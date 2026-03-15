@@ -13,7 +13,12 @@ function getZapp(): ZappGlobal {
   return z;
 }
 
-export const Events = {
+export interface EventsAPI {
+  emit(name: string, payload?: unknown): unknown;
+  on(name: string, handler: EventHandler): () => void;
+}
+
+export const Events: EventsAPI = {
   emit(name: string, payload?: unknown): unknown {
     return getZapp().emit(name, payload);
   },

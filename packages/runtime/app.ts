@@ -22,7 +22,14 @@ const defaultConfig: AppConfig = {
   webContentInspectable: true,
 };
 
-export const App = {
+export interface AppAPI {
+  getConfig(): AppConfig;
+  quit(): void;
+  hide(): void;
+  show(): void;
+}
+
+export const App: AppAPI = {
   getConfig(): AppConfig {
     return getBridge()?.getConfig?.() ?? defaultConfig;
   },

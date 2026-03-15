@@ -1,10 +1,13 @@
 export { App } from "./app";
-export type { AppConfig } from "./app";
+export type { AppAPI, AppConfig } from "./app";
 export { Events } from "./events";
+export type { EventsAPI } from "./events";
 export { Window } from "./windows";
-export type { WindowOptions, WindowHandle } from "./windows";
+export type { WindowAPI, WindowOptions, WindowHandle } from "./windows";
 export { Worker, SharedWorker } from "./worker";
 export { Services } from "./services";
+export type { ServicesAPI } from "./services";
 export { Sync } from "./sync";
+export type { SyncAPI, SyncWaitOptions } from "./sync";
 export * from "./protocol";
 export * from "./bindings-contract";

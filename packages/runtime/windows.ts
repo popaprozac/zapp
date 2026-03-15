@@ -88,7 +88,12 @@ export function _dispatchWindowEvent(windowId: string, event: string): void {
   }
 }
 
-export const Window = {
+export interface WindowAPI {
+  create(options?: WindowOptions): Promise<WindowHandle>;
+  current(): WindowHandle;
+}
+
+export const Window: WindowAPI = {
   async create(options: WindowOptions = {}): Promise<WindowHandle> {
     const bridge = getBridge();
     if (!bridge?.windowCreate) {

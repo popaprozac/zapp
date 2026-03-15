@@ -42,7 +42,12 @@ const makeRequest = (method: string, args: unknown): ZappServiceInvokeRequest =>
   },
 });
 
-export const Services = {
+export interface ServicesAPI {
+  invoke<T = unknown>(method: string, args?: unknown): Promise<T>;
+  getBindingsManifest(): unknown;
+}
+
+export const Services: ServicesAPI = {
   async invoke<T = unknown>(method: string, args?: unknown): Promise<T> {
     if (typeof method !== "string" || method.length === 0) {
       throw new Error("Service method must be a non-empty string.");

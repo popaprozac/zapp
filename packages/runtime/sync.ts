@@ -18,7 +18,12 @@ const getBridge = (): Bridge | null =>
     Symbol.for("zapp.bridge")
   ] as Bridge | undefined) ?? null;
 
-export const Sync = {
+export interface SyncAPI {
+  wait(key: string, timeoutOrOptions?: number | SyncWaitOptions | null): Promise<"notified" | "timed-out">;
+  notify(key: string, count?: number): boolean;
+}
+
+export const Sync: SyncAPI = {
   async wait(
     key: string,
     timeoutOrOptions: number | SyncWaitOptions | null = 30000
