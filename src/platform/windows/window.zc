@@ -1,29 +1,203 @@
-import "./window.zc";
+import "../window.zc";
+
+raw {
+    #include <windows.h>
+    #include <stdio.h>
+
+    extern const wchar_t* ZAPP_WINDOW_CLASS;
+    extern void zapp_windows_webview_create(HWND hwnd, BOOL inspectable);
+
+    static HWND zapp_create_hwnd(const char* title, int width, int height, int x, int y) {
+        int titleLen = MultiByteToWideChar(CP_UTF8, 0, title, -1, NULL, 0);
+        wchar_t* wTitle = (wchar_t*)malloc(titleLen * sizeof(wchar_t));
+        MultiByteToWideChar(CP_UTF8, 0, title, -1, wTitle, titleLen);
+
+        int screenW = GetSystemMetrics(SM_CXSCREEN);
+        int screenH = GetSystemMetrics(SM_CYSCREEN);
+        int posX = (x == 0) ? (screenW - width) / 2 : x;
+        int posY = (y == 0) ? (screenH - height) / 2 : y;
+
+        HWND hwnd = CreateWindowExW(
+            0,
+            ZAPP_WINDOW_CLASS,
+            wTitle,
+            WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+            posX, posY, width, height,
+            NULL, NULL,
+            GetModuleHandleW(NULL),
+            NULL
+        );
+        free(wTitle);
+        return hwnd;
+    }
+}
 
 fn windows_window_create(options: WindowOptions*, inspectable: bool) -> void* {
-    return NULL;
+    let handle: void* = NULL;
+    raw {
+        HWND hwnd = zapp_create_hwnd(
+            (const char*)options->title,
+            options->width, options->height,
+            options->x, options->y
+        );
+
+        if (hwnd == NULL) {
+            fprintf(stderr, "[zapp] CreateWindowEx failed: %lu\n", GetLastError());
+            return NULL;
+        }
+
+        zapp_windows_webview_create(hwnd, inspectable ? TRUE : FALSE);
+        ShowWindow(hwnd, SW_SHOW);
+        UpdateWindow(hwnd);
+        handle = (void*)hwnd;
+    }
+    return handle;
 }
 
 fn windows_window_destroy(window: void*) -> void {
-    let _ = window;
+    raw {
+        HWND hwnd = (HWND)window;
+        if (hwnd && IsWindow(hwnd)) {
+            DestroyWindow(hwnd);
+        }
+    }
 }
 
 fn windows_window_minimize(window: void*) -> void {
-    let _ = window;
+    raw {
+        HWND hwnd = (HWND)window;
+        if (hwnd && IsWindow(hwnd)) {
+            ShowWindow(hwnd, SW_MINIMIZE);
+        }
+    }
 }
 
 fn windows_window_unminimize(window: void*) -> void {
-    let _ = window;
+    raw {
+        HWND hwnd = (HWND)window;
+        if (hwnd && IsWindow(hwnd)) {
+            ShowWindow(hwnd, SW_RESTORE);
+        }
+    }
 }
 
 fn windows_window_maximize(window: void*) -> void {
-    let _ = window;
+    raw {
+        HWND hwnd = (HWND)window;
+        if (hwnd && IsWindow(hwnd)) {
+            ShowWindow(hwnd, SW_MAXIMIZE);
+        }
+    }
+}
+
+fn windows_window_unmaximize(window: void*) -> void {
+    raw {
+        HWND hwnd = (HWND)window;
+        if (hwnd && IsWindow(hwnd)) {
+            if (IsZoomed(hwnd)) {
+                ShowWindow(hwnd, SW_RESTORE);
+            }
+        }
+    }
 }
 
 fn windows_window_toggle_minimize(window: void*) -> void {
-    let _ = window;
+    raw {
+        HWND hwnd = (HWND)window;
+        if (hwnd && IsWindow(hwnd)) {
+            if (IsIconic(hwnd)) {
+                ShowWindow(hwnd, SW_RESTORE);
+            } else {
+                ShowWindow(hwnd, SW_MINIMIZE);
+            }
+        }
+    }
 }
 
 fn windows_window_toggle_maximize(window: void*) -> void {
-    let _ = window;
+    raw {
+        HWND hwnd = (HWND)window;
+        if (hwnd && IsWindow(hwnd)) {
+            if (IsZoomed(hwnd)) {
+                ShowWindow(hwnd, SW_RESTORE);
+            } else {
+                ShowWindow(hwnd, SW_MAXIMIZE);
+            }
+        }
+    }
+}
+
+fn windows_window_set_title(window: void*, title: string) -> void {
+    raw {
+        HWND hwnd = (HWND)window;
+        if (hwnd && IsWindow(hwnd) && title) {
+            int len = MultiByteToWideChar(CP_UTF8, 0, (const char*)title, -1, NULL, 0);
+            wchar_t* wTitle = (wchar_t*)malloc(len * sizeof(wchar_t));
+            MultiByteToWideChar(CP_UTF8, 0, (const char*)title, -1, wTitle, len);
+            SetWindowTextW(hwnd, wTitle);
+            free(wTitle);
+        }
+    }
+}
+
+fn windows_window_set_size(window: void*, width: int, height: int) -> void {
+    raw {
+        HWND hwnd = (HWND)window;
+        if (hwnd && IsWindow(hwnd)) {
+            RECT rc;
+            GetWindowRect(hwnd, &rc);
+            MoveWindow(hwnd, rc.left, rc.top, width, height, TRUE);
+        }
+    }
+}
+
+fn windows_window_set_position(window: void*, x: int, y: int) -> void {
+    raw {
+        HWND hwnd = (HWND)window;
+        if (hwnd && IsWindow(hwnd)) {
+            RECT rc;
+            GetWindowRect(hwnd, &rc);
+            int w = rc.right - rc.left;
+            int h = rc.bottom - rc.top;
+            MoveWindow(hwnd, x, y, w, h, TRUE);
+        }
+    }
+}
+
+fn windows_window_set_fullscreen(window: void*, on: bool) -> void {
+    raw {
+        HWND hwnd = (HWND)window;
+        if (!hwnd || !IsWindow(hwnd)) return;
+
+        static WINDOWPLACEMENT zapp_prev_placement = { sizeof(WINDOWPLACEMENT) };
+        LONG style = GetWindowLongW(hwnd, GWL_STYLE);
+        BOOL isFS = !(style & WS_OVERLAPPEDWINDOW);
+
+        if (on && !isFS) {
+            MONITORINFO mi = { sizeof(MONITORINFO) };
+            GetWindowPlacement(hwnd, &zapp_prev_placement);
+            GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mi);
+            SetWindowLongW(hwnd, GWL_STYLE, style & ~WS_OVERLAPPEDWINDOW);
+            SetWindowPos(hwnd, HWND_TOP,
+                mi.rcMonitor.left, mi.rcMonitor.top,
+                mi.rcMonitor.right - mi.rcMonitor.left,
+                mi.rcMonitor.bottom - mi.rcMonitor.top,
+                SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+        } else if (!on && isFS) {
+            SetWindowLongW(hwnd, GWL_STYLE, style | WS_OVERLAPPEDWINDOW);
+            SetWindowPlacement(hwnd, &zapp_prev_placement);
+            SetWindowPos(hwnd, NULL, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+        }
+    }
+}
+
+fn windows_window_set_always_on_top(window: void*, on: bool) -> void {
+    raw {
+        HWND hwnd = (HWND)window;
+        if (hwnd && IsWindow(hwnd)) {
+            SetWindowPos(hwnd, on ? HWND_TOPMOST : HWND_NOTOPMOST,
+                0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+        }
+    }
 }

@@ -1,0 +1,32 @@
+// Win32-native crypto: random bytes (BCryptGenRandom) and UUID (UuidCreate).
+
+//> windows: link: -lbcrypt -lrpcrt4
+
+raw {
+    #include <windows.h>
+    #include <bcrypt.h>
+    #include <rpc.h>
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <string.h>
+
+    static void zapp_core_crypto_random_bytes(unsigned char* buf, size_t len) {
+        if (buf && len > 0) {
+            BCryptGenRandom(NULL, buf, (ULONG)len, BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+        }
+    }
+
+    static char* zapp_core_crypto_random_uuid(void) {
+        UUID uuid;
+        UuidCreate(&uuid);
+        RPC_CSTR uuidStr = NULL;
+        UuidToStringA(&uuid, &uuidStr);
+        char* result = _strdup((char*)uuidStr);
+        RpcStringFreeA(&uuidStr);
+        // Lowercase to match web standard
+        for (char* p = result; *p; p++) {
+            if (*p >= 'A' && *p <= 'F') *p += 32;
+        }
+        return result;
+    }
+}

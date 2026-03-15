@@ -1,0 +1,214 @@
+// Win32-native URL parsing.
+// Uses a manual parser since CreateUri / IUri COM is overly complex for this use case.
+
+raw {
+    #include <windows.h>
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <string.h>
+
+    #ifndef ZAPP_URL_PARSED_DEFINED
+    #define ZAPP_URL_PARSED_DEFINED 1
+    typedef struct zapp_url_parsed {
+        char* href;
+        char* protocol;
+        char* host;
+        char* hostname;
+        char* port;
+        char* pathname;
+        char* search;
+        char* hash;
+        char* origin;
+        char* username;
+        char* password;
+    } zapp_url_parsed_t;
+    #endif
+
+    static void zapp_core_url_free(zapp_url_parsed_t* c) {
+        if (!c) return;
+        free(c->href);      free(c->protocol);  free(c->host);
+        free(c->hostname);  free(c->port);      free(c->pathname);
+        free(c->search);    free(c->hash);      free(c->origin);
+        free(c->username);  free(c->password);
+    }
+
+    static int zapp_core_url_parse(const char* url_str, const char* base_str, zapp_url_parsed_t* out) {
+        if (!url_str || !out) return -1;
+        memset(out, 0, sizeof(zapp_url_parsed_t));
+
+        // Simple URL resolution: if url_str is relative and base_str given, prepend base
+        char resolved[2048] = {0};
+        if (base_str && base_str[0] && (strstr(url_str, "://") == NULL)) {
+            snprintf(resolved, sizeof(resolved), "%s", base_str);
+            // Remove trailing path from base to get base directory
+            char* lastSlash = strrchr(resolved, '/');
+            char* afterScheme = strstr(resolved, "://");
+            if (lastSlash && afterScheme && lastSlash > afterScheme + 2) {
+                *(lastSlash + 1) = '\0';
+            }
+            if (url_str[0] == '/') {
+                // Absolute path: keep scheme + host
+                char* thirdSlash = afterScheme ? strchr(afterScheme + 3, '/') : NULL;
+                if (thirdSlash) *thirdSlash = '\0';
+                strncat(resolved, url_str, sizeof(resolved) - strlen(resolved) - 1);
+            } else {
+                strncat(resolved, url_str, sizeof(resolved) - strlen(resolved) - 1);
+            }
+        } else {
+            strncpy(resolved, url_str, sizeof(resolved) - 1);
+        }
+
+        const char* p = resolved;
+        char scheme[64] = {0};
+        char userinfo[256] = {0};
+        char hostname[256] = {0};
+        char port[16] = {0};
+        char pathname[1024] = {0};
+        char search[1024] = {0};
+        char hash[512] = {0};
+
+        // Parse scheme
+        const char* schemeEnd = strstr(p, "://");
+        if (schemeEnd) {
+            size_t slen = (size_t)(schemeEnd - p);
+            if (slen < sizeof(scheme)) {
+                memcpy(scheme, p, slen);
+                scheme[slen] = '\0';
+            }
+            p = schemeEnd + 3;
+        }
+
+        // Parse userinfo (user:pass@)
+        const char* atSign = strchr(p, '@');
+        const char* firstSlash = strchr(p, '/');
+        if (atSign && (!firstSlash || atSign < firstSlash)) {
+            size_t ulen = (size_t)(atSign - p);
+            if (ulen < sizeof(userinfo)) {
+                memcpy(userinfo, p, ulen);
+                userinfo[ulen] = '\0';
+            }
+            p = atSign + 1;
+        }
+
+        // Parse host:port
+        firstSlash = strchr(p, '/');
+        const char* queryMark = strchr(p, '?');
+        const char* hashMark = strchr(p, '#');
+        const char* hostEnd = firstSlash;
+        if (!hostEnd || (queryMark && queryMark < hostEnd)) hostEnd = queryMark;
+        if (!hostEnd || (hashMark && hashMark < hostEnd)) hostEnd = hashMark;
+        if (!hostEnd) hostEnd = p + strlen(p);
+
+        size_t hostLen = (size_t)(hostEnd - p);
+        char hostPort[256] = {0};
+        if (hostLen < sizeof(hostPort)) {
+            memcpy(hostPort, p, hostLen);
+            hostPort[hostLen] = '\0';
+        }
+
+        // Split host and port
+        char* colonInHost = strrchr(hostPort, ':');
+        if (colonInHost && hostPort[0] != '[') {
+            *colonInHost = '\0';
+            strncpy(hostname, hostPort, sizeof(hostname) - 1);
+            strncpy(port, colonInHost + 1, sizeof(port) - 1);
+        } else {
+            strncpy(hostname, hostPort, sizeof(hostname) - 1);
+        }
+
+        p = hostEnd;
+
+        // Parse pathname
+        if (*p == '/') {
+            const char* pathEnd = p;
+            while (*pathEnd && *pathEnd != '?' && *pathEnd != '#') pathEnd++;
+            size_t plen = (size_t)(pathEnd - p);
+            if (plen < sizeof(pathname)) {
+                memcpy(pathname, p, plen);
+                pathname[plen] = '\0';
+            }
+            p = pathEnd;
+        } else if (*p != '?' && *p != '#' && *p) {
+            strcpy(pathname, "/");
+        }
+
+        // Parse search
+        if (*p == '?') {
+            const char* searchEnd = strchr(p, '#');
+            if (!searchEnd) searchEnd = p + strlen(p);
+            size_t slen = (size_t)(searchEnd - p);
+            if (slen < sizeof(search)) {
+                memcpy(search, p, slen);
+                search[slen] = '\0';
+            }
+            p = searchEnd;
+        }
+
+        // Parse hash
+        if (*p == '#') {
+            strncpy(hash, p, sizeof(hash) - 1);
+        }
+
+        // Build protocol string
+        char protocol[66] = {0};
+        if (scheme[0]) snprintf(protocol, sizeof(protocol), "%s:", scheme);
+
+        // Build host with port
+        char hostWithPort[280] = {0};
+        if (port[0]) {
+            snprintf(hostWithPort, sizeof(hostWithPort), "%s:%s", hostname, port);
+        } else {
+            strncpy(hostWithPort, hostname, sizeof(hostWithPort) - 1);
+        }
+
+        // Build origin
+        char origin[512] = {0};
+        if (strcmp(scheme, "http") == 0 || strcmp(scheme, "https") == 0 ||
+            strcmp(scheme, "ws") == 0 || strcmp(scheme, "wss") == 0 ||
+            strcmp(scheme, "ftp") == 0) {
+            snprintf(origin, sizeof(origin), "%s://%s", scheme, hostWithPort);
+        } else {
+            strcpy(origin, "null");
+        }
+
+        // Build href
+        char href[2048] = {0};
+        if (scheme[0]) {
+            snprintf(href, sizeof(href), "%s://%s%s%s%s%s",
+                scheme,
+                userinfo[0] ? userinfo : "",
+                userinfo[0] ? "@" : "",
+                hostWithPort, pathname, search);
+        } else {
+            snprintf(href, sizeof(href), "%s%s", pathname, search);
+        }
+        if (hash[0]) strncat(href, hash, sizeof(href) - strlen(href) - 1);
+
+        // Parse username/password from userinfo
+        char username[128] = {0};
+        char password[128] = {0};
+        if (userinfo[0]) {
+            char* colon = strchr(userinfo, ':');
+            if (colon) {
+                size_t ulen = (size_t)(colon - userinfo);
+                if (ulen < sizeof(username)) memcpy(username, userinfo, ulen);
+                strncpy(password, colon + 1, sizeof(password) - 1);
+            } else {
+                strncpy(username, userinfo, sizeof(username) - 1);
+            }
+        }
+
+        out->href     = _strdup(href);
+        out->protocol = _strdup(protocol);
+        out->host     = _strdup(hostWithPort);
+        out->hostname = _strdup(hostname);
+        out->port     = _strdup(port);
+        out->pathname = _strdup(pathname[0] ? pathname : "/");
+        out->search   = _strdup(search);
+        out->hash     = _strdup(hash);
+        out->origin   = _strdup(origin);
+        out->username = _strdup(username);
+        out->password = _strdup(password);
+        return 0;
+    }
+}

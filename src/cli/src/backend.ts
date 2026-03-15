@@ -1,5 +1,6 @@
 import path from "node:path";
 import process from "node:process";
+import { mkdir } from "node:fs/promises";
 import { runCmd } from "./common";
 
 const BACKEND_CONVENTIONS = ["backend.ts", "backend.js"];
@@ -62,9 +63,7 @@ export async function resolveAndBundleBackend({
   process.stdout.write(`[zapp] bundling backend script: ${path.relative(root, entryPath)}\n`);
 
   const buildDir = path.join(root, ".zapp");
-  if (!(await Bun.file(buildDir).exists())) {
-    await runCmd("mkdir", ["-p", buildDir], { cwd: root });
-  }
+  await mkdir(buildDir, { recursive: true });
 
   const outFile = path.join(buildDir, "backend.bundle.js");
 

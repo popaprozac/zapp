@@ -261,8 +261,7 @@ fn window_set_title(window: void*, title: string) -> void {
 
 @cfg(_WIN32)
 fn window_set_title(window: void*, title: string) -> void {
-    let _ = window;
-    let _ = title;
+    windows_window_set_title(window, title);
 }
 
 // Set size
@@ -273,9 +272,7 @@ fn window_set_size(window: void*, width: int, height: int) -> void {
 
 @cfg(_WIN32)
 fn window_set_size(window: void*, width: int, height: int) -> void {
-    let _ = window;
-    let _ = width;
-    let _ = height;
+    windows_window_set_size(window, width, height);
 }
 
 // Set position
@@ -286,9 +283,7 @@ fn window_set_position(window: void*, x: int, y: int) -> void {
 
 @cfg(_WIN32)
 fn window_set_position(window: void*, x: int, y: int) -> void {
-    let _ = window;
-    let _ = x;
-    let _ = y;
+    windows_window_set_position(window, x, y);
 }
 
 // Set fullscreen
@@ -299,8 +294,7 @@ fn window_set_fullscreen(window: void*, on: bool) -> void {
 
 @cfg(_WIN32)
 fn window_set_fullscreen(window: void*, on: bool) -> void {
-    let _ = window;
-    let _ = on;
+    windows_window_set_fullscreen(window, on);
 }
 
 // Set always on top
@@ -311,6 +305,5 @@ fn window_set_always_on_top(window: void*, on: bool) -> void {
 
 @cfg(_WIN32)
 fn window_set_always_on_top(window: void*, on: bool) -> void {
-    let _ = window;
-    let _ = on;
+    windows_window_set_always_on_top(window, on);
 }

@@ -1,9 +1,11 @@
 // Engine-agnostic TextEncoder/TextDecoder implementation using Foundation.
 
-include <Foundation/Foundation.h>
 include <string.h>
 
 raw {
+#ifdef __APPLE__
+    #include <Foundation/Foundation.h>
+
     // Encode a UTF-8 C string into raw bytes. Caller must free() the result.
     // Returns NULL on failure; *out_len is set to the byte count.
     static uint8_t* zapp_core_text_encode(const char* input, size_t* out_len) {
@@ -26,4 +28,5 @@ raw {
         if (str == nil) return strdup("");
         return strdup([str UTF8String]);
     }
+#endif
 }

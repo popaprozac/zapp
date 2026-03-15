@@ -1,10 +1,12 @@
 //> macos: framework: JavaScriptCore
-include <Cocoa/Cocoa.h>
-include <WebKit/WebKit.h>
-include <dispatch/dispatch.h>
-include <JavaScriptCore/JavaScriptCore.h>
 
 raw {
+#ifdef __APPLE__
+    #include <Cocoa/Cocoa.h>
+    #include <WebKit/WebKit.h>
+    #include <dispatch/dispatch.h>
+    #include <JavaScriptCore/JavaScriptCore.h>
+
     static dispatch_queue_t zapp_worker_js_queue = nil;
     static void* zapp_worker_js_queue_key = &zapp_worker_js_queue_key;
     static NSMutableDictionary<NSString*, NSMutableDictionary<NSNumber*, id>*>* zapp_worker_timers = nil;
@@ -143,4 +145,5 @@ raw {
             }
         };
     }
+#endif
 }

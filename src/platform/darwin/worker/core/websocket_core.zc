@@ -1,9 +1,10 @@
 // Engine-agnostic WebSocket connection management using NSURLSessionWebSocketTask.
 // The JS engine callback is abstracted via a C function pointer.
 
-include <Foundation/Foundation.h>
-
 raw {
+#ifdef __APPLE__
+    #include <Foundation/Foundation.h>
+
     static NSMutableDictionary<NSString*, NSMutableDictionary*>* zapp_ws_conns = nil;
     static int zapp_ws_id_counter = 1;
 
@@ -174,4 +175,5 @@ raw {
 
         [zapp_ws_conns removeObjectForKey:wsId];
     }
+#endif
 }

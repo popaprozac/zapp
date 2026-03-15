@@ -18,13 +18,18 @@ import "./jsc/fetch_jsc.zc";
 import "../engine_jsc.zc";
 
 //> macos: framework: JavaScriptCore
-include <Cocoa/Cocoa.h>
-include <WebKit/WebKit.h>
-include <dispatch/dispatch.h>
-include <JavaScriptCore/JavaScriptCore.h>
+raw {
+#ifdef __APPLE__
+    #include <Cocoa/Cocoa.h>
+    #include <WebKit/WebKit.h>
+    #include <dispatch/dispatch.h>
+    #include <JavaScriptCore/JavaScriptCore.h>
+#endif
+}
 
 raw {
 #if !defined(ZAPP_WORKER_ENGINE_QJS)
+#ifdef __APPLE__
     extern void* engine_jsc_create_ctx(void* vm, const char* name);
     extern int engine_jsc_eval(void* ctx, const char* utf8, size_t len, const char* filename);
     extern const char* engine_jsc_get_exception_message(void* ctx);
@@ -271,6 +276,7 @@ raw {
             zapp_call_bridge_method_unsafe(ctx, @"dispatchSyncResult", @[payload]);
         });
     }
+#endif /* __APPLE__ */
 #endif
 }
 
@@ -281,6 +287,7 @@ impl WorkerBackend for DarwinWorkerJsc {
     fn handle_bridge(self, app: App*, action: string, payload: string) -> void {
         raw {
 #if !defined(ZAPP_WORKER_ENGINE_QJS)
+#ifdef __APPLE__
         if (action == NULL || payload == NULL) return;
 
         NSDictionary* body = zapp_worker_parse_bridge_payload((const char*)payload);
@@ -598,6 +605,7 @@ impl WorkerBackend for DarwinWorkerJsc {
             });
             return;
         }
+#endif /* __APPLE__ */
 #endif
     }
 }
@@ -605,7 +613,9 @@ impl WorkerBackend for DarwinWorkerJsc {
     fn bind_runtime(self, app: App*) -> void {
         raw {
 #if !defined(ZAPP_WORKER_ENGINE_QJS)
+#ifdef __APPLE__
         app->event.send_event_to_js = (void*)zapp_darwin_send_event_to_js;
+#endif /* __APPLE__ */
 #endif
         }
     }

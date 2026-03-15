@@ -6,6 +6,7 @@ struct EngineQjs {
 }
 
 raw {
+#ifdef __APPLE__
 #ifdef ZAPP_WORKER_ENGINE_QJS
 /* Rename QuickJS types to avoid conflict with JavaScriptCore (Cocoa/WebKit) in
  * same translation unit */
@@ -86,5 +87,6 @@ raw {
     QJSContext *ctx = (QJSContext *)ctx_opaque;
     JS_FreeContext(ctx);
   }
+#endif
 #endif
 }

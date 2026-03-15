@@ -1,5 +1,6 @@
 import path from "node:path";
 import process from "node:process";
+import { mkdir } from "node:fs/promises";
 import { brotliCompressSync, constants as zlibConstants } from "node:zlib";
 import { generateBuildConfigZc } from "./build-config";
 import { preferredJsTool, runCmd, runPackageScript } from "./common";
@@ -68,9 +69,7 @@ ${assetEntries.join("\n")}
 `;
 
   const buildDir = path.join(root, ".zapp");
-  if (!(await Bun.file(buildDir).exists())) {
-    await runCmd("mkdir", ["-p", buildDir], { cwd: root });
-  }
+  await mkdir(buildDir, { recursive: true });
   const outPath = path.join(buildDir, "zapp_assets.zc");
   await Bun.write(outPath, zcContent);
   return outPath;

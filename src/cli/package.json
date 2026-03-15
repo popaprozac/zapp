@@ -8,7 +8,7 @@
     "zapp": "dist/zapp-cli.js"
   },
   "scripts": {
-    "build": "bun build ./src/zapp-cli.ts --outfile ./dist/zapp-cli.js --target bun --format esm && chmod +x ./dist/zapp-cli.js"
+    "build": "bun build ./src/zapp-cli.ts --outfile ./dist/zapp-cli.js --target bun --format esm"
   },
   "devDependencies": {
     "@types/bun": "^1.3.10",

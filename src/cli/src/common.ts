@@ -52,7 +52,7 @@ export const killChild = (child: import("bun").Subprocess | null | any) => {
   try {
     child.kill("SIGTERM");
   } catch {
-    // Ignore.
+    try { child.kill(9); } catch { /* ignore */ }
   }
 };
 

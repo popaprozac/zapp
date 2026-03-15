@@ -3,6 +3,7 @@
 @cfg(ZAPP_WORKER_ENGINE_QJS)
 raw {
 #ifdef ZAPP_WORKER_ENGINE_QJS
+#ifdef __APPLE__
     extern NSValue* zapp_darwin_qjs_get_context(NSString* workerId);
     extern void zapp_darwin_qjs_dispatch_async(dispatch_block_t block);
     extern void zapp_darwin_qjs_drain_jobs(void* ctx, const char* label);
@@ -184,5 +185,6 @@ raw {
             JS_NewCFunctionData(ctx, qjs_bridge_fetch, 4, 0, 1, funcData));
         JS_FreeValue(ctx, wIdVal);
     }
+#endif /* __APPLE__ */
 #endif
 }

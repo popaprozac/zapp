@@ -5,13 +5,19 @@
     "": {
       "name": "zapp-example",
       "dependencies": {
+        "@zapp/backend": "link:../packages/backend",
+        "@zapp/runtime": "link:../packages/runtime",
         "@zapp/backend": "file:../packages/backend",
         "@zapp/runtime": "file:../packages/runtime",
       },
     },
   },
   "packages": {
+    "@zapp/backend": ["@zapp/backend@link:../packages/backend", {}],
+
     "@zapp/backend": ["@zapp/backend@file:../packages/backend", {}],
+
+    "@zapp/runtime": ["@zapp/runtime@link:../packages/runtime", {}],
 
     "@zapp/runtime": ["@zapp/runtime@file:../packages/runtime", {}],
   }

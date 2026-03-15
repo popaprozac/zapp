@@ -1,4 +1,5 @@
 import path from "node:path";
+import { mkdir } from "node:fs/promises";
 import { runCmd } from "./common";
 
 export type BuildMode = "dev" | "dev-embedded" | "prod" | "prod-embedded";
@@ -19,9 +20,7 @@ export const generateBuildConfigZc = async ({
   backendScriptPath?: string | null;
 }) => {
   const buildDir = path.join(root, ".zapp");
-  if (!(await Bun.file(buildDir).exists())) {
-    await runCmd("mkdir", ["-p", buildDir], { cwd: root });
-  }
+  await mkdir(buildDir, { recursive: true });
 
   const isDev = mode === "dev" || mode === "dev-embedded";
   const useEmbeddedAssets = mode === "dev-embedded" || mode === "prod-embedded";

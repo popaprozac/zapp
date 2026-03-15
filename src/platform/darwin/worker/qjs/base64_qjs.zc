@@ -2,6 +2,7 @@
 
 @cfg(ZAPP_WORKER_ENGINE_QJS)
 raw {
+#ifdef __APPLE__
 #ifdef ZAPP_WORKER_ENGINE_QJS
     static char* zapp_core_btoa(const char* input);
     static char* zapp_core_atob(const char* input);
@@ -33,5 +34,6 @@ raw {
         JS_SetPropertyStr(ctx, bridge, "atob", JS_NewCFunction(ctx, qjs_bridge_atob, "atob", 1));
     }
 
+#endif
 #endif
 }

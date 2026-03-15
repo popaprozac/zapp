@@ -2,6 +2,7 @@
 
 @cfg(ZAPP_WORKER_ENGINE_QJS)
 raw {
+#ifdef __APPLE__
 #ifdef ZAPP_WORKER_ENGINE_QJS
     static int zapp_core_url_parse(const char* url_str, const char* base_str, zapp_url_parsed_t* out);
     static void zapp_core_url_free(zapp_url_parsed_t* c);
@@ -44,5 +45,6 @@ raw {
         JS_SetPropertyStr(ctx, bridge, "urlParse", JS_NewCFunction(ctx, qjs_bridge_urlParse, "urlParse", 2));
     }
 
+#endif
 #endif
 }

@@ -1,0 +1,6 @@
+// Win32-native WebSocket. Stub for initial implementation.
+// Will be implemented using WinHTTP WebSocket APIs.
+
+raw {
+    // Placeholder: websocket implementation coming in a follow-up phase.
+}

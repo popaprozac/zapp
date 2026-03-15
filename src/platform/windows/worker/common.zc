@@ -1,0 +1,393 @@
+raw {
+    #include <windows.h>
+    #include <winhttp.h>
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <string.h>
+
+    extern const char* zapp_build_asset_root(void);
+    extern int zapp_build_use_embedded_assets(void);
+    extern int zapp_build_is_dev_mode(void);
+    extern void zapp_dispatch_worker_to_webviews(const char* kind, const char* worker_id, const char* payload_json);
+
+    // -----------------------------------------------------------------------
+    // Simple string -> void* map (fixed-size, linear scan)
+    // -----------------------------------------------------------------------
+
+    #define ZAPP_MAP_MAX 512
+
+    typedef struct {
+        char key[128];
+        void* val;
+    } ZappMapEntry;
+
+    typedef struct {
+        ZappMapEntry entries[ZAPP_MAP_MAX];
+    } ZappStringMap;
+
+    static void zapp_map_init(ZappStringMap* m) {
+        memset(m, 0, sizeof(ZappStringMap));
+    }
+
+    static void* zapp_map_get(ZappStringMap* m, const char* key) {
+        if (!m || !key) return NULL;
+        for (int i = 0; i < ZAPP_MAP_MAX; i++) {
+            if (m->entries[i].key[0] != '\0' && strcmp(m->entries[i].key, key) == 0) {
+                return m->entries[i].val;
+            }
+        }
+        return NULL;
+    }
+
+    static void zapp_map_set(ZappStringMap* m, const char* key, void* val) {
+        if (!m || !key) return;
+        for (int i = 0; i < ZAPP_MAP_MAX; i++) {
+            if (m->entries[i].key[0] != '\0' && strcmp(m->entries[i].key, key) == 0) {
+                m->entries[i].val = val;
+                return;
+            }
+        }
+        for (int i = 0; i < ZAPP_MAP_MAX; i++) {
+            if (m->entries[i].key[0] == '\0') {
+                strncpy(m->entries[i].key, key, sizeof(m->entries[i].key) - 1);
+                m->entries[i].key[sizeof(m->entries[i].key) - 1] = '\0';
+                m->entries[i].val = val;
+                return;
+            }
+        }
+    }
+
+    static void zapp_map_remove(ZappStringMap* m, const char* key) {
+        if (!m || !key) return;
+        for (int i = 0; i < ZAPP_MAP_MAX; i++) {
+            if (m->entries[i].key[0] != '\0' && strcmp(m->entries[i].key, key) == 0) {
+                m->entries[i].key[0] = '\0';
+                m->entries[i].val = NULL;
+                return;
+            }
+        }
+    }
+
+    static void zapp_map_clear(ZappStringMap* m) {
+        if (m) memset(m, 0, sizeof(ZappStringMap));
+    }
+
+    typedef void (*zapp_map_iter_fn)(const char* key, void* val, void* userdata);
+
+    static void zapp_map_foreach(ZappStringMap* m, zapp_map_iter_fn fn, void* userdata) {
+        if (!m || !fn) return;
+        for (int i = 0; i < ZAPP_MAP_MAX; i++) {
+            if (m->entries[i].key[0] != '\0') {
+                fn(m->entries[i].key, m->entries[i].val, userdata);
+            }
+        }
+    }
+
+    static int zapp_map_count_unique_ptrs(ZappStringMap* m) {
+        if (!m) return 0;
+        void* seen[ZAPP_MAP_MAX];
+        int seen_count = 0;
+        for (int i = 0; i < ZAPP_MAP_MAX; i++) {
+            if (m->entries[i].key[0] == '\0' || m->entries[i].val == NULL) continue;
+            int found = 0;
+            for (int j = 0; j < seen_count; j++) {
+                if (seen[j] == m->entries[i].val) { found = 1; break; }
+            }
+            if (!found && seen_count < ZAPP_MAP_MAX) {
+                seen[seen_count++] = m->entries[i].val;
+            }
+        }
+        return seen_count;
+    }
+
+    // -----------------------------------------------------------------------
+    // Minimal JSON field extraction (avoids needing a JSON parser library)
+    // -----------------------------------------------------------------------
+
+    static char* zapp_json_get_string(const char* json, const char* key) {
+        if (!json || !key) return NULL;
+        char pattern[256];
+        snprintf(pattern, sizeof(pattern), "\"%s\":\"", key);
+        const char* start = strstr(json, pattern);
+        if (!start) return NULL;
+        start += strlen(pattern);
+        const char* end = start;
+        while (*end && *end != '"') {
+            if (*end == '\\' && *(end + 1)) end++;
+            end++;
+        }
+        size_t len = (size_t)(end - start);
+        char* result = (char*)malloc(len + 1);
+        memcpy(result, start, len);
+        result[len] = '\0';
+        return result;
+    }
+
+    static int zapp_json_get_bool(const char* json, const char* key, int default_val) {
+        if (!json || !key) return default_val;
+        char pattern[256];
+        snprintf(pattern, sizeof(pattern), "\"%s\":", key);
+        const char* start = strstr(json, pattern);
+        if (!start) return default_val;
+        start += strlen(pattern);
+        while (*start == ' ') start++;
+        if (*start == 't') return 1;
+        if (*start == 'f') return 0;
+        return default_val;
+    }
+
+    // Extract raw JSON value for a key (for passing data objects)
+    static char* zapp_json_get_raw(const char* json, const char* key) {
+        if (!json || !key) return NULL;
+        char pattern[256];
+        snprintf(pattern, sizeof(pattern), "\"%s\":", key);
+        const char* start = strstr(json, pattern);
+        if (!start) return NULL;
+        start += strlen(pattern);
+        while (*start == ' ') start++;
+
+        if (*start == '"') {
+            const char* end = start + 1;
+            while (*end && *end != '"') {
+                if (*end == '\\' && *(end + 1)) end++;
+                end++;
+            }
+            if (*end == '"') end++;
+            size_t len = (size_t)(end - start);
+            char* result = (char*)malloc(len + 1);
+            memcpy(result, start, len);
+            result[len] = '\0';
+            return result;
+        }
+
+        if (*start == '{' || *start == '[') {
+            int depth = 0;
+            const char* end = start;
+            char open = *start;
+            char close = (open == '{') ? '}' : ']';
+            while (*end) {
+                if (*end == open) depth++;
+                else if (*end == close) { depth--; if (depth == 0) { end++; break; } }
+                else if (*end == '"') {
+                    end++;
+                    while (*end && *end != '"') {
+                        if (*end == '\\' && *(end + 1)) end++;
+                        end++;
+                    }
+                }
+                end++;
+            }
+            size_t len = (size_t)(end - start);
+            char* result = (char*)malloc(len + 1);
+            memcpy(result, start, len);
+            result[len] = '\0';
+            return result;
+        }
+
+        const char* end = start;
+        while (*end && *end != ',' && *end != '}' && *end != ']') end++;
+        size_t len = (size_t)(end - start);
+        char* result = (char*)malloc(len + 1);
+        memcpy(result, start, len);
+        result[len] = '\0';
+        return result;
+    }
+
+    // -----------------------------------------------------------------------
+    // Worker error dispatch helpers
+    // -----------------------------------------------------------------------
+
+    static void zapp_worker_dispatch_error_message(const char* workerId, const char* message) {
+        if (!workerId) return;
+        const char* safeMsg = (message && message[0]) ? message : "Worker error";
+        char payload[1024];
+        snprintf(payload, sizeof(payload), "{\"message\":\"%s\"}", safeMsg);
+        zapp_dispatch_worker_to_webviews("error", workerId, payload);
+    }
+
+    static void zapp_worker_dispatch_max_workers_error(const char* workerId, int maxWorkers) {
+        char msg[256];
+        snprintf(msg, sizeof(msg), "Max worker limit (%d) exceeded.", maxWorkers);
+        zapp_worker_dispatch_error_message(workerId, msg);
+    }
+
+    // -----------------------------------------------------------------------
+    // Asset / script loading
+    // -----------------------------------------------------------------------
+
+    #ifndef ZAPP_EMBEDDED_ASSET_STRUCT_DEFINED
+    #define ZAPP_EMBEDDED_ASSET_STRUCT_DEFINED 1
+    struct ZappEmbeddedAsset {
+        char* path;
+        unsigned char* data;
+        int len;
+        int is_brotli;
+        int uncompressed_len;
+    };
+    #endif
+
+    extern struct ZappEmbeddedAsset zapp_embedded_assets[];
+    extern int zapp_embedded_assets_count;
+
+    static const char* zapp_worker_asset_root(void) {
+        const char* configuredRoot = zapp_build_asset_root();
+        if (configuredRoot != NULL && configuredRoot[0] != '\0') {
+            return configuredRoot;
+        }
+        return "example\\frontend\\dist";
+    }
+
+    static char* zapp_worker_resolve_rel_path(const char* scriptUrl) {
+        if (!scriptUrl) return NULL;
+        // Only handle zapp:// URLs
+        if (strncmp(scriptUrl, "zapp://", 7) != 0) return NULL;
+
+        const char* after_scheme = scriptUrl + 7;
+        // Find the path portion (after host)
+        const char* slash = strchr(after_scheme, '/');
+        const char* rel = slash ? slash + 1 : after_scheme;
+
+        // Normalize: strip leading slashes and known prefixes
+        while (*rel == '/') rel++;
+        if (strncmp(rel, "app/", 4) == 0) rel += 4;
+        if (strncmp(rel, "index.html/", 11) == 0) rel += 11;
+
+        if (!*rel) return NULL;
+        return _strdup(rel);
+    }
+
+    // Synchronous HTTP GET using WinHTTP (used in dev mode to fetch worker scripts)
+    static char* zapp_worker_http_get(const char* url) {
+        if (!url) return NULL;
+
+        // Parse host, port, path from http://host:port/path
+        const char* hostStart = url;
+        if (strncmp(url, "http://", 7) == 0) hostStart = url + 7;
+        else if (strncmp(url, "https://", 8) == 0) hostStart = url + 8;
+        else return NULL;
+
+        char host[256] = {0};
+        INTERNET_PORT port = (url[4] == 's') ? INTERNET_DEFAULT_HTTPS_PORT : INTERNET_DEFAULT_HTTP_PORT;
+        const char* slash = strchr(hostStart, '/');
+        const char* colon = strchr(hostStart, ':');
+        if (colon && (!slash || colon < slash)) {
+            size_t hlen = (size_t)(colon - hostStart);
+            if (hlen >= sizeof(host)) return NULL;
+            memcpy(host, hostStart, hlen);
+            port = (INTERNET_PORT)atoi(colon + 1);
+        } else if (slash) {
+            size_t hlen = (size_t)(slash - hostStart);
+            if (hlen >= sizeof(host)) return NULL;
+            memcpy(host, hostStart, hlen);
+        } else {
+            strncpy(host, hostStart, sizeof(host) - 1);
+        }
+
+        const char* pathStr = slash ? slash : "/";
+        wchar_t wHost[256], wPath[1024];
+        MultiByteToWideChar(CP_UTF8, 0, host, -1, wHost, 256);
+        MultiByteToWideChar(CP_UTF8, 0, pathStr, -1, wPath, 1024);
+
+        HINTERNET session = WinHttpOpen(L"Zapp/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY, NULL, NULL, 0);
+        if (!session) return NULL;
+
+        HINTERNET connection = WinHttpConnect(session, wHost, port, 0);
+        if (!connection) { WinHttpCloseHandle(session); return NULL; }
+
+        DWORD flags = (url[4] == 's') ? WINHTTP_FLAG_SECURE : 0;
+        HINTERNET request = WinHttpOpenRequest(connection, L"GET", wPath, NULL, NULL, NULL, flags);
+        if (!request) { WinHttpCloseHandle(connection); WinHttpCloseHandle(session); return NULL; }
+
+        if (!WinHttpSendRequest(request, NULL, 0, NULL, 0, 0, 0) ||
+            !WinHttpReceiveResponse(request, NULL)) {
+            WinHttpCloseHandle(request); WinHttpCloseHandle(connection); WinHttpCloseHandle(session);
+            return NULL;
+        }
+
+        size_t totalLen = 0, cap = 4096;
+        char* buf = (char*)malloc(cap);
+        DWORD bytesRead = 0;
+        while (WinHttpReadData(request, buf + totalLen, (DWORD)(cap - totalLen - 1), &bytesRead) && bytesRead > 0) {
+            totalLen += bytesRead;
+            if (totalLen + 1 >= cap) { cap *= 2; buf = (char*)realloc(buf, cap); }
+            bytesRead = 0;
+        }
+        buf[totalLen] = '\0';
+
+        WinHttpCloseHandle(request);
+        WinHttpCloseHandle(connection);
+        WinHttpCloseHandle(session);
+        return (totalLen > 0) ? buf : (free(buf), (char*)NULL);
+    }
+
+    static char* zapp_worker_read_source(const char* scriptUrl) {
+        if (!scriptUrl || !*scriptUrl) return NULL;
+
+        char* rel = zapp_worker_resolve_rel_path(scriptUrl);
+        if (rel) {
+            // Try embedded assets first
+            if (zapp_build_use_embedded_assets() && zapp_embedded_assets_count > 0) {
+                char lookupPath[512];
+                snprintf(lookupPath, sizeof(lookupPath), "/%s", rel);
+                for (int i = 0; i < zapp_embedded_assets_count; i++) {
+                    if (strcmp(zapp_embedded_assets[i].path, lookupPath) == 0) {
+                        if (!zapp_embedded_assets[i].is_brotli) {
+                            char* result = (char*)malloc(zapp_embedded_assets[i].len + 1);
+                            memcpy(result, zapp_embedded_assets[i].data, zapp_embedded_assets[i].len);
+                            result[zapp_embedded_assets[i].len] = '\0';
+                            free(rel);
+                            return result;
+                        }
+                        break;
+                    }
+                }
+            }
+
+            // Try local filesystem
+            const char* root = zapp_worker_asset_root();
+            char fullPath[1024];
+            snprintf(fullPath, sizeof(fullPath), "%s\\%s", root, rel);
+            // Normalize slashes
+            for (char* p = fullPath; *p; p++) { if (*p == '/') *p = '\\'; }
+
+            FILE* f = fopen(fullPath, "rb");
+            if (f) {
+                fseek(f, 0, SEEK_END);
+                long len = ftell(f);
+                fseek(f, 0, SEEK_SET);
+                if (len > 0) {
+                    char* result = (char*)malloc((size_t)len + 1);
+                    fread(result, 1, (size_t)len, f);
+                    result[len] = '\0';
+                    fclose(f);
+                    free(rel);
+                    return result;
+                }
+                fclose(f);
+            }
+            free(rel);
+        }
+
+        // HTTP(S) URLs: fetch from dev server or remote
+        if (strncmp(scriptUrl, "http://", 7) == 0 || strncmp(scriptUrl, "https://", 8) == 0) {
+            return zapp_worker_http_get(scriptUrl);
+        }
+
+        FILE* f = fopen(scriptUrl, "rb");
+        if (f) {
+            fseek(f, 0, SEEK_END);
+            long len = ftell(f);
+            fseek(f, 0, SEEK_SET);
+            if (len > 0) {
+                char* result = (char*)malloc((size_t)len + 1);
+                fread(result, 1, (size_t)len, f);
+                result[len] = '\0';
+                fclose(f);
+                return result;
+            }
+            fclose(f);
+        }
+
+        return NULL;
+    }
+}

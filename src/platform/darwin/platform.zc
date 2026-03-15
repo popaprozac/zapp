@@ -16,6 +16,7 @@ fn app_get_config(app_ptr: App*) -> AppConfig;
 fn app_should_quit() -> bool;
 
 raw {
+#ifdef __APPLE__
     extern bool app_should_quit(void);
     static BOOL zapp_should_terminate_after_last_window_closed = NO;
     static void zapp_set_should_terminate_after_last_window_closed(BOOL value) {
@@ -34,6 +35,7 @@ raw {
     @end
 
     static id zapp_app_delegate = nil;
+#endif
 }
 
 struct CocoaPlatform {
@@ -46,12 +48,14 @@ impl Platform for CocoaPlatform {
             println "NSApplication already initialized";
         } else {
             raw {
+#ifdef __APPLE__
                 NSApplication* nsApp = [NSApplication sharedApplication];
                 [nsApp setActivationPolicy:NSApplicationActivationPolicyRegular];
                 if (zapp_app_delegate == nil) {
                     zapp_app_delegate = [ZappAppDelegate new];
                 }
                 [nsApp setDelegate:zapp_app_delegate];
+#endif
             }
             self.initialized = true;
         }
@@ -61,6 +65,7 @@ impl Platform for CocoaPlatform {
         self.init();
         let cfg = app_get_config(app);
         raw {
+#ifdef __APPLE__
             #include <stdlib.h>
             #include <signal.h>
             
@@ -81,6 +86,7 @@ impl Platform for CocoaPlatform {
             );
             [NSApp activateIgnoringOtherApps:YES];
             [NSApp run];
+#endif
         }
         return 0;
     }

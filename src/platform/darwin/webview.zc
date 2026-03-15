@@ -6,15 +6,16 @@
 import "./window.zc";
 import "./webview_bootstrap.zc";
 
-include <Cocoa/Cocoa.h>
-include <WebKit/WebKit.h>
-include <dispatch/dispatch.h>
 include <stdlib.h>
 include <string.h>
 include <stdbool.h>
-include <compression.h>
 
 raw {
+#ifdef __APPLE__
+    #include <Cocoa/Cocoa.h>
+    #include <WebKit/WebKit.h>
+    #include <dispatch/dispatch.h>
+    #include <compression.h>
 #ifndef ZAPP_EMBEDDED_ASSET_STRUCT_DEFINED
 #define ZAPP_EMBEDDED_ASSET_STRUCT_DEFINED 1
     struct ZappEmbeddedAsset {
@@ -509,4 +510,5 @@ raw {
         
         [window setContentView:webview];
     }
+#endif
 }

@@ -2,6 +2,7 @@
 
 @cfg(ZAPP_WORKER_ENGINE_QJS)
 raw {
+#ifdef __APPLE__
 #ifdef ZAPP_WORKER_ENGINE_QJS
     static void zapp_core_crypto_random_bytes(uint8_t* buf, size_t len);
     static char* zapp_core_crypto_random_uuid(void);
@@ -40,5 +41,6 @@ raw {
         JS_SetPropertyStr(ctx, bridge, "randomUUID",
             JS_NewCFunction(ctx, qjs_bridge_randomUUID, "randomUUID", 0));
     }
+#endif
 #endif
 }

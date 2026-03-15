@@ -33,11 +33,16 @@ import "./qjs/fetch_qjs.zc";
 include <string.h>
 include <stdlib.h>
 //> macos: framework: Security
-include <Security/Security.h>
+raw {
+#ifdef __APPLE__
+    #include <Security/Security.h>
+#endif
+}
 
 // Rename QuickJS types to avoid conflicts with JavaScriptCore (included via WebKit)
 raw {
 #ifdef ZAPP_WORKER_ENGINE_QJS
+#ifdef __APPLE__
     extern void* engine_qjs_create_ctx(void* rt);
     extern int engine_qjs_eval(void* ctx, const char* utf8, size_t len, const char* filename);
     extern const char* engine_qjs_get_exception_message(void* ctx);
@@ -559,6 +564,7 @@ raw {
         });
     }
 }
+#endif /* __APPLE__ */
 #endif
 }
 
@@ -569,7 +575,9 @@ impl WorkerBackend for DarwinWorkerQjs {
     fn bind_runtime(self, app: App*) -> void {
         raw {
 #ifdef ZAPP_WORKER_ENGINE_QJS
+#ifdef __APPLE__
         app->event.send_event_to_js = (void*)zapp_darwin_send_event_to_js;
+#endif /* __APPLE__ */
 #endif
         }
     }
@@ -577,6 +585,7 @@ impl WorkerBackend for DarwinWorkerQjs {
     fn handle_bridge(self, app: App*, action: string, payload: string) -> void {
         raw {
 #ifdef ZAPP_WORKER_ENGINE_QJS
+#ifdef __APPLE__
         if (action == NULL || payload == NULL) return;
 
         zapp_darwin_qjs_ensure_init();
@@ -931,6 +940,7 @@ impl WorkerBackend for DarwinWorkerQjs {
 
             return;
         }
+#endif /* __APPLE__ */
 #endif
         }
     }
@@ -938,6 +948,7 @@ impl WorkerBackend for DarwinWorkerQjs {
 
 raw {
 #ifdef ZAPP_WORKER_ENGINE_QJS
+#ifdef __APPLE__
     #undef JSContext
     #undef JSRuntime
     #undef JSValue
@@ -947,5 +958,6 @@ raw {
     #undef JSValueConst
     #undef JSPropertyEnum
     #undef JSPropertyDescriptor
+#endif /* __APPLE__ */
 #endif
 }

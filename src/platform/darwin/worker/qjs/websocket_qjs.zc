@@ -3,6 +3,7 @@
 @cfg(ZAPP_WORKER_ENGINE_QJS)
 raw {
 #ifdef ZAPP_WORKER_ENGINE_QJS
+#ifdef __APPLE__
     static char* zapp_core_ws_connect(const char* url_str, const char** protocols, int protocol_count,
                                        zapp_ws_event_fn callback, void* user_data);
     static void zapp_core_ws_send_text(const char* ws_id, const char* text);
@@ -217,5 +218,6 @@ raw {
         JS_SetPropertyStr(ctx, bridge, "wsClose", JS_NewCFunction(ctx, qjs_bridge_wsClose, "wsClose", 3));
     }
 
+#endif /* __APPLE__ */
 #endif
 }

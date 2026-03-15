@@ -1,0 +1,9 @@
+// QJS wrapper for WebSocket on Windows. Stub for initial implementation.
+
+raw {
+    #include "quickjs.h"
+
+    void zapp_windows_qjs_websocket_install(JSContext* ctx, JSValue bridge, const char* worker_id) {
+        (void)ctx; (void)bridge; (void)worker_id;
+    }
+}

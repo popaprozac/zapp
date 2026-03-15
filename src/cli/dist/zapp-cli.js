@@ -5,15 +5,29 @@ var __getProtoOf = Object.getPrototypeOf;
 var __defProp = Object.defineProperty;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
+function __accessProp(key) {
+  return this[key];
+}
+var __toESMCache_node;
+var __toESMCache_esm;
 var __toESM = (mod, isNodeMode, target) => {
+  var canCache = mod != null && typeof mod === "object";
+  if (canCache) {
+    var cache = isNodeMode ? __toESMCache_node ??= new WeakMap : __toESMCache_esm ??= new WeakMap;
+    var cached = cache.get(mod);
+    if (cached)
+      return cached;
+  }
   target = mod != null ? __create(__getProtoOf(mod)) : {};
   const to = isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target;
   for (let key of __getOwnPropNames(mod))
     if (!__hasOwnProp.call(to, key))
       __defProp(to, key, {
-        get: () => mod[key],
+        get: __accessProp.bind(mod, key),
         enumerable: true
       });
+  if (canCache)
+    cache.set(mod, to);
   return to;
 };
 var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
@@ -21,7 +35,7 @@ var __require = import.meta.require;
 
 // node_modules/esbuild/lib/main.js
 var require_main = __commonJS((exports, module) => {
-  var __dirname = "/Users/zach/code/zapp/src/cli/node_modules/esbuild/lib", __filename = "/Users/zach/code/zapp/src/cli/node_modules/esbuild/lib/main.js";
+  var __dirname = "C:\\Users\\Zach\\code\\zapp\\src\\cli\\node_modules\\esbuild\\lib", __filename = "C:\\Users\\Zach\\code\\zapp\\src\\cli\\node_modules\\esbuild\\lib\\main.js";
   var __defProp2 = Object.defineProperty;
   var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
   var __getOwnPropNames2 = Object.getOwnPropertyNames;
@@ -2733,10 +2747,12 @@ var spawnPackageScript = (script, options = {}) => {
 // src/build.ts
 import path4 from "path";
 import process5 from "process";
+import { mkdir as mkdir3 } from "fs/promises";
 import { brotliCompressSync, constants as zlibConstants } from "zlib";
 
 // src/build-config.ts
 import path from "path";
+import { mkdir } from "fs/promises";
 var cString = (value) => JSON.stringify(value.replace(/\\/g, "/"));
 var generateBuildConfigZc = async ({
   root,
@@ -2746,9 +2762,7 @@ var generateBuildConfigZc = async ({
   backendScriptPath
 }) => {
   const buildDir = path.join(root, ".zapp");
-  if (!await Bun.file(buildDir).exists()) {
-    await runCmd("mkdir", ["-p", buildDir], { cwd: root });
-  }
+  await mkdir(buildDir, { recursive: true });
   const isDev = mode === "dev" || mode === "dev-embedded";
   const useEmbeddedAssets = mode === "dev-embedded" || mode === "prod-embedded";
   const initialUrl = mode === "dev" ? devUrl ?? "http://localhost:5173" : "zapp://index.html";
@@ -2788,6 +2802,7 @@ raw {
 // src/backend.ts
 import path2 from "path";
 import process3 from "process";
+import { mkdir as mkdir2 } from "fs/promises";
 var BACKEND_CONVENTIONS = ["backend.ts", "backend.js"];
 async function findBackendScript(root) {
   for (const name of BACKEND_CONVENTIONS) {
@@ -2837,9 +2852,7 @@ async function resolveAndBundleBackend({
   process3.stdout.write(`[zapp] bundling backend script: ${path2.relative(root, entryPath)}
 `);
   const buildDir = path2.join(root, ".zapp");
-  if (!await Bun.file(buildDir).exists()) {
-    await runCmd("mkdir", ["-p", buildDir], { cwd: root });
-  }
+  await mkdir2(buildDir, { recursive: true });
   const outFile = path2.join(buildDir, "backend.bundle.js");
   const runtimePath = resolveZappPackage("@zapp/runtime", root);
   const backendPath = resolveZappPackage("@zapp/backend", root);
@@ -3095,9 +3108,7 @@ ${assetEntries.join(`
 }
 `;
   const buildDir = path4.join(root, ".zapp");
-  if (!await Bun.file(buildDir).exists()) {
-    await runCmd("mkdir", ["-p", buildDir], { cwd: root });
-  }
+  await mkdir3(buildDir, { recursive: true });
   const outPath = path4.join(buildDir, "zapp_assets.zc");
   await Bun.write(outPath, zcContent);
   return outPath;
@@ -3268,7 +3279,7 @@ var runDev = async ({
 
 // src/init.ts
 import path6 from "path";
-import { mkdir } from "fs/promises";
+import { mkdir as mkdir4 } from "fs/promises";
 var runInit = async ({
   root,
   name,
@@ -3281,9 +3292,9 @@ var runInit = async ({
   const darwinConfigDir = path6.join(configDir, "darwin");
   const windowsConfigDir = path6.join(configDir, "windows");
   console.log(`Scaffolding Zapp project in ${projectDir}...`);
-  await mkdir(projectDir, { recursive: true });
-  await mkdir(darwinConfigDir, { recursive: true });
-  await mkdir(windowsConfigDir, { recursive: true });
+  await mkdir4(projectDir, { recursive: true });
+  await mkdir4(darwinConfigDir, { recursive: true });
+  await mkdir4(windowsConfigDir, { recursive: true });
   console.log(`Creating frontend with Vite template: ${template}...`);
   await spawnStreaming("bun", ["create", "vite", "frontend", "--template", template], { cwd: projectDir }).exited;
   const pkgPath = path6.join(frontendDir, "package.json");
@@ -3335,6 +3346,14 @@ fn run_app() -> int {
 //> macos: cflags: -fobjc-arc -x objective-c
 // ---------------------------------
 
+// --- Windows Directives (QuickJS default) ---
+//> windows: link: -lWebView2Loader
+//> windows: link: -lole32 -lshell32 -luuid -luser32 -lgdi32 -lcomctl32 -lshlwapi
+//> windows: link: -lwinhttp -lbcrypt
+//> windows: cflags: -DUNICODE -D_UNICODE -DCINTERFACE -DCOBJMACROS
+//> windows: define: ZAPP_WORKER_ENGINE_QJS
+// ---------------------------------
+
 import "app.zc";
 
 fn main() -> int {
@@ -3366,7 +3385,7 @@ fn main() -> int {
     await Bun.write(path6.join(projectDir, "tsconfig.json"), rootTsConfig);
     const backendContent = `import { App } from "@zapp/backend";
 
-// Your backend TypeScript runs in a privileged JSC context
+// Your backend TypeScript runs in a privileged native context
 // with direct access to native bridge, window management, and app lifecycle.
 `;
     await Bun.write(path6.join(projectDir, "backend.ts"), backendContent);
@@ -3411,7 +3430,7 @@ Project ${name} scaffolded successfully!`);
 };
 
 // src/package.ts
-import { mkdir as mkdir2, copyFile, chmod } from "fs/promises";
+import { mkdir as mkdir5, copyFile, chmod } from "fs/promises";
 import path7 from "path";
 import process7 from "process";
 var runPackage = async ({ root, nativeOut }) => {
@@ -3426,8 +3445,8 @@ var runPackage = async ({ root, nativeOut }) => {
   const contentsDir = path7.join(appBundlePath, "Contents");
   const macosDir = path7.join(contentsDir, "MacOS");
   const resourcesDir = path7.join(contentsDir, "Resources");
-  await mkdir2(macosDir, { recursive: true });
-  await mkdir2(resourcesDir, { recursive: true });
+  await mkdir5(macosDir, { recursive: true });
+  await mkdir5(resourcesDir, { recursive: true });
   const execPath = path7.resolve(root, nativeOut);
   const execFile = Bun.file(execPath);
   if (!await execFile.exists()) {
@@ -3498,7 +3517,8 @@ var command = process8.argv[2] ?? "help";
 var root = parseFlag("--root", cwd);
 var frontendDir = path8.resolve(root, parseFlag("--frontend", "frontend"));
 var buildFile = path8.resolve(root, parseFlag("--input", parseFlag("--build-file", "build.zc")));
-var nativeOut = path8.resolve(root, parseFlag("--out", "zapp"));
+var defaultOut = process8.platform === "win32" ? "zapp.exe" : "zapp";
+var nativeOut = path8.resolve(root, parseFlag("--out", defaultOut));
 var assetDir = path8.resolve(frontendDir, parseFlag("--asset-dir", "dist"));
 var devUrl = parseFlag("--dev-url", "http://localhost:5173");
 var withBrotli = process8.argv.includes("--brotli");

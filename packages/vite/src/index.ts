@@ -69,11 +69,14 @@ export const zapp = (options: ZappOptions = {}): Plugin => {
     typeof (globalThis as any).Bun.build === "function";
 
   const bundleWorker = async (entryPath: string, outFile: string) => {
+    // On Windows, Vite's watcher can hold a memory-mapped lock on output files.
+    // Write to a temp file then rename to avoid EBUSY / user-mapped section errors.
+    const tmpFile = outFile + ".tmp";
     if (hasBunBuild) {
       const result = await (globalThis as any).Bun.build({
         entrypoints: [entryPath],
-        outdir: path.dirname(outFile),
-        naming: path.basename(outFile),
+        outdir: path.dirname(tmpFile),
+        naming: path.basename(tmpFile),
         target: "browser",
         format: "esm",
         sourcemap: devServer ? "inline" : "none",
@@ -97,20 +100,40 @@ export const zapp = (options: ZappOptions = {}): Plugin => {
           .join("\n");
         throw new Error(lines || `bun build failed for ${entryPath}`);
       }
-      return;
+    } else {
+      const { build: esbuild } = await import("esbuild");
+      await esbuild({
+        entryPoints: [entryPath],
+        bundle: true,
+        format: "esm",
+        platform: "browser",
+        target: "es2022",
+        sourcemap: devServer ? "inline" : false,
+        minify: devServer ? false : minify,
+        outfile: tmpFile,
+        alias: viteAliases,
+      });
     }
-    const { build: esbuild } = await import("esbuild");
-    await esbuild({
-      entryPoints: [entryPath],
-      bundle: true,
-      format: "esm",
-      platform: "browser",
-      target: "es2022",
-      sourcemap: devServer ? "inline" : false,
-      minify: devServer ? false : minify,
-      outfile: outFile,
-      alias: viteAliases,
-    });
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        await fs.rename(tmpFile, outFile);
+        return;
+      } catch (e: any) {
+        if (attempt < 4 && (e.code === "EPERM" || e.code === "EBUSY")) {
+          await new Promise((r) => setTimeout(r, 50 * (attempt + 1)));
+          continue;
+        }
+        // Last resort: overwrite by reading+writing instead of rename
+        try {
+          const content = await fs.readFile(tmpFile);
+          await fs.writeFile(outFile, content);
+          await fs.unlink(tmpFile).catch(() => {});
+          return;
+        } catch {
+          throw e;
+        }
+      }
+    }
   };
 
   const buildWorkers = async () => {

@@ -43,12 +43,12 @@ import "./engine_qjs.zc";
 import "./worker/qjs.zc";
 
 //> macos: framework: JavaScriptCore
-include <Cocoa/Cocoa.h>
-include <WebKit/WebKit.h>
-include <dispatch/dispatch.h>
-include <JavaScriptCore/JavaScriptCore.h>
-
 raw {
+#ifdef __APPLE__
+    #include <Cocoa/Cocoa.h>
+    #include <WebKit/WebKit.h>
+    #include <dispatch/dispatch.h>
+    #include <JavaScriptCore/JavaScriptCore.h>
 #if !defined(ZAPP_WORKER_ENGINE_QJS)
     extern void* engine_jsc_create_ctx(void* vm, const char* name);
     extern int engine_jsc_eval(void* ctx, const char* utf8, size_t len, const char* filename);
@@ -837,6 +837,7 @@ raw {
 
     void zapp_backend_context_destroy(void) {}
 #endif
+#endif /* __APPLE__ */
 }
 
 struct DarwinBackend {}

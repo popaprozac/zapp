@@ -1,0 +1,284 @@
+raw {
+    #include <windows.h>
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <string.h>
+    #include "quickjs.h"
+    #include "quickjs-libc.h"
+
+    extern void* zapp_windows_qjs_get_context(const char* workerId);
+    extern void zapp_windows_qjs_dispatch(void (*func)(void*), void* data);
+    extern void zapp_windows_qjs_drain_jobs(void* ctx, const char* label);
+
+    // -----------------------------------------------------------------------
+    // Timer state
+    // -----------------------------------------------------------------------
+
+    #define ZAPP_MAX_TIMERS_PER_WORKER 256
+    #define ZAPP_MAX_TOTAL_TIMERS 4096
+    #define ZAPP_MIN_INTERVAL_MS 4
+
+    typedef struct {
+        int id;
+        char workerId[128];
+        HANDLE hTimer;
+        JSContext* creatingCtx;
+        JSValue savedFn;
+        int shouldRepeat;
+        int cancelled;
+        DWORD intervalMs;
+    } ZappTimer;
+
+    static HANDLE zapp_timer_queue = NULL;
+    static ZappTimer zapp_timers[ZAPP_MAX_TOTAL_TIMERS] = {0};
+    static int zapp_next_timer_id = 1;
+    static CRITICAL_SECTION zapp_timer_lock;
+    static int zapp_timer_lock_init = 0;
+
+    static void zapp_timers_ensure_init(void) {
+        if (!zapp_timer_lock_init) {
+            InitializeCriticalSection(&zapp_timer_lock);
+            zapp_timer_lock_init = 1;
+        }
+        if (!zapp_timer_queue) {
+            zapp_timer_queue = CreateTimerQueue();
+        }
+    }
+
+    static ZappTimer* zapp_timer_find(int id) {
+        for (int i = 0; i < ZAPP_MAX_TOTAL_TIMERS; i++) {
+            if (zapp_timers[i].id == id && zapp_timers[i].hTimer != NULL) {
+                return &zapp_timers[i];
+            }
+        }
+        return NULL;
+    }
+
+    static ZappTimer* zapp_timer_alloc(void) {
+        for (int i = 0; i < ZAPP_MAX_TOTAL_TIMERS; i++) {
+            if (zapp_timers[i].id == 0) {
+                return &zapp_timers[i];
+            }
+        }
+        return NULL;
+    }
+
+    static int zapp_timers_count_for_worker(const char* workerId) {
+        int count = 0;
+        for (int i = 0; i < ZAPP_MAX_TOTAL_TIMERS; i++) {
+            if (zapp_timers[i].id != 0 && strcmp(zapp_timers[i].workerId, workerId) == 0) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    // -----------------------------------------------------------------------
+    // Timer callback (fires on threadpool, dispatches to QJS thread)
+    // -----------------------------------------------------------------------
+
+    typedef struct {
+        int timerId;
+    } ZappTimerFireData;
+
+    static void zapp_timer_fire_on_qjs(void* data) {
+        ZappTimerFireData* fd = (ZappTimerFireData*)data;
+        int timerId = fd->timerId;
+        free(fd);
+
+        EnterCriticalSection(&zapp_timer_lock);
+        ZappTimer* timer = zapp_timer_find(timerId);
+        if (!timer || timer->cancelled) {
+            LeaveCriticalSection(&zapp_timer_lock);
+            return;
+        }
+
+        char workerId[128];
+        strncpy(workerId, timer->workerId, sizeof(workerId));
+        JSContext* creatingCtx = timer->creatingCtx;
+        JSValue savedFn = timer->savedFn;
+        int shouldRepeat = timer->shouldRepeat;
+        LeaveCriticalSection(&zapp_timer_lock);
+
+        void* ctx_ptr = zapp_windows_qjs_get_context(workerId);
+        if (!ctx_ptr || (JSContext*)ctx_ptr != creatingCtx) {
+            return;
+        }
+        JSContext* ctx = (JSContext*)ctx_ptr;
+
+        JSValue ret = JS_Call(ctx, savedFn, JS_UNDEFINED, 0, NULL);
+        if (JS_IsException(ret)) {
+            JSValue exception = JS_GetException(ctx);
+            const char* str = JS_ToCString(ctx, exception);
+            fprintf(stderr, "[qjs] timer error: %s\n", str ? str : "unknown");
+            if (str) JS_FreeCString(ctx, str);
+            JS_FreeValue(ctx, exception);
+        }
+        JS_FreeValue(ctx, ret);
+        zapp_windows_qjs_drain_jobs(ctx, "timer");
+
+        if (!shouldRepeat) {
+            EnterCriticalSection(&zapp_timer_lock);
+            ZappTimer* t = zapp_timer_find(timerId);
+            if (t) {
+                if (t->hTimer) {
+                    DeleteTimerQueueTimer(zapp_timer_queue, t->hTimer, NULL);
+                }
+                if (ctx_ptr && (JSContext*)ctx_ptr == t->creatingCtx) {
+                    JS_FreeValue(t->creatingCtx, t->savedFn);
+                }
+                memset(t, 0, sizeof(ZappTimer));
+            }
+            LeaveCriticalSection(&zapp_timer_lock);
+        }
+    }
+
+    static VOID CALLBACK zapp_timer_callback(PVOID lpParameter, BOOLEAN TimerOrWaitFired) {
+        (void)TimerOrWaitFired;
+        int timerId = (int)(intptr_t)lpParameter;
+
+        ZappTimerFireData* fd = (ZappTimerFireData*)calloc(1, sizeof(ZappTimerFireData));
+        fd->timerId = timerId;
+        zapp_windows_qjs_dispatch(zapp_timer_fire_on_qjs, fd);
+    }
+
+    // -----------------------------------------------------------------------
+    // QJS bridge functions: setTimer, clearTimer
+    // -----------------------------------------------------------------------
+
+    static JSValue qjs_bridge_setTimer(JSContext* ctx, JSValue this_val, int argc, JSValue* argv, int magic, JSValue* func_data) {
+        (void)this_val; (void)magic;
+        if (argc < 3) return JS_NewInt32(ctx, 0);
+
+        const char* worker_id = JS_ToCString(ctx, func_data[0]);
+        if (!worker_id) return JS_NewInt32(ctx, 0);
+
+        if (!JS_IsFunction(ctx, argv[0])) {
+            JS_FreeCString(ctx, worker_id);
+            return JS_NewInt32(ctx, 0);
+        }
+
+        double ms = 0;
+        JS_ToFloat64(ctx, &ms, argv[1]);
+        if (!(ms >= 0)) ms = 0;
+
+        int shouldRepeat = JS_ToBool(ctx, argv[2]);
+        if (shouldRepeat && ms < ZAPP_MIN_INTERVAL_MS) {
+            ms = ZAPP_MIN_INTERVAL_MS;
+        }
+
+        zapp_timers_ensure_init();
+
+        EnterCriticalSection(&zapp_timer_lock);
+
+        if (zapp_timers_count_for_worker(worker_id) >= ZAPP_MAX_TIMERS_PER_WORKER) {
+            LeaveCriticalSection(&zapp_timer_lock);
+            JS_FreeCString(ctx, worker_id);
+            return JS_NewInt32(ctx, 0);
+        }
+
+        ZappTimer* timer = zapp_timer_alloc();
+        if (!timer) {
+            LeaveCriticalSection(&zapp_timer_lock);
+            JS_FreeCString(ctx, worker_id);
+            return JS_NewInt32(ctx, 0);
+        }
+
+        int timerId = zapp_next_timer_id++;
+        memset(timer, 0, sizeof(ZappTimer));
+        timer->id = timerId;
+        strncpy(timer->workerId, worker_id, sizeof(timer->workerId) - 1);
+        timer->creatingCtx = ctx;
+        timer->savedFn = JS_DupValue(ctx, argv[0]);
+        timer->shouldRepeat = shouldRepeat;
+        timer->cancelled = 0;
+        timer->intervalMs = (DWORD)(ms > 0 ? ms : 1);
+
+        BOOL ok = CreateTimerQueueTimer(
+            &timer->hTimer,
+            zapp_timer_queue,
+            zapp_timer_callback,
+            (PVOID)(intptr_t)timerId,
+            timer->intervalMs,
+            shouldRepeat ? timer->intervalMs : 0,
+            WT_EXECUTEDEFAULT
+        );
+
+        LeaveCriticalSection(&zapp_timer_lock);
+        JS_FreeCString(ctx, worker_id);
+
+        if (!ok) return JS_NewInt32(ctx, 0);
+        return JS_NewInt32(ctx, timerId);
+    }
+
+    static JSValue qjs_bridge_clearTimer(JSContext* ctx, JSValue this_val, int argc, JSValue* argv, int magic, JSValue* func_data) {
+        (void)this_val; (void)magic;
+        if (argc < 1) return JS_UNDEFINED;
+
+        const char* worker_id = JS_ToCString(ctx, func_data[0]);
+        if (!worker_id) return JS_UNDEFINED;
+
+        int32_t tId = 0;
+        JS_ToInt32(ctx, &tId, argv[0]);
+
+        EnterCriticalSection(&zapp_timer_lock);
+        ZappTimer* timer = zapp_timer_find(tId);
+        if (timer && strcmp(timer->workerId, worker_id) == 0) {
+            timer->cancelled = 1;
+            if (timer->hTimer) {
+                DeleteTimerQueueTimer(zapp_timer_queue, timer->hTimer, NULL);
+            }
+            void* ctx_ptr = zapp_windows_qjs_get_context(worker_id);
+            if (ctx_ptr && (JSContext*)ctx_ptr == timer->creatingCtx) {
+                JS_FreeValue(timer->creatingCtx, timer->savedFn);
+            }
+            memset(timer, 0, sizeof(ZappTimer));
+        }
+        LeaveCriticalSection(&zapp_timer_lock);
+
+        JS_FreeCString(ctx, worker_id);
+        return JS_UNDEFINED;
+    }
+
+    // -----------------------------------------------------------------------
+    // Cancel all timers for a given worker
+    // -----------------------------------------------------------------------
+
+    void zapp_windows_qjs_timers_cancel(const char* workerId) {
+        if (!workerId || !zapp_timer_lock_init) return;
+
+        EnterCriticalSection(&zapp_timer_lock);
+        for (int i = 0; i < ZAPP_MAX_TOTAL_TIMERS; i++) {
+            if (zapp_timers[i].id != 0 && strcmp(zapp_timers[i].workerId, workerId) == 0) {
+                zapp_timers[i].cancelled = 1;
+                if (zapp_timers[i].hTimer) {
+                    DeleteTimerQueueTimer(zapp_timer_queue, zapp_timers[i].hTimer, NULL);
+                }
+                void* ctx_ptr = zapp_windows_qjs_get_context(workerId);
+                if (ctx_ptr && (JSContext*)ctx_ptr == zapp_timers[i].creatingCtx) {
+                    JS_FreeValue(zapp_timers[i].creatingCtx, zapp_timers[i].savedFn);
+                }
+                memset(&zapp_timers[i], 0, sizeof(ZappTimer));
+            }
+        }
+        LeaveCriticalSection(&zapp_timer_lock);
+    }
+
+    // -----------------------------------------------------------------------
+    // Install setTimer/clearTimer on a QJS bridge object
+    // -----------------------------------------------------------------------
+
+    void zapp_windows_qjs_timers_install(JSContext* ctx, JSValue bridge, const char* worker_id) {
+        zapp_timers_ensure_init();
+        JSValue wIdVal = JS_NewString(ctx, worker_id);
+        JSValue funcData[1] = { wIdVal };
+
+        JSValue setTimerFunc = JS_NewCFunctionData(ctx, qjs_bridge_setTimer, 3, 0, 1, funcData);
+        JS_SetPropertyStr(ctx, bridge, "setTimer", setTimerFunc);
+
+        JSValue clearTimerFunc = JS_NewCFunctionData(ctx, qjs_bridge_clearTimer, 1, 0, 1, funcData);
+        JS_SetPropertyStr(ctx, bridge, "clearTimer", clearTimerFunc);
+
+        JS_FreeValue(ctx, wIdVal);
+    }
+}

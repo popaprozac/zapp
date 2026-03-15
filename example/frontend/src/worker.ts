@@ -10,67 +10,67 @@ type ZappWorkerGlobal = typeof globalThis & {
 }
 
 import { Sync } from '@zapp/runtime'
-import { Surreal } from "surrealdb";
+// import { Surreal } from "surrealdb";
 
-const db = new Surreal();
+// const db = new Surreal();
 
-console.log(db.status);
+// console.log(db.status);
 
 const workerSelf = self as unknown as ZappWorkerGlobal
 const zapp = workerSelf.__zapp
 
-console.log("workerSelf", workerSelf);
+// console.log("workerSelf", workerSelf);
 
-// // Worker sync demo
-// ;(async () => {
-//   console.log('[Worker] Starting Sync.wait demo...');
-//   const controller = new AbortController();
+// Worker sync demo
+;(async () => {
+  console.log('[Worker] Starting Sync.wait demo...');
+  const controller = new AbortController();
   
-//   // Abort after 4 seconds
-//   setTimeout(() => {
-//     console.log('[Worker] Aborting Sync.wait demo...');
-//     controller.abort("worker-timeout");
-//   }, 4000);
+  // Abort after 4 seconds
+  setTimeout(() => {
+    console.log('[Worker] Aborting Sync.wait demo...');
+    controller.abort("worker-timeout");
+  }, 4000);
 
-//   try {
-//     const result = await Sync.wait("worker-demo-sync", { 
-//       timeoutMs: null, 
-//       signal: controller.signal 
-//     });
-//     console.log('[Worker] Sync.wait completed:', result);
-//   } catch (err) {
-//     const message = err instanceof Error ? err.message : String(err);
-//     console.error('[Worker] Sync.wait failed:', message);
-//   }
-// })();
+  try {
+    const result = await Sync.wait("worker-demo-sync", { 
+      timeoutMs: null, 
+      signal: controller.signal 
+    });
+    console.log('[Worker] Sync.wait completed:', result);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('[Worker] Sync.wait failed:', message);
+  }
+})();
 
-// self.onmessage = async (event) => {
-//   console.log('echoing message', event.data)
-//   self.postMessage({
-//     type: 'echo',
-//     payload: event.data
-//   });
-// }
+self.onmessage = async (event) => {
+  console.log('echoing message', event.data)
+  self.postMessage({
+    type: 'echo',
+    payload: event.data
+  });
+}
 
-// workerSelf.receive("ping", (data) => {
-//   console.log("Worker received ping on channel", data);
-//   workerSelf.send("pong", { ok: true, orig: data });
-// });
+workerSelf.receive("ping", (data) => {
+  console.log("Worker received ping on channel", data);
+  workerSelf.send("pong", { ok: true, orig: data });
+});
 
-// zapp?.on?.("test", console.log);
+zapp?.on?.("test", console.log);
 
-// try {
-//   const res = await fetch("https://jsonplaceholder.typicode.com/todos/1");
-//   const json = await res.json();
-//   self.postMessage({
-//     type: 'echo_with_fetch',
-//     payload: 'hello',
-//     fetchResult: json,
-//     id,
-//   });
-// } catch(e) {
-//   console.error("Fetch failed:", e instanceof Error ? e.message : String(e));
-// }
+try {
+  const res = await fetch("https://jsonplaceholder.typicode.com/todos/1");
+  const json = await res.json();
+  self.postMessage({
+    type: 'echo_with_fetch',
+    payload: 'hello',
+    fetchResult: json,
+    id,
+  });
+} catch(e) {
+  console.error("Fetch failed:", e instanceof Error ? e.message : String(e));
+}
 
 setInterval(() => {
   console.log('emitting pong')

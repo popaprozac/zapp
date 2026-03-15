@@ -1,10 +1,12 @@
 // JSC wrapper for URL parsing. Delegates to core/url_core.zc.
 
 //> macos: framework: JavaScriptCore
-include <Foundation/Foundation.h>
-include <JavaScriptCore/JavaScriptCore.h>
 
 raw {
+#ifdef __APPLE__
+    #include <Foundation/Foundation.h>
+    #include <JavaScriptCore/JavaScriptCore.h>
+
     static int zapp_core_url_parse(const char* url_str, const char* base_str, zapp_url_parsed_t* out);
     static void zapp_core_url_free(zapp_url_parsed_t* c);
 
@@ -48,4 +50,5 @@ raw {
             return [JSValue valueWithObject:result inContext:ctx];
         };
     }
+#endif
 }

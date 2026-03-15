@@ -1,10 +1,12 @@
 // JSC wrapper for WebSocket. Delegates to core/websocket_core.zc.
 
 //> macos: framework: JavaScriptCore
-include <Foundation/Foundation.h>
-include <JavaScriptCore/JavaScriptCore.h>
 
 raw {
+#ifdef __APPLE__
+    #include <Foundation/Foundation.h>
+    #include <JavaScriptCore/JavaScriptCore.h>
+
     static char* zapp_core_ws_connect(const char* url_str, const char** protocols, int protocol_count,
                                        zapp_ws_event_fn callback, void* user_data);
     static void zapp_core_ws_send_text(const char* ws_id, const char* text);
@@ -121,4 +123,5 @@ raw {
             [zapp_jsc_ws_refs removeObjectForKey:wsId];
         };
     }
+#endif
 }

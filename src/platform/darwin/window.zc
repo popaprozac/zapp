@@ -1,10 +1,10 @@
 import "../window.zc";
 import "./webview.zc";
 
-include <Cocoa/Cocoa.h>
-include <dispatch/dispatch.h>
-
 raw {
+#ifdef __APPLE__
+    #include <Cocoa/Cocoa.h>
+    #include <dispatch/dispatch.h>
     #import <objc/runtime.h>
 
     extern void zapp_darwin_reset_all_workers(void);
@@ -27,11 +27,13 @@ raw {
 
     // Key for retaining the window delegate via associated object (NSWindow.delegate is weak).
     static const char kZappWindowDelegateKey = 0;
+#endif
 }
 
 fn darwin_window_create(options: WindowOptions*, inspectable: bool) -> void* {
     let handle: void* = NULL;
     raw {
+#ifdef __APPLE__
         @autoreleasepool {
             __block void* out = NULL;
             void (^work)(void) = ^{
@@ -84,18 +86,18 @@ fn darwin_window_create(options: WindowOptions*, inspectable: bool) -> void* {
 
             handle = out;
         }
+#endif
     }
     return handle;
 }
 
 fn darwin_window_destroy(window: void*) -> void {
     raw {
+#ifdef __APPLE__
         @autoreleasepool {
             void (^work)(void) = ^{
                 NSWindow* nsWindow = (__bridge NSWindow*)window;
                 if (nsWindow) {
-                    // Defensive cleanup for dev reload/close: if this is the last app window,
-                    // clear any remaining worker contexts that might not have reset in-page.
                     if ([[NSApp windows] count] <= 1) {
                         zapp_darwin_reset_all_workers();
                     }
@@ -108,11 +110,13 @@ fn darwin_window_destroy(window: void*) -> void {
                 dispatch_sync(dispatch_get_main_queue(), work);
             }
         }
+#endif
     }
 }
 
 fn darwin_window_minimize(window: void*) -> void {
     raw {
+#ifdef __APPLE__
         @autoreleasepool {
             void (^work)(void) = ^{
                 NSWindow* nsWindow = (__bridge NSWindow*)window;
@@ -126,11 +130,13 @@ fn darwin_window_minimize(window: void*) -> void {
                 dispatch_sync(dispatch_get_main_queue(), work);
             }
         }
+#endif
     }
 }
 
 fn darwin_window_unminimize(window: void*) -> void {
     raw {
+#ifdef __APPLE__
         @autoreleasepool {
             void (^work)(void) = ^{
                 NSWindow* nsWindow = (__bridge NSWindow*)window;
@@ -144,11 +150,13 @@ fn darwin_window_unminimize(window: void*) -> void {
                 dispatch_sync(dispatch_get_main_queue(), work);
             }
         }
+#endif
     }
 }
 
 fn darwin_window_maximize(window: void*) -> void {
     raw {
+#ifdef __APPLE__
         @autoreleasepool {
             void (^work)(void) = ^{
                 NSWindow* nsWindow = (__bridge NSWindow*)window;
@@ -162,16 +170,17 @@ fn darwin_window_maximize(window: void*) -> void {
                 dispatch_sync(dispatch_get_main_queue(), work);
             }
         }
+#endif
     }
 }
 
 fn darwin_window_unmaximize(window: void*) -> void {
     raw {
+#ifdef __APPLE__
         @autoreleasepool {
             void (^work)(void) = ^{
                 NSWindow* nsWindow = (__bridge NSWindow*)window;
                 if (nsWindow) {
-                    // NSWindow zoom toggles maximized/restored state.
                     if ([nsWindow isZoomed]) {
                         [nsWindow zoom:nil];
                     }
@@ -183,11 +192,13 @@ fn darwin_window_unmaximize(window: void*) -> void {
                 dispatch_sync(dispatch_get_main_queue(), work);
             }
         }
+#endif
     }
 }
 
 fn darwin_window_toggle_minimize(window: void*) -> void {
     raw {
+#ifdef __APPLE__
         @autoreleasepool {
             void (^work)(void) = ^{
                 NSWindow* nsWindow = (__bridge NSWindow*)window;
@@ -205,11 +216,13 @@ fn darwin_window_toggle_minimize(window: void*) -> void {
                 dispatch_sync(dispatch_get_main_queue(), work);
             }
         }
+#endif
     }
 }
 
 fn darwin_window_toggle_maximize(window: void*) -> void {
     raw {
+#ifdef __APPLE__
         @autoreleasepool {
             void (^work)(void) = ^{
                 NSWindow* nsWindow = (__bridge NSWindow*)window;
@@ -223,11 +236,13 @@ fn darwin_window_toggle_maximize(window: void*) -> void {
                 dispatch_sync(dispatch_get_main_queue(), work);
             }
         }
+#endif
     }
 }
 
 fn darwin_window_set_title(window: void*, title: string) -> void {
     raw {
+#ifdef __APPLE__
         @autoreleasepool {
             void (^work)(void) = ^{
                 NSWindow* nsWindow = (__bridge NSWindow*)window;
@@ -238,11 +253,13 @@ fn darwin_window_set_title(window: void*, title: string) -> void {
             if ([NSThread isMainThread]) { work(); }
             else { dispatch_sync(dispatch_get_main_queue(), work); }
         }
+#endif
     }
 }
 
 fn darwin_window_set_size(window: void*, width: int, height: int) -> void {
     raw {
+#ifdef __APPLE__
         @autoreleasepool {
             void (^work)(void) = ^{
                 NSWindow* nsWindow = (__bridge NSWindow*)window;
@@ -255,11 +272,13 @@ fn darwin_window_set_size(window: void*, width: int, height: int) -> void {
             if ([NSThread isMainThread]) { work(); }
             else { dispatch_sync(dispatch_get_main_queue(), work); }
         }
+#endif
     }
 }
 
 fn darwin_window_set_position(window: void*, x: int, y: int) -> void {
     raw {
+#ifdef __APPLE__
         @autoreleasepool {
             void (^work)(void) = ^{
                 NSWindow* nsWindow = (__bridge NSWindow*)window;
@@ -270,11 +289,13 @@ fn darwin_window_set_position(window: void*, x: int, y: int) -> void {
             if ([NSThread isMainThread]) { work(); }
             else { dispatch_sync(dispatch_get_main_queue(), work); }
         }
+#endif
     }
 }
 
 fn darwin_window_set_fullscreen(window: void*, on: bool) -> void {
     raw {
+#ifdef __APPLE__
         @autoreleasepool {
             void (^work)(void) = ^{
                 NSWindow* nsWindow = (__bridge NSWindow*)window;
@@ -288,11 +309,13 @@ fn darwin_window_set_fullscreen(window: void*, on: bool) -> void {
             if ([NSThread isMainThread]) { work(); }
             else { dispatch_sync(dispatch_get_main_queue(), work); }
         }
+#endif
     }
 }
 
 fn darwin_window_set_always_on_top(window: void*, on: bool) -> void {
     raw {
+#ifdef __APPLE__
         @autoreleasepool {
             void (^work)(void) = ^{
                 NSWindow* nsWindow = (__bridge NSWindow*)window;
@@ -303,10 +326,12 @@ fn darwin_window_set_always_on_top(window: void*, on: bool) -> void {
             if ([NSThread isMainThread]) { work(); }
             else { dispatch_sync(dispatch_get_main_queue(), work); }
         }
+#endif
     }
 }
 
 raw {
+#ifdef __APPLE__
     extern void* app_get_active(void);
     extern void zapp_handle_message(void* app_ptr, char* msg_c);
 
@@ -539,4 +564,5 @@ raw {
         if ([NSThread isMainThread]) { work(); }
         else { dispatch_async(dispatch_get_main_queue(), work); }
     }
+#endif
 }

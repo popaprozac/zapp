@@ -1,4 +1,4 @@
-// ../packages/runtime/app.ts
+// packages/runtime/app.ts
 function getBridge() {
   return globalThis[Symbol.for("zapp.bridge")] ?? null;
 }
@@ -21,7 +21,7 @@ var App = {
     getBridge()?.appAction?.("show");
   }
 };
-// ../packages/runtime/windows.ts
+// packages/runtime/windows.ts
 var getBridge2 = () => globalThis[Symbol.for("zapp.bridge")] ?? null;
 var nextEventId = 0;
 var windowEventListeners = [];
@@ -100,7 +100,7 @@ var Window = {
     return makeHandle(windowId);
   }
 };
-// ../packages/runtime/worker.ts
+// packages/runtime/worker.ts
 function getBridge3() {
   const b = globalThis[Symbol.for("zapp.bridge")];
   if (!b?.createWorker) {
@@ -316,7 +316,7 @@ class SharedWorker {
     return this.#inner.receive(channel, handler);
   }
 }
-// ../packages/backend/app.ts
+// packages/backend/app.ts
 function getBridge4() {
   return globalThis[Symbol.for("zapp.bridge")] ?? null;
 }
@@ -372,7 +372,7 @@ var App2 = {
     readyCallbacks.length = 0;
   }
 };
-// backend.ts
+// example/backend.ts
 console.log("[backend] starting");
 App2.configure({
   name: "Example App",

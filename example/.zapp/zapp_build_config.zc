@@ -2,26 +2,26 @@
 
 raw {
     const char* zapp_build_mode_name(void) {
-        return "prod-embedded";
+        return "dev";
     }
 
     const char* zapp_build_asset_root(void) {
-        return "/Users/zach/code/zapp/example/frontend/dist";
+        return "C:/Users/Zach/code/zapp/example/frontend/dist";
     }
 
     const char* zapp_build_initial_url(void) {
-        return "zapp://index.html";
+        return "http://localhost:5173";
     }
 
     int zapp_build_is_dev_mode(void) {
-        return 0;
-    }
-
-    int zapp_build_use_embedded_assets(void) {
         return 1;
     }
 
+    int zapp_build_use_embedded_assets(void) {
+        return 0;
+    }
+
     const char* zapp_build_backend_script_path(void) {
-        return "/Users/zach/code/zapp/example/.zapp/backend.bundle.js";
+        return "C:/Users/Zach/code/zapp/example/.zapp/backend.bundle.js";
     }
 }

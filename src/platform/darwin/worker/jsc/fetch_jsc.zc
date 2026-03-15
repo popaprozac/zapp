@@ -1,10 +1,12 @@
 // JSC wrapper for fetch. Delegates to core/fetch_core.zc.
 
 //> macos: framework: JavaScriptCore
-include <Foundation/Foundation.h>
-include <JavaScriptCore/JavaScriptCore.h>
 
 raw {
+#ifdef __APPLE__
+    #include <Foundation/Foundation.h>
+    #include <JavaScriptCore/JavaScriptCore.h>
+
     extern void zapp_darwin_worker_js_sync(dispatch_block_t block);
     static void zapp_core_fetch_ensure_init(void);
     static void zapp_core_fetch_execute(NSMutableURLRequest*, NSString*, zapp_fetch_completion_t);
@@ -143,4 +145,5 @@ raw {
     void zapp_darwin_worker_fetch_cancel_all(void) {
         zapp_core_fetch_cancel_all();
     }
+#endif
 }

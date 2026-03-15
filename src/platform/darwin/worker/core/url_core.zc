@@ -1,8 +1,9 @@
 // Engine-agnostic URL parsing using NSURL.
 
-include <Foundation/Foundation.h>
-
 raw {
+#ifdef __APPLE__
+    #include <Foundation/Foundation.h>
+
     static void zapp_core_url_free(zapp_url_parsed_t* c) {
         if (!c) return;
         free(c->href);      free(c->protocol);  free(c->host);
@@ -64,4 +65,5 @@ raw {
         out->password = strdup([pass     UTF8String]);
         return 0;
     }
+#endif
 }

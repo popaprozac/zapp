@@ -1,0 +1,245 @@
+// QJS wrapper for fetch on Windows. Delegates to core/fetch_core.zc.
+
+raw {
+    #include "quickjs.h"
+    #include "quickjs-libc.h"
+    #include <stdlib.h>
+    #include <string.h>
+
+    extern void* zapp_windows_qjs_get_context(const char* workerId);
+    extern void zapp_windows_qjs_dispatch(void (*func)(void*), void* data);
+    extern void zapp_windows_qjs_drain_jobs(void* ctx, const char* label);
+
+
+    typedef struct {
+        char workerId[128];
+        JSContext* creatingCtx;
+        JSValue savedResolve;
+        JSValue savedReject;
+        zapp_fetch_response_t* response;
+        char* error;
+    } ZappFetchResultData;
+
+    static void zapp_fetch_deliver_on_qjs(void* data) {
+        ZappFetchResultData* d = (ZappFetchResultData*)data;
+
+        void* ctx_ptr = zapp_windows_qjs_get_context(d->workerId);
+        if (!ctx_ptr || (JSContext*)ctx_ptr != d->creatingCtx) {
+            JS_FreeValue(d->creatingCtx, d->savedResolve);
+            JS_FreeValue(d->creatingCtx, d->savedReject);
+            if (d->error) free(d->error);
+            if (d->response) {
+                free(d->response->status_text);
+                for (int i = 0; i < d->response->header_count; i++) {
+                    free(d->response->header_keys[i]);
+                    free(d->response->header_values[i]);
+                }
+                free(d->response->header_keys);
+                free(d->response->header_values);
+                free(d->response->body);
+                free(d->response->body_base64);
+                free(d->response);
+            }
+            free(d);
+            return;
+        }
+
+        JSContext* ctx = (JSContext*)ctx_ptr;
+
+        if (d->error) {
+            JSValue args[1] = { JS_NewString(ctx, d->error) };
+            JSValue ret = JS_Call(ctx, d->savedReject, JS_UNDEFINED, 1, args);
+            if (JS_IsException(ret)) {
+                JSValue exc = JS_GetException(ctx);
+                const char* s = JS_ToCString(ctx, exc);
+                if (s) { fprintf(stderr, "[qjs] fetch reject threw: %s\n", s); JS_FreeCString(ctx, s); }
+                JS_FreeValue(ctx, exc);
+            }
+            JS_FreeValue(ctx, ret);
+            JS_FreeValue(ctx, args[0]);
+        } else if (d->response) {
+            zapp_fetch_response_t* r = d->response;
+            JSValue resObj = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, resObj, "status", JS_NewInt32(ctx, r->status));
+            JS_SetPropertyStr(ctx, resObj, "statusText",
+                JS_NewString(ctx, r->status_text ? r->status_text : ""));
+
+            JSValue headersObj = JS_NewObject(ctx);
+            for (int i = 0; i < r->header_count; i++) {
+                if (r->header_keys[i] && r->header_values[i]) {
+                    JS_SetPropertyStr(ctx, headersObj, r->header_keys[i],
+                        JS_NewString(ctx, r->header_values[i]));
+                }
+            }
+            JS_SetPropertyStr(ctx, resObj, "headers", headersObj);
+
+            if (r->body)
+                JS_SetPropertyStr(ctx, resObj, "body", JS_NewString(ctx, r->body));
+            else if (r->body_base64)
+                JS_SetPropertyStr(ctx, resObj, "body_base64", JS_NewString(ctx, r->body_base64));
+            else
+                JS_SetPropertyStr(ctx, resObj, "body", JS_NewString(ctx, ""));
+
+            JSValue args[1] = { resObj };
+            JSValue ret = JS_Call(ctx, d->savedResolve, JS_UNDEFINED, 1, args);
+            if (JS_IsException(ret)) {
+                JSValue exc = JS_GetException(ctx);
+                const char* s = JS_ToCString(ctx, exc);
+                if (s) { fprintf(stderr, "[qjs] fetch resolve threw: %s\n", s); JS_FreeCString(ctx, s); }
+                JS_FreeValue(ctx, exc);
+            }
+            JS_FreeValue(ctx, ret);
+            JS_FreeValue(ctx, resObj);
+        }
+
+        JS_FreeValue(ctx, d->savedResolve);
+        JS_FreeValue(ctx, d->savedReject);
+        zapp_windows_qjs_drain_jobs(ctx, "fetch");
+
+        if (d->error) free(d->error);
+        if (d->response) {
+            free(d->response->status_text);
+            for (int i = 0; i < d->response->header_count; i++) {
+                free(d->response->header_keys[i]);
+                free(d->response->header_values[i]);
+            }
+            free(d->response->header_keys);
+            free(d->response->header_values);
+            free(d->response->body);
+            free(d->response->body_base64);
+            free(d->response);
+        }
+        free(d);
+    }
+
+    static void zapp_fetch_completion_handler(zapp_fetch_response_t* response, const char* error, void* userdata) {
+        ZappFetchResultData* d = (ZappFetchResultData*)userdata;
+
+        if (error) {
+            d->error = _strdup(error);
+            d->response = NULL;
+        } else if (response) {
+            // Deep copy the response since it's freed after callback returns
+            zapp_fetch_response_t* copy = (zapp_fetch_response_t*)calloc(1, sizeof(zapp_fetch_response_t));
+            copy->status = response->status;
+            copy->status_text = response->status_text ? _strdup(response->status_text) : NULL;
+            copy->header_count = response->header_count;
+            if (copy->header_count > 0) {
+                copy->header_keys = (char**)calloc(copy->header_count, sizeof(char*));
+                copy->header_values = (char**)calloc(copy->header_count, sizeof(char*));
+                for (int i = 0; i < copy->header_count; i++) {
+                    copy->header_keys[i] = response->header_keys[i] ? _strdup(response->header_keys[i]) : NULL;
+                    copy->header_values[i] = response->header_values[i] ? _strdup(response->header_values[i]) : NULL;
+                }
+            }
+            copy->body = response->body ? _strdup(response->body) : NULL;
+            copy->body_base64 = response->body_base64 ? _strdup(response->body_base64) : NULL;
+            d->response = copy;
+        }
+
+        zapp_windows_qjs_dispatch(zapp_fetch_deliver_on_qjs, d);
+    }
+
+    static JSValue qjs_bridge_fetch(JSContext* ctx, JSValue this_val, int argc, JSValue* argv, int magic, JSValue* func_data) {
+        (void)this_val; (void)magic;
+        if (argc < 4) return JS_UNDEFINED;
+
+        const char* worker_id = JS_ToCString(ctx, func_data[0]);
+        if (!worker_id) return JS_UNDEFINED;
+
+        const char* urlStr = JS_ToCString(ctx, argv[0]);
+        if (!urlStr) { JS_FreeCString(ctx, worker_id); return JS_UNDEFINED; }
+
+        JSValue optionsVal = argv[1];
+        JSValue resolveVal = argv[2];
+        JSValue rejectVal = argv[3];
+
+        // Extract method
+        char* method_copy = NULL;
+        if (!JS_IsUndefined(optionsVal) && !JS_IsNull(optionsVal)) {
+            JSValue m = JS_GetPropertyStr(ctx, optionsVal, "method");
+            if (!JS_IsUndefined(m)) {
+                const char* ms = JS_ToCString(ctx, m);
+                if (ms) { method_copy = _strdup(ms); JS_FreeCString(ctx, ms); }
+            }
+            JS_FreeValue(ctx, m);
+        }
+
+        // Extract headers
+        char** hKeys = NULL;
+        char** hVals = NULL;
+        int hCount = 0;
+        if (!JS_IsUndefined(optionsVal) && !JS_IsNull(optionsVal)) {
+            JSValue headersVal = JS_GetPropertyStr(ctx, optionsVal, "headers");
+            if (JS_IsObject(headersVal)) {
+                JSPropertyEnum* tab = NULL;
+                uint32_t len = 0;
+                if (JS_GetOwnPropertyNames(ctx, &tab, &len, headersVal, JS_GPN_STRING_MASK) == 0 && len > 0) {
+                    hCount = (int)len;
+                    hKeys = (char**)calloc(hCount, sizeof(char*));
+                    hVals = (char**)calloc(hCount, sizeof(char*));
+                    for (uint32_t i = 0; i < len; i++) {
+                        const char* key = JS_AtomToCString(ctx, tab[i].atom);
+                        JSValue val = JS_GetProperty(ctx, headersVal, tab[i].atom);
+                        const char* valStr = JS_ToCString(ctx, val);
+                        hKeys[i] = key ? _strdup(key) : NULL;
+                        hVals[i] = valStr ? _strdup(valStr) : NULL;
+                        if (key) JS_FreeCString(ctx, key);
+                        if (valStr) JS_FreeCString(ctx, valStr);
+                        JS_FreeValue(ctx, val);
+                        JS_FreeAtom(ctx, tab[i].atom);
+                    }
+                    js_free(ctx, tab);
+                }
+            }
+            JS_FreeValue(ctx, headersVal);
+        }
+
+        // Extract body
+        char* body_copy = NULL;
+        size_t body_len = 0;
+        if (!JS_IsUndefined(optionsVal) && !JS_IsNull(optionsVal)) {
+            JSValue bodyVal = JS_GetPropertyStr(ctx, optionsVal, "body");
+            if (!JS_IsUndefined(bodyVal) && !JS_IsNull(bodyVal) && JS_IsString(bodyVal)) {
+                const char* bs = JS_ToCString(ctx, bodyVal);
+                if (bs) { body_copy = _strdup(bs); body_len = strlen(body_copy); JS_FreeCString(ctx, bs); }
+            }
+            JS_FreeValue(ctx, bodyVal);
+        }
+
+        // Create result data with saved JS callbacks
+        ZappFetchResultData* resultData = (ZappFetchResultData*)calloc(1, sizeof(ZappFetchResultData));
+        strncpy(resultData->workerId, worker_id, sizeof(resultData->workerId) - 1);
+        resultData->creatingCtx = ctx;
+        resultData->savedResolve = JS_DupValue(ctx, resolveVal);
+        resultData->savedReject = JS_DupValue(ctx, rejectVal);
+
+        char* urlCopy = _strdup(urlStr);
+        JS_FreeCString(ctx, urlStr);
+        JS_FreeCString(ctx, worker_id);
+
+        zapp_core_fetch_execute(
+            urlCopy, method_copy,
+            (const char**)hKeys, (const char**)hVals, hCount,
+            body_copy, body_len,
+            resultData->workerId,
+            zapp_fetch_completion_handler, resultData
+        );
+
+        free(urlCopy);
+        free(method_copy);
+        for (int i = 0; i < hCount; i++) { free(hKeys[i]); free(hVals[i]); }
+        free(hKeys); free(hVals);
+        free(body_copy);
+
+        return JS_UNDEFINED;
+    }
+
+    void zapp_windows_qjs_fetch_install(JSContext* ctx, JSValue bridge, const char* worker_id) {
+        JSValue wIdVal = JS_NewString(ctx, worker_id);
+        JSValue funcData[1] = { wIdVal };
+        JS_SetPropertyStr(ctx, bridge, "fetch",
+            JS_NewCFunctionData(ctx, qjs_bridge_fetch, 4, 0, 1, funcData));
+        JS_FreeValue(ctx, wIdVal);
+    }
+}

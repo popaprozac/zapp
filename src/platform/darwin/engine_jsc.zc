@@ -8,6 +8,7 @@ struct EngineJsc {}
 
 raw {
 #if !defined(ZAPP_WORKER_ENGINE_QJS)
+#ifdef __APPLE__
 #include <Cocoa/Cocoa.h>
 #include <JavaScriptCore/JavaScriptCore.h>
 #include <dispatch/dispatch.h>
@@ -80,5 +81,6 @@ void engine_jsc_free_ctx(void* ctx_opaque, void* vm_opaque, const char* new_name
         });
     }
 }
+#endif /* __APPLE__ */
 #endif
 }

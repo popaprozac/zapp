@@ -1,8 +1,9 @@
 // Engine-agnostic HTTP fetch: request building, response handling, task tracking.
 
-include <Foundation/Foundation.h>
-
 raw {
+#ifdef __APPLE__
+    #include <Foundation/Foundation.h>
+
     // zapp_fetch_response_t and zapp_fetch_completion_t are defined in common.zc
 
     static void zapp_core_fetch_response_free(zapp_fetch_response_t* r) {
@@ -140,4 +141,5 @@ raw {
         }
         [zapp_fetch_tasks removeAllObjects];
     }
+#endif
 }

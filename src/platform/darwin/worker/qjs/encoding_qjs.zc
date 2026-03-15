@@ -2,6 +2,7 @@
 
 @cfg(ZAPP_WORKER_ENGINE_QJS)
 raw {
+#ifdef __APPLE__
 #ifdef ZAPP_WORKER_ENGINE_QJS
     #define JSContext QJSContext
     #define JSRuntime QJSRuntime
@@ -108,5 +109,6 @@ raw {
     }
 
     /* Do not #undef: later QJS modules in the same translation unit need the macros. */
+#endif
 #endif
 }

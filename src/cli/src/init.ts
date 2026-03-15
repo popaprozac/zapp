@@ -81,6 +81,18 @@ fn run_app() -> int {
 //> macos: cflags: -fobjc-arc -x objective-c
 // ---------------------------------
 
+// --- Windows Directives (QuickJS default) ---
+//> windows: cflags: -DUNICODE -D_UNICODE -DCINTERFACE -DCOBJMACROS
+//> windows: cflags: -I../vendor/webview2/include
+//> windows: cflags: -I../vendor/quickjs-ng
+//> windows: link: -L../vendor/quickjs-ng/build
+//> windows: link: -lqjs
+//> windows: link: -lole32 -lshell32 -luuid -luser32 -lgdi32 -lcomctl32 -lshlwapi
+//> windows: link: -lwinhttp -lbcrypt -ladvapi32 -lrpcrt4 -lcrypt32 -lversion
+//> windows: define: _WIN32
+//> windows: define: ZAPP_WORKER_ENGINE_QJS
+// ---------------------------------
+
 import "app.zc";
 
 fn main() -> int {
@@ -123,7 +135,7 @@ fn main() -> int {
 
     const backendContent = `import { App } from "@zapp/backend";
 
-// Your backend TypeScript runs in a privileged JSC context
+// Your backend TypeScript runs in a privileged native context
 // with direct access to native bridge, window management, and app lifecycle.
 `;
     await Bun.write(path.join(projectDir, "backend.ts"), backendContent);

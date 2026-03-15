@@ -1,0 +1,28 @@
+// Win32-native text encoding/decoding.
+
+raw {
+    #include <windows.h>
+    #include <stdlib.h>
+    #include <string.h>
+
+    static unsigned char* zapp_core_text_encode(const char* input, size_t* out_len) {
+        if (out_len) *out_len = 0;
+        if (input == NULL) return NULL;
+        size_t len = strlen(input);
+        if (len == 0) return NULL;
+        unsigned char* copy = (unsigned char*)malloc(len);
+        if (!copy) return NULL;
+        memcpy(copy, input, len);
+        if (out_len) *out_len = len;
+        return copy;
+    }
+
+    static char* zapp_core_text_decode(const unsigned char* bytes, size_t len) {
+        if (bytes == NULL || len == 0) return _strdup("");
+        char* result = (char*)malloc(len + 1);
+        if (!result) return _strdup("");
+        memcpy(result, bytes, len);
+        result[len] = '\0';
+        return result;
+    }
+}

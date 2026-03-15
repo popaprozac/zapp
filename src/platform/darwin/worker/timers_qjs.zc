@@ -4,6 +4,7 @@
 @cfg(ZAPP_WORKER_ENGINE_QJS)
 raw {
 #ifdef ZAPP_WORKER_ENGINE_QJS
+#ifdef __APPLE__
     #define JSContext QJSContext
     #define JSRuntime QJSRuntime
     #define JSValue QJSValue
@@ -203,5 +204,6 @@ raw {
 
         JS_FreeValue(ctx, wIdVal);
     }
+#endif /* __APPLE__ */
 #endif
 }

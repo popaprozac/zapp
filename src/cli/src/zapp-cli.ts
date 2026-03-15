@@ -18,10 +18,11 @@ const parseFlag = (name: string, fallback: string): string => {
 };
 
 const command = process.argv[2] ?? "help";
-const root = parseFlag("--root", cwd);
+const root = path.resolve(cwd, parseFlag("--root", "."));
 const frontendDir = path.resolve(root, parseFlag("--frontend", "frontend"));
 const buildFile = path.resolve(root, parseFlag("--input", parseFlag("--build-file", "build.zc")));
-const nativeOut = path.resolve(root, parseFlag("--out", "zapp"));
+const defaultOut = process.platform === "win32" ? "zapp.exe" : "zapp";
+const nativeOut = path.resolve(root, parseFlag("--out", defaultOut));
 const assetDir = path.resolve(frontendDir, parseFlag("--asset-dir", "dist"));
 const devUrl = parseFlag("--dev-url", "http://localhost:5173");
 const withBrotli = process.argv.includes("--brotli");
