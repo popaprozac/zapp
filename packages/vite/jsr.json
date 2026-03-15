@@ -1,0 +1,12 @@
+{
+  "name": "@zapp/vite",
+  "version": "0.0.1",
+  "exports": "./src/index.ts",
+  "license": "MIT",
+  "exclude": [
+    "dist/",
+    "bun.lock",
+    "package-lock.json",
+    "node_modules/"
+  ]
+}
