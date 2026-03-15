@@ -1,0 +1,18 @@
+{
+  "lockfileVersion": 1,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "zapp-example",
+      "dependencies": {
+        "@zapp/backend": "file:../packages/backend",
+        "@zapp/runtime": "file:../packages/runtime",
+      },
+    },
+  },
+  "packages": {
+    "@zapp/backend": ["@zapp/backend@file:../packages/backend", {}],
+
+    "@zapp/runtime": ["@zapp/runtime@file:../packages/runtime", {}],
+  }
+}

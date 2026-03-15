@@ -4,7 +4,6 @@ Zen-C.md
 WORKERS*.md
 ZAPP_WORKER*.md
 zenc-lang-tests
-example
 node_modules
 .vscode
 .idea

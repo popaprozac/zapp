@@ -1,0 +1,9 @@
+{
+  "name": "zapp-example",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@zapp/runtime": "file:../packages/runtime",
+    "@zapp/backend": "file:../packages/backend"
+  }
+}
