@@ -5,29 +5,15 @@ var __getProtoOf = Object.getPrototypeOf;
 var __defProp = Object.defineProperty;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
-function __accessProp(key) {
-  return this[key];
-}
-var __toESMCache_node;
-var __toESMCache_esm;
 var __toESM = (mod, isNodeMode, target) => {
-  var canCache = mod != null && typeof mod === "object";
-  if (canCache) {
-    var cache = isNodeMode ? __toESMCache_node ??= new WeakMap : __toESMCache_esm ??= new WeakMap;
-    var cached = cache.get(mod);
-    if (cached)
-      return cached;
-  }
   target = mod != null ? __create(__getProtoOf(mod)) : {};
   const to = isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target;
   for (let key of __getOwnPropNames(mod))
     if (!__hasOwnProp.call(to, key))
       __defProp(to, key, {
-        get: __accessProp.bind(mod, key),
+        get: () => mod[key],
         enumerable: true
       });
-  if (canCache)
-    cache.set(mod, to);
   return to;
 };
 var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
@@ -35,7 +21,7 @@ var __require = import.meta.require;
 
 // node_modules/esbuild/lib/main.js
 var require_main = __commonJS((exports, module) => {
-  var __dirname = "C:\\Users\\Zach\\code\\zapp\\src\\cli\\node_modules\\esbuild\\lib", __filename = "C:\\Users\\Zach\\code\\zapp\\src\\cli\\node_modules\\esbuild\\lib\\main.js";
+  var __dirname = "/Users/zach/code/zapp/src/cli/node_modules/esbuild/lib", __filename = "/Users/zach/code/zapp/src/cli/node_modules/esbuild/lib/main.js";
   var __defProp2 = Object.defineProperty;
   var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
   var __getOwnPropNames2 = Object.getOwnPropertyNames;
@@ -2731,7 +2717,11 @@ var killChild = (child) => {
     return;
   try {
     child.kill("SIGTERM");
-  } catch {}
+  } catch {
+    try {
+      child.kill(9);
+    } catch {}
+  }
 };
 var runPackageScript = (script, options = {}) => {
   const tool = preferredJsTool();
@@ -3347,10 +3337,13 @@ fn run_app() -> int {
 // ---------------------------------
 
 // --- Windows Directives (QuickJS default) ---
-//> windows: link: -lWebView2Loader
-//> windows: link: -lole32 -lshell32 -luuid -luser32 -lgdi32 -lcomctl32 -lshlwapi
-//> windows: link: -lwinhttp -lbcrypt
 //> windows: cflags: -DUNICODE -D_UNICODE -DCINTERFACE -DCOBJMACROS
+//> windows: cflags: -I../vendor/webview2/include
+//> windows: cflags: -I../vendor/quickjs-ng
+//> windows: link: -L../vendor/quickjs-ng/build
+//> windows: link: -lqjs
+//> windows: link: -lole32 -lshell32 -luuid -luser32 -lgdi32 -lcomctl32 -lshlwapi
+//> windows: link: -lwinhttp -lbcrypt -ladvapi32 -lrpcrt4 -lcrypt32 -lversion
 //> windows: define: ZAPP_WORKER_ENGINE_QJS
 // ---------------------------------
 
@@ -3412,6 +3405,47 @@ fn main() -> int {
 </plist>
 `;
   await Bun.write(path6.join(darwinConfigDir, "Info.plist"), plistContent);
+  const manifestContent = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity
+    type="win32"
+    name="com.zapp.${name}"
+    version="1.0.0.0"
+  />
+  <description>${name}</description>
+
+  <!-- Enable visual styles (modern controls) -->
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+        type="win32"
+        name="Microsoft.Windows.Common-Controls"
+        version="6.0.0.0"
+        processorArchitecture="*"
+        publicKeyToken="6595b64144ccf1df"
+        language="*"
+      />
+    </dependentAssembly>
+  </dependency>
+
+  <!-- High-DPI awareness (Per-Monitor V2) -->
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2,PerMonitor</dpiAwareness>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">True/PM</dpiAware>
+    </windowsSettings>
+  </application>
+
+  <!-- Declare supported OS versions -->
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}" /> <!-- Windows 10/11 -->
+      <supportedOS Id="{1f676c76-80e1-4239-95bb-83d0f6d0da78}" /> <!-- Windows 8.1 -->
+    </application>
+  </compatibility>
+</assembly>
+`;
+  await Bun.write(path6.join(windowsConfigDir, "app.manifest"), manifestContent);
   console.log(`
 Project ${name} scaffolded successfully!`);
   console.log(`Next steps:`);
@@ -3514,7 +3548,7 @@ var parseFlag = (name, fallback) => {
   return value;
 };
 var command = process8.argv[2] ?? "help";
-var root = parseFlag("--root", cwd);
+var root = path8.resolve(cwd, parseFlag("--root", "."));
 var frontendDir = path8.resolve(root, parseFlag("--frontend", "frontend"));
 var buildFile = path8.resolve(root, parseFlag("--input", parseFlag("--build-file", "build.zc")));
 var defaultOut = process8.platform === "win32" ? "zapp.exe" : "zapp";

@@ -2,6 +2,7 @@
 // No type renaming needed since we don't have JavaScriptCore in the same TU.
 
 raw {
+#ifdef _WIN32
     #include "quickjs.h"
     #include "quickjs-libc.h"
     #include <string.h>
@@ -55,4 +56,5 @@ raw {
         JSContext* ctx = (JSContext*)ctx_opaque;
         JS_FreeContext(ctx);
     }
+#endif
 }

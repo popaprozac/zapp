@@ -3,6 +3,7 @@ import "./webview.zc";
 
 raw {
 #ifdef __APPLE__
+    #undef panic
     #include <Cocoa/Cocoa.h>
     #include <dispatch/dispatch.h>
     #import <objc/runtime.h>
@@ -425,7 +426,8 @@ raw {
                     [window setTitlebarAppearsTransparent:YES];
                 }
 
-                zapp_darwin_webview_create((__bridge void*)window, app->window.webContentInspectable);
+                extern bool app_get_bootstrap_web_content_inspectable(void);
+                zapp_darwin_webview_create((__bridge void*)window, app_get_bootstrap_web_content_inspectable());
 
                 NSString* windowId = zapp_window_register(window);
 

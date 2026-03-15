@@ -1,9 +1,255 @@
-// QJS wrapper for WebSocket on Windows. Stub for initial implementation.
+// QJS wrapper for WebSocket on Windows. Delegates to core/websocket_core.zc.
 
 raw {
+#ifdef _WIN32
     #include "quickjs.h"
+    #include "quickjs-libc.h"
+    #include <stdlib.h>
+    #include <string.h>
+
+    extern void* zapp_windows_qjs_get_context(const char* workerId);
+    extern void zapp_windows_qjs_dispatch(void (*func)(void*), void* data);
+    extern void zapp_windows_qjs_drain_jobs(void* ctx, const char* label);
+
+    static char* zapp_core_ws_connect(const char* url_str, const char** protocols, int protocol_count,
+                                       zapp_ws_event_fn callback, void* user_data);
+    static void zapp_core_ws_send_text(const char* ws_id, const char* text);
+    static void zapp_core_ws_send_binary(const char* ws_id, const uint8_t* bytes, size_t len);
+    static void zapp_core_ws_close(const char* ws_id, int code, const char* reason);
+
+    // Per-WS callback reference storage
+    #define ZAPP_QJS_WS_REF_MAX 64
+    typedef struct {
+        char ws_id[64];
+        char worker_id[128];
+        JSContext* ctx;
+        JSValue fn;
+        int in_use;
+    } ZappQjsWsRef;
+    static ZappQjsWsRef zapp_qjs_ws_refs[ZAPP_QJS_WS_REF_MAX] = {0};
+
+    static ZappQjsWsRef* zapp_qjs_ws_ref_find(const char* ws_id) {
+        if (!ws_id) return NULL;
+        for (int i = 0; i < ZAPP_QJS_WS_REF_MAX; i++) {
+            if (zapp_qjs_ws_refs[i].in_use && strcmp(zapp_qjs_ws_refs[i].ws_id, ws_id) == 0)
+                return &zapp_qjs_ws_refs[i];
+        }
+        return NULL;
+    }
+
+    static ZappQjsWsRef* zapp_qjs_ws_ref_alloc(void) {
+        for (int i = 0; i < ZAPP_QJS_WS_REF_MAX; i++) {
+            if (!zapp_qjs_ws_refs[i].in_use) return &zapp_qjs_ws_refs[i];
+        }
+        return NULL;
+    }
+
+    // Dispatch data for delivering WS events on the QJS thread
+    typedef struct {
+        char ws_id[64];
+        char worker_id[128];
+        char* json_payload;
+    } ZappQjsWsEventData;
+
+    static void zapp_ws_deliver_on_qjs(void* data) {
+        ZappQjsWsEventData* d = (ZappQjsWsEventData*)data;
+
+        ZappQjsWsRef* ref = zapp_qjs_ws_ref_find(d->ws_id);
+        if (!ref) { free(d->json_payload); free(d); return; }
+
+        void* ctx_ptr = zapp_windows_qjs_get_context(ref->worker_id);
+        if (!ctx_ptr || (JSContext*)ctx_ptr != ref->ctx) {
+            free(d->json_payload);
+            free(d);
+            return;
+        }
+
+        JSContext* ctx = ref->ctx;
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue JSON = JS_GetPropertyStr(ctx, global, "JSON");
+        JSValue parse = JS_GetPropertyStr(ctx, JSON, "parse");
+        JSValue jsonArg = JS_NewString(ctx, d->json_payload);
+        JSValue parsed = JS_Call(ctx, parse, JSON, 1, &jsonArg);
+
+        JSValue args[1] = { parsed };
+        JSValue ret = JS_Call(ctx, ref->fn, JS_UNDEFINED, 1, args);
+        if (JS_IsException(ret)) {
+            JSValue exc = JS_GetException(ctx);
+            const char* s = JS_ToCString(ctx, exc);
+            if (s) { fprintf(stderr, "[qjs-ws] callback error: %s\n", s); JS_FreeCString(ctx, s); }
+            JS_FreeValue(ctx, exc);
+        }
+        JS_FreeValue(ctx, ret);
+        JS_FreeValue(ctx, parsed);
+        JS_FreeValue(ctx, jsonArg);
+        JS_FreeValue(ctx, parse);
+        JS_FreeValue(ctx, JSON);
+        JS_FreeValue(ctx, global);
+        zapp_windows_qjs_drain_jobs(ctx, "ws-event");
+
+        free(d->json_payload);
+        free(d);
+    }
+
+    // Core callback: dispatches events to the QJS thread
+    static void zapp_qjs_ws_callback(const char* ws_id, const char* event_type, const char* json_payload, void* user_data) {
+        (void)event_type;
+        if (!ws_id || !json_payload) return;
+
+        ZappQjsWsEventData* d = (ZappQjsWsEventData*)calloc(1, sizeof(ZappQjsWsEventData));
+        strncpy(d->ws_id, ws_id, sizeof(d->ws_id) - 1);
+        d->json_payload = _strdup(json_payload);
+
+        ZappQjsWsRef* ref = zapp_qjs_ws_ref_find(ws_id);
+        if (ref) strncpy(d->worker_id, ref->worker_id, sizeof(d->worker_id) - 1);
+
+        zapp_windows_qjs_dispatch(zapp_ws_deliver_on_qjs, d);
+    }
+
+    static JSValue qjs_bridge_wsConnect(JSContext* ctx, JSValue this_val, int argc, JSValue* argv, int magic, JSValue* func_data) {
+        (void)this_val; (void)magic;
+        if (argc < 3) return JS_NewString(ctx, "");
+
+        const char* urlStr = JS_ToCString(ctx, argv[0]);
+        if (!urlStr) return JS_NewString(ctx, "");
+
+        const char** protos = NULL;
+        int protoCount = 0;
+        if (!JS_IsUndefined(argv[1]) && !JS_IsNull(argv[1])) {
+            JSValue lenVal = JS_GetPropertyStr(ctx, argv[1], "length");
+            int32_t arrLen = 0;
+            JS_ToInt32(ctx, &arrLen, lenVal);
+            JS_FreeValue(ctx, lenVal);
+            if (arrLen > 0) {
+                protoCount = arrLen;
+                protos = (const char**)malloc(sizeof(const char*) * protoCount);
+                for (int i = 0; i < protoCount; i++) {
+                    JSValue el = JS_GetPropertyUint32(ctx, argv[1], (uint32_t)i);
+                    protos[i] = JS_ToCString(ctx, el);
+                    JS_FreeValue(ctx, el);
+                }
+            }
+        }
+
+        const char* workerId = JS_ToCString(ctx, func_data[0]);
+        char workerIdBuf[128] = {0};
+        if (workerId) { strncpy(workerIdBuf, workerId, sizeof(workerIdBuf) - 1); JS_FreeCString(ctx, workerId); }
+
+        JSValue jsFn = JS_DupValue(ctx, argv[2]);
+
+        char* wsIdC = zapp_core_ws_connect(urlStr, protos, protoCount, zapp_qjs_ws_callback, NULL);
+
+        for (int i = 0; i < protoCount; i++) {
+            if (protos[i]) JS_FreeCString(ctx, protos[i]);
+        }
+        free(protos);
+        JS_FreeCString(ctx, urlStr);
+
+        if (!wsIdC) {
+            JS_FreeValue(ctx, jsFn);
+            return JS_NewString(ctx, "");
+        }
+
+        ZappQjsWsRef* ref = zapp_qjs_ws_ref_alloc();
+        if (ref) {
+            memset(ref, 0, sizeof(ZappQjsWsRef));
+            strncpy(ref->ws_id, wsIdC, sizeof(ref->ws_id) - 1);
+            strncpy(ref->worker_id, workerIdBuf, sizeof(ref->worker_id) - 1);
+            ref->ctx = ctx;
+            ref->fn = jsFn;
+            ref->in_use = 1;
+        } else {
+            JS_FreeValue(ctx, jsFn);
+        }
+
+        JSValue result = JS_NewString(ctx, wsIdC);
+        free(wsIdC);
+        return result;
+    }
+
+    static JSValue qjs_bridge_wsSend(JSContext* ctx, JSValue this_val, int argc, JSValue* argv) {
+        (void)this_val;
+        if (argc < 3) return JS_UNDEFINED;
+
+        const char* wsId = JS_ToCString(ctx, argv[0]);
+        if (!wsId) return JS_UNDEFINED;
+
+        int isBinary = JS_ToBool(ctx, argv[2]);
+
+        if (isBinary) {
+            size_t len = 0;
+            uint8_t* bytes = JS_GetArrayBuffer(ctx, &len, argv[1]);
+            if (!bytes) {
+                JSValue bufProp = JS_GetPropertyStr(ctx, argv[1], "buffer");
+                if (!JS_IsUndefined(bufProp)) {
+                    size_t bufLen = 0;
+                    uint8_t* bufPtr = JS_GetArrayBuffer(ctx, &bufLen, bufProp);
+                    JSValue oVal = JS_GetPropertyStr(ctx, argv[1], "byteOffset");
+                    JSValue lVal = JS_GetPropertyStr(ctx, argv[1], "byteLength");
+                    int32_t off = 0, blen = 0;
+                    JS_ToInt32(ctx, &off, oVal);
+                    JS_ToInt32(ctx, &blen, lVal);
+                    JS_FreeValue(ctx, oVal);
+                    JS_FreeValue(ctx, lVal);
+                    if (bufPtr && off >= 0 && blen > 0 && (size_t)(off + blen) <= bufLen) {
+                        bytes = bufPtr + off;
+                        len = (size_t)blen;
+                    }
+                }
+                JS_FreeValue(ctx, bufProp);
+            }
+            if (bytes && len > 0) zapp_core_ws_send_binary(wsId, bytes, len);
+        } else {
+            const char* text = JS_ToCString(ctx, argv[1]);
+            zapp_core_ws_send_text(wsId, text ? text : "");
+            if (text) JS_FreeCString(ctx, text);
+        }
+
+        JS_FreeCString(ctx, wsId);
+        return JS_UNDEFINED;
+    }
+
+    static JSValue qjs_bridge_wsClose(JSContext* ctx, JSValue this_val, int argc, JSValue* argv) {
+        (void)this_val;
+        if (argc < 1) return JS_UNDEFINED;
+        const char* wsId = JS_ToCString(ctx, argv[0]);
+        if (!wsId) return JS_UNDEFINED;
+
+        int32_t code = 1000;
+        if (argc >= 2 && !JS_IsUndefined(argv[1]) && !JS_IsNull(argv[1])) {
+            JS_ToInt32(ctx, &code, argv[1]);
+        }
+        const char* reason = NULL;
+        if (argc >= 3 && !JS_IsUndefined(argv[2]) && !JS_IsNull(argv[2])) {
+            reason = JS_ToCString(ctx, argv[2]);
+        }
+
+        zapp_core_ws_close(wsId, code, reason);
+
+        // Clean up JS callback reference
+        ZappQjsWsRef* ref = zapp_qjs_ws_ref_find(wsId);
+        if (ref) {
+            JS_FreeValue(ref->ctx, ref->fn);
+            ref->in_use = 0;
+            memset(ref, 0, sizeof(ZappQjsWsRef));
+        }
+
+        if (reason) JS_FreeCString(ctx, reason);
+        JS_FreeCString(ctx, wsId);
+        return JS_UNDEFINED;
+    }
 
     void zapp_windows_qjs_websocket_install(JSContext* ctx, JSValue bridge, const char* worker_id) {
-        (void)ctx; (void)bridge; (void)worker_id;
+        JSValue wIdVal = JS_NewString(ctx, worker_id);
+        JSValue funcData[1] = { wIdVal };
+        JS_SetPropertyStr(ctx, bridge, "wsConnect",
+            JS_NewCFunctionData(ctx, qjs_bridge_wsConnect, 3, 0, 1, funcData));
+        JS_FreeValue(ctx, wIdVal);
+
+        JS_SetPropertyStr(ctx, bridge, "wsSend",
+            JS_NewCFunction(ctx, qjs_bridge_wsSend, "wsSend", 3));
+        JS_SetPropertyStr(ctx, bridge, "wsClose",
+            JS_NewCFunction(ctx, qjs_bridge_wsClose, "wsClose", 3));
     }
+#endif
 }

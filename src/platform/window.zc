@@ -1,4 +1,9 @@
 import "std/map.zc";
+
+raw {
+    #undef panic
+}
+
 import "stdio.h" as c_stdio;
 
 @cfg(__APPLE__)
@@ -165,145 +170,71 @@ fn window_options_default(title: string) -> WindowOptions {
     };
 }
 
-// Create
 @cfg(__APPLE__)
 fn window_create(options: WindowOptions*, inspectable: bool) -> void* {
     return darwin_window_create(options, inspectable);
 }
-
 @cfg(_WIN32)
 fn window_create(options: WindowOptions*, inspectable: bool) -> void* {
     return windows_window_create(options, inspectable);
 }
 
-// Destroy
 @cfg(__APPLE__)
-fn window_destroy(window: void*) -> void {
-    darwin_window_destroy(window);
-}
-
+fn window_destroy(window: void*) -> void { darwin_window_destroy(window); }
 @cfg(_WIN32)
-fn window_destroy(window: void*) -> void {
-    windows_window_destroy(window);
-}
+fn window_destroy(window: void*) -> void { windows_window_destroy(window); }
 
-// Minimize
 @cfg(__APPLE__)
-fn window_minimize(window: void*) -> void {
-    darwin_window_minimize(window);
-}
-
+fn window_minimize(window: void*) -> void { darwin_window_minimize(window); }
 @cfg(_WIN32)
-fn window_minimize(window: void*) -> void {
-    windows_window_minimize(window);
-}
+fn window_minimize(window: void*) -> void { windows_window_minimize(window); }
 
-// Unminimize
 @cfg(__APPLE__)
-fn window_unminimize(window: void*) -> void {
-    darwin_window_unminimize(window);
-}
-
+fn window_unminimize(window: void*) -> void { darwin_window_unminimize(window); }
 @cfg(_WIN32)
-fn window_unminimize(window: void*) -> void {
-    windows_window_unminimize(window);
-}
+fn window_unminimize(window: void*) -> void { windows_window_unminimize(window); }
 
-// Maximize
 @cfg(__APPLE__)
-fn window_maximize(window: void*) -> void {
-    darwin_window_maximize(window);
-}
-
+fn window_maximize(window: void*) -> void { darwin_window_maximize(window); }
 @cfg(_WIN32)
-fn window_maximize(window: void*) -> void {
-    windows_window_maximize(window);
-}
+fn window_maximize(window: void*) -> void { windows_window_maximize(window); }
 
-// Unmaximize
 @cfg(__APPLE__)
-fn window_unmaximize(window: void*) -> void {
-    darwin_window_unmaximize(window);
-}
-
+fn window_unmaximize(window: void*) -> void { darwin_window_unmaximize(window); }
 @cfg(_WIN32)
-fn window_unmaximize(window: void*) -> void {
-    windows_window_unmaximize(window);
-}
+fn window_unmaximize(window: void*) -> void { windows_window_unmaximize(window); }
 
-// Toggle minimize
 @cfg(__APPLE__)
-fn window_toggle_minimize(window: void*) -> void {
-    darwin_window_toggle_minimize(window);
-}
-
+fn window_toggle_minimize(window: void*) -> void { darwin_window_toggle_minimize(window); }
 @cfg(_WIN32)
-fn window_toggle_minimize(window: void*) -> void {
-    windows_window_toggle_minimize(window);
-}
+fn window_toggle_minimize(window: void*) -> void { windows_window_toggle_minimize(window); }
 
-// Toggle maximize
 @cfg(__APPLE__)
-fn window_toggle_maximize(window: void*) -> void {
-    darwin_window_toggle_maximize(window);
-}
-
+fn window_toggle_maximize(window: void*) -> void { darwin_window_toggle_maximize(window); }
 @cfg(_WIN32)
-fn window_toggle_maximize(window: void*) -> void {
-    windows_window_toggle_maximize(window);
-}
+fn window_toggle_maximize(window: void*) -> void { windows_window_toggle_maximize(window); }
 
-// Set title
 @cfg(__APPLE__)
-fn window_set_title(window: void*, title: string) -> void {
-    darwin_window_set_title(window, title);
-}
-
+fn window_set_title(window: void*, title: string) -> void { darwin_window_set_title(window, title); }
 @cfg(_WIN32)
-fn window_set_title(window: void*, title: string) -> void {
-    windows_window_set_title(window, title);
-}
+fn window_set_title(window: void*, title: string) -> void { windows_window_set_title(window, title); }
 
-// Set size
 @cfg(__APPLE__)
-fn window_set_size(window: void*, width: int, height: int) -> void {
-    darwin_window_set_size(window, width, height);
-}
-
+fn window_set_size(window: void*, width: int, height: int) -> void { darwin_window_set_size(window, width, height); }
 @cfg(_WIN32)
-fn window_set_size(window: void*, width: int, height: int) -> void {
-    windows_window_set_size(window, width, height);
-}
+fn window_set_size(window: void*, width: int, height: int) -> void { windows_window_set_size(window, width, height); }
 
-// Set position
 @cfg(__APPLE__)
-fn window_set_position(window: void*, x: int, y: int) -> void {
-    darwin_window_set_position(window, x, y);
-}
-
+fn window_set_position(window: void*, x: int, y: int) -> void { darwin_window_set_position(window, x, y); }
 @cfg(_WIN32)
-fn window_set_position(window: void*, x: int, y: int) -> void {
-    windows_window_set_position(window, x, y);
-}
+fn window_set_position(window: void*, x: int, y: int) -> void { windows_window_set_position(window, x, y); }
 
-// Set fullscreen
 @cfg(__APPLE__)
-fn window_set_fullscreen(window: void*, on: bool) -> void {
-    darwin_window_set_fullscreen(window, on);
-}
-
+fn window_set_fullscreen(window: void*, on: bool) -> void { darwin_window_set_fullscreen(window, on); }
 @cfg(_WIN32)
-fn window_set_fullscreen(window: void*, on: bool) -> void {
-    windows_window_set_fullscreen(window, on);
-}
+fn window_set_fullscreen(window: void*, on: bool) -> void { windows_window_set_fullscreen(window, on); }
 
-// Set always on top
 @cfg(__APPLE__)
-fn window_set_always_on_top(window: void*, on: bool) -> void {
-    darwin_window_set_always_on_top(window, on);
-}
-
+fn window_set_always_on_top(window: void*, on: bool) -> void { darwin_window_set_always_on_top(window, on); }
 @cfg(_WIN32)
-fn window_set_always_on_top(window: void*, on: bool) -> void {
-    windows_window_set_always_on_top(window, on);
-}
+fn window_set_always_on_top(window: void*, on: bool) -> void { windows_window_set_always_on_top(window, on); }

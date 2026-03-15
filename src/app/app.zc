@@ -337,7 +337,7 @@ fn app_should_quit() -> bool {
 @cfg(__APPLE__)
 fn zapp_dispatch_invoke_result(request_id: string, payload_json: string) -> void;
 @cfg(__APPLE__)
-fn zapp_darwin_sync_handle_bridge(action: string, payload_json: string) -> void;
+fn platform_sync_handle_bridge(action: string, payload_json: string) -> void;
 @cfg(__APPLE__)
 fn app_handle_window_message(app: App*, action: string, payload: string) -> void;
 @cfg(__APPLE__)
@@ -345,13 +345,16 @@ fn app_handle_app_action(app: App*, action: string) -> void;
 
 @cfg(_WIN32)
 raw {
+#ifdef _WIN32
     extern void zapp_windows_webview_eval_all(const char* js_utf8);
     extern char* zapp_escape_js_string(const char* raw);
+#endif
 }
 
 @cfg(_WIN32)
 fn zapp_dispatch_invoke_result(request_id: string, payload_json: string) -> void {
     raw {
+    #ifdef _WIN32
         (void)request_id;
         char* escaped = zapp_escape_js_string((const char*)payload_json);
         size_t jsLen = strlen(escaped) + 256;
@@ -364,27 +367,28 @@ fn zapp_dispatch_invoke_result(request_id: string, payload_json: string) -> void
         zapp_windows_webview_eval_all(js);
         free(js);
         free(escaped);
+    #endif
     }
 }
 
 @cfg(_WIN32)
-fn zapp_darwin_sync_handle_bridge(action: string, payload_json: string) -> void {
+fn platform_sync_handle_bridge(action: string, payload_json: string) -> void {
     raw { (void)action; (void)payload_json; }
 }
 
 @cfg(_WIN32)
-fn app_handle_window_message(app: App*, action: string, payload: string) -> void {
-    raw { (void)app; (void)action; (void)payload; }
-}
+fn app_handle_window_message(app: App*, action: string, payload: string) -> void;
 
 @cfg(_WIN32)
 fn app_handle_app_action(app: App*, action: string) -> void {
     raw {
+    #ifdef _WIN32
         (void)app;
         if (action == NULL) return;
         if (strcmp((const char*)action, "quit") == 0) {
             PostQuitMessage(0);
         }
+    #endif
     }
 }
 
@@ -393,7 +397,7 @@ fn zapp_dispatch_invoke_result(request_id: string, payload_json: string) -> void
     raw { (void)request_id; (void)payload_json; }
 }
 @cfg(ZAPP_LINUX)
-fn zapp_darwin_sync_handle_bridge(action: string, payload_json: string) -> void {
+fn platform_sync_handle_bridge(action: string, payload_json: string) -> void {
     raw { (void)action; (void)payload_json; }
 }
 @cfg(ZAPP_LINUX)
@@ -524,7 +528,7 @@ fn app_handle_frontend_message(app: App*, msg: string) -> void {
     }
 
     if msg_type == "sync" {
-        zapp_darwin_sync_handle_bridge(key, payload);
+        platform_sync_handle_bridge(key, payload);
         return;
     }
 

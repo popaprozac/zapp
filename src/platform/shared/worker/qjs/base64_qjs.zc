@@ -1,9 +1,7 @@
-// QJS wrapper for btoa/atob on Windows. Delegates to core/base64_core.zc.
+// Shared QJS wrapper for btoa/atob. Delegates to platform-specific core/base64_core.zc.
 
 raw {
-    #include "quickjs.h"
-    #include <stdlib.h>
-
+#if defined(ZAPP_WORKER_ENGINE_QJS) || defined(_WIN32)
     static char* zapp_core_btoa(const char* input);
     static char* zapp_core_atob(const char* input);
 
@@ -31,8 +29,9 @@ raw {
         return ret;
     }
 
-    void zapp_windows_qjs_base64_install(JSContext* ctx, JSValue bridge) {
+    void zapp_qjs_base64_install(JSContext* ctx, JSValue bridge) {
         JS_SetPropertyStr(ctx, bridge, "btoa", JS_NewCFunction(ctx, qjs_bridge_btoa, "btoa", 1));
         JS_SetPropertyStr(ctx, bridge, "atob", JS_NewCFunction(ctx, qjs_bridge_atob, "atob", 1));
     }
+#endif
 }

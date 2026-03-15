@@ -11,6 +11,7 @@ fn app_get_config(app_ptr: App*) -> AppConfig;
 fn app_should_quit() -> bool;
 
 raw {
+#ifdef _WIN32
     #include <windows.h>
     #include <stdlib.h>
     #include <stdio.h>
@@ -74,6 +75,7 @@ raw {
         }
         return FALSE;
     }
+#endif
 }
 
 struct WindowsPlatform {
@@ -86,12 +88,14 @@ impl Platform for WindowsPlatform {
             return;
         }
         raw {
+        #ifdef _WIN32
             HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
             if (FAILED(hr) && hr != S_FALSE && hr != RPC_E_CHANGED_MODE) {
                 fprintf(stderr, "[zapp] CoInitializeEx failed: 0x%08lX\n", hr);
             }
             zapp_register_window_class();
             SetConsoleCtrlHandler(zapp_console_ctrl_handler, TRUE);
+        #endif
         }
         self.initialized = true;
     }
@@ -100,8 +104,10 @@ impl Platform for WindowsPlatform {
         self.init();
         let cfg = app_get_config(app);
         raw {
+        #ifdef _WIN32
             zapp_should_terminate_after_last =
                 cfg.applicationShouldTerminateAfterLastWindowClosed ? TRUE : FALSE;
+        #endif
         }
 
         // Create the initial window
@@ -109,11 +115,13 @@ impl Platform for WindowsPlatform {
         let _initial = app.window.create(&options);
 
         raw {
+        #ifdef _WIN32
             MSG msg;
             while (GetMessageW(&msg, NULL, 0, 0) > 0) {
                 TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
+        #endif
         }
         return 0;
     }

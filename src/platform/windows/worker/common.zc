@@ -1,4 +1,5 @@
 raw {
+#ifdef _WIN32
     #include <windows.h>
     #include <winhttp.h>
     #include <stdio.h>
@@ -390,4 +391,5 @@ raw {
 
         return NULL;
     }
+#endif
 }

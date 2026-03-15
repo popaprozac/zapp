@@ -1,6 +1,7 @@
 // QJS wrapper for fetch on Windows. Delegates to core/fetch_core.zc.
 
 raw {
+#ifdef _WIN32
     #include "quickjs.h"
     #include "quickjs-libc.h"
     #include <stdlib.h>
@@ -242,4 +243,5 @@ raw {
             JS_NewCFunctionData(ctx, qjs_bridge_fetch, 4, 0, 1, funcData));
         JS_FreeValue(ctx, wIdVal);
     }
+#endif
 }

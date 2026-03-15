@@ -18,15 +18,17 @@ import "./core/crypto_core.zc";
 @cfg(ZAPP_WORKER_ENGINE_QJS)
 import "./core/fetch_core.zc";
 @cfg(ZAPP_WORKER_ENGINE_QJS)
-import "./qjs/encoding_qjs.zc";
+import "./qjs/qjs_macros.zc";
 @cfg(ZAPP_WORKER_ENGINE_QJS)
-import "./qjs/url_qjs.zc";
+import "../../shared/worker/qjs/encoding_qjs.zc";
 @cfg(ZAPP_WORKER_ENGINE_QJS)
-import "./qjs/base64_qjs.zc";
+import "../../shared/worker/qjs/url_qjs.zc";
+@cfg(ZAPP_WORKER_ENGINE_QJS)
+import "../../shared/worker/qjs/base64_qjs.zc";
+@cfg(ZAPP_WORKER_ENGINE_QJS)
+import "../../shared/worker/qjs/crypto_qjs.zc";
 @cfg(ZAPP_WORKER_ENGINE_QJS)
 import "./qjs/websocket_qjs.zc";
-@cfg(ZAPP_WORKER_ENGINE_QJS)
-import "./qjs/crypto_qjs.zc";
 @cfg(ZAPP_WORKER_ENGINE_QJS)
 import "./qjs/fetch_qjs.zc";
 
@@ -67,11 +69,11 @@ raw {
     extern void zapp_handle_message(void* app, char* msg);
     extern void* app_get_active(void);
 
-    extern void zapp_darwin_qjs_encoding_install(QJSContext* ctx, QJSValue bridge);
-    extern void zapp_darwin_qjs_url_install(QJSContext* ctx, QJSValue bridge);
-    extern void zapp_darwin_qjs_base64_install(QJSContext* ctx, QJSValue bridge);
+    extern void zapp_qjs_encoding_install(QJSContext* ctx, QJSValue bridge);
+    extern void zapp_qjs_url_install(QJSContext* ctx, QJSValue bridge);
+    extern void zapp_qjs_base64_install(QJSContext* ctx, QJSValue bridge);
     extern void zapp_darwin_qjs_websocket_install(QJSContext* ctx, QJSValue bridge, const char* worker_id);
-    extern void zapp_darwin_qjs_crypto_install(QJSContext* ctx, QJSValue bridge);
+    extern void zapp_qjs_crypto_install(QJSContext* ctx, QJSValue bridge);
     extern void zapp_darwin_qjs_fetch_install(QJSContext* ctx, QJSValue bridge, const char* worker_id);
     extern void zapp_darwin_qjs_fetch_cancel(NSString* workerId);
     extern void zapp_darwin_qjs_fetch_cancel_all(void);
@@ -766,10 +768,10 @@ impl WorkerBackend for DarwinWorkerQjs {
 
                 zapp_darwin_qjs_timers_install(ctx, bridge, [workerId UTF8String]);
                 zapp_darwin_qjs_fetch_install(ctx, bridge, [workerId UTF8String]);
-                zapp_darwin_qjs_crypto_install(ctx, bridge);
-                zapp_darwin_qjs_encoding_install(ctx, bridge);
-                zapp_darwin_qjs_url_install(ctx, bridge);
-                zapp_darwin_qjs_base64_install(ctx, bridge);
+                zapp_qjs_crypto_install(ctx, bridge);
+                zapp_qjs_encoding_install(ctx, bridge);
+                zapp_qjs_url_install(ctx, bridge);
+                zapp_qjs_base64_install(ctx, bridge);
                 zapp_darwin_qjs_websocket_install(ctx, bridge, [workerId UTF8String]);
 
                 JS_SetPropertyStr(ctx, global, "globalThis", JS_DupValue(ctx, global));

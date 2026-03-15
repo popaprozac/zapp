@@ -2,4 +2,3 @@
 setTimeout(() => {
   throw new Error("parity worker boom");
 }, 25);
-//# sourceMappingURL=data:application/json;base64,ewogICJ2ZXJzaW9uIjogMywKICAic291cmNlcyI6IFsiLi4vLi4vc3JjL3Bhcml0eS1lcnJvci50cyJdLAogICJzb3VyY2VzQ29udGVudCI6IFsic2V0VGltZW91dCgoKSA9PiB7XHJcbiAgdGhyb3cgbmV3IEVycm9yKCdwYXJpdHkgd29ya2VyIGJvb20nKVxyXG59LCAyNSlcclxuIl0sCiAgIm1hcHBpbmdzIjogIjtBQUFBLFdBQVcsTUFBTTtBQUNmLFFBQU0sSUFBSSxNQUFNLG9CQUFvQjtBQUN0QyxHQUFHLEVBQUU7IiwKICAibmFtZXMiOiBbXQp9Cg==

@@ -334,7 +334,7 @@ raw {
         }
     }
 
-    void zapp_darwin_sync_handle_bridge(char* action, char* payload_json) {
+    void platform_sync_handle_bridge(char* action, char* payload_json) {
         if (action == NULL || payload_json == NULL) return;
         NSString* actionStr = [NSString stringWithUTF8String:action];
         NSString* payload = [NSString stringWithUTF8String:payload_json];

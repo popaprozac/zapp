@@ -3,6 +3,7 @@
 //> windows: link: -lbcrypt -lrpcrt4
 
 raw {
+#ifdef _WIN32
     #include <windows.h>
     #include <bcrypt.h>
     #include <rpc.h>
@@ -29,4 +30,5 @@ raw {
         }
         return result;
     }
+#endif
 }

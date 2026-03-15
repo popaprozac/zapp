@@ -1,3 +1,6 @@
+// To use QuickJS instead of JSC on macOS, add:
+//   //> macos: define: ZAPP_WORKER_ENGINE_QJS
+
 // --- macOS Directives ---
 //> macos: framework: Cocoa
 //> macos: framework: WebKit
@@ -6,7 +9,6 @@
 //> macos: framework: Security
 //> macos: link: -lcompression
 //> macos: cflags: -fobjc-arc -x objective-c
-//> macos: define: _APPLE
 // ---------------------------------
 
 // --- Windows Directives (QuickJS default) ---
@@ -17,7 +19,6 @@
 //> windows: link: -lqjs
 //> windows: link: -lole32 -lshell32 -luuid -luser32 -lgdi32 -lcomctl32 -lshlwapi
 //> windows: link: -lwinhttp -lbcrypt -ladvapi32 -lrpcrt4 -lcrypt32 -lversion
-//> windows: define: _WIN32
 //> windows: define: ZAPP_WORKER_ENGINE_QJS
 // ---------------------------------
 

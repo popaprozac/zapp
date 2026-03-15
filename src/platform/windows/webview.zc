@@ -5,6 +5,7 @@ import "./webview_bootstrap.zc";
 //> windows: cflags: -DCINTERFACE -DCOBJMACROS
 
 raw {
+#ifdef _WIN32
     #include <windows.h>
     #include <stdlib.h>
     #include <stdio.h>
@@ -606,4 +607,5 @@ raw {
         }
         free(wJs);
     }
+#endif
 }

@@ -1,4 +1,5 @@
 raw {
+#ifdef _WIN32
     #include <windows.h>
     #include <stdio.h>
     #include <stdlib.h>
@@ -281,4 +282,5 @@ raw {
 
         JS_FreeValue(ctx, wIdVal);
     }
+#endif
 }

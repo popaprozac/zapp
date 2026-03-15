@@ -4,6 +4,7 @@ import "./engine_qjs.zc";
 import "./worker/qjs.zc";
 
 raw {
+#ifdef _WIN32
     #include <windows.h>
     #include <stdio.h>
     #include <stdlib.h>
@@ -27,10 +28,10 @@ raw {
     extern void zapp_windows_qjs_drain_jobs(void* ctx, const char* label);
     extern void zapp_windows_qjs_timers_install(JSContext* ctx, JSValue bridge, const char* worker_id);
     extern void zapp_windows_qjs_timers_cancel(const char* workerId);
-    extern void zapp_windows_qjs_crypto_install(JSContext* ctx, JSValue bridge);
-    extern void zapp_windows_qjs_encoding_install(JSContext* ctx, JSValue bridge);
-    extern void zapp_windows_qjs_url_install(JSContext* ctx, JSValue bridge);
-    extern void zapp_windows_qjs_base64_install(JSContext* ctx, JSValue bridge);
+    extern void zapp_qjs_crypto_install(JSContext* ctx, JSValue bridge);
+    extern void zapp_qjs_encoding_install(JSContext* ctx, JSValue bridge);
+    extern void zapp_qjs_url_install(JSContext* ctx, JSValue bridge);
+    extern void zapp_qjs_base64_install(JSContext* ctx, JSValue bridge);
     extern void zapp_windows_qjs_fetch_install(JSContext* ctx, JSValue bridge, const char* worker_id);
     extern void zapp_windows_qjs_websocket_install(JSContext* ctx, JSValue bridge, const char* worker_id);
 
@@ -248,10 +249,10 @@ raw {
 
         zapp_windows_qjs_timers_install(ctx, bridge, zapp_be_id);
         zapp_windows_qjs_fetch_install(ctx, bridge, zapp_be_id);
-        zapp_windows_qjs_crypto_install(ctx, bridge);
-        zapp_windows_qjs_encoding_install(ctx, bridge);
-        zapp_windows_qjs_url_install(ctx, bridge);
-        zapp_windows_qjs_base64_install(ctx, bridge);
+        zapp_qjs_crypto_install(ctx, bridge);
+        zapp_qjs_encoding_install(ctx, bridge);
+        zapp_qjs_url_install(ctx, bridge);
+        zapp_qjs_base64_install(ctx, bridge);
         zapp_windows_qjs_websocket_install(ctx, bridge, zapp_be_id);
 
         JS_SetPropertyStr(ctx, global, "globalThis", JS_DupValue(ctx, global));
@@ -344,10 +345,29 @@ raw {
         return result;
     }
 
+    void zapp_backend_deliver_event(const char* name, const char* payload) {
+        if (zapp_be_ctx == NULL || name == NULL) return;
+        JSValue args[2];
+        args[0] = JS_NewString(zapp_be_ctx, name);
+        args[1] = JS_NewString(zapp_be_ctx, payload ? payload : "{}");
+        zapp_be_call_bridge("deliverEvent", 2, args);
+        JS_FreeValue(zapp_be_ctx, args[0]);
+        JS_FreeValue(zapp_be_ctx, args[1]);
+    }
+
+    void zapp_backend_dispatch_window_result(const char* payload_json) {
+        if (zapp_be_ctx == NULL || payload_json == NULL) return;
+        JSValue args[1];
+        args[0] = JS_NewString(zapp_be_ctx, payload_json);
+        zapp_be_call_bridge("dispatchWindowResult", 1, args);
+        JS_FreeValue(zapp_be_ctx, args[0]);
+    }
+
     void zapp_backend_context_destroy(void) {
         if (zapp_be_ctx == NULL) return;
         zapp_windows_qjs_timers_cancel(zapp_be_id);
         engine_qjs_free_ctx(zapp_be_ctx);
         zapp_be_ctx = NULL;
     }
+#endif
 }

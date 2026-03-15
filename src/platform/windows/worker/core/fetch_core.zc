@@ -3,6 +3,7 @@
 //> windows: link: -lwinhttp
 
 raw {
+#ifdef _WIN32
     #include <windows.h>
     #include <winhttp.h>
     #include <stdio.h>
@@ -269,4 +270,5 @@ raw {
 
         CreateThread(NULL, 0, zapp_fetch_thread_proc, req, 0, NULL);
     }
+#endif
 }

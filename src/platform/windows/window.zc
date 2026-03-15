@@ -1,6 +1,7 @@
 import "../window.zc";
 
 raw {
+#ifdef _WIN32
     #include <windows.h>
     #include <stdio.h>
 
@@ -30,105 +31,97 @@ raw {
         free(wTitle);
         return hwnd;
     }
+#endif
 }
 
 fn windows_window_create(options: WindowOptions*, inspectable: bool) -> void* {
     let handle: void* = NULL;
     raw {
+    #ifdef _WIN32
         HWND hwnd = zapp_create_hwnd(
             (const char*)options->title,
             options->width, options->height,
             options->x, options->y
         );
-
         if (hwnd == NULL) {
             fprintf(stderr, "[zapp] CreateWindowEx failed: %lu\n", GetLastError());
             return NULL;
         }
-
         zapp_windows_webview_create(hwnd, inspectable ? TRUE : FALSE);
         ShowWindow(hwnd, SW_SHOW);
         UpdateWindow(hwnd);
         handle = (void*)hwnd;
+    #endif
     }
     return handle;
 }
 
 fn windows_window_destroy(window: void*) -> void {
     raw {
+    #ifdef _WIN32
         HWND hwnd = (HWND)window;
-        if (hwnd && IsWindow(hwnd)) {
-            DestroyWindow(hwnd);
-        }
+        if (hwnd && IsWindow(hwnd)) DestroyWindow(hwnd);
+    #endif
     }
 }
 
 fn windows_window_minimize(window: void*) -> void {
     raw {
+    #ifdef _WIN32
         HWND hwnd = (HWND)window;
-        if (hwnd && IsWindow(hwnd)) {
-            ShowWindow(hwnd, SW_MINIMIZE);
-        }
+        if (hwnd && IsWindow(hwnd)) ShowWindow(hwnd, SW_MINIMIZE);
+    #endif
     }
 }
 
 fn windows_window_unminimize(window: void*) -> void {
     raw {
+    #ifdef _WIN32
         HWND hwnd = (HWND)window;
-        if (hwnd && IsWindow(hwnd)) {
-            ShowWindow(hwnd, SW_RESTORE);
-        }
+        if (hwnd && IsWindow(hwnd)) ShowWindow(hwnd, SW_RESTORE);
+    #endif
     }
 }
 
 fn windows_window_maximize(window: void*) -> void {
     raw {
+    #ifdef _WIN32
         HWND hwnd = (HWND)window;
-        if (hwnd && IsWindow(hwnd)) {
-            ShowWindow(hwnd, SW_MAXIMIZE);
-        }
+        if (hwnd && IsWindow(hwnd)) ShowWindow(hwnd, SW_MAXIMIZE);
+    #endif
     }
 }
 
 fn windows_window_unmaximize(window: void*) -> void {
     raw {
+    #ifdef _WIN32
         HWND hwnd = (HWND)window;
-        if (hwnd && IsWindow(hwnd)) {
-            if (IsZoomed(hwnd)) {
-                ShowWindow(hwnd, SW_RESTORE);
-            }
-        }
+        if (hwnd && IsWindow(hwnd) && IsZoomed(hwnd)) ShowWindow(hwnd, SW_RESTORE);
+    #endif
     }
 }
 
 fn windows_window_toggle_minimize(window: void*) -> void {
     raw {
+    #ifdef _WIN32
         HWND hwnd = (HWND)window;
-        if (hwnd && IsWindow(hwnd)) {
-            if (IsIconic(hwnd)) {
-                ShowWindow(hwnd, SW_RESTORE);
-            } else {
-                ShowWindow(hwnd, SW_MINIMIZE);
-            }
-        }
+        if (hwnd && IsWindow(hwnd)) ShowWindow(hwnd, IsIconic(hwnd) ? SW_RESTORE : SW_MINIMIZE);
+    #endif
     }
 }
 
 fn windows_window_toggle_maximize(window: void*) -> void {
     raw {
+    #ifdef _WIN32
         HWND hwnd = (HWND)window;
-        if (hwnd && IsWindow(hwnd)) {
-            if (IsZoomed(hwnd)) {
-                ShowWindow(hwnd, SW_RESTORE);
-            } else {
-                ShowWindow(hwnd, SW_MAXIMIZE);
-            }
-        }
+        if (hwnd && IsWindow(hwnd)) ShowWindow(hwnd, IsZoomed(hwnd) ? SW_RESTORE : SW_MAXIMIZE);
+    #endif
     }
 }
 
 fn windows_window_set_title(window: void*, title: string) -> void {
     raw {
+    #ifdef _WIN32
         HWND hwnd = (HWND)window;
         if (hwnd && IsWindow(hwnd) && title) {
             int len = MultiByteToWideChar(CP_UTF8, 0, (const char*)title, -1, NULL, 0);
@@ -137,42 +130,44 @@ fn windows_window_set_title(window: void*, title: string) -> void {
             SetWindowTextW(hwnd, wTitle);
             free(wTitle);
         }
+    #endif
     }
 }
 
 fn windows_window_set_size(window: void*, width: int, height: int) -> void {
     raw {
+    #ifdef _WIN32
         HWND hwnd = (HWND)window;
         if (hwnd && IsWindow(hwnd)) {
             RECT rc;
             GetWindowRect(hwnd, &rc);
             MoveWindow(hwnd, rc.left, rc.top, width, height, TRUE);
         }
+    #endif
     }
 }
 
 fn windows_window_set_position(window: void*, x: int, y: int) -> void {
     raw {
+    #ifdef _WIN32
         HWND hwnd = (HWND)window;
         if (hwnd && IsWindow(hwnd)) {
             RECT rc;
             GetWindowRect(hwnd, &rc);
-            int w = rc.right - rc.left;
-            int h = rc.bottom - rc.top;
-            MoveWindow(hwnd, x, y, w, h, TRUE);
+            MoveWindow(hwnd, x, y, rc.right - rc.left, rc.bottom - rc.top, TRUE);
         }
+    #endif
     }
 }
 
 fn windows_window_set_fullscreen(window: void*, on: bool) -> void {
     raw {
+    #ifdef _WIN32
         HWND hwnd = (HWND)window;
         if (!hwnd || !IsWindow(hwnd)) return;
-
         static WINDOWPLACEMENT zapp_prev_placement = { sizeof(WINDOWPLACEMENT) };
         LONG style = GetWindowLongW(hwnd, GWL_STYLE);
         BOOL isFS = !(style & WS_OVERLAPPEDWINDOW);
-
         if (on && !isFS) {
             MONITORINFO mi = { sizeof(MONITORINFO) };
             GetWindowPlacement(hwnd, &zapp_prev_placement);
@@ -189,15 +184,267 @@ fn windows_window_set_fullscreen(window: void*, on: bool) -> void {
             SetWindowPos(hwnd, NULL, 0, 0, 0, 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
         }
+    #endif
     }
 }
 
 fn windows_window_set_always_on_top(window: void*, on: bool) -> void {
     raw {
+    #ifdef _WIN32
         HWND hwnd = (HWND)window;
-        if (hwnd && IsWindow(hwnd)) {
+        if (hwnd && IsWindow(hwnd))
+            SetWindowPos(hwnd, on ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+    #endif
+    }
+}
+
+raw {
+#ifdef _WIN32
+    // ---------------------------------------------------------------------------
+    // Window registry (JS-created windows by string ID)
+    // ---------------------------------------------------------------------------
+
+    #define ZAPP_WIN_REG_MAX 256
+    typedef struct { char id[64]; HWND hwnd; int in_use; } ZappWinRegEntry;
+    static ZappWinRegEntry zapp_win_reg[ZAPP_WIN_REG_MAX] = {0};
+    static int zapp_win_reg_next = 0;
+
+    static const char* zapp_win_register(HWND hwnd) {
+        for (int i = 0; i < ZAPP_WIN_REG_MAX; i++) {
+            if (!zapp_win_reg[i].in_use) {
+                snprintf(zapp_win_reg[i].id, sizeof(zapp_win_reg[i].id), "win-%d", zapp_win_reg_next++);
+                zapp_win_reg[i].hwnd = hwnd;
+                zapp_win_reg[i].in_use = 1;
+                return zapp_win_reg[i].id;
+            }
+        }
+        return NULL;
+    }
+
+    static HWND zapp_win_lookup(const char* windowId) {
+        if (!windowId) return NULL;
+        for (int i = 0; i < ZAPP_WIN_REG_MAX; i++) {
+            if (zapp_win_reg[i].in_use && strcmp(zapp_win_reg[i].id, windowId) == 0)
+                return zapp_win_reg[i].hwnd;
+        }
+        return NULL;
+    }
+
+    static void zapp_win_unregister(const char* windowId) {
+        if (!windowId) return;
+        for (int i = 0; i < ZAPP_WIN_REG_MAX; i++) {
+            if (zapp_win_reg[i].in_use && strcmp(zapp_win_reg[i].id, windowId) == 0) {
+                zapp_win_reg[i].in_use = 0;
+                zapp_win_reg[i].hwnd = NULL;
+                return;
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Dispatch window result to all webviews + backend
+    // ---------------------------------------------------------------------------
+
+    extern void zapp_windows_webview_eval_all(const char* js_utf8);
+    extern char* zapp_escape_js_string(const char* raw);
+    extern void zapp_backend_dispatch_window_result(const char* payload_json);
+
+    static void zapp_dispatch_window_result_to_all(const char* payload_json) {
+        char* escaped = zapp_escape_js_string(payload_json);
+        size_t jsLen = strlen(escaped) + 256;
+        char* js = (char*)malloc(jsLen);
+        snprintf(js, jsLen,
+            "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+            "if(b&&typeof b.dispatchWindowResult==='function'){b.dispatchWindowResult('%s');}})();",
+            escaped);
+        zapp_windows_webview_eval_all(js);
+        free(js);
+        free(escaped);
+        zapp_backend_dispatch_window_result(payload_json);
+    }
+
+    // ---------------------------------------------------------------------------
+    // app_handle_window_message — called from app.zc for "window" messages
+    // ---------------------------------------------------------------------------
+
+    extern void zapp_windows_webview_create(HWND hwnd, BOOL inspectable);
+    extern const char* zapp_build_initial_url(void);
+
+    static char* zapp_wm_json_get_string(const char* json, const char* key) {
+        if (!json || !key) return NULL;
+        char pattern[256];
+        snprintf(pattern, sizeof(pattern), "\"%s\":\"", key);
+        const char* start = strstr(json, pattern);
+        if (!start) return NULL;
+        start += strlen(pattern);
+        const char* end = start;
+        while (*end && *end != '"') {
+            if (*end == '\\' && *(end + 1)) end++;
+            end++;
+        }
+        size_t len = (size_t)(end - start);
+        char* result = (char*)malloc(len + 1);
+        memcpy(result, start, len);
+        result[len] = '\0';
+        return result;
+    }
+
+    static int zapp_wm_json_get_int(const char* json, const char* key, int def) {
+        if (!json || !key) return def;
+        char pattern[256];
+        snprintf(pattern, sizeof(pattern), "\"%s\":", key);
+        const char* start = strstr(json, pattern);
+        if (!start) return def;
+        start += strlen(pattern);
+        while (*start == ' ') start++;
+        if (*start == '-' || (*start >= '0' && *start <= '9')) return atoi(start);
+        return def;
+    }
+
+    static int zapp_wm_json_get_bool(const char* json, const char* key, int def) {
+        if (!json || !key) return def;
+        char pattern[256];
+        snprintf(pattern, sizeof(pattern), "\"%s\":", key);
+        const char* start = strstr(json, pattern);
+        if (!start) return def;
+        start += strlen(pattern);
+        while (*start == ' ') start++;
+        if (*start == 't') return 1;
+        if (*start == 'f') return 0;
+        return def;
+    }
+
+    static char* zapp_wm_json_get_raw(const char* json, const char* key) {
+        if (!json || !key) return NULL;
+        char pattern[256];
+        snprintf(pattern, sizeof(pattern), "\"%s\":", key);
+        const char* start = strstr(json, pattern);
+        if (!start) return NULL;
+        start += strlen(pattern);
+        while (*start == ' ') start++;
+        if (*start == '{') {
+            int depth = 0;
+            const char* end = start;
+            while (*end) {
+                if (*end == '{') depth++;
+                else if (*end == '}') { depth--; if (depth == 0) { end++; break; } }
+                else if (*end == '"') { end++; while (*end && *end != '"') { if (*end == '\\' && *(end+1)) end++; end++; } }
+                end++;
+            }
+            size_t len = (size_t)(end - start);
+            char* result = (char*)malloc(len + 1);
+            memcpy(result, start, len);
+            result[len] = '\0';
+            return result;
+        }
+        return NULL;
+    }
+
+    void app_handle_window_message(App* app, char* action, char* payload_json) {
+        if (action == NULL || payload_json == NULL) return;
+        const char* json = (const char*)payload_json;
+
+        if (strcmp(action, "create") == 0) {
+            char* requestId = zapp_wm_json_get_string(json, "requestId");
+            if (!requestId || requestId[0] == '\0') { free(requestId); return; }
+
+            char* optsRaw = zapp_wm_json_get_raw(json, "options");
+            const char* opts = optsRaw ? optsRaw : "{}";
+
+            char* title = zapp_wm_json_get_string(opts, "title");
+            int width = zapp_wm_json_get_int(opts, "width", 800);
+            int height = zapp_wm_json_get_int(opts, "height", 600);
+            int x = zapp_wm_json_get_int(opts, "x", 0);
+            int y = zapp_wm_json_get_int(opts, "y", 0);
+            int visible = zapp_wm_json_get_bool(opts, "visible", 1);
+
+            HWND hwnd = zapp_create_hwnd(
+                title ? title : "Zapp Window",
+                width, height, x, y
+            );
+
+            if (hwnd) {
+                extern bool app_get_bootstrap_web_content_inspectable(void);
+                zapp_windows_webview_create(hwnd, app_get_bootstrap_web_content_inspectable() ? TRUE : FALSE);
+                const char* windowId = zapp_win_register(hwnd);
+
+                if (visible) {
+                    ShowWindow(hwnd, SW_SHOW);
+                    UpdateWindow(hwnd);
+                }
+
+                char response[512];
+                snprintf(response, sizeof(response),
+                    "{\"requestId\":\"%s\",\"id\":\"%s\",\"ok\":true}",
+                    requestId, windowId ? windowId : "");
+                zapp_dispatch_window_result_to_all(response);
+            }
+
+            free(requestId);
+            free(title);
+            if (optsRaw) free(optsRaw);
+            return;
+        }
+
+        char* windowId = zapp_wm_json_get_string(json, "windowId");
+        if (!windowId || windowId[0] == '\0') { free(windowId); return; }
+
+        HWND hwnd = zapp_win_lookup(windowId);
+        if (!hwnd || !IsWindow(hwnd)) { free(windowId); return; }
+
+        if (strcmp(action, "close") == 0) {
+            zapp_win_unregister(windowId);
+            DestroyWindow(hwnd);
+        } else if (strcmp(action, "minimize") == 0) {
+            ShowWindow(hwnd, SW_MINIMIZE);
+        } else if (strcmp(action, "maximize") == 0) {
+            ShowWindow(hwnd, SW_MAXIMIZE);
+        } else if (strcmp(action, "unminimize") == 0) {
+            ShowWindow(hwnd, SW_RESTORE);
+        } else if (strcmp(action, "unmaximize") == 0) {
+            if (IsZoomed(hwnd)) ShowWindow(hwnd, SW_RESTORE);
+        } else if (strcmp(action, "toggle_minimize") == 0) {
+            ShowWindow(hwnd, IsIconic(hwnd) ? SW_RESTORE : SW_MINIMIZE);
+        } else if (strcmp(action, "toggle_maximize") == 0) {
+            ShowWindow(hwnd, IsZoomed(hwnd) ? SW_RESTORE : SW_MAXIMIZE);
+        } else if (strcmp(action, "set_title") == 0) {
+            char* t = zapp_wm_json_get_string(json, "title");
+            if (t) {
+                int len = MultiByteToWideChar(CP_UTF8, 0, t, -1, NULL, 0);
+                wchar_t* wt = (wchar_t*)malloc(len * sizeof(wchar_t));
+                MultiByteToWideChar(CP_UTF8, 0, t, -1, wt, len);
+                SetWindowTextW(hwnd, wt);
+                free(wt);
+                free(t);
+            }
+        } else if (strcmp(action, "set_size") == 0) {
+            int w = zapp_wm_json_get_int(json, "width", -1);
+            int h = zapp_wm_json_get_int(json, "height", -1);
+            if (w > 0 && h > 0) {
+                RECT rc;
+                GetWindowRect(hwnd, &rc);
+                MoveWindow(hwnd, rc.left, rc.top, w, h, TRUE);
+            }
+        } else if (strcmp(action, "set_position") == 0) {
+            int px = zapp_wm_json_get_int(json, "x", -1);
+            int py = zapp_wm_json_get_int(json, "y", -1);
+            if (px >= 0 && py >= 0) {
+                RECT rc;
+                GetWindowRect(hwnd, &rc);
+                int w = rc.right - rc.left;
+                int h = rc.bottom - rc.top;
+                MoveWindow(hwnd, px, py, w, h, TRUE);
+            }
+        } else if (strcmp(action, "set_fullscreen") == 0) {
+            int on = zapp_wm_json_get_bool(json, "on", 0);
+            windows_window_set_fullscreen((void*)hwnd, on);
+        } else if (strcmp(action, "set_always_on_top") == 0) {
+            int on = zapp_wm_json_get_bool(json, "on", 0);
             SetWindowPos(hwnd, on ? HWND_TOPMOST : HWND_NOTOPMOST,
                 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
         }
+
+        free(windowId);
     }
+#endif
 }

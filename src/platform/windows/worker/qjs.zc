@@ -10,10 +10,10 @@ import "./core/base64_core.zc";
 import "./core/crypto_core.zc";
 import "./core/fetch_core.zc";
 import "./core/websocket_core.zc";
-import "./qjs/encoding_qjs.zc";
-import "./qjs/url_qjs.zc";
-import "./qjs/base64_qjs.zc";
-import "./qjs/crypto_qjs.zc";
+import "../../shared/worker/qjs/encoding_qjs.zc";
+import "../../shared/worker/qjs/url_qjs.zc";
+import "../../shared/worker/qjs/base64_qjs.zc";
+import "../../shared/worker/qjs/crypto_qjs.zc";
 import "./qjs/fetch_qjs.zc";
 import "./qjs/websocket_qjs.zc";
 
@@ -21,6 +21,7 @@ include <string.h>
 include <stdlib.h>
 
 raw {
+#ifdef _WIN32
     #include <windows.h>
     #include <stdio.h>
     #include "quickjs.h"
@@ -40,10 +41,10 @@ raw {
 
     extern void zapp_windows_qjs_timers_cancel(const char* workerId);
     extern void zapp_windows_qjs_timers_install(JSContext* ctx, JSValue bridge, const char* worker_id);
-    extern void zapp_windows_qjs_encoding_install(JSContext* ctx, JSValue bridge);
-    extern void zapp_windows_qjs_url_install(JSContext* ctx, JSValue bridge);
-    extern void zapp_windows_qjs_base64_install(JSContext* ctx, JSValue bridge);
-    extern void zapp_windows_qjs_crypto_install(JSContext* ctx, JSValue bridge);
+    extern void zapp_qjs_encoding_install(JSContext* ctx, JSValue bridge);
+    extern void zapp_qjs_url_install(JSContext* ctx, JSValue bridge);
+    extern void zapp_qjs_base64_install(JSContext* ctx, JSValue bridge);
+    extern void zapp_qjs_crypto_install(JSContext* ctx, JSValue bridge);
     extern void zapp_windows_qjs_fetch_install(JSContext* ctx, JSValue bridge, const char* worker_id);
     extern void zapp_windows_qjs_websocket_install(JSContext* ctx, JSValue bridge, const char* worker_id);
 
@@ -617,10 +618,10 @@ raw {
         JS_SetPropertyStr(ctx, bridge, "syncCancel", JS_NewCFunctionData(ctx, qjs_bridge_syncCancel, 1, 0, 1, funcData));
 
         zapp_windows_qjs_timers_install(ctx, bridge, d->workerId);
-        zapp_windows_qjs_crypto_install(ctx, bridge);
-        zapp_windows_qjs_encoding_install(ctx, bridge);
-        zapp_windows_qjs_url_install(ctx, bridge);
-        zapp_windows_qjs_base64_install(ctx, bridge);
+        zapp_qjs_crypto_install(ctx, bridge);
+        zapp_qjs_encoding_install(ctx, bridge);
+        zapp_qjs_url_install(ctx, bridge);
+        zapp_qjs_base64_install(ctx, bridge);
         zapp_windows_qjs_fetch_install(ctx, bridge, d->workerId);
         zapp_windows_qjs_websocket_install(ctx, bridge, d->workerId);
 
@@ -793,6 +794,7 @@ raw {
         d->payloadJson = _strdup(payload_json);
         zapp_windows_qjs_dispatch(zapp_qjs_sync_result_on_thread, d);
     }
+#endif
 }
 
 struct WindowsWorkerQjs {}
@@ -804,6 +806,7 @@ impl WorkerBackend for WindowsWorkerQjs {
 
     fn handle_bridge(self, app: App*, action: string, payload: string) -> void {
         raw {
+        #ifdef _WIN32
             if (action == NULL || payload == NULL) return;
 
             zapp_windows_qjs_ensure_init();
@@ -902,6 +905,7 @@ impl WorkerBackend for WindowsWorkerQjs {
 
             free(workerId);
             if (ownerId) free(ownerId);
+        #endif
         }
     }
 }

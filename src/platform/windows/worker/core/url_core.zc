@@ -2,6 +2,7 @@
 // Uses a manual parser since CreateUri / IUri COM is overly complex for this use case.
 
 raw {
+#ifdef _WIN32
     #include <windows.h>
     #include <stdio.h>
     #include <stdlib.h>
@@ -211,4 +212,5 @@ raw {
         out->password = _strdup(password);
         return 0;
     }
+#endif
 }

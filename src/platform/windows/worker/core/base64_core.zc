@@ -1,6 +1,7 @@
 // Win32-native base64 encoding/decoding.
 
 raw {
+#ifdef _WIN32
     #include <windows.h>
     #include <wincrypt.h>
     #include <stdlib.h>
@@ -47,4 +48,5 @@ raw {
         bin[binLen] = '\0';
         return (char*)bin;
     }
+#endif
 }
