@@ -1,0 +1,8 @@
+{
+  "name": "@zapp/bootstrap",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "generate": "bun run ./generate-native-bootstraps.ts"
+  }
+}

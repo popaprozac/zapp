@@ -1,0 +1,44 @@
+// QJS wrapper for crypto. Delegates to core/crypto_core.zc.
+
+@cfg(ZAPP_WORKER_ENGINE_QJS)
+raw {
+#ifdef ZAPP_WORKER_ENGINE_QJS
+    static void zapp_core_crypto_random_bytes(uint8_t* buf, size_t len);
+    static char* zapp_core_crypto_random_uuid(void);
+
+    static QJSValue qjs_bridge_getRandomValues(QJSContext *ctx, QJSValue this_val, int argc, QJSValue *argv) {
+        if (argc < 1) return JS_UNDEFINED;
+
+        QJSValue arrayVal = argv[0];
+
+        size_t byte_offset = 0, byte_length = 0, bytes_per_element = 0;
+        QJSValue buffer = JS_GetTypedArrayBuffer(ctx, arrayVal, &byte_offset, &byte_length, &bytes_per_element);
+        if (!JS_IsException(buffer)) {
+            size_t len = 0;
+            uint8_t *buf = JS_GetArrayBuffer(ctx, &len, buffer);
+            if (buf) zapp_core_crypto_random_bytes(buf + byte_offset, byte_length);
+            JS_FreeValue(ctx, buffer);
+        } else {
+            size_t len = 0;
+            uint8_t *buf = JS_GetArrayBuffer(ctx, &len, arrayVal);
+            if (buf) zapp_core_crypto_random_bytes(buf, len);
+        }
+
+        return JS_DupValue(ctx, arrayVal);
+    }
+
+    static QJSValue qjs_bridge_randomUUID(QJSContext *ctx, QJSValue this_val, int argc, QJSValue *argv) {
+        char* uuid = zapp_core_crypto_random_uuid();
+        QJSValue result = JS_NewString(ctx, uuid);
+        free(uuid);
+        return result;
+    }
+
+    void zapp_darwin_qjs_crypto_install(QJSContext* ctx, QJSValue bridge) {
+        JS_SetPropertyStr(ctx, bridge, "getRandomValues",
+            JS_NewCFunction(ctx, qjs_bridge_getRandomValues, "getRandomValues", 1));
+        JS_SetPropertyStr(ctx, bridge, "randomUUID",
+            JS_NewCFunction(ctx, qjs_bridge_randomUUID, "randomUUID", 0));
+    }
+#endif
+}

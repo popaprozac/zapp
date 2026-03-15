@@ -1,0 +1,29 @@
+import "./window.zc";
+
+fn windows_window_create(options: WindowOptions*, inspectable: bool) -> void* {
+    return NULL;
+}
+
+fn windows_window_destroy(window: void*) -> void {
+    let _ = window;
+}
+
+fn windows_window_minimize(window: void*) -> void {
+    let _ = window;
+}
+
+fn windows_window_unminimize(window: void*) -> void {
+    let _ = window;
+}
+
+fn windows_window_maximize(window: void*) -> void {
+    let _ = window;
+}
+
+fn windows_window_toggle_minimize(window: void*) -> void {
+    let _ = window;
+}
+
+fn windows_window_toggle_maximize(window: void*) -> void {
+    let _ = window;
+}

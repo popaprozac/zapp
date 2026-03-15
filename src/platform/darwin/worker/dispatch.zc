@@ -1,0 +1,53 @@
+include <Cocoa/Cocoa.h>
+include <WebKit/WebKit.h>
+include <dispatch/dispatch.h>
+
+raw {
+    void zapp_dispatch_worker_to_webviews(const char* kind, const char* worker_id, const char* payload_json) {
+        if (kind == NULL || worker_id == NULL) return;
+        if (payload_json == NULL) payload_json = "null";
+
+        NSString* k = [NSString stringWithUTF8String:kind];
+        NSString* wid = [NSString stringWithUTF8String:worker_id];
+        NSString* payload = [NSString stringWithUTF8String:payload_json];
+
+        k = [k stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+        k = [k stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
+        wid = [wid stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+        wid = [wid stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
+
+        NSString* js = [NSString stringWithFormat:
+            @"(function(){var b=globalThis[Symbol.for('zapp.bridge')];if(b&&typeof b.dispatchWorkerBridge==='function'){b.dispatchWorkerBridge('%@','%@',%@);}})();",
+            k, wid, payload
+        ];
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            for (NSWindow* window in [NSApp windows]) {
+                NSView* content = [window contentView];
+                if ([content isKindOfClass:[WKWebView class]]) {
+                    WKWebView* webview = (WKWebView*)content;
+                    [webview evaluateJavaScript:js completionHandler:nil];
+                }
+            }
+        });
+    }
+
+    NSString* zapp_json_stringify_obj(id obj) {
+        if (obj == nil || obj == [NSNull null]) return @"null";
+        if (![NSJSONSerialization isValidJSONObject:obj]) {
+            if ([obj isKindOfClass:[NSString class]]) {
+                NSData* data = [NSJSONSerialization dataWithJSONObject:@[(NSString*)obj] options:0 error:nil];
+                if (!data) return @"null";
+                NSString* arr = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+                if ([arr length] >= 2) {
+                    return [arr substringWithRange:NSMakeRange(1, [arr length] - 2)];
+                }
+                return @"null";
+            }
+            return @"null";
+        }
+        NSData* jsonData = [NSJSONSerialization dataWithJSONObject:obj options:0 error:nil];
+        if (!jsonData) return @"null";
+        return [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
+    }
+}

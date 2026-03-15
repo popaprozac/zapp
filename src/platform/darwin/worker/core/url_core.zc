@@ -1,0 +1,67 @@
+// Engine-agnostic URL parsing using NSURL.
+
+include <Foundation/Foundation.h>
+
+raw {
+    static void zapp_core_url_free(zapp_url_parsed_t* c) {
+        if (!c) return;
+        free(c->href);      free(c->protocol);  free(c->host);
+        free(c->hostname);   free(c->port);      free(c->pathname);
+        free(c->search);     free(c->hash);      free(c->origin);
+        free(c->username);   free(c->password);
+    }
+
+    static int zapp_core_url_parse(const char* url_str, const char* base_str, zapp_url_parsed_t* out) {
+        if (!url_str || !out) return -1;
+        memset(out, 0, sizeof(zapp_url_parsed_t));
+
+        NSString* urlNS = [NSString stringWithUTF8String:url_str];
+        NSURL* url = nil;
+
+        if (base_str && base_str[0] != '\0') {
+            NSURL* baseURL = [NSURL URLWithString:[NSString stringWithUTF8String:base_str]];
+            if (baseURL) url = [NSURL URLWithString:urlNS relativeToURL:baseURL];
+        }
+        if (url == nil) url = [NSURL URLWithString:urlNS];
+        if (url == nil) return -1;
+
+        NSString* scheme   = [url scheme]   ?: @"";
+        NSString* host     = [url host]     ?: @"";
+        NSNumber* portNum  = [url port];
+        NSString* portStr  = portNum ? [portNum stringValue] : @"";
+        NSString* path     = [url path]     ?: @"";
+        NSString* query    = [url query];
+        NSString* fragment = [url fragment];
+        NSString* user     = [url user]     ?: @"";
+        NSString* pass     = [url password] ?: @"";
+
+        NSString* protocol  = [scheme length] > 0 ? [NSString stringWithFormat:@"%@:", scheme] : @"";
+        NSString* search    = query    ? [NSString stringWithFormat:@"?%@", query]    : @"";
+        NSString* hash      = fragment ? [NSString stringWithFormat:@"#%@", fragment] : @"";
+        NSString* hostPort  = [portStr length] > 0 ? [NSString stringWithFormat:@"%@:%@", host, portStr] : host;
+
+        NSString* origin = @"null";
+        if ([scheme isEqualToString:@"http"]  || [scheme isEqualToString:@"https"] ||
+            [scheme isEqualToString:@"ws"]    || [scheme isEqualToString:@"wss"]   ||
+            [scheme isEqualToString:@"ftp"]) {
+            origin = [portStr length] > 0
+                ? [NSString stringWithFormat:@"%@://%@:%@", scheme, host, portStr]
+                : [NSString stringWithFormat:@"%@://%@", scheme, host];
+        }
+
+        NSString* href = [url absoluteString] ?: @"";
+
+        out->href     = strdup([href     UTF8String]);
+        out->protocol = strdup([protocol UTF8String]);
+        out->host     = strdup([hostPort UTF8String]);
+        out->hostname = strdup([host     UTF8String]);
+        out->port     = strdup([portStr  UTF8String]);
+        out->pathname = strdup([path     UTF8String]);
+        out->search   = strdup([search   UTF8String]);
+        out->hash     = strdup([hash     UTF8String]);
+        out->origin   = strdup([origin   UTF8String]);
+        out->username = strdup([user     UTF8String]);
+        out->password = strdup([pass     UTF8String]);
+        return 0;
+    }
+}

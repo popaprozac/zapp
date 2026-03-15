@@ -1,0 +1,512 @@
+//> macos: framework: WebKit
+//> macos: framework: Cocoa
+//> macos: framework: Security
+//> macos: link: -lcompression
+
+import "./window.zc";
+import "./webview_bootstrap.zc";
+
+include <Cocoa/Cocoa.h>
+include <WebKit/WebKit.h>
+include <dispatch/dispatch.h>
+include <stdlib.h>
+include <string.h>
+include <stdbool.h>
+include <compression.h>
+
+raw {
+#ifndef ZAPP_EMBEDDED_ASSET_STRUCT_DEFINED
+#define ZAPP_EMBEDDED_ASSET_STRUCT_DEFINED 1
+    struct ZappEmbeddedAsset {
+        char* path;
+        uint8_t* data;
+        int len;
+        bool is_brotli;
+        int uncompressed_len;
+    };
+#endif
+    extern struct ZappEmbeddedAsset zapp_embedded_assets[];
+    extern int zapp_embedded_assets_count;
+
+    extern void* app_get_active(void);
+    extern char* app_get_bootstrap_name(void);
+    extern bool app_get_bootstrap_application_should_terminate_after_last_window_closed(void);
+    extern bool app_get_bootstrap_web_content_inspectable(void);
+    extern int app_get_bootstrap_max_workers(void);
+    extern void zapp_handle_message(void* app_ptr, char* msg_c);
+    extern const char* zapp_darwin_webview_bootstrap_script(void);
+    extern char* service_get_bindings_manifest_json(void);
+    extern const char* zapp_build_asset_root(void);
+    extern const char* zapp_build_initial_url(void);
+    extern int zapp_build_is_dev_mode(void);
+    extern int zapp_build_use_embedded_assets(void);
+
+    static NSString* zapp_escape_js_string(const char* raw) {
+        if (!raw) return @"";
+        NSString* s = [NSString stringWithUTF8String:raw];
+        s = [s stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+        s = [s stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
+        s = [s stringByReplacingOccurrencesOfString:@"\n" withString:@"\\n"];
+        s = [s stringByReplacingOccurrencesOfString:@"\r" withString:@"\\r"];
+        return s;
+    }
+
+    static NSString* zapp_mime_for_path(NSString* path) {
+        NSString* lower = [path lowercaseString];
+        if ([lower hasSuffix:@".html"]) return @"text/html; charset=utf-8";
+        if ([lower hasSuffix:@".js"] || [lower hasSuffix:@".mjs"]) return @"application/javascript; charset=utf-8";
+        if ([lower hasSuffix:@".css"]) return @"text/css; charset=utf-8";
+        if ([lower hasSuffix:@".json"]) return @"application/json; charset=utf-8";
+        if ([lower hasSuffix:@".svg"]) return @"image/svg+xml";
+        if ([lower hasSuffix:@".png"]) return @"image/png";
+        if ([lower hasSuffix:@".jpg"] || [lower hasSuffix:@".jpeg"]) return @"image/jpeg";
+        if ([lower hasSuffix:@".woff2"]) return @"font/woff2";
+        if ([lower hasSuffix:@".map"]) return @"application/json; charset=utf-8";
+        return @"application/octet-stream";
+    }
+
+    static NSString* zapp_asset_root_path(void) {
+        const char* configuredRoot = zapp_build_asset_root();
+        if (configuredRoot && configuredRoot[0] != '\0') {
+            return [NSString stringWithUTF8String:configuredRoot];
+        }
+        return [[[NSFileManager defaultManager] currentDirectoryPath] stringByAppendingPathComponent:@"example/frontend/dist"];
+    }
+
+    static NSMutableDictionary<NSString*, NSMutableDictionary*>* zapp_sync_waits = nil;
+    static NSMutableDictionary<NSString*, NSMutableArray<NSString*>*>* zapp_sync_queues = nil;
+    extern void zapp_darwin_worker_dispatch_sync_result(const char* worker_id, const char* payload_json);
+
+    static void zapp_sync_ensure_state(void) {
+        if (zapp_sync_waits == nil) {
+            zapp_sync_waits = [NSMutableDictionary dictionary];
+        }
+        if (zapp_sync_queues == nil) {
+            zapp_sync_queues = [NSMutableDictionary dictionary];
+        }
+    }
+
+    static void zapp_sync_remove_wait_from_queue(NSString* key, NSString* requestId) {
+        if (key == nil || requestId == nil) return;
+        NSMutableArray<NSString*>* queue = [zapp_sync_queues objectForKey:key];
+        if (queue == nil) return;
+        [queue removeObject:requestId];
+        if ([queue count] == 0) {
+            [zapp_sync_queues removeObjectForKey:key];
+        }
+    }
+
+    static void zapp_dispatch_sync_result_to_webviews(const char* payload_json) {
+        NSString* payload = zapp_escape_js_string(payload_json);
+        NSString* js = [NSString stringWithFormat:
+            @"(function(){const b=globalThis[Symbol.for('zapp.bridge')];if(b&&typeof b.dispatchSyncResult==='function'){b.dispatchSyncResult('%@');}})();",
+            payload
+        ];
+        for (NSWindow* window in [NSApp windows]) {
+            NSView* content = [window contentView];
+            if ([content isKindOfClass:[WKWebView class]]) {
+                WKWebView* webview = (WKWebView*)content;
+                [webview evaluateJavaScript:js completionHandler:nil];
+            }
+        }
+    }
+
+    static void zapp_sync_dispatch_result(NSString* requestId, BOOL ok, NSString* status, NSString* targetWorkerId) {
+        if (requestId == nil || [requestId length] == 0) return;
+        NSString* safeStatus = ([status isKindOfClass:[NSString class]] && [status length] > 0) ? status : @"notified";
+        NSString* payload = [NSString stringWithFormat:
+            @"{\"id\":\"%@\",\"ok\":%@,\"status\":\"%@\"}",
+            requestId,
+            ok ? @"true" : @"false",
+            safeStatus
+        ];
+        if ([targetWorkerId isKindOfClass:[NSString class]] && [targetWorkerId length] > 0) {
+            zapp_darwin_worker_dispatch_sync_result([targetWorkerId UTF8String], [payload UTF8String]);
+            return;
+        }
+        zapp_dispatch_sync_result_to_webviews([payload UTF8String]);
+    }
+
+    static NSURL* zapp_initial_url(void) {
+        const char* configuredUrl = zapp_build_initial_url();
+        if (configuredUrl && configuredUrl[0] != '\0') {
+            return [NSURL URLWithString:[NSString stringWithUTF8String:configuredUrl]];
+        }
+        return [NSURL URLWithString:@"zapp://index.html"];
+    }
+
+    @interface ZappAssetSchemeHandler : NSObject <WKURLSchemeHandler>
+    @end
+
+    @implementation ZappAssetSchemeHandler
+    - (void)webView:(WKWebView*)webView startURLSchemeTask:(id<WKURLSchemeTask>)task {
+        (void)webView;
+        NSURL* url = [task request].URL;
+        NSString* host = url.host ?: @"";
+        NSString* path = url.path ?: @"/";
+        NSString* assetRoot = zapp_asset_root_path();
+
+        // Map custom scheme URLs to dist files:
+        // - zapp://index.html                -> index.html
+        // - zapp://index.html/assets/a.css   -> assets/a.css
+        // - zapp://app/index.html            -> index.html
+        // - zapp://app/assets/a.css          -> assets/a.css
+        NSString* rel = path;
+        if ((rel.length == 0 || [rel isEqualToString:@"/"]) && host.length > 0) {
+            rel = [@"/" stringByAppendingString:host];
+        } else if (host.length > 0 && ![host isEqualToString:@"app"]) {
+            // Some URLs encode the html file in host and real path in pathname.
+            // For asset paths, ignore host and keep only pathname.
+            if ([path hasPrefix:@"/assets/"]) {
+                rel = path;
+            }
+        }
+        if ([rel isEqualToString:@"/"] || rel.length == 0) {
+            rel = @"/index.html";
+        }
+        while ([rel hasPrefix:@"/"]) rel = [rel substringFromIndex:1];
+
+        NSString* lookupPath = [@"/" stringByAppendingString:rel];
+        if (zapp_build_use_embedded_assets() != 0 && zapp_embedded_assets_count > 0) {
+            bool foundEmbedded = false;
+            for (int i = 0; i < zapp_embedded_assets_count; i++) {
+                NSString* assetPath = [NSString stringWithUTF8String:zapp_embedded_assets[i].path];
+                if ([assetPath isEqualToString:lookupPath]) {
+                    NSData* data = nil;
+                    if (zapp_embedded_assets[i].is_brotli) {
+                        uint8_t* out_buf = malloc(zapp_embedded_assets[i].uncompressed_len);
+                        size_t decoded_size = compression_decode_buffer(out_buf, zapp_embedded_assets[i].uncompressed_len,
+                                                                        zapp_embedded_assets[i].data, zapp_embedded_assets[i].len,
+                                                                        NULL, COMPRESSION_BROTLI);
+                        if (decoded_size > 0) {
+                            data = [NSData dataWithBytesNoCopy:out_buf length:decoded_size freeWhenDone:YES];
+                        } else {
+                            free(out_buf);
+                            data = [NSData data];
+                        }
+                    } else {
+                        data = [NSData dataWithBytesNoCopy:(void*)zapp_embedded_assets[i].data length:zapp_embedded_assets[i].len freeWhenDone:NO];
+                    }
+
+                    NSMutableDictionary* headers = [NSMutableDictionary dictionaryWithDictionary:@{
+                        @"Content-Type": zapp_mime_for_path(lookupPath),
+                        @"Cross-Origin-Opener-Policy": @"same-origin",
+                        @"Cross-Origin-Embedder-Policy": @"require-corp",
+                        @"Cross-Origin-Resource-Policy": @"same-origin",
+                        @"Cache-Control": @"no-cache"
+                    }];
+                    
+                    NSHTTPURLResponse* response = [[NSHTTPURLResponse alloc]
+                        initWithURL:url
+                        statusCode:200
+                        HTTPVersion:@"HTTP/1.1"
+                        headerFields:headers];
+                    [task didReceiveResponse:response];
+                    [task didReceiveData:data];
+                    [task didFinish];
+                    return;
+                }
+            }
+            BOOL isAssetRequest = [rel hasPrefix:@"assets/"] || [rel hasPrefix:@"zapp-workers/"];
+            if (!isAssetRequest && !foundEmbedded) {
+                 for (int i = 0; i < zapp_embedded_assets_count; i++) {
+                     NSString* assetPath = [NSString stringWithUTF8String:zapp_embedded_assets[i].path];
+                     if ([assetPath isEqualToString:@"/index.html"]) {
+                         NSData* data = nil;
+                         if (zapp_embedded_assets[i].is_brotli) {
+                             uint8_t* out_buf = malloc(zapp_embedded_assets[i].uncompressed_len);
+                             size_t decoded_size = compression_decode_buffer(out_buf, zapp_embedded_assets[i].uncompressed_len,
+                                                                             zapp_embedded_assets[i].data, zapp_embedded_assets[i].len,
+                                                                             NULL, COMPRESSION_BROTLI);
+                             if (decoded_size > 0) {
+                                 data = [NSData dataWithBytesNoCopy:out_buf length:decoded_size freeWhenDone:YES];
+                             } else {
+                                 free(out_buf);
+                                 data = [NSData data];
+                             }
+                         } else {
+                             data = [NSData dataWithBytesNoCopy:(void*)zapp_embedded_assets[i].data length:zapp_embedded_assets[i].len freeWhenDone:NO];
+                         }
+
+                         NSMutableDictionary* headers = [NSMutableDictionary dictionaryWithDictionary:@{
+                             @"Content-Type": zapp_mime_for_path(@"/index.html"),
+                             @"Cross-Origin-Opener-Policy": @"same-origin",
+                             @"Cross-Origin-Embedder-Policy": @"require-corp",
+                             @"Cross-Origin-Resource-Policy": @"same-origin",
+                             @"Cache-Control": @"no-cache"
+                         }];
+                         
+                         NSHTTPURLResponse* response = [[NSHTTPURLResponse alloc]
+                             initWithURL:url
+                             statusCode:200
+                             HTTPVersion:@"HTTP/1.1"
+                             headerFields:headers];
+                         [task didReceiveResponse:response];
+                         [task didReceiveData:data];
+                         [task didFinish];
+                         return;
+                     }
+                 }
+            }
+        }
+
+        NSString* full = [assetRoot stringByAppendingPathComponent:rel];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:full] == NO) {
+            BOOL isAssetRequest = [rel hasPrefix:@"assets/"] || [rel hasPrefix:@"zapp-workers/"];
+            if (!isAssetRequest) {
+                NSString* fallback = [assetRoot stringByAppendingPathComponent:@"index.html"];
+                if ([[NSFileManager defaultManager] fileExistsAtPath:fallback]) {
+                    full = fallback;
+                }
+            }
+            if ([[NSFileManager defaultManager] fileExistsAtPath:full] == NO) {
+                NSData* empty = [NSData data];
+                NSHTTPURLResponse* notFound = [[NSHTTPURLResponse alloc]
+                    initWithURL:url
+                    statusCode:404
+                    HTTPVersion:@"HTTP/1.1"
+                    headerFields:@{ @"Content-Type": @"text/plain; charset=utf-8" }];
+                [task didReceiveResponse:notFound];
+                [task didReceiveData:empty];
+                [task didFinish];
+                return;
+            }
+        }
+
+        NSData* data = [NSData dataWithContentsOfFile:full];
+        if (!data) data = [NSData data];
+        NSDictionary* headers = @{
+            @"Content-Type": zapp_mime_for_path(full),
+            @"Cross-Origin-Opener-Policy": @"same-origin",
+            @"Cross-Origin-Embedder-Policy": @"require-corp",
+            @"Cross-Origin-Resource-Policy": @"same-origin",
+            @"Cache-Control": @"no-cache"
+        };
+        NSHTTPURLResponse* response = [[NSHTTPURLResponse alloc]
+            initWithURL:url
+            statusCode:200
+            HTTPVersion:@"HTTP/1.1"
+            headerFields:headers];
+        [task didReceiveResponse:response];
+        [task didReceiveData:data];
+        [task didFinish];
+    }
+
+    - (void)webView:(WKWebView*)webView stopURLSchemeTask:(id<WKURLSchemeTask>)task {
+        (void)webView;
+        (void)task;
+    }
+    @end
+
+    @interface ZappMsgHandler : NSObject <WKScriptMessageHandler>
+    @end
+
+    @implementation ZappMsgHandler
+    - (void)userContentController:(WKUserContentController*)ucc didReceiveScriptMessage:(WKScriptMessage*)msg {
+        (void)ucc;
+        id body = [msg body];
+        if (![body isKindOfClass:[NSString class]]) return;
+        const char* raw_msg = [(NSString*)body UTF8String];
+        if (!raw_msg) return;
+        char* msg_copy = strdup(raw_msg);
+        if (!msg_copy) return;
+        void* app_ptr = app_get_active();
+        if (app_ptr != NULL) {
+            zapp_handle_message(app_ptr, msg_copy);
+        }
+        free(msg_copy);
+    }
+    @end
+
+    void zapp_dispatch_invoke_result(char* request_id, char* payload_json) {
+        (void)request_id;
+        NSString* payload = zapp_escape_js_string(payload_json);
+        NSString* js = [NSString stringWithFormat:
+            @"(function(){const b=globalThis[Symbol.for('zapp.bridge')];if(b&&typeof b.dispatchInvokeResult==='function'){b.dispatchInvokeResult('%@');}})();",
+            payload];
+        for (NSWindow* window in [NSApp windows]) {
+            NSView* content = [window contentView];
+            if ([content isKindOfClass:[WKWebView class]]) {
+                WKWebView* webview = (WKWebView*)content;
+                [webview evaluateJavaScript:js completionHandler:nil];
+            }
+        }
+    }
+
+    void zapp_darwin_sync_handle_bridge(char* action, char* payload_json) {
+        if (action == NULL || payload_json == NULL) return;
+        NSString* actionStr = [NSString stringWithUTF8String:action];
+        NSString* payload = [NSString stringWithUTF8String:payload_json];
+        if (![actionStr isKindOfClass:[NSString class]] || ![payload isKindOfClass:[NSString class]]) return;
+
+        NSData* payloadData = [payload dataUsingEncoding:NSUTF8StringEncoding];
+        if (payloadData == nil) return;
+        id rawObj = [NSJSONSerialization JSONObjectWithData:payloadData options:0 error:nil];
+        if (![rawObj isKindOfClass:[NSDictionary class]]) return;
+        NSDictionary* body = (NSDictionary*)rawObj;
+
+        zapp_sync_ensure_state();
+
+        if ([actionStr isEqualToString:@"wait"]) {
+            NSString* requestId = [body objectForKey:@"id"];
+            NSString* key = [body objectForKey:@"key"];
+            NSNumber* timeoutNumber = [body objectForKey:@"timeoutMs"];
+            NSString* targetWorkerId = [body objectForKey:@"targetWorkerId"];
+            if (![requestId isKindOfClass:[NSString class]] || [requestId length] == 0) return;
+            if (![key isKindOfClass:[NSString class]] || [key length] == 0) return;
+            if ([zapp_sync_waits objectForKey:requestId] != nil) return;
+
+            NSInteger timeoutMs = 30000;
+            if ([timeoutNumber respondsToSelector:@selector(integerValue)]) {
+                timeoutMs = [timeoutNumber integerValue];
+            }
+            if (timeoutMs < 1) timeoutMs = 1;
+            if (timeoutMs > 300000) timeoutMs = 300000;
+
+            NSMutableDictionary* waitObj = [NSMutableDictionary dictionary];
+            [waitObj setObject:key forKey:@"key"];
+            if ([targetWorkerId isKindOfClass:[NSString class]] && [targetWorkerId length] > 0) {
+                [waitObj setObject:targetWorkerId forKey:@"targetWorkerId"];
+            }
+            [zapp_sync_waits setObject:waitObj forKey:requestId];
+
+            NSMutableArray<NSString*>* queue = [zapp_sync_queues objectForKey:key];
+            if (queue == nil) {
+                queue = [NSMutableArray array];
+                [zapp_sync_queues setObject:queue forKey:key];
+            }
+            [queue addObject:requestId];
+
+            if ([timeoutNumber respondsToSelector:@selector(integerValue)]) {
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)timeoutMs * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+                    NSDictionary* existing = [zapp_sync_waits objectForKey:requestId];
+                    if (existing == nil) return;
+                    NSString* existingKey = [existing objectForKey:@"key"];
+                    NSString* existingTargetWorkerId = [existing objectForKey:@"targetWorkerId"];
+                    [zapp_sync_waits removeObjectForKey:requestId];
+                    zapp_sync_remove_wait_from_queue(existingKey, requestId);
+                    zapp_sync_dispatch_result(requestId, YES, @"timed-out", existingTargetWorkerId);
+                });
+            }
+            return;
+        }
+
+        if ([actionStr isEqualToString:@"notify"]) {
+            NSString* key = [body objectForKey:@"key"];
+            NSNumber* countNumber = [body objectForKey:@"count"];
+            if (![key isKindOfClass:[NSString class]] || [key length] == 0) return;
+            NSInteger count = 1;
+            if ([countNumber respondsToSelector:@selector(integerValue)]) {
+                count = [countNumber integerValue];
+            }
+            if (count < 1) count = 1;
+            if (count > 65535) count = 65535;
+
+            NSMutableArray<NSString*>* queue = [zapp_sync_queues objectForKey:key];
+            if (queue == nil || [queue count] == 0) return;
+
+            NSInteger delivered = 0;
+            while (delivered < count && [queue count] > 0) {
+                NSString* requestId = queue[0];
+                [queue removeObjectAtIndex:0];
+                NSDictionary* existing = [zapp_sync_waits objectForKey:requestId];
+                if (existing == nil) continue;
+                NSString* existingTargetWorkerId = [existing objectForKey:@"targetWorkerId"];
+                [zapp_sync_waits removeObjectForKey:requestId];
+                zapp_sync_dispatch_result(requestId, YES, @"notified", existingTargetWorkerId);
+                delivered += 1;
+            }
+            if ([queue count] == 0) {
+                [zapp_sync_queues removeObjectForKey:key];
+            }
+            return;
+        }
+
+        if ([actionStr isEqualToString:@"cancel"]) {
+            NSString* requestId = [body objectForKey:@"id"];
+            if (![requestId isKindOfClass:[NSString class]] || [requestId length] == 0) return;
+            NSDictionary* existing = [zapp_sync_waits objectForKey:requestId];
+            if (existing == nil) return;
+            NSString* existingKey = [existing objectForKey:@"key"];
+            NSString* existingTargetWorkerId = [existing objectForKey:@"targetWorkerId"];
+            [zapp_sync_waits removeObjectForKey:requestId];
+            zapp_sync_remove_wait_from_queue(existingKey, requestId);
+            zapp_sync_dispatch_result(requestId, YES, @"cancelled", existingTargetWorkerId);
+        }
+    }
+
+    void zapp_darwin_webview_create(void* window_ptr, bool inspectable) {
+        NSWindow* window = (__bridge NSWindow*)window_ptr;
+        NSView* hostView = [window contentView];
+        NSRect bounds = [hostView bounds];
+        WKWebViewConfiguration* config = [[WKWebViewConfiguration alloc] init];
+        ZappAssetSchemeHandler* schemeHandler = [[ZappAssetSchemeHandler alloc] init];
+        [config setURLSchemeHandler:schemeHandler forURLScheme:@"zapp"];
+        WKUserContentController* ucc = [[WKUserContentController alloc] init];
+        NSString* ownerId = [NSString stringWithFormat:@"owner-%p", window];
+        const char* bindingsRaw = service_get_bindings_manifest_json();
+        NSString* bindingsJson = zapp_escape_js_string(bindingsRaw);
+
+        const char* bootstrapName = app_get_bootstrap_name();
+        NSString* appName = bootstrapName != NULL
+            ? [NSString stringWithUTF8String:bootstrapName]
+            : @"Zapp App";
+        BOOL applicationShouldTerminateAfterLastWindowClosed =
+            app_get_bootstrap_application_should_terminate_after_last_window_closed() ? YES : NO;
+        BOOL webContentInspectable =
+            app_get_bootstrap_web_content_inspectable() ? YES : NO;
+        int maxWorkers = app_get_bootstrap_max_workers();
+        appName = [appName stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+        appName = [appName stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
+        NSString* appConfigScript = [NSString stringWithFormat:
+            @"(function(){globalThis[Symbol.for('zapp.bootstrapConfig')]={name:'%@',applicationShouldTerminateAfterLastWindowClosed:%@,webContentInspectable:%@,maxWorkers:%d};})();",
+            appName,
+            applicationShouldTerminateAfterLastWindowClosed ? @"true" : @"false",
+            webContentInspectable ? @"true" : @"false",
+            maxWorkers
+        ];
+        WKUserScript* appConfigUserScript = [[WKUserScript alloc]
+            initWithSource:appConfigScript
+            injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+            forMainFrameOnly:NO];
+        [ucc addUserScript:appConfigUserScript];
+
+        NSString* bindingsScript = [NSString stringWithFormat:
+            @"(function(){globalThis[Symbol.for('zapp.bindingsManifest')]='%@';})();",
+            bindingsJson
+        ];
+        WKUserScript* bindingsUserScript = [[WKUserScript alloc]
+            initWithSource:bindingsScript
+            injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+            forMainFrameOnly:NO];
+        [ucc addUserScript:bindingsUserScript];
+
+        NSString* ownerScript = [NSString stringWithFormat:
+            @"(function(){globalThis[Symbol.for('zapp.ownerId')]='%@';})();",
+            ownerId
+        ];
+        WKUserScript* ownerUserScript = [[WKUserScript alloc]
+            initWithSource:ownerScript
+            injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+            forMainFrameOnly:NO];
+        [ucc addUserScript:ownerUserScript];
+
+        NSString* bootstrap = [NSString stringWithUTF8String:zapp_darwin_webview_bootstrap_script()];
+        WKUserScript* userScript = [[WKUserScript alloc]
+            initWithSource:bootstrap
+            injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+            forMainFrameOnly:NO];
+        [ucc addUserScript:userScript];
+        ZappMsgHandler* handler = [[ZappMsgHandler alloc] init];
+        [ucc addScriptMessageHandler:handler name:@"zapp"];
+        [config setUserContentController:ucc];
+        [[config preferences] setValue:@YES forKey:@"developerExtrasEnabled"];
+        WKWebView* webview = [[WKWebView alloc] initWithFrame:bounds configuration:config];
+        [webview setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
+        [webview setInspectable:inspectable ? YES : NO];
+        NSURL* url = zapp_initial_url();
+        [webview loadRequest:[NSURLRequest requestWithURL:url]];
+        
+        [window setContentView:webview];
+    }
+}

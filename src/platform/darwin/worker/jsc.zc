@@ -1,0 +1,612 @@
+import "../../platform.zc";
+import "../bootstrap.zc";
+import "./common.zc";
+import "./timers.zc";
+import "./core/encoding_core.zc";
+import "./core/url_core.zc";
+import "./core/base64_core.zc";
+import "./core/websocket_core.zc";
+import "./core/crypto_core.zc";
+import "./core/fetch_core.zc";
+import "./jsc/encoding_jsc.zc";
+import "./jsc/url_jsc.zc";
+import "./jsc/base64_jsc.zc";
+import "./jsc/websocket_jsc.zc";
+import "./jsc/crypto_jsc.zc";
+import "./jsc/fetch_jsc.zc";
+@cfg(not(ZAPP_WORKER_ENGINE_QJS))
+import "../engine_jsc.zc";
+
+//> macos: framework: JavaScriptCore
+include <Cocoa/Cocoa.h>
+include <WebKit/WebKit.h>
+include <dispatch/dispatch.h>
+include <JavaScriptCore/JavaScriptCore.h>
+
+raw {
+#if !defined(ZAPP_WORKER_ENGINE_QJS)
+    extern void* engine_jsc_create_ctx(void* vm, const char* name);
+    extern int engine_jsc_eval(void* ctx, const char* utf8, size_t len, const char* filename);
+    extern const char* engine_jsc_get_exception_message(void* ctx);
+    extern void engine_jsc_free_ctx(void* ctx, void* vm, const char* new_name);
+
+    extern void zapp_darwin_worker_js_sync(dispatch_block_t block);
+    extern void zapp_darwin_worker_timers_cancel(NSString* workerId);
+    extern void zapp_darwin_worker_timers_cancel_all(void);
+    extern void zapp_darwin_worker_timers_init(JSContext* ctx, NSString* workerId);
+    extern void zapp_darwin_worker_fetch_cancel(NSString* workerId);
+    extern void zapp_darwin_worker_fetch_cancel_all(void);
+    extern void zapp_darwin_worker_fetch_init(JSContext* ctx, NSString* workerId);
+    extern void zapp_darwin_worker_crypto_init(JSContext* ctx);
+
+    static JSVirtualMachine* zapp_worker_vm = nil;
+    static NSMutableDictionary<NSString*, JSContext*>* zapp_worker_contexts = nil;
+    static NSMutableDictionary<NSString*, NSString*>* zapp_worker_owners = nil;
+    static NSMutableDictionary<NSString*, NSString*>* zapp_worker_script_urls = nil;
+    static NSMutableDictionary<NSString*, NSNumber*>* zapp_worker_shared_flags = nil;
+    static NSMutableDictionary<NSString*, JSContext*>* zapp_shared_worker_contexts = nil;
+    static NSMutableDictionary<NSString*, NSNumber*>* zapp_shared_worker_refcounts = nil;
+
+    static void zapp_teardown_jscontext(JSContext* ctx, NSString* newName) {
+        if (ctx == nil) return;
+        engine_jsc_free_ctx((__bridge void*)ctx, (__bridge void*)zapp_worker_vm, newName ? [newName UTF8String] : NULL);
+    }
+
+    static void zapp_ensure_worker_state(void) {
+        if (zapp_worker_contexts == nil) {
+            zapp_worker_contexts = [NSMutableDictionary dictionary];
+        }
+        if (zapp_worker_owners == nil) {
+            zapp_worker_owners = [NSMutableDictionary dictionary];
+        }
+        if (zapp_worker_script_urls == nil) {
+            zapp_worker_script_urls = [NSMutableDictionary dictionary];
+        }
+        if (zapp_worker_shared_flags == nil) {
+            zapp_worker_shared_flags = [NSMutableDictionary dictionary];
+        }
+        if (zapp_shared_worker_contexts == nil) {
+            zapp_shared_worker_contexts = [NSMutableDictionary dictionary];
+        }
+        if (zapp_shared_worker_refcounts == nil) {
+            zapp_shared_worker_refcounts = [NSMutableDictionary dictionary];
+        }
+        if (zapp_worker_vm == nil) {
+            zapp_worker_vm = [[JSVirtualMachine alloc] init];
+        }
+    }
+
+    static NSUInteger zapp_worker_active_context_count(void) {
+        if (zapp_worker_contexts == nil) return 0;
+        NSMutableSet<JSContext*>* seen = [NSMutableSet set];
+        for (NSString* key in zapp_worker_contexts) {
+            JSContext* ctx = zapp_worker_contexts[key];
+            if (ctx != nil) {
+                [seen addObject:ctx];
+            }
+        }
+        return [seen count];
+    }
+
+    static void zapp_call_bridge_method_unsafe(JSContext* ctx, NSString* methodName, NSArray* args) {
+        if (ctx == nil || methodName == nil) return;
+        JSValue* bridge = [ctx evaluateScript:@"globalThis[Symbol.for('zapp.bridge')]"];
+        if (bridge == nil || bridge.isUndefined || ![bridge isObject]) return;
+        JSValue* fn = bridge[methodName];
+        if (fn == nil || fn.isUndefined) return;
+        @try {
+            [fn callWithArguments:args ?: @[]];
+        } @catch (NSException* e) {
+            NSLog(@"[zapp] bridge.%@ exception: %@", methodName, e);
+        }
+    }
+
+    static void zapp_reset_owner_workers_internal(NSString* ownerId) {
+        if (ownerId == nil || zapp_worker_owners == nil) return;
+        zapp_darwin_worker_js_sync(^{
+            NSArray<NSString*>* keys = [zapp_worker_owners allKeys];
+            for (NSString* key in keys) {
+                NSString* existingOwner = zapp_worker_owners[key];
+                if (![existingOwner isEqualToString:ownerId]) continue;
+                NSString* scriptUrl = zapp_worker_script_urls[key];
+                NSNumber* sharedFlag = zapp_worker_shared_flags[key];
+                BOOL isShared = (sharedFlag != nil && [sharedFlag boolValue]);
+                JSContext* ctx = zapp_worker_contexts[key];
+
+                [zapp_worker_contexts removeObjectForKey:key];
+                [zapp_worker_owners removeObjectForKey:key];
+                [zapp_worker_script_urls removeObjectForKey:key];
+                [zapp_worker_shared_flags removeObjectForKey:key];
+
+                zapp_darwin_worker_timers_cancel(key);
+                zapp_darwin_worker_fetch_cancel(key);
+
+                if (ctx == nil) continue;
+
+                if (isShared && scriptUrl != nil) {
+                    zapp_call_bridge_method_unsafe(ctx, @"dispatchDisconnect", @[key]);
+                    NSNumber* rc = zapp_shared_worker_refcounts[scriptUrl];
+                    NSInteger next = (rc != nil ? [rc integerValue] : 1) - 1;
+                    if (next > 0) {
+                        [zapp_shared_worker_refcounts setObject:@(next) forKey:scriptUrl];
+                    } else {
+                        [zapp_shared_worker_refcounts removeObjectForKey:scriptUrl];
+                        [zapp_shared_worker_contexts removeObjectForKey:scriptUrl];
+                        zapp_teardown_jscontext(ctx, [NSString stringWithFormat:@"DeadSharedWorker:%@", key]);
+                    }
+                } else {
+                    zapp_teardown_jscontext(ctx, [NSString stringWithFormat:@"DeadWorker:%@", key]);
+                }
+            }
+        });
+    }
+
+    void zapp_darwin_reset_owner_workers(const char* owner_id) {
+        if (owner_id == NULL) return;
+        NSString* ownerId = [NSString stringWithUTF8String:owner_id];
+        if (![ownerId isKindOfClass:[NSString class]] || [ownerId length] == 0) return;
+        zapp_reset_owner_workers_internal(ownerId);
+    }
+
+    void zapp_darwin_reset_all_workers(void) {
+        zapp_darwin_worker_js_sync(^{
+            if (zapp_worker_contexts == nil) return;
+
+            NSArray<NSString*>* workerIds = [zapp_worker_contexts allKeys];
+            NSMutableSet<JSContext*>* seen = [NSMutableSet set];
+
+            for (NSString* workerId in workerIds) {
+                JSContext* ctx = zapp_worker_contexts[workerId];
+                zapp_darwin_worker_timers_cancel(workerId);
+                zapp_darwin_worker_fetch_cancel(workerId);
+                if (ctx == nil || [seen containsObject:ctx]) continue;
+                [seen addObject:ctx];
+                zapp_teardown_jscontext(ctx, [NSString stringWithFormat:@"DeadWorker:%@", workerId]);
+            }
+
+            [zapp_worker_contexts removeAllObjects];
+            [zapp_worker_owners removeAllObjects];
+            [zapp_worker_script_urls removeAllObjects];
+            [zapp_worker_shared_flags removeAllObjects];
+            [zapp_shared_worker_contexts removeAllObjects];
+            [zapp_shared_worker_refcounts removeAllObjects];
+        });
+    }
+
+    extern void zapp_dispatch_worker_to_webviews(const char* kind, const char* worker_id, const char* payload_json);
+    extern NSString* zapp_json_stringify_obj(id obj);
+
+    static void zapp_worker_dispatch_error_string(NSString* workerId, NSString* message) {
+        if (workerId == nil || [workerId length] == 0) return;
+        if (message == nil || [message length] == 0) message = @"Worker error";
+        NSLog(@"[zapp:worker:%@] %@", workerId, message);
+        NSDictionary* payload = @{@"message": message};
+        NSString* errJson = zapp_json_stringify_obj(payload);
+        zapp_dispatch_worker_to_webviews("error", [workerId UTF8String], [errJson UTF8String]);
+    }
+
+    static NSString* zapp_jsc_exception_message(JSValue* exception) {
+        if (exception == nil || exception.isUndefined || exception.isNull) return @"Worker error";
+        @try {
+            return [exception toString] ?: @"Worker error";
+        } @catch (NSException* e) {
+            return @"Worker error";
+        }
+    }
+
+    static NSString* zapp_sync_payload_with_target(id reqObj, NSString* targetWorkerId) {
+        NSMutableDictionary* payload = [NSMutableDictionary dictionary];
+        if ([reqObj isKindOfClass:[NSDictionary class]]) {
+            [payload addEntriesFromDictionary:(NSDictionary*)reqObj];
+        }
+        if ([targetWorkerId isKindOfClass:[NSString class]] && [targetWorkerId length] > 0) {
+            [payload setObject:targetWorkerId forKey:@"targetWorkerId"];
+        }
+        NSData* jsonData = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
+        NSString* json = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
+        return json ?: @"{}";
+    }
+
+    extern void zapp_backend_deliver_event(const char* name, const char* payload);
+
+    static void zapp_darwin_send_event_to_js(void* app_ptr, char* name, char* payload) {
+        (void)app_ptr;
+        if (name == NULL) return;
+        if (payload == NULL) payload = "{}";
+
+        NSString* n = [NSString stringWithUTF8String:name];
+        NSString* p = [NSString stringWithUTF8String:payload];
+        NSString* nEsc = [n stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+        nEsc = [nEsc stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
+        NSString* pEsc = [p stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+        pEsc = [pEsc stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
+
+        void (^work)(void) = ^{
+            NSString* js = [NSString stringWithFormat:
+                @"(function(){var b=globalThis[Symbol.for('zapp.bridge')];if(b&&typeof b.deliverEvent==='function'){b.deliverEvent('%@','%@');}})();",
+                nEsc, pEsc
+            ];
+
+            for (NSWindow* window in [NSApp windows]) {
+                NSView* content = [window contentView];
+                if ([content isKindOfClass:[WKWebView class]]) {
+                    WKWebView* webview = (WKWebView*)content;
+                    [webview evaluateJavaScript:js completionHandler:nil];
+                }
+            }
+            
+            zapp_darwin_worker_js_sync(^{
+                if (zapp_worker_contexts == nil) return;
+                NSMutableSet<JSContext*>* seen = [NSMutableSet set];
+                for (NSString* workerId in zapp_worker_contexts) {
+                    JSContext* wCtx = zapp_worker_contexts[workerId];
+                    if (wCtx == nil || [seen containsObject:wCtx]) continue;
+                    [seen addObject:wCtx];
+                    zapp_call_bridge_method_unsafe(wCtx, @"deliverEvent", @[n, p]);
+                }
+            });
+        };
+
+        if ([NSThread isMainThread]) {
+            work();
+        } else {
+            dispatch_async(dispatch_get_main_queue(), work);
+        }
+
+        // Also deliver to backend context
+        zapp_backend_deliver_event(name, payload);
+    }
+
+    void zapp_darwin_worker_dispatch_sync_result(const char* worker_id, const char* payload_json) {
+        if (worker_id == NULL || payload_json == NULL) return;
+        NSString* workerId = [NSString stringWithUTF8String:worker_id];
+        NSString* payload = [NSString stringWithUTF8String:payload_json];
+        if (![workerId isKindOfClass:[NSString class]] || [workerId length] == 0) return;
+        if (![payload isKindOfClass:[NSString class]]) return;
+
+        zapp_darwin_worker_js_sync(^{
+            if (zapp_worker_contexts == nil) return;
+            JSContext* ctx = zapp_worker_contexts[workerId];
+            if (ctx == nil) return;
+            zapp_call_bridge_method_unsafe(ctx, @"dispatchSyncResult", @[payload]);
+        });
+    }
+#endif
+}
+
+struct DarwinWorkerJsc {}
+
+@unused
+impl WorkerBackend for DarwinWorkerJsc {
+    fn handle_bridge(self, app: App*, action: string, payload: string) -> void {
+        raw {
+#if !defined(ZAPP_WORKER_ENGINE_QJS)
+        if (action == NULL || payload == NULL) return;
+
+        NSDictionary* body = zapp_worker_parse_bridge_payload((const char*)payload);
+        if (body == nil) return;
+
+        NSString* actionStr = [NSString stringWithUTF8String:(const char*)action];
+        if (!actionStr) return;
+
+        zapp_ensure_worker_state();
+
+        NSString* ownerId = zapp_worker_body_owner_id(body);
+        BOOL shared = zapp_worker_body_shared(body);
+
+        if ([actionStr isEqualToString:@"reset_owner"]) {
+            if (ownerId == nil) return;
+            zapp_reset_owner_workers_internal(ownerId);
+            return;
+        }
+
+        NSString* workerId = zapp_worker_body_worker_id(body);
+        if (workerId == nil) return;
+
+        if ([actionStr isEqualToString:@"create"]) {
+            NSString* scriptUrl = zapp_worker_body_script_url(body);
+            if (scriptUrl == nil) return;
+
+            NSError* readErr = nil;
+            NSString* source = zapp_worker_read_source(scriptUrl, &readErr);
+            if (!source || readErr) {
+                zapp_worker_dispatch_error_message(workerId, @"Failed to load worker script");
+                return;
+            }
+
+            __block BOOL exceeded = NO;
+
+            zapp_darwin_worker_js_sync(^{
+                int maxWorkers = app->config.maxWorkers;
+                if (shared) {
+                    JSContext* existingCtx = zapp_shared_worker_contexts[scriptUrl];
+                    if (existingCtx != nil) {
+                        NSNumber* rc = zapp_shared_worker_refcounts[scriptUrl];
+                        NSInteger next = (rc != nil ? [rc integerValue] : 0) + 1;
+                        [zapp_shared_worker_refcounts setObject:@(next) forKey:scriptUrl];
+                        [zapp_worker_contexts setObject:existingCtx forKey:workerId];
+                        [zapp_worker_script_urls setObject:scriptUrl forKey:workerId];
+                        [zapp_worker_shared_flags setObject:@(YES) forKey:workerId];
+                        if (ownerId != nil) {
+                            [zapp_worker_owners setObject:ownerId forKey:workerId];
+                        }
+                        zapp_call_bridge_method_unsafe(existingCtx, @"dispatchConnect", @[workerId]);
+                        return;
+                    }
+                }
+
+                if (maxWorkers > 0 && zapp_worker_active_context_count() >= (NSUInteger)maxWorkers) {
+                    exceeded = YES;
+                    return;
+                }
+
+                NSString* ctxName = [NSString stringWithFormat:@"ZappWorker:%@", workerId];
+                void* opaque = engine_jsc_create_ctx((__bridge void*)zapp_worker_vm, [ctxName UTF8String]);
+                if (!opaque) {
+                    zapp_worker_dispatch_error_message(workerId, @"Failed to create context");
+                    return;
+                }
+
+                JSContext* ctx = (__bridge JSContext*)opaque;
+                if (@available(macOS 13.3, *)) {
+                    ctx.inspectable = app->window.webContentInspectable ? YES : NO;
+                }
+
+                __weak JSContext* weakCtx = ctx;
+                ctx.exceptionHandler = ^(JSContext* context, JSValue* exception) {
+                    void (^previousHandler)(JSContext *ctx, JSValue *exc) = context.exceptionHandler;
+                    context.exceptionHandler = nil;
+                    context.exception = nil;
+                    NSString* dispatchId = [weakCtx[@"__zappWorkerDispatchId"] toString];
+                    if (![dispatchId isKindOfClass:[NSString class]] || [dispatchId length] == 0) {
+                        dispatchId = workerId;
+                    }
+                    zapp_worker_dispatch_error_string(dispatchId, zapp_jsc_exception_message(exception));
+                    context.exceptionHandler = previousHandler;
+                };
+
+                ctx[@"globalThis"] = ctx.globalObject;
+                ctx[@"self"] = ctx.globalObject;
+                ctx[@"__zappWorkerDispatchId"] = workerId;
+
+                JSValue* bridge = [JSValue valueWithNewObjectInContext:ctx];
+                ctx[@"__zappBridge"] = bridge;
+
+                bridge[@"consoleLog"] = ^(JSValue* levelVal, JSValue* msgVal) {
+                    NSString* level = [levelVal toString] ?: @"log";
+                    NSString* msg = [msgVal toString] ?: @"";
+                    NSLog(@"[zapp:worker:%@:%@] %@", workerId, level, msg);
+                };
+
+                zapp_darwin_worker_timers_init(ctx, workerId);
+                zapp_darwin_worker_fetch_init(ctx, workerId);
+                zapp_darwin_worker_crypto_init(ctx);
+                zapp_darwin_worker_encoding_init(ctx);
+                zapp_darwin_worker_url_init(ctx);
+                zapp_darwin_worker_base64_init(ctx);
+                zapp_darwin_worker_websocket_init(ctx);
+
+                bridge[@"emitToHost"] = ^(JSValue* nameVal, JSValue* payloadVal) {
+                    NSString* eventName = [nameVal toString];
+                    if (![eventName isKindOfClass:[NSString class]] || [eventName length] == 0) return;
+                    id payloadObj = [payloadVal toObject];
+                    NSString* payloadJson = zapp_json_stringify_obj(payloadObj);
+                    if (payloadJson == nil) payloadJson = @"{}";
+                    zapp_darwin_send_event_to_js((void*)app, (char*)[eventName UTF8String], (char*)[payloadJson UTF8String]);
+                };
+
+                bridge[@"invokeToHost"] = ^(JSValue* methodVal, JSValue* payloadVal) {
+                    NSString* methodName = [methodVal toString];
+                    if (![methodName isKindOfClass:[NSString class]] || [methodName length] == 0) return;
+                    id payloadObj = [payloadVal toObject];
+                    NSString* payloadJson = zapp_json_stringify_obj(payloadObj);
+                    if (payloadJson == nil) payloadJson = @"{}";
+                    NSString* wire = [NSString stringWithFormat:@"invoke\n%@\n%@", methodName, payloadJson];
+                    zapp_handle_message((void*)app, (char*)[wire UTF8String]);
+                };
+
+                bridge[@"reportError"] = ^(JSValue* errVal) {
+                    NSString* dispatchId = [weakCtx[@"__zappWorkerDispatchId"] toString];
+                    if (![dispatchId isKindOfClass:[NSString class]] || [dispatchId length] == 0) {
+                        dispatchId = workerId;
+                    }
+                    NSString* msg = @"Worker runtime error";
+                    if (errVal != nil && !errVal.isUndefined && !errVal.isNull) {
+                        @try { msg = [errVal toString] ?: msg; } @catch (NSException* e) {}
+                    }
+                    zapp_worker_dispatch_error_string(dispatchId, msg);
+                };
+
+                bridge[@"postMessage"] = ^(JSValue* data, JSValue* optTargetId) {
+                    id obj = [data toObject];
+                    NSString* json = zapp_json_stringify_obj(obj);
+                    NSString* dispatchId = nil;
+                    if (optTargetId != nil && !optTargetId.isUndefined && !optTargetId.isNull) {
+                        dispatchId = [optTargetId toString];
+                    } else {
+                        dispatchId = [weakCtx[@"__zappWorkerDispatchId"] toString];
+                        if (![dispatchId isKindOfClass:[NSString class]] || [dispatchId length] == 0) {
+                            dispatchId = workerId;
+                        }
+                    }
+                    zapp_dispatch_worker_to_webviews("message", [dispatchId UTF8String], [json UTF8String]);
+                };
+
+                bridge[@"closeWorker"] = ^() {
+                    NSString* dispatchId = [weakCtx[@"__zappWorkerDispatchId"] toString];
+                    if (![dispatchId isKindOfClass:[NSString class]] || [dispatchId length] == 0) {
+                        dispatchId = workerId;
+                    }
+                    zapp_dispatch_worker_to_webviews("close", [dispatchId UTF8String], "{}");
+                };
+
+                bridge[@"syncWait"] = ^(JSValue* requestVal) {
+                    id reqObj = [requestVal toObject];
+                    NSString* dispatchId = [weakCtx[@"__zappWorkerDispatchId"] toString];
+                    if (![dispatchId isKindOfClass:[NSString class]] || [dispatchId length] == 0) {
+                        dispatchId = workerId;
+                    }
+                    NSString* payloadJson = zapp_sync_payload_with_target(reqObj, dispatchId);
+                    NSString* wire = [NSString stringWithFormat:@"sync\nwait\n%@", payloadJson];
+                    void* appPtr = app_get_active();
+                    if (appPtr != NULL) {
+                        zapp_handle_message(appPtr, (char*)[wire UTF8String]);
+                    }
+                };
+
+                bridge[@"syncNotify"] = ^(JSValue* requestVal) {
+                    id reqObj = [requestVal toObject];
+                    NSString* dispatchId = [weakCtx[@"__zappWorkerDispatchId"] toString];
+                    if (![dispatchId isKindOfClass:[NSString class]] || [dispatchId length] == 0) {
+                        dispatchId = workerId;
+                    }
+                    NSString* payloadJson = zapp_sync_payload_with_target(reqObj, dispatchId);
+                    NSString* wire = [NSString stringWithFormat:@"sync\nnotify\n%@", payloadJson];
+                    void* appPtr = app_get_active();
+                    if (appPtr != NULL) {
+                        zapp_handle_message(appPtr, (char*)[wire UTF8String]);
+                    }
+                };
+
+                bridge[@"syncCancel"] = ^(JSValue* requestVal) {
+                    id reqObj = [requestVal toObject];
+                    NSString* dispatchId = [weakCtx[@"__zappWorkerDispatchId"] toString];
+                    if (![dispatchId isKindOfClass:[NSString class]] || [dispatchId length] == 0) {
+                        dispatchId = workerId;
+                    }
+                    NSString* payloadJson = zapp_sync_payload_with_target(reqObj, dispatchId);
+                    NSString* wire = [NSString stringWithFormat:@"sync\ncancel\n%@", payloadJson];
+                    void* appPtr = app_get_active();
+                    if (appPtr != NULL) {
+                        zapp_handle_message(appPtr, (char*)[wire UTF8String]);
+                    }
+                };
+
+                const char* bootstrap = zapp_darwin_worker_bootstrap_script();
+                size_t blen = strlen(bootstrap);
+                int err = engine_jsc_eval((__bridge void*)ctx, bootstrap, blen, "bootstrap.js");
+                if (err != 0) {
+                    const char* msg = engine_jsc_get_exception_message((__bridge void*)ctx);
+                    NSLog(@"[zapp:worker:%@] bootstrap failed: %s", workerId, msg ?: "(no message)");
+                    NSString* errMsg = msg ? [NSString stringWithFormat:@"{\"message\":\"Bootstrap failed: %s\"}", msg] : @"{\"message\":\"Bootstrap failed\"}";
+                    zapp_dispatch_worker_to_webviews("error", [workerId UTF8String], [errMsg UTF8String]);
+                    zapp_darwin_worker_timers_cancel(workerId);
+                    zapp_darwin_worker_fetch_cancel(workerId);
+                    zapp_teardown_jscontext(ctx, [NSString stringWithFormat:@"DeadWorker:%@", workerId]);
+                    return;
+                }
+
+                NSString* wrappedSource = [NSString stringWithFormat:
+                    @"(async function(){\n%@\n})()"
+                    @".catch(function(e){"
+                    @"var b=globalThis[Symbol.for('zapp.bridge')];"
+                    @"if(b&&b.reportError)b.reportError(e);"
+                    @"else if(typeof console!=='undefined')console.error('[worker] unhandled:',e);"
+                    @"});", source];
+                NSData* wrappedData = [wrappedSource dataUsingEncoding:NSUTF8StringEncoding];
+                if (wrappedData == nil || [wrappedData length] == 0) {
+                    zapp_worker_dispatch_error_message(workerId, @"Script encoding failed");
+                    zapp_darwin_worker_timers_cancel(workerId);
+                    zapp_darwin_worker_fetch_cancel(workerId);
+                    zapp_teardown_jscontext(ctx, [NSString stringWithFormat:@"DeadWorker:%@", workerId]);
+                    return;
+                }
+                const char* wrappedUtf8 = (const char*)[wrappedData bytes];
+                size_t wrappedLen = [wrappedData length];
+                err = engine_jsc_eval((__bridge void*)ctx, wrappedUtf8, wrappedLen, scriptUrl ? [scriptUrl UTF8String] : NULL);
+                if (err != 0) {
+                    const char* msg = engine_jsc_get_exception_message((__bridge void*)ctx);
+                    NSLog(@"[zapp:worker:%@] script eval failed: %s", workerId, msg ?: "(no message)");
+                    NSString* errMsg = msg ? [NSString stringWithFormat:@"{\"message\":\"%@\"}", [NSString stringWithUTF8String:msg]] : @"{\"message\":\"Script error\"}";
+                    zapp_dispatch_worker_to_webviews("error", [workerId UTF8String], [errMsg UTF8String]);
+                    zapp_darwin_worker_timers_cancel(workerId);
+                    zapp_darwin_worker_fetch_cancel(workerId);
+                    zapp_teardown_jscontext(ctx, [NSString stringWithFormat:@"DeadWorker:%@", workerId]);
+                    return;
+                }
+
+                [zapp_worker_contexts setObject:ctx forKey:workerId];
+                [zapp_worker_script_urls setObject:scriptUrl forKey:workerId];
+                [zapp_worker_shared_flags setObject:@(shared) forKey:workerId];
+                if (ownerId != nil) {
+                    [zapp_worker_owners setObject:ownerId forKey:workerId];
+                }
+                if (shared) {
+                    [zapp_shared_worker_contexts setObject:ctx forKey:scriptUrl];
+                    [zapp_shared_worker_refcounts setObject:@(1) forKey:scriptUrl];
+                    zapp_call_bridge_method_unsafe(ctx, @"dispatchConnect", @[workerId]);
+                }
+
+            });
+
+            if (exceeded) {
+                zapp_worker_dispatch_max_workers_error(workerId, app->config.maxWorkers);
+            }
+            return;
+        }
+
+        if ([actionStr isEqualToString:@"post"]) {
+            id dataObj = body[@"data"];
+            zapp_darwin_worker_js_sync(^{
+                JSContext* ctx = zapp_worker_contexts[workerId];
+                if (!ctx) return;
+                if (ownerId != nil) {
+                    NSString* existingOwner = zapp_worker_owners[workerId];
+                    if (existingOwner != nil && ![existingOwner isEqualToString:ownerId]) return;
+                }
+                zapp_call_bridge_method_unsafe(ctx, @"dispatchMessage", @[dataObj ?: [NSNull null], workerId]);
+            });
+            return;
+        }
+
+        if ([actionStr isEqualToString:@"terminate"]) {
+            zapp_darwin_worker_js_sync(^{
+                if (ownerId != nil) {
+                    NSString* existingOwner = zapp_worker_owners[workerId];
+                    if (existingOwner != nil && ![existingOwner isEqualToString:ownerId]) return;
+                }
+
+                NSString* scriptUrl = zapp_worker_script_urls[workerId];
+                NSNumber* sharedFlag = zapp_worker_shared_flags[workerId];
+                BOOL isShared = (sharedFlag != nil && [sharedFlag boolValue]);
+                JSContext* ctx = zapp_worker_contexts[workerId];
+
+                [zapp_worker_contexts removeObjectForKey:workerId];
+                zapp_darwin_worker_timers_cancel(workerId);
+                zapp_darwin_worker_fetch_cancel(workerId);
+                [zapp_worker_owners removeObjectForKey:workerId];
+                [zapp_worker_script_urls removeObjectForKey:workerId];
+                [zapp_worker_shared_flags removeObjectForKey:workerId];
+
+                if (ctx == nil) return;
+
+                if (isShared && scriptUrl != nil) {
+                    zapp_call_bridge_method_unsafe(ctx, @"dispatchDisconnect", @[workerId]);
+
+                    NSNumber* rc = zapp_shared_worker_refcounts[scriptUrl];
+                    NSInteger next = (rc != nil ? [rc integerValue] : 1) - 1;
+                    if (next > 0) {
+                        [zapp_shared_worker_refcounts setObject:@(next) forKey:scriptUrl];
+                    } else {
+                        [zapp_shared_worker_refcounts removeObjectForKey:scriptUrl];
+                        [zapp_shared_worker_contexts removeObjectForKey:scriptUrl];
+                        zapp_teardown_jscontext(ctx, [NSString stringWithFormat:@"DeadSharedWorker:%@", workerId]);
+                    }
+                } else {
+                    zapp_teardown_jscontext(ctx, [NSString stringWithFormat:@"DeadWorker:%@", workerId]);
+                }
+            });
+            return;
+        }
+#endif
+    }
+}
+
+    fn bind_runtime(self, app: App*) -> void {
+        raw {
+#if !defined(ZAPP_WORKER_ENGINE_QJS)
+        app->event.send_event_to_js = (void*)zapp_darwin_send_event_to_js;
+#endif
+        }
+    }
+}

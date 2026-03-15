@@ -1,0 +1,221 @@
+// QJS wrapper for WebSocket. Delegates to core/websocket_core.zc.
+
+@cfg(ZAPP_WORKER_ENGINE_QJS)
+raw {
+#ifdef ZAPP_WORKER_ENGINE_QJS
+    static char* zapp_core_ws_connect(const char* url_str, const char** protocols, int protocol_count,
+                                       zapp_ws_event_fn callback, void* user_data);
+    static void zapp_core_ws_send_text(const char* ws_id, const char* text);
+    static void zapp_core_ws_send_binary(const char* ws_id, const uint8_t* bytes, size_t len);
+    static void zapp_core_ws_close(const char* ws_id, int code, const char* reason);
+    static void zapp_core_ws_ensure_init(void);
+
+    dispatch_queue_t zapp_darwin_qjs_get_queue(void);
+    NSValue* zapp_darwin_qjs_get_context(NSString* workerId);
+    void zapp_darwin_qjs_drain_jobs(void* ctx, const char* label);
+
+    // Storage for QJS callback references keyed by wsId
+    static NSMutableDictionary<NSString*, NSMutableDictionary*>* zapp_qjs_ws_refs = nil;
+
+    // QJS WS callback: receives events from core and dispatches to QJS context.
+    static void zapp_qjs_ws_callback(const char* ws_id, const char* event_type, const char* json_payload, void* user_data) {
+        if (!ws_id || !json_payload || !user_data) return;
+
+        NSString* wsId = [NSString stringWithUTF8String:ws_id];
+        NSString* jsonStr = [NSString stringWithUTF8String:json_payload];
+        NSString* workerId = (__bridge NSString*)user_data;
+
+        dispatch_queue_t q = zapp_darwin_qjs_get_queue();
+        if (!q) return;
+
+        dispatch_async(q, ^{
+            NSValue* ctxVal = zapp_darwin_qjs_get_context(workerId);
+            if (!ctxVal) return;
+            QJSContext* ctx = (QJSContext*)[ctxVal pointerValue];
+
+            NSMutableDictionary* ref = zapp_qjs_ws_refs[wsId];
+            if (!ref) return;
+            NSValue* fnBoxed = ref[@"fn"];
+            if (!fnBoxed) return;
+            QJSValue fn = *(QJSValue*)[fnBoxed pointerValue];
+
+            // Parse JSON and call the JS callback
+            QJSValue global = JS_GetGlobalObject(ctx);
+            QJSValue JSON = JS_GetPropertyStr(ctx, global, "JSON");
+            QJSValue parse = JS_GetPropertyStr(ctx, JSON, "parse");
+            QJSValue jsonArg = JS_NewString(ctx, [jsonStr UTF8String]);
+            QJSValue parsed = JS_Call(ctx, parse, JSON, 1, &jsonArg);
+
+            QJSValue args[1] = { parsed };
+            QJSValue ret = JS_Call(ctx, fn, JS_UNDEFINED, 1, args);
+            if (JS_IsException(ret)) {
+                QJSValue exc = JS_GetException(ctx);
+                const char* s = JS_ToCString(ctx, exc);
+                NSLog(@"[zapp-ws-qjs] callback error: %s", s ? s : "unknown");
+                if (s) JS_FreeCString(ctx, s);
+                JS_FreeValue(ctx, exc);
+            }
+            JS_FreeValue(ctx, ret);
+            JS_FreeValue(ctx, parsed);
+            JS_FreeValue(ctx, jsonArg);
+            JS_FreeValue(ctx, parse);
+            JS_FreeValue(ctx, JSON);
+            JS_FreeValue(ctx, global);
+            zapp_darwin_qjs_drain_jobs(ctx, "ws-event");
+        });
+    }
+
+    static QJSValue qjs_bridge_wsConnect(QJSContext *ctx, QJSValue this_val, int argc, QJSValue *argv, int magic, QJSValue *func_data) {
+        if (argc < 3) return JS_NewString(ctx, "");
+
+        const char* urlStr = JS_ToCString(ctx, argv[0]);
+        if (!urlStr) return JS_NewString(ctx, "");
+
+        // Extract protocols array
+        const char** protos = NULL;
+        int protoCount = 0;
+        if (!JS_IsUndefined(argv[1]) && !JS_IsNull(argv[1])) {
+            QJSValue lenVal = JS_GetPropertyStr(ctx, argv[1], "length");
+            int32_t arrLen = 0;
+            JS_ToInt32(ctx, &arrLen, lenVal);
+            JS_FreeValue(ctx, lenVal);
+            if (arrLen > 0) {
+                protoCount = arrLen;
+                protos = (const char**)malloc(sizeof(const char*) * protoCount);
+                for (int i = 0; i < protoCount; i++) {
+                    QJSValue el = JS_GetPropertyUint32(ctx, argv[1], (uint32_t)i);
+                    protos[i] = JS_ToCString(ctx, el);
+                    JS_FreeValue(ctx, el);
+                }
+            }
+        }
+
+        // Get worker ID for callback dispatch
+        const char* workerId = JS_ToCString(ctx, func_data[0]);
+        NSString* wId = workerId ? [NSString stringWithUTF8String:workerId] : @"";
+        if (workerId) JS_FreeCString(ctx, workerId);
+
+        // Retain JS callback
+        QJSValue jsFn = JS_DupValue(ctx, argv[2]);
+        QJSValue* fnBox = (QJSValue*)malloc(sizeof(QJSValue));
+        *fnBox = jsFn;
+
+        char* wsIdC = zapp_core_ws_connect(urlStr, protos, protoCount, zapp_qjs_ws_callback, (__bridge void*)wId);
+
+        // Free protocol strings
+        for (int i = 0; i < protoCount; i++) {
+            if (protos[i]) JS_FreeCString(ctx, protos[i]);
+        }
+        free(protos);
+        JS_FreeCString(ctx, urlStr);
+
+        if (!wsIdC) {
+            JS_FreeValue(ctx, jsFn);
+            free(fnBox);
+            return JS_NewString(ctx, "");
+        }
+
+        NSString* wsId = [NSString stringWithUTF8String:wsIdC];
+        if (zapp_qjs_ws_refs == nil) zapp_qjs_ws_refs = [NSMutableDictionary new];
+        zapp_qjs_ws_refs[wsId] = [@{
+            @"fn": [NSValue valueWithPointer:fnBox],
+            @"ctx": [NSValue valueWithPointer:ctx],
+        } mutableCopy];
+
+        QJSValue result = JS_NewString(ctx, wsIdC);
+        free(wsIdC);
+        return result;
+    }
+
+    static QJSValue qjs_bridge_wsSend(QJSContext *ctx, QJSValue this_val, int argc, QJSValue *argv) {
+        if (argc < 3) return JS_UNDEFINED;
+
+        const char* wsId = JS_ToCString(ctx, argv[0]);
+        if (!wsId) return JS_UNDEFINED;
+
+        int isBinary = JS_ToBool(ctx, argv[2]);
+
+        if (isBinary) {
+            size_t len = 0;
+            uint8_t* bytes = JS_GetArrayBuffer(ctx, &len, argv[1]);
+            if (!bytes) {
+                QJSValue bufProp = JS_GetPropertyStr(ctx, argv[1], "buffer");
+                if (!JS_IsUndefined(bufProp)) {
+                    size_t bufLen = 0;
+                    uint8_t* bufPtr = JS_GetArrayBuffer(ctx, &bufLen, bufProp);
+                    QJSValue oVal = JS_GetPropertyStr(ctx, argv[1], "byteOffset");
+                    QJSValue lVal = JS_GetPropertyStr(ctx, argv[1], "byteLength");
+                    int32_t off = 0, blen = 0;
+                    JS_ToInt32(ctx, &off, oVal);
+                    JS_ToInt32(ctx, &blen, lVal);
+                    JS_FreeValue(ctx, oVal);
+                    JS_FreeValue(ctx, lVal);
+                    if (bufPtr && off >= 0 && blen > 0 && (size_t)(off + blen) <= bufLen) {
+                        bytes = bufPtr + off;
+                        len = (size_t)blen;
+                    }
+                }
+                JS_FreeValue(ctx, bufProp);
+            }
+            if (bytes && len > 0) zapp_core_ws_send_binary(wsId, bytes, len);
+        } else {
+            const char* text = JS_ToCString(ctx, argv[1]);
+            zapp_core_ws_send_text(wsId, text ? text : "");
+            if (text) JS_FreeCString(ctx, text);
+        }
+
+        JS_FreeCString(ctx, wsId);
+        return JS_UNDEFINED;
+    }
+
+    static QJSValue qjs_bridge_wsClose(QJSContext *ctx, QJSValue this_val, int argc, QJSValue *argv) {
+        if (argc < 1) return JS_UNDEFINED;
+        const char* wsId = JS_ToCString(ctx, argv[0]);
+        if (!wsId) return JS_UNDEFINED;
+
+        int32_t code = 1000;
+        if (argc >= 2 && !JS_IsUndefined(argv[1]) && !JS_IsNull(argv[1])) {
+            JS_ToInt32(ctx, &code, argv[1]);
+        }
+        const char* reason = NULL;
+        if (argc >= 3 && !JS_IsUndefined(argv[2]) && !JS_IsNull(argv[2])) {
+            reason = JS_ToCString(ctx, argv[2]);
+        }
+
+        zapp_core_ws_close(wsId, code, reason);
+
+        // Clean up JS callback reference
+        NSString* wsIdNS = [NSString stringWithUTF8String:wsId];
+        NSMutableDictionary* ref = zapp_qjs_ws_refs[wsIdNS];
+        if (ref) {
+            NSValue* fnBoxed = ref[@"fn"];
+            if (fnBoxed) {
+                QJSValue* fnBox = (QJSValue*)[fnBoxed pointerValue];
+                NSValue* ctxBoxed = ref[@"ctx"];
+                QJSContext* origCtx = ctxBoxed ? (QJSContext*)[ctxBoxed pointerValue] : ctx;
+                JS_FreeValue(origCtx, *fnBox);
+                free(fnBox);
+            }
+            [zapp_qjs_ws_refs removeObjectForKey:wsIdNS];
+        }
+
+        if (reason) JS_FreeCString(ctx, reason);
+        JS_FreeCString(ctx, wsId);
+        return JS_UNDEFINED;
+    }
+
+    void zapp_darwin_qjs_websocket_install(QJSContext* ctx, QJSValue bridge, const char* worker_id) {
+        zapp_core_ws_ensure_init();
+        if (zapp_qjs_ws_refs == nil) zapp_qjs_ws_refs = [NSMutableDictionary new];
+
+        QJSValue wIdVal = JS_NewString(ctx, worker_id);
+        QJSValue funcData[1] = { wIdVal };
+        JS_SetPropertyStr(ctx, bridge, "wsConnect", JS_NewCFunctionData(ctx, qjs_bridge_wsConnect, 3, 0, 1, funcData));
+        JS_FreeValue(ctx, wIdVal);
+
+        JS_SetPropertyStr(ctx, bridge, "wsSend", JS_NewCFunction(ctx, qjs_bridge_wsSend, "wsSend", 3));
+        JS_SetPropertyStr(ctx, bridge, "wsClose", JS_NewCFunction(ctx, qjs_bridge_wsClose, "wsClose", 3));
+    }
+
+#endif
+}

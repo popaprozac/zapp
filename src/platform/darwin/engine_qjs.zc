@@ -1,0 +1,90 @@
+// Engine adapter for QJS: context lifecycle + eval. Backend (qjs) calls
+// these. See WORKERS.md "Where to start implementation" and WORKERS_PROTOCOL.md
+// §4.
+
+struct EngineQjs {
+}
+
+raw {
+#ifdef ZAPP_WORKER_ENGINE_QJS
+/* Rename QuickJS types to avoid conflict with JavaScriptCore (Cocoa/WebKit) in
+ * same translation unit */
+#define JSContext QJSContext
+#define JSRuntime QJSRuntime
+#define JSValue QJSValue
+#define JSClassID QJSClassID
+#define JSClassDef QJSClassDef
+#define JSClassEx QJSClassEx
+#define JSValueConst QJSValueConst
+#define JSPropertyEnum QJSPropertyEnum
+#define JSPropertyDescriptor QJSPropertyDescriptor
+#include "quickjs.h"
+#include "quickjs-libc.h"
+#undef JSContext
+#undef JSRuntime
+#undef JSValue
+#undef JSClassID
+#undef JSClassDef
+#undef JSClassEx
+#undef JSValueConst
+#undef JSPropertyEnum
+#undef JSPropertyDescriptor
+#include <string.h>
+
+#define ENGINE_QJS_MSG_MAX 4096
+  static char g_engine_qjs_last_message[ENGINE_QJS_MSG_MAX] = {0};
+
+  void *engine_qjs_create_ctx(void *rt) {
+    if (!rt)
+      return NULL;
+    QJSRuntime *qrt = (QJSRuntime *)rt;
+    QJSContext *ctx = JS_NewContext(qrt);
+    if (!ctx)
+      return NULL;
+    js_std_add_helpers(ctx, 0, NULL);
+    js_init_module_std(ctx, "std");
+    js_init_module_os(ctx, "os");
+    return (void *)ctx;
+  }
+
+  int engine_qjs_eval(void *ctx_opaque, const char *utf8, size_t len,
+                      const char *filename) {
+    if (!ctx_opaque || !utf8)
+      return -1;
+    g_engine_qjs_last_message[0] = '\0';
+    QJSContext *ctx = (QJSContext *)ctx_opaque;
+    QJSValue ret =
+        JS_Eval(ctx, utf8, (int)(len > 0x7fffffff ? 0x7fffffff : len),
+                filename ? filename : "<script>", JS_EVAL_TYPE_GLOBAL);
+    if (JS_IsException(ret)) {
+      QJSValue exc = JS_GetException(ctx);
+      const char *str = JS_ToCString(ctx, exc);
+      if (str) {
+        size_t n = strlen(str);
+        if (n >= ENGINE_QJS_MSG_MAX)
+          n = ENGINE_QJS_MSG_MAX - 1;
+        memcpy(g_engine_qjs_last_message, str, n);
+        g_engine_qjs_last_message[n] = '\0';
+        JS_FreeCString(ctx, str);
+      }
+      JS_FreeValue(ctx, exc);
+      JS_FreeValue(ctx, ret);
+      return -1;
+    }
+    JS_FreeValue(ctx, ret);
+    return 0;
+  }
+
+  const char *engine_qjs_get_exception_message(void *ctx_opaque) {
+    (void)ctx_opaque;
+    return g_engine_qjs_last_message[0] ? g_engine_qjs_last_message : NULL;
+  }
+
+  void engine_qjs_free_ctx(void *ctx_opaque) {
+    if (!ctx_opaque)
+      return;
+    QJSContext *ctx = (QJSContext *)ctx_opaque;
+    JS_FreeContext(ctx);
+  }
+#endif
+}

@@ -1,0 +1,46 @@
+// JSC wrapper for crypto. Delegates to core/crypto_core.zc.
+
+//> macos: framework: JavaScriptCore
+include <Foundation/Foundation.h>
+include <JavaScriptCore/JavaScriptCore.h>
+
+raw {
+    static void zapp_core_crypto_random_bytes(uint8_t* buf, size_t len);
+    static char* zapp_core_crypto_random_uuid(void);
+
+    void zapp_darwin_worker_crypto_init(JSContext* ctx) {
+        JSValue* bridge = ctx[@"__zappBridge"];
+        if (bridge == nil || bridge.isUndefined) {
+            ctx[@"__zappBridge"] = [JSValue valueWithNewObjectInContext:ctx];
+            bridge = ctx[@"__zappBridge"];
+        }
+
+        bridge[@"getRandomValues"] = ^(JSValue* arrayVal) {
+            if (arrayVal == nil || [arrayVal isUndefined] || [arrayVal isNull]) return arrayVal;
+
+            JSContextRef ctxRef = ctx.JSGlobalContextRef;
+            JSValueRef valRef = arrayVal.JSValueRef;
+            if (!ctxRef || !valRef) return arrayVal;
+
+            JSValueRef exception = NULL;
+            JSTypedArrayType type = JSValueGetTypedArrayType(ctxRef, valRef, &exception);
+            if (type == kJSTypedArrayTypeNone) return arrayVal;
+
+            size_t len = JSObjectGetTypedArrayByteLength(ctxRef, valRef, &exception);
+            if (len == 0 || exception) return arrayVal;
+
+            void* bytes = JSObjectGetTypedArrayBytesPtr(ctxRef, valRef, &exception);
+            if (!bytes || exception) return arrayVal;
+
+            zapp_core_crypto_random_bytes((uint8_t*)bytes, len);
+            return arrayVal;
+        };
+
+        bridge[@"randomUUID"] = ^NSString*() {
+            char* uuid = zapp_core_crypto_random_uuid();
+            NSString* result = [NSString stringWithUTF8String:uuid];
+            free(uuid);
+            return result;
+        };
+    }
+}

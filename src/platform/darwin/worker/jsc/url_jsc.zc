@@ -1,0 +1,51 @@
+// JSC wrapper for URL parsing. Delegates to core/url_core.zc.
+
+//> macos: framework: JavaScriptCore
+include <Foundation/Foundation.h>
+include <JavaScriptCore/JavaScriptCore.h>
+
+raw {
+    static int zapp_core_url_parse(const char* url_str, const char* base_str, zapp_url_parsed_t* out);
+    static void zapp_core_url_free(zapp_url_parsed_t* c);
+
+    void zapp_darwin_worker_url_init(JSContext* ctx) {
+        JSValue* bridge = ctx[@"__zappBridge"];
+        if (bridge == nil || bridge.isUndefined) {
+            ctx[@"__zappBridge"] = [JSValue valueWithNewObjectInContext:ctx];
+            bridge = ctx[@"__zappBridge"];
+        }
+
+        bridge[@"urlParse"] = ^(JSValue* urlVal, JSValue* baseVal) {
+            if (urlVal == nil || [urlVal isUndefined] || [urlVal isNull]) {
+                return [JSValue valueWithNullInContext:ctx];
+            }
+
+            const char* urlStr = [[urlVal toString] UTF8String];
+            const char* baseStr = NULL;
+            if (baseVal != nil && ![baseVal isUndefined] && ![baseVal isNull]) {
+                baseStr = [[baseVal toString] UTF8String];
+            }
+
+            zapp_url_parsed_t c;
+            if (zapp_core_url_parse(urlStr, baseStr, &c) != 0) {
+                return [JSValue valueWithNullInContext:ctx];
+            }
+
+            NSDictionary* result = @{
+                @"href":     [NSString stringWithUTF8String:c.href],
+                @"protocol": [NSString stringWithUTF8String:c.protocol],
+                @"host":     [NSString stringWithUTF8String:c.host],
+                @"hostname": [NSString stringWithUTF8String:c.hostname],
+                @"port":     [NSString stringWithUTF8String:c.port],
+                @"pathname": [NSString stringWithUTF8String:c.pathname],
+                @"search":   [NSString stringWithUTF8String:c.search],
+                @"hash":     [NSString stringWithUTF8String:c.hash],
+                @"origin":   [NSString stringWithUTF8String:c.origin],
+                @"username": [NSString stringWithUTF8String:c.username],
+                @"password": [NSString stringWithUTF8String:c.password],
+            };
+            zapp_core_url_free(&c);
+            return [JSValue valueWithObject:result inContext:ctx];
+        };
+    }
+}

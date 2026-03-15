@@ -1,0 +1,27 @@
+// Engine-agnostic btoa/atob implementation using Foundation.
+
+include <Foundation/Foundation.h>
+
+raw {
+    // btoa: encode Latin-1 string to base64. Caller must free() the result.
+    static char* zapp_core_btoa(const char* input) {
+        if (input == NULL || input[0] == '\0') return strdup("");
+        NSString* str = [NSString stringWithUTF8String:input];
+        if (str == nil) return strdup("");
+        NSData* data = [str dataUsingEncoding:NSISOLatin1StringEncoding];
+        if (data == nil) return strdup("");
+        NSString* b64 = [data base64EncodedStringWithOptions:0];
+        return b64 ? strdup([b64 UTF8String]) : strdup("");
+    }
+
+    // atob: decode base64 to Latin-1 string. Caller must free() the result.
+    static char* zapp_core_atob(const char* input) {
+        if (input == NULL || input[0] == '\0') return strdup("");
+        NSString* str = [NSString stringWithUTF8String:input];
+        if (str == nil) return strdup("");
+        NSData* data = [[NSData alloc] initWithBase64EncodedString:str options:NSDataBase64DecodingIgnoreUnknownCharacters];
+        if (data == nil) return strdup("");
+        NSString* result = [[NSString alloc] initWithData:data encoding:NSISOLatin1StringEncoding];
+        return result ? strdup([result UTF8String]) : strdup("");
+    }
+}

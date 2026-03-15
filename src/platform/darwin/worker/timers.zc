@@ -1,0 +1,146 @@
+//> macos: framework: JavaScriptCore
+include <Cocoa/Cocoa.h>
+include <WebKit/WebKit.h>
+include <dispatch/dispatch.h>
+include <JavaScriptCore/JavaScriptCore.h>
+
+raw {
+    static dispatch_queue_t zapp_worker_js_queue = nil;
+    static void* zapp_worker_js_queue_key = &zapp_worker_js_queue_key;
+    static NSMutableDictionary<NSString*, NSMutableDictionary<NSNumber*, id>*>* zapp_worker_timers = nil;
+    static NSInteger zapp_next_timer_id = 1;
+    static const NSInteger zapp_worker_max_timers_per_worker = 256;
+    static const double zapp_worker_min_interval_ms = 4.0;
+
+    void zapp_darwin_worker_ensure_queue(void) {
+        static dispatch_once_t onceToken;
+        dispatch_once(&onceToken, ^{
+            zapp_worker_js_queue = dispatch_queue_create("dev.zapp.worker-js", DISPATCH_QUEUE_SERIAL);
+            dispatch_queue_set_specific(zapp_worker_js_queue, zapp_worker_js_queue_key, (void*)1, NULL);
+            zapp_worker_timers = [NSMutableDictionary dictionary];
+        });
+    }
+
+    void zapp_darwin_worker_js_sync(dispatch_block_t block) {
+        zapp_darwin_worker_ensure_queue();
+        if (dispatch_get_specific(zapp_worker_js_queue_key) != NULL) {
+            block();
+            return;
+        }
+        dispatch_sync(zapp_worker_js_queue, block);
+    }
+
+    void zapp_darwin_worker_timers_cancel(NSString* workerId) {
+        if (workerId == nil || zapp_worker_timers == nil) return;
+        NSMutableDictionary<NSNumber*, id>* timers = zapp_worker_timers[workerId];
+        if (timers == nil) return;
+        for (NSNumber* key in [timers allKeys]) {
+            dispatch_source_t src = (dispatch_source_t)timers[key];
+            if (src != nil) {
+                dispatch_source_cancel(src);
+            }
+        }
+        [timers removeAllObjects]; // Break retain cycle: timers -> src -> block -> timers
+        [zapp_worker_timers removeObjectForKey:workerId];
+    }
+
+    void zapp_darwin_worker_timers_cancel_all(void) {
+        if (zapp_worker_timers != nil) {
+            NSArray<NSString*>* workerIds = [zapp_worker_timers allKeys];
+            for (NSString* workerId in workerIds) {
+                zapp_darwin_worker_timers_cancel(workerId);
+            }
+            [zapp_worker_timers removeAllObjects];
+        }
+    }
+
+    void zapp_darwin_worker_timers_init(JSContext* ctx, NSString* workerId) {
+        zapp_darwin_worker_ensure_queue();
+        zapp_worker_timers[workerId] = [NSMutableDictionary dictionary];
+        __weak JSContext* weakCtx = ctx;
+
+        JSValue* bridge = ctx[@"__zappBridge"];
+        if (bridge == nil || bridge.isUndefined) {
+            ctx[@"__zappBridge"] = [JSValue valueWithNewObjectInContext:ctx];
+            bridge = ctx[@"__zappBridge"];
+        }
+
+        bridge[@"setTimer"] = ^(JSValue* fnVal, JSValue* msVal, JSValue* repeatVal) {
+            if (fnVal == nil || ![fnVal isObject]) return (NSNumber*)@0;
+            NSString* wId = [weakCtx[@"__zappWorkerDispatchId"] toString];
+            if (![wId isKindOfClass:[NSString class]] || [wId length] == 0) {
+                wId = workerId;
+            }
+            if (wId == nil) return (NSNumber*)@0;
+            NSMutableDictionary<NSNumber*, id>* timers = zapp_worker_timers[wId];
+            if (timers == nil) {
+                timers = [NSMutableDictionary dictionary];
+                zapp_worker_timers[wId] = timers;
+            }
+            if ([timers count] >= zapp_worker_max_timers_per_worker) {
+                return (NSNumber*)@0;
+            }
+            double ms = [msVal toDouble];
+            if (!(ms >= 0)) ms = 0;
+            BOOL shouldRepeat = [repeatVal toBool] ? YES : NO;
+            if (shouldRepeat && ms < zapp_worker_min_interval_ms) {
+                ms = zapp_worker_min_interval_ms;
+            }
+            NSInteger nextId = zapp_next_timer_id++;
+            NSNumber* timerId = @(nextId);
+            uint64_t intervalNs = (uint64_t)(ms * (double)NSEC_PER_MSEC);
+            if (intervalNs == 0) intervalNs = 1 * NSEC_PER_MSEC;
+            
+            dispatch_source_t src = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, zapp_worker_js_queue);
+            if (src == nil) return (NSNumber*)@0;
+            dispatch_source_set_timer(src, dispatch_time(DISPATCH_TIME_NOW, (int64_t)intervalNs), shouldRepeat ? intervalNs : DISPATCH_TIME_FOREVER, 1 * NSEC_PER_MSEC);
+            
+            __weak JSContext* weakCtxForTimer = weakCtx;
+            __block __weak dispatch_source_t weakSrc = src;
+            __block JSValue* blockFnVal = fnVal; // Make mutable so we can nil it out
+            
+            dispatch_source_set_event_handler(src, ^{
+                dispatch_source_t strongSrc = weakSrc;
+                JSContext* strongCtx = weakCtxForTimer;
+                if (strongCtx == nil) {
+                    if (strongSrc) dispatch_source_cancel(strongSrc);
+                    [timers removeObjectForKey:timerId];
+                    return;
+                }
+                NSString* currentDispatchId = [strongCtx[@"__zappWorkerDispatchId"] toString];
+                if (![currentDispatchId isKindOfClass:[NSString class]] || [currentDispatchId length] == 0) {
+                    currentDispatchId = wId;
+                }
+                if (blockFnVal) [blockFnVal callWithArguments:@[]];
+                if (!shouldRepeat) {
+                    if (strongSrc) dispatch_source_cancel(strongSrc);
+                    [timers removeObjectForKey:timerId];
+                }
+            });
+            
+            dispatch_source_set_cancel_handler(src, ^{
+                blockFnVal = nil; // Crucial: break the strong reference to JSValue -> JSContext
+            });
+            
+            dispatch_resume(src);
+            timers[timerId] = src;
+            return timerId;
+        };
+
+        bridge[@"clearTimer"] = ^(JSValue* idVal) {
+            NSString* wId = [weakCtx[@"__zappWorkerDispatchId"] toString];
+            if (![wId isKindOfClass:[NSString class]] || [wId length] == 0) {
+                wId = workerId;
+            }
+            if (wId == nil) return;
+            NSMutableDictionary<NSNumber*, id>* timers = zapp_worker_timers[wId];
+            if (timers == nil) return;
+            NSNumber* timerId = @([idVal toInt32]);
+            dispatch_source_t src = (dispatch_source_t)timers[timerId];
+            if (src != nil) {
+                dispatch_source_cancel(src);
+                [timers removeObjectForKey:timerId];
+            }
+        };
+    }
+}

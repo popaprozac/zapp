@@ -1,0 +1,124 @@
+// JSC wrapper for WebSocket. Delegates to core/websocket_core.zc.
+
+//> macos: framework: JavaScriptCore
+include <Foundation/Foundation.h>
+include <JavaScriptCore/JavaScriptCore.h>
+
+raw {
+    static char* zapp_core_ws_connect(const char* url_str, const char** protocols, int protocol_count,
+                                       zapp_ws_event_fn callback, void* user_data);
+    static void zapp_core_ws_send_text(const char* ws_id, const char* text);
+    static void zapp_core_ws_send_binary(const char* ws_id, const uint8_t* bytes, size_t len);
+    static void zapp_core_ws_close(const char* ws_id, int code, const char* reason);
+    static void zapp_core_ws_ensure_init(void);
+
+    // JSC WS callback: receives events from core and dispatches to JS.
+    // user_data holds a retained NSDictionary* with the JSContext and JS callback function.
+    static void zapp_jsc_ws_callback(const char* ws_id, const char* event_type, const char* json_payload, void* user_data) {
+        if (!user_data || !json_payload) return;
+        NSDictionary* info = (__bridge NSDictionary*)user_data;
+        JSContext* ctx = info[@"ctx"];
+        JSValue* callback = info[@"fn"];
+        if (ctx == nil || callback == nil || [callback isUndefined]) return;
+
+        NSData* jsonData = [[NSString stringWithUTF8String:json_payload] dataUsingEncoding:NSUTF8StringEncoding];
+        id parsed = jsonData ? [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:nil] : @{};
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            @try {
+                [callback callWithArguments:@[[JSValue valueWithObject:parsed inContext:ctx]]];
+            } @catch (NSException* e) {
+                NSLog(@"[zapp-ws] dispatch error: %@", e);
+            }
+        });
+    }
+
+    // Per-context storage for callback info so ARC keeps it alive
+    static NSMutableDictionary<NSString*, NSDictionary*>* zapp_jsc_ws_refs = nil;
+
+    void zapp_darwin_worker_websocket_init(JSContext* ctx) {
+        zapp_core_ws_ensure_init();
+        if (zapp_jsc_ws_refs == nil) zapp_jsc_ws_refs = [NSMutableDictionary new];
+
+        JSValue* bridge = ctx[@"__zappBridge"];
+        if (bridge == nil || bridge.isUndefined) {
+            ctx[@"__zappBridge"] = [JSValue valueWithNewObjectInContext:ctx];
+            bridge = ctx[@"__zappBridge"];
+        }
+
+        bridge[@"wsConnect"] = ^NSString*(JSValue* urlVal, JSValue* protocolsVal, JSValue* callbackVal) {
+            if (urlVal == nil || [urlVal isUndefined] || [urlVal isNull]) return @"";
+            NSString* urlStr = [urlVal toString];
+            if (urlStr == nil || [urlStr length] == 0) return @"";
+
+            // Extract protocols
+            const char** protos = NULL;
+            int protoCount = 0;
+            NSArray* protoArr = nil;
+            if (protocolsVal != nil && ![protocolsVal isUndefined] && ![protocolsVal isNull]) {
+                protoArr = [protocolsVal toArray];
+                protoCount = (int)[protoArr count];
+                if (protoCount > 0) {
+                    protos = (const char**)malloc(sizeof(const char*) * protoCount);
+                    for (int i = 0; i < protoCount; i++) {
+                        protos[i] = [[protoArr[i] description] UTF8String];
+                    }
+                }
+            }
+
+            // Store context + callback for the event dispatcher
+            NSDictionary* info = @{@"ctx": ctx, @"fn": (callbackVal && ![callbackVal isUndefined]) ? callbackVal : [NSNull null]};
+            void* ud = (__bridge_retained void*)info;
+
+            char* wsIdC = zapp_core_ws_connect([urlStr UTF8String], protos, protoCount, zapp_jsc_ws_callback, ud);
+            free(protos);
+
+            if (!wsIdC) {
+                CFRelease(ud);
+                return @"";
+            }
+            NSString* wsId = [NSString stringWithUTF8String:wsIdC];
+            zapp_jsc_ws_refs[wsId] = info;
+            free(wsIdC);
+            return wsId;
+        };
+
+        bridge[@"wsSend"] = ^(JSValue* wsIdVal, JSValue* dataVal, JSValue* isBinaryVal) {
+            if (wsIdVal == nil || [wsIdVal isUndefined]) return;
+            const char* wsId = [[wsIdVal toString] UTF8String];
+            BOOL isBinary = (isBinaryVal && ![isBinaryVal isUndefined]) ? [isBinaryVal toBool] : NO;
+
+            if (isBinary) {
+                JSContextRef ctxRef = ctx.JSGlobalContextRef;
+                JSValueRef valRef = dataVal.JSValueRef;
+                JSValueRef exception = NULL;
+                const uint8_t* bytes = NULL;
+                size_t len = 0;
+
+                JSTypedArrayType type = JSValueGetTypedArrayType(ctxRef, valRef, &exception);
+                if (type != kJSTypedArrayTypeNone && exception == NULL) {
+                    bytes = (const uint8_t*)JSObjectGetTypedArrayBytesPtr(ctxRef, valRef, &exception);
+                    len = JSObjectGetTypedArrayByteLength(ctxRef, valRef, &exception);
+                } else {
+                    exception = NULL;
+                    bytes = (const uint8_t*)JSObjectGetArrayBufferBytesPtr(ctxRef, valRef, &exception);
+                    if (bytes && exception == NULL) len = JSObjectGetArrayBufferByteLength(ctxRef, valRef, &exception);
+                }
+                if (bytes && len > 0) zapp_core_ws_send_binary(wsId, bytes, len);
+            } else {
+                const char* text = [[dataVal toString] UTF8String];
+                zapp_core_ws_send_text(wsId, text ?: "");
+            }
+        };
+
+        bridge[@"wsClose"] = ^(JSValue* wsIdVal, JSValue* codeVal, JSValue* reasonVal) {
+            if (wsIdVal == nil || [wsIdVal isUndefined]) return;
+            NSString* wsId = [wsIdVal toString];
+            int code = (codeVal && ![codeVal isUndefined] && ![codeVal isNull]) ? [codeVal toInt32] : 1000;
+            const char* reason = (reasonVal && ![reasonVal isUndefined] && ![reasonVal isNull]) ? [[reasonVal toString] UTF8String] : NULL;
+
+            zapp_core_ws_close([wsId UTF8String], code, reason);
+            [zapp_jsc_ws_refs removeObjectForKey:wsId];
+        };
+    }
+}

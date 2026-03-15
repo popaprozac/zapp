@@ -1,0 +1,22 @@
+import "../platform.zc";
+
+// Windows implementation (for future)
+struct WindowsPlatform {
+}
+
+fn windows_platform_bind_runtime(app: App*) -> void {
+    let _ = app;
+}
+
+fn windows_platform_handle_worker_bridge(app: App*, action: string, payload: string) -> void {
+    
+}
+
+impl Platform for WindowsPlatform {
+    fn init(self) -> void {}
+
+    fn run(self, app: App*) -> int {
+        let _ = app;
+        return 0;
+    }
+}

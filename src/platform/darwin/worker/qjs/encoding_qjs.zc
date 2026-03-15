@@ -1,0 +1,112 @@
+// QJS wrapper for TextEncoder/TextDecoder. Delegates to core/encoding_core.zc.
+
+@cfg(ZAPP_WORKER_ENGINE_QJS)
+raw {
+#ifdef ZAPP_WORKER_ENGINE_QJS
+    #define JSContext QJSContext
+    #define JSRuntime QJSRuntime
+    #define JSValue QJSValue
+    #define JSClassID QJSClassID
+    #define JSClassDef QJSClassDef
+    #define JSClassEx QJSClassEx
+    #define JSValueConst QJSValueConst
+    #define JSPropertyEnum QJSPropertyEnum
+    #define JSPropertyDescriptor QJSPropertyDescriptor
+    #include "quickjs.h"
+    #include "quickjs-libc.h"
+
+    static uint8_t* zapp_core_text_encode(const char* input, size_t* out_len);
+    static char* zapp_core_text_decode(const uint8_t* bytes, size_t len);
+
+    static QJSValue qjs_bridge_textEncode(QJSContext *ctx, QJSValue this_val, int argc, QJSValue *argv) {
+        if (argc < 1) return JS_NewArrayBufferCopy(ctx, NULL, 0);
+        const char* str = JS_ToCString(ctx, argv[0]);
+        if (!str) return JS_NewArrayBufferCopy(ctx, NULL, 0);
+
+        size_t len = 0;
+        uint8_t* bytes = zapp_core_text_encode(str, &len);
+        JS_FreeCString(ctx, str);
+
+        if (!bytes || len == 0) {
+            free(bytes);
+            // Return empty Uint8Array via JS: new Uint8Array(0)
+            QJSValue global = JS_GetGlobalObject(ctx);
+            QJSValue u8ctor = JS_GetPropertyStr(ctx, global, "Uint8Array");
+            QJSValue arg = JS_NewInt32(ctx, 0);
+            QJSValue result = JS_CallConstructor(ctx, u8ctor, 1, &arg);
+            JS_FreeValue(ctx, arg);
+            JS_FreeValue(ctx, u8ctor);
+            JS_FreeValue(ctx, global);
+            return result;
+        }
+
+        // Create Uint8Array from bytes
+        QJSValue global = JS_GetGlobalObject(ctx);
+        QJSValue u8ctor = JS_GetPropertyStr(ctx, global, "Uint8Array");
+        QJSValue lenArg = JS_NewInt32(ctx, (int32_t)len);
+        QJSValue u8arr = JS_CallConstructor(ctx, u8ctor, 1, &lenArg);
+        JS_FreeValue(ctx, lenArg);
+
+        // Copy bytes into the typed array
+        size_t u8size = 0;
+        uint8_t* u8ptr = JS_GetArrayBuffer(ctx, &u8size,
+            JS_GetPropertyStr(ctx, u8arr, "buffer"));
+        if (u8ptr && u8size >= len) {
+            memcpy(u8ptr, bytes, len);
+        } else {
+            // Fallback: set individual elements
+            for (size_t i = 0; i < len; i++) {
+                JS_SetPropertyUint32(ctx, u8arr, (uint32_t)i, JS_NewInt32(ctx, bytes[i]));
+            }
+        }
+
+        free(bytes);
+        JS_FreeValue(ctx, u8ctor);
+        JS_FreeValue(ctx, global);
+        return u8arr;
+    }
+
+    static QJSValue qjs_bridge_textDecode(QJSContext *ctx, QJSValue this_val, int argc, QJSValue *argv) {
+        if (argc < 1) return JS_NewString(ctx, "");
+
+        size_t len = 0;
+        uint8_t* bytes = JS_GetArrayBuffer(ctx, &len, argv[0]);
+
+        if (!bytes) {
+            // Try as typed array view: get .buffer, .byteOffset, .byteLength
+            QJSValue bufProp = JS_GetPropertyStr(ctx, argv[0], "buffer");
+            if (!JS_IsUndefined(bufProp)) {
+                size_t bufLen = 0;
+                uint8_t* bufPtr = JS_GetArrayBuffer(ctx, &bufLen, bufProp);
+                QJSValue offsetVal = JS_GetPropertyStr(ctx, argv[0], "byteOffset");
+                QJSValue lengthVal = JS_GetPropertyStr(ctx, argv[0], "byteLength");
+                int32_t offset = 0, length = 0;
+                JS_ToInt32(ctx, &offset, offsetVal);
+                JS_ToInt32(ctx, &length, lengthVal);
+                JS_FreeValue(ctx, offsetVal);
+                JS_FreeValue(ctx, lengthVal);
+
+                if (bufPtr && offset >= 0 && length > 0 && (size_t)(offset + length) <= bufLen) {
+                    bytes = bufPtr + offset;
+                    len = (size_t)length;
+                }
+            }
+            JS_FreeValue(ctx, bufProp);
+        }
+
+        if (!bytes || len == 0) return JS_NewString(ctx, "");
+
+        char* decoded = zapp_core_text_decode(bytes, len);
+        QJSValue result = JS_NewString(ctx, decoded);
+        free(decoded);
+        return result;
+    }
+
+    void zapp_darwin_qjs_encoding_install(QJSContext* ctx, QJSValue bridge) {
+        JS_SetPropertyStr(ctx, bridge, "textEncode", JS_NewCFunction(ctx, qjs_bridge_textEncode, "textEncode", 1));
+        JS_SetPropertyStr(ctx, bridge, "textDecode", JS_NewCFunction(ctx, qjs_bridge_textDecode, "textDecode", 1));
+    }
+
+    /* Do not #undef: later QJS modules in the same translation unit need the macros. */
+#endif
+}

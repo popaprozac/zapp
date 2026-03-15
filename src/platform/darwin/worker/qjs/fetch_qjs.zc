@@ -1,0 +1,188 @@
+// QJS wrapper for fetch. Delegates to core/fetch_core.zc.
+
+@cfg(ZAPP_WORKER_ENGINE_QJS)
+raw {
+#ifdef ZAPP_WORKER_ENGINE_QJS
+    extern NSValue* zapp_darwin_qjs_get_context(NSString* workerId);
+    extern void zapp_darwin_qjs_dispatch_async(dispatch_block_t block);
+    extern void zapp_darwin_qjs_drain_jobs(void* ctx, const char* label);
+
+    static void zapp_core_fetch_ensure_init(void);
+    static void zapp_core_fetch_execute(NSMutableURLRequest*, NSString*, zapp_fetch_completion_t);
+    static NSMutableURLRequest* zapp_core_fetch_build_request(const char*, const char*, const char**, const char**, int, const char*, size_t);
+    static void zapp_core_fetch_cancel(NSString*);
+    static void zapp_core_fetch_cancel_all(void);
+
+    static QJSValue qjs_bridge_fetch(QJSContext *ctx, QJSValue this_val, int argc, QJSValue *argv, int magic, QJSValue *func_data) {
+        if (argc < 4) return JS_UNDEFINED;
+
+        const char* worker_id = JS_ToCString(ctx, func_data[0]);
+        if (!worker_id) return JS_UNDEFINED;
+
+        // Extract URL
+        const char* urlStr = JS_ToCString(ctx, argv[0]);
+        if (!urlStr) { JS_FreeCString(ctx, worker_id); return JS_UNDEFINED; }
+        char* url_copy = strdup(urlStr);
+        JS_FreeCString(ctx, urlStr);
+
+        QJSValue optionsVal = argv[1];
+        QJSValue resolveVal = argv[2];
+        QJSValue rejectVal = argv[3];
+
+        // Extract method
+        char* method_copy = NULL;
+        if (!JS_IsUndefined(optionsVal) && !JS_IsNull(optionsVal)) {
+            QJSValue m = JS_GetPropertyStr(ctx, optionsVal, "method");
+            if (!JS_IsUndefined(m)) {
+                const char* ms = JS_ToCString(ctx, m);
+                if (ms) { method_copy = strdup(ms); JS_FreeCString(ctx, ms); }
+            }
+            JS_FreeValue(ctx, m);
+        }
+
+        // Extract headers
+        char** hKeys = NULL;
+        char** hVals = NULL;
+        int hCount = 0;
+        if (!JS_IsUndefined(optionsVal) && !JS_IsNull(optionsVal)) {
+            QJSValue headersVal = JS_GetPropertyStr(ctx, optionsVal, "headers");
+            if (JS_IsObject(headersVal)) {
+                QJSPropertyEnum *tab = NULL;
+                uint32_t len = 0;
+                if (JS_GetOwnPropertyNames(ctx, &tab, &len, headersVal, JS_GPN_STRING_MASK) == 0 && len > 0) {
+                    hCount = (int)len;
+                    hKeys = (char**)calloc(hCount, sizeof(char*));
+                    hVals = (char**)calloc(hCount, sizeof(char*));
+                    for (uint32_t i = 0; i < len; i++) {
+                        const char* key = JS_AtomToCString(ctx, tab[i].atom);
+                        QJSValue val = JS_GetProperty(ctx, headersVal, tab[i].atom);
+                        const char* valStr = JS_ToCString(ctx, val);
+                        hKeys[i] = key ? strdup(key) : NULL;
+                        hVals[i] = valStr ? strdup(valStr) : NULL;
+                        if (key) JS_FreeCString(ctx, key);
+                        if (valStr) JS_FreeCString(ctx, valStr);
+                        JS_FreeValue(ctx, val);
+                        JS_FreeAtom(ctx, tab[i].atom);
+                    }
+                    js_free(ctx, tab);
+                }
+            }
+            JS_FreeValue(ctx, headersVal);
+        }
+
+        // Extract body
+        char* body_copy = NULL;
+        size_t body_len = 0;
+        if (!JS_IsUndefined(optionsVal) && !JS_IsNull(optionsVal)) {
+            QJSValue bodyVal = JS_GetPropertyStr(ctx, optionsVal, "body");
+            if (!JS_IsUndefined(bodyVal) && !JS_IsNull(bodyVal) && JS_IsString(bodyVal)) {
+                const char* bs = JS_ToCString(ctx, bodyVal);
+                if (bs) { body_copy = strdup(bs); body_len = strlen(body_copy); JS_FreeCString(ctx, bs); }
+            }
+            JS_FreeValue(ctx, bodyVal);
+        }
+
+        NSMutableURLRequest* request = zapp_core_fetch_build_request(
+            url_copy, method_copy,
+            (const char**)hKeys, (const char**)hVals, hCount,
+            body_copy, body_len);
+
+        free(url_copy);
+        free(method_copy);
+        for (int i = 0; i < hCount; i++) { free(hKeys[i]); free(hVals[i]); }
+        free(hKeys); free(hVals);
+        free(body_copy);
+
+        if (!request) {
+            QJSValue errArgs[1] = { JS_NewString(ctx, "Invalid URL") };
+            QJSValue ret = JS_Call(ctx, rejectVal, JS_UNDEFINED, 1, errArgs);
+            JS_FreeValue(ctx, ret); JS_FreeValue(ctx, errArgs[0]);
+            JS_FreeCString(ctx, worker_id);
+            return JS_UNDEFINED;
+        }
+
+        NSString* wId = [NSString stringWithUTF8String:worker_id];
+        JS_FreeCString(ctx, worker_id);
+
+        QJSValue savedResolve = JS_DupValue(ctx, resolveVal);
+        QJSValue savedReject = JS_DupValue(ctx, rejectVal);
+        QJSContext* creating_ctx = ctx;
+
+        zapp_core_fetch_execute(request, wId, ^(zapp_fetch_response_t* response, NSString* error) {
+            zapp_darwin_qjs_dispatch_async(^{
+                NSValue* val = zapp_darwin_qjs_get_context(wId);
+                if (!val) return;
+
+                QJSContext* current_ctx = (QJSContext*)[val pointerValue];
+                if (current_ctx != creating_ctx) return;
+
+                if (error) {
+                    QJSValue args[1] = { JS_NewString(current_ctx, [error UTF8String]) };
+                    QJSValue ret = JS_Call(current_ctx, savedReject, JS_UNDEFINED, 1, args);
+                    if (JS_IsException(ret)) {
+                        QJSValue exc = JS_GetException(current_ctx);
+                        const char* s = JS_ToCString(current_ctx, exc);
+                        if (s) { printf("[qjs] fetch reject threw: %s\n", s); JS_FreeCString(current_ctx, s); }
+                        JS_FreeValue(current_ctx, exc);
+                    }
+                    JS_FreeValue(current_ctx, ret); JS_FreeValue(current_ctx, args[0]);
+                } else if (response) {
+                    QJSValue resObj = JS_NewObject(current_ctx);
+                    JS_SetPropertyStr(current_ctx, resObj, "status", JS_NewInt32(current_ctx, response->status));
+                    JS_SetPropertyStr(current_ctx, resObj, "statusText",
+                        JS_NewString(current_ctx, response->status_text ? response->status_text : ""));
+
+                    QJSValue headersObj = JS_NewObject(current_ctx);
+                    for (int i = 0; i < response->header_count; i++) {
+                        if (response->header_keys[i] && response->header_values[i]) {
+                            JS_SetPropertyStr(current_ctx, headersObj,
+                                response->header_keys[i],
+                                JS_NewString(current_ctx, response->header_values[i]));
+                        }
+                    }
+                    JS_SetPropertyStr(current_ctx, resObj, "headers", headersObj);
+
+                    if (response->body)
+                        JS_SetPropertyStr(current_ctx, resObj, "body", JS_NewString(current_ctx, response->body));
+                    else if (response->body_base64)
+                        JS_SetPropertyStr(current_ctx, resObj, "body_base64", JS_NewString(current_ctx, response->body_base64));
+                    else
+                        JS_SetPropertyStr(current_ctx, resObj, "body", JS_NewString(current_ctx, ""));
+
+                    QJSValue args[1] = { resObj };
+                    QJSValue ret = JS_Call(current_ctx, savedResolve, JS_UNDEFINED, 1, args);
+                    if (JS_IsException(ret)) {
+                        QJSValue exc = JS_GetException(current_ctx);
+                        const char* s = JS_ToCString(current_ctx, exc);
+                        if (s) { printf("[qjs] fetch resolve threw: %s\n", s); JS_FreeCString(current_ctx, s); }
+                        JS_FreeValue(current_ctx, exc);
+                    }
+                    JS_FreeValue(current_ctx, ret); JS_FreeValue(current_ctx, resObj);
+                }
+
+                JS_FreeValue(current_ctx, savedResolve);
+                JS_FreeValue(current_ctx, savedReject);
+                zapp_darwin_qjs_drain_jobs(current_ctx, "fetch");
+            });
+        });
+
+        return JS_UNDEFINED;
+    }
+
+    void zapp_darwin_qjs_fetch_cancel(NSString* workerId) {
+        zapp_core_fetch_cancel(workerId);
+    }
+
+    void zapp_darwin_qjs_fetch_cancel_all(void) {
+        zapp_core_fetch_cancel_all();
+    }
+
+    void zapp_darwin_qjs_fetch_install(QJSContext* ctx, QJSValue bridge, const char* worker_id) {
+        QJSValue wIdVal = JS_NewString(ctx, worker_id);
+        QJSValue funcData[1] = { wIdVal };
+        JS_SetPropertyStr(ctx, bridge, "fetch",
+            JS_NewCFunctionData(ctx, qjs_bridge_fetch, 4, 0, 1, funcData));
+        JS_FreeValue(ctx, wIdVal);
+    }
+#endif
+}
