@@ -1,0 +1,149 @@
+import "../platform.zc";
+import "./webview.zc";
+import "./backend.zc";
+
+//> windows: link: -lole32 -lshell32 -luuid -luser32 -lgdi32 -lcomctl32
+//> windows: cflags: -DUNICODE -D_UNICODE
+
+import "./worker/mod.zc";
+
+fn app_get_config(app_ptr: App*) -> AppConfig;
+fn app_should_quit() -> bool;
+
+raw {
+#ifdef _WIN32
+    #include <windows.h>
+    #include <stdlib.h>
+    #include <stdio.h>
+
+    const wchar_t* ZAPP_WINDOW_CLASS = L"ZappWindowClass";
+    static BOOL zapp_window_class_registered = FALSE;
+    static BOOL zapp_should_terminate_after_last = FALSE;
+    extern bool app_should_quit(void);
+    extern void zapp_windows_webview_resize(HWND hwnd);
+    extern void zapp_windows_webview_detach(HWND hwnd);
+    extern void zapp_windows_webview_notify_position(HWND hwnd);
+    extern void zapp_windows_webview_eval_all_ui(wchar_t* wJs);
+
+    #define WM_ZAPP_HANDLE_MSG (WM_APP + 2)
+
+    extern void zapp_handle_message(void* app, char* msg);
+    extern void* app_get_active(void);
+    static DWORD zapp_ui_thread_id = 0;
+
+    static LRESULT CALLBACK ZappWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+        switch (msg) {
+            case WM_ERASEBKGND:
+                return 1;
+            case WM_ZAPP_EVAL_JS: {
+                zapp_windows_webview_eval_all_ui((wchar_t*)lParam);
+                return 0;
+            }
+            case WM_SIZE: {
+                zapp_windows_webview_resize(hwnd);
+                return 0;
+            }
+            case WM_MOVE:
+            case WM_MOVING: {
+                zapp_windows_webview_notify_position(hwnd);
+                break;
+            }
+            case WM_DESTROY: {
+                zapp_windows_webview_detach(hwnd);
+                if (zapp_should_terminate_after_last && app_should_quit()) {
+                    PostQuitMessage(0);
+                }
+                return 0;
+            }
+            case WM_CLOSE: {
+                DestroyWindow(hwnd);
+                return 0;
+            }
+        }
+        return DefWindowProcW(hwnd, msg, wParam, lParam);
+    }
+
+    static void zapp_register_window_class(void) {
+        if (zapp_window_class_registered) return;
+        WNDCLASSEXW wc = {0};
+        wc.cbSize = sizeof(WNDCLASSEXW);
+        wc.style = 0;
+        wc.lpfnWndProc = ZappWindowProc;
+        wc.hInstance = GetModuleHandleW(NULL);
+        wc.hCursor = LoadCursorW(NULL, IDC_ARROW);
+        wc.hbrBackground = NULL;
+        wc.lpszClassName = ZAPP_WINDOW_CLASS;
+        RegisterClassExW(&wc);
+        zapp_window_class_registered = TRUE;
+    }
+
+    static BOOL WINAPI zapp_console_ctrl_handler(DWORD ctrlType) {
+        if (ctrlType == CTRL_C_EVENT || ctrlType == CTRL_BREAK_EVENT) {
+            if (app_should_quit()) {
+                PostQuitMessage(0);
+            }
+            return TRUE;
+        }
+        return FALSE;
+    }
+
+    void zapp_post_to_ui_thread(const char* wire) {
+        if (!zapp_ui_thread_id) return;
+        PostThreadMessageW(zapp_ui_thread_id, WM_ZAPP_HANDLE_MSG, 0, (LPARAM)_strdup(wire));
+    }
+#endif
+}
+
+struct WindowsPlatform {
+    initialized: bool;
+}
+
+impl Platform for WindowsPlatform {
+    fn init(self) -> void {
+        if self.initialized {
+            return;
+        }
+        raw {
+        #ifdef _WIN32
+            HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+            if (FAILED(hr) && hr != S_FALSE && hr != RPC_E_CHANGED_MODE) {
+                fprintf(stderr, "[zapp] CoInitializeEx failed: 0x%08lX\n", hr);
+            }
+            zapp_register_window_class();
+            SetConsoleCtrlHandler(zapp_console_ctrl_handler, TRUE);
+        #endif
+        }
+        self.initialized = true;
+    }
+
+    fn run(self, app: App*) -> int {
+        self.init();
+        let cfg = app_get_config(app);
+        raw {
+        #ifdef _WIN32
+            zapp_should_terminate_after_last =
+                cfg.applicationShouldTerminateAfterLastWindowClosed ? TRUE : FALSE;
+        #endif
+        }
+
+        raw {
+        #ifdef _WIN32
+            MSG msg;
+            while (GetMessageW(&msg, NULL, 0, 0) > 0) {
+                if (msg.hwnd == NULL && msg.message == WM_ZAPP_HANDLE_MSG) {
+                    char* wire = (char*)msg.lParam;
+                    zapp_handle_message(app_get_active(), wire);
+                    free(wire);
+                    continue;
+                }
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        #endif
+        }
+        return 0;
+    }
+}
+
+// windows_platform_bind_runtime and windows_platform_handle_worker_bridge
+// are defined in worker/mod.zc

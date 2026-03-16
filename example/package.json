@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json"
+    "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
+    "zapp:dev": "bun ../packages/cli/dist/zapp-cli.js dev",
+    "zapp:build": "bun ../packages/cli/dist/zapp-cli.js build --embed-assets --brotli"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.0.0",

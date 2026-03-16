@@ -1,4 +1,4 @@
-import "../../src/app/app.zc";
+import "app/app.zc";
 
 fn ping_service(app: App*, args: string) -> string {
     return args;

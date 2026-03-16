@@ -1,0 +1,830 @@
+import "../platform.zc";
+import "./bootstrap.zc";
+import "./backend_bootstrap.zc";
+import "./worker/common.zc";
+import "./worker/timers.zc";
+import "./worker/core/encoding_core.zc";
+import "./worker/core/url_core.zc";
+import "./worker/core/base64_core.zc";
+import "./worker/core/websocket_core.zc";
+import "./worker/core/crypto_core.zc";
+import "./worker/core/fetch_core.zc";
+@cfg(not(ZAPP_WORKER_ENGINE_QJS))
+import "./worker/jsc/encoding_jsc.zc";
+@cfg(not(ZAPP_WORKER_ENGINE_QJS))
+import "./worker/jsc/url_jsc.zc";
+@cfg(not(ZAPP_WORKER_ENGINE_QJS))
+import "./worker/jsc/base64_jsc.zc";
+@cfg(not(ZAPP_WORKER_ENGINE_QJS))
+import "./worker/jsc/websocket_jsc.zc";
+@cfg(not(ZAPP_WORKER_ENGINE_QJS))
+import "./worker/jsc/crypto_jsc.zc";
+@cfg(not(ZAPP_WORKER_ENGINE_QJS))
+import "./worker/jsc/fetch_jsc.zc";
+@cfg(not(ZAPP_WORKER_ENGINE_QJS))
+import "./engine_jsc.zc";
+
+@cfg(ZAPP_WORKER_ENGINE_QJS)
+import "./engine_qjs.zc";
+@cfg(ZAPP_WORKER_ENGINE_QJS)
+import "./worker/qjs.zc";
+
+//> macos: framework: JavaScriptCore
+raw {
+#ifdef __APPLE__
+    #include <Cocoa/Cocoa.h>
+    #include <WebKit/WebKit.h>
+    #include <dispatch/dispatch.h>
+    #include <JavaScriptCore/JavaScriptCore.h>
+#if !defined(ZAPP_WORKER_ENGINE_QJS)
+    extern void* engine_jsc_create_ctx(void* vm, const char* name);
+    extern int engine_jsc_eval(void* ctx, const char* utf8, size_t len, const char* filename);
+    extern const char* engine_jsc_get_exception_message(void* ctx);
+    extern void engine_jsc_free_ctx(void* ctx, void* vm, const char* new_name);
+
+    extern void zapp_darwin_worker_js_sync(dispatch_block_t block);
+    extern void zapp_darwin_worker_timers_init(JSContext* ctx, NSString* workerId);
+    extern void zapp_darwin_worker_fetch_init(JSContext* ctx, NSString* workerId);
+    extern void zapp_darwin_worker_crypto_init(JSContext* ctx);
+    extern void zapp_darwin_worker_encoding_init(JSContext* ctx);
+    extern void zapp_darwin_worker_url_init(JSContext* ctx);
+    extern void zapp_darwin_worker_base64_init(JSContext* ctx);
+    extern void zapp_darwin_worker_websocket_init(JSContext* ctx);
+    extern void zapp_darwin_worker_timers_cancel(NSString* workerId);
+    extern void zapp_darwin_worker_fetch_cancel(NSString* workerId);
+    extern const char* zapp_darwin_worker_bootstrap_script(void);
+    extern const char* zapp_darwin_backend_bootstrap_script(void);
+
+    extern void* app_get_active(void);
+    extern void zapp_handle_message(void* app_ptr, char* msg_c);
+    extern NSString* zapp_json_stringify_obj(id obj);
+    extern void zapp_dispatch_worker_to_webviews(const char* kind, const char* worker_id, const char* payload_json);
+
+    extern const char* zapp_build_initial_url(void);
+
+    static JSVirtualMachine* zapp_backend_vm = nil;
+    static JSContext* zapp_backend_ctx = nil;
+    static NSString* zapp_backend_id = @"__zapp_backend__";
+
+    static void zapp_backend_call_bridge(NSString* methodName, NSArray* args) {
+        if (zapp_backend_ctx == nil || methodName == nil) return;
+        JSValue* bridge = [zapp_backend_ctx evaluateScript:@"globalThis[Symbol.for('zapp.bridge')]"];
+        if (bridge == nil || bridge.isUndefined || ![bridge isObject]) return;
+        JSValue* fn = bridge[methodName];
+        if (fn == nil || fn.isUndefined) return;
+        @try {
+            [fn callWithArguments:args ?: @[]];
+        } @catch (NSException* e) {
+            NSLog(@"[zapp] backend bridge.%@ exception: %@", methodName, e);
+        }
+    }
+
+    void zapp_backend_deliver_event(const char* name, const char* payload) {
+        if (zapp_backend_ctx == nil) return;
+        if (name == NULL) return;
+        NSString* n = [NSString stringWithUTF8String:name];
+        NSString* p = payload ? [NSString stringWithUTF8String:payload] : @"{}";
+        zapp_darwin_worker_js_sync(^{
+            if (zapp_backend_ctx == nil) return;
+            zapp_backend_call_bridge(@"deliverEvent", @[n, p]);
+        });
+    }
+
+    void zapp_backend_dispatch_window_result(const char* payload_json) {
+        if (zapp_backend_ctx == nil || payload_json == NULL) return;
+        NSString* payload = [NSString stringWithUTF8String:payload_json];
+        zapp_darwin_worker_js_sync(^{
+            if (zapp_backend_ctx == nil) return;
+            zapp_backend_call_bridge(@"dispatchWindowResult", @[payload]);
+        });
+    }
+
+    int32_t zapp_backend_context_create(void* app_ptr, char* script_source) {
+        if (app_ptr == NULL || script_source == NULL) return -1;
+        App* app = (App*)app_ptr;
+
+        zapp_darwin_worker_js_sync(^{
+            if (zapp_backend_vm == nil) {
+                zapp_backend_vm = [[JSVirtualMachine alloc] init];
+            }
+
+            void* opaque = engine_jsc_create_ctx((__bridge void*)zapp_backend_vm, "ZappBackend");
+            if (!opaque) {
+                NSLog(@"[zapp] failed to create backend JSC context");
+                return;
+            }
+
+            JSContext* ctx = (__bridge JSContext*)opaque;
+            zapp_backend_ctx = ctx;
+
+            if (@available(macOS 13.3, *)) {
+                extern bool app_get_bootstrap_web_content_inspectable(void);
+                ctx.inspectable = app_get_bootstrap_web_content_inspectable() ? YES : NO;
+            }
+
+            ctx.exceptionHandler = ^(JSContext* context, JSValue* exception) {
+                void (^previousHandler)(JSContext*, JSValue*) = context.exceptionHandler;
+                context.exceptionHandler = nil;
+                context.exception = nil;
+                NSString* msg = @"Backend error";
+                @try { msg = [exception toString] ?: msg; } @catch (NSException* e) {}
+                NSLog(@"[zapp] backend error: %@", msg);
+                context.exceptionHandler = previousHandler;
+            };
+
+            ctx[@"globalThis"] = ctx.globalObject;
+            ctx[@"self"] = ctx.globalObject;
+            ctx[@"__zappWorkerDispatchId"] = zapp_backend_id;
+
+            // Inject initial config so the bootstrap can read it
+            {
+                extern char* app_get_bootstrap_name(void);
+                extern bool app_get_bootstrap_application_should_terminate_after_last_window_closed(void);
+                extern bool app_get_bootstrap_web_content_inspectable(void);
+                extern int app_get_bootstrap_max_workers(void);
+
+                NSString* appName = [NSString stringWithUTF8String:app_get_bootstrap_name()];
+                appName = [appName stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+                appName = [appName stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
+                NSString* configScript = [NSString stringWithFormat:
+                    @"globalThis.__zappConfig={name:'%@',applicationShouldTerminateAfterLastWindowClosed:%@,webContentInspectable:%@,maxWorkers:%d};",
+                    appName,
+                    app_get_bootstrap_application_should_terminate_after_last_window_closed() ? @"true" : @"false",
+                    app_get_bootstrap_web_content_inspectable() ? @"true" : @"false",
+                    app_get_bootstrap_max_workers()
+                ];
+                [ctx evaluateScript:configScript];
+            }
+
+            JSValue* bridge = [JSValue valueWithNewObjectInContext:ctx];
+            ctx[@"__zappBridge"] = bridge;
+
+            // Timers, fetch, crypto, encoding, URL, base64 (same as workers)
+            zapp_darwin_worker_timers_init(ctx, zapp_backend_id);
+            zapp_darwin_worker_fetch_init(ctx, zapp_backend_id);
+            zapp_darwin_worker_crypto_init(ctx);
+            zapp_darwin_worker_encoding_init(ctx);
+            zapp_darwin_worker_url_init(ctx);
+            zapp_darwin_worker_base64_init(ctx);
+            zapp_darwin_worker_websocket_init(ctx);
+
+            // Event emission -> routes through the app message handler
+            bridge[@"emitToHost"] = ^(JSValue* nameVal, JSValue* payloadVal) {
+                NSString* eventName = [nameVal toString];
+                if (![eventName isKindOfClass:[NSString class]] || [eventName length] == 0) return;
+
+                // Handle internal window/app action events from the backend bootstrap
+                if ([eventName isEqualToString:@"__zapp_window_create"] ||
+                    [eventName isEqualToString:@"__zapp_window_action"] ||
+                    [eventName isEqualToString:@"__zapp_app_action"]) {
+                    NSString* payloadStr = [payloadVal toString];
+                    if (![payloadStr isKindOfClass:[NSString class]]) return;
+                    NSData* jsonData = [payloadStr dataUsingEncoding:NSUTF8StringEncoding];
+                    if (!jsonData) return;
+                    NSDictionary* body = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:nil];
+                    if (![body isKindOfClass:[NSDictionary class]]) return;
+
+                    if ([eventName isEqualToString:@"__zapp_window_create"]) {
+                        NSString* wire = [NSString stringWithFormat:@"window\ncreate\n%@", payloadStr];
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            void* activeApp = app_get_active();
+                            if (activeApp) { char* m = strdup([wire UTF8String]); zapp_handle_message(activeApp, m); free(m); }
+                        });
+                    } else if ([eventName isEqualToString:@"__zapp_window_action"]) {
+                        NSString* action = body[@"action"];
+                        if (![action isKindOfClass:[NSString class]]) return;
+                        NSString* wire = [NSString stringWithFormat:@"window\n%@\n%@", action, payloadStr];
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            void* activeApp = app_get_active();
+                            if (activeApp) { char* m = strdup([wire UTF8String]); zapp_handle_message(activeApp, m); free(m); }
+                        });
+                    } else if ([eventName isEqualToString:@"__zapp_app_action"]) {
+                        NSString* action = body[@"action"];
+                        if (![action isKindOfClass:[NSString class]]) return;
+                        NSString* wire = [NSString stringWithFormat:@"app\n%@\n{}",  action];
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            void* activeApp = app_get_active();
+                            if (activeApp) { char* m = strdup([wire UTF8String]); zapp_handle_message(activeApp, m); free(m); }
+                        });
+                    } else if ([eventName isEqualToString:@"__zapp_app_configure"]) {
+                        NSString* wire = [NSString stringWithFormat:@"app\nconfigure\n%@", payloadStr];
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            void* activeApp = app_get_active();
+                            if (activeApp) { char* m = strdup([wire UTF8String]); zapp_handle_message(activeApp, m); free(m); }
+                        });
+                    }
+                    return;
+                }
+
+                id payloadObj = [payloadVal toObject];
+                NSString* payloadJson = zapp_json_stringify_obj(payloadObj);
+                if (payloadJson == nil) payloadJson = @"{}";
+                NSString* wire = [NSString stringWithFormat:@"emit\n%@\n%@", eventName, payloadJson];
+                void* activeApp = app_get_active();
+                if (activeApp) { char* m = strdup([wire UTF8String]); zapp_handle_message(activeApp, m); free(m); }
+            };
+
+            bridge[@"invokeToHost"] = ^(JSValue* methodVal, JSValue* payloadVal) {
+                NSString* methodName = [methodVal toString];
+                if (![methodName isKindOfClass:[NSString class]] || [methodName length] == 0) return;
+                id payloadObj = [payloadVal toObject];
+                NSString* payloadJson = zapp_json_stringify_obj(payloadObj);
+                if (payloadJson == nil) payloadJson = @"{}";
+                NSString* wire = [NSString stringWithFormat:@"invoke\n%@\n%@", methodName, payloadJson];
+                void* activeApp = app_get_active();
+                if (activeApp) zapp_handle_message(activeApp, (char*)[wire UTF8String]);
+            };
+
+            bridge[@"reportError"] = ^(JSValue* errVal) {
+                NSString* msg = @"Backend runtime error";
+                if (errVal != nil && !errVal.isUndefined && !errVal.isNull) {
+                    @try { msg = [errVal toString] ?: msg; } @catch (NSException* e) {}
+                }
+                NSLog(@"[zapp] backend error: %@", msg);
+            };
+
+            bridge[@"consoleLog"] = ^(JSValue* levelVal, JSValue* msgVal) {
+                NSString* level = [levelVal toString] ?: @"log";
+                NSString* msg = @"";
+                if (msgVal != nil && !msgVal.isUndefined && !msgVal.isNull) {
+                    @try { msg = [msgVal toString] ?: @""; } @catch (NSException* e) {}
+                }
+                NSLog(@"[backend:%@] %@", level, msg);
+            };
+
+            bridge[@"postMessage"] = ^(JSValue* data, JSValue* optTargetId) {
+                (void)data; (void)optTargetId;
+            };
+
+            bridge[@"closeWorker"] = ^() {
+                // no-op for backend context
+            };
+
+            bridge[@"syncWait"] = ^(JSValue* requestVal) {
+                id reqObj = [requestVal toObject];
+                NSString* payloadJson = @"{}";
+                if ([reqObj isKindOfClass:[NSDictionary class]]) {
+                    NSMutableDictionary* payload = [NSMutableDictionary dictionaryWithDictionary:(NSDictionary*)reqObj];
+                    [payload setObject:zapp_backend_id forKey:@"targetWorkerId"];
+                    NSData* jsonData = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
+                    payloadJson = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding] ?: @"{}";
+                }
+                NSString* wire = [NSString stringWithFormat:@"sync\nwait\n%@", payloadJson];
+                void* activeApp = app_get_active();
+                if (activeApp) zapp_handle_message(activeApp, (char*)[wire UTF8String]);
+            };
+
+            bridge[@"syncNotify"] = ^(JSValue* requestVal) {
+                id reqObj = [requestVal toObject];
+                NSString* payloadJson = @"{}";
+                if ([reqObj isKindOfClass:[NSDictionary class]]) {
+                    NSMutableDictionary* payload = [NSMutableDictionary dictionaryWithDictionary:(NSDictionary*)reqObj];
+                    [payload setObject:zapp_backend_id forKey:@"targetWorkerId"];
+                    NSData* jsonData = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
+                    payloadJson = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding] ?: @"{}";
+                }
+                NSString* wire = [NSString stringWithFormat:@"sync\nnotify\n%@", payloadJson];
+                void* activeApp = app_get_active();
+                if (activeApp) zapp_handle_message(activeApp, (char*)[wire UTF8String]);
+            };
+
+            bridge[@"syncCancel"] = ^(JSValue* requestVal) {
+                id reqObj = [requestVal toObject];
+                NSString* payloadJson = @"{}";
+                if ([reqObj isKindOfClass:[NSDictionary class]]) {
+                    NSMutableDictionary* payload = [NSMutableDictionary dictionaryWithDictionary:(NSDictionary*)reqObj];
+                    [payload setObject:zapp_backend_id forKey:@"targetWorkerId"];
+                    NSData* jsonData = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
+                    payloadJson = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding] ?: @"{}";
+                }
+                NSString* wire = [NSString stringWithFormat:@"sync\ncancel\n%@", payloadJson];
+                void* activeApp = app_get_active();
+                if (activeApp) zapp_handle_message(activeApp, (char*)[wire UTF8String]);
+            };
+
+            // Evaluate bootstrap
+            const char* bootstrap = zapp_darwin_backend_bootstrap_script();
+            size_t blen = strlen(bootstrap);
+            int err = engine_jsc_eval((__bridge void*)ctx, bootstrap, blen, "backend-bootstrap.js");
+            if (err != 0) {
+                const char* msg = engine_jsc_get_exception_message((__bridge void*)ctx);
+                NSLog(@"[zapp] backend bootstrap failed: %s", msg ?: "unknown error");
+                zapp_darwin_worker_timers_cancel(zapp_backend_id);
+                zapp_darwin_worker_fetch_cancel(zapp_backend_id);
+                engine_jsc_free_ctx((__bridge void*)ctx, (__bridge void*)zapp_backend_vm, "DeadBackend");
+                zapp_backend_ctx = nil;
+                return;
+            }
+
+            // Evaluate user script in async IIFE with error catching
+            NSString* wrappedSource = [NSString stringWithFormat:
+                @"(async function(){\n%s\n})()"
+                @".catch(function(e){"
+                @"var b=globalThis[Symbol.for('zapp.bridge')];"
+                @"if(b&&b.reportError)b.reportError(e);"
+                @"else if(typeof console!=='undefined')console.error('[backend] unhandled:',e);"
+                @"});", script_source];
+            NSData* wrappedData = [wrappedSource dataUsingEncoding:NSUTF8StringEncoding];
+            if (wrappedData == nil || [wrappedData length] == 0) {
+                NSLog(@"[zapp] backend script encoding failed");
+                zapp_darwin_worker_timers_cancel(zapp_backend_id);
+                zapp_darwin_worker_fetch_cancel(zapp_backend_id);
+                engine_jsc_free_ctx((__bridge void*)ctx, (__bridge void*)zapp_backend_vm, "DeadBackend");
+                zapp_backend_ctx = nil;
+                return;
+            }
+            const char* wrappedUtf8 = (const char*)[wrappedData bytes];
+            size_t wrappedLen = [wrappedData length];
+            err = engine_jsc_eval((__bridge void*)ctx, wrappedUtf8, wrappedLen, "backend.js");
+            if (err != 0) {
+                const char* msg = engine_jsc_get_exception_message((__bridge void*)ctx);
+                NSLog(@"[zapp] backend script error: %s", msg ?: "unknown error");
+            }
+        });
+
+        return (zapp_backend_ctx != nil) ? 0 : -1;
+    }
+
+    void zapp_backend_context_destroy(void) {
+        zapp_darwin_worker_js_sync(^{
+            if (zapp_backend_ctx != nil) {
+                zapp_darwin_worker_timers_cancel(zapp_backend_id);
+                zapp_darwin_worker_fetch_cancel(zapp_backend_id);
+                engine_jsc_free_ctx((__bridge void*)zapp_backend_ctx, (__bridge void*)zapp_backend_vm, "DeadBackend");
+                zapp_backend_ctx = nil;
+            }
+        });
+    }
+#elif defined(ZAPP_WORKER_ENGINE_QJS)
+    #define JSContext QJSContext
+    #define JSRuntime QJSRuntime
+    #define JSValue QJSValue
+    #define JSClassID QJSClassID
+    #define JSClassDef QJSClassDef
+    #define JSClassEx QJSClassEx
+    #define JSValueConst QJSValueConst
+    #define JSPropertyEnum QJSPropertyEnum
+    #define JSPropertyDescriptor QJSPropertyDescriptor
+
+    extern void* engine_qjs_create_ctx(void* rt);
+    extern int engine_qjs_eval(void* ctx, const char* utf8, size_t len, const char* filename);
+    extern const char* engine_qjs_get_exception_message(void* ctx);
+    extern void engine_qjs_free_ctx(void* ctx);
+
+    extern void zapp_handle_message(void* app, char* msg);
+    extern void* app_get_active(void);
+    extern const char* zapp_darwin_backend_bootstrap_script(void);
+
+    extern void zapp_darwin_qjs_ensure_init(void);
+    extern void* zapp_darwin_qjs_get_runtime(void);
+    extern dispatch_queue_t zapp_darwin_qjs_get_queue(void);
+    extern void zapp_darwin_qjs_register_context(NSString* ctxId, void* ctx_opaque);
+    extern void zapp_darwin_qjs_unregister_context(NSString* ctxId);
+    extern void zapp_darwin_qjs_drain_jobs(void* ctx, const char* label);
+    extern void zapp_darwin_qjs_timers_install(QJSContext* ctx, QJSValue bridge, const char* worker_id);
+    extern void zapp_darwin_qjs_fetch_install(QJSContext* ctx, QJSValue bridge, const char* worker_id);
+    extern void zapp_qjs_crypto_install(QJSContext* ctx, QJSValue bridge);
+    extern void zapp_qjs_encoding_install(QJSContext* ctx, QJSValue bridge);
+    extern void zapp_qjs_url_install(QJSContext* ctx, QJSValue bridge);
+    extern void zapp_qjs_base64_install(QJSContext* ctx, QJSValue bridge);
+    extern void zapp_darwin_qjs_websocket_install(QJSContext* ctx, QJSValue bridge, const char* worker_id);
+    extern void zapp_darwin_qjs_timers_cancel(NSString* workerId);
+    extern void zapp_darwin_qjs_fetch_cancel(NSString* workerId);
+
+    static QJSContext* qjs_be_ctx = NULL;
+    static NSString* qjs_be_id = @"__zapp_backend__";
+
+    static void qjs_be_drain(QJSContext* ctx, const char* label);
+
+    static void qjs_be_call_bridge(NSString* methodName, int argc, QJSValue* argv) {
+        if (qjs_be_ctx == NULL || methodName == nil) return;
+
+        QJSValue global = JS_GetGlobalObject(qjs_be_ctx);
+        QJSValue symbol = JS_GetPropertyStr(qjs_be_ctx, global, "Symbol");
+        QJSValue symbolFor = JS_GetPropertyStr(qjs_be_ctx, symbol, "for");
+        QJSValue arg = JS_NewString(qjs_be_ctx, "zapp.bridge");
+        QJSValue bridgeSym = JS_Call(qjs_be_ctx, symbolFor, symbol, 1, &arg);
+        JSAtom bridgeAtom = JS_ValueToAtom(qjs_be_ctx, bridgeSym);
+        QJSValue bridge = JS_GetProperty(qjs_be_ctx, global, bridgeAtom);
+
+        if (JS_IsObject(bridge)) {
+            QJSValue fn = JS_GetPropertyStr(qjs_be_ctx, bridge, [methodName UTF8String]);
+            if (JS_IsFunction(qjs_be_ctx, fn)) {
+                QJSValue ret = JS_Call(qjs_be_ctx, fn, bridge, argc, argv);
+                if (JS_IsException(ret)) {
+                    QJSValue exc = JS_GetException(qjs_be_ctx);
+                    const char* str = JS_ToCString(qjs_be_ctx, exc);
+                    NSLog(@"[zapp] qjs backend bridge.%@ threw: %s", methodName, str ? str : "unknown");
+                    if (str) JS_FreeCString(qjs_be_ctx, str);
+                    JS_FreeValue(qjs_be_ctx, exc);
+                }
+                JS_FreeValue(qjs_be_ctx, ret);
+                qjs_be_drain(qjs_be_ctx, [methodName UTF8String]);
+            }
+            JS_FreeValue(qjs_be_ctx, fn);
+        }
+
+        JS_FreeAtom(qjs_be_ctx, bridgeAtom);
+        JS_FreeValue(qjs_be_ctx, bridge);
+        JS_FreeValue(qjs_be_ctx, bridgeSym);
+        JS_FreeValue(qjs_be_ctx, arg);
+        JS_FreeValue(qjs_be_ctx, symbolFor);
+        JS_FreeValue(qjs_be_ctx, symbol);
+        JS_FreeValue(qjs_be_ctx, global);
+    }
+
+    static void qjs_be_drain(QJSContext* ctx, const char* label) {
+        if (!ctx) return;
+        QJSContext* pctx = NULL;
+        for (;;) {
+            int err = JS_ExecutePendingJob(JS_GetRuntime(ctx), &pctx);
+            if (err <= 0) {
+                if (err < 0 && pctx) {
+                    QJSValue exc = JS_GetException(pctx);
+                    const char* str = JS_ToCString(pctx, exc);
+                    NSLog(@"[zapp] qjs backend pending job error (%s): %s", label ? label : "?", str ? str : "unknown");
+                    if (str) JS_FreeCString(pctx, str);
+                    JS_FreeValue(pctx, exc);
+                }
+                break;
+            }
+        }
+    }
+
+    static QJSValue qjs_be_console_log(QJSContext *ctx, QJSValue this_val, int argc, QJSValue *argv) {
+        NSMutableString* buf = [NSMutableString string];
+        for (int i = 0; i < argc; i++) {
+            const char* str = JS_ToCString(ctx, argv[i]);
+            if (str) {
+                if (i > 0) [buf appendString:@" "];
+                [buf appendFormat:@"%s", str];
+                JS_FreeCString(ctx, str);
+            }
+        }
+        NSLog(@"[backend:log] %@", buf);
+        return JS_UNDEFINED;
+    }
+
+    static QJSValue qjs_be_bridge_consoleLog(QJSContext *ctx, QJSValue this_val, int argc, QJSValue *argv) {
+        const char* level = (argc >= 1) ? JS_ToCString(ctx, argv[0]) : NULL;
+        const char* msg = (argc >= 2) ? JS_ToCString(ctx, argv[1]) : NULL;
+        NSLog(@"[backend:%s] %s", level ? level : "log", msg ? msg : "");
+        if (level) JS_FreeCString(ctx, level);
+        if (msg) JS_FreeCString(ctx, msg);
+        return JS_UNDEFINED;
+    }
+
+    static char* qjs_be_json_stringify(QJSContext* ctx, QJSValue val) {
+        QJSValue global = JS_GetGlobalObject(ctx);
+        QJSValue JSON = JS_GetPropertyStr(ctx, global, "JSON");
+        QJSValue stringify = JS_GetPropertyStr(ctx, JSON, "stringify");
+        QJSValue result = JS_Call(ctx, stringify, JSON, 1, &val);
+        const char* str = JS_ToCString(ctx, result);
+        char* copy = str ? strdup(str) : NULL;
+        if (str) JS_FreeCString(ctx, str);
+        JS_FreeValue(ctx, result);
+        JS_FreeValue(ctx, stringify);
+        JS_FreeValue(ctx, JSON);
+        JS_FreeValue(ctx, global);
+        return copy;
+    }
+
+    static QJSValue qjs_be_emitToHost(QJSContext *ctx, QJSValue this_val, int argc, QJSValue *argv) {
+        if (argc < 2) return JS_UNDEFINED;
+
+        const char* name = JS_ToCString(ctx, argv[0]);
+        if (!name) return JS_UNDEFINED;
+
+        NSString* eventName = [NSString stringWithUTF8String:name];
+        JS_FreeCString(ctx, name);
+
+        // Use JS_ToCString (equivalent to JSC's toString) to avoid double-encoding.
+        // The bootstrap already passes JSON.stringify'd strings.
+        const char* payloadCStr = JS_ToCString(ctx, argv[1]);
+        NSString* payload = payloadCStr ? [NSString stringWithUTF8String:payloadCStr] : @"{}";
+        if (payloadCStr) JS_FreeCString(ctx, payloadCStr);
+
+        if ([eventName isEqualToString:@"__zapp_window_create"] ||
+            [eventName isEqualToString:@"__zapp_window_action"] ||
+            [eventName isEqualToString:@"__zapp_app_action"] ||
+            [eventName isEqualToString:@"__zapp_app_configure"]) {
+
+            if ([eventName isEqualToString:@"__zapp_window_create"]) {
+                NSString* wire = [NSString stringWithFormat:@"window\ncreate\n%@", payload];
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    void* a = app_get_active();
+                    if (a) { char* m = strdup([wire UTF8String]); zapp_handle_message(a, m); free(m); }
+                });
+            } else if ([eventName isEqualToString:@"__zapp_window_action"]) {
+                NSData* d = [payload dataUsingEncoding:NSUTF8StringEncoding];
+                NSDictionary* body = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
+                NSString* action = ([body isKindOfClass:[NSDictionary class]]) ? body[@"action"] : nil;
+                if ([action isKindOfClass:[NSString class]]) {
+                    NSString* wire = [NSString stringWithFormat:@"window\n%@\n%@", action, payload];
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        void* a = app_get_active();
+                        if (a) { char* m = strdup([wire UTF8String]); zapp_handle_message(a, m); free(m); }
+                    });
+                }
+            } else if ([eventName isEqualToString:@"__zapp_app_action"]) {
+                NSData* d = [payload dataUsingEncoding:NSUTF8StringEncoding];
+                NSDictionary* body = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
+                NSString* action = ([body isKindOfClass:[NSDictionary class]]) ? body[@"action"] : nil;
+                if ([action isKindOfClass:[NSString class]]) {
+                    NSString* wire = [NSString stringWithFormat:@"app\n%@\n{}", action];
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        void* a = app_get_active();
+                        if (a) { char* m = strdup([wire UTF8String]); zapp_handle_message(a, m); free(m); }
+                    });
+                }
+            } else if ([eventName isEqualToString:@"__zapp_app_configure"]) {
+                NSString* wire = [NSString stringWithFormat:@"app\nconfigure\n%@", payload];
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    void* a = app_get_active();
+                    if (a) { char* m = strdup([wire UTF8String]); zapp_handle_message(a, m); free(m); }
+                });
+            }
+            return JS_UNDEFINED;
+        }
+
+        NSString* wire = [NSString stringWithFormat:@"emit\n%@\n%@", eventName, payload];
+        void* a = app_get_active();
+        if (a) { char* m = strdup([wire UTF8String]); zapp_handle_message(a, m); free(m); }
+        return JS_UNDEFINED;
+    }
+
+    static QJSValue qjs_be_invokeToHost(QJSContext *ctx, QJSValue this_val, int argc, QJSValue *argv) {
+        if (argc < 2) return JS_UNDEFINED;
+        const char* name = JS_ToCString(ctx, argv[0]);
+        if (!name) return JS_UNDEFINED;
+
+        char* payloadStr = qjs_be_json_stringify(ctx, argv[1]);
+        const char* p = payloadStr ? payloadStr : "{}";
+
+        void* a = app_get_active();
+        if (a) {
+            NSString* wire = [NSString stringWithFormat:@"invoke\n%s\n%s", name, p];
+            zapp_handle_message(a, (char*)[wire UTF8String]);
+        }
+
+        if (payloadStr) free(payloadStr);
+        JS_FreeCString(ctx, name);
+        return JS_UNDEFINED;
+    }
+
+    static QJSValue qjs_be_reportError(QJSContext *ctx, QJSValue this_val, int argc, QJSValue *argv) {
+        if (argc < 1) return JS_UNDEFINED;
+        const char* msg = JS_ToCString(ctx, argv[0]);
+        NSLog(@"[zapp] qjs backend error: %s", msg ? msg : "unknown");
+        if (msg) JS_FreeCString(ctx, msg);
+        return JS_UNDEFINED;
+    }
+
+    static QJSValue qjs_be_noop(QJSContext *ctx, QJSValue this_val, int argc, QJSValue *argv) {
+        (void)ctx; (void)this_val; (void)argc; (void)argv;
+        return JS_UNDEFINED;
+    }
+
+    static QJSValue qjs_be_sync_forward(QJSContext *ctx, const char* action, int argc, QJSValue *argv) {
+        if (argc < 1 || !action) return JS_UNDEFINED;
+        char* payloadStr = qjs_be_json_stringify(ctx, argv[0]);
+        NSString* payloadJson = payloadStr ? [NSString stringWithUTF8String:payloadStr] : @"{}";
+        if (payloadStr) free(payloadStr);
+
+        NSData* d = [payloadJson dataUsingEncoding:NSUTF8StringEncoding];
+        id rawObj = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
+        NSMutableDictionary* body = [NSMutableDictionary dictionary];
+        if ([rawObj isKindOfClass:[NSDictionary class]]) [body addEntriesFromDictionary:(NSDictionary*)rawObj];
+        [body setObject:qjs_be_id forKey:@"targetWorkerId"];
+        NSData* outData = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
+        NSString* outJson = [[NSString alloc] initWithData:outData encoding:NSUTF8StringEncoding] ?: @"{}";
+
+        void* a = app_get_active();
+        if (a) {
+            NSString* wire = [NSString stringWithFormat:@"sync\n%s\n%@", action, outJson];
+            zapp_handle_message(a, (char*)[wire UTF8String]);
+        }
+        return JS_UNDEFINED;
+    }
+
+    static QJSValue qjs_be_syncWait(QJSContext *ctx, QJSValue this_val, int argc, QJSValue *argv) {
+        return qjs_be_sync_forward(ctx, "wait", argc, argv);
+    }
+    static QJSValue qjs_be_syncNotify(QJSContext *ctx, QJSValue this_val, int argc, QJSValue *argv) {
+        return qjs_be_sync_forward(ctx, "notify", argc, argv);
+    }
+    static QJSValue qjs_be_syncCancel(QJSContext *ctx, QJSValue this_val, int argc, QJSValue *argv) {
+        return qjs_be_sync_forward(ctx, "cancel", argc, argv);
+    }
+
+    void zapp_backend_deliver_event(const char* name, const char* payload) {
+        if (qjs_be_ctx == NULL || name == NULL) return;
+        NSString* n = [NSString stringWithUTF8String:name];
+        NSString* p = payload ? [NSString stringWithUTF8String:payload] : @"{}";
+        dispatch_queue_t q = zapp_darwin_qjs_get_queue();
+        if (!q) return;
+        dispatch_async(q, ^{
+            if (qjs_be_ctx == NULL) return;
+            QJSValue args[2];
+            args[0] = JS_NewString(qjs_be_ctx, [n UTF8String]);
+            args[1] = JS_NewString(qjs_be_ctx, [p UTF8String]);
+            qjs_be_call_bridge(@"deliverEvent", 2, args);
+            JS_FreeValue(qjs_be_ctx, args[0]);
+            JS_FreeValue(qjs_be_ctx, args[1]);
+        });
+    }
+
+    void zapp_backend_dispatch_window_result(const char* payload_json) {
+        if (qjs_be_ctx == NULL || payload_json == NULL) return;
+        NSString* payload = [NSString stringWithUTF8String:payload_json];
+        dispatch_queue_t q = zapp_darwin_qjs_get_queue();
+        if (!q) return;
+        dispatch_async(q, ^{
+            if (qjs_be_ctx == NULL) return;
+            QJSValue args[1];
+            args[0] = JS_NewString(qjs_be_ctx, [payload UTF8String]);
+            qjs_be_call_bridge(@"dispatchWindowResult", 1, args);
+            JS_FreeValue(qjs_be_ctx, args[0]);
+        });
+    }
+
+    int32_t zapp_backend_context_create(void* app_ptr, char* script_source) {
+        if (app_ptr == NULL || script_source == NULL) return -1;
+
+        zapp_darwin_qjs_ensure_init();
+
+        __block int32_t result = -1;
+        dispatch_queue_t q = zapp_darwin_qjs_get_queue();
+        if (!q) return -1;
+
+        dispatch_sync(q, ^{
+            void* rt = zapp_darwin_qjs_get_runtime();
+            if (!rt) { NSLog(@"[zapp] qjs backend: no runtime"); return; }
+
+            void* ctx_opaque = engine_qjs_create_ctx(rt);
+            if (!ctx_opaque) { NSLog(@"[zapp] qjs backend: failed to create context"); return; }
+
+            QJSContext* ctx = (QJSContext*)ctx_opaque;
+            qjs_be_ctx = ctx;
+
+            zapp_darwin_qjs_register_context(qjs_be_id, ctx_opaque);
+
+            QJSValue global = JS_GetGlobalObject(ctx);
+
+            // console
+            QJSValue consoleObj = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, consoleObj, "log", JS_NewCFunction(ctx, qjs_be_console_log, "log", 1));
+            JS_SetPropertyStr(ctx, consoleObj, "info", JS_NewCFunction(ctx, qjs_be_console_log, "info", 1));
+            JS_SetPropertyStr(ctx, consoleObj, "warn", JS_NewCFunction(ctx, qjs_be_console_log, "warn", 1));
+            JS_SetPropertyStr(ctx, consoleObj, "error", JS_NewCFunction(ctx, qjs_be_console_log, "error", 1));
+            JS_SetPropertyStr(ctx, consoleObj, "debug", JS_NewCFunction(ctx, qjs_be_console_log, "debug", 1));
+            JS_SetPropertyStr(ctx, global, "console", consoleObj);
+
+            // bridge
+            QJSValue bridge = JS_NewObject(ctx);
+
+            JS_SetPropertyStr(ctx, bridge, "emitToHost", JS_NewCFunction(ctx, qjs_be_emitToHost, "emitToHost", 2));
+            JS_SetPropertyStr(ctx, bridge, "invokeToHost", JS_NewCFunction(ctx, qjs_be_invokeToHost, "invokeToHost", 2));
+            JS_SetPropertyStr(ctx, bridge, "reportError", JS_NewCFunction(ctx, qjs_be_reportError, "reportError", 1));
+            JS_SetPropertyStr(ctx, bridge, "consoleLog", JS_NewCFunction(ctx, qjs_be_bridge_consoleLog, "consoleLog", 2));
+            JS_SetPropertyStr(ctx, bridge, "syncWait", JS_NewCFunction(ctx, qjs_be_syncWait, "syncWait", 1));
+            JS_SetPropertyStr(ctx, bridge, "syncNotify", JS_NewCFunction(ctx, qjs_be_syncNotify, "syncNotify", 1));
+            JS_SetPropertyStr(ctx, bridge, "syncCancel", JS_NewCFunction(ctx, qjs_be_syncCancel, "syncCancel", 1));
+
+            // postMessage / closeWorker no-ops for backend
+            QJSValue noop = JS_NewCFunction(ctx, qjs_be_noop, "noop", 0);
+            JS_SetPropertyStr(ctx, bridge, "postMessage", JS_DupValue(ctx, noop));
+            JS_SetPropertyStr(ctx, bridge, "closeWorker", noop);
+
+            zapp_darwin_qjs_timers_install(ctx, bridge, [qjs_be_id UTF8String]);
+            zapp_darwin_qjs_fetch_install(ctx, bridge, [qjs_be_id UTF8String]);
+            zapp_qjs_crypto_install(ctx, bridge);
+            zapp_qjs_encoding_install(ctx, bridge);
+            zapp_qjs_url_install(ctx, bridge);
+            zapp_qjs_base64_install(ctx, bridge);
+            zapp_darwin_qjs_websocket_install(ctx, bridge, [qjs_be_id UTF8String]);
+
+            JS_SetPropertyStr(ctx, global, "globalThis", JS_DupValue(ctx, global));
+            JS_SetPropertyStr(ctx, global, "self", JS_DupValue(ctx, global));
+            JS_SetPropertyStr(ctx, global, "__zappWorkerDispatchId", JS_NewString(ctx, [qjs_be_id UTF8String]));
+            JS_SetPropertyStr(ctx, global, "__zappBridge", bridge);
+
+            // Inject initial config
+            {
+                extern char* app_get_bootstrap_name(void);
+                extern bool app_get_bootstrap_application_should_terminate_after_last_window_closed(void);
+                extern bool app_get_bootstrap_web_content_inspectable(void);
+                extern int app_get_bootstrap_max_workers(void);
+
+                char configScript[1024];
+                const char* appName = app_get_bootstrap_name();
+                snprintf(configScript, sizeof(configScript),
+                    "globalThis.__zappConfig={name:'%s',"
+                    "applicationShouldTerminateAfterLastWindowClosed:%s,"
+                    "webContentInspectable:%s,"
+                    "maxWorkers:%d};",
+                    appName ? appName : "Zapp",
+                    app_get_bootstrap_application_should_terminate_after_last_window_closed() ? "true" : "false",
+                    app_get_bootstrap_web_content_inspectable() ? "true" : "false",
+                    app_get_bootstrap_max_workers()
+                );
+                engine_qjs_eval(ctx, configScript, strlen(configScript), "<config>");
+                qjs_be_drain(ctx, "config");
+            }
+
+            // Evaluate bootstrap
+            const char* bootstrap = zapp_darwin_backend_bootstrap_script();
+            size_t blen = strlen(bootstrap);
+            int err = engine_qjs_eval(ctx, bootstrap, blen, "backend-bootstrap.js");
+            if (err != 0) {
+                const char* msg = engine_qjs_get_exception_message(ctx);
+                NSLog(@"[zapp] qjs backend bootstrap failed: %s", msg ? msg : "unknown");
+                zapp_darwin_qjs_timers_cancel(qjs_be_id);
+                zapp_darwin_qjs_fetch_cancel(qjs_be_id);
+                zapp_darwin_qjs_unregister_context(qjs_be_id);
+                engine_qjs_free_ctx(ctx);
+                qjs_be_ctx = NULL;
+                JS_FreeValue(ctx, global);
+                return;
+            }
+            qjs_be_drain(ctx, "bootstrap");
+
+            // Evaluate user script in async IIFE with error catching
+            size_t srcLen = strlen(script_source);
+            size_t totalLen = srcLen + 256;
+            char* wrapped = (char*)malloc(totalLen);
+            if (!wrapped) {
+                NSLog(@"[zapp] qjs backend: out of memory");
+                zapp_darwin_qjs_timers_cancel(qjs_be_id);
+                zapp_darwin_qjs_fetch_cancel(qjs_be_id);
+                zapp_darwin_qjs_unregister_context(qjs_be_id);
+                engine_qjs_free_ctx(ctx);
+                qjs_be_ctx = NULL;
+                JS_FreeValue(ctx, global);
+                return;
+            }
+            snprintf(wrapped, totalLen,
+                "(async function(){\n%s\n})()"
+                ".catch(function(e){"
+                "var b=globalThis[Symbol.for('zapp.bridge')];"
+                "if(b&&b.reportError)b.reportError(String(e));"
+                "else console.error('[backend] unhandled:',e);"
+                "});", script_source);
+            err = engine_qjs_eval(ctx, wrapped, strlen(wrapped), "backend.js");
+            free(wrapped);
+            if (err != 0) {
+                const char* msg = engine_qjs_get_exception_message(ctx);
+                NSLog(@"[zapp] qjs backend script error: %s", msg ? msg : "unknown");
+            }
+            qjs_be_drain(ctx, "backend-script");
+
+            JS_FreeValue(ctx, global);
+            result = 0;
+        });
+
+        return result;
+    }
+
+    void zapp_backend_context_destroy(void) {
+        dispatch_queue_t q = zapp_darwin_qjs_get_queue();
+        if (!q || qjs_be_ctx == NULL) return;
+        dispatch_sync(q, ^{
+            if (qjs_be_ctx != NULL) {
+                zapp_darwin_qjs_timers_cancel(qjs_be_id);
+                zapp_darwin_qjs_fetch_cancel(qjs_be_id);
+                zapp_darwin_qjs_unregister_context(qjs_be_id);
+                engine_qjs_free_ctx(qjs_be_ctx);
+                qjs_be_ctx = NULL;
+            }
+        });
+    }
+
+    #undef JSContext
+    #undef JSRuntime
+    #undef JSValue
+    #undef JSClassID
+    #undef JSClassDef
+    #undef JSClassEx
+    #undef JSValueConst
+    #undef JSPropertyEnum
+    #undef JSPropertyDescriptor
+#else
+    void zapp_backend_deliver_event(const char* name, const char* payload) {
+        (void)name; (void)payload;
+    }
+
+    void zapp_backend_dispatch_window_result(const char* payload_json) {
+        (void)payload_json;
+    }
+
+    int zapp_backend_context_create(void* app_ptr, char* script_source) {
+        (void)app_ptr; (void)script_source;
+        return -1;
+    }
+
+    void zapp_backend_context_destroy(void) {}
+#endif
+#endif /* __APPLE__ */
+}
+
+struct DarwinBackend {}

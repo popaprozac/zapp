@@ -1,0 +1,570 @@
+import "../window.zc";
+import "./webview.zc";
+
+raw {
+#ifdef __APPLE__
+    #undef panic
+    #include <Cocoa/Cocoa.h>
+    #include <dispatch/dispatch.h>
+    #import <objc/runtime.h>
+
+    extern void zapp_darwin_reset_all_workers(void);
+    extern void zapp_darwin_reset_owner_workers(const char* owner_id);
+    extern void zapp_darwin_webview_create(void* window_ptr, bool inspectable);
+
+    // Per-window delegate that terminates attached workers when the window closes.
+    @interface ZappWindowDelegate : NSObject <NSWindowDelegate>
+    @property (nonatomic, copy) NSString* ownerId;
+    @end
+
+    @implementation ZappWindowDelegate
+    - (void)windowWillClose:(NSNotification*)notification {
+        (void)notification;
+        if (self.ownerId) {
+            zapp_darwin_reset_owner_workers([self.ownerId UTF8String]);
+        }
+    }
+    @end
+
+    // Key for retaining the window delegate via associated object (NSWindow.delegate is weak).
+    static const char kZappWindowDelegateKey = 0;
+#endif
+}
+
+fn darwin_window_create(options: WindowOptions*, inspectable: bool) -> void* {
+    let handle: void* = NULL;
+    raw {
+#ifdef __APPLE__
+        @autoreleasepool {
+            __block void* out = NULL;
+            void (^work)(void) = ^{
+                NSRect frame = NSMakeRect(options->x, options->y, options->width, options->height);
+                NSWindow* window = [[NSWindow alloc] initWithContentRect:frame
+                    styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable)
+                    backing:NSBackingStoreBuffered
+                    defer:NO];
+                
+                NSString* titleStr = [NSString stringWithUTF8String:(const char*)options->title];
+                [window setTitle:titleStr];
+
+                // Electron/Tauri/Wails-like titlebar styles
+                // default: normal titlebar
+                // hidden: hide titlebar/title, keep traffic lights
+                // hiddenInset: hidden with inset-style toolbar presentation when available
+                if (options->titleBarStyle == WINDOW_TITLEBAR_STYLE_HIDDEN || options->titleBarStyle == WINDOW_TITLEBAR_STYLE_HIDDEN_INSET) {
+                    [window setStyleMask:([window styleMask] | NSWindowStyleMaskFullSizeContentView)];
+                    [window setTitleVisibility:NSWindowTitleHidden];
+                    [window setTitlebarAppearsTransparent:YES];
+                }
+
+                if (options->titleBarStyle == WINDOW_TITLEBAR_STYLE_HIDDEN_INSET) {
+                    #if defined(NSWindowToolbarStyleUnifiedCompact)
+                        if ([window respondsToSelector:@selector(setToolbarStyle:)]) {
+                            [window setToolbarStyle:NSWindowToolbarStyleUnifiedCompact];
+                        }
+                    #endif
+                }
+
+                zapp_darwin_webview_create((__bridge void*)window, inspectable);
+
+                NSString* ownerId = [NSString stringWithFormat:@"owner-%p", window];
+                ZappWindowDelegate* windowDelegate = [[ZappWindowDelegate alloc] init];
+                windowDelegate.ownerId = ownerId;
+                // NSWindow.delegate is a weak reference; retain the delegate for the
+                // window's lifetime via an associated object so windowWillClose: fires.
+                objc_setAssociatedObject(window, &kZappWindowDelegateKey, windowDelegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                [window setDelegate:windowDelegate];
+
+                [window makeKeyAndOrderFront:nil];
+                out = (__bridge_retained void*)window;
+            };
+
+            if ([NSThread isMainThread]) {
+                work();
+            } else {
+                dispatch_sync(dispatch_get_main_queue(), work);
+            }
+
+            handle = out;
+        }
+#endif
+    }
+    return handle;
+}
+
+fn darwin_window_destroy(window: void*) -> void {
+    raw {
+#ifdef __APPLE__
+        @autoreleasepool {
+            void (^work)(void) = ^{
+                NSWindow* nsWindow = (__bridge NSWindow*)window;
+                if (nsWindow) {
+                    if ([[NSApp windows] count] <= 1) {
+                        zapp_darwin_reset_all_workers();
+                    }
+                    [nsWindow close];
+                }
+            };
+            if ([NSThread isMainThread]) {
+                work();
+            } else {
+                dispatch_sync(dispatch_get_main_queue(), work);
+            }
+        }
+#endif
+    }
+}
+
+fn darwin_window_minimize(window: void*) -> void {
+    raw {
+#ifdef __APPLE__
+        @autoreleasepool {
+            void (^work)(void) = ^{
+                NSWindow* nsWindow = (__bridge NSWindow*)window;
+                if (nsWindow) {
+                    [nsWindow miniaturize:nil];
+                }
+            };
+            if ([NSThread isMainThread]) {
+                work();
+            } else {
+                dispatch_sync(dispatch_get_main_queue(), work);
+            }
+        }
+#endif
+    }
+}
+
+fn darwin_window_unminimize(window: void*) -> void {
+    raw {
+#ifdef __APPLE__
+        @autoreleasepool {
+            void (^work)(void) = ^{
+                NSWindow* nsWindow = (__bridge NSWindow*)window;
+                if (nsWindow) {
+                    [nsWindow deminiaturize:nil];
+                }
+            };
+            if ([NSThread isMainThread]) {
+                work();
+            } else {
+                dispatch_sync(dispatch_get_main_queue(), work);
+            }
+        }
+#endif
+    }
+}
+
+fn darwin_window_maximize(window: void*) -> void {
+    raw {
+#ifdef __APPLE__
+        @autoreleasepool {
+            void (^work)(void) = ^{
+                NSWindow* nsWindow = (__bridge NSWindow*)window;
+                if (nsWindow) {
+                    [nsWindow zoom:nil];
+                }
+            };
+            if ([NSThread isMainThread]) {
+                work();
+            } else {
+                dispatch_sync(dispatch_get_main_queue(), work);
+            }
+        }
+#endif
+    }
+}
+
+fn darwin_window_unmaximize(window: void*) -> void {
+    raw {
+#ifdef __APPLE__
+        @autoreleasepool {
+            void (^work)(void) = ^{
+                NSWindow* nsWindow = (__bridge NSWindow*)window;
+                if (nsWindow) {
+                    if ([nsWindow isZoomed]) {
+                        [nsWindow zoom:nil];
+                    }
+                }
+            };
+            if ([NSThread isMainThread]) {
+                work();
+            } else {
+                dispatch_sync(dispatch_get_main_queue(), work);
+            }
+        }
+#endif
+    }
+}
+
+fn darwin_window_toggle_minimize(window: void*) -> void {
+    raw {
+#ifdef __APPLE__
+        @autoreleasepool {
+            void (^work)(void) = ^{
+                NSWindow* nsWindow = (__bridge NSWindow*)window;
+                if (nsWindow) {
+                    if ([nsWindow isMiniaturized]) {
+                        [nsWindow deminiaturize:nil];
+                    } else {
+                        [nsWindow miniaturize:nil];
+                    }
+                }
+            };
+            if ([NSThread isMainThread]) {
+                work();
+            } else {
+                dispatch_sync(dispatch_get_main_queue(), work);
+            }
+        }
+#endif
+    }
+}
+
+fn darwin_window_toggle_maximize(window: void*) -> void {
+    raw {
+#ifdef __APPLE__
+        @autoreleasepool {
+            void (^work)(void) = ^{
+                NSWindow* nsWindow = (__bridge NSWindow*)window;
+                if (nsWindow) {
+                    [nsWindow zoom:nil];
+                }
+            };
+            if ([NSThread isMainThread]) {
+                work();
+            } else {
+                dispatch_sync(dispatch_get_main_queue(), work);
+            }
+        }
+#endif
+    }
+}
+
+fn darwin_window_set_title(window: void*, title: string) -> void {
+    raw {
+#ifdef __APPLE__
+        @autoreleasepool {
+            void (^work)(void) = ^{
+                NSWindow* nsWindow = (__bridge NSWindow*)window;
+                if (nsWindow && title) {
+                    [nsWindow setTitle:[NSString stringWithUTF8String:(const char*)title]];
+                }
+            };
+            if ([NSThread isMainThread]) { work(); }
+            else { dispatch_sync(dispatch_get_main_queue(), work); }
+        }
+#endif
+    }
+}
+
+fn darwin_window_set_size(window: void*, width: int, height: int) -> void {
+    raw {
+#ifdef __APPLE__
+        @autoreleasepool {
+            void (^work)(void) = ^{
+                NSWindow* nsWindow = (__bridge NSWindow*)window;
+                if (nsWindow) {
+                    NSRect frame = [nsWindow frame];
+                    frame.size = NSMakeSize((CGFloat)width, (CGFloat)height);
+                    [nsWindow setFrame:frame display:YES animate:YES];
+                }
+            };
+            if ([NSThread isMainThread]) { work(); }
+            else { dispatch_sync(dispatch_get_main_queue(), work); }
+        }
+#endif
+    }
+}
+
+fn darwin_window_set_position(window: void*, x: int, y: int) -> void {
+    raw {
+#ifdef __APPLE__
+        @autoreleasepool {
+            void (^work)(void) = ^{
+                NSWindow* nsWindow = (__bridge NSWindow*)window;
+                if (nsWindow) {
+                    [nsWindow setFrameOrigin:NSMakePoint((CGFloat)x, (CGFloat)y)];
+                }
+            };
+            if ([NSThread isMainThread]) { work(); }
+            else { dispatch_sync(dispatch_get_main_queue(), work); }
+        }
+#endif
+    }
+}
+
+fn darwin_window_set_fullscreen(window: void*, on: bool) -> void {
+    raw {
+#ifdef __APPLE__
+        @autoreleasepool {
+            void (^work)(void) = ^{
+                NSWindow* nsWindow = (__bridge NSWindow*)window;
+                if (nsWindow) {
+                    BOOL isFS = ([nsWindow styleMask] & NSWindowStyleMaskFullScreen) != 0;
+                    if ((on && !isFS) || (!on && isFS)) {
+                        [nsWindow toggleFullScreen:nil];
+                    }
+                }
+            };
+            if ([NSThread isMainThread]) { work(); }
+            else { dispatch_sync(dispatch_get_main_queue(), work); }
+        }
+#endif
+    }
+}
+
+fn darwin_window_set_always_on_top(window: void*, on: bool) -> void {
+    raw {
+#ifdef __APPLE__
+        @autoreleasepool {
+            void (^work)(void) = ^{
+                NSWindow* nsWindow = (__bridge NSWindow*)window;
+                if (nsWindow) {
+                    [nsWindow setLevel:on ? NSFloatingWindowLevel : NSNormalWindowLevel];
+                }
+            };
+            if ([NSThread isMainThread]) { work(); }
+            else { dispatch_sync(dispatch_get_main_queue(), work); }
+        }
+#endif
+    }
+}
+
+raw {
+#ifdef __APPLE__
+    extern void* app_get_active(void);
+    extern void zapp_handle_message(void* app_ptr, char* msg_c);
+
+    static NSMutableDictionary<NSString*, NSValue*>* zapp_window_registry = nil;
+
+    static void zapp_window_registry_ensure(void) {
+        if (zapp_window_registry == nil) {
+            zapp_window_registry = [NSMutableDictionary dictionary];
+        }
+    }
+
+    static NSString* zapp_window_register(NSWindow* window) {
+        zapp_window_registry_ensure();
+        NSString* windowId = [NSString stringWithFormat:@"win-%p", window];
+        [zapp_window_registry setObject:[NSValue valueWithPointer:(__bridge void*)window] forKey:windowId];
+        return windowId;
+    }
+
+    static NSWindow* zapp_window_lookup(NSString* windowId) {
+        zapp_window_registry_ensure();
+        if (windowId == nil || [windowId length] == 0) return nil;
+
+        // First try the registry for JS-created windows
+        NSValue* val = [zapp_window_registry objectForKey:windowId];
+        if (val != nil) return (__bridge NSWindow*)[val pointerValue];
+
+        // Also check owner-ID style (for Window.current() from webviews)
+        for (NSWindow* window in [NSApp windows]) {
+            NSString* ownerId = [NSString stringWithFormat:@"owner-%p", window];
+            if ([ownerId isEqualToString:windowId]) return window;
+        }
+        return nil;
+    }
+
+    extern void zapp_backend_dispatch_window_result(const char* payload_json);
+
+    static void zapp_dispatch_window_result_to_all(const char* payload_json) {
+        NSString* payload = [NSString stringWithUTF8String:payload_json];
+        payload = [payload stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+        payload = [payload stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
+        NSString* js = [NSString stringWithFormat:
+            @"(function(){var b=globalThis[Symbol.for('zapp.bridge')];if(b&&typeof b.dispatchWindowResult==='function'){b.dispatchWindowResult('%@');}})();",
+            payload
+        ];
+        for (NSWindow* window in [NSApp windows]) {
+            NSView* content = [window contentView];
+            if ([content isKindOfClass:[WKWebView class]]) {
+                WKWebView* webview = (WKWebView*)content;
+                [webview evaluateJavaScript:js completionHandler:nil];
+            }
+        }
+        // Also dispatch to backend context
+        zapp_backend_dispatch_window_result(payload_json);
+    }
+
+    void app_handle_window_message(App* app, char* action, char* payload_json) {
+        if (action == NULL || payload_json == NULL) return;
+        NSString* actionStr = [NSString stringWithUTF8String:action];
+        NSString* payload = [NSString stringWithUTF8String:payload_json];
+        NSData* payloadData = [payload dataUsingEncoding:NSUTF8StringEncoding];
+        if (payloadData == nil) return;
+        NSDictionary* body = [NSJSONSerialization JSONObjectWithData:payloadData options:0 error:nil];
+        if (![body isKindOfClass:[NSDictionary class]]) return;
+
+        if ([actionStr isEqualToString:@"create"]) {
+            NSString* requestId = body[@"requestId"];
+            NSDictionary* opts = body[@"options"];
+            if (![requestId isKindOfClass:[NSString class]] || [requestId length] == 0) return;
+            if (![opts isKindOfClass:[NSDictionary class]]) opts = @{};
+
+            void (^createWork)(void) = ^{
+                NSString* title = [opts[@"title"] isKindOfClass:[NSString class]] ? opts[@"title"] : @"Zapp Window";
+                CGFloat width = [opts[@"width"] respondsToSelector:@selector(doubleValue)] ? [opts[@"width"] doubleValue] : 800;
+                CGFloat height = [opts[@"height"] respondsToSelector:@selector(doubleValue)] ? [opts[@"height"] doubleValue] : 600;
+                CGFloat x = [opts[@"x"] respondsToSelector:@selector(doubleValue)] ? [opts[@"x"] doubleValue] : 0;
+                CGFloat y = [opts[@"y"] respondsToSelector:@selector(doubleValue)] ? [opts[@"y"] doubleValue] : 0;
+
+                NSUInteger styleMask = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable;
+
+                NSRect frame = NSMakeRect(x, y, width, height);
+                NSWindow* window = [[NSWindow alloc] initWithContentRect:frame
+                    styleMask:styleMask
+                    backing:NSBackingStoreBuffered
+                    defer:NO];
+                [window setTitle:title];
+
+                NSString* titleBarStyle = [opts[@"titleBarStyle"] isKindOfClass:[NSString class]] ? opts[@"titleBarStyle"] : @"default";
+                if ([titleBarStyle isEqualToString:@"hidden"] || [titleBarStyle isEqualToString:@"hiddenInset"]) {
+                    [window setStyleMask:([window styleMask] | NSWindowStyleMaskFullSizeContentView)];
+                    [window setTitleVisibility:NSWindowTitleHidden];
+                    [window setTitlebarAppearsTransparent:YES];
+                }
+
+                extern bool app_get_bootstrap_web_content_inspectable(void);
+                zapp_darwin_webview_create((__bridge void*)window, app_get_bootstrap_web_content_inspectable());
+
+                NSString* windowId = zapp_window_register(window);
+
+                NSString* ownerId = [NSString stringWithFormat:@"owner-%p", window];
+                ZappWindowDelegate* windowDelegate = [[ZappWindowDelegate alloc] init];
+                windowDelegate.ownerId = ownerId;
+                objc_setAssociatedObject(window, &kZappWindowDelegateKey, windowDelegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                [window setDelegate:windowDelegate];
+
+                id visible = opts[@"visible"];
+                BOOL shouldShow = (visible == nil || ([visible respondsToSelector:@selector(boolValue)] && [visible boolValue]));
+                if (shouldShow) {
+                    [window makeKeyAndOrderFront:nil];
+                }
+
+                NSString* responseJson = [NSString stringWithFormat:
+                    @"{\"requestId\":\"%@\",\"id\":\"%@\",\"ok\":true}",
+                    requestId, windowId
+                ];
+                zapp_dispatch_window_result_to_all([responseJson UTF8String]);
+
+                // If a custom URL was specified, navigate to it (initial URL already loaded by webview create)
+                NSString* url = [opts[@"url"] isKindOfClass:[NSString class]] ? opts[@"url"] : nil;
+                if (url != nil && [url length] > 0) {
+                    NSView* content = [window contentView];
+                    if ([content isKindOfClass:[WKWebView class]]) {
+                        WKWebView* webview = (WKWebView*)content;
+                        NSURL* loadUrl;
+                        if ([url hasPrefix:@"http://"] || [url hasPrefix:@"https://"]) {
+                            loadUrl = [NSURL URLWithString:url];
+                        } else {
+                            // Relative URL: use the same scheme/base as the initial URL
+                            NSString* baseUrl = [NSString stringWithUTF8String:zapp_build_initial_url()];
+                            if ([baseUrl hasPrefix:@"http"]) {
+                                // Dev mode: relative to dev server
+                                NSURL* base = [NSURL URLWithString:baseUrl];
+                                loadUrl = [NSURL URLWithString:url relativeToURL:base];
+                            } else {
+                                // Prod mode: use zapp:// scheme
+                                if ([url hasPrefix:@"/"]) {
+                                    loadUrl = [NSURL URLWithString:[NSString stringWithFormat:@"zapp://app%@", url]];
+                                } else {
+                                    loadUrl = [NSURL URLWithString:[NSString stringWithFormat:@"zapp://app/%@", url]];
+                                }
+                            }
+                        }
+                        if (loadUrl) {
+                            [webview loadRequest:[NSURLRequest requestWithURL:loadUrl]];
+                        }
+                    }
+                }
+            };
+
+            if ([NSThread isMainThread]) { createWork(); }
+            else { dispatch_async(dispatch_get_main_queue(), createWork); }
+            return;
+        }
+
+        // All other actions operate on an existing window
+        NSString* windowId = body[@"windowId"];
+        if (![windowId isKindOfClass:[NSString class]] || [windowId length] == 0) return;
+
+        void (^actionWork)(void) = ^{
+            NSWindow* nsWindow = zapp_window_lookup(windowId);
+            if (nsWindow == nil) return;
+
+            if ([actionStr isEqualToString:@"close"]) {
+                [nsWindow close];
+            } else if ([actionStr isEqualToString:@"minimize"]) {
+                [nsWindow miniaturize:nil];
+            } else if ([actionStr isEqualToString:@"maximize"]) {
+                [nsWindow zoom:nil];
+            } else if ([actionStr isEqualToString:@"unminimize"]) {
+                [nsWindow deminiaturize:nil];
+            } else if ([actionStr isEqualToString:@"unmaximize"]) {
+                if ([nsWindow isZoomed]) [nsWindow zoom:nil];
+            } else if ([actionStr isEqualToString:@"toggle_minimize"]) {
+                if ([nsWindow isMiniaturized]) [nsWindow deminiaturize:nil];
+                else [nsWindow miniaturize:nil];
+            } else if ([actionStr isEqualToString:@"toggle_maximize"]) {
+                [nsWindow zoom:nil];
+            } else if ([actionStr isEqualToString:@"set_title"]) {
+                NSString* title = body[@"title"];
+                if ([title isKindOfClass:[NSString class]]) [nsWindow setTitle:title];
+            } else if ([actionStr isEqualToString:@"set_size"]) {
+                NSNumber* w = body[@"width"];
+                NSNumber* h = body[@"height"];
+                if ([w respondsToSelector:@selector(doubleValue)] && [h respondsToSelector:@selector(doubleValue)]) {
+                    NSRect frame = [nsWindow frame];
+                    frame.size = NSMakeSize([w doubleValue], [h doubleValue]);
+                    [nsWindow setFrame:frame display:YES animate:YES];
+                }
+            } else if ([actionStr isEqualToString:@"set_position"]) {
+                NSNumber* px = body[@"x"];
+                NSNumber* py = body[@"y"];
+                if ([px respondsToSelector:@selector(doubleValue)] && [py respondsToSelector:@selector(doubleValue)]) {
+                    [nsWindow setFrameOrigin:NSMakePoint([px doubleValue], [py doubleValue])];
+                }
+            } else if ([actionStr isEqualToString:@"set_fullscreen"]) {
+                id onVal = body[@"on"];
+                if ([onVal respondsToSelector:@selector(boolValue)]) {
+                    BOOL on = [onVal boolValue];
+                    BOOL isFS = ([nsWindow styleMask] & NSWindowStyleMaskFullScreen) != 0;
+                    if ((on && !isFS) || (!on && isFS)) {
+                        [nsWindow toggleFullScreen:nil];
+                    }
+                }
+            } else if ([actionStr isEqualToString:@"set_always_on_top"]) {
+                id onVal = body[@"on"];
+                if ([onVal respondsToSelector:@selector(boolValue)]) {
+                    [nsWindow setLevel:[onVal boolValue] ? NSFloatingWindowLevel : NSNormalWindowLevel];
+                }
+            }
+        };
+
+        if ([NSThread isMainThread]) { actionWork(); }
+        else { dispatch_async(dispatch_get_main_queue(), actionWork); }
+    }
+
+    void app_handle_app_action(App* app, char* action) {
+        (void)app;
+        if (action == NULL) return;
+        NSString* actionStr = [NSString stringWithUTF8String:action];
+
+        void (^work)(void) = ^{
+            if ([actionStr isEqualToString:@"quit"]) {
+                [NSApp terminate:nil];
+            } else if ([actionStr isEqualToString:@"hide"]) {
+                [NSApp hide:nil];
+            } else if ([actionStr isEqualToString:@"show"]) {
+                [NSApp unhide:nil];
+                [NSApp activateIgnoringOtherApps:YES];
+            }
+        };
+
+        if ([NSThread isMainThread]) { work(); }
+        else { dispatch_async(dispatch_get_main_queue(), work); }
+    }
+#endif
+}

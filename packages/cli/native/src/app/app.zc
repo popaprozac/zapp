@@ -1,0 +1,556 @@
+import "../platform/platform.zc";
+import "../platform/window.zc";
+import "../event/event.zc";
+import "../service/service.zc";
+include <string.h>
+
+struct AppConfig {
+    name: string;
+    applicationShouldTerminateAfterLastWindowClosed: bool;
+    webContentInspectable: bool;
+    maxWorkers: int;
+}
+
+opaque struct _AppConfig {
+    name: string;
+    applicationShouldTerminateAfterLastWindowClosed: bool;
+    webContentInspectable: bool;
+    maxWorkers: int;
+}
+
+struct App {
+    config: _AppConfig;
+    window: WindowManager;
+    event: EventManager;
+    service: ServiceManager;
+    has_backend: bool;
+}
+
+impl App {
+    fn new(config: AppConfig) -> Self {
+        app_set_bootstrap_config(config);
+        let windowManager = WindowManager::new();
+        windowManager.webContentInspectable = config.webContentInspectable;
+        return App{
+            config: _AppConfig{
+                name: config.name,
+                applicationShouldTerminateAfterLastWindowClosed: config.applicationShouldTerminateAfterLastWindowClosed,
+                webContentInspectable: config.webContentInspectable,
+                maxWorkers: config.maxWorkers,
+            },
+            window: windowManager,
+            event: EventManager::new(),
+            service: ServiceManager::new(),
+            has_backend: false,
+        };
+    }
+
+    fn config(self) -> AppConfig {
+        return AppConfig{
+            name: self.config.name,
+            applicationShouldTerminateAfterLastWindowClosed: self.config.applicationShouldTerminateAfterLastWindowClosed,
+            webContentInspectable: self.config.webContentInspectable,
+            maxWorkers: self.config.maxWorkers,
+        };
+    }
+
+    fn run(self) -> int {
+        println "Running app: {self.config.name}";
+        self.window.app = self;
+        self.event.app = self;
+        self.service.app = self;
+        if !service_start_all(self) {
+            return 1;
+        }
+        app_set_active(self);
+        platform_bind_runtime(self);
+        app_start_backend(self);
+        let result = platform_run(self);
+        app_stop_backend(self);
+        service_shutdown_all(self);
+        app_set_active(NULL);
+        return result;
+    }
+
+    fn on_shutdown(self, cb: fn*() -> void) -> void {
+        let _self = self;
+        let _cb = cb;
+    }
+
+    fn should_quit(self, cb: fn*() -> bool) -> void {
+        let _self = self;
+        let _cb = cb;
+    }
+}
+
+// Top-level wrappers keep cross-module callsites simple and stable.
+fn app_get_config(app: App*) -> AppConfig {
+    return app.config();
+}
+
+static let zapp_active_app_ptr: void* = NULL;
+static let zapp_has_bootstrap_config: bool = false;
+static let zapp_bootstrap_config: AppConfig;
+
+fn app_get_active() -> void* {
+    return zapp_active_app_ptr;
+}
+
+fn app_set_active(app: App*) -> void {
+    zapp_active_app_ptr = (void*)app;
+}
+
+fn app_set_bootstrap_config(config: AppConfig) -> void {
+    zapp_bootstrap_config = config;
+    zapp_has_bootstrap_config = true;
+}
+
+fn app_get_bootstrap_config() -> AppConfig {
+    if zapp_has_bootstrap_config {
+        return zapp_bootstrap_config;
+    }
+    return AppConfig{
+        name: "Zapp App",
+        applicationShouldTerminateAfterLastWindowClosed: false,
+        webContentInspectable: true,
+        maxWorkers: 0,
+    };
+}
+
+fn app_get_bootstrap_name() -> string {
+    return app_get_bootstrap_config().name;
+}
+
+fn app_get_bootstrap_application_should_terminate_after_last_window_closed() -> bool {
+    return app_get_bootstrap_config().applicationShouldTerminateAfterLastWindowClosed;
+}
+
+fn app_get_bootstrap_web_content_inspectable() -> bool {
+    return app_get_bootstrap_config().webContentInspectable;
+}
+
+fn app_get_bootstrap_max_workers() -> int {
+    return app_get_bootstrap_config().maxWorkers;
+}
+
+@cfg(__APPLE__)
+fn zapp_backend_context_create(app: void*, script: string) -> int;
+@cfg(__APPLE__)
+fn zapp_backend_context_destroy() -> void;
+
+@cfg(_WIN32)
+fn zapp_backend_context_create(app: void*, script: string) -> int;
+@cfg(_WIN32)
+fn zapp_backend_context_destroy() -> void;
+
+@cfg(ZAPP_LINUX)
+fn zapp_backend_context_create(app: void*, script: string) -> int {
+    raw { (void)app; (void)script; }
+    return -1;
+}
+@cfg(ZAPP_LINUX)
+fn zapp_backend_context_destroy() -> void {}
+
+raw {
+    extern const char* zapp_build_backend_script_path(void);
+}
+
+raw {
+    #include <stdio.h>
+    #include <stdlib.h>
+
+    static char* zapp_read_file_utf8(const char* path) {
+        if (!path || path[0] == '\0') return NULL;
+        FILE* f = fopen(path, "rb");
+        if (!f) return NULL;
+        fseek(f, 0, SEEK_END);
+        long len = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        if (len <= 0) { fclose(f); return NULL; }
+        char* buf = (char*)malloc((size_t)len + 1);
+        if (!buf) { fclose(f); return NULL; }
+        size_t read = fread(buf, 1, (size_t)len, f);
+        fclose(f);
+        buf[read] = '\0';
+        return buf;
+    }
+}
+
+fn app_start_backend(app: App*) -> void {
+    raw {
+        const char* backendPath = zapp_build_backend_script_path();
+        if (backendPath == NULL || backendPath[0] == '\0') return;
+
+        char* source = zapp_read_file_utf8(backendPath);
+        if (source == NULL) {
+            fprintf(stderr, "[zapp] failed to read backend script at %s\n", backendPath);
+            return;
+        }
+
+        int result = zapp_backend_context_create((void*)app, source);
+        free(source);
+        if (result == 0) {
+            app->has_backend = true;
+            fprintf(stderr, "[zapp] backend context started\n");
+        } else {
+            fprintf(stderr, "[zapp] backend context failed to start\n");
+        }
+    }
+}
+
+fn app_stop_backend(app: App*) -> void {
+    if app.has_backend {
+        zapp_backend_context_destroy();
+        app.has_backend = false;
+    }
+}
+
+fn parse_wire(msg: string, out_type: string*, out_key: string*, out_payload: string*) -> void {
+    let p: string = msg;
+    *out_type = p;
+    *out_key = p;
+    *out_payload = p;
+    while *p != '\0' {
+        if *p == '\n' {
+            *p = '\0';
+            p++;
+            if (void*)*out_key == (void*)msg {
+                *out_key = p;
+            } else {
+                *out_payload = p;
+                break;
+            }
+        } else {
+            p++;
+        }
+    }
+}
+
+static let zapp_app_configured: bool = false;
+
+@cfg(__APPLE__)
+fn app_apply_configure(app: App*, payload: string) -> void {
+    raw {
+        if (app == NULL || payload == NULL) return;
+        if (zapp_app_configured) {
+            NSLog(@"[zapp] App.configure() ignored: already configured");
+            return;
+        }
+        zapp_app_configured = true;
+        NSString* jsonStr = [NSString stringWithUTF8String:(const char*)payload];
+        if (jsonStr == nil || [jsonStr length] == 0) return;
+        NSData* data = [jsonStr dataUsingEncoding:NSUTF8StringEncoding];
+        if (data == nil) return;
+        NSDictionary* dict = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+        if (![dict isKindOfClass:[NSDictionary class]]) return;
+
+        id nameVal = dict[@"name"];
+        if ([nameVal isKindOfClass:[NSString class]]) {
+            const char* utf8 = [(NSString*)nameVal UTF8String];
+            if (utf8) app->config.name = strdup(utf8);
+        }
+
+        id quitVal = dict[@"applicationShouldTerminateAfterLastWindowClosed"];
+        if ([quitVal isKindOfClass:[NSNumber class]]) {
+            app->config.applicationShouldTerminateAfterLastWindowClosed = [quitVal boolValue] ? true : false;
+        }
+
+        id inspVal = dict[@"webContentInspectable"];
+        if ([inspVal isKindOfClass:[NSNumber class]]) {
+            app->config.webContentInspectable = [inspVal boolValue] ? true : false;
+            app->window.webContentInspectable = app->config.webContentInspectable;
+        }
+
+        id maxVal = dict[@"maxWorkers"];
+        if ([maxVal isKindOfClass:[NSNumber class]]) {
+            app->config.maxWorkers = [maxVal intValue];
+        }
+
+        NSLog(@"[zapp] app configured from backend");
+    }
+}
+
+@cfg(_WIN32)
+fn app_apply_configure(app: App*, payload: string) -> void {
+    raw {
+        if (app == NULL || payload == NULL) return;
+        if (zapp_app_configured) {
+            fprintf(stderr, "[zapp] App.configure() ignored: already configured\n");
+            return;
+        }
+        zapp_app_configured = true;
+        // Minimal JSON key extraction for configure (no external JSON lib yet).
+        // Parses: name, applicationShouldTerminateAfterLastWindowClosed, webContentInspectable, maxWorkers
+        const char* json = (const char*)payload;
+
+        // Extract "name":"..."
+        const char* nameKey = "\"name\":\"";
+        const char* nameStart = strstr(json, nameKey);
+        if (nameStart) {
+            nameStart += strlen(nameKey);
+            const char* nameEnd = strchr(nameStart, '"');
+            if (nameEnd) {
+                size_t len = (size_t)(nameEnd - nameStart);
+                char* name = (char*)malloc(len + 1);
+                memcpy(name, nameStart, len);
+                name[len] = '\0';
+                app->config.name = name;
+            }
+        }
+
+        // Extract boolean: "applicationShouldTerminateAfterLastWindowClosed":true/false
+        const char* quitKey = "\"applicationShouldTerminateAfterLastWindowClosed\":";
+        const char* quitStart = strstr(json, quitKey);
+        if (quitStart) {
+            quitStart += strlen(quitKey);
+            app->config.applicationShouldTerminateAfterLastWindowClosed = (*quitStart == 't');
+        }
+
+        const char* inspKey = "\"webContentInspectable\":";
+        const char* inspStart = strstr(json, inspKey);
+        if (inspStart) {
+            inspStart += strlen(inspKey);
+            app->config.webContentInspectable = (*inspStart == 't');
+            app->window.webContentInspectable = app->config.webContentInspectable;
+        }
+
+        const char* maxKey = "\"maxWorkers\":";
+        const char* maxStart = strstr(json, maxKey);
+        if (maxStart) {
+            maxStart += strlen(maxKey);
+            app->config.maxWorkers = atoi(maxStart);
+        }
+
+        fprintf(stderr, "[zapp] app configured from backend\n");
+    }
+}
+
+@cfg(ZAPP_LINUX)
+fn app_apply_configure(app: App*, payload: string) -> void {
+    raw { (void)app; (void)payload; }
+}
+
+fn app_should_quit() -> bool {
+    return true;
+}
+
+@cfg(__APPLE__)
+fn zapp_dispatch_invoke_result(request_id: string, payload_json: string) -> void;
+@cfg(__APPLE__)
+fn platform_sync_handle_bridge(action: string, payload_json: string) -> void;
+@cfg(__APPLE__)
+fn app_handle_window_message(app: App*, action: string, payload: string) -> void;
+@cfg(__APPLE__)
+fn app_handle_app_action(app: App*, action: string) -> void;
+
+@cfg(_WIN32)
+raw {
+#ifdef _WIN32
+    extern void zapp_windows_webview_eval_all(const char* js_utf8);
+    extern char* zapp_escape_js_string(const char* raw);
+#endif
+}
+
+@cfg(_WIN32)
+fn zapp_dispatch_invoke_result(request_id: string, payload_json: string) -> void {
+    raw {
+    #ifdef _WIN32
+        (void)request_id;
+        char* escaped = zapp_escape_js_string((const char*)payload_json);
+        size_t jsLen = strlen(escaped) + 256;
+        char* js = (char*)malloc(jsLen);
+        snprintf(js, jsLen,
+            "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+            "if(b&&typeof b.dispatchInvokeResult==='function'){b.dispatchInvokeResult('%s');}})();",
+            escaped
+        );
+        zapp_windows_webview_eval_all(js);
+        free(js);
+        free(escaped);
+    #endif
+    }
+}
+
+@cfg(_WIN32)
+fn platform_sync_handle_bridge(action: string, payload_json: string) -> void {
+    raw { (void)action; (void)payload_json; }
+}
+
+@cfg(_WIN32)
+fn app_handle_window_message(app: App*, action: string, payload: string) -> void;
+
+@cfg(_WIN32)
+fn app_handle_app_action(app: App*, action: string) -> void {
+    raw {
+    #ifdef _WIN32
+        (void)app;
+        if (action == NULL) return;
+        if (strcmp((const char*)action, "quit") == 0) {
+            PostQuitMessage(0);
+        }
+    #endif
+    }
+}
+
+@cfg(ZAPP_LINUX)
+fn zapp_dispatch_invoke_result(request_id: string, payload_json: string) -> void {
+    raw { (void)request_id; (void)payload_json; }
+}
+@cfg(ZAPP_LINUX)
+fn platform_sync_handle_bridge(action: string, payload_json: string) -> void {
+    raw { (void)action; (void)payload_json; }
+}
+@cfg(ZAPP_LINUX)
+fn app_handle_window_message(app: App*, action: string, payload: string) -> void {
+    raw { (void)app; (void)action; (void)payload; }
+}
+@cfg(ZAPP_LINUX)
+fn app_handle_app_action(app: App*, action: string) -> void {
+    raw { (void)app; (void)action; }
+}
+
+fn app_invoke_rpc(app: App*, method: string, request_payload: string) -> void {
+    if method == "" || request_payload == "" {
+        return;
+    }
+    raw {
+        const char* json = (const char*)request_payload;
+        if (!json) return;
+
+        char requestId[128] = {0};
+        char capability[128] = {0};
+        char argsPayload[65536] = {0};
+
+        const char* idKey = "\"id\":\"";
+        const char* idStart = strstr(json, idKey);
+        if (!idStart) return;
+        idStart += strlen(idKey);
+        const char* idEnd = strchr(idStart, '"');
+        if (!idEnd) return;
+        size_t idLen = (size_t)(idEnd - idStart);
+        if (idLen >= sizeof(requestId)) idLen = sizeof(requestId) - 1;
+        memcpy(requestId, idStart, idLen);
+        requestId[idLen] = '\0';
+
+        const char* capKey = "\"capability\":\"";
+        const char* capStart = strstr(json, capKey);
+        if (capStart) {
+            capStart += strlen(capKey);
+            const char* capEnd = strchr(capStart, '"');
+            if (capEnd) {
+                size_t capLen = (size_t)(capEnd - capStart);
+                if (capLen >= sizeof(capability)) capLen = sizeof(capability) - 1;
+                memcpy(capability, capStart, capLen);
+                capability[capLen] = '\0';
+            }
+        }
+
+        const char* argsKey = "\"args\":";
+        const char* argsStart = strstr(json, argsKey);
+        if (!argsStart) return;
+        argsStart += strlen(argsKey);
+        while (*argsStart == ' ' || *argsStart == '\n' || *argsStart == '\r' || *argsStart == '\t') {
+            argsStart++;
+        }
+        const char* argsEnd = strstr(argsStart, ",\"meta\"");
+        if (!argsEnd) {
+            argsEnd = strrchr(argsStart, '}');
+        }
+        if (!argsEnd || argsEnd <= argsStart) {
+            strncpy(argsPayload, "{}", sizeof(argsPayload) - 1);
+        } else {
+            size_t argsLen = (size_t)(argsEnd - argsStart);
+            if (argsLen >= sizeof(argsPayload)) argsLen = sizeof(argsPayload) - 1;
+            memcpy(argsPayload, argsStart, argsLen);
+            argsPayload[argsLen] = '\0';
+        }
+
+        char* errorCode = "";
+        char* errorMessage = "";
+        char* result = service_invoke_with_policy(
+            (App*)app,
+            (char*)method,
+            argsPayload,
+            capability,
+            &errorCode,
+            &errorMessage
+        );
+
+        char response[70000];
+        if (errorCode && errorCode[0] != '\0') {
+            snprintf(
+                response,
+                sizeof(response),
+                "{\"v\":1,\"id\":\"%s\",\"ok\":false,\"error\":{\"code\":\"%s\",\"message\":\"%s\"}}",
+                requestId,
+                errorCode,
+                errorMessage && errorMessage[0] ? errorMessage : "Service invocation failed"
+            );
+        } else {
+            if (!result || result[0] == '\0') result = "{}";
+            snprintf(
+                response,
+                sizeof(response),
+                "{\"v\":1,\"id\":\"%s\",\"ok\":true,\"result\":%s}",
+                requestId,
+                result
+            );
+        }
+
+        zapp_dispatch_invoke_result(requestId, response);
+    }
+}
+
+fn app_handle_frontend_message(app: App*, msg: string) -> void {
+    let msg_type: string = "";
+    let key: string = "";
+    let payload: string = "";
+    parse_wire(msg, &msg_type, &key, &payload);
+
+    if msg_type == "invoke" {
+        let _ = service_invoke(app, key, payload);
+        return;
+    }
+
+    if msg_type == "invoke_rpc" {
+        app_invoke_rpc(app, key, payload);
+        return;
+    }
+
+    if msg_type == "emit" {
+        app.event.emit(key, payload);
+        return;
+    }
+
+    if msg_type == "worker" {
+        platform_handle_worker_bridge(app, key, payload);
+        return;
+    }
+
+    if msg_type == "sync" {
+        platform_sync_handle_bridge(key, payload);
+        return;
+    }
+
+    if msg_type == "window" {
+        app_handle_window_message(app, key, payload);
+        return;
+    }
+
+    if msg_type == "app" {
+        if key == "configure" {
+            app_apply_configure(app, payload);
+            return;
+        }
+        app_handle_app_action(app, key);
+        return;
+    }
+}
+
+// Native entry for ObjC script message handlers.
+fn zapp_handle_message(app_ptr: void*, msg_c: string) -> void {
+    if app_ptr == NULL || msg_c == NULL {
+        return;
+    }
+    app_handle_frontend_message((App*)app_ptr, msg_c);
+}

@@ -1,0 +1,93 @@
+import "../platform.zc";
+import "./worker/dispatch.zc";
+import "./backend.zc";
+
+// --- Baseline macOS Directives ---
+//> macos: framework: Cocoa
+//> macos: framework: WebKit
+//> macos: framework: Foundation
+//> macos: cflags: -fobjc-arc
+// ---------------------------------
+
+// Worker API: worker.zc selects JSC (default) or QuickJS implementation
+import "./worker/mod.zc";
+
+fn app_get_config(app_ptr: App*) -> AppConfig;
+fn app_should_quit() -> bool;
+
+raw {
+#ifdef __APPLE__
+    extern bool app_should_quit(void);
+    static BOOL zapp_should_terminate_after_last_window_closed = NO;
+    static void zapp_set_should_terminate_after_last_window_closed(BOOL value) {
+        zapp_should_terminate_after_last_window_closed = value;
+    }
+
+    @interface ZappAppDelegate : NSObject <NSApplicationDelegate>
+    @end
+
+    @implementation ZappAppDelegate
+    - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication*)sender {
+        (void)sender;
+        if (!zapp_should_terminate_after_last_window_closed) return NO;
+        return app_should_quit() ? YES : NO;
+    }
+    @end
+
+    static id zapp_app_delegate = nil;
+#endif
+}
+
+struct CocoaPlatform {
+    initialized: bool;
+}
+
+impl Platform for CocoaPlatform {
+    fn init(self) -> void {
+        if self.initialized {
+            println "NSApplication already initialized";
+        } else {
+            raw {
+#ifdef __APPLE__
+                NSApplication* nsApp = [NSApplication sharedApplication];
+                [nsApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+                if (zapp_app_delegate == nil) {
+                    zapp_app_delegate = [ZappAppDelegate new];
+                }
+                [nsApp setDelegate:zapp_app_delegate];
+#endif
+            }
+            self.initialized = true;
+        }
+    }
+
+    fn run(self, app: App*) -> int {
+        self.init();
+        let cfg = app_get_config(app);
+        raw {
+#ifdef __APPLE__
+            #include <stdlib.h>
+            #include <signal.h>
+            
+            static dispatch_source_t zapp_sigint_source = nil;
+            if (zapp_sigint_source == nil) {
+                signal(SIGINT, SIG_IGN);
+                zapp_sigint_source = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGINT, 0, dispatch_get_main_queue());
+                dispatch_source_set_event_handler(zapp_sigint_source, ^{
+                    if (app_should_quit()) {
+                        exit(0);
+                    }
+                });
+                dispatch_resume(zapp_sigint_source);
+            }
+
+            zapp_set_should_terminate_after_last_window_closed(
+                cfg.applicationShouldTerminateAfterLastWindowClosed ? YES : NO
+            );
+            [NSApp activateIgnoringOtherApps:YES];
+            [NSApp run];
+#endif
+        }
+        return 0;
+    }
+}

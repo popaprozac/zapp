@@ -1,0 +1,61 @@
+import "./window.zc";
+
+trait Platform {
+    fn init(self) -> void;
+    fn run(self, app: App*) -> int;
+}
+
+@cfg(__APPLE__)
+import "./darwin/platform.zc";
+
+@cfg(_WIN32)
+import "./windows/platform.zc";
+
+@cfg(__APPLE__)
+fn platform_bind_runtime(app: App*) -> void {
+    darwin_platform_bind_runtime(app);
+}
+
+@cfg(_WIN32)
+fn platform_bind_runtime(app: App*) -> void {
+    windows_platform_bind_runtime(app);
+}
+
+@cfg(ZAPP_LINUX)
+fn platform_bind_runtime(app: App*) -> void {
+    let _ = app;
+}
+
+@cfg(__APPLE__)
+fn platform_handle_worker_bridge(app: App*, action: string, payload: string) -> void {
+    darwin_platform_handle_worker_bridge(app, action, payload);
+}
+
+@cfg(_WIN32)
+fn platform_handle_worker_bridge(app: App*, action: string, payload: string) -> void {
+    windows_platform_handle_worker_bridge(app, action, payload);
+}
+
+@cfg(ZAPP_LINUX)
+fn platform_handle_worker_bridge(app: App*, action: string, payload: string) -> void {
+    
+}
+
+@cfg(__APPLE__)
+fn platform_run(app: App*) -> int {
+    let platform = CocoaPlatform{};
+    return platform.run(app);
+}
+
+@cfg(_WIN32)
+fn platform_run(app: App*) -> int {
+    let platform = WindowsPlatform{};
+    return platform.run(app);
+}
+
+@cfg(ZAPP_LINUX)
+fn platform_run(app: App*) -> int {
+    let _ = app;
+    println "Linux not implemented yet";
+    return 0;
+}

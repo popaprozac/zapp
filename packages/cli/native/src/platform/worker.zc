@@ -1,0 +1,8 @@
+// Cross-platform Worker contract. Each OS (darwin, windows) wires a backend that
+// implements this trait; the app only calls platform_bind_runtime and
+// platform_handle_worker_bridge. On darwin, the engine (JSC vs QuickJS vs XS) is
+// selected by @cfg(ZAPP_WORKER_ENGINE_*) in platform/darwin/worker.zc.
+trait WorkerBackend {
+    fn bind_runtime(self, app: App*) -> void;
+    fn handle_bridge(self, app: App*, action: string, payload: string) -> void;
+}

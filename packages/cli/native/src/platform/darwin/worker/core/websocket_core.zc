@@ -1,0 +1,179 @@
+// Engine-agnostic WebSocket connection management using NSURLSessionWebSocketTask.
+// The JS engine callback is abstracted via a C function pointer.
+
+raw {
+#ifdef __APPLE__
+    #include <Foundation/Foundation.h>
+
+    static NSMutableDictionary<NSString*, NSMutableDictionary*>* zapp_ws_conns = nil;
+    static int zapp_ws_id_counter = 1;
+
+    static void zapp_core_ws_ensure_init(void) {
+        if (zapp_ws_conns == nil) zapp_ws_conns = [NSMutableDictionary new];
+    }
+
+    static NSString* zapp_core_ws_json_for_event(NSDictionary* dict) {
+        NSData* d = [NSJSONSerialization dataWithJSONObject:dict options:0 error:nil];
+        return d ? [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding] : @"{}";
+    }
+
+    static void zapp_core_ws_fire(NSString* wsId, NSString* eventType, NSDictionary* payload) {
+        NSMutableDictionary* conn = zapp_ws_conns[wsId];
+        if (conn == nil) return;
+
+        zapp_ws_event_fn cb = NULL;
+        NSValue* cbVal = conn[@"callback_fn"];
+        NSValue* udVal  = conn[@"user_data"];
+        if (cbVal) cb = (zapp_ws_event_fn)[cbVal pointerValue];
+        void* ud = udVal ? [udVal pointerValue] : NULL;
+        if (!cb) return;
+
+        NSMutableDictionary* full = [NSMutableDictionary dictionaryWithDictionary:payload ?: @{}];
+        full[@"type"] = eventType;
+        full[@"wsId"] = wsId;
+        NSString* json = zapp_core_ws_json_for_event(full);
+
+        cb([wsId UTF8String], [eventType UTF8String], [json UTF8String], ud);
+    }
+
+    static void zapp_core_ws_receive_loop(NSURLSessionWebSocketTask* task, NSString* wsId);
+
+    static void zapp_core_ws_receive_loop(NSURLSessionWebSocketTask* task, NSString* wsId) {
+        [task receiveMessageWithCompletionHandler:^(NSURLSessionWebSocketMessage* message, NSError* error) {
+            if (error != nil) {
+                zapp_core_ws_fire(wsId, @"error", @{@"message": [error localizedDescription] ?: @"WebSocket error"});
+                return;
+            }
+            if (message == nil) return;
+
+            if (message.type == NSURLSessionWebSocketMessageTypeString) {
+                NSString* text = message.string ?: @"";
+                zapp_core_ws_fire(wsId, @"message", @{@"data": text, @"binary": @NO});
+            } else if (message.type == NSURLSessionWebSocketMessageTypeData) {
+                NSData* data = message.data;
+                if (data != nil) {
+                    NSMutableArray* byteArray = [NSMutableArray arrayWithCapacity:[data length]];
+                    const uint8_t* bytes = (const uint8_t*)[data bytes];
+                    for (NSUInteger i = 0; i < [data length]; i++) {
+                        [byteArray addObject:@(bytes[i])];
+                    }
+                    zapp_core_ws_fire(wsId, @"message", @{@"data": byteArray, @"binary": @YES});
+                }
+            }
+
+            NSMutableDictionary* conn = zapp_ws_conns[wsId];
+            if (conn != nil && task.state == NSURLSessionTaskStateRunning) {
+                zapp_core_ws_receive_loop(task, wsId);
+            }
+        }];
+    }
+
+    // Connect. Returns wsId C string (caller must free), or NULL on failure.
+    static char* zapp_core_ws_connect(const char* url_str, const char** protocols, int protocol_count,
+                                       zapp_ws_event_fn callback, void* user_data) {
+        zapp_core_ws_ensure_init();
+        if (url_str == NULL) return NULL;
+
+        NSURL* url = [NSURL URLWithString:[NSString stringWithUTF8String:url_str]];
+        if (url == nil) return NULL;
+
+        NSString* wsId = [NSString stringWithFormat:@"ws-%d", zapp_ws_id_counter++];
+
+        NSURLSessionConfiguration* config = [NSURLSessionConfiguration defaultSessionConfiguration];
+        NSURLSession* session = [NSURLSession sessionWithConfiguration:config];
+        NSMutableURLRequest* request = [NSMutableURLRequest requestWithURL:url];
+
+        if (protocols && protocol_count > 0) {
+            NSMutableArray* protos = [NSMutableArray arrayWithCapacity:protocol_count];
+            for (int i = 0; i < protocol_count; i++) {
+                if (protocols[i]) [protos addObject:[NSString stringWithUTF8String:protocols[i]]];
+            }
+            if ([protos count] > 0) {
+                [request setValue:[protos componentsJoinedByString:@", "] forHTTPHeaderField:@"Sec-WebSocket-Protocol"];
+            }
+        }
+
+        NSURLSessionWebSocketTask* task = [session webSocketTaskWithRequest:request];
+
+        NSMutableDictionary* conn = [NSMutableDictionary dictionary];
+        conn[@"task"] = task;
+        conn[@"session"] = session;
+        conn[@"callback_fn"] = [NSValue valueWithPointer:(void*)callback];
+        if (user_data) conn[@"user_data"] = [NSValue valueWithPointer:user_data];
+        zapp_ws_conns[wsId] = conn;
+
+        [task resume];
+        zapp_core_ws_receive_loop(task, wsId);
+
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            NSMutableDictionary* c = zapp_ws_conns[wsId];
+            if (c != nil) {
+                NSURLSessionWebSocketTask* t = c[@"task"];
+                if (t && t.state == NSURLSessionTaskStateRunning) {
+                    zapp_core_ws_fire(wsId, @"open", @{});
+                } else {
+                    zapp_core_ws_fire(wsId, @"error", @{@"message": @"Connection failed"});
+                }
+            }
+        });
+
+        return strdup([wsId UTF8String]);
+    }
+
+    // Send text or binary data on an existing WebSocket.
+    static void zapp_core_ws_send_text(const char* ws_id, const char* text) {
+        if (!ws_id || !text) return;
+        NSString* wsId = [NSString stringWithUTF8String:ws_id];
+        NSMutableDictionary* conn = zapp_ws_conns[wsId];
+        if (!conn) return;
+        NSURLSessionWebSocketTask* task = conn[@"task"];
+        if (!task || task.state != NSURLSessionTaskStateRunning) return;
+
+        NSURLSessionWebSocketMessage* msg = [[NSURLSessionWebSocketMessage alloc] initWithString:[NSString stringWithUTF8String:text]];
+        [task sendMessage:msg completionHandler:^(NSError* error) {
+            if (error) {
+                zapp_core_ws_fire(wsId, @"error", @{@"message": [error localizedDescription] ?: @"Send failed"});
+            }
+        }];
+    }
+
+    static void zapp_core_ws_send_binary(const char* ws_id, const uint8_t* bytes, size_t len) {
+        if (!ws_id || !bytes || len == 0) return;
+        NSString* wsId = [NSString stringWithUTF8String:ws_id];
+        NSMutableDictionary* conn = zapp_ws_conns[wsId];
+        if (!conn) return;
+        NSURLSessionWebSocketTask* task = conn[@"task"];
+        if (!task || task.state != NSURLSessionTaskStateRunning) return;
+
+        NSData* data = [NSData dataWithBytes:bytes length:len];
+        NSURLSessionWebSocketMessage* msg = [[NSURLSessionWebSocketMessage alloc] initWithData:data];
+        [task sendMessage:msg completionHandler:^(NSError* error) {
+            if (error) {
+                zapp_core_ws_fire(wsId, @"error", @{@"message": [error localizedDescription] ?: @"Send failed"});
+            }
+        }];
+    }
+
+    // Close an existing WebSocket.
+    static void zapp_core_ws_close(const char* ws_id, int code, const char* reason) {
+        if (!ws_id) return;
+        NSString* wsId = [NSString stringWithUTF8String:ws_id];
+        NSMutableDictionary* conn = zapp_ws_conns[wsId];
+        if (!conn) return;
+
+        NSURLSessionWebSocketTask* task = conn[@"task"];
+        if (task) {
+            NSData* reasonData = reason ? [[NSString stringWithUTF8String:reason] dataUsingEncoding:NSUTF8StringEncoding] : nil;
+            [task cancelWithCloseCode:(NSURLSessionWebSocketCloseCode)code reason:reasonData];
+        }
+
+        zapp_core_ws_fire(wsId, @"close", @{
+            @"code": @(code),
+            @"reason": reason ? [NSString stringWithUTF8String:reason] : @"",
+            @"wasClean": @YES,
+        });
+
+        [zapp_ws_conns removeObjectForKey:wsId];
+    }
+#endif
+}

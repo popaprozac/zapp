@@ -1,0 +1,149 @@
+// JSC wrapper for fetch. Delegates to core/fetch_core.zc.
+
+//> macos: framework: JavaScriptCore
+
+raw {
+#ifdef __APPLE__
+    #include <Foundation/Foundation.h>
+    #include <JavaScriptCore/JavaScriptCore.h>
+
+    extern void zapp_darwin_worker_js_sync(dispatch_block_t block);
+    static void zapp_core_fetch_ensure_init(void);
+    static void zapp_core_fetch_execute(NSMutableURLRequest*, NSString*, zapp_fetch_completion_t);
+    static NSMutableURLRequest* zapp_core_fetch_build_request(const char*, const char*, const char**, const char**, int, const char*, size_t);
+    static void zapp_core_fetch_cancel(NSString*);
+    static void zapp_core_fetch_cancel_all(void);
+
+    void zapp_darwin_worker_fetch_init(JSContext* ctx, NSString* workerId) {
+        zapp_core_fetch_ensure_init();
+
+        __weak JSContext* weakCtx = ctx;
+
+        JSValue* bridge = ctx[@"__zappBridge"];
+        if (bridge == nil || bridge.isUndefined) {
+            ctx[@"__zappBridge"] = [JSValue valueWithNewObjectInContext:ctx];
+            bridge = ctx[@"__zappBridge"];
+        }
+
+        bridge[@"fetch"] = ^(JSValue* urlVal, JSValue* optionsVal, JSValue* resolveVal, JSValue* rejectVal) {
+            JSContext* strongCtx = weakCtx;
+            if (!strongCtx) return;
+
+            NSString* wId = [strongCtx[@"__zappWorkerDispatchId"] toString];
+            if (![wId isKindOfClass:[NSString class]] || [wId length] == 0) wId = workerId;
+            if (!wId) return;
+
+            const char* urlStr = [[urlVal toString] UTF8String];
+
+            // Extract method
+            const char* method = NULL;
+            NSString* methodNS = nil;
+            if (optionsVal && ![optionsVal isUndefined] && ![optionsVal isNull]) {
+                JSValue* m = optionsVal[@"method"];
+                if (m && ![m isUndefined]) { methodNS = [m toString]; method = [methodNS UTF8String]; }
+            }
+
+            // Extract headers
+            const char** hKeys = NULL;
+            const char** hVals = NULL;
+            int hCount = 0;
+            NSMutableArray* hKeysNS = nil;
+            NSMutableArray* hValsNS = nil;
+            if (optionsVal && ![optionsVal isUndefined] && ![optionsVal isNull]) {
+                JSValue* headersVal = optionsVal[@"headers"];
+                if (headersVal && ![headersVal isUndefined] && [headersVal isObject]) {
+                    NSDictionary* hDict = [headersVal toDictionary];
+                    hCount = (int)[hDict count];
+                    if (hCount > 0) {
+                        hKeysNS = [NSMutableArray arrayWithCapacity:hCount];
+                        hValsNS = [NSMutableArray arrayWithCapacity:hCount];
+                        hKeys = (const char**)calloc(hCount, sizeof(char*));
+                        hVals = (const char**)calloc(hCount, sizeof(char*));
+                        int i = 0;
+                        for (NSString* k in hDict) {
+                            NSString* v = [NSString stringWithFormat:@"%@", hDict[k]];
+                            [hKeysNS addObject:k];
+                            [hValsNS addObject:v];
+                            hKeys[i] = [k UTF8String];
+                            hVals[i] = [v UTF8String];
+                            i++;
+                        }
+                    }
+                }
+            }
+
+            // Extract body
+            const char* body = NULL;
+            size_t bodyLen = 0;
+            NSString* bodyNS = nil;
+            if (optionsVal && ![optionsVal isUndefined] && ![optionsVal isNull]) {
+                JSValue* bodyVal = optionsVal[@"body"];
+                if (bodyVal && ![bodyVal isUndefined] && ![bodyVal isNull] && [bodyVal isString]) {
+                    bodyNS = [bodyVal toString];
+                    body = [bodyNS UTF8String];
+                    bodyLen = [bodyNS lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+                }
+            }
+
+            NSMutableURLRequest* request = zapp_core_fetch_build_request(urlStr, method, hKeys, hVals, hCount, body, bodyLen);
+            free(hKeys);
+            free(hVals);
+
+            if (!request) {
+                if (rejectVal && ![rejectVal isUndefined]) [rejectVal callWithArguments:@[@"Invalid URL"]];
+                return;
+            }
+
+            __block JSValue* blockResolve = resolveVal;
+            __block JSValue* blockReject = rejectVal;
+
+            zapp_core_fetch_execute(request, wId, ^(zapp_fetch_response_t* response, NSString* error) {
+                zapp_darwin_worker_js_sync(^{
+                    JSContext* ctx2 = weakCtx;
+                    if (!ctx2) return;
+
+                    if (error) {
+                        if (blockReject && ![blockReject isUndefined]) {
+                            [blockReject callWithArguments:@[error]];
+                        }
+                        blockResolve = nil; blockReject = nil;
+                        return;
+                    }
+
+                    if (!response) { blockResolve = nil; blockReject = nil; return; }
+
+                    NSMutableDictionary* resDict = [NSMutableDictionary dictionary];
+                    resDict[@"status"] = @(response->status);
+                    resDict[@"statusText"] = response->status_text ? [NSString stringWithUTF8String:response->status_text] : @"";
+
+                    NSMutableDictionary* headers = [NSMutableDictionary dictionary];
+                    for (int i = 0; i < response->header_count; i++) {
+                        if (response->header_keys[i] && response->header_values[i]) {
+                            headers[[NSString stringWithUTF8String:response->header_keys[i]]] =
+                                [NSString stringWithUTF8String:response->header_values[i]];
+                        }
+                    }
+                    resDict[@"headers"] = headers;
+
+                    if (response->body) resDict[@"body"] = [NSString stringWithUTF8String:response->body];
+                    else if (response->body_base64) resDict[@"body_base64"] = [NSString stringWithUTF8String:response->body_base64];
+                    else resDict[@"body"] = @"";
+
+                    if (blockResolve && ![blockResolve isUndefined]) {
+                        [blockResolve callWithArguments:@[resDict]];
+                    }
+                    blockResolve = nil; blockReject = nil;
+                });
+            });
+        };
+    }
+
+    void zapp_darwin_worker_fetch_cancel(NSString* workerId) {
+        zapp_core_fetch_cancel(workerId);
+    }
+
+    void zapp_darwin_worker_fetch_cancel_all(void) {
+        zapp_core_fetch_cancel_all();
+    }
+#endif
+}

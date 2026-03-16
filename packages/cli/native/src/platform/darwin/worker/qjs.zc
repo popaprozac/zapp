@@ -1,0 +1,965 @@
+import "../../platform.zc";
+import "../bootstrap.zc";
+import "./common.zc";
+@cfg(ZAPP_WORKER_ENGINE_QJS)
+import "../engine_qjs.zc";
+@cfg(ZAPP_WORKER_ENGINE_QJS)
+import "./timers_qjs.zc";
+@cfg(ZAPP_WORKER_ENGINE_QJS)
+import "./core/encoding_core.zc";
+@cfg(ZAPP_WORKER_ENGINE_QJS)
+import "./core/url_core.zc";
+@cfg(ZAPP_WORKER_ENGINE_QJS)
+import "./core/base64_core.zc";
+@cfg(ZAPP_WORKER_ENGINE_QJS)
+import "./core/websocket_core.zc";
+@cfg(ZAPP_WORKER_ENGINE_QJS)
+import "./core/crypto_core.zc";
+@cfg(ZAPP_WORKER_ENGINE_QJS)
+import "./core/fetch_core.zc";
+@cfg(ZAPP_WORKER_ENGINE_QJS)
+import "./qjs/qjs_macros.zc";
+@cfg(ZAPP_WORKER_ENGINE_QJS)
+import "../../shared/worker/qjs/encoding_qjs.zc";
+@cfg(ZAPP_WORKER_ENGINE_QJS)
+import "../../shared/worker/qjs/url_qjs.zc";
+@cfg(ZAPP_WORKER_ENGINE_QJS)
+import "../../shared/worker/qjs/base64_qjs.zc";
+@cfg(ZAPP_WORKER_ENGINE_QJS)
+import "../../shared/worker/qjs/crypto_qjs.zc";
+@cfg(ZAPP_WORKER_ENGINE_QJS)
+import "./qjs/websocket_qjs.zc";
+@cfg(ZAPP_WORKER_ENGINE_QJS)
+import "./qjs/fetch_qjs.zc";
+
+include <string.h>
+include <stdlib.h>
+//> macos: framework: Security
+raw {
+#ifdef __APPLE__
+    #include <Security/Security.h>
+#endif
+}
+
+// Rename QuickJS types to avoid conflicts with JavaScriptCore (included via WebKit)
+raw {
+#ifdef ZAPP_WORKER_ENGINE_QJS
+#ifdef __APPLE__
+    extern void* engine_qjs_create_ctx(void* rt);
+    extern int engine_qjs_eval(void* ctx, const char* utf8, size_t len, const char* filename);
+    extern const char* engine_qjs_get_exception_message(void* ctx);
+    extern void engine_qjs_free_ctx(void* ctx);
+
+    #define JSContext QJSContext
+    #define JSRuntime QJSRuntime
+    #define JSValue QJSValue
+    #define JSClassID QJSClassID
+    #define JSClassDef QJSClassDef
+    #define JSClassEx QJSClassEx
+    #define JSValueConst QJSValueConst
+    #define JSPropertyEnum QJSPropertyEnum
+    #define JSPropertyDescriptor QJSPropertyDescriptor
+
+    #include "quickjs.h"
+    #include "quickjs-libc.h"
+
+    extern void zapp_dispatch_worker_to_webviews(const char* kind, const char* worker_id, const char* payload_json);
+    static void zapp_darwin_send_event_to_js(void* app_ptr, char* name, char* payload);
+    extern const char* zapp_darwin_worker_bootstrap_script(void);
+    extern void zapp_handle_message(void* app, char* msg);
+    extern void* app_get_active(void);
+
+    extern void zapp_qjs_encoding_install(QJSContext* ctx, QJSValue bridge);
+    extern void zapp_qjs_url_install(QJSContext* ctx, QJSValue bridge);
+    extern void zapp_qjs_base64_install(QJSContext* ctx, QJSValue bridge);
+    extern void zapp_darwin_qjs_websocket_install(QJSContext* ctx, QJSValue bridge, const char* worker_id);
+    extern void zapp_qjs_crypto_install(QJSContext* ctx, QJSValue bridge);
+    extern void zapp_darwin_qjs_fetch_install(QJSContext* ctx, QJSValue bridge, const char* worker_id);
+    extern void zapp_darwin_qjs_fetch_cancel(NSString* workerId);
+    extern void zapp_darwin_qjs_fetch_cancel_all(void);
+
+    static dispatch_queue_t qjs_queue = nil;
+    static QJSRuntime* qjs_rt = NULL;
+    static NSMutableDictionary<NSString*, NSValue*>* qjs_contexts = nil;
+    static NSMutableDictionary<NSString*, NSString*>* qjs_owners = nil;
+
+    static NSMutableDictionary<NSString*, NSString*>* qjs_worker_script_urls = nil;
+    static NSMutableDictionary<NSString*, NSNumber*>* qjs_worker_shared_flags = nil;
+    static NSMutableDictionary<NSString*, NSValue*>* qjs_shared_worker_contexts = nil;
+    static NSMutableDictionary<NSString*, NSNumber*>* qjs_shared_worker_refcounts = nil;
+    static void* qjs_shared_loading_sentinel = (void*)(uintptr_t)1;
+
+    static void qjs_drain_jobs(QJSContext* ctx, const char* label) {
+        if (!ctx) return;
+
+        QJSContext* pctx = NULL;
+        int err_job = 0;
+
+        for (;;) {
+            err_job = JS_ExecutePendingJob(JS_GetRuntime(ctx), &pctx);
+            if (err_job <= 0) {
+                if (err_job < 0 && pctx) {
+                    QJSValue exception = JS_GetException(pctx);
+                    const char *str = JS_ToCString(pctx, exception);
+                    printf("[qjs] pending job error (%s): %s\n", label ? label : "unknown", str ? str : "unknown");
+                    if (str) JS_FreeCString(pctx, str);
+                    JS_FreeValue(pctx, exception);
+                }
+                break;
+            }
+        }
+    }
+
+    static NSUInteger qjs_active_context_count(void) {
+        if (!qjs_contexts) return 0;
+        NSMutableSet<NSValue*>* seen = [NSMutableSet set];
+        for (NSString* key in qjs_contexts) {
+            NSValue* boxedCtx = qjs_contexts[key];
+            if (boxedCtx != nil) {
+                [seen addObject:boxedCtx];
+            }
+        }
+        return [seen count];
+    }
+
+    static void qjs_call_bridge_method(QJSContext* ctx, NSString* methodName, int argc, QJSValue* argv) {
+        if (!ctx || !methodName) return;
+
+        QJSValue global = JS_GetGlobalObject(ctx);
+        QJSValue symbol = JS_GetPropertyStr(ctx, global, "Symbol");
+        QJSValue symbolFor = JS_GetPropertyStr(ctx, symbol, "for");
+        QJSValue arg = JS_NewString(ctx, "zapp.bridge");
+        QJSValue bridgeSym = JS_Call(ctx, symbolFor, symbol, 1, &arg);
+
+        JSAtom bridgeAtom = JS_ValueToAtom(ctx, bridgeSym);
+        QJSValue bridge = JS_GetProperty(ctx, global, bridgeAtom);
+
+        if (JS_IsObject(bridge)) {
+            QJSValue fn = JS_GetPropertyStr(ctx, bridge, [methodName UTF8String]);
+            if (JS_IsFunction(ctx, fn)) {
+                QJSValue ret = JS_Call(ctx, fn, bridge, argc, argv);
+                if (JS_IsException(ret)) {
+                    QJSValue exception = JS_GetException(ctx);
+                    const char* str = JS_ToCString(ctx, exception);
+                    printf("[qjs] bridge.%s threw: %s\n", [methodName UTF8String], str ? str : "unknown");
+                    if (str) JS_FreeCString(ctx, str);
+                    JS_FreeValue(ctx, exception);
+                }
+                JS_FreeValue(ctx, ret);
+                qjs_drain_jobs(ctx, [methodName UTF8String]);
+            }
+            JS_FreeValue(ctx, fn);
+        }
+
+        JS_FreeAtom(ctx, bridgeAtom);
+        JS_FreeValue(ctx, bridge);
+        JS_FreeValue(ctx, bridgeSym);
+        JS_FreeValue(ctx, arg);
+        JS_FreeValue(ctx, symbolFor);
+        JS_FreeValue(ctx, symbol);
+        JS_FreeValue(ctx, global);
+    }
+
+    static QJSValue qjs_bridge_post(QJSContext *ctx, QJSValue this_val, int argc, QJSValue *argv, int magic, QJSValue *func_data) {
+        if (argc < 1) return JS_UNDEFINED;
+
+        const char *worker_id = JS_ToCString(ctx, func_data[0]);
+        if (!worker_id) return JS_UNDEFINED;
+
+        const char *target_id = worker_id;
+        if (argc >= 2 && !JS_IsUndefined(argv[1]) && !JS_IsNull(argv[1])) {
+            target_id = JS_ToCString(ctx, argv[1]);
+        }
+
+        QJSValue global = JS_GetGlobalObject(ctx);
+        QJSValue JSON = JS_GetPropertyStr(ctx, global, "JSON");
+        QJSValue stringify = JS_GetPropertyStr(ctx, JSON, "stringify");
+        QJSValue jsonStrVal = JS_Call(ctx, stringify, JSON, 1, &argv[0]);
+
+        const char *payload = JS_ToCString(ctx, jsonStrVal);
+        zapp_dispatch_worker_to_webviews("message", target_id, payload ? payload : "null");
+
+        if (payload) JS_FreeCString(ctx, payload);
+        JS_FreeValue(ctx, jsonStrVal);
+        JS_FreeValue(ctx, stringify);
+        JS_FreeValue(ctx, JSON);
+        JS_FreeValue(ctx, global);
+
+        if (target_id != worker_id) {
+            JS_FreeCString(ctx, target_id);
+        }
+        JS_FreeCString(ctx, worker_id);
+
+        return JS_UNDEFINED;
+    }
+
+    static QJSValue qjs_bridge_emitToHost(QJSContext *ctx, QJSValue this_val, int argc, QJSValue *argv, int magic, QJSValue *func_data) {
+        if (argc < 2) return JS_UNDEFINED;
+
+        const char *name = JS_ToCString(ctx, argv[0]);
+        if (!name) return JS_UNDEFINED;
+
+        QJSValue global = JS_GetGlobalObject(ctx);
+        QJSValue JSON = JS_GetPropertyStr(ctx, global, "JSON");
+        QJSValue stringify = JS_GetPropertyStr(ctx, JSON, "stringify");
+        QJSValue jsonStrVal = JS_Call(ctx, stringify, JSON, 1, &argv[1]);
+
+        const char *payload = JS_ToCString(ctx, jsonStrVal);
+        const char *p = payload ? payload : "{}";
+
+        void* app_ptr = app_get_active();
+        zapp_darwin_send_event_to_js(app_ptr, (char*)name, (char*)p);
+
+        if (payload) JS_FreeCString(ctx, payload);
+        JS_FreeValue(ctx, jsonStrVal);
+        JS_FreeValue(ctx, stringify);
+        JS_FreeValue(ctx, JSON);
+        JS_FreeValue(ctx, global);
+        JS_FreeCString(ctx, name);
+
+        return JS_UNDEFINED;
+    }
+
+    static QJSValue qjs_bridge_invokeToHost(QJSContext *ctx, QJSValue this_val, int argc, QJSValue *argv, int magic, QJSValue *func_data) {
+        if (argc < 2) return JS_UNDEFINED;
+
+        const char *name = JS_ToCString(ctx, argv[0]);
+        if (!name) return JS_UNDEFINED;
+
+        QJSValue global = JS_GetGlobalObject(ctx);
+        QJSValue JSON = JS_GetPropertyStr(ctx, global, "JSON");
+        QJSValue stringify = JS_GetPropertyStr(ctx, JSON, "stringify");
+        QJSValue jsonStrVal = JS_Call(ctx, stringify, JSON, 1, &argv[1]);
+
+        const char *payload = JS_ToCString(ctx, jsonStrVal);
+        const char *p = payload ? payload : "{}";
+
+        void* app_ptr = app_get_active();
+        if (app_ptr) {
+            NSString* wire = [NSString stringWithFormat:@"invoke\n%s\n%s", name, p];
+            zapp_handle_message(app_ptr, (char*)[wire UTF8String]);
+        }
+
+        if (payload) JS_FreeCString(ctx, payload);
+        JS_FreeValue(ctx, jsonStrVal);
+        JS_FreeValue(ctx, stringify);
+        JS_FreeValue(ctx, JSON);
+        JS_FreeValue(ctx, global);
+        JS_FreeCString(ctx, name);
+
+        return JS_UNDEFINED;
+    }
+
+    static QJSValue qjs_bridge_reportError(QJSContext *ctx, QJSValue this_val, int argc, QJSValue *argv, int magic, QJSValue *func_data) {
+        if (argc < 1) return JS_UNDEFINED;
+
+        const char *worker_id = JS_ToCString(ctx, func_data[0]);
+        if (!worker_id) return JS_UNDEFINED;
+
+        const char *msg = JS_ToCString(ctx, argv[0]);
+        NSString* message = msg ? [NSString stringWithUTF8String:msg] : @"Worker error";
+        if (msg) JS_FreeCString(ctx, msg);
+
+        zapp_worker_dispatch_error_message([NSString stringWithUTF8String:worker_id], message);
+        JS_FreeCString(ctx, worker_id);
+
+        return JS_UNDEFINED;
+    }
+
+    static QJSValue qjs_bridge_closeWorker(QJSContext *ctx, QJSValue this_val, int argc, QJSValue *argv, int magic, QJSValue *func_data) {
+        const char *worker_id = JS_ToCString(ctx, func_data[0]);
+        if (!worker_id) return JS_UNDEFINED;
+
+        zapp_dispatch_worker_to_webviews("close", worker_id, "{}");
+        JS_FreeCString(ctx, worker_id);
+        return JS_UNDEFINED;
+    }
+
+    static QJSValue qjs_bridge_sync_forward(QJSContext *ctx, const char* action, QJSValue* argv, int argc, QJSValue *func_data) {
+        if (argc < 1 || action == NULL) return JS_UNDEFINED;
+        const char *worker_id = JS_ToCString(ctx, func_data[0]);
+        if (!worker_id) return JS_UNDEFINED;
+
+        QJSValue global = JS_GetGlobalObject(ctx);
+        QJSValue JSON = JS_GetPropertyStr(ctx, global, "JSON");
+        QJSValue stringify = JS_GetPropertyStr(ctx, JSON, "stringify");
+        QJSValue jsonStrVal = JS_Call(ctx, stringify, JSON, 1, &argv[0]);
+        const char *payload = JS_ToCString(ctx, jsonStrVal);
+
+        NSString* payloadJson = payload ? [NSString stringWithUTF8String:payload] : @"{}";
+        NSData* payloadData = [payloadJson dataUsingEncoding:NSUTF8StringEncoding];
+        id rawObj = payloadData ? [NSJSONSerialization JSONObjectWithData:payloadData options:0 error:nil] : nil;
+        NSMutableDictionary* body = [NSMutableDictionary dictionary];
+        if ([rawObj isKindOfClass:[NSDictionary class]]) {
+            [body addEntriesFromDictionary:(NSDictionary*)rawObj];
+        }
+        [body setObject:[NSString stringWithUTF8String:worker_id] forKey:@"targetWorkerId"];
+        NSData* withTargetData = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
+        NSString* withTarget = [[NSString alloc] initWithData:withTargetData encoding:NSUTF8StringEncoding];
+        if (withTarget == nil) withTarget = @"{}";
+
+        void* app_ptr = app_get_active();
+        if (app_ptr) {
+            NSString* wire = [NSString stringWithFormat:@"sync\n%s\n%@", action, withTarget];
+            zapp_handle_message(app_ptr, (char*)[wire UTF8String]);
+        }
+
+        if (payload) JS_FreeCString(ctx, payload);
+        JS_FreeValue(ctx, jsonStrVal);
+        JS_FreeValue(ctx, stringify);
+        JS_FreeValue(ctx, JSON);
+        JS_FreeValue(ctx, global);
+        JS_FreeCString(ctx, worker_id);
+        return JS_UNDEFINED;
+    }
+
+    static QJSValue qjs_bridge_syncWait(QJSContext *ctx, QJSValue this_val, int argc, QJSValue *argv, int magic, QJSValue *func_data) {
+        return qjs_bridge_sync_forward(ctx, "wait", argv, argc, func_data);
+    }
+
+    static QJSValue qjs_bridge_syncNotify(QJSContext *ctx, QJSValue this_val, int argc, QJSValue *argv, int magic, QJSValue *func_data) {
+        return qjs_bridge_sync_forward(ctx, "notify", argv, argc, func_data);
+    }
+
+    static QJSValue qjs_bridge_syncCancel(QJSContext *ctx, QJSValue this_val, int argc, QJSValue *argv, int magic, QJSValue *func_data) {
+        return qjs_bridge_sync_forward(ctx, "cancel", argv, argc, func_data);
+    }
+
+    static QJSValue qjs_console_log(QJSContext *ctx, QJSValue this_val, int argc, QJSValue *argv) {
+        QJSValue global = JS_GetGlobalObject(ctx);
+        QJSValue JSON_val = JS_GetPropertyStr(ctx, global, "JSON");
+        QJSValue stringify = JS_IsObject(JSON_val) ? JS_GetPropertyStr(ctx, JSON_val, "stringify") : JS_UNDEFINED;
+
+        for (int i = 0; i < argc; i++) {
+            const char *str = NULL;
+
+            if (JS_IsFunction(ctx, stringify)) {
+                QJSValue args[1] = { argv[i] };
+                QJSValue jsonVal = JS_Call(ctx, stringify, JSON_val, 1, args);
+                if (!JS_IsException(jsonVal)) {
+                    str = JS_ToCString(ctx, jsonVal);
+                }
+                JS_FreeValue(ctx, jsonVal);
+            }
+
+            if (!str) str = JS_ToCString(ctx, argv[i]);
+            if (str) {
+                printf("%s%s", i == 0 ? "" : " ", str);
+                JS_FreeCString(ctx, str);
+            }
+        }
+
+        JS_FreeValue(ctx, global);
+        if (JS_IsObject(JSON_val)) JS_FreeValue(ctx, stringify);
+        JS_FreeValue(ctx, JSON_val);
+        printf("\n");
+
+        return JS_UNDEFINED;
+    }
+
+    NSValue* zapp_darwin_qjs_get_context(NSString* workerId) {
+        return qjs_contexts ? qjs_contexts[workerId] : nil;
+    }
+
+    dispatch_queue_t zapp_darwin_qjs_get_queue(void) {
+        return qjs_queue;
+    }
+
+    void zapp_darwin_qjs_drain_jobs(void* ctx_opaque, const char* label) {
+        qjs_drain_jobs((QJSContext*)ctx_opaque, label);
+    }
+
+    void zapp_darwin_qjs_dispatch_async(dispatch_block_t block) {
+        dispatch_async(qjs_queue, block);
+    }
+
+    void zapp_darwin_qjs_ensure_init(void) {
+        static dispatch_once_t onceToken;
+        dispatch_once(&onceToken, ^{
+            qjs_queue = dispatch_queue_create("dev.zapp.worker-qjs", DISPATCH_QUEUE_SERIAL);
+            qjs_contexts = [NSMutableDictionary dictionary];
+            qjs_owners = [NSMutableDictionary dictionary];
+            qjs_worker_script_urls = [NSMutableDictionary dictionary];
+            qjs_worker_shared_flags = [NSMutableDictionary dictionary];
+            qjs_shared_worker_contexts = [NSMutableDictionary dictionary];
+            qjs_shared_worker_refcounts = [NSMutableDictionary dictionary];
+            qjs_rt = JS_NewRuntime();
+        });
+    }
+
+    void* zapp_darwin_qjs_get_runtime(void) {
+        return (void*)qjs_rt;
+    }
+
+    void zapp_darwin_qjs_register_context(NSString* ctxId, void* ctx_opaque) {
+        if (ctxId == nil || ctx_opaque == NULL) return;
+        if (qjs_contexts == nil) return;
+        [qjs_contexts setObject:[NSValue valueWithPointer:ctx_opaque] forKey:ctxId];
+    }
+
+    void zapp_darwin_qjs_unregister_context(NSString* ctxId) {
+        if (ctxId == nil || qjs_contexts == nil) return;
+        [qjs_contexts removeObjectForKey:ctxId];
+    }
+
+    void zapp_darwin_worker_dispatch_sync_result(const char* worker_id, const char* payload_json) {
+        if (worker_id == NULL || payload_json == NULL) return;
+        NSString* workerId = [NSString stringWithUTF8String:worker_id];
+        if (![workerId isKindOfClass:[NSString class]] || [workerId length] == 0) return;
+        dispatch_async(qjs_queue, ^{
+            NSValue* val = qjs_contexts[workerId];
+            if (!val) return;
+            QJSContext* ctx = (QJSContext*)[val pointerValue];
+            QJSValue arg = JS_NewString(ctx, payload_json);
+            qjs_call_bridge_method(ctx, @"dispatchSyncResult", 1, &arg);
+            JS_FreeValue(ctx, arg);
+        });
+    }
+
+    void zapp_darwin_reset_owner_workers(const char* owner_id) {
+        if (owner_id == NULL || !qjs_owners) return;
+
+        NSString* ownerId = [NSString stringWithUTF8String:owner_id];
+        NSArray* keys = [qjs_owners allKeys];
+
+        for (NSString* key in keys) {
+            if (![qjs_owners[key] isEqualToString:ownerId]) continue;
+
+            NSValue* val = qjs_contexts[key];
+            NSString* scriptUrl = qjs_worker_script_urls[key];
+            NSNumber* sharedFlag = qjs_worker_shared_flags[key];
+            BOOL isShared = (sharedFlag != nil && [sharedFlag boolValue]);
+
+            [qjs_contexts removeObjectForKey:key];
+            [qjs_owners removeObjectForKey:key];
+            [qjs_worker_script_urls removeObjectForKey:key];
+            [qjs_worker_shared_flags removeObjectForKey:key];
+
+            if (!val) continue;
+
+            QJSContext* ctx = (QJSContext*)[val pointerValue];
+
+            dispatch_async(qjs_queue, ^{
+                zapp_darwin_qjs_timers_cancel(key);
+                zapp_darwin_qjs_fetch_cancel(key);
+
+                if (isShared && scriptUrl != nil) {
+                    QJSValue args[1];
+                    args[0] = JS_NewString(ctx, [key UTF8String]);
+                    qjs_call_bridge_method(ctx, @"dispatchDisconnect", 1, args);
+                    JS_FreeValue(ctx, args[0]);
+
+                    NSNumber* rc = qjs_shared_worker_refcounts[scriptUrl];
+                    NSInteger next = (rc != nil ? [rc integerValue] : 1) - 1;
+
+                    if (next > 0) {
+                        qjs_shared_worker_refcounts[scriptUrl] = @(next);
+                    } else {
+                        [qjs_shared_worker_refcounts removeObjectForKey:scriptUrl];
+                        [qjs_shared_worker_contexts removeObjectForKey:scriptUrl];
+                        engine_qjs_free_ctx(ctx);
+                    }
+                } else {
+                    engine_qjs_free_ctx(ctx);
+                }
+            });
+        }
+    }
+
+    void zapp_darwin_reset_all_workers(void) {
+        if (!qjs_contexts) return;
+
+        NSMutableSet<NSValue*>* seen = [NSMutableSet set];
+        NSDictionary* contextsCopy = [qjs_contexts copy];
+
+        [qjs_contexts removeAllObjects];
+        [qjs_owners removeAllObjects];
+        [qjs_worker_script_urls removeAllObjects];
+        [qjs_worker_shared_flags removeAllObjects];
+        [qjs_shared_worker_contexts removeAllObjects];
+        [qjs_shared_worker_refcounts removeAllObjects];
+
+        for (NSString* key in contextsCopy) {
+            NSValue* val = contextsCopy[key];
+            if (!val || [seen containsObject:val]) continue;
+            [seen addObject:val];
+
+            QJSContext* ctx = (QJSContext*)[val pointerValue];
+            dispatch_async(qjs_queue, ^{
+                zapp_darwin_qjs_timers_cancel(key);
+                zapp_darwin_qjs_fetch_cancel(key);
+                engine_qjs_free_ctx(ctx);
+            });
+        }
+    }
+
+    static void zapp_darwin_send_event_to_js(void* app_ptr, char* name, char* payload) {
+        (void)app_ptr;
+        if (name == NULL) return;
+        if (payload == NULL) payload = "{}";
+
+        NSString* n = [NSString stringWithUTF8String:name] ?: @"";
+        NSString* p = [NSString stringWithUTF8String:payload] ?: @"{}";
+
+        NSDictionary* envelope = @{
+            @"name": n,
+            @"payload": p
+        };
+
+        NSData* envelopeData = [NSJSONSerialization dataWithJSONObject:envelope options:0 error:nil];
+        if (!envelopeData) return;
+
+        NSString* envelopeJson = [[NSString alloc] initWithData:envelopeData encoding:NSUTF8StringEncoding];
+        if (!envelopeJson) return;
+
+        void (^deliverToWebviews)(void) = ^{
+            NSString* js = [NSString stringWithFormat:
+                @"(function(){"
+                "var e=%@;"
+                "var b=globalThis[Symbol.for('zapp.bridge')];"
+                "if(b&&typeof b.deliverEvent==='function'){"
+                "b.deliverEvent(e.name,e.payload);"
+                "}"
+                "})();",
+                envelopeJson
+            ];
+
+            for (NSWindow* window in [NSApp windows]) {
+                NSView* content = [window contentView];
+                if ([content isKindOfClass:[WKWebView class]]) {
+                    WKWebView* webview = (WKWebView*)content;
+                    [webview evaluateJavaScript:js completionHandler:^(id result, NSError *error) {
+                        if (error) {
+                            printf("[qjs] evaluateJavaScript deliverEvent error: %s\n", [[error localizedDescription] UTF8String]);
+                        }
+                    }];
+                }
+            }
+        };
+
+        if ([NSThread isMainThread]) {
+            deliverToWebviews();
+        } else {
+            dispatch_async(dispatch_get_main_queue(), deliverToWebviews);
+        }
+
+        if (!qjs_contexts || !qjs_queue) return;
+
+        dispatch_async(qjs_queue, ^{
+            NSMutableSet<NSValue*>* seen = [NSMutableSet set];
+            NSDictionary<NSString*, NSValue*>* contextsCopy = [qjs_contexts copy];
+
+            for (NSString* key in contextsCopy) {
+                NSValue* boxedCtx = contextsCopy[key];
+                if (!boxedCtx || [seen containsObject:boxedCtx]) continue;
+                [seen addObject:boxedCtx];
+
+                QJSContext* ctx = (QJSContext*)[boxedCtx pointerValue];
+
+                QJSValue args[2];
+                args[0] = JS_NewString(ctx, [n UTF8String]);
+                args[1] = JS_NewString(ctx, [p UTF8String]);
+                qjs_call_bridge_method(ctx, @"deliverEvent", 2, args);
+                JS_FreeValue(ctx, args[0]);
+                JS_FreeValue(ctx, args[1]);
+            }
+        });
+    }
+}
+#endif /* __APPLE__ */
+#endif
+}
+
+struct DarwinWorkerQjs {}
+
+@unused
+impl WorkerBackend for DarwinWorkerQjs {
+    fn bind_runtime(self, app: App*) -> void {
+        raw {
+#ifdef ZAPP_WORKER_ENGINE_QJS
+#ifdef __APPLE__
+        app->event.send_event_to_js = (void*)zapp_darwin_send_event_to_js;
+#endif /* __APPLE__ */
+#endif
+        }
+    }
+
+    fn handle_bridge(self, app: App*, action: string, payload: string) -> void {
+        raw {
+#ifdef ZAPP_WORKER_ENGINE_QJS
+#ifdef __APPLE__
+        if (action == NULL || payload == NULL) return;
+
+        zapp_darwin_qjs_ensure_init();
+
+        NSDictionary* body = zapp_worker_parse_bridge_payload((const char*)payload);
+        if (body == nil) return;
+
+        NSString* actionStr = [NSString stringWithUTF8String:(const char*)action];
+        NSString* workerId = zapp_worker_body_worker_id(body);
+        if (workerId == nil) {
+            NSString* legacyWorkerId = body[@"workerId"];
+            workerId = [legacyWorkerId isKindOfClass:[NSString class]] ? legacyWorkerId : nil;
+        }
+        if (workerId == nil) return;
+
+        NSString* ownerId = zapp_worker_body_owner_id(body);
+        BOOL shared = zapp_worker_body_shared(body);
+
+        if ([actionStr isEqualToString:@"reset_owner"]) {
+            if (ownerId != nil && [ownerId length] > 0) {
+                zapp_darwin_reset_owner_workers([ownerId UTF8String]);
+            }
+            return;
+        }
+
+        if ([actionStr isEqualToString:@"create"]) {
+            NSString* scriptUrl = zapp_worker_body_script_url(body);
+            if (scriptUrl == nil) return;
+
+            int maxWorkers = app->config.maxWorkers;
+            if (maxWorkers > 0) {
+                BOOL willCreateNew = YES;
+                if (shared && qjs_shared_worker_contexts[scriptUrl] != nil) {
+                    willCreateNew = NO;
+                }
+                if (willCreateNew && qjs_active_context_count() >= (NSUInteger)maxWorkers) {
+                    zapp_worker_dispatch_max_workers_error(workerId, maxWorkers);
+                    return;
+                }
+            }
+
+            if (shared) {
+                NSValue* sharedVal = qjs_shared_worker_contexts[scriptUrl];
+                if (sharedVal != nil && [sharedVal pointerValue] != qjs_shared_loading_sentinel) {
+                    QJSContext* existingCtx = (QJSContext*)[sharedVal pointerValue];
+
+                    NSNumber* rc = qjs_shared_worker_refcounts[scriptUrl];
+                    NSInteger next = (rc != nil ? [rc integerValue] : 0) + 1;
+                    qjs_shared_worker_refcounts[scriptUrl] = @(next);
+
+                    qjs_contexts[workerId] = [NSValue valueWithPointer:existingCtx];
+                    qjs_worker_script_urls[workerId] = scriptUrl;
+                    qjs_worker_shared_flags[workerId] = @(YES);
+                    if (ownerId != nil) {
+                        qjs_owners[workerId] = ownerId;
+                    }
+
+                    dispatch_async(qjs_queue, ^{
+                        QJSValue args[1];
+                        args[0] = JS_NewString(existingCtx, [workerId UTF8String]);
+                        qjs_call_bridge_method(existingCtx, @"dispatchConnect", 1, args);
+                        JS_FreeValue(existingCtx, args[0]);
+                    });
+
+                    return;
+                }
+            }
+
+            dispatch_async(qjs_queue, ^{
+                /* Re-check shared context: another create for same scriptUrl may have run before us on this queue */
+                if (shared) {
+                    NSValue* existingVal = qjs_shared_worker_contexts[scriptUrl];
+                    if (existingVal != nil) {
+                        void* ptr = [existingVal pointerValue];
+                        if (ptr == qjs_shared_loading_sentinel) {
+                            /* First creator is still loading; re-dispatch so we run again after it finishes */
+                            dispatch_async(qjs_queue, ^{
+                                /* Re-invoke create handling for this workerId/scriptUrl (payload not re-used; we only need reuse path) */
+                                NSValue* val = qjs_shared_worker_contexts[scriptUrl];
+                                if (val == nil || [val pointerValue] == qjs_shared_loading_sentinel) {
+                                    zapp_dispatch_worker_to_webviews("error", [workerId UTF8String], "{\"message\":\"Shared worker failed to load\"}");
+                                    return;
+                                }
+                                QJSContext* existingCtx = (QJSContext*)[val pointerValue];
+                                NSNumber* rc = qjs_shared_worker_refcounts[scriptUrl];
+                                NSInteger next = (rc != nil ? [rc integerValue] : 0) + 1;
+                                qjs_shared_worker_refcounts[scriptUrl] = @(next);
+                                qjs_contexts[workerId] = [NSValue valueWithPointer:existingCtx];
+                                qjs_worker_script_urls[workerId] = scriptUrl;
+                                qjs_worker_shared_flags[workerId] = @(YES);
+                                if (ownerId) [qjs_owners setObject:ownerId forKey:workerId];
+                                QJSValue args[1];
+                                args[0] = JS_NewString(existingCtx, [workerId UTF8String]);
+                                qjs_call_bridge_method(existingCtx, @"dispatchConnect", 1, args);
+                                JS_FreeValue(existingCtx, args[0]);
+                            });
+                            return;
+                        }
+                        QJSContext* existingCtx = (QJSContext*)ptr;
+                        NSNumber* rc = qjs_shared_worker_refcounts[scriptUrl];
+                        NSInteger next = (rc != nil ? [rc integerValue] : 0) + 1;
+                        qjs_shared_worker_refcounts[scriptUrl] = @(next);
+                        qjs_contexts[workerId] = [NSValue valueWithPointer:existingCtx];
+                        qjs_worker_script_urls[workerId] = scriptUrl;
+                        qjs_worker_shared_flags[workerId] = @(YES);
+                        if (ownerId) [qjs_owners setObject:ownerId forKey:workerId];
+                        QJSValue args[1];
+                        args[0] = JS_NewString(existingCtx, [workerId UTF8String]);
+                        qjs_call_bridge_method(existingCtx, @"dispatchConnect", 1, args);
+                        JS_FreeValue(existingCtx, args[0]);
+                        return;
+                    }
+                    /* Reserve slot so second creator will wait for us instead of loading too */
+                    qjs_shared_worker_contexts[scriptUrl] = [NSValue valueWithPointer:qjs_shared_loading_sentinel];
+                }
+
+                if (maxWorkers > 0 && qjs_active_context_count() >= (NSUInteger)maxWorkers) {
+                    if (shared) [qjs_shared_worker_contexts removeObjectForKey:scriptUrl];
+                    zapp_worker_dispatch_max_workers_error(workerId, maxWorkers);
+                    return;
+                }
+
+                NSError* err = nil;
+                NSString* source = zapp_worker_read_source(scriptUrl, &err);
+                if (!source) {
+                    if (shared) [qjs_shared_worker_contexts removeObjectForKey:scriptUrl];
+                    zapp_worker_dispatch_error_message(workerId, @"Failed to load script");
+                    return;
+                }
+
+                void* ctx_opaque = engine_qjs_create_ctx(qjs_rt);
+                if (!ctx_opaque) {
+                    if (shared) [qjs_shared_worker_contexts removeObjectForKey:scriptUrl];
+                    zapp_worker_dispatch_error_message(workerId, @"Failed to create context");
+                    return;
+                }
+                QJSContext* ctx = (QJSContext*)ctx_opaque;
+
+                [qjs_contexts setObject:[NSValue valueWithPointer:ctx] forKey:workerId];
+                [qjs_worker_script_urls setObject:scriptUrl forKey:workerId];
+                [qjs_worker_shared_flags setObject:@(shared) forKey:workerId];
+                if (ownerId) [qjs_owners setObject:ownerId forKey:workerId];
+
+                QJSValue global = JS_GetGlobalObject(ctx);
+
+                QJSValue consoleObj = JS_NewObject(ctx);
+                JS_SetPropertyStr(ctx, consoleObj, "log", JS_NewCFunction(ctx, qjs_console_log, "log", 1));
+                JS_SetPropertyStr(ctx, consoleObj, "error", JS_NewCFunction(ctx, qjs_console_log, "error", 1));
+                JS_SetPropertyStr(ctx, consoleObj, "warn", JS_NewCFunction(ctx, qjs_console_log, "warn", 1));
+                JS_SetPropertyStr(ctx, global, "console", consoleObj);
+
+                QJSValue bridge = JS_NewObject(ctx);
+
+                QJSValue wIdVal = JS_NewString(ctx, [workerId UTF8String]);
+                QJSValue funcData[1] = { wIdVal };
+
+                QJSValue postFunc = JS_NewCFunctionData(ctx, qjs_bridge_post, 1, 0, 1, funcData);
+                JS_SetPropertyStr(ctx, bridge, "postMessage", postFunc);
+
+                QJSValue emitFunc = JS_NewCFunctionData(ctx, qjs_bridge_emitToHost, 2, 0, 1, funcData);
+                JS_SetPropertyStr(ctx, bridge, "emitToHost", emitFunc);
+
+                QJSValue invokeFunc = JS_NewCFunctionData(ctx, qjs_bridge_invokeToHost, 2, 0, 1, funcData);
+                JS_SetPropertyStr(ctx, bridge, "invokeToHost", invokeFunc);
+
+                QJSValue reportFunc = JS_NewCFunctionData(ctx, qjs_bridge_reportError, 1, 0, 1, funcData);
+                JS_SetPropertyStr(ctx, bridge, "reportError", reportFunc);
+
+                QJSValue closeFunc = JS_NewCFunctionData(ctx, qjs_bridge_closeWorker, 0, 0, 1, funcData);
+                JS_SetPropertyStr(ctx, bridge, "closeWorker", closeFunc);
+
+                QJSValue syncWaitFunc = JS_NewCFunctionData(ctx, qjs_bridge_syncWait, 1, 0, 1, funcData);
+                JS_SetPropertyStr(ctx, bridge, "syncWait", syncWaitFunc);
+                QJSValue syncNotifyFunc = JS_NewCFunctionData(ctx, qjs_bridge_syncNotify, 1, 0, 1, funcData);
+                JS_SetPropertyStr(ctx, bridge, "syncNotify", syncNotifyFunc);
+                QJSValue syncCancelFunc = JS_NewCFunctionData(ctx, qjs_bridge_syncCancel, 1, 0, 1, funcData);
+                JS_SetPropertyStr(ctx, bridge, "syncCancel", syncCancelFunc);
+
+                zapp_darwin_qjs_timers_install(ctx, bridge, [workerId UTF8String]);
+                zapp_darwin_qjs_fetch_install(ctx, bridge, [workerId UTF8String]);
+                zapp_qjs_crypto_install(ctx, bridge);
+                zapp_qjs_encoding_install(ctx, bridge);
+                zapp_qjs_url_install(ctx, bridge);
+                zapp_qjs_base64_install(ctx, bridge);
+                zapp_darwin_qjs_websocket_install(ctx, bridge, [workerId UTF8String]);
+
+                JS_SetPropertyStr(ctx, global, "globalThis", JS_DupValue(ctx, global));
+                JS_SetPropertyStr(ctx, global, "self", JS_DupValue(ctx, global));
+                JS_SetPropertyStr(ctx, global, "__zappWorkerDispatchId", JS_NewString(ctx, [workerId UTF8String]));
+                JS_SetPropertyStr(ctx, global, "__zappBridge", bridge);
+
+                JS_FreeValue(ctx, wIdVal);
+
+                const char* bsrc = zapp_darwin_worker_bootstrap_script();
+                int qjs_ret = engine_qjs_eval(ctx, bsrc, strlen(bsrc), "bootstrap.js");
+                if (qjs_ret != 0) {
+                    if (shared) [qjs_shared_worker_contexts removeObjectForKey:scriptUrl];
+                    const char* msg = engine_qjs_get_exception_message(ctx);
+                    NSString* errMsg = msg
+                        ? [NSString stringWithFormat:@"{\"message\":\"Bootstrap failed: %s\"}", msg]
+                        : @"{\"message\":\"Bootstrap failed\"}";
+                    zapp_dispatch_worker_to_webviews("error", [workerId UTF8String], [errMsg UTF8String]);
+                    engine_qjs_free_ctx(ctx);
+                    return;
+                }
+
+                NSString* wrapped = [[@"(async function(){\n" stringByAppendingString:source] stringByAppendingString:@"\n})();"];
+                NSData* wrappedData = [wrapped dataUsingEncoding:NSUTF8StringEncoding];
+                if (!wrappedData || [wrappedData length] == 0) {
+                    if (shared) [qjs_shared_worker_contexts removeObjectForKey:scriptUrl];
+                    zapp_worker_dispatch_error_message(workerId, @"Script encoding failed");
+                    [qjs_contexts removeObjectForKey:workerId];
+                    [qjs_worker_script_urls removeObjectForKey:workerId];
+                    [qjs_worker_shared_flags removeObjectForKey:workerId];
+                    if (ownerId) [qjs_owners removeObjectForKey:workerId];
+                    engine_qjs_free_ctx(ctx);
+                    return;
+                }
+                size_t wrappedLen = [wrappedData length];
+                char* scriptCopy = (char*)malloc(wrappedLen + 1);
+                if (!scriptCopy) {
+                    if (shared) [qjs_shared_worker_contexts removeObjectForKey:scriptUrl];
+                    zapp_dispatch_worker_to_webviews("error", [workerId UTF8String], "{\"message\":\"Out of memory\"}");
+                    [qjs_contexts removeObjectForKey:workerId];
+                    [qjs_worker_script_urls removeObjectForKey:workerId];
+                    [qjs_worker_shared_flags removeObjectForKey:workerId];
+                    if (ownerId) [qjs_owners removeObjectForKey:workerId];
+                    engine_qjs_free_ctx(ctx);
+                    return;
+                }
+                memcpy(scriptCopy, [wrappedData bytes], wrappedLen);
+                scriptCopy[wrappedLen] = '\0';
+                const char* scriptUrlCstr = [scriptUrl UTF8String];
+                qjs_ret = engine_qjs_eval(ctx, scriptCopy, wrappedLen, scriptUrlCstr ? scriptUrlCstr : "<script>");
+                free(scriptCopy);
+                if (qjs_ret != 0) {
+                    if (shared) [qjs_shared_worker_contexts removeObjectForKey:scriptUrl];
+                    const char* msg = engine_qjs_get_exception_message(ctx);
+                    NSString* errMsg = msg
+                        ? [NSString stringWithFormat:@"{\"message\":\"%@\"}", [NSString stringWithUTF8String:msg]]
+                        : @"{\"message\":\"Script error\"}";
+                    zapp_dispatch_worker_to_webviews("error", [workerId UTF8String], [errMsg UTF8String]);
+                    [qjs_contexts removeObjectForKey:workerId];
+                    [qjs_worker_script_urls removeObjectForKey:workerId];
+                    [qjs_worker_shared_flags removeObjectForKey:workerId];
+                    if (ownerId) [qjs_owners removeObjectForKey:workerId];
+                    engine_qjs_free_ctx(ctx);
+                    return;
+                }
+
+                qjs_drain_jobs(ctx, "create");
+
+                if (shared) {
+                    [qjs_shared_worker_contexts setObject:[NSValue valueWithPointer:ctx] forKey:scriptUrl];
+                    [qjs_shared_worker_refcounts setObject:@(1) forKey:scriptUrl];
+
+                    QJSValue args[1];
+                    args[0] = JS_NewString(ctx, [workerId UTF8String]);
+                    qjs_call_bridge_method(ctx, @"dispatchConnect", 1, args);
+                    JS_FreeValue(ctx, args[0]);
+                }
+
+                JS_FreeValue(ctx, global);
+            });
+            return;
+        }
+
+        if ([actionStr isEqualToString:@"post"]) {
+            id dataObj = body[@"data"];
+            NSData* dataData = [NSJSONSerialization dataWithJSONObject:dataObj ?: @{} options:NSJSONWritingFragmentsAllowed error:nil];
+            NSString* dataJson = [[NSString alloc] initWithData:dataData encoding:NSUTF8StringEncoding];
+
+            dispatch_async(qjs_queue, ^{
+                NSValue* val = qjs_contexts[workerId];
+                if (!val) return;
+
+                QJSContext* ctx = (QJSContext*)[val pointerValue];
+
+                QJSValue global = JS_GetGlobalObject(ctx);
+                QJSValue globalJSON = JS_GetPropertyStr(ctx, global, "JSON");
+                QJSValue parseFunc = JS_GetPropertyStr(ctx, globalJSON, "parse");
+                QJSValue argJson = JS_NewString(ctx, [dataJson UTF8String]);
+                QJSValue parsedData = JS_Call(ctx, parseFunc, globalJSON, 1, &argJson);
+
+                if (JS_IsException(parsedData)) {
+                    QJSValue exception = JS_GetException(ctx);
+                    const char *str = JS_ToCString(ctx, exception);
+                    printf("[qjs] JSON.parse in post failed: %s\n", str ? str : "unknown");
+                    if (str) JS_FreeCString(ctx, str);
+                    JS_FreeValue(ctx, exception);
+                } else {
+                    QJSValue args[2];
+                    args[0] = parsedData;
+                    args[1] = JS_NewString(ctx, [workerId UTF8String]);
+                    qjs_call_bridge_method(ctx, @"dispatchMessage", 2, args);
+                    JS_FreeValue(ctx, args[1]);
+                }
+
+                JS_FreeValue(ctx, parsedData);
+                JS_FreeValue(ctx, argJson);
+                JS_FreeValue(ctx, parseFunc);
+                JS_FreeValue(ctx, globalJSON);
+                JS_FreeValue(ctx, global);
+            });
+            return;
+        }
+
+        if ([actionStr isEqualToString:@"terminate"]) {
+            if (ownerId != nil) {
+                NSString* existingOwner = qjs_owners[workerId];
+                if (existingOwner != nil && ![existingOwner isEqualToString:ownerId]) return;
+            }
+
+            NSValue* val = qjs_contexts[workerId];
+            if (!val) return;
+
+            NSString* scriptUrl = qjs_worker_script_urls[workerId];
+            NSNumber* sharedFlag = qjs_worker_shared_flags[workerId];
+            BOOL isShared = (sharedFlag != nil && [sharedFlag boolValue]);
+
+            [qjs_contexts removeObjectForKey:workerId];
+            [qjs_owners removeObjectForKey:workerId];
+            [qjs_worker_script_urls removeObjectForKey:workerId];
+            [qjs_worker_shared_flags removeObjectForKey:workerId];
+
+            dispatch_async(qjs_queue, ^{
+                QJSContext* ctx = (QJSContext*)[val pointerValue];
+
+                zapp_darwin_qjs_timers_cancel(workerId);
+                zapp_darwin_qjs_fetch_cancel(workerId);
+
+                if (isShared && scriptUrl != nil) {
+                    QJSValue args[1];
+                    args[0] = JS_NewString(ctx, [workerId UTF8String]);
+                    qjs_call_bridge_method(ctx, @"dispatchDisconnect", 1, args);
+                    JS_FreeValue(ctx, args[0]);
+
+                    NSNumber* rc = qjs_shared_worker_refcounts[scriptUrl];
+                    NSInteger next = (rc != nil ? [rc integerValue] : 1) - 1;
+
+                    if (next > 0) {
+                        qjs_shared_worker_refcounts[scriptUrl] = @(next);
+                    } else {
+                        [qjs_shared_worker_refcounts removeObjectForKey:scriptUrl];
+                        [qjs_shared_worker_contexts removeObjectForKey:scriptUrl];
+                        engine_qjs_free_ctx(ctx);
+                    }
+                } else {
+                    engine_qjs_free_ctx(ctx);
+                }
+            });
+
+            return;
+        }
+#endif /* __APPLE__ */
+#endif
+        }
+    }
+}
+
+raw {
+#ifdef ZAPP_WORKER_ENGINE_QJS
+#ifdef __APPLE__
+    #undef JSContext
+    #undef JSRuntime
+    #undef JSValue
+    #undef JSClassID
+    #undef JSClassDef
+    #undef JSClassEx
+    #undef JSValueConst
+    #undef JSPropertyEnum
+    #undef JSPropertyDescriptor
+#endif /* __APPLE__ */
+#endif
+}

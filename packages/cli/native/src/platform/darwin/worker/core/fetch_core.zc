@@ -1,0 +1,145 @@
+// Engine-agnostic HTTP fetch: request building, response handling, task tracking.
+
+raw {
+#ifdef __APPLE__
+    #include <Foundation/Foundation.h>
+
+    // zapp_fetch_response_t and zapp_fetch_completion_t are defined in common.zc
+
+    static void zapp_core_fetch_response_free(zapp_fetch_response_t* r) {
+        if (!r) return;
+        free(r->status_text);
+        for (int i = 0; i < r->header_count; i++) {
+            free(r->header_keys[i]);
+            free(r->header_values[i]);
+        }
+        free(r->header_keys);
+        free(r->header_values);
+        free(r->body);
+        free(r->body_base64);
+    }
+
+    static zapp_fetch_response_t zapp_core_fetch_build_response(NSHTTPURLResponse* httpResponse, NSData* data) {
+        zapp_fetch_response_t r;
+        memset(&r, 0, sizeof(r));
+
+        r.status = (int)[httpResponse statusCode];
+        NSString* statusText = [NSHTTPURLResponse localizedStringForStatusCode:[httpResponse statusCode]];
+        r.status_text = strdup([statusText UTF8String]);
+
+        NSDictionary* headers = [httpResponse allHeaderFields];
+        r.header_count = (int)[headers count];
+        if (r.header_count > 0) {
+            r.header_keys = (char**)calloc(r.header_count, sizeof(char*));
+            r.header_values = (char**)calloc(r.header_count, sizeof(char*));
+            int i = 0;
+            for (NSString* key in headers) {
+                r.header_keys[i] = strdup([key UTF8String]);
+                r.header_values[i] = strdup([[NSString stringWithFormat:@"%@", headers[key]] UTF8String]);
+                i++;
+            }
+        }
+
+        if (data != nil && [data length] > 0) {
+            NSString* dataStr = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+            if (dataStr) {
+                r.body = strdup([dataStr UTF8String]);
+            } else {
+                r.body_base64 = strdup([[data base64EncodedStringWithOptions:0] UTF8String]);
+            }
+        } else {
+            r.body = strdup("");
+        }
+
+        return r;
+    }
+
+    // --- Request builder ---
+    static NSMutableURLRequest* zapp_core_fetch_build_request(
+        const char* url_str,
+        const char* method,
+        const char** header_keys, const char** header_values, int header_count,
+        const char* body, size_t body_len
+    ) {
+        if (!url_str) return nil;
+        NSURL* url = [NSURL URLWithString:[NSString stringWithUTF8String:url_str]];
+        if (!url) return nil;
+
+        NSMutableURLRequest* request = [NSMutableURLRequest requestWithURL:url];
+        if (method) [request setHTTPMethod:[NSString stringWithUTF8String:method]];
+
+        for (int i = 0; i < header_count; i++) {
+            if (header_keys[i] && header_values[i]) {
+                [request setValue:[NSString stringWithUTF8String:header_values[i]]
+               forHTTPHeaderField:[NSString stringWithUTF8String:header_keys[i]]];
+            }
+        }
+
+        if (body && body_len > 0) {
+            [request setHTTPBody:[NSData dataWithBytes:body length:body_len]];
+        }
+
+        return request;
+    }
+
+    // --- Task tracking ---
+    static NSMutableDictionary<NSString*, NSMutableDictionary<NSNumber*, NSURLSessionDataTask*>*>* zapp_fetch_tasks = nil;
+    static NSInteger zapp_fetch_next_id = 1;
+
+    static void zapp_core_fetch_ensure_init(void) {
+        if (!zapp_fetch_tasks) zapp_fetch_tasks = [NSMutableDictionary dictionary];
+    }
+
+    // Execute a fetch and track the task. Completion is called on the NSURLSession callback queue.
+    static void zapp_core_fetch_execute(
+        NSMutableURLRequest* request, NSString* worker_id,
+        zapp_fetch_completion_t completion
+    ) {
+        zapp_core_fetch_ensure_init();
+        if (!request || !worker_id) return;
+
+        NSMutableDictionary<NSNumber*, NSURLSessionDataTask*>* tasks = zapp_fetch_tasks[worker_id];
+        if (!tasks) { tasks = [NSMutableDictionary dictionary]; zapp_fetch_tasks[worker_id] = tasks; }
+
+        NSInteger taskId = zapp_fetch_next_id++;
+        NSNumber* taskKey = @(taskId);
+
+        NSURLSessionDataTask* task = [[NSURLSession sharedSession] dataTaskWithRequest:request
+            completionHandler:^(NSData* data, NSURLResponse* response, NSError* error) {
+                NSMutableDictionary<NSNumber*, NSURLSessionDataTask*>* t = zapp_fetch_tasks[worker_id];
+                if (t) [t removeObjectForKey:taskKey];
+
+                if (error) {
+                    if (completion) completion(NULL, [error localizedDescription]);
+                } else {
+                    zapp_fetch_response_t r = zapp_core_fetch_build_response((NSHTTPURLResponse*)response, data);
+                    if (completion) completion(&r, nil);
+                    zapp_core_fetch_response_free(&r);
+                }
+            }];
+
+        tasks[taskKey] = task;
+        [task resume];
+    }
+
+    static void zapp_core_fetch_cancel(NSString* workerId) {
+        if (!workerId || !zapp_fetch_tasks) return;
+        NSMutableDictionary<NSNumber*, NSURLSessionDataTask*>* tasks = zapp_fetch_tasks[workerId];
+        if (!tasks) return;
+        for (NSNumber* key in [tasks allKeys]) {
+            NSURLSessionDataTask* task = tasks[key];
+            if (task) [task cancel];
+        }
+        [tasks removeAllObjects];
+        [zapp_fetch_tasks removeObjectForKey:workerId];
+    }
+
+    static void zapp_core_fetch_cancel_all(void) {
+        if (!zapp_fetch_tasks) return;
+        for (NSString* wId in [zapp_fetch_tasks allKeys]) {
+            zapp_core_fetch_cancel(wId);
+        }
+        [zapp_fetch_tasks removeAllObjects];
+    }
+#endif
+}

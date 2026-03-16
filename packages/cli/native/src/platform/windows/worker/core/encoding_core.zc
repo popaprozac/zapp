@@ -1,0 +1,60 @@
+// Win32-native text encoding/decoding with proper UTF-8 validation.
+
+raw {
+#ifdef _WIN32
+    #include <windows.h>
+    #include <stdlib.h>
+    #include <string.h>
+
+    // TextEncoder.encode(): converts a UTF-8 string to its byte representation.
+    unsigned char* zapp_core_text_encode(const char* input, size_t* out_len) {
+        if (out_len) *out_len = 0;
+        if (input == NULL) return NULL;
+        size_t len = strlen(input);
+        if (len == 0) return NULL;
+        unsigned char* copy = (unsigned char*)malloc(len);
+        if (!copy) return NULL;
+        memcpy(copy, input, len);
+        if (out_len) *out_len = len;
+        return copy;
+    }
+
+    // TextDecoder.decode(): validates the byte sequence as UTF-8 via
+    // MultiByteToWideChar round-trip, returning a valid UTF-8 C string.
+    // Invalid sequences are replaced with U+FFFD.
+    char* zapp_core_text_decode(const unsigned char* bytes, size_t len) {
+        if (bytes == NULL || len == 0) return _strdup("");
+
+        // First pass: determine required wide-char buffer size.
+        int wlen = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, (const char*)bytes, (int)len, NULL, 0);
+        if (wlen > 0) {
+            // Valid UTF-8 — fast path: just copy as-is.
+            char* result = (char*)malloc(len + 1);
+            if (!result) return _strdup("");
+            memcpy(result, bytes, len);
+            result[len] = '\0';
+            return result;
+        }
+
+        // Invalid UTF-8 detected. Use the lenient flag (0) which replaces
+        // bad sequences, then round-trip back to UTF-8.
+        wlen = MultiByteToWideChar(CP_UTF8, 0, (const char*)bytes, (int)len, NULL, 0);
+        if (wlen <= 0) return _strdup("");
+
+        wchar_t* wbuf = (wchar_t*)malloc((size_t)wlen * sizeof(wchar_t));
+        if (!wbuf) return _strdup("");
+        MultiByteToWideChar(CP_UTF8, 0, (const char*)bytes, (int)len, wbuf, wlen);
+
+        // Convert back to UTF-8
+        int ulen = WideCharToMultiByte(CP_UTF8, 0, wbuf, wlen, NULL, 0, NULL, NULL);
+        if (ulen <= 0) { free(wbuf); return _strdup(""); }
+
+        char* result = (char*)malloc((size_t)ulen + 1);
+        if (!result) { free(wbuf); return _strdup(""); }
+        WideCharToMultiByte(CP_UTF8, 0, wbuf, wlen, result, ulen, NULL, NULL);
+        result[ulen] = '\0';
+        free(wbuf);
+        return result;
+    }
+#endif
+}

@@ -1,0 +1,19 @@
+// Engine-agnostic crypto: random bytes and UUID generation.
+
+//> macos: framework: Security
+
+raw {
+#ifdef __APPLE__
+    #include <Foundation/Foundation.h>
+    #include <Security/Security.h>
+
+    static void zapp_core_crypto_random_bytes(uint8_t* buf, size_t len) {
+        if (buf && len > 0) SecRandomCopyBytes(kSecRandomDefault, len, buf);
+    }
+
+    // Returns a new UUID string. Caller must free().
+    static char* zapp_core_crypto_random_uuid(void) {
+        return strdup([[[NSUUID UUID] UUIDString] UTF8String]);
+    }
+#endif
+}

@@ -1,0 +1,223 @@
+// Shared worker bridge helpers used by the Darwin backends.
+// This keeps request parsing and standard error payloads engine-agnostic so
+// additional engines do not need to reimplement the same bridge boilerplate.
+
+include <stdlib.h>
+include <stdbool.h>
+
+raw {
+#ifdef __APPLE__
+    #include <Foundation/Foundation.h>
+    #include <compression.h>
+#ifndef ZAPP_BRIDGE_TYPES_DEFINED
+#define ZAPP_BRIDGE_TYPES_DEFINED 1
+    typedef struct zapp_url_parsed {
+        char* href;
+        char* protocol;
+        char* host;
+        char* hostname;
+        char* port;
+        char* pathname;
+        char* search;
+        char* hash;
+        char* origin;
+        char* username;
+        char* password;
+    } zapp_url_parsed_t;
+
+    typedef void (*zapp_ws_event_fn)(
+        const char* ws_id,
+        const char* event_type,
+        const char* json_payload,
+        void* user_data
+    );
+
+    typedef struct {
+        int status;
+        char* status_text;
+        char** header_keys;
+        char** header_values;
+        int header_count;
+        char* body;
+        char* body_base64;
+    } zapp_fetch_response_t;
+
+    typedef void (^zapp_fetch_completion_t)(zapp_fetch_response_t* response, NSString* error);
+#endif
+
+#ifndef ZAPP_EMBEDDED_ASSET_STRUCT_DEFINED
+#define ZAPP_EMBEDDED_ASSET_STRUCT_DEFINED 1
+    struct ZappEmbeddedAsset {
+        char* path;
+        uint8_t* data;
+        int len;
+        bool is_brotli;
+        int uncompressed_len;
+    };
+#endif
+
+    extern struct ZappEmbeddedAsset zapp_embedded_assets[];
+    extern int zapp_embedded_assets_count;
+    extern const char* zapp_build_asset_root(void);
+    extern int zapp_build_use_embedded_assets(void);
+    extern void zapp_dispatch_worker_to_webviews(const char* kind, const char* worker_id, const char* payload_json);
+
+    static NSDictionary* zapp_worker_parse_bridge_payload(const char* payload_c) {
+        if (payload_c == NULL) return nil;
+        NSString* payload = [NSString stringWithUTF8String:payload_c];
+        if (payload == nil) return nil;
+        NSData* jsonData = [payload dataUsingEncoding:NSUTF8StringEncoding];
+        if (jsonData == nil) return nil;
+        NSDictionary* body = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:nil];
+        return [body isKindOfClass:[NSDictionary class]] ? body : nil;
+    }
+
+    static NSString* zapp_worker_body_owner_id(NSDictionary* body) {
+        NSString* ownerId = body[@"ownerId"];
+        return [ownerId isKindOfClass:[NSString class]] ? ownerId : nil;
+    }
+
+    static NSString* zapp_worker_body_worker_id(NSDictionary* body) {
+        NSString* workerId = body[@"id"];
+        if (![workerId isKindOfClass:[NSString class]] || [workerId length] == 0) return nil;
+        return workerId;
+    }
+
+    static NSString* zapp_worker_body_script_url(NSDictionary* body) {
+        NSString* scriptUrl = body[@"scriptUrl"];
+        return [scriptUrl isKindOfClass:[NSString class]] ? scriptUrl : nil;
+    }
+
+    static BOOL zapp_worker_body_shared(NSDictionary* body) {
+        id sharedObj = body[@"shared"];
+        if ([sharedObj respondsToSelector:@selector(boolValue)]) {
+            return [sharedObj boolValue] ? YES : NO;
+        }
+        return NO;
+    }
+
+    static void zapp_worker_dispatch_error_json(NSString* workerId, NSString* payloadJson) {
+        if (![workerId isKindOfClass:[NSString class]] || [workerId length] == 0) return;
+        NSString* json = ([payloadJson isKindOfClass:[NSString class]] && [payloadJson length] > 0)
+            ? payloadJson
+            : @"{\"message\":\"Worker error\"}";
+        zapp_dispatch_worker_to_webviews("error", [workerId UTF8String], [json UTF8String]);
+    }
+
+    static void zapp_worker_dispatch_error_message(NSString* workerId, NSString* message) {
+        NSString* safeMessage = ([message isKindOfClass:[NSString class]] && [message length] > 0)
+            ? message
+            : @"Worker error";
+        NSString* payloadJson = [NSString stringWithFormat:@"{\"message\":\"%@\"}", safeMessage];
+        zapp_worker_dispatch_error_json(workerId, payloadJson);
+    }
+
+    static void zapp_worker_dispatch_max_workers_error(NSString* workerId, int maxWorkers) {
+        NSString* errMsg = [NSString stringWithFormat:@"Max worker limit (%d) exceeded.", maxWorkers];
+        zapp_worker_dispatch_error_message(workerId, errMsg);
+    }
+
+    static NSString* zapp_worker_asset_root(void) {
+        const char* configuredRoot = zapp_build_asset_root();
+        if (configuredRoot != NULL && configuredRoot[0] != '\0') {
+            return [NSString stringWithUTF8String:configuredRoot];
+        }
+        return [[[NSFileManager defaultManager] currentDirectoryPath] stringByAppendingPathComponent:@"example/frontend/dist"];
+    }
+
+    static NSString* zapp_worker_resolve_rel_path(NSURL* url) {
+        if (url == nil) return nil;
+        NSString* scheme = [[url scheme] lowercaseString];
+        if (![scheme isEqualToString:@"zapp"]) return nil;
+
+        NSString* host = url.host ?: @"";
+        NSString* path = url.path ?: @"";
+        NSString* rel = path;
+
+        if ((rel.length == 0 || [rel isEqualToString:@"/"]) && host.length > 0) {
+            rel = [@"/" stringByAppendingString:host];
+        }
+        if ([rel hasPrefix:@"/zapp-workers/"]) {
+            // already normalized
+        } else if ([rel hasPrefix:@"/assets/"]) {
+            // keep assets path if used in workers
+        } else if ([rel hasPrefix:@"/index.html/"]) {
+            rel = [rel substringFromIndex:[@"/index.html/" length] - 1];
+        } else if ([rel hasPrefix:@"/app/"]) {
+            rel = [rel substringFromIndex:[@"/app/" length] - 1];
+        }
+
+        while ([rel hasPrefix:@"/"]) {
+            rel = [rel substringFromIndex:1];
+        }
+        if (rel.length == 0) return nil;
+
+        return rel;
+    }
+
+    static NSString* zapp_worker_resolve_local_path(NSURL* url) {
+        NSString* rel = zapp_worker_resolve_rel_path(url);
+        if (rel == nil) return nil;
+        return [zapp_worker_asset_root() stringByAppendingPathComponent:rel];
+    }
+
+    static NSData* zapp_worker_read_embedded_asset(NSString* logicalPath) {
+        if (![logicalPath isKindOfClass:[NSString class]] || [logicalPath length] == 0) return nil;
+        if (zapp_build_use_embedded_assets() == 0) return nil;
+        if (zapp_embedded_assets_count <= 0) return nil;
+
+        for (int i = 0; i < zapp_embedded_assets_count; i++) {
+            NSString* assetPath = [NSString stringWithUTF8String:zapp_embedded_assets[i].path];
+            if (![assetPath isEqualToString:logicalPath]) continue;
+
+            if (zapp_embedded_assets[i].is_brotli) {
+                uint8_t* outBuf = malloc(zapp_embedded_assets[i].uncompressed_len);
+                size_t decodedSize = compression_decode_buffer(outBuf, zapp_embedded_assets[i].uncompressed_len,
+                                                               zapp_embedded_assets[i].data, zapp_embedded_assets[i].len,
+                                                               NULL, COMPRESSION_BROTLI);
+                if (decodedSize > 0) {
+                    return [NSData dataWithBytesNoCopy:outBuf length:decodedSize freeWhenDone:YES];
+                }
+                free(outBuf);
+                return nil;
+            }
+
+            return [NSData dataWithBytesNoCopy:(void*)zapp_embedded_assets[i].data
+                                        length:zapp_embedded_assets[i].len
+                                  freeWhenDone:NO];
+        }
+
+        return nil;
+    }
+
+    static NSString* zapp_worker_read_source(NSString* scriptUrl, NSError** outErr) {
+        if (![scriptUrl isKindOfClass:[NSString class]] || [scriptUrl length] == 0) return nil;
+        NSURL* url = [NSURL URLWithString:scriptUrl];
+        if (url == nil) return nil;
+
+        NSString* rel = zapp_worker_resolve_rel_path(url);
+        if (rel != nil) {
+            NSString* logicalPath = [@"/" stringByAppendingString:rel];
+            NSData* embeddedData = zapp_worker_read_embedded_asset(logicalPath);
+            if (embeddedData != nil) {
+                return [[NSString alloc] initWithData:embeddedData encoding:NSUTF8StringEncoding];
+            }
+        }
+
+        NSString* localPath = zapp_worker_resolve_local_path(url);
+        if (localPath != nil) {
+            if (![[NSFileManager defaultManager] fileExistsAtPath:localPath]) {
+                if (outErr) {
+                    *outErr = [NSError errorWithDomain:@"zapp.worker" code:404 userInfo:nil];
+                }
+                return nil;
+            }
+            return [NSString stringWithContentsOfFile:localPath encoding:NSUTF8StringEncoding error:outErr];
+        }
+
+        return [NSString stringWithContentsOfURL:url encoding:NSUTF8StringEncoding error:outErr];
+    }
+#endif
+}
+
+struct WorkerCommon {}

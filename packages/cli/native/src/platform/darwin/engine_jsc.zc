@@ -1,0 +1,86 @@
+// Engine adapter for JSC: context lifecycle + eval. Backend (jsc) calls these.
+// See WORKERS.md "Where to start implementation" and WORKERS_PROTOCOL.md §4.
+
+//> macos: framework: JavaScriptCore
+//> macos: framework: Cocoa
+
+struct EngineJsc {}
+
+raw {
+#if !defined(ZAPP_WORKER_ENGINE_QJS)
+#ifdef __APPLE__
+#include <Cocoa/Cocoa.h>
+#include <JavaScriptCore/JavaScriptCore.h>
+#include <dispatch/dispatch.h>
+#include <string.h>
+
+static NSString* g_engine_jsc_last_exception_message = nil;
+
+void* engine_jsc_create_ctx(void* vm, const char* name) {
+    if (!vm) return NULL;
+    JSVirtualMachine* jvm = (__bridge JSVirtualMachine*)vm;
+    JSContext* ctx = [[JSContext alloc] initWithVirtualMachine:jvm];
+    if (!ctx) return NULL;
+    if (name && name[0]) {
+        ctx.name = [NSString stringWithUTF8String:name];
+    }
+    return (__bridge_retained void*)ctx;
+}
+
+int engine_jsc_eval(void* ctx_opaque, const char* utf8, size_t len, const char* filename) {
+    if (!ctx_opaque || !utf8) return -1;
+    g_engine_jsc_last_exception_message = nil;
+    JSContext* ctx = (__bridge JSContext*)ctx_opaque;
+    NSString* source = [[NSString alloc] initWithBytes:utf8 length:len encoding:NSUTF8StringEncoding];
+    if (!source) {
+        g_engine_jsc_last_exception_message = @"SyntaxError: invalid UTF-8 sequence";
+        return -1;
+    }
+    NSURL* url = filename && filename[0] ? [NSURL URLWithString:[NSString stringWithUTF8String:filename]] : nil;
+    if (url) {
+        [ctx evaluateScript:source withSourceURL:url];
+    } else {
+        [ctx evaluateScript:source];
+    }
+    if (ctx.exception) {
+        g_engine_jsc_last_exception_message = [ctx.exception toString];
+        return -1;
+    }
+    return 0;
+}
+
+const char* engine_jsc_get_exception_message(void* ctx_opaque) {
+    (void)ctx_opaque;
+    if (!g_engine_jsc_last_exception_message) return NULL;
+    return [g_engine_jsc_last_exception_message UTF8String];
+}
+
+void engine_jsc_free_ctx(void* ctx_opaque, void* vm_opaque, const char* new_name) {
+    if (!ctx_opaque) return;
+    JSContext* ctx = (__bridge_transfer JSContext*)ctx_opaque;
+    ctx.exceptionHandler = nil;
+    [ctx evaluateScript:@"\
+        delete globalThis[Symbol.for('zapp.bridge')];\
+        delete globalThis.__zappBridge;\
+        delete globalThis.__zappWorkerDispatchId;\
+    "];
+    ctx[@"__zappBridge"] = [NSNull null];
+    ctx[@"self"] = [NSNull null];
+    ctx[@"globalThis"] = [NSNull null];
+    if (new_name && new_name[0]) {
+        ctx.name = [NSString stringWithUTF8String:new_name];
+    }
+    if (@available(macOS 13.3, *)) {
+        ctx.inspectable = NO;
+    }
+    JSGarbageCollect(ctx.JSGlobalContextRef);
+    if (vm_opaque) {
+        JSVirtualMachine* jvm = (__bridge JSVirtualMachine*)vm_opaque;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [jvm performSelector:@selector(garbageCollect) withObject:nil afterDelay:0.1];
+        });
+    }
+}
+#endif /* __APPLE__ */
+#endif
+}

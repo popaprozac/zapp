@@ -1,0 +1,274 @@
+// Win32-native HTTP fetch using WinHTTP (synchronous on background thread).
+
+//> windows: link: -lwinhttp
+
+raw {
+#ifdef _WIN32
+    #include <windows.h>
+    #include <winhttp.h>
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <string.h>
+
+    typedef struct {
+        int status;
+        char* status_text;
+        char** header_keys;
+        char** header_values;
+        int header_count;
+        char* body;
+        char* body_base64;
+    } zapp_fetch_response_t;
+
+    static void zapp_core_fetch_response_free(zapp_fetch_response_t* r) {
+        if (!r) return;
+        free(r->status_text);
+        for (int i = 0; i < r->header_count; i++) {
+            free(r->header_keys[i]);
+            free(r->header_values[i]);
+        }
+        free(r->header_keys);
+        free(r->header_values);
+        free(r->body);
+        free(r->body_base64);
+    }
+
+    // Callback function type for fetch completion
+    typedef void (*zapp_fetch_callback_fn)(zapp_fetch_response_t* response, const char* error, void* userdata);
+
+    typedef struct {
+        char* url;
+        char* method;
+        char** header_keys;
+        char** header_values;
+        int header_count;
+        char* body;
+        size_t body_len;
+        char worker_id[128];
+        zapp_fetch_callback_fn callback;
+        void* userdata;
+    } ZappFetchRequest;
+
+    static wchar_t* zapp_fetch_utf8_to_wide(const char* utf8) {
+        if (!utf8) return NULL;
+        int len = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
+        wchar_t* wide = (wchar_t*)malloc(len * sizeof(wchar_t));
+        MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wide, len);
+        return wide;
+    }
+
+    static char* zapp_fetch_wide_to_utf8(const wchar_t* wide) {
+        if (!wide) return NULL;
+        int len = WideCharToMultiByte(CP_UTF8, 0, wide, -1, NULL, 0, NULL, NULL);
+        char* utf8 = (char*)malloc(len);
+        WideCharToMultiByte(CP_UTF8, 0, wide, -1, utf8, len, NULL, NULL);
+        return utf8;
+    }
+
+    static DWORD WINAPI zapp_fetch_thread_proc(LPVOID param) {
+        ZappFetchRequest* req = (ZappFetchRequest*)param;
+        zapp_fetch_response_t response;
+        memset(&response, 0, sizeof(response));
+
+        HINTERNET hSession = NULL, hConnect = NULL, hRequest = NULL;
+        char* errorMsg = NULL;
+
+        // Parse URL components
+        wchar_t* wUrl = zapp_fetch_utf8_to_wide(req->url);
+        URL_COMPONENTSW urlComp;
+        memset(&urlComp, 0, sizeof(urlComp));
+        urlComp.dwStructSize = sizeof(urlComp);
+        wchar_t hostBuf[256] = {0};
+        wchar_t pathBuf[2048] = {0};
+        urlComp.lpszHostName = hostBuf;
+        urlComp.dwHostNameLength = 256;
+        urlComp.lpszUrlPath = pathBuf;
+        urlComp.dwUrlPathLength = 2048;
+
+        if (!WinHttpCrackUrl(wUrl, 0, 0, &urlComp)) {
+            errorMsg = _strdup("Invalid URL");
+            goto cleanup;
+        }
+
+        hSession = WinHttpOpen(L"Zapp/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                               WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+        if (!hSession) { errorMsg = _strdup("Failed to create HTTP session"); goto cleanup; }
+
+        hConnect = WinHttpConnect(hSession, hostBuf, urlComp.nPort, 0);
+        if (!hConnect) { errorMsg = _strdup("Failed to connect"); goto cleanup; }
+
+        wchar_t* wMethod = zapp_fetch_utf8_to_wide(req->method ? req->method : "GET");
+        DWORD flags = (urlComp.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
+        hRequest = WinHttpOpenRequest(hConnect, wMethod, pathBuf, NULL,
+                                       WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
+        free(wMethod);
+        if (!hRequest) { errorMsg = _strdup("Failed to create request"); goto cleanup; }
+
+        // Add headers
+        for (int i = 0; i < req->header_count; i++) {
+            if (req->header_keys[i] && req->header_values[i]) {
+                wchar_t header[1024];
+                wchar_t* wKey = zapp_fetch_utf8_to_wide(req->header_keys[i]);
+                wchar_t* wVal = zapp_fetch_utf8_to_wide(req->header_values[i]);
+                _snwprintf(header, 1024, L"%s: %s", wKey, wVal);
+                WinHttpAddRequestHeaders(hRequest, header, (DWORD)-1, WINHTTP_ADDREQ_FLAG_ADD);
+                free(wKey);
+                free(wVal);
+            }
+        }
+
+        // Send request
+        DWORD bodyLen = req->body ? (DWORD)req->body_len : 0;
+        if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                                req->body, bodyLen, bodyLen, 0)) {
+            errorMsg = _strdup("Failed to send request");
+            goto cleanup;
+        }
+
+        if (!WinHttpReceiveResponse(hRequest, NULL)) {
+            errorMsg = _strdup("Failed to receive response");
+            goto cleanup;
+        }
+
+        // Read status
+        DWORD statusCode = 0;
+        DWORD statusSize = sizeof(statusCode);
+        WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                           WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &statusSize, WINHTTP_NO_HEADER_INDEX);
+        response.status = (int)statusCode;
+
+        // Read status text
+        wchar_t statusTextBuf[256] = {0};
+        DWORD statusTextLen = sizeof(statusTextBuf);
+        if (WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_TEXT, WINHTTP_HEADER_NAME_BY_INDEX,
+                                statusTextBuf, &statusTextLen, WINHTTP_NO_HEADER_INDEX)) {
+            response.status_text = zapp_fetch_wide_to_utf8(statusTextBuf);
+        } else {
+            response.status_text = _strdup("OK");
+        }
+
+        // Read all headers
+        DWORD headerBufSize = 0;
+        WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_RAW_HEADERS_CRLF,
+                           WINHTTP_HEADER_NAME_BY_INDEX, NULL, &headerBufSize, WINHTTP_NO_HEADER_INDEX);
+        if (headerBufSize > 0) {
+            wchar_t* headerBuf = (wchar_t*)malloc(headerBufSize);
+            if (WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_RAW_HEADERS_CRLF,
+                                   WINHTTP_HEADER_NAME_BY_INDEX, headerBuf, &headerBufSize, WINHTTP_NO_HEADER_INDEX)) {
+                char* headerUtf8 = zapp_fetch_wide_to_utf8(headerBuf);
+                // Count headers (skip first status line)
+                int count = 0;
+                char* line = strtok(_strdup(headerUtf8), "\r\n");
+                if (line) line = strtok(NULL, "\r\n"); // skip status line
+                while (line) { if (strchr(line, ':')) count++; line = strtok(NULL, "\r\n"); }
+
+                if (count > 0) {
+                    response.header_keys = (char**)calloc(count, sizeof(char*));
+                    response.header_values = (char**)calloc(count, sizeof(char*));
+                    response.header_count = 0;
+
+                    char* copy = _strdup(headerUtf8);
+                    line = strtok(copy, "\r\n");
+                    if (line) line = strtok(NULL, "\r\n"); // skip status line
+                    while (line && response.header_count < count) {
+                        char* colon = strchr(line, ':');
+                        if (colon) {
+                            *colon = '\0';
+                            char* val = colon + 1;
+                            while (*val == ' ') val++;
+                            response.header_keys[response.header_count] = _strdup(line);
+                            response.header_values[response.header_count] = _strdup(val);
+                            response.header_count++;
+                        }
+                        line = strtok(NULL, "\r\n");
+                    }
+                    free(copy);
+                }
+                free(headerUtf8);
+            }
+            free(headerBuf);
+        }
+
+        // Read body
+        {
+            size_t totalSize = 0;
+            size_t bufCap = 65536;
+            char* bodyBuf = (char*)malloc(bufCap);
+            DWORD bytesRead = 0;
+
+            while (WinHttpReadData(hRequest, bodyBuf + totalSize,
+                                   (DWORD)(bufCap - totalSize - 1), &bytesRead) && bytesRead > 0) {
+                totalSize += bytesRead;
+                if (totalSize + 4096 >= bufCap) {
+                    bufCap *= 2;
+                    bodyBuf = (char*)realloc(bodyBuf, bufCap);
+                }
+            }
+            bodyBuf[totalSize] = '\0';
+            response.body = bodyBuf;
+        }
+
+    cleanup:
+        if (hRequest) WinHttpCloseHandle(hRequest);
+        if (hConnect) WinHttpCloseHandle(hConnect);
+        if (hSession) WinHttpCloseHandle(hSession);
+        free(wUrl);
+
+        if (req->callback) {
+            if (errorMsg) {
+                req->callback(NULL, errorMsg, req->userdata);
+            } else {
+                req->callback(&response, NULL, req->userdata);
+            }
+        }
+
+        zapp_core_fetch_response_free(&response);
+        free(errorMsg);
+
+        // Free the request
+        free(req->url);
+        free(req->method);
+        for (int i = 0; i < req->header_count; i++) {
+            free(req->header_keys[i]);
+            free(req->header_values[i]);
+        }
+        free(req->header_keys);
+        free(req->header_values);
+        free(req->body);
+        free(req);
+
+        return 0;
+    }
+
+    static void zapp_core_fetch_execute(
+        const char* url, const char* method,
+        const char** header_keys, const char** header_values, int header_count,
+        const char* body, size_t body_len,
+        const char* worker_id,
+        zapp_fetch_callback_fn callback, void* userdata
+    ) {
+        ZappFetchRequest* req = (ZappFetchRequest*)calloc(1, sizeof(ZappFetchRequest));
+        req->url = url ? _strdup(url) : NULL;
+        req->method = method ? _strdup(method) : NULL;
+        if (header_count > 0) {
+            req->header_keys = (char**)calloc(header_count, sizeof(char*));
+            req->header_values = (char**)calloc(header_count, sizeof(char*));
+            for (int i = 0; i < header_count; i++) {
+                req->header_keys[i] = header_keys[i] ? _strdup(header_keys[i]) : NULL;
+                req->header_values[i] = header_values[i] ? _strdup(header_values[i]) : NULL;
+            }
+            req->header_count = header_count;
+        }
+        if (body && body_len > 0) {
+            req->body = (char*)malloc(body_len);
+            memcpy(req->body, body, body_len);
+            req->body_len = body_len;
+        }
+        if (worker_id) strncpy(req->worker_id, worker_id, sizeof(req->worker_id) - 1);
+        req->callback = callback;
+        req->userdata = userdata;
+
+        CreateThread(NULL, 0, zapp_fetch_thread_proc, req, 0, NULL);
+    }
+#endif
+}

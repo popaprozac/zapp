@@ -1,0 +1,39 @@
+// JSC wrapper for btoa/atob. Delegates to core/base64_core.zc.
+
+//> macos: framework: JavaScriptCore
+
+raw {
+#ifdef __APPLE__
+    #include <Foundation/Foundation.h>
+    #include <JavaScriptCore/JavaScriptCore.h>
+
+    static char* zapp_core_btoa(const char* input);
+    static char* zapp_core_atob(const char* input);
+
+    void zapp_darwin_worker_base64_init(JSContext* ctx) {
+        JSValue* bridge = ctx[@"__zappBridge"];
+        if (bridge == nil || bridge.isUndefined) {
+            ctx[@"__zappBridge"] = [JSValue valueWithNewObjectInContext:ctx];
+            bridge = ctx[@"__zappBridge"];
+        }
+
+        bridge[@"btoa"] = ^NSString*(JSValue* strVal) {
+            if (strVal == nil || [strVal isUndefined] || [strVal isNull]) return @"";
+            const char* input = [[strVal toString] UTF8String];
+            char* result = zapp_core_btoa(input);
+            NSString* ns = [NSString stringWithUTF8String:result];
+            free(result);
+            return ns ?: @"";
+        };
+
+        bridge[@"atob"] = ^NSString*(JSValue* strVal) {
+            if (strVal == nil || [strVal isUndefined] || [strVal isNull]) return @"";
+            const char* input = [[strVal toString] UTF8String];
+            char* result = zapp_core_atob(input);
+            NSString* ns = [NSString stringWithUTF8String:result];
+            free(result);
+            return ns ?: @"";
+        };
+    }
+#endif
+}

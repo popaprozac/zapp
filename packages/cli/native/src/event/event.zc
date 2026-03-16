@@ -1,0 +1,24 @@
+struct App;
+
+struct EventManager {
+    app: App*;
+    send_event_to_js: fn*(App*, string, string);
+}
+
+impl EventManager {
+    fn new() -> Self {
+        return EventManager{ app: NULL, send_event_to_js: NULL };
+    }
+
+    fn emit(self, name: string, payload: string) -> void {
+        let _n = name;
+        let _p = payload;
+        if self.app != NULL && self.send_event_to_js != NULL {
+            raw {
+                typedef void (*SendFn)(void*, char*, char*);
+                SendFn cb = (SendFn)self->send_event_to_js;
+                cb((void*)self->app, (char*)name, (char*)payload);
+            }
+        }
+    }
+}

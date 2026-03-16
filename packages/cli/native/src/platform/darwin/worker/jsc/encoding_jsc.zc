@@ -1,0 +1,86 @@
+// JSC wrapper for TextEncoder/TextDecoder. Delegates to core/encoding_core.zc.
+
+//> macos: framework: JavaScriptCore
+
+raw {
+#ifdef __APPLE__
+    #include <Foundation/Foundation.h>
+    #include <JavaScriptCore/JavaScriptCore.h>
+
+    static uint8_t* zapp_core_text_encode(const char* input, size_t* out_len);
+    static char* zapp_core_text_decode(const uint8_t* bytes, size_t len);
+
+    static JSValue* zapp_jsc_create_uint8array(JSContext* ctx, const uint8_t* bytes, size_t len) {
+        JSContextRef ctxRef = ctx.JSGlobalContextRef;
+        JSValueRef exception = NULL;
+
+        JSStringRef u8Name = JSStringCreateWithUTF8CString("Uint8Array");
+        JSValueRef u8Ctor = JSObjectGetProperty(ctxRef, JSContextGetGlobalObject(ctxRef), u8Name, NULL);
+        JSStringRelease(u8Name);
+
+        if (len == 0 || bytes == NULL) {
+            JSValueRef args[1] = { JSValueMakeNumber(ctxRef, 0) };
+            JSObjectRef result = JSObjectCallAsConstructor(ctxRef, (JSObjectRef)u8Ctor, 1, args, &exception);
+            if (result && !exception) return [JSValue valueWithJSValueRef:result inContext:ctx];
+            return [JSValue valueWithUndefinedInContext:ctx];
+        }
+
+        JSValueRef args[1] = { JSValueMakeNumber(ctxRef, (double)len) };
+        JSObjectRef u8Arr = JSObjectCallAsConstructor(ctxRef, (JSObjectRef)u8Ctor, 1, args, &exception);
+        if (!u8Arr || exception) return [JSValue valueWithUndefinedInContext:ctx];
+
+        void* ptr = JSObjectGetTypedArrayBytesPtr(ctxRef, u8Arr, &exception);
+        if (ptr && !exception) memcpy(ptr, bytes, len);
+
+        return [JSValue valueWithJSValueRef:u8Arr inContext:ctx];
+    }
+
+    void zapp_darwin_worker_encoding_init(JSContext* ctx) {
+        JSValue* bridge = ctx[@"__zappBridge"];
+        if (bridge == nil || bridge.isUndefined) {
+            ctx[@"__zappBridge"] = [JSValue valueWithNewObjectInContext:ctx];
+            bridge = ctx[@"__zappBridge"];
+        }
+
+        bridge[@"textEncode"] = ^JSValue*(JSValue* strVal) {
+            if (strVal == nil || [strVal isUndefined] || [strVal isNull]) {
+                return zapp_jsc_create_uint8array(ctx, NULL, 0);
+            }
+            NSString* str = [strVal toString];
+            if (str == nil) return zapp_jsc_create_uint8array(ctx, NULL, 0);
+            size_t len = 0;
+            uint8_t* bytes = zapp_core_text_encode([str UTF8String], &len);
+            JSValue* result = zapp_jsc_create_uint8array(ctx, bytes, len);
+            free(bytes);
+            return result;
+        };
+
+        bridge[@"textDecode"] = ^NSString*(JSValue* bufVal) {
+            if (bufVal == nil || [bufVal isUndefined] || [bufVal isNull]) return @"";
+
+            JSContextRef ctxRef = ctx.JSGlobalContextRef;
+            JSValueRef valRef = bufVal.JSValueRef;
+            JSValueRef exception = NULL;
+            const uint8_t* bytes = NULL;
+            size_t len = 0;
+
+            JSTypedArrayType type = JSValueGetTypedArrayType(ctxRef, valRef, &exception);
+            if (type != kJSTypedArrayTypeNone && exception == NULL) {
+                bytes = (const uint8_t*)JSObjectGetTypedArrayBytesPtr(ctxRef, valRef, &exception);
+                size_t byteOffset = JSObjectGetTypedArrayByteOffset(ctxRef, valRef, &exception);
+                len = JSObjectGetTypedArrayByteLength(ctxRef, valRef, &exception);
+                if (bytes) bytes += byteOffset;
+            } else {
+                exception = NULL;
+                bytes = (const uint8_t*)JSObjectGetArrayBufferBytesPtr(ctxRef, valRef, &exception);
+                if (bytes && exception == NULL) len = JSObjectGetArrayBufferByteLength(ctxRef, valRef, &exception);
+            }
+
+            char* decoded = zapp_core_text_decode(bytes, len);
+            NSString* result = [NSString stringWithUTF8String:decoded];
+            free(decoded);
+            return result ?: @"";
+        };
+    }
+#endif
+}

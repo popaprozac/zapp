@@ -1,0 +1,209 @@
+// QJS worker timers: setTimer, clearTimer. Only built when ZAPP_WORKER_ENGINE_QJS.
+// Inlined after qjs.zc's QuickJS include so QJSContext/QJSValue are defined.
+
+@cfg(ZAPP_WORKER_ENGINE_QJS)
+raw {
+#ifdef ZAPP_WORKER_ENGINE_QJS
+#ifdef __APPLE__
+    #define JSContext QJSContext
+    #define JSRuntime QJSRuntime
+    #define JSValue QJSValue
+    #define JSClassID QJSClassID
+    #define JSClassDef QJSClassDef
+    #define JSClassEx QJSClassEx
+    #define JSValueConst QJSValueConst
+    #define JSPropertyEnum QJSPropertyEnum
+    #define JSPropertyDescriptor QJSPropertyDescriptor
+    #include "quickjs.h"
+    #include "quickjs-libc.h"
+    /* Do not #undef here: JS_UNDEFINED/JS_MKVAL etc. expand (JSValue){...} at use site;
+       later modules (fetch, crypto) and qjs need the macro active. */
+
+    static void qjs_call_bridge_method(QJSContext* ctx, NSString* methodName, int argc, QJSValue* argv);
+
+    extern NSValue* zapp_darwin_qjs_get_context(NSString* workerId);
+    extern dispatch_queue_t zapp_darwin_qjs_get_queue(void);
+    extern void zapp_darwin_qjs_drain_jobs(void* ctx, const char* label);
+
+    static NSMutableDictionary<NSString*, NSMutableDictionary<NSNumber*, id>*>* qjs_timers = nil;
+    static NSInteger qjs_next_timer_id = 1;
+    static const NSInteger qjs_max_timers_per_worker = 256;
+    static const double qjs_min_interval_ms = 4.0;
+
+    static QJSValue qjs_bridge_setTimer(QJSContext *ctx, QJSValue this_val, int argc, QJSValue *argv, int magic, QJSValue *func_data) {
+        if (argc < 3) return JS_NewInt32(ctx, 0);
+
+        const char *worker_id = JS_ToCString(ctx, func_data[0]);
+        if (!worker_id) return JS_NewInt32(ctx, 0);
+
+        QJSValue fnVal = argv[0];
+        if (!JS_IsFunction(ctx, fnVal)) {
+            JS_FreeCString(ctx, worker_id);
+            return JS_NewInt32(ctx, 0);
+        }
+
+        double ms = 0;
+        JS_ToFloat64(ctx, &ms, argv[1]);
+        if (!(ms >= 0)) ms = 0;
+
+        int shouldRepeat = JS_ToBool(ctx, argv[2]);
+        if (shouldRepeat && ms < qjs_min_interval_ms) {
+            ms = qjs_min_interval_ms;
+        }
+
+        NSString* wId = [NSString stringWithUTF8String:worker_id];
+        JS_FreeCString(ctx, worker_id);
+
+        dispatch_queue_t qjs_queue = zapp_darwin_qjs_get_queue();
+        if (!qjs_queue) return JS_NewInt32(ctx, 0);
+
+        if (!qjs_timers) qjs_timers = [NSMutableDictionary dictionary];
+        NSMutableDictionary<NSNumber*, id>* timers = qjs_timers[wId];
+        if (!timers) {
+            timers = [NSMutableDictionary dictionary];
+            qjs_timers[wId] = timers;
+        }
+
+        if ([timers count] >= qjs_max_timers_per_worker) {
+            return JS_NewInt32(ctx, 0);
+        }
+
+        NSInteger nextId = qjs_next_timer_id++;
+        NSNumber* timerId = @(nextId);
+        uint64_t intervalNs = (uint64_t)(ms * (double)NSEC_PER_MSEC);
+        if (intervalNs == 0) intervalNs = 1 * NSEC_PER_MSEC;
+
+        dispatch_source_t src = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, qjs_queue);
+        if (src == nil) return JS_NewInt32(ctx, 0);
+
+        dispatch_source_set_timer(
+            src,
+            dispatch_time(DISPATCH_TIME_NOW, (int64_t)intervalNs),
+            shouldRepeat ? intervalNs : DISPATCH_TIME_FOREVER,
+            1 * NSEC_PER_MSEC
+        );
+
+        QJSValue savedFn = JS_DupValue(ctx, fnVal);
+        QJSContext* creating_ctx = ctx;
+        __block BOOL isFreed = NO;
+        __block __weak dispatch_source_t weakSrc = src;
+
+        dispatch_source_set_event_handler(src, ^{
+            dispatch_source_t strongSrc = weakSrc;
+            NSValue* val = zapp_darwin_qjs_get_context(wId);
+            if (!val) {
+                if (strongSrc) dispatch_source_cancel(strongSrc);
+                return;
+            }
+
+            QJSContext* current_ctx = (QJSContext*)[val pointerValue];
+            if (current_ctx != creating_ctx) {
+                if (strongSrc) dispatch_source_cancel(strongSrc);
+                return;
+            }
+
+            QJSValue ret = JS_Call(current_ctx, savedFn, JS_UNDEFINED, 0, NULL);
+            if (JS_IsException(ret)) {
+                QJSValue exception = JS_GetException(current_ctx);
+                QJSValue args[1];
+                args[0] = JS_DupValue(current_ctx, exception);
+                qjs_call_bridge_method(current_ctx, @"reportError", 1, args);
+                JS_FreeValue(current_ctx, args[0]);
+                JS_FreeValue(current_ctx, exception);
+            }
+            JS_FreeValue(current_ctx, ret);
+
+            zapp_darwin_qjs_drain_jobs(current_ctx, "timer");
+
+            if (!shouldRepeat) {
+                if (strongSrc) dispatch_source_cancel(strongSrc);
+            }
+        });
+
+        dispatch_source_set_cancel_handler(src, ^{
+            if (!isFreed) {
+                NSValue* val = zapp_darwin_qjs_get_context(wId);
+                if (val) {
+                    QJSContext* current_ctx = (QJSContext*)[val pointerValue];
+                    if (current_ctx == creating_ctx) {
+                        JS_FreeValue(current_ctx, savedFn);
+                    }
+                }
+                isFreed = YES;
+            }
+            [timers removeObjectForKey:timerId];
+        });
+
+        timers[timerId] = src;
+        dispatch_resume(src);
+
+        return JS_NewInt32(ctx, (int32_t)nextId);
+    }
+
+    static QJSValue qjs_bridge_clearTimer(QJSContext *ctx, QJSValue this_val, int argc, QJSValue *argv, int magic, QJSValue *func_data) {
+        if (argc < 1) return JS_UNDEFINED;
+
+        const char *worker_id = JS_ToCString(ctx, func_data[0]);
+        if (!worker_id) return JS_UNDEFINED;
+
+        int32_t tId = 0;
+        JS_ToInt32(ctx, &tId, argv[0]);
+
+        NSString* wId = [NSString stringWithUTF8String:worker_id];
+        JS_FreeCString(ctx, worker_id);
+
+        if (qjs_timers) {
+            NSMutableDictionary<NSNumber*, id>* timers = qjs_timers[wId];
+            if (timers) {
+                NSNumber* timerId = @((NSInteger)tId);
+                dispatch_source_t src = (dispatch_source_t)timers[timerId];
+                if (src) {
+                    dispatch_source_cancel(src);
+                }
+            }
+        }
+
+        return JS_UNDEFINED;
+    }
+
+    void zapp_darwin_qjs_timers_cancel(NSString* workerId) {
+        if (workerId == nil || qjs_timers == nil) return;
+
+        NSMutableDictionary<NSNumber*, id>* timers = qjs_timers[workerId];
+        if (timers == nil) return;
+
+        for (NSNumber* key in [timers allKeys]) {
+            dispatch_source_t src = (dispatch_source_t)timers[key];
+            if (src != nil) {
+                dispatch_source_cancel(src);
+            }
+        }
+
+        [qjs_timers removeObjectForKey:workerId];
+    }
+
+    void zapp_darwin_qjs_timers_cancel_all(void) {
+        if (qjs_timers != nil) {
+            NSArray<NSString*>* workerIds = [qjs_timers allKeys];
+            for (NSString* workerId in workerIds) {
+                zapp_darwin_qjs_timers_cancel(workerId);
+            }
+            [qjs_timers removeAllObjects];
+        }
+    }
+
+    void zapp_darwin_qjs_timers_install(QJSContext* ctx, QJSValue bridge, const char* worker_id) {
+        QJSValue wIdVal = JS_NewString(ctx, worker_id);
+        QJSValue funcData[1] = { wIdVal };
+
+        QJSValue setTimerFunc = JS_NewCFunctionData(ctx, qjs_bridge_setTimer, 3, 0, 1, funcData);
+        JS_SetPropertyStr(ctx, bridge, "setTimer", setTimerFunc);
+
+        QJSValue clearTimerFunc = JS_NewCFunctionData(ctx, qjs_bridge_clearTimer, 1, 0, 1, funcData);
+        JS_SetPropertyStr(ctx, bridge, "clearTimer", clearTimerFunc);
+
+        JS_FreeValue(ctx, wIdVal);
+    }
+#endif /* __APPLE__ */
+#endif
+}

@@ -1,8 +1,13 @@
 {
   "name": "@zapp/runtime",
-  "private": true,
+  "version": "0.1.0",
   "type": "module",
-  "version": "0.0.0",
+  "description": "Frontend runtime API for Zapp desktop apps",
   "main": "index.ts",
-  "types": "index.ts"
+  "types": "index.ts",
+  "files": [
+    "*.ts",
+    "src/"
+  ],
+  "license": "MIT"
 }
