@@ -1,9 +1,10 @@
 // Shared QJS wrapper for crypto. Delegates to platform-specific core/crypto_core.zc.
 
 raw {
+#include "quickjs.h"
 #if defined(ZAPP_WORKER_ENGINE_QJS) || defined(_WIN32)
-    static void zapp_core_crypto_random_bytes(uint8_t* buf, size_t len);
-    static char* zapp_core_crypto_random_uuid(void);
+    void zapp_core_crypto_random_bytes(uint8_t* buf, size_t len);
+    char* zapp_core_crypto_random_uuid(void);
 
     static JSValue qjs_bridge_getRandomValues(JSContext* ctx, JSValue this_val, int argc, JSValue* argv) {
         (void)this_val;

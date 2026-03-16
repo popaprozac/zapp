@@ -7,7 +7,7 @@ raw {
     #include <stdlib.h>
     #include <string.h>
 
-    static char* zapp_core_btoa(const char* input) {
+    char* zapp_core_btoa(const char* input) {
         if (input == NULL || input[0] == '\0') return _strdup("");
         DWORD inputLen = (DWORD)strlen(input);
         DWORD b64Len = 0;
@@ -30,7 +30,7 @@ raw {
         return b64;
     }
 
-    static char* zapp_core_atob(const char* input) {
+    char* zapp_core_atob(const char* input) {
         if (input == NULL || input[0] == '\0') return _strdup("");
         DWORD inputLen = (DWORD)strlen(input);
         DWORD binLen = 0;

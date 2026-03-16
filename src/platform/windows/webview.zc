@@ -127,11 +127,7 @@ raw {
     extern int app_get_bootstrap_max_workers(void);
     extern void zapp_handle_message(void* app_ptr, char* msg_c);
     extern char* service_get_bindings_manifest_json(void);
-    extern const char* zapp_build_asset_root(void);
     extern const char* zapp_build_initial_url(void);
-    extern int zapp_build_is_dev_mode(void);
-    extern int zapp_build_use_embedded_assets(void);
-
     extern const char* zapp_windows_webview_bootstrap_script(void);
 
     // ---------------------------------------------------------------------------
@@ -139,6 +135,7 @@ raw {
     // ---------------------------------------------------------------------------
 
     #define ZAPP_MAX_WINDOWS 64
+    #define WM_ZAPP_EVAL_JS (WM_APP + 1)
 
     typedef struct {
         HWND hwnd;
@@ -146,11 +143,12 @@ raw {
         ICoreWebView2* webview;
         char ownerId[64];
         BOOL in_use;
+        WINDOWPLACEMENT prevPlacement;
     } ZappWindowEntry;
 
     static ZappWindowEntry zapp_windows[ZAPP_MAX_WINDOWS] = {0};
 
-    static ZappWindowEntry* zapp_window_entry_for_hwnd(HWND hwnd) {
+    ZappWindowEntry* zapp_window_entry_for_hwnd(HWND hwnd) {
         for (int i = 0; i < ZAPP_MAX_WINDOWS; i++) {
             if (zapp_windows[i].in_use && zapp_windows[i].hwnd == hwnd)
                 return &zapp_windows[i];
@@ -191,23 +189,7 @@ raw {
         return utf8;
     }
 
-    static const char* zapp_mime_for_path(const char* path) {
-        if (!path) return "application/octet-stream";
-        const char* ext = strrchr(path, '.');
-        if (!ext) return "application/octet-stream";
-        if (_stricmp(ext, ".html") == 0) return "text/html; charset=utf-8";
-        if (_stricmp(ext, ".js") == 0 || _stricmp(ext, ".mjs") == 0) return "application/javascript; charset=utf-8";
-        if (_stricmp(ext, ".css") == 0) return "text/css; charset=utf-8";
-        if (_stricmp(ext, ".json") == 0) return "application/json; charset=utf-8";
-        if (_stricmp(ext, ".svg") == 0) return "image/svg+xml";
-        if (_stricmp(ext, ".png") == 0) return "image/png";
-        if (_stricmp(ext, ".jpg") == 0 || _stricmp(ext, ".jpeg") == 0) return "image/jpeg";
-        if (_stricmp(ext, ".woff2") == 0) return "font/woff2";
-        if (_stricmp(ext, ".map") == 0) return "application/json; charset=utf-8";
-        return "application/octet-stream";
-    }
-
-    static char* zapp_escape_js_string(const char* raw) {
+    char* zapp_escape_js_string(const char* raw) {
         if (!raw) return _strdup("");
         size_t len = strlen(raw);
         size_t cap = len * 2 + 1;
@@ -574,9 +556,16 @@ raw {
         }
     }
 
+    extern void zapp_windows_reset_owner_workers(const char* owner_id);
+    extern void zapp_win_unregister_by_hwnd(HWND hwnd);
+
     void zapp_windows_webview_detach(HWND hwnd) {
         ZappWindowEntry* entry = zapp_window_entry_for_hwnd(hwnd);
         if (entry) {
+            if (entry->ownerId[0]) {
+                zapp_windows_reset_owner_workers(entry->ownerId);
+            }
+            zapp_win_unregister_by_hwnd(hwnd);
             if (entry->controller) {
                 ICoreWebView2Controller_Close(entry->controller);
                 ICoreWebView2Controller_Release(entry->controller);
@@ -588,6 +577,38 @@ raw {
         }
     }
 
+    HWND zapp_get_first_hwnd(void) {
+        for (int i = 0; i < ZAPP_MAX_WINDOWS; i++) {
+            if (zapp_windows[i].in_use && zapp_windows[i].hwnd)
+                return zapp_windows[i].hwnd;
+        }
+        return NULL;
+    }
+
+    void zapp_windows_webview_navigate(HWND hwnd, const char* url_utf8) {
+        ZappWindowEntry* entry = zapp_window_entry_for_hwnd(hwnd);
+        if (entry && entry->webview && url_utf8) {
+            const char* initialUrl = zapp_build_initial_url();
+            char resolved[2048];
+            if (strncmp(url_utf8, "http://", 7) == 0 || strncmp(url_utf8, "https://", 8) == 0 || strncmp(url_utf8, "zapp://", 7) == 0) {
+                strncpy(resolved, url_utf8, sizeof(resolved) - 1);
+            } else if (initialUrl && strncmp(initialUrl, "http", 4) == 0) {
+                snprintf(resolved, sizeof(resolved), "%s%s%s",
+                    initialUrl,
+                    url_utf8[0] == '/' ? "" : "/",
+                    url_utf8);
+            } else {
+                snprintf(resolved, sizeof(resolved), "zapp://app%s%s",
+                    url_utf8[0] == '/' ? "" : "/",
+                    url_utf8);
+            }
+            resolved[sizeof(resolved) - 1] = '\0';
+            wchar_t* wUrl = zapp_utf8_to_wide(resolved);
+            ICoreWebView2_Navigate(entry->webview, wUrl);
+            free(wUrl);
+        }
+    }
+
     // Execute JS in a specific window's webview
     void zapp_windows_webview_eval(HWND hwnd, const wchar_t* js) {
         ZappWindowEntry* entry = zapp_window_entry_for_hwnd(hwnd);
@@ -596,13 +617,28 @@ raw {
         }
     }
 
-    // Execute JS in ALL webviews (for dispatching events/results)
-    void zapp_windows_webview_eval_all(const char* js_utf8) {
-        wchar_t* wJs = zapp_utf8_to_wide(js_utf8);
+    // Execute JS in ALL webviews on the UI thread.
+    // Called from ZappWindowProc via WM_ZAPP_EVAL_JS.
+    void zapp_windows_webview_eval_all_ui(wchar_t* wJs) {
         if (!wJs) return;
         for (int i = 0; i < ZAPP_MAX_WINDOWS; i++) {
             if (zapp_windows[i].in_use && zapp_windows[i].webview) {
                 ICoreWebView2_ExecuteScript(zapp_windows[i].webview, wJs, NULL);
+            }
+        }
+        free(wJs);
+    }
+
+    // Thread-safe: posts JS to the UI message loop so ExecuteScript
+    // runs on the thread that owns the WebView2 COM objects.
+    void zapp_windows_webview_eval_all(const char* js_utf8) {
+        wchar_t* wJs = zapp_utf8_to_wide(js_utf8);
+        if (!wJs) return;
+        // Find any in-use window to post the message to
+        for (int i = 0; i < ZAPP_MAX_WINDOWS; i++) {
+            if (zapp_windows[i].in_use && zapp_windows[i].hwnd) {
+                PostMessageW(zapp_windows[i].hwnd, WM_ZAPP_EVAL_JS, 0, (LPARAM)wJs);
+                return;
             }
         }
         free(wJs);

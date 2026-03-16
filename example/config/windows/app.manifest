@@ -5,7 +5,7 @@
     name="com.zapp.example"
     version="1.0.0.0"
   />
-  <description>Zapp Example App</description>
+  <description>example</description>
 
   <!-- Enable visual styles (modern controls) -->
   <dependency>

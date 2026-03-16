@@ -19,8 +19,8 @@ const parseFlag = (name: string, fallback: string): string => {
 
 const command = process.argv[2] ?? "help";
 const root = path.resolve(cwd, parseFlag("--root", "."));
-const frontendDir = path.resolve(root, parseFlag("--frontend", "frontend"));
-const buildFile = path.resolve(root, parseFlag("--input", parseFlag("--build-file", "build.zc")));
+const frontendDir = path.resolve(root, parseFlag("--frontend", "."));
+const buildFile = path.resolve(root, parseFlag("--input", parseFlag("--build-file", "zapp/build.zc")));
 const defaultOut = process.platform === "win32" ? "zapp.exe" : "zapp";
 const nativeOut = path.resolve(root, parseFlag("--out", defaultOut));
 const assetDir = path.resolve(frontendDir, parseFlag("--asset-dir", "dist"));
@@ -78,13 +78,13 @@ const main = async () => {
       "Common flags:",
       "  --root <path>",
       "  --frontend <path>",
-      "  --input <path>       Build file (default: build.zc, alias: --build-file)",
+      "  --input <path>       Build file (default: zapp/build.zc, alias: --build-file)",
       "  --out <path>",
       "  --dev-url <url>",
       "",
       "Optional flags:",
       "  --asset-dir <path>",
-      "  --backend <path>  Backend script (default: auto-detect backend.ts in root)",
+      "  --backend <path>  Backend script (default: auto-detect zapp/backend.ts)",
       "  --embed-assets    Embed all frontend assets in the binary",
       "  --brotli          Brotli-compress embedded assets (requires --embed-assets)",
       "",

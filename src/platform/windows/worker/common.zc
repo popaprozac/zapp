@@ -105,7 +105,7 @@ raw {
     // Minimal JSON field extraction (avoids needing a JSON parser library)
     // -----------------------------------------------------------------------
 
-    static char* zapp_json_get_string(const char* json, const char* key) {
+    char* zapp_json_get_string(const char* json, const char* key) {
         if (!json || !key) return NULL;
         char pattern[256];
         snprintf(pattern, sizeof(pattern), "\"%s\":\"", key);
@@ -124,7 +124,7 @@ raw {
         return result;
     }
 
-    static int zapp_json_get_bool(const char* json, const char* key, int default_val) {
+    int zapp_json_get_bool(const char* json, const char* key, int default_val) {
         if (!json || !key) return default_val;
         char pattern[256];
         snprintf(pattern, sizeof(pattern), "\"%s\":", key);
@@ -137,8 +137,19 @@ raw {
         return default_val;
     }
 
-    // Extract raw JSON value for a key (for passing data objects)
-    static char* zapp_json_get_raw(const char* json, const char* key) {
+    int zapp_json_get_int(const char* json, const char* key, int default_val) {
+        if (!json || !key) return default_val;
+        char pattern[256];
+        snprintf(pattern, sizeof(pattern), "\"%s\":", key);
+        const char* start = strstr(json, pattern);
+        if (!start) return default_val;
+        start += strlen(pattern);
+        while (*start == ' ') start++;
+        if (*start == '-' || (*start >= '0' && *start <= '9')) return atoi(start);
+        return default_val;
+    }
+
+    char* zapp_json_get_raw(const char* json, const char* key) {
         if (!json || !key) return NULL;
         char pattern[256];
         snprintf(pattern, sizeof(pattern), "\"%s\":", key);

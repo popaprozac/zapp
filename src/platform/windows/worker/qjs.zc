@@ -10,6 +10,14 @@ import "./core/base64_core.zc";
 import "./core/crypto_core.zc";
 import "./core/fetch_core.zc";
 import "./core/websocket_core.zc";
+
+raw {
+#ifdef _WIN32
+    #include "quickjs.h"
+    #include "quickjs-libc.h"
+#endif
+}
+
 import "../../shared/worker/qjs/encoding_qjs.zc";
 import "../../shared/worker/qjs/url_qjs.zc";
 import "../../shared/worker/qjs/base64_qjs.zc";
@@ -24,8 +32,6 @@ raw {
 #ifdef _WIN32
     #include <windows.h>
     #include <stdio.h>
-    #include "quickjs.h"
-    #include "quickjs-libc.h"
 
     extern void* engine_qjs_create_ctx(void* rt);
     extern int engine_qjs_eval(void* ctx, const char* utf8, size_t len, const char* filename);
@@ -474,6 +480,12 @@ raw {
             zapp_windows_qjs_timers_cancel(workerId);
 
             if (isShared && scriptUrl) {
+                JSContext* ctx = (JSContext*)ctx_ptr;
+                JSValue args[1];
+                args[0] = JS_NewString(ctx, workerId);
+                qjs_call_bridge_method(ctx, "dispatchDisconnect", 1, args);
+                JS_FreeValue(ctx, args[0]);
+
                 intptr_t rc = (intptr_t)zapp_map_get(&qjs_shared_refs, scriptUrl);
                 rc--;
                 if (rc > 0) {
@@ -748,6 +760,14 @@ raw {
         zapp_windows_qjs_timers_cancel(d->workerId);
 
         if (d->isShared && d->scriptUrl[0]) {
+            JSContext* ctx = (JSContext*)d->ctx_ptr;
+            if (ctx) {
+                JSValue args[1];
+                args[0] = JS_NewString(ctx, d->workerId);
+                qjs_call_bridge_method(ctx, "dispatchDisconnect", 1, args);
+                JS_FreeValue(ctx, args[0]);
+            }
+
             intptr_t rc = (intptr_t)zapp_map_get(&qjs_shared_refs, d->scriptUrl);
             rc--;
             if (rc > 0) {
@@ -797,11 +817,81 @@ raw {
 #endif
 }
 
+raw {
+#ifdef _WIN32
+    typedef struct {
+        char* name;
+        char* payload;
+    } ZappEventFanoutData;
+
+    static void zapp_event_fanout_on_qjs_thread(void* data) {
+        ZappEventFanoutData* d = (ZappEventFanoutData*)data;
+
+        void* seen[ZAPP_MAP_MAX];
+        int seen_count = 0;
+        for (int i = 0; i < ZAPP_MAP_MAX; i++) {
+            if (qjs_contexts.entries[i].key[0] == '\0') continue;
+            JSContext* ctx = (JSContext*)qjs_contexts.entries[i].val;
+            if (!ctx) continue;
+
+            int already_seen = 0;
+            for (int j = 0; j < seen_count; j++) {
+                if (seen[j] == ctx) { already_seen = 1; break; }
+            }
+            if (already_seen) continue;
+            if (seen_count < ZAPP_MAP_MAX) seen[seen_count++] = ctx;
+
+            JSValue args[2];
+            args[0] = JS_NewString(ctx, d->name);
+            args[1] = JS_NewString(ctx, d->payload);
+            qjs_call_bridge_method(ctx, "deliverEvent", 2, args);
+            JS_FreeValue(ctx, args[0]);
+            JS_FreeValue(ctx, args[1]);
+        }
+        free(d->name);
+        free(d->payload);
+        free(d);
+    }
+
+    static void zapp_windows_send_event_to_js(void* app_ptr, char* name, char* payload) {
+        (void)app_ptr;
+        if (name == NULL) return;
+        if (payload == NULL) payload = "{}";
+
+        // 1. Deliver to all webviews (thread-safe via PostMessage)
+        char* escaped_name = zapp_escape_js_string(name);
+        char* escaped_payload = zapp_escape_js_string(payload);
+        size_t jsLen = strlen(escaped_name) + strlen(escaped_payload) + 256;
+        char* js = (char*)malloc(jsLen);
+        snprintf(js, jsLen,
+            "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+            "if(b&&typeof b.deliverEvent==='function'){b.deliverEvent('%s','%s');}})();",
+            escaped_name, escaped_payload
+        );
+        zapp_windows_webview_eval_all(js);
+        free(js);
+        free(escaped_name);
+        free(escaped_payload);
+
+        // 2. Deliver to all QJS worker contexts on the QJS thread
+        if (!qjs_initialized) return;
+        ZappEventFanoutData* d = (ZappEventFanoutData*)calloc(1, sizeof(ZappEventFanoutData));
+        d->name = _strdup(name);
+        d->payload = _strdup(payload);
+        zapp_windows_qjs_dispatch(zapp_event_fanout_on_qjs_thread, d);
+    }
+#endif
+}
+
 struct WindowsWorkerQjs {}
 
 impl WorkerBackend for WindowsWorkerQjs {
     fn bind_runtime(self, app: App*) -> void {
-        let _ = app;
+        raw {
+        #ifdef _WIN32
+            app->event.send_event_to_js = (void*)zapp_windows_send_event_to_js;
+        #endif
+        }
     }
 
     fn handle_bridge(self, app: App*, action: string, payload: string) -> void {
@@ -836,12 +926,14 @@ impl WorkerBackend for WindowsWorkerQjs {
                 char* scriptUrl = zapp_json_get_string(payloadStr, "scriptUrl");
                 if (!scriptUrl) { free(workerId); if (ownerId) free(ownerId); return; }
 
+                int maxW = app->config.maxWorkers;
+
                 ZappCreateWorkerData* d = (ZappCreateWorkerData*)calloc(1, sizeof(ZappCreateWorkerData));
                 strncpy(d->workerId, workerId, sizeof(d->workerId) - 1);
                 if (ownerId) strncpy(d->ownerId, ownerId, sizeof(d->ownerId) - 1);
                 strncpy(d->scriptUrl, scriptUrl, sizeof(d->scriptUrl) - 1);
                 d->shared = shared;
-                d->maxWorkers = app->config.maxWorkers;
+                d->maxWorkers = maxW;
                 d->inspectable = app->config.webContentInspectable;
 
                 zapp_windows_qjs_dispatch(zapp_qjs_create_worker_on_thread, d);

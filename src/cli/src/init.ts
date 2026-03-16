@@ -14,7 +14,7 @@ export const runInit = async ({
   withBackend: boolean;
 }) => {
   const projectDir = path.resolve(root, name);
-  const frontendDir = path.join(projectDir, "frontend");
+  const zappDir = path.join(projectDir, "zapp");
   const configDir = path.join(projectDir, "config");
   const darwinConfigDir = path.join(configDir, "darwin");
   const windowsConfigDir = path.join(configDir, "windows");
@@ -22,13 +22,15 @@ export const runInit = async ({
   console.log(`Scaffolding Zapp project in ${projectDir}...`);
 
   await mkdir(projectDir, { recursive: true });
+
+  console.log(`Creating Vite project with template: ${template}...`);
+  await spawnStreaming("bun", ["create", "vite", ".", "--template", template], { cwd: projectDir }).exited;
+
+  await mkdir(zappDir, { recursive: true });
   await mkdir(darwinConfigDir, { recursive: true });
   await mkdir(windowsConfigDir, { recursive: true });
 
-  console.log(`Creating frontend with Vite template: ${template}...`);
-  await spawnStreaming("bun", ["create", "vite", "frontend", "--template", template], { cwd: projectDir }).exited;
-
-  const pkgPath = path.join(frontendDir, "package.json");
+  const pkgPath = path.join(projectDir, "package.json");
   let pkgObj: any = {};
   try {
     const pkgFile = Bun.file(pkgPath);
@@ -44,6 +46,9 @@ export const runInit = async ({
   pkgObj.devDependencies["@zapp/vite"] = "latest";
   pkgObj.dependencies = pkgObj.dependencies || {};
   pkgObj.dependencies["@zapp/runtime"] = "latest";
+  if (withBackend) {
+    pkgObj.dependencies["@zapp/backend"] = "latest";
+  }
 
   await Bun.write(pkgPath, JSON.stringify(pkgObj, null, 2));
 
@@ -57,21 +62,13 @@ fn run_app() -> int {
         maxWorkers: 50,
     };
     let app = App::new(config);
-    app.window.create(&WindowOptions{
-        title: "${name}",
-        width: 1200,
-        height: 800,
-        x: 80,
-        y: 80,
-        visible: true,
-        titleBarStyle: WINDOW_TITLEBAR_STYLE_DEFAULT,
-    });
     return app.run();
 }
 `;
-  await Bun.write(path.join(projectDir, "app.zc"), appZcContent);
+  await Bun.write(path.join(zappDir, "app.zc"), appZcContent);
 
   const buildZcContent = `// --- Baseline macOS Directives ---
+//> macos: define: __APPLE__
 //> macos: framework: Cocoa
 //> macos: framework: WebKit
 //> macos: framework: CoreFoundation
@@ -82,6 +79,7 @@ fn run_app() -> int {
 // ---------------------------------
 
 // --- Windows Directives (QuickJS default) ---
+//> windows: define: _WIN32
 //> windows: cflags: -DUNICODE -D_UNICODE -DCINTERFACE -DCOBJMACROS
 //> windows: cflags: -I../vendor/webview2/include
 //> windows: cflags: -I../vendor/quickjs-ng
@@ -98,46 +96,15 @@ fn main() -> int {
     return run_app();
 }
 `;
-  await Bun.write(path.join(projectDir, "build.zc"), buildZcContent);
+  await Bun.write(path.join(zappDir, "build.zc"), buildZcContent);
 
   if (withBackend) {
-    const rootPkgContent = JSON.stringify(
-      {
-        name,
-        private: true,
-        type: "module",
-        dependencies: {
-          "@zapp/runtime": "latest",
-          "@zapp/backend": "latest",
-        },
-      },
-      null,
-      2,
-    );
-    await Bun.write(path.join(projectDir, "package.json"), rootPkgContent);
-
-    const rootTsConfig = JSON.stringify(
-      {
-        compilerOptions: {
-          target: "ES2022",
-          module: "ESNext",
-          moduleResolution: "bundler",
-          strict: true,
-          noEmit: true,
-        },
-        include: ["backend.ts"],
-      },
-      null,
-      2,
-    );
-    await Bun.write(path.join(projectDir, "tsconfig.json"), rootTsConfig);
-
     const backendContent = `import { App } from "@zapp/backend";
 
 // Your backend TypeScript runs in a privileged native context
 // with direct access to native bridge, window management, and app lifecycle.
 `;
-    await Bun.write(path.join(projectDir, "backend.ts"), backendContent);
+    await Bun.write(path.join(zappDir, "backend.ts"), backendContent);
   }
 
   const plistContent = `<?xml version="1.0" encoding="UTF-8"?>
@@ -207,16 +174,7 @@ fn main() -> int {
 
   console.log(`\nProject ${name} scaffolded successfully!`);
   console.log(`Next steps:`);
-  if (withBackend) {
-    console.log(`  cd ${name}`);
-    console.log(`  bun install`);
-    console.log(`  cd frontend`);
-    console.log(`  bun install`);
-    console.log(`  cd ..`);
-  } else {
-    console.log(`  cd ${name}/frontend`);
-    console.log(`  bun install`);
-    console.log(`  cd ..`);
-  }
+  console.log(`  cd ${name}`);
+  console.log(`  bun install`);
   console.log(`  zapp dev`);
 };

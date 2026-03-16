@@ -3,7 +3,7 @@ import process from "node:process";
 import { mkdir } from "node:fs/promises";
 import { runCmd } from "./common";
 
-const BACKEND_CONVENTIONS = ["backend.ts", "backend.js"];
+const BACKEND_CONVENTIONS = ["zapp/backend.ts", "zapp/backend.js", "backend.ts", "backend.js"];
 
 async function findBackendScript(root: string): Promise<string | null> {
   for (const name of BACKEND_CONVENTIONS) {

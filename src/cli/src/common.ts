@@ -1,4 +1,4 @@
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, execSync, type ChildProcess } from "node:child_process";
 import process from "node:process";
 
 export const sleep = (ms: number) => Bun.sleep(ms);
@@ -49,6 +49,13 @@ export const spawnStreaming = (command: string, args: string[], options: any = {
 
 export const killChild = (child: import("bun").Subprocess | null | any) => {
   if (!child || child.killed) return;
+  const pid = child.pid;
+  if (process.platform === "win32" && pid) {
+    try {
+      execSync(`taskkill /F /T /PID ${pid}`, { stdio: "ignore" });
+      return;
+    } catch { /* process may already be gone */ }
+  }
   try {
     child.kill("SIGTERM");
   } catch {

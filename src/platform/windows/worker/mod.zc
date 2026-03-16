@@ -4,6 +4,11 @@ import "../../worker.zc";
 import "./qjs.zc";
 
 fn windows_platform_bind_runtime(app: App*) -> void {
+    raw {
+    #ifdef _WIN32
+        zapp_ui_thread_id = GetCurrentThreadId();
+    #endif
+    }
     (WindowsWorkerQjs{}).bind_runtime(app);
 }
 

@@ -1,0 +1,17 @@
+import "../../src/app/app.zc";
+
+fn ping_service(app: App*, args: string) -> string {
+    return args;
+}
+
+fn run_app() -> int {
+    let config = AppConfig{ 
+        name: "Zapp Playground", 
+        applicationShouldTerminateAfterLastWindowClosed: false,
+        webContentInspectable: true,
+        maxWorkers: 50,
+    };
+    let app = App::new(config);
+    app.service.add("ping", ping_service);
+    return app.run();
+}

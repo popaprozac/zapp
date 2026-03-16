@@ -1,2 +1,3 @@
-2026/03/15-13:10:22.580 145d10 Creating DB C:\Users\Zach\code\zapp\example\zapp.exe.WebView2\EBWebView\Default\Session Storage since it was missing.
-2026/03/15-13:10:22.597 145d10 Reusing MANIFEST C:\Users\Zach\code\zapp\example\zapp.exe.WebView2\EBWebView\Default\Session Storage/MANIFEST-000001
+2026/03/15-20:56:26.341 1541f8 Reusing MANIFEST C:\Users\Zach\code\zapp\example\zapp.exe.WebView2\EBWebView\Default\Session Storage/MANIFEST-000001
+2026/03/15-20:56:26.343 1541f8 Recovering log #3
+2026/03/15-20:56:26.347 1541f8 Reusing old log C:\Users\Zach\code\zapp\example\zapp.exe.WebView2\EBWebView\Default\Session Storage/000003.log 

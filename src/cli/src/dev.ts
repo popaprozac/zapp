@@ -62,7 +62,7 @@ export const runDev = async ({
     shuttingDown = true;
     killChild(app);
     killChild(vite);
-    setTimeout(() => process.exit(0), 200).unref();
+    setTimeout(() => process.exit(0), 500).unref();
   };
 
   process.on("SIGINT", shutdown);

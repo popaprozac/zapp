@@ -10,6 +10,7 @@ raw {
     extern void* zapp_windows_qjs_get_context(const char* workerId);
     extern void zapp_windows_qjs_dispatch(void (*func)(void*), void* data);
     extern void zapp_windows_qjs_drain_jobs(void* ctx, const char* label);
+    static void qjs_call_bridge_method(JSContext* ctx, const char* methodName, int argc, JSValue* argv);
 
     // -----------------------------------------------------------------------
     // Timer state
@@ -110,9 +111,10 @@ raw {
         JSValue ret = JS_Call(ctx, savedFn, JS_UNDEFINED, 0, NULL);
         if (JS_IsException(ret)) {
             JSValue exception = JS_GetException(ctx);
-            const char* str = JS_ToCString(ctx, exception);
-            fprintf(stderr, "[qjs] timer error: %s\n", str ? str : "unknown");
-            if (str) JS_FreeCString(ctx, str);
+            JSValue args[1];
+            args[0] = JS_DupValue(ctx, exception);
+            qjs_call_bridge_method(ctx, "reportError", 1, args);
+            JS_FreeValue(ctx, args[0]);
             JS_FreeValue(ctx, exception);
         }
         JS_FreeValue(ctx, ret);

@@ -25,7 +25,7 @@ raw {
     } zapp_url_parsed_t;
     #endif
 
-    static void zapp_core_url_free(zapp_url_parsed_t* c) {
+    void zapp_core_url_free(zapp_url_parsed_t* c) {
         if (!c) return;
         free(c->href);      free(c->protocol);  free(c->host);
         free(c->hostname);  free(c->port);      free(c->pathname);
@@ -33,7 +33,7 @@ raw {
         free(c->username);  free(c->password);
     }
 
-    static int zapp_core_url_parse(const char* url_str, const char* base_str, zapp_url_parsed_t* out) {
+    int zapp_core_url_parse(const char* url_str, const char* base_str, zapp_url_parsed_t* out) {
         if (!url_str || !out) return -1;
         memset(out, 0, sizeof(zapp_url_parsed_t));
 

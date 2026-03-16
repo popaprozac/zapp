@@ -1,2 +1,3 @@
-2026/03/15-13:10:22.414 153028 Creating DB C:\Users\Zach\code\zapp\example\zapp.exe.WebView2\EBWebView\Default\Extension Rules since it was missing.
-2026/03/15-13:10:22.448 153028 Reusing MANIFEST C:\Users\Zach\code\zapp\example\zapp.exe.WebView2\EBWebView\Default\Extension Rules/MANIFEST-000001
+2026/03/15-20:56:33.770 15d120 Reusing MANIFEST C:\Users\Zach\code\zapp\example\zapp.exe.WebView2\EBWebView\Default\Extension Rules/MANIFEST-000001
+2026/03/15-20:56:33.770 15d120 Recovering log #3
+2026/03/15-20:56:33.771 15d120 Reusing old log C:\Users\Zach\code\zapp\example\zapp.exe.WebView2\EBWebView\Default\Extension Rules/000003.log 

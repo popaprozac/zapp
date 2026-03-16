@@ -23,11 +23,22 @@ raw {
     extern void zapp_windows_webview_resize(HWND hwnd);
     extern void zapp_windows_webview_detach(HWND hwnd);
     extern void zapp_windows_webview_notify_position(HWND hwnd);
+    extern void zapp_windows_webview_eval_all_ui(wchar_t* wJs);
+
+    #define WM_ZAPP_HANDLE_MSG (WM_APP + 2)
+
+    extern void zapp_handle_message(void* app, char* msg);
+    extern void* app_get_active(void);
+    static DWORD zapp_ui_thread_id = 0;
 
     static LRESULT CALLBACK ZappWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         switch (msg) {
             case WM_ERASEBKGND:
                 return 1;
+            case WM_ZAPP_EVAL_JS: {
+                zapp_windows_webview_eval_all_ui((wchar_t*)lParam);
+                return 0;
+            }
             case WM_SIZE: {
                 zapp_windows_webview_resize(hwnd);
                 return 0;
@@ -75,6 +86,11 @@ raw {
         }
         return FALSE;
     }
+
+    void zapp_post_to_ui_thread(const char* wire) {
+        if (!zapp_ui_thread_id) return;
+        PostThreadMessageW(zapp_ui_thread_id, WM_ZAPP_HANDLE_MSG, 0, (LPARAM)_strdup(wire));
+    }
 #endif
 }
 
@@ -110,14 +126,16 @@ impl Platform for WindowsPlatform {
         #endif
         }
 
-        // Create the initial window
-        let options = window_options_default(cfg.name);
-        let _initial = app.window.create(&options);
-
         raw {
         #ifdef _WIN32
             MSG msg;
             while (GetMessageW(&msg, NULL, 0, 0) > 0) {
+                if (msg.hwnd == NULL && msg.message == WM_ZAPP_HANDLE_MSG) {
+                    char* wire = (char*)msg.lParam;
+                    zapp_handle_message(app_get_active(), wire);
+                    free(wire);
+                    continue;
+                }
                 TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }

@@ -7,7 +7,7 @@ raw {
     #include <string.h>
 
     // TextEncoder.encode(): converts a UTF-8 string to its byte representation.
-    static unsigned char* zapp_core_text_encode(const char* input, size_t* out_len) {
+    unsigned char* zapp_core_text_encode(const char* input, size_t* out_len) {
         if (out_len) *out_len = 0;
         if (input == NULL) return NULL;
         size_t len = strlen(input);
@@ -22,7 +22,7 @@ raw {
     // TextDecoder.decode(): validates the byte sequence as UTF-8 via
     // MultiByteToWideChar round-trip, returning a valid UTF-8 C string.
     // Invalid sequences are replaced with U+FFFD.
-    static char* zapp_core_text_decode(const unsigned char* bytes, size_t len) {
+    char* zapp_core_text_decode(const unsigned char* bytes, size_t len) {
         if (bytes == NULL || len == 0) return _strdup("");
 
         // First pass: determine required wide-char buffer size.

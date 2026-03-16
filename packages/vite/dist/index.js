@@ -46,20 +46,30 @@ const normalizeOutName = (entryPath, used) => {
     used.add(candidate);
     return candidate;
 };
+const writeIfChanged = async (filePath, content) => {
+    try {
+        const existing = await fs.readFile(filePath, "utf8");
+        if (existing === content)
+            return false;
+    }
+    catch { }
+    await fs.writeFile(filePath, content);
+    return true;
+};
 export const zapp = (options = {}) => {
-    const workerOutDir = options.outDir ?? "public/zapp-workers";
+    const configuredOutDir = options.outDir ?? ".zapp/workers";
     const sourceRoot = options.sourceRoot ?? "src";
     const minify = options.minify ?? false;
     let root = process.cwd();
     let devServer = false;
     let viteAliases = {};
     let timer = null;
+    let building = false;
     const hasBunBuild = typeof globalThis.Bun !== "undefined" &&
         globalThis.Bun != null &&
         typeof globalThis.Bun.build === "function";
+    const getOutDir = () => path.resolve(root, configuredOutDir);
     const bundleWorker = async (entryPath, outFile) => {
-        // On Windows, Vite's watcher can hold a memory-mapped lock on output files.
-        // Write to a temp file then rename to avoid EBUSY / user-mapped section errors.
         const tmpFile = outFile + ".tmp";
         if (hasBunBuild) {
             const result = await globalThis.Bun.build({
@@ -104,45 +114,39 @@ export const zapp = (options = {}) => {
                 alias: viteAliases,
             });
         }
-        for (let attempt = 0; attempt < 5; attempt++) {
-            try {
-                await fs.rename(tmpFile, outFile);
-                return;
-            }
-            catch (e) {
-                if (attempt < 4 && (e.code === "EPERM" || e.code === "EBUSY")) {
-                    await new Promise((r) => setTimeout(r, 50 * (attempt + 1)));
-                    continue;
-                }
-                // Last resort: overwrite by reading+writing instead of rename
-                try {
-                    const content = await fs.readFile(tmpFile);
-                    await fs.writeFile(outFile, content);
-                    await fs.unlink(tmpFile).catch(() => { });
-                    return;
-                }
-                catch {
-                    throw e;
-                }
-            }
+        try {
+            const built = await fs.readFile(tmpFile, "utf8");
+            await writeIfChanged(outFile, built);
+        }
+        finally {
+            await fs.unlink(tmpFile).catch(() => { });
         }
     };
     const buildWorkers = async () => {
-        const srcRoot = path.resolve(root, sourceRoot);
-        const outDir = path.resolve(root, workerOutDir);
-        await fs.mkdir(outDir, { recursive: true });
-        const entries = await discoverWorkerEntries(srcRoot);
-        const usedNames = new Set();
-        const manifest = {};
-        for (const { entryPath, sourceSpec } of entries) {
-            const outName = normalizeOutName(entryPath, usedNames);
-            const outFile = path.join(outDir, outName);
-            await bundleWorker(entryPath, outFile);
-            manifest[sourceSpec] = `/zapp-workers/${outName}`;
-            manifest[path.basename(sourceSpec)] = `/zapp-workers/${outName}`;
+        if (building)
+            return;
+        building = true;
+        try {
+            const srcRoot = path.resolve(root, sourceRoot);
+            const outDir = getOutDir();
+            await fs.mkdir(outDir, { recursive: true });
+            const entries = await discoverWorkerEntries(srcRoot);
+            const usedNames = new Set();
+            const manifest = {};
+            for (const { entryPath, sourceSpec } of entries) {
+                const outName = normalizeOutName(entryPath, usedNames);
+                const outFile = path.join(outDir, outName);
+                await bundleWorker(entryPath, outFile);
+                manifest[sourceSpec] = `/zapp-workers/${outName}`;
+                manifest[path.basename(sourceSpec)] = `/zapp-workers/${outName}`;
+            }
+            const manifestContent = JSON.stringify({ v: 1, workers: manifest }, null, 2);
+            await writeIfChanged(path.join(outDir, "manifest.json"), manifestContent);
+            return manifest;
         }
-        await fs.writeFile(path.join(outDir, "manifest.json"), JSON.stringify({ v: 1, generatedAt: new Date().toISOString(), workers: manifest }, null, 2));
-        return manifest;
+        finally {
+            building = false;
+        }
     };
     return {
         name: "zapp-workers",
@@ -164,7 +168,8 @@ export const zapp = (options = {}) => {
             await buildWorkers();
         },
         async transformIndexHtml(html) {
-            const manifestPath = path.resolve(root, workerOutDir, "manifest.json");
+            const outDir = getOutDir();
+            const manifestPath = path.join(outDir, "manifest.json");
             let workers = {};
             try {
                 const raw = await fs.readFile(manifestPath, "utf8");
@@ -179,7 +184,9 @@ export const zapp = (options = {}) => {
         },
         configureServer(server) {
             devServer = true;
-            const outDir = path.resolve(root, workerOutDir);
+            const outDir = getOutDir();
+            const srcRoot = path.resolve(root, sourceRoot);
+            const srcRootNorm = srcRoot.replace(/\\/g, "/");
             server.middlewares.use((req, res, next) => {
                 const url = req.url ?? "";
                 if (!url.startsWith("/zapp-workers/"))
@@ -194,18 +201,36 @@ export const zapp = (options = {}) => {
                     res.end(content);
                 }).catch(() => next());
             });
-            const rebuild = () => {
+            const rebuild = (filePath) => {
+                const norm = path.resolve(filePath).replace(/\\/g, "/");
+                if (!norm.startsWith(srcRootNorm + "/"))
+                    return;
                 if (timer)
                     clearTimeout(timer);
                 timer = setTimeout(() => {
                     buildWorkers().catch((error) => {
                         server.config.logger.error(`[zapp-workers] ${error.message}`);
                     });
-                }, 120);
+                }, 200);
             };
             server.watcher.on("add", rebuild);
             server.watcher.on("change", rebuild);
             server.watcher.on("unlink", rebuild);
+        },
+        async writeBundle(outputOptions) {
+            if (devServer)
+                return;
+            const workerDir = getOutDir();
+            const distDir = outputOptions.dir ?? path.join(root, "dist");
+            const workerDistDir = path.join(distDir, "zapp-workers");
+            await fs.mkdir(workerDistDir, { recursive: true });
+            try {
+                const files = await fs.readdir(workerDir);
+                for (const file of files) {
+                    await fs.copyFile(path.join(workerDir, file), path.join(workerDistDir, file));
+                }
+            }
+            catch { }
         },
     };
 };

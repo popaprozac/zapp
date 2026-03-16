@@ -157,10 +157,12 @@ export async function runGenerate({
 }) {
   const targetDir = outDir
     ? path.resolve(root, outDir)
-    : path.join(frontendDir ?? path.join(root, "frontend"), "generated");
+    : path.join(frontendDir ?? root, "src", "generated");
 
   process.stdout.write(`[zapp] scanning for service registrations...\n`);
-  const services = await scanServices(root);
+  const zappDir = path.join(root, "zapp");
+  const scanDir = await fs.stat(zappDir).then(() => zappDir, () => root);
+  const services = await scanServices(scanDir);
 
   if (services.length === 0) {
     process.stdout.write(

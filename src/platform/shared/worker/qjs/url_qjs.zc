@@ -1,9 +1,27 @@
 // Shared QJS wrapper for URL parsing. Delegates to platform-specific core/url_core.zc.
 
 raw {
+#include "quickjs.h"
 #if defined(ZAPP_WORKER_ENGINE_QJS) || defined(_WIN32)
-    static int zapp_core_url_parse(const char* url_str, const char* base_str, zapp_url_parsed_t* out);
-    static void zapp_core_url_free(zapp_url_parsed_t* c);
+    #ifndef ZAPP_URL_PARSED_DEFINED
+    #define ZAPP_URL_PARSED_DEFINED 1
+    typedef struct zapp_url_parsed {
+        char* href;
+        char* protocol;
+        char* host;
+        char* hostname;
+        char* port;
+        char* pathname;
+        char* search;
+        char* hash;
+        char* origin;
+        char* username;
+        char* password;
+    } zapp_url_parsed_t;
+    #endif
+
+    int zapp_core_url_parse(const char* url_str, const char* base_str, zapp_url_parsed_t* out);
+    void zapp_core_url_free(zapp_url_parsed_t* c);
 
     static JSValue qjs_bridge_urlParse(JSContext* ctx, JSValue this_val, int argc, JSValue* argv) {
         (void)this_val;
