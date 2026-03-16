@@ -356,49 +356,36 @@ raw {
         return "application/octet-stream";
     }
 
+    #define ZAPP_LOCALHOST_PREFIX "https://app.localhost/"
+    #define ZAPP_LOCALHOST_PREFIX_LEN 22
+
     static char* zapp_url_to_rel_path(const char* url) {
-        if (!url || strncmp(url, "zapp://", 7) != 0) return _strdup("index.html");
+        if (!url) return _strdup("index.html");
 
-        const char* after = url + 7;
-        const char* slash = strchr(after, '/');
+        const char* rel = NULL;
 
-        char host[256] = {0};
-        const char* pathPart = "";
-
-        if (slash) {
-            size_t hlen = (size_t)(slash - after);
-            if (hlen >= sizeof(host)) hlen = sizeof(host) - 1;
-            memcpy(host, after, hlen);
-            pathPart = slash;
+        if (strncmp(url, ZAPP_LOCALHOST_PREFIX, ZAPP_LOCALHOST_PREFIX_LEN) == 0) {
+            rel = url + ZAPP_LOCALHOST_PREFIX_LEN;
+        } else if (strncmp(url, "zapp://", 7) == 0) {
+            const char* after = url + 7;
+            const char* slash = strchr(after, '/');
+            rel = slash ? slash + 1 : after;
         } else {
-            strncpy(host, after, sizeof(host) - 1);
+            return _strdup("index.html");
         }
 
         char pathBuf[2048];
-        strncpy(pathBuf, pathPart, sizeof(pathBuf) - 1);
+        strncpy(pathBuf, rel, sizeof(pathBuf) - 1);
         pathBuf[sizeof(pathBuf) - 1] = '\0';
         char* q = strchr(pathBuf, '?');
         if (q) *q = '\0';
         q = strchr(pathBuf, '#');
         if (q) *q = '\0';
 
-        const char* rel = pathBuf;
+        while (pathBuf[0] == '/') memmove(pathBuf, pathBuf + 1, strlen(pathBuf));
+        if (pathBuf[0] == '\0') return _strdup("index.html");
 
-        if ((rel[0] == '\0' || (rel[0] == '/' && rel[1] == '\0')) && host[0] != '\0') {
-            return _strdup(host);
-        }
-
-        if (host[0] != '\0' && _stricmp(host, "app") != 0) {
-            if (strncmp(rel, "/assets/", 8) == 0) {
-                while (*rel == '/') rel++;
-                return _strdup(rel);
-            }
-        }
-
-        while (*rel == '/') rel++;
-        if (rel[0] == '\0') return _strdup("index.html");
-
-        return _strdup(rel);
+        return _strdup(pathBuf);
     }
 
     static void zapp_send_resource_response(
@@ -486,7 +473,8 @@ raw {
         CoTaskMemFree(uriW);
         if (!uri) return S_OK;
 
-        if (strncmp(uri, "zapp://", 7) != 0) {
+        if (strncmp(uri, ZAPP_LOCALHOST_PREFIX, ZAPP_LOCALHOST_PREFIX_LEN) != 0 &&
+            strncmp(uri, "zapp://", 7) != 0) {
             free(uri);
             return S_OK;
         }
@@ -662,8 +650,30 @@ raw {
             free(wBootstrap);
         }
 
-        // Register zapp:// protocol handler for embedded/file asset serving
-        ICoreWebView2_AddWebResourceRequestedFilter(webview, L"zapp://*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
+        // Register app.localhost virtual host so WebView2 recognises the origin.
+        // For file-based builds this serves files directly; for embedded builds
+        // our WebResourceRequested handler below intercepts and overrides.
+        {
+            ICoreWebView2_3* wv3 = NULL;
+            HRESULT qihr = ICoreWebView2_QueryInterface(webview, &IID_ICoreWebView2_3, (void**)&wv3);
+            if (SUCCEEDED(qihr) && wv3) {
+                const char* assetRoot = zapp_build_asset_root();
+                const wchar_t* folderW = L".";
+                wchar_t* allocFolder = NULL;
+                if (assetRoot && assetRoot[0] != '\0') {
+                    allocFolder = zapp_utf8_to_wide(assetRoot);
+                    folderW = allocFolder;
+                }
+                ICoreWebView2_3_SetVirtualHostNameToFolderMapping(
+                    wv3, L"app.localhost", folderW,
+                    COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
+                if (allocFolder) free(allocFolder);
+                ICoreWebView2_3_Release(wv3);
+            }
+        }
+
+        // Intercept requests for embedded/custom asset serving
+        ICoreWebView2_AddWebResourceRequestedFilter(webview, L"https://app.localhost/*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
         ZappResourceHandler* resHandler = (ZappResourceHandler*)calloc(1, sizeof(ZappResourceHandler));
         resHandler->lpVtbl = &zrh_vtbl;
         resHandler->refCount = 1;
@@ -672,7 +682,7 @@ raw {
 
         // Navigate to initial URL
         const char* initialUrl = zapp_build_initial_url();
-        const char* url = (initialUrl && initialUrl[0] != '\0') ? initialUrl : "zapp://index.html";
+        const char* url = (initialUrl && initialUrl[0] != '\0') ? initialUrl : "https://app.localhost/index.html";
         wchar_t* wUrl = zapp_utf8_to_wide(url);
         ICoreWebView2_Navigate(webview, wUrl);
         free(wUrl);
@@ -892,7 +902,7 @@ raw {
                     url_utf8[0] == '/' ? "" : "/",
                     url_utf8);
             } else {
-                snprintf(resolved, sizeof(resolved), "zapp://app%s%s",
+                snprintf(resolved, sizeof(resolved), "https://app.localhost%s%s",
                     url_utf8[0] == '/' ? "" : "/",
                     url_utf8);
             }

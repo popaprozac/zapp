@@ -3,7 +3,7 @@ import process from "node:process";
 import { mkdir } from "node:fs/promises";
 import { brotliCompressSync, constants as zlibConstants } from "node:zlib";
 import { generateBuildConfigZc } from "./build-config";
-import { preferredJsTool, resolveNativeDir, runCmd, runPackageScript } from "./common";
+import { nativeIncludeArgs, preferredJsTool, resolveNativeDir, runCmd, runPackageScript } from "./common";
 import { resolveAndBundleBackend } from "./backend";
 import { runGenerate } from "./generate";
 
@@ -75,6 +75,21 @@ ${assetEntries.join("\n")}
   return outPath;
 };
 
+const collectWorkerStems = async (assetDir: string): Promise<Set<string>> => {
+  const stems = new Set<string>();
+  const manifestPath = path.join(assetDir, "zapp-workers", "manifest.json");
+  try {
+    const raw = await Bun.file(manifestPath).text();
+    const data = JSON.parse(raw);
+    const workers = data.workers ?? data;
+    for (const key of Object.keys(workers)) {
+      const stem = path.basename(key).replace(/\.[^.]+$/, "");
+      if (stem) stems.add(stem);
+    }
+  } catch { /* no manifest */ }
+  return stems;
+};
+
 export const buildAssetManifest = async ({
   assetDir,
   withBrotli,
@@ -83,6 +98,7 @@ export const buildAssetManifest = async ({
   withBrotli: boolean;
 }) => {
   const allFiles = await walkFiles(assetDir);
+  const workerStems = withBrotli ? await collectWorkerStems(assetDir) : new Set<string>();
   const manifest = {
     v: 1,
     generatedAt: new Date().toISOString(),
@@ -94,7 +110,21 @@ export const buildAssetManifest = async ({
     const rel = path.relative(assetDir, file).split(path.sep).join("/");
     const stat = Bun.file(file);
     const item: any = { file: rel, size: stat.size, brotli: null };
-    if (withBrotli) {
+
+    let skipBrotli = false;
+    if (rel.startsWith("zapp-workers/")) {
+      skipBrotli = true;
+    } else if (rel.startsWith("assets/") && workerStems.size > 0) {
+      const baseName = path.basename(rel).replace(/\.[^.]+$/, "");
+      for (const stem of workerStems) {
+        if (baseName === stem || baseName.startsWith(`${stem}-`)) {
+          skipBrotli = true;
+          break;
+        }
+      }
+    }
+
+    if (withBrotli && !skipBrotli) {
       const brPath = await maybeBrotli(file);
       const brStat = Bun.file(brPath);
       item.brotli = { file: `${rel}.br`, size: brStat.size };
@@ -152,7 +182,7 @@ export const runBuild = async ({
   });
 
   process.stdout.write("[zapp] building native binary\n");
-  const zcArgs = ["build", buildFile, buildConfigFile];
+  const zcArgs = ["build", buildFile, buildConfigFile, ...nativeIncludeArgs()];
   const assetsFile = await generateAssetsZc(root, manifest, assetDir);
   if (await Bun.file(assetsFile).exists()) zcArgs.push(assetsFile);
   zcArgs.push("-o", nativeOut);

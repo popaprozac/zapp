@@ -1,9 +1,6 @@
 // To use QuickJS instead of JSC on macOS, add:
 //   //> macos: define: ZAPP_WORKER_ENGINE_QJS
 
-// Framework source resolved via ZAPP_NATIVE env var (set by CLI)
-//> include: ${ZAPP_NATIVE}/src
-
 // --- macOS Directives ---
 //> macos: define: __APPLE__
 //> macos: framework: Cocoa
@@ -18,12 +15,7 @@
 // --- Windows Directives (QuickJS default) ---
 //> windows: define: _WIN32
 //> windows: cflags: -DUNICODE -D_UNICODE -DCINTERFACE -DCOBJMACROS
-//> windows: include: ${ZAPP_NATIVE}/vendor/webview2/include
-//> windows: include: ${ZAPP_NATIVE}/vendor/quickjs-ng
-//> windows: include: ${ZAPP_NATIVE}/vendor/brotli/include
-//> windows: lib: ${ZAPP_NATIVE}/vendor/quickjs-ng/build
-//> windows: lib: ${ZAPP_NATIVE}/vendor/brotli/lib
-//> windows: link: -lqjs -lbrotlidec -lbrotlicommon
+//> windows: link: -lqjs
 //> windows: link: -lole32 -lshell32 -luuid -luser32 -lgdi32 -lcomctl32 -lshlwapi
 //> windows: link: -lwinhttp -lbcrypt -ladvapi32 -lrpcrt4 -lcrypt32 -lversion
 //> windows: define: ZAPP_WORKER_ENGINE_QJS

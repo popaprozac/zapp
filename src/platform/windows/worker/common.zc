@@ -5,8 +5,6 @@ raw {
     #include <stdio.h>
     #include <stdlib.h>
     #include <string.h>
-    #include <brotli/decode.h>
-
     extern const char* zapp_build_asset_root(void);
     extern int zapp_build_use_embedded_assets(void);
     extern int zapp_build_is_dev_mode(void);
@@ -250,17 +248,24 @@ raw {
         return "example\\frontend\\dist";
     }
 
+    #define ZAPP_WORKER_LOCALHOST_PREFIX "https://app.localhost/"
+    #define ZAPP_WORKER_LOCALHOST_PREFIX_LEN 22
+
     static char* zapp_worker_resolve_rel_path(const char* scriptUrl) {
         if (!scriptUrl) return NULL;
-        // Only handle zapp:// URLs
-        if (strncmp(scriptUrl, "zapp://", 7) != 0) return NULL;
 
-        const char* after_scheme = scriptUrl + 7;
-        // Find the path portion (after host)
-        const char* slash = strchr(after_scheme, '/');
-        const char* rel = slash ? slash + 1 : after_scheme;
+        const char* rel = NULL;
 
-        // Normalize: strip leading slashes and known prefixes
+        if (strncmp(scriptUrl, ZAPP_WORKER_LOCALHOST_PREFIX, ZAPP_WORKER_LOCALHOST_PREFIX_LEN) == 0) {
+            rel = scriptUrl + ZAPP_WORKER_LOCALHOST_PREFIX_LEN;
+        } else if (strncmp(scriptUrl, "zapp://", 7) == 0) {
+            const char* after_scheme = scriptUrl + 7;
+            const char* slash = strchr(after_scheme, '/');
+            rel = slash ? slash + 1 : after_scheme;
+        } else {
+            return NULL;
+        }
+
         while (*rel == '/') rel++;
         if (strncmp(rel, "app/", 4) == 0) rel += 4;
         if (strncmp(rel, "index.html/", 11) == 0) rel += 11;
@@ -344,27 +349,11 @@ raw {
                 snprintf(lookupPath, sizeof(lookupPath), "/%s", rel);
                 for (int i = 0; i < zapp_embedded_assets_count; i++) {
                     if (strcmp(zapp_embedded_assets[i].path, lookupPath) == 0) {
-                        if (zapp_embedded_assets[i].is_brotli) {
-                            size_t outLen = (size_t)zapp_embedded_assets[i].uncompressed_len;
-                            char* out = (char*)malloc(outLen + 1);
-                            BrotliDecoderResult br = BrotliDecoderDecompress(
-                                (size_t)zapp_embedded_assets[i].len,
-                                zapp_embedded_assets[i].data,
-                                &outLen, (uint8_t*)out);
-                            if (br == BROTLI_DECODER_RESULT_SUCCESS) {
-                                out[outLen] = '\0';
-                                free(rel);
-                                return out;
-                            }
-                            free(out);
-                        } else {
-                            char* result = (char*)malloc(zapp_embedded_assets[i].len + 1);
-                            memcpy(result, zapp_embedded_assets[i].data, zapp_embedded_assets[i].len);
-                            result[zapp_embedded_assets[i].len] = '\0';
-                            free(rel);
-                            return result;
-                        }
-                        break;
+                        char* result = (char*)malloc(zapp_embedded_assets[i].len + 1);
+                        memcpy(result, zapp_embedded_assets[i].data, zapp_embedded_assets[i].len);
+                        result[zapp_embedded_assets[i].len] = '\0';
+                        free(rel);
+                        return result;
                     }
                 }
             }

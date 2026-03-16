@@ -2,6 +2,7 @@ import path from "node:path";
 import process from "node:process";
 import {
   killChild,
+  nativeIncludeArgs,
   preferredJsTool,
   resolveNativeDir,
   runCmd,
@@ -63,12 +64,15 @@ export const runDev = async ({
     shuttingDown = true;
     killChild(app);
     killChild(vite);
-    setTimeout(() => process.exit(0), 500).unref();
+    setTimeout(() => process.exit(0), 1000).unref();
   };
 
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
   process.on("exit", shutdown);
+  if (process.platform === "win32") {
+    process.on("SIGHUP", shutdown);
+  }
 
   try {
     const assetDir = path.join(frontendDir, "dist");
@@ -89,7 +93,7 @@ export const runDev = async ({
       backendScriptPath,
     });
 
-    const zcArgs = ["build", buildFile, buildConfigFile, "-DZAPP_BUILD_DEV"];
+    const zcArgs = ["build", buildFile, buildConfigFile, "-DZAPP_BUILD_DEV", ...nativeIncludeArgs()];
     const manifest = embedAssets
       ? await buildAssetManifest({ assetDir, withBrotli })
       : { v: 1, generatedAt: new Date().toISOString(), assets: [] as any[], embedded: false };

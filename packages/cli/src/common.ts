@@ -34,6 +34,21 @@ export const resolveNativeDir = (): string => {
   );
 };
 
+export const nativeIncludeArgs = (): string[] => {
+  const nd = resolveNativeDir();
+  const args: string[] = [];
+
+  args.push("-I", path.join(nd, "src"));
+
+  if (process.platform === "win32") {
+    args.push("-I", path.join(nd, "vendor", "webview2", "include"));
+    args.push("-I", path.join(nd, "vendor", "quickjs-ng"));
+    args.push("-L", path.join(nd, "vendor", "quickjs-ng", "build"));
+  }
+
+  return args;
+};
+
 let cachedExec: string | null = null;
 
 export const preferredJsTool = (): string => {

@@ -2710,6 +2710,17 @@ var resolveNativeDir = () => {
 ` + `  - ${repoRoot}/src  (monorepo development)
 `);
 };
+var nativeIncludeArgs = () => {
+  const nd = resolveNativeDir();
+  const args = [];
+  args.push("-I", path.join(nd, "src"));
+  if (process2.platform === "win32") {
+    args.push("-I", path.join(nd, "vendor", "webview2", "include"));
+    args.push("-I", path.join(nd, "vendor", "quickjs-ng"));
+    args.push("-L", path.join(nd, "vendor", "quickjs-ng", "build"));
+  }
+  return args;
+};
 var cachedExec = null;
 var preferredJsTool = () => {
   if (cachedExec)
@@ -2800,7 +2811,9 @@ var generateBuildConfigZc = async ({
   await mkdir(buildDir, { recursive: true });
   const isDev = mode === "dev" || mode === "dev-embedded";
   const useEmbeddedAssets = mode === "dev-embedded" || mode === "prod-embedded";
-  const initialUrl = mode === "dev" ? devUrl ?? "http://localhost:5173" : "zapp://index.html";
+  const isDarwin = process.platform === "darwin";
+  const prodUrl = isDarwin ? "zapp://index.html" : "https://app.localhost/index.html";
+  const initialUrl = mode === "dev" ? devUrl ?? "http://localhost:5173" : prodUrl;
   const content = `// AUTO-GENERATED FILE. DO NOT EDIT.
 
 raw {
@@ -3150,11 +3163,27 @@ ${assetEntries.join(`
   await Bun.write(outPath, zcContent);
   return outPath;
 };
+var collectWorkerStems = async (assetDir) => {
+  const stems = new Set;
+  const manifestPath = path5.join(assetDir, "zapp-workers", "manifest.json");
+  try {
+    const raw = await Bun.file(manifestPath).text();
+    const data = JSON.parse(raw);
+    const workers = data.workers ?? data;
+    for (const key of Object.keys(workers)) {
+      const stem = path5.basename(key).replace(/\.[^.]+$/, "");
+      if (stem)
+        stems.add(stem);
+    }
+  } catch {}
+  return stems;
+};
 var buildAssetManifest = async ({
   assetDir,
   withBrotli
 }) => {
   const allFiles = await walkFiles(assetDir);
+  const workerStems = withBrotli ? await collectWorkerStems(assetDir) : new Set;
   const manifest = {
     v: 1,
     generatedAt: new Date().toISOString(),
@@ -3165,7 +3194,19 @@ var buildAssetManifest = async ({
     const rel = path5.relative(assetDir, file).split(path5.sep).join("/");
     const stat = Bun.file(file);
     const item = { file: rel, size: stat.size, brotli: null };
-    if (withBrotli) {
+    let skipBrotli = false;
+    if (rel.startsWith("zapp-workers/")) {
+      skipBrotli = true;
+    } else if (rel.startsWith("assets/") && workerStems.size > 0) {
+      const baseName = path5.basename(rel).replace(/\.[^.]+$/, "");
+      for (const stem of workerStems) {
+        if (baseName === stem || baseName.startsWith(`${stem}-`)) {
+          skipBrotli = true;
+          break;
+        }
+      }
+    }
+    if (withBrotli && !skipBrotli) {
       const brPath = await maybeBrotli(file);
       const brStat = Bun.file(brPath);
       item.brotli = { file: `${rel}.br`, size: brStat.size };
@@ -3207,7 +3248,7 @@ var runBuild = async ({
   });
   process5.stdout.write(`[zapp] building native binary
 `);
-  const zcArgs = ["build", buildFile, buildConfigFile];
+  const zcArgs = ["build", buildFile, buildConfigFile, ...nativeIncludeArgs()];
   const assetsFile = await generateAssetsZc(root, manifest, assetDir);
   if (await Bun.file(assetsFile).exists())
     zcArgs.push(assetsFile);
@@ -3265,11 +3306,14 @@ var runDev = async ({
     shuttingDown = true;
     killChild(app);
     killChild(vite);
-    setTimeout(() => process6.exit(0), 500).unref();
+    setTimeout(() => process6.exit(0), 1000).unref();
   };
   process6.on("SIGINT", shutdown);
   process6.on("SIGTERM", shutdown);
   process6.on("exit", shutdown);
+  if (process6.platform === "win32") {
+    process6.on("SIGHUP", shutdown);
+  }
   try {
     const assetDir = path6.join(frontendDir, "dist");
     if (embedAssets) {
@@ -3287,7 +3331,7 @@ var runDev = async ({
       devUrl,
       backendScriptPath
     });
-    const zcArgs = ["build", buildFile, buildConfigFile, "-DZAPP_BUILD_DEV"];
+    const zcArgs = ["build", buildFile, buildConfigFile, "-DZAPP_BUILD_DEV", ...nativeIncludeArgs()];
     const manifest = embedAssets ? await buildAssetManifest({ assetDir, withBrotli }) : { v: 1, generatedAt: new Date().toISOString(), assets: [], embedded: false };
     const assetsFile = await generateAssetsZc(root, manifest, assetDir);
     zcArgs.push(assetsFile);
@@ -3368,8 +3412,7 @@ fn run_app() -> int {
 }
 `;
   await Bun.write(path7.join(zappDir, "app.zc"), appZcContent);
-  const buildZcContent = `// Framework source resolved via ZAPP_NATIVE env var (set by CLI)
-//> include: \${ZAPP_NATIVE}/src
+  const buildZcContent = `// Include paths and library paths are injected by the zapp CLI.
 
 // --- macOS Directives ---
 //> macos: define: __APPLE__
@@ -3384,12 +3427,7 @@ fn run_app() -> int {
 // --- Windows Directives (QuickJS default) ---
 //> windows: define: _WIN32
 //> windows: cflags: -DUNICODE -D_UNICODE -DCINTERFACE -DCOBJMACROS
-//> windows: include: \${ZAPP_NATIVE}/vendor/webview2/include
-//> windows: include: \${ZAPP_NATIVE}/vendor/quickjs-ng
-//> windows: include: \${ZAPP_NATIVE}/vendor/brotli/include
-//> windows: lib: \${ZAPP_NATIVE}/vendor/quickjs-ng/build
-//> windows: lib: \${ZAPP_NATIVE}/vendor/brotli/lib
-//> windows: link: -lqjs -lbrotlidec -lbrotlicommon
+//> windows: link: -lqjs
 //> windows: link: -lole32 -lshell32 -luuid -luser32 -lgdi32 -lcomctl32 -lshlwapi
 //> windows: link: -lwinhttp -lbcrypt -ladvapi32 -lrpcrt4 -lcrypt32 -lversion
 //> windows: define: ZAPP_WORKER_ENGINE_QJS

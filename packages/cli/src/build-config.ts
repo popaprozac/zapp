@@ -24,7 +24,9 @@ export const generateBuildConfigZc = async ({
 
   const isDev = mode === "dev" || mode === "dev-embedded";
   const useEmbeddedAssets = mode === "dev-embedded" || mode === "prod-embedded";
-  const initialUrl = mode === "dev" ? devUrl ?? "http://localhost:5173" : "zapp://index.html";
+  const isDarwin = process.platform === "darwin";
+  const prodUrl = isDarwin ? "zapp://index.html" : "https://app.localhost/index.html";
+  const initialUrl = mode === "dev" ? devUrl ?? "http://localhost:5173" : prodUrl;
 
   const content = `// AUTO-GENERATED FILE. DO NOT EDIT.
 
