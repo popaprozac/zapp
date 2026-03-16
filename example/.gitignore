@@ -12,7 +12,7 @@ dist
 dist-ssr
 *.local
 .zapp/
-*.exe
+bin/
 *.exe.WebView2/
 
 # Editor directories and files
