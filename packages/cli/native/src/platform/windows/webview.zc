@@ -144,6 +144,7 @@ raw {
         ICoreWebView2* webview;
         char ownerId[64];
         BOOL in_use;
+        BOOL inspectable;
         WINDOWPLACEMENT prevPlacement;
     } ZappWindowEntry;
 
@@ -575,6 +576,13 @@ raw {
 
         ICoreWebView2Controller_put_IsVisible(controller, TRUE);
 
+        // Apply webContentInspectable (dev tools) setting
+        ICoreWebView2Settings* settings = NULL;
+        if (SUCCEEDED(ICoreWebView2_get_Settings(webview, &settings)) && settings) {
+            ICoreWebView2Settings_put_AreDevToolsEnabled(settings, entry->inspectable);
+            ICoreWebView2Settings_Release(settings);
+        }
+
         RECT bounds;
         GetClientRect(hwnd, &bounds);
         ICoreWebView2Controller_put_Bounds(controller, bounds);
@@ -641,6 +649,16 @@ raw {
         wchar_t* wOwnerScript = zapp_utf8_to_wide(ownerScript);
         ICoreWebView2_AddScriptToExecuteOnDocumentCreated(webview, wOwnerScript, NULL);
         free(wOwnerScript);
+
+        // Inject window ID (used by fireReady to identify which window is ready)
+        char windowIdScript[256];
+        snprintf(windowIdScript, sizeof(windowIdScript),
+            "(function(){globalThis[Symbol.for('zapp.windowId')]='win-%p';})();",
+            (void*)hwnd
+        );
+        wchar_t* wWindowIdScript = zapp_utf8_to_wide(windowIdScript);
+        ICoreWebView2_AddScriptToExecuteOnDocumentCreated(webview, wWindowIdScript, NULL);
+        free(wWindowIdScript);
 
         // Inject webview bootstrap script
         const char* bootstrap = zapp_windows_webview_bootstrap_script();
@@ -815,12 +833,12 @@ raw {
     }
 
     void zapp_windows_webview_create(HWND hwnd, BOOL inspectable) {
-        (void)inspectable;
         ZappWindowEntry* entry = zapp_window_entry_alloc(hwnd);
         if (!entry) {
             fprintf(stderr, "[zapp] Max windows reached\n");
             return;
         }
+        entry->inspectable = inspectable;
 
         ZappEnvironmentHandler* eh = (ZappEnvironmentHandler*)calloc(1, sizeof(ZappEnvironmentHandler));
         eh->lpVtbl = &zeh_vtbl;

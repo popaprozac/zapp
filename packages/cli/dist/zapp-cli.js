@@ -8052,6 +8052,7 @@ var yargs_default = Yargs;
 // src/dev.ts
 import path6 from "path";
 import process6 from "process";
+import { createInterface } from "readline";
 import { mkdir as mkdir5 } from "fs/promises";
 
 // src/common.ts
@@ -8067,19 +8068,19 @@ var resolveNativeDir = () => {
     return _nativeDir;
   const cliSrcDir = import.meta.dir;
   const cliRoot = path.dirname(cliSrcDir);
-  const bundled = path.join(cliRoot, "native");
-  if (existsSync(path.join(bundled, "src")) && existsSync(path.join(bundled, "vendor"))) {
-    _nativeDir = bundled;
-    return _nativeDir;
-  }
   const repoRoot = path.resolve(cliRoot, "../..");
   if (existsSync(path.join(repoRoot, "src")) && existsSync(path.join(repoRoot, "vendor"))) {
     _nativeDir = repoRoot;
     return _nativeDir;
   }
+  const bundled = path.join(cliRoot, "native");
+  if (existsSync(path.join(bundled, "src")) && existsSync(path.join(bundled, "vendor"))) {
+    _nativeDir = bundled;
+    return _nativeDir;
+  }
   throw new Error(`[zapp] Cannot find native framework code. Expected either:
-` + `  - ${bundled}/src  (bundled with CLI)
 ` + `  - ${repoRoot}/src  (monorepo development)
+` + `  - ${bundled}/src  (bundled with CLI)
 `);
 };
 var nativeIncludeArgs = () => {
@@ -8758,19 +8759,29 @@ var runDev = async ({
   const vite = embedAssets ? null : spawnPackageScript("dev", { cwd: frontendDir });
   let app = null;
   let shuttingDown = false;
-  const shutdown = () => {
+  const shutdown = (reason = "error") => {
     if (shuttingDown)
       return;
     shuttingDown = true;
+    if (reason === "user") {
+      process6.stdout.write(`
+[zapp] gracefully exiting...
+`);
+    } else if (reason === "app-exit") {
+      process6.stdout.write(`[zapp] app exited, cleaning up...
+`);
+    }
     killChild(app);
     killChild(vite);
-    setTimeout(() => process6.exit(0), 1000).unref();
+    setTimeout(() => process6.exit(0), 1500);
   };
-  process6.on("SIGINT", shutdown);
-  process6.on("SIGTERM", shutdown);
-  process6.on("exit", shutdown);
-  if (process6.platform === "win32") {
-    process6.on("SIGHUP", shutdown);
+  process6.on("SIGINT", () => shutdown("user"));
+  process6.on("SIGTERM", () => shutdown("user"));
+  process6.on("SIGHUP", () => shutdown("user"));
+  if (process6.platform === "win32" && process6.stdin.isTTY) {
+    const rl = createInterface({ input: process6.stdin });
+    rl.on("SIGINT", () => shutdown("user"));
+    rl.on("close", () => shutdown("user"));
   }
   try {
     const assetDir = path6.join(frontendDir, "dist");
@@ -8802,17 +8813,17 @@ var runDev = async ({
       cwd: root
     });
     app.exited.then((code) => {
-      process6.stdout.write(`[zapp] native process exited (${code ?? "null"})
-`);
-      shutdown();
+      if (!shuttingDown) {
+        shutdown("app-exit");
+      }
     });
-    vite?.exited.then((code) => {
-      process6.stdout.write(`[zapp] vite exited (${code ?? "null"})
-`);
-      shutdown();
+    vite?.exited.then(() => {
+      if (!shuttingDown) {
+        shutdown("error");
+      }
     });
   } catch (error) {
-    shutdown();
+    shutdown("error");
     throw error;
   }
   await new Promise(() => {});

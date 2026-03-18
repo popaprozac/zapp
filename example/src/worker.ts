@@ -66,4 +66,4 @@ try {
 setInterval(() => {
   console.log('emitting pong')
   zapp?.emit?.('pong', { hello: 'from-worker', id })
-}, 1000)
+}, 1000);

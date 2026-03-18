@@ -43,5 +43,11 @@ In `./example` we want to build a test app, like what an end user would do. So I
    - `-Oz` flag: aggressive size optimization
    - `-flto`: link-time optimization
    - `strip`: removes debug symbols
-   - **JSC**: 204KB (uses system JavaScriptCore framework)
-   - **QJS**: 745KB (embeds QuickJS runtime)
+   - **JSC**: ~200KB (uses system JavaScriptCore framework)
+   - **QJS**: ~745KB (embeds QuickJS runtime)
+
+## Bootstrap Scripts
+
+- `bootstrap.sh` (macOS/Linux) - Syncs native code to CLI and rebuilds CLI
+- `bootstrap.ps1` (Windows) - Same for Windows
+- Usage: `./bootstrap.sh` or `./bootstrap.sh --clean` (also cleans build artifacts)

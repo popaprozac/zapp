@@ -1,3 +1,5 @@
+import { Events } from "./events";
+
 export interface WindowOptions {
   title?: string;
   width?: number;
@@ -80,14 +82,12 @@ function makeHandle(windowId: string): WindowHandle {
     },
     onReady(handler: WindowEventHandler): () => void {
       // Listen for "window-ready" event globally and filter by windowId
-      const { Events } = require("./events");
-      const off = Events.on("window-ready", (payload) => {
+      return Events.on("window-ready", (payload) => {
         const p = payload as { windowId?: string };
         if (p?.windowId === windowId) {
           handler();
         }
       });
-      return off;
     },
   };
 }

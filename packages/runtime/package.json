@@ -2,12 +2,6 @@
   "name": "@zapp/runtime",
   "version": "0.1.0",
   "type": "module",
-<<<<<<< HEAD
-  "version": "0.0.1",
-  "main": "index.ts",
-  "types": "index.ts",
-  "exports": "./index.ts",
-=======
   "description": "Frontend runtime API for Zapp desktop apps",
   "main": "index.ts",
   "types": "index.ts",
@@ -15,6 +9,5 @@
     "*.ts",
     "src/"
   ],
->>>>>>> window-fixes
   "license": "MIT"
 }

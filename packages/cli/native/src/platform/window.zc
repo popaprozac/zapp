@@ -35,7 +35,11 @@ struct WindowOptions {
     hidden: bool;
     alwaysOnTop: bool;
     titleBarStyle: TitleBarStyle;
+    webContentInspectable: int; // -1 = inherit from app config, 0 = false, 1 = true
 }
+
+struct App;
+extern fn app_get_active() -> void*;
 
 struct Window {
     id: int;
@@ -43,8 +47,11 @@ struct Window {
 }
 
 impl Window {
-    fn on_ready(self, manager: WindowManager*, cb: fn*() -> void) -> void {
-        manager.set_on_ready(self.id, cb);
+    fn on_ready(self, cb: fn*() -> void) -> void {
+        let app = (App*)app_get_active();
+        if app != NULL {
+            app.window.set_on_ready(self.id, cb);
+        }
     }
 
     fn minimize(self) -> void {
@@ -83,9 +90,12 @@ impl Window {
         }
     }
 
-    fn close(self, manager: WindowManager*) -> void {
+    fn close(self) -> void {
         if self.handle != NULL {
-            manager.close(self.id);
+            let app = (App*)app_get_active();
+            if app != NULL {
+                app.window.close(self.id);
+            }
         }
     }
 
@@ -93,8 +103,6 @@ impl Window {
         return self.handle != NULL;
     }
 }
-
-struct App;
 
 struct WindowManager {
     app: App*;
@@ -114,7 +122,14 @@ impl WindowManager {
     }
 
     fn create(self, options: WindowOptions*) -> Window {
-        let handle = window_create(options, self.webContentInspectable);
+        if options.webContentInspectable < 0 {
+            if self.webContentInspectable {
+                options.webContentInspectable = 1;
+            } else {
+                options.webContentInspectable = 0;
+            }
+        }
+        let handle = window_create(options);
         let key: char[32];
         c_stdio::snprintf(key, 32, "win-%d", self.next_id);
         self.handles.put(key, handle);
@@ -182,16 +197,17 @@ fn window_options_default(title: string) -> WindowOptions {
         hidden: false,
         alwaysOnTop: false,
         titleBarStyle: WINDOW_TITLEBAR_STYLE_DEFAULT,
+        webContentInspectable: -1,
     };
 }
 
 @cfg(apple)
-fn window_create(options: WindowOptions*, inspectable: bool) -> void* {
-    return darwin_window_create(options, inspectable);
+fn window_create(options: WindowOptions*) -> void* {
+    return darwin_window_create(options);
 }
 @cfg(windows)
-fn window_create(options: WindowOptions*, inspectable: bool) -> void* {
-    return windows_window_create(options, inspectable);
+fn window_create(options: WindowOptions*) -> void* {
+    return windows_window_create(options);
 }
 
 @cfg(apple)
@@ -258,8 +274,6 @@ fn window_set_always_on_top(window: void*, on: bool) -> void { windows_window_se
 fn window_register_numeric_id(window: void*, id: int) -> void { darwin_window_register_numeric_id(window, id); }
 @cfg(windows)
 fn window_register_numeric_id(window: void*, id: int) -> void { windows_window_register_numeric_id(window, id); }
-
-extern fn app_get_active() -> void*;
 
 fn window_manager_trigger_on_ready(id: int) -> void {
     let app = (App*)app_get_active();

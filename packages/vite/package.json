@@ -1,13 +1,8 @@
 {
   "name": "@zapp/vite",
-<<<<<<< HEAD
-  "type": "module",
-  "version": "0.0.1",
-=======
   "version": "0.1.0",
   "type": "module",
   "description": "Vite plugin for Zapp desktop apps",
->>>>>>> window-fixes
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [

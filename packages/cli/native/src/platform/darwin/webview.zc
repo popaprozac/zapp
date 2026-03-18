@@ -509,15 +509,7 @@ raw {
             injectionTime:WKUserScriptInjectionTimeAtDocumentStart
             forMainFrameOnly:NO];
         [ucc addUserScript:userScript];
-        
-        // Add a script to send ready message when DOM is ready
-        NSString* readyScript = @"document.addEventListener('DOMContentLoaded', function() { var winId = globalThis[Symbol.for('zapp.windowId')]; var payload = JSON.stringify({windowId: winId || 'unknown'}); window.webkit.messageHandlers.zapp.postMessage('window\\nready\\n' + payload); });";
-        WKUserScript* readyUserScript = [[WKUserScript alloc]
-            initWithSource:readyScript
-            injectionTime:WKUserScriptInjectionTimeAtDocumentStart
-            forMainFrameOnly:NO];
-        [ucc addUserScript:readyUserScript];
-        
+
         ZappMsgHandler* handler = [[ZappMsgHandler alloc] init];
         [ucc addScriptMessageHandler:handler name:@"zapp"];
         [config setUserContentController:ucc];

@@ -3,7 +3,6 @@
 
 include <stdio.h>
 include <string.h>
-include <unistd.h>
 
 raw {
     // Log levels (higher = more verbose)
@@ -29,16 +28,29 @@ raw {
     // Global log level (default: WARN for prod, INFO for dev)
     // Can be overridden via ZAPP_LOG_LEVEL env var or CLI flag
     static int g_zapp_log_level = ZAPP_LOG_WARN;
+}
 
-    // Check if colors should be used (TTY check)
+// Platform-specific TTY check - Windows
+raw {
+#ifdef _WIN32
+    #include <io.h>
     static bool zapp_log_use_colors(void) {
-        #ifdef _WIN32
-            return _isatty(_fileno(stderr));
-        #else
-            return isatty(fileno(stderr)) != 0;
-        #endif
+        return _isatty(_fileno(stderr)) != 0;
     }
+#endif
+}
 
+// Platform-specific TTY check - Unix/macOS
+raw {
+#ifndef _WIN32
+    #include <unistd.h>
+    static bool zapp_log_use_colors(void) {
+        return isatty(fileno(stderr)) != 0;
+    }
+#endif
+}
+
+raw {
     // Get ANSI color for log level
     static const char* zapp_log_level_color(int level) {
         if (!zapp_log_use_colors()) return "";

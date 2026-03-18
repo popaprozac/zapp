@@ -34,10 +34,13 @@ raw {
 #endif
 }
 
-fn windows_window_create(options: WindowOptions*, inspectable: bool) -> void* {
+fn windows_window_create(options: WindowOptions*) -> void* {
     let handle: void* = NULL;
     raw {
     #ifdef _WIN32
+        extern void zapp_register_window_class(void);
+        CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+        zapp_register_window_class();
         HWND hwnd = zapp_create_hwnd(
             (const char*)options->title,
             options->width, options->height,
@@ -47,7 +50,8 @@ fn windows_window_create(options: WindowOptions*, inspectable: bool) -> void* {
             fprintf(stderr, "[zapp] CreateWindowEx failed: %lu\n", GetLastError());
             return NULL;
         }
-        zapp_windows_webview_create(hwnd, inspectable ? TRUE : FALSE);
+        BOOL inspectable = options->webContentInspectable > 0 ? TRUE : FALSE;
+        zapp_windows_webview_create(hwnd, inspectable);
         ShowWindow(hwnd, SW_SHOW);
         UpdateWindow(hwnd);
         handle = (void*)hwnd;
@@ -205,6 +209,36 @@ fn windows_window_set_always_on_top(window: void*, on: bool) -> void {
 raw {
 #ifdef _WIN32
     // ---------------------------------------------------------------------------
+    // Numeric ID registry (maps window ID strings to numeric IDs for on_ready)
+    // ---------------------------------------------------------------------------
+
+    #define ZAPP_MAX_NUMERIC_IDS 64
+    typedef struct { char window_id[64]; int numeric_id; int in_use; } ZappNumericIdEntry;
+    static ZappNumericIdEntry zapp_numeric_ids[ZAPP_MAX_NUMERIC_IDS] = {0};
+
+    static void zapp_window_register_numeric_id_str(const char* window_id, int numeric_id) {
+        if (!window_id) return;
+        for (int i = 0; i < ZAPP_MAX_NUMERIC_IDS; i++) {
+            if (!zapp_numeric_ids[i].in_use) {
+                strncpy(zapp_numeric_ids[i].window_id, window_id, 63);
+                zapp_numeric_ids[i].window_id[63] = '\0';
+                zapp_numeric_ids[i].numeric_id = numeric_id;
+                zapp_numeric_ids[i].in_use = 1;
+                return;
+            }
+        }
+    }
+
+    static int zapp_window_get_numeric_id(const char* window_id) {
+        if (!window_id) return -1;
+        for (int i = 0; i < ZAPP_MAX_NUMERIC_IDS; i++) {
+            if (zapp_numeric_ids[i].in_use && strcmp(zapp_numeric_ids[i].window_id, window_id) == 0)
+                return zapp_numeric_ids[i].numeric_id;
+        }
+        return -1;
+    }
+
+    // ---------------------------------------------------------------------------
     // Window registry (JS-created windows by string ID)
     // ---------------------------------------------------------------------------
 
@@ -285,6 +319,8 @@ raw {
 
     extern void zapp_windows_webview_create(HWND hwnd, BOOL inspectable);
     extern const char* zapp_build_initial_url(void);
+    extern void zapp_backend_dispatch_window_ready(const char* window_id);
+    extern void window_manager_trigger_on_ready(int window_id);
 
     extern char* zapp_json_get_string(const char* json, const char* key);
     extern int zapp_json_get_int(const char* json, const char* key, int default_val);
@@ -294,6 +330,19 @@ raw {
     void app_handle_window_message(App* app, char* action, char* payload_json) {
         if (action == NULL || payload_json == NULL) return;
         const char* json = (const char*)payload_json;
+
+        if (strcmp(action, "ready") == 0) {
+            char* windowId = zapp_json_get_string(json, "windowId");
+            if (windowId && windowId[0] != '\0') {
+                zapp_backend_dispatch_window_ready(windowId);
+                int numericId = zapp_window_get_numeric_id(windowId);
+                if (numericId >= 0) {
+                    window_manager_trigger_on_ready(numericId);
+                }
+            }
+            if (windowId) free(windowId);
+            return;
+        }
 
         if (strcmp(action, "create") == 0) {
             char* requestId = zapp_json_get_string(json, "requestId");
@@ -405,4 +454,16 @@ raw {
         free(windowId);
     }
 #endif
+}
+
+fn windows_window_register_numeric_id(window: void*, numeric_id: int) -> void {
+    raw {
+    #ifdef _WIN32
+        if (window == NULL) return;
+        HWND hwnd = (HWND)window;
+        char wid[64];
+        snprintf(wid, sizeof(wid), "win-%p", (void*)hwnd);
+        zapp_window_register_numeric_id_str(wid, numeric_id);
+    #endif
+    }
 }
