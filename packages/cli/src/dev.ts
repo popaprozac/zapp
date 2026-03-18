@@ -1,5 +1,6 @@
 import path from "node:path";
 import process from "node:process";
+import { createInterface } from "node:readline";
 import { mkdir } from "node:fs/promises";
 import {
   ensureQjsLib,
@@ -66,19 +67,27 @@ export const runDev = async ({
   let app: any = null;
   let shuttingDown = false;
 
-  const shutdown = () => {
+  const shutdown = (reason: "user" | "app-exit" | "error" = "error") => {
     if (shuttingDown) return;
     shuttingDown = true;
+    if (reason === "user") {
+      process.stdout.write("\n[zapp] gracefully exiting...\n");
+    } else if (reason === "app-exit") {
+      process.stdout.write("[zapp] app exited, cleaning up...\n");
+    }
     killChild(app);
     killChild(vite);
-    setTimeout(() => process.exit(0), 1000).unref();
+    setTimeout(() => process.exit(0), 1500);
   };
 
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
-  process.on("exit", shutdown);
-  if (process.platform === "win32") {
-    process.on("SIGHUP", shutdown);
+  process.on("SIGINT", () => shutdown("user"));
+  process.on("SIGTERM", () => shutdown("user"));
+  process.on("SIGHUP", () => shutdown("user"));
+
+  if (process.platform === "win32" && process.stdin.isTTY) {
+    const rl = createInterface({ input: process.stdin });
+    rl.on("SIGINT", () => shutdown("user"));
+    rl.on("close", () => shutdown("user"));
   }
 
   try {
@@ -116,15 +125,17 @@ export const runDev = async ({
     });
 
     app.exited.then((code: number | null) => {
-      process.stdout.write(`[zapp] native process exited (${code ?? "null"})\n`);
-      shutdown();
+      if (!shuttingDown) {
+        shutdown("app-exit");
+      }
     });
-    vite?.exited.then((code: number | null) => {
-      process.stdout.write(`[zapp] vite exited (${code ?? "null"})\n`);
-      shutdown();
+    vite?.exited.then(() => {
+      if (!shuttingDown) {
+        shutdown("error");
+      }
     });
   } catch (error) {
-    shutdown();
+    shutdown("error");
     throw error;
   }
 

@@ -1,4 +1,5 @@
 import "../../platform.zc";
+import "../../shared/worker_registry.zc";
 import "../bootstrap.zc";
 import "./common.zc";
 import "../engine_qjs.zc";
@@ -54,6 +55,9 @@ raw {
     extern void zapp_windows_qjs_fetch_install(JSContext* ctx, JSValue bridge, const char* worker_id);
     extern void zapp_windows_qjs_websocket_install(JSContext* ctx, JSValue bridge, const char* worker_id);
 
+    // Forward declarations for worker state used by thread proc
+    static JSRuntime* qjs_rt;
+
     // -----------------------------------------------------------------------
     // Worker thread: serial work queue (equivalent of GCD serial dispatch queue)
     // -----------------------------------------------------------------------
@@ -71,8 +75,13 @@ raw {
     static ZappWorkItem* zapp_qjs_queue_tail = NULL;
     static volatile LONG zapp_qjs_shutdown = 0;
 
+    static HANDLE zapp_qjs_rt_ready_event = NULL;
+
     static DWORD WINAPI zapp_qjs_thread_proc(LPVOID param) {
         (void)param;
+        qjs_rt = JS_NewRuntime();
+        JS_SetMaxStackSize(qjs_rt, 4 * 1024 * 1024);
+        if (zapp_qjs_rt_ready_event) SetEvent(zapp_qjs_rt_ready_event);
         while (!zapp_qjs_shutdown) {
             WaitForSingleObject(zapp_qjs_wake_event, INFINITE);
             while (1) {
@@ -110,7 +119,6 @@ raw {
     // Worker state (maps using ZappStringMap from common.zc)
     // -----------------------------------------------------------------------
 
-    static JSRuntime* qjs_rt = NULL;
     static ZappStringMap qjs_contexts;       // workerId -> JSContext*
     static ZappStringMap qjs_owners;         // workerId -> strdup(ownerId)
     static ZappStringMap qjs_script_urls;    // workerId -> strdup(scriptUrl)
@@ -126,7 +134,7 @@ raw {
 
         InitializeCriticalSection(&zapp_qjs_queue_lock);
         zapp_qjs_wake_event = CreateEventW(NULL, FALSE, FALSE, NULL);
-        zapp_qjs_thread = CreateThread(NULL, 0, zapp_qjs_thread_proc, NULL, 0, NULL);
+        zapp_qjs_rt_ready_event = CreateEventW(NULL, TRUE, FALSE, NULL);
 
         zapp_map_init(&qjs_contexts);
         zapp_map_init(&qjs_owners);
@@ -135,8 +143,10 @@ raw {
         zapp_map_init(&qjs_shared_ctxs);
         zapp_map_init(&qjs_shared_refs);
 
-        qjs_rt = JS_NewRuntime();
-        JS_SetMaxStackSize(qjs_rt, 2 * 1024 * 1024);
+        zapp_qjs_thread = CreateThread(NULL, 4 * 1024 * 1024, zapp_qjs_thread_proc, NULL, 0, NULL);
+        WaitForSingleObject(zapp_qjs_rt_ready_event, INFINITE);
+        CloseHandle(zapp_qjs_rt_ready_event);
+        zapp_qjs_rt_ready_event = NULL;
     }
 
     void* zapp_windows_qjs_get_context(const char* workerId) {
@@ -154,7 +164,9 @@ raw {
                 if (err_job < 0 && pctx) {
                     JSValue exception = JS_GetException(pctx);
                     const char* str = JS_ToCString(pctx, exception);
-                    fprintf(stderr, "[qjs] pending job error (%s): %s\n", label ? label : "unknown", str ? str : "unknown");
+                    char log_buf[512];
+                    snprintf(log_buf, sizeof(log_buf), "pending job error (%s): %s", label ? label : "unknown", str ? str : "unknown");
+                    zapp_log_worker(ZAPP_LOG_ERROR, -1, -1, log_buf);
                     if (str) JS_FreeCString(pctx, str);
                     JS_FreeValue(pctx, exception);
                 }
@@ -181,7 +193,9 @@ raw {
                 if (JS_IsException(ret)) {
                     JSValue exception = JS_GetException(ctx);
                     const char* str = JS_ToCString(ctx, exception);
-                    fprintf(stderr, "[qjs] bridge.%s threw: %s\n", methodName, str ? str : "unknown");
+                    char log_buf[512];
+                    snprintf(log_buf, sizeof(log_buf), "bridge.%s threw: %s", methodName, str ? str : "unknown");
+                    zapp_log_worker(ZAPP_LOG_ERROR, -1, -1, log_buf);
                     if (str) JS_FreeCString(ctx, str);
                     JS_FreeValue(ctx, exception);
                 }
@@ -417,13 +431,25 @@ raw {
         return JS_UNDEFINED;
     }
 
-    static JSValue qjs_console_log(JSContext* ctx, JSValue this_val, int argc, JSValue* argv) {
+    extern void zapp_log_worker(int level, int window_id, int worker_id, const char* message);
+    #ifndef ZAPP_LOG_ERROR
+    #define ZAPP_LOG_ERROR 0
+    #define ZAPP_LOG_WARN  1
+    #define ZAPP_LOG_INFO  2
+    #define ZAPP_LOG_DEBUG 3
+    #define ZAPP_LOG_TRACE 4
+    #endif
+
+    static JSValue qjs_console_log(JSContext* ctx, JSValue this_val, int argc, JSValue* argv, int magic, JSValue* func_data) {
         (void)this_val;
+        char msg_buf[4096];
+        size_t msg_len = 0;
+
         JSValue global = JS_GetGlobalObject(ctx);
         JSValue JSON_val = JS_GetPropertyStr(ctx, global, "JSON");
         JSValue stringify = JS_IsObject(JSON_val) ? JS_GetPropertyStr(ctx, JSON_val, "stringify") : JS_UNDEFINED;
 
-        for (int i = 0; i < argc; i++) {
+        for (int i = 0; i < argc && msg_len < sizeof(msg_buf) - 1; i++) {
             const char* str = NULL;
             if (JS_IsFunction(ctx, stringify)) {
                 JSValue args[1] = { argv[i] };
@@ -435,15 +461,27 @@ raw {
             }
             if (!str) str = JS_ToCString(ctx, argv[i]);
             if (str) {
-                printf("%s%s", i == 0 ? "" : " ", str);
+                int n = snprintf(msg_buf + msg_len, sizeof(msg_buf) - msg_len, "%s%s", i > 0 ? " " : "", str);
+                if (n > 0) msg_len += (size_t)n;
                 JS_FreeCString(ctx, str);
             }
         }
+        msg_buf[msg_len] = '\0';
 
         JS_FreeValue(ctx, global);
         if (JS_IsObject(JSON_val)) JS_FreeValue(ctx, stringify);
         JS_FreeValue(ctx, JSON_val);
-        printf("\n");
+
+        int level = (magic >= ZAPP_LOG_ERROR && magic <= ZAPP_LOG_TRACE) ? magic : ZAPP_LOG_INFO;
+        int window_id = -1, worker_seq_id = -1;
+        if (func_data) {
+            const char* wid = JS_ToCString(ctx, func_data[0]);
+            if (wid) {
+                zapp_worker_lookup(wid, &window_id, &worker_seq_id);
+                JS_FreeCString(ctx, wid);
+            }
+        }
+        zapp_log_worker(level, window_id, worker_seq_id, msg_buf);
         return JS_UNDEFINED;
     }
 
@@ -565,6 +603,7 @@ raw {
                 zapp_map_set(&qjs_script_urls, d->workerId, _strdup(d->scriptUrl));
                 zapp_map_set(&qjs_shared_flags, d->workerId, (void*)(intptr_t)1);
                 if (d->ownerId[0]) zapp_map_set(&qjs_owners, d->workerId, _strdup(d->ownerId));
+                zapp_worker_register(d->workerId);
 
                 JSValue args[1];
                 args[0] = JS_NewString((JSContext*)existingCtx, d->workerId);
@@ -605,20 +644,24 @@ raw {
         zapp_map_set(&qjs_script_urls, d->workerId, _strdup(d->scriptUrl));
         zapp_map_set(&qjs_shared_flags, d->workerId, d->shared ? (void*)(intptr_t)1 : NULL);
         if (d->ownerId[0]) zapp_map_set(&qjs_owners, d->workerId, _strdup(d->ownerId));
+        zapp_worker_register(d->workerId);
 
         JSValue global = JS_GetGlobalObject(ctx);
 
-        // console.log/error/warn
+        JSValue wIdVal = JS_NewString(ctx, d->workerId);
+        JSValue funcData[1] = { wIdVal };
+
         JSValue consoleObj = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, consoleObj, "log", JS_NewCFunction(ctx, qjs_console_log, "log", 1));
-        JS_SetPropertyStr(ctx, consoleObj, "error", JS_NewCFunction(ctx, qjs_console_log, "error", 1));
-        JS_SetPropertyStr(ctx, consoleObj, "warn", JS_NewCFunction(ctx, qjs_console_log, "warn", 1));
+        JS_SetPropertyStr(ctx, consoleObj, "log",   JS_NewCFunctionData(ctx, qjs_console_log, 1, ZAPP_LOG_INFO,  1, funcData));
+        JS_SetPropertyStr(ctx, consoleObj, "info",  JS_NewCFunctionData(ctx, qjs_console_log, 1, ZAPP_LOG_INFO,  1, funcData));
+        JS_SetPropertyStr(ctx, consoleObj, "warn",  JS_NewCFunctionData(ctx, qjs_console_log, 1, ZAPP_LOG_WARN,  1, funcData));
+        JS_SetPropertyStr(ctx, consoleObj, "error", JS_NewCFunctionData(ctx, qjs_console_log, 1, ZAPP_LOG_ERROR, 1, funcData));
+        JS_SetPropertyStr(ctx, consoleObj, "debug", JS_NewCFunctionData(ctx, qjs_console_log, 1, ZAPP_LOG_DEBUG, 1, funcData));
+        JS_SetPropertyStr(ctx, consoleObj, "trace", JS_NewCFunctionData(ctx, qjs_console_log, 1, ZAPP_LOG_TRACE, 1, funcData));
         JS_SetPropertyStr(ctx, global, "console", consoleObj);
 
         // Bridge object
         JSValue bridge = JS_NewObject(ctx);
-        JSValue wIdVal = JS_NewString(ctx, d->workerId);
-        JSValue funcData[1] = { wIdVal };
 
         JS_SetPropertyStr(ctx, bridge, "postMessage", JS_NewCFunctionData(ctx, qjs_bridge_post, 1, 0, 1, funcData));
         JS_SetPropertyStr(ctx, bridge, "emitToHost", JS_NewCFunctionData(ctx, qjs_bridge_emitToHost, 2, 0, 1, funcData));
@@ -722,7 +765,9 @@ raw {
         if (JS_IsException(parsedData)) {
             JSValue exception = JS_GetException(ctx);
             const char* str = JS_ToCString(ctx, exception);
-            fprintf(stderr, "[qjs] JSON.parse in post failed: %s\n", str ? str : "unknown");
+            char log_buf[512];
+            snprintf(log_buf, sizeof(log_buf), "JSON.parse in post failed: %s", str ? str : "unknown");
+            zapp_log_worker(ZAPP_LOG_ERROR, -1, -1, log_buf);
             if (str) JS_FreeCString(ctx, str);
             JS_FreeValue(ctx, exception);
         } else {

@@ -139,4 +139,68 @@ raw {
         g_window_counter_count = 0;
         g_next_window_id = 1;
     }
+
+    // --- Per-worker ID registry (register once, lookup many) ---
+
+    #define ZAPP_MAX_REGISTERED_WORKERS 512
+
+    typedef struct {
+        char worker_id[ZAPP_MAX_WORKER_ID_LEN];
+        int window_id;
+        int worker_seq_id;
+    } zapp_registered_worker_t;
+
+    static zapp_registered_worker_t g_registered_workers[ZAPP_MAX_REGISTERED_WORKERS];
+    static int g_registered_worker_count = 0;
+
+    static void zapp_worker_register(const char* worker_id) {
+        if (!worker_id || worker_id[0] == '\0') return;
+        if (g_registered_worker_count >= ZAPP_MAX_REGISTERED_WORKERS) return;
+
+        for (int i = 0; i < g_registered_worker_count; i++) {
+            if (strcmp(g_registered_workers[i].worker_id, worker_id) == 0) return;
+        }
+
+        char owner_buf[256];
+        zapp_extract_owner_id(worker_id, owner_buf, sizeof(owner_buf));
+
+        int win_id = -1, seq_id = -1;
+        zapp_get_window_and_worker_id(owner_buf, &win_id, &seq_id);
+
+        zapp_registered_worker_t* w = &g_registered_workers[g_registered_worker_count++];
+        strncpy(w->worker_id, worker_id, ZAPP_MAX_WORKER_ID_LEN - 1);
+        w->worker_id[ZAPP_MAX_WORKER_ID_LEN - 1] = '\0';
+        w->window_id = win_id;
+        w->worker_seq_id = seq_id;
+    }
+
+    static void zapp_worker_lookup(const char* worker_id, int* out_window_id, int* out_worker_seq_id) {
+        if (!worker_id || worker_id[0] == '\0') {
+            if (out_window_id) *out_window_id = -1;
+            if (out_worker_seq_id) *out_worker_seq_id = -1;
+            return;
+        }
+        for (int i = 0; i < g_registered_worker_count; i++) {
+            if (strcmp(g_registered_workers[i].worker_id, worker_id) == 0) {
+                if (out_window_id) *out_window_id = g_registered_workers[i].window_id;
+                if (out_worker_seq_id) *out_worker_seq_id = g_registered_workers[i].worker_seq_id;
+                return;
+            }
+        }
+        if (out_window_id) *out_window_id = -1;
+        if (out_worker_seq_id) *out_worker_seq_id = -1;
+    }
+
+    static void zapp_worker_unregister(const char* worker_id) {
+        if (!worker_id) return;
+        for (int i = 0; i < g_registered_worker_count; i++) {
+            if (strcmp(g_registered_workers[i].worker_id, worker_id) == 0) {
+                for (int j = i; j < g_registered_worker_count - 1; j++) {
+                    memcpy(&g_registered_workers[j], &g_registered_workers[j + 1], sizeof(zapp_registered_worker_t));
+                }
+                g_registered_worker_count--;
+                return;
+            }
+        }
+    }
 }

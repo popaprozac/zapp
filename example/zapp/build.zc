@@ -1,3 +1,7 @@
+// --- Platform Tags ---
+//> macos: define: apple
+//> windows: define: windows
+
 // --- macOS Directives ---
 //> macos: framework: Cocoa
 //> macos: framework: WebKit

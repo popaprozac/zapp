@@ -417,9 +417,7 @@ raw {
         int worker_seq_id = -1;
         
         if (worker_id) {
-            char owner_buf[256];
-            qjs_extract_owner_id(worker_id, owner_buf, sizeof(owner_buf));
-            zapp_get_window_and_worker_id(owner_buf, &window_id, &worker_seq_id);
+            zapp_worker_lookup(worker_id, &window_id, &worker_seq_id);
             JS_FreeCString(ctx, worker_id);
         }
         
@@ -720,6 +718,7 @@ impl WorkerBackend for DarwinWorkerQjs {
                     if (ownerId != nil) {
                         qjs_owners[workerId] = ownerId;
                     }
+                    zapp_worker_register([workerId UTF8String]);
 
                     dispatch_async(qjs_queue, ^{
                         QJSValue args[1];
@@ -755,6 +754,7 @@ impl WorkerBackend for DarwinWorkerQjs {
                                 qjs_worker_script_urls[workerId] = scriptUrl;
                                 qjs_worker_shared_flags[workerId] = @(YES);
                                 if (ownerId) [qjs_owners setObject:ownerId forKey:workerId];
+                                zapp_worker_register([workerId UTF8String]);
                                 QJSValue args[1];
                                 args[0] = JS_NewString(existingCtx, [workerId UTF8String]);
                                 qjs_call_bridge_method(existingCtx, @"dispatchConnect", 1, args);
@@ -770,6 +770,7 @@ impl WorkerBackend for DarwinWorkerQjs {
                         qjs_worker_script_urls[workerId] = scriptUrl;
                         qjs_worker_shared_flags[workerId] = @(YES);
                         if (ownerId) [qjs_owners setObject:ownerId forKey:workerId];
+                        zapp_worker_register([workerId UTF8String]);
                         QJSValue args[1];
                         args[0] = JS_NewString(existingCtx, [workerId UTF8String]);
                         qjs_call_bridge_method(existingCtx, @"dispatchConnect", 1, args);
@@ -806,6 +807,7 @@ impl WorkerBackend for DarwinWorkerQjs {
                 [qjs_worker_script_urls setObject:scriptUrl forKey:workerId];
                 [qjs_worker_shared_flags setObject:@(shared) forKey:workerId];
                 if (ownerId) [qjs_owners setObject:ownerId forKey:workerId];
+                zapp_worker_register([workerId UTF8String]);
 
                 QJSValue global = JS_GetGlobalObject(ctx);
 

@@ -10,6 +10,14 @@ raw {
     extern void* zapp_windows_qjs_get_context(const char* workerId);
     extern void zapp_windows_qjs_dispatch(void (*func)(void*), void* data);
     extern void zapp_windows_qjs_drain_jobs(void* ctx, const char* label);
+    extern void zapp_log_worker(int level, int window_id, int worker_id, const char* message);
+    #ifndef ZAPP_LOG_ERROR
+    #define ZAPP_LOG_ERROR 0
+    #define ZAPP_LOG_WARN  1
+    #define ZAPP_LOG_INFO  2
+    #define ZAPP_LOG_DEBUG 3
+    #define ZAPP_LOG_TRACE 4
+    #endif
 
     static char* zapp_core_ws_connect(const char* url_str, const char** protocols, int protocol_count,
                                        zapp_ws_event_fn callback, void* user_data);
@@ -76,7 +84,7 @@ raw {
         if (JS_IsException(ret)) {
             JSValue exc = JS_GetException(ctx);
             const char* s = JS_ToCString(ctx, exc);
-            if (s) { fprintf(stderr, "[qjs-ws] callback error: %s\n", s); JS_FreeCString(ctx, s); }
+            if (s) { zapp_log_worker(ZAPP_LOG_ERROR, -1, -1, s); JS_FreeCString(ctx, s); }
             JS_FreeValue(ctx, exc);
         }
         JS_FreeValue(ctx, ret);

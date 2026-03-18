@@ -14,6 +14,13 @@ export const resolveNativeDir = (): string => {
   const cliSrcDir = import.meta.dir;
   const cliRoot = path.dirname(cliSrcDir);
 
+  // Monorepo: packages/cli/../../ is the repo root with src/ and vendor/
+  const repoRoot = path.resolve(cliRoot, "../..");
+  if (existsSync(path.join(repoRoot, "src")) && existsSync(path.join(repoRoot, "vendor"))) {
+    _nativeDir = repoRoot;
+    return _nativeDir;
+  }
+
   // Published/linked: packages/cli/native/ exists
   const bundled = path.join(cliRoot, "native");
   if (existsSync(path.join(bundled, "src")) && existsSync(path.join(bundled, "vendor"))) {
@@ -21,17 +28,10 @@ export const resolveNativeDir = (): string => {
     return _nativeDir;
   }
 
-  // Monorepo fallback: packages/cli/../../ is the repo root with src/ and vendor/
-  const repoRoot = path.resolve(cliRoot, "../..");
-  if (existsSync(path.join(repoRoot, "src")) && existsSync(path.join(repoRoot, "vendor"))) {
-    _nativeDir = repoRoot;
-    return _nativeDir;
-  }
-
   throw new Error(
     "[zapp] Cannot find native framework code. Expected either:\n" +
-    `  - ${bundled}/src  (bundled with CLI)\n` +
-    `  - ${repoRoot}/src  (monorepo development)\n`
+    `  - ${repoRoot}/src  (monorepo development)\n` +
+    `  - ${bundled}/src  (bundled with CLI)\n`
   );
 };
 

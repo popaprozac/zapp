@@ -36,7 +36,7 @@ raw {
 #endif
 }
 
-fn darwin_window_create(options: WindowOptions*, inspectable: bool) -> void* {
+fn darwin_window_create(options: WindowOptions*) -> void* {
     let handle: void* = NULL;
     raw {
 #ifdef __APPLE__
@@ -53,10 +53,6 @@ fn darwin_window_create(options: WindowOptions*, inspectable: bool) -> void* {
                 NSString* titleStr = [NSString stringWithUTF8String:(const char*)options->title];
                 [window setTitle:titleStr];
 
-                // Electron/Tauri/Wails-like titlebar styles
-                // default: normal titlebar
-                // hidden: hide titlebar/title, keep traffic lights
-                // hiddenInset: hidden with inset-style toolbar presentation when available
                 if (options->titleBarStyle == WINDOW_TITLEBAR_STYLE_HIDDEN || options->titleBarStyle == WINDOW_TITLEBAR_STYLE_HIDDEN_INSET) {
                     [window setStyleMask:([window styleMask] | NSWindowStyleMaskFullSizeContentView)];
                     [window setTitleVisibility:NSWindowTitleHidden];
@@ -71,6 +67,7 @@ fn darwin_window_create(options: WindowOptions*, inspectable: bool) -> void* {
                     #endif
                 }
 
+                bool inspectable = options->webContentInspectable > 0;
                 zapp_darwin_webview_create((__bridge void*)window, inspectable);
 
                 NSString* ownerId = [NSString stringWithFormat:@"owner-%p", window];

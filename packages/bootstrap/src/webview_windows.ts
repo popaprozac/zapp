@@ -694,4 +694,30 @@ Object.defineProperties(zapp, {
 Object.freeze(zapp);
 ensurePublicZappBinding();
 
+// Fire ready event when DOM is ready
+let readyFired = false;
+const fireReady = (): void => {
+  if (readyFired) return;
+  readyFired = true;
+
+  const winSymbolStore = g as unknown as Record<symbol, unknown>;
+  const windowId = winSymbolStore[Symbol.for("zapp.windowId")] as string | undefined;
+
+  const handler = g.chrome?.webview;
+  if (handler?.postMessage) {
+    const payload = JSON.stringify({ windowId: windowId ?? "unknown" });
+    handler.postMessage(`window\nready\n${payload}`);
+  }
+
+  rt.onEvent?.("ready", () => {});
+  deliverEvent("ready", undefined);
+};
+
+if (typeof document !== "undefined") {
+  document.addEventListener("DOMContentLoaded", fireReady, { once: true });
+  if (document.readyState !== "loading") {
+    fireReady();
+  }
+}
+
 export {};
