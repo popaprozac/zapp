@@ -94,7 +94,8 @@ export const ensureQjsLib = async (root: string): Promise<string> => {
     await runCmd(cc, [...cflags, srcPath, "-o", objPath]);
   }
 
-  await runCmd("ar", ["rcs", libPath, ...objectFiles]);
+  const ar = process.platform === "win32" ? "gcc-ar" : "ar";
+  await runCmd(ar, ["rcs", libPath, ...objectFiles]);
 
   return libPath;
 };
