@@ -1,0 +1,34 @@
+raw {
+#ifdef _WIN32
+    #include <windows.h>
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <string.h>
+
+    extern void zapp_windows_webview_eval_all(const char* js_utf8);
+    extern char* zapp_escape_js_string(const char* raw);
+
+    void zapp_dispatch_worker_to_webviews(const char* kind, const char* worker_id, const char* payload_json) {
+        if (kind == NULL || worker_id == NULL) return;
+        if (payload_json == NULL) payload_json = "null";
+
+        char* escaped_kind = zapp_escape_js_string(kind);
+        char* escaped_wid = zapp_escape_js_string(worker_id);
+
+        size_t jsLen = strlen(escaped_kind) + strlen(escaped_wid) + strlen(payload_json) + 256;
+        char* js = (char*)malloc(jsLen);
+        snprintf(js, jsLen,
+            "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+            "if(b&&typeof b.dispatchWorkerBridge==='function'){"
+            "b.dispatchWorkerBridge('%s','%s',%s);}})();",
+            escaped_kind, escaped_wid, payload_json
+        );
+
+        zapp_windows_webview_eval_all(js);
+
+        free(js);
+        free(escaped_kind);
+        free(escaped_wid);
+    }
+#endif
+}

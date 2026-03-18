@@ -1,0 +1,286 @@
+import "std/map.zc";
+
+raw {
+    #undef panic
+}
+
+import "stdio.h" as c_stdio;
+
+@cfg(apple)
+import "../platform/darwin/window.zc";
+
+@cfg(windows)
+import "../platform/windows/window.zc";
+
+opaque alias TitleBarStyle = int;
+
+def WINDOW_TITLEBAR_STYLE_DEFAULT: TitleBarStyle = 0;
+def WINDOW_TITLEBAR_STYLE_HIDDEN: TitleBarStyle = 1;
+def WINDOW_TITLEBAR_STYLE_HIDDEN_INSET: TitleBarStyle = 2;
+
+struct WindowOptions {
+    title: string;
+    width: int;
+    height: int;
+    x: int;
+    y: int;
+    visible: bool;
+    resizable: bool;
+    closable: bool;
+    minimizable: bool;
+    maximizable: bool;
+    fullscreen: bool;
+    borderless: bool;
+    transparent: bool;
+    hidden: bool;
+    alwaysOnTop: bool;
+    titleBarStyle: TitleBarStyle;
+}
+
+struct Window {
+    id: int;
+    handle: void*;
+}
+
+impl Window {
+    fn on_ready(self, manager: WindowManager*, cb: fn*() -> void) -> void {
+        manager.set_on_ready(self.id, cb);
+    }
+
+    fn minimize(self) -> void {
+        if self.handle != NULL {
+            window_minimize(self.handle);
+        }
+    }
+
+    fn unminimize(self) -> void {
+        if self.handle != NULL {
+            window_unminimize(self.handle);
+        }
+    }
+
+    fn maximize(self) -> void {
+        if self.handle != NULL {
+            window_maximize(self.handle);
+        }
+    }
+
+    fn unmaximize(self) -> void {
+        if self.handle != NULL {
+            window_unmaximize(self.handle);
+        }
+    }
+
+    fn toggle_minimize(self) -> void {
+        if self.handle != NULL {
+            window_toggle_minimize(self.handle);
+        }
+    }
+
+    fn toggle_maximize(self) -> void {
+        if self.handle != NULL {
+            window_toggle_maximize(self.handle);
+        }
+    }
+
+    fn close(self, manager: WindowManager*) -> void {
+        if self.handle != NULL {
+            manager.close(self.id);
+        }
+    }
+
+    fn is_valid(self) -> bool {
+        return self.handle != NULL;
+    }
+}
+
+struct App;
+
+struct WindowManager {
+    app: App*;
+    webContentInspectable: bool;
+    handles: Map<void*>;
+    next_id: int;
+}
+
+impl WindowManager {
+    fn new() -> Self {
+        return WindowManager{
+            app: NULL,
+            webContentInspectable: true,
+            handles: Map<void*>::new(),
+            next_id: 0,
+        };
+    }
+
+    fn create(self, options: WindowOptions*) -> Window {
+        let handle = window_create(options, self.webContentInspectable);
+        let key: char[32];
+        c_stdio::snprintf(key, 32, "win-%d", self.next_id);
+        self.handles.put(key, handle);
+        let id = self.next_id;
+        
+        window_register_numeric_id(handle, id);
+        
+        self.next_id += 1;
+        return Window{
+            id: id,
+            handle: handle,
+        };
+    }
+
+    fn set_on_ready(self, id: int, cb: fn*() -> void) -> void {
+        zapp_window_set_on_ready(id, cb);
+    }
+
+    fn trigger_on_ready(self, id: int) -> void {
+        zapp_window_trigger_on_ready(id);
+    }
+
+    fn get(self, id: int) -> Window {
+        let key: char[32];
+        c_stdio::snprintf(key, 32, "win-%d", id);
+        let maybe = self.handles.get(key);
+        if maybe.is_some() {
+            return Window{
+                id: id,
+                handle: maybe.unwrap(),
+            };
+        }
+        return Window{
+            id: id,
+            handle: NULL,
+        };
+    }
+
+    fn close(self, id: int) -> void {
+        let key: char[32];
+        c_stdio::snprintf(key, 32, "win-%d", id);
+        let maybe = self.handles.get(key);
+        if maybe.is_some() {
+            self.handles.remove(key);
+            window_destroy(maybe.unwrap());
+        }
+    }
+}
+
+fn window_options_default(title: string) -> WindowOptions {
+    return WindowOptions{
+        title: title,
+        width: 1200,
+        height: 800,
+        x: 0,
+        y: 0,
+        visible: true,
+        resizable: true,
+        closable: true,
+        minimizable: true,
+        maximizable: true,
+        fullscreen: false,
+        borderless: false,
+        transparent: false,
+        hidden: false,
+        alwaysOnTop: false,
+        titleBarStyle: WINDOW_TITLEBAR_STYLE_DEFAULT,
+    };
+}
+
+@cfg(apple)
+fn window_create(options: WindowOptions*, inspectable: bool) -> void* {
+    return darwin_window_create(options, inspectable);
+}
+@cfg(windows)
+fn window_create(options: WindowOptions*, inspectable: bool) -> void* {
+    return windows_window_create(options, inspectable);
+}
+
+@cfg(apple)
+fn window_destroy(window: void*) -> void { darwin_window_destroy(window); }
+@cfg(windows)
+fn window_destroy(window: void*) -> void { windows_window_destroy(window); }
+
+@cfg(apple)
+fn window_minimize(window: void*) -> void { darwin_window_minimize(window); }
+@cfg(windows)
+fn window_minimize(window: void*) -> void { windows_window_minimize(window); }
+
+@cfg(apple)
+fn window_unminimize(window: void*) -> void { darwin_window_unminimize(window); }
+@cfg(windows)
+fn window_unminimize(window: void*) -> void { windows_window_unminimize(window); }
+
+@cfg(apple)
+fn window_maximize(window: void*) -> void { darwin_window_maximize(window); }
+@cfg(windows)
+fn window_maximize(window: void*) -> void { windows_window_maximize(window); }
+
+@cfg(apple)
+fn window_unmaximize(window: void*) -> void { darwin_window_unmaximize(window); }
+@cfg(windows)
+fn window_unmaximize(window: void*) -> void { windows_window_unmaximize(window); }
+
+@cfg(apple)
+fn window_toggle_minimize(window: void*) -> void { darwin_window_toggle_minimize(window); }
+@cfg(windows)
+fn window_toggle_minimize(window: void*) -> void { windows_window_toggle_minimize(window); }
+
+@cfg(apple)
+fn window_toggle_maximize(window: void*) -> void { darwin_window_toggle_maximize(window); }
+@cfg(windows)
+fn window_toggle_maximize(window: void*) -> void { windows_window_toggle_maximize(window); }
+
+@cfg(apple)
+fn window_set_title(window: void*, title: string) -> void { darwin_window_set_title(window, title); }
+@cfg(windows)
+fn window_set_title(window: void*, title: string) -> void { windows_window_set_title(window, title); }
+
+@cfg(apple)
+fn window_set_size(window: void*, width: int, height: int) -> void { darwin_window_set_size(window, width, height); }
+@cfg(windows)
+fn window_set_size(window: void*, width: int, height: int) -> void { windows_window_set_size(window, width, height); }
+
+@cfg(apple)
+fn window_set_position(window: void*, x: int, y: int) -> void { darwin_window_set_position(window, x, y); }
+@cfg(windows)
+fn window_set_position(window: void*, x: int, y: int) -> void { windows_window_set_position(window, x, y); }
+
+@cfg(apple)
+fn window_set_fullscreen(window: void*, on: bool) -> void { darwin_window_set_fullscreen(window, on); }
+@cfg(windows)
+fn window_set_fullscreen(window: void*, on: bool) -> void { windows_window_set_fullscreen(window, on); }
+
+@cfg(apple)
+fn window_set_always_on_top(window: void*, on: bool) -> void { darwin_window_set_always_on_top(window, on); }
+@cfg(windows)
+fn window_set_always_on_top(window: void*, on: bool) -> void { windows_window_set_always_on_top(window, on); }
+
+@cfg(apple)
+fn window_register_numeric_id(window: void*, id: int) -> void { darwin_window_register_numeric_id(window, id); }
+@cfg(windows)
+fn window_register_numeric_id(window: void*, id: int) -> void { windows_window_register_numeric_id(window, id); }
+
+extern fn app_get_active() -> void*;
+
+fn window_manager_trigger_on_ready(id: int) -> void {
+    let app = (App*)app_get_active();
+    if app != NULL {
+        app.window.trigger_on_ready(id);
+    }
+}
+
+raw {
+    #define ZAPP_MAX_WINDOW_CALLBACKS 64
+    static void (*zapp_window_on_ready_cbs[ZAPP_MAX_WINDOW_CALLBACKS])(void) = {0};
+
+    void zapp_window_set_on_ready(int id, void (*cb)(void)) {
+        if (id >= 0 && id < ZAPP_MAX_WINDOW_CALLBACKS) {
+            zapp_window_on_ready_cbs[id] = cb;
+        }
+    }
+
+    void zapp_window_trigger_on_ready(int id) {
+        if (id >= 0 && id < ZAPP_MAX_WINDOW_CALLBACKS && zapp_window_on_ready_cbs[id] != NULL) {
+            zapp_window_on_ready_cbs[id]();
+        }
+    }
+}

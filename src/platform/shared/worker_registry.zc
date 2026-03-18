@@ -1,0 +1,206 @@
+// Worker Registry - Tracks per-window worker counters for logging
+
+include <string.h>
+
+raw {
+    #define ZAPP_MAX_WINDOWS 64
+    #define ZAPP_MAX_WORKER_ID_LEN 256
+
+    typedef struct {
+        char owner_id[ZAPP_MAX_WORKER_ID_LEN];
+        int window_id;
+        int next_worker_id;
+    } zapp_window_worker_counter_t;
+
+    static zapp_window_worker_counter_t g_window_worker_counters[ZAPP_MAX_WINDOWS];
+    static int g_window_counter_count = 0;
+    static int g_next_window_id = 1;
+
+    // Extract owner_id from worker_id (format: owner:ctx:zw-N)
+    static void zapp_extract_owner_id(const char* worker_id, char* owner_buf, size_t buf_len) {
+        if (!worker_id || !owner_buf || buf_len == 0) {
+            if (owner_buf && buf_len > 0) owner_buf[0] = '\0';
+            return;
+        }
+        
+        // Find first colon
+        const char* colon = strchr(worker_id, ':');
+        if (!colon) {
+            strncpy(owner_buf, worker_id, buf_len - 1);
+            owner_buf[buf_len - 1] = '\0';
+            return;
+        }
+        
+        size_t owner_len = colon - worker_id;
+        if (owner_len >= buf_len) owner_len = buf_len - 1;
+        strncpy(owner_buf, worker_id, owner_len);
+        owner_buf[owner_len] = '\0';
+    }
+
+    // Get window ID for an owner (creates if not exists)
+    static int zapp_get_window_id(const char* owner_id) {
+        if (!owner_id || owner_id[0] == '\0') return -1;
+
+        // Find existing window
+        for (int i = 0; i < g_window_counter_count; i++) {
+            if (strcmp(g_window_worker_counters[i].owner_id, owner_id) == 0) {
+                return g_window_worker_counters[i].window_id;
+            }
+        }
+
+        // Create new window entry
+        if (g_window_counter_count < ZAPP_MAX_WINDOWS) {
+            strncpy(g_window_worker_counters[g_window_counter_count].owner_id, owner_id, ZAPP_MAX_WORKER_ID_LEN - 1);
+            g_window_worker_counters[g_window_counter_count].owner_id[ZAPP_MAX_WORKER_ID_LEN - 1] = '\0';
+            g_window_worker_counters[g_window_counter_count].window_id = g_next_window_id++;
+            g_window_worker_counters[g_window_counter_count].next_worker_id = 0;
+            g_window_counter_count++;
+            return g_window_worker_counters[g_window_counter_count - 1].window_id;
+        }
+
+        return -1; // Too many windows
+    }
+
+    // Get or create a counter for a window (by owner_id)
+    static int zapp_get_next_worker_id(const char* owner_id) {
+        if (!owner_id || owner_id[0] == '\0') return -1;
+
+        // Find existing counter
+        for (int i = 0; i < g_window_counter_count; i++) {
+            if (strcmp(g_window_worker_counters[i].owner_id, owner_id) == 0) {
+                return ++g_window_worker_counters[i].next_worker_id;
+            }
+        }
+
+        // Create new counter (also assigns window ID)
+        if (g_window_counter_count < ZAPP_MAX_WINDOWS) {
+            strncpy(g_window_worker_counters[g_window_counter_count].owner_id, owner_id, ZAPP_MAX_WORKER_ID_LEN - 1);
+            g_window_worker_counters[g_window_counter_count].owner_id[ZAPP_MAX_WORKER_ID_LEN - 1] = '\0';
+            g_window_worker_counters[g_window_counter_count].window_id = g_next_window_id++;
+            g_window_worker_counters[g_window_counter_count].next_worker_id = 1;
+            g_window_counter_count++;
+            return 1;
+        }
+
+        return -1; // Too many windows
+    }
+
+    // Get both window ID and next worker ID in one call
+    static void zapp_get_window_and_worker_id(const char* owner_id, int* out_window_id, int* out_worker_id) {
+        if (!owner_id || owner_id[0] == '\0') {
+            if (out_window_id) *out_window_id = -1;
+            if (out_worker_id) *out_worker_id = -1;
+            return;
+        }
+
+        // Find existing
+        for (int i = 0; i < g_window_counter_count; i++) {
+            if (strcmp(g_window_worker_counters[i].owner_id, owner_id) == 0) {
+                if (out_window_id) *out_window_id = g_window_worker_counters[i].window_id;
+                if (out_worker_id) *out_worker_id = ++g_window_worker_counters[i].next_worker_id;
+                return;
+            }
+        }
+
+        // Create new
+        if (g_window_counter_count < ZAPP_MAX_WINDOWS) {
+            strncpy(g_window_worker_counters[g_window_counter_count].owner_id, owner_id, ZAPP_MAX_WORKER_ID_LEN - 1);
+            g_window_worker_counters[g_window_counter_count].owner_id[ZAPP_MAX_WORKER_ID_LEN - 1] = '\0';
+            g_window_worker_counters[g_window_counter_count].window_id = g_next_window_id++;
+            g_window_worker_counters[g_window_counter_count].next_worker_id = 1;
+            if (out_window_id) *out_window_id = g_window_worker_counters[g_window_counter_count].window_id;
+            if (out_worker_id) *out_worker_id = 1;
+            g_window_counter_count++;
+            return;
+        }
+
+        if (out_window_id) *out_window_id = -1;
+        if (out_worker_id) *out_worker_id = -1;
+    }
+
+    // Reset counter for a window (when window closes)
+    static void zapp_reset_window_workers(const char* owner_id) {
+        if (!owner_id) return;
+
+        for (int i = 0; i < g_window_counter_count; i++) {
+            if (strcmp(g_window_worker_counters[i].owner_id, owner_id) == 0) {
+                // Shift remaining counters
+                for (int j = i; j < g_window_counter_count - 1; j++) {
+                    memcpy(&g_window_worker_counters[j], &g_window_worker_counters[j + 1], sizeof(zapp_window_worker_counter_t));
+                }
+                g_window_counter_count--;
+                return;
+            }
+        }
+    }
+
+    // Reset all counters
+    static void zapp_reset_all_window_workers(void) {
+        g_window_counter_count = 0;
+        g_next_window_id = 1;
+    }
+
+    // --- Per-worker ID registry (register once, lookup many) ---
+
+    #define ZAPP_MAX_REGISTERED_WORKERS 512
+
+    typedef struct {
+        char worker_id[ZAPP_MAX_WORKER_ID_LEN];
+        int window_id;
+        int worker_seq_id;
+    } zapp_registered_worker_t;
+
+    static zapp_registered_worker_t g_registered_workers[ZAPP_MAX_REGISTERED_WORKERS];
+    static int g_registered_worker_count = 0;
+
+    static void zapp_worker_register(const char* worker_id) {
+        if (!worker_id || worker_id[0] == '\0') return;
+        if (g_registered_worker_count >= ZAPP_MAX_REGISTERED_WORKERS) return;
+
+        for (int i = 0; i < g_registered_worker_count; i++) {
+            if (strcmp(g_registered_workers[i].worker_id, worker_id) == 0) return;
+        }
+
+        char owner_buf[256];
+        zapp_extract_owner_id(worker_id, owner_buf, sizeof(owner_buf));
+
+        int win_id = -1, seq_id = -1;
+        zapp_get_window_and_worker_id(owner_buf, &win_id, &seq_id);
+
+        zapp_registered_worker_t* w = &g_registered_workers[g_registered_worker_count++];
+        strncpy(w->worker_id, worker_id, ZAPP_MAX_WORKER_ID_LEN - 1);
+        w->worker_id[ZAPP_MAX_WORKER_ID_LEN - 1] = '\0';
+        w->window_id = win_id;
+        w->worker_seq_id = seq_id;
+    }
+
+    static void zapp_worker_lookup(const char* worker_id, int* out_window_id, int* out_worker_seq_id) {
+        if (!worker_id || worker_id[0] == '\0') {
+            if (out_window_id) *out_window_id = -1;
+            if (out_worker_seq_id) *out_worker_seq_id = -1;
+            return;
+        }
+        for (int i = 0; i < g_registered_worker_count; i++) {
+            if (strcmp(g_registered_workers[i].worker_id, worker_id) == 0) {
+                if (out_window_id) *out_window_id = g_registered_workers[i].window_id;
+                if (out_worker_seq_id) *out_worker_seq_id = g_registered_workers[i].worker_seq_id;
+                return;
+            }
+        }
+        if (out_window_id) *out_window_id = -1;
+        if (out_worker_seq_id) *out_worker_seq_id = -1;
+    }
+
+    static void zapp_worker_unregister(const char* worker_id) {
+        if (!worker_id) return;
+        for (int i = 0; i < g_registered_worker_count; i++) {
+            if (strcmp(g_registered_workers[i].worker_id, worker_id) == 0) {
+                for (int j = i; j < g_registered_worker_count - 1; j++) {
+                    memcpy(&g_registered_workers[j], &g_registered_workers[j + 1], sizeof(zapp_registered_worker_t));
+                }
+                g_registered_worker_count--;
+                return;
+            }
+        }
+    }
+}

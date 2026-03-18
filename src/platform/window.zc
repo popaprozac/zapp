@@ -1,10 +1,15 @@
 import "std/map.zc";
+
+raw {
+    #undef panic
+}
+
 import "stdio.h" as c_stdio;
 
-@cfg(__APPLE__)
+@cfg(apple)
 import "../platform/darwin/window.zc";
 
-@cfg(_WIN32)
+@cfg(windows)
 import "../platform/windows/window.zc";
 
 opaque alias TitleBarStyle = int;
@@ -30,7 +35,11 @@ struct WindowOptions {
     hidden: bool;
     alwaysOnTop: bool;
     titleBarStyle: TitleBarStyle;
+    webContentInspectable: int; // -1 = inherit from app config, 0 = false, 1 = true
 }
+
+struct App;
+extern fn app_get_active() -> void*;
 
 struct Window {
     id: int;
@@ -38,6 +47,13 @@ struct Window {
 }
 
 impl Window {
+    fn on_ready(self, cb: fn*() -> void) -> void {
+        let app = (App*)app_get_active();
+        if app != NULL {
+            app.window.set_on_ready(self.id, cb);
+        }
+    }
+
     fn minimize(self) -> void {
         if self.handle != NULL {
             window_minimize(self.handle);
@@ -74,9 +90,12 @@ impl Window {
         }
     }
 
-    fn close(self, manager: WindowManager*) -> void {
+    fn close(self) -> void {
         if self.handle != NULL {
-            manager.close(self.id);
+            let app = (App*)app_get_active();
+            if app != NULL {
+                app.window.close(self.id);
+            }
         }
     }
 
@@ -85,12 +104,10 @@ impl Window {
     }
 }
 
-struct App;
-
 struct WindowManager {
     app: App*;
     webContentInspectable: bool;
-    windows: Map<void*>;
+    handles: Map<void*>;
     next_id: int;
 }
 
@@ -99,17 +116,27 @@ impl WindowManager {
         return WindowManager{
             app: NULL,
             webContentInspectable: true,
-            windows: Map<void*>::new(),
+            handles: Map<void*>::new(),
             next_id: 0,
         };
     }
 
     fn create(self, options: WindowOptions*) -> Window {
-        let handle = window_create(options, self.webContentInspectable);
+        if options.webContentInspectable < 0 {
+            if self.webContentInspectable {
+                options.webContentInspectable = 1;
+            } else {
+                options.webContentInspectable = 0;
+            }
+        }
+        let handle = window_create(options);
         let key: char[32];
         c_stdio::snprintf(key, 32, "win-%d", self.next_id);
-        self.windows.put(key, handle);
+        self.handles.put(key, handle);
         let id = self.next_id;
+        
+        window_register_numeric_id(handle, id);
+        
         self.next_id += 1;
         return Window{
             id: id,
@@ -117,10 +144,18 @@ impl WindowManager {
         };
     }
 
+    fn set_on_ready(self, id: int, cb: fn*() -> void) -> void {
+        zapp_window_set_on_ready(id, cb);
+    }
+
+    fn trigger_on_ready(self, id: int) -> void {
+        zapp_window_trigger_on_ready(id);
+    }
+
     fn get(self, id: int) -> Window {
         let key: char[32];
         c_stdio::snprintf(key, 32, "win-%d", id);
-        let maybe = self.windows.get(key);
+        let maybe = self.handles.get(key);
         if maybe.is_some() {
             return Window{
                 id: id,
@@ -136,9 +171,9 @@ impl WindowManager {
     fn close(self, id: int) -> void {
         let key: char[32];
         c_stdio::snprintf(key, 32, "win-%d", id);
-        let maybe = self.windows.get(key);
+        let maybe = self.handles.get(key);
         if maybe.is_some() {
-            self.windows.remove(key);
+            self.handles.remove(key);
             window_destroy(maybe.unwrap());
         }
     }
@@ -162,155 +197,104 @@ fn window_options_default(title: string) -> WindowOptions {
         hidden: false,
         alwaysOnTop: false,
         titleBarStyle: WINDOW_TITLEBAR_STYLE_DEFAULT,
+        webContentInspectable: -1,
     };
 }
 
-// Create
-@cfg(__APPLE__)
-fn window_create(options: WindowOptions*, inspectable: bool) -> void* {
-    return darwin_window_create(options, inspectable);
+@cfg(apple)
+fn window_create(options: WindowOptions*) -> void* {
+    return darwin_window_create(options);
+}
+@cfg(windows)
+fn window_create(options: WindowOptions*) -> void* {
+    return windows_window_create(options);
 }
 
-@cfg(_WIN32)
-fn window_create(options: WindowOptions*, inspectable: bool) -> void* {
-    return windows_window_create(options, inspectable);
+@cfg(apple)
+fn window_destroy(window: void*) -> void { darwin_window_destroy(window); }
+@cfg(windows)
+fn window_destroy(window: void*) -> void { windows_window_destroy(window); }
+
+@cfg(apple)
+fn window_minimize(window: void*) -> void { darwin_window_minimize(window); }
+@cfg(windows)
+fn window_minimize(window: void*) -> void { windows_window_minimize(window); }
+
+@cfg(apple)
+fn window_unminimize(window: void*) -> void { darwin_window_unminimize(window); }
+@cfg(windows)
+fn window_unminimize(window: void*) -> void { windows_window_unminimize(window); }
+
+@cfg(apple)
+fn window_maximize(window: void*) -> void { darwin_window_maximize(window); }
+@cfg(windows)
+fn window_maximize(window: void*) -> void { windows_window_maximize(window); }
+
+@cfg(apple)
+fn window_unmaximize(window: void*) -> void { darwin_window_unmaximize(window); }
+@cfg(windows)
+fn window_unmaximize(window: void*) -> void { windows_window_unmaximize(window); }
+
+@cfg(apple)
+fn window_toggle_minimize(window: void*) -> void { darwin_window_toggle_minimize(window); }
+@cfg(windows)
+fn window_toggle_minimize(window: void*) -> void { windows_window_toggle_minimize(window); }
+
+@cfg(apple)
+fn window_toggle_maximize(window: void*) -> void { darwin_window_toggle_maximize(window); }
+@cfg(windows)
+fn window_toggle_maximize(window: void*) -> void { windows_window_toggle_maximize(window); }
+
+@cfg(apple)
+fn window_set_title(window: void*, title: string) -> void { darwin_window_set_title(window, title); }
+@cfg(windows)
+fn window_set_title(window: void*, title: string) -> void { windows_window_set_title(window, title); }
+
+@cfg(apple)
+fn window_set_size(window: void*, width: int, height: int) -> void { darwin_window_set_size(window, width, height); }
+@cfg(windows)
+fn window_set_size(window: void*, width: int, height: int) -> void { windows_window_set_size(window, width, height); }
+
+@cfg(apple)
+fn window_set_position(window: void*, x: int, y: int) -> void { darwin_window_set_position(window, x, y); }
+@cfg(windows)
+fn window_set_position(window: void*, x: int, y: int) -> void { windows_window_set_position(window, x, y); }
+
+@cfg(apple)
+fn window_set_fullscreen(window: void*, on: bool) -> void { darwin_window_set_fullscreen(window, on); }
+@cfg(windows)
+fn window_set_fullscreen(window: void*, on: bool) -> void { windows_window_set_fullscreen(window, on); }
+
+@cfg(apple)
+fn window_set_always_on_top(window: void*, on: bool) -> void { darwin_window_set_always_on_top(window, on); }
+@cfg(windows)
+fn window_set_always_on_top(window: void*, on: bool) -> void { windows_window_set_always_on_top(window, on); }
+
+@cfg(apple)
+fn window_register_numeric_id(window: void*, id: int) -> void { darwin_window_register_numeric_id(window, id); }
+@cfg(windows)
+fn window_register_numeric_id(window: void*, id: int) -> void { windows_window_register_numeric_id(window, id); }
+
+fn window_manager_trigger_on_ready(id: int) -> void {
+    let app = (App*)app_get_active();
+    if app != NULL {
+        app.window.trigger_on_ready(id);
+    }
 }
 
-// Destroy
-@cfg(__APPLE__)
-fn window_destroy(window: void*) -> void {
-    darwin_window_destroy(window);
-}
+raw {
+    #define ZAPP_MAX_WINDOW_CALLBACKS 64
+    static void (*zapp_window_on_ready_cbs[ZAPP_MAX_WINDOW_CALLBACKS])(void) = {0};
 
-@cfg(_WIN32)
-fn window_destroy(window: void*) -> void {
-    windows_window_destroy(window);
-}
+    void zapp_window_set_on_ready(int id, void (*cb)(void)) {
+        if (id >= 0 && id < ZAPP_MAX_WINDOW_CALLBACKS) {
+            zapp_window_on_ready_cbs[id] = cb;
+        }
+    }
 
-// Minimize
-@cfg(__APPLE__)
-fn window_minimize(window: void*) -> void {
-    darwin_window_minimize(window);
-}
-
-@cfg(_WIN32)
-fn window_minimize(window: void*) -> void {
-    windows_window_minimize(window);
-}
-
-// Unminimize
-@cfg(__APPLE__)
-fn window_unminimize(window: void*) -> void {
-    darwin_window_unminimize(window);
-}
-
-@cfg(_WIN32)
-fn window_unminimize(window: void*) -> void {
-    windows_window_unminimize(window);
-}
-
-// Maximize
-@cfg(__APPLE__)
-fn window_maximize(window: void*) -> void {
-    darwin_window_maximize(window);
-}
-
-@cfg(_WIN32)
-fn window_maximize(window: void*) -> void {
-    windows_window_maximize(window);
-}
-
-// Unmaximize
-@cfg(__APPLE__)
-fn window_unmaximize(window: void*) -> void {
-    darwin_window_unmaximize(window);
-}
-
-@cfg(_WIN32)
-fn window_unmaximize(window: void*) -> void {
-    windows_window_unmaximize(window);
-}
-
-// Toggle minimize
-@cfg(__APPLE__)
-fn window_toggle_minimize(window: void*) -> void {
-    darwin_window_toggle_minimize(window);
-}
-
-@cfg(_WIN32)
-fn window_toggle_minimize(window: void*) -> void {
-    windows_window_toggle_minimize(window);
-}
-
-// Toggle maximize
-@cfg(__APPLE__)
-fn window_toggle_maximize(window: void*) -> void {
-    darwin_window_toggle_maximize(window);
-}
-
-@cfg(_WIN32)
-fn window_toggle_maximize(window: void*) -> void {
-    windows_window_toggle_maximize(window);
-}
-
-// Set title
-@cfg(__APPLE__)
-fn window_set_title(window: void*, title: string) -> void {
-    darwin_window_set_title(window, title);
-}
-
-@cfg(_WIN32)
-fn window_set_title(window: void*, title: string) -> void {
-    let _ = window;
-    let _ = title;
-}
-
-// Set size
-@cfg(__APPLE__)
-fn window_set_size(window: void*, width: int, height: int) -> void {
-    darwin_window_set_size(window, width, height);
-}
-
-@cfg(_WIN32)
-fn window_set_size(window: void*, width: int, height: int) -> void {
-    let _ = window;
-    let _ = width;
-    let _ = height;
-}
-
-// Set position
-@cfg(__APPLE__)
-fn window_set_position(window: void*, x: int, y: int) -> void {
-    darwin_window_set_position(window, x, y);
-}
-
-@cfg(_WIN32)
-fn window_set_position(window: void*, x: int, y: int) -> void {
-    let _ = window;
-    let _ = x;
-    let _ = y;
-}
-
-// Set fullscreen
-@cfg(__APPLE__)
-fn window_set_fullscreen(window: void*, on: bool) -> void {
-    darwin_window_set_fullscreen(window, on);
-}
-
-@cfg(_WIN32)
-fn window_set_fullscreen(window: void*, on: bool) -> void {
-    let _ = window;
-    let _ = on;
-}
-
-// Set always on top
-@cfg(__APPLE__)
-fn window_set_always_on_top(window: void*, on: bool) -> void {
-    darwin_window_set_always_on_top(window, on);
-}
-
-@cfg(_WIN32)
-fn window_set_always_on_top(window: void*, on: bool) -> void {
-    let _ = window;
-    let _ = on;
+    void zapp_window_trigger_on_ready(int id) {
+        if (id >= 0 && id < ZAPP_MAX_WINDOW_CALLBACKS && zapp_window_on_ready_cbs[id] != NULL) {
+            zapp_window_on_ready_cbs[id]();
+        }
+    }
 }

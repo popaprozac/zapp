@@ -1,6 +1,8 @@
 import "../../platform.zc";
 import "../bootstrap.zc";
 import "./common.zc";
+import "../../shared/log.zc";
+import "../../shared/worker_registry.zc";
 @cfg(ZAPP_WORKER_ENGINE_QJS)
 import "../engine_qjs.zc";
 @cfg(ZAPP_WORKER_ENGINE_QJS)
@@ -18,26 +20,33 @@ import "./core/crypto_core.zc";
 @cfg(ZAPP_WORKER_ENGINE_QJS)
 import "./core/fetch_core.zc";
 @cfg(ZAPP_WORKER_ENGINE_QJS)
-import "./qjs/encoding_qjs.zc";
+import "./qjs/qjs_macros.zc";
 @cfg(ZAPP_WORKER_ENGINE_QJS)
-import "./qjs/url_qjs.zc";
+import "../../shared/worker/qjs/encoding_qjs.zc";
 @cfg(ZAPP_WORKER_ENGINE_QJS)
-import "./qjs/base64_qjs.zc";
+import "../../shared/worker/qjs/url_qjs.zc";
+@cfg(ZAPP_WORKER_ENGINE_QJS)
+import "../../shared/worker/qjs/base64_qjs.zc";
+@cfg(ZAPP_WORKER_ENGINE_QJS)
+import "../../shared/worker/qjs/crypto_qjs.zc";
 @cfg(ZAPP_WORKER_ENGINE_QJS)
 import "./qjs/websocket_qjs.zc";
-@cfg(ZAPP_WORKER_ENGINE_QJS)
-import "./qjs/crypto_qjs.zc";
 @cfg(ZAPP_WORKER_ENGINE_QJS)
 import "./qjs/fetch_qjs.zc";
 
 include <string.h>
 include <stdlib.h>
 //> macos: framework: Security
-include <Security/Security.h>
+raw {
+#ifdef __APPLE__
+    #include <Security/Security.h>
+#endif
+}
 
 // Rename QuickJS types to avoid conflicts with JavaScriptCore (included via WebKit)
 raw {
 #ifdef ZAPP_WORKER_ENGINE_QJS
+#ifdef __APPLE__
     extern void* engine_qjs_create_ctx(void* rt);
     extern int engine_qjs_eval(void* ctx, const char* utf8, size_t len, const char* filename);
     extern const char* engine_qjs_get_exception_message(void* ctx);
@@ -62,14 +71,23 @@ raw {
     extern void zapp_handle_message(void* app, char* msg);
     extern void* app_get_active(void);
 
-    extern void zapp_darwin_qjs_encoding_install(QJSContext* ctx, QJSValue bridge);
-    extern void zapp_darwin_qjs_url_install(QJSContext* ctx, QJSValue bridge);
-    extern void zapp_darwin_qjs_base64_install(QJSContext* ctx, QJSValue bridge);
+    extern void zapp_qjs_encoding_install(QJSContext* ctx, QJSValue bridge);
+    extern void zapp_qjs_url_install(QJSContext* ctx, QJSValue bridge);
+    extern void zapp_qjs_base64_install(QJSContext* ctx, QJSValue bridge);
     extern void zapp_darwin_qjs_websocket_install(QJSContext* ctx, QJSValue bridge, const char* worker_id);
-    extern void zapp_darwin_qjs_crypto_install(QJSContext* ctx, QJSValue bridge);
+    extern void zapp_qjs_crypto_install(QJSContext* ctx, QJSValue bridge);
     extern void zapp_darwin_qjs_fetch_install(QJSContext* ctx, QJSValue bridge, const char* worker_id);
     extern void zapp_darwin_qjs_fetch_cancel(NSString* workerId);
     extern void zapp_darwin_qjs_fetch_cancel_all(void);
+
+    // Log functions from log.zc
+    extern void zapp_log_worker(int level, int window_id, int worker_id, const char* message);
+    extern void zapp_log_backend(int level, const char* message);
+    #define ZAPP_LOG_ERROR 0
+    #define ZAPP_LOG_WARN  1
+    #define ZAPP_LOG_INFO  2
+    #define ZAPP_LOG_DEBUG 3
+    #define ZAPP_LOG_TRACE 4
 
     static dispatch_queue_t qjs_queue = nil;
     static QJSRuntime* qjs_rt = NULL;
@@ -94,7 +112,9 @@ raw {
                 if (err_job < 0 && pctx) {
                     QJSValue exception = JS_GetException(pctx);
                     const char *str = JS_ToCString(pctx, exception);
-                    printf("[qjs] pending job error (%s): %s\n", label ? label : "unknown", str ? str : "unknown");
+                    char buf[256];
+                    snprintf(buf, sizeof(buf), "pending job error (%s): %s", label ? label : "unknown", str ? str : "unknown");
+                    zapp_log_worker(ZAPP_LOG_ERROR, -1, -1, buf);
                     if (str) JS_FreeCString(pctx, str);
                     JS_FreeValue(pctx, exception);
                 }
@@ -134,7 +154,9 @@ raw {
                 if (JS_IsException(ret)) {
                     QJSValue exception = JS_GetException(ctx);
                     const char* str = JS_ToCString(ctx, exception);
-                    printf("[qjs] bridge.%s threw: %s\n", [methodName UTF8String], str ? str : "unknown");
+                    char buf[256];
+                    snprintf(buf, sizeof(buf), "bridge.%s threw: %s", [methodName UTF8String], str ? str : "unknown");
+                    zapp_log_worker(ZAPP_LOG_ERROR, -1, -1, buf);
                     if (str) JS_FreeCString(ctx, str);
                     JS_FreeValue(ctx, exception);
                 }
@@ -318,12 +340,41 @@ raw {
         return qjs_bridge_sync_forward(ctx, "cancel", argv, argc, func_data);
     }
 
-    static QJSValue qjs_console_log(QJSContext *ctx, QJSValue this_val, int argc, QJSValue *argv) {
+    // Helper to extract owner_id from worker_id (format: owner:ctx:zw-N)
+    static void qjs_extract_owner_id(const char* worker_id, char* owner_buf, size_t buf_len) {
+        if (!worker_id || !owner_buf || buf_len == 0) {
+            if (owner_buf && buf_len > 0) owner_buf[0] = '\0';
+            return;
+        }
+        
+        // Find first colon
+        const char* colon = strchr(worker_id, ':');
+        if (!colon) {
+            strncpy(owner_buf, worker_id, buf_len - 1);
+            owner_buf[buf_len - 1] = '\0';
+            return;
+        }
+        
+        size_t owner_len = colon - worker_id;
+        if (owner_len >= buf_len) owner_len = buf_len - 1;
+        strncpy(owner_buf, worker_id, owner_len);
+        owner_buf[owner_len] = '\0';
+    }
+
+    // Console log with worker context for unified logging
+    // func_data[0] = worker_id string
+    // magic = log level (0=error, 1=warn, 2=info, 3=debug, 4=trace)
+    static QJSValue qjs_console_log_with_data(QJSContext *ctx, QJSValue this_val, int argc, QJSValue *argv, int magic, QJSValue *func_data) {
+        // Build message from arguments
+        char msg_buf[1024];
+        msg_buf[0] = '\0';
+        size_t msg_len = 0;
+        
         QJSValue global = JS_GetGlobalObject(ctx);
         QJSValue JSON_val = JS_GetPropertyStr(ctx, global, "JSON");
         QJSValue stringify = JS_IsObject(JSON_val) ? JS_GetPropertyStr(ctx, JSON_val, "stringify") : JS_UNDEFINED;
 
-        for (int i = 0; i < argc; i++) {
+        for (int i = 0; i < argc && msg_len < sizeof(msg_buf) - 1; i++) {
             const char *str = NULL;
 
             if (JS_IsFunction(ctx, stringify)) {
@@ -337,15 +388,43 @@ raw {
 
             if (!str) str = JS_ToCString(ctx, argv[i]);
             if (str) {
-                printf("%s%s", i == 0 ? "" : " ", str);
+                size_t str_len = strlen(str);
+                if (i > 0 && msg_len < sizeof(msg_buf) - 1) {
+                    msg_buf[msg_len++] = ' ';
+                }
+                if (msg_len + str_len < sizeof(msg_buf)) {
+                    strcpy(msg_buf + msg_len, str);
+                    msg_len += str_len;
+                }
                 JS_FreeCString(ctx, str);
             }
         }
+        msg_buf[msg_len] = '\0';
 
         JS_FreeValue(ctx, global);
         if (JS_IsObject(JSON_val)) JS_FreeValue(ctx, stringify);
         JS_FreeValue(ctx, JSON_val);
-        printf("\n");
+
+        // Get worker_id from func_data
+        const char* worker_id = NULL;
+        char worker_id_buf[256];
+        if (func_data && JS_IsString(func_data[0])) {
+            worker_id = JS_ToCString(ctx, func_data[0]);
+        }
+        
+        // Extract owner_id and get window/worker IDs
+        int window_id = -1;
+        int worker_seq_id = -1;
+        
+        if (worker_id) {
+            zapp_worker_lookup(worker_id, &window_id, &worker_seq_id);
+            JS_FreeCString(ctx, worker_id);
+        }
+        
+        // Log level from magic
+        int level = (magic >= ZAPP_LOG_ERROR && magic <= ZAPP_LOG_TRACE) ? magic : ZAPP_LOG_INFO;
+        
+        zapp_log_worker(level, window_id, worker_seq_id, msg_buf);
 
         return JS_UNDEFINED;
     }
@@ -523,7 +602,9 @@ raw {
                     WKWebView* webview = (WKWebView*)content;
                     [webview evaluateJavaScript:js completionHandler:^(id result, NSError *error) {
                         if (error) {
-                            printf("[qjs] evaluateJavaScript deliverEvent error: %s\n", [[error localizedDescription] UTF8String]);
+                            char buf[256];
+                            snprintf(buf, sizeof(buf), "deliverEvent error: %s", [[error localizedDescription] UTF8String]);
+                            zapp_log_worker(ZAPP_LOG_ERROR, -1, -1, buf);
                         }
                     }];
                 }
@@ -559,6 +640,7 @@ raw {
         });
     }
 }
+#endif /* __APPLE__ */
 #endif
 }
 
@@ -569,7 +651,9 @@ impl WorkerBackend for DarwinWorkerQjs {
     fn bind_runtime(self, app: App*) -> void {
         raw {
 #ifdef ZAPP_WORKER_ENGINE_QJS
+#ifdef __APPLE__
         app->event.send_event_to_js = (void*)zapp_darwin_send_event_to_js;
+#endif /* __APPLE__ */
 #endif
         }
     }
@@ -577,6 +661,7 @@ impl WorkerBackend for DarwinWorkerQjs {
     fn handle_bridge(self, app: App*, action: string, payload: string) -> void {
         raw {
 #ifdef ZAPP_WORKER_ENGINE_QJS
+#ifdef __APPLE__
         if (action == NULL || payload == NULL) return;
 
         zapp_darwin_qjs_ensure_init();
@@ -633,6 +718,7 @@ impl WorkerBackend for DarwinWorkerQjs {
                     if (ownerId != nil) {
                         qjs_owners[workerId] = ownerId;
                     }
+                    zapp_worker_register([workerId UTF8String]);
 
                     dispatch_async(qjs_queue, ^{
                         QJSValue args[1];
@@ -668,6 +754,7 @@ impl WorkerBackend for DarwinWorkerQjs {
                                 qjs_worker_script_urls[workerId] = scriptUrl;
                                 qjs_worker_shared_flags[workerId] = @(YES);
                                 if (ownerId) [qjs_owners setObject:ownerId forKey:workerId];
+                                zapp_worker_register([workerId UTF8String]);
                                 QJSValue args[1];
                                 args[0] = JS_NewString(existingCtx, [workerId UTF8String]);
                                 qjs_call_bridge_method(existingCtx, @"dispatchConnect", 1, args);
@@ -683,6 +770,7 @@ impl WorkerBackend for DarwinWorkerQjs {
                         qjs_worker_script_urls[workerId] = scriptUrl;
                         qjs_worker_shared_flags[workerId] = @(YES);
                         if (ownerId) [qjs_owners setObject:ownerId forKey:workerId];
+                        zapp_worker_register([workerId UTF8String]);
                         QJSValue args[1];
                         args[0] = JS_NewString(existingCtx, [workerId UTF8String]);
                         qjs_call_bridge_method(existingCtx, @"dispatchConnect", 1, args);
@@ -719,18 +807,25 @@ impl WorkerBackend for DarwinWorkerQjs {
                 [qjs_worker_script_urls setObject:scriptUrl forKey:workerId];
                 [qjs_worker_shared_flags setObject:@(shared) forKey:workerId];
                 if (ownerId) [qjs_owners setObject:ownerId forKey:workerId];
+                zapp_worker_register([workerId UTF8String]);
 
                 QJSValue global = JS_GetGlobalObject(ctx);
 
+                // Console with unified logging - pass workerId via func_data, log level via magic
+                QJSValue wIdVal = JS_NewString(ctx, [workerId UTF8String]);
+                QJSValue consoleFuncData[1] = { wIdVal };
+                
                 QJSValue consoleObj = JS_NewObject(ctx);
-                JS_SetPropertyStr(ctx, consoleObj, "log", JS_NewCFunction(ctx, qjs_console_log, "log", 1));
-                JS_SetPropertyStr(ctx, consoleObj, "error", JS_NewCFunction(ctx, qjs_console_log, "error", 1));
-                JS_SetPropertyStr(ctx, consoleObj, "warn", JS_NewCFunction(ctx, qjs_console_log, "warn", 1));
+                JS_SetPropertyStr(ctx, consoleObj, "log", JS_NewCFunctionData(ctx, qjs_console_log_with_data, 1, ZAPP_LOG_INFO, 1, consoleFuncData));
+                JS_SetPropertyStr(ctx, consoleObj, "error", JS_NewCFunctionData(ctx, qjs_console_log_with_data, 1, ZAPP_LOG_ERROR, 1, consoleFuncData));
+                JS_SetPropertyStr(ctx, consoleObj, "warn", JS_NewCFunctionData(ctx, qjs_console_log_with_data, 1, ZAPP_LOG_WARN, 1, consoleFuncData));
+                JS_SetPropertyStr(ctx, consoleObj, "info", JS_NewCFunctionData(ctx, qjs_console_log_with_data, 1, ZAPP_LOG_INFO, 1, consoleFuncData));
+                JS_SetPropertyStr(ctx, consoleObj, "debug", JS_NewCFunctionData(ctx, qjs_console_log_with_data, 1, ZAPP_LOG_DEBUG, 1, consoleFuncData));
+                JS_SetPropertyStr(ctx, consoleObj, "trace", JS_NewCFunctionData(ctx, qjs_console_log_with_data, 1, ZAPP_LOG_TRACE, 1, consoleFuncData));
                 JS_SetPropertyStr(ctx, global, "console", consoleObj);
 
                 QJSValue bridge = JS_NewObject(ctx);
 
-                QJSValue wIdVal = JS_NewString(ctx, [workerId UTF8String]);
                 QJSValue funcData[1] = { wIdVal };
 
                 QJSValue postFunc = JS_NewCFunctionData(ctx, qjs_bridge_post, 1, 0, 1, funcData);
@@ -757,10 +852,10 @@ impl WorkerBackend for DarwinWorkerQjs {
 
                 zapp_darwin_qjs_timers_install(ctx, bridge, [workerId UTF8String]);
                 zapp_darwin_qjs_fetch_install(ctx, bridge, [workerId UTF8String]);
-                zapp_darwin_qjs_crypto_install(ctx, bridge);
-                zapp_darwin_qjs_encoding_install(ctx, bridge);
-                zapp_darwin_qjs_url_install(ctx, bridge);
-                zapp_darwin_qjs_base64_install(ctx, bridge);
+                zapp_qjs_crypto_install(ctx, bridge);
+                zapp_qjs_encoding_install(ctx, bridge);
+                zapp_qjs_url_install(ctx, bridge);
+                zapp_qjs_base64_install(ctx, bridge);
                 zapp_darwin_qjs_websocket_install(ctx, bridge, [workerId UTF8String]);
 
                 JS_SetPropertyStr(ctx, global, "globalThis", JS_DupValue(ctx, global));
@@ -864,7 +959,9 @@ impl WorkerBackend for DarwinWorkerQjs {
                 if (JS_IsException(parsedData)) {
                     QJSValue exception = JS_GetException(ctx);
                     const char *str = JS_ToCString(ctx, exception);
-                    printf("[qjs] JSON.parse in post failed: %s\n", str ? str : "unknown");
+                    char buf[256];
+                    snprintf(buf, sizeof(buf), "JSON.parse in post failed: %s", str ? str : "unknown");
+                    zapp_log_worker(ZAPP_LOG_ERROR, -1, -1, buf);
                     if (str) JS_FreeCString(ctx, str);
                     JS_FreeValue(ctx, exception);
                 } else {
@@ -931,6 +1028,7 @@ impl WorkerBackend for DarwinWorkerQjs {
 
             return;
         }
+#endif /* __APPLE__ */
 #endif
         }
     }
@@ -938,6 +1036,7 @@ impl WorkerBackend for DarwinWorkerQjs {
 
 raw {
 #ifdef ZAPP_WORKER_ENGINE_QJS
+#ifdef __APPLE__
     #undef JSContext
     #undef JSRuntime
     #undef JSValue
@@ -947,5 +1046,6 @@ raw {
     #undef JSValueConst
     #undef JSPropertyEnum
     #undef JSPropertyDescriptor
+#endif /* __APPLE__ */
 #endif
 }

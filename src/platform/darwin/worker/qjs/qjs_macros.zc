@@ -1,0 +1,23 @@
+// Re-establish QuickJS type macros for the shared QJS wrapper files.
+// engine_qjs.zc undef's them after including quickjs.h, so subsequent QJS
+// modules need them back to avoid collisions with JavaScriptCore types.
+
+@cfg(ZAPP_WORKER_ENGINE_QJS)
+raw {
+#ifdef __APPLE__
+#ifdef ZAPP_WORKER_ENGINE_QJS
+    #define JSContext QJSContext
+    #define JSRuntime QJSRuntime
+    #define JSValue QJSValue
+    #define JSClassID QJSClassID
+    #define JSClassDef QJSClassDef
+    #define JSClassEx QJSClassEx
+    #define JSValueConst QJSValueConst
+    #define JSPropertyEnum QJSPropertyEnum
+    #define JSPropertyDescriptor QJSPropertyDescriptor
+    #include "quickjs.h"
+    #include "quickjs-libc.h"
+    /* Do NOT #undef: shared QJS modules need these macros active. */
+#endif
+#endif
+}

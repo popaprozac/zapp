@@ -1,7 +1,29 @@
 {
   "name": "zapp-example",
   "private": true,
+  "version": "0.0.0",
   "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
+    "zapp:generate": "bun ../packages/cli/dist/zapp-cli.js generate",
+    "zapp:dev": "bun run zapp:generate && bun ../packages/cli/dist/zapp-cli.js dev",
+    "zapp:build": "bun run zapp:generate && bun ../packages/cli/dist/zapp-cli.js build --brotli"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.0.0",
+    "@tsconfig/svelte": "^5.0.8",
+    "@types/node": "^24.12.0",
+    "@zapp/cli": "file:../packages/cli",
+    "@zapp/vite": "file:../packages/vite",
+    "esbuild": "^0.27.4",
+    "svelte": "^5.53.7",
+    "svelte-check": "^4.4.5",
+    "typescript": "~5.9.3",
+    "vite": "^8.0.0"
+  },
   "dependencies": {
     "@zapp/runtime": "file:../packages/runtime",
     "@zapp/backend": "file:../packages/backend"

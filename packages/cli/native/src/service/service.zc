@@ -1,0 +1,244 @@
+struct App;
+
+include <string.h>
+
+def SERVICE_MAX_BINDINGS = 128;
+def SERVICE_MAX_NAME = 96;
+def SERVICE_MAX_PAYLOAD_BYTES = 65536;
+
+struct ServiceManager {
+    app: App*;
+}
+
+let g_service_names: string[SERVICE_MAX_BINDINGS];
+let g_service_handlers: void*[SERVICE_MAX_BINDINGS];
+let g_service_startup_handlers: void*[SERVICE_MAX_BINDINGS];
+let g_service_shutdown_handlers: void*[SERVICE_MAX_BINDINGS];
+let g_service_public: bool[SERVICE_MAX_BINDINGS];
+let g_service_capabilities: string[SERVICE_MAX_BINDINGS];
+let g_service_count: int = 0;
+
+fn service_is_valid_name(name: string) -> bool {
+    if name == "" {
+        return false;
+    }
+    raw {
+        const char* s = (const char*)name;
+        int len = 0;
+        while (*s != '\0') {
+            char ch = *s;
+            int ok =
+                (ch >= 'a' && ch <= 'z') ||
+                (ch >= 'A' && ch <= 'Z') ||
+                (ch >= '0' && ch <= '9') ||
+                ch == '.' || ch == '_' || ch == '-';
+            if (!ok) return false;
+            len++;
+            if (len > SERVICE_MAX_NAME) return false;
+            s++;
+        }
+        return len > 0;
+    }
+}
+
+fn service_payload_size_ok(payload: string) -> bool {
+    if payload == NULL {
+        return true;
+    }
+    raw {
+        size_t n = strlen((const char*)payload);
+        return n <= SERVICE_MAX_PAYLOAD_BYTES;
+    }
+}
+
+fn service_index_of(name: string) -> int {
+    raw {
+        for (int i = 0; i < g_service_count; i++) {
+            if (strcmp((const char*)g_service_names[i], (const char*)name) == 0) return i;
+        }
+        return -1;
+    }
+}
+
+fn service_add_with_lifecycle(
+    name: string,
+    handler: fn*(App*, string) -> string,
+    startup: fn*(App*) -> bool,
+    shutdown: fn*(App*) -> void,
+    public: bool,
+    capability: string
+) -> bool {
+    if !service_is_valid_name(name) {
+        return false;
+    }
+    if g_service_count >= SERVICE_MAX_BINDINGS {
+        return false;
+    }
+    if service_index_of(name) >= 0 {
+        return false;
+    }
+    g_service_names[g_service_count] = name;
+    g_service_public[g_service_count] = public;
+    g_service_capabilities[g_service_count] = capability;
+    raw {
+        g_service_handlers[g_service_count] = (void*)handler;
+        g_service_startup_handlers[g_service_count] = (void*)startup;
+        g_service_shutdown_handlers[g_service_count] = (void*)shutdown;
+    }
+    g_service_count += 1;
+    return true;
+}
+
+fn service_add(name: string, handler: fn*(App*, string) -> string) -> bool {
+    return service_add_with_lifecycle(name, handler, NULL, NULL, true, "");
+}
+
+fn service_start_all(app: App*) -> bool {
+    for i in 0..g_service_count {
+        if g_service_startup_handlers[i] != NULL {
+            raw {
+                typedef bool (*StartupFnPtr)(void*);
+                StartupFnPtr cb = (StartupFnPtr)g_service_startup_handlers[i];
+                if (!cb((void*)app)) {
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
+fn service_shutdown_all(app: App*) -> void {
+    let _ = app;
+    for j in 0..g_service_count {
+        let i = g_service_count - 1 - j;
+        if i < 0 {
+            continue;
+        }
+        if g_service_shutdown_handlers[i] != NULL {
+            raw {
+                typedef void (*ShutdownFnPtr)(void*);
+                ShutdownFnPtr cb = (ShutdownFnPtr)g_service_shutdown_handlers[i];
+                cb((void*)app);
+            }
+        }
+    }
+}
+
+fn service_get_bindings_manifest_json() -> string {
+    raw {
+        static char manifest[16384];
+        strcpy(manifest, "{\"v\":1,\"generatedAt\":\"native\",\"services\":[");
+        for (int i = 0; i < g_service_count; i++) {
+            if (i > 0) strcat(manifest, ",");
+            strcat(manifest, "{\"name\":\"");
+            strcat(manifest, (const char*)g_service_names[i]);
+            strcat(manifest, "\",\"methods\":[{\"name\":\"");
+            strcat(manifest, (const char*)g_service_names[i]);
+            strcat(manifest, "\"}]");
+            if (g_service_capabilities[i] != NULL && ((const char*)g_service_capabilities[i])[0] != '\0') {
+                strcat(manifest, ",\"capability\":\"");
+                strcat(manifest, (const char*)g_service_capabilities[i]);
+                strcat(manifest, "\"");
+            }
+            strcat(manifest, "}");
+        }
+        strcat(manifest, "]}");
+        return (char*)manifest;
+    }
+}
+
+fn service_invoke_with_policy(
+    app: App*,
+    name: string,
+    payload: string,
+    capability: string,
+    out_error_code: string*,
+    out_error_message: string*
+) -> string {
+    if !service_is_valid_name(name) {
+        *out_error_code = "INVALID_METHOD";
+        *out_error_message = "Invalid service method name.";
+        return "";
+    }
+    if !service_payload_size_ok(payload) {
+        *out_error_code = "BAD_REQUEST";
+        *out_error_message = "Service payload exceeds max size.";
+        return "";
+    }
+
+    let idx = service_index_of(name);
+    if idx < 0 {
+        *out_error_code = "NOT_FOUND";
+        *out_error_message = "Service method not found.";
+        return "";
+    }
+
+    if !g_service_public[idx] {
+        *out_error_code = "UNAUTHORIZED";
+        *out_error_message = "Service method is not public.";
+        return "";
+    }
+
+    let required_capability = g_service_capabilities[idx];
+    raw {
+        int has_cap = (required_capability != NULL && ((const char*)required_capability)[0] != '\0');
+        int cap_match = has_cap ? (strcmp((const char*)capability, (const char*)required_capability) == 0) : 1;
+        if (has_cap && !cap_match) {
+            *out_error_code = "UNAUTHORIZED";
+            *out_error_message = "Capability mismatch.";
+            return "";
+        }
+
+        if (g_service_handlers[idx] != NULL) {
+            typedef char* (*ServiceFnPtr)(void*, char*);
+            ServiceFnPtr cb = (ServiceFnPtr)g_service_handlers[idx];
+            return cb((void*)app, (char*)payload);
+        }
+
+        *out_error_code = "INTERNAL_ERROR";
+        *out_error_message = "Service handler is not available.";
+        return "";
+    }
+}
+
+fn service_invoke(app: App*, name: string, payload: string) -> string {
+    let error_code = "";
+    let error_message = "";
+    let result = service_invoke_with_policy(
+        app,
+        name,
+        payload,
+        "",
+        &error_code,
+        &error_message
+    );
+    if error_code != "" {
+        return "{{}}";
+    }
+    return result;
+}
+
+impl ServiceManager {
+    fn new() -> Self {
+        return ServiceManager{ app: NULL };
+    }
+
+    fn add(self, name: string, handler: fn*(App*, string) -> string) -> bool {
+        let _ = self;
+        return service_add(name, handler);
+    }
+
+    fn add_with_lifecycle(
+        self,
+        name: string,
+        handler: fn*(App*, string) -> string,
+        startup: fn*(App*) -> bool,
+        shutdown: fn*(App*) -> void,
+        public: bool,
+        capability: string
+    ) -> bool {
+        let _ = self;
+        return service_add_with_lifecycle(name, handler, startup, shutdown, public, capability);
+    }
+}

@@ -1,0 +1,28 @@
+// --- Platform Tags ---
+//> macos: define: apple
+//> windows: define: windows
+
+// --- macOS Directives ---
+//> macos: framework: Cocoa
+//> macos: framework: WebKit
+//> macos: framework: CoreFoundation
+//> macos: framework: JavaScriptCore
+//> macos: framework: Security
+//> macos: link: -lcompression
+//> macos: cflags: -fobjc-arc -x objective-c
+// To use QuickJS instead of JSC on macOS, uncomment:
+//      //> macos: define: ZAPP_WORKER_ENGINE_QJS
+// ---------------------------------
+
+// --- Windows Directives (QuickJS default) ---
+//> windows: cflags: -DUNICODE -D_UNICODE -DCINTERFACE -DCOBJMACROS
+//> windows: link: -lole32 -lshell32 -luuid -luser32 -lgdi32 -lcomctl32 -lshlwapi
+//> windows: link: -lwinhttp -lbcrypt -ladvapi32 -lrpcrt4 -lcrypt32 -lversion
+//> windows: define: ZAPP_WORKER_ENGINE_QJS
+// ---------------------------------
+
+import "app.zc";
+
+fn main() -> int {
+    return run_app();
+}

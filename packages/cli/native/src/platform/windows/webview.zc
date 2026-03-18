@@ -1,0 +1,951 @@
+import "./window.zc";
+import "./webview_bootstrap.zc";
+
+//> windows: link: -lshlwapi -lversion
+//> windows: cflags: -DCINTERFACE -DCOBJMACROS
+
+raw {
+#ifdef _WIN32
+    #include <windows.h>
+    #include <stdlib.h>
+    #include <stdio.h>
+    #include <string.h>
+    #include <shlwapi.h>
+    #include <shlobj.h>
+    #include "WebView2.h"
+
+    // ---------------------------------------------------------------------------
+    // Self-contained WebView2 loader
+    //
+    // Finds the WebView2 runtime via registry and loads EmbeddedBrowserWebView.dll
+    // directly, eliminating the need for WebView2Loader.dll or the MSVC-only
+    // WebView2LoaderStatic.lib. Based on OpenWebView2Loader by jchv.
+    // ---------------------------------------------------------------------------
+
+    // Undocumented internal entry point exported by EmbeddedBrowserWebView.dll
+    typedef HRESULT (STDMETHODCALLTYPE *CreateWebViewEnvInternalFn)(
+        int unknown,
+        int runtimeType,     // 0 = installed, 1 = redistributable
+        PCWSTR userDataDir,
+        IUnknown* options,
+        ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler* handler
+    );
+    static CreateWebViewEnvInternalFn zapp_CreateEnvInternal = NULL;
+
+    // Stable channel GUID for EdgeUpdate registry
+    static const wchar_t* ZAPP_WV2_STABLE_GUID =
+        L"{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}";
+
+#if defined(__x86_64__) || defined(_M_X64) || defined(_M_AMD64)
+    static const wchar_t* ZAPP_WV2_EMBEDDED_DLL_SUBPATH =
+        L"\\EBWebView\\x64\\EmbeddedBrowserWebView.dll";
+#elif defined(__aarch64__) || defined(_M_ARM64)
+    static const wchar_t* ZAPP_WV2_EMBEDDED_DLL_SUBPATH =
+        L"\\EBWebView\\arm64\\EmbeddedBrowserWebView.dll";
+#else
+    static const wchar_t* ZAPP_WV2_EMBEDDED_DLL_SUBPATH =
+        L"\\EBWebView\\x86\\EmbeddedBrowserWebView.dll";
+#endif
+
+    // Try to find the WebView2 client DLL path from a registry root + subkey.
+    // Returns 1 and writes the full DLL path into outPath on success.
+    static int zapp_wv2_find_in_registry(HKEY root, const wchar_t* subkey,
+                                         wchar_t* outPath, DWORD outPathSize) {
+        HKEY hKey = NULL;
+        DWORD cbData = outPathSize * sizeof(wchar_t);
+        wchar_t runtimePath[MAX_PATH];
+
+        if (RegOpenKeyExW(root, subkey, 0,
+                          KEY_READ | KEY_WOW64_32KEY, &hKey) != ERROR_SUCCESS) {
+            return 0;
+        }
+        cbData = sizeof(runtimePath);
+        LSTATUS status = RegQueryValueExW(hKey, L"EBWebView", NULL, NULL,
+                                          (LPBYTE)runtimePath, &cbData);
+        RegCloseKey(hKey);
+        if (status != ERROR_SUCCESS) return 0;
+
+        // runtimePath now contains something like:
+        //   C:\Program Files (x86)\Microsoft\EdgeWebView\Application\131.0.2903.86
+        // Append the architecture-specific DLL subpath
+        _snwprintf(outPath, outPathSize, L"%s%s",
+                   runtimePath, ZAPP_WV2_EMBEDDED_DLL_SUBPATH);
+        outPath[outPathSize - 1] = 0;
+
+        return GetFileAttributesW(outPath) != INVALID_FILE_ATTRIBUTES;
+    }
+
+    static int zapp_webview2_loader_init(void) {
+        if (zapp_CreateEnvInternal) return 1;
+
+        wchar_t dllPath[MAX_PATH * 2];
+        wchar_t regKey[256];
+
+        // Build the registry subkey for the stable channel
+        _snwprintf(regKey, 256,
+                   L"Software\\Microsoft\\EdgeUpdate\\ClientState\\%s",
+                   ZAPP_WV2_STABLE_GUID);
+        regKey[255] = 0;
+
+        // Search order: HKCU (per-user install), then HKLM (system install)
+        int found = zapp_wv2_find_in_registry(HKEY_CURRENT_USER, regKey,
+                                              dllPath, MAX_PATH * 2)
+                 || zapp_wv2_find_in_registry(HKEY_LOCAL_MACHINE, regKey,
+                                              dllPath, MAX_PATH * 2);
+
+        if (!found) {
+            fprintf(stderr, "[zapp] WebView2 runtime not found. "
+                    "Install Microsoft Edge WebView2 Runtime.\n");
+            return 0;
+        }
+
+        HMODULE hmod = LoadLibraryW(dllPath);
+        if (!hmod) {
+            fprintf(stderr, "[zapp] Failed to load %ls (error %lu)\n",
+                    dllPath, GetLastError());
+            return 0;
+        }
+
+        zapp_CreateEnvInternal = (CreateWebViewEnvInternalFn)
+            GetProcAddress(hmod, "CreateWebViewEnvironmentWithOptionsInternal");
+        if (!zapp_CreateEnvInternal) {
+            fprintf(stderr, "[zapp] CreateWebViewEnvironmentWithOptionsInternal "
+                    "not found in runtime DLL.\n");
+            FreeLibrary(hmod);
+            return 0;
+        }
+        return 1;
+    }
+
+    // ---------------------------------------------------------------------------
+    // Forward declarations
+    // ---------------------------------------------------------------------------
+
+    extern void* app_get_active(void);
+    extern char* app_get_bootstrap_name(void);
+    extern bool app_get_bootstrap_application_should_terminate_after_last_window_closed(void);
+    extern bool app_get_bootstrap_web_content_inspectable(void);
+    extern int app_get_bootstrap_max_workers(void);
+    extern void zapp_handle_message(void* app_ptr, char* msg_c);
+    extern char* service_get_bindings_manifest_json(void);
+    extern const char* zapp_build_initial_url(void);
+    extern const char* zapp_windows_webview_bootstrap_script(void);
+
+    // ---------------------------------------------------------------------------
+    // Per-window WebView2 state
+    // ---------------------------------------------------------------------------
+
+    #define ZAPP_MAX_WINDOWS 64
+    #define WM_ZAPP_EVAL_JS (WM_APP + 1)
+
+    typedef struct {
+        HWND hwnd;
+        ICoreWebView2Controller* controller;
+        ICoreWebView2* webview;
+        char ownerId[64];
+        BOOL in_use;
+        WINDOWPLACEMENT prevPlacement;
+    } ZappWindowEntry;
+
+    static ZappWindowEntry zapp_windows[ZAPP_MAX_WINDOWS] = {0};
+
+    ZappWindowEntry* zapp_window_entry_for_hwnd(HWND hwnd) {
+        for (int i = 0; i < ZAPP_MAX_WINDOWS; i++) {
+            if (zapp_windows[i].in_use && zapp_windows[i].hwnd == hwnd)
+                return &zapp_windows[i];
+        }
+        return NULL;
+    }
+
+    static ZappWindowEntry* zapp_window_entry_alloc(HWND hwnd) {
+        for (int i = 0; i < ZAPP_MAX_WINDOWS; i++) {
+            if (!zapp_windows[i].in_use) {
+                memset(&zapp_windows[i], 0, sizeof(ZappWindowEntry));
+                zapp_windows[i].hwnd = hwnd;
+                zapp_windows[i].in_use = TRUE;
+                sprintf(zapp_windows[i].ownerId, "owner-%p", (void*)hwnd);
+                return &zapp_windows[i];
+            }
+        }
+        return NULL;
+    }
+
+    // ---------------------------------------------------------------------------
+    // Helpers
+    // ---------------------------------------------------------------------------
+
+    static wchar_t* zapp_utf8_to_wide(const char* utf8) {
+        if (!utf8) return NULL;
+        int len = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
+        wchar_t* wide = (wchar_t*)malloc(len * sizeof(wchar_t));
+        MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wide, len);
+        return wide;
+    }
+
+    static char* zapp_wide_to_utf8(const wchar_t* wide) {
+        if (!wide) return NULL;
+        int len = WideCharToMultiByte(CP_UTF8, 0, wide, -1, NULL, 0, NULL, NULL);
+        char* utf8 = (char*)malloc(len);
+        WideCharToMultiByte(CP_UTF8, 0, wide, -1, utf8, len, NULL, NULL);
+        return utf8;
+    }
+
+    char* zapp_escape_js_string(const char* raw) {
+        if (!raw) return _strdup("");
+        size_t len = strlen(raw);
+        size_t cap = len * 2 + 1;
+        char* out = (char*)malloc(cap);
+        size_t j = 0;
+        for (size_t i = 0; i < len && j < cap - 2; i++) {
+            char c = raw[i];
+            if (c == '\\') { out[j++] = '\\'; out[j++] = '\\'; }
+            else if (c == '\'') { out[j++] = '\\'; out[j++] = '\''; }
+            else if (c == '\n') { out[j++] = '\\'; out[j++] = 'n'; }
+            else if (c == '\r') { out[j++] = '\\'; out[j++] = 'r'; }
+            else { out[j++] = c; }
+        }
+        out[j] = '\0';
+        return out;
+    }
+
+    // ---------------------------------------------------------------------------
+    // COM callback: WebMessageReceived
+    // ---------------------------------------------------------------------------
+
+    typedef struct {
+        ICoreWebView2WebMessageReceivedEventHandlerVtbl* lpVtbl;
+        ULONG refCount;
+    } ZappMessageHandler;
+
+    static HRESULT STDMETHODCALLTYPE zmh_QueryInterface(ICoreWebView2WebMessageReceivedEventHandler* This, REFIID riid, void** ppv) {
+        (void)riid;
+        *ppv = This;
+        This->lpVtbl->AddRef(This);
+        return S_OK;
+    }
+    static ULONG STDMETHODCALLTYPE zmh_AddRef(ICoreWebView2WebMessageReceivedEventHandler* This) {
+        ZappMessageHandler* self = (ZappMessageHandler*)This;
+        return ++self->refCount;
+    }
+    static ULONG STDMETHODCALLTYPE zmh_Release(ICoreWebView2WebMessageReceivedEventHandler* This) {
+        ZappMessageHandler* self = (ZappMessageHandler*)This;
+        if (--self->refCount == 0) { free(self); return 0; }
+        return self->refCount;
+    }
+    static HRESULT STDMETHODCALLTYPE zmh_Invoke(
+        ICoreWebView2WebMessageReceivedEventHandler* This,
+        ICoreWebView2* sender,
+        ICoreWebView2WebMessageReceivedEventArgs* args
+    ) {
+        (void)This; (void)sender;
+        wchar_t* msgW = NULL;
+        HRESULT hr = ICoreWebView2WebMessageReceivedEventArgs_TryGetWebMessageAsString(args, &msgW);
+        if (SUCCEEDED(hr) && msgW) {
+            char* msgUtf8 = zapp_wide_to_utf8(msgW);
+            CoTaskMemFree(msgW);
+            if (msgUtf8) {
+                void* app_ptr = app_get_active();
+                if (app_ptr) {
+                    zapp_handle_message(app_ptr, msgUtf8);
+                }
+                free(msgUtf8);
+            }
+        }
+        return S_OK;
+    }
+
+    static ICoreWebView2WebMessageReceivedEventHandlerVtbl zmh_vtbl = {
+        zmh_QueryInterface, zmh_AddRef, zmh_Release, zmh_Invoke
+    };
+
+    static ZappMessageHandler* zapp_create_message_handler(void) {
+        ZappMessageHandler* h = (ZappMessageHandler*)calloc(1, sizeof(ZappMessageHandler));
+        h->lpVtbl = &zmh_vtbl;
+        h->refCount = 1;
+        return h;
+    }
+
+    // ---------------------------------------------------------------------------
+    // COM callback: NavigationCompleted (visibility toggle workaround)
+    // https://github.com/MicrosoftEdge/WebView2Feedback/issues/1077
+    // ---------------------------------------------------------------------------
+
+    typedef struct {
+        ICoreWebView2NavigationCompletedEventHandlerVtbl* lpVtbl;
+        ULONG refCount;
+        ICoreWebView2Controller* controller;
+        BOOL firstNavDone;
+    } ZappNavHandler;
+
+    static HRESULT STDMETHODCALLTYPE znh_QueryInterface(ICoreWebView2NavigationCompletedEventHandler* This, REFIID riid, void** ppv) {
+        (void)riid;
+        *ppv = This;
+        This->lpVtbl->AddRef(This);
+        return S_OK;
+    }
+    static ULONG STDMETHODCALLTYPE znh_AddRef(ICoreWebView2NavigationCompletedEventHandler* This) {
+        return ++((ZappNavHandler*)This)->refCount;
+    }
+    static ULONG STDMETHODCALLTYPE znh_Release(ICoreWebView2NavigationCompletedEventHandler* This) {
+        ZappNavHandler* self = (ZappNavHandler*)This;
+        if (--self->refCount == 0) { free(self); return 0; }
+        return self->refCount;
+    }
+    static HRESULT STDMETHODCALLTYPE znh_Invoke(
+        ICoreWebView2NavigationCompletedEventHandler* This,
+        ICoreWebView2* sender,
+        ICoreWebView2NavigationCompletedEventArgs* args
+    ) {
+        (void)sender; (void)args;
+        ZappNavHandler* self = (ZappNavHandler*)This;
+        if (!self->firstNavDone) {
+            self->firstNavDone = TRUE;
+            // Workaround: toggle visibility to force WebView2 to composite
+            // https://github.com/MicrosoftEdge/WebView2Feedback/issues/1077
+            ICoreWebView2Controller_put_IsVisible(self->controller, FALSE);
+            ICoreWebView2Controller_put_IsVisible(self->controller, TRUE);
+            ICoreWebView2Controller_MoveFocus(self->controller, COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+        }
+        return S_OK;
+    }
+
+    static ICoreWebView2NavigationCompletedEventHandlerVtbl znh_vtbl = {
+        znh_QueryInterface, znh_AddRef, znh_Release, znh_Invoke
+    };
+
+    // ---------------------------------------------------------------------------
+    // zapp:// protocol: embedded/file asset serving
+    // ---------------------------------------------------------------------------
+
+    static ICoreWebView2Environment* zapp_wv2_env = NULL;
+
+    #ifndef ZAPP_EMBEDDED_ASSET_STRUCT_DEFINED
+    #define ZAPP_EMBEDDED_ASSET_STRUCT_DEFINED 1
+    struct ZappEmbeddedAsset {
+        char* path;
+        unsigned char* data;
+        int len;
+        int is_brotli;
+        int uncompressed_len;
+    };
+    #endif
+
+    extern struct ZappEmbeddedAsset zapp_embedded_assets[];
+    extern int zapp_embedded_assets_count;
+    extern int zapp_build_use_embedded_assets(void);
+    extern const char* zapp_build_asset_root(void);
+
+    static const char* zapp_mime_for_path(const char* path) {
+        if (!path) return "application/octet-stream";
+        const char* dot = strrchr(path, '.');
+        if (!dot) return "application/octet-stream";
+        if (_stricmp(dot, ".html") == 0 || _stricmp(dot, ".htm") == 0) return "text/html; charset=utf-8";
+        if (_stricmp(dot, ".js") == 0 || _stricmp(dot, ".mjs") == 0) return "application/javascript; charset=utf-8";
+        if (_stricmp(dot, ".css") == 0) return "text/css; charset=utf-8";
+        if (_stricmp(dot, ".json") == 0) return "application/json; charset=utf-8";
+        if (_stricmp(dot, ".svg") == 0) return "image/svg+xml";
+        if (_stricmp(dot, ".png") == 0) return "image/png";
+        if (_stricmp(dot, ".jpg") == 0 || _stricmp(dot, ".jpeg") == 0) return "image/jpeg";
+        if (_stricmp(dot, ".gif") == 0) return "image/gif";
+        if (_stricmp(dot, ".ico") == 0) return "image/x-icon";
+        if (_stricmp(dot, ".woff2") == 0) return "font/woff2";
+        if (_stricmp(dot, ".woff") == 0) return "font/woff";
+        if (_stricmp(dot, ".ttf") == 0) return "font/ttf";
+        if (_stricmp(dot, ".map") == 0) return "application/json; charset=utf-8";
+        if (_stricmp(dot, ".wasm") == 0) return "application/wasm";
+        return "application/octet-stream";
+    }
+
+    #define ZAPP_LOCALHOST_PREFIX "https://app.localhost/"
+    #define ZAPP_LOCALHOST_PREFIX_LEN 22
+
+    static char* zapp_url_to_rel_path(const char* url) {
+        if (!url) return _strdup("index.html");
+
+        const char* rel = NULL;
+
+        if (strncmp(url, ZAPP_LOCALHOST_PREFIX, ZAPP_LOCALHOST_PREFIX_LEN) == 0) {
+            rel = url + ZAPP_LOCALHOST_PREFIX_LEN;
+        } else if (strncmp(url, "zapp://", 7) == 0) {
+            const char* after = url + 7;
+            const char* slash = strchr(after, '/');
+            rel = slash ? slash + 1 : after;
+        } else {
+            return _strdup("index.html");
+        }
+
+        char pathBuf[2048];
+        strncpy(pathBuf, rel, sizeof(pathBuf) - 1);
+        pathBuf[sizeof(pathBuf) - 1] = '\0';
+        char* q = strchr(pathBuf, '?');
+        if (q) *q = '\0';
+        q = strchr(pathBuf, '#');
+        if (q) *q = '\0';
+
+        while (pathBuf[0] == '/') memmove(pathBuf, pathBuf + 1, strlen(pathBuf));
+        if (pathBuf[0] == '\0') return _strdup("index.html");
+
+        return _strdup(pathBuf);
+    }
+
+    static void zapp_send_resource_response(
+        ICoreWebView2WebResourceRequestedEventArgs* args,
+        const unsigned char* data, int dataLen,
+        const char* mime, int statusCode, int is_brotli
+    ) {
+        if (!zapp_wv2_env) return;
+
+        IStream* stream = SHCreateMemStream(data, (UINT)dataLen);
+        if (!stream) stream = SHCreateMemStream((const BYTE*)"", 0);
+
+        wchar_t wMime[256];
+        MultiByteToWideChar(CP_UTF8, 0, mime, -1, wMime, 256);
+
+        wchar_t headers[1024];
+        if (is_brotli) {
+            _snwprintf(headers, 1024,
+                L"Content-Type: %s\r\n"
+                L"Content-Encoding: br\r\n"
+                L"Cross-Origin-Opener-Policy: same-origin\r\n"
+                L"Cross-Origin-Embedder-Policy: require-corp\r\n"
+                L"Cross-Origin-Resource-Policy: same-origin\r\n"
+                L"Cache-Control: no-cache",
+                wMime);
+        } else {
+            _snwprintf(headers, 1024,
+                L"Content-Type: %s\r\n"
+                L"Cross-Origin-Opener-Policy: same-origin\r\n"
+                L"Cross-Origin-Embedder-Policy: require-corp\r\n"
+                L"Cross-Origin-Resource-Policy: same-origin\r\n"
+                L"Cache-Control: no-cache",
+                wMime);
+        }
+
+        ICoreWebView2WebResourceResponse* response = NULL;
+        const wchar_t* reason = (statusCode == 200) ? L"OK" : L"Not Found";
+        HRESULT hr = ICoreWebView2Environment_CreateWebResourceResponse(
+            zapp_wv2_env, stream, statusCode, reason, headers, &response
+        );
+
+        if (SUCCEEDED(hr) && response) {
+            ICoreWebView2WebResourceRequestedEventArgs_put_Response(args, response);
+            ICoreWebView2WebResourceResponse_Release(response);
+        }
+
+        IStream_Release(stream);
+    }
+
+    // COM handler: WebResourceRequested
+    typedef struct {
+        ICoreWebView2WebResourceRequestedEventHandlerVtbl* lpVtbl;
+        ULONG refCount;
+    } ZappResourceHandler;
+
+    static HRESULT STDMETHODCALLTYPE zrh_QueryInterface(ICoreWebView2WebResourceRequestedEventHandler* This, REFIID riid, void** ppv) {
+        (void)riid; *ppv = This; This->lpVtbl->AddRef(This); return S_OK;
+    }
+    static ULONG STDMETHODCALLTYPE zrh_AddRef(ICoreWebView2WebResourceRequestedEventHandler* This) {
+        return ++((ZappResourceHandler*)This)->refCount;
+    }
+    static ULONG STDMETHODCALLTYPE zrh_Release(ICoreWebView2WebResourceRequestedEventHandler* This) {
+        ZappResourceHandler* self = (ZappResourceHandler*)This;
+        if (--self->refCount == 0) { free(self); return 0; }
+        return self->refCount;
+    }
+
+    static HRESULT STDMETHODCALLTYPE zrh_Invoke(
+        ICoreWebView2WebResourceRequestedEventHandler* This,
+        ICoreWebView2* sender,
+        ICoreWebView2WebResourceRequestedEventArgs* args
+    ) {
+        (void)This; (void)sender;
+
+        ICoreWebView2WebResourceRequest* request = NULL;
+        ICoreWebView2WebResourceRequestedEventArgs_get_Request(args, &request);
+        if (!request) return S_OK;
+
+        LPWSTR uriW = NULL;
+        ICoreWebView2WebResourceRequest_get_Uri(request, &uriW);
+        ICoreWebView2WebResourceRequest_Release(request);
+        if (!uriW) return S_OK;
+
+        char* uri = zapp_wide_to_utf8(uriW);
+        CoTaskMemFree(uriW);
+        if (!uri) return S_OK;
+
+        if (strncmp(uri, ZAPP_LOCALHOST_PREFIX, ZAPP_LOCALHOST_PREFIX_LEN) != 0 &&
+            strncmp(uri, "zapp://", 7) != 0) {
+            free(uri);
+            return S_OK;
+        }
+
+        char* rel = zapp_url_to_rel_path(uri);
+        free(uri);
+
+        char lookupPath[512];
+        snprintf(lookupPath, sizeof(lookupPath), "/%s", rel);
+
+        const char* mime = zapp_mime_for_path(rel);
+
+        // Embedded assets
+        if (zapp_build_use_embedded_assets() && zapp_embedded_assets_count > 0) {
+            for (int i = 0; i < zapp_embedded_assets_count; i++) {
+                if (strcmp(zapp_embedded_assets[i].path, lookupPath) == 0) {
+                    zapp_send_resource_response(args,
+                        zapp_embedded_assets[i].data,
+                        zapp_embedded_assets[i].len,
+                        mime, 200,
+                        zapp_embedded_assets[i].is_brotli);
+                    free(rel);
+                    return S_OK;
+                }
+            }
+            // SPA fallback for embedded mode
+            int isAsset = (strncmp(rel, "assets/", 7) == 0) || (strncmp(rel, "zapp-workers/", 13) == 0);
+            if (!isAsset) {
+                for (int i = 0; i < zapp_embedded_assets_count; i++) {
+                    if (strcmp(zapp_embedded_assets[i].path, "/index.html") == 0) {
+                        zapp_send_resource_response(args,
+                            zapp_embedded_assets[i].data,
+                            zapp_embedded_assets[i].len,
+                            "text/html; charset=utf-8", 200,
+                            zapp_embedded_assets[i].is_brotli);
+                        free(rel);
+                        return S_OK;
+                    }
+                }
+            }
+        }
+
+        // File-based serving
+        const char* assetRoot = zapp_build_asset_root();
+        if (assetRoot && assetRoot[0] != '\0') {
+            char fullPath[1024];
+            snprintf(fullPath, sizeof(fullPath), "%s/%s", assetRoot, rel);
+            for (char* p = fullPath; *p; p++) { if (*p == '/') *p = '\\'; }
+
+            FILE* f = fopen(fullPath, "rb");
+            if (!f) {
+                int isAsset = (strncmp(rel, "assets/", 7) == 0) || (strncmp(rel, "zapp-workers/", 13) == 0);
+                if (!isAsset) {
+                    snprintf(fullPath, sizeof(fullPath), "%s\\index.html", assetRoot);
+                    for (char* p = fullPath; *p; p++) { if (*p == '/') *p = '\\'; }
+                    f = fopen(fullPath, "rb");
+                    if (f) mime = "text/html; charset=utf-8";
+                }
+            }
+
+            if (f) {
+                fseek(f, 0, SEEK_END);
+                long len = ftell(f);
+                fseek(f, 0, SEEK_SET);
+                if (len > 0) {
+                    unsigned char* buf = (unsigned char*)malloc((size_t)len);
+                    fread(buf, 1, (size_t)len, f);
+                    fclose(f);
+                    zapp_send_resource_response(args, buf, (int)len, mime, 200, 0);
+                    free(buf);
+                    free(rel);
+                    return S_OK;
+                }
+                fclose(f);
+            }
+        }
+
+        zapp_send_resource_response(args,
+            (const unsigned char*)"Not Found", 9,
+            "text/plain; charset=utf-8", 404, 0);
+        free(rel);
+        return S_OK;
+    }
+
+    static ICoreWebView2WebResourceRequestedEventHandlerVtbl zrh_vtbl = {
+        zrh_QueryInterface, zrh_AddRef, zrh_Release, zrh_Invoke
+    };
+
+    // ---------------------------------------------------------------------------
+    // WebView2 configuration (called once controller is ready)
+    // ---------------------------------------------------------------------------
+
+    static void zapp_configure_webview(HWND hwnd, ICoreWebView2Controller* controller, ICoreWebView2* webview) {
+        ZappWindowEntry* entry = zapp_window_entry_for_hwnd(hwnd);
+        if (!entry) return;
+        entry->controller = controller;
+        entry->webview = webview;
+
+        ICoreWebView2Controller_put_IsVisible(controller, TRUE);
+
+        RECT bounds;
+        GetClientRect(hwnd, &bounds);
+        ICoreWebView2Controller_put_Bounds(controller, bounds);
+        ICoreWebView2Controller_NotifyParentWindowPositionChanged(controller);
+
+        // Register message handler
+        EventRegistrationToken token;
+        ZappMessageHandler* msgHandler = zapp_create_message_handler();
+        ICoreWebView2_add_WebMessageReceived(webview, (ICoreWebView2WebMessageReceivedEventHandler*)msgHandler, &token);
+
+        // Register NavigationCompleted handler (IsVisible toggle workaround)
+        ZappNavHandler* navHandler = (ZappNavHandler*)calloc(1, sizeof(ZappNavHandler));
+        navHandler->lpVtbl = &znh_vtbl;
+        navHandler->refCount = 1;
+        navHandler->controller = controller;
+        navHandler->firstNavDone = FALSE;
+        EventRegistrationToken navToken;
+        ICoreWebView2_add_NavigationCompleted(webview, (ICoreWebView2NavigationCompletedEventHandler*)navHandler, &navToken);
+
+        // Inject bootstrap config script
+        const char* bootstrapName = app_get_bootstrap_name();
+        char* escapedName = zapp_escape_js_string(bootstrapName ? bootstrapName : "Zapp App");
+        BOOL shouldTerminate = app_get_bootstrap_application_should_terminate_after_last_window_closed();
+        BOOL inspectable = app_get_bootstrap_web_content_inspectable();
+        int maxWorkers = app_get_bootstrap_max_workers();
+
+        char configScript[2048];
+        snprintf(configScript, sizeof(configScript),
+            "(function(){globalThis[Symbol.for('zapp.bootstrapConfig')]="
+            "{name:'%s',applicationShouldTerminateAfterLastWindowClosed:%s,"
+            "webContentInspectable:%s,maxWorkers:%d};})();",
+            escapedName,
+            shouldTerminate ? "true" : "false",
+            inspectable ? "true" : "false",
+            maxWorkers
+        );
+        free(escapedName);
+
+        wchar_t* wConfigScript = zapp_utf8_to_wide(configScript);
+        ICoreWebView2_AddScriptToExecuteOnDocumentCreated(webview, wConfigScript, NULL);
+        free(wConfigScript);
+
+        // Inject bindings manifest
+        const char* bindingsRaw = service_get_bindings_manifest_json();
+        char* escapedBindings = zapp_escape_js_string(bindingsRaw);
+        size_t bindScriptLen = strlen(escapedBindings) + 256;
+        char* bindScript = (char*)malloc(bindScriptLen);
+        snprintf(bindScript, bindScriptLen,
+            "(function(){globalThis[Symbol.for('zapp.bindingsManifest')]='%s';})();",
+            escapedBindings
+        );
+        free(escapedBindings);
+        wchar_t* wBindScript = zapp_utf8_to_wide(bindScript);
+        ICoreWebView2_AddScriptToExecuteOnDocumentCreated(webview, wBindScript, NULL);
+        free(wBindScript);
+        free(bindScript);
+
+        // Inject owner ID
+        char ownerScript[256];
+        snprintf(ownerScript, sizeof(ownerScript),
+            "(function(){globalThis[Symbol.for('zapp.ownerId')]='%s';})();",
+            entry->ownerId
+        );
+        wchar_t* wOwnerScript = zapp_utf8_to_wide(ownerScript);
+        ICoreWebView2_AddScriptToExecuteOnDocumentCreated(webview, wOwnerScript, NULL);
+        free(wOwnerScript);
+
+        // Inject webview bootstrap script
+        const char* bootstrap = zapp_windows_webview_bootstrap_script();
+        if (bootstrap && bootstrap[0] != '\0') {
+            wchar_t* wBootstrap = zapp_utf8_to_wide(bootstrap);
+            ICoreWebView2_AddScriptToExecuteOnDocumentCreated(webview, wBootstrap, NULL);
+            free(wBootstrap);
+        }
+
+        // Register app.localhost virtual host so WebView2 recognises the origin.
+        // For file-based builds this serves files directly; for embedded builds
+        // our WebResourceRequested handler below intercepts and overrides.
+        {
+            ICoreWebView2_3* wv3 = NULL;
+            HRESULT qihr = ICoreWebView2_QueryInterface(webview, &IID_ICoreWebView2_3, (void**)&wv3);
+            if (SUCCEEDED(qihr) && wv3) {
+                const char* assetRoot = zapp_build_asset_root();
+                const wchar_t* folderW = L".";
+                wchar_t* allocFolder = NULL;
+                if (assetRoot && assetRoot[0] != '\0') {
+                    allocFolder = zapp_utf8_to_wide(assetRoot);
+                    folderW = allocFolder;
+                }
+                ICoreWebView2_3_SetVirtualHostNameToFolderMapping(
+                    wv3, L"app.localhost", folderW,
+                    COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
+                if (allocFolder) free(allocFolder);
+                ICoreWebView2_3_Release(wv3);
+            }
+        }
+
+        // Intercept requests for embedded/custom asset serving
+        ICoreWebView2_AddWebResourceRequestedFilter(webview, L"https://app.localhost/*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
+        ZappResourceHandler* resHandler = (ZappResourceHandler*)calloc(1, sizeof(ZappResourceHandler));
+        resHandler->lpVtbl = &zrh_vtbl;
+        resHandler->refCount = 1;
+        EventRegistrationToken resToken;
+        ICoreWebView2_add_WebResourceRequested(webview, (ICoreWebView2WebResourceRequestedEventHandler*)resHandler, &resToken);
+
+        // Navigate to initial URL
+        const char* initialUrl = zapp_build_initial_url();
+        const char* url = (initialUrl && initialUrl[0] != '\0') ? initialUrl : "https://app.localhost/index.html";
+        wchar_t* wUrl = zapp_utf8_to_wide(url);
+        ICoreWebView2_Navigate(webview, wUrl);
+        free(wUrl);
+    }
+
+    // ---------------------------------------------------------------------------
+    // COM callback: ControllerCompleted
+    // ---------------------------------------------------------------------------
+
+    typedef struct {
+        ICoreWebView2CreateCoreWebView2ControllerCompletedHandlerVtbl* lpVtbl;
+        ULONG refCount;
+        HWND hwnd;
+    } ZappControllerHandler;
+
+    static HRESULT STDMETHODCALLTYPE zch_QueryInterface(ICoreWebView2CreateCoreWebView2ControllerCompletedHandler* This, REFIID riid, void** ppv) {
+        (void)riid; *ppv = This; This->lpVtbl->AddRef(This); return S_OK;
+    }
+    static ULONG STDMETHODCALLTYPE zch_AddRef(ICoreWebView2CreateCoreWebView2ControllerCompletedHandler* This) {
+        return ++((ZappControllerHandler*)This)->refCount;
+    }
+    static ULONG STDMETHODCALLTYPE zch_Release(ICoreWebView2CreateCoreWebView2ControllerCompletedHandler* This) {
+        ZappControllerHandler* self = (ZappControllerHandler*)This;
+        if (--self->refCount == 0) { free(self); return 0; }
+        return self->refCount;
+    }
+    static HRESULT STDMETHODCALLTYPE zch_Invoke(
+        ICoreWebView2CreateCoreWebView2ControllerCompletedHandler* This,
+        HRESULT errorCode,
+        ICoreWebView2Controller* controller
+    ) {
+        ZappControllerHandler* self = (ZappControllerHandler*)This;
+        if (FAILED(errorCode) || !controller) {
+            fprintf(stderr, "[zapp] WebView2 controller creation failed: 0x%08lX\n", errorCode);
+            return S_OK;
+        }
+
+        // The controller is an [in] parameter - caller releases after callback.
+        // We must AddRef to keep it alive beyond this scope.
+        ICoreWebView2Controller_AddRef(controller);
+
+        ICoreWebView2* webview = NULL;
+        ICoreWebView2Controller_get_CoreWebView2(controller, &webview);
+        if (!webview) {
+            fprintf(stderr, "[zapp] Failed to get CoreWebView2 from controller\n");
+            ICoreWebView2Controller_Release(controller);
+            return S_OK;
+        }
+        // get_CoreWebView2 returns an AddRef'd pointer per COM [out] convention
+
+        zapp_configure_webview(self->hwnd, controller, webview);
+        return S_OK;
+    }
+
+    static ICoreWebView2CreateCoreWebView2ControllerCompletedHandlerVtbl zch_vtbl = {
+        zch_QueryInterface, zch_AddRef, zch_Release, zch_Invoke
+    };
+
+    // ---------------------------------------------------------------------------
+    // COM callback: EnvironmentCompleted
+    // ---------------------------------------------------------------------------
+
+    typedef struct {
+        ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandlerVtbl* lpVtbl;
+        ULONG refCount;
+        HWND hwnd;
+    } ZappEnvironmentHandler;
+
+    static HRESULT STDMETHODCALLTYPE zeh_QueryInterface(ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler* This, REFIID riid, void** ppv) {
+        (void)riid; *ppv = This; This->lpVtbl->AddRef(This); return S_OK;
+    }
+    static ULONG STDMETHODCALLTYPE zeh_AddRef(ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler* This) {
+        return ++((ZappEnvironmentHandler*)This)->refCount;
+    }
+    static ULONG STDMETHODCALLTYPE zeh_Release(ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler* This) {
+        ZappEnvironmentHandler* self = (ZappEnvironmentHandler*)This;
+        if (--self->refCount == 0) { free(self); return 0; }
+        return self->refCount;
+    }
+    static HRESULT STDMETHODCALLTYPE zeh_Invoke(
+        ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler* This,
+        HRESULT errorCode,
+        ICoreWebView2Environment* env
+    ) {
+        ZappEnvironmentHandler* self = (ZappEnvironmentHandler*)This;
+        if (FAILED(errorCode) || !env) {
+            fprintf(stderr, "[zapp] WebView2 environment creation failed: 0x%08lX\n", errorCode);
+            return S_OK;
+        }
+
+        if (!zapp_wv2_env) {
+            zapp_wv2_env = env;
+            ICoreWebView2Environment_AddRef(env);
+        }
+
+        ZappControllerHandler* ch = (ZappControllerHandler*)calloc(1, sizeof(ZappControllerHandler));
+        ch->lpVtbl = &zch_vtbl;
+        ch->refCount = 1;
+        ch->hwnd = self->hwnd;
+
+        ICoreWebView2Environment_CreateCoreWebView2Controller(
+            env, self->hwnd,
+            (ICoreWebView2CreateCoreWebView2ControllerCompletedHandler*)ch
+        );
+        return S_OK;
+    }
+
+    static ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandlerVtbl zeh_vtbl = {
+        zeh_QueryInterface, zeh_AddRef, zeh_Release, zeh_Invoke
+    };
+
+    // ---------------------------------------------------------------------------
+    // Public API
+    // ---------------------------------------------------------------------------
+
+    static wchar_t* zapp_webview2_user_data_path(void) {
+        const char* appName = app_get_bootstrap_name();
+        if (!appName || appName[0] == '\0') appName = "ZappApp";
+
+        char path[MAX_PATH];
+        if (FAILED(SHGetFolderPathA(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, path))) {
+            return NULL;
+        }
+        strncat(path, "\\", sizeof(path) - strlen(path) - 1);
+        strncat(path, appName, sizeof(path) - strlen(path) - 1);
+        strncat(path, "\\WebView2", sizeof(path) - strlen(path) - 1);
+
+        SHCreateDirectoryExA(NULL, path, NULL);
+        return zapp_utf8_to_wide(path);
+    }
+
+    void zapp_windows_webview_create(HWND hwnd, BOOL inspectable) {
+        (void)inspectable;
+        ZappWindowEntry* entry = zapp_window_entry_alloc(hwnd);
+        if (!entry) {
+            fprintf(stderr, "[zapp] Max windows reached\n");
+            return;
+        }
+
+        ZappEnvironmentHandler* eh = (ZappEnvironmentHandler*)calloc(1, sizeof(ZappEnvironmentHandler));
+        eh->lpVtbl = &zeh_vtbl;
+        eh->refCount = 1;
+        eh->hwnd = hwnd;
+
+        if (!zapp_webview2_loader_init()) {
+            fprintf(stderr, "[zapp] Failed to initialize WebView2 loader\n");
+            free(eh);
+            return;
+        }
+
+        wchar_t* userDataDir = zapp_webview2_user_data_path();
+        HRESULT hr = zapp_CreateEnvInternal(
+            1, 0, userDataDir, NULL,
+            (ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler*)eh
+        );
+        free(userDataDir);
+        if (FAILED(hr)) {
+            fprintf(stderr, "[zapp] WebView2 environment creation failed: 0x%08lX\n", hr);
+        }
+    }
+
+    void zapp_windows_webview_resize(HWND hwnd) {
+        ZappWindowEntry* entry = zapp_window_entry_for_hwnd(hwnd);
+        if (entry && entry->controller) {
+            RECT bounds;
+            GetClientRect(hwnd, &bounds);
+            ICoreWebView2Controller_put_Bounds(entry->controller, bounds);
+        }
+    }
+
+    void zapp_windows_webview_notify_position(HWND hwnd) {
+        ZappWindowEntry* entry = zapp_window_entry_for_hwnd(hwnd);
+        if (entry && entry->controller) {
+            ICoreWebView2Controller_NotifyParentWindowPositionChanged(entry->controller);
+        }
+    }
+
+    extern void zapp_windows_reset_owner_workers(const char* owner_id);
+    extern void zapp_win_unregister_by_hwnd(HWND hwnd);
+
+    void zapp_windows_webview_detach(HWND hwnd) {
+        ZappWindowEntry* entry = zapp_window_entry_for_hwnd(hwnd);
+        if (entry) {
+            if (entry->ownerId[0]) {
+                zapp_windows_reset_owner_workers(entry->ownerId);
+            }
+            zapp_win_unregister_by_hwnd(hwnd);
+            if (entry->controller) {
+                ICoreWebView2Controller_Close(entry->controller);
+                ICoreWebView2Controller_Release(entry->controller);
+            }
+            if (entry->webview) {
+                ICoreWebView2_Release(entry->webview);
+            }
+            entry->in_use = FALSE;
+        }
+    }
+
+    HWND zapp_get_first_hwnd(void) {
+        for (int i = 0; i < ZAPP_MAX_WINDOWS; i++) {
+            if (zapp_windows[i].in_use && zapp_windows[i].hwnd)
+                return zapp_windows[i].hwnd;
+        }
+        return NULL;
+    }
+
+    void zapp_windows_webview_navigate(HWND hwnd, const char* url_utf8) {
+        ZappWindowEntry* entry = zapp_window_entry_for_hwnd(hwnd);
+        if (entry && entry->webview && url_utf8) {
+            const char* initialUrl = zapp_build_initial_url();
+            char resolved[2048];
+            if (strncmp(url_utf8, "http://", 7) == 0 || strncmp(url_utf8, "https://", 8) == 0 || strncmp(url_utf8, "zapp://", 7) == 0) {
+                strncpy(resolved, url_utf8, sizeof(resolved) - 1);
+            } else if (initialUrl && strncmp(initialUrl, "http", 4) == 0) {
+                snprintf(resolved, sizeof(resolved), "%s%s%s",
+                    initialUrl,
+                    url_utf8[0] == '/' ? "" : "/",
+                    url_utf8);
+            } else {
+                snprintf(resolved, sizeof(resolved), "https://app.localhost%s%s",
+                    url_utf8[0] == '/' ? "" : "/",
+                    url_utf8);
+            }
+            resolved[sizeof(resolved) - 1] = '\0';
+            wchar_t* wUrl = zapp_utf8_to_wide(resolved);
+            ICoreWebView2_Navigate(entry->webview, wUrl);
+            free(wUrl);
+        }
+    }
+
+    // Execute JS in a specific window's webview
+    void zapp_windows_webview_eval(HWND hwnd, const wchar_t* js) {
+        ZappWindowEntry* entry = zapp_window_entry_for_hwnd(hwnd);
+        if (entry && entry->webview) {
+            ICoreWebView2_ExecuteScript(entry->webview, js, NULL);
+        }
+    }
+
+    // Execute JS in ALL webviews on the UI thread.
+    // Called from ZappWindowProc via WM_ZAPP_EVAL_JS.
+    void zapp_windows_webview_eval_all_ui(wchar_t* wJs) {
+        if (!wJs) return;
+        for (int i = 0; i < ZAPP_MAX_WINDOWS; i++) {
+            if (zapp_windows[i].in_use && zapp_windows[i].webview) {
+                ICoreWebView2_ExecuteScript(zapp_windows[i].webview, wJs, NULL);
+            }
+        }
+        free(wJs);
+    }
+
+    // Thread-safe: posts JS to the UI message loop so ExecuteScript
+    // runs on the thread that owns the WebView2 COM objects.
+    void zapp_windows_webview_eval_all(const char* js_utf8) {
+        wchar_t* wJs = zapp_utf8_to_wide(js_utf8);
+        if (!wJs) return;
+        // Find any in-use window to post the message to
+        for (int i = 0; i < ZAPP_MAX_WINDOWS; i++) {
+            if (zapp_windows[i].in_use && zapp_windows[i].hwnd) {
+                PostMessageW(zapp_windows[i].hwnd, WM_ZAPP_EVAL_JS, 0, (LPARAM)wJs);
+                return;
+            }
+        }
+        free(wJs);
+    }
+#endif
+}

@@ -6,15 +6,16 @@
 import "./window.zc";
 import "./webview_bootstrap.zc";
 
-include <Cocoa/Cocoa.h>
-include <WebKit/WebKit.h>
-include <dispatch/dispatch.h>
 include <stdlib.h>
 include <string.h>
 include <stdbool.h>
-include <compression.h>
 
 raw {
+#ifdef __APPLE__
+    #include <Cocoa/Cocoa.h>
+    #include <WebKit/WebKit.h>
+    #include <dispatch/dispatch.h>
+    #include <compression.h>
 #ifndef ZAPP_EMBEDDED_ASSET_STRUCT_DEFINED
 #define ZAPP_EMBEDDED_ASSET_STRUCT_DEFINED 1
     struct ZappEmbeddedAsset {
@@ -333,7 +334,7 @@ raw {
         }
     }
 
-    void zapp_darwin_sync_handle_bridge(char* action, char* payload_json) {
+    void platform_sync_handle_bridge(char* action, char* payload_json) {
         if (action == NULL || payload_json == NULL) return;
         NSString* actionStr = [NSString stringWithUTF8String:action];
         NSString* payload = [NSString stringWithUTF8String:payload_json];
@@ -444,6 +445,7 @@ raw {
         [config setURLSchemeHandler:schemeHandler forURLScheme:@"zapp"];
         WKUserContentController* ucc = [[WKUserContentController alloc] init];
         NSString* ownerId = [NSString stringWithFormat:@"owner-%p", window];
+        NSString* windowId = [NSString stringWithFormat:@"win-%p", window];
         const char* bindingsRaw = service_get_bindings_manifest_json();
         NSString* bindingsJson = zapp_escape_js_string(bindingsRaw);
 
@@ -491,12 +493,23 @@ raw {
             forMainFrameOnly:NO];
         [ucc addUserScript:ownerUserScript];
 
+        NSString* windowIdScript = [NSString stringWithFormat:
+            @"(function(){globalThis[Symbol.for('zapp.windowId')]='%@';})();",
+            windowId
+        ];
+        WKUserScript* windowIdUserScript = [[WKUserScript alloc]
+            initWithSource:windowIdScript
+            injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+            forMainFrameOnly:NO];
+        [ucc addUserScript:windowIdUserScript];
+
         NSString* bootstrap = [NSString stringWithUTF8String:zapp_darwin_webview_bootstrap_script()];
         WKUserScript* userScript = [[WKUserScript alloc]
             initWithSource:bootstrap
             injectionTime:WKUserScriptInjectionTimeAtDocumentStart
             forMainFrameOnly:NO];
         [ucc addUserScript:userScript];
+
         ZappMsgHandler* handler = [[ZappMsgHandler alloc] init];
         [ucc addScriptMessageHandler:handler name:@"zapp"];
         [config setUserContentController:ucc];
@@ -509,4 +522,5 @@ raw {
         
         [window setContentView:webview];
     }
+#endif
 }

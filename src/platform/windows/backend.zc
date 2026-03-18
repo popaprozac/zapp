@@ -1,0 +1,432 @@
+import "../platform.zc";
+import "./backend_bootstrap.zc";
+import "./engine_qjs.zc";
+import "./worker/qjs.zc";
+
+raw {
+#ifdef _WIN32
+    #include <windows.h>
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <string.h>
+    #include "quickjs.h"
+    #include "quickjs-libc.h"
+
+    extern void* engine_qjs_create_ctx(void* rt);
+    extern int engine_qjs_eval(void* ctx, const char* utf8, size_t len, const char* filename);
+    extern const char* engine_qjs_get_exception_message(void* ctx);
+    extern void engine_qjs_free_ctx(void* ctx);
+
+    extern void zapp_handle_message(void* app, char* msg);
+    extern void* app_get_active(void);
+    extern void zapp_post_to_ui_thread(const char* wire);
+    extern char* zapp_json_get_string(const char* json, const char* key);
+    extern const char* zapp_windows_backend_bootstrap_script(void);
+
+    extern void zapp_windows_qjs_dispatch(void (*func)(void*), void* data);
+    extern void zapp_windows_qjs_drain_jobs(void* ctx, const char* label);
+    extern void zapp_windows_qjs_timers_install(JSContext* ctx, JSValue bridge, const char* worker_id);
+    extern void zapp_windows_qjs_timers_cancel(const char* workerId);
+    extern void zapp_qjs_crypto_install(JSContext* ctx, JSValue bridge);
+    extern void zapp_qjs_encoding_install(JSContext* ctx, JSValue bridge);
+    extern void zapp_qjs_url_install(JSContext* ctx, JSValue bridge);
+    extern void zapp_qjs_base64_install(JSContext* ctx, JSValue bridge);
+    extern void zapp_windows_qjs_fetch_install(JSContext* ctx, JSValue bridge, const char* worker_id);
+    extern void zapp_windows_qjs_websocket_install(JSContext* ctx, JSValue bridge, const char* worker_id);
+
+    extern void zapp_windows_qjs_ensure_init(void);
+    extern JSRuntime* qjs_rt;
+
+    extern void zapp_log_backend(int level, const char* message);
+    #ifndef ZAPP_LOG_ERROR
+    #define ZAPP_LOG_ERROR 0
+    #define ZAPP_LOG_WARN  1
+    #define ZAPP_LOG_INFO  2
+    #define ZAPP_LOG_DEBUG 3
+    #define ZAPP_LOG_TRACE 4
+    #endif
+
+    static JSContext* zapp_be_ctx = NULL;
+    static const char* zapp_be_id = "__zapp_backend__";
+
+    static void zapp_be_call_bridge(const char* methodName, int argc, JSValue* argv) {
+        if (zapp_be_ctx == NULL || methodName == NULL) return;
+
+        JSValue global = JS_GetGlobalObject(zapp_be_ctx);
+        JSValue symbol = JS_GetPropertyStr(zapp_be_ctx, global, "Symbol");
+        JSValue symbolFor = JS_GetPropertyStr(zapp_be_ctx, symbol, "for");
+        JSValue arg = JS_NewString(zapp_be_ctx, "zapp.bridge");
+        JSValue bridgeSym = JS_Call(zapp_be_ctx, symbolFor, symbol, 1, &arg);
+        JSAtom bridgeAtom = JS_ValueToAtom(zapp_be_ctx, bridgeSym);
+        JSValue bridge = JS_GetProperty(zapp_be_ctx, global, bridgeAtom);
+
+        if (JS_IsObject(bridge)) {
+            JSValue fn = JS_GetPropertyStr(zapp_be_ctx, bridge, methodName);
+            if (JS_IsFunction(zapp_be_ctx, fn)) {
+                JSValue ret = JS_Call(zapp_be_ctx, fn, bridge, argc, argv);
+                if (JS_IsException(ret)) {
+                    JSValue exc = JS_GetException(zapp_be_ctx);
+                    const char* str = JS_ToCString(zapp_be_ctx, exc);
+                    char err_buf[512];
+                    snprintf(err_buf, sizeof(err_buf), "bridge.%s threw: %s", methodName, str ? str : "unknown");
+                    zapp_log_backend(ZAPP_LOG_ERROR, err_buf);
+                    if (str) JS_FreeCString(zapp_be_ctx, str);
+                    JS_FreeValue(zapp_be_ctx, exc);
+                }
+                JS_FreeValue(zapp_be_ctx, ret);
+                zapp_windows_qjs_drain_jobs(zapp_be_ctx, methodName);
+            }
+            JS_FreeValue(zapp_be_ctx, fn);
+        }
+
+        JS_FreeAtom(zapp_be_ctx, bridgeAtom);
+        JS_FreeValue(zapp_be_ctx, bridge);
+        JS_FreeValue(zapp_be_ctx, bridgeSym);
+        JS_FreeValue(zapp_be_ctx, arg);
+        JS_FreeValue(zapp_be_ctx, symbolFor);
+        JS_FreeValue(zapp_be_ctx, symbol);
+        JS_FreeValue(zapp_be_ctx, global);
+    }
+
+    static JSValue qjs_be_console_log(JSContext* ctx, JSValue this_val, int argc, JSValue* argv, int magic, JSValue* func_data) {
+        (void)this_val; (void)func_data;
+        char buf[4096];
+        size_t offset = 0;
+        for (int i = 0; i < argc && offset < sizeof(buf) - 1; i++) {
+            const char* str = JS_ToCString(ctx, argv[i]);
+            if (str) {
+                int n = snprintf(buf + offset, sizeof(buf) - offset, "%s%s", i > 0 ? " " : "", str);
+                if (n > 0) offset += (size_t)n;
+                JS_FreeCString(ctx, str);
+            }
+        }
+        buf[offset] = '\0';
+        int level = (magic >= ZAPP_LOG_ERROR && magic <= ZAPP_LOG_TRACE) ? magic : ZAPP_LOG_INFO;
+        zapp_log_backend(level, buf);
+        return JS_UNDEFINED;
+    }
+
+    static JSValue qjs_be_emitToHost(JSContext* ctx, JSValue this_val, int argc, JSValue* argv) {
+        (void)this_val;
+        if (argc < 2) return JS_UNDEFINED;
+
+        const char* name = JS_ToCString(ctx, argv[0]);
+        if (!name) return JS_UNDEFINED;
+
+        const char* payloadStr = JS_ToCString(ctx, argv[1]);
+        const char* payload = payloadStr ? payloadStr : "{}";
+
+        // Internal events: build wire string, post to UI thread
+        if (strcmp(name, "__zapp_window_create") == 0 ||
+            strcmp(name, "__zapp_window_action") == 0 ||
+            strcmp(name, "__zapp_app_action") == 0 ||
+            strcmp(name, "__zapp_app_configure") == 0) {
+
+            char wire[4096];
+            if (strcmp(name, "__zapp_window_create") == 0) {
+                snprintf(wire, sizeof(wire), "window\ncreate\n%s", payload);
+            } else if (strcmp(name, "__zapp_window_action") == 0) {
+                char* action = zapp_json_get_string(payload, "action");
+                if (action) {
+                    snprintf(wire, sizeof(wire), "window\n%s\n%s", action, payload);
+                    free(action);
+                } else { wire[0] = '\0'; }
+            } else if (strcmp(name, "__zapp_app_action") == 0) {
+                char* action = zapp_json_get_string(payload, "action");
+                if (action) {
+                    snprintf(wire, sizeof(wire), "app\n%s\n{}", action);
+                    free(action);
+                } else { wire[0] = '\0'; }
+            } else {
+                snprintf(wire, sizeof(wire), "app\nconfigure\n%s", payload);
+            }
+
+            if (wire[0]) zapp_post_to_ui_thread(wire);
+
+            JS_FreeCString(ctx, name);
+            if (payloadStr) JS_FreeCString(ctx, payloadStr);
+            return JS_UNDEFINED;
+        }
+
+        // Regular event emission
+        void* app = app_get_active();
+        if (app) {
+            size_t len = strlen("emit\n") + strlen(name) + 1 + strlen(payload) + 1;
+            char* wire = (char*)malloc(len);
+            snprintf(wire, len, "emit\n%s\n%s", name, payload);
+            zapp_handle_message(app, wire);
+            free(wire);
+        }
+
+        JS_FreeCString(ctx, name);
+        if (payloadStr) JS_FreeCString(ctx, payloadStr);
+        return JS_UNDEFINED;
+    }
+
+    static JSValue qjs_be_invokeToHost(JSContext* ctx, JSValue this_val, int argc, JSValue* argv) {
+        (void)this_val;
+        if (argc < 2) return JS_UNDEFINED;
+        const char* name = JS_ToCString(ctx, argv[0]);
+        if (!name) return JS_UNDEFINED;
+
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue JSON = JS_GetPropertyStr(ctx, global, "JSON");
+        JSValue stringify = JS_GetPropertyStr(ctx, JSON, "stringify");
+        JSValue jsonVal = JS_Call(ctx, stringify, JSON, 1, &argv[1]);
+        const char* payload = JS_ToCString(ctx, jsonVal);
+        const char* p = payload ? payload : "{}";
+
+        void* app = app_get_active();
+        if (app) {
+            size_t len = strlen("invoke\n") + strlen(name) + 1 + strlen(p) + 1;
+            char* wire = (char*)malloc(len);
+            snprintf(wire, len, "invoke\n%s\n%s", name, p);
+            zapp_handle_message(app, wire);
+            free(wire);
+        }
+
+        if (payload) JS_FreeCString(ctx, payload);
+        JS_FreeValue(ctx, jsonVal);
+        JS_FreeValue(ctx, stringify);
+        JS_FreeValue(ctx, JSON);
+        JS_FreeValue(ctx, global);
+        JS_FreeCString(ctx, name);
+        return JS_UNDEFINED;
+    }
+
+    static JSValue qjs_be_reportError(JSContext* ctx, JSValue this_val, int argc, JSValue* argv) {
+        (void)this_val;
+        if (argc < 1) return JS_UNDEFINED;
+        const char* msg = JS_ToCString(ctx, argv[0]);
+        zapp_log_backend(ZAPP_LOG_ERROR, msg ? msg : "unknown");
+        if (msg) JS_FreeCString(ctx, msg);
+        return JS_UNDEFINED;
+    }
+
+    static JSValue qjs_be_bridge_consoleLog(JSContext* ctx, JSValue this_val, int argc, JSValue* argv) {
+        (void)this_val;
+        const char* level_str = (argc >= 1) ? JS_ToCString(ctx, argv[0]) : NULL;
+        const char* msg = (argc >= 2) ? JS_ToCString(ctx, argv[1]) : NULL;
+
+        int level_int = ZAPP_LOG_INFO;
+        if (level_str) {
+            if (strcmp(level_str, "error") == 0) level_int = ZAPP_LOG_ERROR;
+            else if (strcmp(level_str, "warn") == 0) level_int = ZAPP_LOG_WARN;
+            else if (strcmp(level_str, "debug") == 0) level_int = ZAPP_LOG_DEBUG;
+            else if (strcmp(level_str, "trace") == 0) level_int = ZAPP_LOG_TRACE;
+        }
+
+        zapp_log_backend(level_int, msg ? msg : "");
+        if (level_str) JS_FreeCString(ctx, level_str);
+        if (msg) JS_FreeCString(ctx, msg);
+        return JS_UNDEFINED;
+    }
+
+    static JSValue qjs_be_noop(JSContext* ctx, JSValue this_val, int argc, JSValue* argv) {
+        (void)ctx; (void)this_val; (void)argc; (void)argv;
+        return JS_UNDEFINED;
+    }
+
+    // Create backend data (dispatched to QJS thread)
+    typedef struct {
+        void* app_ptr;
+        char* script_source;
+        int* result;
+        HANDLE done_event;
+    } ZappBackendCreateData;
+
+    static void zapp_backend_create_on_thread(void* data) {
+        ZappBackendCreateData* d = (ZappBackendCreateData*)data;
+
+        void* ctx_opaque = engine_qjs_create_ctx(qjs_rt);
+        if (!ctx_opaque) {
+            zapp_log_backend(ZAPP_LOG_ERROR, "failed to create QJS context");
+            *d->result = -1;
+            SetEvent(d->done_event);
+            return;
+        }
+
+        JSContext* ctx = (JSContext*)ctx_opaque;
+        zapp_be_ctx = ctx;
+
+        JSValue global = JS_GetGlobalObject(ctx);
+
+        // console — each method routes through zapp_log_backend with appropriate level
+        JSValue consoleObj = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, consoleObj, "log",   JS_NewCFunctionData(ctx, qjs_be_console_log, 1, ZAPP_LOG_INFO,  0, NULL));
+        JS_SetPropertyStr(ctx, consoleObj, "info",  JS_NewCFunctionData(ctx, qjs_be_console_log, 1, ZAPP_LOG_INFO,  0, NULL));
+        JS_SetPropertyStr(ctx, consoleObj, "warn",  JS_NewCFunctionData(ctx, qjs_be_console_log, 1, ZAPP_LOG_WARN,  0, NULL));
+        JS_SetPropertyStr(ctx, consoleObj, "error", JS_NewCFunctionData(ctx, qjs_be_console_log, 1, ZAPP_LOG_ERROR, 0, NULL));
+        JS_SetPropertyStr(ctx, consoleObj, "debug", JS_NewCFunctionData(ctx, qjs_be_console_log, 1, ZAPP_LOG_DEBUG, 0, NULL));
+        JS_SetPropertyStr(ctx, consoleObj, "trace", JS_NewCFunctionData(ctx, qjs_be_console_log, 1, ZAPP_LOG_TRACE, 0, NULL));
+        JS_SetPropertyStr(ctx, global, "console", consoleObj);
+
+        // bridge
+        JSValue bridge = JS_NewObject(ctx);
+
+        JS_SetPropertyStr(ctx, bridge, "emitToHost", JS_NewCFunction(ctx, qjs_be_emitToHost, "emitToHost", 2));
+        JS_SetPropertyStr(ctx, bridge, "invokeToHost", JS_NewCFunction(ctx, qjs_be_invokeToHost, "invokeToHost", 2));
+        JS_SetPropertyStr(ctx, bridge, "reportError", JS_NewCFunction(ctx, qjs_be_reportError, "reportError", 1));
+        JS_SetPropertyStr(ctx, bridge, "consoleLog", JS_NewCFunction(ctx, qjs_be_bridge_consoleLog, "consoleLog", 2));
+
+        JSValue noop = JS_NewCFunction(ctx, qjs_be_noop, "noop", 0);
+        JS_SetPropertyStr(ctx, bridge, "postMessage", JS_DupValue(ctx, noop));
+        JS_SetPropertyStr(ctx, bridge, "closeWorker", JS_DupValue(ctx, noop));
+        JS_SetPropertyStr(ctx, bridge, "syncWait", JS_DupValue(ctx, noop));
+        JS_SetPropertyStr(ctx, bridge, "syncNotify", JS_DupValue(ctx, noop));
+        JS_SetPropertyStr(ctx, bridge, "syncCancel", noop);
+
+        zapp_windows_qjs_timers_install(ctx, bridge, zapp_be_id);
+        zapp_windows_qjs_fetch_install(ctx, bridge, zapp_be_id);
+        zapp_qjs_crypto_install(ctx, bridge);
+        zapp_qjs_encoding_install(ctx, bridge);
+        zapp_qjs_url_install(ctx, bridge);
+        zapp_qjs_base64_install(ctx, bridge);
+        zapp_windows_qjs_websocket_install(ctx, bridge, zapp_be_id);
+
+        JS_SetPropertyStr(ctx, global, "globalThis", JS_DupValue(ctx, global));
+        JS_SetPropertyStr(ctx, global, "self", JS_DupValue(ctx, global));
+        JS_SetPropertyStr(ctx, global, "__zappWorkerDispatchId", JS_NewString(ctx, zapp_be_id));
+        JS_SetPropertyStr(ctx, global, "__zappBridge", bridge);
+
+        // Inject config
+        {
+            extern char* app_get_bootstrap_name(void);
+            extern bool app_get_bootstrap_application_should_terminate_after_last_window_closed(void);
+            extern bool app_get_bootstrap_web_content_inspectable(void);
+            extern int app_get_bootstrap_max_workers(void);
+
+            char configScript[1024];
+            const char* appName = app_get_bootstrap_name();
+            snprintf(configScript, sizeof(configScript),
+                "globalThis.__zappConfig={name:'%s',"
+                "applicationShouldTerminateAfterLastWindowClosed:%s,"
+                "webContentInspectable:%s,"
+                "maxWorkers:%d};",
+                appName ? appName : "Zapp",
+                app_get_bootstrap_application_should_terminate_after_last_window_closed() ? "true" : "false",
+                app_get_bootstrap_web_content_inspectable() ? "true" : "false",
+                app_get_bootstrap_max_workers()
+            );
+            engine_qjs_eval(ctx, configScript, strlen(configScript), "<config>");
+            zapp_windows_qjs_drain_jobs(ctx, "config");
+        }
+
+        // Bootstrap
+        const char* bootstrap = zapp_windows_backend_bootstrap_script();
+        int err = engine_qjs_eval(ctx, bootstrap, strlen(bootstrap), "backend-bootstrap.js");
+        if (err != 0) {
+            const char* msg = engine_qjs_get_exception_message(ctx);
+            char boot_err[256];
+            snprintf(boot_err, sizeof(boot_err), "bootstrap failed: %s", msg ? msg : "unknown");
+            zapp_log_backend(ZAPP_LOG_ERROR, boot_err);
+            zapp_windows_qjs_timers_cancel(zapp_be_id);
+            engine_qjs_free_ctx(ctx);
+            zapp_be_ctx = NULL;
+            JS_FreeValue(ctx, global);
+            *d->result = -1;
+            SetEvent(d->done_event);
+            return;
+        }
+        zapp_windows_qjs_drain_jobs(ctx, "bootstrap");
+
+        // User script
+        size_t srcLen = strlen(d->script_source);
+        size_t totalLen = srcLen + 256;
+        char* wrapped = (char*)malloc(totalLen);
+        snprintf(wrapped, totalLen,
+            "(async function(){\n%s\n})()"
+            ".catch(function(e){"
+            "var b=globalThis[Symbol.for('zapp.bridge')];"
+            "if(b&&b.reportError)b.reportError(String(e));"
+            "else console.error('[backend] unhandled:',e);"
+            "});", d->script_source);
+        err = engine_qjs_eval(ctx, wrapped, strlen(wrapped), "backend.js");
+        free(wrapped);
+        if (err != 0) {
+            const char* msg = engine_qjs_get_exception_message(ctx);
+            char script_err[256];
+            snprintf(script_err, sizeof(script_err), "script error: %s", msg ? msg : "unknown");
+            zapp_log_backend(ZAPP_LOG_ERROR, script_err);
+        }
+        zapp_windows_qjs_drain_jobs(ctx, "backend-script");
+
+        JS_FreeValue(ctx, global);
+        *d->result = 0;
+        SetEvent(d->done_event);
+    }
+
+    int32_t zapp_backend_context_create(void* app_ptr, char* script_source) {
+        if (app_ptr == NULL || script_source == NULL) return -1;
+
+        zapp_windows_qjs_ensure_init();
+
+        int result = -1;
+        HANDLE doneEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+
+        ZappBackendCreateData* d = (ZappBackendCreateData*)calloc(1, sizeof(ZappBackendCreateData));
+        d->app_ptr = app_ptr;
+        d->script_source = script_source;
+        d->result = &result;
+        d->done_event = doneEvent;
+
+        zapp_windows_qjs_dispatch(zapp_backend_create_on_thread, d);
+        WaitForSingleObject(doneEvent, INFINITE);
+        CloseHandle(doneEvent);
+        free(d);
+
+        return result;
+    }
+
+    void zapp_backend_deliver_event(const char* name, const char* payload) {
+        if (zapp_be_ctx == NULL || name == NULL) return;
+        JSValue args[2];
+        args[0] = JS_NewString(zapp_be_ctx, name);
+        args[1] = JS_NewString(zapp_be_ctx, payload ? payload : "{}");
+        zapp_be_call_bridge("deliverEvent", 2, args);
+        JS_FreeValue(zapp_be_ctx, args[0]);
+        JS_FreeValue(zapp_be_ctx, args[1]);
+    }
+
+    static void zapp_be_dispatch_window_result_on_thread(void* data) {
+        char* payload = (char*)data;
+        if (zapp_be_ctx == NULL || payload == NULL) { free(payload); return; }
+        JSValue args[1];
+        args[0] = JS_NewString(zapp_be_ctx, payload);
+        zapp_be_call_bridge("dispatchWindowResult", 1, args);
+        JS_FreeValue(zapp_be_ctx, args[0]);
+        zapp_windows_qjs_drain_jobs(zapp_be_ctx, "window-result");
+        free(payload);
+    }
+
+    void zapp_backend_dispatch_window_result(const char* payload_json) {
+        if (zapp_be_ctx == NULL || payload_json == NULL) return;
+        char* copy = _strdup(payload_json);
+        zapp_windows_qjs_dispatch(zapp_be_dispatch_window_result_on_thread, copy);
+    }
+
+    static void zapp_be_dispatch_window_ready_on_thread(void* data) {
+        char* window_id = (char*)data;
+        if (zapp_be_ctx == NULL || window_id == NULL) { free(window_id); return; }
+        JSValue args[1];
+        args[0] = JS_NewString(zapp_be_ctx, window_id);
+        zapp_be_call_bridge("dispatchWindowReady", 1, args);
+        JS_FreeValue(zapp_be_ctx, args[0]);
+        zapp_windows_qjs_drain_jobs(zapp_be_ctx, "window-ready");
+        free(window_id);
+    }
+
+    void zapp_backend_dispatch_window_ready(const char* window_id) {
+        if (zapp_be_ctx == NULL || window_id == NULL) return;
+        char* copy = _strdup(window_id);
+        zapp_windows_qjs_dispatch(zapp_be_dispatch_window_ready_on_thread, copy);
+    }
+
+    void zapp_backend_context_destroy(void) {
+        if (zapp_be_ctx == NULL) return;
+        zapp_windows_qjs_timers_cancel(zapp_be_id);
+        engine_qjs_free_ctx(zapp_be_ctx);
+        zapp_be_ctx = NULL;
+    }
+#endif
+}

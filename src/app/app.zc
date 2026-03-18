@@ -2,6 +2,7 @@ import "../platform/platform.zc";
 import "../platform/window.zc";
 import "../event/event.zc";
 import "../service/service.zc";
+import "../platform/shared/log.zc";
 include <string.h>
 
 struct AppConfig {
@@ -55,6 +56,21 @@ impl App {
     }
 
     fn run(self) -> int {
+        // Initialize logging with build config log level
+        raw {
+            extern const char* zapp_build_log_level(void);
+            const char* level_str = zapp_build_log_level();
+            int level = ZAPP_LOG_INFO; // default
+            if (level_str) {
+                if (strcmp(level_str, "error") == 0) level = ZAPP_LOG_ERROR;
+                else if (strcmp(level_str, "warn") == 0) level = ZAPP_LOG_WARN;
+                else if (strcmp(level_str, "info") == 0) level = ZAPP_LOG_INFO;
+                else if (strcmp(level_str, "debug") == 0) level = ZAPP_LOG_DEBUG;
+                else if (strcmp(level_str, "trace") == 0) level = ZAPP_LOG_TRACE;
+            }
+            zapp_log_init(level);
+        }
+        
         println "Running app: {self.config.name}";
         self.window.app = self;
         self.event.app = self;
@@ -133,22 +149,47 @@ fn app_get_bootstrap_max_workers() -> int {
     return app_get_bootstrap_config().maxWorkers;
 }
 
-@cfg(__APPLE__)
+@cfg(apple)
 fn zapp_backend_context_create(app: void*, script: string) -> int;
-@cfg(__APPLE__)
+@cfg(apple)
 fn zapp_backend_context_destroy() -> void;
 
-@cfg(not(__APPLE__))
+@cfg(windows)
+fn zapp_backend_context_create(app: void*, script: string) -> int;
+@cfg(windows)
+fn zapp_backend_context_destroy() -> void;
+
+@cfg(ZAPP_LINUX)
 fn zapp_backend_context_create(app: void*, script: string) -> int {
-    let _ = app;
-    let _ = script;
+    raw { (void)app; (void)script; }
     return -1;
 }
-@cfg(not(__APPLE__))
+@cfg(ZAPP_LINUX)
 fn zapp_backend_context_destroy() -> void {}
 
 raw {
     extern const char* zapp_build_backend_script_path(void);
+}
+
+raw {
+    #include <stdio.h>
+    #include <stdlib.h>
+
+    static char* zapp_read_file_utf8(const char* path) {
+        if (!path || path[0] == '\0') return NULL;
+        FILE* f = fopen(path, "rb");
+        if (!f) return NULL;
+        fseek(f, 0, SEEK_END);
+        long len = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        if (len <= 0) { fclose(f); return NULL; }
+        char* buf = (char*)malloc((size_t)len + 1);
+        if (!buf) { fclose(f); return NULL; }
+        size_t read = fread(buf, 1, (size_t)len, f);
+        fclose(f);
+        buf[read] = '\0';
+        return buf;
+    }
 }
 
 fn app_start_backend(app: App*) -> void {
@@ -156,21 +197,19 @@ fn app_start_backend(app: App*) -> void {
         const char* backendPath = zapp_build_backend_script_path();
         if (backendPath == NULL || backendPath[0] == '\0') return;
 
-        // Read the backend script file
-        NSString* path = [NSString stringWithUTF8String:backendPath];
-        NSError* err = nil;
-        NSString* source = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:&err];
-        if (source == nil || err != nil) {
-            NSLog(@"[zapp] failed to read backend script at %@: %@", path, err);
+        char* source = zapp_read_file_utf8(backendPath);
+        if (source == NULL) {
+            zapp_log_backend(ZAPP_LOG_ERROR, "failed to read backend script");
             return;
         }
 
-        int result = zapp_backend_context_create((void*)app, [source UTF8String]);
+        int result = zapp_backend_context_create((void*)app, source);
+        free(source);
         if (result == 0) {
             app->has_backend = true;
-            NSLog(@"[zapp] backend context started");
+            zapp_log_backend(ZAPP_LOG_INFO, "backend context started");
         } else {
-            NSLog(@"[zapp] backend context failed to start");
+            zapp_log_backend(ZAPP_LOG_ERROR, "backend context failed to start");
         }
     }
 }
@@ -205,11 +244,12 @@ fn parse_wire(msg: string, out_type: string*, out_key: string*, out_payload: str
 
 static let zapp_app_configured: bool = false;
 
+@cfg(apple)
 fn app_apply_configure(app: App*, payload: string) -> void {
     raw {
         if (app == NULL || payload == NULL) return;
         if (zapp_app_configured) {
-            NSLog(@"[zapp] App.configure() ignored: already configured");
+            zapp_log_backend(ZAPP_LOG_WARN, "App.configure() ignored: already configured");
             return;
         }
         zapp_app_configured = true;
@@ -242,43 +282,303 @@ fn app_apply_configure(app: App*, payload: string) -> void {
             app->config.maxWorkers = [maxVal intValue];
         }
 
-        NSLog(@"[zapp] app configured from backend");
+        zapp_log_backend(ZAPP_LOG_INFO, "app configured from backend");
     }
+}
+
+@cfg(windows)
+fn app_apply_configure(app: App*, payload: string) -> void {
+    raw {
+        if (app == NULL || payload == NULL) return;
+        if (zapp_app_configured) {
+            zapp_log_backend(ZAPP_LOG_WARN, "App.configure() ignored: already configured");
+            return;
+        }
+        zapp_app_configured = true;
+        // Minimal JSON key extraction for configure (no external JSON lib yet).
+        // Parses: name, applicationShouldTerminateAfterLastWindowClosed, webContentInspectable, maxWorkers
+        const char* json = (const char*)payload;
+
+        // Extract "name":"..."
+        const char* nameKey = "\"name\":\"";
+        const char* nameStart = strstr(json, nameKey);
+        if (nameStart) {
+            nameStart += strlen(nameKey);
+            const char* nameEnd = strchr(nameStart, '"');
+            if (nameEnd) {
+                size_t len = (size_t)(nameEnd - nameStart);
+                char* name = (char*)malloc(len + 1);
+                memcpy(name, nameStart, len);
+                name[len] = '\0';
+                app->config.name = name;
+            }
+        }
+
+        // Extract boolean: "applicationShouldTerminateAfterLastWindowClosed":true/false
+        const char* quitKey = "\"applicationShouldTerminateAfterLastWindowClosed\":";
+        const char* quitStart = strstr(json, quitKey);
+        if (quitStart) {
+            quitStart += strlen(quitKey);
+            app->config.applicationShouldTerminateAfterLastWindowClosed = (*quitStart == 't');
+        }
+
+        const char* inspKey = "\"webContentInspectable\":";
+        const char* inspStart = strstr(json, inspKey);
+        if (inspStart) {
+            inspStart += strlen(inspKey);
+            app->config.webContentInspectable = (*inspStart == 't');
+            app->window.webContentInspectable = app->config.webContentInspectable;
+        }
+
+        const char* maxKey = "\"maxWorkers\":";
+        const char* maxStart = strstr(json, maxKey);
+        if (maxStart) {
+            maxStart += strlen(maxKey);
+            app->config.maxWorkers = atoi(maxStart);
+        }
+
+        zapp_log_backend(ZAPP_LOG_INFO, "app configured from backend");
+    }
+}
+
+@cfg(ZAPP_LINUX)
+fn app_apply_configure(app: App*, payload: string) -> void {
+    raw { (void)app; (void)payload; }
 }
 
 fn app_should_quit() -> bool {
     return true;
 }
 
-@cfg(__APPLE__)
+@cfg(apple)
 fn zapp_dispatch_invoke_result(request_id: string, payload_json: string) -> void;
-@cfg(__APPLE__)
-fn zapp_darwin_sync_handle_bridge(action: string, payload_json: string) -> void;
-@cfg(__APPLE__)
+@cfg(apple)
+fn platform_sync_handle_bridge(action: string, payload_json: string) -> void;
+@cfg(apple)
 fn app_handle_window_message(app: App*, action: string, payload: string) -> void;
-@cfg(__APPLE__)
+@cfg(apple)
 fn app_handle_app_action(app: App*, action: string) -> void;
 
-@cfg(not(__APPLE__))
+@cfg(windows)
+raw {
+#ifdef _WIN32
+    extern void zapp_windows_webview_eval_all(const char* js_utf8);
+    extern char* zapp_escape_js_string(const char* raw);
+#endif
+}
+
+@cfg(windows)
 fn zapp_dispatch_invoke_result(request_id: string, payload_json: string) -> void {
-    let _ = request_id;
-    let _ = payload_json;
+    raw {
+    #ifdef _WIN32
+        (void)request_id;
+        char* escaped = zapp_escape_js_string((const char*)payload_json);
+        size_t jsLen = strlen(escaped) + 256;
+        char* js = (char*)malloc(jsLen);
+        snprintf(js, jsLen,
+            "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+            "if(b&&typeof b.dispatchInvokeResult==='function'){b.dispatchInvokeResult('%s');}})();",
+            escaped
+        );
+        zapp_windows_webview_eval_all(js);
+        free(js);
+        free(escaped);
+    #endif
+    }
 }
-@cfg(not(__APPLE__))
-fn zapp_darwin_sync_handle_bridge(action: string, payload_json: string) -> void {
-    let _ = action;
-    let _ = payload_json;
+
+raw {
+#ifdef _WIN32
+    #define ZAPP_MAX_SYNC_WAITS 256
+    #define ZAPP_SYNC_TIMER_MAP_SIZE 512
+
+    typedef struct {
+        int in_use;
+        char requestId[128];
+        char key[128];
+        char targetWorkerId[256];
+        UINT_PTR timerId;
+    } ZappSyncWait;
+
+    static ZappSyncWait zapp_sync_waits[ZAPP_MAX_SYNC_WAITS] = {0};
+    static int zapp_sync_timer_to_slot[ZAPP_SYNC_TIMER_MAP_SIZE] = {0};
+    static int zapp_sync_initialized = 0;
+
+    static void zapp_sync_ensure_state(void) {
+        if (!zapp_sync_initialized) {
+            memset(zapp_sync_waits, 0, sizeof(zapp_sync_waits));
+            memset(zapp_sync_timer_to_slot, -1, sizeof(zapp_sync_timer_to_slot));
+            zapp_sync_initialized = 1;
+        }
+    }
+
+    static void zapp_sync_dispatch_result(ZappSyncWait* w, const char* status, int ok) {
+        if (!w || !w->in_use) return;
+
+        extern void zapp_windows_webview_eval_all(const char* js_utf8);
+        extern char* zapp_escape_js_string(const char* raw);
+        extern void zapp_windows_worker_dispatch_sync_result(const char* worker_id, const char* payload_json);
+
+        char payload[512];
+        snprintf(payload, sizeof(payload),
+            "{\"id\":\"%s\",\"ok\":%s,\"status\":\"%s\"}",
+            w->requestId, ok ? "true" : "false", status);
+
+        if (w->timerId) {
+            KillTimer(NULL, w->timerId);
+            w->timerId = 0;
+        }
+
+        if (w->targetWorkerId[0] != '\0') {
+            zapp_windows_worker_dispatch_sync_result(w->targetWorkerId, payload);
+        } else {
+            char* escaped = zapp_escape_js_string(payload);
+            size_t jsLen = strlen(escaped) + 256;
+            char* js = (char*)malloc(jsLen);
+            snprintf(js, jsLen,
+                "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+                "if(b&&typeof b.dispatchSyncResult==='function'){b.dispatchSyncResult('%s');}})();",
+                escaped);
+            zapp_windows_webview_eval_all(js);
+            free(js);
+            free(escaped);
+        }
+
+        w->in_use = 0;
+        w->requestId[0] = '\0';
+        w->key[0] = '\0';
+        w->targetWorkerId[0] = '\0';
+    }
+
+    static void CALLBACK zapp_sync_timeout_proc(HWND hwnd, UINT msg, UINT_PTR timerId, DWORD tick) {
+        (void)hwnd; (void)msg; (void)tick;
+        KillTimer(NULL, timerId);
+        int slot = zapp_sync_timer_to_slot[timerId % ZAPP_SYNC_TIMER_MAP_SIZE];
+        if (slot >= 0 && slot < ZAPP_MAX_SYNC_WAITS && zapp_sync_waits[slot].in_use
+            && zapp_sync_waits[slot].timerId == timerId) {
+            zapp_sync_waits[slot].timerId = 0;
+            zapp_sync_dispatch_result(&zapp_sync_waits[slot], "timed-out", 1);
+        }
+    }
+#endif
 }
-@cfg(not(__APPLE__))
-fn app_handle_window_message(app: App*, action: string, payload: string) -> void {
-    let _ = app;
-    let _ = action;
-    let _ = payload;
+
+@cfg(windows)
+fn platform_sync_handle_bridge(action: string, payload_json: string) -> void {
+    raw {
+    #ifdef _WIN32
+        if (action == NULL || payload_json == NULL) return;
+
+        extern char* zapp_json_get_string(const char* json, const char* key);
+        extern int zapp_json_get_int(const char* json, const char* key, int default_val);
+        extern void zapp_windows_webview_eval_all(const char* js_utf8);
+        extern char* zapp_escape_js_string(const char* raw);
+        extern void zapp_windows_worker_dispatch_sync_result(const char* worker_id, const char* payload_json);
+
+        zapp_sync_ensure_state();
+
+        if (strcmp((const char*)action, "wait") == 0) {
+            char* requestId = zapp_json_get_string((const char*)payload_json, "id");
+            char* key = zapp_json_get_string((const char*)payload_json, "key");
+            char* targetWorkerId = zapp_json_get_string((const char*)payload_json, "targetWorkerId");
+            int timeoutMs = zapp_json_get_int((const char*)payload_json, "timeoutMs", 30000);
+            if (!requestId || !key || requestId[0] == '\0' || key[0] == '\0') {
+                free(requestId); free(key); free(targetWorkerId);
+                return;
+            }
+            if (timeoutMs < 1) timeoutMs = 1;
+            if (timeoutMs > 300000) timeoutMs = 300000;
+
+            int slot = -1;
+            for (int i = 0; i < ZAPP_MAX_SYNC_WAITS; i++) {
+                if (!zapp_sync_waits[i].in_use) { slot = i; break; }
+            }
+            if (slot < 0) {
+                free(requestId); free(key); free(targetWorkerId);
+                return;
+            }
+
+            ZappSyncWait* w = &zapp_sync_waits[slot];
+            w->in_use = 1;
+            strncpy(w->requestId, requestId, sizeof(w->requestId) - 1);
+            strncpy(w->key, key, sizeof(w->key) - 1);
+            if (targetWorkerId) strncpy(w->targetWorkerId, targetWorkerId, sizeof(w->targetWorkerId) - 1);
+            else w->targetWorkerId[0] = '\0';
+
+            w->timerId = SetTimer(NULL, 0, (UINT)timeoutMs, zapp_sync_timeout_proc);
+            if (w->timerId) {
+                zapp_sync_timer_to_slot[w->timerId % ZAPP_SYNC_TIMER_MAP_SIZE] = slot;
+            }
+
+            free(requestId); free(key); free(targetWorkerId);
+            return;
+        }
+
+        if (strcmp((const char*)action, "notify") == 0) {
+            char* key = zapp_json_get_string((const char*)payload_json, "key");
+            int count = zapp_json_get_int((const char*)payload_json, "count", 1);
+            if (!key || key[0] == '\0') { free(key); return; }
+            if (count < 1) count = 1;
+            if (count > 65535) count = 65535;
+
+            int delivered = 0;
+            for (int i = 0; i < ZAPP_MAX_SYNC_WAITS && delivered < count; i++) {
+                if (zapp_sync_waits[i].in_use && strcmp(zapp_sync_waits[i].key, key) == 0) {
+                    zapp_sync_dispatch_result(&zapp_sync_waits[i], "notified", 1);
+                    delivered++;
+                }
+            }
+            free(key);
+            return;
+        }
+
+        if (strcmp((const char*)action, "cancel") == 0) {
+            char* requestId = zapp_json_get_string((const char*)payload_json, "id");
+            if (!requestId || requestId[0] == '\0') { free(requestId); return; }
+            for (int i = 0; i < ZAPP_MAX_SYNC_WAITS; i++) {
+                if (zapp_sync_waits[i].in_use && strcmp(zapp_sync_waits[i].requestId, requestId) == 0) {
+                    zapp_sync_dispatch_result(&zapp_sync_waits[i], "cancelled", 1);
+                    break;
+                }
+            }
+            free(requestId);
+            return;
+        }
+    #endif
+    }
 }
-@cfg(not(__APPLE__))
+
+@cfg(windows)
+fn app_handle_window_message(app: App*, action: string, payload: string) -> void;
+
+@cfg(windows)
 fn app_handle_app_action(app: App*, action: string) -> void {
-    let _ = app;
-    let _ = action;
+    raw {
+    #ifdef _WIN32
+        (void)app;
+        if (action == NULL) return;
+        if (strcmp((const char*)action, "quit") == 0) {
+            PostQuitMessage(0);
+        }
+    #endif
+    }
+}
+
+@cfg(ZAPP_LINUX)
+fn zapp_dispatch_invoke_result(request_id: string, payload_json: string) -> void {
+    raw { (void)request_id; (void)payload_json; }
+}
+@cfg(ZAPP_LINUX)
+fn platform_sync_handle_bridge(action: string, payload_json: string) -> void {
+    raw { (void)action; (void)payload_json; }
+}
+@cfg(ZAPP_LINUX)
+fn app_handle_window_message(app: App*, action: string, payload: string) -> void {
+    raw { (void)app; (void)action; (void)payload; }
+}
+@cfg(ZAPP_LINUX)
+fn app_handle_app_action(app: App*, action: string) -> void {
+    raw { (void)app; (void)action; }
 }
 
 fn app_invoke_rpc(app: App*, method: string, request_payload: string) -> void {
@@ -400,7 +700,7 @@ fn app_handle_frontend_message(app: App*, msg: string) -> void {
     }
 
     if msg_type == "sync" {
-        zapp_darwin_sync_handle_bridge(key, payload);
+        platform_sync_handle_bridge(key, payload);
         return;
     }
 

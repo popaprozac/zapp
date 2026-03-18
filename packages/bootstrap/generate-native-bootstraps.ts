@@ -7,9 +7,11 @@ type BootstrapEntry = {
   fnName: string;
 };
 
-const projectRoot = resolve(new URL(".", import.meta.url).pathname, "../..");
+const bootstrapDir = new URL(".", import.meta.url);
+const projectRoot = resolve(Bun.fileURLToPath(bootstrapDir), "../..");
 
 const entries: BootstrapEntry[] = [
+  // --- Darwin ---
   {
     source: resolve(projectRoot, "packages/bootstrap/src/worker.ts"),
     output: resolve(projectRoot, "src/platform/darwin/bootstrap.zc"),
@@ -24,6 +26,22 @@ const entries: BootstrapEntry[] = [
     source: resolve(projectRoot, "packages/bootstrap/src/backend.ts"),
     output: resolve(projectRoot, "src/platform/darwin/backend_bootstrap.zc"),
     fnName: "zapp_darwin_backend_bootstrap_script",
+  },
+  // --- Windows ---
+  {
+    source: resolve(projectRoot, "packages/bootstrap/src/worker.ts"),
+    output: resolve(projectRoot, "src/platform/windows/bootstrap.zc"),
+    fnName: "zapp_windows_worker_bootstrap_script",
+  },
+  {
+    source: resolve(projectRoot, "packages/bootstrap/src/webview_windows.ts"),
+    output: resolve(projectRoot, "src/platform/windows/webview_bootstrap.zc"),
+    fnName: "zapp_windows_webview_bootstrap_script",
+  },
+  {
+    source: resolve(projectRoot, "packages/bootstrap/src/backend.ts"),
+    output: resolve(projectRoot, "src/platform/windows/backend_bootstrap.zc"),
+    fnName: "zapp_windows_backend_bootstrap_script",
   },
 ];
 

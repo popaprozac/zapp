@@ -1,8 +1,9 @@
-AGENTS.md
-context.md
-Zen-C.md
-WORKERS*.md
-ZAPP_WORKER*.md
+# AGENTS.md
+# context.md
+# Zen-C.md
+# WORKERS*.md
+# ZAPP_WORKER*.md
+# ZAPP_CHARTER.md
 zenc-lang-tests
 node_modules
 .vscode
@@ -13,4 +14,10 @@ node_modules
 .env.development.local
 .env.test.local
 .env.production.local
+<<<<<<< HEAD
 .zapp/
+=======
+.zapp/
+.zapp-workers/
+bin/
+>>>>>>> window-fixes

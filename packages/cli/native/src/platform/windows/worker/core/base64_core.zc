@@ -1,0 +1,52 @@
+// Win32-native base64 encoding/decoding.
+
+raw {
+#ifdef _WIN32
+    #include <windows.h>
+    #include <wincrypt.h>
+    #include <stdlib.h>
+    #include <string.h>
+
+    char* zapp_core_btoa(const char* input) {
+        if (input == NULL || input[0] == '\0') return _strdup("");
+        DWORD inputLen = (DWORD)strlen(input);
+        DWORD b64Len = 0;
+
+        CryptBinaryToStringA((const BYTE*)input, inputLen,
+            CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, NULL, &b64Len);
+        if (b64Len == 0) return _strdup("");
+
+        char* b64 = (char*)malloc(b64Len + 1);
+        if (!CryptBinaryToStringA((const BYTE*)input, inputLen,
+            CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, b64, &b64Len)) {
+            free(b64);
+            return _strdup("");
+        }
+        b64[b64Len] = '\0';
+        // Trim trailing whitespace
+        while (b64Len > 0 && (b64[b64Len - 1] == '\n' || b64[b64Len - 1] == '\r' || b64[b64Len - 1] == ' ')) {
+            b64[--b64Len] = '\0';
+        }
+        return b64;
+    }
+
+    char* zapp_core_atob(const char* input) {
+        if (input == NULL || input[0] == '\0') return _strdup("");
+        DWORD inputLen = (DWORD)strlen(input);
+        DWORD binLen = 0;
+
+        CryptStringToBinaryA(input, inputLen,
+            CRYPT_STRING_BASE64, NULL, &binLen, NULL, NULL);
+        if (binLen == 0) return _strdup("");
+
+        BYTE* bin = (BYTE*)malloc(binLen + 1);
+        if (!CryptStringToBinaryA(input, inputLen,
+            CRYPT_STRING_BASE64, bin, &binLen, NULL, NULL)) {
+            free(bin);
+            return _strdup("");
+        }
+        bin[binLen] = '\0';
+        return (char*)bin;
+    }
+#endif
+}

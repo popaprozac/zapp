@@ -14,21 +14,42 @@ import "./jsc/base64_jsc.zc";
 import "./jsc/websocket_jsc.zc";
 import "./jsc/crypto_jsc.zc";
 import "./jsc/fetch_jsc.zc";
+import "../../shared/log.zc";
+import "../../shared/worker_registry.zc";
 @cfg(not(ZAPP_WORKER_ENGINE_QJS))
 import "../engine_jsc.zc";
 
 //> macos: framework: JavaScriptCore
-include <Cocoa/Cocoa.h>
-include <WebKit/WebKit.h>
-include <dispatch/dispatch.h>
-include <JavaScriptCore/JavaScriptCore.h>
+raw {
+#ifdef __APPLE__
+    #include <Cocoa/Cocoa.h>
+    #include <WebKit/WebKit.h>
+    #include <dispatch/dispatch.h>
+    #include <JavaScriptCore/JavaScriptCore.h>
+#endif
+}
 
 raw {
 #if !defined(ZAPP_WORKER_ENGINE_QJS)
+#ifdef __APPLE__
     extern void* engine_jsc_create_ctx(void* vm, const char* name);
     extern int engine_jsc_eval(void* ctx, const char* utf8, size_t len, const char* filename);
     extern const char* engine_jsc_get_exception_message(void* ctx);
     extern void engine_jsc_free_ctx(void* ctx, void* vm, const char* new_name);
+
+    // Log functions from log.zc
+    extern void zapp_log_worker(int level, int window_id, int worker_id, const char* message);
+    #define ZAPP_LOG_ERROR 0
+    #define ZAPP_LOG_WARN  1
+    #define ZAPP_LOG_INFO  2
+    #define ZAPP_LOG_DEBUG 3
+    #define ZAPP_LOG_TRACE 4
+
+    // Worker registry functions from worker_registry.zc
+    extern void zapp_extract_owner_id(const char* worker_id, char* owner_buf, size_t buf_size);
+    extern void zapp_get_window_and_worker_id(const char* owner_id, int* window_id, int* worker_id);
+    extern void zapp_worker_register(const char* worker_id);
+    extern void zapp_worker_lookup(const char* worker_id, int* out_window_id, int* out_worker_seq_id);
 
     extern void zapp_darwin_worker_js_sync(dispatch_block_t block);
     extern void zapp_darwin_worker_timers_cancel(NSString* workerId);
@@ -97,7 +118,9 @@ raw {
         @try {
             [fn callWithArguments:args ?: @[]];
         } @catch (NSException* e) {
-            NSLog(@"[zapp] bridge.%@ exception: %@", methodName, e);
+            char buf[256];
+            snprintf(buf, sizeof(buf), "bridge.%s exception: %s", [methodName UTF8String], [[e description] UTF8String]);
+            zapp_log_worker(ZAPP_LOG_ERROR, -1, -1, buf);
         }
     }
 
@@ -179,7 +202,12 @@ raw {
     static void zapp_worker_dispatch_error_string(NSString* workerId, NSString* message) {
         if (workerId == nil || [workerId length] == 0) return;
         if (message == nil || [message length] == 0) message = @"Worker error";
-        NSLog(@"[zapp:worker:%@] %@", workerId, message);
+        
+        int window_id = -1, worker_seq_id = -1;
+        zapp_worker_lookup([workerId UTF8String], &window_id, &worker_seq_id);
+        
+        zapp_log_worker(ZAPP_LOG_ERROR, window_id, worker_seq_id, [message UTF8String]);
+        
         NSDictionary* payload = @{@"message": message};
         NSString* errJson = zapp_json_stringify_obj(payload);
         zapp_dispatch_worker_to_webviews("error", [workerId UTF8String], [errJson UTF8String]);
@@ -271,6 +299,7 @@ raw {
             zapp_call_bridge_method_unsafe(ctx, @"dispatchSyncResult", @[payload]);
         });
     }
+#endif /* __APPLE__ */
 #endif
 }
 
@@ -281,6 +310,7 @@ impl WorkerBackend for DarwinWorkerJsc {
     fn handle_bridge(self, app: App*, action: string, payload: string) -> void {
         raw {
 #if !defined(ZAPP_WORKER_ENGINE_QJS)
+#ifdef __APPLE__
         if (action == NULL || payload == NULL) return;
 
         NSDictionary* body = zapp_worker_parse_bridge_payload((const char*)payload);
@@ -368,6 +398,7 @@ impl WorkerBackend for DarwinWorkerJsc {
                 ctx[@"globalThis"] = ctx.globalObject;
                 ctx[@"self"] = ctx.globalObject;
                 ctx[@"__zappWorkerDispatchId"] = workerId;
+                zapp_worker_register([workerId UTF8String]);
 
                 JSValue* bridge = [JSValue valueWithNewObjectInContext:ctx];
                 ctx[@"__zappBridge"] = bridge;
@@ -375,7 +406,19 @@ impl WorkerBackend for DarwinWorkerJsc {
                 bridge[@"consoleLog"] = ^(JSValue* levelVal, JSValue* msgVal) {
                     NSString* level = [levelVal toString] ?: @"log";
                     NSString* msg = [msgVal toString] ?: @"";
-                    NSLog(@"[zapp:worker:%@:%@] %@", workerId, level, msg);
+                    
+                    int window_id = -1;
+                    int worker_seq_id = -1;
+                    zapp_worker_lookup([workerId UTF8String], &window_id, &worker_seq_id);
+                    
+                    // Convert level string to int
+                    int level_int = ZAPP_LOG_INFO;
+                    if ([level isEqualToString:@"error"]) level_int = ZAPP_LOG_ERROR;
+                    else if ([level isEqualToString:@"warn"]) level_int = ZAPP_LOG_WARN;
+                    else if ([level isEqualToString:@"debug"]) level_int = ZAPP_LOG_DEBUG;
+                    else if ([level isEqualToString:@"trace"]) level_int = ZAPP_LOG_TRACE;
+                    
+                    zapp_log_worker(level_int, window_id, worker_seq_id, [msg UTF8String]);
                 };
 
                 zapp_darwin_worker_timers_init(ctx, workerId);
@@ -487,7 +530,13 @@ impl WorkerBackend for DarwinWorkerJsc {
                 int err = engine_jsc_eval((__bridge void*)ctx, bootstrap, blen, "bootstrap.js");
                 if (err != 0) {
                     const char* msg = engine_jsc_get_exception_message((__bridge void*)ctx);
-                    NSLog(@"[zapp:worker:%@] bootstrap failed: %s", workerId, msg ?: "(no message)");
+                    
+                    int window_id = -1, worker_seq_id = -1;
+                    zapp_worker_lookup([workerId UTF8String], &window_id, &worker_seq_id);
+                    char log_buf[256];
+                    snprintf(log_buf, sizeof(log_buf), "bootstrap failed: %s", msg ?: "(no message)");
+                    zapp_log_worker(ZAPP_LOG_ERROR, window_id, worker_seq_id, log_buf);
+                    
                     NSString* errMsg = msg ? [NSString stringWithFormat:@"{\"message\":\"Bootstrap failed: %s\"}", msg] : @"{\"message\":\"Bootstrap failed\"}";
                     zapp_dispatch_worker_to_webviews("error", [workerId UTF8String], [errMsg UTF8String]);
                     zapp_darwin_worker_timers_cancel(workerId);
@@ -516,7 +565,13 @@ impl WorkerBackend for DarwinWorkerJsc {
                 err = engine_jsc_eval((__bridge void*)ctx, wrappedUtf8, wrappedLen, scriptUrl ? [scriptUrl UTF8String] : NULL);
                 if (err != 0) {
                     const char* msg = engine_jsc_get_exception_message((__bridge void*)ctx);
-                    NSLog(@"[zapp:worker:%@] script eval failed: %s", workerId, msg ?: "(no message)");
+                    
+                    int window_id = -1, worker_seq_id = -1;
+                    zapp_worker_lookup([workerId UTF8String], &window_id, &worker_seq_id);
+                    char log_buf[256];
+                    snprintf(log_buf, sizeof(log_buf), "script eval failed: %s", msg ?: "(no message)");
+                    zapp_log_worker(ZAPP_LOG_ERROR, window_id, worker_seq_id, log_buf);
+                    
                     NSString* errMsg = msg ? [NSString stringWithFormat:@"{\"message\":\"%@\"}", [NSString stringWithUTF8String:msg]] : @"{\"message\":\"Script error\"}";
                     zapp_dispatch_worker_to_webviews("error", [workerId UTF8String], [errMsg UTF8String]);
                     zapp_darwin_worker_timers_cancel(workerId);
@@ -598,6 +653,7 @@ impl WorkerBackend for DarwinWorkerJsc {
             });
             return;
         }
+#endif /* __APPLE__ */
 #endif
     }
 }
@@ -605,7 +661,9 @@ impl WorkerBackend for DarwinWorkerJsc {
     fn bind_runtime(self, app: App*) -> void {
         raw {
 #if !defined(ZAPP_WORKER_ENGINE_QJS)
+#ifdef __APPLE__
         app->event.send_event_to_js = (void*)zapp_darwin_send_event_to_js;
+#endif /* __APPLE__ */
 #endif
         }
     }

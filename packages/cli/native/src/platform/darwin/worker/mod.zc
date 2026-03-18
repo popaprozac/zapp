@@ -1,0 +1,30 @@
+// Darwin worker: single platform-agnostic API; backend chosen by cfg.
+// JSC = default (no engine flag). QJS = ZAPP_WORKER_ENGINE_QJS.
+
+import "../../worker.zc";
+
+@cfg(not(ZAPP_WORKER_ENGINE_QJS))
+import "./jsc.zc";
+
+@cfg(ZAPP_WORKER_ENGINE_QJS)
+import "./qjs.zc";
+
+@cfg(not(ZAPP_WORKER_ENGINE_QJS))
+fn darwin_platform_bind_runtime(app: App*) -> void {
+    (DarwinWorkerJsc{}).bind_runtime(app);
+}
+
+@cfg(not(ZAPP_WORKER_ENGINE_QJS))
+fn darwin_platform_handle_worker_bridge(app: App*, action: string, payload: string) -> void {
+    (DarwinWorkerJsc{}).handle_bridge(app, action, payload);
+}
+
+@cfg(ZAPP_WORKER_ENGINE_QJS)
+fn darwin_platform_bind_runtime(app: App*) -> void {
+    (DarwinWorkerQjs{}).bind_runtime(app);
+}
+
+@cfg(ZAPP_WORKER_ENGINE_QJS)
+fn darwin_platform_handle_worker_bridge(app: App*, action: string, payload: string) -> void {
+    (DarwinWorkerQjs{}).handle_bridge(app, action, payload);
+}

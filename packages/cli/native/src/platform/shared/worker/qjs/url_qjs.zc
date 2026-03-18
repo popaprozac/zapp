@@ -1,0 +1,65 @@
+// Shared QJS wrapper for URL parsing. Delegates to platform-specific core/url_core.zc.
+
+raw {
+#if defined(ZAPP_WORKER_ENGINE_QJS) || defined(_WIN32)
+    #include "quickjs.h"
+    #ifndef ZAPP_BRIDGE_TYPES_DEFINED
+    #define ZAPP_BRIDGE_TYPES_DEFINED 1
+    typedef struct zapp_url_parsed {
+        char* href;
+        char* protocol;
+        char* host;
+        char* hostname;
+        char* port;
+        char* pathname;
+        char* search;
+        char* hash;
+        char* origin;
+        char* username;
+        char* password;
+    } zapp_url_parsed_t;
+    #endif
+
+    int zapp_core_url_parse(const char* url_str, const char* base_str, zapp_url_parsed_t* out);
+    void zapp_core_url_free(zapp_url_parsed_t* c);
+
+    static JSValue qjs_bridge_urlParse(JSContext* ctx, JSValue this_val, int argc, JSValue* argv) {
+        (void)this_val;
+        if (argc < 1) return JS_NULL;
+
+        const char* urlStr = JS_ToCString(ctx, argv[0]);
+        if (!urlStr) return JS_NULL;
+
+        const char* baseStr = NULL;
+        if (argc >= 2 && !JS_IsUndefined(argv[1]) && !JS_IsNull(argv[1])) {
+            baseStr = JS_ToCString(ctx, argv[1]);
+        }
+
+        zapp_url_parsed_t c;
+        int err = zapp_core_url_parse(urlStr, baseStr, &c);
+        JS_FreeCString(ctx, urlStr);
+        if (baseStr) JS_FreeCString(ctx, baseStr);
+
+        if (err != 0) return JS_NULL;
+
+        JSValue obj = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, obj, "href",     JS_NewString(ctx, c.href));
+        JS_SetPropertyStr(ctx, obj, "protocol", JS_NewString(ctx, c.protocol));
+        JS_SetPropertyStr(ctx, obj, "host",     JS_NewString(ctx, c.host));
+        JS_SetPropertyStr(ctx, obj, "hostname", JS_NewString(ctx, c.hostname));
+        JS_SetPropertyStr(ctx, obj, "port",     JS_NewString(ctx, c.port));
+        JS_SetPropertyStr(ctx, obj, "pathname", JS_NewString(ctx, c.pathname));
+        JS_SetPropertyStr(ctx, obj, "search",   JS_NewString(ctx, c.search));
+        JS_SetPropertyStr(ctx, obj, "hash",     JS_NewString(ctx, c.hash));
+        JS_SetPropertyStr(ctx, obj, "origin",   JS_NewString(ctx, c.origin));
+        JS_SetPropertyStr(ctx, obj, "username", JS_NewString(ctx, c.username));
+        JS_SetPropertyStr(ctx, obj, "password", JS_NewString(ctx, c.password));
+        zapp_core_url_free(&c);
+        return obj;
+    }
+
+    void zapp_qjs_url_install(JSContext* ctx, JSValue bridge) {
+        JS_SetPropertyStr(ctx, bridge, "urlParse", JS_NewCFunction(ctx, qjs_bridge_urlParse, "urlParse", 2));
+    }
+#endif
+}
