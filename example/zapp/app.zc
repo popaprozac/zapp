@@ -4,6 +4,10 @@ fn ping_service(app: App*, args: string) -> string {
     return args;
 }
 
+fn on_window_ready() -> void {
+    println "[native] window ready callback fired!";
+}
+
 fn run_app() -> int {
     let config = AppConfig{ 
         name: "Zapp Playground", 
@@ -12,6 +16,14 @@ fn run_app() -> int {
         maxWorkers: 50,
     };
     let app = App::new(config);
+    
     app.service.add("ping", ping_service);
+    
+    // let opts = window_options_default("Native Window");
+    // opts.width = 800;
+    // opts.height = 600;
+    // let win = app.window.create(&opts);
+    // win.on_ready(&app.window, on_window_ready);
+    
     return app.run();
 }

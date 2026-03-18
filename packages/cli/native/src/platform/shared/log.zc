@@ -1,0 +1,144 @@
+// Zapp Unified Logging System
+// Provides consistent, colored logging across all contexts (workers, backend, webview)
+
+include <stdio.h>
+include <string.h>
+include <unistd.h>
+
+raw {
+    // Log levels (higher = more verbose)
+    #define ZAPP_LOG_ERROR 0
+    #define ZAPP_LOG_WARN  1
+    #define ZAPP_LOG_INFO  2
+    #define ZAPP_LOG_DEBUG 3
+    #define ZAPP_LOG_TRACE 4
+
+    // Context types
+    #define ZAPP_LOG_CTX_BACKEND 0
+    #define ZAPP_LOG_CTX_WEBVIEW 1
+    #define ZAPP_LOG_CTX_WORKER  2
+
+    // ANSI color codes
+    #define ZAPP_ANSI_RESET   "\x1b[0m"
+    #define ZAPP_ANSI_RED     "\x1b[31m"
+    #define ZAPP_ANSI_YELLOW  "\x1b[33m"
+    #define ZAPP_ANSI_CYAN    "\x1b[36m"
+    #define ZAPP_ANSI_GRAY    "\x1b[90m"
+    #define ZAPP_ANSI_BOLD    "\x1b[1m"
+
+    // Global log level (default: WARN for prod, INFO for dev)
+    // Can be overridden via ZAPP_LOG_LEVEL env var or CLI flag
+    static int g_zapp_log_level = ZAPP_LOG_WARN;
+
+    // Check if colors should be used (TTY check)
+    static bool zapp_log_use_colors(void) {
+        #ifdef _WIN32
+            return _isatty(_fileno(stderr));
+        #else
+            return isatty(fileno(stderr)) != 0;
+        #endif
+    }
+
+    // Get ANSI color for log level
+    static const char* zapp_log_level_color(int level) {
+        if (!zapp_log_use_colors()) return "";
+        switch (level) {
+            case ZAPP_LOG_ERROR: return ZAPP_ANSI_RED;
+            case ZAPP_LOG_WARN:  return ZAPP_ANSI_YELLOW;
+            case ZAPP_LOG_DEBUG: return ZAPP_ANSI_CYAN;
+            case ZAPP_LOG_TRACE: return ZAPP_ANSI_GRAY;
+            default: return "";
+        }
+    }
+
+    // Get level name string
+    static const char* zapp_log_level_name(int level) {
+        switch (level) {
+            case ZAPP_LOG_ERROR: return "error";
+            case ZAPP_LOG_WARN:  return "warn";
+            case ZAPP_LOG_INFO:  return "info";
+            case ZAPP_LOG_DEBUG: return "debug";
+            case ZAPP_LOG_TRACE: return "trace";
+            default: return "log";
+        }
+    }
+
+    // Core logging function
+    void zapp_log(int level, int ctx_type, int window_id, int worker_id, const char* message) {
+        if (level > g_zapp_log_level) return;
+        if (!message) return;
+
+        const char* color = zapp_log_level_color(level);
+        const char* reset = zapp_log_use_colors() ? ZAPP_ANSI_RESET : "";
+        const char* level_name = zapp_log_level_name(level);
+
+        // Build context string
+        char ctx_buf[64];
+        ctx_buf[0] = '\0';
+
+        if (ctx_type == ZAPP_LOG_CTX_BACKEND) {
+            snprintf(ctx_buf, sizeof(ctx_buf), "[B]");
+        } else if (ctx_type == ZAPP_LOG_CTX_WEBVIEW) {
+            snprintf(ctx_buf, sizeof(ctx_buf), "[V]");
+        } else if (ctx_type == ZAPP_LOG_CTX_WORKER) {
+            if (window_id >= 0 && worker_id >= 0) {
+                snprintf(ctx_buf, sizeof(ctx_buf), "[Win:%d][W:%d]", window_id, worker_id);
+            } else if (worker_id >= 0) {
+                snprintf(ctx_buf, sizeof(ctx_buf), "[W:%d]", worker_id);
+            } else {
+                snprintf(ctx_buf, sizeof(ctx_buf), "[W:?]");
+            }
+        }
+
+        // Output format: [Zapp] [Win:N][W:M] level: message
+        // Or for backend/webview: [Zapp] [B] level: message
+        fprintf(stderr, "%s[Zapp]%s %s %s%s:%s %s\n",
+                zapp_log_use_colors() ? ZAPP_ANSI_BOLD : "",
+                reset,
+                ctx_buf,
+                color,
+                level_name,
+                reset,
+                message);
+    }
+
+    // Convenience functions for each context
+    void zapp_log_backend(int level, const char* message) {
+        zapp_log(level, ZAPP_LOG_CTX_BACKEND, -1, -1, message);
+    }
+
+    void zapp_log_webview(int level, int window_id, const char* message) {
+        zapp_log(level, ZAPP_LOG_CTX_WEBVIEW, window_id, -1, message);
+    }
+
+    void zapp_log_worker(int level, int window_id, int worker_id, const char* message) {
+        zapp_log(level, ZAPP_LOG_CTX_WORKER, window_id, worker_id, message);
+    }
+
+    // Set global log level
+    void zapp_set_log_level(int level) {
+        if (level >= ZAPP_LOG_ERROR && level <= ZAPP_LOG_TRACE) {
+            g_zapp_log_level = level;
+        }
+    }
+
+    // Get current log level
+    int zapp_get_log_level(void) {
+        return g_zapp_log_level;
+    }
+
+    // Initialize log level from environment or default
+    void zapp_log_init(int default_level) {
+        g_zapp_log_level = default_level;
+
+        // Check environment variable
+        const char* env_level = getenv("ZAPP_LOG_LEVEL");
+        if (env_level) {
+            if (strcmp(env_level, "error") == 0) g_zapp_log_level = ZAPP_LOG_ERROR;
+            else if (strcmp(env_level, "warn") == 0) g_zapp_log_level = ZAPP_LOG_WARN;
+            else if (strcmp(env_level, "info") == 0) g_zapp_log_level = ZAPP_LOG_INFO;
+            else if (strcmp(env_level, "debug") == 0) g_zapp_log_level = ZAPP_LOG_DEBUG;
+            else if (strcmp(env_level, "trace") == 0) g_zapp_log_level = ZAPP_LOG_TRACE;
+        }
+    }
+}

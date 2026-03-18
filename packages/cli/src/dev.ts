@@ -1,6 +1,8 @@
 import path from "node:path";
 import process from "node:process";
+import { mkdir } from "node:fs/promises";
 import {
+  ensureQjsLib,
   killChild,
   nativeIncludeArgs,
   preferredJsTool,
@@ -15,6 +17,7 @@ import { buildAssetManifest, generateAssetsZc } from "./build";
 import { generateBuildConfigZc } from "./build-config";
 import { resolveAndBundleBackend } from "./backend";
 import { runGenerate } from "./generate";
+import type { ResolvedZappConfig } from "./config";
 
 const waitForUrl = async (url: string, timeoutMs: number) => {
   const start = Date.now();
@@ -38,6 +41,8 @@ export const runDev = async ({
   withBrotli,
   embedAssets,
   backendScript,
+  logLevel,
+  config,
 }: {
   root: string;
   frontendDir: string;
@@ -47,6 +52,8 @@ export const runDev = async ({
   withBrotli: boolean;
   embedAssets: boolean;
   backendScript?: string;
+  logLevel?: "error" | "warn" | "info" | "debug" | "trace";
+  config: ResolvedZappConfig;
 }) => {
   process.stdout.write(`[zapp] starting dev orchestration (${preferredJsTool()})\n`);
   if (withBrotli && !embedAssets) {
@@ -91,15 +98,18 @@ export const runDev = async ({
       assetDir,
       devUrl,
       backendScriptPath,
+      logLevel,
     });
 
+    await mkdir(path.dirname(nativeOut), { recursive: true });
+    const qjsLib = await ensureQjsLib(root);
     const zcArgs = ["build", buildFile, buildConfigFile, "-DZAPP_BUILD_DEV", ...nativeIncludeArgs()];
     const manifest = embedAssets
       ? await buildAssetManifest({ assetDir, withBrotli })
       : { v: 1, generatedAt: new Date().toISOString(), assets: [] as any[], embedded: false };
     const assetsFile = await generateAssetsZc(root, manifest, assetDir);
     zcArgs.push(assetsFile);
-    zcArgs.push("-o", nativeOut);
+    zcArgs.push("-o", nativeOut, "-L", path.dirname(qjsLib), "-lqjs");
     await runCmd("zc", zcArgs, { cwd: root, env: { ZAPP_NATIVE: resolveNativeDir() } });
     app = spawnStreaming(nativeOut, [], {
       cwd: root,

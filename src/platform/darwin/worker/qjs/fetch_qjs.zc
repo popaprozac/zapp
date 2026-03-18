@@ -1,9 +1,19 @@
 // QJS wrapper for fetch. Delegates to core/fetch_core.zc.
 
+import "../../../shared/log.zc";
+
 @cfg(ZAPP_WORKER_ENGINE_QJS)
 raw {
 #ifdef ZAPP_WORKER_ENGINE_QJS
 #ifdef __APPLE__
+    // Log functions from log.zc
+    extern void zapp_log_worker(int level, int window_id, int worker_id, const char* message);
+    #define ZAPP_LOG_ERROR 0
+    #define ZAPP_LOG_WARN  1
+    #define ZAPP_LOG_INFO  2
+    #define ZAPP_LOG_DEBUG 3
+    #define ZAPP_LOG_TRACE 4
+
     extern NSValue* zapp_darwin_qjs_get_context(NSString* workerId);
     extern void zapp_darwin_qjs_dispatch_async(dispatch_block_t block);
     extern void zapp_darwin_qjs_drain_jobs(void* ctx, const char* label);
@@ -110,6 +120,39 @@ raw {
         QJSContext* creating_ctx = ctx;
 
         zapp_core_fetch_execute(request, wId, ^(zapp_fetch_response_t* response, NSString* error) {
+            // The response pointer is only valid for the duration of this callback
+            // (fetch_core frees it immediately after). Copy data into ObjC objects
+            // which the block will retain across the async dispatch.
+            BOOL has_response = (response != nil);
+            int resp_status = 0;
+            NSString* resp_status_text = nil;
+            NSArray<NSString*>* resp_hdr_keys = nil;
+            NSArray<NSString*>* resp_hdr_vals = nil;
+            NSString* resp_body = nil;
+            NSString* resp_body_base64 = nil;
+
+            if (response) {
+                resp_status = response->status;
+                resp_status_text = response->status_text
+                    ? [NSString stringWithUTF8String:response->status_text] : @"";
+                if (response->header_count > 0) {
+                    NSMutableArray* hk = [NSMutableArray arrayWithCapacity:response->header_count];
+                    NSMutableArray* hv = [NSMutableArray arrayWithCapacity:response->header_count];
+                    for (int i = 0; i < response->header_count; i++) {
+                        if (response->header_keys[i] && response->header_values[i]) {
+                            [hk addObject:[NSString stringWithUTF8String:response->header_keys[i]]];
+                            [hv addObject:[NSString stringWithUTF8String:response->header_values[i]]];
+                        }
+                    }
+                    resp_hdr_keys = hk;
+                    resp_hdr_vals = hv;
+                }
+                if (response->body)
+                    resp_body = [NSString stringWithUTF8String:response->body];
+                else if (response->body_base64)
+                    resp_body_base64 = [NSString stringWithUTF8String:response->body_base64];
+            }
+
             zapp_darwin_qjs_dispatch_async(^{
                 NSValue* val = zapp_darwin_qjs_get_context(wId);
                 if (!val) return;
@@ -123,30 +166,30 @@ raw {
                     if (JS_IsException(ret)) {
                         QJSValue exc = JS_GetException(current_ctx);
                         const char* s = JS_ToCString(current_ctx, exc);
-                        if (s) { printf("[qjs] fetch reject threw: %s\n", s); JS_FreeCString(current_ctx, s); }
+                        if (s) { zapp_log_worker(ZAPP_LOG_ERROR, -1, -1, s); JS_FreeCString(current_ctx, s); }
                         JS_FreeValue(current_ctx, exc);
                     }
                     JS_FreeValue(current_ctx, ret); JS_FreeValue(current_ctx, args[0]);
-                } else if (response) {
+                } else if (has_response) {
                     QJSValue resObj = JS_NewObject(current_ctx);
-                    JS_SetPropertyStr(current_ctx, resObj, "status", JS_NewInt32(current_ctx, response->status));
+                    JS_SetPropertyStr(current_ctx, resObj, "status", JS_NewInt32(current_ctx, resp_status));
                     JS_SetPropertyStr(current_ctx, resObj, "statusText",
-                        JS_NewString(current_ctx, response->status_text ? response->status_text : ""));
+                        JS_NewString(current_ctx, [resp_status_text UTF8String]));
 
                     QJSValue headersObj = JS_NewObject(current_ctx);
-                    for (int i = 0; i < response->header_count; i++) {
-                        if (response->header_keys[i] && response->header_values[i]) {
+                    if (resp_hdr_keys) {
+                        for (NSUInteger i = 0; i < [resp_hdr_keys count]; i++) {
                             JS_SetPropertyStr(current_ctx, headersObj,
-                                response->header_keys[i],
-                                JS_NewString(current_ctx, response->header_values[i]));
+                                [resp_hdr_keys[i] UTF8String],
+                                JS_NewString(current_ctx, [resp_hdr_vals[i] UTF8String]));
                         }
                     }
                     JS_SetPropertyStr(current_ctx, resObj, "headers", headersObj);
 
-                    if (response->body)
-                        JS_SetPropertyStr(current_ctx, resObj, "body", JS_NewString(current_ctx, response->body));
-                    else if (response->body_base64)
-                        JS_SetPropertyStr(current_ctx, resObj, "body_base64", JS_NewString(current_ctx, response->body_base64));
+                    if (resp_body)
+                        JS_SetPropertyStr(current_ctx, resObj, "body", JS_NewString(current_ctx, [resp_body UTF8String]));
+                    else if (resp_body_base64)
+                        JS_SetPropertyStr(current_ctx, resObj, "body_base64", JS_NewString(current_ctx, [resp_body_base64 UTF8String]));
                     else
                         JS_SetPropertyStr(current_ctx, resObj, "body", JS_NewString(current_ctx, ""));
 
@@ -155,7 +198,7 @@ raw {
                     if (JS_IsException(ret)) {
                         QJSValue exc = JS_GetException(current_ctx);
                         const char* s = JS_ToCString(current_ctx, exc);
-                        if (s) { printf("[qjs] fetch resolve threw: %s\n", s); JS_FreeCString(current_ctx, s); }
+                        if (s) { zapp_log_worker(ZAPP_LOG_ERROR, -1, -1, s); JS_FreeCString(current_ctx, s); }
                         JS_FreeValue(current_ctx, exc);
                     }
                     JS_FreeValue(current_ctx, ret); JS_FreeValue(current_ctx, resObj);

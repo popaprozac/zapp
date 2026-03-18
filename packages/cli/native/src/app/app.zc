@@ -2,6 +2,7 @@ import "../platform/platform.zc";
 import "../platform/window.zc";
 import "../event/event.zc";
 import "../service/service.zc";
+import "../platform/shared/log.zc";
 include <string.h>
 
 struct AppConfig {
@@ -55,6 +56,21 @@ impl App {
     }
 
     fn run(self) -> int {
+        // Initialize logging with build config log level
+        raw {
+            extern const char* zapp_build_log_level(void);
+            const char* level_str = zapp_build_log_level();
+            int level = ZAPP_LOG_INFO; // default
+            if (level_str) {
+                if (strcmp(level_str, "error") == 0) level = ZAPP_LOG_ERROR;
+                else if (strcmp(level_str, "warn") == 0) level = ZAPP_LOG_WARN;
+                else if (strcmp(level_str, "info") == 0) level = ZAPP_LOG_INFO;
+                else if (strcmp(level_str, "debug") == 0) level = ZAPP_LOG_DEBUG;
+                else if (strcmp(level_str, "trace") == 0) level = ZAPP_LOG_TRACE;
+            }
+            zapp_log_init(level);
+        }
+        
         println "Running app: {self.config.name}";
         self.window.app = self;
         self.event.app = self;
@@ -183,7 +199,7 @@ fn app_start_backend(app: App*) -> void {
 
         char* source = zapp_read_file_utf8(backendPath);
         if (source == NULL) {
-            fprintf(stderr, "[zapp] failed to read backend script at %s\n", backendPath);
+            zapp_log_backend(ZAPP_LOG_ERROR, "failed to read backend script");
             return;
         }
 
@@ -191,9 +207,9 @@ fn app_start_backend(app: App*) -> void {
         free(source);
         if (result == 0) {
             app->has_backend = true;
-            fprintf(stderr, "[zapp] backend context started\n");
+            zapp_log_backend(ZAPP_LOG_INFO, "backend context started");
         } else {
-            fprintf(stderr, "[zapp] backend context failed to start\n");
+            zapp_log_backend(ZAPP_LOG_ERROR, "backend context failed to start");
         }
     }
 }
@@ -233,7 +249,7 @@ fn app_apply_configure(app: App*, payload: string) -> void {
     raw {
         if (app == NULL || payload == NULL) return;
         if (zapp_app_configured) {
-            NSLog(@"[zapp] App.configure() ignored: already configured");
+            zapp_log_backend(ZAPP_LOG_WARN, "App.configure() ignored: already configured");
             return;
         }
         zapp_app_configured = true;
@@ -266,7 +282,7 @@ fn app_apply_configure(app: App*, payload: string) -> void {
             app->config.maxWorkers = [maxVal intValue];
         }
 
-        NSLog(@"[zapp] app configured from backend");
+        zapp_log_backend(ZAPP_LOG_INFO, "app configured from backend");
     }
 }
 
@@ -275,7 +291,7 @@ fn app_apply_configure(app: App*, payload: string) -> void {
     raw {
         if (app == NULL || payload == NULL) return;
         if (zapp_app_configured) {
-            fprintf(stderr, "[zapp] App.configure() ignored: already configured\n");
+            zapp_log_backend(ZAPP_LOG_WARN, "App.configure() ignored: already configured");
             return;
         }
         zapp_app_configured = true;
@@ -321,7 +337,7 @@ fn app_apply_configure(app: App*, payload: string) -> void {
             app->config.maxWorkers = atoi(maxStart);
         }
 
-        fprintf(stderr, "[zapp] app configured from backend\n");
+        zapp_log_backend(ZAPP_LOG_INFO, "app configured from backend");
     }
 }
 

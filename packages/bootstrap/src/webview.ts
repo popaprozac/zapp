@@ -694,6 +694,49 @@ Object.defineProperties(zapp, {
   on: { value: zapp.on, enumerable: true, configurable: false, writable: false },
 });
 Object.freeze(zapp);
+// Inject Content Security Policy when DOM is ready
+if (typeof document !== "undefined") {
+  const injectCSP = (): void => {
+    if (!document.head) return;
+    const csp = document.createElement("meta");
+    csp.httpEquiv = "Content-Security-Policy";
+    csp.content = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https:; img-src 'self' data: blob:;";
+    document.head.insertBefore(csp, document.head.firstChild);
+  };
+  if (document.head) {
+    injectCSP();
+  } else {
+    document.addEventListener("DOMContentLoaded", injectCSP, { once: true });
+  }
+}
+
 ensurePublicZappBinding();
+
+// Fire ready event when DOM is ready
+const fireReady = (): void => {
+  // Notify native side that this window is ready
+  const winSymbolStore = g as unknown as Record<symbol, unknown>;
+  const windowId = winSymbolStore[Symbol.for("zapp.windowId")] as string | undefined;
+  
+  // Direct call to message handler (post function might not be available yet)
+  const handler = g.webkit?.messageHandlers?.zapp;
+  if (handler?.postMessage) {
+    const payload = JSON.stringify({ windowId: windowId ?? "unknown" });
+    handler.postMessage(`window\nready\n${payload}`);
+  }
+  
+  rt.onEvent?.("ready", () => {}); // Ensure listener storage exists
+  deliverEvent("ready", undefined);
+};
+
+// Use DOMContentLoaded to ensure the message handler is available
+// Always add the listener, and also call immediately if DOM is already loaded
+if (typeof document !== "undefined") {
+  document.addEventListener("DOMContentLoaded", fireReady, { once: true });
+  // Also check if DOM is already loaded
+  if (document.readyState !== "loading") {
+    fireReady();
+  }
+}
 
 export {};

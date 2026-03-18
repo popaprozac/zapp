@@ -15,7 +15,7 @@ export interface WindowOptions {
   visible?: boolean;
 }
 
-export interface WindowHandle {
+export type WindowHandle = {
   readonly id: string;
   minimize(): void;
   maximize(): void;
@@ -30,6 +30,8 @@ export interface WindowHandle {
   setFullscreen(on: boolean): void;
   setAlwaysOnTop(on: boolean): void;
   on(event: string, handler: () => void): () => void;
+  /** Convenience method for "ready" event */
+  onReady(handler: () => void): () => void;
 }
 
 type WindowBridge = {
@@ -76,6 +78,17 @@ function makeHandle(windowId: string): WindowHandle {
         if (idx !== -1) windowEventListeners.splice(idx, 1);
       };
     },
+    onReady(handler: WindowEventHandler): () => void {
+      // Listen for "window-ready" event globally and filter by windowId
+      const { Events } = require("./events");
+      const off = Events.on("window-ready", (payload) => {
+        const p = payload as { windowId?: string };
+        if (p?.windowId === windowId) {
+          handler();
+        }
+      });
+      return off;
+    },
   };
 }
 
@@ -99,18 +112,16 @@ export const Window = {
   },
 
   current(): WindowHandle {
-    const ownerId = (globalThis as unknown as Record<symbol, unknown>)[
-      Symbol.for("zapp.ownerId")
-    ] as string | undefined;
-    const contextOwnerId = (globalThis as unknown as Record<symbol, unknown>)[
-      Symbol.for("zapp.currentWindowId")
-    ] as string | undefined;
-    const windowId = contextOwnerId ?? ownerId;
-    if (!windowId) {
+    const symbolStore = globalThis as unknown as Record<symbol, unknown>;
+    const windowId = symbolStore[Symbol.for("zapp.windowId")] as string | undefined;
+    const ownerId = symbolStore[Symbol.for("zapp.ownerId")] as string | undefined;
+    const contextWindowId = symbolStore[Symbol.for("zapp.currentWindowId")] as string | undefined;
+    const id = windowId ?? contextWindowId ?? ownerId;
+    if (!id) {
       throw new Error(
         "Window.current() is only available in a webview context with an associated window.",
       );
     }
-    return makeHandle(windowId);
+    return makeHandle(id);
   },
 };

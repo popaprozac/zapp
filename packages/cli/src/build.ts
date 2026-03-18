@@ -3,9 +3,10 @@ import process from "node:process";
 import { mkdir } from "node:fs/promises";
 import { brotliCompressSync, constants as zlibConstants } from "node:zlib";
 import { generateBuildConfigZc } from "./build-config";
-import { nativeIncludeArgs, preferredJsTool, resolveNativeDir, runCmd, runPackageScript } from "./common";
+import { ensureQjsLib, nativeIncludeArgs, preferredJsTool, resolveNativeDir, runCmd, runPackageScript } from "./common";
 import { resolveAndBundleBackend } from "./backend";
 import { runGenerate } from "./generate";
+import type { ResolvedZappConfig } from "./config";
 
 export const walkFiles = async (dir: string): Promise<string[]> => {
   const glob = new Bun.Glob("**/*");
@@ -35,6 +36,21 @@ export const generateAssetsZc = async (root: string, manifest: any, assetDir: st
   let zcContent = `// AUTO-GENERATED FILE. DO NOT EDIT.
 
 `;
+
+  // If no assets, generate empty placeholder
+  if (!manifest.assets || manifest.assets.length === 0) {
+    zcContent += `
+raw {
+    struct ZappEmbeddedAsset zapp_embedded_assets[1];
+    int zapp_embedded_assets_count = 0;
+}
+`;
+    const buildDir = path.join(root, ".zapp");
+    await mkdir(buildDir, { recursive: true });
+    const outPath = path.join(buildDir, "zapp_assets.zc");
+    await Bun.write(outPath, zcContent);
+    return outPath;
+  }
 
   const assetEntries = [];
   const assetExterns = [];
@@ -143,7 +159,10 @@ export const runBuild = async ({
   assetDir,
   withBrotli,
   embedAssets,
+  isDebug,
   backendScript,
+  logLevel,
+  config,
 }: {
   root: string;
   frontendDir: string;
@@ -152,10 +171,13 @@ export const runBuild = async ({
   assetDir: string;
   withBrotli: boolean;
   embedAssets: boolean;
+  isDebug: boolean;
   backendScript?: string;
+  logLevel?: "error" | "warn" | "info" | "debug" | "trace";
+  config: ResolvedZappConfig;
 }) => {
   if (withBrotli && !embedAssets) {
-    process.stdout.write("[zapp] note: --brotli has no effect without --embed-assets\n");
+    process.stdout.write("[zapp] note: --brotli has no effect without embedded assets\n");
   }
 
   await runGenerate({ root, frontendDir });
@@ -173,26 +195,53 @@ export const runBuild = async ({
   }
 
   const backendScriptPath = await resolveAndBundleBackend({ root, frontendDir, backendScript });
-  const buildMode = embedAssets ? "prod-embedded" : "prod";
+  const buildMode = isDebug ? "prod" : (embedAssets ? "prod-embedded" : "prod");
+  const effectiveLogLevel = logLevel ?? (isDebug ? "debug" : "warn");
   const buildConfigFile = await generateBuildConfigZc({
     root,
     mode: buildMode,
     assetDir,
     backendScriptPath,
+    logLevel: effectiveLogLevel,
   });
 
   process.stdout.write("[zapp] building native binary\n");
+  await mkdir(path.dirname(nativeOut), { recursive: true });
+  const qjsLib = await ensureQjsLib(root);
   const zcArgs = ["build", buildFile, buildConfigFile, ...nativeIncludeArgs()];
+  
+  // Always generate assets file (provides empty placeholder when not embedding)
   const assetsFile = await generateAssetsZc(root, manifest, assetDir);
   if (await Bun.file(assetsFile).exists()) zcArgs.push(assetsFile);
-  zcArgs.push("-o", nativeOut);
+  
+  // Add debug flags if isDebug, otherwise optimize for size
+  if (isDebug) {
+    zcArgs.push("--debug");
+  } else {
+    zcArgs.push("-Oz");  // Aggressive size optimization
+    zcArgs.push("-flto"); // Link-time optimization
+  }
+  
+  zcArgs.push("-o", nativeOut, "-L", path.dirname(qjsLib), "-lqjs");
   await runCmd("zc", zcArgs, { cwd: root, env: { ZAPP_NATIVE: resolveNativeDir() } });
+
+  // Strip symbols in release builds for smaller binary
+  if (!isDebug) {
+    try {
+      const stripPath = Bun.which("strip");
+      if (stripPath) {
+        await runCmd("strip", [nativeOut]);
+      }
+    } catch (e) {
+      process.stdout.write(`[zapp] warning: strip failed: ${e}\n`);
+    }
+  }
 
   process.stdout.write(
     [
       "[zapp] build complete",
       `native: ${nativeOut}`,
-      `mode: ${buildMode}`,
+      `mode: ${isDebug ? 'debug' : buildMode}`,
       "",
       "Run:",
       `${nativeOut}`,

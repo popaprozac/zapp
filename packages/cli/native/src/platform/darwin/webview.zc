@@ -445,6 +445,7 @@ raw {
         [config setURLSchemeHandler:schemeHandler forURLScheme:@"zapp"];
         WKUserContentController* ucc = [[WKUserContentController alloc] init];
         NSString* ownerId = [NSString stringWithFormat:@"owner-%p", window];
+        NSString* windowId = [NSString stringWithFormat:@"win-%p", window];
         const char* bindingsRaw = service_get_bindings_manifest_json();
         NSString* bindingsJson = zapp_escape_js_string(bindingsRaw);
 
@@ -492,12 +493,31 @@ raw {
             forMainFrameOnly:NO];
         [ucc addUserScript:ownerUserScript];
 
+        NSString* windowIdScript = [NSString stringWithFormat:
+            @"(function(){globalThis[Symbol.for('zapp.windowId')]='%@';})();",
+            windowId
+        ];
+        WKUserScript* windowIdUserScript = [[WKUserScript alloc]
+            initWithSource:windowIdScript
+            injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+            forMainFrameOnly:NO];
+        [ucc addUserScript:windowIdUserScript];
+
         NSString* bootstrap = [NSString stringWithUTF8String:zapp_darwin_webview_bootstrap_script()];
         WKUserScript* userScript = [[WKUserScript alloc]
             initWithSource:bootstrap
             injectionTime:WKUserScriptInjectionTimeAtDocumentStart
             forMainFrameOnly:NO];
         [ucc addUserScript:userScript];
+        
+        // Add a script to send ready message when DOM is ready
+        NSString* readyScript = @"document.addEventListener('DOMContentLoaded', function() { var winId = globalThis[Symbol.for('zapp.windowId')]; var payload = JSON.stringify({windowId: winId || 'unknown'}); window.webkit.messageHandlers.zapp.postMessage('window\\nready\\n' + payload); });";
+        WKUserScript* readyUserScript = [[WKUserScript alloc]
+            initWithSource:readyScript
+            injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+            forMainFrameOnly:NO];
+        [ucc addUserScript:readyUserScript];
+        
         ZappMsgHandler* handler = [[ZappMsgHandler alloc] init];
         [ucc addScriptMessageHandler:handler name:@"zapp"];
         [config setUserContentController:ucc];

@@ -1,8 +1,9 @@
-AGENTS.md
-context.md
-Zen-C.md
-WORKERS*.md
-ZAPP_WORKER*.md
+# AGENTS.md
+# context.md
+# Zen-C.md
+# WORKERS*.md
+# ZAPP_WORKER*.md
+# ZAPP_CHARTER.md
 zenc-lang-tests
 node_modules
 .vscode
@@ -15,3 +16,4 @@ node_modules
 .env.production.local
 .zapp/
 .zapp-workers/
+bin/

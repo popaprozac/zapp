@@ -43,6 +43,7 @@ export const runInit = async ({
   }
 
   pkgObj.devDependencies = pkgObj.devDependencies || {};
+  pkgObj.devDependencies["@zapp/cli"] = "latest";
   pkgObj.devDependencies["@zapp/vite"] = "latest";
   pkgObj.dependencies = pkgObj.dependencies || {};
   pkgObj.dependencies["@zapp/runtime"] = "latest";
@@ -67,10 +68,17 @@ fn run_app() -> int {
 `;
   await Bun.write(path.join(zappDir, "app.zc"), appZcContent);
 
+  const zappConfigContent = `import { defineConfig } from "@zapp/cli/config";
+
+export default defineConfig({
+  name: "${name}",
+});
+`;
+  await Bun.write(path.join(zappDir, "zapp.config.ts"), zappConfigContent);
+
   const buildZcContent = `// Include paths and library paths are injected by the zapp CLI.
 
 // --- macOS Directives ---
-//> macos: define: __APPLE__
 //> macos: framework: Cocoa
 //> macos: framework: WebKit
 //> macos: framework: CoreFoundation
@@ -78,11 +86,11 @@ fn run_app() -> int {
 //> macos: framework: Security
 //> macos: link: -lcompression
 //> macos: cflags: -fobjc-arc -x objective-c
+// To use QuickJS instead of JSC on macOS, uncomment:
+//   //> macos: define: ZAPP_WORKER_ENGINE_QJS
 
 // --- Windows Directives (QuickJS default) ---
-//> windows: define: _WIN32
 //> windows: cflags: -DUNICODE -D_UNICODE -DCINTERFACE -DCOBJMACROS
-//> windows: link: -lqjs
 //> windows: link: -lole32 -lshell32 -luuid -luser32 -lgdi32 -lcomctl32 -lshlwapi
 //> windows: link: -lwinhttp -lbcrypt -ladvapi32 -lrpcrt4 -lcrypt32 -lversion
 //> windows: define: ZAPP_WORKER_ENGINE_QJS

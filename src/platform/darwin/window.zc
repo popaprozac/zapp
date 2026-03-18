@@ -17,9 +17,14 @@ raw {
     @property (nonatomic, copy) NSString* ownerId;
     @end
 
+    static void zapp_window_unregister(NSWindow* window);
+
     @implementation ZappWindowDelegate
     - (void)windowWillClose:(NSNotification*)notification {
-        (void)notification;
+        NSWindow* window = (NSWindow*)[notification object];
+        if (window) {
+            zapp_window_unregister(window);
+        }
         if (self.ownerId) {
             zapp_darwin_reset_owner_workers([self.ownerId UTF8String]);
         }
@@ -43,7 +48,8 @@ fn darwin_window_create(options: WindowOptions*, inspectable: bool) -> void* {
                     styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable)
                     backing:NSBackingStoreBuffered
                     defer:NO];
-                
+                [window setReleasedWhenClosed:NO];
+
                 NSString* titleStr = [NSString stringWithUTF8String:(const char*)options->title];
                 [window setTitle:titleStr];
 
@@ -197,6 +203,17 @@ fn darwin_window_unmaximize(window: void*) -> void {
     }
 }
 
+fn darwin_window_register_numeric_id(window: void*, numeric_id: int) -> void {
+    raw {
+#ifdef __APPLE__
+        if (window == NULL) return;
+        NSWindow* nsWindow = (__bridge NSWindow*)window;
+        NSString* windowId = [NSString stringWithFormat:@"win-%p", nsWindow];
+        zapp_window_register_numeric_id(windowId, numeric_id);
+#endif
+    }
+}
+
 fn darwin_window_toggle_minimize(window: void*) -> void {
     raw {
 #ifdef __APPLE__
@@ -335,31 +352,67 @@ raw {
 #ifdef __APPLE__
     extern void* app_get_active(void);
     extern void zapp_handle_message(void* app_ptr, char* msg_c);
+    extern void window_manager_trigger_on_ready(int window_id);
 
-    static NSMutableDictionary<NSString*, NSValue*>* zapp_window_registry = nil;
+    // Strong-reference registry so JS-created windows survive until explicitly closed.
+    static NSMutableDictionary<NSString*, NSWindow*>* zapp_window_registry = nil;
+    static NSMutableDictionary<NSString*, NSNumber*>* zapp_window_numeric_ids = nil;
 
     static void zapp_window_registry_ensure(void) {
         if (zapp_window_registry == nil) {
             zapp_window_registry = [NSMutableDictionary dictionary];
+        }
+        if (zapp_window_numeric_ids == nil) {
+            zapp_window_numeric_ids = [NSMutableDictionary dictionary];
         }
     }
 
     static NSString* zapp_window_register(NSWindow* window) {
         zapp_window_registry_ensure();
         NSString* windowId = [NSString stringWithFormat:@"win-%p", window];
-        [zapp_window_registry setObject:[NSValue valueWithPointer:(__bridge void*)window] forKey:windowId];
+        [zapp_window_registry setObject:window forKey:windowId];
         return windowId;
+    }
+
+    static void zapp_window_register_numeric_id(NSString* windowId, int numericId) {
+        zapp_window_registry_ensure();
+        [zapp_window_numeric_ids setObject:@(numericId) forKey:windowId];
+    }
+
+    static int zapp_window_get_numeric_id(NSString* windowId) {
+        zapp_window_registry_ensure();
+        NSNumber* num = [zapp_window_numeric_ids objectForKey:windowId];
+        return num ? [num intValue] : -1;
+    }
+
+    void zapp_darwin_window_register_numeric_id(const char* window_id, int numeric_id) {
+        NSString* windowId = [NSString stringWithUTF8String:window_id];
+        zapp_window_register_numeric_id(windowId, numeric_id);
+    }
+#endif
+}
+
+raw {
+#ifdef __APPLE__
+    static void zapp_window_unregister(NSWindow* window) {
+        if (zapp_window_registry == nil || window == nil) return;
+        NSString* keyToRemove = nil;
+        for (NSString* key in zapp_window_registry) {
+            if (zapp_window_registry[key] == window) {
+                keyToRemove = key;
+                break;
+            }
+        }
+        if (keyToRemove) [zapp_window_registry removeObjectForKey:keyToRemove];
     }
 
     static NSWindow* zapp_window_lookup(NSString* windowId) {
         zapp_window_registry_ensure();
         if (windowId == nil || [windowId length] == 0) return nil;
 
-        // First try the registry for JS-created windows
-        NSValue* val = [zapp_window_registry objectForKey:windowId];
-        if (val != nil) return (__bridge NSWindow*)[val pointerValue];
+        NSWindow* win = [zapp_window_registry objectForKey:windowId];
+        if (win != nil) return win;
 
-        // Also check owner-ID style (for Window.current() from webviews)
         for (NSWindow* window in [NSApp windows]) {
             NSString* ownerId = [NSString stringWithFormat:@"owner-%p", window];
             if ([ownerId isEqualToString:windowId]) return window;
@@ -368,6 +421,7 @@ raw {
     }
 
     extern void zapp_backend_dispatch_window_result(const char* payload_json);
+    extern void zapp_backend_dispatch_window_ready(const char* window_id);
 
     static void zapp_dispatch_window_result_to_all(const char* payload_json) {
         NSString* payload = [NSString stringWithUTF8String:payload_json];
@@ -397,6 +451,19 @@ raw {
         NSDictionary* body = [NSJSONSerialization JSONObjectWithData:payloadData options:0 error:nil];
         if (![body isKindOfClass:[NSDictionary class]]) return;
 
+        if ([actionStr isEqualToString:@"ready"]) {
+            NSString* windowId = body[@"windowId"];
+            if ([windowId isKindOfClass:[NSString class]]) {
+                zapp_backend_dispatch_window_ready([windowId UTF8String]);
+                // Trigger native on_ready callback
+                int numericId = zapp_window_get_numeric_id(windowId);
+                if (numericId >= 0) {
+                    window_manager_trigger_on_ready(numericId);
+                }
+            }
+            return;
+        }
+
         if ([actionStr isEqualToString:@"create"]) {
             NSString* requestId = body[@"requestId"];
             NSDictionary* opts = body[@"options"];
@@ -417,6 +484,7 @@ raw {
                     styleMask:styleMask
                     backing:NSBackingStoreBuffered
                     defer:NO];
+                [window setReleasedWhenClosed:NO];
                 [window setTitle:title];
 
                 NSString* titleBarStyle = [opts[@"titleBarStyle"] isKindOfClass:[NSString class]] ? opts[@"titleBarStyle"] : @"default";

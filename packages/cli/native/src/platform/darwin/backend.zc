@@ -9,6 +9,7 @@ import "./worker/core/base64_core.zc";
 import "./worker/core/websocket_core.zc";
 import "./worker/core/crypto_core.zc";
 import "./worker/core/fetch_core.zc";
+import "../shared/log.zc";
 @cfg(not(ZAPP_WORKER_ENGINE_QJS))
 import "./worker/jsc/encoding_jsc.zc";
 @cfg(not(ZAPP_WORKER_ENGINE_QJS))
@@ -36,6 +37,16 @@ raw {
     #include <WebKit/WebKit.h>
     #include <dispatch/dispatch.h>
     #include <JavaScriptCore/JavaScriptCore.h>
+
+    // Log level constants (from shared/log.zc)
+    #ifndef ZAPP_LOG_ERROR
+    #define ZAPP_LOG_ERROR 0
+    #define ZAPP_LOG_WARN  1
+    #define ZAPP_LOG_INFO  2
+    #define ZAPP_LOG_DEBUG 3
+    #define ZAPP_LOG_TRACE 4
+    #endif
+
 #if !defined(ZAPP_WORKER_ENGINE_QJS)
     extern void* engine_jsc_create_ctx(void* vm, const char* name);
     extern int engine_jsc_eval(void* ctx, const char* utf8, size_t len, const char* filename);
@@ -59,6 +70,7 @@ raw {
     extern void zapp_handle_message(void* app_ptr, char* msg_c);
     extern NSString* zapp_json_stringify_obj(id obj);
     extern void zapp_dispatch_worker_to_webviews(const char* kind, const char* worker_id, const char* payload_json);
+    extern void zapp_log_backend(int level, const char* message);
 
     extern const char* zapp_build_initial_url(void);
 
@@ -75,7 +87,9 @@ raw {
         @try {
             [fn callWithArguments:args ?: @[]];
         } @catch (NSException* e) {
-            NSLog(@"[zapp] backend bridge.%@ exception: %@", methodName, e);
+            char buf[512];
+            snprintf(buf, sizeof(buf), "bridge.%s exception: %s", [methodName UTF8String], [[e description] UTF8String]);
+            zapp_log_backend(ZAPP_LOG_ERROR, buf);
         }
     }
 
@@ -99,6 +113,16 @@ raw {
         });
     }
 
+    void zapp_backend_dispatch_window_ready(const char* window_id) {
+        if (zapp_backend_ctx == nil || window_id == NULL) return;
+        NSString* windowId = [NSString stringWithUTF8String:window_id];
+        NSString* eventJson = [NSString stringWithFormat:@"{\"windowId\":\"%@\"}", windowId];
+        zapp_darwin_worker_js_sync(^{
+            if (zapp_backend_ctx == nil) return;
+            zapp_backend_call_bridge(@"deliverEvent", @[@"window-ready", eventJson]);
+        });
+    }
+
     int32_t zapp_backend_context_create(void* app_ptr, char* script_source) {
         if (app_ptr == NULL || script_source == NULL) return -1;
         App* app = (App*)app_ptr;
@@ -110,7 +134,7 @@ raw {
 
             void* opaque = engine_jsc_create_ctx((__bridge void*)zapp_backend_vm, "ZappBackend");
             if (!opaque) {
-                NSLog(@"[zapp] failed to create backend JSC context");
+                zapp_log_backend(ZAPP_LOG_ERROR, "failed to create backend JSC context");
                 return;
             }
 
@@ -128,7 +152,9 @@ raw {
                 context.exception = nil;
                 NSString* msg = @"Backend error";
                 @try { msg = [exception toString] ?: msg; } @catch (NSException* e) {}
-                NSLog(@"[zapp] backend error: %@", msg);
+                char buf[256];
+                snprintf(buf, sizeof(buf), "error: %s", [msg UTF8String]);
+                zapp_log_backend(ZAPP_LOG_ERROR, buf);
                 context.exceptionHandler = previousHandler;
             };
 
@@ -240,7 +266,7 @@ raw {
                 if (errVal != nil && !errVal.isUndefined && !errVal.isNull) {
                     @try { msg = [errVal toString] ?: msg; } @catch (NSException* e) {}
                 }
-                NSLog(@"[zapp] backend error: %@", msg);
+                zapp_log_backend(ZAPP_LOG_ERROR, [msg UTF8String]);
             };
 
             bridge[@"consoleLog"] = ^(JSValue* levelVal, JSValue* msgVal) {
@@ -249,7 +275,15 @@ raw {
                 if (msgVal != nil && !msgVal.isUndefined && !msgVal.isNull) {
                     @try { msg = [msgVal toString] ?: @""; } @catch (NSException* e) {}
                 }
-                NSLog(@"[backend:%@] %@", level, msg);
+                
+                // Convert level string to int
+                int level_int = ZAPP_LOG_INFO;
+                if ([level isEqualToString:@"error"]) level_int = ZAPP_LOG_ERROR;
+                else if ([level isEqualToString:@"warn"]) level_int = ZAPP_LOG_WARN;
+                else if ([level isEqualToString:@"debug"]) level_int = ZAPP_LOG_DEBUG;
+                else if ([level isEqualToString:@"trace"]) level_int = ZAPP_LOG_TRACE;
+                
+                zapp_log_backend(level_int, [msg UTF8String]);
             };
 
             bridge[@"postMessage"] = ^(JSValue* data, JSValue* optTargetId) {
@@ -308,7 +342,9 @@ raw {
             int err = engine_jsc_eval((__bridge void*)ctx, bootstrap, blen, "backend-bootstrap.js");
             if (err != 0) {
                 const char* msg = engine_jsc_get_exception_message((__bridge void*)ctx);
-                NSLog(@"[zapp] backend bootstrap failed: %s", msg ?: "unknown error");
+                char buf[256];
+                snprintf(buf, sizeof(buf), "bootstrap failed: %s", msg ?: "unknown error");
+                zapp_log_backend(ZAPP_LOG_ERROR, buf);
                 zapp_darwin_worker_timers_cancel(zapp_backend_id);
                 zapp_darwin_worker_fetch_cancel(zapp_backend_id);
                 engine_jsc_free_ctx((__bridge void*)ctx, (__bridge void*)zapp_backend_vm, "DeadBackend");
@@ -326,7 +362,7 @@ raw {
                 @"});", script_source];
             NSData* wrappedData = [wrappedSource dataUsingEncoding:NSUTF8StringEncoding];
             if (wrappedData == nil || [wrappedData length] == 0) {
-                NSLog(@"[zapp] backend script encoding failed");
+                zapp_log_backend(ZAPP_LOG_ERROR, "script encoding failed");
                 zapp_darwin_worker_timers_cancel(zapp_backend_id);
                 zapp_darwin_worker_fetch_cancel(zapp_backend_id);
                 engine_jsc_free_ctx((__bridge void*)ctx, (__bridge void*)zapp_backend_vm, "DeadBackend");
@@ -338,7 +374,9 @@ raw {
             err = engine_jsc_eval((__bridge void*)ctx, wrappedUtf8, wrappedLen, "backend.js");
             if (err != 0) {
                 const char* msg = engine_jsc_get_exception_message((__bridge void*)ctx);
-                NSLog(@"[zapp] backend script error: %s", msg ?: "unknown error");
+                char buf[256];
+                snprintf(buf, sizeof(buf), "script error: %s", msg ?: "unknown error");
+                zapp_log_backend(ZAPP_LOG_ERROR, buf);
             }
         });
 
@@ -391,6 +429,16 @@ raw {
     extern void zapp_darwin_qjs_timers_cancel(NSString* workerId);
     extern void zapp_darwin_qjs_fetch_cancel(NSString* workerId);
 
+    // Log functions from log.zc
+    extern void zapp_log_backend(int level, const char* message);
+    #ifndef ZAPP_LOG_ERROR
+    #define ZAPP_LOG_ERROR 0
+    #define ZAPP_LOG_WARN  1
+    #define ZAPP_LOG_INFO  2
+    #define ZAPP_LOG_DEBUG 3
+    #define ZAPP_LOG_TRACE 4
+    #endif
+
     static QJSContext* qjs_be_ctx = NULL;
     static NSString* qjs_be_id = @"__zapp_backend__";
 
@@ -414,7 +462,9 @@ raw {
                 if (JS_IsException(ret)) {
                     QJSValue exc = JS_GetException(qjs_be_ctx);
                     const char* str = JS_ToCString(qjs_be_ctx, exc);
-                    NSLog(@"[zapp] qjs backend bridge.%@ threw: %s", methodName, str ? str : "unknown");
+                    char buf[256];
+                    snprintf(buf, sizeof(buf), "bridge.%s threw: %s", [methodName UTF8String], str ? str : "unknown");
+                    zapp_log_backend(ZAPP_LOG_ERROR, buf);
                     if (str) JS_FreeCString(qjs_be_ctx, str);
                     JS_FreeValue(qjs_be_ctx, exc);
                 }
@@ -442,7 +492,9 @@ raw {
                 if (err < 0 && pctx) {
                     QJSValue exc = JS_GetException(pctx);
                     const char* str = JS_ToCString(pctx, exc);
-                    NSLog(@"[zapp] qjs backend pending job error (%s): %s", label ? label : "?", str ? str : "unknown");
+                    char buf[256];
+                    snprintf(buf, sizeof(buf), "pending job error (%s): %s", label ? label : "?", str ? str : "unknown");
+                    zapp_log_backend(ZAPP_LOG_ERROR, buf);
                     if (str) JS_FreeCString(pctx, str);
                     JS_FreeValue(pctx, exc);
                 }
@@ -461,14 +513,23 @@ raw {
                 JS_FreeCString(ctx, str);
             }
         }
-        NSLog(@"[backend:log] %@", buf);
+        zapp_log_backend(ZAPP_LOG_INFO, [buf UTF8String]);
         return JS_UNDEFINED;
     }
 
     static QJSValue qjs_be_bridge_consoleLog(QJSContext *ctx, QJSValue this_val, int argc, QJSValue *argv) {
         const char* level = (argc >= 1) ? JS_ToCString(ctx, argv[0]) : NULL;
         const char* msg = (argc >= 2) ? JS_ToCString(ctx, argv[1]) : NULL;
-        NSLog(@"[backend:%s] %s", level ? level : "log", msg ? msg : "");
+        
+        int level_int = ZAPP_LOG_INFO;
+        if (level) {
+            if (strcmp(level, "error") == 0) level_int = ZAPP_LOG_ERROR;
+            else if (strcmp(level, "warn") == 0) level_int = ZAPP_LOG_WARN;
+            else if (strcmp(level, "debug") == 0) level_int = ZAPP_LOG_DEBUG;
+            else if (strcmp(level, "trace") == 0) level_int = ZAPP_LOG_TRACE;
+        }
+        
+        zapp_log_backend(level_int, msg ? msg : "");
         if (level) JS_FreeCString(ctx, level);
         if (msg) JS_FreeCString(ctx, msg);
         return JS_UNDEFINED;
@@ -575,7 +636,7 @@ raw {
     static QJSValue qjs_be_reportError(QJSContext *ctx, QJSValue this_val, int argc, QJSValue *argv) {
         if (argc < 1) return JS_UNDEFINED;
         const char* msg = JS_ToCString(ctx, argv[0]);
-        NSLog(@"[zapp] qjs backend error: %s", msg ? msg : "unknown");
+        zapp_log_backend(ZAPP_LOG_ERROR, msg ? msg : "unknown");
         if (msg) JS_FreeCString(ctx, msg);
         return JS_UNDEFINED;
     }
@@ -648,6 +709,25 @@ raw {
         });
     }
 
+    void zapp_backend_dispatch_window_ready(const char* window_id) {
+        if (qjs_be_ctx == NULL || window_id == NULL) return;
+        NSString* windowId = [NSString stringWithUTF8String:window_id];
+        dispatch_queue_t q = zapp_darwin_qjs_get_queue();
+        if (!q) return;
+        dispatch_async(q, ^{
+            if (qjs_be_ctx == NULL) return;
+            // Deliver "window-ready" event to backend
+            NSString* eventJson = [NSString stringWithFormat:@"{\"windowId\":\"%@\"}", windowId];
+            NSString* js = [NSString stringWithFormat:
+                @"(function(){var b=globalThis[Symbol.for('zapp.bridge')];if(b&&typeof b.deliverEvent==='function'){b.deliverEvent('window-ready','%@');}})();",
+                [eventJson stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"]
+            ];
+            const char* jsUtf8 = [js UTF8String];
+            extern int engine_qjs_eval(void* ctx, const char* utf8, size_t len, const char* filename);
+            engine_qjs_eval(qjs_be_ctx, jsUtf8, strlen(jsUtf8), "<window-ready>");
+        });
+    }
+
     int32_t zapp_backend_context_create(void* app_ptr, char* script_source) {
         if (app_ptr == NULL || script_source == NULL) return -1;
 
@@ -659,10 +739,10 @@ raw {
 
         dispatch_sync(q, ^{
             void* rt = zapp_darwin_qjs_get_runtime();
-            if (!rt) { NSLog(@"[zapp] qjs backend: no runtime"); return; }
+            if (!rt) { zapp_log_backend(ZAPP_LOG_ERROR, "no runtime"); return; }
 
             void* ctx_opaque = engine_qjs_create_ctx(rt);
-            if (!ctx_opaque) { NSLog(@"[zapp] qjs backend: failed to create context"); return; }
+            if (!ctx_opaque) { zapp_log_backend(ZAPP_LOG_ERROR, "failed to create context"); return; }
 
             QJSContext* ctx = (QJSContext*)ctx_opaque;
             qjs_be_ctx = ctx;
@@ -738,7 +818,9 @@ raw {
             int err = engine_qjs_eval(ctx, bootstrap, blen, "backend-bootstrap.js");
             if (err != 0) {
                 const char* msg = engine_qjs_get_exception_message(ctx);
-                NSLog(@"[zapp] qjs backend bootstrap failed: %s", msg ? msg : "unknown");
+                char buf[256];
+                snprintf(buf, sizeof(buf), "bootstrap failed: %s", msg ? msg : "unknown");
+                zapp_log_backend(ZAPP_LOG_ERROR, buf);
                 zapp_darwin_qjs_timers_cancel(qjs_be_id);
                 zapp_darwin_qjs_fetch_cancel(qjs_be_id);
                 zapp_darwin_qjs_unregister_context(qjs_be_id);
@@ -754,7 +836,7 @@ raw {
             size_t totalLen = srcLen + 256;
             char* wrapped = (char*)malloc(totalLen);
             if (!wrapped) {
-                NSLog(@"[zapp] qjs backend: out of memory");
+                zapp_log_backend(ZAPP_LOG_ERROR, "out of memory");
                 zapp_darwin_qjs_timers_cancel(qjs_be_id);
                 zapp_darwin_qjs_fetch_cancel(qjs_be_id);
                 zapp_darwin_qjs_unregister_context(qjs_be_id);
@@ -774,7 +856,9 @@ raw {
             free(wrapped);
             if (err != 0) {
                 const char* msg = engine_qjs_get_exception_message(ctx);
-                NSLog(@"[zapp] qjs backend script error: %s", msg ? msg : "unknown");
+                char buf[256];
+                snprintf(buf, sizeof(buf), "script error: %s", msg ? msg : "unknown");
+                zapp_log_backend(ZAPP_LOG_ERROR, buf);
             }
             qjs_be_drain(ctx, "backend-script");
 
@@ -815,6 +899,10 @@ raw {
 
     void zapp_backend_dispatch_window_result(const char* payload_json) {
         (void)payload_json;
+    }
+
+    void zapp_backend_dispatch_window_ready(const char* window_id) {
+        (void)window_id;
     }
 
     int zapp_backend_context_create(void* app_ptr, char* script_source) {

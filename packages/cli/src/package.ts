@@ -2,15 +2,15 @@ import { mkdir, copyFile, chmod } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { runCmd } from "./common";
+import type { ResolvedZappConfig } from "./config";
 
-export const runPackage = async ({ root, nativeOut }: { root: string; nativeOut: string }) => {
+export const runPackage = async ({ root, nativeOut, config }: { root: string; nativeOut: string; config: ResolvedZappConfig }) => {
   if (process.platform !== "darwin") {
     console.error("The package command is currently only supported on macOS.");
     return;
   }
 
-  // Find app name from root directory or config
-  const appName = path.basename(root) || "ZappApp";
+  const appName = config.name;
   const appBundleName = `${appName}.app`;
   const appBundlePath = path.join(root, appBundleName);
 
@@ -53,11 +53,11 @@ export const runPackage = async ({ root, nativeOut }: { root: string; nativeOut:
     <key>CFBundleExecutable</key>
     <string>${appName}</string>
     <key>CFBundleIdentifier</key>
-    <string>com.zapp.${appName}</string>
+    <string>${config.identifier}</string>
     <key>CFBundleVersion</key>
-    <string>1.0.0</string>
+    <string>${config.version}</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
+    <string>${config.version}</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>

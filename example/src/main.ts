@@ -17,6 +17,10 @@ mount(AppInstance, {
 
 console.log(App.getConfig())
 
+App.onReady(() => {
+  console.log("[frontend] ready");
+});
+
 Events.on("pong", (payload) => {
   console.log("pong", payload);
 });

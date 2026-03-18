@@ -43,6 +43,10 @@ struct Window {
 }
 
 impl Window {
+    fn on_ready(self, manager: WindowManager*, cb: fn*() -> void) -> void {
+        manager.set_on_ready(self.id, cb);
+    }
+
     fn minimize(self) -> void {
         if self.handle != NULL {
             window_minimize(self.handle);
@@ -115,11 +119,22 @@ impl WindowManager {
         c_stdio::snprintf(key, 32, "win-%d", self.next_id);
         self.windows.put(key, handle);
         let id = self.next_id;
+        
+        window_register_numeric_id(handle, id);
+        
         self.next_id += 1;
         return Window{
             id: id,
             handle: handle,
         };
+    }
+
+    fn set_on_ready(self, id: int, cb: fn*() -> void) -> void {
+        zapp_window_set_on_ready(id, cb);
+    }
+
+    fn trigger_on_ready(self, id: int) -> void {
+        zapp_window_trigger_on_ready(id);
     }
 
     fn get(self, id: int) -> Window {
@@ -238,3 +253,34 @@ fn window_set_fullscreen(window: void*, on: bool) -> void { windows_window_set_f
 fn window_set_always_on_top(window: void*, on: bool) -> void { darwin_window_set_always_on_top(window, on); }
 @cfg(_WIN32)
 fn window_set_always_on_top(window: void*, on: bool) -> void { windows_window_set_always_on_top(window, on); }
+
+@cfg(__APPLE__)
+fn window_register_numeric_id(window: void*, id: int) -> void { darwin_window_register_numeric_id(window, id); }
+@cfg(_WIN32)
+fn window_register_numeric_id(window: void*, id: int) -> void { windows_window_register_numeric_id(window, id); }
+
+extern fn app_get_active() -> void*;
+
+fn window_manager_trigger_on_ready(id: int) -> void {
+    let app = (App*)app_get_active();
+    if app != NULL {
+        app.window.trigger_on_ready(id);
+    }
+}
+
+raw {
+    #define ZAPP_MAX_WINDOW_CALLBACKS 64
+    static void (*zapp_window_on_ready_cbs[ZAPP_MAX_WINDOW_CALLBACKS])(void) = {0};
+
+    void zapp_window_set_on_ready(int id, void (*cb)(void)) {
+        if (id >= 0 && id < ZAPP_MAX_WINDOW_CALLBACKS) {
+            zapp_window_on_ready_cbs[id] = cb;
+        }
+    }
+
+    void zapp_window_trigger_on_ready(int id) {
+        if (id >= 0 && id < ZAPP_MAX_WINDOW_CALLBACKS && zapp_window_on_ready_cbs[id] != NULL) {
+            zapp_window_on_ready_cbs[id]();
+        }
+    }
+}
