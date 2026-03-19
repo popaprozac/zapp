@@ -130,6 +130,7 @@ raw {
     extern char* service_get_bindings_manifest_json(void);
     extern const char* zapp_build_initial_url(void);
     extern const char* zapp_windows_webview_bootstrap_script(void);
+    extern const char* zapp_win_id_for_hwnd(HWND hwnd);
 
     // ---------------------------------------------------------------------------
     // Per-window WebView2 state
@@ -583,6 +584,18 @@ raw {
         ZappMessageHandler* msgHandler = zapp_create_message_handler();
         ICoreWebView2_add_WebMessageReceived(webview, (ICoreWebView2WebMessageReceivedEventHandler*)msgHandler, &token);
 
+        // Set transparent background so there's no white flash before content loads
+        {
+            ICoreWebView2Controller2* ctrl2 = NULL;
+            HRESULT bghr = ICoreWebView2Controller_QueryInterface(
+                controller, &IID_ICoreWebView2Controller2, (void**)&ctrl2);
+            if (SUCCEEDED(bghr) && ctrl2) {
+                COREWEBVIEW2_COLOR transparent = {0, 0, 0, 0};
+                ICoreWebView2Controller2_put_DefaultBackgroundColor(ctrl2, transparent);
+                ICoreWebView2Controller2_Release(ctrl2);
+            }
+        }
+
         // Register NavigationCompleted handler (IsVisible toggle workaround)
         ZappNavHandler* navHandler = (ZappNavHandler*)calloc(1, sizeof(ZappNavHandler));
         navHandler->lpVtbl = &znh_vtbl;
@@ -641,10 +654,11 @@ raw {
         free(wOwnerScript);
 
         // Inject window ID (used by fireReady to identify which window is ready)
+        const char* registeredId = zapp_win_id_for_hwnd(hwnd);
         char windowIdScript[256];
         snprintf(windowIdScript, sizeof(windowIdScript),
-            "(function(){globalThis[Symbol.for('zapp.windowId')]='win-%p';})();",
-            (void*)hwnd
+            "(function(){globalThis[Symbol.for('zapp.windowId')]='%s';})();",
+            registeredId ? registeredId : "unknown"
         );
         wchar_t* wWindowIdScript = zapp_utf8_to_wide(windowIdScript);
         ICoreWebView2_AddScriptToExecuteOnDocumentCreated(webview, wWindowIdScript, NULL);

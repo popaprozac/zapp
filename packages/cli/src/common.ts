@@ -54,10 +54,10 @@ export const nativeIncludeArgs = (): string[] => {
  * Returns the path to the library, or null if the build dir isn't ready.
  * The library is cached in .zapp/qjs/ and only rebuilt when source changes.
  */
-export const ensureQjsLib = async (root: string): Promise<string> => {
+export const ensureQjsLib = async (root: string, mode: "dev" | "release" = "release"): Promise<string> => {
   const nd = resolveNativeDir();
   const qjsVendor = path.join(nd, "vendor", "quickjs-ng");
-  const qjsBuildDir = path.join(root, ".zapp", "qjs");
+  const qjsBuildDir = path.join(root, ".zapp", "qjs", mode);
   await mkdir(qjsBuildDir, { recursive: true });
 
   const libPath = path.join(qjsBuildDir, "libqjs.a");
@@ -78,10 +78,12 @@ export const ensureQjsLib = async (root: string): Promise<string> => {
 
   if (!needsRebuild) return libPath;
 
-  process.stdout.write("[zapp] compiling QuickJS...\n");
+  process.stdout.write(`[zapp] compiling QuickJS (${mode})...\n`);
 
   const cc = process.platform === "win32" ? "gcc" : "cc";
-  const cflags = ["-Oz", "-flto", "-c", `-I${qjsVendor}`];
+  const cflags = mode === "release"
+    ? ["-Oz", "-flto", "-c", `-I${qjsVendor}`]
+    : ["-O2", "-c", `-I${qjsVendor}`];
   if (process.platform === "win32") {
     cflags.push("-DUNICODE", "-D_UNICODE");
   }
@@ -94,7 +96,7 @@ export const ensureQjsLib = async (root: string): Promise<string> => {
     await runCmd(cc, [...cflags, srcPath, "-o", objPath]);
   }
 
-  const ar = process.platform === "win32" ? "gcc-ar" : "ar";
+  const ar = (mode === "release" && process.platform === "win32") ? "gcc-ar" : "ar";
   await runCmd(ar, ["rcs", libPath, ...objectFiles]);
 
   return libPath;

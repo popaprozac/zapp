@@ -207,7 +207,7 @@ export const runBuild = async ({
 
   process.stdout.write("[zapp] building native binary\n");
   await mkdir(path.dirname(nativeOut), { recursive: true });
-  const qjsLib = await ensureQjsLib(root);
+  const qjsLib = await ensureQjsLib(root, isDebug ? "dev" : "release");
   const zcArgs = ["build", buildFile, buildConfigFile, ...nativeIncludeArgs()];
   
   // Always generate assets file (provides empty placeholder when not embedding)

@@ -49,4 +49,5 @@ Window.current().on(WindowEvent.BLUR, (payload) => {
 
 Window.current().on(WindowEvent.READY, () => {
   console.log("window ready");
+  Window.current().show();
 })

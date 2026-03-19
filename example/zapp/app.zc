@@ -4,8 +4,11 @@ fn ping_service(app: App*, args: string) -> string {
     return args;
 }
 
-fn on_window_ready() -> void {
+fn on_window_ready(id: int, handle: void*) -> void {
+    let win = Window{id: id, handle: handle};
     println "[native] window ready callback fired!";
+    // Users who create windows with visible: false can call win.show() here
+    // win.show();
 }
 
 fn on_window_focus() -> void {
@@ -30,6 +33,7 @@ fn run_app() -> int {
     let opts = window_options_default("Native Window");
     opts.width = 800;
     opts.height = 600;
+    opts.visible = false;
     let win = app.window.create(&opts);
     win.on_ready(on_window_ready);
     win.on(WindowEvent.FOCUS, on_window_focus);
@@ -40,6 +44,7 @@ fn run_app() -> int {
     opts2.height = 600;
     opts2.x = 100;
     opts2.y = 100;
+    opts2.visible = false;
     let win2 = app.window.create(&opts2);
     win2.on_ready(on_window_ready);
     win2.on(WindowEvent.FOCUS, on_window_focus);

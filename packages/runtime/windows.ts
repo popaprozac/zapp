@@ -21,6 +21,8 @@ type WindowEventHandler = (payload?: WindowEventPayload) => void;
 
 export type WindowHandle = {
   readonly id: string;
+  show(): void;
+  hide(): void;
   minimize(): void;
   maximize(): void;
   unminimize(): void;
@@ -112,6 +114,8 @@ function makeHandle(windowId: string): WindowHandle {
 
   return {
     get id() { return windowId; },
+    show() { action("show"); },
+    hide() { action("hide"); },
     minimize() { action("minimize"); },
     maximize() { action("maximize"); },
     unminimize() { action("unminimize"); },

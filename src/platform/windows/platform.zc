@@ -114,8 +114,8 @@ raw {
 
     static BOOL WINAPI zapp_console_ctrl_handler(DWORD ctrlType) {
         if (ctrlType == CTRL_C_EVENT || ctrlType == CTRL_BREAK_EVENT) {
-            if (app_should_quit()) {
-                PostQuitMessage(0);
+            if (zapp_ui_thread_id) {
+                PostThreadMessageW(zapp_ui_thread_id, WM_QUIT, 0, 0);
             }
             return TRUE;
         }

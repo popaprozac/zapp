@@ -8107,10 +8107,10 @@ var nativeIncludeArgs = () => {
   }
   return args;
 };
-var ensureQjsLib = async (root) => {
+var ensureQjsLib = async (root, mode = "release") => {
   const nd = resolveNativeDir();
   const qjsVendor = path.join(nd, "vendor", "quickjs-ng");
-  const qjsBuildDir = path.join(root, ".zapp", "qjs");
+  const qjsBuildDir = path.join(root, ".zapp", "qjs", mode);
   await mkdir(qjsBuildDir, { recursive: true });
   const libPath = path.join(qjsBuildDir, "libqjs.a");
   const sourceFiles = ["quickjs.c", "quickjs-libc.c", "dtoa.c", "libregexp.c", "libunicode.c"];
@@ -8128,10 +8128,10 @@ var ensureQjsLib = async (root) => {
   }
   if (!needsRebuild)
     return libPath;
-  process2.stdout.write(`[zapp] compiling QuickJS...
+  process2.stdout.write(`[zapp] compiling QuickJS (${mode})...
 `);
   const cc = process2.platform === "win32" ? "gcc" : "cc";
-  const cflags = ["-Oz", "-flto", "-c", `-I${qjsVendor}`];
+  const cflags = mode === "release" ? ["-Oz", "-flto", "-c", `-I${qjsVendor}`] : ["-O2", "-c", `-I${qjsVendor}`];
   if (process2.platform === "win32") {
     cflags.push("-DUNICODE", "-D_UNICODE");
   }
@@ -8142,7 +8142,7 @@ var ensureQjsLib = async (root) => {
     objectFiles.push(objPath);
     await runCmd(cc, [...cflags, srcPath, "-o", objPath]);
   }
-  const ar = process2.platform === "win32" ? "gcc-ar" : "ar";
+  const ar = mode === "release" && process2.platform === "win32" ? "gcc-ar" : "ar";
   await runCmd(ar, ["rcs", libPath, ...objectFiles]);
   return libPath;
 };
@@ -8702,7 +8702,7 @@ var runBuild = async ({
   process5.stdout.write(`[zapp] building native binary
 `);
   await mkdir4(path5.dirname(nativeOut), { recursive: true });
-  const qjsLib = await ensureQjsLib(root);
+  const qjsLib = await ensureQjsLib(root, isDebug ? "dev" : "release");
   const zcArgs = ["build", buildFile, buildConfigFile, ...nativeIncludeArgs()];
   const assetsFile = await generateAssetsZc(root, manifest, assetDir);
   if (await Bun.file(assetsFile).exists())
@@ -8817,8 +8817,8 @@ var runDev = async ({
       logLevel
     });
     await mkdir5(path6.dirname(nativeOut), { recursive: true });
-    const qjsLib = await ensureQjsLib(root);
-    const zcArgs = ["build", buildFile, buildConfigFile, "-DZAPP_BUILD_DEV", ...nativeIncludeArgs()];
+    const qjsLib = await ensureQjsLib(root, "dev");
+    const zcArgs = ["build", buildFile, buildConfigFile, "-DZAPP_BUILD_DEV", "--debug", ...nativeIncludeArgs()];
     const manifest = embedAssets ? await buildAssetManifest({ assetDir, withBrotli }) : { v: 1, generatedAt: new Date().toISOString(), assets: [], embedded: false };
     const assetsFile = await generateAssetsZc(root, manifest, assetDir);
     zcArgs.push(assetsFile);

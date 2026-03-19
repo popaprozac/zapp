@@ -49,8 +49,8 @@ impl Window {
         zapp_window_set_event_cb(self.id, event_id, cb);
     }
 
-    fn on_ready(self, cb: fn*() -> void) -> void {
-        zapp_window_set_on_ready(self.id, cb);
+    fn on_ready(self, cb: fn*(int, void*) -> void) -> void {
+        zapp_window_set_on_ready(self.id, self.handle, cb);
     }
 
     fn minimize(self) -> void {
@@ -86,6 +86,18 @@ impl Window {
     fn toggle_maximize(self) -> void {
         if self.handle != NULL {
             window_toggle_maximize(self.handle);
+        }
+    }
+
+    fn show(self) -> void {
+        if self.handle != NULL {
+            window_show(self.handle);
+        }
+    }
+
+    fn hide(self) -> void {
+        if self.handle != NULL {
+            window_hide(self.handle);
         }
     }
 
@@ -143,8 +155,8 @@ impl WindowManager {
         };
     }
 
-    fn set_on_ready(self, id: int, cb: fn*() -> void) -> void {
-        zapp_window_set_on_ready(id, cb);
+    fn set_on_ready(self, id: int, handle: void*, cb: fn*(int, void*) -> void) -> void {
+        zapp_window_set_on_ready(id, handle, cb);
     }
 
     fn trigger_on_ready(self, id: int) -> void {
@@ -274,6 +286,16 @@ fn window_register_numeric_id(window: void*, id: int) -> void { darwin_window_re
 @cfg(windows)
 fn window_register_numeric_id(window: void*, id: int) -> void { windows_window_register_numeric_id(window, id); }
 
+@cfg(apple)
+fn window_show(window: void*) -> void { darwin_window_show(window); }
+@cfg(windows)
+fn window_show(window: void*) -> void { windows_window_show(window); }
+
+@cfg(apple)
+fn window_hide(window: void*) -> void { darwin_window_hide(window); }
+@cfg(windows)
+fn window_hide(window: void*) -> void { windows_window_hide(window); }
+
 fn window_manager_trigger_on_ready(id: int) -> void {
     let app = (App*)app_get_active();
     if app != NULL {
@@ -287,18 +309,20 @@ raw {
     #define ZAPP_MAX_WINDOW_EVENT_TYPES 11
     #endif
 
-    static void (*zapp_window_on_ready_cbs[ZAPP_MAX_WINDOW_CALLBACKS])(void) = {0};
+    static void (*zapp_window_on_ready_cbs[ZAPP_MAX_WINDOW_CALLBACKS])(int, void*) = {0};
+    static void* zapp_window_on_ready_handles[ZAPP_MAX_WINDOW_CALLBACKS] = {0};
     static void (*zapp_window_event_cbs[ZAPP_MAX_WINDOW_CALLBACKS][ZAPP_MAX_WINDOW_EVENT_TYPES])(void) = {{0}};
 
-    void zapp_window_set_on_ready(int id, void (*cb)(void)) {
+    void zapp_window_set_on_ready(int id, void* handle, void (*cb)(int, void*)) {
         if (id >= 0 && id < ZAPP_MAX_WINDOW_CALLBACKS) {
             zapp_window_on_ready_cbs[id] = cb;
+            zapp_window_on_ready_handles[id] = handle;
         }
     }
 
     void zapp_window_trigger_on_ready(int id) {
         if (id >= 0 && id < ZAPP_MAX_WINDOW_CALLBACKS && zapp_window_on_ready_cbs[id] != NULL) {
-            zapp_window_on_ready_cbs[id]();
+            zapp_window_on_ready_cbs[id](id, zapp_window_on_ready_handles[id]);
         }
     }
 

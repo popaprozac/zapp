@@ -111,8 +111,8 @@ export const runDev = async ({
     });
 
     await mkdir(path.dirname(nativeOut), { recursive: true });
-    const qjsLib = await ensureQjsLib(root);
-    const zcArgs = ["build", buildFile, buildConfigFile, "-DZAPP_BUILD_DEV", ...nativeIncludeArgs()];
+    const qjsLib = await ensureQjsLib(root, "dev");
+    const zcArgs = ["build", buildFile, buildConfigFile, "-DZAPP_BUILD_DEV", "--debug", ...nativeIncludeArgs()];
     const manifest = embedAssets
       ? await buildAssetManifest({ assetDir, withBrotli })
       : { v: 1, generatedAt: new Date().toISOString(), assets: [] as any[], embedded: false };
