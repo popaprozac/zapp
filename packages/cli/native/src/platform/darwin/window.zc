@@ -175,6 +175,40 @@ fn darwin_window_destroy(window: void*) -> void {
     }
 }
 
+fn darwin_window_show(window: void*) -> void {
+    raw {
+#ifdef __APPLE__
+        @autoreleasepool {
+            void (^work)(void) = ^{
+                NSWindow* nsWindow = (__bridge NSWindow*)window;
+                if (nsWindow) {
+                    [nsWindow makeKeyAndOrderFront:nil];
+                }
+            };
+            if ([NSThread isMainThread]) { work(); }
+            else { dispatch_sync(dispatch_get_main_queue(), work); }
+        }
+#endif
+    }
+}
+
+fn darwin_window_hide(window: void*) -> void {
+    raw {
+#ifdef __APPLE__
+        @autoreleasepool {
+            void (^work)(void) = ^{
+                NSWindow* nsWindow = (__bridge NSWindow*)window;
+                if (nsWindow) {
+                    [nsWindow orderOut:nil];
+                }
+            };
+            if ([NSThread isMainThread]) { work(); }
+            else { dispatch_sync(dispatch_get_main_queue(), work); }
+        }
+#endif
+    }
+}
+
 fn darwin_window_minimize(window: void*) -> void {
     raw {
 #ifdef __APPLE__
@@ -648,6 +682,10 @@ raw {
 
             if ([actionStr isEqualToString:@"close"]) {
                 [nsWindow close];
+            } else if ([actionStr isEqualToString:@"show"]) {
+                [nsWindow makeKeyAndOrderFront:nil];
+            } else if ([actionStr isEqualToString:@"hide"]) {
+                [nsWindow orderOut:nil];
             } else if ([actionStr isEqualToString:@"minimize"]) {
                 [nsWindow miniaturize:nil];
             } else if ([actionStr isEqualToString:@"maximize"]) {

@@ -130,6 +130,7 @@ raw {
     extern char* service_get_bindings_manifest_json(void);
     extern const char* zapp_build_initial_url(void);
     extern const char* zapp_windows_webview_bootstrap_script(void);
+    extern const char* zapp_win_id_for_hwnd(HWND hwnd);
 
     // ---------------------------------------------------------------------------
     // Per-window WebView2 state
@@ -137,21 +138,6 @@ raw {
 
     #define ZAPP_MAX_WINDOWS 64
     #define WM_ZAPP_EVAL_JS (WM_APP + 1)
-
-    #ifndef ZAPP_WINDOW_ENTRY_DEFINED
-    #define ZAPP_WINDOW_ENTRY_DEFINED
-    typedef struct ZappWindowEntry {
-        HWND hwnd;
-        ICoreWebView2Controller* controller;
-        ICoreWebView2* webview;
-        char ownerId[64];
-        BOOL in_use;
-        BOOL inspectable;
-        BOOL bridgeReady;
-        BOOL pendingFocusEvent;
-        WINDOWPLACEMENT prevPlacement;
-    } ZappWindowEntry;
-    #endif
 
     static ZappWindowEntry zapp_windows[ZAPP_MAX_WINDOWS] = {0};
 
@@ -598,6 +584,18 @@ raw {
         ZappMessageHandler* msgHandler = zapp_create_message_handler();
         ICoreWebView2_add_WebMessageReceived(webview, (ICoreWebView2WebMessageReceivedEventHandler*)msgHandler, &token);
 
+        // Set transparent background so there's no white flash before content loads
+        {
+            ICoreWebView2Controller2* ctrl2 = NULL;
+            HRESULT bghr = ICoreWebView2Controller_QueryInterface(
+                controller, &IID_ICoreWebView2Controller2, (void**)&ctrl2);
+            if (SUCCEEDED(bghr) && ctrl2) {
+                COREWEBVIEW2_COLOR transparent = {0, 0, 0, 0};
+                ICoreWebView2Controller2_put_DefaultBackgroundColor(ctrl2, transparent);
+                ICoreWebView2Controller2_Release(ctrl2);
+            }
+        }
+
         // Register NavigationCompleted handler (IsVisible toggle workaround)
         ZappNavHandler* navHandler = (ZappNavHandler*)calloc(1, sizeof(ZappNavHandler));
         navHandler->lpVtbl = &znh_vtbl;
@@ -656,10 +654,11 @@ raw {
         free(wOwnerScript);
 
         // Inject window ID (used by fireReady to identify which window is ready)
+        const char* registeredId = zapp_win_id_for_hwnd(hwnd);
         char windowIdScript[256];
         snprintf(windowIdScript, sizeof(windowIdScript),
-            "(function(){globalThis[Symbol.for('zapp.windowId')]='win-%p';})();",
-            (void*)hwnd
+            "(function(){globalThis[Symbol.for('zapp.windowId')]='%s';})();",
+            registeredId ? registeredId : "unknown"
         );
         wchar_t* wWindowIdScript = zapp_utf8_to_wide(windowIdScript);
         ICoreWebView2_AddScriptToExecuteOnDocumentCreated(webview, wWindowIdScript, NULL);
@@ -870,16 +869,18 @@ raw {
     void zapp_windows_webview_resize(HWND hwnd) {
         ZappWindowEntry* entry = zapp_window_entry_for_hwnd(hwnd);
         if (entry && entry->controller) {
+            ICoreWebView2Controller* ctrl = (ICoreWebView2Controller*)entry->controller;
             RECT bounds;
             GetClientRect(hwnd, &bounds);
-            ICoreWebView2Controller_put_Bounds(entry->controller, bounds);
+            ICoreWebView2Controller_put_Bounds(ctrl, bounds);
         }
     }
 
     void zapp_windows_webview_notify_position(HWND hwnd) {
         ZappWindowEntry* entry = zapp_window_entry_for_hwnd(hwnd);
         if (entry && entry->controller) {
-            ICoreWebView2Controller_NotifyParentWindowPositionChanged(entry->controller);
+            ICoreWebView2Controller_NotifyParentWindowPositionChanged(
+                (ICoreWebView2Controller*)entry->controller);
         }
     }
 
@@ -894,11 +895,12 @@ raw {
             }
             zapp_win_unregister_by_hwnd(hwnd);
             if (entry->controller) {
-                ICoreWebView2Controller_Close(entry->controller);
-                ICoreWebView2Controller_Release(entry->controller);
+                ICoreWebView2Controller* ctrl = (ICoreWebView2Controller*)entry->controller;
+                ICoreWebView2Controller_Close(ctrl);
+                ICoreWebView2Controller_Release(ctrl);
             }
             if (entry->webview) {
-                ICoreWebView2_Release(entry->webview);
+                ICoreWebView2_Release((ICoreWebView2*)entry->webview);
             }
             entry->in_use = FALSE;
         }
@@ -915,6 +917,7 @@ raw {
     void zapp_windows_webview_navigate(HWND hwnd, const char* url_utf8) {
         ZappWindowEntry* entry = zapp_window_entry_for_hwnd(hwnd);
         if (entry && entry->webview && url_utf8) {
+            ICoreWebView2* webview = (ICoreWebView2*)entry->webview;
             const char* initialUrl = zapp_build_initial_url();
             char resolved[2048];
             if (strncmp(url_utf8, "http://", 7) == 0 || strncmp(url_utf8, "https://", 8) == 0 || strncmp(url_utf8, "zapp://", 7) == 0) {
@@ -931,26 +934,24 @@ raw {
             }
             resolved[sizeof(resolved) - 1] = '\0';
             wchar_t* wUrl = zapp_utf8_to_wide(resolved);
-            ICoreWebView2_Navigate(entry->webview, wUrl);
+            ICoreWebView2_Navigate(webview, wUrl);
             free(wUrl);
         }
     }
 
-    // Execute JS in a specific window's webview
     void zapp_windows_webview_eval(HWND hwnd, const wchar_t* js) {
         ZappWindowEntry* entry = zapp_window_entry_for_hwnd(hwnd);
         if (entry && entry->webview) {
-            ICoreWebView2_ExecuteScript(entry->webview, js, NULL);
+            ICoreWebView2_ExecuteScript((ICoreWebView2*)entry->webview, js, NULL);
         }
     }
 
-    // Execute JS in ALL webviews on the UI thread.
-    // Called from ZappWindowProc via WM_ZAPP_EVAL_JS.
     void zapp_windows_webview_eval_all_ui(wchar_t* wJs) {
         if (!wJs) return;
         for (int i = 0; i < ZAPP_MAX_WINDOWS; i++) {
             if (zapp_windows[i].in_use && zapp_windows[i].webview) {
-                ICoreWebView2_ExecuteScript(zapp_windows[i].webview, wJs, NULL);
+                ICoreWebView2_ExecuteScript(
+                    (ICoreWebView2*)zapp_windows[i].webview, wJs, NULL);
             }
         }
         free(wJs);
