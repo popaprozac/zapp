@@ -1,6 +1,6 @@
 // AUTO-GENERATED FILE. DO NOT EDIT.
 // Source of truth: `packages/bootstrap/src/worker.ts`
-// Generated: `2026-03-19T00:30:30.061Z`
+// Generated: `2026-03-19T20:57:42.398Z`
 
 raw {
     const char* zapp_windows_worker_bootstrap_script(void) {

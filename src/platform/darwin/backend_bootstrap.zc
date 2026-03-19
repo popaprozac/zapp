@@ -1,6 +1,6 @@
 // AUTO-GENERATED FILE. DO NOT EDIT.
 // Source of truth: `packages/bootstrap/src/backend.ts`
-// Generated: `2026-03-19T00:30:30.060Z`
+// Generated: `2026-03-19T20:57:42.397Z`
 
 raw {
     const char* zapp_darwin_backend_bootstrap_script(void) {

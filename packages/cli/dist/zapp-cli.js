@@ -42,7 +42,7 @@ var require_get_caller_file = __commonJS((exports, module) => {
 
 // node_modules/esbuild/lib/main.js
 var require_main = __commonJS((exports, module) => {
-  var __dirname = "/Users/zach/code/zapp/packages/cli/node_modules/esbuild/lib", __filename = "/Users/zach/code/zapp/packages/cli/node_modules/esbuild/lib/main.js";
+  var __dirname = "/Users/zach.botterman/git-personal/zapp/packages/cli/node_modules/esbuild/lib", __filename = "/Users/zach.botterman/git-personal/zapp/packages/cli/node_modules/esbuild/lib/main.js";
   var __defProp2 = Object.defineProperty;
   var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
   var __getOwnPropNames2 = Object.getOwnPropertyNames;
@@ -5413,14 +5413,14 @@ function usage(yargs, shim2) {
     const logger = yargs.getInternalMethods().getLoggerInstance();
     if (fails.length) {
       for (let i = fails.length - 1;i >= 0; --i) {
-        const fail2 = fails[i];
-        if (isBoolean(fail2)) {
+        const fail = fails[i];
+        if (isBoolean(fail)) {
           if (err)
             throw err;
           else if (msg)
             throw Error(msg);
         } else {
-          fail2(msg, err, self);
+          fail(msg, err, self);
         }
       }
     } else {
@@ -5477,7 +5477,7 @@ function usage(yargs, shim2) {
     examples.push([cmd, description || ""]);
   };
   let commands = [];
-  self.command = function command2(cmd, description, isDefault, aliases, deprecated = false) {
+  self.command = function command(cmd, description, isDefault, aliases, deprecated = false) {
     if (isDefault) {
       commands = commands.map((cmdArray) => {
         cmdArray[2] = false;

@@ -7,6 +7,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLI_DIR="$SCRIPT_DIR/packages/cli"
+VITE_DIR="$SCRIPT_DIR/packages/vite"
 NATIVE_DIR="$CLI_DIR/native"
 SRC_DIR="$SCRIPT_DIR/src"
 VENDOR_DIR="$SCRIPT_DIR/vendor"
@@ -39,6 +40,13 @@ rm -rf "$NATIVE_DIR/src/cli/package.json"
 rm -rf "$NATIVE_DIR/src/tools"
 rm -rf "$NATIVE_DIR/src/generated"
 
+# Run Bun install on packages
+echo "[zapp] running Bun install on packages..."
+cd "$CLI_DIR"
+bun install
+cd "$VITE_DIR"
+bun install
+
 # Sync vendor/ directory (exclude .git, build, docs)
 echo "[zapp] syncing native/vendor/..."
 rm -rf "$NATIVE_DIR/vendor"
@@ -63,6 +71,11 @@ if [[ -d "$VENDOR_DIR/webview2" ]]; then
         --exclude '.git' \
         "$VENDOR_DIR/webview2/" "$NATIVE_DIR/vendor/webview2/"
 fi
+
+# Ensure git submodules are updated
+echo "[zapp] updating git submodules..."
+cd "$VENDOR_DIR/quickjs-ng"
+git submodule update --init --recursive
 
 # Rebuild CLI
 echo "[zapp] rebuilding CLI..."

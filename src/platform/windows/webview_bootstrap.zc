@@ -1,6 +1,6 @@
 // AUTO-GENERATED FILE. DO NOT EDIT.
 // Source of truth: `packages/bootstrap/src/webview_windows.ts`
-// Generated: `2026-03-19T00:30:30.062Z`
+// Generated: `2026-03-19T20:57:42.399Z`
 
 raw {
     const char* zapp_windows_webview_bootstrap_script(void) {

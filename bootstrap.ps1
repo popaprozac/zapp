@@ -44,6 +44,13 @@ foreach ($path in $cleanupPaths) {
     if (Test-Path $path) { Remove-Item -Recurse -Force $path }
 }
 
+# Run Bun install on packages
+Write-Host "[zapp] running Bun install on packages..."
+Set-Location $CliDir
+bun install
+Set-Location $ViteDir
+bun install
+
 # Sync vendor/ directory
 Write-Host "[zapp] syncing native\vendor\..."
 if (Test-Path "$NativeDir\vendor") { Remove-Item -Recurse -Force "$NativeDir\vendor" }
@@ -77,6 +84,11 @@ if (Test-Path $wvSrc) {
     New-Item -ItemType Directory -Force -Path $wvDst | Out-Null
     Copy-Item -Path "$wvSrc\*" -Destination $wvDst -Recurse -Force -Exclude ".git"
 }
+
+# Ensure git submodules are updated
+Write-Host "[zapp] updating git submodules..."
+Set-Location $VendorDir\quickjs-ng
+git submodule update --init --recursive
 
 # Rebuild CLI
 Write-Host "[zapp] rebuilding CLI..."

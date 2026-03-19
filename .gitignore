@@ -19,3 +19,5 @@ node_modules
 .zapp/
 .zapp-workers/
 bin/
+packages/cli/native
+packages/cli/dist
