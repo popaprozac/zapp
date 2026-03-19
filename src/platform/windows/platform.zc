@@ -31,6 +31,14 @@ raw {
     extern void* app_get_active(void);
     static DWORD zapp_ui_thread_id = 0;
 
+    #ifndef ZAPP_EVENT_WINDOW_FOCUS
+    #define ZAPP_EVENT_WINDOW_FOCUS 1
+    #endif
+    #ifndef ZAPP_EVENT_WINDOW_BLUR
+    #define ZAPP_EVENT_WINDOW_BLUR  2
+    #endif
+
+    typedef struct ZappWindowEntry ZappWindowEntry;
     extern const char* zapp_win_id_for_hwnd(HWND hwnd);
     extern int zapp_window_get_numeric_id(const char* window_id);
     extern void zapp_window_trigger_event(int id, int event_id);
