@@ -46,10 +46,13 @@
 
 - [x] Add logging system (unified, colored, log levels)
 - [x] Windows log conversion (fixed with separate raw blocks)
-- [ ] File logging support (backlog)
+- [x] Window Events — focus, blur, ready (macOS & Windows, native + frontend)
+- [x] Window.on() API — `win.on(WindowEvent.FOCUS, cb)` (no app pointer needed)
+- [x] WindowEvent dot-access — struct-based `def` for `WindowEvent.FOCUS` syntax
+- [x] Windows event parity — WM_ACTIVATE, bridgeReady buffering, HWND lookup
+- [ ] File logging support
 - [ ] Multi-window IPC between windows
 - [ ] Explore trait-based worker engine abstraction (Option C)
-- [x] Window Events Phase 1 (focus, blur with typed API)
 - [ ] Cancellable window events (close prevention)
 - [ ] Additional window events (resize, move, minimize, maximize, restore, fullscreen)
 - [ ] App events (started, shutdown)
@@ -59,4 +62,4 @@
 ## Open Questions
 
 - [ ] Can we use traits+opaque structs to unify JSC/QJS engine selection?
-- [ ] TODO: Explore Option C for worker engine unification
+- [ ] Explore Option C for worker engine unification

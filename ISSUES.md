@@ -69,38 +69,31 @@ void zapp_windows_webview_create(HWND hwnd, BOOL inspectable, const char* window
 
 ## Future Enhancements
 
-### Window Event Listeners (Like Wails)
+### Additional Window Events
+- [ ] resize, move, minimize, maximize, restore, fullscreen, unfullscreen
+- [ ] Extend `zapp_get_window_event_name_win()` (Windows) and macOS `zapp_dispatch_window_event_to_bridge()` switch cases
+- [ ] Cancellable events (e.g. close prevention)
 
-**Reference:** https://v3alpha.wails.io/reference/window/#window-events
-
-**Current:** Single `on_ready` callback per window
-
-**Future:** Add event listener API for windows:
-- `window.on("ready", callback)`
-- `window.on("close", callback)`
-- `window.on("focus", callback)`
-- `window.on("blur", callback)`
-- etc.
-
-This would allow multiple listeners per event type, similar to Wails.
+### App Events
+- [ ] `AppEvent.STARTED`, `AppEvent.SHUTDOWN` (constants already defined in `events.zc`)
 
 ---
 
-## on_ready Callback Design
+## Completed: Window Event System
 
-**Current Design:**
-- Single callback per window (not multiple listeners)
-- Settable from:
-  - Native Zen-C: `win.on_ready(&app.window, callback)`
-  - TypeScript: `Window.onReady(windowId, callback)` via bridge
+**Implemented (macOS & Windows):**
+- `win.on(WindowEvent.FOCUS, callback)` — no app pointer needed
+- `win.on_ready(callback)` — fires when webview bridge is ready
+- Single callback per event per window, stored in static arrays
+- Focus/blur events dispatch to both native callbacks and JS bridge
+- `bridgeReady` + `pendingFocusEvent` buffering for events arriving before JS is loaded
 
-**Callback Storage:** Static array indexed by numeric window ID:
+**Callback Storage:** Static arrays indexed by numeric window ID:
 ```c
 #define ZAPP_MAX_WINDOW_CALLBACKS 64
+static void (*zapp_window_event_cbs[ZAPP_MAX_WINDOW_CALLBACKS][ZAPP_MAX_WINDOW_EVENT_TYPES])(void) = {{0}};
 static void (*zapp_window_on_ready_cbs[ZAPP_MAX_WINDOW_CALLBACKS])(void) = {0};
 ```
-
-**Setting a callback replaces any previous callback for that window.**
 
 ---
 
@@ -111,19 +104,14 @@ static void (*zapp_window_on_ready_cbs[ZAPP_MAX_WINDOW_CALLBACKS])(void) = {0};
 - Prod mode: `false` (not inspectable by default)
 - User can override via `AppConfig` in native code or `App.configure()` in TypeScript
 
-**Usage in native code:**
-```zc
-let config = AppConfig{ 
-    name: "My App",
-    webContentInspectable: app_get_default_web_content_inspectable(), // Use build default
-    ...
-};
-```
+---
 
-**Usage in TypeScript:**
-```typescript
-App.configure({
-    name: "My App",
-    // webContentInspectable not set = uses build default
-});
-```
+## Cross-Platform Compilation Notes
+
+### Zen-C raw block ordering
+When `.zc` files compile into one `.c` file, `raw {}` blocks are emitted in import-tree depth-first order. This causes issues when a type or macro is used in a file that's emitted before the file that defines it.
+
+**Patterns to follow:**
+- `#define` macros: always wrap in `#ifndef` guards
+- Struct typedefs shared across files: use tagged structs (`typedef struct Foo { ... } Foo;`) and wrap in `#ifndef DEFINED` guards
+- Example: `ZappWindowEntry` is defined in `window.zc` (emitted first) with `#ifndef ZAPP_WINDOW_ENTRY_DEFINED`, and the same guard skips the duplicate in `webview.zc` (emitted later)
