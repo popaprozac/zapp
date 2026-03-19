@@ -138,7 +138,7 @@ raw {
     #define ZAPP_MAX_WINDOWS 64
     #define WM_ZAPP_EVAL_JS (WM_APP + 1)
 
-    typedef struct {
+    typedef struct ZappWindowEntry {
         HWND hwnd;
         ICoreWebView2Controller* controller;
         ICoreWebView2* webview;

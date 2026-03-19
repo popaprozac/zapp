@@ -38,7 +38,6 @@ raw {
     #define ZAPP_EVENT_WINDOW_BLUR  2
     #endif
 
-    typedef struct ZappWindowEntry ZappWindowEntry;
     extern const char* zapp_win_id_for_hwnd(HWND hwnd);
     extern int zapp_window_get_numeric_id(const char* window_id);
     extern void zapp_window_trigger_event(int id, int event_id);

@@ -322,6 +322,16 @@ raw {
         zapp_backend_dispatch_window_result(payload_json);
     }
 
+    #ifndef ZAPP_EVENT_WINDOW_READY
+    #define ZAPP_EVENT_WINDOW_READY 0
+    #endif
+    #ifndef ZAPP_EVENT_WINDOW_FOCUS
+    #define ZAPP_EVENT_WINDOW_FOCUS 1
+    #endif
+    #ifndef ZAPP_EVENT_WINDOW_BLUR
+    #define ZAPP_EVENT_WINDOW_BLUR  2
+    #endif
+
     static const char* zapp_get_window_event_name_win(int event_id) {
         switch (event_id) {
             case ZAPP_EVENT_WINDOW_READY: return "ready";
