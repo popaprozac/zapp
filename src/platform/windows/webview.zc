@@ -138,6 +138,8 @@ raw {
     #define ZAPP_MAX_WINDOWS 64
     #define WM_ZAPP_EVAL_JS (WM_APP + 1)
 
+    #ifndef ZAPP_WINDOW_ENTRY_DEFINED
+    #define ZAPP_WINDOW_ENTRY_DEFINED
     typedef struct ZappWindowEntry {
         HWND hwnd;
         ICoreWebView2Controller* controller;
@@ -149,6 +151,7 @@ raw {
         BOOL pendingFocusEvent;
         WINDOWPLACEMENT prevPlacement;
     } ZappWindowEntry;
+    #endif
 
     static ZappWindowEntry zapp_windows[ZAPP_MAX_WINDOWS] = {0};
 

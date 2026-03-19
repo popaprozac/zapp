@@ -5,6 +5,21 @@ raw {
     #include <windows.h>
     #include <stdio.h>
 
+    #ifndef ZAPP_WINDOW_ENTRY_DEFINED
+    #define ZAPP_WINDOW_ENTRY_DEFINED
+    typedef struct ZappWindowEntry {
+        HWND hwnd;
+        void* controller;
+        void* webview;
+        char ownerId[64];
+        BOOL in_use;
+        BOOL inspectable;
+        BOOL bridgeReady;
+        BOOL pendingFocusEvent;
+        WINDOWPLACEMENT prevPlacement;
+    } ZappWindowEntry;
+    #endif
+
     extern const wchar_t* ZAPP_WINDOW_CLASS;
     extern void zapp_windows_webview_create(HWND hwnd, BOOL inspectable);
 
@@ -169,7 +184,7 @@ fn windows_window_set_fullscreen(window: void*, on: bool) -> void {
     #ifdef _WIN32
         HWND hwnd = (HWND)window;
         if (!hwnd || !IsWindow(hwnd)) return;
-        extern ZappWindowEntry* zapp_window_entry_for_hwnd(HWND hwnd);
+        extern ZappWindowEntry* zapp_window_entry_for_hwnd(HWND);
         ZappWindowEntry* entry = zapp_window_entry_for_hwnd(hwnd);
         LONG style = GetWindowLongW(hwnd, GWL_STYLE);
         BOOL isFS = !(style & WS_OVERLAPPEDWINDOW);
