@@ -154,9 +154,11 @@ export class Worker {
   }
 
   terminate(): void {
-    this.#unsubscribe?.();
+    if (this.#unsubscribe === null) return;
+    const unsubscribe = this.#unsubscribe;
     this.#unsubscribe = null;
     getBridge().terminateWorker(this.id);
+    queueMicrotask(() => unsubscribe?.());
   }
 
   addEventListener(

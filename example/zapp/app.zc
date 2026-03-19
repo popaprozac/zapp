@@ -8,6 +8,14 @@ fn on_window_ready() -> void {
     println "[native] window ready callback fired!";
 }
 
+fn on_window_focus() -> void {
+    println "[native] window focused!";
+}
+
+fn on_window_blur() -> void {
+    println "[native] window blurred!";
+}
+
 fn run_app() -> int {
     let config = AppConfig{ 
         name: "Zapp Playground", 
@@ -24,6 +32,8 @@ fn run_app() -> int {
     opts.height = 600;
     let win = app.window.create(&opts);
     win.on_ready(on_window_ready);
+    win.on(WindowEvent.FOCUS, on_window_focus);
+    win.on(WindowEvent.BLUR, on_window_blur);
 
     let opts2 = window_options_default("Native Window 2");
     opts2.width = 800;
@@ -32,6 +42,8 @@ fn run_app() -> int {
     opts2.y = 100;
     let win2 = app.window.create(&opts2);
     win2.on_ready(on_window_ready);
+    win2.on(WindowEvent.FOCUS, on_window_focus);
+    win2.on(WindowEvent.BLUR, on_window_blur);
     
     return app.run();
 }

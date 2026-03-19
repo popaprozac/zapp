@@ -51,3 +51,83 @@ In `./example` we want to build a test app, like what an end user would do. So I
 - `bootstrap.sh` (macOS/Linux) - Syncs native code to CLI and rebuilds CLI
 - `bootstrap.ps1` (Windows) - Same for Windows
 - Usage: `./bootstrap.sh` or `./bootstrap.sh --clean` (also cleans build artifacts)
+
+## Window Events System (Phase 1 - Completed)
+
+### Event Type Definitions (`src/event/events.zc`)
+- Numeric event IDs for efficient routing (focus=1, blur=2, etc.)
+- Zen-C enums with typed access via `WindowEvent` and `AppEvent` constants
+
+### TypeScript Runtime (`packages/runtime/events.ts`)
+- `WindowEvent` enum: READY, FOCUS, BLUR, RESIZE, MOVE, CLOSE, MINIMIZE, MAXIMIZE, RESTORE, FULLSCREEN, UNFULLSCREEN
+- `AppEvent` enum: STARTED, SHUTDOWN
+- Enhanced EventsAPI: `once()`, `off()`, `offAll()` support
+- `WindowEventPayload` interface with windowId, timestamp, size, position
+
+### Window Handle (`packages/runtime/windows.ts`)
+- Typed event listeners: `window.on(WindowEvent.FOCUS, handler)`
+- One-time listeners: `window.once(WindowEvent.READY, handler)`
+- Remove listeners: `window.off(WindowEvent.CLOSE)`
+- Legacy string-based events still supported
+
+### Bootstrap Runtime (`packages/bootstrap/src/webview.ts`, `webview_windows.ts`)
+- Unified listener storage: Both bootstrap and runtime share `Symbol.for("zapp.bridge")` storage
+- Event naming: `"window:ready"`, `"window:focus"`, `"window:blur"` (colon separator)
+- `deliverEvent()` properly handles `once` listeners (removes after firing)
+
+### macOS Native (`src/platform/darwin/window.zc`)
+- Added `windowDidBecomeKey:` delegate method → emits focus event
+- Added `windowDidResignKey:` delegate method → emits blur event
+- `zapp_dispatch_window_event_to_bridge()` dispatches to JS via bridge
+
+### Event Flow
+```
+NSWindow Delegate → zapp_dispatch_window_event_to_bridge()
+  → JavaScript bridge.dispatchWindowEvent(windowId, event)
+  → Internal listeners fire (window:focus, window:blur)
+  → Typed listeners filter by windowId and fire
+```
+
+### Key Fix: Unified Listener Storage
+- Bootstrap and runtime previously used separate storage locations
+- Now both use `Symbol.for("zapp.bridge")._listeners`
+- `Events.on()` stores via runtime → bootstrap `_onEvent()` → bridge storage
+- `deliverEvent()` reads from bridge storage → both bootstrap and runtime listeners fire
+
+### Usage Example
+```typescript
+import { Window, WindowEvent } from '@zapp/runtime';
+
+// Listen for focus
+const offFocus = Window.current().on(WindowEvent.FOCUS, (payload) => {
+    console.log('Window focused:', payload.windowId);
+});
+
+// One-time event
+const offReady = Window.current().once(WindowEvent.READY, (payload) => {
+    console.log('Window ready!');
+});
+
+// Cleanup
+offFocus();
+offReady();
+
+// Or remove all listeners for an event
+Window.current().off(WindowEvent.FOCUS);
+
+// Global events
+Events.on('window:focus', (payload) => {
+    console.log('Any window focused');
+});
+```
+
+## Phase 2 (Later)
+
+- [ ] Add logging system
+- [ ] Windows log conversion (fixed with separate raw blocks)
+- [ ] File logging support (backlog)
+- [ ] Multi-window IPC between windows
+- [ ] Explore trait-based worker engine abstraction (Option C)
+- [ ] Cancellable window events (close prevention)
+- [ ] Additional window events (resize, move, minimize, maximize, restore, fullscreen)
+- [ ] App events (started, shutdown)

@@ -8,18 +8,36 @@ raw {
     #include <dispatch/dispatch.h>
     #import <objc/runtime.h>
 
+    // Window event IDs (must match src/event/events.zc)
+    #define ZAPP_EVENT_WINDOW_FOCUS      1
+    #define ZAPP_EVENT_WINDOW_BLUR        2
+
     extern void zapp_darwin_reset_all_workers(void);
     extern void zapp_darwin_reset_owner_workers(const char* owner_id);
     extern void zapp_darwin_webview_create(void* window_ptr, bool inspectable);
+    extern void zapp_dispatch_window_event_to_bridge(const char* window_id, int event_id);
+    static int zapp_window_get_numeric_id(NSString* windowId);
+    extern void zapp_window_trigger_event(int id, int event_id);
 
     // Per-window delegate that terminates attached workers when the window closes.
     @interface ZappWindowDelegate : NSObject <NSWindowDelegate>
     @property (nonatomic, copy) NSString* ownerId;
+    @property (nonatomic, copy) NSString* windowId;
+    @property (nonatomic, assign) BOOL bridgeReady;
+    @property (nonatomic, assign) BOOL pendingFocusEvent;
     @end
 
     static void zapp_window_unregister(NSWindow* window);
 
     @implementation ZappWindowDelegate
+    - (instancetype)init {
+        self = [super init];
+        if (self) {
+            _bridgeReady = NO;
+            _pendingFocusEvent = NO;
+        }
+        return self;
+    }
     - (void)windowWillClose:(NSNotification*)notification {
         NSWindow* window = (NSWindow*)[notification object];
         if (window) {
@@ -29,7 +47,44 @@ raw {
             zapp_darwin_reset_owner_workers([self.ownerId UTF8String]);
         }
     }
+    - (void)windowDidBecomeKey:(NSNotification*)notification {
+        (void)notification;
+        if (self.windowId) {
+            int numId = zapp_window_get_numeric_id(self.windowId);
+            if (numId >= 0) zapp_window_trigger_event(numId, ZAPP_EVENT_WINDOW_FOCUS);
+            if (self.bridgeReady) {
+                zapp_dispatch_window_event_to_bridge([self.windowId UTF8String], ZAPP_EVENT_WINDOW_FOCUS);
+            } else {
+                self.pendingFocusEvent = YES;
+            }
+        }
+    }
+    - (void)windowDidResignKey:(NSNotification*)notification {
+        (void)notification;
+        if (self.windowId) {
+            int numId = zapp_window_get_numeric_id(self.windowId);
+            if (numId >= 0) zapp_window_trigger_event(numId, ZAPP_EVENT_WINDOW_BLUR);
+            zapp_dispatch_window_event_to_bridge([self.windowId UTF8String], ZAPP_EVENT_WINDOW_BLUR);
+        }
+    }
     @end
+
+    // Called when webview signals readiness - replays any buffered events
+    void zapp_window_set_bridge_ready(const char* window_id) {
+        if (window_id == NULL) return;
+        NSString* wid = [NSString stringWithUTF8String:window_id];
+        for (NSWindow* window in [NSApp windows]) {
+            ZappWindowDelegate* delegate = (ZappWindowDelegate*)[window delegate];
+            if ([delegate isKindOfClass:[ZappWindowDelegate class]] && [delegate.windowId isEqualToString:wid]) {
+                delegate.bridgeReady = YES;
+                if (delegate.pendingFocusEvent) {
+                    delegate.pendingFocusEvent = NO;
+                    zapp_dispatch_window_event_to_bridge([delegate.windowId UTF8String], ZAPP_EVENT_WINDOW_FOCUS);
+                }
+                break;
+            }
+        }
+    }
 
     // Key for retaining the window delegate via associated object (NSWindow.delegate is weak).
     static const char kZappWindowDelegateKey = 0;
@@ -70,8 +125,10 @@ fn darwin_window_create(options: WindowOptions*) -> void* {
                 bool inspectable = options->webContentInspectable > 0;
                 zapp_darwin_webview_create((__bridge void*)window, inspectable);
 
+                NSString* windowId = [NSString stringWithFormat:@"win-%p", window];
                 NSString* ownerId = [NSString stringWithFormat:@"owner-%p", window];
                 ZappWindowDelegate* windowDelegate = [[ZappWindowDelegate alloc] init];
+                windowDelegate.windowId = windowId;
                 windowDelegate.ownerId = ownerId;
                 // NSWindow.delegate is a weak reference; retain the delegate for the
                 // window's lifetime via an associated object so windowWillClose: fires.
@@ -439,6 +496,34 @@ raw {
         zapp_backend_dispatch_window_result(payload_json);
     }
 
+    // Event names matching WindowEvent enum in TypeScript runtime
+    static const char* zapp_get_window_event_name(int event_id) {
+        switch (event_id) {
+            case ZAPP_EVENT_WINDOW_FOCUS: return "focus";
+            case ZAPP_EVENT_WINDOW_BLUR: return "blur";
+            default: return "unknown";
+        }
+    }
+
+    void zapp_dispatch_window_event_to_bridge(const char* window_id, int event_id) {
+        if (window_id == NULL) return;
+        const char* event_name = zapp_get_window_event_name(event_id);
+        NSString* escapedEvent = [NSString stringWithUTF8String:event_name];
+        escapedEvent = [escapedEvent stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
+        NSString* js = [NSString stringWithFormat:
+            @"(function(){var b=globalThis[Symbol.for('zapp.bridge')];if(b&&typeof b.dispatchWindowEvent==='function'){b.dispatchWindowEvent('%@','%@');}})();",
+            [NSString stringWithUTF8String:window_id],
+            escapedEvent
+        ];
+        for (NSWindow* window in [NSApp windows]) {
+            NSView* content = [window contentView];
+            if ([content isKindOfClass:[WKWebView class]]) {
+                WKWebView* webview = (WKWebView*)content;
+                [webview evaluateJavaScript:js completionHandler:nil];
+            }
+        }
+    }
+
     void app_handle_window_message(App* app, char* action, char* payload_json) {
         if (action == NULL || payload_json == NULL) return;
         NSString* actionStr = [NSString stringWithUTF8String:action];
@@ -452,6 +537,7 @@ raw {
             NSString* windowId = body[@"windowId"];
             if ([windowId isKindOfClass:[NSString class]]) {
                 zapp_backend_dispatch_window_ready([windowId UTF8String]);
+                zapp_window_set_bridge_ready([windowId UTF8String]);
                 // Trigger native on_ready callback
                 int numericId = zapp_window_get_numeric_id(windowId);
                 if (numericId >= 0) {
@@ -498,6 +584,7 @@ raw {
 
                 NSString* ownerId = [NSString stringWithFormat:@"owner-%p", window];
                 ZappWindowDelegate* windowDelegate = [[ZappWindowDelegate alloc] init];
+                windowDelegate.windowId = windowId;
                 windowDelegate.ownerId = ownerId;
                 objc_setAssociatedObject(window, &kZappWindowDelegateKey, windowDelegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                 [window setDelegate:windowDelegate];

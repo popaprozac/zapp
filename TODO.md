@@ -49,6 +49,10 @@
 - [ ] File logging support (backlog)
 - [ ] Multi-window IPC between windows
 - [ ] Explore trait-based worker engine abstraction (Option C)
+- [x] Window Events Phase 1 (focus, blur with typed API)
+- [ ] Cancellable window events (close prevention)
+- [ ] Additional window events (resize, move, minimize, maximize, restore, fullscreen)
+- [ ] App events (started, shutdown)
 
 ---
 

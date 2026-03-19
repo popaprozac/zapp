@@ -1,4 +1,4 @@
-import { Events } from "./events";
+import { Events, WindowEvent, getWindowEventName, type WindowEventPayload } from "./events";
 
 export interface WindowOptions {
   title?: string;
@@ -17,6 +17,8 @@ export interface WindowOptions {
   visible?: boolean;
 }
 
+type WindowEventHandler = (payload?: WindowEventPayload) => void;
+
 export type WindowHandle = {
   readonly id: string;
   minimize(): void;
@@ -31,31 +33,81 @@ export type WindowHandle = {
   setPosition(x: number, y: number): void;
   setFullscreen(on: boolean): void;
   setAlwaysOnTop(on: boolean): void;
+  /** Legacy string-based event listener */
   on(event: string, handler: () => void): () => void;
-  /** Convenience method for "ready" event */
-  onReady(handler: () => void): () => void;
-}
+  /** Typed event listener using WindowEvent enum */
+  on(event: WindowEvent, handler: WindowEventHandler): () => void;
+  /** One-time typed event listener */
+  once(event: WindowEvent, handler: WindowEventHandler): () => void;
+  /** Remove all listeners for a typed event */
+  off(event: WindowEvent): void;
+};
 
 type WindowBridge = {
   windowCreate?: (options: WindowOptions) => Promise<{ id: string }>;
   windowAction?: (windowId: string, action: string, params?: Record<string, unknown>) => void;
 };
 
-type WindowEventHandler = () => void;
-type WindowEventEntry = { id: number; event: string; handler: WindowEventHandler };
+type LegacyWindowEventEntry = { id: number; event: string; handler: () => void };
 
 const getBridge = (): WindowBridge | null =>
   ((globalThis as unknown as Record<symbol, unknown>)[
     Symbol.for("zapp.bridge")
   ] as WindowBridge | undefined) ?? null;
 
-let nextEventId = 0;
-const windowEventListeners: WindowEventEntry[] = [];
+let nextLegacyEventId = 0;
+const legacyWindowEventListeners: LegacyWindowEventEntry[] = [];
 
 function makeHandle(windowId: string): WindowHandle {
   const action = (name: string, params?: Record<string, unknown>) => {
     const bridge = getBridge();
     bridge?.windowAction?.(windowId, name, params);
+  };
+
+  const isWindowReady = (): boolean => {
+    const ss = globalThis as unknown as Record<symbol, unknown>;
+    return ss[Symbol.for("zapp.windowReady")] === true;
+  };
+
+  const handleOn: WindowHandle["on"] = (event: WindowEvent | string, handler: WindowEventHandler) => {
+    if (typeof event === "string") {
+      const id = ++nextLegacyEventId;
+      legacyWindowEventListeners.push({ id, event: `${windowId}:${event}`, handler: handler as () => void });
+      return () => {
+        const idx = legacyWindowEventListeners.findIndex((e) => e.id === id);
+        if (idx !== -1) legacyWindowEventListeners.splice(idx, 1);
+      };
+    }
+    const eventName = getWindowEventName(event);
+    const off = Events.on(`window:${eventName}`, (payload) => {
+      const p = payload as WindowEventPayload | undefined;
+      if (p?.windowId === windowId) {
+        handler(p);
+      }
+    });
+    if (event === WindowEvent.READY && isWindowReady()) {
+      queueMicrotask(() => handler({ windowId, timestamp: Date.now() }));
+    }
+    return off;
+  };
+
+  const handleOnce: WindowHandle["once"] = (event: WindowEvent, handler: WindowEventHandler) => {
+    if (event === WindowEvent.READY && isWindowReady()) {
+      queueMicrotask(() => handler({ windowId, timestamp: Date.now() }));
+      return () => {};
+    }
+    const eventName = getWindowEventName(event);
+    return Events.once(`window:${eventName}`, (payload) => {
+      const p = payload as WindowEventPayload | undefined;
+      if (p?.windowId === windowId) {
+        handler(p);
+      }
+    });
+  };
+
+  const handleOff: WindowHandle["off"] = (event: WindowEvent) => {
+    const eventName = getWindowEventName(event);
+    Events.off(`window:${eventName}`);
   };
 
   return {
@@ -72,29 +124,15 @@ function makeHandle(windowId: string): WindowHandle {
     setPosition(x: number, y: number) { action("set_position", { x, y }); },
     setFullscreen(on: boolean) { action("set_fullscreen", { on }); },
     setAlwaysOnTop(on: boolean) { action("set_always_on_top", { on }); },
-    on(event: string, handler: WindowEventHandler): () => void {
-      const id = ++nextEventId;
-      windowEventListeners.push({ id, event: `${windowId}:${event}`, handler });
-      return () => {
-        const idx = windowEventListeners.findIndex((e) => e.id === id);
-        if (idx !== -1) windowEventListeners.splice(idx, 1);
-      };
-    },
-    onReady(handler: WindowEventHandler): () => void {
-      // Listen for "window-ready" event globally and filter by windowId
-      return Events.on("window-ready", (payload) => {
-        const p = payload as { windowId?: string };
-        if (p?.windowId === windowId) {
-          handler();
-        }
-      });
-    },
+    on: handleOn,
+    once: handleOnce,
+    off: handleOff,
   };
 }
 
 export function _dispatchWindowEvent(windowId: string, event: string): void {
   const key = `${windowId}:${event}`;
-  for (const entry of windowEventListeners) {
+  for (const entry of legacyWindowEventListeners) {
     if (entry.event === key) {
       try { entry.handler(); } catch { /* isolate listener failures */ }
     }

@@ -31,6 +31,12 @@ raw {
     extern void* app_get_active(void);
     static DWORD zapp_ui_thread_id = 0;
 
+    extern const char* zapp_win_id_for_hwnd(HWND hwnd);
+    extern int zapp_window_get_numeric_id(const char* window_id);
+    extern void zapp_window_trigger_event(int id, int event_id);
+    extern void zapp_dispatch_window_event_to_bridge_win(const char* window_id, int event_id);
+    extern ZappWindowEntry* zapp_window_entry_for_hwnd(HWND hwnd);
+
     static LRESULT CALLBACK ZappWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         switch (msg) {
             case WM_ERASEBKGND:
@@ -46,6 +52,28 @@ raw {
             case WM_MOVE:
             case WM_MOVING: {
                 zapp_windows_webview_notify_position(hwnd);
+                break;
+            }
+            case WM_ACTIVATE: {
+                const char* windowId = zapp_win_id_for_hwnd(hwnd);
+                if (windowId) {
+                    int numericId = zapp_window_get_numeric_id(windowId);
+                    WORD activateState = LOWORD(wParam);
+                    if (activateState == WA_ACTIVE || activateState == WA_CLICKACTIVE) {
+                        if (numericId >= 0)
+                            zapp_window_trigger_event(numericId, ZAPP_EVENT_WINDOW_FOCUS);
+                        ZappWindowEntry* entry = zapp_window_entry_for_hwnd(hwnd);
+                        if (entry && entry->bridgeReady) {
+                            zapp_dispatch_window_event_to_bridge_win(windowId, ZAPP_EVENT_WINDOW_FOCUS);
+                        } else if (entry) {
+                            entry->pendingFocusEvent = TRUE;
+                        }
+                    } else if (activateState == WA_INACTIVE) {
+                        if (numericId >= 0)
+                            zapp_window_trigger_event(numericId, ZAPP_EVENT_WINDOW_BLUR);
+                        zapp_dispatch_window_event_to_bridge_win(windowId, ZAPP_EVENT_WINDOW_BLUR);
+                    }
+                }
                 break;
             }
             case WM_DESTROY: {

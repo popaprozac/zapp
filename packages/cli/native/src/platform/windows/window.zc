@@ -229,7 +229,7 @@ raw {
         }
     }
 
-    static int zapp_window_get_numeric_id(const char* window_id) {
+    int zapp_window_get_numeric_id(const char* window_id) {
         if (!window_id) return -1;
         for (int i = 0; i < ZAPP_MAX_NUMERIC_IDS; i++) {
             if (zapp_numeric_ids[i].in_use && strcmp(zapp_numeric_ids[i].window_id, window_id) == 0)
@@ -290,6 +290,15 @@ raw {
         }
     }
 
+    const char* zapp_win_id_for_hwnd(HWND hwnd) {
+        if (!hwnd) return NULL;
+        for (int i = 0; i < ZAPP_WIN_REG_MAX; i++) {
+            if (zapp_win_reg[i].in_use && zapp_win_reg[i].hwnd == hwnd)
+                return zapp_win_reg[i].id;
+        }
+        return NULL;
+    }
+
     // ---------------------------------------------------------------------------
     // Dispatch window result to all webviews + backend
     // ---------------------------------------------------------------------------
@@ -311,6 +320,26 @@ raw {
         free(js);
         free(escaped);
         zapp_backend_dispatch_window_result(payload_json);
+    }
+
+    static const char* zapp_get_window_event_name_win(int event_id) {
+        switch (event_id) {
+            case ZAPP_EVENT_WINDOW_READY: return "ready";
+            case ZAPP_EVENT_WINDOW_FOCUS: return "focus";
+            case ZAPP_EVENT_WINDOW_BLUR:  return "blur";
+            default: return "unknown";
+        }
+    }
+
+    void zapp_dispatch_window_event_to_bridge_win(const char* window_id, int event_id) {
+        if (window_id == NULL) return;
+        const char* event_name = zapp_get_window_event_name_win(event_id);
+        char js[512];
+        snprintf(js, sizeof(js),
+            "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+            "if(b&&b.dispatchWindowEvent)b.dispatchWindowEvent('%s','%s');})();",
+            window_id, event_name);
+        zapp_windows_webview_eval_all(js);
     }
 
     // ---------------------------------------------------------------------------
@@ -338,6 +367,17 @@ raw {
                 int numericId = zapp_window_get_numeric_id(windowId);
                 if (numericId >= 0) {
                     window_manager_trigger_on_ready(numericId);
+                }
+                HWND hwnd = zapp_win_lookup(windowId);
+                if (hwnd) {
+                    ZappWindowEntry* entry = zapp_window_entry_for_hwnd(hwnd);
+                    if (entry) {
+                        entry->bridgeReady = TRUE;
+                        if (entry->pendingFocusEvent) {
+                            entry->pendingFocusEvent = FALSE;
+                            zapp_dispatch_window_event_to_bridge_win(windowId, ZAPP_EVENT_WINDOW_FOCUS);
+                        }
+                    }
                 }
             }
             if (windowId) free(windowId);
@@ -461,9 +501,15 @@ fn windows_window_register_numeric_id(window: void*, numeric_id: int) -> void {
     #ifdef _WIN32
         if (window == NULL) return;
         HWND hwnd = (HWND)window;
-        char wid[64];
-        snprintf(wid, sizeof(wid), "win-%p", (void*)hwnd);
-        zapp_window_register_numeric_id_str(wid, numeric_id);
+        const char* existing = zapp_win_id_for_hwnd(hwnd);
+        if (existing) {
+            zapp_window_register_numeric_id_str(existing, numeric_id);
+        } else {
+            const char* regId = zapp_win_register(hwnd);
+            if (regId) {
+                zapp_window_register_numeric_id_str(regId, numeric_id);
+            }
+        }
     #endif
     }
 }

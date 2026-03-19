@@ -1,6 +1,7 @@
 import "../platform/platform.zc";
 import "../platform/window.zc";
 import "../event/event.zc";
+import "../event/events.zc";
 import "../service/service.zc";
 import "../platform/shared/log.zc";
 include <string.h>

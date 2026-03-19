@@ -1,0 +1,70 @@
+struct WindowEvents {
+    READY: int;
+    FOCUS: int;
+    BLUR: int;
+    RESIZE: int;
+    MOVE: int;
+    CLOSE: int;
+    MINIMIZE: int;
+    MAXIMIZE: int;
+    RESTORE: int;
+    FULLSCREEN: int;
+    UNFULLSCREEN: int;
+}
+
+def WindowEvent = WindowEvents{
+    READY: 0,
+    FOCUS: 1,
+    BLUR: 2,
+    RESIZE: 3,
+    MOVE: 4,
+    CLOSE: 5,
+    MINIMIZE: 6,
+    MAXIMIZE: 7,
+    RESTORE: 8,
+    FULLSCREEN: 9,
+    UNFULLSCREEN: 10,
+};
+
+struct AppEvents {
+    STARTED: int;
+    SHUTDOWN: int;
+}
+
+def AppEvent = AppEvents{
+    STARTED: 100,
+    SHUTDOWN: 101,
+};
+
+struct EventResults {
+    ALLOW: int;
+    CANCEL: int;
+}
+
+def EventResult = EventResults{
+    ALLOW: 0,
+    CANCEL: 1,
+};
+
+raw {
+    // C-accessible macros for use in raw blocks and Obj-C delegates
+    #define ZAPP_EVENT_WINDOW_READY       0
+    #define ZAPP_EVENT_WINDOW_FOCUS       1
+    #define ZAPP_EVENT_WINDOW_BLUR        2
+    #define ZAPP_EVENT_WINDOW_RESIZE      3
+    #define ZAPP_EVENT_WINDOW_MOVE        4
+    #define ZAPP_EVENT_WINDOW_CLOSE       5
+    #define ZAPP_EVENT_WINDOW_MINIMIZE    6
+    #define ZAPP_EVENT_WINDOW_MAXIMIZE    7
+    #define ZAPP_EVENT_WINDOW_RESTORE     8
+    #define ZAPP_EVENT_WINDOW_FULLSCREEN  9
+    #define ZAPP_EVENT_WINDOW_UNFULLSCREEN 10
+
+    #define ZAPP_EVENT_APP_STARTED       100
+    #define ZAPP_EVENT_APP_SHUTDOWN      101
+
+    #define ZAPP_EVENT_RESULT_ALLOW      0
+    #define ZAPP_EVENT_RESULT_CANCEL     1
+
+    #define ZAPP_MAX_WINDOW_EVENT_TYPES  11
+}

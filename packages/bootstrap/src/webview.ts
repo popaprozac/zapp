@@ -1,5 +1,5 @@
 type EventHandler = (payload: unknown) => void;
-type ListenerEntry = { id: number; fn: EventHandler };
+type ListenerEntry = { id: number; fn: EventHandler; once?: boolean };
 type WorkerSubscriber = (data: unknown) => void;
 type WorkerSubscriptions = { message: WorkerSubscriber[]; error: WorkerSubscriber[]; close: WorkerSubscriber[] };
 type WorkerBridge = {
@@ -47,7 +47,9 @@ type RuntimeInternal = {
   syncCancel?: (id: string) => boolean;
   emit?: (name: string, payload: unknown) => boolean;
   onEvent?: (name: string, handler: EventHandler) => number;
+  onceEvent?: (name: string, handler: EventHandler) => number;
   offEvent?: (name: string, id: number) => void;
+  offAllEvents?: (name?: string) => void;
 };
 
 type PublicZapp = {
@@ -99,7 +101,15 @@ type ConfigSnapshot = {
   webContentInspectable: boolean;
   maxWorkers?: number;
 };
+type BridgeListeners = Record<string, Array<{ id: number; fn: EventHandler; once?: boolean }>>;
 type NativeBridge = {
+  _listeners: BridgeListeners;
+  _lastId: number;
+  _emit: (name: string, payload: unknown) => boolean;
+  _onEvent: (name: string, handler: EventHandler) => number;
+  _offEvent: (name: string, id: number) => void;
+  _onceEvent: (name: string, handler: EventHandler) => number;
+  _offAllEvents: (name?: string) => void;
   dispatchWorkerBridge: (kind: string, workerId: string, payload: unknown) => void;
   dispatchInvokeResult: (payload: unknown) => void;
   dispatchSyncResult: (payload: unknown) => void;
@@ -139,7 +149,10 @@ const upsertBridge = (patch: Partial<NativeBridge>): void => {
   });
 };
 const rt: RuntimeInternal = {};
-const listeners = (rt.__listeners = rt.__listeners ?? {});
+
+const _listeners: BridgeListeners = {};
+let _lastId = 0;
+upsertBridge({ _listeners, _lastId } as unknown as Partial<NativeBridge>);
 const ctxId = (rt.__ctxId ??= `ctx-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 const invokePending = (rt.__pendingInvokes = rt.__pendingInvokes ?? {});
 const syncPending = (rt.__pendingSyncWaits = rt.__pendingSyncWaits ?? {});
@@ -171,7 +184,6 @@ type SyncResultPayload = {
   ok: boolean;
   status?: "notified" | "timed-out" | "cancelled";
 };
-let lastId = rt.__lastId ?? 0;
 let appConfig =
   symbolStore[BOOTSTRAP_CONFIG_SYMBOL] == null
     ? null
@@ -322,15 +334,28 @@ rt.emit = (name: string, payload: unknown): boolean =>
   });
 
 rt.onEvent = (name: string, handler: EventHandler): number => {
-  const id = ++lastId;
-  rt.__lastId = lastId;
-  (listeners[name] ??= []).push({ id, fn: handler });
+  const id = ++_lastId;
+  (_listeners[name] ??= []).push({ id, fn: handler });
   return id;
 };
 
 rt.offEvent = (name: string, id: number): void => {
-  const existing = listeners[name] ?? [];
-  listeners[name] = existing.filter((entry) => entry.id !== id);
+  const existing = _listeners[name] ?? [];
+  _listeners[name] = existing.filter((entry) => entry.id !== id);
+};
+
+rt.onceEvent = (name: string, handler: EventHandler): number => {
+  const id = ++_lastId;
+  (_listeners[name] ??= []).push({ id, fn: handler, once: true });
+  return id;
+};
+
+rt.offAllEvents = (name?: string): void => {
+  if (name) {
+    delete _listeners[name];
+  } else {
+    Object.keys(_listeners).forEach((k) => delete _listeners[k]);
+  }
 };
 
 const rewriteToBundledWorker = (url: URL): string => {
@@ -531,11 +556,26 @@ const dispatchWindowResult = (payload: unknown): void => {
 
 const dispatchWindowEvent = (windowId: string, event: string): void => {
   ensurePublicZappBinding();
-  const eventName = `__zapp_window:${windowId}:${event}`;
-  const handlers = listeners[eventName] ?? [];
-  for (const entry of handlers) {
-    try { entry.fn(undefined); } catch { /* isolate */ }
-  }
+
+  const payload = { windowId, timestamp: Date.now() };
+
+  const fireAndPrune = (eventName: string): void => {
+    const handlers = _listeners[eventName];
+    if (!handlers || handlers.length === 0) return;
+    const remaining: typeof handlers = [];
+    for (const entry of handlers) {
+      try { entry.fn(payload); } catch { /* isolate */ }
+      if (!entry.once) remaining.push(entry);
+    }
+    if (remaining.length > 0) {
+      _listeners[eventName] = remaining;
+    } else {
+      delete _listeners[eventName];
+    }
+  };
+
+  fireAndPrune(`__zapp_window:${windowId}:${event}`);
+  fireAndPrune(`window:${event}`);
 };
 
 upsertBridge({
@@ -544,6 +584,11 @@ upsertBridge({
   appAction,
   dispatchWindowResult,
   dispatchWindowEvent,
+  _emit: rt.emit,
+  _onEvent: rt.onEvent,
+  _onceEvent: rt.onceEvent,
+  _offEvent: rt.offEvent,
+  _offAllEvents: rt.offAllEvents,
 });
 
 zapp.invoke = rt.invoke;
@@ -580,13 +625,22 @@ const deliverEvent = (name: string, payload: unknown): void => {
     }
   }
 
-  const handlers = listeners[name] ?? [];
+  const handlers = _listeners[name] ?? [];
+  const remaining: ListenerEntry[] = [];
   for (const entry of handlers) {
     try {
       entry.fn(parsed);
     } catch {
       // Isolate listener failures.
     }
+    if (!entry.once) {
+      remaining.push(entry);
+    }
+  }
+  if (remaining.length > 0) {
+    _listeners[name] = remaining;
+  } else {
+    delete _listeners[name];
   }
 };
 
@@ -712,28 +766,26 @@ if (typeof document !== "undefined") {
 
 ensurePublicZappBinding();
 
-// Fire ready event when DOM is ready
+const WINDOW_ID_SYMBOL = Symbol.for("zapp.windowId");
+const WINDOW_READY_SYMBOL = Symbol.for("zapp.windowReady");
+const winSymbolStore = g as unknown as Record<symbol, unknown>;
+
 const fireReady = (): void => {
-  // Notify native side that this window is ready
-  const winSymbolStore = g as unknown as Record<symbol, unknown>;
-  const windowId = winSymbolStore[Symbol.for("zapp.windowId")] as string | undefined;
-  
-  // Direct call to message handler (post function might not be available yet)
+  if (winSymbolStore[WINDOW_READY_SYMBOL]) return;
+  winSymbolStore[WINDOW_READY_SYMBOL] = true;
+
+  const windowId = winSymbolStore[WINDOW_ID_SYMBOL] as string | undefined;
   const handler = g.webkit?.messageHandlers?.zapp;
   if (handler?.postMessage) {
     const payload = JSON.stringify({ windowId: windowId ?? "unknown" });
     handler.postMessage(`window\nready\n${payload}`);
   }
-  
-  rt.onEvent?.("ready", () => {}); // Ensure listener storage exists
-  deliverEvent("ready", undefined);
+
+  dispatchWindowEvent(windowId ?? "unknown", "ready");
 };
 
-// Use DOMContentLoaded to ensure the message handler is available
-// Always add the listener, and also call immediately if DOM is already loaded
 if (typeof document !== "undefined") {
   document.addEventListener("DOMContentLoaded", fireReady, { once: true });
-  // Also check if DOM is already loaded
   if (document.readyState !== "loading") {
     fireReady();
   }

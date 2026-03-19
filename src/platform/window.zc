@@ -39,19 +39,18 @@ struct WindowOptions {
 }
 
 struct App;
-extern fn app_get_active() -> void*;
-
 struct Window {
     id: int;
     handle: void*;
 }
 
 impl Window {
+    fn on(self, event_id: int, cb: fn*() -> void) -> void {
+        zapp_window_set_event_cb(self.id, event_id, cb);
+    }
+
     fn on_ready(self, cb: fn*() -> void) -> void {
-        let app = (App*)app_get_active();
-        if app != NULL {
-            app.window.set_on_ready(self.id, cb);
-        }
+        zapp_window_set_on_ready(self.id, cb);
     }
 
     fn minimize(self) -> void {
@@ -284,7 +283,12 @@ fn window_manager_trigger_on_ready(id: int) -> void {
 
 raw {
     #define ZAPP_MAX_WINDOW_CALLBACKS 64
+    #ifndef ZAPP_MAX_WINDOW_EVENT_TYPES
+    #define ZAPP_MAX_WINDOW_EVENT_TYPES 11
+    #endif
+
     static void (*zapp_window_on_ready_cbs[ZAPP_MAX_WINDOW_CALLBACKS])(void) = {0};
+    static void (*zapp_window_event_cbs[ZAPP_MAX_WINDOW_CALLBACKS][ZAPP_MAX_WINDOW_EVENT_TYPES])(void) = {{0}};
 
     void zapp_window_set_on_ready(int id, void (*cb)(void)) {
         if (id >= 0 && id < ZAPP_MAX_WINDOW_CALLBACKS) {
@@ -295,6 +299,20 @@ raw {
     void zapp_window_trigger_on_ready(int id) {
         if (id >= 0 && id < ZAPP_MAX_WINDOW_CALLBACKS && zapp_window_on_ready_cbs[id] != NULL) {
             zapp_window_on_ready_cbs[id]();
+        }
+    }
+
+    void zapp_window_set_event_cb(int id, int event_id, void (*cb)(void)) {
+        if (id >= 0 && id < ZAPP_MAX_WINDOW_CALLBACKS && event_id >= 0 && event_id < ZAPP_MAX_WINDOW_EVENT_TYPES) {
+            zapp_window_event_cbs[id][event_id] = cb;
+        }
+    }
+
+    void zapp_window_trigger_event(int id, int event_id) {
+        if (id >= 0 && id < ZAPP_MAX_WINDOW_CALLBACKS && event_id >= 0 && event_id < ZAPP_MAX_WINDOW_EVENT_TYPES) {
+            if (zapp_window_event_cbs[id][event_id] != NULL) {
+                zapp_window_event_cbs[id][event_id]();
+            }
         }
     }
 }

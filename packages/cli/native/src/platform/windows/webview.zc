@@ -145,6 +145,8 @@ raw {
         char ownerId[64];
         BOOL in_use;
         BOOL inspectable;
+        BOOL bridgeReady;
+        BOOL pendingFocusEvent;
         WINDOWPLACEMENT prevPlacement;
     } ZappWindowEntry;
 

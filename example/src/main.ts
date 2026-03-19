@@ -1,7 +1,7 @@
 import { mount } from 'svelte'
 import './app.css'
 import AppInstance from './App.svelte'
-import { App, Events, Window, Worker, SharedWorker } from '@zapp/runtime'
+import { App, Events, Window, Worker, SharedWorker,WindowEvent } from '@zapp/runtime'
 import { Ping } from "./generated";
 import './worker-parity';
 import './multiwindow-parity';
@@ -37,4 +37,16 @@ worker.onclose = (event) => {
 }
 worker.addEventListener('close', (event) => {
   console.log('close event listener', event);
+})
+
+Window.current().on(WindowEvent.FOCUS, (payload) => {
+  console.log("window focused", payload);
+});
+
+Window.current().on(WindowEvent.BLUR, (payload) => {
+  console.log("window blurred", payload);
+});
+
+Window.current().on(WindowEvent.READY, () => {
+  console.log("window ready");
 })

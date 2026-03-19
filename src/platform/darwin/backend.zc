@@ -119,7 +119,7 @@ raw {
         NSString* eventJson = [NSString stringWithFormat:@"{\"windowId\":\"%@\"}", windowId];
         zapp_darwin_worker_js_sync(^{
             if (zapp_backend_ctx == nil) return;
-            zapp_backend_call_bridge(@"deliverEvent", @[@"window-ready", eventJson]);
+            zapp_backend_call_bridge(@"deliverEvent", @[@"window:ready", eventJson]);
         });
     }
 
@@ -720,15 +720,15 @@ raw {
         if (!q) return;
         dispatch_async(q, ^{
             if (qjs_be_ctx == NULL) return;
-            // Deliver "window-ready" event to backend
+            // Deliver "window:ready" event to backend
             NSString* eventJson = [NSString stringWithFormat:@"{\"windowId\":\"%@\"}", windowId];
             NSString* js = [NSString stringWithFormat:
-                @"(function(){var b=globalThis[Symbol.for('zapp.bridge')];if(b&&typeof b.deliverEvent==='function'){b.deliverEvent('window-ready','%@');}})();",
+                @"(function(){var b=globalThis[Symbol.for('zapp.bridge')];if(b&&typeof b.deliverEvent==='function'){b.deliverEvent('window:ready','%@');}})();",
                 [eventJson stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"]
             ];
             const char* jsUtf8 = [js UTF8String];
             extern int engine_qjs_eval(void* ctx, const char* utf8, size_t len, const char* filename);
-            engine_qjs_eval(qjs_be_ctx, jsUtf8, strlen(jsUtf8), "<window-ready>");
+            engine_qjs_eval(qjs_be_ctx, jsUtf8, strlen(jsUtf8), "<window:ready>");
         });
     }
 
