@@ -2,7 +2,7 @@ import "../platform.zc";
 import "./webview.zc";
 import "./backend.zc";
 
-//> windows: link: -lole32 -lshell32 -luuid -luser32 -lgdi32 -lcomctl32
+//> windows: link: -lole32 -lshell32 -luuid -luser32 -lgdi32 -lcomctl32 -lcomdlg32
 //> windows: cflags: -DUNICODE -D_UNICODE
 
 import "./worker/mod.zc";
@@ -37,26 +37,190 @@ raw {
     #ifndef ZAPP_EVENT_WINDOW_BLUR
     #define ZAPP_EVENT_WINDOW_BLUR  2
     #endif
+    #ifndef ZAPP_EVENT_WINDOW_RESIZE
+    #define ZAPP_EVENT_WINDOW_RESIZE 3
+    #endif
+    #ifndef ZAPP_EVENT_WINDOW_MOVE
+    #define ZAPP_EVENT_WINDOW_MOVE 4
+    #endif
+    #ifndef ZAPP_EVENT_WINDOW_CLOSE
+    #define ZAPP_EVENT_WINDOW_CLOSE 5
+    #endif
+    #ifndef ZAPP_EVENT_WINDOW_MINIMIZE
+    #define ZAPP_EVENT_WINDOW_MINIMIZE 6
+    #endif
+    #ifndef ZAPP_EVENT_WINDOW_MAXIMIZE
+    #define ZAPP_EVENT_WINDOW_MAXIMIZE 7
+    #endif
+    #ifndef ZAPP_EVENT_WINDOW_RESTORE
+    #define ZAPP_EVENT_WINDOW_RESTORE 8
+    #endif
+    #ifndef ZAPP_EVENT_WINDOW_FULLSCREEN
+    #define ZAPP_EVENT_WINDOW_FULLSCREEN 9
+    #endif
+    #ifndef ZAPP_EVENT_WINDOW_UNFULLSCREEN
+    #define ZAPP_EVENT_WINDOW_UNFULLSCREEN 10
+    #endif
 
     extern const char* zapp_win_id_for_hwnd(HWND hwnd);
     extern int zapp_window_get_numeric_id(const char* window_id);
     extern void zapp_window_trigger_event(int id, int event_id);
-    extern void zapp_dispatch_window_event_to_bridge_win(const char* window_id, int event_id);
+    extern void zapp_dispatch_window_event_to_bridge_win(const char* window_id, int event_id, int width, int height, int x, int y);
     extern ZappWindowEntry* zapp_window_entry_for_hwnd(HWND hwnd);
+
+    // Helper to fire both native callback and bridge event for Windows
+    static void zapp_fire_window_event_win(HWND hwnd, int event_id, int w, int h, int x, int y) {
+        const char* windowId = zapp_win_id_for_hwnd(hwnd);
+        if (!windowId) return;
+        int numericId = zapp_window_get_numeric_id(windowId);
+        if (numericId >= 0)
+            zapp_window_trigger_event(numericId, event_id);
+        ZappWindowEntry* entry = zapp_window_entry_for_hwnd(hwnd);
+        if (entry && entry->bridgeReady) {
+            zapp_dispatch_window_event_to_bridge_win(windowId, event_id, w, h, x, y);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Default system menus (Edit, View, Window) — must be before WndProc
+    // -----------------------------------------------------------------------
+    #define IDM_EDIT_UNDO      40001
+    #define IDM_EDIT_REDO      40002
+    #define IDM_EDIT_CUT       40003
+    #define IDM_EDIT_COPY      40004
+    #define IDM_EDIT_PASTE     40005
+    #define IDM_EDIT_SELECTALL 40006
+    #define IDM_VIEW_FULLSCREEN 40010
+    #define IDM_WIN_MINIMIZE   40020
+    #define IDM_WIN_MAXIMIZE   40021
+    #define IDM_WIN_CLOSE      40022
+
+    HMENU zapp_default_menu = NULL;
+    HACCEL zapp_accel_table = NULL;
+
+    extern void windows_window_set_fullscreen(void* window, _Bool on);
+
+    HMENU zapp_create_default_menu(void) {
+        HMENU menuBar = CreateMenu();
+
+        HMENU editMenu = CreatePopupMenu();
+        AppendMenuW(editMenu, MF_STRING, IDM_EDIT_UNDO,      L"Undo\tCtrl+Z");
+        AppendMenuW(editMenu, MF_STRING, IDM_EDIT_REDO,      L"Redo\tCtrl+Y");
+        AppendMenuW(editMenu, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(editMenu, MF_STRING, IDM_EDIT_CUT,       L"Cut\tCtrl+X");
+        AppendMenuW(editMenu, MF_STRING, IDM_EDIT_COPY,      L"Copy\tCtrl+C");
+        AppendMenuW(editMenu, MF_STRING, IDM_EDIT_PASTE,     L"Paste\tCtrl+V");
+        AppendMenuW(editMenu, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(editMenu, MF_STRING, IDM_EDIT_SELECTALL, L"Select All\tCtrl+A");
+        AppendMenuW(menuBar, MF_POPUP, (UINT_PTR)editMenu, L"Edit");
+
+        HMENU viewMenu = CreatePopupMenu();
+        AppendMenuW(viewMenu, MF_STRING, IDM_VIEW_FULLSCREEN, L"Fullscreen\tF11");
+        AppendMenuW(menuBar, MF_POPUP, (UINT_PTR)viewMenu, L"View");
+
+        HMENU windowMenu = CreatePopupMenu();
+        AppendMenuW(windowMenu, MF_STRING, IDM_WIN_MINIMIZE, L"Minimize");
+        AppendMenuW(windowMenu, MF_STRING, IDM_WIN_MAXIMIZE, L"Maximize");
+        AppendMenuW(windowMenu, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(windowMenu, MF_STRING, IDM_WIN_CLOSE,    L"Close\tAlt+F4");
+        AppendMenuW(menuBar, MF_POPUP, (UINT_PTR)windowMenu, L"Window");
+
+        zapp_default_menu = menuBar;
+        return menuBar;
+    }
+
+    HACCEL zapp_create_default_accel(void) {
+        ACCEL accels[] = {
+            { FCONTROL | FVIRTKEY, 'Z', IDM_EDIT_UNDO },
+            { FCONTROL | FVIRTKEY, 'Y', IDM_EDIT_REDO },
+            { FCONTROL | FVIRTKEY, 'X', IDM_EDIT_CUT },
+            { FCONTROL | FVIRTKEY, 'C', IDM_EDIT_COPY },
+            { FCONTROL | FVIRTKEY, 'V', IDM_EDIT_PASTE },
+            { FCONTROL | FVIRTKEY, 'A', IDM_EDIT_SELECTALL },
+            { FVIRTKEY,            VK_F11, IDM_VIEW_FULLSCREEN },
+        };
+        return CreateAcceleratorTableW(accels, sizeof(accels) / sizeof(accels[0]));
+    }
+
+    void zapp_handle_menu_command(HWND hwnd, WORD cmd) {
+        switch (cmd) {
+            case IDM_EDIT_UNDO:
+            case IDM_EDIT_REDO:
+            case IDM_EDIT_CUT:
+            case IDM_EDIT_COPY:
+            case IDM_EDIT_PASTE:
+            case IDM_EDIT_SELECTALL: {
+                HWND focus = GetFocus();
+                if (focus) SendMessageW(focus, WM_COMMAND, cmd, 0);
+                break;
+            }
+            case IDM_VIEW_FULLSCREEN: {
+                if (hwnd) {
+                    LONG style = GetWindowLongW(hwnd, GWL_STYLE);
+                    BOOL isFS = !(style & WS_OVERLAPPEDWINDOW);
+                    windows_window_set_fullscreen((void*)hwnd, !isFS);
+                }
+                break;
+            }
+            case IDM_WIN_MINIMIZE:
+                if (hwnd) ShowWindow(hwnd, SW_MINIMIZE);
+                break;
+            case IDM_WIN_MAXIMIZE:
+                if (hwnd) ShowWindow(hwnd, IsZoomed(hwnd) ? SW_RESTORE : SW_MAXIMIZE);
+                break;
+            case IDM_WIN_CLOSE:
+                if (hwnd) PostMessageW(hwnd, WM_CLOSE, 0, 0);
+                break;
+        }
+    }
 
     static LRESULT CALLBACK ZappWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         switch (msg) {
             case WM_ERASEBKGND:
                 return 1;
+            case WM_COMMAND: {
+                WORD cmd = LOWORD(wParam);
+                if (cmd >= 40001 && cmd <= 40099) {
+                    zapp_handle_menu_command(hwnd, cmd);
+                    return 0;
+                }
+                break;
+            }
             case WM_ZAPP_EVAL_JS: {
                 zapp_windows_webview_eval_all_ui((wchar_t*)lParam);
                 return 0;
             }
             case WM_SIZE: {
                 zapp_windows_webview_resize(hwnd);
+                RECT rc;
+                GetWindowRect(hwnd, &rc);
+                int w = rc.right - rc.left;
+                int h = rc.bottom - rc.top;
+                int x = rc.left;
+                int y = rc.top;
+                WORD sizeType = LOWORD(wParam);
+                if (sizeType == SIZE_MINIMIZED) {
+                    zapp_fire_window_event_win(hwnd, ZAPP_EVENT_WINDOW_MINIMIZE, w, h, x, y);
+                } else if (sizeType == SIZE_MAXIMIZED) {
+                    zapp_fire_window_event_win(hwnd, ZAPP_EVENT_WINDOW_MAXIMIZE, w, h, x, y);
+                    zapp_fire_window_event_win(hwnd, ZAPP_EVENT_WINDOW_RESIZE, w, h, x, y);
+                } else if (sizeType == SIZE_RESTORED) {
+                    zapp_fire_window_event_win(hwnd, ZAPP_EVENT_WINDOW_RESTORE, w, h, x, y);
+                    zapp_fire_window_event_win(hwnd, ZAPP_EVENT_WINDOW_RESIZE, w, h, x, y);
+                } else {
+                    zapp_fire_window_event_win(hwnd, ZAPP_EVENT_WINDOW_RESIZE, w, h, x, y);
+                }
                 return 0;
             }
-            case WM_MOVE:
+            case WM_MOVE: {
+                zapp_windows_webview_notify_position(hwnd);
+                RECT rc;
+                GetWindowRect(hwnd, &rc);
+                int w = rc.right - rc.left;
+                int h = rc.bottom - rc.top;
+                zapp_fire_window_event_win(hwnd, ZAPP_EVENT_WINDOW_MOVE, w, h, rc.left, rc.top);
+                break;
+            }
             case WM_MOVING: {
                 zapp_windows_webview_notify_position(hwnd);
                 break;
@@ -71,14 +235,14 @@ raw {
                             zapp_window_trigger_event(numericId, ZAPP_EVENT_WINDOW_FOCUS);
                         ZappWindowEntry* entry = zapp_window_entry_for_hwnd(hwnd);
                         if (entry && entry->bridgeReady) {
-                            zapp_dispatch_window_event_to_bridge_win(windowId, ZAPP_EVENT_WINDOW_FOCUS);
+                            zapp_dispatch_window_event_to_bridge_win(windowId, ZAPP_EVENT_WINDOW_FOCUS, 0, 0, 0, 0);
                         } else if (entry) {
                             entry->pendingFocusEvent = TRUE;
                         }
                     } else if (activateState == WA_INACTIVE) {
                         if (numericId >= 0)
                             zapp_window_trigger_event(numericId, ZAPP_EVENT_WINDOW_BLUR);
-                        zapp_dispatch_window_event_to_bridge_win(windowId, ZAPP_EVENT_WINDOW_BLUR);
+                        zapp_dispatch_window_event_to_bridge_win(windowId, ZAPP_EVENT_WINDOW_BLUR, 0, 0, 0, 0);
                     }
                 }
                 break;
@@ -91,6 +255,7 @@ raw {
                 return 0;
             }
             case WM_CLOSE: {
+                zapp_fire_window_event_win(hwnd, ZAPP_EVENT_WINDOW_CLOSE, 0, 0, 0, 0);
                 DestroyWindow(hwnd);
                 return 0;
             }
@@ -108,8 +273,12 @@ raw {
         wc.hCursor = LoadCursorW(NULL, IDC_ARROW);
         wc.hbrBackground = NULL;
         wc.lpszClassName = ZAPP_WINDOW_CLASS;
+        wc.lpszMenuName = NULL;
         RegisterClassExW(&wc);
         zapp_window_class_registered = TRUE;
+        // Pre-create the default menu and accelerator table
+        zapp_create_default_menu();
+        zapp_accel_table = zapp_create_default_accel();
     }
 
     static BOOL WINAPI zapp_console_ctrl_handler(DWORD ctrlType) {
@@ -126,6 +295,7 @@ raw {
         if (!zapp_ui_thread_id) return;
         PostThreadMessageW(zapp_ui_thread_id, WM_ZAPP_HANDLE_MSG, 0, (LPARAM)_strdup(wire));
     }
+
 #endif
 }
 
@@ -169,6 +339,9 @@ impl Platform for WindowsPlatform {
                     char* wire = (char*)msg.lParam;
                     zapp_handle_message(app_get_active(), wire);
                     free(wire);
+                    continue;
+                }
+                if (zapp_accel_table && TranslateAcceleratorW(msg.hwnd, zapp_accel_table, &msg)) {
                     continue;
                 }
                 TranslateMessage(&msg);

@@ -81,9 +81,13 @@ export const ensureQjsLib = async (root: string, mode: "dev" | "release" = "rele
   process.stdout.write(`[zapp] compiling QuickJS (${mode})...\n`);
 
   const cc = process.platform === "win32" ? "gcc" : "cc";
-  const cflags = mode === "release"
-    ? ["-Oz", "-flto", "-c", `-I${qjsVendor}`]
-    : ["-O2", "-c", `-I${qjsVendor}`];
+
+  const cflags: string[] = [];
+  if (mode === "release") {
+    cflags.push("-Oz", "-flto", "-c", `-I${qjsVendor}`);
+  } else {
+    cflags.push("-O2", "-c", `-I${qjsVendor}`);
+  }
   if (process.platform === "win32") {
     cflags.push("-DUNICODE", "-D_UNICODE");
   }
@@ -96,7 +100,7 @@ export const ensureQjsLib = async (root: string, mode: "dev" | "release" = "rele
     await runCmd(cc, [...cflags, srcPath, "-o", objPath]);
   }
 
-  const ar = (mode === "release" && process.platform === "win32") ? "gcc-ar" : "ar";
+  const ar = "ar";
   await runCmd(ar, ["rcs", libPath, ...objectFiles]);
 
   return libPath;
@@ -118,15 +122,15 @@ export const runCmd = async (command: string, args: string[], options: any = {})
   const { $ } = require("bun");
   const env = { ...process.env, ...(options.env ?? {}) };
   const cwd = options.cwd ?? process.cwd();
-  
+
   if (command === "zc") {
     console.error(`[debug] zc ${args.join(" ")}`);
+    await $`zc ${args}`.cwd(cwd).env(env);
+    return;
   }
-  
+
   if (command === "bun") {
     await $`bun ${args}`.cwd(cwd).env(env);
-  } else if (command === "zc") {
-    await $`zc ${args}`.cwd(cwd).env(env);
   } else {
     const cmdPath = Bun.which(command) || command;
     const proc = Bun.spawn([cmdPath, ...args], {

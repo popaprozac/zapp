@@ -1,7 +1,9 @@
 import "std/map.zc";
 
 raw {
+#ifdef __APPLE__
     #undef panic
+#endif
 }
 
 import "stdio.h" as c_stdio;

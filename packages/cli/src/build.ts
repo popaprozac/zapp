@@ -1,5 +1,6 @@
 import path from "node:path";
 import process from "node:process";
+import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { brotliCompressSync, constants as zlibConstants } from "node:zlib";
 import { generateBuildConfigZc } from "./build-config";
@@ -222,6 +223,20 @@ export const runBuild = async ({
     zcArgs.push("-flto"); // Link-time optimization
   }
   
+  // On Windows, embed the application manifest for comctl32 v6 (TaskDialogIndirect, visual styles)
+  if (process.platform === "win32") {
+    const manifestSrc = path.join(root, "config", "windows", "app.manifest");
+    if (existsSync(manifestSrc)) {
+      const buildDir = path.join(root, ".zapp", "build");
+      await mkdir(buildDir, { recursive: true });
+      const rcPath = path.join(buildDir, "app.rc");
+      await Bun.write(rcPath, `1 24 "${manifestSrc.replace(/\\/g, "/")}"\n`);
+      const resPath = path.join(buildDir, "app_manifest.o");
+      await runCmd("windres", [rcPath, "-O", "coff", "-o", resPath]);
+      zcArgs.push(resPath);
+    }
+  }
+
   zcArgs.push("-o", nativeOut, "-L", path.dirname(qjsLib), "-lqjs");
   await runCmd("zc", zcArgs, { cwd: root, env: { ZAPP_NATIVE: resolveNativeDir() } });
 

@@ -9,6 +9,7 @@ param(
 $ErrorActionPreference = "Stop"
 $ScriptDir = $PSScriptRoot
 $CliDir = Join-Path $ScriptDir "packages\cli"
+$ViteDir = Join-Path $ScriptDir "packages\vite"
 $NativeDir = Join-Path $CliDir "native"
 $SrcDir = Join-Path $ScriptDir "src"
 $VendorDir = Join-Path $ScriptDir "vendor"
@@ -87,7 +88,7 @@ if (Test-Path $wvSrc) {
 
 # Ensure git submodules are updated
 Write-Host "[zapp] updating git submodules..."
-Set-Location $VendorDir\quickjs-ng
+Set-Location $ScriptDir
 git submodule update --init --recursive
 
 # Rebuild CLI

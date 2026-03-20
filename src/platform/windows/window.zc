@@ -1,5 +1,7 @@
 import "../window.zc";
 
+//> windows: link: -lcomdlg32
+
 raw {
 #ifdef _WIN32
     #include <windows.h>
@@ -24,23 +26,32 @@ raw {
     extern void zapp_windows_webview_create(HWND hwnd, BOOL inspectable);
     extern ZappWindowEntry* zapp_window_entry_for_hwnd(HWND hwnd);
 
+    extern HMENU zapp_default_menu;
+
     static HWND zapp_create_hwnd(const char* title, int width, int height, int x, int y) {
         int titleLen = MultiByteToWideChar(CP_UTF8, 0, title, -1, NULL, 0);
         wchar_t* wTitle = (wchar_t*)malloc(titleLen * sizeof(wchar_t));
         MultiByteToWideChar(CP_UTF8, 0, title, -1, wTitle, titleLen);
 
+        // Adjust window size so the *client area* matches the requested dimensions
+        DWORD style = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN;
+        RECT rc = { 0, 0, width, height };
+        AdjustWindowRectEx(&rc, style, zapp_default_menu ? TRUE : FALSE, 0);
+        int adjW = rc.right - rc.left;
+        int adjH = rc.bottom - rc.top;
+
         int screenW = GetSystemMetrics(SM_CXSCREEN);
         int screenH = GetSystemMetrics(SM_CYSCREEN);
-        int posX = (x == 0) ? (screenW - width) / 2 : x;
-        int posY = (y == 0) ? (screenH - height) / 2 : y;
+        int posX = (x == 0) ? (screenW - adjW) / 2 : x;
+        int posY = (y == 0) ? (screenH - adjH) / 2 : y;
 
         HWND hwnd = CreateWindowExW(
             0,
             ZAPP_WINDOW_CLASS,
             wTitle,
-            WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
-            posX, posY, width, height,
-            NULL, NULL,
+            style,
+            posX, posY, adjW, adjH,
+            NULL, zapp_default_menu,
             GetModuleHandleW(NULL),
             NULL
         );
@@ -179,9 +190,16 @@ fn windows_window_set_size(window: void*, width: int, height: int) -> void {
     #ifdef _WIN32
         HWND hwnd = (HWND)window;
         if (hwnd && IsWindow(hwnd)) {
-            RECT rc;
-            GetWindowRect(hwnd, &rc);
-            MoveWindow(hwnd, rc.left, rc.top, width, height, TRUE);
+            // Convert client area dimensions to window frame dimensions
+            DWORD style = (DWORD)GetWindowLongW(hwnd, GWL_STYLE);
+            BOOL hasMenu = GetMenu(hwnd) != NULL;
+            RECT desired = { 0, 0, width, height };
+            AdjustWindowRectEx(&desired, style, hasMenu, 0);
+            RECT pos;
+            GetWindowRect(hwnd, &pos);
+            MoveWindow(hwnd, pos.left, pos.top,
+                       desired.right - desired.left,
+                       desired.bottom - desired.top, TRUE);
         }
     #endif
     }
@@ -594,7 +612,11 @@ raw {
     // --- Dialog handling (Windows) ---
     extern char* zapp_json_get_string(const char* json, const char* key);
     extern int zapp_json_get_bool(const char* json, const char* key, int default_val);
+    extern char* zapp_json_get_raw(const char* json, const char* key);
     #include <commdlg.h>
+    #include <shlobj.h>
+    #include <shobjidl.h>
+    #include <commctrl.h>
 
     static void zapp_dispatch_dialog_result(const char* payload_json) {
         char* escaped = zapp_escape_js_string(payload_json);
@@ -609,6 +631,169 @@ raw {
         free(escaped);
     }
 
+    // Helper: escape a UTF-8 string for JSON embedding (quotes + backslashes)
+    static void zapp_json_escape_path(const char* src, char* dst, size_t dstSize) {
+        size_t i = 0;
+        while (*src && i + 3 < dstSize) {
+            if (*src == '"') { dst[i++] = '\\'; dst[i++] = '"'; }
+            else if (*src == '\\') { dst[i++] = '\\'; dst[i++] = '\\'; }
+            else { dst[i++] = *src; }
+            src++;
+        }
+        dst[i] = '\0';
+    }
+
+    // ---------------------------------------------------------------------------
+    // openFile: directory selection via IFileDialog COM
+    // ---------------------------------------------------------------------------
+    static int zapp_open_folder_dialog(const char* titleUtf8, const char* defaultPathUtf8,
+                                        char* requestId) {
+        IFileDialog* pfd = NULL;
+        HRESULT hr = CoCreateInstance(&CLSID_FileOpenDialog, NULL, CLSCTX_INPROC_SERVER,
+                                       &IID_IFileOpenDialog, (void**)&pfd);
+        if (FAILED(hr) || !pfd) return 0;
+
+        DWORD opts = 0;
+        pfd->lpVtbl->GetOptions(pfd, &opts);
+        pfd->lpVtbl->SetOptions(pfd, opts | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
+
+        if (titleUtf8 && titleUtf8[0]) {
+            int len = MultiByteToWideChar(CP_UTF8, 0, titleUtf8, -1, NULL, 0);
+            wchar_t* wt = (wchar_t*)malloc(len * sizeof(wchar_t));
+            MultiByteToWideChar(CP_UTF8, 0, titleUtf8, -1, wt, len);
+            pfd->lpVtbl->SetTitle(pfd, wt);
+            free(wt);
+        }
+
+        if (defaultPathUtf8 && defaultPathUtf8[0]) {
+            int len = MultiByteToWideChar(CP_UTF8, 0, defaultPathUtf8, -1, NULL, 0);
+            wchar_t* wp = (wchar_t*)malloc(len * sizeof(wchar_t));
+            MultiByteToWideChar(CP_UTF8, 0, defaultPathUtf8, -1, wp, len);
+            IShellItem* psi = NULL;
+            SHCreateItemFromParsingName(wp, NULL, &IID_IShellItem, (void**)&psi);
+            if (psi) {
+                pfd->lpVtbl->SetFolder(pfd, psi);
+                psi->lpVtbl->Release(psi);
+            }
+            free(wp);
+        }
+
+        hr = pfd->lpVtbl->Show(pfd, NULL);
+        if (SUCCEEDED(hr)) {
+            IShellItem* psi = NULL;
+            pfd->lpVtbl->GetResult(pfd, &psi);
+            if (psi) {
+                PWSTR wPath = NULL;
+                psi->lpVtbl->GetDisplayName(psi, SIGDN_FILESYSPATH, &wPath);
+                if (wPath) {
+                    char utf8[MAX_PATH * 4];
+                    WideCharToMultiByte(CP_UTF8, 0, wPath, -1, utf8, sizeof(utf8), NULL, NULL);
+                    CoTaskMemFree(wPath);
+                    char escaped[MAX_PATH * 8];
+                    zapp_json_escape_path(utf8, escaped, sizeof(escaped));
+                    char response[MAX_PATH * 8 + 256];
+                    snprintf(response, sizeof(response),
+                        "{\"requestId\":\"%s\",\"ok\":true,\"paths\":[\"%s\"]}",
+                        requestId, escaped);
+                    zapp_dispatch_dialog_result(response);
+                }
+                psi->lpVtbl->Release(psi);
+            }
+        } else {
+            char response[256];
+            snprintf(response, sizeof(response),
+                "{\"requestId\":\"%s\",\"ok\":false,\"cancelled\":true}",
+                requestId);
+            zapp_dispatch_dialog_result(response);
+        }
+        pfd->lpVtbl->Release(pfd);
+        return 1;
+    }
+
+    // ---------------------------------------------------------------------------
+    // Build lpstrFilter from JSON filters array
+    // Format: "Description\0*.ext1;*.ext2\0...\0\0"
+    // ---------------------------------------------------------------------------
+    static wchar_t* zapp_build_filter_string(const char* json) {
+        // Parse the filters array from the JSON payload
+        char* filtersRaw = zapp_json_get_raw(json, "filters");
+        if (!filtersRaw || filtersRaw[0] != '[') { free(filtersRaw); return NULL; }
+
+        // Simple parser for [{"name":"X","extensions":["a","b"]}, ...]
+        // We build: Name\0*.a;*.b\0Name2\0*.c\0\0
+        static wchar_t buf[4096];
+        int pos = 0;
+        memset(buf, 0, sizeof(buf));
+
+        const char* p = filtersRaw + 1; // skip '['
+        while (*p) {
+            // Find next object
+            while (*p && *p != '{') p++;
+            if (!*p) break;
+
+            // Extract "name" value
+            const char* nameKey = strstr(p, "\"name\"");
+            char name[256] = "Files";
+            if (nameKey) {
+                nameKey = strchr(nameKey + 6, '"');
+                if (nameKey) {
+                    nameKey++;
+                    int ni = 0;
+                    while (*nameKey && *nameKey != '"' && ni < 255) name[ni++] = *nameKey++;
+                    name[ni] = '\0';
+                }
+            }
+
+            // Extract "extensions" array
+            const char* extKey = strstr(p, "\"extensions\"");
+            char extBuf[1024] = "";
+            int extPos = 0;
+            if (extKey) {
+                const char* arrStart = strchr(extKey + 12, '[');
+                if (arrStart) {
+                    arrStart++;
+                    while (*arrStart && *arrStart != ']') {
+                        if (*arrStart == '"') {
+                            arrStart++;
+                            if (extPos > 0 && extPos < 1020) extBuf[extPos++] = ';';
+                            extBuf[extPos++] = '*';
+                            extBuf[extPos++] = '.';
+                            while (*arrStart && *arrStart != '"' && extPos < 1020)
+                                extBuf[extPos++] = *arrStart++;
+                            if (*arrStart == '"') arrStart++;
+                        } else {
+                            arrStart++;
+                        }
+                    }
+                }
+            }
+            extBuf[extPos] = '\0';
+
+            if (extPos > 0) {
+                // Write name
+                int nLen = MultiByteToWideChar(CP_UTF8, 0, name, -1, buf + pos, 4096 - pos);
+                pos += nLen; // nLen includes null terminator, which acts as separator
+                // Write extensions pattern
+                int eLen = MultiByteToWideChar(CP_UTF8, 0, extBuf, -1, buf + pos, 4096 - pos);
+                pos += eLen;
+            }
+
+            // Skip to end of this object
+            int depth = 1;
+            p++;
+            while (*p && depth > 0) {
+                if (*p == '{') depth++;
+                else if (*p == '}') depth--;
+                p++;
+            }
+        }
+
+        free(filtersRaw);
+        if (pos == 0) return NULL;
+        buf[pos] = L'\0'; // double-null terminate
+        return buf;
+    }
+
     void app_handle_dialog(App* app, char* action, char* payload_json) {
         (void)app;
         if (action == NULL || payload_json == NULL) return;
@@ -618,49 +803,113 @@ raw {
         if (!requestId || requestId[0] == '\0') { free(requestId); return; }
 
         if (strcmp(action, "openFile") == 0) {
+            int directory = zapp_json_get_bool(json, "directory", 0);
+            char* title = zapp_json_get_string(json, "title");
+            char* defaultPath = zapp_json_get_string(json, "defaultPath");
+
+            // --- Directory selection: use IFileDialog COM ---
+            if (directory) {
+                zapp_open_folder_dialog(title, defaultPath, requestId);
+                free(requestId);
+                if (title) free(title);
+                if (defaultPath) free(defaultPath);
+                return;
+            }
+
+            // --- File selection ---
+            int multiple = zapp_json_get_bool(json, "multiple", 0);
+
             OPENFILENAMEW ofn;
-            wchar_t szFile[MAX_PATH * 10] = {0};
+            wchar_t szFile[MAX_PATH * 100] = {0};
             ZeroMemory(&ofn, sizeof(ofn));
             ofn.lStructSize = sizeof(ofn);
             ofn.hwndOwner = NULL;
             ofn.lpstrFile = szFile;
             ofn.nMaxFile = sizeof(szFile) / sizeof(szFile[0]);
             ofn.Flags = OFN_FILEMUSTEXIST | OFN_EXPLORER;
-
-            int multiple = zapp_json_get_bool(json, "multiple", 0);
             if (multiple) ofn.Flags |= OFN_ALLOWMULTISELECT;
-            int directory = zapp_json_get_bool(json, "directory", 0);
 
-            if (directory) {
-                // Use folder browser for directory selection
-                // Simplified: just use file dialog for now
-                ofn.Flags |= OFN_NOVALIDATE;
+            // File type filters
+            wchar_t* filterStr = zapp_build_filter_string(json);
+            if (filterStr) {
+                ofn.lpstrFilter = filterStr;
             }
 
-            char* title = zapp_json_get_string(json, "title");
+            // Title
             wchar_t wTitle[256] = {0};
             if (title && title[0]) {
                 MultiByteToWideChar(CP_UTF8, 0, title, -1, wTitle, 256);
                 ofn.lpstrTitle = wTitle;
             }
 
+            // Default path
+            wchar_t wDefaultPath[MAX_PATH] = {0};
+            if (defaultPath && defaultPath[0]) {
+                MultiByteToWideChar(CP_UTF8, 0, defaultPath, -1, wDefaultPath, MAX_PATH);
+                ofn.lpstrInitialDir = wDefaultPath;
+            }
+
             if (GetOpenFileNameW(&ofn)) {
-                char utf8Path[MAX_PATH * 4];
-                WideCharToMultiByte(CP_UTF8, 0, szFile, -1, utf8Path, sizeof(utf8Path), NULL, NULL);
-                // Escape quotes in path
-                char escapedPath[MAX_PATH * 8];
-                char* dst = escapedPath;
-                for (const char* src = utf8Path; *src; src++) {
-                    if (*src == '"') { *dst++ = '\\'; *dst++ = '"'; }
-                    else if (*src == '\\') { *dst++ = '\\'; *dst++ = '\\'; }
-                    else { *dst++ = *src; }
+                if (multiple) {
+                    // Multi-select: buffer is dir\0file1\0file2\0\0
+                    // Single-select: buffer is full-path\0\0
+                    // If szFile[wcslen(szFile)+1] != 0, it's multi-select format
+                    size_t dirLen = wcslen(szFile);
+                    if (szFile[dirLen + 1] != L'\0') {
+                        // Multi-select: parse dir + filenames
+                        char response[MAX_PATH * 100 + 256];
+                        int rpos = snprintf(response, sizeof(response),
+                            "{\"requestId\":\"%s\",\"ok\":true,\"paths\":[", requestId);
+                        const wchar_t* dir = szFile;
+                        const wchar_t* fname = szFile + dirLen + 1;
+                        int first = 1;
+                        while (*fname) {
+                            // Build full path: dir\fname
+                            wchar_t fullPath[MAX_PATH * 2];
+                            size_t dl = wcslen(dir);
+                            // Add backslash separator if dir doesn't end with one
+                            if (dl > 0 && dir[dl - 1] != L'\\' && dir[dl - 1] != L'/') {
+                                swprintf(fullPath, sizeof(fullPath)/sizeof(fullPath[0]),
+                                    L"%s\\%s", dir, fname);
+                            } else {
+                                swprintf(fullPath, sizeof(fullPath)/sizeof(fullPath[0]),
+                                    L"%s%s", dir, fname);
+                            }
+                            char utf8[MAX_PATH * 4];
+                            WideCharToMultiByte(CP_UTF8, 0, fullPath, -1, utf8, sizeof(utf8), NULL, NULL);
+                            char escaped[MAX_PATH * 8];
+                            zapp_json_escape_path(utf8, escaped, sizeof(escaped));
+                            rpos += snprintf(response + rpos, sizeof(response) - rpos,
+                                "%s\"%s\"", first ? "" : ",", escaped);
+                            first = 0;
+                            fname += wcslen(fname) + 1;
+                        }
+                        snprintf(response + rpos, sizeof(response) - rpos, "]}");
+                        zapp_dispatch_dialog_result(response);
+                    } else {
+                        // Single file selected even with multi-select enabled
+                        char utf8Path[MAX_PATH * 4];
+                        WideCharToMultiByte(CP_UTF8, 0, szFile, -1, utf8Path, sizeof(utf8Path), NULL, NULL);
+                        char escapedPath[MAX_PATH * 8];
+                        zapp_json_escape_path(utf8Path, escapedPath, sizeof(escapedPath));
+                        char response[MAX_PATH * 8 + 256];
+                        snprintf(response, sizeof(response),
+                            "{\"requestId\":\"%s\",\"ok\":true,\"paths\":[\"%s\"]}",
+                            requestId, escapedPath);
+                        zapp_dispatch_dialog_result(response);
+                    }
+                } else {
+                    // Single-select
+                    char utf8Path[MAX_PATH * 4];
+                    WideCharToMultiByte(CP_UTF8, 0, szFile, -1, utf8Path, sizeof(utf8Path), NULL, NULL);
+                    char escapedPath[MAX_PATH * 8];
+                    zapp_json_escape_path(utf8Path, escapedPath, sizeof(escapedPath));
+                    char response[MAX_PATH * 8 + 256];
+                    snprintf(response, sizeof(response),
+                        "{\"requestId\":\"%s\",\"ok\":true,\"paths\":[\"%s\"]}",
+                        requestId, escapedPath);
+                    zapp_dispatch_dialog_result(response);
                 }
-                *dst = '\0';
-                char response[MAX_PATH * 8 + 256];
-                snprintf(response, sizeof(response),
-                    "{\"requestId\":\"%s\",\"ok\":true,\"paths\":[\"%s\"]}",
-                    requestId, escapedPath);
-                zapp_dispatch_dialog_result(response);
             } else {
                 char response[256];
                 snprintf(response, sizeof(response),
@@ -670,6 +919,7 @@ raw {
             }
             free(requestId);
             if (title) free(title);
+            if (defaultPath) free(defaultPath);
             return;
         }
 
@@ -695,17 +945,18 @@ raw {
                 ofn.lpstrTitle = wTitle;
             }
 
+            char* defaultPath = zapp_json_get_string(json, "defaultPath");
+            wchar_t wDefaultPath[MAX_PATH] = {0};
+            if (defaultPath && defaultPath[0]) {
+                MultiByteToWideChar(CP_UTF8, 0, defaultPath, -1, wDefaultPath, MAX_PATH);
+                ofn.lpstrInitialDir = wDefaultPath;
+            }
+
             if (GetSaveFileNameW(&ofn)) {
                 char utf8Path[MAX_PATH * 4];
                 WideCharToMultiByte(CP_UTF8, 0, szFile, -1, utf8Path, sizeof(utf8Path), NULL, NULL);
                 char escapedPath[MAX_PATH * 8];
-                char* dst = escapedPath;
-                for (const char* src = utf8Path; *src; src++) {
-                    if (*src == '"') { *dst++ = '\\'; *dst++ = '"'; }
-                    else if (*src == '\\') { *dst++ = '\\'; *dst++ = '\\'; }
-                    else { *dst++ = *src; }
-                }
-                *dst = '\0';
+                zapp_json_escape_path(utf8Path, escapedPath, sizeof(escapedPath));
                 char response[MAX_PATH * 8 + 256];
                 snprintf(response, sizeof(response),
                     "{\"requestId\":\"%s\",\"ok\":true,\"path\":\"%s\"}",
@@ -721,6 +972,7 @@ raw {
             free(requestId);
             if (defaultName) free(defaultName);
             if (title) free(title);
+            if (defaultPath) free(defaultPath);
             return;
         }
 
@@ -728,25 +980,104 @@ raw {
             char* title = zapp_json_get_string(json, "title");
             char* message = zapp_json_get_string(json, "message");
             char* kind = zapp_json_get_string(json, "kind");
+            char* buttonsRaw = zapp_json_get_raw(json, "buttons");
 
-            UINT type = MB_OK;
-            if (kind) {
-                if (strcmp(kind, "warning") == 0) type |= MB_ICONWARNING;
-                else if (strcmp(kind, "critical") == 0) type |= MB_ICONERROR;
-                else type |= MB_ICONINFORMATION;
-            } else {
-                type |= MB_ICONINFORMATION;
+            // Parse button labels from JSON array
+            // Simple parser: find each quoted string in the array
+            wchar_t* buttonLabels[32];
+            int buttonCount = 0;
+            if (buttonsRaw && buttonsRaw[0] == '[') {
+                const char* p = buttonsRaw + 1;
+                while (*p && buttonCount < 32) {
+                    // Skip whitespace and commas
+                    while (*p == ' ' || *p == ',' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+                    if (*p == ']' || *p == '\0') break;
+                    if (*p == '"') {
+                        p++; // skip opening quote
+                        const char* start = p;
+                        while (*p && *p != '"') {
+                            if (*p == '\\' && *(p+1)) p++; // skip escaped char
+                            p++;
+                        }
+                        // Extract the string between start and p
+                        int len = (int)(p - start);
+                        char* label = (char*)malloc(len + 1);
+                        memcpy(label, start, len);
+                        label[len] = '\0';
+                        // Convert to wide
+                        int wlen = MultiByteToWideChar(CP_UTF8, 0, label, -1, NULL, 0);
+                        buttonLabels[buttonCount] = (wchar_t*)malloc(wlen * sizeof(wchar_t));
+                        MultiByteToWideChar(CP_UTF8, 0, label, -1, buttonLabels[buttonCount], wlen);
+                        free(label);
+                        buttonCount++;
+                        if (*p == '"') p++; // skip closing quote
+                    }
+                }
             }
 
+            // Fallback: if no buttons, add "OK"
+            if (buttonCount == 0) {
+                buttonLabels[0] = _wcsdup(L"OK");
+                buttonCount = 1;
+            }
+
+            // Convert title and message to wide
             wchar_t wTitle[256] = {0};
             wchar_t wMessage[4096] = {0};
             if (title) MultiByteToWideChar(CP_UTF8, 0, title, -1, wTitle, 256);
             if (message) MultiByteToWideChar(CP_UTF8, 0, message, -1, wMessage, 4096);
 
-            int result = MessageBoxW(NULL, wMessage, wTitle, type);
+            // Build TASKDIALOG_BUTTON array with IDs 1000 + index
+            TASKDIALOG_BUTTON* tdButtons = (TASKDIALOG_BUTTON*)calloc(buttonCount, sizeof(TASKDIALOG_BUTTON));
+            for (int i = 0; i < buttonCount; i++) {
+                tdButtons[i].nButtonID = 1000 + i;
+                tdButtons[i].pszButtonText = buttonLabels[i];
+            }
+
+            TASKDIALOGCONFIG config = {0};
+            config.cbSize = sizeof(config);
+            config.hwndParent = NULL;
+            config.dwFlags = 0;
+            config.pszWindowTitle = wTitle;
+            config.pszContent = wMessage;
+            config.cButtons = buttonCount;
+            config.pButtons = tdButtons;
+            config.nDefaultButton = 1000;
+
+            // Set icon based on kind
+            if (kind) {
+                if (strcmp(kind, "warning") == 0) {
+                    config.pszMainIcon = TD_WARNING_ICON;
+                } else if (strcmp(kind, "critical") == 0) {
+                    config.pszMainIcon = TD_ERROR_ICON;
+                } else {
+                    config.pszMainIcon = TD_INFORMATION_ICON;
+                }
+            } else {
+                config.pszMainIcon = TD_INFORMATION_ICON;
+            }
+
+            int pressedButton = 0;
+            HRESULT hr = TaskDialogIndirect(&config, &pressedButton, NULL, NULL);
+
             int buttonIndex = 0;
-            if (result == IDOK || result == IDYES) buttonIndex = 0;
-            else if (result == IDCANCEL || result == IDNO) buttonIndex = 1;
+            if (SUCCEEDED(hr)) {
+                buttonIndex = pressedButton - 1000;
+                if (buttonIndex < 0 || buttonIndex >= buttonCount) buttonIndex = 0;
+            } else {
+                // Fallback to MessageBoxW if TaskDialogIndirect fails
+                UINT mbType = MB_OK | MB_ICONINFORMATION;
+                if (kind) {
+                    if (strcmp(kind, "warning") == 0) mbType = MB_OK | MB_ICONWARNING;
+                    else if (strcmp(kind, "critical") == 0) mbType = MB_OK | MB_ICONERROR;
+                }
+                MessageBoxW(NULL, wMessage, wTitle, mbType);
+                buttonIndex = 0;
+            }
+
+            // Clean up
+            for (int i = 0; i < buttonCount; i++) free(buttonLabels[i]);
+            free(tdButtons);
 
             char response[256];
             snprintf(response, sizeof(response),
@@ -758,6 +1089,7 @@ raw {
             if (title) free(title);
             if (message) free(message);
             if (kind) free(kind);
+            if (buttonsRaw) free(buttonsRaw);
             return;
         }
 
@@ -773,7 +1105,7 @@ fn windows_window_get_size(window: void*) -> WindowSize {
         HWND hwnd = (HWND)window;
         if (hwnd && IsWindow(hwnd)) {
             RECT rc;
-            GetWindowRect(hwnd, &rc);
+            GetClientRect(hwnd, &rc);
             s.width = rc.right - rc.left;
             s.height = rc.bottom - rc.top;
         }

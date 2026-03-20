@@ -74,7 +74,7 @@ fi
 
 # Ensure git submodules are updated
 echo "[zapp] updating git submodules..."
-cd "$VENDOR_DIR/quickjs-ng"
+cd "$SCRIPT_DIR"
 git submodule update --init --recursive
 
 # Rebuild CLI

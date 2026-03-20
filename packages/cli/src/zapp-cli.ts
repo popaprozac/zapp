@@ -14,19 +14,11 @@ const VALID_LOG_LEVELS = ["error", "warn", "info", "debug", "trace"] as const;
 type LogLevel = typeof VALID_LOG_LEVELS[number];
 
 const checkPrerequisites = () => {
-  const missing: string[] = [];
-
-  if (!Bun.which("zc")) {
-    missing.push(
-      "  zc (Zen-C compiler) is not on PATH.\n" +
-      "    Install: https://github.com/z-libs/Zen-C\n" +
-      "    Then add to PATH or set ZC_ROOT."
-    );
-  }
-
-  if (missing.length > 0) {
-    process.stderr.write(
-      "[zapp] Missing required tools:\n\n" + missing.join("\n\n") + "\n\n"
+  const which = Bun.which("zc");
+  if (!which) {
+    console.error(
+      "[zapp] Error: 'zc' (Zen-C compiler) not found on PATH.\n" +
+      "  Install from: https://github.com/zenc-lang/zenc\n"
     );
     process.exit(1);
   }

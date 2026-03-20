@@ -5,15 +5,29 @@ var __getProtoOf = Object.getPrototypeOf;
 var __defProp = Object.defineProperty;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
+function __accessProp(key) {
+  return this[key];
+}
+var __toESMCache_node;
+var __toESMCache_esm;
 var __toESM = (mod, isNodeMode, target) => {
+  var canCache = mod != null && typeof mod === "object";
+  if (canCache) {
+    var cache = isNodeMode ? __toESMCache_node ??= new WeakMap : __toESMCache_esm ??= new WeakMap;
+    var cached = cache.get(mod);
+    if (cached)
+      return cached;
+  }
   target = mod != null ? __create(__getProtoOf(mod)) : {};
   const to = isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target;
   for (let key of __getOwnPropNames(mod))
     if (!__hasOwnProp.call(to, key))
       __defProp(to, key, {
-        get: () => mod[key],
+        get: __accessProp.bind(mod, key),
         enumerable: true
       });
+  if (canCache)
+    cache.set(mod, to);
   return to;
 };
 var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
@@ -42,7 +56,7 @@ var require_get_caller_file = __commonJS((exports, module) => {
 
 // node_modules/esbuild/lib/main.js
 var require_main = __commonJS((exports, module) => {
-  var __dirname = "/Users/zach/code/zapp/packages/cli/node_modules/esbuild/lib", __filename = "/Users/zach/code/zapp/packages/cli/node_modules/esbuild/lib/main.js";
+  var __dirname = "C:\\Users\\Zach\\code\\zapp\\packages\\cli\\node_modules\\esbuild\\lib", __filename = "C:\\Users\\Zach\\code\\zapp\\packages\\cli\\node_modules\\esbuild\\lib\\main.js";
   var __defProp2 = Object.defineProperty;
   var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
   var __getOwnPropNames2 = Object.getOwnPropertyNames;
@@ -8052,6 +8066,7 @@ var yargs_default = Yargs;
 // src/dev.ts
 import path6 from "path";
 import process6 from "process";
+import { existsSync as existsSync3 } from "fs";
 import { createInterface } from "readline";
 import { mkdir as mkdir5 } from "fs/promises";
 
@@ -8117,7 +8132,12 @@ var ensureQjsLib = async (root, mode = "release") => {
   process2.stdout.write(`[zapp] compiling QuickJS (${mode})...
 `);
   const cc = process2.platform === "win32" ? "gcc" : "cc";
-  const cflags = mode === "release" ? ["-Oz", "-flto", "-c", `-I${qjsVendor}`] : ["-O2", "-c", `-I${qjsVendor}`];
+  const cflags = [];
+  if (mode === "release") {
+    cflags.push("-Oz", "-flto", "-c", `-I${qjsVendor}`);
+  } else {
+    cflags.push("-O2", "-c", `-I${qjsVendor}`);
+  }
   if (process2.platform === "win32") {
     cflags.push("-DUNICODE", "-D_UNICODE");
   }
@@ -8128,7 +8148,7 @@ var ensureQjsLib = async (root, mode = "release") => {
     objectFiles.push(objPath);
     await runCmd(cc, [...cflags, srcPath, "-o", objPath]);
   }
-  const ar = mode === "release" && process2.platform === "win32" ? "gcc-ar" : "ar";
+  const ar = "ar";
   await runCmd(ar, ["rcs", libPath, ...objectFiles]);
   return libPath;
 };
@@ -8149,11 +8169,11 @@ var runCmd = async (command2, args, options = {}) => {
   const cwd = options.cwd ?? process2.cwd();
   if (command2 === "zc") {
     console.error(`[debug] zc ${args.join(" ")}`);
+    await $`zc ${args}`.cwd(cwd).env(env2);
+    return;
   }
   if (command2 === "bun") {
     await $`bun ${args}`.cwd(cwd).env(env2);
-  } else if (command2 === "zc") {
-    await $`zc ${args}`.cwd(cwd).env(env2);
   } else {
     const cmdPath = Bun.which(command2) || command2;
     const proc = Bun.spawn([cmdPath, ...args], {
@@ -8207,6 +8227,7 @@ var spawnPackageScript = (script, options = {}) => {
 // src/build.ts
 import path5 from "path";
 import process5 from "process";
+import { existsSync as existsSync2 } from "fs";
 import { mkdir as mkdir4 } from "fs/promises";
 import { brotliCompressSync, constants as zlibConstants } from "zlib";
 
@@ -8702,6 +8723,19 @@ var runBuild = async ({
     zcArgs.push("-Oz");
     zcArgs.push("-flto");
   }
+  if (process5.platform === "win32") {
+    const manifestSrc = path5.join(root, "config", "windows", "app.manifest");
+    if (existsSync2(manifestSrc)) {
+      const buildDir = path5.join(root, ".zapp", "build");
+      await mkdir4(buildDir, { recursive: true });
+      const rcPath = path5.join(buildDir, "app.rc");
+      await Bun.write(rcPath, `1 24 "${manifestSrc.replace(/\\/g, "/")}"
+`);
+      const resPath = path5.join(buildDir, "app_manifest.o");
+      await runCmd("windres", [rcPath, "-O", "coff", "-o", resPath]);
+      zcArgs.push(resPath);
+    }
+  }
   zcArgs.push("-o", nativeOut, "-L", path5.dirname(qjsLib), "-lqjs");
   await runCmd("zc", zcArgs, { cwd: root, env: { ZAPP_NATIVE: resolveNativeDir() } });
   if (!isDebug) {
@@ -8811,6 +8845,19 @@ var runDev = async ({
     const manifest = embedAssets ? await buildAssetManifest({ assetDir, withBrotli }) : { v: 1, generatedAt: new Date().toISOString(), assets: [], embedded: false };
     const assetsFile = await generateAssetsZc(root, manifest, assetDir);
     zcArgs.push(assetsFile);
+    if (process6.platform === "win32") {
+      const manifestSrc = path6.join(root, "config", "windows", "app.manifest");
+      if (existsSync3(manifestSrc)) {
+        const buildDir = path6.join(root, ".zapp", "build");
+        await mkdir5(buildDir, { recursive: true });
+        const rcPath = path6.join(buildDir, "app.rc");
+        await Bun.write(rcPath, `1 24 "${manifestSrc.replace(/\\/g, "/")}"
+`);
+        const resPath = path6.join(buildDir, "app_manifest.o");
+        await runCmd("windres", [rcPath, "-O", "coff", "-o", resPath]);
+        zcArgs.push(resPath);
+      }
+    }
     zcArgs.push("-o", nativeOut, "-L", path6.dirname(qjsLib), "-lqjs");
     await runCmd("zc", zcArgs, { cwd: root, env: { ZAPP_NATIVE: resolveNativeDir() } });
     app = spawnStreaming(nativeOut, [], {
@@ -8911,7 +8958,7 @@ export default defineConfig({
 
 // --- Windows Directives (QuickJS default) ---
 //> windows: cflags: -DUNICODE -D_UNICODE -DCINTERFACE -DCOBJMACROS
-//> windows: link: -lole32 -lshell32 -luuid -luser32 -lgdi32 -lcomctl32 -lshlwapi
+//> windows: link: -lole32 -lshell32 -luuid -luser32 -lgdi32 -lcomctl32 -lcomdlg32 -lshlwapi
 //> windows: link: -lwinhttp -lbcrypt -ladvapi32 -lrpcrt4 -lcrypt32 -lversion
 //> windows: define: ZAPP_WORKER_ENGINE_QJS
 
@@ -9107,19 +9154,10 @@ async function loadConfig(root) {
 // src/zapp-cli.ts
 var VALID_LOG_LEVELS = ["error", "warn", "info", "debug", "trace"];
 var checkPrerequisites = () => {
-  const missing = [];
-  if (!Bun.which("zc")) {
-    missing.push(`  zc (Zen-C compiler) is not on PATH.
-` + `    Install: https://github.com/z-libs/Zen-C
-` + "    Then add to PATH or set ZC_ROOT.");
-  }
-  if (missing.length > 0) {
-    process8.stderr.write(`[zapp] Missing required tools:
-
-` + missing.join(`
-
-`) + `
-
+  const which = Bun.which("zc");
+  if (!which) {
+    console.error(`[zapp] Error: 'zc' (Zen-C compiler) not found on PATH.
+` + `  Install from: https://github.com/zenc-lang/zenc
 `);
     process8.exit(1);
   }

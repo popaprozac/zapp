@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bun packages/cli/dist/zapp-cli.js build --root example)",
+      "WebFetch(domain:github.com)",
+      "Bash(git submodule:*)",
+      "Bash(git rm:*)",
+      "Read(//c/ProgramData/mingw64/**)",
+      "Read(//c//**)",
+      "Read(//c/Users/Zach/code/zapp/$USERPROFILE/scoop/apps/**)"
+    ]
+  }
+}
