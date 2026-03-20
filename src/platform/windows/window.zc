@@ -33,17 +33,31 @@ raw {
         wchar_t* wTitle = (wchar_t*)malloc(titleLen * sizeof(wchar_t));
         MultiByteToWideChar(CP_UTF8, 0, title, -1, wTitle, titleLen);
 
+        // Scale dimensions by DPI (app uses logical points, not physical pixels)
+        UINT dpi = 96;
+        // GetDpiForSystem requires Windows 10 1607+
+        HMODULE user32 = GetModuleHandleW(L"user32.dll");
+        if (user32) {
+            typedef UINT (WINAPI *GetDpiForSystemFn)(void);
+            GetDpiForSystemFn getDpi = (GetDpiForSystemFn)GetProcAddress(user32, "GetDpiForSystem");
+            if (getDpi) dpi = getDpi();
+        }
+        int scaledW = MulDiv(width, dpi, 96);
+        int scaledH = MulDiv(height, dpi, 96);
+        int scaledX = (x != 0) ? MulDiv(x, dpi, 96) : 0;
+        int scaledY = (y != 0) ? MulDiv(y, dpi, 96) : 0;
+
         // Adjust window size so the *client area* matches the requested dimensions
         DWORD style = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN;
-        RECT rc = { 0, 0, width, height };
+        RECT rc = { 0, 0, scaledW, scaledH };
         AdjustWindowRectEx(&rc, style, zapp_default_menu ? TRUE : FALSE, 0);
         int adjW = rc.right - rc.left;
         int adjH = rc.bottom - rc.top;
 
         int screenW = GetSystemMetrics(SM_CXSCREEN);
         int screenH = GetSystemMetrics(SM_CYSCREEN);
-        int posX = (x == 0) ? (screenW - adjW) / 2 : x;
-        int posY = (y == 0) ? (screenH - adjH) / 2 : y;
+        int posX = (scaledX == 0) ? (screenW - adjW) / 2 : scaledX;
+        int posY = (scaledY == 0) ? (screenH - adjH) / 2 : scaledY;
 
         HWND hwnd = CreateWindowExW(
             0,
