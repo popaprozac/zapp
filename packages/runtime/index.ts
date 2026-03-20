@@ -9,5 +9,7 @@ export { Services } from "./services";
 export type { ServicesAPI } from "./services";
 export { Sync } from "./sync";
 export type { SyncAPI, SyncWaitOptions } from "./sync";
+export { Dialog } from "./dialog";
+export type { DialogAPI, OpenFileOptions, SaveFileOptions, MessageOptions, FileFilter, OpenFileResult, SaveFileResult, MessageResult } from "./dialog";
 export * from "./protocol";
 export * from "./bindings-contract";

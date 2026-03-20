@@ -9,13 +9,22 @@ raw {
     #import <objc/runtime.h>
 
     // Window event IDs (must match src/event/events.zc)
-    #define ZAPP_EVENT_WINDOW_FOCUS      1
+    #define ZAPP_EVENT_WINDOW_READY       0
+    #define ZAPP_EVENT_WINDOW_FOCUS       1
     #define ZAPP_EVENT_WINDOW_BLUR        2
+    #define ZAPP_EVENT_WINDOW_RESIZE      3
+    #define ZAPP_EVENT_WINDOW_MOVE        4
+    #define ZAPP_EVENT_WINDOW_CLOSE       5
+    #define ZAPP_EVENT_WINDOW_MINIMIZE    6
+    #define ZAPP_EVENT_WINDOW_MAXIMIZE    7
+    #define ZAPP_EVENT_WINDOW_RESTORE     8
+    #define ZAPP_EVENT_WINDOW_FULLSCREEN  9
+    #define ZAPP_EVENT_WINDOW_UNFULLSCREEN 10
 
     extern void zapp_darwin_reset_all_workers(void);
     extern void zapp_darwin_reset_owner_workers(const char* owner_id);
     extern void zapp_darwin_webview_create(void* window_ptr, bool inspectable);
-    extern void zapp_dispatch_window_event_to_bridge(const char* window_id, int event_id);
+    extern void zapp_dispatch_window_event_to_bridge(const char* window_id, int event_id, int width, int height, int x, int y);
     static int zapp_window_get_numeric_id(NSString* windowId);
     extern void zapp_window_trigger_event(int id, int event_id);
 
@@ -25,9 +34,18 @@ raw {
     @property (nonatomic, copy) NSString* windowId;
     @property (nonatomic, assign) BOOL bridgeReady;
     @property (nonatomic, assign) BOOL pendingFocusEvent;
+    @property (nonatomic, assign) BOOL wasZoomed;
     @end
 
     static void zapp_window_unregister(NSWindow* window);
+
+    // Helper to fire both native callback and bridge event
+    static void zapp_fire_window_event(NSString* windowId, int event_id, int w, int h, int x, int y) {
+        if (windowId == nil) return;
+        int numId = zapp_window_get_numeric_id(windowId);
+        if (numId >= 0) zapp_window_trigger_event(numId, event_id);
+        zapp_dispatch_window_event_to_bridge([windowId UTF8String], event_id, w, h, x, y);
+    }
 
     @implementation ZappWindowDelegate
     - (instancetype)init {
@@ -35,11 +53,15 @@ raw {
         if (self) {
             _bridgeReady = NO;
             _pendingFocusEvent = NO;
+            _wasZoomed = NO;
         }
         return self;
     }
     - (void)windowWillClose:(NSNotification*)notification {
         NSWindow* window = (NSWindow*)[notification object];
+        if (self.windowId) {
+            zapp_fire_window_event(self.windowId, ZAPP_EVENT_WINDOW_CLOSE, 0, 0, 0, 0);
+        }
         if (window) {
             zapp_window_unregister(window);
         }
@@ -53,7 +75,7 @@ raw {
             int numId = zapp_window_get_numeric_id(self.windowId);
             if (numId >= 0) zapp_window_trigger_event(numId, ZAPP_EVENT_WINDOW_FOCUS);
             if (self.bridgeReady) {
-                zapp_dispatch_window_event_to_bridge([self.windowId UTF8String], ZAPP_EVENT_WINDOW_FOCUS);
+                zapp_dispatch_window_event_to_bridge([self.windowId UTF8String], ZAPP_EVENT_WINDOW_FOCUS, 0, 0, 0, 0);
             } else {
                 self.pendingFocusEvent = YES;
             }
@@ -62,9 +84,61 @@ raw {
     - (void)windowDidResignKey:(NSNotification*)notification {
         (void)notification;
         if (self.windowId) {
-            int numId = zapp_window_get_numeric_id(self.windowId);
-            if (numId >= 0) zapp_window_trigger_event(numId, ZAPP_EVENT_WINDOW_BLUR);
-            zapp_dispatch_window_event_to_bridge([self.windowId UTF8String], ZAPP_EVENT_WINDOW_BLUR);
+            zapp_fire_window_event(self.windowId, ZAPP_EVENT_WINDOW_BLUR, 0, 0, 0, 0);
+        }
+    }
+    - (void)windowDidResize:(NSNotification*)notification {
+        NSWindow* window = (NSWindow*)[notification object];
+        if (self.windowId && window) {
+            NSRect frame = [window frame];
+            int w = (int)frame.size.width;
+            int h = (int)frame.size.height;
+            int x = (int)frame.origin.x;
+            int y = (int)frame.origin.y;
+            zapp_fire_window_event(self.windowId, ZAPP_EVENT_WINDOW_RESIZE, w, h, x, y);
+            // Detect maximize (zoom) transitions
+            BOOL isZoomed = [window isZoomed];
+            if (isZoomed && !self.wasZoomed) {
+                zapp_fire_window_event(self.windowId, ZAPP_EVENT_WINDOW_MAXIMIZE, w, h, x, y);
+            } else if (!isZoomed && self.wasZoomed) {
+                zapp_fire_window_event(self.windowId, ZAPP_EVENT_WINDOW_RESTORE, w, h, x, y);
+            }
+            self.wasZoomed = isZoomed;
+        }
+    }
+    - (void)windowDidMove:(NSNotification*)notification {
+        NSWindow* window = (NSWindow*)[notification object];
+        if (self.windowId && window) {
+            NSRect frame = [window frame];
+            int w = (int)frame.size.width;
+            int h = (int)frame.size.height;
+            int x = (int)frame.origin.x;
+            int y = (int)frame.origin.y;
+            zapp_fire_window_event(self.windowId, ZAPP_EVENT_WINDOW_MOVE, w, h, x, y);
+        }
+    }
+    - (void)windowDidMiniaturize:(NSNotification*)notification {
+        (void)notification;
+        if (self.windowId) {
+            zapp_fire_window_event(self.windowId, ZAPP_EVENT_WINDOW_MINIMIZE, 0, 0, 0, 0);
+        }
+    }
+    - (void)windowDidDeminiaturize:(NSNotification*)notification {
+        (void)notification;
+        if (self.windowId) {
+            zapp_fire_window_event(self.windowId, ZAPP_EVENT_WINDOW_RESTORE, 0, 0, 0, 0);
+        }
+    }
+    - (void)windowDidEnterFullScreen:(NSNotification*)notification {
+        (void)notification;
+        if (self.windowId) {
+            zapp_fire_window_event(self.windowId, ZAPP_EVENT_WINDOW_FULLSCREEN, 0, 0, 0, 0);
+        }
+    }
+    - (void)windowDidExitFullScreen:(NSNotification*)notification {
+        (void)notification;
+        if (self.windowId) {
+            zapp_fire_window_event(self.windowId, ZAPP_EVENT_WINDOW_UNFULLSCREEN, 0, 0, 0, 0);
         }
     }
     @end
@@ -79,7 +153,7 @@ raw {
                 delegate.bridgeReady = YES;
                 if (delegate.pendingFocusEvent) {
                     delegate.pendingFocusEvent = NO;
-                    zapp_dispatch_window_event_to_bridge([delegate.windowId UTF8String], ZAPP_EVENT_WINDOW_FOCUS);
+                    zapp_dispatch_window_event_to_bridge([delegate.windowId UTF8String], ZAPP_EVENT_WINDOW_FOCUS, 0, 0, 0, 0);
                 }
                 break;
             }
@@ -436,6 +510,66 @@ fn darwin_window_set_always_on_top(window: void*, on: bool) -> void {
     }
 }
 
+fn darwin_window_get_size(window: void*) -> WindowSize {
+    let s = WindowSize{ width: 0, height: 0 };
+    raw {
+#ifdef __APPLE__
+        NSWindow* nsWindow = (__bridge NSWindow*)window;
+        if (nsWindow) {
+            NSRect frame = [nsWindow frame];
+            s.width = (int)frame.size.width;
+            s.height = (int)frame.size.height;
+        }
+#endif
+    }
+    return s;
+}
+
+fn darwin_window_get_position(window: void*) -> WindowPosition {
+    let p = WindowPosition{ x: 0, y: 0 };
+    raw {
+#ifdef __APPLE__
+        NSWindow* nsWindow = (__bridge NSWindow*)window;
+        if (nsWindow) {
+            NSRect frame = [nsWindow frame];
+            p.x = (int)frame.origin.x;
+            p.y = (int)frame.origin.y;
+        }
+#endif
+    }
+    return p;
+}
+
+fn darwin_window_is_minimized(window: void*) -> bool {
+    raw {
+#ifdef __APPLE__
+        NSWindow* nsWindow = (__bridge NSWindow*)window;
+        if (nsWindow) return [nsWindow isMiniaturized] ? true : false;
+#endif
+    }
+    return false;
+}
+
+fn darwin_window_is_maximized(window: void*) -> bool {
+    raw {
+#ifdef __APPLE__
+        NSWindow* nsWindow = (__bridge NSWindow*)window;
+        if (nsWindow) return [nsWindow isZoomed] ? true : false;
+#endif
+    }
+    return false;
+}
+
+fn darwin_window_is_fullscreen(window: void*) -> bool {
+    raw {
+#ifdef __APPLE__
+        NSWindow* nsWindow = (__bridge NSWindow*)window;
+        if (nsWindow) return ([nsWindow styleMask] & NSWindowStyleMaskFullScreen) != 0;
+#endif
+    }
+    return false;
+}
+
 raw {
 #ifdef __APPLE__
     extern void* app_get_active(void);
@@ -530,25 +664,63 @@ raw {
         zapp_backend_dispatch_window_result(payload_json);
     }
 
+    static void zapp_dispatch_dialog_result(const char* payload_json) {
+        NSString* payload = [NSString stringWithUTF8String:payload_json];
+        payload = [payload stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+        payload = [payload stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
+        NSString* js = [NSString stringWithFormat:
+            @"(function(){var b=globalThis[Symbol.for('zapp.bridge')];if(b&&typeof b.dispatchDialogResult==='function'){b.dispatchDialogResult('%@');}})();",
+            payload
+        ];
+        for (NSWindow* window in [NSApp windows]) {
+            NSView* content = [window contentView];
+            if ([content isKindOfClass:[WKWebView class]]) {
+                WKWebView* webview = (WKWebView*)content;
+                [webview evaluateJavaScript:js completionHandler:nil];
+            }
+        }
+    }
+
     // Event names matching WindowEvent enum in TypeScript runtime
     static const char* zapp_get_window_event_name(int event_id) {
         switch (event_id) {
+            case ZAPP_EVENT_WINDOW_READY: return "ready";
             case ZAPP_EVENT_WINDOW_FOCUS: return "focus";
             case ZAPP_EVENT_WINDOW_BLUR: return "blur";
+            case ZAPP_EVENT_WINDOW_RESIZE: return "resize";
+            case ZAPP_EVENT_WINDOW_MOVE: return "move";
+            case ZAPP_EVENT_WINDOW_CLOSE: return "close";
+            case ZAPP_EVENT_WINDOW_MINIMIZE: return "minimize";
+            case ZAPP_EVENT_WINDOW_MAXIMIZE: return "maximize";
+            case ZAPP_EVENT_WINDOW_RESTORE: return "restore";
+            case ZAPP_EVENT_WINDOW_FULLSCREEN: return "fullscreen";
+            case ZAPP_EVENT_WINDOW_UNFULLSCREEN: return "unfullscreen";
             default: return "unknown";
         }
     }
 
-    void zapp_dispatch_window_event_to_bridge(const char* window_id, int event_id) {
+    void zapp_dispatch_window_event_to_bridge(const char* window_id, int event_id, int width, int height, int x, int y) {
         if (window_id == NULL) return;
         const char* event_name = zapp_get_window_event_name(event_id);
         NSString* escapedEvent = [NSString stringWithUTF8String:event_name];
         escapedEvent = [escapedEvent stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
-        NSString* js = [NSString stringWithFormat:
-            @"(function(){var b=globalThis[Symbol.for('zapp.bridge')];if(b&&typeof b.dispatchWindowEvent==='function'){b.dispatchWindowEvent('%@','%@');}})();",
-            [NSString stringWithUTF8String:window_id],
-            escapedEvent
-        ];
+        NSString* windowIdStr = [NSString stringWithUTF8String:window_id];
+
+        // Only include size/position payload for events where it's meaningful
+        BOOL hasPayload = (event_id == ZAPP_EVENT_WINDOW_RESIZE || event_id == ZAPP_EVENT_WINDOW_MOVE ||
+                           event_id == ZAPP_EVENT_WINDOW_MAXIMIZE || event_id == ZAPP_EVENT_WINDOW_RESTORE);
+        NSString* js;
+        if (hasPayload) {
+            js = [NSString stringWithFormat:
+                @"(function(){var b=globalThis[Symbol.for('zapp.bridge')];if(b&&typeof b.dispatchWindowEvent==='function'){b.dispatchWindowEvent('%@','%@','{\"width\":%d,\"height\":%d,\"x\":%d,\"y\":%d}');}})();",
+                windowIdStr, escapedEvent, width, height, x, y
+            ];
+        } else {
+            js = [NSString stringWithFormat:
+                @"(function(){var b=globalThis[Symbol.for('zapp.bridge')];if(b&&typeof b.dispatchWindowEvent==='function'){b.dispatchWindowEvent('%@','%@');}})();",
+                windowIdStr, escapedEvent
+            ];
+        }
         for (NSWindow* window in [NSApp windows]) {
             NSView* content = [window contentView];
             if ([content isKindOfClass:[WKWebView class]]) {
@@ -755,6 +927,173 @@ raw {
 
         if ([NSThread isMainThread]) { work(); }
         else { dispatch_async(dispatch_get_main_queue(), work); }
+    }
+
+    // --- Open external URL ---
+    void app_open_external(App* app, char* payload) {
+        (void)app;
+        if (payload == NULL) return;
+        NSString* jsonStr = [NSString stringWithUTF8String:(const char*)payload];
+        NSData* data = [jsonStr dataUsingEncoding:NSUTF8StringEncoding];
+        if (data == nil) return;
+        NSDictionary* dict = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+        if (![dict isKindOfClass:[NSDictionary class]]) return;
+        NSString* urlStr = dict[@"url"];
+        if (![urlStr isKindOfClass:[NSString class]] || [urlStr length] == 0) return;
+        NSURL* url = [NSURL URLWithString:urlStr];
+        if (url) {
+            [[NSWorkspace sharedWorkspace] openURL:url];
+        }
+    }
+
+    // --- Dialog handling ---
+
+    void app_handle_dialog(App* app, char* action, char* payload_json) {
+        (void)app;
+        if (action == NULL || payload_json == NULL) return;
+        NSString* actionStr = [NSString stringWithUTF8String:action];
+        NSString* payload = [NSString stringWithUTF8String:payload_json];
+        NSData* payloadData = [payload dataUsingEncoding:NSUTF8StringEncoding];
+        if (payloadData == nil) return;
+        NSDictionary* body = [NSJSONSerialization JSONObjectWithData:payloadData options:0 error:nil];
+        if (![body isKindOfClass:[NSDictionary class]]) return;
+
+        NSString* requestId = body[@"requestId"];
+        if (![requestId isKindOfClass:[NSString class]] || [requestId length] == 0) return;
+
+        if ([actionStr isEqualToString:@"openFile"]) {
+            void (^work)(void) = ^{
+                NSOpenPanel* panel = [NSOpenPanel openPanel];
+                NSString* title = body[@"title"];
+                if ([title isKindOfClass:[NSString class]]) [panel setTitle:title];
+                id multiVal = body[@"multiple"];
+                if ([multiVal respondsToSelector:@selector(boolValue)]) {
+                    [panel setAllowsMultipleSelection:[multiVal boolValue]];
+                }
+                id dirVal = body[@"directory"];
+                if ([dirVal respondsToSelector:@selector(boolValue)] && [dirVal boolValue]) {
+                    [panel setCanChooseDirectories:YES];
+                    [panel setCanChooseFiles:NO];
+                } else {
+                    [panel setCanChooseDirectories:NO];
+                    [panel setCanChooseFiles:YES];
+                }
+                NSArray* filters = body[@"filters"];
+                if ([filters isKindOfClass:[NSArray class]] && [filters count] > 0) {
+                    NSMutableArray<NSString*>* extensions = [NSMutableArray array];
+                    for (NSDictionary* filter in filters) {
+                        NSArray* exts = filter[@"extensions"];
+                        if ([exts isKindOfClass:[NSArray class]]) {
+                            for (NSString* ext in exts) {
+                                if ([ext isKindOfClass:[NSString class]]) {
+                                    [extensions addObject:ext];
+                                }
+                            }
+                        }
+                    }
+                    if ([extensions count] > 0) {
+                        // Use allowedFileTypes (available on all macOS versions)
+                        [panel setAllowedFileTypes:extensions];
+                    }
+                }
+                NSString* defaultPath = body[@"defaultPath"];
+                if ([defaultPath isKindOfClass:[NSString class]] && [defaultPath length] > 0) {
+                    [panel setDirectoryURL:[NSURL fileURLWithPath:defaultPath]];
+                }
+
+                NSModalResponse result = [panel runModal];
+                NSString* responseJson;
+                if (result == NSModalResponseOK) {
+                    NSMutableArray<NSString*>* paths = [NSMutableArray array];
+                    for (NSURL* url in [panel URLs]) {
+                        [paths addObject:[url path]];
+                    }
+                    NSData* pathsData = [NSJSONSerialization dataWithJSONObject:paths options:0 error:nil];
+                    NSString* pathsStr = [[NSString alloc] initWithData:pathsData encoding:NSUTF8StringEncoding];
+                    responseJson = [NSString stringWithFormat:
+                        @"{\"requestId\":\"%@\",\"ok\":true,\"paths\":%@}",
+                        requestId, pathsStr];
+                } else {
+                    responseJson = [NSString stringWithFormat:
+                        @"{\"requestId\":\"%@\",\"ok\":false,\"cancelled\":true}",
+                        requestId];
+                }
+                zapp_dispatch_dialog_result([responseJson UTF8String]);
+            };
+            if ([NSThread isMainThread]) { work(); }
+            else { dispatch_async(dispatch_get_main_queue(), work); }
+            return;
+        }
+
+        if ([actionStr isEqualToString:@"saveFile"]) {
+            void (^work)(void) = ^{
+                NSSavePanel* panel = [NSSavePanel savePanel];
+                NSString* title = body[@"title"];
+                if ([title isKindOfClass:[NSString class]]) [panel setTitle:title];
+                NSString* defaultName = body[@"defaultName"];
+                if ([defaultName isKindOfClass:[NSString class]] && [defaultName length] > 0) {
+                    [panel setNameFieldStringValue:defaultName];
+                }
+                NSString* defaultPath = body[@"defaultPath"];
+                if ([defaultPath isKindOfClass:[NSString class]] && [defaultPath length] > 0) {
+                    [panel setDirectoryURL:[NSURL fileURLWithPath:defaultPath]];
+                }
+
+                NSModalResponse result = [panel runModal];
+                NSString* responseJson;
+                if (result == NSModalResponseOK && [panel URL]) {
+                    NSString* path = [[panel URL] path];
+                    NSString* escaped = [path stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\""];
+                    responseJson = [NSString stringWithFormat:
+                        @"{\"requestId\":\"%@\",\"ok\":true,\"path\":\"%@\"}",
+                        requestId, escaped];
+                } else {
+                    responseJson = [NSString stringWithFormat:
+                        @"{\"requestId\":\"%@\",\"ok\":false,\"cancelled\":true}",
+                        requestId];
+                }
+                zapp_dispatch_dialog_result([responseJson UTF8String]);
+            };
+            if ([NSThread isMainThread]) { work(); }
+            else { dispatch_async(dispatch_get_main_queue(), work); }
+            return;
+        }
+
+        if ([actionStr isEqualToString:@"message"]) {
+            void (^work)(void) = ^{
+                NSAlert* alert = [[NSAlert alloc] init];
+                NSString* title = body[@"title"];
+                NSString* message = body[@"message"];
+                NSString* kind = body[@"kind"];
+                NSArray* buttons = body[@"buttons"];
+                if ([title isKindOfClass:[NSString class]]) [alert setMessageText:title];
+                if ([message isKindOfClass:[NSString class]]) [alert setInformativeText:message];
+                if ([kind isKindOfClass:[NSString class]]) {
+                    if ([kind isEqualToString:@"warning"]) [alert setAlertStyle:NSAlertStyleWarning];
+                    else if ([kind isEqualToString:@"critical"]) [alert setAlertStyle:NSAlertStyleCritical];
+                    else [alert setAlertStyle:NSAlertStyleInformational];
+                }
+                if ([buttons isKindOfClass:[NSArray class]]) {
+                    for (NSString* btn in buttons) {
+                        if ([btn isKindOfClass:[NSString class]]) {
+                            [alert addButtonWithTitle:btn];
+                        }
+                    }
+                }
+                if ([[alert buttons] count] == 0) {
+                    [alert addButtonWithTitle:@"OK"];
+                }
+                NSModalResponse result = [alert runModal];
+                int buttonIndex = (int)(result - NSAlertFirstButtonReturn);
+                NSString* responseJson = [NSString stringWithFormat:
+                    @"{\"requestId\":\"%@\",\"ok\":true,\"button\":%d}",
+                    requestId, buttonIndex];
+                zapp_dispatch_dialog_result([responseJson UTF8String]);
+            };
+            if ([NSThread isMainThread]) { work(); }
+            else { dispatch_async(dispatch_get_main_queue(), work); }
+            return;
+        }
     }
 #endif
 }

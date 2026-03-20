@@ -42,7 +42,7 @@ var require_get_caller_file = __commonJS((exports, module) => {
 
 // node_modules/esbuild/lib/main.js
 var require_main = __commonJS((exports, module) => {
-  var __dirname = "/Users/zach.botterman/git-personal/zapp/packages/cli/node_modules/esbuild/lib", __filename = "/Users/zach.botterman/git-personal/zapp/packages/cli/node_modules/esbuild/lib/main.js";
+  var __dirname = "/Users/zach/code/zapp/packages/cli/node_modules/esbuild/lib", __filename = "/Users/zach/code/zapp/packages/cli/node_modules/esbuild/lib/main.js";
   var __defProp2 = Object.defineProperty;
   var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
   var __getOwnPropNames2 = Object.getOwnPropertyNames;
@@ -5413,14 +5413,14 @@ function usage(yargs, shim2) {
     const logger = yargs.getInternalMethods().getLoggerInstance();
     if (fails.length) {
       for (let i = fails.length - 1;i >= 0; --i) {
-        const fail = fails[i];
-        if (isBoolean(fail)) {
+        const fail2 = fails[i];
+        if (isBoolean(fail2)) {
           if (err)
             throw err;
           else if (msg)
             throw Error(msg);
         } else {
-          fail(msg, err, self);
+          fail2(msg, err, self);
         }
       }
     } else {
@@ -5477,7 +5477,7 @@ function usage(yargs, shim2) {
     examples.push([cmd, description || ""]);
   };
   let commands = [];
-  self.command = function command(cmd, description, isDefault, aliases, deprecated = false) {
+  self.command = function command2(cmd, description, isDefault, aliases, deprecated = false) {
     if (isDefault) {
       commands = commands.map((cmdArray) => {
         cmdArray[2] = false;
@@ -8488,7 +8488,10 @@ async function runGenerate({
   outDir,
   frontendDir
 }) {
-  const targetDir = outDir ? path4.resolve(root, outDir) : path4.join(frontendDir ?? root, "generated");
+  const base = frontendDir ?? root;
+  const srcDir = path4.join(base, "src");
+  const hasSrcDir = await fs.stat(srcDir).then(() => true, () => false);
+  const targetDir = outDir ? path4.resolve(root, outDir) : path4.join(hasSrcDir ? srcDir : base, "generated");
   process4.stdout.write(`[zapp] scanning for service registrations...
 `);
   const zappDir = path4.join(root, "zapp");

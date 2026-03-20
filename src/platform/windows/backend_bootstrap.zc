@@ -1,6 +1,6 @@
 // AUTO-GENERATED FILE. DO NOT EDIT.
 // Source of truth: `packages/bootstrap/src/backend.ts`
-// Generated: `2026-03-19T20:57:42.400Z`
+// Generated: `2026-03-20T10:02:58.338Z`
 
 raw {
     const char* zapp_windows_backend_bootstrap_script(void) {

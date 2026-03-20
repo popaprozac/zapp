@@ -37,12 +37,49 @@ raw {
     #ifndef ZAPP_EVENT_WINDOW_BLUR
     #define ZAPP_EVENT_WINDOW_BLUR  2
     #endif
+    #ifndef ZAPP_EVENT_WINDOW_RESIZE
+    #define ZAPP_EVENT_WINDOW_RESIZE 3
+    #endif
+    #ifndef ZAPP_EVENT_WINDOW_MOVE
+    #define ZAPP_EVENT_WINDOW_MOVE 4
+    #endif
+    #ifndef ZAPP_EVENT_WINDOW_CLOSE
+    #define ZAPP_EVENT_WINDOW_CLOSE 5
+    #endif
+    #ifndef ZAPP_EVENT_WINDOW_MINIMIZE
+    #define ZAPP_EVENT_WINDOW_MINIMIZE 6
+    #endif
+    #ifndef ZAPP_EVENT_WINDOW_MAXIMIZE
+    #define ZAPP_EVENT_WINDOW_MAXIMIZE 7
+    #endif
+    #ifndef ZAPP_EVENT_WINDOW_RESTORE
+    #define ZAPP_EVENT_WINDOW_RESTORE 8
+    #endif
+    #ifndef ZAPP_EVENT_WINDOW_FULLSCREEN
+    #define ZAPP_EVENT_WINDOW_FULLSCREEN 9
+    #endif
+    #ifndef ZAPP_EVENT_WINDOW_UNFULLSCREEN
+    #define ZAPP_EVENT_WINDOW_UNFULLSCREEN 10
+    #endif
 
     extern const char* zapp_win_id_for_hwnd(HWND hwnd);
     extern int zapp_window_get_numeric_id(const char* window_id);
     extern void zapp_window_trigger_event(int id, int event_id);
-    extern void zapp_dispatch_window_event_to_bridge_win(const char* window_id, int event_id);
+    extern void zapp_dispatch_window_event_to_bridge_win(const char* window_id, int event_id, int width, int height, int x, int y);
     extern ZappWindowEntry* zapp_window_entry_for_hwnd(HWND hwnd);
+
+    // Helper to fire both native callback and bridge event for Windows
+    static void zapp_fire_window_event_win(HWND hwnd, int event_id, int w, int h, int x, int y) {
+        const char* windowId = zapp_win_id_for_hwnd(hwnd);
+        if (!windowId) return;
+        int numericId = zapp_window_get_numeric_id(windowId);
+        if (numericId >= 0)
+            zapp_window_trigger_event(numericId, event_id);
+        ZappWindowEntry* entry = zapp_window_entry_for_hwnd(hwnd);
+        if (entry && entry->bridgeReady) {
+            zapp_dispatch_window_event_to_bridge_win(windowId, event_id, w, h, x, y);
+        }
+    }
 
     static LRESULT CALLBACK ZappWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         switch (msg) {
@@ -54,9 +91,35 @@ raw {
             }
             case WM_SIZE: {
                 zapp_windows_webview_resize(hwnd);
+                RECT rc;
+                GetWindowRect(hwnd, &rc);
+                int w = rc.right - rc.left;
+                int h = rc.bottom - rc.top;
+                int x = rc.left;
+                int y = rc.top;
+                WORD sizeType = LOWORD(wParam);
+                if (sizeType == SIZE_MINIMIZED) {
+                    zapp_fire_window_event_win(hwnd, ZAPP_EVENT_WINDOW_MINIMIZE, w, h, x, y);
+                } else if (sizeType == SIZE_MAXIMIZED) {
+                    zapp_fire_window_event_win(hwnd, ZAPP_EVENT_WINDOW_MAXIMIZE, w, h, x, y);
+                    zapp_fire_window_event_win(hwnd, ZAPP_EVENT_WINDOW_RESIZE, w, h, x, y);
+                } else if (sizeType == SIZE_RESTORED) {
+                    zapp_fire_window_event_win(hwnd, ZAPP_EVENT_WINDOW_RESTORE, w, h, x, y);
+                    zapp_fire_window_event_win(hwnd, ZAPP_EVENT_WINDOW_RESIZE, w, h, x, y);
+                } else {
+                    zapp_fire_window_event_win(hwnd, ZAPP_EVENT_WINDOW_RESIZE, w, h, x, y);
+                }
                 return 0;
             }
-            case WM_MOVE:
+            case WM_MOVE: {
+                zapp_windows_webview_notify_position(hwnd);
+                RECT rc;
+                GetWindowRect(hwnd, &rc);
+                int w = rc.right - rc.left;
+                int h = rc.bottom - rc.top;
+                zapp_fire_window_event_win(hwnd, ZAPP_EVENT_WINDOW_MOVE, w, h, rc.left, rc.top);
+                break;
+            }
             case WM_MOVING: {
                 zapp_windows_webview_notify_position(hwnd);
                 break;
@@ -71,14 +134,14 @@ raw {
                             zapp_window_trigger_event(numericId, ZAPP_EVENT_WINDOW_FOCUS);
                         ZappWindowEntry* entry = zapp_window_entry_for_hwnd(hwnd);
                         if (entry && entry->bridgeReady) {
-                            zapp_dispatch_window_event_to_bridge_win(windowId, ZAPP_EVENT_WINDOW_FOCUS);
+                            zapp_dispatch_window_event_to_bridge_win(windowId, ZAPP_EVENT_WINDOW_FOCUS, 0, 0, 0, 0);
                         } else if (entry) {
                             entry->pendingFocusEvent = TRUE;
                         }
                     } else if (activateState == WA_INACTIVE) {
                         if (numericId >= 0)
                             zapp_window_trigger_event(numericId, ZAPP_EVENT_WINDOW_BLUR);
-                        zapp_dispatch_window_event_to_bridge_win(windowId, ZAPP_EVENT_WINDOW_BLUR);
+                        zapp_dispatch_window_event_to_bridge_win(windowId, ZAPP_EVENT_WINDOW_BLUR, 0, 0, 0, 0);
                     }
                 }
                 break;
@@ -91,6 +154,7 @@ raw {
                 return 0;
             }
             case WM_CLOSE: {
+                zapp_fire_window_event_win(hwnd, ZAPP_EVENT_WINDOW_CLOSE, 0, 0, 0, 0);
                 DestroyWindow(hwnd);
                 return 0;
             }

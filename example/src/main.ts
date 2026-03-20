@@ -1,7 +1,7 @@
 import { mount } from 'svelte'
 import './app.css'
 import AppInstance from './App.svelte'
-import { App, Events, Window, Worker, SharedWorker,WindowEvent } from '@zapp/runtime'
+import { App, Events, Window, Worker, SharedWorker,WindowEvent,Dialog } from '@zapp/runtime'
 import { Ping } from "./generated";
 import './worker-parity';
 import './multiwindow-parity';
@@ -51,3 +51,27 @@ Window.current().on(WindowEvent.READY, () => {
   console.log("window ready");
   Window.current().show();
 })
+
+Window.current().on(WindowEvent.RESIZE, (payload) => {
+  console.log("window resized", payload);
+});
+
+Window.current().on(WindowEvent.MOVE, (payload) => {
+  console.log("window moved", payload);
+});
+
+Window.current().on(WindowEvent.MINIMIZE, (payload) => {
+  console.log("window minimized", payload);
+});
+
+Window.current().on(WindowEvent.MAXIMIZE, (payload) => {
+  console.log("window maximized", payload);
+});
+
+const result = await Dialog.message({
+  message: "Hello from dialog",
+  title: "Dialog Title",
+  kind: "info",
+  buttons: ["OK", "Cancel"],
+});
+console.log("dialog result", result.button);

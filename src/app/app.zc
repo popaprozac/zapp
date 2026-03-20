@@ -4,6 +4,7 @@ import "../event/event.zc";
 import "../event/events.zc";
 import "../service/service.zc";
 import "../platform/shared/log.zc";
+import "std/json.zc";
 include <string.h>
 
 struct AppConfig {
@@ -264,7 +265,10 @@ fn app_apply_configure(app: App*, payload: string) -> void {
         id nameVal = dict[@"name"];
         if ([nameVal isKindOfClass:[NSString class]]) {
             const char* utf8 = [(NSString*)nameVal UTF8String];
-            if (utf8) app->config.name = strdup(utf8);
+            if (utf8) {
+                if (app->config.name) free((void*)app->config.name);
+                app->config.name = strdup(utf8);
+            }
         }
 
         id quitVal = dict[@"applicationShouldTerminateAfterLastWindowClosed"];
@@ -289,57 +293,42 @@ fn app_apply_configure(app: App*, payload: string) -> void {
 
 @cfg(windows)
 fn app_apply_configure(app: App*, payload: string) -> void {
+    if app == NULL || payload == NULL {
+        return;
+    }
     raw {
-        if (app == NULL || payload == NULL) return;
         if (zapp_app_configured) {
             zapp_log_backend(ZAPP_LOG_WARN, "App.configure() ignored: already configured");
             return;
         }
         zapp_app_configured = true;
-        // Minimal JSON key extraction for configure (no external JSON lib yet).
-        // Parses: name, applicationShouldTerminateAfterLastWindowClosed, webContentInspectable, maxWorkers
-        const char* json = (const char*)payload;
-
-        // Extract "name":"..."
-        const char* nameKey = "\"name\":\"";
-        const char* nameStart = strstr(json, nameKey);
-        if (nameStart) {
-            nameStart += strlen(nameKey);
-            const char* nameEnd = strchr(nameStart, '"');
-            if (nameEnd) {
-                size_t len = (size_t)(nameEnd - nameStart);
-                char* name = (char*)malloc(len + 1);
-                memcpy(name, nameStart, len);
-                name[len] = '\0';
-                app->config.name = name;
-            }
-        }
-
-        // Extract boolean: "applicationShouldTerminateAfterLastWindowClosed":true/false
-        const char* quitKey = "\"applicationShouldTerminateAfterLastWindowClosed\":";
-        const char* quitStart = strstr(json, quitKey);
-        if (quitStart) {
-            quitStart += strlen(quitKey);
-            app->config.applicationShouldTerminateAfterLastWindowClosed = (*quitStart == 't');
-        }
-
-        const char* inspKey = "\"webContentInspectable\":";
-        const char* inspStart = strstr(json, inspKey);
-        if (inspStart) {
-            inspStart += strlen(inspKey);
-            app->config.webContentInspectable = (*inspStart == 't');
-            app->window.webContentInspectable = app->config.webContentInspectable;
-        }
-
-        const char* maxKey = "\"maxWorkers\":";
-        const char* maxStart = strstr(json, maxKey);
-        if (maxStart) {
-            maxStart += strlen(maxKey);
-            app->config.maxWorkers = atoi(maxStart);
-        }
-
-        zapp_log_backend(ZAPP_LOG_INFO, "app configured from backend");
     }
+    let result = JsonValue::parse(payload);
+    if result.is_err() {
+        return;
+    }
+    let json = result.unwrap();
+    let name_opt = json.get_string("name");
+    if name_opt.is_some() {
+        raw {
+            if (app->config.name) free((void*)app->config.name);
+            app->config.name = strdup(name_opt.val);
+        }
+    }
+    let quit_opt = json.get_bool("applicationShouldTerminateAfterLastWindowClosed");
+    if quit_opt.is_some() {
+        app.config.applicationShouldTerminateAfterLastWindowClosed = quit_opt.unwrap();
+    }
+    let insp_opt = json.get_bool("webContentInspectable");
+    if insp_opt.is_some() {
+        app.config.webContentInspectable = insp_opt.unwrap();
+        app.window.webContentInspectable = app.config.webContentInspectable;
+    }
+    let max_opt = json.get_int("maxWorkers");
+    if max_opt.is_some() {
+        app.config.maxWorkers = max_opt.unwrap();
+    }
+    raw { zapp_log_backend(ZAPP_LOG_INFO, "app configured from backend"); }
 }
 
 @cfg(ZAPP_LINUX)
@@ -359,6 +348,10 @@ fn platform_sync_handle_bridge(action: string, payload_json: string) -> void;
 fn app_handle_window_message(app: App*, action: string, payload: string) -> void;
 @cfg(apple)
 fn app_handle_app_action(app: App*, action: string) -> void;
+@cfg(apple)
+fn app_open_external(app: App*, payload: string) -> void;
+@cfg(apple)
+fn app_handle_dialog(app: App*, action: string, payload: string) -> void;
 
 @cfg(windows)
 raw {
@@ -553,6 +546,29 @@ fn platform_sync_handle_bridge(action: string, payload_json: string) -> void {
 fn app_handle_window_message(app: App*, action: string, payload: string) -> void;
 
 @cfg(windows)
+fn app_open_external(app: App*, payload: string) -> void {
+    raw {
+    #ifdef _WIN32
+        (void)app;
+        if (payload == NULL) return;
+        extern char* zapp_json_get_string(const char* json, const char* key);
+        char* url = zapp_json_get_string((const char*)payload, "url");
+        if (url && url[0] != '\0') {
+            int len = MultiByteToWideChar(CP_UTF8, 0, url, -1, NULL, 0);
+            wchar_t* wUrl = (wchar_t*)malloc(len * sizeof(wchar_t));
+            MultiByteToWideChar(CP_UTF8, 0, url, -1, wUrl, len);
+            ShellExecuteW(NULL, L"open", wUrl, NULL, NULL, SW_SHOWNORMAL);
+            free(wUrl);
+        }
+        if (url) free(url);
+    #endif
+    }
+}
+
+@cfg(windows)
+fn app_handle_dialog(app: App*, action: string, payload: string) -> void;
+
+@cfg(windows)
 fn app_handle_app_action(app: App*, action: string) -> void {
     raw {
     #ifdef _WIN32
@@ -581,96 +597,85 @@ fn app_handle_window_message(app: App*, action: string, payload: string) -> void
 fn app_handle_app_action(app: App*, action: string) -> void {
     raw { (void)app; (void)action; }
 }
+@cfg(ZAPP_LINUX)
+fn app_open_external(app: App*, payload: string) -> void {
+    raw { (void)app; (void)payload; }
+}
+@cfg(ZAPP_LINUX)
+fn app_handle_dialog(app: App*, action: string, payload: string) -> void {
+    raw { (void)app; (void)action; (void)payload; }
+}
 
 fn app_invoke_rpc(app: App*, method: string, request_payload: string) -> void {
     if method == "" || request_payload == "" {
         return;
     }
+    let parse_result = JsonValue::parse(request_payload);
+    if parse_result.is_err() {
+        return;
+    }
+    let json = parse_result.unwrap();
+    let id_opt = json.get_string("id");
+    if id_opt.is_none() {
+        return;
+    }
+    let request_id = id_opt.unwrap();
+    let cap_opt = json.get_string("capability");
+    let capability: string = "";
+    if cap_opt.is_some() {
+        capability = cap_opt.unwrap();
+    }
+
+    // Extract args as a sub-object and re-serialize
+    let args_opt = json.get("args");
+    let args_str: string = "{{}}";
+
     raw {
-        const char* json = (const char*)request_payload;
-        if (!json) return;
-
-        char requestId[128] = {0};
-        char capability[128] = {0};
-        char argsPayload[65536] = {0};
-
-        const char* idKey = "\"id\":\"";
-        const char* idStart = strstr(json, idKey);
-        if (!idStart) return;
-        idStart += strlen(idKey);
-        const char* idEnd = strchr(idStart, '"');
-        if (!idEnd) return;
-        size_t idLen = (size_t)(idEnd - idStart);
-        if (idLen >= sizeof(requestId)) idLen = sizeof(requestId) - 1;
-        memcpy(requestId, idStart, idLen);
-        requestId[idLen] = '\0';
-
-        const char* capKey = "\"capability\":\"";
-        const char* capStart = strstr(json, capKey);
-        if (capStart) {
-            capStart += strlen(capKey);
-            const char* capEnd = strchr(capStart, '"');
-            if (capEnd) {
-                size_t capLen = (size_t)(capEnd - capStart);
-                if (capLen >= sizeof(capability)) capLen = sizeof(capability) - 1;
-                memcpy(capability, capStart, capLen);
-                capability[capLen] = '\0';
+        // Re-extract args substring from original JSON for service invocation
+        // (serializing back would lose fidelity; pass the raw substring)
+        const char* argsKey = "\"args\":";
+        const char* argsStart = strstr((const char*)request_payload, argsKey);
+        if (argsStart) {
+            argsStart += strlen(argsKey);
+            while (*argsStart == ' ' || *argsStart == '\n' || *argsStart == '\r' || *argsStart == '\t') argsStart++;
+            const char* argsEnd = strstr(argsStart, ",\"meta\"");
+            if (!argsEnd) argsEnd = strrchr(argsStart, '}');
+            if (argsEnd && argsEnd > argsStart) {
+                static char _args_buf[65536];
+                size_t len = (size_t)(argsEnd - argsStart);
+                if (len >= sizeof(_args_buf)) len = sizeof(_args_buf) - 1;
+                memcpy(_args_buf, argsStart, len);
+                _args_buf[len] = '\0';
+                args_str = _args_buf;
             }
         }
+    }
 
-        const char* argsKey = "\"args\":";
-        const char* argsStart = strstr(json, argsKey);
-        if (!argsStart) return;
-        argsStart += strlen(argsKey);
-        while (*argsStart == ' ' || *argsStart == '\n' || *argsStart == '\r' || *argsStart == '\t') {
-            argsStart++;
-        }
-        const char* argsEnd = strstr(argsStart, ",\"meta\"");
-        if (!argsEnd) {
-            argsEnd = strrchr(argsStart, '}');
-        }
-        if (!argsEnd || argsEnd <= argsStart) {
-            strncpy(argsPayload, "{}", sizeof(argsPayload) - 1);
-        } else {
-            size_t argsLen = (size_t)(argsEnd - argsStart);
-            if (argsLen >= sizeof(argsPayload)) argsLen = sizeof(argsPayload) - 1;
-            memcpy(argsPayload, argsStart, argsLen);
-            argsPayload[argsLen] = '\0';
-        }
+    let error_code: string = "";
+    let error_message: string = "";
+    let result = service_invoke_with_policy(
+        app,
+        method,
+        args_str,
+        capability,
+        &error_code,
+        &error_message
+    );
 
-        char* errorCode = "";
-        char* errorMessage = "";
-        char* result = service_invoke_with_policy(
-            (App*)app,
-            (char*)method,
-            argsPayload,
-            capability,
-            &errorCode,
-            &errorMessage
-        );
-
+    raw {
         char response[70000];
-        if (errorCode && errorCode[0] != '\0') {
-            snprintf(
-                response,
-                sizeof(response),
+        if (error_code && error_code[0] != '\0') {
+            snprintf(response, sizeof(response),
                 "{\"v\":1,\"id\":\"%s\",\"ok\":false,\"error\":{\"code\":\"%s\",\"message\":\"%s\"}}",
-                requestId,
-                errorCode,
-                errorMessage && errorMessage[0] ? errorMessage : "Service invocation failed"
-            );
+                (const char*)request_id, (const char*)error_code,
+                (error_message && error_message[0]) ? (const char*)error_message : "Service invocation failed");
         } else {
-            if (!result || result[0] == '\0') result = "{}";
-            snprintf(
-                response,
-                sizeof(response),
+            const char* r = (result && result[0] != '\0') ? (const char*)result : "{}";
+            snprintf(response, sizeof(response),
                 "{\"v\":1,\"id\":\"%s\",\"ok\":true,\"result\":%s}",
-                requestId,
-                result
-            );
+                (const char*)request_id, r);
         }
-
-        zapp_dispatch_invoke_result(requestId, response);
+        zapp_dispatch_invoke_result(request_id, response);
     }
 }
 
@@ -715,7 +720,16 @@ fn app_handle_frontend_message(app: App*, msg: string) -> void {
             app_apply_configure(app, payload);
             return;
         }
+        if key == "openExternal" {
+            app_open_external(app, payload);
+            return;
+        }
         app_handle_app_action(app, key);
+        return;
+    }
+
+    if msg_type == "dialog" {
+        app_handle_dialog(app, key, payload);
         return;
     }
 }

@@ -9,7 +9,7 @@ export interface AppConfig {
 
 type AppBridge = {
   getConfig?: () => AppConfig | null;
-  appAction?: (action: string) => void;
+  appAction?: (action: string, payload?: unknown) => void;
 };
 
 type ReadyCallback = () => void | Promise<void>;
@@ -34,9 +34,11 @@ const defaultConfig: AppConfig = {
 
 export interface AppAPI {
   getConfig(): AppConfig;
+  onReady(callback: ReadyCallback): void;
   quit(): void;
   hide(): void;
   show(): void;
+  openExternal(url: string): void;
 }
 
 export const App: AppAPI = {
@@ -62,5 +64,9 @@ export const App: AppAPI = {
 
   show(): void {
     getBridge()?.appAction?.("show");
+  },
+
+  openExternal(url: string): void {
+    getBridge()?.appAction?.("openExternal", { url });
   },
 };

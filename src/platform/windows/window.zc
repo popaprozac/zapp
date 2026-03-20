@@ -366,24 +366,67 @@ raw {
     #ifndef ZAPP_EVENT_WINDOW_BLUR
     #define ZAPP_EVENT_WINDOW_BLUR  2
     #endif
+    #ifndef ZAPP_EVENT_WINDOW_RESIZE
+    #define ZAPP_EVENT_WINDOW_RESIZE 3
+    #endif
+    #ifndef ZAPP_EVENT_WINDOW_MOVE
+    #define ZAPP_EVENT_WINDOW_MOVE 4
+    #endif
+    #ifndef ZAPP_EVENT_WINDOW_CLOSE
+    #define ZAPP_EVENT_WINDOW_CLOSE 5
+    #endif
+    #ifndef ZAPP_EVENT_WINDOW_MINIMIZE
+    #define ZAPP_EVENT_WINDOW_MINIMIZE 6
+    #endif
+    #ifndef ZAPP_EVENT_WINDOW_MAXIMIZE
+    #define ZAPP_EVENT_WINDOW_MAXIMIZE 7
+    #endif
+    #ifndef ZAPP_EVENT_WINDOW_RESTORE
+    #define ZAPP_EVENT_WINDOW_RESTORE 8
+    #endif
+    #ifndef ZAPP_EVENT_WINDOW_FULLSCREEN
+    #define ZAPP_EVENT_WINDOW_FULLSCREEN 9
+    #endif
+    #ifndef ZAPP_EVENT_WINDOW_UNFULLSCREEN
+    #define ZAPP_EVENT_WINDOW_UNFULLSCREEN 10
+    #endif
 
     static const char* zapp_get_window_event_name_win(int event_id) {
         switch (event_id) {
             case ZAPP_EVENT_WINDOW_READY: return "ready";
             case ZAPP_EVENT_WINDOW_FOCUS: return "focus";
             case ZAPP_EVENT_WINDOW_BLUR:  return "blur";
+            case ZAPP_EVENT_WINDOW_RESIZE: return "resize";
+            case ZAPP_EVENT_WINDOW_MOVE: return "move";
+            case ZAPP_EVENT_WINDOW_CLOSE: return "close";
+            case ZAPP_EVENT_WINDOW_MINIMIZE: return "minimize";
+            case ZAPP_EVENT_WINDOW_MAXIMIZE: return "maximize";
+            case ZAPP_EVENT_WINDOW_RESTORE: return "restore";
+            case ZAPP_EVENT_WINDOW_FULLSCREEN: return "fullscreen";
+            case ZAPP_EVENT_WINDOW_UNFULLSCREEN: return "unfullscreen";
             default: return "unknown";
         }
     }
 
-    void zapp_dispatch_window_event_to_bridge_win(const char* window_id, int event_id) {
+    void zapp_dispatch_window_event_to_bridge_win(const char* window_id, int event_id, int width, int height, int x, int y) {
         if (window_id == NULL) return;
         const char* event_name = zapp_get_window_event_name_win(event_id);
-        char js[512];
-        snprintf(js, sizeof(js),
-            "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
-            "if(b&&b.dispatchWindowEvent)b.dispatchWindowEvent('%s','%s');})();",
-            window_id, event_name);
+        // Only include size/position payload for events where it's meaningful
+        int hasPayload = (event_id == ZAPP_EVENT_WINDOW_RESIZE || event_id == ZAPP_EVENT_WINDOW_MOVE ||
+                          event_id == ZAPP_EVENT_WINDOW_MAXIMIZE || event_id == ZAPP_EVENT_WINDOW_RESTORE);
+        char js[1024];
+        if (hasPayload) {
+            snprintf(js, sizeof(js),
+                "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+                "if(b&&b.dispatchWindowEvent)b.dispatchWindowEvent('%s','%s',"
+                "'{\"width\":%d,\"height\":%d,\"x\":%d,\"y\":%d}');})();",
+                window_id, event_name, width, height, x, y);
+        } else {
+            snprintf(js, sizeof(js),
+                "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+                "if(b&&b.dispatchWindowEvent)b.dispatchWindowEvent('%s','%s');})();",
+                window_id, event_name);
+        }
         zapp_windows_webview_eval_all(js);
     }
 
@@ -420,7 +463,7 @@ raw {
                         entry->bridgeReady = TRUE;
                         if (entry->pendingFocusEvent) {
                             entry->pendingFocusEvent = FALSE;
-                            zapp_dispatch_window_event_to_bridge_win(windowId, ZAPP_EVENT_WINDOW_FOCUS);
+                            zapp_dispatch_window_event_to_bridge_win(windowId, ZAPP_EVENT_WINDOW_FOCUS, 0, 0, 0, 0);
                         }
                     }
                 }
@@ -544,6 +587,248 @@ raw {
         free(windowId);
     }
 #endif
+}
+
+raw {
+#ifdef _WIN32
+    // --- Dialog handling (Windows) ---
+    extern char* zapp_json_get_string(const char* json, const char* key);
+    extern int zapp_json_get_bool(const char* json, const char* key, int default_val);
+    #include <commdlg.h>
+
+    static void zapp_dispatch_dialog_result(const char* payload_json) {
+        char* escaped = zapp_escape_js_string(payload_json);
+        size_t jsLen = strlen(escaped) + 256;
+        char* js = (char*)malloc(jsLen);
+        snprintf(js, jsLen,
+            "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+            "if(b&&typeof b.dispatchDialogResult==='function'){b.dispatchDialogResult('%s');}})();",
+            escaped);
+        zapp_windows_webview_eval_all(js);
+        free(js);
+        free(escaped);
+    }
+
+    void app_handle_dialog(App* app, char* action, char* payload_json) {
+        (void)app;
+        if (action == NULL || payload_json == NULL) return;
+        const char* json = (const char*)payload_json;
+
+        char* requestId = zapp_json_get_string(json, "requestId");
+        if (!requestId || requestId[0] == '\0') { free(requestId); return; }
+
+        if (strcmp(action, "openFile") == 0) {
+            OPENFILENAMEW ofn;
+            wchar_t szFile[MAX_PATH * 10] = {0};
+            ZeroMemory(&ofn, sizeof(ofn));
+            ofn.lStructSize = sizeof(ofn);
+            ofn.hwndOwner = NULL;
+            ofn.lpstrFile = szFile;
+            ofn.nMaxFile = sizeof(szFile) / sizeof(szFile[0]);
+            ofn.Flags = OFN_FILEMUSTEXIST | OFN_EXPLORER;
+
+            int multiple = zapp_json_get_bool(json, "multiple", 0);
+            if (multiple) ofn.Flags |= OFN_ALLOWMULTISELECT;
+            int directory = zapp_json_get_bool(json, "directory", 0);
+
+            if (directory) {
+                // Use folder browser for directory selection
+                // Simplified: just use file dialog for now
+                ofn.Flags |= OFN_NOVALIDATE;
+            }
+
+            char* title = zapp_json_get_string(json, "title");
+            wchar_t wTitle[256] = {0};
+            if (title && title[0]) {
+                MultiByteToWideChar(CP_UTF8, 0, title, -1, wTitle, 256);
+                ofn.lpstrTitle = wTitle;
+            }
+
+            if (GetOpenFileNameW(&ofn)) {
+                char utf8Path[MAX_PATH * 4];
+                WideCharToMultiByte(CP_UTF8, 0, szFile, -1, utf8Path, sizeof(utf8Path), NULL, NULL);
+                // Escape quotes in path
+                char escapedPath[MAX_PATH * 8];
+                char* dst = escapedPath;
+                for (const char* src = utf8Path; *src; src++) {
+                    if (*src == '"') { *dst++ = '\\'; *dst++ = '"'; }
+                    else if (*src == '\\') { *dst++ = '\\'; *dst++ = '\\'; }
+                    else { *dst++ = *src; }
+                }
+                *dst = '\0';
+                char response[MAX_PATH * 8 + 256];
+                snprintf(response, sizeof(response),
+                    "{\"requestId\":\"%s\",\"ok\":true,\"paths\":[\"%s\"]}",
+                    requestId, escapedPath);
+                zapp_dispatch_dialog_result(response);
+            } else {
+                char response[256];
+                snprintf(response, sizeof(response),
+                    "{\"requestId\":\"%s\",\"ok\":false,\"cancelled\":true}",
+                    requestId);
+                zapp_dispatch_dialog_result(response);
+            }
+            free(requestId);
+            if (title) free(title);
+            return;
+        }
+
+        if (strcmp(action, "saveFile") == 0) {
+            OPENFILENAMEW ofn;
+            wchar_t szFile[MAX_PATH] = {0};
+            ZeroMemory(&ofn, sizeof(ofn));
+            ofn.lStructSize = sizeof(ofn);
+            ofn.hwndOwner = NULL;
+            ofn.lpstrFile = szFile;
+            ofn.nMaxFile = sizeof(szFile) / sizeof(szFile[0]);
+            ofn.Flags = OFN_OVERWRITEPROMPT | OFN_EXPLORER;
+
+            char* defaultName = zapp_json_get_string(json, "defaultName");
+            if (defaultName && defaultName[0]) {
+                MultiByteToWideChar(CP_UTF8, 0, defaultName, -1, szFile, MAX_PATH);
+            }
+
+            char* title = zapp_json_get_string(json, "title");
+            wchar_t wTitle[256] = {0};
+            if (title && title[0]) {
+                MultiByteToWideChar(CP_UTF8, 0, title, -1, wTitle, 256);
+                ofn.lpstrTitle = wTitle;
+            }
+
+            if (GetSaveFileNameW(&ofn)) {
+                char utf8Path[MAX_PATH * 4];
+                WideCharToMultiByte(CP_UTF8, 0, szFile, -1, utf8Path, sizeof(utf8Path), NULL, NULL);
+                char escapedPath[MAX_PATH * 8];
+                char* dst = escapedPath;
+                for (const char* src = utf8Path; *src; src++) {
+                    if (*src == '"') { *dst++ = '\\'; *dst++ = '"'; }
+                    else if (*src == '\\') { *dst++ = '\\'; *dst++ = '\\'; }
+                    else { *dst++ = *src; }
+                }
+                *dst = '\0';
+                char response[MAX_PATH * 8 + 256];
+                snprintf(response, sizeof(response),
+                    "{\"requestId\":\"%s\",\"ok\":true,\"path\":\"%s\"}",
+                    requestId, escapedPath);
+                zapp_dispatch_dialog_result(response);
+            } else {
+                char response[256];
+                snprintf(response, sizeof(response),
+                    "{\"requestId\":\"%s\",\"ok\":false,\"cancelled\":true}",
+                    requestId);
+                zapp_dispatch_dialog_result(response);
+            }
+            free(requestId);
+            if (defaultName) free(defaultName);
+            if (title) free(title);
+            return;
+        }
+
+        if (strcmp(action, "message") == 0) {
+            char* title = zapp_json_get_string(json, "title");
+            char* message = zapp_json_get_string(json, "message");
+            char* kind = zapp_json_get_string(json, "kind");
+
+            UINT type = MB_OK;
+            if (kind) {
+                if (strcmp(kind, "warning") == 0) type |= MB_ICONWARNING;
+                else if (strcmp(kind, "critical") == 0) type |= MB_ICONERROR;
+                else type |= MB_ICONINFORMATION;
+            } else {
+                type |= MB_ICONINFORMATION;
+            }
+
+            wchar_t wTitle[256] = {0};
+            wchar_t wMessage[4096] = {0};
+            if (title) MultiByteToWideChar(CP_UTF8, 0, title, -1, wTitle, 256);
+            if (message) MultiByteToWideChar(CP_UTF8, 0, message, -1, wMessage, 4096);
+
+            int result = MessageBoxW(NULL, wMessage, wTitle, type);
+            int buttonIndex = 0;
+            if (result == IDOK || result == IDYES) buttonIndex = 0;
+            else if (result == IDCANCEL || result == IDNO) buttonIndex = 1;
+
+            char response[256];
+            snprintf(response, sizeof(response),
+                "{\"requestId\":\"%s\",\"ok\":true,\"button\":%d}",
+                requestId, buttonIndex);
+            zapp_dispatch_dialog_result(response);
+
+            free(requestId);
+            if (title) free(title);
+            if (message) free(message);
+            if (kind) free(kind);
+            return;
+        }
+
+        free(requestId);
+    }
+#endif
+}
+
+fn windows_window_get_size(window: void*) -> WindowSize {
+    let s = WindowSize{ width: 0, height: 0 };
+    raw {
+    #ifdef _WIN32
+        HWND hwnd = (HWND)window;
+        if (hwnd && IsWindow(hwnd)) {
+            RECT rc;
+            GetWindowRect(hwnd, &rc);
+            s.width = rc.right - rc.left;
+            s.height = rc.bottom - rc.top;
+        }
+    #endif
+    }
+    return s;
+}
+
+fn windows_window_get_position(window: void*) -> WindowPosition {
+    let p = WindowPosition{ x: 0, y: 0 };
+    raw {
+    #ifdef _WIN32
+        HWND hwnd = (HWND)window;
+        if (hwnd && IsWindow(hwnd)) {
+            RECT rc;
+            GetWindowRect(hwnd, &rc);
+            p.x = rc.left;
+            p.y = rc.top;
+        }
+    #endif
+    }
+    return p;
+}
+
+fn windows_window_is_minimized(window: void*) -> bool {
+    raw {
+    #ifdef _WIN32
+        HWND hwnd = (HWND)window;
+        if (hwnd && IsWindow(hwnd)) return IsIconic(hwnd) ? true : false;
+    #endif
+    }
+    return false;
+}
+
+fn windows_window_is_maximized(window: void*) -> bool {
+    raw {
+    #ifdef _WIN32
+        HWND hwnd = (HWND)window;
+        if (hwnd && IsWindow(hwnd)) return IsZoomed(hwnd) ? true : false;
+    #endif
+    }
+    return false;
+}
+
+fn windows_window_is_fullscreen(window: void*) -> bool {
+    raw {
+    #ifdef _WIN32
+        HWND hwnd = (HWND)window;
+        if (hwnd && IsWindow(hwnd)) {
+            LONG style = GetWindowLongW(hwnd, GWL_STYLE);
+            return !(style & WS_OVERLAPPEDWINDOW) ? true : false;
+        }
+    #endif
+    }
+    return false;
 }
 
 fn windows_window_register_numeric_id(window: void*, numeric_id: int) -> void {

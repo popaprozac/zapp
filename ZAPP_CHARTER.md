@@ -23,6 +23,7 @@ We want to create the smallest, fastest, and most flexible webview desktop frame
 - Event system that allows backend and JS code to emit/listen to events across the application
 - "Services" that are native code with optional lifecycle methods that get automatically compiled to TS code that uses the Zapp native bridge to call methods (more efficient than traditional RPC)
 
+(BUILD SIZES ARE OUT OF DATE)
 ### macOS
 
 - WKWebview windows
@@ -37,8 +38,7 @@ We want to create the smallest, fastest, and most flexible webview desktop frame
     - we set a custom protocol on WKWebview which means it loses its ability to natively accept brotli (confirm my understanding)
 - Sizes (with current features, will grow as we add core functionality) of our example app:
     - `build`: 302K
-    - `build --embed-assets`: 385K
-    - `build --embed-assets --brotli`: 336K
+    - `build --brotli`: 336K
 
 # Windows
 
@@ -51,8 +51,7 @@ We want to create the smallest, fastest, and most flexible webview desktop frame
 - No compression lib built-in but we use `https` so the Webview2 will natively accept/decompress
 - Sizes (with current features, will grow as we add core functionality) of our example app:
     - `build`: 1.7M
-    - `build --embed-assets`: 1.78M
-    - `build --embed-assets --brotli`: 1.73M
+    - `build --brotli`: 1.73M
 
 # Linux
 

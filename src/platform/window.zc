@@ -44,6 +44,16 @@ struct Window {
     handle: void*;
 }
 
+struct WindowSize {
+    width: int;
+    height: int;
+}
+
+struct WindowPosition {
+    x: int;
+    y: int;
+}
+
 impl Window {
     fn on(self, event_id: int, cb: fn*() -> void) -> void {
         zapp_window_set_event_cb(self.id, event_id, cb);
@@ -112,6 +122,41 @@ impl Window {
 
     fn is_valid(self) -> bool {
         return self.handle != NULL;
+    }
+
+    fn size(self) -> WindowSize {
+        if self.handle != NULL {
+            return window_get_size(self.handle);
+        }
+        return WindowSize{ width: 0, height: 0 };
+    }
+
+    fn position(self) -> WindowPosition {
+        if self.handle != NULL {
+            return window_get_position(self.handle);
+        }
+        return WindowPosition{ x: 0, y: 0 };
+    }
+
+    fn is_minimized(self) -> bool {
+        if self.handle != NULL {
+            return window_is_minimized(self.handle);
+        }
+        return false;
+    }
+
+    fn is_maximized(self) -> bool {
+        if self.handle != NULL {
+            return window_is_maximized(self.handle);
+        }
+        return false;
+    }
+
+    fn is_fullscreen(self) -> bool {
+        if self.handle != NULL {
+            return window_is_fullscreen(self.handle);
+        }
+        return false;
     }
 }
 
@@ -295,6 +340,31 @@ fn window_show(window: void*) -> void { windows_window_show(window); }
 fn window_hide(window: void*) -> void { darwin_window_hide(window); }
 @cfg(windows)
 fn window_hide(window: void*) -> void { windows_window_hide(window); }
+
+@cfg(apple)
+fn window_get_size(window: void*) -> WindowSize { return darwin_window_get_size(window); }
+@cfg(windows)
+fn window_get_size(window: void*) -> WindowSize { return windows_window_get_size(window); }
+
+@cfg(apple)
+fn window_get_position(window: void*) -> WindowPosition { return darwin_window_get_position(window); }
+@cfg(windows)
+fn window_get_position(window: void*) -> WindowPosition { return windows_window_get_position(window); }
+
+@cfg(apple)
+fn window_is_minimized(window: void*) -> bool { return darwin_window_is_minimized(window); }
+@cfg(windows)
+fn window_is_minimized(window: void*) -> bool { return windows_window_is_minimized(window); }
+
+@cfg(apple)
+fn window_is_maximized(window: void*) -> bool { return darwin_window_is_maximized(window); }
+@cfg(windows)
+fn window_is_maximized(window: void*) -> bool { return windows_window_is_maximized(window); }
+
+@cfg(apple)
+fn window_is_fullscreen(window: void*) -> bool { return darwin_window_is_fullscreen(window); }
+@cfg(windows)
+fn window_is_fullscreen(window: void*) -> bool { return windows_window_is_fullscreen(window); }
 
 fn window_manager_trigger_on_ready(id: int) -> void {
     let app = (App*)app_get_active();

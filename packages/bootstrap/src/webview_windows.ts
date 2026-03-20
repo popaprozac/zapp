@@ -113,7 +113,7 @@ type NativeBridge = {
   dispatchSyncResult: (payload: unknown) => void;
   dispatchWindowResult: (payload: unknown) => void;
   deliverEvent: (name: string, payload: unknown) => void;
-  dispatchWindowEvent: (windowId: string, event: string) => void;
+  dispatchWindowEvent: (windowId: string, event: string, dataJson?: string) => void;
   getConfig: () => ConfigSnapshot | null;
   invoke: (request: unknown) => Promise<unknown>;
   syncWait: (request: unknown) => Promise<"notified" | "timed-out">;
@@ -133,7 +133,7 @@ type NativeBridge = {
   resolveWorkerScriptURL: (scriptURL: string | URL) => string;
   windowCreate: (options: unknown) => Promise<{ id: string }>;
   windowAction: (windowId: string, action: string, params?: Record<string, unknown>) => void;
-  appAction: (action: string) => void;
+  appAction: (action: string, payload?: unknown) => void;
 };
 const symbolStore = g as unknown as Record<symbol, unknown>;
 const upsertBridge = (patch: Partial<NativeBridge>): void => {
@@ -529,8 +529,8 @@ const windowAction = (windowId: string, action: string, params?: Record<string, 
   post("window", action, { windowId, ...params });
 };
 
-const appAction = (action: string): void => {
-  post("app", action, {});
+const appAction = (action: string, payload?: unknown): void => {
+  post("app", action, payload ?? {});
 };
 
 const dispatchWindowResult = (payload: unknown): void => {
@@ -552,10 +552,17 @@ const dispatchWindowResult = (payload: unknown): void => {
   }
 };
 
-const dispatchWindowEvent = (windowId: string, event: string): void => {
+const dispatchWindowEvent = (windowId: string, event: string, dataJson?: string): void => {
   ensurePublicZappBinding();
 
-  const payload = { windowId, timestamp: Date.now() };
+  const payload: Record<string, unknown> = { windowId, timestamp: Date.now() };
+  if (dataJson) {
+    try {
+      const data = JSON.parse(dataJson) as { width?: number; height?: number; x?: number; y?: number };
+      if (data.width || data.height) payload.size = { width: data.width ?? 0, height: data.height ?? 0 };
+      if (data.x !== undefined || data.y !== undefined) payload.position = { x: data.x ?? 0, y: data.y ?? 0 };
+    } catch { /* ignore malformed payload */ }
+  }
 
   const fireAndPrune = (eventName: string): void => {
     const handlers = _listeners[eventName];
@@ -694,9 +701,28 @@ const dispatchSyncResult = (payload: unknown): void => {
   pending.resolve(result.status === "timed-out" ? "timed-out" : "notified");
 };
 
+const dispatchDialogResult = (payload: unknown): void => {
+  let parsed = payload;
+  if (typeof payload === "string") {
+    try { parsed = JSON.parse(payload); } catch { return; }
+  }
+  if (!parsed || typeof parsed !== "object") return;
+  const result = parsed as { requestId?: string };
+  if (typeof result.requestId !== "string") return;
+  const eventName = `__zapp:dialog:${result.requestId}`;
+  const handlers = _listeners[eventName];
+  if (handlers) {
+    for (const entry of handlers) {
+      try { entry.fn(result); } catch { /* isolate */ }
+    }
+    delete _listeners[eventName];
+  }
+};
+
 upsertBridge({
   dispatchInvokeResult,
   dispatchSyncResult,
+  dispatchDialogResult,
   deliverEvent,
   getConfig: () => (appConfig == null ? null : { ...appConfig }),
   invoke: async (request: unknown) => {
