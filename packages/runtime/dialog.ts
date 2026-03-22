@@ -52,6 +52,13 @@ export interface DialogAPI {
 
 let dialogSeq = 0;
 
+function assertNotWorker(): void {
+  const ctx = (globalThis as unknown as Record<symbol, unknown>)[Symbol.for("zapp.context")];
+  if (ctx === "worker") {
+    throw new Error("Dialog APIs are not available in a worker context.");
+  }
+}
+
 function postDialog<T>(action: string, params: Record<string, unknown>): Promise<T> {
   return new Promise((resolve, reject) => {
     const requestId = `dialog-${Date.now()}-${++dialogSeq}`;
@@ -90,14 +97,17 @@ function postDialog<T>(action: string, params: Record<string, unknown>): Promise
 
 export const Dialog: DialogAPI = {
   openFile(options: OpenFileOptions = {}): Promise<OpenFileResult> {
+    assertNotWorker();
     return postDialog<OpenFileResult>("openFile", options as unknown as Record<string, unknown>);
   },
 
   saveFile(options: SaveFileOptions = {}): Promise<SaveFileResult> {
+    assertNotWorker();
     return postDialog<SaveFileResult>("saveFile", options as unknown as Record<string, unknown>);
   },
 
   message(options: MessageOptions): Promise<MessageResult> {
+    assertNotWorker();
     return postDialog<MessageResult>("message", options as unknown as Record<string, unknown>);
   },
 };

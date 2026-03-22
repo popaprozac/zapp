@@ -65,7 +65,7 @@ raw {
 
     extern const char* zapp_win_id_for_hwnd(HWND hwnd);
     extern int zapp_window_get_numeric_id(const char* window_id);
-    extern void zapp_window_trigger_event(int id, int event_id);
+    extern void zapp_window_trigger_event_with_data(int id, int event_id, int w, int h, int x, int y);
     extern void zapp_dispatch_window_event_to_bridge_win(const char* window_id, int event_id, int width, int height, int x, int y);
     extern ZappWindowEntry* zapp_window_entry_for_hwnd(HWND hwnd);
 
@@ -75,7 +75,7 @@ raw {
         if (!windowId) return;
         int numericId = zapp_window_get_numeric_id(windowId);
         if (numericId >= 0)
-            zapp_window_trigger_event(numericId, event_id);
+            zapp_window_trigger_event_with_data(numericId, event_id, w, h, x, y);
         ZappWindowEntry* entry = zapp_window_entry_for_hwnd(hwnd);
         if (entry && entry->bridgeReady) {
             zapp_dispatch_window_event_to_bridge_win(windowId, event_id, w, h, x, y);
@@ -235,7 +235,7 @@ raw {
                     WORD activateState = LOWORD(wParam);
                     if (activateState == WA_ACTIVE || activateState == WA_CLICKACTIVE) {
                         if (numericId >= 0)
-                            zapp_window_trigger_event(numericId, ZAPP_EVENT_WINDOW_FOCUS);
+                            zapp_window_trigger_event_with_data(numericId, ZAPP_EVENT_WINDOW_FOCUS, 0, 0, 0, 0);
                         ZappWindowEntry* entry = zapp_window_entry_for_hwnd(hwnd);
                         if (entry && entry->bridgeReady) {
                             zapp_dispatch_window_event_to_bridge_win(windowId, ZAPP_EVENT_WINDOW_FOCUS, 0, 0, 0, 0);
@@ -244,7 +244,7 @@ raw {
                         }
                     } else if (activateState == WA_INACTIVE) {
                         if (numericId >= 0)
-                            zapp_window_trigger_event(numericId, ZAPP_EVENT_WINDOW_BLUR);
+                            zapp_window_trigger_event_with_data(numericId, ZAPP_EVENT_WINDOW_BLUR, 0, 0, 0, 0);
                         zapp_dispatch_window_event_to_bridge_win(windowId, ZAPP_EVENT_WINDOW_BLUR, 0, 0, 0, 0);
                     }
                 }

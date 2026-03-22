@@ -26,7 +26,7 @@ raw {
     extern void zapp_darwin_webview_create(void* window_ptr, bool inspectable);
     extern void zapp_dispatch_window_event_to_bridge(const char* window_id, int event_id, int width, int height, int x, int y);
     static int zapp_window_get_numeric_id(NSString* windowId);
-    extern void zapp_window_trigger_event(int id, int event_id);
+    extern void zapp_window_trigger_event_with_data(int id, int event_id, int w, int h, int x, int y);
 
     // Per-window delegate that terminates attached workers when the window closes.
     @interface ZappWindowDelegate : NSObject <NSWindowDelegate>
@@ -43,7 +43,7 @@ raw {
     static void zapp_fire_window_event(NSString* windowId, int event_id, int w, int h, int x, int y) {
         if (windowId == nil) return;
         int numId = zapp_window_get_numeric_id(windowId);
-        if (numId >= 0) zapp_window_trigger_event(numId, event_id);
+        if (numId >= 0) zapp_window_trigger_event_with_data(numId, event_id, w, h, x, y);
         zapp_dispatch_window_event_to_bridge([windowId UTF8String], event_id, w, h, x, y);
     }
 
@@ -73,7 +73,7 @@ raw {
         (void)notification;
         if (self.windowId) {
             int numId = zapp_window_get_numeric_id(self.windowId);
-            if (numId >= 0) zapp_window_trigger_event(numId, ZAPP_EVENT_WINDOW_FOCUS);
+            if (numId >= 0) zapp_window_trigger_event_with_data(numId, ZAPP_EVENT_WINDOW_FOCUS, 0, 0, 0, 0);
             if (self.bridgeReady) {
                 zapp_dispatch_window_event_to_bridge([self.windowId UTF8String], ZAPP_EVENT_WINDOW_FOCUS, 0, 0, 0, 0);
             } else {

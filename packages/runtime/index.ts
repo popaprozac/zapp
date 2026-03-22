@@ -1,7 +1,7 @@
 export { App } from "./app";
 export type { AppAPI, AppConfig } from "./app";
 export { Events, WindowEvent, AppEvent, getWindowEventName, getAppEventName } from "./events";
-export type { EventsAPI, WindowEventPayload } from "./events";
+export type { EventsAPI, WindowEventPayload, WindowSizeEventPayload, EventName, KnownEventName, EventPayloadFor } from "./events";
 export { Window } from "./windows";
 export type { WindowAPI, WindowOptions, WindowHandle } from "./windows";
 export { Worker, SharedWorker } from "./worker";

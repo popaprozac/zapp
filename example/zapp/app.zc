@@ -11,20 +11,42 @@ fn on_window_ready(id: int, handle: void*) -> void {
     // win.show();
 }
 
-fn on_window_focus() -> void {
+fn on_window_focus(data: WindowEventData*) -> void {
+    let _d = data;
     println "[native] window focused!";
 }
 
-fn on_window_blur() -> void {
+fn on_window_blur(data: WindowEventData*) -> void {
+    let _d = data;
     println "[native] window blurred!";
 }
 
+fn on_window_resize(data: WindowEventData*) -> void {
+    raw {
+        printf("[native] window resized to %dx%d at (%d,%d)\n",
+            data->width, data->height, data->x, data->y);
+    }
+}
+
+fn on_window_move(data: WindowEventData*) -> void {
+    raw {
+        printf("[native] window moved to (%d,%d)\n",
+            data->x, data->y);
+    }
+}
+
+fn on_window_close(data: WindowEventData*) -> void {
+    let _d = data;
+    println "[native] window closed!";
+}
+
 fn run_app() -> int {
-    let config = AppConfig{ 
-        name: "Zapp Playground", 
+    let config = AppConfig{
+        name: "Zapp Playground",
         applicationShouldTerminateAfterLastWindowClosed: false,
         webContentInspectable: true,
         maxWorkers: 50,
+        qjsStackSize: 0, // 0 = default 4MB
     };
     let app = App::new(config);
     
@@ -38,6 +60,8 @@ fn run_app() -> int {
     win.on_ready(on_window_ready);
     win.on(WindowEvent.FOCUS, on_window_focus);
     win.on(WindowEvent.BLUR, on_window_blur);
+    win.on(WindowEvent.RESIZE, on_window_resize);
+    win.on(WindowEvent.MOVE, on_window_move);
 
     let opts2 = window_options_default("Native Window 2");
     opts2.width = 800;
@@ -49,6 +73,8 @@ fn run_app() -> int {
     win2.on_ready(on_window_ready);
     win2.on(WindowEvent.FOCUS, on_window_focus);
     win2.on(WindowEvent.BLUR, on_window_blur);
-    
+    win2.on(WindowEvent.RESIZE, on_window_resize);
+    win2.on(WindowEvent.MOVE, on_window_move);
+    win2.on(WindowEvent.CLOSE, on_window_close);
     return app.run();
 }

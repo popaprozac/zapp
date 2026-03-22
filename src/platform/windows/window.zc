@@ -237,6 +237,10 @@ fn windows_window_set_fullscreen(window: void*, on: bool) -> void {
     #ifdef _WIN32
         HWND hwnd = (HWND)window;
         if (!hwnd || !IsWindow(hwnd)) return;
+        extern void zapp_window_trigger_event_with_data(int id, int event_id, int w, int h, int x, int y);
+        extern void zapp_dispatch_window_event_to_bridge_win(const char* window_id, int event_id, int w, int h, int x, int y);
+        extern const char* zapp_win_id_for_hwnd(HWND hwnd);
+        extern int zapp_window_get_numeric_id(const char* window_id);
         ZappWindowEntry* entry = zapp_window_entry_for_hwnd(hwnd);
         LONG style = GetWindowLongW(hwnd, GWL_STYLE);
         BOOL isFS = !(style & WS_OVERLAPPEDWINDOW);
@@ -253,11 +257,25 @@ fn windows_window_set_fullscreen(window: void*, on: bool) -> void {
                 mi.rcMonitor.right - mi.rcMonitor.left,
                 mi.rcMonitor.bottom - mi.rcMonitor.top,
                 SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+            // Fire FULLSCREEN event
+            const char* wid = zapp_win_id_for_hwnd(hwnd);
+            if (wid) {
+                int nid = zapp_window_get_numeric_id(wid);
+                if (nid >= 0) zapp_window_trigger_event_with_data(nid, 9, 0, 0, 0, 0);
+                if (entry && entry->bridgeReady) zapp_dispatch_window_event_to_bridge_win(wid, 9, 0, 0, 0, 0);
+            }
         } else if (!on && isFS && entry) {
             SetWindowLongW(hwnd, GWL_STYLE, style | WS_OVERLAPPEDWINDOW);
             SetWindowPlacement(hwnd, &entry->prevPlacement);
             SetWindowPos(hwnd, NULL, 0, 0, 0, 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+            // Fire UNFULLSCREEN event
+            const char* wid = zapp_win_id_for_hwnd(hwnd);
+            if (wid) {
+                int nid = zapp_window_get_numeric_id(wid);
+                if (nid >= 0) zapp_window_trigger_event_with_data(nid, 10, 0, 0, 0, 0);
+                if (entry && entry->bridgeReady) zapp_dispatch_window_event_to_bridge_win(wid, 10, 0, 0, 0, 0);
+            }
         }
     #endif
     }

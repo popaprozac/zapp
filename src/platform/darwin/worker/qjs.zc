@@ -455,7 +455,9 @@ raw {
             qjs_worker_shared_flags = [NSMutableDictionary dictionary];
             qjs_shared_worker_contexts = [NSMutableDictionary dictionary];
             qjs_shared_worker_refcounts = [NSMutableDictionary dictionary];
+            extern int app_get_bootstrap_qjs_stack_size(void);
             qjs_rt = JS_NewRuntime();
+            JS_SetMaxStackSize(qjs_rt, (size_t)app_get_bootstrap_qjs_stack_size());
         });
     }
 

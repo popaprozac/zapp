@@ -56,8 +56,21 @@ struct WindowPosition {
     y: int;
 }
 
+raw {
+    #ifndef ZAPP_WINDOW_EVENT_DATA_DEFINED
+    #define ZAPP_WINDOW_EVENT_DATA_DEFINED
+    typedef struct WindowEventData {
+        int32_t event;
+        int32_t width;
+        int32_t height;
+        int32_t x;
+        int32_t y;
+    } WindowEventData;
+    #endif
+}
+
 impl Window {
-    fn on(self, event_id: int, cb: fn*() -> void) -> void {
+    fn on(self, event_id: int, cb: fn*(WindowEventData*) -> void) -> void {
         zapp_window_set_event_cb(self.id, event_id, cb);
     }
 
@@ -383,7 +396,7 @@ raw {
 
     static void (*zapp_window_on_ready_cbs[ZAPP_MAX_WINDOW_CALLBACKS])(int, void*) = {0};
     static void* zapp_window_on_ready_handles[ZAPP_MAX_WINDOW_CALLBACKS] = {0};
-    static void (*zapp_window_event_cbs[ZAPP_MAX_WINDOW_CALLBACKS][ZAPP_MAX_WINDOW_EVENT_TYPES])(void) = {{0}};
+    static void (*zapp_window_event_cbs[ZAPP_MAX_WINDOW_CALLBACKS][ZAPP_MAX_WINDOW_EVENT_TYPES])(WindowEventData*) = {{0}};
 
     void zapp_window_set_on_ready(int id, void* handle, void (*cb)(int, void*)) {
         if (id >= 0 && id < ZAPP_MAX_WINDOW_CALLBACKS) {
@@ -398,16 +411,22 @@ raw {
         }
     }
 
-    void zapp_window_set_event_cb(int id, int event_id, void (*cb)(void)) {
+    void zapp_window_set_event_cb(int id, int event_id, void (*cb)(WindowEventData*)) {
         if (id >= 0 && id < ZAPP_MAX_WINDOW_CALLBACKS && event_id >= 0 && event_id < ZAPP_MAX_WINDOW_EVENT_TYPES) {
             zapp_window_event_cbs[id][event_id] = cb;
         }
     }
 
-    void zapp_window_trigger_event(int id, int event_id) {
+    void zapp_window_trigger_event_with_data(int id, int event_id, int w, int h, int x, int y) {
         if (id >= 0 && id < ZAPP_MAX_WINDOW_CALLBACKS && event_id >= 0 && event_id < ZAPP_MAX_WINDOW_EVENT_TYPES) {
             if (zapp_window_event_cbs[id][event_id] != NULL) {
-                zapp_window_event_cbs[id][event_id]();
+                WindowEventData data = {0};
+                data.event = event_id;
+                data.width = w;
+                data.height = h;
+                data.x = x;
+                data.y = y;
+                zapp_window_event_cbs[id][event_id](&data);
             }
         }
     }

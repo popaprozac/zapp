@@ -79,8 +79,9 @@ raw {
 
     static DWORD WINAPI zapp_qjs_thread_proc(LPVOID param) {
         (void)param;
+        extern int app_get_bootstrap_qjs_stack_size(void);
         qjs_rt = JS_NewRuntime();
-        JS_SetMaxStackSize(qjs_rt, 4 * 1024 * 1024);
+        JS_SetMaxStackSize(qjs_rt, (size_t)app_get_bootstrap_qjs_stack_size());
         if (zapp_qjs_rt_ready_event) SetEvent(zapp_qjs_rt_ready_event);
         while (!zapp_qjs_shutdown) {
             WaitForSingleObject(zapp_qjs_wake_event, INFINITE);

@@ -1,4 +1,4 @@
-import { Events, WindowEvent, getWindowEventName, type WindowEventPayload } from "./events";
+import { Events, WindowEvent, getWindowEventName, type WindowEventPayload, type WindowSizeEventPayload } from "./events";
 
 export interface WindowOptions {
   title?: string;
@@ -17,7 +17,12 @@ export interface WindowOptions {
   visible?: boolean;
 }
 
-type WindowEventHandler = (payload?: WindowEventPayload) => void;
+/** Window events that carry size + position */
+type SizeEvent =
+  | WindowEvent.RESIZE
+  | WindowEvent.MOVE
+  | WindowEvent.MAXIMIZE
+  | WindowEvent.RESTORE;
 
 export type WindowHandle = {
   readonly id: string;
@@ -35,13 +40,15 @@ export type WindowHandle = {
   setPosition(x: number, y: number): void;
   setFullscreen(on: boolean): void;
   setAlwaysOnTop(on: boolean): void;
-  /** Legacy string-based event listener */
-  on(event: string, handler: () => void): () => void;
-  /** Typed event listener using WindowEvent enum */
-  on(event: WindowEvent, handler: WindowEventHandler): () => void;
-  /** One-time typed event listener */
-  once(event: WindowEvent, handler: WindowEventHandler): () => void;
-  /** Remove all listeners for a typed event */
+  /** Typed event listener — size events get a payload with size + position */
+  on(event: SizeEvent, handler: (payload: WindowSizeEventPayload) => void): () => void;
+  /** Typed event listener — other window events get base payload */
+  on(event: WindowEvent, handler: (payload: WindowEventPayload) => void): () => void;
+  /** Typed one-time listener — size events */
+  once(event: SizeEvent, handler: (payload: WindowSizeEventPayload) => void): () => void;
+  /** Typed one-time listener — other window events */
+  once(event: WindowEvent, handler: (payload: WindowEventPayload) => void): () => void;
+  /** Remove all listeners for an event */
   off(event: WindowEvent): void;
 };
 
@@ -50,15 +57,10 @@ type WindowBridge = {
   windowAction?: (windowId: string, action: string, params?: Record<string, unknown>) => void;
 };
 
-type LegacyWindowEventEntry = { id: number; event: string; handler: () => void };
-
 const getBridge = (): WindowBridge | null =>
   ((globalThis as unknown as Record<symbol, unknown>)[
     Symbol.for("zapp.bridge")
   ] as WindowBridge | undefined) ?? null;
-
-let nextLegacyEventId = 0;
-const legacyWindowEventListeners: LegacyWindowEventEntry[] = [];
 
 function makeHandle(windowId: string): WindowHandle {
   const action = (name: string, params?: Record<string, unknown>) => {
@@ -71,15 +73,7 @@ function makeHandle(windowId: string): WindowHandle {
     return ss[Symbol.for("zapp.windowReady")] === true;
   };
 
-  const handleOn: WindowHandle["on"] = (event: WindowEvent | string, handler: WindowEventHandler) => {
-    if (typeof event === "string") {
-      const id = ++nextLegacyEventId;
-      legacyWindowEventListeners.push({ id, event: `${windowId}:${event}`, handler: handler as () => void });
-      return () => {
-        const idx = legacyWindowEventListeners.findIndex((e) => e.id === id);
-        if (idx !== -1) legacyWindowEventListeners.splice(idx, 1);
-      };
-    }
+  const handleOn = (event: WindowEvent, handler: (payload: WindowEventPayload) => void): (() => void) => {
     const eventName = getWindowEventName(event);
     const off = Events.on(`window:${eventName}`, (payload) => {
       const p = payload as WindowEventPayload | undefined;
@@ -93,7 +87,7 @@ function makeHandle(windowId: string): WindowHandle {
     return off;
   };
 
-  const handleOnce: WindowHandle["once"] = (event: WindowEvent, handler: WindowEventHandler) => {
+  const handleOnce = (event: WindowEvent, handler: (payload: WindowEventPayload) => void): (() => void) => {
     if (event === WindowEvent.READY && isWindowReady()) {
       queueMicrotask(() => handler({ windowId, timestamp: Date.now() }));
       return () => {};
@@ -128,19 +122,10 @@ function makeHandle(windowId: string): WindowHandle {
     setPosition(x: number, y: number) { action("set_position", { x, y }); },
     setFullscreen(on: boolean) { action("set_fullscreen", { on }); },
     setAlwaysOnTop(on: boolean) { action("set_always_on_top", { on }); },
-    on: handleOn,
-    once: handleOnce,
+    on: handleOn as WindowHandle["on"],
+    once: handleOnce as WindowHandle["once"],
     off: handleOff,
   };
-}
-
-export function _dispatchWindowEvent(windowId: string, event: string): void {
-  const key = `${windowId}:${event}`;
-  for (const entry of legacyWindowEventListeners) {
-    if (entry.event === key) {
-      try { entry.handler(); } catch { /* isolate listener failures */ }
-    }
-  }
 }
 
 export interface WindowAPI {
@@ -160,6 +145,9 @@ export const Window: WindowAPI = {
 
   current(): WindowHandle {
     const symbolStore = globalThis as unknown as Record<symbol, unknown>;
+    if (symbolStore[Symbol.for("zapp.context")] === "worker") {
+      throw new Error("Window.current() is not available in a worker context. Use Window.create() instead.");
+    }
     const windowId = symbolStore[Symbol.for("zapp.windowId")] as string | undefined;
     const ownerId = symbolStore[Symbol.for("zapp.ownerId")] as string | undefined;
     const contextWindowId = symbolStore[Symbol.for("zapp.currentWindowId")] as string | undefined;

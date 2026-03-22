@@ -12,6 +12,7 @@ struct AppConfig {
     applicationShouldTerminateAfterLastWindowClosed: bool;
     webContentInspectable: bool;
     maxWorkers: int;
+    qjsStackSize: int; // QuickJS stack size in bytes (0 = default 4MB)
 }
 
 opaque struct _AppConfig {
@@ -19,6 +20,7 @@ opaque struct _AppConfig {
     applicationShouldTerminateAfterLastWindowClosed: bool;
     webContentInspectable: bool;
     maxWorkers: int;
+    qjsStackSize: int;
 }
 
 struct App {
@@ -40,6 +42,7 @@ impl App {
                 applicationShouldTerminateAfterLastWindowClosed: config.applicationShouldTerminateAfterLastWindowClosed,
                 webContentInspectable: config.webContentInspectable,
                 maxWorkers: config.maxWorkers,
+                qjsStackSize: config.qjsStackSize,
             },
             window: windowManager,
             event: EventManager::new(),
@@ -54,6 +57,7 @@ impl App {
             applicationShouldTerminateAfterLastWindowClosed: self.config.applicationShouldTerminateAfterLastWindowClosed,
             webContentInspectable: self.config.webContentInspectable,
             maxWorkers: self.config.maxWorkers,
+            qjsStackSize: self.config.qjsStackSize,
         };
     }
 
@@ -132,6 +136,7 @@ fn app_get_bootstrap_config() -> AppConfig {
         applicationShouldTerminateAfterLastWindowClosed: false,
         webContentInspectable: true,
         maxWorkers: 0,
+        qjsStackSize: 0,
     };
 }
 
@@ -149,6 +154,14 @@ fn app_get_bootstrap_web_content_inspectable() -> bool {
 
 fn app_get_bootstrap_max_workers() -> int {
     return app_get_bootstrap_config().maxWorkers;
+}
+
+fn app_get_bootstrap_qjs_stack_size() -> int {
+    let size = app_get_bootstrap_config().qjsStackSize;
+    if size <= 0 {
+        return 4 * 1024 * 1024; // Default 4 MB
+    }
+    return size;
 }
 
 @cfg(apple)

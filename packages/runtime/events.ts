@@ -83,15 +83,76 @@ export interface WindowEventPayload {
     position?: { x: number; y: number };
 }
 
-export interface EventsAPI {
-    emit(name: string, payload?: unknown): unknown;
-    on(name: string, handler: EventHandler): () => void;
-    once(name: string, handler: EventHandler): () => void;
-    off(name: string, handler?: EventHandler): void;
-    offAll(name?: string): void;
+/** Payload for events that always include size and position (resize, move, maximize, restore) */
+export interface WindowSizeEventPayload {
+    windowId: string;
+    timestamp: number;
+    size: { width: number; height: number };
+    position: { x: number; y: number };
 }
 
-export const Events: EventsAPI = {
+// ---------------------------------------------------------------------------
+// Known event name → payload type mapping
+// ---------------------------------------------------------------------------
+
+/** Window events that carry size + position data */
+type WindowSizeEvents =
+    | "window:resize"
+    | "window:move"
+    | "window:maximize"
+    | "window:restore";
+
+/** Window events without size/position data */
+type WindowSimpleEvents =
+    | "window:ready"
+    | "window:focus"
+    | "window:blur"
+    | "window:close"
+    | "window:minimize"
+    | "window:fullscreen"
+    | "window:unfullscreen";
+
+/** App lifecycle events */
+type AppEvents =
+    | "app:started"
+    | "app:shutdown";
+
+/** All known Zapp event names */
+export type KnownEventName = WindowSizeEvents | WindowSimpleEvents | AppEvents;
+
+/** Resolve the payload type for a given event name */
+export type EventPayloadFor<T extends string> =
+    T extends WindowSizeEvents ? WindowSizeEventPayload :
+    T extends WindowSimpleEvents ? WindowEventPayload :
+    T extends AppEvents ? undefined :
+    unknown;
+
+/** Event name type — known names get autocomplete, arbitrary strings still work */
+export type EventName = KnownEventName | (string & {});
+
+export interface EventsAPI {
+    emit(name: string, payload?: unknown): unknown;
+
+    // Window events with size + position payload
+    on(name: WindowSizeEvents, handler: (payload: WindowSizeEventPayload) => void): () => void;
+    // Window events with base payload
+    on(name: WindowSimpleEvents, handler: (payload: WindowEventPayload) => void): () => void;
+    // App lifecycle events
+    on(name: AppEvents, handler: () => void): () => void;
+    // Custom / arbitrary events
+    on(name: string & {}, handler: (payload?: unknown) => void): () => void;
+
+    once(name: WindowSizeEvents, handler: (payload: WindowSizeEventPayload) => void): () => void;
+    once(name: WindowSimpleEvents, handler: (payload: WindowEventPayload) => void): () => void;
+    once(name: AppEvents, handler: () => void): () => void;
+    once(name: string & {}, handler: (payload?: unknown) => void): () => void;
+
+    off(name: EventName, handler?: EventHandler): void;
+    offAll(name?: EventName): void;
+}
+
+// Implementation uses broad signatures; the EventsAPI interface provides type-safe overloads to consumers
+export const Events = {
     emit(name: string, payload?: unknown): unknown {
         return getBridge()._emit?.(name, payload);
     },
@@ -147,7 +208,7 @@ export const Events: EventsAPI = {
             bridge._listeners = {};
         }
     },
-};
+} satisfies Record<string, unknown> as EventsAPI;
 
 export function getWindowEventName(event: WindowEvent): string {
     return WINDOW_EVENT_NAMES[event] ?? `window:${event}`;
