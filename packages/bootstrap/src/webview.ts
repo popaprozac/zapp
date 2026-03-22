@@ -816,6 +816,27 @@ if (typeof document !== "undefined") {
   if (document.readyState !== "loading") {
     fireReady();
   }
+
+  // Draggable regions: track whether mouse is over a data-zapp-drag-region element.
+  // Native mouseDown: checks this flag to initiate window drag.
+  const isInDragRegion = (target: HTMLElement | null): boolean => {
+    let el = target;
+    while (el) {
+      if (el.hasAttribute?.("data-zapp-drag-region")) return true;
+      const tag = el.tagName;
+      if (tag === "BUTTON" || tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA" || tag === "A") return false;
+      el = el.parentElement;
+    }
+    return false;
+  };
+  let lastDragState = false;
+  document.addEventListener("mousemove", (e) => {
+    const inDrag = isInDragRegion(e.target as HTMLElement | null);
+    if (inDrag !== lastDragState) {
+      lastDragState = inDrag;
+      post("window", "setDragRegion", { windowId: winSymbolStore[WINDOW_ID_SYMBOL] ?? "unknown", drag: inDrag });
+    }
+  });
 }
 
 export {};

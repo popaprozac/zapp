@@ -94,7 +94,7 @@
   </form>
   <p>{greetMsg}</p>
 
-  <section class="sync-panel">
+  <section data-zapp-drag-region class="sync-panel">
     <h2>Sync.wait / Sync.notify demo</h2>
     <p class="sync-help">
       Open two windows: run <code>wait</code> in one and <code>notify</code> in the other.

@@ -577,6 +577,13 @@ raw {
         HWND hwnd = zapp_win_lookup(windowId);
         if (!hwnd || !IsWindow(hwnd)) { free(windowId); return; }
 
+        if (strcmp(action, "startDrag") == 0) {
+            ReleaseCapture();
+            SendMessageW(hwnd, WM_SYSCOMMAND, SC_MOVE | HTCAPTION, 0);
+            free(windowId);
+            return;
+        }
+
         if (strcmp(action, "close") == 0) {
             zapp_win_unregister(windowId);
             DestroyWindow(hwnd);

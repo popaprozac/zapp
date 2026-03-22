@@ -848,6 +848,27 @@ raw {
         NSString* windowId = body[@"windowId"];
         if (![windowId isKindOfClass:[NSString class]] || [windowId length] == 0) return;
 
+        if ([actionStr isEqualToString:@"setDragRegion"]) {
+            id dragVal = body[@"drag"];
+            BOOL drag = [dragVal respondsToSelector:@selector(boolValue)] && [dragVal boolValue];
+            void (^work)(void) = ^{
+                // Find the window by matching its windowId (win-%p format)
+                for (NSWindow* window in [NSApp windows]) {
+                    NSString* wid = [NSString stringWithFormat:@"win-%p", window];
+                    if ([wid isEqualToString:windowId]) {
+                        NSView* content = [window contentView];
+                        if ([content isKindOfClass:[ZappWebView class]]) {
+                            [(ZappWebView*)content setInDragRegion:drag];
+                        }
+                        break;
+                    }
+                }
+            };
+            if ([NSThread isMainThread]) { work(); }
+            else { dispatch_async(dispatch_get_main_queue(), work); }
+            return;
+        }
+
         void (^actionWork)(void) = ^{
             NSWindow* nsWindow = zapp_window_lookup(windowId);
             if (nsWindow == nil) return;

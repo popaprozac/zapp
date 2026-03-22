@@ -219,8 +219,9 @@ export const runBuild = async ({
   if (isDebug) {
     zcArgs.push("--debug");
   } else {
-    zcArgs.push("-Oz");  // Aggressive size optimization
-    zcArgs.push("-flto"); // Link-time optimization
+    zcArgs.push("-Oz");       // Aggressive size optimization
+    zcArgs.push("-flto");     // Link-time optimization
+    zcArgs.push("--no-debug"); // No debug symbols / .dSYM
   }
   
   // On Windows, embed the application manifest for comctl32 v6 (TaskDialogIndirect, visual styles)

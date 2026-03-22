@@ -692,31 +692,28 @@ fn app_invoke_rpc(app: App*, method: string, request_payload: string) -> void {
         }
     }
 
-    let error_code: string = "";
-    let error_message: string = "";
-    let result = service_invoke_with_policy(
-        app,
-        method,
-        args_str,
-        capability,
-        &error_code,
-        &error_message
-    );
+    let invoke_result = service_invoke_with_policy(app, method, args_str, capability);
 
-    raw {
-        char response[70000];
-        if (error_code && error_code[0] != '\0') {
+    if invoke_result.is_err() {
+        let error_code = invoke_result.err;
+        let error_message = service_error_message(error_code);
+        raw {
+            char response[70000];
             snprintf(response, sizeof(response),
                 "{\"v\":1,\"id\":\"%s\",\"ok\":false,\"error\":{\"code\":\"%s\",\"message\":\"%s\"}}",
-                (const char*)request_id, (const char*)error_code,
-                (error_message && error_message[0]) ? (const char*)error_message : "Service invocation failed");
-        } else {
-            const char* r = (result && result[0] != '\0') ? (const char*)result : "{}";
+                (const char*)request_id, (const char*)error_code, (const char*)error_message);
+            zapp_dispatch_invoke_result(request_id, response);
+        }
+    } else {
+        let result_val = invoke_result.unwrap();
+        raw {
+            char response[70000];
+            const char* r = (result_val && result_val[0] != '\0') ? (const char*)result_val : "{}";
             snprintf(response, sizeof(response),
                 "{\"v\":1,\"id\":\"%s\",\"ok\":true,\"result\":%s}",
                 (const char*)request_id, r);
+            zapp_dispatch_invoke_result(request_id, response);
         }
-        zapp_dispatch_invoke_result(request_id, response);
     }
 }
 

@@ -436,6 +436,30 @@ raw {
         }
     }
 
+    // Custom WKWebView subclass for drag region support
+    @interface ZappWebView : WKWebView
+    @property (nonatomic, assign) BOOL inDragRegion;
+    @end
+
+    @implementation ZappWebView
+    - (instancetype)initWithFrame:(NSRect)frame configuration:(WKWebViewConfiguration*)config {
+        self = [super initWithFrame:frame configuration:config];
+        if (self) { _inDragRegion = NO; }
+        return self;
+    }
+    - (void)mouseDown:(NSEvent*)event {
+        if (self.inDragRegion) {
+            [self.window performWindowDragWithEvent:event];
+            return;
+        }
+        [super mouseDown:event];
+    }
+    // Allow the window to be moved when clicking drag regions
+    - (BOOL)mouseDownCanMoveWindow {
+        return self.inDragRegion;
+    }
+    @end
+
     void zapp_darwin_webview_create(void* window_ptr, bool inspectable) {
         NSWindow* window = (__bridge NSWindow*)window_ptr;
         NSView* hostView = [window contentView];
@@ -514,7 +538,7 @@ raw {
         [ucc addScriptMessageHandler:handler name:@"zapp"];
         [config setUserContentController:ucc];
         [[config preferences] setValue:@YES forKey:@"developerExtrasEnabled"];
-        WKWebView* webview = [[WKWebView alloc] initWithFrame:bounds configuration:config];
+        ZappWebView* webview = [[ZappWebView alloc] initWithFrame:bounds configuration:config];
         [webview setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
         [webview setInspectable:inspectable ? YES : NO];
         NSURL* url = zapp_initial_url();

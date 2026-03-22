@@ -8,7 +8,13 @@
       "Read(//c/ProgramData/mingw64/**)",
       "Read(//c//**)",
       "Read(//c/Users/Zach/code/zapp/$USERPROFILE/scoop/apps/**)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(grep -r \"mouseDown\\\\|hitTest\\\\|performDrag\" /Users/zach/code/zapp/src --include=*.zc --include=*.m)",
+      "Bash(find /Users/zach/code/zapp/packages/bootstrap -type f -name *.ts -o -name *.tsx)",
+      "Bash(find /Users/zach/code/zapp/packages/bootstrap/src -type f \\\\\\(-name *.ts -o -name *.tsx \\\\\\))",
+      "Bash(bun packages/cli/dist/zapp-cli.js build --root example --brotli)",
+      "Bash(bun run:*)",
+      "Bash(bun packages/cli/src/zapp-cli.ts dev --root example)"
     ]
   }
 }

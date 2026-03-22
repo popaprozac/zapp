@@ -797,6 +797,37 @@ if (typeof document !== "undefined") {
   if (document.readyState !== "loading") {
     fireReady();
   }
+
+  // Draggable regions: elements with data-zapp-drag-region enable window dragging
+  document.addEventListener("mousedown", (e) => {
+    let el = e.target as HTMLElement | null;
+    while (el) {
+      if (el.hasAttribute?.("data-zapp-drag-region")) {
+        e.preventDefault();
+        post("window", "startDrag", { windowId: winSymbolStore[WINDOW_ID_SYMBOL] ?? "unknown" });
+        return;
+      }
+      const tag = el.tagName;
+      if (tag === "BUTTON" || tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA" || tag === "A") return;
+      el = el.parentElement;
+    }
+  });
+  // Also track drag region on mousemove for platforms that use it
+  let lastDragState = false;
+  document.addEventListener("mousemove", (e) => {
+    let el = e.target as HTMLElement | null;
+    let inDrag = false;
+    while (el) {
+      if (el.hasAttribute?.("data-zapp-drag-region")) { inDrag = true; break; }
+      const tag = el.tagName;
+      if (tag === "BUTTON" || tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA" || tag === "A") break;
+      el = el.parentElement;
+    }
+    if (inDrag !== lastDragState) {
+      lastDragState = inDrag;
+      post("window", "setDragRegion", { windowId: winSymbolStore[WINDOW_ID_SYMBOL] ?? "unknown", drag: inDrag });
+    }
+  });
 }
 
 export {};

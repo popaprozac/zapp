@@ -1,5 +1,6 @@
 struct App;
 
+import "std/result.zc";
 include <string.h>
 
 def SERVICE_MAX_BINDINGS = 128;
@@ -152,32 +153,22 @@ fn service_invoke_with_policy(
     app: App*,
     name: string,
     payload: string,
-    capability: string,
-    out_error_code: string*,
-    out_error_message: string*
-) -> string {
+    capability: string
+) -> Result<string> {
     if !service_is_valid_name(name) {
-        *out_error_code = "INVALID_METHOD";
-        *out_error_message = "Invalid service method name.";
-        return "";
+        return Result<string>::Err("INVALID_METHOD");
     }
     if !service_payload_size_ok(payload) {
-        *out_error_code = "BAD_REQUEST";
-        *out_error_message = "Service payload exceeds max size.";
-        return "";
+        return Result<string>::Err("BAD_REQUEST");
     }
 
     let idx = service_index_of(name);
     if idx < 0 {
-        *out_error_code = "NOT_FOUND";
-        *out_error_message = "Service method not found.";
-        return "";
+        return Result<string>::Err("NOT_FOUND");
     }
 
     if !g_service_public[idx] {
-        *out_error_code = "UNAUTHORIZED";
-        *out_error_message = "Service method is not public.";
-        return "";
+        return Result<string>::Err("UNAUTHORIZED");
     }
 
     let required_capability = g_service_capabilities[idx];
@@ -185,38 +176,31 @@ fn service_invoke_with_policy(
         int has_cap = (required_capability != NULL && ((const char*)required_capability)[0] != '\0');
         int cap_match = has_cap ? (strcmp((const char*)capability, (const char*)required_capability) == 0) : 1;
         if (has_cap && !cap_match) {
-            *out_error_code = "UNAUTHORIZED";
-            *out_error_message = "Capability mismatch.";
-            return "";
+            return Result_string__Err("UNAUTHORIZED");
         }
 
         if (g_service_handlers[idx] != NULL) {
             typedef char* (*ServiceFnPtr)(void*, char*);
             ServiceFnPtr cb = (ServiceFnPtr)g_service_handlers[idx];
-            return cb((void*)app, (char*)payload);
+            char* res = cb((void*)app, (char*)payload);
+            return Result_string__Ok(res);
         }
 
-        *out_error_code = "INTERNAL_ERROR";
-        *out_error_message = "Service handler is not available.";
-        return "";
+        return Result_string__Err("INTERNAL_ERROR");
     }
 }
 
-fn service_invoke(app: App*, name: string, payload: string) -> string {
-    let error_code = "";
-    let error_message = "";
-    let result = service_invoke_with_policy(
-        app,
-        name,
-        payload,
-        "",
-        &error_code,
-        &error_message
-    );
-    if error_code != "" {
-        return "{{}}";
-    }
-    return result;
+fn service_error_message(code: string) -> string {
+    if code == "INVALID_METHOD" { return "Invalid service method name."; }
+    if code == "BAD_REQUEST" { return "Service payload exceeds max size."; }
+    if code == "NOT_FOUND" { return "Service method not found."; }
+    if code == "UNAUTHORIZED" { return "Unauthorized."; }
+    if code == "INTERNAL_ERROR" { return "Service handler is not available."; }
+    return "Unknown error.";
+}
+
+fn service_invoke(app: App*, name: string, payload: string) -> Result<string> {
+    return service_invoke_with_policy(app, name, payload, "");
 }
 
 impl ServiceManager {

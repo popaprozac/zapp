@@ -11,7 +11,7 @@
 //> macos: link: -lcompression
 //> macos: cflags: -fobjc-arc -x objective-c
 // To use QuickJS instead of JSC on macOS, uncomment:
-//> macos: define: ZAPP_WORKER_ENGINE_QJS
+//  //> macos: define: ZAPP_WORKER_ENGINE_QJS
 // ---------------------------------
 
 // --- Windows Directives (QuickJS default) ---
