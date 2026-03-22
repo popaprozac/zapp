@@ -14,7 +14,27 @@
       "Bash(find /Users/zach/code/zapp/packages/bootstrap/src -type f \\\\\\(-name *.ts -o -name *.tsx \\\\\\))",
       "Bash(bun packages/cli/dist/zapp-cli.js build --root example --brotli)",
       "Bash(bun run:*)",
-      "Bash(bun packages/cli/src/zapp-cli.ts dev --root example)"
+      "Bash(bun packages/cli/src/zapp-cli.ts dev --root example)",
+      "WebSearch",
+      "Bash(find /Users/zach/code/zapp -path *src* -name *.zc -type f)",
+      "Bash(find /Users/zach/code/zapp/src -name \"*.zc\" -type f -exec wc -l {} +)",
+      "Bash(find /Users/zach/code/zapp/src -type f -name \"*.zc\" -exec wc -l {})",
+      "WebFetch(domain:v3alpha.wails.io)",
+      "WebFetch(domain:v2.tauri.app)",
+      "WebFetch(domain:blackboard.sh)",
+      "WebFetch(domain:wails.io)",
+      "Bash(bash benchmarks/bench.sh 5 2>&1)",
+      "Bash(system_profiler SPHardwareDataType)",
+      "Bash(sw_vers)",
+      "Bash(wails3 version:*)",
+      "Bash(wails3 init:*)",
+      "Bash(wails3 build:*)",
+      "Bash(bun create:*)",
+      "Bash(bun install:*)",
+      "Bash(bun tauri:*)",
+      "Bash(bunx electrobun:*)",
+      "WebFetch(domain:www.electronjs.org)",
+      "WebFetch(domain:www.electrobun.dev)"
     ]
   }
 }

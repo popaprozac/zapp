@@ -17,7 +17,7 @@
   <p>
     <a href="#"><img src="https://img.shields.io/badge/build-passing-brightgreen" alt="Build Status"></a>
     <a href="#"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License"></a>
-    <a href="#"><img src="https://img.shields.io/github/v/release/z-libs/Zen-C?label=version&color=orange" alt="Version"></a>
+    <a href="#"><img src="https://img.shields.io/github/v/release/zenc-lang/zenc?label=version&color=orange" alt="Version"></a>
     <a href="#"><img src="https://img.shields.io/badge/platform-linux%20%7C%20windows%20%7C%20macos-lightgrey" alt="Platform"></a>
   </p>
   <p><em>Write like a high-level language, run like C.</em></p>
@@ -30,6 +30,7 @@
     <b><a href="#overview">Overview</a></b> •
     <b><a href="#community">Community</a></b> •
     <b><a href="#quick-start">Quick Start</a></b> •
+    <b><a href="#ecosystem">Ecosystem</a></b> •
     <b><a href="#language-reference">Language Reference</a></b> •
     <b><a href="#standard-library">Standard Library</a></b> •
     <b><a href="#tooling">Toolchain</a></b>
@@ -47,6 +48,21 @@
 Join the discussion, share demos, ask questions, or report bugs in the official Zen C Discord server!
 
 - Discord: [Join here](https://discord.com/invite/q6wEsCmkJP)
+- RFCs: [Propose features](https://github.com/zenc-lang/rfcs)
+
+## Ecosystem
+
+The Zen C project consists of several repositories. Below you can find the primary ones:
+
+| Repository | Description | Status |
+| :--- | :--- | :--- |
+| **[zenc](https://github.com/zenc-lang/zenc)** | The core Zen C compiler (`zc`), CLI, and Standard Library. | Active Development |
+| **[docs](https://github.com/zenc-lang/docs)** | The official documentation and language specification. | Active |
+| **[rfcs](https://github.com/zenc-lang/rfcs)** | The Request for Comments (RFC) repository. Shape the future of the language. | Active |
+| **[vscode-zenc](https://github.com/zenc-lang/vscode-zenc)** | Official VS Code extension (Syntax Highlighting, Snippets). | Alpha |
+| **[www](https://github.com/zenc-lang/www)** | Source code for `zenc-lang.org`. | Active |
+| **[awesome-zenc](https://github.com/zenc-lang/awesome-zenc)** | A curated list of awesome Zen C examples | Growing |
+| **[zenc.vim](https://github.com/zenc-lang/zenc.vim)** | Official Vim/Neovim plugin (Syntax, Indentation). | Active |
 
 ## Showcase
 
@@ -70,11 +86,15 @@ Check out these projects built with Zen C:
       <ul>
         <li><a href="#overview">Overview</a></li>
         <li><a href="#community">Community</a></li>
+        <li><a href="https://github.com/zenc-lang/rfcs">RFCs</a></li>
         <li><a href="#quick-start">Quick Start</a></li>
+        <li><a href="#ecosystem">Ecosystem</a></li>
+        <li><a href="https://github.com/zenc-lang/docs">Documentation</a></li>
         <li><a href="#standard-library">Standard Library</a></li>
         <li><a href="#tooling">Tooling</a>
           <ul>
             <li><a href="#language-server-protocol-lsp">LSP</a></li>
+            <li><a href="#debugging-zen-c">Debugging</a></li>
           </ul>
         </li>
         <li><a href="#compiler-support--compatibility">Compiler Support & Compatibility</a></li>
@@ -85,7 +105,11 @@ Check out these projects built with Zen C:
     <td valign="top">
       <ul>
         <li><a href="#1-variables-and-constants">1. Variables & Constants</a></li>
-        <li><a href="#2-primitive-types">2. Primitive Types</a></li>
+        <li><a href="#2-primitive-types">2. Primitive Types</a>
+          <ul>
+            <li><a href="#unicode-and-runes">Unicode & Runes</a></li>
+          </ul>
+        </li>
         <li><a href="#3-aggregate-types">3. Aggregate Types</a></li>
         <li><a href="#4-functions--lambdas">4. Functions & Lambdas</a></li>
         <li><a href="#5-control-flow">5. Control Flow</a></li>
@@ -101,6 +125,7 @@ Check out these projects built with Zen C:
         <li><a href="#15-build-directives">15. Build Directives</a></li>
         <li><a href="#16-keywords">16. Keywords</a></li>
         <li><a href="#17-c-interoperability">17. C Interoperability</a></li>
+        <li><a href="#18-unit-testing-framework">18. Unit Testing Framework</a></li>
       </ul>
     </td>
   </tr>
@@ -113,9 +138,8 @@ Check out these projects built with Zen C:
 ### Installation
 
 ```bash
-git clone https://github.com/z-libs/Zen-C.git
+git clone https://github.com/zenc-lang/zenc.git
 cd Zen-C
-git submodule update --init --recursive
 make clean # remove old build files
 make
 sudo make install
@@ -231,12 +255,44 @@ let y: const int = 10;  // Read-only (Type qualified)
 | `U0`, `u0`, `void` | `void` | Empty type |
 | `iN` (for example, `i256`) | `_BitInt(N)` | Arbitrary bit-width signed integer (C23) |
 | `uN` (for example, `u42`) | `unsigned _BitInt(N)` | Arbitrary bit-width unsigned integer (C23) |
+| `rune` | `uint32_t` | Unicode scalar value (UTF-32 code point) |
 
 #### Literals
 - **Integers**: Decimal (`123`), Hex (`0xFF`), Octal (`0o755`), Binary (`0b1011`).
   - *Note*: Numbers with leading zeros are treated as decimal (`0123` is `123`), unlike C.
   - *Note*: Numbers can contain underscores for readability (`1_000_000`, `0b_1111_0000`).
 - **Floats**: Standard (`3.14`), Scientific (`1e-5`, `1.2E3`). Floating point numbers also support underscores (`3_14.15_92`).
+
+#### Unicode and Runes
+
+Zen C provides first-class support for Unicode scalar values via the `rune` type. A `rune` represents a single Unicode code point (encoded as a 32-bit unsigned integer).
+
+| Literal | Description |
+|:---|:---|
+| `'a'` | Standard ASCII character |
+| `'🚀'` | Multi-byte Unicode character |
+| `'\u{2764}'` | Unicode escape sequence (Hex) |
+
+```zc
+import "std.zc"
+
+fn main() {
+    let c = 'a';
+    println "The character '{c}' has a code of {(int)c} in ASCII/Unicode";
+
+    let code = 97;
+    println "The code {code} corresponds to the character {(char)code}";
+
+    let r: rune = '🚀';
+    println "The rune '{r}' has a code of {(uint)r} in Unicode";
+    
+    let r_code: uint = 128640;
+    println "The code {r_code} corresponds to the rune '{(rune)r_code}'";
+
+    let r_esc: rune = '\u{2764}';
+    println "The rune '{r_esc}' has code {(uint)r_esc} (0x{(uint)r_esc:X})";
+}
+```
 
 > [!IMPORTANT]
 > **Best Practices for Portable Code**
@@ -584,6 +640,9 @@ for val in arr {
 
 // While
 while x < 10 { ... }
+
+// Do-While
+do { ... } while x < 10;
 
 // Infinite with label
 outer: loop {
@@ -1208,7 +1267,7 @@ Decorate functions and structs to modify compiler behavior.
 
 | Attribute | Scope | Description |
 |:---|:---|:---|
-| `@must_use` | Fn | Warn if return value is ignored. |
+| `@required` | Fn | Warn if return value is ignored. |
 | `@deprecated("msg")` | Fn/Struct | Warn on usage with message. |
 | `@inline` | Fn | Hint compiler to inline. |
 | `@noinline` | Fn | Prevent inlining. |
@@ -1361,7 +1420,7 @@ The following keywords are reserved in Zen C.
 `alias`, `def`, `enum`, `fn`, `impl`, `import`, `let`, `module`, `opaque`, `struct`, `trait`, `union`, `use`
 
 #### Control Flow
-`async`, `await`, `break`, `catch`, `continue`, `defer`, `else`, `for`, `goto`, `guard`, `if`, `loop`, `match`, `return`, `try`, `unless`, `while`
+`async`, `await`, `break`, `catch`, `continue`, `defer`, `do`, `else`, `for`, `goto`, `guard`, `if`, `loop`, `match`, `return`, `try`, `unless`, `while`
 
 #### Special
 `asm`, `assert`, `autofree`, `comptime`, `const`, `embed`, `launch`, `ref`, `sizeof`, `static`, `test`, `volatile`
@@ -1371,7 +1430,7 @@ The following keywords are reserved in Zen C.
 
 #### C Reserved
 The following identifiers are reserved because they are keywords in C11:
-`auto`, `case`, `char`, `default`, `do`, `double`, `extern`, `float`, `inline`, `int`, `long`, `register`, `restrict`, `short`, `signed`, `switch`, `typedef`, `unsigned`, `void`, `_Atomic`, `_Bool`, `_Complex`, `_Generic`, `_Imaginary`, `_Noreturn`, `_Static_assert`, `_Thread_local`
+`auto`, `case`, `char`, `default`, `double`, `extern`, `float`, `inline`, `int`, `long`, `register`, `restrict`, `short`, `signed`, `switch`, `typedef`, `unsigned`, `void`, `_Atomic`, `_Bool`, `_Complex`, `_Generic`, `_Imaginary`, `_Noreturn`, `_Static_assert`, `_Thread_local`
 
 #### Operators
 `and`, `or`
@@ -1462,11 +1521,39 @@ Zen C includes a standard library (`std`) covering essential functionality.
 
 </details>
 
+### 18. Unit Testing Framework
+
+Zen C features a built-in testing framework that allows you to write unit tests directly in your source files using the `test` keyword.
+
+#### Syntax
+A `test` block contains a descriptive name and a body of code to execute. Tests do not require a `main` function to run.
+
+```zc
+test "unittest1" {
+    "This is an unittest";
+
+    let a = 3;
+    assert(a > 0, "a should be a positive integer");
+
+    "unittest1 passed.";
+}
+```
+
+#### Running Tests
+To run all tests in a file, use the `run` command. The compiler will automatically detect and execute all top-level `test` blocks.
+
+```bash
+zc run my_file.zc
+```
+
+#### Assertions
+Use the built-in `assert(condition, message)` function to verify expectations. If the condition is false, the test will fail and print the provided message.
+
 ---
 
 ## Tooling
 
-Zen C provides a built-in Language Server and REPL to enhance the development experience.
+Zen C provides a built-in Language Server and REPL to enhance the development experience. It is also debuggable with LLDB.
 
 ### Language Server (LSP)
 
@@ -1535,9 +1622,41 @@ zc repl
 Zen C includes a built-in Language Server for editor integration.
 
 - **[Installation & Setup Guide](docs/LSP.md)**
-- **Supported Editors**: VS Code, Neovim, Vim, Zed, and any LSP-capable editor.
+- **Supported Editors**: VS Code, Neovim, Vim ([zenc.vim](https://github.com/zenc-lang/zenc.vim)), Zed, and any LSP-capable editor.
 
 Use `zc lsp` to start the server.
+
+### Debugging Zen C
+
+Zen C programs can be debugged using standard C debuggers like **LLDB** or **GDB**.
+
+#### Visual Studio Code
+
+For the best experience in VS Code, install the official [Zen C extension](https://marketplace.visualstudio.com/items?itemName=Z-libs.zenc). For debugging, you can use the **C/C++** (by Microsoft) or **CodeLLDB** extension.
+
+Add these configurations to your `.vscode` directory to enable one-click debugging:
+
+**`tasks.json`** (Build Task):
+```json
+{
+    "label": "Zen C: Build Debug",
+    "type": "shell",
+    "command": "zc",
+    "args": [ "${file}", "-g", "-o", "${fileDirname}/app", "-O0" ],
+    "group": { "kind": "build", "isDefault": true }
+}
+```
+
+**`launch.json`** (Debugger):
+```json
+{
+    "name": "Zen C: Debug (LLDB)",
+    "type": "lldb",
+    "request": "launch",
+    "program": "${fileDirname}/app",
+    "preLaunchTask": "Zen C: Build Debug"
+}
+```
 
 ## Compiler Support & Compatibility
 
@@ -1772,6 +1891,7 @@ This project uses third-party libraries. Full license texts can be found in the 
 *   **[zc-ape](https://github.com/OEvgeny/zc-ape)** (MIT License): The original Actually Portable Executable port of Zen-C by [Eugene Olonov](https://github.com/OEvgeny).
 *   **[Cosmopolitan Libc](https://github.com/jart/cosmopolitan)** (ISC License): The foundational library that makes APE possible.
 *   **[TRE](https://github.com/laurikari/tre)** (BSD License): Used for the regular expression engine in the standard library.
+*   **[zenc.vim](https://github.com/zenc-lang/zenc.vim)** (MIT License): The official Vim/Neovim plugin, primarily authored by **[davidscholberg](https://github.com/davidscholberg)**.
 
 ---
 
@@ -1782,7 +1902,10 @@ This project uses third-party libraries. Full license texts can be found in the 
   </p>
   <p>
     <a href="https://discord.com/invite/q6wEsCmkJP">Discord</a> •
-    <a href="https://github.com/z-libs/Zen-C">GitHub</a> •
+    <a href="https://github.com/zenc-lang/zenc">GitHub</a> •
+    <a href="https://github.com/zenc-lang/docs">Documentation</a> •
+    <a href="https://github.com/zenc-lang/awesome-zenc">Examples</a> •
+    <a href="https://github.com/zenc-lang/rfcs">RFCs</a> •
     <a href="CONTRIBUTING.md">Contribute</a>
   </p>
 </div>

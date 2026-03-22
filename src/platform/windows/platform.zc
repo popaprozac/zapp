@@ -62,10 +62,13 @@ raw {
     #ifndef ZAPP_EVENT_WINDOW_UNFULLSCREEN
     #define ZAPP_EVENT_WINDOW_UNFULLSCREEN 10
     #endif
+    #ifndef ZAPP_EVENT_RESULT_CANCEL
+    #define ZAPP_EVENT_RESULT_CANCEL 1
+    #endif
 
     extern const char* zapp_win_id_for_hwnd(HWND hwnd);
     extern int zapp_window_get_numeric_id(const char* window_id);
-    extern void zapp_window_trigger_event_with_data(int id, int event_id, int w, int h, int x, int y);
+    extern int zapp_window_trigger_event_with_data(int id, int event_id, int w, int h, int x, int y);
     extern void zapp_dispatch_window_event_to_bridge_win(const char* window_id, int event_id, int width, int height, int x, int y);
     extern ZappWindowEntry* zapp_window_entry_for_hwnd(HWND hwnd);
 
@@ -258,7 +261,27 @@ raw {
                 return 0;
             }
             case WM_CLOSE: {
-                zapp_fire_window_event_win(hwnd, ZAPP_EVENT_WINDOW_CLOSE, 0, 0, 0, 0);
+                ZappWindowEntry* closeEntry = zapp_window_entry_for_hwnd(hwnd);
+                // Force-close bypasses all guards
+                if (closeEntry && closeEntry->forceClose) {
+                    closeEntry->forceClose = FALSE;
+                    DestroyWindow(hwnd);
+                    return 0;
+                }
+                // Check native Zen-C callback
+                const char* closeWid = zapp_win_id_for_hwnd(hwnd);
+                if (closeWid) {
+                    int closeNumId = zapp_window_get_numeric_id(closeWid);
+                    if (closeNumId >= 0) {
+                        int result = zapp_window_trigger_event_with_data(closeNumId, ZAPP_EVENT_WINDOW_CLOSE, 0, 0, 0, 0);
+                        if (result == ZAPP_EVENT_RESULT_CANCEL) return 0;
+                    }
+                    // Check JS close guard
+                    if (closeEntry && closeEntry->closeGuarded) {
+                        zapp_dispatch_window_event_to_bridge_win(closeWid, ZAPP_EVENT_WINDOW_CLOSE, 0, 0, 0, 0);
+                        return 0;
+                    }
+                }
                 DestroyWindow(hwnd);
                 return 0;
             }

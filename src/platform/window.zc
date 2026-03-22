@@ -70,7 +70,7 @@ raw {
 }
 
 impl Window {
-    fn on(self, event_id: int, cb: fn*(WindowEventData*) -> void) -> void {
+    fn on(self, event_id: int, cb: fn*(WindowEventData*) -> int) -> void {
         zapp_window_set_event_cb(self.id, event_id, cb);
     }
 
@@ -132,6 +132,12 @@ impl Window {
             if app != NULL {
                 app.window.close(self.id);
             }
+        }
+    }
+
+    fn destroy(self) -> void {
+        if self.handle != NULL {
+            window_force_close(self.handle);
         }
     }
 
@@ -381,6 +387,11 @@ fn window_is_fullscreen(window: void*) -> bool { return darwin_window_is_fullscr
 @cfg(windows)
 fn window_is_fullscreen(window: void*) -> bool { return windows_window_is_fullscreen(window); }
 
+@cfg(apple)
+fn window_force_close(window: void*) -> void { darwin_window_force_close(window); }
+@cfg(windows)
+fn window_force_close(window: void*) -> void { windows_window_force_close(window); }
+
 fn window_manager_trigger_on_ready(id: int) -> void {
     let app = (App*)app_get_active();
     if app != NULL {
@@ -396,7 +407,7 @@ raw {
 
     static void (*zapp_window_on_ready_cbs[ZAPP_MAX_WINDOW_CALLBACKS])(int, void*) = {0};
     static void* zapp_window_on_ready_handles[ZAPP_MAX_WINDOW_CALLBACKS] = {0};
-    static void (*zapp_window_event_cbs[ZAPP_MAX_WINDOW_CALLBACKS][ZAPP_MAX_WINDOW_EVENT_TYPES])(WindowEventData*) = {{0}};
+    static int (*zapp_window_event_cbs[ZAPP_MAX_WINDOW_CALLBACKS][ZAPP_MAX_WINDOW_EVENT_TYPES])(WindowEventData*) = {{0}};
 
     void zapp_window_set_on_ready(int id, void* handle, void (*cb)(int, void*)) {
         if (id >= 0 && id < ZAPP_MAX_WINDOW_CALLBACKS) {
@@ -411,13 +422,14 @@ raw {
         }
     }
 
-    void zapp_window_set_event_cb(int id, int event_id, void (*cb)(WindowEventData*)) {
+    void zapp_window_set_event_cb(int id, int event_id, int (*cb)(WindowEventData*)) {
         if (id >= 0 && id < ZAPP_MAX_WINDOW_CALLBACKS && event_id >= 0 && event_id < ZAPP_MAX_WINDOW_EVENT_TYPES) {
             zapp_window_event_cbs[id][event_id] = cb;
         }
     }
 
-    void zapp_window_trigger_event_with_data(int id, int event_id, int w, int h, int x, int y) {
+    // Returns ZAPP_EVENT_RESULT_ALLOW (0) or ZAPP_EVENT_RESULT_CANCEL (1)
+    int zapp_window_trigger_event_with_data(int id, int event_id, int w, int h, int x, int y) {
         if (id >= 0 && id < ZAPP_MAX_WINDOW_CALLBACKS && event_id >= 0 && event_id < ZAPP_MAX_WINDOW_EVENT_TYPES) {
             if (zapp_window_event_cbs[id][event_id] != NULL) {
                 WindowEventData data = {0};
@@ -426,8 +438,9 @@ raw {
                 data.height = h;
                 data.x = x;
                 data.y = y;
-                zapp_window_event_cbs[id][event_id](&data);
+                return zapp_window_event_cbs[id][event_id](&data);
             }
         }
+        return 0; // ALLOW
     }
 }

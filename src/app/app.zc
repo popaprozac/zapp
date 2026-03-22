@@ -259,52 +259,6 @@ fn parse_wire(msg: string, out_type: string*, out_key: string*, out_payload: str
 
 static let zapp_app_configured: bool = false;
 
-@cfg(apple)
-fn app_apply_configure(app: App*, payload: string) -> void {
-    raw {
-        if (app == NULL || payload == NULL) return;
-        if (zapp_app_configured) {
-            zapp_log_backend(ZAPP_LOG_WARN, "App.configure() ignored: already configured");
-            return;
-        }
-        zapp_app_configured = true;
-        NSString* jsonStr = [NSString stringWithUTF8String:(const char*)payload];
-        if (jsonStr == nil || [jsonStr length] == 0) return;
-        NSData* data = [jsonStr dataUsingEncoding:NSUTF8StringEncoding];
-        if (data == nil) return;
-        NSDictionary* dict = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-        if (![dict isKindOfClass:[NSDictionary class]]) return;
-
-        id nameVal = dict[@"name"];
-        if ([nameVal isKindOfClass:[NSString class]]) {
-            const char* utf8 = [(NSString*)nameVal UTF8String];
-            if (utf8) {
-                if (app->config.name) free((void*)app->config.name);
-                app->config.name = strdup(utf8);
-            }
-        }
-
-        id quitVal = dict[@"applicationShouldTerminateAfterLastWindowClosed"];
-        if ([quitVal isKindOfClass:[NSNumber class]]) {
-            app->config.applicationShouldTerminateAfterLastWindowClosed = [quitVal boolValue] ? true : false;
-        }
-
-        id inspVal = dict[@"webContentInspectable"];
-        if ([inspVal isKindOfClass:[NSNumber class]]) {
-            app->config.webContentInspectable = [inspVal boolValue] ? true : false;
-            app->window.webContentInspectable = app->config.webContentInspectable;
-        }
-
-        id maxVal = dict[@"maxWorkers"];
-        if ([maxVal isKindOfClass:[NSNumber class]]) {
-            app->config.maxWorkers = [maxVal intValue];
-        }
-
-        zapp_log_backend(ZAPP_LOG_INFO, "app configured from backend");
-    }
-}
-
-@cfg(windows)
 fn app_apply_configure(app: App*, payload: string) -> void {
     if app == NULL || payload == NULL {
         return;
@@ -344,11 +298,6 @@ fn app_apply_configure(app: App*, payload: string) -> void {
     raw { zapp_log_backend(ZAPP_LOG_INFO, "app configured from backend"); }
 }
 
-@cfg(ZAPP_LINUX)
-fn app_apply_configure(app: App*, payload: string) -> void {
-    raw { (void)app; (void)payload; }
-}
-
 fn app_should_quit() -> bool {
     return true;
 }
@@ -367,260 +316,20 @@ fn app_open_external(app: App*, payload: string) -> void;
 fn app_handle_dialog(app: App*, action: string, payload: string) -> void;
 
 @cfg(windows)
-raw {
-#ifdef _WIN32
-    extern void zapp_windows_webview_eval_all(const char* js_utf8);
-    extern char* zapp_escape_js_string(const char* raw);
-#endif
-}
+fn zapp_dispatch_invoke_result(request_id: string, payload_json: string) -> void;
 
 @cfg(windows)
-fn zapp_dispatch_invoke_result(request_id: string, payload_json: string) -> void {
-    raw {
-    #ifdef _WIN32
-        (void)request_id;
-        char* escaped = zapp_escape_js_string((const char*)payload_json);
-        size_t jsLen = strlen(escaped) + 256;
-        char* js = (char*)malloc(jsLen);
-        snprintf(js, jsLen,
-            "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
-            "if(b&&typeof b.dispatchInvokeResult==='function'){b.dispatchInvokeResult('%s');}})();",
-            escaped
-        );
-        zapp_windows_webview_eval_all(js);
-        free(js);
-        free(escaped);
-    #endif
-    }
-}
-
-raw {
-#ifdef _WIN32
-    #define ZAPP_MAX_SYNC_WAITS 256
-    #define ZAPP_SYNC_TIMER_MAP_SIZE 512
-
-    typedef struct {
-        int in_use;
-        char requestId[128];
-        char key[128];
-        char targetWorkerId[256];
-        UINT_PTR timerId;
-    } ZappSyncWait;
-
-    static ZappSyncWait zapp_sync_waits[ZAPP_MAX_SYNC_WAITS] = {0};
-    static int zapp_sync_timer_to_slot[ZAPP_SYNC_TIMER_MAP_SIZE] = {0};
-    static int zapp_sync_initialized = 0;
-
-    static void zapp_sync_ensure_state(void) {
-        if (!zapp_sync_initialized) {
-            memset(zapp_sync_waits, 0, sizeof(zapp_sync_waits));
-            memset(zapp_sync_timer_to_slot, -1, sizeof(zapp_sync_timer_to_slot));
-            zapp_sync_initialized = 1;
-        }
-    }
-
-    static void zapp_sync_dispatch_result(ZappSyncWait* w, const char* status, int ok) {
-        if (!w || !w->in_use) return;
-
-        extern void zapp_windows_webview_eval_all(const char* js_utf8);
-        extern char* zapp_escape_js_string(const char* raw);
-        extern void zapp_windows_worker_dispatch_sync_result(const char* worker_id, const char* payload_json);
-
-        char payload[512];
-        snprintf(payload, sizeof(payload),
-            "{\"id\":\"%s\",\"ok\":%s,\"status\":\"%s\"}",
-            w->requestId, ok ? "true" : "false", status);
-
-        if (w->timerId) {
-            KillTimer(NULL, w->timerId);
-            w->timerId = 0;
-        }
-
-        if (w->targetWorkerId[0] != '\0') {
-            zapp_windows_worker_dispatch_sync_result(w->targetWorkerId, payload);
-        } else {
-            char* escaped = zapp_escape_js_string(payload);
-            size_t jsLen = strlen(escaped) + 256;
-            char* js = (char*)malloc(jsLen);
-            snprintf(js, jsLen,
-                "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
-                "if(b&&typeof b.dispatchSyncResult==='function'){b.dispatchSyncResult('%s');}})();",
-                escaped);
-            zapp_windows_webview_eval_all(js);
-            free(js);
-            free(escaped);
-        }
-
-        w->in_use = 0;
-        w->requestId[0] = '\0';
-        w->key[0] = '\0';
-        w->targetWorkerId[0] = '\0';
-    }
-
-    static void CALLBACK zapp_sync_timeout_proc(HWND hwnd, UINT msg, UINT_PTR timerId, DWORD tick) {
-        (void)hwnd; (void)msg; (void)tick;
-        KillTimer(NULL, timerId);
-        int slot = zapp_sync_timer_to_slot[timerId % ZAPP_SYNC_TIMER_MAP_SIZE];
-        if (slot >= 0 && slot < ZAPP_MAX_SYNC_WAITS && zapp_sync_waits[slot].in_use
-            && zapp_sync_waits[slot].timerId == timerId) {
-            zapp_sync_waits[slot].timerId = 0;
-            zapp_sync_dispatch_result(&zapp_sync_waits[slot], "timed-out", 1);
-        }
-    }
-#endif
-}
-
-@cfg(windows)
-fn platform_sync_handle_bridge(action: string, payload_json: string) -> void {
-    raw {
-    #ifdef _WIN32
-        if (action == NULL || payload_json == NULL) return;
-
-        extern char* zapp_json_get_string(const char* json, const char* key);
-        extern int zapp_json_get_int(const char* json, const char* key, int default_val);
-        extern void zapp_windows_webview_eval_all(const char* js_utf8);
-        extern char* zapp_escape_js_string(const char* raw);
-        extern void zapp_windows_worker_dispatch_sync_result(const char* worker_id, const char* payload_json);
-
-        zapp_sync_ensure_state();
-
-        if (strcmp((const char*)action, "wait") == 0) {
-            char* requestId = zapp_json_get_string((const char*)payload_json, "id");
-            char* key = zapp_json_get_string((const char*)payload_json, "key");
-            char* targetWorkerId = zapp_json_get_string((const char*)payload_json, "targetWorkerId");
-            int timeoutMs = zapp_json_get_int((const char*)payload_json, "timeoutMs", 30000);
-            if (!requestId || !key || requestId[0] == '\0' || key[0] == '\0') {
-                free(requestId); free(key); free(targetWorkerId);
-                return;
-            }
-            if (timeoutMs < 1) timeoutMs = 1;
-            if (timeoutMs > 300000) timeoutMs = 300000;
-
-            int slot = -1;
-            for (int i = 0; i < ZAPP_MAX_SYNC_WAITS; i++) {
-                if (!zapp_sync_waits[i].in_use) { slot = i; break; }
-            }
-            if (slot < 0) {
-                free(requestId); free(key); free(targetWorkerId);
-                return;
-            }
-
-            ZappSyncWait* w = &zapp_sync_waits[slot];
-            w->in_use = 1;
-            strncpy(w->requestId, requestId, sizeof(w->requestId) - 1);
-            strncpy(w->key, key, sizeof(w->key) - 1);
-            if (targetWorkerId) strncpy(w->targetWorkerId, targetWorkerId, sizeof(w->targetWorkerId) - 1);
-            else w->targetWorkerId[0] = '\0';
-
-            w->timerId = SetTimer(NULL, 0, (UINT)timeoutMs, zapp_sync_timeout_proc);
-            if (w->timerId) {
-                zapp_sync_timer_to_slot[w->timerId % ZAPP_SYNC_TIMER_MAP_SIZE] = slot;
-            }
-
-            free(requestId); free(key); free(targetWorkerId);
-            return;
-        }
-
-        if (strcmp((const char*)action, "notify") == 0) {
-            char* key = zapp_json_get_string((const char*)payload_json, "key");
-            int count = zapp_json_get_int((const char*)payload_json, "count", 1);
-            if (!key || key[0] == '\0') { free(key); return; }
-            if (count < 1) count = 1;
-            if (count > 65535) count = 65535;
-
-            int delivered = 0;
-            for (int i = 0; i < ZAPP_MAX_SYNC_WAITS && delivered < count; i++) {
-                if (zapp_sync_waits[i].in_use && strcmp(zapp_sync_waits[i].key, key) == 0) {
-                    zapp_sync_dispatch_result(&zapp_sync_waits[i], "notified", 1);
-                    delivered++;
-                }
-            }
-            free(key);
-            return;
-        }
-
-        if (strcmp((const char*)action, "cancel") == 0) {
-            char* requestId = zapp_json_get_string((const char*)payload_json, "id");
-            if (!requestId || requestId[0] == '\0') { free(requestId); return; }
-            for (int i = 0; i < ZAPP_MAX_SYNC_WAITS; i++) {
-                if (zapp_sync_waits[i].in_use && strcmp(zapp_sync_waits[i].requestId, requestId) == 0) {
-                    zapp_sync_dispatch_result(&zapp_sync_waits[i], "cancelled", 1);
-                    break;
-                }
-            }
-            free(requestId);
-            return;
-        }
-    #endif
-    }
-}
+fn platform_sync_handle_bridge(action: string, payload_json: string) -> void;
 
 @cfg(windows)
 fn app_handle_window_message(app: App*, action: string, payload: string) -> void;
 
 @cfg(windows)
-fn app_open_external(app: App*, payload: string) -> void {
-    raw {
-    #ifdef _WIN32
-        (void)app;
-        if (payload == NULL) return;
-        extern char* zapp_json_get_string(const char* json, const char* key);
-        char* url = zapp_json_get_string((const char*)payload, "url");
-        if (url && url[0] != '\0') {
-            int len = MultiByteToWideChar(CP_UTF8, 0, url, -1, NULL, 0);
-            wchar_t* wUrl = (wchar_t*)malloc(len * sizeof(wchar_t));
-            MultiByteToWideChar(CP_UTF8, 0, url, -1, wUrl, len);
-            ShellExecuteW(NULL, L"open", wUrl, NULL, NULL, SW_SHOWNORMAL);
-            free(wUrl);
-        }
-        if (url) free(url);
-    #endif
-    }
-}
-
+fn app_open_external(app: App*, payload: string) -> void;
 @cfg(windows)
 fn app_handle_dialog(app: App*, action: string, payload: string) -> void;
-
 @cfg(windows)
-fn app_handle_app_action(app: App*, action: string) -> void {
-    raw {
-    #ifdef _WIN32
-        (void)app;
-        if (action == NULL) return;
-        if (strcmp((const char*)action, "quit") == 0) {
-            PostQuitMessage(0);
-            return;
-        }
-        if (strcmp((const char*)action, "hide") == 0) {
-            // Minimize all top-level windows owned by this process
-            HWND hwnd = NULL;
-            while ((hwnd = FindWindowExW(NULL, hwnd, L"ZappWindowClass", NULL)) != NULL) {
-                if (IsWindowVisible(hwnd)) {
-                    ShowWindow(hwnd, SW_MINIMIZE);
-                }
-            }
-            return;
-        }
-        if (strcmp((const char*)action, "show") == 0) {
-            // Restore all minimized windows and bring to foreground
-            HWND hwnd = NULL;
-            HWND first = NULL;
-            while ((hwnd = FindWindowExW(NULL, hwnd, L"ZappWindowClass", NULL)) != NULL) {
-                if (IsIconic(hwnd)) {
-                    ShowWindow(hwnd, SW_RESTORE);
-                } else {
-                    ShowWindow(hwnd, SW_SHOW);
-                }
-                if (!first) first = hwnd;
-            }
-            if (first) {
-                SetForegroundWindow(first);
-            }
-            return;
-        }
-    #endif
-    }
-}
+fn app_handle_app_action(app: App*, action: string) -> void;
 
 @cfg(ZAPP_LINUX)
 fn zapp_dispatch_invoke_result(request_id: string, payload_json: string) -> void {

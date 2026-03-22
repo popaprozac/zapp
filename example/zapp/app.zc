@@ -8,36 +8,41 @@ fn on_window_ready(id: int, handle: void*) -> void {
     let win = Window{id: id, handle: handle};
     println "[native] window ready callback fired!";
     // Users who create windows with visible: false can call win.show() here
-    // win.show();
+    win.show();
 }
 
-fn on_window_focus(data: WindowEventData*) -> void {
+fn on_window_focus(data: WindowEventData*) -> int {
     let _d = data;
     println "[native] window focused!";
+    return 0;
 }
 
-fn on_window_blur(data: WindowEventData*) -> void {
+fn on_window_blur(data: WindowEventData*) -> int {
     let _d = data;
     println "[native] window blurred!";
+    return 0;
 }
 
-fn on_window_resize(data: WindowEventData*) -> void {
+fn on_window_resize(data: WindowEventData*) -> int {
     raw {
         printf("[native] window resized to %dx%d at (%d,%d)\n",
             data->width, data->height, data->x, data->y);
     }
+    return 0;
 }
 
-fn on_window_move(data: WindowEventData*) -> void {
+fn on_window_move(data: WindowEventData*) -> int {
     raw {
         printf("[native] window moved to (%d,%d)\n",
             data->x, data->y);
     }
+    return 0;
 }
 
-fn on_window_close(data: WindowEventData*) -> void {
+fn on_window_close(data: WindowEventData*) -> int {
     let _d = data;
-    println "[native] window closed!";
+    println "[native] window close requested!";
+    return 0; // ALLOW (return 1 for CANCEL)
 }
 
 fn run_app() -> int {
@@ -56,6 +61,7 @@ fn run_app() -> int {
     opts.width = 800;
     opts.height = 600;
     opts.visible = false;
+    opts.alwaysOnTop = true;
     let win = app.window.create(&opts);
     win.on_ready(on_window_ready);
     win.on(WindowEvent.FOCUS, on_window_focus);

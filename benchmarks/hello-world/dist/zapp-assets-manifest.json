@@ -1,0 +1,23 @@
+{
+  "v": 1,
+  "generatedAt": "2026-03-22T21:34:50.138Z",
+  "assets": [
+    {
+      "file": "index.html",
+      "size": 948,
+      "brotli": {
+        "file": "index.html.br",
+        "size": 361
+      }
+    },
+    {
+      "file": "assets/index-DMhcemXI.js",
+      "size": 5520,
+      "brotli": {
+        "file": "assets/index-DMhcemXI.js.br",
+        "size": 2004
+      }
+    }
+  ],
+  "embedded": true
+}

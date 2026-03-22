@@ -1,0 +1,34 @@
+import "app/app.zc";
+
+fn greet_service(app: App*, args: string) -> string {
+    return args;
+}
+
+fn on_ready(id: int, handle: void*) -> void {
+    let _id = id; let _h = handle;
+    let app = (App*)app_get_active();
+    if app != NULL {
+        app.window.get(id).show();
+    }
+}
+
+fn run_app() -> int {
+    let config = AppConfig{
+        name: "Zapp Hello World",
+        applicationShouldTerminateAfterLastWindowClosed: true,
+        webContentInspectable: false,
+        maxWorkers: 0,
+        qjsStackSize: 0,
+    };
+    let app = App::new(config);
+    app.service.add("greet", greet_service);
+
+    let opts = window_options_default("Hello World");
+    opts.width = 600;
+    opts.height = 400;
+    opts.visible = false;
+    let win = app.window.create(&opts);
+    win.on_ready(on_ready);
+
+    return app.run();
+}

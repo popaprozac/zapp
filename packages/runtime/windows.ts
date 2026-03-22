@@ -40,6 +40,8 @@ export type WindowHandle = {
   setPosition(x: number, y: number): void;
   setFullscreen(on: boolean): void;
   setAlwaysOnTop(on: boolean): void;
+  /** Force-close the window, bypassing all close guards */
+  destroy(): void;
   /** Typed event listener — size events get a payload with size + position */
   on(event: SizeEvent, handler: (payload: WindowSizeEventPayload) => void): () => void;
   /** Typed event listener — other window events get base payload */
@@ -73,6 +75,8 @@ function makeHandle(windowId: string): WindowHandle {
     return ss[Symbol.for("zapp.windowReady")] === true;
   };
 
+  let closeListenerCount = 0;
+
   const handleOn = (event: WindowEvent, handler: (payload: WindowEventPayload) => void): (() => void) => {
     const eventName = getWindowEventName(event);
     const off = Events.on(`window:${eventName}`, (payload) => {
@@ -81,10 +85,30 @@ function makeHandle(windowId: string): WindowHandle {
         handler(p);
       }
     });
+
+    // Auto-guard: registering a CLOSE listener enables the native close guard
+    if (event === WindowEvent.CLOSE) {
+      closeListenerCount++;
+      if (closeListenerCount === 1) {
+        action("setCloseGuard", { guard: true });
+      }
+    }
+
     if (event === WindowEvent.READY && isWindowReady()) {
       queueMicrotask(() => handler({ windowId, timestamp: Date.now() }));
     }
-    return off;
+
+    // Return unsubscribe that also manages the close guard
+    return () => {
+      off();
+      if (event === WindowEvent.CLOSE) {
+        closeListenerCount--;
+        if (closeListenerCount <= 0) {
+          closeListenerCount = 0;
+          action("setCloseGuard", { guard: false });
+        }
+      }
+    };
   };
 
   const handleOnce = (event: WindowEvent, handler: (payload: WindowEventPayload) => void): (() => void) => {
@@ -117,6 +141,7 @@ function makeHandle(windowId: string): WindowHandle {
     toggleMinimize() { action("toggle_minimize"); },
     toggleMaximize() { action("toggle_maximize"); },
     close() { action("close"); },
+    destroy() { action("destroy"); },
     setTitle(title: string) { action("set_title", { title }); },
     setSize(width: number, height: number) { action("set_size", { width, height }); },
     setPosition(x: number, y: number) { action("set_position", { x, y }); },
