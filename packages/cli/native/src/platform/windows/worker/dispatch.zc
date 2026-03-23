@@ -1,5 +1,5 @@
 raw {
-#ifdef _WIN32
+#if defined(_WIN32) && defined(ZAPP_WORKER_ENGINE_QJS)
     #include <windows.h>
     #include <stdio.h>
     #include <stdlib.h>

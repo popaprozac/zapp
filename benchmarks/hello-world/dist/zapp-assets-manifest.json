@@ -1,13 +1,13 @@
 {
   "v": 1,
-  "generatedAt": "2026-03-22T21:34:50.138Z",
+  "generatedAt": "2026-03-22T23:39:42.551Z",
   "assets": [
     {
       "file": "index.html",
-      "size": 948,
+      "size": 966,
       "brotli": {
         "file": "index.html.br",
-        "size": 361
+        "size": 389
       }
     },
     {

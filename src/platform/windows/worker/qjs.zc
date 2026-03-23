@@ -13,7 +13,7 @@ import "./core/fetch_core.zc";
 import "./core/websocket_core.zc";
 
 raw {
-#ifdef _WIN32
+#if defined(_WIN32) && defined(ZAPP_WORKER_ENGINE_QJS)
     #include "quickjs.h"
     #include "quickjs-libc.h"
 #endif
@@ -30,7 +30,7 @@ include <string.h>
 include <stdlib.h>
 
 raw {
-#ifdef _WIN32
+#if defined(_WIN32) && defined(ZAPP_WORKER_ENGINE_QJS)
     #include <windows.h>
     #include <stdio.h>
 
@@ -56,7 +56,7 @@ raw {
     extern void zapp_windows_qjs_websocket_install(JSContext* ctx, JSValue bridge, const char* worker_id);
 
     // Forward declarations for worker state used by thread proc
-    static JSRuntime* qjs_rt;
+    JSRuntime* qjs_rt;
 
     // -----------------------------------------------------------------------
     // Worker thread: serial work queue (equivalent of GCD serial dispatch queue)
@@ -129,7 +129,7 @@ raw {
     static int qjs_initialized = 0;
     static void* qjs_shared_loading_sentinel = (void*)(uintptr_t)0xDEADBEEF;
 
-    static void zapp_windows_qjs_ensure_init(void) {
+    void zapp_windows_qjs_ensure_init(void) {
         if (qjs_initialized) return;
         qjs_initialized = 1;
 
@@ -864,7 +864,7 @@ raw {
 }
 
 raw {
-#ifdef _WIN32
+#if defined(_WIN32) && defined(ZAPP_WORKER_ENGINE_QJS)
     typedef struct {
         char* name;
         char* payload;
@@ -934,7 +934,7 @@ struct WindowsWorkerQjs {}
 impl WorkerBackend for WindowsWorkerQjs {
     fn bind_runtime(self, app: App*) -> void {
         raw {
-        #ifdef _WIN32
+        #if defined(_WIN32) && defined(ZAPP_WORKER_ENGINE_QJS)
             app->event.send_event_to_js = (void*)zapp_windows_send_event_to_js;
         #endif
         }
@@ -942,7 +942,7 @@ impl WorkerBackend for WindowsWorkerQjs {
 
     fn handle_bridge(self, app: App*, action: string, payload: string) -> void {
         raw {
-        #ifdef _WIN32
+        #if defined(_WIN32) && defined(ZAPP_WORKER_ENGINE_QJS)
             if (action == NULL || payload == NULL) return;
 
             zapp_windows_qjs_ensure_init();

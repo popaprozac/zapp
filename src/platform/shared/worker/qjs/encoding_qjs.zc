@@ -1,7 +1,7 @@
 // Shared QJS wrapper for TextEncoder/TextDecoder. Delegates to platform-specific core/encoding_core.zc.
 
 raw {
-#if defined(ZAPP_WORKER_ENGINE_QJS) || defined(_WIN32)
+#if defined(ZAPP_WORKER_ENGINE_QJS)
     #include "quickjs.h"
     uint8_t* zapp_core_text_encode(const char* input, size_t* out_len);
     char* zapp_core_text_decode(const uint8_t* bytes, size_t len);

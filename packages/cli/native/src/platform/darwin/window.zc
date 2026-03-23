@@ -21,12 +21,16 @@ raw {
     #define ZAPP_EVENT_WINDOW_FULLSCREEN  9
     #define ZAPP_EVENT_WINDOW_UNFULLSCREEN 10
 
+    #ifndef ZAPP_EVENT_RESULT_CANCEL
+    #define ZAPP_EVENT_RESULT_CANCEL 1
+    #endif
+
     extern void zapp_darwin_reset_all_workers(void);
     extern void zapp_darwin_reset_owner_workers(const char* owner_id);
     extern void zapp_darwin_webview_create(void* window_ptr, bool inspectable);
     extern void zapp_dispatch_window_event_to_bridge(const char* window_id, int event_id, int width, int height, int x, int y);
     static int zapp_window_get_numeric_id(NSString* windowId);
-    extern void zapp_window_trigger_event(int id, int event_id);
+    extern int zapp_window_trigger_event_with_data(int id, int event_id, int w, int h, int x, int y);
 
     // Per-window delegate that terminates attached workers when the window closes.
     @interface ZappWindowDelegate : NSObject <NSWindowDelegate>
@@ -35,6 +39,8 @@ raw {
     @property (nonatomic, assign) BOOL bridgeReady;
     @property (nonatomic, assign) BOOL pendingFocusEvent;
     @property (nonatomic, assign) BOOL wasZoomed;
+    @property (nonatomic, assign) BOOL closeGuarded;
+    @property (nonatomic, assign) BOOL forceClose;
     @end
 
     static void zapp_window_unregister(NSWindow* window);
@@ -43,7 +49,7 @@ raw {
     static void zapp_fire_window_event(NSString* windowId, int event_id, int w, int h, int x, int y) {
         if (windowId == nil) return;
         int numId = zapp_window_get_numeric_id(windowId);
-        if (numId >= 0) zapp_window_trigger_event(numId, event_id);
+        if (numId >= 0) zapp_window_trigger_event_with_data(numId, event_id, w, h, x, y);
         zapp_dispatch_window_event_to_bridge([windowId UTF8String], event_id, w, h, x, y);
     }
 
@@ -54,14 +60,32 @@ raw {
             _bridgeReady = NO;
             _pendingFocusEvent = NO;
             _wasZoomed = NO;
+            _closeGuarded = NO;
+            _forceClose = NO;
         }
         return self;
     }
+    - (BOOL)windowShouldClose:(NSWindow*)sender {
+        (void)sender;
+        if (self.forceClose) {
+            self.forceClose = NO;
+            return YES;
+        }
+        if (self.windowId) {
+            int numId = zapp_window_get_numeric_id(self.windowId);
+            if (numId >= 0) {
+                int result = zapp_window_trigger_event_with_data(numId, ZAPP_EVENT_WINDOW_CLOSE, 0, 0, 0, 0);
+                if (result == ZAPP_EVENT_RESULT_CANCEL) return NO;
+            }
+            if (self.closeGuarded) {
+                zapp_dispatch_window_event_to_bridge([self.windowId UTF8String], ZAPP_EVENT_WINDOW_CLOSE, 0, 0, 0, 0);
+                return NO;
+            }
+        }
+        return YES;
+    }
     - (void)windowWillClose:(NSNotification*)notification {
         NSWindow* window = (NSWindow*)[notification object];
-        if (self.windowId) {
-            zapp_fire_window_event(self.windowId, ZAPP_EVENT_WINDOW_CLOSE, 0, 0, 0, 0);
-        }
         if (window) {
             zapp_window_unregister(window);
         }
@@ -73,7 +97,7 @@ raw {
         (void)notification;
         if (self.windowId) {
             int numId = zapp_window_get_numeric_id(self.windowId);
-            if (numId >= 0) zapp_window_trigger_event(numId, ZAPP_EVENT_WINDOW_FOCUS);
+            if (numId >= 0) zapp_window_trigger_event_with_data(numId, ZAPP_EVENT_WINDOW_FOCUS, 0, 0, 0, 0);
             if (self.bridgeReady) {
                 zapp_dispatch_window_event_to_bridge([self.windowId UTF8String], ZAPP_EVENT_WINDOW_FOCUS, 0, 0, 0, 0);
             } else {
@@ -172,9 +196,20 @@ fn darwin_window_create(options: WindowOptions*) -> void* {
         @autoreleasepool {
             __block void* out = NULL;
             void (^work)(void) = ^{
+                // Build style mask from options
+                NSUInteger styleMask = 0;
+                if (!options->borderless) {
+                    styleMask |= NSWindowStyleMaskTitled;
+                    if (options->closable)     styleMask |= NSWindowStyleMaskClosable;
+                    if (options->minimizable)  styleMask |= NSWindowStyleMaskMiniaturizable;
+                    if (options->resizable)    styleMask |= NSWindowStyleMaskResizable;
+                } else {
+                    styleMask = NSWindowStyleMaskBorderless;
+                }
+
                 NSRect frame = NSMakeRect(options->x, options->y, options->width, options->height);
                 NSWindow* window = [[NSWindow alloc] initWithContentRect:frame
-                    styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable)
+                    styleMask:styleMask
                     backing:NSBackingStoreBuffered
                     defer:NO];
                 [window setReleasedWhenClosed:NO];
@@ -196,6 +231,15 @@ fn darwin_window_create(options: WindowOptions*) -> void* {
                     #endif
                 }
 
+                if (options->transparent) {
+                    [window setOpaque:NO];
+                    [window setBackgroundColor:[NSColor clearColor]];
+                }
+
+                if (options->alwaysOnTop) {
+                    [window setLevel:NSFloatingWindowLevel];
+                }
+
                 bool inspectable = options->webContentInspectable > 0;
                 zapp_darwin_webview_create((__bridge void*)window, inspectable);
 
@@ -204,12 +248,17 @@ fn darwin_window_create(options: WindowOptions*) -> void* {
                 ZappWindowDelegate* windowDelegate = [[ZappWindowDelegate alloc] init];
                 windowDelegate.windowId = windowId;
                 windowDelegate.ownerId = ownerId;
-                // NSWindow.delegate is a weak reference; retain the delegate for the
-                // window's lifetime via an associated object so windowWillClose: fires.
                 objc_setAssociatedObject(window, &kZappWindowDelegateKey, windowDelegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                 [window setDelegate:windowDelegate];
 
-                [window makeKeyAndOrderFront:nil];
+                if (options->fullscreen) {
+                    [window toggleFullScreen:nil];
+                }
+
+                if (options->visible && !options->hidden) {
+                    [window makeKeyAndOrderFront:nil];
+                }
+
                 out = (__bridge_retained void*)window;
             };
 
@@ -570,6 +619,21 @@ fn darwin_window_is_fullscreen(window: void*) -> bool {
     return false;
 }
 
+fn darwin_window_force_close(window: void*) -> void {
+    raw {
+#ifdef __APPLE__
+        NSWindow* nsWindow = (__bridge NSWindow*)window;
+        if (nsWindow) {
+            ZappWindowDelegate* del = (ZappWindowDelegate*)[nsWindow delegate];
+            if ([del isKindOfClass:[ZappWindowDelegate class]]) {
+                del.forceClose = YES;
+            }
+            [nsWindow close];
+        }
+#endif
+    }
+}
+
 raw {
 #ifdef __APPLE__
     extern void* app_get_active(void);
@@ -847,6 +911,66 @@ raw {
         // All other actions operate on an existing window
         NSString* windowId = body[@"windowId"];
         if (![windowId isKindOfClass:[NSString class]] || [windowId length] == 0) return;
+
+        if ([actionStr isEqualToString:@"setCloseGuard"]) {
+            id guardVal = body[@"guard"];
+            BOOL guard = [guardVal respondsToSelector:@selector(boolValue)] && [guardVal boolValue];
+            void (^work)(void) = ^{
+                for (NSWindow* window in [NSApp windows]) {
+                    NSString* wid = [NSString stringWithFormat:@"win-%p", window];
+                    if ([wid isEqualToString:windowId]) {
+                        ZappWindowDelegate* del = (ZappWindowDelegate*)[window delegate];
+                        if ([del isKindOfClass:[ZappWindowDelegate class]]) {
+                            del.closeGuarded = guard;
+                        }
+                        break;
+                    }
+                }
+            };
+            if ([NSThread isMainThread]) { work(); }
+            else { dispatch_async(dispatch_get_main_queue(), work); }
+            return;
+        }
+
+        if ([actionStr isEqualToString:@"destroy"]) {
+            void (^work)(void) = ^{
+                for (NSWindow* window in [NSApp windows]) {
+                    NSString* wid = [NSString stringWithFormat:@"win-%p", window];
+                    if ([wid isEqualToString:windowId]) {
+                        ZappWindowDelegate* del = (ZappWindowDelegate*)[window delegate];
+                        if ([del isKindOfClass:[ZappWindowDelegate class]]) {
+                            del.forceClose = YES;
+                        }
+                        [window close];
+                        break;
+                    }
+                }
+            };
+            if ([NSThread isMainThread]) { work(); }
+            else { dispatch_async(dispatch_get_main_queue(), work); }
+            return;
+        }
+
+        if ([actionStr isEqualToString:@"setDragRegion"]) {
+            id dragVal = body[@"drag"];
+            BOOL drag = [dragVal respondsToSelector:@selector(boolValue)] && [dragVal boolValue];
+            void (^work)(void) = ^{
+                // Find the window by matching its windowId (win-%p format)
+                for (NSWindow* window in [NSApp windows]) {
+                    NSString* wid = [NSString stringWithFormat:@"win-%p", window];
+                    if ([wid isEqualToString:windowId]) {
+                        NSView* content = [window contentView];
+                        if ([content isKindOfClass:[ZappWebView class]]) {
+                            [(ZappWebView*)content setInDragRegion:drag];
+                        }
+                        break;
+                    }
+                }
+            };
+            if ([NSThread isMainThread]) { work(); }
+            else { dispatch_async(dispatch_get_main_queue(), work); }
+            return;
+        }
 
         void (^actionWork)(void) = ^{
             NSWindow* nsWindow = zapp_window_lookup(windowId);

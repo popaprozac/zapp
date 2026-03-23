@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { brotliCompressSync, constants as zlibConstants } from "node:zlib";
 import { generateBuildConfigZc } from "./build-config";
-import { ensureQjsLib, nativeIncludeArgs, preferredJsTool, resolveNativeDir, runCmd, runPackageScript } from "./common";
+import { buildFileNeedsQjs, ensureQjsLib, nativeIncludeArgs, preferredJsTool, resolveNativeDir, runCmd, runPackageScript } from "./common";
 import { resolveAndBundleBackend } from "./backend";
 import { runGenerate } from "./generate";
 import type { ResolvedZappConfig } from "./config";
@@ -12,7 +12,8 @@ import type { ResolvedZappConfig } from "./config";
 export const walkFiles = async (dir: string): Promise<string[]> => {
   const glob = new Bun.Glob("**/*");
   const files: string[] = [];
-  for await (const file of glob.scan({ cwd: dir, absolute: true })) {
+  // Bun.Glob.scan() on Windows requires forward slashes in the cwd path
+  for await (const file of glob.scan({ cwd: dir.replace(/\\/g, "/"), absolute: true })) {
     const stat = Bun.file(file);
     if (stat.size > 0 || (await stat.exists())) {
         files.push(file);
@@ -95,15 +96,17 @@ ${assetEntries.join("\n")}
 const collectWorkerStems = async (assetDir: string): Promise<Set<string>> => {
   const stems = new Set<string>();
   const manifestPath = path.join(assetDir, "zapp-workers", "manifest.json");
+  const manifestFile = Bun.file(manifestPath);
+  if (!(await manifestFile.exists())) return stems;
   try {
-    const raw = await Bun.file(manifestPath).text();
+    const raw = await manifestFile.text();
     const data = JSON.parse(raw);
     const workers = data.workers ?? data;
     for (const key of Object.keys(workers)) {
       const stem = path.basename(key).replace(/\.[^.]+$/, "");
       if (stem) stems.add(stem);
     }
-  } catch { /* no manifest */ }
+  } catch { /* malformed manifest */ }
   return stems;
 };
 
@@ -208,7 +211,8 @@ export const runBuild = async ({
 
   process.stdout.write("[zapp] building native binary\n");
   await mkdir(path.dirname(nativeOut), { recursive: true });
-  const qjsLib = await ensureQjsLib(root, isDebug ? "dev" : "release");
+  const needsQjs = await buildFileNeedsQjs(buildFile);
+  const qjsLib = needsQjs ? await ensureQjsLib(root, isDebug ? "dev" : "release") : null;
   const zcArgs = ["build", buildFile, buildConfigFile, ...nativeIncludeArgs()];
   
   // Always generate assets file (provides empty placeholder when not embedding)
@@ -238,7 +242,10 @@ export const runBuild = async ({
     }
   }
 
-  zcArgs.push("-o", nativeOut, "-L", path.dirname(qjsLib), "-lqjs");
+  zcArgs.push("-o", nativeOut);
+  if (qjsLib) {
+    zcArgs.push("-L", path.dirname(qjsLib), "-lqjs");
+  }
   await runCmd("zc", zcArgs, { cwd: root, env: { ZAPP_NATIVE: resolveNativeDir() } });
 
   // Strip symbols in release builds for smaller binary

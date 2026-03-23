@@ -1,7 +1,7 @@
 // QJS wrapper for WebSocket on Windows. Delegates to core/websocket_core.zc.
 
 raw {
-#ifdef _WIN32
+#if defined(_WIN32) && defined(ZAPP_WORKER_ENGINE_QJS)
     #include "quickjs.h"
     #include "quickjs-libc.h"
     #include <stdlib.h>

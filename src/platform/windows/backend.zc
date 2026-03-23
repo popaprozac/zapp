@@ -1,10 +1,13 @@
 import "../platform.zc";
+
+@cfg(ZAPP_WORKER_ENGINE_QJS)
 import "./backend_bootstrap.zc";
+@cfg(ZAPP_WORKER_ENGINE_QJS)
 import "./engine_qjs.zc";
-import "./worker/qjs.zc";
 
 raw {
 #ifdef _WIN32
+#ifdef ZAPP_WORKER_ENGINE_QJS
     #include <windows.h>
     #include <stdio.h>
     #include <stdlib.h>
@@ -428,5 +431,22 @@ raw {
         engine_qjs_free_ctx(zapp_be_ctx);
         zapp_be_ctx = NULL;
     }
-#endif
+#else /* !ZAPP_WORKER_ENGINE_QJS */
+    // No-op stubs when QJS is not enabled
+    int32_t zapp_backend_context_create(void* app_ptr, char* script_source) {
+        (void)app_ptr; (void)script_source;
+        return -1;
+    }
+    void zapp_backend_deliver_event(const char* name, const char* payload) {
+        (void)name; (void)payload;
+    }
+    void zapp_backend_dispatch_window_result(const char* payload_json) {
+        (void)payload_json;
+    }
+    void zapp_backend_dispatch_window_ready(const char* window_id) {
+        (void)window_id;
+    }
+    void zapp_backend_context_destroy(void) {}
+#endif /* ZAPP_WORKER_ENGINE_QJS */
+#endif /* _WIN32 */
 }

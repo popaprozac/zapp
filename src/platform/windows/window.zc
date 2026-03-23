@@ -256,7 +256,7 @@ fn windows_window_set_fullscreen(window: void*, on: bool) -> void {
     #ifdef _WIN32
         HWND hwnd = (HWND)window;
         if (!hwnd || !IsWindow(hwnd)) return;
-        extern void zapp_window_trigger_event_with_data(int id, int event_id, int w, int h, int x, int y);
+        extern int zapp_window_trigger_event_with_data(int id, int event_id, int w, int h, int x, int y);
         extern void zapp_dispatch_window_event_to_bridge_win(const char* window_id, int event_id, int w, int h, int x, int y);
         extern const char* zapp_win_id_for_hwnd(HWND hwnd);
         extern int zapp_window_get_numeric_id(const char* window_id);

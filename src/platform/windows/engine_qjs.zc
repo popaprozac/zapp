@@ -2,7 +2,7 @@
 // No type renaming needed since we don't have JavaScriptCore in the same TU.
 
 raw {
-#ifdef _WIN32
+#if defined(_WIN32) && defined(ZAPP_WORKER_ENGINE_QJS)
     #include "quickjs.h"
     #include "quickjs-libc.h"
     #include <string.h>

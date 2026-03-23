@@ -5,15 +5,29 @@ var __getProtoOf = Object.getPrototypeOf;
 var __defProp = Object.defineProperty;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
+function __accessProp(key) {
+  return this[key];
+}
+var __toESMCache_node;
+var __toESMCache_esm;
 var __toESM = (mod, isNodeMode, target) => {
+  var canCache = mod != null && typeof mod === "object";
+  if (canCache) {
+    var cache = isNodeMode ? __toESMCache_node ??= new WeakMap : __toESMCache_esm ??= new WeakMap;
+    var cached = cache.get(mod);
+    if (cached)
+      return cached;
+  }
   target = mod != null ? __create(__getProtoOf(mod)) : {};
   const to = isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target;
   for (let key of __getOwnPropNames(mod))
     if (!__hasOwnProp.call(to, key))
       __defProp(to, key, {
-        get: () => mod[key],
+        get: __accessProp.bind(mod, key),
         enumerable: true
       });
+  if (canCache)
+    cache.set(mod, to);
   return to;
 };
 var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
@@ -42,7 +56,7 @@ var require_get_caller_file = __commonJS((exports, module) => {
 
 // node_modules/esbuild/lib/main.js
 var require_main = __commonJS((exports, module) => {
-  var __dirname = "/Users/zach/code/zapp/packages/cli/node_modules/esbuild/lib", __filename = "/Users/zach/code/zapp/packages/cli/node_modules/esbuild/lib/main.js";
+  var __dirname = "C:\\Users\\Zach\\code\\zapp\\packages\\cli\\node_modules\\esbuild\\lib", __filename = "C:\\Users\\Zach\\code\\zapp\\packages\\cli\\node_modules\\esbuild\\lib\\main.js";
   var __defProp2 = Object.defineProperty;
   var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
   var __getOwnPropNames2 = Object.getOwnPropertyNames;
@@ -8134,9 +8148,15 @@ var ensureQjsLib = async (root, mode = "release") => {
     objectFiles.push(objPath);
     await runCmd(cc, [...cflags, srcPath, "-o", objPath]);
   }
-  const ar = "ar";
+  const ar = process2.platform === "win32" ? "gcc-ar" : "ar";
   await runCmd(ar, ["rcs", libPath, ...objectFiles]);
   return libPath;
+};
+var buildFileNeedsQjs = async (buildFile) => {
+  const content = await Bun.file(buildFile).text();
+  const platformTag = process2.platform === "darwin" ? "macos" : "windows";
+  const pattern = new RegExp(`^\\s*//> ${platformTag}: define: ZAPP_WORKER_ENGINE_QJS`, "m");
+  return pattern.test(content);
 };
 var cachedExec = null;
 var preferredJsTool = () => {
@@ -8534,7 +8554,7 @@ ${indexExports.join(`
 var walkFiles = async (dir) => {
   const glob = new Bun.Glob("**/*");
   const files = [];
-  for await (const file of glob.scan({ cwd: dir, absolute: true })) {
+  for await (const file of glob.scan({ cwd: dir.replace(/\\/g, "/"), absolute: true })) {
     const stat = Bun.file(file);
     if (stat.size > 0 || await stat.exists()) {
       files.push(file);
@@ -8610,8 +8630,11 @@ ${assetEntries.join(`
 var collectWorkerStems = async (assetDir) => {
   const stems = new Set;
   const manifestPath = path5.join(assetDir, "zapp-workers", "manifest.json");
+  const manifestFile = Bun.file(manifestPath);
+  if (!await manifestFile.exists())
+    return stems;
   try {
-    const raw = await Bun.file(manifestPath).text();
+    const raw = await manifestFile.text();
     const data = JSON.parse(raw);
     const workers = data.workers ?? data;
     for (const key of Object.keys(workers)) {
@@ -8698,7 +8721,8 @@ var runBuild = async ({
   process5.stdout.write(`[zapp] building native binary
 `);
   await mkdir4(path5.dirname(nativeOut), { recursive: true });
-  const qjsLib = await ensureQjsLib(root, isDebug ? "dev" : "release");
+  const needsQjs = await buildFileNeedsQjs(buildFile);
+  const qjsLib = needsQjs ? await ensureQjsLib(root, isDebug ? "dev" : "release") : null;
   const zcArgs = ["build", buildFile, buildConfigFile, ...nativeIncludeArgs()];
   const assetsFile = await generateAssetsZc(root, manifest, assetDir);
   if (await Bun.file(assetsFile).exists())
@@ -8723,7 +8747,10 @@ var runBuild = async ({
       zcArgs.push(resPath);
     }
   }
-  zcArgs.push("-o", nativeOut, "-L", path5.dirname(qjsLib), "-lqjs");
+  zcArgs.push("-o", nativeOut);
+  if (qjsLib) {
+    zcArgs.push("-L", path5.dirname(qjsLib), "-lqjs");
+  }
   await runCmd("zc", zcArgs, { cwd: root, env: { ZAPP_NATIVE: resolveNativeDir() } });
   if (!isDebug) {
     try {
@@ -8827,7 +8854,8 @@ var runDev = async ({
       logLevel
     });
     await mkdir5(path6.dirname(nativeOut), { recursive: true });
-    const qjsLib = await ensureQjsLib(root, "dev");
+    const needsQjs = await buildFileNeedsQjs(buildFile);
+    const qjsLib = needsQjs ? await ensureQjsLib(root, "dev") : null;
     const zcArgs = ["build", buildFile, buildConfigFile, "-DZAPP_BUILD_DEV", "--debug", ...nativeIncludeArgs()];
     const manifest = embedAssets ? await buildAssetManifest({ assetDir, withBrotli }) : { v: 1, generatedAt: new Date().toISOString(), assets: [], embedded: false };
     const assetsFile = await generateAssetsZc(root, manifest, assetDir);
@@ -8845,7 +8873,10 @@ var runDev = async ({
         zcArgs.push(resPath);
       }
     }
-    zcArgs.push("-o", nativeOut, "-L", path6.dirname(qjsLib), "-lqjs");
+    zcArgs.push("-o", nativeOut);
+    if (qjsLib) {
+      zcArgs.push("-L", path6.dirname(qjsLib), "-lqjs");
+    }
     await runCmd("zc", zcArgs, { cwd: root, env: { ZAPP_NATIVE: resolveNativeDir() } });
     app = spawnStreaming(nativeOut, [], {
       cwd: root

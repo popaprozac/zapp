@@ -100,10 +100,22 @@ export const ensureQjsLib = async (root: string, mode: "dev" | "release" = "rele
     await runCmd(cc, [...cflags, srcPath, "-o", objPath]);
   }
 
-  const ar = "ar";
+  // Use gcc-ar on Windows to handle LTO objects (needs linker plugin)
+  const ar = process.platform === "win32" ? "gcc-ar" : "ar";
   await runCmd(ar, ["rcs", libPath, ...objectFiles]);
 
   return libPath;
+};
+
+/**
+ * Check if a build.zc file defines ZAPP_WORKER_ENGINE_QJS for the current platform.
+ */
+export const buildFileNeedsQjs = async (buildFile: string): Promise<boolean> => {
+  const content = await Bun.file(buildFile).text();
+  const platformTag = process.platform === "darwin" ? "macos" : "windows";
+  // Match lines like: //> windows: define: ZAPP_WORKER_ENGINE_QJS
+  const pattern = new RegExp(`^\\s*//> ${platformTag}: define: ZAPP_WORKER_ENGINE_QJS`, "m");
+  return pattern.test(content);
 };
 
 let cachedExec: string | null = null;

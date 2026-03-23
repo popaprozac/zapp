@@ -21,3 +21,11 @@ node_modules
 bin/
 packages/cli/native
 packages/cli/dist
+
+# Benchmark build artifacts
+*.br
+benchmarks/hello-world/bin/
+benchmarks/competitors/*/hello-world/dist/
+benchmarks/competitors/*/hello-world/node_modules/
+benchmarks/competitors/*/hello-world/build/
+benchmarks/competitors/*/hello-world/src-tauri/target/

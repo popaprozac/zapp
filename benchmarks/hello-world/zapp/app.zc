@@ -27,6 +27,7 @@ fn run_app() -> int {
     opts.width = 600;
     opts.height = 400;
     opts.visible = false;
+    opts.webContentInspectable = 1;
     let win = app.window.create(&opts);
     win.on_ready(on_ready);
 

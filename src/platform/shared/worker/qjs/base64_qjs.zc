@@ -1,7 +1,7 @@
 // Shared QJS wrapper for btoa/atob. Delegates to platform-specific core/base64_core.zc.
 
 raw {
-#if defined(ZAPP_WORKER_ENGINE_QJS) || defined(_WIN32)
+#if defined(ZAPP_WORKER_ENGINE_QJS)
     #include "quickjs.h"
     char* zapp_core_btoa(const char* input);
     char* zapp_core_atob(const char* input);

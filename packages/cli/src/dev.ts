@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { mkdir } from "node:fs/promises";
 import {
+  buildFileNeedsQjs,
   ensureQjsLib,
   killChild,
   nativeIncludeArgs,
@@ -112,7 +113,8 @@ export const runDev = async ({
     });
 
     await mkdir(path.dirname(nativeOut), { recursive: true });
-    const qjsLib = await ensureQjsLib(root, "dev");
+    const needsQjs = await buildFileNeedsQjs(buildFile);
+    const qjsLib = needsQjs ? await ensureQjsLib(root, "dev") : null;
     const zcArgs = ["build", buildFile, buildConfigFile, "-DZAPP_BUILD_DEV", "--debug", ...nativeIncludeArgs()];
     const manifest = embedAssets
       ? await buildAssetManifest({ assetDir, withBrotli })
@@ -133,7 +135,10 @@ export const runDev = async ({
       }
     }
 
-    zcArgs.push("-o", nativeOut, "-L", path.dirname(qjsLib), "-lqjs");
+    zcArgs.push("-o", nativeOut);
+    if (qjsLib) {
+      zcArgs.push("-L", path.dirname(qjsLib), "-lqjs");
+    }
     await runCmd("zc", zcArgs, { cwd: root, env: { ZAPP_NATIVE: resolveNativeDir() } });
     app = spawnStreaming(nativeOut, [], {
       cwd: root,
