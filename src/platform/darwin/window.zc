@@ -1109,18 +1109,22 @@ raw {
         (void)sender;
         if (self.itemId == nil) return;
         // Dispatch menu:{id} event to all webviews
-        NSString* eventName = [NSString stringWithFormat:@"menu:%@", self.itemId];
-        NSString* escapedName = [eventName stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
-        NSString* js = [NSString stringWithFormat:
-            @"(function(){var b=globalThis[Symbol.for('zapp.bridge')];if(b&&b.deliverEvent)b.deliverEvent('%@',{});})();",
-            escapedName
-        ];
-        for (NSWindow* window in [NSApp windows]) {
-            NSView* content = [window contentView];
-            if ([content isKindOfClass:[WKWebView class]]) {
-                [(WKWebView*)content evaluateJavaScript:js completionHandler:nil];
+        // Use dispatch_async to ensure JS eval runs after any modal menu loop completes
+        NSString* capturedId = [self.itemId copy];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            NSString* eventName = [NSString stringWithFormat:@"menu:%@", capturedId];
+            NSString* escapedName = [eventName stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
+            NSString* js = [NSString stringWithFormat:
+                @"(function(){var b=globalThis[Symbol.for('zapp.bridge')];if(b&&b.deliverEvent)b.deliverEvent('%@',{});})();",
+                escapedName
+            ];
+            for (NSWindow* window in [NSApp windows]) {
+                NSView* content = [window contentView];
+                if ([content isKindOfClass:[WKWebView class]]) {
+                    [(WKWebView*)content evaluateJavaScript:js completionHandler:nil];
+                }
             }
-        }
+        });
     }
     @end
 
@@ -1193,7 +1197,7 @@ raw {
         // Check for role
         NSString* role = def[@"role"];
         if ([role isKindOfClass:[NSString class]] && [role length] > 0) {
-            // Item-level roles (copy, cut, paste, etc.)
+            // Item-level roles: always use native selectors (no JS callback)
             if ([role isEqualToString:@"copy"]) {
                 [menu addItemWithTitle:def[@"label"] ?: @"Copy" action:@selector(copy:) keyEquivalent:@""];
                 return;

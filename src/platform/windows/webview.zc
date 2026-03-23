@@ -1100,6 +1100,27 @@ raw {
         if (!itemJson) return;
         char* role = zapp_json_get_string(itemJson, "role");
         if (role && role[0]) {
+            // Item-level roles: native edit commands
+            if (strcmp(role, "copy") == 0) {
+                AppendMenuW(menu, MF_STRING, IDM_EDIT_COPY, L"Copy");
+                free(role); return;
+            } else if (strcmp(role, "cut") == 0) {
+                AppendMenuW(menu, MF_STRING, IDM_EDIT_CUT, L"Cut");
+                free(role); return;
+            } else if (strcmp(role, "paste") == 0) {
+                AppendMenuW(menu, MF_STRING, IDM_EDIT_PASTE, L"Paste");
+                free(role); return;
+            } else if (strcmp(role, "selectAll") == 0) {
+                AppendMenuW(menu, MF_STRING, IDM_EDIT_SELECTALL, L"Select All");
+                free(role); return;
+            } else if (strcmp(role, "undo") == 0) {
+                AppendMenuW(menu, MF_STRING, IDM_EDIT_UNDO, L"Undo");
+                free(role); return;
+            } else if (strcmp(role, "redo") == 0) {
+                AppendMenuW(menu, MF_STRING, IDM_EDIT_REDO, L"Redo");
+                free(role); return;
+            }
+            // Menu-level roles: create submenu
             char* label = zapp_json_get_string(itemJson, "label");
             HMENU sub = CreatePopupMenu();
             zapp_build_role_menu_win(sub, role);
