@@ -42,5 +42,8 @@ raw {
     void zapp_windows_worker_dispatch_sync_result(const char* worker_id, const char* payload_json) {
         (void)worker_id; (void)payload_json;
     }
+    void zapp_dispatch_worker_to_webviews(const char* kind, const char* worker_id, const char* payload_json) {
+        (void)kind; (void)worker_id; (void)payload_json;
+    }
 #endif
 }

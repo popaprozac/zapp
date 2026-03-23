@@ -167,6 +167,17 @@ raw {
         }
         while ([rel hasPrefix:@"/"]) rel = [rel substringFromIndex:1];
 
+        // Block path traversal
+        if ([rel rangeOfString:@".."].location != NSNotFound) {
+            NSHTTPURLResponse* forbidden = [[NSHTTPURLResponse alloc]
+                initWithURL:url statusCode:403 HTTPVersion:@"HTTP/1.1"
+                headerFields:@{ @"Content-Type": @"text/plain" }];
+            [task didReceiveResponse:forbidden];
+            [task didReceiveData:[@"Forbidden" dataUsingEncoding:NSUTF8StringEncoding]];
+            [task didFinish];
+            return;
+        }
+
         NSString* lookupPath = [@"/" stringByAppendingString:rel];
         if (zapp_build_use_embedded_assets() != 0 && zapp_embedded_assets_count > 0) {
             bool foundEmbedded = false;
@@ -458,6 +469,32 @@ raw {
     - (BOOL)mouseDownCanMoveWindow {
         return self.inDragRegion;
     }
+    // Filter default context menu: remove Reload, Back, Forward, Stop Loading
+    - (void)willOpenMenu:(NSMenu*)menu withEvent:(NSEvent*)event {
+        for (NSInteger i = menu.numberOfItems - 1; i >= 0; i--) {
+            NSMenuItem* item = [menu itemAtIndex:i];
+            SEL action = item.action;
+            if (action == @selector(reload:) ||
+                action == @selector(goBack:) ||
+                action == @selector(goForward:) ||
+                action == @selector(stopLoading:) ||
+                action == NSSelectorFromString(@"_reloadFromOrigin:") ||
+                action == NSSelectorFromString(@"_goBack:") ||
+                action == NSSelectorFromString(@"_goForward:")) {
+                [menu removeItemAtIndex:i];
+            }
+        }
+        // Remove trailing/leading separators left over from removal
+        while (menu.numberOfItems > 0 && [[menu itemAtIndex:menu.numberOfItems - 1] isSeparatorItem]) {
+            [menu removeItemAtIndex:menu.numberOfItems - 1];
+        }
+        while (menu.numberOfItems > 0 && [[menu itemAtIndex:0] isSeparatorItem]) {
+            [menu removeItemAtIndex:0];
+        }
+        // WebKit automatically adds "Inspect Element" when developerExtrasEnabled is set.
+        // No need to manually add it — it survives the filter above.
+        [super willOpenMenu:menu withEvent:event];
+    }
     @end
 
     void zapp_darwin_webview_create(void* window_ptr, bool inspectable) {
@@ -482,14 +519,24 @@ raw {
         BOOL webContentInspectable =
             app_get_bootstrap_web_content_inspectable() ? YES : NO;
         int maxWorkers = app_get_bootstrap_max_workers();
+        extern const char* zapp_build_csp(void);
+        const char* cspRaw = zapp_build_csp();
+        NSString* cspExtra = @"";
+        if (cspRaw && cspRaw[0] != '\0') {
+            NSString* cspStr = [NSString stringWithUTF8String:cspRaw];
+            cspStr = [cspStr stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+            cspStr = [cspStr stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
+            cspExtra = [NSString stringWithFormat:@",csp:'%@'", cspStr];
+        }
         appName = [appName stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
         appName = [appName stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
         NSString* appConfigScript = [NSString stringWithFormat:
-            @"(function(){globalThis[Symbol.for('zapp.bootstrapConfig')]={name:'%@',applicationShouldTerminateAfterLastWindowClosed:%@,webContentInspectable:%@,maxWorkers:%d};})();",
+            @"(function(){globalThis[Symbol.for('zapp.bootstrapConfig')]={name:'%@',applicationShouldTerminateAfterLastWindowClosed:%@,webContentInspectable:%@,maxWorkers:%d%@};})();",
             appName,
             applicationShouldTerminateAfterLastWindowClosed ? @"true" : @"false",
             webContentInspectable ? @"true" : @"false",
-            maxWorkers
+            maxWorkers,
+            cspExtra
         ];
         WKUserScript* appConfigUserScript = [[WKUserScript alloc]
             initWithSource:appConfigScript
@@ -537,7 +584,9 @@ raw {
         ZappMsgHandler* handler = [[ZappMsgHandler alloc] init];
         [ucc addScriptMessageHandler:handler name:@"zapp"];
         [config setUserContentController:ucc];
-        [[config preferences] setValue:@YES forKey:@"developerExtrasEnabled"];
+        if (inspectable) {
+            [[config preferences] setValue:@YES forKey:@"developerExtrasEnabled"];
+        }
         ZappWebView* webview = [[ZappWebView alloc] initWithFrame:bounds configuration:config];
         [webview setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
         [webview setInspectable:inspectable ? YES : NO];

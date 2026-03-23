@@ -132,6 +132,9 @@ raw {
     extern const char* zapp_windows_webview_bootstrap_script(void);
     extern const char* zapp_win_id_for_hwnd(HWND hwnd);
 
+    // WebView2 environment (shared across all windows, used by context menus + resource handler)
+    static ICoreWebView2Environment* zapp_wv2_env = NULL;
+
     // ---------------------------------------------------------------------------
     // Per-window WebView2 state
     // ---------------------------------------------------------------------------
@@ -258,6 +261,102 @@ raw {
     }
 
     // ---------------------------------------------------------------------------
+    // COM callback: ContextMenuRequested — filter default context menu
+    // ---------------------------------------------------------------------------
+
+    typedef struct {
+        ICoreWebView2ContextMenuRequestedEventHandlerVtbl* lpVtbl;
+        ULONG refCount;
+        BOOL inspectable;
+    } ZappContextMenuHandler;
+
+    static HRESULT STDMETHODCALLTYPE zcmh_QueryInterface(ICoreWebView2ContextMenuRequestedEventHandler* This, REFIID riid, void** ppv) {
+        (void)riid; *ppv = This; This->lpVtbl->AddRef(This); return S_OK;
+    }
+    static ULONG STDMETHODCALLTYPE zcmh_AddRef(ICoreWebView2ContextMenuRequestedEventHandler* This) {
+        return ++((ZappContextMenuHandler*)This)->refCount;
+    }
+    static ULONG STDMETHODCALLTYPE zcmh_Release(ICoreWebView2ContextMenuRequestedEventHandler* This) {
+        ZappContextMenuHandler* self = (ZappContextMenuHandler*)This;
+        if (--self->refCount == 0) { free(self); return 0; }
+        return self->refCount;
+    }
+
+    // Names of WebView2 default context menu items to remove
+    static int zapp_ctx_should_remove(const wchar_t* name, BOOL inspectable) {
+        // Always remove web-specific items
+        if (wcscmp(name, L"back") == 0) return 1;
+        if (wcscmp(name, L"forward") == 0) return 1;
+        if (wcscmp(name, L"reload") == 0) return 1;
+        if (wcscmp(name, L"saveAs") == 0) return 1;
+        if (wcscmp(name, L"print") == 0) return 1;
+        if (wcscmp(name, L"share") == 0) return 1;
+        if (wcscmp(name, L"webCapture") == 0) return 1;
+        if (wcscmp(name, L"webSelect") == 0) return 1;
+        if (wcscmp(name, L"other") == 0) return 1;
+        // Remove inspectElement in production
+        if (!inspectable && wcscmp(name, L"inspectElement") == 0) return 1;
+        return 0;
+    }
+
+    static HRESULT STDMETHODCALLTYPE zcmh_Invoke(
+        ICoreWebView2ContextMenuRequestedEventHandler* This,
+        ICoreWebView2* sender,
+        ICoreWebView2ContextMenuRequestedEventArgs* args
+    ) {
+        (void)sender;
+        ZappContextMenuHandler* self = (ZappContextMenuHandler*)This;
+
+        ICoreWebView2ContextMenuItemCollection* items = NULL;
+        if (FAILED(ICoreWebView2ContextMenuRequestedEventArgs_get_MenuItems(args, &items)) || !items)
+            return S_OK;
+
+        UINT32 count = 0;
+        ICoreWebView2ContextMenuItemCollection_get_Count(items, &count);
+
+        // Iterate backwards so removal doesn't shift indices
+        for (int i = (int)count - 1; i >= 0; i--) {
+            ICoreWebView2ContextMenuItem* item = NULL;
+            if (FAILED(ICoreWebView2ContextMenuItemCollection_GetValueAtIndex(items, (UINT32)i, &item)) || !item)
+                continue;
+
+            wchar_t* name = NULL;
+            ICoreWebView2ContextMenuItem_get_Name(item, &name);
+
+            BOOL remove = FALSE;
+            if (name) {
+                remove = zapp_ctx_should_remove(name, self->inspectable);
+                CoTaskMemFree(name);
+            }
+
+            // Also remove separators that would be orphaned at start/end or doubled
+            if (!remove) {
+                COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND kind;
+                ICoreWebView2ContextMenuItem_get_Kind(item, &kind);
+                if (kind == COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_SEPARATOR) {
+                    UINT32 curCount = 0;
+                    ICoreWebView2ContextMenuItemCollection_get_Count(items, &curCount);
+                    if ((UINT32)i == 0 || (UINT32)i == curCount - 1) {
+                        remove = TRUE;
+                    }
+                }
+            }
+
+            ICoreWebView2ContextMenuItem_Release(item);
+            if (remove) {
+                ICoreWebView2ContextMenuItemCollection_RemoveValueAtIndex(items, (UINT32)i);
+            }
+        }
+
+        ICoreWebView2ContextMenuItemCollection_Release(items);
+        return S_OK;
+    }
+
+    static ICoreWebView2ContextMenuRequestedEventHandlerVtbl zcmh_vtbl = {
+        zcmh_QueryInterface, zcmh_AddRef, zcmh_Release, zcmh_Invoke
+    };
+
+    // ---------------------------------------------------------------------------
     // COM callback: NavigationCompleted (visibility toggle workaround)
     // https://github.com/MicrosoftEdge/WebView2Feedback/issues/1077
     // ---------------------------------------------------------------------------
@@ -308,8 +407,6 @@ raw {
     // ---------------------------------------------------------------------------
     // zapp:// protocol: embedded/file asset serving
     // ---------------------------------------------------------------------------
-
-    static ICoreWebView2Environment* zapp_wv2_env = NULL;
 
     #ifndef ZAPP_EMBEDDED_ASSET_STRUCT_DEFINED
     #define ZAPP_EMBEDDED_ASSET_STRUCT_DEFINED 1
@@ -474,6 +571,13 @@ raw {
         char* rel = zapp_url_to_rel_path(uri);
         free(uri);
 
+        // Block path traversal
+        if (rel && strstr(rel, "..") != NULL) {
+            zapp_send_resource_response(args, (const unsigned char*)"Forbidden", 9, "text/plain", 403, 0);
+            free(rel);
+            return S_OK;
+        }
+
         char lookupPath[512];
         snprintf(lookupPath, sizeof(lookupPath), "/%s", rel);
 
@@ -583,6 +687,21 @@ raw {
         EventRegistrationToken token;
         ZappMessageHandler* msgHandler = zapp_create_message_handler();
         ICoreWebView2_add_WebMessageReceived(webview, (ICoreWebView2WebMessageReceivedEventHandler*)msgHandler, &token);
+
+        // Register context menu filter (removes web-specific items like Back, Refresh, etc.)
+        {
+            ICoreWebView2_11* wv11 = NULL;
+            HRESULT cmhr = ICoreWebView2_QueryInterface(webview, &IID_ICoreWebView2_11, (void**)&wv11);
+            if (SUCCEEDED(cmhr) && wv11) {
+                ZappContextMenuHandler* cmHandler = (ZappContextMenuHandler*)calloc(1, sizeof(ZappContextMenuHandler));
+                cmHandler->lpVtbl = &zcmh_vtbl;
+                cmHandler->refCount = 1;
+                cmHandler->inspectable = entry->inspectable;
+                EventRegistrationToken cmToken;
+                ICoreWebView2_11_add_ContextMenuRequested(wv11, (ICoreWebView2ContextMenuRequestedEventHandler*)cmHandler, &cmToken);
+                ICoreWebView2_11_Release(wv11);
+            }
+        }
 
         // Set transparent background so there's no white flash before content loads
         {
@@ -1032,6 +1151,534 @@ raw {
             free(wUrl);
         }
         if (url) free(url);
+    }
+
+    // --- Custom Menu Builder ---
+    #ifndef IDM_EDIT_UNDO
+    #define IDM_EDIT_UNDO      40001
+    #define IDM_EDIT_REDO      40002
+    #define IDM_EDIT_CUT       40003
+    #define IDM_EDIT_COPY      40004
+    #define IDM_EDIT_PASTE     40005
+    #define IDM_EDIT_SELECTALL 40006
+    #define IDM_WIN_MINIMIZE   40020
+    #define IDM_WIN_MAXIMIZE   40021
+    #define IDM_WIN_CLOSE      40022
+    #endif
+
+    #define ZAPP_MENU_CMD_CUSTOM_BASE 41000
+    #define ZAPP_MENU_MAX_CUSTOM 256
+
+    static char zapp_menu_id_map[ZAPP_MENU_MAX_CUSTOM][64] = {{0}};
+    static int zapp_menu_custom_count = 0;
+
+    static int zapp_menu_register_id(const char* itemId) {
+        if (!itemId || zapp_menu_custom_count >= ZAPP_MENU_MAX_CUSTOM) return 0;
+        int cmd = ZAPP_MENU_CMD_CUSTOM_BASE + zapp_menu_custom_count;
+        strncpy(zapp_menu_id_map[zapp_menu_custom_count], itemId, 63);
+        zapp_menu_custom_count++;
+        return cmd;
+    }
+
+    static const char* zapp_menu_id_for_cmd(int cmd) {
+        int idx = cmd - ZAPP_MENU_CMD_CUSTOM_BASE;
+        if (idx >= 0 && idx < zapp_menu_custom_count) return zapp_menu_id_map[idx];
+        return NULL;
+    }
+
+    // Called from zapp_handle_menu_command for custom items
+    void zapp_dispatch_custom_menu_click(const char* itemId) {
+        if (!itemId) return;
+        char js[512];
+        snprintf(js, sizeof(js),
+            "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+            "if(b&&b.deliverEvent)b.deliverEvent('menu:%s',{});})();",
+            itemId);
+        zapp_windows_webview_eval_all(js);
+    }
+
+    static void zapp_build_role_menu_win(HMENU menu, const char* role) {
+        if (strcmp(role, "appMenu") == 0) {
+            // No app menu on Windows (macOS-only concept) — skip
+            return;
+        } else if (strcmp(role, "editMenu") == 0) {
+            AppendMenuW(menu, MF_STRING, IDM_EDIT_UNDO,      L"Undo\tCtrl+Z");
+            AppendMenuW(menu, MF_STRING, IDM_EDIT_REDO,      L"Redo\tCtrl+Y");
+            AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+            AppendMenuW(menu, MF_STRING, IDM_EDIT_CUT,       L"Cut\tCtrl+X");
+            AppendMenuW(menu, MF_STRING, IDM_EDIT_COPY,      L"Copy\tCtrl+C");
+            AppendMenuW(menu, MF_STRING, IDM_EDIT_PASTE,     L"Paste\tCtrl+V");
+            AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+            AppendMenuW(menu, MF_STRING, IDM_EDIT_SELECTALL, L"Select All\tCtrl+A");
+        } else if (strcmp(role, "windowMenu") == 0) {
+            AppendMenuW(menu, MF_STRING, IDM_WIN_MINIMIZE, L"Minimize");
+            AppendMenuW(menu, MF_STRING, IDM_WIN_MAXIMIZE, L"Maximize");
+            AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+            AppendMenuW(menu, MF_STRING, IDM_WIN_CLOSE,    L"Close\tAlt+F4");
+        }
+    }
+
+    extern char* zapp_json_get_string(const char* json, const char* key);
+
+    void zapp_build_menu_items_win(HMENU parent, const char* itemsJson);
+
+    // Parse a JSON array of menu items and build HMENU
+    static void zapp_add_menu_item_win(HMENU menu, const char* itemJson) {
+        if (!itemJson) return;
+        char* role = zapp_json_get_string(itemJson, "role");
+        if (role && role[0]) {
+            // appMenu is macOS-only — skip on Windows
+            if (strcmp(role, "appMenu") == 0) { free(role); return; }
+
+            // Individual item roles (for context menus)
+            if (strcmp(role, "undo") == 0) { AppendMenuW(menu, MF_STRING, IDM_EDIT_UNDO, L"Undo"); free(role); return; }
+            if (strcmp(role, "redo") == 0) { AppendMenuW(menu, MF_STRING, IDM_EDIT_REDO, L"Redo"); free(role); return; }
+            if (strcmp(role, "cut") == 0) { AppendMenuW(menu, MF_STRING, IDM_EDIT_CUT, L"Cut"); free(role); return; }
+            if (strcmp(role, "copy") == 0) { AppendMenuW(menu, MF_STRING, IDM_EDIT_COPY, L"Copy"); free(role); return; }
+            if (strcmp(role, "paste") == 0) { AppendMenuW(menu, MF_STRING, IDM_EDIT_PASTE, L"Paste"); free(role); return; }
+            if (strcmp(role, "selectAll") == 0) { AppendMenuW(menu, MF_STRING, IDM_EDIT_SELECTALL, L"Select All"); free(role); return; }
+
+            // Submenu roles (editMenu, windowMenu)
+            char* label = zapp_json_get_string(itemJson, "label");
+            HMENU sub = CreatePopupMenu();
+            zapp_build_role_menu_win(sub, role);
+            wchar_t wLabel[128] = {0};
+            if (label && label[0]) {
+                MultiByteToWideChar(CP_UTF8, 0, label, -1, wLabel, 128);
+            } else {
+                if (strcmp(role, "editMenu") == 0) wcscpy(wLabel, L"Edit");
+                else if (strcmp(role, "windowMenu") == 0) wcscpy(wLabel, L"Window");
+                else MultiByteToWideChar(CP_UTF8, 0, role, -1, wLabel, 128);
+            }
+            AppendMenuW(menu, MF_POPUP, (UINT_PTR)sub, wLabel);
+            if (label) free(label);
+            free(role);
+            return;
+        }
+        if (role) free(role);
+
+        char* type = zapp_json_get_string(itemJson, "type");
+        if (type && strcmp(type, "separator") == 0) {
+            AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+            free(type);
+            return;
+        }
+        if (type) free(type);
+
+        char* label = zapp_json_get_string(itemJson, "label");
+        if (!label || !label[0]) { if (label) free(label); return; }
+
+        // Check for submenu (look for "submenu":[)
+        char* subRaw = NULL;
+        {
+            const char* subKey = "\"submenu\":[";
+            const char* subStart = strstr(itemJson, subKey);
+            if (subStart) {
+                subStart += strlen("\"submenu\":");
+                // Find matching ]
+                int depth = 0;
+                const char* p = subStart;
+                const char* end = NULL;
+                while (*p) {
+                    if (*p == '[') depth++;
+                    else if (*p == ']') { depth--; if (depth == 0) { end = p + 1; break; } }
+                    p++;
+                }
+                if (end) {
+                    size_t len = (size_t)(end - subStart);
+                    subRaw = (char*)malloc(len + 1);
+                    memcpy(subRaw, subStart, len);
+                    subRaw[len] = '\0';
+                }
+            }
+        }
+
+        if (subRaw) {
+            HMENU sub = CreatePopupMenu();
+            zapp_build_menu_items_win(sub, subRaw);
+            free(subRaw);
+            wchar_t wLabel[256] = {0};
+            MultiByteToWideChar(CP_UTF8, 0, label, -1, wLabel, 256);
+            AppendMenuW(menu, MF_POPUP, (UINT_PTR)sub, wLabel);
+            free(label);
+            return;
+        }
+
+        // Regular item
+        char* itemId = zapp_json_get_string(itemJson, "id");
+        char* accel = zapp_json_get_string(itemJson, "accelerator");
+        int cmd = 0;
+        if (itemId && itemId[0]) {
+            cmd = zapp_menu_register_id(itemId);
+        }
+
+        wchar_t wLabel[256] = {0};
+        if (accel && accel[0]) {
+            char combined[256];
+            snprintf(combined, sizeof(combined), "%s\t%s", label, accel);
+            MultiByteToWideChar(CP_UTF8, 0, combined, -1, wLabel, 256);
+        } else {
+            MultiByteToWideChar(CP_UTF8, 0, label, -1, wLabel, 256);
+        }
+
+        UINT flags = MF_STRING;
+        extern int zapp_json_get_bool(const char* json, const char* key, int default_val);
+        if (!zapp_json_get_bool(itemJson, "enabled", 1)) flags |= MF_GRAYED;
+        if (zapp_json_get_bool(itemJson, "checked", 0)) flags |= MF_CHECKED;
+
+        AppendMenuW(menu, flags, cmd, wLabel);
+
+        if (itemId) free(itemId);
+        if (accel) free(accel);
+        free(label);
+    }
+
+    // Parse "[{...},{...}]" array of menu items
+    void zapp_build_menu_items_win(HMENU parent, const char* arrJson) {
+        if (!arrJson || arrJson[0] != '[') return;
+        const char* p = arrJson + 1;
+        while (*p) {
+            while (*p == ' ' || *p == '\n' || *p == '\r' || *p == '\t' || *p == ',') p++;
+            if (*p == ']' || *p == '\0') break;
+            if (*p == '{') {
+                int depth = 0;
+                const char* start = p;
+                while (*p) {
+                    if (*p == '{') depth++;
+                    else if (*p == '}') { depth--; if (depth == 0) { p++; break; } }
+                    p++;
+                }
+                size_t len = (size_t)(p - start);
+                char* item = (char*)malloc(len + 1);
+                memcpy(item, start, len);
+                item[len] = '\0';
+                zapp_add_menu_item_win(parent, item);
+                free(item);
+            } else {
+                p++;
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Context menu builder (Win32 TrackPopupMenu) — separate from menu bar
+    //
+    // Unlike the menu bar builder, context menu items with a role AND an id
+    // register as custom items so the JS action callback fires. The role is
+    // stored alongside the id so we can also execute the native operation.
+    // ---------------------------------------------------------------------------
+
+    #define ZAPP_CTX_CMD_BASE 42000
+    #define ZAPP_CTX_MAX 256
+
+    typedef struct {
+        char id[64];
+        char role[32];
+    } ZappCtxEntry;
+
+    static ZappCtxEntry zapp_ctx_entries[ZAPP_CTX_MAX] = {{0}};
+    static int zapp_ctx_count = 0;
+
+    static void zapp_ctx_reset(void) {
+        zapp_ctx_count = 0;
+        memset(zapp_ctx_entries, 0, sizeof(zapp_ctx_entries));
+    }
+
+    static int zapp_ctx_register(const char* id, const char* role) {
+        if (zapp_ctx_count >= ZAPP_CTX_MAX) return 0;
+        int cmd = ZAPP_CTX_CMD_BASE + zapp_ctx_count;
+        if (id) strncpy(zapp_ctx_entries[zapp_ctx_count].id, id, 63);
+        if (role) strncpy(zapp_ctx_entries[zapp_ctx_count].role, role, 31);
+        zapp_ctx_count++;
+        return cmd;
+    }
+
+    extern void zapp_windows_webview_eval(HWND hwnd, const wchar_t* js);
+
+    void zapp_handle_context_menu_click(HWND hwnd, WORD cmd) {
+        int idx = cmd - ZAPP_CTX_CMD_BASE;
+        if (idx < 0 || idx >= zapp_ctx_count) return;
+        ZappCtxEntry* e = &zapp_ctx_entries[idx];
+
+        // Execute native clipboard operation for role items
+        if (e->role[0]) {
+            const wchar_t* jsCmd = NULL;
+            if (strcmp(e->role, "undo") == 0)      jsCmd = L"document.execCommand('undo')";
+            else if (strcmp(e->role, "redo") == 0)  jsCmd = L"document.execCommand('redo')";
+            else if (strcmp(e->role, "cut") == 0)   jsCmd = L"document.execCommand('cut')";
+            else if (strcmp(e->role, "copy") == 0)  jsCmd = L"document.execCommand('copy')";
+            else if (strcmp(e->role, "paste") == 0) jsCmd = L"document.execCommand('paste')";
+            else if (strcmp(e->role, "selectAll") == 0) jsCmd = L"document.execCommand('selectAll')";
+            if (jsCmd && hwnd) zapp_windows_webview_eval(hwnd, jsCmd);
+        }
+
+        // Fire the JS action callback via bridge event
+        if (e->id[0]) {
+            zapp_dispatch_custom_menu_click(e->id);
+        }
+    }
+
+    static void zapp_add_ctx_menu_item(HMENU menu, const char* itemJson);
+    void zapp_build_context_menu_items_win(HMENU parent, const char* arrJson);
+
+    static void zapp_add_ctx_menu_item(HMENU menu, const char* itemJson) {
+        if (!itemJson) return;
+        extern char* zapp_json_get_string(const char* json, const char* key);
+        extern int zapp_json_get_bool(const char* json, const char* key, int default_val);
+
+        char* role = zapp_json_get_string(itemJson, "role");
+        if (role && role[0]) {
+            if (strcmp(role, "appMenu") == 0) { free(role); return; }
+
+            // Individual role items — register as context menu commands
+            const wchar_t* label = NULL;
+            if (strcmp(role, "undo") == 0) label = L"Undo";
+            else if (strcmp(role, "redo") == 0) label = L"Redo";
+            else if (strcmp(role, "cut") == 0) label = L"Cut";
+            else if (strcmp(role, "copy") == 0) label = L"Copy";
+            else if (strcmp(role, "paste") == 0) label = L"Paste";
+            else if (strcmp(role, "selectAll") == 0) label = L"Select All";
+
+            if (label) {
+                char* id = zapp_json_get_string(itemJson, "id");
+                int cmd = zapp_ctx_register(id, role);
+                AppendMenuW(menu, MF_STRING, cmd, label);
+                if (id) free(id);
+                free(role);
+                return;
+            }
+
+            // Submenu roles (editMenu, windowMenu)
+            if (strcmp(role, "editMenu") == 0) {
+                HMENU sub = CreatePopupMenu();
+                const char* editItems[] = {
+                    "{\"role\":\"undo\"}", "{\"role\":\"redo\"}", "{\"type\":\"separator\"}",
+                    "{\"role\":\"cut\"}", "{\"role\":\"copy\"}", "{\"role\":\"paste\"}",
+                    "{\"type\":\"separator\"}", "{\"role\":\"selectAll\"}"
+                };
+                for (int i = 0; i < 8; i++) {
+                    zapp_add_ctx_menu_item(sub, editItems[i]);
+                }
+                char* rlabel = zapp_json_get_string(itemJson, "label");
+                wchar_t wLabel[128] = L"Edit";
+                if (rlabel && rlabel[0]) {
+                    MultiByteToWideChar(CP_UTF8, 0, rlabel, -1, wLabel, 128);
+                }
+                AppendMenuW(menu, MF_POPUP, (UINT_PTR)sub, wLabel);
+                if (rlabel) free(rlabel);
+            } else if (strcmp(role, "windowMenu") == 0) {
+                HMENU sub = CreatePopupMenu();
+                AppendMenuW(sub, MF_STRING, IDM_WIN_MINIMIZE, L"Minimize");
+                AppendMenuW(sub, MF_STRING, IDM_WIN_MAXIMIZE, L"Maximize");
+                AppendMenuW(sub, MF_SEPARATOR, 0, NULL);
+                AppendMenuW(sub, MF_STRING, IDM_WIN_CLOSE, L"Close");
+                char* rlabel = zapp_json_get_string(itemJson, "label");
+                wchar_t wLabel[128] = L"Window";
+                if (rlabel && rlabel[0]) {
+                    MultiByteToWideChar(CP_UTF8, 0, rlabel, -1, wLabel, 128);
+                }
+                AppendMenuW(menu, MF_POPUP, (UINT_PTR)sub, wLabel);
+                if (rlabel) free(rlabel);
+            }
+
+            free(role);
+            return;
+        }
+        if (role) free(role);
+
+        // Separator
+        char* type = zapp_json_get_string(itemJson, "type");
+        if (type && strcmp(type, "separator") == 0) {
+            AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+            free(type);
+            return;
+        }
+        if (type) free(type);
+
+        // Regular item or submenu
+        char* label = zapp_json_get_string(itemJson, "label");
+        if (!label || !label[0]) { if (label) free(label); return; }
+
+        // Check for submenu
+        const char* subKey = "\"submenu\":[";
+        const char* subStart = strstr(itemJson, subKey);
+        if (subStart) {
+            subStart += strlen("\"submenu\":");
+            int depth = 0;
+            const char* p = subStart;
+            const char* end = NULL;
+            while (*p) {
+                if (*p == '[') depth++;
+                else if (*p == ']') { depth--; if (depth == 0) { end = p + 1; break; } }
+                p++;
+            }
+            if (end) {
+                size_t slen = (size_t)(end - subStart);
+                char* subJson = (char*)malloc(slen + 1);
+                memcpy(subJson, subStart, slen);
+                subJson[slen] = '\0';
+                HMENU sub = CreatePopupMenu();
+                zapp_build_context_menu_items_win(sub, subJson);
+                free(subJson);
+                wchar_t wLabel[256] = {0};
+                MultiByteToWideChar(CP_UTF8, 0, label, -1, wLabel, 256);
+                AppendMenuW(menu, MF_POPUP, (UINT_PTR)sub, wLabel);
+            }
+            free(label);
+            return;
+        }
+
+        // Regular command item
+        char* id = zapp_json_get_string(itemJson, "id");
+        int cmd = zapp_ctx_register(id, NULL);
+
+        wchar_t wLabel[256] = {0};
+        char* accel = zapp_json_get_string(itemJson, "accelerator");
+        if (accel && accel[0]) {
+            char combined[256];
+            snprintf(combined, sizeof(combined), "%s\t%s", label, accel);
+            MultiByteToWideChar(CP_UTF8, 0, combined, -1, wLabel, 256);
+        } else {
+            MultiByteToWideChar(CP_UTF8, 0, label, -1, wLabel, 256);
+        }
+
+        UINT flags = MF_STRING;
+        if (!zapp_json_get_bool(itemJson, "enabled", 1)) flags |= MF_GRAYED;
+        if (zapp_json_get_bool(itemJson, "checked", 0)) flags |= MF_CHECKED;
+        AppendMenuW(menu, flags, cmd, wLabel);
+
+        if (id) free(id);
+        if (accel) free(accel);
+        free(label);
+    }
+
+    // Parse "[{...},{...}]" array of context menu items
+    void zapp_build_context_menu_items_win(HMENU parent, const char* arrJson) {
+        if (!arrJson || arrJson[0] != '[') return;
+        const char* p = arrJson + 1;
+        while (*p) {
+            while (*p == ' ' || *p == '\n' || *p == '\r' || *p == '\t' || *p == ',') p++;
+            if (*p == ']' || *p == '\0') break;
+            if (*p == '{') {
+                int depth = 0;
+                const char* start = p;
+                while (*p) {
+                    if (*p == '{') depth++;
+                    else if (*p == '}') { depth--; if (depth == 0) { p++; break; } }
+                    p++;
+                }
+                size_t len = (size_t)(p - start);
+                char* item = (char*)malloc(len + 1);
+                memcpy(item, start, len);
+                item[len] = '\0';
+                zapp_add_ctx_menu_item(parent, item);
+                free(item);
+            } else {
+                p++;
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Dark mode for Win32 context menus (Windows 10 1903+)
+    // Uses undocumented uxtheme ordinals 135/136 widely used by apps and the OS
+    // ---------------------------------------------------------------------------
+
+    typedef enum { APPMODE_DEFAULT, APPMODE_ALLOWDARK, APPMODE_FORCEDARK, APPMODE_FORCELIGHT, APPMODE_MAX } PreferredAppMode;
+    typedef PreferredAppMode (WINAPI *SetPreferredAppModeFn)(PreferredAppMode);
+    typedef void (WINAPI *FlushMenuThemesFn)(void);
+    typedef BOOL (WINAPI *AllowDarkModeForWindowFn)(HWND, BOOL);
+
+    static BOOL zapp_dark_mode_initialized = FALSE;
+
+    void zapp_enable_dark_menus(void) {
+        if (zapp_dark_mode_initialized) return;
+        zapp_dark_mode_initialized = TRUE;
+
+        HMODULE uxtheme = LoadLibraryW(L"uxtheme.dll");
+        if (!uxtheme) return;
+
+        // Ordinal 135: SetPreferredAppMode (Windows 10 1903+)
+        SetPreferredAppModeFn setMode = (SetPreferredAppModeFn)GetProcAddress(uxtheme, MAKEINTRESOURCEA(135));
+        // Ordinal 136: FlushMenuThemes
+        FlushMenuThemesFn flush = (FlushMenuThemesFn)GetProcAddress(uxtheme, MAKEINTRESOURCEA(136));
+
+        if (setMode) {
+            setMode(APPMODE_ALLOWDARK);
+        }
+        if (flush) {
+            flush();
+        }
+        // Don't FreeLibrary — uxtheme needs to stay loaded
+    }
+
+    void zapp_enable_dark_mode_for_window(HWND hwnd) {
+        HMODULE uxtheme = GetModuleHandleW(L"uxtheme.dll");
+        if (uxtheme) {
+            // Ordinal 133: AllowDarkModeForWindow
+            AllowDarkModeForWindowFn allowDark = (AllowDarkModeForWindowFn)GetProcAddress(uxtheme, MAKEINTRESOURCEA(133));
+            if (allowDark) {
+                allowDark(hwnd, TRUE);
+            }
+        }
+
+        // Also set DWMWA_USE_IMMERSIVE_DARK_MODE for title bar
+        HMODULE dwmapi = LoadLibraryW(L"dwmapi.dll");
+        if (dwmapi) {
+            typedef HRESULT (WINAPI *DwmSetWindowAttributeFn)(HWND, DWORD, LPCVOID, DWORD);
+            DwmSetWindowAttributeFn setAttr = (DwmSetWindowAttributeFn)GetProcAddress(dwmapi, "DwmSetWindowAttribute");
+            if (setAttr) {
+                // DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+                BOOL useDark = TRUE;
+                setAttr(hwnd, 20, &useDark, sizeof(useDark));
+            }
+        }
+    }
+
+    void app_set_menu(App* app, char* payload) {
+        (void)app;
+        if (payload == NULL) return;
+        // Reset custom ID registry
+        zapp_menu_custom_count = 0;
+        memset(zapp_menu_id_map, 0, sizeof(zapp_menu_id_map));
+
+        // Find "items":[ in the payload
+        const char* itemsKey = "\"items\":[";
+        const char* itemsStart = strstr((const char*)payload, itemsKey);
+        if (!itemsStart) return;
+        itemsStart += strlen("\"items\":");
+
+        // Find the matching ]
+        int depth = 0;
+        const char* p = itemsStart;
+        const char* end = NULL;
+        while (*p) {
+            if (*p == '[') depth++;
+            else if (*p == ']') { depth--; if (depth == 0) { end = p + 1; break; } }
+            p++;
+        }
+        if (!end) return;
+
+        size_t len = (size_t)(end - itemsStart);
+        char* arrJson = (char*)malloc(len + 1);
+        memcpy(arrJson, itemsStart, len);
+        arrJson[len] = '\0';
+
+        HMENU menuBar = CreateMenu();
+        zapp_build_menu_items_win(menuBar, arrJson);
+        free(arrJson);
+
+        // Apply to all windows
+        extern const wchar_t* ZAPP_WINDOW_CLASS;
+        HWND hwnd = NULL;
+        while ((hwnd = FindWindowExW(NULL, hwnd, ZAPP_WINDOW_CLASS, NULL)) != NULL) {
+            SetMenu(hwnd, menuBar);
+            DrawMenuBar(hwnd);
+        }
+        if (zapp_default_menu) {
+            // Don't destroy old menu — windows might reference it
+        }
+        zapp_default_menu = menuBar;
     }
 
     // --- Sync bridge (moved from app.zc) ---

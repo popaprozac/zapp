@@ -10,7 +10,7 @@ include <string.h>
 struct AppConfig {
     name: string;
     applicationShouldTerminateAfterLastWindowClosed: bool;
-    webContentInspectable: bool;
+    webContentInspectable: int; // -1 = inherit from build (dev=true, prod=false), 0 = false, 1 = true
     maxWorkers: int;
     qjsStackSize: int; // QuickJS stack size in bytes (0 = default 4MB)
 }
@@ -18,7 +18,7 @@ struct AppConfig {
 opaque struct _AppConfig {
     name: string;
     applicationShouldTerminateAfterLastWindowClosed: bool;
-    webContentInspectable: bool;
+    webContentInspectable: int;
     maxWorkers: int;
     qjsStackSize: int;
 }
@@ -35,7 +35,7 @@ impl App {
     fn new(config: AppConfig) -> Self {
         app_set_bootstrap_config(config);
         let windowManager = WindowManager::new();
-        windowManager.webContentInspectable = config.webContentInspectable;
+        windowManager.webContentInspectable = app_get_bootstrap_web_content_inspectable();
         return App{
             config: _AppConfig{
                 name: config.name,
@@ -134,7 +134,7 @@ fn app_get_bootstrap_config() -> AppConfig {
     return AppConfig{
         name: "Zapp App",
         applicationShouldTerminateAfterLastWindowClosed: false,
-        webContentInspectable: true,
+        webContentInspectable: -1, // inherit from build default
         maxWorkers: 0,
         qjsStackSize: 0,
     };
@@ -149,7 +149,17 @@ fn app_get_bootstrap_application_should_terminate_after_last_window_closed() -> 
 }
 
 fn app_get_bootstrap_web_content_inspectable() -> bool {
-    return app_get_bootstrap_config().webContentInspectable;
+    let user_val = app_get_bootstrap_config().webContentInspectable;
+    // -1 = inherit from build default (dev=true, prod=false)
+    //  0 = explicitly false
+    //  1 = explicitly true (user override)
+    if user_val >= 0 {
+        return user_val > 0;
+    }
+    raw {
+        extern int zapp_build_dev_tools_default(void);
+        return zapp_build_dev_tools_default() ? true : false;
+    }
 }
 
 fn app_get_bootstrap_max_workers() -> int {
@@ -288,8 +298,9 @@ fn app_apply_configure(app: App*, payload: string) -> void {
     }
     let insp_opt = json.get_bool("webContentInspectable");
     if insp_opt.is_some() {
-        app.config.webContentInspectable = insp_opt.unwrap();
-        app.window.webContentInspectable = app.config.webContentInspectable;
+        let insp_val = insp_opt.unwrap();
+        app.config.webContentInspectable = if insp_val { 1 } else { 0 };
+        app.window.webContentInspectable = insp_val;
     }
     let max_opt = json.get_int("maxWorkers");
     if max_opt.is_some() {
@@ -314,6 +325,8 @@ fn app_handle_app_action(app: App*, action: string) -> void;
 fn app_open_external(app: App*, payload: string) -> void;
 @cfg(apple)
 fn app_handle_dialog(app: App*, action: string, payload: string) -> void;
+@cfg(apple)
+fn app_set_menu(app: App*, payload: string) -> void;
 
 @cfg(windows)
 fn zapp_dispatch_invoke_result(request_id: string, payload_json: string) -> void;
@@ -330,6 +343,8 @@ fn app_open_external(app: App*, payload: string) -> void;
 fn app_handle_dialog(app: App*, action: string, payload: string) -> void;
 @cfg(windows)
 fn app_handle_app_action(app: App*, action: string) -> void;
+@cfg(windows)
+fn app_set_menu(app: App*, payload: string) -> void;
 
 @cfg(ZAPP_LINUX)
 fn zapp_dispatch_invoke_result(request_id: string, payload_json: string) -> void {
@@ -354,6 +369,10 @@ fn app_open_external(app: App*, payload: string) -> void {
 @cfg(ZAPP_LINUX)
 fn app_handle_dialog(app: App*, action: string, payload: string) -> void {
     raw { (void)app; (void)action; (void)payload; }
+}
+@cfg(ZAPP_LINUX)
+fn app_set_menu(app: App*, payload: string) -> void {
+    raw { (void)app; (void)payload; }
 }
 
 fn app_invoke_rpc(app: App*, method: string, request_payload: string) -> void {
@@ -469,6 +488,10 @@ fn app_handle_frontend_message(app: App*, msg: string) -> void {
         }
         if key == "openExternal" {
             app_open_external(app, payload);
+            return;
+        }
+        if key == "setMenu" {
+            app_set_menu(app, payload);
             return;
         }
         app_handle_app_action(app, key);

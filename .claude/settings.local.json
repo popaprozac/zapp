@@ -35,7 +35,9 @@
       "Bash(bunx electrobun:*)",
       "WebFetch(domain:www.electronjs.org)",
       "WebFetch(domain:www.electrobun.dev)",
-      "Bash(bun packages/cli/dist/zapp-cli.js package --root example --brotli)"
+      "Bash(bun packages/cli/dist/zapp-cli.js package --root example --brotli)",
+      "Bash(bun packages/cli/dist/zapp-cli.js dev --root example)",
+      "Bash(powershell -ExecutionPolicy Bypass -File bootstrap.ps1)"
     ]
   }
 }

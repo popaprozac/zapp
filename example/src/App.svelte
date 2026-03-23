@@ -77,8 +77,8 @@
   function handleContextMenu(event: Event): void {
     event.preventDefault();
     ContextMenu.show([
-      { role: "copy" },
-      { role: "paste" },
+      { role: "copy", action: () => console.log("COPY") },
+      { role: "paste", action: () => console.log("PASTE") },
     ]);
   }
 </script>
