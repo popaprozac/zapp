@@ -1,19 +1,34 @@
 import { Events, WindowEvent, getWindowEventName, type WindowEventPayload, type WindowSizeEventPayload } from "./events";
 
+/** Options for creating a new window. */
 export interface WindowOptions {
+  /** Window title text. */
   title?: string;
+  /** Initial width in logical pixels. */
   width?: number;
+  /** Initial height in logical pixels. */
   height?: number;
+  /** Initial x position on screen. */
   x?: number;
+  /** Initial y position on screen. */
   y?: number;
+  /** URL to load in the window. */
   url?: string;
+  /** Whether the window can be resized by the user. */
   resizable?: boolean;
+  /** Whether the window shows a close button. */
   closable?: boolean;
+  /** Whether the window can be minimized. */
   minimizable?: boolean;
+  /** Whether the window can be maximized. */
   maximizable?: boolean;
+  /** Whether the window starts in fullscreen. */
   fullscreen?: boolean;
+  /** Whether the window floats above other windows. */
   alwaysOnTop?: boolean;
+  /** Title bar appearance style. */
   titleBarStyle?: "default" | "hidden" | "hiddenInset";
+  /** Whether the window is visible on creation. */
   visible?: boolean;
 }
 
@@ -24,21 +39,37 @@ type SizeEvent =
   | WindowEvent.MAXIMIZE
   | WindowEvent.RESTORE;
 
+/** Handle for controlling an individual window instance. */
 export type WindowHandle = {
+  /** Unique identifier for this window. */
   readonly id: string;
+  /** Show the window. */
   show(): void;
+  /** Hide the window. */
   hide(): void;
+  /** Minimize the window. */
   minimize(): void;
+  /** Maximize the window. */
   maximize(): void;
+  /** Restore the window from minimized state. */
   unminimize(): void;
+  /** Restore the window from maximized state. */
   unmaximize(): void;
+  /** Toggle between minimized and restored. */
   toggleMinimize(): void;
+  /** Toggle between maximized and restored. */
   toggleMaximize(): void;
+  /** Request the window to close (may be intercepted by close guards). */
   close(): void;
+  /** Set the window title. */
   setTitle(title: string): void;
+  /** Set the window size in logical pixels. */
   setSize(width: number, height: number): void;
+  /** Set the window position on screen. */
   setPosition(x: number, y: number): void;
+  /** Enter or exit fullscreen mode. */
   setFullscreen(on: boolean): void;
+  /** Set whether the window floats above other windows. */
   setAlwaysOnTop(on: boolean): void;
   /** Force-close the window, bypassing all close guards */
   destroy(): void;
@@ -153,11 +184,15 @@ function makeHandle(windowId: string): WindowHandle {
   };
 }
 
+/** API for creating and accessing windows. */
 export interface WindowAPI {
+  /** Create a new window with the given options. */
   create(options?: WindowOptions): Promise<WindowHandle>;
+  /** Get a handle to the current webview's window. Throws in worker contexts. */
   current(): WindowHandle;
 }
 
+/** The singleton window management API instance. */
 export const Window: WindowAPI = {
   async create(options: WindowOptions = {}): Promise<WindowHandle> {
     const bridge = getBridge();

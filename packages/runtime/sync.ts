@@ -8,8 +8,11 @@ type Bridge = {
   syncCancel?: (request: { id: string }) => boolean;
 };
 
+/** Options for {@link SyncAPI.wait}. */
 export type SyncWaitOptions = {
+  /** Timeout in milliseconds, or null to wait indefinitely. */
   timeoutMs?: number | null;
+  /** An AbortSignal to cancel the wait. */
   signal?: AbortSignal;
 };
 
@@ -18,11 +21,15 @@ const getBridge = (): Bridge | null =>
     Symbol.for("zapp.bridge")
   ] as Bridge | undefined) ?? null;
 
+/** API for cross-context synchronization primitives (wait/notify). */
 export interface SyncAPI {
+  /** Block until the given key is notified or the timeout elapses. */
   wait(key: string, timeoutOrOptions?: number | SyncWaitOptions | null): Promise<"notified" | "timed-out">;
+  /** Wake up to `count` waiters blocked on the given key. */
   notify(key: string, count?: number): boolean;
 }
 
+/** The singleton synchronization API instance. */
 export const Sync: SyncAPI = {
   async wait(
     key: string,

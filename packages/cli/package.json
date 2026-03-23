@@ -1,6 +1,6 @@
 {
-  "name": "@zapp/cli",
-  "version": "0.1.0",
+  "name": "@zappdev/cli",
+  "version": "0.1.1",
   "type": "module",
   "description": "CLI for building cross-platform desktop apps with Zapp",
   "main": "dist/zapp-cli.js",

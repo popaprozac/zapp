@@ -1,5 +1,8 @@
+/** Options for creating a Worker or SharedWorker. */
 export interface WorkerOptions {
+  /** If true, create a shared worker that can be accessed from multiple contexts. */
   shared?: boolean;
+  /** The `import.meta.url` of the calling module, used to resolve relative script paths. */
   importMetaUrl?: string | URL;
 }
 
@@ -76,6 +79,7 @@ function resolveWorkerScriptURL(
 
 type ListenerEntry = { listener: EventListenerOrEventListenerObject; once: boolean };
 
+/** A Zapp worker that runs a script in a separate native thread. */
 export class Worker {
   readonly id: string;
   readonly scriptURL: string;
@@ -233,6 +237,7 @@ export class Worker {
   }
 }
 
+/** A shared worker accessible from multiple windows via a MessagePort-like interface. */
 export class SharedWorker {
   readonly port: {
     postMessage: (data: unknown) => void;

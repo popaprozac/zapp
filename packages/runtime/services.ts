@@ -42,11 +42,15 @@ const makeRequest = (method: string, args: unknown): ZappServiceInvokeRequest =>
   },
 });
 
+/** API for invoking native services defined in the Zapp backend. */
 export interface ServicesAPI {
+  /** Call a named service method and return the result. */
   invoke<T = unknown>(method: string, args?: unknown): Promise<T>;
+  /** Retrieve the parsed bindings manifest describing available services, or null. */
   getBindingsManifest(): unknown;
 }
 
+/** The singleton services API instance. */
 export const Services: ServicesAPI = {
   async invoke<T = unknown>(method: string, args?: unknown): Promise<T> {
     if (typeof method !== "string" || method.length === 0) {
