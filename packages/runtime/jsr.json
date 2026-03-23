@@ -1,6 +1,14 @@
 {
   "name": "@zapp/runtime",
-  "version": "0.0.1",
+  "version": "0.1.0",
+  "description": "Frontend runtime API for Zapp desktop apps",
   "exports": "./index.ts",
-  "license": "MIT"
+  "license": "MIT",
+  "publish": {
+    "include": [
+      "*.ts",
+      "README.md",
+      "jsr.json"
+    ]
+  }
 }

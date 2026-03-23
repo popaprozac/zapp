@@ -46,10 +46,6 @@ const commonOptions = {
     type: "string" as const,
     describe: "Override output binary path",
   },
-  backend: {
-    type: "string" as const,
-    describe: "Backend script path",
-  },
   "log-level": {
     type: "string" as const,
     choices: VALID_LOG_LEVELS,
@@ -74,13 +70,8 @@ const cli = yargs(hideBin(process.argv))
         })
         .option("template", {
           type: "string",
-          default: "svelte-ts",
-          describe: "Frontend template",
-        })
-        .option("backend", {
-          type: "boolean",
-          default: false,
-          describe: "Include backend script",
+          default: "vanilla-ts",
+          describe: "Vite template (e.g. vanilla-ts, react-ts, svelte-ts, vue-ts)",
         })
         .option("root", commonOptions.root),
     async (argv) => {
@@ -89,7 +80,6 @@ const cli = yargs(hideBin(process.argv))
         root,
         name: argv.name,
         template: argv.template,
-        withBackend: argv.backend,
       });
     }
   )
@@ -102,22 +92,11 @@ const cli = yargs(hideBin(process.argv))
         .option("frontend", commonOptions.frontend)
         .option("input", commonOptions.input)
         .option("out", commonOptions.out)
-        .option("backend", commonOptions.backend)
         .option("log-level", commonOptions["log-level"])
         .option("dev-url", {
           type: "string",
           default: "http://localhost:5173",
           describe: "Dev server URL",
-        })
-        .option("brotli", {
-          type: "boolean",
-          default: false,
-          describe: "Brotli-compress embedded assets",
-        })
-        .option("embed-assets", {
-          type: "boolean",
-          default: false,
-          describe: "Embed assets in binary (default: false for dev)",
         }),
     async (argv) => {
       checkPrerequisites();
@@ -135,9 +114,8 @@ const cli = yargs(hideBin(process.argv))
         buildFile,
         nativeOut,
         devUrl: argv["dev-url"],
-        withBrotli: argv.brotli,
-        embedAssets: argv["embed-assets"],
-        backendScript: argv.backend,
+        withBrotli: false,
+        embedAssets: false,
         logLevel: argv["log-level"] as LogLevel | undefined,
         config,
       });
@@ -152,7 +130,6 @@ const cli = yargs(hideBin(process.argv))
         .option("frontend", commonOptions.frontend)
         .option("input", commonOptions.input)
         .option("out", commonOptions.out)
-        .option("backend", commonOptions.backend)
         .option("log-level", commonOptions["log-level"])
         .option("asset-dir", {
           type: "string",
@@ -192,7 +169,6 @@ const cli = yargs(hideBin(process.argv))
         withBrotli: argv.brotli,
         embedAssets,
         isDebug: argv.debug,
-        backendScript: argv.backend,
         logLevel: argv["log-level"] as LogLevel | undefined,
         config,
       });

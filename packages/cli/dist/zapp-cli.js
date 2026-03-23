@@ -8903,8 +8903,7 @@ import { mkdir as mkdir6 } from "fs/promises";
 var runInit = async ({
   root,
   name,
-  template,
-  withBackend
+  template
 }) => {
   const projectDir = path7.resolve(root, name);
   const zappDir = path7.join(projectDir, "zapp");
@@ -8923,43 +8922,54 @@ var runInit = async ({
   try {
     const pkgFile = Bun.file(pkgPath);
     if (await pkgFile.exists()) {
-      const pkgRaw = await pkgFile.text();
-      pkgObj = JSON.parse(pkgRaw);
+      pkgObj = JSON.parse(await pkgFile.text());
     }
-  } catch (err) {
+  } catch {
     console.error(`Warning: Could not read ${pkgPath}`);
   }
-  pkgObj.devDependencies = pkgObj.devDependencies || {};
-  pkgObj.devDependencies["@zapp/cli"] = "latest";
-  pkgObj.devDependencies["@zapp/vite"] = "latest";
-  pkgObj.dependencies = pkgObj.dependencies || {};
-  pkgObj.dependencies["@zapp/runtime"] = "latest";
-  if (withBackend) {
-    pkgObj.dependencies["@zapp/backend"] = "latest";
-  }
+  const devDeps = pkgObj.devDependencies ?? {};
+  devDeps["@zappdev/cli"] = "latest";
+  devDeps["@zappdev/vite"] = "latest";
+  pkgObj.devDependencies = devDeps;
+  const deps = pkgObj.dependencies ?? {};
+  deps["@zappdev/runtime"] = "latest";
+  pkgObj.dependencies = deps;
   await Bun.write(pkgPath, JSON.stringify(pkgObj, null, 2));
-  const appZcContent = `import "app/app.zc";
+  await Bun.write(path7.join(zappDir, "app.zc"), `import "app/app.zc";
+
+fn on_ready(id: int, handle: void*) -> void {
+    Window{id: id, handle: handle}.show();
+}
 
 fn run_app() -> int {
-    let config = AppConfig{ 
-        name: "${name}", 
+    let config = AppConfig{
+        name: "${name}",
         applicationShouldTerminateAfterLastWindowClosed: true,
-        webContentInspectable: true,
-        maxWorkers: 50,
+        webContentInspectable: -1, // -1 = inherit from build (dev=on, prod=off)
+        maxWorkers: 0,
+        qjsStackSize: 0,
     };
     let app = App::new(config);
+
+    let opts = window_options_default("${name}");
+    opts.visible = false;
+    let win = app.window.create(&opts);
+    win.on_ready(on_ready);
+
     return app.run();
 }
-`;
-  await Bun.write(path7.join(zappDir, "app.zc"), appZcContent);
-  const zappConfigContent = `import { defineConfig } from "@zapp/cli/config";
+`);
+  await Bun.write(path7.join(zappDir, "zapp.config.ts"), `import { defineConfig } from "@zappdev/cli/config";
 
 export default defineConfig({
   name: "${name}",
+  identifier: "com.zapp.${name.toLowerCase().replace(/[^a-z0-9]/g, "")}",
+  version: "0.1.0",
 });
-`;
-  await Bun.write(path7.join(zappDir, "zapp.config.ts"), zappConfigContent);
-  const buildZcContent = `// Include paths and library paths are injected by the zapp CLI.
+`);
+  await Bun.write(path7.join(zappDir, "build.zc"), `// --- Platform Tags ---
+//> macos: define: apple
+//> windows: define: windows
 
 // --- macOS Directives ---
 //> macos: framework: Cocoa
@@ -8970,37 +8980,29 @@ export default defineConfig({
 //> macos: link: -lcompression
 //> macos: cflags: -fobjc-arc -x objective-c
 // To use QuickJS instead of JSC on macOS, uncomment:
-//   //> macos: define: ZAPP_WORKER_ENGINE_QJS
+// //> macos: define: ZAPP_WORKER_ENGINE_QJS
 
-// --- Windows Directives (QuickJS default) ---
+// --- Windows Directives ---
 //> windows: cflags: -DUNICODE -D_UNICODE -DCINTERFACE -DCOBJMACROS
 //> windows: link: -lole32 -lshell32 -luuid -luser32 -lgdi32 -lcomctl32 -lcomdlg32 -lshlwapi
 //> windows: link: -lwinhttp -lbcrypt -ladvapi32 -lrpcrt4 -lcrypt32 -lversion
-//> windows: define: ZAPP_WORKER_ENGINE_QJS
+// Uncomment to enable Zapp Workers on Windows (adds ~760 KB):
+// //> windows: define: ZAPP_WORKER_ENGINE_QJS
 
 import "app.zc";
 
 fn main() -> int {
     return run_app();
 }
-`;
-  await Bun.write(path7.join(zappDir, "build.zc"), buildZcContent);
-  if (withBackend) {
-    const backendContent = `import { App } from "@zapp/backend";
-
-// Your backend TypeScript runs in a privileged native context
-// with direct access to native bridge, window management, and app lifecycle.
-`;
-    await Bun.write(path7.join(zappDir, "backend.ts"), backendContent);
-  }
-  const plistContent = `<?xml version="1.0" encoding="UTF-8"?>
+`);
+  await Bun.write(path7.join(darwinConfigDir, "Info.plist"), `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
     <string>${name}</string>
     <key>CFBundleIdentifier</key>
-    <string>com.zapp.${name}</string>
+    <string>com.zapp.${name.toLowerCase().replace(/[^a-z0-9]/g, "")}</string>
     <key>CFBundleVersion</key>
     <string>1.0.0</string>
     <key>CFBundleShortVersionString</key>
@@ -9008,18 +9010,17 @@ fn main() -> int {
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>
-    <string>10.13</string>
+    <string>13.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
 </dict>
 </plist>
-`;
-  await Bun.write(path7.join(darwinConfigDir, "Info.plist"), plistContent);
-  const manifestContent = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+`);
+  await Bun.write(path7.join(windowsConfigDir, "app.manifest"), `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
   <assemblyIdentity
     type="win32"
-    name="com.zapp.${name}"
+    name="com.zapp.${name.toLowerCase().replace(/[^a-z0-9]/g, "")}"
     version="1.0.0.0"
   />
   <description>${name}</description>
@@ -9054,8 +9055,7 @@ fn main() -> int {
     </application>
   </compatibility>
 </assembly>
-`;
-  await Bun.write(path7.join(windowsConfigDir, "app.manifest"), manifestContent);
+`);
   console.log(`
 Project ${name} scaffolded successfully!`);
   console.log(`Next steps:`);
@@ -9341,10 +9341,6 @@ var commonOptions = {
     type: "string",
     describe: "Override output binary path"
   },
-  backend: {
-    type: "string",
-    describe: "Backend script path"
-  },
   "log-level": {
     type: "string",
     choices: VALID_LOG_LEVELS,
@@ -9357,32 +9353,19 @@ var cli = yargs_default(hideBin(process8.argv)).scriptName("zapp").usage("zapp <
   describe: "Project name"
 }).option("template", {
   type: "string",
-  default: "svelte-ts",
-  describe: "Frontend template"
-}).option("backend", {
-  type: "boolean",
-  default: false,
-  describe: "Include backend script"
+  default: "vanilla-ts",
+  describe: "Vite template (e.g. vanilla-ts, react-ts, svelte-ts, vue-ts)"
 }).option("root", commonOptions.root), async (argv) => {
   const root = path11.resolve(cwd, argv.root);
   await runInit({
     root,
     name: argv.name,
-    template: argv.template,
-    withBackend: argv.backend
+    template: argv.template
   });
-}).command("dev", "Run Vite + native app together", (yargs) => yargs.option("root", commonOptions.root).option("frontend", commonOptions.frontend).option("input", commonOptions.input).option("out", commonOptions.out).option("backend", commonOptions.backend).option("log-level", commonOptions["log-level"]).option("dev-url", {
+}).command("dev", "Run Vite + native app together", (yargs) => yargs.option("root", commonOptions.root).option("frontend", commonOptions.frontend).option("input", commonOptions.input).option("out", commonOptions.out).option("log-level", commonOptions["log-level"]).option("dev-url", {
   type: "string",
   default: "http://localhost:5173",
   describe: "Dev server URL"
-}).option("brotli", {
-  type: "boolean",
-  default: false,
-  describe: "Brotli-compress embedded assets"
-}).option("embed-assets", {
-  type: "boolean",
-  default: false,
-  describe: "Embed assets in binary (default: false for dev)"
 }), async (argv) => {
   checkPrerequisites();
   const root = path11.resolve(cwd, argv.root);
@@ -9396,13 +9379,12 @@ var cli = yargs_default(hideBin(process8.argv)).scriptName("zapp").usage("zapp <
     buildFile,
     nativeOut,
     devUrl: argv["dev-url"],
-    withBrotli: argv.brotli,
-    embedAssets: argv["embed-assets"],
-    backendScript: argv.backend,
+    withBrotli: false,
+    embedAssets: false,
     logLevel: argv["log-level"],
     config
   });
-}).command("build", "Build frontend assets + native binary", (yargs) => yargs.option("root", commonOptions.root).option("frontend", commonOptions.frontend).option("input", commonOptions.input).option("out", commonOptions.out).option("backend", commonOptions.backend).option("log-level", commonOptions["log-level"]).option("asset-dir", {
+}).command("build", "Build frontend assets + native binary", (yargs) => yargs.option("root", commonOptions.root).option("frontend", commonOptions.frontend).option("input", commonOptions.input).option("out", commonOptions.out).option("log-level", commonOptions["log-level"]).option("asset-dir", {
   type: "string",
   default: "dist",
   describe: "Asset directory"
@@ -9432,7 +9414,6 @@ var cli = yargs_default(hideBin(process8.argv)).scriptName("zapp").usage("zapp <
     withBrotli: argv.brotli,
     embedAssets,
     isDebug: argv.debug,
-    backendScript: argv.backend,
     logLevel: argv["log-level"],
     config
   });

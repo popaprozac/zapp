@@ -1,5 +1,6 @@
 import { Events } from "./events";
 
+/** Definition of a single menu item, including separators, checkboxes, and submenus. */
 export interface MenuItemDef {
   /** Unique ID for click events. Auto-generated if action is provided without id. */
   id?: string;
@@ -21,6 +22,7 @@ export interface MenuItemDef {
   submenu?: MenuItemDef[];
 }
 
+/** Handle returned after building a menu, used to listen for item clicks. */
 export interface MenuHandle {
   /** Listen for a menu item click by its ID */
   on(itemId: string, handler: () => void): () => void;
@@ -28,6 +30,7 @@ export interface MenuHandle {
   readonly items: MenuItemDef[];
 }
 
+/** API for building and installing native menus. */
 export interface MenuAPI {
   /** Build a menu from a definition array */
   build(items: MenuItemDef[]): MenuHandle;
@@ -70,6 +73,7 @@ function postMenu(items: MenuItemDef[]): void {
   }
 }
 
+/** The singleton menu API instance. */
 export const Menu: MenuAPI = {
   build(items: MenuItemDef[]): MenuHandle {
     const actions: ActionEntry[] = [];

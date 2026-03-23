@@ -1,3 +1,25 @@
+/**
+ * @module
+ * Frontend runtime API for Zapp desktop apps.
+ *
+ * Provides window management, events, dialogs, menus, workers, sync primitives,
+ * and service invocation for building cross-platform desktop applications.
+ *
+ * @example
+ * ```ts
+ * import { App, Window, WindowEvent, Dialog, Menu, Events } from "@zapp/runtime";
+ *
+ * Window.current().on(WindowEvent.READY, () => {
+ *     Window.current().show();
+ * });
+ *
+ * const result = await Dialog.message({
+ *     message: "Hello from Zapp!",
+ *     buttons: ["OK"],
+ * });
+ * ```
+ */
+
 export { App } from "./app";
 export type { AppAPI, AppConfig } from "./app";
 export { Events, WindowEvent, AppEvent, getWindowEventName, getAppEventName } from "./events";

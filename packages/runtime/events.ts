@@ -1,19 +1,34 @@
+/** Numeric identifiers for window lifecycle and state-change events. */
 export enum WindowEvent {
+    /** The window has finished loading and is ready. */
     READY = 0,
+    /** The window gained input focus. */
     FOCUS = 1,
+    /** The window lost input focus. */
     BLUR = 2,
+    /** The window was resized. */
     RESIZE = 3,
+    /** The window was moved. */
     MOVE = 4,
+    /** The window close was requested. */
     CLOSE = 5,
+    /** The window was minimized. */
     MINIMIZE = 6,
+    /** The window was maximized. */
     MAXIMIZE = 7,
+    /** The window was restored from minimize or maximize. */
     RESTORE = 8,
+    /** The window entered fullscreen mode. */
     FULLSCREEN = 9,
+    /** The window exited fullscreen mode. */
     UNFULLSCREEN = 10,
 }
 
+/** Numeric identifiers for application lifecycle events. */
 export enum AppEvent {
+    /** The application has started. */
     STARTED = 100,
+    /** The application is shutting down. */
     SHUTDOWN = 101,
 }
 
@@ -76,10 +91,15 @@ const ensureBridge = (): ZappBridge => {
     return bridge;
 };
 
+/** Base payload delivered with window events. */
 export interface WindowEventPayload {
+    /** The ID of the window that emitted the event. */
     windowId: string;
+    /** Unix-epoch millisecond timestamp of when the event occurred. */
     timestamp: number;
+    /** Window dimensions, present on size-related events. */
     size?: { width: number; height: number };
+    /** Window screen coordinates, present on position-related events. */
     position?: { x: number; y: number };
 }
 
@@ -130,28 +150,36 @@ export type EventPayloadFor<T extends string> =
 /** Event name type — known names get autocomplete, arbitrary strings still work */
 export type EventName = KnownEventName | (string & {});
 
+/** Type-safe event emitter API for subscribing to and emitting Zapp events. */
 export interface EventsAPI {
+    /** Emit a named event with an optional payload. */
     emit(name: string, payload?: unknown): unknown;
 
-    // Window events with size + position payload
+    /** Subscribe to a window size/position event. Returns an unsubscribe function. */
     on(name: WindowSizeEvents, handler: (payload: WindowSizeEventPayload) => void): () => void;
-    // Window events with base payload
+    /** Subscribe to a simple window event. Returns an unsubscribe function. */
     on(name: WindowSimpleEvents, handler: (payload: WindowEventPayload) => void): () => void;
-    // App lifecycle events
+    /** Subscribe to an app lifecycle event. Returns an unsubscribe function. */
     on(name: AppEvents, handler: () => void): () => void;
-    // Custom / arbitrary events
+    /** Subscribe to a custom event. Returns an unsubscribe function. */
     on(name: string & {}, handler: (payload?: unknown) => void): () => void;
 
+    /** Subscribe to a window size/position event once. Returns an unsubscribe function. */
     once(name: WindowSizeEvents, handler: (payload: WindowSizeEventPayload) => void): () => void;
+    /** Subscribe to a simple window event once. Returns an unsubscribe function. */
     once(name: WindowSimpleEvents, handler: (payload: WindowEventPayload) => void): () => void;
+    /** Subscribe to an app lifecycle event once. Returns an unsubscribe function. */
     once(name: AppEvents, handler: () => void): () => void;
+    /** Subscribe to a custom event once. Returns an unsubscribe function. */
     once(name: string & {}, handler: (payload?: unknown) => void): () => void;
 
+    /** Remove a specific handler, or all handlers, for the given event name. */
     off(name: EventName, handler?: EventHandler): void;
+    /** Remove all handlers for a given event name, or all events if no name is provided. */
     offAll(name?: EventName): void;
 }
 
-// Implementation uses broad signatures; the EventsAPI interface provides type-safe overloads to consumers
+/** The singleton event bus for emitting, subscribing to, and removing event listeners. */
 export const Events = {
     emit(name: string, payload?: unknown): unknown {
         return getBridge()._emit?.(name, payload);
@@ -210,10 +238,12 @@ export const Events = {
     },
 } satisfies Record<string, unknown> as EventsAPI;
 
+/** Resolve a {@link WindowEvent} enum member to its string event name. */
 export function getWindowEventName(event: WindowEvent): string {
     return WINDOW_EVENT_NAMES[event] ?? `window:${event}`;
 }
 
+/** Resolve an {@link AppEvent} enum member to its string event name. */
 export function getAppEventName(event: AppEvent): string {
     return APP_EVENT_NAMES[event] ?? `app:${event}`;
 }

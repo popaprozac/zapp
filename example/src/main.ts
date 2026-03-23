@@ -68,14 +68,6 @@ Window.current().on(WindowEvent.MAXIMIZE, (payload) => {
   console.log("window maximized", payload);
 });
 
-// const result = await Dialog.message({
-//   message: "Hello from dialog",
-//   title: "Dialog Title",
-//   kind: "info",
-//   buttons: ["OK", "Cancel"],
-// });
-// console.log("dialog result", result.button);
-
 Events.on("window:focus", console.log);
 
 Menu.build([
