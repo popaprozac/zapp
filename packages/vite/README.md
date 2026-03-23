@@ -1,15 +1,15 @@
-# @zapp/vite
+# @zappdev/vite
 
 Vite plugin for Zapp desktop apps. Handles worker discovery, source bundling, and output configuration so your Vite-based frontend integrates seamlessly with the Zapp native runtime.
 
 ## Install
 
 ```sh
-bun add -D @zapp/vite
+bun add -D @zappdev/vite
 ```
 
 ```sh
-npm install -D @zapp/vite
+npm install -D @zappdev/vite
 ```
 
 ## Usage
@@ -17,16 +17,10 @@ npm install -D @zapp/vite
 ```ts
 // vite.config.ts
 import { defineConfig } from "vite";
-import zapp from "@zapp/vite";
+import zapp from "@zappdev/vite";
 
 export default defineConfig({
-  plugins: [
-    zapp({
-      outDir: "dist",
-      sourceRoot: "src",
-      minify: true,
-    }),
-  ],
+  plugins: [zapp()],
 });
 ```
 

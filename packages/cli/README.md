@@ -1,15 +1,15 @@
-# @zapp/cli
+# @zappdev/cli
 
 CLI for building cross-platform desktop apps with Zapp.
 
 ## Install
 
 ```sh
-bun add -D @zapp/cli
+bun add -g @zappdev/cli
 ```
 
 ```sh
-npm install -D @zapp/cli
+npm install -g @zappdev/cli
 ```
 
 ## Quick Start
@@ -18,37 +18,40 @@ npm install -D @zapp/cli
 # Create a new Zapp project
 zapp init my-app
 cd my-app
+bun install
 
 # Start the dev server with hot reload
 zapp dev
 
 # Build for production
-zapp build
+zapp build --brotli
 
-# Package into a distributable
-zapp package
+# Package into a .app bundle (macOS)
+zapp package --brotli
 ```
 
 ## Commands
 
-| Command    | Description                                      |
-| ---------- | ------------------------------------------------ |
-| `init`     | Scaffold a new Zapp project                      |
-| `dev`      | Start the development server with live reload     |
-| `build`    | Compile the native backend and bundle the frontend |
-| `package`  | Package the app into a distributable binary       |
-| `generate` | Generate bindings and boilerplate code            |
+| Command    | Description                                       |
+| ---------- | ------------------------------------------------- |
+| `init`     | Scaffold a new Zapp project (any Vite template)   |
+| `dev`      | Start dev mode with Vite hot reload + native app  |
+| `build`    | Build frontend assets + compile native binary     |
+| `package`  | Build and package into a platform bundle (.app)   |
+| `generate` | Generate TypeScript bindings from Zen-C services  |
 
-## Options
+## Common Options
 
-All build-related commands support:
+- `--root` — project root directory
+- `--frontend` — frontend directory
+- `--input` — build file path (default: `zapp/build.zc`)
+- `--out` — override output binary path
+- `--log-level` — log verbosity (`error`, `warn`, `info`, `debug`, `trace`)
 
-- `--root` -- project root directory
-- `--frontend` -- frontend directory
-- `--input` -- build file path (default: `zapp/build.zc`)
-- `--out` -- override output binary path
-- `--backend` -- backend script path
-- `--log-level` -- log verbosity (`error`, `warn`, `info`, `debug`, `trace`)
+## Prerequisites
+
+- [Zen-C compiler](https://github.com/zenc-lang/zenc) (`zc`) in your PATH
+- [Bun](https://bun.sh) runtime
 
 ## License
 
