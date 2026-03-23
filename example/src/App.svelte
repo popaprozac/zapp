@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { App, Events, Sync } from '@zapp/runtime';
+  import { App, Events, Sync, ContextMenu } from '@zapp/runtime';
   import svelteLogo from './assets/svelte.svg'
   import viteLogo from '/favicon.svg'
 
@@ -73,10 +73,18 @@
     syncStatus = "Cancel requested for active wait.";
     appendSyncLog(syncStatus);
   }
+
+  function handleContextMenu(event: Event): void {
+    event.preventDefault();
+    ContextMenu.show([
+      { role: "copy" },
+      { role: "paste" },
+    ]);
+  }
 </script>
 
 <main class="container">
-  <h1>Welcome to Zapp + Svelte</h1>
+  <h1 oncontextmenu={handleContextMenu}>Welcome to Zapp + Svelte</h1>
 
   <div class="row">
     <a href="https://vitejs.dev" target="_blank" rel="noreferrer">

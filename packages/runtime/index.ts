@@ -13,5 +13,7 @@ export { Dialog } from "./dialog";
 export type { DialogAPI, OpenFileOptions, SaveFileOptions, MessageOptions, FileFilter, OpenFileResult, SaveFileResult, MessageResult } from "./dialog";
 export { Menu } from "./menu";
 export type { MenuAPI, MenuItemDef, MenuHandle } from "./menu";
+export { ContextMenu } from "./context-menu";
+export type { ContextMenuAPI } from "./context-menu";
 export * from "./protocol";
 export * from "./bindings-contract";

@@ -1,7 +1,7 @@
 import { mount } from 'svelte'
 import './app.css'
 import AppInstance from './App.svelte'
-import { App, Events, Window, Worker, SharedWorker,WindowEvent, Dialog, Menu } from '@zapp/runtime'
+import { App, Events, Window, Worker, SharedWorker,WindowEvent, Dialog, Menu, ContextMenu } from '@zapp/runtime'
 import { Ping } from "./generated";
 import './worker-parity';
 import './multiwindow-parity';

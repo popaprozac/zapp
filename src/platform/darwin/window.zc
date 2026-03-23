@@ -25,6 +25,7 @@ raw {
     #define ZAPP_EVENT_RESULT_CANCEL 1
     #endif
 
+    static NSMenu* zapp_build_menu_from_json(NSArray* items);
     extern void zapp_darwin_reset_all_workers(void);
     extern void zapp_darwin_reset_owner_workers(const char* owner_id);
     extern void zapp_darwin_webview_create(void* window_ptr, bool inspectable);
@@ -912,6 +913,32 @@ raw {
         NSString* windowId = body[@"windowId"];
         if (![windowId isKindOfClass:[NSString class]] || [windowId length] == 0) return;
 
+        if ([actionStr isEqualToString:@"showContextMenu"]) {
+            NSArray* menuItems = body[@"items"];
+            if (![menuItems isKindOfClass:[NSArray class]]) return;
+            NSNumber* xVal = body[@"x"];
+            NSNumber* yVal = body[@"y"];
+            CGFloat cx = [xVal respondsToSelector:@selector(doubleValue)] ? [xVal doubleValue] : 0;
+            CGFloat cy = [yVal respondsToSelector:@selector(doubleValue)] ? [yVal doubleValue] : 0;
+            void (^work)(void) = ^{
+                for (NSWindow* window in [NSApp windows]) {
+                    NSString* wid = [NSString stringWithFormat:@"win-%p", window];
+                    if ([wid isEqualToString:windowId]) {
+                        NSMenu* menu = zapp_build_menu_from_json(menuItems);
+                        NSView* content = [window contentView];
+                        // CSS coordinates: origin top-left. NSView: origin bottom-left.
+                        CGFloat scale = [window backingScaleFactor];
+                        NSPoint viewLoc = NSMakePoint(cx, cy);
+                        [menu popUpMenuPositioningItem:nil atLocation:viewLoc inView:content];
+                        break;
+                    }
+                }
+            };
+            if ([NSThread isMainThread]) { work(); }
+            else { dispatch_async(dispatch_get_main_queue(), work); }
+            return;
+        }
+
         if ([actionStr isEqualToString:@"setCloseGuard"]) {
             id guardVal = body[@"guard"];
             BOOL guard = [guardVal respondsToSelector:@selector(boolValue)] && [guardVal boolValue];
@@ -1166,9 +1193,30 @@ raw {
         // Check for role
         NSString* role = def[@"role"];
         if ([role isKindOfClass:[NSString class]] && [role length] > 0) {
+            // Item-level roles (copy, cut, paste, etc.)
+            if ([role isEqualToString:@"copy"]) {
+                [menu addItemWithTitle:def[@"label"] ?: @"Copy" action:@selector(copy:) keyEquivalent:@""];
+                return;
+            } else if ([role isEqualToString:@"cut"]) {
+                [menu addItemWithTitle:def[@"label"] ?: @"Cut" action:@selector(cut:) keyEquivalent:@""];
+                return;
+            } else if ([role isEqualToString:@"paste"]) {
+                [menu addItemWithTitle:def[@"label"] ?: @"Paste" action:@selector(paste:) keyEquivalent:@""];
+                return;
+            } else if ([role isEqualToString:@"selectAll"]) {
+                [menu addItemWithTitle:def[@"label"] ?: @"Select All" action:@selector(selectAll:) keyEquivalent:@""];
+                return;
+            } else if ([role isEqualToString:@"undo"]) {
+                [menu addItemWithTitle:def[@"label"] ?: @"Undo" action:@selector(undo:) keyEquivalent:@""];
+                return;
+            } else if ([role isEqualToString:@"redo"]) {
+                [menu addItemWithTitle:def[@"label"] ?: @"Redo" action:@selector(redo:) keyEquivalent:@""];
+                return;
+            }
+
+            // Menu-level roles (editMenu, windowMenu, appMenu)
             NSString* label = def[@"label"];
             if (![label isKindOfClass:[NSString class]]) {
-                // Default label for roles
                 if ([role isEqualToString:@"editMenu"]) label = @"Edit";
                 else if ([role isEqualToString:@"windowMenu"]) label = @"Window";
                 else if ([role isEqualToString:@"appMenu"]) {

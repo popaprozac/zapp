@@ -13,8 +13,8 @@ export interface MenuItemDef {
   checked?: boolean;
   /** Keyboard shortcut. Use "CmdOrCtrl" for cross-platform Cmd/Ctrl. */
   accelerator?: string;
-  /** Built-in menu role. Overrides label/submenu with standard items. */
-  role?: "editMenu" | "windowMenu" | "appMenu";
+  /** Built-in role. Menu-level: "editMenu", "windowMenu", "appMenu". Item-level: "copy", "cut", "paste", "selectAll", "undo", "redo". */
+  role?: "editMenu" | "windowMenu" | "appMenu" | "copy" | "cut" | "paste" | "selectAll" | "undo" | "redo";
   /** Click handler. Sugar for menu.on(id, handler). */
   action?: () => void;
   /** Nested submenu items. */
