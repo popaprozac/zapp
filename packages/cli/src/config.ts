@@ -1,5 +1,21 @@
 import path from "node:path";
 
+export interface MacOSConfig {
+  /** Minimum macOS version. Defaults to "13.0" */
+  minimumSystemVersion?: string;
+  /** App category for the Mac App Store (e.g. "public.app-category.developer-tools") */
+  category?: string;
+  /** Path to .icon folder for macOS Tahoe liquid glass icons (created with Icon Composer) */
+  iconLayers?: string;
+}
+
+export interface SecurityConfig {
+  /** Custom Content Security Policy. Default: strict self-only policy */
+  csp?: string;
+  /** Allowed navigation URLs (glob patterns). Default: only app scheme + dev server */
+  allowNavigation?: string[];
+}
+
 export interface ZappConfig {
   /** App name -- used for binary output, bundle name, window title fallback */
   name: string;
@@ -7,12 +23,27 @@ export interface ZappConfig {
   identifier?: string;
   /** App version string. Defaults to "1.0.0" */
   version?: string;
+  /** Path to app icon source (1024x1024 PNG). Used to generate .icns (macOS) and .ico (Windows). */
+  icon?: string;
+  /** App description */
+  description?: string;
+  /** Author name */
+  author?: string;
+  /** macOS-specific config */
+  macos?: MacOSConfig;
+  /** Security settings */
+  security?: SecurityConfig;
 }
 
 export interface ResolvedZappConfig {
   name: string;
   identifier: string;
   version: string;
+  icon?: string;
+  description?: string;
+  author?: string;
+  macos?: MacOSConfig;
+  security?: SecurityConfig;
 }
 
 /** Passthrough helper that provides type inference and autocomplete for zapp.config.ts */
@@ -25,6 +56,11 @@ function applyDefaults(config: ZappConfig): ResolvedZappConfig {
     name: config.name,
     identifier: config.identifier ?? `com.zapp.${config.name}`,
     version: config.version ?? "1.0.0",
+    icon: config.icon,
+    description: config.description,
+    author: config.author,
+    macos: config.macos,
+    security: config.security,
   };
 }
 

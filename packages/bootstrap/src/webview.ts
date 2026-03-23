@@ -781,7 +781,10 @@ if (typeof document !== "undefined") {
     if (!document.head) return;
     const csp = document.createElement("meta");
     csp.httpEquiv = "Content-Security-Policy";
-    csp.content = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https:; img-src 'self' data: blob:;";
+    // Read custom CSP from bootstrap config, or use strict default
+    const cfg = appConfig as Record<string, unknown> | null;
+    const customCSP = cfg?.csp as string | undefined;
+    csp.content = customCSP || "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:;";
     document.head.insertBefore(csp, document.head.firstChild);
   };
   if (document.head) {

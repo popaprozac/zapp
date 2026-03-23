@@ -175,6 +175,16 @@ raw {
             case IDM_WIN_CLOSE:
                 if (hwnd) PostMessageW(hwnd, WM_CLOSE, 0, 0);
                 break;
+            default: {
+                // Custom menu items (41000+)
+                extern const char* zapp_menu_id_for_cmd(int cmd);
+                extern void zapp_dispatch_custom_menu_click(const char* itemId);
+                const char* itemId = zapp_menu_id_for_cmd(cmd);
+                if (itemId) {
+                    zapp_dispatch_custom_menu_click(itemId);
+                }
+                break;
+            }
         }
     }
 
@@ -184,7 +194,7 @@ raw {
                 return 1;
             case WM_COMMAND: {
                 WORD cmd = LOWORD(wParam);
-                if (cmd >= 40001 && cmd <= 40099) {
+                if (cmd >= 40001) {
                     zapp_handle_menu_command(hwnd, cmd);
                     return 0;
                 }

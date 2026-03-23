@@ -15,6 +15,8 @@ export const generateBuildConfigZc = async ({
   devUrl,
   backendScriptPath,
   logLevel,
+  csp,
+  enableDevTools,
 }: {
   root: string;
   mode: BuildMode;
@@ -22,6 +24,8 @@ export const generateBuildConfigZc = async ({
   devUrl?: string;
   backendScriptPath?: string | null;
   logLevel?: LogLevel;
+  csp?: string;
+  enableDevTools?: boolean;
 }) => {
   const buildDir = path.join(root, ".zapp");
   await mkdir(buildDir, { recursive: true });
@@ -65,6 +69,14 @@ raw {
 
     const char* zapp_build_log_level(void) {
         return ${cString(effectiveLogLevel)};
+    }
+
+    int zapp_build_dev_tools_default(void) {
+        return ${enableDevTools ?? isDev ? 1 : 0};
+    }
+
+    const char* zapp_build_csp(void) {
+        return ${csp ? cString(csp) : '""'};
     }
 }
 `;

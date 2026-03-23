@@ -16,7 +16,7 @@ fn run_app() -> int {
     let config = AppConfig{
         name: "Zapp Hello World",
         applicationShouldTerminateAfterLastWindowClosed: true,
-        webContentInspectable: false,
+        webContentInspectable: -1, // inherit from build
         maxWorkers: 0,
         qjsStackSize: 0,
     };

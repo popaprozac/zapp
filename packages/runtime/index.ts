@@ -11,5 +11,7 @@ export { Sync } from "./sync";
 export type { SyncAPI, SyncWaitOptions } from "./sync";
 export { Dialog } from "./dialog";
 export type { DialogAPI, OpenFileOptions, SaveFileOptions, MessageOptions, FileFilter, OpenFileResult, SaveFileResult, MessageResult } from "./dialog";
+export { Menu } from "./menu";
+export type { MenuAPI, MenuItemDef, MenuHandle } from "./menu";
 export * from "./protocol";
 export * from "./bindings-contract";

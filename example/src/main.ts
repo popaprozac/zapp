@@ -1,7 +1,7 @@
 import { mount } from 'svelte'
 import './app.css'
 import AppInstance from './App.svelte'
-import { App, Events, Window, Worker, SharedWorker,WindowEvent, Dialog } from '@zapp/runtime'
+import { App, Events, Window, Worker, SharedWorker,WindowEvent, Dialog, Menu } from '@zapp/runtime'
 import { Ping } from "./generated";
 import './worker-parity';
 import './multiwindow-parity';
@@ -76,4 +76,20 @@ Window.current().on(WindowEvent.MAXIMIZE, (payload) => {
 // });
 // console.log("dialog result", result.button);
 
-Events.on("window:focus", console.log)
+Events.on("window:focus", console.log);
+
+Menu.build([
+  { role: "appMenu" },
+  { label: "File", submenu: [
+    { label: "New", accelerator: "CmdOrCtrl+N", action: () => console.log("New file!") },
+    { label: "Open...", accelerator: "CmdOrCtrl+O", action: () => console.log("Open file!") },
+    { type: "separator" },
+    { label: "Quit", accelerator: "CmdOrCtrl+Q", action: () => App.quit() },
+  ]},
+  { label: "Edit", role: "editMenu" },
+  { label: "Tools", submenu: [
+    { label: "Run Benchmark", accelerator: "CmdOrCtrl+Shift+B", action: () => console.log("Running benchmark...") },
+    { label: "Toggle Debug", type: "checkbox", checked: false, action: () => console.log("Debug toggled") },
+  ]},
+  { label: "Window", role: "windowMenu" },
+]);

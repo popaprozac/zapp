@@ -34,7 +34,8 @@
       "Bash(bun tauri:*)",
       "Bash(bunx electrobun:*)",
       "WebFetch(domain:www.electronjs.org)",
-      "WebFetch(domain:www.electrobun.dev)"
+      "WebFetch(domain:www.electrobun.dev)",
+      "Bash(bun packages/cli/dist/zapp-cli.js package --root example --brotli)"
     ]
   }
 }

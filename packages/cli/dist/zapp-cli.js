@@ -5,29 +5,15 @@ var __getProtoOf = Object.getPrototypeOf;
 var __defProp = Object.defineProperty;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
-function __accessProp(key) {
-  return this[key];
-}
-var __toESMCache_node;
-var __toESMCache_esm;
 var __toESM = (mod, isNodeMode, target) => {
-  var canCache = mod != null && typeof mod === "object";
-  if (canCache) {
-    var cache = isNodeMode ? __toESMCache_node ??= new WeakMap : __toESMCache_esm ??= new WeakMap;
-    var cached = cache.get(mod);
-    if (cached)
-      return cached;
-  }
   target = mod != null ? __create(__getProtoOf(mod)) : {};
   const to = isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target;
   for (let key of __getOwnPropNames(mod))
     if (!__hasOwnProp.call(to, key))
       __defProp(to, key, {
-        get: __accessProp.bind(mod, key),
+        get: () => mod[key],
         enumerable: true
       });
-  if (canCache)
-    cache.set(mod, to);
   return to;
 };
 var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
@@ -56,7 +42,7 @@ var require_get_caller_file = __commonJS((exports, module) => {
 
 // node_modules/esbuild/lib/main.js
 var require_main = __commonJS((exports, module) => {
-  var __dirname = "C:\\Users\\Zach\\code\\zapp\\packages\\cli\\node_modules\\esbuild\\lib", __filename = "C:\\Users\\Zach\\code\\zapp\\packages\\cli\\node_modules\\esbuild\\lib\\main.js";
+  var __dirname = "/Users/zach/code/zapp/packages/cli/node_modules/esbuild/lib", __filename = "/Users/zach/code/zapp/packages/cli/node_modules/esbuild/lib/main.js";
   var __defProp2 = Object.defineProperty;
   var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
   var __getOwnPropNames2 = Object.getOwnPropertyNames;
@@ -2697,7 +2683,7 @@ error: ${text}`);
 });
 
 // src/zapp-cli.ts
-import path10 from "path";
+import path11 from "path";
 import process8 from "process";
 
 // node_modules/yargs/lib/platform-shims/esm.mjs
@@ -8247,7 +8233,9 @@ var generateBuildConfigZc = async ({
   assetDir,
   devUrl,
   backendScriptPath,
-  logLevel
+  logLevel,
+  csp,
+  enableDevTools
 }) => {
   const buildDir = path2.join(root, ".zapp");
   await mkdir2(buildDir, { recursive: true });
@@ -8287,6 +8275,14 @@ raw {
 
     const char* zapp_build_log_level(void) {
         return ${cString(effectiveLogLevel)};
+    }
+
+    int zapp_build_dev_tools_default(void) {
+        return ${enableDevTools ?? isDev ? 1 : 0};
+    }
+
+    const char* zapp_build_csp(void) {
+        return ${csp ? cString(csp) : '""'};
     }
 }
 `;
@@ -8716,7 +8712,9 @@ var runBuild = async ({
     mode: buildMode,
     assetDir,
     backendScriptPath,
-    logLevel: effectiveLogLevel
+    logLevel: effectiveLogLevel,
+    csp: config.security?.csp,
+    enableDevTools: isDebug ? true : undefined
   });
   process5.stdout.write(`[zapp] building native binary
 `);
@@ -9067,40 +9065,175 @@ Project ${name} scaffolded successfully!`);
 };
 
 // src/package.ts
-import { mkdir as mkdir7, copyFile, chmod } from "fs/promises";
-import path8 from "path";
+import { mkdir as mkdir8, copyFile, chmod } from "fs/promises";
+import path9 from "path";
 import process7 from "process";
-var runPackage = async ({ root, nativeOut, config }) => {
-  if (process7.platform !== "darwin") {
-    console.error("The package command is currently only supported on macOS.");
-    return;
+import { existsSync as existsSync5 } from "fs";
+
+// src/icons.ts
+import { mkdir as mkdir7, rm } from "fs/promises";
+import path8 from "path";
+import { existsSync as existsSync4 } from "fs";
+var ICNS_SIZES = [
+  [16, 1],
+  [16, 2],
+  [32, 1],
+  [32, 2],
+  [128, 1],
+  [128, 2],
+  [256, 1],
+  [256, 2],
+  [512, 1],
+  [512, 2]
+];
+async function generateIcns(pngPath, outputDir) {
+  if (process.platform !== "darwin")
+    return null;
+  if (!existsSync4(pngPath)) {
+    console.warn(`[zapp] icon source not found: ${pngPath}`);
+    return null;
   }
+  const iconsetDir = path8.join(outputDir, "AppIcon.iconset");
+  await mkdir7(iconsetDir, { recursive: true });
+  for (const [size, scale] of ICNS_SIZES) {
+    const pixels = size * scale;
+    const suffix = scale > 1 ? `@${scale}x` : "";
+    const filename = `icon_${size}x${size}${suffix}.png`;
+    const outPath = path8.join(iconsetDir, filename);
+    try {
+      await runCmd("sips", ["-z", String(pixels), String(pixels), pngPath, "--out", outPath]);
+    } catch (err) {
+      console.warn(`[zapp] failed to resize icon to ${pixels}x${pixels}: ${err}`);
+      return null;
+    }
+  }
+  const icnsPath = path8.join(outputDir, "AppIcon.icns");
+  try {
+    await runCmd("iconutil", ["-c", "icns", iconsetDir, "-o", icnsPath]);
+  } catch (err) {
+    console.warn(`[zapp] iconutil failed: ${err}`);
+    return null;
+  }
+  await rm(iconsetDir, { recursive: true, force: true });
+  return icnsPath;
+}
+async function compileIconAsset(iconFolder, outputDir) {
+  if (process.platform !== "darwin")
+    return null;
+  if (!existsSync4(iconFolder)) {
+    console.warn(`[zapp] .icon folder not found: ${iconFolder}`);
+    return null;
+  }
+  try {
+    await runCmd("actool", [
+      "--compile",
+      outputDir,
+      "--platform",
+      "macosx",
+      "--minimum-deployment-target",
+      "26.0",
+      iconFolder
+    ]);
+    const carPath = path8.join(outputDir, "Assets.car");
+    if (existsSync4(carPath)) {
+      return carPath;
+    }
+    console.warn("[zapp] actool did not produce Assets.car");
+    return null;
+  } catch (err) {
+    console.warn(`[zapp] actool failed (requires Xcode 26): ${err}`);
+    return null;
+  }
+}
+
+// src/package.ts
+var runPackage = async ({ root, nativeOut, config }) => {
+  if (process7.platform === "darwin") {
+    await packageMacOS({ root, nativeOut, config });
+  } else if (process7.platform === "win32") {
+    console.log("[zapp] Windows packaging: the binary is ready at " + nativeOut);
+    console.log("[zapp] Icon embedding happens during 'zapp build' (see build.ts).");
+    console.log("[zapp] Installer generation (NSIS/MSIX) is not yet implemented.");
+  } else {
+    console.error("[zapp] Packaging is not yet supported on this platform.");
+  }
+};
+async function packageMacOS({ root, nativeOut, config }) {
   const appName = config.name;
   const appBundleName = `${appName}.app`;
-  const appBundlePath = path8.join(root, appBundleName);
-  console.log(`Packaging ${appName} to ${appBundleName}...`);
-  const contentsDir = path8.join(appBundlePath, "Contents");
-  const macosDir = path8.join(contentsDir, "MacOS");
-  const resourcesDir = path8.join(contentsDir, "Resources");
-  await mkdir7(macosDir, { recursive: true });
-  await mkdir7(resourcesDir, { recursive: true });
-  const execPath = path8.resolve(root, nativeOut);
-  const execFile = Bun.file(execPath);
-  if (!await execFile.exists()) {
-    console.error(`Error: Native binary not found at ${execPath}. Run 'zapp build' first.`);
+  const binDir = path9.join(root, "bin");
+  await mkdir8(binDir, { recursive: true });
+  const appBundlePath = path9.join(binDir, appBundleName);
+  process7.stdout.write(`[zapp] packaging ${appName} \u2192 ${appBundleName}
+`);
+  const contentsDir = path9.join(appBundlePath, "Contents");
+  const macosDir = path9.join(contentsDir, "MacOS");
+  const resourcesDir = path9.join(contentsDir, "Resources");
+  await mkdir8(macosDir, { recursive: true });
+  await mkdir8(resourcesDir, { recursive: true });
+  const execPath = path9.resolve(root, nativeOut);
+  if (!existsSync5(execPath)) {
+    console.error(`[zapp] binary not found at ${execPath}. Run 'zapp build' first.`);
     return;
   }
-  const destExecPath = path8.join(macosDir, appName);
+  const destExecPath = path9.join(macosDir, appName);
   await copyFile(execPath, destExecPath);
   await chmod(destExecPath, 493);
-  const configPlistPath = path8.join(root, "config", "darwin", "Info.plist");
+  let hasIcon = false;
+  let hasLiquidGlass = false;
+  if (config.icon) {
+    const iconSource = path9.resolve(root, config.icon);
+    const icnsPath = await generateIcns(iconSource, resourcesDir);
+    if (icnsPath) {
+      hasIcon = true;
+      process7.stdout.write(`[zapp] generated AppIcon.icns
+`);
+    }
+  }
+  if (config.macos?.iconLayers) {
+    const iconFolder = path9.resolve(root, config.macos.iconLayers);
+    const carPath = await compileIconAsset(iconFolder, resourcesDir);
+    if (carPath) {
+      hasLiquidGlass = true;
+      process7.stdout.write(`[zapp] compiled liquid glass icon \u2192 Assets.car
+`);
+    }
+  }
+  const configPlistPath = path9.join(root, "config", "darwin", "Info.plist");
   let plistContent = "";
-  const plistFile = Bun.file(configPlistPath);
-  if (await plistFile.exists()) {
-    plistContent = await plistFile.text();
-    console.log(`Using Info.plist from ${configPlistPath}`);
+  if (existsSync5(configPlistPath)) {
+    plistContent = await Bun.file(configPlistPath).text();
+    if (hasIcon && !plistContent.includes("CFBundleIconFile")) {
+      plistContent = plistContent.replace("</dict>", `    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundleIconName</key>
+    <string>AppIcon</string>
+</dict>`);
+    }
+    process7.stdout.write(`[zapp] using custom Info.plist
+`);
   } else {
-    console.log(`No Info.plist found at ${configPlistPath}, generating default...`);
+    const minVersion = config.macos?.minimumSystemVersion ?? "13.0";
+    const category = config.macos?.category ?? "";
+    const copyright = config.author ? `Copyright \xA9 ${new Date().getFullYear()} ${config.author}` : "";
+    let extraKeys = "";
+    if (hasIcon || hasLiquidGlass) {
+      extraKeys += `    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundleIconName</key>
+    <string>AppIcon</string>
+`;
+    }
+    if (category) {
+      extraKeys += `    <key>LSApplicationCategoryType</key>
+    <string>${category}</string>
+`;
+    }
+    if (copyright) {
+      extraKeys += `    <key>NSHumanReadableCopyright</key>
+    <string>${copyright}</string>
+`;
+    }
     plistContent = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -9118,10 +9251,10 @@ var runPackage = async ({ root, nativeOut, config }) => {
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>
-    <string>10.13</string>
+    <string>${minVersion}</string>
     <key>NSHighResolutionCapable</key>
     <true/>
-</dict>
+${extraKeys}</dict>
 </plist>`;
   }
   if (!plistContent.includes("<key>CFBundleExecutable</key>")) {
@@ -9129,27 +9262,34 @@ var runPackage = async ({ root, nativeOut, config }) => {
     <key>CFBundleExecutable</key>
     <string>${appName}</string>`);
   }
-  await Bun.write(path8.join(contentsDir, "Info.plist"), plistContent);
+  await Bun.write(path9.join(contentsDir, "Info.plist"), plistContent);
   try {
-    console.log(`Codesigning ${appBundlePath}...`);
     await runCmd("codesign", ["--force", "--deep", "--sign", "-", appBundlePath]);
-  } catch (err) {
-    console.error(`Warning: Failed to codesign ${appBundlePath}:`, err);
+    process7.stdout.write(`[zapp] codesigned (ad-hoc)
+`);
+  } catch {
+    console.warn("[zapp] codesign failed (non-fatal)");
   }
-  console.log(`Successfully packaged to ${appBundlePath}`);
-};
+  process7.stdout.write(`[zapp] packaged \u2192 ${appBundlePath}
+`);
+}
 
 // src/config.ts
-import path9 from "path";
+import path10 from "path";
 function applyDefaults(config) {
   return {
     name: config.name,
     identifier: config.identifier ?? `com.zapp.${config.name}`,
-    version: config.version ?? "1.0.0"
+    version: config.version ?? "1.0.0",
+    icon: config.icon,
+    description: config.description,
+    author: config.author,
+    macos: config.macos,
+    security: config.security
   };
 }
 async function loadConfig(root) {
-  const configPath = path9.join(root, "zapp", "zapp.config.ts");
+  const configPath = path10.join(root, "zapp", "zapp.config.ts");
   const configFile = Bun.file(configPath);
   if (await configFile.exists()) {
     try {
@@ -9165,7 +9305,7 @@ async function loadConfig(root) {
       throw new Error(`Failed to load ${configPath}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
-  const fallbackName = path9.basename(root) || "zapp-app";
+  const fallbackName = path10.basename(root) || "zapp-app";
   return applyDefaults({ name: fallbackName });
 }
 
@@ -9224,7 +9364,7 @@ var cli = yargs_default(hideBin(process8.argv)).scriptName("zapp").usage("zapp <
   default: false,
   describe: "Include backend script"
 }).option("root", commonOptions.root), async (argv) => {
-  const root = path10.resolve(cwd, argv.root);
+  const root = path11.resolve(cwd, argv.root);
   await runInit({
     root,
     name: argv.name,
@@ -9245,11 +9385,11 @@ var cli = yargs_default(hideBin(process8.argv)).scriptName("zapp").usage("zapp <
   describe: "Embed assets in binary (default: false for dev)"
 }), async (argv) => {
   checkPrerequisites();
-  const root = path10.resolve(cwd, argv.root);
-  const frontendDir = path10.resolve(root, argv.frontend);
-  const buildFile = path10.resolve(root, argv.input);
+  const root = path11.resolve(cwd, argv.root);
+  const frontendDir = path11.resolve(root, argv.frontend);
+  const buildFile = path11.resolve(root, argv.input);
   const config = await loadConfig(root);
-  const nativeOut = argv.out ? path10.resolve(root, argv.out) : path10.resolve(root, "bin", process8.platform === "win32" ? `${config.name}.exe` : config.name);
+  const nativeOut = argv.out ? path11.resolve(root, argv.out) : path11.resolve(root, "bin", process8.platform === "win32" ? `${config.name}.exe` : config.name);
   await runDev({
     root,
     frontendDir,
@@ -9276,12 +9416,12 @@ var cli = yargs_default(hideBin(process8.argv)).scriptName("zapp").usage("zapp <
   describe: "Debug build (filesystem assets, debug logs, no optimizations)"
 }), async (argv) => {
   checkPrerequisites();
-  const root = path10.resolve(cwd, argv.root);
-  const frontendDir = path10.resolve(root, argv.frontend);
-  const buildFile = path10.resolve(root, argv.input);
-  const assetDir = path10.resolve(frontendDir, argv["asset-dir"]);
+  const root = path11.resolve(cwd, argv.root);
+  const frontendDir = path11.resolve(root, argv.frontend);
+  const buildFile = path11.resolve(root, argv.input);
+  const assetDir = path11.resolve(frontendDir, argv["asset-dir"]);
   const config = await loadConfig(root);
-  const nativeOut = argv.out ? path10.resolve(root, argv.out) : path10.resolve(root, "bin", process8.platform === "win32" ? `${config.name}.exe` : config.name);
+  const nativeOut = argv.out ? path11.resolve(root, argv.out) : path11.resolve(root, "bin", process8.platform === "win32" ? `${config.name}.exe` : config.name);
   const embedAssets = !argv.debug;
   await runBuild({
     root,
@@ -9296,17 +9436,41 @@ var cli = yargs_default(hideBin(process8.argv)).scriptName("zapp").usage("zapp <
     logLevel: argv["log-level"],
     config
   });
-}).command("package", "Package the binary into a macOS .app bundle", (yargs) => yargs.option("root", commonOptions.root).option("out", commonOptions.out), async (argv) => {
+}).command("package", "Build and package into a platform bundle (.app on macOS)", (yargs) => yargs.option("root", commonOptions.root).option("frontend", commonOptions.frontend).option("input", commonOptions.input).option("out", commonOptions.out).option("brotli", {
+  type: "boolean",
+  default: true,
+  describe: "Brotli-compress embedded assets"
+}).option("skip-build", {
+  type: "boolean",
+  default: false,
+  describe: "Skip the build step (use existing binary)"
+}), async (argv) => {
   checkPrerequisites();
-  const root = path10.resolve(cwd, argv.root);
+  const root = path11.resolve(cwd, argv.root);
+  const frontendDir = path11.resolve(root, argv.frontend);
+  const buildFile = path11.resolve(root, argv.input);
   const config = await loadConfig(root);
-  const nativeOut = argv.out ? path10.resolve(root, argv.out) : path10.resolve(root, "bin", process8.platform === "win32" ? `${config.name}.exe` : config.name);
+  const nativeOut = argv.out ? path11.resolve(root, argv.out) : path11.resolve(root, "bin", process8.platform === "win32" ? `${config.name}.exe` : config.name);
+  if (!argv["skip-build"]) {
+    const assetDir = path11.resolve(frontendDir, "dist");
+    await runBuild({
+      root,
+      frontendDir,
+      buildFile,
+      nativeOut,
+      assetDir,
+      isDebug: false,
+      embedAssets: true,
+      withBrotli: argv.brotli,
+      config
+    });
+  }
   await runPackage({ root, nativeOut, config });
 }).command("generate", "Generate TypeScript bindings from Zen-C services", (yargs) => yargs.option("root", commonOptions.root).option("frontend", commonOptions.frontend).option("out-dir", {
   type: "string",
   describe: "Output directory for generated files"
 }), async (argv) => {
-  const root = path10.resolve(cwd, argv.root);
-  const frontendDir = path10.resolve(root, argv.frontend);
+  const root = path11.resolve(cwd, argv.root);
+  const frontendDir = path11.resolve(root, argv.frontend);
   await runGenerate({ root, frontendDir, outDir: argv["out-dir"] });
 }).alias("h", "help").alias("v", "version").alias("build-file", "input").epilogue("Documentation: https://zapp.dev").parse();

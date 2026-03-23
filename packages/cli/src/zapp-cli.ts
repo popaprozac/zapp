@@ -200,18 +200,47 @@ const cli = yargs(hideBin(process.argv))
   )
   .command(
     "package",
-    "Package the binary into a macOS .app bundle",
+    "Build and package into a platform bundle (.app on macOS)",
     (yargs) =>
       yargs
         .option("root", commonOptions.root)
-        .option("out", commonOptions.out),
+        .option("frontend", commonOptions.frontend)
+        .option("input", commonOptions.input)
+        .option("out", commonOptions.out)
+        .option("brotli", {
+          type: "boolean",
+          default: true,
+          describe: "Brotli-compress embedded assets",
+        })
+        .option("skip-build", {
+          type: "boolean",
+          default: false,
+          describe: "Skip the build step (use existing binary)",
+        }),
     async (argv) => {
       checkPrerequisites();
       const root = path.resolve(cwd, argv.root);
+      const frontendDir = path.resolve(root, argv.frontend);
+      const buildFile = path.resolve(root, argv.input);
       const config = await loadConfig(root);
       const nativeOut = argv.out
         ? path.resolve(root, argv.out)
         : path.resolve(root, "bin", process.platform === "win32" ? `${config.name}.exe` : config.name);
+
+      if (!argv["skip-build"]) {
+        const assetDir = path.resolve(frontendDir, "dist");
+        await runBuild({
+          root,
+          frontendDir,
+          buildFile,
+          nativeOut,
+          assetDir,
+          isDebug: false,
+          embedAssets: true,
+          withBrotli: argv.brotli,
+          config,
+        });
+      }
 
       await runPackage({ root, nativeOut, config });
     }

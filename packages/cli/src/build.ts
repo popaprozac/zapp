@@ -207,6 +207,8 @@ export const runBuild = async ({
     assetDir,
     backendScriptPath,
     logLevel: effectiveLogLevel,
+    csp: config.security?.csp,
+    enableDevTools: isDebug ? true : undefined, // --debug enables dev tools; otherwise inherit from mode
   });
 
   process.stdout.write("[zapp] building native binary\n");

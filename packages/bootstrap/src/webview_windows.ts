@@ -772,6 +772,26 @@ Object.defineProperties(zapp, {
   on: { value: zapp.on, enumerable: true, configurable: false, writable: false },
 });
 Object.freeze(zapp);
+
+// Inject Content Security Policy when DOM is ready
+if (typeof document !== "undefined") {
+  const injectCSP = (): void => {
+    if (!document.head) return;
+    const csp = document.createElement("meta");
+    csp.httpEquiv = "Content-Security-Policy";
+    // Read custom CSP from bootstrap config, or use strict default
+    const cfg = appConfig as Record<string, unknown> | null;
+    const customCSP = cfg?.csp as string | undefined;
+    csp.content = customCSP || "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:;";
+    document.head.insertBefore(csp, document.head.firstChild);
+  };
+  if (document.head) {
+    injectCSP();
+  } else {
+    document.addEventListener("DOMContentLoaded", injectCSP, { once: true });
+  }
+}
+
 ensurePublicZappBinding();
 
 const WINDOW_ID_SYMBOL = Symbol.for("zapp.windowId");

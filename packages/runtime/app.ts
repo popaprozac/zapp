@@ -39,6 +39,7 @@ export interface AppAPI {
   hide(): void;
   show(): void;
   openExternal(url: string): void;
+  setMenu(menu: { items: unknown[] }): void;
 }
 
 export const App: AppAPI = {
@@ -68,5 +69,9 @@ export const App: AppAPI = {
 
   openExternal(url: string): void {
     getBridge()?.appAction?.("openExternal", { url });
+  },
+
+  setMenu(menu: { items: unknown[] }): void {
+    getBridge()?.appAction?.("setMenu", { items: menu.items });
   },
 };

@@ -48,39 +48,24 @@ fn on_window_close(data: WindowEventData*) -> int {
 fn run_app() -> int {
     let config = AppConfig{
         name: "Zapp Playground",
-        applicationShouldTerminateAfterLastWindowClosed: false,
-        webContentInspectable: true,
+        applicationShouldTerminateAfterLastWindowClosed: true,
+        webContentInspectable: -1, // -1 = inherit from build (dev=true, prod=false), 0 = off, 1 = on
         maxWorkers: 50,
-        qjsStackSize: 0, // 0 = default 4MB
+        qjsStackSize: 0,
     };
     let app = App::new(config);
-    
+
     app.service.add("ping", ping_service);
-    
-    let opts = window_options_default("Native Window");
-    opts.width = 800;
-    opts.height = 600;
+
+    // Main window — hidden titlebar with drag region support
+    let opts = window_options_default("Zapp Playground");
+    opts.width = 900;
+    opts.height = 650;
     opts.visible = false;
-    opts.alwaysOnTop = true;
     let win = app.window.create(&opts);
     win.on_ready(on_window_ready);
-    win.on(WindowEvent.FOCUS, on_window_focus);
-    win.on(WindowEvent.BLUR, on_window_blur);
     win.on(WindowEvent.RESIZE, on_window_resize);
-    win.on(WindowEvent.MOVE, on_window_move);
+    win.on(WindowEvent.CLOSE, on_window_close);
 
-    let opts2 = window_options_default("Native Window 2");
-    opts2.width = 800;
-    opts2.height = 600;
-    opts2.x = 100;
-    opts2.y = 100;
-    opts2.visible = false;
-    let win2 = app.window.create(&opts2);
-    win2.on_ready(on_window_ready);
-    win2.on(WindowEvent.FOCUS, on_window_focus);
-    win2.on(WindowEvent.BLUR, on_window_blur);
-    win2.on(WindowEvent.RESIZE, on_window_resize);
-    win2.on(WindowEvent.MOVE, on_window_move);
-    win2.on(WindowEvent.CLOSE, on_window_close);
     return app.run();
 }

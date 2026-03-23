@@ -474,6 +474,13 @@ raw {
         char* rel = zapp_url_to_rel_path(uri);
         free(uri);
 
+        // Block path traversal
+        if (rel && strstr(rel, "..") != NULL) {
+            zapp_send_resource_response(args, 403, "text/plain", "Forbidden", 9, 0, NULL);
+            free(rel);
+            return S_OK;
+        }
+
         char lookupPath[512];
         snprintf(lookupPath, sizeof(lookupPath), "/%s", rel);
 
@@ -1032,6 +1039,241 @@ raw {
             free(wUrl);
         }
         if (url) free(url);
+    }
+
+    // --- Custom Menu Builder ---
+    #define ZAPP_MENU_CMD_CUSTOM_BASE 41000
+    #define ZAPP_MENU_MAX_CUSTOM 256
+
+    static char zapp_menu_id_map[ZAPP_MENU_MAX_CUSTOM][64] = {{0}};
+    static int zapp_menu_custom_count = 0;
+
+    static int zapp_menu_register_id(const char* itemId) {
+        if (!itemId || zapp_menu_custom_count >= ZAPP_MENU_MAX_CUSTOM) return 0;
+        int cmd = ZAPP_MENU_CMD_CUSTOM_BASE + zapp_menu_custom_count;
+        strncpy(zapp_menu_id_map[zapp_menu_custom_count], itemId, 63);
+        zapp_menu_custom_count++;
+        return cmd;
+    }
+
+    static const char* zapp_menu_id_for_cmd(int cmd) {
+        int idx = cmd - ZAPP_MENU_CMD_CUSTOM_BASE;
+        if (idx >= 0 && idx < zapp_menu_custom_count) return zapp_menu_id_map[idx];
+        return NULL;
+    }
+
+    // Called from zapp_handle_menu_command for custom items
+    void zapp_dispatch_custom_menu_click(const char* itemId) {
+        if (!itemId) return;
+        char js[512];
+        snprintf(js, sizeof(js),
+            "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+            "if(b&&b.deliverEvent)b.deliverEvent('menu:%s',{});})();",
+            itemId);
+        zapp_windows_webview_eval_all(js);
+    }
+
+    static void zapp_build_role_menu_win(HMENU menu, const char* role) {
+        if (strcmp(role, "editMenu") == 0) {
+            AppendMenuW(menu, MF_STRING, IDM_EDIT_UNDO,      L"Undo\tCtrl+Z");
+            AppendMenuW(menu, MF_STRING, IDM_EDIT_REDO,      L"Redo\tCtrl+Y");
+            AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+            AppendMenuW(menu, MF_STRING, IDM_EDIT_CUT,       L"Cut\tCtrl+X");
+            AppendMenuW(menu, MF_STRING, IDM_EDIT_COPY,      L"Copy\tCtrl+C");
+            AppendMenuW(menu, MF_STRING, IDM_EDIT_PASTE,     L"Paste\tCtrl+V");
+            AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+            AppendMenuW(menu, MF_STRING, IDM_EDIT_SELECTALL, L"Select All\tCtrl+A");
+        } else if (strcmp(role, "windowMenu") == 0) {
+            AppendMenuW(menu, MF_STRING, IDM_WIN_MINIMIZE, L"Minimize");
+            AppendMenuW(menu, MF_STRING, IDM_WIN_MAXIMIZE, L"Maximize");
+            AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+            AppendMenuW(menu, MF_STRING, IDM_WIN_CLOSE,    L"Close\tAlt+F4");
+        }
+    }
+
+    extern char* zapp_json_get_string(const char* json, const char* key);
+
+    static void zapp_build_menu_items_win(HMENU parent, const char* itemsJson);
+
+    // Parse a JSON array of menu items and build HMENU
+    static void zapp_add_menu_item_win(HMENU menu, const char* itemJson) {
+        if (!itemJson) return;
+        char* role = zapp_json_get_string(itemJson, "role");
+        if (role && role[0]) {
+            char* label = zapp_json_get_string(itemJson, "label");
+            HMENU sub = CreatePopupMenu();
+            zapp_build_role_menu_win(sub, role);
+            wchar_t wLabel[128] = {0};
+            if (label && label[0]) {
+                MultiByteToWideChar(CP_UTF8, 0, label, -1, wLabel, 128);
+            } else {
+                if (strcmp(role, "editMenu") == 0) wcscpy(wLabel, L"Edit");
+                else if (strcmp(role, "windowMenu") == 0) wcscpy(wLabel, L"Window");
+                else MultiByteToWideChar(CP_UTF8, 0, role, -1, wLabel, 128);
+            }
+            AppendMenuW(menu, MF_POPUP, (UINT_PTR)sub, wLabel);
+            if (label) free(label);
+            free(role);
+            return;
+        }
+        if (role) free(role);
+
+        char* type = zapp_json_get_string(itemJson, "type");
+        if (type && strcmp(type, "separator") == 0) {
+            AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+            free(type);
+            return;
+        }
+        if (type) free(type);
+
+        char* label = zapp_json_get_string(itemJson, "label");
+        if (!label || !label[0]) { if (label) free(label); return; }
+
+        // Check for submenu (look for "submenu":[)
+        char* subRaw = NULL;
+        {
+            const char* subKey = "\"submenu\":[";
+            const char* subStart = strstr(itemJson, subKey);
+            if (subStart) {
+                subStart += strlen("\"submenu\":");
+                // Find matching ]
+                int depth = 0;
+                const char* p = subStart;
+                const char* end = NULL;
+                while (*p) {
+                    if (*p == '[') depth++;
+                    else if (*p == ']') { depth--; if (depth == 0) { end = p + 1; break; } }
+                    p++;
+                }
+                if (end) {
+                    size_t len = (size_t)(end - subStart);
+                    subRaw = (char*)malloc(len + 1);
+                    memcpy(subRaw, subStart, len);
+                    subRaw[len] = '\0';
+                }
+            }
+        }
+
+        if (subRaw) {
+            HMENU sub = CreatePopupMenu();
+            zapp_build_menu_items_win(sub, subRaw);
+            free(subRaw);
+            // Build label with accelerator hint
+            char* accel = zapp_json_get_string(itemJson, "accelerator");
+            wchar_t wLabel[256] = {0};
+            if (accel && accel[0]) {
+                char combined[256];
+                snprintf(combined, sizeof(combined), "%s\t%s", label, accel);
+                MultiByteToWideChar(CP_UTF8, 0, combined, -1, wLabel, 256);
+                free(accel);
+            } else {
+                MultiByteToWideChar(CP_UTF8, 0, label, -1, wLabel, 256);
+            }
+            AppendMenuW(menu, MF_POPUP, (UINT_PTR)sub, wLabel);
+            free(label);
+            return;
+        }
+
+        // Regular item
+        char* itemId = zapp_json_get_string(itemJson, "id");
+        char* accel = zapp_json_get_string(itemJson, "accelerator");
+        int cmd = 0;
+        if (itemId && itemId[0]) {
+            cmd = zapp_menu_register_id(itemId);
+        }
+
+        wchar_t wLabel[256] = {0};
+        if (accel && accel[0]) {
+            char combined[256];
+            snprintf(combined, sizeof(combined), "%s\t%s", label, accel);
+            MultiByteToWideChar(CP_UTF8, 0, combined, -1, wLabel, 256);
+        } else {
+            MultiByteToWideChar(CP_UTF8, 0, label, -1, wLabel, 256);
+        }
+
+        UINT flags = MF_STRING;
+        extern int zapp_json_get_bool(const char* json, const char* key, int default_val);
+        if (!zapp_json_get_bool(itemJson, "enabled", 1)) flags |= MF_GRAYED;
+        if (zapp_json_get_bool(itemJson, "checked", 0)) flags |= MF_CHECKED;
+
+        AppendMenuW(menu, flags, cmd, wLabel);
+
+        if (itemId) free(itemId);
+        if (accel) free(accel);
+        free(label);
+    }
+
+    // Parse "[{...},{...}]" array of menu items
+    static void zapp_build_menu_items_win(HMENU parent, const char* arrJson) {
+        if (!arrJson || arrJson[0] != '[') return;
+        const char* p = arrJson + 1;
+        while (*p) {
+            while (*p == ' ' || *p == '\n' || *p == '\r' || *p == '\t' || *p == ',') p++;
+            if (*p == ']' || *p == '\0') break;
+            if (*p == '{') {
+                int depth = 0;
+                const char* start = p;
+                while (*p) {
+                    if (*p == '{') depth++;
+                    else if (*p == '}') { depth--; if (depth == 0) { p++; break; } }
+                    p++;
+                }
+                size_t len = (size_t)(p - start);
+                char* item = (char*)malloc(len + 1);
+                memcpy(item, start, len);
+                item[len] = '\0';
+                zapp_add_menu_item_win(parent, item);
+                free(item);
+            } else {
+                p++;
+            }
+        }
+    }
+
+    void app_set_menu(App* app, char* payload) {
+        (void)app;
+        if (payload == NULL) return;
+        // Reset custom ID registry
+        zapp_menu_custom_count = 0;
+        memset(zapp_menu_id_map, 0, sizeof(zapp_menu_id_map));
+
+        // Find "items":[ in the payload
+        const char* itemsKey = "\"items\":[";
+        const char* itemsStart = strstr((const char*)payload, itemsKey);
+        if (!itemsStart) return;
+        itemsStart += strlen("\"items\":");
+
+        // Find the matching ]
+        int depth = 0;
+        const char* p = itemsStart;
+        const char* end = NULL;
+        while (*p) {
+            if (*p == '[') depth++;
+            else if (*p == ']') { depth--; if (depth == 0) { end = p + 1; break; } }
+            p++;
+        }
+        if (!end) return;
+
+        size_t len = (size_t)(end - itemsStart);
+        char* arrJson = (char*)malloc(len + 1);
+        memcpy(arrJson, itemsStart, len);
+        arrJson[len] = '\0';
+
+        HMENU menuBar = CreateMenu();
+        zapp_build_menu_items_win(menuBar, arrJson);
+        free(arrJson);
+
+        // Apply to all windows
+        extern const wchar_t* ZAPP_WINDOW_CLASS;
+        HWND hwnd = NULL;
+        while ((hwnd = FindWindowExW(NULL, hwnd, ZAPP_WINDOW_CLASS, NULL)) != NULL) {
+            SetMenu(hwnd, menuBar);
+            DrawMenuBar(hwnd);
+        }
+        if (zapp_default_menu) {
+            // Don't destroy old menu — windows might reference it
+        }
+        zapp_default_menu = menuBar;
     }
 
     // --- Sync bridge (moved from app.zc) ---
