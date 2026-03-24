@@ -17,6 +17,7 @@ export const generateBuildConfigZc = async ({
   logLevel,
   csp,
   enableDevTools,
+  allowNavigation,
 }: {
   root: string;
   mode: BuildMode;
@@ -26,6 +27,7 @@ export const generateBuildConfigZc = async ({
   logLevel?: LogLevel;
   csp?: string;
   enableDevTools?: boolean;
+  allowNavigation?: string[];
 }) => {
   const buildDir = path.join(root, ".zapp");
   await mkdir(buildDir, { recursive: true });
@@ -77,6 +79,10 @@ raw {
 
     const char* zapp_build_csp(void) {
         return ${csp ? cString(csp) : '""'};
+    }
+
+    const char* zapp_build_allowed_navigation(void) {
+        return ${allowNavigation && allowNavigation.length > 0 ? cString(JSON.stringify(allowNavigation)) : '""'};
     }
 }
 `;

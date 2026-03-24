@@ -447,6 +447,76 @@ raw {
         }
     }
 
+    // --- Navigation restriction ---
+    extern int zapp_build_is_dev_mode(void);
+    extern const char* zapp_build_initial_url(void);
+    extern const char* zapp_build_allowed_navigation(void);
+
+    static BOOL zapp_is_navigation_allowed(NSURL* url) {
+        if (url == nil) return YES;
+        NSString* scheme = [url scheme];
+        NSString* host = [url host];
+        NSString* urlStr = [url absoluteString];
+
+        // Always allow app scheme
+        if ([scheme isEqualToString:@"zapp"]) return YES;
+        // Always allow about:blank
+        if ([scheme isEqualToString:@"about"]) return YES;
+        // Always allow blob: (used by workers, downloads)
+        if ([scheme isEqualToString:@"blob"]) return YES;
+
+        // In dev mode, allow localhost
+        if (zapp_build_is_dev_mode()) {
+            if (host && ([host isEqualToString:@"localhost"] || [host isEqualToString:@"127.0.0.1"])) {
+                return YES;
+            }
+        }
+
+        // Check user-defined allowlist
+        const char* patternsRaw = zapp_build_allowed_navigation();
+        if (patternsRaw && patternsRaw[0] != '\0') {
+            NSString* patternsStr = [NSString stringWithUTF8String:patternsRaw];
+            NSData* data = [patternsStr dataUsingEncoding:NSUTF8StringEncoding];
+            if (data) {
+                NSArray* patterns = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+                if ([patterns isKindOfClass:[NSArray class]]) {
+                    for (NSString* pattern in patterns) {
+                        if (![pattern isKindOfClass:[NSString class]]) continue;
+                        // Simple glob: "https://example.com/*" → prefix match
+                        if ([pattern hasSuffix:@"*"]) {
+                            NSString* prefix = [pattern substringToIndex:[pattern length] - 1];
+                            if ([urlStr hasPrefix:prefix]) return YES;
+                        } else {
+                            if ([urlStr isEqualToString:pattern]) return YES;
+                        }
+                    }
+                }
+            }
+        }
+
+        return NO;
+    }
+
+    @interface ZappNavigationDelegate : NSObject <WKNavigationDelegate>
+    @end
+
+    @implementation ZappNavigationDelegate
+    - (void)webView:(WKWebView*)webView
+        decidePolicyForNavigationAction:(WKNavigationAction*)navigationAction
+        decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
+        (void)webView;
+        NSURL* url = navigationAction.request.URL;
+        if (zapp_is_navigation_allowed(url)) {
+            decisionHandler(WKNavigationActionPolicyAllow);
+        } else {
+            NSLog(@"[zapp] navigation blocked: %@", [url absoluteString]);
+            decisionHandler(WKNavigationActionPolicyCancel);
+        }
+    }
+    @end
+
+    static ZappNavigationDelegate* zapp_shared_nav_delegate = nil;
+
     // Custom WKWebView subclass for drag region support
     @interface ZappWebView : WKWebView
     @property (nonatomic, assign) BOOL inDragRegion;
@@ -590,6 +660,11 @@ raw {
         ZappWebView* webview = [[ZappWebView alloc] initWithFrame:bounds configuration:config];
         [webview setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
         [webview setInspectable:inspectable ? YES : NO];
+        // Set navigation delegate to restrict URLs
+        if (zapp_shared_nav_delegate == nil) {
+            zapp_shared_nav_delegate = [[ZappNavigationDelegate alloc] init];
+        }
+        [webview setNavigationDelegate:zapp_shared_nav_delegate];
         NSURL* url = zapp_initial_url();
         [webview loadRequest:[NSURLRequest requestWithURL:url]];
         

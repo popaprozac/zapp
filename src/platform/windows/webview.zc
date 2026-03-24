@@ -603,6 +603,118 @@ raw {
             }
         }
 
+        // Register NavigationStarting handler (URL restriction)
+        {
+            extern int zapp_build_is_dev_mode(void);
+            extern const char* zapp_build_allowed_navigation(void);
+
+            // Simple URL check — allows app URLs, localhost in dev, and user patterns
+            static int zapp_is_nav_allowed(const wchar_t* uri) {
+                if (!uri) return 1;
+                char* url = zapp_wide_to_utf8(uri);
+                if (!url) return 1;
+
+                // Always allow app scheme
+                if (strncmp(url, "https://app.localhost", 20) == 0 ||
+                    strncmp(url, "about:", 6) == 0 ||
+                    strncmp(url, "blob:", 5) == 0) {
+                    free(url);
+                    return 1;
+                }
+
+                // Dev mode: allow localhost
+                if (zapp_build_is_dev_mode()) {
+                    if (strncmp(url, "http://localhost", 16) == 0 ||
+                        strncmp(url, "http://127.0.0.1", 16) == 0 ||
+                        strncmp(url, "https://localhost", 17) == 0) {
+                        free(url);
+                        return 1;
+                    }
+                }
+
+                // Check user allowlist
+                const char* patternsRaw = zapp_build_allowed_navigation();
+                if (patternsRaw && patternsRaw[0] == '[') {
+                    // Simple JSON array parse — look for string patterns
+                    const char* p = patternsRaw + 1;
+                    while (*p) {
+                        while (*p == ' ' || *p == ',') p++;
+                        if (*p == ']') break;
+                        if (*p == '"') {
+                            p++;
+                            const char* start = p;
+                            while (*p && *p != '"') p++;
+                            size_t plen = (size_t)(p - start);
+                            if (*p == '"') p++;
+                            // Check if pattern matches (simple prefix glob)
+                            if (plen > 0 && start[plen - 1] == '*') {
+                                if (strncmp(url, start, plen - 1) == 0) {
+                                    free(url);
+                                    return 1;
+                                }
+                            } else if (strlen(url) == plen && strncmp(url, start, plen) == 0) {
+                                free(url);
+                                return 1;
+                            }
+                        } else {
+                            p++;
+                        }
+                    }
+                }
+
+                free(url);
+                return 0;
+            }
+
+            typedef struct {
+                ICoreWebView2NavigationStartingEventHandlerVtbl* lpVtbl;
+                ULONG refCount;
+            } ZappNavStartHandler;
+
+            static HRESULT STDMETHODCALLTYPE zns_QI(ICoreWebView2NavigationStartingEventHandler* This, REFIID riid, void** ppv) {
+                (void)riid; *ppv = This; This->lpVtbl->AddRef(This); return S_OK;
+            }
+            static ULONG STDMETHODCALLTYPE zns_AddRef(ICoreWebView2NavigationStartingEventHandler* This) {
+                return ++((ZappNavStartHandler*)This)->refCount;
+            }
+            static ULONG STDMETHODCALLTYPE zns_Release(ICoreWebView2NavigationStartingEventHandler* This) {
+                ZappNavStartHandler* self = (ZappNavStartHandler*)This;
+                if (--self->refCount == 0) { free(self); return 0; }
+                return self->refCount;
+            }
+            static HRESULT STDMETHODCALLTYPE zns_Invoke(
+                ICoreWebView2NavigationStartingEventHandler* This,
+                ICoreWebView2* sender,
+                ICoreWebView2NavigationStartingEventArgs* args
+            ) {
+                (void)This; (void)sender;
+                wchar_t* uriW = NULL;
+                ICoreWebView2NavigationStartingEventArgs_get_Uri(args, &uriW);
+                if (uriW) {
+                    if (!zapp_is_nav_allowed(uriW)) {
+                        ICoreWebView2NavigationStartingEventArgs_put_Cancel(args, TRUE);
+                        char* uriUtf8 = zapp_wide_to_utf8(uriW);
+                        if (uriUtf8) {
+                            fprintf(stderr, "[zapp] navigation blocked: %s\n", uriUtf8);
+                            free(uriUtf8);
+                        }
+                    }
+                    CoTaskMemFree(uriW);
+                }
+                return S_OK;
+            }
+
+            static ICoreWebView2NavigationStartingEventHandlerVtbl zns_vtbl = {
+                zns_QI, zns_AddRef, zns_Release, zns_Invoke
+            };
+
+            ZappNavStartHandler* nsHandler = (ZappNavStartHandler*)calloc(1, sizeof(ZappNavStartHandler));
+            nsHandler->lpVtbl = &zns_vtbl;
+            nsHandler->refCount = 1;
+            EventRegistrationToken nsToken;
+            ICoreWebView2_add_NavigationStarting(webview, (ICoreWebView2NavigationStartingEventHandler*)nsHandler, &nsToken);
+        }
+
         // Register NavigationCompleted handler (IsVisible toggle workaround)
         ZappNavHandler* navHandler = (ZappNavHandler*)calloc(1, sizeof(ZappNavHandler));
         navHandler->lpVtbl = &znh_vtbl;

@@ -8235,7 +8235,8 @@ var generateBuildConfigZc = async ({
   backendScriptPath,
   logLevel,
   csp,
-  enableDevTools
+  enableDevTools,
+  allowNavigation
 }) => {
   const buildDir = path2.join(root, ".zapp");
   await mkdir2(buildDir, { recursive: true });
@@ -8283,6 +8284,10 @@ raw {
 
     const char* zapp_build_csp(void) {
         return ${csp ? cString(csp) : '""'};
+    }
+
+    const char* zapp_build_allowed_navigation(void) {
+        return ${allowNavigation && allowNavigation.length > 0 ? cString(JSON.stringify(allowNavigation)) : '""'};
     }
 }
 `;
@@ -8714,7 +8719,8 @@ var runBuild = async ({
     backendScriptPath,
     logLevel: effectiveLogLevel,
     csp: config.security?.csp,
-    enableDevTools: isDebug ? true : undefined
+    enableDevTools: isDebug ? true : undefined,
+    allowNavigation: config.security?.allowNavigation
   });
   process5.stdout.write(`[zapp] building native binary
 `);
