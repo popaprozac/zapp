@@ -39,8 +39,8 @@ measure_startup() {
         start=$(python3 -c "import time; print(int(time.monotonic_ns()))")
         "$bin" &
         local pid=$!
-        # Give the app time to launch and render its first frame
-        sleep 0.5
+        # Wait for window to appear (poll for process to have a window)
+        sleep 0.1
         end=$(python3 -c "import time; print(int(time.monotonic_ns()))")
         kill "$pid" 2>/dev/null || true
         wait "$pid" 2>/dev/null || true

@@ -1,6 +1,6 @@
 {
   "v": 1,
-  "generatedAt": "2026-03-23T00:36:41.072Z",
+  "generatedAt": "2026-03-25T01:57:23.787Z",
   "assets": [
     {
       "file": "index.html",
@@ -11,11 +11,11 @@
       }
     },
     {
-      "file": "assets/index-DMhcemXI.js",
-      "size": 5520,
+      "file": "assets/index-CIl3Zjwd.js",
+      "size": 5610,
       "brotli": {
-        "file": "assets/index-DMhcemXI.js.br",
-        "size": 2004
+        "file": "assets/index-CIl3Zjwd.js.br",
+        "size": 2044
       }
     }
   ],

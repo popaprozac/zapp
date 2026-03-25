@@ -5,11 +5,7 @@ fn greet_service(app: App*, args: string) -> string {
 }
 
 fn on_ready(id: int, handle: void*) -> void {
-    let _id = id; let _h = handle;
-    let app = (App*)app_get_active();
-    if app != NULL {
-        app.window.get(id).show();
-    }
+    println "[native] window ready!";
 }
 
 fn run_app() -> int {
@@ -26,7 +22,6 @@ fn run_app() -> int {
     let opts = window_options_default("Hello World");
     opts.width = 600;
     opts.height = 400;
-    opts.visible = false;
     opts.webContentInspectable = 1;
     let win = app.window.create(&opts);
     win.on_ready(on_ready);

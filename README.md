@@ -1,6 +1,6 @@
 <div align="center">
   <h1>Zapp</h1>
-  <h3>Desktop apps. 173 KB.</h3>
+  <h3>Desktop apps. 189 KB.</h3>
   <p>
     <img src="https://img.shields.io/badge/macOS-supported-brightgreen" alt="macOS">
     <img src="https://img.shields.io/badge/Windows-supported-brightgreen" alt="Windows">
@@ -19,8 +19,8 @@ Real numbers. Same hello-world app (1 window, 1 service call) on each framework.
 
 | | Zapp | Tauri v2 | Wails v3 | Electron |
 |---|---|---|---|---|
-| **Binary** | **173 KB** | 8.2 MB | 7.5 MB | 263 MB |
-| **Memory** | **25 MB** | 27 MB | 31 MB | 528 MB |
+| **Binary** | **189 KB** | 8.2 MB | 7.5 MB | 263 MB |
+| **Memory** | **24 MB** | 27 MB | 31 MB | 528 MB |
 | **Bridge** | **0.085 ms** | ~0.1 ms | ~0.2 ms | ~0.3 ms |
 
 <sub>macOS ARM64, M4 Max. See <a href="benchmarks/RESULTS.md">full results</a> including Windows.</sub>

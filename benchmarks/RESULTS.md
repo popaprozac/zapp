@@ -6,11 +6,11 @@
 
 ## Methodology
 - **Binary size:** `stat -f%z` (macOS) or `stat -c%s` (Windows) on the release binary. For Zapp: `--brotli` embedded assets. For Tauri: `--release`. For Wails: `wails3 build`. Electrobun measured as full .app bundle (includes bundled Bun runtime).
-- **Startup:** Wall clock from process launch to `kill` after a fixed sleep (500ms). Note: this method has a floor at the sleep duration. On macOS, all WebKit-based frameworks show similar startup (~170ms). On Windows, WebView2 (Chromium) initialization dominates (~500ms).
+- **Startup:** Wall clock from process launch to `kill` after a 100ms sleep. On macOS, all WebKit-based frameworks show similar startup (~122-127ms) — the bottleneck is OS WebView initialization. On Windows, WebView2 initialization dominates (~500ms).
 - **Memory (macOS):** `footprint <pid>` after 2s idle. Measures actual process-owned memory (dirty + compressed), excluding shared system libraries.
 - **Memory (Windows):** `Get-Process.WorkingSet64` and `PrivateMemorySize64` after 2s idle via PowerShell. Working Set includes shared pages; Private Memory is framework-owned.
 
-## 2026-03-22 — Hello World (macOS ARM64)
+## 2026-03-24 — Hello World (macOS ARM64)
 
 **App:** 1 window (600x400), text input + button, 1 backend service call.
 
@@ -18,35 +18,35 @@
 
 | Framework | Binary Size | vs Zapp |
 |-----------|------------|---------|
-| **Zapp** | **173 KB** | — |
-| Wails v3 | 7.5 MB | 44x larger |
-| Tauri v2 | 8.2 MB | 48x larger |
-| Electrobun | 69.2 MB (.app bundle) | 410x larger |
-| Electron | 263.2 MB (.app bundle) | 1,554x larger |
+| **Zapp** | **189 KB** | — |
+| Wails v3 | 7.5 MB | 40x larger |
+| Tauri v2 | 8.2 MB | 44x larger |
+| Electrobun | 69.2 MB (.app bundle) | 375x larger |
+| Electron | 263.2 MB (.app bundle) | 1,425x larger |
 
 ### Memory (footprint after 2s idle, single window)
 
 | Framework | Footprint | vs Zapp |
 |-----------|----------|---------|
-| **Zapp** | **26 MB** | — |
-| Tauri v2 | 27 MB | +1 MB |
-| Wails v3 | 31 MB | +5 MB |
-| Electron | 22 MB (main footprint) / 528 MB RSS (all 7+ processes) | 20x total RSS |
-| Electrobun | 96 MB (Bun child process) | +70 MB |
+| **Zapp** | **24 MB** | — |
+| Tauri v2 | 27 MB | +3 MB |
+| Wails v3 | 31 MB | +7 MB |
+| Electron | 22 MB (main footprint) / 528 MB RSS (all 7+ processes) | 22x total RSS |
+| Electrobun | 96 MB (Bun child process) | +72 MB |
 
-Note: Electron spawns multiple helper processes (GPU, renderer, utility). 270 MB is total RSS across all. Electrobun's launcher is tiny but spawns a Bun runtime child at 96 MB.
+Note: Electron spawns multiple helper processes (GPU, renderer, utility). 528 MB is total RSS across all. Electrobun's launcher is tiny but spawns a Bun runtime child at 96 MB.
 
-### Startup
+### Startup (10 runs, 100ms measurement floor, median)
 
-All WebKit-based frameworks (Zapp, Tauri, Wails) show similar startup times on macOS ARM64 (~170-180ms with 150ms measurement floor). The bottleneck is OS WebView initialization, not framework code. A more precise timing methodology is needed to differentiate.
+All WebKit-based frameworks (Zapp, Tauri, Wails) show similar startup times on macOS ARM64 (~122-127ms). The bottleneck is OS WebView initialization, not framework code. The 100ms measurement floor means real process startup is ~22-27ms.
 
-| Framework | Startup (wall clock) | Notes |
-|-----------|---------------------|-------|
-| Zapp | ~176 ms | Measurement floor at 150ms |
-| Tauri v2 | ~172 ms | Same measurement floor |
-| Wails v3 | ~176 ms | Same measurement floor |
-| Electrobun | ~529 ms | Launcher + child Bun process |
-| Electron | ~831 ms | Includes Chromium startup (800ms sleep floor) |
+| Framework | Startup (median) | Min | Max |
+|-----------|-----------------|-----|-----|
+| Tauri v2 | 123 ms | 122 ms | 126 ms |
+| **Zapp** | **124 ms** | 122 ms | 126 ms |
+| Wails v3 | 127 ms | 122 ms | 132 ms |
+| Electrobun | ~529 ms | — | — |
+| Electron | ~831 ms | — | — |
 
 ### Bridge Performance (JS → Native → JS)
 
@@ -78,9 +78,9 @@ Zapp's bridge is in the same tier as Tauri and Electrobun — the fastest in the
 
 ## Key Takeaways
 
-1. **Binary size is Zapp's standout advantage.** 173 KB vs 7.5+ MB — this is 44-1554x smaller than every competitor. The binary includes all native code, WebView bootstrap, and Brotli-compressed frontend assets.
+1. **Binary size is Zapp's standout advantage.** 189 KB vs 7.5+ MB — this is 40-1425x smaller than every competitor. The binary includes all native code, WebView bootstrap, and Brotli-compressed frontend assets.
 
-2. **Memory is competitive.** 25 MB footprint is the lowest measured, neck-and-neck with Tauri (26 MB). Both use the system WebView (WKWebView on macOS), so the floor is set by WebKit.
+2. **Memory is competitive.** 24 MB footprint is the lowest measured, beating Tauri (27 MB). Both use the system WebView (WKWebView on macOS), so the floor is set by WebKit.
 
 3. **Startup is WebView-bound.** On macOS, all WebKit-based frameworks hit the same WKWebView initialization cost. Differentiating here requires either pre-warming the WebView or using a lighter rendering path.
 
