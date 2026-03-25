@@ -75,6 +75,13 @@ async function packageMacOS({ root, nativeOut, config }: { root: string; nativeO
 
   if (existsSync(configPlistPath)) {
     plistContent = await Bun.file(configPlistPath).text();
+    // Inject deep link URL scheme if configured
+    if (config.deepLink?.scheme && !plistContent.includes("CFBundleURLTypes")) {
+      plistContent = plistContent.replace(
+        "</dict>",
+        `    <key>CFBundleURLTypes</key>\n    <array>\n        <dict>\n            <key>CFBundleURLName</key>\n            <string>${config.identifier}</string>\n            <key>CFBundleURLSchemes</key>\n            <array>\n                <string>${config.deepLink.scheme}</string>\n            </array>\n        </dict>\n    </array>\n</dict>`
+      );
+    }
     // Inject icon keys if icon was generated and plist doesn't have them
     if (hasIcon && !plistContent.includes("CFBundleIconFile")) {
       plistContent = plistContent.replace(
@@ -102,6 +109,19 @@ async function packageMacOS({ root, nativeOut, config }: { root: string; nativeO
     if (copyright) {
       extraKeys += `    <key>NSHumanReadableCopyright</key>
     <string>${copyright}</string>\n`;
+    }
+    if (config.deepLink?.scheme) {
+      extraKeys += `    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>${config.identifier}</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>${config.deepLink.scheme}</string>
+            </array>
+        </dict>
+    </array>\n`;
     }
 
     plistContent = `<?xml version="1.0" encoding="UTF-8"?>

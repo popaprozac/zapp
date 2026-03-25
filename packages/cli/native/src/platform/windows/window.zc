@@ -597,6 +597,37 @@ raw {
         HWND hwnd = zapp_win_lookup(windowId);
         if (!hwnd || !IsWindow(hwnd)) { free(windowId); return; }
 
+        if (strcmp(action, "showContextMenu") == 0) {
+            const char* itemsKey = "\"items\":[";
+            const char* itemsStart = strstr(json, itemsKey);
+            if (itemsStart) {
+                itemsStart += strlen("\"items\":");
+                int depth = 0;
+                const char* p2 = itemsStart;
+                const char* end2 = NULL;
+                while (*p2) {
+                    if (*p2 == '[') depth++;
+                    else if (*p2 == ']') { depth--; if (depth == 0) { end2 = p2 + 1; break; } }
+                    p2++;
+                }
+                if (end2) {
+                    size_t len = (size_t)(end2 - itemsStart);
+                    char* arrJson = (char*)malloc(len + 1);
+                    memcpy(arrJson, itemsStart, len);
+                    arrJson[len] = '\0';
+                    HMENU popup = CreatePopupMenu();
+                    zapp_build_menu_items_win(popup, arrJson);
+                    free(arrJson);
+                    POINT pt;
+                    GetCursorPos(&pt);
+                    TrackPopupMenu(popup, TPM_LEFTALIGN | TPM_TOPALIGN, pt.x, pt.y, 0, hwnd, NULL);
+                    DestroyMenu(popup);
+                }
+            }
+            free(windowId);
+            return;
+        }
+
         if (strcmp(action, "setCloseGuard") == 0) {
             extern int zapp_json_get_bool(const char* json, const char* key, int default_val);
             int guard = zapp_json_get_bool(json, "guard", 0);

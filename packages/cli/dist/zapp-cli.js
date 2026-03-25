@@ -9209,6 +9209,20 @@ async function packageMacOS({ root, nativeOut, config }) {
   let plistContent = "";
   if (existsSync5(configPlistPath)) {
     plistContent = await Bun.file(configPlistPath).text();
+    if (config.deepLink?.scheme && !plistContent.includes("CFBundleURLTypes")) {
+      plistContent = plistContent.replace("</dict>", `    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>${config.identifier}</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>${config.deepLink.scheme}</string>
+            </array>
+        </dict>
+    </array>
+</dict>`);
+    }
     if (hasIcon && !plistContent.includes("CFBundleIconFile")) {
       plistContent = plistContent.replace("</dict>", `    <key>CFBundleIconFile</key>
     <string>AppIcon</string>
@@ -9238,6 +9252,20 @@ async function packageMacOS({ root, nativeOut, config }) {
     if (copyright) {
       extraKeys += `    <key>NSHumanReadableCopyright</key>
     <string>${copyright}</string>
+`;
+    }
+    if (config.deepLink?.scheme) {
+      extraKeys += `    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>${config.identifier}</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>${config.deepLink.scheme}</string>
+            </array>
+        </dict>
+    </array>
 `;
     }
     plistContent = `<?xml version="1.0" encoding="UTF-8"?>
@@ -9291,7 +9319,8 @@ function applyDefaults(config) {
     description: config.description,
     author: config.author,
     macos: config.macos,
-    security: config.security
+    security: config.security,
+    deepLink: config.deepLink
   };
 }
 async function loadConfig(root) {

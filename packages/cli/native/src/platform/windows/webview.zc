@@ -283,20 +283,41 @@ raw {
         if (--self->refCount == 0) { free(self); return 0; }
         return self->refCount;
     }
+    wchar_t* zapp_pending_deep_link = NULL;
+
     static HRESULT STDMETHODCALLTYPE znh_Invoke(
         ICoreWebView2NavigationCompletedEventHandler* This,
         ICoreWebView2* sender,
         ICoreWebView2NavigationCompletedEventArgs* args
     ) {
-        (void)sender; (void)args;
+        (void)args;
         ZappNavHandler* self = (ZappNavHandler*)This;
         if (!self->firstNavDone) {
             self->firstNavDone = TRUE;
             // Workaround: toggle visibility to force WebView2 to composite
-            // https://github.com/MicrosoftEdge/WebView2Feedback/issues/1077
             ICoreWebView2Controller_put_IsVisible(self->controller, FALSE);
             ICoreWebView2Controller_put_IsVisible(self->controller, TRUE);
             ICoreWebView2Controller_MoveFocus(self->controller, COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+
+            // Dispatch pending deep link URL if app was launched with one
+            if (zapp_pending_deep_link) {
+                char* urlUtf8 = zapp_wide_to_utf8(zapp_pending_deep_link);
+                if (urlUtf8) {
+                    char* escaped = zapp_escape_js_string(urlUtf8);
+                    size_t jsLen = strlen(escaped) + 256;
+                    char* js = (char*)malloc(jsLen);
+                    snprintf(js, jsLen,
+                        "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+                        "if(b&&b.deliverEvent)b.deliverEvent('app:open-url',{url:'%s'});})();",
+                        escaped);
+                    ICoreWebView2_ExecuteScript(sender, zapp_utf8_to_wide(js), NULL);
+                    free(js);
+                    free(escaped);
+                    free(urlUtf8);
+                }
+                free(zapp_pending_deep_link);
+                zapp_pending_deep_link = NULL;
+            }
         }
         return S_OK;
     }
@@ -474,6 +495,13 @@ raw {
         char* rel = zapp_url_to_rel_path(uri);
         free(uri);
 
+        // Block path traversal
+        if (rel && strstr(rel, "..") != NULL) {
+            zapp_send_resource_response(args, 403, "text/plain", "Forbidden", 9, 0, NULL);
+            free(rel);
+            return S_OK;
+        }
+
         char lookupPath[512];
         snprintf(lookupPath, sizeof(lookupPath), "/%s", rel);
 
@@ -594,6 +622,164 @@ raw {
                 ICoreWebView2Controller2_put_DefaultBackgroundColor(ctrl2, transparent);
                 ICoreWebView2Controller2_Release(ctrl2);
             }
+        }
+
+        // Register NavigationStarting handler (URL restriction)
+        {
+            extern int zapp_build_is_dev_mode(void);
+            extern const char* zapp_build_allowed_navigation(void);
+
+            // Simple URL check — allows app URLs, localhost in dev, and user patterns
+            static int zapp_is_nav_allowed(const wchar_t* uri) {
+                if (!uri) return 1;
+                char* url = zapp_wide_to_utf8(uri);
+                if (!url) return 1;
+
+                // Always allow app scheme
+                if (strncmp(url, "https://app.localhost", 20) == 0 ||
+                    strncmp(url, "about:", 6) == 0 ||
+                    strncmp(url, "blob:", 5) == 0) {
+                    free(url);
+                    return 1;
+                }
+
+                // Dev mode: allow localhost
+                if (zapp_build_is_dev_mode()) {
+                    if (strncmp(url, "http://localhost", 16) == 0 ||
+                        strncmp(url, "http://127.0.0.1", 16) == 0 ||
+                        strncmp(url, "https://localhost", 17) == 0) {
+                        free(url);
+                        return 1;
+                    }
+                }
+
+                // Check user allowlist
+                const char* patternsRaw = zapp_build_allowed_navigation();
+                if (patternsRaw && patternsRaw[0] == '[') {
+                    // Simple JSON array parse — look for string patterns
+                    const char* p = patternsRaw + 1;
+                    while (*p) {
+                        while (*p == ' ' || *p == ',') p++;
+                        if (*p == ']') break;
+                        if (*p == '"') {
+                            p++;
+                            const char* start = p;
+                            while (*p && *p != '"') p++;
+                            size_t plen = (size_t)(p - start);
+                            if (*p == '"') p++;
+                            // Check if pattern matches (simple prefix glob)
+                            if (plen > 0 && start[plen - 1] == '*') {
+                                if (strncmp(url, start, plen - 1) == 0) {
+                                    free(url);
+                                    return 1;
+                                }
+                            } else if (strlen(url) == plen && strncmp(url, start, plen) == 0) {
+                                free(url);
+                                return 1;
+                            }
+                        } else {
+                            p++;
+                        }
+                    }
+                }
+
+                free(url);
+                return 0;
+            }
+
+            typedef struct {
+                ICoreWebView2NavigationStartingEventHandlerVtbl* lpVtbl;
+                ULONG refCount;
+            } ZappNavStartHandler;
+
+            static HRESULT STDMETHODCALLTYPE zns_QI(ICoreWebView2NavigationStartingEventHandler* This, REFIID riid, void** ppv) {
+                (void)riid; *ppv = This; This->lpVtbl->AddRef(This); return S_OK;
+            }
+            static ULONG STDMETHODCALLTYPE zns_AddRef(ICoreWebView2NavigationStartingEventHandler* This) {
+                return ++((ZappNavStartHandler*)This)->refCount;
+            }
+            static ULONG STDMETHODCALLTYPE zns_Release(ICoreWebView2NavigationStartingEventHandler* This) {
+                ZappNavStartHandler* self = (ZappNavStartHandler*)This;
+                if (--self->refCount == 0) { free(self); return 0; }
+                return self->refCount;
+            }
+            static HRESULT STDMETHODCALLTYPE zns_Invoke(
+                ICoreWebView2NavigationStartingEventHandler* This,
+                ICoreWebView2* sender,
+                ICoreWebView2NavigationStartingEventArgs* args
+            ) {
+                (void)This; (void)sender;
+                wchar_t* uriW = NULL;
+                ICoreWebView2NavigationStartingEventArgs_get_Uri(args, &uriW);
+                if (uriW) {
+                    if (!zapp_is_nav_allowed(uriW)) {
+                        ICoreWebView2NavigationStartingEventArgs_put_Cancel(args, TRUE);
+                        // If user-initiated, open in system browser
+                        BOOL isUserInitiated = FALSE;
+                        ICoreWebView2NavigationStartingEventArgs_get_IsUserInitiated(args, &isUserInitiated);
+                        if (isUserInitiated) {
+                            ShellExecuteW(NULL, L"open", uriW, NULL, NULL, SW_SHOWNORMAL);
+                        }
+                    }
+                    CoTaskMemFree(uriW);
+                }
+                return S_OK;
+            }
+
+            static ICoreWebView2NavigationStartingEventHandlerVtbl zns_vtbl = {
+                zns_QI, zns_AddRef, zns_Release, zns_Invoke
+            };
+
+            ZappNavStartHandler* nsHandler = (ZappNavStartHandler*)calloc(1, sizeof(ZappNavStartHandler));
+            nsHandler->lpVtbl = &zns_vtbl;
+            nsHandler->refCount = 1;
+            EventRegistrationToken nsToken;
+            ICoreWebView2_add_NavigationStarting(webview, (ICoreWebView2NavigationStartingEventHandler*)nsHandler, &nsToken);
+        }
+
+        // Handle target="_blank" — open in system browser instead of new webview window
+        {
+            typedef struct {
+                ICoreWebView2NewWindowRequestedEventHandlerVtbl* lpVtbl;
+                ULONG refCount;
+            } ZappNewWindowHandler;
+
+            static HRESULT STDMETHODCALLTYPE znw_QI(ICoreWebView2NewWindowRequestedEventHandler* This, REFIID riid, void** ppv) {
+                (void)riid; *ppv = This; This->lpVtbl->AddRef(This); return S_OK;
+            }
+            static ULONG STDMETHODCALLTYPE znw_AddRef(ICoreWebView2NewWindowRequestedEventHandler* This) {
+                return ++((ZappNewWindowHandler*)This)->refCount;
+            }
+            static ULONG STDMETHODCALLTYPE znw_Release(ICoreWebView2NewWindowRequestedEventHandler* This) {
+                ZappNewWindowHandler* self = (ZappNewWindowHandler*)This;
+                if (--self->refCount == 0) { free(self); return 0; }
+                return self->refCount;
+            }
+            static HRESULT STDMETHODCALLTYPE znw_Invoke(
+                ICoreWebView2NewWindowRequestedEventHandler* This,
+                ICoreWebView2* sender,
+                ICoreWebView2NewWindowRequestedEventArgs* args
+            ) {
+                (void)This; (void)sender;
+                wchar_t* uriW = NULL;
+                ICoreWebView2NewWindowRequestedEventArgs_get_Uri(args, &uriW);
+                if (uriW) {
+                    ShellExecuteW(NULL, L"open", uriW, NULL, NULL, SW_SHOWNORMAL);
+                    CoTaskMemFree(uriW);
+                }
+                ICoreWebView2NewWindowRequestedEventArgs_put_Handled(args, TRUE);
+                return S_OK;
+            }
+
+            static ICoreWebView2NewWindowRequestedEventHandlerVtbl znw_vtbl = {
+                znw_QI, znw_AddRef, znw_Release, znw_Invoke
+            };
+
+            ZappNewWindowHandler* nwHandler = (ZappNewWindowHandler*)calloc(1, sizeof(ZappNewWindowHandler));
+            nwHandler->lpVtbl = &znw_vtbl;
+            nwHandler->refCount = 1;
+            EventRegistrationToken nwToken;
+            ICoreWebView2_add_NewWindowRequested(webview, (ICoreWebView2NewWindowRequestedEventHandler*)nwHandler, &nwToken);
         }
 
         // Register NavigationCompleted handler (IsVisible toggle workaround)
@@ -1032,6 +1218,262 @@ raw {
             free(wUrl);
         }
         if (url) free(url);
+    }
+
+    // --- Custom Menu Builder ---
+    #define ZAPP_MENU_CMD_CUSTOM_BASE 41000
+    #define ZAPP_MENU_MAX_CUSTOM 256
+
+    static char zapp_menu_id_map[ZAPP_MENU_MAX_CUSTOM][64] = {{0}};
+    static int zapp_menu_custom_count = 0;
+
+    static int zapp_menu_register_id(const char* itemId) {
+        if (!itemId || zapp_menu_custom_count >= ZAPP_MENU_MAX_CUSTOM) return 0;
+        int cmd = ZAPP_MENU_CMD_CUSTOM_BASE + zapp_menu_custom_count;
+        strncpy(zapp_menu_id_map[zapp_menu_custom_count], itemId, 63);
+        zapp_menu_custom_count++;
+        return cmd;
+    }
+
+    static const char* zapp_menu_id_for_cmd(int cmd) {
+        int idx = cmd - ZAPP_MENU_CMD_CUSTOM_BASE;
+        if (idx >= 0 && idx < zapp_menu_custom_count) return zapp_menu_id_map[idx];
+        return NULL;
+    }
+
+    // Called from zapp_handle_menu_command for custom items
+    void zapp_dispatch_custom_menu_click(const char* itemId) {
+        if (!itemId) return;
+        char js[512];
+        snprintf(js, sizeof(js),
+            "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+            "if(b&&b.deliverEvent)b.deliverEvent('menu:%s',{});})();",
+            itemId);
+        zapp_windows_webview_eval_all(js);
+    }
+
+    static void zapp_build_role_menu_win(HMENU menu, const char* role) {
+        if (strcmp(role, "editMenu") == 0) {
+            AppendMenuW(menu, MF_STRING, IDM_EDIT_UNDO,      L"Undo\tCtrl+Z");
+            AppendMenuW(menu, MF_STRING, IDM_EDIT_REDO,      L"Redo\tCtrl+Y");
+            AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+            AppendMenuW(menu, MF_STRING, IDM_EDIT_CUT,       L"Cut\tCtrl+X");
+            AppendMenuW(menu, MF_STRING, IDM_EDIT_COPY,      L"Copy\tCtrl+C");
+            AppendMenuW(menu, MF_STRING, IDM_EDIT_PASTE,     L"Paste\tCtrl+V");
+            AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+            AppendMenuW(menu, MF_STRING, IDM_EDIT_SELECTALL, L"Select All\tCtrl+A");
+        } else if (strcmp(role, "windowMenu") == 0) {
+            AppendMenuW(menu, MF_STRING, IDM_WIN_MINIMIZE, L"Minimize");
+            AppendMenuW(menu, MF_STRING, IDM_WIN_MAXIMIZE, L"Maximize");
+            AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+            AppendMenuW(menu, MF_STRING, IDM_WIN_CLOSE,    L"Close\tAlt+F4");
+        }
+    }
+
+    extern char* zapp_json_get_string(const char* json, const char* key);
+
+    static void zapp_build_menu_items_win(HMENU parent, const char* itemsJson);
+
+    // Parse a JSON array of menu items and build HMENU
+    static void zapp_add_menu_item_win(HMENU menu, const char* itemJson) {
+        if (!itemJson) return;
+        char* role = zapp_json_get_string(itemJson, "role");
+        if (role && role[0]) {
+            // Item-level roles: native edit commands
+            if (strcmp(role, "copy") == 0) {
+                AppendMenuW(menu, MF_STRING, IDM_EDIT_COPY, L"Copy");
+                free(role); return;
+            } else if (strcmp(role, "cut") == 0) {
+                AppendMenuW(menu, MF_STRING, IDM_EDIT_CUT, L"Cut");
+                free(role); return;
+            } else if (strcmp(role, "paste") == 0) {
+                AppendMenuW(menu, MF_STRING, IDM_EDIT_PASTE, L"Paste");
+                free(role); return;
+            } else if (strcmp(role, "selectAll") == 0) {
+                AppendMenuW(menu, MF_STRING, IDM_EDIT_SELECTALL, L"Select All");
+                free(role); return;
+            } else if (strcmp(role, "undo") == 0) {
+                AppendMenuW(menu, MF_STRING, IDM_EDIT_UNDO, L"Undo");
+                free(role); return;
+            } else if (strcmp(role, "redo") == 0) {
+                AppendMenuW(menu, MF_STRING, IDM_EDIT_REDO, L"Redo");
+                free(role); return;
+            }
+            // Menu-level roles: create submenu
+            char* label = zapp_json_get_string(itemJson, "label");
+            HMENU sub = CreatePopupMenu();
+            zapp_build_role_menu_win(sub, role);
+            wchar_t wLabel[128] = {0};
+            if (label && label[0]) {
+                MultiByteToWideChar(CP_UTF8, 0, label, -1, wLabel, 128);
+            } else {
+                if (strcmp(role, "editMenu") == 0) wcscpy(wLabel, L"Edit");
+                else if (strcmp(role, "windowMenu") == 0) wcscpy(wLabel, L"Window");
+                else MultiByteToWideChar(CP_UTF8, 0, role, -1, wLabel, 128);
+            }
+            AppendMenuW(menu, MF_POPUP, (UINT_PTR)sub, wLabel);
+            if (label) free(label);
+            free(role);
+            return;
+        }
+        if (role) free(role);
+
+        char* type = zapp_json_get_string(itemJson, "type");
+        if (type && strcmp(type, "separator") == 0) {
+            AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+            free(type);
+            return;
+        }
+        if (type) free(type);
+
+        char* label = zapp_json_get_string(itemJson, "label");
+        if (!label || !label[0]) { if (label) free(label); return; }
+
+        // Check for submenu (look for "submenu":[)
+        char* subRaw = NULL;
+        {
+            const char* subKey = "\"submenu\":[";
+            const char* subStart = strstr(itemJson, subKey);
+            if (subStart) {
+                subStart += strlen("\"submenu\":");
+                // Find matching ]
+                int depth = 0;
+                const char* p = subStart;
+                const char* end = NULL;
+                while (*p) {
+                    if (*p == '[') depth++;
+                    else if (*p == ']') { depth--; if (depth == 0) { end = p + 1; break; } }
+                    p++;
+                }
+                if (end) {
+                    size_t len = (size_t)(end - subStart);
+                    subRaw = (char*)malloc(len + 1);
+                    memcpy(subRaw, subStart, len);
+                    subRaw[len] = '\0';
+                }
+            }
+        }
+
+        if (subRaw) {
+            HMENU sub = CreatePopupMenu();
+            zapp_build_menu_items_win(sub, subRaw);
+            free(subRaw);
+            // Build label with accelerator hint
+            char* accel = zapp_json_get_string(itemJson, "accelerator");
+            wchar_t wLabel[256] = {0};
+            if (accel && accel[0]) {
+                char combined[256];
+                snprintf(combined, sizeof(combined), "%s\t%s", label, accel);
+                MultiByteToWideChar(CP_UTF8, 0, combined, -1, wLabel, 256);
+                free(accel);
+            } else {
+                MultiByteToWideChar(CP_UTF8, 0, label, -1, wLabel, 256);
+            }
+            AppendMenuW(menu, MF_POPUP, (UINT_PTR)sub, wLabel);
+            free(label);
+            return;
+        }
+
+        // Regular item
+        char* itemId = zapp_json_get_string(itemJson, "id");
+        char* accel = zapp_json_get_string(itemJson, "accelerator");
+        int cmd = 0;
+        if (itemId && itemId[0]) {
+            cmd = zapp_menu_register_id(itemId);
+        }
+
+        wchar_t wLabel[256] = {0};
+        if (accel && accel[0]) {
+            char combined[256];
+            snprintf(combined, sizeof(combined), "%s\t%s", label, accel);
+            MultiByteToWideChar(CP_UTF8, 0, combined, -1, wLabel, 256);
+        } else {
+            MultiByteToWideChar(CP_UTF8, 0, label, -1, wLabel, 256);
+        }
+
+        UINT flags = MF_STRING;
+        extern int zapp_json_get_bool(const char* json, const char* key, int default_val);
+        if (!zapp_json_get_bool(itemJson, "enabled", 1)) flags |= MF_GRAYED;
+        if (zapp_json_get_bool(itemJson, "checked", 0)) flags |= MF_CHECKED;
+
+        AppendMenuW(menu, flags, cmd, wLabel);
+
+        if (itemId) free(itemId);
+        if (accel) free(accel);
+        free(label);
+    }
+
+    // Parse "[{...},{...}]" array of menu items
+    static void zapp_build_menu_items_win(HMENU parent, const char* arrJson) {
+        if (!arrJson || arrJson[0] != '[') return;
+        const char* p = arrJson + 1;
+        while (*p) {
+            while (*p == ' ' || *p == '\n' || *p == '\r' || *p == '\t' || *p == ',') p++;
+            if (*p == ']' || *p == '\0') break;
+            if (*p == '{') {
+                int depth = 0;
+                const char* start = p;
+                while (*p) {
+                    if (*p == '{') depth++;
+                    else if (*p == '}') { depth--; if (depth == 0) { p++; break; } }
+                    p++;
+                }
+                size_t len = (size_t)(p - start);
+                char* item = (char*)malloc(len + 1);
+                memcpy(item, start, len);
+                item[len] = '\0';
+                zapp_add_menu_item_win(parent, item);
+                free(item);
+            } else {
+                p++;
+            }
+        }
+    }
+
+    void app_set_menu(App* app, char* payload) {
+        (void)app;
+        if (payload == NULL) return;
+        // Reset custom ID registry
+        zapp_menu_custom_count = 0;
+        memset(zapp_menu_id_map, 0, sizeof(zapp_menu_id_map));
+
+        // Find "items":[ in the payload
+        const char* itemsKey = "\"items\":[";
+        const char* itemsStart = strstr((const char*)payload, itemsKey);
+        if (!itemsStart) return;
+        itemsStart += strlen("\"items\":");
+
+        // Find the matching ]
+        int depth = 0;
+        const char* p = itemsStart;
+        const char* end = NULL;
+        while (*p) {
+            if (*p == '[') depth++;
+            else if (*p == ']') { depth--; if (depth == 0) { end = p + 1; break; } }
+            p++;
+        }
+        if (!end) return;
+
+        size_t len = (size_t)(end - itemsStart);
+        char* arrJson = (char*)malloc(len + 1);
+        memcpy(arrJson, itemsStart, len);
+        arrJson[len] = '\0';
+
+        HMENU menuBar = CreateMenu();
+        zapp_build_menu_items_win(menuBar, arrJson);
+        free(arrJson);
+
+        // Apply to all windows
+        extern const wchar_t* ZAPP_WINDOW_CLASS;
+        HWND hwnd = NULL;
+        while ((hwnd = FindWindowExW(NULL, hwnd, ZAPP_WINDOW_CLASS, NULL)) != NULL) {
+            SetMenu(hwnd, menuBar);
+            DrawMenuBar(hwnd);
+        }
+        if (zapp_default_menu) {
+            // Don't destroy old menu — windows might reference it
+        }
+        zapp_default_menu = menuBar;
     }
 
     // --- Sync bridge (moved from app.zc) ---

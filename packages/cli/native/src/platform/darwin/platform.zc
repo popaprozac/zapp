@@ -32,6 +32,28 @@ raw {
         if (!zapp_should_terminate_after_last_window_closed) return NO;
         return app_should_quit() ? YES : NO;
     }
+    // Deep link handler: receives URLs when app is opened via custom scheme (e.g., myapp://callback)
+    - (void)application:(NSApplication*)application openURLs:(NSArray<NSURL*>*)urls {
+        (void)application;
+        for (NSURL* url in urls) {
+            NSString* urlStr = [url absoluteString];
+            if (urlStr == nil || [urlStr length] == 0) continue;
+            // Escape for JS string
+            NSString* escaped = [urlStr stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+            escaped = [escaped stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
+            // Dispatch "app:open-url" event to all webviews
+            NSString* js = [NSString stringWithFormat:
+                @"(function(){var b=globalThis[Symbol.for('zapp.bridge')];if(b&&b.deliverEvent)b.deliverEvent('app:open-url',{url:'%@'});})();",
+                escaped
+            ];
+            for (NSWindow* window in [NSApp windows]) {
+                NSView* content = [window contentView];
+                if ([content isKindOfClass:[WKWebView class]]) {
+                    [(WKWebView*)content evaluateJavaScript:js completionHandler:nil];
+                }
+            }
+        }
+    }
     @end
 
     static id zapp_app_delegate = nil;

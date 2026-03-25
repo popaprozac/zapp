@@ -85,3 +85,16 @@ Menu.build([
   ]},
   { label: "Window", role: "windowMenu" },
 ]);
+
+// Deep link handler
+Events.on("app:open-url", (payload) => {
+  console.log("[deep-link] received:", payload);
+  try {
+    const url = new URL((payload as { url: string }).url);
+    console.log("[deep-link] scheme:", url.protocol);
+    console.log("[deep-link] path:", url.pathname);
+    console.log("[deep-link] params:", Object.fromEntries(url.searchParams));
+  } catch (e) {
+    console.log("[deep-link] parse error:", e);
+  }
+});

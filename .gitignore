@@ -18,7 +18,7 @@ node_modules
 .env.production.local
 .zapp/
 .zapp-workers/
-bin/
+example/bin/
 packages/cli/native
 packages/cli/dist
 

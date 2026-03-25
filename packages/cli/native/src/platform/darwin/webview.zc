@@ -167,6 +167,17 @@ raw {
         }
         while ([rel hasPrefix:@"/"]) rel = [rel substringFromIndex:1];
 
+        // Block path traversal
+        if ([rel rangeOfString:@".."].location != NSNotFound) {
+            NSHTTPURLResponse* forbidden = [[NSHTTPURLResponse alloc]
+                initWithURL:url statusCode:403 HTTPVersion:@"HTTP/1.1"
+                headerFields:@{ @"Content-Type": @"text/plain" }];
+            [task didReceiveResponse:forbidden];
+            [task didReceiveData:[@"Forbidden" dataUsingEncoding:NSUTF8StringEncoding]];
+            [task didFinish];
+            return;
+        }
+
         NSString* lookupPath = [@"/" stringByAppendingString:rel];
         if (zapp_build_use_embedded_assets() != 0 && zapp_embedded_assets_count > 0) {
             bool foundEmbedded = false;
@@ -436,6 +447,91 @@ raw {
         }
     }
 
+    // --- Navigation restriction ---
+    extern int zapp_build_is_dev_mode(void);
+    extern const char* zapp_build_initial_url(void);
+    extern const char* zapp_build_allowed_navigation(void);
+
+    static BOOL zapp_is_navigation_allowed(NSURL* url) {
+        if (url == nil) return YES;
+        NSString* scheme = [url scheme];
+        NSString* host = [url host];
+        NSString* urlStr = [url absoluteString];
+
+        // Always allow app scheme
+        if ([scheme isEqualToString:@"zapp"]) return YES;
+        // Always allow about:blank
+        if ([scheme isEqualToString:@"about"]) return YES;
+        // Always allow blob: (used by workers, downloads)
+        if ([scheme isEqualToString:@"blob"]) return YES;
+
+        // In dev mode, allow localhost
+        if (zapp_build_is_dev_mode()) {
+            if (host && ([host isEqualToString:@"localhost"] || [host isEqualToString:@"127.0.0.1"])) {
+                return YES;
+            }
+        }
+
+        // Check user-defined allowlist
+        const char* patternsRaw = zapp_build_allowed_navigation();
+        if (patternsRaw && patternsRaw[0] != '\0') {
+            NSString* patternsStr = [NSString stringWithUTF8String:patternsRaw];
+            NSData* data = [patternsStr dataUsingEncoding:NSUTF8StringEncoding];
+            if (data) {
+                NSArray* patterns = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+                if ([patterns isKindOfClass:[NSArray class]]) {
+                    for (NSString* pattern in patterns) {
+                        if (![pattern isKindOfClass:[NSString class]]) continue;
+                        // Simple glob: "https://example.com/*" → prefix match
+                        if ([pattern hasSuffix:@"*"]) {
+                            NSString* prefix = [pattern substringToIndex:[pattern length] - 1];
+                            if ([urlStr hasPrefix:prefix]) return YES;
+                        } else {
+                            if ([urlStr isEqualToString:pattern]) return YES;
+                        }
+                    }
+                }
+            }
+        }
+
+        return NO;
+    }
+
+    @interface ZappNavigationDelegate : NSObject <WKNavigationDelegate, WKUIDelegate>
+    @end
+
+    @implementation ZappNavigationDelegate
+    - (void)webView:(WKWebView*)webView
+        decidePolicyForNavigationAction:(WKNavigationAction*)navigationAction
+        decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
+        (void)webView;
+        NSURL* url = navigationAction.request.URL;
+        if (zapp_is_navigation_allowed(url)) {
+            decisionHandler(WKNavigationActionPolicyAllow);
+        } else {
+            // If it's a user-initiated link click, open in system browser
+            if (navigationAction.navigationType == WKNavigationTypeLinkActivated) {
+                [[NSWorkspace sharedWorkspace] openURL:url];
+            }
+            decisionHandler(WKNavigationActionPolicyCancel);
+        }
+    }
+    // Handle target="_blank" links — open in system browser
+    - (WKWebView*)webView:(WKWebView*)webView
+        createWebViewWithConfiguration:(WKWebViewConfiguration*)configuration
+        forNavigationAction:(WKNavigationAction*)navigationAction
+        windowFeatures:(WKWindowFeatures*)windowFeatures {
+        (void)webView; (void)configuration; (void)windowFeatures;
+        NSURL* url = navigationAction.request.URL;
+        if (url) {
+            [[NSWorkspace sharedWorkspace] openURL:url];
+        }
+        return nil; // Don't create a new webview
+    }
+    @end
+
+    static ZappNavigationDelegate* zapp_shared_nav_delegate = nil;
+
     // Custom WKWebView subclass for drag region support
     @interface ZappWebView : WKWebView
     @property (nonatomic, assign) BOOL inDragRegion;
@@ -457,6 +553,47 @@ raw {
     // Allow the window to be moved when clicking drag regions
     - (BOOL)mouseDownCanMoveWindow {
         return self.inDragRegion;
+    }
+    // Filter default context menu: remove Reload, Back, Forward, Stop Loading
+    - (void)willOpenMenu:(NSMenu*)menu withEvent:(NSEvent*)event {
+        for (NSInteger i = menu.numberOfItems - 1; i >= 0; i--) {
+            NSMenuItem* item = [menu itemAtIndex:i];
+            SEL action = item.action;
+            NSString* title = [item title];
+            // Filter by selector
+            BOOL remove = (action == @selector(reload:) ||
+                action == @selector(goBack:) ||
+                action == @selector(goForward:) ||
+                action == @selector(stopLoading:) ||
+                action == NSSelectorFromString(@"_reloadFromOrigin:") ||
+                action == NSSelectorFromString(@"_goBack:") ||
+                action == NSSelectorFromString(@"_goForward:"));
+            // Also filter by title (WebKit may use private selectors)
+            if (!remove && title) {
+                NSString* lower = [title lowercaseString];
+                if ([lower isEqualToString:@"reload page"] ||
+                    [lower isEqualToString:@"reload"] ||
+                    [lower isEqualToString:@"back"] ||
+                    [lower isEqualToString:@"forward"] ||
+                    [lower isEqualToString:@"go back"] ||
+                    [lower isEqualToString:@"go forward"]) {
+                    remove = YES;
+                }
+            }
+            if (remove) {
+                [menu removeItemAtIndex:i];
+            }
+        }
+        // Remove trailing/leading separators left over from removal
+        while (menu.numberOfItems > 0 && [[menu itemAtIndex:menu.numberOfItems - 1] isSeparatorItem]) {
+            [menu removeItemAtIndex:menu.numberOfItems - 1];
+        }
+        while (menu.numberOfItems > 0 && [[menu itemAtIndex:0] isSeparatorItem]) {
+            [menu removeItemAtIndex:0];
+        }
+        // WebKit automatically adds "Inspect Element" when developerExtrasEnabled is set.
+        // No need to manually add it — it survives the filter above.
+        [super willOpenMenu:menu withEvent:event];
     }
     @end
 
@@ -482,14 +619,24 @@ raw {
         BOOL webContentInspectable =
             app_get_bootstrap_web_content_inspectable() ? YES : NO;
         int maxWorkers = app_get_bootstrap_max_workers();
+        extern const char* zapp_build_csp(void);
+        const char* cspRaw = zapp_build_csp();
+        NSString* cspExtra = @"";
+        if (cspRaw && cspRaw[0] != '\0') {
+            NSString* cspStr = [NSString stringWithUTF8String:cspRaw];
+            cspStr = [cspStr stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+            cspStr = [cspStr stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
+            cspExtra = [NSString stringWithFormat:@",csp:'%@'", cspStr];
+        }
         appName = [appName stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
         appName = [appName stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
         NSString* appConfigScript = [NSString stringWithFormat:
-            @"(function(){globalThis[Symbol.for('zapp.bootstrapConfig')]={name:'%@',applicationShouldTerminateAfterLastWindowClosed:%@,webContentInspectable:%@,maxWorkers:%d};})();",
+            @"(function(){globalThis[Symbol.for('zapp.bootstrapConfig')]={name:'%@',applicationShouldTerminateAfterLastWindowClosed:%@,webContentInspectable:%@,maxWorkers:%d%@};})();",
             appName,
             applicationShouldTerminateAfterLastWindowClosed ? @"true" : @"false",
             webContentInspectable ? @"true" : @"false",
-            maxWorkers
+            maxWorkers,
+            cspExtra
         ];
         WKUserScript* appConfigUserScript = [[WKUserScript alloc]
             initWithSource:appConfigScript
@@ -537,10 +684,18 @@ raw {
         ZappMsgHandler* handler = [[ZappMsgHandler alloc] init];
         [ucc addScriptMessageHandler:handler name:@"zapp"];
         [config setUserContentController:ucc];
-        [[config preferences] setValue:@YES forKey:@"developerExtrasEnabled"];
+        if (inspectable) {
+            [[config preferences] setValue:@YES forKey:@"developerExtrasEnabled"];
+        }
         ZappWebView* webview = [[ZappWebView alloc] initWithFrame:bounds configuration:config];
         [webview setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
         [webview setInspectable:inspectable ? YES : NO];
+        // Set navigation delegate to restrict URLs
+        if (zapp_shared_nav_delegate == nil) {
+            zapp_shared_nav_delegate = [[ZappNavigationDelegate alloc] init];
+        }
+        [webview setNavigationDelegate:zapp_shared_nav_delegate];
+        [webview setUIDelegate:(id<WKUIDelegate>)zapp_shared_nav_delegate];
         NSURL* url = zapp_initial_url();
         [webview loadRequest:[NSURLRequest requestWithURL:url]];
         

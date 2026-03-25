@@ -25,6 +25,7 @@ raw {
     #define ZAPP_EVENT_RESULT_CANCEL 1
     #endif
 
+    static NSMenu* zapp_build_menu_from_json(NSArray* items);
     extern void zapp_darwin_reset_all_workers(void);
     extern void zapp_darwin_reset_owner_workers(const char* owner_id);
     extern void zapp_darwin_webview_create(void* window_ptr, bool inspectable);
@@ -912,6 +913,32 @@ raw {
         NSString* windowId = body[@"windowId"];
         if (![windowId isKindOfClass:[NSString class]] || [windowId length] == 0) return;
 
+        if ([actionStr isEqualToString:@"showContextMenu"]) {
+            NSArray* menuItems = body[@"items"];
+            if (![menuItems isKindOfClass:[NSArray class]]) return;
+            NSNumber* xVal = body[@"x"];
+            NSNumber* yVal = body[@"y"];
+            CGFloat cx = [xVal respondsToSelector:@selector(doubleValue)] ? [xVal doubleValue] : 0;
+            CGFloat cy = [yVal respondsToSelector:@selector(doubleValue)] ? [yVal doubleValue] : 0;
+            void (^work)(void) = ^{
+                for (NSWindow* window in [NSApp windows]) {
+                    NSString* wid = [NSString stringWithFormat:@"win-%p", window];
+                    if ([wid isEqualToString:windowId]) {
+                        NSMenu* menu = zapp_build_menu_from_json(menuItems);
+                        NSView* content = [window contentView];
+                        // CSS coordinates: origin top-left. NSView: origin bottom-left.
+                        CGFloat scale = [window backingScaleFactor];
+                        NSPoint viewLoc = NSMakePoint(cx, cy);
+                        [menu popUpMenuPositioningItem:nil atLocation:viewLoc inView:content];
+                        break;
+                    }
+                }
+            };
+            if ([NSThread isMainThread]) { work(); }
+            else { dispatch_async(dispatch_get_main_queue(), work); }
+            return;
+        }
+
         if ([actionStr isEqualToString:@"setCloseGuard"]) {
             id guardVal = body[@"guard"];
             BOOL guard = [guardVal respondsToSelector:@selector(boolValue)] && [guardVal boolValue];
@@ -1068,6 +1095,243 @@ raw {
         if (url) {
             [[NSWorkspace sharedWorkspace] openURL:url];
         }
+    }
+
+    // --- Custom Menu Builder ---
+
+    // Handler target for custom menu item clicks
+    @interface ZappMenuTarget : NSObject
+    @property (nonatomic, copy) NSString* itemId;
+    @end
+
+    @implementation ZappMenuTarget
+    - (void)menuItemClicked:(id)sender {
+        (void)sender;
+        if (self.itemId == nil) return;
+        // Dispatch menu:{id} event to all webviews
+        // Use dispatch_async to ensure JS eval runs after any modal menu loop completes
+        NSString* capturedId = [self.itemId copy];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            NSString* eventName = [NSString stringWithFormat:@"menu:%@", capturedId];
+            NSString* escapedName = [eventName stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
+            NSString* js = [NSString stringWithFormat:
+                @"(function(){var b=globalThis[Symbol.for('zapp.bridge')];if(b&&b.deliverEvent)b.deliverEvent('%@',{});})();",
+                escapedName
+            ];
+            for (NSWindow* window in [NSApp windows]) {
+                NSView* content = [window contentView];
+                if ([content isKindOfClass:[WKWebView class]]) {
+                    [(WKWebView*)content evaluateJavaScript:js completionHandler:nil];
+                }
+            }
+        });
+    }
+    @end
+
+    static NSMutableArray* zapp_menu_targets = nil;
+
+    static void zapp_parse_accelerator(NSString* accel, NSString** outKey, NSUInteger* outMask) {
+        *outKey = @"";
+        *outMask = 0;
+        if (accel == nil || [accel length] == 0) return;
+        NSArray* parts = [accel componentsSeparatedByString:@"+"];
+        for (NSString* part in parts) {
+            NSString* lower = [part lowercaseString];
+            if ([lower isEqualToString:@"cmd"] || [lower isEqualToString:@"command"] || [lower isEqualToString:@"cmdorctrl"]) {
+                *outMask |= NSEventModifierFlagCommand;
+            } else if ([lower isEqualToString:@"ctrl"] || [lower isEqualToString:@"control"]) {
+                *outMask |= NSEventModifierFlagControl;
+            } else if ([lower isEqualToString:@"alt"] || [lower isEqualToString:@"option"]) {
+                *outMask |= NSEventModifierFlagOption;
+            } else if ([lower isEqualToString:@"shift"]) {
+                *outMask |= NSEventModifierFlagShift;
+            } else if ([lower isEqualToString:@"f11"]) {
+                // F11 requires special handling - use unicode
+                *outKey = [NSString stringWithFormat:@"%C", (unichar)NSF11FunctionKey];
+            } else if ([lower length] == 1) {
+                *outKey = lower;
+            } else {
+                *outKey = lower;
+            }
+        }
+    }
+
+    static void zapp_build_role_menu(NSMenu* menu, NSString* role) {
+        if ([role isEqualToString:@"editMenu"]) {
+            [menu addItemWithTitle:@"Undo" action:@selector(undo:) keyEquivalent:@"z"];
+            [menu addItemWithTitle:@"Redo" action:@selector(redo:) keyEquivalent:@"Z"];
+            [menu addItem:[NSMenuItem separatorItem]];
+            [menu addItemWithTitle:@"Cut" action:@selector(cut:) keyEquivalent:@"x"];
+            [menu addItemWithTitle:@"Copy" action:@selector(copy:) keyEquivalent:@"c"];
+            [menu addItemWithTitle:@"Paste" action:@selector(paste:) keyEquivalent:@"v"];
+            [menu addItemWithTitle:@"Select All" action:@selector(selectAll:) keyEquivalent:@"a"];
+        } else if ([role isEqualToString:@"windowMenu"]) {
+            [menu addItemWithTitle:@"Minimize" action:@selector(performMiniaturize:) keyEquivalent:@"m"];
+            [menu addItemWithTitle:@"Zoom" action:@selector(performZoom:) keyEquivalent:@""];
+            [menu addItem:[NSMenuItem separatorItem]];
+            [menu addItemWithTitle:@"Close Window" action:@selector(performClose:) keyEquivalent:@"w"];
+        } else if ([role isEqualToString:@"appMenu"]) {
+            extern char* app_get_bootstrap_name(void);
+            const char* nameC = app_get_bootstrap_name();
+            NSString* appName = nameC ? [NSString stringWithUTF8String:nameC] : @"Zapp";
+            [menu addItemWithTitle:[NSString stringWithFormat:@"About %@", appName]
+                    action:@selector(orderFrontStandardAboutPanel:) keyEquivalent:@""];
+            [menu addItem:[NSMenuItem separatorItem]];
+            [menu addItemWithTitle:[NSString stringWithFormat:@"Hide %@", appName]
+                    action:@selector(hide:) keyEquivalent:@"h"];
+            NSMenuItem* hideOthers = [menu addItemWithTitle:@"Hide Others"
+                    action:@selector(hideOtherApplications:) keyEquivalent:@"h"];
+            [hideOthers setKeyEquivalentModifierMask:NSEventModifierFlagOption | NSEventModifierFlagCommand];
+            [menu addItemWithTitle:@"Show All" action:@selector(unhideAllApplications:) keyEquivalent:@""];
+            [menu addItem:[NSMenuItem separatorItem]];
+            [menu addItemWithTitle:[NSString stringWithFormat:@"Quit %@", appName]
+                    action:@selector(terminate:) keyEquivalent:@"q"];
+        }
+    }
+
+    static NSMenu* zapp_build_menu_from_json(NSArray* items);
+
+    static void zapp_add_menu_item(NSMenu* menu, NSDictionary* def) {
+        if (![def isKindOfClass:[NSDictionary class]]) return;
+
+        // Check for role
+        NSString* role = def[@"role"];
+        if ([role isKindOfClass:[NSString class]] && [role length] > 0) {
+            // Item-level roles: always use native selectors (no JS callback)
+            if ([role isEqualToString:@"copy"]) {
+                [menu addItemWithTitle:def[@"label"] ?: @"Copy" action:@selector(copy:) keyEquivalent:@""];
+                return;
+            } else if ([role isEqualToString:@"cut"]) {
+                [menu addItemWithTitle:def[@"label"] ?: @"Cut" action:@selector(cut:) keyEquivalent:@""];
+                return;
+            } else if ([role isEqualToString:@"paste"]) {
+                [menu addItemWithTitle:def[@"label"] ?: @"Paste" action:@selector(paste:) keyEquivalent:@""];
+                return;
+            } else if ([role isEqualToString:@"selectAll"]) {
+                [menu addItemWithTitle:def[@"label"] ?: @"Select All" action:@selector(selectAll:) keyEquivalent:@""];
+                return;
+            } else if ([role isEqualToString:@"undo"]) {
+                [menu addItemWithTitle:def[@"label"] ?: @"Undo" action:@selector(undo:) keyEquivalent:@""];
+                return;
+            } else if ([role isEqualToString:@"redo"]) {
+                [menu addItemWithTitle:def[@"label"] ?: @"Redo" action:@selector(redo:) keyEquivalent:@""];
+                return;
+            }
+
+            // Menu-level roles (editMenu, windowMenu, appMenu)
+            NSString* label = def[@"label"];
+            if (![label isKindOfClass:[NSString class]]) {
+                if ([role isEqualToString:@"editMenu"]) label = @"Edit";
+                else if ([role isEqualToString:@"windowMenu"]) label = @"Window";
+                else if ([role isEqualToString:@"appMenu"]) {
+                    extern char* app_get_bootstrap_name(void);
+                    const char* nameC = app_get_bootstrap_name();
+                    label = nameC ? [NSString stringWithUTF8String:nameC] : @"App";
+                }
+                else label = role;
+            }
+            NSMenuItem* menuItem = [[NSMenuItem alloc] init];
+            NSMenu* submenu = [[NSMenu alloc] initWithTitle:label];
+            zapp_build_role_menu(submenu, role);
+            [menuItem setSubmenu:submenu];
+            [menu addItem:menuItem];
+            if ([role isEqualToString:@"windowMenu"]) {
+                [NSApp setWindowsMenu:submenu];
+            }
+            return;
+        }
+
+        // Check for separator
+        NSString* type = def[@"type"];
+        if ([type isKindOfClass:[NSString class]] && [type isEqualToString:@"separator"]) {
+            [menu addItem:[NSMenuItem separatorItem]];
+            return;
+        }
+
+        NSString* label = def[@"label"];
+        if (![label isKindOfClass:[NSString class]]) return;
+
+        // Check for submenu
+        NSArray* submenuItems = def[@"submenu"];
+        if ([submenuItems isKindOfClass:[NSArray class]] && [submenuItems count] > 0) {
+            NSMenuItem* menuItem = [[NSMenuItem alloc] init];
+            NSMenu* submenu = zapp_build_menu_from_json(submenuItems);
+            [submenu setTitle:label];
+            [menuItem setSubmenu:submenu];
+            [menu addItem:menuItem];
+            return;
+        }
+
+        // Regular item
+        NSString* accelStr = def[@"accelerator"];
+        NSString* key = @"";
+        NSUInteger mask = 0;
+        if ([accelStr isKindOfClass:[NSString class]]) {
+            zapp_parse_accelerator(accelStr, &key, &mask);
+        }
+
+        NSString* itemId = def[@"id"];
+        SEL action = NULL;
+        ZappMenuTarget* target = nil;
+        if ([itemId isKindOfClass:[NSString class]] && [itemId length] > 0) {
+            target = [[ZappMenuTarget alloc] init];
+            target.itemId = itemId;
+            if (zapp_menu_targets == nil) zapp_menu_targets = [NSMutableArray array];
+            [zapp_menu_targets addObject:target];
+            action = @selector(menuItemClicked:);
+        }
+
+        NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:label action:action keyEquivalent:key];
+        if (mask != 0) [item setKeyEquivalentModifierMask:mask];
+        if (target) [item setTarget:target];
+
+        id enabledVal = def[@"enabled"];
+        if ([enabledVal respondsToSelector:@selector(boolValue)] && ![enabledVal boolValue]) {
+            [item setEnabled:NO];
+        }
+
+        if ([type isKindOfClass:[NSString class]] && [type isEqualToString:@"checkbox"]) {
+            id checkedVal = def[@"checked"];
+            if ([checkedVal respondsToSelector:@selector(boolValue)] && [checkedVal boolValue]) {
+                [item setState:NSControlStateValueOn];
+            }
+        }
+
+        [menu addItem:item];
+    }
+
+    static NSMenu* zapp_build_menu_from_json(NSArray* items) {
+        NSMenu* menu = [[NSMenu alloc] init];
+        for (NSDictionary* def in items) {
+            zapp_add_menu_item(menu, def);
+        }
+        return menu;
+    }
+
+    void app_set_menu(App* app, char* payload) {
+        (void)app;
+        if (payload == NULL) return;
+        NSString* jsonStr = [NSString stringWithUTF8String:(const char*)payload];
+        NSData* data = [jsonStr dataUsingEncoding:NSUTF8StringEncoding];
+        if (data == nil) return;
+        NSDictionary* body = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+        if (![body isKindOfClass:[NSDictionary class]]) return;
+        NSArray* items = body[@"items"];
+        if (![items isKindOfClass:[NSArray class]]) return;
+
+        void (^work)(void) = ^{
+            // Clear old targets
+            if (zapp_menu_targets) [zapp_menu_targets removeAllObjects];
+
+            NSMenu* mainMenu = [[NSMenu alloc] init];
+            for (NSDictionary* def in items) {
+                zapp_add_menu_item(mainMenu, def);
+            }
+            [NSApp setMainMenu:mainMenu];
+        };
+
+        if ([NSThread isMainThread]) { work(); }
+        else { dispatch_async(dispatch_get_main_queue(), work); }
     }
 
     // --- Dialog handling ---

@@ -11,4 +11,7 @@ export default defineConfig({
     minimumSystemVersion: "13.0",
     category: "public.app-category.developer-tools",
   },
+  deepLink: {
+    scheme: "zapp",
+  },
 });

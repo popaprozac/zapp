@@ -137,13 +137,23 @@ type AppEvents =
     | "app:started"
     | "app:shutdown";
 
+/** Deep link event — app opened via custom URL scheme */
+type DeepLinkEvents = "app:open-url";
+
+/** Payload for deep link events */
+export interface DeepLinkPayload {
+    /** The full URL that opened the app (e.g., "myapp://callback?code=...") */
+    url: string;
+}
+
 /** All known Zapp event names */
-export type KnownEventName = WindowSizeEvents | WindowSimpleEvents | AppEvents;
+export type KnownEventName = WindowSizeEvents | WindowSimpleEvents | AppEvents | DeepLinkEvents;
 
 /** Resolve the payload type for a given event name */
 export type EventPayloadFor<T extends string> =
     T extends WindowSizeEvents ? WindowSizeEventPayload :
     T extends WindowSimpleEvents ? WindowEventPayload :
+    T extends DeepLinkEvents ? DeepLinkPayload :
     T extends AppEvents ? undefined :
     unknown;
 

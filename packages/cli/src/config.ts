@@ -16,6 +16,11 @@ export interface SecurityConfig {
   allowNavigation?: string[];
 }
 
+export interface DeepLinkConfig {
+  /** Custom URL scheme (e.g. "myapp" registers myapp://). Derived from identifier if not set. */
+  scheme: string;
+}
+
 export interface ZappConfig {
   /** App name -- used for binary output, bundle name, window title fallback */
   name: string;
@@ -33,6 +38,8 @@ export interface ZappConfig {
   macos?: MacOSConfig;
   /** Security settings */
   security?: SecurityConfig;
+  /** Deep link / custom URL scheme. Enables myscheme:// to open the app. */
+  deepLink?: DeepLinkConfig;
 }
 
 export interface ResolvedZappConfig {
@@ -44,6 +51,7 @@ export interface ResolvedZappConfig {
   author?: string;
   macos?: MacOSConfig;
   security?: SecurityConfig;
+  deepLink?: DeepLinkConfig;
 }
 
 /** Passthrough helper that provides type inference and autocomplete for zapp.config.ts */
@@ -61,6 +69,7 @@ function applyDefaults(config: ZappConfig): ResolvedZappConfig {
     author: config.author,
     macos: config.macos,
     security: config.security,
+    deepLink: config.deepLink,
   };
 }
 

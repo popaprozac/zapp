@@ -175,6 +175,16 @@ raw {
             case IDM_WIN_CLOSE:
                 if (hwnd) PostMessageW(hwnd, WM_CLOSE, 0, 0);
                 break;
+            default: {
+                // Custom menu items (41000+)
+                extern const char* zapp_menu_id_for_cmd(int cmd);
+                extern void zapp_dispatch_custom_menu_click(const char* itemId);
+                const char* itemId = zapp_menu_id_for_cmd(cmd);
+                if (itemId) {
+                    zapp_dispatch_custom_menu_click(itemId);
+                }
+                break;
+            }
         }
     }
 
@@ -184,7 +194,7 @@ raw {
                 return 1;
             case WM_COMMAND: {
                 WORD cmd = LOWORD(wParam);
-                if (cmd >= 40001 && cmd <= 40099) {
+                if (cmd >= 40001) {
                     zapp_handle_menu_command(hwnd, cmd);
                     return 0;
                 }
@@ -358,6 +368,22 @@ impl Platform for WindowsPlatform {
         #ifdef _WIN32
             zapp_should_terminate_after_last =
                 cfg.applicationShouldTerminateAfterLastWindowClosed ? TRUE : FALSE;
+
+            // Check for deep link URL in command line args
+            {
+                int argc = 0;
+                LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+                if (argv && argc > 1) {
+                    // Check if last arg looks like a URL (contains "://")
+                    wchar_t* lastArg = argv[argc - 1];
+                    if (lastArg && wcsstr(lastArg, L"://") != NULL) {
+                        // Store for dispatch after webview is ready
+                        extern wchar_t* zapp_pending_deep_link;
+                        zapp_pending_deep_link = _wcsdup(lastArg);
+                    }
+                }
+                if (argv) LocalFree(argv);
+            }
         #endif
         }
 

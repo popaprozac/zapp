@@ -68,6 +68,13 @@ done
 
 echo ""
 
+# --- Sync native source to CLI package ---
+if [[ " ${PACKAGES[*]} " == *" cli "* ]]; then
+  echo "[cli] Syncing native source..."
+  "$ROOT/scripts/sync-native.sh"
+  echo ""
+fi
+
 # --- Build if needed ---
 for pkg in "${PACKAGES[@]}"; do
   PKG_DIR="$ROOT/packages/$pkg"

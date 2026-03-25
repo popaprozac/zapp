@@ -1,6 +1,6 @@
 {
   "name": "@zappdev/vite",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "Vite plugin for Zapp desktop apps",
   "main": "dist/index.js",
