@@ -1,0 +1,21 @@
+// Test: String interpolation with println
+// Syntax: println "text {expression} text"
+// println is a keyword, not a function — takes a string literal.
+
+fn main() -> int {
+    let x: int = 42;
+    let name: string = "Zen-C";
+    let flag: bool = true;
+
+    // Basic interpolation with different types
+    println "number: {x}";
+    println "string: {name}";
+    println "bool: {flag}";
+
+    // Expressions in interpolation
+    let a: int = 10;
+    let b: int = 20;
+    println "sum: {a + b}";
+
+    return 0;
+}

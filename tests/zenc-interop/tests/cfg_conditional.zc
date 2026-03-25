@@ -1,0 +1,30 @@
+// Test: @cfg conditional compilation
+// @cfg(apple) compiles on macOS, @cfg(windows) on Windows.
+// Used for platform dispatch trampolines.
+
+@cfg(apple)
+fn platform_name() -> string {
+    return "macOS";
+}
+
+@cfg(windows)
+fn platform_name() -> string {
+    return "Windows";
+}
+
+@cfg(linux)
+fn platform_name() -> string {
+    return "Linux";
+}
+
+fn main() -> int {
+    let name = platform_name();
+    println "platform: {name}";
+
+    // Verify it's not empty
+    raw {
+        if (name == NULL || name[0] == '\0') return 1;
+    }
+
+    return 0;
+}

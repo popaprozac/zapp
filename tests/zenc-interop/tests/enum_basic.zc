@@ -1,0 +1,35 @@
+// Test: Basic enum declaration, construction, and pattern matching
+// Zen-C enums are tagged unions. No-data variants use () constructor syntax.
+
+enum Color {
+    Red,
+    Green,
+    Blue,
+}
+
+fn color_name(c: Color) -> string {
+    match c {
+        Color::Red => { return "red"; },
+        Color::Green => { return "green"; },
+        Color::Blue => { return "blue"; },
+    }
+    return "unknown";
+}
+
+fn main() -> int {
+    let r: Color = Color::Red();
+    let g: Color = Color::Green();
+    let b: Color = Color::Blue();
+
+    // Pattern matching
+    raw {
+        const char* rn = color_name(r);
+        const char* gn = color_name(g);
+        const char* bn = color_name(b);
+        if (strcmp(rn, "red") != 0) return 1;
+        if (strcmp(gn, "green") != 0) return 2;
+        if (strcmp(bn, "blue") != 0) return 3;
+    }
+
+    return 0;
+}

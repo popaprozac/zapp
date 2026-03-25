@@ -1,0 +1,42 @@
+// Test: The struct+def "enum" pattern
+// This is an alternative to real enums when you need plain int values
+// (useful when raw blocks need direct int comparisons without .tag access).
+//
+// Pattern: struct with named int fields + def instance with values
+// Access: EnumName.FIELD_NAME evaluates to the int value
+
+struct LogLevels {
+    ERROR: int;
+    WARN: int;
+    INFO: int;
+    DEBUG: int;
+}
+
+def LogLevel = LogLevels{
+    ERROR: 0,
+    WARN: 1,
+    INFO: 2,
+    DEBUG: 3,
+};
+
+fn log_name(level: int) -> string {
+    if level == LogLevel.ERROR { return "ERROR"; }
+    if level == LogLevel.WARN { return "WARN"; }
+    if level == LogLevel.INFO { return "INFO"; }
+    if level == LogLevel.DEBUG { return "DEBUG"; }
+    return "UNKNOWN";
+}
+
+fn main() -> int {
+    // Values are plain ints — work directly in raw blocks
+    raw {
+        if (LogLevel.ERROR != 0) return 1;
+        if (LogLevel.DEBUG != 3) return 2;
+
+        // Can compare directly — no .tag needed
+        int level = 2;
+        if (level != LogLevel.INFO) return 3;
+    }
+
+    return 0;
+}

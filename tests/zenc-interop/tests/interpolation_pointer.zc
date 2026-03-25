@@ -1,0 +1,26 @@
+// Test: String interpolation with pointer auto-deref
+// ptr.field works in interpolation strings.
+// CAVEAT: On macOS with ObjC/ARC, int32_t fields from raw typedef structs
+// cause _Generic ARC casting errors. Workaround: extract to local int vars.
+
+raw {
+    typedef struct Vec2 {
+        int32_t x;
+        int32_t y;
+    } Vec2;
+}
+
+fn print_vec(v: Vec2*) -> void {
+    // Workaround for macOS ARC issue: extract to local int variables
+    let x: int = v.x;
+    let y: int = v.y;
+    println "vec: ({x}, {y})";
+}
+
+fn main() -> int {
+    raw {
+        Vec2 v = {5, 10};
+        print_vec(&v);
+    }
+    return 0;
+}

@@ -1,3 +1,7 @@
+// Windows platform init (platform layer).
+// Window class registration, WndProc message loop, menus, event dispatch.
+// ~85% raw C/Win32, ~15% Zen-C (Platform trait impl).
+
 import "../platform.zc";
 import "./webview.zc";
 import "./backend.zc";
@@ -32,6 +36,7 @@ raw {
     extern void* app_get_active(void);
     static DWORD zapp_ui_thread_id = 0;
 
+    // Event IDs (mirrored from src/event/events.zc for raw block access)
     #ifndef ZAPP_EVENT_WINDOW_FOCUS
     #define ZAPP_EVENT_WINDOW_FOCUS 1
     #endif
@@ -368,6 +373,22 @@ impl Platform for WindowsPlatform {
         #ifdef _WIN32
             zapp_should_terminate_after_last =
                 cfg.applicationShouldTerminateAfterLastWindowClosed ? TRUE : FALSE;
+
+            // Check for deep link URL in command line args
+            {
+                int argc = 0;
+                LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+                if (argv && argc > 1) {
+                    // Check if last arg looks like a URL (contains "://")
+                    wchar_t* lastArg = argv[argc - 1];
+                    if (lastArg && wcsstr(lastArg, L"://") != NULL) {
+                        // Store for dispatch after webview is ready
+                        extern wchar_t* zapp_pending_deep_link;
+                        zapp_pending_deep_link = _wcsdup(lastArg);
+                    }
+                }
+                if (argv) LocalFree(argv);
+            }
         #endif
         }
 

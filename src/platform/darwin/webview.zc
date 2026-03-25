@@ -1,3 +1,7 @@
+// macOS WebView implementation (platform layer).
+// ~99% Objective-C — WKWebView subclass, scheme handler, navigation delegate,
+// message handler, drag region support. No Zen-C logic.
+
 //> macos: framework: WebKit
 //> macos: framework: Cocoa
 //> macos: framework: Security
@@ -497,7 +501,7 @@ raw {
         return NO;
     }
 
-    @interface ZappNavigationDelegate : NSObject <WKNavigationDelegate>
+    @interface ZappNavigationDelegate : NSObject <WKNavigationDelegate, WKUIDelegate>
     @end
 
     @implementation ZappNavigationDelegate
@@ -509,9 +513,24 @@ raw {
         if (zapp_is_navigation_allowed(url)) {
             decisionHandler(WKNavigationActionPolicyAllow);
         } else {
-            NSLog(@"[zapp] navigation blocked: %@", [url absoluteString]);
+            // If it's a user-initiated link click, open in system browser
+            if (navigationAction.navigationType == WKNavigationTypeLinkActivated) {
+                [[NSWorkspace sharedWorkspace] openURL:url];
+            }
             decisionHandler(WKNavigationActionPolicyCancel);
         }
+    }
+    // Handle target="_blank" links — open in system browser
+    - (WKWebView*)webView:(WKWebView*)webView
+        createWebViewWithConfiguration:(WKWebViewConfiguration*)configuration
+        forNavigationAction:(WKNavigationAction*)navigationAction
+        windowFeatures:(WKWindowFeatures*)windowFeatures {
+        (void)webView; (void)configuration; (void)windowFeatures;
+        NSURL* url = navigationAction.request.URL;
+        if (url) {
+            [[NSWorkspace sharedWorkspace] openURL:url];
+        }
+        return nil; // Don't create a new webview
     }
     @end
 
@@ -544,13 +563,28 @@ raw {
         for (NSInteger i = menu.numberOfItems - 1; i >= 0; i--) {
             NSMenuItem* item = [menu itemAtIndex:i];
             SEL action = item.action;
-            if (action == @selector(reload:) ||
+            NSString* title = [item title];
+            // Filter by selector
+            BOOL remove = (action == @selector(reload:) ||
                 action == @selector(goBack:) ||
                 action == @selector(goForward:) ||
                 action == @selector(stopLoading:) ||
                 action == NSSelectorFromString(@"_reloadFromOrigin:") ||
                 action == NSSelectorFromString(@"_goBack:") ||
-                action == NSSelectorFromString(@"_goForward:")) {
+                action == NSSelectorFromString(@"_goForward:"));
+            // Also filter by title (WebKit may use private selectors)
+            if (!remove && title) {
+                NSString* lower = [title lowercaseString];
+                if ([lower isEqualToString:@"reload page"] ||
+                    [lower isEqualToString:@"reload"] ||
+                    [lower isEqualToString:@"back"] ||
+                    [lower isEqualToString:@"forward"] ||
+                    [lower isEqualToString:@"go back"] ||
+                    [lower isEqualToString:@"go forward"]) {
+                    remove = YES;
+                }
+            }
+            if (remove) {
                 [menu removeItemAtIndex:i];
             }
         }
@@ -665,6 +699,7 @@ raw {
             zapp_shared_nav_delegate = [[ZappNavigationDelegate alloc] init];
         }
         [webview setNavigationDelegate:zapp_shared_nav_delegate];
+        [webview setUIDelegate:(id<WKUIDelegate>)zapp_shared_nav_delegate];
         NSURL* url = zapp_initial_url();
         [webview loadRequest:[NSURLRequest requestWithURL:url]];
         

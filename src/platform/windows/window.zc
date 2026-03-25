@@ -1,3 +1,7 @@
+// Windows window implementation (platform layer).
+// ~98% raw C/Win32 — HWND creation, DPI scaling, dialogs, window state.
+// Thin Zen-C wrappers provide the @cfg(windows) interface.
+
 import "../window.zc";
 
 //> windows: link: -lcomdlg32
@@ -426,6 +430,7 @@ raw {
         zapp_backend_dispatch_window_result(payload_json);
     }
 
+    // Event IDs (mirrored from src/event/events.zc for raw block access)
     #ifndef ZAPP_EVENT_WINDOW_READY
     #define ZAPP_EVENT_WINDOW_READY 0
     #endif

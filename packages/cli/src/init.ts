@@ -55,6 +55,7 @@ export const runInit = async ({
   await Bun.write(path.join(zappDir, "app.zc"), `import "app/app.zc";
 
 fn on_ready(id: int, handle: void*) -> void {
+    println "Window ready!";
     Window{id: id, handle: handle}.show();
 }
 

@@ -1,0 +1,37 @@
+// Test: Suppressing unused parameter warnings
+// Prefix parameter names with _ to suppress warnings.
+
+raw {
+    typedef struct Data {
+        int32_t value;
+    } Data;
+}
+
+fn handler_used(data: Data*) -> int {
+    return data.value;
+}
+
+fn handler_unused(_data: Data*) -> int {
+    // _data prefix suppresses "unused parameter" warning
+    println "event handled";
+    return 0;
+}
+
+fn callback(_a: int, _b: int, _c: string) -> void {
+    // Multiple unused params with _ prefix
+    println "callback fired";
+}
+
+fn main() -> int {
+    raw {
+        Data d = {42};
+        int r1 = handler_used(&d);
+        if (r1 != 42) return 1;
+
+        int r2 = handler_unused(&d);
+        if (r2 != 0) return 2;
+
+        callback(1, 2, "test");
+    }
+    return 0;
+}

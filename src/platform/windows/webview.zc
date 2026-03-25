@@ -1,3 +1,7 @@
+// Windows WebView2 implementation (platform layer).
+// ~99% C/COM code — WebView2 controller, message handling, navigation,
+// scheme handler. No Zen-C logic.
+
 import "./window.zc";
 import "./webview_bootstrap.zc";
 
@@ -283,20 +287,41 @@ raw {
         if (--self->refCount == 0) { free(self); return 0; }
         return self->refCount;
     }
+    wchar_t* zapp_pending_deep_link = NULL;
+
     static HRESULT STDMETHODCALLTYPE znh_Invoke(
         ICoreWebView2NavigationCompletedEventHandler* This,
         ICoreWebView2* sender,
         ICoreWebView2NavigationCompletedEventArgs* args
     ) {
-        (void)sender; (void)args;
+        (void)args;
         ZappNavHandler* self = (ZappNavHandler*)This;
         if (!self->firstNavDone) {
             self->firstNavDone = TRUE;
             // Workaround: toggle visibility to force WebView2 to composite
-            // https://github.com/MicrosoftEdge/WebView2Feedback/issues/1077
             ICoreWebView2Controller_put_IsVisible(self->controller, FALSE);
             ICoreWebView2Controller_put_IsVisible(self->controller, TRUE);
             ICoreWebView2Controller_MoveFocus(self->controller, COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+
+            // Dispatch pending deep link URL if app was launched with one
+            if (zapp_pending_deep_link) {
+                char* urlUtf8 = zapp_wide_to_utf8(zapp_pending_deep_link);
+                if (urlUtf8) {
+                    char* escaped = zapp_escape_js_string(urlUtf8);
+                    size_t jsLen = strlen(escaped) + 256;
+                    char* js = (char*)malloc(jsLen);
+                    snprintf(js, jsLen,
+                        "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+                        "if(b&&b.deliverEvent)b.deliverEvent('app:open-url',{url:'%s'});})();",
+                        escaped);
+                    ICoreWebView2_ExecuteScript(sender, zapp_utf8_to_wide(js), NULL);
+                    free(js);
+                    free(escaped);
+                    free(urlUtf8);
+                }
+                free(zapp_pending_deep_link);
+                zapp_pending_deep_link = NULL;
+            }
         }
         return S_OK;
     }
@@ -693,10 +718,11 @@ raw {
                 if (uriW) {
                     if (!zapp_is_nav_allowed(uriW)) {
                         ICoreWebView2NavigationStartingEventArgs_put_Cancel(args, TRUE);
-                        char* uriUtf8 = zapp_wide_to_utf8(uriW);
-                        if (uriUtf8) {
-                            fprintf(stderr, "[zapp] navigation blocked: %s\n", uriUtf8);
-                            free(uriUtf8);
+                        // If user-initiated, open in system browser
+                        BOOL isUserInitiated = FALSE;
+                        ICoreWebView2NavigationStartingEventArgs_get_IsUserInitiated(args, &isUserInitiated);
+                        if (isUserInitiated) {
+                            ShellExecuteW(NULL, L"open", uriW, NULL, NULL, SW_SHOWNORMAL);
                         }
                     }
                     CoTaskMemFree(uriW);
@@ -713,6 +739,51 @@ raw {
             nsHandler->refCount = 1;
             EventRegistrationToken nsToken;
             ICoreWebView2_add_NavigationStarting(webview, (ICoreWebView2NavigationStartingEventHandler*)nsHandler, &nsToken);
+        }
+
+        // Handle target="_blank" — open in system browser instead of new webview window
+        {
+            typedef struct {
+                ICoreWebView2NewWindowRequestedEventHandlerVtbl* lpVtbl;
+                ULONG refCount;
+            } ZappNewWindowHandler;
+
+            static HRESULT STDMETHODCALLTYPE znw_QI(ICoreWebView2NewWindowRequestedEventHandler* This, REFIID riid, void** ppv) {
+                (void)riid; *ppv = This; This->lpVtbl->AddRef(This); return S_OK;
+            }
+            static ULONG STDMETHODCALLTYPE znw_AddRef(ICoreWebView2NewWindowRequestedEventHandler* This) {
+                return ++((ZappNewWindowHandler*)This)->refCount;
+            }
+            static ULONG STDMETHODCALLTYPE znw_Release(ICoreWebView2NewWindowRequestedEventHandler* This) {
+                ZappNewWindowHandler* self = (ZappNewWindowHandler*)This;
+                if (--self->refCount == 0) { free(self); return 0; }
+                return self->refCount;
+            }
+            static HRESULT STDMETHODCALLTYPE znw_Invoke(
+                ICoreWebView2NewWindowRequestedEventHandler* This,
+                ICoreWebView2* sender,
+                ICoreWebView2NewWindowRequestedEventArgs* args
+            ) {
+                (void)This; (void)sender;
+                wchar_t* uriW = NULL;
+                ICoreWebView2NewWindowRequestedEventArgs_get_Uri(args, &uriW);
+                if (uriW) {
+                    ShellExecuteW(NULL, L"open", uriW, NULL, NULL, SW_SHOWNORMAL);
+                    CoTaskMemFree(uriW);
+                }
+                ICoreWebView2NewWindowRequestedEventArgs_put_Handled(args, TRUE);
+                return S_OK;
+            }
+
+            static ICoreWebView2NewWindowRequestedEventHandlerVtbl znw_vtbl = {
+                znw_QI, znw_AddRef, znw_Release, znw_Invoke
+            };
+
+            ZappNewWindowHandler* nwHandler = (ZappNewWindowHandler*)calloc(1, sizeof(ZappNewWindowHandler));
+            nwHandler->lpVtbl = &znw_vtbl;
+            nwHandler->refCount = 1;
+            EventRegistrationToken nwToken;
+            ICoreWebView2_add_NewWindowRequested(webview, (ICoreWebView2NewWindowRequestedEventHandler*)nwHandler, &nwToken);
         }
 
         // Register NavigationCompleted handler (IsVisible toggle workaround)

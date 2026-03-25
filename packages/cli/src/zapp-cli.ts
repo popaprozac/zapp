@@ -9,6 +9,7 @@ import { runInit } from "./init";
 import { runPackage } from "./package";
 import { runGenerate } from "./generate";
 import { loadConfig } from "./config";
+import pkg from "../package.json";
 
 const VALID_LOG_LEVELS = ["error", "warn", "info", "debug", "trace"] as const;
 type LogLevel = typeof VALID_LOG_LEVELS[number];
@@ -31,6 +32,7 @@ const commonOptions = {
     type: "string" as const,
     default: ".",
     describe: "Project root directory",
+    alias: "r",
   },
   frontend: {
     type: "string" as const,
@@ -45,6 +47,7 @@ const commonOptions = {
   out: {
     type: "string" as const,
     describe: "Override output binary path",
+    alias: "o",
   },
   "log-level": {
     type: "string" as const,
@@ -72,6 +75,7 @@ const cli = yargs(hideBin(process.argv))
           type: "string",
           default: "vanilla-ts",
           describe: "Vite template (e.g. vanilla-ts, react-ts, svelte-ts, vue-ts)",
+          alias: "t",
         })
         .option("root", commonOptions.root),
     async (argv) => {
@@ -140,11 +144,13 @@ const cli = yargs(hideBin(process.argv))
           type: "boolean",
           default: false,
           describe: "Brotli-compress embedded assets",
+          alias: "b",
         })
         .option("debug", {
           type: "boolean",
           default: false,
           describe: "Debug build (filesystem assets, debug logs, no optimizations)",
+          alias: "d",
         }),
     async (argv) => {
       checkPrerequisites();
@@ -187,6 +193,7 @@ const cli = yargs(hideBin(process.argv))
           type: "boolean",
           default: true,
           describe: "Brotli-compress embedded assets",
+          alias: "b",
         })
         .option("skip-build", {
           type: "boolean",
@@ -238,6 +245,7 @@ const cli = yargs(hideBin(process.argv))
       await runGenerate({ root, frontendDir, outDir: argv["out-dir"] });
     }
   )
+  .version(pkg.version)
   .alias("h", "help")
   .alias("v", "version")
   .alias("build-file", "input")
