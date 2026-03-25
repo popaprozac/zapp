@@ -1,3 +1,9 @@
+// Platform-agnostic window API (abstraction layer).
+// Defines WindowOptions, Window, WindowManager as Zen-C structs/enums.
+// Platform implementations in darwin/window.zc and windows/window.zc.
+// The event callback registry (bottom of file) is raw C because
+// Zen-C cannot express static mutable function pointer arrays.
+
 import "std/map.zc";
 
 raw {
@@ -14,11 +20,11 @@ import "../platform/darwin/window.zc";
 @cfg(windows)
 import "../platform/windows/window.zc";
 
-opaque alias TitleBarStyle = int;
-
-def WINDOW_TITLEBAR_STYLE_DEFAULT: TitleBarStyle = 0;
-def WINDOW_TITLEBAR_STYLE_HIDDEN: TitleBarStyle = 1;
-def WINDOW_TITLEBAR_STYLE_HIDDEN_INSET: TitleBarStyle = 2;
+enum TitleBarStyle {
+    Default,
+    Hidden,
+    HiddenInset,
+}
 
 struct WindowOptions {
     title: string;
@@ -56,6 +62,8 @@ struct WindowPosition {
     y: int;
 }
 
+// WindowEventData is defined in a raw block so it's available to other raw blocks
+// (Zen-C struct definitions are emitted late in generated C, after raw blocks)
 raw {
     #ifndef ZAPP_WINDOW_EVENT_DATA_DEFINED
     #define ZAPP_WINDOW_EVENT_DATA_DEFINED
@@ -273,7 +281,7 @@ fn window_options_default(title: string) -> WindowOptions {
         transparent: false,
         hidden: false,
         alwaysOnTop: false,
-        titleBarStyle: WINDOW_TITLEBAR_STYLE_DEFAULT,
+        titleBarStyle: TitleBarStyle::Default(),
         webContentInspectable: -1,
     };
 }
@@ -400,7 +408,9 @@ fn window_manager_trigger_on_ready(id: int) -> void {
 }
 
 raw {
+    #ifndef ZAPP_MAX_WINDOW_CALLBACKS
     #define ZAPP_MAX_WINDOW_CALLBACKS 64
+    #endif
     #ifndef ZAPP_MAX_WINDOW_EVENT_TYPES
     #define ZAPP_MAX_WINDOW_EVENT_TYPES 11
     #endif

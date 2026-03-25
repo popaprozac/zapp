@@ -1,3 +1,7 @@
+// Service registry and RPC invocation (abstraction layer).
+// ~85% Zen-C — service registration, manifest building, invoke with policy.
+// Raw block used only for name validation (C character classification).
+
 struct App;
 
 import "std/result.zc";

@@ -1,3 +1,7 @@
+// macOS platform init (platform layer).
+// NSApplication setup, ZappAppDelegate, default menus, deep link handling.
+// ~60% raw ObjC, ~40% Zen-C (Platform trait impl).
+
 import "../platform.zc";
 import "./worker/dispatch.zc";
 import "./backend.zc";

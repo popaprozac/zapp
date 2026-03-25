@@ -1,3 +1,7 @@
+// macOS WebView implementation (platform layer).
+// ~99% Objective-C — WKWebView subclass, scheme handler, navigation delegate,
+// message handler, drag region support. No Zen-C logic.
+
 //> macos: framework: WebKit
 //> macos: framework: Cocoa
 //> macos: framework: Security

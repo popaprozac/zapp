@@ -1,22 +1,16 @@
 {
   "v": 1,
-  "generatedAt": "2026-03-25T01:57:23.787Z",
+  "generatedAt": "2026-03-25T04:22:22.204Z",
   "assets": [
     {
       "file": "index.html",
-      "size": 948,
-      "brotli": {
-        "file": "index.html.br",
-        "size": 361
-      }
+      "size": 966,
+      "brotli": null
     },
     {
-      "file": "assets/index-CIl3Zjwd.js",
-      "size": 5610,
-      "brotli": {
-        "file": "assets/index-CIl3Zjwd.js.br",
-        "size": 2044
-      }
+      "file": "assets/index-DMhcemXI.js",
+      "size": 5520,
+      "brotli": null
     }
   ],
   "embedded": true

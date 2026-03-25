@@ -1,3 +1,8 @@
+// macOS window implementation (platform layer).
+// ~97% Objective-C in raw blocks — NSWindow lifecycle, delegates, menus,
+// event dispatch. Thin Zen-C wrappers provide the @cfg(apple) interface.
+// #define constants mirrored from events.zc with #ifndef guards.
+
 import "../window.zc";
 import "./webview.zc";
 
@@ -8,18 +13,40 @@ raw {
     #include <dispatch/dispatch.h>
     #import <objc/runtime.h>
 
-    // Window event IDs (must match src/event/events.zc)
+    // Window event IDs (mirrored from src/event/events.zc for raw block access)
+    #ifndef ZAPP_EVENT_WINDOW_READY
     #define ZAPP_EVENT_WINDOW_READY       0
+    #endif
+    #ifndef ZAPP_EVENT_WINDOW_FOCUS
     #define ZAPP_EVENT_WINDOW_FOCUS       1
+    #endif
+    #ifndef ZAPP_EVENT_WINDOW_BLUR
     #define ZAPP_EVENT_WINDOW_BLUR        2
+    #endif
+    #ifndef ZAPP_EVENT_WINDOW_RESIZE
     #define ZAPP_EVENT_WINDOW_RESIZE      3
+    #endif
+    #ifndef ZAPP_EVENT_WINDOW_MOVE
     #define ZAPP_EVENT_WINDOW_MOVE        4
+    #endif
+    #ifndef ZAPP_EVENT_WINDOW_CLOSE
     #define ZAPP_EVENT_WINDOW_CLOSE       5
+    #endif
+    #ifndef ZAPP_EVENT_WINDOW_MINIMIZE
     #define ZAPP_EVENT_WINDOW_MINIMIZE    6
+    #endif
+    #ifndef ZAPP_EVENT_WINDOW_MAXIMIZE
     #define ZAPP_EVENT_WINDOW_MAXIMIZE    7
+    #endif
+    #ifndef ZAPP_EVENT_WINDOW_RESTORE
     #define ZAPP_EVENT_WINDOW_RESTORE     8
+    #endif
+    #ifndef ZAPP_EVENT_WINDOW_FULLSCREEN
     #define ZAPP_EVENT_WINDOW_FULLSCREEN  9
+    #endif
+    #ifndef ZAPP_EVENT_WINDOW_UNFULLSCREEN
     #define ZAPP_EVENT_WINDOW_UNFULLSCREEN 10
+    #endif
 
     #ifndef ZAPP_EVENT_RESULT_CANCEL
     #define ZAPP_EVENT_RESULT_CANCEL 1
@@ -218,13 +245,13 @@ fn darwin_window_create(options: WindowOptions*) -> void* {
                 NSString* titleStr = [NSString stringWithUTF8String:(const char*)options->title];
                 [window setTitle:titleStr];
 
-                if (options->titleBarStyle == WINDOW_TITLEBAR_STYLE_HIDDEN || options->titleBarStyle == WINDOW_TITLEBAR_STYLE_HIDDEN_INSET) {
+                if (options->titleBarStyle.tag == TitleBarStyle_Hidden_Tag || options->titleBarStyle.tag == TitleBarStyle_HiddenInset_Tag) {
                     [window setStyleMask:([window styleMask] | NSWindowStyleMaskFullSizeContentView)];
                     [window setTitleVisibility:NSWindowTitleHidden];
                     [window setTitlebarAppearsTransparent:YES];
                 }
 
-                if (options->titleBarStyle == WINDOW_TITLEBAR_STYLE_HIDDEN_INSET) {
+                if (options->titleBarStyle.tag == TitleBarStyle_HiddenInset_Tag) {
                     #if defined(NSWindowToolbarStyleUnifiedCompact)
                         if ([window respondsToSelector:@selector(setToolbarStyle:)]) {
                             [window setToolbarStyle:NSWindowToolbarStyleUnifiedCompact];

@@ -31,6 +31,9 @@ raw {
     extern void zapp_windows_webview_eval_all_ui(wchar_t* wJs);
 
     #define WM_ZAPP_HANDLE_MSG (WM_APP + 2)
+    #define WM_ZAPP_SHOW_CONTEXT_MENU (WM_APP + 3)
+
+    typedef struct { char* arrJson; POINT pt; HWND hwnd; } ZappContextMenuData;
 
     extern void zapp_handle_message(void* app, char* msg);
     extern void* app_get_active(void);
@@ -159,8 +162,20 @@ raw {
             case IDM_EDIT_COPY:
             case IDM_EDIT_PASTE:
             case IDM_EDIT_SELECTALL: {
-                HWND focus = GetFocus();
-                if (focus) SendMessageW(focus, WM_COMMAND, cmd, 0);
+                extern void zapp_windows_webview_eval(HWND hwnd, const wchar_t* js);
+                const wchar_t* jsCmd = NULL;
+                switch (cmd) {
+                    case IDM_EDIT_UNDO:      jsCmd = L"document.execCommand('undo')"; break;
+                    case IDM_EDIT_REDO:       jsCmd = L"document.execCommand('redo')"; break;
+                    case IDM_EDIT_CUT:        jsCmd = L"document.execCommand('cut')"; break;
+                    case IDM_EDIT_COPY:       jsCmd = L"document.execCommand('copy')"; break;
+                    case IDM_EDIT_PASTE:
+                        jsCmd = L"(async function(){try{var t=await navigator.clipboard.readText();"
+                                L"document.execCommand('insertText',false,t);}catch(e){}})()";
+                        break;
+                    case IDM_EDIT_SELECTALL:  jsCmd = L"document.execCommand('selectAll')"; break;
+                }
+                if (jsCmd && hwnd) zapp_windows_webview_eval(hwnd, jsCmd);
                 break;
             }
             case IDM_VIEW_FULLSCREEN: {
@@ -207,6 +222,26 @@ raw {
             }
             case WM_ZAPP_EVAL_JS: {
                 zapp_windows_webview_eval_all_ui((wchar_t*)lParam);
+                return 0;
+            }
+            case WM_ZAPP_SHOW_CONTEXT_MENU: {
+                extern void zapp_build_context_menu_items_win(HMENU parent, const char* itemsJson);
+                extern void zapp_handle_context_menu_click(HWND hwnd, WORD cmd);
+                extern void zapp_ctx_reset(void);
+                ZappContextMenuData* d = (ZappContextMenuData*)lParam;
+                if (d) {
+                    zapp_ctx_reset();
+                    HMENU popup = CreatePopupMenu();
+                    zapp_build_context_menu_items_win(popup, d->arrJson);
+                    ReleaseCapture();
+                    SetForegroundWindow(d->hwnd);
+                    int cmd = TrackPopupMenu(popup, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD | TPM_NONOTIFY, d->pt.x, d->pt.y, 0, d->hwnd, NULL);
+                    PostMessageW(d->hwnd, WM_NULL, 0, 0);
+                    DestroyMenu(popup);
+                    if (cmd > 0) zapp_handle_context_menu_click(d->hwnd, (WORD)cmd);
+                    free(d->arrJson);
+                    free(d);
+                }
                 return 0;
             }
             case WM_SIZE: {
@@ -320,6 +355,8 @@ raw {
         // Pre-create the default menu and accelerator table
         zapp_create_default_menu();
         zapp_accel_table = zapp_create_default_accel();
+        extern void zapp_enable_dark_menus(void);
+        zapp_enable_dark_menus();
     }
 
     static BOOL WINAPI zapp_console_ctrl_handler(DWORD ctrlType) {

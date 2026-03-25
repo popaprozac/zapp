@@ -1,3 +1,10 @@
+// Event definitions (source of truth).
+// Uses struct+def pattern for WindowEvent/AppEvent — these compile to plain ints,
+// which is necessary because raw blocks across the codebase compare event IDs directly.
+// The #define macros at the bottom mirror these values for raw block access.
+// Other files duplicate these #defines with #ifndef guards due to unpredictable
+// raw block ordering in the generated C output.
+
 struct WindowEvents {
     READY: int;
     FOCUS: int;

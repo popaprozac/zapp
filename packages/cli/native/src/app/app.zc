@@ -1,3 +1,7 @@
+// Application lifecycle and message routing (abstraction layer).
+// Mostly Zen-C — raw blocks used for log init, file I/O, and config parsing
+// where C stdlib functions are needed.
+
 import "../platform/platform.zc";
 import "../platform/window.zc";
 import "../event/event.zc";
