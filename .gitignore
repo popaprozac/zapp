@@ -6,7 +6,10 @@ bootstrap.ps1
 ISSUES.md
 TODO.md
 ZAPP_CHARTER.md
+tests/
 zenc-lang-tests
+example/
+.claude/
 node_modules
 .vscode
 .idea
