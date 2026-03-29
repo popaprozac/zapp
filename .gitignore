@@ -1,37 +1,29 @@
-AGENTS.md
-GEMINI.md
-SKILLS.md
-context.md
-Zen-C.md
-bootstrap.sh
-bootstrap.ps1
-ISSUES.md
-TODO.md
-ZAPP_CHARTER.md
-playground/
-tests/
-zenc-lang-tests
-example/
-.claude/
-node_modules
-.vscode
-.idea
+# Build artifacts
+.zapp/
+bin/
+release/
+dist/
+*.br
+
+# Dependencies
+node_modules/
+bun.lock
+
+# Generated
+src/zapp/
+
+# IDE
+.vscode/
+.idea/
 .DS_Store
+
+# Environment
 .env
 .env.local
-.env.development.local
-.env.test.local
-.env.production.local
-.zapp/
-.zapp-workers/
-example/bin/
-packages/cli/native
-packages/cli/dist
+.env.*.local
 
-# Benchmark build artifacts
-*.br
-benchmarks/hello-world/bin/
-benchmarks/competitors/*/hello-world/dist/
-benchmarks/competitors/*/hello-world/node_modules/
-benchmarks/competitors/*/hello-world/build/
-benchmarks/competitors/*/hello-world/src-tauri/target/
+# Old v1 code (pending removal)
+old/
+
+# Claude
+.claude/
