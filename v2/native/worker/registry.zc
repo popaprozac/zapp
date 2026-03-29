@@ -1,0 +1,156 @@
+// Worker registry — tracks which workers belong to which window.
+// Supports both dedicated (single-owner) and shared (multi-owner, refcounted) workers.
+
+import "string.h" as str;
+
+raw {
+    #define ZAPP_MAX_WORKERS 64
+    #define ZAPP_MAX_OWNERS_PER_WORKER 16
+
+    typedef struct {
+        char worker_id[64];
+        char script_url[256];
+        char owners[ZAPP_MAX_OWNERS_PER_WORKER][64];
+        int owner_count;
+        int shared;       // 0 = dedicated, 1 = shared
+        int active;
+    } ZappWorkerEntry;
+
+    static ZappWorkerEntry zapp_worker_registry[ZAPP_MAX_WORKERS] = {{0}};
+
+    // Add a dedicated worker (backward-compatible)
+    static int zapp_worker_registry_add(const char* worker_id, const char* owner_id) {
+        for (int i = 0; i < ZAPP_MAX_WORKERS; i++) {
+            if (!zapp_worker_registry[i].active) {
+                strncpy(zapp_worker_registry[i].worker_id, worker_id, 63);
+                strncpy(zapp_worker_registry[i].owners[0], owner_id, 63);
+                zapp_worker_registry[i].owner_count = 1;
+                zapp_worker_registry[i].shared = 0;
+                zapp_worker_registry[i].script_url[0] = '\0';
+                zapp_worker_registry[i].active = 1;
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    // Add a worker with full options (shared flag + script URL)
+    static int zapp_worker_registry_add_full(const char* worker_id, const char* owner_id,
+                                              int shared, const char* script_url) {
+        for (int i = 0; i < ZAPP_MAX_WORKERS; i++) {
+            if (!zapp_worker_registry[i].active) {
+                strncpy(zapp_worker_registry[i].worker_id, worker_id, 63);
+                strncpy(zapp_worker_registry[i].owners[0], owner_id, 63);
+                zapp_worker_registry[i].owner_count = 1;
+                zapp_worker_registry[i].shared = shared;
+                if (script_url)
+                    strncpy(zapp_worker_registry[i].script_url, script_url, 255);
+                else
+                    zapp_worker_registry[i].script_url[0] = '\0';
+                zapp_worker_registry[i].active = 1;
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    // Non-static: called from jsc.m
+    void zapp_worker_registry_remove(const char* worker_id) {
+        for (int i = 0; i < ZAPP_MAX_WORKERS; i++) {
+            if (zapp_worker_registry[i].active &&
+                strcmp(zapp_worker_registry[i].worker_id, worker_id) == 0) {
+                zapp_worker_registry[i].active = 0;
+                break;
+            }
+        }
+    }
+
+    // Returns first owner_id for a worker, or NULL (dedicated workers have exactly one)
+    static const char* zapp_worker_registry_owner(const char* worker_id) {
+        for (int i = 0; i < ZAPP_MAX_WORKERS; i++) {
+            if (zapp_worker_registry[i].active &&
+                strcmp(zapp_worker_registry[i].worker_id, worker_id) == 0) {
+                if (zapp_worker_registry[i].owner_count > 0)
+                    return zapp_worker_registry[i].owners[0];
+                return NULL;
+            }
+        }
+        return NULL;
+    }
+
+    // Check if a worker is shared (non-static: called from jsc.m)
+    int zapp_worker_registry_is_shared(const char* worker_id) {
+        for (int i = 0; i < ZAPP_MAX_WORKERS; i++) {
+            if (zapp_worker_registry[i].active &&
+                strcmp(zapp_worker_registry[i].worker_id, worker_id) == 0) {
+                return zapp_worker_registry[i].shared;
+            }
+        }
+        return 0;
+    }
+
+    // Find an existing shared worker by script URL. Returns worker_id or NULL.
+    static const char* zapp_worker_registry_find_shared(const char* script_url) {
+        if (!script_url) return NULL;
+        for (int i = 0; i < ZAPP_MAX_WORKERS; i++) {
+            if (zapp_worker_registry[i].active && zapp_worker_registry[i].shared &&
+                strcmp(zapp_worker_registry[i].script_url, script_url) == 0) {
+                return zapp_worker_registry[i].worker_id;
+            }
+        }
+        return NULL;
+    }
+
+    // Add an owner to a shared worker. Returns 0 on success, -1 if not found or full.
+    static int zapp_worker_registry_add_owner(const char* worker_id, const char* owner_id) {
+        for (int i = 0; i < ZAPP_MAX_WORKERS; i++) {
+            if (zapp_worker_registry[i].active &&
+                strcmp(zapp_worker_registry[i].worker_id, worker_id) == 0) {
+                int c = zapp_worker_registry[i].owner_count;
+                // Check for duplicate
+                for (int j = 0; j < c; j++) {
+                    if (strcmp(zapp_worker_registry[i].owners[j], owner_id) == 0) return 0;
+                }
+                if (c >= ZAPP_MAX_OWNERS_PER_WORKER) return -1;
+                strncpy(zapp_worker_registry[i].owners[c], owner_id, 63);
+                zapp_worker_registry[i].owner_count++;
+                return 0;
+            }
+        }
+        return -1;
+    }
+
+    // Remove an owner from a shared worker. Returns remaining owner count, or -1 if not found.
+    // Non-static: called from jsc.m
+    int zapp_worker_registry_remove_owner(const char* worker_id, const char* owner_id) {
+        for (int i = 0; i < ZAPP_MAX_WORKERS; i++) {
+            if (zapp_worker_registry[i].active &&
+                strcmp(zapp_worker_registry[i].worker_id, worker_id) == 0) {
+                for (int j = 0; j < zapp_worker_registry[i].owner_count; j++) {
+                    if (strcmp(zapp_worker_registry[i].owners[j], owner_id) == 0) {
+                        // Shift remaining owners down
+                        for (int k = j; k < zapp_worker_registry[i].owner_count - 1; k++) {
+                            strcpy(zapp_worker_registry[i].owners[k],
+                                   zapp_worker_registry[i].owners[k + 1]);
+                        }
+                        zapp_worker_registry[i].owner_count--;
+                        return zapp_worker_registry[i].owner_count;
+                    }
+                }
+                return zapp_worker_registry[i].owner_count;
+            }
+        }
+        return -1;
+    }
+
+    // Get the registry entry for a worker (for iteration). Returns pointer or NULL.
+    static ZappWorkerEntry* zapp_worker_registry_get(const char* worker_id) {
+        for (int i = 0; i < ZAPP_MAX_WORKERS; i++) {
+            if (zapp_worker_registry[i].active &&
+                strcmp(zapp_worker_registry[i].worker_id, worker_id) == 0) {
+                return &zapp_worker_registry[i];
+            }
+        }
+        return NULL;
+    }
+}

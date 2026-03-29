@@ -1,0 +1,115 @@
+// Unified event dispatcher.
+// Layered dispatch: native callback (can cancel) → JS bridge (targeted to window).
+//
+// Raw C — Zen-C cannot express static mutable function pointer arrays.
+// This is the interop boundary between Zen-C Window.on() and platform events.
+
+import "./window.zc";
+
+raw {
+    #ifndef ZAPP_MAX_WINDOW_CALLBACKS
+    #define ZAPP_MAX_WINDOW_CALLBACKS 64
+    #endif
+    #ifndef ZAPP_MAX_WINDOW_EVENT_TYPES
+    #define ZAPP_MAX_WINDOW_EVENT_TYPES 11
+    #endif
+
+    // --- Layer 1: Native callbacks ---
+    // Registered via Window.on(event_id, callback) in Zen-C user code.
+    // Callbacks return 0 (ALLOW) or 1 (CANCEL).
+
+    static void (*zapp_window_on_ready_cbs[ZAPP_MAX_WINDOW_CALLBACKS])(int, void*) = {0};
+    static void* zapp_window_on_ready_handles[ZAPP_MAX_WINDOW_CALLBACKS] = {0};
+    static int (*zapp_window_event_cbs[ZAPP_MAX_WINDOW_CALLBACKS][ZAPP_MAX_WINDOW_EVENT_TYPES])(WindowEventData*) = {{0}};
+
+    // --- JS listener bitmask ---
+    // Bit per event type: set when JS registers a listener for that event on this window.
+    // Prevents building JS strings and calling evaluateJavaScript for unlistened events.
+    static uint32_t zapp_window_js_listeners[ZAPP_MAX_WINDOW_CALLBACKS] = {0};
+
+    // --- JS close guard ---
+    // When set, windowShouldClose dispatches event to JS and returns CANCEL.
+    // JS decides: call Window.close() (force) or do nothing.
+    static uint32_t zapp_window_close_guard[ZAPP_MAX_WINDOW_CALLBACKS] = {0};
+
+    void zapp_window_set_close_guard(int id, int enabled) {
+        if (id >= 0 && id < ZAPP_MAX_WINDOW_CALLBACKS)
+            zapp_window_close_guard[id] = enabled ? 1 : 0;
+    }
+
+    // --- Registration ---
+
+    void zapp_window_set_on_ready(int id, void* handle, void (*cb)(int, void*)) {
+        if (id >= 0 && id < ZAPP_MAX_WINDOW_CALLBACKS) {
+            zapp_window_on_ready_cbs[id] = cb;
+            zapp_window_on_ready_handles[id] = handle;
+        }
+    }
+
+    void zapp_window_trigger_on_ready(int id) {
+        if (id >= 0 && id < ZAPP_MAX_WINDOW_CALLBACKS && zapp_window_on_ready_cbs[id] != NULL) {
+            zapp_window_on_ready_cbs[id](id, zapp_window_on_ready_handles[id]);
+        }
+    }
+
+    void zapp_window_set_event_cb(int id, int event_id, int (*cb)(WindowEventData*)) {
+        if (id >= 0 && id < ZAPP_MAX_WINDOW_CALLBACKS && event_id >= 0 && event_id < ZAPP_MAX_WINDOW_EVENT_TYPES) {
+            zapp_window_event_cbs[id][event_id] = cb;
+        }
+    }
+
+    // JS listener tracking — called when JS adds/removes a listener for an event type
+    void zapp_window_set_js_listener(int id, int event_id, int has_listener) {
+        if (id >= 0 && id < ZAPP_MAX_WINDOW_CALLBACKS && event_id >= 0 && event_id < ZAPP_MAX_WINDOW_EVENT_TYPES) {
+            if (has_listener) {
+                zapp_window_js_listeners[id] |= (1u << event_id);
+            } else {
+                zapp_window_js_listeners[id] &= ~(1u << event_id);
+            }
+        }
+    }
+
+    // --- Unified dispatch ---
+    // Called by platform code (NSWindow delegate / WndProc).
+    // Layer 1: fire native callback (if registered). If it returns CANCEL, stop.
+    // Layer 2: fire JS bridge on the owning window's WebView (if JS listener exists).
+
+    // Platform-specific JS dispatch — implemented in platform/darwin/window.zc or windows/window.zc
+    extern void zapp_dispatch_event_to_js(int window_id, int event_id, int w, int h, int x, int y);
+
+    int zapp_dispatch_event(int window_id, int event_id, int w, int h, int x, int y) {
+        if (window_id < 0 || window_id >= ZAPP_MAX_WINDOW_CALLBACKS) return 0;
+        if (event_id < 0 || event_id >= ZAPP_MAX_WINDOW_EVENT_TYPES) return 0;
+
+        // Layer 1: Native callback
+        int result = 0; // ALLOW
+        if (zapp_window_event_cbs[window_id][event_id] != NULL) {
+            WindowEventData data = {0};
+            data.event = event_id;
+            data.width = w;
+            data.height = h;
+            data.x = x;
+            data.y = y;
+            result = zapp_window_event_cbs[window_id][event_id](&data);
+        }
+        if (result != 0) return result; // CANCEL — stop propagation
+
+        // Layer 1.5: JS close guard
+        // If JS has set a close guard, dispatch event to JS and prevent close.
+        // JS can then call Window.close() to force-close, or ignore.
+        #ifndef ZAPP_EVENT_WINDOW_CLOSE
+        #define ZAPP_EVENT_WINDOW_CLOSE 5
+        #endif
+        if (event_id == ZAPP_EVENT_WINDOW_CLOSE && zapp_window_close_guard[window_id]) {
+            zapp_dispatch_event_to_js(window_id, event_id, 0, 0, 0, 0);
+            return 1; // CANCEL — JS will decide
+        }
+
+        // Layer 2: JS bridge (targeted, only if JS has a listener)
+        if (zapp_window_js_listeners[window_id] & (1u << event_id)) {
+            zapp_dispatch_event_to_js(window_id, event_id, w, h, x, y);
+        }
+
+        return 0; // ALLOW
+    }
+}

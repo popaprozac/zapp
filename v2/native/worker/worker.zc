@@ -1,0 +1,32 @@
+// Worker engine abstraction — dispatches to JSC or txiki.js.
+// Workers are opt-in. Without an engine defined, stubs do nothing.
+
+import "./registry.zc";
+
+// Engine imports — only the defined engine is active.
+// Both files must exist (Zen-C resolves imports at parse time).
+@cfg(ZAPP_WORKER_ENGINE_JSC)
+import "./engines/jsc.zc";
+
+@cfg(ZAPP_WORKER_ENGINE_TXIKI)
+import "./engines/txiki.zc";
+
+// When no engine is defined, the jsc.zc / txiki.zc files provide
+// the worker_* functions. Without either define, we need stubs.
+// The simplest approach: always include stubs, engines override via @cfg.
+// But Zen-C doesn't allow duplicate function definitions.
+//
+// Solution: the router checks if workers are enabled before calling.
+// The worker_* functions only exist when an engine is defined.
+// The router gates on a build config flag.
+
+fn workers_enabled() -> bool {
+    raw {
+        #if defined(ZAPP_WORKER_ENGINE_JSC) || defined(ZAPP_WORKER_ENGINE_TXIKI)
+        return true;
+        #else
+        return false;
+        #endif
+    }
+    return false;
+}

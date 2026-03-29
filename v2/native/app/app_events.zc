@@ -1,0 +1,108 @@
+// App-level event dispatcher.
+// Fires for app lifecycle events (notification clicks, reopen, activate, etc.)
+// Native callbacks fire first. JS bridge forwarding handled separately.
+//
+// Raw C — mirrors window/callbacks.zc pattern but without window IDs.
+
+import "string.h" as str;
+
+raw {
+    #ifndef ZAPP_MAX_APP_EVENT_TYPES
+    #define ZAPP_MAX_APP_EVENT_TYPES 16
+    #endif
+    #ifndef ZAPP_MAX_APP_CALLBACKS
+    #define ZAPP_MAX_APP_CALLBACKS 8
+    #endif
+
+    // App event IDs: offset from 100 to avoid collision with window events (0-10)
+    // Index into callback array: event_id - 100
+    #ifndef ZAPP_APP_EVENT_BASE
+    #define ZAPP_APP_EVENT_BASE 100
+    #endif
+
+    // Callback signature: (event_id, data_json)
+    // data_json is optional context (e.g. notification ID, URL for deep links)
+    static void (*zapp_app_event_cbs[ZAPP_MAX_APP_EVENT_TYPES][ZAPP_MAX_APP_CALLBACKS])(int, const char*) = {{0}};
+
+    // Register a native callback for an app event.
+    void zapp_app_on(int event_id, void (*cb)(int, const char*)) {
+        int idx = event_id - ZAPP_APP_EVENT_BASE;
+        if (idx < 0 || idx >= ZAPP_MAX_APP_EVENT_TYPES) return;
+        for (int i = 0; i < ZAPP_MAX_APP_CALLBACKS; i++) {
+            if (zapp_app_event_cbs[idx][i] == NULL) {
+                zapp_app_event_cbs[idx][i] = cb;
+                return;
+            }
+        }
+    }
+
+    // Dispatch an app event to all registered native callbacks,
+    // then forward to backend worker (if running).
+    // Returns number of native callbacks fired.
+    int zapp_app_dispatch(int event_id, const char* data) {
+        int idx = event_id - ZAPP_APP_EVENT_BASE;
+        if (idx < 0 || idx >= ZAPP_MAX_APP_EVENT_TYPES) return 0;
+
+        // Layer 1: Native Zen-C callbacks
+        int fired = 0;
+        for (int i = 0; i < ZAPP_MAX_APP_CALLBACKS; i++) {
+            if (zapp_app_event_cbs[idx][i] != NULL) {
+                zapp_app_event_cbs[idx][i](event_id, data);
+                fired++;
+            }
+        }
+
+        // Layer 2: Backend worker (if running)
+        {
+            const char* safe_data = data ? data : "";
+            char buf[4096];
+            snprintf(buf, sizeof(buf),
+                "(function(){var b=self.__zappBridge||globalThis.__zappBridge;"
+                "if(b&&b._dispatchAppEvent)b._dispatchAppEvent(%d,'%s');})();",
+                event_id, safe_data);
+
+            #if defined(ZAPP_WORKER_ENGINE_TXIKI)
+            extern bool txiki_backend_is_running(void);
+            extern void txiki_backend_eval_js(const char* js);
+            if (txiki_backend_is_running()) {
+                txiki_backend_eval_js(buf);
+            }
+            #endif
+            #if defined(ZAPP_WORKER_ENGINE_JSC)
+            extern bool jsc_backend_is_running(void);
+            extern void jsc_backend_eval_js(const char* js);
+            if (jsc_backend_is_running()) {
+                jsc_backend_eval_js(buf);
+            }
+            #endif
+        }
+
+        // Layer 3: Forward to all WebViews (skip STARTED/SHUTDOWN — no WebViews exist yet/anymore)
+        #ifndef ZAPP_EVENT_APP_STARTED
+        #define ZAPP_EVENT_APP_STARTED 100
+        #define ZAPP_EVENT_APP_SHUTDOWN 101
+        #endif
+        if (event_id != ZAPP_EVENT_APP_STARTED && event_id != ZAPP_EVENT_APP_SHUTDOWN) {
+            // Map event ID to JS event name
+            const char* js_name = NULL;
+            switch (event_id) {
+                case 104: js_name = "app:reopen"; break;
+                case 105: js_name = "app:open-url"; break;
+                case 106: js_name = "app:active"; break;
+                case 107: js_name = "app:inactive"; break;
+            }
+            if (js_name) {
+                const char* safe_data = data ? data : "{}";
+                char js_buf[4096];
+                snprintf(js_buf, sizeof(js_buf),
+                    "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+                    "if(b&&b._onEvent)b._onEvent('%s','%s');})();",
+                    js_name, safe_data);
+                extern void darwin_webview_eval_all(const char* js);
+                darwin_webview_eval_all(js_buf);
+            }
+        }
+
+        return fired;
+    }
+}

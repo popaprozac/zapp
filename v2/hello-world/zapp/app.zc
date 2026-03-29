@@ -1,0 +1,181 @@
+import "app/app.zc";
+
+// Log via NSLog — writes to stderr, visible in terminal even via `open`
+fn log(msg: string) -> void {
+    raw {
+        extern void NSLog(id, ...);
+        NSLog(@"[native] %s", (const char*)msg);
+    }
+}
+
+fn greet(_app: App*, args: string) -> string {
+    log("service: greet called");
+    return args;
+}
+
+fn on_ready(_id: int, _handle: void*) -> void {
+    log("window ready, showing");
+    Window{id: _id, handle: _handle}.show();
+}
+
+// --- Native app-level event handlers ---
+
+fn on_notification_click(_event: int, _data: string) -> void {
+    log("app event: notification clicked");
+}
+
+fn on_notification_action(_event: int, _data: string) -> void {
+    log("app event: notification action");
+}
+
+fn on_reopen(_event: int, _data: string) -> void {
+    log("app event: reopen");
+}
+
+fn on_open_url(_event: int, _data: string) -> void {
+    log("app event: deep link opened");
+}
+
+fn on_app_started(_event: int, _data: string) -> void {
+    log("app event: started");
+}
+
+fn on_became_active(_event: int, _data: string) -> void {
+    log("app event: became active");
+}
+
+fn on_resigned_active(_event: int, _data: string) -> void {
+    log("app event: resigned active");
+}
+
+// --- Native menu action callbacks ---
+
+fn on_about() -> void {
+    log("menu action: About");
+}
+
+fn on_new_window() -> void {
+    log("menu action: New Window");
+}
+
+// --- Stateful service with lifecycle ---
+
+struct CounterService {
+    count: int;
+    ready: int;
+}
+
+// Global instance (lives for app lifetime)
+let counter_svc = CounterService{ count: 0, ready: 0 };
+
+fn counter_startup(ptr: void*) -> void {
+    let svc = (CounterService*)ptr;
+    svc.count = 0;
+    svc.ready = 1;
+    log("service lifecycle: counter started");
+}
+
+fn counter_shutdown(ptr: void*) -> void {
+    let svc = (CounterService*)ptr;
+    log("service lifecycle: counter shutdown");
+    svc.ready = 0;
+}
+
+fn counter_query(_app: App*, _args: string) -> string {
+    counter_svc.count += 1;
+    let c = counter_svc.count;
+    raw {
+        static char buf[64];
+        snprintf(buf, sizeof(buf), "{\"count\":%d}", c);
+        return buf;
+    }
+    return "";
+}
+
+fn run_app() -> int {
+    log("initializing app...");
+
+    let config = AppConfig{
+        name: "hello-world",
+        applicationShouldTerminateAfterLastWindowClosed: true,
+        webContentInspectable: -1,
+        maxWorkers: 0,
+        qjsStackSize: 0,
+        backend: true,
+    };
+    let app = App::new(config);
+    log("app created");
+
+    // Simple service (no state, no lifecycle)
+    app.service.add("greet", greet);
+    log("service registered: greet");
+
+    // Stateful service with lifecycle
+    let counter_impl = ServiceImpl{
+        handler: counter_query,
+        startup: counter_startup,
+        shutdown: counter_shutdown,
+    };
+    app.service.register("counter", (void*)&counter_svc, &counter_impl);
+    log("service registered: counter (with lifecycle)");
+
+    // Register app-level event handlers
+    app.on(AppEvent.STARTED, on_app_started);
+    app.on(AppEvent.NOTIFICATION_CLICK, on_notification_click);
+    app.on(AppEvent.NOTIFICATION_ACTION, on_notification_action);
+    app.on(AppEvent.REOPEN, on_reopen);
+    app.on(AppEvent.DID_BECOME_ACTIVE, on_became_active);
+    app.on(AppEvent.DID_RESIGN_ACTIVE, on_resigned_active);
+    app.on(AppEvent.OPEN_URL, on_open_url);
+    log("app events registered");
+
+    // Build native menu
+    let about = MenuItem::item_with_action("About hello-world", on_about);
+    let new_win = MenuItem::item_with_action("New Window", on_new_window);
+    new_win.accelerator = "CmdOrCtrl+N";
+    let sep = MenuItem::separator();
+    let hide = MenuItem::item_with_role("hide");
+    let quit = MenuItem::item_with_role("quit");
+    quit.label = "Quit hello-world";
+
+    let file_items = [new_win];
+    let file_menu = MenuItem::item("File");
+    file_menu.submenu = &file_items[0];
+    file_menu.submenu_count = 1;
+
+    let app_items = [about, sep, hide, quit];
+    let app_menu = MenuItem::item("hello-world");
+    app_menu.submenu = &app_items[0];
+    app_menu.submenu_count = 4;
+
+    let edit_menu = MenuItem::item_with_role("editMenu");
+
+    let menus = [app_menu, file_menu, edit_menu];
+    app.menu.set(&menus[0], 3);
+    log("menu set: app, File, Edit");
+
+    // Register notification category with action buttons (native-first API)
+    let reply_action = NotificationAction{ id: "reply", title: "Reply", destructive: 0 };
+    let delete_action = NotificationAction{ id: "delete", title: "Delete", destructive: 1 };
+    let notif_actions = [reply_action, delete_action];
+    let msg_category = NotificationCategory{
+        id: "message",
+        actions: &notif_actions[0],
+        action_count: 2,
+        has_reply_field: 1,
+        reply_placeholder: "Type reply...",
+        reply_button_title: "Send",
+    };
+    app.notification.register_category(&msg_category);
+    log("notification category registered: message (reply, delete, reply field)");
+
+    // Create window
+    let opts = WindowOptions::create("hello-world");
+    opts.visible = false;
+    let win = app.window.create(&opts);
+    log("window created");
+    win.on_ready(on_ready);
+
+    log("starting event loop...");
+    return app.run();
+}

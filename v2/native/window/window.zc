@@ -1,0 +1,318 @@
+// Cross-platform window API (abstraction layer).
+// Pure Zen-C — structs, enums, accessors, platform trampolines.
+// Zero raw blocks.
+
+import "std/map.zc";
+import "stdio.h" as c;
+import "./events.zc";
+
+// --- Types ---
+
+enum TitleBarStyle {
+    Default,
+    Hidden,
+    HiddenInset,
+}
+
+struct WindowOptions {
+    title: string;
+    url: string;   // Override initial URL (empty = use default)
+    width: int;
+    height: int;
+    x: int;
+    y: int;
+    visible: bool;
+    resizable: bool;
+    closable: bool;
+    minimizable: bool;
+    maximizable: bool;
+    fullscreen: bool;
+    borderless: bool;
+    transparent: bool;
+    hidden: bool;
+    alwaysOnTop: bool;
+    titleBarStyle: TitleBarStyle;
+    webContentInspectable: int; // -1 = inherit, 0 = off, 1 = on
+}
+
+struct WindowSize {
+    width: int;
+    height: int;
+}
+
+struct WindowPosition {
+    x: int;
+    y: int;
+}
+
+// WindowEventData must be a raw typedef — raw blocks in callbacks.zc stack-allocate it
+raw {
+    #ifndef ZAPP_WINDOW_EVENT_DATA_DEFINED
+    #define ZAPP_WINDOW_EVENT_DATA_DEFINED
+    typedef struct WindowEventData {
+        int32_t event;
+        int32_t width;
+        int32_t height;
+        int32_t x;
+        int32_t y;
+    } WindowEventData;
+    #endif
+}
+
+// --- WindowOptions default ---
+
+impl WindowOptions {
+    fn create(title: string) -> WindowOptions {
+        return WindowOptions{
+            title: title,
+            url: "",
+            width: 1200,
+            height: 800,
+            x: 0,
+            y: 0,
+            visible: true,
+            resizable: true,
+            closable: true,
+            minimizable: true,
+            maximizable: true,
+            fullscreen: false,
+            borderless: false,
+            transparent: false,
+            hidden: false,
+            alwaysOnTop: false,
+            titleBarStyle: TitleBarStyle::Default(),
+            webContentInspectable: -1,
+        };
+    }
+}
+
+// --- WindowOptions accessor functions ---
+// Called by .m code through the C header. Bridges Zen-C struct fields to C.
+// Pure Zen-C — no raw blocks, auto-deref on pointer fields.
+
+fn wopts_title(opts: WindowOptions*) -> string { return opts.title; }
+fn wopts_url(opts: WindowOptions*) -> string { return opts.url; }
+fn wopts_width(opts: WindowOptions*) -> int { return opts.width; }
+fn wopts_height(opts: WindowOptions*) -> int { return opts.height; }
+fn wopts_x(opts: WindowOptions*) -> int { return opts.x; }
+fn wopts_y(opts: WindowOptions*) -> int { return opts.y; }
+fn wopts_visible(opts: WindowOptions*) -> bool { return opts.visible; }
+fn wopts_resizable(opts: WindowOptions*) -> bool { return opts.resizable; }
+fn wopts_closable(opts: WindowOptions*) -> bool { return opts.closable; }
+fn wopts_minimizable(opts: WindowOptions*) -> bool { return opts.minimizable; }
+fn wopts_maximizable(opts: WindowOptions*) -> bool { return opts.maximizable; }
+fn wopts_fullscreen(opts: WindowOptions*) -> bool { return opts.fullscreen; }
+fn wopts_borderless(opts: WindowOptions*) -> bool { return opts.borderless; }
+fn wopts_transparent(opts: WindowOptions*) -> bool { return opts.transparent; }
+fn wopts_hidden(opts: WindowOptions*) -> bool { return opts.hidden; }
+fn wopts_always_on_top(opts: WindowOptions*) -> bool { return opts.alwaysOnTop; }
+fn wopts_inspectable(opts: WindowOptions*) -> int { return opts.webContentInspectable; }
+
+fn wopts_title_bar_style_tag(opts: WindowOptions*) -> int {
+    match opts.titleBarStyle {
+        TitleBarStyle::Default => { return 0; },
+        TitleBarStyle::Hidden => { return 1; },
+        TitleBarStyle::HiddenInset => { return 2; },
+    }
+    return 0;
+}
+
+// --- Window struct ---
+
+struct Window {
+    id: int;
+    handle: void*;
+}
+
+impl Window {
+    fn on(self, event_id: int, cb: fn*(WindowEventData*) -> int) -> void {
+        zapp_window_set_event_cb(self.id, event_id, cb);
+    }
+
+    fn on_ready(self, cb: fn*(int, void*) -> void) -> void {
+        zapp_window_set_on_ready(self.id, self.handle, cb);
+    }
+
+    fn show(self) -> void {
+        if self.handle != NULL { window_show(self.handle); }
+    }
+
+    fn hide(self) -> void {
+        if self.handle != NULL { window_hide(self.handle); }
+    }
+
+    fn close(self) -> void {
+        if self.handle != NULL { window_force_close(self.handle); }
+    }
+
+    fn destroy(self) -> void {
+        if self.handle != NULL { window_force_close(self.handle); }
+    }
+
+    fn set_title(self, title: string) -> void {
+        if self.handle != NULL { window_set_title(self.handle, title); }
+    }
+
+    fn set_size(self, width: int, height: int) -> void {
+        if self.handle != NULL { window_set_size(self.handle, width, height); }
+    }
+
+    fn set_position(self, x: int, y: int) -> void {
+        if self.handle != NULL { window_set_position(self.handle, x, y); }
+    }
+
+    fn minimize(self) -> void {
+        if self.handle != NULL { window_minimize(self.handle); }
+    }
+
+    fn maximize(self) -> void {
+        if self.handle != NULL { window_maximize(self.handle); }
+    }
+
+    fn set_fullscreen(self, on: bool) -> void {
+        if self.handle != NULL { window_set_fullscreen(self.handle, on); }
+    }
+
+    fn set_always_on_top(self, on: bool) -> void {
+        if self.handle != NULL { window_set_always_on_top(self.handle, on); }
+    }
+
+    fn size(self) -> WindowSize {
+        if self.handle != NULL { return window_get_size(self.handle); }
+        return WindowSize{ width: 0, height: 0 };
+    }
+
+    fn position(self) -> WindowPosition {
+        if self.handle != NULL { return window_get_position(self.handle); }
+        return WindowPosition{ x: 0, y: 0 };
+    }
+
+    fn is_valid(self) -> bool { return self.handle != NULL; }
+
+    fn set_close_guard(self, enabled: bool) -> void {
+        let wid = self.id;
+        raw {
+            extern void zapp_window_set_close_guard(int id, int enabled);
+            zapp_window_set_close_guard(wid, enabled ? 1 : 0);
+        }
+    }
+
+    fn load_url(self, url: string) -> void {
+        let wid = self.id;
+        raw {
+            extern void darwin_window_load_url(int32_t window_id, const char* url);
+            darwin_window_load_url(wid, (const char*)url);
+        }
+    }
+}
+
+// --- Window Manager ---
+
+struct App;
+
+struct WindowManager {
+    app: App*;
+    webContentInspectable: bool;
+    handles: Map<void*>;
+    next_id: int;
+}
+
+impl WindowManager {
+    fn new() -> Self {
+        return WindowManager{
+            app: NULL,
+            webContentInspectable: true,
+            handles: Map<void*>::new(),
+            next_id: 0,
+        };
+    }
+
+    fn create(self, options: WindowOptions*) -> Window {
+        if options.webContentInspectable < 0 {
+            if self.webContentInspectable {
+                options.webContentInspectable = 1;
+            } else {
+                options.webContentInspectable = 0;
+            }
+        }
+        let handle = window_create(options);
+        let key: char[32];
+        c::snprintf(key, 32, "win-%d", self.next_id);
+        self.handles.put(key, handle);
+        let id = self.next_id;
+        window_register_numeric_id(handle, id);
+        self.next_id += 1;
+        return Window{ id: id, handle: handle };
+    }
+
+    fn get(self, id: int) -> Window {
+        let key: char[32];
+        c::snprintf(key, 32, "win-%d", id);
+        let maybe = self.handles.get(key);
+        if maybe.is_some() {
+            return Window{ id: id, handle: maybe.unwrap() };
+        }
+        return Window{ id: id, handle: NULL };
+    }
+
+    fn close(self, id: int) -> void {
+        let key: char[32];
+        c::snprintf(key, 32, "win-%d", id);
+        let maybe = self.handles.get(key);
+        if maybe.is_some() {
+            self.handles.remove(key);
+            window_destroy(maybe.unwrap());
+        }
+    }
+}
+
+// --- Platform dispatch trampolines ---
+// Import the C header, call through to .m implementations.
+
+@cfg(apple)
+import "../platform/darwin/window.h" as darwin_win;
+
+@cfg(apple)
+fn window_create(options: WindowOptions*) -> void* { return darwin_win::darwin_window_create(options); }
+@cfg(apple)
+fn window_destroy(handle: void*) -> void { darwin_win::darwin_window_destroy(handle); }
+@cfg(apple)
+fn window_show(handle: void*) -> void { darwin_win::darwin_window_show(handle); }
+@cfg(apple)
+fn window_hide(handle: void*) -> void { darwin_win::darwin_window_hide(handle); }
+@cfg(apple)
+fn window_force_close(handle: void*) -> void { darwin_win::darwin_window_force_close(handle); }
+@cfg(apple)
+fn window_register_numeric_id(handle: void*, id: int) -> void { darwin_win::darwin_window_register_numeric_id(handle, id); }
+@cfg(apple)
+fn window_minimize(handle: void*) -> void { darwin_win::darwin_window_minimize(handle); }
+@cfg(apple)
+fn window_maximize(handle: void*) -> void { darwin_win::darwin_window_maximize(handle); }
+@cfg(apple)
+fn window_set_title(handle: void*, title: string) -> void { darwin_win::darwin_window_set_title(handle, title); }
+@cfg(apple)
+fn window_set_size(handle: void*, w: int, h: int) -> void { darwin_win::darwin_window_set_size(handle, w, h); }
+@cfg(apple)
+fn window_set_position(handle: void*, x: int, y: int) -> void { darwin_win::darwin_window_set_position(handle, x, y); }
+@cfg(apple)
+fn window_set_fullscreen(handle: void*, on: bool) -> void { darwin_win::darwin_window_set_fullscreen(handle, on); }
+@cfg(apple)
+fn window_set_always_on_top(handle: void*, on: bool) -> void { darwin_win::darwin_window_set_always_on_top(handle, on); }
+
+@cfg(apple)
+fn window_get_size(handle: void*) -> WindowSize {
+    let w: int = 0;
+    let h: int = 0;
+    darwin_win::darwin_window_get_size(handle, &w, &h);
+    return WindowSize{ width: w, height: h };
+}
+
+@cfg(apple)
+fn window_get_position(handle: void*) -> WindowPosition {
+    let x: int = 0;
+    let y: int = 0;
+    darwin_win::darwin_window_get_position(handle, &x, &y);
+    return WindowPosition{ x: x, y: y };
+}
+
+// TODO: @cfg(windows) trampolines

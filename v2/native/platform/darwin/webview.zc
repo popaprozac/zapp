@@ -1,0 +1,5 @@
+// macOS WebView implementation (platform layer).
+// ~99% Objective-C — WKWebView subclass, scheme handler, navigation delegate,
+// message handler, drag region support.
+
+// TODO: Port from v1 src/platform/darwin/webview.zc

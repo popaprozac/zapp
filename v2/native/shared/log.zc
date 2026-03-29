@@ -1,0 +1,4 @@
+// Logging utilities (raw C — platform printf).
+// Supports log levels, TTY color detection, per-module context.
+
+// TODO: Port from v1 src/platform/shared/log.zc

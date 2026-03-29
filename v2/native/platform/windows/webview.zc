@@ -1,0 +1,4 @@
+// Windows WebView2 implementation (platform layer).
+// ~99% raw C/COM — WebView2 controller, message handling, navigation.
+
+// TODO: Port from v1 src/platform/windows/webview.zc

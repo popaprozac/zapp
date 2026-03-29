@@ -1,0 +1,4 @@
+// Windows window implementation (platform layer).
+// ~98% raw C/Win32 — HWND creation, DPI scaling, window state.
+
+// TODO: Port from v1 src/platform/windows/window.zc

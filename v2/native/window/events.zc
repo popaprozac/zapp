@@ -1,0 +1,90 @@
+// Window and app event definitions.
+// Source of truth for event IDs used across the framework.
+//
+// Uses struct+def pattern (not enums) because raw blocks across platform
+// files need direct int comparisons. The #define macros below mirror these
+// values for raw block access — they MUST be duplicated with #ifndef guards
+// in each platform file due to unpredictable raw block ordering.
+
+struct WindowEvents {
+    READY: int;
+    FOCUS: int;
+    BLUR: int;
+    RESIZE: int;
+    MOVE: int;
+    CLOSE: int;
+    MINIMIZE: int;
+    MAXIMIZE: int;
+    RESTORE: int;
+    FULLSCREEN: int;
+    UNFULLSCREEN: int;
+}
+
+def WindowEvent = WindowEvents{
+    READY: 0,
+    FOCUS: 1,
+    BLUR: 2,
+    RESIZE: 3,
+    MOVE: 4,
+    CLOSE: 5,
+    MINIMIZE: 6,
+    MAXIMIZE: 7,
+    RESTORE: 8,
+    FULLSCREEN: 9,
+    UNFULLSCREEN: 10,
+};
+
+struct AppEvents {
+    STARTED: int;
+    SHUTDOWN: int;
+    NOTIFICATION_CLICK: int;
+    NOTIFICATION_ACTION: int;
+    REOPEN: int;
+    OPEN_URL: int;
+    DID_BECOME_ACTIVE: int;
+    DID_RESIGN_ACTIVE: int;
+}
+
+def AppEvent = AppEvents{
+    STARTED: 100,
+    SHUTDOWN: 101,
+    NOTIFICATION_CLICK: 102,
+    NOTIFICATION_ACTION: 103,
+    REOPEN: 104,
+    OPEN_URL: 105,
+    DID_BECOME_ACTIVE: 106,
+    DID_RESIGN_ACTIVE: 107,
+};
+
+// EventResult uses a real enum — user-facing, benefits from type safety
+enum EventResult {
+    Allow,
+    Cancel,
+}
+
+raw {
+    // C-accessible macros (source of truth).
+    // Other files mirror these with #ifndef guards.
+    #define ZAPP_EVENT_WINDOW_READY       0
+    #define ZAPP_EVENT_WINDOW_FOCUS       1
+    #define ZAPP_EVENT_WINDOW_BLUR        2
+    #define ZAPP_EVENT_WINDOW_RESIZE      3
+    #define ZAPP_EVENT_WINDOW_MOVE        4
+    #define ZAPP_EVENT_WINDOW_CLOSE       5
+    #define ZAPP_EVENT_WINDOW_MINIMIZE    6
+    #define ZAPP_EVENT_WINDOW_MAXIMIZE    7
+    #define ZAPP_EVENT_WINDOW_RESTORE     8
+    #define ZAPP_EVENT_WINDOW_FULLSCREEN  9
+    #define ZAPP_EVENT_WINDOW_UNFULLSCREEN 10
+
+    #define ZAPP_EVENT_APP_STARTED             100
+    #define ZAPP_EVENT_APP_SHUTDOWN            101
+    #define ZAPP_EVENT_APP_NOTIFICATION_CLICK  102
+    #define ZAPP_EVENT_APP_NOTIFICATION_ACTION 103
+    #define ZAPP_EVENT_APP_REOPEN             104
+    #define ZAPP_EVENT_APP_OPEN_URL           105
+    #define ZAPP_EVENT_APP_DID_BECOME_ACTIVE  106
+    #define ZAPP_EVENT_APP_DID_RESIGN_ACTIVE  107
+
+    #define ZAPP_MAX_WINDOW_EVENT_TYPES  11
+}

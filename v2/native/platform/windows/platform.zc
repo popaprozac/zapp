@@ -1,0 +1,5 @@
+// Windows platform init (platform layer).
+// Window class registration, WndProc message loop, menus, event dispatch.
+// ~85% raw C/Win32, ~15% Zen-C.
+
+// TODO: Port from v1 src/platform/windows/platform.zc

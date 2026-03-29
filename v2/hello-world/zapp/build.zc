@@ -1,0 +1,25 @@
+// Build directives — platform tags and framework linking.
+// .m file compilation is handled by the zapp CLI.
+
+//> macos: define: apple
+//> windows: define: windows
+//> macos: define: ZAPP_WORKER_ENGINE_JSC
+
+//> macos: framework: Cocoa
+//> macos: framework: WebKit
+//> macos: framework: CoreFoundation
+//> macos: framework: JavaScriptCore
+//> macos: framework: Security
+//> macos: framework: UserNotifications
+//> macos: link: -lcompression
+//> macos: cflags: -fobjc-arc -x objective-c
+
+//> windows: cflags: -DUNICODE -D_UNICODE -DCINTERFACE -DCOBJMACROS
+//> windows: link: -lole32 -lshell32 -luuid -luser32 -lgdi32 -lcomctl32 -lcomdlg32 -lshlwapi
+//> windows: link: -lwinhttp -lbcrypt -ladvapi32 -lrpcrt4 -lcrypt32 -lversion
+
+import "app.zc";
+
+fn main() -> int {
+    return run_app();
+}

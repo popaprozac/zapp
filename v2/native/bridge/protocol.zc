@@ -1,0 +1,97 @@
+// Bridge protocol — message types and parsing.
+// Format: JSON with numeric type routing.
+// Example: {"t":1,"id":42,"m":"greet","a":{"name":"World"}}
+
+import "std/json.zc";
+import "string.h" as str;
+
+// --- Message types (numeric, switch dispatch) ---
+
+struct MessageTypes {
+    INVOKE: int;
+    INVOKE_RESPONSE: int;
+    EMIT: int;
+    WINDOW_ACTION: int;
+    WORKER: int;
+    SYNC: int;
+    CANCEL: int;
+}
+
+def MsgType = MessageTypes{
+    INVOKE: 1,
+    INVOKE_RESPONSE: 2,
+    EMIT: 3,
+    WINDOW_ACTION: 4,
+    WORKER: 5,
+    SYNC: 6,
+    CANCEL: 7,
+};
+
+// --- Parsed message ---
+
+struct BridgeMessage {
+    msg_type: int;
+    request_id: int;
+    method: string;
+    payload: string;
+    valid: bool;
+}
+
+// Parse a JSON bridge message.
+fn bridge_parse(raw: string) -> BridgeMessage {
+    let msg = BridgeMessage{
+        msg_type: 0,
+        request_id: 0,
+        method: "",
+        payload: "",
+        valid: false,
+    };
+
+    let parse_result = JsonValue::parse(raw);
+    if parse_result.is_err() { return msg; }
+    let json = parse_result.unwrap();
+
+    // Required: t (type)
+    let t_opt = json.get_int("t");
+    if !t_opt.is_some() { return msg; }
+    msg.msg_type = t_opt.unwrap();
+
+    // Optional: id (request ID)
+    let id_opt = json.get_int("id");
+    if id_opt.is_some() { msg.request_id = id_opt.unwrap(); }
+
+    // Optional: m (method name)
+    let m_opt = json.get_string("m");
+    if m_opt.is_some() { msg.method = m_opt.unwrap(); }
+
+    // Optional: a (args — pass as raw string for handler to parse)
+    // For now, pass the full raw JSON — handler extracts "a" itself
+    // This avoids re-stringifying a JsonValue which returns String struct
+    msg.payload = raw;
+
+    msg.valid = true;
+    return msg;
+}
+
+// --- Cancellation tracking ---
+
+raw {
+    #define ZAPP_MAX_REQUEST_IDS 65536
+    static uint8_t zapp_cancelled_bitmap[ZAPP_MAX_REQUEST_IDS / 8] = {0};
+
+    static inline void zapp_cancel_request(int id) {
+        if (id >= 0 && id < ZAPP_MAX_REQUEST_IDS)
+            zapp_cancelled_bitmap[id / 8] |= (1 << (id % 8));
+    }
+
+    static inline int zapp_is_cancelled(int id) {
+        if (id >= 0 && id < ZAPP_MAX_REQUEST_IDS)
+            return (zapp_cancelled_bitmap[id / 8] >> (id % 8)) & 1;
+        return 0;
+    }
+
+    static inline void zapp_clear_cancelled(int id) {
+        if (id >= 0 && id < ZAPP_MAX_REQUEST_IDS)
+            zapp_cancelled_bitmap[id / 8] &= ~(1 << (id % 8));
+    }
+}

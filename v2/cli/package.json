@@ -1,0 +1,11 @@
+{
+  "name": "@zappdev/cli",
+  "version": "2.0.0-alpha.0",
+  "type": "module",
+  "bin": {
+    "zapp": "./src/zapp-cli.ts"
+  },
+  "dependencies": {
+    "yargs": "^17.7.2"
+  }
+}

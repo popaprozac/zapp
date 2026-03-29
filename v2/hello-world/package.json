@@ -1,0 +1,16 @@
+{
+  "name": "hello-world",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run ../cli/src/zapp-cli.ts dev",
+    "build": "bun run ../cli/src/zapp-cli.ts build",
+    "generate": "bun run ../cli/src/zapp-cli.ts generate"
+  },
+  "devDependencies": {
+    "typescript": "~5.9.3",
+    "vite": "^8.0.1"
+  },
+  "dependencies": {}
+}

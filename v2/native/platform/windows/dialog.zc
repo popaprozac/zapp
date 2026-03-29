@@ -1,0 +1,4 @@
+// Windows dialogs (platform layer).
+// GetOpenFileNameW, GetSaveFileNameW, TaskDialogIndirect, IFileDialog COM.
+
+// TODO: Port dialog code from v1 src/platform/windows/window.zc

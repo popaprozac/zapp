@@ -1,0 +1,614 @@
+// Message routing — parses bridge messages and dispatches to handlers.
+
+import "std/json.zc";
+import "string.h" as str;
+import "../bridge/protocol.zc";
+import "../bridge/dispatch.zc";
+import "../service/service.zc";
+import "../window/events.zc";
+// darwin_win imported via dispatch.zc → darwin/window.h
+@cfg(apple)
+import "../platform/darwin/dialog.h" as darwin_dialog;
+
+fn router_handle_message(app: App*, msg: string, window_id: int) -> void {
+    let parsed = bridge_parse(msg);
+    if !parsed.valid { return; }
+
+    if parsed.msg_type == MsgType.INVOKE {
+        // Check for __dialog: prefix
+        let is_dialog: bool = false;
+        raw { is_dialog = (strncmp((const char*)parsed.method, "__dialog:", 9) == 0); }
+        if is_dialog {
+            router_handle_dialog(parsed.method, parsed.payload, window_id, parsed.request_id);
+            return;
+        }
+
+        // Check for __notif: prefix
+        let is_notif: bool = false;
+        raw { is_notif = (strncmp((const char*)parsed.method, "__notif:", 7) == 0); }
+        if is_notif {
+            router_handle_notification(parsed.method, parsed.payload, window_id, parsed.request_id);
+            return;
+        }
+
+        // Check for __window:create
+        let is_window_create: bool = false;
+        raw { is_window_create = (strcmp((const char*)parsed.method, "__window:create") == 0); }
+        if is_window_create {
+            // Create a new window from the frontend
+            let opts = WindowOptions::create("Zapp");
+            // Parse options from payload if provided
+            let parse_result = JsonValue::parse(parsed.payload);
+            if parse_result.is_ok() {
+                let json = parse_result.unwrap();
+                let a_opt = json.get("a");
+                if a_opt.is_some() {
+                    let args = a_opt.unwrap();
+                    let title_opt = args.get_string("title");
+                    if title_opt.is_some() { opts.title = title_opt.unwrap(); }
+                    let url_opt = args.get_string("url");
+                    if url_opt.is_some() { opts.url = url_opt.unwrap(); }
+                    let w_opt = args.get_int("width");
+                    if w_opt.is_some() { opts.width = w_opt.unwrap(); }
+                    let h_opt = args.get_int("height");
+                    if h_opt.is_some() { opts.height = h_opt.unwrap(); }
+                }
+            }
+            opts.visible = true;
+            let win = app.window.create(&opts);
+            // Return the window ID to the caller
+            raw {
+                char resp[128];
+                snprintf(resp, sizeof(resp), "{\"windowId\":\"win-%d\"}", win.id);
+                dispatch_invoke_response(window_id, parsed.request_id, true, resp);
+            }
+            return;
+        }
+
+        let result = service_invoke(app, parsed.method, parsed.payload);
+        if result.is_ok() {
+            dispatch_invoke_response(window_id, parsed.request_id, true, result.unwrap());
+        } else {
+            dispatch_invoke_response(window_id, parsed.request_id, false, "NOT_FOUND");
+        }
+        return;
+    }
+
+    if parsed.msg_type == MsgType.CANCEL {
+        raw { zapp_cancel_request(parsed.request_id); }
+        return;
+    }
+
+    if parsed.msg_type == MsgType.EMIT {
+        dispatch_event_to_all(parsed.method, parsed.payload);
+        return;
+    }
+
+    if parsed.msg_type == MsgType.WINDOW_ACTION {
+        router_handle_window_action(app, parsed.method, parsed.payload, window_id);
+        return;
+    }
+
+    if parsed.msg_type == MsgType.WORKER {
+        router_handle_worker(app, parsed.method, parsed.payload, window_id);
+        return;
+    }
+
+    if parsed.msg_type == MsgType.SYNC {
+        raw {
+            extern void darwin_sync_handle(const char* action, const char* payload_json);
+            darwin_sync_handle((const char*)parsed.method, (const char*)parsed.payload);
+        }
+        return;
+    }
+}
+
+// Map "window:eventname" → event ID for bitmask
+fn event_name_to_id(name: string) -> int {
+    raw {
+        const char* n = (const char*)name;
+        // Skip "window:" prefix
+        if (strncmp(n, "window:", 7) == 0) n += 7;
+        if (strcmp(n, "ready") == 0)        return 0;
+        if (strcmp(n, "focus") == 0)        return 1;
+        if (strcmp(n, "blur") == 0)         return 2;
+        if (strcmp(n, "resize") == 0)       return 3;
+        if (strcmp(n, "move") == 0)         return 4;
+        if (strcmp(n, "close") == 0)        return 5;
+        if (strcmp(n, "minimize") == 0)     return 6;
+        if (strcmp(n, "maximize") == 0)     return 7;
+        if (strcmp(n, "restore") == 0)      return 8;
+        if (strcmp(n, "fullscreen") == 0)   return 9;
+        if (strcmp(n, "unfullscreen") == 0) return 10;
+    }
+    return -1;
+}
+
+fn router_handle_window_action(app: App*, action: string, payload: string, window_id: int) -> void {
+    // Handle bridge ready signal
+    let is_ready: bool = false;
+    raw { is_ready = (strcmp((const char*)action, "ready") == 0); }
+    if is_ready {
+        let wid = darwin_win::darwin_window_id_string(window_id);
+        if wid != NULL {
+            // Terminate any existing workers owned by this window (handles page refresh)
+            raw {
+                #if defined(ZAPP_WORKER_ENGINE_JSC) || defined(ZAPP_WORKER_ENGINE_TXIKI)
+                extern void worker_terminate_owner(char* owner_id);
+                worker_terminate_owner((char*)wid);
+                #endif
+            }
+            darwin_win::darwin_window_set_bridge_ready(wid);
+        }
+        // NOTE: notification event flush moved to subscribe handler (lazy flush)
+        // so buffered events only dispatch after user code registers handlers
+
+        // Fire the native on_ready callback for this window
+        raw {
+            extern void zapp_window_trigger_on_ready(int id);
+            zapp_window_trigger_on_ready(window_id);
+        }
+        return;
+    }
+
+    // Parse args from payload
+    let parse_result = JsonValue::parse(payload);
+    if parse_result.is_err() { return; }
+    let json = parse_result.unwrap();
+
+    let a_opt = json.get("a");
+    if !a_opt.is_some() { return; }
+    let args = a_opt.unwrap();
+
+    // Window operations — get the window handle from the manager
+    let win = app.window.get(window_id);
+    if !win.is_valid() { return; }
+
+    let is_show: bool = false;
+    let is_hide: bool = false;
+    let is_minimize: bool = false;
+    let is_maximize: bool = false;
+    let is_subscribe: bool = false;
+    let is_unsubscribe: bool = false;
+    let is_set_title: bool = false;
+    let is_set_fullscreen: bool = false;
+    let is_set_always_on_top: bool = false;
+    let is_set_size: bool = false;
+    let is_set_position: bool = false;
+
+    raw {
+        const char* a = (const char*)action;
+        is_show = (strcmp(a, "show") == 0);
+        is_hide = (strcmp(a, "hide") == 0);
+        is_minimize = (strcmp(a, "minimize") == 0);
+        is_maximize = (strcmp(a, "maximize") == 0);
+        is_subscribe = (strcmp(a, "subscribe") == 0);
+        is_unsubscribe = (strcmp(a, "unsubscribe") == 0);
+        is_set_title = (strcmp(a, "setTitle") == 0);
+        is_set_fullscreen = (strcmp(a, "setFullscreen") == 0);
+        is_set_always_on_top = (strcmp(a, "setAlwaysOnTop") == 0);
+        is_set_size = (strcmp(a, "setSize") == 0);
+        is_set_position = (strcmp(a, "setPosition") == 0);
+    }
+
+    // openExternal — open URL in system browser
+    let is_open_external: bool = false;
+    raw { is_open_external = (strcmp((const char*)action, "openExternal") == 0); }
+    if is_open_external {
+        let url_opt = args.get_string("url");
+        if url_opt.is_some() {
+            raw {
+                extern void darwin_open_external(const char* url);
+                darwin_open_external((const char*)url_opt.val);
+            }
+        }
+        return;
+    }
+
+    // Draggable regions
+    let is_set_drag: bool = false;
+    raw { is_set_drag = (strcmp((const char*)action, "setDragRegion") == 0); }
+    if is_set_drag {
+        let drag_opt = args.get_bool("drag");
+        if drag_opt.is_some() {
+            raw {
+                extern void darwin_webview_set_drag_region(int32_t window_id, bool drag);
+                darwin_webview_set_drag_region(window_id, drag_opt.val);
+            }
+        }
+        return;
+    }
+
+    // Close guard — JS can prevent window close
+    let is_set_close_guard: bool = false;
+    let is_close: bool = false;
+    raw {
+        is_set_close_guard = (strcmp((const char*)action, "setCloseGuard") == 0);
+        is_close = (strcmp((const char*)action, "close") == 0);
+    }
+    if is_set_close_guard {
+        let on_opt = args.get_bool("on");
+        if on_opt.is_some() {
+            raw {
+                extern void zapp_window_set_close_guard(int id, int enabled);
+                zapp_window_set_close_guard(window_id, on_opt.val ? 1 : 0);
+            }
+        }
+        return;
+    }
+    if is_close {
+        // Force close — clear guard, then close (bypasses windowShouldClose)
+        raw {
+            extern void zapp_window_set_close_guard(int id, int enabled);
+            zapp_window_set_close_guard(window_id, 0);
+        }
+        window_force_close(win.handle);
+        return;
+    }
+
+    // loadUrl — navigate WebView to a new URL
+    let is_load_url: bool = false;
+    raw { is_load_url = (strcmp((const char*)action, "loadUrl") == 0); }
+    if is_load_url {
+        let url_opt = args.get_string("url");
+        if url_opt.is_some() {
+            raw {
+                extern void darwin_window_load_url(int32_t window_id, const char* url);
+                darwin_window_load_url(window_id, (const char*)url_opt.val);
+            }
+        }
+        return;
+    }
+
+    // Menu actions — use the full payload (ObjC extracts "a" items array)
+    let is_set_menu: bool = false;
+    let is_show_ctx: bool = false;
+    raw {
+        is_set_menu = (strcmp((const char*)action, "setMenu") == 0);
+        is_show_ctx = (strcmp((const char*)action, "showContextMenu") == 0);
+    }
+    if is_set_menu {
+        raw {
+            extern void darwin_menu_set_from_payload(const char* payload_json);
+            darwin_menu_set_from_payload((const char*)payload);
+        }
+        return;
+    }
+    if is_show_ctx {
+        raw {
+            extern void darwin_menu_show_context_from_payload(const char* payload_json, int32_t window_id);
+            darwin_menu_show_context_from_payload((const char*)payload, window_id);
+        }
+        return;
+    }
+
+    if is_show { win.show(); return; }
+    if is_hide { win.hide(); return; }
+    if is_minimize { window_minimize(win.handle); return; }
+    if is_maximize { window_maximize(win.handle); return; }
+
+    if is_set_title {
+        let title_opt = args.get_string("title");
+        if title_opt.is_some() {
+            window_set_title(win.handle, title_opt.unwrap());
+        }
+        return;
+    }
+
+    if is_set_size {
+        let w_opt = args.get_int("width");
+        let h_opt = args.get_int("height");
+        if w_opt.is_some() && h_opt.is_some() {
+            window_set_size(win.handle, w_opt.unwrap(), h_opt.unwrap());
+        }
+        return;
+    }
+
+    if is_set_position {
+        let x_opt = args.get_int("x");
+        let y_opt = args.get_int("y");
+        if x_opt.is_some() && y_opt.is_some() {
+            window_set_position(win.handle, x_opt.unwrap(), y_opt.unwrap());
+        }
+        return;
+    }
+
+    if is_set_fullscreen {
+        let on_opt = args.get_bool("on");
+        if on_opt.is_some() {
+            window_set_fullscreen(win.handle, on_opt.unwrap());
+        }
+        return;
+    }
+
+    if is_set_always_on_top {
+        let on_opt = args.get_bool("on");
+        if on_opt.is_some() {
+            window_set_always_on_top(win.handle, on_opt.unwrap());
+        }
+        return;
+    }
+
+    // Subscribe/unsubscribe for event bitmask
+    if !is_subscribe && !is_unsubscribe { return; }
+
+    let event_opt = args.get_string("event");
+    if !event_opt.is_some() { return; }
+    let event_name = event_opt.unwrap();
+
+    // Lazy flush: when JS subscribes to notification events, flush any buffered
+    // notification responses. This ensures the handler is registered before events fire.
+    if is_subscribe {
+        raw {
+            const char* en = (const char*)event_name;
+            if (en && strncmp(en, "__notif:", 7) == 0) {
+                extern void darwin_notification_set_bridge_ready(void);
+                darwin_notification_set_bridge_ready();
+            }
+        }
+    }
+
+    let event_id = event_name_to_id(event_name);
+    if event_id < 0 { return; }
+
+    // Set/clear the JS listener bitmask (is_subscribe already set above)
+    raw {
+        extern void zapp_window_set_js_listener(int id, int event_id, int has_listener);
+        zapp_window_set_js_listener(window_id, event_id, is_subscribe ? 1 : 0);
+    }
+}
+
+// --- Worker message handler ---
+
+fn router_handle_worker(app: App*, action: string, payload: string, window_id: int) -> void {
+    if !workers_enabled() { return; }
+
+    let parse_result = JsonValue::parse(payload);
+    if parse_result.is_err() { return; }
+    let json = parse_result.unwrap();
+
+    let a_opt = json.get("a");
+    if !a_opt.is_some() { return; }
+    let args = a_opt.unwrap();
+
+    let is_create: bool = false;
+    let is_post: bool = false;
+    let is_terminate: bool = false;
+    let is_disconnect: bool = false;
+    raw {
+        const char* a = (const char*)action;
+        is_create = (strcmp(a, "create") == 0);
+        is_post = (strcmp(a, "post") == 0);
+        is_terminate = (strcmp(a, "terminate") == 0);
+        is_disconnect = (strcmp(a, "disconnect") == 0);
+    }
+
+    if is_create {
+        let url_opt = args.get_string("scriptUrl");
+        let wid_opt = args.get_string("workerId");
+        if !url_opt.is_some() || !wid_opt.is_some() { return; }
+        let script_url = url_opt.unwrap();
+        let worker_id = wid_opt.unwrap();
+
+        // Owner ID derived from window's string ID
+        let owner_id = darwin_win::darwin_window_id_string(window_id);
+        if owner_id == NULL { return; }
+
+        // Check if this is a shared worker
+        let is_shared: bool = false;
+        let shared_opt = args.get_bool("shared");
+        if shared_opt.is_some() { is_shared = shared_opt.unwrap(); }
+
+        if is_shared {
+            // Check for existing shared worker with same script URL
+            let existing_id: string = "";
+            raw {
+                const char* eid = zapp_worker_registry_find_shared((const char*)script_url);
+                if (eid) existing_id = (char*)eid;
+            }
+            if existing_id != "" {
+                // Connect to existing shared worker — just add this window as an owner
+                raw {
+                    zapp_worker_registry_add_owner((const char*)existing_id, owner_id);
+                }
+                // Notify JS of the actual worker ID (may differ from requested)
+                dispatch_invoke_response(window_id, 0, true, existing_id);
+                return;
+            }
+            // First shared worker with this URL — create it
+            raw {
+                zapp_worker_registry_add_full((const char*)worker_id, owner_id,
+                    1, (const char*)script_url);
+            }
+        } else {
+            // Dedicated worker
+            raw {
+                zapp_worker_registry_add((const char*)worker_id, owner_id);
+            }
+        }
+
+        worker_create(app, script_url, owner_id, worker_id);
+        return;
+    }
+
+    if is_post {
+        let wid_opt = args.get_string("workerId");
+        let data_opt = args.get_string("data");
+        if !wid_opt.is_some() { return; }
+        let data_json: string = "";
+        if data_opt.is_some() { data_json = data_opt.unwrap(); }
+        worker_post_message(wid_opt.unwrap(), data_json);
+        return;
+    }
+
+    if is_terminate {
+        let wid_opt = args.get_string("workerId");
+        if !wid_opt.is_some() { return; }
+        let wid = wid_opt.unwrap();
+
+        // For shared workers, check refcount before terminating
+        let should_terminate: bool = true;
+        raw {
+            if (zapp_worker_registry_is_shared((const char*)wid)) {
+                // Shared workers can't be terminated by a single window — use disconnect instead
+                should_terminate = false;
+            }
+        }
+        if should_terminate {
+            worker_terminate(wid);
+            raw {
+                zapp_worker_registry_remove((const char*)wid);
+            }
+        }
+        return;
+    }
+
+    // Disconnect from a shared worker (remove owner reference, terminate if refcount=0)
+    if is_disconnect {
+        let wid_opt = args.get_string("workerId");
+        if !wid_opt.is_some() { return; }
+        let wid = wid_opt.unwrap();
+
+        let owner_id = darwin_win::darwin_window_id_string(window_id);
+        if owner_id == NULL { return; }
+
+        let remaining: int = 0;
+        raw {
+            remaining = zapp_worker_registry_remove_owner((const char*)wid, owner_id);
+        }
+        if remaining <= 0 {
+            worker_terminate(wid);
+            raw {
+                zapp_worker_registry_remove((const char*)wid);
+            }
+        }
+        return;
+    }
+}
+
+// --- Dialog handler ---
+
+fn router_handle_dialog(method: string, payload: string, window_id: int, request_id: int) -> void {
+    // Extract "a" (args) from the full message JSON via ObjC helper in dialog.m
+    let args_json: string = "";
+    raw {
+        extern const char* darwin_dialog_extract_args(const char* full_json);
+        args_json = (char*)darwin_dialog_extract_args((const char*)payload);
+    }
+
+    let result: string = "";
+    raw {
+        const char* m = (const char*)method;
+        if (strcmp(m, "__dialog:open") == 0) {
+            result = (char*)darwin_dialog_open_file((const char*)args_json);
+        } else if (strcmp(m, "__dialog:save") == 0) {
+            result = (char*)darwin_dialog_save_file((const char*)args_json);
+        } else if (strcmp(m, "__dialog:message") == 0) {
+            result = (char*)darwin_dialog_message((const char*)args_json);
+        }
+    }
+
+    if result != "" {
+        dispatch_invoke_response(window_id, request_id, true, result);
+    } else {
+        dispatch_invoke_response(window_id, request_id, false, "UNKNOWN_DIALOG");
+    }
+}
+
+// --- Notification handler ---
+
+fn router_handle_notification(method: string, payload: string, window_id: int, request_id: int) -> void {
+    let args_json: string = "";
+    raw {
+        extern const char* darwin_dialog_extract_args(const char* full_json);
+        args_json = (char*)darwin_dialog_extract_args((const char*)payload);
+    }
+
+    raw {
+        typedef void (*notif_callback_fn)(int32_t, int32_t, bool, const char*);
+        extern void dispatch_invoke_response(int32_t window_id, int32_t request_id, bool ok, char* payload);
+
+        // Defined at file scope (below) — forward declare here
+        extern void notif_response_cb(int32_t wid, int32_t rid, bool ok, const char* json);
+
+        extern void darwin_notification_request_permission(int32_t wid, int32_t rid, notif_callback_fn cb);
+        extern const char* darwin_notification_get_permission(void);
+        extern void darwin_notification_show(const char* opts, int32_t wid, int32_t rid, notif_callback_fn cb);
+        extern void darwin_notification_schedule(const char* opts, int32_t wid, int32_t rid, notif_callback_fn cb);
+        extern void darwin_notification_cancel(const char* id);
+        extern void darwin_notification_cancel_all(void);
+
+        const char* m = (const char*)method;
+
+        if (strcmp(m, "__notif:requestPermission") == 0) {
+            darwin_notification_request_permission(window_id, request_id, notif_response_cb);
+            return; // async — response comes via callback
+        } else if (strcmp(m, "__notif:getPermission") == 0) {
+            const char* r = darwin_notification_get_permission();
+            dispatch_invoke_response(window_id, request_id, true, (char*)r);
+            return;
+        } else if (strcmp(m, "__notif:show") == 0) {
+            darwin_notification_show((const char*)args_json, window_id, request_id, notif_response_cb);
+            return;
+        } else if (strcmp(m, "__notif:schedule") == 0) {
+            darwin_notification_schedule((const char*)args_json, window_id, request_id, notif_response_cb);
+            return;
+        } else if (strcmp(m, "__notif:cancel") == 0) {
+            const char* a = (const char*)args_json;
+            const char* p = strstr(a, "\"id\":\"");
+            if (p) {
+                p += 6;
+                char id_buf[128];
+                int i = 0;
+                while (*p && *p != '"' && i < 127) id_buf[i++] = *p++;
+                id_buf[i] = '\0';
+                darwin_notification_cancel(id_buf);
+            }
+            dispatch_invoke_response(window_id, request_id, true, "{}");
+            return;
+        } else if (strcmp(m, "__notif:cancelAll") == 0) {
+            darwin_notification_cancel_all();
+            dispatch_invoke_response(window_id, request_id, true, "{}");
+            return;
+        } else if (strcmp(m, "__notif:registerCategory") == 0) {
+            // Extract category ID and pass full args JSON
+            const char* a = (const char*)args_json;
+            const char* p = strstr(a, "\"id\":\"");
+            if (p) {
+                p += 6;
+                char cat_id[128];
+                int i = 0;
+                while (*p && *p != '"' && i < 127) cat_id[i++] = *p++;
+                cat_id[i] = '\0';
+                extern void darwin_notification_register_category(const char*, const char*);
+                darwin_notification_register_category(cat_id, (const char*)args_json);
+            }
+            dispatch_invoke_response(window_id, request_id, true, "{}");
+            return;
+        } else if (strcmp(m, "__notif:removeCategory") == 0) {
+            const char* a = (const char*)args_json;
+            const char* p = strstr(a, "\"id\":\"");
+            if (p) {
+                p += 6;
+                char cat_id[128];
+                int i = 0;
+                while (*p && *p != '"' && i < 127) cat_id[i++] = *p++;
+                cat_id[i] = '\0';
+                extern void darwin_notification_remove_category(const char*);
+                darwin_notification_remove_category(cat_id);
+            }
+            dispatch_invoke_response(window_id, request_id, true, "{}");
+            return;
+        }
+
+        dispatch_invoke_response(window_id, request_id, false, "UNKNOWN_NOTIFICATION");
+    }
+}
+
+// Notification async callback — bridges to invoke response (must be at file scope)
+raw {
+    void notif_response_cb(int32_t wid, int32_t rid, bool ok, const char* json) {
+        extern void dispatch_invoke_response(int32_t, int32_t, bool, char*);
+        dispatch_invoke_response(wid, rid, ok, (char*)json);
+    }
+}

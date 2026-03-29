@@ -1,0 +1,10 @@
+{
+  "name": "@zappdev/runtime",
+  "version": "2.0.0-alpha.0",
+  "type": "module",
+  "main": "index.ts",
+  "types": "index.ts",
+  "exports": {
+    ".": "./index.ts"
+  }
+}

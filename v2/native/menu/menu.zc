@@ -1,0 +1,85 @@
+// Menu — native Zen-C menu API.
+// Set the app menu bar or show context menus from pure Zen-C code.
+// Two-tier design: Zen-C calls typed C functions, JS calls JSON bridge.
+
+import "../platform/platform.zc";
+
+struct MenuItem {
+    label: string;
+    accelerator: string;
+    role: string;
+    is_separator: int;  // int not bool — must match C ZappMenuItem layout
+    enabled: int;
+    checked: int;
+    submenu: MenuItem*;
+    submenu_count: int;
+    action: fn*() -> void;
+}
+
+impl MenuItem {
+    fn separator() -> MenuItem {
+        return MenuItem{
+            label: "", accelerator: "", role: "",
+            is_separator: 1, enabled: 1, checked: 0,
+            submenu: NULL, submenu_count: 0, action: NULL,
+        };
+    }
+
+    fn item(label: string) -> MenuItem {
+        return MenuItem{
+            label: label, accelerator: "", role: "",
+            is_separator: 0, enabled: 1, checked: 0,
+            submenu: NULL, submenu_count: 0, action: NULL,
+        };
+    }
+
+    fn item_with_action(label: string, action: fn*() -> void) -> MenuItem {
+        return MenuItem{
+            label: label, accelerator: "", role: "",
+            is_separator: 0, enabled: 1, checked: 0,
+            submenu: NULL, submenu_count: 0, action: action,
+        };
+    }
+
+    fn item_with_role(role: string) -> MenuItem {
+        return MenuItem{
+            label: "", accelerator: "", role: role,
+            is_separator: 0, enabled: 1, checked: 0,
+            submenu: NULL, submenu_count: 0, action: NULL,
+        };
+    }
+
+    // NOTE: for builder-style chaining, mutate the item in place before passing:
+    //   let item = MenuItem::item("Open");
+    //   item.accelerator = "CmdOrCtrl+O";
+    //   item.action = on_open;
+}
+
+// Set the app menu bar from an array of top-level MenuItems.
+// Each top-level item should have a label and a submenu.
+@cfg(apple)
+fn menu_set(items: MenuItem*, count: int) -> void {
+    raw {
+        extern void darwin_menu_set_typed(void* items, int count);
+        darwin_menu_set_typed((void*)items, count);
+    }
+}
+
+// Show a context menu at position (x, y) in the given window.
+@cfg(apple)
+fn menu_show_context(items: MenuItem*, count: int, x: int, y: int, window_id: int) -> void {
+    raw {
+        extern void darwin_menu_show_context_typed(void* items, int count, int x, int y, int32_t window_id);
+        darwin_menu_show_context_typed((void*)items, count, x, y, window_id);
+    }
+}
+
+// --- Manager (namespaced via app.menu) ---
+
+struct MenuManager {}
+
+impl MenuManager {
+    fn new() -> Self { return MenuManager{}; }
+    fn set(self, items: MenuItem*, count: int) -> void { menu_set(items, count); }
+    fn context(self, items: MenuItem*, count: int, x: int, y: int, window_id: int) -> void { menu_show_context(items, count, x, y, window_id); }
+}

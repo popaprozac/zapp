@@ -1,0 +1,97 @@
+// Bridge dispatch — sends responses from native back to JS.
+// Uses targeted WebView eval (O(1) by window numeric ID).
+// Checks cancellation before dispatching.
+
+import "./protocol.zc";
+
+// Platform-specific JS eval
+@cfg(apple)
+import "../platform/darwin/window.h" as darwin_win;
+@cfg(apple)
+import "../platform/darwin/webview.h" as darwin_webview;
+
+// Reusable buffer for response JS — avoids allocation per response.
+raw {
+    static char zapp_response_buf[4096];
+
+    // Single-pass JS string escape into buffer. Returns length written.
+    static int zapp_escape_into(char* dst, int dst_size, const char* src) {
+        if (!src) { dst[0] = '\0'; return 0; }
+        int j = 0;
+        for (int i = 0; src[i] && j < dst_size - 2; i++) {
+            switch (src[i]) {
+                case '\\': dst[j++] = '\\'; dst[j++] = '\\'; break;
+                case '\'': dst[j++] = '\\'; dst[j++] = '\''; break;
+                case '\n': dst[j++] = '\\'; dst[j++] = 'n'; break;
+                case '\r': dst[j++] = '\\'; dst[j++] = 'r'; break;
+                default:   dst[j++] = src[i]; break;
+            }
+        }
+        dst[j] = '\0';
+        return j;
+    }
+}
+
+// Platform dispatch — eval JS on a specific window by numeric ID
+@cfg(apple)
+fn platform_eval_js(window_id: int, js: string) -> void {
+    darwin_win::darwin_window_eval_js(window_id, js);
+}
+
+// Platform dispatch — eval JS on all windows
+@cfg(apple)
+fn platform_eval_js_all(js: string) -> void {
+    darwin_webview::darwin_webview_eval_all(js);
+}
+
+// Send invoke response to a specific window's WebView.
+fn dispatch_invoke_response(window_id: int, request_id: int, ok: bool, payload: string) -> void {
+    // Check cancellation
+    let cancelled: bool = false;
+    raw {
+        if (zapp_is_cancelled(request_id)) {
+            zapp_clear_cancelled(request_id);
+            cancelled = true;
+        }
+    }
+    if cancelled { return; }
+
+    // Build response JS into reusable buffer
+    raw {
+        char escaped[3072];
+        zapp_escape_into(escaped, sizeof(escaped), (const char*)payload);
+
+        snprintf(zapp_response_buf, sizeof(zapp_response_buf),
+            "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+            "if(b&&typeof b._onInvokeResult==='function'){"
+            "b._onInvokeResult(%d,%s,'%s');}})();",
+            request_id,
+            ok ? "true" : "false",
+            escaped);
+    }
+
+    let js: string = "";
+    raw { js = zapp_response_buf; }
+    platform_eval_js(window_id, js);
+}
+
+// Send event to all windows.
+fn dispatch_event_to_all(event_name: string, payload: string) -> void {
+    raw {
+        char escaped_payload[3072];
+        zapp_escape_into(escaped_payload, sizeof(escaped_payload), (const char*)payload);
+
+        char escaped_name[256];
+        zapp_escape_into(escaped_name, sizeof(escaped_name), (const char*)event_name);
+
+        snprintf(zapp_response_buf, sizeof(zapp_response_buf),
+            "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+            "if(b&&typeof b._onEvent==='function'){"
+            "b._onEvent('%s','%s');}})();",
+            escaped_name, escaped_payload);
+    }
+
+    let js: string = "";
+    raw { js = zapp_response_buf; }
+    platform_eval_js_all(js);
+}

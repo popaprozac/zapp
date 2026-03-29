@@ -1,0 +1,4 @@
+// macOS dialogs (platform layer).
+// NSOpenPanel, NSSavePanel, NSAlert — extracted from v1's window.zc.
+
+// TODO: Port dialog code from v1 src/platform/darwin/window.zc

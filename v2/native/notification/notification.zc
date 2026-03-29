@@ -1,0 +1,99 @@
+// Notification — native macOS notifications for Zen-C code.
+// Fire-and-forget — zero JSON, zero callback plumbing.
+// Requires app bundle + code signing (handled by zapp dev/package).
+
+@cfg(apple)
+import "../platform/darwin/notification.h" as darwin_notif;
+
+// Action button for notification categories.
+struct NotificationAction {
+    id: string;
+    title: string;
+    destructive: int;  // 1 = red styling on macOS
+}
+
+// Category template — defines action buttons for a group of notifications.
+struct NotificationCategory {
+    id: string;
+    actions: NotificationAction*;
+    action_count: int;
+    has_reply_field: int;
+    reply_placeholder: string;
+    reply_button_title: string;
+}
+
+// --- Functions ---
+
+// Show a notification immediately.
+@cfg(apple)
+fn notification_show(title: string, body: string) -> void {
+    darwin_notif::darwin_notification_show_typed(title, "", body, "default");
+}
+
+// Show a notification with subtitle.
+@cfg(apple)
+fn notification_show_with_subtitle(title: string, subtitle: string, body: string) -> void {
+    darwin_notif::darwin_notification_show_typed(title, subtitle, body, "default");
+}
+
+// Show a notification with action buttons (must register category first).
+@cfg(apple)
+fn notification_show_with_actions(title: string, body: string, category_id: string) -> void {
+    darwin_notif::darwin_notification_show_with_category(title, body, category_id);
+}
+
+// Register a notification category with action buttons.
+@cfg(apple)
+fn notification_register_category(cat: NotificationCategory*) -> void {
+    let cat_id = cat.id;
+    let actions = cat.actions;
+    let count = cat.action_count;
+    let has_reply = cat.has_reply_field;
+    let placeholder = cat.reply_placeholder;
+    let button = cat.reply_button_title;
+    raw {
+        darwin_notification_register_category_typed(
+            (const char*)cat_id,
+            (ZappNotifAction*)actions, count,
+            has_reply,
+            (const char*)placeholder,
+            (const char*)button);
+    }
+}
+
+// Remove a registered notification category.
+@cfg(apple)
+fn notification_remove_category(id: string) -> void {
+    raw {
+        darwin_notification_remove_category((const char*)id);
+    }
+}
+
+// Schedule a notification after a delay (seconds).
+@cfg(apple)
+fn notification_schedule(title: string, body: string, delay_seconds: int) -> void {
+    raw {
+        darwin_notification_schedule_typed((const char*)title, (const char*)body, (double)delay_seconds);
+    }
+}
+
+// Cancel all pending notifications.
+@cfg(apple)
+fn notification_cancel_all() -> void {
+    darwin_notif::darwin_notification_cancel_all();
+}
+
+// --- Manager (namespaced via app.notification) ---
+
+struct NotificationManager {}
+
+impl NotificationManager {
+    fn new() -> Self { return NotificationManager{}; }
+    fn show(self, title: string, body: string) -> void { notification_show(title, body); }
+    fn show_with_subtitle(self, title: string, subtitle: string, body: string) -> void { notification_show_with_subtitle(title, subtitle, body); }
+    fn show_with_actions(self, title: string, body: string, category_id: string) -> void { notification_show_with_actions(title, body, category_id); }
+    fn register_category(self, cat: NotificationCategory*) -> void { notification_register_category(cat); }
+    fn remove_category(self, id: string) -> void { notification_remove_category(id); }
+    fn schedule(self, title: string, body: string, delay_seconds: int) -> void { notification_schedule(title, body, delay_seconds); }
+    fn cancel_all(self) -> void { notification_cancel_all(); }
+}

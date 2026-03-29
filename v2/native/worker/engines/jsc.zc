@@ -1,0 +1,26 @@
+// JSC worker engine — Zen-C trampolines.
+// Imports jsc.h C API, provides engine-agnostic function signatures.
+
+@cfg(ZAPP_WORKER_ENGINE_JSC)
+import "./jsc.h" as jsc_engine;
+
+@cfg(ZAPP_WORKER_ENGINE_JSC)
+fn worker_create(app: App*, script_url: string, owner_id: string, worker_id: string) -> bool {
+    let _app = app;
+    return jsc_engine::jsc_worker_create(script_url, owner_id, worker_id);
+}
+
+@cfg(ZAPP_WORKER_ENGINE_JSC)
+fn worker_post_message(worker_id: string, data: string) -> void {
+    jsc_engine::jsc_worker_post_message(worker_id, data);
+}
+
+@cfg(ZAPP_WORKER_ENGINE_JSC)
+fn worker_terminate(worker_id: string) -> void {
+    jsc_engine::jsc_worker_terminate(worker_id);
+}
+
+@cfg(ZAPP_WORKER_ENGINE_JSC)
+fn worker_terminate_owner(owner_id: string) -> void {
+    jsc_engine::jsc_worker_terminate_owner(owner_id);
+}

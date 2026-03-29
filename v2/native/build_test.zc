@@ -1,0 +1,15 @@
+//> macos: define: apple
+//> macos: cflags: -fobjc-arc -x objective-c
+import "window/events.zc";
+import "window/window.zc";
+import "window/callbacks.zc";
+
+fn main() -> int {
+    // Test: can we create window types?
+    let opts = window_options_default("Test");
+    let w: int = opts.width;
+    let h: int = opts.height;
+    println "Window options: {w}x{h}";
+    println "TitleBarStyle default created";
+    return 0;
+}

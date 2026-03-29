@@ -1,0 +1,216 @@
+// Application lifecycle and configuration — pure Zen-C.
+
+import "../window/window.zc";
+import "../window/callbacks.zc";
+import "../service/service.zc";
+import "../dialog/dialog.zc";
+import "../notification/notification.zc";
+import "../platform/platform.zc";
+import "../sync/sync.zc";
+import "../menu/menu.zc";
+import "./app_events.zc";
+
+import "string.h" as str;
+
+// --- Global app state (accessed by .m files via extern) ---
+
+raw {
+    static void* zapp_active_app = NULL;
+}
+
+fn app_set_active(app: App*) -> void {
+    raw { zapp_active_app = (void*)app; }
+}
+
+fn app_get_active() -> void* {
+    let result: void* = NULL;
+    raw { result = zapp_active_app; }
+    return result;
+}
+
+// Bootstrap config accessors (called by webview.m)
+fn app_get_bootstrap_name() -> string {
+    let app = (App*)app_get_active();
+    if app != NULL { return app.config.name; }
+    return "Zapp";
+}
+
+fn app_get_bootstrap_web_content_inspectable() -> bool {
+    let app = (App*)app_get_active();
+    if app != NULL { return app.config.webContentInspectable > 0; }
+    return false;
+}
+
+fn app_get_bootstrap_application_should_terminate_after_last_window_closed() -> bool {
+    let app = (App*)app_get_active();
+    if app != NULL { return app.config.applicationShouldTerminateAfterLastWindowClosed; }
+    return true;
+}
+
+fn app_get_bootstrap_max_workers() -> int {
+    let app = (App*)app_get_active();
+    if app != NULL { return app.config.maxWorkers; }
+    return 0;
+}
+
+import "./router.zc";
+import "../worker/worker.zc";
+
+// Dispatch worker message to a single window by owner_id
+fn worker_dispatch_to_window(worker_id: string, data_json: string, owner_id: string) -> void {
+    let window_id: int = -1;
+    raw {
+        extern const char* darwin_window_id_string(int32_t numeric_id);
+        for (int i = 0; i < 64; i++) {
+            const char* wid = darwin_window_id_string(i);
+            if (wid && strcmp(wid, (const char*)owner_id) == 0) {
+                window_id = i;
+                break;
+            }
+        }
+    }
+    if window_id < 0 { return; }
+
+    raw {
+        static char wk_buf[4096];
+        extern int zapp_escape_into(char* dst, int dst_size, const char* src);
+        char escaped_wid[128];
+        char escaped_data[3072];
+        zapp_escape_into(escaped_wid, sizeof(escaped_wid), (const char*)worker_id);
+        zapp_escape_into(escaped_data, sizeof(escaped_data), (const char*)data_json);
+
+        snprintf(wk_buf, sizeof(wk_buf),
+            "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+            "if(b&&typeof b._onWorkerMessage==='function'){"
+            "b._onWorkerMessage('%s','%s');}})();",
+            escaped_wid, escaped_data);
+
+        extern void darwin_window_eval_js(int32_t window_id, const char* js);
+        darwin_window_eval_js(window_id, wk_buf);
+    }
+}
+
+// Worker → WebView dispatch (called by jsc.m host object postToWebview)
+// For shared workers, broadcasts to all connected windows.
+fn worker_dispatch_to_webview(worker_id: string, data_json: string) -> void {
+    // Check if shared — broadcast to all owners
+    let is_shared: bool = false;
+    raw {
+        is_shared = zapp_worker_registry_is_shared((const char*)worker_id) != 0;
+    }
+
+    if is_shared {
+        // Broadcast to all owners
+        raw {
+            ZappWorkerEntry* entry = zapp_worker_registry_get((const char*)worker_id);
+            if (entry) {
+                for (int i = 0; i < entry->owner_count; i++) {
+                    worker_dispatch_to_window(worker_id, data_json, (char*)entry->owners[i]);
+                }
+            }
+        }
+        return;
+    }
+
+    // Dedicated worker — single owner
+    let owner_id: string = "";
+    raw {
+        const char* oid = zapp_worker_registry_owner((const char*)worker_id);
+        if (oid) owner_id = (char*)oid;
+    }
+    if owner_id == "" { return; }
+    worker_dispatch_to_window(worker_id, data_json, owner_id);
+}
+
+// Message handler with window ID (called by webview.m — knows which WebView sent it)
+fn zapp_handle_message_from_window(app_ptr: void*, msg: string, window_id: int) -> void {
+    let app = (App*)app_ptr;
+    if app == NULL { return; }
+    router_handle_message(app, msg, window_id);
+}
+
+// Build config functions — provided by CLI-generated .zapp/zapp_build_config.zc
+// If compiling standalone (without CLI), define these in your build.zc.
+
+// Bootstrap script — generated from bootstrap/webview.ts by bootstrap/codegen.ts.
+// The function zapp_webview_bootstrap_script() is provided by .zapp/zapp_bootstrap.zc.
+
+// Service bindings — provided by service/service.zc (imported via router.zc)
+
+struct AppConfig {
+    name: string;
+    applicationShouldTerminateAfterLastWindowClosed: bool;
+    webContentInspectable: int; // -1 = inherit from build, 0 = off, 1 = on
+    maxWorkers: int;
+    qjsStackSize: int;
+    backend: bool;  // enable backend worker (src/backend.ts)
+}
+
+struct App {
+    config: AppConfig;
+    window: WindowManager;
+    service: ServiceManager;
+    menu: MenuManager;
+    dialog: DialogManager;
+    notification: NotificationManager;
+    sync: SyncManager;
+}
+
+impl App {
+    fn new(config: AppConfig) -> App {
+        let wm = WindowManager::new();
+        if config.webContentInspectable > 0 {
+            wm.webContentInspectable = true;
+        } else if config.webContentInspectable == 0 {
+            wm.webContentInspectable = false;
+        }
+
+        platform_init(config.name);
+
+        return App{
+            config: config,
+            window: wm,
+            service: ServiceManager::new(),
+            menu: MenuManager::new(),
+            dialog: DialogManager::new(),
+            notification: NotificationManager::new(),
+            sync: SyncManager::new(),
+        };
+    }
+
+    fn run(self) -> int {
+        self.window.app = (App*)self;
+        app_set_active((App*)self);
+
+        // Run service startup (in registration order, before windows/backend)
+        service_run_startup_all();
+
+        // Start backend worker (if enabled)
+        if self.config.backend {
+            raw {
+                #if defined(ZAPP_WORKER_ENGINE_TXIKI)
+                extern bool txiki_backend_create(const char* script_path);
+                txiki_backend_create(".zapp/workers/backend.mjs");
+                #elif defined(ZAPP_WORKER_ENGINE_JSC)
+                extern bool jsc_backend_create(const char* script_path);
+                jsc_backend_create(".zapp/workers/backend.mjs");
+                #endif
+            }
+        }
+
+        return platform_run(self.config.applicationShouldTerminateAfterLastWindowClosed);
+    }
+
+    fn on(self, event_id: int, cb: fn*(int, string) -> void) -> void {
+        raw {
+            zapp_app_on(event_id, (void (*)(int, const char*))cb);
+        }
+    }
+
+    fn open_external(self, url: string) -> void {
+        raw {
+            extern void darwin_open_external(const char* url);
+            darwin_open_external((const char*)url);
+        }
+    }
+}

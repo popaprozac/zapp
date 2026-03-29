@@ -1,0 +1,480 @@
+// JSC worker engine — Objective-C implementation.
+// Each worker gets a JSContext on a serial dispatch queue.
+// Bridge host objects provide direct native access.
+
+#import <JavaScriptCore/JavaScriptCore.h>
+#import <Foundation/Foundation.h>
+#import "jsc.h"
+
+// --- Worker storage ---
+
+#define JSC_MAX_WORKERS 64
+
+typedef struct {
+    char worker_id[64];
+    char owner_id[64];
+    int active;
+    // ObjC objects stored via associated storage below
+} JSCWorkerSlot;
+
+static JSCWorkerSlot jsc_workers[JSC_MAX_WORKERS] = {{0}};
+static NSMutableDictionary<NSString*, JSContext*>* jsc_contexts = nil;
+static NSMutableDictionary<NSString*, dispatch_queue_t>* jsc_queues = nil;
+static JSVirtualMachine* jsc_vm = nil;
+
+static void jsc_ensure_init(void) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        jsc_vm = [[JSVirtualMachine alloc] init];
+        jsc_contexts = [NSMutableDictionary new];
+        jsc_queues = [NSMutableDictionary new];
+    });
+}
+
+// --- Forward declarations ---
+extern void* app_get_active(void);
+extern bool app_get_bootstrap_web_content_inspectable(void);
+
+// Service invoke (called from worker host object)
+extern const char* service_invoke_sync(void* app, const char* method, const char* args);
+
+// --- Host object setup ---
+
+static void jsc_setup_bridge(JSContext* ctx, NSString* workerId) {
+    // Bridge object
+    JSValue* bridge = [JSValue valueWithNewObjectInContext:ctx];
+
+    // console.log/warn/error
+    NSString* wid = [workerId copy];
+
+    // Console — supports multiple arguments via JSContext.currentArguments
+    JSValue* console = [JSValue valueWithNewObjectInContext:ctx];
+    void (^logImpl)(NSString*, NSArray*) = ^(NSString* level, NSArray* rawArgs) {
+        NSMutableString* out = [NSMutableString new];
+        JSContext* currentCtx = [JSContext currentContext];
+        JSValue* jsonStringify = [currentCtx evaluateScript:@"JSON.stringify"];
+        for (JSValue* arg in rawArgs) {
+            if (out.length > 0) [out appendString:@" "];
+            if ([arg isObject] && ![arg isString]) {
+                JSValue* jsonStr = [jsonStringify callWithArguments:@[arg]];
+                if (jsonStr && ![jsonStr isUndefined] && ![jsonStr isNull]) {
+                    [out appendString:[jsonStr toString]];
+                } else {
+                    [out appendString:[arg toString]];
+                }
+            } else {
+                [out appendString:[arg toString]];
+            }
+        }
+        NSLog(@"[worker:%@%@] %@", wid, level, out);
+    };
+    console[@"log"] = ^{ logImpl(@"", [JSContext currentArguments]); };
+    console[@"warn"] = ^{ logImpl(@" WARN", [JSContext currentArguments]); };
+    console[@"error"] = ^{ logImpl(@" ERROR", [JSContext currentArguments]); };
+    ctx[@"console"] = console;
+
+    // invokeService — synchronous, returns result directly (host object perf)
+    bridge[@"invokeService"] = ^JSValue*(NSString* method, JSValue* argsVal) {
+        void* app = app_get_active();
+        if (!app || !method) return [JSValue valueWithUndefinedInContext:[JSContext currentContext]];
+        NSString* argsJson = @"{}";
+        if (argsVal && ![argsVal isUndefined]) {
+            NSData* data = [NSJSONSerialization dataWithJSONObject:[argsVal toObject] options:0 error:nil];
+            if (data) argsJson = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+        }
+        const char* result = service_invoke_sync(app, [method UTF8String], [argsJson UTF8String]);
+        if (!result || result[0] == '\0') return [JSValue valueWithUndefinedInContext:[JSContext currentContext]];
+        // Parse result as JSON to return a proper JS object (not a string)
+        NSString* resultStr = [NSString stringWithUTF8String:result];
+        NSData* resultData = [resultStr dataUsingEncoding:NSUTF8StringEncoding];
+        id resultObj = resultData ? [NSJSONSerialization JSONObjectWithData:resultData options:0 error:nil] : nil;
+        if (resultObj) {
+            return [JSValue valueWithObject:resultObj inContext:[JSContext currentContext]];
+        }
+        return [JSValue valueWithObject:resultStr inContext:[JSContext currentContext]];
+    };
+
+    // emitToHost — fire-and-forget event to native
+    bridge[@"emitToHost"] = ^(NSString* name, JSValue* payload) {
+        (void)name; (void)payload;
+        // TODO: dispatch to event system
+    };
+
+    // postToWebview — send message back to the owner WebView
+    bridge[@"postToWebview"] = ^(JSValue* data) {
+        NSString* json = @"{}";
+        if (data && ![data isUndefined]) {
+            NSData* d = [NSJSONSerialization dataWithJSONObject:[data toObject] options:0 error:nil];
+            if (d) json = [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding];
+        }
+        worker_dispatch_to_webview([wid UTF8String], [json UTF8String]);
+    };
+
+    // syncWait — host object for Sync.wait() from workers
+    bridge[@"syncWait"] = ^(NSString* key, JSValue* timeoutVal) {
+        if (!key || key.length == 0) return;
+        double timeoutMs = (timeoutVal && ![timeoutVal isUndefined]) ? [timeoutVal toDouble] : -1;
+
+        NSString* requestId = [NSString stringWithFormat:@"%@:sync-%f-%u",
+            wid, [[NSDate date] timeIntervalSince1970], arc4random()];
+
+        NSMutableDictionary* payload = [NSMutableDictionary dictionaryWithDictionary:@{
+            @"id": requestId,
+            @"key": key,
+            @"targetWorkerId": wid,
+        }];
+        if (timeoutMs > 0) payload[@"timeoutMs"] = @(timeoutMs);
+
+        NSData* data = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
+        if (!data) return;
+        NSString* json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+
+        extern void darwin_sync_handle(const char* action, const char* payload_json);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            darwin_sync_handle("wait", [json UTF8String]);
+        });
+    };
+
+    // syncNotify — host object for Sync.notify() from workers
+    bridge[@"syncNotify"] = ^(NSString* key, JSValue* countVal) {
+        if (!key || key.length == 0) return;
+        int count = (countVal && ![countVal isUndefined]) ? [countVal toInt32] : 1;
+        if (count < 1) count = 1;
+
+        NSDictionary* payload = @{ @"key": key, @"count": @(count) };
+        NSData* data = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
+        if (!data) return;
+        NSString* json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+
+        extern void darwin_sync_handle(const char* action, const char* payload_json);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            darwin_sync_handle("notify", [json UTF8String]);
+        });
+    };
+
+    ctx[@"__zappBridge"] = bridge;
+
+    // setTimeout / setInterval
+    ctx[@"setTimeout"] = ^JSValue*(JSValue* callback, JSValue* delayMs) {
+        double ms = [delayMs isUndefined] ? 0 : [delayMs toDouble];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(ms * NSEC_PER_MSEC)),
+            dispatch_get_main_queue(), ^{
+                [callback callWithArguments:@[]];
+            });
+        return [JSValue valueWithInt32:1 inContext:[JSContext currentContext]];
+    };
+
+    ctx[@"clearTimeout"] = ^(JSValue* timerId) {
+        (void)timerId; // simplified — real impl would track timer IDs
+    };
+
+    // self reference (worker global)
+    ctx[@"self"] = ctx[@"globalThis"];
+
+    // self.postMessage — standard Worker API (delegates to postToWebview)
+    ctx[@"postMessage"] = ^(JSValue* data) {
+        NSString* json = @"{}";
+        if (data && ![data isUndefined]) {
+            NSData* d = [NSJSONSerialization dataWithJSONObject:[data toObject] options:0 error:nil];
+            if (d) json = [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding];
+        }
+        worker_dispatch_to_webview([wid UTF8String], [json UTF8String]);
+    };
+
+    // Worker bootstrap — generated from bootstrap/worker.ts via codegen
+    // Sets up self.send/self.receive channel API and message handler dispatch
+    ctx.globalObject[@"_messageHandlers"] = [JSValue valueWithNewArrayInContext:ctx];
+
+    extern const char* zapp_worker_bootstrap_script(void);
+    const char* workerBoot = zapp_worker_bootstrap_script();
+    if (workerBoot && workerBoot[0] != '\0') {
+        [ctx evaluateScript:[NSString stringWithUTF8String:workerBoot]];
+    }
+}
+
+// --- C API ---
+
+bool jsc_worker_create(const char* script_url, const char* owner_id, const char* worker_id) {
+    if (!script_url || !worker_id) return false;
+    jsc_ensure_init();
+
+    NSString* wid = [NSString stringWithUTF8String:worker_id];
+    NSString* oid = owner_id ? [NSString stringWithUTF8String:owner_id] : @"";
+    NSString* scriptUrl = [NSString stringWithUTF8String:script_url];
+
+    // Create serial dispatch queue for this worker
+    NSString* queueName = [NSString stringWithFormat:@"com.zapp.worker.%@", wid];
+    dispatch_queue_t queue = dispatch_queue_create([queueName UTF8String], DISPATCH_QUEUE_SERIAL);
+    jsc_queues[wid] = queue;
+
+    // Create JSContext on the worker queue
+    dispatch_async(queue, ^{
+        JSContext* ctx = [[JSContext alloc] initWithVirtualMachine:jsc_vm];
+        ctx.name = [NSString stringWithFormat:@"Zapp Worker: %@", wid];
+        ctx.exceptionHandler = ^(JSContext* c, JSValue* exception) {
+            NSLog(@"[worker:%@ ERROR] %@", c.name, exception);
+        };
+
+        // Make inspectable via Safari Develop menu (gated on app config)
+        if (app_get_bootstrap_web_content_inspectable()) {
+            if ([ctx respondsToSelector:@selector(setInspectable:)]) {
+                [ctx setInspectable:YES];
+            }
+        }
+
+        jsc_contexts[wid] = ctx;
+        jsc_setup_bridge(ctx, wid);
+
+        // Resolve and load the worker script
+        // Try multiple locations:
+        // 1. .zapp/workers/<name>.mjs (CLI-bundled)
+        // 2. Relative to CWD (dev mode)
+        // 3. Relative to asset root (prod mode)
+        NSString* scriptContent = nil;
+        NSArray* searchPaths = @[
+            // CLI-bundled workers
+            [NSString stringWithFormat:@".zapp/workers/%@", [scriptUrl lastPathComponent]],
+            // Replace .ts with .mjs for bundled output
+            [NSString stringWithFormat:@".zapp/workers/%@",
+                [[scriptUrl lastPathComponent] stringByReplacingOccurrencesOfString:@".ts" withString:@".mjs"]],
+            // Direct path (dev mode, already bundled)
+            scriptUrl,
+        ];
+
+        char cwd[1024];
+        NSString* base = getcwd(cwd, sizeof(cwd)) ? [NSString stringWithUTF8String:cwd] : @".";
+
+        for (NSString* rel in searchPaths) {
+            NSString* fullPath = [base stringByAppendingPathComponent:rel];
+            NSError* err = nil;
+            scriptContent = [NSString stringWithContentsOfFile:fullPath encoding:NSUTF8StringEncoding error:&err];
+            if (scriptContent) {
+                NSLog(@"[zapp] worker script loaded: %@", fullPath);
+                break;
+            }
+        }
+
+        if (scriptContent) {
+            [ctx evaluateScript:scriptContent withSourceURL:[NSURL URLWithString:scriptUrl]];
+        } else {
+            NSLog(@"[zapp] worker script not found: %@", scriptUrl);
+        }
+    });
+
+    // Register in slot table
+    for (int i = 0; i < JSC_MAX_WORKERS; i++) {
+        if (!jsc_workers[i].active) {
+            strncpy(jsc_workers[i].worker_id, worker_id, 63);
+            strncpy(jsc_workers[i].owner_id, owner_id ?: "", 63);
+            jsc_workers[i].active = 1;
+            break;
+        }
+    }
+
+    return true;
+}
+
+void jsc_worker_post_message(const char* worker_id, const char* data_json) {
+    if (!worker_id || !data_json) return;
+    NSString* wid = [NSString stringWithUTF8String:worker_id];
+    NSString* json = [NSString stringWithUTF8String:data_json];
+
+    dispatch_queue_t queue = jsc_queues[wid];
+    if (!queue) return;
+
+    dispatch_async(queue, ^{
+        JSContext* ctx = jsc_contexts[wid];
+        if (!ctx) return;
+
+        // Parse JSON into a native JSValue — no eval string building, no escaping issues
+        NSData* jsonData = [json dataUsingEncoding:NSUTF8StringEncoding];
+        id parsed = jsonData ? [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:nil] : json;
+        JSValue* dataVal = parsed ? [JSValue valueWithObject:parsed inContext:ctx]
+                                  : [JSValue valueWithObject:json inContext:ctx];
+
+        // Create MessageEvent-like object and dispatch
+        JSValue* event = [JSValue valueWithObject:@{} inContext:ctx];
+        [event setValue:dataVal forProperty:@"data"];
+
+        // Call self.onmessage
+        JSValue* onmessage = ctx[@"self"][@"onmessage"];
+        if (onmessage && ![onmessage isUndefined]) {
+            [onmessage callWithArguments:@[event]];
+        }
+
+        // Call _messageHandlers (for channel API)
+        JSValue* handlers = ctx[@"self"][@"_messageHandlers"];
+        if (handlers && ![handlers isUndefined]) {
+            int32_t len = [handlers[@"length"] toInt32];
+            for (int i = 0; i < len; i++) {
+                JSValue* handler = [handlers valueAtIndex:i];
+                if (handler && ![handler isUndefined]) {
+                    [handler callWithArguments:@[event]];
+                }
+            }
+        }
+    });
+}
+
+// Evaluate JS in a worker's context (for sync result dispatch)
+void jsc_worker_eval_js(const char* worker_id, const char* js) {
+    if (!worker_id || !js) return;
+    NSString* wid = [NSString stringWithUTF8String:worker_id];
+    NSString* script = [NSString stringWithUTF8String:js];
+
+    dispatch_queue_t queue = jsc_queues[wid];
+    JSContext* ctx = jsc_contexts[wid];
+    if (!queue || !ctx) return;
+
+    dispatch_async(queue, ^{
+        [ctx evaluateScript:script];
+    });
+}
+
+void jsc_worker_terminate(const char* worker_id) {
+    if (!worker_id) return;
+    NSString* wid = [NSString stringWithUTF8String:worker_id];
+
+    [jsc_contexts removeObjectForKey:wid];
+    [jsc_queues removeObjectForKey:wid];
+
+    for (int i = 0; i < JSC_MAX_WORKERS; i++) {
+        if (jsc_workers[i].active && strcmp(jsc_workers[i].worker_id, worker_id) == 0) {
+            jsc_workers[i].active = 0;
+            break;
+        }
+    }
+    NSLog(@"[zapp] JSC worker terminated: %@", wid);
+}
+
+void jsc_worker_terminate_owner(const char* owner_id) {
+    if (!owner_id) return;
+
+    // External registry functions for shared worker support
+    extern int zapp_worker_registry_is_shared(const char* worker_id);
+    extern int zapp_worker_registry_remove_owner(const char* worker_id, const char* owner_id);
+    extern void zapp_worker_registry_remove(const char* worker_id);
+
+    for (int i = 0; i < JSC_MAX_WORKERS; i++) {
+        if (jsc_workers[i].active && strcmp(jsc_workers[i].owner_id, owner_id) == 0) {
+            if (zapp_worker_registry_is_shared(jsc_workers[i].worker_id)) {
+                // Shared worker: remove owner reference, terminate only if no owners left
+                int remaining = zapp_worker_registry_remove_owner(jsc_workers[i].worker_id, owner_id);
+                if (remaining <= 0) {
+                    jsc_worker_terminate(jsc_workers[i].worker_id);
+                    zapp_worker_registry_remove(jsc_workers[i].worker_id);
+                }
+            } else {
+                // Dedicated worker: terminate immediately
+                jsc_worker_terminate(jsc_workers[i].worker_id);
+            }
+        }
+    }
+}
+
+// --- Backend worker (privileged, app-level JS context) ---
+// JSC first. txiki.js opt-in later for web APIs (fetch, WebSocket, timers).
+
+static JSContext* jsc_backend_ctx = nil;
+static dispatch_queue_t jsc_backend_queue = nil;
+static BOOL jsc_backend_running = NO;
+
+bool jsc_backend_create(const char* script_path) {
+    if (jsc_backend_running) return false;
+    if (!script_path) return false;
+    jsc_ensure_init();
+
+    NSString* scriptPath = [NSString stringWithUTF8String:script_path];
+    jsc_backend_queue = dispatch_queue_create("com.zapp.backend", DISPATCH_QUEUE_SERIAL);
+
+    dispatch_async(jsc_backend_queue, ^{
+        JSContext* ctx = [[JSContext alloc] initWithVirtualMachine:jsc_vm];
+        ctx.name = @"Zapp Backend";
+        ctx.exceptionHandler = ^(JSContext* c, JSValue* exception) {
+            (void)c;
+            NSLog(@"[backend ERROR] %@", exception);
+        };
+
+        // Make inspectable
+        if (app_get_bootstrap_web_content_inspectable()) {
+            if ([ctx respondsToSelector:@selector(setInspectable:)]) {
+                [ctx setInspectable:YES];
+            }
+        }
+
+        // Set up standard bridge (console, invokeService, syncWait/Notify)
+        jsc_setup_bridge(ctx, @"__backend__");
+
+        // Backend-specific host objects
+        JSValue* bridge = ctx[@"__zappBridge"];
+
+        // quit — terminate the app
+        bridge[@"quit"] = ^{
+            dispatch_async(dispatch_get_main_queue(), ^{
+                exit(0);
+            });
+        };
+
+        // showNotification — fire-and-forget
+        bridge[@"showNotification"] = ^(NSString* title, NSString* body) {
+            const char* t = title ? [title UTF8String] : "";
+            const char* b = body ? [body UTF8String] : "";
+            // Copy strings for async block
+            char* tc = strdup(t);
+            char* bc = strdup(b);
+            dispatch_async(dispatch_get_main_queue(), ^{
+                extern void darwin_notification_show_typed(const char*, const char*, const char*, const char*);
+                darwin_notification_show_typed(tc, "", bc, "default");
+                free(tc);
+                free(bc);
+            });
+        };
+
+        jsc_backend_ctx = ctx;
+
+        // Load backend bootstrap
+        extern const char* zapp_backend_bootstrap_script(void);
+        const char* bootstrap = zapp_backend_bootstrap_script();
+        if (bootstrap && bootstrap[0] != '\0') {
+            [ctx evaluateScript:[NSString stringWithUTF8String:bootstrap]];
+        }
+
+        // Load user script
+        char cwd[1024];
+        NSString* base = getcwd(cwd, sizeof(cwd)) ? [NSString stringWithUTF8String:cwd] : @".";
+        NSString* fullPath = [base stringByAppendingPathComponent:scriptPath];
+        NSError* err = nil;
+        NSString* script = [NSString stringWithContentsOfFile:fullPath encoding:NSUTF8StringEncoding error:&err];
+        if (script) {
+            NSLog(@"[zapp] backend worker started: %@", fullPath);
+            [ctx evaluateScript:script withSourceURL:[NSURL URLWithString:@"backend.mjs"]];
+        } else {
+            NSLog(@"[zapp] backend script not found: %@", fullPath);
+        }
+    });
+
+    jsc_backend_running = YES;
+    return true;
+}
+
+void jsc_backend_terminate(void) {
+    if (!jsc_backend_running) return;
+    jsc_backend_ctx = nil;
+    jsc_backend_queue = nil;
+    jsc_backend_running = NO;
+    NSLog(@"[zapp] backend worker terminated");
+}
+
+void jsc_backend_eval_js(const char* js) {
+    if (!jsc_backend_running || !jsc_backend_ctx || !jsc_backend_queue || !js) return;
+    NSString* script = [NSString stringWithUTF8String:js];
+    dispatch_async(jsc_backend_queue, ^{
+        if (jsc_backend_ctx) {
+            [jsc_backend_ctx evaluateScript:script];
+        }
+    });
+}
+
+bool jsc_backend_is_running(void) {
+    return jsc_backend_running;
+}

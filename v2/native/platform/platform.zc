@@ -1,0 +1,20 @@
+// Platform abstraction — pure Zen-C.
+// Clean public names, delegates to prefixed C functions in .h/.m.
+
+struct App;
+struct AppConfig;
+
+@cfg(apple)
+import "./darwin/platform.h" as darwin;
+
+@cfg(apple)
+fn platform_init(name: string) -> void {
+    darwin::darwin_platform_init(name);
+}
+
+@cfg(apple)
+fn platform_run(terminate_after_last_window: bool) -> int {
+    return darwin::darwin_platform_run(terminate_after_last_window);
+}
+
+// TODO: @cfg(windows) versions

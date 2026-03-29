@@ -1,0 +1,142 @@
+// Service registry and RPC invocation.
+// Services are native functions registered by name, callable from JS.
+// Optional lifecycle: startup() in registration order, shutdown() in reverse.
+
+import "std/result.zc";
+import "string.h" as str;
+
+struct App;
+
+// Service implementation — bundles handler + optional lifecycle hooks.
+struct ServiceImpl {
+    handler: fn*(App*, string) -> string;
+    startup: fn*(void*) -> void;
+    shutdown: fn*(void*) -> void;
+}
+
+raw {
+    #define SERVICE_MAX_BINDINGS 64
+
+    typedef struct {
+        char* name;
+        void* handler;
+        void* service_ptr;
+        void (*startup)(void*);
+        void (*shutdown)(void*);
+    } ZappServiceEntry;
+
+    static ZappServiceEntry g_services[SERVICE_MAX_BINDINGS] = {{0}};
+    static int g_service_count = 0;
+}
+
+struct ServiceManager {
+    app: App*;
+}
+
+impl ServiceManager {
+    fn new() -> Self {
+        return ServiceManager{ app: NULL };
+    }
+
+    // Register a simple stateless service (no lifecycle, no state).
+    fn add(self, name: string, handler: fn*(App*, string) -> string) -> void {
+        raw {
+            if (g_service_count >= SERVICE_MAX_BINDINGS) return;
+            g_services[g_service_count].name = (char*)name;
+            g_services[g_service_count].handler = (void*)handler;
+            g_services[g_service_count].service_ptr = NULL;
+            g_services[g_service_count].startup = NULL;
+            g_services[g_service_count].shutdown = NULL;
+            g_service_count++;
+        }
+    }
+
+    // Register a stateful service with implementation (handler + lifecycle).
+    fn register(self, name: string, service_ptr: void*, impl_ptr: ServiceImpl*) -> void {
+        let handler = impl_ptr.handler;
+        let startup = impl_ptr.startup;
+        let shutdown = impl_ptr.shutdown;
+        raw {
+            if (g_service_count >= SERVICE_MAX_BINDINGS) return;
+            g_services[g_service_count].name = (char*)name;
+            g_services[g_service_count].handler = (void*)handler;
+            g_services[g_service_count].service_ptr = service_ptr;
+            g_services[g_service_count].startup = (void (*)(void*))startup;
+            g_services[g_service_count].shutdown = (void (*)(void*))shutdown;
+            g_service_count++;
+        }
+    }
+}
+
+// Run startup() for all services with lifecycle, in registration order.
+fn service_run_startup_all() -> void {
+    raw {
+        for (int i = 0; i < g_service_count; i++) {
+            if (g_services[i].startup != NULL) {
+                g_services[i].startup(g_services[i].service_ptr);
+            }
+        }
+    }
+}
+
+// Run shutdown() for all services with lifecycle, in REVERSE registration order.
+fn service_run_shutdown_all() -> void {
+    raw {
+        for (int i = g_service_count - 1; i >= 0; i--) {
+            if (g_services[i].shutdown != NULL) {
+                g_services[i].shutdown(g_services[i].service_ptr);
+            }
+        }
+    }
+}
+
+fn service_invoke(app: App*, method: string, args: string) -> Result<string> {
+    let idx: int = -1;
+    raw {
+        for (int i = 0; i < g_service_count; i++) {
+            if (g_services[i].name && strcmp(g_services[i].name, (const char*)method) == 0) {
+                idx = i;
+                break;
+            }
+        }
+    }
+
+    if idx < 0 {
+        return Result<string>::Err("NOT_FOUND");
+    }
+
+    let result: string = "";
+    raw {
+        typedef char* (*ServiceFnPtr)(void*, char*);
+        ServiceFnPtr fn_ptr = (ServiceFnPtr)g_services[idx].handler;
+        result = fn_ptr((void*)app, (char*)args);
+    }
+
+    return Result<string>::Ok(result);
+}
+
+// Synchronous invoke for worker host objects (called from jsc.m / txiki.c).
+fn service_invoke_sync(app_ptr: void*, method: string, args: string) -> string {
+    let app = (App*)app_ptr;
+    if app == NULL { return ""; }
+    let result = service_invoke(app, method, args);
+    if result.is_ok() { return result.unwrap(); }
+    return "";
+}
+
+// Get bindings manifest as JSON (for bootstrap injection).
+fn service_get_manifest_json() -> string {
+    raw {
+        static char manifest[4096];
+        int pos = 0;
+        pos += snprintf(manifest + pos, sizeof(manifest) - pos, "{\"v\":1,\"services\":[");
+        for (int i = 0; i < g_service_count; i++) {
+            if (i > 0) pos += snprintf(manifest + pos, sizeof(manifest) - pos, ",");
+            pos += snprintf(manifest + pos, sizeof(manifest) - pos,
+                "{\"name\":\"%s\"}", g_services[i].name);
+        }
+        pos += snprintf(manifest + pos, sizeof(manifest) - pos, "]}");
+        return manifest;
+    }
+    return "";
+}

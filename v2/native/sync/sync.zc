@@ -1,0 +1,48 @@
+// Sync — native Zen-C wrappers for cross-context wait/notify coordination.
+// Calls darwin_sync_handle() directly (same as JS bridge, but no JSON bridge overhead).
+//
+// Usage:
+//   sync_notify("data-ready");           // wake one waiter
+//   sync_notify_all("data-ready", 100);  // wake up to 100 waiters
+
+import "stdio.h" as c;
+
+// Wake up to `count` waiters blocked on the given key.
+fn sync_notify(key: string, count: int) -> void {
+    if count < 1 { count = 1; }
+    raw {
+        char buf[384];
+        snprintf(buf, sizeof(buf), "{\"key\":\"%s\",\"count\":%d}", (const char*)key, count);
+        extern void darwin_sync_handle(const char* action, const char* payload_json);
+        darwin_sync_handle("notify", buf);
+    }
+}
+
+// Convenience: wake one waiter.
+fn sync_notify_one(key: string) -> void {
+    sync_notify(key, 1);
+}
+
+// Blocking wait — for background threads / workers ONLY, NOT main thread.
+// Returns "notified" or "timed-out".
+@cfg(apple)
+fn sync_wait(key: string, timeout_ms: int) -> string {
+    let result: int = 0;
+    raw {
+        extern int darwin_sync_wait_blocking(const char* key, int timeout_ms);
+        result = darwin_sync_wait_blocking((const char*)key, timeout_ms);
+    }
+    if result == 1 { return "notified"; }
+    return "timed-out";
+}
+
+// --- Manager (namespaced via app.sync) ---
+
+struct SyncManager {}
+
+impl SyncManager {
+    fn new() -> Self { return SyncManager{}; }
+    fn notify(self, key: string, count: int) -> void { sync_notify(key, count); }
+    fn notify_one(self, key: string) -> void { sync_notify_one(key); }
+    fn wait(self, key: string, timeout_ms: int) -> string { return sync_wait(key, timeout_ms); }
+}

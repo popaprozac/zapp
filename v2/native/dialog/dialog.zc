@@ -1,0 +1,58 @@
+// Dialog — native file and message dialogs for Zen-C code.
+// Zero JSON overhead — calls typed C functions directly.
+//
+// Usage via manager:  app.dialog.open_file("Pick a file")
+// Usage standalone:   dialog_open_file("Pick a file")
+
+@cfg(apple)
+import "../platform/darwin/dialog.h" as darwin_dlg;
+
+// Open a file dialog. Returns selected path, or "" if cancelled.
+@cfg(apple)
+fn dialog_open_file(title: string) -> string {
+    return darwin_dlg::darwin_dialog_open_file_typed(title, false, false);
+}
+
+// Open a folder dialog. Returns selected path, or "" if cancelled.
+@cfg(apple)
+fn dialog_open_folder(title: string) -> string {
+    return darwin_dlg::darwin_dialog_open_file_typed(title, false, true);
+}
+
+// Save file dialog. Returns path, or "" if cancelled.
+@cfg(apple)
+fn dialog_save_file(title: string, default_name: string) -> string {
+    return darwin_dlg::darwin_dialog_save_file_typed(title, default_name);
+}
+
+// Show an info message dialog with OK button. Returns 0.
+@cfg(apple)
+fn dialog_message(msg: string) -> int {
+    return darwin_dlg::darwin_dialog_message_typed(msg, "", 0);
+}
+
+// Show a message dialog with title. style: 0=info, 1=warning, 2=critical.
+@cfg(apple)
+fn dialog_message_with_title(msg: string, title: string, style: int) -> int {
+    return darwin_dlg::darwin_dialog_message_typed(msg, title, style);
+}
+
+// Show a message dialog with custom buttons. Returns button index (0-based).
+@cfg(apple)
+fn dialog_confirm(msg: string, btn_yes: string, btn_no: string) -> int {
+    return darwin_dlg::darwin_dialog_message_buttons_typed(msg, "", 0, btn_yes, btn_no, "");
+}
+
+// --- Manager (namespaced via app.dialog) ---
+
+struct DialogManager {}
+
+impl DialogManager {
+    fn new() -> Self { return DialogManager{}; }
+    fn open_file(self, title: string) -> string { return dialog_open_file(title); }
+    fn open_folder(self, title: string) -> string { return dialog_open_folder(title); }
+    fn save_file(self, title: string, default_name: string) -> string { return dialog_save_file(title, default_name); }
+    fn message(self, msg: string) -> int { return dialog_message(msg); }
+    fn message_with_title(self, msg: string, title: string, style: int) -> int { return dialog_message_with_title(msg, title, style); }
+    fn confirm(self, msg: string, btn_yes: string, btn_no: string) -> int { return dialog_confirm(msg, btn_yes, btn_no); }
+}
