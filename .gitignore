@@ -1,4 +1,6 @@
 AGENTS.md
+GEMINI.md
+SKILLS.md
 context.md
 Zen-C.md
 bootstrap.sh
@@ -6,7 +8,9 @@ bootstrap.ps1
 ISSUES.md
 TODO.md
 ZAPP_CHARTER.md
+playground/
 tests/
+v2/
 zenc-lang-tests
 example/
 .claude/
