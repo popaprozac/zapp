@@ -1,10 +1,14 @@
 import "app/app.zc";
 
-// Log via NSLog — writes to stderr, visible in terminal even via `open`
+// Log to stderr — platform-appropriate logging
 fn log(msg: string) -> void {
     raw {
+        #ifdef __APPLE__
         extern void NSLog(id, ...);
         NSLog(@"[native] %s", (const char*)msg);
+        #else
+        fprintf(stderr, "[native] %s\n", (const char*)msg);
+        #endif
     }
 }
 

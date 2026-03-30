@@ -15,6 +15,7 @@
 //> macos: cflags: -fobjc-arc -x objective-c
 
 //> windows: cflags: -DUNICODE -D_UNICODE -DCINTERFACE -DCOBJMACROS
+// Windows platform .c files added by CLI via zapp_platform.zc
 //> windows: link: -lole32 -lshell32 -luuid -luser32 -lgdi32 -lcomctl32 -lcomdlg32 -lshlwapi
 //> windows: link: -lwinhttp -lbcrypt -ladvapi32 -lrpcrt4 -lcrypt32 -lversion
 
