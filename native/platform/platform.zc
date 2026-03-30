@@ -17,4 +17,15 @@ fn platform_run(terminate_after_last_window: bool) -> int {
     return darwin::darwin_platform_run(terminate_after_last_window);
 }
 
-// TODO: @cfg(windows) versions
+@cfg(windows)
+import "./windows/platform.h" as win;
+
+@cfg(windows)
+fn platform_init(name: string) -> void {
+    win::windows_platform_init(name);
+}
+
+@cfg(windows)
+fn platform_run(terminate_after_last_window: bool) -> int {
+    return win::windows_platform_run(terminate_after_last_window);
+}

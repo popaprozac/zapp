@@ -200,8 +200,13 @@ impl Window {
     fn load_url(self, url: string) -> void {
         let wid = self.id;
         raw {
+            #ifdef __APPLE__
             extern void darwin_window_load_url(int32_t window_id, const char* url);
             darwin_window_load_url(wid, (const char*)url);
+            #else
+            extern void windows_window_load_url(int32_t window_id, const char* url);
+            windows_window_load_url(wid, (const char*)url);
+            #endif
         }
     }
 }
@@ -315,4 +320,48 @@ fn window_get_position(handle: void*) -> WindowPosition {
     return WindowPosition{ x: x, y: y };
 }
 
-// TODO: @cfg(windows) trampolines
+@cfg(windows)
+import "../platform/windows/window.h" as win_window;
+
+@cfg(windows)
+fn window_create(options: WindowOptions*) -> void* { return win_window::windows_window_create(options); }
+@cfg(windows)
+fn window_destroy(handle: void*) -> void { win_window::windows_window_destroy(handle); }
+@cfg(windows)
+fn window_show(handle: void*) -> void { win_window::windows_window_show(handle); }
+@cfg(windows)
+fn window_hide(handle: void*) -> void { win_window::windows_window_hide(handle); }
+@cfg(windows)
+fn window_force_close(handle: void*) -> void { win_window::windows_window_force_close(handle); }
+@cfg(windows)
+fn window_register_numeric_id(handle: void*, id: int) -> void { win_window::windows_window_register_numeric_id(handle, id); }
+@cfg(windows)
+fn window_minimize(handle: void*) -> void { win_window::windows_window_minimize(handle); }
+@cfg(windows)
+fn window_maximize(handle: void*) -> void { win_window::windows_window_maximize(handle); }
+@cfg(windows)
+fn window_set_title(handle: void*, title: string) -> void { win_window::windows_window_set_title(handle, title); }
+@cfg(windows)
+fn window_set_size(handle: void*, w: int, h: int) -> void { win_window::windows_window_set_size(handle, w, h); }
+@cfg(windows)
+fn window_set_position(handle: void*, x: int, y: int) -> void { win_window::windows_window_set_position(handle, x, y); }
+@cfg(windows)
+fn window_set_fullscreen(handle: void*, on: bool) -> void { win_window::windows_window_set_fullscreen(handle, on); }
+@cfg(windows)
+fn window_set_always_on_top(handle: void*, on: bool) -> void { win_window::windows_window_set_always_on_top(handle, on); }
+
+@cfg(windows)
+fn window_get_size(handle: void*) -> WindowSize {
+    let w: int = 0;
+    let h: int = 0;
+    win_window::windows_window_get_size(handle, &w, &h);
+    return WindowSize{ width: w, height: h };
+}
+
+@cfg(windows)
+fn window_get_position(handle: void*) -> WindowPosition {
+    let x: int = 0;
+    let y: int = 0;
+    win_window::windows_window_get_position(handle, &x, &y);
+    return WindowPosition{ x: x, y: y };
+}

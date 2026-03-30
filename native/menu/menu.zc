@@ -64,6 +64,13 @@ fn menu_set(items: MenuItem*, count: int) -> void {
         darwin_menu_set_typed((void*)items, count);
     }
 }
+@cfg(windows)
+fn menu_set(items: MenuItem*, count: int) -> void {
+    raw {
+        extern void windows_menu_set_typed(void* items, int count);
+        windows_menu_set_typed((void*)items, count);
+    }
+}
 
 // Show a context menu at position (x, y) in the given window.
 @cfg(apple)
@@ -71,6 +78,13 @@ fn menu_show_context(items: MenuItem*, count: int, x: int, y: int, window_id: in
     raw {
         extern void darwin_menu_show_context_typed(void* items, int count, int x, int y, int32_t window_id);
         darwin_menu_show_context_typed((void*)items, count, x, y, window_id);
+    }
+}
+@cfg(windows)
+fn menu_show_context(items: MenuItem*, count: int, x: int, y: int, window_id: int) -> void {
+    raw {
+        extern void windows_menu_show_context_typed(void* items, int count, int x, int y, int32_t window_id);
+        windows_menu_show_context_typed((void*)items, count, x, y, window_id);
     }
 }
 

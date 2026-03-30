@@ -9,6 +9,10 @@ import "./protocol.zc";
 import "../platform/darwin/window.h" as darwin_win;
 @cfg(apple)
 import "../platform/darwin/webview.h" as darwin_webview;
+@cfg(windows)
+import "../platform/windows/window.h" as win_window;
+@cfg(windows)
+import "../platform/windows/webview.h" as win_webview;
 
 // Reusable buffer for response JS — avoids allocation per response.
 raw {
@@ -42,6 +46,16 @@ fn platform_eval_js(window_id: int, js: string) -> void {
 @cfg(apple)
 fn platform_eval_js_all(js: string) -> void {
     darwin_webview::darwin_webview_eval_all(js);
+}
+
+@cfg(windows)
+fn platform_eval_js(window_id: int, js: string) -> void {
+    win_window::windows_window_eval_js(window_id, js);
+}
+
+@cfg(windows)
+fn platform_eval_js_all(js: string) -> void {
+    win_webview::windows_webview_eval_all(js);
 }
 
 // Send invoke response to a specific window's WebView.

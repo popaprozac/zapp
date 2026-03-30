@@ -1,0 +1,530 @@
+// Windows window management.
+// HWND creation, WndProc, dispatch tables, window operations, event dispatch.
+
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "window.h"
+
+// --- Forward declarations ---
+
+extern HINSTANCE zapp_get_hinstance(void);
+extern const wchar_t* zapp_get_window_class(void);
+extern void zapp_increment_window_count(void);
+extern void zapp_decrement_window_count(void);
+extern void windows_webview_create(void* hwnd_ptr, bool inspectable, const char* url_override);
+extern int zapp_dispatch_event(int window_id, int event_id, int w, int h, int x, int y);
+
+// --- DPI helper ---
+
+static UINT zapp_get_dpi(void) {
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    if (user32) {
+        typedef UINT (WINAPI *GetDpiForSystemFn)(void);
+        GetDpiForSystemFn fn = (GetDpiForSystemFn)GetProcAddress(user32, "GetDpiForSystem");
+        if (fn) return fn();
+    }
+    return 96;
+}
+
+static int zapp_scale(int value, UINT dpi) {
+    return MulDiv(value, dpi, 96);
+}
+
+// Event IDs (must match events.zc)
+#define ZAPP_EVENT_READY        0
+#define ZAPP_EVENT_FOCUS        1
+#define ZAPP_EVENT_BLUR         2
+#define ZAPP_EVENT_RESIZE       3
+#define ZAPP_EVENT_MOVE         4
+#define ZAPP_EVENT_CLOSE        5
+#define ZAPP_EVENT_MINIMIZE     6
+#define ZAPP_EVENT_MAXIMIZE     7
+#define ZAPP_EVENT_RESTORE      8
+#define ZAPP_EVENT_FULLSCREEN   9
+#define ZAPP_EVENT_UNFULLSCREEN 10
+
+// EventResult
+#define ZAPP_EVENT_ALLOW  0
+#define ZAPP_EVENT_CANCEL 1
+
+// --- Dispatch tables (O(1) by numeric window ID) ---
+
+#define ZAPP_MAX_WINDOWS 64
+
+// Forward declare the WebView2 controller type
+typedef struct ICoreWebView2Controller ICoreWebView2Controller;
+
+static HWND zapp_hwnds[ZAPP_MAX_WINDOWS] = {0};
+static char zapp_window_ids[ZAPP_MAX_WINDOWS][32] = {{0}};
+static int zapp_bridge_ready[ZAPP_MAX_WINDOWS] = {0};
+static int zapp_was_maximized[ZAPP_MAX_WINDOWS] = {0};
+static int zapp_was_minimized[ZAPP_MAX_WINDOWS] = {0};
+static int zapp_pending_focus[ZAPP_MAX_WINDOWS] = {0};
+
+// Fullscreen state
+static LONG zapp_pre_fullscreen_style[ZAPP_MAX_WINDOWS] = {0};
+static RECT zapp_pre_fullscreen_rect[ZAPP_MAX_WINDOWS] = {{0}};
+static int zapp_is_fullscreen[ZAPP_MAX_WINDOWS] = {0};
+
+// Map HWND → numeric ID (stored as window user data)
+static void zapp_set_window_id(HWND hwnd, int32_t id) {
+    SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)id);
+}
+
+static int32_t zapp_get_window_id(HWND hwnd) {
+    return (int32_t)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+}
+
+// --- UTF conversion helpers ---
+
+static wchar_t* utf8_to_wchar(const char* s) {
+    if (!s) return NULL;
+    int len = MultiByteToWideChar(CP_UTF8, 0, s, -1, NULL, 0);
+    if (len <= 0) return NULL;
+    wchar_t* ws = (wchar_t*)malloc(len * sizeof(wchar_t));
+    MultiByteToWideChar(CP_UTF8, 0, s, -1, ws, len);
+    return ws;
+}
+
+static char* wchar_to_utf8(const wchar_t* ws) {
+    if (!ws) return NULL;
+    int len = WideCharToMultiByte(CP_UTF8, 0, ws, -1, NULL, 0, NULL, NULL);
+    if (len <= 0) return NULL;
+    char* s = (char*)malloc(len);
+    WideCharToMultiByte(CP_UTF8, 0, ws, -1, s, len, NULL, NULL);
+    return s;
+}
+
+// --- JS event dispatch ---
+
+// Forward declare: eval JS on window's WebView (in webview.c)
+extern void windows_webview_eval_by_id(int32_t window_id, const char* js);
+
+void zapp_dispatch_event_to_js(int32_t window_id, int32_t event_id, int32_t w, int32_t h, int32_t x, int32_t y) {
+    if (window_id < 0 || window_id >= ZAPP_MAX_WINDOWS) return;
+    if (!zapp_bridge_ready[window_id]) {
+        // Queue focus event if bridge not ready yet
+        if (event_id == ZAPP_EVENT_FOCUS) {
+            zapp_pending_focus[window_id] = 1;
+        }
+        return;
+    }
+
+    // Map event_id to event name
+    const char* name = NULL;
+    switch (event_id) {
+        case ZAPP_EVENT_READY:       name = "ready"; break;
+        case ZAPP_EVENT_FOCUS:       name = "focus"; break;
+        case ZAPP_EVENT_BLUR:        name = "blur"; break;
+        case ZAPP_EVENT_RESIZE:      name = "resize"; break;
+        case ZAPP_EVENT_MOVE:        name = "move"; break;
+        case ZAPP_EVENT_CLOSE:       name = "close"; break;
+        case ZAPP_EVENT_MINIMIZE:    name = "minimize"; break;
+        case ZAPP_EVENT_MAXIMIZE:    name = "maximize"; break;
+        case ZAPP_EVENT_RESTORE:     name = "restore"; break;
+        case ZAPP_EVENT_FULLSCREEN:  name = "fullscreen"; break;
+        case ZAPP_EVENT_UNFULLSCREEN:name = "unfullscreen"; break;
+        default: return;
+    }
+
+    // Build JS call into static buffer
+    static char js_buf[512];
+    const char* wid = zapp_window_ids[window_id];
+
+    // Include payload for resize/move/maximize/restore
+    if (event_id == ZAPP_EVENT_RESIZE || event_id == ZAPP_EVENT_MAXIMIZE || event_id == ZAPP_EVENT_RESTORE) {
+        snprintf(js_buf, sizeof(js_buf),
+            "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+            "if(b&&b.dispatchWindowEvent)b.dispatchWindowEvent('%s','%s','{\"width\":%d,\"height\":%d}');})();",
+            wid, name, w, h);
+    } else if (event_id == ZAPP_EVENT_MOVE) {
+        snprintf(js_buf, sizeof(js_buf),
+            "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+            "if(b&&b.dispatchWindowEvent)b.dispatchWindowEvent('%s','%s','{\"x\":%d,\"y\":%d}');})();",
+            wid, name, x, y);
+    } else {
+        snprintf(js_buf, sizeof(js_buf),
+            "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+            "if(b&&b.dispatchWindowEvent)b.dispatchWindowEvent('%s','%s','{}');})();",
+            wid, name);
+    }
+
+    windows_webview_eval_by_id(window_id, js_buf);
+}
+
+// --- WndProc ---
+
+LRESULT CALLBACK zapp_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    int32_t wid = zapp_get_window_id(hwnd);
+
+    switch (msg) {
+        case WM_SIZE: {
+            // Get client rect for accurate content dimensions
+            RECT client;
+            GetClientRect(hwnd, &client);
+            int w = client.right - client.left;
+            int h = client.bottom - client.top;
+
+            // Resize WebView2 controller bounds
+            extern void windows_webview_resize(int32_t window_id, int w, int h);
+            windows_webview_resize(wid, w, h);
+
+            WORD sizeType = LOWORD(wParam);
+            if (sizeType == SIZE_MINIMIZED) {
+                zapp_was_minimized[wid] = 1;
+                zapp_dispatch_event(wid, ZAPP_EVENT_MINIMIZE, 0, 0, 0, 0);
+            } else if (sizeType == SIZE_MAXIMIZED) {
+                zapp_was_maximized[wid] = 1;
+                zapp_was_minimized[wid] = 0;
+                zapp_dispatch_event(wid, ZAPP_EVENT_MAXIMIZE, w, h, 0, 0);
+                zapp_dispatch_event(wid, ZAPP_EVENT_RESIZE, w, h, 0, 0);
+            } else if (sizeType == SIZE_RESTORED) {
+                if (zapp_was_maximized[wid] || zapp_was_minimized[wid]) {
+                    zapp_was_maximized[wid] = 0;
+                    zapp_was_minimized[wid] = 0;
+                    zapp_dispatch_event(wid, ZAPP_EVENT_RESTORE, w, h, 0, 0);
+                }
+                zapp_dispatch_event(wid, ZAPP_EVENT_RESIZE, w, h, 0, 0);
+            }
+            return 0;
+        }
+
+        case WM_MOVE: {
+            // Notify WebView2 controller of position change
+            extern void windows_webview_notify_position(int32_t window_id);
+            windows_webview_notify_position(wid);
+
+            RECT rc;
+            GetWindowRect(hwnd, &rc);
+            zapp_dispatch_event(wid, ZAPP_EVENT_MOVE, 0, 0, rc.left, rc.top);
+            return 0;
+        }
+
+        // Use WM_ACTIVATE instead of WM_SETFOCUS/WM_KILLFOCUS — WebView2 eats focus events
+        case WM_ACTIVATE: {
+            WORD activateState = LOWORD(wParam);
+            if (activateState == WA_ACTIVE || activateState == WA_CLICKACTIVE) {
+                zapp_dispatch_event(wid, ZAPP_EVENT_FOCUS, 0, 0, 0, 0);
+            } else if (activateState == WA_INACTIVE) {
+                zapp_dispatch_event(wid, ZAPP_EVENT_BLUR, 0, 0, 0, 0);
+            }
+            return 0;
+        }
+
+        case WM_COMMAND: {
+            // Menu item or accelerator
+            extern void zapp_handle_menu_command(unsigned int cmd_id);
+            WORD id = LOWORD(wParam);
+            if (HIWORD(wParam) == 0 && id >= 0x1000) {
+                // Check for __quit
+                zapp_handle_menu_command(id);
+            }
+            return 0;
+        }
+
+        case WM_CLOSE: {
+            int result = zapp_dispatch_event(wid, ZAPP_EVENT_CLOSE, 0, 0, 0, 0);
+            if (result == ZAPP_EVENT_CANCEL) {
+                return 0; // Prevent close (close guard active)
+            }
+            DestroyWindow(hwnd);
+            return 0;
+        }
+
+        case WM_DESTROY: {
+            // Clear dispatch table entry
+            if (wid >= 0 && wid < ZAPP_MAX_WINDOWS) {
+                zapp_hwnds[wid] = NULL;
+                zapp_bridge_ready[wid] = 0;
+                zapp_window_ids[wid][0] = '\0';
+                zapp_was_maximized[wid] = 0;
+                zapp_was_minimized[wid] = 0;
+                zapp_is_fullscreen[wid] = 0;
+            }
+            zapp_decrement_window_count();
+            return 0;
+        }
+
+        default:
+            break;
+    }
+
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+// --- Window creation ---
+
+void* windows_window_create(WindowOptions* opts) {
+    const char* title = wopts_title(opts);
+    int32_t w = wopts_width(opts);
+    int32_t h = wopts_height(opts);
+    int32_t x = wopts_x(opts);
+    int32_t y = wopts_y(opts);
+    bool visible = wopts_visible(opts);
+    bool resizable = wopts_resizable(opts);
+    bool maximizable = wopts_maximizable(opts);
+    bool minimizable = wopts_minimizable(opts);
+    bool borderless = wopts_borderless(opts);
+    bool always_on_top = wopts_always_on_top(opts);
+    int32_t inspectable = wopts_inspectable(opts);
+
+    // DPI-aware scaling
+    UINT dpi = zapp_get_dpi();
+    int scaled_w = zapp_scale(w, dpi);
+    int scaled_h = zapp_scale(h, dpi);
+    int scaled_x = (x != 0) ? zapp_scale(x, dpi) : 0;
+    int scaled_y = (y != 0) ? zapp_scale(y, dpi) : 0;
+
+    // Build window style
+    DWORD style = WS_CLIPCHILDREN;
+    DWORD ex_style = 0;
+    if (borderless) {
+        style |= WS_POPUP;
+    } else {
+        style |= WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
+        if (resizable)    style |= WS_THICKFRAME;
+        if (minimizable)  style |= WS_MINIMIZEBOX;
+        if (maximizable)  style |= WS_MAXIMIZEBOX;
+    }
+    if (always_on_top) ex_style |= WS_EX_TOPMOST;
+
+    // Adjust rect for non-client area (title bar, borders)
+    RECT rc = { 0, 0, scaled_w, scaled_h };
+    AdjustWindowRectEx(&rc, style, FALSE, ex_style);
+    int adj_w = rc.right - rc.left;
+    int adj_h = rc.bottom - rc.top;
+
+    // Center on screen if position not specified
+    int screen_w = GetSystemMetrics(SM_CXSCREEN);
+    int screen_h = GetSystemMetrics(SM_CYSCREEN);
+    int pos_x = (scaled_x == 0) ? (screen_w - adj_w) / 2 : scaled_x;
+    int pos_y = (scaled_y == 0) ? (screen_h - adj_h) / 2 : scaled_y;
+
+    wchar_t* wtitle = utf8_to_wchar(title);
+
+    HWND hwnd = CreateWindowExW(
+        ex_style,
+        zapp_get_window_class(),
+        wtitle ? wtitle : L"Zapp",
+        style,
+        pos_x, pos_y, adj_w, adj_h,
+        NULL, NULL,
+        zapp_get_hinstance(),
+        NULL
+    );
+
+    if (wtitle) free(wtitle);
+    if (!hwnd) return NULL;
+
+    zapp_increment_window_count();
+
+    // Don't show yet — let the app call window_show after on_ready
+    // But if visible is true, show immediately
+    if (visible) {
+        ShowWindow(hwnd, SW_SHOW);
+        UpdateWindow(hwnd);
+    }
+
+    // Get URL override from options
+    const char* url = wopts_url(opts);
+    const char* url_override = (url && url[0]) ? url : NULL;
+
+    // Create WebView2 in this window
+    windows_webview_create((void*)hwnd, inspectable > 0, url_override);
+
+    return (void*)hwnd;
+}
+
+void windows_window_destroy(void* handle) {
+    if (handle) DestroyWindow((HWND)handle);
+}
+
+void windows_window_show(void* handle) {
+    if (handle) {
+        ShowWindow((HWND)handle, SW_SHOW);
+        SetForegroundWindow((HWND)handle);
+    }
+}
+
+void windows_window_hide(void* handle) {
+    if (handle) ShowWindow((HWND)handle, SW_HIDE);
+}
+
+void windows_window_force_close(void* handle) {
+    if (handle) DestroyWindow((HWND)handle);
+}
+
+void windows_window_set_title(void* handle, const char* title) {
+    if (!handle) return;
+    wchar_t* wtitle = utf8_to_wchar(title);
+    if (wtitle) {
+        SetWindowTextW((HWND)handle, wtitle);
+        free(wtitle);
+    }
+}
+
+void windows_window_set_size(void* handle, int32_t width, int32_t height) {
+    if (!handle) return;
+    HWND hwnd = (HWND)handle;
+    UINT dpi = zapp_get_dpi();
+    int scaled_w = zapp_scale(width, dpi);
+    int scaled_h = zapp_scale(height, dpi);
+    DWORD style = (DWORD)GetWindowLongPtrW(hwnd, GWL_STYLE);
+    DWORD ex_style = (DWORD)GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    RECT rc = { 0, 0, scaled_w, scaled_h };
+    AdjustWindowRectEx(&rc, style, FALSE, ex_style);
+    SetWindowPos(hwnd, NULL, 0, 0, rc.right - rc.left, rc.bottom - rc.top,
+                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+void windows_window_set_position(void* handle, int32_t x, int32_t y) {
+    if (!handle) return;
+    UINT dpi = zapp_get_dpi();
+    SetWindowPos((HWND)handle, NULL, zapp_scale(x, dpi), zapp_scale(y, dpi), 0, 0,
+                 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+void windows_window_minimize(void* handle) {
+    if (handle) ShowWindow((HWND)handle, SW_MINIMIZE);
+}
+
+void windows_window_maximize(void* handle) {
+    if (handle) ShowWindow((HWND)handle, SW_MAXIMIZE);
+}
+
+void windows_window_set_fullscreen(void* handle, bool on) {
+    if (!handle) return;
+    HWND hwnd = (HWND)handle;
+    int32_t wid = zapp_get_window_id(hwnd);
+    if (wid < 0 || wid >= ZAPP_MAX_WINDOWS) return;
+
+    if (on && !zapp_is_fullscreen[wid]) {
+        // Save current style and position
+        zapp_pre_fullscreen_style[wid] = GetWindowLongW(hwnd, GWL_STYLE);
+        GetWindowRect(hwnd, &zapp_pre_fullscreen_rect[wid]);
+
+        // Go borderless fullscreen
+        MONITORINFO mi = { sizeof(mi) };
+        GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mi);
+        SetWindowLongW(hwnd, GWL_STYLE, zapp_pre_fullscreen_style[wid] & ~WS_OVERLAPPEDWINDOW);
+        SetWindowPos(hwnd, HWND_TOP,
+            mi.rcMonitor.left, mi.rcMonitor.top,
+            mi.rcMonitor.right - mi.rcMonitor.left,
+            mi.rcMonitor.bottom - mi.rcMonitor.top,
+            SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+        zapp_is_fullscreen[wid] = 1;
+        zapp_dispatch_event(wid, ZAPP_EVENT_FULLSCREEN, 0, 0, 0, 0);
+    } else if (!on && zapp_is_fullscreen[wid]) {
+        // Restore
+        SetWindowLongW(hwnd, GWL_STYLE, zapp_pre_fullscreen_style[wid]);
+        RECT* r = &zapp_pre_fullscreen_rect[wid];
+        SetWindowPos(hwnd, NULL,
+            r->left, r->top, r->right - r->left, r->bottom - r->top,
+            SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+        zapp_is_fullscreen[wid] = 0;
+        zapp_dispatch_event(wid, ZAPP_EVENT_UNFULLSCREEN, 0, 0, 0, 0);
+    }
+}
+
+void windows_window_set_always_on_top(void* handle, bool on) {
+    if (!handle) return;
+    SetWindowPos((HWND)handle,
+        on ? HWND_TOPMOST : HWND_NOTOPMOST,
+        0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+}
+
+void windows_window_get_size(void* handle, int32_t* out_w, int32_t* out_h) {
+    if (!handle) return;
+    RECT rc;
+    GetClientRect((HWND)handle, &rc);
+    if (out_w) *out_w = rc.right - rc.left;
+    if (out_h) *out_h = rc.bottom - rc.top;
+}
+
+void windows_window_get_position(void* handle, int32_t* out_x, int32_t* out_y) {
+    if (!handle) return;
+    RECT rc;
+    GetWindowRect((HWND)handle, &rc);
+    if (out_x) *out_x = rc.left;
+    if (out_y) *out_y = rc.top;
+}
+
+// --- ID registration and lookup ---
+
+void windows_window_register_numeric_id(void* handle, int32_t numeric_id) {
+    if (!handle || numeric_id < 0 || numeric_id >= ZAPP_MAX_WINDOWS) return;
+    HWND hwnd = (HWND)handle;
+    zapp_hwnds[numeric_id] = hwnd;
+    zapp_set_window_id(hwnd, numeric_id);
+    snprintf(zapp_window_ids[numeric_id], 32, "win-%d", numeric_id);
+}
+
+void windows_window_eval_js(int32_t window_id, const char* js) {
+    windows_webview_eval_by_id(window_id, js);
+}
+
+int32_t windows_window_id_for_webview(void* webview) {
+    // Not commonly needed on Windows — WebView2 callbacks carry window context
+    (void)webview;
+    return -1;
+}
+
+const char* windows_window_id_string(int32_t numeric_id) {
+    if (numeric_id < 0 || numeric_id >= ZAPP_MAX_WINDOWS) return NULL;
+    if (zapp_window_ids[numeric_id][0] == '\0') return NULL;
+    return zapp_window_ids[numeric_id];
+}
+
+void* windows_window_get_webview(int32_t numeric_id) {
+    // Returns the HWND — WebView2 lookup is done in webview.c
+    if (numeric_id < 0 || numeric_id >= ZAPP_MAX_WINDOWS) return NULL;
+    return (void*)zapp_hwnds[numeric_id];
+}
+
+void windows_window_set_bridge_ready(const char* window_id) {
+    // Parse "win-N" to get numeric ID
+    if (!window_id || strncmp(window_id, "win-", 4) != 0) return;
+    int id = atoi(window_id + 4);
+    if (id < 0 || id >= ZAPP_MAX_WINDOWS) return;
+    zapp_bridge_ready[id] = 1;
+
+    // Fire pending focus event
+    if (zapp_pending_focus[id]) {
+        zapp_pending_focus[id] = 0;
+        zapp_dispatch_event_to_js(id, ZAPP_EVENT_FOCUS, 0, 0, 0, 0);
+    }
+}
+
+void windows_window_load_url(int32_t window_id, const char* url) {
+    extern void windows_webview_navigate(int32_t window_id, const char* url);
+    windows_webview_navigate(window_id, url);
+}
+
+// --- Drag region ---
+
+static int zapp_in_drag_region[ZAPP_MAX_WINDOWS] = {0};
+
+void windows_webview_set_drag_region(int32_t window_id, bool drag) {
+    if (window_id >= 0 && window_id < ZAPP_MAX_WINDOWS) {
+        zapp_in_drag_region[window_id] = drag ? 1 : 0;
+    }
+}
+
+// Accessor for webview.c to check drag state
+int zapp_is_in_drag_region(int32_t window_id) {
+    if (window_id >= 0 && window_id < ZAPP_MAX_WINDOWS) {
+        return zapp_in_drag_region[window_id];
+    }
+    return 0;
+}
+
+// Get HWND by numeric ID (for webview.c)
+HWND zapp_get_hwnd(int32_t window_id) {
+    if (window_id >= 0 && window_id < ZAPP_MAX_WINDOWS) {
+        return zapp_hwnds[window_id];
+    }
+    return NULL;
+}

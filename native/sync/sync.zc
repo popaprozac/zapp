@@ -13,8 +13,13 @@ fn sync_notify(key: string, count: int) -> void {
     raw {
         char buf[384];
         snprintf(buf, sizeof(buf), "{\"key\":\"%s\",\"count\":%d}", (const char*)key, count);
+        #ifdef __APPLE__
         extern void darwin_sync_handle(const char* action, const char* payload_json);
         darwin_sync_handle("notify", buf);
+        #else
+        extern void windows_sync_handle(const char* action, const char* payload_json);
+        windows_sync_handle("notify", buf);
+        #endif
     }
 }
 
@@ -31,6 +36,17 @@ fn sync_wait(key: string, timeout_ms: int) -> string {
     raw {
         extern int darwin_sync_wait_blocking(const char* key, int timeout_ms);
         result = darwin_sync_wait_blocking((const char*)key, timeout_ms);
+    }
+    if result == 1 { return "notified"; }
+    return "timed-out";
+}
+
+@cfg(windows)
+fn sync_wait(key: string, timeout_ms: int) -> string {
+    let result: int = 0;
+    raw {
+        extern int windows_sync_wait_blocking(const char* key, int timeout_ms);
+        result = windows_sync_wait_blocking((const char*)key, timeout_ms);
     }
     if result == 1 { return "notified"; }
     return "timed-out";

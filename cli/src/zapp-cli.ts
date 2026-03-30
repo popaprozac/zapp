@@ -2,6 +2,7 @@
 import path from "node:path";
 import process from "node:process";
 import { mkdir } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { loadConfig } from "./config";
 import { generateBuildConfig, generatePlatformConfig } from "./build-config";
 import { generateBindings } from "./generate";
@@ -28,8 +29,8 @@ async function waitForPort(port: number, timeoutMs = 10000): Promise<boolean> {
 }
 
 async function runDev(root: string) {
-  if (process.platform !== "darwin") {
-    process.stderr.write("[zapp] dev mode is currently macOS-only. Windows support is in progress.\n");
+  if (process.platform !== "darwin" && process.platform !== "win32") {
+    process.stderr.write("[zapp] dev mode is currently macOS and Windows only.\n");
     process.exit(1);
   }
 
@@ -72,7 +73,8 @@ async function runDev(root: string) {
   process.stdout.write("[zapp] compiling native binary...\n");
   const binDir = path.join(root, "bin");
   await mkdir(binDir, { recursive: true });
-  const nativeOut = path.join(binDir, config.name.replace(/\s+/g, "-").toLowerCase());
+  const exeSuffix = process.platform === "win32" ? ".exe" : "";
+  const nativeOut = path.join(binDir, config.name.replace(/\s+/g, "-").toLowerCase() + exeSuffix);
 
   const buildFile = path.join(root, "zapp", "build.zc");
   await compileNative({
@@ -85,26 +87,44 @@ async function runDev(root: string) {
     optimize: false,
   });
 
-  // 5. Create .app bundle for dev mode (enables notifications, dock icon, app name)
-  process.stdout.write("[zapp] creating dev bundle...\n");
-  const appDir = await createDevBundle(root, nativeOut, config);
+  let execPath: string;
 
-  // 6. Launch the binary directly (pipes stdout/stderr to terminal for native logs)
-  // Using the .app binary path so macOS recognizes it as a bundled app (dock icon, notifications)
-  const execName = path.basename(nativeOut);
-  const execPath = path.join(appDir, "Contents", "MacOS", execName);
-  process.stdout.write(`[zapp] launching ${appDir}\n`);
-  const appBundleId = (config.identifier ?? `com.zapp.${config.name.toLowerCase().replace(/[^a-z0-9]/g, "")}`) + ".dev";
+  if (process.platform === "darwin") {
+    // 5. Create .app bundle for dev mode (enables notifications, dock icon, app name)
+    process.stdout.write("[zapp] creating dev bundle...\n");
+    const appDir = await createDevBundle(root, nativeOut, config);
+    const execName = path.basename(nativeOut);
+    execPath = path.join(appDir, "Contents", "MacOS", execName);
+    process.stdout.write(`[zapp] launching ${appDir}\n`);
+  } else {
+    // Windows: self-contained WebView2 loader — no external DLL needed
+    execPath = nativeOut;
+    process.stdout.write(`[zapp] launching ${execPath}\n`);
+  }
+
   const appProc = Bun.spawn([execPath], {
     cwd: root,
     stdout: "inherit",
     stderr: "inherit",
   });
 
-  // Handle Ctrl+C — terminate the app
+  // Kill a process tree (Windows needs taskkill for child processes)
+  const killProc = (proc: ReturnType<typeof Bun.spawn>) => {
+    try {
+      if (process.platform === "win32" && proc.pid) {
+        Bun.spawnSync(["taskkill", "/F", "/T", "/PID", String(proc.pid)], {
+          stdout: "ignore", stderr: "ignore",
+        });
+      } else {
+        proc.kill();
+      }
+    } catch {}
+  };
+
+  // Handle Ctrl+C — terminate everything
   const cleanup = () => {
-    try { appProc.kill(); } catch {}
-    try { viteProc.kill(); } catch {}
+    killProc(appProc);
+    killProc(viteProc);
     process.exit(0);
   };
   process.on("SIGINT", cleanup);
@@ -116,15 +136,15 @@ async function runDev(root: string) {
     viteProc.exited,
   ]);
 
-  // Cleanup
-  try { viteProc.kill(); } catch {}
-  try { appProc.kill(); } catch {}
+  // Cleanup — kill whichever is still running
+  killProc(viteProc);
+  killProc(appProc);
   process.exit(exitCode as number);
 }
 
 async function runBuild(root: string) {
-  if (process.platform !== "darwin") {
-    process.stderr.write("[zapp] build is currently macOS-only. Windows support is in progress.\n");
+  if (process.platform !== "darwin" && process.platform !== "win32") {
+    process.stderr.write("[zapp] build is currently macOS and Windows only.\n");
     process.exit(1);
   }
 
@@ -165,7 +185,8 @@ async function runBuild(root: string) {
   process.stdout.write("[zapp] compiling native binary...\n");
   const binDir = path.join(root, "bin");
   await mkdir(binDir, { recursive: true });
-  const nativeOut = path.join(binDir, config.name.replace(/\s+/g, "-").toLowerCase());
+  const buildExeSuffix = process.platform === "win32" ? ".exe" : "";
+  const nativeOut = path.join(binDir, config.name.replace(/\s+/g, "-").toLowerCase() + buildExeSuffix);
 
   const buildFile = path.join(root, "zapp", "build.zc");
   await compileNative({

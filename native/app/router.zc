@@ -9,6 +9,8 @@ import "../window/events.zc";
 // darwin_win imported via dispatch.zc → darwin/window.h
 @cfg(apple)
 import "../platform/darwin/dialog.h" as darwin_dialog;
+@cfg(windows)
+import "../platform/windows/dialog.h" as win_dialog;
 
 fn router_handle_message(app: App*, msg: string, window_id: int) -> void {
     let parsed = bridge_parse(msg);
@@ -96,8 +98,13 @@ fn router_handle_message(app: App*, msg: string, window_id: int) -> void {
 
     if parsed.msg_type == MsgType.SYNC {
         raw {
+            #ifdef __APPLE__
             extern void darwin_sync_handle(const char* action, const char* payload_json);
             darwin_sync_handle((const char*)parsed.method, (const char*)parsed.payload);
+            #else
+            extern void windows_sync_handle(const char* action, const char* payload_json);
+            windows_sync_handle((const char*)parsed.method, (const char*)parsed.payload);
+            #endif
         }
         return;
     }
@@ -129,7 +136,16 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
     let is_ready: bool = false;
     raw { is_ready = (strcmp((const char*)action, "ready") == 0); }
     if is_ready {
-        let wid = darwin_win::darwin_window_id_string(window_id);
+        let wid: string = NULL;
+        raw {
+            #ifdef __APPLE__
+            extern const char* darwin_window_id_string(int32_t numeric_id);
+            wid = (char*)darwin_window_id_string(window_id);
+            #else
+            extern const char* windows_window_id_string(int32_t numeric_id);
+            wid = (char*)windows_window_id_string(window_id);
+            #endif
+        }
         if wid != NULL {
             // Terminate any existing workers owned by this window (handles page refresh)
             raw {
@@ -138,7 +154,15 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
                 worker_terminate_owner((char*)wid);
                 #endif
             }
-            darwin_win::darwin_window_set_bridge_ready(wid);
+            raw {
+                #ifdef __APPLE__
+                extern void darwin_window_set_bridge_ready(const char* window_id);
+                darwin_window_set_bridge_ready((const char*)wid);
+                #else
+                extern void windows_window_set_bridge_ready(const char* window_id);
+                windows_window_set_bridge_ready((const char*)wid);
+                #endif
+            }
         }
         // NOTE: notification event flush moved to subscribe handler (lazy flush)
         // so buffered events only dispatch after user code registers handlers
@@ -198,8 +222,13 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
         let url_opt = args.get_string("url");
         if url_opt.is_some() {
             raw {
+                #ifdef __APPLE__
                 extern void darwin_open_external(const char* url);
                 darwin_open_external((const char*)url_opt.val);
+                #else
+                extern void windows_open_external(const char* url);
+                windows_open_external((const char*)url_opt.val);
+                #endif
             }
         }
         return;
@@ -212,8 +241,13 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
         let drag_opt = args.get_bool("drag");
         if drag_opt.is_some() {
             raw {
+                #ifdef __APPLE__
                 extern void darwin_webview_set_drag_region(int32_t window_id, bool drag);
                 darwin_webview_set_drag_region(window_id, drag_opt.val);
+                #else
+                extern void windows_webview_set_drag_region(int32_t window_id, bool drag);
+                windows_webview_set_drag_region(window_id, drag_opt.val);
+                #endif
             }
         }
         return;
@@ -253,8 +287,13 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
         let url_opt = args.get_string("url");
         if url_opt.is_some() {
             raw {
+                #ifdef __APPLE__
                 extern void darwin_window_load_url(int32_t window_id, const char* url);
                 darwin_window_load_url(window_id, (const char*)url_opt.val);
+                #else
+                extern void windows_window_load_url(int32_t window_id, const char* url);
+                windows_window_load_url(window_id, (const char*)url_opt.val);
+                #endif
             }
         }
         return;
@@ -269,15 +308,25 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
     }
     if is_set_menu {
         raw {
+            #ifdef __APPLE__
             extern void darwin_menu_set_from_payload(const char* payload_json);
             darwin_menu_set_from_payload((const char*)payload);
+            #else
+            extern void windows_menu_set_from_payload(const char* payload_json);
+            windows_menu_set_from_payload((const char*)payload);
+            #endif
         }
         return;
     }
     if is_show_ctx {
         raw {
+            #ifdef __APPLE__
             extern void darwin_menu_show_context_from_payload(const char* payload_json, int32_t window_id);
             darwin_menu_show_context_from_payload((const char*)payload, window_id);
+            #else
+            extern void windows_menu_show_context_from_payload(const char* payload_json, int32_t window_id);
+            windows_menu_show_context_from_payload((const char*)payload, window_id);
+            #endif
         }
         return;
     }
@@ -342,8 +391,13 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
         raw {
             const char* en = (const char*)event_name;
             if (en && strncmp(en, "__notif:", 7) == 0) {
+                #ifdef __APPLE__
                 extern void darwin_notification_set_bridge_ready(void);
                 darwin_notification_set_bridge_ready();
+                #else
+                extern void windows_notification_set_bridge_ready(void);
+                windows_notification_set_bridge_ready();
+                #endif
             }
         }
     }
@@ -391,7 +445,16 @@ fn router_handle_worker(app: App*, action: string, payload: string, window_id: i
         let worker_id = wid_opt.unwrap();
 
         // Owner ID derived from window's string ID
-        let owner_id = darwin_win::darwin_window_id_string(window_id);
+        let owner_id: string = NULL;
+        raw {
+            #ifdef __APPLE__
+            extern const char* darwin_window_id_string(int32_t numeric_id);
+            owner_id = (char*)darwin_window_id_string(window_id);
+            #else
+            extern const char* windows_window_id_string(int32_t numeric_id);
+            owner_id = (char*)windows_window_id_string(window_id);
+            #endif
+        }
         if owner_id == NULL { return; }
 
         // Check if this is a shared worker
@@ -469,7 +532,16 @@ fn router_handle_worker(app: App*, action: string, payload: string, window_id: i
         if !wid_opt.is_some() { return; }
         let wid = wid_opt.unwrap();
 
-        let owner_id = darwin_win::darwin_window_id_string(window_id);
+        let owner_id: string = NULL;
+        raw {
+            #ifdef __APPLE__
+            extern const char* darwin_window_id_string(int32_t numeric_id);
+            owner_id = (char*)darwin_window_id_string(window_id);
+            #else
+            extern const char* windows_window_id_string(int32_t numeric_id);
+            owner_id = (char*)windows_window_id_string(window_id);
+            #endif
+        }
         if owner_id == NULL { return; }
 
         let remaining: int = 0;
@@ -489,16 +561,22 @@ fn router_handle_worker(app: App*, action: string, payload: string, window_id: i
 // --- Dialog handler ---
 
 fn router_handle_dialog(method: string, payload: string, window_id: int, request_id: int) -> void {
-    // Extract "a" (args) from the full message JSON via ObjC helper in dialog.m
+    // Extract "a" (args) from the full message JSON
     let args_json: string = "";
     raw {
+        #ifdef __APPLE__
         extern const char* darwin_dialog_extract_args(const char* full_json);
         args_json = (char*)darwin_dialog_extract_args((const char*)payload);
+        #else
+        extern const char* windows_dialog_extract_args(const char* full_json);
+        args_json = (char*)windows_dialog_extract_args((const char*)payload);
+        #endif
     }
 
     let result: string = "";
     raw {
         const char* m = (const char*)method;
+        #ifdef __APPLE__
         if (strcmp(m, "__dialog:open") == 0) {
             result = (char*)darwin_dialog_open_file((const char*)args_json);
         } else if (strcmp(m, "__dialog:save") == 0) {
@@ -506,6 +584,18 @@ fn router_handle_dialog(method: string, payload: string, window_id: int, request
         } else if (strcmp(m, "__dialog:message") == 0) {
             result = (char*)darwin_dialog_message((const char*)args_json);
         }
+        #else
+        extern const char* windows_dialog_open_file(const char*);
+        extern const char* windows_dialog_save_file(const char*);
+        extern const char* windows_dialog_message(const char*);
+        if (strcmp(m, "__dialog:open") == 0) {
+            result = (char*)windows_dialog_open_file((const char*)args_json);
+        } else if (strcmp(m, "__dialog:save") == 0) {
+            result = (char*)windows_dialog_save_file((const char*)args_json);
+        } else if (strcmp(m, "__dialog:message") == 0) {
+            result = (char*)windows_dialog_message((const char*)args_json);
+        }
+        #endif
     }
 
     if result != "" {
@@ -520,38 +610,62 @@ fn router_handle_dialog(method: string, payload: string, window_id: int, request
 fn router_handle_notification(method: string, payload: string, window_id: int, request_id: int) -> void {
     let args_json: string = "";
     raw {
+        #ifdef __APPLE__
         extern const char* darwin_dialog_extract_args(const char* full_json);
         args_json = (char*)darwin_dialog_extract_args((const char*)payload);
+        #else
+        extern const char* windows_dialog_extract_args(const char* full_json);
+        args_json = (char*)windows_dialog_extract_args((const char*)payload);
+        #endif
     }
 
     raw {
         typedef void (*notif_callback_fn)(int32_t, int32_t, bool, const char*);
         extern void dispatch_invoke_response(int32_t window_id, int32_t request_id, bool ok, char* payload);
-
-        // Defined at file scope (below) — forward declare here
         extern void notif_response_cb(int32_t wid, int32_t rid, bool ok, const char* json);
 
+        #ifdef __APPLE__
         extern void darwin_notification_request_permission(int32_t wid, int32_t rid, notif_callback_fn cb);
         extern const char* darwin_notification_get_permission(void);
         extern void darwin_notification_show(const char* opts, int32_t wid, int32_t rid, notif_callback_fn cb);
         extern void darwin_notification_schedule(const char* opts, int32_t wid, int32_t rid, notif_callback_fn cb);
         extern void darwin_notification_cancel(const char* id);
         extern void darwin_notification_cancel_all(void);
+        #define notif_request_permission darwin_notification_request_permission
+        #define notif_get_permission darwin_notification_get_permission
+        #define notif_show darwin_notification_show
+        #define notif_schedule darwin_notification_schedule
+        #define notif_cancel darwin_notification_cancel
+        #define notif_cancel_all darwin_notification_cancel_all
+        #else
+        extern void windows_notification_request_permission(int32_t wid, int32_t rid, notif_callback_fn cb);
+        extern const char* windows_notification_get_permission(void);
+        extern void windows_notification_show(const char* opts, int32_t wid, int32_t rid, notif_callback_fn cb);
+        extern void windows_notification_schedule(const char* opts, int32_t wid, int32_t rid, notif_callback_fn cb);
+        extern void windows_notification_cancel(const char* id);
+        extern void windows_notification_cancel_all(void);
+        #define notif_request_permission windows_notification_request_permission
+        #define notif_get_permission windows_notification_get_permission
+        #define notif_show windows_notification_show
+        #define notif_schedule windows_notification_schedule
+        #define notif_cancel windows_notification_cancel
+        #define notif_cancel_all windows_notification_cancel_all
+        #endif
 
         const char* m = (const char*)method;
 
         if (strcmp(m, "__notif:requestPermission") == 0) {
-            darwin_notification_request_permission(window_id, request_id, notif_response_cb);
-            return; // async — response comes via callback
+            notif_request_permission(window_id, request_id, notif_response_cb);
+            return;
         } else if (strcmp(m, "__notif:getPermission") == 0) {
-            const char* r = darwin_notification_get_permission();
+            const char* r = notif_get_permission();
             dispatch_invoke_response(window_id, request_id, true, (char*)r);
             return;
         } else if (strcmp(m, "__notif:show") == 0) {
-            darwin_notification_show((const char*)args_json, window_id, request_id, notif_response_cb);
+            notif_show((const char*)args_json, window_id, request_id, notif_response_cb);
             return;
         } else if (strcmp(m, "__notif:schedule") == 0) {
-            darwin_notification_schedule((const char*)args_json, window_id, request_id, notif_response_cb);
+            notif_schedule((const char*)args_json, window_id, request_id, notif_response_cb);
             return;
         } else if (strcmp(m, "__notif:cancel") == 0) {
             const char* a = (const char*)args_json;
@@ -562,16 +676,15 @@ fn router_handle_notification(method: string, payload: string, window_id: int, r
                 int i = 0;
                 while (*p && *p != '"' && i < 127) id_buf[i++] = *p++;
                 id_buf[i] = '\0';
-                darwin_notification_cancel(id_buf);
+                notif_cancel(id_buf);
             }
             dispatch_invoke_response(window_id, request_id, true, "{}");
             return;
         } else if (strcmp(m, "__notif:cancelAll") == 0) {
-            darwin_notification_cancel_all();
+            notif_cancel_all();
             dispatch_invoke_response(window_id, request_id, true, "{}");
             return;
         } else if (strcmp(m, "__notif:registerCategory") == 0) {
-            // Extract category ID and pass full args JSON
             const char* a = (const char*)args_json;
             const char* p = strstr(a, "\"id\":\"");
             if (p) {
@@ -580,8 +693,13 @@ fn router_handle_notification(method: string, payload: string, window_id: int, r
                 int i = 0;
                 while (*p && *p != '"' && i < 127) cat_id[i++] = *p++;
                 cat_id[i] = '\0';
+                #ifdef __APPLE__
                 extern void darwin_notification_register_category(const char*, const char*);
                 darwin_notification_register_category(cat_id, (const char*)args_json);
+                #else
+                extern void windows_notification_register_category(const char*, const char*);
+                windows_notification_register_category(cat_id, (const char*)args_json);
+                #endif
             }
             dispatch_invoke_response(window_id, request_id, true, "{}");
             return;
@@ -594,14 +712,26 @@ fn router_handle_notification(method: string, payload: string, window_id: int, r
                 int i = 0;
                 while (*p && *p != '"' && i < 127) cat_id[i++] = *p++;
                 cat_id[i] = '\0';
+                #ifdef __APPLE__
                 extern void darwin_notification_remove_category(const char*);
                 darwin_notification_remove_category(cat_id);
+                #else
+                extern void windows_notification_remove_category(const char*);
+                windows_notification_remove_category(cat_id);
+                #endif
             }
             dispatch_invoke_response(window_id, request_id, true, "{}");
             return;
         }
 
         dispatch_invoke_response(window_id, request_id, false, "UNKNOWN_NOTIFICATION");
+
+        #undef notif_request_permission
+        #undef notif_get_permission
+        #undef notif_show
+        #undef notif_schedule
+        #undef notif_cancel
+        #undef notif_cancel_all
     }
 }
 

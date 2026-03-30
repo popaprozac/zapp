@@ -4,6 +4,8 @@
 
 @cfg(apple)
 import "../platform/darwin/notification.h" as darwin_notif;
+@cfg(windows)
+import "../platform/windows/notification.h" as win_notif;
 
 // Action button for notification categories.
 struct NotificationAction {
@@ -29,17 +31,29 @@ struct NotificationCategory {
 fn notification_show(title: string, body: string) -> void {
     darwin_notif::darwin_notification_show_typed(title, "", body, "default");
 }
+@cfg(windows)
+fn notification_show(title: string, body: string) -> void {
+    win_notif::windows_notification_show_typed(title, "", body, "default");
+}
 
 // Show a notification with subtitle.
 @cfg(apple)
 fn notification_show_with_subtitle(title: string, subtitle: string, body: string) -> void {
     darwin_notif::darwin_notification_show_typed(title, subtitle, body, "default");
 }
+@cfg(windows)
+fn notification_show_with_subtitle(title: string, subtitle: string, body: string) -> void {
+    win_notif::windows_notification_show_typed(title, subtitle, body, "default");
+}
 
 // Show a notification with action buttons (must register category first).
 @cfg(apple)
 fn notification_show_with_actions(title: string, body: string, category_id: string) -> void {
     darwin_notif::darwin_notification_show_with_category(title, body, category_id);
+}
+@cfg(windows)
+fn notification_show_with_actions(title: string, body: string, category_id: string) -> void {
+    // TODO: Windows notification actions
 }
 
 // Register a notification category with action buttons.
@@ -60,6 +74,10 @@ fn notification_register_category(cat: NotificationCategory*) -> void {
             (const char*)button);
     }
 }
+@cfg(windows)
+fn notification_register_category(cat: NotificationCategory*) -> void {
+    // TODO: Windows notification categories
+}
 
 // Remove a registered notification category.
 @cfg(apple)
@@ -67,6 +85,10 @@ fn notification_remove_category(id: string) -> void {
     raw {
         darwin_notification_remove_category((const char*)id);
     }
+}
+@cfg(windows)
+fn notification_remove_category(id: string) -> void {
+    // TODO: Windows notification categories
 }
 
 // Schedule a notification after a delay (seconds).
@@ -76,11 +98,19 @@ fn notification_schedule(title: string, body: string, delay_seconds: int) -> voi
         darwin_notification_schedule_typed((const char*)title, (const char*)body, (double)delay_seconds);
     }
 }
+@cfg(windows)
+fn notification_schedule(title: string, body: string, delay_seconds: int) -> void {
+    // TODO: Windows scheduled notifications
+}
 
 // Cancel all pending notifications.
 @cfg(apple)
 fn notification_cancel_all() -> void {
     darwin_notif::darwin_notification_cancel_all();
+}
+@cfg(windows)
+fn notification_cancel_all() -> void {
+    win_notif::windows_notification_cancel_all();
 }
 
 // --- Manager (namespaced via app.notification) ---

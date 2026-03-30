@@ -48,7 +48,19 @@ export function getPlatformSources(nativeDir: string): string[] {
     // Users add it via workers-txiki.zc or build.zc defines + cflags
     return sources.filter(f => existsSync(f));
   }
-  // TODO: Windows .c files
+  if (process.platform === "win32") {
+    const windowsDir = path.join(nativeDir, "platform", "windows");
+    const sources = [
+      path.join(windowsDir, "platform.c"),
+      path.join(windowsDir, "window.c"),
+      path.join(windowsDir, "webview.c"),
+      path.join(windowsDir, "dialog.c"),
+      path.join(windowsDir, "menu.c"),
+      path.join(windowsDir, "notification.c"),
+      path.join(windowsDir, "sync.c"),
+    ];
+    return sources.filter(f => existsSync(f));
+  }
   return [];
 }
 

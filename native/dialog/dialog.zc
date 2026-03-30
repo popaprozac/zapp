@@ -6,11 +6,17 @@
 
 @cfg(apple)
 import "../platform/darwin/dialog.h" as darwin_dlg;
+@cfg(windows)
+import "../platform/windows/dialog.h" as win_dlg;
 
 // Open a file dialog. Returns selected path, or "" if cancelled.
 @cfg(apple)
 fn dialog_open_file(title: string) -> string {
     return darwin_dlg::darwin_dialog_open_file_typed(title, false, false);
+}
+@cfg(windows)
+fn dialog_open_file(title: string) -> string {
+    return win_dlg::windows_dialog_open_file_typed(title, false, false);
 }
 
 // Open a folder dialog. Returns selected path, or "" if cancelled.
@@ -18,11 +24,19 @@ fn dialog_open_file(title: string) -> string {
 fn dialog_open_folder(title: string) -> string {
     return darwin_dlg::darwin_dialog_open_file_typed(title, false, true);
 }
+@cfg(windows)
+fn dialog_open_folder(title: string) -> string {
+    return win_dlg::windows_dialog_open_file_typed(title, false, true);
+}
 
 // Save file dialog. Returns path, or "" if cancelled.
 @cfg(apple)
 fn dialog_save_file(title: string, default_name: string) -> string {
     return darwin_dlg::darwin_dialog_save_file_typed(title, default_name);
+}
+@cfg(windows)
+fn dialog_save_file(title: string, default_name: string) -> string {
+    return win_dlg::windows_dialog_save_file_typed(title, default_name);
 }
 
 // Show an info message dialog with OK button. Returns 0.
@@ -30,17 +44,29 @@ fn dialog_save_file(title: string, default_name: string) -> string {
 fn dialog_message(msg: string) -> int {
     return darwin_dlg::darwin_dialog_message_typed(msg, "", 0);
 }
+@cfg(windows)
+fn dialog_message(msg: string) -> int {
+    return win_dlg::windows_dialog_message_typed(msg, "", 0);
+}
 
 // Show a message dialog with title. style: 0=info, 1=warning, 2=critical.
 @cfg(apple)
 fn dialog_message_with_title(msg: string, title: string, style: int) -> int {
     return darwin_dlg::darwin_dialog_message_typed(msg, title, style);
 }
+@cfg(windows)
+fn dialog_message_with_title(msg: string, title: string, style: int) -> int {
+    return win_dlg::windows_dialog_message_typed(msg, title, style);
+}
 
 // Show a message dialog with custom buttons. Returns button index (0-based).
 @cfg(apple)
 fn dialog_confirm(msg: string, btn_yes: string, btn_no: string) -> int {
     return darwin_dlg::darwin_dialog_message_buttons_typed(msg, "", 0, btn_yes, btn_no, "");
+}
+@cfg(windows)
+fn dialog_confirm(msg: string, btn_yes: string, btn_no: string) -> int {
+    return win_dlg::windows_dialog_message_buttons_typed(msg, "", 0, btn_yes, btn_no, "");
 }
 
 // --- Manager (namespaced via app.dialog) ---

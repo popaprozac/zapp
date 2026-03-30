@@ -60,14 +60,21 @@ import "../worker/worker.zc";
 fn worker_dispatch_to_window(worker_id: string, data_json: string, owner_id: string) -> void {
     let window_id: int = -1;
     raw {
+        #ifdef __APPLE__
         extern const char* darwin_window_id_string(int32_t numeric_id);
+        #define zapp_window_id_string_fn darwin_window_id_string
+        #else
+        extern const char* windows_window_id_string(int32_t numeric_id);
+        #define zapp_window_id_string_fn windows_window_id_string
+        #endif
         for (int i = 0; i < 64; i++) {
-            const char* wid = darwin_window_id_string(i);
+            const char* wid = zapp_window_id_string_fn(i);
             if (wid && strcmp(wid, (const char*)owner_id) == 0) {
                 window_id = i;
                 break;
             }
         }
+        #undef zapp_window_id_string_fn
     }
     if window_id < 0 { return; }
 
@@ -85,8 +92,13 @@ fn worker_dispatch_to_window(worker_id: string, data_json: string, owner_id: str
             "b._onWorkerMessage('%s','%s');}})();",
             escaped_wid, escaped_data);
 
+        #ifdef __APPLE__
         extern void darwin_window_eval_js(int32_t window_id, const char* js);
         darwin_window_eval_js(window_id, wk_buf);
+        #else
+        extern void windows_window_eval_js(int32_t window_id, const char* js);
+        windows_window_eval_js(window_id, wk_buf);
+        #endif
     }
 }
 
@@ -209,8 +221,13 @@ impl App {
 
     fn open_external(self, url: string) -> void {
         raw {
+            #ifdef __APPLE__
             extern void darwin_open_external(const char* url);
             darwin_open_external((const char*)url);
+            #else
+            extern void windows_open_external(const char* url);
+            windows_open_external((const char*)url);
+            #endif
         }
     }
 }

@@ -84,7 +84,12 @@ export async function generatePlatformConfig(root: string, buildFile?: string): 
     }
   }
 
-  // TODO: windows sources
+  if (process.platform === "win32" && sources.length > 0) {
+    // WebView2 SDK include path (self-contained loader — no WebView2Loader.dll needed)
+    const webview2Dir = path.resolve(nativeDir, "../vendor/webview2");
+    const webview2Include = path.join(webview2Dir, "include");
+    content += `//> windows: cflags: ${sources.join(" ")} -I${webview2Include}\n`;
+  }
 
   const outPath = path.join(zappDir, "zapp_platform.zc");
   await Bun.write(outPath, content);

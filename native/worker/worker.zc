@@ -30,3 +30,24 @@ fn workers_enabled() -> bool {
     }
     return false;
 }
+
+// Stub worker functions when no engine is defined.
+// These are called by router_handle_worker but gated behind workers_enabled().
+// The C compiler still needs to resolve the symbols.
+raw {
+    #if !defined(ZAPP_WORKER_ENGINE_JSC) && !defined(ZAPP_WORKER_ENGINE_TXIKI)
+    bool worker_create(void* app, char* script_url, char* owner_id, char* worker_id) {
+        (void)app; (void)script_url; (void)owner_id; (void)worker_id;
+        return false;
+    }
+    void worker_post_message(char* worker_id, char* data) {
+        (void)worker_id; (void)data;
+    }
+    void worker_terminate(char* worker_id) {
+        (void)worker_id;
+    }
+    void worker_terminate_owner(char* owner_id) {
+        (void)owner_id;
+    }
+    #endif
+}

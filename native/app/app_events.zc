@@ -98,8 +98,13 @@ raw {
                     "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
                     "if(b&&b._onEvent)b._onEvent('%s','%s');})();",
                     js_name, safe_data);
+                #ifdef __APPLE__
                 extern void darwin_webview_eval_all(const char* js);
                 darwin_webview_eval_all(js_buf);
+                #else
+                extern void windows_webview_eval_all(const char* js);
+                windows_webview_eval_all(js_buf);
+                #endif
             }
         }
 
