@@ -6,7 +6,7 @@ import { existsSync } from "node:fs";
 import { loadConfig } from "./config";
 import { generateBuildConfig, generatePlatformConfig } from "./build-config";
 import { generateBindings } from "./generate";
-import { resolveNativeDir, compileNative } from "./native";
+import { resolveNativeDir, compileNative, ensureTxikiBuilt, hasTxikiEnabled } from "./native";
 import { runInit } from "./init";
 import { bundleWorkers } from "./workers";
 import { createDevBundle } from "./bundle";
@@ -46,7 +46,12 @@ async function runDev(root: string) {
   const workerCount = await bundleWorkers(root);
   if (workerCount > 0) process.stdout.write(`[zapp] bundled ${workerCount} worker(s)\n`);
 
-  // 2. Generate build config + bootstrap (dev mode)
+  // 2. Build txiki.js if opted in
+  if (await hasTxikiEnabled(root)) {
+    await ensureTxikiBuilt(nativeDir);
+  }
+
+  // 3. Generate build config + bootstrap (dev mode)
   const buildConfigFile = await generateBuildConfig({ root, config, mode: "dev", devUrl });
   const platformFile = await generatePlatformConfig(root);
   const zappDir = path.join(root, ".zapp");
@@ -176,7 +181,12 @@ async function runBuild(root: string) {
   const zappDir = path.join(root, ".zapp");
   const assetsFile = await generateAssetManifest(root, config.assetDir);
 
-  // 4. Generate build config + bootstrap (prod mode, embedded assets)
+  // 4. Build txiki.js if opted in (first time only)
+  if (await hasTxikiEnabled(root)) {
+    await ensureTxikiBuilt(nativeDir);
+  }
+
+  // 5. Generate build config + bootstrap (prod mode, embedded assets)
   const buildConfigFile = await generateBuildConfig({ root, config, mode: "prod", embedAssets: true });
   const platformFile = await generatePlatformConfig(root);
   const bootstrapFile = await generateBootstrap(zappDir);

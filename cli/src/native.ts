@@ -3,13 +3,13 @@
 import path from "node:path";
 import { existsSync } from "node:fs";
 
-// Resolve the v2/native framework directory.
+// Resolve the native framework directory.
 // Monorepo: ../../native relative to CLI
 // Published: ./native bundled with CLI package
 export function resolveNativeDir(): string {
   const cliDir = import.meta.dir;
 
-  // Monorepo: v2/cli/src/ → v2/native/
+  // Monorepo: cli/src/ → native/
   const monorepo = path.resolve(cliDir, "../../native");
   if (existsSync(path.join(monorepo, "app", "app.zc"))) {
     return monorepo;
@@ -62,6 +62,41 @@ export function getPlatformSources(nativeDir: string): string[] {
     return sources.filter(f => existsSync(f));
   }
   return [];
+}
+
+// Ensure txiki.js is built (cmake). Only runs if libtjs_core.a doesn't exist.
+export async function ensureTxikiBuilt(nativeDir: string): Promise<void> {
+  const txikiDir = path.resolve(nativeDir, "../vendor/txiki.js");
+  const libPath = path.join(txikiDir, "build", "libtjs_core.a");
+
+  if (!existsSync(path.join(txikiDir, "src", "tjs.h"))) {
+    throw new Error("[zapp] txiki.js not found in vendor/txiki.js. Run: git submodule update --init");
+  }
+
+  if (existsSync(libPath)) return; // already built
+
+  process.stdout.write("[zapp] building txiki.js (first time only, may take a minute)...\n");
+
+  const cmake1 = Bun.spawn(["cmake", "-B", "build", "-DCMAKE_BUILD_TYPE=Release"], {
+    cwd: txikiDir, stdout: "inherit", stderr: "inherit",
+  });
+  if (await cmake1.exited !== 0) throw new Error("[zapp] txiki.js cmake configure failed");
+
+  const cmake2 = Bun.spawn(["cmake", "--build", "build", "-j4"], {
+    cwd: txikiDir, stdout: "inherit", stderr: "inherit",
+  });
+  if (await cmake2.exited !== 0) throw new Error("[zapp] txiki.js cmake build failed");
+
+  process.stdout.write("[zapp] txiki.js built successfully\n");
+}
+
+// Check if user's build.zc enables txiki
+export async function hasTxikiEnabled(root: string): Promise<boolean> {
+  const buildFile = path.join(root, "zapp", "build.zc");
+  try {
+    const content = await Bun.file(buildFile).text();
+    return content.includes("ZAPP_WORKER_ENGINE_TXIKI");
+  } catch { return false; }
 }
 
 interface CompileOptions {
