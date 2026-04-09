@@ -1,5 +1,4 @@
 // Sync — native Zen-C wrappers for cross-context wait/notify coordination.
-// Calls darwin_sync_handle() directly (same as JS bridge, but no JSON bridge overhead).
 //
 // Usage:
 //   sync_notify("data-ready");           // wake one waiter
@@ -7,19 +6,18 @@
 
 import "stdio.h" as c;
 
+@cfg(apple)
+import "../platform/darwin/sync.h" as darwin_sync;
+
 // Wake up to `count` waiters blocked on the given key.
+@cfg(apple)
 fn sync_notify(key: string, count: int) -> void {
     if count < 1 { count = 1; }
+    // snprintf needs raw block for stack buffer, but we call through trusted import
     raw {
         char buf[384];
         snprintf(buf, sizeof(buf), "{\"key\":\"%s\",\"count\":%d}", (const char*)key, count);
-        #ifdef __APPLE__
-        extern void darwin_sync_handle(const char* action, const char* payload_json);
         darwin_sync_handle("notify", buf);
-        #else
-        extern void windows_sync_handle(const char* action, const char* payload_json);
-        windows_sync_handle("notify", buf);
-        #endif
     }
 }
 
@@ -32,22 +30,7 @@ fn sync_notify_one(key: string) -> void {
 // Returns "notified" or "timed-out".
 @cfg(apple)
 fn sync_wait(key: string, timeout_ms: int) -> string {
-    let result: int = 0;
-    raw {
-        extern int darwin_sync_wait_blocking(const char* key, int timeout_ms);
-        result = darwin_sync_wait_blocking((const char*)key, timeout_ms);
-    }
-    if result == 1 { return "notified"; }
-    return "timed-out";
-}
-
-@cfg(windows)
-fn sync_wait(key: string, timeout_ms: int) -> string {
-    let result: int = 0;
-    raw {
-        extern int windows_sync_wait_blocking(const char* key, int timeout_ms);
-        result = windows_sync_wait_blocking((const char*)key, timeout_ms);
-    }
+    let result: int = darwin_sync::darwin_sync_wait_blocking(key, timeout_ms);
     if result == 1 { return "notified"; }
     return "timed-out";
 }

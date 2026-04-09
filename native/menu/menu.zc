@@ -4,6 +4,9 @@
 
 import "../platform/platform.zc";
 
+@cfg(apple)
+import "../platform/darwin/menu.h" as darwin_menu;
+
 struct MenuItem {
     label: string;
     accelerator: string;
@@ -57,35 +60,16 @@ impl MenuItem {
 
 // Set the app menu bar from an array of top-level MenuItems.
 // Each top-level item should have a label and a submenu.
+// Set the app menu bar from an array of top-level MenuItems.
 @cfg(apple)
 fn menu_set(items: MenuItem*, count: int) -> void {
-    raw {
-        extern void darwin_menu_set_typed(void* items, int count);
-        darwin_menu_set_typed((void*)items, count);
-    }
-}
-@cfg(windows)
-fn menu_set(items: MenuItem*, count: int) -> void {
-    raw {
-        extern void windows_menu_set_typed(void* items, int count);
-        windows_menu_set_typed((void*)items, count);
-    }
+    darwin_menu::darwin_menu_set_typed((MenuItem*)items, count);
 }
 
 // Show a context menu at position (x, y) in the given window.
 @cfg(apple)
 fn menu_show_context(items: MenuItem*, count: int, x: int, y: int, window_id: int) -> void {
-    raw {
-        extern void darwin_menu_show_context_typed(void* items, int count, int x, int y, int32_t window_id);
-        darwin_menu_show_context_typed((void*)items, count, x, y, window_id);
-    }
-}
-@cfg(windows)
-fn menu_show_context(items: MenuItem*, count: int, x: int, y: int, window_id: int) -> void {
-    raw {
-        extern void windows_menu_show_context_typed(void* items, int count, int x, int y, int32_t window_id);
-        windows_menu_show_context_typed((void*)items, count, x, y, window_id);
-    }
+    darwin_menu::darwin_menu_show_context_typed((MenuItem*)items, count, x, y, window_id);
 }
 
 // --- Manager (namespaced via app.menu) ---

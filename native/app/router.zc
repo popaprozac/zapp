@@ -19,7 +19,7 @@ fn router_handle_message(app: App*, msg: string, window_id: int) -> void {
     if parsed.msg_type == MsgType.INVOKE {
         // Check for __dialog: prefix
         let is_dialog: bool = false;
-        raw { is_dialog = (strncmp((const char*)parsed.method, "__dialog:", 9) == 0); }
+        is_dialog = str::strncmp(parsed.method, "__dialog:", 9) == 0;
         if is_dialog {
             router_handle_dialog(parsed.method, parsed.payload, window_id, parsed.request_id);
             return;
@@ -27,7 +27,7 @@ fn router_handle_message(app: App*, msg: string, window_id: int) -> void {
 
         // Check for __notif: prefix
         let is_notif: bool = false;
-        raw { is_notif = (strncmp((const char*)parsed.method, "__notif:", 7) == 0); }
+        is_notif = str::strncmp(parsed.method, "__notif:", 7) == 0;
         if is_notif {
             router_handle_notification(parsed.method, parsed.payload, window_id, parsed.request_id);
             return;
@@ -35,7 +35,7 @@ fn router_handle_message(app: App*, msg: string, window_id: int) -> void {
 
         // Check for __window:create
         let is_window_create: bool = false;
-        raw { is_window_create = (strcmp((const char*)parsed.method, "__window:create") == 0); }
+        is_window_create = parsed.method == "__window:create";
         if is_window_create {
             // Create a new window from the frontend
             let opts = WindowOptions::create("Zapp");
@@ -133,8 +133,7 @@ fn event_name_to_id(name: string) -> int {
 
 fn router_handle_window_action(app: App*, action: string, payload: string, window_id: int) -> void {
     // Handle bridge ready signal
-    let is_ready: bool = false;
-    raw { is_ready = (strcmp((const char*)action, "ready") == 0); }
+    let is_ready = action == "ready";
     if is_ready {
         let wid: string = NULL;
         raw {
@@ -188,36 +187,21 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
     let win = app.window.get(window_id);
     if !win.is_valid() { return; }
 
-    let is_show: bool = false;
-    let is_hide: bool = false;
-    let is_minimize: bool = false;
-    let is_maximize: bool = false;
-    let is_subscribe: bool = false;
-    let is_unsubscribe: bool = false;
-    let is_set_title: bool = false;
-    let is_set_fullscreen: bool = false;
-    let is_set_always_on_top: bool = false;
-    let is_set_size: bool = false;
-    let is_set_position: bool = false;
-
-    raw {
-        const char* a = (const char*)action;
-        is_show = (strcmp(a, "show") == 0);
-        is_hide = (strcmp(a, "hide") == 0);
-        is_minimize = (strcmp(a, "minimize") == 0);
-        is_maximize = (strcmp(a, "maximize") == 0);
-        is_subscribe = (strcmp(a, "subscribe") == 0);
-        is_unsubscribe = (strcmp(a, "unsubscribe") == 0);
-        is_set_title = (strcmp(a, "setTitle") == 0);
-        is_set_fullscreen = (strcmp(a, "setFullscreen") == 0);
-        is_set_always_on_top = (strcmp(a, "setAlwaysOnTop") == 0);
-        is_set_size = (strcmp(a, "setSize") == 0);
-        is_set_position = (strcmp(a, "setPosition") == 0);
-    }
+    let is_show = action == "show";
+    let is_hide = action == "hide";
+    let is_minimize = action == "minimize";
+    let is_maximize = action == "maximize";
+    let is_subscribe = action == "subscribe";
+    let is_unsubscribe = action == "unsubscribe";
+    let is_set_title = action == "setTitle";
+    let is_set_fullscreen = action == "setFullscreen";
+    let is_set_always_on_top = action == "setAlwaysOnTop";
+    let is_set_size = action == "setSize";
+    let is_set_position = action == "setPosition";
 
     // openExternal — open URL in system browser
     let is_open_external: bool = false;
-    raw { is_open_external = (strcmp((const char*)action, "openExternal") == 0); }
+    is_open_external = action == "openExternal";
     if is_open_external {
         let url_opt = args.get_string("url");
         if url_opt.is_some() {
@@ -236,7 +220,7 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
 
     // Draggable regions
     let is_set_drag: bool = false;
-    raw { is_set_drag = (strcmp((const char*)action, "setDragRegion") == 0); }
+    is_set_drag = action == "setDragRegion";
     if is_set_drag {
         let drag_opt = args.get_bool("drag");
         if drag_opt.is_some() {
@@ -254,12 +238,8 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
     }
 
     // Close guard — JS can prevent window close
-    let is_set_close_guard: bool = false;
-    let is_close: bool = false;
-    raw {
-        is_set_close_guard = (strcmp((const char*)action, "setCloseGuard") == 0);
-        is_close = (strcmp((const char*)action, "close") == 0);
-    }
+    let is_set_close_guard = action == "setCloseGuard";
+    let is_close = action == "close";
     if is_set_close_guard {
         let on_opt = args.get_bool("on");
         if on_opt.is_some() {
@@ -282,7 +262,7 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
 
     // loadUrl — navigate WebView to a new URL
     let is_load_url: bool = false;
-    raw { is_load_url = (strcmp((const char*)action, "loadUrl") == 0); }
+    is_load_url = action == "loadUrl";
     if is_load_url {
         let url_opt = args.get_string("url");
         if url_opt.is_some() {
@@ -300,12 +280,8 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
     }
 
     // Menu actions — use the full payload (ObjC extracts "a" items array)
-    let is_set_menu: bool = false;
-    let is_show_ctx: bool = false;
-    raw {
-        is_set_menu = (strcmp((const char*)action, "setMenu") == 0);
-        is_show_ctx = (strcmp((const char*)action, "showContextMenu") == 0);
-    }
+    let is_set_menu = action == "setMenu";
+    let is_show_ctx = action == "showContextMenu";
     if is_set_menu {
         raw {
             #ifdef __APPLE__
@@ -388,9 +364,8 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
     // Lazy flush: when JS subscribes to notification events, flush any buffered
     // notification responses. This ensures the handler is registered before events fire.
     if is_subscribe {
-        raw {
-            const char* en = (const char*)event_name;
-            if (en && strncmp(en, "__notif:", 7) == 0) {
+        if str::strncmp(event_name, "__notif:", 7) == 0 {
+            raw {
                 #ifdef __APPLE__
                 extern void darwin_notification_set_bridge_ready(void);
                 darwin_notification_set_bridge_ready();
@@ -425,17 +400,10 @@ fn router_handle_worker(app: App*, action: string, payload: string, window_id: i
     if !a_opt.is_some() { return; }
     let args = a_opt.unwrap();
 
-    let is_create: bool = false;
-    let is_post: bool = false;
-    let is_terminate: bool = false;
-    let is_disconnect: bool = false;
-    raw {
-        const char* a = (const char*)action;
-        is_create = (strcmp(a, "create") == 0);
-        is_post = (strcmp(a, "post") == 0);
-        is_terminate = (strcmp(a, "terminate") == 0);
-        is_disconnect = (strcmp(a, "disconnect") == 0);
-    }
+    let is_create = action == "create";
+    let is_post = action == "post";
+    let is_terminate = action == "terminate";
+    let is_disconnect = action == "disconnect";
 
     if is_create {
         let url_opt = args.get_string("scriptUrl");

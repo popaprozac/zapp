@@ -55,6 +55,15 @@ fn app_get_bootstrap_max_workers() -> int {
 
 import "./router.zc";
 import "../worker/worker.zc";
+@cfg(ZAPP_WORKER_ENGINE_JSC)
+import "../worker/engines/jsc.h" as jsc_engine;
+@cfg(ZAPP_WORKER_ENGINE_TXIKI)
+import "../worker/engines/txiki.h" as txiki_engine;
+
+@cfg(ZAPP_WORKER_ENGINE_TXIKI)
+fn app_start_backend() -> void { txiki_engine::txiki_backend_create(".zapp/workers/backend.mjs"); }
+@cfg(ZAPP_WORKER_ENGINE_JSC)
+fn app_start_backend() -> void { jsc_engine::jsc_backend_create(".zapp/workers/backend.mjs"); }
 
 // Dispatch worker message to a single window by owner_id
 fn worker_dispatch_to_window(worker_id: string, data_json: string, owner_id: string) -> void {
@@ -199,15 +208,7 @@ impl App {
 
         // Start backend worker (if enabled)
         if self.config.backend {
-            raw {
-                #if defined(ZAPP_WORKER_ENGINE_TXIKI)
-                extern bool txiki_backend_create(const char* script_path);
-                txiki_backend_create(".zapp/workers/backend.mjs");
-                #elif defined(ZAPP_WORKER_ENGINE_JSC)
-                extern bool jsc_backend_create(const char* script_path);
-                jsc_backend_create(".zapp/workers/backend.mjs");
-                #endif
-            }
+            app_start_backend();
         }
 
         return platform_run(self.config.applicationShouldTerminateAfterLastWindowClosed);

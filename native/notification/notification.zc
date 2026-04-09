@@ -59,20 +59,9 @@ fn notification_show_with_actions(title: string, body: string, category_id: stri
 // Register a notification category with action buttons.
 @cfg(apple)
 fn notification_register_category(cat: NotificationCategory*) -> void {
-    let cat_id = cat.id;
-    let actions = cat.actions;
-    let count = cat.action_count;
-    let has_reply = cat.has_reply_field;
-    let placeholder = cat.reply_placeholder;
-    let button = cat.reply_button_title;
-    raw {
-        darwin_notification_register_category_typed(
-            (const char*)cat_id,
-            (ZappNotifAction*)actions, count,
-            has_reply,
-            (const char*)placeholder,
-            (const char*)button);
-    }
+    darwin_notif::darwin_notification_register_category_typed(
+        cat.id, (NotificationAction*)cat.actions, cat.action_count,
+        cat.has_reply_field, cat.reply_placeholder, cat.reply_button_title);
 }
 @cfg(windows)
 fn notification_register_category(cat: NotificationCategory*) -> void {
@@ -82,9 +71,7 @@ fn notification_register_category(cat: NotificationCategory*) -> void {
 // Remove a registered notification category.
 @cfg(apple)
 fn notification_remove_category(id: string) -> void {
-    raw {
-        darwin_notification_remove_category((const char*)id);
-    }
+    darwin_notif::darwin_notification_remove_category(id);
 }
 @cfg(windows)
 fn notification_remove_category(id: string) -> void {

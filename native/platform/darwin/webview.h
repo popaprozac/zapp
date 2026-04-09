@@ -27,4 +27,7 @@ void darwin_open_external(const char* url);
 // Set drag region flag on a window's WebView.
 void darwin_webview_set_drag_region(int32_t window_id, bool drag);
 
+// Load a URL in a window's WebView.
+void darwin_window_load_url(int32_t window_id, const char* url);
+
 #endif

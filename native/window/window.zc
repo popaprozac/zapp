@@ -198,16 +198,7 @@ impl Window {
     }
 
     fn load_url(self, url: string) -> void {
-        let wid = self.id;
-        raw {
-            #ifdef __APPLE__
-            extern void darwin_window_load_url(int32_t window_id, const char* url);
-            darwin_window_load_url(wid, (const char*)url);
-            #else
-            extern void windows_window_load_url(int32_t window_id, const char* url);
-            windows_window_load_url(wid, (const char*)url);
-            #endif
-        }
+        window_load_url(self.id, url);
     }
 }
 
@@ -276,6 +267,8 @@ impl WindowManager {
 
 @cfg(apple)
 import "../platform/darwin/window.h" as darwin_win;
+@cfg(apple)
+import "../platform/darwin/webview.h" as darwin_webview;
 
 @cfg(apple)
 fn window_create(options: WindowOptions*) -> void* { return darwin_win::darwin_window_create(options); }
@@ -319,6 +312,9 @@ fn window_get_position(handle: void*) -> WindowPosition {
     darwin_win::darwin_window_get_position(handle, &x, &y);
     return WindowPosition{ x: x, y: y };
 }
+
+@cfg(apple)
+fn window_load_url(id: int, url: string) -> void { darwin_webview::darwin_window_load_url(id, url); }
 
 @cfg(windows)
 import "../platform/windows/window.h" as win_window;
