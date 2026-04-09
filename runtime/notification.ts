@@ -38,10 +38,23 @@ export interface NotificationOptions {
   title: string;
   subtitle?: string;
   body?: string;
+  /** Sound: "default", "none", or custom sound name. */
   sound?: "default" | "none" | string;
+  /** Thread ID for grouping related notifications together. */
   threadId?: string;
+  /** Category ID for action buttons (must register category first). */
   categoryId?: string;
+  /** Arbitrary user data (returned in response). */
   data?: Record<string, unknown>;
+  /** File path or file:// URL for an image/audio/video attachment. */
+  attachment?: string;
+  /**
+   * Explicit notification ID. If provided, can be used to:
+   * - Update the notification later with Notification.update()
+   * - Remove it with Notification.removeDelivered()
+   * If omitted, a UUID is auto-generated.
+   */
+  id?: string;
 }
 
 export interface ScheduleOptions extends NotificationOptions {
@@ -92,6 +105,24 @@ export const Notification = {
 
   async cancelAll(): Promise<void> {
     await getBridge().invoke("__notif:cancelAll");
+  },
+
+  /** Remove a specific delivered notification from notification center. */
+  async removeDelivered(id: string): Promise<void> {
+    await getBridge().invoke("__notif:removeDelivered", { id } as any);
+  },
+
+  /** Remove all delivered notifications from notification center. */
+  async removeAllDelivered(): Promise<void> {
+    await getBridge().invoke("__notif:removeAllDelivered");
+  },
+
+  /**
+   * Update an existing notification's content (replaces by ID).
+   * The notification must have been shown with an explicit `id`.
+   */
+  async update(id: string, options: Partial<NotificationOptions>): Promise<void> {
+    await getBridge().invoke("__notif:update", { id, ...options } as any);
   },
 
   on(event: "click" | "action" | "response", handler: ((response: NotificationResponse) => void) | ((notificationId: string, actionId?: string) => void)): () => void {

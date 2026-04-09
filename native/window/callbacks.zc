@@ -27,6 +27,20 @@ raw {
     // Prevents building JS strings and calling evaluateJavaScript for unlistened events.
     static uint32_t zapp_window_js_listeners[ZAPP_MAX_WINDOW_CALLBACKS] = {0};
 
+    // --- Backend listener bitmask ---
+    // Per-window bitmask for events the backend worker has subscribed to.
+    static uint32_t zapp_window_backend_listeners[ZAPP_MAX_WINDOW_CALLBACKS] = {0};
+
+    void zapp_window_set_backend_listener(int id, int event_id, int has_listener) {
+        if (id >= 0 && id < ZAPP_MAX_WINDOW_CALLBACKS && event_id >= 0 && event_id < ZAPP_MAX_WINDOW_EVENT_TYPES) {
+            if (has_listener) {
+                zapp_window_backend_listeners[id] |= (1u << event_id);
+            } else {
+                zapp_window_backend_listeners[id] &= ~(1u << event_id);
+            }
+        }
+    }
+
     // --- JS close guard ---
     // When set, windowShouldClose dispatches event to JS and returns CANCEL.
     // JS decides: call Window.close() (force) or do nothing.
@@ -108,6 +122,43 @@ raw {
         // Layer 2: JS bridge (targeted, only if JS has a listener)
         if (zapp_window_js_listeners[window_id] & (1u << event_id)) {
             zapp_dispatch_event_to_js(window_id, event_id, w, h, x, y);
+        }
+
+        // Layer 3: Backend worker (if subscribed to this window+event)
+        if (zapp_window_backend_listeners[window_id] & (1u << event_id)) {
+            // Dispatch window event to backend JSC/txiki context
+            #if defined(ZAPP_WORKER_ENGINE_JSC) || defined(ZAPP_WORKER_ENGINE_TXIKI)
+            static char __be_buf[512];
+
+            // Event name lookup
+            static const char* __event_names[] = {
+                "ready","focus","blur","resize","move","close",
+                "minimize","maximize","restore","fullscreen","unfullscreen"
+            };
+            const char* ename = (event_id >= 0 && event_id < 11) ? __event_names[event_id] : "unknown";
+
+            if (w || h || x || y) {
+                snprintf(__be_buf, sizeof(__be_buf),
+                    "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+                    "if(b&&b._onEvent)b._onEvent('window:%s','{\"windowId\":\"win-%d\",\"size\":{\"width\":%d,\"height\":%d},\"position\":{\"x\":%d,\"y\":%d}}');})();",
+                    ename, window_id, w, h, x, y);
+            } else {
+                snprintf(__be_buf, sizeof(__be_buf),
+                    "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+                    "if(b&&b._onEvent)b._onEvent('window:%s','{\"windowId\":\"win-%d\"}');})();",
+                    ename, window_id);
+            }
+
+            #if defined(ZAPP_WORKER_ENGINE_TXIKI)
+            extern bool txiki_backend_is_running(void);
+            extern void txiki_backend_eval_js(const char* js);
+            if (txiki_backend_is_running()) txiki_backend_eval_js(__be_buf);
+            #elif defined(ZAPP_WORKER_ENGINE_JSC)
+            extern bool jsc_backend_is_running(void);
+            extern void jsc_backend_eval_js(const char* js);
+            if (jsc_backend_is_running()) jsc_backend_eval_js(__be_buf);
+            #endif
+            #endif
         }
 
         return 0; // ALLOW

@@ -203,7 +203,28 @@ void darwin_notification_show(const char* options_json, int32_t window_id, int32
     NSDictionary* opts = parse_notif_json(options_json);
     UNMutableNotificationContent* content = build_content(opts);
 
-    NSString* identifier = [[NSUUID UUID] UUIDString];
+    // Use explicit ID if provided, otherwise auto-generate
+    NSString* identifier = opts[@"id"];
+    if (!identifier || [identifier length] == 0) {
+        identifier = [[NSUUID UUID] UUIDString];
+    }
+
+    // Attachment support
+    NSString* attachmentPath = opts[@"attachment"];
+    if (attachmentPath && [attachmentPath length] > 0) {
+        NSURL* url;
+        if ([attachmentPath hasPrefix:@"file://"]) {
+            url = [NSURL URLWithString:attachmentPath];
+        } else {
+            url = [NSURL fileURLWithPath:attachmentPath];
+        }
+        NSError* err = nil;
+        UNNotificationAttachment* attachment =
+            [UNNotificationAttachment attachmentWithIdentifier:@"" URL:url options:nil error:&err];
+        if (attachment) content.attachments = @[attachment];
+        else if (err) NSLog(@"[zapp] attachment error: %@", err);
+    }
+
     UNTimeIntervalNotificationTrigger* trigger =
         [UNTimeIntervalNotificationTrigger triggerWithTimeInterval:0.1 repeats:NO];
 
@@ -435,6 +456,29 @@ void darwin_notification_show_with_category(const char* title, const char* body,
         }];
 }
 
+// JSON wrappers for router (parse JSON, call typed functions)
+
+void darwin_notification_remove_delivered_json(const char* json) {
+    if (!json) return;
+    NSDictionary* opts = parse_notif_json(json);
+    NSString* nid = opts[@"id"];
+    if (nid && nid.length > 0) {
+        darwin_notification_remove_delivered([nid UTF8String]);
+    }
+}
+
+void darwin_notification_update_json(const char* json) {
+    if (!json) return;
+    NSDictionary* opts = parse_notif_json(json);
+    NSString* nid = opts[@"id"];
+    if (!nid || nid.length == 0) return;
+    darwin_notification_update(
+        [nid UTF8String],
+        [opts[@"title"] UTF8String] ?: "",
+        [opts[@"subtitle"] UTF8String] ?: "",
+        [opts[@"body"] UTF8String] ?: "");
+}
+
 void darwin_notification_show_typed(const char* title, const char* subtitle, const char* body, const char* sound) {
     darwin_notification_setup_delegate();
 
@@ -477,5 +521,92 @@ void darwin_notification_schedule_typed(const char* title, const char* body, dou
     [[UNUserNotificationCenter currentNotificationCenter]
         addNotificationRequest:request withCompletionHandler:^(NSError* error) {
             if (error) NSLog(@"[zapp] schedule error: %@", error);
+        }];
+}
+
+// --- Extended notification features ---
+
+// Remove a specific delivered notification from notification center.
+void darwin_notification_remove_delivered(const char* notification_id) {
+    if (!notification_id) return;
+    NSString* nid = [NSString stringWithUTF8String:notification_id];
+    [[UNUserNotificationCenter currentNotificationCenter]
+        removeDeliveredNotificationsWithIdentifiers:@[nid]];
+}
+
+// Remove all delivered notifications from notification center.
+void darwin_notification_remove_all_delivered(void) {
+    [[UNUserNotificationCenter currentNotificationCenter] removeAllDeliveredNotifications];
+}
+
+// Update an existing notification by re-posting with the same ID.
+// macOS replaces the existing notification if the identifier matches.
+void darwin_notification_update(const char* notification_id, const char* title,
+                                const char* subtitle, const char* body) {
+    if (!notification_id) return;
+    darwin_notification_setup_delegate();
+
+    UNMutableNotificationContent* content = [[UNMutableNotificationContent alloc] init];
+    if (title && title[0]) content.title = [NSString stringWithUTF8String:title];
+    if (subtitle && subtitle[0]) content.subtitle = [NSString stringWithUTF8String:subtitle];
+    if (body && body[0]) content.body = [NSString stringWithUTF8String:body];
+    content.sound = [UNNotificationSound defaultSound];
+
+    NSString* identifier = [NSString stringWithUTF8String:notification_id];
+    UNTimeIntervalNotificationTrigger* trigger =
+        [UNTimeIntervalNotificationTrigger triggerWithTimeInterval:0.1 repeats:NO];
+    UNNotificationRequest* request =
+        [UNNotificationRequest requestWithIdentifier:identifier content:content trigger:trigger];
+
+    [[UNUserNotificationCenter currentNotificationCenter]
+        addNotificationRequest:request withCompletionHandler:^(NSError* error) {
+            if (error) NSLog(@"[zapp] notification update error: %@", error);
+        }];
+}
+
+// Show a notification with an attachment (image, audio, video).
+void darwin_notification_show_with_attachment(const char* options_json,
+    const char* attachment_url, int32_t window_id, int32_t request_id, notif_callback_fn cb) {
+
+    darwin_notification_setup_delegate();
+    NSDictionary* opts = parse_notif_json(options_json);
+    UNMutableNotificationContent* content = build_content(opts);
+
+    // Add attachment
+    if (attachment_url && attachment_url[0]) {
+        NSString* urlStr = [NSString stringWithUTF8String:attachment_url];
+        NSURL* url;
+        if ([urlStr hasPrefix:@"file://"]) {
+            url = [NSURL URLWithString:urlStr];
+        } else {
+            url = [NSURL fileURLWithPath:urlStr];
+        }
+
+        NSError* attachError = nil;
+        UNNotificationAttachment* attachment =
+            [UNNotificationAttachment attachmentWithIdentifier:@""
+                URL:url options:nil error:&attachError];
+        if (attachment) {
+            content.attachments = @[attachment];
+        } else if (attachError) {
+            NSLog(@"[zapp] attachment error: %@", attachError);
+        }
+    }
+
+    NSString* identifier = [[NSUUID UUID] UUIDString];
+    UNTimeIntervalNotificationTrigger* trigger =
+        [UNTimeIntervalNotificationTrigger triggerWithTimeInterval:0.1 repeats:NO];
+    UNNotificationRequest* request =
+        [UNNotificationRequest requestWithIdentifier:identifier content:content trigger:trigger];
+
+    NSString* idCopy = [identifier copy];
+    [[UNUserNotificationCenter currentNotificationCenter]
+        addNotificationRequest:request
+        withCompletionHandler:^(NSError* error) {
+            if (error) NSLog(@"[zapp] notification error: %@", error);
+            NSString* json = [NSString stringWithFormat:@"{\"id\":\"%@\"}", idCopy];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                cb(window_id, request_id, error == nil, [json UTF8String]);
+            });
         }];
 }

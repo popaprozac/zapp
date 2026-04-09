@@ -95,8 +95,19 @@ export async function hasTxikiEnabled(root: string): Promise<boolean> {
   const buildFile = path.join(root, "zapp", "build.zc");
   try {
     const content = await Bun.file(buildFile).text();
-    return content.includes("ZAPP_WORKER_ENGINE_TXIKI");
+    return /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_TXIKI/m.test(content);
   } catch { return false; }
+}
+
+// Check if any worker engine is defined
+export async function hasAnyWorkerEngine(root: string): Promise<"jsc" | "txiki" | null> {
+  const buildFile = path.join(root, "zapp", "build.zc");
+  try {
+    const content = await Bun.file(buildFile).text();
+    if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_TXIKI/m.test(content)) return "txiki";
+    if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_JSC/m.test(content)) return "jsc";
+    return null;
+  } catch { return null; }
 }
 
 interface CompileOptions {

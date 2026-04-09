@@ -64,7 +64,8 @@ export async function generatePlatformConfig(root: string, buildFile?: string): 
   const userBuild = buildFile ?? path.join(root, "zapp", "build.zc");
   try {
     const buildContent = await Bun.file(userBuild).text();
-    hasTxiki = buildContent.includes("ZAPP_WORKER_ENGINE_TXIKI");
+    // Match uncommented define directive only (not commented-out lines)
+    hasTxiki = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_TXIKI/m.test(buildContent);
   } catch {}
   if (hasTxiki) {
     const txikiC = path.join(nativeDir, "worker", "engines", "txiki.c");

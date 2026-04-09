@@ -53,12 +53,41 @@
         console.error("[backend]", e);
       }
     }
+
+    // Also dispatch notification events under __notif: names
+    // so Notification.on("click"/"action") from @zappdev/runtime works
+    if (eventId === 102) {
+      const notifHandlers = listeners["__notif:click"] || [];
+      for (const h of notifHandlers) try { h(data); } catch (e) { console.error("[backend]", e); }
+    } else if (eventId === 103) {
+      const notifHandlers = listeners["__notif:action"] || [];
+      for (const h of notifHandlers) try { h(data); } catch (e) { console.error("[backend]", e); }
+    }
+  };
+
+  // Window event name → event ID mapping (for backend subscription)
+  const windowEventIds: Record<string, number> = {
+    "window:ready": 0, "window:focus": 1, "window:blur": 2,
+    "window:resize": 3, "window:move": 4, "window:close": 5,
+    "window:minimize": 6, "window:maximize": 7, "window:restore": 8,
+    "window:fullscreen": 9, "window:unfullscreen": 10,
   };
 
   // Expose as Symbol.for('zapp.bridge') so @zappdev/runtime works in the backend.
   // The runtime's getBridge() looks for this symbol on globalThis.
   const runtimeBridge = {
-    on: bridge.on,
+    on(name: string, handler: (data: unknown) => void) {
+      const off = bridge.on(name, handler);
+
+      // If subscribing to a window event, tell native to forward to backend
+      const eventId = windowEventIds[name];
+      if (eventId !== undefined && bridge.subscribeWindowEvent) {
+        // Subscribe all windows (pass -1 for "all")
+        bridge.subscribeWindowEvent(-1, eventId);
+      }
+
+      return off;
+    },
     emit(name: string, payload?: Record<string, unknown>) {
       // Backend emit — could forward to native or no-op
     },
@@ -69,6 +98,15 @@
     },
     post(msg: string) {
       // No WebView to post to — no-op in backend
+    },
+    // Called by native Layer 3 when dispatching window events to backend
+    _onEvent(name: string, payload: string) {
+      const handlers = listeners[name] || [];
+      let parsed: unknown = payload;
+      try { parsed = JSON.parse(payload); } catch {}
+      for (let i = 0; i < handlers.length; i++) {
+        try { handlers[i](parsed); } catch (e) { console.error("[backend]", e); }
+      }
     },
   };
   (globalThis as any)[Symbol.for("zapp.bridge")] = runtimeBridge;

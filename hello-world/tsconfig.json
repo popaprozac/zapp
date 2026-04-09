@@ -16,7 +16,8 @@
 
     /* Path aliases */
     "paths": {
-      "@zappdev/runtime": ["../runtime/index.ts"]
+      "@zappdev/runtime": ["../runtime/index.ts"],
+      "@zappdev/runtime/worker-globals": ["../runtime/worker-globals.ts"]
     },
 
     /* Linting */

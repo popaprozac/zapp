@@ -28,7 +28,7 @@ export interface MenuItemDef {
   enabled?: boolean;
   checked?: boolean;
   accelerator?: string;
-  role?: "editMenu" | "windowMenu" | "appMenu" | "copy" | "cut" | "paste" | "selectAll" | "undo" | "redo";
+  role?: "editMenu" | "windowMenu" | "appMenu" | "copy" | "cut" | "paste" | "selectAll" | "undo" | "redo" | "quit";
   action?: () => void;
   submenu?: MenuItemDef[];
 }

@@ -4,7 +4,17 @@
 
 #import <JavaScriptCore/JavaScriptCore.h>
 #import <Foundation/Foundation.h>
+#import <compression.h>
 #import "jsc.h"
+
+// Embedded asset struct (defined in zapp_assets.zc, accessed via weak extern)
+typedef struct {
+    const char* path;
+    uint8_t* data;
+    int len;
+    int uncompressed_len;
+    int is_brotli;
+} ZappEmbeddedAsset;
 
 // --- Worker storage ---
 
@@ -225,32 +235,65 @@ bool jsc_worker_create(const char* script_url, const char* owner_id, const char*
         jsc_contexts[wid] = ctx;
         jsc_setup_bridge(ctx, wid);
 
-        // Resolve and load the worker script
-        // Try multiple locations:
-        // 1. .zapp/workers/<name>.mjs (CLI-bundled)
-        // 2. Relative to CWD (dev mode)
-        // 3. Relative to asset root (prod mode)
+        // Load worker script
+        // scriptUrl is now "/_workers/worker.mjs" (rewritten by Vite plugin)
         NSString* scriptContent = nil;
-        NSArray* searchPaths = @[
-            // CLI-bundled workers
-            [NSString stringWithFormat:@".zapp/workers/%@", [scriptUrl lastPathComponent]],
-            // Replace .ts with .mjs for bundled output
-            [NSString stringWithFormat:@".zapp/workers/%@",
-                [[scriptUrl lastPathComponent] stringByReplacingOccurrencesOfString:@".ts" withString:@".mjs"]],
-            // Direct path (dev mode, already bundled)
-            scriptUrl,
-        ];
 
-        char cwd[1024];
-        NSString* base = getcwd(cwd, sizeof(cwd)) ? [NSString stringWithUTF8String:cwd] : @".";
+        // Try embedded assets first (production builds)
+        extern int zapp_build_use_embedded_assets(void);
+        // These are defined in zapp_assets.zc (compiled into the Zen-C unit)
+        // We access them via extern — they exist at link time when assets are embedded.
+        extern int zapp_embedded_assets_count;
+        extern ZappEmbeddedAsset zapp_embedded_assets[];
+        if (zapp_build_use_embedded_assets() && zapp_embedded_assets_count > 0) {
 
-        for (NSString* rel in searchPaths) {
-            NSString* fullPath = [base stringByAppendingPathComponent:rel];
-            NSError* err = nil;
-            scriptContent = [NSString stringWithContentsOfFile:fullPath encoding:NSUTF8StringEncoding error:&err];
-            if (scriptContent) {
-                NSLog(@"[zapp] worker script loaded: %@", fullPath);
-                break;
+            for (int ai = 0; ai < zapp_embedded_assets_count; ai++) {
+                NSString* assetPath = [NSString stringWithUTF8String:zapp_embedded_assets[ai].path];
+                if ([assetPath isEqualToString:scriptUrl]) {
+                    if (zapp_embedded_assets[ai].is_brotli && zapp_embedded_assets[ai].uncompressed_len > 0) {
+                        uint8_t* out = malloc(zapp_embedded_assets[ai].uncompressed_len + 1);
+                        size_t decoded = compression_decode_buffer(
+                            out, zapp_embedded_assets[ai].uncompressed_len,
+                            zapp_embedded_assets[ai].data, zapp_embedded_assets[ai].len,
+                            NULL, COMPRESSION_BROTLI);
+                        out[decoded] = '\0';
+                        scriptContent = [[NSString alloc] initWithBytesNoCopy:out length:decoded
+                            encoding:NSUTF8StringEncoding freeWhenDone:YES];
+                    } else {
+                        scriptContent = [[NSString alloc] initWithBytes:zapp_embedded_assets[ai].data
+                            length:zapp_embedded_assets[ai].len encoding:NSUTF8StringEncoding];
+                    }
+                    NSLog(@"[zapp] worker loaded from embedded: %@", scriptUrl);
+                    break;
+                }
+            }
+        }
+
+        // Fallback: filesystem via dev server (Vite serves /_workers/ in dev)
+        if (!scriptContent) {
+            // In dev mode, fetch from Vite dev server
+            extern const char* zapp_build_initial_url(void);
+            const char* devUrl = zapp_build_initial_url();
+            if (devUrl && devUrl[0] != '\0') {
+                // Dev mode: load from http://localhost:PORT/_workers/worker.mjs
+                NSString* fullUrl = [NSString stringWithFormat:@"%s%@",
+                    devUrl, scriptUrl];
+                NSData* data = [NSData dataWithContentsOfURL:[NSURL URLWithString:fullUrl]];
+                if (data) {
+                    scriptContent = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+                    NSLog(@"[zapp] worker loaded from dev server: %@", fullUrl);
+                }
+            }
+
+            // Last resort: filesystem relative to CWD
+            if (!scriptContent) {
+                char cwd[1024];
+                NSString* base = getcwd(cwd, sizeof(cwd)) ? [NSString stringWithUTF8String:cwd] : @".";
+                NSString* fullPath = [base stringByAppendingPathComponent:
+                    [@"dist" stringByAppendingPathComponent:scriptUrl]];
+                NSError* err = nil;
+                scriptContent = [NSString stringWithContentsOfFile:fullPath encoding:NSUTF8StringEncoding error:&err];
+                if (scriptContent) NSLog(@"[zapp] worker loaded from filesystem: %@", fullPath);
             }
         }
 
@@ -415,6 +458,23 @@ bool jsc_backend_create(const char* script_path) {
             });
         };
 
+        // subscribeWindowEvent — register backend for window events
+        bridge[@"subscribeWindowEvent"] = ^(JSValue* windowIdVal, JSValue* eventIdVal) {
+            int wid = [windowIdVal toInt32];
+            int eid = [eventIdVal toInt32];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                extern void zapp_window_set_backend_listener(int id, int event_id, int has_listener);
+                if (wid < 0) {
+                    // Subscribe all windows (wid == -1)
+                    for (int i = 0; i < 64; i++) {
+                        zapp_window_set_backend_listener(i, eid, 1);
+                    }
+                } else {
+                    zapp_window_set_backend_listener(wid, eid, 1);
+                }
+            });
+        };
+
         // showNotification — fire-and-forget
         bridge[@"showNotification"] = ^(NSString* title, NSString* body) {
             const char* t = title ? [title UTF8String] : "";
@@ -439,17 +499,48 @@ bool jsc_backend_create(const char* script_path) {
             [ctx evaluateScript:[NSString stringWithUTF8String:bootstrap]];
         }
 
-        // Load user script
-        char cwd[1024];
-        NSString* base = getcwd(cwd, sizeof(cwd)) ? [NSString stringWithUTF8String:cwd] : @".";
-        NSString* fullPath = [base stringByAppendingPathComponent:scriptPath];
-        NSError* err = nil;
-        NSString* script = [NSString stringWithContentsOfFile:fullPath encoding:NSUTF8StringEncoding error:&err];
+        // Load user backend script — try embedded first, then filesystem
+        NSString* script = nil;
+
+        extern int zapp_build_use_embedded_assets(void);
+        extern int zapp_embedded_assets_count;
+        extern ZappEmbeddedAsset zapp_embedded_assets[];
+        if (zapp_build_use_embedded_assets() && zapp_embedded_assets_count > 0) {
+            NSString* lookup = @"/_workers/backend.mjs";
+            for (int ai = 0; ai < zapp_embedded_assets_count; ai++) {
+                NSString* assetPath = [NSString stringWithUTF8String:zapp_embedded_assets[ai].path];
+                if ([assetPath isEqualToString:lookup]) {
+                    if (zapp_embedded_assets[ai].is_brotli && zapp_embedded_assets[ai].uncompressed_len > 0) {
+                        uint8_t* out = malloc(zapp_embedded_assets[ai].uncompressed_len + 1);
+                        size_t decoded = compression_decode_buffer(
+                            out, zapp_embedded_assets[ai].uncompressed_len,
+                            zapp_embedded_assets[ai].data, zapp_embedded_assets[ai].len,
+                            NULL, COMPRESSION_BROTLI);
+                        out[decoded] = '\0';
+                        script = [[NSString alloc] initWithBytesNoCopy:out length:decoded
+                            encoding:NSUTF8StringEncoding freeWhenDone:YES];
+                    } else {
+                        script = [[NSString alloc] initWithBytes:zapp_embedded_assets[ai].data
+                            length:zapp_embedded_assets[ai].len encoding:NSUTF8StringEncoding];
+                    }
+                    NSLog(@"[zapp] backend loaded from embedded");
+                    break;
+                }
+            }
+        }
+
+        if (!script) {
+            char cwd[1024];
+            NSString* base = getcwd(cwd, sizeof(cwd)) ? [NSString stringWithUTF8String:cwd] : @".";
+            NSString* fullPath = [base stringByAppendingPathComponent:scriptPath];
+            NSError* err = nil;
+            script = [NSString stringWithContentsOfFile:fullPath encoding:NSUTF8StringEncoding error:&err];
+            if (script) NSLog(@"[zapp] backend worker started: %@", fullPath);
+            else NSLog(@"[zapp] backend script not found: %@", fullPath);
+        }
+
         if (script) {
-            NSLog(@"[zapp] backend worker started: %@", fullPath);
             [ctx evaluateScript:script withSourceURL:[NSURL URLWithString:@"backend.mjs"]];
-        } else {
-            NSLog(@"[zapp] backend script not found: %@", fullPath);
         }
     });
 

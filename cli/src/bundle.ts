@@ -3,7 +3,7 @@
 // Ad-hoc signed for local development.
 
 import path from "node:path";
-import { mkdir, unlink, rm } from "node:fs/promises";
+import { mkdir, unlink, rm, cp, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import type { ResolvedConfig } from "./config";
 import { processIcon } from "./icon";
@@ -27,27 +27,51 @@ export async function createDevBundle(root: string, binaryPath: string, config: 
   const { chmod } = await import("node:fs/promises");
   await chmod(execPath, 0o755);
 
-  // Process icon if configured
+  // Process icon — user-configured or framework default
   const resourcesDir = path.join(contentsDir, "Resources");
   await mkdir(resourcesDir, { recursive: true });
   let iconPlistEntry = "";
+
+  // Resolve icon source: user config > framework default
+  let iconSrc = "";
   if (config.macos?.icon) {
-    const iconSrc = path.resolve(root, config.macos.icon);
-    if (existsSync(iconSrc)) {
+    iconSrc = path.resolve(root, config.macos.icon);
+  }
+  if (!iconSrc || !existsSync(iconSrc)) {
+    // Fall back to framework default icon
+    const frameworkAssets = path.resolve(import.meta.dir, "../../assets");
+    const defaultIcon = path.join(frameworkAssets, "zapp.icon");
+    const defaultPng = path.join(frameworkAssets, "zapp.png");
+    if (existsSync(defaultIcon)) iconSrc = defaultIcon;
+    else if (existsSync(defaultPng)) iconSrc = defaultPng;
+  }
+
+  if (iconSrc && existsSync(iconSrc)) {
       const tempDir = path.join(root, ".zapp", "icon-tmp");
       await mkdir(tempDir, { recursive: true });
       try {
         const result = await processIcon(iconSrc, tempDir);
         for (const file of result.files) {
-          await Bun.write(path.join(resourcesDir, file.dest), Bun.file(file.src));
+          const destPath = path.join(resourcesDir, file.dest);
+          const srcStat = await stat(file.src);
+          if (srcStat.isDirectory()) {
+            await cp(file.src, destPath, { recursive: true });
+          } else {
+            await Bun.write(destPath, Bun.file(file.src));
+          }
         }
         iconPlistEntry = `
     <key>${result.plistKey}</key>
     <string>${result.plistValue}</string>`;
+        // Also add CFBundleIconFile for older macOS fallback
+        if (result.plistKey === "CFBundleIconName") {
+          iconPlistEntry += `
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>`;
+        }
       } finally {
         await rm(tempDir, { recursive: true, force: true });
       }
-    }
   }
 
   // Generate Info.plist

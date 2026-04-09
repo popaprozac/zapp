@@ -3,7 +3,5 @@ export default {
   identifier: "com.zapp.helloworld",
   version: "0.1.0",
   deepLinkSchemes: ["helloworld"],
-  macos: {
-    icon: "./assets/icon.png",
-  },
+  // No icon configured — will use framework default (assets/zapp.icon)
 };

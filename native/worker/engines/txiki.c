@@ -298,33 +298,81 @@ static void* txiki_worker_thread(void* arg) {
         strncpy(script_path, slot->script_url, sizeof(script_path) - 1);
     }
 
-    FILE* f = fopen(script_path, "r");
-    if (f) {
-        fseek(f, 0, SEEK_END);
-        long len = ftell(f);
-        fseek(f, 0, SEEK_SET);
-        char* code = (char*)malloc(len + 1);
-        if (code) {
-            fread(code, 1, len, f);
-            code[len] = '\0';
-            fprintf(stderr, "[zapp] txiki worker script loaded: %s\n", script_path);
-            JSValue result = JS_Eval(ctx, code, len, slot->script_url, JS_EVAL_TYPE_GLOBAL);
-            if (JS_IsException(result)) {
-                JSValue exc = JS_GetException(ctx);
-                const char* err = JS_ToCString(ctx, exc);
-                fprintf(stderr, "[zapp] txiki worker error: %s\n", err ? err : "unknown");
-                if (err) JS_FreeCString(ctx, err);
-                JS_FreeValue(ctx, exc);
-            }
-            JS_FreeValue(ctx, result);
-            free(code);
-        }
-        fclose(f);
+    // Try embedded assets first (production builds)
+    char* code = NULL;
+    long code_len = 0;
 
-        // Run the event loop — handles fetch, timers, WebSocket, AND our uv_async messages
+    extern int zapp_build_use_embedded_assets(void);
+    if (zapp_build_use_embedded_assets()) {
+        #ifdef ZAPP_EMBEDDED_ASSET_DEFINED
+        extern ZappEmbeddedAsset zapp_embedded_assets[];
+        extern int zapp_embedded_assets_count;
+        // Try /.zapp/workers/<name>.mjs
+        char lookup[512];
+        const char* basename = strrchr(slot->script_url, '/');
+        basename = basename ? basename + 1 : slot->script_url;
+        char mjs_name[128];
+        strncpy(mjs_name, basename, sizeof(mjs_name) - 1);
+        char* dot = strrchr(mjs_name, '.');
+        if (dot) strcpy(dot, ".mjs");
+        snprintf(lookup, sizeof(lookup), "/.zapp/workers/%s", mjs_name);
+
+        for (int ai = 0; ai < zapp_embedded_assets_count; ai++) {
+            if (strcmp(zapp_embedded_assets[ai].path, lookup) == 0) {
+                if (zapp_embedded_assets[ai].is_brotli && zapp_embedded_assets[ai].uncompressed_len > 0) {
+                    #include <compression.h>
+                    code = (char*)malloc(zapp_embedded_assets[ai].uncompressed_len + 1);
+                    code_len = compression_decode_buffer(
+                        (uint8_t*)code, zapp_embedded_assets[ai].uncompressed_len,
+                        zapp_embedded_assets[ai].data, zapp_embedded_assets[ai].len,
+                        NULL, COMPRESSION_BROTLI);
+                    code[code_len] = '\0';
+                } else {
+                    code_len = zapp_embedded_assets[ai].len;
+                    code = (char*)malloc(code_len + 1);
+                    memcpy(code, zapp_embedded_assets[ai].data, code_len);
+                    code[code_len] = '\0';
+                }
+                fprintf(stderr, "[zapp] txiki worker script loaded from embedded: %s\n", lookup);
+                break;
+            }
+        }
+        #endif
+    }
+
+    // Fallback: filesystem (dev mode)
+    if (!code) {
+        FILE* f = fopen(script_path, "r");
+        if (f) {
+            fseek(f, 0, SEEK_END);
+            code_len = ftell(f);
+            fseek(f, 0, SEEK_SET);
+            code = (char*)malloc(code_len + 1);
+            if (code) {
+                fread(code, 1, code_len, f);
+                code[code_len] = '\0';
+                fprintf(stderr, "[zapp] txiki worker script loaded: %s\n", script_path);
+            }
+            fclose(f);
+        } else {
+            fprintf(stderr, "[zapp] txiki worker script not found: %s\n", script_path);
+        }
+    }
+
+    if (code) {
+        JSValue result = JS_Eval(ctx, code, code_len, slot->script_url, JS_EVAL_TYPE_GLOBAL);
+        if (JS_IsException(result)) {
+            JSValue exc = JS_GetException(ctx);
+            const char* err = JS_ToCString(ctx, exc);
+            fprintf(stderr, "[zapp] txiki worker error: %s\n", err ? err : "unknown");
+            if (err) JS_FreeCString(ctx, err);
+            JS_FreeValue(ctx, exc);
+        }
+        JS_FreeValue(ctx, result);
+        free(code);
+
+        // Run the event loop
         TJS_Run(rt);
-    } else {
-        fprintf(stderr, "[zapp] txiki worker script not found: %s\n", script_path);
     }
 
     // Cleanup
@@ -441,6 +489,24 @@ static JSValue zapp_backend_quit(JSContext* ctx, JSValueConst this_val, int argc
     return JS_UNDEFINED;
 }
 
+static JSValue zapp_backend_subscribe_window(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    (void)this_val;
+    if (argc < 2) return JS_UNDEFINED;
+    int wid = 0, eid = 0;
+    JS_ToInt32(ctx, &wid, argv[0]);
+    JS_ToInt32(ctx, &eid, argv[1]);
+
+    extern void zapp_window_set_backend_listener(int id, int event_id, int has_listener);
+    if (wid < 0) {
+        for (int i = 0; i < 64; i++) {
+            zapp_window_set_backend_listener(i, eid, 1);
+        }
+    } else {
+        zapp_window_set_backend_listener(wid, eid, 1);
+    }
+    return JS_UNDEFINED;
+}
+
 static void* txiki_backend_thread(void* arg) {
     TxikiWorkerSlot* slot = (TxikiWorkerSlot*)arg;
 
@@ -469,6 +535,8 @@ static void* txiki_backend_thread(void* arg) {
     JSValue bridge = JS_GetPropertyStr(ctx, global, "__zappBridge");
     JS_SetPropertyStr(ctx, bridge, "quit",
         JS_NewCFunction(ctx, zapp_backend_quit, "quit", 0));
+    JS_SetPropertyStr(ctx, bridge, "subscribeWindowEvent",
+        JS_NewCFunction(ctx, zapp_backend_subscribe_window, "subscribeWindowEvent", 2));
     JS_FreeValue(ctx, bridge);
     JS_FreeValue(ctx, global);
 
@@ -480,37 +548,75 @@ static void* txiki_backend_thread(void* arg) {
         JS_FreeValue(ctx, r);
     }
 
-    // Load user script
-    char cwd[1024];
-    char script_path[1280];
-    if (getcwd(cwd, sizeof(cwd))) {
-        snprintf(script_path, sizeof(script_path), "%s/%s", cwd, slot->script_url);
-    } else {
-        strncpy(script_path, slot->script_url, sizeof(script_path) - 1);
+    // Load user backend script — try embedded first, then filesystem
+    char* code = NULL;
+    long code_len = 0;
+
+    extern int zapp_build_use_embedded_assets(void);
+    if (zapp_build_use_embedded_assets()) {
+        #ifdef ZAPP_EMBEDDED_ASSET_DEFINED
+        extern ZappEmbeddedAsset zapp_embedded_assets[];
+        extern int zapp_embedded_assets_count;
+        const char* lookup = "/.zapp/workers/backend.mjs";
+        for (int ai = 0; ai < zapp_embedded_assets_count; ai++) {
+            if (strcmp(zapp_embedded_assets[ai].path, lookup) == 0) {
+                if (zapp_embedded_assets[ai].is_brotli && zapp_embedded_assets[ai].uncompressed_len > 0) {
+                    #include <compression.h>
+                    code = (char*)malloc(zapp_embedded_assets[ai].uncompressed_len + 1);
+                    code_len = compression_decode_buffer(
+                        (uint8_t*)code, zapp_embedded_assets[ai].uncompressed_len,
+                        zapp_embedded_assets[ai].data, zapp_embedded_assets[ai].len,
+                        NULL, COMPRESSION_BROTLI);
+                    code[code_len] = '\0';
+                } else {
+                    code_len = zapp_embedded_assets[ai].len;
+                    code = (char*)malloc(code_len + 1);
+                    memcpy(code, zapp_embedded_assets[ai].data, code_len);
+                    code[code_len] = '\0';
+                }
+                fprintf(stderr, "[zapp] txiki backend loaded from embedded\n");
+                break;
+            }
+        }
+        #endif
     }
 
-    FILE* f = fopen(script_path, "r");
-    if (f) {
-        fseek(f, 0, SEEK_END);
-        long len = ftell(f);
-        fseek(f, 0, SEEK_SET);
-        char* code = (char*)malloc(len + 1);
-        if (code) {
-            fread(code, 1, len, f);
-            code[len] = '\0';
-            fprintf(stderr, "[zapp] txiki backend started: %s\n", script_path);
-            JSValue result = JS_Eval(ctx, code, len, "backend.mjs", JS_EVAL_TYPE_GLOBAL);
-            if (JS_IsException(result)) {
-                JSValue exc = JS_GetException(ctx);
-                const char* err = JS_ToCString(ctx, exc);
-                fprintf(stderr, "[backend ERROR] %s\n", err ? err : "unknown");
-                if (err) JS_FreeCString(ctx, err);
-                JS_FreeValue(ctx, exc);
-            }
-            JS_FreeValue(ctx, result);
-            free(code);
+    if (!code) {
+        char cwd[1024];
+        char script_path[1280];
+        if (getcwd(cwd, sizeof(cwd))) {
+            snprintf(script_path, sizeof(script_path), "%s/%s", cwd, slot->script_url);
+        } else {
+            strncpy(script_path, slot->script_url, sizeof(script_path) - 1);
         }
-        fclose(f);
+        FILE* f = fopen(script_path, "r");
+        if (f) {
+            fseek(f, 0, SEEK_END);
+            code_len = ftell(f);
+            fseek(f, 0, SEEK_SET);
+            code = (char*)malloc(code_len + 1);
+            if (code) {
+                fread(code, 1, code_len, f);
+                code[code_len] = '\0';
+                fprintf(stderr, "[zapp] txiki backend started: %s\n", script_path);
+            }
+            fclose(f);
+        } else {
+            fprintf(stderr, "[zapp] txiki backend script not found: %s\n", script_path);
+        }
+    }
+
+    if (code) {
+        JSValue result = JS_Eval(ctx, code, code_len, "backend.mjs", JS_EVAL_TYPE_GLOBAL);
+        if (JS_IsException(result)) {
+            JSValue exc = JS_GetException(ctx);
+            const char* err = JS_ToCString(ctx, exc);
+            fprintf(stderr, "[backend ERROR] %s\n", err ? err : "unknown");
+            if (err) JS_FreeCString(ctx, err);
+            JS_FreeValue(ctx, exc);
+        }
+        JS_FreeValue(ctx, result);
+        free(code);
 
         // Run event loop — handles fetch, WebSocket, timers, AND our async eval messages
         TJS_Run(rt);

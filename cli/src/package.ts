@@ -53,31 +53,52 @@ export async function createProductionBundle(opts: PackageOptions): Promise<stri
     process.stderr.write(`[zapp] warning: asset directory not found: ${assetSrc}\n`);
   }
 
-  // Process app icon
+  // Copy worker scripts into .app bundle (workers load from filesystem, not embedded)
+  const workersDir = path.join(root, ".zapp", "workers");
+  if (existsSync(workersDir)) {
+    const bundleWorkersDir = path.join(resourcesDir, ".zapp", "workers");
+    await mkdir(bundleWorkersDir, { recursive: true });
+    await cp(workersDir, bundleWorkersDir, { recursive: true });
+    process.stdout.write("[zapp] bundled worker scripts\n");
+  }
+
+  // Process app icon — user-configured or framework default
   const macosConfig = config.macos;
   let iconResult: IconResult | null = null;
+
+  let iconSrc = "";
   if (macosConfig?.icon) {
-    const iconSrc = path.resolve(root, macosConfig.icon);
-    if (existsSync(iconSrc)) {
+    iconSrc = path.resolve(root, macosConfig.icon);
+  }
+  if (!iconSrc || !existsSync(iconSrc)) {
+    const frameworkAssets = path.resolve(import.meta.dir, "../../assets");
+    const defaultIcon = path.join(frameworkAssets, "zapp.icon");
+    const defaultPng = path.join(frameworkAssets, "zapp.png");
+    if (existsSync(defaultIcon)) iconSrc = defaultIcon;
+    else if (existsSync(defaultPng)) iconSrc = defaultPng;
+  }
+
+  if (iconSrc && existsSync(iconSrc)) {
       const tempDir = path.join(root, ".zapp", "icon-tmp");
       await mkdir(tempDir, { recursive: true });
       try {
         iconResult = await processIcon(iconSrc, tempDir);
         // Copy icon files into Resources/
         for (const file of iconResult.files) {
-          await Bun.write(
-            path.join(resourcesDir, file.dest),
-            Bun.file(file.src)
-          );
+          const destPath = path.join(resourcesDir, file.dest);
+          const { stat: fsStat } = await import("node:fs/promises");
+          const srcStat = await fsStat(file.src);
+          if (srcStat.isDirectory()) {
+            await cp(file.src, destPath, { recursive: true });
+          } else {
+            await Bun.write(destPath, Bun.file(file.src));
+          }
         }
         const format = iconResult.type === "assetcatalog" ? "asset catalog (liquid glass)" : ".icns";
         process.stdout.write(`[zapp] bundled icon: ${format}\n`);
       } finally {
         await rm(tempDir, { recursive: true, force: true });
       }
-    } else {
-      process.stderr.write(`[zapp] warning: icon not found: ${iconSrc}\n`);
-    }
   }
 
   // Generate Info.plist
@@ -117,6 +138,12 @@ export async function createProductionBundle(opts: PackageOptions): Promise<stri
     plist += `
     <key>${iconResult.plistKey}</key>
     <string>${iconResult.plistValue}</string>`;
+    // Also add CFBundleIconFile for older macOS fallback
+    if (iconResult.plistKey === "CFBundleIconName") {
+      plist += `
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>`;
+    }
   }
 
   if (category) {

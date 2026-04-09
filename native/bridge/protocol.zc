@@ -33,7 +33,9 @@ struct BridgeMessage {
     msg_type: int;
     request_id: int;
     method: string;
-    payload: string;
+    payload: string;    // full raw JSON (for handlers that need it)
+    args: JsonValue;    // pre-parsed "a" field (eliminates double-parse)
+    has_args: bool;
     valid: bool;
 }
 
@@ -44,6 +46,8 @@ fn bridge_parse(raw: string) -> BridgeMessage {
         request_id: 0,
         method: "",
         payload: "",
+        args: JsonValue::null(),
+        has_args: false,
         valid: false,
     };
 
@@ -64,9 +68,15 @@ fn bridge_parse(raw: string) -> BridgeMessage {
     let m_opt = json.get_string("m");
     if m_opt.is_some() { msg.method = m_opt.unwrap(); }
 
-    // Optional: a (args — pass as raw string for handler to parse)
-    // For now, pass the full raw JSON — handler extracts "a" itself
-    // This avoids re-stringifying a JsonValue which returns String struct
+    // Pre-extract "a" (args) to eliminate double-parse in handlers
+    let a_opt = json.get("a");
+    if a_opt.is_some() {
+        let a_ptr = a_opt.unwrap();
+        raw { msg.args = *a_ptr; }
+        msg.has_args = true;
+    }
+
+    // Keep full raw JSON for handlers that need the complete message (dialogs, menus)
     msg.payload = raw;
 
     msg.valid = true;

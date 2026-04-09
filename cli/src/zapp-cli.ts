@@ -6,9 +6,9 @@ import { existsSync } from "node:fs";
 import { loadConfig } from "./config";
 import { generateBuildConfig, generatePlatformConfig } from "./build-config";
 import { generateBindings } from "./generate";
-import { resolveNativeDir, compileNative, ensureTxikiBuilt, hasTxikiEnabled } from "./native";
+import { resolveNativeDir, compileNative, ensureTxikiBuilt, hasTxikiEnabled, hasAnyWorkerEngine } from "./native";
 import { runInit } from "./init";
-import { bundleWorkers } from "./workers";
+// bundleWorkers removed — Vite plugin handles worker bundling now
 import { createDevBundle } from "./bundle";
 import { createProductionBundle } from "./package";
 import { generateBootstrap } from "../../bootstrap/codegen";
@@ -39,15 +39,26 @@ async function runDev(root: string) {
   const port = config.devPort ?? 5173;
   const devUrl = `http://localhost:${port}`;
 
+  // 0. Check worker engine
+  const workerEngine = await hasAnyWorkerEngine(root);
+  if (!workerEngine) {
+    process.stderr.write(
+      "[zapp] no worker engine defined in zapp/build.zc.\n" +
+      "  Add one of:\n" +
+      "    //> macos: define: ZAPP_WORKER_ENGINE_JSC    (zero binary cost, macOS-only)\n" +
+      "    //> define: ZAPP_WORKER_ENGINE_TXIKI          (cross-platform, +6MB, web APIs)\n"
+    );
+    process.exit(1);
+  }
+
   // 1. Generate service bindings + bundle workers
   process.stdout.write("[zapp] scanning for services...\n");
   const count = await generateBindings(root);
   if (count > 0) process.stdout.write(`[zapp] generated ${count} binding(s) in src/zapp/\n`);
-  const workerCount = await bundleWorkers(root);
-  if (workerCount > 0) process.stdout.write(`[zapp] bundled ${workerCount} worker(s)\n`);
+  // Workers are bundled by the Vite plugin during vite build/dev
 
   // 2. Build txiki.js if opted in
-  if (await hasTxikiEnabled(root)) {
+  if (workerEngine === "txiki") {
     await ensureTxikiBuilt(nativeDir);
   }
 
@@ -57,6 +68,18 @@ async function runDev(root: string) {
   const zappDir = path.join(root, ".zapp");
   process.stdout.write("[zapp] generating bootstrap...\n");
   const bootstrapFile = await generateBootstrap(zappDir);
+
+  // Generate stub assets file (no embedded assets in dev, but symbols must exist for linking)
+  const stubAssets = `// Stub — no embedded assets in dev mode.\nraw {\n` +
+    `    #include <compression.h>\n` +
+    `    #ifndef ZAPP_EMBEDDED_ASSET_DEFINED\n` +
+    `    #define ZAPP_EMBEDDED_ASSET_DEFINED\n` +
+    `    typedef struct { const char* path; uint8_t* data; int len; int uncompressed_len; int is_brotli; } ZappEmbeddedAsset;\n` +
+    `    #endif\n` +
+    `    ZappEmbeddedAsset zapp_embedded_assets[1] = {{0}};\n` +
+    `    int zapp_embedded_assets_count = 0;\n}\n`;
+  const assetsFile = path.join(zappDir, "zapp_assets.zc");
+  await Bun.write(assetsFile, stubAssets);
 
   // 3. Start Vite dev server on a fixed port
   process.stdout.write("[zapp] starting vite dev server...\n");
@@ -87,6 +110,7 @@ async function runDev(root: string) {
     buildFile,
     buildConfigFile,
     bootstrapFile,
+    assetsFile,
     output: nativeOut,
     nativeDir,
     optimize: false,
@@ -126,14 +150,27 @@ async function runDev(root: string) {
     } catch {}
   };
 
-  // Handle Ctrl+C — terminate everything
-  const cleanup = () => {
+  // Ensure Vite and app are always killed on any exit path
+  let cleaned = false;
+  const cleanup = (code = 0) => {
+    if (cleaned) return;
+    cleaned = true;
     killProc(appProc);
     killProc(viteProc);
-    process.exit(0);
+    if (code !== undefined) process.exit(code);
   };
-  process.on("SIGINT", cleanup);
-  process.on("SIGTERM", cleanup);
+
+  process.on("SIGINT", () => cleanup(0));
+  process.on("SIGTERM", () => cleanup(0));
+  process.on("exit", () => { cleaned = true; killProc(viteProc); killProc(appProc); });
+  process.on("uncaughtException", (err) => {
+    console.error("[zapp] uncaught exception:", err);
+    cleanup(1);
+  });
+  process.on("unhandledRejection", (err) => {
+    console.error("[zapp] unhandled rejection:", err);
+    cleanup(1);
+  });
 
   // Wait for either to exit
   const exitCode = await Promise.race([
@@ -141,10 +178,7 @@ async function runDev(root: string) {
     viteProc.exited,
   ]);
 
-  // Cleanup — kill whichever is still running
-  killProc(viteProc);
-  killProc(appProc);
-  process.exit(exitCode as number);
+  cleanup(exitCode as number);
 }
 
 async function runBuild(root: string) {
@@ -156,12 +190,23 @@ async function runBuild(root: string) {
   const config = await loadConfig(root);
   const nativeDir = resolveNativeDir();
 
+  // 0. Check worker engine
+  const workerEngine = await hasAnyWorkerEngine(root);
+  if (!workerEngine) {
+    process.stderr.write(
+      "[zapp] no worker engine defined in zapp/build.zc.\n" +
+      "  Add one of:\n" +
+      "    //> macos: define: ZAPP_WORKER_ENGINE_JSC    (zero binary cost, macOS-only)\n" +
+      "    //> define: ZAPP_WORKER_ENGINE_TXIKI          (cross-platform, +6MB, web APIs)\n"
+    );
+    process.exit(1);
+  }
+
   // 1. Generate service bindings + bundle workers
   process.stdout.write("[zapp] scanning for services...\n");
   const count = await generateBindings(root);
   if (count > 0) process.stdout.write(`[zapp] generated ${count} binding(s) in src/zapp/\n`);
-  const workerCount = await bundleWorkers(root);
-  if (workerCount > 0) process.stdout.write(`[zapp] bundled ${workerCount} worker(s)\n`);
+  // Workers are bundled by the Vite plugin during vite build
 
   // 2. Build frontend with Vite
   process.stdout.write("[zapp] building frontend...\n");
@@ -182,7 +227,7 @@ async function runBuild(root: string) {
   const assetsFile = await generateAssetManifest(root, config.assetDir);
 
   // 4. Build txiki.js if opted in (first time only)
-  if (await hasTxikiEnabled(root)) {
+  if (workerEngine === "txiki") {
     await ensureTxikiBuilt(nativeDir);
   }
 

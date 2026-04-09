@@ -1,7 +1,7 @@
 // Backend worker — runs before any window, no DOM, no WebView.
 // Uses the same @zappdev/runtime API but with host object transport.
 
-import { App, AppEvent, Notification } from "@zappdev/runtime";
+import { App, AppEvent, Events, Notification, Window, WindowEvent } from "@zappdev/runtime";
 
 App.on(AppEvent.STARTED, () => {
   console.log("[backend] app started");
@@ -25,6 +25,15 @@ App.on(AppEvent.DID_RESIGN_ACTIVE, () => {
 
 Notification.on("click", (id) => {
   console.log("[backend] notification clicked:", id);
+});
+
+// Listen to window events from backend (all windows)
+Events.on("window:move", (p) => {
+  console.log("[backend] window moved:", JSON.stringify(p));
+});
+
+Events.on("window:resize", (p) => {
+  console.log("[backend] window resized:", JSON.stringify(p));
 });
 
 console.log("[backend] initialized");

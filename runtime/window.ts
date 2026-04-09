@@ -96,13 +96,18 @@ function createWindowHandle(windowId: string): WindowHandle {
   };
 }
 
-function getCurrentWindowId(): string {
-  return (globalThis as any)[Symbol.for("zapp.windowId")] ?? "win-0";
+function getCurrentWindowId(): string | null {
+  return (globalThis as any)[Symbol.for("zapp.windowId")] ?? null;
 }
 
 export const Window = {
+  /** Get the current window handle. Only available in WebView context. */
   current(): WindowHandle {
-    return createWindowHandle(getCurrentWindowId());
+    const id = getCurrentWindowId();
+    if (!id) {
+      throw new Error("[zapp] Window.current() is only available in WebView context. Use Window.create() in backend/workers.");
+    }
+    return createWindowHandle(id);
   },
 
   /** Create a new window. Returns a handle for the new window. */

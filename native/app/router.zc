@@ -39,22 +39,16 @@ fn router_handle_message(app: App*, msg: string, window_id: int) -> void {
         if is_window_create {
             // Create a new window from the frontend
             let opts = WindowOptions::create("Zapp");
-            // Parse options from payload if provided
-            let parse_result = JsonValue::parse(parsed.payload);
-            if parse_result.is_ok() {
-                let json = parse_result.unwrap();
-                let a_opt = json.get("a");
-                if a_opt.is_some() {
-                    let args = a_opt.unwrap();
-                    let title_opt = args.get_string("title");
-                    if title_opt.is_some() { opts.title = title_opt.unwrap(); }
-                    let url_opt = args.get_string("url");
-                    if url_opt.is_some() { opts.url = url_opt.unwrap(); }
-                    let w_opt = args.get_int("width");
-                    if w_opt.is_some() { opts.width = w_opt.unwrap(); }
-                    let h_opt = args.get_int("height");
-                    if h_opt.is_some() { opts.height = h_opt.unwrap(); }
-                }
+            if parsed.has_args {
+                let args = parsed.args;
+                let title_opt = args.get_string("title");
+                if title_opt.is_some() { opts.title = title_opt.unwrap(); }
+                let url_opt = args.get_string("url");
+                if url_opt.is_some() { opts.url = url_opt.unwrap(); }
+                let w_opt = args.get_int("width");
+                if w_opt.is_some() { opts.width = w_opt.unwrap(); }
+                let h_opt = args.get_int("height");
+                if h_opt.is_some() { opts.height = h_opt.unwrap(); }
             }
             opts.visible = true;
             let win = app.window.create(&opts);
@@ -87,12 +81,12 @@ fn router_handle_message(app: App*, msg: string, window_id: int) -> void {
     }
 
     if parsed.msg_type == MsgType.WINDOW_ACTION {
-        router_handle_window_action(app, parsed.method, parsed.payload, window_id);
+        router_handle_window_action(app, parsed.method, parsed.payload, window_id, parsed.args, parsed.has_args);
         return;
     }
 
     if parsed.msg_type == MsgType.WORKER {
-        router_handle_worker(app, parsed.method, parsed.payload, window_id);
+        router_handle_worker(app, parsed.method, parsed.payload, window_id, parsed.args, parsed.has_args);
         return;
     }
 
@@ -131,7 +125,7 @@ fn event_name_to_id(name: string) -> int {
     return -1;
 }
 
-fn router_handle_window_action(app: App*, action: string, payload: string, window_id: int) -> void {
+fn router_handle_window_action(app: App*, action: string, payload: string, window_id: int, pre_args: JsonValue, has_pre_args: bool) -> void {
     // Handle bridge ready signal
     let is_ready = action == "ready";
     if is_ready {
@@ -174,14 +168,9 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
         return;
     }
 
-    // Parse args from payload
-    let parse_result = JsonValue::parse(payload);
-    if parse_result.is_err() { return; }
-    let json = parse_result.unwrap();
-
-    let a_opt = json.get("a");
-    if !a_opt.is_some() { return; }
-    let args = a_opt.unwrap();
+    // Use pre-parsed args (eliminates double JSON parse)
+    if !has_pre_args { return; }
+    let args = pre_args;
 
     // Window operations — get the window handle from the manager
     let win = app.window.get(window_id);
@@ -389,16 +378,10 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
 
 // --- Worker message handler ---
 
-fn router_handle_worker(app: App*, action: string, payload: string, window_id: int) -> void {
+fn router_handle_worker(app: App*, action: string, payload: string, window_id: int, pre_args: JsonValue, has_pre_args: bool) -> void {
     if !workers_enabled() { return; }
-
-    let parse_result = JsonValue::parse(payload);
-    if parse_result.is_err() { return; }
-    let json = parse_result.unwrap();
-
-    let a_opt = json.get("a");
-    if !a_opt.is_some() { return; }
-    let args = a_opt.unwrap();
+    if !has_pre_args { return; }
+    let args = pre_args;
 
     let is_create = action == "create";
     let is_post = action == "post";
@@ -688,6 +671,27 @@ fn router_handle_notification(method: string, payload: string, window_id: int, r
                 windows_notification_remove_category(cat_id);
                 #endif
             }
+            dispatch_invoke_response(window_id, request_id, true, "{}");
+            return;
+        } else if (strcmp(m, "__notif:removeDelivered") == 0) {
+            #ifdef __APPLE__
+            extern void darwin_notification_remove_delivered_json(const char* json);
+            darwin_notification_remove_delivered_json((const char*)args_json);
+            #endif
+            dispatch_invoke_response(window_id, request_id, true, "{}");
+            return;
+        } else if (strcmp(m, "__notif:removeAllDelivered") == 0) {
+            #ifdef __APPLE__
+            extern void darwin_notification_remove_all_delivered(void);
+            darwin_notification_remove_all_delivered();
+            #endif
+            dispatch_invoke_response(window_id, request_id, true, "{}");
+            return;
+        } else if (strcmp(m, "__notif:update") == 0) {
+            #ifdef __APPLE__
+            extern void darwin_notification_update_json(const char* json);
+            darwin_notification_update_json((const char*)args_json);
+            #endif
             dispatch_invoke_response(window_id, request_id, true, "{}");
             return;
         }

@@ -217,9 +217,21 @@ extern void zapp_handle_message_from_window(void* app, char* msg, int32_t window
     if (![body isKindOfClass:[NSString class]]) return;
     const char* raw_msg = [(NSString*)body UTF8String];
     if (!raw_msg) return;
+    int32_t window_id = darwin_window_id_for_webview((__bridge void*)msg.webView);
+
+    // Fast path: drag region messages are the most frequent (60Hz on mousemove).
+    // Detect with simple string prefix check — avoids JSON parse entirely.
+    if (raw_msg[0] == '{' && raw_msg[1] == '"' && raw_msg[2] == 't' &&
+        raw_msg[3] == '"' && raw_msg[4] == ':' && raw_msg[5] == '4' &&
+        strstr(raw_msg, "\"setDragRegion\"") != NULL) {
+        BOOL drag = strstr(raw_msg, "\"drag\":true") != NULL;
+        extern void darwin_webview_set_drag_region(int32_t window_id, bool drag);
+        darwin_webview_set_drag_region(window_id, drag);
+        return;
+    }
+
     void* app_ptr = app_get_active();
     if (app_ptr != NULL) {
-        int32_t window_id = darwin_window_id_for_webview((__bridge void*)msg.webView);
         zapp_handle_message_from_window(app_ptr, (char*)raw_msg, window_id);
     }
 }

@@ -26,6 +26,29 @@ export interface IconResult {
 export async function processIcon(iconPath: string, tempDir: string): Promise<IconResult> {
   const ext = path.extname(iconPath).toLowerCase();
 
+  // .icon directory (macOS 26+ Icon Composer format)
+  if (ext === ".icon") {
+    const files: Array<{ src: string; dest: string }> = [
+      { src: iconPath, dest: "AppIcon.icon" },
+    ];
+
+    // Also generate .icns fallback from the framework PNG for older macOS
+    const siblingPng = path.join(path.dirname(iconPath), path.basename(iconPath, ".icon") + ".png");
+    if (existsSync(siblingPng)) {
+      try {
+        const fallback = await fallbackPngToIcns(siblingPng, tempDir);
+        files.push(...fallback.files);
+      } catch {}
+    }
+
+    return {
+      type: "assetcatalog",
+      files,
+      plistKey: "CFBundleIconName",
+      plistValue: "AppIcon",
+    };
+  }
+
   if (ext === ".icns") {
     return {
       type: "icns",

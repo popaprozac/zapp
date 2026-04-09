@@ -23,9 +23,34 @@ export interface CancellablePromise<T> extends Promise<T> {
 export const Services = {
   /**
    * Invoke a native service by name.
-   * Returns a cancellable promise that resolves with the service result.
+   * In WebView/backend: async bridge call (returns CancellablePromise).
+   * In workers: sync host object call (returns resolved Promise).
    */
   invoke<T = unknown>(method: string, args?: Record<string, unknown>, opts?: InvokeOptions): CancellablePromise<T> {
+    // Worker/backend context: use host object for sync invocation
+    const hostBridge = (globalThis as any).__zappBridge;
+    if (hostBridge?.invokeService) {
+      const result = hostBridge.invokeService(method, args) as T;
+      const p = Promise.resolve(result) as CancellablePromise<T>;
+      p.cancel = () => {};
+      // Also expose sync result directly for worker convenience
+      (p as any).value = result;
+      return p;
+    }
+
+    // WebView context: async bridge call
     return getBridge().invoke(method, args, opts) as CancellablePromise<T>;
+  },
+
+  /**
+   * Invoke a native service synchronously (workers/backend only).
+   * Throws if called from WebView context.
+   */
+  invokeSync<T = unknown>(method: string, args?: Record<string, unknown>): T {
+    const hostBridge = (globalThis as any).__zappBridge;
+    if (!hostBridge?.invokeService) {
+      throw new Error("[zapp] invokeSync is only available in workers and backend contexts");
+    }
+    return hostBridge.invokeService(method, args) as T;
   },
 };

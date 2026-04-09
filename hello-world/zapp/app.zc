@@ -103,7 +103,7 @@ fn run_app() -> int {
         name: "hello-world",
         applicationShouldTerminateAfterLastWindowClosed: true,
         webContentInspectable: -1,
-        maxWorkers: 0,
+        maxWorkers: 4,
         qjsStackSize: 0,
         backend: true,
     };

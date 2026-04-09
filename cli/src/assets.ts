@@ -3,6 +3,7 @@
 
 import path from "node:path";
 import { mkdir, readdir, stat } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { brotliCompressSync, constants } from "node:zlib";
 
 interface AssetEntry {
@@ -36,6 +37,7 @@ export async function generateAssetManifest(root: string, assetDir: string): Pro
   const brDir = path.join(zappDir, "assets");
   await mkdir(brDir, { recursive: true });
 
+  // Collect all files from Vite dist/ output (includes _workers/ from Vite plugin)
   const files = await walkDir(distDir);
   const assets: AssetEntry[] = [];
   let totalOriginal = 0;
