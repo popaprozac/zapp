@@ -9,12 +9,28 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include <pthread.h>
 #include <uv.h>
+#include <compression.h>
 
 // txiki.js private API — needed for TJS_GetLoop and TJS_NewRuntimeWorker
 extern uv_loop_t* TJS_GetLoop(TJSRuntime* qrt);
 extern TJSRuntime* TJS_NewRuntimeWorker(void);
+// Required so the libwebsockets layer doesn't assert on first WebSocket use.
+// Embedder helper added to vendor/txiki.js/src/vm.c.
+extern void TJS_SetCookieJarPath(TJSRuntime* qrt, const char* path);
+
+// Embedded asset struct — defined in zapp_assets.zc, accessed via extern below.
+// We mirror the layout here because the ZAPP_EMBEDDED_ASSET_DEFINED macro
+// is local to the zapp_assets translation unit and isn't visible across files.
+typedef struct {
+    const char* path;
+    uint8_t* data;
+    int len;
+    int uncompressed_len;
+    int is_brotli;
+} ZappEmbeddedAsset;
 
 // --- Message queue (thread-safe) ---
 
@@ -113,27 +129,24 @@ static JSValue zapp_bridge_invoke_service(JSContext* ctx, JSValueConst this_val,
     const char* method = JS_ToCString(ctx, argv[0]);
     if (!method) return JS_UNDEFINED;
 
+    // Use JS_JSONStringify direct C API instead of four property lookups
+    // (global → JSON → stringify → Call). Same result, no JS-level overhead.
     const char* args_json = "{}";
     char* args_str = NULL;
-    if (argc >= 2 && !JS_IsUndefined(argv[1])) {
-        JSValue global = JS_GetGlobalObject(ctx);
-        JSValue json_obj = JS_GetPropertyStr(ctx, global, "JSON");
-        JSValue stringify = JS_GetPropertyStr(ctx, json_obj, "stringify");
-        JSValue result = JS_Call(ctx, stringify, json_obj, 1, &argv[1]);
-        JS_FreeValue(ctx, stringify);
-        JS_FreeValue(ctx, json_obj);
-        JS_FreeValue(ctx, global);
-        if (!JS_IsException(result)) {
-            args_str = (char*)JS_ToCString(ctx, result);
+    JSValue json_val = JS_UNDEFINED;
+    if (argc >= 2 && !JS_IsUndefined(argv[1]) && !JS_IsNull(argv[1])) {
+        json_val = JS_JSONStringify(ctx, argv[1], JS_UNDEFINED, JS_UNDEFINED);
+        if (!JS_IsException(json_val)) {
+            args_str = (char*)JS_ToCString(ctx, json_val);
             if (args_str) args_json = args_str;
         }
-        JS_FreeValue(ctx, result);
     }
 
     void* app = app_get_active();
     const char* svc_result = app ? service_invoke_sync(app, method, args_json) : NULL;
     JS_FreeCString(ctx, method);
     if (args_str) JS_FreeCString(ctx, args_str);
+    JS_FreeValue(ctx, json_val);
 
     if (!svc_result || svc_result[0] == '\0') return JS_UNDEFINED;
     JSValue parsed = JS_ParseJSON(ctx, svc_result, strlen(svc_result), "<service>");
@@ -141,40 +154,105 @@ static JSValue zapp_bridge_invoke_service(JSContext* ctx, JSValueConst this_val,
     return parsed;
 }
 
+// Per-worker cached state, looked up once at setup by worker_id and reused
+// on every host object call. Indexed by a __zapp_ctx_id hidden property set
+// on the context's TJSRuntime during bridge setup.
+typedef struct {
+    char worker_id[64];
+} TxikiBridgeCache;
+
+// Hash map keyed by JSContext* → TxikiBridgeCache*. Workers are created rarely
+// (once per new Worker()) so the linear scan is fine. Bounded by TXIKI_MAX_WORKERS.
+static TxikiBridgeCache txiki_bridge_caches[TXIKI_MAX_WORKERS + 1] = {{{0}}};
+static JSContext* txiki_bridge_ctxs[TXIKI_MAX_WORKERS + 1] = {0};
+
+static TxikiBridgeCache* txiki_bridge_cache_for(JSContext* ctx) {
+    for (int i = 0; i < TXIKI_MAX_WORKERS + 1; i++) {
+        if (txiki_bridge_ctxs[i] == ctx) return &txiki_bridge_caches[i];
+    }
+    return NULL;
+}
+
+static void txiki_bridge_cache_register(JSContext* ctx, const char* worker_id) {
+    for (int i = 0; i < TXIKI_MAX_WORKERS + 1; i++) {
+        if (txiki_bridge_ctxs[i] == NULL) {
+            txiki_bridge_ctxs[i] = ctx;
+            strncpy(txiki_bridge_caches[i].worker_id, worker_id, 63);
+            txiki_bridge_caches[i].worker_id[63] = '\0';
+            return;
+        }
+    }
+}
+
+static void txiki_bridge_cache_release(JSContext* ctx) {
+    for (int i = 0; i < TXIKI_MAX_WORKERS + 1; i++) {
+        if (txiki_bridge_ctxs[i] == ctx) {
+            txiki_bridge_ctxs[i] = NULL;
+            txiki_bridge_caches[i].worker_id[0] = '\0';
+            return;
+        }
+    }
+}
+
 static JSValue zapp_bridge_post_to_webview(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     (void)this_val;
     if (argc < 1) return JS_UNDEFINED;
-    JSValue wid_val = JS_GetPropertyStr(ctx, JS_GetGlobalObject(ctx), "__zappWorkerId");
-    const char* wid = JS_ToCString(ctx, wid_val);
-    JS_FreeValue(ctx, wid_val);
-    if (!wid) return JS_UNDEFINED;
 
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue json_obj = JS_GetPropertyStr(ctx, global, "JSON");
-    JSValue stringify = JS_GetPropertyStr(ctx, json_obj, "stringify");
-    JSValue json_str = JS_Call(ctx, stringify, json_obj, 1, argv);
-    JS_FreeValue(ctx, stringify);
-    JS_FreeValue(ctx, json_obj);
-    JS_FreeValue(ctx, global);
+    // Cached worker_id — no per-call globalThis lookup.
+    TxikiBridgeCache* cache = txiki_bridge_cache_for(ctx);
+    if (!cache || cache->worker_id[0] == '\0') return JS_UNDEFINED;
 
-    if (!JS_IsException(json_str)) {
-        const char* json = JS_ToCString(ctx, json_str);
+    // Direct C JSON.stringify — no four-property lookup dance.
+    JSValue json_val = JS_JSONStringify(ctx, argv[0], JS_UNDEFINED, JS_UNDEFINED);
+    if (!JS_IsException(json_val)) {
+        const char* json = JS_ToCString(ctx, json_val);
         if (json) {
-            worker_dispatch_to_webview((char*)wid, (char*)json);
+            worker_dispatch_to_webview(cache->worker_id, (char*)json);
             JS_FreeCString(ctx, json);
         }
     }
-    JS_FreeValue(ctx, json_str);
-    JS_FreeCString(ctx, wid);
+    JS_FreeValue(ctx, json_val);
     return JS_UNDEFINED;
 }
 
+// Broadcast a fire-and-forget event to every webview. Used by the backend
+// to push state changes to all open windows; workers can use it the same way.
+// Calls into the existing Zen-C dispatch_event_to_all which builds the JS
+// every webview's bridge._onEvent listener picks up.
+extern void dispatch_event_to_all(const char* event_name, const char* payload);
+
 static JSValue zapp_bridge_emit_to_host(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    (void)this_val; (void)ctx; (void)argc; (void)argv;
+    (void)this_val;
+    if (argc < 1) return JS_UNDEFINED;
+
+    const char* name = JS_ToCString(ctx, argv[0]);
+    if (!name) return JS_UNDEFINED;
+
+    // Direct C JSON.stringify — no property-lookup dance.
+    const char* payload_json = "{}";
+    char* payload_str = NULL;
+    JSValue json_val = JS_UNDEFINED;
+    if (argc >= 2 && !JS_IsUndefined(argv[1]) && !JS_IsNull(argv[1])) {
+        json_val = JS_JSONStringify(ctx, argv[1], JS_UNDEFINED, JS_UNDEFINED);
+        if (!JS_IsException(json_val)) {
+            payload_str = (char*)JS_ToCString(ctx, json_val);
+            if (payload_str) payload_json = payload_str;
+        }
+    }
+
+    dispatch_event_to_all(name, payload_json);
+
+    JS_FreeCString(ctx, name);
+    if (payload_str) JS_FreeCString(ctx, payload_str);
+    JS_FreeValue(ctx, json_val);
     return JS_UNDEFINED;
 }
 
 static void txiki_setup_bridge(JSContext* ctx, const char* worker_id) {
+    // Register worker_id in the per-context cache so host objects can look it
+    // up without a globalThis property fetch on every call.
+    txiki_bridge_cache_register(ctx, worker_id);
+
     JSValue global = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, global, "__zappWorkerId", JS_NewString(ctx, worker_id));
 
@@ -185,6 +263,8 @@ static void txiki_setup_bridge(JSContext* ctx, const char* worker_id) {
         JS_NewCFunction(ctx, zapp_bridge_post_to_webview, "postToWebview", 1));
     JS_SetPropertyStr(ctx, bridge, "emitToHost",
         JS_NewCFunction(ctx, zapp_bridge_emit_to_host, "emitToHost", 2));
+    JS_SetPropertyStr(ctx, bridge, "dispatchEventToAll",
+        JS_NewCFunction(ctx, zapp_bridge_emit_to_host, "dispatchEventToAll", 2));
     JS_SetPropertyStr(ctx, global, "__zappBridge", bridge);
     JS_SetPropertyStr(ctx, global, "postMessage",
         JS_NewCFunction(ctx, zapp_bridge_post_to_webview, "postMessage", 1));
@@ -271,6 +351,19 @@ static void* txiki_worker_thread(void* arg) {
         return NULL;
     }
 
+    // libwebsockets requires a non-NULL cookie jar path before any WebSocket
+    // is constructed. txiki's CLI bootstrap normally sets this; for embedder
+    // use we set it ourselves so SDKs like SurrealDB can connect.
+    {
+        char cookie_dir[1024];
+        char cookie_path[1280];
+        const char* home = getenv("HOME");
+        snprintf(cookie_dir, sizeof(cookie_dir), "%s/Library/Caches/zapp", home ? home : "/tmp");
+        mkdir(cookie_dir, 0755);  // best-effort; ignore EEXIST
+        snprintf(cookie_path, sizeof(cookie_path), "%s/cookies-%s.txt", cookie_dir, slot->worker_id);
+        TJS_SetCookieJarPath(rt, cookie_path);
+    }
+
     JSContext* ctx = TJS_GetJSContext(rt);
     slot->runtime = rt;
     slot->ctx = ctx;
@@ -283,17 +376,15 @@ static void* txiki_worker_thread(void* arg) {
 
     txiki_setup_bridge(ctx, slot->worker_id);
 
-    // Load script
+    // script_url is the canonical URL form (e.g. "/_workers/worker.mjs")
+    // rewritten by the Vite plugin. Embedded assets use the same key;
+    // dev filesystem fallback maps it to .zapp/workers/<basename>.
     char script_path[512];
     char cwd[256];
+    const char* basename = strrchr(slot->script_url, '/');
+    basename = basename ? basename + 1 : slot->script_url;
     if (getcwd(cwd, sizeof(cwd))) {
-        const char* basename = strrchr(slot->script_url, '/');
-        basename = basename ? basename + 1 : slot->script_url;
-        char mjs_name[128];
-        strncpy(mjs_name, basename, sizeof(mjs_name) - 1);
-        char* dot = strrchr(mjs_name, '.');
-        if (dot) strcpy(dot, ".mjs");
-        snprintf(script_path, sizeof(script_path), "%s/.zapp/workers/%s", cwd, mjs_name);
+        snprintf(script_path, sizeof(script_path), "%s/.zapp/workers/%s", cwd, basename);
     } else {
         strncpy(script_path, slot->script_url, sizeof(script_path) - 1);
     }
@@ -304,23 +395,12 @@ static void* txiki_worker_thread(void* arg) {
 
     extern int zapp_build_use_embedded_assets(void);
     if (zapp_build_use_embedded_assets()) {
-        #ifdef ZAPP_EMBEDDED_ASSET_DEFINED
         extern ZappEmbeddedAsset zapp_embedded_assets[];
         extern int zapp_embedded_assets_count;
-        // Try /.zapp/workers/<name>.mjs
-        char lookup[512];
-        const char* basename = strrchr(slot->script_url, '/');
-        basename = basename ? basename + 1 : slot->script_url;
-        char mjs_name[128];
-        strncpy(mjs_name, basename, sizeof(mjs_name) - 1);
-        char* dot = strrchr(mjs_name, '.');
-        if (dot) strcpy(dot, ".mjs");
-        snprintf(lookup, sizeof(lookup), "/.zapp/workers/%s", mjs_name);
 
         for (int ai = 0; ai < zapp_embedded_assets_count; ai++) {
-            if (strcmp(zapp_embedded_assets[ai].path, lookup) == 0) {
+            if (strcmp(zapp_embedded_assets[ai].path, slot->script_url) == 0) {
                 if (zapp_embedded_assets[ai].is_brotli && zapp_embedded_assets[ai].uncompressed_len > 0) {
-                    #include <compression.h>
                     code = (char*)malloc(zapp_embedded_assets[ai].uncompressed_len + 1);
                     code_len = compression_decode_buffer(
                         (uint8_t*)code, zapp_embedded_assets[ai].uncompressed_len,
@@ -333,11 +413,10 @@ static void* txiki_worker_thread(void* arg) {
                     memcpy(code, zapp_embedded_assets[ai].data, code_len);
                     code[code_len] = '\0';
                 }
-                fprintf(stderr, "[zapp] txiki worker script loaded from embedded: %s\n", lookup);
+                fprintf(stderr, "[zapp] txiki worker script loaded from embedded: %s\n", slot->script_url);
                 break;
             }
         }
-        #endif
     }
 
     // Fallback: filesystem (dev mode)
@@ -360,7 +439,11 @@ static void* txiki_worker_thread(void* arg) {
     }
 
     if (code) {
-        JSValue result = JS_Eval(ctx, code, code_len, slot->script_url, JS_EVAL_TYPE_GLOBAL);
+        // Eval as a module so top-level await is allowed. The bundled script
+        // is ESM-shaped and contains no live imports/exports (Vite tree-shakes
+        // everything inline), so no module loader is needed. The TJS_Run loop
+        // below pumps any pending top-level await.
+        JSValue result = JS_Eval(ctx, code, code_len, slot->script_url, JS_EVAL_TYPE_MODULE);
         if (JS_IsException(result)) {
             JSValue exc = JS_GetException(ctx);
             const char* err = JS_ToCString(ctx, exc);
@@ -379,6 +462,7 @@ static void* txiki_worker_thread(void* arg) {
     if (slot->async_initialized) {
         uv_close((uv_handle_t*)&slot->async, NULL);
     }
+    txiki_bridge_cache_release(ctx);
     TJS_FreeRuntime(rt);
     slot->runtime = NULL;
     slot->ctx = NULL;
@@ -517,6 +601,17 @@ static void* txiki_backend_thread(void* arg) {
         return NULL;
     }
 
+    // libwebsockets needs a non-NULL cookie jar path before any WebSocket use.
+    {
+        char cookie_dir[1024];
+        char cookie_path[1280];
+        const char* home = getenv("HOME");
+        snprintf(cookie_dir, sizeof(cookie_dir), "%s/Library/Caches/zapp", home ? home : "/tmp");
+        mkdir(cookie_dir, 0755);
+        snprintf(cookie_path, sizeof(cookie_path), "%s/cookies-backend.txt", cookie_dir);
+        TJS_SetCookieJarPath(rt, cookie_path);
+    }
+
     JSContext* ctx = TJS_GetJSContext(rt);
     slot->runtime = rt;
     slot->ctx = ctx;
@@ -548,20 +643,18 @@ static void* txiki_backend_thread(void* arg) {
         JS_FreeValue(ctx, r);
     }
 
-    // Load user backend script — try embedded first, then filesystem
+    // Load user backend script — try embedded first, then filesystem.
+    // slot->script_url is the canonical URL form ("/_workers/backend.mjs").
     char* code = NULL;
     long code_len = 0;
 
     extern int zapp_build_use_embedded_assets(void);
     if (zapp_build_use_embedded_assets()) {
-        #ifdef ZAPP_EMBEDDED_ASSET_DEFINED
         extern ZappEmbeddedAsset zapp_embedded_assets[];
         extern int zapp_embedded_assets_count;
-        const char* lookup = "/.zapp/workers/backend.mjs";
         for (int ai = 0; ai < zapp_embedded_assets_count; ai++) {
-            if (strcmp(zapp_embedded_assets[ai].path, lookup) == 0) {
+            if (strcmp(zapp_embedded_assets[ai].path, slot->script_url) == 0) {
                 if (zapp_embedded_assets[ai].is_brotli && zapp_embedded_assets[ai].uncompressed_len > 0) {
-                    #include <compression.h>
                     code = (char*)malloc(zapp_embedded_assets[ai].uncompressed_len + 1);
                     code_len = compression_decode_buffer(
                         (uint8_t*)code, zapp_embedded_assets[ai].uncompressed_len,
@@ -574,18 +667,20 @@ static void* txiki_backend_thread(void* arg) {
                     memcpy(code, zapp_embedded_assets[ai].data, code_len);
                     code[code_len] = '\0';
                 }
-                fprintf(stderr, "[zapp] txiki backend loaded from embedded\n");
+                fprintf(stderr, "[zapp] txiki backend loaded from embedded: %s\n", slot->script_url);
                 break;
             }
         }
-        #endif
     }
 
     if (!code) {
+        // Dev: Vite plugin writes workers to .zapp/workers/<basename>
         char cwd[1024];
         char script_path[1280];
+        const char* basename = strrchr(slot->script_url, '/');
+        basename = basename ? basename + 1 : slot->script_url;
         if (getcwd(cwd, sizeof(cwd))) {
-            snprintf(script_path, sizeof(script_path), "%s/%s", cwd, slot->script_url);
+            snprintf(script_path, sizeof(script_path), "%s/.zapp/workers/%s", cwd, basename);
         } else {
             strncpy(script_path, slot->script_url, sizeof(script_path) - 1);
         }
@@ -607,7 +702,8 @@ static void* txiki_backend_thread(void* arg) {
     }
 
     if (code) {
-        JSValue result = JS_Eval(ctx, code, code_len, "backend.mjs", JS_EVAL_TYPE_GLOBAL);
+        // Module mode for top-level await — see worker thread for rationale.
+        JSValue result = JS_Eval(ctx, code, code_len, "backend.mjs", JS_EVAL_TYPE_MODULE);
         if (JS_IsException(result)) {
             JSValue exc = JS_GetException(ctx);
             const char* err = JS_ToCString(ctx, exc);
@@ -621,13 +717,14 @@ static void* txiki_backend_thread(void* arg) {
         // Run event loop — handles fetch, WebSocket, timers, AND our async eval messages
         TJS_Run(rt);
     } else {
-        fprintf(stderr, "[zapp] txiki backend script not found: %s\n", script_path);
+        fprintf(stderr, "[zapp] txiki backend script not found: %s\n", slot->script_url);
     }
 
     // Cleanup
     if (slot->async_initialized) {
         uv_close((uv_handle_t*)&slot->async, NULL);
     }
+    txiki_bridge_cache_release(ctx);
     TJS_FreeRuntime(rt);
     slot->runtime = NULL;
     slot->ctx = NULL;

@@ -4,6 +4,17 @@ import { Services } from "@zappdev/runtime";
 import "@zappdev/runtime/worker-globals";
 
 console.log("[worker] started");
+import { Surreal } from "surrealdb";
+
+const db = new Surreal();
+
+// Open a connection and authenticate
+await db.connect("wss://mystic-ocean-06eev24ec5o75cqi0ecpgm5vr4.aws-euw1.surreal.cloud", {
+	namespace: "okapi",
+	database: "stats-dev",
+});
+
+console.log("[worker] surreal connected ", db.status);
 
 // Channel API — typed message routing
 receive("ping", (data) => {

@@ -175,24 +175,43 @@ export function zappWorkers(): Plugin {
       return modified ? { code: result, map: null } : null;
     },
 
-    // Dev: serve workers from middleware
-    configureServer(server: ViteDevServer) {
+    // Dev: bundle workers eagerly so they exist on disk before the native
+    // binary launches. The backend worker is loaded directly by native code
+    // and never goes through HTTP, so a lazy-on-request middleware would never
+    // bundle it. Eager bundling also lets native fall back to filesystem.
+    //
+    // configureServer runs before buildStart, so we re-discover workers here
+    // (buildStart's results aren't yet available).
+    async configureServer(server: ViteDevServer) {
       const devOutDir = path.join(root, ".zapp", "workers");
+      await mkdir(devOutDir, { recursive: true });
 
+      workers = await discoverWorkers(srcDir);
+      const backendPath = path.join(srcDir, "backend.ts");
+      if (existsSync(backendPath)) {
+        backendEntry = {
+          specifier: "./backend.ts",
+          sourcePath: backendPath,
+          outputName: "backend.mjs",
+          outputUrl: "/_workers/backend.mjs",
+        };
+      }
+
+      const allEntries = [...workers];
+      if (backendEntry) allEntries.push(backendEntry);
+
+      for (const entry of allEntries) {
+        const ok = await bundleWorker(entry, devOutDir, aliases);
+        if (ok) console.log(`[zapp] dev-bundled worker: ${entry.outputName}`);
+      }
+
+      // Still expose middleware so WebView fetch of /_workers/<name>.mjs works
+      // (e.g. native engines that pull via dev URL like jsc.m).
       server.middlewares.use(async (req, res, next) => {
         if (!req.url?.startsWith("/_workers/")) return next();
 
         const fileName = req.url.slice("/_workers/".length);
         const filePath = path.join(devOutDir, fileName);
-
-        // Bundle on-demand if not cached
-        if (!existsSync(filePath)) {
-          const entry = [...workers, backendEntry].find(w => w?.outputName === fileName);
-          if (entry) {
-            await mkdir(devOutDir, { recursive: true });
-            await bundleWorker(entry, devOutDir, aliases);
-          }
-        }
 
         if (existsSync(filePath)) {
           const content = await readFile(filePath, "utf-8");

@@ -3,8 +3,8 @@
 
 //> macos: define: apple
 //> windows: define: windows
-// //> macos: define: ZAPP_WORKER_ENGINE_TXIKI
-//> macos: define: ZAPP_WORKER_ENGINE_JSC
+//> macos: define: ZAPP_WORKER_ENGINE_TXIKI
+// //> macos: define: ZAPP_WORKER_ENGINE_JSC
 
 //> macos: framework: Cocoa
 //> macos: framework: WebKit

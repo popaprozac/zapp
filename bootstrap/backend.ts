@@ -89,7 +89,12 @@
       return off;
     },
     emit(name: string, payload?: Record<string, unknown>) {
-      // Backend emit — could forward to native or no-op
+      // Broadcast to every webview via the native dispatchEventToAll bridge.
+      // Each webview's bridge._onEvent picks it up and fans out to listeners
+      // registered with Events.on(name, ...).
+      if (typeof bridge.dispatchEventToAll === "function") {
+        bridge.dispatchEventToAll(name, payload ?? {});
+      }
     },
     invoke(method: string, args?: Record<string, unknown>) {
       // Use host object for sync service invocation

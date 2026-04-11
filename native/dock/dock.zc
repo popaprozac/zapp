@@ -1,0 +1,58 @@
+// Dock — native dock/taskbar features.
+// Badge, icon visibility, bounce, custom icon.
+//
+// Usage:
+//   app.dock.set_badge("5");
+//   app.dock.bounce(0);  // informational
+//   app.dock.hide_icon();
+
+@cfg(apple)
+import "../platform/darwin/dock.h" as darwin_dock;
+
+// Show the app icon in the dock.
+@cfg(apple)
+fn dock_show_icon() -> void { darwin_dock::darwin_dock_show_icon(); }
+
+// Hide the app icon from the dock.
+@cfg(apple)
+fn dock_hide_icon() -> void { darwin_dock::darwin_dock_hide_icon(); }
+
+// Set a text badge on the dock icon (e.g. "5", "●", "new").
+@cfg(apple)
+fn dock_set_badge(label: string) -> void { darwin_dock::darwin_dock_set_badge(label); }
+
+// Remove the badge from the dock icon.
+@cfg(apple)
+fn dock_remove_badge() -> void { darwin_dock::darwin_dock_remove_badge(); }
+
+// Get the current badge label.
+@cfg(apple)
+fn dock_get_badge() -> string { return darwin_dock::darwin_dock_get_badge(); }
+
+// Bounce the dock icon. type: 0 = informational (once), 1 = critical (until activated).
+@cfg(apple)
+fn dock_bounce(bounce_type: int) -> void { darwin_dock::darwin_dock_bounce(bounce_type); }
+
+// Set a custom dock icon from a file path.
+@cfg(apple)
+fn dock_set_icon(path: string) -> void { darwin_dock::darwin_dock_set_icon(path); }
+
+// Reset the dock icon to the app bundle default.
+@cfg(apple)
+fn dock_reset_icon() -> void { darwin_dock::darwin_dock_reset_icon(); }
+
+// --- Manager (namespaced via app.dock) ---
+
+struct DockManager {}
+
+impl DockManager {
+    fn new() -> Self { return DockManager{}; }
+    fn show_icon(self) -> void { dock_show_icon(); }
+    fn hide_icon(self) -> void { dock_hide_icon(); }
+    fn set_badge(self, label: string) -> void { dock_set_badge(label); }
+    fn remove_badge(self) -> void { dock_remove_badge(); }
+    fn get_badge(self) -> string { return dock_get_badge(); }
+    fn bounce(self, bounce_type: int) -> void { dock_bounce(bounce_type); }
+    fn set_icon(self, path: string) -> void { dock_set_icon(path); }
+    fn reset_icon(self) -> void { dock_reset_icon(); }
+}

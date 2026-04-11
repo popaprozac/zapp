@@ -3,6 +3,15 @@
 
 import { App, AppEvent, Events, Notification, Window, WindowEvent } from "@zappdev/runtime";
 
+// Backend-owned state, broadcast to every open window every 2s.
+// Demonstrates the canonical pattern: backend holds authoritative state,
+// pushes deltas to all webviews, no per-window polling needed.
+let counter = 0;
+setInterval(() => {
+  counter++;
+  Events.emit("counter:tick", { value: counter, ts: Date.now() });
+}, 2000);
+
 App.on(AppEvent.STARTED, () => {
   console.log("[backend] app started");
 });

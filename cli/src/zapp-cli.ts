@@ -82,6 +82,22 @@ async function runDev(root: string) {
   await Bun.write(assetsFile, stubAssets);
 
   // 3. Start Vite dev server on a fixed port
+  // Detect a stale process holding the port — usually a Vite from a previous
+  // crashed dev run. With --strictPort our new Vite would die immediately
+  // and waitForPort would succeed against the *old* process, masking the failure.
+  if (process.platform !== "win32") {
+    const lsof = Bun.spawnSync(["lsof", "-ti", `:${port}`], { stdout: "pipe", stderr: "ignore" });
+    const pids = lsof.stdout.toString().trim().split("\n").filter(Boolean);
+    if (pids.length > 0) {
+      process.stderr.write(
+        `[zapp] port ${port} is already in use (pid ${pids.join(", ")}).\n` +
+        `  Likely a stale Vite from a previous dev run. Run:\n` +
+        `    kill ${pids.join(" ")}\n`
+      );
+      process.exit(1);
+    }
+  }
+
   process.stdout.write("[zapp] starting vite dev server...\n");
   const viteProc = Bun.spawn(["bunx", "vite", "--port", String(port), "--strictPort"], {
     cwd: root,
@@ -89,9 +105,13 @@ async function runDev(root: string) {
     stderr: "inherit",
   });
 
-  // Wait for Vite to be ready
-  const ready = await waitForPort(port);
-  if (!ready) {
+  // Wait for Vite to be ready — but also fail fast if the spawned process dies
+  // (e.g. plugin error during startup).
+  const ready = await Promise.race([
+    waitForPort(port),
+    viteProc.exited.then(() => "vite-died" as const),
+  ]);
+  if (ready !== true) {
     process.stderr.write(`[zapp] vite dev server failed to start on port ${port}\n`);
     try { viteProc.kill(); } catch {}
     process.exit(1);

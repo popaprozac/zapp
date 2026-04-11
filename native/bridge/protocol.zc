@@ -28,15 +28,34 @@ def MsgType = MessageTypes{
 };
 
 // --- Parsed message ---
+//
+// Ownership model:
+// - `root` owns the entire parsed JSON tree. BridgeMessage's Drop frees it.
+// - `method`, `args` are *borrowed* pointers into `root`. They are valid for
+//   the lifetime of the BridgeMessage and must not outlive it.
+// - `payload` is borrowed from the caller's input buffer, which outlives the
+//   router call.
 
 struct BridgeMessage {
     msg_type: int;
     request_id: int;
-    method: string;
-    payload: string;    // full raw JSON (for handlers that need it)
-    args: JsonValue;    // pre-parsed "a" field (eliminates double-parse)
+    method: string;      // borrowed from root
+    payload: string;     // borrowed from raw input
+    args: JsonValue*;    // borrowed from root (pre-extracted "a" field)
     has_args: bool;
     valid: bool;
+    root: JsonValue*;    // OWNED — the full parsed tree
+}
+
+impl Drop for BridgeMessage {
+    fn drop(self) {
+        if self.root != NULL {
+            raw {
+                JsonValue__Drop_glue(self->root);
+                free(self->root);
+            }
+        }
+    }
 }
 
 // Parse a JSON bridge message.
@@ -46,14 +65,18 @@ fn bridge_parse(raw: string) -> BridgeMessage {
         request_id: 0,
         method: "",
         payload: "",
-        args: JsonValue::null(),
+        args: NULL,
         has_args: false,
         valid: false,
+        root: NULL,
     };
 
     let parse_result = JsonValue::parse(raw);
     if parse_result.is_err() { return msg; }
     let json = parse_result.unwrap();
+
+    // Own the whole tree — BridgeMessage's Drop will free it.
+    msg.root = json;
 
     // Required: t (type)
     let t_opt = json.get_int("t");
@@ -64,19 +87,18 @@ fn bridge_parse(raw: string) -> BridgeMessage {
     let id_opt = json.get_int("id");
     if id_opt.is_some() { msg.request_id = id_opt.unwrap(); }
 
-    // Optional: m (method name)
+    // Optional: m (method name) — borrowed from root
     let m_opt = json.get_string("m");
     if m_opt.is_some() { msg.method = m_opt.unwrap(); }
 
-    // Pre-extract "a" (args) to eliminate double-parse in handlers
+    // Pre-extract "a" (args) — borrowed pointer into root, no copy.
     let a_opt = json.get("a");
     if a_opt.is_some() {
-        let a_ptr = a_opt.unwrap();
-        raw { msg.args = *a_ptr; }
+        msg.args = a_opt.unwrap();
         msg.has_args = true;
     }
 
-    // Keep full raw JSON for handlers that need the complete message (dialogs, menus)
+    // Full raw JSON for handlers that need the complete message (dialogs, menus)
     msg.payload = raw;
 
     msg.valid = true;

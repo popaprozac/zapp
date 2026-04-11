@@ -75,12 +75,21 @@ await Notification.show({ title: "Done!", body: "File saved" });
 
 // Sync (cross-context wait/notify)
 const result = await Sync.wait("data-ready", 5000); // "notified" | "timed-out"
-Sync.notify("data-ready"); // wake waiters
+Sync.notify("data-ready");      // wake one waiter (default count = 1)
+Sync.notifyAll("data-ready");   // wake every waiter — broadcast
 
 // Workers
 const w = new Worker("./worker.ts");
 w.send("compute", { n: 42 });
 w.receive("result", (data) => console.log(data));
+
+// Backend → all webviews state push (src/backend.ts is the convention)
+// In src/backend.ts:
+//   let count = 0;
+//   setInterval(() => Events.emit("counter:tick", { value: ++count }), 2000);
+// In any webview:
+//   Events.on("counter:tick", ({ value }) => updateUI(value));
+// Every open window receives the broadcast simultaneously.
 
 // Open URL in system browser
 App.openExternal("https://example.com");

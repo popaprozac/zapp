@@ -10,7 +10,9 @@ import {
   Menu,
   ContextMenu,
   Notification,
-  Worker
+  Worker,
+  Dock,
+  Sync
 } from "@zappdev/runtime";
 import { greet } from "./zapp";
 
@@ -75,6 +77,16 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
         <button id="btn-size">Resize 900x700</button>
         <button id="btn-minimize">Minimize</button>
         <button id="btn-guard">Enable Close Guard</button>
+        <button id="btn-new-window">New Window</button>
+        <button id="btn-new-window-small">New Window (small)</button>
+      </section>
+
+      <section>
+        <h2>Sync (cross-context wait/notify)</h2>
+        <button id="btn-sync-wait">Wait for "demo" (10s)</button>
+        <button id="btn-sync-notify">Notify "demo" (one)</button>
+        <button id="btn-sync-notify-all">Notify "demo" (all)</button>
+        <div id="sync-result" class="result"></div>
       </section>
 
       <section>
@@ -106,9 +118,27 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
       </section>
 
       <section>
+        <h2>Dock</h2>
+        <button id="btn-dock-badge">Badge "3"</button>
+        <button id="btn-dock-clear">Clear Badge</button>
+        <button id="btn-dock-bounce">Bounce</button>
+        <button id="btn-dock-hide">Hide Icon</button>
+        <button id="btn-dock-show">Show Icon</button>
+      </section>
+
+      <section>
         <h2>Events</h2>
         <button id="btn-emit">Emit Custom Event</button>
         <div id="event-log" class="result"></div>
+      </section>
+
+      <section>
+        <h2>Backend State</h2>
+        <p style="font-size: 12px; opacity: 0.7; margin: 0 0 8px 0;">
+          Backend ticks every 2s. Open multiple windows — they all update in lockstep
+          from backend-owned state, no polling.
+        </p>
+        <div id="counter-display" class="result">Counter: (waiting…)</div>
       </section>
 
       <section>
@@ -166,6 +196,63 @@ $("btn-size").addEventListener("click", () => {
 $("btn-minimize").addEventListener("click", () => {
   win.minimize();
   log("Minimized");
+});
+
+$("btn-new-window").addEventListener("click", async () => {
+  try {
+    const child = await Window.create({
+      title: "Zapp Child Window",
+      width: 800,
+      height: 600,
+    });
+    log(`New window: ${child.id}`);
+  } catch (e) {
+    log(`New window failed: ${e}`);
+  }
+});
+
+$("btn-new-window-small").addEventListener("click", async () => {
+  try {
+    const child = await Window.create({
+      title: "Notifier",
+      width: 400,
+      height: 300,
+    });
+    log(`New small window: ${child.id}`);
+  } catch (e) {
+    log(`New window failed: ${e}`);
+  }
+});
+
+// --- Sync (cross-context wait/notify) ---
+//
+// Sync is a one-shot rendezvous primitive — like a condition variable. The
+// payoff is *cross-context*: open a second window with "New Window", click
+// "Wait" here, then click "Notify" in the other window. The wait resolves.
+//
+// (Within a single webview you'd just use a Promise — Sync's value is that
+// it works across windows, workers, and the backend through native.)
+
+$("btn-sync-wait").addEventListener("click", async () => {
+  $("sync-result").textContent = `Waiting for "demo"...`;
+  log(`Sync.wait("demo", 10000) started`);
+  const result = await Sync.wait("demo", 10000);
+  $("sync-result").textContent = `Result: ${result}`;
+  log(`Sync.wait("demo") → ${result}`);
+});
+
+$("btn-sync-notify").addEventListener("click", () => {
+  Sync.notify("demo");
+  $("sync-result").textContent = `Notified "demo" (one)`;
+  log(`Sync.notify("demo") — wakes one waiter (FIFO)`);
+});
+
+// Open ≥2 windows, click "Wait" in each, then click this in any one of them.
+// All waiting windows resolve simultaneously — broadcast.
+$("btn-sync-notify-all").addEventListener("click", () => {
+  Sync.notifyAll("demo");
+  $("sync-result").textContent = `Notified "demo" (all)`;
+  log(`Sync.notifyAll("demo") — wakes every waiter`);
 });
 
 let guardEnabled = false;
@@ -353,6 +440,35 @@ $("btn-worker-terminate").addEventListener("click", () => {
   log("Worker terminated");
 });
 
+// --- Dock ---
+
+$("btn-dock-badge").addEventListener("click", () => {
+  Dock.setBadge("3");
+  log("Dock badge set to 3");
+});
+
+$("btn-dock-clear").addEventListener("click", () => {
+  Dock.removeBadge();
+  log("Dock badge cleared");
+});
+
+$("btn-dock-bounce").addEventListener("click", () => {
+  log("Dock will bounce in 3s — switch to another app!");
+  setTimeout(() => {
+    Dock.bounce("critical");
+  }, 3000);
+});
+
+$("btn-dock-hide").addEventListener("click", () => {
+  Dock.hideIcon();
+  log("Dock icon hidden");
+});
+
+$("btn-dock-show").addEventListener("click", () => {
+  Dock.showIcon();
+  log("Dock icon shown");
+});
+
 // --- Events ---
 
 Events.on("custom:ping", (payload) => {
@@ -363,6 +479,18 @@ Events.on("custom:ping", (payload) => {
 $("btn-emit").addEventListener("click", () => {
   Events.emit("custom:ping", { time: Date.now() });
   log("Emitted custom:ping");
+});
+
+// --- Backend state push ---
+//
+// Backend (src/backend.ts) owns a counter and emits "counter:tick" every 2s
+// via Events.emit, which broadcasts to every webview through the native
+// dispatchEventToAll bridge. Open multiple windows — they all stay in sync
+// without any per-window polling or fetching.
+
+Events.on("counter:tick", (data: any) => {
+  $("counter-display").textContent =
+    `Counter: ${data.value}  (ts: ${new Date(data.ts).toLocaleTimeString()})`;
 });
 
 // --- Window Events ---

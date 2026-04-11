@@ -104,11 +104,29 @@ static void jsc_setup_bridge(JSContext* ctx, NSString* workerId) {
         return [JSValue valueWithObject:resultStr inContext:[JSContext currentContext]];
     };
 
-    // emitToHost — fire-and-forget event to native
-    bridge[@"emitToHost"] = ^(NSString* name, JSValue* payload) {
-        (void)name; (void)payload;
-        // TODO: dispatch to event system
+    // dispatchEventToAll — broadcast a fire-and-forget event to every webview.
+    // The backend uses this to push state changes to all open windows; workers
+    // can use it the same way. Native dispatch_event_to_all builds the JS that
+    // every webview's bridge._onEvent listener picks up.
+    extern void dispatch_event_to_all(const char* event_name, const char* payload);
+    JSValue* (^broadcast)(NSString*, JSValue*) = ^JSValue*(NSString* name, JSValue* payload) {
+        if (!name || name.length == 0) return [JSValue valueWithUndefinedInContext:[JSContext currentContext]];
+        NSString* payloadJson = @"{}";
+        if (payload && ![payload isUndefined] && ![payload isNull]) {
+            NSData* d = [NSJSONSerialization dataWithJSONObject:[payload toObject] options:0 error:nil];
+            if (d) payloadJson = [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding];
+        }
+        const char* nameC = strdup([name UTF8String]);
+        const char* jsonC = strdup([payloadJson UTF8String]);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            dispatch_event_to_all(nameC, jsonC);
+            free((void*)nameC);
+            free((void*)jsonC);
+        });
+        return [JSValue valueWithUndefinedInContext:[JSContext currentContext]];
     };
+    bridge[@"dispatchEventToAll"] = broadcast;
+    bridge[@"emitToHost"] = broadcast;  // legacy alias — workers use this name
 
     // postToWebview — send message back to the owner WebView
     bridge[@"postToWebview"] = ^(JSValue* data) {
@@ -298,7 +316,15 @@ bool jsc_worker_create(const char* script_url, const char* owner_id, const char*
         }
 
         if (scriptContent) {
-            [ctx evaluateScript:scriptContent withSourceURL:[NSURL URLWithString:scriptUrl]];
+            // JavaScriptCore's public Cocoa API only supports script-mode eval,
+            // which forbids top-level await. Wrap user code in an async IIFE so
+            // any top-level await becomes a normal await inside an async fn.
+            // Bundled workers have no live module imports/exports, so wrapping
+            // is semantically safe — top-level vars become locals to the IIFE.
+            NSString* wrapped = [NSString stringWithFormat:
+                @"(async () => {\n%@\n})().catch(e => { console.error('[worker error]', e && e.stack ? e.stack : e); });",
+                scriptContent];
+            [ctx evaluateScript:wrapped withSourceURL:[NSURL URLWithString:scriptUrl]];
         } else {
             NSLog(@"[zapp] worker script not found: %@", scriptUrl);
         }
@@ -499,17 +525,17 @@ bool jsc_backend_create(const char* script_path) {
             [ctx evaluateScript:[NSString stringWithUTF8String:bootstrap]];
         }
 
-        // Load user backend script — try embedded first, then filesystem
+        // Load user backend script — try embedded first, then filesystem.
+        // scriptPath is the canonical URL form ("/_workers/backend.mjs").
         NSString* script = nil;
 
         extern int zapp_build_use_embedded_assets(void);
         extern int zapp_embedded_assets_count;
         extern ZappEmbeddedAsset zapp_embedded_assets[];
         if (zapp_build_use_embedded_assets() && zapp_embedded_assets_count > 0) {
-            NSString* lookup = @"/_workers/backend.mjs";
             for (int ai = 0; ai < zapp_embedded_assets_count; ai++) {
                 NSString* assetPath = [NSString stringWithUTF8String:zapp_embedded_assets[ai].path];
-                if ([assetPath isEqualToString:lookup]) {
+                if ([assetPath isEqualToString:scriptPath]) {
                     if (zapp_embedded_assets[ai].is_brotli && zapp_embedded_assets[ai].uncompressed_len > 0) {
                         uint8_t* out = malloc(zapp_embedded_assets[ai].uncompressed_len + 1);
                         size_t decoded = compression_decode_buffer(
@@ -523,16 +549,19 @@ bool jsc_backend_create(const char* script_path) {
                         script = [[NSString alloc] initWithBytes:zapp_embedded_assets[ai].data
                             length:zapp_embedded_assets[ai].len encoding:NSUTF8StringEncoding];
                     }
-                    NSLog(@"[zapp] backend loaded from embedded");
+                    NSLog(@"[zapp] backend loaded from embedded: %@", scriptPath);
                     break;
                 }
             }
         }
 
         if (!script) {
+            // Dev: Vite plugin writes workers to .zapp/workers/<basename>
             char cwd[1024];
             NSString* base = getcwd(cwd, sizeof(cwd)) ? [NSString stringWithUTF8String:cwd] : @".";
-            NSString* fullPath = [base stringByAppendingPathComponent:scriptPath];
+            NSString* basename = [scriptPath lastPathComponent];
+            NSString* fullPath = [[base stringByAppendingPathComponent:@".zapp/workers"]
+                stringByAppendingPathComponent:basename];
             NSError* err = nil;
             script = [NSString stringWithContentsOfFile:fullPath encoding:NSUTF8StringEncoding error:&err];
             if (script) NSLog(@"[zapp] backend worker started: %@", fullPath);
@@ -540,7 +569,12 @@ bool jsc_backend_create(const char* script_path) {
         }
 
         if (script) {
-            [ctx evaluateScript:script withSourceURL:[NSURL URLWithString:@"backend.mjs"]];
+            // Async IIFE wrapper enables top-level await — see jsc_worker_create
+            // for rationale.
+            NSString* wrapped = [NSString stringWithFormat:
+                @"(async () => {\n%@\n})().catch(e => { console.error('[backend error]', e && e.stack ? e.stack : e); });",
+                script];
+            [ctx evaluateScript:wrapped withSourceURL:[NSURL URLWithString:@"backend.mjs"]];
         }
     });
 

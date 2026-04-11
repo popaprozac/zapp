@@ -51,6 +51,10 @@ export const Sync = {
 
   /**
    * Wake up to `count` waiters blocked on the given key.
+   *
+   * Defaults to **1** — same semantics as `pthread_cond_signal` /
+   * `Object.notify()`. Use {@link Sync.notifyAll} to wake every current waiter.
+   *
    * @param key - Sync key
    * @param count - Number of waiters to wake (default 1)
    */
@@ -59,5 +63,16 @@ export const Sync = {
     if (!bridge?.syncNotify) return;
     if (typeof key !== "string" || key.trim().length === 0) return;
     bridge.syncNotify(key.trim(), Math.max(1, Math.min(count, 65535)));
+  },
+
+  /**
+   * Wake every waiter currently blocked on the given key — broadcast.
+   * Equivalent to `pthread_cond_broadcast` / `Object.notifyAll()`.
+   */
+  notifyAll(key: string): void {
+    const bridge = getBridge() as any;
+    if (!bridge?.syncNotify) return;
+    if (typeof key !== "string" || key.trim().length === 0) return;
+    bridge.syncNotify(key.trim(), 65535);
   },
 };

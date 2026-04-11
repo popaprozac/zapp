@@ -61,7 +61,14 @@ static void zapp_sync_handle_wait(NSDictionary* args) {
     NSNumber* timeoutMs = args[@"timeoutMs"];
     NSString* targetWorkerId = args[@"targetWorkerId"] ?: @"";
 
-    if (!requestId || !key || key.length == 0) return;
+    if (!requestId || !key || key.length == 0) {
+        NSLog(@"[zapp:sync] wait rejected — missing id (%@) or key (%@)",
+            requestId ?: @"<nil>", key ?: @"<nil>");
+        return;
+    }
+    NSLog(@"[zapp:sync] wait registered key=%@ id=%@ timeout=%@ target=%@",
+        key, requestId, timeoutMs ?: @"none",
+        targetWorkerId.length > 0 ? targetWorkerId : @"webview");
 
     zapp_sync_ensure_init();
 
@@ -91,6 +98,8 @@ static void zapp_sync_handle_wait(NSDictionary* args) {
                 dispatch_get_main_queue(), ^{
                     NSDictionary* w = zapp_sync_waits[ridCopy];
                     if (w && ![w[@"dispatched"] boolValue]) {
+                        NSLog(@"[zapp:sync] wait timed-out key=%@ id=%@",
+                            w[@"key"], ridCopy);
                         zapp_sync_remove_waiter(ridCopy);
                         zapp_sync_dispatch_result(ridCopy, YES, @"timed-out",
                             w[@"targetWorkerId"]);
@@ -106,12 +115,20 @@ static void zapp_sync_handle_notify(NSDictionary* args) {
     int count = countNum ? [countNum intValue] : 1;
     if (count < 1) count = 1;
 
-    if (!key || key.length == 0) return;
+    if (!key || key.length == 0) {
+        NSLog(@"[zapp:sync] notify rejected — missing key");
+        return;
+    }
 
     zapp_sync_ensure_init();
 
     NSMutableArray* queue = zapp_sync_queues[key];
-    if (!queue || queue.count == 0) return;
+    if (!queue || queue.count == 0) {
+        NSLog(@"[zapp:sync] notify key=%@ — no waiters", key);
+        return;
+    }
+    NSLog(@"[zapp:sync] notify key=%@ count=%d waiters=%lu",
+        key, count, (unsigned long)queue.count);
 
     int delivered = 0;
     while (queue.count > 0 && delivered < count) {
@@ -138,6 +155,7 @@ static void zapp_sync_handle_notify(NSDictionary* args) {
     }
 
     if (queue.count == 0) [zapp_sync_queues removeObjectForKey:key];
+    NSLog(@"[zapp:sync] notify key=%@ delivered=%d", key, delivered);
 }
 
 static void zapp_sync_handle_cancel(NSDictionary* args) {
@@ -150,6 +168,7 @@ static void zapp_sync_handle_cancel(NSDictionary* args) {
     if (!wait || [wait[@"dispatched"] boolValue]) return;
 
     NSString* targetWorkerId = wait[@"targetWorkerId"];
+    NSLog(@"[zapp:sync] cancel key=%@ id=%@", wait[@"key"], requestId);
     zapp_sync_remove_waiter(requestId);
     zapp_sync_dispatch_result(requestId, YES, @"cancelled", targetWorkerId);
 }
@@ -162,8 +181,19 @@ void darwin_sync_handle(const char* action, const char* payload_json) {
     NSString* act = [NSString stringWithUTF8String:action];
     NSData* data = [[NSString stringWithUTF8String:payload_json] dataUsingEncoding:NSUTF8StringEncoding];
     if (!data) return;
-    NSDictionary* args = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-    if (![args isKindOfClass:[NSDictionary class]]) return;
+    NSDictionary* parsed = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    if (![parsed isKindOfClass:[NSDictionary class]]) return;
+
+    // Two callers package payloads differently:
+    //   - Workers (jsc.m / txiki.c) pass a flat dict: {id, key, targetWorkerId}
+    //   - Webviews route through the bridge as {t:6, m:"wait", a:{id, key, ...}}
+    //     and the router forwards the *full* message as payload_json.
+    // Unwrap the nested "a" field when present so both shapes work.
+    NSDictionary* args = parsed;
+    id wrapped = parsed[@"a"];
+    if ([wrapped isKindOfClass:[NSDictionary class]]) {
+        args = (NSDictionary*)wrapped;
+    }
 
     if ([act isEqualToString:@"wait"]) {
         zapp_sync_handle_wait(args);

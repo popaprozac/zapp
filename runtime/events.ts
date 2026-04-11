@@ -112,7 +112,14 @@ export const Events = {
   },
 
   /**
-   * Emit a fire-and-forget event. All listeners (JS + native) receive it.
+   * Emit a fire-and-forget event.
+   *
+   * - From a **webview**: dispatched locally to listeners in the same window
+   *   (and to native listeners). Does not cross window boundaries.
+   * - From the **backend** worker: broadcast to *every* open webview's
+   *   listeners. This is the canonical pattern for pushing backend-owned
+   *   state to all windows without per-window polling.
+   * - From a **regular worker**: same as backend — broadcast to every webview.
    */
   emit(name: string, payload?: Record<string, unknown>): void {
     getBridge().emit(name, payload);

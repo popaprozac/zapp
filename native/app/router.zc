@@ -37,17 +37,22 @@ fn router_handle_message(app: App*, msg: string, window_id: int) -> void {
         let is_window_create: bool = false;
         is_window_create = parsed.method == "__window:create";
         if is_window_create {
-            // Create a new window from the frontend
+            // Create a new window from the frontend.
+            // Note: we deliberately do NOT bind `parsed.args` to a local. A
+            // `let args = parsed.args` move would invoke JsonValue's drop glue
+            // at the end of the inner block, freeing the JSON tree before
+            // app.window.create reads opts.title — leaving a dangling pointer.
+            // Using parsed.args directly keeps it alive until parsed itself
+            // drops at function return, which is *after* the create call.
             let opts = WindowOptions::create("Zapp");
             if parsed.has_args {
-                let args = parsed.args;
-                let title_opt = args.get_string("title");
+                let title_opt = parsed.args.get_string("title");
                 if title_opt.is_some() { opts.title = title_opt.unwrap(); }
-                let url_opt = args.get_string("url");
+                let url_opt = parsed.args.get_string("url");
                 if url_opt.is_some() { opts.url = url_opt.unwrap(); }
-                let w_opt = args.get_int("width");
+                let w_opt = parsed.args.get_int("width");
                 if w_opt.is_some() { opts.width = w_opt.unwrap(); }
-                let h_opt = args.get_int("height");
+                let h_opt = parsed.args.get_int("height");
                 if h_opt.is_some() { opts.height = h_opt.unwrap(); }
             }
             opts.visible = true;
@@ -81,6 +86,8 @@ fn router_handle_message(app: App*, msg: string, window_id: int) -> void {
     }
 
     if parsed.msg_type == MsgType.WINDOW_ACTION {
+        // parsed.args is already a JsonValue* (borrowed pointer into parsed.root).
+        // Pass it directly — no copy, no move, no drop in the handler.
         router_handle_window_action(app, parsed.method, parsed.payload, window_id, parsed.args, parsed.has_args);
         return;
     }
@@ -125,7 +132,7 @@ fn event_name_to_id(name: string) -> int {
     return -1;
 }
 
-fn router_handle_window_action(app: App*, action: string, payload: string, window_id: int, pre_args: JsonValue, has_pre_args: bool) -> void {
+fn router_handle_window_action(app: App*, action: string, payload: string, window_id: int, pre_args: JsonValue*, has_pre_args: bool) -> void {
     // Handle bridge ready signal
     let is_ready = action == "ready";
     if is_ready {
@@ -168,9 +175,10 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
         return;
     }
 
-    // Use pre-parsed args (eliminates double JSON parse)
+    // Use pre-parsed args (eliminates double JSON parse).
+    // pre_args is borrowed — owned by caller's `parsed`. Method calls compile
+    // to JsonValue__get_string(pre_args, ...) — pointer receiver, no copy.
     if !has_pre_args { return; }
-    let args = pre_args;
 
     // Window operations — get the window handle from the manager
     let win = app.window.get(window_id);
@@ -192,7 +200,7 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
     let is_open_external: bool = false;
     is_open_external = action == "openExternal";
     if is_open_external {
-        let url_opt = args.get_string("url");
+        let url_opt = pre_args.get_string("url");
         if url_opt.is_some() {
             raw {
                 #ifdef __APPLE__
@@ -211,7 +219,7 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
     let is_set_drag: bool = false;
     is_set_drag = action == "setDragRegion";
     if is_set_drag {
-        let drag_opt = args.get_bool("drag");
+        let drag_opt = pre_args.get_bool("drag");
         if drag_opt.is_some() {
             raw {
                 #ifdef __APPLE__
@@ -230,7 +238,7 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
     let is_set_close_guard = action == "setCloseGuard";
     let is_close = action == "close";
     if is_set_close_guard {
-        let on_opt = args.get_bool("on");
+        let on_opt = pre_args.get_bool("on");
         if on_opt.is_some() {
             raw {
                 extern void zapp_window_set_close_guard(int id, int enabled);
@@ -253,7 +261,7 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
     let is_load_url: bool = false;
     is_load_url = action == "loadUrl";
     if is_load_url {
-        let url_opt = args.get_string("url");
+        let url_opt = pre_args.get_string("url");
         if url_opt.is_some() {
             raw {
                 #ifdef __APPLE__
@@ -265,6 +273,29 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
                 #endif
             }
         }
+        return;
+    }
+
+    // Dock actions
+    if action == "dock:showIcon" { dock_show_icon(); return; }
+    if action == "dock:hideIcon" { dock_hide_icon(); return; }
+    if action == "dock:removeBadge" { dock_remove_badge(); return; }
+    if action == "dock:resetIcon" { dock_reset_icon(); return; }
+    if action == "dock:setBadge" {
+        let label_opt = pre_args.get_string("label");
+        if label_opt.is_some() { dock_set_badge(label_opt.unwrap()); }
+        return;
+    }
+    if action == "dock:bounce" {
+        let type_opt = pre_args.get_int("type");
+        let t = 0;
+        if type_opt.is_some() { t = type_opt.unwrap(); }
+        dock_bounce(t);
+        return;
+    }
+    if action == "dock:setIcon" {
+        let path_opt = pre_args.get_string("path");
+        if path_opt.is_some() { dock_set_icon(path_opt.unwrap()); }
         return;
     }
 
@@ -302,7 +333,7 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
     if is_maximize { window_maximize(win.handle); return; }
 
     if is_set_title {
-        let title_opt = args.get_string("title");
+        let title_opt = pre_args.get_string("title");
         if title_opt.is_some() {
             window_set_title(win.handle, title_opt.unwrap());
         }
@@ -310,8 +341,8 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
     }
 
     if is_set_size {
-        let w_opt = args.get_int("width");
-        let h_opt = args.get_int("height");
+        let w_opt = pre_args.get_int("width");
+        let h_opt = pre_args.get_int("height");
         if w_opt.is_some() && h_opt.is_some() {
             window_set_size(win.handle, w_opt.unwrap(), h_opt.unwrap());
         }
@@ -319,8 +350,8 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
     }
 
     if is_set_position {
-        let x_opt = args.get_int("x");
-        let y_opt = args.get_int("y");
+        let x_opt = pre_args.get_int("x");
+        let y_opt = pre_args.get_int("y");
         if x_opt.is_some() && y_opt.is_some() {
             window_set_position(win.handle, x_opt.unwrap(), y_opt.unwrap());
         }
@@ -328,7 +359,7 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
     }
 
     if is_set_fullscreen {
-        let on_opt = args.get_bool("on");
+        let on_opt = pre_args.get_bool("on");
         if on_opt.is_some() {
             window_set_fullscreen(win.handle, on_opt.unwrap());
         }
@@ -336,7 +367,7 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
     }
 
     if is_set_always_on_top {
-        let on_opt = args.get_bool("on");
+        let on_opt = pre_args.get_bool("on");
         if on_opt.is_some() {
             window_set_always_on_top(win.handle, on_opt.unwrap());
         }
@@ -346,7 +377,7 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
     // Subscribe/unsubscribe for event bitmask
     if !is_subscribe && !is_unsubscribe { return; }
 
-    let event_opt = args.get_string("event");
+    let event_opt = pre_args.get_string("event");
     if !event_opt.is_some() { return; }
     let event_name = event_opt.unwrap();
 
@@ -378,10 +409,10 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
 
 // --- Worker message handler ---
 
-fn router_handle_worker(app: App*, action: string, payload: string, window_id: int, pre_args: JsonValue, has_pre_args: bool) -> void {
+fn router_handle_worker(app: App*, action: string, payload: string, window_id: int, pre_args: JsonValue*, has_pre_args: bool) -> void {
     if !workers_enabled() { return; }
     if !has_pre_args { return; }
-    let args = pre_args;
+    // pre_args is borrowed — owned by caller's `parsed`. See window-action handler.
 
     let is_create = action == "create";
     let is_post = action == "post";
@@ -389,8 +420,8 @@ fn router_handle_worker(app: App*, action: string, payload: string, window_id: i
     let is_disconnect = action == "disconnect";
 
     if is_create {
-        let url_opt = args.get_string("scriptUrl");
-        let wid_opt = args.get_string("workerId");
+        let url_opt = pre_args.get_string("scriptUrl");
+        let wid_opt = pre_args.get_string("workerId");
         if !url_opt.is_some() || !wid_opt.is_some() { return; }
         let script_url = url_opt.unwrap();
         let worker_id = wid_opt.unwrap();
@@ -410,7 +441,7 @@ fn router_handle_worker(app: App*, action: string, payload: string, window_id: i
 
         // Check if this is a shared worker
         let is_shared: bool = false;
-        let shared_opt = args.get_bool("shared");
+        let shared_opt = pre_args.get_bool("shared");
         if shared_opt.is_some() { is_shared = shared_opt.unwrap(); }
 
         if is_shared {
@@ -446,8 +477,8 @@ fn router_handle_worker(app: App*, action: string, payload: string, window_id: i
     }
 
     if is_post {
-        let wid_opt = args.get_string("workerId");
-        let data_opt = args.get_string("data");
+        let wid_opt = pre_args.get_string("workerId");
+        let data_opt = pre_args.get_string("data");
         if !wid_opt.is_some() { return; }
         let data_json: string = "";
         if data_opt.is_some() { data_json = data_opt.unwrap(); }
@@ -456,7 +487,7 @@ fn router_handle_worker(app: App*, action: string, payload: string, window_id: i
     }
 
     if is_terminate {
-        let wid_opt = args.get_string("workerId");
+        let wid_opt = pre_args.get_string("workerId");
         if !wid_opt.is_some() { return; }
         let wid = wid_opt.unwrap();
 
@@ -479,7 +510,7 @@ fn router_handle_worker(app: App*, action: string, payload: string, window_id: i
 
     // Disconnect from a shared worker (remove owner reference, terminate if refcount=0)
     if is_disconnect {
-        let wid_opt = args.get_string("workerId");
+        let wid_opt = pre_args.get_string("workerId");
         if !wid_opt.is_some() { return; }
         let wid = wid_opt.unwrap();
 

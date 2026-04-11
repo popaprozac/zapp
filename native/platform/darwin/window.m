@@ -285,7 +285,10 @@ void* darwin_window_create(WindowOptions* opts) {
         [window setReleasedWhenClosed:NO];
 
         char* title = wopts_title(opts);
-        if (title) [window setTitle:[NSString stringWithUTF8String:title]];
+        NSString* titleStr = title ? [NSString stringWithUTF8String:title] : nil;
+        // Defensive: stringWithUTF8String returns nil for invalid UTF-8.
+        // setTitle: asserts non-nil, so fall back rather than crash.
+        [window setTitle:titleStr ?: @"Zapp"];
 
         int32_t tbs = wopts_title_bar_style_tag(opts);
         if (tbs == 1 || tbs == 2) {
@@ -350,7 +353,9 @@ void darwin_window_force_close(void* handle) {
 
 void darwin_window_set_title(void* handle, const char* title) {
     if (!title) return;
-    [(__bridge NSWindow*)handle setTitle:[NSString stringWithUTF8String:title]];
+    NSString* str = [NSString stringWithUTF8String:title];
+    if (!str) return;  // invalid UTF-8 / garbage pointer
+    [(__bridge NSWindow*)handle setTitle:str];
 }
 
 void darwin_window_set_size(void* handle, int32_t width, int32_t height) {

@@ -40,6 +40,7 @@ export function getPlatformSources(nativeDir: string): string[] {
       path.join(darwinDir, "menu.m"),
       path.join(darwinDir, "notification.m"),
       path.join(darwinDir, "sync.m"),
+      path.join(darwinDir, "dock.m"),
     ];
     // JSC worker engine (always safe — system framework)
     const jscWorker = path.join(nativeDir, "worker", "engines", "jsc.m");

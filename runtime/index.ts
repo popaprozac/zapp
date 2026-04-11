@@ -24,6 +24,7 @@ export { Menu, type MenuItemDef, type MenuHandle } from "./menu";
 export { ContextMenu, type ContextMenuOptions } from "./context-menu";
 export { Notification, type NotificationOptions, type ScheduleOptions, type PermissionStatus } from "./notification";
 export { Sync, type SyncWaitOptions } from "./sync";
+export { Dock } from "./dock";
 
 // Re-export worker globals type declarations.
 // Workers should add: import "@zappdev/runtime/worker-globals";
