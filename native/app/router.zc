@@ -4,6 +4,7 @@ import "std/json.zc";
 import "string.h" as str;
 import "../bridge/protocol.zc";
 import "../bridge/dispatch.zc";
+import "../bridge/json_builder.zc";
 import "../service/service.zc";
 import "../window/events.zc";
 // darwin_win imported via dispatch.zc → darwin/window.h
@@ -66,7 +67,7 @@ fn router_handle_message(app: App*, msg: string, window_id: int) -> void {
             return;
         }
 
-        let result = service_invoke(app, parsed.method, parsed.payload);
+        let result = service_invoke(app, parsed.method, parsed.args);
         if result.is_ok() {
             dispatch_invoke_response(window_id, parsed.request_id, true, result.unwrap());
         } else {

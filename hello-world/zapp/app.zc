@@ -12,9 +12,22 @@ fn log(msg: string) -> void {
     }
 }
 
-fn greet(_app: App*, args: string) -> string {
+fn greet(_app: App*, args: JsonValue*) -> string {
     log("service: greet called");
-    return args;
+    // Pre-parsed args — extract typed fields directly, no JSON parse needed.
+    let name: string = "stranger";
+    if args != NULL {
+        let name_opt = args.get_string("name");
+        if name_opt.is_some() { name = name_opt.unwrap(); }
+    }
+    raw {
+        // Thread-local buffer: workers call this concurrently; a plain static
+        // would race. _Thread_local gives each thread its own slot.
+        static _Thread_local char buf[256];
+        snprintf(buf, sizeof(buf), "{\"greeting\":\"hello, %s\"}", (const char*)name);
+        return buf;
+    }
+    return "";
 }
 
 fn on_ready(_id: int, _handle: void*) -> void {
@@ -85,11 +98,14 @@ fn counter_shutdown(ptr: void*) -> void {
     svc.ready = 0;
 }
 
-fn counter_query(_app: App*, _args: string) -> string {
+fn counter_query(_app: App*, _args: JsonValue*) -> string {
+    // Registered via `service.register()` which auto-serializes handler calls
+    // with a per-service mutex, so `counter_svc.count += 1` is safe across
+    // concurrent worker invocations.
     counter_svc.count += 1;
     let c = counter_svc.count;
     raw {
-        static char buf[64];
+        static _Thread_local char buf[64];
         snprintf(buf, sizeof(buf), "{\"count\":%d}", c);
         return buf;
     }

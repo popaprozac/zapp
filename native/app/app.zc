@@ -89,7 +89,9 @@ fn worker_dispatch_to_window(worker_id: string, data_json: string, owner_id: str
     if window_id < 0 { return; }
 
     raw {
-        static char wk_buf[4096];
+        // Thread-local: multiple worker threads may call this concurrently.
+        // darwin_window_eval_js now copies the buffer before queueing.
+        static _Thread_local char wk_buf[4096];
         extern int zapp_escape_into(char* dst, int dst_size, const char* src);
         char escaped_wid[128];
         char escaped_data[3072];

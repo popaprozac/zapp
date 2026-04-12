@@ -1,0 +1,18 @@
+{
+	"name": "electrobun-hello-world",
+	"version": "1.0.0",
+	"description": "A simple Electrobun app showcasing core features",
+	"scripts": {
+		"start": "electrobun run",
+		"dev": "electrobun dev",
+		"build:dev": "electrobun build",
+		"build:canary": "electrobun build --env=canary",
+		"build:stable": "electrobun build --env=stable"
+	},
+	"dependencies": {
+		"electrobun": "1.16.0"
+	},
+	"devDependencies": {
+		"@types/bun": "latest"
+	}
+}

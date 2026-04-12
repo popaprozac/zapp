@@ -1,10 +1,10 @@
 // Example worker — runs in a JSC/txiki.js context with host object access.
 
 import { Services } from "@zappdev/runtime";
+import { Surreal } from "surrealdb";
 import "@zappdev/runtime/worker-globals";
 
 console.log("[worker] started");
-import { Surreal } from "surrealdb";
 
 const db = new Surreal();
 

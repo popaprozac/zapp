@@ -41,9 +41,8 @@ fn zapp_backend_bootstrap_script() -> string { return ""; }
 
 // --- Test entry point ---
 
-fn greet_service(_app: App*, args: string) -> string {
-    // Echo args back — simplest possible service
-    return args;
+fn greet_service(_app: App*, _args: JsonValue*) -> string {
+    return "{\"greeting\":\"hello from native\"}";
 }
 
 fn on_ready(_id: int, _handle: void*) -> void {

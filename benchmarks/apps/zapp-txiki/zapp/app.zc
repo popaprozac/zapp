@@ -1,0 +1,39 @@
+import "app/app.zc";
+import "std/time.zc";
+
+// Minimal ping service: returns {"pong": <timestamp_ms>}.
+fn ping(_app: App*, _args: JsonValue*) -> string {
+    let ms = Time::now();
+    raw {
+        static _Thread_local char buf[64];
+        snprintf(buf, sizeof(buf), "{\"pong\":%llu}", (unsigned long long)ms);
+        return buf;
+    }
+    return "";
+}
+
+fn on_ready(_id: int, _handle: void*) -> void {
+    Window{id: _id, handle: _handle}.show();
+}
+
+fn run_app() -> int {
+    let config = AppConfig{
+        name: "bench-zapp-txiki",
+        applicationShouldTerminateAfterLastWindowClosed: true,
+        webContentInspectable: -1,
+        maxWorkers: 0,
+        qjsStackSize: 0,
+        backend: false,
+    };
+    let app = App::new(config);
+    app.service.add("ping", ping);
+
+    let opts = WindowOptions::create("Hello Zapp (txiki)");
+    opts.width = 400;
+    opts.height = 300;
+    opts.visible = false;
+    let win = app.window.create(&opts);
+    win.on_ready(on_ready);
+
+    return app.run();
+}

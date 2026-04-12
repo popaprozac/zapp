@@ -1,0 +1,19 @@
+// Build directives — txiki engine (full web APIs, ~6.7 MB binary).
+
+//> macos: define: apple
+//> macos: define: ZAPP_WORKER_ENGINE_TXIKI
+
+//> macos: framework: Cocoa
+//> macos: framework: WebKit
+//> macos: framework: CoreFoundation
+//> macos: framework: JavaScriptCore
+//> macos: framework: Security
+//> macos: framework: UserNotifications
+//> macos: link: -lcompression
+//> macos: cflags: -fobjc-arc -x objective-c
+
+import "app.zc";
+
+fn main() -> int {
+    return run_app();
+}

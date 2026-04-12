@@ -1,0 +1,48 @@
+// JsonValue construction helpers that take ownership by pointer.
+//
+// std/json.zc's set/push take values, which forces an extra malloc+copy when
+// you already have a heap-allocated child node. These helpers transfer
+// ownership directly into the parent's map/vec, eliminating that copy.
+//
+// Used by JS-engine walkers (txiki.c, jsc.m) to build JsonValue trees from
+// JS values without going through JSON.stringify+parse.
+
+import "std/json.zc";
+
+// Free a heap-allocated JsonValue tree built by the constructors.
+fn json_free_tree(v: JsonValue*) -> void {
+    raw {
+        if (v == NULL) return;
+        JsonValue__Drop_glue(v);
+        free(v);
+    }
+}
+
+// Transfer `val` into `obj`'s object map under `key`. Both must already be
+// heap-allocated. After this call, `obj` owns `val`.
+fn json_object_set_owned(obj: JsonValue*, key: char*, val: JsonValue*) -> void {
+    raw {
+        if (obj == NULL || val == NULL) {
+            if (val != NULL) { JsonValue__Drop_glue(val); free(val); }
+            return;
+        }
+        if (obj->kind.tag != JsonType_JSON_OBJECT_Tag) {
+            JsonValue__Drop_glue(val); free(val); return;
+        }
+        Map_JsonValuePtr__put(obj->object_val, (char*)key, val);
+    }
+}
+
+// Transfer `val` into `arr`'s array vec. Both must already be heap-allocated.
+fn json_array_push_owned(arr: JsonValue*, val: JsonValue*) -> void {
+    raw {
+        if (arr == NULL || val == NULL) {
+            if (val != NULL) { JsonValue__Drop_glue(val); free(val); }
+            return;
+        }
+        if (arr->kind.tag != JsonType_JSON_ARRAY_Tag) {
+            JsonValue__Drop_glue(val); free(val); return;
+        }
+        Vec_JsonValuePtr__push(arr->array_val, val);
+    }
+}

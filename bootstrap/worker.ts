@@ -17,6 +17,11 @@
   const bridge = (self as any).__zappBridge;
   if (!bridge) return;
 
+  // Expose under Symbol.for("zapp.bridge") so @zappdev/runtime's getBridge()
+  // works in workers. Host objects on the bridge (invokeService, syncWait,
+  // syncNotify, postToWebview, dispatchEventToAll) are accessed directly.
+  (globalThis as any)[Symbol.for("zapp.bridge")] = bridge;
+
   // Channel handler registry
   const channelHandlers: Record<string, Array<(data: unknown) => void>> = {};
 
@@ -58,11 +63,25 @@
     }
   });
 
-  // dispatchSyncResult — called by native sync.m via jsc_worker_eval_js
+  // dispatchSyncResult — called by native sync.m via jsc_worker_eval_js after
+  // a wait completes (either notified or timed-out). Looks up the resolver
+  // stashed by the syncWait host object and resolves the pending promise.
   bridge.dispatchSyncResult = function (payloadStr: string) {
-    // Sync results for workers are dispatched via eval_js from native.
-    // The bridge on the worker side doesn't track pending sync requests
-    // (host objects handle the wait/notify directly).
-    // This hook exists for future extensions.
+    let data: any;
+    try {
+      data = JSON.parse(payloadStr);
+    } catch {
+      return;
+    }
+    const pending = bridge._syncPending;
+    if (!pending || typeof data?.id !== "string") return;
+    const resolver = pending[data.id];
+    if (!resolver) return;
+    delete pending[data.id];
+    try {
+      resolver(data.status);
+    } catch (e) {
+      console.error("[zapp] syncWait resolver threw:", e);
+    }
   };
 })();

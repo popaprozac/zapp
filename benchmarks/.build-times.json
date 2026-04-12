@@ -1,0 +1,20 @@
+{
+  "cold": {
+    "zapp-jsc": 3.45,
+    "zapp-txiki": 3.21,
+    "tauri": 53.8,
+    "wails": 1.93,
+    "electron": 3.64,
+    "electrobun": 12.83
+  },
+  "cold_at": "2026-04-11 19:15",
+  "hot": {
+    "zapp-jsc": 3.1,
+    "zapp-txiki": 3.15,
+    "tauri": 30.29,
+    "wails": 1.03,
+    "electron": 2.73,
+    "electrobun": 13.22
+  },
+  "hot_at": "2026-04-11 19:20"
+}

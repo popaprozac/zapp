@@ -1,20 +1,27 @@
 // Service registry and RPC invocation.
 // Services are native functions registered by name, callable from JS.
 // Optional lifecycle: startup() in registration order, shutdown() in reverse.
+//
+// Handler ABI: services receive the pre-parsed args sub-object as a
+// JsonValue* (the "a" field of the bridge message). This eliminates the
+// double-parse that the old (App*, string) ABI required when handlers wanted
+// to extract typed fields. `args` may be NULL if the caller sent no args.
 
 import "std/result.zc";
+import "std/json.zc";
 import "string.h" as str;
 
 struct App;
 
 // Service implementation — bundles handler + optional lifecycle hooks.
 struct ServiceImpl {
-    handler: fn*(App*, string) -> string;
+    handler: fn*(App*, JsonValue*) -> string;
     startup: fn*(void*) -> void;
     shutdown: fn*(void*) -> void;
 }
 
 raw {
+    #include <pthread.h>
     #define SERVICE_MAX_BINDINGS 64
 
     typedef struct {
@@ -23,6 +30,12 @@ raw {
         void* service_ptr;
         void (*startup)(void*);
         void (*shutdown)(void*);
+        // Present for stateful services registered via `register()`.
+        // Locked around handler calls to serialize access to service_ptr.
+        // Stateless services registered via `add()` leave this zero and skip
+        // the lock entirely (matching the zero-state contract).
+        int has_lock;
+        pthread_mutex_t lock;
     } ZappServiceEntry;
 
     static ZappServiceEntry g_services[SERVICE_MAX_BINDINGS] = {{0}};
@@ -39,7 +52,7 @@ impl ServiceManager {
     }
 
     // Register a simple stateless service (no lifecycle, no state).
-    fn add(self, name: string, handler: fn*(App*, string) -> string) -> void {
+    fn add(self, name: string, handler: fn*(App*, JsonValue*) -> string) -> void {
         raw {
             if (g_service_count >= SERVICE_MAX_BINDINGS) return;
             g_services[g_service_count].name = (char*)name;
@@ -52,17 +65,24 @@ impl ServiceManager {
     }
 
     // Register a stateful service with implementation (handler + lifecycle).
+    // The dispatcher automatically serializes handler calls with a mutex so
+    // concurrent workers can't race on `service_ptr`'s state. Services that
+    // want finer-grained concurrency should use `add()` instead and manage
+    // their own locking.
     fn register(self, name: string, service_ptr: void*, impl_ptr: ServiceImpl*) -> void {
         let handler = impl_ptr.handler;
         let startup = impl_ptr.startup;
         let shutdown = impl_ptr.shutdown;
         raw {
             if (g_service_count >= SERVICE_MAX_BINDINGS) return;
-            g_services[g_service_count].name = (char*)name;
-            g_services[g_service_count].handler = (void*)handler;
-            g_services[g_service_count].service_ptr = service_ptr;
-            g_services[g_service_count].startup = (void (*)(void*))startup;
-            g_services[g_service_count].shutdown = (void (*)(void*))shutdown;
+            int i = g_service_count;
+            g_services[i].name = (char*)name;
+            g_services[i].handler = (void*)handler;
+            g_services[i].service_ptr = service_ptr;
+            g_services[i].startup = (void (*)(void*))startup;
+            g_services[i].shutdown = (void (*)(void*))shutdown;
+            pthread_mutex_init(&g_services[i].lock, NULL);
+            g_services[i].has_lock = 1;
             g_service_count++;
         }
     }
@@ -90,7 +110,9 @@ fn service_run_shutdown_all() -> void {
     }
 }
 
-fn service_invoke(app: App*, method: string, args: string) -> Result<string> {
+// Webview path: caller already has parsed.args as a JsonValue* — pass it
+// directly, no re-parse.
+fn service_invoke(app: App*, method: string, args: JsonValue*) -> Result<string> {
     let idx: int = -1;
     raw {
         for (int i = 0; i < g_service_count; i++) {
@@ -107,19 +129,67 @@ fn service_invoke(app: App*, method: string, args: string) -> Result<string> {
 
     let result: string = "";
     raw {
-        typedef char* (*ServiceFnPtr)(void*, char*);
+        typedef char* (*ServiceFnPtr)(void*, JsonValue*);
         ServiceFnPtr fn_ptr = (ServiceFnPtr)g_services[idx].handler;
-        result = fn_ptr((void*)app, (char*)args);
+        if (g_services[idx].has_lock) {
+            // Stateful service — serialize handler calls so concurrent
+            // workers don't race on the shared state in service_ptr.
+            pthread_mutex_lock(&g_services[idx].lock);
+            result = fn_ptr((void*)app, args);
+            pthread_mutex_unlock(&g_services[idx].lock);
+        } else {
+            // Stateless service — no shared state, no lock overhead.
+            result = fn_ptr((void*)app, args);
+        }
     }
 
     return Result<string>::Ok(result);
 }
 
-// Synchronous invoke for worker host objects (called from jsc.m / txiki.c).
-fn service_invoke_sync(app_ptr: void*, method: string, args: string) -> string {
+// Worker zero-JSON path: caller already built a JsonValue* via a JS-engine
+// walker (no JSON serialization). Just looks up the service and calls the
+// handler directly. The caller owns `args` and is responsible for freeing it.
+fn service_invoke_native(app_ptr: void*, method: string, args: JsonValue*) -> string {
     let app = (App*)app_ptr;
     if app == NULL { return ""; }
     let result = service_invoke(app, method, args);
+    if result.is_ok() { return result.unwrap(); }
+    return "";
+}
+
+// Worker JSON-string path: callers (jsc.m) hand us a JSON string. We parse it
+// once here so handlers always see a JsonValue*. This gives the worker path
+// one parse total (vs. the previous path where handlers had to re-parse).
+fn service_invoke_sync(app_ptr: void*, method: string, args_json: string) -> string {
+    let app = (App*)app_ptr;
+    if app == NULL { return ""; }
+
+    // Empty/null args → call with NULL JsonValue*
+    let is_empty: bool = false;
+    raw {
+        is_empty = (!args_json || args_json[0] == '\0' ||
+                    (args_json[0] == '{' && args_json[1] == '}' && args_json[2] == '\0'));
+    }
+
+    if is_empty {
+        let result = service_invoke(app, method, (JsonValue*)NULL);
+        if result.is_ok() { return result.unwrap(); }
+        return "";
+    }
+
+    let parse_result = JsonValue::parse(args_json);
+    if parse_result.is_err() {
+        let result = service_invoke(app, method, (JsonValue*)NULL);
+        if result.is_ok() { return result.unwrap(); }
+        return "";
+    }
+    let parsed = parse_result.unwrap();
+    let result = service_invoke(app, method, parsed);
+    // NOTE: we leak `parsed` here. The result string returned from the
+    // handler often points into it (e.g. greet returns args echoed). Freeing
+    // would dangle. Worker call rate is low and this is a per-call leak we
+    // accept for now — task 17 (zero-JSON path) will eliminate the parse
+    // entirely.
     if result.is_ok() { return result.unwrap(); }
     return "";
 }

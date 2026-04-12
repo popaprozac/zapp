@@ -240,9 +240,18 @@ void darwin_window_eval_js(int32_t window_id, const char* js) {
     if (window_id < 0 || window_id >= ZAPP_MAX_WINDOW_CALLBACKS) return;
     WKWebView* webview = zapp_webviews[window_id];
     if (!webview || !js) return;
-    NSString* script = [[NSString alloc] initWithBytesNoCopy:(void*)js
-        length:strlen(js) encoding:NSUTF8StringEncoding freeWhenDone:NO];
-    [webview evaluateJavaScript:script completionHandler:nil];
+    // Copy the source string — callers frequently pass thread-local or static
+    // buffers that can be overwritten before WebKit reads them.
+    // Also bounce to main thread because evaluateJavaScript: requires it.
+    NSString* script = [NSString stringWithUTF8String:js];
+    if (!script) return;
+    if ([NSThread isMainThread]) {
+        [webview evaluateJavaScript:script completionHandler:nil];
+    } else {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [webview evaluateJavaScript:script completionHandler:nil];
+        });
+    }
 }
 
 // Bridge readiness

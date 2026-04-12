@@ -104,6 +104,18 @@
     post(msg: string) {
       // No WebView to post to — no-op in backend
     },
+    // Sync primitives — forward to the native host objects so Sync.wait /
+    // Sync.notify work from the backend the same way they work in workers.
+    syncWait(key: string, timeoutMs?: number | null) {
+      if (typeof bridge.syncWait !== "function") {
+        throw new Error("Sync bridge is unavailable.");
+      }
+      return bridge.syncWait(key, timeoutMs ?? -1);
+    },
+    syncNotify(key: string, count?: number) {
+      if (typeof bridge.syncNotify !== "function") return;
+      bridge.syncNotify(key, count ?? 1);
+    },
     // Called by native Layer 3 when dispatching window events to backend
     _onEvent(name: string, payload: string) {
       const handlers = listeners[name] || [];

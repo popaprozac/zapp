@@ -45,8 +45,85 @@ static void jsc_ensure_init(void) {
 extern void* app_get_active(void);
 extern bool app_get_bootstrap_web_content_inspectable(void);
 
-// Service invoke (called from worker host object)
+// Service invoke — legacy JSON-string path (still used for some callers).
 extern const char* service_invoke_sync(void* app, const char* method, const char* args);
+
+// --- Zen-C JsonValue construction (declared in std/json.zc + json_builder.zc) ---
+// Mirror of the txiki walker — JSValue* → JsonValue* without going through
+// JSON.stringify + JSON.parse.
+typedef struct JsonValue JsonValue;
+extern JsonValue* JsonValue__null_ptr(void);
+extern JsonValue* JsonValue__bool_ptr(bool b);
+extern JsonValue* JsonValue__number_ptr(double n);
+extern JsonValue* JsonValue__string_ptr(char* s);
+extern JsonValue* JsonValue__array_ptr(void);
+extern JsonValue* JsonValue__object_ptr(void);
+extern void json_object_set_owned(JsonValue* obj, char* key, JsonValue* val);
+extern void json_array_push_owned(JsonValue* arr, JsonValue* val);
+extern void json_free_tree(JsonValue* v);
+extern const char* service_invoke_native(void* app, const char* method, JsonValue* args);
+
+// Walk a JSValue (Cocoa API) into a Zen-C JsonValue tree.
+// Returns a heap-allocated tree; caller frees via json_free_tree().
+// Object enumeration uses the lower-level JSObjectCopyPropertyNames C API
+// instead of [v toDictionary] — toDictionary would walk the entire tree into
+// NSDictionary/NSArray/NSNumber/NSString once, defeating the whole point.
+static JsonValue* jscvalue_to_jsonvalue(JSValue* v) {
+    if (!v || [v isUndefined] || [v isNull]) {
+        return JsonValue__null_ptr();
+    }
+    if ([v isBoolean]) {
+        return JsonValue__bool_ptr([v toBool] ? true : false);
+    }
+    if ([v isNumber]) {
+        return JsonValue__number_ptr([v toDouble]);
+    }
+    if ([v isString]) {
+        const char* s = [[v toString] UTF8String];
+        return JsonValue__string_ptr((char*)(s ? s : ""));
+    }
+    if ([v isArray]) {
+        JsonValue* arr = JsonValue__array_ptr();
+        uint32_t len = (uint32_t)[[v valueForProperty:@"length"] toUInt32];
+        for (uint32_t i = 0; i < len; i++) {
+            JSValue* elem = [v valueAtIndex:i];
+            JsonValue* child = jscvalue_to_jsonvalue(elem);
+            json_array_push_owned(arr, child);
+        }
+        return arr;
+    }
+    if ([v isObject]) {
+        JsonValue* obj = JsonValue__object_ptr();
+        JSContextRef ctxRef = v.context.JSGlobalContextRef;
+        JSObjectRef objRef = JSValueToObject(ctxRef, v.JSValueRef, NULL);
+        if (objRef) {
+            JSPropertyNameArrayRef names = JSObjectCopyPropertyNames(ctxRef, objRef);
+            size_t count = JSPropertyNameArrayGetCount(names);
+            for (size_t i = 0; i < count; i++) {
+                JSStringRef nameRef = JSPropertyNameArrayGetNameAtIndex(names, i);
+                size_t utf8len = JSStringGetMaximumUTF8CStringSize(nameRef);
+                char key_buf[256];
+                char* key_heap = NULL;
+                char* key_ptr = key_buf;
+                if (utf8len > sizeof(key_buf)) {
+                    key_heap = malloc(utf8len);
+                    key_ptr = key_heap;
+                }
+                JSStringGetUTF8CString(nameRef, key_ptr, utf8len);
+
+                JSValueRef propRef = JSObjectGetProperty(ctxRef, objRef, nameRef, NULL);
+                JSValue* prop = [JSValue valueWithJSValueRef:propRef inContext:v.context];
+                JsonValue* child = jscvalue_to_jsonvalue(prop);
+                json_object_set_owned(obj, key_ptr, child);
+
+                if (key_heap) free(key_heap);
+            }
+            JSPropertyNameArrayRelease(names);
+        }
+        return obj;
+    }
+    return JsonValue__null_ptr();
+}
 
 // --- Host object setup ---
 
@@ -83,17 +160,24 @@ static void jsc_setup_bridge(JSContext* ctx, NSString* workerId) {
     console[@"error"] = ^{ logImpl(@" ERROR", [JSContext currentArguments]); };
     ctx[@"console"] = console;
 
-    // invokeService — synchronous, returns result directly (host object perf)
+    // invokeService — zero-JSON args path: walk JS value directly into a
+    // JsonValue tree (no NSJSONSerialization round-trip on the way in).
+    // Result side still parses JSON for now — see task 21.
     bridge[@"invokeService"] = ^JSValue*(NSString* method, JSValue* argsVal) {
         void* app = app_get_active();
         if (!app || !method) return [JSValue valueWithUndefinedInContext:[JSContext currentContext]];
-        NSString* argsJson = @"{}";
-        if (argsVal && ![argsVal isUndefined]) {
-            NSData* data = [NSJSONSerialization dataWithJSONObject:[argsVal toObject] options:0 error:nil];
-            if (data) argsJson = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+
+        JsonValue* args_jv = NULL;
+        if (argsVal && ![argsVal isUndefined] && ![argsVal isNull]) {
+            args_jv = jscvalue_to_jsonvalue(argsVal);
         }
-        const char* result = service_invoke_sync(app, [method UTF8String], [argsJson UTF8String]);
-        if (!result || result[0] == '\0') return [JSValue valueWithUndefinedInContext:[JSContext currentContext]];
+
+        const char* result = service_invoke_native(app, [method UTF8String], args_jv);
+        if (args_jv) json_free_tree(args_jv);
+
+        if (!result || result[0] == '\0') {
+            return [JSValue valueWithUndefinedInContext:[JSContext currentContext]];
+        }
         // Parse result as JSON to return a proper JS object (not a string)
         NSString* resultStr = [NSString stringWithUTF8String:result];
         NSData* resultData = [resultStr dataUsingEncoding:NSUTF8StringEncoding];
@@ -138,14 +222,49 @@ static void jsc_setup_bridge(JSContext* ctx, NSString* workerId) {
         worker_dispatch_to_webview([wid UTF8String], [json UTF8String]);
     };
 
-    // syncWait — host object for Sync.wait() from workers
-    bridge[@"syncWait"] = ^(NSString* key, JSValue* timeoutVal) {
-        if (!key || key.length == 0) return;
+    // syncWait — host object for Sync.wait() from workers.
+    // Returns a real JS Promise whose resolver is stashed on bridge._syncPending
+    // keyed by request_id. When the native sync dispatch eval's dispatchSyncResult
+    // back into this worker's context, the bootstrap looks up and resolves.
+    //
+    // darwin_sync_handle is thread-safe (pthread_mutex), so the worker calls
+    // it directly on its own thread — no main-queue bounce.
+    extern void darwin_sync_handle(const char* action, const char* payload_json);
+    bridge[@"syncWait"] = ^JSValue*(NSString* key, JSValue* timeoutVal) {
+        JSContext* currentCtx = [JSContext currentContext];
+        if (!key || key.length == 0) {
+            return [JSValue valueWithNewPromiseResolvedWithResult:@"timed-out" inContext:currentCtx];
+        }
         double timeoutMs = (timeoutVal && ![timeoutVal isUndefined]) ? [timeoutVal toDouble] : -1;
 
         NSString* requestId = [NSString stringWithFormat:@"%@:sync-%f-%u",
             wid, [[NSDate date] timeIntervalSince1970], arc4random()];
 
+        // Create the promise and capture the resolve function (executor runs
+        // synchronously during valueWithNewPromise...).
+        __block JSValue* capturedResolve = nil;
+        JSValue* promise = [JSValue valueWithNewPromiseInContext:currentCtx
+            fromExecutor:^(JSValue* resolve, JSValue* reject) {
+                (void)reject;
+                capturedResolve = resolve;
+            }];
+        if (!capturedResolve) {
+            return [JSValue valueWithNewPromiseResolvedWithResult:@"timed-out" inContext:currentCtx];
+        }
+
+        // Fetch the bridge fresh from the context each call. We can't capture
+        // it in the setup closure because JSValue wrappers are released when
+        // the setup function returns — ctx[@"__zappBridge"] gives us a fresh
+        // wrapper around the (still-alive) underlying JS object.
+        JSValue* liveBridge = currentCtx[@"__zappBridge"];
+        JSValue* pending = liveBridge[@"_syncPending"];
+        if (!pending || [pending isUndefined] || [pending isNull]) {
+            pending = [JSValue valueWithNewObjectInContext:currentCtx];
+            liveBridge[@"_syncPending"] = pending;
+        }
+        pending[requestId] = capturedResolve;
+
+        // Register the wait with native.
         NSMutableDictionary* payload = [NSMutableDictionary dictionaryWithDictionary:@{
             @"id": requestId,
             @"key": key,
@@ -154,16 +273,15 @@ static void jsc_setup_bridge(JSContext* ctx, NSString* workerId) {
         if (timeoutMs > 0) payload[@"timeoutMs"] = @(timeoutMs);
 
         NSData* data = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
-        if (!data) return;
-        NSString* json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-
-        extern void darwin_sync_handle(const char* action, const char* payload_json);
-        dispatch_async(dispatch_get_main_queue(), ^{
+        if (data) {
+            NSString* json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
             darwin_sync_handle("wait", [json UTF8String]);
-        });
+        }
+
+        return promise;
     };
 
-    // syncNotify — host object for Sync.notify() from workers
+    // syncNotify — same: direct call, no main-queue bounce.
     bridge[@"syncNotify"] = ^(NSString* key, JSValue* countVal) {
         if (!key || key.length == 0) return;
         int count = (countVal && ![countVal isUndefined]) ? [countVal toInt32] : 1;
@@ -173,11 +291,7 @@ static void jsc_setup_bridge(JSContext* ctx, NSString* workerId) {
         NSData* data = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
         if (!data) return;
         NSString* json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-
-        extern void darwin_sync_handle(const char* action, const char* payload_json);
-        dispatch_async(dispatch_get_main_queue(), ^{
-            darwin_sync_handle("notify", [json UTF8String]);
-        });
+        darwin_sync_handle("notify", [json UTF8String]);
     };
 
     ctx[@"__zappBridge"] = bridge;

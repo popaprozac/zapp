@@ -100,7 +100,8 @@ typedef struct {
     JSContext* ctx;
     pthread_t thread;
     uv_async_t async;       // Wakes worker thread for incoming messages
-    MsgQueue inbox;          // Thread-safe message queue
+    MsgQueue inbox;          // Thread-safe message queue (regular messages)
+    MsgQueue sync_inbox;     // Thread-safe queue for Sync.wait results
     int async_initialized;
 } TxikiWorkerSlot;
 
@@ -121,6 +122,78 @@ extern void* app_get_active(void);
 extern const char* service_invoke_sync(void* app, const char* method, const char* args);
 extern bool app_get_bootstrap_web_content_inspectable(void);
 
+// --- Zen-C JsonValue construction (declared in std/json.zc + json_builder.zc) ---
+// JsonValue is opaque to this translation unit; we only manipulate it via
+// pointers. The _ptr constructors return heap-allocated nodes; our own
+// json_object_set_owned / json_array_push_owned helpers transfer ownership
+// without the extra malloc that std/json.zc's set/push would do.
+typedef struct JsonValue JsonValue;
+extern JsonValue* JsonValue__null_ptr(void);
+extern JsonValue* JsonValue__bool_ptr(bool b);
+extern JsonValue* JsonValue__number_ptr(double n);
+extern JsonValue* JsonValue__string_ptr(char* s);
+extern JsonValue* JsonValue__array_ptr(void);
+extern JsonValue* JsonValue__object_ptr(void);
+extern void json_object_set_owned(JsonValue* obj, char* key, JsonValue* val);
+extern void json_array_push_owned(JsonValue* arr, JsonValue* val);
+extern void json_free_tree(JsonValue* v);
+extern const char* service_invoke_native(void* app, const char* method, JsonValue* args);
+
+// Walk a QuickJS JSValue and build a Zen-C JsonValue tree directly.
+// Returns a heap-allocated tree; caller frees via json_free_tree().
+static JsonValue* jsvalue_to_jsonvalue(JSContext* ctx, JSValueConst v) {
+    if (JS_IsUndefined(v) || JS_IsNull(v)) {
+        return JsonValue__null_ptr();
+    }
+    if (JS_IsBool(v)) {
+        return JsonValue__bool_ptr(JS_ToBool(ctx, v) ? true : false);
+    }
+    if (JS_IsNumber(v)) {
+        double n = 0;
+        JS_ToFloat64(ctx, &n, v);
+        return JsonValue__number_ptr(n);
+    }
+    if (JS_IsString(v)) {
+        const char* s = JS_ToCString(ctx, v);
+        JsonValue* jv = JsonValue__string_ptr((char*)(s ? s : ""));
+        if (s) JS_FreeCString(ctx, s);
+        return jv;
+    }
+    if (JS_IsArray(v)) {
+        JsonValue* arr = JsonValue__array_ptr();
+        JSValue len_val = JS_GetPropertyStr(ctx, v, "length");
+        uint32_t len = 0;
+        JS_ToUint32(ctx, &len, len_val);
+        JS_FreeValue(ctx, len_val);
+        for (uint32_t i = 0; i < len; i++) {
+            JSValue elem = JS_GetPropertyUint32(ctx, v, i);
+            JsonValue* child = jsvalue_to_jsonvalue(ctx, elem);
+            JS_FreeValue(ctx, elem);
+            json_array_push_owned(arr, child);
+        }
+        return arr;
+    }
+    if (JS_IsObject(v)) {
+        JsonValue* obj = JsonValue__object_ptr();
+        JSPropertyEnum* tab = NULL;
+        uint32_t len = 0;
+        if (JS_GetOwnPropertyNames(ctx, &tab, &len, v, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0) {
+            for (uint32_t i = 0; i < len; i++) {
+                const char* key = JS_AtomToCString(ctx, tab[i].atom);
+                JSValue prop = JS_GetProperty(ctx, v, tab[i].atom);
+                JsonValue* child = jsvalue_to_jsonvalue(ctx, prop);
+                json_object_set_owned(obj, (char*)(key ? key : ""), child);
+                if (key) JS_FreeCString(ctx, key);
+                JS_FreeValue(ctx, prop);
+            }
+            JS_FreePropertyEnum(ctx, tab, len);
+        }
+        return obj;
+    }
+    // Anything else (function, symbol) — coerce to null.
+    return JsonValue__null_ptr();
+}
+
 // --- Host objects (same as before) ---
 
 static JSValue zapp_bridge_invoke_service(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
@@ -129,24 +202,17 @@ static JSValue zapp_bridge_invoke_service(JSContext* ctx, JSValueConst this_val,
     const char* method = JS_ToCString(ctx, argv[0]);
     if (!method) return JS_UNDEFINED;
 
-    // Use JS_JSONStringify direct C API instead of four property lookups
-    // (global → JSON → stringify → Call). Same result, no JS-level overhead.
-    const char* args_json = "{}";
-    char* args_str = NULL;
-    JSValue json_val = JS_UNDEFINED;
+    // Zero-JSON path: walk JS args directly into a JsonValue tree (no
+    // JSON.stringify + JSON.parse round-trip). One tree walk instead of two.
+    JsonValue* args_jv = NULL;
     if (argc >= 2 && !JS_IsUndefined(argv[1]) && !JS_IsNull(argv[1])) {
-        json_val = JS_JSONStringify(ctx, argv[1], JS_UNDEFINED, JS_UNDEFINED);
-        if (!JS_IsException(json_val)) {
-            args_str = (char*)JS_ToCString(ctx, json_val);
-            if (args_str) args_json = args_str;
-        }
+        args_jv = jsvalue_to_jsonvalue(ctx, argv[1]);
     }
 
     void* app = app_get_active();
-    const char* svc_result = app ? service_invoke_sync(app, method, args_json) : NULL;
+    const char* svc_result = app ? service_invoke_native(app, method, args_jv) : NULL;
     JS_FreeCString(ctx, method);
-    if (args_str) JS_FreeCString(ctx, args_str);
-    JS_FreeValue(ctx, json_val);
+    if (args_jv) json_free_tree(args_jv);
 
     if (!svc_result || svc_result[0] == '\0') return JS_UNDEFINED;
     JSValue parsed = JS_ParseJSON(ctx, svc_result, strlen(svc_result), "<service>");
@@ -194,6 +260,79 @@ static void txiki_bridge_cache_release(JSContext* ctx) {
     }
 }
 
+// --- Sync pending resolvers (per-worker) ---
+//
+// Sync.wait returns a Promise. The resolver is stored here (keyed by the
+// request_id sent to darwin_sync_handle) until the result arrives and is
+// dispatched back into the worker via sync_inbox + uv_async.
+//
+// Access is single-threaded: only the worker thread that owns `ctx` touches
+// its own entries. Register/lookup/release all happen on the worker thread.
+
+#define TXIKI_MAX_PENDING_SYNCS 128
+
+typedef struct {
+    int active;
+    char request_id[128];
+    JSContext* ctx;        // context that owns the resolver
+    JSValue resolver;      // JS function ref (strong ref, JS_DupValue'd)
+} TxikiSyncPending;
+
+static TxikiSyncPending txiki_sync_pending[TXIKI_MAX_PENDING_SYNCS] = {{0}};
+static pthread_mutex_t txiki_sync_pending_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static void txiki_sync_pending_add(const char* request_id, JSContext* ctx, JSValue resolver) {
+    pthread_mutex_lock(&txiki_sync_pending_mutex);
+    for (int i = 0; i < TXIKI_MAX_PENDING_SYNCS; i++) {
+        if (!txiki_sync_pending[i].active) {
+            txiki_sync_pending[i].active = 1;
+            strncpy(txiki_sync_pending[i].request_id, request_id, sizeof(txiki_sync_pending[i].request_id) - 1);
+            txiki_sync_pending[i].request_id[sizeof(txiki_sync_pending[i].request_id) - 1] = '\0';
+            txiki_sync_pending[i].ctx = ctx;
+            txiki_sync_pending[i].resolver = resolver;
+            pthread_mutex_unlock(&txiki_sync_pending_mutex);
+            return;
+        }
+    }
+    pthread_mutex_unlock(&txiki_sync_pending_mutex);
+    // Table full — leak the resolver ref. Should never happen in practice.
+    JS_FreeValue(ctx, resolver);
+}
+
+// Find and remove a pending entry. Returns the resolver on success (caller
+// owns the strong ref and must JS_FreeValue after use).
+static int txiki_sync_pending_take(const char* request_id, JSContext** out_ctx, JSValue* out_resolver) {
+    pthread_mutex_lock(&txiki_sync_pending_mutex);
+    for (int i = 0; i < TXIKI_MAX_PENDING_SYNCS; i++) {
+        if (txiki_sync_pending[i].active &&
+            strcmp(txiki_sync_pending[i].request_id, request_id) == 0) {
+            *out_ctx = txiki_sync_pending[i].ctx;
+            *out_resolver = txiki_sync_pending[i].resolver;
+            txiki_sync_pending[i].active = 0;
+            txiki_sync_pending[i].request_id[0] = '\0';
+            txiki_sync_pending[i].ctx = NULL;
+            pthread_mutex_unlock(&txiki_sync_pending_mutex);
+            return 1;
+        }
+    }
+    pthread_mutex_unlock(&txiki_sync_pending_mutex);
+    return 0;
+}
+
+// Release any entries owned by `ctx` (called on worker teardown).
+static void txiki_sync_pending_release_ctx(JSContext* ctx) {
+    pthread_mutex_lock(&txiki_sync_pending_mutex);
+    for (int i = 0; i < TXIKI_MAX_PENDING_SYNCS; i++) {
+        if (txiki_sync_pending[i].active && txiki_sync_pending[i].ctx == ctx) {
+            JS_FreeValue(ctx, txiki_sync_pending[i].resolver);
+            txiki_sync_pending[i].active = 0;
+            txiki_sync_pending[i].request_id[0] = '\0';
+            txiki_sync_pending[i].ctx = NULL;
+        }
+    }
+    pthread_mutex_unlock(&txiki_sync_pending_mutex);
+}
+
 static JSValue zapp_bridge_post_to_webview(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     (void)this_val;
     if (argc < 1) return JS_UNDEFINED;
@@ -213,6 +352,134 @@ static JSValue zapp_bridge_post_to_webview(JSContext* ctx, JSValueConst this_val
     }
     JS_FreeValue(ctx, json_val);
     return JS_UNDEFINED;
+}
+
+// --- Sync.wait / Sync.notify host objects ---
+
+extern void darwin_sync_handle(const char* action, const char* payload_json);
+
+static JSValue zapp_bridge_sync_wait(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    (void)this_val;
+    if (argc < 1) return JS_UNDEFINED;
+
+    const char* key = JS_ToCString(ctx, argv[0]);
+    if (!key) return JS_UNDEFINED;
+
+    double timeout_ms = -1;
+    if (argc >= 2 && !JS_IsUndefined(argv[1]) && !JS_IsNull(argv[1])) {
+        JS_ToFloat64(ctx, &timeout_ms, argv[1]);
+    }
+
+    TxikiBridgeCache* cache = txiki_bridge_cache_for(ctx);
+    const char* wid = (cache && cache->worker_id[0]) ? cache->worker_id : "__unknown__";
+
+    // Generate a unique request_id scoped to the worker.
+    static int zapp_sync_counter = 0;
+    int seq = __atomic_add_fetch(&zapp_sync_counter, 1, __ATOMIC_SEQ_CST);
+    char request_id[128];
+    snprintf(request_id, sizeof(request_id), "%s:sync-%d-%u", wid, seq, arc4random());
+
+    // Build payload for darwin_sync_handle
+    char payload[512];
+    if (timeout_ms > 0) {
+        snprintf(payload, sizeof(payload),
+            "{\"id\":\"%s\",\"key\":\"%s\",\"targetWorkerId\":\"%s\",\"timeoutMs\":%d}",
+            request_id, key, wid, (int)timeout_ms);
+    } else {
+        snprintf(payload, sizeof(payload),
+            "{\"id\":\"%s\",\"key\":\"%s\",\"targetWorkerId\":\"%s\"}",
+            request_id, key, wid);
+    }
+    JS_FreeCString(ctx, key);
+
+    // Create the promise and store the resolver.
+    JSValue resolving_funcs[2];
+    JSValue promise = JS_NewPromiseCapability(ctx, resolving_funcs);
+    if (JS_IsException(promise)) {
+        return JS_UNDEFINED;
+    }
+    // Keep the resolve fn; drop the reject fn (we always resolve with a status).
+    txiki_sync_pending_add(request_id, ctx, resolving_funcs[0]);
+    JS_FreeValue(ctx, resolving_funcs[1]);
+
+    // Register with the native sync handler. darwin_sync_handle is
+    // thread-safe (pthread_mutex), so we call it directly from the worker
+    // thread with no main-queue bounce.
+    darwin_sync_handle("wait", payload);
+
+    return promise;
+}
+
+static JSValue zapp_bridge_sync_notify(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    (void)this_val;
+    if (argc < 1) return JS_UNDEFINED;
+
+    const char* key = JS_ToCString(ctx, argv[0]);
+    if (!key) return JS_UNDEFINED;
+
+    int count = 1;
+    if (argc >= 2 && !JS_IsUndefined(argv[1]) && !JS_IsNull(argv[1])) {
+        int32_t c = 1;
+        JS_ToInt32(ctx, &c, argv[1]);
+        if (c >= 1) count = c;
+    }
+
+    char payload[256];
+    snprintf(payload, sizeof(payload), "{\"key\":\"%s\",\"count\":%d}", key, count);
+    JS_FreeCString(ctx, key);
+
+    darwin_sync_handle("notify", payload);
+    return JS_UNDEFINED;
+}
+
+// Forward decl — defined later in the backend section.
+extern TxikiWorkerSlot txiki_backend;
+extern int txiki_backend_running;
+
+// Called by darwin_sync_dispatch_to_worker from whatever thread the match
+// happened on. We push the payload to the target worker's sync_inbox and
+// signal its uv_async so it drains on the worker thread.
+//
+// Returns 1 if the worker was found and the message queued; 0 otherwise.
+int txiki_worker_dispatch_sync_result(const char* worker_id, const char* payload_json) {
+    if (!worker_id || !payload_json) return 0;
+
+    // Special case: __backend__ has its own slot outside the workers array.
+    if (strcmp(worker_id, "__backend__") == 0) {
+        if (!txiki_backend_running || !txiki_backend.async_initialized) return 0;
+        msgqueue_push(&txiki_backend.sync_inbox, payload_json);
+        uv_async_send(&txiki_backend.async);
+        return 1;
+    }
+
+    pthread_mutex_lock(&txiki_mutex);
+    TxikiWorkerSlot* slot = txiki_find_slot(worker_id);
+    if (!slot || !slot->async_initialized) {
+        pthread_mutex_unlock(&txiki_mutex);
+        return 0;
+    }
+    msgqueue_push(&slot->sync_inbox, payload_json);
+    uv_async_send(&slot->async);
+    pthread_mutex_unlock(&txiki_mutex);
+    return 1;
+}
+
+// Extract a string field from a flat JSON payload like {"id":"foo","status":"notified"}.
+// Writes up to out_size-1 chars plus a null terminator. Returns 1 on success.
+static int zapp_extract_json_str(const char* payload, const char* field, char* out, size_t out_size) {
+    if (!payload || !field || !out || out_size < 2) return 0;
+    char pattern[64];
+    snprintf(pattern, sizeof(pattern), "\"%s\":\"", field);
+    const char* p = strstr(payload, pattern);
+    if (!p) return 0;
+    p += strlen(pattern);
+    size_t i = 0;
+    while (*p && *p != '"' && i < out_size - 1) {
+        if (*p == '\\' && p[1]) { p++; }
+        out[i++] = *p++;
+    }
+    out[i] = '\0';
+    return 1;
 }
 
 // Broadcast a fire-and-forget event to every webview. Used by the backend
@@ -265,12 +532,19 @@ static void txiki_setup_bridge(JSContext* ctx, const char* worker_id) {
         JS_NewCFunction(ctx, zapp_bridge_emit_to_host, "emitToHost", 2));
     JS_SetPropertyStr(ctx, bridge, "dispatchEventToAll",
         JS_NewCFunction(ctx, zapp_bridge_emit_to_host, "dispatchEventToAll", 2));
+    JS_SetPropertyStr(ctx, bridge, "syncWait",
+        JS_NewCFunction(ctx, zapp_bridge_sync_wait, "syncWait", 2));
+    JS_SetPropertyStr(ctx, bridge, "syncNotify",
+        JS_NewCFunction(ctx, zapp_bridge_sync_notify, "syncNotify", 2));
     JS_SetPropertyStr(ctx, global, "__zappBridge", bridge);
     JS_SetPropertyStr(ctx, global, "postMessage",
         JS_NewCFunction(ctx, zapp_bridge_post_to_webview, "postMessage", 1));
 
     const char* channel_api =
         "self = globalThis;"
+        // Expose __zappBridge under Symbol.for('zapp.bridge') so getBridge()
+        // works in worker context (used by Sync.wait, Events.on, etc.).
+        "globalThis[Symbol.for('zapp.bridge')] = self.__zappBridge;"
         "self.send = function(channel, data) { self.postMessage({ __zc: channel, d: data }); };"
         "self._channelHandlers = {};"
         "self._messageHandlers = [];"
@@ -297,11 +571,39 @@ static void txiki_setup_bridge(JSContext* ctx, const char* worker_id) {
 
 // --- Async message delivery (runs on worker thread) ---
 
+// Drain Sync.wait results from a worker's sync_inbox — runs on the worker
+// thread that owns `ctx`. Called by both regular worker and backend async
+// handlers.
+static void txiki_drain_sync_inbox(TxikiWorkerSlot* slot, JSContext* ctx) {
+    char* sync_msg;
+    while ((sync_msg = msgqueue_pop(&slot->sync_inbox)) != NULL) {
+        char rid[128] = {0};
+        char status[32] = {0};
+        if (zapp_extract_json_str(sync_msg, "id", rid, sizeof(rid)) &&
+            zapp_extract_json_str(sync_msg, "status", status, sizeof(status))) {
+            JSContext* pending_ctx = NULL;
+            JSValue resolver;
+            if (txiki_sync_pending_take(rid, &pending_ctx, &resolver) && pending_ctx == ctx) {
+                JSValue arg = JS_NewString(ctx, status);
+                JSValue ret = JS_Call(ctx, resolver, JS_UNDEFINED, 1, &arg);
+                JS_FreeValue(ctx, ret);
+                JS_FreeValue(ctx, arg);
+                JS_FreeValue(ctx, resolver);
+            }
+        }
+        free(sync_msg);
+    }
+}
+
 static void on_async_message(uv_async_t* handle) {
     TxikiWorkerSlot* slot = (TxikiWorkerSlot*)handle->data;
     if (!slot || !slot->ctx) return;
 
     JSContext* ctx = slot->ctx;
+
+    // Drain Sync.wait results first.
+    txiki_drain_sync_inbox(slot, ctx);
+
     char* msg;
     while ((msg = msgqueue_pop(&slot->inbox)) != NULL) {
         // Parse JSON and create event
@@ -462,6 +764,7 @@ static void* txiki_worker_thread(void* arg) {
     if (slot->async_initialized) {
         uv_close((uv_handle_t*)&slot->async, NULL);
     }
+    txiki_sync_pending_release_ctx(ctx);
     txiki_bridge_cache_release(ctx);
     TJS_FreeRuntime(rt);
     slot->runtime = NULL;
@@ -491,6 +794,7 @@ bool txiki_worker_create(const char* script_url, const char* owner_id, const cha
     strncpy(slot->script_url, script_url, 255);
     slot->active = 1;
     msgqueue_init(&slot->inbox);
+    msgqueue_init(&slot->sync_inbox);
 
     TJS_Initialize(0, NULL);
     pthread_create(&slot->thread, NULL, txiki_worker_thread, slot);
@@ -521,6 +825,7 @@ void txiki_worker_terminate(const char* worker_id) {
     if (slot) {
         if (slot->runtime) TJS_Stop(slot->runtime);
         msgqueue_destroy(&slot->inbox);
+        msgqueue_destroy(&slot->sync_inbox);
         slot->active = 0;
         fprintf(stderr, "[zapp] txiki worker terminated: %s\n", worker_id);
     }
@@ -534,6 +839,7 @@ void txiki_worker_terminate_owner(const char* owner_id) {
         if (txiki_workers[i].active && strcmp(txiki_workers[i].owner_id, owner_id) == 0) {
             if (txiki_workers[i].runtime) TJS_Stop(txiki_workers[i].runtime);
             msgqueue_destroy(&txiki_workers[i].inbox);
+            msgqueue_destroy(&txiki_workers[i].sync_inbox);
             txiki_workers[i].active = 0;
         }
     }
@@ -543,14 +849,18 @@ void txiki_worker_terminate_owner(const char* owner_id) {
 // --- Backend worker (privileged, app-level context with web APIs) ---
 // Uses txiki.js for fetch, WebSocket, timers, crypto — opt-in via build config.
 
-static TxikiWorkerSlot txiki_backend = {0};
-static int txiki_backend_running = 0;
+TxikiWorkerSlot txiki_backend = {0};
+int txiki_backend_running = 0;
 
 // Backend-specific async handler: evals queued JS strings
 static void txiki_backend_on_async(uv_async_t* handle) {
     TxikiWorkerSlot* slot = (TxikiWorkerSlot*)handle->data;
     if (!slot || !slot->ctx) return;
     JSContext* ctx = slot->ctx;
+
+    // Drain Sync.wait results first — resolves pending promises on the
+    // backend's event loop.
+    txiki_drain_sync_inbox(slot, ctx);
 
     char* msg;
     while ((msg = msgqueue_pop(&slot->inbox)) != NULL) {
@@ -724,6 +1034,7 @@ static void* txiki_backend_thread(void* arg) {
     if (slot->async_initialized) {
         uv_close((uv_handle_t*)&slot->async, NULL);
     }
+    txiki_sync_pending_release_ctx(ctx);
     txiki_bridge_cache_release(ctx);
     TJS_FreeRuntime(rt);
     slot->runtime = NULL;
@@ -741,6 +1052,7 @@ bool txiki_backend_create(const char* script_path) {
     strncpy(txiki_backend.script_url, script_path, 255);
     txiki_backend.active = 1;
     msgqueue_init(&txiki_backend.inbox);
+    msgqueue_init(&txiki_backend.sync_inbox);
 
     TJS_Initialize(0, NULL);
     txiki_backend_running = 1;
@@ -756,6 +1068,7 @@ void txiki_backend_terminate(void) {
     if (!txiki_backend_running) return;
     if (txiki_backend.runtime) TJS_Stop(txiki_backend.runtime);
     msgqueue_destroy(&txiki_backend.inbox);
+    msgqueue_destroy(&txiki_backend.sync_inbox);
     txiki_backend.active = 0;
     txiki_backend_running = 0;
     fprintf(stderr, "[zapp] txiki backend terminated\n");
