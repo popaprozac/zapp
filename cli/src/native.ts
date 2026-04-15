@@ -1,32 +1,8 @@
-// Native compilation — resolves framework source, compiles with zc.
+// Native compilation — compiles with zc.
 
 import path from "node:path";
 import { existsSync } from "node:fs";
-
-// Resolve the native framework directory.
-// Monorepo: ../../native relative to CLI
-// Published: ./native bundled with CLI package
-export function resolveNativeDir(): string {
-  const cliDir = import.meta.dir;
-
-  // Monorepo: cli/src/ → native/
-  const monorepo = path.resolve(cliDir, "../../native");
-  if (existsSync(path.join(monorepo, "app", "app.zc"))) {
-    return monorepo;
-  }
-
-  // Published: cli/native/
-  const bundled = path.resolve(cliDir, "../native");
-  if (existsSync(path.join(bundled, "app", "app.zc"))) {
-    return bundled;
-  }
-
-  throw new Error(
-    "[zapp] Cannot find v2 native framework. Expected:\n" +
-    `  - ${monorepo}/app/app.zc  (monorepo)\n` +
-    `  - ${bundled}/app/app.zc  (published)\n`
-  );
-}
+import { resolveTxikiDir } from "./paths";
 
 // Get platform-specific .m files to compile alongside the generated .c
 export function getPlatformSources(nativeDir: string): string[] {
@@ -65,16 +41,13 @@ export function getPlatformSources(nativeDir: string): string[] {
   return [];
 }
 
-// Ensure txiki.js is built (cmake). Only runs if libtjs_core.a doesn't exist.
-export async function ensureTxikiBuilt(nativeDir: string): Promise<void> {
-  const txikiDir = path.resolve(nativeDir, "../vendor/txiki.js");
+// Ensure txiki.js is available and built (cmake).
+// Downloads on-demand if not found in monorepo or cache.
+export async function ensureTxikiBuilt(_nativeDir: string): Promise<string> {
+  const txikiDir = await resolveTxikiDir();
   const libPath = path.join(txikiDir, "build", "libtjs_core.a");
 
-  if (!existsSync(path.join(txikiDir, "src", "tjs.h"))) {
-    throw new Error("[zapp] txiki.js not found in vendor/txiki.js. Run: git submodule update --init");
-  }
-
-  if (existsSync(libPath)) return; // already built
+  if (existsSync(libPath)) return txikiDir; // already built
 
   process.stdout.write("[zapp] building txiki.js (first time only, may take a minute)...\n");
 
@@ -89,6 +62,7 @@ export async function ensureTxikiBuilt(nativeDir: string): Promise<void> {
   if (await cmake2.exited !== 0) throw new Error("[zapp] txiki.js cmake build failed");
 
   process.stdout.write("[zapp] txiki.js built successfully\n");
+  return txikiDir;
 }
 
 // Check if user's build.zc enables txiki
@@ -117,17 +91,20 @@ interface CompileOptions {
   buildConfigFile: string;   // .zapp/zapp_build_config.zc
   bootstrapFile?: string;    // .zapp/zapp_bootstrap.zc
   assetsFile?: string;       // .zapp/zapp_assets.zc (embedded brotli assets)
+  headlessFile?: string;     // .zapp/zapp_headless_workers.zc
   output: string;            // Binary output path
   nativeDir: string;         // Framework source dir
   optimize: boolean;         // Size optimizations
 }
 
 export async function compileNative(opts: CompileOptions): Promise<void> {
-  const { root, buildFile, buildConfigFile, bootstrapFile, assetsFile, output, nativeDir, optimize } = opts;
+  const { root, buildFile, buildConfigFile, bootstrapFile, assetsFile, headlessFile, output, nativeDir, optimize } = opts;
 
   // Generate platform config with .m file paths
   const { generatePlatformConfig } = await import("./build-config");
   const platformFile = await generatePlatformConfig(root);
+
+  const verbose = process.argv.includes("--verbose") || process.argv.includes("-v");
 
   const zcArgs = [
     "build",
@@ -136,23 +113,59 @@ export async function compileNative(opts: CompileOptions): Promise<void> {
     platformFile,
     ...(bootstrapFile ? [bootstrapFile] : []),
     ...(assetsFile ? [assetsFile] : []),
+    ...(headlessFile ? [headlessFile] : []),
     "-I", nativeDir,
     "-o", output,
+    // Suppress C compiler warnings by default. The framework and zc stdlib
+    // generate ~200 warnings (parentheses-equality, incompatible-pointer-types,
+    // etc.) that are pure noise for end users and bury any actual error.
+    // Pass --verbose to see them.
+    ...(verbose ? [] : ["-w"]),
   ];
 
-  // Size optimizations deferred for v2 baseline.
-  // When re-introduced: -Oz, -flto, --no-debug, strip
-
-  // Debug: uncomment to see zc invocation
-  // process.stderr.write(`[zapp] zc ${zcArgs.join(" ")}\n`);
+  // Verbose: stream stdout AND stderr live so the user sees the whole
+  // compile as it happens. Default: capture both, filter stderr for actual
+  // errors only (zc + clang emit ~200 warnings from framework/stdlib that
+  // are pure noise).
   const proc = Bun.spawn(["zc", ...zcArgs], {
     cwd: root,
-    stdout: "inherit",
-    stderr: "inherit",
+    stdout: verbose ? "inherit" : "pipe",
+    stderr: verbose ? "inherit" : "pipe",
   });
+
+  const stdoutText = verbose ? "" : await new Response(proc.stdout).text();
+  const stderrText = verbose ? "" : await new Response(proc.stderr).text();
+
   const exitCode = await proc.exited;
   if (exitCode !== 0) {
-    throw new Error(`[zapp] zc compilation failed (exit ${exitCode})`);
+    if (!verbose && stderrText) {
+      // Filter out warning/note lines; keep error lines + surrounding context.
+      const lines = stderrText.split("\n");
+      const errorLines: string[] = [];
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (line.includes("error:") || line.includes("error :")) {
+          // Include a bit of context (the error line itself and up to 3 following indented/source lines).
+          errorLines.push(line);
+          for (let j = 1; j <= 4 && i + j < lines.length; j++) {
+            const next = lines[i + j];
+            if (next.startsWith(" ") || next.startsWith("|") || next.match(/^\s*\d+\s*\|/)) {
+              errorLines.push(next);
+            } else {
+              break;
+            }
+          }
+        }
+      }
+      if (errorLines.length > 0) {
+        process.stderr.write(errorLines.join("\n") + "\n");
+      } else {
+        // Couldn't find anything that looks like an error — dump the full stderr
+        // so users aren't left staring at just "compilation failed".
+        process.stderr.write(stderrText);
+      }
+    }
+    throw new Error(`[zapp] compilation failed (exit ${exitCode}). Run with --verbose for full output.`);
   }
 
   // Strip deferred for v2 baseline

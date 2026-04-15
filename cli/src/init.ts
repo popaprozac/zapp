@@ -21,13 +21,15 @@ export async function runInit(opts: InitOptions) {
     process.exit(1);
   }
 
-  // 1. Create Vite project
+  // 1. Scaffold Vite project files (no install, no dev server).
+  // create-vite has an --immediate flag that auto-installs + starts the dev
+  // server, and an interactive prompt that does the same if confirmed.
+  // --no-interactive skips the prompt and defaults to no install.
   process.stdout.write(`[zapp] creating ${name} with template ${template}...\n`);
-  const viteProc = Bun.spawn(["bun", "create", "vite", name, "--template", template], {
-    cwd: root,
-    stdout: "inherit",
-    stderr: "inherit",
-  });
+  const viteProc = Bun.spawn(
+    ["bunx", "create-vite@latest", name, "--template", template, "--no-interactive"],
+    { cwd: root, stdout: "inherit", stderr: "inherit" },
+  );
   if ((await viteProc.exited) !== 0) {
     process.stderr.write("[zapp] vite scaffold failed\n");
     process.exit(1);
@@ -39,8 +41,8 @@ export async function runInit(opts: InitOptions) {
 
   await Bun.write(path.join(zappDir, "app.zc"), `import "app/app.zc";
 
-fn greet(_app: App*, args: string) -> string {
-    return args;
+fn greet(_app: App*, _args: JsonValue*) -> string {
+    return "Hello from Zapp!";
 }
 
 fn on_ready(_id: int, _handle: void*) -> void {
@@ -51,7 +53,7 @@ fn run_app() -> int {
     let config = AppConfig{
         name: "${name}",
         applicationShouldTerminateAfterLastWindowClosed: true,
-        webContentInspectable: -1,
+        webContentInspectable: Zapp::inspectable_auto(),
         maxWorkers: 0,
         qjsStackSize: 0,
     };
@@ -74,10 +76,15 @@ fn run_app() -> int {
 //> windows: define: windows
 
 // --- Worker engine (choose one) ---
+// JSC — macOS only, ~450 KB. Workers run JavaScript via JavaScriptCore.
+// Comment it out and uncomment TXIKI below to switch engines.
 //> macos: define: ZAPP_WORKER_ENGINE_JSC
-// Uncomment below for txiki.js (adds fetch, WebSocket, timers — +6MB binary):
-// //> define: ZAPP_WORKER_ENGINE_TXIKI
-// import "workers-txiki.zc";
+
+// txiki.js — cross-platform, ~6.5 MB. Adds fetch, WebSocket, timers,
+// and other web APIs to workers. CLI downloads and builds it on first
+// use (takes ~60s the first time). To switch, comment out the JSC line
+// above and uncomment:
+// //> macos: define: ZAPP_WORKER_ENGINE_TXIKI
 
 //> macos: framework: Cocoa
 //> macos: framework: WebKit
@@ -99,13 +106,21 @@ fn main() -> int {
 }
 `);
 
-  // 3. Add zapp.config.ts
+  // 3. Add zapp.config.ts — typed via defineConfig for autocomplete
   const identifier = `com.zapp.${name.toLowerCase().replace(/[^a-z0-9]/g, "")}`;
-  await Bun.write(path.join(projectDir, "zapp.config.ts"), `export default {
+  await Bun.write(path.join(projectDir, "zapp.config.ts"), `import { defineConfig } from "@zappdev/cli/config";
+
+export default defineConfig({
   name: "${name}",
   identifier: "${identifier}",
   version: "0.1.0",
-};
+  // Add headless TypeScript workers that start when the app boots.
+  // Keys are worker IDs (used for termination); values are source paths.
+  //
+  //   headless: {
+  //     db: "src/workers/db.ts",
+  //   },
+});
 `);
 
   // 4. Update package.json — add deps and scripts
@@ -116,21 +131,74 @@ fn main() -> int {
     ...pkgObj.scripts,
     "dev": "zapp dev",
     "build": "zapp build",
+    "package": "zapp package",
     "generate": "zapp generate",
   };
 
   pkgObj.dependencies = {
     ...(pkgObj.dependencies ?? {}),
-    "@zappdev/runtime": "latest",
+    "@zappdev/runtime": "^0.6.0-alpha.0",
   };
   pkgObj.devDependencies = {
     ...(pkgObj.devDependencies ?? {}),
-    "@zappdev/cli": "latest",
+    "@zappdev/cli": "^0.6.0-alpha.0",
+    "@zappdev/vite": "^0.6.0-alpha.0",
   };
 
   await Bun.write(pkgPath, JSON.stringify(pkgObj, null, 2));
 
-  // 5. Add .zapp/ to .gitignore
+  // 5. Inject zappWorkers() into the template's vite.config.ts
+  // Templates like svelte-ts ship their own vite.config.ts with framework
+  // plugins (e.g. svelte()). We must preserve those and append ours.
+  const viteConfigPath = path.join(projectDir, "vite.config.ts");
+  // Also check .js — some templates use vite.config.js
+  const viteConfigJsPath = path.join(projectDir, "vite.config.js");
+  const configPath = existsSync(viteConfigPath) ? viteConfigPath
+    : existsSync(viteConfigJsPath) ? viteConfigJsPath
+    : null;
+
+  if (configPath) {
+    let viteConfig = await Bun.file(configPath).text();
+
+    // Add our imports at the top (after existing imports)
+    const importLines = [
+      `import { zappWorkers } from "@zappdev/vite";`,
+      `import zappConfig from "./zapp.config";`,
+    ];
+    for (const importLine of importLines) {
+      const pkg = importLine.match(/from ["'](.+?)["']/)?.[1] ?? "";
+      if (viteConfig.includes(pkg)) continue;
+      const lastImportIdx = viteConfig.lastIndexOf("\nimport ");
+      if (lastImportIdx >= 0) {
+        const endOfLine = viteConfig.indexOf("\n", lastImportIdx + 1);
+        viteConfig = viteConfig.slice(0, endOfLine + 1) + importLine + "\n" + viteConfig.slice(endOfLine + 1);
+      } else {
+        viteConfig = importLine + "\n" + viteConfig;
+      }
+    }
+
+    // Append zappWorkers() with config to the plugins array
+    if (!viteConfig.includes("zappWorkers(")) {
+      viteConfig = viteConfig.replace(
+        /plugins:\s*\[/,
+        "plugins: [zappWorkers({ headless: zappConfig.headless }), "
+      );
+    }
+
+    await Bun.write(configPath, viteConfig);
+  } else {
+    // No vite.config found — create a minimal one
+    await Bun.write(viteConfigPath, `import { defineConfig } from "vite";
+import { zappWorkers } from "@zappdev/vite";
+import zappConfig from "./zapp.config";
+
+export default defineConfig({
+  plugins: [zappWorkers({ headless: zappConfig.headless })],
+});
+`);
+  }
+
+  // 6. Add .zapp/ to .gitignore
   const gitignorePath = path.join(projectDir, ".gitignore");
   let gitignore = "";
   try { gitignore = await Bun.file(gitignorePath).text(); } catch {}
@@ -145,6 +213,7 @@ fn main() -> int {
   process.stdout.write(`  Then add to your entry file (e.g. src/main.ts):\n\n`);
   process.stdout.write(`    import { Window, WindowEvent, Services } from "@zappdev/runtime";\n\n`);
   process.stdout.write(`  Run:\n`);
-  process.stdout.write(`    zapp dev      # development with Vite HMR\n`);
-  process.stdout.write(`    zapp build    # production build\n\n`);
+  process.stdout.write(`    bun run dev      # development with Vite HMR\n`);
+  process.stdout.write(`    bun run build    # production build\n`);
+  process.stdout.write(`    bun run package  # .app bundle (macOS)\n\n`);
 }

@@ -20,10 +20,9 @@ fn run_app() -> int {
     let config = AppConfig{
         name: "bench-zapp-txiki",
         applicationShouldTerminateAfterLastWindowClosed: true,
-        webContentInspectable: -1,
+        webContentInspectable: Zapp::inspectable_auto(),
         maxWorkers: 0,
         qjsStackSize: 0,
-        backend: false,
     };
     let app = App::new(config);
     app.service.add("ping", ping);

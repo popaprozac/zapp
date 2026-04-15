@@ -118,10 +118,9 @@ fn run_app() -> int {
     let config = AppConfig{
         name: "hello-world",
         applicationShouldTerminateAfterLastWindowClosed: true,
-        webContentInspectable: -1,
+        webContentInspectable: Zapp::inspectable_auto(),
         maxWorkers: 4,
         qjsStackSize: 0,
-        backend: true,
     };
     let app = App::new(config);
     log("app created");

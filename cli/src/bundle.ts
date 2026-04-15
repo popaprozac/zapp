@@ -7,6 +7,7 @@ import { mkdir, unlink, rm, cp, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import type { ResolvedConfig } from "./config";
 import { processIcon } from "./icon";
+import { resolveAssetsDir } from "./paths";
 
 export async function createDevBundle(root: string, binaryPath: string, config: ResolvedConfig): Promise<string> {
   const appName = config.name.replace(/[^a-zA-Z0-9 _-]/g, "");
@@ -39,11 +40,13 @@ export async function createDevBundle(root: string, binaryPath: string, config: 
   }
   if (!iconSrc || !existsSync(iconSrc)) {
     // Fall back to framework default icon
-    const frameworkAssets = path.resolve(import.meta.dir, "../../assets");
-    const defaultIcon = path.join(frameworkAssets, "zapp.icon");
-    const defaultPng = path.join(frameworkAssets, "zapp.png");
-    if (existsSync(defaultIcon)) iconSrc = defaultIcon;
-    else if (existsSync(defaultPng)) iconSrc = defaultPng;
+    const frameworkAssets = resolveAssetsDir();
+    if (frameworkAssets) {
+      const defaultIcon = path.join(frameworkAssets, "zapp.icon");
+      const defaultPng = path.join(frameworkAssets, "zapp.png");
+      if (existsSync(defaultIcon)) iconSrc = defaultIcon;
+      else if (existsSync(defaultPng)) iconSrc = defaultPng;
+    }
   }
 
   if (iconSrc && existsSync(iconSrc)) {

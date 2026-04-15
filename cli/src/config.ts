@@ -26,6 +26,12 @@ export interface ZappConfig {
   version?: string;
   assetDir?: string;  // Default: "./dist" (Vite), configurable for static sites
   devPort?: number;   // Default: 5173
+  /**
+   * Headless workers to start at app boot, keyed by ID.
+   * Example: `{ db: "src/workers/db.ts", sync: "src/workers/sync.ts" }`
+   * IDs are used for termination via `Workers.terminate(id)`.
+   */
+  headless?: Record<string, string>;
   deepLinkSchemes?: string[];  // e.g. ["myapp"] → registers myapp:// URL scheme
   macos?: MacOSConfig;
   security?: SecurityConfig;

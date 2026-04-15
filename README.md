@@ -33,18 +33,19 @@ Zapp ships two worker engines: **JSC** (macOS-only, tiny, no web APIs in workers
 
 ```bash
 # Prerequisites: Zen-C compiler (zc) + Bun
-bun add -g @zappdev/cli
-zapp init my-app
+bunx @zappdev/cli init my-app
 cd my-app
 bun install
-zapp dev
+bun run dev
 ```
 
 Production build:
 ```bash
-zapp build
-zapp package   # .app bundle with icon (macOS)
+bun run build
+bun run package   # .app bundle with icon (macOS)
 ```
+
+No global install needed — `bunx` fetches the CLI on the fly for init, and `bun run` uses the local copy in your project's `node_modules`.
 
 ## Features
 
@@ -67,19 +68,19 @@ zapp package   # .app bundle with icon (macOS)
 ```zc
 import "app/app.zc";
 
-fn greet(app: App*, args: string) -> string {
-    return args;
+fn greet(_app: App*, _args: JsonValue*) -> string {
+    return "Hello from Zapp!";
 }
 
-fn on_ready(id: int, handle: void*) -> void {
-    Window{id: id, handle: handle}.show();
+fn on_ready(_id: int, _handle: void*) -> void {
+    Window{id: _id, handle: _handle}.show();
 }
 
 fn run_app() -> int {
     let config = AppConfig{
         name: "My App",
         applicationShouldTerminateAfterLastWindowClosed: true,
-        webContentInspectable: -1,
+        webContentInspectable: Zapp::inspectable_auto(),
         maxWorkers: 0,
         qjsStackSize: 0,
         backend: false,

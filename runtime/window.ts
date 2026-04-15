@@ -112,6 +112,13 @@ export const Window = {
 
   /** Create a new window. Returns a handle for the new window. */
   async create(opts?: Partial<WindowOptions>): Promise<WindowHandle> {
+    // Worker context: call the createWindow host directly (sync C call).
+    const host = (globalThis as any).__zappBridge;
+    if (host?.createWindow) {
+      const r = host.createWindow(opts ?? {}) as { windowId: string };
+      return createWindowHandle(r.windowId);
+    }
+    // Webview context: async IPC roundtrip through the WKWebView bridge.
     const result = await getBridge().invoke("__window:create", opts ?? {}) as { windowId: string };
     return createWindowHandle(result.windowId);
   },

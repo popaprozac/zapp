@@ -4,15 +4,21 @@ import process from "node:process";
 import { mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { loadConfig } from "./config";
-import { generateBuildConfig, generatePlatformConfig } from "./build-config";
+import { generateBuildConfig, generatePlatformConfig, generateHeadlessWorkers } from "./build-config";
 import { generateBindings } from "./generate";
-import { resolveNativeDir, compileNative, ensureTxikiBuilt, hasTxikiEnabled, hasAnyWorkerEngine } from "./native";
+import { compileNative, ensureTxikiBuilt, hasTxikiEnabled, hasAnyWorkerEngine } from "./native";
+import { resolveNativeDir, resolveBootstrapDir } from "./paths";
 import { runInit } from "./init";
 // bundleWorkers removed — Vite plugin handles worker bundling now
 import { createDevBundle } from "./bundle";
 import { createProductionBundle } from "./package";
-import { generateBootstrap } from "../../bootstrap/codegen";
 import { generateAssetManifest } from "./assets";
+
+// Bootstrap codegen lives outside cli/ in the monorepo but is bundled
+// alongside it in the published package. Dynamic import so the path
+// can be resolved at runtime for both layouts.
+const bootstrapDir = resolveBootstrapDir();
+const { generateBootstrap } = await import(path.join(bootstrapDir, "codegen.ts"));
 
 const cwd = process.cwd();
 
@@ -65,6 +71,7 @@ async function runDev(root: string) {
   // 3. Generate build config + bootstrap (dev mode)
   const buildConfigFile = await generateBuildConfig({ root, config, mode: "dev", devUrl });
   const platformFile = await generatePlatformConfig(root);
+  const headlessFile = await generateHeadlessWorkers({ root, headless: config.headless });
   const zappDir = path.join(root, ".zapp");
   process.stdout.write("[zapp] generating bootstrap...\n");
   const bootstrapFile = await generateBootstrap(zappDir);
@@ -117,48 +124,9 @@ async function runDev(root: string) {
     process.exit(1);
   }
 
-  // 4. Compile native binary
-  process.stdout.write("[zapp] compiling native binary...\n");
-  const binDir = path.join(root, "bin");
-  await mkdir(binDir, { recursive: true });
-  const exeSuffix = process.platform === "win32" ? ".exe" : "";
-  const nativeOut = path.join(binDir, config.name.replace(/\s+/g, "-").toLowerCase() + exeSuffix);
-
-  const buildFile = path.join(root, "zapp", "build.zc");
-  await compileNative({
-    root,
-    buildFile,
-    buildConfigFile,
-    bootstrapFile,
-    assetsFile,
-    output: nativeOut,
-    nativeDir,
-    optimize: false,
-  });
-
-  let execPath: string;
-
-  if (process.platform === "darwin") {
-    // 5. Create .app bundle for dev mode (enables notifications, dock icon, app name)
-    process.stdout.write("[zapp] creating dev bundle...\n");
-    const appDir = await createDevBundle(root, nativeOut, config);
-    const execName = path.basename(nativeOut);
-    execPath = path.join(appDir, "Contents", "MacOS", execName);
-    process.stdout.write(`[zapp] launching ${appDir}\n`);
-  } else {
-    // Windows: self-contained WebView2 loader — no external DLL needed
-    execPath = nativeOut;
-    process.stdout.write(`[zapp] launching ${execPath}\n`);
-  }
-
-  const appProc = Bun.spawn([execPath], {
-    cwd: root,
-    stdout: "inherit",
-    stderr: "inherit",
-  });
-
   // Kill a process tree (Windows needs taskkill for child processes)
-  const killProc = (proc: ReturnType<typeof Bun.spawn>) => {
+  const killProc = (proc: ReturnType<typeof Bun.spawn> | null) => {
+    if (!proc) return;
     try {
       if (process.platform === "win32" && proc.pid) {
         Bun.spawnSync(["taskkill", "/F", "/T", "/PID", String(proc.pid)], {
@@ -170,9 +138,13 @@ async function runDev(root: string) {
     } catch {}
   };
 
-  // Ensure Vite and app are always killed on any exit path
+  // Register cleanup NOW, before the compile step. If compilation throws
+  // (zc error, missing dep, etc.), vite would otherwise leak — the next
+  // `bun run dev` would then fail with "port 5173 already in use" and
+  // force the user to manually `kill` the stale vite.
+  let appProc: ReturnType<typeof Bun.spawn> | null = null;
   let cleaned = false;
-  const cleanup = (code = 0) => {
+  const cleanup = (code?: number) => {
     if (cleaned) return;
     cleaned = true;
     killProc(appProc);
@@ -190,6 +162,54 @@ async function runDev(root: string) {
   process.on("unhandledRejection", (err) => {
     console.error("[zapp] unhandled rejection:", err);
     cleanup(1);
+  });
+
+  // 4. Compile native binary. If this throws, cleanup() above kills vite.
+  process.stdout.write("[zapp] compiling native binary...\n");
+  const binDir = path.join(root, "bin");
+  await mkdir(binDir, { recursive: true });
+  const exeSuffix = process.platform === "win32" ? ".exe" : "";
+  const nativeOut = path.join(binDir, config.name.replace(/\s+/g, "-").toLowerCase() + exeSuffix);
+
+  const buildFile = path.join(root, "zapp", "build.zc");
+  try {
+    await compileNative({
+      root,
+      buildFile,
+      buildConfigFile,
+      bootstrapFile,
+      assetsFile,
+      headlessFile,
+      output: nativeOut,
+      nativeDir,
+      optimize: false,
+    });
+  } catch (err) {
+    // Tear down vite before propagating — otherwise the failed compile
+    // leaves the dev server running and blocks port 5173 for the retry.
+    killProc(viteProc);
+    throw err;
+  }
+
+  let execPath: string;
+
+  if (process.platform === "darwin") {
+    // 5. Create .app bundle for dev mode (enables notifications, dock icon, app name)
+    process.stdout.write("[zapp] creating dev bundle...\n");
+    const appDir = await createDevBundle(root, nativeOut, config);
+    const execName = path.basename(nativeOut);
+    execPath = path.join(appDir, "Contents", "MacOS", execName);
+    process.stdout.write(`[zapp] launching ${appDir}\n`);
+  } else {
+    // Windows: self-contained WebView2 loader — no external DLL needed
+    execPath = nativeOut;
+    process.stdout.write(`[zapp] launching ${execPath}\n`);
+  }
+
+  appProc = Bun.spawn([execPath], {
+    cwd: root,
+    stdout: "inherit",
+    stderr: "inherit",
   });
 
   // Wait for either to exit
@@ -254,6 +274,7 @@ async function runBuild(root: string) {
   // 5. Generate build config + bootstrap (prod mode, embedded assets)
   const buildConfigFile = await generateBuildConfig({ root, config, mode: "prod", embedAssets: true });
   const platformFile = await generatePlatformConfig(root);
+  const headlessFile = await generateHeadlessWorkers({ root, headless: config.headless });
   const bootstrapFile = await generateBootstrap(zappDir);
 
   // 5. Compile native binary (assets embedded in binary)
@@ -270,6 +291,7 @@ async function runBuild(root: string) {
     buildConfigFile,
     bootstrapFile,
     assetsFile,
+    headlessFile,
     output: nativeOut,
     nativeDir,
     optimize: true,

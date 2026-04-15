@@ -1,0 +1,22 @@
+{
+  "name": "@zappdev/vite",
+  "version": "0.6.0-alpha.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist/",
+    "src/"
+  ],
+  "scripts": {
+    "build": "bun build src/index.ts --outdir dist --format esm --target node",
+    "prepack": "bun run build"
+  },
+  "peerDependencies": {
+    "vite": ">=5.0.0"
+  }
+}

@@ -149,14 +149,13 @@ raw {
                     ename, window_id);
             }
 
+            // Broadcast to every active worker (headless + webview-owned)
             #if defined(ZAPP_WORKER_ENGINE_TXIKI)
-            extern bool txiki_backend_is_running(void);
-            extern void txiki_backend_eval_js(const char* js);
-            if (txiki_backend_is_running()) txiki_backend_eval_js(__be_buf);
+            extern void txiki_broadcast_eval_js(const char* js);
+            txiki_broadcast_eval_js(__be_buf);
             #elif defined(ZAPP_WORKER_ENGINE_JSC)
-            extern bool jsc_backend_is_running(void);
-            extern void jsc_backend_eval_js(const char* js);
-            if (jsc_backend_is_running()) jsc_backend_eval_js(__be_buf);
+            extern void jsc_broadcast_eval_js(const char* js);
+            jsc_broadcast_eval_js(__be_buf);
             #endif
             #endif
         }

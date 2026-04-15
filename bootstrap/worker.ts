@@ -1,25 +1,112 @@
 /**
- * Worker bootstrap — injected into JSC worker contexts after host objects are set up.
+ * Worker bootstrap — injected into every JSC worker context (webview-spawned
+ * and headless alike). All workers share the same API surface; the only
+ * difference between a headless worker and a webview-owned one is whether
+ * they have an owner window.
  *
- * Host objects already available on __zappBridge:
+ * Host objects set up by native (see jsc_setup_bridge in jsc.m):
  *   - invokeService(method, args) → JSValue (sync, direct C call)
- *   - postToWebview(data) → void
- *   - syncWait(key, timeoutMs) → void (fires async, result via dispatchSyncResult)
- *   - syncNotify(key, count) → void
+ *   - postToWebview(data) → void (no-op in headless workers)
+ *   - syncWait(key, timeoutMs), syncNotify(key, count)
+ *   - dispatchEventToAll(name, payload) — broadcast to every webview
+ *   - createWindow(opts) → number (returns windowId; works from any worker)
+ *   - quit() — terminate the app
+ *   - showNotification(title, body)
+ *   - subscribeWindowEvent(windowId, eventId)
  *
- * This bootstrap adds JS-side convenience APIs:
- *   - self.send(channel, data) / self.receive(channel, handler) — named channels
- *   - Channel routing in _messageHandlers (called by ObjC post_message dispatch)
- *   - self.postMessage wrapper
+ * This bootstrap adds:
+ *   - A runtime bridge exposed via Symbol.for("zapp.bridge") so
+ *     @zappdev/runtime's getBridge() works uniformly across contexts.
+ *   - Channel API (self.send / self.receive) for webview-worker messaging.
+ *   - App event listener registry + _dispatchAppEvent callback for headless
+ *     workers that want to hear app:* lifecycle events.
+ *   - dispatchSyncResult glue for Sync.wait()'s promise resolution.
  */
 
 (function () {
   const bridge = (self as any).__zappBridge;
   if (!bridge) return;
 
-  // Expose under Symbol.for("zapp.bridge") so @zappdev/runtime's getBridge()
-  // works in workers. Host objects on the bridge (invokeService, syncWait,
-  // syncNotify, postToWebview, dispatchEventToAll) are accessed directly.
+  // Zero-overhead principle: we mutate __zappBridge in place to add the
+  // methods the runtime expects (on, emit, invoke, post, _onEvent,
+  // _dispatchAppEvent) and expose *that same object* under
+  // Symbol.for("zapp.bridge"). No wrapper, no indirection — when the
+  // runtime calls getBridge().invoke(...), it's hitting the native host
+  // object's own property directly.
+  //
+  // The hottest path (Services.invoke → __zappBridge.invokeService) already
+  // bypasses getBridge() entirely in runtime/services.ts, so it remains a
+  // direct C call regardless. This setup ensures the remaining
+  // runtime-API calls from worker contexts pay at most one JS property
+  // read + function call, not a whole wrapper object hop.
+
+  const listeners: Record<string, Array<(data: unknown) => void>> = {};
+
+  const windowEventIds: Record<string, number> = {
+    "window:ready": 0, "window:focus": 1, "window:blur": 2,
+    "window:resize": 3, "window:move": 4, "window:close": 5,
+    "window:minimize": 6, "window:maximize": 7, "window:restore": 8,
+    "window:fullscreen": 9, "window:unfullscreen": 10,
+  };
+
+  bridge.on = function (event: string, handler: (data: unknown) => void) {
+    if (!listeners[event]) listeners[event] = [];
+    listeners[event].push(handler);
+    const eventId = windowEventIds[event];
+    if (eventId !== undefined && typeof bridge.subscribeWindowEvent === "function") {
+      bridge.subscribeWindowEvent(-1, eventId); // -1 = all windows
+    }
+    return () => {
+      listeners[event] = (listeners[event] || []).filter((h) => h !== handler);
+    };
+  };
+
+  // Runtime's Events.emit calls bridge.emit — alias to the direct host.
+  // No wrapper, just rename.
+  bridge.emit = bridge.dispatchEventToAll;
+
+  // Runtime's getBridge().invoke() — pure alias to invokeService (zero JS
+  // overhead). Runtime APIs that need something other than a user service
+  // (Window.create, Notification.*, Dock.*) detect worker context and call
+  // the appropriate host dispatcher directly, so there's no branching here.
+  bridge.invoke = bridge.invokeService;
+
+  // Headless workers have no webview to post to; webview-owned workers
+  // use postToWebview. Alias so getBridge().post(...) works either way.
+  bridge.post = bridge.postToWebview ?? function () {};
+
+  // Native-driven event dispatch callbacks.
+  bridge._dispatchAppEvent = function (eventId: number, dataJson: string) {
+    const eventMap: Record<number, string> = {
+      100: "app:started", 101: "app:shutdown",
+      102: "app:notification-click", 103: "app:notification-action",
+      104: "app:reopen", 105: "app:open-url",
+      106: "app:active", 107: "app:inactive",
+    };
+    const name = eventMap[eventId];
+    if (!name) return;
+    let data: unknown = dataJson;
+    try { data = JSON.parse(dataJson); } catch {}
+    for (const h of listeners[name] || []) {
+      try { h(data); } catch (e) { console.error("[worker]", e); }
+    }
+    if (eventId === 102) {
+      for (const h of listeners["__notif:click"] || []) try { h(data); } catch (e) { console.error("[worker]", e); }
+    } else if (eventId === 103) {
+      for (const h of listeners["__notif:action"] || []) try { h(data); } catch (e) { console.error("[worker]", e); }
+    }
+  };
+
+  bridge._onEvent = function (name: string, payload: string) {
+    let parsed: unknown = payload;
+    try { parsed = JSON.parse(payload); } catch {}
+    for (const h of listeners[name] || []) {
+      try { h(parsed); } catch (e) { console.error("[worker]", e); }
+    }
+  };
+
+  // Expose __zappBridge itself (not a wrapper) under the symbol the
+  // runtime looks up. getBridge() returns the native host object directly.
   (globalThis as any)[Symbol.for("zapp.bridge")] = bridge;
 
   // Channel handler registry

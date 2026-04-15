@@ -11,8 +11,16 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <pthread.h>
+#include <time.h>
 #include <uv.h>
 #include <compression.h>
+
+// Platform-specific APIs used for privileged host objects (createWindow,
+// quit, notif, dock). Darwin uses GCD; Windows will need its own path via
+// thread hops / platform APIs when txiki gains Windows support.
+#ifdef __APPLE__
+#include <dispatch/dispatch.h>
+#endif
 
 // txiki.js private API — needed for TJS_GetLoop and TJS_NewRuntimeWorker
 extern uv_loop_t* TJS_GetLoop(TJSRuntime* qrt);
@@ -515,6 +523,254 @@ static JSValue zapp_bridge_emit_to_host(JSContext* ctx, JSValueConst this_val, i
     return JS_UNDEFINED;
 }
 
+// --- Privileged host objects: parity with JSC ---
+
+// createWindow(opts) — sync window creation from any worker.
+// Threading: window creation must happen on the main thread. Worker threads
+// call dispatch_sync(main) to hop over, but guard against the deadlock when
+// the caller is already on main (e.g. via a setTimeout-dispatched callback
+// that the JSC engine routes to main — txiki workers run on their own thread
+// so this guard is belt-and-suspenders).
+extern int zapp_worker_create_window(const char* title, const char* url, int width, int height);
+
+static JSValue zapp_bridge_create_window(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    (void)this_val;
+    const char* title = "Window";
+    const char* url = "";
+    int width = 0, height = 0;
+    JSValue title_val = JS_UNDEFINED;
+    JSValue url_val = JS_UNDEFINED;
+
+    if (argc >= 1 && JS_IsObject(argv[0])) {
+        title_val = JS_GetPropertyStr(ctx, argv[0], "title");
+        if (JS_IsString(title_val)) title = JS_ToCString(ctx, title_val);
+        url_val = JS_GetPropertyStr(ctx, argv[0], "url");
+        if (JS_IsString(url_val)) url = JS_ToCString(ctx, url_val);
+        JSValue w_val = JS_GetPropertyStr(ctx, argv[0], "width");
+        if (JS_IsNumber(w_val)) { int32_t w = 0; JS_ToInt32(ctx, &w, w_val); width = w; }
+        JS_FreeValue(ctx, w_val);
+        JSValue h_val = JS_GetPropertyStr(ctx, argv[0], "height");
+        if (JS_IsNumber(h_val)) { int32_t h = 0; JS_ToInt32(ctx, &h, h_val); height = h; }
+        JS_FreeValue(ctx, h_val);
+    }
+
+    int window_id = -1;
+    const char* titleC = title ? title : "";
+    const char* urlC = url ? url : "";
+#ifdef __APPLE__
+    // txiki workers always run on their own thread (uv_loop), never the main
+    // queue — so dispatch_sync(main) is always safe here (no deadlock risk).
+    __block int wid_out = -1;
+    __block const char* tC = titleC;
+    __block const char* uC = urlC;
+    __block int w = width;
+    __block int h = height;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        wid_out = zapp_worker_create_window(tC, uC, w, h);
+    });
+    window_id = wid_out;
+#else
+    // TODO(windows): route window creation through the platform's main-thread
+    // hop (PostMessage + WaitForSingleObject or equivalent) when txiki gains
+    // Windows support.
+    window_id = zapp_worker_create_window(titleC, urlC, width, height);
+#endif
+
+    if (title && JS_IsString(title_val)) JS_FreeCString(ctx, title);
+    if (url && JS_IsString(url_val)) JS_FreeCString(ctx, url);
+    JS_FreeValue(ctx, title_val);
+    JS_FreeValue(ctx, url_val);
+
+    char wid[32];
+    snprintf(wid, sizeof(wid), "win-%d", window_id);
+    JSValue result = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, result, "windowId", JS_NewString(ctx, wid));
+    return result;
+}
+
+// quit() — terminate the app. Must hop to the main thread on platforms that
+// require it; exit() itself is safe from any thread but some teardown
+// handlers assume main-thread context.
+static JSValue zapp_bridge_quit(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    (void)ctx; (void)this_val; (void)argc; (void)argv;
+#ifdef __APPLE__
+    dispatch_async(dispatch_get_main_queue(), ^{ exit(0); });
+#else
+    exit(0);
+#endif
+    return JS_UNDEFINED;
+}
+
+// notif(action, args) — dispatcher for all notification operations.
+// Mirrors the JSC engine's bridge.notif host.
+//
+// Darwin-only today. When txiki ships on Windows we'll add the Windows
+// notification backend and drop the #ifdef, routing to a common
+// `zapp_notification_*` layer.
+#ifdef __APPLE__
+extern const char* darwin_notification_get_permission(void);
+extern void darwin_notification_show_typed(const char*, const char*, const char*, const char*);
+extern void darwin_notification_schedule_typed(const char*, const char*, double);
+extern void darwin_notification_cancel(const char*);
+extern void darwin_notification_cancel_all(void);
+extern void darwin_notification_remove_delivered(const char*);
+extern void darwin_notification_remove_all_delivered(void);
+extern void darwin_notification_update(const char*, const char*, const char*, const char*);
+#endif
+
+static JSValue zapp_bridge_notif(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+#ifndef __APPLE__
+    (void)ctx; (void)this_val; (void)argc; (void)argv;
+    return JS_UNDEFINED;
+#else
+    (void)this_val;
+    if (argc < 1) return JS_UNDEFINED;
+    const char* action = JS_ToCString(ctx, argv[0]);
+    if (!action) return JS_UNDEFINED;
+    JSValue args = (argc >= 2) ? argv[1] : JS_UNDEFINED;
+
+    // Helper to extract a string property from args (if args is an object).
+    #define GETSTR(name, dflt) ({ \
+        const char* _r = (dflt); \
+        JSValue _v = JS_IsObject(args) ? JS_GetPropertyStr(ctx, args, (name)) : JS_UNDEFINED; \
+        if (JS_IsString(_v)) _r = JS_ToCString(ctx, _v); \
+        _v; _r; \
+    })
+
+    JSValue result = JS_UNDEFINED;
+
+    if (strcmp(action, "getPermission") == 0) {
+        const char* st = darwin_notification_get_permission();
+        result = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, result, "status", JS_NewString(ctx, st ? st : "notDetermined"));
+    } else if (strcmp(action, "show") == 0 && JS_IsObject(args)) {
+        JSValue title_v = JS_GetPropertyStr(ctx, args, "title");
+        JSValue subtitle_v = JS_GetPropertyStr(ctx, args, "subtitle");
+        JSValue body_v = JS_GetPropertyStr(ctx, args, "body");
+        JSValue sound_v = JS_GetPropertyStr(ctx, args, "sound");
+        const char* t = JS_IsString(title_v) ? JS_ToCString(ctx, title_v) : "";
+        const char* s = JS_IsString(subtitle_v) ? JS_ToCString(ctx, subtitle_v) : "";
+        const char* b = JS_IsString(body_v) ? JS_ToCString(ctx, body_v) : "";
+        const char* snd = JS_IsString(sound_v) ? JS_ToCString(ctx, sound_v) : "default";
+        darwin_notification_show_typed(t, s, b, snd);
+        char id[64];
+        {
+            struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts);
+            unsigned long long ms = (unsigned long long)ts.tv_sec * 1000ULL + ts.tv_nsec / 1000000ULL;
+            snprintf(id, sizeof(id), "notif-%llu-%u", ms, arc4random());
+        }
+        result = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, result, "id", JS_NewString(ctx, id));
+        if (JS_IsString(title_v)) JS_FreeCString(ctx, t);
+        if (JS_IsString(subtitle_v)) JS_FreeCString(ctx, s);
+        if (JS_IsString(body_v)) JS_FreeCString(ctx, b);
+        if (JS_IsString(sound_v)) JS_FreeCString(ctx, snd);
+        JS_FreeValue(ctx, title_v); JS_FreeValue(ctx, subtitle_v);
+        JS_FreeValue(ctx, body_v); JS_FreeValue(ctx, sound_v);
+    } else if (strcmp(action, "schedule") == 0 && JS_IsObject(args)) {
+        JSValue title_v = JS_GetPropertyStr(ctx, args, "title");
+        JSValue body_v = JS_GetPropertyStr(ctx, args, "body");
+        JSValue delay_v = JS_GetPropertyStr(ctx, args, "delaySeconds");
+        const char* t = JS_IsString(title_v) ? JS_ToCString(ctx, title_v) : "";
+        const char* b = JS_IsString(body_v) ? JS_ToCString(ctx, body_v) : "";
+        double d = 0; if (JS_IsNumber(delay_v)) JS_ToFloat64(ctx, &d, delay_v);
+        darwin_notification_schedule_typed(t, b, d);
+        char id[64];
+        {
+            struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts);
+            unsigned long long ms = (unsigned long long)ts.tv_sec * 1000ULL + ts.tv_nsec / 1000000ULL;
+            snprintf(id, sizeof(id), "notif-%llu-%u", ms, arc4random());
+        }
+        result = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, result, "id", JS_NewString(ctx, id));
+        if (JS_IsString(title_v)) JS_FreeCString(ctx, t);
+        if (JS_IsString(body_v)) JS_FreeCString(ctx, b);
+        JS_FreeValue(ctx, title_v); JS_FreeValue(ctx, body_v); JS_FreeValue(ctx, delay_v);
+    } else if (strcmp(action, "cancelAll") == 0) {
+        darwin_notification_cancel_all();
+    } else if (strcmp(action, "removeAllDelivered") == 0) {
+        darwin_notification_remove_all_delivered();
+    } else if (JS_IsObject(args)) {
+        JSValue id_v = JS_GetPropertyStr(ctx, args, "id");
+        const char* id = JS_IsString(id_v) ? JS_ToCString(ctx, id_v) : "";
+        if (strcmp(action, "cancel") == 0) darwin_notification_cancel(id);
+        else if (strcmp(action, "removeDelivered") == 0) darwin_notification_remove_delivered(id);
+        else if (strcmp(action, "update") == 0) {
+            JSValue t_v = JS_GetPropertyStr(ctx, args, "title");
+            JSValue st_v = JS_GetPropertyStr(ctx, args, "subtitle");
+            JSValue b_v = JS_GetPropertyStr(ctx, args, "body");
+            const char* t = JS_IsString(t_v) ? JS_ToCString(ctx, t_v) : "";
+            const char* st = JS_IsString(st_v) ? JS_ToCString(ctx, st_v) : "";
+            const char* b = JS_IsString(b_v) ? JS_ToCString(ctx, b_v) : "";
+            darwin_notification_update(id, t, st, b);
+            if (JS_IsString(t_v)) JS_FreeCString(ctx, t);
+            if (JS_IsString(st_v)) JS_FreeCString(ctx, st);
+            if (JS_IsString(b_v)) JS_FreeCString(ctx, b);
+            JS_FreeValue(ctx, t_v); JS_FreeValue(ctx, st_v); JS_FreeValue(ctx, b_v);
+        }
+        if (JS_IsString(id_v)) JS_FreeCString(ctx, id);
+        JS_FreeValue(ctx, id_v);
+    }
+
+    #undef GETSTR
+    JS_FreeCString(ctx, action);
+    return result;
+#endif /* __APPLE__ */
+}
+
+// dock(action, args) — sync dispatcher for macOS dock APIs. On Windows this
+// will become `taskbar` routing to SetOverlayIcon / SetThumbnailTooltip etc.
+// once the cross-platform `zapp_dock_*` layer lands.
+#ifdef __APPLE__
+extern void darwin_dock_show_icon(void);
+extern void darwin_dock_hide_icon(void);
+extern void darwin_dock_set_badge(const char*);
+extern void darwin_dock_remove_badge(void);
+extern void darwin_dock_bounce(int);
+extern void darwin_dock_set_icon(const char*);
+extern void darwin_dock_reset_icon(void);
+#endif
+
+static JSValue zapp_bridge_dock(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+#ifndef __APPLE__
+    (void)ctx; (void)this_val; (void)argc; (void)argv;
+    return JS_UNDEFINED;
+#else
+    (void)this_val;
+    if (argc < 1) return JS_UNDEFINED;
+    const char* action = JS_ToCString(ctx, argv[0]);
+    if (!action) return JS_UNDEFINED;
+
+    if (strcmp(action, "showIcon") == 0) darwin_dock_show_icon();
+    else if (strcmp(action, "hideIcon") == 0) darwin_dock_hide_icon();
+    else if (strcmp(action, "removeBadge") == 0) darwin_dock_remove_badge();
+    else if (strcmp(action, "resetIcon") == 0) darwin_dock_reset_icon();
+    else if (argc >= 2 && JS_IsObject(argv[1])) {
+        if (strcmp(action, "setBadge") == 0) {
+            JSValue v = JS_GetPropertyStr(ctx, argv[1], "label");
+            const char* s = JS_IsString(v) ? JS_ToCString(ctx, v) : "";
+            darwin_dock_set_badge(s);
+            if (JS_IsString(v)) JS_FreeCString(ctx, s);
+            JS_FreeValue(ctx, v);
+        } else if (strcmp(action, "bounce") == 0) {
+            JSValue v = JS_GetPropertyStr(ctx, argv[1], "type");
+            int32_t t = 0; if (JS_IsNumber(v)) JS_ToInt32(ctx, &t, v);
+            darwin_dock_bounce(t);
+            JS_FreeValue(ctx, v);
+        } else if (strcmp(action, "setIcon") == 0) {
+            JSValue v = JS_GetPropertyStr(ctx, argv[1], "path");
+            const char* s = JS_IsString(v) ? JS_ToCString(ctx, v) : "";
+            darwin_dock_set_icon(s);
+            if (JS_IsString(v)) JS_FreeCString(ctx, s);
+            JS_FreeValue(ctx, v);
+        }
+    }
+
+    JS_FreeCString(ctx, action);
+    return JS_UNDEFINED;
+#endif /* __APPLE__ */
+}
+
 static void txiki_setup_bridge(JSContext* ctx, const char* worker_id) {
     // Register worker_id in the per-context cache so host objects can look it
     // up without a globalThis property fetch on every call.
@@ -536,36 +792,43 @@ static void txiki_setup_bridge(JSContext* ctx, const char* worker_id) {
         JS_NewCFunction(ctx, zapp_bridge_sync_wait, "syncWait", 2));
     JS_SetPropertyStr(ctx, bridge, "syncNotify",
         JS_NewCFunction(ctx, zapp_bridge_sync_notify, "syncNotify", 2));
+    // Privileged host objects — parity with JSC engine. Every worker gets
+    // full access to these regardless of how it was spawned.
+    JS_SetPropertyStr(ctx, bridge, "createWindow",
+        JS_NewCFunction(ctx, zapp_bridge_create_window, "createWindow", 1));
+    JS_SetPropertyStr(ctx, bridge, "quit",
+        JS_NewCFunction(ctx, zapp_bridge_quit, "quit", 0));
+    JS_SetPropertyStr(ctx, bridge, "notif",
+        JS_NewCFunction(ctx, zapp_bridge_notif, "notif", 2));
+    JS_SetPropertyStr(ctx, bridge, "dock",
+        JS_NewCFunction(ctx, zapp_bridge_dock, "dock", 2));
     JS_SetPropertyStr(ctx, global, "__zappBridge", bridge);
     JS_SetPropertyStr(ctx, global, "postMessage",
         JS_NewCFunction(ctx, zapp_bridge_post_to_webview, "postMessage", 1));
 
-    const char* channel_api =
-        "self = globalThis;"
-        // Expose __zappBridge under Symbol.for('zapp.bridge') so getBridge()
-        // works in worker context (used by Sync.wait, Events.on, etc.).
-        "globalThis[Symbol.for('zapp.bridge')] = self.__zappBridge;"
-        "self.send = function(channel, data) { self.postMessage({ __zc: channel, d: data }); };"
-        "self._channelHandlers = {};"
-        "self._messageHandlers = [];"
-        "self.receive = function(channel, handler) {"
-        "  if (!self._channelHandlers[channel]) self._channelHandlers[channel] = [];"
-        "  self._channelHandlers[channel].push(handler);"
-        "  if (!self._channelSetup) {"
-        "    self._channelSetup = true;"
-        "    self._messageHandlers.push(function(ev) {"
-        "      var msg = ev.data;"
-        "      if (msg && msg.__zc && self._channelHandlers[msg.__zc]) {"
-        "        var hs = self._channelHandlers[msg.__zc];"
-        "        for (var i = 0; i < hs.length; i++) try { hs[i](msg.d); } catch(e) { console.error(e); }"
-        "      }"
-        "    });"
-        "  }"
-        "  return function() {"
-        "    self._channelHandlers[channel] = (self._channelHandlers[channel] || []).filter(function(h) { return h !== handler; });"
-        "  };"
-        "};";
-    JS_Eval(ctx, channel_api, strlen(channel_api), "<bridge>", JS_EVAL_TYPE_GLOBAL);
+    // `self` alias — worker scope convention.
+    JS_Eval(ctx, "self = globalThis;", 18, "<bridge>", JS_EVAL_TYPE_GLOBAL);
+
+    // Run the shared worker bootstrap (bootstrap/worker.ts). This wires up
+    // the event listener registry, the runtime bridge aliases, channel API
+    // (self.send / self.receive), and app-event dispatch — the same JS that
+    // the JSC engine runs. Parity between engines is critical: the same TS
+    // worker code must behave identically whether it's spawned under JSC or
+    // txiki.
+    extern const char* zapp_worker_bootstrap_script(void);
+    const char* bootstrap = zapp_worker_bootstrap_script();
+    if (bootstrap && bootstrap[0] != '\0') {
+        JSValue r = JS_Eval(ctx, bootstrap, strlen(bootstrap), "<worker-bootstrap>", JS_EVAL_TYPE_GLOBAL);
+        if (JS_IsException(r)) {
+            JSValue e = JS_GetException(ctx);
+            const char* msg = JS_ToCString(ctx, e);
+            fprintf(stderr, "[zapp] txiki worker bootstrap failed: %s\n", msg ? msg : "(unknown)");
+            if (msg) JS_FreeCString(ctx, msg);
+            JS_FreeValue(ctx, e);
+        }
+        JS_FreeValue(ctx, r);
+    }
+
     JS_FreeValue(ctx, global);
 }
 
@@ -945,13 +1208,9 @@ static void* txiki_backend_thread(void* arg) {
     JS_FreeValue(ctx, bridge);
     JS_FreeValue(ctx, global);
 
-    // Load backend bootstrap
-    extern const char* zapp_backend_bootstrap_script(void);
-    const char* bootstrap = zapp_backend_bootstrap_script();
-    if (bootstrap && bootstrap[0] != '\0') {
-        JSValue r = JS_Eval(ctx, bootstrap, strlen(bootstrap), "<backend-bootstrap>", JS_EVAL_TYPE_GLOBAL);
-        JS_FreeValue(ctx, r);
-    }
+    // Note: dead code path — app_start_backend no longer dispatches here.
+    // Backend bootstrap was merged into the worker bootstrap; this function
+    // is left in place until the full txiki backend removal lands.
 
     // Load user backend script — try embedded first, then filesystem.
     // slot->script_url is the canonical URL form ("/_workers/backend.mjs").
@@ -1084,4 +1343,15 @@ void txiki_backend_eval_js(const char* js) {
 
 bool txiki_backend_is_running(void) {
     return txiki_backend_running != 0;
+}
+
+// Broadcast a JS snippet to every active worker. Counterpart of
+// jsc_broadcast_eval_js — used by native event dispatch to deliver app and
+// window events to every worker. TODO: txiki uses a message-queue/libuv
+// dispatch pattern rather than direct eval; a full implementation requires
+// adding an "eval this JS" message type handled in on_async_message. For now
+// this is a stub so the JSC engine path works; txiki headless workers will
+// not receive forwarded events until this is wired up.
+void txiki_broadcast_eval_js(const char* js) {
+    (void)js;
 }

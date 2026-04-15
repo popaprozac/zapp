@@ -20,6 +20,16 @@
 import { getBridge } from "./bridge";
 import { Events } from "./events";
 
+// In worker contexts, __zappBridge.notif is a dispatcher host object that
+// routes directly to darwin_notification_* C functions. We prefer it when
+// available to avoid the webview IPC roundtrip (bridge.invoke sends JSON
+// over WKWebView's userContentController). The webview path is the
+// fallback — it's the only option there.
+function notifHost(): ((action: string, args?: unknown) => unknown) | null {
+  const host = (globalThis as any).__zappBridge;
+  return host?.notif ?? null;
+}
+
 export interface NotificationAction {
   id: string;
   title: string;
@@ -72,26 +82,52 @@ export type PermissionStatus = "granted" | "denied" | "not-determined" | "provis
 
 export const Notification = {
   async requestPermission(): Promise<PermissionStatus> {
+    const host = notifHost();
+    if (host) {
+      // In workers we can't easily wait on an async permission prompt — fall
+      // back to returning the current status. Users of headless workers
+      // typically request permission from a webview first anyway.
+      const r = host("getPermission") as { status: string };
+      return r.status as PermissionStatus;
+    }
     const result = await getBridge().invoke("__notif:requestPermission") as { status: string };
     return result.status as PermissionStatus;
   },
 
   async getPermissionStatus(): Promise<PermissionStatus> {
+    const host = notifHost();
+    if (host) {
+      const r = host("getPermission") as { status: string };
+      return r.status as PermissionStatus;
+    }
     const result = await getBridge().invoke("__notif:getPermission") as { status: string };
     return result.status as PermissionStatus;
   },
 
   async show(options: NotificationOptions): Promise<string> {
+    const host = notifHost();
+    if (host) {
+      const r = host("show", options) as { id: string };
+      return r.id;
+    }
     const result = await getBridge().invoke("__notif:show", options as any) as { id: string };
     return result.id;
   },
 
   async schedule(options: ScheduleOptions): Promise<string> {
+    const host = notifHost();
+    if (host) {
+      const delaySeconds = "seconds" in options.trigger ? options.trigger.seconds : 0;
+      const r = host("schedule", { ...options, delaySeconds }) as { id: string };
+      return r.id;
+    }
     const result = await getBridge().invoke("__notif:schedule", options as any) as { id: string };
     return result.id;
   },
 
   async registerCategory(category: NotificationCategory): Promise<void> {
+    // Worker path not wired — registerCategory needs typed-struct args that
+    // don't fit the simple dispatcher. Fall back to webview IPC.
     await getBridge().invoke("__notif:registerCategory", category as any);
   },
 
@@ -100,20 +136,28 @@ export const Notification = {
   },
 
   async cancel(id: string): Promise<void> {
+    const host = notifHost();
+    if (host) { host("cancel", { id }); return; }
     await getBridge().invoke("__notif:cancel", { id } as any);
   },
 
   async cancelAll(): Promise<void> {
+    const host = notifHost();
+    if (host) { host("cancelAll"); return; }
     await getBridge().invoke("__notif:cancelAll");
   },
 
   /** Remove a specific delivered notification from notification center. */
   async removeDelivered(id: string): Promise<void> {
+    const host = notifHost();
+    if (host) { host("removeDelivered", { id }); return; }
     await getBridge().invoke("__notif:removeDelivered", { id } as any);
   },
 
   /** Remove all delivered notifications from notification center. */
   async removeAllDelivered(): Promise<void> {
+    const host = notifHost();
+    if (host) { host("removeAllDelivered"); return; }
     await getBridge().invoke("__notif:removeAllDelivered");
   },
 
@@ -122,6 +166,8 @@ export const Notification = {
    * The notification must have been shown with an explicit `id`.
    */
   async update(id: string, options: Partial<NotificationOptions>): Promise<void> {
+    const host = notifHost();
+    if (host) { host("update", { id, ...options }); return; }
     await getBridge().invoke("__notif:update", { id, ...options } as any);
   },
 

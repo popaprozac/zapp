@@ -294,13 +294,200 @@ static void jsc_setup_bridge(JSContext* ctx, NSString* workerId) {
         darwin_sync_handle("notify", [json UTF8String]);
     };
 
+    // --- Privileged host objects available in every worker ---
+
+    // quit — terminate the app from any worker
+    bridge[@"quit"] = ^{
+        dispatch_async(dispatch_get_main_queue(), ^{
+            exit(0);
+        });
+    };
+
+    // subscribeWindowEvent — register this worker for window events
+    bridge[@"subscribeWindowEvent"] = ^(JSValue* windowIdVal, JSValue* eventIdVal) {
+        int wId = [windowIdVal toInt32];
+        int eId = [eventIdVal toInt32];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            extern void zapp_window_set_backend_listener(int id, int event_id, int has_listener);
+            if (wId < 0) {
+                for (int i = 0; i < 64; i++) {
+                    zapp_window_set_backend_listener(i, eId, 1);
+                }
+            } else {
+                zapp_window_set_backend_listener(wId, eId, 1);
+            }
+        });
+    };
+
+    // showNotification — fire-and-forget system notification
+    bridge[@"showNotification"] = ^(NSString* title, NSString* body) {
+        const char* t = title ? [title UTF8String] : "";
+        const char* b = body ? [body UTF8String] : "";
+        char* tc = strdup(t);
+        char* bc = strdup(b);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            extern void darwin_notification_show_typed(const char*, const char*, const char*, const char*);
+            darwin_notification_show_typed(tc, "", bc, "default");
+            free(tc);
+            free(bc);
+        });
+    };
+
+    // createWindow — synchronously create a window from any worker.
+    // Dispatches to main queue (window creation requires main thread on macOS),
+    // waits for result, returns an object with windowId.
+    bridge[@"createWindow"] = ^JSValue*(JSValue* optsVal) {
+        JSContext* currentCtx = [JSContext currentContext];
+        NSString* title = @"Window";
+        NSString* url = @"";
+        __block int width = 0;
+        __block int height = 0;
+        if (optsVal && ![optsVal isUndefined] && ![optsVal isNull]) {
+            JSValue* t = optsVal[@"title"];
+            if (t && ![t isUndefined] && ![t isNull]) title = [t toString];
+            JSValue* u = optsVal[@"url"];
+            if (u && ![u isUndefined] && ![u isNull]) url = [u toString];
+            JSValue* w = optsVal[@"width"];
+            if (w && ![w isUndefined] && ![w isNull]) width = [w toInt32];
+            JSValue* h = optsVal[@"height"];
+            if (h && ![h isUndefined] && ![h isNull]) height = [h toInt32];
+        }
+        const char* titleC = strdup([title UTF8String]);
+        const char* urlC = strdup([url UTF8String]);
+        __block int windowId = -1;
+        extern int zapp_worker_create_window(const char* title, const char* url, int width, int height);
+        // Guard against dispatch_sync deadlock when called from a block that
+        // is already running on the main queue (e.g. a worker's setTimeout
+        // callback — setTimeout currently dispatches to the main queue, so
+        // JS that runs inside it is already main-thread when it calls us).
+        if ([NSThread isMainThread]) {
+            windowId = zapp_worker_create_window(titleC, urlC, width, height);
+        } else {
+            dispatch_sync(dispatch_get_main_queue(), ^{
+                windowId = zapp_worker_create_window(titleC, urlC, width, height);
+            });
+        }
+        free((void*)titleC);
+        free((void*)urlC);
+        JSValue* result = [JSValue valueWithNewObjectInContext:currentCtx];
+        result[@"windowId"] = [NSString stringWithFormat:@"win-%d", windowId];
+        return result;
+    };
+
+    // notif(action, args) — dispatcher for all notification operations.
+    // Runtime's Notification.* methods call this directly in worker contexts,
+    // bypassing getBridge().invoke() entirely for zero-overhead calls.
+    bridge[@"notif"] = ^JSValue*(NSString* action, JSValue* argsVal) {
+        JSContext* currentCtx = [JSContext currentContext];
+        extern const char* darwin_notification_get_permission(void);
+        extern void darwin_notification_show_typed(const char*, const char*, const char*, const char*);
+        extern void darwin_notification_schedule_typed(const char*, const char*, double);
+        extern void darwin_notification_cancel(const char*);
+        extern void darwin_notification_cancel_all(void);
+        extern void darwin_notification_remove_delivered(const char*);
+        extern void darwin_notification_remove_all_delivered(void);
+        extern void darwin_notification_update(const char*, const char*, const char*, const char*);
+
+        NSString* act = action ?: @"";
+        if ([act isEqualToString:@"getPermission"]) {
+            const char* st = darwin_notification_get_permission();
+            JSValue* r = [JSValue valueWithNewObjectInContext:currentCtx];
+            r[@"status"] = st ? [NSString stringWithUTF8String:st] : @"notDetermined";
+            return r;
+        }
+        if ([act isEqualToString:@"show"]) {
+            NSString* title = argsVal[@"title"] ? [argsVal[@"title"] toString] : @"";
+            NSString* subtitle = argsVal[@"subtitle"] ? [argsVal[@"subtitle"] toString] : @"";
+            NSString* body = argsVal[@"body"] ? [argsVal[@"body"] toString] : @"";
+            NSString* sound = argsVal[@"sound"] ? [argsVal[@"sound"] toString] : @"default";
+            darwin_notification_show_typed([title UTF8String], [subtitle UTF8String], [body UTF8String], [sound UTF8String]);
+            // Return an ID (clients use it for update/cancel). Workers don't get the native-generated ID in this
+            // sync path — generate a client-side UUID-ish value so the API contract holds.
+            JSValue* r = [JSValue valueWithNewObjectInContext:currentCtx];
+            r[@"id"] = [NSString stringWithFormat:@"notif-%llu-%u", (unsigned long long)[[NSDate date] timeIntervalSince1970] * 1000, arc4random()];
+            return r;
+        }
+        if ([act isEqualToString:@"schedule"]) {
+            NSString* title = argsVal[@"title"] ? [argsVal[@"title"] toString] : @"";
+            NSString* body = argsVal[@"body"] ? [argsVal[@"body"] toString] : @"";
+            double delay = argsVal[@"delaySeconds"] ? [argsVal[@"delaySeconds"] toDouble] : 0;
+            darwin_notification_schedule_typed([title UTF8String], [body UTF8String], delay);
+            JSValue* r = [JSValue valueWithNewObjectInContext:currentCtx];
+            r[@"id"] = [NSString stringWithFormat:@"notif-%llu-%u", (unsigned long long)[[NSDate date] timeIntervalSince1970] * 1000, arc4random()];
+            return r;
+        }
+        if ([act isEqualToString:@"cancel"]) {
+            NSString* id_ = argsVal[@"id"] ? [argsVal[@"id"] toString] : @"";
+            darwin_notification_cancel([id_ UTF8String]);
+            return [JSValue valueWithUndefinedInContext:currentCtx];
+        }
+        if ([act isEqualToString:@"cancelAll"]) {
+            darwin_notification_cancel_all();
+            return [JSValue valueWithUndefinedInContext:currentCtx];
+        }
+        if ([act isEqualToString:@"removeDelivered"]) {
+            NSString* id_ = argsVal[@"id"] ? [argsVal[@"id"] toString] : @"";
+            darwin_notification_remove_delivered([id_ UTF8String]);
+            return [JSValue valueWithUndefinedInContext:currentCtx];
+        }
+        if ([act isEqualToString:@"removeAllDelivered"]) {
+            darwin_notification_remove_all_delivered();
+            return [JSValue valueWithUndefinedInContext:currentCtx];
+        }
+        if ([act isEqualToString:@"update"]) {
+            NSString* id_ = argsVal[@"id"] ? [argsVal[@"id"] toString] : @"";
+            NSString* title = argsVal[@"title"] ? [argsVal[@"title"] toString] : @"";
+            NSString* subtitle = argsVal[@"subtitle"] ? [argsVal[@"subtitle"] toString] : @"";
+            NSString* body = argsVal[@"body"] ? [argsVal[@"body"] toString] : @"";
+            darwin_notification_update([id_ UTF8String], [title UTF8String], [subtitle UTF8String], [body UTF8String]);
+            return [JSValue valueWithUndefinedInContext:currentCtx];
+        }
+        return [JSValue valueWithUndefinedInContext:currentCtx];
+    };
+
+    // dock(action, args) — dispatcher for all dock operations. All are sync,
+    // fire-and-forget (they post to the main UI thread internally via the
+    // Zen-C bridge and return immediately).
+    bridge[@"dock"] = ^(NSString* action, JSValue* argsVal) {
+        extern void darwin_dock_show_icon(void);
+        extern void darwin_dock_hide_icon(void);
+        extern void darwin_dock_set_badge(const char*);
+        extern void darwin_dock_remove_badge(void);
+        extern void darwin_dock_bounce(int);
+        extern void darwin_dock_set_icon(const char*);
+        extern void darwin_dock_reset_icon(void);
+
+        NSString* act = action ?: @"";
+        if ([act isEqualToString:@"showIcon"]) { darwin_dock_show_icon(); return; }
+        if ([act isEqualToString:@"hideIcon"]) { darwin_dock_hide_icon(); return; }
+        if ([act isEqualToString:@"setBadge"]) {
+            NSString* label = argsVal[@"label"] ? [argsVal[@"label"] toString] : @"";
+            darwin_dock_set_badge([label UTF8String]); return;
+        }
+        if ([act isEqualToString:@"removeBadge"]) { darwin_dock_remove_badge(); return; }
+        if ([act isEqualToString:@"bounce"]) {
+            int t = argsVal[@"type"] ? [argsVal[@"type"] toInt32] : 0;
+            darwin_dock_bounce(t); return;
+        }
+        if ([act isEqualToString:@"setIcon"]) {
+            NSString* p = argsVal[@"path"] ? [argsVal[@"path"] toString] : @"";
+            darwin_dock_set_icon([p UTF8String]); return;
+        }
+        if ([act isEqualToString:@"resetIcon"]) { darwin_dock_reset_icon(); return; }
+    };
+
     ctx[@"__zappBridge"] = bridge;
 
     // setTimeout / setInterval
+    // Dispatch the callback back onto this worker's own serial queue so JS
+    // runs on the worker thread. Running it on the main queue (the previous
+    // behavior) made every host object that uses dispatch_sync(main) — like
+    // createWindow — deadlock when called from a timer callback.
+    dispatch_queue_t workerQueue = jsc_queues[wid];
     ctx[@"setTimeout"] = ^JSValue*(JSValue* callback, JSValue* delayMs) {
         double ms = [delayMs isUndefined] ? 0 : [delayMs toDouble];
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(ms * NSEC_PER_MSEC)),
-            dispatch_get_main_queue(), ^{
+            workerQueue ?: dispatch_get_main_queue(), ^{
                 [callback callWithArguments:@[]];
             });
         return [JSValue valueWithInt32:1 inContext:[JSContext currentContext]];
@@ -555,165 +742,21 @@ void jsc_worker_terminate_owner(const char* owner_id) {
     }
 }
 
-// --- Backend worker (privileged, app-level JS context) ---
-// JSC first. txiki.js opt-in later for web APIs (fetch, WebSocket, timers).
-
-static JSContext* jsc_backend_ctx = nil;
-static dispatch_queue_t jsc_backend_queue = nil;
-static BOOL jsc_backend_running = NO;
-
-bool jsc_backend_create(const char* script_path) {
-    if (jsc_backend_running) return false;
-    if (!script_path) return false;
-    jsc_ensure_init();
-
-    NSString* scriptPath = [NSString stringWithUTF8String:script_path];
-    jsc_backend_queue = dispatch_queue_create("com.zapp.backend", DISPATCH_QUEUE_SERIAL);
-
-    dispatch_async(jsc_backend_queue, ^{
-        JSContext* ctx = [[JSContext alloc] initWithVirtualMachine:jsc_vm];
-        ctx.name = @"Zapp Backend";
-        ctx.exceptionHandler = ^(JSContext* c, JSValue* exception) {
-            (void)c;
-            NSLog(@"[backend ERROR] %@", exception);
-        };
-
-        // Make inspectable
-        if (app_get_bootstrap_web_content_inspectable()) {
-            if ([ctx respondsToSelector:@selector(setInspectable:)]) {
-                [ctx setInspectable:YES];
-            }
-        }
-
-        // Set up standard bridge (console, invokeService, syncWait/Notify)
-        jsc_setup_bridge(ctx, @"__backend__");
-
-        // Backend-specific host objects
-        JSValue* bridge = ctx[@"__zappBridge"];
-
-        // quit — terminate the app
-        bridge[@"quit"] = ^{
-            dispatch_async(dispatch_get_main_queue(), ^{
-                exit(0);
-            });
-        };
-
-        // subscribeWindowEvent — register backend for window events
-        bridge[@"subscribeWindowEvent"] = ^(JSValue* windowIdVal, JSValue* eventIdVal) {
-            int wid = [windowIdVal toInt32];
-            int eid = [eventIdVal toInt32];
-            dispatch_async(dispatch_get_main_queue(), ^{
-                extern void zapp_window_set_backend_listener(int id, int event_id, int has_listener);
-                if (wid < 0) {
-                    // Subscribe all windows (wid == -1)
-                    for (int i = 0; i < 64; i++) {
-                        zapp_window_set_backend_listener(i, eid, 1);
-                    }
-                } else {
-                    zapp_window_set_backend_listener(wid, eid, 1);
-                }
-            });
-        };
-
-        // showNotification — fire-and-forget
-        bridge[@"showNotification"] = ^(NSString* title, NSString* body) {
-            const char* t = title ? [title UTF8String] : "";
-            const char* b = body ? [body UTF8String] : "";
-            // Copy strings for async block
-            char* tc = strdup(t);
-            char* bc = strdup(b);
-            dispatch_async(dispatch_get_main_queue(), ^{
-                extern void darwin_notification_show_typed(const char*, const char*, const char*, const char*);
-                darwin_notification_show_typed(tc, "", bc, "default");
-                free(tc);
-                free(bc);
-            });
-        };
-
-        jsc_backend_ctx = ctx;
-
-        // Load backend bootstrap
-        extern const char* zapp_backend_bootstrap_script(void);
-        const char* bootstrap = zapp_backend_bootstrap_script();
-        if (bootstrap && bootstrap[0] != '\0') {
-            [ctx evaluateScript:[NSString stringWithUTF8String:bootstrap]];
-        }
-
-        // Load user backend script — try embedded first, then filesystem.
-        // scriptPath is the canonical URL form ("/_workers/backend.mjs").
-        NSString* script = nil;
-
-        extern int zapp_build_use_embedded_assets(void);
-        extern int zapp_embedded_assets_count;
-        extern ZappEmbeddedAsset zapp_embedded_assets[];
-        if (zapp_build_use_embedded_assets() && zapp_embedded_assets_count > 0) {
-            for (int ai = 0; ai < zapp_embedded_assets_count; ai++) {
-                NSString* assetPath = [NSString stringWithUTF8String:zapp_embedded_assets[ai].path];
-                if ([assetPath isEqualToString:scriptPath]) {
-                    if (zapp_embedded_assets[ai].is_brotli && zapp_embedded_assets[ai].uncompressed_len > 0) {
-                        uint8_t* out = malloc(zapp_embedded_assets[ai].uncompressed_len + 1);
-                        size_t decoded = compression_decode_buffer(
-                            out, zapp_embedded_assets[ai].uncompressed_len,
-                            zapp_embedded_assets[ai].data, zapp_embedded_assets[ai].len,
-                            NULL, COMPRESSION_BROTLI);
-                        out[decoded] = '\0';
-                        script = [[NSString alloc] initWithBytesNoCopy:out length:decoded
-                            encoding:NSUTF8StringEncoding freeWhenDone:YES];
-                    } else {
-                        script = [[NSString alloc] initWithBytes:zapp_embedded_assets[ai].data
-                            length:zapp_embedded_assets[ai].len encoding:NSUTF8StringEncoding];
-                    }
-                    NSLog(@"[zapp] backend loaded from embedded: %@", scriptPath);
-                    break;
-                }
-            }
-        }
-
-        if (!script) {
-            // Dev: Vite plugin writes workers to .zapp/workers/<basename>
-            char cwd[1024];
-            NSString* base = getcwd(cwd, sizeof(cwd)) ? [NSString stringWithUTF8String:cwd] : @".";
-            NSString* basename = [scriptPath lastPathComponent];
-            NSString* fullPath = [[base stringByAppendingPathComponent:@".zapp/workers"]
-                stringByAppendingPathComponent:basename];
-            NSError* err = nil;
-            script = [NSString stringWithContentsOfFile:fullPath encoding:NSUTF8StringEncoding error:&err];
-            if (script) NSLog(@"[zapp] backend worker started: %@", fullPath);
-            else NSLog(@"[zapp] backend script not found: %@", fullPath);
-        }
-
-        if (script) {
-            // Async IIFE wrapper enables top-level await — see jsc_worker_create
-            // for rationale.
-            NSString* wrapped = [NSString stringWithFormat:
-                @"(async () => {\n%@\n})().catch(e => { console.error('[backend error]', e && e.stack ? e.stack : e); });",
-                script];
-            [ctx evaluateScript:wrapped withSourceURL:[NSURL URLWithString:@"backend.mjs"]];
-        }
-    });
-
-    jsc_backend_running = YES;
-    return true;
-}
-
-void jsc_backend_terminate(void) {
-    if (!jsc_backend_running) return;
-    jsc_backend_ctx = nil;
-    jsc_backend_queue = nil;
-    jsc_backend_running = NO;
-    NSLog(@"[zapp] backend worker terminated");
-}
-
-void jsc_backend_eval_js(const char* js) {
-    if (!jsc_backend_running || !jsc_backend_ctx || !jsc_backend_queue || !js) return;
+// Broadcast a JS snippet to every active worker (headless + webview-owned).
+// Used by native event dispatch to deliver app/window events to every worker
+// that may have subscribed. Each worker evaluates on its own serial queue.
+void jsc_broadcast_eval_js(const char* js) {
+    if (!js) return;
     NSString* script = [NSString stringWithUTF8String:js];
-    dispatch_async(jsc_backend_queue, ^{
-        if (jsc_backend_ctx) {
-            [jsc_backend_ctx evaluateScript:script];
-        }
-    });
+    for (int i = 0; i < JSC_MAX_WORKERS; i++) {
+        if (!jsc_workers[i].active) continue;
+        NSString* wid = [NSString stringWithUTF8String:jsc_workers[i].worker_id];
+        dispatch_queue_t queue = jsc_queues[wid];
+        JSContext* ctx = jsc_contexts[wid];
+        if (!queue || !ctx) continue;
+        dispatch_async(queue, ^{
+            [ctx evaluateScript:script];
+        });
+    }
 }
 
-bool jsc_backend_is_running(void) {
-    return jsc_backend_running;
-}

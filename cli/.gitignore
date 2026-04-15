@@ -1,0 +1,6 @@
+# Copied by prepack for npm publish — should never be committed.
+# postpack cleans these up, but if interrupted they'd be left behind.
+native/
+bootstrap/
+assets/
+vendor/

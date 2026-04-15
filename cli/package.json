@@ -1,9 +1,28 @@
 {
   "name": "@zappdev/cli",
-  "version": "2.0.0-alpha.0",
+  "version": "0.6.0-alpha.6",
   "type": "module",
   "bin": {
     "zapp": "./src/zapp-cli.ts"
+  },
+  "exports": {
+    "./config": {
+      "types": "./src/config.ts",
+      "default": "./dist/config.js"
+    }
+  },
+  "files": [
+    "src/",
+    "dist/",
+    "native/",
+    "bootstrap/",
+    "assets/",
+    "patches/",
+    "vendor/webview2/"
+  ],
+  "scripts": {
+    "prepack": "bun build src/config.ts --outdir dist --format esm --target node && cp -r ../native ./native && cp -r ../bootstrap ./bootstrap && cp -r ../assets ./assets && mkdir -p ./vendor && cp -r ../vendor/webview2 ./vendor/webview2",
+    "postpack": "rm -rf ./native ./bootstrap ./assets ./vendor"
   },
   "dependencies": {
     "yargs": "^17.7.2"

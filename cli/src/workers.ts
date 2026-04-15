@@ -45,7 +45,7 @@ async function discoverWorkers(srcDir: string): Promise<WorkerEntry[]> {
   return [...found.entries()].map(([entryPath, specifier]) => ({ entryPath, specifier }));
 }
 
-export async function bundleWorkers(root: string): Promise<number> {
+export async function bundleWorkers(root: string, backendConfig?: string): Promise<number> {
   const srcDir = path.join(root, "src");
   const outDir = path.join(root, ".zapp", "workers");
   await mkdir(outDir, { recursive: true });
@@ -81,8 +81,10 @@ export async function bundleWorkers(root: string): Promise<number> {
     }
   }
 
-  // Backend worker — convention: src/backend.ts
-  const backendPath = path.join(root, "src", "backend.ts");
+  // Backend worker — from config or fall back to src/backend.ts convention
+  const backendPath = backendConfig
+    ? path.resolve(root, backendConfig)
+    : path.join(root, "src", "backend.ts");
   try {
     await stat(backendPath);
     const outPath = path.join(outDir, "backend.mjs");
@@ -95,12 +97,12 @@ export async function bundleWorkers(root: string): Promise<number> {
       minify: false,
     });
     if (result.success) {
-      process.stdout.write("[zapp] backend worker detected: src/backend.ts\n");
+      process.stdout.write(`[zapp] backend worker: ${path.relative(root, backendPath)}\n`);
     } else {
       process.stderr.write("[zapp] backend bundle failed\n");
     }
   } catch {
-    // No backend.ts — that's fine, backend is optional
+    // No backend file — that's fine, backend is optional
   }
 
   return workers.length;

@@ -7,6 +7,7 @@ import { mkdir, cp, chmod, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import type { ResolvedConfig } from "./config";
 import { processIcon, type IconResult } from "./icon";
+import { resolveAssetsDir } from "./paths";
 
 interface PackageOptions {
   root: string;
@@ -71,11 +72,13 @@ export async function createProductionBundle(opts: PackageOptions): Promise<stri
     iconSrc = path.resolve(root, macosConfig.icon);
   }
   if (!iconSrc || !existsSync(iconSrc)) {
-    const frameworkAssets = path.resolve(import.meta.dir, "../../assets");
-    const defaultIcon = path.join(frameworkAssets, "zapp.icon");
-    const defaultPng = path.join(frameworkAssets, "zapp.png");
-    if (existsSync(defaultIcon)) iconSrc = defaultIcon;
-    else if (existsSync(defaultPng)) iconSrc = defaultPng;
+    const frameworkAssets = resolveAssetsDir();
+    if (frameworkAssets) {
+      const defaultIcon = path.join(frameworkAssets, "zapp.icon");
+      const defaultPng = path.join(frameworkAssets, "zapp.png");
+      if (existsSync(defaultIcon)) iconSrc = defaultIcon;
+      else if (existsSync(defaultPng)) iconSrc = defaultPng;
+    }
   }
 
   if (iconSrc && existsSync(iconSrc)) {

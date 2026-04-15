@@ -24,18 +24,4 @@ void jsc_worker_terminate_owner(const char* owner_id);
 // Implemented in Zen-C (bridge/dispatch.zc), declared here for jsc.m to call.
 extern void worker_dispatch_to_webview(char* worker_id, char* data_json);
 
-// --- Backend worker (privileged, app-level JS context) ---
-
-// Create the backend worker. Loads script from path. Starts on serial queue.
-bool jsc_backend_create(const char* script_path);
-
-// Terminate the backend worker.
-void jsc_backend_terminate(void);
-
-// Evaluate JS in the backend worker context.
-void jsc_backend_eval_js(const char* js);
-
-// Check if backend worker is running.
-bool jsc_backend_is_running(void);
-
 #endif

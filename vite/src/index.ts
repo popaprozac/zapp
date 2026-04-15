@@ -104,11 +104,39 @@ async function bundleWorker(entry: WorkerEntry, outDir: string, aliases: Record<
   }
 }
 
-export function zappWorkers(): Plugin {
+interface ZappWorkersOptions {
+  /**
+   * Headless workers to bundle, keyed by ID. Values are source paths relative
+   * to project root. Output URL is `/_workers/_headless_<id>.mjs` — the native
+   * runtime loads these at app startup via generated Zen-C code.
+   */
+  headless?: Record<string, string>;
+}
+
+function resolveHeadlessEntries(root: string, headless?: Record<string, string>): WorkerEntry[] {
+  if (!headless) return [];
+  const entries: WorkerEntry[] = [];
+  for (const [id, srcPath] of Object.entries(headless)) {
+    const abs = path.resolve(root, srcPath);
+    if (!existsSync(abs)) {
+      console.warn(`[zapp] headless worker "${id}" not found at ${srcPath}`);
+      continue;
+    }
+    entries.push({
+      specifier: srcPath,
+      sourcePath: abs,
+      outputName: `_headless_${id}.mjs`,
+      outputUrl: `/_workers/_headless_${id}.mjs`,
+    });
+  }
+  return entries;
+}
+
+export function zappWorkers(options?: ZappWorkersOptions): Plugin {
   let root = "";
   let srcDir = "";
   let workers: WorkerEntry[] = [];
-  let backendEntry: WorkerEntry | null = null;
+  let headlessEntries: WorkerEntry[] = [];
   let aliases: Record<string, string> = {};
   let isDev = false;
   let outDir = "";
@@ -131,25 +159,17 @@ export function zappWorkers(): Plugin {
     },
 
     async buildStart() {
-      // Discover workers from source
+      // Webview-spawned workers: discovered by scanning source.
       workers = await discoverWorkers(srcDir);
 
-      // Check for backend worker (convention: src/backend.ts)
-      const backendPath = path.join(srcDir, "backend.ts");
-      if (existsSync(backendPath)) {
-        backendEntry = {
-          specifier: "./backend.ts",
-          sourcePath: backendPath,
-          outputName: "backend.mjs",
-          outputUrl: "/_workers/backend.mjs",
-        };
-      }
+      // Headless workers: declared in zapp.config.ts.
+      headlessEntries = resolveHeadlessEntries(root, options?.headless);
 
       if (workers.length > 0) {
         console.log(`[zapp] discovered ${workers.length} worker(s)`);
       }
-      if (backendEntry) {
-        console.log("[zapp] backend worker: src/backend.ts");
+      for (const entry of headlessEntries) {
+        console.log(`[zapp] headless worker: ${path.relative(root, entry.sourcePath)}`);
       }
     },
 
@@ -176,9 +196,10 @@ export function zappWorkers(): Plugin {
     },
 
     // Dev: bundle workers eagerly so they exist on disk before the native
-    // binary launches. The backend worker is loaded directly by native code
-    // and never goes through HTTP, so a lazy-on-request middleware would never
-    // bundle it. Eager bundling also lets native fall back to filesystem.
+    // binary launches. Headless workers are loaded directly by native code
+    // via the generated .zapp/zapp_headless_workers.zc, so a lazy-on-request
+    // middleware would never bundle them. Eager bundling also lets native
+    // fall back to filesystem.
     //
     // configureServer runs before buildStart, so we re-discover workers here
     // (buildStart's results aren't yet available).
@@ -187,19 +208,9 @@ export function zappWorkers(): Plugin {
       await mkdir(devOutDir, { recursive: true });
 
       workers = await discoverWorkers(srcDir);
-      const backendPath = path.join(srcDir, "backend.ts");
-      if (existsSync(backendPath)) {
-        backendEntry = {
-          specifier: "./backend.ts",
-          sourcePath: backendPath,
-          outputName: "backend.mjs",
-          outputUrl: "/_workers/backend.mjs",
-        };
-      }
+      headlessEntries = resolveHeadlessEntries(root, options?.headless);
 
-      const allEntries = [...workers];
-      if (backendEntry) allEntries.push(backendEntry);
-
+      const allEntries = [...workers, ...headlessEntries];
       for (const entry of allEntries) {
         const ok = await bundleWorker(entry, devOutDir, aliases);
         if (ok) console.log(`[zapp] dev-bundled worker: ${entry.outputName}`);
@@ -230,8 +241,7 @@ export function zappWorkers(): Plugin {
 
       await mkdir(outDir, { recursive: true });
 
-      const allEntries = [...workers];
-      if (backendEntry) allEntries.push(backendEntry);
+      const allEntries = [...workers, ...headlessEntries];
 
       for (const entry of allEntries) {
         const ok = await bundleWorker(entry, outDir, aliases);

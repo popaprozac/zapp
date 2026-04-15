@@ -52,7 +52,9 @@ raw {
             }
         }
 
-        // Layer 2: Backend worker (if running)
+        // Layer 2: Broadcast to every active worker (headless + webview-owned).
+        // Each worker's bootstrap sets up `_dispatchAppEvent` on __zappBridge
+        // and fans the event out to any listeners registered via bridge.on().
         {
             const char* safe_data = data ? data : "";
             char buf[4096];
@@ -62,18 +64,12 @@ raw {
                 event_id, safe_data);
 
             #if defined(ZAPP_WORKER_ENGINE_TXIKI)
-            extern bool txiki_backend_is_running(void);
-            extern void txiki_backend_eval_js(const char* js);
-            if (txiki_backend_is_running()) {
-                txiki_backend_eval_js(buf);
-            }
+            extern void txiki_broadcast_eval_js(const char* js);
+            txiki_broadcast_eval_js(buf);
             #endif
             #if defined(ZAPP_WORKER_ENGINE_JSC)
-            extern bool jsc_backend_is_running(void);
-            extern void jsc_backend_eval_js(const char* js);
-            if (jsc_backend_is_running()) {
-                jsc_backend_eval_js(buf);
-            }
+            extern void jsc_broadcast_eval_js(const char* js);
+            jsc_broadcast_eval_js(buf);
             #endif
         }
 
