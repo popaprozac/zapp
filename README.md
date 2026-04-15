@@ -13,6 +13,11 @@
 
 Zapp is a desktop application framework that produces **extraordinarily small binaries** by compiling to native code via [Zen-C](https://github.com/zenc-lang/zenc) and rendering UI in the system WebView. No bundled browser. No runtime overhead. Your frontend is your choice — React, Svelte, Vue, or vanilla.
 
+Building with an AI agent? Point it at [`llms.txt`](llms.txt) for a
+comprehensive single-file reference covering concepts, config shapes, the
+full runtime API, and common patterns. See [`docs/`](docs/) for longer-form
+guides.
+
 ## Benchmarks
 
 Real numbers. Same hello-world app (1 window, 1 service call) on each framework. macOS ARM64, M4 Max.
@@ -56,7 +61,7 @@ No global install needed — `bunx` fetches the CLI on the fly for init, and `bu
 - **Draggable Regions** — `data-zapp-drag-region` for custom titlebar apps.
 - **Close Prevention** — Cancellable close events from native or JS. "Unsaved changes?" dialogs.
 - **Services** — Define native RPC in Zen-C, call from JS. Auto-generated TypeScript bindings.
-- **Workers** — Optional native JS workers (QuickJS/JSC/txiki) with direct backend access.
+- **Workers (unified)** — Webview-spawned (`new Worker("./foo.ts")`) or headless (declared in `zapp.config.ts`). Both share the full runtime API — `Window.create`, `Events`, `Services`, `Notification`, `Dock`, `Sync` — via a zero-overhead direct host bridge (no IPC).
 - **Sync** — `wait`/`notify` across contexts without SharedArrayBuffer.
 - **Events** — Typed cross-context events with autocomplete.
 - **Security** — CSP, navigation restrictions, path traversal prevention, dev tools disabled in production.
@@ -83,7 +88,6 @@ fn run_app() -> int {
         webContentInspectable: Zapp::inspectable_auto(),
         maxWorkers: 0,
         qjsStackSize: 0,
-        backend: false,
     };
     let app = App::new(config);
     app.service.add("greet", greet);
@@ -116,13 +120,63 @@ Menu.build([
 const result = await Services.invoke("greet", { name: "World" });
 ```
 
+## Headless workers
+
+Add a long-running TypeScript worker that starts at app boot — useful for
+database connections, background sync, or any app-level state that needs
+to outlive individual windows.
+
+```ts
+// zapp.config.ts
+import { defineConfig } from "@zappdev/cli/config";
+
+export default defineConfig({
+  name: "My App",
+  headless: {
+    sync: "src/workers/sync.ts",   // worker ID → source path
+  },
+});
+```
+
+```ts
+// src/workers/sync.ts
+import { Events, Services, Notification } from "@zappdev/runtime";
+
+setInterval(async () => {
+  const latest = await Services.invoke("fetchLatest");
+  Events.emit("data:updated", latest);   // broadcast to every open window
+}, 5000);
+```
+
+```ts
+// src/main.ts — any window can listen
+import { Events } from "@zappdev/runtime";
+Events.on("data:updated", (data) => render(data));
+```
+
+All workers (webview-spawned via `new Worker()` or headless via config)
+have identical runtime API access: `Window.create`, `Events`, `Services`,
+`Notification`, `Dock`, `Sync`. The only difference is lifecycle.
+
 ## Packages
 
-| Package | NPM |
+| Package | NPM | Docs |
+|---|---|---|
+| `@zappdev/cli` | [npm](https://www.npmjs.com/package/@zappdev/cli) | [README](cli/README.md) |
+| `@zappdev/runtime` | [npm](https://www.npmjs.com/package/@zappdev/runtime) | [README](runtime/README.md) |
+| `@zappdev/vite` | [npm](https://www.npmjs.com/package/@zappdev/vite) | [README](vite/README.md) |
+
+## Documentation
+
+| | |
 |---|---|
-| `@zappdev/cli` | [npm](https://www.npmjs.com/package/@zappdev/cli) |
-| `@zappdev/runtime` | [npm](https://www.npmjs.com/package/@zappdev/runtime) |
-| `@zappdev/vite` | [npm](https://www.npmjs.com/package/@zappdev/vite) |
+| [`llms.txt`](llms.txt) | Single-file reference — concepts, config, full runtime API, patterns, anti-patterns. Good for agents. |
+| [`docs/api-reference.md`](docs/api-reference.md) | Long-form API reference with edge cases |
+| [`docs/zen-c-services.md`](docs/zen-c-services.md) | Writing native services: JsonValue args, lifecycle, thread-safety |
+| [`docs/patterns.md`](docs/patterns.md) | Cookbook of common app patterns |
+| [`docs/architecture.md`](docs/architecture.md) | How the pieces fit under the hood |
+| [`benchmarks/README.md`](benchmarks/README.md) | Methodology for the benchmarks above |
+| [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md) | Full measurements with raw JSON |
 
 ## License
 

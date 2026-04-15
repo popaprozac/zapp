@@ -1,316 +1,283 @@
-# Zapp — Claude Skills Reference
+# Zapp — contributor / agent primer
 
-Reference for Claude sessions working on the Zapp desktop framework.
+Short orientation doc for Claude sessions (or other agents) working **on
+Zapp itself**, not apps built with Zapp.
 
-## 1. Mission
+**For the public API**, read [`llms.txt`](llms.txt). That's the
+single-file reference — concepts, config, full runtime API, patterns.
+Don't duplicate that here.
 
-Zapp creates the **smallest, fastest desktop application framework**. Key metrics (v2 baseline, no optimizations):
+**This file covers what agents need to navigate the framework source
+code**: directory layout, conventions, invariants, file roles.
 
-| Metric | Zapp v2 | Tauri v2 | Wails v3 | Electron |
-|---|---|---|---|---|
-| Binary | **259 KB** (86 KB optimized) | 8.2 MB | 7.5 MB | 263 MB |
-| Memory | **24 MB** | 27 MB | 30 MB | 528 MB |
-| Bridge | **0.085 ms** (WebView), **0.0005 ms** (Worker host object) | ~0.1 ms | ~0.2 ms | ~0.3 ms |
+## Mission
 
-- Written in **Zen-C** (compiles to C) with system WebViews (WKWebView macOS, WebView2 Windows)
-- No bundled browser, no runtime overhead
-- Frontend: any Vite-compatible framework (React, Svelte, Vue, vanilla)
-- Platforms: macOS first. Windows next. Linux future.
+Build the smallest, fastest desktop framework. macOS first, Windows next.
 
-## 2. Architecture
+Current headline numbers (M4 Max, one-window hello-world):
 
-### v2 Directory Structure
+| Metric | Zapp (JSC) | Zapp (txiki) |
+|---|---|---|
+| Binary | 450 KB | 6.5 MB |
+| Memory | 26 MB | 25 MB |
+| IPC round-trip (webview) | 135 µs | 130 µs |
+| IPC round-trip (worker) | ~5 µs | ~5 µs |
+
+Full comparison vs Tauri / Wails / Electron / Electrobun: `benchmarks/RESULTS.md`.
+
+## Architecture
+
+Three layers, read bottom to top:
+
+1. **Native core** (`native/`) — Zen-C source. Owns App, Window, Service,
+   Menu, Notification, Dialog, Dock, Sync, Worker engines. Calls into
+   platform code via `darwin_*` / `windows_*` externs declared in `.h`
+   files and implemented in `.m` / `.c` files.
+2. **Bridge** (`bootstrap/`) — TypeScript that gets bundled, minified, and
+   compiled into the native binary as a C string constant. Injected into
+   each WebView and each Worker JS context at startup. Defines the
+   `__zappBridge` global the runtime uses.
+3. **Runtime** (`runtime/`) — published as `@zappdev/runtime`. Thin TS
+   wrappers over `__zappBridge`. Same imports work in webview + workers;
+   per-call fast-path detection is inline.
+
+Alongside:
+- **CLI** (`cli/`) — `@zappdev/cli`. Project scaffold + build pipeline.
+- **Vite plugin** (`vite/`) — `@zappdev/vite`. Worker bundling + Vite
+  integration.
+- **Bootstrap** (`bootstrap/`) — TS → C string codegen.
+
+## Directory map
 
 ```
 zapp/
-├── native/                     # Zen-C framework
-│   ├── app/                    # App lifecycle, message routing
-│   │   ├── app.zc              # App struct, config, bootstrap JS
-│   │   └── router.zc           # Bridge message dispatch
-│   ├── window/                 # Cross-platform window API
-│   │   ├── window.zc           # Structs, enums, accessors, trampolines
-│   │   ├── events.zc           # Event IDs (struct+def), EventResult enum
-│   │   └── callbacks.zc        # Unified event dispatcher (raw C)
-│   ├── dialog/
-│   │   └── dialog.zc           # Native Zen-C dialog wrappers
-│   ├── notification/
-│   │   └── notification.zc     # Native Zen-C notification wrappers
-│   ├── service/
-│   │   └── service.zc          # Service registry, RPC invoke
-│   ├── bridge/
-│   │   ├── protocol.zc         # JSON protocol, cancellation bitmap
-│   │   └── dispatch.zc         # Response/event dispatch to WebViews
-│   ├── worker/                 # Worker engine abstraction
-│   │   ├── worker.zc           # Worker trait
-│   │   └── engines/            # JSC, txiki.js (replacing QJS)
-│   ├── platform/
-│   │   ├── platform.zc         # @cfg dispatch to platform impls
-│   │   └── darwin/
-│   │       ├── platform.h/.m   # NSApp, delegate, menus
-│   │       ├── window.h/.m     # NSWindow, delegates, events
-│   │       ├── webview.h/.m    # WKWebView, scheme handler, bridge
-│   │       ├── dialog.h/.m     # Dialogs (bridge JSON + native typed)
-│   │       ├── notification.h/.m # Notifications (async + fire-and-forget)
-│   │       └── menu.h/.m       # Menus (recursive builder, accelerators)
-│   └── shared/
-│       └── log.zc
-├── runtime/                    # TypeScript user API (@zappdev/runtime)
+├── native/                         # Zen-C framework
+│   ├── app/                        # App, router, events
+│   │   ├── app.zc                  # AppConfig, ZappInspectable, App::new/run
+│   │   ├── router.zc               # Bridge message dispatch
+│   │   └── app_events.zc           # AppEvent broadcast to workers
+│   ├── window/                     # Cross-platform window API
+│   │   ├── window.zc               # WindowOptions, Window, accessors
+│   │   ├── events.zc               # WindowEvent IDs
+│   │   └── callbacks.zc            # Event dispatcher, per-window bitmask
+│   ├── bridge/                     # IPC protocol
+│   │   ├── protocol.zc             # JSON protocol types
+│   │   └── dispatch.zc             # Response/event dispatch
+│   ├── service/service.zc          # Service registry, invoke
+│   ├── worker/
+│   │   ├── worker.zc               # Engine abstraction
+│   │   ├── registry.zc             # Worker slots, owner tracking
+│   │   └── engines/
+│   │       ├── jsc.{h,m,zc}        # JSC engine (macOS)
+│   │       └── txiki.{h,c,zc}      # txiki.js engine (cross-platform)
+│   ├── dialog/dialog.zc            # Native dialog wrappers
+│   ├── notification/notification.zc # Native notification wrappers
+│   ├── dock/dock.zc                # Native dock wrappers (macOS)
+│   ├── menu/menu.zc                # Native menu wrappers
+│   ├── sync/sync.zc                # Cross-context wait/notify
+│   └── platform/
+│       ├── darwin/*.{h,m}          # NSWindow, WKWebView, etc.
+│       └── windows/*.{h,c}         # WebView2 (in progress)
+│
+├── bootstrap/                      # Injected JS (codegen'd into binary)
+│   ├── webview.ts                  # WKWebView / WebView2 bridge
+│   ├── worker.ts                   # Unified worker bootstrap (JSC + txiki)
+│   └── codegen.ts                  # TS → minified → escaped → Zen-C string
+│
+├── runtime/                        # @zappdev/runtime (TS API)
+│   ├── index.ts                    # Re-exports
+│   ├── bridge.ts                   # getBridge() via Symbol.for('zapp.bridge')
 │   ├── app.ts, window.ts, events.ts, services.ts
-│   ├── dialog.ts, menu.ts, context-menu.ts, notification.ts
-│   └── bridge.ts               # Internal bridge accessor
-├── cli/                        # Build tooling (Bun)
-│   └── src/                    # init, dev, build, generate commands
-├── bootstrap/                  # JS injected into WebView/Workers (future)
-└── hello-world/                # Reference example app
+│   ├── worker.ts, sync.ts
+│   ├── dialog.ts, menu.ts, context-menu.ts
+│   ├── notification.ts, dock.ts
+│   └── worker-globals.ts
+│
+├── cli/                            # @zappdev/cli
+│   ├── src/
+│   │   ├── zapp-cli.ts             # Command dispatch (init/dev/build/package/generate)
+│   │   ├── init.ts                 # Scaffold
+│   │   ├── config.ts               # ZappConfig + defineConfig (subpath-exported)
+│   │   ├── build-config.ts         # Generate .zapp/*.zc
+│   │   ├── native.ts               # Resolve + compile with zc
+│   │   ├── paths.ts                # Resolve native/, bootstrap/, vendor/
+│   │   ├── generate.ts, workers.ts, bundle.ts, package.ts, icon.ts
+│   │   └── assets.ts               # Brotli-embed dist/ as C struct array
+│   └── patches/                    # Applied to cloned txiki.js
+│
+├── vite/                           # @zappdev/vite
+│   └── src/index.ts                # zappWorkers() plugin
+│
+├── benchmarks/                     # Zapp vs Tauri/Wails/Electron/Electrobun
+├── hello-world/                    # Playground (features-rich, not minimal)
+├── llms.txt                        # Public API reference (single file)
+├── docs/                           # Long-form guides
+└── SKILLS.md                       # This file
 ```
 
-### Layered Architecture
+## Key invariants
 
-| Layer | Purpose | Language |
-|---|---|---|
-| **User native code** | Services, window config | Zen-C (pure, no raw blocks) |
-| **Framework abstraction** | Window, events, bridge, services | Zen-C (minimal raw for C arrays) |
-| **Platform impl** | NSWindow, WKWebView, Win32 | ObjC .m / C .c files |
-| **Bootstrap** | JS bridge in WebView | JS (inlined, future: TS codegen) |
-| **Runtime** | User-facing TS API | TypeScript |
-| **CLI** | Build pipeline | TypeScript (Bun) |
+### The `.zc / .h / .m` pattern
 
-### The .zc → .h → .m Pattern
-
-ObjC lives in proper .m files. Zen-C owns the types and calls through C headers:
+- Zen-C owns the types (structs, enums) and declares accessor functions.
+- `.h` declares the C API the .m file implements (`darwin_window_create`,
+  etc.) and any `extern` Zen-C helpers the .m calls back into.
+- `.m` uses the accessor functions — no struct-layout duplication.
 
 ```
-Zen-C (.zc)  →  defines structs, enums, accessor functions
-C Header (.h) →  declares opaque types + C API
-ObjC (.m)    →  implements using accessor functions (no struct layout duplication)
+Zen-C struct WindowOptions { width: int; ... }
+   │
+   ├── wopts_width(WindowOptions* opts) -> int  // accessor in window.zc
+   │
+   └── darwin_window_create(WindowOptions* opts)  // in window.m
+           // reads via wopts_width(opts), not opts->width
 ```
 
-Example: `WindowOptions` defined in Zen-C, `darwin_window_create(WindowOptions* opts)` in .m calls `wopts_width(opts)`, `wopts_title(opts)` etc.
+This is because Zen-C struct layout is opaque to hand-written C/.m code
+(generated C is ordered late in the unit).
 
-### Two-Tier Native API
+### Two-tier native API
 
-The `.m` files serve two consumers — typed C functions bypass JSON entirely for native Zen-C code:
+Every framework feature exposes two paths:
 
 ```
-JS Bridge:  JS → JSON → C(JSON) → ObjC → JSON → JS
-Native:     Zen-C → C(typed) → ObjC → typed return → Zen-C  (zero serialization)
+JS:       JS → JSON → C(JSON) → ObjC → JSON → JS
+Zen-C:    Zen-C → typed C call → ObjC → typed return → Zen-C
 ```
 
-Wrappers in `native/dialog/dialog.zc` and `native/notification/notification.zc` give pure Zen-C code (no raw blocks, no JSON).
+The Zen-C path skips JSON serialization entirely. Wrappers in
+`native/dialog/dialog.zc`, `native/notification/notification.zc`,
+`native/menu/menu.zc`, `native/dock/dock.zc` provide the typed path.
 
-### Bridge Protocol
+### Unified worker model
 
-JSON with numeric type routing:
-```json
-{"t":1,"id":42,"m":"greet","a":{"name":"World"}}
-```
+All workers (webview-spawned and headless-from-config) use the **same
+bootstrap** (`bootstrap/worker.ts`) and get the **same host objects**
+(`invokeService`, `syncWait`, `syncNotify`, `dispatchEventToAll`,
+`postToWebview`, `createWindow`, `quit`, `showNotification`,
+`subscribeWindowEvent`, `notif`, `dock`).
 
-| Type | Code | Direction | Response? |
+There is **no separate "backend worker" code path** anymore — that was
+folded into the worker engine in 0.6.0-alpha.0. When reading old code or
+old comments that reference `jsc_backend_create` / `txiki_backend_create`,
+that's been removed; everything is just `_worker_create`.
+
+Headless workers differ from webview-spawned ones in three ways only:
+1. **Spawn timing** — headless start at `app.run()`; webview-spawned on
+   `new Worker(...)`.
+2. **Owner ID** — webview-spawned have `owner_id = <windowId>`; headless
+   have empty owner. Window-close cleanup respects this.
+3. **Worker ID prefix** — headless IDs are prefixed `h-` in the registry
+   so termination APIs can distinguish.
+
+### Worker → native is fast-path, webview → native is IPC
+
+`runtime/services.ts`, `runtime/window.ts`, `runtime/notification.ts`,
+`runtime/dock.ts` all branch on `globalThis.__zappBridge` presence. If
+present → call host object directly (~5 µs). If not → async IPC through
+WKWebView (~135 µs). This branch is intentional and has to stay fast —
+don't wrap host objects in JS middleware.
+
+### Bridge message types
+
+Single byte `t` field routes in `native/app/router.zc`:
+
+| t | Name | Direction | Responds? |
 |---|---|---|---|
-| invoke | 1 | JS→Native | Yes (targeted to calling window) |
-| invoke_response | 2 | Native→JS | — |
-| emit | 3 | JS→Native | No (fire-and-forget, broadcast) |
-| window_action | 4 | JS→Native | No (show, hide, setTitle, subscribe, ready) |
-| worker | 5 | JS→Native | — |
-| sync | 6 | JS→Native | — |
-| cancel | 7 | JS→Native | No (cancels pending invoke by ID) |
+| 1 | invoke | JS → Native | yes (type 2 back) |
+| 2 | invoke_response | Native → JS | — |
+| 3 | emit | JS → Native | no, broadcast |
+| 4 | window_action | JS → Native | no (show/hide/setTitle/etc.) |
+| 5 | worker | JS → Native | — |
+| 6 | sync | JS → Native | async result via dispatchSyncResult |
+| 7 | cancel | JS → Native | no (cancel in-flight invoke by ID) |
 
-### Event System
+Special method names prefixed `__` (e.g. `__window:create`, `__notif:show`,
+`__dialog:open`) are internal — user services can't start with `__`.
 
-Unified layered dispatcher:
-1. **Layer 1**: Native Zen-C callback (can return CANCEL to stop propagation)
-2. **Layer 2**: JS bridge dispatch (targeted to owning window's WebView)
+### Event dispatch is tiered
 
-Optimizations:
-- Per-window JS listener bitmask — skips JS dispatch for unlistened events
-- Direct WebView dispatch table — O(1) lookup by numeric window ID
-- Reusable C buffer for event JS — zero allocation per event
-- Cached numericId on delegate — no string lookup in hot path
+`native/window/callbacks.zc` is the single place window events get
+dispatched. For each event, it:
+1. **Layer 1** — invokes native Zen-C callback (can return CANCEL).
+2. **Layer 2** — broadcasts to every active worker via
+   `jsc_broadcast_eval_js` / `txiki_broadcast_eval_js`.
+3. **Layer 3** — posts to the owning window's WebView JS.
 
-### Worker Architecture
+Per-window listener bitmask in `callbacks.zc` skips Layer 3 when no
+webview handler has subscribed.
 
-Workers are in-process JS contexts owned by a window. They have direct native access via host objects (nanosecond-level calls vs 0.085ms WebView bridge).
+### Bootstrap is a C string constant
 
-| Engine | Platform | Status |
-|---|---|---|
-| **JSC** | macOS (default) | v1 working, v2 pending port |
-| **txiki.js** | All platforms | Replacing QuickJS — web APIs built-in |
-| QuickJS | Legacy | Being replaced by txiki.js |
+`bootstrap/codegen.ts` runs at every CLI build. It bundles and minifies
+`bootstrap/webview.ts` and `bootstrap/worker.ts`, then escapes them into
+C string literals compiled into the binary via
+`.zapp/zapp_bootstrap.zc`. Two exported functions:
+- `zapp_webview_bootstrap_script()` — injected into WKWebView via
+  `WKUserScript` at document-start
+- `zapp_worker_bootstrap_script()` — eval'd into each worker context
+  during `jsc_setup_bridge` / `txiki_setup_bridge`
 
-txiki.js (QuickJS-ng + libuv) provides fetch, WebSocket, timers, crypto, TextEncoder/Decoder natively — eliminates our manual polyfills.
+There is **no separate backend-bootstrap** anymore.
 
-## 3. Zen-C Quick Reference
+## Zen-C conventions
 
-### Trusted C header imports (KEY DX PATTERN)
-```zc
-import "stdio.h" as c;
-import "JavaScriptCore/JavaScriptCore.h" as jsc;
+- **Enums construct with `()`**: `TitleBarStyle::Hidden()`, not
+  `TitleBarStyle::Hidden`
+- **Accessor fns for struct fields** used across file boundaries
+- **`.m` files** hold ObjC — never raw ObjC inside a `.zc` raw block
+- **`darwin_*`** prefix for platform-specific C API; **`zapp_*`** for
+  internal C helpers in .m files; plain names for Zen-C trampolines
+- **`@cfg(apple)` / `@cfg(windows)`** on top-level imports and functions
+- **`#ifdef __APPLE__`** inside .c files (txiki.c) for conditional
+  platform host objects
+- **`_Thread_local` static buffer** for service return values (avoids
+  malloc in the hot path)
 
-fn example() -> void {
-    c::printf("hello\n");
-    let ctx = jsc::JSGlobalContextCreate(NULL);  // entire JSC C API works
-}
-```
+## Things that look weird but aren't
 
-### Enums (tagged unions)
-```zc
-enum TitleBarStyle { Default, Hidden, HiddenInset }
-let style = TitleBarStyle::Hidden();  // () required — constructors
-```
-Raw block access: `value.tag == TitleBarStyle_Hidden_Tag`
+- `app.zc:Zapp` struct with `impl Zapp` containing only functions — it's
+  a namespace for `Zapp::inspectable_auto()` etc. Zen-C's struct literal
+  limitation prevents using `ZappInspectable::Auto()` as a bare value in
+  some contexts, so we provide these wrappers.
+- `txiki.c` has `#ifdef __APPLE__` around notif/dock dispatcher bodies.
+  Those are placeholders for the day `darwin_*` externs get replaced
+  with a cross-platform `zapp_*` layer. When that lands, drop the guards.
+- `cli/patches/txiki-cookie-jar-path.patch` — upstream gap in
+  `saghul/txiki.js`. Embedders need to set an lws cookie jar path; the
+  upstream API doesn't expose a setter. We add one via this patch, apply
+  after cloning. See the patch file for the small diff.
+- `cli/package.json` has `prepack` / `postpack` scripts that copy
+  `native/`, `bootstrap/`, `assets/`, `vendor/webview2/` into `cli/`
+  before npm pack, then delete them after. This ships the framework
+  source inside the CLI tarball.
 
-### struct+def pattern (int-valued constants)
-```zc
-struct WindowEvents { READY: int; FOCUS: int; RESIZE: int; }
-def WindowEvent = WindowEvents{ READY: 0, FOCUS: 1, RESIZE: 3 };
-```
-Use when raw blocks need direct int comparisons.
+## Development conventions
 
-### Auto-dereference
-```zc
-fn process(data: MyStruct*) -> int { return data.width; }
-```
+- **Bun everywhere**, never Node.
+- **Inclusive language**: allowlist/blocklist, not white/black.
+- **`hello-world/`** is the playground — test changes here end-to-end.
+- **`benchmarks/`** is the performance regression harness.
+- Before publishing: `bun run build` in `hello-world/` must pass with JSC
+  engine AND with txiki (change the `define` in `build.zc`).
 
-### String interpolation
-```zc
-println "value: {x}, name: {name}";
-```
-macOS ARC issue with int32_t pointer fields — extract to local `int` var first.
+## Public docs
 
-### @cfg platform dispatch
-```zc
-@cfg(apple)
-fn platform_init(name: string) -> void { darwin::darwin_platform_init(name); }
-```
-Only works on top-level declarations (not inside functions).
+For anyone building **with** Zapp (not on it), point them at:
 
-### Key limitations
-- Struct bodies emitted late in generated C — raw blocks can't stack-allocate Zen-C structs
-- Raw block ordering unpredictable across files — `#define` must be duplicated with `#ifndef` guards
-- Enum values need `()` — `Color::Red()` not `Color::Red`
-- `default` is a C reserved word — don't use as function name (use `create` instead)
-- `{}` in strings triggers interpolation — use raw blocks for literal braces
-
-## 4. Key Files (v2)
-
-### Native framework
-| File | Role |
+| Path | Audience |
 |---|---|
-| `native/app/app.zc` | App lifecycle, config, bootstrap JS, active app state |
-| `native/app/router.zc` | Bridge message dispatch (invoke, emit, window actions, workers, cancel) |
-| `native/window/window.zc` | WindowOptions, Window, WindowManager, accessors, @cfg trampolines |
-| `native/window/events.zc` | Event IDs (struct+def), EventResult enum, #define macros |
-| `native/window/callbacks.zc` | Unified event dispatcher, bitmask, callback registry |
-| `native/service/service.zc` | Service registration, invoke, sync invoke for workers, manifest JSON |
-| `native/bridge/protocol.zc` | Message types, JSON parsing, cancellation bitmap |
-| `native/bridge/dispatch.zc` | Response/event dispatch, JS string escaping |
-| `native/worker/worker.zc` | Worker trait, @cfg engine dispatch, workers_enabled() |
-| `native/worker/registry.zc` | Worker-to-owner tracking for cleanup |
-| `native/worker/engines/jsc.h/.m` | JSC worker engine (macOS, serial dispatch queue) |
-| `native/worker/engines/jsc.zc` | JSC Zen-C trampolines |
-| `native/worker/engines/txiki.h/.c` | txiki.js worker engine (cross-platform, libuv threads) |
-| `native/worker/engines/txiki.zc` | txiki.js Zen-C trampolines |
-| `native/platform/platform.zc` | @cfg(apple) trampolines for platform_init/run |
-| `native/platform/darwin/platform.h/.m` | NSApp, delegate, menus |
-| `native/platform/darwin/window.h/.m` | NSWindow, ZappWindowDelegate, event dispatch, WebView table |
-| `native/platform/darwin/webview.h/.m` | WKWebView, scheme handler, message handler, navigation delegate |
-| `native/platform/darwin/dialog.h/.m` | macOS dialogs — bridge JSON + native typed API |
-| `native/platform/darwin/notification.h/.m` | macOS notifications — async bridge + fire-and-forget typed |
-| `native/platform/darwin/menu.h/.m` | macOS menus — recursive NSMenu builder, accelerators, roles |
-| `native/dialog/dialog.zc` | Native Zen-C dialog wrappers (zero JSON) |
-| `native/notification/notification.zc` | Native Zen-C notification wrappers (fire-and-forget) |
+| `README.md` | Landing page |
+| `llms.txt` | Agent reference — full API surface, single file |
+| `docs/api-reference.md` | Long-form API reference |
+| `docs/patterns.md` | Common patterns cookbook |
+| `docs/zen-c-services.md` | Writing native services |
+| `docs/architecture.md` | Under-the-hood walkthrough |
 
-### TypeScript
-| File | Role |
-|---|---|
-| `runtime/index.ts` | Re-exports: App, Window, Events, Services, Worker, Dialog, Menu, ContextMenu, Notification |
-| `runtime/bridge.ts` | Internal getBridge() via Symbol.for('zapp.bridge') |
-| `runtime/services.ts` | Services.invoke() → CancellablePromise |
-| `runtime/events.ts` | Events.on/emit, WindowEvent/AppEvent enums |
-| `runtime/window.ts` | Window.current().on/show/hide/setTitle/etc |
-| `runtime/worker.ts` | Worker class with postMessage + channels (send/receive) |
-| `runtime/dialog.ts` | Dialog.openFile/saveFile/message |
-| `runtime/menu.ts` | Menu.build() with action stripping, auto-IDs, event wiring |
-| `runtime/context-menu.ts` | ContextMenu.show() with one-shot event cleanup |
-| `runtime/notification.ts` | Notification.requestPermission/show/schedule/cancel/on |
-| `runtime/app.ts` | App.quit(), App.openExternal(), App.getConfig() |
-| `cli/src/zapp-cli.ts` | CLI entry: init, dev, build, generate |
-| `cli/src/build-config.ts` | Generates .zapp/zapp_build_config.zc + platform config |
-| `cli/src/generate.ts` | Scans services → src/zapp/ TypeScript bindings |
-| `cli/src/workers.ts` | Discovers + bundles worker scripts |
-| `cli/src/native.ts` | Resolves framework dir, compiles with zc |
-| `cli/src/bundle.ts` | Dev .app bundle creation (Info.plist + ad-hoc signing) |
-| `cli/src/init.ts` | Scaffolds via Vite + adds zapp/ native code |
+Don't add public-API content to `SKILLS.md`. This file is for people
+hacking on the framework itself.
 
-## 5. Conventions
-
-- **Always use Bun**, never Node.js
-- **Inclusive language**: allowlist/blocklist
-- **Test in playground/** before applying Zen-C patterns
-- **ObjC in .m files**, never in raw blocks in .zc files
-- **Accessor functions** bridge Zen-C structs to .m code (no layout duplication)
-- **darwin_ prefix** in .h/.m, clean names in .zc trampolines
-- **zapp_ prefix** for internal C globals/helpers in .m files
-- **`@cfg(apple)`** on top-level imports and functions for platform dispatch
-- `hello-world/` is the reference example app
-
-## 6. Current State
-
-### Working (v2, as of 2026-03-29)
-- Window creation with all options (TitleBarStyle enum, transparency, always-on-top)
-- WebView with zapp:// custom scheme handler
-- Bridge: JSON protocol, numeric routing, request IDs, cancellation + timeout
-- Services: register in Zen-C, invoke from JS/Workers, auto-generated TS bindings
-- Events: 11 window events, unified dispatcher, per-window bitmask, targeted delivery
-- Window actions: show, hide, close, setTitle, setSize, setPosition, minimize, maximize, fullscreen, alwaysOnTop
-- Close guard: `Window.current().setCloseGuard(true)` prevents close from JS, handler decides
-- Workers: JSC (macOS, 0 size) + txiki.js (cross-platform, +6 MB)
-  - postMessage round-trip (WebView ↔ Worker)
-  - Channel API (send/receive named routing)
-  - Host objects (invokeService — direct native calls from worker)
-  - Worker bundling (CLI scans for `new Worker()`, bundles .ts → .mjs)
-  - Page refresh cleanup (pagehide terminates owned workers)
-  - SharedWorkers: refcounted multi-window, dedup by URL, broadcast dispatch
-  - Safari Web Inspector for JSC workers (gated on inspectable config)
-- Dialogs: openFile, saveFile, message — bridge JSON API + native Zen-C typed API
-- Menus: app menu + context menu — JSON from JS, recursive NSMenu builder, accelerators, roles
-- Draggable regions: `--zapp-drag` CSS property, mousemove tracking in bootstrap JS
-- Notifications: async bridge API (permission, show, schedule, cancel) + fire-and-forget native Zen-C API
-- Native Zen-C wrappers: `dialog/dialog.zc`, `notification/notification.zc` — two-tier design, zero JSON
-- Dev .app bundle: CLI creates minimal .app + Info.plist + ad-hoc signing (enables notifications, dock icon)
-- Navigation restrictions: block external URLs, allowlist with glob patterns, user clicks → system browser
-- App.openExternal(url) — open URL in system browser
-- CLI: init (Vite scaffold), dev (HMR + .app bundle), build (prod binary), generate (TS bindings)
-- Bootstrap codegen: `bootstrap/webview.ts` → minified → `.zapp/zapp_bootstrap.zc` (proper TypeScript, build-time)
-- Sync: cross-context wait/notify coordination — native per-key FIFO queues with timeout, host objects in workers
-- Native Zen-C menu API: MenuItem struct, menu_set, menu_show_context — two-tier (typed + JSON)
-- Manager pattern: app.menu, app.dialog, app.notification, app.sync — namespaced access
-- App-level event system: STARTED, SHUTDOWN, REOPEN, OPEN_URL, ACTIVE/INACTIVE — native-first
-- Deep links: custom URL protocols (CFBundleURLTypes), `application:openURLs:` delegate
-- Backend worker: privileged app-level JS context (JSC default, txiki.js opt-in for web APIs)
-- Production packaging: `zapp package` with icons (liquid glass), signing, notarization
-- Window.create() from frontend, App.on(AppEvent) from frontend, Window.loadUrl()
-- Runtime: App, Window, Events, Services, Worker, SharedWorker, Dialog, Menu, ContextMenu, Notification, Sync
-
-### Binary sizes
-- 384 KB (JSC workers + backend, no optimizations)
-- ~6.4 MB (txiki.js workers, no optimizations)
-- ~90 KB (JSC workers, -Oz -flto strip — deferred for baseline)
-
-### Not yet in v2
-- Windows platform
-- Brotli/embedded assets
-- File watching in dev mode
-- Build optimizations (-Oz -flto strip)
-- Service lifecycle trait (startup/shutdown, Wails-style)
-
-### Deferred design decisions
-- Deep links — reference Wails v3 custom protocols
-- Binary protocol header — add when JSON parsing is a measured bottleneck
-- Per-window capabilities (Tauri-style security) — config-driven
-- JSC web APIs (fetch, WebSocket) — keep lean, users reach for txiki.js
-
-## 7. Resources
+## Resources
 
 | Resource | URL |
 |---|---|
@@ -318,8 +285,4 @@ Only works on top-level declarations (not inside functions).
 | Zen-C repo | https://github.com/zenc-lang/zenc |
 | txiki.js | https://github.com/saghul/txiki.js |
 | WebView2 host objects | https://learn.microsoft.com/en-us/microsoft-edge/webview2/how-to/hostobject |
-| Wails v3 bindings | https://v3alpha.wails.io/features/bindings/methods/ |
-| Tauri IPC | https://tauri.app/develop/calling-rust/ |
-| Playground | `playground/` (test Zen-C patterns before applying) |
-| Interop tests | `tests/zenc-interop/` (12 tests) |
-| Gemini research | `GEMINI.md` (bridge architecture, host objects) |
+| Apple WKWebView | https://developer.apple.com/documentation/webkit/wkwebview |

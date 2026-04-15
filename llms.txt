@@ -1,0 +1,1033 @@
+# Zapp — agent reference
+
+> **Zapp is a desktop application framework.** Native code is written in Zen-C and
+> compiled to a tiny binary (~450 KB for the JSC engine on macOS). The UI renders
+> in the system WebView. The JavaScript side is your choice — plain HTML, Svelte,
+> React, Vue, Solid, anything that builds through Vite.
+>
+> This document is the single source of truth for an agent building a Zapp app.
+> It covers concepts, config shapes, the full runtime API, service signatures,
+> common patterns, and the mistakes to avoid. No need to fetch anything else.
+>
+> **Platform:** macOS first. Windows in progress (portable framework with
+> `#ifdef __APPLE__` stubs where Windows backends haven't landed).
+> **Versions covered:** `@zappdev/cli`, `@zappdev/runtime`, `@zappdev/vite`
+> each at `0.6.0-alpha.x`.
+
+---
+
+## Core concepts
+
+### Two layers, three execution contexts
+
+```
+┌─────────────────────────────────────────────────────┐
+│           Native binary (Zen-C → C11 → machine)     │
+│     App ・ Window ・ Service ・ Menu ・ Notification │
+│                      …Dock ・ Dialog                 │
+└──────────────┬──────────────────────┬───────────────┘
+               │ host objects          │ IPC (JSON)
+               ▼                       ▼
+    ┌────────────────────┐   ┌──────────────────────┐
+    │   Workers          │   │   WebView (UI)       │
+    │   (JS/TS threads)  │   │   HTML/CSS/JS        │
+    │   headless OR      │   │   Vite-built         │
+    │   webview-spawned  │   │                      │
+    └────────────────────┘   └──────────────────────┘
+```
+
+**Native (Zen-C)** runs the app. It owns windows, services, menus, dock,
+notifications, dialogs. Your entry point is `zapp/app.zc`.
+
+**WebView** is the UI surface — what the user sees. One webview per window.
+Uses WKWebView on macOS / WebView2 on Windows. Talks to native via a JSON
+IPC bridge.
+
+**Workers** are JavaScript threads with a fast direct-call bridge to native.
+All workers share the same runtime API surface. They differ only by *how
+they're spawned*:
+- **Webview-spawned workers**: `new Worker("./my-worker.ts")` from inside
+  a webview. Owner is the window that spawned them. Die when the window dies.
+- **Headless workers**: declared in `zapp.config.ts` → `headless`. Start at
+  app boot, no parent window, live for the app lifetime.
+
+**No "backend worker" — that concept is gone.** All workers have full API
+access: `Window.create`, `Events`, `Services`, `Notification`, `Dock`, `Sync`,
+`App.quit`. The only thing you can't do from a worker is `Window.current()`
+(you don't have a current window — you're not in one).
+
+### When to use what
+
+| Work | Where |
+|---|---|
+| UI (buttons, forms, layout) | Webview |
+| Heavy JS compute (parse, crypto, image) | Webview-spawned Worker |
+| App-level state that outlives any window | Headless worker |
+| DB connection pool shared across windows | Headless worker |
+| Long-running background sync / polling | Headless worker |
+| Privileged native ops (FS, system info, menus) | Zen-C Service |
+
+### Bridge IPC latency (for mental model)
+
+Measured on M4 Max, `ping` round-trip:
+
+| Path | Median | Throughput |
+|---|---|---|
+| Worker → native (direct host-object call) | ~5 µs | ~200k/s |
+| Webview → native (WKWebView `userContentController`) | ~135 µs | ~7.4k/s |
+| Electron renderer → main (reference) | ~52 µs | ~19k/s |
+
+**Takeaway**: if you're making tight loops of IPC calls, do it from a worker,
+not a webview. The WKWebView IPC can't be made faster — it's an OS-level
+round-trip through WebKit's sandbox. Workers go straight to C.
+
+---
+
+## Project layout
+
+What `bunx @zappdev/cli init my-app` scaffolds:
+
+```
+my-app/
+├── package.json          # @zappdev/cli, runtime, vite as deps
+├── zapp.config.ts        # app identity + headless + macOS opts
+├── vite.config.ts        # auto-injects zappWorkers() from @zappdev/vite
+├── tsconfig.json         # standard Vite TS setup
+├── index.html            # webview entry
+├── src/                  # your TS/UI code
+│   └── main.ts
+├── zapp/                 # your Zen-C (native) code
+│   ├── app.zc            # run_app() — AppConfig, service registration, window
+│   └── build.zc          # platform directives (frameworks, defines, link)
+└── .zapp/                # CLI-generated, gitignored:
+    ├── zapp_build_config.zc
+    ├── zapp_platform.zc
+    ├── zapp_bootstrap.zc
+    ├── zapp_headless_workers.zc
+    └── ...
+```
+
+**Yours to edit**: `zapp/app.zc`, `zapp/build.zc`, `zapp.config.ts`, `src/**`,
+`index.html`, `vite.config.ts` (additional plugins).
+
+**Don't edit**: `.zapp/**`, `bin/**`, `dist/**`, `release/**`. All generated.
+
+### Scripts in package.json
+
+```json
+{
+  "scripts": {
+    "dev": "zapp dev",       // Vite HMR + native compile + launch
+    "build": "zapp build",   // production binary with embedded assets
+    "package": "zapp package", // .app bundle with icon (macOS)
+    "generate": "zapp generate" // regenerate TS bindings for services
+  }
+}
+```
+
+Run via `bun run dev`, `bun run build`, `bun run package`. Don't type
+`zapp dev` directly — that hits a global install which may be stale. `bun run`
+uses the local `node_modules/.bin/zapp`, guaranteed matching versions.
+
+---
+
+## AppConfig (zapp/app.zc)
+
+The struct passed to `App::new(config)`. Every field required.
+
+```zc
+import "app/app.zc";
+
+fn run_app() -> int {
+    let config = AppConfig{
+        name: "My App",
+        applicationShouldTerminateAfterLastWindowClosed: true,
+        webContentInspectable: Zapp::inspectable_auto(),
+        maxWorkers: 0,
+        qjsStackSize: 0,
+    };
+    let app = App::new(config);
+    app.service.add("greet", greet_handler);
+
+    let opts = WindowOptions::create("My App");
+    opts.width = 1200;
+    opts.height = 800;
+    opts.visible = false;
+    let win = app.window.create(&opts);
+    win.on_ready(on_ready);
+
+    return app.run();
+}
+
+fn on_ready(_id: int, _handle: void*) -> void {
+    Window{id: _id, handle: _handle}.show();
+}
+```
+
+### Fields
+
+| Field | Type | Meaning |
+|---|---|---|
+| `name` | `string` | App name (shown in menu bar, dock) |
+| `applicationShouldTerminateAfterLastWindowClosed` | `bool` | macOS standard — quit when last window closes |
+| `webContentInspectable` | `ZappInspectable` | Auto / On / Off — see below |
+| `maxWorkers` | `int` | Upper bound on webview-spawned workers (0 = default 64) |
+| `qjsStackSize` | `int` | QuickJS stack size for txiki workers (0 = default) |
+
+### ZappInspectable enum
+
+Controls whether the webview's "Inspect Element" is available.
+
+```zc
+// Preferred — convenience accessors
+webContentInspectable: Zapp::inspectable_auto(),  // dev → on, prod → off
+webContentInspectable: Zapp::inspectable_on(),    // always on
+webContentInspectable: Zapp::inspectable_off(),   // always off
+
+// Equivalent raw form (less readable, prefer above)
+webContentInspectable: ZappInspectable::Auto(),
+webContentInspectable: ZappInspectable::On(),
+webContentInspectable: ZappInspectable::Off(),
+```
+
+**Default for production apps**: `Zapp::inspectable_auto()`. Ships debug
+tools in `zapp dev`, strips them in `zapp build` / `zapp package`.
+
+### The `Zapp` namespace struct
+
+A cross-cutting namespace for framework-level accessors that are scoped
+under `Zapp::` so they don't pollute the global namespace. Today it holds
+the three `inspectable_*` functions; future additions will go here.
+
+### Service handler signature
+
+```zc
+fn my_service(_app: App*, _args: JsonValue*) -> string {
+    // Parse args:
+    if _args != NULL {
+        let name_opt = _args.get_string("name");
+        if name_opt.is_some() {
+            let name = name_opt.unwrap();
+            // ...
+        }
+    }
+
+    // Return a JSON string. Use a _Thread_local buffer for fixed responses.
+    raw {
+        static _Thread_local char buf[128];
+        snprintf(buf, sizeof(buf), "{\"greeting\":\"Hello %s\"}", "world");
+        return buf;
+    }
+    return "";
+}
+
+// Register in run_app() before app.run():
+app.service.add("greet", my_service);
+```
+
+**Always take `(App*, JsonValue*) -> string`**. Even if you don't use args,
+use `_args: JsonValue*` and prefix with `_` to mark unused. Returning an empty
+string signals "no response payload".
+
+---
+
+## zapp.config.ts
+
+TypeScript config file at the project root. Typed via `defineConfig` from
+`@zappdev/cli/config`.
+
+```ts
+import { defineConfig } from "@zappdev/cli/config";
+
+export default defineConfig({
+  name: "My App",
+  identifier: "com.example.myapp",
+  version: "1.0.0",
+
+  // Headless workers — start at app boot, no parent window.
+  // Keys are IDs (used for termination), values are source paths.
+  headless: {
+    db: "src/workers/db.ts",
+    sync: "src/workers/sync.ts",
+  },
+
+  // Deep links: myapp://some/path opens the app with OPEN_URL event
+  deepLinkSchemes: ["myapp"],
+
+  // macOS-specific packaging opts
+  macos: {
+    icon: "assets/icon.png",     // converted to .icns at package time
+    category: "public.app-category.developer-tools",
+    minimumSystemVersion: "12.0",
+    signingIdentity: undefined,  // undefined = adhoc signing
+    acceptFirstMouse: true,
+  },
+
+  // Security — glob patterns for URLs the webview can navigate to
+  security: {
+    allowNavigation: ["https://myapi.example.com/*"],
+  },
+});
+```
+
+### Field reference
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `name` | `string` | required | App name (also appears in generated AppConfig if desired) |
+| `identifier` | `string` | auto | Reverse-DNS bundle identifier |
+| `version` | `string` | `"0.1.0"` | Semver, shown in About box / Info.plist |
+| `assetDir` | `string` | `"./dist"` | Vite build output (usually don't change) |
+| `devPort` | `number` | `5173` | Vite dev server port |
+| `headless` | `Record<string,string>` | `{}` | Worker ID → source path map |
+| `deepLinkSchemes` | `string[]` | `[]` | URL schemes to register |
+| `macos.icon` | `string` | none | Path to `.png` / `.icns` / `.iconset` |
+| `macos.signingIdentity` | `string` | adhoc | Apple Developer ID for signing |
+| `security.allowNavigation` | `string[]` | none | Navigation allowlist (glob) |
+
+---
+
+## Runtime API (@zappdev/runtime)
+
+All runtime APIs import from the same package. Same signatures everywhere —
+webview, webview-spawned worker, headless worker. Under the hood, workers
+take a zero-overhead direct path; webviews take the WKWebView IPC path.
+
+```ts
+import {
+  App,
+  Window, WindowEvent, type WindowHandle, type WindowOptions,
+  Events, AppEvent,
+  Services, type CancellablePromise,
+  Worker, SharedWorker,
+  Dialog,
+  Menu, type MenuItemDef,
+  ContextMenu,
+  Notification, type NotificationOptions,
+  Sync,
+  Dock,
+} from "@zappdev/runtime";
+```
+
+### App
+
+```ts
+App.quit(): void
+App.openExternal(url: string): void   // open in system browser
+App.on(event: AppEvent, handler): () => void
+App.getConfig(): Record<string, unknown>  // bootstrapped config
+```
+
+### Events
+
+Global event bus. Events fire locally; `emit()` from a worker broadcasts
+to every webview, and from a webview is local-only.
+
+```ts
+Events.on(name: string, handler: (payload) => void): () => void
+Events.emit(name: string, payload?: Record<string, unknown>): void
+eventName(event: WindowEvent | AppEvent): string  // enum → string name
+```
+
+**WindowEvent enum** (0–10):
+`READY, FOCUS, BLUR, RESIZE, MOVE, CLOSE, MINIMIZE, MAXIMIZE, RESTORE,
+FULLSCREEN, UNFULLSCREEN`
+
+**AppEvent enum** (100+):
+`STARTED (100), SHUTDOWN (101), REOPEN (104), OPEN_URL (105),
+DID_BECOME_ACTIVE (106), DID_RESIGN_ACTIVE (107)`
+
+STARTED / SHUTDOWN fire before/after any webview exists — handle them in a
+headless worker if you need to react.
+
+### Window
+
+```ts
+// Webview only — throws in workers
+Window.current(): WindowHandle
+
+// Everywhere. In workers: direct C call via __zappBridge.createWindow.
+// In webview: async __window:create invoke over IPC.
+Window.create(opts?: Partial<WindowOptions>): Promise<WindowHandle>
+```
+
+`WindowHandle`:
+```ts
+readonly id: string
+on(event: WindowEvent, handler): () => void  // scoped to this window
+show() / hide() / close()
+setTitle(title) / setSize(w, h) / setPosition(x, y)
+minimize() / maximize()
+setFullscreen(on) / setAlwaysOnTop(on)
+setCloseGuard(on)   // when true, CLOSE event fires and close is blocked until close()
+loadUrl(url)
+```
+
+`WindowOptions`:
+```ts
+{
+  title?: string
+  url?: string
+  width?: number
+  height?: number
+  x?: number
+  y?: number
+  visible?: boolean
+  resizable?: boolean
+  closable?: boolean
+  minimizable?: boolean
+  maximizable?: boolean
+  fullscreen?: boolean
+  borderless?: boolean
+  transparent?: boolean
+  alwaysOnTop?: boolean
+  titleBarStyle?: "default" | "hidden" | "hiddenInset"
+}
+```
+
+### Services
+
+Call Zen-C service handlers registered via `app.service.add(name, fn)`.
+
+```ts
+Services.invoke<T>(method: string, args?: object, opts?: { timeout? }): CancellablePromise<T>
+Services.invokeSync<T>(method: string, args?: object): T   // workers only
+```
+
+`CancellablePromise<T>` has `.cancel()` to abort a pending invoke.
+
+**In webview**: async IPC round-trip (~135 µs).
+**In worker**: direct host-object C call (~5 µs), returned as resolved Promise.
+**`invokeSync`**: worker-only. Throws if called from a webview.
+
+### Notification
+
+Full feature: permission, show, schedule, actions (buttons/reply), update,
+cancel, remove from Notification Center.
+
+```ts
+Notification.requestPermission(): Promise<PermissionStatus>
+Notification.getPermissionStatus(): Promise<PermissionStatus>
+Notification.show(options): Promise<id>
+Notification.schedule(options with trigger): Promise<id>
+Notification.cancel(id) / cancelAll()
+Notification.removeDelivered(id) / removeAllDelivered()
+Notification.update(id, options)
+Notification.registerCategory(category)   // webview only — needs typed struct args
+Notification.removeCategory(id)
+Notification.on("response" | "click" | "action", handler): () => void
+```
+
+`NotificationOptions`:
+```ts
+{
+  title: string
+  subtitle?: string
+  body?: string
+  sound?: "default" | "none" | string
+  threadId?: string
+  categoryId?: string        // must registerCategory first
+  data?: Record<string, unknown>
+  attachment?: string        // file path or file:// URL
+  id?: string                // explicit ID for update/removeDelivered
+}
+```
+
+`PermissionStatus`: `"granted" | "denied" | "not-determined" | "provisional"`
+
+**macOS requires**: app bundle + code signing. `zapp dev` handles this
+automatically with adhoc signing; `zapp package` respects `macos.signingIdentity`.
+
+### Dock (macOS)
+
+```ts
+Dock.showIcon() / hideIcon()
+Dock.setBadge(label: string) / removeBadge()
+Dock.bounce(type?: "informational" | "critical")
+Dock.setIcon(path: string) / resetIcon()
+```
+
+### Menu
+
+```ts
+Menu.build(items: MenuItemDef[]): MenuHandle
+```
+
+`MenuItemDef`:
+```ts
+{
+  id?: string
+  label?: string
+  type?: "normal" | "separator" | "checkbox"
+  enabled?: boolean
+  checked?: boolean
+  accelerator?: string   // e.g. "CmdOrCtrl+N"
+  role?: "editMenu" | "windowMenu" | "appMenu" | "copy" | "cut" | "paste"
+       | "selectAll" | "undo" | "redo" | "quit"
+  action?: () => void    // fires on click
+  submenu?: MenuItemDef[]
+}
+```
+
+Roles automatically supply the right system items. `role: "editMenu"`
+creates the whole Edit menu.
+
+### ContextMenu
+
+One-shot native context menu.
+
+```ts
+ContextMenu.show(items: MenuItemDef[], options?: { x?: number, y?: number }): void
+```
+
+Without `x`/`y`, uses the last `contextmenu` event position. Action listeners
+are auto-cleaned after click or 30 s timeout.
+
+### Dialog
+
+Native file and message dialogs. All async.
+
+```ts
+Dialog.openFile(opts?: OpenFileOptions): Promise<{ cancelled, paths? }>
+Dialog.saveFile(opts?: SaveFileOptions): Promise<{ cancelled, path? }>
+Dialog.message(opts: MessageOptions): Promise<{ button: number }>
+```
+
+`MessageOptions`:
+```ts
+{
+  message: string
+  title?: string
+  kind?: "info" | "warning" | "critical"
+  buttons?: string[]    // defaults to ["OK"]
+}
+```
+
+### Sync — cross-context wait/notify
+
+Low-level coordination across windows/workers. Like `pthread_cond_*` but
+keyed by string.
+
+```ts
+Sync.wait(key: string, timeoutMs?: number | null): Promise<"notified" | "timed-out">
+Sync.notify(key: string, count = 1): void    // wake N waiters (default 1)
+Sync.notifyAll(key: string): void              // wake all waiters
+```
+
+Useful for: rate-limiting a resource to one waiter at a time, draining a
+queue on a signal, any race between background producer and foreground
+consumer.
+
+### Worker / SharedWorker
+
+Spawn from a webview.
+
+```ts
+const w = new Worker("./path/to/worker.ts");
+w.postMessage({ task: "compute" });
+w.onmessage = (e) => console.log(e.data);
+w.send("channel", payload);            // named channel (typed routing)
+w.receive("channel", handler);         // unsub = receive returns
+w.terminate();
+
+const sw = new SharedWorker("./shared.ts");  // URL-keyed, refcounted
+sw.port.postMessage(...);
+```
+
+Workers have the full runtime API. They are *not* web workers in the
+standard sense — they're Zapp workers with a privileged bridge. `fetch`
+and timers need the txiki engine (not JSC).
+
+---
+
+## Worker engines
+
+Zen-C's `zapp/build.zc` chooses which engine to compile in.
+
+```zc
+// JSC — macOS only, ~450 KB binary, no web APIs in workers (no fetch, no
+// WebSocket, but setTimeout/clearTimeout are provided by Zapp).
+//> macos: define: ZAPP_WORKER_ENGINE_JSC
+
+// txiki.js — cross-platform, ~6.5 MB binary, full web APIs (fetch,
+// WebSocket, timers, Performance, etc.). CLI downloads + builds it on
+// first use (~60 s one-time cost). Uses a patched fork via the
+// cookie-jar-path upstream gap.
+//> macos: define: ZAPP_WORKER_ENGINE_TXIKI
+```
+
+Pick **one** engine per app. Both can't be active at once.
+
+- **JSC** when: macOS-only app, want the smallest possible binary, don't need
+  fetch/WebSocket *inside workers* (you can still do fetch/WebSocket in the
+  webview — the UI has full DOM APIs).
+- **txiki** when: cross-platform, want web APIs inside workers, size budget
+  allows ~6 MB. Also required for Windows.
+
+---
+
+## Common patterns
+
+### Close guard — "unsaved changes?" dialog
+
+```ts
+// src/main.ts (webview)
+import { Window, WindowEvent, Dialog } from "@zappdev/runtime";
+
+const win = Window.current();
+win.setCloseGuard(true);
+
+win.on(WindowEvent.CLOSE, async () => {
+  const result = await Dialog.message({
+    message: "Save changes before closing?",
+    buttons: ["Save", "Don't save", "Cancel"],
+  });
+  if (result.button === 0) {
+    await save();
+    win.close();                 // explicit close, bypasses guard
+  } else if (result.button === 1) {
+    win.close();
+  }
+  // button 2 = stay open
+});
+```
+
+### Headless worker with broadcast
+
+```ts
+// zapp.config.ts
+export default defineConfig({
+  name: "my-app",
+  headless: { sync: "src/workers/sync.ts" },
+});
+```
+
+```ts
+// src/workers/sync.ts
+import { Events, Services } from "@zappdev/runtime";
+
+setInterval(async () => {
+  const latest = await Services.invoke("fetchLatest");
+  Events.emit("data:updated", latest);   // broadcast to every open webview
+}, 5000);
+```
+
+```ts
+// src/main.ts (webview — any window can listen)
+import { Events } from "@zappdev/runtime";
+
+Events.on("data:updated", (data) => {
+  render(data);
+});
+```
+
+### Service with lifecycle (startup / shutdown)
+
+```zc
+import "app/app.zc";
+
+struct CounterService {
+    value: int;
+}
+
+let counter = CounterService{value: 0};
+
+fn counter_startup(ptr: void*) -> void {
+    let self = (CounterService*)ptr;
+    self.value = 0;
+    println "counter started";
+}
+
+fn counter_shutdown(ptr: void*) -> void {
+    println "counter stopped";
+}
+
+fn counter_increment(_app: App*, _args: JsonValue*) -> string {
+    counter.value = counter.value + 1;
+    raw {
+        static _Thread_local char buf[64];
+        snprintf(buf, sizeof(buf), "{\"value\":%d}", counter.value);
+        return buf;
+    }
+    return "";
+}
+
+fn run_app() -> int {
+    let config = AppConfig{
+        name: "counter",
+        applicationShouldTerminateAfterLastWindowClosed: true,
+        webContentInspectable: Zapp::inspectable_auto(),
+        maxWorkers: 0,
+        qjsStackSize: 0,
+    };
+    let app = App::new(config);
+
+    // register() gives you lifecycle hooks (startup/shutdown).
+    // add() is the shortcut when you don't need them.
+    app.service.register("increment", (void*)&counter, &ServiceImpl{
+        handler: counter_increment,
+        startup: counter_startup,
+        shutdown: counter_shutdown,
+    });
+
+    let opts = WindowOptions::create("counter");
+    opts.visible = false;
+    let win = app.window.create(&opts);
+    win.on_ready(fn (_id: int, _handle: void*) -> void {
+        Window{id: _id, handle: _handle}.show();
+    });
+
+    return app.run();
+}
+```
+
+### Notification with action buttons
+
+```ts
+import { Notification } from "@zappdev/runtime";
+
+// One-time: register the category
+await Notification.registerCategory({
+  id: "message",
+  actions: [
+    { id: "reply", title: "Reply" },
+    { id: "delete", title: "Delete", destructive: true },
+  ],
+  hasReplyField: true,
+  replyPlaceholder: "Type your reply...",
+  replyButtonTitle: "Send",
+});
+
+// Show one
+await Notification.show({
+  title: "New message from Alice",
+  body: "Hey, are you free?",
+  categoryId: "message",
+});
+
+// React — these fire for any category
+Notification.on("response", (r) => {
+  console.log("notif", r.id, "action:", r.actionId, "text:", r.userText);
+});
+```
+
+### Menu with actions
+
+```ts
+import { Menu, App } from "@zappdev/runtime";
+
+Menu.build([
+  { role: "appMenu" },
+  { label: "File", submenu: [
+    { label: "New", accelerator: "CmdOrCtrl+N", action: () => newFile() },
+    { label: "Open", accelerator: "CmdOrCtrl+O", action: () => openFile() },
+    { type: "separator" },
+    { label: "Quit", accelerator: "CmdOrCtrl+Q", action: () => App.quit() },
+  ]},
+  { label: "Edit", role: "editMenu" },
+  { label: "Window", role: "windowMenu" },
+]);
+```
+
+---
+
+## Anti-patterns
+
+### Don't use `backend: bool` in AppConfig
+
+Removed in 0.6.0-alpha.0. Previously you'd set `backend: true` to enable a
+singleton privileged JS worker. Now: declare headless workers explicitly in
+`zapp.config.ts` under `headless`. The unified worker model means each
+worker is explicit about its purpose and ID.
+
+```ts
+// WRONG (AppConfig field no longer exists)
+AppConfig{ backend: true, ... }
+
+// RIGHT (declare in zapp.config.ts)
+export default defineConfig({ headless: { main: "src/main-worker.ts" } });
+```
+
+### Don't use raw `webContentInspectable: -1 / 0 / 1`
+
+Field is now a `ZappInspectable` enum. Use the `Zapp::inspectable_*()`
+accessors.
+
+```zc
+// WRONG
+webContentInspectable: -1
+
+// RIGHT
+webContentInspectable: Zapp::inspectable_auto()
+```
+
+### Don't `await Window.create()` at module top in a webview
+
+Webview context doesn't have the worker fast path — it goes through async
+IPC. Top-level await is fine in a worker (direct C call, synchronous under
+the hood), but in a webview you should wrap in an async handler:
+
+```ts
+// WRONG (webview) — IPC not ready at module init
+const w = await Window.create({...});
+
+// RIGHT
+async function openSecondaryWindow() {
+  const w = await Window.create({...});
+}
+button.addEventListener("click", openSecondaryWindow);
+```
+
+In a headless worker, top-level `await Window.create(...)` is fine — workers
+are ready before your code runs.
+
+### Don't use `Window.current()` from a worker
+
+Workers have no "current" window. Use `Window.create` to spawn a new one, or
+pass `windowId` through a service call if you need to operate on a specific
+existing window.
+
+```ts
+// WRONG (from worker)
+const w = Window.current();   // throws
+
+// RIGHT
+const w = await Window.create({...});
+```
+
+### Don't assume workers have a different API
+
+Same `import { Window, Events, ... } from "@zappdev/runtime"` imports work
+in all three contexts. Internal fast paths are automatic. If some code runs
+in both a webview and a worker, write it once and trust the runtime.
+
+### Don't type `zapp dev` in your terminal
+
+Use `bun run dev` (or the other scripts). Bare `zapp` hits a global install
+(which may be stale or missing); `bun run` resolves to the local
+`node_modules/.bin/zapp` pinned in your project's `package.json`.
+
+### Don't block the main thread in a service handler
+
+Service handlers run on the native thread that received the call (worker
+thread in worker-context, main thread in webview-context). Long ops (big
+file reads, network, crypto) should run async or on a background thread. A
+10 ms blocking service freezes the UI for 10 ms.
+
+### Production security — use `inspectable_off()` if you don't want devtools
+
+`Zapp::inspectable_auto()` turns devtools off in `zapp build` / `zapp package`
+(production mode). If you want belt-and-suspenders certainty, or you ship
+a `zapp dev` build to internal users, use `Zapp::inspectable_off()` to hard-
+disable devtools regardless of build mode.
+
+---
+
+## CLI — @zappdev/cli
+
+Commands (via `bun run <script>` in a project):
+
+| Command | Scaffolds / Builds |
+|---|---|
+| `zapp init <name> [-t template]` | New project (vanilla-ts, svelte-ts, react-ts, vue-ts, etc.) |
+| `zapp dev` | Vite HMR + native compile + launch. Watches `zapp/**` for recompile. |
+| `zapp build` | Production binary in `bin/`. Embeds Vite `dist/` as brotli-compressed assets. |
+| `zapp package` | macOS `.app` bundle in `release/` with icon + Info.plist + adhoc signing. |
+| `zapp generate` | Scan `app.service.add(...)` calls, emit TS bindings for Services.invoke. |
+
+Flags:
+- `--verbose` / `-v`: stream full `zc`/`clang` output. Without this, only
+  errors are shown (~200 framework warnings are suppressed).
+- `-r <path>`: run in a different project directory.
+
+First `zapp dev` / `zapp build` with `ZAPP_WORKER_ENGINE_TXIKI` defined
+clones + builds txiki.js (~60 s one-time). Cached in `~/.zapp/vendor/txiki.js`.
+
+---
+
+## Vite plugin — @zappdev/vite
+
+Scaffolded `vite.config.ts` wires it up automatically. The plugin:
+
+1. Scans source for `new Worker("./foo.ts")` patterns, bundles each as a
+   separate entry to `dist/_workers/foo.mjs`, rewrites the import to the
+   output URL.
+2. Bundles headless workers declared in `zapp.config.ts` to
+   `dist/_workers/_headless_<id>.mjs` — native code loads them at boot.
+3. Provides a dev middleware that serves `/_workers/*` from
+   `.zapp/workers/` so the WebView's `new Worker()` calls resolve during
+   `zapp dev`.
+
+Options (mostly auto-configured):
+
+```ts
+import { defineConfig } from "vite";
+import { zappWorkers } from "@zappdev/vite";
+import zappConfig from "./zapp.config";
+
+export default defineConfig({
+  plugins: [
+    zappWorkers({ headless: zappConfig.headless }),
+    // your other plugins (svelte(), react(), etc.)
+  ],
+});
+```
+
+---
+
+## Packaging and distribution
+
+### Icons
+
+Pass `macos.icon` in `zapp.config.ts` as a path to a `.png`, `.icns`, or
+`.iconset`. The CLI builds the appropriate macOS asset catalog on package.
+On macOS 14+ (Sonoma) with a PNG, the icon gets a "liquid glass" treatment
+automatically.
+
+Recommended: 1024×1024 PNG. The CLI generates all the required resolutions.
+
+### Signing
+
+Adhoc signing (the default) produces a `.app` that runs locally but will
+show "unidentified developer" warnings elsewhere. For distribution, set
+`macos.signingIdentity` to your Apple Developer certificate name:
+
+```ts
+macos: { signingIdentity: "Developer ID Application: Your Name (TEAMID)" }
+```
+
+Notarization is not automated yet — you'll want to run `xcrun notarytool`
+against the produced `.app` bundle.
+
+### Binary size
+
+A trivial "hello world" — one window, one service:
+
+| Engine | Binary | Bundle (with icon) |
+|---|---|---|
+| JSC | ~450 KB | ~3 MB (2.4 MB is the multi-resolution icon) |
+| txiki | ~6.5 MB | ~9 MB |
+
+The icon dominates the JSC bundle. Without icon, zapp-jsc ships in ~460 KB.
+
+---
+
+## Quick-start template
+
+For agents: what a minimal Zapp app looks like from scratch.
+
+`zapp.config.ts`:
+```ts
+import { defineConfig } from "@zappdev/cli/config";
+
+export default defineConfig({
+  name: "hello",
+  identifier: "com.example.hello",
+  version: "0.1.0",
+});
+```
+
+`zapp/app.zc`:
+```zc
+import "app/app.zc";
+import "std/time.zc";
+
+fn now_ms(_app: App*, _args: JsonValue*) -> string {
+    let ms = Time::now();
+    raw {
+        static _Thread_local char buf[64];
+        snprintf(buf, sizeof(buf), "{\"now\":%llu}", (unsigned long long)ms);
+        return buf;
+    }
+    return "";
+}
+
+fn on_ready(_id: int, _handle: void*) -> void {
+    Window{id: _id, handle: _handle}.show();
+}
+
+fn run_app() -> int {
+    let config = AppConfig{
+        name: "hello",
+        applicationShouldTerminateAfterLastWindowClosed: true,
+        webContentInspectable: Zapp::inspectable_auto(),
+        maxWorkers: 0,
+        qjsStackSize: 0,
+    };
+    let app = App::new(config);
+    app.service.add("now", now_ms);
+
+    let opts = WindowOptions::create("hello");
+    opts.width = 600;
+    opts.height = 400;
+    opts.visible = false;
+    let win = app.window.create(&opts);
+    win.on_ready(on_ready);
+
+    return app.run();
+}
+```
+
+`zapp/build.zc`:
+```zc
+//> macos: define: apple
+//> windows: define: windows
+
+//> macos: define: ZAPP_WORKER_ENGINE_JSC
+
+//> macos: framework: Cocoa
+//> macos: framework: WebKit
+//> macos: framework: CoreFoundation
+//> macos: framework: JavaScriptCore
+//> macos: framework: Security
+//> macos: framework: UserNotifications
+//> macos: link: -lcompression
+//> macos: cflags: -fobjc-arc -x objective-c
+
+//> windows: cflags: -DUNICODE -D_UNICODE -DCINTERFACE -DCOBJMACROS
+//> windows: link: -lole32 -lshell32 -luuid -luser32 -lgdi32 -lcomctl32 -lcomdlg32 -lshlwapi
+//> windows: link: -lwinhttp -lbcrypt -ladvapi32 -lrpcrt4 -lcrypt32 -lversion
+
+import "app.zc";
+
+fn main() -> int {
+    return run_app();
+}
+```
+
+`src/main.ts`:
+```ts
+import { Window, WindowEvent, Services } from "@zappdev/runtime";
+
+const win = Window.current();
+win.on(WindowEvent.READY, () => win.show());
+
+document.body.innerHTML = `
+  <main>
+    <h1>Hello Zapp</h1>
+    <button id="now">Get server time</button>
+    <pre id="out"></pre>
+  </main>
+`;
+
+document.getElementById("now")!.addEventListener("click", async () => {
+  const r = await Services.invoke<{ now: number }>("now");
+  document.getElementById("out")!.textContent = `now = ${r.now}`;
+});
+```
+
+Run: `bun install && bun run dev`. Ship: `bun run package`.
+
+---
+
+## Where to go next
+
+- `docs/api-reference.md` — long-form API reference with edge cases
+- `docs/patterns.md` — cookbook of common app patterns
+- `docs/zen-c-services.md` — deeper dive on writing native services
+- `docs/architecture.md` — how the pieces fit under the hood
+- `benchmarks/RESULTS.md` — IPC latency / size / startup vs Tauri / Wails / Electron / Electrobun
+- `benchmarks/README.md` — benchmark methodology
+
+**Repo**: https://github.com/zappdev/zapp
+**npm**: `@zappdev/cli`, `@zappdev/runtime`, `@zappdev/vite`
