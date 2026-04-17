@@ -207,6 +207,22 @@ dispatched. For each event, it:
 Per-window listener bitmask in `callbacks.zc` skips Layer 3 when no
 webview handler has subscribed.
 
+### User-authored native sources scan
+
+`cli/src/native.ts → getUserProjectSources(root)` recursively walks
+`<project>/zapp/**` and collects `.m` files on macOS, `.c` files on
+Windows. They're appended to the generated `.zapp/zapp_platform.zc`'s
+platform `cflags` alongside the framework's own platform sources, so a
+user app can ship service implementations in ObjC/C without modifying
+the framework. Scope is bounded to `zapp/**` — files under `src/` are
+JS/TS, not compiled.
+
+Without this scan, a bridging `.zc` that `import`s a user's `.h` would
+generate C that *declares* the externs but leaves them undefined at link
+time. If you ever change the scan's scope, update
+[`docs/zen-c-services.md`](docs/zen-c-services.md) and
+[`llms.txt`](llms.txt) — both document the `zapp/**` boundary.
+
 ### Bootstrap is a C string constant
 
 `bootstrap/codegen.ts` runs at every CLI build. It bundles and minifies

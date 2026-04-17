@@ -7,7 +7,7 @@
 #import "window.h"
 
 // --- Forward declarations ---
-extern void darwin_webview_create(void* window_ptr, bool inspectable, const char* url_override);
+extern void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first_mouse, const char* url_override);
 extern int zapp_dispatch_event(int window_id, int event_id, int w, int h, int x, int y);
 
 // Event IDs (mirrored from window/events.zc)
@@ -321,9 +321,10 @@ void* darwin_window_create(WindowOptions* opts) {
         }
 
         bool inspectable = wopts_inspectable(opts) > 0;
+        bool accept_first_mouse = wopts_accept_first_mouse(opts);
         extern const char* wopts_url(void* opts);
         const char* custom_url = wopts_url(opts);
-        darwin_webview_create((__bridge void*)window, inspectable, custom_url);
+        darwin_webview_create((__bridge void*)window, inspectable, accept_first_mouse, custom_url);
 
         NSString* windowId = [NSString stringWithFormat:@"win-%p", window];
         NSString* ownerId = [NSString stringWithFormat:@"owner-%p", window];

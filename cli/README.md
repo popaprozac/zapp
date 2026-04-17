@@ -83,6 +83,47 @@ calls.
   are noise).
 - `-r <path>` — operate on a project at a different directory.
 
+## Project structure
+
+`zapp init` scaffolds:
+
+```
+my-app/
+├── package.json, tsconfig.json, vite.config.ts, index.html
+├── src/                   # your TS / UI code
+├── zapp/                  # your Zen-C (native) code — app.zc, build.zc
+├── zapp.config.ts         # app identity, headless workers, macOS opts
+├── build/                 # platform-specific build inputs
+│   ├── README.md
+│   └── macos/             # drop icon.{icon,icns,iconset,png} or Info.plist.extra
+└── .zapp/                 # CLI-generated, gitignored
+```
+
+The `build/` directory is where you put **build inputs you control**:
+
+- `build/macos/icon.{icon,icns,iconset,png}` — app icon (any of these
+  formats). CLI auto-detects.
+- `build/macos/Info.plist.extra` — optional partial Info.plist; key/value
+  pairs are merged into the generated plist at package time.
+- `build/macos/app.entitlements` — optional code-signing entitlements
+  file; passed to `codesign --entitlements` during `zapp dev` and
+  `zapp package`. Override the path via `macos.entitlementsFile` or
+  add typed entries inline via `macos.entitlements`.
+
+Any `.m` (macOS) or `.c` (Windows) files dropped anywhere under `zapp/`
+are auto-compiled and linked into the binary — useful for system APIs
+that are easier to call from ObjC than from Zen-C (Keychain,
+AVFoundation, NSWorkspace). No config needed. See
+[`docs/zen-c-services.md`](../docs/zen-c-services.md) → "Services in
+ObjC or C" for the bridging pattern.
+
+For inline `Info.plist` customization (typed, autocomplete-friendly), use
+`zapp.config.ts → macos.copyright`, `macos.usageDescriptions`,
+`macos.plistExtras`. Entitlements live alongside in
+`macos.entitlements` (typed map) or `macos.entitlementsFile` (path to
+`.entitlements`). See [`llms.txt`](../llms.txt) → "build/" and
+"Entitlements" for priority rules and the ad-hoc signing caveat.
+
 ## txiki.js on first build
 
 If your `zapp/build.zc` defines `ZAPP_WORKER_ENGINE_TXIKI`, the CLI

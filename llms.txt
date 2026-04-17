@@ -98,7 +98,15 @@ my-app/
 │   └── main.ts
 ├── zapp/                 # your Zen-C (native) code
 │   ├── app.zc            # run_app() — AppConfig, service registration, window
-│   └── build.zc          # platform directives (frameworks, defines, link)
+│   ├── build.zc          # platform directives (frameworks, defines, link)
+│   └── services/         # OPTIONAL — your own .m / .c / .h / .zc files
+│       ├── keychain.h    # C header for your service
+│       ├── keychain.m    # ObjC implementation (macOS) — auto-compiled
+│       └── keychain.zc   # Zen-C bridge — typed wrapper over keychain.h
+├── build/                # platform-specific build inputs (icons, plist extras)
+│   ├── README.md
+│   └── macos/
+│       └── .gitkeep      # drop icon.{icon,icns,iconset,png} or Info.plist.extra here
 └── .zapp/                # CLI-generated, gitignored:
     ├── zapp_build_config.zc
     ├── zapp_platform.zc
@@ -131,6 +139,139 @@ uses the local `node_modules/.bin/zapp`, guaranteed matching versions.
 
 ---
 
+## build/ — icons and Info.plist
+
+The `build/` directory is where platform-specific build inputs live. The
+CLI scaffolds `build/macos/` empty; drop your assets in by convention.
+
+### App icon (macOS)
+
+Resolution priority — first match wins:
+
+1. `macos.icon` path set in `zapp.config.ts` (explicit override)
+2. `build/macos/icon.{icon,icns,iconset,png}` (convention)
+3. Framework default (Zapp logo)
+
+Supported formats:
+- `icon.icon` — Icon Composer bundle, **best for macOS 26+ liquid glass**
+- `icon.icns` — traditional `.icns` file
+- `icon.iconset` — source set, CLI converts via `iconutil`
+- `icon.png` — single 1024×1024 PNG, CLI compiles via `actool` (becomes
+  asset catalog → liquid glass on macOS 26+, regular icon on earlier)
+
+### Info.plist customization
+
+Three escape hatches, in order of preference:
+
+**1. Typed fields in `zapp.config.ts`** (autocomplete, validated):
+
+```ts
+macos: {
+  copyright: "Copyright © 2026 You",
+  usageDescriptions: {
+    camera: "We need camera for photo capture",
+    microphone: "Audio recording for calls",
+    location: "...",
+    photos: "...",
+    documents: "...",
+    downloads: "...",
+    desktop: "...",
+    network: "...",
+    bluetooth: "...",
+    appleEvents: "...",
+  },
+}
+```
+
+These map to the standard `NSCameraUsageDescription`,
+`NSMicrophoneUsageDescription`, etc. Required by macOS — apps requesting
+these capabilities without a usage description crash on first use.
+
+**2. `plistExtras` map** for arbitrary keys:
+
+```ts
+macos: {
+  plistExtras: {
+    LSUIElement: true,                    // → <true/>
+    LSBackgroundOnly: false,              // → <false/>
+    NSPrincipalClass: "NSApplication",    // → <string>...</string>
+    SomeNumber: 42,                       // → <integer>42</integer>
+    SomeFloat: 3.14,                      // → <real>3.14</real>
+    SomeList: ["one", "two"],             // → <array><string>...</string></array>
+  },
+}
+```
+
+For nested dicts/arrays of mixed types, use the raw file:
+
+**3. `build/macos/Info.plist.extra`** (raw partial plist):
+
+```xml
+<key>LSUIElement</key>
+<true/>
+<key>NSAppTransportSecurity</key>
+<dict>
+    <key>NSAllowsArbitraryLoads</key>
+    <true/>
+</dict>
+```
+
+Just `<key>...</key><value/>` pairs at the top level. **No `<plist>` or
+`<dict>` wrappers** — those are added by the generator. Path can be
+overridden via `macos.plistFile`; default is `build/macos/Info.plist.extra`.
+
+### Override semantics
+
+Order of injection into the generated `Info.plist`:
+
+1. CLI-derived defaults (CFBundleExecutable, CFBundleIdentifier, etc.)
+2. Typed fields (copyright, usageDescriptions)
+3. `plistExtras` map
+4. `Info.plist.extra` raw file
+
+Later wins. If a user override replaces a CLI-derived key (e.g. you set
+`plistExtras: { CFBundleIdentifier: "com.other" }`), the CLI logs a
+warning so it's loud rather than silent.
+
+### Entitlements
+
+Code-signing entitlements are configured separately from the Info.plist.
+They land in a standalone `Entitlements.plist` and are passed to
+`codesign --entitlements` during both `zapp dev` and `zapp package`.
+
+**Typed map** in `zapp.config.ts → macos.entitlements`:
+
+```ts
+export default defineConfig({
+  name: "my-app",
+  macos: {
+    entitlements: {
+      "com.apple.security.network.client": true,
+      "com.apple.security.files.user-selected.read-write": true,
+      "com.apple.security.app-sandbox": false,
+    },
+  },
+});
+```
+
+Value rules match `plistExtras` (`boolean`/`string`/`number`/`string[]`).
+
+**File** at `build/macos/app.entitlements` (or set `macos.entitlementsFile`)
+for complex entitlements with nested dicts or mixed arrays. Wrap in a
+full `<plist><dict>…</dict></plist>` — the CLI strips and re-emits the
+wrappers.
+
+When both are set, map entries override matching keys in the file (CLI
+warns on conflict).
+
+**Ad-hoc signing caveat**: privileged entitlements (anything starting with
+`com.apple.developer.*` or `com.apple.security.app-sandbox`) require a
+real `signingIdentity`. Ad-hoc signing embeds the entitlements but
+macOS ignores them. The CLI warns when the mismatch is detected.
+Use cases like `kSecUseDataProtectionKeychain` fall into this bucket.
+
+---
+
 ## AppConfig (zapp/app.zc)
 
 The struct passed to `App::new(config)`. Every field required.
@@ -149,10 +290,16 @@ fn run_app() -> int {
     let app = App::new(config);
     app.service.add("greet", greet_handler);
 
+    // Optional: lock down top-level navigation. Built-in schemes (zapp,
+    // about, blob) and localhost in dev mode are always allowed.
+    let nav = ["https://api.example.com/*"];
+    app.security.allow_navigation(&nav[0], 1);
+
     let opts = WindowOptions::create("My App");
     opts.width = 1200;
     opts.height = 800;
     opts.visible = false;
+    opts.acceptFirstMouse = true;  // default — clicks on unfocused window also activate controls
     let win = app.window.create(&opts);
     win.on_ready(on_ready);
 
@@ -199,6 +346,24 @@ A cross-cutting namespace for framework-level accessors that are scoped
 under `Zapp::` so they don't pollute the global namespace. Today it holds
 the three `inspectable_*` functions; future additions will go here.
 
+### Navigation allowlist — `app.security`
+
+Restrict top-level webview navigation to a list of glob patterns. Built-in
+schemes (`zapp://`, `about:`, `blob:`) and localhost in dev mode are
+always allowed. Call before `app.run()`:
+
+```zc
+let patterns = [
+    "https://api.example.com/*",
+    "https://cdn.example.com/*",
+];
+app.security.allow_navigation(&patterns[0], 2);
+```
+
+Omit the call to allow any navigation (framework default). The allowlist
+is app-wide, not per-window. Window-scoped policies would be a separate
+feature.
+
 ### Service handler signature
 
 ```zc
@@ -229,6 +394,156 @@ app.service.add("greet", my_service);
 use `_args: JsonValue*` and prefix with `_` to mark unused. Returning an empty
 string signals "no response payload".
 
+### Writing services in ObjC / C
+
+Some services need system APIs that are cleaner in ObjC than Zen-C
+(Keychain, AVFoundation, NSWorkspace) or plain C libs (libsqlite3, libcurl).
+
+Drop `.m` files (macOS) or `.c` files (Windows) anywhere under your
+project's `zapp/` tree. The CLI **auto-compiles and links them** — no
+config needed. On every build, `cli/src/native.ts → getUserProjectSources`
+scans `<project>/zapp/**/*.{m,c}` and appends them to the platform cflags.
+
+Pattern: pair the `.m` with a C header and a Zen-C bridge file.
+
+```
+zapp/services/
+├── keychain.h       # C API declaration
+├── keychain.m       # ObjC implementation
+└── keychain.zc      # Zen-C typed bridge (called from your service handler)
+```
+
+`keychain.h` (plain C API — the interop surface):
+```c
+#ifndef KEYCHAIN_H
+#define KEYCHAIN_H
+const char* keychain_read(const char* service, const char* account);
+int keychain_write(const char* service, const char* account, const char* value);
+#endif
+```
+
+`keychain.m` (ObjC using Security.framework — compiled by CLI):
+```objc
+#import <Foundation/Foundation.h>
+#import <Security/Security.h>
+#include "keychain.h"
+
+const char* keychain_read(const char* service, const char* account) {
+    NSDictionary* query = @{
+        (id)kSecClass: (id)kSecClassGenericPassword,
+        (id)kSecAttrService: [NSString stringWithUTF8String:service],
+        (id)kSecAttrAccount: [NSString stringWithUTF8String:account],
+        (id)kSecReturnData: @YES,
+    };
+    CFDataRef data = NULL;
+    OSStatus st = SecItemCopyMatching((CFDictionaryRef)query, (CFTypeRef*)&data);
+    if (st != errSecSuccess || !data) return NULL;
+
+    static _Thread_local char buf[1024];
+    NSData* nsData = (__bridge_transfer NSData*)data;
+    NSString* str = [[NSString alloc] initWithData:nsData encoding:NSUTF8StringEncoding];
+    strncpy(buf, [str UTF8String], sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+    return buf;
+}
+
+int keychain_write(const char* service, const char* account, const char* value) {
+    // ... SecItemAdd / SecItemUpdate logic
+    return 0;
+}
+```
+
+`keychain.zc` (Zen-C bridge — gives the rest of your app typed calls):
+```zc
+import "services/keychain.h" as c;
+
+fn keychain_read_zc(service: string, account: string) -> string {
+    let v = c::keychain_read(service, account);
+    if v == NULL { return ""; }
+    raw { return v; }
+    return "";
+}
+```
+
+`app.zc` (service handler calls the bridge):
+```zc
+import "app/app.zc";
+import "services/keychain.zc";
+
+fn get_token(_app: App*, args: JsonValue*) -> string {
+    if args == NULL { return "{\"error\":\"no args\"}"; }
+    let svc_opt = args.get_string("service");
+    let acct_opt = args.get_string("account");
+    if svc_opt.is_none() || acct_opt.is_none() {
+        return "{\"error\":\"missing fields\"}";
+    }
+    let token = keychain_read_zc(svc_opt.unwrap(), acct_opt.unwrap());
+    raw {
+        static _Thread_local char buf[1280];
+        snprintf(buf, sizeof(buf), "{\"token\":\"%s\"}", (const char*)token);
+        return buf;
+    }
+    return "";
+}
+
+fn run_app() -> int {
+    // ... standard AppConfig + window setup
+    let app = App::new(config);
+    app.service.add("getToken", get_token);
+    // ...
+}
+```
+
+`build.zc` needs to link Security.framework (only if your .m uses it):
+```zc
+//> macos: framework: Security
+```
+
+The Zen-C bridge is optional — you can call the C function directly from a
+raw block inside your service handler. But the bridge pattern keeps your
+handler idiomatic and gives you typed arguments.
+
+**Keeping registration next to handlers**: `service.add(...)` calls don't
+have to live in `app.zc`. Move them into the service `.zc` file itself and
+expose a `register_X_services(app: App*)` helper:
+
+```zc
+// zapp/services/keychain.zc — handlers + registration
+import "app/app.zc";
+import "services/keychain.h" as c;
+
+fn keychain_get(_app: App*, args: JsonValue*) -> string { /* ... */ }
+fn keychain_set(_app: App*, args: JsonValue*) -> string { /* ... */ }
+
+fn register_keychain_services(app: App*) -> void {
+    app.service.add("keychain:get", keychain_get);
+    app.service.add("keychain:set", keychain_set);
+}
+```
+
+```zc
+// zapp/app.zc — just wires them up
+import "app/app.zc";
+import "./services/keychain.zc";
+
+fn run_app() -> int {
+    let app = App::new(config);
+    register_keychain_services(&app);
+    // ...
+}
+```
+
+`zapp generate` walks every `.zc` file under `zapp/`, so both
+`keychain:get` and `keychain:set` show up as TS bindings in `src/zapp/`.
+
+**Why this matters**: without the auto-scan, a naked `import "foo.h"` in
+Zen-C compiles the declaration but leaves the symbol undefined at link
+time (`Undefined symbols: _keychain_read`). The CLI scan closes that gap.
+
+**Scope**: scan is limited to `<project>/zapp/**` — `.m`/`.c` files elsewhere
+in your project (like `src/`) are not compiled. That's deliberate — `src/`
+is your JS/TS bundle, not native code.
+
 ---
 
 ## zapp.config.ts
@@ -254,21 +569,29 @@ export default defineConfig({
   // Deep links: myapp://some/path opens the app with OPEN_URL event
   deepLinkSchemes: ["myapp"],
 
-  // macOS-specific packaging opts
+  // macOS-specific packaging opts (install-time only — runtime policies
+  // like acceptFirstMouse and navigation allowlist live in Zen-C)
   macos: {
     icon: "assets/icon.png",     // converted to .icns at package time
     category: "public.app-category.developer-tools",
     minimumSystemVersion: "12.0",
     signingIdentity: undefined,  // undefined = adhoc signing
-    acceptFirstMouse: true,
-  },
-
-  // Security — glob patterns for URLs the webview can navigate to
-  security: {
-    allowNavigation: ["https://myapi.example.com/*"],
   },
 });
 ```
+
+### Install-time vs runtime — why some settings live in `app.zc`
+
+`zapp.config.ts` carries **install-time** concerns the operating system
+reads before your code runs: bundle identifier, Info.plist keys, icon,
+entitlements, code signing, deep-link schemes. Anything that ends up in
+the `.app` bundle or the `codesign` invocation.
+
+Runtime policies — window behavior, navigation allowlist, service
+registration — live in Zen-C (`zapp/app.zc`), where they're typed and
+can compose with the rest of the app logic. `WindowOptions.acceptFirstMouse`
+(per-window) and `app.security.allow_navigation(&patterns[0], count)`
+(app-wide) are examples.
 
 ### Field reference
 
@@ -281,9 +604,16 @@ export default defineConfig({
 | `devPort` | `number` | `5173` | Vite dev server port |
 | `headless` | `Record<string,string>` | `{}` | Worker ID → source path map |
 | `deepLinkSchemes` | `string[]` | `[]` | URL schemes to register |
-| `macos.icon` | `string` | none | Path to `.png` / `.icns` / `.iconset` |
+| `macos.icon` | `string` | none | Path to `.icon` / `.icns` / `.iconset` / `.png`. If omitted, falls back to `build/macos/icon.*` then framework default. |
+| `macos.category` | `string` | none | App Store category (e.g. `public.app-category.developer-tools`) |
+| `macos.minimumSystemVersion` | `string` | `"12.0"` | LSMinimumSystemVersion |
 | `macos.signingIdentity` | `string` | adhoc | Apple Developer ID for signing |
-| `security.allowNavigation` | `string[]` | none | Navigation allowlist (glob) |
+| `macos.copyright` | `string` | none | NSHumanReadableCopyright |
+| `macos.usageDescriptions` | `{camera?, microphone?, location?, photos?, documents?, downloads?, desktop?, network?, bluetooth?, appleEvents?: string}` | `{}` | Privacy strings shown in macOS permission prompts |
+| `macos.plistExtras` | `Record<string, string \| number \| boolean \| string[]>` | `{}` | Arbitrary additional Info.plist keys |
+| `macos.entitlements` | `Record<string, string \| number \| boolean \| string[]>` | `{}` | Code-signing entitlements (standalone `Entitlements.plist`; passed to `codesign --entitlements`) |
+| `macos.entitlementsFile` | `string` | `"build/macos/app.entitlements"` | Path to a `.entitlements` file. Map keys override matching file keys (CLI warns on conflict) |
+| `macos.plistFile` | `string` | `build/macos/Info.plist.extra` if present | Raw partial Info.plist file merged into generated plist |
 
 ---
 
@@ -382,6 +712,7 @@ loadUrl(url)
   transparent?: boolean
   alwaysOnTop?: boolean
   titleBarStyle?: "default" | "hidden" | "hiddenInset"
+  acceptFirstMouse?: boolean  // macOS — default: true. Clicks on an unfocused window also activate the target control
 }
 ```
 
@@ -833,7 +1164,7 @@ Commands (via `bun run <script>` in a project):
 | `zapp dev` | Vite HMR + native compile + launch. Watches `zapp/**` for recompile. |
 | `zapp build` | Production binary in `bin/`. Embeds Vite `dist/` as brotli-compressed assets. |
 | `zapp package` | macOS `.app` bundle in `release/` with icon + Info.plist + adhoc signing. |
-| `zapp generate` | Scan `app.service.add(...)` calls, emit TS bindings for Services.invoke. |
+| `zapp generate` | Walk `zapp/**/*.zc`, scan `app.service.add(...)` calls, emit TS bindings for Services.invoke under `src/zapp/`. Stale files pruned automatically. |
 
 Flags:
 - `--verbose` / `-v`: stream full `zc`/`clang` output. Without this, only

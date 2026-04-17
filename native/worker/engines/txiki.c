@@ -110,6 +110,7 @@ typedef struct {
     uv_async_t async;       // Wakes worker thread for incoming messages
     MsgQueue inbox;          // Thread-safe message queue (regular messages)
     MsgQueue sync_inbox;     // Thread-safe queue for Sync.wait results
+    MsgQueue eval_inbox;     // Raw JS to eval (from native event dispatch)
     int async_initialized;
 } TxikiWorkerSlot;
 
@@ -864,7 +865,27 @@ static void on_async_message(uv_async_t* handle) {
 
     JSContext* ctx = slot->ctx;
 
-    // Drain Sync.wait results first.
+    // Drain raw JS eval messages first (from native event dispatch). These
+    // are bridge._onEvent / _dispatchAppEvent invocations pushed by
+    // txiki_broadcast_eval_js — handled separately from postMessage data
+    // so they bypass JSON parsing and onmessage dispatch.
+    char* eval_msg;
+    while ((eval_msg = msgqueue_pop(&slot->eval_inbox)) != NULL) {
+        JSValue r = JS_Eval(ctx, eval_msg, strlen(eval_msg),
+                            "<event-broadcast>", JS_EVAL_TYPE_GLOBAL);
+        if (JS_IsException(r)) {
+            JSValue e = JS_GetException(ctx);
+            const char* emsg = JS_ToCString(ctx, e);
+            fprintf(stderr, "[zapp] txiki broadcast eval failed: %s\n",
+                    emsg ? emsg : "(unknown)");
+            if (emsg) JS_FreeCString(ctx, emsg);
+            JS_FreeValue(ctx, e);
+        }
+        JS_FreeValue(ctx, r);
+        free(eval_msg);
+    }
+
+    // Drain Sync.wait results next.
     txiki_drain_sync_inbox(slot, ctx);
 
     char* msg;
@@ -1058,6 +1079,7 @@ bool txiki_worker_create(const char* script_url, const char* owner_id, const cha
     slot->active = 1;
     msgqueue_init(&slot->inbox);
     msgqueue_init(&slot->sync_inbox);
+    msgqueue_init(&slot->eval_inbox);
 
     TJS_Initialize(0, NULL);
     pthread_create(&slot->thread, NULL, txiki_worker_thread, slot);
@@ -1089,6 +1111,7 @@ void txiki_worker_terminate(const char* worker_id) {
         if (slot->runtime) TJS_Stop(slot->runtime);
         msgqueue_destroy(&slot->inbox);
         msgqueue_destroy(&slot->sync_inbox);
+        msgqueue_destroy(&slot->eval_inbox);
         slot->active = 0;
         fprintf(stderr, "[zapp] txiki worker terminated: %s\n", worker_id);
     }
@@ -1103,6 +1126,7 @@ void txiki_worker_terminate_owner(const char* owner_id) {
             if (txiki_workers[i].runtime) TJS_Stop(txiki_workers[i].runtime);
             msgqueue_destroy(&txiki_workers[i].inbox);
             msgqueue_destroy(&txiki_workers[i].sync_inbox);
+            msgqueue_destroy(&txiki_workers[i].eval_inbox);
             txiki_workers[i].active = 0;
         }
     }
@@ -1312,6 +1336,7 @@ bool txiki_backend_create(const char* script_path) {
     txiki_backend.active = 1;
     msgqueue_init(&txiki_backend.inbox);
     msgqueue_init(&txiki_backend.sync_inbox);
+    msgqueue_init(&txiki_backend.eval_inbox);
 
     TJS_Initialize(0, NULL);
     txiki_backend_running = 1;
@@ -1328,6 +1353,7 @@ void txiki_backend_terminate(void) {
     if (txiki_backend.runtime) TJS_Stop(txiki_backend.runtime);
     msgqueue_destroy(&txiki_backend.inbox);
     msgqueue_destroy(&txiki_backend.sync_inbox);
+    msgqueue_destroy(&txiki_backend.eval_inbox);
     txiki_backend.active = 0;
     txiki_backend_running = 0;
     fprintf(stderr, "[zapp] txiki backend terminated\n");
@@ -1346,12 +1372,19 @@ bool txiki_backend_is_running(void) {
 }
 
 // Broadcast a JS snippet to every active worker. Counterpart of
-// jsc_broadcast_eval_js — used by native event dispatch to deliver app and
-// window events to every worker. TODO: txiki uses a message-queue/libuv
-// dispatch pattern rather than direct eval; a full implementation requires
-// adding an "eval this JS" message type handled in on_async_message. For now
-// this is a stub so the JSC engine path works; txiki headless workers will
-// not receive forwarded events until this is wired up.
+// jsc_broadcast_eval_js — used by native event dispatch to deliver app,
+// window, and webview-emitted events to every worker. txiki workers run
+// their own libuv loop, so we push the JS into each slot's eval_inbox and
+// wake the loop via uv_async_send; on_async_message drains the queue and
+// JS_Evals each entry on the worker thread.
 void txiki_broadcast_eval_js(const char* js) {
-    (void)js;
+    if (!js) return;
+    pthread_mutex_lock(&txiki_mutex);
+    for (int i = 0; i < TXIKI_MAX_WORKERS; i++) {
+        TxikiWorkerSlot* slot = &txiki_workers[i];
+        if (!slot->active || !slot->async_initialized) continue;
+        msgqueue_push(&slot->eval_inbox, js);
+        uv_async_send(&slot->async);
+    }
+    pthread_mutex_unlock(&txiki_mutex);
 }

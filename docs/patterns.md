@@ -146,6 +146,79 @@ Note: `fetch` and `WebSocket` only work in workers when using the
 move network calls to a webview (which has full DOM APIs) or switch
 engines.
 
+## Service that calls ObjC (Keychain, AVFoundation, NSWorkspace)
+
+Some system APIs are cleaner to use from ObjC than from Zen-C — Keychain
+via Security.framework is the canonical example. Drop a `.m` file
+anywhere under `zapp/` and the CLI auto-compiles and links it.
+
+```
+zapp/services/
+├── keychain.h       # C header
+├── keychain.m       # ObjC implementation
+└── keychain.zc      # Zen-C bridge (typed wrapper)
+```
+
+```objc
+// zapp/services/keychain.m
+#import <Foundation/Foundation.h>
+#import <Security/Security.h>
+#include "keychain.h"
+
+const char* keychain_read(const char* service, const char* account) {
+    NSDictionary* query = @{
+        (id)kSecClass: (id)kSecClassGenericPassword,
+        (id)kSecAttrService: [NSString stringWithUTF8String:service],
+        (id)kSecAttrAccount: [NSString stringWithUTF8String:account],
+        (id)kSecReturnData: @YES,
+    };
+    CFDataRef data = NULL;
+    if (SecItemCopyMatching((CFDictionaryRef)query, (CFTypeRef*)&data) != errSecSuccess || !data) return NULL;
+    static _Thread_local char buf[1024];
+    NSData* nsData = (__bridge_transfer NSData*)data;
+    strncpy(buf, [[[NSString alloc] initWithData:nsData encoding:NSUTF8StringEncoding] UTF8String], sizeof(buf) - 1);
+    return buf;
+}
+```
+
+```zc
+// zapp/services/keychain.zc
+import "services/keychain.h" as c;
+
+fn keychain_read_zc(service: string, account: string) -> string {
+    let v = c::keychain_read(service, account);
+    if v == NULL { return ""; }
+    raw { return v; }
+    return "";
+}
+```
+
+```zc
+// zapp/app.zc
+import "services/keychain.zc";
+
+fn get_token(_app: App*, args: JsonValue*) -> string {
+    let svc = args.get_string("service").unwrap();
+    let acct = args.get_string("account").unwrap();
+    let token = keychain_read_zc(svc, acct);
+    raw {
+        static _Thread_local char buf[1280];
+        snprintf(buf, sizeof(buf), "{\"token\":\"%s\"}", (const char*)token);
+        return buf;
+    }
+    return "";
+}
+```
+
+And link Security.framework from `zapp/build.zc`:
+
+```zc
+//> macos: framework: Security
+```
+
+Full treatment with error handling, `.c` equivalent for Windows, and
+framework guidance: [`zen-c-services.md → Services in ObjC or C`](zen-c-services.md#services-in-objc-or-c).
+
 ## Service with lifecycle — persistent DB connection
 
 Open a DB connection at app boot, close it on shutdown.
@@ -475,6 +548,228 @@ window.addEventListener("focus", () => {
   Dock.removeBadge();
 });
 ```
+
+## Custom icon and Info.plist
+
+### Just an icon
+
+Drop your icon into `build/macos/`. CLI picks it up automatically at
+`bun run package` — no config needed.
+
+```
+build/macos/icon.icon         # Icon Composer (best for macOS 26+)
+# or
+build/macos/icon.icns
+build/macos/icon.iconset
+build/macos/icon.png          # 1024×1024 single PNG
+```
+
+For a custom path elsewhere, set `macos.icon` in `zapp.config.ts`:
+
+```ts
+export default defineConfig({
+  name: "My App",
+  macos: {
+    icon: "design/app-icon.png",
+  },
+});
+```
+
+### Privacy usage descriptions
+
+If your app uses camera, microphone, location, etc., macOS requires a
+human-readable explanation. Without one, the app crashes the moment it
+tries to use the capability.
+
+```ts
+// zapp.config.ts
+export default defineConfig({
+  name: "My App",
+  macos: {
+    usageDescriptions: {
+      camera: "Capture photos for your profile",
+      microphone: "Record audio messages",
+      photos: "Pick images from your library",
+    },
+  },
+});
+```
+
+These map to `NSCameraUsageDescription`,
+`NSMicrophoneUsageDescription`, and `NSPhotoLibraryUsageDescription`
+in the generated `Info.plist`.
+
+### Background-only / agent app
+
+A "menu bar app" or background daemon — no dock icon, no menu in the
+menu bar.
+
+```ts
+// zapp.config.ts
+export default defineConfig({
+  name: "My App",
+  macos: {
+    plistExtras: {
+      LSUIElement: true,    // → <true/>
+    },
+  },
+});
+```
+
+### Custom URL scheme + permissions + signing
+
+Real-app config combining several options:
+
+```ts
+import { defineConfig } from "@zappdev/cli/config";
+
+export default defineConfig({
+  name: "Conversa",
+  identifier: "com.acme.conversa",
+  version: "1.4.2",
+  deepLinkSchemes: ["conversa"],
+  macos: {
+    copyright: "Copyright © 2026 Acme Corp",
+    category: "public.app-category.social-networking",
+    minimumSystemVersion: "13.0",
+    signingIdentity: "Developer ID Application: Acme Corp (TEAM12345)",
+    usageDescriptions: {
+      camera: "Take photos for your conversations",
+      microphone: "Record voice messages",
+      photos: "Attach images from your library",
+      bluetooth: "Discover nearby contacts",
+    },
+  },
+});
+```
+
+### Complex Info.plist via raw file
+
+When you need nested dicts/arrays of mixed types — not expressible via
+`plistExtras`'s flat map — use `build/macos/Info.plist.extra`:
+
+```xml
+<key>NSAppTransportSecurity</key>
+<dict>
+    <key>NSAllowsArbitraryLoads</key>
+    <false/>
+    <key>NSExceptionDomains</key>
+    <dict>
+        <key>example.com</key>
+        <dict>
+            <key>NSIncludesSubdomains</key>
+            <true/>
+            <key>NSExceptionAllowsInsecureHTTPLoads</key>
+            <true/>
+        </dict>
+    </dict>
+</dict>
+<key>UTExportedTypeDeclarations</key>
+<array>
+    <dict>
+        <key>UTTypeIdentifier</key>
+        <string>com.acme.mydoc</string>
+        <key>UTTypeDescription</key>
+        <string>My App Document</string>
+    </dict>
+</array>
+```
+
+Don't wrap in `<plist>` or `<dict>` — only the inner key/value pairs.
+The CLI injects them into the generated plist's top-level `<dict>`.
+
+If a key here matches a CLI-derived key, CLI logs a warning at package
+time and your value wins.
+
+## Code-signing entitlements
+
+Entitlements are **separate from the Info.plist**. They live in a
+standalone `Entitlements.plist` and are passed to `codesign
+--entitlements` during both `zapp dev` and `zapp package`.
+
+### Typed map in `zapp.config.ts`
+
+Common entitlements that fit a flat map:
+
+```ts
+import { defineConfig } from "@zappdev/cli/config";
+
+export default defineConfig({
+  name: "my-app",
+  macos: {
+    entitlements: {
+      // Network access for a web client
+      "com.apple.security.network.client": true,
+
+      // File system scopes
+      "com.apple.security.files.user-selected.read-write": true,
+
+      // Hardened runtime relaxations
+      "com.apple.security.cs.allow-jit": true,
+
+      // App Sandbox opt-in (usually paired with narrow scopes above)
+      "com.apple.security.app-sandbox": false,
+    },
+  },
+});
+```
+
+Value rules match `plistExtras`:
+- `boolean` → `<true/>`/`<false/>`
+- `string` → `<string>…</string>`
+- `number` → `<integer>` (or `<real>` if fractional)
+- `string[]` → `<array>` of strings
+
+### File at `build/macos/app.entitlements`
+
+For complex entitlements — App Groups with arrays, nested dicts — drop
+a full `.entitlements` file. Wrap in the standard `<plist><dict>…</dict>
+</plist>` header (the CLI strips and re-emits the wrappers):
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.application-groups</key>
+    <array>
+        <string>group.com.acme.myapp.shared</string>
+    </array>
+    <key>keychain-access-groups</key>
+    <array>
+        <string>$(AppIdentifierPrefix)com.acme.myapp</string>
+    </array>
+</dict>
+</plist>
+```
+
+Override the path via `macos.entitlementsFile` if you keep it
+elsewhere.
+
+### Map + file precedence
+
+If both are configured, map entries override the same keys in the file.
+CLI logs a warning when a key appears in both.
+
+### Ad-hoc signing caveat
+
+Privileged entitlements — anything starting with `com.apple.developer.*`
+or `com.apple.security.app-sandbox` — require a **real signing
+identity**. Ad-hoc signing embeds the entitlements but macOS ignores
+them. The CLI warns when it detects this mismatch.
+
+Two common examples:
+
+- `kSecUseDataProtectionKeychain` needs
+  `com.apple.developer.default-data-protection`, which requires a
+  Developer ID signing identity + a provisioning profile.
+- iCloud containers need a team-id-scoped container entitlement, also
+  Developer ID only.
+
+For local dev against those APIs, set `macos.signingIdentity` to a
+self-signed or Developer ID identity so the entitlements take effect.
+`zapp dev` re-signs with the same identity and entitlements, so the
+dev run matches the `zapp package` result.
 
 ## Further reading
 

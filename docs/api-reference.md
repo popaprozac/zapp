@@ -482,6 +482,11 @@ scheduling.
 **Requires**: macOS app bundle + code signing. `zapp dev` adhoc-signs
 for you; `zapp package` respects `zapp.config.ts → macos.signingIdentity`.
 
+**Privacy permissions** (camera, microphone, location, photos, etc.)
+require usage-description strings in `Info.plist`. Set them via
+`zapp.config.ts → macos.usageDescriptions` — see [`patterns.md`
+"Privacy usage descriptions"](patterns.md#privacy-usage-descriptions).
+
 ### Permission flow
 
 ```ts

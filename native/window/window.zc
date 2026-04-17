@@ -33,6 +33,7 @@ struct WindowOptions {
     alwaysOnTop: bool;
     titleBarStyle: TitleBarStyle;
     webContentInspectable: int; // -1 = inherit, 0 = off, 1 = on
+    acceptFirstMouse: bool;     // macOS: click unfocused window also activates a control
 }
 
 struct WindowSize {
@@ -82,6 +83,7 @@ impl WindowOptions {
             alwaysOnTop: false,
             titleBarStyle: TitleBarStyle::Default(),
             webContentInspectable: -1,
+            acceptFirstMouse: true,
         };
     }
 }
@@ -107,6 +109,7 @@ fn wopts_transparent(opts: WindowOptions*) -> bool { return opts.transparent; }
 fn wopts_hidden(opts: WindowOptions*) -> bool { return opts.hidden; }
 fn wopts_always_on_top(opts: WindowOptions*) -> bool { return opts.alwaysOnTop; }
 fn wopts_inspectable(opts: WindowOptions*) -> int { return opts.webContentInspectable; }
+fn wopts_accept_first_mouse(opts: WindowOptions*) -> bool { return opts.acceptFirstMouse; }
 
 fn wopts_title_bar_style_tag(opts: WindowOptions*) -> int {
     match opts.titleBarStyle {

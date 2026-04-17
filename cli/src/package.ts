@@ -5,9 +5,10 @@
 import path from "node:path";
 import { mkdir, cp, chmod, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import type { ResolvedConfig } from "./config";
+import type { MacOSConfig, ResolvedConfig } from "./config";
 import { processIcon, type IconResult } from "./icon";
-import { resolveAssetsDir } from "./paths";
+import { resolveAppIconPath } from "./paths";
+import { resolveEntitlements } from "./entitlements";
 
 interface PackageOptions {
   root: string;
@@ -63,25 +64,13 @@ export async function createProductionBundle(opts: PackageOptions): Promise<stri
     process.stdout.write("[zapp] bundled worker scripts\n");
   }
 
-  // Process app icon — user-configured or framework default
+  // Process app icon. Priority: macos.icon → build/macos/icon.* → framework default.
+  // resolveAppIconPath handles the search; processIcon converts to bundle format.
   const macosConfig = config.macos;
   let iconResult: IconResult | null = null;
+  const iconSrc = resolveAppIconPath(root, macosConfig?.icon);
 
-  let iconSrc = "";
-  if (macosConfig?.icon) {
-    iconSrc = path.resolve(root, macosConfig.icon);
-  }
-  if (!iconSrc || !existsSync(iconSrc)) {
-    const frameworkAssets = resolveAssetsDir();
-    if (frameworkAssets) {
-      const defaultIcon = path.join(frameworkAssets, "zapp.icon");
-      const defaultPng = path.join(frameworkAssets, "zapp.png");
-      if (existsSync(defaultIcon)) iconSrc = defaultIcon;
-      else if (existsSync(defaultPng)) iconSrc = defaultPng;
-    }
-  }
-
-  if (iconSrc && existsSync(iconSrc)) {
+  if (iconSrc) {
       const tempDir = path.join(root, ".zapp", "icon-tmp");
       await mkdir(tempDir, { recursive: true });
       try {
@@ -105,78 +94,13 @@ export async function createProductionBundle(opts: PackageOptions): Promise<stri
   }
 
   // Generate Info.plist
-  const identifier = config.identifier ?? `com.zapp.${appName.toLowerCase().replace(/[^a-z0-9]/g, "")}`;
-  const version = config.version ?? "1.0.0";
-  const minVersion = macosConfig?.minimumSystemVersion ?? "12.0";
-  const category = macosConfig?.category ?? "";
-
-  let plist = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleExecutable</key>
-    <string>${execName}</string>
-    <key>CFBundleIdentifier</key>
-    <string>${identifier}</string>
-    <key>CFBundleName</key>
-    <string>${appName}</string>
-    <key>CFBundleDisplayName</key>
-    <string>${appName}</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleVersion</key>
-    <string>${version}</string>
-    <key>CFBundleShortVersionString</key>
-    <string>${version}</string>
-    <key>CFBundleInfoDictionaryVersion</key>
-    <string>6.0</string>
-    <key>LSMinimumSystemVersion</key>
-    <string>${minVersion}</string>
-    <key>NSHighResolutionCapable</key>
-    <true/>
-    <key>NSSupportsAutomaticGraphicsSwitching</key>
-    <true/>`;
-
-  if (iconResult) {
-    plist += `
-    <key>${iconResult.plistKey}</key>
-    <string>${iconResult.plistValue}</string>`;
-    // Also add CFBundleIconFile for older macOS fallback
-    if (iconResult.plistKey === "CFBundleIconName") {
-      plist += `
-    <key>CFBundleIconFile</key>
-    <string>AppIcon</string>`;
-    }
-  }
-
-  if (category) {
-    plist += `
-    <key>LSApplicationCategoryType</key>
-    <string>${category}</string>`;
-  }
-
-  // Deep link URL schemes
-  const schemes = config.deepLinkSchemes;
-  if (schemes && schemes.length > 0) {
-    const schemesXml = schemes.map(s => `            <string>${s}</string>`).join("\n");
-    plist += `
-    <key>CFBundleURLTypes</key>
-    <array>
-        <dict>
-            <key>CFBundleURLName</key>
-            <string>${identifier}</string>
-            <key>CFBundleURLSchemes</key>
-            <array>
-${schemesXml}
-            </array>
-        </dict>
-    </array>`;
-  }
-
-  plist += `
-</dict>
-</plist>`;
-
+  const plist = await generateInfoPlist({
+    root,
+    appName,
+    execName,
+    config,
+    iconResult,
+  });
   await Bun.write(path.join(contentsDir, "Info.plist"), plist);
 
   // Code sign
@@ -184,11 +108,21 @@ ${schemesXml}
     ? (macosConfig?.signingIdentity ?? "-")
     : "-";
 
-  process.stdout.write(`[zapp] signing (${identity === "-" ? "ad-hoc" : identity})...\n`);
-  const signProc = Bun.spawn(
-    ["codesign", "--force", "--deep", "-s", identity, outDir],
-    { stdout: "pipe", stderr: "pipe" }
+  const entitlements = await resolveEntitlements(root, config);
+
+  process.stdout.write(
+    `[zapp] signing (${identity === "-" ? "ad-hoc" : identity})` +
+    (entitlements.used ? ` with entitlements` : ``) +
+    `...\n`
   );
+
+  const codesignArgs = ["codesign", "--force", "--deep", "-s", identity];
+  if (entitlements.used) {
+    codesignArgs.push("--entitlements", entitlements.path);
+  }
+  codesignArgs.push(outDir);
+
+  const signProc = Bun.spawn(codesignArgs, { stdout: "pipe", stderr: "pipe" });
   const signExit = await signProc.exited;
   if (signExit !== 0) {
     const stderr = await new Response(signProc.stderr).text();
@@ -234,6 +168,186 @@ ${schemesXml}
   );
 
   return outDir;
+}
+
+// ---------------------------------------------------------------------------
+// Info.plist generation
+// ---------------------------------------------------------------------------
+
+interface PlistGenOptions {
+  root: string;
+  appName: string;
+  execName: string;
+  config: ResolvedConfig;
+  iconResult: IconResult | null;
+}
+
+const USAGE_DESC_KEYS: Record<string, string> = {
+  camera: "NSCameraUsageDescription",
+  microphone: "NSMicrophoneUsageDescription",
+  location: "NSLocationUsageDescription",
+  photos: "NSPhotoLibraryUsageDescription",
+  documents: "NSDocumentsFolderUsageDescription",
+  downloads: "NSDownloadsFolderUsageDescription",
+  desktop: "NSDesktopFolderUsageDescription",
+  network: "NSLocalNetworkUsageDescription",
+  bluetooth: "NSBluetoothAlwaysUsageDescription",
+  appleEvents: "NSAppleEventsUsageDescription",
+};
+
+/** Escape a string for use as text content in an XML element. */
+function xmlEscape(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+/** Render a plistExtras value as plist XML. */
+function renderPlistValue(v: string | number | boolean | string[]): string {
+  if (typeof v === "boolean") return v ? "<true/>" : "<false/>";
+  if (typeof v === "number") {
+    return Number.isInteger(v)
+      ? `<integer>${v}</integer>`
+      : `<real>${v}</real>`;
+  }
+  if (Array.isArray(v)) {
+    const items = v.map(s => `        <string>${xmlEscape(s)}</string>`).join("\n");
+    return `<array>\n${items}\n    </array>`;
+  }
+  return `<string>${xmlEscape(v)}</string>`;
+}
+
+/** Read the optional plist extras file. Default location: build/macos/Info.plist.extra. */
+async function loadPlistExtraFile(root: string, override?: string): Promise<string> {
+  const file = override
+    ? (path.isAbsolute(override) ? override : path.resolve(root, override))
+    : path.join(root, "build", "macos", "Info.plist.extra");
+  if (!existsSync(file)) return "";
+  return await Bun.file(file).text();
+}
+
+/** Extract the keys defined in a partial plist (for override warnings). */
+function extractPlistKeys(content: string): string[] {
+  const matches = content.match(/<key>([^<]+)<\/key>/g) ?? [];
+  return matches.map(m => m.replace(/<\/?key>/g, ""));
+}
+
+export async function generateInfoPlist(opts: PlistGenOptions): Promise<string> {
+  const { root, appName, execName, config, iconResult } = opts;
+  const macosConfig: MacOSConfig = config.macos ?? {};
+
+  const identifier = config.identifier
+    ?? `com.zapp.${appName.toLowerCase().replace(/[^a-z0-9]/g, "")}`;
+  const version = config.version ?? "1.0.0";
+  const minVersion = macosConfig.minimumSystemVersion ?? "12.0";
+  const category = macosConfig.category ?? "";
+  const copyright = macosConfig.copyright ?? "";
+  const usageDescriptions = macosConfig.usageDescriptions ?? {};
+  const plistExtras = macosConfig.plistExtras ?? {};
+
+  // Track which keys we've emitted so we can detect user overrides.
+  const cliEmittedKeys = new Set<string>();
+  const lines: string[] = [];
+
+  const addKey = (key: string, value: string) => {
+    cliEmittedKeys.add(key);
+    lines.push(`    <key>${key}</key>`);
+    lines.push(`    ${value}`);
+  };
+
+  // Required core keys.
+  addKey("CFBundleExecutable",            `<string>${xmlEscape(execName)}</string>`);
+  addKey("CFBundleIdentifier",            `<string>${xmlEscape(identifier)}</string>`);
+  addKey("CFBundleName",                  `<string>${xmlEscape(appName)}</string>`);
+  addKey("CFBundleDisplayName",           `<string>${xmlEscape(appName)}</string>`);
+  addKey("CFBundlePackageType",           `<string>APPL</string>`);
+  addKey("CFBundleVersion",               `<string>${xmlEscape(version)}</string>`);
+  addKey("CFBundleShortVersionString",    `<string>${xmlEscape(version)}</string>`);
+  addKey("CFBundleInfoDictionaryVersion", `<string>6.0</string>`);
+  addKey("LSMinimumSystemVersion",        `<string>${xmlEscape(minVersion)}</string>`);
+  addKey("NSHighResolutionCapable",       `<true/>`);
+  addKey("NSSupportsAutomaticGraphicsSwitching", `<true/>`);
+
+  // Icon (asset catalog key + .icns fallback for older macOS).
+  if (iconResult) {
+    addKey(iconResult.plistKey, `<string>${xmlEscape(iconResult.plistValue)}</string>`);
+    if (iconResult.plistKey === "CFBundleIconName") {
+      addKey("CFBundleIconFile", `<string>AppIcon</string>`);
+    }
+  }
+
+  // App Store category.
+  if (category) {
+    addKey("LSApplicationCategoryType", `<string>${xmlEscape(category)}</string>`);
+  }
+
+  // Copyright.
+  if (copyright) {
+    addKey("NSHumanReadableCopyright", `<string>${xmlEscape(copyright)}</string>`);
+  }
+
+  // Privacy usage descriptions.
+  for (const [field, desc] of Object.entries(usageDescriptions)) {
+    if (!desc) continue;
+    const plistKey = USAGE_DESC_KEYS[field];
+    if (!plistKey) continue;
+    addKey(plistKey, `<string>${xmlEscape(desc as string)}</string>`);
+  }
+
+  // Deep link URL schemes.
+  const schemes = config.deepLinkSchemes;
+  if (schemes && schemes.length > 0) {
+    const schemesXml = schemes
+      .map(s => `            <string>${xmlEscape(s)}</string>`)
+      .join("\n");
+    cliEmittedKeys.add("CFBundleURLTypes");
+    lines.push(`    <key>CFBundleURLTypes</key>`);
+    lines.push(`    <array>`);
+    lines.push(`        <dict>`);
+    lines.push(`            <key>CFBundleURLName</key>`);
+    lines.push(`            <string>${xmlEscape(identifier)}</string>`);
+    lines.push(`            <key>CFBundleURLSchemes</key>`);
+    lines.push(`            <array>`);
+    lines.push(schemesXml);
+    lines.push(`            </array>`);
+    lines.push(`        </dict>`);
+    lines.push(`    </array>`);
+  }
+
+  // plistExtras (typed map). Warn on overrides.
+  for (const [key, value] of Object.entries(plistExtras)) {
+    if (cliEmittedKeys.has(key)) {
+      process.stdout.write(
+        `[zapp] plistExtras: overriding CLI-derived key "${key}"\n`
+      );
+    }
+    cliEmittedKeys.add(key);
+    lines.push(`    <key>${xmlEscape(key)}</key>`);
+    lines.push(`    ${renderPlistValue(value)}`);
+  }
+
+  // Raw plistFile (last — wins over everything).
+  const extraContent = await loadPlistExtraFile(root, macosConfig.plistFile);
+  if (extraContent.trim().length > 0) {
+    const extraKeys = extractPlistKeys(extraContent);
+    for (const key of extraKeys) {
+      if (cliEmittedKeys.has(key)) {
+        process.stdout.write(
+          `[zapp] Info.plist.extra: overriding key "${key}"\n`
+        );
+      }
+    }
+    lines.push("    " + extraContent.trim().split("\n").join("\n    "));
+  }
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+${lines.join("\n")}
+</dict>
+</plist>`;
 }
 
 async function getDirectorySize(dir: string): Promise<number> {

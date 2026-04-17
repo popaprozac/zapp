@@ -12,7 +12,7 @@ extern void* app_get_active(void);
 extern const char* zapp_build_initial_url(void);
 extern int zapp_build_use_embedded_assets(void);
 extern const char* zapp_build_csp(void);
-extern const char* zapp_build_allowed_navigation(void);
+extern const char* app_get_allowed_navigation_json(void);
 extern int zapp_build_is_dev(void);
 
 // Bootstrap script (generated from TS)
@@ -241,12 +241,16 @@ extern void zapp_handle_message_from_window(void* app, char* msg, int32_t window
 
 @interface ZappWebView : WKWebView
 @property (nonatomic, assign) BOOL inDragRegion;
+@property (nonatomic, assign) BOOL acceptFirstMouse;
 @end
 
 @implementation ZappWebView
 - (instancetype)initWithFrame:(NSRect)frame configuration:(WKWebViewConfiguration*)config {
     self = [super initWithFrame:frame configuration:config];
-    if (self) _inDragRegion = NO;
+    if (self) {
+        _inDragRegion = NO;
+        _acceptFirstMouse = YES;
+    }
     return self;
 }
 - (void)mouseDown:(NSEvent*)event {
@@ -259,8 +263,7 @@ extern void zapp_handle_message_from_window(void* app, char* msg, int32_t window
 - (BOOL)mouseDownCanMoveWindow { return self.inDragRegion; }
 - (BOOL)acceptsFirstMouse:(NSEvent*)event {
     (void)event;
-    extern int zapp_build_accept_first_mouse(void);
-    return zapp_build_accept_first_mouse() ? YES : NO;
+    return self.acceptFirstMouse;
 }
 @end
 
@@ -287,7 +290,7 @@ static BOOL zapp_is_navigation_allowed(NSURL* url) {
 
     // User allowlist (parsed once, cached)
     if (!zapp_cached_allowlist) {
-        const char* json = zapp_build_allowed_navigation();
+        const char* json = app_get_allowed_navigation_json();
         if (json && json[0] != '\0') {
             NSData* data = [[NSString stringWithUTF8String:json] dataUsingEncoding:NSUTF8StringEncoding];
             id parsed = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
@@ -371,7 +374,7 @@ void darwin_webview_set_drag_region(int32_t window_id, bool drag) {
 
 // --- WebView Creation ---
 
-void darwin_webview_create(void* window_ptr, bool inspectable, const char* url_override) {
+void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first_mouse, const char* url_override) {
     NSWindow* window = (__bridge NSWindow*)window_ptr;
     NSView* hostView = [window contentView];
     NSRect bounds = [hostView bounds];
@@ -451,6 +454,7 @@ void darwin_webview_create(void* window_ptr, bool inspectable, const char* url_o
 
     // --- Create WebView ---
     ZappWebView* webview = [[ZappWebView alloc] initWithFrame:bounds configuration:config];
+    webview.acceptFirstMouse = accept_first_mouse ? YES : NO;
     [webview setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
     if ([webview respondsToSelector:@selector(setInspectable:)]) {
         [webview setInspectable:inspectable ? YES : NO];

@@ -2,6 +2,7 @@
 
 import path from "node:path";
 import { existsSync } from "node:fs";
+import { readdir } from "node:fs/promises";
 import { resolveTxikiDir } from "./paths";
 
 // Get platform-specific .m files to compile alongside the generated .c
@@ -39,6 +40,42 @@ export function getPlatformSources(nativeDir: string): string[] {
     return sources.filter(f => existsSync(f));
   }
   return [];
+}
+
+// Scan the project's zapp/ tree for user-authored ObjC/C sources.
+// Convention: drop .m (macOS) or .c (Windows) files anywhere under
+// <project>/zapp/**, reference them from your .zc service code, and the
+// CLI will compile + link them alongside the framework's platform sources.
+//
+// Example: `zapp/services/keychain.m` + `zapp/services/keychain.h` gives
+// you a pure-ObjC service that calls Security.framework, called from a
+// Zen-C service handler via `import "services/keychain.h"`.
+export async function getUserProjectSources(root: string): Promise<string[]> {
+  const projectZapp = path.join(root, "zapp");
+  if (!existsSync(projectZapp)) return [];
+
+  const ext = process.platform === "darwin" ? ".m"
+    : process.platform === "win32" ? ".c"
+    : null;
+  if (!ext) return [];
+
+  const results: string[] = [];
+  async function walk(dir: string): Promise<void> {
+    let entries;
+    try { entries = await readdir(dir, { withFileTypes: true }); }
+    catch { return; }
+    for (const entry of entries) {
+      if (entry.name.startsWith(".")) continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(full);
+      } else if (entry.isFile() && entry.name.endsWith(ext)) {
+        results.push(full);
+      }
+    }
+  }
+  await walk(projectZapp);
+  return results;
 }
 
 // Ensure txiki.js is available and built (cmake).

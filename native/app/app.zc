@@ -17,6 +17,7 @@ import "string.h" as str;
 
 raw {
     static void* zapp_active_app = NULL;
+    static char zapp_security_nav_json[4096] = "";
 }
 
 fn app_set_active(app: App*) -> void {
@@ -57,6 +58,15 @@ fn app_get_bootstrap_max_workers() -> int {
     let app = (App*)app_get_active();
     if app != NULL { return app.config.maxWorkers; }
     return 0;
+}
+
+// Navigation allowlist. Returns a JSON array of glob patterns, or "" when
+// unset. Called by the webview's navigation delegate before every top-level
+// load. Built by SecurityManager::allow_navigation at startup.
+fn app_get_allowed_navigation_json() -> string {
+    let result: string = "";
+    raw { result = zapp_security_nav_json; }
+    return result;
 }
 
 import "./router.zc";
@@ -231,6 +241,39 @@ impl Zapp {
     fn inspectable_off() -> ZappInspectable { return ZappInspectable::Off(); }
 }
 
+// Runtime security policy — navigation allowlist, future CSP, etc.
+// Lives on App so webview delegates can read through `app_get_active()`.
+struct SecurityManager {}
+
+impl SecurityManager {
+    fn new() -> Self { return SecurityManager{}; }
+
+    // Declare the set of URL patterns the webview is allowed to navigate to
+    // for top-level loads. Patterns are globs ("https://api.example.com/*").
+    // Built-in schemes (zapp, about, blob) and localhost in dev mode are
+    // always allowed. Call before app.run().
+    fn allow_navigation(self, patterns: string*, count: int) -> void {
+        raw {
+            char* out = zapp_security_nav_json;
+            size_t cap = sizeof(zapp_security_nav_json);
+            size_t used = 0;
+            if (cap > 0) out[used++] = '[';
+            for (int i = 0; i < count && used + 2 < cap; i++) {
+                if (i > 0) { out[used++] = ','; }
+                out[used++] = '"';
+                const char* p = ((const char**)patterns)[i];
+                while (p && *p && used + 2 < cap) {
+                    if (*p == '"' || *p == '\\') out[used++] = '\\';
+                    out[used++] = *p++;
+                }
+                if (used + 1 < cap) out[used++] = '"';
+            }
+            if (used + 1 < cap) out[used++] = ']';
+            if (used < cap) out[used] = '\0';
+        }
+    }
+}
+
 struct App {
     config: AppConfig;
     window: WindowManager;
@@ -240,6 +283,7 @@ struct App {
     notification: NotificationManager;
     sync: SyncManager;
     dock: DockManager;
+    security: SecurityManager;
 }
 
 impl App {
@@ -264,6 +308,7 @@ impl App {
             notification: NotificationManager::new(),
             sync: SyncManager::new(),
             dock: DockManager::new(),
+            security: SecurityManager::new(),
         };
     }
 

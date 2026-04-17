@@ -10,7 +10,7 @@
 // Create a WKWebView inside the given NSWindow.
 // Sets up: custom scheme handler (zapp://), message handler, bootstrap injection.
 // url_override: if non-NULL and non-empty, load this URL instead of the default.
-void darwin_webview_create(void* window_ptr, bool inspectable, const char* url_override);
+void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first_mouse, const char* url_override);
 
 // Evaluate JavaScript on a specific window's WebView.
 void darwin_webview_eval(void* window_ptr, const char* js);

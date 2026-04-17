@@ -32,6 +32,11 @@ export interface WindowOptions {
   transparent?: boolean;
   alwaysOnTop?: boolean;
   titleBarStyle?: "default" | "hidden" | "hiddenInset";
+  /**
+   * macOS — accept clicks on an unfocused window so the first click both
+   * activates the window and triggers the target control. Default: `true`.
+   */
+  acceptFirstMouse?: boolean;
 }
 
 /** Size events that include width/height/position data. */

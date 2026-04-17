@@ -108,4 +108,18 @@ fn dispatch_event_to_all(event_name: string, payload: string) -> void {
     let js: string = "";
     raw { js = zapp_response_buf; }
     platform_eval_js_all(js);
+
+    // Broadcast to every active worker (headless + webview-owned). Same JS
+    // snippet works in worker contexts because bootstrap/worker.ts exposes
+    // bridge._onEvent under the same Symbol.for("zapp.bridge") key.
+    raw {
+        #if defined(ZAPP_WORKER_ENGINE_TXIKI)
+        extern void txiki_broadcast_eval_js(const char* js);
+        txiki_broadcast_eval_js(zapp_response_buf);
+        #endif
+        #if defined(ZAPP_WORKER_ENGINE_JSC)
+        extern void jsc_broadcast_eval_js(const char* js);
+        jsc_broadcast_eval_js(zapp_response_buf);
+        #endif
+    }
 }

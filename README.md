@@ -52,6 +52,30 @@ bun run package   # .app bundle with icon (macOS)
 
 No global install needed — `bunx` fetches the CLI on the fly for init, and `bun run` uses the local copy in your project's `node_modules`.
 
+### Custom icons and Info.plist
+
+Drop your app icon into `build/macos/`:
+
+```
+build/macos/icon.icon       # Icon Composer (best for macOS 26+ liquid glass)
+build/macos/icon.icns       # traditional .icns
+build/macos/icon.iconset    # source set, CLI converts via iconutil
+build/macos/icon.png        # 1024×1024, CLI compiles via actool
+```
+
+Customize `Info.plist` via typed config (autocomplete-friendly):
+
+```ts
+// zapp.config.ts
+macos: {
+  copyright: "Copyright © 2026 You",
+  usageDescriptions: { camera: "We need camera for ...", microphone: "..." },
+  plistExtras: { LSUIElement: false, MyKey: "MyValue" },
+}
+```
+
+For nested dicts/arrays, drop a partial XML file into `build/macos/Info.plist.extra`. Full pattern in [`docs/patterns.md`](docs/patterns.md#custom-icon-and-infoplist).
+
 ## Features
 
 - **Window Management** — Create, resize, fullscreen, always-on-top. 11 typed events with payloads.
@@ -60,7 +84,7 @@ No global install needed — `bunx` fetches the CLI on the fly for init, and `bu
 - **Dialogs** — Native file open/save and message dialogs.
 - **Draggable Regions** — `data-zapp-drag-region` for custom titlebar apps.
 - **Close Prevention** — Cancellable close events from native or JS. "Unsaved changes?" dialogs.
-- **Services** — Define native RPC in Zen-C, call from JS. Auto-generated TypeScript bindings.
+- **Services** — Define native RPC in Zen-C, call from JS. Auto-generated TypeScript bindings. Drop `.m` (macOS) or `.c` (Windows) files anywhere under `zapp/` for ObjC/C-backed services (Keychain, AVFoundation, libsqlite3, etc.) — auto-compiled and linked.
 - **Workers (unified)** — Webview-spawned (`new Worker("./foo.ts")`) or headless (declared in `zapp.config.ts`). Both share the full runtime API — `Window.create`, `Events`, `Services`, `Notification`, `Dock`, `Sync` — via a zero-overhead direct host bridge (no IPC).
 - **Sync** — `wait`/`notify` across contexts without SharedArrayBuffer.
 - **Events** — Typed cross-context events with autocomplete.

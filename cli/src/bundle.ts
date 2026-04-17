@@ -7,7 +7,8 @@ import { mkdir, unlink, rm, cp, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import type { ResolvedConfig } from "./config";
 import { processIcon } from "./icon";
-import { resolveAssetsDir } from "./paths";
+import { resolveAppIconPath } from "./paths";
+import { resolveEntitlements } from "./entitlements";
 
 export async function createDevBundle(root: string, binaryPath: string, config: ResolvedConfig): Promise<string> {
   const appName = config.name.replace(/[^a-zA-Z0-9 _-]/g, "");
@@ -33,23 +34,11 @@ export async function createDevBundle(root: string, binaryPath: string, config: 
   await mkdir(resourcesDir, { recursive: true });
   let iconPlistEntry = "";
 
-  // Resolve icon source: user config > framework default
-  let iconSrc = "";
-  if (config.macos?.icon) {
-    iconSrc = path.resolve(root, config.macos.icon);
-  }
-  if (!iconSrc || !existsSync(iconSrc)) {
-    // Fall back to framework default icon
-    const frameworkAssets = resolveAssetsDir();
-    if (frameworkAssets) {
-      const defaultIcon = path.join(frameworkAssets, "zapp.icon");
-      const defaultPng = path.join(frameworkAssets, "zapp.png");
-      if (existsSync(defaultIcon)) iconSrc = defaultIcon;
-      else if (existsSync(defaultPng)) iconSrc = defaultPng;
-    }
-  }
+  // Resolve icon source: macos.icon → build/macos/icon.* → framework default.
+  // Same priority as production package (cli/src/package.ts).
+  const iconSrc = resolveAppIconPath(root, config.macos?.icon);
 
-  if (iconSrc && existsSync(iconSrc)) {
+  if (iconSrc) {
       const tempDir = path.join(root, ".zapp", "icon-tmp");
       await mkdir(tempDir, { recursive: true });
       try {
@@ -131,8 +120,17 @@ ${schemesXml}
 
   await Bun.write(path.join(contentsDir, "Info.plist"), plist);
 
-  // Ad-hoc code sign
-  const signProc = Bun.spawn(["codesign", "--force", "-s", "-", appDir], {
+  // Ad-hoc code sign (with entitlements if configured — some APIs read them
+  // even under ad-hoc, and keeping dev consistent with `zapp package` makes
+  // sign-path differences surface earlier).
+  const entitlements = await resolveEntitlements(root, config);
+  const codesignArgs = ["codesign", "--force", "-s", "-"];
+  if (entitlements.used) {
+    codesignArgs.push("--entitlements", entitlements.path);
+  }
+  codesignArgs.push(appDir);
+
+  const signProc = Bun.spawn(codesignArgs, {
     stdout: "pipe",
     stderr: "pipe",
   });

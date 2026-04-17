@@ -123,7 +123,6 @@ extern char* zapp_build_asset_root(void);
 extern int zapp_build_is_dev(void);
 extern int zapp_build_use_embedded_assets(void);
 extern char* zapp_build_csp(void);
-extern int zapp_build_accept_first_mouse(void);
 
 // --- UTF helpers ---
 

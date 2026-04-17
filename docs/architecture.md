@@ -84,6 +84,15 @@ User-defined services use the JSON path (that's how you register
 handlers). Framework-internal calls within Zen-C prefer the typed path —
 no serialization cost.
 
+### User-authored ObjC / C sources
+
+The CLI scans `<project>/zapp/**/*.{m,c}` on every build and appends them
+to the platform `cflags` alongside the framework's own platform sources.
+This lets an app ship a service implementation in a `.m` file (macOS) or
+`.c` file (Windows) without modifying the framework. See
+[`zen-c-services.md`](zen-c-services.md) → "Services in ObjC or C" for
+the bridging pattern.
+
 ### Zen-C <-> ObjC boundary
 
 Zen-C owns the types (`WindowOptions`, `AppConfig`, etc.). Zen-C emits

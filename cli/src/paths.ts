@@ -54,6 +54,40 @@ export function resolveAssetsDir(): string {
   return resolve("assets", "zapp.icon") || resolve("assets", "zapp.png");
 }
 
+// Resolve which icon file to use when packaging. Priority:
+//   1. macos.icon explicit path in zapp.config.ts
+//   2. build/macos/icon.{icon,icns,iconset,png} (convention)
+//   3. Framework default — assets/zapp.icon, falling back to zapp.png
+//
+// Returns "" when nothing is found (caller treats as "no icon"). The
+// existing icon.ts pipeline handles all four extensions.
+export function resolveAppIconPath(root: string, configIcon?: string): string {
+  // 1. Explicit user override.
+  if (configIcon) {
+    const abs = path.isAbsolute(configIcon) ? configIcon : path.resolve(root, configIcon);
+    if (existsSync(abs)) return abs;
+  }
+
+  // 2. build/macos/ convention. Order matters — .icon first because
+  // it's the best macOS 26+ format, then .icns / .iconset / .png.
+  const buildMac = path.join(root, "build", "macos");
+  for (const name of ["icon.icon", "icon.icns", "icon.iconset", "icon.png"]) {
+    const candidate = path.join(buildMac, name);
+    if (existsSync(candidate)) return candidate;
+  }
+
+  // 3. Framework default.
+  const frameworkAssets = resolveAssetsDir();
+  if (frameworkAssets) {
+    const defaultIcon = path.join(frameworkAssets, "zapp.icon");
+    if (existsSync(defaultIcon)) return defaultIcon;
+    const defaultPng = path.join(frameworkAssets, "zapp.png");
+    if (existsSync(defaultPng)) return defaultPng;
+  }
+
+  return "";
+}
+
 export function resolveVendorDir(): string {
   // Check monorepo then published locations.
   const monorepo = path.resolve(CLI_SRC_DIR, "../../vendor");

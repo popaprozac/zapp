@@ -31,6 +31,7 @@ bool wopts_hidden(WindowOptions* opts);
 bool wopts_always_on_top(WindowOptions* opts);
 int32_t wopts_title_bar_style_tag(WindowOptions* opts);
 int32_t wopts_inspectable(WindowOptions* opts);
+bool wopts_accept_first_mouse(WindowOptions* opts);
 
 // --- Window lifecycle ---
 void* darwin_window_create(WindowOptions* opts);

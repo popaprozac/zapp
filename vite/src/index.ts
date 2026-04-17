@@ -76,12 +76,33 @@ async function discoverWorkers(srcDir: string): Promise<WorkerEntry[]> {
 }
 
 /** Bundle a single worker entry using Vite's build API (Rolldown in Vite 8). */
-async function bundleWorker(entry: WorkerEntry, outDir: string, aliases: Record<string, string>): Promise<boolean> {
+async function bundleWorker(
+  entry: WorkerEntry,
+  outDir: string,
+  aliases: Record<string, string>,
+  root: string,
+  mode: string,
+): Promise<boolean> {
   try {
     const vite = await import("vite");
+    // We use configFile:false here to avoid recursion (this bundle is called
+    // from inside a Vite plugin). That opts us out of Vite's usual env
+    // handling, so load VITE_* vars manually and replicate the MODE/DEV/PROD
+    // replacements the main build gets for free.
+    const env = vite.loadEnv(mode, root, "");
+    const define: Record<string, string> = {};
+    for (const [k, v] of Object.entries(env)) {
+      if (k.startsWith("VITE_")) define[`import.meta.env.${k}`] = JSON.stringify(v);
+    }
+    define["import.meta.env.MODE"] = JSON.stringify(mode);
+    define["import.meta.env.DEV"] = JSON.stringify(mode !== "production");
+    define["import.meta.env.PROD"] = JSON.stringify(mode === "production");
+
     await vite.build({
       configFile: false,
       logLevel: "silent",
+      mode,
+      define,
       build: {
         outDir,
         emptyOutDir: false,
@@ -139,6 +160,7 @@ export function zappWorkers(options?: ZappWorkersOptions): Plugin {
   let headlessEntries: WorkerEntry[] = [];
   let aliases: Record<string, string> = {};
   let isDev = false;
+  let mode = "production";
   let outDir = "";
 
   return {
@@ -150,6 +172,7 @@ export function zappWorkers(options?: ZappWorkersOptions): Plugin {
       srcDir = path.join(root, "src");
       outDir = path.join(root, "dist", "_workers");
       isDev = config.command === "serve";
+      mode = config.mode;
 
       // Extract alias paths for worker bundling
       const resolvedAlias = config.resolve?.alias;
@@ -212,7 +235,7 @@ export function zappWorkers(options?: ZappWorkersOptions): Plugin {
 
       const allEntries = [...workers, ...headlessEntries];
       for (const entry of allEntries) {
-        const ok = await bundleWorker(entry, devOutDir, aliases);
+        const ok = await bundleWorker(entry, devOutDir, aliases, root, mode);
         if (ok) console.log(`[zapp] dev-bundled worker: ${entry.outputName}`);
       }
 
@@ -244,7 +267,7 @@ export function zappWorkers(options?: ZappWorkersOptions): Plugin {
       const allEntries = [...workers, ...headlessEntries];
 
       for (const entry of allEntries) {
-        const ok = await bundleWorker(entry, outDir, aliases);
+        const ok = await bundleWorker(entry, outDir, aliases, root, mode);
         if (ok) {
           console.log(`[zapp] bundled worker: ${entry.outputName}`);
         }

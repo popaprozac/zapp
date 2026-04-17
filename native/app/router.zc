@@ -82,7 +82,20 @@ fn router_handle_message(app: App*, msg: string, window_id: int) -> void {
     }
 
     if parsed.msg_type == MsgType.EMIT {
-        dispatch_event_to_all(parsed.method, parsed.payload);
+        // Extract just the "a" (args) field — parsed.payload is the full
+        // {t,m,a} envelope, but listeners expect their user payload directly.
+        // Worker emits already pass the unwrapped payload; this matches that.
+        let args_json: string = "";
+        raw {
+            #ifdef __APPLE__
+            extern const char* darwin_dialog_extract_args(const char* full_json);
+            args_json = (char*)darwin_dialog_extract_args((const char*)parsed.payload);
+            #else
+            extern const char* windows_dialog_extract_args(const char* full_json);
+            args_json = (char*)windows_dialog_extract_args((const char*)parsed.payload);
+            #endif
+        }
+        dispatch_event_to_all(parsed.method, args_json);
         return;
     }
 
