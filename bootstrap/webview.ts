@@ -246,7 +246,23 @@
     bridge._workers = {};
   });
 
-  // Drag region tracking via --zapp-drag CSS property
+  // Drag region tracking. Walk up the DOM from the hovered element; the
+  // first decisive rule wins. Order:
+  //
+  //   1. `--zapp-drag: no-drag` or `--zapp-drag: drag` — explicit override,
+  //      wins over everything (lets users force an unusual choice).
+  //   2. Native interactive tags (button, input, a, select, textarea) or
+  //      `role=button` / `contenteditable` — auto-treated as no-drag so
+  //      clicks / focus actually reach the control instead of being
+  //      swallowed by `performWindowDragWithEvent:`. This matches Electron's
+  //      `-webkit-app-region` convention.
+  //   3. `data-zapp-drag-region` attribute — explicit drag handle.
+  //
+  // Without (2), putting a button inside `data-zapp-drag-region` absorbs
+  // the click. Authors shouldn't have to paint `--zapp-drag: no-drag` on
+  // every toolbar button; the sensible default is "interactive elements
+  // win." Users who actually want a draggable button can still do so with
+  // `style="--zapp-drag: drag"` on the element.
   let inDrag = false;
   document.addEventListener("mousemove", (e: MouseEvent) => {
     let el: HTMLElement | null = e.target as HTMLElement;
@@ -260,6 +276,19 @@
       }
       if (val === "drag") {
         isDrag = true;
+        break;
+      }
+      const tag = el.tagName;
+      if (
+        tag === "BUTTON" ||
+        tag === "INPUT" ||
+        tag === "SELECT" ||
+        tag === "TEXTAREA" ||
+        (tag === "A" && el.hasAttribute("href")) ||
+        el.getAttribute("role") === "button" ||
+        el.isContentEditable
+      ) {
+        isDrag = false;
         break;
       }
       if (el.hasAttribute && el.hasAttribute("data-zapp-drag-region")) {

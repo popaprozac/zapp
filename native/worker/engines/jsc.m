@@ -336,39 +336,36 @@ static void jsc_setup_bridge(JSContext* ctx, NSString* workerId) {
     // createWindow — synchronously create a window from any worker.
     // Dispatches to main queue (window creation requires main thread on macOS),
     // waits for result, returns an object with windowId.
+    //
+    // Forwards the whole opts object as JSON so every WindowOptions field
+    // (titleBarStyle, alwaysOnTop, acceptFirstMouse, ...) plumbs through,
+    // not just title/url/width/height. Zen-C parses and applies via
+    // window_opts_apply_json.
     bridge[@"createWindow"] = ^JSValue*(JSValue* optsVal) {
         JSContext* currentCtx = [JSContext currentContext];
-        NSString* title = @"Window";
-        NSString* url = @"";
-        __block int width = 0;
-        __block int height = 0;
+        NSString* optsJson = @"{}";
         if (optsVal && ![optsVal isUndefined] && ![optsVal isNull]) {
-            JSValue* t = optsVal[@"title"];
-            if (t && ![t isUndefined] && ![t isNull]) title = [t toString];
-            JSValue* u = optsVal[@"url"];
-            if (u && ![u isUndefined] && ![u isNull]) url = [u toString];
-            JSValue* w = optsVal[@"width"];
-            if (w && ![w isUndefined] && ![w isNull]) width = [w toInt32];
-            JSValue* h = optsVal[@"height"];
-            if (h && ![h isUndefined] && ![h isNull]) height = [h toInt32];
+            id optsObj = [optsVal toObject];
+            if ([optsObj isKindOfClass:[NSDictionary class]]) {
+                NSData* d = [NSJSONSerialization dataWithJSONObject:optsObj options:0 error:nil];
+                if (d) optsJson = [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding];
+            }
         }
-        const char* titleC = strdup([title UTF8String]);
-        const char* urlC = strdup([url UTF8String]);
+        const char* jsonC = strdup([optsJson UTF8String]);
         __block int windowId = -1;
-        extern int zapp_worker_create_window(const char* title, const char* url, int width, int height);
+        extern int zapp_worker_create_window_from_json(const char* opts_json);
         // Guard against dispatch_sync deadlock when called from a block that
         // is already running on the main queue (e.g. a worker's setTimeout
         // callback — setTimeout currently dispatches to the main queue, so
         // JS that runs inside it is already main-thread when it calls us).
         if ([NSThread isMainThread]) {
-            windowId = zapp_worker_create_window(titleC, urlC, width, height);
+            windowId = zapp_worker_create_window_from_json(jsonC);
         } else {
             dispatch_sync(dispatch_get_main_queue(), ^{
-                windowId = zapp_worker_create_window(titleC, urlC, width, height);
+                windowId = zapp_worker_create_window_from_json(jsonC);
             });
         }
-        free((void*)titleC);
-        free((void*)urlC);
+        free((void*)jsonC);
         JSValue* result = [JSValue valueWithNewObjectInContext:currentCtx];
         result[@"windowId"] = [NSString stringWithFormat:@"win-%d", windowId];
         return result;
@@ -496,6 +493,18 @@ static void jsc_setup_bridge(JSContext* ctx, NSString* workerId) {
     ctx[@"clearTimeout"] = ^(JSValue* timerId) {
         (void)timerId; // simplified — real impl would track timer IDs
     };
+
+    // performance.now() — high-resolution monotonic timer in milliseconds.
+    // JSC plain contexts don't ship the Web Performance API; WKWebView adds
+    // it for main-world contexts but workers (which are bare JSContexts
+    // here) need us to provide it. systemUptime is sub-microsecond on macOS.
+    {
+        JSValue* perf = [JSValue valueWithNewObjectInContext:ctx];
+        perf[@"now"] = ^double() {
+            return [NSProcessInfo processInfo].systemUptime * 1000.0;
+        };
+        ctx[@"performance"] = perf;
+    }
 
     // self reference (worker global)
     ctx[@"self"] = ctx[@"globalThis"];

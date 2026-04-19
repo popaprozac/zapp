@@ -461,6 +461,81 @@ specific position:
 ContextMenu.show(items, { x: 100, y: 200 });
 ```
 
+## Custom titlebar with draggable region
+
+Mark any element with `data-zapp-drag-region` and the system treats it
+as a draggable region — click-and-hold moves the window. Interactive
+elements *inside* the region (buttons, inputs, links, selects,
+textareas, `role="button"` widgets, `contenteditable` elements) stay
+clickable by default — the bootstrap walks the hovered element's
+ancestors and auto-excludes them from drag.
+
+```html
+<!-- Drag anywhere in the titlebar except the controls -->
+<div class="titlebar" data-zapp-drag-region>
+  <button onclick="goBack()">←</button>
+  <input type="search" placeholder="Search..." />
+  <div class="title">My App</div>
+  <button onclick="settings()">⚙</button>
+</div>
+```
+
+Works without any CSS on the buttons or input.
+
+### Overriding the default
+
+Two CSS variables force either behavior on a specific element:
+
+```css
+/* Force this button to drag the window instead of receiving clicks */
+.grab-handle { --zapp-drag: drag; }
+
+/* Force this custom div to be clickable inside a drag region */
+.my-custom-button { --zapp-drag: no-drag; }
+```
+
+Walk order: explicit `--zapp-drag` on the element > native interactive
+tag > `data-zapp-drag-region`. The first decisive rule wins, walking
+from the hovered element upward.
+
+### When to use `--zapp-drag: no-drag`
+
+You mostly don't need it — native interactive elements are
+auto-excluded. Reach for it only when you build a "button-shaped
+thing" out of a `<div>` with your own click handler, or when you
+have a complex widget (color picker, slider) that isn't a standard
+form control.
+
+### Window metrics — stop eyeballing 28px
+
+Zapp injects real values from the native window into the webview at
+document start, so you don't have to guess titlebar height or traffic-
+light width:
+
+```css
+.titlebar {
+  height: var(--zapp-titlebar-height, 38px);
+  padding-left: var(--zapp-content-inset-left, 78px);
+}
+```
+
+- `--zapp-titlebar-height`: the vertical inset the native titlebar
+  occupies. `0` on fully borderless windows.
+- `--zapp-content-inset-left`: the horizontal offset of the right edge
+  of the traffic-light buttons (+ 8pt breathing room). Pad your content
+  by this amount to avoid overlap.
+- `data-zapp-titlebar-style` on `<html>`: `"default"`, `"hidden"`, or
+  `"hiddenInset"`. Use as a CSS attribute selector for style-conditional
+  layout.
+
+The values reflect the actual `NSWindow.frame` / `contentLayoutRect` /
+`standardWindowButton(NSWindowZoomButton).frame` math on the host
+system, so they match exactly whether the OS is using the classic
+22pt titlebar, the modern 28pt titlebar, a toolbar-compact variant, or
+a future macOS change. Always fall back to a reasonable literal (the
+28 / 78 defaults above) so the CSS still works when previewed outside
+a Zapp window.
+
 ## Native file drop into webview
 
 Zapp handles drag-drop natively — add `data-file-drop-target` to an
@@ -500,6 +575,35 @@ async function rateLimited<T>(key: string, fn: () => Promise<T>): Promise<T> {
 // Prime the lock once at startup
 Sync.notify("lock:api");
 ```
+
+### Why not `SharedArrayBuffer` + `Atomics.wait`?
+
+Zapp's `Sync` looks like the Web Platform's standard wait/notify
+primitive, so a fair question is: why not just ship `SharedArrayBuffer`
++ `Atomics.wait`? Three reasons:
+
+1. **Zapp ships two JS engines.** A JSC webview and a txiki worker run
+   in isolated runtimes — they cannot share a `SharedArrayBuffer`
+   regardless of COOP/COEP headers. `Sync` works across every context
+   pair Zapp supports: webview ↔ worker, webview ↔ webview, worker ↔
+   worker, JSC ↔ txiki. SAB works only within a single engine.
+
+2. **Robustness against Spectre mitigations.** SAB has a long history
+   of being silently disabled at runtime when browsers tighten
+   mitigations or the platform gets quirky. `Sync` goes through
+   native primitives (`dispatch_semaphore_t` on Darwin, event objects
+   on Windows) — no web-platform kill-switch can disable it.
+
+3. **SAB is the single-engine perf path, not a replacement.** Inside
+   a single engine (JSC webview ↔ JSC worker), SAB + `Atomics.wait`
+   *would* be faster for hot wait/notify loops. Enabling it is
+   additive — `Sync` stays as the portable correctness primitive,
+   SAB becomes an opt-in perf path when COOP/COEP headers land on
+   the `zapp://` scheme handler. `Sync` works everywhere today; SAB
+   is a future micro-optimization for apps that need it.
+
+Framing: **portable coordination primitive across engines, SAB as an
+optional single-engine perf path when we add it.**
 
 ## Deep links
 

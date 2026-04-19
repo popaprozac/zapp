@@ -1,16 +1,27 @@
 /**
  * ContextMenu — native context menus.
  *
- * @example
+ * @example Right-click (uses last pointer position automatically):
  * ```ts
- * import { ContextMenu } from "@zappdev/runtime";
- *
- * ContextMenu.show([
+ * element.addEventListener("contextmenu", (e) => {
+ *   e.preventDefault();
+ *   ContextMenu.show([
  *     { label: "Copy", role: "copy" },
  *     { label: "Paste", role: "paste" },
- *     { type: "separator" },
- *     { label: "Custom Action", action: () => console.log("clicked!") },
- * ]);
+ *   ]);
+ * });
+ * ```
+ *
+ * @example Dropdown button (positioned below the button):
+ * ```ts
+ * button.addEventListener("click", (e) => {
+ *   ContextMenu.show(items, { anchor: e.currentTarget as HTMLElement });
+ * });
+ * ```
+ *
+ * @example Explicit position:
+ * ```ts
+ * ContextMenu.show(items, { x: 100, y: 200 });
  * ```
  */
 
@@ -19,15 +30,23 @@ import { Events } from "./events";
 import type { MenuItemDef } from "./menu";
 
 let ctxActionCounter = 0;
-let lastContextX = 0;
-let lastContextY = 0;
 
-// Track right-click position
+// Last-known pointer position in CSS pixels (viewport-relative). Tracks
+// every pointer event — contextmenu, pointerdown, click — so a menu opened
+// from *any* event type has a sensible fallback position when the caller
+// doesn't pass explicit coordinates. Prior versions only listened to
+// contextmenu, which left dropdown-from-button patterns stuck at (0, 0).
+let lastPointerX = 0;
+let lastPointerY = 0;
+
 if (typeof document !== "undefined") {
-  document.addEventListener("contextmenu", (e) => {
-    lastContextX = e.clientX;
-    lastContextY = e.clientY;
-  }, true);
+  const track = (e: MouseEvent | PointerEvent) => {
+    lastPointerX = e.clientX;
+    lastPointerY = e.clientY;
+  };
+  document.addEventListener("contextmenu", track, true);
+  document.addEventListener("pointerdown", track, true);
+  document.addEventListener("click", track, true);
 }
 
 function collectAndStrip(items: MenuItemDef[]): { clean: any[]; actions: Map<string, () => void> } {
@@ -50,10 +69,35 @@ function collectAndStrip(items: MenuItemDef[]): { clean: any[]; actions: Map<str
 }
 
 export interface ContextMenuOptions {
-  /** X position in CSS pixels. Defaults to last contextmenu event position. */
+  /** Explicit X (CSS pixels, viewport-relative). Highest priority. */
   x?: number;
-  /** Y position in CSS pixels. Defaults to last contextmenu event position. */
+  /** Explicit Y (CSS pixels, viewport-relative). Highest priority. */
   y?: number;
+  /**
+   * Show the menu at the position of this MouseEvent (e.g. pass `e` from
+   * a `click` or `contextmenu` handler). Uses `clientX` / `clientY`.
+   */
+  event?: MouseEvent | PointerEvent;
+  /**
+   * Show the menu anchored to this element — positions the menu at the
+   * element's bottom-left corner, matching the native dropdown-button
+   * convention. Uses `getBoundingClientRect()`.
+   */
+  anchor?: Element;
+}
+
+function resolvePosition(options?: ContextMenuOptions): { x: number; y: number } {
+  if (options?.x != null && options?.y != null) {
+    return { x: options.x, y: options.y };
+  }
+  if (options?.event) {
+    return { x: options.event.clientX, y: options.event.clientY };
+  }
+  if (options?.anchor) {
+    const r = options.anchor.getBoundingClientRect();
+    return { x: r.left, y: r.bottom };
+  }
+  return { x: lastPointerX, y: lastPointerY };
 }
 
 export const ContextMenu = {
@@ -73,8 +117,7 @@ export const ContextMenu = {
       setTimeout(() => off(), 30000);
     }
 
-    const x = options?.x ?? lastContextX;
-    const y = options?.y ?? lastContextY;
+    const { x, y } = resolvePosition(options);
 
     (getBridge() as any).post(JSON.stringify({
       t: 4, m: "showContextMenu",

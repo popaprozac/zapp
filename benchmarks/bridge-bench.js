@@ -52,10 +52,46 @@
     return;
   }
 
+  const summarize = (label, perCallUs) => {
+    const sorted = perCallUs.slice().sort((a, b) => a - b);
+    const min = sorted[0];
+    const max = sorted[sorted.length - 1];
+    const median = sorted[Math.floor(sorted.length * 0.5)];
+    const mean = sorted.reduce((s, x) => s + x, 0) / sorted.length;
+    const variance =
+      sorted.reduce((s, x) => s + (x - mean) * (x - mean), 0) / sorted.length;
+    const stdev = Math.sqrt(variance);
+    const record = {
+      label,
+      total_calls: perCallUs.length * BATCH_SIZE,
+      batches: perCallUs.length,
+      batch_size: BATCH_SIZE,
+      warmup: WARMUP,
+      min_us: +min.toFixed(1),
+      median_us: +median.toFixed(1),
+      mean_us: +mean.toFixed(1),
+      max_us: +max.toFixed(1),
+      stdev_us: +stdev.toFixed(1),
+      throughput_per_sec: Math.round(1_000_000 / mean),
+    };
+    const fmt = (x) => x.toFixed(1) + " µs";
+    console.log(`=== ${label} ===`);
+    console.log(
+      `total:      ${record.total_calls} calls (${record.batches} batches × ${BATCH_SIZE}, ${WARMUP} warmup)`
+    );
+    console.log(`min:        ${fmt(min)} (fastest batch avg)`);
+    console.log(`median:     ${fmt(median)} (batch median)`);
+    console.log(`mean:       ${fmt(mean)} (overall avg)`);
+    console.log(`max:        ${fmt(max)} (slowest batch avg)`);
+    console.log(`stdev:      ${fmt(stdev)} (across batches)`);
+    console.log(`throughput: ${record.throughput_per_sec} calls/sec (at mean)`);
+    console.log("json:", JSON.stringify(record));
+    return record;
+  };
+
+  // --- Webview → native (IPC) ---
   const ping = globalThis.__bench.ping;
 
-  // Warmup — give the JIT a chance to optimize the hot path, and settle
-  // any lazy bridge init (socket setup, channel pairing, etc.).
   for (let i = 0; i < WARMUP; i++) {
     try {
       await ping();
@@ -65,54 +101,36 @@
     }
   }
 
-  // Batched timing — each batch is one performance.now() pair around
-  // BATCH_SIZE sequential calls. The batch duration is in the tens of
-  // milliseconds, well above the webview's clamp resolution, so the
-  // average-per-call we derive is genuinely accurate.
-  const perCallUs = new Array(BATCHES);
+  const webviewPerCallUs = new Array(BATCHES);
   for (let b = 0; b < BATCHES; b++) {
     const t0 = performance.now();
     for (let i = 0; i < BATCH_SIZE; i++) {
       await ping();
     }
     const t1 = performance.now();
-    // (t1 - t0) is in ms; divide by BATCH_SIZE, multiply by 1000 for µs.
-    perCallUs[b] = ((t1 - t0) * 1000) / BATCH_SIZE;
+    webviewPerCallUs[b] = ((t1 - t0) * 1000) / BATCH_SIZE;
   }
 
-  perCallUs.sort((a, b) => a - b);
-  const min = perCallUs[0];
-  const max = perCallUs[perCallUs.length - 1];
-  const median = perCallUs[Math.floor(perCallUs.length * 0.5)];
-  const mean = perCallUs.reduce((s, x) => s + x, 0) / perCallUs.length;
-  const variance =
-    perCallUs.reduce((s, x) => s + (x - mean) * (x - mean), 0) /
-    perCallUs.length;
-  const stdev = Math.sqrt(variance);
+  summarize("webview → native", webviewPerCallUs);
 
-  const fmt = (x) => x.toFixed(1) + " µs";
-  const record = {
-    total_calls: TOTAL,
-    batches: BATCHES,
-    batch_size: BATCH_SIZE,
-    warmup: WARMUP,
-    min_us: +min.toFixed(1),
-    median_us: +median.toFixed(1),
-    mean_us: +mean.toFixed(1),
-    max_us: +max.toFixed(1),
-    stdev_us: +stdev.toFixed(1),
-    throughput_per_sec: Math.round(1_000_000 / mean),
-  };
-
-  console.log("=== bridge bench ===");
-  console.log(
-    `total:      ${TOTAL} calls (${BATCHES} batches × ${BATCH_SIZE}, ${WARMUP} warmup)`
-  );
-  console.log(`min:        ${fmt(min)} (fastest batch avg)`);
-  console.log(`median:     ${fmt(median)} (batch median)`);
-  console.log(`mean:       ${fmt(mean)} (overall avg)`);
-  console.log(`max:        ${fmt(max)} (slowest batch avg)`);
-  console.log(`stdev:      ${fmt(stdev)} (across batches)`);
-  console.log(`throughput: ${record.throughput_per_sec} calls/sec (at mean)`);
-  console.log("json:", JSON.stringify(record));
+  // --- Worker → native (direct host call, no IPC) ---
+  // Only measured for frameworks that expose the worker bench hook. The
+  // worker spawns fresh each run, so warmup and timing happen on the
+  // worker thread's own performance.now().
+  if (typeof globalThis.__bench.workerBench === "function") {
+    try {
+      const workerPerCallUs = await globalThis.__bench.workerBench({
+        batches: BATCHES,
+        batchSize: BATCH_SIZE,
+        warmup: WARMUP,
+      });
+      summarize("worker  → native", workerPerCallUs);
+    } catch (e) {
+      console.error("[bridge-bench] worker bench failed:", e);
+    }
+  } else {
+    console.log(
+      "[bridge-bench] worker → native: skipped (no __bench.workerBench hook on this framework)"
+    );
+  }
 })();

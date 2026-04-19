@@ -528,59 +528,50 @@ static JSValue zapp_bridge_emit_to_host(JSContext* ctx, JSValueConst this_val, i
 
 // createWindow(opts) — sync window creation from any worker.
 // Threading: window creation must happen on the main thread. Worker threads
-// call dispatch_sync(main) to hop over, but guard against the deadlock when
-// the caller is already on main (e.g. via a setTimeout-dispatched callback
-// that the JSC engine routes to main — txiki workers run on their own thread
-// so this guard is belt-and-suspenders).
-extern int zapp_worker_create_window(const char* title, const char* url, int width, int height);
+// call dispatch_sync(main) to hop over.
+//
+// Forwards the whole opts object as JSON so every WindowOptions field
+// (titleBarStyle, alwaysOnTop, acceptFirstMouse, ...) plumbs through, not
+// just title/url/width/height. Zen-C parses and applies via
+// window_opts_apply_json.
+extern int zapp_worker_create_window_from_json(const char* opts_json);
 
 static JSValue zapp_bridge_create_window(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     (void)this_val;
-    const char* title = "Window";
-    const char* url = "";
-    int width = 0, height = 0;
-    JSValue title_val = JS_UNDEFINED;
-    JSValue url_val = JS_UNDEFINED;
 
-    if (argc >= 1 && JS_IsObject(argv[0])) {
-        title_val = JS_GetPropertyStr(ctx, argv[0], "title");
-        if (JS_IsString(title_val)) title = JS_ToCString(ctx, title_val);
-        url_val = JS_GetPropertyStr(ctx, argv[0], "url");
-        if (JS_IsString(url_val)) url = JS_ToCString(ctx, url_val);
-        JSValue w_val = JS_GetPropertyStr(ctx, argv[0], "width");
-        if (JS_IsNumber(w_val)) { int32_t w = 0; JS_ToInt32(ctx, &w, w_val); width = w; }
-        JS_FreeValue(ctx, w_val);
-        JSValue h_val = JS_GetPropertyStr(ctx, argv[0], "height");
-        if (JS_IsNumber(h_val)) { int32_t h = 0; JS_ToInt32(ctx, &h, h_val); height = h; }
-        JS_FreeValue(ctx, h_val);
+    // JSON-stringify the opts object (via a JS call to JSON.stringify so we
+    // get txiki's native serializer; avoids re-implementing the walk).
+    const char* opts_json_cstr = "{}";
+    JSValue stringified = JS_UNDEFINED;
+    if (argc >= 1 && !JS_IsUndefined(argv[0]) && !JS_IsNull(argv[0])) {
+        stringified = JS_JSONStringify(ctx, argv[0], JS_UNDEFINED, JS_UNDEFINED);
+        if (!JS_IsException(stringified) && JS_IsString(stringified)) {
+            opts_json_cstr = JS_ToCString(ctx, stringified);
+            if (!opts_json_cstr) opts_json_cstr = "{}";
+        }
     }
 
     int window_id = -1;
-    const char* titleC = title ? title : "";
-    const char* urlC = url ? url : "";
 #ifdef __APPLE__
     // txiki workers always run on their own thread (uv_loop), never the main
     // queue — so dispatch_sync(main) is always safe here (no deadlock risk).
     __block int wid_out = -1;
-    __block const char* tC = titleC;
-    __block const char* uC = urlC;
-    __block int w = width;
-    __block int h = height;
+    __block const char* jsonC = opts_json_cstr;
     dispatch_sync(dispatch_get_main_queue(), ^{
-        wid_out = zapp_worker_create_window(tC, uC, w, h);
+        wid_out = zapp_worker_create_window_from_json(jsonC);
     });
     window_id = wid_out;
 #else
     // TODO(windows): route window creation through the platform's main-thread
     // hop (PostMessage + WaitForSingleObject or equivalent) when txiki gains
     // Windows support.
-    window_id = zapp_worker_create_window(titleC, urlC, width, height);
+    window_id = zapp_worker_create_window_from_json(opts_json_cstr);
 #endif
 
-    if (title && JS_IsString(title_val)) JS_FreeCString(ctx, title);
-    if (url && JS_IsString(url_val)) JS_FreeCString(ctx, url);
-    JS_FreeValue(ctx, title_val);
-    JS_FreeValue(ctx, url_val);
+    if (opts_json_cstr != (const char*)"{}") {
+        JS_FreeCString(ctx, opts_json_cstr);
+    }
+    JS_FreeValue(ctx, stringified);
 
     char wid[32];
     snprintf(wid, sizeof(wid), "win-%d", window_id);

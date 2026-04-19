@@ -38,26 +38,18 @@ fn router_handle_message(app: App*, msg: string, window_id: int) -> void {
         let is_window_create: bool = false;
         is_window_create = parsed.method == "__window:create";
         if is_window_create {
-            // Create a new window from the frontend.
-            // Note: we deliberately do NOT bind `parsed.args` to a local. A
-            // `let args = parsed.args` move would invoke JsonValue's drop glue
-            // at the end of the inner block, freeing the JSON tree before
-            // app.window.create reads opts.title — leaving a dangling pointer.
-            // Using parsed.args directly keeps it alive until parsed itself
-            // drops at function return, which is *after* the create call.
+            // Create a new window from the frontend. window_opts_apply_json
+            // strdups the title/url fields so opts is self-contained after
+            // it returns — no lifetime dependency on parsed.args / the
+            // BridgeMessage's JSON tree. Strings are freed via
+            // window_opts_free after create.
             let opts = WindowOptions::create("Zapp");
             if parsed.has_args {
-                let title_opt = parsed.args.get_string("title");
-                if title_opt.is_some() { opts.title = title_opt.unwrap(); }
-                let url_opt = parsed.args.get_string("url");
-                if url_opt.is_some() { opts.url = url_opt.unwrap(); }
-                let w_opt = parsed.args.get_int("width");
-                if w_opt.is_some() { opts.width = w_opt.unwrap(); }
-                let h_opt = parsed.args.get_int("height");
-                if h_opt.is_some() { opts.height = h_opt.unwrap(); }
+                window_opts_apply_json(&opts, parsed.args);
             }
             opts.visible = true;
             let win = app.window.create(&opts);
+            window_opts_free(&opts);
             // Return the window ID to the caller
             raw {
                 char resp[128];

@@ -250,6 +250,29 @@ const result = await Services.invoke<{ rows: unknown[] }>("db:query", {
 // ~5 µs round-trip instead of ~135 µs
 ```
 
+### Tight worker loops → use `Services.invokeSync`
+
+Both `invoke` and `invokeSync` take the same direct host-object C call
+in worker context — but `invoke` wraps the result in `Promise.resolve`
+for API consistency with webview callers, which costs one microtask
+drain per call. For a DB loop hitting a service 10,000 times that's
+10,000 microtasks of pure overhead.
+
+`invokeSync` returns the value directly:
+
+```ts
+// In a worker only — throws in a webview.
+for (const id of ids) {
+  const row = Services.invokeSync<Row>("db:fetchOne", { id });
+  process(row);
+}
+```
+
+Same ~5 µs round-trip as `invoke` in a worker, minus the microtask.
+`invokeSync` throws if called from a webview context — if a handler
+needs to run in both contexts, write it against `invoke` and let the
+microtask cost fall to the rare webview caller.
+
 ## Thread safety
 
 Service handlers run on the thread of the calling context:

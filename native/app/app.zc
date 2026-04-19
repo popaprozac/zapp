@@ -106,6 +106,38 @@ fn zapp_worker_create_window(title: string, url: string, width: int, height: int
     return win.id;
 }
 
+// Full-shape worker createWindow — accepts the same JSON shape as the
+// webview's __window:create so `Window.create({ titleBarStyle, alwaysOnTop,
+// acceptFirstMouse, ... })` from a worker honors every option. Engine
+// host objects (jsc.m / txiki.c) JSON-stringify the opts JS object and
+// pass the string here instead of plumbing a growing positional-arg list.
+//
+// Lifetime: `window_opts_apply_json` strdups the title/url strings out of
+// the JSON tree, so `opts` is self-contained after it returns. We drop
+// the tree immediately, then free the heap-owned strings on `opts` after
+// `app.window.create(&opts)` via `window_opts_free(&opts)`.
+fn zapp_worker_create_window_from_json(opts_json: string) -> int {
+    let app = (App*)app_get_active();
+    if app == NULL { return -1; }
+    let opts = WindowOptions::create("Zapp");
+
+    if opts_json != "" {
+        let parse_result = JsonValue::parse(opts_json);
+        if parse_result.is_ok() {
+            let json_ptr = parse_result.unwrap();
+            window_opts_apply_json(&opts, json_ptr);
+            raw {
+                JsonValue__Drop_glue(json_ptr);
+                free(json_ptr);
+            }
+        }
+    }
+    opts.visible = true;
+    let win = app.window.create(&opts);
+    window_opts_free(&opts);
+    return win.id;
+}
+
 // Dispatch worker message to a single window by owner_id
 fn worker_dispatch_to_window(worker_id: string, data_json: string, owner_id: string) -> void {
     let window_id: int = -1;

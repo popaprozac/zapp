@@ -1,6 +1,6 @@
 {
   "name": "@zappdev/cli",
-  "version": "0.6.0-alpha.15",
+  "version": "0.6.0-alpha.25",
   "type": "module",
   "bin": {
     "zapp": "./src/zapp-cli.ts"

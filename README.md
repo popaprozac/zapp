@@ -27,10 +27,37 @@ Real numbers. Same hello-world app (1 window, 1 service call) on each framework.
 | **Binary** | **445 KB** | 6.5 MB | 8.0 MB | 7.5 MB | 170.6 MB | 17.0 MB |
 | **Bundle** | **2.8 MB** | 8.9 MB | 8.1 MB | 9.0 MB | 263.3 MB | 17.1 MB |
 | **Memory** | **26 MB** | 25 MB | 26 MB | 32 MB | 90 MB | 101 MB |
-| **IPC** | **0.14 ms** | 0.13 ms | 0.28 ms | 0.33 ms | 0.05 ms | 0.38 ms |
 | **Build** | **3.5s** | 3.2s | 53.8s | 1.9s | 3.6s | 12.8s |
 
-Zapp ships two worker engines: **JSC** (macOS-only, tiny, no web APIs in workers) and **txiki** (cross-platform, full web APIs). Both share the same native bridge — IPC is within noise of each other.
+### Bridge latency — by context (µs, median)
+
+Two numbers matter, not one: calls from the webview, and calls from a
+worker. Worker calls are where real app hot paths live (sync engine,
+DB access, local filesystem).
+
+| | Zapp (JSC) | Zapp (txiki) | Tauri | Wails | Electron | Electrobun |
+|---|---:|---:|---:|---:|---:|---:|
+| **Webview → native** | 145 | 130 | 265 | 325 | **51** | 360 |
+| **Worker → native** | **2.1** | **0.3** | N/A<sup>\*</sup> | N/A<sup>\*</sup> | 73 | N/A<sup>†</sup> |
+
+<sub>\* Tauri and Wails don't ship a JS worker with native-call access — their equivalent is "drop to Rust/Go and wire it yourself." No apples-to-apples JS number exists.</sub>
+<br>
+<sub><sup>†</sup> Electrobun uses an encrypted WebSocket for webview IPC; no separate worker→native fast path.</sub>
+
+Electron wins row 1 because Chromium's IPC uses optimized named pipes / mach ports. Electron's worker row (73 µs) is the realistic pattern: a Web Worker can't call `ipcRenderer` directly (contextBridge only exposes APIs to the main window), so calls route worker → renderer postMessage → `ipcRenderer.invoke` → main, then the reply flows back the same way — 2 postMessage hops plus the IPC round-trip.
+
+Zapp workers bypass that entirely — `Services.invokeSync` is a direct C call via the worker engine's host object. **JSC is 35× faster than Electron** on this path; **txiki is 243× faster** because QuickJS's `JS_NewCFunction` is a thinner C-call convention than JSC's JSValue-block dispatch. For apps where hot work lives in workers (sync engines, DB access, background pipelines), row 2 is the number that matters — and Tauri/Wails can't compete on row 2 at all, because they force a language boundary instead.
+
+### Which engine?
+
+Zapp ships two worker engines on macOS. Both win on different axes:
+
+- **JSC** *(default)* — 445 KB binary. macOS system framework, zero extra cost. Best raw JS perf (JIT). Worker → native: 2.1 µs.
+- **txiki** *(opt-in)* — 6.5 MB binary. Cross-platform (macOS + future Windows/Linux). Full web APIs in workers: `fetch`, `WebSocket`, `TextEncoder`, `crypto`, embedded SQLite, FFI. Fastest worker → native path: 0.3 µs (QuickJS's `JS_NewCFunction` is a thinner C-call convention than JSC's JSValue dispatch).
+
+Pick **JSC** when: macOS-only, no web APIs needed inside workers, smallest binary matters. Pick **txiki** when: you need `fetch` or `WebSocket` inside a worker (sync engines, DB drivers), you're targeting cross-platform, or you have a hot worker↔native loop where the 7× call-rate difference pays back the binary cost.
+
+Per-worker engine mix lands in a later alpha — until then, pick one per project via `zapp/build.zc`.
 
 <sub>See <a href="benchmarks/RESULTS.md">full results</a> with methodology, cold/hot build times, and raw JSON.</sub>
 
@@ -82,7 +109,7 @@ For nested dicts/arrays, drop a partial XML file into `build/macos/Info.plist.ex
 - **Application Menus** — Default OS menus + custom menu API with roles, accelerators, and inline actions.
 - **Context Menus** — Filtered default (no Reload/Back) + `ContextMenu.show()` for custom native menus.
 - **Dialogs** — Native file open/save and message dialogs.
-- **Draggable Regions** — `data-zapp-drag-region` for custom titlebar apps.
+- **Draggable Regions** — `data-zapp-drag-region` for custom titlebar apps. Buttons, inputs, links, and other interactive elements inside a drag region stay clickable by default; override with `style="--zapp-drag: drag"` or `--zapp-drag: no-drag` to force either behavior. Native window metrics (`--zapp-titlebar-height`, `--zapp-content-inset-left`) are injected as CSS variables so custom titlebars size correctly without hard-coded magic numbers.
 - **Close Prevention** — Cancellable close events from native or JS. "Unsaved changes?" dialogs.
 - **Services** — Define native RPC in Zen-C, call from JS. Auto-generated TypeScript bindings. Drop `.m` (macOS) or `.c` (Windows) files anywhere under `zapp/` for ObjC/C-backed services (Keychain, AVFoundation, libsqlite3, etc.) — auto-compiled and linked.
 - **Workers (unified)** — Webview-spawned (`new Worker("./foo.ts")`) or headless (declared in `zapp.config.ts`). Both share the full runtime API — `Window.create`, `Events`, `Services`, `Notification`, `Dock`, `Sync` — via a zero-overhead direct host bridge (no IPC).
@@ -166,8 +193,10 @@ export default defineConfig({
 // src/workers/sync.ts
 import { Events, Services, Notification } from "@zappdev/runtime";
 
-setInterval(async () => {
-  const latest = await Services.invoke("fetchLatest");
+setInterval(() => {
+  // Sync in a worker — direct host-object C call, no await, no microtask.
+  // (In a webview context you'd use Services.invoke with await.)
+  const latest = Services.invokeSync("fetchLatest");
   Events.emit("data:updated", latest);   // broadcast to every open window
 }, 5000);
 ```

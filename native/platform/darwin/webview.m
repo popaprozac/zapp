@@ -84,6 +84,34 @@ static NSURL* zapp_initial_url(void) {
     return [NSURL URLWithString:@"zapp://index.html"];
 }
 
+// Resolve a user-supplied URL string for Window.create({ url }) or
+// window.loadUrl(). If the string lacks a scheme, treat it as relative to
+// the current initial URL so apps can pass "#/chat", "?tab=2", or a
+// bare path without knowing whether they're in dev (http://localhost:5173)
+// or prod (zapp://index.html). Matches RFC 3986 relative-reference
+// resolution semantics via NSURL.
+static NSURL* zapp_resolve_url(const char* url_cstr) {
+    if (!url_cstr || url_cstr[0] == '\0') return zapp_initial_url();
+    NSString* s = [NSString stringWithUTF8String:url_cstr];
+    if (!s) return zapp_initial_url();
+
+    // Has a scheme separator — absolute URL, use directly.
+    if ([s rangeOfString:@"://"].location != NSNotFound) {
+        NSURL* absolute = [NSURL URLWithString:s];
+        if (absolute) return absolute;
+    }
+
+    // Relative — resolve against the initial URL. Covers "#fragment",
+    // "?query", "/absolute-path", and "bare-path" per RFC 3986.
+    NSURL* base = zapp_initial_url();
+    NSURL* resolved = [NSURL URLWithString:s relativeToURL:base];
+    if (resolved) return [resolved absoluteURL];
+
+    // Parse failed entirely — fall back to base rather than nil so the
+    // webview doesn't stay blank on a typo.
+    return base;
+}
+
 extern const char* zapp_build_asset_root(void);
 
 static NSString* zapp_asset_root_path(void) {
@@ -434,7 +462,45 @@ void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first
     [ucc addUserScript:[[WKUserScript alloc] initWithSource:windowIdScript
         injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
 
-    // 4. Bootstrap script
+    // 4. Window metrics — expose native values as CSS custom properties so
+    //    custom-titlebar apps don't have to eyeball 28px / 78px guesses.
+    //    - --zapp-titlebar-height: vertical inset taken by the native
+    //      titlebar (0 on truly borderless windows).
+    //    - --zapp-content-inset-left: horizontal distance from the window's
+    //      left edge to the right side of the zoom (green) standard button,
+    //      plus a small pad. Apps pad their content by this amount so the
+    //      traffic lights don't overlap their own UI.
+    //    - data-zapp-titlebar-style on <html>: "default" | "hidden" |
+    //      "hiddenInset", for style-conditional CSS.
+    {
+        CGFloat titlebarHeight = window.frame.size.height - window.contentLayoutRect.size.height;
+        if (titlebarHeight < 0) titlebarHeight = 0;
+
+        CGFloat contentInsetLeft = 0;
+        NSButton* zoomBtn = [window standardWindowButton:NSWindowZoomButton];
+        if (zoomBtn) {
+            contentInsetLeft = NSMaxX(zoomBtn.frame) + 8.0; // 8pt pad past rightmost button
+        }
+
+        // Derive style name from the window's actual state rather than
+        // re-plumbing the original WindowOptions enum.
+        NSString* styleName = @"default";
+        if ([window titleVisibility] == NSWindowTitleHidden &&
+            ([window styleMask] & NSWindowStyleMaskFullSizeContentView)) {
+            styleName = contentInsetLeft > 0 ? @"hiddenInset" : @"hidden";
+        }
+
+        NSString* metricsScript = [NSString stringWithFormat:
+            @"(function(){try{var r=document.documentElement;"
+            @"if(r){r.style.setProperty('--zapp-titlebar-height','%.0fpx');"
+            @"r.style.setProperty('--zapp-content-inset-left','%.0fpx');"
+            @"r.setAttribute('data-zapp-titlebar-style','%@');}}catch(e){}})();",
+            titlebarHeight, contentInsetLeft, styleName];
+        [ucc addUserScript:[[WKUserScript alloc] initWithSource:metricsScript
+            injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
+    }
+
+    // 5. Bootstrap script
     const char* bootstrapSrc = zapp_webview_bootstrap_script();
     if (bootstrapSrc) {
         NSString* bootstrap = [NSString stringWithUTF8String:bootstrapSrc];
@@ -467,13 +533,13 @@ void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first
     [webview setNavigationDelegate:zapp_shared_nav_delegate];
     [webview setUIDelegate:(id<WKUIDelegate>)zapp_shared_nav_delegate];
 
-    // Load initial URL (per-window override or default)
-    NSURL* url;
-    if (url_override && url_override[0] != '\0') {
-        url = [NSURL URLWithString:[NSString stringWithUTF8String:url_override]];
-    } else {
-        url = zapp_initial_url();
-    }
+    // Load initial URL (per-window override or default). url_override is
+    // resolved relative to the initial URL when it lacks a scheme, so
+    // Window.create({ url: "#/chat" }) works from either webview or worker
+    // without the caller knowing dev vs prod URL base.
+    NSURL* url = (url_override && url_override[0] != '\0')
+        ? zapp_resolve_url(url_override)
+        : zapp_initial_url();
     [webview loadRequest:[NSURLRequest requestWithURL:url]];
     [window setContentView:webview];
 }
@@ -495,7 +561,9 @@ void darwin_window_load_url(int32_t window_id, const char* url) {
     void* wv_ptr = darwin_window_get_webview(window_id);
     if (!wv_ptr) return;
     WKWebView* wv = (__bridge WKWebView*)wv_ptr;
-    NSURL* nsurl = [NSURL URLWithString:[NSString stringWithUTF8String:url]];
+    // Same relative-URL rules as Window.create({ url }) — "#/chat" et al.
+    // resolve against the initial URL rather than failing to parse.
+    NSURL* nsurl = zapp_resolve_url(url);
     if (nsurl) {
         [wv loadRequest:[NSURLRequest requestWithURL:nsurl]];
     }

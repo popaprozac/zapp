@@ -34,6 +34,14 @@ struct WindowOptions {
     titleBarStyle: TitleBarStyle;
     webContentInspectable: int; // -1 = inherit, 0 = off, 1 = on
     acceptFirstMouse: bool;     // macOS: click unfocused window also activates a control
+
+    // Ownership flags for the two string fields. `window_opts_apply_json`
+    // strdups values it pulls from a JsonValue tree and sets the flag;
+    // `window_opts_free` frees only what it allocated. Direct assignment
+    // (e.g. `opts.title = "Zapp"` with a literal or caller-owned string)
+    // leaves these false — free() becomes a no-op for that field.
+    _title_heap: bool;
+    _url_heap: bool;
 }
 
 struct WindowSize {
@@ -84,6 +92,8 @@ impl WindowOptions {
             titleBarStyle: TitleBarStyle::Default(),
             webContentInspectable: -1,
             acceptFirstMouse: true,
+            _title_heap: false,
+            _url_heap: false,
         };
     }
 }
@@ -110,6 +120,119 @@ fn wopts_hidden(opts: WindowOptions*) -> bool { return opts.hidden; }
 fn wopts_always_on_top(opts: WindowOptions*) -> bool { return opts.alwaysOnTop; }
 fn wopts_inspectable(opts: WindowOptions*) -> int { return opts.webContentInspectable; }
 fn wopts_accept_first_mouse(opts: WindowOptions*) -> bool { return opts.acceptFirstMouse; }
+
+// Apply JS-side WindowOptions (parsed into a JsonValue) onto a native
+// WindowOptions struct. Used by both the webview path (router.zc's
+// __window:create) and the worker path (zapp_worker_create_window_from_json)
+// so Window.create({ titleBarStyle, acceptFirstMouse, ... }) plumbs every
+// field, not just title/url/width/height. Fields omitted in the JSON keep
+// their defaults from WindowOptions::create().
+//
+// String fields (title, url) are strdup'd out of the JsonValue tree so
+// `opts` becomes self-contained — callers can drop the tree immediately
+// after this returns without invalidating opts.title / opts.url. Pair
+// with `window_opts_free(&opts)` after `app.window.create(&opts)` to
+// release the heap-owned strings. Call sites that never invoke
+// apply_json don't need to call free (ownership flags are false).
+fn window_opts_apply_json(opts: WindowOptions*, args: JsonValue*) -> void {
+    if args == NULL { return; }
+
+    let title_opt = args.get_string("title");
+    if title_opt.is_some() {
+        let src = title_opt.unwrap();
+        raw {
+            if (opts->_title_heap && opts->title) free((void*)opts->title);
+            opts->title = strdup((const char*)src);
+            opts->_title_heap = 1;
+        }
+    }
+    let url_opt = args.get_string("url");
+    if url_opt.is_some() {
+        let src = url_opt.unwrap();
+        raw {
+            if (opts->_url_heap && opts->url) free((void*)opts->url);
+            opts->url = strdup((const char*)src);
+            opts->_url_heap = 1;
+        }
+    }
+
+    let w_opt = args.get_int("width");
+    if w_opt.is_some() { opts.width = w_opt.unwrap(); }
+    let h_opt = args.get_int("height");
+    if h_opt.is_some() { opts.height = h_opt.unwrap(); }
+    let x_opt = args.get_int("x");
+    if x_opt.is_some() { opts.x = x_opt.unwrap(); }
+    let y_opt = args.get_int("y");
+    if y_opt.is_some() { opts.y = y_opt.unwrap(); }
+
+    let visible_opt = args.get_bool("visible");
+    if visible_opt.is_some() { opts.visible = visible_opt.unwrap(); }
+    let resizable_opt = args.get_bool("resizable");
+    if resizable_opt.is_some() { opts.resizable = resizable_opt.unwrap(); }
+    let closable_opt = args.get_bool("closable");
+    if closable_opt.is_some() { opts.closable = closable_opt.unwrap(); }
+    let minimizable_opt = args.get_bool("minimizable");
+    if minimizable_opt.is_some() { opts.minimizable = minimizable_opt.unwrap(); }
+    let maximizable_opt = args.get_bool("maximizable");
+    if maximizable_opt.is_some() { opts.maximizable = maximizable_opt.unwrap(); }
+    let fullscreen_opt = args.get_bool("fullscreen");
+    if fullscreen_opt.is_some() { opts.fullscreen = fullscreen_opt.unwrap(); }
+    let borderless_opt = args.get_bool("borderless");
+    if borderless_opt.is_some() { opts.borderless = borderless_opt.unwrap(); }
+    let transparent_opt = args.get_bool("transparent");
+    if transparent_opt.is_some() { opts.transparent = transparent_opt.unwrap(); }
+    let hidden_opt = args.get_bool("hidden");
+    if hidden_opt.is_some() { opts.hidden = hidden_opt.unwrap(); }
+    let aot_opt = args.get_bool("alwaysOnTop");
+    if aot_opt.is_some() { opts.alwaysOnTop = aot_opt.unwrap(); }
+    let afm_opt = args.get_bool("acceptFirstMouse");
+    if afm_opt.is_some() { opts.acceptFirstMouse = afm_opt.unwrap(); }
+
+    // titleBarStyle is a string enum on the JS side
+    // ("default" | "hidden" | "hiddenInset") mapped into the native
+    // TitleBarStyle tagged union.
+    //
+    // Note on the explicit `: string` type annotation: without it, Zen-C
+    // generates `ZC_AUTO tbs = tbs_opt.unwrap();` and the subsequent
+    // `tbs == "hiddenInset"` transpiles to a raw C pointer compare (!)
+    // instead of `strcmp`. Type-inferring through the generic
+    // `Option<T>.unwrap()` apparently loses the concrete `string` tag
+    // that zc uses to pick the string-equality codegen path. Direct
+    // field access (`parsed.method == "..."` in router.zc) works
+    // without the hint because the field's declared type is visible.
+    let tbs_opt = args.get_string("titleBarStyle");
+    if tbs_opt.is_some() {
+        let tbs: string = tbs_opt.unwrap();
+        if tbs == "hiddenInset" {
+            opts.titleBarStyle = TitleBarStyle::HiddenInset();
+        } else if tbs == "hidden" {
+            opts.titleBarStyle = TitleBarStyle::Hidden();
+        } else {
+            opts.titleBarStyle = TitleBarStyle::Default();
+        }
+    }
+}
+
+// Free any heap-allocated strings that `window_opts_apply_json` strdup'd
+// into the WindowOptions. Safe to call multiple times, safe on a
+// WindowOptions that never saw apply_json (ownership flags are false).
+// Call after `app.window.create(&opts)` — the native side copies titles
+// and URLs into its own storage during construction, so the strings
+// aren't needed afterwards.
+fn window_opts_free(opts: WindowOptions*) -> void {
+    raw {
+        if (opts->_title_heap && opts->title) {
+            free((void*)opts->title);
+            opts->title = "";
+            opts->_title_heap = 0;
+        }
+        if (opts->_url_heap && opts->url) {
+            free((void*)opts->url);
+            opts->url = "";
+            opts->_url_heap = 0;
+        }
+    }
+}
 
 fn wopts_title_bar_style_tag(opts: WindowOptions*) -> int {
     match opts.titleBarStyle {

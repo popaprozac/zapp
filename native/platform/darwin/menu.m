@@ -308,11 +308,16 @@ void darwin_menu_show_context(const char* items_json, int32_t x, int32_t y, int3
         if (!wv_ptr) return;
 
         NSView* view = (__bridge NSView*)wv_ptr;
-        // CSS clientX/clientY map directly to the content view coordinate space.
-        // No Y-flip needed — popUpMenuPositioningItem handles it.
-        NSView* content = [[view window] contentView];
+        // CSS clientX/clientY are viewport-relative with Y growing down.
+        // popUpMenuPositioningItem:atLocation:inView: uses the target view's
+        // own coordinate system — if the view isn't flipped, Y grows UP from
+        // the bottom, so we flip. WKWebView is a regular NSView (non-flipped)
+        // even though its rendered content uses top-origin internally.
         NSPoint point = NSMakePoint((CGFloat)x, (CGFloat)y);
-        [menu popUpMenuPositioningItem:nil atLocation:point inView:content];
+        if (![view isFlipped]) {
+            point.y = view.bounds.size.height - point.y;
+        }
+        [menu popUpMenuPositioningItem:nil atLocation:point inView:view];
     }
 }
 
@@ -542,8 +547,10 @@ void darwin_menu_show_context_typed(ZappMenuItem* items, int count, int x, int y
         if (!wv_ptr) return;
 
         NSView* view = (__bridge NSView*)wv_ptr;
-        NSView* content = [[view window] contentView];
         NSPoint point = NSMakePoint((CGFloat)x, (CGFloat)y);
-        [menu popUpMenuPositioningItem:nil atLocation:point inView:content];
+        if (![view isFlipped]) {
+            point.y = view.bounds.size.height - point.y;
+        }
+        [menu popUpMenuPositioningItem:nil atLocation:point inView:view];
     }
 }

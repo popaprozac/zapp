@@ -716,6 +716,55 @@ loadUrl(url)
 }
 ```
 
+#### Draggable region
+
+Mark any element with `data-zapp-drag-region`; the system treats it as a
+window-drag handle. Native interactive children (`<button>`, `<input>`,
+`<a href>`, `<select>`, `<textarea>`, `role="button"`, `contenteditable`)
+are auto-excluded and stay clickable — no CSS opt-in required. Override
+the default with CSS variables on specific elements:
+
+```html
+<div data-zapp-drag-region class="titlebar">
+  <button onclick="back()">←</button>        <!-- clickable (auto) -->
+  <input placeholder="search" />             <!-- focusable (auto) -->
+  <span>My App</span>                        <!-- drag handle -->
+  <div class="grab" style="--zapp-drag: drag">≡</div>       <!-- force drag -->
+  <div class="btn" style="--zapp-drag: no-drag">⚙</div>     <!-- force click -->
+</div>
+```
+
+Walk precedence (first decisive rule wins, walking up from hovered
+element): explicit `--zapp-drag` > interactive tag > `data-zapp-drag-region`.
+
+#### Window metrics as CSS variables
+
+Zapp injects real measurements from the native window into the webview's
+`:root` at document start, so custom titlebars don't need magic numbers:
+
+| Variable | Meaning |
+|---|---|
+| `--zapp-titlebar-height` | Vertical inset taken by the native titlebar (0 on fully borderless windows) |
+| `--zapp-content-inset-left` | Horizontal distance to the right side of the traffic-light buttons (+ 8pt pad). Use as `padding-left` on content so traffic lights don't overlap your UI |
+
+Plus a `data-zapp-titlebar-style` attribute on `<html>` (`"default"`,
+`"hidden"`, or `"hiddenInset"`) for style-conditional CSS.
+
+```css
+.titlebar {
+  height: var(--zapp-titlebar-height, 38px);       /* fallback for non-Zapp contexts */
+  padding-left: var(--zapp-content-inset-left, 78px);
+}
+
+[data-zapp-titlebar-style="hiddenInset"] .titlebar {
+  /* styles specific to the inset style */
+}
+```
+
+Values are set once at webview creation; they don't currently update on
+fullscreen toggle or window resize (the traffic-light position doesn't
+actually change on resize, and fullscreen hides the bar entirely).
+
 ### Services
 
 Call Zen-C service handlers registered via `app.service.add(name, fn)`.

@@ -20,7 +20,10 @@ fn run_app() -> int {
     let config = AppConfig{
         name: "bench-zapp-txiki",
         applicationShouldTerminateAfterLastWindowClosed: true,
-        webContentInspectable: Zapp::inspectable_auto(),
+        // Always inspectable — bench apps need devtools even in release
+        // so bridge-bench.js can be pasted (same reason Wails benches
+        // with DEV=true). This is bench scaffolding, not a real app.
+        webContentInspectable: Zapp::inspectable_on(),
         maxWorkers: 0,
         qjsStackSize: 0,
     };

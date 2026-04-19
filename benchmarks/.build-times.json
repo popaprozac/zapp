@@ -9,12 +9,12 @@
   },
   "cold_at": "2026-04-11 19:15",
   "hot": {
-    "zapp-jsc": 3.1,
-    "zapp-txiki": 3.15,
-    "tauri": 30.29,
-    "wails": 1.03,
-    "electron": 2.73,
-    "electrobun": 13.22
+    "zapp-jsc": 3.47,
+    "zapp-txiki": 3.16,
+    "tauri": 30.54,
+    "wails": 1.22,
+    "electron": 4.15,
+    "electrobun": 12.39
   },
-  "hot_at": "2026-04-11 19:20"
+  "hot_at": "2026-04-17 11:30"
 }

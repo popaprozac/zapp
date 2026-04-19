@@ -143,3 +143,95 @@ standard release/production builds.
 ```
 
 </details>
+
+### Worker → native (hot-path IPC)
+
+Bench infrastructure landed in `@zappdev/cli@0.6.0-alpha.16` —
+`benchmarks/bridge-bench.js` runs this scenario automatically for any
+framework that exposes a `window.__bench.workerBench` hook. Zapp
+(JSC + txiki) and Electron hooks are wired; Tauri / Wails / Electrobun
+don't ship a JS-worker path to native and are N/A.
+
+| Framework | Path | Median (µs) | Mean (µs) | Throughput |
+|---|---|---:|---:|---:|
+| Zapp (txiki) | Web Worker → QuickJS `JS_NewCFunction` direct C call | **0.3** | 0.3 | 3,045,685/s |
+| Zapp (JSC) | Web Worker → JSC host-object block call | **2.1** | 2.1 | 470,307/s |
+| Electron | Web Worker → renderer postMessage → ipcRenderer.invoke → main | **73.0** | 72.6 | 13,771/s |
+| Tauri | N/A — no JS worker → native path; fall back to Rust | — | — | — |
+| Wails | N/A — no JS worker → native path; fall back to Go | — | — | — |
+| Electrobun | N/A — no separate worker fast path | — | — | — |
+
+**Zapp txiki is 243× faster than Electron on this path. Zapp JSC is
+35×.** Both dominate the column that matters for real app hot paths —
+sync engines, DB access, background pipelines, anything where the app
+calls native from a worker in a loop.
+
+**Why txiki beats JSC.** QuickJS exposes `JS_NewCFunction` — a host
+call registers a plain C function pointer that the interpreter calls
+directly with a JSValue argument array. JSC's JavaScriptCore-Cocoa
+bridge routes through a block invocation with JSValue boxing on both
+sides, plus ObjC autorelease-pool bookkeeping. At a few hundred
+nanoseconds per call, the boxing overhead dominates. For apps where
+the worker is chatty with native, txiki's 7× call-rate advantage pays
+back the 6 MB binary cost; for apps where the worker is
+compute-heavy with occasional native calls, JSC's smaller size + JIT
+is the win.
+
+**Why Electron needs two hops.** `contextBridge.exposeInMainWorld`
+only exposes APIs to the renderer's main world, not to its Web
+Workers. A worker that wants to call a native handler has to
+postMessage the renderer, which then calls `ipcRenderer.invoke`, and
+the response flows back the same way. Two renderer↔worker postMessage
+hops plus the IPC round-trip — 73 µs total.
+
+**Why Tauri/Wails can't compete here.** Their JS-from-worker story is
+"drop to Rust/Go." That's a language boundary, not a bridge, so
+there's no apples-to-apples JS measurement. For the architecture Zapp
+targets — JS/TS application code orchestrated from workers — this row
+is the wedge.
+
+<details><summary>raw JSON (worker → native)</summary>
+
+```json
+{"label":"zapp-jsc","total_calls":6000,"batches":30,"batch_size":200,"warmup":500,"min_us":1.9,"median_us":2.1,"mean_us":2.1,"max_us":3,"stdev_us":0.2,"throughput_per_sec":470307}
+{"label":"zapp-txiki","total_calls":6000,"batches":30,"batch_size":200,"warmup":500,"min_us":0.3,"median_us":0.3,"mean_us":0.3,"max_us":0.3,"stdev_us":0,"throughput_per_sec":3045685}
+{"label":"electron","total_calls":6000,"batches":30,"batch_size":200,"warmup":500,"min_us":65,"median_us":73,"mean_us":72.6,"max_us":107.5,"stdev_us":7.4,"throughput_per_sec":13771}
+```
+
+</details>
+
+### 2026-04-17 webview → native re-runs
+
+Fresh measurements captured during the alpha.16 bench-infrastructure
+work. Numbers match the 2026-04-11 run within batch-to-batch noise —
+nothing regressed.
+
+| Framework | Median (µs) | Mean (µs) | Throughput |
+|---|---:|---:|---:|
+| Zapp (txiki) | 130.0 | 135.3 | 7,389/s |
+| Zapp (JSC) | 145.0 | 151.2 | 6,615/s |
+| Tauri | 265.0 | 266.3 | 3,755/s |
+| Electrobun | 360.0 | 363.3 | 2,752/s |
+| Electron | 51.0 | 51.8 | 19,293/s |
+
+<details><summary>raw JSON (2026-04-17 webview re-runs)</summary>
+
+```json
+{"label":"zapp-jsc","total_calls":6000,"batches":30,"batch_size":200,"warmup":500,"min_us":90,"median_us":145,"mean_us":151.2,"max_us":255,"stdev_us":41.7,"throughput_per_sec":6615}
+{"label":"zapp-txiki","total_calls":6000,"batches":30,"batch_size":200,"warmup":500,"min_us":85,"median_us":130,"mean_us":135.3,"max_us":215,"stdev_us":35.9,"throughput_per_sec":7389}
+{"label":"tauri","total_calls":6000,"batches":30,"batch_size":200,"warmup":500,"min_us":250,"median_us":265,"mean_us":266.3,"max_us":320,"stdev_us":15.4,"throughput_per_sec":3755}
+{"label":"electrobun","total_calls":6000,"batches":30,"batch_size":200,"warmup":500,"min_us":345,"median_us":360,"mean_us":363.3,"max_us":390,"stdev_us":11.9,"throughput_per_sec":2752}
+{"label":"electron","total_calls":6000,"batches":30,"batch_size":200,"warmup":500,"min_us":49.5,"median_us":51,"mean_us":51.8,"max_us":59,"stdev_us":2.3,"throughput_per_sec":19293}
+```
+
+</details>
+| Wails | N/A — no JS worker / native path; recommendation is Go | — |
+| Electrobun | N/A — no separate worker fast path | — |
+
+The Zapp number is the pitch: the path is a direct C call into a
+registered service via the worker engine's host object (JSC
+`JSValue` block or txiki QuickJS `JS_NewCFunction`), not an IPC
+hop. Electron's Web Workers can't call `ipcRenderer` directly —
+contextBridge only exposes APIs to the main window — so the
+realistic pattern is a worker↔renderer↔main round-trip, measured
+in the `workerBench` hook.
