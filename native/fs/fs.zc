@@ -1,0 +1,479 @@
+// Filesystem — native-side FS with zapp.config.ts allowlist enforcement.
+//
+// Goals:
+//   - Scoped access: every path is validated against an allowlist before
+//     any syscall. Unknown paths throw FsPermissionError (returned as
+//     Option::none / false from this layer — callers translate into an
+//     error in their own dialect).
+//   - Path variable expansion: $userData, $cache, $temp, $home,
+//     $downloads, $documents, $appData (alias of $userData). `~/…` also
+//     expands to $home.
+//   - Two-source allowlist: (1) the static set declared in zapp.config.ts
+//     `fs.allow`, (2) runtime session grants added via `fs_grant_path()`
+//     when the user picks a file via `Dialog.openFile`.
+//
+// What this layer does NOT handle: worker JS bindings. Those get added as
+// host objects in a follow-up alpha. For now FS is available in Zen-C
+// services and workers that call through the service layer.
+
+@cfg(apple)
+import "../platform/darwin/fs.h" as darwin_fs;
+
+import "stdio.h" as c;
+import "string.h" as str;
+import "stdlib.h";
+
+// --- Generated build config ---
+// Emitted by CLI to .zapp/zapp_fs_config.zc. Format: JSON array of raw
+// allowlist patterns (e.g. `["$userData","$temp","/Users/alice/Docs"]`).
+extern fn zapp_build_fs_allowlist_json() -> string;
+extern fn zapp_build_fs_persist_grants() -> bool;
+
+// --- Path resolution ---
+
+// Expand `$var/…` and `~/…` prefixes into absolute paths. Caller's input
+// buffer is untouched; the return value is a reusable static buffer valid
+// until the next call.
+raw {
+    static char fs_expand_buf[2048];
+}
+
+fn fs_expand_path(path: string) -> string {
+    let result: string = "";
+    raw {
+        const char* in = (const char*)path;
+        if (!in || in[0] == '\0') { fs_expand_buf[0] = '\0'; result = fs_expand_buf; goto fs_expand_done; }
+
+        // ~/… → $home/…
+        if (in[0] == '~' && (in[1] == '/' || in[1] == '\0')) {
+            #ifdef __APPLE__
+            extern const char* darwin_fs_path_var(const char* name);
+            const char* home = darwin_fs_path_var("home");
+            #else
+            const char* home = "";
+            #endif
+            if (!home || !home[0]) { fs_expand_buf[0] = '\0'; result = fs_expand_buf; goto fs_expand_done; }
+            snprintf(fs_expand_buf, sizeof(fs_expand_buf), "%s%s", home, in + 1);
+            result = fs_expand_buf;
+            goto fs_expand_done;
+        }
+
+        // $var/… → <resolved>/…
+        if (in[0] == '$') {
+            const char* slash = strchr(in + 1, '/');
+            char name[64] = {0};
+            size_t name_len = slash ? (size_t)(slash - (in + 1)) : strlen(in + 1);
+            if (name_len >= sizeof(name)) name_len = sizeof(name) - 1;
+            memcpy(name, in + 1, name_len);
+            name[name_len] = '\0';
+
+            #ifdef __APPLE__
+            extern const char* darwin_fs_path_var(const char* name);
+            const char* resolved = darwin_fs_path_var(name);
+            #else
+            const char* resolved = "";
+            #endif
+            if (!resolved || !resolved[0]) { fs_expand_buf[0] = '\0'; result = fs_expand_buf; goto fs_expand_done; }
+
+            if (slash) {
+                snprintf(fs_expand_buf, sizeof(fs_expand_buf), "%s%s", resolved, slash);
+            } else {
+                strncpy(fs_expand_buf, resolved, sizeof(fs_expand_buf) - 1);
+                fs_expand_buf[sizeof(fs_expand_buf) - 1] = '\0';
+            }
+            result = fs_expand_buf;
+            goto fs_expand_done;
+        }
+
+        // Absolute path — pass through. Relative paths are also copied but
+        // will fail the allowlist check since they don't match any
+        // allowlisted prefix.
+        strncpy(fs_expand_buf, in, sizeof(fs_expand_buf) - 1);
+        fs_expand_buf[sizeof(fs_expand_buf) - 1] = '\0';
+        result = fs_expand_buf;
+
+        fs_expand_done: ;
+    }
+    return result;
+}
+
+// --- Allowlist ---
+//
+// Two lists:
+//   fs_static_allowlist — parsed once from zapp.config.ts at startup
+//   fs_session_grants   — populated at runtime via fs_grant_path
+//
+// Each entry is stored as its *expanded* absolute form so check is a
+// prefix match. The raw JSON from the build config is re-parsed lazily
+// on first access.
+
+raw {
+    #define FS_MAX_ALLOW 64
+    static char fs_static_allowlist[FS_MAX_ALLOW][1024];
+    static int fs_static_count = -1;   // -1 = not yet initialized
+    static char fs_session_grants[FS_MAX_ALLOW][1024];
+    static int fs_session_count = 0;
+}
+
+fn fs_init_static_allowlist() -> void {
+    raw {
+        if (fs_static_count >= 0) return;
+        fs_static_count = 0;
+    }
+    let json = zapp_build_fs_allowlist_json();
+    raw {
+        const char* s = (const char*)json;
+        if (!s || !s[0]) return;
+        // Minimal JSON-array-of-strings parse — avoids pulling JsonValue
+        // for a build-time-generated constant. Accepts `["…","…"]`.
+        const char* p = s;
+        while (*p && *p != '[') p++;
+        if (*p == '[') p++;
+        while (*p) {
+            while (*p == ' ' || *p == ',' || *p == '\t' || *p == '\n') p++;
+            if (*p == ']' || *p == '\0') break;
+            if (*p != '"') break;
+            p++;
+            char raw_entry[1024];
+            size_t rlen = 0;
+            while (*p && *p != '"' && rlen + 1 < sizeof(raw_entry)) {
+                if (*p == '\\' && p[1]) { raw_entry[rlen++] = p[1]; p += 2; }
+                else raw_entry[rlen++] = *p++;
+            }
+            raw_entry[rlen] = '\0';
+            if (*p == '"') p++;
+            if (fs_static_count >= FS_MAX_ALLOW) break;
+        }
+    }
+    // Re-parse outside the raw block so we can call `fs_expand_path`
+    // between entries. The loop above captures raw entries; expand each
+    // here and store the resolved form so checks are plain prefix
+    // matches. (Two-pass avoids embedding fs_expand_path into a raw loop.)
+    let i: int = 0;
+    raw {
+        const char* s2 = (const char*)json;
+        if (!s2) goto fs_init_done;
+        const char* p2 = s2;
+        while (*p2 && *p2 != '[') p2++;
+        if (*p2 == '[') p2++;
+        while (*p2 && i < FS_MAX_ALLOW) {
+            while (*p2 == ' ' || *p2 == ',' || *p2 == '\t' || *p2 == '\n') p2++;
+            if (*p2 == ']' || *p2 == '\0') break;
+            if (*p2 != '"') break;
+            p2++;
+            char raw_entry[1024];
+            size_t rlen = 0;
+            while (*p2 && *p2 != '"' && rlen + 1 < sizeof(raw_entry)) {
+                if (*p2 == '\\' && p2[1]) { raw_entry[rlen++] = p2[1]; p2 += 2; }
+                else raw_entry[rlen++] = *p2++;
+            }
+            raw_entry[rlen] = '\0';
+            if (*p2 == '"') p2++;
+            // Call back out to Zen-C for expansion — reuses the same
+            // fs_expand_buf, so copy the result before the next call.
+            const char* expanded;
+            {
+                const char* e = fs_expand_path((const char*)raw_entry);
+                expanded = e;
+            }
+            if (expanded && expanded[0]) {
+                strncpy(fs_static_allowlist[i], expanded, sizeof(fs_static_allowlist[0]) - 1);
+                fs_static_allowlist[i][sizeof(fs_static_allowlist[0]) - 1] = '\0';
+                i++;
+            }
+        }
+        fs_init_done: ;
+        fs_static_count = i;
+    }
+}
+
+// Check whether `resolved` (already expanded) is under any allowlisted
+// prefix. Matches as a directory prefix: pattern "/a/b" allows "/a/b"
+// itself and anything under "/a/b/", but not "/a/bad".
+fn fs_is_allowed(resolved: string) -> bool {
+    fs_init_static_allowlist();
+    let ok: bool = false;
+    raw {
+        if (!resolved || !resolved[0]) return false;
+        // Reject traversal. Any ".." component is a hard fail so apps
+        // can't use "$userData/../.." to escape the sandbox.
+        if (strstr((const char*)resolved, "/../") != NULL) return false;
+        size_t rlen = strlen((const char*)resolved);
+        if (rlen >= 3 && strcmp((const char*)resolved + rlen - 3, "/..") == 0) return false;
+
+        for (int idx = 0; idx < fs_static_count; idx++) {
+            const char* pat = fs_static_allowlist[idx];
+            size_t plen = strlen(pat);
+            if (plen == 0) continue;
+            if (strncmp((const char*)resolved, pat, plen) == 0) {
+                // Exact match OR next char is '/' (prefix at dir boundary)
+                if (rlen == plen || resolved[plen] == '/') { ok = true; break; }
+            }
+        }
+        if (!ok) {
+            for (int idx = 0; idx < fs_session_count; idx++) {
+                const char* pat = fs_session_grants[idx];
+                size_t plen = strlen(pat);
+                if (plen == 0) continue;
+                if (strncmp((const char*)resolved, pat, plen) == 0) {
+                    if (rlen == plen || resolved[plen] == '/') { ok = true; break; }
+                }
+            }
+        }
+    }
+    return ok;
+}
+
+// Add a path to the session allowlist. Called by Dialog.openFile /
+// openDirectory after the user grants a path. No-op if the path is
+// already covered by an existing entry.
+fn fs_grant_path(path: string) -> void {
+    let expanded = fs_expand_path(path);
+    raw {
+        if (!expanded || !expanded[0]) return;
+        if (fs_session_count >= FS_MAX_ALLOW) return;
+        // Skip duplicates
+        for (int idx = 0; idx < fs_session_count; idx++) {
+            if (strcmp(fs_session_grants[idx], (const char*)expanded) == 0) return;
+        }
+        strncpy(fs_session_grants[fs_session_count], (const char*)expanded,
+                sizeof(fs_session_grants[0]) - 1);
+        fs_session_grants[fs_session_count][sizeof(fs_session_grants[0]) - 1] = '\0';
+        fs_session_count++;
+    }
+}
+
+// --- Platform trampolines ---
+
+@cfg(apple)
+fn fs_read_file_native(path: string) -> string {
+    let result: string = "";
+    raw {
+        char* buf = darwin_fs_read_file((const char*)path);
+        if (buf) {
+            // The C buffer is heap; hand ownership to a static slot
+            // so Zen-C callers get a stable pointer for the duration of
+            // the call. Free on the next invocation.
+            static char* fs_last_read = NULL;
+            if (fs_last_read) free(fs_last_read);
+            fs_last_read = buf;
+            result = buf;
+        }
+    }
+    return result;
+}
+
+@cfg(apple)
+fn fs_write_file_native(path: string, data: string) -> bool {
+    let ok: bool = false;
+    raw {
+        ok = darwin_fs_write_file((const char*)path, (const char*)data);
+    }
+    return ok;
+}
+
+@cfg(apple)
+fn fs_append_file_native(path: string, data: string) -> bool {
+    let ok: bool = false;
+    raw {
+        ok = darwin_fs_append_file((const char*)path, (const char*)data);
+    }
+    return ok;
+}
+
+@cfg(apple)
+fn fs_exists_native(path: string) -> bool {
+    let ok: bool = false;
+    raw {
+        ok = darwin_fs_exists((const char*)path);
+    }
+    return ok;
+}
+
+@cfg(apple)
+fn fs_read_dir_native(path: string) -> string {
+    let result: string = "";
+    raw {
+        char* json = darwin_fs_read_dir((const char*)path);
+        if (json) {
+            static char* fs_last_readdir = NULL;
+            if (fs_last_readdir) free(fs_last_readdir);
+            fs_last_readdir = json;
+            result = json;
+        }
+    }
+    return result;
+}
+
+@cfg(apple)
+fn fs_mkdir_native(path: string, recursive: bool) -> bool {
+    let ok: bool = false;
+    raw {
+        ok = darwin_fs_mkdir((const char*)path, recursive);
+    }
+    return ok;
+}
+
+@cfg(apple)
+fn fs_remove_native(path: string) -> bool {
+    let ok: bool = false;
+    raw {
+        ok = darwin_fs_remove((const char*)path);
+    }
+    return ok;
+}
+
+@cfg(apple)
+fn fs_rmdir_native(path: string, recursive: bool) -> bool {
+    let ok: bool = false;
+    raw {
+        ok = darwin_fs_rmdir((const char*)path, recursive);
+    }
+    return ok;
+}
+
+@cfg(apple)
+fn fs_rename_native(from: string, to: string) -> bool {
+    let ok: bool = false;
+    raw {
+        ok = darwin_fs_rename((const char*)from, (const char*)to);
+    }
+    return ok;
+}
+
+@cfg(apple)
+fn fs_copy_native(from: string, to: string) -> bool {
+    let ok: bool = false;
+    raw {
+        ok = darwin_fs_copy((const char*)from, (const char*)to);
+    }
+    return ok;
+}
+
+// Windows stubs — return false until the Windows native layer catches up.
+@cfg(windows)
+fn fs_read_file_native(path: string) -> string { return ""; }
+@cfg(windows)
+fn fs_write_file_native(path: string, data: string) -> bool { return false; }
+@cfg(windows)
+fn fs_append_file_native(path: string, data: string) -> bool { return false; }
+@cfg(windows)
+fn fs_exists_native(path: string) -> bool { return false; }
+@cfg(windows)
+fn fs_read_dir_native(path: string) -> string { return ""; }
+@cfg(windows)
+fn fs_mkdir_native(path: string, recursive: bool) -> bool { return false; }
+@cfg(windows)
+fn fs_remove_native(path: string) -> bool { return false; }
+@cfg(windows)
+fn fs_rmdir_native(path: string, recursive: bool) -> bool { return false; }
+@cfg(windows)
+fn fs_rename_native(from: string, to: string) -> bool { return false; }
+@cfg(windows)
+fn fs_copy_native(from: string, to: string) -> bool { return false; }
+
+// --- Public API ---
+//
+// All entry points expand the path, enforce the allowlist, then delegate
+// to the platform trampoline. Returning "" / false on denial keeps the
+// signature simple; callers that want distinct "denied" vs "not found"
+// errors should layer that on top.
+
+fn fs_read_file(path: string) -> string {
+    let abs = fs_expand_path(path);
+    if !fs_is_allowed(abs) { return ""; }
+    return fs_read_file_native(abs);
+}
+
+fn fs_write_file(path: string, data: string) -> bool {
+    let abs = fs_expand_path(path);
+    if !fs_is_allowed(abs) { return false; }
+    return fs_write_file_native(abs, data);
+}
+
+fn fs_append_file(path: string, data: string) -> bool {
+    let abs = fs_expand_path(path);
+    if !fs_is_allowed(abs) { return false; }
+    return fs_append_file_native(abs, data);
+}
+
+fn fs_exists(path: string) -> bool {
+    let abs = fs_expand_path(path);
+    if !fs_is_allowed(abs) { return false; }
+    return fs_exists_native(abs);
+}
+
+fn fs_read_dir(path: string) -> string {
+    let abs = fs_expand_path(path);
+    if !fs_is_allowed(abs) { return ""; }
+    return fs_read_dir_native(abs);
+}
+
+fn fs_mkdir(path: string, recursive: bool) -> bool {
+    let abs = fs_expand_path(path);
+    if !fs_is_allowed(abs) { return false; }
+    return fs_mkdir_native(abs, recursive);
+}
+
+fn fs_remove(path: string) -> bool {
+    let abs = fs_expand_path(path);
+    if !fs_is_allowed(abs) { return false; }
+    return fs_remove_native(abs);
+}
+
+fn fs_rmdir(path: string, recursive: bool) -> bool {
+    let abs = fs_expand_path(path);
+    if !fs_is_allowed(abs) { return false; }
+    return fs_rmdir_native(abs, recursive);
+}
+
+// rename/copy check both source and destination.
+fn fs_rename(from: string, to: string) -> bool {
+    let abs_from = fs_expand_path(from);
+    raw {
+        // Copy to a local scratch buffer so the next fs_expand_path call
+        // doesn't clobber fs_expand_buf before we resolve `to`.
+        static char from_local[2048];
+        strncpy(from_local, (const char*)abs_from, sizeof(from_local) - 1);
+        from_local[sizeof(from_local) - 1] = '\0';
+        abs_from = from_local;
+    }
+    let abs_to = fs_expand_path(to);
+    if !fs_is_allowed(abs_from) { return false; }
+    if !fs_is_allowed(abs_to) { return false; }
+    return fs_rename_native(abs_from, abs_to);
+}
+
+fn fs_copy(from: string, to: string) -> bool {
+    let abs_from = fs_expand_path(from);
+    raw {
+        static char from_local[2048];
+        strncpy(from_local, (const char*)abs_from, sizeof(from_local) - 1);
+        from_local[sizeof(from_local) - 1] = '\0';
+        abs_from = from_local;
+    }
+    let abs_to = fs_expand_path(to);
+    if !fs_is_allowed(abs_from) { return false; }
+    if !fs_is_allowed(abs_to) { return false; }
+    return fs_copy_native(abs_from, abs_to);
+}
+
+// --- Manager (for App.fs namespacing) ---
+
+struct FsManager {}
+
+impl FsManager {
+    fn new() -> Self { return FsManager{}; }
+    fn read_file(self, path: string) -> string { return fs_read_file(path); }
+    fn write_file(self, path: string, data: string) -> bool { return fs_write_file(path, data); }
+    fn append_file(self, path: string, data: string) -> bool { return fs_append_file(path, data); }
+    fn exists(self, path: string) -> bool { return fs_exists(path); }
+    fn read_dir(self, path: string) -> string { return fs_read_dir(path); }
+    fn mkdir(self, path: string, recursive: bool) -> bool { return fs_mkdir(path, recursive); }
+    fn remove(self, path: string) -> bool { return fs_remove(path); }
+    fn rmdir(self, path: string, recursive: bool) -> bool { return fs_rmdir(path, recursive); }
+    fn rename(self, from: string, to: string) -> bool { return fs_rename(from, to); }
+    fn copy(self, from: string, to: string) -> bool { return fs_copy(from, to); }
+    fn grant(self, path: string) -> void { fs_grant_path(path); }
+    fn expand(self, path: string) -> string { return fs_expand_path(path); }
+}

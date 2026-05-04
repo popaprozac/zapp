@@ -14,6 +14,23 @@ enum TitleBarStyle {
     HiddenInset,
 }
 
+// Per-button state for the macOS traffic lights (close/minimize/zoom).
+// - Enabled: default, clickable.
+// - Disabled: greyed out but still drawn (user sees the button as unavailable).
+// - Hidden: button not drawn at all (leaves a gap — pair with a custom
+//   titlebar if you want a clean look).
+enum ButtonState {
+    Enabled,
+    Disabled,
+    Hidden,
+}
+
+struct TrafficLights {
+    close: ButtonState;
+    minimize: ButtonState;
+    zoom: ButtonState;
+}
+
 struct WindowOptions {
     title: string;
     url: string;   // Override initial URL (empty = use default)
@@ -32,8 +49,24 @@ struct WindowOptions {
     hidden: bool;
     alwaysOnTop: bool;
     titleBarStyle: TitleBarStyle;
+    trafficLights: TrafficLights;
     webContentInspectable: int; // -1 = inherit, 0 = off, 1 = on
     acceptFirstMouse: bool;     // macOS: click unfocused window also activates a control
+    // -1 = not a sheet. Otherwise the numeric ID of the parent window
+    // this should be attached to as a sheet immediately after creation.
+    // Setting this also forces visible=false so the modal never flashes
+    // as a free-floating window before beginSheet wraps it.
+    asSheetOfId: int;
+    // Center on the active screen at create time. Overrides x/y if both
+    // are set. With frameAutosaveName, the saved frame still wins on
+    // restore — autoCenter is the first-launch fallback.
+    autoCenter: bool;
+    // Empty = no autosave. Otherwise calls NSWindow setFrameAutosaveName:
+    // which persists frame (position + size) to NSUserDefaults under this
+    // name and restores it on subsequent launches. AppKit handles the
+    // round-trip; the framework just exposes the knob.
+    frameAutosaveName: string;
+    _frameAutosaveName_heap: bool;
 
     // Ownership flags for the two string fields. `window_opts_apply_json`
     // strdups values it pulls from a JsonValue tree and sets the flag;
@@ -90,8 +123,17 @@ impl WindowOptions {
             hidden: false,
             alwaysOnTop: false,
             titleBarStyle: TitleBarStyle::Default(),
+            trafficLights: TrafficLights{
+                close: ButtonState::Enabled(),
+                minimize: ButtonState::Enabled(),
+                zoom: ButtonState::Enabled(),
+            },
             webContentInspectable: -1,
             acceptFirstMouse: true,
+            asSheetOfId: -1,
+            autoCenter: false,
+            frameAutosaveName: "",
+            _frameAutosaveName_heap: false,
             _title_heap: false,
             _url_heap: false,
         };
@@ -120,6 +162,34 @@ fn wopts_hidden(opts: WindowOptions*) -> bool { return opts.hidden; }
 fn wopts_always_on_top(opts: WindowOptions*) -> bool { return opts.alwaysOnTop; }
 fn wopts_inspectable(opts: WindowOptions*) -> int { return opts.webContentInspectable; }
 fn wopts_accept_first_mouse(opts: WindowOptions*) -> bool { return opts.acceptFirstMouse; }
+fn wopts_auto_center(opts: WindowOptions*) -> bool { return opts.autoCenter; }
+fn wopts_frame_autosave_name(opts: WindowOptions*) -> string { return opts.frameAutosaveName; }
+
+// Traffic light state tags (0=Enabled, 1=Disabled, 2=Hidden).
+fn wopts_traffic_light_close_tag(opts: WindowOptions*) -> int {
+    match opts.trafficLights.close {
+        ButtonState::Enabled => { return 0; },
+        ButtonState::Disabled => { return 1; },
+        ButtonState::Hidden => { return 2; },
+    }
+    return 0;
+}
+fn wopts_traffic_light_minimize_tag(opts: WindowOptions*) -> int {
+    match opts.trafficLights.minimize {
+        ButtonState::Enabled => { return 0; },
+        ButtonState::Disabled => { return 1; },
+        ButtonState::Hidden => { return 2; },
+    }
+    return 0;
+}
+fn wopts_traffic_light_zoom_tag(opts: WindowOptions*) -> int {
+    match opts.trafficLights.zoom {
+        ButtonState::Enabled => { return 0; },
+        ButtonState::Disabled => { return 1; },
+        ButtonState::Hidden => { return 2; },
+    }
+    return 0;
+}
 
 // Apply JS-side WindowOptions (parsed into a JsonValue) onto a native
 // WindowOptions struct. Used by both the webview path (router.zc's
@@ -169,12 +239,27 @@ fn window_opts_apply_json(opts: WindowOptions*, args: JsonValue*) -> void {
     if visible_opt.is_some() { opts.visible = visible_opt.unwrap(); }
     let resizable_opt = args.get_bool("resizable");
     if resizable_opt.is_some() { opts.resizable = resizable_opt.unwrap(); }
+    // Legacy closable/minimizable/maximizable booleans are sugar for the
+    // corresponding trafficLights.*.Disabled state. An explicit
+    // trafficLights object (parsed after this block) overrides these.
     let closable_opt = args.get_bool("closable");
-    if closable_opt.is_some() { opts.closable = closable_opt.unwrap(); }
+    if closable_opt.is_some() {
+        let cb = closable_opt.unwrap();
+        opts.closable = cb;
+        if !cb { opts.trafficLights.close = ButtonState::Disabled(); }
+    }
     let minimizable_opt = args.get_bool("minimizable");
-    if minimizable_opt.is_some() { opts.minimizable = minimizable_opt.unwrap(); }
+    if minimizable_opt.is_some() {
+        let mb = minimizable_opt.unwrap();
+        opts.minimizable = mb;
+        if !mb { opts.trafficLights.minimize = ButtonState::Disabled(); }
+    }
     let maximizable_opt = args.get_bool("maximizable");
-    if maximizable_opt.is_some() { opts.maximizable = maximizable_opt.unwrap(); }
+    if maximizable_opt.is_some() {
+        let xb = maximizable_opt.unwrap();
+        opts.maximizable = xb;
+        if !xb { opts.trafficLights.zoom = ButtonState::Disabled(); }
+    }
     let fullscreen_opt = args.get_bool("fullscreen");
     if fullscreen_opt.is_some() { opts.fullscreen = fullscreen_opt.unwrap(); }
     let borderless_opt = args.get_bool("borderless");
@@ -187,6 +272,44 @@ fn window_opts_apply_json(opts: WindowOptions*, args: JsonValue*) -> void {
     if aot_opt.is_some() { opts.alwaysOnTop = aot_opt.unwrap(); }
     let afm_opt = args.get_bool("acceptFirstMouse");
     if afm_opt.is_some() { opts.acceptFirstMouse = afm_opt.unwrap(); }
+
+    let ac_opt = args.get_bool("autoCenter");
+    if ac_opt.is_some() { opts.autoCenter = ac_opt.unwrap(); }
+
+    let fas_opt = args.get_string("frameAutosaveName");
+    if fas_opt.is_some() {
+        let src = fas_opt.unwrap();
+        raw {
+            if (opts->_frameAutosaveName_heap && opts->frameAutosaveName) free((void*)opts->frameAutosaveName);
+            opts->frameAutosaveName = strdup((const char*)src);
+            opts->_frameAutosaveName_heap = 1;
+        }
+    }
+
+    // asSheetOf: accept either a number (raw numeric ID) or a string
+    // window ID. JS-visible window IDs are pointer-based ("win-0xPTR"),
+    // not numeric, so the string path is the common one and resolves via
+    // darwin_window_numeric_id_for_string. WindowManager::create then
+    // attaches as a sheet atomically and forces visible=false to suppress
+    // the flash.
+    let aso_int = args.get_int("asSheetOf");
+    if aso_int.is_some() {
+        opts.asSheetOfId = aso_int.unwrap();
+    } else {
+        let aso_str = args.get_string("asSheetOf");
+        if aso_str.is_some() {
+            let s: string = aso_str.unwrap();
+            raw {
+                #ifdef __APPLE__
+                extern int32_t darwin_window_numeric_id_for_string(const char* wid);
+                int32_t found = darwin_window_numeric_id_for_string((const char*)s);
+                if (found >= 0) {
+                    opts->asSheetOfId = (int)found;
+                }
+                #endif
+            }
+        }
+    }
 
     // titleBarStyle is a string enum on the JS side
     // ("default" | "hidden" | "hiddenInset") mapped into the native
@@ -211,6 +334,49 @@ fn window_opts_apply_json(opts: WindowOptions*, args: JsonValue*) -> void {
             opts.titleBarStyle = TitleBarStyle::Default();
         }
     }
+
+    // trafficLights: { close?, minimize?, zoom? } where each is
+    // "enabled" | "disabled" | "hidden". Parsed after the legacy booleans
+    // so an explicit object always wins. Fields omitted from the object
+    // keep whatever state was already set (default Enabled, or Disabled
+    // from a legacy boolean above).
+    let tl_opt = args.get_object("trafficLights");
+    if tl_opt.is_some() {
+        let tl = tl_opt.unwrap();
+        let close_opt = tl.get_string("close");
+        if close_opt.is_some() {
+            let cs: string = close_opt.unwrap();
+            if cs == "hidden" {
+                opts.trafficLights.close = ButtonState::Hidden();
+            } else if cs == "disabled" {
+                opts.trafficLights.close = ButtonState::Disabled();
+            } else {
+                opts.trafficLights.close = ButtonState::Enabled();
+            }
+        }
+        let min_opt = tl.get_string("minimize");
+        if min_opt.is_some() {
+            let ms: string = min_opt.unwrap();
+            if ms == "hidden" {
+                opts.trafficLights.minimize = ButtonState::Hidden();
+            } else if ms == "disabled" {
+                opts.trafficLights.minimize = ButtonState::Disabled();
+            } else {
+                opts.trafficLights.minimize = ButtonState::Enabled();
+            }
+        }
+        let zoom_opt = tl.get_string("zoom");
+        if zoom_opt.is_some() {
+            let zs: string = zoom_opt.unwrap();
+            if zs == "hidden" {
+                opts.trafficLights.zoom = ButtonState::Hidden();
+            } else if zs == "disabled" {
+                opts.trafficLights.zoom = ButtonState::Disabled();
+            } else {
+                opts.trafficLights.zoom = ButtonState::Enabled();
+            }
+        }
+    }
 }
 
 // Free any heap-allocated strings that `window_opts_apply_json` strdup'd
@@ -230,6 +396,11 @@ fn window_opts_free(opts: WindowOptions*) -> void {
             free((void*)opts->url);
             opts->url = "";
             opts->_url_heap = 0;
+        }
+        if (opts->_frameAutosaveName_heap && opts->frameAutosaveName) {
+            free((void*)opts->frameAutosaveName);
+            opts->frameAutosaveName = "";
+            opts->_frameAutosaveName_heap = 0;
         }
     }
 }
@@ -326,6 +497,29 @@ impl Window {
     fn load_url(self, url: string) -> void {
         window_load_url(self.id, url);
     }
+
+    // Attach `modal` as a sheet on `self`. Modal is shown anchored to the
+    // parent's titlebar and blocks interaction with the parent (but not
+    // the rest of the app) until dismissed.
+    //
+    // Compatible WindowOptions on the modal: title, url, width, height,
+    // transparent, webContentInspectable. Position/fullscreen/borderless/
+    // titleBarStyle/trafficLights/alwaysOnTop are ignored — sheets are
+    // chrome-less and anchored to the parent.
+    //
+    // Dismiss either by closing the modal (window button, modal.close(),
+    // or modal.destroy()) or explicitly with parent.detach_modal(modal).
+    fn attach_modal(self, modal: Window) -> void {
+        if self.handle == NULL || modal.handle == NULL { return; }
+        window_attach_modal(self.handle, modal.handle);
+    }
+
+    // Dismiss a previously-attached modal sheet without closing the modal
+    // window itself. Use `modal.close()` if you also want the modal gone.
+    fn detach_modal(self, modal: Window) -> void {
+        if self.handle == NULL || modal.handle == NULL { return; }
+        window_detach_modal(self.handle, modal.handle);
+    }
 }
 
 // --- Window Manager ---
@@ -357,6 +551,13 @@ impl WindowManager {
                 options.webContentInspectable = 0;
             }
         }
+        // asSheetOf forces visible=false so the modal never appears as a
+        // free-floating window before beginSheet wraps it. This eliminates
+        // the visible-flash race that callers otherwise have to dodge by
+        // remembering visible:false manually.
+        if options.asSheetOfId >= 0 {
+            options.visible = false;
+        }
         let handle = window_create(options);
         let key: char[32];
         c::snprintf(key, 32, "win-%d", self.next_id);
@@ -364,7 +565,18 @@ impl WindowManager {
         let id = self.next_id;
         window_register_numeric_id(handle, id);
         self.next_id += 1;
-        return Window{ id: id, handle: handle };
+        let new_window = Window{ id: id, handle: handle };
+
+        // Atomic create+attach. The parent must already exist in the
+        // manager — if it doesn't, the modal is created but free-floating
+        // (caller can still `parent.attach_modal(modal)` later).
+        if options.asSheetOfId >= 0 {
+            let parent = self.get(options.asSheetOfId);
+            if parent.is_valid() {
+                parent.attach_modal(new_window);
+            }
+        }
+        return new_window;
     }
 
     fn get(self, id: int) -> Window {
@@ -442,6 +654,11 @@ fn window_get_position(handle: void*) -> WindowPosition {
 @cfg(apple)
 fn window_load_url(id: int, url: string) -> void { darwin_webview::darwin_window_load_url(id, url); }
 
+@cfg(apple)
+fn window_attach_modal(parent: void*, modal: void*) -> void { darwin_win::darwin_window_attach_modal(parent, modal); }
+@cfg(apple)
+fn window_detach_modal(parent: void*, modal: void*) -> void { darwin_win::darwin_window_detach_modal(parent, modal); }
+
 @cfg(windows)
 import "../platform/windows/window.h" as win_window;
 
@@ -471,6 +688,11 @@ fn window_set_position(handle: void*, x: int, y: int) -> void { win_window::wind
 fn window_set_fullscreen(handle: void*, on: bool) -> void { win_window::windows_window_set_fullscreen(handle, on); }
 @cfg(windows)
 fn window_set_always_on_top(handle: void*, on: bool) -> void { win_window::windows_window_set_always_on_top(handle, on); }
+
+@cfg(windows)
+fn window_attach_modal(parent: void*, modal: void*) -> void { win_window::windows_window_attach_modal(parent, modal); }
+@cfg(windows)
+fn window_detach_modal(parent: void*, modal: void*) -> void { win_window::windows_window_detach_modal(parent, modal); }
 
 @cfg(windows)
 fn window_get_size(handle: void*) -> WindowSize {

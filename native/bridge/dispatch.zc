@@ -1,6 +1,14 @@
 // Bridge dispatch — sends responses from native back to JS.
 // Uses targeted WebView eval (O(1) by window numeric ID).
 // Checks cancellation before dispatching.
+//
+// All payloads (event data, invoke results) are escaped + framed into
+// JS source on the heap, no fixed-size stack buffers. The previous
+// implementation used 3072-byte stack buffers in zapp_escape_into and a
+// 4096-byte zapp_response_buf, which silently truncated worker→webview
+// events and webview→worker broadcasts above ~3 KB — symptoms in the
+// receiver looked like missing fields on the deserialized payload
+// (chat history > ~7 messages, avatar data URLs > ~3 KB, etc.).
 
 import "./protocol.zc";
 
@@ -14,15 +22,22 @@ import "../platform/windows/window.h" as win_window;
 @cfg(windows)
 import "../platform/windows/webview.h" as win_webview;
 
-// Reusable buffer for response JS — avoids allocation per response.
 raw {
-    static char zapp_response_buf[4096];
-
-    // Single-pass JS string escape into buffer. Returns length written.
-    static int zapp_escape_into(char* dst, int dst_size, const char* src) {
-        if (!src) { dst[0] = '\0'; return 0; }
-        int j = 0;
-        for (int i = 0; src[i] && j < dst_size - 2; i++) {
+    // Heap-allocating JS string escape. Returns malloc'd buffer (caller
+    // frees). Worst case: every char doubles → 2x source length plus
+    // terminator. Returns an empty heap buffer for NULL input so callers
+    // never have to special-case it.
+    static char* zapp_escape_dup(const char* src) {
+        if (!src) {
+            char* e = (char*)malloc(1);
+            if (e) e[0] = '\0';
+            return e;
+        }
+        size_t n = strlen(src);
+        char* dst = (char*)malloc(n * 2 + 1);
+        if (!dst) return NULL;
+        size_t j = 0;
+        for (size_t i = 0; i < n; i++) {
             switch (src[i]) {
                 case '\\': dst[j++] = '\\'; dst[j++] = '\\'; break;
                 case '\'': dst[j++] = '\\'; dst[j++] = '\''; break;
@@ -32,30 +47,8 @@ raw {
             }
         }
         dst[j] = '\0';
-        return j;
+        return dst;
     }
-}
-
-// Platform dispatch — eval JS on a specific window by numeric ID
-@cfg(apple)
-fn platform_eval_js(window_id: int, js: string) -> void {
-    darwin_win::darwin_window_eval_js(window_id, js);
-}
-
-// Platform dispatch — eval JS on all windows
-@cfg(apple)
-fn platform_eval_js_all(js: string) -> void {
-    darwin_webview::darwin_webview_eval_all(js);
-}
-
-@cfg(windows)
-fn platform_eval_js(window_id: int, js: string) -> void {
-    win_window::windows_window_eval_js(window_id, js);
-}
-
-@cfg(windows)
-fn platform_eval_js_all(js: string) -> void {
-    win_webview::windows_webview_eval_all(js);
 }
 
 // Send invoke response to a specific window's WebView.
@@ -70,56 +63,76 @@ fn dispatch_invoke_response(window_id: int, request_id: int, ok: bool, payload: 
     }
     if cancelled { return; }
 
-    // Build response JS into reusable buffer
     raw {
-        char escaped[3072];
-        zapp_escape_into(escaped, sizeof(escaped), (const char*)payload);
-
-        snprintf(zapp_response_buf, sizeof(zapp_response_buf),
+        char* esc = zapp_escape_dup((const char*)payload);
+        if (!esc) return;
+        const char* tmpl =
             "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
             "if(b&&typeof b._onInvokeResult==='function'){"
-            "b._onInvokeResult(%d,%s,'%s');}})();",
-            request_id,
-            ok ? "true" : "false",
-            escaped);
-    }
+            "b._onInvokeResult(%d,%s,'%s');}})();";
+        int needed = snprintf(NULL, 0, tmpl,
+            (int)request_id, ok ? "true" : "false", esc);
+        if (needed < 0) { free(esc); return; }
+        char* js = (char*)malloc((size_t)needed + 1);
+        if (!js) { free(esc); return; }
+        snprintf(js, (size_t)needed + 1, tmpl,
+            (int)request_id, ok ? "true" : "false", esc);
+        free(esc);
 
-    let js: string = "";
-    raw { js = zapp_response_buf; }
-    platform_eval_js(window_id, js);
+        // The platform eval primitives copy `js` synchronously (NSString
+        // for JSC contexts, strdup-into-msgqueue for txiki), so freeing
+        // immediately after the call is safe.
+        #ifdef __APPLE__
+        extern void darwin_window_eval_js(int32_t window_id, const char* js);
+        darwin_window_eval_js((int32_t)window_id, js);
+        #else
+        extern void windows_window_eval_js(int32_t window_id, const char* js);
+        windows_window_eval_js((int32_t)window_id, js);
+        #endif
+        free(js);
+    }
 }
 
-// Send event to all windows.
+// Send event to all windows (and broadcast to all workers).
 fn dispatch_event_to_all(event_name: string, payload: string) -> void {
     raw {
-        char escaped_payload[3072];
-        zapp_escape_into(escaped_payload, sizeof(escaped_payload), (const char*)payload);
+        char* esc_name = zapp_escape_dup((const char*)event_name);
+        if (!esc_name) return;
+        char* esc_payload = zapp_escape_dup((const char*)payload);
+        if (!esc_payload) { free(esc_name); return; }
 
-        char escaped_name[256];
-        zapp_escape_into(escaped_name, sizeof(escaped_name), (const char*)event_name);
-
-        snprintf(zapp_response_buf, sizeof(zapp_response_buf),
+        const char* tmpl =
             "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
             "if(b&&typeof b._onEvent==='function'){"
-            "b._onEvent('%s','%s');}})();",
-            escaped_name, escaped_payload);
-    }
+            "b._onEvent('%s','%s');}})();";
+        int needed = snprintf(NULL, 0, tmpl, esc_name, esc_payload);
+        if (needed < 0) { free(esc_name); free(esc_payload); return; }
+        char* js = (char*)malloc((size_t)needed + 1);
+        if (!js) { free(esc_name); free(esc_payload); return; }
+        snprintf(js, (size_t)needed + 1, tmpl, esc_name, esc_payload);
+        free(esc_name);
+        free(esc_payload);
 
-    let js: string = "";
-    raw { js = zapp_response_buf; }
-    platform_eval_js_all(js);
+        // Webviews
+        #ifdef __APPLE__
+        extern void darwin_webview_eval_all(const char* js);
+        darwin_webview_eval_all(js);
+        #else
+        extern void windows_webview_eval_all(const char* js);
+        windows_webview_eval_all(js);
+        #endif
 
-    // Broadcast to every active worker (headless + webview-owned). Same JS
-    // snippet works in worker contexts because bootstrap/worker.ts exposes
-    // bridge._onEvent under the same Symbol.for("zapp.bridge") key.
-    raw {
+        // Workers — txiki and JSC each strdup/copy on push, so free
+        // after both calls return.
         #if defined(ZAPP_WORKER_ENGINE_TXIKI)
         extern void txiki_broadcast_eval_js(const char* js);
-        txiki_broadcast_eval_js(zapp_response_buf);
+        txiki_broadcast_eval_js(js);
         #endif
         #if defined(ZAPP_WORKER_ENGINE_JSC)
         extern void jsc_broadcast_eval_js(const char* js);
-        jsc_broadcast_eval_js(zapp_response_buf);
+        jsc_broadcast_eval_js(js);
         #endif
+
+        free(js);
     }
 }

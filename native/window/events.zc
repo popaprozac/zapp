@@ -18,6 +18,7 @@ struct WindowEvents {
     RESTORE: int;
     FULLSCREEN: int;
     UNFULLSCREEN: int;
+    MODAL_DISMISSED: int;
 }
 
 def WindowEvent = WindowEvents{
@@ -32,6 +33,7 @@ def WindowEvent = WindowEvents{
     RESTORE: 8,
     FULLSCREEN: 9,
     UNFULLSCREEN: 10,
+    MODAL_DISMISSED: 11,
 };
 
 struct AppEvents {
@@ -43,6 +45,7 @@ struct AppEvents {
     OPEN_URL: int;
     DID_BECOME_ACTIVE: int;
     DID_RESIGN_ACTIVE: int;
+    THEME_CHANGED: int;
 }
 
 def AppEvent = AppEvents{
@@ -54,6 +57,7 @@ def AppEvent = AppEvents{
     OPEN_URL: 105,
     DID_BECOME_ACTIVE: 106,
     DID_RESIGN_ACTIVE: 107,
+    THEME_CHANGED: 108,
 };
 
 // EventResult uses a real enum — user-facing, benefits from type safety
@@ -76,6 +80,7 @@ raw {
     #define ZAPP_EVENT_WINDOW_RESTORE     8
     #define ZAPP_EVENT_WINDOW_FULLSCREEN  9
     #define ZAPP_EVENT_WINDOW_UNFULLSCREEN 10
+    #define ZAPP_EVENT_WINDOW_MODAL_DISMISSED 11
 
     #define ZAPP_EVENT_APP_STARTED             100
     #define ZAPP_EVENT_APP_SHUTDOWN            101
@@ -85,6 +90,7 @@ raw {
     #define ZAPP_EVENT_APP_OPEN_URL           105
     #define ZAPP_EVENT_APP_DID_BECOME_ACTIVE  106
     #define ZAPP_EVENT_APP_DID_RESIGN_ACTIVE  107
+    #define ZAPP_EVENT_APP_THEME_CHANGED       108
 
-    #define ZAPP_MAX_WINDOW_EVENT_TYPES  11
+    #define ZAPP_MAX_WINDOW_EVENT_TYPES  12
 }

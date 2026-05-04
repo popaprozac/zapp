@@ -95,9 +95,16 @@ export async function createDevBundle(root: string, binaryPath: string, config: 
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSSupportsAutomaticGraphicsSwitching</key>
-    <true/>${iconPlistEntry}${buildDeepLinkPlist(config)}
+    <true/>${iconPlistEntry}${buildDeepLinkPlist(config)}${buildSingleInstancePlist(config)}
 </dict>
 </plist>`;
+
+  function buildSingleInstancePlist(cfg: ResolvedConfig): string {
+    if (!cfg.singleInstance) return "";
+    return `
+    <key>LSMultipleInstancesProhibited</key>
+    <true/>`;
+  }
 
   function buildDeepLinkPlist(cfg: ResolvedConfig): string {
     const schemes = cfg.deepLinkSchemes;

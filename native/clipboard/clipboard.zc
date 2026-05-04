@@ -1,0 +1,127 @@
+// Clipboard — Zen-C namespace mirroring the runtime/clipboard.ts
+// `Clipboard.*` API. Wraps NSPasteboard via the platform shim in
+// `native/platform/darwin/clipboard.m`. Per the native-first rule
+// (see feedback_native_first_implementation memory), services and
+// native code should call these methods directly rather than going
+// through the JS bridge.
+//
+// Image bytes are intentionally absent from the Zen-C surface —
+// services that handle images typically work with file paths via the
+// FS module + Dialog grants. JS code gets `Clipboard.readImage()` for
+// the in-memory PNG case.
+
+@cfg(apple)
+import "../platform/darwin/clipboard.h" as darwin_cb;
+
+import "stdlib.h";
+
+struct Clipboard {}
+
+impl Clipboard {
+    // --- Text ---
+
+    // Read clipboard text. Empty string when no text is present (matches
+    // the JS API's empty-string-on-absent contract).
+    @cfg(apple)
+    fn read_text() -> string {
+        let result: string = "";
+        raw {
+            char* buf = darwin_clipboard_read_text();
+            if (buf) {
+                static char* cb_last_text = NULL;
+                if (cb_last_text) free(cb_last_text);
+                cb_last_text = buf;
+                result = buf;
+            }
+        }
+        return result;
+    }
+
+    @cfg(apple)
+    fn write_text(text: string) -> bool {
+        let ok: bool = false;
+        raw {
+            ok = darwin_clipboard_write_text((const char*)text);
+        }
+        return ok;
+    }
+
+    // --- HTML ---
+
+    @cfg(apple)
+    fn read_html() -> string {
+        let result: string = "";
+        raw {
+            char* buf = darwin_clipboard_read_html();
+            if (buf) {
+                static char* cb_last_html = NULL;
+                if (cb_last_html) free(cb_last_html);
+                cb_last_html = buf;
+                result = buf;
+            }
+        }
+        return result;
+    }
+
+    @cfg(apple)
+    fn write_html(html: string) -> bool {
+        let ok: bool = false;
+        raw {
+            ok = darwin_clipboard_write_html((const char*)html);
+        }
+        return ok;
+    }
+
+    // --- Files ---
+    // Returns a JSON array of absolute path strings (`["/a", "/b"]`),
+    // or `"[]"` when none. Services that want a structured array can
+    // re-parse via `JsonValue::parse(result)`.
+    @cfg(apple)
+    fn read_files() -> string {
+        let result: string = "[]";
+        raw {
+            char* buf = darwin_clipboard_read_files();
+            if (buf) {
+                static char* cb_last_files = NULL;
+                if (cb_last_files) free(cb_last_files);
+                cb_last_files = buf;
+                result = buf;
+            }
+        }
+        return result;
+    }
+
+    // --- Format presence + clear ---
+    // fmt: "text" | "html" | "image" | "files".
+    @cfg(apple)
+    fn has(fmt: string) -> bool {
+        let ok: bool = false;
+        raw {
+            ok = darwin_clipboard_has((const char*)fmt);
+        }
+        return ok;
+    }
+
+    @cfg(apple)
+    fn clear() -> void {
+        raw {
+            darwin_clipboard_clear();
+        }
+    }
+
+    // --- Windows stubs (no-op) ---
+    @cfg(windows)
+    fn read_text() -> string { return ""; }
+    @cfg(windows)
+    fn write_text(text: string) -> bool { return false; }
+    @cfg(windows)
+    fn read_html() -> string { return ""; }
+    @cfg(windows)
+    fn write_html(html: string) -> bool { return false; }
+    @cfg(windows)
+    fn read_files() -> string { return "[]"; }
+    @cfg(windows)
+    fn has(fmt: string) -> bool { return false; }
+    @cfg(windows)
+    fn clear() -> void {}
+}

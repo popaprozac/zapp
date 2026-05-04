@@ -98,6 +98,140 @@ export interface MacOSConfig {
   entitlementsFile?: string;
 }
 
+/**
+ * Filesystem allowlist. Every path Zapp's FS APIs touch must be under one
+ * of the patterns declared here. Path variables ($userData, $temp, etc.)
+ * are expanded at runtime.
+ *
+ * Granted paths from `Dialog.openFile` / `Dialog.openDirectory` also
+ * extend the allowlist for the session (and persist across launches if
+ * `persistDialogGrants` is true).
+ *
+ * @example
+ * ```ts
+ * fs: {
+ *   allow: ["$userData", "$temp", "~/Documents/MyApp"],
+ *   persistDialogGrants: true,
+ * }
+ * ```
+ */
+export interface FsConfig {
+  /** Path patterns the app may read/write. Paths may use `$var` or `~/…` prefixes. */
+  allow?: string[];
+  /** Persist `Dialog.openFile`-granted paths across app launches. Default: `false`. */
+  persistDialogGrants?: boolean;
+}
+
+/**
+ * iOS-specific configuration. Parallel to `MacOSConfig` but with
+ * iOS-specific keys (UIDeviceFamily, UIBackgroundModes, etc.) and a
+ * typed `capabilities` map for the most common entitlements. iPad and
+ * iPhone share this config; treat iPad as iPhone in Phase 1-3 unless
+ * `deviceFamily: "ipad"` is set.
+ *
+ * Phase 1 surface — Simulator only, no signing required. Production
+ * fields (provisioningProfile, signingTeamId) are honored when
+ * present but not required for `zapp build --platform ios`.
+ *
+ * See `/Users/zach/.claude/plans/ios-strategic-scoping.md` for the
+ * full iOS roadmap including phases 2-4 (API parity, App Store
+ * distribution, mobile-specific features).
+ */
+export interface IOSConfig {
+  /**
+   * Path to a 1024×1024 PNG icon source. The CLI generates the iOS
+   * Assets.xcassets/AppIcon.appiconset/ scales from this. If omitted,
+   * looks for `build/ios/icon.png`, then `build/icon.png`.
+   */
+  icon?: string;
+
+  /** Minimum iOS deployment target. Default: `"15.0"`. */
+  minimumSystemVersion?: string;
+
+  /**
+   * Which device families the app targets:
+   * - `"iphone"` — UIDeviceFamily = [1]
+   * - `"ipad"` — UIDeviceFamily = [2]
+   * - `"universal"` — UIDeviceFamily = [1, 2] (default)
+   */
+  deviceFamily?: "iphone" | "ipad" | "universal";
+
+  /**
+   * Apple Developer Team ID for code-signing. Required for device
+   * builds and TestFlight upload; not required for Simulator.
+   */
+  signingTeamId?: string;
+
+  /**
+   * Path to the .mobileprovision file. Required for device / App
+   * Store builds; not required for Simulator. Per-developer; should
+   * be gitignored.
+   */
+  provisioningProfile?: string;
+
+  /**
+   * Typed shortcuts for common iOS entitlements. The CLI translates
+   * each enabled capability into the corresponding plist + entitlement
+   * keys. For things not covered here, use `entitlements` below.
+   */
+  capabilities?: {
+    /** Adds `aps-environment` entitlement. Required for APNs. */
+    pushNotifications?: boolean;
+    /** Adds `fetch` to UIBackgroundModes. */
+    backgroundFetch?: boolean;
+    /** Adds `processing` to UIBackgroundModes (BGTaskScheduler). */
+    backgroundProcessing?: boolean;
+    /** Adds `com.apple.developer.icloud-services` entitlement. */
+    iCloud?: boolean;
+    /** Enables keychain access groups. */
+    keychainSharing?: boolean;
+  };
+
+  /**
+   * UIBackgroundModes plist key. Each string is one mode:
+   * "audio", "location", "voip", "fetch", "processing", "remote-notification",
+   * "external-accessory", "bluetooth-central", "bluetooth-peripheral".
+   * Most apps don't need this; use `capabilities.backgroundFetch`
+   * for the common case.
+   */
+  backgroundModes?: string[];
+
+  /**
+   * Privacy usage descriptions. Same shape as `MacOSConfig` minus
+   * macOS-only keys (documents/downloads/desktop/appleEvents).
+   */
+  usageDescriptions?: {
+    camera?: string;
+    microphone?: string;
+    location?: string;
+    photos?: string;
+    bluetooth?: string;
+    network?: string;     // → NSLocalNetworkUsageDescription (iOS 14+)
+  };
+
+  /** iOS-specific Info.plist extras (e.g. UISupportedInterfaceOrientations). */
+  plistExtras?: Record<string, string | number | boolean | string[]>;
+
+  /**
+   * Partial Info.plist file (key/value pairs only — no plist/dict
+   * wrappers). Default: `build/ios/Info.plist.extra` if present.
+   */
+  plistFile?: string;
+
+  /**
+   * Free-form iOS entitlements. Use for things `capabilities` doesn't
+   * cover (e.g. App Groups, HealthKit, etc.).
+   */
+  entitlements?: Record<string, string | number | boolean | string[]>;
+
+  /**
+   * Path to a .entitlements XML file. Default: `build/ios/app.entitlements`
+   * if present. Merges with the typed `entitlements` map; the typed
+   * map wins on conflict.
+   */
+  entitlementsFile?: string;
+}
+
 export interface ZappConfig {
   name: string;
   identifier?: string;
@@ -111,7 +245,30 @@ export interface ZappConfig {
    */
   headless?: Record<string, string>;
   deepLinkSchemes?: string[];  // e.g. ["myapp"] → registers myapp:// URL scheme
+  /**
+   * Single-instance enforcement. When `true`, only one copy of the app
+   * can run at a time — Launch Services refuses second-launch attempts
+   * (`open -n` / duplicated bundles). On macOS this maps to
+   * `LSMultipleInstancesProhibited` in Info.plist.
+   *
+   * Deep-link clicks (`myapp://...`) and dock-icon reopens already
+   * route to the running instance via `App.on(AppEvent.OPEN_URL)` /
+   * `AppEvent.REOPEN`; `singleInstance: true` prevents the duplicate
+   * instances that would otherwise be spawned by `open -n`.
+   *
+   * Default: `false` (matches macOS-native behavior). Most desktop apps
+   * want `true`; menu-bar / sync-engine apps almost always want `true`
+   * to keep local state coherent.
+   *
+   * No-op on iOS (apps are always single-instance there by platform
+   * contract). Windows handling lands later.
+   */
+  singleInstance?: boolean;
+  /** Filesystem allowlist. See {@link FsConfig}. */
+  fs?: FsConfig;
   macos?: MacOSConfig;
+  /** iOS-specific configuration. See {@link IOSConfig}. */
+  ios?: IOSConfig;
 }
 
 export interface ResolvedConfig extends ZappConfig {

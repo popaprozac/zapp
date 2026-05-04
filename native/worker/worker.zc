@@ -51,3 +51,38 @@ raw {
     }
     #endif
 }
+
+// --- Workers namespace (Zen-C) ---
+//
+// Mirrors the runtime/worker.ts `Workers` namespace so Zen-C services
+// and native code can manage workers by ID without raw blocks. Since
+// Zen-C doesn't have a free-floating `module.fn` syntax, we use the
+// established `struct Foo {} impl Foo { fn ... }` namespace pattern
+// (also used by `Zapp` in app.zc).
+//
+// Usage:
+//   Workers::terminate("h-sync");
+//
+// Recognised ID forms match the JS side: dedicated workers ("w-N"),
+// headless workers ("h-<key>"), shared workers ("sw-N" — silently
+// no-op since shared workers are refcount-based).
+struct Workers {}
+
+impl Workers {
+    fn terminate(id: string) -> void {
+        if id == "" { return; }
+        // The native router already has all the policy (shared-vs-dedicated
+        // refcount handling, registry cleanup) — the Zen-C wrapper just
+        // forwards. Bypassing the router would duplicate that policy.
+        raw {
+            #if defined(ZAPP_WORKER_ENGINE_JSC) || defined(ZAPP_WORKER_ENGINE_TXIKI)
+            extern int zapp_worker_registry_is_shared(const char* worker_id);
+            extern void zapp_worker_registry_remove(const char* worker_id);
+            if (!zapp_worker_registry_is_shared((const char*)id)) {
+                worker_terminate((char*)id);
+                zapp_worker_registry_remove((const char*)id);
+            }
+            #endif
+        }
+    }
+}

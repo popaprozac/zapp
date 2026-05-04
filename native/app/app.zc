@@ -9,6 +9,10 @@ import "../platform/platform.zc";
 import "../sync/sync.zc";
 import "../menu/menu.zc";
 import "../dock/dock.zc";
+import "../fs/fs.zc";
+import "../clipboard/clipboard.zc";
+import "../shortcuts/shortcuts.zc";
+import "../bridge/json_safe.zc";
 import "./app_events.zc";
 
 import "string.h" as str;
@@ -122,7 +126,7 @@ fn zapp_worker_create_window_from_json(opts_json: string) -> int {
     let opts = WindowOptions::create("Zapp");
 
     if opts_json != "" {
-        let parse_result = JsonValue::parse(opts_json);
+        let parse_result = zapp_json_parse(opts_json);
         if parse_result.is_ok() {
             let json_ptr = parse_result.unwrap();
             window_opts_apply_json(&opts, json_ptr);
@@ -161,28 +165,41 @@ fn worker_dispatch_to_window(worker_id: string, data_json: string, owner_id: str
     if window_id < 0 { return; }
 
     raw {
-        // Thread-local: multiple worker threads may call this concurrently.
-        // darwin_window_eval_js now copies the buffer before queueing.
-        static _Thread_local char wk_buf[4096];
-        extern int zapp_escape_into(char* dst, int dst_size, const char* src);
-        char escaped_wid[128];
-        char escaped_data[3072];
-        zapp_escape_into(escaped_wid, sizeof(escaped_wid), (const char*)worker_id);
-        zapp_escape_into(escaped_data, sizeof(escaped_data), (const char*)data_json);
+        // Heap-grown JS buffer — the previous fixed-stack escape+frame
+        // truncated worker→webview messages above ~3 KB, which silently
+        // corrupted large payloads (chat history, avatars, file
+        // contents) at the receiver. zapp_escape_dup lives in
+        // bridge/dispatch.zc; declared extern here because raw blocks
+        // don't pick up file-static C symbols across .zc imports.
+        extern char* zapp_escape_dup(const char* src);
 
-        snprintf(wk_buf, sizeof(wk_buf),
+        char* esc_wid = zapp_escape_dup((const char*)worker_id);
+        if (!esc_wid) return;
+        char* esc_data = zapp_escape_dup((const char*)data_json);
+        if (!esc_data) { free(esc_wid); return; }
+
+        const char* tmpl =
             "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
             "if(b&&typeof b._onWorkerMessage==='function'){"
-            "b._onWorkerMessage('%s','%s');}})();",
-            escaped_wid, escaped_data);
+            "b._onWorkerMessage('%s','%s');}})();";
+        int needed = snprintf(NULL, 0, tmpl, esc_wid, esc_data);
+        if (needed < 0) { free(esc_wid); free(esc_data); return; }
+        char* js = (char*)malloc((size_t)needed + 1);
+        if (!js) { free(esc_wid); free(esc_data); return; }
+        snprintf(js, (size_t)needed + 1, tmpl, esc_wid, esc_data);
+        free(esc_wid);
+        free(esc_data);
 
+        // darwin_window_eval_js / windows_window_eval_js copy the buffer
+        // synchronously before queueing onto the main thread.
         #ifdef __APPLE__
         extern void darwin_window_eval_js(int32_t window_id, const char* js);
-        darwin_window_eval_js(window_id, wk_buf);
+        darwin_window_eval_js(window_id, js);
         #else
         extern void windows_window_eval_js(int32_t window_id, const char* js);
-        windows_window_eval_js(window_id, wk_buf);
+        windows_window_eval_js(window_id, js);
         #endif
+        free(js);
     }
 }
 
@@ -316,6 +333,7 @@ struct App {
     sync: SyncManager;
     dock: DockManager;
     security: SecurityManager;
+    fs: FsManager;
 }
 
 impl App {
@@ -341,6 +359,7 @@ impl App {
             sync: SyncManager::new(),
             dock: DockManager::new(),
             security: SecurityManager::new(),
+            fs: FsManager::new(),
         };
     }
 
@@ -374,5 +393,67 @@ impl App {
             windows_open_external((const char*)url);
             #endif
         }
+    }
+
+    // --- Finder integration (Zen-C parity for runtime/app.ts) ---
+
+    // Reveal a file or folder in Finder, with the item selected. Honors
+    // path-var expansion ($userData, ~/, etc.) for symmetry with app.fs.
+    // Non-destructive — no allowlist gate.
+    fn show_item_in_folder(self, path: string) -> void {
+        if path == "" { return; }
+        let abs = fs_expand_path(path);
+        raw {
+            #ifdef __APPLE__
+            extern void darwin_show_item_in_folder(const char* p);
+            darwin_show_item_in_folder((const char*)abs);
+            #endif
+            // Windows: no-op until shell integration lands.
+        }
+    }
+
+    // Open a file or folder using the system default application.
+    // Path-var expansion applied. Non-destructive — no allowlist gate.
+    fn open_path(self, path: string) -> void {
+        if path == "" { return; }
+        let abs = fs_expand_path(path);
+        raw {
+            #ifdef __APPLE__
+            extern void darwin_open_path(const char* p);
+            darwin_open_path((const char*)abs);
+            #endif
+        }
+    }
+
+    // Move a file or folder to the user's Trash. Reversible via Finder's
+    // "Put Back". **Gated by the FS allowlist** (config.fs.allow) the
+    // same way app.fs.remove is — services calling trash_item can't
+    // bypass the policy that protects every other path-mutating call.
+    fn trash_item(self, path: string) -> void {
+        if path == "" { return; }
+        let abs = fs_expand_path(path);
+        if !fs_is_allowed(abs) { return; }
+        raw {
+            #ifdef __APPLE__
+            extern void darwin_trash_item(const char* p);
+            darwin_trash_item((const char*)abs);
+            #endif
+        }
+    }
+
+    // Current system appearance — "light" or "dark". Reads
+    // NSApp.effectiveAppearance directly, so always live (not cached).
+    // Falls back to "light" on platforms that don't yet support theme
+    // detection.
+    fn get_theme(self) -> string {
+        let result: string = "light";
+        raw {
+            #ifdef __APPLE__
+            extern const char* darwin_get_theme(void);
+            const char* t = darwin_get_theme();
+            if (t) result = (char*)t;
+            #endif
+        }
+        return result;
     }
 }

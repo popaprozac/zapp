@@ -141,3 +141,48 @@ export class SharedWorker {
     (bridge as any)._workers[workerId] = this.port;
   }
 }
+
+/**
+ * Workers — namespace for managing workers by ID, complementing the
+ * `Worker` class which is instance-scoped. Use this when you only have
+ * a string ID and no live `Worker` handle — most commonly for headless
+ * workers configured via `zapp.config.ts`'s `headless` map, since those
+ * are started by the framework and never expose a JS-side `Worker`
+ * instance.
+ *
+ * @example
+ * ```ts
+ * import { Workers } from "@zappdev/runtime";
+ *
+ * // zapp.config.ts:
+ * //   headless: { sync: "src/workers/sync.ts" }
+ * // → at runtime, the worker is reachable as "h-sync".
+ * Workers.terminate("h-sync");
+ * ```
+ */
+export const Workers = {
+  /**
+   * Terminate a worker by ID. Equivalent to `worker.terminate()` for
+   * dedicated workers; the only path for headless workers (no JS handle).
+   *
+   * Recognised ID forms:
+   * - `"w-N"` — dedicated worker instance (same as `worker.terminate()`)
+   * - `"h-<key>"` — headless worker keyed by `zapp.config.ts` `headless`
+   * - `"sw-N"` — **rejected at the native layer**. Shared workers must
+   *   be released via `port` disconnect; the last disconnect auto-
+   *   terminates. Calling this for a SharedWorker ID is a no-op rather
+   *   than an error so callers don't have to care about the distinction.
+   *
+   * Unknown IDs are also a silent no-op (native logs but doesn't throw).
+   */
+  terminate(id: string): void {
+    if (!id) return;
+    const bridge = getBridge();
+    (bridge as any).terminateWorker(id);
+    // Drop any local message-handler registration so subsequent posts
+    // to a stale ID don't accumulate listeners. Mirrors what
+    // `Worker.terminate()` does for the instance path.
+    const workers = (bridge as any)._workers;
+    if (workers && id in workers) delete workers[id];
+  },
+};

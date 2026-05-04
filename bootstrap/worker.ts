@@ -82,6 +82,7 @@
       102: "app:notification-click", 103: "app:notification-action",
       104: "app:reopen", 105: "app:open-url",
       106: "app:active", 107: "app:inactive",
+      108: "app:theme-changed",
     };
     const name = eventMap[eventId];
     if (!name) return;

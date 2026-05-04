@@ -635,6 +635,30 @@ On macOS, the OS routes `myapp://...` URLs to your app via
 `application:openURLs:`. On Windows, URL scheme registration goes
 through the registry + `WM_COPYDATA` for single-instance handling.
 
+## Single-instance enforcement
+
+```ts
+// zapp.config.ts
+export default defineConfig({
+  name: "My App",
+  singleInstance: true,
+});
+```
+
+Maps to `LSMultipleInstancesProhibited = YES` in Info.plist on macOS.
+Launch Services refuses second-launch attempts (`open -n` / running a
+duplicated bundle); the existing instance receives any `myapp://` URL
+or dock-icon reopen via `App.on(AppEvent.OPEN_URL)` /
+`AppEvent.REOPEN`.
+
+Default is `false` to match macOS-native behavior. Most desktop apps
+want `true`; menu-bar / sync-engine apps almost always want `true` to
+keep local state coherent (two copies of a sync worker would corrupt
+the local DB).
+
+No-op on iOS — apps are always single-instance there by platform
+contract.
+
 ## Dock badge + bounce
 
 ```ts

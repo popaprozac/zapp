@@ -3,5 +3,6 @@ export default {
   identifier: "com.zapp.helloworld",
   version: "0.1.0",
   deepLinkSchemes: ["helloworld"],
+  singleInstance: true,
   // No icon configured — will use framework default (assets/zapp.icon)
 };

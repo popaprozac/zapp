@@ -11,6 +11,7 @@
 static BOOL zapp_should_terminate_after_last_window_closed = NO;
 
 @interface ZappAppDelegate : NSObject <NSApplicationDelegate>
+@property (nonatomic, assign) BOOL themeObserverInstalled;
 @end
 
 // App event dispatch — defined in app/app_events.zc
@@ -26,7 +27,23 @@ extern int zapp_app_dispatch(int event_id, const char* data);
 #define ZAPP_EVENT_APP_OPEN_URL           105
 #define ZAPP_EVENT_APP_DID_BECOME_ACTIVE  106
 #define ZAPP_EVENT_APP_DID_RESIGN_ACTIVE  107
+#define ZAPP_EVENT_APP_THEME_CHANGED      108
 #endif
+
+// Read the current effective appearance and return "light" or "dark".
+// Returns string literals — caller must not free. Falls back to "light"
+// on macOS < 10.14 (pre-dark-mode) or if NSApp isn't ready yet.
+const char* darwin_get_theme(void) {
+    if (![NSApp respondsToSelector:@selector(effectiveAppearance)]) {
+        return "light";
+    }
+    NSAppearance* appearance = [NSApp effectiveAppearance];
+    if (!appearance) return "light";
+    NSAppearanceName best = [appearance bestMatchFromAppearancesWithNames:@[
+        NSAppearanceNameAqua, NSAppearanceNameDarkAqua
+    ]];
+    return [best isEqualToString:NSAppearanceNameDarkAqua] ? "dark" : "light";
+}
 
 @implementation ZappAppDelegate
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication*)sender {
@@ -36,11 +53,43 @@ extern int zapp_app_dispatch(int event_id, const char* data);
 
 - (void)applicationDidFinishLaunching:(NSNotification*)notification {
     (void)notification;
+
+    // KVO on NSApp.effectiveAppearance fires whenever the effective theme
+    // changes — system-wide (System Settings → Appearance) and per-window
+    // overrides via setAppearance:. Cheaper and more reliable than
+    // listening to NSDistributedNotificationCenter's
+    // AppleInterfaceThemeChangedNotification (which only catches the
+    // system-wide toggle).
+    if ([NSApp respondsToSelector:@selector(effectiveAppearance)]) {
+        [NSApp addObserver:self
+                forKeyPath:@"effectiveAppearance"
+                   options:0
+                   context:NULL];
+        self.themeObserverInstalled = YES;
+    }
+
     zapp_app_dispatch(ZAPP_EVENT_APP_STARTED, NULL);
+}
+
+- (void)observeValueForKeyPath:(NSString*)keyPath ofObject:(id)object
+                        change:(NSDictionary*)change context:(void*)context {
+    (void)object; (void)change; (void)context;
+    if ([keyPath isEqualToString:@"effectiveAppearance"]) {
+        const char* theme = darwin_get_theme();
+        char payload[64];
+        snprintf(payload, sizeof(payload), "{\"theme\":\"%s\"}", theme);
+        zapp_app_dispatch(ZAPP_EVENT_APP_THEME_CHANGED, payload);
+    }
 }
 
 - (void)applicationWillTerminate:(NSNotification*)notification {
     (void)notification;
+    if (self.themeObserverInstalled) {
+        @try {
+            [NSApp removeObserver:self forKeyPath:@"effectiveAppearance"];
+        } @catch (NSException* ignored) { (void)ignored; }
+        self.themeObserverInstalled = NO;
+    }
     // Service shutdown in reverse registration order (before SHUTDOWN event)
     extern void service_run_shutdown_all(void);
     service_run_shutdown_all();

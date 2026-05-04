@@ -1,0 +1,67 @@
+// Shortcuts — Zen-C namespace for global system-wide hotkeys.
+// Mirrors runtime/shortcuts.ts. Wraps Carbon RegisterEventHotKey via
+// `native/platform/darwin/shortcuts.m`. Per the native-first rule
+// (feedback_native_first_implementation.md), services and Zen-C code
+// should call these directly rather than going through the JS bridge.
+//
+// Accelerator strings use the same "CmdOrCtrl+Shift+Space" notation as
+// menu accelerators — one syntax to remember.
+//
+// **Callbacks are JS-side only**. The native dispatch fires an
+// "app:shortcut-triggered" event; native Zen-C code that wants to
+// react to a global shortcut can listen via `App::on(...)` for that
+// event name. The framework deliberately doesn't accept C function
+// pointers as callbacks here — function pointers across thread
+// boundaries (Carbon dispatches on main; services run wherever) are
+// a footgun better solved by the existing event system.
+
+@cfg(apple)
+import "../platform/darwin/shortcuts.h" as darwin_sc;
+
+struct Shortcuts {}
+
+impl Shortcuts {
+    @cfg(apple)
+    fn register(accelerator: string) -> bool {
+        let ok: bool = false;
+        raw {
+            ok = darwin_shortcut_register((const char*)accelerator);
+        }
+        return ok;
+    }
+
+    @cfg(apple)
+    fn unregister(accelerator: string) -> bool {
+        let ok: bool = false;
+        raw {
+            ok = darwin_shortcut_unregister((const char*)accelerator);
+        }
+        return ok;
+    }
+
+    @cfg(apple)
+    fn is_registered(accelerator: string) -> bool {
+        let ok: bool = false;
+        raw {
+            ok = darwin_shortcut_is_registered((const char*)accelerator);
+        }
+        return ok;
+    }
+
+    @cfg(apple)
+    fn unregister_all() -> void {
+        raw {
+            darwin_shortcut_unregister_all();
+        }
+    }
+
+    // --- Windows stubs (no-op until Win32 RegisterHotKey wires up) ---
+    @cfg(windows)
+    fn register(accelerator: string) -> bool { return false; }
+    @cfg(windows)
+    fn unregister(accelerator: string) -> bool { return false; }
+    @cfg(windows)
+    fn is_registered(accelerator: string) -> bool { return false; }
+    @cfg(windows)
+    fn unregister_all() -> void {}
+}

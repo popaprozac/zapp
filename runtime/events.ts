@@ -31,6 +31,10 @@ export enum WindowEvent {
   RESTORE = 8,
   FULLSCREEN = 9,
   UNFULLSCREEN = 10,
+  /** Fires on a parent window when an attached modal sheet dismisses.
+   * Payload: `{ windowId, modalId, code, timestamp }`. `code` is the
+   * NSModalResponse value (1 = OK, 0 = Cancel, -1000 = Stop, etc.). */
+  MODAL_DISMISSED = 11,
 }
 
 /** App lifecycle events.
@@ -43,6 +47,10 @@ export enum AppEvent {
   OPEN_URL = 105,      // deep link opened
   DID_BECOME_ACTIVE = 106,
   DID_RESIGN_ACTIVE = 107,
+  /** System-wide appearance changed — fires on light↔dark toggles
+   * (System Settings → Appearance, auto schedule, or per-window
+   * override). Payload: `{ theme: "light" | "dark" }`. */
+  THEME_CHANGED = 108,
 }
 
 /** Map WindowEvent enum to string event names. */
@@ -58,6 +66,7 @@ const WINDOW_EVENT_NAMES: Record<number, string> = {
   [WindowEvent.RESTORE]: "window:restore",
   [WindowEvent.FULLSCREEN]: "window:fullscreen",
   [WindowEvent.UNFULLSCREEN]: "window:unfullscreen",
+  [WindowEvent.MODAL_DISMISSED]: "window:modal-dismissed",
 };
 
 const APP_EVENT_NAMES: Record<number, string> = {
@@ -67,6 +76,7 @@ const APP_EVENT_NAMES: Record<number, string> = {
   [AppEvent.OPEN_URL]: "app:open-url",
   [AppEvent.DID_BECOME_ACTIVE]: "app:active",
   [AppEvent.DID_RESIGN_ACTIVE]: "app:inactive",
+  [AppEvent.THEME_CHANGED]: "app:theme-changed",
 };
 
 /** Payload for window events that include size and position. */
@@ -83,6 +93,22 @@ export interface WindowPayload {
   timestamp: number;
 }
 
+/**
+ * Payload for `WindowEvent.MODAL_DISMISSED` — fires on the parent window
+ * when an attached modal sheet dismisses (close button, `modal.close()`,
+ * `modal.destroy()`, or explicit `parent.detachModal(modal)`).
+ *
+ * `code` is the underlying NSModalResponse — 1 = OK, 0 = Cancel,
+ * -1000 = Stop (default for self-closed modals), -1001 = Abort
+ * (modal was attached elsewhere and was forcibly detached).
+ */
+export interface ModalDismissedPayload {
+  windowId: string;       // the parent window
+  modalId: string;        // the modal that dismissed
+  code: number;           // NSModalResponse value
+  timestamp: number;
+}
+
 /** Known window events that carry size+position data. */
 type SizeEvents = "window:resize" | "window:move" | "window:maximize" | "window:restore";
 
@@ -91,7 +117,7 @@ type SimpleEvents = "window:ready" | "window:focus" | "window:blur" | "window:cl
   | "window:minimize" | "window:fullscreen" | "window:unfullscreen";
 
 /** App event string names. */
-type AppEvents = "app:started" | "app:shutdown" | "app:reopen" | "app:open-url" | "app:active" | "app:inactive";
+type AppEvents = "app:started" | "app:shutdown" | "app:reopen" | "app:open-url" | "app:active" | "app:inactive" | "app:theme-changed";
 
 /** All known event names. Arbitrary strings also work. */
 export type EventName = SizeEvents | SimpleEvents | AppEvents | (string & {});

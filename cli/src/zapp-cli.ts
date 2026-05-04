@@ -4,9 +4,9 @@ import process from "node:process";
 import { mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { loadConfig } from "./config";
-import { generateBuildConfig, generatePlatformConfig, generateHeadlessWorkers } from "./build-config";
+import { generateBuildConfig, generatePlatformConfig, generateHeadlessWorkers, generateIOSBuildFile } from "./build-config";
 import { generateBindings } from "./generate";
-import { compileNative, ensureTxikiBuilt, hasTxikiEnabled, hasAnyWorkerEngine } from "./native";
+import { compileNative, ensureTxikiBuilt, hasTxikiEnabled, hasAnyWorkerEngine, detectTarget, isIOSTarget, type BuildTarget } from "./native";
 import { resolveNativeDir, resolveBootstrapDir } from "./paths";
 import { runInit } from "./init";
 // bundleWorkers removed — Vite plugin handles worker bundling now
@@ -21,6 +21,60 @@ const bootstrapDir = resolveBootstrapDir();
 const { generateBootstrap } = await import(path.join(bootstrapDir, "codegen.ts"));
 
 const cwd = process.cwd();
+
+// Minimal Info.plist for iOS dev/spike builds. Enough for simctl
+// install + launch to succeed; production packaging (Phase 3) replaces
+// this with the full plist + icons + entitlements path.
+async function writeIOSDevPlist(opts: {
+  binaryPath: string;
+  config: { name: string; identifier?: string; version?: string; ios?: { minimumSystemVersion?: string; deviceFamily?: string } };
+  target: BuildTarget;
+}): Promise<void> {
+  const { binaryPath, config, target } = opts;
+  const appBundle = path.dirname(binaryPath);
+  const exeName = path.basename(binaryPath);
+  const bundleId = config.identifier ?? `com.zapp.${config.name.replace(/\s+/g, "-").toLowerCase()}.dev`;
+  const version = config.version ?? "0.1.0";
+  const minVersion = config.ios?.minimumSystemVersion ?? "15.0";
+  // UIDeviceFamily values: 1 = iPhone, 2 = iPad. Universal lists both.
+  const family = config.ios?.deviceFamily ?? "universal";
+  const deviceFamilyArray = family === "iphone" ? "<integer>1</integer>"
+    : family === "ipad" ? "<integer>2</integer>"
+    : "<integer>1</integer><integer>2</integer>";
+  // DTPlatformName is what simctl uses to verify the bundle was built
+  // for the right SDK. Without it, install fails with a confusing
+  // "MissingBundleExecutable" or similar.
+  const platformName = target === "ios-simulator" ? "iphonesimulator" : "iphoneos";
+
+  const plist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleExecutable</key><string>${exeName}</string>
+  <key>CFBundleIdentifier</key><string>${bundleId}</string>
+  <key>CFBundleName</key><string>${config.name}</string>
+  <key>CFBundleDisplayName</key><string>${config.name}</string>
+  <key>CFBundleVersion</key><string>${version}</string>
+  <key>CFBundleShortVersionString</key><string>${version}</string>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleSupportedPlatforms</key><array><string>${platformName === "iphonesimulator" ? "iPhoneSimulator" : "iPhoneOS"}</string></array>
+  <key>DTPlatformName</key><string>${platformName}</string>
+  <key>LSRequiresIPhoneOS</key><true/>
+  <key>MinimumOSVersion</key><string>${minVersion}</string>
+  <key>UIDeviceFamily</key><array>${deviceFamilyArray}</array>
+  <key>UILaunchScreen</key><dict/>
+  <key>UIRequiredDeviceCapabilities</key><array><string>arm64</string></array>
+  <key>UISupportedInterfaceOrientations</key><array>
+    <string>UIInterfaceOrientationPortrait</string>
+    <string>UIInterfaceOrientationLandscapeLeft</string>
+    <string>UIInterfaceOrientationLandscapeRight</string>
+  </array>
+</dict>
+</plist>
+`;
+  await Bun.write(path.join(appBundle, "Info.plist"), plist);
+}
 
 async function waitForPort(port: number, timeoutMs = 10000): Promise<boolean> {
   const start = Date.now();
@@ -227,6 +281,16 @@ async function runBuild(root: string) {
     process.exit(1);
   }
 
+  const target: BuildTarget = detectTarget();
+  // iOS targets only build on macOS (Xcode SDK requirement).
+  if (isIOSTarget(target) && process.platform !== "darwin") {
+    process.stderr.write("[zapp] iOS builds require macOS host (Xcode SDK).\n");
+    process.exit(1);
+  }
+  if (isIOSTarget(target)) {
+    process.stdout.write(`[zapp] target: ${target}\n`);
+  }
+
   const config = await loadConfig(root);
   const nativeDir = resolveNativeDir();
 
@@ -273,18 +337,37 @@ async function runBuild(root: string) {
 
   // 5. Generate build config + bootstrap (prod mode, embedded assets)
   const buildConfigFile = await generateBuildConfig({ root, config, mode: "prod", embedAssets: true });
-  const platformFile = await generatePlatformConfig(root);
+  const platformFile = await generatePlatformConfig(root, target);
   const headlessFile = await generateHeadlessWorkers({ root, headless: config.headless });
   const bootstrapFile = await generateBootstrap(zappDir);
 
   // 5. Compile native binary (assets embedded in binary)
   process.stdout.write("[zapp] compiling native binary...\n");
+  // Output paths differ by target. macOS / Windows: bin/<name>(.exe).
+  // iOS: bin/ios/<name>.app/<name> — the binary lives inside a bundle
+  // since simctl install / .ipa packaging both expect the bundled
+  // structure. We create the bundle skeleton here; webview asset
+  // embedding still happens the same way (in-binary).
   const binDir = path.join(root, "bin");
   await mkdir(binDir, { recursive: true });
+  const exeName = config.name.replace(/\s+/g, "-").toLowerCase();
   const buildExeSuffix = process.platform === "win32" ? ".exe" : "";
-  const nativeOut = path.join(binDir, config.name.replace(/\s+/g, "-").toLowerCase() + buildExeSuffix);
+  let nativeOut: string;
+  if (isIOSTarget(target)) {
+    const appBundle = path.join(binDir, "ios", `${config.name}.app`);
+    await mkdir(appBundle, { recursive: true });
+    nativeOut = path.join(appBundle, exeName);
+  } else {
+    nativeOut = path.join(binDir, exeName + buildExeSuffix);
+  }
 
-  const buildFile = path.join(root, "zapp", "build.zc");
+  const userBuildFile = path.join(root, "zapp", "build.zc");
+  // For iOS, swap user's build.zc for a CLI-generated overlay that
+  // strips `//> macos:` directives (zc gates those by host, not build
+  // target) and re-emits iOS-appropriate ones.
+  const buildFile = isIOSTarget(target)
+    ? await generateIOSBuildFile(root, userBuildFile)
+    : userBuildFile;
   await compileNative({
     root,
     buildFile,
@@ -295,7 +378,43 @@ async function runBuild(root: string) {
     output: nativeOut,
     nativeDir,
     optimize: true,
+    target,
   });
+
+  // For iOS, write a minimal Info.plist next to the binary so simctl
+  // install will accept the bundle. Real Phase 3 packaging adds icons,
+  // entitlements, code-sign, etc. — this is the spike-grade plist
+  // that just makes the app launch.
+  if (isIOSTarget(target)) {
+    await writeIOSDevPlist({ binaryPath: nativeOut, config, target });
+    // Re-sign the bundle ad-hoc so the Info.plist is bound into the
+    // signature. clang's linker emits an `adhoc,linker-signed` blob
+    // covering only the Mach-O — modern iOS Simulator (macOS Sequoia+)
+    // refuses to launch bundles whose Info.plist isn't sealed by the
+    // code signature, with FBSOpenApplicationServiceErrorDomain code 4.
+    // Real signing for device builds is Phase 3; this just makes
+    // Simulator happy.
+    const appBundle = path.dirname(nativeOut);
+    const signProc = Bun.spawn(["codesign", "--force", "--sign", "-", appBundle], {
+      stdout: "pipe", stderr: "pipe",
+    });
+    const signExit = await signProc.exited;
+    if (signExit !== 0) {
+      const errOutput = await new Response(signProc.stderr).text();
+      process.stderr.write(`[zapp] warning: ad-hoc sign failed (exit ${signExit})\n${errOutput}`);
+    }
+    // Surface the launch invocation so the user doesn't have to dig
+    // into Info.plist for the bundle ID. simctl's identifier is
+    // CFBundleIdentifier, which is `config.identifier` (or our
+    // generated fallback when omitted).
+    const bundleId = config.identifier ?? `com.zapp.${config.name.replace(/\s+/g, "-").toLowerCase()}.dev`;
+    process.stdout.write(
+      `[zapp] iOS bundle: ${appBundle}\n` +
+      `[zapp] to install + launch:\n` +
+      `         xcrun simctl install booted ${path.relative(root, appBundle)}\n` +
+      `         xcrun simctl launch --console booted ${bundleId}\n`
+    );
+  }
 
   const stat = Bun.file(nativeOut);
   const size = stat.size;

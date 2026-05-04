@@ -32,6 +32,12 @@ bool wopts_always_on_top(WindowOptions* opts);
 int32_t wopts_title_bar_style_tag(WindowOptions* opts);
 int32_t wopts_inspectable(WindowOptions* opts);
 bool wopts_accept_first_mouse(WindowOptions* opts);
+bool wopts_auto_center(WindowOptions* opts);
+char* wopts_frame_autosave_name(WindowOptions* opts);
+// Traffic light state tags: 0=Enabled, 1=Disabled, 2=Hidden
+int32_t wopts_traffic_light_close_tag(WindowOptions* opts);
+int32_t wopts_traffic_light_minimize_tag(WindowOptions* opts);
+int32_t wopts_traffic_light_zoom_tag(WindowOptions* opts);
 
 // --- Window lifecycle ---
 void* darwin_window_create(WindowOptions* opts);
@@ -48,6 +54,10 @@ void darwin_window_minimize(void* handle);
 void darwin_window_maximize(void* handle);
 void darwin_window_set_fullscreen(void* handle, bool on);
 void darwin_window_set_always_on_top(void* handle, bool on);
+
+// --- Modal sheets ---
+void darwin_window_attach_modal(void* parent_handle, void* modal_handle);
+void darwin_window_detach_modal(void* parent_handle, void* modal_handle);
 
 // --- Window getters ---
 void darwin_window_get_size(void* handle, int32_t* out_w, int32_t* out_h);
@@ -67,6 +77,11 @@ int32_t darwin_window_id_for_webview(void* webview);
 
 // --- Get string window ID for a numeric ID ---
 const char* darwin_window_id_string(int32_t numeric_id);
+
+// --- Reverse: get numeric ID from a "win-0xPTR" string ID, -1 if unknown.
+//     Used to resolve JS-visible window IDs (which are pointer-based) back
+//     to the numeric ID WindowManager keys by. ---
+int32_t darwin_window_numeric_id_for_string(const char* window_id_string);
 
 // --- Get WKWebView pointer for a numeric ID (O(1)) ---
 void* darwin_window_get_webview(int32_t numeric_id);

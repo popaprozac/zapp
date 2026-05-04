@@ -7,6 +7,7 @@ import "../bridge/dispatch.zc";
 import "../bridge/json_builder.zc";
 import "../service/service.zc";
 import "../window/events.zc";
+import "../fs/fs.zc";
 // darwin_win imported via dispatch.zc → darwin/window.h
 @cfg(apple)
 import "../platform/darwin/dialog.h" as darwin_dialog;
@@ -31,6 +32,22 @@ fn router_handle_message(app: App*, msg: string, window_id: int) -> void {
         is_notif = str::strncmp(parsed.method, "__notif:", 7) == 0;
         if is_notif {
             router_handle_notification(parsed.method, parsed.payload, window_id, parsed.request_id);
+            return;
+        }
+
+        // Check for __clipboard: prefix
+        let is_clipboard: bool = false;
+        is_clipboard = str::strncmp(parsed.method, "__clipboard:", 12) == 0;
+        if is_clipboard {
+            router_handle_clipboard(parsed.method, parsed.args, parsed.has_args, window_id, parsed.request_id);
+            return;
+        }
+
+        // Check for __shortcuts: prefix
+        let is_shortcuts: bool = false;
+        is_shortcuts = str::strncmp(parsed.method, "__shortcuts:", 12) == 0;
+        if is_shortcuts {
+            router_handle_shortcuts(parsed.method, parsed.args, parsed.has_args, window_id, parsed.request_id);
             return;
         }
 
@@ -221,6 +238,50 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
         return;
     }
 
+    // Finder integration — reveal / open / trash a filesystem path.
+    // All three take the same { path: string } payload; they're grouped
+    // here rather than scattered because the wire shape is identical.
+    //
+    // Path expansion: all three resolve `$userData` / `~/` prefixes via
+    // fs_expand_path so callers can write the same paths they'd pass to
+    // `app.fs.*`. Empty / unexpandable inputs pass through and the
+    // darwin helpers no-op on them.
+    //
+    // Allowlist policy: showItemInFolder and openPath are non-destructive
+    // (delegate to user-visible OS actions; the user sees what's happening
+    // and can cancel). trashItem moves data — gate by the FS allowlist,
+    // the same `config.fs.allow` list that gates `app.fs.remove`. Without
+    // this gate, JS could trashItem any path on disk, bypassing the
+    // allowlist that gates every other path-mutating call. Dialog grants
+    // still extend the session allowlist, so user-picked files work.
+    let is_show_item = action == "showItemInFolder";
+    let is_open_path = action == "openPath";
+    let is_trash_item = action == "trashItem";
+    if is_show_item || is_open_path || is_trash_item {
+        let path_opt = pre_args.get_string("path");
+        if !path_opt.is_some() { return; }
+        let path: string = path_opt.unwrap();
+        let abs = fs_expand_path(path);
+
+        if is_trash_item {
+            if !fs_is_allowed(abs) { return; }
+        }
+
+        raw {
+            #ifdef __APPLE__
+            extern void darwin_show_item_in_folder(const char* p);
+            extern void darwin_open_path(const char* p);
+            extern void darwin_trash_item(const char* p);
+            if (is_show_item) darwin_show_item_in_folder((const char*)abs);
+            else if (is_open_path) darwin_open_path((const char*)abs);
+            else if (is_trash_item) darwin_trash_item((const char*)abs);
+            #else
+            // Windows stubs — TODO when WebView2 / shell integration lands.
+            #endif
+        }
+        return;
+    }
+
     // Draggable regions
     let is_set_drag: bool = false;
     is_set_drag = action == "setDragRegion";
@@ -260,6 +321,54 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
             zapp_window_set_close_guard(window_id, 0);
         }
         window_force_close(win.handle);
+        return;
+    }
+
+    // attachModal / detachModal — show another window as a sheet on the
+    // parent. JS-visible window IDs are pointer-based strings, so the
+    // primary path is to look them up via darwin_window_numeric_id_for_string;
+    // raw numeric IDs (from the int branch) are accepted for symmetry
+    // with asSheetOf and for callers that already have the numeric form.
+    let is_attach_modal = action == "attachModal";
+    let is_detach_modal = action == "detachModal";
+    if is_attach_modal || is_detach_modal {
+        let parent_numeric: int = -1;
+        let modal_numeric: int = -1;
+        let parent_int_opt = pre_args.get_int("parentId");
+        if parent_int_opt.is_some() { parent_numeric = parent_int_opt.unwrap(); }
+        let modal_int_opt = pre_args.get_int("modalId");
+        if modal_int_opt.is_some() { modal_numeric = modal_int_opt.unwrap(); }
+        if parent_numeric < 0 {
+            let p_str = pre_args.get_string("parentId");
+            if p_str.is_some() {
+                let ps: string = p_str.unwrap();
+                raw {
+                    #ifdef __APPLE__
+                    extern int32_t darwin_window_numeric_id_for_string(const char* wid);
+                    parent_numeric = (int)darwin_window_numeric_id_for_string((const char*)ps);
+                    #endif
+                }
+            }
+        }
+        if modal_numeric < 0 {
+            let m_str = pre_args.get_string("modalId");
+            if m_str.is_some() {
+                let ms: string = m_str.unwrap();
+                raw {
+                    #ifdef __APPLE__
+                    extern int32_t darwin_window_numeric_id_for_string(const char* wid);
+                    modal_numeric = (int)darwin_window_numeric_id_for_string((const char*)ms);
+                    #endif
+                }
+            }
+        }
+        if parent_numeric < 0 || modal_numeric < 0 { return; }
+        let parent = app.window.get(parent_numeric);
+        let modal = app.window.get(modal_numeric);
+        if parent.is_valid() && modal.is_valid() {
+            if is_attach_modal { parent.attach_modal(modal); }
+            else { parent.detach_modal(modal); }
+        }
         return;
     }
 
@@ -562,15 +671,28 @@ fn router_handle_dialog(method: string, payload: string, window_id: int, request
     }
 
     let result: string = "";
+    let is_ios_async: bool = false;
     raw {
         const char* m = (const char*)method;
         #ifdef __APPLE__
+        #include <TargetConditionals.h>
         if (strcmp(m, "__dialog:open") == 0) {
             result = (char*)darwin_dialog_open_file((const char*)args_json);
         } else if (strcmp(m, "__dialog:save") == 0) {
             result = (char*)darwin_dialog_save_file((const char*)args_json);
         } else if (strcmp(m, "__dialog:message") == 0) {
+            #if TARGET_OS_IPHONE
+            // iOS: UIAlertController is async-only. Fire and let the
+            // tap handler resolve the invoke promise via the same
+            // callback shape notifications use.
+            typedef void (*zapp_ios_dialog_cb_t)(int32_t, int32_t, bool, const char*);
+            extern void notif_response_cb(int32_t wid, int32_t rid, bool ok, const char* json);
+            extern void darwin_dialog_message_async(int32_t, int32_t, const char*, zapp_ios_dialog_cb_t);
+            darwin_dialog_message_async(window_id, request_id, (const char*)args_json, notif_response_cb);
+            is_ios_async = true;
+            #else
             result = (char*)darwin_dialog_message((const char*)args_json);
+            #endif
         }
         #else
         extern const char* windows_dialog_open_file(const char*);
@@ -586,10 +708,52 @@ fn router_handle_dialog(method: string, payload: string, window_id: int, request
         #endif
     }
 
+    // iOS async path dispatches its own response via the tap handler.
+    if is_ios_async { return; }
+
+    // If the user picked files, extend the FS session allowlist with
+    // each picked path. Lets apps read the file back via FS.readFile
+    // without having to put the directory in zapp.config.ts.
+    if method == "__dialog:open" && result != "" {
+        router_grant_paths_from_dialog(result);
+    }
+
     if result != "" {
         dispatch_invoke_response(window_id, request_id, true, result);
     } else {
         dispatch_invoke_response(window_id, request_id, false, "UNKNOWN_DIALOG");
+    }
+}
+
+// Parse `{"cancelled":false,"paths":["…","…"]}` from an open-dialog result
+// and grant each path. Tolerant: silently no-ops if cancelled or malformed.
+fn router_grant_paths_from_dialog(result_json: string) -> void {
+    raw {
+        const char* s = (const char*)result_json;
+        if (!s || !s[0]) return;
+        if (strstr(s, "\"cancelled\":true") != NULL) return;
+        const char* p = strstr(s, "\"paths\"");
+        if (!p) return;
+        p = strchr(p, '[');
+        if (!p) return;
+        p++;
+        while (*p) {
+            while (*p == ' ' || *p == ',' || *p == '\t' || *p == '\n') p++;
+            if (*p == ']' || *p == '\0') break;
+            if (*p != '"') break;
+            p++;
+            char grant[2048];
+            size_t glen = 0;
+            while (*p && *p != '"' && glen + 1 < sizeof(grant)) {
+                if (*p == '\\' && p[1]) { grant[glen++] = p[1]; p += 2; }
+                else grant[glen++] = *p++;
+            }
+            grant[glen] = '\0';
+            if (*p == '"') p++;
+            if (glen > 0) {
+                fs_grant_path((const char*)grant);
+            }
+        }
     }
 }
 
@@ -750,4 +914,177 @@ raw {
         extern void dispatch_invoke_response(int32_t, int32_t, bool, char*);
         dispatch_invoke_response(wid, rid, ok, (char*)json);
     }
+}
+
+// --- Shortcuts handler ---
+//
+// Webview path. Workers use the host fast path
+// (`__zappBridge.shortcuts(action, args)`) and skip this entirely.
+// register / unregister / isRegistered all return a boolean; the
+// runtime promise resolves to that boolean. unregisterAll returns null.
+fn router_handle_shortcuts(method: string, args: JsonValue*, has_args: bool, window_id: int, request_id: int) -> void {
+    let result: string = "null";
+    let did_handle: bool = false;
+
+    if method == "__shortcuts:register" {
+        if has_args {
+            let acc_opt = args.get_string("accelerator");
+            if acc_opt.is_some() {
+                let ok = Shortcuts::register(acc_opt.unwrap());
+                result = "false";
+                if ok { result = "true"; }
+                did_handle = true;
+            }
+        }
+    } else if method == "__shortcuts:unregister" {
+        if has_args {
+            let acc_opt = args.get_string("accelerator");
+            if acc_opt.is_some() {
+                let ok = Shortcuts::unregister(acc_opt.unwrap());
+                result = "false";
+                if ok { result = "true"; }
+                did_handle = true;
+            }
+        }
+    } else if method == "__shortcuts:isRegistered" {
+        if has_args {
+            let acc_opt = args.get_string("accelerator");
+            if acc_opt.is_some() {
+                let ok = Shortcuts::is_registered(acc_opt.unwrap());
+                result = "false";
+                if ok { result = "true"; }
+                did_handle = true;
+            }
+        }
+    } else if method == "__shortcuts:unregisterAll" {
+        Shortcuts::unregister_all();
+        did_handle = true;
+    }
+
+    if !did_handle {
+        dispatch_invoke_response(window_id, request_id, false, "UNKNOWN_SHORTCUT");
+        return;
+    }
+    dispatch_invoke_response(window_id, request_id, true, result);
+}
+
+// --- Clipboard handler ---
+//
+// Webview path. The Clipboard Zen-C namespace is the canonical layer;
+// JS calls land here and dispatch to it. Worker path is faster: jsc.m
+// and txiki.c expose `__zappBridge.clipboard(action, args)` that
+// invokes the same Zen-C namespace directly without crossing the IPC
+// boundary.
+fn router_handle_clipboard(method: string, args: JsonValue*, has_args: bool, window_id: int, request_id: int) -> void {
+    let result: string = "";
+    let is_string_result: bool = false;
+    let did_handle: bool = false;
+
+    if method == "__clipboard:readText" {
+        result = Clipboard::read_text();
+        is_string_result = true;
+        did_handle = true;
+    } else if method == "__clipboard:readHtml" {
+        result = Clipboard::read_html();
+        is_string_result = true;
+        did_handle = true;
+    } else if method == "__clipboard:readFiles" {
+        // Already JSON-shaped — pass through verbatim.
+        result = Clipboard::read_files();
+        did_handle = true;
+    } else if method == "__clipboard:has" {
+        if has_args {
+            let fmt_opt = args.get_string("format");
+            if fmt_opt.is_some() {
+                let ok = Clipboard::has(fmt_opt.unwrap());
+                result = "false";
+                if ok { result = "true"; }
+                did_handle = true;
+            }
+        }
+    } else if method == "__clipboard:writeText" {
+        if has_args {
+            let txt_opt = args.get_string("text");
+            if txt_opt.is_some() {
+                Clipboard::write_text(txt_opt.unwrap());
+            }
+        }
+        result = "null";
+        did_handle = true;
+    } else if method == "__clipboard:writeHtml" {
+        if has_args {
+            let h_opt = args.get_string("html");
+            if h_opt.is_some() {
+                Clipboard::write_html(h_opt.unwrap());
+            }
+        }
+        result = "null";
+        did_handle = true;
+    } else if method == "__clipboard:clear" {
+        Clipboard::clear();
+        result = "null";
+        did_handle = true;
+    } else if method == "__clipboard:readImagePng" {
+        // Returns base64 PNG, or empty string when no image present.
+        // Encoded server-side in clipboard.m so this raw block stays
+        // free of Foundation imports.
+        let b64: string = "";
+        raw {
+            char* encoded = darwin_clipboard_read_image_png_b64();
+            if (encoded) {
+                static char* cb_last_b64 = NULL;
+                if (cb_last_b64) free(cb_last_b64);
+                cb_last_b64 = encoded;
+                b64 = encoded;
+            }
+        }
+        // Already a string — fall through to the JSON-string-envelope path.
+        result = b64;
+        is_string_result = true;
+        did_handle = true;
+    } else if method == "__clipboard:writeImagePng" {
+        if has_args {
+            let b64_opt = args.get_string("data");
+            if b64_opt.is_some() {
+                let b64: string = b64_opt.unwrap();
+                raw {
+                    darwin_clipboard_write_image_png_b64((const char*)b64);
+                }
+            }
+        }
+        result = "null";
+        did_handle = true;
+    }
+
+    if !did_handle {
+        dispatch_invoke_response(window_id, request_id, false, "UNKNOWN_CLIPBOARD");
+        return;
+    }
+
+    if is_string_result {
+        // Wrap plain string in JSON string literal so JS-side JSON.parse
+        // gives back a string. Empty string → `""`.
+        raw {
+            static char cb_str_envelope[8192];
+            // Minimal escape: backslash and quote. clipboard text could
+            // contain newlines / tabs which JSON allows literally inside
+            // strings on most parsers, but escaping them is safer.
+            const char* src = (const char*)result;
+            size_t j = 0;
+            cb_str_envelope[j++] = '"';
+            for (size_t i = 0; src[i] && j + 2 < sizeof(cb_str_envelope) - 1; i++) {
+                char c = src[i];
+                if (c == '\\') { cb_str_envelope[j++] = '\\'; cb_str_envelope[j++] = '\\'; }
+                else if (c == '"') { cb_str_envelope[j++] = '\\'; cb_str_envelope[j++] = '"'; }
+                else if (c == '\n') { cb_str_envelope[j++] = '\\'; cb_str_envelope[j++] = 'n'; }
+                else if (c == '\r') { cb_str_envelope[j++] = '\\'; cb_str_envelope[j++] = 'r'; }
+                else if (c == '\t') { cb_str_envelope[j++] = '\\'; cb_str_envelope[j++] = 't'; }
+                else { cb_str_envelope[j++] = c; }
+            }
+            cb_str_envelope[j++] = '"';
+            cb_str_envelope[j] = '\0';
+            result = cb_str_envelope;
+        }
+    }
+    dispatch_invoke_response(window_id, request_id, true, result);
 }

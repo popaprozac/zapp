@@ -628,6 +628,172 @@ binary bytes need base64 encoding. `JsonValue::stringify` handles
 escaping for you; avoid hand-rolling JSON when the data contains
 arbitrary strings.
 
+## Reading and writing files from a service
+
+Services frequently need to read, write, or list files — a config file,
+a user-picked upload, a cached fetch result. Zapp exposes `app.fs.*`
+for this with an allowlist model enforced at every call.
+
+**Declare allowed paths in `zapp.config.ts`:**
+
+```ts
+export default defineConfig({
+  name: "MyApp",
+  fs: {
+    allow: [
+      "$userData",              // ~/Library/Application Support/<bundle-id>/
+      "$temp",                  // NSTemporaryDirectory()
+      "~/Documents/MyApp",      // absolute, recursive
+    ],
+  },
+});
+```
+
+Path variables resolve at runtime:
+
+| Variable | Resolves to |
+|---|---|
+| `$userData` / `$appData` | `~/Library/Application Support/<bundle-id>/` |
+| `$cache` | `~/Library/Caches/<bundle-id>/` |
+| `$temp` | `NSTemporaryDirectory()` |
+| `$home` | `NSHomeDirectory()` |
+| `$downloads` | `~/Downloads` (requires entitlement if sandboxed) |
+| `$documents` | `~/Documents` (requires entitlement if sandboxed) |
+| `~/...` | alias for `$home/...` |
+
+**Use from a service handler:**
+
+```zc
+import "../fs/fs.zc";
+
+fn handle_save_note(app: App*, args_json: string, _rid: int) -> string {
+    let parsed = JsonValue::parse(args_json).unwrap();
+    let body = parsed.get_string("body").unwrap();
+    let ok = app.fs.write_file("$userData/notes/latest.md", body);
+    if ok { return "{\"ok\":true}"; }
+    return "{\"ok\":false}";
+}
+```
+
+**Paths granted via `Dialog.openFile` extend the allowlist for the
+session.** When the user picks a file, you can read it back through
+`app.fs.read_file` without putting its directory in `zapp.config.ts`:
+
+```ts
+// webview or worker side
+const { paths } = await Dialog.openFile({});
+// paths[0] is now readable via a service that calls app.fs.read_file(...)
+```
+
+**API surface:**
+
+```zc
+app.fs.read_file(path: string) -> string       // "" on denial / not found
+app.fs.write_file(path: string, data: string) -> bool
+app.fs.append_file(path: string, data: string) -> bool
+app.fs.exists(path: string) -> bool
+app.fs.read_dir(path: string) -> string        // JSON: [{name, kind}, ...]
+app.fs.mkdir(path: string, recursive: bool) -> bool
+app.fs.remove(path: string) -> bool            // file or empty dir
+app.fs.rmdir(path: string, recursive: bool) -> bool
+app.fs.rename(from: string, to: string) -> bool
+app.fs.copy(from: string, to: string) -> bool
+app.fs.grant(path: string) -> void             // extend session allowlist
+app.fs.expand(path: string) -> string          // $var → absolute
+```
+
+Every call expands `$vars` / `~/...` and prefix-matches against the
+allowlist. Paths containing `..` segments are rejected outright. Denied
+calls return `""` / `false` — layer your own error reporting on top if
+you need to distinguish "denied" from "not found."
+
+**Scope note:** `FS` is not available in the webview. Webview code
+should go through a service (see [Calling services from
+JS](#calling-services-from-js)) or use `Dialog.openFile` for
+user-initiated reads. A worker-JS binding will land in a follow-up
+alpha; until then, call FS from Zen-C service code.
+
+## Other native APIs available from services
+
+The same native primitives the JS runtime exposes are also reachable
+from Zen-C as methods on the `App` struct (or the matching namespace).
+This is the **native-first** half of every Zapp API: the C/Obj-C
+function is the platform primitive; the Zen-C method is the idiomatic
+caller-facing API; the TS runtime is a presentation layer on top. From
+inside a service handler you can skip the bridge round-trip and call
+the Zen-C method directly:
+
+```zc
+// Show a Finder reveal as part of a save flow.
+fn handle_export_done(app: App*, args_json: string, _rid: int) -> string {
+    let path_opt = JsonValue::parse(args_json).unwrap().get_string("path");
+    if path_opt.is_some() {
+        app.show_item_in_folder(path_opt.unwrap());
+    }
+    return "{\"ok\":true}";
+}
+
+// React to system theme changes from a worker.
+let theme = app.get_theme();   // "light" | "dark"
+```
+
+**Currently available `App::*` methods** (mirrors the JS `App.*`
+namespace):
+
+```zc
+app.open_external(url: string)            // browser
+app.show_item_in_folder(path: string)     // Finder reveal
+app.open_path(path: string)               // open with default app
+app.trash_item(path: string)              // → Trash (allowlist-gated)
+app.get_theme() -> string                 // "light" | "dark"
+```
+
+**`Workers::*`** static namespace (no instance — call directly):
+
+```zc
+Workers::terminate(id: string)            // by ID; "h-foo" for headless
+```
+
+**`Clipboard::*`** static namespace — read/write the system clipboard:
+
+```zc
+Clipboard::read_text() -> string          // "" if no text
+Clipboard::write_text(text: string) -> bool
+Clipboard::read_html() -> string
+Clipboard::write_html(html: string) -> bool
+Clipboard::read_files() -> string         // JSON array of paths, or "[]"
+Clipboard::has(fmt: string) -> bool       // "text" | "html" | "image" | "files"
+Clipboard::clear() -> void
+```
+
+Image bytes are intentionally absent from the Zen-C surface —
+services that handle images typically work with file paths via FS +
+Dialog grants. JS code gets `Clipboard.readImage()` for the
+in-memory PNG case.
+
+**`Shortcuts::*`** static namespace — system-wide hotkeys via
+Carbon's `RegisterEventHotKey`:
+
+```zc
+Shortcuts::register(accelerator: string) -> bool
+Shortcuts::unregister(accelerator: string) -> bool
+Shortcuts::is_registered(accelerator: string) -> bool
+Shortcuts::unregister_all() -> void
+```
+
+The native side dispatches `app:shortcut-triggered` events with
+`{accelerator: "..."}` payload on every press. Zen-C consumers can
+listen via `App::on(...)` for the corresponding event name.
+Per-accelerator native callbacks are intentionally not part of this
+API — function pointers across thread boundaries (Carbon dispatches
+on main; services run wherever) are a footgun better solved by the
+existing event system.
+
+All of these are thin wrappers around the same C primitives the JS
+side calls — same allowlist gating on `trash_item`, same path-var
+expansion on the Finder methods, same shared-worker rejection on
+`Workers::terminate`. Zen-C services pay no extra cost for using them.
+
 ## Further reading
 
 - [`api-reference.md`](api-reference.md) — runtime API including Services

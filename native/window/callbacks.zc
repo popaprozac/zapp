@@ -11,7 +11,7 @@ raw {
     #define ZAPP_MAX_WINDOW_CALLBACKS 64
     #endif
     #ifndef ZAPP_MAX_WINDOW_EVENT_TYPES
-    #define ZAPP_MAX_WINDOW_EVENT_TYPES 11
+    #define ZAPP_MAX_WINDOW_EVENT_TYPES 12
     #endif
 
     // --- Layer 1: Native callbacks ---

@@ -78,4 +78,11 @@ void windows_window_set_bridge_ready(const char* window_id);
 // --- Load URL in a window's WebView ---
 void windows_window_load_url(int32_t window_id, const char* url);
 
+// --- Modal sheets ---
+// Stub on Windows for now — Win32 doesn't have a direct sheet equivalent.
+// Closest pattern is owned dialog with EnableWindow(parent, FALSE) or a
+// modal message loop. Defer until macOS modal API stabilizes.
+void windows_window_attach_modal(void* parent_handle, void* modal_handle);
+void windows_window_detach_modal(void* parent_handle, void* modal_handle);
+
 #endif

@@ -18,13 +18,15 @@ export { App } from "./app";
 export { Window, type WindowHandle, type WindowOptions } from "./window";
 export { Events, WindowEvent, AppEvent, eventName, type WindowPayload, type WindowSizePayload, type EventName } from "./events";
 export { Services, type InvokeOptions, type CancellablePromise } from "./services";
-export { Worker, SharedWorker, SharedWorkerPort, type WorkerMessageEvent } from "./worker";
+export { Worker, SharedWorker, SharedWorkerPort, Workers, type WorkerMessageEvent } from "./worker";
 export { Dialog, type OpenFileOptions, type SaveFileOptions, type MessageOptions, type OpenFileResult, type SaveFileResult, type MessageResult } from "./dialog";
 export { Menu, type MenuItemDef, type MenuHandle } from "./menu";
 export { ContextMenu, type ContextMenuOptions } from "./context-menu";
 export { Notification, type NotificationOptions, type ScheduleOptions, type PermissionStatus } from "./notification";
 export { Sync, type SyncWaitOptions } from "./sync";
 export { Dock } from "./dock";
+export { Clipboard, type ClipboardFormat } from "./clipboard";
+export { Shortcuts } from "./shortcuts";
 
 // Re-export worker globals type declarations.
 // Workers should add: import "@zappdev/runtime/worker-globals";

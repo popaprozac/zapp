@@ -473,6 +473,116 @@ static void jsc_setup_bridge(JSContext* ctx, NSString* workerId) {
         if ([act isEqualToString:@"resetIcon"]) { darwin_dock_reset_icon(); return; }
     };
 
+    // clipboard(action, args) — dispatcher matching the notif/dock pattern.
+    // Workers get sync access to NSPasteboard via this host without paying
+    // the webview IPC roundtrip. Returns:
+    //   readText / readHtml → string (empty if absent)
+    //   readFiles → string[] (empty if absent)
+    //   readImage → string (base64 PNG, empty if absent)
+    //   has → boolean
+    //   write* / clear → undefined
+    bridge[@"clipboard"] = ^JSValue*(NSString* action, JSValue* argsVal) {
+        JSContext* currentCtx = [JSContext currentContext];
+        extern char* darwin_clipboard_read_text(void);
+        extern bool darwin_clipboard_write_text(const char* text);
+        extern char* darwin_clipboard_read_html(void);
+        extern bool darwin_clipboard_write_html(const char* html);
+        extern char* darwin_clipboard_read_files(void);
+        extern char* darwin_clipboard_read_image_png_b64(void);
+        extern bool darwin_clipboard_write_image_png_b64(const char* b64);
+        extern bool darwin_clipboard_has(const char* fmt);
+        extern void darwin_clipboard_clear(void);
+
+        NSString* act = action ?: @"";
+        if ([act isEqualToString:@"readText"]) {
+            char* s = darwin_clipboard_read_text();
+            JSValue* r = s ? [JSValue valueWithObject:[NSString stringWithUTF8String:s] inContext:currentCtx]
+                           : [JSValue valueWithObject:@"" inContext:currentCtx];
+            if (s) free(s);
+            return r;
+        }
+        if ([act isEqualToString:@"writeText"]) {
+            NSString* t = argsVal[@"text"] ? [argsVal[@"text"] toString] : @"";
+            darwin_clipboard_write_text([t UTF8String]);
+            return [JSValue valueWithUndefinedInContext:currentCtx];
+        }
+        if ([act isEqualToString:@"readHtml"]) {
+            char* s = darwin_clipboard_read_html();
+            JSValue* r = s ? [JSValue valueWithObject:[NSString stringWithUTF8String:s] inContext:currentCtx]
+                           : [JSValue valueWithObject:@"" inContext:currentCtx];
+            if (s) free(s);
+            return r;
+        }
+        if ([act isEqualToString:@"writeHtml"]) {
+            NSString* h = argsVal[@"html"] ? [argsVal[@"html"] toString] : @"";
+            darwin_clipboard_write_html([h UTF8String]);
+            return [JSValue valueWithUndefinedInContext:currentCtx];
+        }
+        if ([act isEqualToString:@"readFiles"]) {
+            char* json = darwin_clipboard_read_files();
+            // Returned as JSON-array string; parse to array on JS side.
+            // Pass through as a JS string here — the runtime wrapper
+            // calls JSON.parse on it.
+            JSValue* r = json ? [JSValue valueWithObject:[NSString stringWithUTF8String:json] inContext:currentCtx]
+                              : [JSValue valueWithObject:@"[]" inContext:currentCtx];
+            if (json) free(json);
+            return r;
+        }
+        if ([act isEqualToString:@"readImage"]) {
+            char* b64 = darwin_clipboard_read_image_png_b64();
+            JSValue* r = b64 ? [JSValue valueWithObject:[NSString stringWithUTF8String:b64] inContext:currentCtx]
+                             : [JSValue valueWithObject:@"" inContext:currentCtx];
+            if (b64) free(b64);
+            return r;
+        }
+        if ([act isEqualToString:@"writeImage"]) {
+            NSString* b64 = argsVal[@"data"] ? [argsVal[@"data"] toString] : @"";
+            darwin_clipboard_write_image_png_b64([b64 UTF8String]);
+            return [JSValue valueWithUndefinedInContext:currentCtx];
+        }
+        if ([act isEqualToString:@"has"]) {
+            NSString* fmt = argsVal[@"format"] ? [argsVal[@"format"] toString] : @"";
+            BOOL has = darwin_clipboard_has([fmt UTF8String]);
+            return [JSValue valueWithBool:has inContext:currentCtx];
+        }
+        if ([act isEqualToString:@"clear"]) {
+            darwin_clipboard_clear();
+            return [JSValue valueWithUndefinedInContext:currentCtx];
+        }
+        return [JSValue valueWithUndefinedInContext:currentCtx];
+    };
+
+    // shortcuts(action, args) — register/unregister/isRegistered/unregisterAll.
+    // Returns boolean for the per-accelerator actions, undefined for
+    // unregisterAll. Workers can register hotkeys directly without IPC.
+    bridge[@"shortcuts"] = ^JSValue*(NSString* action, JSValue* argsVal) {
+        JSContext* currentCtx = [JSContext currentContext];
+        extern bool darwin_shortcut_register(const char* a);
+        extern bool darwin_shortcut_unregister(const char* a);
+        extern bool darwin_shortcut_is_registered(const char* a);
+        extern void darwin_shortcut_unregister_all(void);
+
+        NSString* act = action ?: @"";
+        if ([act isEqualToString:@"unregisterAll"]) {
+            darwin_shortcut_unregister_all();
+            return [JSValue valueWithUndefinedInContext:currentCtx];
+        }
+        NSString* acc = argsVal[@"accelerator"] ? [argsVal[@"accelerator"] toString] : @"";
+        if ([act isEqualToString:@"register"]) {
+            return [JSValue valueWithBool:darwin_shortcut_register([acc UTF8String])
+                                inContext:currentCtx];
+        }
+        if ([act isEqualToString:@"unregister"]) {
+            return [JSValue valueWithBool:darwin_shortcut_unregister([acc UTF8String])
+                                inContext:currentCtx];
+        }
+        if ([act isEqualToString:@"isRegistered"]) {
+            return [JSValue valueWithBool:darwin_shortcut_is_registered([acc UTF8String])
+                                inContext:currentCtx];
+        }
+        return [JSValue valueWithUndefinedInContext:currentCtx];
+    };
+
     ctx[@"__zappBridge"] = bridge;
 
     // setTimeout / setInterval
@@ -632,7 +742,7 @@ bool jsc_worker_create(const char* script_url, const char* owner_id, const char*
             // Bundled workers have no live module imports/exports, so wrapping
             // is semantically safe — top-level vars become locals to the IIFE.
             NSString* wrapped = [NSString stringWithFormat:
-                @"(async () => {\n%@\n})().catch(e => { console.error('[worker error]', e && e.stack ? e.stack : e); });",
+                @"(async () => {\n%@\n})().catch(e => { console.error('[worker error]', (e && e.message) || String(e), e && e.stack ? '\\n' + e.stack : ''); });",
                 scriptContent];
             [ctx evaluateScript:wrapped withSourceURL:[NSURL URLWithString:scriptUrl]];
         } else {

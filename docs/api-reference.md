@@ -20,7 +20,11 @@ import {
   Services, type InvokeOptions, type CancellablePromise,
 
   // Workers
-  Worker, SharedWorker, SharedWorkerPort, type WorkerMessageEvent,
+  Worker, SharedWorker, SharedWorkerPort, Workers, type WorkerMessageEvent,
+
+  // System integration
+  Clipboard, type ClipboardFormat,
+  Shortcuts,
 
   // Native UI
   Dialog, type OpenFileOptions, type SaveFileOptions, type MessageOptions,
@@ -71,6 +75,60 @@ Opens a URL in the system's default browser (not in the app's webview).
 App.openExternal("https://example.com");
 ```
 
+### `App.showItemInFolder(path: string): void`
+
+Reveal a file or folder in Finder, with the item selected — same as
+right-click → "Show in Finder". Fire-and-forget; silently no-ops if
+the path is empty or doesn't exist. Path variables (`$userData`,
+`~/`, etc.) are expanded the same way `app.fs.*` resolves them.
+
+```ts
+App.showItemInFolder("/Users/me/Downloads/zapp-app.dmg");
+App.showItemInFolder("$userData/exports/report.pdf");
+```
+
+Note: passing a folder reveals the folder *inside its parent* (with
+the folder selected), not the folder's contents. To open a folder
+itself in Finder, use `App.openPath(folder)`.
+
+Not gated by the FS allowlist — Finder reveal is a user-visible
+action and doesn't mutate disk state.
+
+### `App.openPath(path: string): void`
+
+Open a file or folder using the system default application —
+equivalent to a double-click in Finder. For URLs with schemes
+(`https://`, `mailto:`, etc.) use `App.openExternal` instead; this
+method takes filesystem paths only. Path variables are expanded.
+
+```ts
+App.openPath("/Users/me/Documents/notes.md");   // opens in default editor
+App.openPath("/Users/me/Documents");             // opens folder in Finder
+App.openPath("$userData/cache");                  // path-var expansion
+```
+
+Not gated by the FS allowlist — handing off to the default app is a
+user-visible action that the user can cancel.
+
+### `App.trashItem(path: string): void`
+
+Move a file or folder to the user's Trash. Reversible via Finder's
+"Put Back" command. Fire-and-forget; silent on failure — path missing,
+permission denied, **or path not in `config.fs.allow`**. To confirm
+removal, follow with `app.fs.exists(path)`. Path variables are
+expanded.
+
+```ts
+App.trashItem("$userData/old-cache.db");
+```
+
+**Gated by the FS allowlist.** Same `config.fs.allow` list that gates
+`app.fs.remove` — without this gate, JS could trash arbitrary paths
+on disk, bypassing the allowlist that protects every other
+path-mutating call. Files the user picks via `Dialog.openFile`
+extend the session allowlist automatically, so the common
+"user picks file → app trashes it" flow works out of the box.
+
 ### `App.on(event: AppEvent, handler): () => void`
 
 Listen to app lifecycle events. Returns an unsubscribe function.
@@ -92,6 +150,36 @@ Returns the config object the native bootstrap injected on window creation
 (a subset of `zapp.config.ts` plus computed values). Mostly useful for
 debugging — prefer reading specific config values from services if you
 need them at runtime.
+
+### `App.getTheme(): "light" | "dark"`
+
+Current system appearance. Synchronous — backed by an in-memory cache
+seeded at import time from the bootstrap config (so the first read after
+launch is already correct, no flash) and refreshed on every
+`AppEvent.THEME_CHANGED`.
+
+Pair with the event for live updates:
+
+```ts
+import { App, AppEvent } from "@zappdev/runtime";
+
+function applyTheme(theme: "light" | "dark") {
+  document.documentElement.dataset.theme = theme;
+}
+
+applyTheme(App.getTheme());
+App.on(AppEvent.THEME_CHANGED, ({ theme }) => applyTheme(theme));
+```
+
+**`AppEvent.THEME_CHANGED` fires** when the user toggles
+System Settings → Appearance, when an auto-schedule flips
+light↔dark, or when a per-window appearance override changes.
+Payload: `{ theme: "light" | "dark" }`.
+
+**Worker caveat.** Workers don't receive bootstrap config, so the
+cached value defaults to `"light"` until the first
+`app:theme-changed` event arrives. If a worker needs the theme
+synchronously before then, gate that work on the first event.
 
 ---
 
@@ -189,17 +277,56 @@ w.on(WindowEvent.READY, () => w.show());
   height?: number
   x?: number
   y?: number
-  visible?: boolean               // default: true
+  visible?: boolean               // default: true — auto-shows when content is ready
   resizable?: boolean             // default: true
-  closable?: boolean              // default: true
-  minimizable?: boolean           // default: true
-  maximizable?: boolean           // default: true
+  closable?: boolean              // default: true   (sugar for trafficLights.close)
+  minimizable?: boolean           // default: true   (sugar for trafficLights.minimize)
+  maximizable?: boolean           // default: true   (sugar for trafficLights.zoom)
   fullscreen?: boolean            // default: false
   borderless?: boolean            // default: false
   transparent?: boolean           // default: false
   alwaysOnTop?: boolean           // default: false
   titleBarStyle?: "default" | "hidden" | "hiddenInset"
+  trafficLights?: {
+    close?:    "enabled" | "disabled" | "hidden"  // default: "enabled"
+    minimize?: "enabled" | "disabled" | "hidden"
+    zoom?:     "enabled" | "disabled" | "hidden"
+  }
+  acceptFirstMouse?: boolean      // default: true (macOS — first click both focuses and triggers)
+  asSheetOf?: WindowHandle | string  // atomic create-and-attach as modal sheet
+  autoCenter?: boolean            // center on active screen at create time (overrides x/y)
+  frameAutosaveName?: string      // persist frame (position + size) to NSUserDefaults under this name
 }
+```
+
+**Visibility model.** `visible` is cosmetic — the window is fully created
+either way. With `visible: true` (default), the framework defers
+`makeKeyAndOrderFront` until the bridge bootstrap signals ready (with
+`didFinishNavigation` as a fallback). This eliminates the white-flash
+that would otherwise show while the webview loads. Apps don't need to
+wire `on(READY, () => show())` themselves — that pattern is no longer
+needed. Pass `visible: false` if you want to defer showing yourself and
+call `show()` manually when your app's logic decides it's time.
+
+**Traffic lights:** per-button control over the macOS close/minimize/zoom
+buttons. `"enabled"` is the default clickable state; `"disabled"` greys
+the button; `"hidden"` removes it entirely (leaves a gap unless paired
+with a custom titlebar). The legacy `closable` / `minimizable` /
+`maximizable` booleans are sugar: `false` maps to the corresponding
+button's `"disabled"` state. An explicit `trafficLights` object wins
+over the legacy booleans.
+
+```ts
+// Custom titlebar — hide all three traffic lights, draw your own.
+Window.create({
+  titleBarStyle: "hidden",
+  trafficLights: { close: "hidden", minimize: "hidden", zoom: "hidden" },
+});
+
+// Chromeless tool window — only close button, zoom greyed, minimize gone.
+Window.create({
+  trafficLights: { close: "enabled", minimize: "hidden", zoom: "disabled" },
+});
 ```
 
 ### `WindowHandle`
@@ -226,7 +353,71 @@ setCloseGuard(on: boolean): void
   // but don't actually close. Call close() explicitly from the handler.
 
 loadUrl(url: string): void
+
+attachModal(modal: WindowHandle): void
+detachModal(modal: WindowHandle): void
 ```
+
+### Modal sheets
+
+`attachModal` shows another window as a macOS sheet anchored to this
+window's titlebar. The sheet blocks interaction with the parent only —
+the rest of the app stays usable. Closing the modal (close button,
+`modal.close()`, `modal.destroy()`) auto-dismisses the sheet.
+
+**Recommended: `Window.create({ asSheetOf: parent })`** — atomic
+create-and-attach in one call, no flash:
+
+```ts
+const parent = Window.current();
+const settings = await Window.create({
+  title: "Settings", width: 500, height: 400,
+  asSheetOf: parent,
+});
+// settings is now a sheet on parent — no separate attachModal needed.
+
+// Listen for dismissal on the parent:
+parent.on(WindowEvent.MODAL_DISMISSED, ({ modalId, code }) => {
+  if (modalId === settings.id) {
+    // code: NSModalResponse value (1=OK, 0=Cancel, -1000=Stop, ...)
+  }
+});
+```
+
+**Manual attach** still works if you need to create-then-attach
+separately (e.g. parent is selected at runtime):
+
+```ts
+const modal = await Window.create({
+  title: "Settings",
+  width: 500, height: 400,
+  visible: false,                // create hidden so it doesn't briefly flash
+});
+Window.current().attachModal(modal);
+// (attachModal also auto-hides a visible standalone modal as a fallback,
+// but you'll see a brief flash — prefer asSheetOf or visible:false.)
+
+// Optional explicit dismiss without closing the modal window:
+// Window.current().detachModal(modal);
+```
+
+`MODAL_DISMISSED` fires on the **parent** when the sheet detaches — via
+the modal's close button, `modal.close()`, `modal.destroy()`, or
+explicit `parent.detachModal(modal)`. Payload: `{ windowId, modalId,
+code, timestamp }` where `code` is the underlying NSModalResponse:
+`1` = OK, `0` = Cancel, `-1000` = Stop (default for self-closed),
+`-1001` = Abort (modal was forcibly detached because it was being
+re-attached to a different parent).
+
+**Honored `WindowOptions` on a modal:** `title`, `url`, `width`,
+`height`, `transparent`, `webContentInspectable`. Position,
+`fullscreen`, `borderless`, `titleBarStyle`, `trafficLights`, and
+`alwaysOnTop` are meaningless for sheets and ignored.
+
+**Platform support:** macOS only today. Windows is a no-op until
+WebView2 modal support lands — design pending (Win32 has no clean
+sheet equivalent; closest pattern is owned topmost child + `EnableWindow`
+on the parent).
 
 `on()` auto-filters — only fires for events targeting this specific window.
 No manual windowId checking needed.
@@ -329,6 +520,33 @@ worker tear down.
 
 Each webview gets its own `SharedWorkerPort` — messages posted from the
 worker via `worker.clients` broadcast to every connected port.
+
+### `Workers.terminate(id: string): void`
+
+Terminate a worker by ID. Use this when you only have a string ID and
+no live `Worker` handle — most commonly for **headless workers**
+configured via `zapp.config.ts`'s `headless` map, since those are
+started by the framework and never expose a JS-side `Worker` instance.
+
+Recognised ID forms:
+- `"w-N"` — dedicated worker instance (same effect as
+  `worker.terminate()`).
+- `"h-<key>"` — headless worker keyed by `zapp.config.ts`. For
+  `headless: { sync: "..." }` the runtime ID is `"h-sync"`.
+- `"sw-N"` — **rejected at the native layer.** Shared workers are
+  refcounted — drop your last `SharedWorker` reference (or call
+  `port.disconnect()`) and the last release auto-terminates. Calling
+  `Workers.terminate("sw-…")` is a silent no-op rather than an error
+  so callers don't have to branch on worker type.
+
+Unknown IDs are also a silent no-op (native logs but doesn't throw).
+
+```ts
+import { Workers } from "@zappdev/runtime";
+
+// Stop the headless sync worker — e.g. user toggled "Pause sync".
+Workers.terminate("h-sync");
+```
 
 ---
 
@@ -592,6 +810,125 @@ Dock.resetIcon()
 On Windows, a taskbar-equivalent API is planned (see
 [`../WINDOWS_PORTING.md`](../WINDOWS_PORTING.md)). Calls are no-ops until
 that lands.
+
+---
+
+## `Clipboard`
+
+Read and write the system clipboard. Works in webviews and workers —
+worker contexts use a sync host-object fast path
+(`__zappBridge.clipboard`) so they skip the IPC roundtrip; webviews
+go through the bridge. The promise return shape is identical in both.
+
+```ts
+import { Clipboard } from "@zappdev/runtime";
+
+await Clipboard.writeText("hello");
+const text = await Clipboard.readText();   // "" if no text
+
+await Clipboard.writeHtml("<b>bold</b>");
+const html = await Clipboard.readHtml();   // "" if no HTML
+
+if (await Clipboard.has("image")) {
+  const png = await Clipboard.readImage(); // Uint8Array | null
+}
+
+const files = await Clipboard.readFiles(); // string[] of paths
+await Clipboard.clear();
+```
+
+### `Clipboard.has(format): Promise<boolean>`
+
+Tests whether the clipboard currently contains a given format.
+`format` is `"text" | "html" | "image" | "files"`. Useful for guarding
+reads that might return empty/null.
+
+### `Clipboard.readImage()` notes
+
+- Returns PNG bytes as a `Uint8Array`, or `null` when no image.
+- Apple-deposited TIFF (Preview's "Copy", many screen-capture tools)
+  is transparently re-encoded to PNG on the native side, so consumers
+  always get PNG.
+- Bridge crosses as base64 — the runtime decodes back to a
+  `Uint8Array` on the JS side.
+
+### `Clipboard.readFiles()` notes
+
+- Returns absolute file paths from clipboard file references — most
+  commonly populated by Cmd-C in Finder.
+- Empty array when the clipboard has no `NSPasteboardTypeFileURL`
+  entries.
+
+### Platform support
+
+macOS only today. Windows is a no-op until WebView2 / Win32 clipboard
+integration lands (planned in `WINDOWS_PORTING.md`).
+
+---
+
+## `Shortcuts` — global hotkeys
+
+System-wide hotkeys that fire whether or not the app is focused.
+Backed by Carbon's `RegisterEventHotKey` on macOS — no accessibility
+permission required, no entitlement, works from menu-bar-only apps.
+
+```ts
+import { Shortcuts, Window } from "@zappdev/runtime";
+
+const ok = await Shortcuts.register("CmdOrCtrl+Shift+Space", () => {
+  Window.current().show();
+});
+if (!ok) console.warn("hotkey unavailable — already taken?");
+
+await Shortcuts.unregister("CmdOrCtrl+Shift+Space");
+await Shortcuts.unregisterAll();
+```
+
+### Accelerator syntax
+
+Same notation as menu accelerators:
+`<modifier>+<modifier>+...+<key>`. Modifiers and keys are
+case-insensitive.
+
+**Modifiers:** `Cmd` / `Command` / `CmdOrCtrl` / `Meta`, `Ctrl` /
+`Control`, `Alt` / `Option`, `Shift`.
+
+**Keys:** `A`–`Z`, `0`–`9`, `Space`, `Tab`, `Return` / `Enter`,
+`Escape` / `Esc`, `Delete` / `Backspace`, `ForwardDelete`, `Left`,
+`Right`, `Up`, `Down`, `Home`, `End`, `PageUp`, `PageDown`,
+`F1`–`F12`.
+
+### `Shortcuts.register(accelerator, handler): Promise<boolean>`
+
+Resolves to `true` on success, `false` on:
+- accelerator already registered by this app (call `unregister`
+  first to replace).
+- the OS reports the hotkey is held by another app.
+- the accelerator string couldn't be parsed.
+
+The `handler` runs every time the hotkey is pressed system-wide
+until you unregister or the app exits. Errors thrown inside the
+handler are caught and logged.
+
+### `Shortcuts.unregister(accelerator): Promise<boolean>`
+
+Resolves to `true` if the accelerator was registered and is now
+released, `false` if it wasn't registered. Idempotent.
+
+### `Shortcuts.isRegistered(accelerator): Promise<boolean>`
+
+Whether *this app* currently holds the accelerator. Says nothing
+about whether other apps hold it.
+
+### `Shortcuts.unregisterAll(): Promise<void>`
+
+Releases every accelerator the app has registered. Useful for
+"Reset shortcuts" UI or test teardown.
+
+### Platform support
+
+macOS only today. Windows is a no-op until Win32 `RegisterHotKey`
+wires up.
 
 ---
 

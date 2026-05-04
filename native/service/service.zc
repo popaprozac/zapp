@@ -9,6 +9,7 @@
 
 import "std/result.zc";
 import "std/json.zc";
+import "../bridge/json_safe.zc";
 import "string.h" as str;
 
 struct App;
@@ -177,7 +178,10 @@ fn service_invoke_sync(app_ptr: void*, method: string, args_json: string) -> str
         return "";
     }
 
-    let parse_result = JsonValue::parse(args_json);
+    // zapp_json_parse — heap-allocating, handles large string tokens
+    // (avatar data URLs, file contents, etc.) without the SIGABRT the
+    // stdlib parser triggers on inputs > 4096 chars per string token.
+    let parse_result = zapp_json_parse(args_json);
     if parse_result.is_err() {
         let result = service_invoke(app, method, (JsonValue*)NULL);
         if result.is_ok() { return result.unwrap(); }

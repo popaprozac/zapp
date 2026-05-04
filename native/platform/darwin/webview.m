@@ -348,6 +348,22 @@ static BOOL zapp_is_navigation_allowed(NSURL* url) {
 @end
 
 @implementation ZappNavigationDelegate
+
+// Auto-show fallback. Primary path is darwin_window_set_bridge_ready
+// (fires when the bootstrap script runs at document-start). If the JS
+// bootstrap fails to fire for any reason, this catches the window when
+// navigation completes so it doesn't stay invisible forever. Whichever
+// fires first wins — applyAutoShowOnWindow is idempotent.
+- (void)webView:(WKWebView*)webView didFinishNavigation:(WKNavigation*)navigation {
+    (void)navigation;
+    NSWindow* window = webView.window;
+    if (!window) return;
+    id delegate = [window delegate];
+    if ([delegate respondsToSelector:@selector(applyAutoShowOnWindow:)]) {
+        [delegate performSelector:@selector(applyAutoShowOnWindow:) withObject:window];
+    }
+}
+
 - (void)webView:(WKWebView*)webView decidePolicyForNavigationAction:(WKNavigationAction*)action
     decisionHandler:(void (^)(WKNavigationActionPolicy))handler {
     NSURL* url = action.request.URL;
@@ -374,16 +390,109 @@ static BOOL zapp_is_navigation_allowed(NSURL* url) {
     if (url) [[NSWorkspace sharedWorkspace] openURL:url];
     return nil;
 }
+
+// DOM <input type="file"> → NSOpenPanel sheet on the owning window.
+// Routes through the same panel used by Dialog.openFile so third-party
+// libraries (react-dropzone, tiptap, etc.) that emit their own file
+// inputs work without app code changes.
+- (void)webView:(WKWebView*)webView
+    runOpenPanelWithParameters:(WKOpenPanelParameters*)params
+    initiatedByFrame:(WKFrameInfo*)frame
+    completionHandler:(void (^)(NSArray<NSURL*>* _Nullable))handler {
+    (void)frame;
+    NSOpenPanel* panel = [NSOpenPanel openPanel];
+    panel.canChooseFiles = YES;
+    panel.canChooseDirectories = params.allowsDirectories;
+    panel.allowsMultipleSelection = params.allowsMultipleSelection;
+
+    // Best-effort translation of HTML accept="..." — WebKit exposes the
+    // parsed extensions as a private KVC key. If unavailable, show all
+    // file types rather than failing.
+    @try {
+        id exts = [params valueForKey:@"_acceptedFileExtensions"];
+        if ([exts isKindOfClass:[NSArray class]] && [exts count] > 0) {
+            panel.allowedFileTypes = exts;
+        }
+    } @catch (NSException* ignored) { (void)ignored; }
+
+    NSWindow* parent = webView.window;
+    void (^finish)(NSModalResponse) = ^(NSModalResponse response) {
+        handler(response == NSModalResponseOK ? panel.URLs : nil);
+    };
+    if (parent) {
+        [panel beginSheetModalForWindow:parent completionHandler:finish];
+    } else {
+        finish([panel runModal]);
+    }
+}
 @end
 
 static ZappNavigationDelegate* zapp_shared_nav_delegate = nil;
 
-// --- App.openExternal ---
+// --- App / shell helpers ---
+//
+// Each helper main-thread-bounces because NSWorkspace's UI-affecting
+// methods (activateFileViewerSelectingURLs, openURL — the latter
+// trips assertions when invoked off-main on macOS 26.x) require it.
+// Callers may be webview, worker, or service contexts; trampolining
+// here means no caller has to think about it. Same pattern as the
+// alpha.31 fix to darwin_webview_eval_all.
 
 void darwin_open_external(const char* url_str) {
-    if (!url_str) return;
+    if (!url_str || !url_str[0]) return;
     NSURL* url = [NSURL URLWithString:[NSString stringWithUTF8String:url_str]];
-    if (url) [[NSWorkspace sharedWorkspace] openURL:url];
+    if (!url) return;
+    void (^run)(void) = ^{ [[NSWorkspace sharedWorkspace] openURL:url]; };
+    if ([NSThread isMainThread]) run();
+    else dispatch_async(dispatch_get_main_queue(), run);
+}
+
+// Reveal a file or folder in Finder with the item selected. For a
+// folder, Finder opens the *parent* and selects the folder; pass the
+// folder's contents path if you want the folder itself opened.
+void darwin_show_item_in_folder(const char* path) {
+    if (!path || !path[0]) return;
+    NSString* nsPath = [NSString stringWithUTF8String:path];
+    if (!nsPath) return;
+    NSURL* url = [NSURL fileURLWithPath:nsPath];
+    if (!url) return;
+    void (^run)(void) = ^{
+        [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[url]];
+    };
+    if ([NSThread isMainThread]) run();
+    else dispatch_async(dispatch_get_main_queue(), run);
+}
+
+// Open a file or folder using the system default application.
+// Files: launches the default app (TextEdit for .txt, Preview for
+// .png, etc.). Folders: opens in Finder. URLs with schemes go through
+// darwin_open_external instead — this is filesystem-paths-only.
+void darwin_open_path(const char* path) {
+    if (!path || !path[0]) return;
+    NSString* nsPath = [NSString stringWithUTF8String:path];
+    if (!nsPath) return;
+    NSURL* url = [NSURL fileURLWithPath:nsPath];
+    if (!url) return;
+    void (^run)(void) = ^{ [[NSWorkspace sharedWorkspace] openURL:url]; };
+    if ([NSThread isMainThread]) run();
+    else dispatch_async(dispatch_get_main_queue(), run);
+}
+
+// Move a file or folder to the user's Trash. Reversible via Finder's
+// "Put Back". Silent on failure (path missing, permission denied) —
+// callers wanting to know if it worked should fs.exists() afterward.
+void darwin_trash_item(const char* path) {
+    if (!path || !path[0]) return;
+    NSString* nsPath = [NSString stringWithUTF8String:path];
+    if (!nsPath) return;
+    NSURL* url = [NSURL fileURLWithPath:nsPath];
+    if (!url) return;
+    void (^run)(void) = ^{
+        [[NSFileManager defaultManager] trashItemAtURL:url
+                                      resultingItemURL:nil error:nil];
+    };
+    if ([NSThread isMainThread]) run();
+    else dispatch_async(dispatch_get_main_queue(), run);
 }
 
 // --- Drag Region ---
@@ -432,14 +541,22 @@ void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first
         cspExtra = [NSString stringWithFormat:@",csp:'%@'", cspStr];
     }
 
+    // theme: initial appearance at window-create time. App.getTheme() reads
+    // this on import, then refreshes from app:theme-changed events. Without
+    // the initial value, the first render in dark mode would briefly assume
+    // "light" until the first KVO fire — visible flash.
+    extern const char* darwin_get_theme(void);
+    const char* themeC = darwin_get_theme();
+    NSString* themeStr = [NSString stringWithUTF8String:themeC ? themeC : "light"];
+
     NSString* configScript = [NSString stringWithFormat:
         @"(function(){globalThis[Symbol.for('zapp.bootstrapConfig')]="
         "{name:'%@',applicationShouldTerminateAfterLastWindowClosed:%@,"
-        "webContentInspectable:%@,maxWorkers:%d%@};})();",
+        "webContentInspectable:%@,maxWorkers:%d,theme:'%@'%@};})();",
         appName,
         terminate ? @"true" : @"false",
         inspect ? @"true" : @"false",
-        maxWorkers, cspExtra];
+        maxWorkers, themeStr, cspExtra];
     [ucc addUserScript:[[WKUserScript alloc] initWithSource:configScript
         injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
 
@@ -525,6 +642,15 @@ void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first
     if ([webview respondsToSelector:@selector(setInspectable:)]) {
         [webview setInspectable:inspectable ? YES : NO];
     }
+    // Color the WKWebView's own background so it doesn't paint white
+    // before first content frame. underPageBackgroundColor (macOS 12+)
+    // is the canonical knob — it controls what WebKit renders behind
+    // page content during navigation, before first paint, and during
+    // scroll bounce. Like windowBackgroundColor, it's a dynamic NSColor
+    // that resolves correctly across light/dark mode without observation.
+    if ([webview respondsToSelector:@selector(setUnderPageBackgroundColor:)]) {
+        [webview setUnderPageBackgroundColor:[NSColor windowBackgroundColor]];
+    }
 
     // Navigation restrictions
     if (!zapp_shared_nav_delegate) {
@@ -545,14 +671,32 @@ void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first
 }
 
 // --- JS evaluation ---
+//
+// All three helpers below touch WKWebView APIs that are documented
+// main-thread-only (evaluateJavaScript:, loadRequest:, iterating
+// [NSApp windows]). Callers include workers firing Events.emit at high
+// rates (e.g. streaming large payloads, WebSocket receive loops) — from
+// those threads, calling these APIs directly is undefined behavior that
+// usually "works" but intermittently trips WebKit ProcessThrottler
+// invariants under load (EXC_BREAKPOINT brk 1 on macOS 26.x).
+//
+// Bounce to main when not already there. NSString is created up-front
+// (off the critical path) and captured into the block; dispatch_async
+// retains it through execution.
 
 void darwin_webview_eval(void* window_ptr, const char* js) {
+    if (!window_ptr || !js) return;
     NSWindow* window = (__bridge NSWindow*)window_ptr;
-    NSView* content = [window contentView];
-    if ([content isKindOfClass:[WKWebView class]]) {
-        NSString* script = [NSString stringWithUTF8String:js];
-        [(WKWebView*)content evaluateJavaScript:script completionHandler:nil];
-    }
+    NSString* script = [NSString stringWithUTF8String:js];
+    if (!script) return;
+    void (^run)(void) = ^{
+        NSView* content = [window contentView];
+        if ([content isKindOfClass:[WKWebView class]]) {
+            [(WKWebView*)content evaluateJavaScript:script completionHandler:nil];
+        }
+    };
+    if ([NSThread isMainThread]) run();
+    else dispatch_async(dispatch_get_main_queue(), run);
 }
 
 void darwin_window_load_url(int32_t window_id, const char* url) {
@@ -564,17 +708,26 @@ void darwin_window_load_url(int32_t window_id, const char* url) {
     // Same relative-URL rules as Window.create({ url }) — "#/chat" et al.
     // resolve against the initial URL rather than failing to parse.
     NSURL* nsurl = zapp_resolve_url(url);
-    if (nsurl) {
+    if (!nsurl) return;
+    void (^run)(void) = ^{
         [wv loadRequest:[NSURLRequest requestWithURL:nsurl]];
-    }
+    };
+    if ([NSThread isMainThread]) run();
+    else dispatch_async(dispatch_get_main_queue(), run);
 }
 
 void darwin_webview_eval_all(const char* js) {
+    if (!js) return;
     NSString* script = [NSString stringWithUTF8String:js];
-    for (NSWindow* window in [NSApp windows]) {
-        NSView* content = [window contentView];
-        if ([content isKindOfClass:[WKWebView class]]) {
-            [(WKWebView*)content evaluateJavaScript:script completionHandler:nil];
+    if (!script) return;
+    void (^run)(void) = ^{
+        for (NSWindow* window in [NSApp windows]) {
+            NSView* content = [window contentView];
+            if ([content isKindOfClass:[WKWebView class]]) {
+                [(WKWebView*)content evaluateJavaScript:script completionHandler:nil];
+            }
         }
-    }
+    };
+    if ([NSThread isMainThread]) run();
+    else dispatch_async(dispatch_get_main_queue(), run);
 }

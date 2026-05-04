@@ -763,6 +763,121 @@ static JSValue zapp_bridge_dock(JSContext* ctx, JSValueConst this_val, int argc,
 #endif /* __APPLE__ */
 }
 
+#ifdef __APPLE__
+extern char* darwin_clipboard_read_text(void);
+extern bool  darwin_clipboard_write_text(const char* text);
+extern char* darwin_clipboard_read_html(void);
+extern bool  darwin_clipboard_write_html(const char* html);
+extern char* darwin_clipboard_read_files(void);
+extern char* darwin_clipboard_read_image_png_b64(void);
+extern bool  darwin_clipboard_write_image_png_b64(const char* b64);
+extern bool  darwin_clipboard_has(const char* fmt);
+extern void  darwin_clipboard_clear(void);
+#endif
+
+static JSValue zapp_bridge_clipboard(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+#ifndef __APPLE__
+    (void)ctx; (void)this_val; (void)argc; (void)argv;
+    return JS_UNDEFINED;
+#else
+    (void)this_val;
+    if (argc < 1) return JS_UNDEFINED;
+    const char* action = JS_ToCString(ctx, argv[0]);
+    if (!action) return JS_UNDEFINED;
+    JSValue args = (argc >= 2) ? argv[1] : JS_UNDEFINED;
+    JSValue result = JS_UNDEFINED;
+
+    if (strcmp(action, "readText") == 0) {
+        char* s = darwin_clipboard_read_text();
+        result = JS_NewString(ctx, s ? s : "");
+        if (s) free(s);
+    } else if (strcmp(action, "writeText") == 0 && JS_IsObject(args)) {
+        JSValue v = JS_GetPropertyStr(ctx, args, "text");
+        const char* t = JS_IsString(v) ? JS_ToCString(ctx, v) : "";
+        darwin_clipboard_write_text(t);
+        if (JS_IsString(v)) JS_FreeCString(ctx, t);
+        JS_FreeValue(ctx, v);
+    } else if (strcmp(action, "readHtml") == 0) {
+        char* s = darwin_clipboard_read_html();
+        result = JS_NewString(ctx, s ? s : "");
+        if (s) free(s);
+    } else if (strcmp(action, "writeHtml") == 0 && JS_IsObject(args)) {
+        JSValue v = JS_GetPropertyStr(ctx, args, "html");
+        const char* h = JS_IsString(v) ? JS_ToCString(ctx, v) : "";
+        darwin_clipboard_write_html(h);
+        if (JS_IsString(v)) JS_FreeCString(ctx, h);
+        JS_FreeValue(ctx, v);
+    } else if (strcmp(action, "readFiles") == 0) {
+        char* json = darwin_clipboard_read_files();
+        // Returned as JSON-array string; runtime side parses.
+        result = JS_NewString(ctx, json ? json : "[]");
+        if (json) free(json);
+    } else if (strcmp(action, "readImage") == 0) {
+        char* b64 = darwin_clipboard_read_image_png_b64();
+        result = JS_NewString(ctx, b64 ? b64 : "");
+        if (b64) free(b64);
+    } else if (strcmp(action, "writeImage") == 0 && JS_IsObject(args)) {
+        JSValue v = JS_GetPropertyStr(ctx, args, "data");
+        const char* b64 = JS_IsString(v) ? JS_ToCString(ctx, v) : "";
+        darwin_clipboard_write_image_png_b64(b64);
+        if (JS_IsString(v)) JS_FreeCString(ctx, b64);
+        JS_FreeValue(ctx, v);
+    } else if (strcmp(action, "has") == 0 && JS_IsObject(args)) {
+        JSValue v = JS_GetPropertyStr(ctx, args, "format");
+        const char* fmt = JS_IsString(v) ? JS_ToCString(ctx, v) : "";
+        bool has = darwin_clipboard_has(fmt);
+        result = JS_NewBool(ctx, has);
+        if (JS_IsString(v)) JS_FreeCString(ctx, fmt);
+        JS_FreeValue(ctx, v);
+    } else if (strcmp(action, "clear") == 0) {
+        darwin_clipboard_clear();
+    }
+
+    JS_FreeCString(ctx, action);
+    return result;
+#endif /* __APPLE__ */
+}
+
+#ifdef __APPLE__
+extern bool darwin_shortcut_register(const char* a);
+extern bool darwin_shortcut_unregister(const char* a);
+extern bool darwin_shortcut_is_registered(const char* a);
+extern void darwin_shortcut_unregister_all(void);
+#endif
+
+static JSValue zapp_bridge_shortcuts(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+#ifndef __APPLE__
+    (void)ctx; (void)this_val; (void)argc; (void)argv;
+    return JS_UNDEFINED;
+#else
+    (void)this_val;
+    if (argc < 1) return JS_UNDEFINED;
+    const char* action = JS_ToCString(ctx, argv[0]);
+    if (!action) return JS_UNDEFINED;
+    JSValue args = (argc >= 2) ? argv[1] : JS_UNDEFINED;
+    JSValue result = JS_UNDEFINED;
+
+    if (strcmp(action, "unregisterAll") == 0) {
+        darwin_shortcut_unregister_all();
+    } else {
+        JSValue v = JS_IsObject(args) ? JS_GetPropertyStr(ctx, args, "accelerator") : JS_UNDEFINED;
+        const char* acc = JS_IsString(v) ? JS_ToCString(ctx, v) : "";
+        if (strcmp(action, "register") == 0) {
+            result = JS_NewBool(ctx, darwin_shortcut_register(acc));
+        } else if (strcmp(action, "unregister") == 0) {
+            result = JS_NewBool(ctx, darwin_shortcut_unregister(acc));
+        } else if (strcmp(action, "isRegistered") == 0) {
+            result = JS_NewBool(ctx, darwin_shortcut_is_registered(acc));
+        }
+        if (JS_IsString(v)) JS_FreeCString(ctx, acc);
+        JS_FreeValue(ctx, v);
+    }
+
+    JS_FreeCString(ctx, action);
+    return result;
+#endif /* __APPLE__ */
+}
+
 static void txiki_setup_bridge(JSContext* ctx, const char* worker_id) {
     // Register worker_id in the per-context cache so host objects can look it
     // up without a globalThis property fetch on every call.
@@ -794,6 +909,10 @@ static void txiki_setup_bridge(JSContext* ctx, const char* worker_id) {
         JS_NewCFunction(ctx, zapp_bridge_notif, "notif", 2));
     JS_SetPropertyStr(ctx, bridge, "dock",
         JS_NewCFunction(ctx, zapp_bridge_dock, "dock", 2));
+    JS_SetPropertyStr(ctx, bridge, "clipboard",
+        JS_NewCFunction(ctx, zapp_bridge_clipboard, "clipboard", 2));
+    JS_SetPropertyStr(ctx, bridge, "shortcuts",
+        JS_NewCFunction(ctx, zapp_bridge_shortcuts, "shortcuts", 2));
     JS_SetPropertyStr(ctx, global, "__zappBridge", bridge);
     JS_SetPropertyStr(ctx, global, "postMessage",
         JS_NewCFunction(ctx, zapp_bridge_post_to_webview, "postMessage", 1));

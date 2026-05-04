@@ -295,6 +295,11 @@ export async function generateInfoPlist(opts: PlistGenOptions): Promise<string> 
     addKey(plistKey, `<string>${xmlEscape(desc as string)}</string>`);
   }
 
+  // Single-instance enforcement (Launch Services rejects `open -n` etc.).
+  if (config.singleInstance) {
+    addKey("LSMultipleInstancesProhibited", `<true/>`);
+  }
+
   // Deep link URL schemes.
   const schemes = config.deepLinkSchemes;
   if (schemes && schemes.length > 0) {

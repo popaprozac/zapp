@@ -503,6 +503,19 @@ void windows_window_load_url(int32_t window_id, const char* url) {
     windows_webview_navigate(window_id, url);
 }
 
+// --- Modal sheets (stubs) ---
+// macOS sheets don't have a clean Win32 equivalent. The closest pattern is
+// EnableWindow(parent, FALSE) + own a topmost modal child + restore on
+// dismiss. Until we have a real Windows modal use case, no-op.
+void windows_window_attach_modal(void* parent_handle, void* modal_handle) {
+    (void)parent_handle;
+    (void)modal_handle;
+}
+void windows_window_detach_modal(void* parent_handle, void* modal_handle) {
+    (void)parent_handle;
+    (void)modal_handle;
+}
+
 // --- Drag region ---
 
 static int zapp_in_drag_region[ZAPP_MAX_WINDOWS] = {0};

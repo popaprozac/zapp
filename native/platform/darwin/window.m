@@ -23,6 +23,7 @@ extern int zapp_dispatch_event(int window_id, int event_id, int w, int h, int x,
 #define ZAPP_EVENT_WINDOW_RESTORE     8
 #define ZAPP_EVENT_WINDOW_FULLSCREEN  9
 #define ZAPP_EVENT_WINDOW_UNFULLSCREEN 10
+#define ZAPP_EVENT_WINDOW_MODAL_DISMISSED 11
 #endif
 #ifndef ZAPP_EVENT_RESULT_CANCEL
 #define ZAPP_EVENT_RESULT_CANCEL 1
@@ -49,11 +50,12 @@ static void zapp_register_webview(int32_t numericId, WKWebView* webview, NSStrin
 
 static const char* zapp_event_names[] = {
     "ready", "focus", "blur", "resize", "move", "close",
-    "minimize", "maximize", "restore", "fullscreen", "unfullscreen"
+    "minimize", "maximize", "restore", "fullscreen", "unfullscreen",
+    "modal-dismissed"
 };
 
 static inline const char* zapp_get_event_name(int event_id) {
-    if (event_id >= 0 && event_id < 11) return zapp_event_names[event_id];
+    if (event_id >= 0 && event_id < 12) return zapp_event_names[event_id];
     return "unknown";
 }
 
@@ -72,21 +74,31 @@ void zapp_dispatch_event_to_js(int32_t window_id, int32_t event_id, int32_t w, i
     const char* event_name = zapp_get_event_name(event_id);
     const char* wid = [windowId UTF8String];
 
-    // Build JS into reusable buffer
-    bool hasPayload = (event_id == ZAPP_EVENT_WINDOW_RESIZE || event_id == ZAPP_EVENT_WINDOW_MOVE ||
-                       event_id == ZAPP_EVENT_WINDOW_MAXIMIZE || event_id == ZAPP_EVENT_WINDOW_RESTORE);
-    if (hasPayload) {
+    // Build JS into reusable buffer. MODAL_DISMISSED gets a custom
+    // payload: w carries the modal numeric ID (mapped to "win-N") and h
+    // carries the NSModalResponse code, exposed as { modalId, code }.
+    if (event_id == ZAPP_EVENT_WINDOW_MODAL_DISMISSED) {
         snprintf(zapp_js_buf, sizeof(zapp_js_buf),
             "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
             "if(b&&typeof b.dispatchWindowEvent==='function'){"
-            "b.dispatchWindowEvent('%s','%s','{\"width\":%d,\"height\":%d,\"x\":%d,\"y\":%d}');}})();",
-            wid, event_name, w, h, x, y);
+            "b.dispatchWindowEvent('%s','%s','{\"modalId\":\"win-%d\",\"code\":%d}');}})();",
+            wid, event_name, w, h);
     } else {
-        snprintf(zapp_js_buf, sizeof(zapp_js_buf),
-            "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
-            "if(b&&typeof b.dispatchWindowEvent==='function'){"
-            "b.dispatchWindowEvent('%s','%s');}})();",
-            wid, event_name);
+        bool hasPayload = (event_id == ZAPP_EVENT_WINDOW_RESIZE || event_id == ZAPP_EVENT_WINDOW_MOVE ||
+                           event_id == ZAPP_EVENT_WINDOW_MAXIMIZE || event_id == ZAPP_EVENT_WINDOW_RESTORE);
+        if (hasPayload) {
+            snprintf(zapp_js_buf, sizeof(zapp_js_buf),
+                "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+                "if(b&&typeof b.dispatchWindowEvent==='function'){"
+                "b.dispatchWindowEvent('%s','%s','{\"width\":%d,\"height\":%d,\"x\":%d,\"y\":%d}');}})();",
+                wid, event_name, w, h, x, y);
+        } else {
+            snprintf(zapp_js_buf, sizeof(zapp_js_buf),
+                "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+                "if(b&&typeof b.dispatchWindowEvent==='function'){"
+                "b.dispatchWindowEvent('%s','%s');}})();",
+                wid, event_name);
+        }
     }
 
     NSString* js = [[NSString alloc] initWithBytesNoCopy:zapp_js_buf
@@ -108,6 +120,12 @@ static const char kZappWindowDelegateKey = 0;
 @property (nonatomic, assign) BOOL bridgeReady;
 @property (nonatomic, assign) BOOL pendingFocusEvent;
 @property (nonatomic, assign) BOOL wasZoomed;
+// Auto-show machinery — set in darwin_window_create from WindowOptions,
+// cleared by whichever ready signal fires first (bridge_ready primary,
+// didFinishNavigation fallback). Once cleared, makeKeyAndOrderFront has
+// already happened (or won't happen automatically).
+@property (nonatomic, assign) BOOL shouldAutoShow;
+@property (nonatomic, assign) BOOL fullscreenOnShow;
 @end
 
 @implementation ZappWindowDelegate
@@ -118,8 +136,24 @@ static const char kZappWindowDelegateKey = 0;
         _bridgeReady = NO;
         _pendingFocusEvent = NO;
         _wasZoomed = NO;
+        _shouldAutoShow = NO;
+        _fullscreenOnShow = NO;
     }
     return self;
+}
+
+// Apply queued auto-show + fullscreen state. Idempotent — if shouldAutoShow
+// is already cleared, this is a no-op. Called from both bridge_ready
+// (early, JS bootstrap signaled) and didFinishNavigation (fallback,
+// navigation completed). Whichever fires first wins.
+- (void)applyAutoShowOnWindow:(NSWindow*)window {
+    if (!self.shouldAutoShow || !window) return;
+    self.shouldAutoShow = NO;
+    [window makeKeyAndOrderFront:nil];
+    if (self.fullscreenOnShow) {
+        self.fullscreenOnShow = NO;
+        [window toggleFullScreen:nil];
+    }
 }
 
 - (BOOL)windowShouldClose:(NSWindow*)sender {
@@ -133,12 +167,17 @@ static const char kZappWindowDelegateKey = 0;
 
 - (void)windowWillClose:(NSNotification*)notification {
     (void)notification;
-    // Clear from dispatch table
+    // Clear from dispatch table. `close()` is reversible (the window is
+    // created with setReleasedWhenClosed:NO, so [window close] orders
+    // out but keeps the object alive for a later show()) — we must NOT
+    // tear down the WKWebView here, or show-after-close would display
+    // a broken webview. Real webview teardown happens in
+    // darwin_window_destroy which is the only path that actually
+    // releases the NSWindow.
     if (self.numericId >= 0 && self.numericId < ZAPP_MAX_WINDOW_CALLBACKS) {
         zapp_webviews[self.numericId] = nil;
         zapp_window_ids[self.numericId] = nil;
     }
-    // TODO: worker cleanup via owner ID
 }
 
 - (void)windowDidBecomeKey:(NSNotification*)notification {
@@ -225,6 +264,23 @@ const char* darwin_window_id_string(int32_t numeric_id) {
     return NULL;
 }
 
+// Reverse lookup: pointer-based JS-visible string ID → numeric ID.
+// JS holds windowId as "win-<NSWindow*>" (set by webview.m bootstrap),
+// but WindowManager keys by the numeric ID darwin_window_register_numeric_id
+// assigns. Multi-window APIs (attachModal/detachModal, asSheetOf) need the
+// numeric form to look up the WindowOptions instance, so this maps back.
+int32_t darwin_window_numeric_id_for_string(const char* window_id_string) {
+    if (!window_id_string || !window_id_string[0]) return -1;
+    NSString* target = [NSString stringWithUTF8String:window_id_string];
+    if (!target) return -1;
+    for (int i = 0; i < ZAPP_MAX_WINDOW_CALLBACKS; i++) {
+        if (zapp_window_ids[i] && [zapp_window_ids[i] isEqualToString:target]) {
+            return i;
+        }
+    }
+    return -1;
+}
+
 // --- Get WebView by numeric ID (O(1)) ---
 
 void* darwin_window_get_webview(int32_t numeric_id) {
@@ -264,6 +320,11 @@ void darwin_window_set_bridge_ready(const char* window_id) {
         if ([delegate isKindOfClass:[ZappWindowDelegate class]] &&
             [delegate.windowId isEqualToString:wid]) {
             delegate.bridgeReady = YES;
+            // Primary auto-show path — bridge bootstrap signaled. Earliest
+            // reliable "first frame is going to render" moment we have.
+            // didFinishNavigation in the nav delegate is the fallback if
+            // bootstrap doesn't fire (rare).
+            [delegate applyAutoShowOnWindow:window];
             if (delegate.pendingFocusEvent) {
                 delegate.pendingFocusEvent = NO;
                 if (delegate.numericId >= 0)
@@ -293,6 +354,14 @@ void* darwin_window_create(WindowOptions* opts) {
             styleMask:styleMask backing:NSBackingStoreBuffered defer:NO];
         [window setReleasedWhenClosed:NO];
 
+        // Paint the host dark-or-light correctly before the WKWebView
+        // shows up. windowBackgroundColor is a dynamic NSColor that
+        // tracks the system's effective appearance without us having to
+        // observe NSAppearance changes ourselves. Without this the
+        // brand-new NSWindow flashes its default (often white) backing
+        // before the webview's first paint replaces it.
+        [window setBackgroundColor:[NSColor windowBackgroundColor]];
+
         char* title = wopts_title(opts);
         NSString* titleStr = title ? [NSString stringWithUTF8String:title] : nil;
         // Defensive: stringWithUTF8String returns nil for invalid UTF-8.
@@ -320,6 +389,47 @@ void* darwin_window_create(WindowOptions* opts) {
             [window setLevel:NSFloatingWindowLevel];
         }
 
+        // Traffic lights (close / minimize / zoom). 0=Enabled, 1=Disabled,
+        // 2=Hidden. Per-button enabled/hidden overrides the style-mask
+        // defaults so apps can express "close greyed, zoom hidden, minimize
+        // clickable" without reshuffling the style mask.
+        {
+            int close_tag = wopts_traffic_light_close_tag(opts);
+            int min_tag = wopts_traffic_light_minimize_tag(opts);
+            int zoom_tag = wopts_traffic_light_zoom_tag(opts);
+            NSButton* closeBtn = [window standardWindowButton:NSWindowCloseButton];
+            NSButton* minBtn = [window standardWindowButton:NSWindowMiniaturizeButton];
+            NSButton* zoomBtn = [window standardWindowButton:NSWindowZoomButton];
+            if (closeBtn) {
+                closeBtn.hidden = (close_tag == 2);
+                closeBtn.enabled = (close_tag == 0);
+            }
+            if (minBtn) {
+                minBtn.hidden = (min_tag == 2);
+                minBtn.enabled = (min_tag == 0);
+            }
+            if (zoomBtn) {
+                zoomBtn.hidden = (zoom_tag == 2);
+                zoomBtn.enabled = (zoom_tag == 0);
+            }
+        }
+
+        // Center on the active screen if requested. Done before
+        // setFrameAutosaveName: so a saved frame still wins on restore;
+        // autoCenter is only the first-launch fallback.
+        if (wopts_auto_center(opts)) {
+            [window center];
+        }
+
+        // Frame autosave — AppKit persists frame to NSUserDefaults under
+        // this name and restores on subsequent launches. Empty string
+        // means no autosave.
+        const char* autosave_name = wopts_frame_autosave_name(opts);
+        if (autosave_name && autosave_name[0] != '\0') {
+            NSString* nsName = [NSString stringWithUTF8String:autosave_name];
+            if (nsName) [window setFrameAutosaveName:nsName];
+        }
+
         bool inspectable = wopts_inspectable(opts) > 0;
         bool accept_first_mouse = wopts_accept_first_mouse(opts);
         extern const char* wopts_url(void* opts);
@@ -332,12 +442,24 @@ void* darwin_window_create(WindowOptions* opts) {
         delegate.windowId = windowId;
         delegate.ownerId = ownerId;
         // numericId set by darwin_window_register_numeric_id after creation
+
+        // Visibility model: visible:true is cosmetic — apps say "show me
+        // when ready", not "show me right now even if blank". The window
+        // is fully created either way; we just defer makeKeyAndOrderFront
+        // until the bridge bootstrap or navigation completes (whichever
+        // first), eliminating the white flash and the need for apps to
+        // wire `on(READY, () => show())` themselves.
+        //
+        // visible:false means "create but don't auto-show" — the app must
+        // call show() explicitly. Same with fullscreen — toggleFullScreen
+        // requires the window to be on screen, so it queues until first
+        // show.
+        delegate.shouldAutoShow = (wopts_visible(opts) && !wopts_hidden(opts));
+        delegate.fullscreenOnShow = wopts_fullscreen(opts);
+
         objc_setAssociatedObject(window, &kZappWindowDelegateKey,
             delegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [window setDelegate:delegate];
-
-        if (wopts_fullscreen(opts)) [window toggleFullScreen:nil];
-        if (wopts_visible(opts) && !wopts_hidden(opts)) [window makeKeyAndOrderFront:nil];
 
         return (__bridge_retained void*)window;
     }
@@ -345,6 +467,37 @@ void* darwin_window_create(WindowOptions* opts) {
 
 void darwin_window_destroy(void* handle) {
     NSWindow* window = (__bridge_transfer NSWindow*)handle;
+
+    // Explicit WKWebView teardown before the NSWindow is released at the
+    // end of this function. Without this, in-flight IPC replies from the
+    // web content process can land on a webview that's mid-release —
+    // their captured ProcessThrottlerActivity derefs to zero during the
+    // reply handler's destructor and triggers WebKit's prepare-to-suspend
+    // path on a process proxy that's already past that state. That's the
+    // EXC_BREAKPOINT brk 1 in WebKit::ProcessThrottler::sendPrepareToSuspendIPC
+    // on macOS 26.x, especially with rapid create/destroy from workers.
+    //
+    // Order: stop pending loads → remove script handler (drops WebKit's
+    // strong ref to ZappMsgHandler and its captured blocks) → nil
+    // delegates (final in-flight callbacks become no-ops instead of
+    // retaining the webview through its destruction).
+    //
+    // Only runs here — not in windowWillClose: — because [window close]
+    // with setReleasedWhenClosed:NO is reversible via show(); only this
+    // function (which does __bridge_transfer to actually release) is the
+    // terminal point.
+    NSView* content = [window contentView];
+    if ([content isKindOfClass:[WKWebView class]]) {
+        WKWebView* wv = (WKWebView*)content;
+        [wv stopLoading];
+        WKUserContentController* ucc = wv.configuration.userContentController;
+        @try {
+            [ucc removeScriptMessageHandlerForName:@"zapp"];
+        } @catch (NSException* ex) { (void)ex; }
+        [wv setNavigationDelegate:nil];
+        [wv setUIDelegate:nil];
+    }
+
     [window close];
     (void)window;
 }
@@ -396,6 +549,77 @@ void darwin_window_set_fullscreen(void* handle, bool on) {
 
 void darwin_window_set_always_on_top(void* handle, bool on) {
     [(__bridge NSWindow*)handle setLevel:on ? NSFloatingWindowLevel : NSNormalWindowLevel];
+}
+
+// --- Modal sheets ---
+//
+// beginSheet: shows the modal anchored to parent's titlebar and blocks
+// interaction with parent only (not the rest of the app). When the modal
+// closes via [modal close] or its close button, NSWindow auto-dismisses
+// the sheet and fires the completion handler — no explicit cleanup
+// required for that path.
+//
+// Both helpers main-thread-bounce per alpha.31 — modal attach is
+// frequently driven by webview/worker callbacks that arrive off-thread.
+
+void darwin_window_attach_modal(void* parent_handle, void* modal_handle) {
+    if (!parent_handle || !modal_handle) return;
+    NSWindow* parent = (__bridge NSWindow*)parent_handle;
+    NSWindow* modal = (__bridge NSWindow*)modal_handle;
+    if (parent == modal) return;  // self-attach is meaningless
+    void (^run)(void) = ^{
+        // Already attached to this parent? No-op (NSWindow asserts otherwise).
+        if ([parent attachedSheet] == modal) return;
+        // Attached to a different parent? Detach first to avoid the
+        // "sheet already running" assertion.
+        NSWindow* currentSheetParent = [modal sheetParent];
+        if (currentSheetParent && currentSheetParent != parent) {
+            [currentSheetParent endSheet:modal returnCode:NSModalResponseAbort];
+        }
+        // beginSheet silently fails to wrap a window that's already
+        // visible standalone — orderOut first so the modal appears as a
+        // sheet rather than as the free-floating window the user already
+        // saw. Use Window.create({ asSheetOf: parent }) for an atomic
+        // create-and-attach that avoids this transient flash entirely.
+        if ([modal isVisible] && ![modal sheetParent]) {
+            [modal orderOut:nil];
+        }
+        [parent beginSheet:modal completionHandler:^(NSModalResponse code) {
+            // Notify the parent window's JS that the sheet dismissed,
+            // including the response code (default NSModalResponseStop
+            // when modal closes itself; user-supplied if a future
+            // setModalResult API lands). Look up parent's numeric ID
+            // via the cached delegate.
+            ZappWindowDelegate* delegate = (ZappWindowDelegate*)[parent delegate];
+            if (![delegate isKindOfClass:[ZappWindowDelegate class]]) return;
+            int32_t parent_id = delegate.numericId;
+            if (parent_id < 0) return;
+            ZappWindowDelegate* modal_delegate = (ZappWindowDelegate*)[modal delegate];
+            int32_t modal_id = -1;
+            if ([modal_delegate isKindOfClass:[ZappWindowDelegate class]]) {
+                modal_id = modal_delegate.numericId;
+            }
+            // Pass modal_id via `w` and code via `h` — zapp_dispatch_event_to_js
+            // recognizes MODAL_DISMISSED and formats { modalId, code } in JSON.
+            extern int zapp_dispatch_event(int window_id, int event_id, int w, int h, int x, int y);
+            zapp_dispatch_event(parent_id, ZAPP_EVENT_WINDOW_MODAL_DISMISSED, (int)modal_id, (int)code, 0, 0);
+        }];
+    };
+    if ([NSThread isMainThread]) run();
+    else dispatch_async(dispatch_get_main_queue(), run);
+}
+
+void darwin_window_detach_modal(void* parent_handle, void* modal_handle) {
+    if (!parent_handle || !modal_handle) return;
+    NSWindow* parent = (__bridge NSWindow*)parent_handle;
+    NSWindow* modal = (__bridge NSWindow*)modal_handle;
+    void (^run)(void) = ^{
+        if ([modal sheetParent] == parent) {
+            [parent endSheet:modal returnCode:NSModalResponseStop];
+        }
+    };
+    if ([NSThread isMainThread]) run();
+    else dispatch_async(dispatch_get_main_queue(), run);
 }
 
 void darwin_window_get_size(void* handle, int32_t* out_w, int32_t* out_h) {

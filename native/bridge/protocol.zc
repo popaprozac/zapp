@@ -3,6 +3,7 @@
 // Example: {"t":1,"id":42,"m":"greet","a":{"name":"World"}}
 
 import "std/json.zc";
+import "./json_safe.zc";
 import "string.h" as str;
 
 // --- Message types (numeric, switch dispatch) ---
@@ -71,7 +72,10 @@ fn bridge_parse(raw: string) -> BridgeMessage {
         root: NULL,
     };
 
-    let parse_result = JsonValue::parse(raw);
+    // Use the heap-allocating parser to avoid the stack-buffer stack
+    // overflow in stdlib's parser on string tokens > 4096 chars. See
+    // native/bridge/json_safe.zc for background.
+    let parse_result = zapp_json_parse(raw);
     if parse_result.is_err() { return msg; }
     let json = parse_result.unwrap();
 

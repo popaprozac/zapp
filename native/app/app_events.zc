@@ -86,6 +86,7 @@ raw {
                 case 105: js_name = "app:open-url"; break;
                 case 106: js_name = "app:active"; break;
                 case 107: js_name = "app:inactive"; break;
+                case 108: js_name = "app:theme-changed"; break;
             }
             if (js_name) {
                 const char* safe_data = data ? data : "{}";
