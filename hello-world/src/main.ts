@@ -12,6 +12,8 @@ import {
   Notification,
   Worker,
   Dock,
+  Tray,
+  type TrayHandle,
   Sync
 } from "@zappdev/runtime";
 import { greet } from "./zapp";
@@ -124,6 +126,20 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
         <button id="btn-dock-bounce">Bounce</button>
         <button id="btn-dock-hide">Hide Icon</button>
         <button id="btn-dock-show">Show Icon</button>
+      </section>
+
+      <section>
+        <h2>Tray (menu bar)</h2>
+        <button id="btn-tray-menu">Create tray w/ menu</button>
+        <button id="btn-tray-click">Create click-only tray</button>
+        <button id="btn-tray-set-title">Set title "5"</button>
+        <button id="btn-tray-clear-title">Clear title</button>
+        <button id="btn-tray-set-tooltip">Set tooltip</button>
+        <button id="btn-tray-swap-menu">Swap menu</button>
+        <button id="btn-tray-attach">Attach popover window</button>
+        <button id="btn-tray-detach">Detach window</button>
+        <button id="btn-tray-destroy">Destroy</button>
+        <div id="tray-result" class="result"></div>
       </section>
 
       <section>
@@ -467,6 +483,120 @@ $("btn-dock-hide").addEventListener("click", () => {
 $("btn-dock-show").addEventListener("click", () => {
   Dock.showIcon();
   log("Dock icon shown");
+});
+
+// --- Tray ---
+//
+// Look at the top-right of your menu bar after clicking "Create tray".
+// The icon dispatches click/right-click events when no menu is set;
+// when a menu is set the system shows it on click and we never see the
+// click itself. Path is absolute so it works regardless of CWD.
+//
+// IMPORTANT for demo testers: every Window has its own WKWebView and
+// its own JS context. The `activeTray` and `attachedWin` references
+// below are per-window — if you click "Create tray" in the main
+// window and then drive a popover from `attachWindow`, the popover's
+// JS has its OWN `activeTray = null`. Clicking detach/destroy from
+// inside the popover won't find a tray to act on. This is correct
+// isolation for real apps; for the demo, drive tray buttons from the
+// main window and use the popover only to verify show/hide/dismiss.
+
+const TRAY_ICON = "/Users/zach/code/zapp/hello-world/build/tray-icon.png";
+let activeTray: TrayHandle | null = null;
+
+$("btn-tray-menu").addEventListener("click", () => {
+  if (activeTray) { log("Tray already exists — destroy it first"); return; }
+  activeTray = Tray.create({
+    icon: TRAY_ICON,
+    tooltip: "Zapp Hello-World",
+    menu: [
+      { label: "Open Hello-World", action: () => { win.show(); log("Tray menu: open"); } },
+      { type: "separator" },
+      { label: "Ping log", action: () => log("Tray menu: ping") },
+      { type: "separator" },
+      { label: "Quit", role: "quit" },
+    ],
+  });
+  $("tray-result").textContent = `Tray ${activeTray.id} (with menu)`;
+  log(`Tray created with menu: id=${activeTray.id}`);
+});
+
+$("btn-tray-click").addEventListener("click", () => {
+  if (activeTray) { log("Tray already exists — destroy it first"); return; }
+  activeTray = Tray.create({
+    icon: TRAY_ICON,
+    tooltip: "Click-only tray",
+  });
+  activeTray.on("click", () => log(`Tray ${activeTray!.id}: left-click`));
+  activeTray.on("right-click", () => log(`Tray ${activeTray!.id}: right-click`));
+  $("tray-result").textContent = `Tray ${activeTray.id} (click-only)`;
+  log(`Tray created click-only: id=${activeTray.id}`);
+});
+
+$("btn-tray-set-title").addEventListener("click", () => {
+  if (!activeTray) { log("No tray"); return; }
+  activeTray.setTitle("5");
+  log(`Tray title → "5"`);
+});
+
+$("btn-tray-clear-title").addEventListener("click", () => {
+  if (!activeTray) { log("No tray"); return; }
+  activeTray.setTitle("");
+  log(`Tray title cleared`);
+});
+
+$("btn-tray-set-tooltip").addEventListener("click", () => {
+  if (!activeTray) { log("No tray"); return; }
+  activeTray.setTooltip(`Updated at ${new Date().toLocaleTimeString()}`);
+  log(`Tray tooltip updated`);
+});
+
+$("btn-tray-swap-menu").addEventListener("click", () => {
+  if (!activeTray) { log("No tray"); return; }
+  activeTray.setMenu([
+    { label: "Swapped at " + new Date().toLocaleTimeString(), enabled: false },
+    { type: "separator" },
+    { label: "New action", action: () => log("Tray menu: new action fired") },
+    { label: "Quit", role: "quit" },
+  ]);
+  log(`Tray menu swapped`);
+});
+
+let attachedWin: Awaited<ReturnType<typeof Window.create>> | null = null;
+
+$("btn-tray-attach").addEventListener("click", async () => {
+  if (!activeTray) { log("Create a tray first"); return; }
+  if (!attachedWin) {
+    attachedWin = await Window.create({
+      title: "Tray Popover",
+      width: 320,
+      height: 480,
+      borderless: true,
+      visible: false,    // hide until attach toggles it on
+      resizable: false,
+    });
+    log(`Created popover window ${attachedWin.id}`);
+  }
+  activeTray.attachWindow(attachedWin, {
+    position: "centerBelow",
+    dismissOnBlur: true,
+    toggleOnClick: true,
+  });
+  log(`Tray ${activeTray.id} ↦ window ${attachedWin.id} (left-click to toggle, right-click for menu if set)`);
+});
+
+$("btn-tray-detach").addEventListener("click", () => {
+  if (!activeTray) { log("No tray"); return; }
+  activeTray.detachWindow();
+  log(`Tray ${activeTray.id} window detached`);
+});
+
+$("btn-tray-destroy").addEventListener("click", () => {
+  if (!activeTray) { log("No tray"); return; }
+  activeTray.destroy();
+  log(`Tray ${activeTray.id} destroyed`);
+  activeTray = null;
+  $("tray-result").textContent = "";
 });
 
 // --- Events ---

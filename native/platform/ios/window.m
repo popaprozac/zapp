@@ -30,7 +30,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-extern void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first_mouse, const char* url_override);
+extern void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first_mouse,
+                                  const char* url_override, int32_t numeric_id_pre_alloc);
 
 #ifndef ZAPP_MAX_WINDOW_CALLBACKS
 #define ZAPP_MAX_WINDOW_CALLBACKS 64
@@ -101,7 +102,9 @@ void zapp_ios_materialize_pending_windows(void) {
         d->real_window = window;
         if (d->numeric_id >= 0 && d->numeric_id < ZAPP_MAX_WINDOW_CALLBACKS) {
             zapp_ios_windows[d->numeric_id] = window;
-            zapp_ios_window_ids[d->numeric_id] = [NSString stringWithFormat:@"win-%p", window];
+            // Numeric form matches what router.zc returns to JS — keeps
+            // Window.current() and Window.create() handles in lockstep.
+            zapp_ios_window_ids[d->numeric_id] = [NSString stringWithFormat:@"win-%d", d->numeric_id];
         }
 
         // darwin_webview_create allocates the WKWebView, attaches it to
@@ -109,10 +112,18 @@ void zapp_ios_materialize_pending_windows(void) {
         // zapp_ios_webviews via zapp_ios_register_webview. Crucially,
         // the WKWebView is being added to a scene-bound window — its
         // gesture recognizers form against a live responder chain.
-        darwin_webview_create((__bridge void*)window, d->inspectable, d->first_mouse, NULL);
+        darwin_webview_create((__bridge void*)window, d->inspectable, d->first_mouse, NULL, d->numeric_id);
 
         if (d->numeric_id >= 0 && d->numeric_id < ZAPP_MAX_WINDOW_CALLBACKS) {
             d->real_webview = zapp_ios_webviews[d->numeric_id];
+            // Push the canonical "win-<numericId>" into the JS context
+            // so Window.current() returns the same string format that
+            // Window.create() produces. Mirrors the macOS flow.
+            if (d->real_webview) {
+                NSString* setIdJs = [NSString stringWithFormat:
+                    @"globalThis[Symbol.for('zapp.windowId')]='win-%d';", d->numeric_id];
+                [d->real_webview evaluateJavaScript:setIdJs completionHandler:nil];
+            }
         }
 
         // Replay queued setters.
@@ -410,7 +421,7 @@ void darwin_window_register_numeric_id(void* handle, int32_t numeric_id) {
     }
     UIWindow* w = (__bridge UIWindow*)handle;
     zapp_ios_windows[numeric_id] = w;
-    zapp_ios_window_ids[numeric_id] = [NSString stringWithFormat:@"win-%p", w];
+    zapp_ios_window_ids[numeric_id] = [NSString stringWithFormat:@"win-%d", numeric_id];
 }
 
 // --- Modal sheets — iOS has presentViewController:; Phase 2 wires it up ---

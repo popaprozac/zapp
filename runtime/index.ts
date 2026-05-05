@@ -25,6 +25,7 @@ export { ContextMenu, type ContextMenuOptions } from "./context-menu";
 export { Notification, type NotificationOptions, type ScheduleOptions, type PermissionStatus } from "./notification";
 export { Sync, type SyncWaitOptions } from "./sync";
 export { Dock } from "./dock";
+export { Tray, type TrayOptions, type TrayHandle, type AttachWindowOptions } from "./tray";
 export { Clipboard, type ClipboardFormat } from "./clipboard";
 export { Shortcuts } from "./shortcuts";
 

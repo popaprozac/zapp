@@ -222,7 +222,8 @@ static ZappIOSNavDelegate* zapp_ios_shared_nav_delegate = nil;
 // caller passes its UIWindow*); we attach a UIViewController hosting
 // a WKWebView as its rootViewController.
 
-void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first_mouse, const char* url_override) {
+void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first_mouse,
+                           const char* url_override, int32_t numeric_id_pre_alloc) {
     (void)accept_first_mouse;  // iOS has no equivalent
     UIWindow* window = (__bridge UIWindow*)window_ptr;
 
@@ -258,13 +259,21 @@ void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first
     [ucc addUserScript:[[WKUserScript alloc] initWithSource:bindingsScript
         injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
 
+    // Owner + window IDs (windowId baked from the pre-allocated
+    // numeric id; iOS materialization passes d->numeric_id through).
     NSString* ownerId = [NSString stringWithFormat:@"owner-%p", window];
-    NSString* windowIdStr = [NSString stringWithFormat:@"win-%p", window];
     NSString* ownerScript = [NSString stringWithFormat:
-        @"(function(){globalThis[Symbol.for('zapp.ownerId')]='%@';"
-        @"globalThis[Symbol.for('zapp.windowId')]='%@';})();", ownerId, windowIdStr];
+        @"(function(){globalThis[Symbol.for('zapp.ownerId')]='%@';})();", ownerId];
     [ucc addUserScript:[[WKUserScript alloc] initWithSource:ownerScript
         injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
+
+    if (numeric_id_pre_alloc >= 0) {
+        NSString* windowIdScript = [NSString stringWithFormat:
+            @"(function(){globalThis[Symbol.for('zapp.windowId')]='win-%d';})();",
+            numeric_id_pre_alloc];
+        [ucc addUserScript:[[WKUserScript alloc] initWithSource:windowIdScript
+            injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
+    }
 
     const char* bootstrapSrc = zapp_webview_bootstrap_script();
     if (bootstrapSrc) {

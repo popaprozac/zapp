@@ -64,7 +64,11 @@ fn router_handle_message(app: App*, msg: string, window_id: int) -> void {
             if parsed.has_args {
                 window_opts_apply_json(&opts, parsed.args);
             }
-            opts.visible = true;
+            // Honor the caller's visible flag — `visible: false` is a
+            // legitimate use case (e.g. tray.attachWindow needs the
+            // popover hidden until tray click toggles it on). The
+            // default from WindowOptions::create is already true, so
+            // omitted callers still auto-show.
             let win = app.window.create(&opts);
             window_opts_free(&opts);
             // Return the window ID to the caller
@@ -411,6 +415,89 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
     if action == "dock:setIcon" {
         let path_opt = pre_args.get_string("path");
         if path_opt.is_some() { dock_set_icon(path_opt.unwrap()); }
+        return;
+    }
+
+    // Tray actions — payload-driven (the .m side extracts "a" itself).
+    // Each maps directly to a darwin_tray_*_from_payload entry point.
+    let is_tray_create = action == "tray:create";
+    let is_tray_set_icon = action == "tray:setIcon";
+    let is_tray_set_title = action == "tray:setTitle";
+    let is_tray_set_tooltip = action == "tray:setTooltip";
+    let is_tray_set_menu = action == "tray:setMenu";
+    let is_tray_destroy = action == "tray:destroy";
+    let is_tray_attach_window = action == "tray:attachWindow";
+    let is_tray_detach_window = action == "tray:detachWindow";
+    if is_tray_create {
+        raw {
+            #ifdef __APPLE__
+            extern void darwin_tray_create_from_payload(const char* payload_json);
+            darwin_tray_create_from_payload((const char*)payload);
+            #endif
+        }
+        return;
+    }
+    if is_tray_set_icon {
+        raw {
+            #ifdef __APPLE__
+            extern void darwin_tray_set_icon_from_payload(const char* payload_json);
+            darwin_tray_set_icon_from_payload((const char*)payload);
+            #endif
+        }
+        return;
+    }
+    if is_tray_set_title {
+        raw {
+            #ifdef __APPLE__
+            extern void darwin_tray_set_title_from_payload(const char* payload_json);
+            darwin_tray_set_title_from_payload((const char*)payload);
+            #endif
+        }
+        return;
+    }
+    if is_tray_set_tooltip {
+        raw {
+            #ifdef __APPLE__
+            extern void darwin_tray_set_tooltip_from_payload(const char* payload_json);
+            darwin_tray_set_tooltip_from_payload((const char*)payload);
+            #endif
+        }
+        return;
+    }
+    if is_tray_set_menu {
+        raw {
+            #ifdef __APPLE__
+            extern void darwin_tray_set_menu_from_payload(const char* payload_json);
+            darwin_tray_set_menu_from_payload((const char*)payload);
+            #endif
+        }
+        return;
+    }
+    if is_tray_destroy {
+        raw {
+            #ifdef __APPLE__
+            extern void darwin_tray_destroy_from_payload(const char* payload_json);
+            darwin_tray_destroy_from_payload((const char*)payload);
+            #endif
+        }
+        return;
+    }
+    if is_tray_attach_window {
+        raw {
+            #ifdef __APPLE__
+            extern void darwin_tray_attach_window_from_payload(const char* payload_json);
+            darwin_tray_attach_window_from_payload((const char*)payload);
+            #endif
+        }
+        return;
+    }
+    if is_tray_detach_window {
+        raw {
+            #ifdef __APPLE__
+            extern void darwin_tray_detach_window_from_payload(const char* payload_json);
+            darwin_tray_detach_window_from_payload((const char*)payload);
+            #endif
+        }
         return;
     }
 

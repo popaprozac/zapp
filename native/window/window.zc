@@ -57,6 +57,13 @@ struct WindowOptions {
     // Setting this also forces visible=false so the modal never flashes
     // as a free-floating window before beginSheet wraps it.
     asSheetOfId: int;
+    // Numeric window id pre-assigned by WindowManager.create *before*
+    // the native window is built. Native code uses this so the JS
+    // bootstrap user script can bake in the canonical "win-<N>" id —
+    // otherwise the page loads with no windowId and Window.current()
+    // throws at module-top before darwin_window_register_numeric_id
+    // can finish. -1 = unassigned (treated as "use ptr fallback").
+    numericIdPreAlloc: int;
     // Center on the active screen at create time. Overrides x/y if both
     // are set. With frameAutosaveName, the saved frame still wins on
     // restore — autoCenter is the first-launch fallback.
@@ -131,6 +138,7 @@ impl WindowOptions {
             webContentInspectable: -1,
             acceptFirstMouse: true,
             asSheetOfId: -1,
+            numericIdPreAlloc: -1,
             autoCenter: false,
             frameAutosaveName: "",
             _frameAutosaveName_heap: false,
@@ -164,6 +172,7 @@ fn wopts_inspectable(opts: WindowOptions*) -> int { return opts.webContentInspec
 fn wopts_accept_first_mouse(opts: WindowOptions*) -> bool { return opts.acceptFirstMouse; }
 fn wopts_auto_center(opts: WindowOptions*) -> bool { return opts.autoCenter; }
 fn wopts_frame_autosave_name(opts: WindowOptions*) -> string { return opts.frameAutosaveName; }
+fn wopts_numeric_id_pre_alloc(opts: WindowOptions*) -> int { return opts.numericIdPreAlloc; }
 
 // Traffic light state tags (0=Enabled, 1=Disabled, 2=Hidden).
 fn wopts_traffic_light_close_tag(opts: WindowOptions*) -> int {
@@ -558,13 +567,18 @@ impl WindowManager {
         if options.asSheetOfId >= 0 {
             options.visible = false;
         }
+        // Pre-assign the numeric id so the native window-creation path
+        // can bake "win-<N>" into the bootstrap user script. Otherwise
+        // the page loads with no windowId and Window.current() throws
+        // at module-top.
+        let id = self.next_id;
+        self.next_id += 1;
+        options.numericIdPreAlloc = id;
         let handle = window_create(options);
         let key: char[32];
-        c::snprintf(key, 32, "win-%d", self.next_id);
+        c::snprintf(key, 32, "win-%d", id);
         self.handles.put(key, handle);
-        let id = self.next_id;
         window_register_numeric_id(handle, id);
-        self.next_id += 1;
         let new_window = Window{ id: id, handle: handle };
 
         // Atomic create+attach. The parent must already exist in the

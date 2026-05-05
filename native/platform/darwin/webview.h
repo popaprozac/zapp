@@ -10,7 +10,12 @@
 // Create a WKWebView inside the given NSWindow.
 // Sets up: custom scheme handler (zapp://), message handler, bootstrap injection.
 // url_override: if non-NULL and non-empty, load this URL instead of the default.
-void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first_mouse, const char* url_override);
+// numeric_id_pre_alloc: pre-assigned numeric window id used to bake the
+// canonical "win-<N>" Symbol.for('zapp.windowId') into the bootstrap user
+// script. Pass -1 if no id is available yet (the caller will set the id
+// later via JS eval; some early Window.current() calls may then race).
+void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first_mouse,
+                           const char* url_override, int32_t numeric_id_pre_alloc);
 
 // Evaluate JavaScript on a specific window's WebView.
 void darwin_webview_eval(void* window_ptr, const char* js);

@@ -554,3 +554,19 @@ void darwin_menu_show_context_typed(ZappMenuItem* items, int count, int x, int y
         [menu popUpMenuPositioningItem:nil atLocation:point inView:view];
     }
 }
+
+// Public helper for cross-module menu construction (e.g. tray.m).
+// Wraps the static `build_menu_from_json` so callers pass a JSON
+// items array. Returns NULL on parse failure. The returned NSMenu is
+// retained — caller takes ownership (e.g. assigns to NSStatusItem.menu
+// which then holds the strong ref).
+void* darwin_menu_build_from_items_json(const char* items_json) {
+    if (!items_json) return NULL;
+    @autoreleasepool {
+        NSData* data = [[NSString stringWithUTF8String:items_json] dataUsingEncoding:NSUTF8StringEncoding];
+        NSArray* items = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+        if (![items isKindOfClass:[NSArray class]]) return NULL;
+        NSMenu* menu = build_menu_from_json(items);
+        return (__bridge_retained void*)menu;
+    }
+}

@@ -34,6 +34,7 @@ int32_t wopts_inspectable(WindowOptions* opts);
 bool wopts_accept_first_mouse(WindowOptions* opts);
 bool wopts_auto_center(WindowOptions* opts);
 char* wopts_frame_autosave_name(WindowOptions* opts);
+int32_t wopts_numeric_id_pre_alloc(WindowOptions* opts);
 // Traffic light state tags: 0=Enabled, 1=Disabled, 2=Hidden
 int32_t wopts_traffic_light_close_tag(WindowOptions* opts);
 int32_t wopts_traffic_light_minimize_tag(WindowOptions* opts);
@@ -85,6 +86,13 @@ int32_t darwin_window_numeric_id_for_string(const char* window_id_string);
 
 // --- Get WKWebView pointer for a numeric ID (O(1)) ---
 void* darwin_window_get_webview(int32_t numeric_id);
+
+// --- Get NSWindow pointer for a numeric ID (O(1) via webview.window) ---
+// Returns the NSWindow* hosting the WKWebView for the given numeric id,
+// or NULL if no such window. Used by tray.attachWindow and any other
+// cross-module API that takes a runtime WindowHandle.id. Caller bridges
+// to (NSWindow*).
+void* darwin_window_get_by_numeric_id(int32_t numeric_id);
 
 // --- Bridge readiness ---
 void darwin_window_set_bridge_ready(const char* window_id);

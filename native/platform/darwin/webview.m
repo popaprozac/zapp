@@ -511,7 +511,8 @@ void darwin_webview_set_drag_region(int32_t window_id, bool drag) {
 
 // --- WebView Creation ---
 
-void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first_mouse, const char* url_override) {
+void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first_mouse,
+                           const char* url_override, int32_t numeric_id_pre_alloc) {
     NSWindow* window = (__bridge NSWindow*)window_ptr;
     NSView* hostView = [window contentView];
     NSRect bounds = [hostView bounds];
@@ -522,7 +523,14 @@ void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first
 
     WKUserContentController* ucc = [[WKUserContentController alloc] init];
     NSString* ownerId = [NSString stringWithFormat:@"owner-%p", window];
-    NSString* windowId = [NSString stringWithFormat:@"win-%p", window];
+    // Bake the canonical "win-<N>" id into the bootstrap user script so
+    // module-top `Window.current()` resolves correctly. Caller passes
+    // the pre-allocated numeric id from WindowManager. -1 = no id yet;
+    // we leave the symbol unset and let darwin_window_register_numeric_id
+    // fix it via eval (works for the rare internal-construction paths).
+    NSString* windowId = (numeric_id_pre_alloc >= 0)
+        ? [NSString stringWithFormat:@"win-%d", numeric_id_pre_alloc]
+        : @"";
 
     // --- Inject user scripts before page load ---
 
@@ -568,16 +576,20 @@ void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first
     [ucc addUserScript:[[WKUserScript alloc] initWithSource:bindingsScript
         injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
 
-    // 3. Owner + window IDs
+    // 3. Owner + window IDs (window id baked from the pre-allocated
+    //    numeric id, so module-top Window.current() resolves correctly
+    //    without waiting for darwin_window_register_numeric_id).
     NSString* ownerScript = [NSString stringWithFormat:
         @"(function(){globalThis[Symbol.for('zapp.ownerId')]='%@';})();", ownerId];
     [ucc addUserScript:[[WKUserScript alloc] initWithSource:ownerScript
         injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
 
-    NSString* windowIdScript = [NSString stringWithFormat:
-        @"(function(){globalThis[Symbol.for('zapp.windowId')]='%@';})();", windowId];
-    [ucc addUserScript:[[WKUserScript alloc] initWithSource:windowIdScript
-        injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
+    if (windowId.length > 0) {
+        NSString* windowIdScript = [NSString stringWithFormat:
+            @"(function(){globalThis[Symbol.for('zapp.windowId')]='%@';})();", windowId];
+        [ucc addUserScript:[[WKUserScript alloc] initWithSource:windowIdScript
+            injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
+    }
 
     // 4. Window metrics — expose native values as CSS custom properties so
     //    custom-titlebar apps don't have to eyeball 28px / 78px guesses.

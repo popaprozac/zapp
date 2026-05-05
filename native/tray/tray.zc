@@ -1,0 +1,114 @@
+// Tray — system menu-bar / status-item API.
+//
+// Each tray is keyed by a numeric id. The runtime allocates ids
+// monotonically; native uses them as dispatch keys for subsequent
+// setIcon / setMenu / destroy calls. Trays survive across window
+// open/close — they're owned by the app, not by any window.
+//
+// Two API levels:
+//
+//   1. Trampolines (`tray_create_from_payload`, ...) — bridge invokes
+//      these with the full JSON envelope. Used by router.zc.
+//
+//   2. `TrayManager` (mounted on `app.tray`) — typed convenience wrappers
+//      for the common single-tray cases. Apps doing menu-bar UIs from
+//      pure Zen-C call `app.tray.create_from_json(...)` directly. Menu
+//      support from typed structs is deferred — apps that need menus
+//      from Zen-C build the JSON themselves for now.
+
+@cfg(apple)
+import "../platform/darwin/tray.h" as darwin_tray;
+
+@cfg(apple)
+fn tray_create_from_payload(payload: string) -> void {
+    darwin_tray::darwin_tray_create_from_payload(payload);
+}
+
+@cfg(apple)
+fn tray_set_icon_from_payload(payload: string) -> void {
+    darwin_tray::darwin_tray_set_icon_from_payload(payload);
+}
+
+@cfg(apple)
+fn tray_set_title_from_payload(payload: string) -> void {
+    darwin_tray::darwin_tray_set_title_from_payload(payload);
+}
+
+@cfg(apple)
+fn tray_set_tooltip_from_payload(payload: string) -> void {
+    darwin_tray::darwin_tray_set_tooltip_from_payload(payload);
+}
+
+@cfg(apple)
+fn tray_set_menu_from_payload(payload: string) -> void {
+    darwin_tray::darwin_tray_set_menu_from_payload(payload);
+}
+
+@cfg(apple)
+fn tray_destroy_from_payload(payload: string) -> void {
+    darwin_tray::darwin_tray_destroy_from_payload(payload);
+}
+
+@cfg(apple)
+fn tray_attach_window_from_payload(payload: string) -> void {
+    darwin_tray::darwin_tray_attach_window_from_payload(payload);
+}
+
+@cfg(apple)
+fn tray_detach_window_from_payload(payload: string) -> void {
+    darwin_tray::darwin_tray_detach_window_from_payload(payload);
+}
+
+// Cross-platform stubs — Windows / iOS lands later.
+@cfg(windows)
+fn tray_create_from_payload(payload: string) -> void { (void)payload; }
+@cfg(windows)
+fn tray_set_icon_from_payload(payload: string) -> void { (void)payload; }
+@cfg(windows)
+fn tray_set_title_from_payload(payload: string) -> void { (void)payload; }
+@cfg(windows)
+fn tray_set_tooltip_from_payload(payload: string) -> void { (void)payload; }
+@cfg(windows)
+fn tray_set_menu_from_payload(payload: string) -> void { (void)payload; }
+@cfg(windows)
+fn tray_destroy_from_payload(payload: string) -> void { (void)payload; }
+@cfg(windows)
+fn tray_attach_window_from_payload(payload: string) -> void { (void)payload; }
+@cfg(windows)
+fn tray_detach_window_from_payload(payload: string) -> void { (void)payload; }
+
+// --- Manager (namespaced via app.tray) ---
+
+struct TrayManager {}
+
+impl TrayManager {
+    fn new() -> Self { return TrayManager{}; }
+
+    // Pass-through for Zen-C apps that build the bridge payload
+    // themselves. The payload is the same JSON envelope JS sends:
+    //   {"a":{"id":N,"icon":"...","title":"...","menu":[...]}}
+    fn create_from_json(self, payload: string) -> void {
+        tray_create_from_payload(payload);
+    }
+    fn set_icon_from_json(self, payload: string) -> void {
+        tray_set_icon_from_payload(payload);
+    }
+    fn set_title_from_json(self, payload: string) -> void {
+        tray_set_title_from_payload(payload);
+    }
+    fn set_tooltip_from_json(self, payload: string) -> void {
+        tray_set_tooltip_from_payload(payload);
+    }
+    fn set_menu_from_json(self, payload: string) -> void {
+        tray_set_menu_from_payload(payload);
+    }
+    fn destroy_from_json(self, payload: string) -> void {
+        tray_destroy_from_payload(payload);
+    }
+    fn attach_window_from_json(self, payload: string) -> void {
+        tray_attach_window_from_payload(payload);
+    }
+    fn detach_window_from_json(self, payload: string) -> void {
+        tray_detach_window_from_payload(payload);
+    }
+}

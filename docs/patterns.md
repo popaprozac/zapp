@@ -659,6 +659,89 @@ the local DB).
 No-op on iOS — apps are always single-instance there by platform
 contract.
 
+## Menu-bar app (tray-attached window)
+
+The classic macOS menu-bar app pattern: an icon in the top-right of
+the menu bar, click it, a small panel slides in. Bartender, Hand
+Mirror, Stats, Linear's status icon, Granola's mini panel.
+
+```ts
+import { Tray, Window } from "@zappdev/runtime";
+
+// 1. Create the popover window. Make it borderless + invisible until
+//    the tray icon toggles it on. The framework forces floating level
+//    + auto-hides on blur, so you don't have to.
+const popover = await Window.create({
+  title: "Stats",
+  width: 320,
+  height: 480,
+  borderless: true,
+  visible: false,
+  resizable: false,
+});
+
+// 2. Create the tray icon and attach the window. Left-click toggles
+//    visibility. Position is auto-computed from the icon's screen
+//    coordinates.
+const tray = Tray.create({ icon: "build/menubar-icon.png", tooltip: "Stats" });
+tray.attachWindow(popover, { position: "centerBelow" });
+```
+
+### Combined mode — left = window, right = menu
+
+`attachWindow` is purely additive to `setMenu`. With both configured,
+left-click drives the window and right-click opens the menu (the
+[`menubar`](https://github.com/max-mapper/menubar) package's
+convention):
+
+```ts
+const tray = Tray.create({
+  icon: "build/menubar-icon.png",
+  menu: [                                 // right-click menu
+    { label: "Open Settings…", action: openSettings },
+    { type: "separator" },
+    { label: "Quit", role: "quit" },
+  ],
+});
+tray.attachWindow(popover);                // left-click toggle
+```
+
+### Options
+
+`attachWindow(window, opts?)` accepts:
+
+| Option | Default | Notes |
+|---|---|---|
+| `position` | `"centerBelow"` | `"centerBelow"`, `"centerAbove"`, or `"rightCenter"` |
+| `dismissOnBlur` | `true` | Hide on focus loss (cmd-tab to another app, key window changes) |
+| `dismissOnOutsideClick` | `true` | Hide on any click outside the popover (other windows, dock, menu bar) |
+| `toggleOnClick` | `true` | Second click hides; set false for click-to-show only |
+| `offset` | `{ x: 0, y: 4 }` | Pixel adjustment from the computed anchor point |
+
+The two dismiss flags are independent. Set both `false` for a "sticky" panel that you close explicitly from inside (e.g. an X button). Set only `dismissOnOutsideClick: false` for a panel that survives stray clicks but still auto-hides when you cmd-tab away.
+
+### Detaching
+
+```ts
+tray.detachWindow();  // restores menu-only or click-event mode
+```
+
+If a menu was previously set, it returns to system-driven left-click
+behavior. Otherwise the tray reverts to firing `click` /
+`right-click` events.
+
+### Caveats
+
+- The window is forced to `NSFloatingWindowLevel` while attached.
+  This restores to normal level on detach.
+- Multi-monitor: the window appears on the screen the menu bar lives
+  on (drag the menu bar between displays to test).
+- Make the window **`borderless: true`** at creation. Re-styling
+  after creation is unreliable — the macOS titlebar reappears in
+  weird states.
+- iOS / Windows: `attachWindow` is a no-op (no menu bar / different
+  metaphor). Code is portable.
+
 ## Dock badge + bounce
 
 ```ts

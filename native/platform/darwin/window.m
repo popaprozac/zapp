@@ -7,7 +7,8 @@
 #import "window.h"
 
 // --- Forward declarations ---
-extern void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first_mouse, const char* url_override);
+extern void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first_mouse,
+                                  const char* url_override, int32_t numeric_id_pre_alloc);
 extern int zapp_dispatch_event(int window_id, int event_id, int w, int h, int x, int y);
 
 // Event IDs (mirrored from window/events.zc)
@@ -290,6 +291,21 @@ void* darwin_window_get_webview(int32_t numeric_id) {
     return NULL;
 }
 
+// --- Get NSWindow by numeric ID ---
+//
+// We don't keep a separate NSWindow dispatch table — the WKWebView is
+// always the window's contentView, so `webview.window` is the canonical
+// path. Used by features that take a runtime WindowHandle.id (notably
+// `tray.attachWindow`).
+void* darwin_window_get_by_numeric_id(int32_t numeric_id) {
+    if (numeric_id < 0 || numeric_id >= ZAPP_MAX_WINDOW_CALLBACKS) return NULL;
+    WKWebView* wv = zapp_webviews[numeric_id];
+    if (!wv) return NULL;
+    NSWindow* w = wv.window;
+    if (!w) return NULL;
+    return (__bridge void*)w;
+}
+
 // --- JS eval on specific window (by numeric ID, O(1) lookup) ---
 
 void darwin_window_eval_js(int32_t window_id, const char* js) {
@@ -434,7 +450,8 @@ void* darwin_window_create(WindowOptions* opts) {
         bool accept_first_mouse = wopts_accept_first_mouse(opts);
         extern const char* wopts_url(void* opts);
         const char* custom_url = wopts_url(opts);
-        darwin_webview_create((__bridge void*)window, inspectable, accept_first_mouse, custom_url);
+        darwin_webview_create((__bridge void*)window, inspectable, accept_first_mouse,
+                              custom_url, wopts_numeric_id_pre_alloc(opts));
 
         NSString* windowId = [NSString stringWithFormat:@"win-%p", window];
         NSString* ownerId = [NSString stringWithFormat:@"owner-%p", window];
@@ -636,7 +653,13 @@ void darwin_window_get_position(void* handle, int32_t* out_x, int32_t* out_y) {
 
 void darwin_window_register_numeric_id(void* handle, int32_t numeric_id) {
     NSWindow* w = (__bridge NSWindow*)handle;
-    NSString* windowId = [NSString stringWithFormat:@"win-%p", w];
+    // Single canonical format for window IDs visible to JS:
+    // "win-<numericId>". This matches what the router serializes back
+    // to JS from `__window:create` (`router.zc` `"win-%d"`), so the
+    // reverse lookup `darwin_window_numeric_id_for_string` actually
+    // resolves Window.current() and Window.create() handles. The
+    // pointer-based form was a footgun — the two paths diverged.
+    NSString* windowId = [NSString stringWithFormat:@"win-%d", numeric_id];
 
     // Cache numericId on delegate for O(1) event dispatch
     ZappWindowDelegate* delegate = (ZappWindowDelegate*)[w delegate];
@@ -647,6 +670,16 @@ void darwin_window_register_numeric_id(void* handle, int32_t numeric_id) {
     // Register WebView in direct dispatch table
     NSView* content = [w contentView];
     if ([content isKindOfClass:[WKWebView class]]) {
-        zapp_register_webview(numeric_id, (WKWebView*)content, windowId);
+        WKWebView* wv = (WKWebView*)content;
+        zapp_register_webview(numeric_id, wv, windowId);
+
+        // Set the in-page Symbol.for('zapp.windowId') to the same
+        // numeric form. WKWebView queues evaluateJavaScript: until the
+        // JS context exists, so this lands before any user-script can
+        // observe the global. We set it via globalThis assignment so
+        // it persists across user-script runs at document-start.
+        NSString* setIdJs = [NSString stringWithFormat:
+            @"globalThis[Symbol.for('zapp.windowId')]='%@';", windowId];
+        [wv evaluateJavaScript:setIdJs completionHandler:nil];
     }
 }

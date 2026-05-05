@@ -9,6 +9,7 @@ import "../platform/platform.zc";
 import "../sync/sync.zc";
 import "../menu/menu.zc";
 import "../dock/dock.zc";
+import "../tray/tray.zc";
 import "../fs/fs.zc";
 import "../clipboard/clipboard.zc";
 import "../shortcuts/shortcuts.zc";
@@ -332,6 +333,7 @@ struct App {
     notification: NotificationManager;
     sync: SyncManager;
     dock: DockManager;
+    tray: TrayManager;
     security: SecurityManager;
     fs: FsManager;
 }
@@ -358,6 +360,7 @@ impl App {
             notification: NotificationManager::new(),
             sync: SyncManager::new(),
             dock: DockManager::new(),
+            tray: TrayManager::new(),
             security: SecurityManager::new(),
             fs: FsManager::new(),
         };

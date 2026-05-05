@@ -19,6 +19,14 @@ void darwin_menu_show_context(const char* items_json, int32_t x, int32_t y, int3
 // Show a context menu from a full bridge payload (extracts "a.items", "a.x", "a.y").
 void darwin_menu_show_context_from_payload(const char* payload_json, int32_t window_id);
 
+// Build an NSMenu from a JSON items array (the same array shape
+// `darwin_menu_set` consumes). Returns `void*` so the header stays
+// pure C; callers bridge-cast to `NSMenu*`. Used by tray.m to mount
+// menus on NSStatusItem instances. Returns NULL on parse failure.
+// The returned NSMenu is autoreleased — caller must retain to keep
+// it alive (e.g. via NSStatusItem.menu = ...).
+void* darwin_menu_build_from_items_json(const char* items_json);
+
 // --- Native typed API (called from Zen-C, no JSON) ---
 
 // ZappMenuItem must match the MenuItem struct layout in menu.zc
