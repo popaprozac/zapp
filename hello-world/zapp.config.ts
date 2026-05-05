@@ -9,13 +9,20 @@ export default {
     // Supervisor demo — throws on `force-crash` event. Restart policy
     // allows 2 retries inside 30s, then gives up. The UI listens for
     // worker:crashed / worker:restarted / worker:gave-up events.
+    // Pinned to JSC: full restart support is JSC-only today (txiki
+    // restart needs pthread teardown + respawn — separate alpha).
     supervised: {
       script: "src/workers/supervised.ts",
       restart: { maxRetries: 2, withinMs: 30_000 },
+      engine: "jsc",
     },
-    // Ticker — emits counter:tick every 2s. Drives the "Backend
-    // State" section in the main UI; demonstrates the canonical
-    // single-source-of-truth state-push-to-all-windows pattern.
-    ticker: "src/workers/ticker.ts",
+    // Ticker — emits counter:tick every 2s. Drives the cross-context
+    // state section in the main UI. Pinned to txiki to demonstrate
+    // mixing engines in the same app (G8): supervised runs on JSC,
+    // ticker runs on txiki — both work side-by-side.
+    ticker: {
+      script: "src/workers/ticker.ts",
+      engine: "txiki",
+    },
   },
 };

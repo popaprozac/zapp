@@ -646,6 +646,15 @@ fn router_handle_worker(app: App*, action: string, payload: string, window_id: i
         let shared_opt = pre_args.get_bool("shared");
         if shared_opt.is_some() { is_shared = shared_opt.unwrap(); }
 
+        // Per-worker engine selection (G8). JS callers pass
+        // `engine: "jsc" | "txiki"` in the create options. Default 0 = JSC.
+        let engine: int = 0;
+        let engine_str_opt = pre_args.get_string("engine");
+        if engine_str_opt.is_some() {
+            let s = engine_str_opt.unwrap();
+            if s == "txiki" { engine = 1; }
+        }
+
         if is_shared {
             // Check for existing shared worker with same script URL
             let existing_id: string = "";
@@ -664,17 +673,18 @@ fn router_handle_worker(app: App*, action: string, payload: string, window_id: i
             }
             // First shared worker with this URL — create it
             raw {
-                zapp_worker_registry_add_full((const char*)worker_id, owner_id,
-                    1, (const char*)script_url);
+                zapp_worker_registry_add_full_with_engine((const char*)worker_id, owner_id,
+                    1, (const char*)script_url, (int)engine);
             }
         } else {
             // Dedicated worker
             raw {
-                zapp_worker_registry_add((const char*)worker_id, owner_id);
+                zapp_worker_registry_add_full_with_engine((const char*)worker_id, owner_id,
+                    0, (const char*)script_url, (int)engine);
             }
         }
 
-        worker_create(app, script_url, owner_id, worker_id);
+        worker_create(app, script_url, owner_id, worker_id, engine);
         return;
     }
 

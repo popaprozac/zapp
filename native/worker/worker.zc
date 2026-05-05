@@ -1,24 +1,23 @@
-// Worker engine abstraction — dispatches to JSC or txiki.js.
-// Workers are opt-in. Without an engine defined, stubs do nothing.
+// Worker engine abstraction — dispatches to JSC or txiki by per-worker
+// engine selection (G8). The engine is captured at create time and
+// stored on the registry entry; subsequent post / terminate look it
+// up there so the rest of the framework just calls the unified
+// `worker_*` functions without caring which engine owns each worker.
+//
+// Build flags:
+//   - `ZAPP_WORKER_ENGINE_JSC`   — JSC engine present (Apple-only)
+//   - `ZAPP_WORKER_ENGINE_TXIKI` — txiki engine present
+// Both can be defined together for true per-worker mixing. When only
+// one is defined, requests for the missing engine are silently
+// downgraded to the present one (with a log line so the surprise is
+// visible in dev).
 
 import "./registry.zc";
 
-// Engine imports — only the defined engine is active.
-// Both files must exist (Zen-C resolves imports at parse time).
-@cfg(ZAPP_WORKER_ENGINE_JSC)
+// Engine .zc files just import their respective C headers so the
+// extern symbols are visible to the raw-block dispatchers below.
 import "./engines/jsc.zc";
-
-@cfg(ZAPP_WORKER_ENGINE_TXIKI)
 import "./engines/txiki.zc";
-
-// When no engine is defined, the jsc.zc / txiki.zc files provide
-// the worker_* functions. Without either define, we need stubs.
-// The simplest approach: always include stubs, engines override via @cfg.
-// But Zen-C doesn't allow duplicate function definitions.
-//
-// Solution: the router checks if workers are enabled before calling.
-// The worker_* functions only exist when an engine is defined.
-// The router gates on a build config flag.
 
 fn workers_enabled() -> bool {
     raw {
@@ -31,25 +30,110 @@ fn workers_enabled() -> bool {
     return false;
 }
 
-// Stub worker functions when no engine is defined.
-// These are called by router_handle_worker but gated behind workers_enabled().
-// The C compiler still needs to resolve the symbols.
+// Stub C symbols when no engine is defined — keeps the link clean
+// for builds that don't enable either engine.
 raw {
     #if !defined(ZAPP_WORKER_ENGINE_JSC) && !defined(ZAPP_WORKER_ENGINE_TXIKI)
-    bool worker_create(void* app, char* script_url, char* owner_id, char* worker_id) {
-        (void)app; (void)script_url; (void)owner_id; (void)worker_id;
-        return false;
+    bool jsc_worker_create(const char* a, const char* b, const char* c) {
+        (void)a; (void)b; (void)c; return false;
     }
-    void worker_post_message(char* worker_id, char* data) {
-        (void)worker_id; (void)data;
+    void jsc_worker_post_message(const char* a, const char* b) { (void)a; (void)b; }
+    void jsc_worker_terminate(const char* a) { (void)a; }
+    void jsc_worker_terminate_owner(const char* a) { (void)a; }
+    bool txiki_worker_create(const char* a, const char* b, const char* c) {
+        (void)a; (void)b; (void)c; return false;
     }
-    void worker_terminate(char* worker_id) {
-        (void)worker_id;
-    }
-    void worker_terminate_owner(char* owner_id) {
-        (void)owner_id;
-    }
+    void txiki_worker_post_message(const char* a, const char* b) { (void)a; (void)b; }
+    void txiki_worker_terminate(const char* a) { (void)a; }
+    void txiki_worker_terminate_owner(const char* a) { (void)a; }
     #endif
+}
+
+// --- Unified dispatchers ---
+//
+// `engine` matches `ZAPP_ENGINE_*` constants from registry.zc:
+//   0 = JSC, 1 = txiki.
+// The dispatcher logs a downgrade if the requested engine isn't
+// compiled in, then falls back to whichever IS available.
+
+fn worker_create(app: App*, script_url: string, owner_id: string,
+                 worker_id: string, engine: int) -> bool {
+    let _app = app;
+    let result: bool = false;
+    raw {
+        int eng = (int)engine;
+        #if defined(ZAPP_WORKER_ENGINE_TXIKI) && defined(ZAPP_WORKER_ENGINE_JSC)
+        if (eng == 1) {
+            result = txiki_worker_create((const char*)script_url, (const char*)owner_id, (const char*)worker_id);
+        } else {
+            result = jsc_worker_create((const char*)script_url, (const char*)owner_id, (const char*)worker_id);
+        }
+        #elif defined(ZAPP_WORKER_ENGINE_TXIKI)
+        if (eng == 0) {
+            fprintf(stderr, "[zapp] worker '%s' requested JSC but only txiki is compiled — using txiki.\n",
+                (const char*)worker_id);
+        }
+        result = txiki_worker_create((const char*)script_url, (const char*)owner_id, (const char*)worker_id);
+        #elif defined(ZAPP_WORKER_ENGINE_JSC)
+        if (eng == 1) {
+            fprintf(stderr, "[zapp] worker '%s' requested txiki but only JSC is compiled — using JSC.\n",
+                (const char*)worker_id);
+        }
+        result = jsc_worker_create((const char*)script_url, (const char*)owner_id, (const char*)worker_id);
+        #else
+        result = false;
+        #endif
+    }
+    return result;
+}
+
+fn worker_post_message(worker_id: string, data: string) -> void {
+    raw {
+        extern int zapp_worker_registry_get_engine(const char* worker_id);
+        int eng = zapp_worker_registry_get_engine((const char*)worker_id);
+        #if defined(ZAPP_WORKER_ENGINE_TXIKI) && defined(ZAPP_WORKER_ENGINE_JSC)
+        if (eng == 1) txiki_worker_post_message((const char*)worker_id, (const char*)data);
+        else          jsc_worker_post_message((const char*)worker_id, (const char*)data);
+        #elif defined(ZAPP_WORKER_ENGINE_TXIKI)
+        (void)eng;
+        txiki_worker_post_message((const char*)worker_id, (const char*)data);
+        #elif defined(ZAPP_WORKER_ENGINE_JSC)
+        (void)eng;
+        jsc_worker_post_message((const char*)worker_id, (const char*)data);
+        #endif
+    }
+}
+
+fn worker_terminate(worker_id: string) -> void {
+    raw {
+        extern int zapp_worker_registry_get_engine(const char* worker_id);
+        int eng = zapp_worker_registry_get_engine((const char*)worker_id);
+        #if defined(ZAPP_WORKER_ENGINE_TXIKI) && defined(ZAPP_WORKER_ENGINE_JSC)
+        if (eng == 1) txiki_worker_terminate((const char*)worker_id);
+        else          jsc_worker_terminate((const char*)worker_id);
+        #elif defined(ZAPP_WORKER_ENGINE_TXIKI)
+        (void)eng;
+        txiki_worker_terminate((const char*)worker_id);
+        #elif defined(ZAPP_WORKER_ENGINE_JSC)
+        (void)eng;
+        jsc_worker_terminate((const char*)worker_id);
+        #endif
+    }
+}
+
+// terminate_owner doesn't have a worker_id to look up — owner kills
+// every worker spawned by that owner regardless of engine, so call
+// both engines' implementations. They each iterate their own slot
+// table and skip any worker that doesn't match.
+fn worker_terminate_owner(owner_id: string) -> void {
+    raw {
+        #ifdef ZAPP_WORKER_ENGINE_JSC
+        jsc_worker_terminate_owner((const char*)owner_id);
+        #endif
+        #ifdef ZAPP_WORKER_ENGINE_TXIKI
+        txiki_worker_terminate_owner((const char*)owner_id);
+        #endif
+    }
 }
 
 // --- Workers namespace (Zen-C) ---

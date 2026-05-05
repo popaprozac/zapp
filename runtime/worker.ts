@@ -38,9 +38,21 @@ export class Worker {
   /** @internal */
   _messageHandlers: Array<(event: WorkerMessageEvent) => void> = [];
 
-  constructor(scriptUrl: string) {
+  /**
+   * Create a dedicated worker.
+   *
+   * @param scriptUrl Module URL bundled by the Vite plugin.
+   * @param opts.engine Which engine to spawn this worker on:
+   *   `"jsc"` (default — JIT, zero binary cost on macOS, no fetch /
+   *   WebSocket / Streams) or `"txiki"` (full web APIs at ~6 MB if
+   *   not already linked). Both engines must be enabled at build
+   *   time for `engine: "txiki"` to actually take effect — otherwise
+   *   the build downgrades to whichever engine is compiled and logs
+   *   a warning.
+   */
+  constructor(scriptUrl: string, opts?: { engine?: "jsc" | "txiki" }) {
     this._bridge = getBridge();
-    this.id = (this._bridge as any).createWorker(scriptUrl);
+    this.id = (this._bridge as any).createWorker(scriptUrl, opts);
 
     // Register this instance for message dispatch
     (this._bridge as any)._workers[this.id] = this;

@@ -137,11 +137,11 @@
 
     // --- Worker lifecycle ---
 
-    createWorker(scriptUrl: string): string {
+    createWorker(scriptUrl: string, opts?: { engine?: "jsc" | "txiki" }): string {
       const id = "w-" + nextId++;
       if (nextId > 65535) nextId = 1;
       bridge._workers[id] = { onmessage: null, _messageHandlers: [] };
-      post(JSON.stringify({ t: 5, m: "create", a: { scriptUrl, workerId: id } }));
+      post(JSON.stringify({ t: 5, m: "create", a: { scriptUrl, workerId: id, engine: opts?.engine } }));
       return id;
     },
 

@@ -1,26 +1,10 @@
 // txiki.js worker engine — Zen-C trampolines.
-// Imports txiki.h C API, provides engine-agnostic function signatures.
+//
+// As of G8 (per-worker engine selection), the unified `worker_create`
+// / `worker_post_message` / `worker_terminate` dispatchers live in
+// `worker.zc` and call the engine-prefixed C symbols
+// (`txiki_worker_*`) directly. This file pulls the C header into
+// scope so the dispatcher's raw blocks have the symbols available.
 
 @cfg(ZAPP_WORKER_ENGINE_TXIKI)
 import "./txiki.h" as txiki_engine;
-
-@cfg(ZAPP_WORKER_ENGINE_TXIKI)
-fn worker_create(app: App*, script_url: string, owner_id: string, worker_id: string) -> bool {
-    let _app = app;
-    return txiki_engine::txiki_worker_create(script_url, owner_id, worker_id);
-}
-
-@cfg(ZAPP_WORKER_ENGINE_TXIKI)
-fn worker_post_message(worker_id: string, data: string) -> void {
-    txiki_engine::txiki_worker_post_message(worker_id, data);
-}
-
-@cfg(ZAPP_WORKER_ENGINE_TXIKI)
-fn worker_terminate(worker_id: string) -> void {
-    txiki_engine::txiki_worker_terminate(worker_id);
-}
-
-@cfg(ZAPP_WORKER_ENGINE_TXIKI)
-fn worker_terminate_owner(owner_id: string) -> void {
-    txiki_engine::txiki_worker_terminate_owner(owner_id);
-}

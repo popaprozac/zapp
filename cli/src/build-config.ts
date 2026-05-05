@@ -84,7 +84,11 @@ fn zapp_build_fs_persist_grants() -> bool { return ${fsPersistGrants}; }
 // are configured.
 export async function generateHeadlessWorkers(opts: {
   root: string;
-  headless?: Record<string, string | { script: string; restart?: { maxRetries?: number; withinMs?: number } | false }>;
+  headless?: Record<string, string | {
+    script: string;
+    restart?: { maxRetries?: number; withinMs?: number } | false;
+    engine?: "jsc" | "txiki";
+  }>;
 }): Promise<string> {
   const { root, headless } = opts;
   const zappDir = path.join(root, ".zapp");
@@ -94,18 +98,16 @@ export async function generateHeadlessWorkers(opts: {
   const calls = entries
     .map(([id, value]) => {
       const url = `/_workers/_headless_${id}.mjs`;
-      // Bare string → no restart policy (legacy behavior).
+      // Bare string → no engine, no restart policy.
       if (typeof value === "string") {
         return `    zapp_start_headless_worker("h-${id}", "${url}");`;
       }
-      // Object form. Restart explicitly false / omitted → no policy.
+      // Object form. Pull engine + restart; either field can be absent.
+      const engineId = value.engine === "txiki" ? 1 : 0;
       const restart = value.restart;
-      if (!restart) {
-        return `    zapp_start_headless_worker("h-${id}", "${url}");`;
-      }
-      const max = restart.maxRetries ?? 3;
-      const within = restart.withinMs ?? 60_000;
-      return `    zapp_start_headless_worker_with_restart("h-${id}", "${url}", ${max}, ${within});`;
+      const max = restart ? (restart.maxRetries ?? 3) : 0;
+      const within = restart ? (restart.withinMs ?? 60_000) : 0;
+      return `    zapp_start_headless_worker_full("h-${id}", "${url}", ${engineId}, ${max}, ${within});`;
     })
     .join("\n");
 

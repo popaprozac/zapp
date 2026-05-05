@@ -7,6 +7,12 @@ raw {
     #define ZAPP_MAX_WORKERS 64
     #define ZAPP_MAX_OWNERS_PER_WORKER 16
 
+    // Engine selector — tracked per-worker so dispatchers can route
+    // post / terminate / restart to the right engine without
+    // re-passing the choice on every call.
+    #define ZAPP_ENGINE_JSC   0
+    #define ZAPP_ENGINE_TXIKI 1
+
     typedef struct {
         char worker_id[64];
         char script_url[256];
@@ -14,6 +20,7 @@ raw {
         int owner_count;
         int shared;       // 0 = dedicated, 1 = shared
         int active;
+        int engine;       // ZAPP_ENGINE_JSC | ZAPP_ENGINE_TXIKI
 
         // --- Supervisor / restart policy ---
         // Failures inside a sliding window of `restart_window_ms` are
@@ -45,17 +52,18 @@ raw {
         return -1;
     }
 
-    // Add a worker with full options (shared flag + script URL).
-    // Non-static so app.zc can register headless workers (they don't
-    // go through the router add path). Idempotent: a duplicate id is
-    // refreshed in place rather than double-allocated.
-    int zapp_worker_registry_add_full(const char* worker_id, const char* owner_id,
-                                      int shared, const char* script_url) {
+    // Add a worker with full options (shared flag + script URL +
+    // engine). Non-static so app.zc can register headless workers
+    // (they don't go through the router add path). Idempotent: a
+    // duplicate id is refreshed in place rather than double-allocated.
+    int zapp_worker_registry_add_full_with_engine(const char* worker_id, const char* owner_id,
+                                                   int shared, const char* script_url, int engine) {
         // Update an existing entry if present.
         for (int i = 0; i < ZAPP_MAX_WORKERS; i++) {
             if (zapp_worker_registry[i].active &&
                 strcmp(zapp_worker_registry[i].worker_id, worker_id) == 0) {
                 zapp_worker_registry[i].shared = shared;
+                zapp_worker_registry[i].engine = engine;
                 if (script_url) {
                     strncpy(zapp_worker_registry[i].script_url, script_url, 255);
                     zapp_worker_registry[i].script_url[255] = '\0';
@@ -69,6 +77,7 @@ raw {
                 strncpy(zapp_worker_registry[i].owners[0], owner_id, 63);
                 zapp_worker_registry[i].owner_count = 1;
                 zapp_worker_registry[i].shared = shared;
+                zapp_worker_registry[i].engine = engine;
                 if (script_url)
                     strncpy(zapp_worker_registry[i].script_url, script_url, 255);
                 else
@@ -78,6 +87,25 @@ raw {
             }
         }
         return -1;
+    }
+
+    // Backward-compat wrapper — defaults engine to JSC. Existing
+    // callsites in router / app.zc keep working without a sweep.
+    int zapp_worker_registry_add_full(const char* worker_id, const char* owner_id,
+                                      int shared, const char* script_url) {
+        return zapp_worker_registry_add_full_with_engine(worker_id, owner_id, shared, script_url, ZAPP_ENGINE_JSC);
+    }
+
+    // Look up the engine for a worker. Returns ZAPP_ENGINE_JSC if not
+    // found (safe default — the JSC path is always present on Apple).
+    int zapp_worker_registry_get_engine(const char* worker_id) {
+        for (int i = 0; i < ZAPP_MAX_WORKERS; i++) {
+            if (zapp_worker_registry[i].active &&
+                strcmp(zapp_worker_registry[i].worker_id, worker_id) == 0) {
+                return zapp_worker_registry[i].engine;
+            }
+        }
+        return ZAPP_ENGINE_JSC;
     }
 
     // Non-static: called from jsc.m

@@ -291,6 +291,20 @@ export interface HeadlessWorkerConfig {
   script: string;
   /** Optional restart policy. Omit / `false` to disable auto-restart. */
   restart?: RestartPolicy | false;
+  /**
+   * Per-worker engine selection (G8). `"jsc"` is the default — zero
+   * binary cost on Apple, JIT for hot JS loops, no fetch / WebSocket /
+   * Streams. `"txiki"` opts this specific worker into the txiki.js
+   * runtime — full web APIs (fetch, WebSocket, Streams, SQLite via
+   * FFI) and a faster worker→native call rate, at the cost of pulling
+   * in the txiki engine (~6 MB if not already linked).
+   *
+   * Both engines must be enabled at build time (`ZAPP_WORKER_ENGINE_JSC`
+   * + `ZAPP_WORKER_ENGINE_TXIKI`) for true mixing. When only one is
+   * compiled, requests for the other are downgraded with a warning so
+   * the surprise is visible during dev.
+   */
+  engine?: "jsc" | "txiki";
 }
 
 export interface ZappConfig {
