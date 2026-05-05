@@ -19,6 +19,44 @@ export interface MacOSConfig {
   /** Code signing identity. Omit for ad-hoc. */
   signingIdentity?: string;
 
+  /**
+   * Apple notarization credentials. When set (and `signingIdentity`
+   * is a real Developer ID, not ad-hoc), `zapp package --notarize`
+   * submits the signed `.app` to Apple, waits for approval, and
+   * staples the ticket so it opens cleanly on other Macs without a
+   * "downloaded from internet" warning.
+   *
+   * **Three auth paths**, in order of preference:
+   *
+   *   1. **Keychain profile** — fastest local setup. Run once:
+   *      `xcrun notarytool store-credentials zapp-notarize`.
+   *      Then set `keychainProfile: "zapp-notarize"`.
+   *
+   *   2. **API key** — recommended for CI. Generates a `.p8` from
+   *      App Store Connect. Set `apiKeyPath` / `apiKeyId` /
+   *      `apiIssuerId`. The .p8 stays on disk; no password in
+   *      env or config.
+   *
+   *   3. **Apple ID + app-specific password** — legacy but works.
+   *      Password should NOT live in config; set
+   *      `ZAPP_NOTARIZE_APPLE_PASSWORD` env var instead.
+   *
+   * Every field can be overridden by an env var
+   * (`ZAPP_NOTARIZE_<UPPERCASE_FIELD>`) so secrets stay out of
+   * `zapp.config.ts`.
+   */
+  notarize?: {
+    /** Keychain profile name (created via `xcrun notarytool store-credentials`). */
+    keychainProfile?: string;
+    /** Path to App Store Connect API key (.p8 file). Pair with apiKeyId + apiIssuerId. */
+    apiKeyPath?: string;
+    apiKeyId?: string;
+    apiIssuerId?: string;
+    /** Apple ID email. Pair with teamId; password from env var. */
+    appleId?: string;
+    teamId?: string;
+  };
+
   /** Copyright string → `NSHumanReadableCopyright` in Info.plist. */
   copyright?: string;
 

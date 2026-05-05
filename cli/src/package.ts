@@ -9,6 +9,7 @@ import type { MacOSConfig, ResolvedConfig } from "./config";
 import { processIcon, type IconResult } from "./icon";
 import { resolveAppIconPath } from "./paths";
 import { resolveEntitlements } from "./entitlements";
+import { notarizeApp } from "./notarize";
 
 interface PackageOptions {
   root: string;
@@ -117,6 +118,13 @@ export async function createProductionBundle(opts: PackageOptions): Promise<stri
   );
 
   const codesignArgs = ["codesign", "--force", "--deep", "-s", identity];
+  // Hardened runtime is required for Apple notarization. Always
+  // enable it for non-ad-hoc signs — it has zero downside for apps
+  // that aren't doing exotic memory tricks, and saves users the
+  // mysterious "notarization rejected: hardened runtime" footgun.
+  if (identity !== "-") {
+    codesignArgs.push("--options", "runtime");
+  }
   if (entitlements.used) {
     codesignArgs.push("--entitlements", entitlements.path);
   }
@@ -129,32 +137,17 @@ export async function createProductionBundle(opts: PackageOptions): Promise<stri
     process.stderr.write(`[zapp] signing failed: ${stderr}\n`);
   }
 
-  // Notarize (if requested and identity is not ad-hoc)
-  if (notarize && identity !== "-") {
-    process.stdout.write("[zapp] notarizing (this may take a few minutes)...\n");
-
-    const zipPath = path.join(path.dirname(outDir), `${appName}.zip`);
-    const zipProc = Bun.spawn(
-      ["ditto", "-c", "-k", "--keepParent", outDir, zipPath],
-      { stdout: "pipe", stderr: "pipe" }
-    );
-    await zipProc.exited;
-
-    const notarizeProc = Bun.spawn(
-      ["xcrun", "notarytool", "submit", zipPath, "--keychain-profile", "zapp", "--wait"],
-      { stdout: "inherit", stderr: "inherit" }
-    );
-    const notarizeExit = await notarizeProc.exited;
-
-    if (notarizeExit === 0) {
-      const stapleProc = Bun.spawn(
-        ["xcrun", "stapler", "staple", outDir],
-        { stdout: "pipe", stderr: "pipe" }
+  // Notarize: only meaningful with a real Developer ID. Ad-hoc signed
+  // bundles can't be notarized — the user needs to set
+  // `macos.signingIdentity` first. Surface that clearly.
+  if (notarize) {
+    if (identity === "-") {
+      process.stderr.write(
+        "[zapp] notarization skipped: ad-hoc signed bundle. " +
+        "Set `macos.signingIdentity` to a Developer ID and rerun.\n"
       );
-      await stapleProc.exited;
-      process.stdout.write("[zapp] notarization complete\n");
     } else {
-      process.stderr.write("[zapp] notarization failed\n");
+      await notarizeApp({ appPath: outDir, notarize: macosConfig?.notarize });
     }
   }
 

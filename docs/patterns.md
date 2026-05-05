@@ -982,6 +982,128 @@ self-signed or Developer ID identity so the entitlements take effect.
 `zapp dev` re-signs with the same identity and entitlements, so the
 dev run matches the `zapp package` result.
 
+## Notarization
+
+Distributing a `.app` outside the App Store on macOS 10.15+ requires
+**notarization** — Apple scans the bundle, returns a verdict, and you
+"staple" the approval ticket onto the bundle so Gatekeeper opens it
+without warnings on first launch.
+
+`zapp package --notarize` automates this end-to-end. Three things
+need to be in place:
+
+1. A real Developer ID code-signing identity (not ad-hoc).
+2. Notarization credentials (one of three auth paths below).
+3. The signed `.app` (handled by `zapp package` itself).
+
+### Set up credentials
+
+**Option 1 — Keychain profile (easiest local).**
+
+Run once on your machine:
+
+```bash
+xcrun notarytool store-credentials zapp-notarize \
+  --apple-id "you@example.com" \
+  --team-id "TEAMID1234" \
+  --password "app-specific-password-from-appleid.apple.com"
+```
+
+Then in `zapp.config.ts`:
+
+```ts
+macos: {
+  signingIdentity: "Developer ID Application: Your Name (TEAMID1234)",
+  notarize: { keychainProfile: "zapp-notarize" },
+}
+```
+
+**Option 2 — API key (recommended for CI).**
+
+Generate an App Store Connect API key (`.p8`). Set:
+
+```ts
+macos: {
+  signingIdentity: "Developer ID Application: ...",
+  notarize: {
+    apiKeyPath: "/secure/path/AuthKey_AB12CD34EF.p8",
+    apiKeyId: "AB12CD34EF",
+    apiIssuerId: "1234abcd-...-...-...-1234abcd5678",
+  },
+}
+```
+
+For CI, override via env vars instead of committing the values:
+
+```bash
+ZAPP_NOTARIZE_API_KEY_PATH=/secrets/key.p8
+ZAPP_NOTARIZE_API_KEY_ID=AB12CD34EF
+ZAPP_NOTARIZE_API_ISSUER_ID=1234abcd-...
+```
+
+**Option 3 — Apple ID + app-specific password (legacy).**
+
+```ts
+macos: {
+  signingIdentity: "Developer ID Application: ...",
+  notarize: {
+    appleId: "you@example.com",
+    teamId: "TEAMID1234",
+    // password ALWAYS via env, never config:
+    //   ZAPP_NOTARIZE_APPLE_PASSWORD=xxxx-xxxx-xxxx-xxxx
+  },
+}
+```
+
+### Run it
+
+```bash
+bunx @zappdev/cli package --notarize
+```
+
+Output looks like:
+
+```
+[zapp] signing (Developer ID Application: Your Name) with entitlements...
+[zapp] notarizing via keychain profile "zapp-notarize"…
+[zapp] (Apple typically takes 1–5 min — be patient)
+[zapp] notarization accepted, stapling…
+[zapp] notarization complete: release/MyApp.app
+```
+
+### Common failures
+
+- **Hardened runtime not enabled** — required for notarization. Add
+  `entitlements: { "com.apple.security.cs.allow-unsigned-executable-memory": false }`
+  and ensure no entitlement disables the hardened runtime. The CLI
+  passes `--options runtime` to codesign automatically when
+  `signingIdentity` is non-ad-hoc.
+- **Bundle not fully signed** — `--deep` fixes most cases; if you
+  vendor pre-built binaries (e.g. txiki.js native libs) they must
+  also be signed.
+- **"Invalid" status with no obvious reason** — the CLI fetches the
+  submission log via `xcrun notarytool log` and prints it. Look for
+  `code: 90000` and the `message` field for the actual rejection
+  reason.
+
+### Env-var overrides
+
+Every `notarize.*` config field has a matching env var, so secrets
+stay out of `zapp.config.ts`:
+
+| Config | Env var |
+|---|---|
+| `keychainProfile` | `ZAPP_NOTARIZE_KEYCHAIN_PROFILE` |
+| `apiKeyPath` | `ZAPP_NOTARIZE_API_KEY_PATH` |
+| `apiKeyId` | `ZAPP_NOTARIZE_API_KEY_ID` |
+| `apiIssuerId` | `ZAPP_NOTARIZE_API_ISSUER_ID` |
+| `appleId` | `ZAPP_NOTARIZE_APPLE_ID` |
+| `teamId` | `ZAPP_NOTARIZE_TEAM_ID` |
+| (password — env only) | `ZAPP_NOTARIZE_APPLE_PASSWORD` |
+
+Env wins over config so you can set safe placeholders in source and
+override per-environment.
+
 ## Further reading
 
 - [`api-reference.md`](api-reference.md) — full runtime API
