@@ -237,6 +237,21 @@ static void jsc_setup_bridge(JSContext* ctx, NSString* workerId) {
         worker_dispatch_to_webview([wid UTF8String], [json UTF8String]);
     };
 
+    // postToWorker(targetId, data) — direct worker→worker channel.
+    // Workers.postMessage(targetId, data) and Workers.send(targetId,
+    // channel, data) both route through here. Skips the webview hop
+    // and the broadcast fan-out you'd get from Events.emit, so a
+    // pipeline like ingest → db → sync stays point-to-point.
+    bridge[@"postToWorker"] = ^(NSString* targetId, JSValue* data) {
+        if (!targetId || targetId.length == 0) return;
+        NSString* json = @"{}";
+        if (data && ![data isUndefined]) {
+            NSData* d = [NSJSONSerialization dataWithJSONObject:[data toObject] options:0 error:nil];
+            if (d) json = [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding];
+        }
+        jsc_worker_post_message([targetId UTF8String], [json UTF8String]);
+    };
+
     // syncWait — host object for Sync.wait() from workers.
     // Returns a real JS Promise whose resolver is stashed on bridge._syncPending
     // keyed by request_id. When the native sync dispatch eval's dispatchSyncResult

@@ -7,7 +7,7 @@
 // `project_backend_stale.md`). A headless worker is the supported
 // way to do app-wide background work today.
 
-import { Events } from "@zappdev/runtime";
+import { Events, Workers } from "@zappdev/runtime";
 import "@zappdev/runtime/worker-globals";
 
 let counter = 0;
@@ -15,5 +15,20 @@ setInterval(() => {
   counter++;
   Events.emit("counter:tick", { value: counter, ts: Date.now() });
 }, 2000);
+
+// Pipeline-style channel — receive a "ping" via Workers.send from any
+// context (webview or another worker), reply by re-sending on a
+// "pong" channel. Demonstrates the worker→worker pipe (the supervised
+// worker can address us as "h-ticker", same as a webview).
+receive("ping", (data: any) => {
+  console.log("[ticker] received ping:", JSON.stringify(data));
+  // Reply: echo back to the supervised worker if that's who sent it,
+  // otherwise broadcast via Events for the webview test path.
+  if (data?.replyTo) {
+    Workers.send(data.replyTo, "pong", { from: "h-ticker", ts: Date.now() });
+  } else {
+    Events.emit("ticker:pong", { from: "h-ticker", ts: Date.now() });
+  }
+});
 
 console.log("[ticker] started");

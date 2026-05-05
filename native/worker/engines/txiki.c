@@ -363,6 +363,35 @@ static JSValue zapp_bridge_post_to_webview(JSContext* ctx, JSValueConst this_val
     return JS_UNDEFINED;
 }
 
+// postToWorker(targetId, data) — direct worker→worker channel.
+// Workers.postMessage(targetId, data) and Workers.send(targetId,
+// channel, data) both route here. Skips the broadcast fan-out you'd
+// get from Events.emit, so a pipeline like ingest→db→sync stays
+// point-to-point. Cross-engine safe: txiki worker can post to a JSC
+// worker (and vice versa) since the public worker_post_message
+// dispatcher in worker.zc routes by id, not by engine.
+extern void worker_post_message(char* worker_id, char* data_json);
+
+static JSValue zapp_bridge_post_to_worker(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    (void)this_val;
+    if (argc < 2) return JS_UNDEFINED;
+
+    const char* target = JS_ToCString(ctx, argv[0]);
+    if (!target) return JS_UNDEFINED;
+
+    JSValue json_val = JS_JSONStringify(ctx, argv[1], JS_UNDEFINED, JS_UNDEFINED);
+    if (!JS_IsException(json_val)) {
+        const char* json = JS_ToCString(ctx, json_val);
+        if (json) {
+            worker_post_message((char*)target, (char*)json);
+            JS_FreeCString(ctx, json);
+        }
+    }
+    JS_FreeValue(ctx, json_val);
+    JS_FreeCString(ctx, target);
+    return JS_UNDEFINED;
+}
+
 // --- Sync.wait / Sync.notify host objects ---
 
 extern void darwin_sync_handle(const char* action, const char* payload_json);
@@ -940,6 +969,8 @@ static void txiki_setup_bridge(JSContext* ctx, const char* worker_id) {
         JS_NewCFunction(ctx, zapp_bridge_invoke_service, "invokeService", 2));
     JS_SetPropertyStr(ctx, bridge, "postToWebview",
         JS_NewCFunction(ctx, zapp_bridge_post_to_webview, "postToWebview", 1));
+    JS_SetPropertyStr(ctx, bridge, "postToWorker",
+        JS_NewCFunction(ctx, zapp_bridge_post_to_worker, "postToWorker", 2));
     JS_SetPropertyStr(ctx, bridge, "emitToHost",
         JS_NewCFunction(ctx, zapp_bridge_emit_to_host, "emitToHost", 2));
     JS_SetPropertyStr(ctx, bridge, "dispatchEventToAll",

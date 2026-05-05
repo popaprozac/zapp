@@ -185,4 +185,49 @@ export const Workers = {
     const workers = (bridge as any)._workers;
     if (workers && id in workers) delete workers[id];
   },
+
+  /**
+   * Send a raw message to any worker by ID — webview → worker, worker
+   * → worker, backend → worker, all reachable through the same call.
+   * For pipelines (`ingest → db → sync`) this skips the broadcast
+   * fan-out you'd get from `Events.emit`, keeping the message
+   * point-to-point.
+   *
+   * The receiving worker picks it up via the standard worker scope:
+   * `self.onmessage` for raw, `self.receive("channel", handler)` for
+   * channel-typed messages (use `Workers.send` for the channel form).
+   *
+   * Unknown / terminated IDs are a silent no-op.
+   *
+   * @example
+   * ```ts
+   * // From any context — webview or another worker
+   * Workers.postMessage("h-db", { type: "write", row: { ... } });
+   * ```
+   */
+  postMessage(targetId: string, data: unknown): void {
+    if (!targetId) return;
+    (getBridge() as any).postToWorker(targetId, data);
+  },
+
+  /**
+   * Channel-typed equivalent of `postMessage` — wraps `data` so the
+   * target's `self.receive("<channel>", handler)` picks it up.
+   * Mirrors `worker.send(channel, data)` but for arbitrary worker IDs
+   * (including headless workers that have no `Worker` instance).
+   *
+   * @example
+   * ```ts
+   * Workers.send("h-db", "write", { row: { ... } });
+   * // In src/workers/db.ts:
+   * receive("write", (row) => { ... });
+   * ```
+   */
+  send(targetId: string, channel: string, data: unknown): void {
+    if (!targetId) return;
+    (getBridge() as any).postToWorker(targetId, {
+      [CHANNEL_KEY]: channel,
+      [DATA_KEY]: data,
+    });
+  },
 };

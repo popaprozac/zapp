@@ -139,6 +139,18 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
       </section>
 
       <section>
+        <h2>Worker Channels (G7)</h2>
+        <p style="font-size: 12px; opacity: 0.7; margin: 0 0 8px 0;">
+          <code>Workers.postMessage(id, data)</code> /
+          <code>Workers.send(id, channel, data)</code> — point-to-point.
+          Skips Events.emit's broadcast fan-out.
+        </p>
+        <button id="btn-channel-direct">Webview → ticker (direct)</button>
+        <button id="btn-channel-pipeline">Pipeline: webview → supervised → ticker → supervised</button>
+        <div id="channel-result" class="result"></div>
+      </section>
+
+      <section>
         <h2>Supervisor (headless: supervised)</h2>
         <p style="font-size: 12px; opacity: 0.7; margin: 0 0 8px 0;">
           Restart policy: 2 retries / 30s. Click "Force crash" up to 3 times —
@@ -569,6 +581,34 @@ Events.on("worker:gave-up", (data: any) => {
 $("btn-supervisor-crash").addEventListener("click", () => {
   Events.emit("force-crash", {});
   log("emitted force-crash to supervised worker");
+});
+
+// --- Worker channels (G7) ---
+
+// Webview → ticker direct: ticker has receive("ping") that broadcasts
+// via Events when no replyTo is set, so we listen for ticker:pong here.
+Events.on("ticker:pong", (data: any) => {
+  const d = typeof data === "string" ? JSON.parse(data) : data;
+  $("channel-result").textContent = `direct: ${JSON.stringify(d)}`;
+  log(`Workers.send → ticker → Events.emit pong: ${JSON.stringify(d)}`);
+});
+
+$("btn-channel-direct").addEventListener("click", () => {
+  Workers.postMessage("h-ticker", { __zc: "ping", d: { from: "webview", ts: Date.now() } });
+  log(`Workers.postMessage("h-ticker", ping) — direct webview→worker`);
+});
+
+// Pipeline: webview emits force-pipeline → supervised → Workers.send →
+// ticker → Workers.send pong → supervised → Events.emit pipeline-done.
+Events.on("supervised:pipeline-done", (data: any) => {
+  const d = typeof data === "string" ? JSON.parse(data) : data;
+  $("channel-result").textContent = `pipeline: ${d.hop}`;
+  log(`pipeline complete: ${d.hop}`);
+});
+
+$("btn-channel-pipeline").addEventListener("click", () => {
+  Events.emit("relay-to-ticker", {});
+  log(`emitted relay-to-ticker — supervised will Workers.send to ticker`);
 });
 
 // --- Clipboard ---

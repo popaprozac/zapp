@@ -11,7 +11,7 @@
 //   - 2nd crash:  worker:crashed → worker:restarted
 //   - 3rd crash:  worker:crashed → worker:gave-up
 
-import { Events } from "@zappdev/runtime";
+import { Events, Workers } from "@zappdev/runtime";
 import "@zappdev/runtime/worker-globals";
 
 console.log("[supervised] starting");
@@ -23,6 +23,20 @@ Events.on("force-crash", () => {
   setTimeout(() => {
     throw new Error("forced crash from supervisor demo");
   }, 0);
+});
+
+// Worker→worker pipeline demo: when the UI emits `relay-to-ticker`,
+// this worker sends a `ping` directly to the ticker headless worker
+// via `Workers.send` (no broadcast fan-out, no webview hop). The
+// ticker echoes back to *this* worker on the `pong` channel.
+receive("pong", (data: any) => {
+  console.log("[supervised] got pong from ticker:", JSON.stringify(data));
+  Events.emit("supervised:pipeline-done", { hop: "supervised → ticker → supervised", ts: Date.now() });
+});
+
+Events.on("relay-to-ticker", () => {
+  console.log("[supervised] relaying ping to h-ticker");
+  Workers.send("h-ticker", "ping", { replyTo: "h-supervised", from: "h-supervised" });
 });
 
 console.log("[supervised] ready");
