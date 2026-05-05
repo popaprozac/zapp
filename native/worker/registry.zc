@@ -14,6 +14,17 @@ raw {
         int owner_count;
         int shared;       // 0 = dedicated, 1 = shared
         int active;
+
+        // --- Supervisor / restart policy ---
+        // Failures inside a sliding window of `restart_window_ms` are
+        // counted; once `fail_count` reaches `restart_max` the worker
+        // is marked `gave_up` and no further restarts are attempted.
+        // restart_max == 0 means "no auto-restart" (default).
+        int restart_max;
+        int restart_window_ms;
+        int fail_count;
+        long long fail_window_start_ms;
+        int gave_up;
     } ZappWorkerEntry;
 
     static ZappWorkerEntry zapp_worker_registry[ZAPP_MAX_WORKERS] = {{0}};
@@ -34,9 +45,24 @@ raw {
         return -1;
     }
 
-    // Add a worker with full options (shared flag + script URL)
-    static int zapp_worker_registry_add_full(const char* worker_id, const char* owner_id,
-                                              int shared, const char* script_url) {
+    // Add a worker with full options (shared flag + script URL).
+    // Non-static so app.zc can register headless workers (they don't
+    // go through the router add path). Idempotent: a duplicate id is
+    // refreshed in place rather than double-allocated.
+    int zapp_worker_registry_add_full(const char* worker_id, const char* owner_id,
+                                      int shared, const char* script_url) {
+        // Update an existing entry if present.
+        for (int i = 0; i < ZAPP_MAX_WORKERS; i++) {
+            if (zapp_worker_registry[i].active &&
+                strcmp(zapp_worker_registry[i].worker_id, worker_id) == 0) {
+                zapp_worker_registry[i].shared = shared;
+                if (script_url) {
+                    strncpy(zapp_worker_registry[i].script_url, script_url, 255);
+                    zapp_worker_registry[i].script_url[255] = '\0';
+                }
+                return i;
+            }
+        }
         for (int i = 0; i < ZAPP_MAX_WORKERS; i++) {
             if (!zapp_worker_registry[i].active) {
                 strncpy(zapp_worker_registry[i].worker_id, worker_id, 63);
@@ -152,5 +178,75 @@ raw {
             }
         }
         return NULL;
+    }
+
+    // --- Supervisor public API ---
+    //
+    // The engine (jsc.m, txiki.c) calls these on uncaught worker errors.
+    // The split is deliberate: the engine knows when a fault has fired,
+    // the supervisor knows whether to retry. Engine-agnostic policy
+    // lives here so adding a new engine doesn't duplicate it.
+
+    #include <sys/time.h>
+
+    static long long zapp_supervisor_now_ms(void) {
+        struct timeval tv;
+        gettimeofday(&tv, NULL);
+        return (long long)tv.tv_sec * 1000LL + (long long)tv.tv_usec / 1000LL;
+    }
+
+    // Configure the restart policy for a worker. max == 0 disables
+    // auto-restart (default). Setting after the worker is created is
+    // fine — failures before policy was set won't have been counted.
+    void zapp_worker_supervisor_set_policy(const char* worker_id, int max, int window_ms) {
+        ZappWorkerEntry* e = zapp_worker_registry_get(worker_id);
+        if (!e) return;
+        e->restart_max = max;
+        e->restart_window_ms = window_ms > 0 ? window_ms : 60000;
+        e->fail_count = 0;
+        e->fail_window_start_ms = 0;
+        e->gave_up = 0;
+    }
+
+    // Record a worker failure. Returns:
+    //   0  — ignore (no policy configured; engine should NOT restart)
+    //   1  — restart approved (engine should tear down + rerun script)
+    //   2  — gave up (this and all future calls return 2 until policy reset)
+    //
+    // Sliding-window logic: failures within `restart_window_ms` of the
+    // first failure in the current window count toward `restart_max`.
+    // Once max is reached, gave_up flips to 1 permanently. If a failure
+    // arrives after the window expires, the window resets and the
+    // counter starts at 1.
+    int zapp_worker_supervisor_record_failure(const char* worker_id) {
+        ZappWorkerEntry* e = zapp_worker_registry_get(worker_id);
+        if (!e) return 0;
+        if (e->restart_max <= 0) return 0;
+        if (e->gave_up) return 2;
+
+        long long now = zapp_supervisor_now_ms();
+        if (e->fail_count == 0 ||
+            (now - e->fail_window_start_ms) > (long long)e->restart_window_ms) {
+            e->fail_count = 1;
+            e->fail_window_start_ms = now;
+            return 1;
+        }
+        e->fail_count++;
+        if (e->fail_count > e->restart_max) {
+            e->gave_up = 1;
+            return 2;
+        }
+        return 1;
+    }
+
+    // Helpers the engine needs to recreate a worker on restart.
+    const char* zapp_worker_supervisor_get_script_url(const char* worker_id) {
+        ZappWorkerEntry* e = zapp_worker_registry_get(worker_id);
+        return e ? e->script_url : NULL;
+    }
+    const char* zapp_worker_supervisor_get_owner(const char* worker_id) {
+        ZappWorkerEntry* e = zapp_worker_registry_get(worker_id);
+        if (!e || e->owner_count == 0) return "";
+        return e->owners[0];
     }
 }

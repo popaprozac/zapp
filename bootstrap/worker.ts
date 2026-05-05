@@ -98,13 +98,52 @@
     }
   };
 
+  // Forward an uncaught error to the supervisor (host side fires
+  // worker:crashed + applies restart policy). The "Error:" prefix is
+  // dropped from the message since the supervisor adds context anyway.
+  function reportCrash(e: unknown) {
+    const message = (e && typeof e === "object" && "message" in (e as any))
+      ? String((e as any).message)
+      : String(e);
+    const stack = (e && typeof e === "object" && "stack" in (e as any))
+      ? String((e as any).stack)
+      : "";
+    try { (bridge as any).workerCrash?.(message, stack); }
+    catch (loopErr) { console.error("[worker]", loopErr); }
+  }
+
   bridge._onEvent = function (name: string, payload: string) {
     let parsed: unknown = payload;
     try { parsed = JSON.parse(payload); } catch {}
     for (const h of listeners[name] || []) {
-      try { h(parsed); } catch (e) { console.error("[worker]", e); }
+      try { h(parsed); } catch (e) {
+        console.error("[worker]", e);
+        reportCrash(e);
+      }
     }
   };
+
+  // Wrap setTimeout / setInterval so callbacks that throw route through
+  // the supervisor instead of being dumped to stderr by the engine. This
+  // is the single biggest source of "the throw escapes the bootstrap
+  // try/catch and silently disappears" footguns. Both engines use this
+  // shape — the wrap is engine-agnostic.
+  const origSetTimeout = (globalThis as any).setTimeout?.bind(globalThis);
+  if (origSetTimeout) {
+    (globalThis as any).setTimeout = function (cb: (...a: any[]) => void, ms?: number, ...args: any[]) {
+      return origSetTimeout(() => {
+        try { cb(...args); } catch (e) { reportCrash(e); }
+      }, ms);
+    };
+  }
+  const origSetInterval = (globalThis as any).setInterval?.bind(globalThis);
+  if (origSetInterval) {
+    (globalThis as any).setInterval = function (cb: (...a: any[]) => void, ms?: number, ...args: any[]) {
+      return origSetInterval(() => {
+        try { cb(...args); } catch (e) { reportCrash(e); }
+      }, ms);
+    };
+  }
 
   // Expose __zappBridge itself (not a wrapper) under the symbol the
   // runtime looks up. getBridge() returns the native host object directly.

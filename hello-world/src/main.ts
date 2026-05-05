@@ -10,11 +10,15 @@ import {
   Menu,
   ContextMenu,
   Notification,
+  type NotificationResponse,
   Worker,
+  Workers,
   Dock,
   Tray,
   type TrayHandle,
-  Sync
+  Clipboard,
+  Shortcuts,
+  Sync,
 } from "@zappdev/runtime";
 import { greet } from "./zapp";
 
@@ -27,6 +31,7 @@ log(`greet({ name: "World" }) → ${result}`);
 
 // --- Menu ---
 
+let isFullscreen = false;
 Menu.build([
   {
     label: "File",
@@ -52,10 +57,17 @@ Menu.build([
       {
         label: "Toggle Fullscreen",
         accelerator: "CmdOrCtrl+F",
-        action: () => win.setFullscreen(true),
+        action: () => {
+          isFullscreen = !isFullscreen;
+          win.setFullscreen(isFullscreen);
+          log(`Fullscreen: ${isFullscreen ? "ON" : "OFF"}`);
+        },
       },
     ],
   },
+  // Standard Window menu — gives Cmd+W (close), Cmd+M (minimize), and
+  // the running-windows submenu macOS users expect.
+  { role: "windowMenu", label: "Window" },
 ]);
 
 // --- UI ---
@@ -63,7 +75,7 @@ Menu.build([
 document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
   <div class="container">
     <h1>Zapp v2</h1>
-    <p class="subtitle">Desktop framework — 354 KB binary</p>
+    <p class="subtitle">Desktop framework — single-binary, no Electron</p>
 
     <div class="grid">
       <section>
@@ -78,6 +90,7 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
         <button id="btn-title">Set Title</button>
         <button id="btn-size">Resize 900x700</button>
         <button id="btn-minimize">Minimize</button>
+        <button id="btn-always-on-top">Toggle Always-On-Top</button>
         <button id="btn-guard">Enable Close Guard</button>
         <button id="btn-new-window">New Window</button>
         <button id="btn-new-window-small">New Window (small)</button>
@@ -96,11 +109,16 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
         <button id="btn-open-file">Open File</button>
         <button id="btn-save-file">Save File</button>
         <button id="btn-message">Message Dialog</button>
+        <button id="btn-reveal-file">Reveal Last in Finder</button>
+        <button id="btn-open-path">Open Last with Default App</button>
         <div id="dialog-result" class="result"></div>
       </section>
 
       <section>
         <h2>Notifications</h2>
+        <p style="font-size: 12px; opacity: 0.7; margin: 0 0 8px 0;">
+          Double-click <strong>Show</strong> to attach an image.
+        </p>
         <button id="btn-notif-perm">Request Permission</button>
         <button id="btn-notif-show">Show</button>
         <button id="btn-notif-actions">With Actions</button>
@@ -116,14 +134,57 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
         <button id="btn-worker-ping">Send Ping</button>
         <button id="btn-worker-service">Invoke Service</button>
         <button id="btn-worker-terminate">Terminate</button>
+        <button id="btn-worker-terminate-by-id">Workers.terminate("h-supervised")</button>
         <div id="worker-result" class="result"></div>
+      </section>
+
+      <section>
+        <h2>Supervisor (headless: supervised)</h2>
+        <p style="font-size: 12px; opacity: 0.7; margin: 0 0 8px 0;">
+          Restart policy: 2 retries / 30s. Click "Force crash" up to 3 times —
+          the 3rd should fire <code>worker:gave-up</code>.
+        </p>
+        <button id="btn-supervisor-crash">Force crash</button>
+        <div id="supervisor-result" class="result"></div>
+      </section>
+
+      <section>
+        <h2>Clipboard</h2>
+        <button id="btn-clip-write-text">Write text</button>
+        <button id="btn-clip-read-text">Read text</button>
+        <button id="btn-clip-has-image">Has image?</button>
+        <button id="btn-clip-read-image">Read image (PNG bytes)</button>
+        <button id="btn-clip-clear">Clear</button>
+        <div id="clip-result" class="result"></div>
+      </section>
+
+      <section>
+        <h2>Global Shortcuts</h2>
+        <p style="font-size: 12px; opacity: 0.7; margin: 0 0 8px 0;">
+          Registers <code>CmdOrCtrl+Shift+Z</code>. Switch to another app and
+          press it — fires the handler regardless of focus.
+        </p>
+        <button id="btn-shortcut-register">Register</button>
+        <button id="btn-shortcut-unregister">Unregister</button>
+        <button id="btn-shortcut-is-registered">Is registered?</button>
+        <div id="shortcut-result" class="result"></div>
+      </section>
+
+      <section>
+        <h2>Theme</h2>
+        <p style="font-size: 12px; opacity: 0.7; margin: 0 0 8px 0;">
+          Toggle macOS appearance (System Settings → Appearance) to see the
+          theme-changed event fire live.
+        </p>
+        <button id="btn-theme-get">Get current theme</button>
+        <div id="theme-result" class="result">Theme: ${App.getTheme()}</div>
       </section>
 
       <section>
         <h2>Dock</h2>
         <button id="btn-dock-badge">Badge "3"</button>
         <button id="btn-dock-clear">Clear Badge</button>
-        <button id="btn-dock-bounce">Bounce</button>
+        <button id="btn-dock-bounce">Bounce (in 3s)</button>
         <button id="btn-dock-hide">Hide Icon</button>
         <button id="btn-dock-show">Show Icon</button>
       </section>
@@ -149,10 +210,11 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
       </section>
 
       <section>
-        <h2>Backend State</h2>
+        <h2>Cross-Context State (headless: ticker)</h2>
         <p style="font-size: 12px; opacity: 0.7; margin: 0 0 8px 0;">
-          Backend ticks every 2s. Open multiple windows — they all update in lockstep
-          from backend-owned state, no polling.
+          A headless worker (<code>src/workers/ticker.ts</code>) emits
+          <code>counter:tick</code> every 2s. Open multiple windows —
+          they all update in lockstep from one source of truth, no polling.
         </p>
         <div id="counter-display" class="result">Counter: (waiting…)</div>
       </section>
@@ -212,6 +274,13 @@ $("btn-size").addEventListener("click", () => {
 $("btn-minimize").addEventListener("click", () => {
   win.minimize();
   log("Minimized");
+});
+
+let alwaysOnTop = false;
+$("btn-always-on-top").addEventListener("click", () => {
+  alwaysOnTop = !alwaysOnTop;
+  win.setAlwaysOnTop(alwaysOnTop);
+  log(`Always-on-top: ${alwaysOnTop ? "ON" : "OFF"}`);
 });
 
 $("btn-new-window").addEventListener("click", async () => {
@@ -299,14 +368,17 @@ win.on(WindowEvent.CLOSE, async () => {
 
 // --- Dialogs ---
 
+let lastPickedPath = "";
+
 $("btn-open-file").addEventListener("click", async () => {
   const result = await Dialog.openFile({ title: "Pick a file" });
   if (result.cancelled) {
     $("dialog-result").textContent = "Cancelled";
     log("Open file: cancelled");
   } else {
-    $("dialog-result").textContent = result.paths[0];
-    log(`Open file: ${result.paths[0]}`);
+    lastPickedPath = result.paths[0];
+    $("dialog-result").textContent = lastPickedPath;
+    log(`Open file: ${lastPickedPath}`);
   }
 });
 
@@ -318,8 +390,9 @@ $("btn-save-file").addEventListener("click", async () => {
   if (result.cancelled) {
     $("dialog-result").textContent = "Cancelled";
   } else {
-    $("dialog-result").textContent = result.path;
-    log(`Save file: ${result.path}`);
+    lastPickedPath = result.path;
+    $("dialog-result").textContent = lastPickedPath;
+    log(`Save file: ${lastPickedPath}`);
   }
 });
 
@@ -331,6 +404,18 @@ $("btn-message").addEventListener("click", async () => {
   });
   $("dialog-result").textContent = `Button: ${result.button}`;
   log(`Message dialog: button ${result.button}`);
+});
+
+$("btn-reveal-file").addEventListener("click", () => {
+  if (!lastPickedPath) { log("Pick a file first"); return; }
+  App.showItemInFolder(lastPickedPath);
+  log(`Revealed in Finder: ${lastPickedPath}`);
+});
+
+$("btn-open-path").addEventListener("click", () => {
+  if (!lastPickedPath) { log("Pick a file first"); return; }
+  App.openPath(lastPickedPath);
+  log(`Opened with default app: ${lastPickedPath}`);
 });
 
 // --- Notifications ---
@@ -380,9 +465,9 @@ $("btn-notif-remove").addEventListener("click", async () => {
   lastNotifId = "";
 });
 
-// Test attachment — double-click the Show button
+// Test attachment — double-click the Show button.
 $("btn-notif-show").addEventListener("dblclick", async () => {
-  // Use a file dialog to pick an image for the attachment
+  // Use a file dialog to pick an image for the attachment.
   const result = await Dialog.openFile({ title: "Pick an image for notification" });
   if (result.cancelled || !result.paths?.[0]) return;
   lastNotifId = await Notification.show({
@@ -456,6 +541,116 @@ $("btn-worker-terminate").addEventListener("click", () => {
   log("Worker terminated");
 });
 
+// Demonstrates `Workers.terminate(id)` — kill any worker (headless or
+// dedicated) by its id without holding the Worker instance.
+$("btn-worker-terminate-by-id").addEventListener("click", () => {
+  Workers.terminate("h-supervised");
+  log(`Workers.terminate("h-supervised") — supervised headless worker killed`);
+});
+
+// --- Supervisor (G6) ---
+
+Events.on("worker:crashed", (data: any) => {
+  const d = typeof data === "string" ? JSON.parse(data) : data;
+  $("supervisor-result").textContent = `crashed: ${d.id} — ${d.message}`;
+  log(`worker:crashed ${d.id}: ${d.message}`);
+});
+Events.on("worker:restarted", (data: any) => {
+  const d = typeof data === "string" ? JSON.parse(data) : data;
+  $("supervisor-result").textContent = `restarted: ${d.id}`;
+  log(`worker:restarted ${d.id}`);
+});
+Events.on("worker:gave-up", (data: any) => {
+  const d = typeof data === "string" ? JSON.parse(data) : data;
+  $("supervisor-result").textContent = `gave up: ${d.id}`;
+  log(`worker:gave-up ${d.id}`);
+});
+
+$("btn-supervisor-crash").addEventListener("click", () => {
+  Events.emit("force-crash", {});
+  log("emitted force-crash to supervised worker");
+});
+
+// --- Clipboard ---
+
+$("btn-clip-write-text").addEventListener("click", async () => {
+  const text = `Hello from Zapp at ${new Date().toLocaleTimeString()}`;
+  await Clipboard.writeText(text);
+  $("clip-result").textContent = `Wrote: ${text}`;
+  log(`Clipboard write: "${text}"`);
+});
+
+$("btn-clip-read-text").addEventListener("click", async () => {
+  const text = await Clipboard.readText();
+  $("clip-result").textContent = `Read: ${text || "(empty)"}`;
+  log(`Clipboard read: "${text}"`);
+});
+
+$("btn-clip-has-image").addEventListener("click", async () => {
+  const has = await Clipboard.has("image");
+  $("clip-result").textContent = `has("image"): ${has}`;
+  log(`Clipboard has image: ${has}`);
+});
+
+$("btn-clip-read-image").addEventListener("click", async () => {
+  const bytes = await Clipboard.readImage();
+  if (!bytes) {
+    $("clip-result").textContent = "No image on clipboard";
+    log(`Clipboard image: (none — copy an image somewhere first)`);
+    return;
+  }
+  $("clip-result").textContent = `Got ${bytes.length}-byte PNG`;
+  log(`Clipboard image: ${bytes.length} bytes`);
+});
+
+$("btn-clip-clear").addEventListener("click", async () => {
+  await Clipboard.clear();
+  $("clip-result").textContent = "(cleared)";
+  log(`Clipboard cleared`);
+});
+
+// --- Global Shortcuts ---
+
+const SHORTCUT = "CmdOrCtrl+Shift+Z";
+
+$("btn-shortcut-register").addEventListener("click", async () => {
+  const ok = await Shortcuts.register(SHORTCUT, () => {
+    log(`Global shortcut fired: ${SHORTCUT}`);
+    $("shortcut-result").textContent = `Last fired: ${new Date().toLocaleTimeString()}`;
+    win.show();  // bring the app forward when the shortcut fires
+  });
+  $("shortcut-result").textContent = ok
+    ? `Registered ${SHORTCUT} — try it from any app`
+    : `Failed to register (already in use?)`;
+  log(`Shortcuts.register(${SHORTCUT}) → ${ok}`);
+});
+
+$("btn-shortcut-unregister").addEventListener("click", async () => {
+  await Shortcuts.unregister(SHORTCUT);
+  $("shortcut-result").textContent = `Unregistered ${SHORTCUT}`;
+  log(`Shortcuts.unregister(${SHORTCUT})`);
+});
+
+$("btn-shortcut-is-registered").addEventListener("click", async () => {
+  const reg = await Shortcuts.isRegistered(SHORTCUT);
+  $("shortcut-result").textContent = `isRegistered: ${reg}`;
+  log(`Shortcuts.isRegistered(${SHORTCUT}) → ${reg}`);
+});
+
+// --- Theme ---
+
+$("btn-theme-get").addEventListener("click", () => {
+  const theme = App.getTheme();
+  $("theme-result").textContent = `Theme: ${theme}`;
+  log(`App.getTheme() → ${theme}`);
+});
+
+App.on(AppEvent.THEME_CHANGED, (data: any) => {
+  const theme = data?.theme ?? App.getTheme();
+  $("theme-result").textContent = `Theme: ${theme} (just changed)`;
+  log(`app:theme-changed → ${theme}`);
+});
+
 // --- Dock ---
 
 $("btn-dock-badge").addEventListener("click", () => {
@@ -490,19 +685,17 @@ $("btn-dock-show").addEventListener("click", () => {
 // Look at the top-right of your menu bar after clicking "Create tray".
 // The icon dispatches click/right-click events when no menu is set;
 // when a menu is set the system shows it on click and we never see the
-// click itself. Path is absolute so it works regardless of CWD.
+// click itself. Path is absolute for testing — for a real app, ship the
+// PNG inside `build/` and load it via a relative path or bundle helper.
 //
-// IMPORTANT for demo testers: every Window has its own WKWebView and
-// its own JS context. The `activeTray` and `attachedWin` references
-// below are per-window — if you click "Create tray" in the main
-// window and then drive a popover from `attachWindow`, the popover's
-// JS has its OWN `activeTray = null`. Clicking detach/destroy from
-// inside the popover won't find a tray to act on. This is correct
-// isolation for real apps; for the demo, drive tray buttons from the
-// main window and use the popover only to verify show/hide/dismiss.
+// IMPORTANT: every Window has its own WKWebView and its own JS context.
+// `activeTray` and `attachedWin` are per-window — clicking detach /
+// destroy from inside the popover won't find a tray. Drive tray buttons
+// from the main window; the popover is for verifying show/hide/dismiss.
 
 const TRAY_ICON = "/Users/zach/code/zapp/hello-world/build/tray-icon.png";
 let activeTray: TrayHandle | null = null;
+let attachedWin: Awaited<ReturnType<typeof Window.create>> | null = null;
 
 $("btn-tray-menu").addEventListener("click", () => {
   if (activeTray) { log("Tray already exists — destroy it first"); return; }
@@ -562,8 +755,6 @@ $("btn-tray-swap-menu").addEventListener("click", () => {
   log(`Tray menu swapped`);
 });
 
-let attachedWin: Awaited<ReturnType<typeof Window.create>> | null = null;
-
 $("btn-tray-attach").addEventListener("click", async () => {
   if (!activeTray) { log("Create a tray first"); return; }
   if (!attachedWin) {
@@ -596,6 +787,10 @@ $("btn-tray-destroy").addEventListener("click", () => {
   activeTray.destroy();
   log(`Tray ${activeTray.id} destroyed`);
   activeTray = null;
+  // Drop the popover reference too — destroying the tray ordered out
+  // its attached window; recreating the tray + reusing the same
+  // popover handle would race against the orderOut.
+  attachedWin = null;
   $("tray-result").textContent = "";
 });
 
@@ -611,12 +806,17 @@ $("btn-emit").addEventListener("click", () => {
   log("Emitted custom:ping");
 });
 
-// --- Backend state push ---
+// --- Cross-context state push ---
 //
-// Backend (src/backend.ts) owns a counter and emits "counter:tick" every 2s
-// via Events.emit, which broadcasts to every webview through the native
-// dispatchEventToAll bridge. Open multiple windows — they all stay in sync
-// without any per-window polling or fetching.
+// The `ticker` headless worker (configured in zapp.config.ts → headless,
+// source at src/workers/ticker.ts) emits `counter:tick` every 2s via
+// Events.emit. The native bridge fans that out to every webview, so
+// every open window stays in sync from one authoritative source —
+// no per-window polling.
+//
+// (Previously this was driven by `src/backend.ts`. The --backend flag
+// is currently stale — see project_backend_stale memory — so headless
+// workers are the supported way to do app-wide background work.)
 
 Events.on("counter:tick", (data: any) => {
   $("counter-display").textContent =
@@ -657,7 +857,14 @@ $("btn-ctx-menu").addEventListener("click", (e) => {
 });
 
 // --- App Events (frontend) ---
+//
+// STARTED fires once at app boot, *before* this script runs in any
+// webview, so listening here only catches it on subsequent webviews
+// (e.g. a new window opening). SHUTDOWN fires when the user quits;
+// the webview is mid-teardown when it dispatches.
 
+App.on(AppEvent.STARTED, () => log("App event: started"));
+App.on(AppEvent.SHUTDOWN, () => log("App event: shutdown"));
 App.on(AppEvent.REOPEN, () => log("App event: reopen (dock icon)"));
 App.on(AppEvent.DID_BECOME_ACTIVE, () => log("App event: became active"));
 App.on(AppEvent.DID_RESIGN_ACTIVE, () => log("App event: resigned active"));

@@ -45,6 +45,21 @@ static void jsc_ensure_init(void) {
 extern void* app_get_active(void);
 extern bool app_get_bootstrap_web_content_inspectable(void);
 
+// Supervisor (registry.zc) — host-side restart policy decisions.
+// Declared up here so jsc_setup_bridge's bridge.workerCrash handler
+// can reach them without needing a second forward block.
+extern int  zapp_worker_supervisor_record_failure(const char* worker_id);
+extern const char* zapp_worker_supervisor_get_script_url(const char* worker_id);
+extern const char* zapp_worker_supervisor_get_owner(const char* worker_id);
+extern void dispatch_event_to_all(const char* event_name, const char* payload);
+
+// Forward decls so the bridge handler defined inside jsc_setup_bridge
+// (which lives near the top of the file) can reach the helpers + the
+// init-context entry point defined further down.
+@class JSContext;
+static void jsc_worker_init_context(NSString* wid, NSString* oid, NSString* scriptUrl);
+static void jsc_dispatch_simple(const char* event, NSString* wid);
+
 // Service invoke — legacy JSON-string path (still used for some callers).
 extern const char* service_invoke_sync(void* app, const char* method, const char* args);
 
@@ -295,6 +310,43 @@ static void jsc_setup_bridge(JSContext* ctx, NSString* workerId) {
     };
 
     // --- Privileged host objects available in every worker ---
+
+    // workerCrash(message, stack) — bootstrap calls this when an
+    // uncaught error escapes a setTimeout callback or an event handler
+    // (the bootstrap try/catch normally swallows them, hiding the
+    // failure from the supervisor). On JSC we ALSO have ctx.exceptionHandler
+    // for sync top-level throws — both paths feed into the same flow.
+    bridge[@"workerCrash"] = ^(NSString* message, NSString* stack) {
+        NSDictionary* d = @{
+            @"id": wid ?: @"",
+            @"message": message ?: @"",
+            @"stack": stack ?: @"",
+        };
+        NSData* j = [NSJSONSerialization dataWithJSONObject:d options:0 error:nil];
+        NSString* payload = j ? [[NSString alloc] initWithData:j encoding:NSUTF8StringEncoding] : @"{}";
+        dispatch_event_to_all((char*)"worker:crashed", (char*)[payload UTF8String]);
+
+        int decision = zapp_worker_supervisor_record_failure([wid UTF8String]);
+        if (decision == 2) {
+            jsc_dispatch_simple("worker:gave-up", wid);
+            return;
+        }
+        if (decision != 1) return;
+
+        // Restart approved on JSC. Tear down + re-init in same queue.
+        dispatch_queue_t queue = jsc_queues[wid];
+        if (!queue) return;
+        const char* scriptUrlC = zapp_worker_supervisor_get_script_url([wid UTF8String]);
+        if (!scriptUrlC || !scriptUrlC[0]) return;
+        NSString* scriptUrl = [NSString stringWithUTF8String:scriptUrlC];
+        const char* ownerC = zapp_worker_supervisor_get_owner([wid UTF8String]);
+        NSString* oid = ownerC ? [NSString stringWithUTF8String:ownerC] : @"";
+        dispatch_async(queue, ^{
+            [jsc_contexts removeObjectForKey:wid];
+            jsc_worker_init_context(wid, oid, scriptUrl);
+            jsc_dispatch_simple("worker:restarted", wid);
+        });
+    };
 
     // quit — terminate the app from any worker
     bridge[@"quit"] = ^{
@@ -640,6 +692,45 @@ static void jsc_setup_bridge(JSContext* ctx, NSString* workerId) {
     }
 }
 
+// --- Supervisor + crash recovery ---
+//
+// On uncaught JS exception in a worker:
+//   1. Dispatch `worker:crashed` event with worker_id + message + stack.
+//   2. Ask the supervisor (registry.zc) whether to restart, give up,
+//      or ignore (no policy configured = ignore).
+//   3. If restart: clear the old context (ARC handles release), re-run
+//      the same script_url in a fresh JSContext on the same queue.
+//      Dispatch `worker:restarted`.
+//   4. If gave-up: dispatch `worker:gave-up`.
+//
+// All restart decisions live in registry.zc so adding a new engine
+// (txiki etc.) doesn't duplicate policy. Externs declared at the top
+// of this file (consolidated for cross-function reach).
+
+// Forward decl — initialize a fresh JSContext for the given worker
+// id (engine setup, bridge install, script eval). Used both at first
+// create and on supervisor-approved restart.
+static void jsc_worker_init_context(NSString* wid, NSString* oid, NSString* scriptUrl);
+
+// Build a JSON payload {"id":"<wid>","message":"<m>","stack":"<s>"}
+// safe for embedding in the JS broadcast call. The escape happens
+// inside dispatch_event_to_all, so we just need valid JSON.
+static NSString* jsc_build_crash_payload(NSString* wid, JSValue* exception) {
+    NSString* msg = exception ? [exception toString] : @"unknown";
+    JSValue* stackVal = exception ? exception[@"stack"] : nil;
+    NSString* stack = (stackVal && ![stackVal isUndefined]) ? [stackVal toString] : @"";
+    NSDictionary* d = @{ @"id": wid ?: @"", @"message": msg ?: @"", @"stack": stack ?: @"" };
+    NSData* j = [NSJSONSerialization dataWithJSONObject:d options:0 error:nil];
+    return j ? [[NSString alloc] initWithData:j encoding:NSUTF8StringEncoding] : @"{}";
+}
+
+static void jsc_dispatch_simple(const char* event, NSString* wid) {
+    NSDictionary* d = @{ @"id": wid ?: @"" };
+    NSData* j = [NSJSONSerialization dataWithJSONObject:d options:0 error:nil];
+    NSString* payload = j ? [[NSString alloc] initWithData:j encoding:NSUTF8StringEncoding] : @"{}";
+    dispatch_event_to_all((char*)event, (char*)[payload UTF8String]);
+}
+
 // --- C API ---
 
 bool jsc_worker_create(const char* script_url, const char* owner_id, const char* worker_id) {
@@ -655,12 +746,59 @@ bool jsc_worker_create(const char* script_url, const char* owner_id, const char*
     dispatch_queue_t queue = dispatch_queue_create([queueName UTF8String], DISPATCH_QUEUE_SERIAL);
     jsc_queues[wid] = queue;
 
-    // Create JSContext on the worker queue
     dispatch_async(queue, ^{
+        jsc_worker_init_context(wid, oid, scriptUrl);
+    });
+
+    // Register in slot table (storing the script_url so restarts can
+    // re-evaluate without the caller re-passing it).
+    for (int i = 0; i < JSC_MAX_WORKERS; i++) {
+        if (!jsc_workers[i].active) {
+            strncpy(jsc_workers[i].worker_id, worker_id, 63);
+            strncpy(jsc_workers[i].owner_id, owner_id ?: "", 63);
+            jsc_workers[i].active = 1;
+            break;
+        }
+    }
+    return true;
+}
+
+// Initialize a fresh JSContext for the given worker. Called from
+// jsc_worker_create's dispatch_async, and from the supervisor's
+// restart path (also on the same queue).
+static void jsc_worker_init_context(NSString* wid, NSString* oid, NSString* scriptUrl) {
         JSContext* ctx = [[JSContext alloc] initWithVirtualMachine:jsc_vm];
         ctx.name = [NSString stringWithFormat:@"Zapp Worker: %@", wid];
+
+        // Capture wid + oid + scriptUrl for the crash + restart path.
         ctx.exceptionHandler = ^(JSContext* c, JSValue* exception) {
             NSLog(@"[worker:%@ ERROR] %@", c.name, exception);
+
+            // 1. Always fire the `worker:crashed` event so observers
+            //    know something went wrong, even when no policy is set.
+            NSString* crashJson = jsc_build_crash_payload(wid, exception);
+            dispatch_event_to_all((char*)"worker:crashed",
+                                  (char*)[crashJson UTF8String]);
+
+            // 2. Decision: restart, give up, or ignore.
+            int decision = zapp_worker_supervisor_record_failure([wid UTF8String]);
+            if (decision == 2) {
+                jsc_dispatch_simple("worker:gave-up", wid);
+                return;
+            }
+            if (decision != 1) return;  // 0 = no policy, leave worker dead-ish
+
+            // 3. Restart approved. Schedule the actual recreation on
+            //    the same queue *after* this exceptionHandler returns —
+            //    the context is still in an exception state right now,
+            //    and re-evaluating from inside the handler is unsafe.
+            dispatch_queue_t queue = jsc_queues[wid];
+            if (!queue) return;
+            dispatch_async(queue, ^{
+                [jsc_contexts removeObjectForKey:wid];  // ARC releases the old ctx
+                jsc_worker_init_context(wid, oid, scriptUrl);
+                jsc_dispatch_simple("worker:restarted", wid);
+            });
         };
 
         // Make inspectable via Safari Develop menu (gated on app config)
@@ -748,19 +886,6 @@ bool jsc_worker_create(const char* script_url, const char* owner_id, const char*
         } else {
             NSLog(@"[zapp] worker script not found: %@", scriptUrl);
         }
-    });
-
-    // Register in slot table
-    for (int i = 0; i < JSC_MAX_WORKERS; i++) {
-        if (!jsc_workers[i].active) {
-            strncpy(jsc_workers[i].worker_id, worker_id, 63);
-            strncpy(jsc_workers[i].owner_id, owner_id ?: "", 63);
-            jsc_workers[i].active = 1;
-            break;
-        }
-    }
-
-    return true;
 }
 
 void jsc_worker_post_message(const char* worker_id, const char* data_json) {

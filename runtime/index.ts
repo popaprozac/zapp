@@ -22,7 +22,7 @@ export { Worker, SharedWorker, SharedWorkerPort, Workers, type WorkerMessageEven
 export { Dialog, type OpenFileOptions, type SaveFileOptions, type MessageOptions, type OpenFileResult, type SaveFileResult, type MessageResult } from "./dialog";
 export { Menu, type MenuItemDef, type MenuHandle } from "./menu";
 export { ContextMenu, type ContextMenuOptions } from "./context-menu";
-export { Notification, type NotificationOptions, type ScheduleOptions, type PermissionStatus } from "./notification";
+export { Notification, type NotificationOptions, type ScheduleOptions, type PermissionStatus, type NotificationResponse } from "./notification";
 export { Sync, type SyncWaitOptions } from "./sync";
 export { Dock } from "./dock";
 export { Tray, type TrayOptions, type TrayHandle, type AttachWindowOptions } from "./tray";

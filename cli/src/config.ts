@@ -270,6 +270,29 @@ export interface IOSConfig {
   entitlementsFile?: string;
 }
 
+/**
+ * Restart policy applied to a supervised headless worker. The
+ * supervisor counts uncaught failures within a sliding `withinMs`
+ * window; once `maxRetries` is exceeded, the worker is given up on
+ * and `worker:gave-up` fires (instead of `worker:restarted`).
+ *
+ * Defaults when `restart: {}` is set without explicit fields:
+ *   `maxRetries: 3`, `withinMs: 60_000`.
+ */
+export interface RestartPolicy {
+  /** Max consecutive failures inside `withinMs` before giving up. Default 3. */
+  maxRetries?: number;
+  /** Sliding-window length in milliseconds. Default 60_000 (1 min). */
+  withinMs?: number;
+}
+
+export interface HeadlessWorkerConfig {
+  /** Script path (same as the bare-string form). */
+  script: string;
+  /** Optional restart policy. Omit / `false` to disable auto-restart. */
+  restart?: RestartPolicy | false;
+}
+
 export interface ZappConfig {
   name: string;
   identifier?: string;
@@ -278,10 +301,28 @@ export interface ZappConfig {
   devPort?: number;   // Default: 5173
   /**
    * Headless workers to start at app boot, keyed by ID.
-   * Example: `{ db: "src/workers/db.ts", sync: "src/workers/sync.ts" }`
-   * IDs are used for termination via `Workers.terminate(id)`.
+   *
+   * Two shapes per entry:
+   *
+   *   - `string` — script path. Worker starts at boot, no auto-restart.
+   *   - `{ script, restart? }` — same plus an optional restart policy.
+   *
+   * IDs are used for termination via `Workers.terminate(id)` and for
+   * the supervisor's `worker:crashed` / `worker:restarted` /
+   * `worker:gave-up` events.
+   *
+   * @example
+   * ```ts
+   * headless: {
+   *   db: "src/workers/db.ts",                     // simple
+   *   sync: {
+   *     script: "src/workers/sync.ts",
+   *     restart: { maxRetries: 3, withinMs: 60_000 }, // supervised
+   *   },
+   * }
+   * ```
    */
-  headless?: Record<string, string>;
+  headless?: Record<string, string | HeadlessWorkerConfig>;
   deepLinkSchemes?: string[];  // e.g. ["myapp"] → registers myapp:// URL scheme
   /**
    * Single-instance enforcement. When `true`, only one copy of the app

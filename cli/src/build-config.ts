@@ -82,14 +82,31 @@ fn zapp_build_fs_persist_grants() -> bool { return ${fsPersistGrants}; }
 // declares as `extern fn zapp_start_headless_workers()`. Body contains one
 // call per entry in zappConfig.headless; empty body when no headless workers
 // are configured.
-export async function generateHeadlessWorkers(opts: { root: string; headless?: Record<string, string> }): Promise<string> {
+export async function generateHeadlessWorkers(opts: {
+  root: string;
+  headless?: Record<string, string | { script: string; restart?: { maxRetries?: number; withinMs?: number } | false }>;
+}): Promise<string> {
   const { root, headless } = opts;
   const zappDir = path.join(root, ".zapp");
   await mkdir(zappDir, { recursive: true });
 
   const entries = Object.entries(headless ?? {});
   const calls = entries
-    .map(([id]) => `    zapp_start_headless_worker("h-${id}", "/_workers/_headless_${id}.mjs");`)
+    .map(([id, value]) => {
+      const url = `/_workers/_headless_${id}.mjs`;
+      // Bare string → no restart policy (legacy behavior).
+      if (typeof value === "string") {
+        return `    zapp_start_headless_worker("h-${id}", "${url}");`;
+      }
+      // Object form. Restart explicitly false / omitted → no policy.
+      const restart = value.restart;
+      if (!restart) {
+        return `    zapp_start_headless_worker("h-${id}", "${url}");`;
+      }
+      const max = restart.maxRetries ?? 3;
+      const within = restart.withinMs ?? 60_000;
+      return `    zapp_start_headless_worker_with_restart("h-${id}", "${url}", ${max}, ${within});`;
+    })
     .join("\n");
 
   const body = calls || `    // No headless workers configured.`;

@@ -127,17 +127,22 @@ async function bundleWorker(
 
 interface ZappWorkersOptions {
   /**
-   * Headless workers to bundle, keyed by ID. Values are source paths relative
-   * to project root. Output URL is `/_workers/_headless_<id>.mjs` — the native
-   * runtime loads these at app startup via generated Zen-C code.
+   * Headless workers to bundle, keyed by ID. Each value is either a
+   * source path (string) or `{ script, restart? }` for supervised
+   * workers (the restart policy is ignored at bundle time but the
+   * script field is read).
+   *
+   * Output URL is `/_workers/_headless_<id>.mjs` — the native runtime
+   * loads these at app startup via generated Zen-C code.
    */
-  headless?: Record<string, string>;
+  headless?: Record<string, string | { script: string; restart?: unknown }>;
 }
 
-function resolveHeadlessEntries(root: string, headless?: Record<string, string>): WorkerEntry[] {
+function resolveHeadlessEntries(root: string, headless?: ZappWorkersOptions["headless"]): WorkerEntry[] {
   if (!headless) return [];
   const entries: WorkerEntry[] = [];
-  for (const [id, srcPath] of Object.entries(headless)) {
+  for (const [id, value] of Object.entries(headless)) {
+    const srcPath = typeof value === "string" ? value : value.script;
     const abs = path.resolve(root, srcPath);
     if (!existsSync(abs)) {
       console.warn(`[zapp] headless worker "${id}" not found at ${srcPath}`);

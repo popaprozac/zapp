@@ -580,6 +580,55 @@ static JSValue zapp_bridge_create_window(JSContext* ctx, JSValueConst this_val, 
     return result;
 }
 
+// workerCrash(message, stack) — bootstrap calls this when an uncaught
+// error escapes a setTimeout callback or an event handler. We dispatch
+// `worker:crashed` so observers can react, then ask the supervisor for
+// a decision. Restart on txiki is more involved than JSC (separate
+// pthread + uv_loop per worker) — for v1 we record the failure and
+// dispatch `worker:gave-up`, leaving txiki workers alive-but-broken.
+// JSC engine has full restart support.
+extern int  zapp_worker_supervisor_record_failure(const char* worker_id);
+extern void dispatch_event_to_all(const char* event_name, const char* payload);
+
+static JSValue zapp_bridge_worker_crash(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    (void)this_val;
+    TxikiBridgeCache* cache = txiki_bridge_cache_for(ctx);
+    const char* wid = cache ? cache->worker_id : "";
+    const char* msg = (argc > 0 && JS_IsString(argv[0])) ? JS_ToCString(ctx, argv[0]) : "";
+    const char* stk = (argc > 1 && JS_IsString(argv[1])) ? JS_ToCString(ctx, argv[1]) : "";
+
+    // Build {"id":wid,"message":msg,"stack":stk} — minimal escape since
+    // dispatch_event_to_all does its own escape on the payload.
+    char* payload = NULL;
+    int needed = snprintf(NULL, 0,
+        "{\"id\":\"%s\",\"message\":\"%s\",\"stack\":\"%s\"}",
+        wid, msg ? msg : "", stk ? stk : "");
+    if (needed > 0) {
+        payload = (char*)malloc((size_t)needed + 1);
+        if (payload) {
+            snprintf(payload, (size_t)needed + 1,
+                "{\"id\":\"%s\",\"message\":\"%s\",\"stack\":\"%s\"}",
+                wid, msg ? msg : "", stk ? stk : "");
+            dispatch_event_to_all("worker:crashed", payload);
+            free(payload);
+        }
+    }
+
+    // Supervisor decision. txiki can't currently restart in-place, so
+    // any "restart approved" verdict still surfaces as gave-up for the
+    // user — at least they know the worker won't auto-recover.
+    int decision = zapp_worker_supervisor_record_failure(wid);
+    if (decision != 0) {
+        char giveUp[256];
+        snprintf(giveUp, sizeof(giveUp), "{\"id\":\"%s\"}", wid);
+        dispatch_event_to_all("worker:gave-up", giveUp);
+    }
+
+    if (msg && argc > 0 && JS_IsString(argv[0])) JS_FreeCString(ctx, msg);
+    if (stk && argc > 1 && JS_IsString(argv[1])) JS_FreeCString(ctx, stk);
+    return JS_UNDEFINED;
+}
+
 // quit() — terminate the app. Must hop to the main thread on platforms that
 // require it; exit() itself is safe from any thread but some teardown
 // handlers assume main-thread context.
@@ -913,6 +962,8 @@ static void txiki_setup_bridge(JSContext* ctx, const char* worker_id) {
         JS_NewCFunction(ctx, zapp_bridge_clipboard, "clipboard", 2));
     JS_SetPropertyStr(ctx, bridge, "shortcuts",
         JS_NewCFunction(ctx, zapp_bridge_shortcuts, "shortcuts", 2));
+    JS_SetPropertyStr(ctx, bridge, "workerCrash",
+        JS_NewCFunction(ctx, zapp_bridge_worker_crash, "workerCrash", 2));
     JS_SetPropertyStr(ctx, global, "__zappBridge", bridge);
     JS_SetPropertyStr(ctx, global, "postMessage",
         JS_NewCFunction(ctx, zapp_bridge_post_to_webview, "postMessage", 1));
