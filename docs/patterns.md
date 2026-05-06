@@ -538,24 +538,98 @@ a Zapp window.
 
 ## Native file drop into webview
 
-Zapp handles drag-drop natively — add `data-file-drop-target` to an
-element and listen for the event:
+The web `drop` event gives you `File` objects, never the original
+filesystem path — that's by design in browsers. For desktop apps the
+path is exactly what you want, so Zapp intercepts file drops at the
+AppKit layer and surfaces four events scoped to the receiving window:
 
-```html
-<div data-file-drop-target id="drop-zone">Drop files here</div>
-```
+| Event | Payload | When |
+|---|---|---|
+| `file-drop-enter` | `{ paths: string[], x, y }` | A file drag entered the window. Show a soft "drag in flight" cue across the whole window. |
+| `file-drop-over` | `{ x, y }` | Cursor moved during the drag (≤60 Hz). Hit-test the coords against your drop zone's bounding rect to toggle a "ready to drop" highlight only when the cursor is actually over the target. |
+| `file-drop-leave` | `{ x, y }` | The drag left the window without dropping (or was cancelled). Reset all states. |
+| `file-drop` | `{ paths: string[], x, y }` | Files were dropped. Process them. |
 
 ```ts
 import { Events } from "@zappdev/runtime";
 
-Events.on("files-dropped", (payload: any) => {
-  console.log("dropped files:", payload.paths);
-  // payload.paths is string[]
+const dropZone = document.getElementById("drop-zone")!;
+
+let dragInFlight = false;   // drag entered the window at all
+let overTarget = false;     // cursor is currently over our drop zone
+
+function paint() {
+  dropZone.classList.toggle("is-dragging", dragInFlight);
+  dropZone.classList.toggle("is-over-target", overTarget);
+}
+
+function isOverTarget(x: number, y: number): boolean {
+  const r = dropZone.getBoundingClientRect();
+  return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+}
+
+Events.on("file-drop-enter", (d: any) => {
+  dragInFlight = true;
+  overTarget = isOverTarget(d.x, d.y);
+  paint();
+});
+
+Events.on("file-drop-over", (d: any) => {
+  const was = overTarget;
+  overTarget = isOverTarget(d.x, d.y);
+  if (was !== overTarget) paint();
+});
+
+Events.on("file-drop-leave", () => {
+  dragInFlight = false;
+  overTarget = false;
+  paint();
+});
+
+Events.on("file-drop", (d: any) => {
+  dragInFlight = false;
+  overTarget = false;
+  paint();
+  for (const path of d.paths as string[]) {
+    console.log("dropped:", path);
+    // Read via native FS service, copy elsewhere, etc.
+  }
 });
 ```
 
-Files are passed as file:// paths that you can read via a service
-(native has FS access; JS doesn't on its own).
+```css
+#drop-zone {
+  border: 2px dashed currentColor;
+  transition: background-color 0.15s, border-style 0.15s;
+}
+#drop-zone.is-dragging   { background: rgba(0, 122, 255, 0.10); }
+#drop-zone.is-over-target {
+  background: rgba(0, 122, 255, 0.30);
+  border-style: solid;
+}
+```
+
+### Notes
+
+- **Window-scoped.** Events only fire in the window that received the
+  drop — not broadcast. Open multiple windows and drop on one; the
+  other window's listener won't fire.
+- **Coordinates** are in CSS-pixel-ish view-local space (top-left
+  origin), so they line up with `event.clientX/Y`. `getBoundingClientRect()`
+  on a DOM element gives you the rect to hit-test against directly.
+- **`file-drop-over` is rate-limited to ~60 Hz** at the native layer
+  so it doesn't flood JS during a long drag. Skip the event if you
+  don't need element-level highlighting; the other three are enough
+  for window-level UX.
+- **Path access** — `paths` are absolute file paths (`/Users/...`).
+  JS can't `readFile` them on its own; route through a Zapp service
+  with FS allowlist coverage, or use `Dialog.openFile`'s grant flow
+  to extend the allowlist for the dropped paths.
+- **Non-file drags** (text into an input, drag-out from an `<a>`
+  tag) fall through to WebKit's normal handling.
+- **iOS:** uses `UIDragInteraction` / Document Picker — not yet
+  shipped. iOS apps that need this should route through
+  `Dialog.openFile` for now.
 
 ## Sync primitive — rate-limiting a resource
 

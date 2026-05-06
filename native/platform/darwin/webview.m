@@ -270,6 +270,7 @@ extern void zapp_handle_message_from_window(void* app, char* msg, int32_t window
 @interface ZappWebView : WKWebView
 @property (nonatomic, assign) BOOL inDragRegion;
 @property (nonatomic, assign) BOOL acceptFirstMouse;
+@property (nonatomic, assign) NSTimeInterval zapp_lastDropOverTime;
 @end
 
 @implementation ZappWebView
@@ -278,6 +279,14 @@ extern void zapp_handle_message_from_window(void* app, char* msg, int32_t window
     if (self) {
         _inDragRegion = NO;
         _acceptFirstMouse = YES;
+        // File drop wiring (G10). Web standards give JS a `File` object
+        // on drop but never the absolute path — for desktop apps the
+        // path is what matters. We register for file URLs at the
+        // AppKit layer so we can dispatch them as a Zapp event with
+        // both `paths` and drop coordinates. Non-file drags (e.g.
+        // dragging text or web content) fall through to WKWebView's
+        // own handling via the call-super path below.
+        [self registerForDraggedTypes:@[ NSPasteboardTypeFileURL ]];
     }
     return self;
 }
@@ -292,6 +301,130 @@ extern void zapp_handle_message_from_window(void* app, char* msg, int32_t window
 - (BOOL)acceptsFirstMouse:(NSEvent*)event {
     (void)event;
     return self.acceptFirstMouse;
+}
+
+// --- File drop (G10) ---
+//
+// Three events surfaced to JS:
+//   - `file-drop-enter` — drag with files crossed into this webview;
+//     payload includes the proposed paths (so the UI can preview)
+//     and the entry coordinates. Use this to add a `.is-dragging`
+//     class on a drop zone.
+//   - `file-drop-leave` — drag left without dropping (or was
+//     cancelled). Use this to remove the highlight class.
+//   - `file-drop`       — drop happened. Same payload as -enter
+//     plus final coordinates.
+//
+// All three events are window-scoped via `darwin_window_eval_js` so
+// listeners only fire in the receiving window, not all open windows.
+
+extern int32_t darwin_window_id_for_webview(void* webview);
+extern void darwin_window_eval_js(int32_t window_id, const char* js);
+
+static BOOL zapp_pasteboard_has_file_urls(NSPasteboard* pb) {
+    return [pb canReadObjectForClasses:@[[NSURL class]]
+                               options:@{ NSPasteboardURLReadingFileURLsOnlyKey: @YES }];
+}
+
+// Build {"paths":[...],"x":N,"y":N} for dispatch to JS. Caller passes
+// nil paths for events that only need coordinates (e.g. -leave).
+static NSString* zapp_build_drop_payload(NSArray<NSString*>* paths, NSPoint p) {
+    NSDictionary* obj = paths
+        ? @{ @"paths": paths, @"x": @((int)p.x), @"y": @((int)p.y) }
+        : @{ @"x": @((int)p.x), @"y": @((int)p.y) };
+    NSData* j = [NSJSONSerialization dataWithJSONObject:obj options:0 error:nil];
+    if (!j) return @"{}";
+    NSString* s = [[NSString alloc] initWithData:j encoding:NSUTF8StringEncoding];
+    s = [s stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+    s = [s stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
+    return s;
+}
+
+- (void)zapp_dispatchDropEvent:(const char*)eventName payload:(NSString*)payload {
+    int32_t windowId = darwin_window_id_for_webview((__bridge void*)self);
+    NSString* js = [NSString stringWithFormat:
+        @"(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+        @"if(b&&typeof b._onEvent==='function'){b._onEvent('%s','%@');}})();",
+        eventName, payload];
+    darwin_window_eval_js(windowId, [js UTF8String]);
+}
+
+// View-local drop coordinates (top-left origin, matching event.clientX/Y).
+- (NSPoint)zapp_dropPointFromInfo:(id<NSDraggingInfo>)sender {
+    NSPoint windowPoint = [sender draggingLocation];
+    NSPoint viewPoint = [self convertPoint:windowPoint fromView:nil];
+    if (![self isFlipped]) {
+        viewPoint.y = self.bounds.size.height - viewPoint.y;
+    }
+    return viewPoint;
+}
+
+// Read file paths off the dragging pasteboard. Returns nil if the
+// drag isn't a file-URL drag.
+- (NSArray<NSString*>*)zapp_pathsFromInfo:(id<NSDraggingInfo>)sender {
+    NSPasteboard* pb = [sender draggingPasteboard];
+    if (!zapp_pasteboard_has_file_urls(pb)) return nil;
+    NSArray<NSURL*>* urls = [pb readObjectsForClasses:@[[NSURL class]]
+                                              options:@{ NSPasteboardURLReadingFileURLsOnlyKey: @YES }];
+    NSMutableArray* paths = [NSMutableArray arrayWithCapacity:urls.count];
+    for (NSURL* u in urls) if (u.path) [paths addObject:u.path];
+    return paths;
+}
+
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
+    NSArray<NSString*>* paths = [self zapp_pathsFromInfo:sender];
+    if (paths) {
+        NSPoint p = [self zapp_dropPointFromInfo:sender];
+        [self zapp_dispatchDropEvent:"file-drop-enter"
+                             payload:zapp_build_drop_payload(paths, p)];
+        return NSDragOperationCopy;
+    }
+    return [super draggingEntered:sender];
+}
+
+- (NSDragOperation)draggingUpdated:(id<NSDraggingInfo>)sender {
+    if (zapp_pasteboard_has_file_urls([sender draggingPasteboard])) {
+        // Rate-limit `file-drop-over` to ~60 Hz — draggingUpdated:
+        // fires on every mouse move, but JS only needs enough
+        // resolution to hit-test against a drop zone's bounding rect.
+        // The threshold is per-view so multi-window drags don't
+        // throttle each other.
+        static const NSTimeInterval kDropOverMinInterval = 1.0 / 60.0;
+        NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+        if (now - self.zapp_lastDropOverTime >= kDropOverMinInterval) {
+            self.zapp_lastDropOverTime = now;
+            NSPoint p = [self zapp_dropPointFromInfo:sender];
+            [self zapp_dispatchDropEvent:"file-drop-over"
+                                 payload:zapp_build_drop_payload(nil, p)];
+        }
+        return NSDragOperationCopy;
+    }
+    return [super draggingUpdated:sender];
+}
+
+- (void)draggingExited:(id<NSDraggingInfo>)sender {
+    if (zapp_pasteboard_has_file_urls([sender draggingPasteboard])) {
+        NSPoint p = [self zapp_dropPointFromInfo:sender];
+        [self zapp_dispatchDropEvent:"file-drop-leave"
+                             payload:zapp_build_drop_payload(nil, p)];
+        return;
+    }
+    [super draggingExited:sender];
+}
+
+- (BOOL)prepareForDragOperation:(id<NSDraggingInfo>)sender {
+    if (zapp_pasteboard_has_file_urls([sender draggingPasteboard])) return YES;
+    return [super prepareForDragOperation:sender];
+}
+
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
+    NSArray<NSString*>* paths = [self zapp_pathsFromInfo:sender];
+    if (!paths) return [super performDragOperation:sender];
+    if (paths.count == 0) return NO;
+    NSPoint p = [self zapp_dropPointFromInfo:sender];
+    [self zapp_dispatchDropEvent:"file-drop"
+                         payload:zapp_build_drop_payload(paths, p)];
+    return YES;
 }
 @end
 

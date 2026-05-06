@@ -232,6 +232,20 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
       </section>
 
       <section>
+        <h2>File Drop (G10)</h2>
+        <p style="font-size: 12px; opacity: 0.7; margin: 0 0 8px 0;">
+          Drag a file from Finder anywhere into this window. Three
+          events fire on the receiving window only:
+          <code>file-drop-enter</code>, <code>file-drop-leave</code>,
+          <code>file-drop</code> — paths come through as absolute
+          strings (DOM <code>File</code> objects don't expose paths).
+        </p>
+        <div id="drop-zone" class="result" style="min-height: 60px; border: 2px dashed currentColor; padding: 16px; text-align: center; transition: background-color 0.15s;">
+          Drop files here (or anywhere in the window)
+        </div>
+      </section>
+
+      <section>
         <h2>Other</h2>
         <button id="btn-external">Open zapp.dev</button>
         <button id="btn-ctx-menu">Right-click menu</button>
@@ -881,6 +895,77 @@ win.on(WindowEvent.MOVE, (p) => {
 $("btn-external").addEventListener("click", () => {
   App.openExternal("https://zapp.dev");
   log("Opened zapp.dev in browser");
+});
+
+// --- File drop (G10) ---
+//
+// Three-layer feedback:
+//  - Window-level "drag is in flight" — file-drop-enter / leave.
+//    Tells the app a file drag is happening at all.
+//  - Element-level "cursor is over the drop target" — hit-test the
+//    drop-zone rect against `file-drop-over` coordinates. Lets us
+//    style the zone differently when it's about to receive vs when
+//    the drag is just hovering somewhere else in the window.
+//  - The drop itself — file-drop with the final paths.
+//
+// We track these as separate UI states so the user can see a soft
+// "drag in flight" cue across the whole window, plus a brighter
+// "ready to drop" cue only when their cursor is on the target.
+
+let dragInFlight = false;
+let overTarget = false;
+
+function paintDropZone() {
+  const dz = $("drop-zone");
+  if (overTarget) {
+    dz.style.backgroundColor = "rgba(0, 122, 255, 0.30)";
+    dz.style.borderStyle = "solid";
+  } else if (dragInFlight) {
+    dz.style.backgroundColor = "rgba(0, 122, 255, 0.10)";
+    dz.style.borderStyle = "dashed";
+  } else {
+    dz.style.backgroundColor = "";
+    dz.style.borderStyle = "dashed";
+  }
+}
+
+function isOverDropZone(x: number, y: number): boolean {
+  const r = $("drop-zone").getBoundingClientRect();
+  return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+}
+
+Events.on("file-drop-enter", (data: any) => {
+  const d = typeof data === "string" ? JSON.parse(data) : data;
+  const paths: string[] = d.paths ?? [];
+  dragInFlight = true;
+  overTarget = isOverDropZone(d.x, d.y);
+  $("drop-zone").textContent = `Dragging ${paths.length} file(s)…`;
+  paintDropZone();
+});
+
+Events.on("file-drop-over", (data: any) => {
+  const d = typeof data === "string" ? JSON.parse(data) : data;
+  const wasOver = overTarget;
+  overTarget = isOverDropZone(d.x, d.y);
+  if (wasOver !== overTarget) paintDropZone();
+});
+
+Events.on("file-drop-leave", () => {
+  dragInFlight = false;
+  overTarget = false;
+  $("drop-zone").textContent = "Drop files here (or anywhere in the window)";
+  paintDropZone();
+});
+
+Events.on("file-drop", (data: any) => {
+  const d = typeof data === "string" ? JSON.parse(data) : data;
+  const paths: string[] = d.paths ?? [];
+  const summary = paths.length === 1 ? paths[0] : `${paths.length} files`;
+  dragInFlight = false;
+  overTarget = false;
+  $("drop-zone").textContent = `Dropped ${summary} at (${d.x}, ${d.y})`;
+  paintDropZone();
+  log(`file-drop: ${summary} at (${d.x}, ${d.y})`);
 });
 
 $("btn-ctx-menu").addEventListener("click", (e) => {
