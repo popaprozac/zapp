@@ -14,8 +14,15 @@
 // canonical "win-<N>" Symbol.for('zapp.windowId') into the bootstrap user
 // script. Pass -1 if no id is available yet (the caller will set the id
 // later via JS eval; some early Window.current() calls may then race).
+// transparent_background: when true, configure the WKWebView for
+// transparent rendering (drawsBackground=NO + clear layer) before the
+// initial loadRequest so the first paint preserves transparency. Used
+// by windows with `vibrancy: ...` set so the NSVisualEffectView blur
+// shows through. Reloading post-load would interrupt the initial
+// bridge bootstrap and break in-flight invoke responses.
 void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first_mouse,
-                           const char* url_override, int32_t numeric_id_pre_alloc);
+                           const char* url_override, int32_t numeric_id_pre_alloc,
+                           bool transparent_background);
 
 // Evaluate JavaScript on a specific window's WebView.
 void darwin_webview_eval(void* window_ptr, const char* js);

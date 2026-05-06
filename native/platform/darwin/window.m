@@ -8,7 +8,8 @@
 
 // --- Forward declarations ---
 extern void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first_mouse,
-                                  const char* url_override, int32_t numeric_id_pre_alloc);
+                                  const char* url_override, int32_t numeric_id_pre_alloc,
+                                  bool transparent_background);
 extern int zapp_dispatch_event(int window_id, int event_id, int w, int h, int x, int y);
 
 // Event IDs (mirrored from window/events.zc)
@@ -450,8 +451,42 @@ void* darwin_window_create(WindowOptions* opts) {
         bool accept_first_mouse = wopts_accept_first_mouse(opts);
         extern const char* wopts_url(void* opts);
         const char* custom_url = wopts_url(opts);
+        // Vibrancy (G12) — install the NSVisualEffectView as the
+        // window's contentView BEFORE creating the webview. The
+        // webview detects the vfx-as-host and mounts itself as a
+        // subview, so it's born in the final view tree and never
+        // re-parented. Re-parenting WKWebView after its first
+        // loadRequest resets the content process and breaks the
+        // bridge bootstrap (the await greet() at module top would
+        // time out — observed in dev).
+        const char* vibrancyName = wopts_vibrancy(opts);
+        bool useVibrancy = (vibrancyName && vibrancyName[0] != '\0');
+        if (useVibrancy) {
+            NSString* mat = [NSString stringWithUTF8String:vibrancyName];
+            NSVisualEffectMaterial material = NSVisualEffectMaterialWindowBackground;
+            if      ([mat isEqualToString:@"sidebar"])               material = NSVisualEffectMaterialSidebar;
+            else if ([mat isEqualToString:@"headerView"])            material = NSVisualEffectMaterialHeaderView;
+            else if ([mat isEqualToString:@"titlebar"])              material = NSVisualEffectMaterialTitlebar;
+            else if ([mat isEqualToString:@"menu"])                  material = NSVisualEffectMaterialMenu;
+            else if ([mat isEqualToString:@"popover"])               material = NSVisualEffectMaterialPopover;
+            else if ([mat isEqualToString:@"hudWindow"])             material = NSVisualEffectMaterialHUDWindow;
+            else if ([mat isEqualToString:@"fullScreenUI"])          material = NSVisualEffectMaterialFullScreenUI;
+            else if ([mat isEqualToString:@"sheet"])                 material = NSVisualEffectMaterialSheet;
+            else if ([mat isEqualToString:@"contentBackground"])     material = NSVisualEffectMaterialContentBackground;
+            else if ([mat isEqualToString:@"underWindowBackground"]) material = NSVisualEffectMaterialUnderWindowBackground;
+            else if ([mat isEqualToString:@"underPageBackground"])   material = NSVisualEffectMaterialUnderPageBackground;
+
+            NSRect contentRect = [window contentView].frame;
+            NSVisualEffectView* vfx = [[NSVisualEffectView alloc] initWithFrame:contentRect];
+            vfx.material = material;
+            vfx.blendingMode = NSVisualEffectBlendingModeBehindWindow;
+            vfx.state = NSVisualEffectStateFollowsWindowActiveState;
+            vfx.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+            [window setContentView:vfx];
+        }
+
         darwin_webview_create((__bridge void*)window, inspectable, accept_first_mouse,
-                              custom_url, wopts_numeric_id_pre_alloc(opts));
+                              custom_url, wopts_numeric_id_pre_alloc(opts), useVibrancy);
 
         NSString* windowId = [NSString stringWithFormat:@"win-%p", window];
         NSString* ownerId = [NSString stringWithFormat:@"owner-%p", window];
@@ -667,10 +702,26 @@ void darwin_window_register_numeric_id(void* handle, int32_t numeric_id) {
         delegate.numericId = numeric_id;
     }
 
-    // Register WebView in direct dispatch table
+    // Register WebView in direct dispatch table.
+    //
+    // The contentView is the WKWebView in the default path, but for
+    // windows with `vibrancy: ...` set it's an NSVisualEffectView
+    // wrapping the WKWebView as a subview. Walk one level down to
+    // find it. Without this, the webview never enters the dispatch
+    // table → ZappMsgHandler can't resolve window_id from
+    // msg.webView → invoke responses can't be routed back → JS
+    // bridge calls (e.g. `await Services.invoke("greet", ...)` at
+    // module top) hang and timeout.
     NSView* content = [w contentView];
+    WKWebView* wv = nil;
     if ([content isKindOfClass:[WKWebView class]]) {
-        WKWebView* wv = (WKWebView*)content;
+        wv = (WKWebView*)content;
+    } else {
+        for (NSView* sub in content.subviews) {
+            if ([sub isKindOfClass:[WKWebView class]]) { wv = (WKWebView*)sub; break; }
+        }
+    }
+    if (wv) {
         zapp_register_webview(numeric_id, wv, windowId);
 
         // Set the in-page Symbol.for('zapp.windowId') to the same

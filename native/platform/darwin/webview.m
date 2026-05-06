@@ -72,6 +72,17 @@ static NSString* zapp_mime_for_path(NSString* path) {
             @"wasm": @"application/wasm",
         };
     });
+    // Defensively strip any trailing query / fragment that snuck into
+    // the path before computing the extension. NSURL.path normally
+    // strips these, but base-URL resolution edge cases can still
+    // produce a contaminated string. Without this, `index.js?x=1`
+    // would resolve to "js?x=1" and fall back to octet-stream — which
+    // module scripts reject with the cryptic "not a valid JavaScript
+    // MIME type" error.
+    NSRange q = [path rangeOfString:@"?"];
+    if (q.location != NSNotFound) path = [path substringToIndex:q.location];
+    NSRange h = [path rangeOfString:@"#"];
+    if (h.location != NSNotFound) path = [path substringToIndex:h.location];
     NSString* ext = [[path pathExtension] lowercaseString];
     return zapp_mime_map[ext] ?: @"application/octet-stream";
 }
@@ -645,7 +656,8 @@ void darwin_webview_set_drag_region(int32_t window_id, bool drag) {
 // --- WebView Creation ---
 
 void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first_mouse,
-                           const char* url_override, int32_t numeric_id_pre_alloc) {
+                           const char* url_override, int32_t numeric_id_pre_alloc,
+                           bool transparent_background) {
     NSWindow* window = (__bridge NSWindow*)window_ptr;
     NSView* hostView = [window contentView];
     NSRect bounds = [hostView bounds];
@@ -787,13 +799,34 @@ void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first
     if ([webview respondsToSelector:@selector(setInspectable:)]) {
         [webview setInspectable:inspectable ? YES : NO];
     }
-    // Color the WKWebView's own background so it doesn't paint white
-    // before first content frame. underPageBackgroundColor (macOS 12+)
-    // is the canonical knob — it controls what WebKit renders behind
-    // page content during navigation, before first paint, and during
-    // scroll bounce. Like windowBackgroundColor, it's a dynamic NSColor
-    // that resolves correctly across light/dark mode without observation.
-    if ([webview respondsToSelector:@selector(setUnderPageBackgroundColor:)]) {
+    // Background handling: when the window opts into vibrancy, we
+    // need the WKWebView to paint nothing behind content so the
+    // NSVisualEffectView mounted as superview shows through. Two
+    // levers cooperate:
+    //   - drawsBackground=NO (private KVC) — stops WebKit from
+    //     painting the default white page background.
+    //   - layer.backgroundColor = clear + opaque=NO — on macOS 14+
+    //     the host CALayer's background defaults to opaque even when
+    //     WebKit is told not to draw, so the compositing pipeline
+    //     can still discard the alpha. Setting it to clear here
+    //     avoids that.
+    // Both are applied BEFORE loadRequest so the first paint is
+    // already transparent — reloading post-load to fix it would
+    // interrupt the bridge bootstrap and strand any in-flight
+    // invoke responses.
+    //
+    // Without vibrancy: keep underPageBackgroundColor at the system
+    // window background so the brief pre-first-frame window doesn't
+    // flash white in dark mode.
+    if (transparent_background) {
+        @try { [webview setValue:@NO forKey:@"drawsBackground"]; }
+        @catch (NSException* _) { /* WebKit changed key; vibrancy still works behind opaque content */ }
+        webview.wantsLayer = YES;
+        if (webview.layer) {
+            webview.layer.backgroundColor = [[NSColor clearColor] CGColor];
+            webview.layer.opaque = NO;
+        }
+    } else if ([webview respondsToSelector:@selector(setUnderPageBackgroundColor:)]) {
         [webview setUnderPageBackgroundColor:[NSColor windowBackgroundColor]];
     }
 
@@ -812,7 +845,22 @@ void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first
         ? zapp_resolve_url(url_override)
         : zapp_initial_url();
     [webview loadRequest:[NSURLRequest requestWithURL:url]];
-    [window setContentView:webview];
+
+    // Mount: if the window already has an NSVisualEffectView as its
+    // contentView (vibrancy path — see darwin_window_create), add
+    // ourselves as a subview of it. Otherwise replace the contentView
+    // outright (the default path). Re-parenting the webview AFTER
+    // its first load would reset the WKWebView's content process and
+    // interrupt the bridge bootstrap, so we install into the final
+    // tree before any of that happens.
+    NSView* finalHost = [window contentView];
+    if ([finalHost isKindOfClass:[NSVisualEffectView class]]) {
+        [webview setFrame:finalHost.bounds];
+        [webview setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+        [finalHost addSubview:webview];
+    } else {
+        [window setContentView:webview];
+    }
 }
 
 // --- JS evaluation ---

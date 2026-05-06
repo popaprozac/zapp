@@ -6,6 +6,17 @@
   -webkit-font-smoothing: antialiased;
 }
 
+/* Vibrancy demo (G12): when the window was opened with `vibrancy=...`,
+   main.ts adds this class on <html> so the body bg drops out and the
+   NSVisualEffectView blur behind the WebView is visible. Sections
+   stay translucent for legibility against the blur. */
+html.vibrancy-demo,
+html.vibrancy-demo body { background: transparent !important; }
+html.vibrancy-demo section { background: rgba(255, 255, 255, 0.45); }
+@media (prefers-color-scheme: dark) {
+  html.vibrancy-demo section { background: rgba(40, 40, 60, 0.45); }
+}
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 .container {

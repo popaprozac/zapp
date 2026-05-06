@@ -35,6 +35,7 @@ bool wopts_accept_first_mouse(WindowOptions* opts);
 bool wopts_auto_center(WindowOptions* opts);
 char* wopts_frame_autosave_name(WindowOptions* opts);
 int32_t wopts_numeric_id_pre_alloc(WindowOptions* opts);
+char* wopts_vibrancy(WindowOptions* opts);
 // Traffic light state tags: 0=Enabled, 1=Disabled, 2=Hidden
 int32_t wopts_traffic_light_close_tag(WindowOptions* opts);
 int32_t wopts_traffic_light_minimize_tag(WindowOptions* opts);

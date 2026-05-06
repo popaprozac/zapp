@@ -223,8 +223,10 @@ static ZappIOSNavDelegate* zapp_ios_shared_nav_delegate = nil;
 // a WKWebView as its rootViewController.
 
 void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first_mouse,
-                           const char* url_override, int32_t numeric_id_pre_alloc) {
-    (void)accept_first_mouse;  // iOS has no equivalent
+                           const char* url_override, int32_t numeric_id_pre_alloc,
+                           bool transparent_background) {
+    (void)accept_first_mouse;       // iOS has no equivalent
+    (void)transparent_background;   // iOS vibrancy is a separate model (UIBlurEffect / UIVisualEffectView) — Phase 2
     UIWindow* window = (__bridge UIWindow*)window_ptr;
 
     WKWebViewConfiguration* config = [[WKWebViewConfiguration alloc] init];

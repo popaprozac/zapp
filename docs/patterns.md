@@ -536,6 +536,67 @@ a future macOS change. Always fall back to a reasonable literal (the
 28 / 78 defaults above) so the CSS still works when previewed outside
 a Zapp window.
 
+## Vibrancy / blur material (macOS)
+
+macOS apps with translucent sidebars, HUDs, and titlebars use
+`NSVisualEffectView` to get the system blur. Zapp surfaces this as
+a one-line option on `Window.create`:
+
+```ts
+import { Window } from "@zappdev/runtime";
+
+const win = await Window.create({
+  title: "Stats",
+  width: 480, height: 360,
+  vibrancy: "sidebar",
+  titleBarStyle: "hiddenInset",  // common pairing — full-bleed blur
+});
+```
+
+```css
+/* Web content needs a transparent / translucent background for the
+   blur to show through. The window's WebView has its own surface;
+   set body to transparent and put per-region color via translucent
+   panels. */
+html, body { background: transparent; }
+.panel    { background: rgba(255, 255, 255, 0.45); }
+@media (prefers-color-scheme: dark) {
+  .panel  { background: rgba(40, 40, 60, 0.45); }
+}
+```
+
+### Materials
+
+Maps directly to macOS `NSVisualEffectMaterial` constants:
+
+| Value | Use for |
+|---|---|
+| `"sidebar"` | Mail / Finder sidebar — most common |
+| `"headerView"` | Section header / toolbar background |
+| `"titlebar"` | Title-bar matching, full-bleed when paired with `titleBarStyle: "hiddenInset"` |
+| `"menu"` | Menu / dropdown background |
+| `"popover"` | Popover content (Tray.attachWindow uses regular NSWindow, not NSPopover — set this if you want popover-style blur on a tray-attached window) |
+| `"hudWindow"` | HUD overlay (control palettes) |
+| `"fullScreenUI"` | Full-screen overlay chrome |
+| `"sheet"` | Modal sheet content |
+| `"contentBackground"` | Generic content-area background |
+| `"underWindowBackground"` | Behind-window blending |
+| `"underPageBackground"` | Page-level blending |
+| `"windowBackground"` | Default fallback |
+
+### Notes
+
+- **Web content owns its background.** If `body` has `background:
+  white`, vibrancy is invisible (the white covers it). Apps using
+  vibrancy design CSS for transparency from the start.
+- **Window-level only** — there's no per-element vibrancy in DOM
+  (CSS `backdrop-filter: blur()` is the closest web equivalent and
+  works inside the WebView regardless of native vibrancy).
+- **Active vs inactive** — the framework uses
+  `NSVisualEffectStateFollowsWindowActiveState` so the blur dims
+  when the window loses key focus. Standard macOS UX.
+- **No-op on iOS / Windows** — the option is silently ignored.
+
 ## Native file drop into webview
 
 The web `drop` event gives you `File` objects, never the original

@@ -1,4 +1,15 @@
 import "./style.css";
+
+// Vibrancy demo: when this window was opened with either
+// `?vibrancy=...` or `#vibrancy=...`, add a class on <html> so
+// style.css can drop the body background and let the
+// NSVisualEffectView blur show through. Both are accepted — the
+// framework supports query and fragment equally; pick whichever
+// fits your routing. Set BEFORE any other code runs so the class
+// lands before first paint.
+if (location.search.includes("vibrancy=") || location.hash.includes("vibrancy=")) {
+  document.documentElement.classList.add("vibrancy-demo");
+}
 import {
   App,
   AppEvent,
@@ -94,6 +105,7 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
         <button id="btn-guard">Enable Close Guard</button>
         <button id="btn-new-window">New Window</button>
         <button id="btn-new-window-small">New Window (small)</button>
+        <button id="btn-new-window-vibrant">New Window (vibrancy: sidebar)</button>
       </section>
 
       <section>
@@ -332,6 +344,30 @@ $("btn-new-window-small").addEventListener("click", async () => {
     log(`New small window: ${child.id}`);
   } catch (e) {
     log(`New window failed: ${e}`);
+  }
+});
+
+$("btn-new-window-vibrant").addEventListener("click", async () => {
+  try {
+    const child = await Window.create({
+      title: "Vibrancy demo (sidebar material)",
+      width: 480,
+      height: 360,
+      vibrancy: "sidebar",
+      titleBarStyle: "hiddenInset",
+      // Relative URL — resolves against whatever the app's
+      // configured initial URL is (Vite dev server in dev, the
+      // built zapp:// in prod), so this works in both modes.
+      // Hardcoding `zapp://index.html?vibrancy=...` would break in
+      // dev because that bypasses the Vite dev server entirely.
+      // The new window's main.ts reads `vibrancy=` from either
+      // location.search or location.hash; ?query is the user's
+      // preferred convention here.
+      url: "?vibrancy=sidebar",
+    });
+    log(`New vibrant window: ${child.id}`);
+  } catch (e) {
+    log(`New vibrant window failed: ${e}`);
   }
 });
 

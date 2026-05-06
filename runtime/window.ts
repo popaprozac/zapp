@@ -55,6 +55,28 @@ export interface WindowOptions {
   borderless?: boolean;
   transparent?: boolean;
   alwaysOnTop?: boolean;
+  /**
+   * macOS vibrancy / blur material (G12). When set, an
+   * `NSVisualEffectView` is mounted behind the WebView with the
+   * named material so the window background shows the system blur
+   * (sidebar, hud, titlebar, etc.). Web content needs a
+   * transparent / translucent CSS background — `body { background:
+   * transparent }` or any color with alpha < 1 — for the effect to
+   * be visible.
+   *
+   * Materials map to macOS `NSVisualEffectMaterial` constants:
+   *   `"sidebar"`, `"headerView"`, `"titlebar"`, `"menu"`,
+   *   `"popover"`, `"hudWindow"`, `"fullScreenUI"`, `"sheet"`,
+   *   `"windowBackground"`, `"contentBackground"`,
+   *   `"underWindowBackground"`, `"underPageBackground"`.
+   *
+   * No-op on iOS / Windows.
+   */
+  vibrancy?:
+    | "sidebar" | "headerView" | "titlebar" | "menu"
+    | "popover" | "hudWindow" | "fullScreenUI" | "sheet"
+    | "windowBackground" | "contentBackground"
+    | "underWindowBackground" | "underPageBackground";
   titleBarStyle?: "default" | "hidden" | "hiddenInset";
   /**
    * Atomic create-and-attach-as-sheet. Equivalent to creating the window

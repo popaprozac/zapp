@@ -57,6 +57,18 @@ struct WindowOptions {
     // Setting this also forces visible=false so the modal never flashes
     // as a free-floating window before beginSheet wraps it.
     asSheetOfId: int;
+    // macOS NSVisualEffectView material — when non-empty, an
+    // NSVisualEffectView with this material is mounted as the
+    // window's content view and the WKWebView is added as its
+    // subview with transparent drawing. The web content needs a
+    // transparent or translucent CSS background for the vibrancy
+    // to show through. Recognised values match macOS material
+    // constants: "sidebar", "headerView", "titlebar", "menu",
+    // "popover", "hudWindow", "fullScreenUI", "sheet",
+    // "windowBackground", "contentBackground",
+    // "underWindowBackground", "underPageBackground".
+    vibrancy: string;
+    _vibrancy_heap: bool;
     // Numeric window id pre-assigned by WindowManager.create *before*
     // the native window is built. Native code uses this so the JS
     // bootstrap user script can bake in the canonical "win-<N>" id —
@@ -138,6 +150,8 @@ impl WindowOptions {
             webContentInspectable: -1,
             acceptFirstMouse: true,
             asSheetOfId: -1,
+            vibrancy: "",
+            _vibrancy_heap: false,
             numericIdPreAlloc: -1,
             autoCenter: false,
             frameAutosaveName: "",
@@ -173,6 +187,7 @@ fn wopts_accept_first_mouse(opts: WindowOptions*) -> bool { return opts.acceptFi
 fn wopts_auto_center(opts: WindowOptions*) -> bool { return opts.autoCenter; }
 fn wopts_frame_autosave_name(opts: WindowOptions*) -> string { return opts.frameAutosaveName; }
 fn wopts_numeric_id_pre_alloc(opts: WindowOptions*) -> int { return opts.numericIdPreAlloc; }
+fn wopts_vibrancy(opts: WindowOptions*) -> string { return opts.vibrancy; }
 
 // Traffic light state tags (0=Enabled, 1=Disabled, 2=Hidden).
 fn wopts_traffic_light_close_tag(opts: WindowOptions*) -> int {
@@ -279,6 +294,16 @@ fn window_opts_apply_json(opts: WindowOptions*, args: JsonValue*) -> void {
     if hidden_opt.is_some() { opts.hidden = hidden_opt.unwrap(); }
     let aot_opt = args.get_bool("alwaysOnTop");
     if aot_opt.is_some() { opts.alwaysOnTop = aot_opt.unwrap(); }
+
+    let vibrancy_opt = args.get_string("vibrancy");
+    if vibrancy_opt.is_some() {
+        let src = vibrancy_opt.unwrap();
+        raw {
+            if (opts->_vibrancy_heap && opts->vibrancy) free((void*)opts->vibrancy);
+            opts->vibrancy = strdup((const char*)src);
+            opts->_vibrancy_heap = 1;
+        }
+    }
     let afm_opt = args.get_bool("acceptFirstMouse");
     if afm_opt.is_some() { opts.acceptFirstMouse = afm_opt.unwrap(); }
 
@@ -410,6 +435,11 @@ fn window_opts_free(opts: WindowOptions*) -> void {
             free((void*)opts->frameAutosaveName);
             opts->frameAutosaveName = "";
             opts->_frameAutosaveName_heap = 0;
+        }
+        if (opts->_vibrancy_heap && opts->vibrancy) {
+            free((void*)opts->vibrancy);
+            opts->vibrancy = "";
+            opts->_vibrancy_heap = 0;
         }
     }
 }
