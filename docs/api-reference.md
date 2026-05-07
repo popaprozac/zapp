@@ -294,6 +294,10 @@ w.on(WindowEvent.READY, () => w.show());
   }
   acceptFirstMouse?: boolean      // default: true (macOS — first click both focuses and triggers)
   asSheetOf?: WindowHandle | string  // atomic create-and-attach as modal sheet
+  // iOS sheet presentation (only meaningful with asSheetOf; no-op on macOS).
+  presentation?: "page" | "form" | "fullscreen" | "bottomSheet"
+  detents?: ("small" | "medium" | "large")[]  // iOS 15+; "small" is iOS 16+
+  grabber?: boolean              // small drag-handle on the sheet (iOS 15+)
   autoCenter?: boolean            // center on active screen at create time (overrides x/y)
   frameAutosaveName?: string      // persist frame (position + size) to NSUserDefaults under this name
 }

@@ -1,8 +1,9 @@
 <div align="center">
   <h1>Zapp</h1>
-  <h3>Desktop apps. 445 KB.</h3>
+  <h3>Desktop and mobile apps. 445 KB on macOS.</h3>
   <p>
     <img src="https://img.shields.io/badge/macOS-supported-brightgreen" alt="macOS">
+    <img src="https://img.shields.io/badge/iOS-supported-brightgreen" alt="iOS">
     <img src="https://img.shields.io/badge/Windows-in_progress-yellow" alt="Windows">
     <img src="https://img.shields.io/badge/Linux-planned-lightgrey" alt="Linux">
     <img src="https://img.shields.io/badge/license-MIT-blue" alt="License">
@@ -11,7 +12,9 @@
 
 ---
 
-Zapp is a desktop application framework that produces **extraordinarily small binaries** by compiling to native code via [Zen-C](https://github.com/zenc-lang/zenc) and rendering UI in the system WebView. No bundled browser. No runtime overhead. Your frontend is your choice — React, Svelte, Vue, or vanilla.
+Zapp is an application framework that produces **extraordinarily small binaries** by compiling to native code via [Zen-C](https://github.com/zenc-lang/zenc) and rendering UI in the system WebView. No bundled browser. No runtime overhead. Your frontend is your choice — React, Svelte, Vue, or vanilla.
+
+The same Zapp codebase ships to **macOS and iOS** today (Windows next). Desktop apps get the full multi-window / menu-bar / tray surface; iOS apps get UIKit-native modal sheets, file pickers, notifications, and clipboard — without any "this looks like a web app on a phone" feel.
 
 Building with an AI agent? Point it at [`llms.txt`](llms.txt) for a
 comprehensive single-file reference covering concepts, config shapes, the
@@ -79,6 +82,14 @@ bun run package   # .app bundle with icon (macOS)
 
 No global install needed — `bunx` fetches the CLI on the fly for init, and `bun run` uses the local copy in your project's `node_modules`.
 
+iOS build (requires Xcode + booted Simulator):
+```bash
+bun run build --platform ios
+xcrun simctl install booted bin/ios/<name>.app
+xcrun simctl launch --console-pty booted com.your.bundle
+```
+First iOS build takes a minute (cross-compiles txiki.js for the iOS Simulator SDK if your config opts into it). Subsequent builds reuse the cached static libs in `vendor/txiki.js/build-ios-sim`.
+
 ### Custom icons and Info.plist
 
 Drop your app icon into `build/macos/`:
@@ -117,6 +128,25 @@ For nested dicts/arrays, drop a partial XML file into `build/macos/Info.plist.ex
 - **Events** — Typed cross-context events with autocomplete.
 - **Security** — CSP, navigation restrictions, path traversal prevention, dev tools disabled in production.
 - **Packaging** — `.app` bundles with icon generation (including macOS Tahoe liquid glass).
+- **iOS** — Same source compiles to iOS Simulator / device via `--platform ios`. UIKit-native presentation: `Window.create({ asSheetOf, presentation: "page" | "form" | "fullscreen" | "bottomSheet", detents, grabber })` for sheets and drawers, `UIDocumentPickerViewController` for file pickers, `UNUserNotificationCenter` for notifications + actions + reply field, `UIPasteboard` for full clipboard (text / HTML / image / files), `UIDropInteraction` for file drag-drop, custom `WKURLSchemeHandler` protocols, navigation allowlist with Safari handoff for external links.
+
+## Platform support
+
+| Feature | macOS | iOS | Windows |
+|---|:-:|:-:|:-:|
+| Window create / resize / events | ✅ | ✅ (single window on iPhone, sheets for "new content") | ⚠️ in progress |
+| Application menus | ✅ | n/a (no menu bar) | ⚠️ |
+| Tray / status item | ✅ | n/a | ⏳ |
+| Modal sheets (`asSheetOf`) | ✅ NSWindow.beginSheet | ✅ presentViewController + UISheetPresentationController | ⏳ |
+| Native dialogs | ✅ | ✅ UIDocumentPicker / UIAlertController | ⚠️ |
+| Notifications + actions | ✅ | ✅ UNUserNotificationCenter | ⏳ |
+| Clipboard (text / HTML / image / files) | ✅ | ✅ UIPasteboard | ⚠️ text only |
+| File drag-drop into webview | ✅ | ✅ UIDropInteraction | ⏳ |
+| Custom protocols (`asset://`, ...) | ✅ | ✅ | ⏳ |
+| Navigation allowlist | ✅ | ✅ | ⏳ |
+| Workers — JSC | ✅ (JIT) | ✅ (no JIT, Apple policy) | n/a |
+| Workers — txiki / fetch / WebSocket / SQLite | ✅ | ✅ (FFI disabled per App Store policy) | ⏳ |
+| App Store / TestFlight packaging | n/a | ⏳ Phase 3 | n/a |
 
 ## Example
 

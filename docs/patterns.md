@@ -616,8 +616,11 @@ mechanisms, different scheme namespaces).
 - **Body transit**: bytes are base64-encoded for the JS→native trip.
   For very large bodies (>10 MB) consider chunking via streams or
   routing through a Zen-C service (lower overhead).
-- **iOS**: Same `WKURLSchemeHandler` API, ships when the iOS path
-  catches up — design transfers cleanly.
+- **iOS**: Same `WKURLSchemeHandler` API; shipped in alpha.54. Apps
+  declare `protocols: [...]` in `zapp.config.ts` and the iOS build
+  registers each scheme on the `WKWebViewConfiguration`. The runtime
+  side is identical — `Protocols.register(...)` works on both
+  platforms with the same handler signature.
 
 ## Vibrancy / blur material (macOS)
 
@@ -771,9 +774,13 @@ Events.on("file-drop", (d: any) => {
   to extend the allowlist for the dropped paths.
 - **Non-file drags** (text into an input, drag-out from an `<a>`
   tag) fall through to WebKit's normal handling.
-- **iOS:** uses `UIDragInteraction` / Document Picker — not yet
-  shipped. iOS apps that need this should route through
-  `Dialog.openFile` for now.
+- **iOS:** shipped in alpha.61 via `UIDropInteraction`. Drops from
+  Photos / Files / other apps deliver `file-drop` events with
+  paths. iOS hands us security-scoped temp copies of the dragged
+  files (NSTemporaryDirectory copies of the originals); the
+  framework auto-grants those paths through the FS allowlist so
+  apps can `FS.readFile` them immediately. Most useful on iPad
+  split-view; works on iPhone via long-press in Files.
 
 ## Sync primitive — rate-limiting a resource
 
@@ -959,6 +966,115 @@ behavior. Otherwise the tray reverts to firing `click` /
   weird states.
 - iOS / Windows: `attachWindow` is a no-op (no menu bar / different
   metaphor). Code is portable.
+
+## Modal sheets — same code, native presentation per platform
+
+`Window.create({ asSheetOf: parent })` opens a child window attached
+to a parent — slides down as an `NSWindow` sheet on macOS, presents
+as a `UIViewController` modal on iOS. Same JSON, two native idioms.
+
+```ts
+import { Window } from "@zappdev/runtime";
+
+const settings = await Window.create({
+  title: "Settings",
+  width: 480,
+  height: 600,
+  asSheetOf: Window.current(),
+});
+// macOS: slides down from the parent's titlebar.
+// iOS: presents as PageSheet by default.
+```
+
+iOS adds presentation styles (no-op on macOS) that desktop-cross-
+platform frameworks can't expose, because they don't have a native
+iOS story:
+
+```ts
+// Drawer-style bottom sheet with snap points + grabber.
+await Window.create({
+  asSheetOf: Window.current(),
+  presentation: "bottomSheet",
+  detents: ["small", "medium", "large"],
+  grabber: true,
+});
+
+// Compact form sheet (centered card on iPad, ~half-screen on iPhone).
+await Window.create({
+  asSheetOf: Window.current(),
+  presentation: "form",
+});
+
+// Take-over modal — no swipe-to-dismiss, modal must close itself.
+await Window.create({
+  asSheetOf: Window.current(),
+  presentation: "fullscreen",
+});
+```
+
+### Detents (iOS 15+ `UISheetPresentationController`)
+
+| Value | Approx. height | Availability |
+|---|---|---|
+| `"small"` | ~25% | iOS 16+ (custom detent; silently dropped on iOS 15) |
+| `"medium"` | ~50% | iOS 15+ |
+| `"large"` | full sheet | iOS 15+ |
+
+Mix freely (`["small", "medium", "large"]`) to give users multiple
+snap points. When omitted on `bottomSheet`, defaults to
+`["medium", "large"]`. Page / form sheets ignore detents on iPhone
+in older iOS versions but respect them on iOS 15+ where the
+underlying controller is the same.
+
+### Grabber
+
+`grabber: true` shows the small drag-handle at the top of the
+sheet — makes swipe-to-dismiss obviously discoverable on full-
+width iPhone sheets. iOS 15+; no-op on macOS.
+
+### Nested sheets
+
+You can present a sheet from inside a sheet. The framework keeps a
+modal stack and presents on the topmost currently-displayed VC:
+
+```ts
+// Inside the first modal's webview:
+await Window.create({
+  asSheetOf: Window.current(),
+  presentation: "page",
+});
+// Stacks on top of the bottom sheet that opened this one.
+```
+
+Dismissing the topmost reveals the one beneath, and the
+`WINDOW_MODAL_DISMISSED` event fires with the right `(parent, modal)`
+pair so app code can react per-level.
+
+### Dismissal event
+
+```ts
+parent.on(WindowEvent.MODAL_DISMISSED, ({ modalId }) => {
+  console.log("user closed modal:", modalId);
+});
+```
+
+Fires when the user swipes a sheet down (iOS), clicks the close
+button (macOS), or app code calls `parent.detachModal(modal)`.
+Fullscreen presentations don't fire on swipe (they don't allow it)
+— only on programmatic dismiss.
+
+### Notes
+
+- **iPhone** is single-window. `Window.create` without `asSheetOf`
+  on iPhone returns the existing window; sheets are how you "open
+  new content" on iPhone.
+- **Custom detent heights** (e.g. exactly 200pt or 35%) aren't
+  in the API yet — see `project_ios_custom_detents` for the future
+  shape.
+- **macOS** `beginSheet` is single-style; the `presentation` /
+  `detents` / `grabber` options silently no-op there. macOS apps
+  that want a "popover bottom sheet" effect would need a different
+  primitive.
 
 ## Dock badge + bounce
 

@@ -29,6 +29,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <objc/runtime.h>
 
 extern void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first_mouse,
                                   const char* url_override, int32_t numeric_id_pre_alloc,
@@ -489,6 +490,27 @@ static UIViewController* zapp_ios_topmost_presented(UIViewController* rootVC) {
     return vc;
 }
 
+// Add a runtime method to UIViewController that dismisses the
+// receiver — UIKeyCommand for Escape uses this as its action selector
+// so iPad keyboard users (and iPhone with a hardware keyboard) can
+// close any presented sheet with one keystroke. Registered once at
+// +load; idempotent across multiple attach_modal invocations.
+@interface ZappIOSModalEscapeFix : NSObject
+@end
+@implementation ZappIOSModalEscapeFix
++ (void)load {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        IMP imp = imp_implementationWithBlock(^(id self_) {
+            [(UIViewController*)self_ dismissViewControllerAnimated:YES completion:nil];
+        });
+        class_addMethod([UIViewController class],
+                        NSSelectorFromString(@"__zapp_dismiss_modal_via_escape"),
+                        imp, "v@:");
+    });
+}
+@end
+
 @interface ZappIOSModalDismissObserver : NSObject <UIAdaptivePresentationControllerDelegate>
 @end
 
@@ -639,6 +661,19 @@ void darwin_window_attach_modal(void* parent_handle, void* modal_handle) {
             zapp_ios_modal_observer = [[ZappIOSModalDismissObserver alloc] init];
         }
         vcStrong.presentationController.delegate = zapp_ios_modal_observer;
+
+        // Escape dismisses the sheet — iPad hardware keyboards expect
+        // this convention and iPhone hardware keyboards do too.
+        // Especially important for `presentation: "fullscreen"` which
+        // has no swipe-to-dismiss gesture.
+        UIKeyCommand* esc = [UIKeyCommand
+            keyCommandWithInput:UIKeyInputEscape
+                  modifierFlags:0
+                         action:NSSelectorFromString(@"__zapp_dismiss_modal_via_escape")];
+        if (@available(iOS 15.0, *)) {
+            esc.wantsPriorityOverSystemBehavior = YES;
+        }
+        [vcStrong addKeyCommand:esc];
 
         // Push to the modal stack so the dismissal observer can
         // route WINDOW_MODAL_DISMISSED to the right (parent, modal).

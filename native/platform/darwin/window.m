@@ -636,7 +636,41 @@ void darwin_window_attach_modal(void* parent_handle, void* modal_handle) {
         if ([modal isVisible] && ![modal sheetParent]) {
             [modal orderOut:nil];
         }
+        // Escape-to-dismiss. macOS HIG says a sheet with a Cancel
+        // button should bind ⎋ to it, but a webview-content sheet has
+        // no Cancel button — so install a local key monitor scoped to
+        // the modal window that ends the sheet on Escape (keycode 53).
+        // Mirrors the iOS UIKeyCommand behavior so apps get the same
+        // "press Escape to close" UX on both platforms. Monitor is
+        // associated with the modal so it auto-releases when modal
+        // dies.
+        __weak NSWindow* weakModal = modal;
+        __weak NSWindow* weakParent = parent;
+        id monitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown
+            handler:^NSEvent*(NSEvent* event) {
+                if (event.keyCode != 53 /* kVK_Escape */) return event;
+                NSWindow* m = weakModal;
+                NSWindow* p = weakParent;
+                if (!m || !p || event.window != m) return event;
+                if ([p attachedSheet] != m) return event;
+                [p endSheet:m returnCode:NSModalResponseCancel];
+                return nil;  // swallow
+            }];
+        objc_setAssociatedObject(modal, "zapp_modal_esc_monitor",
+            monitor, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
         [parent beginSheet:modal completionHandler:^(NSModalResponse code) {
+            // Tear down the Escape monitor when the sheet dismisses
+            // (regardless of how — Escape, programmatic, or close
+            // button). NSEvent monitors are global to the app, so
+            // leaving them around would respond to keystrokes in
+            // unrelated windows.
+            id mon = objc_getAssociatedObject(modal, "zapp_modal_esc_monitor");
+            if (mon) {
+                [NSEvent removeMonitor:mon];
+                objc_setAssociatedObject(modal, "zapp_modal_esc_monitor",
+                    nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            }
             // Notify the parent window's JS that the sheet dismissed,
             // including the response code (default NSModalResponseStop
             // when modal closes itself; user-supplied if a future
