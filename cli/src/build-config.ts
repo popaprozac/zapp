@@ -280,6 +280,9 @@ export async function generatePlatformConfig(root: string, target: BuildTarget =
     // UniformTypeIdentifiers — used by ios/dialog.m for UIDocumentPicker
     // file-type filtering (UTType). iOS 14+ system framework.
     content += `//> framework: UniformTypeIdentifiers\n`;
+    // UserNotifications — used by ios/notification.m. Same framework as
+    // macOS (UNUserNotificationCenter API is cross-Apple-platform).
+    content += `//> framework: UserNotifications\n`;
     // libcompression — used by jsc.m for embedded-asset brotli decode.
     // Available on iOS as a system library; just needs the link flag.
     content += `//> link: -lcompression\n`;
