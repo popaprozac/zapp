@@ -107,6 +107,10 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
         <button id="btn-new-window">New Window</button>
         <button id="btn-new-window-small">New Window (small)</button>
         <button id="btn-new-window-vibrant">New Window (vibrancy: sidebar)</button>
+        <button id="btn-new-window-sheet">Sheet (page)</button>
+        <button id="btn-new-window-form">Sheet (form)</button>
+        <button id="btn-new-window-fullscreen">Sheet (fullscreen)</button>
+        <button id="btn-new-window-bottom">Bottom Sheet (medium+large+grabber)</button>
       </section>
 
       <section>
@@ -383,6 +387,48 @@ $("btn-new-window-vibrant").addEventListener("click", async () => {
   } catch (e) {
     log(`New vibrant window failed: ${e}`);
   }
+});
+
+$("btn-new-window-sheet").addEventListener("click", async () => {
+  try {
+    const sheet = await Window.create({
+      title: "Settings", width: 480, height: 600,
+      asSheetOf: win, presentation: "page", grabber: true,
+    });
+    log(`Page sheet: ${sheet.id}`);
+  } catch (e) { log(`Open sheet failed: ${e}`); }
+});
+
+$("btn-new-window-form").addEventListener("click", async () => {
+  try {
+    const sheet = await Window.create({
+      title: "Quick Add", width: 400, height: 300,
+      asSheetOf: win, presentation: "form", grabber: true,
+    });
+    log(`Form sheet: ${sheet.id}`);
+  } catch (e) { log(`Open form sheet failed: ${e}`); }
+});
+
+$("btn-new-window-fullscreen").addEventListener("click", async () => {
+  try {
+    const sheet = await Window.create({
+      title: "Detail View",
+      asSheetOf: win, presentation: "fullscreen",
+    });
+    log(`Fullscreen modal: ${sheet.id}`);
+  } catch (e) { log(`Open fullscreen failed: ${e}`); }
+});
+
+$("btn-new-window-bottom").addEventListener("click", async () => {
+  try {
+    const sheet = await Window.create({
+      title: "Drawer",
+      asSheetOf: win, presentation: "bottomSheet",
+      detents: ["small", "medium", "large"],
+      grabber: true,
+    });
+    log(`Bottom sheet: ${sheet.id}`);
+  } catch (e) { log(`Open bottom sheet failed: ${e}`); }
 });
 
 // --- Sync (cross-context wait/notify) ---

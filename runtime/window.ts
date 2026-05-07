@@ -100,6 +100,40 @@ export interface WindowOptions {
    */
   asSheetOf?: WindowHandle | string;
   /**
+   * iOS sheet presentation style — only meaningful when `asSheetOf` is
+   * also set. Maps to UIKit:
+   * - `"page"` → `UIModalPresentationPageSheet` (default — swipeable
+   *   card on iPhone, centered card on iPad)
+   * - `"form"` → `UIModalPresentationFormSheet` (smaller centered card,
+   *   better for short input dialogs on iPad)
+   * - `"fullscreen"` → `UIModalPresentationFullScreen` (take-over modal,
+   *   no swipe-to-dismiss; the modal must close itself)
+   * - `"bottomSheet"` → drawer-style sheet using
+   *   `UISheetPresentationController` (iOS 15+); pair with `detents` to
+   *   support snap points (medium = half-screen, large = full).
+   *
+   * No-op on macOS (NSWindow.beginSheet is single-style).
+   */
+  presentation?: "page" | "form" | "fullscreen" | "bottomSheet";
+  /**
+   * iOS 15+ `UISheetPresentationController` snap points.
+   * - `"small"` → ~25% (custom detent, iOS 16+; silently dropped on iOS 15)
+   * - `"medium"` → ~50% (built-in)
+   * - `"large"` → full sheet (built-in)
+   *
+   * Provide multiple to let users swipe between them. Ignored unless
+   * `presentation` is `"bottomSheet"` (or any sheet on iOS 15+ that
+   * supports sheetPresentationController). When omitted on
+   * `bottomSheet`, defaults to `["medium", "large"]`.
+   */
+  detents?: ("small" | "medium" | "large")[];
+  /**
+   * Show the small drag-handle "grabber" at the top of an iOS sheet.
+   * Makes the swipe-to-dismiss gesture obviously discoverable on
+   * full-width iPhone sheets. iOS 15+ only.
+   */
+  grabber?: boolean;
+  /**
    * Per-button state for the macOS traffic lights. Takes precedence over
    * the legacy `closable` / `minimizable` / `maximizable` booleans (those
    * remain as sugar: `false` maps to the corresponding button's

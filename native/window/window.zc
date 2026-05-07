@@ -57,6 +57,23 @@ struct WindowOptions {
     // Setting this also forces visible=false so the modal never flashes
     // as a free-floating window before beginSheet wraps it.
     asSheetOfId: int;
+    // Sheet presentation style on iOS — values match the int enum that
+    // ios/window.m attach_modal reads:
+    //   0 = page (UIModalPresentationPageSheet — default)
+    //   1 = form (UIModalPresentationFormSheet)
+    //   2 = fullscreen (UIModalPresentationFullScreen)
+    //   3 = bottomSheet (UISheetPresentationController, iOS 15+)
+    // No-op on macOS (NSWindow.beginSheet is single-style).
+    sheetPresentation: int;
+    // bottomSheet detents bitmask (iOS 15+ UISheetPresentationController):
+    //   bit 0 = .medium
+    //   bit 1 = .large
+    // 0 → defaults to .large only. Ignored unless presentation == 3.
+    sheetDetents: int;
+    // Show the small drag-handle "grabber" at the top of the sheet —
+    // makes swipe-to-dismiss obviously discoverable on iPhone full-
+    // width sheets. iOS 15+ only, ignored otherwise.
+    sheetGrabber: bool;
     // macOS NSVisualEffectView material — when non-empty, an
     // NSVisualEffectView with this material is mounted as the
     // window's content view and the WKWebView is added as its
@@ -150,6 +167,9 @@ impl WindowOptions {
             webContentInspectable: -1,
             acceptFirstMouse: true,
             asSheetOfId: -1,
+            sheetPresentation: 0,
+            sheetDetents: 0,
+            sheetGrabber: false,
             vibrancy: "",
             _vibrancy_heap: false,
             numericIdPreAlloc: -1,
@@ -188,6 +208,9 @@ fn wopts_auto_center(opts: WindowOptions*) -> bool { return opts.autoCenter; }
 fn wopts_frame_autosave_name(opts: WindowOptions*) -> string { return opts.frameAutosaveName; }
 fn wopts_numeric_id_pre_alloc(opts: WindowOptions*) -> int { return opts.numericIdPreAlloc; }
 fn wopts_vibrancy(opts: WindowOptions*) -> string { return opts.vibrancy; }
+fn wopts_sheet_presentation(opts: WindowOptions*) -> int { return opts.sheetPresentation; }
+fn wopts_sheet_detents(opts: WindowOptions*) -> int { return opts.sheetDetents; }
+fn wopts_sheet_grabber(opts: WindowOptions*) -> bool { return opts.sheetGrabber; }
 
 // Traffic light state tags (0=Enabled, 1=Disabled, 2=Hidden).
 fn wopts_traffic_light_close_tag(opts: WindowOptions*) -> int {
@@ -344,6 +367,42 @@ fn window_opts_apply_json(opts: WindowOptions*, args: JsonValue*) -> void {
             }
         }
     }
+
+    // Sheet presentation style (iOS-only, no-op elsewhere).
+    let pres_opt = args.get_string("presentation");
+    if pres_opt.is_some() {
+        let pres: string = pres_opt.unwrap();
+        if pres == "page" { opts.sheetPresentation = 0; }
+        else if pres == "form" { opts.sheetPresentation = 1; }
+        else if pres == "fullscreen" { opts.sheetPresentation = 2; }
+        else if pres == "bottomSheet" { opts.sheetPresentation = 3; }
+    }
+    let detents_opt = args.get_array("detents");
+    if detents_opt.is_some() {
+        let arr: JsonValue* = detents_opt.unwrap();
+        let bits: int = 0;
+        let n = arr.len();
+        let i: usize = 0;
+        while i < n {
+            let item_opt = arr.at(i);
+            if item_opt.is_some() {
+                let item: JsonValue* = item_opt.unwrap();
+                if item.is_string() {
+                    let s_opt = item.as_string();
+                    if s_opt.is_some() {
+                        let s: string = s_opt.unwrap();
+                        if s == "medium" { bits = bits | 1; }
+                        else if s == "large" { bits = bits | 2; }
+                        else if s == "small" { bits = bits | 4; }
+                    }
+                }
+            }
+            i = i + 1;
+        }
+        opts.sheetDetents = bits;
+    }
+    let grab_opt = args.get_bool("grabber");
+    if grab_opt.is_some() { opts.sheetGrabber = grab_opt.unwrap(); }
 
     // titleBarStyle is a string enum on the JS side
     // ("default" | "hidden" | "hiddenInset") mapped into the native

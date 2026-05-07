@@ -48,6 +48,11 @@ typedef struct ZappIOSDeferred {
     bool show_requested;      // makeKeyAndVisible queued?
     UIWindow* __unsafe_unretained real_window;     // nil until materialized
     WKWebView* __unsafe_unretained real_webview;
+    // Sheet presentation options — populated by darwin_window_create
+    // from WindowOptions, consumed by darwin_window_attach_modal.
+    int32_t sheet_presentation;   // 0=page, 1=form, 2=fullscreen, 3=bottomSheet
+    int32_t sheet_detents;        // bitmask: 1=medium, 2=large
+    bool    sheet_grabber;
 } ZappIOSDeferred;
 
 #define ZAPP_MAX_DEFERRED 16
@@ -301,12 +306,22 @@ void zapp_dispatch_event_to_js(int32_t window_id, int32_t event_id, int32_t w, i
 // zapp_ios_materialize_pending_windows.
 
 void* darwin_window_create(void* opts) {
-    (void)opts;  // Phase 1: opts fields read on materialization in webview.m
     ZappIOSDeferred* d = (ZappIOSDeferred*)calloc(1, sizeof(ZappIOSDeferred));
     d->numeric_id = -1;
     d->inspectable = true;
     d->first_mouse = true;
     d->show_requested = true;  // create implies show on iOS
+    if (opts) {
+        // Capture sheet presentation options now — attach_modal reads
+        // them later. Other WindowOptions fields are read at
+        // materialization time in webview.m via wopts_*.
+        extern int wopts_sheet_presentation(void* opts);
+        extern int wopts_sheet_detents(void* opts);
+        extern bool wopts_sheet_grabber(void* opts);
+        d->sheet_presentation = (int32_t)wopts_sheet_presentation(opts);
+        d->sheet_detents = (int32_t)wopts_sheet_detents(opts);
+        d->sheet_grabber = wopts_sheet_grabber(opts);
+    }
     for (int i = 0; i < ZAPP_MAX_DEFERRED; i++) {
         if (!zapp_ios_deferred_list[i]) {
             zapp_ios_deferred_list[i] = d;
@@ -425,12 +440,241 @@ void darwin_window_register_numeric_id(void* handle, int32_t numeric_id) {
     zapp_ios_window_ids[numeric_id] = [NSString stringWithFormat:@"win-%d", numeric_id];
 }
 
-// --- Modal sheets — iOS has presentViewController:; Phase 2 wires it up ---
+// --- Modal sheets — UIViewController presentation ---
+//
+// iOS doesn't have a direct NSWindow.beginSheet equivalent. The closest
+// match is `presentViewController:animated:completion:` — slides up
+// from the bottom, blocks interaction with the presenting controller
+// until dismissed, and supports the iOS 13+ swipe-down-to-dismiss
+// gesture. We map `Window.create({ asSheetOf: parent })` to this
+// presentation by stealing the modal UIWindow's rootViewController and
+// presenting it on the parent's rootViewController.
+//
+// On dismissal we fire the same `WINDOW_MODAL_DISMISSED` (event id 12)
+// that macOS does, so JS bridge listeners ported from macOS just work.
+
+// Helper: resolve either a deferred handle or a live UIWindow* into
+// a UIWindow*. Returns nil if neither is materialized.
+static UIWindow* zapp_ios_resolve_window(void* handle) {
+    if (!handle) return nil;
+    ZappIOSDeferred* d = zapp_ios_find_deferred(handle);
+    if (d) return d->real_window;
+    return (__bridge UIWindow*)handle;
+}
+
+// Modal stack — supports presenting a sheet from inside another sheet
+// (the wedge audience does this: tap a row in a bottom sheet, push a
+// detail page sheet on top). UIKit's pattern is to walk the
+// `presentedViewController` chain to find the topmost VC, then present
+// from there. We mirror that with a stack of (vc, parentId, modalId)
+// so the dismissal observer knows which entry to fire WINDOW_MODAL_
+// DISMISSED for.
+typedef struct {
+    UIViewController* __weak vc;
+    int32_t parent_id;
+    int32_t modal_id;
+} ZappIOSModalStackEntry;
+
+#define ZAPP_IOS_MODAL_STACK_MAX 8
+static ZappIOSModalStackEntry zapp_ios_modal_stack[ZAPP_IOS_MODAL_STACK_MAX] = {0};
+static int zapp_ios_modal_stack_count = 0;
+
+// Find the topmost currently-presented VC (the one to present new
+// modals from). Returns rootVC if nothing is currently presented.
+static UIViewController* zapp_ios_topmost_presented(UIViewController* rootVC) {
+    UIViewController* vc = rootVC;
+    while (vc.presentedViewController) {
+        vc = vc.presentedViewController;
+    }
+    return vc;
+}
+
+@interface ZappIOSModalDismissObserver : NSObject <UIAdaptivePresentationControllerDelegate>
+@end
+
+@implementation ZappIOSModalDismissObserver
+- (void)presentationControllerDidDismiss:(UIPresentationController*)pc {
+    UIViewController* dismissedVC = pc.presentedViewController;
+    extern int zapp_dispatch_event(int window_id, int event_id, int w, int h, int x, int y);
+    // Find this VC in the stack and remove it (anywhere — the user
+    // could dismiss a non-top sheet via swipe-down on a stack with
+    // adaptive presentation).
+    for (int i = zapp_ios_modal_stack_count - 1; i >= 0; i--) {
+        if (zapp_ios_modal_stack[i].vc == dismissedVC) {
+            // ZAPP_EVENT_WINDOW_MODAL_DISMISSED == 12 (matches darwin path)
+            zapp_dispatch_event(zapp_ios_modal_stack[i].parent_id, 12,
+                                (int)zapp_ios_modal_stack[i].modal_id, 0, 0, 0);
+            // Compact the stack.
+            for (int j = i; j < zapp_ios_modal_stack_count - 1; j++) {
+                zapp_ios_modal_stack[j] = zapp_ios_modal_stack[j + 1];
+            }
+            zapp_ios_modal_stack_count--;
+            zapp_ios_modal_stack[zapp_ios_modal_stack_count].vc = nil;
+            zapp_ios_modal_stack[zapp_ios_modal_stack_count].parent_id = -1;
+            zapp_ios_modal_stack[zapp_ios_modal_stack_count].modal_id = -1;
+            return;
+        }
+    }
+}
+@end
+
+static ZappIOSModalDismissObserver* zapp_ios_modal_observer = nil;
 
 void darwin_window_attach_modal(void* parent_handle, void* modal_handle) {
-    (void)parent_handle; (void)modal_handle;
+    if (!parent_handle || !modal_handle || parent_handle == modal_handle) return;
+
+    // On iOS, post-UIApplicationMain Window.create allocates a deferred
+    // handle but doesn't materialize a real UIWindow until something
+    // (like this modal-attach call) drives the materialization. Run
+    // the queue drain now so the modal's UIWindow + rootViewController
+    // + WKWebView all exist before we present.
+    extern void zapp_ios_materialize_pending_windows(void);
+    zapp_ios_materialize_pending_windows();
+
+    UIWindow* parent = zapp_ios_resolve_window(parent_handle);
+    UIWindow* modal  = zapp_ios_resolve_window(modal_handle);
+    if (!parent || !modal) return;
+
+    // The modal's UIWindow.rootViewController is intact (we steal it
+    // below at present time). The parent's may not be — if the parent
+    // is itself a currently-presented modal, we cleared its UIWindow's
+    // rootViewController when we presented it earlier. Resolve via:
+    //   - modal-stack lookup if parent is a known modal (its real VC
+    //     is the stack entry's vc, currently presented in the chain);
+    //   - else the parent UIWindow's intact rootViewController (the
+    //     normal "root window of the app" case).
+    UIViewController* modalVC = modal.rootViewController;
+    if (!modalVC) return;
+    if (modalVC.presentingViewController) return;  // already presented
+
+    UIViewController* parentRootVC = nil;
+    ZappIOSDeferred* parentDef0 = zapp_ios_find_deferred(parent_handle);
+    int32_t parentNumericId = parentDef0 ? parentDef0->numeric_id : -1;
+    for (int i = 0; i < zapp_ios_modal_stack_count; i++) {
+        if (zapp_ios_modal_stack[i].modal_id == parentNumericId) {
+            parentRootVC = zapp_ios_modal_stack[i].vc;
+            break;
+        }
+    }
+    if (!parentRootVC) parentRootVC = parent.rootViewController;
+    if (!parentRootVC) return;
+
+    // For nested modals: present from the topmost currently-presented
+    // VC in the chain rooted at parentRootVC. UIKit refuses to present
+    // from a VC whose view isn't currently visible.
+    UIViewController* parentVC = zapp_ios_topmost_presented(parentRootVC);
+
+    // Capture numeric IDs for the dismissal callback before we tear
+    // the modal UIWindow down.
+    ZappIOSDeferred* modalDef = zapp_ios_find_deferred(modal_handle);
+    int32_t parentId = parentNumericId;
+    int32_t modalId  = modalDef  ? modalDef->numeric_id  : -1;
+
+    // Capture sheet presentation options before the dispatch_async
+    // (modalDef may not be safe to read on the main queue if it's
+    // freed in some edge case).
+    int32_t sheetPres = modalDef ? modalDef->sheet_presentation : 0;
+    int32_t sheetDetents = modalDef ? modalDef->sheet_detents : 0;
+    bool sheetGrabber = modalDef ? modalDef->sheet_grabber : false;
+
+    void (^run)(void) = ^{
+        // Hold the VC strong before clearing rootViewController
+        // (which would otherwise dealloc it — UIWindow.rootViewController
+        // is the only strong ref).
+        UIViewController* vcStrong = modalVC;
+        modal.rootViewController = nil;
+        modal.hidden = YES;
+
+        // Map sheet presentation enum:
+        //   0 = page (PageSheet) — default
+        //   1 = form (FormSheet) — smaller centered card on iPad
+        //   2 = fullscreen (FullScreen) — take-over modal
+        //   3 = bottomSheet (UISheetPresentationController) — drawer
+        switch (sheetPres) {
+            case 1: vcStrong.modalPresentationStyle = UIModalPresentationFormSheet; break;
+            case 2: vcStrong.modalPresentationStyle = UIModalPresentationFullScreen; break;
+            case 3:
+            case 0:
+            default: vcStrong.modalPresentationStyle = UIModalPresentationPageSheet; break;
+        }
+
+        // Bottom sheet — UISheetPresentationController gives detents,
+        // grabber, and mid-screen positioning (iOS 15+). PageSheet
+        // also exposes the same controller via `sheetPresentationController`,
+        // so the grabber + detent options on a regular pageSheet work.
+        if (@available(iOS 15.0, *)) {
+            UISheetPresentationController* sheet = vcStrong.sheetPresentationController;
+            if (sheet) {
+                NSMutableArray<UISheetPresentationControllerDetent*>* detents = [NSMutableArray array];
+                // Bit 0 = medium, bit 1 = large, bit 2 = small (custom,
+                // iOS 16+; degrades to no entry on iOS 15).
+                if (sheetDetents & 4) {
+                    if (@available(iOS 16.0, *)) {
+                        UISheetPresentationControllerDetent* small =
+                            [UISheetPresentationControllerDetent
+                                customDetentWithIdentifier:@"zapp.small"
+                                resolver:^CGFloat(id<UISheetPresentationControllerDetentResolutionContext> ctx) {
+                                    return ctx.maximumDetentValue * 0.25;
+                                }];
+                        if (small) [detents addObject:small];
+                    }
+                }
+                if (sheetDetents & 1) [detents addObject:[UISheetPresentationControllerDetent mediumDetent]];
+                if (sheetDetents & 2) [detents addObject:[UISheetPresentationControllerDetent largeDetent]];
+                // bottomSheet with no explicit detents → both available
+                // (medium + large with swipe between). Page/form sheets
+                // with no detents → keep system default (large only).
+                if (detents.count == 0 && sheetPres == 3) {
+                    [detents addObject:[UISheetPresentationControllerDetent mediumDetent]];
+                    [detents addObject:[UISheetPresentationControllerDetent largeDetent]];
+                }
+                if (detents.count > 0) {
+                    sheet.detents = detents;
+                }
+                sheet.prefersGrabberVisible = sheetGrabber;
+            }
+        }
+
+        if (!zapp_ios_modal_observer) {
+            zapp_ios_modal_observer = [[ZappIOSModalDismissObserver alloc] init];
+        }
+        vcStrong.presentationController.delegate = zapp_ios_modal_observer;
+
+        // Push to the modal stack so the dismissal observer can
+        // route WINDOW_MODAL_DISMISSED to the right (parent, modal).
+        if (zapp_ios_modal_stack_count < ZAPP_IOS_MODAL_STACK_MAX) {
+            zapp_ios_modal_stack[zapp_ios_modal_stack_count].vc = vcStrong;
+            zapp_ios_modal_stack[zapp_ios_modal_stack_count].parent_id = parentId;
+            zapp_ios_modal_stack[zapp_ios_modal_stack_count].modal_id = modalId;
+            zapp_ios_modal_stack_count++;
+        }
+
+        [parentVC presentViewController:vcStrong animated:YES completion:nil];
+    };
+    if ([NSThread isMainThread]) run();
+    else dispatch_async(dispatch_get_main_queue(), run);
 }
 
 void darwin_window_detach_modal(void* parent_handle, void* modal_handle) {
-    (void)parent_handle; (void)modal_handle;
+    (void)parent_handle;  // iOS dismisses via the modal's presenting controller, parent is implicit
+    if (!modal_handle) return;
+    ZappIOSDeferred* modalDef = zapp_ios_find_deferred(modal_handle);
+    int32_t modalId = modalDef ? modalDef->numeric_id : -1;
+    void (^run)(void) = ^{
+        // Find the right VC in the stack by modal ID, since the modal's
+        // UIWindow.rootViewController got cleared when we presented
+        // (vcStrong is the only retainer left, held weakly in the stack).
+        UIViewController* vc = nil;
+        for (int i = zapp_ios_modal_stack_count - 1; i >= 0; i--) {
+            if (zapp_ios_modal_stack[i].modal_id == modalId) {
+                vc = zapp_ios_modal_stack[i].vc;
+                break;
+            }
+        }
+        if (vc.presentingViewController) {
+            [vc dismissViewControllerAnimated:YES completion:nil];
+        }
+    };
+    if ([NSThread isMainThread]) run();
+    else dispatch_async(dispatch_get_main_queue(), run);
 }
