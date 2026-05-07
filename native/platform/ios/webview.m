@@ -367,3 +367,14 @@ void darwin_webview_eval_all(const char* js) {
 void darwin_webview_set_drag_region(int32_t window_id, bool drag) {
     (void)window_id; (void)drag;  // no drag regions on iOS — phase 2/3
 }
+
+// G19 custom protocols — iOS stub. WKURLSchemeHandler exists on iOS
+// (WebKit framework parity with macOS) but the iOS webview module
+// doesn't yet wire up scheme registration; this is the matching no-op
+// for the router's `__protocol:respond` invoke. Phase 2 follow-up work
+// will actually plumb through a ZappCustomSchemeHandler analogous to
+// the macOS path.
+void darwin_protocol_respond(const char* request_id, const char* body_base64,
+                             const char* content_type, int32_t status) {
+    (void)request_id; (void)body_base64; (void)content_type; (void)status;
+}

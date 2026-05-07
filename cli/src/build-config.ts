@@ -161,23 +161,27 @@ export async function generateIOSBuildFile(root: string, originalBuildFile: stri
     .filter(line => !/^\/\/>\s*macos:/.test(line.trim()))
     .join("\n");
 
-  // Worker engine on iOS: ALWAYS JSC for Phase 1.
-  //
-  // txiki.js requires a per-target cmake build (the macOS-built static
-  // libs can't link into an iOS-Simulator binary — different ABI
-  // expectations). Cross-compiling txiki for iOS Simulator + iOS
-  // device is Phase 2 work. JSC is the system framework — same API on
-  // both, no JIT on iOS but otherwise identical, zero binary cost.
-  // Apps that opted into txiki on macOS get JSC on iOS until txiki
-  // cross-builds land.
-  const engineDefine = "ZAPP_WORKER_ENGINE_JSC";
+  // Worker engine selection on iOS — mirror whatever the user picked
+  // on macOS:
+  // - txiki: Phase 2 ships the cross-build for iphonesimulator +
+  //   iphoneos. FFI is disabled at txiki build time (App Store ban on
+  //   dlopen); everything else (fetch / WebSocket / Streams / SQLite)
+  //   works.
+  // - JSC: system framework on iOS. Same API as macOS, no JIT (Apple
+  //   policy), zero binary cost.
+  // - Neither: default to JSC (smallest, always available).
+  const userPickedTxiki = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_TXIKI/m.test(content);
+  const userPickedJsc = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_JSC/m.test(content);
+  const engineDefines: string[] = [];
+  if (userPickedTxiki) engineDefines.push("ZAPP_WORKER_ENGINE_TXIKI");
+  if (userPickedJsc || (!userPickedTxiki && !userPickedJsc)) engineDefines.push("ZAPP_WORKER_ENGINE_JSC");
 
   const iosOverlay = `
 // AUTO-GENERATED for iOS builds. Strips macos:-prefixed directives
 // from the user's build.zc (which zc applies based on host platform
 // rather than build target) and re-emits the iOS-appropriate set.
 //> define: apple
-//> define: ${engineDefine}
+${engineDefines.map(d => `//> define: ${d}`).join("\n")}
 `;
 
   // Write next to the user's build.zc so relative imports
@@ -215,10 +219,6 @@ export async function generatePlatformConfig(root: string, target: BuildTarget =
     // Match uncommented define directive only (not commented-out lines)
     hasTxiki = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_TXIKI/m.test(buildContent);
   } catch {}
-  // iOS forces JSC for Phase 1 — txiki.js requires per-target cmake
-  // builds we don't have yet. Skip the source + link directives even
-  // if the user's build.zc enables txiki on macOS.
-  if (isIOSTarget(target)) hasTxiki = false;
   if (hasTxiki) {
     const txikiC = path.join(nativeDir, "worker", "engines", "txiki.c");
     if (existsSync(txikiC)) sources.push(txikiC);
@@ -283,7 +283,8 @@ export async function generatePlatformConfig(root: string, target: BuildTarget =
   }
   if (hasTxiki) {
     const txikiDir = await resolveTxikiDir();
-    const txikiBuild = path.join(txikiDir, "build");
+    const { txikiBuildDirName } = await import("./native");
+    const txikiBuild = path.join(txikiDir, txikiBuildDirName(target));
     if (existsSync(path.join(txikiDir, "src", "tjs.h"))) {
       const includes = [
         `-I${shortPath(path.join(txikiDir, "src"))}`,
@@ -292,25 +293,40 @@ export async function generatePlatformConfig(root: string, target: BuildTarget =
       ].join(" ");
       content += `//> cflags: ${includes}\n`;
 
-      // Linker flags — all static libraries from txiki.js build
+      // Linker flags — all static libraries from txiki.js build. iOS
+      // builds skip libffi (-lffi) and mimalloc (-lmimalloc): FFI is
+      // banned by Apple (no dlopen) so we configured txiki with
+      // BUILD_WITH_FFI=OFF; mimalloc is disabled for size and to avoid
+      // a libsystem_malloc interceptor on iOS.
       if (existsSync(path.join(txikiBuild, "libtjs_core.a"))) {
-        const linkFlags = [
-          `-L${shortPath(txikiBuild)}`,
-          `-L${shortPath(path.join(txikiBuild, "deps", "libuv"))}`,
-          `-L${shortPath(path.join(txikiBuild, "deps", "quickjs"))}`,
-          `-L${shortPath(path.join(txikiBuild, "deps", "mbedtls", "library"))}`,
-          `-L${shortPath(path.join(txikiBuild, "deps", "mbedtls", "3rdparty", "p256-m"))}`,
-          `-L${shortPath(path.join(txikiBuild, "deps", "mbedtls", "3rdparty", "everest"))}`,
-          `-L${shortPath(path.join(txikiBuild, "deps", "libwebsockets", "lib"))}`,
-          `-L${shortPath(path.join(txikiBuild, "deps", "mimalloc"))}`,
-          `-L${shortPath(path.join(txikiBuild, "deps", "miniz"))}`,
-          `-L${shortPath(path.join(txikiBuild, "deps", "sqlite3"))}`,
-          `-L${shortPath(path.join(txikiBuild, "deps", "ada"))}`,
+        const linkLibs = [
           "-ltjs_core", "-lvmlib", "-lqjs",
-          "-luv", "-lwebsockets", "-lada", "-lminiz", "-lmimalloc", "-lsqlite3",
+          "-luv", "-lwebsockets", "-lada", "-lminiz", "-lsqlite3",
           "-lmbedtls", "-lmbedcrypto", "-lmbedx509", "-lp256m", "-leverest",
-          "-lffi",   // txiki.js FFI module
           "-lc++",   // ada (URL parser) is C++
+        ];
+        if (!isIOSTarget(target)) {
+          linkLibs.unshift("-lmimalloc");
+          linkLibs.push("-lffi");
+        }
+        const searchDirs = [
+          shortPath(txikiBuild),
+          shortPath(path.join(txikiBuild, "deps", "libuv")),
+          shortPath(path.join(txikiBuild, "deps", "quickjs")),
+          shortPath(path.join(txikiBuild, "deps", "mbedtls", "library")),
+          shortPath(path.join(txikiBuild, "deps", "mbedtls", "3rdparty", "p256-m")),
+          shortPath(path.join(txikiBuild, "deps", "mbedtls", "3rdparty", "everest")),
+          shortPath(path.join(txikiBuild, "deps", "libwebsockets", "lib")),
+          shortPath(path.join(txikiBuild, "deps", "miniz")),
+          shortPath(path.join(txikiBuild, "deps", "sqlite3")),
+          shortPath(path.join(txikiBuild, "deps", "ada")),
+        ];
+        if (!isIOSTarget(target)) {
+          searchDirs.push(shortPath(path.join(txikiBuild, "deps", "mimalloc")));
+        }
+        const linkFlags = [
+          ...searchDirs.map(d => `-L${d}`),
+          ...linkLibs,
         ].join(" ");
         content += `//> link: ${linkFlags}\n`;
       }

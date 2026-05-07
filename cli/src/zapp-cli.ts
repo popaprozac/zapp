@@ -330,9 +330,11 @@ async function runBuild(root: string) {
   const zappDir = path.join(root, ".zapp");
   const assetsFile = await generateAssetManifest(root, config.assetDir);
 
-  // 4. Build txiki.js if opted in (first time only)
+  // 4. Build txiki.js if opted in (first time only). Per-target build
+  // dirs — iOS Sim + iOS device share the macOS source tree but get
+  // their own out-of-tree static libs.
   if (workerEngine === "txiki") {
-    await ensureTxikiBuilt(nativeDir);
+    await ensureTxikiBuilt(nativeDir, target);
   }
 
   // 5. Generate build config + bootstrap (prod mode, embedded assets)

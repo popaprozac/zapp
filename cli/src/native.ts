@@ -143,22 +143,61 @@ export async function getUserProjectSources(root: string, target: BuildTarget = 
   return results;
 }
 
-// Ensure txiki.js is available and built (cmake).
-// Downloads on-demand if not found in monorepo or cache.
-export async function ensureTxikiBuilt(_nativeDir: string): Promise<string> {
+// Per-target build directory for txiki. Each platform/SDK gets its own
+// out-of-tree build dir so artifacts coexist (macOS dev + iOS Sim + iOS
+// device side by side, no rebuild churn switching targets).
+export function txikiBuildDirName(target: BuildTarget): string {
+  if (target === "ios-simulator") return "build-ios-sim";
+  if (target === "ios-device") return "build-ios-dev";
+  return "build";
+}
+
+// Ensure txiki.js is available and built (cmake) for the given target.
+// On iOS, cross-builds via the iphonesimulator / iphoneos SDK with FFI
+// disabled (App Store ban on dlopen) — see vendor/txiki.js patches.
+export async function ensureTxikiBuilt(_nativeDir: string, target: BuildTarget = detectTarget()): Promise<string> {
   const txikiDir = await resolveTxikiDir();
-  const libPath = path.join(txikiDir, "build", "libtjs_core.a");
+  const buildDir = txikiBuildDirName(target);
+  const libPath = path.join(txikiDir, buildDir, "libtjs_core.a");
 
-  if (existsSync(libPath)) return txikiDir; // already built
+  if (existsSync(libPath)) return txikiDir; // already built for this target
 
-  process.stdout.write("[zapp] building txiki.js (first time only, may take a minute)...\n");
+  const label = target === "macos" ? "macOS"
+    : target === "ios-simulator" ? "iOS Simulator (arm64)"
+    : target === "ios-device" ? "iOS device (arm64)"
+    : target;
+  process.stdout.write(`[zapp] building txiki.js for ${label} (first time only, may take a minute)...\n`);
 
-  const cmake1 = Bun.spawn(["cmake", "-B", "build", "-DCMAKE_BUILD_TYPE=Release"], {
+  const configureArgs = ["-B", buildDir, "-DCMAKE_BUILD_TYPE=Release"];
+  if (isIOSTarget(target)) {
+    const sdk = target === "ios-simulator" ? "iphonesimulator" : "iphoneos";
+    const proc = Bun.spawn(["xcrun", "--sdk", sdk, "--show-sdk-path"], { stdout: "pipe" });
+    const sdkPath = (await new Response(proc.stdout).text()).trim();
+    if (await proc.exited !== 0 || !sdkPath) {
+      throw new Error(`[zapp] failed to resolve ${sdk} SDK path via xcrun`);
+    }
+    configureArgs.push(
+      "-DCMAKE_SYSTEM_NAME=iOS",
+      "-DCMAKE_SYSTEM_PROCESSOR=arm64",
+      `-DCMAKE_OSX_SYSROOT=${sdkPath}`,
+      "-DCMAKE_OSX_ARCHITECTURES=arm64",
+      "-DCMAKE_OSX_DEPLOYMENT_TARGET=15.0",
+      "-DBUILD_WITH_FFI=OFF",
+      "-DBUILD_WITH_MIMALLOC=OFF",
+      "-DWAMR_BUILD_TARGET=AARCH64",
+      "-DWAMR_BUILD_PLATFORM=darwin",
+      "-DCMAKE_ASM_FLAGS=-DBH_PLATFORM_DARWIN",
+    );
+  }
+
+  const cmake1 = Bun.spawn(["cmake", ...configureArgs], {
     cwd: txikiDir, stdout: "inherit", stderr: "inherit",
   });
   if (await cmake1.exited !== 0) throw new Error("[zapp] txiki.js cmake configure failed");
 
-  const cmake2 = Bun.spawn(["cmake", "--build", "build", "-j4"], {
+  // Build only the static `tjs` target — we don't need the CLI executable
+  // or test fixtures (ffi-test / sqlite-test) to ship in our binary.
+  const cmake2 = Bun.spawn(["cmake", "--build", buildDir, "--target", "tjs", "-j4"], {
     cwd: txikiDir, stdout: "inherit", stderr: "inherit",
   });
   if (await cmake2.exited !== 0) throw new Error("[zapp] txiki.js cmake build failed");
