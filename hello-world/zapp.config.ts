@@ -3,6 +3,10 @@ export default {
   identifier: "com.zapp.helloworld",
   version: "0.1.0",
   deepLinkSchemes: ["helloworld"],
+  // Custom in-webview protocols (G19). The "asset" handler below
+  // serves dynamically-generated SVG thumbnails — try it from
+  // DevTools: `<img src="asset://thumb-blue">`.
+  protocols: ["asset"],
   singleInstance: true,
   // No icon configured — will use framework default (assets/zapp.icon)
   headless: {

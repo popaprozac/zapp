@@ -339,6 +339,35 @@ export interface ZappConfig {
   headless?: Record<string, string | HeadlessWorkerConfig>;
   deepLinkSchemes?: string[];  // e.g. ["myapp"] → registers myapp:// URL scheme
   /**
+   * Custom in-webview URL protocols (G19). Each scheme listed here
+   * is registered on every WKWebView's configuration so navigation
+   * / fetch requests with that scheme route to a JS handler registered
+   * via `Protocols.register("scheme", handler)` in the runtime.
+   *
+   * Use cases:
+   *  - `"asset"` for app-managed user uploads served from a DB or
+   *    encrypted store
+   *  - `"media"` for on-the-fly resized / transcoded images
+   *  - `"vault"` for content that must be decrypted before reaching
+   *    the webview
+   *
+   * **Different from `deepLinkSchemes`** — those are system-wide URL
+   * schemes registered with macOS so `myapp://open/...` from another
+   * app fires `App.on(AppEvent.OPEN_URL, ...)`. `protocols` are
+   * webview-internal: they only intercept requests inside Zapp's
+   * own WebViews.
+   *
+   * Schemes must be declared at build time (WKWebView's scheme
+   * registration is config-time only — can't be added after a
+   * webview is created).
+   *
+   * @example
+   * ```ts
+   * protocols: ["asset", "media"]
+   * ```
+   */
+  protocols?: string[];
+  /**
    * Single-instance enforcement. When `true`, only one copy of the app
    * can run at a time — Launch Services refuses second-launch attempts
    * (`open -n` / duplicated bundles). On macOS this maps to

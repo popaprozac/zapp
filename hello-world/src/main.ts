@@ -29,6 +29,7 @@ import {
   type TrayHandle,
   Clipboard,
   Shortcuts,
+  Protocols,
   Sync,
 } from "@zappdev/runtime";
 import { greet } from "./zapp";
@@ -241,6 +242,19 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
           they all update in lockstep from one source of truth, no polling.
         </p>
         <div id="counter-display" class="result">Counter: (waiting…)</div>
+      </section>
+
+      <section>
+        <h2>Custom Protocols (G19)</h2>
+        <p style="font-size: 12px; opacity: 0.7; margin: 0 0 8px 0;">
+          App-defined schemes intercepted inside the WebView. The
+          <code>asset://</code> handler below returns a generated SVG
+          thumbnail per id. Click the buttons to render them.
+        </p>
+        <div id="protocol-thumbs" style="display: flex; gap: 8px; margin-bottom: 8px;"></div>
+        <button id="btn-protocol-blue">asset://thumb-blue</button>
+        <button id="btn-protocol-pink">asset://thumb-pink</button>
+        <button id="btn-protocol-green">asset://thumb-green</button>
       </section>
 
       <section>
@@ -932,6 +946,49 @@ $("btn-external").addEventListener("click", () => {
   App.openExternal("https://zapp.dev");
   log("Opened zapp.dev in browser");
 });
+
+// --- Custom Protocols (G19) ---
+//
+// Register an `asset://` handler that returns an SVG thumbnail for
+// known ids. Click a button → set <img src="asset://thumb-X"> → the
+// webview fetches it, our handler runs, returns SVG bytes.
+
+const SWATCHES: Record<string, string> = {
+  blue: "#4a6fa5",
+  pink: "#f06292",
+  green: "#66bb6a",
+};
+
+Protocols.register("asset", (req) => {
+  // Pull the part between `asset://` and the first `?`/`#` so the
+  // cache-busting query string the demo appends doesn't end up in
+  // the id. URL semantics for `asset://thumb-blue` treat `thumb-blue`
+  // as the authority component (no path) — easier to just regex
+  // it out than to pretend it's a real RFC 3986 URL.
+  const id = (/^asset:\/\/([^?#]+)/.exec(req.url)?.[1] ?? "").replace(/^\/+/, "");
+  const swatch = id.startsWith("thumb-") ? SWATCHES[id.slice("thumb-".length)] : null;
+  if (!swatch) {
+    return { body: `not found: ${id}`, contentType: "text/plain", status: 404 };
+  }
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80">` +
+    `<rect width="80" height="80" fill="${swatch}" rx="12"/>` +
+    `<text x="50%" y="55%" text-anchor="middle" fill="white" font-size="14" ` +
+    `font-family="-apple-system, sans-serif">${id.replace("thumb-", "")}</text>` +
+    `</svg>`;
+  return { body: svg, contentType: "image/svg+xml" };
+});
+
+function renderThumb(id: string) {
+  const img = document.createElement("img");
+  img.src = `asset://${id}?t=${Date.now()}`;  // bust cache so re-clicks visibly re-fetch
+  img.style.cssText = "width: 80px; height: 80px; border-radius: 12px;";
+  $("protocol-thumbs").appendChild(img);
+  log(`<img src="asset://${id}"> appended`);
+}
+$("btn-protocol-blue").addEventListener("click", () => renderThumb("thumb-blue"));
+$("btn-protocol-pink").addEventListener("click", () => renderThumb("thumb-pink"));
+$("btn-protocol-green").addEventListener("click", () => renderThumb("thumb-green"));
 
 // --- File drop (G10) ---
 //

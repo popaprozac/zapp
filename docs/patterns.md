@@ -536,6 +536,89 @@ a future macOS change. Always fall back to a reasonable literal (the
 28 / 78 defaults above) so the CSS still works when previewed outside
 a Zapp window.
 
+## Custom in-webview protocols
+
+Apps can register their own URL schemes inside the WebView and serve
+arbitrary bytes from a JS handler — useful for app-managed assets
+(user uploads from a DB, decrypted vault content, on-the-fly resized
+images) that you don't want to write to disk just to make WebKit
+fetch them.
+
+```ts
+// zapp.config.ts
+export default defineConfig({
+  // Schemes must be declared at build time — WKWebView's scheme
+  // registration is config-time only. You can declare any number;
+  // each one stays dormant until JS calls Protocols.register.
+  protocols: ["asset", "media"],
+});
+```
+
+```ts
+import { Protocols } from "@zappdev/runtime";
+
+Protocols.register("asset", async (req) => {
+  // req.url = "asset://thumb-123" (or whatever the consumer fetched)
+  const id = new URL(req.url).pathname.slice(1);
+  const bytes = await myDb.loadAsset(id);    // your storage
+  return { body: bytes, contentType: "image/jpeg" };
+});
+
+// Anywhere in HTML / CSS / fetch:
+//   <img src="asset://thumb-123" />
+//   const r = await fetch("asset://config.json");
+```
+
+Returns: `{ body, contentType?, status? }`. Body can be `Uint8Array`
+(binary) or `string` (UTF-8 encoded). Status defaults to 200 and
+contentType to `application/octet-stream`.
+
+### Use cases
+
+- **Auth-gated images.** `asset://avatar/{user_id}` → fetch from S3
+  with the user's session token, return JPEG bytes. The webview can
+  use it as a normal `<img src>` — no `fetch`+`URL.createObjectURL`
+  dance.
+- **Encrypted vault content.** `vault://note/{id}` → decrypt on the
+  fly, return Markdown bytes.
+- **On-the-fly transcoding.** `media://video/{id}.webm` → run a
+  worker that produces a stream-friendly format from the source.
+- **Local file proxy with FS allowlist.** `local://file.png` →
+  read from disk via the FS service so the rest of the app sees a
+  uniform URL space without scattered `file://` paths.
+
+### Different from `deepLinkSchemes`
+
+- `deepLinkSchemes` registers a scheme **system-wide** with macOS so
+  `myapp://open/document/123` clicked from another app launches your
+  app and fires `App.on(AppEvent.OPEN_URL)`. Routing happens in the
+  OS.
+- `protocols` registers a scheme **inside the WebView** — Zapp
+  intercepts navigation/fetch requests for that scheme and routes
+  them to your handler. The OS doesn't see them at all.
+
+You can declare both for the same app — they don't conflict (different
+mechanisms, different scheme namespaces).
+
+### Notes
+
+- **Schemes must be declared at build time** in `zapp.config.ts`.
+  Calling `Protocols.register("foo", ...)` for a scheme not in the
+  config has no effect — WKWebView won't intercept `foo://` requests.
+- **Reserved schemes** (http / https / ws / wss / file / about /
+  zapp / etc.) are filtered or rejected at WKWebView level. Pick a
+  custom name like `asset`, `vault`, `app-asset`.
+- **Async handlers** are first-class — return a Promise. WebKit
+  doesn't time out on its side; cancellations from JS-side abort
+  (e.g. user navigating away mid-load) call `stopURLSchemeTask:`
+  and the runtime's pending entry is dropped, so a late respond
+  becomes a no-op rather than an error.
+- **Body transit**: bytes are base64-encoded for the JS→native trip.
+  For very large bodies (>10 MB) consider chunking via streams or
+  routing through a Zen-C service (lower overhead).
+- **iOS**: Same `WKURLSchemeHandler` API, ships when the iOS path
+  catches up — design transfers cleanly.
+
 ## Vibrancy / blur material (macOS)
 
 macOS apps with translucent sidebars, HUDs, and titlebars use

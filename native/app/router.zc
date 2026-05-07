@@ -51,6 +51,45 @@ fn router_handle_message(app: App*, msg: string, window_id: int) -> void {
             return;
         }
 
+        // __protocol:respond — runtime calls this from
+        // Protocols.register's handler with { id, body, contentType,
+        // status }. Route directly to the native respond function;
+        // no acknowledgement needed back to JS.
+        if parsed.method == "__protocol:respond" {
+            if parsed.has_args {
+                let id_opt = parsed.args.get_string("id");
+                let body_opt = parsed.args.get_string("body");
+                let ct_opt = parsed.args.get_string("contentType");
+                let status_opt = parsed.args.get_int("status");
+                let id_s: string = "";
+                let body_s: string = "";
+                let ct_s: string = "";
+                let status_i: int = 200;
+                if id_opt.is_some() { id_s = id_opt.unwrap(); }
+                if body_opt.is_some() { body_s = body_opt.unwrap(); }
+                if ct_opt.is_some() { ct_s = ct_opt.unwrap(); }
+                if status_opt.is_some() { status_i = status_opt.unwrap(); }
+                raw {
+                    #ifdef __APPLE__
+                    extern void darwin_protocol_respond(const char* request_id,
+                                                        const char* body_base64,
+                                                        const char* content_type,
+                                                        int32_t status);
+                    darwin_protocol_respond((const char*)id_s, (const char*)body_s,
+                                            (const char*)ct_s, (int32_t)status_i);
+                    #endif
+                }
+            }
+            // Fire-and-forget — but the runtime awaits this invoke,
+            // so send a minimal ok response. Empty-JSON literal goes
+            // through a C string to dodge Zen-C's f-string parser
+            // (curly braces are interpolation outside raw blocks).
+            let empty_obj: string = "";
+            raw { empty_obj = (char*)"{}"; }
+            dispatch_invoke_response(window_id, parsed.request_id, true, empty_obj);
+            return;
+        }
+
         // Check for __window:create
         let is_window_create: bool = false;
         is_window_create = parsed.method == "__window:create";
