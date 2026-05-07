@@ -13,6 +13,7 @@
 #import <Foundation/Foundation.h>
 #include <compression.h>
 #include <stdint.h>
+#include <libkern/OSAtomic.h>
 
 // Embedded asset struct — local mirror of the layout defined in the
 // generated zapp_assets.zc (cli/src/assets.ts). Weak externs let the
@@ -179,6 +180,59 @@ static NSString* zapp_ios_asset_root_path(void) {
 }
 @end
 
+// --- Custom protocols (G19) — iOS port of darwin's ZappCustomSchemeHandler.
+// Same shape: stash the task by request id, fire `__protocol:request` into
+// the originating window's JS, wait for the runtime's Protocols.register
+// handler to call back via `darwin_protocol_respond`. Tasks are cancellable
+// from WebKit (stopURLSchemeTask:) so a late respond becomes a no-op.
+
+extern void darwin_window_eval_js(int32_t window_id, const char* js);
+
+static NSMutableDictionary<NSString*, id<WKURLSchemeTask>>* zapp_ios_protocol_pending = nil;
+static int32_t zapp_ios_protocol_request_counter = 0;
+
+@interface ZappIOSCustomSchemeHandler : NSObject <WKURLSchemeHandler>
+@property (nonatomic, copy) NSString* schemeName;
+@end
+
+@implementation ZappIOSCustomSchemeHandler
+- (void)webView:(WKWebView*)webView startURLSchemeTask:(id<WKURLSchemeTask>)task {
+    if (!zapp_ios_protocol_pending) zapp_ios_protocol_pending = [NSMutableDictionary dictionary];
+    int32_t reqId = OSAtomicIncrement32(&zapp_ios_protocol_request_counter);
+    NSString* reqIdStr = [NSString stringWithFormat:@"p%d", reqId];
+    zapp_ios_protocol_pending[reqIdStr] = task;
+
+    NSDictionary* payload = @{
+        @"id":     reqIdStr,
+        @"scheme": self.schemeName ?: @"",
+        @"url":    [task.request.URL absoluteString] ?: @"",
+        @"method": task.request.HTTPMethod ?: @"GET",
+    };
+    NSData* j = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
+    NSString* payloadStr = j ? [[NSString alloc] initWithData:j encoding:NSUTF8StringEncoding] : @"{}";
+    NSString* escaped = [payloadStr stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+    escaped = [escaped stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
+
+    int32_t windowId = darwin_window_id_for_webview((__bridge void*)webView);
+    NSString* js = [NSString stringWithFormat:
+        @"(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+        @"if(b&&typeof b._onEvent==='function'){b._onEvent('__protocol:request','%@');}})();",
+        escaped];
+    darwin_window_eval_js(windowId, [js UTF8String]);
+}
+
+- (void)webView:(WKWebView*)webView stopURLSchemeTask:(id<WKURLSchemeTask>)task {
+    (void)webView;
+    if (!zapp_ios_protocol_pending) return;
+    for (NSString* k in [zapp_ios_protocol_pending allKeys]) {
+        if (zapp_ios_protocol_pending[k] == task) {
+            [zapp_ios_protocol_pending removeObjectForKey:k];
+            break;
+        }
+    }
+}
+@end
+
 // --- Message handler (JS → native bridge) ---
 
 @interface ZappIOSMsgHandler : NSObject <WKScriptMessageHandler>
@@ -232,6 +286,31 @@ void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first
     WKWebViewConfiguration* config = [[WKWebViewConfiguration alloc] init];
     ZappIOSAssetSchemeHandler* schemeHandler = [[ZappIOSAssetSchemeHandler alloc] init];
     [config setURLSchemeHandler:schemeHandler forURLScheme:@"zapp"];
+
+    // Custom protocols (G19) — register one ZappIOSCustomSchemeHandler per
+    // declared scheme. Mirrors the macOS path; reserved schemes are filtered
+    // out by the CLI shape check.
+    extern const char* zapp_build_custom_protocols_json(void);
+    const char* protosJsonC = zapp_build_custom_protocols_json();
+    if (protosJsonC && protosJsonC[0]) {
+        NSData* d = [[NSString stringWithUTF8String:protosJsonC]
+                       dataUsingEncoding:NSUTF8StringEncoding];
+        NSArray* schemes = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
+        if ([schemes isKindOfClass:[NSArray class]]) {
+            for (id s in schemes) {
+                if (![s isKindOfClass:[NSString class]]) continue;
+                ZappIOSCustomSchemeHandler* h = [[ZappIOSCustomSchemeHandler alloc] init];
+                h.schemeName = (NSString*)s;
+                @try {
+                    [config setURLSchemeHandler:h forURLScheme:(NSString*)s];
+                } @catch (NSException* e) {
+                    fprintf(stderr,
+                        "[zapp] custom protocol '%s' rejected by WebKit (%s) — skipping\n",
+                        [(NSString*)s UTF8String], [[e reason] UTF8String]);
+                }
+            }
+        }
+    }
 
     WKUserContentController* ucc = [[WKUserContentController alloc] init];
 
@@ -368,13 +447,41 @@ void darwin_webview_set_drag_region(int32_t window_id, bool drag) {
     (void)window_id; (void)drag;  // no drag regions on iOS — phase 2/3
 }
 
-// G19 custom protocols — iOS stub. WKURLSchemeHandler exists on iOS
-// (WebKit framework parity with macOS) but the iOS webview module
-// doesn't yet wire up scheme registration; this is the matching no-op
-// for the router's `__protocol:respond` invoke. Phase 2 follow-up work
-// will actually plumb through a ZappCustomSchemeHandler analogous to
-// the macOS path.
+// G19 custom protocols — iOS impl. Mirrors darwin's darwin_protocol_respond
+// in native/platform/darwin/webview.m. The router calls this when the
+// runtime's Protocols.register handler returns; we look up the pending
+// task by id and feed it the response. Silent no-op if WebKit cancelled
+// the task (stopURLSchemeTask: removed it from the pending map).
 void darwin_protocol_respond(const char* request_id, const char* body_base64,
                              const char* content_type, int32_t status) {
-    (void)request_id; (void)body_base64; (void)content_type; (void)status;
+    if (!request_id || !zapp_ios_protocol_pending) return;
+    NSString* reqIdStr = [NSString stringWithUTF8String:request_id];
+    id<WKURLSchemeTask> task = zapp_ios_protocol_pending[reqIdStr];
+    if (!task) return;
+    [zapp_ios_protocol_pending removeObjectForKey:reqIdStr];
+
+    NSData* body = nil;
+    if (body_base64 && body_base64[0]) {
+        body = [[NSData alloc] initWithBase64EncodedString:[NSString stringWithUTF8String:body_base64]
+                                                   options:NSDataBase64DecodingIgnoreUnknownCharacters];
+    }
+    NSString* mime = (content_type && content_type[0])
+        ? [NSString stringWithUTF8String:content_type]
+        : @"application/octet-stream";
+    int code = (status > 0) ? (int)status : 200;
+
+    NSDictionary* headers = @{ @"Content-Type": mime,
+                               @"Content-Length": [@(body.length) stringValue] };
+    NSHTTPURLResponse* response = [[NSHTTPURLResponse alloc]
+        initWithURL:task.request.URL statusCode:code HTTPVersion:@"HTTP/1.1"
+        headerFields:headers];
+
+    @try {
+        [task didReceiveResponse:response];
+        if (body) [task didReceiveData:body];
+        [task didFinish];
+    } @catch (NSException* _) {
+        // Task may have been invalidated by WebKit between our removeObjectForKey
+        // and didReceive — swallow rather than crash.
+    }
 }
