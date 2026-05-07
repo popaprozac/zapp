@@ -14,6 +14,7 @@
 #include <compression.h>
 #include <stdint.h>
 #include <libkern/OSAtomic.h>
+#include <objc/runtime.h>
 
 // Embedded asset struct — local mirror of the layout defined in the
 // generated zapp_assets.zc (cli/src/assets.ts). Weak externs let the
@@ -253,6 +254,138 @@ static int32_t zapp_ios_protocol_request_counter = 0;
 }
 @end
 
+// --- File drag-drop (G10 port) ---
+//
+// iOS uses UIDropInteraction (iPadOS-first but iPhone too with split-
+// screen / Files app). Same JS event surface as macOS:
+//   `file-drop-enter` / `file-drop-over` / `file-drop-leave` / `file-drop`
+// with `{ paths: [...], x, y }` payloads scoped to the receiving window.
+//
+// Caveat that iOS adds: the URLs returned by UIDropSession items are
+// security-scoped temp files copied into the app's container. The
+// runtime FS allowlist gets each path granted automatically (matching
+// dialog-open's behavior); apps should `FS.readFile` synchronously
+// from inside the `file-drop` handler since iOS may clean up the temp
+// copies once the drop session ends.
+
+extern void darwin_window_eval_js(int32_t window_id, const char* js);
+
+static NSString* zapp_ios_build_drop_payload(NSArray<NSString*>* paths, CGPoint p) {
+    NSDictionary* obj = paths
+        ? @{ @"paths": paths, @"x": @((int)p.x), @"y": @((int)p.y) }
+        : @{ @"x": @((int)p.x), @"y": @((int)p.y) };
+    NSData* j = [NSJSONSerialization dataWithJSONObject:obj options:0 error:nil];
+    if (!j) return @"{}";
+    NSString* s = [[NSString alloc] initWithData:j encoding:NSUTF8StringEncoding];
+    s = [s stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+    s = [s stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
+    return s;
+}
+
+@interface ZappIOSDropDelegate : NSObject <UIDropInteractionDelegate>
+@property (nonatomic, assign) NSTimeInterval lastOverTime;
+@property (nonatomic, weak) WKWebView* webview;
+@end
+
+@implementation ZappIOSDropDelegate
+
+- (void)dispatchEvent:(const char*)name payload:(NSString*)payload {
+    if (!self.webview) return;
+    int32_t windowId = darwin_window_id_for_webview((__bridge void*)self.webview);
+    NSString* js = [NSString stringWithFormat:
+        @"(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+        @"if(b&&typeof b._onEvent==='function'){b._onEvent('%s','%@');}})();",
+        name, payload];
+    darwin_window_eval_js(windowId, [js UTF8String]);
+}
+
+- (BOOL)dropInteraction:(UIDropInteraction*)interaction canHandleSession:(id<UIDropSession>)session {
+    (void)interaction;
+    return [session hasItemsConformingToTypeIdentifiers:@[@"public.file-url", @"public.url", @"public.item"]];
+}
+
+- (UIDropProposal*)dropInteraction:(UIDropInteraction*)interaction
+                  sessionDidUpdate:(id<UIDropSession>)session {
+    (void)interaction;
+    static const NSTimeInterval kOverMinInterval = 1.0 / 60.0;
+    NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+    if (now - self.lastOverTime >= kOverMinInterval && self.webview) {
+        self.lastOverTime = now;
+        CGPoint p = [session locationInView:self.webview];
+        [self dispatchEvent:"file-drop-over" payload:zapp_ios_build_drop_payload(nil, p)];
+    }
+    return [[UIDropProposal alloc] initWithDropOperation:UIDropOperationCopy];
+}
+
+- (void)dropInteraction:(UIDropInteraction*)interaction sessionDidEnter:(id<UIDropSession>)session {
+    (void)interaction;
+    if (!self.webview) return;
+    CGPoint p = [session locationInView:self.webview];
+    [self dispatchEvent:"file-drop-enter" payload:zapp_ios_build_drop_payload(nil, p)];
+}
+
+- (void)dropInteraction:(UIDropInteraction*)interaction sessionDidExit:(id<UIDropSession>)session {
+    (void)interaction;
+    if (!self.webview) return;
+    CGPoint p = [session locationInView:self.webview];
+    [self dispatchEvent:"file-drop-leave" payload:zapp_ios_build_drop_payload(nil, p)];
+}
+
+- (void)dropInteraction:(UIDropInteraction*)interaction performDrop:(id<UIDropSession>)session {
+    (void)interaction;
+    if (!self.webview) return;
+    CGPoint p = [session locationInView:self.webview];
+    NSArray<UIDragItem*>* items = session.items;
+
+    __block NSInteger pending = items.count;
+    NSMutableArray<NSString*>* paths = [NSMutableArray array];
+    void (^maybeFire)(void) = ^{
+        if (pending == 0) {
+            // Grant the FS allowlist for each path so apps can immediately
+            // read them with FS.readFile (iOS hands us security-scoped
+            // copies in the app container).
+            for (NSString* p2 in paths) {
+                extern void fs_grant_path(char*);
+                fs_grant_path((char*)[p2 UTF8String]);
+            }
+            [self dispatchEvent:"file-drop"
+                        payload:zapp_ios_build_drop_payload(paths, p)];
+        }
+    };
+
+    for (UIDragItem* item in items) {
+        [item.itemProvider loadFileRepresentationForTypeIdentifier:@"public.item"
+            completionHandler:^(NSURL* fileURL, NSError* error) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    if (fileURL && !error) {
+                        NSString* path = fileURL.path;
+                        if (path) {
+                            // iOS deletes the temp file after this callback
+                            // returns. Copy it to a stable location inside
+                            // the app's tmp dir so reads after the drop
+                            // session ends still work.
+                            NSString* dest = [NSTemporaryDirectory()
+                                stringByAppendingPathComponent:fileURL.lastPathComponent];
+                            [[NSFileManager defaultManager] removeItemAtPath:dest error:nil];
+                            NSError* copyErr = nil;
+                            [[NSFileManager defaultManager] copyItemAtPath:path toPath:dest error:&copyErr];
+                            if (!copyErr) [paths addObject:dest];
+                            else [paths addObject:path]; // best-effort
+                        }
+                    }
+                    pending--;
+                    maybeFire();
+                });
+            }];
+    }
+
+    if (items.count == 0) {
+        [self dispatchEvent:"file-drop"
+                    payload:zapp_ios_build_drop_payload(@[], p)];
+    }
+}
+@end
+
 // --- Navigation policy (allowlist + target=_blank → openExternal) ---
 //
 // Ported from native/platform/darwin/webview.m's ZappNavigationDelegate.
@@ -462,6 +595,18 @@ void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first
     // UIDelegate handles target="_blank" / window.open() — without this
     // the createWebViewWithConfiguration: callback never fires.
     webview.UIDelegate = zapp_ios_shared_nav_delegate;
+
+    // File drag-drop (G10 port). Add a UIDropInteraction to the webview
+    // — UIPasteConfiguration is a separate concept (system-paste UI),
+    // we want the inline drop-on-content flow.
+    ZappIOSDropDelegate* dropDelegate = [[ZappIOSDropDelegate alloc] init];
+    dropDelegate.webview = webview;
+    UIDropInteraction* dropInteraction = [[UIDropInteraction alloc] initWithDelegate:dropDelegate];
+    [webview addInteraction:dropInteraction];
+    // Keep a strong ref alive on the webview itself via associated object;
+    // when webview deallocs, the drop delegate goes too.
+    objc_setAssociatedObject(webview, "zapp_ios_drop_delegate",
+        dropDelegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
     NSURL* url = (url_override && url_override[0] != '\0')
         ? [NSURL URLWithString:[NSString stringWithUTF8String:url_override]]
