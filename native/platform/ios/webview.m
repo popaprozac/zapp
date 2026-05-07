@@ -253,17 +253,94 @@ static int32_t zapp_ios_protocol_request_counter = 0;
 }
 @end
 
-// --- Navigation delegate (minimal — phase 2 ports the full allowlist
-//     and target=_blank → openExternal flow) ---
+// --- Navigation policy (allowlist + target=_blank → openExternal) ---
+//
+// Ported from native/platform/darwin/webview.m's ZappNavigationDelegate.
+// Same allowlist semantics: built-in schemes + dev-mode localhost +
+// user-config patterns (suffix wildcards). Disallowed user-initiated
+// link clicks open in the system browser via `[UIApplication openURL:]`.
 
-@interface ZappIOSNavDelegate : NSObject <WKNavigationDelegate>
+static NSArray* zapp_ios_cached_allowlist = nil;
+
+static BOOL zapp_ios_is_navigation_allowed(NSURL* url) {
+    if (!url) return NO;
+    NSString* scheme = [[url scheme] lowercaseString];
+
+    if ([scheme isEqualToString:@"zapp"] || [scheme isEqualToString:@"about"] || [scheme isEqualToString:@"blob"]) {
+        return YES;
+    }
+
+    if (zapp_build_is_dev()) {
+        NSString* host = [url host];
+        if (host && ([host isEqualToString:@"localhost"] || [host isEqualToString:@"127.0.0.1"])) {
+            return YES;
+        }
+    }
+
+    if (!zapp_ios_cached_allowlist) {
+        const char* json = app_get_allowed_navigation_json();
+        if (json && json[0] != '\0') {
+            NSData* data = [[NSString stringWithUTF8String:json] dataUsingEncoding:NSUTF8StringEncoding];
+            id parsed = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+            if ([parsed isKindOfClass:[NSArray class]]) {
+                zapp_ios_cached_allowlist = parsed;
+            }
+        }
+        if (!zapp_ios_cached_allowlist) {
+            zapp_ios_cached_allowlist = @[];
+        }
+    }
+
+    NSString* urlStr = [url absoluteString];
+    for (NSString* pattern in zapp_ios_cached_allowlist) {
+        if ([pattern hasSuffix:@"*"]) {
+            NSString* prefix = [pattern substringToIndex:pattern.length - 1];
+            if ([urlStr hasPrefix:prefix]) return YES;
+        } else {
+            if ([urlStr isEqualToString:pattern]) return YES;
+        }
+    }
+
+    return NO;
+}
+
+static void zapp_ios_open_external(NSURL* url) {
+    if (!url) return;
+    [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:nil];
+}
+
+@interface ZappIOSNavDelegate : NSObject <WKNavigationDelegate, WKUIDelegate>
 @end
 
 @implementation ZappIOSNavDelegate
+
 - (void)webView:(WKWebView*)webView decidePolicyForNavigationAction:(WKNavigationAction*)action
     decisionHandler:(void (^)(WKNavigationActionPolicy))handler {
-    (void)webView; (void)action;
-    handler(WKNavigationActionPolicyAllow);
+    (void)webView;
+    NSURL* url = action.request.URL;
+
+    if (zapp_ios_is_navigation_allowed(url)) {
+        handler(WKNavigationActionPolicyAllow);
+        return;
+    }
+
+    // Blocked — if user-initiated link click, hand off to Safari.
+    if (action.navigationType == WKNavigationTypeLinkActivated) {
+        zapp_ios_open_external(url);
+    }
+    handler(WKNavigationActionPolicyCancel);
+}
+
+// target="_blank" / window.open() → open in Safari rather than spawning a
+// nested WKWebView (we don't have multi-window on iPhone, and even on iPad
+// the wedge UX is "external links go to the browser").
+- (WKWebView*)webView:(WKWebView*)webView
+    createWebViewWithConfiguration:(WKWebViewConfiguration*)config
+    forNavigationAction:(WKNavigationAction*)action
+    windowFeatures:(WKWindowFeatures*)features {
+    (void)webView; (void)config; (void)features;
+    zapp_ios_open_external(action.request.URL);
+    return nil;
 }
 @end
 
@@ -382,6 +459,9 @@ void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first
         zapp_ios_shared_nav_delegate = [[ZappIOSNavDelegate alloc] init];
     }
     webview.navigationDelegate = zapp_ios_shared_nav_delegate;
+    // UIDelegate handles target="_blank" / window.open() — without this
+    // the createWebViewWithConfiguration: callback never fires.
+    webview.UIDelegate = zapp_ios_shared_nav_delegate;
 
     NSURL* url = (url_override && url_override[0] != '\0')
         ? [NSURL URLWithString:[NSString stringWithUTF8String:url_override]]
