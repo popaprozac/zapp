@@ -92,13 +92,17 @@ static void dispatch_notif_event(NSString* js) {
     handler();
 }
 
-// Show notifications even when app is in foreground. iOS 14+ has Banner;
-// our minimum is 15.0 so we can use it unconditionally.
+// Show notifications even when app is in foreground. iOS 14+ uses
+// Banner + List (List is what puts the notification in Notification
+// Center; without it foreground deliveries vanish on dismiss). Our
+// minimum is iOS 15.0 so both are unconditional.
 - (void)userNotificationCenter:(UNUserNotificationCenter*)center
        willPresentNotification:(UNNotification*)notification
        withCompletionHandler:(void (^)(UNNotificationPresentationOptions))handler {
     (void)center; (void)notification;
-    handler(UNNotificationPresentationOptionBanner | UNNotificationPresentationOptionSound);
+    handler(UNNotificationPresentationOptionBanner
+            | UNNotificationPresentationOptionList
+            | UNNotificationPresentationOptionSound);
 }
 @end
 

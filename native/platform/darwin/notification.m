@@ -101,8 +101,13 @@ static void dispatch_notif_event(NSString* js) {
        willPresentNotification:(UNNotification*)notification
        withCompletionHandler:(void (^)(UNNotificationPresentationOptions))handler {
     (void)center; (void)notification;
+    // List ensures the notification stays in Notification Center after
+    // the foreground banner dismisses (without it, foreground deliveries
+    // vanish — same iOS bug, same fix).
     if (@available(macOS 11.0, *)) {
-        handler(UNNotificationPresentationOptionBanner | UNNotificationPresentationOptionSound);
+        handler(UNNotificationPresentationOptionBanner
+                | UNNotificationPresentationOptionList
+                | UNNotificationPresentationOptionSound);
     } else {
         handler(UNNotificationPresentationOptionAlert | UNNotificationPresentationOptionSound);
     }

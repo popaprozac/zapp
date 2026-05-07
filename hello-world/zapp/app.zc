@@ -173,20 +173,24 @@ fn run_app() -> int {
     app.menu.set(&menus[0], 3);
     log("menu set: app, File, Edit");
 
-    // Register notification category with action buttons (native-first API)
-    let reply_action = NotificationAction{ id: "reply", title: "Reply", destructive: 0 };
+    // Register notification category with action buttons (native-first
+    // API). The reply text-input action is added automatically when
+    // has_reply_field=1 — its label comes from reply_button_title.
+    // Setting that to "Reply" makes the in-notification button match
+    // user expectation. (A separate `reply_action_title` for the menu
+    // button vs. the post-typing send button is on the wishlist.)
     let delete_action = NotificationAction{ id: "delete", title: "Delete", destructive: 1 };
-    let notif_actions = [reply_action, delete_action];
+    let notif_actions = [delete_action];
     let msg_category = NotificationCategory{
         id: "message",
         actions: &notif_actions[0],
-        action_count: 2,
+        action_count: 1,
         has_reply_field: 1,
         reply_placeholder: "Type reply...",
-        reply_button_title: "Send",
+        reply_button_title: "Reply",
     };
     app.notification.register_category(&msg_category);
-    log("notification category registered: message (reply, delete, reply field)");
+    log("notification category registered: message (delete, reply field)");
 
     // Create window
     let opts = WindowOptions::create("hello-world");
