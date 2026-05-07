@@ -813,9 +813,30 @@ fn router_handle_dialog(method: string, payload: string, window_id: int, request
         #ifdef __APPLE__
         #include <TargetConditionals.h>
         if (strcmp(m, "__dialog:open") == 0) {
+            #if TARGET_OS_IPHONE
+            // iOS: UIDocumentPickerViewController is async-presentation
+            // only. dialog_open_response_cb_zc extends the FS allowlist
+            // with picked paths before resolving the invoke (matching
+            // the macOS sync flow's router_grant_paths_from_dialog).
+            typedef void (*zapp_ios_dialog_cb_t)(int32_t, int32_t, bool, const char*);
+            extern void dialog_open_response_cb_zc(int wid, int rid, bool ok, char* json);
+            extern void darwin_dialog_open_file_async(int32_t, int32_t, const char*, zapp_ios_dialog_cb_t);
+            darwin_dialog_open_file_async(window_id, request_id, (const char*)args_json,
+                (zapp_ios_dialog_cb_t)dialog_open_response_cb_zc);
+            is_ios_async = true;
+            #else
             result = (char*)darwin_dialog_open_file((const char*)args_json);
+            #endif
         } else if (strcmp(m, "__dialog:save") == 0) {
+            #if TARGET_OS_IPHONE
+            typedef void (*zapp_ios_dialog_cb_t)(int32_t, int32_t, bool, const char*);
+            extern void notif_response_cb(int32_t wid, int32_t rid, bool ok, const char* json);
+            extern void darwin_dialog_save_file_async(int32_t, int32_t, const char*, zapp_ios_dialog_cb_t);
+            darwin_dialog_save_file_async(window_id, request_id, (const char*)args_json, notif_response_cb);
+            is_ios_async = true;
+            #else
             result = (char*)darwin_dialog_save_file((const char*)args_json);
+            #endif
         } else if (strcmp(m, "__dialog:message") == 0) {
             #if TARGET_OS_IPHONE
             // iOS: UIAlertController is async-only. Fire and let the
@@ -1049,6 +1070,21 @@ raw {
     void notif_response_cb(int32_t wid, int32_t rid, bool ok, const char* json) {
         extern void dispatch_invoke_response(int32_t, int32_t, bool, char*);
         dispatch_invoke_response(wid, rid, ok, (char*)json);
+    }
+
+}
+
+// iOS dialog-open variant — extends the FS allowlist with picked paths
+// (mirroring the macOS sync call to router_grant_paths_from_dialog)
+// before resolving the invoke promise. Other dialog paths
+// (save / message) use notif_response_cb directly.
+fn dialog_open_response_cb_zc(wid: int, rid: int, ok: bool, json: string) -> void {
+    if json != "" {
+        router_grant_paths_from_dialog(json);
+    }
+    raw {
+        extern void dispatch_invoke_response(int32_t, int32_t, bool, char*);
+        dispatch_invoke_response((int32_t)wid, (int32_t)rid, (bool)ok, (char*)json);
     }
 }
 

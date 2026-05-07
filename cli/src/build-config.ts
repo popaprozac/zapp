@@ -277,6 +277,9 @@ export async function generatePlatformConfig(root: string, target: BuildTarget =
     content += `//> framework: Foundation\n`;
     content += `//> framework: WebKit\n`;
     content += `//> framework: JavaScriptCore\n`;
+    // UniformTypeIdentifiers — used by ios/dialog.m for UIDocumentPicker
+    // file-type filtering (UTType). iOS 14+ system framework.
+    content += `//> framework: UniformTypeIdentifiers\n`;
     // libcompression — used by jsc.m for embedded-asset brotli decode.
     // Available on iOS as a system library; just needs the link flag.
     content += `//> link: -lcompression\n`;
