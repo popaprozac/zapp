@@ -254,6 +254,146 @@ static int32_t zapp_ios_protocol_request_counter = 0;
 }
 @end
 
+// --- Workaround: WKWebView's drop → paste pipeline ---
+//
+// WKWebView (specifically WKContentView) installs a pasteConfiguration
+// and fulfills only half the contract — UIKit's drop-end synthesizes a
+// paste event and walks the responder chain to deliver via either:
+//   - `pasteItemProviders:` (private SPI, single-arg) — UIResponder's
+//     default throws when pasteConfiguration is non-nil but the method
+//     isn't overridden;
+//   - `paste:itemProviders:` (public, two-arg) — receives an
+//     NSArray<NSItemProvider*> with the actual drop data.
+//
+// We need both: stub the throwing one to a no-op so the app doesn't
+// crash, AND override the public one to dispatch our file-drop event
+// (since WKWebView's UIDropInteraction usually claims the session,
+// our own UIDropInteraction.performDrop: never fires — but the paste
+// fallback does).
+
+extern void darwin_window_eval_js(int32_t window_id, const char* js);
+
+// Forward decl of the iOS drop payload helper.
+static NSString* zapp_ios_build_drop_payload(NSArray<NSString*>* paths, CGPoint p);
+
+static void zapp_ios_dispatch_filedrop_from_paste(NSArray<NSItemProvider*>* providers,
+                                                  WKWebView* webview, CGPoint p) {
+    if (!webview || !providers || providers.count == 0) return;
+
+    int32_t windowId = darwin_window_id_for_webview((__bridge void*)webview);
+    if (windowId < 0) return;
+
+    NSMutableArray<NSString*>* paths = [NSMutableArray array];
+    __block NSInteger pending = providers.count;
+    void (^maybeFire)(void) = ^{
+        if (pending != 0) return;
+        // Grant the FS allowlist for each path.
+        for (NSString* path in paths) {
+            extern void fs_grant_path(char*);
+            fs_grant_path((char*)[path UTF8String]);
+        }
+        NSString* payload = zapp_ios_build_drop_payload(paths, p);
+        NSString* js = [NSString stringWithFormat:
+            @"(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+            @"if(b&&typeof b._onEvent==='function'){b._onEvent('file-drop','%@');}})();",
+            payload];
+        darwin_window_eval_js(windowId, [js UTF8String]);
+    };
+
+    for (NSItemProvider* provider in providers) {
+        NSArray<NSString*>* registered = provider.registeredTypeIdentifiers;
+        NSString* typeId = registered.firstObject ?: @"public.item";
+
+        [provider loadFileRepresentationForTypeIdentifier:typeId
+            completionHandler:^(NSURL* fileURL, NSError* error) {
+                if (fileURL && !error) {
+                    NSString* dest = [NSTemporaryDirectory()
+                        stringByAppendingPathComponent:fileURL.lastPathComponent];
+                    [[NSFileManager defaultManager] removeItemAtPath:dest error:nil];
+                    NSError* copyErr = nil;
+                    [[NSFileManager defaultManager] copyItemAtPath:fileURL.path toPath:dest error:&copyErr];
+                    NSString* finalPath = copyErr ? fileURL.path : dest;
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        if (finalPath) [paths addObject:finalPath];
+                        pending--;
+                        maybeFire();
+                    });
+                    return;
+                }
+                [provider loadDataRepresentationForTypeIdentifier:typeId
+                    completionHandler:^(NSData* data, NSError* dataError) {
+                        NSString* finalPath = nil;
+                        if (data && !dataError) {
+                            NSString* ext = @"bin";
+                            if ([typeId isEqualToString:@"public.jpeg"]) ext = @"jpg";
+                            else if ([typeId isEqualToString:@"public.png"]) ext = @"png";
+                            else if ([typeId isEqualToString:@"public.heic"]) ext = @"heic";
+                            else if ([typeId isEqualToString:@"public.tiff"]) ext = @"tiff";
+                            else if ([typeId isEqualToString:@"public.gif"]) ext = @"gif";
+                            else if ([typeId hasPrefix:@"public.image"]) ext = @"png";
+                            else if ([typeId isEqualToString:@"public.text"]) ext = @"txt";
+                            else if ([typeId isEqualToString:@"public.html"]) ext = @"html";
+                            else if ([typeId isEqualToString:@"public.pdf"]) ext = @"pdf";
+                            NSString* basename = provider.suggestedName ?:
+                                [NSString stringWithFormat:@"drop-%lu",
+                                    (unsigned long)[NSDate timeIntervalSinceReferenceDate]];
+                            if (![[basename pathExtension] length]) {
+                                basename = [basename stringByAppendingPathExtension:ext];
+                            }
+                            NSString* dest = [NSTemporaryDirectory() stringByAppendingPathComponent:basename];
+                            [[NSFileManager defaultManager] removeItemAtPath:dest error:nil];
+                            if ([data writeToFile:dest atomically:YES]) {
+                                finalPath = dest;
+                            }
+                        }
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            if (finalPath) [paths addObject:finalPath];
+                            pending--;
+                            maybeFire();
+                        });
+                    }];
+            }];
+    }
+}
+
+// Strong ref to the most-recent webview so the swizzled paste handler
+// (which fires on a generic responder, not on the webview directly) can
+// route file-drop events to the right window. Multi-window iOS (iPad
+// scenes) would need per-scene tracking; not a v1 concern.
+static WKWebView* zapp_ios_drop_webview = nil;
+
+@interface ZappIOSPasteFix : NSObject
+@end
+@implementation ZappIOSPasteFix
++ (void)load {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        // -[UIResponder pasteItemProviders:] is the UIPasteConfiguration-
+        // Supporting protocol method: it RECEIVES the dropped/pasted
+        // NSItemProviders. UIResponder's default impl throws when
+        // pasteConfiguration is non-nil but the method isn't overridden
+        // — and WKContentView (WebKit) sets pasteConfiguration without
+        // a working override. We replace it on UIResponder with a
+        // dispatcher that fires our `file-drop` bridge event when the
+        // drop arrives via this path (which is what happens when
+        // WKContentView wins the drop session over our own
+        // UIDropInteraction). Returns void per the protocol.
+        IMP receiveImp = imp_implementationWithBlock(
+            ^void(id self_, NSArray<NSItemProvider*>* providers) {
+                (void)self_;
+                if (zapp_ios_drop_webview && providers.count > 0) {
+                    zapp_ios_dispatch_filedrop_from_paste(providers,
+                                                          zapp_ios_drop_webview,
+                                                          CGPointMake(0, 0));
+                }
+            });
+        class_replaceMethod([UIResponder class],
+                            NSSelectorFromString(@"pasteItemProviders:"),
+                            receiveImp, "v@:@");
+    });
+}
+@end
+
 // --- File drag-drop (G10 port) ---
 //
 // iOS uses UIDropInteraction (iPadOS-first but iPhone too with split-
@@ -301,7 +441,11 @@ static NSString* zapp_ios_build_drop_payload(NSArray<NSString*>* paths, CGPoint 
 
 - (BOOL)dropInteraction:(UIDropInteraction*)interaction canHandleSession:(id<UIDropSession>)session {
     (void)interaction;
-    return [session hasItemsConformingToTypeIdentifiers:@[@"public.file-url", @"public.url", @"public.item"]];
+    // Be permissive — accept anything the system says is a droppable
+    // item. Photos drags are PHAsset-backed and can be flaky with
+    // narrower UTI checks. We only need at least one item to bother
+    // dispatching.
+    return session.items.count > 0;
 }
 
 - (UIDropProposal*)dropInteraction:(UIDropInteraction*)interaction
@@ -354,28 +498,74 @@ static NSString* zapp_ios_build_drop_payload(NSArray<NSString*>* paths, CGPoint 
     };
 
     for (UIDragItem* item in items) {
-        [item.itemProvider loadFileRepresentationForTypeIdentifier:@"public.item"
+        NSItemProvider* provider = item.itemProvider;
+        // Pick the first registered type identifier that looks loadable.
+        // Photos items typically register public.jpeg / public.image;
+        // Files items register public.item or specific UTIs like
+        // public.png. We only really care about getting bytes — try the
+        // most-specific registered type rather than a generic.
+        NSArray<NSString*>* registered = provider.registeredTypeIdentifiers;
+        NSString* typeId = registered.firstObject ?: @"public.item";
+
+        // Try loadFileRepresentation first (works for items already on
+        // disk like Files-app drags). If that fails, fall back to
+        // loadDataRepresentation (works for in-memory items like
+        // Photos).
+        [provider loadFileRepresentationForTypeIdentifier:typeId
             completionHandler:^(NSURL* fileURL, NSError* error) {
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    if (fileURL && !error) {
-                        NSString* path = fileURL.path;
-                        if (path) {
-                            // iOS deletes the temp file after this callback
-                            // returns. Copy it to a stable location inside
-                            // the app's tmp dir so reads after the drop
-                            // session ends still work.
-                            NSString* dest = [NSTemporaryDirectory()
-                                stringByAppendingPathComponent:fileURL.lastPathComponent];
+                if (fileURL && !error) {
+                    NSString* dest = [NSTemporaryDirectory()
+                        stringByAppendingPathComponent:fileURL.lastPathComponent];
+                    [[NSFileManager defaultManager] removeItemAtPath:dest error:nil];
+                    NSError* copyErr = nil;
+                    [[NSFileManager defaultManager] copyItemAtPath:fileURL.path toPath:dest error:&copyErr];
+                    NSString* finalPath = copyErr ? fileURL.path : dest;
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        if (finalPath) [paths addObject:finalPath];
+                        pending--;
+                        maybeFire();
+                    });
+                    return;
+                }
+
+                // File-rep failed — try data-rep. Photos PHAsset drags
+                // hit this path. Write the data to NSTemporaryDirectory
+                // with a guessed extension based on the UTI.
+                [provider loadDataRepresentationForTypeIdentifier:typeId
+                    completionHandler:^(NSData* data, NSError* dataError) {
+                        NSString* finalPath = nil;
+                        if (data && !dataError) {
+                            // Map common image/data UTIs → extensions.
+                            NSString* ext = @"bin";
+                            if ([typeId isEqualToString:@"public.jpeg"]) ext = @"jpg";
+                            else if ([typeId isEqualToString:@"public.png"]) ext = @"png";
+                            else if ([typeId isEqualToString:@"public.heic"]) ext = @"heic";
+                            else if ([typeId isEqualToString:@"public.tiff"]) ext = @"tiff";
+                            else if ([typeId isEqualToString:@"public.gif"]) ext = @"gif";
+                            else if ([typeId hasPrefix:@"public.image"]) ext = @"png";
+                            else if ([typeId isEqualToString:@"public.text"]) ext = @"txt";
+                            else if ([typeId isEqualToString:@"public.html"]) ext = @"html";
+                            else if ([typeId isEqualToString:@"public.pdf"]) ext = @"pdf";
+
+                            NSString* basename = provider.suggestedName ?:
+                                [NSString stringWithFormat:@"drop-%lu", (unsigned long)[NSDate timeIntervalSinceReferenceDate]];
+                            // Append the extension only if the suggested
+                            // name doesn't already carry one.
+                            if (![[basename pathExtension] length]) {
+                                basename = [basename stringByAppendingPathExtension:ext];
+                            }
+                            NSString* dest = [NSTemporaryDirectory() stringByAppendingPathComponent:basename];
                             [[NSFileManager defaultManager] removeItemAtPath:dest error:nil];
-                            NSError* copyErr = nil;
-                            [[NSFileManager defaultManager] copyItemAtPath:path toPath:dest error:&copyErr];
-                            if (!copyErr) [paths addObject:dest];
-                            else [paths addObject:path]; // best-effort
+                            if ([data writeToFile:dest atomically:YES]) {
+                                finalPath = dest;
+                            }
                         }
-                    }
-                    pending--;
-                    maybeFire();
-                });
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            if (finalPath) [paths addObject:finalPath];
+                            pending--;
+                            maybeFire();
+                        });
+                    }];
             }];
     }
 
@@ -596,18 +786,6 @@ void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first
     // the createWebViewWithConfiguration: callback never fires.
     webview.UIDelegate = zapp_ios_shared_nav_delegate;
 
-    // File drag-drop (G10 port). Add a UIDropInteraction to the webview
-    // — UIPasteConfiguration is a separate concept (system-paste UI),
-    // we want the inline drop-on-content flow.
-    ZappIOSDropDelegate* dropDelegate = [[ZappIOSDropDelegate alloc] init];
-    dropDelegate.webview = webview;
-    UIDropInteraction* dropInteraction = [[UIDropInteraction alloc] initWithDelegate:dropDelegate];
-    [webview addInteraction:dropInteraction];
-    // Keep a strong ref alive on the webview itself via associated object;
-    // when webview deallocs, the drop delegate goes too.
-    objc_setAssociatedObject(webview, "zapp_ios_drop_delegate",
-        dropDelegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-
     NSURL* url = (url_override && url_override[0] != '\0')
         ? [NSURL URLWithString:[NSString stringWithUTF8String:url_override]]
         : zapp_ios_initial_url();
@@ -626,6 +804,50 @@ void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first
     }
     root.view.frame = initialFrame;
     [root.view addSubview:webview];
+
+    // File drag-drop (G10 port). WKWebView ships internal
+    // UIDropInteractions on WKContentView (private subview) that claim
+    // drag sessions via hit-test before parent-view interactions can.
+    // canHandleSession on our delegate fires (iOS asks every registered
+    // interaction up the chain), but sessionDidEnter goes to whoever
+    // wins hit-test — and WKContentView wins. Walk the subview tree
+    // and remove any UIDropInteractions WebKit installed; then add
+    // our own to the WKWebView so we own the drop session.
+    void (^scrubDrops)(UIView*) = ^void(UIView* v) {
+        for (id<UIInteraction> ix in [v.interactions copy]) {
+            if ([ix isKindOfClass:[UIDropInteraction class]]) {
+                [v removeInteraction:ix];
+            }
+        }
+    };
+    // Recursive walk via a self-referencing block.
+    __block __weak void (^walkRef)(UIView*) = nil;
+    void (^walk)(UIView*) = ^void(UIView* v) {
+        scrubDrops(v);
+        for (UIView* sub in v.subviews) walkRef(sub);
+    };
+    walkRef = walk;
+
+    // Track this webview as the active drop target. Single-window
+    // iPhone makes this trivially correct; iPad multi-scene wedge work
+    // can revisit if/when secondary scenes open with their own webview.
+    zapp_ios_drop_webview = webview;
+
+    ZappIOSDropDelegate* dropDelegate = [[ZappIOSDropDelegate alloc] init];
+    dropDelegate.webview = webview;
+    UIDropInteraction* dropInteraction = [[UIDropInteraction alloc] initWithDelegate:dropDelegate];
+    [webview addInteraction:dropInteraction];
+    objc_setAssociatedObject(webview, "zapp_ios_drop_delegate",
+        dropDelegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    // WebKit re-installs UIDropInteractions on WKContentView during
+    // layout. Scrub once now and again on next runloop tick (and a
+    // third time after a short delay) to catch the late-arriving
+    // ones. Repeated scrubs are cheap (no-op when already removed).
+    walk(webview);
+    dispatch_async(dispatch_get_main_queue(), ^{ walk(webview); });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 500 * NSEC_PER_MSEC),
+        dispatch_get_main_queue(), ^{ walk(webview); });
 
     // Stash for later lookups (window.m's dispatch table).
     extern void zapp_ios_register_webview(void* window_ptr, void* webview_ptr);
