@@ -86,36 +86,53 @@ Real integration into Zapp:
 7. ⏳ Port hello-world's supervisor + ticker workers to Bare.
 8. ⏳ Decide replace-vs-coexist with JSC native + txiki.
 
-## Open issue: zc + multiple `//> link:` directives
+## Open issue: zc + multi-engine link plumbing
 
 Enabling `ZAPP_WORKER_ENGINE_BARE_JSC` alongside `ZAPP_WORKER_ENGINE_TXIKI`
-in the same `zapp/build.zc` produces:
-```
-ld: Undefined symbols: _bare_setup, _bare_load, _bare_run, _bare_terminate,
-                       _js_create_function, _js_create_platform, ...
-```
-even though `libbare.a` and `libjs.a` are emitted to disk and the
-generated `.zapp/zapp_platform.zc` contains a `//> link: <abs paths>`
-directive pointing at them.
+in the same `zapp/build.zc` produces undefined-symbol errors at link
+time even though `libbare.a` / `libjs.a` are emitted on disk and the
+generated `.zapp/zapp_platform.zc` references them with the exact paths.
 
-The CLI tries two strategies (both fail):
-- Two separate `//> link:` directives (one per engine pair) — second
-  silently dropped.
-- Merging Bare's flags onto the txiki link line — surfaces missing
-  txiki/QuickJS symbols (`_JS_Eval` etc.) that were resolving cleanly
-  before the merge, suggesting zc reorders flags in a way that
-  breaks `-L .. -lqjs` resolution.
+### Strategies tried (all fail in different ways)
 
-Next-session investigation:
-- Read zc's directive-handling source to confirm whether it concatenates
-  `link:` directives or replaces.
-- Consider using `--start-group / --end-group` to make linker order
-  insensitive to .a appearance order.
-- Or split into a single `//> macos: link:` directive emitted by
-  build-config.ts that owns ALL static-lib paths from every enabled
-  engine (no `-l` flags, only absolute paths).
+| Shape | Outcome |
+|---|---|
+| Two `//> link:` directives — one per engine | Only first honored; bare symbols missing |
+| One `//> link:` per absolute static-lib path | clang tries to **compile** `libbare.a` as source ("expected identifier or '('"); paths from `link:` flow into compile invocations |
+| `//> lib:` directives for `-L` + one `//> link:` per `-l` | Multiple `link:` directives still don't accumulate; some libs missing |
+| Single consolidated `//> link: -L...all... -l...all...`  (one big line) | Seems correct in `.zapp/zapp_platform.zc` (879 chars) but linker still misses both txiki QuickJS symbols and Bare uv symbols |
 
-Build / run instructions to reproduce:
+The Zen-C 0.4.x docs (tour 12.5 Build Directives) document `//> lib:`
+for `-L`, `//> include:` for `-I`, and `//> link:` for `-l<name>` /
+`path/to/lib.a`. zc v0.4.3 (installed) appears to either:
+- Not implement `lib:` / `include:` directives yet (silently ignore)
+- Or process `link:` directives in a way that mangles -L/-l ordering
+  on multi-engine consolidation
+
+### Working baseline before the spike
+
+Single engine (txiki alone, the way the framework shipped before this
+spike) emits one `//> link: -L<txiki dirs> -l<txiki libs>` and links
+fine. Adding any Bare directives (in any documented shape) breaks the
+link, including paths that aren't logically related to the original
+working directives.
+
+### Next-session investigation
+
+1. **Read zc's directive parser** (probably `zc-source-tree/src/build_directives.{c,zc}`):
+   - Does `link:` accumulate or replace?
+   - Are `lib:` / `include:` parsed in v0.4.3?
+   - Is there a fixed-size buffer that truncates long directives?
+2. **Try `-Wl,-force_load,<abs path>`** in cflags as a workaround —
+   force-load is unconditional and bypasses search-path resolution.
+3. **Or use `@cfg(ZAPP_WORKER_ENGINE_BARE_JSC)` import paths** that
+   pull in the static libs via zc's `import` mechanism rather than
+   directives.
+4. **File a zc issue** with a minimal repro (two `//> link:` lines
+   in one file, second is dropped).
+
+### Build / run instructions to reproduce
+
 ```bash
 # uncomment the line in hello-world/zapp/build.zc:
 # //> macos: define: ZAPP_WORKER_ENGINE_BARE_JSC
@@ -132,4 +149,7 @@ cmake -B build-macos-jsc \
   -DBARE_PREBUILDS=OFF
 cmake --build build-macos-jsc --target bare_static -j4
 ls -la build-macos-jsc/libbare.a   # ~700 KB
+ls -la build-macos-jsc/_deps/github+holepunchto+libjsc-build/libjs.a
+ls -la build-macos-jsc/_deps/github+libuv+libuv-build/libuv.a
+ls -la build-macos-jsc/_deps/github+holepunchto+libutf-build/libutf.a
 ```

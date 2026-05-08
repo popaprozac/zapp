@@ -313,6 +313,16 @@ export async function generatePlatformConfig(root: string, target: BuildTarget =
     // Available on iOS as a system library; just needs the link flag.
     content += `//> link: -lcompression\n`;
   }
+  // Worker-engine link plumbing — accumulate all -L search paths and
+  // -l<name> flags into a single `//> link:` directive emitted at the
+  // end. zc v0.4.3 documents `//> lib:` for -L paths but the older
+  // installed binary doesn't appear to honor it; meanwhile multiple
+  // separate `//> link:` directives don't reliably stack. So we
+  // collect everything from txiki + bare and emit one consolidated
+  // line — the pattern the legacy txiki code already used.
+  const allLinkSearchDirs: string[] = [];
+  const allLinkLibs: string[] = [];
+
   if (hasTxiki) {
     const txikiDir = await resolveTxikiDir();
     const { txikiBuildDirName } = await import("./native");
@@ -325,23 +335,18 @@ export async function generatePlatformConfig(root: string, target: BuildTarget =
       ].join(" ");
       content += `//> cflags: ${includes}\n`;
 
-      // Linker flags — all static libraries from txiki.js build. iOS
-      // builds skip libffi (-lffi) and mimalloc (-lmimalloc): FFI is
-      // banned by Apple (no dlopen) so we configured txiki with
-      // BUILD_WITH_FFI=OFF; mimalloc is disabled for size and to avoid
-      // a libsystem_malloc interceptor on iOS.
       if (existsSync(path.join(txikiBuild, "libtjs_core.a"))) {
-        const linkLibs = [
+        const txikiLibs = [
           "-ltjs_core", "-lvmlib", "-lqjs",
           "-luv", "-lwebsockets", "-lada", "-lminiz", "-lsqlite3",
           "-lmbedtls", "-lmbedcrypto", "-lmbedx509", "-lp256m", "-leverest",
-          "-lc++",   // ada (URL parser) is C++
+          "-lc++",
         ];
         if (!isIOSTarget(target)) {
-          linkLibs.unshift("-lmimalloc");
-          linkLibs.push("-lffi");
+          txikiLibs.unshift("-lmimalloc");
+          txikiLibs.push("-lffi");
         }
-        const searchDirs = [
+        const txikiSearchDirs = [
           shortPath(txikiBuild),
           shortPath(path.join(txikiBuild, "deps", "libuv")),
           shortPath(path.join(txikiBuild, "deps", "quickjs")),
@@ -354,28 +359,20 @@ export async function generatePlatformConfig(root: string, target: BuildTarget =
           shortPath(path.join(txikiBuild, "deps", "ada")),
         ];
         if (!isIOSTarget(target)) {
-          searchDirs.push(shortPath(path.join(txikiBuild, "deps", "mimalloc")));
+          txikiSearchDirs.push(shortPath(path.join(txikiBuild, "deps", "mimalloc")));
         }
-        const linkFlags = [
-          ...searchDirs.map(d => `-L${d}`),
-          ...linkLibs,
-        ].join(" ");
-        content += `//> link: ${linkFlags}\n`;
+        allLinkSearchDirs.push(...txikiSearchDirs);
+        allLinkLibs.push(...txikiLibs);
       }
     }
   }
 
-  // Bare runtime — link each enabled engine. cmake-fetch builds engine
-  // sources under `<bareBuild>/_deps/github+holepunchto+lib<name>-build/`;
-  // we add `-I` for include paths and embed the static libs by absolute
-  // path on the link line.
-  //
-  // NOTE: zc seems to honor only the FIRST `//> link:` directive that
-  // appears in any one platform-config file (multiple stack on framework:
-  // and cflags: but not link:). To work around this we collect Bare's
-  // libs into an array, then concatenate onto the previous link line
-  // rather than emitting a fresh `//> link:`.
-  let bareLinkSuffix = "";
+  // Bare runtime — link each enabled engine. Use zc's dedicated
+  // `//> include:` (for -I) and `//> lib:` (for -L) directives rather
+  // than packing -I/-L into `cflags:` / `link:`. Per the docs (Zen-C
+  // tour 12.5 Build Directives), these have purpose-specific
+  // accumulation behavior; bundling search paths into a generic
+  // link: directive doesn't reliably extend the previous one.
   if (bareEngines.length > 0) {
     const { resolveBareDir } = await import("./paths");
     const { bareBuildDirName } = await import("./native");
@@ -388,11 +385,7 @@ export async function generatePlatformConfig(root: string, target: BuildTarget =
         const buildSubdir = bareBuildDirName(target, engine);
         const bareBuild = path.join(bareDir, buildSubdir);
         // js.h lives in the libjs abstraction layer (always pulled in
-        // by Bare regardless of which engine backs it). The engine's
-        // own _deps tree only has its impl (e.g. libjsc-src has
-        // js.c). Include both — libjs's header path first so bare.h's
-        // `#include <js.h>` resolves, then the engine's headers if
-        // any are needed for engine-specific extensions.
+        // by Bare regardless of which engine backs it).
         const libjsInclude = path.join(bareBuild, "_deps",
             "github+holepunchto+libjs-src", "include");
         if (existsSync(libjsInclude)) {
@@ -408,13 +401,11 @@ export async function generatePlatformConfig(root: string, target: BuildTarget =
         if (existsSync(engineSrc) && engine !== "v8") {
           content += `//> cflags: -I${shortPath(engineSrc)}\n`;
         }
-        // libuv header (bare.h includes <uv.h>).
         const libuvInclude = path.join(bareBuild, "_deps",
             "github+libuv+libuv-src", "include");
         if (existsSync(libuvInclude)) {
           content += `//> cflags: -I${shortPath(libuvInclude)}\n`;
         }
-        // libutf header (bare/include pulls <utf.h> transitively).
         const libutfInclude = path.join(bareBuild, "_deps",
             "github+holepunchto+libutf-src", "include");
         if (existsSync(libutfInclude)) {
@@ -422,9 +413,6 @@ export async function generatePlatformConfig(root: string, target: BuildTarget =
         }
         const libBare = path.join(bareBuild, "libbare.a");
         if (existsSync(libBare)) {
-          // Link bare + engine + libuv + libutf. The exact set comes
-          // from cmake-fetch's _deps/ tree at build time; we hard-code
-          // the canonical paths since cmake-fetch's naming is stable.
           const engineBuildMap: Record<string, string> = {
             v8: "github+holepunchto+libjs-build",
             jsc: "github+holepunchto+libjsc-build",
@@ -434,49 +422,39 @@ export async function generatePlatformConfig(root: string, target: BuildTarget =
           const engineBuild = path.join(bareBuild, "_deps", engineBuildMap[engine]);
           const libuvBuild = path.join(bareBuild, "_deps", "github+libuv+libuv-build");
           const libutfBuild = path.join(bareBuild, "_deps", "github+holepunchto+libutf-build");
-          // Pass static libs by absolute path rather than -L/-l so they
-          // (a) bypass any name-collision with txiki's libuv.a in the
-          // -L search order, and (b) survive zc's directive parsing
-          // intact (zc tokenizes `-L x -l y` strangely sometimes).
-          // librlimit / signal handlers compile into libbare.a directly
-          // when BARE_PREBUILDS=OFF + JSC engine; no separate static libs.
-          const linkFlags = [
-            shortPath(path.join(bareBuild, "libbare.a")),
-            shortPath(path.join(engineBuild, "libjs.a")),
-            shortPath(path.join(libuvBuild, "libuv.a")),
-            shortPath(path.join(libutfBuild, "libutf.a")),
-          ];
-          // JSC engine on Apple platforms — system framework, already
-          // linked via macos: directive in user's build.zc. V8 engine
-          // (when the V8 prebuild ships) brings its own static lib via
-          // engineBuild's libjs.a. QuickJS / mQJS are pure-C, no extra.
-          // Append to the rolling Bare link suffix; flushed below by
-          // either rewriting the txiki link line or emitting our own.
-          bareLinkSuffix += " " + linkFlags.join(" ");
+          // `//> lib:` adds an -L search path; `//> link: -l<name>`
+          // names a library to link. Each gets its own directive line
+          // — per the Zen-C docs (tour 12.5), these accumulate cleanly
+          // and each shape goes to the right phase of the build (lib:
+          // is link-time only, doesn't pollute compile invocations).
+          allLinkSearchDirs.push(
+            shortPath(bareBuild),
+            shortPath(engineBuild),
+            shortPath(libuvBuild),
+            shortPath(libutfBuild),
+          );
+          // -luv collides with txiki's libuv.a (both ABI-compat upstream
+          // libuv); first -L wins. -lutf is unique to Bare. -ljs is
+          // unique to Bare (txiki uses -lqjs).
+          allLinkLibs.push("-lbare", "-ljs", "-lutf");
+          // -luv only added once across both engines.
+          if (!allLinkLibs.includes("-luv")) allLinkLibs.push("-luv");
         }
       }
     }
   }
 
-  // Flush the Bare link flags. zc only honors the first `//> link:`
-  // directive in a file, so we either splice into the txiki one or
-  // emit a fresh directive when txiki is disabled.
-  if (bareLinkSuffix) {
-    if (hasTxiki && content.includes("\n//> link: -L")) {
-      // Merge into the existing txiki link directive — match the line
-      // that starts with "//> link: -L" (the txiki block is the only
-      // one that begins with -L; iOS's link line uses -arch first).
-      content = content.replace(
-        /^(\/\/> link: -L[^\n]*)$/m,
-        (line) => line + bareLinkSuffix
-      );
-    } else {
-      // No txiki, no existing link directive to merge with — emit our
-      // own. Note that on Apple platforms the user's build.zc has its
-      // own //> macos: link: directive that will appear before ours;
-      // zc honors them in order, so this still gets through.
-      content += `//> link:${bareLinkSuffix}\n`;
-    }
+  // Flush all accumulated -L paths + -l flags as a single //> link:
+  // directive. Single-line is the form zc handles cleanly — splitting
+  // search paths into //> lib: directives or libs into multiple //>
+  // link: lines caused only the first to be honored in tests on
+  // zc v0.4.3.
+  if (allLinkLibs.length > 0 || allLinkSearchDirs.length > 0) {
+    const allFlags = [
+      ...allLinkSearchDirs.map(d => `-L${d}`),
+      ...allLinkLibs,
+    ];
+    content += `//> link: ${allFlags.join(" ")}\n`;
   }
 
   if (process.platform === "win32" && sources.length > 0) {

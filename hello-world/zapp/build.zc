@@ -9,11 +9,11 @@
 // difference for JSC-only on Apple — JSC is a system framework).
 //> macos: define: ZAPP_WORKER_ENGINE_TXIKI
 //> macos: define: ZAPP_WORKER_ENGINE_JSC
-// Bare runtime (spike) — opt in by uncommenting the line below. The
-// Bare engine builds clean (vendor/bare/build-macos-jsc/libbare.a)
-// but linking it alongside txiki currently runs into a zc link-
-// directive issue — needs a follow-up before this is enabled by
-// default. See spike/bare/README.md for the next-session pickup.
+// Bare runtime (spike) — opt in by uncommenting. Bare itself builds
+// clean (libbare.a + libjs.a) and bare.c compiles + headers resolve.
+// Final link is currently failing — zc's directive merging across
+// multiple engines isn't behaving as the docs suggest. See
+// spike/bare/README.md for the next-session pickup.
 // //> macos: define: ZAPP_WORKER_ENGINE_BARE_JSC
 
 //> macos: framework: Cocoa
