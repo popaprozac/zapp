@@ -82,7 +82,14 @@ bun run package   # .app bundle with icon (macOS)
 
 No global install needed — `bunx` fetches the CLI on the fly for init, and `bun run` uses the local copy in your project's `node_modules`.
 
-iOS build (requires Xcode + booted Simulator):
+iOS dev mode (requires Xcode + booted Simulator):
+```bash
+xcrun simctl boot "iPhone 17 Pro"   # or any device from `simctl list devices available`
+bun run dev --platform ios
+```
+Vite + your app on the sim, with stdout/stderr streamed to the dev terminal — same loop as desktop dev, just routed through `simctl launch --console-pty`. Edit a `.ts` file → Vite HMR refreshes the webview; edit a `.zc` / `.m` file → re-run `bun run dev --platform ios` to recompile + reinstall.
+
+iOS prod build:
 ```bash
 bun run build --platform ios
 xcrun simctl install booted bin/ios/<name>.app
