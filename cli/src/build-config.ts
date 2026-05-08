@@ -367,7 +367,15 @@ export async function generatePlatformConfig(root: string, target: BuildTarget =
 
   // Bare runtime — link each enabled engine. cmake-fetch builds engine
   // sources under `<bareBuild>/_deps/github+holepunchto+lib<name>-build/`;
-  // we add `-I` for include paths and `-L`/`-l` for static libs.
+  // we add `-I` for include paths and embed the static libs by absolute
+  // path on the link line.
+  //
+  // NOTE: zc seems to honor only the FIRST `//> link:` directive that
+  // appears in any one platform-config file (multiple stack on framework:
+  // and cflags: but not link:). To work around this we collect Bare's
+  // libs into an array, then concatenate onto the previous link line
+  // rather than emitting a fresh `//> link:`.
+  let bareLinkSuffix = "";
   if (bareEngines.length > 0) {
     const { resolveBareDir } = await import("./paths");
     const { bareBuildDirName } = await import("./native");
@@ -379,9 +387,17 @@ export async function generatePlatformConfig(root: string, target: BuildTarget =
       for (const engine of bareEngines) {
         const buildSubdir = bareBuildDirName(target, engine);
         const bareBuild = path.join(bareDir, buildSubdir);
-        // libjs.h lives in the engine's source tree; cmake-fetch
-        // checks it out under _deps/. Folder name encodes the GitHub
-        // org+repo+name format cmake-fetch uses.
+        // js.h lives in the libjs abstraction layer (always pulled in
+        // by Bare regardless of which engine backs it). The engine's
+        // own _deps tree only has its impl (e.g. libjsc-src has
+        // js.c). Include both — libjs's header path first so bare.h's
+        // `#include <js.h>` resolves, then the engine's headers if
+        // any are needed for engine-specific extensions.
+        const libjsInclude = path.join(bareBuild, "_deps",
+            "github+holepunchto+libjs-src", "include");
+        if (existsSync(libjsInclude)) {
+          content += `//> cflags: -I${shortPath(libjsInclude)}\n`;
+        }
         const engineSrcMap: Record<string, string> = {
           v8: "github+holepunchto+libjs-src",
           jsc: "github+holepunchto+libjsc-src",
@@ -389,8 +405,20 @@ export async function generatePlatformConfig(root: string, target: BuildTarget =
           mqjs: "github+holepunchto+libmqjs-src",
         };
         const engineSrc = path.join(bareBuild, "_deps", engineSrcMap[engine], "include");
-        if (existsSync(engineSrc)) {
+        if (existsSync(engineSrc) && engine !== "v8") {
           content += `//> cflags: -I${shortPath(engineSrc)}\n`;
+        }
+        // libuv header (bare.h includes <uv.h>).
+        const libuvInclude = path.join(bareBuild, "_deps",
+            "github+libuv+libuv-src", "include");
+        if (existsSync(libuvInclude)) {
+          content += `//> cflags: -I${shortPath(libuvInclude)}\n`;
+        }
+        // libutf header (bare/include pulls <utf.h> transitively).
+        const libutfInclude = path.join(bareBuild, "_deps",
+            "github+holepunchto+libutf-src", "include");
+        if (existsSync(libutfInclude)) {
+          content += `//> cflags: -I${shortPath(libutfInclude)}\n`;
         }
         const libBare = path.join(bareBuild, "libbare.a");
         if (existsSync(libBare)) {
@@ -406,21 +434,48 @@ export async function generatePlatformConfig(root: string, target: BuildTarget =
           const engineBuild = path.join(bareBuild, "_deps", engineBuildMap[engine]);
           const libuvBuild = path.join(bareBuild, "_deps", "github+libuv+libuv-build");
           const libutfBuild = path.join(bareBuild, "_deps", "github+holepunchto+libutf-build");
-          const librlimitBuild = path.join(bareBuild, "_deps", "github+holepunchto+librlimit-build");
+          // Pass static libs by absolute path rather than -L/-l so they
+          // (a) bypass any name-collision with txiki's libuv.a in the
+          // -L search order, and (b) survive zc's directive parsing
+          // intact (zc tokenizes `-L x -l y` strangely sometimes).
+          // librlimit / signal handlers compile into libbare.a directly
+          // when BARE_PREBUILDS=OFF + JSC engine; no separate static libs.
           const linkFlags = [
-            `-L${shortPath(bareBuild)}`, "-lbare",
-            `-L${shortPath(engineBuild)}`, "-ljs",
-            `-L${shortPath(libuvBuild)}`, "-luv_a",
-            `-L${shortPath(libutfBuild)}`, "-lutf",
-            `-L${shortPath(librlimitBuild)}`, "-lrlimit",
+            shortPath(path.join(bareBuild, "libbare.a")),
+            shortPath(path.join(engineBuild, "libjs.a")),
+            shortPath(path.join(libuvBuild, "libuv.a")),
+            shortPath(path.join(libutfBuild, "libutf.a")),
           ];
           // JSC engine on Apple platforms — system framework, already
           // linked via macos: directive in user's build.zc. V8 engine
           // (when the V8 prebuild ships) brings its own static lib via
           // engineBuild's libjs.a. QuickJS / mQJS are pure-C, no extra.
-          content += `//> link: ${linkFlags.join(" ")}\n`;
+          // Append to the rolling Bare link suffix; flushed below by
+          // either rewriting the txiki link line or emitting our own.
+          bareLinkSuffix += " " + linkFlags.join(" ");
         }
       }
+    }
+  }
+
+  // Flush the Bare link flags. zc only honors the first `//> link:`
+  // directive in a file, so we either splice into the txiki one or
+  // emit a fresh directive when txiki is disabled.
+  if (bareLinkSuffix) {
+    if (hasTxiki && content.includes("\n//> link: -L")) {
+      // Merge into the existing txiki link directive — match the line
+      // that starts with "//> link: -L" (the txiki block is the only
+      // one that begins with -L; iOS's link line uses -arch first).
+      content = content.replace(
+        /^(\/\/> link: -L[^\n]*)$/m,
+        (line) => line + bareLinkSuffix
+      );
+    } else {
+      // No txiki, no existing link directive to merge with — emit our
+      // own. Note that on Apple platforms the user's build.zc has its
+      // own //> macos: link: directive that will appear before ours;
+      // zc honors them in order, so this still gets through.
+      content += `//> link:${bareLinkSuffix}\n`;
     }
   }
 

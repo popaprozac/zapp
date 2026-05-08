@@ -77,9 +77,59 @@ round trip in the same ballpark Zapp has today.
 ## Phase 3 / next
 
 Real integration into Zapp:
-1. Vendor Bare into `vendor/bare` as a git submodule.
-2. Wire its cmake build into `cli/src/native.ts` as a third worker engine option.
-3. Implement `Services.invokeSync` + `bridge.workerCrash` as a NAPI addon.
-4. Port hello-world's supervisor + ticker workers to Bare.
-5. Benchmark full bridge latency on the integrated system.
-6. Decide replace-vs-coexist with JSC native + txiki.
+1. ✅ Vendor Bare into `vendor/bare` as a git submodule.
+2. ✅ Wire its cmake build into `cli/src/native.ts` as `ensureBareBuilt(target, engine)`.
+3. ✅ Dispatcher refactor: `worker.zc` runtime switch over 6 engines.
+4. ✅ Minimum-viable `bare.c` with `__zappBridge.log`, slot table, embedded asset loading, terminate plumbing.
+5. ⚠️ End-to-end link blocked on zc directive handling.
+6. ⏳ Implement `Services.invokeSync` + `bridge.workerCrash` as NAPI host functions.
+7. ⏳ Port hello-world's supervisor + ticker workers to Bare.
+8. ⏳ Decide replace-vs-coexist with JSC native + txiki.
+
+## Open issue: zc + multiple `//> link:` directives
+
+Enabling `ZAPP_WORKER_ENGINE_BARE_JSC` alongside `ZAPP_WORKER_ENGINE_TXIKI`
+in the same `zapp/build.zc` produces:
+```
+ld: Undefined symbols: _bare_setup, _bare_load, _bare_run, _bare_terminate,
+                       _js_create_function, _js_create_platform, ...
+```
+even though `libbare.a` and `libjs.a` are emitted to disk and the
+generated `.zapp/zapp_platform.zc` contains a `//> link: <abs paths>`
+directive pointing at them.
+
+The CLI tries two strategies (both fail):
+- Two separate `//> link:` directives (one per engine pair) — second
+  silently dropped.
+- Merging Bare's flags onto the txiki link line — surfaces missing
+  txiki/QuickJS symbols (`_JS_Eval` etc.) that were resolving cleanly
+  before the merge, suggesting zc reorders flags in a way that
+  breaks `-L .. -lqjs` resolution.
+
+Next-session investigation:
+- Read zc's directive-handling source to confirm whether it concatenates
+  `link:` directives or replaces.
+- Consider using `--start-group / --end-group` to make linker order
+  insensitive to .a appearance order.
+- Or split into a single `//> macos: link:` directive emitted by
+  build-config.ts that owns ALL static-lib paths from every enabled
+  engine (no `-l` flags, only absolute paths).
+
+Build / run instructions to reproduce:
+```bash
+# uncomment the line in hello-world/zapp/build.zc:
+# //> macos: define: ZAPP_WORKER_ENGINE_BARE_JSC
+cd hello-world && bun run build
+# expect Undefined symbols error for _bare_setup et al.
+```
+
+Bare itself builds cleanly:
+```bash
+cd vendor/bare && bun install
+cmake -B build-macos-jsc \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBARE_ENGINE=github:holepunchto/libjsc#main \
+  -DBARE_PREBUILDS=OFF
+cmake --build build-macos-jsc --target bare_static -j4
+ls -la build-macos-jsc/libbare.a   # ~700 KB
+```
