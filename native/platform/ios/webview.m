@@ -16,6 +16,31 @@
 #include <libkern/OSAtomic.h>
 #include <objc/runtime.h>
 
+// Synchronous HTTP fetcher used by txiki.c on iOS to load worker
+// bundles from the Vite dev server in dev mode (the host filesystem
+// isn't reachable from inside the Simulator's app sandbox). Returns
+// a malloc'd UTF-8 string or NULL; caller frees. Synchronous on
+// purpose — this fires once per worker at startup, off the main
+// queue (worker thread). Mirrors `[NSData dataWithContentsOfURL:]`
+// behavior, including the same lack of timeout — Vite usually
+// responds in <100ms so a hard timeout isn't worth the surface.
+char* zapp_ios_fetch_url_sync(const char* url_c, int* out_len) {
+    if (!url_c || !url_c[0]) return NULL;
+    @autoreleasepool {
+        NSString* urlStr = [NSString stringWithUTF8String:url_c];
+        NSURL* url = [NSURL URLWithString:urlStr];
+        if (!url) return NULL;
+        NSData* data = [NSData dataWithContentsOfURL:url];
+        if (!data) return NULL;
+        char* buf = (char*)malloc(data.length + 1);
+        if (!buf) return NULL;
+        memcpy(buf, data.bytes, data.length);
+        buf[data.length] = '\0';
+        if (out_len) *out_len = (int)data.length;
+        return buf;
+    }
+}
+
 // Embedded asset struct — local mirror of the layout defined in the
 // generated zapp_assets.zc (cli/src/assets.ts). Weak externs let the
 // final link succeed even when assets aren't embedded (dev mode).

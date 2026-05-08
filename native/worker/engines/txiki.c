@@ -12,6 +12,9 @@
 #include <sys/stat.h>
 #include <pthread.h>
 #include <time.h>
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
 #include <uv.h>
 #include <compression.h>
 
@@ -1197,7 +1200,8 @@ static void* txiki_worker_thread(void* arg) {
         }
     }
 
-    // Fallback: filesystem (dev mode)
+    // Fallback: filesystem (macOS dev mode where cwd resolves to the
+    // project root and .zapp/workers/<file>.mjs is on disk).
     if (!code) {
         FILE* f = fopen(script_path, "r");
         if (f) {
@@ -1211,9 +1215,38 @@ static void* txiki_worker_thread(void* arg) {
                 fprintf(stderr, "[zapp] txiki worker script loaded: %s\n", script_path);
             }
             fclose(f);
-        } else {
-            fprintf(stderr, "[zapp] txiki worker script not found: %s\n", script_path);
         }
+    }
+
+    // iOS dev mode: the host filesystem isn't reachable from inside
+    // the Simulator's app sandbox. Fetch the bundle from the Vite dev
+    // server URL — same path JSC takes (see jsc.m). On non-Apple
+    // platforms zapp_ios_fetch_url_sync isn't linked so this block
+    // is wrapped in an iOS-only ifdef.
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+    if (!code) {
+        extern const char* zapp_build_initial_url(void);
+        const char* dev_url = zapp_build_initial_url();
+        if (dev_url && dev_url[0] != '\0') {
+            char full_url[1024];
+            snprintf(full_url, sizeof(full_url), "%s%s", dev_url, slot->script_url);
+            extern char* zapp_ios_fetch_url_sync(const char* url, int* out_len);
+            int fetched_len = 0;
+            char* fetched = zapp_ios_fetch_url_sync(full_url, &fetched_len);
+            if (fetched) {
+                code = fetched;
+                code_len = fetched_len;
+                fprintf(stderr, "[zapp] txiki worker loaded from dev server: %s\n", full_url);
+            }
+        }
+    }
+#endif
+
+    if (!code) {
+        // Log the canonical script_url (e.g. "/_workers/foo.mjs") rather
+        // than script_path — the latter is a cwd-relative artifact that
+        // looks malformed on iOS where cwd is "/" anyway.
+        fprintf(stderr, "[zapp] txiki worker script not found: %s\n", slot->script_url);
     }
 
     if (code) {

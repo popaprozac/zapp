@@ -90,14 +90,27 @@ async function waitForPort(port: number, timeoutMs = 10000): Promise<boolean> {
 
 async function runDev(root: string) {
   if (process.platform !== "darwin" && process.platform !== "win32") {
-    process.stderr.write("[zapp] dev mode is currently macOS and Windows only.\n");
+    process.stderr.write("[zapp] dev mode is currently macOS, iOS, and Windows only.\n");
+    process.exit(1);
+  }
+
+  const target: BuildTarget = detectTarget();
+  if (isIOSTarget(target) && process.platform !== "darwin") {
+    process.stderr.write("[zapp] iOS dev requires macOS host (Xcode SDK).\n");
     process.exit(1);
   }
 
   const config = await loadConfig(root);
   const nativeDir = resolveNativeDir();
   const port = config.devPort ?? 5173;
+  // iOS Simulator on Apple Silicon shares host network namespace, so
+  // localhost from inside the sim resolves to the same Vite dev server
+  // the host is binding. No special tunnel needed.
   const devUrl = `http://localhost:${port}`;
+  const isIOS = isIOSTarget(target);
+  if (isIOS) {
+    process.stdout.write(`[zapp] target: ${target}\n`);
+  }
 
   // 0. Check worker engine
   const workerEngine = await hasAnyWorkerEngine(root);
@@ -117,14 +130,15 @@ async function runDev(root: string) {
   if (count > 0) process.stdout.write(`[zapp] generated ${count} binding(s) in src/zapp/\n`);
   // Workers are bundled by the Vite plugin during vite build/dev
 
-  // 2. Build txiki.js if opted in
+  // 2. Build txiki.js if opted in (per-target — iOS Sim cross-build
+  // happens here on first run, takes ~1 min).
   if (workerEngine === "txiki") {
-    await ensureTxikiBuilt(nativeDir);
+    await ensureTxikiBuilt(nativeDir, target);
   }
 
   // 3. Generate build config + bootstrap (dev mode)
   const buildConfigFile = await generateBuildConfig({ root, config, mode: "dev", devUrl });
-  const platformFile = await generatePlatformConfig(root);
+  const platformFile = await generatePlatformConfig(root, target);
   const headlessFile = await generateHeadlessWorkers({ root, headless: config.headless });
   const zappDir = path.join(root, ".zapp");
   process.stdout.write("[zapp] generating bootstrap...\n");
@@ -222,10 +236,24 @@ async function runDev(root: string) {
   process.stdout.write("[zapp] compiling native binary...\n");
   const binDir = path.join(root, "bin");
   await mkdir(binDir, { recursive: true });
+  const exeName = config.name.replace(/\s+/g, "-").toLowerCase();
   const exeSuffix = process.platform === "win32" ? ".exe" : "";
-  const nativeOut = path.join(binDir, config.name.replace(/\s+/g, "-").toLowerCase() + exeSuffix);
+  let nativeOut: string;
+  if (isIOS) {
+    const appBundle = path.join(binDir, "ios", `${config.name}.app`);
+    await mkdir(appBundle, { recursive: true });
+    nativeOut = path.join(appBundle, exeName);
+  } else {
+    nativeOut = path.join(binDir, exeName + exeSuffix);
+  }
 
-  const buildFile = path.join(root, "zapp", "build.zc");
+  const userBuildFile = path.join(root, "zapp", "build.zc");
+  // iOS: swap user's build.zc for the CLI-generated overlay (strips
+  // `//> macos:` directives that don't apply for the iOS target).
+  const buildFile = isIOS
+    ? await generateIOSBuildFile(root, userBuildFile)
+    : userBuildFile;
+
   try {
     await compileNative({
       root,
@@ -237,15 +265,84 @@ async function runDev(root: string) {
       output: nativeOut,
       nativeDir,
       optimize: false,
+      target,
     });
   } catch (err) {
-    // Tear down vite before propagating — otherwise the failed compile
-    // leaves the dev server running and blocks port 5173 for the retry.
     killProc(viteProc);
     throw err;
   }
 
   let execPath: string;
+
+  if (isIOS) {
+    // iOS: write Info.plist into the bundle, ad-hoc sign, install +
+    // launch on the booted sim. Same flow as runBuild's iOS path.
+    await writeIOSDevPlist({ binaryPath: nativeOut, config, target });
+    const appBundle = path.dirname(nativeOut);
+    const signProc = Bun.spawn(["codesign", "--force", "--sign", "-", appBundle], {
+      stdout: "pipe", stderr: "pipe",
+    });
+    if (await signProc.exited !== 0) {
+      const errOutput = await new Response(signProc.stderr).text();
+      process.stderr.write(`[zapp] warning: ad-hoc sign failed\n${errOutput}`);
+    }
+
+    // Need a booted sim to install onto. Tell the user clearly if
+    // none is booted instead of erroring out cryptically inside simctl.
+    const listed = Bun.spawnSync(["xcrun", "simctl", "list", "devices", "booted"], {
+      stdout: "pipe", stderr: "ignore",
+    });
+    const bootedOut = listed.stdout.toString();
+    if (!/\(Booted\)/.test(bootedOut)) {
+      process.stderr.write(
+        "[zapp] no iOS Simulator booted. Boot one first:\n" +
+        "         xcrun simctl boot \"iPhone 17\"   # or any device from\n" +
+        "         xcrun simctl list devices available\n"
+      );
+      killProc(viteProc);
+      process.exit(1);
+    }
+
+    // Terminate any prior instance — install on top of a running app
+    // can quietly skip the swap. simctl terminate exits 0 on "wasn't
+    // running" too, so safe to fire-and-ignore.
+    const bundleIdForTerm = config.identifier ?? `com.zapp.${exeName}.dev`;
+    Bun.spawnSync(["xcrun", "simctl", "terminate", "booted", bundleIdForTerm], {
+      stdout: "ignore", stderr: "ignore",
+    });
+
+    process.stdout.write("[zapp] installing on booted simulator...\n");
+    const installProc = Bun.spawn(["xcrun", "simctl", "install", "booted", appBundle], {
+      stdout: "pipe", stderr: "pipe",
+    });
+    if (await installProc.exited !== 0) {
+      const errOutput = await new Response(installProc.stderr).text();
+      process.stderr.write(`[zapp] simctl install failed\n${errOutput}`);
+      killProc(viteProc);
+      process.exit(1);
+    }
+
+    const bundleId = config.identifier ?? `com.zapp.${exeName}.dev`;
+    process.stdout.write(`[zapp] launching ${bundleId}...\n`);
+    // --console-pty captures stderr (txiki uses fprintf, not NSLog —
+    // see reference_ios_wkwebview_drop). User sees the same output
+    // they'd get from a desktop dev run.
+    appProc = Bun.spawn(
+      ["xcrun", "simctl", "launch", "--console-pty", "booted", bundleId],
+      { cwd: root, stdout: "inherit", stderr: "inherit" }
+    );
+
+    // Wait for either Vite or the launch wrapper to exit. Note the
+    // launch wrapper exits when the user terminates the app on the sim
+    // (via the close button, app switcher, or simctl terminate). We
+    // tear down Vite at that point to keep the dev session lean.
+    const exitCode = await Promise.race([
+      appProc.exited,
+      viteProc.exited,
+    ]);
+    cleanup(exitCode as number);
+    return;
+  }
 
   if (process.platform === "darwin") {
     // 5. Create .app bundle for dev mode (enables notifications, dock icon, app name)
