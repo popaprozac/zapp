@@ -6,7 +6,7 @@ import { existsSync } from "node:fs";
 import { loadConfig } from "./config";
 import { generateBuildConfig, generatePlatformConfig, generateHeadlessWorkers, generateIOSBuildFile } from "./build-config";
 import { generateBindings } from "./generate";
-import { compileNative, ensureTxikiBuilt, hasTxikiEnabled, hasAnyWorkerEngine, detectTarget, isIOSTarget, type BuildTarget } from "./native";
+import { compileNative, ensureTxikiBuilt, hasTxikiEnabled, ensureBareBuilt, bareEnginesEnabled, hasAnyWorkerEngine, detectTarget, isIOSTarget, type BuildTarget } from "./native";
 import { resolveNativeDir, resolveBootstrapDir } from "./paths";
 import { runInit } from "./init";
 // bundleWorkers removed — Vite plugin handles worker bundling now
@@ -118,8 +118,11 @@ async function runDev(root: string) {
     process.stderr.write(
       "[zapp] no worker engine defined in zapp/build.zc.\n" +
       "  Add one of:\n" +
-      "    //> macos: define: ZAPP_WORKER_ENGINE_JSC    (zero binary cost, macOS-only)\n" +
-      "    //> define: ZAPP_WORKER_ENGINE_TXIKI          (cross-platform, +6MB, web APIs)\n"
+      "    //> macos: define: ZAPP_WORKER_ENGINE_JSC          (legacy: native Cocoa JSC, smallest, no web APIs)\n" +
+      "    //> macos: define: ZAPP_WORKER_ENGINE_BARE_JSC     (Bare + JSC, system framework, fetch/WS via modules)\n" +
+      "    //>        define: ZAPP_WORKER_ENGINE_BARE_V8      (Bare + V8, JIT all platforms, larger binary)\n" +
+      "    //>        define: ZAPP_WORKER_ENGINE_BARE_QUICKJS (Bare + QuickJS, no JIT, small)\n" +
+      "    //>        define: ZAPP_WORKER_ENGINE_TXIKI        (legacy: txiki.js, +6MB, full web APIs)\n"
     );
     process.exit(1);
   }
@@ -130,10 +133,16 @@ async function runDev(root: string) {
   if (count > 0) process.stdout.write(`[zapp] generated ${count} binding(s) in src/zapp/\n`);
   // Workers are bundled by the Vite plugin during vite build/dev
 
-  // 2. Build txiki.js if opted in (per-target — iOS Sim cross-build
-  // happens here on first run, takes ~1 min).
-  if (workerEngine === "txiki") {
+  // 2. Build vendored worker engines that the user opted into. Each
+  // ZAPP_WORKER_ENGINE_* define in build.zc enables one engine; multiple
+  // can coexist (the dispatcher routes per-worker at runtime). First
+  // build for each is slow (~1 min for txiki, ~3-5 min for Bare with
+  // engine-from-source); subsequent runs reuse the cached `_deps/` tree.
+  if (await hasTxikiEnabled(root)) {
     await ensureTxikiBuilt(nativeDir, target);
+  }
+  for (const bareEngine of await bareEnginesEnabled(root)) {
+    await ensureBareBuilt(nativeDir, target, bareEngine);
   }
 
   // 3. Generate build config + bootstrap (dev mode)
@@ -397,8 +406,11 @@ async function runBuild(root: string) {
     process.stderr.write(
       "[zapp] no worker engine defined in zapp/build.zc.\n" +
       "  Add one of:\n" +
-      "    //> macos: define: ZAPP_WORKER_ENGINE_JSC    (zero binary cost, macOS-only)\n" +
-      "    //> define: ZAPP_WORKER_ENGINE_TXIKI          (cross-platform, +6MB, web APIs)\n"
+      "    //> macos: define: ZAPP_WORKER_ENGINE_JSC          (legacy: native Cocoa JSC, smallest, no web APIs)\n" +
+      "    //> macos: define: ZAPP_WORKER_ENGINE_BARE_JSC     (Bare + JSC, system framework, fetch/WS via modules)\n" +
+      "    //>        define: ZAPP_WORKER_ENGINE_BARE_V8      (Bare + V8, JIT all platforms, larger binary)\n" +
+      "    //>        define: ZAPP_WORKER_ENGINE_BARE_QUICKJS (Bare + QuickJS, no JIT, small)\n" +
+      "    //>        define: ZAPP_WORKER_ENGINE_TXIKI        (legacy: txiki.js, +6MB, full web APIs)\n"
     );
     process.exit(1);
   }
@@ -427,11 +439,14 @@ async function runBuild(root: string) {
   const zappDir = path.join(root, ".zapp");
   const assetsFile = await generateAssetManifest(root, config.assetDir);
 
-  // 4. Build txiki.js if opted in (first time only). Per-target build
-  // dirs — iOS Sim + iOS device share the macOS source tree but get
-  // their own out-of-tree static libs.
-  if (workerEngine === "txiki") {
+  // 4. Build vendored worker engines that the user opted into.
+  // Per-target build dirs so iOS Sim + iOS device + macOS coexist.
+  // First build per engine takes 1-5 min; cached `_deps/` reused after.
+  if (await hasTxikiEnabled(root)) {
     await ensureTxikiBuilt(nativeDir, target);
+  }
+  for (const bareEngine of await bareEnginesEnabled(root)) {
+    await ensureBareBuilt(nativeDir, target, bareEngine);
   }
 
   // 5. Generate build config + bootstrap (prod mode, embedded assets)

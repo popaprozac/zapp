@@ -3,7 +3,7 @@
 import path from "node:path";
 import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
-import { resolveTxikiDir } from "./paths";
+import { resolveTxikiDir, resolveBareDir } from "./paths";
 
 /**
  * Build target — what platform/architecture the binary is being
@@ -215,11 +215,175 @@ export async function hasTxikiEnabled(root: string): Promise<boolean> {
   } catch { return false; }
 }
 
-// Check if any worker engine is defined
-export async function hasAnyWorkerEngine(root: string): Promise<"jsc" | "txiki" | null> {
+/** Bare's pluggable JS engine — picks the C library that backs `js.h`. */
+export type BareEngine = "v8" | "jsc" | "quickjs" | "mqjs";
+
+// Map BareEngine → cmake-fetch spec for `-DBARE_ENGINE=`. The libjs
+// repo IS the V8 binding (Bare's upstream default); libjsc / libqjs /
+// libmqjs are the alternate engines.
+function bareEngineSpec(engine: BareEngine): string {
+  switch (engine) {
+    case "v8":      return "github:holepunchto/libjs";
+    case "jsc":     return "github:holepunchto/libjsc#main";
+    case "quickjs": return "github:holepunchto/libqjs";
+    case "mqjs":    return "github:holepunchto/libmqjs";
+  }
+}
+
+// Per-platform Zapp default. Unlike Bare's upstream default (V8), we
+// pick the smallest engine that fits the platform's constraints:
+//   macOS / iOS — JSC ships in the system, ~free binary cost, JIT
+//     on macOS, no-JIT on iOS (Apple policy) but functional.
+//   Windows / Linux — V8 (JIT, larger binary, but no system-framework
+//     equivalent so we pay it anyway).
+// Apps can override per-worker via `engine: "..."` in zapp.config.ts.
+export function defaultBareEngine(target: BuildTarget): BareEngine {
+  if (target === "macos" || isIOSTarget(target)) return "jsc";
+  return "v8";
+}
+
+// Per-target + per-engine build dir. Engines build independently —
+// shipping bare-jsc + bare-v8 in the same Zapp binary means two
+// separate Bare static libs in two dirs. (Rare but possible if an
+// app wants a JSC worker for one job and a V8 worker for another.)
+export function bareBuildDirName(target: BuildTarget, engine: BareEngine): string {
+  const platform = target === "ios-simulator" ? "ios-sim"
+    : target === "ios-device" ? "ios-dev"
+    : target;
+  return `build-${platform}-${engine}`;
+}
+
+// Ensure Bare runtime is built (via cmake) for the given target +
+// engine. Bare's CMakeLists drives engine fetch through cmake-fetch
+// — so the first build pulls in the engine source + libuv + libutf
+// via internal git clones. Subsequent builds reuse the cached
+// `_deps/` tree.
+//
+// Bare requires `bun install` in its directory before cmake configure
+// (its CMakeLists looks up cmake-bare / cmake-fetch / cmake-drive in
+// node_modules). We run it on first build only.
+export async function ensureBareBuilt(
+  _nativeDir: string,
+  target: BuildTarget = detectTarget(),
+  engine: BareEngine = defaultBareEngine(target),
+): Promise<string> {
+  const bareDir = await resolveBareDir();
+  const buildDir = bareBuildDirName(target, engine);
+  // libbare.a is the canonical artifact — when this exists the Bare
+  // build succeeded for this (target, engine) combo.
+  const libPath = path.join(bareDir, buildDir, "libbare.a");
+
+  if (existsSync(libPath)) return bareDir; // already built
+
+  // Bare's CMakeLists requires its node_modules deps (cmake-bare,
+  // cmake-fetch, cmake-drive, etc.) — install them on first build.
+  if (!existsSync(path.join(bareDir, "node_modules", "cmake-bare"))) {
+    process.stdout.write("[zapp] installing Bare cmake dependencies...\n");
+    const install = Bun.spawn(["bun", "install"], {
+      cwd: bareDir, stdout: "inherit", stderr: "inherit",
+    });
+    if (await install.exited !== 0) throw new Error("[zapp] Bare bun install failed");
+  }
+
+  const label = target === "macos" ? "macOS"
+    : target === "ios-simulator" ? "iOS Simulator (arm64)"
+    : target === "ios-device" ? "iOS device (arm64)"
+    : target;
+  process.stdout.write(`[zapp] building Bare (${engine}) for ${label} (first time only, may take a few minutes)...\n`);
+
+  const configureArgs = [
+    "-B", buildDir,
+    "-DCMAKE_BUILD_TYPE=Release",
+    `-DBARE_ENGINE=${bareEngineSpec(engine)}`,
+    // Prebuilds default ON and pulls a pinned V8 static library via a
+    // Hyperdrive mirror. We only need that for the V8 engine path; for
+    // JSC / QuickJS / mQJS we build the engine from source which is
+    // smaller + simpler.
+    `-DBARE_PREBUILDS=${engine === "v8" ? "ON" : "OFF"}`,
+  ];
+
+  if (isIOSTarget(target)) {
+    const sdk = target === "ios-simulator" ? "iphonesimulator" : "iphoneos";
+    const proc = Bun.spawn(["xcrun", "--sdk", sdk, "--show-sdk-path"], { stdout: "pipe" });
+    const sdkPath = (await new Response(proc.stdout).text()).trim();
+    if (await proc.exited !== 0 || !sdkPath) {
+      throw new Error(`[zapp] failed to resolve ${sdk} SDK path via xcrun`);
+    }
+    configureArgs.push(
+      "-DCMAKE_SYSTEM_NAME=iOS",
+      "-DCMAKE_SYSTEM_PROCESSOR=arm64",
+      `-DCMAKE_OSX_SYSROOT=${sdkPath}`,
+      "-DCMAKE_OSX_ARCHITECTURES=arm64",
+      "-DCMAKE_OSX_DEPLOYMENT_TARGET=15.0",
+    );
+  }
+
+  const cmake1 = Bun.spawn(["cmake", ...configureArgs], {
+    cwd: bareDir, stdout: "inherit", stderr: "inherit",
+  });
+  if (await cmake1.exited !== 0) throw new Error("[zapp] Bare cmake configure failed");
+
+  // Build the static `bare` library only — we don't need the CLI
+  // executable (`bare_bin`) or the optional Bare modules (bare-tls,
+  // bare-crypto, etc.) for the host integration. Apps opting into
+  // those modules add them to `worker.modules` in zapp.config.ts and
+  // the CLI links them at the build-config layer.
+  const cmake2 = Bun.spawn(["cmake", "--build", buildDir, "--target", "bare", "-j4"], {
+    cwd: bareDir, stdout: "inherit", stderr: "inherit",
+  });
+  if (await cmake2.exited !== 0) throw new Error("[zapp] Bare cmake build failed");
+
+  process.stdout.write(`[zapp] Bare (${engine}) built successfully\n`);
+  return bareDir;
+}
+
+// Return the set of Bare engines the user's build.zc opted into.
+// Each ZAPP_WORKER_ENGINE_BARE_<NAME> directive enables one engine;
+// multiple may be enabled in the same project (one worker uses JSC,
+// another uses V8 — the runtime dispatcher routes per-worker).
+export async function bareEnginesEnabled(root: string): Promise<BareEngine[]> {
+  const buildFile = path.join(root, "zapp", "build.zc");
+  let content = "";
+  try { content = await Bun.file(buildFile).text(); } catch { return []; }
+  const enabled: BareEngine[] = [];
+  if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_V8/m.test(content)) enabled.push("v8");
+  if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_JSC/m.test(content)) enabled.push("jsc");
+  if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_QUICKJS/m.test(content)) enabled.push("quickjs");
+  if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_MQJS/m.test(content)) enabled.push("mqjs");
+  return enabled;
+}
+
+/** True when at least one Bare engine variant is enabled. */
+export async function hasBareEnabled(root: string): Promise<boolean> {
+  return (await bareEnginesEnabled(root)).length > 0;
+}
+
+/** Engine identifier returned by `hasAnyWorkerEngine`. */
+export type WorkerEngine =
+  | "jsc"           // legacy: native Cocoa JSContext
+  | "txiki"         // legacy: QuickJS via txiki.js
+  | "bare-v8"
+  | "bare-jsc"
+  | "bare-quickjs"
+  | "bare-mqjs";
+
+// Check if any worker engine is defined. Returns the highest-priority
+// engine when multiple are enabled (build.zc allows several
+// ZAPP_WORKER_ENGINE_* directives — the dispatcher in worker.zc routes
+// per-worker at runtime).
+//
+// Priority order: bare-jsc > bare-v8 > bare-quickjs > bare-mqjs > txiki > jsc.
+// "Newer / more capable" wins so the preflight messages reflect what
+// most workers actually use; legacy engines stay compiled in as
+// fallback.
+export async function hasAnyWorkerEngine(root: string): Promise<WorkerEngine | null> {
   const buildFile = path.join(root, "zapp", "build.zc");
   try {
     const content = await Bun.file(buildFile).text();
+    if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_JSC/m.test(content)) return "bare-jsc";
+    if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_V8/m.test(content)) return "bare-v8";
+    if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_QUICKJS/m.test(content)) return "bare-quickjs";
+    if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_MQJS/m.test(content)) return "bare-mqjs";
     if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_TXIKI/m.test(content)) return "txiki";
     if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_JSC/m.test(content)) return "jsc";
     return null;
