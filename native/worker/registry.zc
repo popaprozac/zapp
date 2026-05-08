@@ -10,8 +10,12 @@ raw {
     // Engine selector — tracked per-worker so dispatchers can route
     // post / terminate / restart to the right engine without
     // re-passing the choice on every call.
-    #define ZAPP_ENGINE_JSC   0
-    #define ZAPP_ENGINE_TXIKI 1
+    #define ZAPP_ENGINE_JSC          0
+    #define ZAPP_ENGINE_TXIKI        1
+    #define ZAPP_ENGINE_BARE_JSC     2
+    #define ZAPP_ENGINE_BARE_V8      3
+    #define ZAPP_ENGINE_BARE_QUICKJS 4
+    #define ZAPP_ENGINE_BARE_MQJS    5
 
     typedef struct {
         char worker_id[64];
