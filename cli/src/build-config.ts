@@ -92,12 +92,27 @@ fn zapp_build_custom_protocols_json() -> string { return "${protocolsJson}"; }
 // declares as `extern fn zapp_start_headless_workers()`. Body contains one
 // call per entry in zappConfig.headless; empty body when no headless workers
 // are configured.
+// String → ZAPP_ENGINE_* numeric ID matching native/worker/registry.zc.
+// Mirror of the constants there so the generated headless-worker
+// invocations pass the right integer per engine.
+function engineNameToId(name: string | undefined): number {
+  switch (name) {
+    case "txiki":        return 1;
+    case "bare-jsc":     return 2;
+    case "bare-v8":      return 3;
+    case "bare-quickjs": return 4;
+    case "bare-mqjs":    return 5;
+    case "jsc":
+    default:             return 0;
+  }
+}
+
 export async function generateHeadlessWorkers(opts: {
   root: string;
   headless?: Record<string, string | {
     script: string;
     restart?: { maxRetries?: number; withinMs?: number } | false;
-    engine?: "jsc" | "txiki";
+    engine?: "jsc" | "txiki" | "bare-jsc" | "bare-v8" | "bare-quickjs" | "bare-mqjs";
   }>;
 }): Promise<string> {
   const { root, headless } = opts;
@@ -113,7 +128,7 @@ export async function generateHeadlessWorkers(opts: {
         return `    zapp_start_headless_worker("h-${id}", "${url}");`;
       }
       // Object form. Pull engine + restart; either field can be absent.
-      const engineId = value.engine === "txiki" ? 1 : 0;
+      const engineId = engineNameToId(value.engine);
       const restart = value.restart;
       const max = restart ? (restart.maxRetries ?? 3) : 0;
       const within = restart ? (restart.withinMs ?? 60_000) : 0;

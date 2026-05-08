@@ -292,19 +292,31 @@ export interface HeadlessWorkerConfig {
   /** Optional restart policy. Omit / `false` to disable auto-restart. */
   restart?: RestartPolicy | false;
   /**
-   * Per-worker engine selection (G8). `"jsc"` is the default — zero
-   * binary cost on Apple, JIT for hot JS loops, no fetch / WebSocket /
-   * Streams. `"txiki"` opts this specific worker into the txiki.js
-   * runtime — full web APIs (fetch, WebSocket, Streams, SQLite via
-   * FFI) and a faster worker→native call rate, at the cost of pulling
-   * in the txiki engine (~6 MB if not already linked).
+   * Per-worker engine selection.
    *
-   * Both engines must be enabled at build time (`ZAPP_WORKER_ENGINE_JSC`
-   * + `ZAPP_WORKER_ENGINE_TXIKI`) for true mixing. When only one is
-   * compiled, requests for the other are downgraded with a warning so
-   * the surprise is visible during dev.
+   * - `"jsc"` (legacy default) — native Cocoa JSContext. Zero binary
+   *   cost on Apple, JIT for hot JS loops, but no fetch / WebSocket /
+   *   Streams in the worker context.
+   * - `"txiki"` (legacy) — txiki.js runtime. Full web APIs, no JIT,
+   *   ~6 MB binary cost.
+   * - `"bare-jsc"` — Bare runtime + JSC engine. JIT on macOS (free
+   *   binary cost on Apple via system framework), à la carte web APIs
+   *   from `bare-fetch` / `bare-ws` / `bare-crypto` / etc.
+   * - `"bare-v8"` — Bare runtime + V8. JIT all platforms; larger
+   *   binary, sensible for Windows / Linux where there's no system
+   *   JSC.
+   * - `"bare-quickjs"` — Bare runtime + QuickJS. No JIT, smallest
+   *   cross-platform footprint after JSC.
+   * - `"bare-mqjs"` — Bare runtime + micro-QuickJS. Embedded / IoT
+   *   profile.
+   *
+   * The corresponding `ZAPP_WORKER_ENGINE_*` directive must be in
+   * `zapp/build.zc` for the engine to be linked in. When the
+   * requested engine isn't compiled, the worker dispatcher logs a
+   * downgrade and falls back through priority order
+   * (bare-jsc > bare-v8 > bare-quickjs > bare-mqjs > txiki > jsc).
    */
-  engine?: "jsc" | "txiki";
+  engine?: "jsc" | "txiki" | "bare-jsc" | "bare-v8" | "bare-quickjs" | "bare-mqjs";
 }
 
 export interface ZappConfig {
