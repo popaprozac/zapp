@@ -29,6 +29,16 @@ interface WorkerEntry {
   outputName: string;
   /** Output URL path: "/_workers/worker.mjs" */
   outputUrl: string;
+  /**
+   * Per-worker engine selection (from HeadlessWorkerConfig.engine).
+   * When `"bare-hermes"`, the bundle goes through the Hermes-compat
+   * downleveler (`hermesCompatLower` plugin); other engines run the
+   * fast path without lowering. Auto-discovered workers (`new
+   * Worker(url)`) leave this undefined and never get downleveled —
+   * if you need Hermes-compat for those, switch them to headless
+   * and set `engine: "bare-hermes"` explicitly.
+   */
+  engine?: string;
 }
 
 /** Recursively scan for source files. */
@@ -195,21 +205,26 @@ function bareBindingTransform(): Plugin {
   };
 }
 
-// Lower worker-bundle output to ES5 syntax — drops `class`, `let`,
-// arrow functions, default params, template literals, etc. down to
-// equivalents Hermes' parser handles without choking.
+// Lower worker-bundle output to a Hermes-friendly syntax subset:
+// drops `class` (→ ES5 prototype chains via Babel), `for await ...
+// of`, optional chaining `?.`, nullish coalescing `??`, logical
+// assignment, class fields, and private methods. Async / await
+// stays because Hermes 0.12+ supports it natively.
 //
-// Why a post-bundle pass instead of `build.target = "es5"`: Vite 8's
-// Rolldown rejects `es5` as a target string (only es2017+ accepted),
-// so we let Rollup emit es2017 then run a second `esbuild.transform`
-// pass on each chunk. Esbuild's standalone API DOES accept `es5`.
+// Why a post-bundle pass: Vite 8's Rolldown rejects `es5` as a
+// `build.target` (only es2017+ accepted), and esbuild's `target`
+// alone can't lower `class` (it errors instead). So we let Rollup
+// emit es2017 then run two transforms on each chunk:
+//   1. esbuild.transform({ target: "es2017" }) → lowers the
+//      newer-than-ES2017 syntax (for-await, ?., ??, etc.).
+//   2. @babel/plugin-transform-classes → lowers `class` to ES5
+//      prototype chains. Required to sidestep Hermes' AST
+//      transformer crash on bare-events' error class shape.
 //
-// Cost on non-Hermes engines: ~10–15 KB of helper scaffolding per
-// bundle (Object.assign polyfills, class prototypes, etc.) — small
-// enough to apply uniformly. The alternative (per-engine targets)
-// would mean two bundle outputs per worker, double the dev-build
-// time, and a surprise when a user flips a worker from `bare-jsc`
-// to `bare-hermes` and it stops working.
+// **Only applied to bare-hermes workers** — JSC / V8 / QuickJS / mQJS
+// workers ship native modern JS untouched. If you flip a worker over
+// to bare-hermes later, the next bundle picks up the downleveler
+// automatically; flip it back and you're on the fast path again.
 function hermesCompatLower(): Plugin {
   return {
     name: "zapp-hermes-compat-lower",
@@ -385,7 +400,14 @@ async function bundleWorker(
     const workerAliases: Record<string, string> = { ...BARE_STDLIB_ALIASES, ...aliases };
 
     const prelude = workerModulesPrelude(entry.sourcePath, workerModules);
-    const plugins: Plugin[] = [bareBindingTransform(), hermesCompatLower()];
+    const plugins: Plugin[] = [bareBindingTransform()];
+    // Only Hermes needs the post-bundle ES2017 + class lowering pass.
+    // JSC / V8 / QuickJS / mQJS run modern JS natively — we don't pay
+    // their workers the ~15 KB scaffolding cost or trade native class
+    // instantiation for prototype-chain instantiation.
+    if (entry.engine === "bare-hermes") {
+      plugins.push(hermesCompatLower());
+    }
     if (prelude) plugins.push(prelude);
 
     await vite.build({
@@ -462,7 +484,7 @@ interface ZappWorkersOptions {
    * Output URL is `/_workers/_headless_<id>.mjs` — the native runtime
    * loads these at app startup via generated Zen-C code.
    */
-  headless?: Record<string, string | { script: string; restart?: unknown }>;
+  headless?: Record<string, string | { script: string; restart?: unknown; engine?: string }>;
   /**
    * Worker capabilities (see ZappConfig.workerModules). For each entry
    * we prepend `import "@zappdev/runtime/worker-globals/<subpath>"` to
@@ -494,12 +516,14 @@ function resolveHeadlessEntries(root: string, headless?: ZappWorkersOptions["hea
   const entries: WorkerEntry[] = [];
   for (const [id, value] of Object.entries(headless)) {
     const srcPath = typeof value === "string" ? value : value.script;
+    const engine = typeof value === "string" ? undefined : value.engine;
     const abs = path.resolve(root, srcPath);
     if (!existsSync(abs)) {
       console.warn(`[zapp] headless worker "${id}" not found at ${srcPath}`);
       continue;
     }
     entries.push({
+      engine,
       specifier: srcPath,
       sourcePath: abs,
       outputName: `_headless_${id}.mjs`,
