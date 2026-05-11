@@ -169,3 +169,47 @@ export async function resolveTxikiDir(): Promise<string> {
   process.stdout.write(`[zapp] txiki.js downloaded (pinned to ${TXIKI_COMMIT.slice(0, 7)})\n`);
   return cacheDir;
 }
+
+// Resolve Bare runtime — same monorepo/published/cache fall-through
+// as txiki. Bare is much smaller than txiki (~5 MB clone) but cmake-fetch
+// pulls in libjs + libjsc + libuv + boringssl during configure, so the
+// total disk footprint is similar. Pin matches `vendor/bare`'s submodule
+// SHA so on-demand clones reproduce the same source.
+export async function resolveBareDir(): Promise<string> {
+  // 1. Monorepo: vendor/bare (submodule)
+  const monorepo = path.resolve(CLI_SRC_DIR, "../../vendor/bare");
+  if (existsSync(path.join(monorepo, "include", "bare.h"))) return monorepo;
+
+  // 2. Published: cli/vendor/bare (won't normally exist — submodule
+  // contents aren't part of the cli npm publish; cache below handles it)
+  const bundled = path.resolve(CLI_SRC_DIR, "../vendor/bare");
+  if (existsSync(path.join(bundled, "include", "bare.h"))) return bundled;
+
+  // 3. User-level cache
+  const cacheDir = path.join(os.homedir(), ".zapp", "vendor", "bare");
+  if (existsSync(path.join(cacheDir, "include", "bare.h"))) return cacheDir;
+
+  // 4. Download on demand. Pin matches the spike-branch submodule SHA;
+  // Bare's API surface is fairly stable across patch releases but their
+  // engine sub-modules (libjs/libjsc) drift more, so the libjs commit
+  // pin is the load-bearing version lock.
+  const BARE_COMMIT = "bfbc127"; // v1.28.5
+  process.stdout.write("[zapp] downloading Bare runtime (first time only)...\n");
+  await mkdir(path.dirname(cacheDir), { recursive: true });
+
+  const clone = Bun.spawn([
+    "git", "clone", "--filter=blob:none", "--no-checkout",
+    "https://github.com/holepunchto/bare.git", cacheDir,
+  ], { stdout: "inherit", stderr: "inherit" });
+  if (await clone.exited !== 0) throw new Error("[zapp] Failed to clone Bare");
+
+  const checkout = Bun.spawn(["git", "checkout", BARE_COMMIT], {
+    cwd: cacheDir, stdout: "inherit", stderr: "inherit",
+  });
+  if (await checkout.exited !== 0) {
+    throw new Error(`[zapp] Failed to checkout Bare @ ${BARE_COMMIT}`);
+  }
+
+  process.stdout.write(`[zapp] Bare downloaded (pinned to ${BARE_COMMIT})\n`);
+  return cacheDir;
+}

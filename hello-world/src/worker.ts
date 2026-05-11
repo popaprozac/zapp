@@ -1,18 +1,18 @@
-// Example worker — runs in a JSC/txiki.js context with host object access.
-//
-// Kept intentionally light so it works on every supported engine:
-//   - macOS JSC (no fetch/WebSocket/Streams)
-//   - macOS txiki (full web APIs)
-//   - iOS JSC (JIT-less; no fetch/WebSocket either)
-//
-// Real apps reach for Surreal / fetch / WebSocket via txiki on macOS.
-// On iOS, until txiki cross-build lands (Phase 2), workers are JSC-only
-// — see project_ios_path.md gotcha #2 for context.
+// Example worker. `workerModules: ["fetch"]` in zapp.config.ts is the
+// only setup needed for `fetch` to be on globalThis here — the CLI
+// verifies bare-fetch is installed and the Vite plugin auto-prepends
+// `import "@zappdev/runtime/worker-globals/fetch"` into this bundle.
+// No bare-* packages should be imported by user code.
 
 import { Services } from "@zappdev/runtime";
-import "@zappdev/runtime/worker-globals";
 
 console.log("[worker] started");
+
+console.log("[worker] fetch typeof:", typeof fetch);
+
+fetch("https://www.google.com").then(res => res.text()).then(text => {
+  console.log("[worker] google response:", text);
+});
 
 receive("ping", (data) => {
   console.log("[worker] received ping:", JSON.stringify(data));

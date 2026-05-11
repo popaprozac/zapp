@@ -122,8 +122,9 @@ fn dispatch_event_to_all(event_name: string, payload: string) -> void {
         windows_webview_eval_all(js);
         #endif
 
-        // Workers — txiki and JSC each strdup/copy on push, so free
-        // after both calls return.
+        // Workers — each engine strdup/copies on push, so free after
+        // all branches return. The ZAPP_HAS_BARE macro is defined in
+        // worker.zc and resolves to 1 when any bare-* engine is built.
         #if defined(ZAPP_WORKER_ENGINE_TXIKI)
         extern void txiki_broadcast_eval_js(const char* js);
         txiki_broadcast_eval_js(js);
@@ -131,6 +132,14 @@ fn dispatch_event_to_all(event_name: string, payload: string) -> void {
         #if defined(ZAPP_WORKER_ENGINE_JSC)
         extern void jsc_broadcast_eval_js(const char* js);
         jsc_broadcast_eval_js(js);
+        #endif
+        #if defined(ZAPP_WORKER_ENGINE_BARE_V8)      \
+         || defined(ZAPP_WORKER_ENGINE_BARE_JSC)     \
+         || defined(ZAPP_WORKER_ENGINE_BARE_QUICKJS) \
+         || defined(ZAPP_WORKER_ENGINE_BARE_MQJS)    \
+         || defined(ZAPP_WORKER_ENGINE_BARE_HERMES)
+        extern void bare_broadcast_eval_js(const char* js);
+        bare_broadcast_eval_js(js);
         #endif
 
         free(js);

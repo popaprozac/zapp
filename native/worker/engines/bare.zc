@@ -1,0 +1,19 @@
+// Bare worker engine — Zen-C trampolines.
+//
+// Mirrors the JSC and txiki engine .zc files: pulls the C header into
+// scope so worker.zc's dispatcher has the `bare_worker_*` symbols
+// available when at least one `ZAPP_WORKER_ENGINE_BARE_*` is defined.
+// Engine variant (V8 / JSC / QuickJS / mQJS) is selected at cmake-fetch
+// time via cli/src/native.ts; bare.c itself is engine-agnostic above
+// the libjs ABI.
+
+@cfg(ZAPP_WORKER_ENGINE_BARE_V8)
+import "./bare.h" as bare_engine;
+@cfg(ZAPP_WORKER_ENGINE_BARE_JSC)
+import "./bare.h" as bare_engine_jsc;
+@cfg(ZAPP_WORKER_ENGINE_BARE_QUICKJS)
+import "./bare.h" as bare_engine_qjs;
+@cfg(ZAPP_WORKER_ENGINE_BARE_MQJS)
+import "./bare.h" as bare_engine_mqjs;
+@cfg(ZAPP_WORKER_ENGINE_BARE_HERMES)
+import "./bare.h" as bare_engine_hermes;

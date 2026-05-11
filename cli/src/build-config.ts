@@ -92,12 +92,28 @@ fn zapp_build_custom_protocols_json() -> string { return "${protocolsJson}"; }
 // declares as `extern fn zapp_start_headless_workers()`. Body contains one
 // call per entry in zappConfig.headless; empty body when no headless workers
 // are configured.
+// String → ZAPP_ENGINE_* numeric ID matching native/worker/registry.zc.
+// Mirror of the constants there so the generated headless-worker
+// invocations pass the right integer per engine.
+function engineNameToId(name: string | undefined): number {
+  switch (name) {
+    case "txiki":        return 1;
+    case "bare-jsc":     return 2;
+    case "bare-v8":      return 3;
+    case "bare-quickjs": return 4;
+    case "bare-mqjs":    return 5;
+    case "bare-hermes":  return 6;
+    case "jsc":
+    default:             return 0;
+  }
+}
+
 export async function generateHeadlessWorkers(opts: {
   root: string;
   headless?: Record<string, string | {
     script: string;
     restart?: { maxRetries?: number; withinMs?: number } | false;
-    engine?: "jsc" | "txiki";
+    engine?: "jsc" | "txiki" | "bare-jsc" | "bare-v8" | "bare-quickjs" | "bare-mqjs" | "bare-hermes";
   }>;
 }): Promise<string> {
   const { root, headless } = opts;
@@ -113,7 +129,7 @@ export async function generateHeadlessWorkers(opts: {
         return `    zapp_start_headless_worker("h-${id}", "${url}");`;
       }
       // Object form. Pull engine + restart; either field can be absent.
-      const engineId = value.engine === "txiki" ? 1 : 0;
+      const engineId = engineNameToId(value.engine);
       const restart = value.restart;
       const max = restart ? (restart.maxRetries ?? 3) : 0;
       const within = restart ? (restart.withinMs ?? 60_000) : 0;
@@ -162,19 +178,50 @@ export async function generateIOSBuildFile(root: string, originalBuildFile: stri
     .join("\n");
 
   // Worker engine selection on iOS — mirror whatever the user picked
-  // on macOS:
+  // on macOS, falling back to bare-jsc (the alpha-T1.6 default on
+  // Apple platforms — zero binary cost via the JSC system framework,
+  // JIT-less on iOS by Apple policy, à la carte web APIs via the
+  // `bare-*` ecosystem):
   // - txiki: Phase 2 ships the cross-build for iphonesimulator +
   //   iphoneos. FFI is disabled at txiki build time (App Store ban on
   //   dlopen); everything else (fetch / WebSocket / Streams / SQLite)
   //   works.
-  // - JSC: system framework on iOS. Same API as macOS, no JIT (Apple
-  //   policy), zero binary cost.
-  // - Neither: default to JSC (smallest, always available).
-  const userPickedTxiki = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_TXIKI/m.test(content);
-  const userPickedJsc = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_JSC/m.test(content);
+  // - legacy JSC (`ZAPP_WORKER_ENGINE_JSC`): system framework on iOS.
+  //   No web APIs in the worker context; kept here for backwards
+  //   compatibility with apps that haven't migrated to bare-*.
+  // - bare-jsc / bare-quickjs (the modern path): use the user's
+  //   declaration. Note that bare-v8 is intentionally NOT exposed for
+  //   iOS — V8 needs JIT pages (`MAP_JIT`) which Apple gates behind
+  //   entitlements not granted to App Store apps.
+  // - Nothing declared: default to bare-jsc.
+  const userPickedTxiki     = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_TXIKI/m.test(content);
+  const userPickedJsc       = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_JSC\b/m.test(content);
+  const userPickedBareJsc   = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_JSC/m.test(content);
+  const userPickedBareQuick = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_QUICKJS/m.test(content);
+  const userPickedBareV8    = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_V8/m.test(content);
+  const userPickedBareHermes = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_HERMES/m.test(content);
+
+  // V8 on iOS is a dead end: full V8 needs JIT pages (`mmap(PROT_EXEC)`)
+  // which Apple gates behind a JIT entitlement not granted to App
+  // Store apps. The fallback (jitless V8) would run as a ~30 MB
+  // interpreter — perf is on par with bare-quickjs at ~1.5 MB.
+  // Surface this explicitly so users don't think they're getting V8
+  // speed on their iOS build.
+  if (userPickedBareV8) {
+    process.stdout.write(
+      "[zapp] note: bare-v8 isn't useful on iOS (no JIT entitlement for App Store apps).\n" +
+      "       Falling back to bare-jsc for this build.\n" +
+      "       Use 'bare-quickjs' explicitly if you want cross-platform interpreter parity.\n"
+    );
+  }
+
   const engineDefines: string[] = [];
-  if (userPickedTxiki) engineDefines.push("ZAPP_WORKER_ENGINE_TXIKI");
-  if (userPickedJsc || (!userPickedTxiki && !userPickedJsc)) engineDefines.push("ZAPP_WORKER_ENGINE_JSC");
+  if (userPickedTxiki)      engineDefines.push("ZAPP_WORKER_ENGINE_TXIKI");
+  if (userPickedJsc)        engineDefines.push("ZAPP_WORKER_ENGINE_JSC");
+  if (userPickedBareJsc)    engineDefines.push("ZAPP_WORKER_ENGINE_BARE_JSC");
+  if (userPickedBareQuick)  engineDefines.push("ZAPP_WORKER_ENGINE_BARE_QUICKJS");
+  if (userPickedBareHermes) engineDefines.push("ZAPP_WORKER_ENGINE_BARE_HERMES");
+  if (engineDefines.length === 0) engineDefines.push("ZAPP_WORKER_ENGINE_BARE_JSC");
 
   const iosOverlay = `
 // AUTO-GENERATED for iOS builds. Strips macos:-prefixed directives
@@ -193,8 +240,105 @@ ${engineDefines.map(d => `//> define: ${d}`).join("\n")}
   return iosBuildFile;
 }
 
-// Generate .zapp/zapp_platform.zc with .m file cflags
-export async function generatePlatformConfig(root: string, target: BuildTarget = detectTarget(), buildFile?: string): Promise<string> {
+// Generate `.zapp/zapp_engine_overlay.zc` — a build-time overlay that adds
+// `//> define: ZAPP_WORKER_ENGINE_*` directives for engines a user reached
+// for in `zapp.config.ts` headless map but didn't manually opt into via
+// `zapp/build.zc`. Lets users say `engine: "bare-quickjs"` in config and
+// have the engine "just appear" in the build (matches the txiki UX —
+// the CLI builds engines you reference, you don't have to learn build
+// directives to use a worker).
+//
+// Returns the overlay file path, or null if no overlay is needed (every
+// engine the project references is already declared in build.zc).
+export async function generateEngineOverlay(opts: {
+  root: string;
+  target: BuildTarget;
+  config: ResolvedConfig;
+}): Promise<string | null> {
+  const { root, target, config } = opts;
+
+  // 1. Read what's already in build.zc.
+  const buildFile = path.join(root, "zapp", "build.zc");
+  let buildContent = "";
+  try { buildContent = await Bun.file(buildFile).text(); } catch {}
+
+  const declared = (m: string) => new RegExp(`^//>.*define:.*${m}\\b`, "m").test(buildContent);
+  const have = {
+    jsc:           declared("ZAPP_WORKER_ENGINE_JSC"),
+    txiki:         declared("ZAPP_WORKER_ENGINE_TXIKI"),
+    "bare-jsc":    declared("ZAPP_WORKER_ENGINE_BARE_JSC"),
+    "bare-v8":     declared("ZAPP_WORKER_ENGINE_BARE_V8"),
+    "bare-quickjs":declared("ZAPP_WORKER_ENGINE_BARE_QUICKJS"),
+    "bare-mqjs":   declared("ZAPP_WORKER_ENGINE_BARE_MQJS"),
+    "bare-hermes": declared("ZAPP_WORKER_ENGINE_BARE_HERMES"),
+  };
+
+  // 2. Walk headless config — pick up any `engine:` field.
+  const wanted = new Set<string>();
+  for (const value of Object.values(config.headless ?? {})) {
+    if (typeof value === "object" && value && "engine" in value && value.engine) {
+      wanted.add(value.engine);
+    }
+  }
+
+  // 3. If the project references workers but declared NO engine at all,
+  //    pick a sensible per-platform default. The matrix lives in
+  //    cli/src/native.ts:defaultBareEngine — bare-jsc on Apple (free,
+  //    JIT with entitlement), bare-v8 elsewhere (JIT, larger binary).
+  const anyDeclared = Object.values(have).some(Boolean);
+  const hasWorkers = (config.headless && Object.keys(config.headless).length > 0)
+    || wanted.size > 0;
+  if (!anyDeclared && hasWorkers) {
+    // Defer the import — keep this file's deps narrow.
+    const { defaultBareEngine } = await import("./native");
+    const engine = defaultBareEngine(target);
+    wanted.add("bare-" + engine);
+  }
+
+  // 4. Compute the missing set (wanted - already-declared).
+  const missing: string[] = [];
+  for (const w of wanted) {
+    if (!(w in have)) continue; // unknown engine string — config validation should've caught it
+    if (!have[w as keyof typeof have]) {
+      const def = w === "jsc"           ? "ZAPP_WORKER_ENGINE_JSC"
+                : w === "txiki"         ? "ZAPP_WORKER_ENGINE_TXIKI"
+                : w === "bare-jsc"      ? "ZAPP_WORKER_ENGINE_BARE_JSC"
+                : w === "bare-v8"       ? "ZAPP_WORKER_ENGINE_BARE_V8"
+                : w === "bare-quickjs"  ? "ZAPP_WORKER_ENGINE_BARE_QUICKJS"
+                : w === "bare-mqjs"     ? "ZAPP_WORKER_ENGINE_BARE_MQJS"
+                : w === "bare-hermes"   ? "ZAPP_WORKER_ENGINE_BARE_HERMES"
+                : null;
+      if (def) missing.push(def);
+    }
+  }
+
+  if (missing.length === 0) return null;
+
+  // Apple-target engines are macOS- AND iOS-relevant; we leave the
+  // platform prefix off so zc applies to whichever host. (`generateIOSBuildFile`
+  // strips macos: directives, so a non-prefixed define carries through to iOS.)
+  const body = `// AUTO-GENERATED engine overlay. Adds defines for engines reached
+// for in zapp.config.ts but not declared in zapp/build.zc.
+${missing.map(d => `//> define: ${d}`).join("\n")}
+`;
+
+  const zappDir = path.join(root, ".zapp");
+  await mkdir(zappDir, { recursive: true });
+  const overlayPath = path.join(zappDir, "zapp_engine_overlay.zc");
+  await Bun.write(overlayPath, body);
+  return overlayPath;
+}
+
+// Generate .zapp/zapp_platform.zc with .m file cflags. The optional
+// `engineOverlayFile` lets the platform scan also see engine defines
+// the CLI auto-generated from zapp.config.ts (parallels how
+// generateEngineOverlay produces them).
+export async function generatePlatformConfig(
+  root: string,
+  target: BuildTarget = detectTarget(),
+  buildFile?: string,
+  engineOverlayFile?: string,
+): Promise<string> {
   const zappDir = path.join(root, ".zapp");
   await mkdir(zappDir, { recursive: true });
 
@@ -211,17 +355,42 @@ export async function generatePlatformConfig(root: string, target: BuildTarget =
     process.stdout.write(`[zapp] user sources: ${relPaths.join(", ")}\n`);
   }
 
-  // Check if txiki.js workers are enabled (user has ZAPP_WORKER_ENGINE_TXIKI in build.zc)
+  // Check enabled worker engines from user's build.zc directives AND
+  // from the CLI-generated engine overlay (when present). Concatenating
+  // the two sources lets users name engines in zapp.config.ts without
+  // also having to add `//> define:` directives by hand.
+  let hasJsc = false;
   let hasTxiki = false;
+  const bareEngines: ("v8" | "jsc" | "quickjs" | "mqjs" | "hermes")[] = [];
   const userBuild = buildFile ?? path.join(root, "zapp", "build.zc");
-  try {
-    const buildContent = await Bun.file(userBuild).text();
-    // Match uncommented define directive only (not commented-out lines)
-    hasTxiki = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_TXIKI/m.test(buildContent);
-  } catch {}
+  let buildContent = "";
+  try { buildContent += await Bun.file(userBuild).text() + "\n"; } catch {}
+  if (engineOverlayFile) {
+    try { buildContent += await Bun.file(engineOverlayFile).text(); } catch {}
+  }
+  hasJsc   = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_JSC\b/m.test(buildContent);
+  hasTxiki = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_TXIKI/m.test(buildContent);
+  if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_V8/m.test(buildContent)) bareEngines.push("v8");
+  if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_JSC/m.test(buildContent)) bareEngines.push("jsc");
+  if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_QUICKJS/m.test(buildContent)) bareEngines.push("quickjs");
+  if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_MQJS/m.test(buildContent)) bareEngines.push("mqjs");
+  if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_HERMES/m.test(buildContent)) bareEngines.push("hermes");
+  if (hasJsc) {
+    // Legacy JSC engine — gated here so projects without JSC don't
+    // get duplicate-symbol link errors against worker.zc's stub block.
+    const jscM = path.join(nativeDir, "worker", "engines", "jsc.m");
+    if (existsSync(jscM)) sources.push(jscM);
+  }
   if (hasTxiki) {
     const txikiC = path.join(nativeDir, "worker", "engines", "txiki.c");
     if (existsSync(txikiC)) sources.push(txikiC);
+  }
+  if (bareEngines.length > 0) {
+    // Single bare.c source handles all enabled engines via #ifdef on
+    // the ZAPP_WORKER_ENGINE_BARE_* defines. The libs differ per
+    // engine but the dispatcher code is the same.
+    const bareC = path.join(nativeDir, "worker", "engines", "bare.c");
+    if (existsSync(bareC)) sources.push(bareC);
   }
 
   let content = "// AUTO-GENERATED by zapp CLI. Do not edit.\n// Platform-specific compilation sources.\n\n";
@@ -287,6 +456,16 @@ export async function generatePlatformConfig(root: string, target: BuildTarget =
     // Available on iOS as a system library; just needs the link flag.
     content += `//> link: -lcompression\n`;
   }
+  // Worker-engine link plumbing — accumulate all -L search paths and
+  // -l<name> flags into a single `//> link:` directive emitted at the
+  // end. zc v0.4.3 documents `//> lib:` for -L paths but the older
+  // installed binary doesn't appear to honor it; meanwhile multiple
+  // separate `//> link:` directives don't reliably stack. So we
+  // collect everything from txiki + bare and emit one consolidated
+  // line — the pattern the legacy txiki code already used.
+  const allLinkSearchDirs: string[] = [];
+  const allLinkLibs: string[] = [];
+
   if (hasTxiki) {
     const txikiDir = await resolveTxikiDir();
     const { txikiBuildDirName } = await import("./native");
@@ -299,23 +478,18 @@ export async function generatePlatformConfig(root: string, target: BuildTarget =
       ].join(" ");
       content += `//> cflags: ${includes}\n`;
 
-      // Linker flags — all static libraries from txiki.js build. iOS
-      // builds skip libffi (-lffi) and mimalloc (-lmimalloc): FFI is
-      // banned by Apple (no dlopen) so we configured txiki with
-      // BUILD_WITH_FFI=OFF; mimalloc is disabled for size and to avoid
-      // a libsystem_malloc interceptor on iOS.
       if (existsSync(path.join(txikiBuild, "libtjs_core.a"))) {
-        const linkLibs = [
+        const txikiLibs = [
           "-ltjs_core", "-lvmlib", "-lqjs",
           "-luv", "-lwebsockets", "-lada", "-lminiz", "-lsqlite3",
           "-lmbedtls", "-lmbedcrypto", "-lmbedx509", "-lp256m", "-leverest",
-          "-lc++",   // ada (URL parser) is C++
+          "-lc++",
         ];
         if (!isIOSTarget(target)) {
-          linkLibs.unshift("-lmimalloc");
-          linkLibs.push("-lffi");
+          txikiLibs.unshift("-lmimalloc");
+          txikiLibs.push("-lffi");
         }
-        const searchDirs = [
+        const txikiSearchDirs = [
           shortPath(txikiBuild),
           shortPath(path.join(txikiBuild, "deps", "libuv")),
           shortPath(path.join(txikiBuild, "deps", "quickjs")),
@@ -328,15 +502,346 @@ export async function generatePlatformConfig(root: string, target: BuildTarget =
           shortPath(path.join(txikiBuild, "deps", "ada")),
         ];
         if (!isIOSTarget(target)) {
-          searchDirs.push(shortPath(path.join(txikiBuild, "deps", "mimalloc")));
+          txikiSearchDirs.push(shortPath(path.join(txikiBuild, "deps", "mimalloc")));
         }
-        const linkFlags = [
-          ...searchDirs.map(d => `-L${d}`),
-          ...linkLibs,
-        ].join(" ");
-        content += `//> link: ${linkFlags}\n`;
+        allLinkSearchDirs.push(...txikiSearchDirs);
+        allLinkLibs.push(...txikiLibs);
       }
     }
+  }
+
+  // Bare runtime — link each enabled engine. Use zc's dedicated
+  // `//> include:` (for -I) and `//> lib:` (for -L) directives rather
+  // than packing -I/-L into `cflags:` / `link:`. Per the docs (Zen-C
+  // tour 12.5 Build Directives), these have purpose-specific
+  // accumulation behavior; bundling search paths into a generic
+  // link: directive doesn't reliably extend the previous one.
+  if (bareEngines.length > 0) {
+    const { resolveBareDir } = await import("./paths");
+    const { bareBuildDirName } = await import("./native");
+    const bareDir = await resolveBareDir();
+    const bareInclude = path.join(bareDir, "include");
+    if (existsSync(path.join(bareInclude, "bare.h"))) {
+      content += `//> cflags: -I${shortPath(bareInclude)}\n`;
+
+      for (const engine of bareEngines) {
+        const buildSubdir = bareBuildDirName(target, engine);
+        const bareBuild = path.join(bareDir, buildSubdir);
+        // js.h lives in the libjs abstraction layer (always pulled in
+        // by Bare regardless of which engine backs it).
+        const libjsInclude = path.join(bareBuild, "_deps",
+            "github+holepunchto+libjs-src", "include");
+        if (existsSync(libjsInclude)) {
+          content += `//> cflags: -I${shortPath(libjsInclude)}\n`;
+        }
+        const engineSrcMap: Record<string, string> = {
+          v8: "github+holepunchto+libjs-src",
+          jsc: "github+holepunchto+libjsc-src",
+          quickjs: "github+holepunchto+libqjs-src",
+          mqjs: "github+holepunchto+libmqjs-src",
+          hermes: "github+popaprozac+libhermes-src",
+        };
+        const engineSrc = path.join(bareBuild, "_deps", engineSrcMap[engine], "include");
+        if (existsSync(engineSrc) && engine !== "v8") {
+          content += `//> cflags: -I${shortPath(engineSrc)}\n`;
+        }
+        const libuvInclude = path.join(bareBuild, "_deps",
+            "github+libuv+libuv-src", "include");
+        if (existsSync(libuvInclude)) {
+          content += `//> cflags: -I${shortPath(libuvInclude)}\n`;
+        }
+        const libutfInclude = path.join(bareBuild, "_deps",
+            "github+holepunchto+libutf-src", "include");
+        if (existsSync(libutfInclude)) {
+          content += `//> cflags: -I${shortPath(libutfInclude)}\n`;
+        }
+        const libBare = path.join(bareBuild, "libbare.a");
+        if (existsSync(libBare)) {
+          // V8 uses BARE_PREBUILDS=ON which places libjs.a (and libv8.a,
+          // libc++.a) under `darwin-arm64/` rather than the usual
+          // `_deps/<repo>-build` tree the other engines use.
+          let engineBuild: string;
+          if (engine === "v8") {
+            engineBuild = path.join(bareBuild, "darwin-arm64");
+          } else {
+            const engineBuildMap: Record<string, string> = {
+              jsc: "github+holepunchto+libjsc-build",
+              quickjs: "github+holepunchto+libqjs-build",
+              mqjs: "github+holepunchto+libmqjs-build",
+              hermes: "github+popaprozac+libhermes-build",
+            };
+            engineBuild = path.join(bareBuild, "_deps", engineBuildMap[engine]);
+          }
+          const libuvBuild = path.join(bareBuild, "_deps", "github+libuv+libuv-build");
+          const libutfBuild = path.join(bareBuild, "_deps", "github+holepunchto+libutf-build");
+          // We pass static .a files as positional arguments rather
+          // than `-L<dir> -l<name>` for libuv specifically. Reason:
+          // homebrew installs `libuv.dylib` in `/opt/homebrew/lib/`,
+          // which is on most devs' default link search path
+          // (LIBRARY_PATH or implicit). With txiki+bare both compiled
+          // in, txiki's `-L` placed its libuv.a first and `-luv`
+          // resolved to it. With ONLY bare compiled in, `-luv` falls
+          // through to homebrew's dylib — produces a binary with an
+          // unsatisfiable @rpath/libuv.1.dylib reference at launch.
+          // Passing the .a file directly forces static linking and
+          // makes the build platform-installed-dylib-proof.
+          //
+          // For libutf and the engine-specific binding (libjs.a) we
+          // keep the -L+-l form because there's no system collision —
+          // those libs only exist in our build dir.
+          const libuvA = path.join(libuvBuild, "libuv.a");
+          // For V8 we skip adding engineBuild to -L; otherwise `-lc++`
+          // resolves to V8's bundled libc++.a (`__Cr` namespace)
+          // before falling through to Apple's stock libc++ (`__1`
+          // namespace), and BoringSSL needs the latter. We pass
+          // libv8.a + libc++.a positionally below instead.
+          allLinkSearchDirs.push(shortPath(bareBuild));
+          if (engine !== "v8") allLinkSearchDirs.push(shortPath(engineBuild));
+          allLinkSearchDirs.push(shortPath(libutfBuild));
+          allLinkLibs.push("-lbare");
+          if (engine !== "v8") allLinkLibs.push("-ljs");
+          allLinkLibs.push("-lutf");
+          if (engine === "v8") {
+            const libjsA = path.join(engineBuild, "libjs.a");
+            if (existsSync(libjsA)) {
+              const flag = shortPath(libjsA);
+              if (!allLinkLibs.includes(flag)) allLinkLibs.push(flag);
+            }
+          }
+          if (existsSync(libuvA)) {
+            // Avoid duplicates if multiple bare engines compile in.
+            const libuvFlag = shortPath(libuvA);
+            if (!allLinkLibs.includes(libuvFlag)) allLinkLibs.push(libuvFlag);
+          }
+          // V8 needs the engine itself + libc++ as separate libs (the
+          // libjsc binding is header-only against the system framework
+          // so doesn't need this; QJS and mQJS link the engine via
+          // their respective libjs binding).
+          //
+          // CRUCIAL detail when BoringSSL is also on the link line:
+          // V8's prebuilt libc++.a uses Holepunch's custom inline
+          // namespace `__Cr` (the build uses LIBCXX_ABI_NAMESPACE to
+          // avoid clashing with the system libc++), while Apple's
+          // stock libc++ uses `__1`. They expose completely different
+          // mangled symbols. BoringSSL was compiled against stock
+          // Apple libc++, so it needs `__1` versions of std::__sort
+          // etc., which V8's bundled libc++.a CANNOT provide.
+          //
+          // We solve this by:
+          //   1. Passing V8's libc++.a as an absolute positional
+          //      argument — gives `__Cr` symbols for V8 itself.
+          //   2. NOT also pushing `-lc++` here (the BoringSSL block
+          //      below pushes it, which resolves to Apple's system
+          //      libc++ providing the `__1` symbols).
+          //
+          // Without (1), V8 can't find its `__Cr` symbols. Without
+          // (2), BoringSSL can't find its `__1` symbols. Both libs
+          // coexist on the link line because the symbols are in
+          // separate namespaces, so no duplicate-symbol conflict.
+          if (engine === "v8") {
+            const v8A = path.join(engineBuild, "libv8.a");
+            if (existsSync(v8A)) {
+              const flag = shortPath(v8A);
+              if (!allLinkLibs.includes(flag)) allLinkLibs.push(flag);
+            }
+            const v8Cxx = path.join(engineBuild, "libc++.a");
+            if (existsSync(v8Cxx)) {
+              const flag = shortPath(v8Cxx);
+              if (!allLinkLibs.includes(flag)) allLinkLibs.push(flag);
+            }
+          }
+          // QuickJS and mQJS produce a separate libqjs.a / libmqjs.a
+          // alongside libjs.a; both need linking.
+          if (engine === "quickjs") {
+            allLinkSearchDirs.push(shortPath(
+              path.join(bareBuild, "_deps", "github+quickjs-ng+quickjs-build")
+            ));
+            allLinkLibs.push("-lqjs", "-lc++");
+          }
+          if (engine === "mqjs") {
+            allLinkLibs.push("-lmqjs");
+          }
+          if (engine === "hermes") {
+            // libhermes pins BUILD_SHARED_LIBS=OFF (see
+            // libhermes/CMakeLists.txt), so Hermes produces static
+            // archives. On Apple, HERMES_BUILD_APPLE_FRAMEWORK
+            // defaults ON and Hermes wraps libhermesvm.a as a
+            // framework bundle whose binary IS a static archive.
+            // Apple's ld can link this via `-framework hermesvm`.
+            const hermesBuildRoot = path.join(bareBuild, "_deps", "github+facebook+hermes-build");
+            const hermesVmFwkCandidates = [
+              path.join(hermesBuildRoot, "API", "hermes", "hermesvm.framework"),
+              path.join(bareBuild, "lib", "hermesvm.framework"),
+            ];
+            const hermesVmFwk = hermesVmFwkCandidates.find(p => existsSync(p));
+            const hermesVmLibA = path.join(hermesBuildRoot, "API", "hermes", "libhermesvm.a");
+            if (hermesVmFwk) {
+              allLinkLibs.push("-F" + shortPath(path.dirname(hermesVmFwk)));
+              allLinkLibs.push("-framework", "hermesvm");
+            } else if (existsSync(hermesVmLibA)) {
+              const flag = shortPath(hermesVmLibA);
+              if (!allLinkLibs.includes(flag)) allLinkLibs.push(flag);
+            }
+            // jsi follows BUILD_SHARED_LIBS / HERMES_BUILD_SHARED_JSI
+            // — libhermes pins both OFF, so we get libjsi.a.
+            const jsiLibA = path.join(hermesBuildRoot, "jsi", "libjsi.a");
+            const jsiLibDylib = path.join(hermesBuildRoot, "jsi", "libjsi.dylib");
+            if (existsSync(jsiLibA)) {
+              const flag = shortPath(jsiLibA);
+              if (!allLinkLibs.includes(flag)) allLinkLibs.push(flag);
+            } else if (existsSync(jsiLibDylib)) {
+              allLinkSearchDirs.push(shortPath(path.dirname(jsiLibDylib)));
+              allLinkLibs.push("-ljsi");
+            }
+            // Hermes' framework binary only contains symbols from
+            // API/hermes/*.cpp — not the underlying VM, optimizer,
+            // parser, or LLVH support libraries. Those live as
+            // ~25 separate static archives under `_deps/.../lib/*`
+            // and `_deps/.../external/llvh/lib/*`.
+            //
+            // cmake's transitive PRIVATE link deps don't propagate
+            // when we're linking by hand. Putting all 25 paths on
+            // a single `//> link:` directive overflows Zen-C's
+            // 8KB `g_link_flags` buffer (the buffer would be fine
+            // for 25 short -l<name> entries, but our paths are
+            // ~95 chars each → 2.4 KB just for these — and the
+            // strncat-based accumulator in append_flag silently
+            // truncates the last few paths instead of erroring).
+            //
+            // Solution: merge them into one combined archive via
+            // libtool at build-config time, then link only that.
+            // Static archive merge is cheap (just an `ar` table
+            // rebuild — no compilation) and the resulting file is
+            // dead-stripped by ld at the final link.
+            const hermesLibGlobs = [
+              path.join(hermesBuildRoot, "lib"),
+              path.join(hermesBuildRoot, "external"),
+              path.join(hermesBuildRoot, "public", "hermes", "Public"),
+            ];
+            const walkForA = (dir: string, out: string[]) => {
+              if (!existsSync(dir)) return;
+              const fs = require("fs") as typeof import("fs");
+              for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+                const p = path.join(dir, entry.name);
+                if (entry.isDirectory()) walkForA(p, out);
+                else if (entry.isFile() && /^lib(hermes|LLVH|dtoa)[A-Za-z0-9]*\.a$/.test(entry.name)) {
+                  out.push(p);
+                }
+              }
+            };
+            const hermesArchives: string[] = [];
+            for (const root of hermesLibGlobs) walkForA(root, hermesArchives);
+            if (hermesArchives.length > 0) {
+              const combinedPath = path.join(hermesBuildRoot, "libhermes_combined.a");
+              const fs = require("fs") as typeof import("fs");
+              const newest = Math.max(...hermesArchives.map(p => fs.statSync(p).mtimeMs));
+              const stale = !existsSync(combinedPath) || fs.statSync(combinedPath).mtimeMs < newest;
+              if (stale) {
+                const { execFileSync } = require("child_process") as typeof import("child_process");
+                if (existsSync(combinedPath)) fs.unlinkSync(combinedPath);
+                execFileSync("libtool", ["-static", "-o", combinedPath, ...hermesArchives], { stdio: "inherit" });
+              }
+              const flag = shortPath(combinedPath);
+              if (!allLinkLibs.includes(flag)) allLinkLibs.push(flag);
+            }
+            // Hermes is C++ — pulls in std symbols. Uses the stock
+            // libc++ namespace `__1`, so system libc++ is correct.
+            if (!allLinkLibs.includes("-lc++")) allLinkLibs.push("-lc++");
+          }
+          // Bare's stdlib modules (bare-buffer, bare-os, bare-timers,
+          // bare-buffer, etc.) live as separate binding.c.o objects
+          // outside libbare.a. Each registers itself with the runtime
+          // via a static-init constructor, which means we need
+          // -force_load so the linker keeps the .o even though no
+          // symbol from it is referenced from our code. Without this
+          // bare.js fails on `require('bare-buffer')` and the runtime
+          // crashes during bare_setup. The combined archive is built
+          // in cli/src/native.ts after the bare cmake build.
+          const libBareModules = path.join(bareBuild, "libbare_modules.a");
+          if (existsSync(libBareModules)) {
+            allLinkLibs.push(`-Wl,-force_load,${shortPath(libBareModules)}`);
+          }
+
+          // Several bare-* bindings have heavyweight transitive
+          // C deps that bare's cmake fetches but doesn't bundle into
+          // libbare.a. When the corresponding binding.c.o is in
+          // libbare_modules.a (because we now build bare_bin in
+          // ensureBareBuilt), we ALSO need to put those deps on the
+          // link line.
+          //
+          //   bare-tls / bare-crypto → BoringSSL (libssl + libcrypto
+          //                            + libdecrepit). Symbols like
+          //                            BIO_clear_retry_flags.
+          //   bare-dns               → c-ares (libcares). Symbols
+          //                            like ares_destroy.
+          //   bare-zlib              → zlib (libz). Symbols like
+          //                            deflateInit_ / inflate.
+          //
+          // The .a files live in different roots depending on which
+          // cmake project built them:
+          //   - macOS: vendor/bare's main build dir (bare_bin's
+          //     transitive fetches).
+          //   - iOS: the user-modules overlay (bare_bin isn't built
+          //     on iOS, so the overlay re-fetches them via its own
+          //     link_bare_module calls for bare-tcp/tls/dns/etc.).
+          //
+          // Probe both. We don't gate on which modules are present —
+          // unused libs cost nothing because the linker dead-strips
+          // unreferenced sections.
+          const depRoots = [
+            path.join(bareBuild, "_deps"),
+            path.join(bareBuild, "zapp-user-modules", "build", "_deps"),
+          ];
+          for (const depRoot of depRoots) {
+            const boringsslDir = path.join(depRoot, "github+google+boringssl-build");
+            if (existsSync(path.join(boringsslDir, "libssl.a"))) {
+              const dir = shortPath(boringsslDir);
+              if (!allLinkSearchDirs.includes(dir)) allLinkSearchDirs.push(dir);
+              if (!allLinkLibs.includes("-lssl")) {
+                allLinkLibs.push("-lssl", "-lcrypto", "-ldecrepit");
+              }
+              // BoringSSL is C++ — pulls in std::__sort, std::terminate,
+              // etc. The final binary is linked with clang (C), so we
+              // need libc++ explicitly, and CRUCIALLY it has to come
+              // AFTER the BoringSSL libs. Apple's ld doesn't re-scan
+              // static archives once it passes them, so a `-lc++`
+              // pushed earlier (e.g. by the V8 engine branch at
+              // engine === "v8") doesn't satisfy libssl's references.
+              //
+              // Pull any existing `-lc++` out of the list first, then
+              // re-push it here. Idempotent in the dedup sense, but
+              // order-sensitive — which is the whole point.
+              const cppIdx = allLinkLibs.indexOf("-lc++");
+              if (cppIdx >= 0) allLinkLibs.splice(cppIdx, 1);
+              allLinkLibs.push("-lc++");
+            }
+            const caresLib = path.join(depRoot, "github+c-ares+c-ares-build", "src", "lib", "libcares.a");
+            if (existsSync(caresLib)) {
+              const flag = shortPath(caresLib);
+              if (!allLinkLibs.includes(flag)) allLinkLibs.push(flag);
+            }
+            const zlibLib = path.join(depRoot, "github+madler+zlib-build", "libz.a");
+            if (existsSync(zlibLib)) {
+              const flag = shortPath(zlibLib);
+              if (!allLinkLibs.includes(flag)) allLinkLibs.push(flag);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Flush all accumulated -L paths + -l flags as a single //> link:
+  // directive. Single-line is the form zc handles cleanly — splitting
+  // search paths into //> lib: directives or libs into multiple //>
+  // link: lines caused only the first to be honored in tests on
+  // zc v0.4.3.
+  if (allLinkLibs.length > 0 || allLinkSearchDirs.length > 0) {
+    const allFlags = [
+      ...allLinkSearchDirs.map(d => `-L${d}`),
+      ...allLinkLibs,
+    ];
+    content += `//> link: ${allFlags.join(" ")}\n`;
   }
 
   if (process.platform === "win32" && sources.length > 0) {

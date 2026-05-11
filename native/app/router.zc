@@ -686,12 +686,22 @@ fn router_handle_worker(app: App*, action: string, payload: string, window_id: i
         if shared_opt.is_some() { is_shared = shared_opt.unwrap(); }
 
         // Per-worker engine selection (G8). JS callers pass
-        // `engine: "jsc" | "txiki"` in the create options. Default 0 = JSC.
+        // `engine: "jsc" | "txiki" | "bare-jsc" | "bare-v8" |
+        // "bare-quickjs" | "bare-mqjs"`. Default 0 = JSC. The downstream
+        // dispatcher in worker.zc handles engines that aren't compiled
+        // in by falling back via `zapp_resolve_engine` (priority order
+        // documented in worker.zc:fallback). Constants mirror
+        // worker/registry.zc and cli/src/build-config.ts:engineNameToId.
         let engine: int = 0;
         let engine_str_opt = pre_args.get_string("engine");
         if engine_str_opt.is_some() {
             let s = engine_str_opt.unwrap();
-            if s == "txiki" { engine = 1; }
+            if s == "txiki"             { engine = 1; }
+            else if s == "bare-jsc"     { engine = 2; }
+            else if s == "bare-v8"      { engine = 3; }
+            else if s == "bare-quickjs" { engine = 4; }
+            else if s == "bare-mqjs"    { engine = 5; }
+            else if s == "bare-hermes"  { engine = 6; }
         }
 
         if is_shared {

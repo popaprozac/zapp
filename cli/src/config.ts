@@ -292,20 +292,83 @@ export interface HeadlessWorkerConfig {
   /** Optional restart policy. Omit / `false` to disable auto-restart. */
   restart?: RestartPolicy | false;
   /**
-   * Per-worker engine selection (G8). `"jsc"` is the default — zero
-   * binary cost on Apple, JIT for hot JS loops, no fetch / WebSocket /
-   * Streams. `"txiki"` opts this specific worker into the txiki.js
-   * runtime — full web APIs (fetch, WebSocket, Streams, SQLite via
-   * FFI) and a faster worker→native call rate, at the cost of pulling
-   * in the txiki engine (~6 MB if not already linked).
+   * Per-worker engine selection.
    *
-   * Both engines must be enabled at build time (`ZAPP_WORKER_ENGINE_JSC`
-   * + `ZAPP_WORKER_ENGINE_TXIKI`) for true mixing. When only one is
-   * compiled, requests for the other are downgraded with a warning so
-   * the surprise is visible during dev.
+   * - `"jsc"` (legacy default) — native Cocoa JSContext. Zero binary
+   *   cost on Apple, JIT for hot JS loops, but no fetch / WebSocket /
+   *   Streams in the worker context.
+   * - `"txiki"` (legacy) — txiki.js runtime. Full web APIs, no JIT,
+   *   ~6 MB binary cost.
+   * - `"bare-jsc"` — Bare runtime + JSC engine. JIT on macOS (free
+   *   binary cost on Apple via system framework), à la carte web APIs
+   *   from `bare-fetch` / `bare-ws` / `bare-crypto` / etc.
+   * - `"bare-v8"` — Bare runtime + V8. JIT all platforms; larger
+   *   binary, sensible for Windows / Linux where there's no system
+   *   JSC.
+   * - `"bare-quickjs"` — Bare runtime + QuickJS. No JIT, smallest
+   *   cross-platform footprint after JSC.
+   * - `"bare-mqjs"` — Bare runtime + micro-QuickJS. Embedded / IoT
+   *   profile.
+   * - `"bare-hermes"` — Bare runtime + Hermes. AOT bytecode + tier-up
+   *   interpreter. iOS-friendly (no JIT entitlement needed).
+   *
+   * The corresponding `ZAPP_WORKER_ENGINE_*` directive must be in
+   * `zapp/build.zc` for the engine to be linked in. When the
+   * requested engine isn't compiled, the worker dispatcher logs a
+   * downgrade and falls back through priority order
+   * (bare-jsc > bare-v8 > bare-hermes > bare-quickjs > bare-mqjs > txiki > jsc).
    */
-  engine?: "jsc" | "txiki";
+  engine?: "jsc" | "txiki" | "bare-jsc" | "bare-v8" | "bare-quickjs" | "bare-mqjs" | "bare-hermes";
 }
+
+/**
+ * High-level worker capability identifiers. Each maps (via the
+ * `WORKER_MODULE_CAPABILITIES` registry in this file) to the
+ * underlying bare-* (or txiki) packages a project must install and the
+ * `@zappdev/runtime/worker-globals/<subpath>` shim that exposes the
+ * matching globals.
+ */
+export type WorkerModuleId =
+  | "fetch"
+  | "websocket"
+  | "fs"
+  | "streams"
+  | "crypto"
+  | "url"
+  | "encoding";
+
+/**
+ * Capability → packages + globals subpath registry. Owned by the CLI
+ * so a single source of truth drives:
+ *  - install verification (`bun install <packages>` if missing)
+ *  - native binding link (the side-cmake overlay picks up each
+ *    package's `binding.c` when present)
+ *  - auto-import (`@zappdev/runtime/worker-globals/<subpath>` is
+ *    prepended to every bundled worker entry)
+ *
+ * `packages` lists the *direct* npm dep(s) needed; transitive
+ * bare-* deps (e.g. bare-fetch → bare-tcp/tls/dns/zlib) get
+ * resolved by Vite + the overlay automatically.
+ *
+ * `globals` is the subpath under `@zappdev/runtime/worker-globals`
+ * (so `"/fetch"` → `import "@zappdev/runtime/worker-globals/fetch"`).
+ * `null` means no global needs to be installed (the package's API
+ * is reached via direct import only).
+ */
+export interface WorkerModuleSpec {
+  packages: readonly string[];
+  globals: string | null;
+}
+
+export const WORKER_MODULE_CAPABILITIES: Record<WorkerModuleId, WorkerModuleSpec> = {
+  fetch:     { packages: ["bare-fetch"],    globals: "/fetch" },
+  websocket: { packages: ["bare-ws"],       globals: "/websocket" },
+  fs:        { packages: ["bare-fs"],       globals: null },
+  streams:   { packages: ["bare-stream"],   globals: "/streams" },
+  crypto:    { packages: ["bare-crypto"],   globals: "/crypto" },
+  url:       { packages: ["bare-url"],      globals: "/url" },
+  encoding:  { packages: ["bare-encoding"], globals: "/encoding" },
+};
 
 export interface ZappConfig {
   name: string;
@@ -337,6 +400,36 @@ export interface ZappConfig {
    * ```
    */
   headless?: Record<string, string | HeadlessWorkerConfig>;
+  /**
+   * Worker capabilities to enable. Each entry is a high-level
+   * capability name (e.g. `"fetch"`, `"websocket"`, `"fs"`) — the
+   * CLI maps it to the underlying bare-* / txiki package(s),
+   * verifies install, and auto-prepends the matching
+   * `@zappdev/runtime/worker-globals/<subpath>` import so the
+   * global API (`fetch`, `WebSocket`, etc.) is available in every
+   * worker without per-worker boilerplate.
+   *
+   * On bare engines, the package's native bindings (`binding.c`)
+   * are also auto-compiled into `libbare_modules.a` via the
+   * side-cmake overlay (see `ensureUserBareModulesCompiled`).
+   *
+   * Same surface across engines — txiki provides most of these
+   * APIs natively, so the runtime shim no-ops there. Legacy JSC
+   * has no web APIs; CLI doctor warns when capabilities are
+   * requested for an engine that can't provide them.
+   *
+   * @example
+   * ```ts
+   * workerModules: ["fetch", "websocket"]
+   * ```
+   *
+   * @example
+   * ```ts
+   * // src/worker.ts — no per-worker imports needed
+   * fetch("https://example.com").then(r => r.text());
+   * ```
+   */
+  workerModules?: WorkerModuleId[];
   deepLinkSchemes?: string[];  // e.g. ["myapp"] → registers myapp:// URL scheme
   /**
    * Custom in-webview URL protocols (G19). Each scheme listed here

@@ -67,7 +67,20 @@ export async function resolveEntitlements(
   config: ResolvedConfig,
 ): Promise<ResolvedEntitlements> {
   const macosConfig: MacOSConfig = config.macos ?? {};
-  const mapEntries = macosConfig.entitlements ?? {};
+
+  // Auto-merge `com.apple.security.cs.allow-jit` when this project links
+  // a JSC-class worker engine (jsc or bare-jsc). Without the entitlement,
+  // Apple Silicon's MAP_JIT enforcement keeps JSC in interpreter mode
+  // (~12× slower on JIT-friendly workloads). User can opt out by
+  // explicitly setting `"com.apple.security.cs.allow-jit": false` in the
+  // entitlements map.
+  const { hasJscClassWorkerEngine } = await import("./native");
+  const needsJit = await hasJscClassWorkerEngine(root);
+  const mapEntries: Record<string, string | number | boolean | string[]> =
+    { ...(macosConfig.entitlements ?? {}) };
+  if (needsJit && !("com.apple.security.cs.allow-jit" in mapEntries)) {
+    mapEntries["com.apple.security.cs.allow-jit"] = true;
+  }
   const mapKeys = Object.keys(mapEntries);
 
   // Resolve entitlements file. Explicit path wins; otherwise look for the

@@ -1,19 +1,26 @@
 /**
- * Worker globals — typed declarations for Zapp Worker contexts.
- * Import this in worker scripts for TypeScript support.
+ * Worker globals — TYPE declarations for `send`, `receive`,
+ * `__zappBridge`, etc.
+ *
+ * Runtime installation of WHATWG-shaped globals (`fetch`, `WebSocket`,
+ * etc.) is now driven by `workerModules` in `zapp.config.ts`. The Vite
+ * plugin auto-prepends the binding code to every worker bundle, so
+ * user code can just call `fetch(...)` without any per-worker import.
  *
  * @example
  * ```ts
- * /// <reference path="@zappdev/runtime/worker-globals" />
- * // or
- * import "@zappdev/runtime/worker-globals";
+ * // zapp.config.ts
+ * workerModules: ["fetch", "websocket"]
  *
- * send("channel", { data: 123 });
- * receive("result", (data) => console.log(data));
+ * // src/worker.ts — no setup needed
+ * fetch("https://example.com").then(r => r.text());
  * ```
+ *
+ * **Legacy per-subpath imports** (`import "@zappdev/runtime/worker-globals/fetch"`)
+ * still work for projects not using `workerModules`. They bind the
+ * same globals via the file shims in this directory. Avoid mixing
+ * the two approaches — the prelude is canonical.
  */
-
-export {};
 
 declare global {
   /** Send a message on a named channel to the owning WebView. */
@@ -45,3 +52,15 @@ declare global {
 
   var self: typeof globalThis;
 }
+
+// The no-subpath aggregator does NOT auto-import per-capability shims
+// anymore. Reason: those shims live outside the project root (in the
+// framework's `runtime/worker-globals/`), so when bundled they cause
+// Vite to externalize their `import bareFetch from "bare-fetch"` etc.
+// — invalid output for the worker's `js_run_script` script context.
+//
+// Use `workerModules` in `zapp.config.ts` for runtime installs (the
+// canonical path), or import a specific subpath like
+// `import "@zappdev/runtime/worker-globals/fetch"` for one-off opt-in.
+
+export {};

@@ -18,5 +18,9 @@
   },
   "peerDependencies": {
     "vite": ">=5.0.0"
+  },
+  "dependencies": {
+    "@babel/core": "^7.29.0",
+    "@babel/plugin-transform-classes": "^7.28.6"
   }
 }

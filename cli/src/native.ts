@@ -1,9 +1,9 @@
 // Native compilation — compiles with zc.
 
 import path from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, unlinkSync } from "node:fs";
 import { readdir } from "node:fs/promises";
-import { resolveTxikiDir } from "./paths";
+import { resolveTxikiDir, resolveBareDir } from "./paths";
 
 /**
  * Build target — what platform/architecture the binary is being
@@ -60,8 +60,12 @@ export function getPlatformSources(nativeDir: string, target: BuildTarget = dete
       path.join(darwinDir, "clipboard.m"),
       path.join(darwinDir, "shortcuts.m"),
     ];
-    const jscWorker = path.join(nativeDir, "worker", "engines", "jsc.m");
-    if (existsSync(jscWorker)) sources.push(jscWorker);
+    // jsc.m / txiki.c / bare.c are NOT listed here — they're added by
+    // `generatePlatformConfig` only when the corresponding
+    // ZAPP_WORKER_ENGINE_* directive is enabled. Otherwise the engine
+    // file's symbols collide with `worker.zc`'s `#if !defined(...)`
+    // stub block, producing duplicate-symbol link errors when a
+    // project disables that engine.
     return sources.filter(f => existsSync(f));
   }
   if (isIOSTarget(target)) {
@@ -70,6 +74,11 @@ export function getPlatformSources(nativeDir: string, target: BuildTarget = dete
     // counterpart of the same-named darwin/ file. Symbols match
     // (darwin_window_create, darwin_clipboard_read_text, etc.) so
     // the Zen-C framework calls bind unchanged across platforms.
+    //
+    // Worker engines (jsc.m, txiki.c, bare.c) are gated in
+    // `generatePlatformConfig` and only added when the
+    // corresponding ZAPP_WORKER_ENGINE_* directive is set. See the
+    // darwin branch above for the rationale.
     const sources = [
       path.join(iosDir, "platform.m"),
       path.join(iosDir, "window.m"),
@@ -84,9 +93,6 @@ export function getPlatformSources(nativeDir: string, target: BuildTarget = dete
       path.join(iosDir, "clipboard.m"),
       path.join(iosDir, "shortcuts.m"),
     ];
-    // JSC worker engine — same file works on iOS (no JIT but same API)
-    const jscWorker = path.join(nativeDir, "worker", "engines", "jsc.m");
-    if (existsSync(jscWorker)) sources.push(jscWorker);
     return sources.filter(f => existsSync(f));
   }
   if (target === "windows") {
@@ -206,24 +212,731 @@ export async function ensureTxikiBuilt(_nativeDir: string, target: BuildTarget =
   return txikiDir;
 }
 
-// Check if user's build.zc enables txiki
-export async function hasTxikiEnabled(root: string): Promise<boolean> {
-  const buildFile = path.join(root, "zapp", "build.zc");
-  try {
-    const content = await Bun.file(buildFile).text();
-    return /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_TXIKI/m.test(content);
-  } catch { return false; }
+// Check if user's build.zc (or the CLI-generated engine overlay) enables
+// txiki. The overlay path is optional: when generateEngineOverlay added
+// directives because the user named "txiki" in zapp.config.ts headless
+// map, we want to honor those too — otherwise we'd skip the txiki build.
+export async function hasTxikiEnabled(root: string, overlayFile?: string): Promise<boolean> {
+  const sources = [path.join(root, "zapp", "build.zc")];
+  if (overlayFile) sources.push(overlayFile);
+  for (const f of sources) {
+    try {
+      const content = await Bun.file(f).text();
+      if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_TXIKI/m.test(content)) return true;
+    } catch {}
+  }
+  return false;
 }
 
-// Check if any worker engine is defined
-export async function hasAnyWorkerEngine(root: string): Promise<"jsc" | "txiki" | null> {
+/** Bare's pluggable JS engine — picks the C library that backs `js.h`. */
+export type BareEngine = "v8" | "jsc" | "quickjs" | "mqjs" | "hermes";
+
+// Map BareEngine → cmake-fetch spec for `-DBARE_ENGINE=`. The libjs
+// repo IS the V8 binding (Bare's upstream default); libjsc / libqjs /
+// libmqjs are the alternate engines. `hermes` points at our in-house
+// libhermes (popaprozac/libhermes) — not yet on github, so the cmake
+// configure also receives a `-DFETCHCONTENT_SOURCE_DIR_*` override
+// directing the fetch at the local checkout (see ensureBareBuilt).
+function bareEngineSpec(engine: BareEngine): string {
+  switch (engine) {
+    case "v8":      return "github:holepunchto/libjs";
+    case "jsc":     return "github:holepunchto/libjsc#main";
+    case "quickjs": return "github:holepunchto/libqjs";
+    case "mqjs":    return "github:holepunchto/libmqjs";
+    case "hermes":  return "github:popaprozac/libhermes";
+  }
+}
+
+// Local checkout path for libhermes — used by FETCHCONTENT_SOURCE_DIR
+// to short-circuit cmake-fetch until the repo is published. Resolved
+// relative to this file's location: `<zapp>/cli/src/` →
+// `<zapp>/../popaprozac/libhermes/`.
+function libhermesLocalPath(): string {
+  // path here is the module-scope path import.
+  return path.resolve(__dirname, "..", "..", "..", "popaprozac", "libhermes");
+}
+
+// Per-platform Zapp default — picked when a project enables workers
+// (configures any `headless` entry, or uses `new Worker()` from JS)
+// but doesn't name an engine. The defaults bias toward the smallest
+// binary that fits the platform's constraints:
+//
+//   macOS / iOS — bare-jsc. JSC ships in the system framework, so the
+//     engine itself adds zero binary weight. JIT on macOS (with the
+//     allow-jit entitlement we auto-merge); no JIT on iOS by Apple
+//     policy. The clear "free and fast" pick.
+//
+//   Windows / Linux — bare-quickjs. ~1.5 MB binary cost, no JIT
+//     (interpreter only), but works everywhere with no platform
+//     surprises. Apps that need JIT speed can opt into bare-v8
+//     explicitly (~60 MB binary).
+//
+// The choice for Windows / Linux defaulting to QuickJS over V8
+// matches Zapp's "small binary by default, opt in to size" pitch —
+// same shape as the rest of the framework. Devs reaching for
+// CPU-heavy worker code (ML, codecs, compute-bound services) should
+// switch to `engine: "bare-v8"` per-worker.
+//
+// Apps can override per-worker via `engine: "..."` in
+// zapp.config.ts. When workers aren't configured at all, NO engine
+// is built — the binary stays tiny.
+export function defaultBareEngine(target: BuildTarget): BareEngine {
+  if (target === "macos" || isIOSTarget(target)) return "jsc";
+  return "quickjs";
+}
+
+// Per-target + per-engine build dir. Engines build independently —
+// shipping bare-jsc + bare-v8 in the same Zapp binary means two
+// separate Bare static libs in two dirs. (Rare but possible if an
+// app wants a JSC worker for one job and a V8 worker for another.)
+export function bareBuildDirName(target: BuildTarget, engine: BareEngine): string {
+  const platform = target === "ios-simulator" ? "ios-sim"
+    : target === "ios-device" ? "ios-dev"
+    : target;
+  return `build-${platform}-${engine}`;
+}
+
+// Ensure Bare runtime is built (via cmake) for the given target +
+// engine. Bare's CMakeLists drives engine fetch through cmake-fetch
+// — so the first build pulls in the engine source + libuv + libutf
+// via internal git clones. Subsequent builds reuse the cached
+// `_deps/` tree.
+//
+// Bare requires `bun install` in its directory before cmake configure
+// (its CMakeLists looks up cmake-bare / cmake-fetch / cmake-drive in
+// node_modules). We run it on first build only.
+export async function ensureBareBuilt(
+  _nativeDir: string,
+  target: BuildTarget = detectTarget(),
+  engine: BareEngine = defaultBareEngine(target),
+  projectRoot?: string,
+): Promise<string> {
+  const bareDir = await resolveBareDir();
+  const buildDir = bareBuildDirName(target, engine);
+  // libbare.a is the canonical artifact — when this exists the Bare
+  // build succeeded for this (target, engine) combo.
+  const libPath = path.join(bareDir, buildDir, "libbare.a");
+
+  if (existsSync(libPath)) {
+    // Even when libbare.a exists, we still need to make sure the
+    // bare-* module bindings have been compiled. On macOS this means
+    // building the `bare_bin` target — vendor/bare/bin/CMakeLists.txt
+    // calls `link_bare_module(bare_bin bare-tcp/tls/dns/...)` which
+    // forces those bindings' `binding.c.o` to compile, after which
+    // `ensureBareModulesArchive` sweeps them into libbare_modules.a.
+    //
+    // On iOS, `bin/` is gated off (vendor/bare/CMakeLists.txt zapp
+    // patch — bare_bin uses MACOSX_BUNDLE which fails cmake configure
+    // for iOS install rules). We just rebuild bare_static. Apps that
+    // need bare-tcp/tls/dns/zlib on iOS surface via the user-modules
+    // overlay path (`workerModules: ["fetch"]` in zapp.config.ts).
+    const bareTarget = isIOSTarget(target) ? "bare_static" : "bare_bin";
+
+    // Same split-build dance for Hermes — see the matching block
+    // below in the first-build path. Idempotent: the downleveler
+    // checks for a marker in the .h file and skips if already
+    // lowered, so a hot incremental rebuild only re-runs the
+    // bundle target (cheap) and the no-op downlevel check.
+    if (engine === "hermes") {
+      const bundleBuild = Bun.spawn(
+        ["cmake", "--build", buildDir, "--target", "bare_bundle", "-j4"],
+        { cwd: bareDir, stdout: "inherit", stderr: "inherit" },
+      );
+      if (await bundleBuild.exited !== 0) {
+        throw new Error("[zapp] Bare cmake bare_bundle build failed");
+      }
+      const { downlevelBareJsForHermes } = await import("./downlevel-bare-js.js");
+      await downlevelBareJsForHermes(bareDir);
+    }
+
+    const cmakeBin = Bun.spawn(
+      ["cmake", "--build", buildDir, "--target", bareTarget, "-j4"],
+      { cwd: bareDir, stdout: "inherit", stderr: "inherit" }
+    );
+    if (await cmakeBin.exited !== 0) {
+      throw new Error(`[zapp] Bare ${bareTarget} incremental build failed`);
+    }
+    pruneBareSharedLib(path.join(bareDir, buildDir));
+    // Compile any user-installed bare-* with native bindings that
+    // vendor/bare doesn't already cover (e.g. bare-zlib).
+    if (projectRoot) {
+      await ensureUserBareModulesCompiled(bareDir, buildDir, projectRoot, target);
+    }
+    // Ensure the combined modules archive exists too — it's a
+    // post-build step we own (cmake doesn't bundle the bare-*
+    // module bindings into libbare.a).
+    await ensureBareModulesArchive(path.join(bareDir, buildDir), projectRoot);
+    return bareDir;
+  }
+
+  // Bare's CMakeLists requires its node_modules deps (cmake-bare,
+  // cmake-fetch, cmake-drive, etc.) — install them on first build.
+  if (!existsSync(path.join(bareDir, "node_modules", "cmake-bare"))) {
+    process.stdout.write("[zapp] installing Bare cmake dependencies...\n");
+    const install = Bun.spawn(["bun", "install"], {
+      cwd: bareDir, stdout: "inherit", stderr: "inherit",
+    });
+    if (await install.exited !== 0) throw new Error("[zapp] Bare bun install failed");
+  }
+
+  const label = target === "macos" ? "macOS"
+    : target === "ios-simulator" ? "iOS Simulator (arm64)"
+    : target === "ios-device" ? "iOS device (arm64)"
+    : target;
+  process.stdout.write(`[zapp] building Bare (${engine}) for ${label} (first time only, may take a few minutes)...\n`);
+
+  const configureArgs = [
+    "-B", buildDir,
+    "-DCMAKE_BUILD_TYPE=Release",
+    `-DBARE_ENGINE=${bareEngineSpec(engine)}`,
+    // Prebuilds default ON and pulls a pinned V8 static library via a
+    // Hyperdrive mirror. We only need that for the V8 engine path; for
+    // JSC / QuickJS / mQJS / Hermes we build the engine from source.
+    `-DBARE_PREBUILDS=${engine === "v8" ? "ON" : "OFF"}`,
+  ];
+
+  // (libhermes used to ship local-only here; now lives at
+  // github:popaprozac/libhermes so cmake-fetch clones it like every
+  // other engine. Leaving the local-path helper around for future
+  // dev workflows — see `libhermesLocalPath` declaration above.)
+
+  if (isIOSTarget(target)) {
+    const sdk = target === "ios-simulator" ? "iphonesimulator" : "iphoneos";
+    const proc = Bun.spawn(["xcrun", "--sdk", sdk, "--show-sdk-path"], { stdout: "pipe" });
+    const sdkPath = (await new Response(proc.stdout).text()).trim();
+    if (await proc.exited !== 0 || !sdkPath) {
+      throw new Error(`[zapp] failed to resolve ${sdk} SDK path via xcrun`);
+    }
+    configureArgs.push(
+      "-DCMAKE_SYSTEM_NAME=iOS",
+      "-DCMAKE_SYSTEM_PROCESSOR=arm64",
+      `-DCMAKE_OSX_SYSROOT=${sdkPath}`,
+      "-DCMAKE_OSX_ARCHITECTURES=arm64",
+      "-DCMAKE_OSX_DEPLOYMENT_TARGET=15.0",
+      // Skip `install(...)` rule validation. On iOS, vendor/bare's
+      // `bin/CMakeLists.txt` and BoringSSL's CMakeLists declare
+      // MACOSX_BUNDLE executables (bare_bin, bssl) and pass them to
+      // `install(TARGETS ...)`. CMake fails configure on iOS because
+      // those installs need a `BUNDLE DESTINATION` we don't provide
+      // — but we NEVER `cmake --install`, only `cmake --build`. The
+      // CMAKE_SKIP_INSTALL_RULES toggle drops the install commands
+      // from generation entirely, sidestepping the validation.
+      "-DCMAKE_SKIP_INSTALL_RULES=ON",
+    );
+  }
+
+  const cmake1 = Bun.spawn(["cmake", ...configureArgs], {
+    cwd: bareDir, stdout: "inherit", stderr: "inherit",
+  });
+  if (await cmake1.exited !== 0) throw new Error("[zapp] Bare cmake configure failed");
+
+  // Build BOTH bare_static (libbare.a — the runtime we link against)
+  // and bare_bin (the CLI executable). We don't ship bare_bin, but
+  // building it forces the bare-* module bindings declared in
+  // vendor/bare/bin/CMakeLists.txt's `link_bare_module()` calls
+  // (bare-crypto, bare-dns, bare-tcp, bare-tls, bare-pipe,
+  // bare-inspector, bare-repl, bare-signals, bare-tty) to compile.
+  // Without this, the `binding.c.o` files don't exist and
+  // `ensureBareModulesArchive` can't pick them up — so user worker
+  // code that does `import "bare-fetch"` (which transitively needs
+  // bare-tcp/tls/dns) blows up at runtime with
+  // `No addon registered for 'bare_tcp'`.
+  //
+  // The cost is a slightly slower build (compile the bare CLI's main
+  // and link it) but `bare_bin` is discarded — nothing in our binary
+  // references it. The .a we ship is unchanged in size; only
+  // libbare_modules.a grows to include the extra bindings.
+  // See the short-circuit branch above for why iOS targets fall back
+  // to `bare_static`. `bare_bin` is a macOS-only convenience to force
+  // bare-* module bindings to compile.
+  const bareTarget = isIOSTarget(target) ? "bare_static" : "bare_bin";
+
+  // For the Hermes engine we need to patch bare's embedded
+  // `bare.js.h` after it's generated but before `bare.c.o` is
+  // compiled. The bundle contains class shapes that crash Hermes'
+  // AST transformer (see downlevel-bare-js.ts comment block). Split
+  // the build: 1) build just `bare_bundle` to produce the .h, 2)
+  // rewrite the .h via the downleveler, 3) build the rest — cmake
+  // sees the .h is newer and rebuilds `bare.c.o` against the
+  // lowered bundle.
+  //
+  // For non-Hermes engines we do the original single-pass build,
+  // so JSC / V8 / QuickJS / mQJS pay nothing for this.
+  if (engine === "hermes") {
+    const bundleBuild = Bun.spawn(
+      ["cmake", "--build", buildDir, "--target", "bare_bundle", "-j4"],
+      { cwd: bareDir, stdout: "inherit", stderr: "inherit" },
+    );
+    if (await bundleBuild.exited !== 0) {
+      throw new Error("[zapp] Bare cmake bare_bundle build failed");
+    }
+    const { downlevelBareJsForHermes } = await import("./downlevel-bare-js.js");
+    await downlevelBareJsForHermes(bareDir);
+  }
+
+  const cmake2 = Bun.spawn(["cmake", "--build", buildDir, "--target", bareTarget, "-j4"], {
+    cwd: bareDir, stdout: "inherit", stderr: "inherit",
+  });
+  if (await cmake2.exited !== 0) throw new Error("[zapp] Bare cmake build failed");
+  pruneBareSharedLib(path.join(bareDir, buildDir));
+
+  if (projectRoot) {
+    await ensureUserBareModulesCompiled(bareDir, buildDir, projectRoot, target);
+  }
+  await ensureBareModulesArchive(path.join(bareDir, buildDir), projectRoot);
+
+  process.stdout.write(`[zapp] Bare (${engine}) built successfully\n`);
+  return bareDir;
+}
+
+// Compile bare-* modules from the user's `node_modules/` (e.g.
+// `bare-zlib`) when vendor/bare's own deps don't include them.
+//
+// Approach: generate a small side cmake project at
+// `<bareBuild>/zapp-user-modules/` that:
+//   1. find_package(cmake-bare REQUIRED PATHS @vendor/bare/node_modules/cmake-bare)
+//   2. declares a placeholder STATIC library `zapp_user_modules`
+//   3. calls `link_bare_module(zapp_user_modules <name> WORKING_DIRECTORY <project>)`
+//      for each user-only bare-* with a binding.c
+//
+// `link_bare_module` is cmake-bare's helper that `add_subdirectory()`s
+// the module and links its `binding.c.o` into the receiver, with the
+// right `BARE_MODULE_NAME="<name>@<version>"` / `BARE_MODULE_REGISTER_CONSTRUCTOR`
+// compile defs. We don't actually USE the resulting static library —
+// what we want is the `binding.c.o` it drops in
+// `<user-build>/node_modules/<name>/CMakeFiles/<name>-<ver>-<hash>.dir/`,
+// which `ensureBareModulesArchive` then sweeps up alongside vendor's
+// own bindings.
+//
+// macOS `bare_bin` target transitively builds `bare_shared`, which
+// produces `libbare.dylib` (and `.tbd`) next to `libbare.a`. Zapp's
+// host link uses `-L<bareBuild> -lbare`, and the macOS linker prefers
+// `.dylib` over `.a` — so the host binary ends up with an
+// unsatisfiable `@rpath/libbare.dylib` LC_LOAD_DYLIB and crashes at
+// launch (`dyld: Library not loaded: @rpath/libbare.dylib`). We
+// don't ship the bare daemon or use libbare at runtime as a
+// dynamic library, so the cleanest fix is to remove the shared
+// artifacts after the build. iOS doesn't build `bare_bin` and
+// therefore never emits these.
+function pruneBareSharedLib(buildDir: string): void {
+  for (const name of ["libbare.dylib", "libbare.tbd"]) {
+    const p = path.join(buildDir, name);
+    if (existsSync(p)) {
+      try { unlinkSync(p); } catch {}
+    }
+  }
+}
+
+// No-op when the user has no bare-* with binding.c that's missing
+// from vendor.
+async function ensureUserBareModulesCompiled(
+  bareDir: string,
+  buildDir: string,
+  projectRoot: string,
+  target: BuildTarget,
+): Promise<void> {
+  const fs = await import("node:fs/promises");
+  const userModulesDir = path.join(projectRoot, "node_modules");
+  const vendorModulesDir = path.join(bareDir, "node_modules");
+
+  // Collect user-installed bare-* with binding.c.
+  let entries: string[] = [];
+  try { entries = await fs.readdir(userModulesDir); }
+  catch { entries = []; }
+  const userBareWithBinding: string[] = [];
+  for (const name of entries) {
+    if (!name.startsWith("bare-")) continue;
+    const bindingPath = path.join(userModulesDir, name, "binding.c");
+    if (existsSync(bindingPath)) userBareWithBinding.push(name);
+  }
+
+  // Filter out the ones vendor/bare already compiled. On macOS that's
+  // most of vendor's deps (via the bare_bin build); on iOS the
+  // `bare_bin` target is gated off (MACOSX_BUNDLE conflict — see
+  // vendor/bare/CMakeLists.txt patch), so we ALSO have to compile
+  // vendor's bare-* bindings ourselves through the overlay.
+  const onlyUserNeeded = userBareWithBinding.filter((name) => {
+    return !existsSync(path.join(vendorModulesDir, name, "binding.c"));
+  });
+
+  // Vendor's own bare-* deps that need to land in libbare_modules.a
+  // when bare_bin isn't being built — same set bare_bin uses (see
+  // vendor/bare/bin/CMakeLists.txt:link_bare_module calls). Keep
+  // this list narrow: only the ones with a runtime-side native
+  // binding. Pure-JS bare-* don't need cmake build at all.
+  const VENDOR_BARE_NATIVE_DEPS = [
+    "bare-crypto",
+    "bare-dns",
+    "bare-inspector",
+    "bare-pipe",
+    "bare-signals",
+    "bare-tcp",
+    "bare-tls",
+    "bare-tty",
+  ];
+  const vendorNeeded: string[] = [];
+  if (isIOSTarget(target)) {
+    for (const name of VENDOR_BARE_NATIVE_DEPS) {
+      if (existsSync(path.join(vendorModulesDir, name, "binding.c"))) {
+        vendorNeeded.push(name);
+      }
+    }
+  }
+
+  const linkSpecs: Array<{ name: string; workingDir: string }> = [
+    ...onlyUserNeeded.map((name) => ({ name, workingDir: projectRoot })),
+    ...vendorNeeded.map((name) => ({ name, workingDir: bareDir })),
+  ];
+
+  if (linkSpecs.length === 0) return;
+
+  const summary = linkSpecs.map((s) => s.name).join(", ");
+  process.stdout.write(`[zapp] compiling bare modules: ${summary}\n`);
+
+  // Generate the overlay project.
+  const overlayDir = path.join(bareDir, buildDir, "zapp-user-modules");
+  const overlayBuildDir = path.join(overlayDir, "build");
+  await fs.mkdir(overlayDir, { recursive: true });
+  await fs.writeFile(path.join(overlayDir, "empty.c"), "// placeholder\n");
+
+  // Symlink vendor/bare's `node_modules/` into the overlay so the
+  // cmake-bare → cmake-npm → cmake-fetch chain (which uses relative
+  // `find_package(X REQUIRED PATHS node_modules/X)` calls internally)
+  // can resolve all its peers. Without this symlink, cmake-bare's
+  // own dependency `find_package(cmake-npm REQUIRED PATHS
+  // node_modules/cmake-npm)` looks under the overlay's
+  // CMAKE_CURRENT_SOURCE_DIR (which has no node_modules) and fails
+  // with "Could not find a package configuration file provided by
+  // 'cmake-npm'".
+  const overlayNodeModules = path.join(overlayDir, "node_modules");
+  if (!existsSync(overlayNodeModules)) {
+    await fs.symlink(
+      path.join(bareDir, "node_modules"),
+      overlayNodeModules,
+      "dir"
+    );
+  }
+
+  const linkCalls = linkSpecs
+    .map((s) =>
+      `link_bare_module(zapp_user_modules ${s.name} WORKING_DIRECTORY "${s.workingDir}")`
+    )
+    .join("\n");
+  const cmakeLists = `cmake_minimum_required(VERSION 4.0)
+
+# Mirrors vendor/bare/CMakeLists.txt's find_package set. All resolve
+# through the symlinked node_modules/ above.
+find_package(cmake-bare       REQUIRED PATHS node_modules/cmake-bare)
+find_package(cmake-harden     REQUIRED PATHS node_modules/cmake-harden)
+find_package(cmake-bare-bundle REQUIRED PATHS node_modules/cmake-bare-bundle)
+find_package(cmake-drive      REQUIRED PATHS node_modules/cmake-drive)
+find_package(cmake-fetch      REQUIRED PATHS node_modules/cmake-fetch)
+find_package(cmake-napi       REQUIRED PATHS node_modules/cmake-napi)
+
+# Disable MACOSX_BUNDLE for executable targets BEFORE any subproject
+# declares them. CMake's iOS toolchain defaults CMAKE_MACOSX_BUNDLE
+# to ON, which causes BoringSSL's \`bssl\` CLI (pulled in transitively
+# by bare-tls/crypto) to fail cmake configure on iOS:
+#   install TARGETS given no BUNDLE DESTINATION for MACOSX_BUNDLE
+#   executable target "bssl"
+# We don't install those CLIs — they're a build-time artifact only.
+# Forcing the variable OFF here propagates to all add_executable()
+# calls in this subproject tree.
+set(CMAKE_MACOSX_BUNDLE OFF CACHE BOOL "" FORCE)
+
+project(zapp_user_bare_modules C)
+
+bare_target(_target)
+
+# Placeholder lib — we only care about the per-module binding.c.o
+# files that cmake-bare drops alongside it under
+# build/node_modules/<bare-X>/CMakeFiles/.
+add_library(zapp_user_modules STATIC empty.c)
+
+${linkCalls}
+`;
+  await fs.writeFile(path.join(overlayDir, "CMakeLists.txt"), cmakeLists);
+
+  // Configure + build using the same target/SDK as bare itself so
+  // generated objects link cleanly against libbare.a.
+  const configureArgs = [
+    "-S", overlayDir,
+    "-B", overlayBuildDir,
+    "-DCMAKE_BUILD_TYPE=Release",
+  ];
+  if (isIOSTarget(target)) {
+    const sdk = target === "ios-simulator" ? "iphonesimulator" : "iphoneos";
+    const proc = Bun.spawn(["xcrun", "--sdk", sdk, "--show-sdk-path"], { stdout: "pipe" });
+    const sdkPath = (await new Response(proc.stdout).text()).trim();
+    if (await proc.exited !== 0 || !sdkPath) {
+      throw new Error(`[zapp] failed to resolve ${sdk} SDK path via xcrun`);
+    }
+    configureArgs.push(
+      "-DCMAKE_SYSTEM_NAME=iOS",
+      "-DCMAKE_SYSTEM_PROCESSOR=arm64",
+      `-DCMAKE_OSX_SYSROOT=${sdkPath}`,
+      "-DCMAKE_OSX_ARCHITECTURES=arm64",
+      "-DCMAKE_OSX_DEPLOYMENT_TARGET=15.0",
+    );
+  }
+
+  const cfg = Bun.spawn(["cmake", ...configureArgs], {
+    stdout: "inherit", stderr: "inherit",
+  });
+  if (await cfg.exited !== 0) {
+    throw new Error("[zapp] user-module overlay configure failed");
+  }
+  const build = Bun.spawn(
+    ["cmake", "--build", overlayBuildDir, "--target", "zapp_user_modules", "-j4"],
+    { stdout: "inherit", stderr: "inherit" }
+  );
+  if (await build.exited !== 0) {
+    throw new Error("[zapp] user-module overlay build failed");
+  }
+}
+
+// Combine all bare-* npm-module binding objects into a single
+// `libbare_modules.a` next to libbare.a. Each module registers itself
+// with the Bare runtime via a static-init constructor (built by the
+// BARE_MODULE_REGISTER_CONSTRUCTOR macro); without these the Bare
+// runtime crashes during setup on the first `require('bare-buffer')`.
+//
+// CMake leaves them as bare binding.c.o files in
+// node_modules/<mod>/CMakeFiles/<mod>.dir/. We `ar -rcs` them into a
+// single archive that build-config.ts then -force_loads at link time.
+async function ensureBareModulesArchive(
+  buildDir: string,
+  projectRoot?: string,
+): Promise<void> {
+  const fs = await import("node:fs/promises");
+  const archivePath = path.join(buildDir, "libbare_modules.a");
+  const objects: string[] = [];
+
+  // 1. bare-* npm module bindings (binding.c.o) — each registers itself
+  //    via static-init so they must be force-loaded at the final link.
+  const nodeModulesDir = path.join(buildDir, "node_modules");
+  if (existsSync(nodeModulesDir)) {
+    const modules = await fs.readdir(nodeModulesDir);
+    for (const mod of modules) {
+      const cmakeFiles = path.join(nodeModulesDir, mod, "CMakeFiles");
+      if (!existsSync(cmakeFiles)) continue;
+      const dirs = await fs.readdir(cmakeFiles);
+      for (const d of dirs) {
+        if (d.endsWith("_module.dir")) continue;
+        const candidate = path.join(cmakeFiles, d, "binding.c.o");
+        if (existsSync(candidate)) objects.push(candidate);
+      }
+    }
+  }
+
+  // 1b. User-installed bare-* modules built via the overlay project
+  //     (see `ensureUserBareModulesCompiled`). Same shape as the
+  //     vendor scan above, just rooted at the overlay's build dir.
+  const overlayBuild = path.join(buildDir, "zapp-user-modules", "build", "node_modules");
+  if (existsSync(overlayBuild)) {
+    const modules = await fs.readdir(overlayBuild);
+    for (const mod of modules) {
+      const cmakeFiles = path.join(overlayBuild, mod, "CMakeFiles");
+      if (!existsSync(cmakeFiles)) continue;
+      const dirs = await fs.readdir(cmakeFiles);
+      for (const d of dirs) {
+        if (d.endsWith("_module.dir")) continue;
+        const candidate = path.join(cmakeFiles, d, "binding.c.o");
+        if (existsSync(candidate)) objects.push(candidate);
+      }
+    }
+    // The overlay also fetches per-module C deps (e.g. madler/zlib for
+    // bare-zlib). Pick up any leaf .c.o under the overlay's _deps too.
+    const overlayDeps = path.join(buildDir, "zapp-user-modules", "build", "_deps");
+    if (existsSync(overlayDeps)) {
+      const deps = await fs.readdir(overlayDeps);
+      for (const dep of deps) {
+        if (!dep.endsWith("-build")) continue;
+        if (/libjs-build|libjsc-build|libqjs-build|libmqjs-build|libuv-build|libutf-build|libnapi-build|libintrusive-build|librlimit-build|boringssl-build|c-ares-build/.test(dep)) continue;
+        const cmakeFiles = path.join(overlayDeps, dep, "CMakeFiles");
+        if (!existsSync(cmakeFiles)) continue;
+        const dirs = await fs.readdir(cmakeFiles);
+        for (const d of dirs) {
+          if (d.includes("_shared.dir") || d.includes("_static.dir") ||
+              d.includes("_test") || d.startsWith("test_")) continue;
+          if (!d.endsWith(".dir")) continue;
+          const collect = async (sub: string) => {
+            const entries = await fs.readdir(sub, { withFileTypes: true });
+            for (const e of entries) {
+              const full = path.join(sub, e.name);
+              if (e.isDirectory()) await collect(full);
+              else if (e.name.endsWith(".c.o")) objects.push(full);
+            }
+          };
+          await collect(path.join(cmakeFiles, d));
+        }
+      }
+    }
+  }
+  // Avoid unused-parameter complaints when overlay is absent.
+  void projectRoot;
+
+  // 2. Holepunch support libs (libbase64, liblog, libhex, liburl) —
+  //    referenced by the bare-* bindings but built as OBJECT-only
+  //    targets, so cmake doesn't emit .a files for them. We pick up
+  //    their .o files directly. (libnapi is already bundled into
+  //    libbare.a via TARGET_OBJECTS in the bare CMakeLists.)
+  const depsDir = path.join(buildDir, "_deps");
+  if (existsSync(depsDir)) {
+    const deps = await fs.readdir(depsDir);
+    for (const dep of deps) {
+      if (!dep.endsWith("-build")) continue;
+      // Skip libs already linked separately or known not to need bundling.
+      if (/libjs-build|libjsc-build|libqjs-build|libmqjs-build|libuv-build|libutf-build|libnapi-build|libintrusive-build|librlimit-build|boringssl-build|c-ares-build/.test(dep)) continue;
+      const cmakeFiles = path.join(depsDir, dep, "CMakeFiles");
+      if (!existsSync(cmakeFiles)) continue;
+      const dirs = await fs.readdir(cmakeFiles);
+      for (const d of dirs) {
+        // Pick the non-shared, non-static, non-test target dir
+        // (cmake-bare convention: <name>.dir for OBJECT, plus
+        // <name>_static.dir / <name>_shared.dir).
+        if (d.includes("_shared.dir") || d.includes("_static.dir") ||
+            d.includes("_test") || d.startsWith("test_")) continue;
+        if (!d.endsWith(".dir")) continue;
+        const targetDir = path.join(cmakeFiles, d);
+        // Walk the .dir for any .c.o file.
+        const collect = async (sub: string) => {
+          const entries = await fs.readdir(sub, { withFileTypes: true });
+          for (const e of entries) {
+            const full = path.join(sub, e.name);
+            if (e.isDirectory()) await collect(full);
+            else if (e.name.endsWith(".c.o")) objects.push(full);
+          }
+        };
+        await collect(targetDir);
+      }
+    }
+  }
+
+  if (objects.length === 0) return;
+
+  if (existsSync(archivePath)) await fs.unlink(archivePath);
+  const ar = Bun.spawn(["ar", "-rcs", archivePath, ...objects], {
+    cwd: buildDir, stdout: "inherit", stderr: "pipe",
+  });
+  if (await ar.exited !== 0) {
+    throw new Error("[zapp] failed to build libbare_modules.a");
+  }
+}
+
+// Return the set of Bare engines the user's build.zc opted into.
+// Each ZAPP_WORKER_ENGINE_BARE_<NAME> directive enables one engine;
+// multiple may be enabled in the same project (one worker uses JSC,
+// another uses V8 — the runtime dispatcher routes per-worker).
+export async function bareEnginesEnabled(
+  root: string,
+  overlayFile?: string,
+  target: BuildTarget = detectTarget(),
+  iosBuildFile?: string,
+): Promise<BareEngine[]> {
+  // On iOS, `_zapp_build_ios.zc` (generated by `generateIOSBuildFile`)
+  // is the source of truth: it strips macos:-prefixed lines from the
+  // user's build.zc and substitutes the iOS-appropriate engine choice
+  // (bare-jsc by default). Prefer it over build.zc when present.
+  const sources: string[] = [];
+  if (iosBuildFile && isIOSTarget(target)) {
+    sources.push(iosBuildFile);
+  } else {
+    sources.push(path.join(root, "zapp", "build.zc"));
+  }
+  if (overlayFile) sources.push(overlayFile);
+  let combined = "";
+  for (const f of sources) {
+    try { combined += await Bun.file(f).text() + "\n"; } catch {}
+  }
+  if (!combined) return [];
+
+  // Filter to lines applicable to the current target. zc's `//> macos:`
+  // / `//> ios:` / `//> windows:` prefixes scope a directive to a host
+  // (or build) platform — `bareEnginesEnabled` previously ignored the
+  // prefix and counted any define regardless of scope, which meant
+  // running `bun run dev --platform ios` with `//> macos: define:
+  // ZAPP_WORKER_ENGINE_BARE_V8` triggered an iOS V8 build (V8 doesn't
+  // work on iOS — needs JIT). Filter explicitly: keep lines with no
+  // platform prefix, plus lines whose prefix matches the active
+  // target's family (macos / ios / windows).
+  const targetTag =
+    target === "macos" ? "macos" :
+    isIOSTarget(target) ? "ios" :
+    target === "windows" ? "windows" : "";
+  const lines = combined.split("\n").filter((raw) => {
+    const m = raw.match(/^\s*\/\/>\s*([a-z-]+)\s*:/);
+    if (!m) return true;
+    const tag = m[1];
+    if (tag === "define" || tag === "link" || tag === "cflags" ||
+        tag === "lib" || tag === "framework" || tag === "include") {
+      return true; // these are directive types, not platform prefixes
+    }
+    return tag === targetTag;
+  });
+  const filtered = lines.join("\n");
+
+  const enabled: BareEngine[] = [];
+  if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_V8/m.test(filtered)) enabled.push("v8");
+  if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_JSC/m.test(filtered)) enabled.push("jsc");
+  if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_QUICKJS/m.test(filtered)) enabled.push("quickjs");
+  if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_MQJS/m.test(filtered)) enabled.push("mqjs");
+  if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_HERMES/m.test(filtered)) enabled.push("hermes");
+  return enabled;
+}
+
+/** True when at least one Bare engine variant is enabled. */
+export async function hasBareEnabled(root: string): Promise<boolean> {
+  return (await bareEnginesEnabled(root)).length > 0;
+}
+
+/** Engine identifier returned by `hasAnyWorkerEngine`. */
+export type WorkerEngine =
+  | "jsc"           // legacy: native Cocoa JSContext
+  | "txiki"         // legacy: QuickJS via txiki.js
+  | "bare-v8"
+  | "bare-jsc"
+  | "bare-quickjs"
+  | "bare-mqjs"
+  | "bare-hermes";
+
+// Check if any worker engine is defined. Returns the highest-priority
+// engine when multiple are enabled (build.zc allows several
+// ZAPP_WORKER_ENGINE_* directives — the dispatcher in worker.zc routes
+// per-worker at runtime).
+//
+// Priority order: bare-jsc > bare-v8 > bare-quickjs > bare-mqjs > txiki > jsc.
+// "Newer / more capable" wins so the preflight messages reflect what
+// most workers actually use; legacy engines stay compiled in as
+// fallback.
+export async function hasAnyWorkerEngine(root: string): Promise<WorkerEngine | null> {
   const buildFile = path.join(root, "zapp", "build.zc");
   try {
     const content = await Bun.file(buildFile).text();
+    if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_JSC/m.test(content)) return "bare-jsc";
+    if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_V8/m.test(content)) return "bare-v8";
+    if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_QUICKJS/m.test(content)) return "bare-quickjs";
+    if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_MQJS/m.test(content)) return "bare-mqjs";
+    if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_HERMES/m.test(content)) return "bare-hermes";
     if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_TXIKI/m.test(content)) return "txiki";
     if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_JSC/m.test(content)) return "jsc";
     return null;
   } catch { return null; }
+}
+
+// True when this project links a JSC-backed worker engine (legacy `jsc`
+// or `bare-jsc`). On Apple Silicon, JSC's tiered JIT is gated by the
+// `com.apple.security.cs.allow-jit` entitlement — without it JSC stays
+// in LLInt interpreter mode, ~12× slower on JIT-friendly workloads.
+// `cli/src/entitlements.ts` consults this and auto-merges the entitlement
+// so users don't have to configure it by hand to get JSC's speed claim.
+export async function hasJscClassWorkerEngine(root: string): Promise<boolean> {
+  const buildFile = path.join(root, "zapp", "build.zc");
+  try {
+    const content = await Bun.file(buildFile).text();
+    return /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_JSC\b/m.test(content)
+        || /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_JSC/m.test(content);
+  } catch { return false; }
 }
 
 interface CompileOptions {
@@ -233,6 +946,7 @@ interface CompileOptions {
   bootstrapFile?: string;    // .zapp/zapp_bootstrap.zc
   assetsFile?: string;       // .zapp/zapp_assets.zc (embedded brotli assets)
   headlessFile?: string;     // .zapp/zapp_headless_workers.zc
+  engineOverlayFile?: string;// .zapp/zapp_engine_overlay.zc — auto-engine defines
   output: string;            // Binary output path
   nativeDir: string;         // Framework source dir
   optimize: boolean;         // Size optimizations
@@ -240,12 +954,19 @@ interface CompileOptions {
 }
 
 export async function compileNative(opts: CompileOptions): Promise<void> {
-  const { root, buildFile, buildConfigFile, bootstrapFile, assetsFile, headlessFile, output, nativeDir, optimize } = opts;
+  const { root, buildFile, buildConfigFile, bootstrapFile, assetsFile, headlessFile, engineOverlayFile, output, nativeDir, optimize } = opts;
   const target: BuildTarget = opts.target ?? detectTarget();
 
-  // Generate platform config with .m file paths
+  // Generate platform config with .m file paths. Forward the
+  // caller's buildFile + engineOverlayFile so the platform config's
+  // engine detection sees the same iOS-specific overlay
+  // (`_zapp_build_ios.zc`) the rest of the pipeline uses — otherwise
+  // it falls back to the raw `build.zc` whose `//> macos:` directives
+  // don't apply to the iOS target, producing wrong -L/-l flags.
   const { generatePlatformConfig } = await import("./build-config");
-  const platformFile = await generatePlatformConfig(root, target);
+  const platformFile = await generatePlatformConfig(
+    root, target, buildFile, engineOverlayFile,
+  );
 
   const verbose = process.argv.includes("--verbose") || process.argv.includes("-v");
 
@@ -257,14 +978,15 @@ export async function compileNative(opts: CompileOptions): Promise<void> {
     ...(bootstrapFile ? [bootstrapFile] : []),
     ...(assetsFile ? [assetsFile] : []),
     ...(headlessFile ? [headlessFile] : []),
+    ...(engineOverlayFile ? [engineOverlayFile] : []),
     "-I", nativeDir,
     "-o", output,
-    // iOS targets need --objective-c so the generated .c file is parsed
-    // as ObjC (raw blocks contain NSLog, NSString*, @"..." literals
-    // gated by #ifdef __APPLE__). On macOS hosts zc auto-enables this
-    // for darwin builds; for cross-target iOS we have to ask for it
-    // explicitly.
-    ...(isIOSTarget(target) ? ["--objective-c"] : []),
+    // Apple targets (macOS + iOS) need --objective-c so the generated
+    // .c file is parsed as ObjC (raw blocks contain NSLog, NSString*,
+    // @"..." literals). Older zc versions (≤0.4.3) auto-enabled this
+    // when building on macOS hosts; newer zc requires the explicit
+    // flag, so we pass it on every Apple target regardless of host.
+    ...(target === "macos" || isIOSTarget(target) ? ["--objective-c"] : []),
     // Suppress C compiler warnings by default. The framework and zc stdlib
     // generate ~200 warnings (parentheses-equality, incompatible-pointer-types,
     // etc.) that are pure noise for end users and bury any actual error.

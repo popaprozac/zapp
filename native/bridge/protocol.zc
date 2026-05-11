@@ -52,7 +52,7 @@ impl Drop for BridgeMessage {
     fn drop(self) {
         if self.root != NULL {
             raw {
-                JsonValue__Drop_glue(self->root);
+                JsonValue__Drop__drop(self->root);
                 free(self->root);
             }
         }

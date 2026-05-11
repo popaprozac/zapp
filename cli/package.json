@@ -25,6 +25,9 @@
     "postpack": "rm -rf ./native ./bootstrap ./assets ./vendor"
   },
   "dependencies": {
+    "@babel/core": "^7.29.0",
+    "@babel/plugin-transform-classes": "^7.28.6",
+    "esbuild": "^0.28.0",
     "yargs": "^17.7.2"
   }
 }
