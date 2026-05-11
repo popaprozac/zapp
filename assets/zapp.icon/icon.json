@@ -1,21 +1,19 @@
 {
-  "color-space-for-untagged-svg-colors" : "display-p3",
   "fill" : {
-    "automatic-gradient" : "display-p3:0.82036,0.94931,0.96783,1.00000"
+    "automatic-gradient" : "extended-srgb:0.00000,0.53333,1.00000,1.00000"
   },
   "groups" : [
     {
       "layers" : [
         {
-          "glass" : false,
           "hidden" : false,
-          "image-name" : "zapp_centered_square.svg",
-          "name" : "zapp_centered_square",
+          "image-name" : "modern-horizon-letter-8633261.svg",
+          "name" : "Layer",
           "position" : {
-            "scale" : 2,
+            "scale" : 0.55,
             "translation-in-points" : [
-              0.004200000001333137,
-              1.1368683772161603e-13
+              0,
+              0
             ]
           }
         }
