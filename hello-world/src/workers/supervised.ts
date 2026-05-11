@@ -12,7 +12,8 @@
 //   - 3rd crash:  worker:crashed → worker:gave-up
 
 import { Events, Workers } from "@zappdev/runtime";
-import "@zappdev/runtime/worker-globals";
+// `workerModules` in zapp.config.ts (now ["fetch"]) drives the
+// install — no manual side-effect import needed here.
 
 console.log("[supervised] starting");
 

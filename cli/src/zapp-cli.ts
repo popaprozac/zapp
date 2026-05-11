@@ -3,8 +3,8 @@ import path from "node:path";
 import process from "node:process";
 import { mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { loadConfig } from "./config";
-import { generateBuildConfig, generatePlatformConfig, generateHeadlessWorkers, generateIOSBuildFile } from "./build-config";
+import { loadConfig, WORKER_MODULE_CAPABILITIES, type WorkerModuleId } from "./config";
+import { generateBuildConfig, generatePlatformConfig, generateHeadlessWorkers, generateIOSBuildFile, generateEngineOverlay } from "./build-config";
 import { generateBindings } from "./generate";
 import { compileNative, ensureTxikiBuilt, hasTxikiEnabled, ensureBareBuilt, bareEnginesEnabled, hasAnyWorkerEngine, detectTarget, isIOSTarget, type BuildTarget } from "./native";
 import { resolveNativeDir, resolveBootstrapDir } from "./paths";
@@ -88,6 +88,41 @@ async function waitForPort(port: number, timeoutMs = 10000): Promise<boolean> {
   return false;
 }
 
+/**
+ * Walk the user's `workerModules` declaration and surface any package
+ * that's named in the capability registry but isn't actually installed
+ * in their `node_modules/`. We don't auto-install today (that's a
+ * deeper UX call — `--auto-install` flag tracked separately); the
+ * warning hands the user a one-liner to run.
+ *
+ * No-op when `workerModules` is empty or unset.
+ */
+async function verifyWorkerModules(
+  root: string,
+  workerModules: WorkerModuleId[] | undefined,
+): Promise<void> {
+  if (!workerModules || workerModules.length === 0) return;
+  const missing: Array<{ capability: WorkerModuleId; pkg: string }> = [];
+  for (const cap of workerModules) {
+    const spec = WORKER_MODULE_CAPABILITIES[cap];
+    if (!spec) {
+      process.stdout.write(`[zapp] warning: unknown workerModules entry '${cap}'\n`);
+      continue;
+    }
+    for (const pkg of spec.packages) {
+      const pkgPath = path.join(root, "node_modules", pkg, "package.json");
+      if (!existsSync(pkgPath)) missing.push({ capability: cap, pkg });
+    }
+  }
+  if (missing.length === 0) return;
+  process.stdout.write("[zapp] workerModules: missing packages —\n");
+  for (const { capability, pkg } of missing) {
+    process.stdout.write(`  - "${capability}" needs '${pkg}'\n`);
+  }
+  const all = missing.map((m) => m.pkg).join(" ");
+  process.stdout.write(`[zapp] run:  bun install ${all}\n`);
+}
+
 async function runDev(root: string) {
   if (process.platform !== "darwin" && process.platform !== "win32") {
     process.stderr.write("[zapp] dev mode is currently macOS, iOS, and Windows only.\n");
@@ -112,42 +147,64 @@ async function runDev(root: string) {
     process.stdout.write(`[zapp] target: ${target}\n`);
   }
 
-  // 0. Check worker engine
+  // 0. Check worker engine. Project either declares one in build.zc OR
+  // names one (or many) in zapp.config.ts headless map; we generate an
+  // overlay below to bridge the latter into the build. If a project has
+  // workers but neither, we default to the platform's bare engine.
   const workerEngine = await hasAnyWorkerEngine(root);
-  if (!workerEngine) {
-    process.stderr.write(
-      "[zapp] no worker engine defined in zapp/build.zc.\n" +
-      "  Add one of:\n" +
-      "    //> macos: define: ZAPP_WORKER_ENGINE_JSC          (legacy: native Cocoa JSC, smallest, no web APIs)\n" +
-      "    //> macos: define: ZAPP_WORKER_ENGINE_BARE_JSC     (Bare + JSC, system framework, fetch/WS via modules)\n" +
-      "    //>        define: ZAPP_WORKER_ENGINE_BARE_V8      (Bare + V8, JIT all platforms, larger binary)\n" +
-      "    //>        define: ZAPP_WORKER_ENGINE_BARE_QUICKJS (Bare + QuickJS, no JIT, small)\n" +
-      "    //>        define: ZAPP_WORKER_ENGINE_TXIKI        (legacy: txiki.js, +6MB, full web APIs)\n"
-    );
-    process.exit(1);
+  const hasHeadlessWorkers = !!(config.headless && Object.keys(config.headless).length > 0);
+  if (!workerEngine && !hasHeadlessWorkers) {
+    // No workers anywhere. The build still succeeds — the user just
+    // doesn't get the worker subsystem. Webview Workers still work.
+    process.stdout.write("[zapp] no worker engine configured — workers disabled.\n");
   }
 
-  // 1. Generate service bindings + bundle workers
+  // 0a. workers.modules — verify each declared capability's
+  //     underlying packages are installed in the project. Today we
+  //     warn only; future iteration may auto-install.
+  await verifyWorkerModules(root, config.workerModules);
+
+  // 1. Generate engine overlay (auto-define engines named in headless
+  //    config but not declared in build.zc). Must run BEFORE the engine
+  //    builds below so bareEnginesEnabled / hasTxikiEnabled see the
+  //    generated overlay too.
+  const engineOverlayFile = await generateEngineOverlay({ root, target, config });
+
+  // 1a. iOS-specific: generate the platform-scoped build file NOW so
+  //     the engine probes below see the iOS-correct directives instead
+  //     of the user's macos:-prefixed ones (which the zc compiler
+  //     drops on iOS but our regex-scan would otherwise honor —
+  //     e.g. trying to build bare-v8 for iOS even though iOS uses
+  //     bare-jsc).
+  const userBuildFileEarly = path.join(root, "zapp", "build.zc");
+  const iosBuildFile = isIOS
+    ? await generateIOSBuildFile(root, userBuildFileEarly)
+    : null;
+
+  // 2. Generate service bindings + bundle workers
   process.stdout.write("[zapp] scanning for services...\n");
   const count = await generateBindings(root);
   if (count > 0) process.stdout.write(`[zapp] generated ${count} binding(s) in src/zapp/\n`);
   // Workers are bundled by the Vite plugin during vite build/dev
 
-  // 2. Build vendored worker engines that the user opted into. Each
-  // ZAPP_WORKER_ENGINE_* define in build.zc enables one engine; multiple
-  // can coexist (the dispatcher routes per-worker at runtime). First
-  // build for each is slow (~1 min for txiki, ~3-5 min for Bare with
-  // engine-from-source); subsequent runs reuse the cached `_deps/` tree.
-  if (await hasTxikiEnabled(root)) {
+  // 3. Build vendored worker engines that the user opted into (either
+  //    via build.zc directives or via the engine overlay). Each
+  //    ZAPP_WORKER_ENGINE_* define enables one engine; multiple can
+  //    coexist (the dispatcher routes per-worker at runtime). First
+  //    build is slow (~1 min for txiki, ~3-5 min for Bare with
+  //    engine-from-source); subsequent runs reuse the cached `_deps/` tree.
+  if (await hasTxikiEnabled(root, engineOverlayFile ?? undefined)) {
     await ensureTxikiBuilt(nativeDir, target);
   }
-  for (const bareEngine of await bareEnginesEnabled(root)) {
-    await ensureBareBuilt(nativeDir, target, bareEngine);
+  for (const bareEngine of await bareEnginesEnabled(
+    root, engineOverlayFile ?? undefined, target, iosBuildFile ?? undefined,
+  )) {
+    await ensureBareBuilt(nativeDir, target, bareEngine, root);
   }
 
-  // 3. Generate build config + bootstrap (dev mode)
+  // 4. Generate build config + bootstrap (dev mode)
   const buildConfigFile = await generateBuildConfig({ root, config, mode: "dev", devUrl });
-  const platformFile = await generatePlatformConfig(root, target);
+  const platformFile = await generatePlatformConfig(root, target, iosBuildFile ?? undefined, engineOverlayFile ?? undefined);
   const headlessFile = await generateHeadlessWorkers({ root, headless: config.headless });
   const zappDir = path.join(root, ".zapp");
   process.stdout.write("[zapp] generating bootstrap...\n");
@@ -256,12 +313,10 @@ async function runDev(root: string) {
     nativeOut = path.join(binDir, exeName + exeSuffix);
   }
 
-  const userBuildFile = path.join(root, "zapp", "build.zc");
-  // iOS: swap user's build.zc for the CLI-generated overlay (strips
-  // `//> macos:` directives that don't apply for the iOS target).
-  const buildFile = isIOS
-    ? await generateIOSBuildFile(root, userBuildFile)
-    : userBuildFile;
+  // For iOS we already generated `_zapp_build_ios.zc` earlier (so
+  // the engine-build probes could see iOS-correct directives). Reuse
+  // it here instead of regenerating.
+  const buildFile = iosBuildFile ?? path.join(root, "zapp", "build.zc");
 
   try {
     await compileNative({
@@ -271,6 +326,7 @@ async function runDev(root: string) {
       bootstrapFile,
       assetsFile,
       headlessFile,
+      engineOverlayFile: engineOverlayFile ?? undefined,
       output: nativeOut,
       nativeDir,
       optimize: false,
@@ -400,20 +456,17 @@ async function runBuild(root: string) {
   const config = await loadConfig(root);
   const nativeDir = resolveNativeDir();
 
-  // 0. Check worker engine
+  // 0. Check worker engine. Workers are opt-in: a project either
+  // declares one in build.zc OR names one in zapp.config.ts headless
+  // map (auto-overlay below pulls it into the build). When neither
+  // exists, workers are silently disabled and the binary stays small.
   const workerEngine = await hasAnyWorkerEngine(root);
-  if (!workerEngine) {
-    process.stderr.write(
-      "[zapp] no worker engine defined in zapp/build.zc.\n" +
-      "  Add one of:\n" +
-      "    //> macos: define: ZAPP_WORKER_ENGINE_JSC          (legacy: native Cocoa JSC, smallest, no web APIs)\n" +
-      "    //> macos: define: ZAPP_WORKER_ENGINE_BARE_JSC     (Bare + JSC, system framework, fetch/WS via modules)\n" +
-      "    //>        define: ZAPP_WORKER_ENGINE_BARE_V8      (Bare + V8, JIT all platforms, larger binary)\n" +
-      "    //>        define: ZAPP_WORKER_ENGINE_BARE_QUICKJS (Bare + QuickJS, no JIT, small)\n" +
-      "    //>        define: ZAPP_WORKER_ENGINE_TXIKI        (legacy: txiki.js, +6MB, full web APIs)\n"
-    );
-    process.exit(1);
+  const hasHeadlessWorkers = !!(config.headless && Object.keys(config.headless).length > 0);
+  if (!workerEngine && !hasHeadlessWorkers) {
+    process.stdout.write("[zapp] no worker engine configured — workers disabled.\n");
   }
+
+  await verifyWorkerModules(root, config.workerModules);
 
   // 1. Generate service bindings + bundle workers
   process.stdout.write("[zapp] scanning for services...\n");
@@ -439,19 +492,24 @@ async function runBuild(root: string) {
   const zappDir = path.join(root, ".zapp");
   const assetsFile = await generateAssetManifest(root, config.assetDir);
 
-  // 4. Build vendored worker engines that the user opted into.
+  // 4. Generate engine overlay (auto-defines for engines named in
+  // zapp.config.ts headless map but not declared in build.zc) BEFORE
+  // engine builds, so the build set sees the overlay too.
+  const engineOverlayFile = await generateEngineOverlay({ root, target, config });
+
+  // 5. Build vendored worker engines that the user opted into.
   // Per-target build dirs so iOS Sim + iOS device + macOS coexist.
   // First build per engine takes 1-5 min; cached `_deps/` reused after.
-  if (await hasTxikiEnabled(root)) {
+  if (await hasTxikiEnabled(root, engineOverlayFile ?? undefined)) {
     await ensureTxikiBuilt(nativeDir, target);
   }
-  for (const bareEngine of await bareEnginesEnabled(root)) {
-    await ensureBareBuilt(nativeDir, target, bareEngine);
+  for (const bareEngine of await bareEnginesEnabled(root, engineOverlayFile ?? undefined)) {
+    await ensureBareBuilt(nativeDir, target, bareEngine, root);
   }
 
-  // 5. Generate build config + bootstrap (prod mode, embedded assets)
+  // 6. Generate build config + bootstrap (prod mode, embedded assets)
   const buildConfigFile = await generateBuildConfig({ root, config, mode: "prod", embedAssets: true });
-  const platformFile = await generatePlatformConfig(root, target);
+  const platformFile = await generatePlatformConfig(root, target, undefined, engineOverlayFile ?? undefined);
   const headlessFile = await generateHeadlessWorkers({ root, headless: config.headless });
   const bootstrapFile = await generateBootstrap(zappDir);
 
@@ -489,6 +547,7 @@ async function runBuild(root: string) {
     bootstrapFile,
     assetsFile,
     headlessFile,
+    engineOverlayFile: engineOverlayFile ?? undefined,
     output: nativeOut,
     nativeDir,
     optimize: true,

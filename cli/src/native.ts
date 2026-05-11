@@ -1,7 +1,7 @@
 // Native compilation — compiles with zc.
 
 import path from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, unlinkSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { resolveTxikiDir, resolveBareDir } from "./paths";
 
@@ -356,6 +356,7 @@ export async function ensureBareBuilt(
     if (await cmakeBin.exited !== 0) {
       throw new Error(`[zapp] Bare ${bareTarget} incremental build failed`);
     }
+    pruneBareSharedLib(path.join(bareDir, buildDir));
     // Compile any user-installed bare-* with native bindings that
     // vendor/bare doesn't already cover (e.g. bare-zlib).
     if (projectRoot) {
@@ -477,6 +478,7 @@ export async function ensureBareBuilt(
     cwd: bareDir, stdout: "inherit", stderr: "inherit",
   });
   if (await cmake2.exited !== 0) throw new Error("[zapp] Bare cmake build failed");
+  pruneBareSharedLib(path.join(bareDir, buildDir));
 
   if (projectRoot) {
     await ensureUserBareModulesCompiled(bareDir, buildDir, projectRoot, target);
@@ -506,6 +508,25 @@ export async function ensureBareBuilt(
 // which `ensureBareModulesArchive` then sweeps up alongside vendor's
 // own bindings.
 //
+// macOS `bare_bin` target transitively builds `bare_shared`, which
+// produces `libbare.dylib` (and `.tbd`) next to `libbare.a`. Zapp's
+// host link uses `-L<bareBuild> -lbare`, and the macOS linker prefers
+// `.dylib` over `.a` — so the host binary ends up with an
+// unsatisfiable `@rpath/libbare.dylib` LC_LOAD_DYLIB and crashes at
+// launch (`dyld: Library not loaded: @rpath/libbare.dylib`). We
+// don't ship the bare daemon or use libbare at runtime as a
+// dynamic library, so the cleanest fix is to remove the shared
+// artifacts after the build. iOS doesn't build `bare_bin` and
+// therefore never emits these.
+function pruneBareSharedLib(buildDir: string): void {
+  for (const name of ["libbare.dylib", "libbare.tbd"]) {
+    const p = path.join(buildDir, name);
+    if (existsSync(p)) {
+      try { unlinkSync(p); } catch {}
+    }
+  }
+}
+
 // No-op when the user has no bare-* with binding.c that's missing
 // from vendor.
 async function ensureUserBareModulesCompiled(

@@ -998,6 +998,12 @@ static void txiki_setup_bridge(JSContext* ctx, const char* worker_id) {
         JS_NewCFunction(ctx, zapp_bridge_shortcuts, "shortcuts", 2));
     JS_SetPropertyStr(ctx, bridge, "workerCrash",
         JS_NewCFunction(ctx, zapp_bridge_worker_crash, "workerCrash", 2));
+    // Expose the worker's own id on the bridge — mirrors bare's
+    // behavior and lets user code (e.g. self-identifying in logs,
+    // benchmarks, supervisor reports) read it without a host call.
+    JS_SetPropertyStr(ctx, bridge, "workerId",
+        JS_NewString(ctx, worker_id));
+
     JS_SetPropertyStr(ctx, global, "__zappBridge", bridge);
     JS_SetPropertyStr(ctx, global, "postMessage",
         JS_NewCFunction(ctx, zapp_bridge_post_to_webview, "postMessage", 1));

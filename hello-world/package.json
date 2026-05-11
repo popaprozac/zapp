@@ -14,6 +14,8 @@
     "vite": "^8.0.1"
   },
   "dependencies": {
+    "bare-events": "^2.8.2",
+    "bare-fetch": "^3.0.1",
     "surrealdb": "^2.0.3"
   }
 }

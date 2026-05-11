@@ -15,3 +15,5 @@ import "./bare.h" as bare_engine_jsc;
 import "./bare.h" as bare_engine_qjs;
 @cfg(ZAPP_WORKER_ENGINE_BARE_MQJS)
 import "./bare.h" as bare_engine_mqjs;
+@cfg(ZAPP_WORKER_ENGINE_BARE_HERMES)
+import "./bare.h" as bare_engine_hermes;

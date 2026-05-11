@@ -42,15 +42,29 @@ export class Worker {
    * Create a dedicated worker.
    *
    * @param scriptUrl Module URL bundled by the Vite plugin.
-   * @param opts.engine Which engine to spawn this worker on:
-   *   `"jsc"` (default — JIT, zero binary cost on macOS, no fetch /
-   *   WebSocket / Streams) or `"txiki"` (full web APIs at ~6 MB if
-   *   not already linked). Both engines must be enabled at build
-   *   time for `engine: "txiki"` to actually take effect — otherwise
-   *   the build downgrades to whichever engine is compiled and logs
-   *   a warning.
+   * @param opts.engine Which engine to spawn this worker on. Picking an
+   *   engine the project hasn't built into the binary triggers a runtime
+   *   downgrade (logged) to whichever engine IS compiled in. See
+   *   `docs/architecture.md#worker-engines` for the size/speed matrix.
+   *
+   *   Legacy engines (predate the Bare integration; fewer modules):
+   *   - `"jsc"` — native `JSContext` on Apple. JIT (with the
+   *     `allow-jit` entitlement). Zero binary cost — system framework.
+   *   - `"txiki"` — txiki.js (QuickJS + libuv + WHATWG fetch / WS).
+   *     ~6 MB binary cost. No JIT (QuickJS is interpreter).
+   *
+   *   Bare engines (npm-shaped module ecosystem; recommended):
+   *   - `"bare-jsc"` — Bare runtime + libjsc. Apple-only. Free + JIT.
+   *   - `"bare-v8"` — Bare runtime + V8. ~60 MB. JIT. Linux/Windows.
+   *   - `"bare-quickjs"` — Bare runtime + QuickJS-NG. ~1.5 MB. No JIT.
+   *   - `"bare-mqjs"` — Bare runtime + micro-QuickJS. Smaller still;
+   *     fewer features. Memory-constrained / embedded targets.
+   *   - `"bare-hermes"` — Bare runtime + Hermes. ~2 MB. AOT bytecode
+   *     option. Best fit for iOS where JIT is gated by entitlement.
    */
-  constructor(scriptUrl: string, opts?: { engine?: "jsc" | "txiki" }) {
+  constructor(scriptUrl: string, opts?: {
+    engine?: "jsc" | "txiki" | "bare-jsc" | "bare-v8" | "bare-quickjs" | "bare-mqjs" | "bare-hermes";
+  }) {
     this._bridge = getBridge();
     this.id = (this._bridge as any).createWorker(scriptUrl, opts);
 

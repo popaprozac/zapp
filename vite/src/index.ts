@@ -34,9 +34,11 @@ interface WorkerEntry {
    * When `"bare-hermes"`, the bundle goes through the Hermes-compat
    * downleveler (`hermesCompatLower` plugin); other engines run the
    * fast path without lowering. Auto-discovered workers (`new
-   * Worker(url)`) leave this undefined and never get downleveled —
-   * if you need Hermes-compat for those, switch them to headless
-   * and set `engine: "bare-hermes"` explicitly.
+   * Worker(url)`) start undefined but inherit `"bare-hermes"` when
+   * any headless worker in the project uses Hermes (see
+   * `inheritAutoWorkerEngine`) — covers the common case where the
+   * native runtime falls back to Hermes for a webview-spawned
+   * worker that asked for a different engine.
    */
   engine?: string;
 }
@@ -83,6 +85,23 @@ async function discoverWorkers(srcDir: string): Promise<WorkerEntry[]> {
   }
 
   return [...found.values()];
+}
+
+// Apply Hermes-compat downlevel to auto-discovered workers when any
+// headless worker uses `bare-hermes`. The native runtime falls back
+// to the first compiled-in engine if the JS-requested one isn't
+// available, so an auto-discovered worker that JS asks for "jsc"
+// will land on bare-hermes in a Hermes-only build — and crash on
+// load without the lowering. Inheriting closes that hole.
+function inheritAutoWorkerEngine(
+  autoWorkers: WorkerEntry[],
+  headlessEntries: WorkerEntry[],
+): void {
+  const hasHermes = headlessEntries.some((e) => e.engine === "bare-hermes");
+  if (!hasHermes) return;
+  for (const w of autoWorkers) {
+    if (!w.engine) w.engine = "bare-hermes";
+  }
 }
 
 // Node-stdlib → bare-* shim aliases used when bundling workers. Required
@@ -580,6 +599,13 @@ export function zappWorkers(options?: ZappWorkersOptions): Plugin {
       // Headless workers: declared in zapp.config.ts.
       headlessEntries = resolveHeadlessEntries(root, options?.headless);
 
+      // Auto-discovered workers don't carry an explicit engine, but if
+      // any headless worker is `bare-hermes` they'll likely land on
+      // bare-hermes too (the native fallback picks the first available
+      // engine when the requested one isn't compiled in). Inherit the
+      // downlevel so the resulting bundle is Hermes-safe.
+      inheritAutoWorkerEngine(workers, headlessEntries);
+
       if (workers.length > 0) {
         console.log(`[zapp] discovered ${workers.length} worker(s)`);
       }
@@ -624,6 +650,7 @@ export function zappWorkers(options?: ZappWorkersOptions): Plugin {
 
       workers = await discoverWorkers(srcDir);
       headlessEntries = resolveHeadlessEntries(root, options?.headless);
+      inheritAutoWorkerEngine(workers, headlessEntries);
 
       const allEntries = [...workers, ...headlessEntries];
       for (const entry of allEntries) {

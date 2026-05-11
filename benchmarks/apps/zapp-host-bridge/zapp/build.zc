@@ -1,0 +1,24 @@
+// Build directives — host-bridge benchmark app. Compiles in jsc.m,
+// txiki.c, and bare-jsc so the same binary measures three engines
+// side by side. To compare more, add the corresponding define here
+// AND a worker entry in zapp.config.ts.
+
+//> macos: define: apple
+//> macos: define: ZAPP_WORKER_ENGINE_JSC
+//> macos: define: ZAPP_WORKER_ENGINE_TXIKI
+//> macos: define: ZAPP_WORKER_ENGINE_BARE_JSC
+
+//> macos: framework: Cocoa
+//> macos: framework: WebKit
+//> macos: framework: CoreFoundation
+//> macos: framework: JavaScriptCore
+//> macos: framework: Security
+//> macos: framework: UserNotifications
+//> macos: link: -lcompression
+//> macos: cflags: -fobjc-arc
+
+import "app.zc";
+
+fn main() -> int {
+    return run_app();
+}

@@ -71,6 +71,14 @@ raw {
             extern void jsc_broadcast_eval_js(const char* js);
             jsc_broadcast_eval_js(buf);
             #endif
+            #if defined(ZAPP_WORKER_ENGINE_BARE_V8)      \
+             || defined(ZAPP_WORKER_ENGINE_BARE_JSC)     \
+             || defined(ZAPP_WORKER_ENGINE_BARE_QUICKJS) \
+             || defined(ZAPP_WORKER_ENGINE_BARE_MQJS)    \
+             || defined(ZAPP_WORKER_ENGINE_BARE_HERMES)
+            extern void bare_broadcast_eval_js(const char* js);
+            bare_broadcast_eval_js(buf);
+            #endif
         }
 
         // Layer 3: Forward to all WebViews (skip STARTED/SHUTDOWN — no WebViews exist yet/anymore)

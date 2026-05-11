@@ -650,6 +650,12 @@ static void jsc_setup_bridge(JSContext* ctx, NSString* workerId) {
         return [JSValue valueWithUndefinedInContext:currentCtx];
     };
 
+    // Expose the worker's own id on the bridge — mirrors bare's
+    // behavior and lets user code (e.g. self-identifying in logs,
+    // benchmarks, supervisor reports) read it without going through
+    // a host call.
+    bridge[@"workerId"] = wid;
+
     ctx[@"__zappBridge"] = bridge;
 
     // setTimeout / setInterval

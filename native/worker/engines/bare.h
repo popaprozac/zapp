@@ -25,4 +25,15 @@ void bare_worker_terminate(const char* worker_id);
 // Terminate all workers owned by a given window.
 void bare_worker_terminate_owner(const char* owner_id);
 
+// Broadcast a raw JS string to every active bare worker. Each worker
+// drains its eval_inbox on the next libuv async tick. Used by the
+// event-broadcast paths (Events.emit, app events).
+void bare_broadcast_eval_js(const char* js);
+
+// Evaluate JS in a specific bare worker's context. Used by
+// `darwin_sync_dispatch_to_worker` (sync.m) to deliver
+// `bridge.dispatchSyncResult(payload)` to the right worker.
+// No-op if the worker isn't found / not yet initialized.
+void bare_worker_eval_js(const char* worker_id, const char* js);
+
 #endif

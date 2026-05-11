@@ -1,0 +1,52 @@
+import "app/app.zc";
+
+// Minimal noop service — returns a constant JSON. Used by the bench
+// worker to measure pure invokeService round-trip latency without
+// service-side work skewing the number.
+fn noop(_app: App*, _args: JsonValue*) -> string {
+    return "{\"ok\":1}";
+}
+
+// echo — same constant return as `noop`, but the framework still
+// fully parses the args before invoking us. The bench uses this to
+// measure invokeService with realistic-size args without paying for
+// service-side work (which would skew the engine comparison).
+//
+// Re-serializing the args back to a JSON string would require the
+// JSON serializer; we don't need it for the measurement — the engine's
+// `_invokeServiceRaw` already paid the full args-walk cost before
+// we got here.
+fn echo(_app: App*, _args: JsonValue*) -> string {
+    return "{\"ok\":1}";
+}
+
+fn on_ready(_id: int, _handle: void*) -> void {
+    Window{id: _id, handle: _handle}.show();
+}
+
+fn run_app() -> int {
+    let config = AppConfig{
+        name: "bench-host-bridge",
+        applicationShouldTerminateAfterLastWindowClosed: true,
+        webContentInspectable: Zapp::inspectable_on(),
+        // Three bench workers run; cap at 4 to leave headroom for the
+        // browser-side worker the bench pipeline may also spin up.
+        maxWorkers: 4,
+        qjsStackSize: 0,
+    };
+    let app = App::new(config);
+    app.service.add("noop", noop);
+    app.service.add("echo", echo);
+
+    let opts = WindowOptions::create("Zapp Host-Bridge Bench");
+    opts.width = 480;
+    opts.height = 320;
+    // Window is shown so the bench has a process the OS treats as a
+    // real app (inactive apps may get throttled). The page itself
+    // shows just a status string.
+    opts.visible = false;
+    let win = app.window.create(&opts);
+    win.on_ready(on_ready);
+
+    return app.run();
+}

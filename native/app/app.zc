@@ -167,7 +167,7 @@ fn zapp_worker_create_window_from_json(opts_json: string) -> int {
             let json_ptr = parse_result.unwrap();
             window_opts_apply_json(&opts, json_ptr);
             raw {
-                JsonValue__Drop_glue(json_ptr);
+                JsonValue__Drop__drop(json_ptr);
                 free(json_ptr);
             }
         }

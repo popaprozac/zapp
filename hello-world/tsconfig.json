@@ -17,7 +17,8 @@
     /* Path aliases */
     "paths": {
       "@zappdev/runtime": ["../runtime/index.ts"],
-      "@zappdev/runtime/worker-globals": ["../runtime/worker-globals.ts"]
+      "@zappdev/runtime/worker-globals": ["../runtime/worker-globals.ts"],
+      "@zappdev/cli/config": ["../cli/src/config.ts"]
     },
 
     /* Linting */
@@ -28,5 +29,5 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true
   },
-  "include": ["src"]
+  "include": ["src", "zapp.config.ts"]
 }

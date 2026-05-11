@@ -279,16 +279,35 @@ void darwin_sync_dispatch_to_worker(const char* worker_id, const char* payload_j
     if (txiki_worker_dispatch_sync_result(worker_id, payload_json)) return;
 #endif
 
-    // Fall back to JSC: eval the dispatch JS via the worker's JSContext.
+    // Build the dispatch JS — same shape regardless of engine. The
+    // worker bootstrap installs `bridge.dispatchSyncResult` which
+    // looks up `_syncPending[id]` and resolves the stored promise.
     NSString* escaped = [[NSString stringWithUTF8String:payload_json]
         stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
     NSString* js = [NSString stringWithFormat:
         @"(function(){var b=self.__zappBridge||globalThis.__zappBridge;"
         "if(b&&typeof b.dispatchSyncResult==='function')b.dispatchSyncResult('%@');})();",
         escaped];
+    const char* js_c = [js UTF8String];
 
+#if defined(ZAPP_WORKER_ENGINE_BARE_V8)      \
+ || defined(ZAPP_WORKER_ENGINE_BARE_JSC)     \
+ || defined(ZAPP_WORKER_ENGINE_BARE_QUICKJS) \
+ || defined(ZAPP_WORKER_ENGINE_BARE_MQJS)    \
+ || defined(ZAPP_WORKER_ENGINE_BARE_HERMES)
+    // bare_worker_eval_js is a no-op when the worker_id doesn't
+    // belong to a bare worker, so this is safe to call unconditionally
+    // when bare is compiled in. We try it before falling through to
+    // jsc to give bare workers their own pre-resolution path.
+    extern void bare_worker_eval_js(const char* worker_id, const char* js);
+    bare_worker_eval_js(worker_id, js_c);
+#endif
+
+    // Fall back to JSC: eval the dispatch JS via the worker's JSContext.
+    // Same call is safe to make even when the worker isn't a JSC one;
+    // jsc_worker_eval_js no-ops on miss.
     extern void jsc_worker_eval_js(const char* worker_id, const char* js);
-    jsc_worker_eval_js(worker_id, [js UTF8String]);
+    jsc_worker_eval_js(worker_id, js_c);
 }
 
 // --- Blocking wait (for background threads ONLY) ---

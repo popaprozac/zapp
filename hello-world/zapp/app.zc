@@ -30,6 +30,14 @@ fn greet(_app: App*, args: JsonValue*) -> string {
     return "";
 }
 
+// noop — minimal-work service used by bench.ts to measure pure
+// invokeService round-trip latency (worker → router → service → worker).
+// Returns a constant JSON string; no logging, no arg parsing. Don't
+// remove unless you also remove the bench harness in src/workers/bench.ts.
+fn noop(_app: App*, _args: JsonValue*) -> string {
+    return "{\"ok\":1}";
+}
+
 fn on_ready(_id: int, _handle: void*) -> void {
     log("window ready, showing");
     Window{id: _id, handle: _handle}.show();
@@ -128,6 +136,13 @@ fn run_app() -> int {
     // Simple service (no state, no lifecycle)
     app.service.add("greet", greet);
     log("service registered: greet");
+
+    // Bench harness service — minimal handler that just returns a
+    // constant JSON. Used by src/workers/bench.ts to measure
+    // invokeService round-trip latency without service work skewing
+    // the number.
+    app.service.add("noop", noop);
+    log("service registered: noop");
 
     // Stateful service with lifecycle
     let counter_impl = ServiceImpl{

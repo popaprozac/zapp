@@ -8,7 +8,8 @@
 // way to do app-wide background work today.
 
 import { Events, Workers } from "@zappdev/runtime";
-import "@zappdev/runtime/worker-globals";
+// `workerModules` in zapp.config.ts (now ["fetch"]) drives the
+// install — no manual side-effect import needed here.
 
 let counter = 0;
 setInterval(() => {

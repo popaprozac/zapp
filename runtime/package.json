@@ -6,7 +6,14 @@
   "types": "index.ts",
   "exports": {
     ".": "./index.ts",
-    "./worker-globals": "./worker-globals.ts"
+    "./worker-globals": "./worker-globals.ts",
+    "./worker-globals/url":       "./worker-globals/url.ts",
+    "./worker-globals/fetch":     "./worker-globals/fetch.ts",
+    "./worker-globals/websocket": "./worker-globals/websocket.ts",
+    "./worker-globals/streams":   "./worker-globals/streams.ts",
+    "./worker-globals/crypto":    "./worker-globals/crypto.ts",
+    "./worker-globals/encoding":  "./worker-globals/encoding.ts",
+    "./bare/fs":                  "./bare/fs.ts"
   },
   "files": [
     "*.ts",

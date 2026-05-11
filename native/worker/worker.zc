@@ -11,6 +11,7 @@
 //   - `ZAPP_WORKER_ENGINE_BARE_V8`      — Bare + libjs (V8)
 //   - `ZAPP_WORKER_ENGINE_BARE_QUICKJS` — Bare + libqjs
 //   - `ZAPP_WORKER_ENGINE_BARE_MQJS`    — Bare + libmqjs
+//   - `ZAPP_WORKER_ENGINE_BARE_HERMES`  — Bare + libhermes (popaprozac)
 // Any combination can be defined together for per-worker mixing. When
 // the requested engine isn't compiled in, the dispatcher logs a
 // downgrade and falls back to the first available engine.
@@ -28,7 +29,8 @@ raw {
         (defined(ZAPP_WORKER_ENGINE_BARE_V8)      || \
          defined(ZAPP_WORKER_ENGINE_BARE_JSC)     || \
          defined(ZAPP_WORKER_ENGINE_BARE_QUICKJS) || \
-         defined(ZAPP_WORKER_ENGINE_BARE_MQJS))
+         defined(ZAPP_WORKER_ENGINE_BARE_MQJS)    || \
+         defined(ZAPP_WORKER_ENGINE_BARE_HERMES))
 }
 
 fn workers_enabled() -> bool {
@@ -54,6 +56,13 @@ raw {
     void jsc_worker_post_message(const char* a, const char* b) { (void)a; (void)b; }
     void jsc_worker_terminate(const char* a) { (void)a; }
     void jsc_worker_terminate_owner(const char* a) { (void)a; }
+    // sync.m's `darwin_sync_dispatch_to_worker` falls through to
+    // jsc_worker_eval_js as the last-ditch result-delivery path.
+    // When JSC isn't compiled in, we still need the symbol so the
+    // sync subsystem links — it's a no-op (sync results route to
+    // bare workers via bare_worker_eval_js / to txiki via
+    // txiki_worker_dispatch_sync_result).
+    void jsc_worker_eval_js(const char* a, const char* b) { (void)a; (void)b; }
     #endif
 
     #if !defined(ZAPP_WORKER_ENGINE_TXIKI)
@@ -72,6 +81,8 @@ raw {
     void bare_worker_post_message(const char* a, const char* b) { (void)a; (void)b; }
     void bare_worker_terminate(const char* a) { (void)a; }
     void bare_worker_terminate_owner(const char* a) { (void)a; }
+    void bare_broadcast_eval_js(const char* a) { (void)a; }
+    void bare_worker_eval_js(const char* a, const char* b) { (void)a; (void)b; }
     #endif
 }
 
@@ -111,11 +122,16 @@ raw {
         #ifdef ZAPP_WORKER_ENGINE_BARE_MQJS
         present[5] = 1;
         #endif
+        #ifdef ZAPP_WORKER_ENGINE_BARE_HERMES
+        present[6] = 1;
+        #endif
         if (requested >= 0 && requested < 8 && present[requested]) return requested;
-        // Fallback order: prefer richer/newer.
-        int order[6] = {2, 3, 4, 5, 1, 0};
-        const char* names[8] = {"jsc","txiki","bare-jsc","bare-v8","bare-quickjs","bare-mqjs","",""};
-        for (int i = 0; i < 6; i++) {
+        // Fallback order: prefer richer/newer. Hermes lands between
+        // V8 and QuickJS — AOT bytecode + tier-up interpreter is
+        // better than plain QJS but loses to V8's full JIT on macOS.
+        int order[7] = {2, 3, 6, 4, 5, 1, 0};
+        const char* names[8] = {"jsc","txiki","bare-jsc","bare-v8","bare-quickjs","bare-mqjs","bare-hermes",""};
+        for (int i = 0; i < 7; i++) {
             if (present[order[i]]) {
                 if (requested != order[i]) {
                     fprintf(stderr,
@@ -134,7 +150,7 @@ raw {
         switch (eng) {
             case 0: return jsc_worker_create(script_url, owner_id, worker_id);
             case 1: return txiki_worker_create(script_url, owner_id, worker_id);
-            case 2: case 3: case 4: case 5:
+            case 2: case 3: case 4: case 5: case 6:
                 return bare_worker_create(script_url, owner_id, worker_id);
         }
         return false;
@@ -144,7 +160,7 @@ raw {
         switch (eng) {
             case 0: jsc_worker_post_message(worker_id, data); break;
             case 1: txiki_worker_post_message(worker_id, data); break;
-            case 2: case 3: case 4: case 5:
+            case 2: case 3: case 4: case 5: case 6:
                 bare_worker_post_message(worker_id, data); break;
         }
     }
@@ -153,7 +169,7 @@ raw {
         switch (eng) {
             case 0: jsc_worker_terminate(worker_id); break;
             case 1: txiki_worker_terminate(worker_id); break;
-            case 2: case 3: case 4: case 5:
+            case 2: case 3: case 4: case 5: case 6:
                 bare_worker_terminate(worker_id); break;
         }
     }
@@ -168,6 +184,14 @@ fn worker_create(app: App*, script_url: string, owner_id: string,
         if (eng < 0) {
             result = false;
         } else {
+            // Update the registry to record the engine that actually
+            // ran (vs the one the user requested). Without this,
+            // post_message + terminate route via the requested engine
+            // — which may be a no-op stub if it wasn't compiled in,
+            // silently dropping every message after worker creation.
+            extern void zapp_worker_registry_set_engine(const char* worker_id, int engine);
+            zapp_worker_registry_set_engine((const char*)worker_id, eng);
+
             result = zapp_dispatch_worker_create(eng,
                 (const char*)script_url, (const char*)owner_id, (const char*)worker_id);
         }

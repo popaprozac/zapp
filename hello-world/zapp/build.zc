@@ -7,14 +7,9 @@
 // selection in zapp.config.ts actually takes effect. Apps that don't
 // need to mix can keep just one of these defines (no binary cost
 // difference for JSC-only on Apple — JSC is a system framework).
-//> macos: define: ZAPP_WORKER_ENGINE_TXIKI
-//> macos: define: ZAPP_WORKER_ENGINE_JSC
-// Bare runtime (spike) — opt in by uncommenting. Bare itself builds
-// clean (libbare.a + libjs.a) and bare.c compiles + headers resolve.
-// Final link is currently failing — zc's directive merging across
-// multiple engines isn't behaving as the docs suggest. See
-// spike/bare/README.md for the next-session pickup.
-// //> macos: define: ZAPP_WORKER_ENGINE_BARE_JSC
+// //> macos: define: ZAPP_WORKER_ENGINE_TXIKI
+// //> macos: define: ZAPP_WORKER_ENGINE_JSC
+//> macos: define: ZAPP_WORKER_ENGINE_BARE_HERMES
 
 //> macos: framework: Cocoa
 //> macos: framework: WebKit
@@ -23,7 +18,7 @@
 //> macos: framework: Security
 //> macos: framework: UserNotifications
 //> macos: link: -lcompression
-//> macos: cflags: -fobjc-arc -x objective-c
+//> macos: cflags: -fobjc-arc
 
 //> windows: cflags: -DUNICODE -D_UNICODE -DCINTERFACE -DCOBJMACROS
 // Windows platform .c files added by CLI via zapp_platform.zc
