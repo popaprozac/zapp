@@ -1,19 +1,97 @@
 // Scaffold a new Zapp project.
-// Wraps `bun create vite` then adds zapp/ native code + config.
-// Does NOT modify the Vite template files — users add Zapp imports themselves.
+//
+// Modes:
+//   - `zapp init <name>`            interactive (asks framework + install)
+//   - `zapp init <name> -t <tmpl>`  non-interactive (no prompts)
+//   - `zapp init <name> --yes`      non-interactive, accept all defaults
+//
+// Pipeline:
+//   1. (interactive) prompt name / framework / install-deps
+//   2. `bun create-vite` with the chosen template
+//   3. Drop in zapp/{app,build}.zc, zapp.config.ts, build/macos/.gitkeep
+//   4. Inject `zappWorkers()` into the template's vite.config.{ts,js}
+//   5. (optional) `bun install` in the project dir
 
 import path from "node:path";
 import { mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import * as readline from "node:readline/promises";
+import { stdin as input, stdout as output } from "node:process";
+
+// Vite templates we surface as first-class. Each entry maps the display
+// name to the `create-vite` template flag. Restricted to the "main four"
+// (plus vanilla) so the prompt stays scannable — power users pass any
+// create-vite template via `-t/--template <name>` directly.
+const FRAMEWORKS: Array<{ id: string; label: string; template: string }> = [
+  { id: "react",   label: "React (TypeScript)",   template: "react-ts" },
+  { id: "svelte",  label: "Svelte (TypeScript)",  template: "svelte-ts" },
+  { id: "vue",     label: "Vue (TypeScript)",     template: "vue-ts" },
+  { id: "solid",   label: "Solid (TypeScript)",   template: "solid-ts" },
+  { id: "vanilla", label: "Vanilla (TypeScript)", template: "vanilla-ts" },
+];
+
+// Map a CLI --template value to the resolved create-vite template name.
+// Accepts our friendly id (`react`) or the raw template (`react-ts`).
+// Returns null for unknown strings — caller decides whether to error
+// or pass through to create-vite as a power-user override.
+function resolveTemplate(input: string | null): string | null {
+  if (!input) return null;
+  const byId = FRAMEWORKS.find(f => f.id === input);
+  if (byId) return byId.template;
+  const byTemplate = FRAMEWORKS.find(f => f.template === input);
+  if (byTemplate) return byTemplate.template;
+  return null;
+}
+
+// Interactive prompt — readline-based, no new dep. Returns the chosen
+// template (create-vite name) + install-deps decision.
+async function promptFramework(): Promise<string> {
+  const rl = readline.createInterface({ input, output });
+  try {
+    output.write("\n  Pick a frontend framework:\n");
+    FRAMEWORKS.forEach((f, i) => {
+      output.write(`    ${i + 1}) ${f.label}\n`);
+    });
+    output.write("\n");
+    while (true) {
+      const answer = (await rl.question(`  framework [1-${FRAMEWORKS.length}] (default 1): `)).trim();
+      if (answer === "") return FRAMEWORKS[0].template;
+      // Accept either the numeric index or the framework id.
+      const n = Number.parseInt(answer, 10);
+      if (Number.isFinite(n) && n >= 1 && n <= FRAMEWORKS.length) {
+        return FRAMEWORKS[n - 1].template;
+      }
+      const byId = FRAMEWORKS.find(f => f.id === answer.toLowerCase());
+      if (byId) return byId.template;
+      output.write(`  not a valid choice — pick a number 1-${FRAMEWORKS.length} or a name (react, svelte, ...)\n`);
+    }
+  } finally {
+    rl.close();
+  }
+}
+
+async function promptYesNo(question: string, defaultYes: boolean): Promise<boolean> {
+  const rl = readline.createInterface({ input, output });
+  try {
+    const suffix = defaultYes ? "(Y/n)" : "(y/N)";
+    const answer = (await rl.question(`  ${question} ${suffix}: `)).trim().toLowerCase();
+    if (answer === "") return defaultYes;
+    return answer === "y" || answer === "yes";
+  } finally {
+    rl.close();
+  }
+}
 
 interface InitOptions {
   name: string;
-  template: string;
+  template: string | null;   // null → prompt; non-null → skip prompt
   root: string;
+  yes?: boolean;             // --yes shortcut: accept all defaults, skip prompts
+  install?: boolean | null;  // null → prompt; bool → skip prompt
 }
 
 export async function runInit(opts: InitOptions) {
-  const { name, template, root } = opts;
+  const { name, root, yes } = opts;
   const projectDir = path.join(root, name);
 
   if (existsSync(projectDir)) {
@@ -21,11 +99,39 @@ export async function runInit(opts: InitOptions) {
     process.exit(1);
   }
 
+  // Resolve template: explicit flag wins. Otherwise prompt unless --yes.
+  let template = resolveTemplate(opts.template);
+  if (!template && opts.template) {
+    // The flag was passed with an unrecognized value — pass through to
+    // create-vite as a power-user override (Vite supports more templates
+    // than we surface in the prompt).
+    template = opts.template;
+    process.stdout.write(`[zapp] using unrecognized template '${opts.template}' as create-vite passthrough\n`);
+  }
+  if (!template) {
+    if (yes) {
+      template = FRAMEWORKS[0].template;
+    } else {
+      template = await promptFramework();
+    }
+  }
+
+  // Resolve install decision: explicit flag wins. Otherwise prompt
+  // unless --yes (accept default = install).
+  let install: boolean;
+  if (opts.install !== undefined && opts.install !== null) {
+    install = opts.install;
+  } else if (yes) {
+    install = true;
+  } else {
+    install = await promptYesNo("install dependencies now?", true);
+  }
+
   // 1. Scaffold Vite project files (no install, no dev server).
   // create-vite has an --immediate flag that auto-installs + starts the dev
   // server, and an interactive prompt that does the same if confirmed.
   // --no-interactive skips the prompt and defaults to no install.
-  process.stdout.write(`[zapp] creating ${name} with template ${template}...\n`);
+  process.stdout.write(`\n[zapp] creating ${name} with template ${template}...\n`);
   const viteProc = Bun.spawn(
     ["bunx", "create-vite@latest", name, "--template", template, "--no-interactive"],
     { cwd: root, stdout: "inherit", stderr: "inherit" },
@@ -279,11 +385,30 @@ manifest, resource file). Windows packaging is in progress.
     await Bun.write(gitignorePath, gitignore);
   }
 
-  process.stdout.write(`\n[zapp] project created!\n\n`);
-  process.stdout.write(`  cd ${name}\n`);
-  process.stdout.write(`  bun install\n\n`);
+  // 8. Auto-install dependencies if the user opted in.
+  if (install) {
+    process.stdout.write(`\n[zapp] installing dependencies (bun install)...\n`);
+    const installProc = Bun.spawn(["bun", "install"], {
+      cwd: projectDir, stdout: "inherit", stderr: "inherit",
+    });
+    if ((await installProc.exited) !== 0) {
+      process.stderr.write("[zapp] bun install failed — you can re-run it manually inside the project dir\n");
+    }
+  }
+
+  // 9. Closing message — branch on install state so the next-step
+  // section reads cleanly in both cases.
+  const frameworkLabel = FRAMEWORKS.find(f => f.template === template)?.label ?? template;
+  process.stdout.write(`\n[zapp] project '${name}' created (${frameworkLabel}).\n\n`);
+  if (!install) {
+    process.stdout.write(`  cd ${name}\n`);
+    process.stdout.write(`  bun install\n\n`);
+  } else {
+    process.stdout.write(`  cd ${name}\n\n`);
+  }
   process.stdout.write(`  Then add to your entry file (e.g. src/main.ts):\n\n`);
-  process.stdout.write(`    import { Window, WindowEvent, Services } from "@zappdev/runtime";\n\n`);
+  process.stdout.write(`    import { Services } from "@zappdev/runtime";\n`);
+  process.stdout.write(`    const greeting = await Services.invoke<unknown, string>("greet");\n\n`);
   process.stdout.write(`  Run:\n`);
   process.stdout.write(`    bun run dev      # development with Vite HMR\n`);
   process.stdout.write(`    bun run build    # production build\n`);

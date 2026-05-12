@@ -635,10 +635,17 @@ switch (command) {
     const name = process.argv[3] || "zapp-app";
     const tIdx = process.argv.indexOf("-t");
     const templateIdx = process.argv.indexOf("--template");
+    // Explicit flag → resolved later in runInit; null → interactive prompt
+    // unless --yes is passed (which uses the default = react-ts).
     const template = tIdx >= 0 ? process.argv[tIdx + 1]
       : templateIdx >= 0 ? process.argv[templateIdx + 1]
-      : "vanilla-ts";
-    await runInit({ name, template, root: cwd });
+      : null;
+    const yes = process.argv.includes("--yes") || process.argv.includes("-y");
+    // --install / --no-install force a decision and skip the prompt.
+    const install = process.argv.includes("--no-install") ? false
+      : process.argv.includes("--install") ? true
+      : null;
+    await runInit({ name, template, root: cwd, yes, install });
     break;
   }
   case "dev":
@@ -656,7 +663,10 @@ switch (command) {
   default:
     console.log("Usage: zapp <init|dev|build|package|generate>");
     console.log("");
-    console.log("  init [name] [-t template]  Scaffold a new project");
+    console.log("  init [name] [opts]         Scaffold a new project");
+    console.log("                               -t,--template <name>  react|svelte|vue|solid|vanilla (default: prompt)");
+    console.log("                               -y,--yes              accept defaults, skip prompts (react)");
+    console.log("                               --install / --no-install  force the post-scaffold bun install");
     console.log("  dev                        Development mode with Vite HMR");
     console.log("  build                      Production build");
     console.log("  package [--sign] [--notarize]  Create .app bundle for distribution");
