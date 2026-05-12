@@ -1,4 +1,5 @@
 <div align="center">
+  <img src="assets/zapp-hero.png" alt="Zapp" width="160" height="160">
   <h1>Zapp</h1>
   <h3>Desktop and mobile apps. 445 KB on macOS.</h3>
   <p>
