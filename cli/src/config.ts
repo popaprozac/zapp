@@ -484,6 +484,31 @@ export interface ZappConfig {
   macos?: MacOSConfig;
   /** iOS-specific configuration. See {@link IOSConfig}. */
   ios?: IOSConfig;
+  /**
+   * Webview engine for the main window. Determines what renders the
+   * UI on macOS / Windows / Linux (iOS is always WKWebView by platform
+   * contract).
+   *
+   *   - **`"system"`** *(default)* — system WebView. WKWebView on
+   *     macOS, WebView2 on Windows, WebKitGTK on Linux. Tiny binary
+   *     (445 KB on macOS), zero runtime overhead, modern web standards.
+   *     The right answer for >99% of apps.
+   *
+   *   - **`"chromium"`** *(early-access)* — bundled Chromium via CEF.
+   *     For apps where the system WebView produces a visible rendering
+   *     mismatch with desktop Chrome (rare in practice for modern web
+   *     stacks; mostly impacts WebGL extensions and certain Web Animations
+   *     edge cases). Adds ~150 MB to the binary, so picks a different
+   *     trade-off than Zapp's default pitch.
+   *
+   *     **Not yet implemented.** Setting this today produces a clear
+   *     CLI error pointing at the early-access program. Ship-ready
+   *     when a real customer surfaces a reproducible "system WebView
+   *     won't render X" requirement.
+   *
+   * @default "system"
+   */
+  webEngine?: "system" | "chromium";
 }
 
 export interface ResolvedConfig extends ZappConfig {
@@ -494,17 +519,44 @@ export function defineConfig(config: ZappConfig): ZappConfig {
   return config;
 }
 
+// Reject `webEngine: "chromium"` with a clear next-step. The field exists
+// in the type (and on the landing page comparison matrix), but bundling
+// CEF / Chromium is gated on a real customer surfacing a reproducible
+// "system WebView won't render X" requirement — see
+// /Users/zach/.claude/plans/polished-mapping-ullman.md.
+function validateWebEngine(engine?: ZappConfig["webEngine"]): void {
+  if (engine === undefined || engine === "system") return;
+  if (engine === "chromium") {
+    throw new Error(
+      "[zapp] webEngine: \"chromium\" is early-access and not yet shipped.\n" +
+      "       The system WebView path (default) gives you a 445 KB binary and\n" +
+      "       handles modern web standards correctly. If you hit a real\n" +
+      "       rendering mismatch with desktop Chrome, open a discussion at\n" +
+      "       https://github.com/popaprozac/zapp/discussions with a repro and\n" +
+      "       we'll prioritize the Chromium backend for the next alpha.\n" +
+      "\n" +
+      "       For now: remove the `webEngine` field, or set it to \"system\"."
+    );
+  }
+  throw new Error(
+    `[zapp] webEngine: "${engine}" is not a valid value. ` +
+    `Expected "system" or "chromium".`
+  );
+}
+
 export async function loadConfig(root: string): Promise<ResolvedConfig> {
   const configPath = path.join(root, "zapp.config.ts");
   try {
     const mod = await import(configPath);
     // Support both `export default defineConfig({...})` and `export default {...}`
     const config = (typeof mod.default === "function" ? mod.default() : mod.default) as ZappConfig;
+    validateWebEngine(config.webEngine);
     return {
       ...config,
       assetDir: config.assetDir ?? "./dist",
     };
-  } catch {
+  } catch (e) {
+    if (e instanceof Error && e.message.startsWith("[zapp]")) throw e;
     return {
       name: path.basename(root),
       assetDir: "./dist",
