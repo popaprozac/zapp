@@ -46,6 +46,28 @@ typedef struct {
 } ZappEmbeddedAsset;
 
 // ---------------------------------------------------------------------------
+// Zen-C JsonValue construction (same externs txiki.c uses).
+//
+// JsonValue is opaque to this translation unit; we only manipulate it via
+// pointers. The _ptr constructors return heap-allocated nodes; the
+// _owned setters transfer ownership without an extra malloc.
+// ---------------------------------------------------------------------------
+
+typedef struct JsonValue JsonValue;
+extern JsonValue* JsonValue__null_ptr(void);
+extern JsonValue* JsonValue__bool_ptr(bool b);
+extern JsonValue* JsonValue__number_ptr(double n);
+extern JsonValue* JsonValue__string_ptr(char* s);
+extern JsonValue* JsonValue__array_ptr(void);
+extern JsonValue* JsonValue__object_ptr(void);
+extern void json_object_set_owned(JsonValue* obj, char* key, JsonValue* val);
+extern void json_array_push_owned(JsonValue* arr, JsonValue* val);
+extern void json_free_tree(JsonValue* v);
+
+extern void* app_get_active(void);
+extern const char* service_invoke_native(void* app, const char* method, JsonValue* args);
+
+// ---------------------------------------------------------------------------
 // Worker slot table — same shape as txiki, sized identically.
 // ---------------------------------------------------------------------------
 
@@ -68,6 +90,13 @@ typedef struct {
     uv_async_t   shutdown_async;     // signaled from terminate to wake the loop
     int          loop_initialized;
 
+    // Cached host-side handles to JS built-ins that the bridge uses on
+    // every host call. Cheaper than rehydrating via zjs_eval each call
+    // (a zjs_get_global lookup beats an eval+parse) and avoids polluting
+    // globalThis with intermediate variables.
+    ZjsValue     object_keys_fn;
+    ZjsValue     json_parse_fn;
+
     // Shutdown latch — set by zjs_worker_terminate from any thread,
     // observed by the worker thread when shutdown_async fires.
     int          shutting_down;
@@ -79,6 +108,19 @@ static pthread_mutex_t zjs_workers_mutex = PTHREAD_MUTEX_INITIALIZER;
 static ZjsWorkerSlot* zjs_find_slot(const char* worker_id) {
     for (int i = 0; i < ZJS_MAX_WORKERS; i++) {
         if (zjs_workers[i].active && strcmp(zjs_workers[i].worker_id, worker_id) == 0) {
+            return &zjs_workers[i];
+        }
+    }
+    return NULL;
+}
+
+// Host functions only see ZjsContext*, so they look their slot up here
+// to reach the cached helper handles + worker_id. Reads are lock-free
+// (each context belongs to one worker thread; the worker only ever sees
+// its own ctx, and only its own thread reads/writes the cached handles).
+static ZjsWorkerSlot* zjs_slot_for_ctx(ZjsContext* ctx) {
+    for (int i = 0; i < ZJS_MAX_WORKERS; i++) {
+        if (zjs_workers[i].active && zjs_workers[i].ctx == ctx) {
             return &zjs_workers[i];
         }
     }
@@ -102,6 +144,136 @@ extern char* zapp_ios_fetch_url_sync(const char* url, int* out_len);
 // First cut surfaces console.log only; Z2/Z3 layer invokeService and
 // dispatchEventToAll on top.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// ZjsValue → JsonValue walker.
+//
+// The whole reason we wrote a first-party engine: the bridge gets to
+// skip the JS-side JSON.stringify hop. Bare/txiki/jsc invoke services
+// by stringifying args in JS, calling a C trampoline that takes a
+// string, parsing the string back into a JsonValue. Two full traversals
+// of the data + an allocator churn for the intermediate string.
+//
+// Here we walk the ZjsValue tree directly into a JsonValue tree —
+// one traversal, no string buffer. The cost is the per-object key
+// iteration (zjs.h doesn't expose a built-in iterator, so we call
+// Object.keys via the cached handle — that's a single zjs_call per
+// object instead of an eval per property).
+// ---------------------------------------------------------------------------
+
+static JsonValue* zjsvalue_to_jsonvalue(ZjsWorkerSlot* slot, ZjsValue v) {
+    ZjsContext* ctx = slot->ctx;
+
+    if (zjs_is_undefined(v) || zjs_is_null(v)) {
+        return JsonValue__null_ptr();
+    }
+    if (zjs_is_bool(v)) {
+        return JsonValue__bool_ptr(zjs_as_bool(v) ? true : false);
+    }
+    if (zjs_is_int32(v)) {
+        return JsonValue__number_ptr((double) zjs_as_int32(v));
+    }
+    if (zjs_is_double(v)) {
+        return JsonValue__number_ptr(zjs_as_double(v));
+    }
+    if (zjs_is_string(v)) {
+        uint32_t len = 0;
+        const char* s = zjs_string_bytes(v, &len);
+        // JsonValue__string_ptr strdups internally; passing a non-NUL'd
+        // buffer is unsafe, so build a NUL-terminated copy. Most worker
+        // payloads are small enough that this temp alloc is noise.
+        char* tmp = (char*) malloc((size_t) len + 1);
+        if (tmp) {
+            if (s && len > 0) memcpy(tmp, s, len);
+            tmp[len] = '\0';
+            JsonValue* jv = JsonValue__string_ptr(tmp);
+            free(tmp);
+            return jv;
+        }
+        return JsonValue__null_ptr();
+    }
+    if (zjs_is_array(v)) {
+        JsonValue* arr = JsonValue__array_ptr();
+        uint32_t n = zjs_array_length(v);
+        for (uint32_t i = 0; i < n; i++) {
+            ZjsValue elem = zjs_get_element(ctx, v, i);
+            json_array_push_owned(arr, zjsvalue_to_jsonvalue(slot, elem));
+        }
+        return arr;
+    }
+    if (zjs_is_object(v)) {
+        JsonValue* obj = JsonValue__object_ptr();
+        // Object.keys(v) — cached at bridge setup. Returns an array of
+        // string keys (own enumerable, same as JSON.stringify uses).
+        ZjsValue arg = v;
+        ZjsValue keys = zjs_call(ctx, slot->object_keys_fn, zjs_undefined(), &arg, 1);
+        uint32_t n = zjs_array_length(keys);
+        for (uint32_t i = 0; i < n; i++) {
+            ZjsValue key = zjs_get_element(ctx, keys, i);
+            uint32_t klen = 0;
+            const char* kbytes = zjs_string_bytes(key, &klen);
+            char* kbuf = (char*) malloc((size_t) klen + 1);
+            if (!kbuf) continue;
+            if (kbytes && klen > 0) memcpy(kbuf, kbytes, klen);
+            kbuf[klen] = '\0';
+            ZjsValue val = zjs_get_property(ctx, v, kbuf);
+            json_object_set_owned(obj, kbuf, zjsvalue_to_jsonvalue(slot, val));
+            free(kbuf);
+        }
+        return obj;
+    }
+    // Function / symbol / anything else → null (matches JSON.stringify).
+    return JsonValue__null_ptr();
+}
+
+// ---------------------------------------------------------------------------
+// __zappBridge.invokeService(method: string, args?: any) -> any
+//
+// Direct value path — no JS-side stringify, no JS-side parse on the
+// way in. Return value still hops through JSON (service_invoke_native
+// returns a string today); upgrading that to a direct JsonValue→ZjsValue
+// walk is a follow-up once we have a zenc-friendly return shape.
+// ---------------------------------------------------------------------------
+
+static ZjsValue host_invoke_service(ZjsContext* ctx, ZjsValue* argv, uint32_t argc) {
+    if (argc < 1 || !zjs_is_string(argv[0])) return zjs_undefined();
+
+    ZjsWorkerSlot* slot = zjs_slot_for_ctx(ctx);
+    if (!slot) return zjs_undefined();
+
+    uint32_t method_len = 0;
+    const char* method_bytes = zjs_string_bytes(argv[0], &method_len);
+    if (!method_bytes) return zjs_undefined();
+    // Method name needs to be NUL-terminated for service_invoke_native;
+    // copy locally so we own the string.
+    char* method = (char*) malloc((size_t) method_len + 1);
+    if (!method) return zjs_undefined();
+    memcpy(method, method_bytes, method_len);
+    method[method_len] = '\0';
+
+    JsonValue* args_jv = NULL;
+    if (argc >= 2 && !zjs_is_undefined(argv[1]) && !zjs_is_null(argv[1])) {
+        args_jv = zjsvalue_to_jsonvalue(slot, argv[1]);
+    }
+
+    void* app = app_get_active();
+    const char* svc_result = app ? service_invoke_native(app, method, args_jv) : NULL;
+    free(method);
+    if (args_jv) json_free_tree(args_jv);
+
+    if (!svc_result || svc_result[0] == '\0') return zjs_undefined();
+
+    // Return walk: JSON.parse the service's output back into a ZjsValue.
+    // Cached JSON.parse beats zjs_eval(ctx, "JSON.parse(...)") because
+    // it avoids the parser + a string concat for the JS source.
+    ZjsValue raw = zjs_new_string(ctx, svc_result, (uint32_t) strlen(svc_result));
+    ZjsValue parsed = zjs_call(ctx, slot->json_parse_fn, zjs_undefined(), &raw, 1);
+    if (zjs_had_error(ctx)) {
+        // Bad JSON from a service — surface the raw string instead.
+        return raw;
+    }
+    return parsed;
+}
 
 static ZjsValue host_console_log(ZjsContext* ctx, ZjsValue* argv, uint32_t argc) {
     fputs("[js-console]", stderr);
@@ -136,8 +308,8 @@ static ZjsValue host_console_log(ZjsContext* ctx, ZjsValue* argv, uint32_t argc)
     return zjs_undefined();
 }
 
-static void zjs_setup_bridge(ZjsContext* ctx, const char* worker_id) {
-    (void) worker_id;  // Z2 stashes this per-context for invokeService routing.
+static void zjs_setup_bridge(ZjsWorkerSlot* slot) {
+    ZjsContext* ctx = slot->ctx;
 
     // globalThis.console = { log, error, warn, info } — all hit the same
     // stderr printer for now. Workers typically don't have multiple log
@@ -150,6 +322,23 @@ static void zjs_setup_bridge(ZjsContext* ctx, const char* worker_id) {
     zjs_set_property(ctx, console, "warn",  log_fn);
     zjs_set_property(ctx, console, "info",  log_fn);
     zjs_set_global(ctx, "console", console);
+
+    // Cache Object.keys + JSON.parse handles for the value walker. Doing
+    // this once at setup beats looking them up on every invokeService
+    // call; both are tiny zjs_get_global lookups but the savings add up
+    // on high-rate workloads.
+    slot->object_keys_fn = zjs_eval(ctx, "Object.keys");
+    slot->json_parse_fn  = zjs_eval(ctx, "JSON.parse");
+
+    // globalThis.__zappBridge — the engine-agnostic host surface. zjs
+    // gets the direct value-path invokeService; bare/jsc/txiki get the
+    // JSON-stringifying wrapper in their per-engine bootstraps. Same
+    // public API (`b.invokeService(method, args)`) either way.
+    ZjsValue bridge = zjs_new_object(ctx);
+    ZjsValue invoke_fn = zjs_register_host_function(ctx, "__zapp_invoke_service",
+                                                    host_invoke_service);
+    zjs_set_property(ctx, bridge, "invokeService", invoke_fn);
+    zjs_set_global(ctx, "__zappBridge", bridge);
 }
 
 // ---------------------------------------------------------------------------
@@ -305,7 +494,7 @@ static void* zjs_worker_thread(void* arg) {
     // functions during top-level execution (Services.invokeSync from
     // module scope is a real pattern), so console.log + invokeService
     // must be reachable before the eval runs.
-    zjs_setup_bridge(slot->ctx, slot->worker_id);
+    zjs_setup_bridge(slot);
 
     // Hook the loop wiring BEFORE eval so any setInterval / setTimeout
     // the script registers immediately gets pumped from the first tick.
