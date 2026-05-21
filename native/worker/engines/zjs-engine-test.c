@@ -113,6 +113,15 @@ void json_free_tree(JsonValue* v) {
 
 void* app_get_active(void) { return (void*) 0x1; }  // any non-NULL works
 
+// Z3 — dispatch_event_to_all is the C target for
+// __zappBridge.dispatchEventToAll. The real impl fans out to every
+// webview; the test just prints so we can see what made it through.
+void dispatch_event_to_all(const char* event_name, const char* payload) {
+    fprintf(stderr, "[event] '%s' payload=%s\n",
+        event_name ? event_name : "<null>",
+        payload    ? payload    : "<null>");
+}
+
 // Crude JSON encoder so the test can show that the args walked from
 // ZjsValue into a JsonValue tree the way invokeService expects. Only
 // covers the primitives + container shapes our test payload uses.
@@ -210,8 +219,15 @@ int main(void) {
         "  typeof r,"
         "  r && r.echoedMethod,"
         "  r && r.argsRendered);\n"
+        // Z3: fire one event before the ticker starts; verify the C
+        // dispatch_event_to_all stub sees the right name + JSON payload.
+        "__zappBridge.dispatchEventToAll('zjs:hello', { from: 'worker', ok: true });\n"
         "var n = 0;\n"
-        "setInterval(() => { n++; console.log('tick', n); }, 200);\n"
+        "setInterval(() => {\n"
+        "  n++;\n"
+        "  console.log('tick', n);\n"
+        "  __zappBridge.dispatchEventToAll('counter:tick', { value: n });\n"
+        "}, 200);\n"
     );
 
     fprintf(stderr, "[test] launching zjs worker...\n");

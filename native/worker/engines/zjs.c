@@ -67,6 +67,13 @@ extern void json_free_tree(JsonValue* v);
 extern void* app_get_active(void);
 extern const char* service_invoke_native(void* app, const char* method, JsonValue* args);
 
+// Fan-out fire-and-forget events to every webview's
+// __zappBridge._onEvent listener. Same destination JSC / txiki / bare
+// hit; the per-engine difference is how we get the JS payload value
+// to a C string. zjs caches JSON.stringify on the slot and calls it
+// directly (no JS-side property dance, no second eval).
+extern void dispatch_event_to_all(const char* event_name, const char* payload);
+
 // ---------------------------------------------------------------------------
 // Worker slot table — same shape as txiki, sized identically.
 // ---------------------------------------------------------------------------
@@ -96,6 +103,7 @@ typedef struct {
     // globalThis with intermediate variables.
     ZjsValue     object_keys_fn;
     ZjsValue     json_parse_fn;
+    ZjsValue     json_stringify_fn;
 
     // Shutdown latch — set by zjs_worker_terminate from any thread,
     // observed by the worker thread when shutdown_async fires.
@@ -275,6 +283,57 @@ static ZjsValue host_invoke_service(ZjsContext* ctx, ZjsValue* argv, uint32_t ar
     return parsed;
 }
 
+// ---------------------------------------------------------------------------
+// __zappBridge.dispatchEventToAll(name: string, payload?: any) -> undefined
+//
+// Fire-and-forget broadcast. dispatch_event_to_all takes a JSON string,
+// so the payload always needs serialising on the way out — no return
+// path means a JsonValue tree-walk would just be extra work vs.
+// calling the engine's own JSON.stringify (cached on the slot). The
+// real perf wedge is invokeService (Z2); events stay simple.
+// ---------------------------------------------------------------------------
+
+static ZjsValue host_dispatch_event_to_all(ZjsContext* ctx, ZjsValue* argv, uint32_t argc) {
+    if (argc < 1 || !zjs_is_string(argv[0])) return zjs_undefined();
+
+    ZjsWorkerSlot* slot = zjs_slot_for_ctx(ctx);
+    if (!slot) return zjs_undefined();
+
+    uint32_t name_len = 0;
+    const char* name_bytes = zjs_string_bytes(argv[0], &name_len);
+    if (!name_bytes) return zjs_undefined();
+    char* name = (char*) malloc((size_t) name_len + 1);
+    if (!name) return zjs_undefined();
+    memcpy(name, name_bytes, name_len);
+    name[name_len] = '\0';
+
+    // Default payload is "{}" so receivers don't crash on a missing field.
+    // Real payload, if present, goes through JSON.stringify via the cached
+    // handle.
+    char* payload = NULL;
+    if (argc >= 2 && !zjs_is_undefined(argv[1]) && !zjs_is_null(argv[1])) {
+        ZjsValue stringified = zjs_call(ctx, slot->json_stringify_fn,
+                                        zjs_undefined(), &argv[1], 1);
+        if (!zjs_had_error(ctx) && zjs_is_string(stringified)) {
+            uint32_t plen = 0;
+            const char* pbytes = zjs_string_bytes(stringified, &plen);
+            if (pbytes) {
+                payload = (char*) malloc((size_t) plen + 1);
+                if (payload) {
+                    memcpy(payload, pbytes, plen);
+                    payload[plen] = '\0';
+                }
+            }
+        }
+    }
+
+    dispatch_event_to_all(name, payload ? payload : "{}");
+
+    free(name);
+    free(payload);
+    return zjs_undefined();
+}
+
 static ZjsValue host_console_log(ZjsContext* ctx, ZjsValue* argv, uint32_t argc) {
     fputs("[js-console]", stderr);
     for (uint32_t i = 0; i < argc; i++) {
@@ -327,8 +386,9 @@ static void zjs_setup_bridge(ZjsWorkerSlot* slot) {
     // this once at setup beats looking them up on every invokeService
     // call; both are tiny zjs_get_global lookups but the savings add up
     // on high-rate workloads.
-    slot->object_keys_fn = zjs_eval(ctx, "Object.keys");
-    slot->json_parse_fn  = zjs_eval(ctx, "JSON.parse");
+    slot->object_keys_fn    = zjs_eval(ctx, "Object.keys");
+    slot->json_parse_fn     = zjs_eval(ctx, "JSON.parse");
+    slot->json_stringify_fn = zjs_eval(ctx, "JSON.stringify");
 
     // globalThis.__zappBridge — the engine-agnostic host surface. zjs
     // gets the direct value-path invokeService; bare/jsc/txiki get the
@@ -337,7 +397,12 @@ static void zjs_setup_bridge(ZjsWorkerSlot* slot) {
     ZjsValue bridge = zjs_new_object(ctx);
     ZjsValue invoke_fn = zjs_register_host_function(ctx, "__zapp_invoke_service",
                                                     host_invoke_service);
-    zjs_set_property(ctx, bridge, "invokeService", invoke_fn);
+    ZjsValue emit_fn   = zjs_register_host_function(ctx, "__zapp_dispatch_event",
+                                                    host_dispatch_event_to_all);
+    zjs_set_property(ctx, bridge, "invokeService",      invoke_fn);
+    zjs_set_property(ctx, bridge, "dispatchEventToAll", emit_fn);
+    // Alias to match the legacy name some runtime code still uses.
+    zjs_set_property(ctx, bridge, "emitToHost",         emit_fn);
     zjs_set_global(ctx, "__zappBridge", bridge);
 }
 
