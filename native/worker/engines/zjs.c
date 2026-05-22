@@ -602,12 +602,16 @@ static void* zjs_worker_thread(void* arg) {
     //     parse pass. Parse-free start is the perf win, especially
     //     on iOS where JIT is gated.
     //
-    //   `.mjs` (everything else) — Vite-bundled source. Today we eval
-    //     it as a plain script; once Z6 lands a zjs-friendly Vite
-    //     output, this can switch to zjs_eval_module for true ESM
-    //     semantics. The script-context path matches what bare /
-    //     jsc / txiki use today, so worker authors don't see a
-    //     semantic difference at this layer.
+    //   `.mjs` (everything else) — Vite-bundled source. Eval via
+    //     zjs_eval_module_source (ESM semantics, microtask drain per
+    //     module evaluation per spec). The virtual_path arg is the
+    //     module cache key — using the canonical worker URL (e.g.
+    //     "/_workers/_headless_ticker.mjs") ensures a second spawn
+    //     of the same worker reuses the cached module if the source
+    //     hasn't changed. Bundle is in-memory already (loaded by
+    //     zjs_load_script via embedded asset / filesystem / dev URL),
+    //     so the _source entry skips the disk hop the path-based
+    //     zjs_eval_module would have to do.
     int is_bytecode = 0;
     {
         const char* dot = strrchr(slot->script_url, '.');
@@ -616,7 +620,7 @@ static void* zjs_worker_thread(void* arg) {
     if (is_bytecode) {
         zjs_eval_bytecode(slot->ctx, (const unsigned char*) code, (size_t) code_len);
     } else {
-        zjs_eval(slot->ctx, code);
+        zjs_eval_module_source(slot->ctx, code, (size_t) code_len, slot->script_url);
     }
     if (zjs_had_error(slot->ctx)) {
         ZjsValue err = zjs_get_error(slot->ctx);
