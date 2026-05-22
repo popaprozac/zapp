@@ -599,10 +599,34 @@ static void* zjs_worker_thread(void* arg) {
     zjs_eval(slot->ctx, code);
     if (zjs_had_error(slot->ctx)) {
         ZjsValue err = zjs_get_error(slot->ctx);
-        uint32_t len = 0;
-        const char* msg = zjs_string_bytes(err, &len);
-        fprintf(stderr, "[zapp] zjs worker '%s' script threw: %.*s\n",
-            slot->worker_id, (int) len, msg ? msg : "<non-string throw>");
+        // Most user throws are Error objects (`throw new Error(...)`), not
+        // bare strings. Read the .message field when present, then fall
+        // back to String() coercion for anything else (numbers, objects
+        // without .message, etc).
+        const char* msg = NULL;
+        uint32_t    len = 0;
+        ZjsValue    msg_val = zjs_get_property(slot->ctx, err, "message");
+        if (zjs_is_string(msg_val)) {
+            msg = zjs_string_bytes(msg_val, &len);
+        }
+        if (!msg) msg = zjs_string_bytes(err, &len);
+        if (!msg) {
+            // Last resort: stash the value as a global and String() it
+            // so we get *something* readable rather than "<non-string>".
+            zjs_set_global(slot->ctx, "__zapp_err_tmp", err);
+            ZjsValue str = zjs_eval(slot->ctx, "String(__zapp_err_tmp)");
+            msg = zjs_string_bytes(str, &len);
+        }
+        // Stacks are non-standard but worth showing when present.
+        const char* stack = NULL;
+        uint32_t    slen  = 0;
+        ZjsValue    stack_val = zjs_get_property(slot->ctx, err, "stack");
+        if (zjs_is_string(stack_val)) stack = zjs_string_bytes(stack_val, &slen);
+        fprintf(stderr, "[zapp] zjs worker '%s' script threw: %.*s%s%.*s\n",
+            slot->worker_id,
+            (int) len, msg ? msg : "<unreadable>",
+            stack ? "\n" : "",
+            (int) slen, stack ? stack : "");
     }
     free(code);
 

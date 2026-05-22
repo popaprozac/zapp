@@ -864,7 +864,20 @@ export async function generatePlatformConfig(
     const vendorDir = resolveVendorDir();
     const zjsDir = path.join(vendorDir, "zjs");
     const zjsInclude = path.join(zjsDir, "include");
-    const zjsLib     = path.join(zjsDir, "build", "libzjs.a");
+    // Use the dylib, not the .a. Both the framework and libzjs.a embed
+    // zenc's stdlib (Vec / String / Option / Arena / …) — linking the
+    // .a fails with hundreds of duplicate-symbol errors on those
+    // shared internals. The dylib resolves symbols per-binary, so the
+    // framework sees only zjs's exported zjs_* surface and its own
+    // copy of the stdlib stays unconflicted.
+    //
+    // Long-term fix lives upstream in zjs: ship an embed-friendly .a
+    // with internal symbols stripped (ld -r + -unexported_symbols_list,
+    // or build a relocatable .o with `-hidden`). Until then the dylib
+    // is the right pragmatic choice — runtime dylib dependency is
+    // acceptable since libzjs.dylib lives next to the binary in dev
+    // and bundles into the .app in prod.
+    const zjsLib = path.join(zjsDir, "build", "libzjs.dylib");
 
     if (!existsSync(zjsLib)) {
       process.stdout.write(`[zapp] building vendor/zjs (first run; ~30s)...\n`);
@@ -877,6 +890,24 @@ export async function generatePlatformConfig(
         throw new Error(
           `[zapp] failed to build vendor/zjs (exit ${exitCode}). ` +
           `Tried: make -C ${zjsDir}. Build vendor/zjs by hand and rerun.\n${stderr}`
+        );
+      }
+    }
+
+    // zjs's Makefile bakes a relative install_name ("build/libzjs.dylib")
+    // because the dylib is normally consumed in-tree (its own smoke test
+    // run from the project root finds it via @loader_path). For Zapp
+    // we're linking from a different cwd, so the runtime loader can't
+    // resolve the relative path. Rewrite the install_name to the
+    // absolute vendor location once — idempotent, fast, no rebuild.
+    const otoolD = Bun.spawnSync(["otool", "-D", zjsLib]);
+    const installName = new TextDecoder().decode(otoolD.stdout).split("\n")[1]?.trim();
+    if (installName && installName !== zjsLib) {
+      const fix = Bun.spawnSync(["install_name_tool", "-id", zjsLib, zjsLib]);
+      if (fix.exitCode !== 0) {
+        throw new Error(
+          `[zapp] failed to set absolute install_name on ${zjsLib}: ` +
+          new TextDecoder().decode(fix.stderr)
         );
       }
     }
@@ -895,8 +926,13 @@ export async function generatePlatformConfig(
       );
     }
 
+    // -rpath so the framework binary finds libzjs.dylib at runtime
+    // from the vendor build dir. Production builds will copy the dylib
+    // into the .app bundle's Frameworks dir and use @loader_path
+    // instead — Z5 follow-up.
+    const zjsBuildDir = path.dirname(zjsLib);
     content += `//> macos: cflags: -I${shortPath(zjsInclude)} -I${uvInclude}\n`;
-    content += `//> macos: link: ${shortPath(zjsLib)} -L${uvLibDir} -luv\n`;
+    content += `//> macos: link: ${shortPath(zjsLib)} -L${uvLibDir} -luv -Wl,-rpath,${zjsBuildDir}\n`;
   }
 
   if (process.platform === "win32" && sources.length > 0) {

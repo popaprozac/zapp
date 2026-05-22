@@ -8,8 +8,8 @@
 // need to mix can keep just one of these defines (no binary cost
 // difference for JSC-only on Apple — JSC is a system framework).
 // //> macos: define: ZAPP_WORKER_ENGINE_TXIKI
-// //> macos: define: ZAPP_WORKER_ENGINE_JSC
-//> macos: define: ZAPP_WORKER_ENGINE_BARE_HERMES
+//> macos: define: ZAPP_WORKER_ENGINE_JSC
+// //> macos: define: ZAPP_WORKER_ENGINE_BARE_HERMES
 
 //> macos: framework: Cocoa
 //> macos: framework: WebKit
