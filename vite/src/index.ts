@@ -41,6 +41,16 @@ interface WorkerEntry {
    * worker that asked for a different engine.
    */
   engine?: string;
+  /**
+   * Pre-compile to zjs bytecode after the Vite bundle runs. Only
+   * meaningful when `engine === "zjs"`. When true, the plugin invokes
+   * `zjs compile` on the post-bundle .mjs and writes a sibling .zbc
+   * file; the engine loader detects the extension and dispatches via
+   * `zjs_eval_bytecode` instead of `zjs_eval`. Always false for
+   * auto-discovered (webview-spawned) workers — only headless workers
+   * carry the flag from zapp.config.ts.
+   */
+  bytecode?: boolean;
 }
 
 /** Recursively scan for source files. */
@@ -486,6 +496,37 @@ async function bundleWorker(
         conditions: ["bare", "import", "module", "default"],
       },
     });
+
+    // bytecode: true (zjs only) — pre-compile the bundled .mjs to a
+    // sibling .zbc so the worker engine can dispatch via
+    // zjs_eval_bytecode instead of zjs_eval. Parse-free start, smaller
+    // embedded asset on iOS.
+    //
+    // Resolves zjs's CLI relative to where the plugin file lives
+    // (the package is published from this monorepo, so vendor/zjs is
+    // a sibling of vite/). For published consumption the zjs binary
+    // would need to be discovered from a different anchor; flagging
+    // as a follow-up.
+    if (entry.bytecode) {
+      const { existsSync } = await import("node:fs");
+      const mjsPath = path.join(outDir, entry.outputName);
+      const zbcPath = mjsPath.replace(/\.mjs$/, ".zbc");
+      const zjsCli = path.resolve(root, "..", "vendor", "zjs", "build", "zjs");
+      if (!existsSync(zjsCli)) {
+        console.warn(
+          `[zapp] bytecode: true requires vendor/zjs/build/zjs — not found at ${zjsCli}. ` +
+          `Skipping bytecode compile for ${entry.outputName}; falling back to .mjs.`
+        );
+      } else {
+        const { spawnSync } = await import("node:child_process");
+        const proc = spawnSync(zjsCli, ["compile", mjsPath, "-o", zbcPath], { encoding: "utf-8" });
+        if (proc.status !== 0) {
+          console.warn(
+            `[zapp] zjs compile failed for ${entry.outputName}, falling back to .mjs:\n${proc.stderr || proc.stdout}`
+          );
+        }
+      }
+    }
     return true;
   } catch (e) {
     console.error(`[zapp] worker bundle failed: ${entry.specifier}`, e);
@@ -503,7 +544,7 @@ interface ZappWorkersOptions {
    * Output URL is `/_workers/_headless_<id>.mjs` — the native runtime
    * loads these at app startup via generated Zen-C code.
    */
-  headless?: Record<string, string | { script: string; restart?: unknown; engine?: string }>;
+  headless?: Record<string, string | { script: string; restart?: unknown; engine?: string; bytecode?: boolean }>;
   /**
    * Worker capabilities (see ZappConfig.workerModules). For each entry
    * we prepend `import "@zappdev/runtime/worker-globals/<subpath>"` to
@@ -536,13 +577,26 @@ function resolveHeadlessEntries(root: string, headless?: ZappWorkersOptions["hea
   for (const [id, value] of Object.entries(headless)) {
     const srcPath = typeof value === "string" ? value : value.script;
     const engine = typeof value === "string" ? undefined : value.engine;
+    const bytecode = typeof value === "object" && value !== null ? !!value.bytecode : false;
     const abs = path.resolve(root, srcPath);
     if (!existsSync(abs)) {
       console.warn(`[zapp] headless worker "${id}" not found at ${srcPath}`);
       continue;
     }
+    if (bytecode && engine !== "zjs") {
+      console.warn(
+        `[zapp] headless worker "${id}": \`bytecode: true\` is only honoured for ` +
+        `\`engine: "zjs"\` — ignoring on engine "${engine ?? "jsc"}".`
+      );
+    }
+    // outputName/Url stay .mjs through the Vite bundle phase; the
+    // bytecode compile step (run after bundleWorker) emits a sibling
+    // .zbc, and the CLI's generated zapp_start_headless_worker_full
+    // call points at the .zbc when bytecode is on. Two artifacts on
+    // disk; the engine loader picks based on what the URL points at.
     entries.push({
       engine,
+      bytecode: bytecode && engine === "zjs",
       specifier: srcPath,
       sourcePath: abs,
       outputName: `_headless_${id}.mjs`,

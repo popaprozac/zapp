@@ -38,11 +38,12 @@ const config: ZappConfig = {
     supervised: {
       script: "src/workers/supervised.ts",
       restart: { maxRetries: 2, withinMs: 30_000 },
-      engine: "bare-jsc",
+      engine: "zjs",
     },
     ticker: {
       script: "src/workers/ticker.ts",
       engine: "zjs",
+      bytecode: true,
     },
 
     // Host-bridge benchmark workers — disabled by default. See

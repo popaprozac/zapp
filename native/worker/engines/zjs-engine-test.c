@@ -230,18 +230,49 @@ int main(void) {
         "}, 200);\n"
     );
 
-    fprintf(stderr, "[test] launching zjs worker...\n");
+    // Z3-bc: pre-compile a tiny script to bytecode + drop it next to
+    // the .mjs. The engine's script loader sniffs the .zbc extension
+    // off the script_url and dispatches to zjs_eval_bytecode — parse
+    // free, exercises the bytecode read path.
+    write_script("/tmp/zjs-engine-test/.zapp/workers/bc-source.js",
+        "console.log('[bc] hello from bytecode!');\n"
+        "console.log('[bc] typeof __zappBridge:', typeof __zappBridge);\n"
+        "var k = 0;\n"
+        "setInterval(function() { k++; console.log('[bc] bc-tick', k); }, 250);\n"
+    );
+    // Use the zjs CLI to compile. Path resolves to vendor/zjs because the
+    // test runs from project root.
+    int compile_rc = system(
+        "/Users/zach/code/zapp/vendor/zjs/build/zjs compile "
+        "/tmp/zjs-engine-test/.zapp/workers/bc-source.js "
+        "-o /tmp/zjs-engine-test/.zapp/workers/bc-test.zbc"
+    );
+    if (compile_rc != 0) {
+        fprintf(stderr, "[test] zjs compile failed (rc=%d) — skipping bytecode worker\n", compile_rc);
+    }
+
+    fprintf(stderr, "[test] launching zjs worker (mjs)...\n");
     if (!zjs_worker_create("/_workers/test.mjs", "owner-1", "worker-1")) {
         fprintf(stderr, "[test] zjs_worker_create FAILED\n");
         return 1;
     }
 
-    // Run for ~900ms to see 4 ticks.
+    // Z3-bc: spawn a SECOND worker pointing at a .zbc — the engine
+    // should dispatch to zjs_eval_bytecode via the extension sniff.
+    if (compile_rc == 0) {
+        fprintf(stderr, "[test] launching zjs worker (zbc)...\n");
+        if (!zjs_worker_create("/_workers/bc-test.zbc", "owner-1", "worker-bc")) {
+            fprintf(stderr, "[test] zjs_worker_create (bc) FAILED\n");
+        }
+    }
+
+    // Run for ~900ms to see 4 ticks from each worker.
     struct timespec ts = { 0, 900 * 1000 * 1000 };
     nanosleep(&ts, NULL);
 
-    fprintf(stderr, "[test] terminating worker...\n");
+    fprintf(stderr, "[test] terminating workers...\n");
     zjs_worker_terminate("worker-1");
+    if (compile_rc == 0) zjs_worker_terminate("worker-bc");
 
     // Give the worker thread a beat to observe the shutdown latch and
     // unwind cleanly. The thread is detached; this is a polite wait,

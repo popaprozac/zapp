@@ -592,11 +592,32 @@ static void* zjs_worker_thread(void* arg) {
         goto teardown;
     }
 
-    // Vite emits .mjs but we eval as a plain script — the bundle is
-    // self-contained (Vite tree-shakes all live imports inline). When
-    // we want true ESM, switch to zjs_eval_module against the resolved
-    // filesystem path; the embedded-asset path makes that a follow-up.
-    zjs_eval(slot->ctx, code);
+    // Two evaluation paths depending on the worker artifact format:
+    //
+    //   `.zbc` (zjs bytecode) — produced when the user opts into
+    //     `bytecode: true` in zapp.config.ts and the CLI ran `zjs
+    //     compile` after Vite bundled the source. We dispatch via
+    //     zjs_eval_bytecode, which deserializes the buffer (magic
+    //     header "ZJSb" verified internally) and runs it without a
+    //     parse pass. Parse-free start is the perf win, especially
+    //     on iOS where JIT is gated.
+    //
+    //   `.mjs` (everything else) — Vite-bundled source. Today we eval
+    //     it as a plain script; once Z6 lands a zjs-friendly Vite
+    //     output, this can switch to zjs_eval_module for true ESM
+    //     semantics. The script-context path matches what bare /
+    //     jsc / txiki use today, so worker authors don't see a
+    //     semantic difference at this layer.
+    int is_bytecode = 0;
+    {
+        const char* dot = strrchr(slot->script_url, '.');
+        if (dot && strcmp(dot, ".zbc") == 0) is_bytecode = 1;
+    }
+    if (is_bytecode) {
+        zjs_eval_bytecode(slot->ctx, (const unsigned char*) code, (size_t) code_len);
+    } else {
+        zjs_eval(slot->ctx, code);
+    }
     if (zjs_had_error(slot->ctx)) {
         ZjsValue err = zjs_get_error(slot->ctx);
         // Most user throws are Error objects (`throw new Error(...)`), not

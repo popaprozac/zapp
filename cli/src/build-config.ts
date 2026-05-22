@@ -115,6 +115,7 @@ export async function generateHeadlessWorkers(opts: {
     script: string;
     restart?: { maxRetries?: number; withinMs?: number } | false;
     engine?: "jsc" | "txiki" | "bare-jsc" | "bare-v8" | "bare-quickjs" | "bare-mqjs" | "bare-hermes" | "zjs";
+    bytecode?: boolean;
   }>;
 }): Promise<string> {
   const { root, headless } = opts;
@@ -124,16 +125,27 @@ export async function generateHeadlessWorkers(opts: {
   const entries = Object.entries(headless ?? {});
   const calls = entries
     .map(([id, value]) => {
-      const url = `/_workers/_headless_${id}.mjs`;
-      // Bare string → no engine, no restart policy.
+      // Bare string → no engine, no restart policy, no bytecode.
       if (typeof value === "string") {
+        const url = `/_workers/_headless_${id}.mjs`;
         return `    zapp_start_headless_worker("h-${id}", "${url}");`;
       }
-      // Object form. Pull engine + restart; either field can be absent.
+      // Object form. Pull engine + restart + bytecode.
       const engineId = engineNameToId(value.engine);
       const restart = value.restart;
       const max = restart ? (restart.maxRetries ?? 3) : 0;
       const within = restart ? (restart.withinMs ?? 60_000) : 0;
+      // bytecode: true is only meaningful for zjs. The CLI build step
+      // produces a sibling .zbc file via `zjs compile`; the engine
+      // detects the extension and dispatches to zjs_eval_bytecode.
+      if (value.bytecode && value.engine !== "zjs") {
+        throw new Error(
+          `[zapp] headless worker "${id}": \`bytecode: true\` is only supported for ` +
+          `\`engine: "zjs"\` (got \`engine: "${value.engine ?? "jsc"}"\`).`
+        );
+      }
+      const ext = value.bytecode ? "zbc" : "mjs";
+      const url = `/_workers/_headless_${id}.${ext}`;
       return `    zapp_start_headless_worker_full("h-${id}", "${url}", ${engineId}, ${max}, ${within});`;
     })
     .join("\n");

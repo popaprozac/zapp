@@ -326,6 +326,25 @@ export interface HeadlessWorkerConfig {
    * (zjs > bare-jsc > bare-v8 > bare-hermes > bare-quickjs > bare-mqjs > txiki > jsc).
    */
   engine?: "jsc" | "txiki" | "bare-jsc" | "bare-v8" | "bare-quickjs" | "bare-mqjs" | "bare-hermes" | "zjs";
+  /**
+   * Pre-compile the worker bundle to bytecode at build time. Only
+   * meaningful for `engine: "zjs"` — other engines silently ignore the
+   * flag (or error if you set it explicitly elsewhere).
+   *
+   * When enabled, the CLI runs `zjs compile` against the Vite-bundled
+   * .mjs after the build pipeline, writes the result to a sibling
+   * `.zbc` file, and ships that as the worker artifact. The engine
+   * detects the `.zbc` extension at script-load time and dispatches
+   * via `zjs_eval_bytecode` instead of `zjs_eval` — parse-free worker
+   * start, faster cold-start (matters most on iOS where JIT is
+   * gated by entitlement), smaller embedded asset.
+   *
+   * Defaults to `false`. Recommended for any zjs worker that hits a
+   * cold path (first invocation after app launch) on every run; the
+   * tradeoff is one build-time compile step per worker, in exchange
+   * for shaving the parse pass off every worker spawn.
+   */
+  bytecode?: boolean;
 }
 
 /**
