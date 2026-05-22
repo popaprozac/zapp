@@ -101,9 +101,16 @@ typedef struct {
     // every host call. Cheaper than rehydrating via zjs_eval each call
     // (a zjs_get_global lookup beats an eval+parse) and avoids polluting
     // globalThis with intermediate variables.
-    ZjsValue     object_keys_fn;
-    ZjsValue     json_parse_fn;
-    ZjsValue     json_stringify_fn;
+    //
+    // Held via zjs_root so the GC can't reclaim them between calls —
+    // the previous "leave as a ZjsValue field on the slot" only worked
+    // because the slot itself was reachable from the static workers[]
+    // table; that was incidental, not enforced. ZjsRoot makes the hold
+    // explicit and survives a future change where the slot is moved or
+    // the JSValue's underlying cell migrates.
+    uint32_t     object_keys_root;
+    uint32_t     json_parse_root;
+    uint32_t     json_stringify_root;
 
     // Shutdown latch — set by zjs_worker_terminate from any thread,
     // observed by the worker thread when shutdown_async fires.
@@ -214,7 +221,9 @@ static JsonValue* zjsvalue_to_jsonvalue(ZjsWorkerSlot* slot, ZjsValue v) {
         // Object.keys(v) — cached at bridge setup. Returns an array of
         // string keys (own enumerable, same as JSON.stringify uses).
         ZjsValue arg = v;
-        ZjsValue keys = zjs_call(ctx, slot->object_keys_fn, zjs_undefined(), &arg, 1);
+        ZjsValue keys = zjs_call(ctx, zjs_root_get(ctx, slot->object_keys_root),
+                                 zjs_undefined(), &arg, 1);
+        zjs_drain_microtasks(ctx);
         uint32_t n = zjs_array_length(keys);
         for (uint32_t i = 0; i < n; i++) {
             ZjsValue key = zjs_get_element(ctx, keys, i);
@@ -275,7 +284,9 @@ static ZjsValue host_invoke_service(ZjsContext* ctx, ZjsValue* argv, uint32_t ar
     // Cached JSON.parse beats zjs_eval(ctx, "JSON.parse(...)") because
     // it avoids the parser + a string concat for the JS source.
     ZjsValue raw = zjs_new_string(ctx, svc_result, (uint32_t) strlen(svc_result));
-    ZjsValue parsed = zjs_call(ctx, slot->json_parse_fn, zjs_undefined(), &raw, 1);
+    ZjsValue parsed = zjs_call(ctx, zjs_root_get(ctx, slot->json_parse_root),
+                               zjs_undefined(), &raw, 1);
+    zjs_drain_microtasks(ctx);
     if (zjs_had_error(ctx)) {
         // Bad JSON from a service — surface the raw string instead.
         return raw;
@@ -312,8 +323,9 @@ static ZjsValue host_dispatch_event_to_all(ZjsContext* ctx, ZjsValue* argv, uint
     // handle.
     char* payload = NULL;
     if (argc >= 2 && !zjs_is_undefined(argv[1]) && !zjs_is_null(argv[1])) {
-        ZjsValue stringified = zjs_call(ctx, slot->json_stringify_fn,
+        ZjsValue stringified = zjs_call(ctx, zjs_root_get(ctx, slot->json_stringify_root),
                                         zjs_undefined(), &argv[1], 1);
+        zjs_drain_microtasks(ctx);
         if (!zjs_had_error(ctx) && zjs_is_string(stringified)) {
             uint32_t plen = 0;
             const char* pbytes = zjs_string_bytes(stringified, &plen);
@@ -386,9 +398,9 @@ static void zjs_setup_bridge(ZjsWorkerSlot* slot) {
     // this once at setup beats looking them up on every invokeService
     // call; both are tiny zjs_get_global lookups but the savings add up
     // on high-rate workloads.
-    slot->object_keys_fn    = zjs_eval(ctx, "Object.keys");
-    slot->json_parse_fn     = zjs_eval(ctx, "JSON.parse");
-    slot->json_stringify_fn = zjs_eval(ctx, "JSON.stringify");
+    slot->object_keys_root    = zjs_root(ctx, zjs_eval(ctx, "Object.keys"));
+    slot->json_parse_root     = zjs_root(ctx, zjs_eval(ctx, "JSON.parse"));
+    slot->json_stringify_root = zjs_root(ctx, zjs_eval(ctx, "JSON.stringify"));
 
     // globalThis.__zappBridge — the engine-agnostic host surface. zjs
     // gets the direct value-path invokeService; bare/jsc/txiki get the
@@ -621,6 +633,14 @@ teardown:
         slot->loop_initialized = 0;
     }
     if (slot->ctx) {
+        // Release the rooted helpers before tearing the context down.
+        // zjs_free_context would clean them up implicitly via root-table
+        // reset, but unrooting here matches symmetric "every root has a
+        // matching unroot" hygiene and would be load-bearing if the
+        // bridge ever moves to a shared context across workers.
+        if (slot->object_keys_root)    zjs_unroot(slot->ctx, slot->object_keys_root);
+        if (slot->json_parse_root)     zjs_unroot(slot->ctx, slot->json_parse_root);
+        if (slot->json_stringify_root) zjs_unroot(slot->ctx, slot->json_stringify_root);
         zjs_free_context(slot->ctx);
         slot->ctx = NULL;
     }
