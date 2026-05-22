@@ -108,8 +108,12 @@
     const stack = (e && typeof e === "object" && "stack" in (e as any))
       ? String((e as any).stack)
       : "";
-    try { (bridge as any).workerCrash?.(message, stack); }
-    catch (loopErr) { console.error("[worker]", loopErr); }
+    // Avoid `?.(`-style optional call — zjs's compiler currently
+    // doesn't lower it, and this script ships engine-agnostic.
+    try {
+      const wc = (bridge as any).workerCrash;
+      if (typeof wc === "function") wc(message, stack);
+    } catch (loopErr) { console.error("[worker]", loopErr); }
   }
 
   bridge._onEvent = function (name: string, payload: string) {
@@ -128,7 +132,9 @@
   // is the single biggest source of "the throw escapes the bootstrap
   // try/catch and silently disappears" footguns. Both engines use this
   // shape — the wrap is engine-agnostic.
-  const origSetTimeout = (globalThis as any).setTimeout?.bind(globalThis);
+  // Same `?.`-avoidance as workerCrash above — zjs compile gap.
+  const _setTimeout = (globalThis as any).setTimeout;
+  const origSetTimeout = typeof _setTimeout === "function" ? _setTimeout.bind(globalThis) : undefined;
   if (origSetTimeout) {
     (globalThis as any).setTimeout = function (cb: (...a: any[]) => void, ms?: number, ...args: any[]) {
       return origSetTimeout(() => {
@@ -136,7 +142,8 @@
       }, ms);
     };
   }
-  const origSetInterval = (globalThis as any).setInterval?.bind(globalThis);
+  const _setInterval = (globalThis as any).setInterval;
+  const origSetInterval = typeof _setInterval === "function" ? _setInterval.bind(globalThis) : undefined;
   if (origSetInterval) {
     (globalThis as any).setInterval = function (cb: (...a: any[]) => void, ms?: number, ...args: any[]) {
       return origSetInterval(() => {
@@ -201,7 +208,7 @@
       return;
     }
     const pending = bridge._syncPending;
-    if (!pending || typeof data?.id !== "string") return;
+    if (!pending || !data || typeof (data as any).id !== "string") return;
     const resolver = pending[data.id];
     if (!resolver) return;
     delete pending[data.id];

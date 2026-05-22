@@ -356,10 +356,44 @@ const WORKER_MODULE_BINDINGS: Record<string, { pkg: string; ident: string; body:
   encoding:  null,  // TODO: bare-encoding global install
 };
 
+// Engines that consume the `bare-*` shim packages. Non-bare engines
+// (zjs, txiki, legacy jsc) have either intrinsic web APIs or rely on
+// engine-specific runtime extensions — they MUST NOT pull in bare-fetch
+// et al., which call `globalThis.Bare.Addon.load(...)` at module-init
+// time and crash on engines that don't expose `Bare`.
+//
+// When workerModules: ["fetch"] is requested on a non-bare engine, we
+// skip the shim injection and surface a warning so the user knows the
+// capability isn't being satisfied this run. zjs will ship its own
+// fetch/WebSocket via its runtime layer; once that lands the warning
+// table here grows engine-specific entries.
+function engineConsumesBareShims(engine: string | undefined): boolean {
+  if (!engine) return true;  // auto-discovered workers default to bare-* lineage
+  return engine.startsWith("bare-");
+}
+
 function workerModulesPrelude(
   entryAbsPath: string,
   workerModules: readonly string[],
+  engine: string | undefined,
 ): Plugin | null {
+  // Hard gate on engine — non-bare engines never get bare-* shims even
+  // if the user asked for them. The shims unconditionally call
+  // `Bare.Addon.load(...)` at module-init, which is a runtime crash on
+  // anything that isn't a bare-* engine.
+  if (!engineConsumesBareShims(engine) && workerModules.length > 0) {
+    const requested = workerModules.filter(c => WORKER_MODULE_BINDINGS[c] != null);
+    if (requested.length > 0) {
+      console.warn(
+        `[zapp] worker "${path.basename(entryAbsPath)}" (engine: "${engine}") requested ` +
+        `workerModules: [${requested.map(c => `"${c}"`).join(", ")}] — those globals ` +
+        `come from bare-* shim packages and are only injected for bare-* engines. ` +
+        `Skipping shim injection. (For zjs, the capability will be served by the ` +
+        `engine's own runtime layer once it lands; for now the global will be undefined.)`
+      );
+    }
+    return null;
+  }
   const importLines: string[] = [];
   const bindBodies: string[] = [];
   for (const cap of workerModules) {
@@ -428,7 +462,7 @@ async function bundleWorker(
     // still override). Only present for worker bundling.
     const workerAliases: Record<string, string> = { ...BARE_STDLIB_ALIASES, ...aliases };
 
-    const prelude = workerModulesPrelude(entry.sourcePath, workerModules);
+    const prelude = workerModulesPrelude(entry.sourcePath, workerModules, entry.engine);
     const plugins: Plugin[] = [bareBindingTransform()];
     // Only Hermes needs the post-bundle ES2017 + class lowering pass.
     // JSC / V8 / QuickJS / mQJS run modern JS natively — we don't pay

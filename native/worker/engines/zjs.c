@@ -573,6 +573,63 @@ static void* zjs_worker_thread(void* arg) {
     // must be reachable before the eval runs.
     zjs_setup_bridge(slot);
 
+    // Engine-agnostic worker bootstrap — installs the JS-side surface
+    // every Zapp worker expects: self.send / self.receive (channel
+    // routing), getBridge()'s `Symbol.for("zapp.bridge")` lookup,
+    // _dispatchAppEvent, dispatchSyncResult, the setInterval/setTimeout
+    // crash wrappers, _onEvent.
+    //
+    // Same script bare-* engines run via their per-engine bootstrap
+    // path (bare.c line 1505). zjs already has the C-side host bridge
+    // (Z1-Z3) installed on globalThis as __zappBridge — this script
+    // adapts that surface to the runtime API (Symbol.for("zapp.bridge"),
+    // self.send, self.receive, etc).
+    //
+    // zjs is a generic embed engine and doesn't provide the Web Worker
+    // `self` global out of the box. The bootstrap (and most worker
+    // payloads that adopt Web Worker conventions) reads `self` heavily,
+    // so alias it to globalThis here once before running the bootstrap.
+    // bare-* / txiki / jsc get this for free from their own runtimes;
+    // we provide the same shape so worker code is engine-agnostic.
+    zjs_eval(slot->ctx, "var self = globalThis;");
+    if (zjs_had_error(slot->ctx)) {
+        fprintf(stderr, "[zapp] zjs worker '%s' could not install `self` alias\n",
+            slot->worker_id);
+    }
+    {
+        extern const char* zapp_worker_bootstrap_script(void);
+        const char* boot = zapp_worker_bootstrap_script();
+        if (boot && boot[0] != '\0') {
+            zjs_eval(slot->ctx, boot);
+            if (zjs_had_error(slot->ctx)) {
+                ZjsValue err = zjs_get_error(slot->ctx);
+                uint32_t mlen = 0;
+                ZjsValue mv = zjs_get_property(slot->ctx, err, "message");
+                const char* m = zjs_is_string(mv)
+                    ? zjs_string_bytes(mv, &mlen)
+                    : zjs_string_bytes(err, &mlen);
+                fprintf(stderr, "[zapp] zjs worker '%s' bootstrap threw: %.*s\n",
+                    slot->worker_id, (int) mlen, m ? m : "<unreadable>");
+                // Continue anyway — partial bootstrap may still be useful
+                // for diagnostics; the user script just won't have full
+                // bridge access.
+            }
+            // Workaround for zjs's global-bare-identifier gap (spec says
+            // globalThis properties are accessible as bare identifiers
+            // via the GlobalEnvironmentRecord's ObjectRecord fallback;
+            // zjs doesn't wire that yet). The bootstrap installs
+            // self.receive / self.send / self.postMessage on globalThis,
+            // but user worker code reads them as bare identifiers. Re-
+            // declare via top-level `var` so they land in
+            // DeclarativeRecord too. Drop this once upstream lands the
+            // ObjectRecord lookup (see REPRO-stage4 in zjs-vite-repro/).
+            zjs_eval(slot->ctx,
+                "var receive = globalThis.receive,"
+                "    send    = globalThis.send,"
+                "    postMessage = globalThis.postMessage;");
+        }
+    }
+
     // Hook the loop wiring BEFORE eval so any setInterval / setTimeout
     // the script registers immediately gets pumped from the first tick.
     uv_check_init(&slot->loop, &slot->check);
