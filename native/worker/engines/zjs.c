@@ -614,19 +614,6 @@ static void* zjs_worker_thread(void* arg) {
                 // for diagnostics; the user script just won't have full
                 // bridge access.
             }
-            // Workaround for zjs's global-bare-identifier gap (spec says
-            // globalThis properties are accessible as bare identifiers
-            // via the GlobalEnvironmentRecord's ObjectRecord fallback;
-            // zjs doesn't wire that yet). The bootstrap installs
-            // self.receive / self.send / self.postMessage on globalThis,
-            // but user worker code reads them as bare identifiers. Re-
-            // declare via top-level `var` so they land in
-            // DeclarativeRecord too. Drop this once upstream lands the
-            // ObjectRecord lookup (see REPRO-stage4 in zjs-vite-repro/).
-            zjs_eval(slot->ctx,
-                "var receive = globalThis.receive,"
-                "    send    = globalThis.send,"
-                "    postMessage = globalThis.postMessage;");
         }
     }
 
