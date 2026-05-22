@@ -17,6 +17,7 @@ raw {
     #define ZAPP_ENGINE_BARE_QUICKJS 4
     #define ZAPP_ENGINE_BARE_MQJS    5
     #define ZAPP_ENGINE_BARE_HERMES  6
+    #define ZAPP_ENGINE_ZJS          7
 
     typedef struct {
         char worker_id[64];

@@ -61,9 +61,14 @@ export class Worker {
    *     fewer features. Memory-constrained / embedded targets.
    *   - `"bare-hermes"` — Bare runtime + Hermes. ~2 MB. AOT bytecode
    *     option. Best fit for iOS where JIT is gated by entitlement.
+   *
+   *   First-party (recommended for new headless workers):
+   *   - `"zjs"` — Zapp's own engine (popaprozac/zjs). 1 MB static lib.
+   *     Direct value-marshalling host bridge — Services.invokeSync
+   *     skips the JS-side JSON.stringify hop other engines pay.
    */
   constructor(scriptUrl: string, opts?: {
-    engine?: "jsc" | "txiki" | "bare-jsc" | "bare-v8" | "bare-quickjs" | "bare-mqjs" | "bare-hermes";
+    engine?: "jsc" | "txiki" | "bare-jsc" | "bare-v8" | "bare-quickjs" | "bare-mqjs" | "bare-hermes" | "zjs";
   }) {
     this._bridge = getBridge();
     this.id = (this._bridge as any).createWorker(scriptUrl, opts);

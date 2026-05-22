@@ -702,6 +702,7 @@ fn router_handle_worker(app: App*, action: string, payload: string, window_id: i
             else if s == "bare-quickjs" { engine = 4; }
             else if s == "bare-mqjs"    { engine = 5; }
             else if s == "bare-hermes"  { engine = 6; }
+            else if s == "zjs"          { engine = 7; }
         }
 
         if is_shared {

@@ -311,14 +311,21 @@ export interface HeadlessWorkerConfig {
    *   profile.
    * - `"bare-hermes"` — Bare runtime + Hermes. AOT bytecode + tier-up
    *   interpreter. iOS-friendly (no JIT entitlement needed).
+   * - `"zjs"` — Zapp's first-party engine (popaprozac/zjs). Smallest
+   *   binary (1 MB static lib), iOS-friendly (no JIT requirement),
+   *   direct value-marshalling host bridge (skips JS-side
+   *   `JSON.stringify` on the way into `Services.invokeSync`). No bare
+   *   runtime — web APIs (fetch, WebSocket) come from zjs's own
+   *   runtime layer as it lands them. Best for headless workers that
+   *   don't need bare-* packages.
    *
    * The corresponding `ZAPP_WORKER_ENGINE_*` directive must be in
    * `zapp/build.zc` for the engine to be linked in. When the
    * requested engine isn't compiled, the worker dispatcher logs a
    * downgrade and falls back through priority order
-   * (bare-jsc > bare-v8 > bare-hermes > bare-quickjs > bare-mqjs > txiki > jsc).
+   * (zjs > bare-jsc > bare-v8 > bare-hermes > bare-quickjs > bare-mqjs > txiki > jsc).
    */
-  engine?: "jsc" | "txiki" | "bare-jsc" | "bare-v8" | "bare-quickjs" | "bare-mqjs" | "bare-hermes";
+  engine?: "jsc" | "txiki" | "bare-jsc" | "bare-v8" | "bare-quickjs" | "bare-mqjs" | "bare-hermes" | "zjs";
 }
 
 /**
