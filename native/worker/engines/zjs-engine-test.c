@@ -113,6 +113,11 @@ void json_free_tree(JsonValue* v) {
 
 void* app_get_active(void) { return (void*) 0x1; }  // any non-NULL works
 
+// In the real framework binary this is generated from bootstrap/worker.ts.
+// The integration test doesn't need bootstrap behaviour — return empty
+// so the engine skips the eval.
+const char* zapp_worker_bootstrap_script(void) { return ""; }
+
 // Z3 — dispatch_event_to_all is the C target for
 // __zappBridge.dispatchEventToAll. The real impl fans out to every
 // webview; the test just prints so we can see what made it through.

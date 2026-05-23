@@ -95,7 +95,18 @@ typedef struct {
     uv_check_t   check;
     uv_timer_t   zjs_wake;
     uv_async_t   shutdown_async;     // signaled from terminate to wake the loop
+    uv_async_t   inbox_async;        // signaled from post_message to drain inbox
     int          loop_initialized;
+
+    // Cross-thread inbox — postMessage queues here; the inbox_async
+    // callback drains on the worker thread. Simple ring with a mutex;
+    // bounded so a runaway producer can't OOM the worker. Cap matches
+    // txiki.c's MSG_QUEUE_MAX for consistency.
+    pthread_mutex_t inbox_mutex;
+    char*           inbox[256];
+    int             inbox_head;
+    int             inbox_tail;
+    int             inbox_count;
 
     // Cached host-side handles to JS built-ins that the bridge uses on
     // every host call. Cheaper than rehydrating via zjs_eval each call
@@ -112,6 +123,14 @@ typedef struct {
     uint32_t     json_parse_root;
     uint32_t     json_stringify_root;
 
+    // Cached message dispatcher — installed at bridge-setup time as a
+    // small JS shim that JSON.parses the incoming string and fans it
+    // out through globalThis.onmessage + the _messageHandlers array
+    // (the channel-routing registry the engine-agnostic worker
+    // bootstrap installs). Held via zjs_root for the same reason as
+    // the JSON helpers above.
+    uint32_t     dispatch_message_root;
+
     // Shutdown latch — set by zjs_worker_terminate from any thread,
     // observed by the worker thread when shutdown_async fires.
     int          shutting_down;
@@ -127,6 +146,38 @@ static ZjsWorkerSlot* zjs_find_slot(const char* worker_id) {
         }
     }
     return NULL;
+}
+
+// ---------------------------------------------------------------------------
+// Cross-thread inbox helpers. Bounded ring, mutex-guarded. push from
+// any thread (typically the main thread via zjs_worker_post_message),
+// pop on the worker thread inside on_inbox_async.
+// ---------------------------------------------------------------------------
+
+static int inbox_push(ZjsWorkerSlot* slot, const char* msg) {
+    pthread_mutex_lock(&slot->inbox_mutex);
+    if (slot->inbox_count >= (int)(sizeof(slot->inbox) / sizeof(slot->inbox[0]))) {
+        pthread_mutex_unlock(&slot->inbox_mutex);
+        return -1;  // overflow — caller logs
+    }
+    slot->inbox[slot->inbox_tail] = strdup(msg);
+    slot->inbox_tail = (slot->inbox_tail + 1) % (int)(sizeof(slot->inbox) / sizeof(slot->inbox[0]));
+    slot->inbox_count++;
+    pthread_mutex_unlock(&slot->inbox_mutex);
+    return 0;
+}
+
+static char* inbox_pop(ZjsWorkerSlot* slot) {
+    pthread_mutex_lock(&slot->inbox_mutex);
+    if (slot->inbox_count == 0) {
+        pthread_mutex_unlock(&slot->inbox_mutex);
+        return NULL;
+    }
+    char* m = slot->inbox[slot->inbox_head];
+    slot->inbox_head = (slot->inbox_head + 1) % (int)(sizeof(slot->inbox) / sizeof(slot->inbox[0]));
+    slot->inbox_count--;
+    pthread_mutex_unlock(&slot->inbox_mutex);
+    return m;
 }
 
 // Host functions only see ZjsContext*, so they look their slot up here
@@ -402,6 +453,31 @@ static void zjs_setup_bridge(ZjsWorkerSlot* slot) {
     slot->json_parse_root     = zjs_root(ctx, zjs_eval(ctx, "JSON.parse"));
     slot->json_stringify_root = zjs_root(ctx, zjs_eval(ctx, "JSON.stringify"));
 
+    // Install the message dispatcher shim — called from on_inbox_async
+    // when a cross-thread postMessage lands. Routes through onmessage +
+    // _messageHandlers, same surface bare-worker.ts installs for bare
+    // engines (via __zappBridge._dispatchMessage). We attach as a
+    // top-level fn rather than on the bridge so the on_inbox_async
+    // call path doesn't have to walk through __zappBridge each time.
+    zjs_eval(ctx,
+        "globalThis.__zapp_dispatch_message = function (rawJson) {"
+        "  var data = rawJson;"
+        "  try { data = JSON.parse(rawJson); } catch (_) {}"
+        "  var ev = { data: data };"
+        "  if (typeof globalThis.onmessage === 'function') {"
+        "    try { globalThis.onmessage(ev); }"
+        "    catch (e) { console.error('[zapp] onmessage threw:', e); }"
+        "  }"
+        "  var hs = globalThis._messageHandlers;"
+        "  if (Array.isArray(hs)) {"
+        "    for (var i = 0; i < hs.length; i++) {"
+        "      try { hs[i](ev); }"
+        "      catch (e) { console.error('[zapp] message handler threw:', e); }"
+        "    }"
+        "  }"
+        "};");
+    slot->dispatch_message_root = zjs_root(ctx, zjs_eval(ctx, "globalThis.__zapp_dispatch_message"));
+
     // globalThis.__zappBridge — the engine-agnostic host surface. zjs
     // gets the direct value-path invokeService; bare/jsc/txiki get the
     // JSON-stringifying wrapper in their per-engine bootstraps. Same
@@ -433,6 +509,39 @@ static void on_zjs_wake(uv_timer_t* h) { (void) h; /* work happens in on_check *
 static void on_shutdown_async(uv_async_t* h) {
     ZjsWorkerSlot* slot = (ZjsWorkerSlot*) h->data;
     uv_stop(&slot->loop);
+}
+
+// Drain the inbox and dispatch each message into JS. Runs on the worker
+// thread (libuv async-callback contract). The dispatcher itself is a
+// small JS shim cached at bridge-setup time — it parses the JSON and
+// fans out to globalThis.onmessage + _messageHandlers, same shape the
+// bare engines get from bare-worker.ts's _dispatchMessage helper.
+//
+// One uv_async_send may coalesce multiple post_message calls into a
+// single firing — that's the documented uv behaviour and exactly why
+// the inbox is a queue, not a single slot.
+static void on_inbox_async(uv_async_t* h) {
+    ZjsWorkerSlot* slot = (ZjsWorkerSlot*) h->data;
+    if (slot->shutting_down) return;
+
+    char* msg;
+    while ((msg = inbox_pop(slot)) != NULL) {
+        ZjsValue arg = zjs_new_string(slot->ctx, msg, (uint32_t) strlen(msg));
+        ZjsValue dispatch = zjs_root_get(slot->ctx, slot->dispatch_message_root);
+        zjs_call(slot->ctx, dispatch, zjs_undefined(), &arg, 1);
+        zjs_drain_microtasks(slot->ctx);
+        if (zjs_had_error(slot->ctx)) {
+            ZjsValue err = zjs_get_error(slot->ctx);
+            uint32_t len = 0;
+            ZjsValue mv = zjs_get_property(slot->ctx, err, "message");
+            const char* m = zjs_is_string(mv)
+                ? zjs_string_bytes(mv, &len)
+                : zjs_string_bytes(err, &len);
+            fprintf(stderr, "[zapp] zjs worker '%s' message handler threw: %.*s\n",
+                slot->worker_id, (int) len, m ? m : "<unreadable>");
+        }
+        free(msg);
+    }
 }
 
 static void on_check(uv_check_t* h) {
@@ -629,6 +738,10 @@ static void* zjs_worker_thread(void* arg) {
     uv_async_init(&slot->loop, &slot->shutdown_async, on_shutdown_async);
     slot->shutdown_async.data = slot;
 
+    pthread_mutex_init(&slot->inbox_mutex, NULL);
+    uv_async_init(&slot->loop, &slot->inbox_async, on_inbox_async);
+    slot->inbox_async.data = slot;
+
     long  code_len = 0;
     char* code = zjs_load_script(slot->script_url, &code_len);
     if (!code) {
@@ -717,6 +830,7 @@ teardown:
         uv_close((uv_handle_t*) &slot->check,           NULL);
         uv_close((uv_handle_t*) &slot->zjs_wake,        NULL);
         uv_close((uv_handle_t*) &slot->shutdown_async,  NULL);
+        uv_close((uv_handle_t*) &slot->inbox_async,     NULL);
         // Drain close callbacks before tearing down the loop. UV_RUN_DEFAULT
         // here would block forever if any handle is still open — but
         // we closed everything above, so the loop drains the closes and
@@ -724,6 +838,14 @@ teardown:
         uv_run(&slot->loop, UV_RUN_DEFAULT);
         uv_loop_close(&slot->loop);
         slot->loop_initialized = 0;
+    }
+    // Free any messages stranded in the inbox before context teardown
+    // (the worker may have been terminated mid-flight with pending
+    // messages the JS side never got to process).
+    {
+        char* drained;
+        while ((drained = inbox_pop(slot)) != NULL) free(drained);
+        pthread_mutex_destroy(&slot->inbox_mutex);
     }
     if (slot->ctx) {
         // Release the rooted helpers before tearing the context down.
@@ -780,12 +902,23 @@ bool zjs_worker_create(const char* script_url, const char* owner_id, const char*
 }
 
 void zjs_worker_post_message(const char* worker_id, const char* data_json) {
-    // Inbox + uv_async wake lands in the next cut (Z2 — message routing
-    // alongside the direct invokeService path). For now a clear log so
-    // any premature use surfaces instead of silently dropping.
-    (void) data_json;
-    fprintf(stderr, "[zapp] zjs_worker_post_message not yet implemented (worker '%s')\n",
-        worker_id ? worker_id : "<null>");
+    if (!worker_id || !data_json) return;
+    pthread_mutex_lock(&zjs_workers_mutex);
+    ZjsWorkerSlot* slot = zjs_find_slot(worker_id);
+    if (!slot || !slot->loop_initialized) {
+        pthread_mutex_unlock(&zjs_workers_mutex);
+        fprintf(stderr, "[zapp] zjs worker '%s' not active for postMessage — dropping\n",
+            worker_id);
+        return;
+    }
+    int err = inbox_push(slot, data_json);
+    if (err == 0) {
+        uv_async_send(&slot->inbox_async);
+    }
+    pthread_mutex_unlock(&zjs_workers_mutex);
+    if (err != 0) {
+        fprintf(stderr, "[zapp] zjs worker '%s' inbox full — dropped message\n", worker_id);
+    }
 }
 
 void zjs_worker_terminate(const char* worker_id) {
