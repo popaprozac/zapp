@@ -97,20 +97,50 @@ async function discoverWorkers(srcDir: string): Promise<WorkerEntry[]> {
   return [...found.values()];
 }
 
-// Apply Hermes-compat downlevel to auto-discovered workers when any
-// headless worker uses `bare-hermes`. The native runtime falls back
-// to the first compiled-in engine if the JS-requested one isn't
-// available, so an auto-discovered worker that JS asks for "jsc"
-// will land on bare-hermes in a Hermes-only build — and crash on
-// load without the lowering. Inheriting closes that hole.
+// Inherit engine choice from headless workers to auto-discovered
+// (`new Worker(...)`) workers. Two reasons:
+//
+//   1. Per-engine compat transforms (hermesCompatLower) need to match
+//      the runtime engine that ends up loading the bundle.
+//   2. Per-engine SHIM gating (Z7 — bare-* packages only injected for
+//      bare-* engines, never zjs/txiki/jsc) needs the engine on the
+//      WorkerEntry so the gate sees it. Without inheritance, the
+//      auto-discovered worker's engine stays undefined and the bare-*
+//      shim injection trips runtime `Bare.Addon` crashes on zjs.
+//
+// Strategy: pick a single inherited engine if all headless workers
+// agree. If they disagree, leave auto-discovered workers undefined —
+// the resolver fallback chain handles mixed projects. If there are
+// no headless workers at all (auto-discovered only), default to
+// `zjs` (the recommended default for new projects).
 function inheritAutoWorkerEngine(
   autoWorkers: WorkerEntry[],
   headlessEntries: WorkerEntry[],
 ): void {
-  const hasHermes = headlessEntries.some((e) => e.engine === "bare-hermes");
-  if (!hasHermes) return;
+  // Collect the distinct engines headless workers explicitly request.
+  // Headless entries with no engine default to the resolver's choice
+  // at runtime; they don't constrain auto-discovered inheritance.
+  const declared = new Set<string>();
+  for (const e of headlessEntries) {
+    if (e.engine) declared.add(e.engine);
+  }
+
+  let chosen: string | undefined;
+  if (declared.size === 1) {
+    // Unique pick across the project — inherit it.
+    chosen = declared.values().next().value;
+  } else if (declared.size === 0) {
+    // No headless workers declare an engine — default to zjs (the
+    // recommended default for new projects). Avoids the bare-*
+    // shim injection misfire when the project hasn't picked.
+    chosen = "zjs";
+  }
+  // size > 1: leave auto-discovered workers undefined. Mixed projects
+  // ship multiple engines and the resolver picks at create time.
+
+  if (!chosen) return;
   for (const w of autoWorkers) {
-    if (!w.engine) w.engine = "bare-hermes";
+    if (!w.engine) w.engine = chosen;
   }
 }
 
@@ -368,7 +398,14 @@ const WORKER_MODULE_BINDINGS: Record<string, { pkg: string; ident: string; body:
 // fetch/WebSocket via its runtime layer; once that lands the warning
 // table here grows engine-specific entries.
 function engineConsumesBareShims(engine: string | undefined): boolean {
-  if (!engine) return true;  // auto-discovered workers default to bare-* lineage
+  // Undefined here is the "mixed-engine project" case where
+  // `inheritAutoWorkerEngine` couldn't pick a single inheritance
+  // target. Leaving bare-* shims OFF in that case is the safer
+  // default — non-bare engines crash hard on the `Bare.Addon`
+  // initialiser; bare-* engines without the shim just lack the
+  // global, which surfaces as a clear ReferenceError instead of
+  // a confusing TypeError.
+  if (!engine) return false;
   return engine.startsWith("bare-");
 }
 

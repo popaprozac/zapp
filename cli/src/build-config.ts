@@ -115,7 +115,7 @@ export async function generateHeadlessWorkers(opts: {
     script: string;
     restart?: { maxRetries?: number; withinMs?: number } | false;
     engine?: "jsc" | "txiki" | "bare-jsc" | "bare-v8" | "bare-quickjs" | "bare-mqjs" | "bare-hermes" | "zjs";
-    bytecode?: boolean;
+    bytecode?: boolean;  // type-narrowed at the user-facing HeadlessWorkerConfig boundary
   }>;
 }): Promise<string> {
   const { root, headless } = opts;

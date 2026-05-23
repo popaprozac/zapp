@@ -181,16 +181,24 @@ fn run_app() -> int {
 //> macos: define: apple
 //> windows: define: windows
 
-// --- Worker engine (choose one) ---
-// JSC — macOS only, ~450 KB. Workers run JavaScript via JavaScriptCore.
-// Comment it out and uncomment TXIKI below to switch engines.
-//> macos: define: ZAPP_WORKER_ENGINE_JSC
-
-// txiki.js — cross-platform, ~6.5 MB. Adds fetch, WebSocket, timers,
-// and other web APIs to workers. CLI downloads and builds it on first
-// use (takes ~60s the first time). To switch, comment out the JSC line
-// above and uncomment:
-// //> macos: define: ZAPP_WORKER_ENGINE_TXIKI
+// --- Worker engine ---
+//
+// New projects default to engine: "zjs" — Zapp's first-party engine.
+// Cross-platform, ~1 MB, iOS-friendly. The CLI auto-injects the
+// ZAPP_WORKER_ENGINE_ZJS define when any worker in zapp.config.ts
+// picks engine: "zjs" so no explicit directive is needed here.
+//
+// On macOS, engine: "bare-jsc" is an almost-equal recommendation:
+// JIT via the system JSC framework (zero engine bundle cost) at the
+// price of less streamlined web APIs (opt into bare-* packages
+// à la carte). Toggle per worker in zapp.config.ts.
+//
+// On Windows / Linux, engine: "bare-v8" is the perf opt-in — JIT but
+// ~30 MB bundle increase. Same per-worker selection in zapp.config.ts.
+//
+// Deprecated: ZAPP_WORKER_ENGINE_JSC and ZAPP_WORKER_ENGINE_TXIKI
+// are kept compiling for existing apps but the CLI warns if used.
+// Don't use for new projects. See docs/engines.md.
 
 //> macos: framework: Cocoa
 //> macos: framework: WebKit
@@ -221,10 +229,13 @@ export default defineConfig({
   identifier: "${identifier}",
   version: "0.1.0",
   // Add headless TypeScript workers that start when the app boots.
-  // Keys are worker IDs (used for termination); values are source paths.
+  // New projects default to \`engine: "zjs"\` — first-party,
+  // cross-platform, small, iOS-friendly. On macOS you can opt into
+  // \`engine: "bare-jsc"\` for JIT (zero bundle cost via system JSC)
+  // at the price of opting into bare-* packages for web APIs.
   //
   //   headless: {
-  //     db: "src/workers/db.ts",
+  //     db: { script: "src/workers/db.ts", engine: "zjs" },
   //   },
 });
 `);
