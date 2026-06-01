@@ -25,6 +25,7 @@
 #include <bare.h>
 #include <js.h>
 #include <uv.h>
+#include <stdatomic.h>
 
 #include <pthread.h>
 #include <stdbool.h>
@@ -174,6 +175,16 @@ typedef struct {
     int async_initialized;
     BareMsgQueue inbox;       // postMessage payloads (JSON strings)
     BareMsgQueue eval_inbox;  // raw JS to eval (broadcast path)
+
+    // Reincarnation counter — 1 on first start, +1 each successful restart.
+    // Written from the outer loop in bare_worker_thread (Task 2.3).
+    int incarnation;
+
+    // Control flags — written from bare_host_worker_crash (worker thread)
+    // and bare_worker_terminate (any thread). The outer reincarnation
+    // loop reads these after bare_run returns. wants_terminate wins.
+    _Atomic int wants_restart;
+    _Atomic int wants_terminate;
 } BareWorkerSlot;
 
 static BareWorkerSlot bare_workers[BARE_MAX_WORKERS] = {0};
@@ -1699,8 +1710,11 @@ void bare_broadcast_eval_js(const char* js) {
 void bare_worker_terminate(const char* worker_id) {
     pthread_mutex_lock(&bare_mutex);
     BareWorkerSlot* slot = bare_find_slot(worker_id);
-    if (slot && slot->bare) {
-        bare_terminate(slot->bare);  // signals bare_run to return; thread cleans up
+    if (slot) {
+        atomic_store(&slot->wants_terminate, 1);
+        if (slot->bare) {
+            bare_terminate(slot->bare);  // signals bare_run to return; thread cleans up
+        }
     }
     pthread_mutex_unlock(&bare_mutex);
 }
@@ -1710,9 +1724,11 @@ void bare_worker_terminate_owner(const char* owner_id) {
     pthread_mutex_lock(&bare_mutex);
     for (int i = 0; i < BARE_MAX_WORKERS; i++) {
         if (bare_workers[i].active &&
-            strcmp(bare_workers[i].owner_id, owner_id) == 0 &&
-            bare_workers[i].bare) {
-            bare_terminate(bare_workers[i].bare);
+            strcmp(bare_workers[i].owner_id, owner_id) == 0) {
+            atomic_store(&bare_workers[i].wants_terminate, 1);
+            if (bare_workers[i].bare) {
+                bare_terminate(bare_workers[i].bare);
+            }
         }
     }
     pthread_mutex_unlock(&bare_mutex);
