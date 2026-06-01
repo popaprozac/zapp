@@ -16,6 +16,7 @@
 #include <TargetConditionals.h>
 #endif
 #include <uv.h>
+#include <stdatomic.h>
 #include <compression.h>
 
 // Platform-specific APIs used for privileged host objects (createWindow,
@@ -115,6 +116,17 @@ typedef struct {
     MsgQueue sync_inbox;     // Thread-safe queue for Sync.wait results
     MsgQueue eval_inbox;     // Raw JS to eval (from native event dispatch)
     int async_initialized;
+
+    // Reincarnation counter — 1 on first start, +1 each successful restart.
+    // Written from the outer loop in txiki_worker_thread (Task 3.3).
+    int incarnation;
+
+    // Control flags — written from txiki's zapp_bridge_worker_crash
+    // (worker thread) and txiki_worker_terminate (any thread). The outer
+    // reincarnation loop reads these after TJS_Run returns.
+    // wants_terminate wins over wants_restart.
+    _Atomic int wants_restart;
+    _Atomic int wants_terminate;
 } TxikiWorkerSlot;
 
 static TxikiWorkerSlot txiki_workers[TXIKI_MAX_WORKERS] = {{0}};
@@ -1339,6 +1351,7 @@ void txiki_worker_terminate(const char* worker_id) {
     pthread_mutex_lock(&txiki_mutex);
     TxikiWorkerSlot* slot = txiki_find_slot(worker_id);
     if (slot) {
+        atomic_store(&slot->wants_terminate, 1);
         if (slot->runtime) TJS_Stop(slot->runtime);
         msgqueue_destroy(&slot->inbox);
         msgqueue_destroy(&slot->sync_inbox);
@@ -1354,6 +1367,7 @@ void txiki_worker_terminate_owner(const char* owner_id) {
     pthread_mutex_lock(&txiki_mutex);
     for (int i = 0; i < TXIKI_MAX_WORKERS; i++) {
         if (txiki_workers[i].active && strcmp(txiki_workers[i].owner_id, owner_id) == 0) {
+            atomic_store(&txiki_workers[i].wants_terminate, 1);
             if (txiki_workers[i].runtime) TJS_Stop(txiki_workers[i].runtime);
             msgqueue_destroy(&txiki_workers[i].inbox);
             msgqueue_destroy(&txiki_workers[i].sync_inbox);
