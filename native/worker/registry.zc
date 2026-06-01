@@ -300,4 +300,21 @@ raw {
         if (!e || e->owner_count == 0) return "";
         return e->owners[0];
     }
+
+    // Read-only window-state inspection. Used by engine dev logs on
+    // restart ("incarnation N, fail_count X/cap in Yms window"). Returns
+    // 0 on success, -1 if the worker isn't registered.
+    int zapp_worker_supervisor_get_window_state(
+        const char* worker_id,
+        int* out_count,
+        int* out_cap,
+        int* out_window_ms
+    ) {
+        ZappWorkerEntry* e = zapp_worker_registry_get(worker_id);
+        if (!e) return -1;
+        if (out_count)     *out_count     = e->fail_count;
+        if (out_cap)       *out_cap       = e->restart_max;
+        if (out_window_ms) *out_window_ms = e->restart_window_ms;
+        return 0;
+    }
 }
