@@ -34,6 +34,7 @@
 #include <compression.h>
 #endif
 #include <uv.h>
+#include <stdatomic.h>
 
 // Mirror txiki.c's embedded-asset struct (the macro that defines it is
 // local to zapp_assets's translation unit).
@@ -74,6 +75,17 @@ extern const char* service_invoke_native(void* app, const char* method, JsonValu
 // directly (no JS-side property dance, no second eval).
 extern void dispatch_event_to_all(const char* event_name, const char* payload);
 
+// Worker→worker delivery. Routes through the dispatcher (worker.zc) so the
+// target engine doesn't have to match — a zjs worker can `Workers.send`
+// to a bare/txiki/jsc worker and vice versa. The dispatcher hands off to
+// the target engine's *_worker_post_message.
+extern void worker_post_message(char* worker_id, char* data_json);
+
+// Supervisor failure recorder. Bumps `fail_count` against the registry's
+// configured restart policy and dispatches `worker:gave-up` when the
+// window cap is exhausted. Same callee bare.c uses from workerCrash.
+extern int zapp_worker_supervisor_record_failure(const char* worker_id);
+
 // ---------------------------------------------------------------------------
 // Worker slot table — same shape as txiki, sized identically.
 // ---------------------------------------------------------------------------
@@ -96,6 +108,7 @@ typedef struct {
     uv_timer_t   zjs_wake;
     uv_async_t   shutdown_async;     // signaled from terminate to wake the loop
     uv_async_t   inbox_async;        // signaled from post_message to drain inbox
+    uv_async_t   eval_inbox_async;   // signaled from broadcast_eval_js to drain eval ring
     int          loop_initialized;
 
     // Cross-thread inbox — postMessage queues here; the inbox_async
@@ -107,6 +120,18 @@ typedef struct {
     int             inbox_head;
     int             inbox_tail;
     int             inbox_count;
+
+    // Cross-thread eval inbox — dispatch_event_to_all → zjs_broadcast_
+    // eval_js pushes raw JS snippets here (the bridge._onEvent call
+    // emitted by bridge/dispatch.zc). on_eval_inbox_async drains and
+    // zjs_evals each one on the worker thread. Kept separate from the
+    // message inbox so each direction has its own backpressure cap and
+    // the drain semantics stay simple (eval vs. dispatch shim call).
+    pthread_mutex_t eval_inbox_mutex;
+    char*           eval_inbox[256];
+    int             eval_inbox_head;
+    int             eval_inbox_tail;
+    int             eval_inbox_count;
 
     // Cached host-side handles to JS built-ins that the bridge uses on
     // every host call. Cheaper than rehydrating via zjs_eval each call
@@ -131,9 +156,16 @@ typedef struct {
     // the JSON helpers above.
     uint32_t     dispatch_message_root;
 
-    // Shutdown latch — set by zjs_worker_terminate from any thread,
-    // observed by the worker thread when shutdown_async fires.
-    int          shutting_down;
+    // Reincarnation counter — 1 on first start, +1 each successful restart.
+    // Read on the worker thread inside setup_state; written there too.
+    int incarnation;
+
+    // Control flags — set from host_worker_crash (worker thread) or
+    // from zjs_worker_terminate (any thread). The shutdown_async signal
+    // wakes the loop; the while-loop in zjs_worker_thread reads these
+    // after uv_run returns. wants_terminate wins over wants_restart.
+    _Atomic int wants_restart;
+    _Atomic int wants_terminate;
 } ZjsWorkerSlot;
 
 static ZjsWorkerSlot zjs_workers[ZJS_MAX_WORKERS] = {{0}};
@@ -177,6 +209,32 @@ static char* inbox_pop(ZjsWorkerSlot* slot) {
     slot->inbox_head = (slot->inbox_head + 1) % (int)(sizeof(slot->inbox) / sizeof(slot->inbox[0]));
     slot->inbox_count--;
     pthread_mutex_unlock(&slot->inbox_mutex);
+    return m;
+}
+
+static int eval_inbox_push(ZjsWorkerSlot* slot, const char* js) {
+    pthread_mutex_lock(&slot->eval_inbox_mutex);
+    if (slot->eval_inbox_count >= (int)(sizeof(slot->eval_inbox) / sizeof(slot->eval_inbox[0]))) {
+        pthread_mutex_unlock(&slot->eval_inbox_mutex);
+        return -1;
+    }
+    slot->eval_inbox[slot->eval_inbox_tail] = strdup(js);
+    slot->eval_inbox_tail = (slot->eval_inbox_tail + 1) % (int)(sizeof(slot->eval_inbox) / sizeof(slot->eval_inbox[0]));
+    slot->eval_inbox_count++;
+    pthread_mutex_unlock(&slot->eval_inbox_mutex);
+    return 0;
+}
+
+static char* eval_inbox_pop(ZjsWorkerSlot* slot) {
+    pthread_mutex_lock(&slot->eval_inbox_mutex);
+    if (slot->eval_inbox_count == 0) {
+        pthread_mutex_unlock(&slot->eval_inbox_mutex);
+        return NULL;
+    }
+    char* m = slot->eval_inbox[slot->eval_inbox_head];
+    slot->eval_inbox_head = (slot->eval_inbox_head + 1) % (int)(sizeof(slot->eval_inbox) / sizeof(slot->eval_inbox[0]));
+    slot->eval_inbox_count--;
+    pthread_mutex_unlock(&slot->eval_inbox_mutex);
     return m;
 }
 
@@ -260,21 +318,36 @@ static JsonValue* zjsvalue_to_jsonvalue(ZjsWorkerSlot* slot, ZjsValue v) {
     }
     if (zjs_is_array(v)) {
         JsonValue* arr = JsonValue__array_ptr();
+        // Pin `v` for the iteration — each recursive descent may
+        // allocate (string + JsonValue + child Object.keys() etc.)
+        // and trigger GC; without a pin, `v` gets reclaimed and the
+        // next `zjs_get_element(v, i)` reads freed memory.
+        zjs_pin(ctx, v);
         uint32_t n = zjs_array_length(v);
         for (uint32_t i = 0; i < n; i++) {
             ZjsValue elem = zjs_get_element(ctx, v, i);
             json_array_push_owned(arr, zjsvalue_to_jsonvalue(slot, elem));
         }
+        zjs_unpin(ctx);
         return arr;
     }
     if (zjs_is_object(v)) {
         JsonValue* obj = JsonValue__object_ptr();
         // Object.keys(v) — cached at bridge setup. Returns an array of
         // string keys (own enumerable, same as JSON.stringify uses).
+        //
+        // Two pins are needed: `v` itself (the object being walked)
+        // and `keys` (the array Object.keys() returned). Both sit
+        // only on the C stack and each recursive walk into a child
+        // value may allocate enough to trigger GC. Without either
+        // pin, the next iteration reads freed memory and either
+        // hangs (garbage indices) or crashes.
+        zjs_pin(ctx, v);
         ZjsValue arg = v;
         ZjsValue keys = zjs_call(ctx, zjs_root_get(ctx, slot->object_keys_root),
                                  zjs_undefined(), &arg, 1);
         zjs_drain_microtasks(ctx);
+        zjs_pin(ctx, keys);
         uint32_t n = zjs_array_length(keys);
         for (uint32_t i = 0; i < n; i++) {
             ZjsValue key = zjs_get_element(ctx, keys, i);
@@ -288,6 +361,8 @@ static JsonValue* zjsvalue_to_jsonvalue(ZjsWorkerSlot* slot, ZjsValue v) {
             json_object_set_owned(obj, kbuf, zjsvalue_to_jsonvalue(slot, val));
             free(kbuf);
         }
+        zjs_unpin(ctx);   // keys
+        zjs_unpin(ctx);   // v
         return obj;
     }
     // Function / symbol / anything else → null (matches JSON.stringify).
@@ -370,8 +445,9 @@ static ZjsValue host_dispatch_event_to_all(ZjsContext* ctx, ZjsValue* argv, uint
     name[name_len] = '\0';
 
     // Default payload is "{}" so receivers don't crash on a missing field.
-    // Real payload, if present, goes through JSON.stringify via the cached
-    // handle.
+    // Real payload, if present, goes through __zappSafeStringify (JS-level
+    // try/catch wrapper around JSON.stringify) so a stringify throw is
+    // contained inside JS and never leaks back to the calling JS frame.
     char* payload = NULL;
     if (argc >= 2 && !zjs_is_undefined(argv[1]) && !zjs_is_null(argv[1])) {
         ZjsValue stringified = zjs_call(ctx, zjs_root_get(ctx, slot->json_stringify_root),
@@ -394,6 +470,165 @@ static ZjsValue host_dispatch_event_to_all(ZjsContext* ctx, ZjsValue* argv, uint
 
     free(name);
     free(payload);
+    return zjs_undefined();
+}
+
+// ---------------------------------------------------------------------------
+// Worker → webview: postMessage / __zappBridge.postToWebview
+//
+// Worker code uses `self.postMessage(data)` directly (Web Worker
+// convention) and the engine-agnostic bootstrap turns `self.send(ch,
+// data)` into `self.postMessage({__zc: ch, d: data})` — so both
+// channel-routed (`Workers.send`) and raw postMessage flows end up
+// here. Reply hits the webview's `_messageHandlers` registry that
+// bootstrap/webview.ts installs.
+// ---------------------------------------------------------------------------
+
+static ZjsValue host_post_to_webview(ZjsContext* ctx, ZjsValue* argv, uint32_t argc) {
+    if (argc < 1) return zjs_undefined();
+    ZjsWorkerSlot* slot = zjs_slot_for_ctx(ctx);
+    if (!slot) return zjs_undefined();
+
+    // The C side wants the worker_id + the payload as JSON. Allocate
+    // a writable copy of worker_id because worker_dispatch_to_webview
+    // takes non-const char*; allocate the JSON via cached
+    // JSON.stringify when the payload is non-trivial.
+    char* worker_id_copy = strdup(slot->worker_id);
+    char* payload = NULL;
+
+    if (!zjs_is_undefined(argv[0]) && !zjs_is_null(argv[0])) {
+        ZjsValue stringified = zjs_call(ctx, zjs_root_get(ctx, slot->json_stringify_root),
+                                        zjs_undefined(), &argv[0], 1);
+        zjs_drain_microtasks(ctx);
+        if (!zjs_had_error(ctx) && zjs_is_string(stringified)) {
+            uint32_t plen = 0;
+            const char* pbytes = zjs_string_bytes(stringified, &plen);
+            if (pbytes) {
+                payload = (char*) malloc((size_t) plen + 1);
+                if (payload) {
+                    memcpy(payload, pbytes, plen);
+                    payload[plen] = '\0';
+                }
+            }
+        }
+    }
+
+    worker_dispatch_to_webview(worker_id_copy, payload ? payload : (char*) "{}");
+
+    free(worker_id_copy);
+    free(payload);
+    return zjs_undefined();
+}
+
+// ---------------------------------------------------------------------------
+// Worker → worker: __zappBridge.postToWorker(targetId, data)
+//
+// Routes through the dispatcher (worker.zc → worker_post_message) so the
+// target can be any engine. Used by `Workers.postMessage(id, data)` and
+// (after channel wrapping) `Workers.send(id, channel, data)` from inside
+// a worker. Same direction the dispatcher already handles for webview →
+// worker; this lets workers talk to each other without a webview hop.
+// ---------------------------------------------------------------------------
+
+static ZjsValue host_post_to_worker(ZjsContext* ctx, ZjsValue* argv, uint32_t argc) {
+    if (argc < 1 || !zjs_is_string(argv[0])) return zjs_undefined();
+    ZjsWorkerSlot* slot = zjs_slot_for_ctx(ctx);
+    if (!slot) return zjs_undefined();
+
+    uint32_t id_len = 0;
+    const char* id_bytes = zjs_string_bytes(argv[0], &id_len);
+    if (!id_bytes) return zjs_undefined();
+    char* target_id = (char*) malloc((size_t) id_len + 1);
+    if (!target_id) return zjs_undefined();
+    memcpy(target_id, id_bytes, id_len);
+    target_id[id_len] = '\0';
+
+    char* payload = NULL;
+    if (argc >= 2 && !zjs_is_undefined(argv[1]) && !zjs_is_null(argv[1])) {
+        ZjsValue stringified = zjs_call(ctx, zjs_root_get(ctx, slot->json_stringify_root),
+                                        zjs_undefined(), &argv[1], 1);
+        zjs_drain_microtasks(ctx);
+        if (!zjs_had_error(ctx) && zjs_is_string(stringified)) {
+            uint32_t plen = 0;
+            const char* pbytes = zjs_string_bytes(stringified, &plen);
+            if (pbytes) {
+                payload = (char*) malloc((size_t) plen + 1);
+                if (payload) {
+                    memcpy(payload, pbytes, plen);
+                    payload[plen] = '\0';
+                }
+            }
+        }
+    }
+
+    // worker_post_message takes ownership of neither pointer — it copies
+    // internally and signals the target's inbox async. Free both here.
+    worker_post_message(target_id, payload ? payload : (char*) "{}");
+
+    free(target_id);
+    free(payload);
+    return zjs_undefined();
+}
+
+// ---------------------------------------------------------------------------
+// __zappBridge.workerCrash(message, stack) — bootstrap calls this when an
+// uncaught error escapes a setTimeout / setInterval callback or a channel
+// handler. We broadcast `worker:crashed` so observers (UI, telemetry) can
+// react, then ask the supervisor to bump fail_count against the worker's
+// restart policy — once the configured cap is hit the supervisor fires
+// `worker:gave-up`. Same shape bare.c / txiki.c use.
+// ---------------------------------------------------------------------------
+
+static char* zjs_stringify_to_dup(ZjsContext* ctx, ZjsWorkerSlot* slot, ZjsValue v) {
+    ZjsValue stringified = zjs_call(ctx, zjs_root_get(ctx, slot->json_stringify_root),
+                                    zjs_undefined(), &v, 1);
+    zjs_drain_microtasks(ctx);
+    if (zjs_had_error(ctx) || !zjs_is_string(stringified)) return NULL;
+    uint32_t len = 0;
+    const char* bytes = zjs_string_bytes(stringified, &len);
+    if (!bytes) return NULL;
+    char* out = (char*) malloc((size_t) len + 1);
+    if (!out) return NULL;
+    memcpy(out, bytes, len);
+    out[len] = '\0';
+    return out;
+}
+
+static ZjsValue host_worker_crash(ZjsContext* ctx, ZjsValue* argv, uint32_t argc) {
+    ZjsWorkerSlot* slot = zjs_slot_for_ctx(ctx);
+    if (!slot) return zjs_undefined();
+
+    // JSON.stringify produces quoted, escaped JSON strings — splice them in
+    // as values directly. Empty defaults so the payload always parses.
+    char* msg_json   = (argc >= 1) ? zjs_stringify_to_dup(ctx, slot, argv[0]) : NULL;
+    char* stack_json = (argc >= 2) ? zjs_stringify_to_dup(ctx, slot, argv[1]) : NULL;
+    const char* msg_v   = msg_json   ? msg_json   : "\"\"";
+    const char* stack_v = stack_json ? stack_json : "\"\"";
+
+    size_t need = strlen(slot->worker_id) + strlen(msg_v) + strlen(stack_v) + 64;
+    char* payload = (char*) malloc(need);
+    if (payload) {
+        snprintf(payload, need,
+                 "{\"id\":\"%s\",\"message\":%s,\"stack\":%s}",
+                 slot->worker_id, msg_v, stack_v);
+        dispatch_event_to_all("worker:crashed", payload);
+        free(payload);
+    }
+
+    // Supervisor decision. zjs can't restart-on-crash yet (same gap as
+    // txiki / bare — see project_txiki_worker_restart), so any non-zero
+    // verdict still surfaces as `worker:gave-up` for the webview so the
+    // UI knows the worker won't auto-recover. Once in-place restart
+    // lands, switch back to dispatching gave-up only when decision == 2.
+    int decision = zapp_worker_supervisor_record_failure(slot->worker_id);
+    if (decision != 0) {
+        char giveUp[256];
+        snprintf(giveUp, sizeof(giveUp), "{\"id\":\"%s\"}", slot->worker_id);
+        dispatch_event_to_all("worker:gave-up", giveUp);
+    }
+
+    free(msg_json);
+    free(stack_json);
     return zjs_undefined();
 }
 
@@ -451,7 +686,22 @@ static void zjs_setup_bridge(ZjsWorkerSlot* slot) {
     // on high-rate workloads.
     slot->object_keys_root    = zjs_root(ctx, zjs_eval(ctx, "Object.keys"));
     slot->json_parse_root     = zjs_root(ctx, zjs_eval(ctx, "JSON.parse"));
-    slot->json_stringify_root = zjs_root(ctx, zjs_eval(ctx, "JSON.stringify"));
+    // Wrap JSON.stringify in a JS-level try/catch so host functions that
+    // serialise a payload never leak a pending error back to the calling
+    // JS frame. There's no zjs_clear_error API, so the only way to keep
+    // the host-call boundary clean is to handle the throw on the JS side.
+    // Returns `null` on failure; the host fn then falls back to "{}".
+    //
+    // Assigned to a global first, then rooted, rather than expression-eval'd
+    // inline — zjs_eval of `(function(){...})` doesn't always return the
+    // function value (depends on whether the engine treats the snippet as
+    // an expression or a statement), but `globalThis.X = fn; globalThis.X`
+    // is unambiguous.
+    zjs_eval(ctx,
+        "globalThis.__zappSafeStringify = function (v) {"
+        "  try { return JSON.stringify(v); } catch (_) { return null; }"
+        "};");
+    slot->json_stringify_root = zjs_root(ctx, zjs_eval(ctx, "globalThis.__zappSafeStringify"));
 
     // Install the message dispatcher shim — called from on_inbox_async
     // when a cross-thread postMessage lands. Routes through onmessage +
@@ -487,11 +737,30 @@ static void zjs_setup_bridge(ZjsWorkerSlot* slot) {
                                                     host_invoke_service);
     ZjsValue emit_fn   = zjs_register_host_function(ctx, "__zapp_dispatch_event",
                                                     host_dispatch_event_to_all);
+    ZjsValue post_fn   = zjs_register_host_function(ctx, "__zapp_post_to_webview",
+                                                    host_post_to_webview);
+    ZjsValue post_worker_fn = zjs_register_host_function(ctx, "__zapp_post_to_worker",
+                                                        host_post_to_worker);
+    ZjsValue crash_fn  = zjs_register_host_function(ctx, "__zapp_worker_crash",
+                                                    host_worker_crash);
     zjs_set_property(ctx, bridge, "invokeService",      invoke_fn);
     zjs_set_property(ctx, bridge, "dispatchEventToAll", emit_fn);
     // Alias to match the legacy name some runtime code still uses.
     zjs_set_property(ctx, bridge, "emitToHost",         emit_fn);
+    zjs_set_property(ctx, bridge, "postToWebview",      post_fn);
+    zjs_set_property(ctx, bridge, "postToWorker",       post_worker_fn);
+    zjs_set_property(ctx, bridge, "workerCrash",        crash_fn);
+    // workerId — bench harness + bare-worker.ts sync-coordination both
+    // read `bridge.workerId` to identify the slot. Bare/jsc/txiki set
+    // the same property; mirror here so engine-agnostic bootstrap +
+    // diagnostic tooling work uniformly.
+    ZjsValue wid_str = zjs_new_string(ctx, slot->worker_id, (uint32_t) strlen(slot->worker_id));
+    zjs_set_property(ctx, bridge, "workerId", wid_str);
     zjs_set_global(ctx, "__zappBridge", bridge);
+    // Web Worker convention — bootstrap/worker.ts's `self.send` routes
+    // through `self.postMessage`, so wire the same host function up as a
+    // global. Same direction (worker → webview), same payload shape.
+    zjs_set_global(ctx, "postMessage", post_fn);
 }
 
 // ---------------------------------------------------------------------------
@@ -500,8 +769,8 @@ static void zjs_setup_bridge(ZjsWorkerSlot* slot) {
 
 static void on_zjs_wake(uv_timer_t* h) { (void) h; /* work happens in on_check */ }
 
-// Fires when zjs_worker_terminate (or terminate_owner) flips
-// shutting_down. We stop the loop here — the on_check tick also bails,
+// Fires when zjs_worker_terminate (or terminate_owner) sets
+// wants_terminate. We stop the loop here — the on_check tick also bails,
 // and the teardown label after uv_run handles the close calls. Splitting
 // the signaling (uv_async_send is thread-safe) from the actual teardown
 // (only the worker thread touches its handles) keeps the locking story
@@ -522,7 +791,7 @@ static void on_shutdown_async(uv_async_t* h) {
 // the inbox is a queue, not a single slot.
 static void on_inbox_async(uv_async_t* h) {
     ZjsWorkerSlot* slot = (ZjsWorkerSlot*) h->data;
-    if (slot->shutting_down) return;
+    if (atomic_load(&slot->wants_terminate)) return;
 
     char* msg;
     while ((msg = inbox_pop(slot)) != NULL) {
@@ -544,9 +813,57 @@ static void on_inbox_async(uv_async_t* h) {
     }
 }
 
+// Drains JS snippets pushed by dispatch_event_to_all → zjs_broadcast_eval_js.
+// Each entry is a self-invoking IIFE that calls `bridge._onEvent(name,
+// payload)` — same shape webviews / bare workers / txiki workers see.
+// Cap on entries drained per async fire. Without it the `while (pop)`
+// loop starves the worker's own JS thread when several other workers
+// are emitting at high frequency: new IIFEs land in the inbox during
+// the drain itself, the loop never exits, and the bench loop (or any
+// foreground work) makes no forward progress. Capping yields back to
+// libuv between batches; if entries remain we re-arm via
+// uv_async_send so the next loop tick picks up the rest. 32 was
+// picked empirically — large enough to amortise the async-fire cost,
+// small enough to keep response latency tight when broadcasts spike.
+#define ZJS_EVAL_INBOX_DRAIN_BATCH 32
+
+static void on_eval_inbox_async(uv_async_t* h) {
+    ZjsWorkerSlot* slot = (ZjsWorkerSlot*) h->data;
+    if (atomic_load(&slot->wants_terminate)) return;
+
+    char* js;
+    int drained = 0;
+    while (drained < ZJS_EVAL_INBOX_DRAIN_BATCH && (js = eval_inbox_pop(slot)) != NULL) {
+        zjs_eval(slot->ctx, js);
+        zjs_drain_microtasks(slot->ctx);
+        if (zjs_had_error(slot->ctx)) {
+            ZjsValue err = zjs_get_error(slot->ctx);
+            uint32_t len = 0;
+            ZjsValue mv = zjs_get_property(slot->ctx, err, "message");
+            const char* m = zjs_is_string(mv)
+                ? zjs_string_bytes(mv, &len)
+                : zjs_string_bytes(err, &len);
+            fprintf(stderr, "[zapp] zjs worker '%s' broadcast eval threw: %.*s\n",
+                slot->worker_id, (int) len, m ? m : "<unreadable>");
+        }
+        free(js);
+        drained++;
+    }
+
+    // If we hit the batch cap and the inbox still has entries, re-arm
+    // the async so libuv schedules another fire next iteration. Bounded
+    // peek under the inbox mutex so we don't race with a producer push.
+    pthread_mutex_lock(&slot->eval_inbox_mutex);
+    int remaining = slot->eval_inbox_count;
+    pthread_mutex_unlock(&slot->eval_inbox_mutex);
+    if (remaining > 0) {
+        uv_async_send(&slot->eval_inbox_async);
+    }
+}
+
 static void on_check(uv_check_t* h) {
     ZjsWorkerSlot* slot = (ZjsWorkerSlot*) h->data;
-    if (slot->shutting_down) return;
+    if (atomic_load(&slot->wants_terminate)) return;
 
     zjs_run_pending_timers(slot->ctx);
 
@@ -710,6 +1027,26 @@ static void* zjs_worker_thread(void* arg) {
         const char* boot = zapp_worker_bootstrap_script();
         if (boot && boot[0] != '\0') {
             zjs_eval(slot->ctx, boot);
+            // zjs exposes setTimeout / setInterval / clearTimeout /
+            // clearInterval as **lexical** globals — distinct slots from
+            // `globalThis.setTimeout` etc. The bootstrap's wrap reassigns
+            // the `globalThis` properties (the convention bare/jsc/txiki
+            // honour), but user code's bare `setTimeout(...)` resolves
+            // via the lexical binding, which still points at the raw
+            // un-wrapped original. Result: throws in setTimeout callbacks
+            // skip `bridge.workerCrash` and surface in the engine's error
+            // handler with no supervisor reporting.
+            //
+            // Re-point the lexical bindings at the wrapped versions the
+            // bootstrap installed on globalThis so the user-visible
+            // identifier and the wrap line up. Wrapped in try/catch so a
+            // future zjs change to const-bindings doesn't break startup.
+            zjs_eval(slot->ctx,
+                "try { setTimeout = globalThis.setTimeout; } catch (_) {}"
+                "try { setInterval = globalThis.setInterval; } catch (_) {}"
+                "try { clearTimeout = globalThis.clearTimeout; } catch (_) {}"
+                "try { clearInterval = globalThis.clearInterval; } catch (_) {}");
+
             if (zjs_had_error(slot->ctx)) {
                 ZjsValue err = zjs_get_error(slot->ctx);
                 uint32_t mlen = 0;
@@ -741,6 +1078,10 @@ static void* zjs_worker_thread(void* arg) {
     pthread_mutex_init(&slot->inbox_mutex, NULL);
     uv_async_init(&slot->loop, &slot->inbox_async, on_inbox_async);
     slot->inbox_async.data = slot;
+
+    pthread_mutex_init(&slot->eval_inbox_mutex, NULL);
+    uv_async_init(&slot->loop, &slot->eval_inbox_async, on_eval_inbox_async);
+    slot->eval_inbox_async.data = slot;
 
     long  code_len = 0;
     char* code = zjs_load_script(slot->script_url, &code_len);
@@ -831,6 +1172,7 @@ teardown:
         uv_close((uv_handle_t*) &slot->zjs_wake,        NULL);
         uv_close((uv_handle_t*) &slot->shutdown_async,  NULL);
         uv_close((uv_handle_t*) &slot->inbox_async,     NULL);
+        uv_close((uv_handle_t*) &slot->eval_inbox_async, NULL);
         // Drain close callbacks before tearing down the loop. UV_RUN_DEFAULT
         // here would block forever if any handle is still open — but
         // we closed everything above, so the loop drains the closes and
@@ -846,6 +1188,8 @@ teardown:
         char* drained;
         while ((drained = inbox_pop(slot)) != NULL) free(drained);
         pthread_mutex_destroy(&slot->inbox_mutex);
+        while ((drained = eval_inbox_pop(slot)) != NULL) free(drained);
+        pthread_mutex_destroy(&slot->eval_inbox_mutex);
     }
     if (slot->ctx) {
         // Release the rooted helpers before tearing the context down.
@@ -926,7 +1270,7 @@ void zjs_worker_terminate(const char* worker_id) {
     pthread_mutex_lock(&zjs_workers_mutex);
     ZjsWorkerSlot* slot = zjs_find_slot(worker_id);
     if (slot) {
-        slot->shutting_down = 1;
+        atomic_store(&slot->wants_terminate, 1);
         // uv_async_send is the only uv_* call that's thread-safe to
         // invoke from outside the loop's thread — it's how we wake the
         // worker. The async fires on_shutdown_async which uv_stops the
@@ -942,11 +1286,33 @@ void zjs_worker_terminate_owner(const char* owner_id) {
     pthread_mutex_lock(&zjs_workers_mutex);
     for (int i = 0; i < ZJS_MAX_WORKERS; i++) {
         if (zjs_workers[i].active && strcmp(zjs_workers[i].owner_id, owner_id) == 0) {
-            zjs_workers[i].shutting_down = 1;
+            atomic_store(&zjs_workers[i].wants_terminate, 1);
             if (zjs_workers[i].loop_initialized) {
                 uv_async_send(&zjs_workers[i].shutdown_async);
             }
         }
+    }
+    pthread_mutex_unlock(&zjs_workers_mutex);
+}
+
+// Broadcast a JS snippet (bridge._onEvent IIFE) to every active zjs worker.
+// Counterpart of txiki_broadcast_eval_js / bare_broadcast_eval_js — the
+// dispatcher fans events emitted from the webview (or anywhere else) into
+// the worker pool by calling this. zjs workers each run their own libuv
+// loop, so we push the snippet into the slot's eval_inbox and signal the
+// async; on_eval_inbox_async drains and evals on the worker thread.
+void zjs_broadcast_eval_js(const char* js) {
+    if (!js) return;
+    pthread_mutex_lock(&zjs_workers_mutex);
+    for (int i = 0; i < ZJS_MAX_WORKERS; i++) {
+        ZjsWorkerSlot* slot = &zjs_workers[i];
+        if (!slot->active || !slot->loop_initialized) continue;
+        if (eval_inbox_push(slot, js) != 0) {
+            fprintf(stderr, "[zapp] zjs worker '%s' eval inbox full — dropped broadcast\n",
+                slot->worker_id);
+            continue;
+        }
+        uv_async_send(&slot->eval_inbox_async);
     }
     pthread_mutex_unlock(&zjs_workers_mutex);
 }
