@@ -125,8 +125,12 @@ raw {
         }
 
         // Layer 3: Backend worker (if subscribed to this window+event)
-        // (Window-event forwarding to workers is handled via the event-broadcast
-        // path in dispatch.zc; bare and zjs workers receive the JS eval there.)
+        // TODO: Worker-side window event broadcast (bare/zjs) is a pre-existing
+        // gap inherited from the JSC-era Layer 3 design. zapp_window_backend_listeners
+        // bit-field is still set by bare's subscribeWindowEvent but no consumer
+        // reads it post-jsc-removal. Tracked in supervisor-restart followups memory.
+        // Adding bare_broadcast_eval_js + zjs_broadcast_eval_js here is the obvious
+        // fix shape; deferred until a real consumer surfaces the need.
 
         return 0; // ALLOW
     }
