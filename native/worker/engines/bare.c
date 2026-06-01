@@ -1727,6 +1727,7 @@ static void* bare_worker_thread(void* data) {
 
     while (1) {
         slot->incarnation++;
+        slot->active = true;
 
         // teardown_state(keep_loop=1) nulls slot->loop to protect against
         // stale access; re-arm it at the top of each iteration so that

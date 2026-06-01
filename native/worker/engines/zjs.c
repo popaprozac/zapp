@@ -1283,6 +1283,7 @@ static void* zjs_worker_thread(void* arg) {
 
     while (1) {
         slot->incarnation++;
+        slot->active = 1;
 
         ZjsSetupResult setup = zjs_worker_setup_state(slot);
 
