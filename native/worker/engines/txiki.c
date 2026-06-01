@@ -1317,20 +1317,46 @@ static void txiki_worker_teardown_state(TxikiWorkerSlot* slot, int keep_loop) {
 
 static void* txiki_worker_thread(void* arg) {
     TxikiWorkerSlot* slot = (TxikiWorkerSlot*)arg;
+    slot->incarnation = 0;
 
-    slot->incarnation = 1;
+    while (1) {
+        slot->incarnation++;
 
-    TxikiSetupResult setup = txiki_worker_setup_state(slot);
+        TxikiSetupResult setup = txiki_worker_setup_state(slot);
 
-    if (setup == TXIKI_SETUP_FATAL) {
-        slot->active = 0;
-        return NULL;
+        if (setup == TXIKI_SETUP_FATAL) {
+            fprintf(stderr, "[zapp] txiki worker '%s' setup fatal (incarnation %d)\n",
+                    slot->worker_id, slot->incarnation);
+            break;
+        }
+
+        if (setup == TXIKI_SETUP_CRASHED) {
+            // host_worker_crash already fired; wants_restart set per
+            // supervisor verdict. Skip TJS_Run — nothing live to run.
+            // (No path returns CRASHED yet — Task 3.5 adds it.)
+            txiki_worker_teardown_state(slot, /*keep_loop=*/1);
+        } else {
+            // TXIKI_SETUP_OK
+            if (slot->incarnation > 1) {
+                char payload[128];
+                snprintf(payload, sizeof(payload),
+                         "{\"id\":\"%s\",\"incarnation\":%d}",
+                         slot->worker_id, slot->incarnation);
+                dispatch_event_to_all("worker:restarted", payload);
+                fprintf(stderr, "[zapp] txiki worker '%s' restarting (incarnation %d)\n",
+                        slot->worker_id, slot->incarnation);
+            }
+
+            TJS_Run(slot->runtime);
+
+            txiki_worker_teardown_state(slot, /*keep_loop=*/1);
+        }
+
+        if (atomic_load(&slot->wants_terminate)) break;
+        if (!atomic_load(&slot->wants_restart)) break;
+        atomic_store(&slot->wants_restart, 0);
     }
 
-    // SETUP_OK — run the loop. (SETUP_CRASHED unreachable until Task 3.5.)
-    TJS_Run(slot->runtime);
-
-    txiki_worker_teardown_state(slot, /*keep_loop=*/0);
     slot->active = 0;
     return NULL;
 }
