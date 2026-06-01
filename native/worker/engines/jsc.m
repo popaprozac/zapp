@@ -946,7 +946,17 @@ static void jsc_worker_init_context(NSString* wid, NSString* oid, NSString* scri
             // Bundled workers have no live module imports/exports, so wrapping
             // is semantically safe — top-level vars become locals to the IIFE.
             NSString* wrapped = [NSString stringWithFormat:
-                @"(async () => {\n%@\n})().catch(e => { console.error('[worker error]', (e && e.message) || String(e), e && e.stack ? '\\n' + e.stack : ''); });",
+                @"(async () => {\n%@\n})().catch(e => {"
+                @"  try {"
+                @"    var msg = (e && e.message) ? String(e.message) : String(e);"
+                @"    var stk = (e && e.stack) ? String(e.stack) : '';"
+                @"    var bridge = globalThis.__zappBridge;"
+                @"    if (bridge && typeof bridge.workerCrash === 'function') {"
+                @"      bridge.workerCrash(msg, stk);"
+                @"    }"
+                @"  } catch (_) {}"
+                @"  console.error('[worker error]', (e && e.message) || String(e), e && e.stack ? '\\n' + e.stack : '');"
+                @"});",
                 scriptContent];
             [ctx evaluateScript:wrapped withSourceURL:[NSURL URLWithString:scriptUrl]];
         } else {
