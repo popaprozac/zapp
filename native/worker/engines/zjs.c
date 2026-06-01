@@ -1000,12 +1000,21 @@ static ZjsSetupResult zjs_worker_setup_state(ZjsWorkerSlot* slot) {
     // must be reachable before the eval runs.
     zjs_setup_bridge(slot);
 
+    // Engine-agnostic worker bootstrap — installs the JS-side surface
+    // every Zapp worker expects: self.send / self.receive (channel
+    // routing), getBridge()'s `Symbol.for("zapp.bridge")` lookup,
+    // _dispatchAppEvent, dispatchSyncResult, the setInterval/setTimeout
+    // crash wrappers, _onEvent.
+    //
+    // Same script bare-* engines run via their per-engine bootstrap
+    // path. zjs already has the C-side host bridge installed on
+    // globalThis as __zappBridge — this script adapts that surface to
+    // the runtime API (Symbol.for("zapp.bridge"), self.send, etc).
+    //
     // zjs is a generic embed engine and doesn't provide the Web Worker
     // `self` global out of the box. The bootstrap (and most worker
-    // payloads that adopt Web Worker conventions) reads `self` heavily,
+    // payloads adopting Web Worker conventions) reads `self` heavily,
     // so alias it to globalThis here once before running the bootstrap.
-    // bare-* / txiki / jsc get this for free from their own runtimes;
-    // we provide the same shape so worker code is engine-agnostic.
     zjs_eval(slot->ctx, "var self = globalThis;");
     if (zjs_had_error(slot->ctx)) {
         fprintf(stderr, "[zapp] zjs worker '%s' could not install `self` alias\n",
@@ -1077,11 +1086,12 @@ static ZjsSetupResult zjs_worker_setup_state(ZjsWorkerSlot* slot) {
     char* code = zjs_load_script(slot->script_url, &code_len);
     if (!code) {
         fprintf(stderr, "[zapp] zjs worker script not found: %s\n", slot->script_url);
-        // Task 1.5 wires synthetic crash here; for this pure refactor, we
-        // preserve the original "exit early after teardown" behavior by
-        // returning SETUP_OK with no live ctx state — the thread main
-        // proceeds to uv_run (which idles instantly since no handles are
-        // active for the script) and then teardown. Match original semantics.
+        // Preserve original "script-missing" semantics: return OK so the
+        // thread main proceeds into uv_run. All five uv handles are live
+        // by this point, so uv_run drains normally (servicing any inbox
+        // signals, ticking on_check), then teardown closes them cleanly.
+        // Task 1.5 wires a synthetic supervisor crash here so the
+        // supervisor cap can give-up after repeated missing-file failures.
         return ZJS_SETUP_OK;
     }
 
