@@ -44,8 +44,8 @@ Windows stubs exist for everything in this list; fill them in:
 - Events (11 window events + 8 app events, unified dispatcher, per-window
   bitmask) — **platform-agnostic; window events need Windows window procs to
   call into `zapp_window_event`**
-- Workers — **txiki.js already compiles cross-platform**; JSC is macOS-only
-  and stays that way
+- Workers — **`zjs` (default) is cross-platform**; `bare-jsc` is macOS-only
+  (Apple JSC framework); `bare-v8` is the JIT option on Windows / Linux
 - Unified worker model (no separate "backend worker" — all workers share
   the same API via `bootstrap/worker.ts`)
 - Dialogs (open file, save file, message) — Windows: IFileDialog,
@@ -60,34 +60,27 @@ Windows stubs exist for everything in this list; fill them in:
   line parsing on `WM_COPYDATA`
 - Packaging — Windows: MSIX or plain `.exe` + resource icons
 
-## Current txiki.js state on non-Apple
+## Cross-platform host-object layer
 
-`native/worker/engines/txiki.c` compiles on Windows today but several
-privileged host objects are guarded with `#ifdef __APPLE__`:
-- `zapp_bridge_notif` — body stubbed on non-Apple (returns undefined)
-- `zapp_bridge_dock` — body stubbed on non-Apple
-- `zapp_bridge_create_window` — runs the window create inline instead of
-  `dispatch_sync(main)` (TODO: Windows main-thread-hop equivalent needed)
-- `zapp_bridge_quit` — calls `exit(0)` directly instead of going through
-  GCD
-
-**The path forward**: when each Windows backend lands (notifications,
-taskbar, etc.), introduce a cross-platform `zapp_*` extern layer that
-both the darwin and windows impls fulfill:
+When each Windows backend lands (notifications, taskbar, etc.), introduce a
+cross-platform `zapp_*` extern layer that both darwin and windows impls
+fulfill:
 
 ```
 Before (darwin-only):
   extern void darwin_notification_show_typed(...)   // in darwin/notification.m
-  used directly in txiki.c, jsc.m, and zapp routing
+  used directly in zjs.c and zapp routing
 
 After (platform-agnostic):
   extern void zapp_notification_show(...)            // declared in native/notification/notification.zc
     → on darwin, lowered to darwin_notification_show_typed
     → on windows, lowered to ToastNotificationManager call
-  txiki.c and jsc.m call zapp_notification_show unconditionally — no #ifdef
+  zjs.c calls zapp_notification_show unconditionally — no #ifdef
 ```
 
-When that layer lands, drop the `#ifdef __APPLE__` guards from `txiki.c`.
+This is already the direction for `zjs.c` (the default engine). Any
+remaining `#ifdef __APPLE__` guards in engine files are placeholders for
+the day this layer is complete.
 
 ## Windows-Specific Notes
 
@@ -112,7 +105,7 @@ equivalents:
 - **Sync with return value**: `PostMessage` + `WaitForSingleObject` on an
   event set by the handler, with the return value stashed in a shared
   struct. Be careful not to deadlock when called from the main thread
-  itself — mirror the `NSThread.isMainThread` check we use in `jsc.m`.
+  itself — mirror the `NSThread.isMainThread` check used in engine impls.
 
 ### Workers on Windows
 

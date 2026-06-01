@@ -143,9 +143,8 @@ crashes once a day stays alive indefinitely with `maxRetries: 2` and
 `withinMs: 60_000`.
 
 **Engine support.** Restart works identically on `zjs` (default), `bare-jsc`,
-`bare-v8`, `bare-quickjs`, `bare-mqjs`, `bare-hermes`, `jsc` (legacy), and
-`txiki` (legacy). Same TypeScript worker source produces the same event
-sequence on every engine.
+`bare-v8`, `bare-quickjs`, `bare-mqjs`, and `bare-hermes`. Same TypeScript
+worker source produces the same event sequence on every engine.
 
 ## Headless worker for background sync that survives window close
 
@@ -198,10 +197,11 @@ uploadButton.addEventListener("click", () => {
 });
 ```
 
-Note: `fetch` and `WebSocket` only work in workers when using the
-**txiki** engine (see `zapp/build.zc`). JSC workers don't have them —
-move network calls to a webview (which has full DOM APIs) or switch
-engines.
+Note: `fetch` and `WebSocket` in workers require a `workerModules:
+["fetch"]` capability declaration in `zapp.config.ts` (for bare-* engines)
+or native engine support (zjs ships fetch as its runtime layer matures).
+Move network calls to a webview (which has full DOM APIs) if the target
+engine doesn't provide them.
 
 ## Service that calls ObjC (Keychain, AVFoundation, NSWorkspace)
 
@@ -864,11 +864,12 @@ Zapp's `Sync` looks like the Web Platform's standard wait/notify
 primitive, so a fair question is: why not just ship `SharedArrayBuffer`
 + `Atomics.wait`? Three reasons:
 
-1. **Zapp ships two JS engines.** A JSC webview and a txiki worker run
-   in isolated runtimes — they cannot share a `SharedArrayBuffer`
-   regardless of COOP/COEP headers. `Sync` works across every context
-   pair Zapp supports: webview ↔ worker, webview ↔ webview, worker ↔
-   worker, JSC ↔ txiki. SAB works only within a single engine.
+1. **Zapp uses multiple JS runtimes.** The webview (WKWebView) and each
+   worker (zjs, bare-jsc, etc.) run in isolated runtimes — they cannot
+   share a `SharedArrayBuffer` regardless of COOP/COEP headers. `Sync`
+   works across every context pair Zapp supports: webview ↔ worker,
+   webview ↔ webview, worker ↔ worker, across engine boundaries. SAB
+   works only within a single engine instance.
 
 2. **Robustness against Spectre mitigations.** SAB has a long history
    of being silently disabled at runtime when browsers tighten
@@ -1470,7 +1471,7 @@ Output looks like:
   passes `--options runtime` to codesign automatically when
   `signingIdentity` is non-ad-hoc.
 - **Bundle not fully signed** — `--deep` fixes most cases; if you
-  vendor pre-built binaries (e.g. txiki.js native libs) they must
+  vendor pre-built binaries (e.g. bare-* engine libs) they must
   also be signed.
 - **"Invalid" status with no obvious reason** — the CLI fetches the
   submission log via `xcrun notarytool log` and prints it. Look for

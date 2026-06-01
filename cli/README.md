@@ -24,9 +24,9 @@ This guarantees your project keeps working even as the CLI evolves.
 - **Bun** ≥ 1.3
 - **Zen-C compiler (`zc`)** — https://github.com/zenc-lang/zenc
 - **Xcode Command Line Tools** (macOS) — for `codesign`, `iconutil`
-- **cmake** — only required on first build of the `bare-*` or `txiki`
-  worker engines (downloads + compiles into `~/.zapp/vendor/`). Not
-  needed for the default `zjs` engine.
+- **cmake** — only required on first build of the `bare-*` worker engines
+  (downloads + compiles into `~/.zapp/vendor/`). Not needed for the
+  default `zjs` engine.
 
 ## Commands
 
@@ -136,7 +136,7 @@ For inline `Info.plist` customization (typed, autocomplete-friendly), use
 Worker engines compile lazily based on the engines referenced in
 `zapp.config.ts → headless` (plus any auto-discovered `new Worker()`
 calls in your source). The default `zjs` engine ships in-tree and has
-no first-build cost. The `bare-*` and `txiki` engines download to
+no first-build cost. The `bare-*` engines download to
 `~/.zapp/vendor/` and build via cmake on first use (~30–60 s each,
 cached after that).
 
@@ -151,8 +151,7 @@ headless: {
 ```
 
 See [`docs/engines.md`](../docs/engines.md) for the full taxonomy
-(zjs, bare-jsc, bare-v8, bare-quickjs, bare-mqjs, bare-hermes, plus the
-deprecated `jsc` / `txiki` compat tier).
+(zjs, bare-jsc, bare-v8, bare-quickjs, bare-mqjs, bare-hermes).
 
 ## Troubleshooting
 
@@ -164,10 +163,6 @@ older versions may still leak.
 **"Cannot find v2 native framework"** — the CLI can't locate the bundled
 `native/` directory. Usually means the npm install was interrupted. Run
 `bun install` again.
-
-**"TJS_SetCookieJarPath" undefined symbol** (deprecated `txiki` engine
-only) — the downloaded txiki.js cache is stale (predates the pinned
-commit). Clear it: `rm -rf ~/.zapp/vendor/txiki.js` and rebuild.
 
 **Bytecode artifact missing / stale** (zjs / bare-hermes workers with
 `bytecode: true`) — force regen with `rm -f .zapp/workers/*.zbc` and

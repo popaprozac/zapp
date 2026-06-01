@@ -26,12 +26,12 @@ guides.
 
 Real numbers. Same hello-world app (1 window, 1 service call) on each framework. macOS ARM64, M4 Max.
 
-| | Zapp (JSC) | Zapp (txiki) | Tauri v2 | Wails v3 | Electron | Electrobun |
-|---|---|---|---|---|---|---|
-| **Binary** | **445 KB** | 6.5 MB | 8.0 MB | 7.5 MB | 170.6 MB | 17.0 MB |
-| **Bundle** | **2.8 MB** | 8.9 MB | 8.1 MB | 9.0 MB | 263.3 MB | 17.1 MB |
-| **Memory** | **26 MB** | 25 MB | 26 MB | 32 MB | 90 MB | 101 MB |
-| **Build** | **3.5s** | 3.2s | 53.8s | 1.9s | 3.6s | 12.8s |
+| | Zapp (zjs) | Tauri v2 | Wails v3 | Electron | Electrobun |
+|---|---|---|---|---|---|
+| **Binary** | **445 KB** | 8.0 MB | 7.5 MB | 170.6 MB | 17.0 MB |
+| **Bundle** | **2.8 MB** | 8.1 MB | 9.0 MB | 263.3 MB | 17.1 MB |
+| **Memory** | **26 MB** | 26 MB | 32 MB | 90 MB | 101 MB |
+| **Build** | **3.5s** | 53.8s | 1.9s | 3.6s | 12.8s |
 
 ### Bridge latency — by context (µs, median)
 
@@ -39,10 +39,10 @@ Two numbers matter, not one: calls from the webview, and calls from a
 worker. Worker calls are where real app hot paths live (sync engine,
 DB access, local filesystem).
 
-| | Zapp (zjs) | Zapp (jsc) | Zapp (txiki) | Tauri | Wails | Electron | Electrobun |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| **Webview → native** | 135 | 145 | 130 | 265 | 325 | **51** | 360 |
-| **Worker → native** | **0.45** | 1.08 | **0.26** | N/A<sup>\*</sup> | N/A<sup>\*</sup> | 73 | N/A<sup>†</sup> |
+| | Zapp (zjs) | Tauri | Wails | Electron | Electrobun |
+|---|---:|---:|---:|---:|---:|
+| **Webview → native** | 135 | 265 | 325 | **51** | 360 |
+| **Worker → native** | **0.45** | N/A<sup>\*</sup> | N/A<sup>\*</sup> | 73 | N/A<sup>†</sup> |
 
 <sub>\* Tauri and Wails don't ship a JS worker with native-call access — their equivalent is "drop to Rust/Go and wire it yourself." No apples-to-apples JS number exists.</sub>
 <br>
@@ -50,17 +50,16 @@ DB access, local filesystem).
 
 Electron wins row 1 because Chromium's IPC uses optimized named pipes / mach ports. Electron's worker row (73 µs) is the realistic pattern: a Web Worker can't call `ipcRenderer` directly (contextBridge only exposes APIs to the main window), so calls route worker → renderer postMessage → `ipcRenderer.invoke` → main, then the reply flows back the same way — 2 postMessage hops plus the IPC round-trip.
 
-Zapp workers bypass that entirely — `Services.invokeSync` is a direct C call via the worker engine's host object. **zjs is 162× faster than Electron** on this path; **txiki is 281× faster** because QuickJS's `JS_NewCFunction` is a thinner C-call convention than zjs's value-marshalling dispatch. For apps where hot work lives in workers (sync engines, DB access, background pipelines), row 2 is the number that matters — and Tauri/Wails can't compete on row 2 at all, because they force a language boundary instead.
+Zapp workers bypass that entirely — `Services.invokeSync` is a direct C call via the worker engine's host object. **zjs is 162× faster than Electron** on this path. For apps where hot work lives in workers (sync engines, DB access, background pipelines), row 2 is the number that matters — and Tauri/Wails can't compete on row 2 at all, because they force a language boundary instead.
 
 ### Which engine?
 
 Worker engine is **per-worker**, set in `zapp.config.ts → headless.<id>.engine`. The framework dispatches at runtime; you can mix engines within one app. Six engines ship today:
 
-- **`zjs`** *(default, recommended)* — Zapp's first-party engine. ~1 MB engine cost, cross-platform, iOS-friendly (no JIT entitlement gymnastics). Direct value-marshalling host bridge: **2× faster than the legacy `jsc.m` path** (0.45 µs vs 1.08 µs). Bytecode AOT option (`bytecode: true`) ships parse-free workers.
+- **`zjs`** *(default, recommended)* — Zapp's first-party engine. ~1 MB engine cost, cross-platform, iOS-friendly (no JIT entitlement gymnastics). Direct value-marshalling host bridge at 0.45 µs. Bytecode AOT option (`bytecode: true`) ships parse-free workers.
 - **`bare-jsc`** — JIT via the system JSC framework on macOS. Zero engine bundle cost — literally smaller than zjs on Apple. Pick when absolute KB and macOS-only JIT-perf matter.
 - **`bare-v8`** — JIT on Windows / Linux where there's no system JSC. ~30 MB bundle increase. JIT-heavy workloads only.
 - `bare-quickjs`, `bare-mqjs`, `bare-hermes` — niche / size-constrained variants. zjs is usually the better fit.
-- `jsc`, `txiki` — **deprecated** compat tier. Kept compiling for existing apps; CLI warns on use. Migrate to `zjs` or `bare-jsc`.
 
 ```ts
 // zapp.config.ts — mix engines per worker
@@ -103,7 +102,7 @@ bun run build --platform ios
 xcrun simctl install booted bin/ios/<name>.app
 xcrun simctl launch --console-pty booted com.your.bundle
 ```
-First iOS build takes a minute (cross-compiles txiki.js for the iOS Simulator SDK if your config opts into it). Subsequent builds reuse the cached static libs in `vendor/txiki.js/build-ios-sim`.
+First iOS build takes a minute (cross-compiles bare-* engines for the iOS Simulator SDK if your config opts into them). Subsequent builds reuse the cached static libs.
 
 ### Custom icons and Info.plist
 
