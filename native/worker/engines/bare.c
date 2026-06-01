@@ -1694,8 +1694,10 @@ static void bare_worker_teardown_state(BareWorkerSlot* slot, int keep_loop) {
         uv_loop_close(slot->loop);
     }
 
-    bare_msgqueue_destroy(&slot->inbox);
-    bare_msgqueue_destroy(&slot->eval_inbox);
+    if (!keep_loop) {
+        bare_msgqueue_destroy(&slot->inbox);
+        bare_msgqueue_destroy(&slot->eval_inbox);
+    }
 
     free(slot->script_source);
     slot->script_source = NULL;
@@ -1775,6 +1777,8 @@ static void* bare_worker_thread(void* data) {
     // Final cleanup — close the loop now that we're really exiting.
     uv_run(&loop, UV_RUN_NOWAIT);
     uv_loop_close(&loop);
+    bare_msgqueue_destroy(&slot->inbox);
+    bare_msgqueue_destroy(&slot->eval_inbox);
     slot->active = false;
     return NULL;
 }
