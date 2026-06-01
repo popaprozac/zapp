@@ -994,6 +994,56 @@ typedef enum {
 static ZjsSetupResult zjs_worker_setup_state(ZjsWorkerSlot* slot);
 static void zjs_worker_teardown_state(ZjsWorkerSlot* slot, int keep_loop);
 
+// Synthetic crash signal — called from setup_state when zjs_eval_module_source /
+// zjs_eval_bytecode returns an error at top level, or when zjs_load_script
+// fails to find the file. Mirrors host_worker_crash's dispatch + supervisor
+// handshake without needing a live JS frame.
+//
+// Caller returns ZJS_SETUP_CRASHED so the outer loop in zjs_worker_thread
+// teardown + iterate per verdict.
+extern char* zapp_escape_dup(const char* s);  // bridge/dispatch.zc
+
+static void zjs_setup_synthesize_crash(ZjsWorkerSlot* slot,
+                                       const char* msg,
+                                       const char* stack) {
+    size_t mlen = msg ? strlen(msg) : 0;
+    size_t slen = stack ? strlen(stack) : 0;
+    size_t need = strlen(slot->worker_id) + mlen + slen + 128;
+    char* payload = (char*) malloc(need);
+    if (payload) {
+        char* msg_esc   = zapp_escape_dup(msg   ? msg   : "");
+        char* stack_esc = zapp_escape_dup(stack ? stack : "");
+        snprintf(payload, need,
+                 "{\"id\":\"%s\",\"message\":\"%s\",\"stack\":\"%s\",\"incarnation\":%d}",
+                 slot->worker_id,
+                 msg_esc   ? msg_esc   : "",
+                 stack_esc ? stack_esc : "",
+                 slot->incarnation);
+        dispatch_event_to_all("worker:crashed", payload);
+        free(msg_esc);
+        free(stack_esc);
+        free(payload);
+    }
+
+    int decision = zapp_worker_supervisor_record_failure(slot->worker_id);
+    if (decision == 1) {
+        atomic_store(&slot->wants_restart, 1);
+        // No uv_async_send here — we're inside setup_state, not running
+        // the loop yet. The outer while-loop in zjs_worker_thread sees
+        // SETUP_CRASHED return value and proceeds to teardown + iterate
+        // without entering uv_run.
+    } else if (decision == 2) {
+        char gp[256];
+        snprintf(gp, sizeof(gp),
+                 "{\"id\":\"%s\",\"finalIncarnation\":%d,\"retriesAttempted\":%d}",
+                 slot->worker_id, slot->incarnation,
+                 slot->incarnation > 0 ? slot->incarnation - 1 : 0);
+        dispatch_event_to_all("worker:gave-up", gp);
+    }
+    // decision == 0: no policy; setup_state caller still gets CRASHED but
+    // wants_restart stays 0, so the while-loop breaks and the worker exits.
+}
+
 static ZjsSetupResult zjs_worker_setup_state(ZjsWorkerSlot* slot) {
     slot->ctx = zjs_new_context();
     if (!slot->ctx) {
@@ -1093,13 +1143,8 @@ static ZjsSetupResult zjs_worker_setup_state(ZjsWorkerSlot* slot) {
     char* code = zjs_load_script(slot->script_url, &code_len);
     if (!code) {
         fprintf(stderr, "[zapp] zjs worker script not found: %s\n", slot->script_url);
-        // Preserve original "script-missing" semantics: return OK so the
-        // thread main proceeds into uv_run. All five uv handles are live
-        // by this point, so uv_run drains normally (servicing any inbox
-        // signals, ticking on_check), then teardown closes them cleanly.
-        // Task 1.5 wires a synthetic supervisor crash here so the
-        // supervisor cap can give-up after repeated missing-file failures.
-        return ZJS_SETUP_OK;
+        zjs_setup_synthesize_crash(slot, "script load failed", "");
+        return ZJS_SETUP_CRASHED;
     }
 
     // Two evaluation paths depending on the worker artifact format:
@@ -1134,34 +1179,38 @@ static ZjsSetupResult zjs_worker_setup_state(ZjsWorkerSlot* slot) {
     }
     if (zjs_had_error(slot->ctx)) {
         ZjsValue err = zjs_get_error(slot->ctx);
-        // Most user throws are Error objects (`throw new Error(...)`), not
-        // bare strings. Read the .message field when present, then fall
-        // back to String() coercion for anything else (numbers, objects
-        // without .message, etc).
         const char* msg = NULL;
         uint32_t    len = 0;
         ZjsValue    msg_val = zjs_get_property(slot->ctx, err, "message");
-        if (zjs_is_string(msg_val)) {
-            msg = zjs_string_bytes(msg_val, &len);
-        }
+        if (zjs_is_string(msg_val)) msg = zjs_string_bytes(msg_val, &len);
         if (!msg) msg = zjs_string_bytes(err, &len);
         if (!msg) {
-            // Last resort: stash the value as a global and String() it
-            // so we get *something* readable rather than "<non-string>".
             zjs_set_global(slot->ctx, "__zapp_err_tmp", err);
             ZjsValue str = zjs_eval(slot->ctx, "String(__zapp_err_tmp)");
             msg = zjs_string_bytes(str, &len);
         }
-        // Stacks are non-standard but worth showing when present.
         const char* stack = NULL;
         uint32_t    slen  = 0;
         ZjsValue    stack_val = zjs_get_property(slot->ctx, err, "stack");
         if (zjs_is_string(stack_val)) stack = zjs_string_bytes(stack_val, &slen);
+
         fprintf(stderr, "[zapp] zjs worker '%s' script threw: %.*s%s%.*s\n",
             slot->worker_id,
             (int) len, msg ? msg : "<unreadable>",
             stack ? "\n" : "",
             (int) slen, stack ? stack : "");
+
+        // Copy to NUL-terminated buffers — zjs_string_bytes returns length-
+        // counted, not NUL-terminated, so we need a local buffer to safely
+        // pass to zjs_setup_synthesize_crash (which expects C-strings).
+        char msg_buf[1024]   = {0};
+        char stack_buf[4096] = {0};
+        if (msg)   { size_t cp = len  < sizeof(msg_buf)   - 1 ? len  : sizeof(msg_buf)   - 1; memcpy(msg_buf,   msg,   cp); }
+        if (stack) { size_t cp = slen < sizeof(stack_buf) - 1 ? slen : sizeof(stack_buf) - 1; memcpy(stack_buf, stack, cp); }
+
+        free(code);
+        zjs_setup_synthesize_crash(slot, msg_buf, stack_buf);
+        return ZJS_SETUP_CRASHED;
     }
     free(code);
 
