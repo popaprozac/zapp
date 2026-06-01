@@ -365,7 +365,7 @@ export type HeadlessWorkerConfig =
 /**
  * High-level worker capability identifiers. Each maps (via the
  * `WORKER_MODULE_CAPABILITIES` registry in this file) to the
- * underlying bare-* (or txiki) packages a project must install and the
+ * underlying bare-* packages a project must install and the
  * `@zappdev/runtime/worker-globals/<subpath>` shim that exposes the
  * matching globals.
  */
@@ -444,8 +444,8 @@ export interface ZappConfig {
   /**
    * Worker capabilities to enable. Each entry is a high-level
    * capability name (e.g. `"fetch"`, `"websocket"`, `"fs"`) — the
-   * CLI maps it to the underlying bare-* / txiki package(s),
-   * verifies install, and auto-prepends the matching
+   * CLI maps it to the underlying bare-* package(s), verifies
+   * install, and auto-prepends the matching
    * `@zappdev/runtime/worker-globals/<subpath>` import so the
    * global API (`fetch`, `WebSocket`, etc.) is available in every
    * worker without per-worker boilerplate.
@@ -453,11 +453,6 @@ export interface ZappConfig {
    * On bare engines, the package's native bindings (`binding.c`)
    * are also auto-compiled into `libbare_modules.a` via the
    * side-cmake overlay (see `ensureUserBareModulesCompiled`).
-   *
-   * Same surface across engines — txiki provides most of these
-   * APIs natively, so the runtime shim no-ops there. Legacy JSC
-   * has no web APIs; CLI doctor warns when capabilities are
-   * requested for an engine that can't provide them.
    *
    * @example
    * ```ts

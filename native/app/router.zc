@@ -215,7 +215,9 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
         if wid != NULL {
             // Terminate any existing workers owned by this window (handles page refresh)
             raw {
-                #if defined(ZAPP_WORKER_ENGINE_JSC) || defined(ZAPP_WORKER_ENGINE_TXIKI)
+                #if defined(ZAPP_WORKER_ENGINE_ZJS) || defined(ZAPP_WORKER_ENGINE_BARE_JSC) \
+                 || defined(ZAPP_WORKER_ENGINE_BARE_V8) || defined(ZAPP_WORKER_ENGINE_BARE_QUICKJS) \
+                 || defined(ZAPP_WORKER_ENGINE_BARE_MQJS) || defined(ZAPP_WORKER_ENGINE_BARE_HERMES)
                 extern void worker_terminate_owner(char* owner_id);
                 worker_terminate_owner((char*)wid);
                 #endif
@@ -686,23 +688,17 @@ fn router_handle_worker(app: App*, action: string, payload: string, window_id: i
         if shared_opt.is_some() { is_shared = shared_opt.unwrap(); }
 
         // Per-worker engine selection (G8). JS callers pass
-        // `engine: "jsc" | "txiki" | "bare-jsc" | "bare-v8" |
-        // "bare-quickjs" | "bare-mqjs"`. Default -1 = "no preference"
+        // `engine: "bare-jsc" | "bare-v8" | "bare-quickjs" | "bare-mqjs"
+        //         | "bare-hermes" | "zjs"`. Default -1 = "no preference"
         // — the resolver picks the highest-priority engine compiled
         // into the binary (priority order documented in
         // worker.zc:fallback, currently zjs > bare-jsc > bare-v8 > …).
-        // Without this, `new Worker("./x.ts")` with no opts.engine
-        // would default to engine=0 (legacy JSC) and run there
-        // whenever JSC happens to be compiled in — surfacing as
-        // missing fetch / web APIs in the worker even on projects
-        // that already chose zjs everywhere. Constants mirror
-        // worker/registry.zc and cli/src/build-config.ts:engineNameToId.
+        // Constants mirror worker/registry.zc and cli/src/build-config.ts.
         let engine: int = -1;
         let engine_str_opt = pre_args.get_string("engine");
         if engine_str_opt.is_some() {
             let s = engine_str_opt.unwrap();
-            if s == "txiki"             { engine = 1; }
-            else if s == "bare-jsc"     { engine = 2; }
+            if s == "bare-jsc"      { engine = 2; }
             else if s == "bare-v8"      { engine = 3; }
             else if s == "bare-quickjs" { engine = 4; }
             else if s == "bare-mqjs"    { engine = 5; }
@@ -1159,10 +1155,9 @@ fn router_handle_shortcuts(method: string, args: JsonValue*, has_args: bool, win
 // --- Clipboard handler ---
 //
 // Webview path. The Clipboard Zen-C namespace is the canonical layer;
-// JS calls land here and dispatch to it. Worker path is faster: jsc.m
-// and txiki.c expose `__zappBridge.clipboard(action, args)` that
-// invokes the same Zen-C namespace directly without crossing the IPC
-// boundary.
+// JS calls land here and dispatch to it. Workers invoke the same
+// Zen-C namespace directly via `__zappBridge.clipboard(action, args)`
+// without crossing the IPC boundary.
 fn router_handle_clipboard(method: string, args: JsonValue*, has_args: bool, window_id: int, request_id: int) -> void {
     let result: string = "";
     let is_string_result: bool = false;

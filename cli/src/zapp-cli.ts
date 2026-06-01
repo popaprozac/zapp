@@ -6,7 +6,7 @@ import { existsSync } from "node:fs";
 import { loadConfig, WORKER_MODULE_CAPABILITIES, type WorkerModuleId } from "./config";
 import { generateBuildConfig, generatePlatformConfig, generateHeadlessWorkers, generateIOSBuildFile, generateEngineOverlay } from "./build-config";
 import { generateBindings } from "./generate";
-import { compileNative, ensureTxikiBuilt, hasTxikiEnabled, ensureBareBuilt, bareEnginesEnabled, hasAnyWorkerEngine, detectTarget, isIOSTarget, type BuildTarget } from "./native";
+import { compileNative, ensureBareBuilt, bareEnginesEnabled, hasAnyWorkerEngine, detectTarget, isIOSTarget, type BuildTarget } from "./native";
 import { resolveNativeDir, resolveBootstrapDir } from "./paths";
 import { runInit } from "./init";
 // bundleWorkers removed — Vite plugin handles worker bundling now
@@ -191,11 +191,8 @@ async function runDev(root: string) {
   //    via build.zc directives or via the engine overlay). Each
   //    ZAPP_WORKER_ENGINE_* define enables one engine; multiple can
   //    coexist (the dispatcher routes per-worker at runtime). First
-  //    build is slow (~1 min for txiki, ~3-5 min for Bare with
-  //    engine-from-source); subsequent runs reuse the cached `_deps/` tree.
-  if (await hasTxikiEnabled(root, engineOverlayFile ?? undefined)) {
-    await ensureTxikiBuilt(nativeDir, target);
-  }
+  //    build is slow (~3-5 min for Bare with engine-from-source);
+  //    subsequent runs reuse the cached `_deps/` tree.
   for (const bareEngine of await bareEnginesEnabled(
     root, engineOverlayFile ?? undefined, target, iosBuildFile ?? undefined,
   )) {
@@ -389,9 +386,8 @@ async function runDev(root: string) {
 
     const bundleId = config.identifier ?? `com.zapp.${exeName}.dev`;
     process.stdout.write(`[zapp] launching ${bundleId}...\n`);
-    // --console-pty captures stderr (txiki uses fprintf, not NSLog —
-    // see reference_ios_wkwebview_drop). User sees the same output
-    // they'd get from a desktop dev run.
+    // --console-pty captures stderr (workers use fprintf for dev logs).
+    // User sees the same output they'd get from a desktop dev run.
     appProc = Bun.spawn(
       ["xcrun", "simctl", "launch", "--console-pty", "booted", bundleId],
       { cwd: root, stdout: "inherit", stderr: "inherit" }
@@ -500,9 +496,6 @@ async function runBuild(root: string) {
   // 5. Build vendored worker engines that the user opted into.
   // Per-target build dirs so iOS Sim + iOS device + macOS coexist.
   // First build per engine takes 1-5 min; cached `_deps/` reused after.
-  if (await hasTxikiEnabled(root, engineOverlayFile ?? undefined)) {
-    await ensureTxikiBuilt(nativeDir, target);
-  }
   for (const bareEngine of await bareEnginesEnabled(root, engineOverlayFile ?? undefined)) {
     await ensureBareBuilt(nativeDir, target, bareEngine, root);
   }

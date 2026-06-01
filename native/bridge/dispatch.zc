@@ -79,8 +79,7 @@ fn dispatch_invoke_response(window_id: int, request_id: int, ok: bool, payload: 
             (int)request_id, ok ? "true" : "false", esc);
         free(esc);
 
-        // The platform eval primitives copy `js` synchronously (NSString
-        // for JSC contexts, strdup-into-msgqueue for txiki), so freeing
+        // The platform eval primitives copy `js` synchronously so freeing
         // immediately after the call is safe.
         #ifdef __APPLE__
         extern void darwin_window_eval_js(int32_t window_id, const char* js);
@@ -125,14 +124,6 @@ fn dispatch_event_to_all(event_name: string, payload: string) -> void {
         // Workers — each engine strdup/copies on push, so free after
         // all branches return. The ZAPP_HAS_BARE macro is defined in
         // worker.zc and resolves to 1 when any bare-* engine is built.
-        #if defined(ZAPP_WORKER_ENGINE_TXIKI)
-        extern void txiki_broadcast_eval_js(const char* js);
-        txiki_broadcast_eval_js(js);
-        #endif
-        #if defined(ZAPP_WORKER_ENGINE_JSC)
-        extern void jsc_broadcast_eval_js(const char* js);
-        jsc_broadcast_eval_js(js);
-        #endif
         #if defined(ZAPP_WORKER_ENGINE_ZJS)
         extern void zjs_broadcast_eval_js(const char* js);
         zjs_broadcast_eval_js(js);

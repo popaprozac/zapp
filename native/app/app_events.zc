@@ -63,14 +63,6 @@ raw {
                 "if(b&&b._dispatchAppEvent)b._dispatchAppEvent(%d,'%s');})();",
                 event_id, safe_data);
 
-            #if defined(ZAPP_WORKER_ENGINE_TXIKI)
-            extern void txiki_broadcast_eval_js(const char* js);
-            txiki_broadcast_eval_js(buf);
-            #endif
-            #if defined(ZAPP_WORKER_ENGINE_JSC)
-            extern void jsc_broadcast_eval_js(const char* js);
-            jsc_broadcast_eval_js(buf);
-            #endif
             #if defined(ZAPP_WORKER_ENGINE_BARE_V8)      \
              || defined(ZAPP_WORKER_ENGINE_BARE_JSC)     \
              || defined(ZAPP_WORKER_ENGINE_BARE_QUICKJS) \
@@ -78,6 +70,10 @@ raw {
              || defined(ZAPP_WORKER_ENGINE_BARE_HERMES)
             extern void bare_broadcast_eval_js(const char* js);
             bare_broadcast_eval_js(buf);
+            #endif
+            #if defined(ZAPP_WORKER_ENGINE_ZJS)
+            extern void zjs_broadcast_eval_js(const char* js);
+            zjs_broadcast_eval_js(buf);
             #endif
         }
 

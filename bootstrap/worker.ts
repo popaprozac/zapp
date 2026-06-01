@@ -190,9 +190,9 @@
     }
   });
 
-  // dispatchSyncResult — called by native sync.m via jsc_worker_eval_js after
-  // a wait completes (either notified or timed-out). Looks up the resolver
-  // stashed by the syncWait host object and resolves the pending promise.
+  // dispatchSyncResult — called by native sync.m after a wait completes
+  // (either notified or timed-out). Looks up the resolver stashed by the
+  // syncWait host object and resolves the pending promise.
   bridge.dispatchSyncResult = function (payloadStr: string) {
     let data: any;
     try {

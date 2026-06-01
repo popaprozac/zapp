@@ -7,7 +7,7 @@ import { mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import type { ResolvedConfig } from "./config";
 import { getPlatformSources, getUserProjectSources, type BuildTarget, detectTarget, isIOSTarget } from "./native";
-import { resolveNativeDir, resolveVendorDir, resolveTxikiDir } from "./paths";
+import { resolveNativeDir, resolveVendorDir } from "./paths";
 
 // xcrun-resolved iOS SDK paths. Cached for the life of the CLI process
 // — calling xcrun is ~80ms, called only once per build now.
@@ -95,17 +95,16 @@ fn zapp_build_custom_protocols_json() -> string { return "${protocolsJson}"; }
 // String → ZAPP_ENGINE_* numeric ID matching native/worker/registry.zc.
 // Mirror of the constants there so the generated headless-worker
 // invocations pass the right integer per engine.
+// -1 means "let the resolver pick the first available engine."
 function engineNameToId(name: string | undefined): number {
   switch (name) {
-    case "txiki":        return 1;
     case "bare-jsc":     return 2;
     case "bare-v8":      return 3;
     case "bare-quickjs": return 4;
     case "bare-mqjs":    return 5;
     case "bare-hermes":  return 6;
     case "zjs":          return 7;
-    case "jsc":
-    default:             return 0;
+    default:             return -1;
   }
 }
 
@@ -114,7 +113,7 @@ export async function generateHeadlessWorkers(opts: {
   headless?: Record<string, string | {
     script: string;
     restart?: { maxRetries?: number; withinMs?: number } | false;
-    engine?: "jsc" | "txiki" | "bare-jsc" | "bare-v8" | "bare-quickjs" | "bare-mqjs" | "bare-hermes" | "zjs";
+    engine?: "bare-jsc" | "bare-v8" | "bare-quickjs" | "bare-mqjs" | "bare-hermes" | "zjs";
     bytecode?: boolean;  // type-narrowed at the user-facing HeadlessWorkerConfig boundary
   }>;
 }): Promise<string> {
@@ -141,7 +140,7 @@ export async function generateHeadlessWorkers(opts: {
       if (value.bytecode && value.engine !== "zjs") {
         throw new Error(
           `[zapp] headless worker "${id}": \`bytecode: true\` is only supported for ` +
-          `\`engine: "zjs"\` (got \`engine: "${value.engine ?? "jsc"}"\`).`
+          `\`engine: "zjs"\` (got \`engine: "${value.engine}"\`).`
         );
       }
       const ext = value.bytecode ? "zbc" : "mjs";
@@ -191,24 +190,12 @@ export async function generateIOSBuildFile(root: string, originalBuildFile: stri
     .join("\n");
 
   // Worker engine selection on iOS — mirror whatever the user picked
-  // on macOS, falling back to bare-jsc (the alpha-T1.6 default on
-  // Apple platforms — zero binary cost via the JSC system framework,
-  // JIT-less on iOS by Apple policy, à la carte web APIs via the
-  // `bare-*` ecosystem):
-  // - txiki: Phase 2 ships the cross-build for iphonesimulator +
-  //   iphoneos. FFI is disabled at txiki build time (App Store ban on
-  //   dlopen); everything else (fetch / WebSocket / Streams / SQLite)
-  //   works.
-  // - legacy JSC (`ZAPP_WORKER_ENGINE_JSC`): system framework on iOS.
-  //   No web APIs in the worker context; kept here for backwards
-  //   compatibility with apps that haven't migrated to bare-*.
-  // - bare-jsc / bare-quickjs (the modern path): use the user's
-  //   declaration. Note that bare-v8 is intentionally NOT exposed for
-  //   iOS — V8 needs JIT pages (`MAP_JIT`) which Apple gates behind
-  //   entitlements not granted to App Store apps.
+  // on macOS, falling back to bare-jsc (zero binary cost via the JSC
+  // system framework; JIT-less on iOS by Apple policy). Note that
+  // bare-v8 is intentionally NOT exposed for iOS — V8 needs JIT pages
+  // (`MAP_JIT`) which Apple gates behind entitlements not granted to
+  // App Store apps.
   // - Nothing declared: default to bare-jsc.
-  const userPickedTxiki     = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_TXIKI/m.test(content);
-  const userPickedJsc       = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_JSC\b/m.test(content);
   const userPickedBareJsc   = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_JSC/m.test(content);
   const userPickedBareQuick = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_QUICKJS/m.test(content);
   const userPickedBareV8    = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_V8/m.test(content);
@@ -230,8 +217,6 @@ export async function generateIOSBuildFile(root: string, originalBuildFile: stri
   }
 
   const engineDefines: string[] = [];
-  if (userPickedTxiki)      engineDefines.push("ZAPP_WORKER_ENGINE_TXIKI");
-  if (userPickedJsc)        engineDefines.push("ZAPP_WORKER_ENGINE_JSC");
   if (userPickedBareJsc)    engineDefines.push("ZAPP_WORKER_ENGINE_BARE_JSC");
   if (userPickedBareQuick)  engineDefines.push("ZAPP_WORKER_ENGINE_BARE_QUICKJS");
   if (userPickedBareHermes) engineDefines.push("ZAPP_WORKER_ENGINE_BARE_HERMES");
@@ -259,9 +244,8 @@ ${engineDefines.map(d => `//> define: ${d}`).join("\n")}
 // `//> define: ZAPP_WORKER_ENGINE_*` directives for engines a user reached
 // for in `zapp.config.ts` headless map but didn't manually opt into via
 // `zapp/build.zc`. Lets users say `engine: "bare-quickjs"` in config and
-// have the engine "just appear" in the build (matches the txiki UX —
-// the CLI builds engines you reference, you don't have to learn build
-// directives to use a worker).
+// have the engine "just appear" in the build — the CLI builds engines you
+// reference; you don't have to learn build directives to use a worker.
 //
 // Returns the overlay file path, or null if no overlay is needed (every
 // engine the project references is already declared in build.zc).
@@ -279,8 +263,6 @@ export async function generateEngineOverlay(opts: {
 
   const declared = (m: string) => new RegExp(`^//>.*define:.*${m}\\b`, "m").test(buildContent);
   const have = {
-    jsc:           declared("ZAPP_WORKER_ENGINE_JSC"),
-    txiki:         declared("ZAPP_WORKER_ENGINE_TXIKI"),
     "bare-jsc":    declared("ZAPP_WORKER_ENGINE_BARE_JSC"),
     "bare-v8":     declared("ZAPP_WORKER_ENGINE_BARE_V8"),
     "bare-quickjs":declared("ZAPP_WORKER_ENGINE_BARE_QUICKJS"),
@@ -316,9 +298,7 @@ export async function generateEngineOverlay(opts: {
   for (const w of wanted) {
     if (!(w in have)) continue; // unknown engine string — config validation should've caught it
     if (!have[w as keyof typeof have]) {
-      const def = w === "jsc"           ? "ZAPP_WORKER_ENGINE_JSC"
-                : w === "txiki"         ? "ZAPP_WORKER_ENGINE_TXIKI"
-                : w === "bare-jsc"      ? "ZAPP_WORKER_ENGINE_BARE_JSC"
+      const def = w === "bare-jsc"      ? "ZAPP_WORKER_ENGINE_BARE_JSC"
                 : w === "bare-v8"       ? "ZAPP_WORKER_ENGINE_BARE_V8"
                 : w === "bare-quickjs"  ? "ZAPP_WORKER_ENGINE_BARE_QUICKJS"
                 : w === "bare-mqjs"     ? "ZAPP_WORKER_ENGINE_BARE_MQJS"
@@ -376,8 +356,6 @@ export async function generatePlatformConfig(
   // from the CLI-generated engine overlay (when present). Concatenating
   // the two sources lets users name engines in zapp.config.ts without
   // also having to add `//> define:` directives by hand.
-  let hasJsc = false;
-  let hasTxiki = false;
   const bareEngines: ("v8" | "jsc" | "quickjs" | "mqjs" | "hermes")[] = [];
   const userBuild = buildFile ?? path.join(root, "zapp", "build.zc");
   let buildContent = "";
@@ -385,24 +363,12 @@ export async function generatePlatformConfig(
   if (engineOverlayFile) {
     try { buildContent += await Bun.file(engineOverlayFile).text(); } catch {}
   }
-  hasJsc   = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_JSC\b/m.test(buildContent);
-  hasTxiki = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_TXIKI/m.test(buildContent);
   const hasZjs = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_ZJS\b/m.test(buildContent);
   if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_V8/m.test(buildContent)) bareEngines.push("v8");
   if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_JSC/m.test(buildContent)) bareEngines.push("jsc");
   if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_QUICKJS/m.test(buildContent)) bareEngines.push("quickjs");
   if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_MQJS/m.test(buildContent)) bareEngines.push("mqjs");
   if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_HERMES/m.test(buildContent)) bareEngines.push("hermes");
-  if (hasJsc) {
-    // Legacy JSC engine — gated here so projects without JSC don't
-    // get duplicate-symbol link errors against worker.zc's stub block.
-    const jscM = path.join(nativeDir, "worker", "engines", "jsc.m");
-    if (existsSync(jscM)) sources.push(jscM);
-  }
-  if (hasTxiki) {
-    const txikiC = path.join(nativeDir, "worker", "engines", "txiki.c");
-    if (existsSync(txikiC)) sources.push(txikiC);
-  }
   if (bareEngines.length > 0) {
     // Single bare.c source handles all enabled engines via #ifdef on
     // the ZAPP_WORKER_ENGINE_BARE_* defines. The libs differ per
@@ -421,10 +387,9 @@ export async function generatePlatformConfig(
   // absolute form. zc has a fixed-size buffer for accumulated build
   // directives; long absolute paths (especially for projects installing
   // the CLI under node_modules/@zappdev/cli/) can overflow it, silently
-  // dropping trailing directives like `//> cflags: -I…/txiki.js/src`.
-  // Since zc invokes clang with cwd = project root, relative paths resolve
-  // identically. Picking the shorter form per-path keeps txiki paths in
-  // ~/.zapp/vendor (outside the project tree) from blowing up as
+  // dropping trailing directives. Since zc invokes clang with cwd = project
+  // root, relative paths resolve identically. Picking the shorter form
+  // per-path keeps vendor paths in ~/.zapp/vendor from blowing up as
   // "../../../../..".
   const shortPath = (abs: string): string => {
     const rel = path.relative(root, abs);
@@ -479,58 +444,9 @@ export async function generatePlatformConfig(
     content += `//> link: -lcompression\n`;
   }
   // Worker-engine link plumbing — accumulate all -L search paths and
-  // -l<name> flags into a single `//> link:` directive emitted at the
-  // end. zc v0.4.3 documents `//> lib:` for -L paths but the older
-  // installed binary doesn't appear to honor it; meanwhile multiple
-  // separate `//> link:` directives don't reliably stack. So we
-  // collect everything from txiki + bare and emit one consolidated
-  // line — the pattern the legacy txiki code already used.
+  // -l<name> flags into a single `//> link:` directive emitted at the end.
   const allLinkSearchDirs: string[] = [];
   const allLinkLibs: string[] = [];
-
-  if (hasTxiki) {
-    const txikiDir = await resolveTxikiDir();
-    const { txikiBuildDirName } = await import("./native");
-    const txikiBuild = path.join(txikiDir, txikiBuildDirName(target));
-    if (existsSync(path.join(txikiDir, "src", "tjs.h"))) {
-      const includes = [
-        `-I${shortPath(path.join(txikiDir, "src"))}`,
-        `-I${shortPath(path.join(txikiDir, "deps", "quickjs"))}`,
-        `-I${shortPath(path.join(txikiDir, "deps", "libuv", "include"))}`,
-      ].join(" ");
-      content += `//> cflags: ${includes}\n`;
-
-      if (existsSync(path.join(txikiBuild, "libtjs_core.a"))) {
-        const txikiLibs = [
-          "-ltjs_core", "-lvmlib", "-lqjs",
-          "-luv", "-lwebsockets", "-lada", "-lminiz", "-lsqlite3",
-          "-lmbedtls", "-lmbedcrypto", "-lmbedx509", "-lp256m", "-leverest",
-          "-lc++",
-        ];
-        if (!isIOSTarget(target)) {
-          txikiLibs.unshift("-lmimalloc");
-          txikiLibs.push("-lffi");
-        }
-        const txikiSearchDirs = [
-          shortPath(txikiBuild),
-          shortPath(path.join(txikiBuild, "deps", "libuv")),
-          shortPath(path.join(txikiBuild, "deps", "quickjs")),
-          shortPath(path.join(txikiBuild, "deps", "mbedtls", "library")),
-          shortPath(path.join(txikiBuild, "deps", "mbedtls", "3rdparty", "p256-m")),
-          shortPath(path.join(txikiBuild, "deps", "mbedtls", "3rdparty", "everest")),
-          shortPath(path.join(txikiBuild, "deps", "libwebsockets", "lib")),
-          shortPath(path.join(txikiBuild, "deps", "miniz")),
-          shortPath(path.join(txikiBuild, "deps", "sqlite3")),
-          shortPath(path.join(txikiBuild, "deps", "ada")),
-        ];
-        if (!isIOSTarget(target)) {
-          txikiSearchDirs.push(shortPath(path.join(txikiBuild, "deps", "mimalloc")));
-        }
-        allLinkSearchDirs.push(...txikiSearchDirs);
-        allLinkLibs.push(...txikiLibs);
-      }
-    }
-  }
 
   // Bare runtime — link each enabled engine. Use zc's dedicated
   // `//> include:` (for -I) and `//> lib:` (for -L) directives rather
@@ -600,11 +516,9 @@ export async function generatePlatformConfig(
           // than `-L<dir> -l<name>` for libuv specifically. Reason:
           // homebrew installs `libuv.dylib` in `/opt/homebrew/lib/`,
           // which is on most devs' default link search path
-          // (LIBRARY_PATH or implicit). With txiki+bare both compiled
-          // in, txiki's `-L` placed its libuv.a first and `-luv`
-          // resolved to it. With ONLY bare compiled in, `-luv` falls
-          // through to homebrew's dylib — produces a binary with an
-          // unsatisfiable @rpath/libuv.1.dylib reference at launch.
+          // (LIBRARY_PATH or implicit). With bare compiled in, `-luv`
+          // falls through to homebrew's dylib — produces a binary with
+          // an unsatisfiable @rpath/libuv.1.dylib reference at launch.
           // Passing the .a file directly forces static linking and
           // makes the build platform-installed-dylib-proof.
           //
