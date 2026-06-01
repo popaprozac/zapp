@@ -644,8 +644,11 @@ void darwin_window_attach_modal(void* parent_handle, void* modal_handle) {
         // "press Escape to close" UX on both platforms. Monitor is
         // associated with the modal so it auto-releases when modal
         // dies.
-        __weak NSWindow* weakModal = modal;
-        __weak NSWindow* weakParent = parent;
+        // __unsafe_unretained (not __weak) — window.m is built without ARC.
+        // Monitor's lifetime is bounded by modal's lifetime, so the captured
+        // pointers can't outlive their targets in practice.
+        __unsafe_unretained NSWindow* weakModal = modal;
+        __unsafe_unretained NSWindow* weakParent = parent;
         id monitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown
             handler:^NSEvent*(NSEvent* event) {
                 if (event.keyCode != 53 /* kVK_Escape */) return event;
