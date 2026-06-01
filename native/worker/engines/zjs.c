@@ -975,22 +975,23 @@ static char* zjs_load_script(const char* script_url, long* out_len) {
 // state; the supervisor / dispatch path uses it to gate routing.
 // ---------------------------------------------------------------------------
 
-static void* zjs_worker_thread(void* arg) {
-    ZjsWorkerSlot* slot = (ZjsWorkerSlot*) arg;
+// setup_state outcome — drives the outer reincarnation loop in later tasks.
+// In this task only ZJS_SETUP_OK and ZJS_SETUP_FATAL are returned; the
+// CRASHED variant is wired up in Task 1.5 (post-eval error check).
+typedef enum {
+    ZJS_SETUP_OK = 0,         // ctx + bridge + bootstrap + script eval all OK
+    ZJS_SETUP_CRASHED = 1,    // script eval threw; host_worker_crash already called
+    ZJS_SETUP_FATAL = 2,      // zjs_new_context failed — unrecoverable
+} ZjsSetupResult;
 
-    if (uv_loop_init(&slot->loop) != 0) {
-        fprintf(stderr, "[zapp] zjs worker '%s' uv_loop_init failed\n", slot->worker_id);
-        slot->active = 0;
-        return NULL;
-    }
-    slot->loop_initialized = 1;
+static ZjsSetupResult zjs_worker_setup_state(ZjsWorkerSlot* slot);
+static void zjs_worker_teardown_state(ZjsWorkerSlot* slot, int keep_loop);
 
+static ZjsSetupResult zjs_worker_setup_state(ZjsWorkerSlot* slot) {
     slot->ctx = zjs_new_context();
     if (!slot->ctx) {
         fprintf(stderr, "[zapp] zjs worker '%s' zjs_new_context failed\n", slot->worker_id);
-        uv_loop_close(&slot->loop);
-        slot->active = 0;
-        return NULL;
+        return ZJS_SETUP_FATAL;
     }
 
     // Bridge first, then user script. The user script may call host
@@ -999,18 +1000,6 @@ static void* zjs_worker_thread(void* arg) {
     // must be reachable before the eval runs.
     zjs_setup_bridge(slot);
 
-    // Engine-agnostic worker bootstrap — installs the JS-side surface
-    // every Zapp worker expects: self.send / self.receive (channel
-    // routing), getBridge()'s `Symbol.for("zapp.bridge")` lookup,
-    // _dispatchAppEvent, dispatchSyncResult, the setInterval/setTimeout
-    // crash wrappers, _onEvent.
-    //
-    // Same script bare-* engines run via their per-engine bootstrap
-    // path (bare.c line 1505). zjs already has the C-side host bridge
-    // (Z1-Z3) installed on globalThis as __zappBridge — this script
-    // adapts that surface to the runtime API (Symbol.for("zapp.bridge"),
-    // self.send, self.receive, etc).
-    //
     // zjs is a generic embed engine and doesn't provide the Web Worker
     // `self` global out of the box. The bootstrap (and most worker
     // payloads that adopt Web Worker conventions) reads `self` heavily,
@@ -1022,6 +1011,7 @@ static void* zjs_worker_thread(void* arg) {
         fprintf(stderr, "[zapp] zjs worker '%s' could not install `self` alias\n",
             slot->worker_id);
     }
+
     {
         extern const char* zapp_worker_bootstrap_script(void);
         const char* boot = zapp_worker_bootstrap_script();
@@ -1087,7 +1077,12 @@ static void* zjs_worker_thread(void* arg) {
     char* code = zjs_load_script(slot->script_url, &code_len);
     if (!code) {
         fprintf(stderr, "[zapp] zjs worker script not found: %s\n", slot->script_url);
-        goto teardown;
+        // Task 1.5 wires synthetic crash here; for this pure refactor, we
+        // preserve the original "exit early after teardown" behavior by
+        // returning SETUP_OK with no live ctx state — the thread main
+        // proceeds to uv_run (which idles instantly since no handles are
+        // active for the script) and then teardown. Match original semantics.
+        return ZJS_SETUP_OK;
     }
 
     // Two evaluation paths depending on the worker artifact format:
@@ -1162,24 +1157,24 @@ static void* zjs_worker_thread(void* arg) {
         uv_timer_start(&slot->zjs_wake, on_zjs_wake, (uint64_t) next_ms, 0);
     }
 
-    uv_run(&slot->loop, UV_RUN_DEFAULT);
+    return ZJS_SETUP_OK;
+}
 
-teardown:
+static void zjs_worker_teardown_state(ZjsWorkerSlot* slot, int keep_loop) {
     if (slot->loop_initialized) {
         uv_check_stop(&slot->check);
         uv_timer_stop(&slot->zjs_wake);
-        uv_close((uv_handle_t*) &slot->check,           NULL);
-        uv_close((uv_handle_t*) &slot->zjs_wake,        NULL);
-        uv_close((uv_handle_t*) &slot->shutdown_async,  NULL);
-        uv_close((uv_handle_t*) &slot->inbox_async,     NULL);
+        uv_close((uv_handle_t*) &slot->check,            NULL);
+        uv_close((uv_handle_t*) &slot->zjs_wake,         NULL);
+        uv_close((uv_handle_t*) &slot->shutdown_async,   NULL);
+        uv_close((uv_handle_t*) &slot->inbox_async,      NULL);
         uv_close((uv_handle_t*) &slot->eval_inbox_async, NULL);
-        // Drain close callbacks before tearing down the loop. UV_RUN_DEFAULT
-        // here would block forever if any handle is still open — but
-        // we closed everything above, so the loop drains the closes and
-        // returns once they're all done.
+        // Drain close callbacks. UV_RUN_DEFAULT returns once close callbacks fire.
         uv_run(&slot->loop, UV_RUN_DEFAULT);
-        uv_loop_close(&slot->loop);
-        slot->loop_initialized = 0;
+        if (!keep_loop) {
+            uv_loop_close(&slot->loop);
+            slot->loop_initialized = 0;
+        }
     }
     // Free any messages stranded in the inbox before context teardown
     // (the worker may have been terminated mid-flight with pending
@@ -1204,6 +1199,33 @@ teardown:
         slot->ctx = NULL;
     }
     slot->active = 0;
+}
+
+static void* zjs_worker_thread(void* arg) {
+    ZjsWorkerSlot* slot = (ZjsWorkerSlot*) arg;
+
+    if (uv_loop_init(&slot->loop) != 0) {
+        fprintf(stderr, "[zapp] zjs worker '%s' uv_loop_init failed\n", slot->worker_id);
+        slot->active = 0;
+        return NULL;
+    }
+    slot->loop_initialized = 1;
+    slot->incarnation = 1;
+
+    ZjsSetupResult setup = zjs_worker_setup_state(slot);
+    if (setup == ZJS_SETUP_FATAL) {
+        // zjs_new_context failed before any uv handles were registered;
+        // only the loop itself needs closing.
+        uv_loop_close(&slot->loop);
+        slot->loop_initialized = 0;
+        slot->active = 0;
+        fprintf(stderr, "[zapp] zjs worker '%s' setup failed\n", slot->worker_id);
+        return NULL;
+    }
+
+    uv_run(&slot->loop, UV_RUN_DEFAULT);
+
+    zjs_worker_teardown_state(slot, /*keep_loop=*/0);
     fprintf(stderr, "[zapp] zjs worker '%s' exited\n", slot->worker_id);
     return NULL;
 }
