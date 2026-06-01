@@ -632,6 +632,8 @@ static JSValue zapp_bridge_create_window(JSContext* ctx, JSValueConst this_val, 
 // `worker:gave-up`. Same shape as host_worker_crash in zjs.c and
 // bare_host_worker_crash in bare.c.
 extern int  zapp_worker_supervisor_record_failure(const char* worker_id);
+extern int zapp_worker_supervisor_get_window_state(
+    const char* worker_id, int* out_count, int* out_cap, int* out_window_ms);
 extern void dispatch_event_to_all(const char* event_name, const char* payload);
 
 static JSValue zapp_bridge_worker_crash(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
@@ -1417,8 +1419,11 @@ static void* txiki_worker_thread(void* arg) {
                          "{\"id\":\"%s\",\"incarnation\":%d}",
                          slot->worker_id, slot->incarnation);
                 dispatch_event_to_all("worker:restarted", payload);
-                fprintf(stderr, "[zapp] txiki worker '%s' restarting (incarnation %d)\n",
-                        slot->worker_id, slot->incarnation);
+                int fc = 0, cap = 0, win = 0;
+                zapp_worker_supervisor_get_window_state(slot->worker_id, &fc, &cap, &win);
+                fprintf(stderr, "[zapp] txiki worker '%s' restarting "
+                                "(incarnation %d, fail_count %d/%d in %dms window)\n",
+                        slot->worker_id, slot->incarnation, fc, cap, win);
             }
 
             TJS_Run(slot->runtime);
@@ -1472,7 +1477,10 @@ void txiki_worker_post_message(const char* worker_id, const char* data_json) {
     if (!worker_id || !data_json) return;
     pthread_mutex_lock(&txiki_mutex);
     TxikiWorkerSlot* slot = txiki_find_slot(worker_id);
-    if (!slot || !slot->async_initialized) {
+    if (!slot || !slot->active || !slot->async_initialized || !slot->runtime || !slot->ctx) {
+        fprintf(stderr, "[zapp] txiki worker '%s' message dropped "
+                        "(worker not ready; incarnation %d)\n",
+                worker_id, slot ? slot->incarnation : 0);
         pthread_mutex_unlock(&txiki_mutex);
         return;
     }
