@@ -1140,14 +1140,21 @@ static void on_async_message(uv_async_t* handle) {
 
 // --- Worker thread ---
 
-static void* txiki_worker_thread(void* arg) {
-    TxikiWorkerSlot* slot = (TxikiWorkerSlot*)arg;
+// setup_state outcome — drives the outer reincarnation loop in Task 3.3.
+typedef enum {
+    TXIKI_SETUP_OK = 0,
+    TXIKI_SETUP_CRASHED = 1,    // Task 3.5 wires synthetic crashes
+    TXIKI_SETUP_FATAL = 2,
+} TxikiSetupResult;
 
+static TxikiSetupResult txiki_worker_setup_state(TxikiWorkerSlot* slot);
+static void txiki_worker_teardown_state(TxikiWorkerSlot* slot, int keep_loop);
+
+static TxikiSetupResult txiki_worker_setup_state(TxikiWorkerSlot* slot) {
     TJSRuntime* rt = TJS_NewRuntimeWorker();
     if (!rt) {
         fprintf(stderr, "[zapp] txiki: failed to create runtime for %s\n", slot->worker_id);
-        slot->active = 0;
-        return NULL;
+        return TXIKI_SETUP_FATAL;
     }
 
     // libwebsockets requires a non-NULL cookie jar path before any WebSocket
@@ -1282,20 +1289,48 @@ static void* txiki_worker_thread(void* arg) {
         }
         JS_FreeValue(ctx, result);
         free(code);
-
-        // Run the event loop
-        TJS_Run(rt);
     }
 
-    // Cleanup
+    return TXIKI_SETUP_OK;
+}
+
+static void txiki_worker_teardown_state(TxikiWorkerSlot* slot, int keep_loop) {
+    // keep_loop is a no-op for txiki: the uv_loop is owned by TJSRuntime
+    // (TJS_GetLoop), so TJS_FreeRuntime tears it down. Parameter kept for
+    // API consistency with zjs/bare.
+    (void)keep_loop;
+
     if (slot->async_initialized) {
         uv_close((uv_handle_t*)&slot->async, NULL);
+        slot->async_initialized = 0;
     }
-    txiki_sync_pending_release_ctx(ctx);
-    txiki_bridge_cache_release(ctx);
-    TJS_FreeRuntime(rt);
+    if (slot->ctx) {
+        txiki_sync_pending_release_ctx(slot->ctx);
+        txiki_bridge_cache_release(slot->ctx);
+    }
+    if (slot->runtime) {
+        TJS_FreeRuntime(slot->runtime);
+    }
     slot->runtime = NULL;
     slot->ctx = NULL;
+}
+
+static void* txiki_worker_thread(void* arg) {
+    TxikiWorkerSlot* slot = (TxikiWorkerSlot*)arg;
+
+    slot->incarnation = 1;
+
+    TxikiSetupResult setup = txiki_worker_setup_state(slot);
+
+    if (setup == TXIKI_SETUP_FATAL) {
+        slot->active = 0;
+        return NULL;
+    }
+
+    // SETUP_OK — run the loop. (SETUP_CRASHED unreachable until Task 3.5.)
+    TJS_Run(slot->runtime);
+
+    txiki_worker_teardown_state(slot, /*keep_loop=*/0);
     slot->active = 0;
     return NULL;
 }
