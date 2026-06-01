@@ -1220,22 +1220,53 @@ static void* zjs_worker_thread(void* arg) {
         return NULL;
     }
     slot->loop_initialized = 1;
-    slot->incarnation = 1;
+    slot->incarnation = 0;
 
-    ZjsSetupResult setup = zjs_worker_setup_state(slot);
-    if (setup == ZJS_SETUP_FATAL) {
-        // zjs_new_context failed before any uv handles were registered;
-        // only the loop itself needs closing.
-        uv_loop_close(&slot->loop);
-        slot->loop_initialized = 0;
-        slot->active = 0;
-        fprintf(stderr, "[zapp] zjs worker '%s' setup failed\n", slot->worker_id);
-        return NULL;
+    while (1) {
+        slot->incarnation++;
+
+        ZjsSetupResult setup = zjs_worker_setup_state(slot);
+
+        if (setup == ZJS_SETUP_FATAL) {
+            fprintf(stderr, "[zapp] zjs worker '%s' setup fatal (incarnation %d)\n",
+                    slot->worker_id, slot->incarnation);
+            break;
+        }
+
+        if (setup == ZJS_SETUP_CRASHED) {
+            // host_worker_crash already fired; wants_restart set per
+            // supervisor verdict. Skip uv_run — nothing live to run.
+            // (No path returns CRASHED yet — Task 1.5 adds it.)
+            zjs_worker_teardown_state(slot, /*keep_loop=*/1);
+        } else {
+            // SETUP_OK
+            if (slot->incarnation > 1) {
+                char payload[128];
+                snprintf(payload, sizeof(payload),
+                         "{\"id\":\"%s\",\"incarnation\":%d}",
+                         slot->worker_id, slot->incarnation);
+                dispatch_event_to_all("worker:restarted", payload);
+                fprintf(stderr, "[zapp] zjs worker '%s' restarting (incarnation %d)\n",
+                        slot->worker_id, slot->incarnation);
+            }
+
+            uv_run(&slot->loop, UV_RUN_DEFAULT);
+
+            zjs_worker_teardown_state(slot, /*keep_loop=*/1);
+        }
+
+        if (atomic_load(&slot->wants_terminate)) break;
+        if (!atomic_load(&slot->wants_restart)) break;
+        atomic_store(&slot->wants_restart, 0);
     }
 
-    uv_run(&slot->loop, UV_RUN_DEFAULT);
-
-    zjs_worker_teardown_state(slot, /*keep_loop=*/0);
+    // Final cleanup — close the loop now that we're really exiting.
+    if (slot->loop_initialized) {
+        uv_run(&slot->loop, UV_RUN_NOWAIT);
+        uv_loop_close(&slot->loop);
+        slot->loop_initialized = 0;
+    }
+    slot->active = 0;
     fprintf(stderr, "[zapp] zjs worker '%s' exited\n", slot->worker_id);
     return NULL;
 }
