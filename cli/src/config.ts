@@ -299,7 +299,7 @@ type BytecodeCapableEngine = "zjs" | "bare-hermes";
  * Engine identifiers that do NOT support bytecode pre-compilation
  * today. Setting `bytecode: true` on these is a type error.
  */
-type ScriptOnlyEngine = "jsc" | "txiki" | "bare-jsc" | "bare-v8" | "bare-quickjs" | "bare-mqjs";
+type ScriptOnlyEngine = "bare-jsc" | "bare-v8" | "bare-quickjs" | "bare-mqjs";
 
 /** Union of all engine identifiers. */
 export type WorkerEngineName = BytecodeCapableEngine | ScriptOnlyEngine;
@@ -331,9 +331,6 @@ interface HeadlessWorkerConfigBase {
  * - `"bare-quickjs"` / `"bare-mqjs"` / `"bare-hermes"` — niche bare
  *   variants. Use when you specifically need that engine's perf or
  *   feature profile; otherwise prefer zjs.
- * - `"jsc"` / `"txiki"` (**deprecated**) — legacy engines kept for
- *   backward compatibility with existing apps. Don't use for new
- *   projects; the CLI will warn and direct you at `"zjs"`.
  *
  * **Bytecode option:**
  *
@@ -348,7 +345,7 @@ interface HeadlessWorkerConfigBase {
  *
  * **Fallback chain when an engine isn't compiled in:** the resolver
  * logs the downgrade and tries
- * `zjs > bare-jsc > bare-v8 > bare-hermes > bare-quickjs > bare-mqjs > txiki > jsc`.
+ * `zjs > bare-jsc > bare-v8 > bare-hermes > bare-quickjs > bare-mqjs`.
  */
 export type HeadlessWorkerConfig =
   | (HeadlessWorkerConfigBase & {
@@ -588,31 +585,24 @@ function validateWebEngine(engine?: ZappConfig["webEngine"]): void {
   );
 }
 
-/**
- * Surface one-time deprecation warnings for legacy worker engines.
- * `jsc` and `txiki` are compat-tier — they keep working but get no new
- * features. Recommend `zjs` (cross-platform first-party) or `bare-jsc`
- * (macOS-only JIT-perf path) as the migration target.
- *
- * Idempotent per process — uses a module-scoped Set to avoid spamming
- * the warning on every dev rebuild.
- */
-const _deprecatedEnginesWarned = new Set<string>();
-function warnOnDeprecatedEngines(config: ZappConfig): void {
-  if (!config.headless) return;
-  for (const [id, value] of Object.entries(config.headless)) {
-    if (typeof value !== "object" || value == null) continue;
-    const engine = (value as { engine?: string }).engine;
-    if (engine !== "jsc" && engine !== "txiki") continue;
-    if (_deprecatedEnginesWarned.has(id)) continue;
-    _deprecatedEnginesWarned.add(id);
-    const suggestion = engine === "jsc"
-      ? `"zjs" (cross-platform, recommended) or "bare-jsc" (macOS JIT-perf)`
-      : `"zjs" (cross-platform first-party with growing web-API surface)`;
-    process.stderr.write(
-      `[zapp] worker "${id}": engine: "${engine}" is deprecated and will not get ` +
-      `new features. Migrate to ${suggestion}. See docs/engines.md.\n`
-    );
+// Removed engines — surface a clean error before TypeScript's narrowed
+// union catches the mistake at compile time. Catches untyped config
+// loaders, JSON-deserialized configs, and the occasional copy-paste
+// from old example code or chat-bot output.
+function rejectRemovedEngines(config: ZappConfig): void {
+  const removed = new Set(["jsc", "txiki"]);
+  const headless = config.headless ?? {};
+  for (const [id, entry] of Object.entries(headless)) {
+    if (typeof entry === "object" && entry !== null && "engine" in entry) {
+      const engine = (entry as { engine?: string }).engine;
+      if (engine && removed.has(engine)) {
+        throw new Error(
+          `[zapp] headless worker "${id}" specifies engine: "${engine}", ` +
+          `which has been removed. Use "zjs" (cross-platform, default) ` +
+          `or "bare-jsc" (macOS JIT). See docs/engines.md.`
+        );
+      }
+    }
   }
 }
 
@@ -623,7 +613,7 @@ export async function loadConfig(root: string): Promise<ResolvedConfig> {
     // Support both `export default defineConfig({...})` and `export default {...}`
     const config = (typeof mod.default === "function" ? mod.default() : mod.default) as ZappConfig;
     validateWebEngine(config.webEngine);
-    warnOnDeprecatedEngines(config);
+    rejectRemovedEngines(config);
     return {
       ...config,
       assetDir: config.assetDir ?? "./dist",
