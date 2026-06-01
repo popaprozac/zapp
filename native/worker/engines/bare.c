@@ -1293,6 +1293,54 @@ typedef enum {
 static BareSetupResult bare_worker_setup_state(BareWorkerSlot* slot);
 static void bare_worker_teardown_state(BareWorkerSlot* slot, int keep_loop);
 
+// Synthetic crash signal — called from setup_state when the wrapped
+// js_run_script fails to eval the user script wrap (rare; usually a
+// parse error in the wrap itself), or when script_source is missing
+// or empty. Mirrors bare_host_worker_crash's dispatch + supervisor
+// handshake without needing a live JS frame.
+//
+// Caller returns BARE_SETUP_CRASHED so the outer loop in
+// bare_worker_thread teardown + iterates per supervisor verdict.
+static void bare_setup_synthesize_crash(BareWorkerSlot* slot,
+                                        const char* msg,
+                                        const char* stack) {
+    char* esc_message = bare_json_escape_dup(msg ? msg : "");
+    char* esc_stack   = bare_json_escape_dup(stack ? stack : "");
+
+    size_t need = strlen(slot->worker_id) +
+                  (esc_message ? strlen(esc_message) : 0) +
+                  (esc_stack ? strlen(esc_stack) : 0) + 128;
+    char* payload = (char*)malloc(need);
+    if (payload) {
+        snprintf(payload, need,
+                 "{\"id\":\"%s\",\"message\":\"%s\",\"stack\":\"%s\",\"incarnation\":%d}",
+                 slot->worker_id,
+                 esc_message ? esc_message : "",
+                 esc_stack   ? esc_stack   : "",
+                 slot->incarnation);
+        dispatch_event_to_all("worker:crashed", payload);
+        free(payload);
+    }
+
+    int decision = zapp_worker_supervisor_record_failure(slot->worker_id);
+    if (decision == 1) {
+        atomic_store(&slot->wants_restart, 1);
+        // No bare_terminate here — we're inside setup_state, not running
+        // bare_run yet. The outer while-loop in bare_worker_thread sees
+        // SETUP_CRASHED return value and proceeds to teardown + iterate.
+    } else if (decision == 2) {
+        char gp[256];
+        snprintf(gp, sizeof(gp),
+                 "{\"id\":\"%s\",\"finalIncarnation\":%d,\"retriesAttempted\":%d}",
+                 slot->worker_id, slot->incarnation,
+                 slot->incarnation > 0 ? slot->incarnation - 1 : 0);
+        dispatch_event_to_all("worker:gave-up", gp);
+    }
+
+    free(esc_message);
+    free(esc_stack);
+}
+
 // bare_worker_setup_state — called from bare_worker_thread after
 // uv_loop_init + slot->loop assignment. Initialises the bare runtime,
 // registers all host functions on __zappBridge, evals both bootstrap
@@ -1610,6 +1658,16 @@ static BareSetupResult bare_worker_setup_state(BareWorkerSlot* slot) {
         }
         free(wrapped);
         js_close_handle_scope(slot->env, run_scope);
+
+        if (run_err) {
+            bare_setup_synthesize_crash(slot, "script wrap eval failed", "");
+            return BARE_SETUP_CRASHED;
+        }
+    } else {
+        fprintf(stderr, "[zapp] bare worker '%s' missing script source\n",
+                slot->worker_id);
+        bare_setup_synthesize_crash(slot, "script load failed", "");
+        return BARE_SETUP_CRASHED;
     }
 
     return BARE_SETUP_OK;
