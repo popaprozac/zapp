@@ -24,26 +24,33 @@ This guarantees your project keeps working even as the CLI evolves.
 - **Bun** ≥ 1.3
 - **Zen-C compiler (`zc`)** — https://github.com/zenc-lang/zenc
 - **Xcode Command Line Tools** (macOS) — for `codesign`, `iconutil`
-- **cmake** — only required on first build with `ZAPP_WORKER_ENGINE_TXIKI`,
-  downloads and builds a patched txiki.js into `~/.zapp/vendor/`
+- **cmake** — only required on first build of the `bare-*` or `txiki`
+  worker engines (downloads + compiles into `~/.zapp/vendor/`). Not
+  needed for the default `zjs` engine.
 
 ## Commands
 
 ### `zapp init <name> [-t template]`
 
-Scaffolds a new Zapp project. Defaults to `vanilla-ts`; other
-`create-vite` templates (`svelte-ts`, `react-ts`, `vue-ts`, `solid-ts`, etc.)
-work too.
+Scaffolds a new Zapp project. Interactive by default — prompts for
+framework and asks before running `bun install`. Pass `-y` to accept
+the defaults non-interactively.
+
+Supported templates: **`vanilla`** (default), **`react`**, **`svelte`**,
+**`vue`**, **`solid`** — each maps to the matching `create-vite`
+TypeScript template (`vanilla-ts`, `react-ts`, ...). Any other valid
+`create-vite` template name also works.
 
 ```bash
-bunx @zappdev/cli init my-app              # vanilla-ts
-bunx @zappdev/cli init my-app -t svelte-ts
+bunx @zappdev/cli init my-app                 # interactive prompt
+bunx @zappdev/cli init my-app -t react -y     # non-interactive, react template, auto-install
+bunx @zappdev/cli init my-app --no-install    # scaffold only, skip `bun install`
 ```
 
 Produces a ready-to-run project with `@zappdev/cli`, `@zappdev/runtime`,
-`@zappdev/vite` as dependencies pinned to `^0.6.0-alpha.0`. Vite config is
+`@zappdev/vite` as dependencies pinned to the current alpha. Vite config is
 auto-wired with the `zappWorkers()` plugin forwarding
-`zapp.config.ts → headless` to the worker bundler.
+`zapp.config.ts → headless` and `workerModules` to the worker bundler.
 
 ### `zapp dev`
 
@@ -124,14 +131,28 @@ For inline `Info.plist` customization (typed, autocomplete-friendly), use
 `.entitlements`). See [`llms.txt`](../llms.txt) → "build/" and
 "Entitlements" for priority rules and the ad-hoc signing caveat.
 
-## txiki.js on first build
+## Worker engines on first build
 
-If your `zapp/build.zc` defines `ZAPP_WORKER_ENGINE_TXIKI`, the CLI
-downloads txiki.js on first build to `~/.zapp/vendor/txiki.js` and builds
-it via cmake (~60 s one-time, then cached). The download is pinned to a
-known-good commit; a local patch file at
-`@zappdev/cli/patches/txiki-cookie-jar-path.patch` is applied to add a
-small embedder helper that hasn't been upstreamed yet.
+Worker engines compile lazily based on the engines referenced in
+`zapp.config.ts → headless` (plus any auto-discovered `new Worker()`
+calls in your source). The default `zjs` engine ships in-tree and has
+no first-build cost. The `bare-*` and `txiki` engines download to
+`~/.zapp/vendor/` and build via cmake on first use (~30–60 s each,
+cached after that).
+
+Picking engines per worker — recommended path:
+
+```ts
+// zapp.config.ts
+headless: {
+  sync:    { script: "src/workers/sync.ts",    engine: "zjs" },        // default
+  encoder: { script: "src/workers/encoder.ts", engine: "bare-jsc" },   // JIT on macOS
+}
+```
+
+See [`docs/engines.md`](../docs/engines.md) for the full taxonomy
+(zjs, bare-jsc, bare-v8, bare-quickjs, bare-mqjs, bare-hermes, plus the
+deprecated `jsc` / `txiki` compat tier).
 
 ## Troubleshooting
 
@@ -144,9 +165,13 @@ older versions may still leak.
 `native/` directory. Usually means the npm install was interrupted. Run
 `bun install` again.
 
-**"TJS_SetCookieJarPath" undefined symbol** — the downloaded txiki.js
-cache is stale (predates the pinned commit). Clear it:
-`rm -rf ~/.zapp/vendor/txiki.js` and rebuild.
+**"TJS_SetCookieJarPath" undefined symbol** (deprecated `txiki` engine
+only) — the downloaded txiki.js cache is stale (predates the pinned
+commit). Clear it: `rm -rf ~/.zapp/vendor/txiki.js` and rebuild.
+
+**Bytecode artifact missing / stale** (zjs / bare-hermes workers with
+`bytecode: true`) — force regen with `rm -f .zapp/workers/*.zbc` and
+re-run `bun run dev`.
 
 ## Reference
 
