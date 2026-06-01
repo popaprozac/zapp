@@ -1647,23 +1647,60 @@ static void* bare_worker_thread(void* data) {
     int err = uv_loop_init(&loop);
     if (err) {
         fprintf(stderr, "[zapp] bare worker '%s' uv_loop_init failed: %s\n",
-            slot->worker_id, uv_strerror(err));
+                slot->worker_id, uv_strerror(err));
         slot->active = false;
         return NULL;
     }
     slot->loop = &loop;
-    slot->incarnation = 1;
+    slot->incarnation = 0;
 
-    BareSetupResult result = bare_worker_setup_state(slot);
-    if (result == BARE_SETUP_FATAL) {
-        uv_loop_close(&loop);
-        return NULL;
+    while (1) {
+        slot->incarnation++;
+
+        // teardown_state(keep_loop=1) nulls slot->loop to protect against
+        // stale access; re-arm it at the top of each iteration so that
+        // setup_state and bare_run always see a live pointer.
+        slot->loop = &loop;
+
+        BareSetupResult setup = bare_worker_setup_state(slot);
+
+        if (setup == BARE_SETUP_FATAL) {
+            fprintf(stderr, "[zapp] bare worker '%s' setup fatal (incarnation %d)\n",
+                    slot->worker_id, slot->incarnation);
+            break;
+        }
+
+        if (setup == BARE_SETUP_CRASHED) {
+            // host_worker_crash already fired; wants_restart set per
+            // supervisor verdict. Skip bare_run — nothing live to run.
+            // (No path returns CRASHED yet — Task 2.5 adds it.)
+            bare_worker_teardown_state(slot, /*keep_loop=*/1);
+        } else {
+            // BARE_SETUP_OK
+            if (slot->incarnation > 1) {
+                char payload[128];
+                snprintf(payload, sizeof(payload),
+                         "{\"id\":\"%s\",\"incarnation\":%d}",
+                         slot->worker_id, slot->incarnation);
+                dispatch_event_to_all("worker:restarted", payload);
+                fprintf(stderr, "[zapp] bare worker '%s' restarting (incarnation %d)\n",
+                        slot->worker_id, slot->incarnation);
+            }
+
+            bare_run(slot->bare, UV_RUN_DEFAULT);
+
+            bare_worker_teardown_state(slot, /*keep_loop=*/1);
+        }
+
+        if (atomic_load(&slot->wants_terminate)) break;
+        if (!atomic_load(&slot->wants_restart)) break;
+        atomic_store(&slot->wants_restart, 0);
     }
 
-    // Run the loop until something terminates the bare instance.
-    bare_run(slot->bare, UV_RUN_DEFAULT);
-
-    bare_worker_teardown_state(slot, /*keep_loop=*/0);
+    // Final cleanup — close the loop now that we're really exiting.
+    uv_run(&loop, UV_RUN_NOWAIT);
+    uv_loop_close(&loop);
+    slot->active = false;
     return NULL;
 }
 
