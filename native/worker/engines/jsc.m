@@ -60,6 +60,7 @@ extern void dispatch_event_to_all(const char* event_name, const char* payload);
 @class JSContext;
 static void jsc_worker_init_context(NSString* wid, NSString* oid, NSString* scriptUrl);
 static int jsc_incarnation_for(NSString* wid);
+static void jsc_bump_incarnation(NSString* wid);
 static void jsc_dispatch_restarted(NSString* wid);
 static void jsc_dispatch_gave_up(NSString* wid);
 
@@ -362,13 +363,7 @@ static void jsc_setup_bridge(JSContext* ctx, NSString* workerId) {
         NSString* oid = ownerC ? [NSString stringWithUTF8String:ownerC] : @"";
         dispatch_async(queue, ^{
             [jsc_contexts removeObjectForKey:wid];
-            for (int i = 0; i < JSC_MAX_WORKERS; i++) {
-                if (jsc_workers[i].active && strcmp(jsc_workers[i].worker_id,
-                                                   [wid UTF8String]) == 0) {
-                    jsc_workers[i].incarnation++;
-                    break;
-                }
-            }
+            jsc_bump_incarnation(wid);
             jsc_worker_init_context(wid, oid, scriptUrl);
             jsc_dispatch_restarted(wid);
         });
@@ -771,6 +766,16 @@ static int jsc_incarnation_for(NSString* wid) {
     return 0;
 }
 
+static void jsc_bump_incarnation(NSString* wid) {
+    for (int i = 0; i < JSC_MAX_WORKERS; i++) {
+        if (jsc_workers[i].active && strcmp(jsc_workers[i].worker_id,
+                                            [wid UTF8String]) == 0) {
+            jsc_workers[i].incarnation++;
+            break;
+        }
+    }
+}
+
 static void jsc_dispatch_restarted(NSString* wid) {
     NSDictionary* d = @{ @"id": wid ?: @"", @"incarnation": @(jsc_incarnation_for(wid)) };
     NSData* j = [NSJSONSerialization dataWithJSONObject:d options:0 error:nil];
@@ -856,13 +861,7 @@ static void jsc_worker_init_context(NSString* wid, NSString* oid, NSString* scri
             if (!queue) return;
             dispatch_async(queue, ^{
                 [jsc_contexts removeObjectForKey:wid];  // ARC releases the old ctx
-                for (int i = 0; i < JSC_MAX_WORKERS; i++) {
-                    if (jsc_workers[i].active && strcmp(jsc_workers[i].worker_id,
-                                                       [wid UTF8String]) == 0) {
-                        jsc_workers[i].incarnation++;
-                        break;
-                    }
-                }
+                jsc_bump_incarnation(wid);
                 jsc_worker_init_context(wid, oid, scriptUrl);
                 jsc_dispatch_restarted(wid);
             });
