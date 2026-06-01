@@ -86,6 +86,8 @@ extern void worker_dispatch_to_webview(const char* worker_id, const char* data_j
 extern void worker_post_message(char* worker_id, char* data_json);
 extern void dispatch_event_to_all(const char* event_name, const char* payload);
 extern int  zapp_worker_supervisor_record_failure(const char* worker_id);
+extern int  zapp_worker_supervisor_get_window_state(
+    const char* worker_id, int* out_count, int* out_cap, int* out_window_ms);
 
 // Sync API + window creation. darwin_sync_handle is thread-safe (uses
 // pthread_mutex), so workers can call directly without bouncing to
@@ -1752,8 +1754,11 @@ static void* bare_worker_thread(void* data) {
                          "{\"id\":\"%s\",\"incarnation\":%d}",
                          slot->worker_id, slot->incarnation);
                 dispatch_event_to_all("worker:restarted", payload);
-                fprintf(stderr, "[zapp] bare worker '%s' restarting (incarnation %d)\n",
-                        slot->worker_id, slot->incarnation);
+                int fc = 0, cap = 0, win = 0;
+                zapp_worker_supervisor_get_window_state(slot->worker_id, &fc, &cap, &win);
+                fprintf(stderr, "[zapp] bare worker '%s' restarting "
+                                "(incarnation %d, fail_count %d/%d in %dms window)\n",
+                        slot->worker_id, slot->incarnation, fc, cap, win);
             }
 
             bare_run(slot->bare, UV_RUN_DEFAULT);
@@ -1830,7 +1835,10 @@ void bare_worker_post_message(const char* worker_id, const char* data_json) {
     if (!worker_id || !data_json) return;
     pthread_mutex_lock(&bare_mutex);
     BareWorkerSlot* slot = bare_find_slot(worker_id);
-    if (!slot || !slot->async_initialized) {
+    if (!slot || !slot->active || !slot->async_initialized || !slot->bare) {
+        fprintf(stderr, "[zapp] bare worker '%s' message dropped "
+                        "(worker not ready; incarnation %d)\n",
+                worker_id, slot ? slot->incarnation : 0);
         pthread_mutex_unlock(&bare_mutex);
         return;
     }
