@@ -145,7 +145,7 @@ fn zapp_worker_create_window(title: string, url: string, width: int, height: int
 // Full-shape worker createWindow — accepts the same JSON shape as the
 // webview's __window:create so `Window.create({ titleBarStyle, alwaysOnTop,
 // acceptFirstMouse, ... })` from a worker honors every option. Engine
-// host objects (jsc.m / txiki.c) JSON-stringify the opts JS object and
+// Worker engine host objects JSON-stringify the opts JS object and
 // pass the string here instead of plumbing a growing positional-arg list.
 //
 // Lifetime: `window_opts_apply_json` strdups the title/url strings out of
@@ -235,7 +235,7 @@ fn worker_dispatch_to_window(worker_id: string, data_json: string, owner_id: str
     }
 }
 
-// Worker → WebView dispatch (called by jsc.m host object postToWebview)
+// Worker → WebView dispatch (called by worker engine's postToWebview host object).
 // For shared workers, broadcasts to all connected windows.
 fn worker_dispatch_to_webview(worker_id: string, data_json: string) -> void {
     // Check if shared — broadcast to all owners

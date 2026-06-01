@@ -279,8 +279,8 @@ Service handlers run on the thread of the calling context:
 
 - **Called from a webview**: runs on the main thread (after a short
   WKWebView IPC hop).
-- **Called from a worker**: runs on the worker's thread (JSC worker
-  queue or txiki libuv thread).
+- **Called from a worker**: runs on the worker's thread (bare/zjs
+  worker thread).
 
 If you mutate shared state from a service and multiple contexts can
 call concurrently, protect with a mutex or move the state into a
@@ -332,7 +332,7 @@ calling context and takes the right transport:
 - **Called from a webview**: ~135 µs — the call crosses the WKWebView /
   WebView2 postMessage boundary before reaching the native handler.
 - **Called from a worker (headless or webview-spawned)**: ~5 µs — the
-  call is a direct C function via a JSC or txiki.js host object. No
+  call is a direct C function via the engine's host-object bridge. No
   IPC hop.
 
 Same import, same call site, different speed per context. You don't

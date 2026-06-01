@@ -95,8 +95,6 @@ export function resolveVendorDir(): string {
   return cache;
 }
 
-// Resolve txiki.js — checks monorepo, published, then user cache.
-// If not found anywhere, downloads it on-demand.
 // Resolve Bare runtime — checks monorepo/published/cache fall-through.
 // Bare is small (~5 MB clone) but cmake-fetch
 // pulls in libjs + libjsc + libuv + boringssl during configure, so the

@@ -9,8 +9,8 @@
  *   - zapp_bare_worker_bootstrap_script() — Bare-engine specific dispatcher setup
  *     (`__zappBridge.invokeService`, `_dispatchMessage`, `dispatchEventToAll`,
  *     `syncWait`/`syncNotify`, `createWindow`, JSON.stringify wrappers around the
- *     C *Raw trampolines). Runs on every bare-* engine; jsc.m / txiki.c install
- *     equivalents inline in their per-engine code.
+ *     C *Raw trampolines). Runs on every bare-* engine to install the
+ *     shared JS-side bridge methods on globalThis.__zappBridge.
  *
  * Usage: called by CLI during build, or standalone:
  *   bun bootstrap/codegen.ts [outputDir]

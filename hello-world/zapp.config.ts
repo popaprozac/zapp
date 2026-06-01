@@ -72,8 +72,7 @@ const config: ZappConfig = {
     // ad-hoc first-pass measurement.
     //
     // "bench-bare-jsc": { script: "src/workers/bench.ts", engine: "bare-jsc" },
-    // "bench-jsc":      { script: "src/workers/bench.ts", engine: "jsc" },
-    // "bench-txiki":    { script: "src/workers/bench.ts", engine: "txiki" },
+    // "bench-zjs":      { script: "src/workers/bench.ts", engine: "zjs" },
   },
 };
 

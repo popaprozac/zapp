@@ -212,7 +212,7 @@ void windows_sync_dispatch_to_webviews(const char* payload_json) {
 }
 
 void windows_sync_dispatch_to_worker(const char* worker_id, const char* payload_json) {
-    // TODO: dispatch to txiki.js worker when workers are implemented
+    // TODO: dispatch to bare/zjs worker when workers are implemented on Windows
     (void)worker_id;
     (void)payload_json;
 }

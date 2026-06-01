@@ -1,10 +1,10 @@
 /**
- * Worker bootstrap — injected into every JSC worker context (webview-spawned
+ * Worker bootstrap — injected into every worker context (webview-spawned
  * and headless alike). All workers share the same API surface; the only
  * difference between a headless worker and a webview-owned one is whether
  * they have an owner window.
  *
- * Host objects set up by native (see jsc_setup_bridge in jsc.m):
+ * Host objects set up by native (per-engine bootstrap in bare.c / zjs.c):
  *   - invokeService(method, args) → JSValue (sync, direct C call)
  *   - postToWebview(data) → void (no-op in headless workers)
  *   - syncWait(key, timeoutMs), syncNotify(key, count)
