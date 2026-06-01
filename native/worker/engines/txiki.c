@@ -624,6 +624,50 @@ static JSValue zapp_bridge_create_window(JSContext* ctx, JSValueConst this_val, 
     return result;
 }
 
+// JSON-escape src into a heap-allocated copy. Caller frees. Returns NULL
+// on malloc failure; never returns NULL for a non-NULL src (empty src →
+// zero-length string). Escapes: \" \\ \n \r \t \b \f and control bytes
+// (< 0x20) → \u00XX. Mirrors bare_json_escape_dup; needed because txiki
+// was splicing msg/stack into worker:crashed payloads via raw %s, which
+// broke webview JSON.parse whenever the stack trace contained newlines.
+static char* txiki_json_escape_dup(const char* src) {
+    if (!src) {
+        char* e = (char*)malloc(1);
+        if (e) e[0] = '\0';
+        return e;
+    }
+    size_t n = strlen(src);
+    // Worst case: every byte becomes a 6-char \u00XX escape.
+    char* dst = (char*)malloc(n * 6 + 1);
+    if (!dst) return NULL;
+    size_t j = 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)src[i];
+        switch (c) {
+            case '"':  dst[j++] = '\\'; dst[j++] = '"';  break;
+            case '\\': dst[j++] = '\\'; dst[j++] = '\\'; break;
+            case '\n': dst[j++] = '\\'; dst[j++] = 'n';  break;
+            case '\r': dst[j++] = '\\'; dst[j++] = 'r';  break;
+            case '\t': dst[j++] = '\\'; dst[j++] = 't';  break;
+            case '\b': dst[j++] = '\\'; dst[j++] = 'b';  break;
+            case '\f': dst[j++] = '\\'; dst[j++] = 'f';  break;
+            default:
+                if (c < 0x20) {
+                    static const char hex[] = "0123456789abcdef";
+                    dst[j++] = '\\'; dst[j++] = 'u';
+                    dst[j++] = '0';  dst[j++] = '0';
+                    dst[j++] = hex[(c >> 4) & 0xF];
+                    dst[j++] = hex[c & 0xF];
+                } else {
+                    dst[j++] = (char)c;
+                }
+                break;
+        }
+    }
+    dst[j] = '\0';
+    return dst;
+}
+
 // workerCrash(message, stack) — bootstrap calls this when an uncaught
 // error escapes a setTimeout callback or event handler. Dispatches
 // `worker:crashed`, asks the supervisor for a verdict, and on verdict==1
@@ -649,21 +693,29 @@ static JSValue zapp_bridge_worker_crash(JSContext* ctx, JSValueConst this_val, i
     TxikiWorkerSlot* slot = txiki_find_slot(wid);
     int incarnation = slot ? slot->incarnation : 0;
 
+    // Escape msg + stk so newlines, quotes, and control chars in the
+    // stack don't break JSON.parse on the webview side.
+    char* esc_msg = txiki_json_escape_dup(msg ? msg : "");
+    char* esc_stk = txiki_json_escape_dup(stk ? stk : "");
+    const char* msg_v = esc_msg ? esc_msg : "";
+    const char* stk_v = esc_stk ? esc_stk : "";
+
     // Build {"id":wid,"message":msg,"stack":stk,"incarnation":N}.
-    char* payload = NULL;
     int needed = snprintf(NULL, 0,
         "{\"id\":\"%s\",\"message\":\"%s\",\"stack\":\"%s\",\"incarnation\":%d}",
-        wid, msg ? msg : "", stk ? stk : "", incarnation);
+        wid, msg_v, stk_v, incarnation);
     if (needed > 0) {
-        payload = (char*)malloc((size_t)needed + 1);
+        char* payload = (char*)malloc((size_t)needed + 1);
         if (payload) {
             snprintf(payload, (size_t)needed + 1,
                 "{\"id\":\"%s\",\"message\":\"%s\",\"stack\":\"%s\",\"incarnation\":%d}",
-                wid, msg ? msg : "", stk ? stk : "", incarnation);
+                wid, msg_v, stk_v, incarnation);
             dispatch_event_to_all("worker:crashed", payload);
             free(payload);
         }
     }
+    free(esc_msg);
+    free(esc_stk);
 
     int decision = zapp_worker_supervisor_record_failure(wid);
     if (decision == 1 && slot) {
@@ -1175,20 +1227,29 @@ static void txiki_setup_synthesize_crash(TxikiWorkerSlot* slot,
                                          const char* stack) {
     if (!slot) return;
 
+    // Escape msg + stack so newlines, quotes, and control chars in the
+    // stack don't break JSON.parse on the webview side.
+    char* esc_msg = txiki_json_escape_dup(msg ? msg : "");
+    char* esc_stk = txiki_json_escape_dup(stack ? stack : "");
+    const char* msg_v = esc_msg ? esc_msg : "";
+    const char* stk_v = esc_stk ? esc_stk : "";
+
     // Build {"id":wid,"message":msg,"stack":stk,"incarnation":N}.
     int needed = snprintf(NULL, 0,
         "{\"id\":\"%s\",\"message\":\"%s\",\"stack\":\"%s\",\"incarnation\":%d}",
-        slot->worker_id, msg ? msg : "", stack ? stack : "", slot->incarnation);
+        slot->worker_id, msg_v, stk_v, slot->incarnation);
     if (needed > 0) {
         char* payload = (char*)malloc((size_t)needed + 1);
         if (payload) {
             snprintf(payload, (size_t)needed + 1,
                 "{\"id\":\"%s\",\"message\":\"%s\",\"stack\":\"%s\",\"incarnation\":%d}",
-                slot->worker_id, msg ? msg : "", stack ? stack : "", slot->incarnation);
+                slot->worker_id, msg_v, stk_v, slot->incarnation);
             dispatch_event_to_all("worker:crashed", payload);
             free(payload);
         }
     }
+    free(esc_msg);
+    free(esc_stk);
 
     int decision = zapp_worker_supervisor_record_failure(slot->worker_id);
     if (decision == 1) {

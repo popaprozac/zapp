@@ -1687,6 +1687,12 @@ static void bare_worker_teardown_state(BareWorkerSlot* slot, int keep_loop) {
         uv_close((uv_handle_t*)&slot->async, NULL);
         slot->async_initialized = 0;
     }
+    // Drain close callbacks before the next incarnation init's a fresh
+    // handle on the same loop. Without this, libuv sees a still-closing
+    // slot->async on the next uv_async_init (UB), and bare_run on the
+    // next iteration drains the stale closing handles itself → loop
+    // empties → bare_run returns immediately. Mirrors zjs's teardown.
+    uv_run(slot->loop, UV_RUN_NOWAIT);
     // The platform is process-wide (see bare_get_shared_platform). We
     // recorded a pointer for diagnostics but DO NOT own it — never
     // call js_destroy_platform from the worker thread.
@@ -1697,10 +1703,10 @@ static void bare_worker_teardown_state(BareWorkerSlot* slot, int keep_loop) {
     if (!keep_loop) {
         bare_msgqueue_destroy(&slot->inbox);
         bare_msgqueue_destroy(&slot->eval_inbox);
+        free(slot->script_source);
+        slot->script_source = NULL;
     }
 
-    free(slot->script_source);
-    slot->script_source = NULL;
     slot->bare = NULL;
     slot->env = NULL;
     slot->platform = NULL;
@@ -1779,6 +1785,8 @@ static void* bare_worker_thread(void* data) {
     uv_loop_close(&loop);
     bare_msgqueue_destroy(&slot->inbox);
     bare_msgqueue_destroy(&slot->eval_inbox);
+    free(slot->script_source);
+    slot->script_source = NULL;
     slot->active = false;
     return NULL;
 }
