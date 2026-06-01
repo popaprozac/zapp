@@ -1218,14 +1218,11 @@ void bare_worker_eval_js(const char* worker_id, const char* js) {
 
 // __zappBridge.workerCrash(message, stack) — the worker bootstrap
 // calls this when an uncaught error escapes a setTimeout callback or
-// event handler. Dispatches `worker:crashed` to anyone listening AND
-// asks the supervisor whether to restart.
-//
-// Restart support is deferred for bare — same as txiki today (see
-// `project_txiki_worker_restart.md`). For now we just record the
-// failure + emit the event; the supervisor's record_failure caps
-// retry attempts, so apps with a configured policy will eventually
-// see `worker:gave-up` even without active restart.
+// event handler. Dispatches `worker:crashed`, asks the supervisor for
+// a verdict, and on verdict==1 sets wants_restart + bare_terminate
+// (the outer reincarnation loop in bare_worker_thread handles the
+// rest). On verdict==2 fires `worker:gave-up`. Same shape as
+// host_worker_crash in zjs.c.
 static js_value_t* bare_host_worker_crash(js_env_t* env, js_callback_info_t* info) {
     size_t argc = 2;
     js_value_t* argv[2];
@@ -1242,26 +1239,40 @@ static js_value_t* bare_host_worker_crash(js_env_t* env, js_callback_info_t* inf
     char* esc_message = bare_json_escape_dup(message);
     char* esc_stack   = bare_json_escape_dup(stack);
 
-    // Build the JSON payload {"id":..., "message":..., "stack":...}.
-    // Length-bounded snprintf into a heap buffer sized to fit; we don't
-    // want a 4 KB stack buffer truncating long stacks (bug class noted
-    // in project_buffer_truncation_sweep.md). The escape helper above
-    // already heap-allocates so we just length-account here.
+    // Build the JSON payload {"id":..., "message":..., "stack":..., "incarnation":N}.
     size_t need = strlen(slot->worker_id) +
                   (esc_message ? strlen(esc_message) : 0) +
-                  (esc_stack ? strlen(esc_stack) : 0) + 64;
+                  (esc_stack ? strlen(esc_stack) : 0) + 128;
     char* payload = (char*)malloc(need);
     if (payload) {
         snprintf(payload, need,
-                 "{\"id\":\"%s\",\"message\":\"%s\",\"stack\":\"%s\"}",
+                 "{\"id\":\"%s\",\"message\":\"%s\",\"stack\":\"%s\",\"incarnation\":%d}",
                  slot->worker_id,
                  esc_message ? esc_message : "",
-                 esc_stack ? esc_stack : "");
+                 esc_stack ? esc_stack : "",
+                 slot->incarnation);
         dispatch_event_to_all("worker:crashed", payload);
         free(payload);
     }
 
-    zapp_worker_supervisor_record_failure(slot->worker_id);
+    int decision = zapp_worker_supervisor_record_failure(slot->worker_id);
+    if (decision == 1) {
+        // Restart approved. Set the atomic flag and bare_terminate to
+        // break bare_run; the outer loop in bare_worker_thread sees
+        // wants_restart and re-incarnates the JS state. worker:restarted
+        // fires from there after setup_state completes.
+        atomic_store(&slot->wants_restart, 1);
+        if (slot->bare) bare_terminate(slot->bare);
+    } else if (decision == 2) {
+        // Supervisor cap exhausted — gave_up flag in registry is now sticky.
+        char gave_up[256];
+        snprintf(gave_up, sizeof(gave_up),
+                 "{\"id\":\"%s\",\"finalIncarnation\":%d,\"retriesAttempted\":%d}",
+                 slot->worker_id, slot->incarnation,
+                 slot->incarnation > 0 ? slot->incarnation - 1 : 0);
+        dispatch_event_to_all("worker:gave-up", gave_up);
+    }
+    // decision == 0: no policy configured; worker idles in current state.
 
     free(esc_message);
     free(esc_stack);
