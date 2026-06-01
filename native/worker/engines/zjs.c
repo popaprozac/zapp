@@ -609,23 +609,30 @@ static ZjsValue host_worker_crash(ZjsContext* ctx, ZjsValue* argv, uint32_t argc
     char* payload = (char*) malloc(need);
     if (payload) {
         snprintf(payload, need,
-                 "{\"id\":\"%s\",\"message\":%s,\"stack\":%s}",
-                 slot->worker_id, msg_v, stack_v);
+                 "{\"id\":\"%s\",\"message\":%s,\"stack\":%s,\"incarnation\":%d}",
+                 slot->worker_id, msg_v, stack_v, slot->incarnation);
         dispatch_event_to_all("worker:crashed", payload);
         free(payload);
     }
 
-    // Supervisor decision. zjs can't restart-on-crash yet (same gap as
-    // txiki / bare — see project_txiki_worker_restart), so any non-zero
-    // verdict still surfaces as `worker:gave-up` for the webview so the
-    // UI knows the worker won't auto-recover. Once in-place restart
-    // lands, switch back to dispatching gave-up only when decision == 2.
     int decision = zapp_worker_supervisor_record_failure(slot->worker_id);
-    if (decision != 0) {
-        char giveUp[256];
-        snprintf(giveUp, sizeof(giveUp), "{\"id\":\"%s\"}", slot->worker_id);
-        dispatch_event_to_all("worker:gave-up", giveUp);
+    if (decision == 1) {
+        // Restart approved. Signal the outer loop in zjs_worker_thread
+        // to break uv_run and re-incarnate the JS state. The
+        // worker:restarted event fires from there after setup_state
+        // completes for the next incarnation.
+        atomic_store(&slot->wants_restart, 1);
+        uv_async_send(&slot->shutdown_async);
+    } else if (decision == 2) {
+        // Supervisor cap exhausted — gave_up flag in registry is now sticky.
+        char gave_up[256];
+        snprintf(gave_up, sizeof(gave_up),
+                 "{\"id\":\"%s\",\"finalIncarnation\":%d,\"retriesAttempted\":%d}",
+                 slot->worker_id, slot->incarnation,
+                 slot->incarnation > 0 ? slot->incarnation - 1 : 0);
+        dispatch_event_to_all("worker:gave-up", gave_up);
     }
+    // decision == 0: no policy configured; worker idles in current state.
 
     free(msg_json);
     free(stack_json);
