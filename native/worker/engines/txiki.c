@@ -1161,6 +1161,51 @@ typedef enum {
     TXIKI_SETUP_FATAL = 2,
 } TxikiSetupResult;
 
+// Synthetic crash signal — called from setup_state when the user script
+// can't be loaded or JS_Eval returns an exception at top level. Mirrors
+// zapp_bridge_worker_crash's dispatch + supervisor handshake without
+// needing a live JS frame.
+//
+// Caller returns TXIKI_SETUP_CRASHED so the outer loop in
+// txiki_worker_thread teardowns + iterates per supervisor verdict.
+static void txiki_setup_synthesize_crash(TxikiWorkerSlot* slot,
+                                         const char* msg,
+                                         const char* stack) {
+    if (!slot) return;
+
+    // Build {"id":wid,"message":msg,"stack":stk,"incarnation":N}.
+    int needed = snprintf(NULL, 0,
+        "{\"id\":\"%s\",\"message\":\"%s\",\"stack\":\"%s\",\"incarnation\":%d}",
+        slot->worker_id, msg ? msg : "", stack ? stack : "", slot->incarnation);
+    if (needed > 0) {
+        char* payload = (char*)malloc((size_t)needed + 1);
+        if (payload) {
+            snprintf(payload, (size_t)needed + 1,
+                "{\"id\":\"%s\",\"message\":\"%s\",\"stack\":\"%s\",\"incarnation\":%d}",
+                slot->worker_id, msg ? msg : "", stack ? stack : "", slot->incarnation);
+            dispatch_event_to_all("worker:crashed", payload);
+            free(payload);
+        }
+    }
+
+    int decision = zapp_worker_supervisor_record_failure(slot->worker_id);
+    if (decision == 1) {
+        atomic_store(&slot->wants_restart, 1);
+        // No TJS_Stop here — we haven't called TJS_Run yet. The outer
+        // while-loop in txiki_worker_thread sees SETUP_CRASHED return
+        // value and proceeds to teardown + iterate.
+    } else if (decision == 2) {
+        char gp[256];
+        snprintf(gp, sizeof(gp),
+                 "{\"id\":\"%s\",\"finalIncarnation\":%d,\"retriesAttempted\":%d}",
+                 slot->worker_id, slot->incarnation,
+                 slot->incarnation > 0 ? slot->incarnation - 1 : 0);
+        dispatch_event_to_all("worker:gave-up", gp);
+    }
+    // decision == 0: no policy; while-loop checks wants_restart (still 0)
+    // and breaks. Worker exits cleanly.
+}
+
 static TxikiSetupResult txiki_worker_setup_state(TxikiWorkerSlot* slot);
 static void txiki_worker_teardown_state(TxikiWorkerSlot* slot, int keep_loop);
 
@@ -1286,6 +1331,8 @@ static TxikiSetupResult txiki_worker_setup_state(TxikiWorkerSlot* slot) {
         // than script_path — the latter is a cwd-relative artifact that
         // looks malformed on iOS where cwd is "/" anyway.
         fprintf(stderr, "[zapp] txiki worker script not found: %s\n", slot->script_url);
+        txiki_setup_synthesize_crash(slot, "script load failed", "");
+        return TXIKI_SETUP_CRASHED;
     }
 
     if (code) {
@@ -1298,8 +1345,22 @@ static TxikiSetupResult txiki_worker_setup_state(TxikiWorkerSlot* slot) {
             JSValue exc = JS_GetException(ctx);
             const char* err = JS_ToCString(ctx, exc);
             fprintf(stderr, "[zapp] txiki worker error: %s\n", err ? err : "unknown");
-            if (err) JS_FreeCString(ctx, err);
+
+            // Copy to stack buffer before freeing the JS string — synthesize
+            // helper needs a C string that survives JS_FreeCString.
+            char msg_buf[1024] = {0};
+            if (err) {
+                size_t elen = strlen(err);
+                size_t cp = elen < sizeof(msg_buf) - 1 ? elen : sizeof(msg_buf) - 1;
+                memcpy(msg_buf, err, cp);
+                JS_FreeCString(ctx, err);
+            }
             JS_FreeValue(ctx, exc);
+            JS_FreeValue(ctx, result);
+            free(code);
+
+            txiki_setup_synthesize_crash(slot, msg_buf[0] ? msg_buf : "JS_Eval threw", "");
+            return TXIKI_SETUP_CRASHED;
         }
         JS_FreeValue(ctx, result);
         free(code);
@@ -1345,9 +1406,8 @@ static void* txiki_worker_thread(void* arg) {
         }
 
         if (setup == TXIKI_SETUP_CRASHED) {
-            // host_worker_crash already fired; wants_restart set per
+            // synthesize_crash already fired; wants_restart set per
             // supervisor verdict. Skip TJS_Run — nothing live to run.
-            // (No path returns CRASHED yet — Task 3.5 adds it.)
             txiki_worker_teardown_state(slot, /*keep_loop=*/1);
         } else {
             // TXIKI_SETUP_OK
