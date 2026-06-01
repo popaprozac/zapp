@@ -1270,21 +1270,28 @@ static js_value_t* bare_host_worker_crash(js_env_t* env, js_callback_info_t* inf
     return undef;
 }
 
-// --- Worker thread entry ---
+// --- Worker thread helpers ---
 
-static void* bare_worker_thread(void* data) {
-    BareWorkerSlot* slot = (BareWorkerSlot*)data;
+typedef enum {
+    BARE_SETUP_OK      = 0,
+    BARE_SETUP_CRASHED = 1,
+    BARE_SETUP_FATAL   = 2,
+} BareSetupResult;
+
+// Forward declarations
+static BareSetupResult bare_worker_setup_state(BareWorkerSlot* slot);
+static void bare_worker_teardown_state(BareWorkerSlot* slot, int keep_loop);
+
+// bare_worker_setup_state — called from bare_worker_thread after
+// uv_loop_init + slot->loop assignment. Initialises the bare runtime,
+// registers all host functions on __zappBridge, evals both bootstrap
+// scripts, and evals the user worker script. Returns BARE_SETUP_FATAL
+// if the platform or bare_setup step fails (caller closes the loop
+// directly). Returns BARE_SETUP_OK on success. BARE_SETUP_CRASHED is
+// defined but not yet returned here — Task 2.5 will wire it for
+// script-eval errors.
+static BareSetupResult bare_worker_setup_state(BareWorkerSlot* slot) {
     int err;
-
-    uv_loop_t loop;
-    err = uv_loop_init(&loop);
-    if (err) {
-        fprintf(stderr, "[zapp] bare worker '%s' uv_loop_init failed: %s\n",
-            slot->worker_id, uv_strerror(err));
-        slot->active = false;
-        return NULL;
-    }
-    slot->loop = &loop;
 
     // Share a single js_platform_t across all bare workers in the
     // process. Required by V8 (which has process-wide global state and
@@ -1296,27 +1303,25 @@ static void* bare_worker_thread(void* data) {
     if (!platform) {
         fprintf(stderr, "[zapp] bare worker '%s' shared platform unavailable\n",
             slot->worker_id);
-        uv_loop_close(&loop);
         slot->active = false;
-        return NULL;
+        return BARE_SETUP_FATAL;
     }
     slot->platform = platform;  // recorded for diagnostics; NOT owned by the slot
 
     bare_options_t bare_opts = {0};
     const char* argv[] = { "zapp-bare-worker", NULL };
-    err = bare_setup(&loop, platform, &slot->env, 1, argv, &bare_opts, &slot->bare);
+    err = bare_setup(slot->loop, platform, &slot->env, 1, argv, &bare_opts, &slot->bare);
     if (err) {
         fprintf(stderr, "[zapp] bare worker '%s' bare_setup failed (err=%d)\n",
             slot->worker_id, err);
-        uv_loop_close(&loop);
         slot->active = false;
-        return NULL;
+        return BARE_SETUP_FATAL;
     }
 
     // Register the uv_async_t BEFORE any host-side post can race in. Once
     // active=true is visible to other threads they may call uv_async_send
     // through bare_worker_post_message; the handle has to exist by then.
-    uv_async_init(&loop, &slot->async, bare_on_async_message);
+    uv_async_init(slot->loop, &slot->async, bare_on_async_message);
     slot->async.data = slot;
     slot->async_initialized = 1;
 
@@ -1582,23 +1587,29 @@ static void* bare_worker_thread(void* data) {
         js_create_string_utf8(slot->env, (utf8_t*)wrapped,
                               strlen(wrapped), &src);
         js_value_t* run_result;
-        err = js_run_script(slot->env, slot->script_url, -1, 0, src, &run_result);
-        if (err) {
+        int run_err = js_run_script(slot->env, slot->script_url, -1, 0, src, &run_result);
+        if (run_err) {
             // Should be rare now — the JS-side try/catch swallows most
             // user-script errors. If we still see this, the wrap
             // itself is malformed (parse error in our generated JS,
             // not in user code).
             fprintf(stderr,
                 "[zapp] bare worker '%s' wrapper eval failed (err=%d) — generated wrap may be malformed\n",
-                slot->worker_id, err);
+                slot->worker_id, run_err);
         }
         free(wrapped);
         js_close_handle_scope(slot->env, run_scope);
     }
 
-    // Run the loop until something terminates the bare instance.
-    bare_run(slot->bare, UV_RUN_DEFAULT);
+    return BARE_SETUP_OK;
+}
 
+// bare_worker_teardown_state — tears down the bare runtime, async
+// handle, message queues, and slot fields. If keep_loop is non-zero,
+// skips uv_loop_close (used when the caller intends to re-init the
+// loop for a restart; Task 2.3 will use this). The final "exited" log
+// line is emitted here so it always appears regardless of call site.
+static void bare_worker_teardown_state(BareWorkerSlot* slot, int keep_loop) {
     int exit_code = 0;
     bare_teardown(slot->bare, UV_RUN_NOWAIT, &exit_code);
     if (slot->async_initialized) {
@@ -1608,7 +1619,9 @@ static void* bare_worker_thread(void* data) {
     // The platform is process-wide (see bare_get_shared_platform). We
     // recorded a pointer for diagnostics but DO NOT own it — never
     // call js_destroy_platform from the worker thread.
-    uv_loop_close(&loop);
+    if (!keep_loop) {
+        uv_loop_close(slot->loop);
+    }
 
     bare_msgqueue_destroy(&slot->inbox);
     bare_msgqueue_destroy(&slot->eval_inbox);
@@ -1623,6 +1636,34 @@ static void* bare_worker_thread(void* data) {
 
     fprintf(stderr, "[zapp] bare worker exited: %s (code=%d)\n",
         slot->worker_id, exit_code);
+}
+
+// --- Worker thread entry ---
+
+static void* bare_worker_thread(void* data) {
+    BareWorkerSlot* slot = (BareWorkerSlot*)data;
+
+    uv_loop_t loop;
+    int err = uv_loop_init(&loop);
+    if (err) {
+        fprintf(stderr, "[zapp] bare worker '%s' uv_loop_init failed: %s\n",
+            slot->worker_id, uv_strerror(err));
+        slot->active = false;
+        return NULL;
+    }
+    slot->loop = &loop;
+    slot->incarnation = 1;
+
+    BareSetupResult result = bare_worker_setup_state(slot);
+    if (result == BARE_SETUP_FATAL) {
+        uv_loop_close(&loop);
+        return NULL;
+    }
+
+    // Run the loop until something terminates the bare instance.
+    bare_run(slot->bare, UV_RUN_DEFAULT);
+
+    bare_worker_teardown_state(slot, /*keep_loop=*/0);
     return NULL;
 }
 
