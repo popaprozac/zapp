@@ -24,6 +24,7 @@ typedef struct {
     char worker_id[64];
     char owner_id[64];
     int active;
+    int incarnation;
     // ObjC objects stored via associated storage below
 } JSCWorkerSlot;
 
@@ -58,7 +59,10 @@ extern void dispatch_event_to_all(const char* event_name, const char* payload);
 // init-context entry point defined further down.
 @class JSContext;
 static void jsc_worker_init_context(NSString* wid, NSString* oid, NSString* scriptUrl);
-static void jsc_dispatch_simple(const char* event, NSString* wid);
+static int jsc_incarnation_for(NSString* wid);
+static void jsc_bump_incarnation(NSString* wid);
+static void jsc_dispatch_restarted(NSString* wid);
+static void jsc_dispatch_gave_up(NSString* wid);
 
 // Service invoke — legacy JSON-string path (still used for some callers).
 extern const char* service_invoke_sync(void* app, const char* method, const char* args);
@@ -336,6 +340,7 @@ static void jsc_setup_bridge(JSContext* ctx, NSString* workerId) {
             @"id": wid ?: @"",
             @"message": message ?: @"",
             @"stack": stack ?: @"",
+            @"incarnation": @(jsc_incarnation_for(wid)),
         };
         NSData* j = [NSJSONSerialization dataWithJSONObject:d options:0 error:nil];
         NSString* payload = j ? [[NSString alloc] initWithData:j encoding:NSUTF8StringEncoding] : @"{}";
@@ -343,7 +348,7 @@ static void jsc_setup_bridge(JSContext* ctx, NSString* workerId) {
 
         int decision = zapp_worker_supervisor_record_failure([wid UTF8String]);
         if (decision == 2) {
-            jsc_dispatch_simple("worker:gave-up", wid);
+            jsc_dispatch_gave_up(wid);
             return;
         }
         if (decision != 1) return;
@@ -358,8 +363,9 @@ static void jsc_setup_bridge(JSContext* ctx, NSString* workerId) {
         NSString* oid = ownerC ? [NSString stringWithUTF8String:ownerC] : @"";
         dispatch_async(queue, ^{
             [jsc_contexts removeObjectForKey:wid];
+            jsc_bump_incarnation(wid);
             jsc_worker_init_context(wid, oid, scriptUrl);
-            jsc_dispatch_simple("worker:restarted", wid);
+            jsc_dispatch_restarted(wid);
         });
     };
 
@@ -740,16 +746,53 @@ static NSString* jsc_build_crash_payload(NSString* wid, JSValue* exception) {
     NSString* msg = exception ? [exception toString] : @"unknown";
     JSValue* stackVal = exception ? exception[@"stack"] : nil;
     NSString* stack = (stackVal && ![stackVal isUndefined]) ? [stackVal toString] : @"";
-    NSDictionary* d = @{ @"id": wid ?: @"", @"message": msg ?: @"", @"stack": stack ?: @"" };
+    NSDictionary* d = @{
+        @"id": wid ?: @"",
+        @"message": msg ?: @"",
+        @"stack": stack ?: @"",
+        @"incarnation": @(jsc_incarnation_for(wid)),
+    };
     NSData* j = [NSJSONSerialization dataWithJSONObject:d options:0 error:nil];
     return j ? [[NSString alloc] initWithData:j encoding:NSUTF8StringEncoding] : @"{}";
 }
 
-static void jsc_dispatch_simple(const char* event, NSString* wid) {
-    NSDictionary* d = @{ @"id": wid ?: @"" };
+static int jsc_incarnation_for(NSString* wid) {
+    for (int i = 0; i < JSC_MAX_WORKERS; i++) {
+        if (jsc_workers[i].active && strcmp(jsc_workers[i].worker_id,
+                                            [wid UTF8String]) == 0) {
+            return jsc_workers[i].incarnation;
+        }
+    }
+    return 0;
+}
+
+static void jsc_bump_incarnation(NSString* wid) {
+    for (int i = 0; i < JSC_MAX_WORKERS; i++) {
+        if (jsc_workers[i].active && strcmp(jsc_workers[i].worker_id,
+                                            [wid UTF8String]) == 0) {
+            jsc_workers[i].incarnation++;
+            break;
+        }
+    }
+}
+
+static void jsc_dispatch_restarted(NSString* wid) {
+    NSDictionary* d = @{ @"id": wid ?: @"", @"incarnation": @(jsc_incarnation_for(wid)) };
     NSData* j = [NSJSONSerialization dataWithJSONObject:d options:0 error:nil];
     NSString* payload = j ? [[NSString alloc] initWithData:j encoding:NSUTF8StringEncoding] : @"{}";
-    dispatch_event_to_all((char*)event, (char*)[payload UTF8String]);
+    dispatch_event_to_all((char*)"worker:restarted", (char*)[payload UTF8String]);
+}
+
+static void jsc_dispatch_gave_up(NSString* wid) {
+    int inc = jsc_incarnation_for(wid);
+    NSDictionary* d = @{
+        @"id": wid ?: @"",
+        @"finalIncarnation": @(inc),
+        @"retriesAttempted": @(inc > 0 ? inc - 1 : 0),
+    };
+    NSData* j = [NSJSONSerialization dataWithJSONObject:d options:0 error:nil];
+    NSString* payload = j ? [[NSString alloc] initWithData:j encoding:NSUTF8StringEncoding] : @"{}";
+    dispatch_event_to_all((char*)"worker:gave-up", (char*)[payload UTF8String]);
 }
 
 // --- C API ---
@@ -778,6 +821,7 @@ bool jsc_worker_create(const char* script_url, const char* owner_id, const char*
             strncpy(jsc_workers[i].worker_id, worker_id, 63);
             strncpy(jsc_workers[i].owner_id, owner_id ?: "", 63);
             jsc_workers[i].active = 1;
+            jsc_workers[i].incarnation = 1;
             break;
         }
     }
@@ -804,7 +848,7 @@ static void jsc_worker_init_context(NSString* wid, NSString* oid, NSString* scri
             // 2. Decision: restart, give up, or ignore.
             int decision = zapp_worker_supervisor_record_failure([wid UTF8String]);
             if (decision == 2) {
-                jsc_dispatch_simple("worker:gave-up", wid);
+                jsc_dispatch_gave_up(wid);
                 return;
             }
             if (decision != 1) return;  // 0 = no policy, leave worker dead-ish
@@ -817,8 +861,9 @@ static void jsc_worker_init_context(NSString* wid, NSString* oid, NSString* scri
             if (!queue) return;
             dispatch_async(queue, ^{
                 [jsc_contexts removeObjectForKey:wid];  // ARC releases the old ctx
+                jsc_bump_incarnation(wid);
                 jsc_worker_init_context(wid, oid, scriptUrl);
-                jsc_dispatch_simple("worker:restarted", wid);
+                jsc_dispatch_restarted(wid);
             });
         };
 

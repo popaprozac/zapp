@@ -3,9 +3,11 @@
 Current state of the Windows port and what's needed to finish it.
 
 macOS is the reference platform and has full coverage. Windows has partial
-scaffolding in place — webview/platform stubs, txiki.js already cross-platform
-— but notifications, dialogs, menus, and dock-equivalent taskbar APIs still
-need backends.
+scaffolding in place — basic WebView2 + window + dialogs + menus + Toast
+notifications + clipboard (text) + global hotkeys (`RegisterHotKey`) work
+today. Tray, file-drop, custom protocols, MSIX packaging, and code-signing
+are the remaining gaps for a "production beta" Windows release (see
+[`project_doc_audit_2026-06`](https://github.com/zappdev/zapp) task #167).
 
 For general framework orientation, read [`SKILLS.md`](SKILLS.md) first. This
 file is Windows-specific.
@@ -19,10 +21,10 @@ zapp/
 │   ├── darwin/*.{h,m}          # macOS: complete
 │   └── windows/                # Windows: partial stubs
 ├── native/worker/engines/
-│   ├── jsc.{h,m}               # macOS-only (JSC is Apple)
-│   └── txiki.{h,c}             # Cross-platform (compiles on Windows today
-│                               #   but most privileged host objects are
-│                               #   stubbed via #ifdef __APPLE__)
+│   ├── zjs.{h,c}               # Default. Cross-platform first-party engine.
+│   ├── bare-*.{h,c}            # bare-jsc / bare-v8 / bare-quickjs / bare-mqjs / bare-hermes
+│   ├── jsc.{h,m}               # Deprecated compat (macOS-only — JSC is Apple)
+│   └── txiki.{h,c}             # Deprecated compat (cross-platform; #ifdef __APPLE__ guards on host objects)
 ├── vendor/webview2/            # Windows WebView2 headers + static loader
 └── old/src/platform/windows/   # v1 Windows impl — reference, not code-path
 ```
@@ -114,12 +116,18 @@ equivalents:
 
 ### Workers on Windows
 
-- JSC is **not available** — it's Apple's engine.
-- **txiki.js** is the path forward. It already compiles via its own cmake
-  build, with libuv doing the event loop.
-- Quick alternative: QuickJS standalone is leaner than txiki but drops web
-  APIs (fetch, WebSocket, timers beyond setTimeout). Only adopt if the 6
-  MB txiki binary cost is unacceptable.
+- JSC is **not available** — it's Apple's engine. The `jsc` / `bare-jsc`
+  engines fall back through the resolver chain on Windows builds.
+- Default is **`zjs`** — Zapp's first-party engine, cross-platform,
+  ~1 MB, no JIT entitlement gymnastics. Same source compiles on
+  Windows; bytecode AOT works the same way.
+- For JIT-heavy workloads, **`bare-v8`** adds ~30 MB and gives you a
+  full V8 with optimizer + GC tuning. Opt in per worker via
+  `engine: "bare-v8"` in `zapp.config.ts`.
+- `bare-quickjs` / `bare-mqjs` / `bare-hermes` also build on Windows
+  for size-constrained or niche scenarios.
+- See [`docs/engines.md`](docs/engines.md) for the full per-platform
+  recommendation table.
 
 ### Build System
 

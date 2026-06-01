@@ -4,3 +4,6 @@
 [submodule "vendor/bare"]
 	path = vendor/bare
 	url = https://github.com/holepunchto/bare.git
+[submodule "vendor/zjs"]
+	path = vendor/zjs
+	url = git@github.com:popaprozac/zjs.git

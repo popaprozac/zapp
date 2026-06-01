@@ -16,6 +16,7 @@
 #include <TargetConditionals.h>
 #endif
 #include <uv.h>
+#include <stdatomic.h>
 #include <compression.h>
 
 // Platform-specific APIs used for privileged host objects (createWindow,
@@ -115,6 +116,17 @@ typedef struct {
     MsgQueue sync_inbox;     // Thread-safe queue for Sync.wait results
     MsgQueue eval_inbox;     // Raw JS to eval (from native event dispatch)
     int async_initialized;
+
+    // Reincarnation counter — 1 on first start, +1 each successful restart.
+    // Written from the outer loop in txiki_worker_thread (Task 3.3).
+    int incarnation;
+
+    // Control flags — written from txiki's zapp_bridge_worker_crash
+    // (worker thread) and txiki_worker_terminate (any thread). The outer
+    // reincarnation loop reads these after TJS_Run returns.
+    // wants_terminate wins over wants_restart.
+    _Atomic int wants_restart;
+    _Atomic int wants_terminate;
 } TxikiWorkerSlot;
 
 static TxikiWorkerSlot txiki_workers[TXIKI_MAX_WORKERS] = {{0}};
@@ -613,13 +625,15 @@ static JSValue zapp_bridge_create_window(JSContext* ctx, JSValueConst this_val, 
 }
 
 // workerCrash(message, stack) — bootstrap calls this when an uncaught
-// error escapes a setTimeout callback or an event handler. We dispatch
-// `worker:crashed` so observers can react, then ask the supervisor for
-// a decision. Restart on txiki is more involved than JSC (separate
-// pthread + uv_loop per worker) — for v1 we record the failure and
-// dispatch `worker:gave-up`, leaving txiki workers alive-but-broken.
-// JSC engine has full restart support.
+// error escapes a setTimeout callback or event handler. Dispatches
+// `worker:crashed`, asks the supervisor for a verdict, and on verdict==1
+// sets wants_restart + TJS_Stop to break TJS_Run; the outer reincarnation
+// loop in txiki_worker_thread handles the rest. On verdict==2 fires
+// `worker:gave-up`. Same shape as host_worker_crash in zjs.c and
+// bare_host_worker_crash in bare.c.
 extern int  zapp_worker_supervisor_record_failure(const char* worker_id);
+extern int zapp_worker_supervisor_get_window_state(
+    const char* worker_id, int* out_count, int* out_cap, int* out_window_ms);
 extern void dispatch_event_to_all(const char* event_name, const char* payload);
 
 static JSValue zapp_bridge_worker_crash(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
@@ -629,32 +643,46 @@ static JSValue zapp_bridge_worker_crash(JSContext* ctx, JSValueConst this_val, i
     const char* msg = (argc > 0 && JS_IsString(argv[0])) ? JS_ToCString(ctx, argv[0]) : "";
     const char* stk = (argc > 1 && JS_IsString(argv[1])) ? JS_ToCString(ctx, argv[1]) : "";
 
-    // Build {"id":wid,"message":msg,"stack":stk} — minimal escape since
-    // dispatch_event_to_all does its own escape on the payload.
+    // Look up the slot so we can set the atomic flag and call TJS_Stop on
+    // restart. Done before payload build so the incarnation value reflects
+    // the current (about-to-crash) incarnation.
+    TxikiWorkerSlot* slot = txiki_find_slot(wid);
+    int incarnation = slot ? slot->incarnation : 0;
+
+    // Build {"id":wid,"message":msg,"stack":stk,"incarnation":N}.
     char* payload = NULL;
     int needed = snprintf(NULL, 0,
-        "{\"id\":\"%s\",\"message\":\"%s\",\"stack\":\"%s\"}",
-        wid, msg ? msg : "", stk ? stk : "");
+        "{\"id\":\"%s\",\"message\":\"%s\",\"stack\":\"%s\",\"incarnation\":%d}",
+        wid, msg ? msg : "", stk ? stk : "", incarnation);
     if (needed > 0) {
         payload = (char*)malloc((size_t)needed + 1);
         if (payload) {
             snprintf(payload, (size_t)needed + 1,
-                "{\"id\":\"%s\",\"message\":\"%s\",\"stack\":\"%s\"}",
-                wid, msg ? msg : "", stk ? stk : "");
+                "{\"id\":\"%s\",\"message\":\"%s\",\"stack\":\"%s\",\"incarnation\":%d}",
+                wid, msg ? msg : "", stk ? stk : "", incarnation);
             dispatch_event_to_all("worker:crashed", payload);
             free(payload);
         }
     }
 
-    // Supervisor decision. txiki can't currently restart in-place, so
-    // any "restart approved" verdict still surfaces as gave-up for the
-    // user — at least they know the worker won't auto-recover.
     int decision = zapp_worker_supervisor_record_failure(wid);
-    if (decision != 0) {
-        char giveUp[256];
-        snprintf(giveUp, sizeof(giveUp), "{\"id\":\"%s\"}", wid);
-        dispatch_event_to_all("worker:gave-up", giveUp);
+    if (decision == 1 && slot) {
+        // Restart approved. Set the atomic flag and TJS_Stop to break
+        // TJS_Run; the outer loop in txiki_worker_thread sees
+        // wants_restart and re-incarnates. worker:restarted fires from
+        // there after setup_state completes.
+        atomic_store(&slot->wants_restart, 1);
+        if (slot->runtime) TJS_Stop(slot->runtime);
+    } else if (decision == 2) {
+        // Supervisor cap exhausted — gave_up flag in registry is now sticky.
+        char gave_up[256];
+        snprintf(gave_up, sizeof(gave_up),
+                 "{\"id\":\"%s\",\"finalIncarnation\":%d,\"retriesAttempted\":%d}",
+                 wid, incarnation,
+                 incarnation > 0 ? incarnation - 1 : 0);
+        dispatch_event_to_all("worker:gave-up", gave_up);
     }
+    // decision == 0: no policy configured; worker idles in current state.
 
     if (msg && argc > 0 && JS_IsString(argv[0])) JS_FreeCString(ctx, msg);
     if (stk && argc > 1 && JS_IsString(argv[1])) JS_FreeCString(ctx, stk);
@@ -1128,14 +1156,66 @@ static void on_async_message(uv_async_t* handle) {
 
 // --- Worker thread ---
 
-static void* txiki_worker_thread(void* arg) {
-    TxikiWorkerSlot* slot = (TxikiWorkerSlot*)arg;
+// setup_state outcome — drives the outer reincarnation loop in Task 3.3.
+typedef enum {
+    TXIKI_SETUP_OK = 0,
+    TXIKI_SETUP_CRASHED = 1,    // Task 3.5 wires synthetic crashes
+    TXIKI_SETUP_FATAL = 2,
+} TxikiSetupResult;
 
+// Synthetic crash signal — called from setup_state when the user script
+// can't be loaded or JS_Eval returns an exception at top level. Mirrors
+// zapp_bridge_worker_crash's dispatch + supervisor handshake without
+// needing a live JS frame.
+//
+// Caller returns TXIKI_SETUP_CRASHED so the outer loop in
+// txiki_worker_thread teardowns + iterates per supervisor verdict.
+static void txiki_setup_synthesize_crash(TxikiWorkerSlot* slot,
+                                         const char* msg,
+                                         const char* stack) {
+    if (!slot) return;
+
+    // Build {"id":wid,"message":msg,"stack":stk,"incarnation":N}.
+    int needed = snprintf(NULL, 0,
+        "{\"id\":\"%s\",\"message\":\"%s\",\"stack\":\"%s\",\"incarnation\":%d}",
+        slot->worker_id, msg ? msg : "", stack ? stack : "", slot->incarnation);
+    if (needed > 0) {
+        char* payload = (char*)malloc((size_t)needed + 1);
+        if (payload) {
+            snprintf(payload, (size_t)needed + 1,
+                "{\"id\":\"%s\",\"message\":\"%s\",\"stack\":\"%s\",\"incarnation\":%d}",
+                slot->worker_id, msg ? msg : "", stack ? stack : "", slot->incarnation);
+            dispatch_event_to_all("worker:crashed", payload);
+            free(payload);
+        }
+    }
+
+    int decision = zapp_worker_supervisor_record_failure(slot->worker_id);
+    if (decision == 1) {
+        atomic_store(&slot->wants_restart, 1);
+        // No TJS_Stop here — we haven't called TJS_Run yet. The outer
+        // while-loop in txiki_worker_thread sees SETUP_CRASHED return
+        // value and proceeds to teardown + iterate.
+    } else if (decision == 2) {
+        char gp[256];
+        snprintf(gp, sizeof(gp),
+                 "{\"id\":\"%s\",\"finalIncarnation\":%d,\"retriesAttempted\":%d}",
+                 slot->worker_id, slot->incarnation,
+                 slot->incarnation > 0 ? slot->incarnation - 1 : 0);
+        dispatch_event_to_all("worker:gave-up", gp);
+    }
+    // decision == 0: no policy; while-loop checks wants_restart (still 0)
+    // and breaks. Worker exits cleanly.
+}
+
+static TxikiSetupResult txiki_worker_setup_state(TxikiWorkerSlot* slot);
+static void txiki_worker_teardown_state(TxikiWorkerSlot* slot, int keep_loop);
+
+static TxikiSetupResult txiki_worker_setup_state(TxikiWorkerSlot* slot) {
     TJSRuntime* rt = TJS_NewRuntimeWorker();
     if (!rt) {
         fprintf(stderr, "[zapp] txiki: failed to create runtime for %s\n", slot->worker_id);
-        slot->active = 0;
-        return NULL;
+        return TXIKI_SETUP_FATAL;
     }
 
     // libwebsockets requires a non-NULL cookie jar path before any WebSocket
@@ -1253,6 +1333,8 @@ static void* txiki_worker_thread(void* arg) {
         // than script_path — the latter is a cwd-relative artifact that
         // looks malformed on iOS where cwd is "/" anyway.
         fprintf(stderr, "[zapp] txiki worker script not found: %s\n", slot->script_url);
+        txiki_setup_synthesize_crash(slot, "script load failed", "");
+        return TXIKI_SETUP_CRASHED;
     }
 
     if (code) {
@@ -1265,25 +1347,95 @@ static void* txiki_worker_thread(void* arg) {
             JSValue exc = JS_GetException(ctx);
             const char* err = JS_ToCString(ctx, exc);
             fprintf(stderr, "[zapp] txiki worker error: %s\n", err ? err : "unknown");
-            if (err) JS_FreeCString(ctx, err);
+
+            // Copy to stack buffer before freeing the JS string — synthesize
+            // helper needs a C string that survives JS_FreeCString.
+            char msg_buf[1024] = {0};
+            if (err) {
+                size_t elen = strlen(err);
+                size_t cp = elen < sizeof(msg_buf) - 1 ? elen : sizeof(msg_buf) - 1;
+                memcpy(msg_buf, err, cp);
+                JS_FreeCString(ctx, err);
+            }
             JS_FreeValue(ctx, exc);
+            JS_FreeValue(ctx, result);
+            free(code);
+
+            txiki_setup_synthesize_crash(slot, msg_buf[0] ? msg_buf : "JS_Eval threw", "");
+            return TXIKI_SETUP_CRASHED;
         }
         JS_FreeValue(ctx, result);
         free(code);
-
-        // Run the event loop
-        TJS_Run(rt);
     }
 
-    // Cleanup
+    return TXIKI_SETUP_OK;
+}
+
+static void txiki_worker_teardown_state(TxikiWorkerSlot* slot, int keep_loop) {
+    // keep_loop is a no-op for txiki: the uv_loop is owned by TJSRuntime
+    // (TJS_GetLoop), so TJS_FreeRuntime tears it down. Parameter kept for
+    // API consistency with zjs/bare.
+    (void)keep_loop;
+
     if (slot->async_initialized) {
         uv_close((uv_handle_t*)&slot->async, NULL);
+        slot->async_initialized = 0;
     }
-    txiki_sync_pending_release_ctx(ctx);
-    txiki_bridge_cache_release(ctx);
-    TJS_FreeRuntime(rt);
+    if (slot->ctx) {
+        txiki_sync_pending_release_ctx(slot->ctx);
+        txiki_bridge_cache_release(slot->ctx);
+    }
+    if (slot->runtime) {
+        TJS_FreeRuntime(slot->runtime);
+    }
     slot->runtime = NULL;
     slot->ctx = NULL;
+}
+
+static void* txiki_worker_thread(void* arg) {
+    TxikiWorkerSlot* slot = (TxikiWorkerSlot*)arg;
+    slot->incarnation = 0;
+
+    while (1) {
+        slot->incarnation++;
+
+        TxikiSetupResult setup = txiki_worker_setup_state(slot);
+
+        if (setup == TXIKI_SETUP_FATAL) {
+            fprintf(stderr, "[zapp] txiki worker '%s' setup fatal (incarnation %d)\n",
+                    slot->worker_id, slot->incarnation);
+            break;
+        }
+
+        if (setup == TXIKI_SETUP_CRASHED) {
+            // synthesize_crash already fired; wants_restart set per
+            // supervisor verdict. Skip TJS_Run — nothing live to run.
+            txiki_worker_teardown_state(slot, /*keep_loop=*/1);
+        } else {
+            // TXIKI_SETUP_OK
+            if (slot->incarnation > 1) {
+                char payload[128];
+                snprintf(payload, sizeof(payload),
+                         "{\"id\":\"%s\",\"incarnation\":%d}",
+                         slot->worker_id, slot->incarnation);
+                dispatch_event_to_all("worker:restarted", payload);
+                int fc = 0, cap = 0, win = 0;
+                zapp_worker_supervisor_get_window_state(slot->worker_id, &fc, &cap, &win);
+                fprintf(stderr, "[zapp] txiki worker '%s' restarting "
+                                "(incarnation %d, fail_count %d/%d in %dms window)\n",
+                        slot->worker_id, slot->incarnation, fc, cap, win);
+            }
+
+            TJS_Run(slot->runtime);
+
+            txiki_worker_teardown_state(slot, /*keep_loop=*/1);
+        }
+
+        if (atomic_load(&slot->wants_terminate)) break;
+        if (!atomic_load(&slot->wants_restart)) break;
+        atomic_store(&slot->wants_restart, 0);
+    }
+
     slot->active = 0;
     return NULL;
 }
@@ -1325,7 +1477,10 @@ void txiki_worker_post_message(const char* worker_id, const char* data_json) {
     if (!worker_id || !data_json) return;
     pthread_mutex_lock(&txiki_mutex);
     TxikiWorkerSlot* slot = txiki_find_slot(worker_id);
-    if (!slot || !slot->async_initialized) {
+    if (!slot || !slot->active || !slot->async_initialized || !slot->runtime || !slot->ctx) {
+        fprintf(stderr, "[zapp] txiki worker '%s' message dropped "
+                        "(worker not ready; incarnation %d)\n",
+                worker_id, slot ? slot->incarnation : 0);
         pthread_mutex_unlock(&txiki_mutex);
         return;
     }
@@ -1339,6 +1494,7 @@ void txiki_worker_terminate(const char* worker_id) {
     pthread_mutex_lock(&txiki_mutex);
     TxikiWorkerSlot* slot = txiki_find_slot(worker_id);
     if (slot) {
+        atomic_store(&slot->wants_terminate, 1);
         if (slot->runtime) TJS_Stop(slot->runtime);
         msgqueue_destroy(&slot->inbox);
         msgqueue_destroy(&slot->sync_inbox);
@@ -1354,6 +1510,7 @@ void txiki_worker_terminate_owner(const char* owner_id) {
     pthread_mutex_lock(&txiki_mutex);
     for (int i = 0; i < TXIKI_MAX_WORKERS; i++) {
         if (txiki_workers[i].active && strcmp(txiki_workers[i].owner_id, owner_id) == 0) {
+            atomic_store(&txiki_workers[i].wants_terminate, 1);
             if (txiki_workers[i].runtime) TJS_Stop(txiki_workers[i].runtime);
             msgqueue_destroy(&txiki_workers[i].inbox);
             msgqueue_destroy(&txiki_workers[i].sync_inbox);

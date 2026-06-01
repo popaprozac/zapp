@@ -13,7 +13,7 @@
 
 ---
 
-Zapp is an application framework that produces **extraordinarily small binaries** by compiling to native code via [Zen-C](https://github.com/zenc-lang/zenc) and rendering UI in the system WebView. No bundled browser. No runtime overhead. Your frontend is your choice — React, Svelte, Vue, or vanilla.
+Zapp is an application framework that produces **extraordinarily small binaries** by compiling to native code via [Zen-C](https://github.com/zenc-lang/zenc) and rendering UI in the system WebView. No bundled browser. No runtime overhead. Your frontend is your choice — React, Svelte, Vue, Solid, or vanilla; `zapp init -t <template>` scaffolds any of them.
 
 The same Zapp codebase ships to **macOS and iOS** today (Windows next). Desktop apps get the full multi-window / menu-bar / tray surface; iOS apps get UIKit-native modal sheets, file pickers, notifications, and clipboard — without any "this looks like a web app on a phone" feel.
 
@@ -39,10 +39,10 @@ Two numbers matter, not one: calls from the webview, and calls from a
 worker. Worker calls are where real app hot paths live (sync engine,
 DB access, local filesystem).
 
-| | Zapp (JSC) | Zapp (txiki) | Tauri | Wails | Electron | Electrobun |
-|---|---:|---:|---:|---:|---:|---:|
-| **Webview → native** | 145 | 130 | 265 | 325 | **51** | 360 |
-| **Worker → native** | **2.1** | **0.3** | N/A<sup>\*</sup> | N/A<sup>\*</sup> | 73 | N/A<sup>†</sup> |
+| | Zapp (zjs) | Zapp (jsc) | Zapp (txiki) | Tauri | Wails | Electron | Electrobun |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| **Webview → native** | 135 | 145 | 130 | 265 | 325 | **51** | 360 |
+| **Worker → native** | **0.45** | 1.08 | **0.26** | N/A<sup>\*</sup> | N/A<sup>\*</sup> | 73 | N/A<sup>†</sup> |
 
 <sub>\* Tauri and Wails don't ship a JS worker with native-call access — their equivalent is "drop to Rust/Go and wire it yourself." No apples-to-apples JS number exists.</sub>
 <br>
@@ -50,20 +50,27 @@ DB access, local filesystem).
 
 Electron wins row 1 because Chromium's IPC uses optimized named pipes / mach ports. Electron's worker row (73 µs) is the realistic pattern: a Web Worker can't call `ipcRenderer` directly (contextBridge only exposes APIs to the main window), so calls route worker → renderer postMessage → `ipcRenderer.invoke` → main, then the reply flows back the same way — 2 postMessage hops plus the IPC round-trip.
 
-Zapp workers bypass that entirely — `Services.invokeSync` is a direct C call via the worker engine's host object. **JSC is 35× faster than Electron** on this path; **txiki is 243× faster** because QuickJS's `JS_NewCFunction` is a thinner C-call convention than JSC's JSValue-block dispatch. For apps where hot work lives in workers (sync engines, DB access, background pipelines), row 2 is the number that matters — and Tauri/Wails can't compete on row 2 at all, because they force a language boundary instead.
+Zapp workers bypass that entirely — `Services.invokeSync` is a direct C call via the worker engine's host object. **zjs is 162× faster than Electron** on this path; **txiki is 281× faster** because QuickJS's `JS_NewCFunction` is a thinner C-call convention than zjs's value-marshalling dispatch. For apps where hot work lives in workers (sync engines, DB access, background pipelines), row 2 is the number that matters — and Tauri/Wails can't compete on row 2 at all, because they force a language boundary instead.
 
 ### Which engine?
 
-Zapp ships two worker engines on macOS. Both win on different axes:
+Worker engine is **per-worker**, set in `zapp.config.ts → headless.<id>.engine`. The framework dispatches at runtime; you can mix engines within one app. Six engines ship today:
 
-- **JSC** *(default)* — 445 KB binary. macOS system framework, zero extra cost. Best raw JS perf (JIT). Worker → native: 2.1 µs.
-- **txiki** *(opt-in)* — 6.5 MB binary. Cross-platform (macOS + future Windows/Linux). Full web APIs in workers: `fetch`, `WebSocket`, `TextEncoder`, `crypto`, embedded SQLite, FFI. Fastest worker → native path: 0.3 µs (QuickJS's `JS_NewCFunction` is a thinner C-call convention than JSC's JSValue dispatch).
+- **`zjs`** *(default, recommended)* — Zapp's first-party engine. ~1 MB engine cost, cross-platform, iOS-friendly (no JIT entitlement gymnastics). Direct value-marshalling host bridge: **2× faster than the legacy `jsc.m` path** (0.45 µs vs 1.08 µs). Bytecode AOT option (`bytecode: true`) ships parse-free workers.
+- **`bare-jsc`** — JIT via the system JSC framework on macOS. Zero engine bundle cost — literally smaller than zjs on Apple. Pick when absolute KB and macOS-only JIT-perf matter.
+- **`bare-v8`** — JIT on Windows / Linux where there's no system JSC. ~30 MB bundle increase. JIT-heavy workloads only.
+- `bare-quickjs`, `bare-mqjs`, `bare-hermes` — niche / size-constrained variants. zjs is usually the better fit.
+- `jsc`, `txiki` — **deprecated** compat tier. Kept compiling for existing apps; CLI warns on use. Migrate to `zjs` or `bare-jsc`.
 
-Pick **JSC** when: macOS-only, no web APIs needed inside workers, smallest binary matters. Pick **txiki** when: you need `fetch` or `WebSocket` inside a worker (sync engines, DB drivers), you're targeting cross-platform, or you have a hot worker↔native loop where the 7× call-rate difference pays back the binary cost.
+```ts
+// zapp.config.ts — mix engines per worker
+headless: {
+  sync:    { script: "src/workers/sync.ts",    engine: "zjs" },
+  encoder: { script: "src/workers/encoder.ts", engine: "bare-jsc" },  // JIT-heavy
+}
+```
 
-Per-worker engine mix lands in a later alpha — until then, pick one per project via `zapp/build.zc`.
-
-<sub>See <a href="benchmarks/RESULTS.md">full results</a> with methodology, cold/hot build times, and raw JSON.</sub>
+<sub>Full taxonomy + platform tradeoffs in <a href="docs/engines.md">docs/engines.md</a>. Latest worker→native µs across engines in <a href="benchmarks/apps/zapp-host-bridge/RESULTS.md">benchmarks/apps/zapp-host-bridge/RESULTS.md</a>.</sub>
 
 ## Quick Start
 
@@ -131,7 +138,7 @@ For nested dicts/arrays, drop a partial XML file into `build/macos/Info.plist.ex
 - **Draggable Regions** — `data-zapp-drag-region` for custom titlebar apps. Buttons, inputs, links, and other interactive elements inside a drag region stay clickable by default; override with `style="--zapp-drag: drag"` or `--zapp-drag: no-drag` to force either behavior. Native window metrics (`--zapp-titlebar-height`, `--zapp-content-inset-left`) are injected as CSS variables so custom titlebars size correctly without hard-coded magic numbers.
 - **Close Prevention** — Cancellable close events from native or JS. "Unsaved changes?" dialogs.
 - **Services** — Define native RPC in Zen-C, call from JS. Auto-generated TypeScript bindings. Drop `.m` (macOS) or `.c` (Windows) files anywhere under `zapp/` for ObjC/C-backed services (Keychain, AVFoundation, libsqlite3, etc.) — auto-compiled and linked.
-- **Workers (unified)** — Webview-spawned (`new Worker("./foo.ts")`) or headless (declared in `zapp.config.ts`). Both share the full runtime API — `Window.create`, `Events`, `Services`, `Notification`, `Dock`, `Sync` — via a zero-overhead direct host bridge (no IPC).
+- **Workers (unified)** — Webview-spawned (`new Worker("./foo.ts")`) or headless (declared in `zapp.config.ts`). Both share the full runtime API — `Window.create`, `Events`, `Services`, `Notification`, `Dock`, `Sync` — via a zero-overhead direct host bridge (no IPC). Six engines available per-worker (zjs default; bare-jsc, bare-v8, bare-quickjs, bare-mqjs, bare-hermes also ship). Bytecode AOT via `bytecode: true` on zjs / bare-hermes.
 - **Sync** — `wait`/`notify` across contexts without SharedArrayBuffer.
 - **Events** — Typed cross-context events with autocomplete.
 - **Security** — CSP, navigation restrictions, path traversal prevention, dev tools disabled in production.
@@ -152,8 +159,11 @@ For nested dicts/arrays, drop a partial XML file into `build/macos/Info.plist.ex
 | File drag-drop into webview | ✅ | ✅ UIDropInteraction | ⏳ |
 | Custom protocols (`asset://`, ...) | ✅ | ✅ | ⏳ |
 | Navigation allowlist | ✅ | ✅ | ⏳ |
-| Workers — JSC | ✅ (JIT) | ✅ (no JIT, Apple policy) | n/a |
-| Workers — txiki / fetch / WebSocket / SQLite | ✅ | ✅ (FFI disabled per App Store policy) | ⏳ |
+| Workers — `zjs` (default, cross-platform) | ✅ | ✅ | ✅ |
+| Workers — `bare-jsc` (macOS JIT) | ✅ (JIT) | ✅ (no JIT, Apple policy) | n/a |
+| Workers — `bare-v8` (Win/Linux JIT) | n/a | n/a | ✅ |
+| Workers — capability modules (`fetch` / `websocket` / `fs` / ...) | ✅ | ✅ (FFI disabled per App Store policy) | ✅ |
+| Global shortcuts | ✅ | n/a (by design) | ⏳ |
 | App Store / TestFlight packaging | n/a | ⏳ Phase 3 | n/a |
 
 ## Example
@@ -221,8 +231,15 @@ import { defineConfig } from "@zappdev/cli/config";
 
 export default defineConfig({
   name: "My App",
+  // Capability modules — auto-installs `bare-fetch` + injects `fetch`
+  // global into every bundled worker.
+  workerModules: ["fetch"],
   headless: {
-    sync: "src/workers/sync.ts",   // worker ID → source path
+    sync: {
+      script: "src/workers/sync.ts",
+      engine: "zjs",                          // default; can also be "bare-jsc", "bare-v8", ...
+      restart: { maxRetries: 3, withinMs: 60_000 },
+    },
   },
 });
 ```
@@ -263,9 +280,11 @@ have identical runtime API access: `Window.create`, `Events`, `Services`,
 |---|---|
 | [`llms.txt`](llms.txt) | Single-file reference — concepts, config, full runtime API, patterns, anti-patterns. Good for agents. |
 | [`docs/api-reference.md`](docs/api-reference.md) | Long-form API reference with edge cases |
+| [`docs/engines.md`](docs/engines.md) | Worker engine taxonomy + per-platform recommendations |
 | [`docs/zen-c-services.md`](docs/zen-c-services.md) | Writing native services: JsonValue args, lifecycle, thread-safety |
 | [`docs/patterns.md`](docs/patterns.md) | Cookbook of common app patterns |
 | [`docs/architecture.md`](docs/architecture.md) | How the pieces fit under the hood |
+| [`docs/auto-update-decision.md`](docs/auto-update-decision.md) | Auto-update path decision (Tauri-style; implementation paused) |
 | [`benchmarks/README.md`](benchmarks/README.md) | Methodology for the benchmarks above |
 | [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md) | Full measurements with raw JSON |
 

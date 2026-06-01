@@ -90,6 +90,63 @@ Events.on("live:update", (data) => {
 Open a second window and it gets the same broadcasts automatically.
 No per-window subscription setup needed.
 
+## Headless worker auto-restart
+
+Configure a restart policy in `zapp.config.ts` so the supervisor recreates
+the worker's JS context after an uncaught throw. After `maxRetries`
+failures inside `withinMs`, the supervisor gives up.
+
+```ts
+// zapp.config.ts
+headless: {
+  sync: {
+    script: "src/workers/sync.ts",
+    engine: "zjs",
+    restart: { maxRetries: 3, withinMs: 60_000 },
+  },
+}
+```
+
+```ts
+// src/main.ts — observe the worker's lifecycle
+import { Events } from "@zappdev/runtime";
+
+Events.on("worker:crashed", ({ id, message, incarnation }) => {
+  console.warn(`[${id}] crashed (incarnation ${incarnation}): ${message}`);
+});
+
+Events.on("worker:restarted", ({ id, incarnation }) => {
+  console.log(`[${id}] restarted as incarnation ${incarnation}`);
+});
+
+Events.on("worker:gave-up", ({ id, retriesAttempted }) => {
+  // Supervisor capped out — show a user-facing "background sync paused" toast.
+  alert(`${id} stopped after ${retriesAttempted} restart attempts.`);
+});
+```
+
+**Clean-slate semantics.** Each incarnation starts with a fresh JS
+context: timers, channel handlers, in-flight inbox messages from the
+prior incarnation are all gone. If a webview tries `Workers.send(id,
+"channel", data)` during the restart gap, the message is dropped with
+a stderr log. The simplest pattern: gate sends on the next
+`worker:restarted` after a `worker:crashed`.
+
+**Top-level vs async throws.** Both count as crashes against the cap. A
+worker whose script throws at module top will burn through `maxRetries`
+in a few milliseconds and surface `worker:gave-up` — no infinite restart
+loop possible.
+
+**Window decay.** The supervisor's `withinMs` is a sliding window: after
+the window elapses with no failures, the counter resets. A worker that
+crashes once a day stays alive indefinitely with `maxRetries: 2` and
+`withinMs: 60_000`.
+
+**Engine support.** Restart works identically on `zjs` (default), `bare-jsc`,
+`bare-v8`, `bare-quickjs`, `bare-mqjs`, `bare-hermes`, `jsc` (legacy), and
+`txiki` (legacy). Same TypeScript worker source produces the same event
+sequence on every engine.
+
 ## Headless worker for background sync that survives window close
 
 Headless workers keep running while the app is alive, even when every

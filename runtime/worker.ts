@@ -47,23 +47,28 @@ export class Worker {
    *   downgrade (logged) to whichever engine IS compiled in. See
    *   `docs/architecture.md#worker-engines` for the size/speed matrix.
    *
-   *   Legacy engines (predate the Bare integration; fewer modules):
-   *   - `"jsc"` — native `JSContext` on Apple. JIT (with the
-   *     `allow-jit` entitlement). Zero binary cost — system framework.
-   *   - `"txiki"` — txiki.js (QuickJS + libuv + WHATWG fetch / WS).
-   *     ~6 MB binary cost. No JIT (QuickJS is interpreter).
+   *   **Recommended** (new projects):
+   *   - `"zjs"` (default) — Zapp's first-party engine. Cross-platform,
+   *     ~1 MB, iOS-friendly. Direct value-marshalling host bridge.
+   *   - `"bare-jsc"` — almost-equal recommendation on macOS. JIT via
+   *     system JSC framework (zero engine bundle cost). Less streamlined
+   *     web APIs — opt into bare-* packages à la carte.
    *
-   *   Bare engines (npm-shaped module ecosystem; recommended):
-   *   - `"bare-jsc"` — Bare runtime + libjsc. Apple-only. Free + JIT.
-   *   - `"bare-v8"` — Bare runtime + V8. ~60 MB. JIT. Linux/Windows.
-   *   - `"bare-quickjs"` — Bare runtime + QuickJS-NG. ~1.5 MB. No JIT.
-   *   - `"bare-mqjs"` — Bare runtime + micro-QuickJS. Smaller still;
-   *     fewer features. Memory-constrained / embedded targets.
-   *   - `"bare-hermes"` — Bare runtime + Hermes. ~2 MB. AOT bytecode
-   *     option. Best fit for iOS where JIT is gated by entitlement.
+   *   **Perf opt-ins:**
+   *   - `"bare-v8"` — JIT on Windows/Linux. ~30 MB bundle increase.
+   *
+   *   **Niche:**
+   *   - `"bare-quickjs"` / `"bare-mqjs"` — small cross-platform variants
+   *     for size-constrained targets. zjs is usually a better fit.
+   *   - `"bare-hermes"` — Hermes AOT bytecode. Mostly subsumed by zjs's
+   *     own bytecode option once mature.
+   *
+   *   **Deprecated** (compat tier — keep working, no new features):
+   *   - `"jsc"` — legacy native `JSContext`. Migrate to `"bare-jsc"` or `"zjs"`.
+   *   - `"txiki"` — legacy QuickJS+libuv runtime. Migrate to `"zjs"`.
    */
   constructor(scriptUrl: string, opts?: {
-    engine?: "jsc" | "txiki" | "bare-jsc" | "bare-v8" | "bare-quickjs" | "bare-mqjs" | "bare-hermes";
+    engine?: "jsc" | "txiki" | "bare-jsc" | "bare-v8" | "bare-quickjs" | "bare-mqjs" | "bare-hermes" | "zjs";
   }) {
     this._bridge = getBridge();
     this.id = (this._bridge as any).createWorker(scriptUrl, opts);

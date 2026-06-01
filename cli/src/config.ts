@@ -286,40 +286,84 @@ export interface RestartPolicy {
   withinMs?: number;
 }
 
-export interface HeadlessWorkerConfig {
+/**
+ * Engine identifiers that support AOT bytecode pre-compilation.
+ * Workers using these engines may set `bytecode: true` to ship a
+ * pre-compiled artifact (`.zbc` for zjs, comparable for bare-hermes
+ * once that path lands). Workers on other engines may not set
+ * `bytecode` — the TypeScript discriminated union below enforces this.
+ */
+type BytecodeCapableEngine = "zjs" | "bare-hermes";
+
+/**
+ * Engine identifiers that do NOT support bytecode pre-compilation
+ * today. Setting `bytecode: true` on these is a type error.
+ */
+type ScriptOnlyEngine = "jsc" | "txiki" | "bare-jsc" | "bare-v8" | "bare-quickjs" | "bare-mqjs";
+
+/** Union of all engine identifiers. */
+export type WorkerEngineName = BytecodeCapableEngine | ScriptOnlyEngine;
+
+interface HeadlessWorkerConfigBase {
   /** Script path (same as the bare-string form). */
   script: string;
   /** Optional restart policy. Omit / `false` to disable auto-restart. */
   restart?: RestartPolicy | false;
-  /**
-   * Per-worker engine selection.
-   *
-   * - `"jsc"` (legacy default) — native Cocoa JSContext. Zero binary
-   *   cost on Apple, JIT for hot JS loops, but no fetch / WebSocket /
-   *   Streams in the worker context.
-   * - `"txiki"` (legacy) — txiki.js runtime. Full web APIs, no JIT,
-   *   ~6 MB binary cost.
-   * - `"bare-jsc"` — Bare runtime + JSC engine. JIT on macOS (free
-   *   binary cost on Apple via system framework), à la carte web APIs
-   *   from `bare-fetch` / `bare-ws` / `bare-crypto` / etc.
-   * - `"bare-v8"` — Bare runtime + V8. JIT all platforms; larger
-   *   binary, sensible for Windows / Linux where there's no system
-   *   JSC.
-   * - `"bare-quickjs"` — Bare runtime + QuickJS. No JIT, smallest
-   *   cross-platform footprint after JSC.
-   * - `"bare-mqjs"` — Bare runtime + micro-QuickJS. Embedded / IoT
-   *   profile.
-   * - `"bare-hermes"` — Bare runtime + Hermes. AOT bytecode + tier-up
-   *   interpreter. iOS-friendly (no JIT entitlement needed).
-   *
-   * The corresponding `ZAPP_WORKER_ENGINE_*` directive must be in
-   * `zapp/build.zc` for the engine to be linked in. When the
-   * requested engine isn't compiled, the worker dispatcher logs a
-   * downgrade and falls back through priority order
-   * (bare-jsc > bare-v8 > bare-hermes > bare-quickjs > bare-mqjs > txiki > jsc).
-   */
-  engine?: "jsc" | "txiki" | "bare-jsc" | "bare-v8" | "bare-quickjs" | "bare-mqjs" | "bare-hermes";
 }
+
+/**
+ * Per-worker config — `engine` + `bytecode` are jointly type-narrowed.
+ *
+ * **Engine selection:**
+ *
+ * - `"zjs"` (recommended default) — Zapp's first-party engine
+ *   (popaprozac/zjs). Cross-platform, ~1 MB lib, iOS-friendly (no JIT
+ *   requirement). Direct value-marshalling host bridge — skips the
+ *   JS-side `JSON.stringify` other engines pay on `Services.invokeSync`.
+ *   Web APIs (fetch, WebSocket) ship with zjs's runtime layer as it
+ *   matures.
+ * - `"bare-jsc"` — almost-equal recommendation on macOS. JIT via the
+ *   system JSC framework (zero engine bundle cost on Apple) at the
+ *   price of less streamlined web APIs — you opt into bare-* packages
+ *   à la carte (`bare-fetch`, `bare-ws`, …).
+ * - `"bare-v8"` — JIT for Windows / Linux. ~30 MB bundle increase,
+ *   only worth it for JIT-heavy workloads.
+ * - `"bare-quickjs"` / `"bare-mqjs"` / `"bare-hermes"` — niche bare
+ *   variants. Use when you specifically need that engine's perf or
+ *   feature profile; otherwise prefer zjs.
+ * - `"jsc"` / `"txiki"` (**deprecated**) — legacy engines kept for
+ *   backward compatibility with existing apps. Don't use for new
+ *   projects; the CLI will warn and direct you at `"zjs"`.
+ *
+ * **Bytecode option:**
+ *
+ * Only valid on engines that ship an AOT bytecode pipeline (`"zjs"`,
+ * `"bare-hermes"`). When `bytecode: true`, the CLI runs `zjs compile`
+ * (or the engine's equivalent) on the Vite-bundled .mjs after the
+ * build pipeline and ships the result as the worker artifact. The
+ * engine loads via parse-free dispatch — faster cold start (matters
+ * most on iOS where JIT is gated), smaller embedded asset. Setting
+ * `bytecode: true` with `engine: "bare-jsc"` (or any non-bytecode
+ * engine) is a TypeScript error.
+ *
+ * **Fallback chain when an engine isn't compiled in:** the resolver
+ * logs the downgrade and tries
+ * `zjs > bare-jsc > bare-v8 > bare-hermes > bare-quickjs > bare-mqjs > txiki > jsc`.
+ */
+export type HeadlessWorkerConfig =
+  | (HeadlessWorkerConfigBase & {
+      engine?: BytecodeCapableEngine;
+      /**
+       * Pre-compile the worker bundle to bytecode at build time. Only
+       * valid for `engine: "zjs"` / `"bare-hermes"`. Defaults to `false`.
+       */
+      bytecode?: boolean;
+    })
+  | (HeadlessWorkerConfigBase & {
+      engine: ScriptOnlyEngine;
+      /** This engine does not support bytecode pre-compilation. */
+      bytecode?: never;
+    });
 
 /**
  * High-level worker capability identifiers. Each maps (via the
@@ -544,6 +588,34 @@ function validateWebEngine(engine?: ZappConfig["webEngine"]): void {
   );
 }
 
+/**
+ * Surface one-time deprecation warnings for legacy worker engines.
+ * `jsc` and `txiki` are compat-tier — they keep working but get no new
+ * features. Recommend `zjs` (cross-platform first-party) or `bare-jsc`
+ * (macOS-only JIT-perf path) as the migration target.
+ *
+ * Idempotent per process — uses a module-scoped Set to avoid spamming
+ * the warning on every dev rebuild.
+ */
+const _deprecatedEnginesWarned = new Set<string>();
+function warnOnDeprecatedEngines(config: ZappConfig): void {
+  if (!config.headless) return;
+  for (const [id, value] of Object.entries(config.headless)) {
+    if (typeof value !== "object" || value == null) continue;
+    const engine = (value as { engine?: string }).engine;
+    if (engine !== "jsc" && engine !== "txiki") continue;
+    if (_deprecatedEnginesWarned.has(id)) continue;
+    _deprecatedEnginesWarned.add(id);
+    const suggestion = engine === "jsc"
+      ? `"zjs" (cross-platform, recommended) or "bare-jsc" (macOS JIT-perf)`
+      : `"zjs" (cross-platform first-party with growing web-API surface)`;
+    process.stderr.write(
+      `[zapp] worker "${id}": engine: "${engine}" is deprecated and will not get ` +
+      `new features. Migrate to ${suggestion}. See docs/engines.md.\n`
+    );
+  }
+}
+
 export async function loadConfig(root: string): Promise<ResolvedConfig> {
   const configPath = path.join(root, "zapp.config.ts");
   try {
@@ -551,6 +623,7 @@ export async function loadConfig(root: string): Promise<ResolvedConfig> {
     // Support both `export default defineConfig({...})` and `export default {...}`
     const config = (typeof mod.default === "function" ? mod.default() : mod.default) as ZappConfig;
     validateWebEngine(config.webEngine);
+    warnOnDeprecatedEngines(config);
     return {
       ...config,
       assetDir: config.assetDir ?? "./dist",

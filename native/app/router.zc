@@ -687,12 +687,17 @@ fn router_handle_worker(app: App*, action: string, payload: string, window_id: i
 
         // Per-worker engine selection (G8). JS callers pass
         // `engine: "jsc" | "txiki" | "bare-jsc" | "bare-v8" |
-        // "bare-quickjs" | "bare-mqjs"`. Default 0 = JSC. The downstream
-        // dispatcher in worker.zc handles engines that aren't compiled
-        // in by falling back via `zapp_resolve_engine` (priority order
-        // documented in worker.zc:fallback). Constants mirror
+        // "bare-quickjs" | "bare-mqjs"`. Default -1 = "no preference"
+        // — the resolver picks the highest-priority engine compiled
+        // into the binary (priority order documented in
+        // worker.zc:fallback, currently zjs > bare-jsc > bare-v8 > …).
+        // Without this, `new Worker("./x.ts")` with no opts.engine
+        // would default to engine=0 (legacy JSC) and run there
+        // whenever JSC happens to be compiled in — surfacing as
+        // missing fetch / web APIs in the worker even on projects
+        // that already chose zjs everywhere. Constants mirror
         // worker/registry.zc and cli/src/build-config.ts:engineNameToId.
-        let engine: int = 0;
+        let engine: int = -1;
         let engine_str_opt = pre_args.get_string("engine");
         if engine_str_opt.is_some() {
             let s = engine_str_opt.unwrap();
@@ -702,6 +707,7 @@ fn router_handle_worker(app: App*, action: string, payload: string, window_id: i
             else if s == "bare-quickjs" { engine = 4; }
             else if s == "bare-mqjs"    { engine = 5; }
             else if s == "bare-hermes"  { engine = 6; }
+            else if s == "zjs"          { engine = 7; }
         }
 
         if is_shared {

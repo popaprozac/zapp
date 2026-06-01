@@ -27,7 +27,7 @@ raw {
     // frees). Worst case: every char doubles → 2x source length plus
     // terminator. Returns an empty heap buffer for NULL input so callers
     // never have to special-case it.
-    static char* zapp_escape_dup(const char* src) {
+    char* zapp_escape_dup(const char* src) {
         if (!src) {
             char* e = (char*)malloc(1);
             if (e) e[0] = '\0';
@@ -132,6 +132,10 @@ fn dispatch_event_to_all(event_name: string, payload: string) -> void {
         #if defined(ZAPP_WORKER_ENGINE_JSC)
         extern void jsc_broadcast_eval_js(const char* js);
         jsc_broadcast_eval_js(js);
+        #endif
+        #if defined(ZAPP_WORKER_ENGINE_ZJS)
+        extern void zjs_broadcast_eval_js(const char* js);
+        zjs_broadcast_eval_js(js);
         #endif
         #if defined(ZAPP_WORKER_ENGINE_BARE_V8)      \
          || defined(ZAPP_WORKER_ENGINE_BARE_JSC)     \

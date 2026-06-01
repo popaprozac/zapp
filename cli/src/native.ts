@@ -952,7 +952,8 @@ export type WorkerEngine =
   | "bare-jsc"
   | "bare-quickjs"
   | "bare-mqjs"
-  | "bare-hermes";
+  | "bare-hermes"
+  | "zjs";          // first-party: popaprozac/zjs, direct value bridge
 
 // Check if any worker engine is defined. Returns the highest-priority
 // engine when multiple are enabled (build.zc allows several
@@ -972,6 +973,7 @@ export async function hasAnyWorkerEngine(root: string): Promise<WorkerEngine | n
     if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_QUICKJS/m.test(content)) return "bare-quickjs";
     if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_MQJS/m.test(content)) return "bare-mqjs";
     if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_HERMES/m.test(content)) return "bare-hermes";
+    if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_ZJS\b/m.test(content)) return "zjs";
     if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_TXIKI/m.test(content)) return "txiki";
     if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_JSC/m.test(content)) return "jsc";
     return null;

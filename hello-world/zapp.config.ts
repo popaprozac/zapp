@@ -17,33 +17,53 @@ const config: ZappConfig = {
   singleInstance: true,
   // No icon configured — will use framework default (assets/zapp.icon)
   //
-  // **Engine soak (alpha 67):** every headless worker is now pinned to
-  // bare-jsc to exercise the new engine across the full host-bridge
-  // surface (Services.invokeSync, syncWait/syncNotify, send/receive,
-  // dispatchEventToAll, supervisor crash reporting). The legacy `jsc`
-  // and `txiki` engines are still compiled in via build.zc, so we can
-  // flip individual workers back if a regression surfaces.
-  //
-  // Caveat: bare worker restart-on-crash is not yet wired (same gap
-  // as txiki). On force-crash the supervised worker will currently
-  // emit `worker:crashed` + record the failure, but won't restart.
-  // Tracked under project_txiki_worker_restart memory.
+  // Every headless worker is pinned to `zjs` — Zapp's first-party
+  // engine. The host-bridge surface that the demo exercises is wired:
+  // Services.invokeSync (direct in-thread service call, no syncWait
+  // round-trip needed), send/receive (worker→worker postMessage),
+  // dispatchEventToAll, postToWebview, and workerCrash → supervisor
+  // record_failure → `worker:crashed` / `worker:gave-up`, and
+  // restart-on-crash works end-to-end across zjs, bare-*, and txiki
+  // (the supervisor recreates the JS context within the configured
+  // cap, then fires worker:gave-up). Verified Phase 1+2+3 of
+  // docs/superpowers/plans/2026-06-01-worker-supervisor-restart.md.
   // Declarative worker capabilities. The CLI verifies each entry's
   // underlying npm package is installed, and the Vite plugin auto-
   // prepends `import "@zappdev/runtime/worker-globals/<sub>"` to
   // every bundled worker entry so the corresponding globals
   // (fetch, WebSocket, etc.) "just work" without per-worker boilerplate.
   workerModules: ["fetch"],
+  // Smoke-test the new webviewPreferences plumbing — autoplay flipped on
+  // exercises the WKWebViewConfiguration.mediaTypesRequiringUserActionForPlayback
+  // path. The other three fields stay at platform default (unset).
+  webviewPreferences: {
+    autoplayWithoutUserGesture: true,
+  },
   headless: {
+    // Cross-engine smoke matrix (manual verification — click force-crash 4 times):
+    //   zjs       → crashed×3, restarted×2, gave-up×1, 4th click silent
+    //   bare-jsc  → same sequence
+    //   txiki     → same sequence
+    // Verified Phase 4 / Task 4.1 of the supervisor-restart plan.
     supervised: {
       script: "src/workers/supervised.ts",
       restart: { maxRetries: 2, withinMs: 30_000 },
-      engine: "bare-hermes",
+      engine: "zjs",
     },
     ticker: {
       script: "src/workers/ticker.ts",
-      engine: "bare-hermes",
+      engine: "zjs",
+      bytecode: true,
     },
+
+    // Verification-only — re-enable to exercise broken-from-start supervisor flow.
+    // After 3 immediate top-level throws (maxRetries: 2), supervisor fires
+    // worker:gave-up; no infinite restart loop.
+    // broken: {
+    //   script: "src/workers/broken-from-start.ts",
+    //   engine: "zjs",
+    //   restart: { maxRetries: 2, withinMs: 30_000 },
+    // },
 
     // Host-bridge benchmark workers — disabled by default. See
     // benchmarks/host-bridge-results.md for results. The proper

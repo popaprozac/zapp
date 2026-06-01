@@ -103,6 +103,7 @@ function engineNameToId(name: string | undefined): number {
     case "bare-quickjs": return 4;
     case "bare-mqjs":    return 5;
     case "bare-hermes":  return 6;
+    case "zjs":          return 7;
     case "jsc":
     default:             return 0;
   }
@@ -113,7 +114,8 @@ export async function generateHeadlessWorkers(opts: {
   headless?: Record<string, string | {
     script: string;
     restart?: { maxRetries?: number; withinMs?: number } | false;
-    engine?: "jsc" | "txiki" | "bare-jsc" | "bare-v8" | "bare-quickjs" | "bare-mqjs" | "bare-hermes";
+    engine?: "jsc" | "txiki" | "bare-jsc" | "bare-v8" | "bare-quickjs" | "bare-mqjs" | "bare-hermes" | "zjs";
+    bytecode?: boolean;  // type-narrowed at the user-facing HeadlessWorkerConfig boundary
   }>;
 }): Promise<string> {
   const { root, headless } = opts;
@@ -123,16 +125,27 @@ export async function generateHeadlessWorkers(opts: {
   const entries = Object.entries(headless ?? {});
   const calls = entries
     .map(([id, value]) => {
-      const url = `/_workers/_headless_${id}.mjs`;
-      // Bare string → no engine, no restart policy.
+      // Bare string → no engine, no restart policy, no bytecode.
       if (typeof value === "string") {
+        const url = `/_workers/_headless_${id}.mjs`;
         return `    zapp_start_headless_worker("h-${id}", "${url}");`;
       }
-      // Object form. Pull engine + restart; either field can be absent.
+      // Object form. Pull engine + restart + bytecode.
       const engineId = engineNameToId(value.engine);
       const restart = value.restart;
       const max = restart ? (restart.maxRetries ?? 3) : 0;
       const within = restart ? (restart.withinMs ?? 60_000) : 0;
+      // bytecode: true is only meaningful for zjs. The CLI build step
+      // produces a sibling .zbc file via `zjs compile`; the engine
+      // detects the extension and dispatches to zjs_eval_bytecode.
+      if (value.bytecode && value.engine !== "zjs") {
+        throw new Error(
+          `[zapp] headless worker "${id}": \`bytecode: true\` is only supported for ` +
+          `\`engine: "zjs"\` (got \`engine: "${value.engine ?? "jsc"}"\`).`
+        );
+      }
+      const ext = value.bytecode ? "zbc" : "mjs";
+      const url = `/_workers/_headless_${id}.${ext}`;
       return `    zapp_start_headless_worker_full("h-${id}", "${url}", ${engineId}, ${max}, ${within});`;
     })
     .join("\n");
@@ -200,6 +213,7 @@ export async function generateIOSBuildFile(root: string, originalBuildFile: stri
   const userPickedBareQuick = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_QUICKJS/m.test(content);
   const userPickedBareV8    = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_V8/m.test(content);
   const userPickedBareHermes = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_HERMES/m.test(content);
+  const userPickedZjs       = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_ZJS\b/m.test(content);
 
   // V8 on iOS is a dead end: full V8 needs JIT pages (`mmap(PROT_EXEC)`)
   // which Apple gates behind a JIT entitlement not granted to App
@@ -221,6 +235,7 @@ export async function generateIOSBuildFile(root: string, originalBuildFile: stri
   if (userPickedBareJsc)    engineDefines.push("ZAPP_WORKER_ENGINE_BARE_JSC");
   if (userPickedBareQuick)  engineDefines.push("ZAPP_WORKER_ENGINE_BARE_QUICKJS");
   if (userPickedBareHermes) engineDefines.push("ZAPP_WORKER_ENGINE_BARE_HERMES");
+  if (userPickedZjs)        engineDefines.push("ZAPP_WORKER_ENGINE_ZJS");
   if (engineDefines.length === 0) engineDefines.push("ZAPP_WORKER_ENGINE_BARE_JSC");
 
   const iosOverlay = `
@@ -271,6 +286,7 @@ export async function generateEngineOverlay(opts: {
     "bare-quickjs":declared("ZAPP_WORKER_ENGINE_BARE_QUICKJS"),
     "bare-mqjs":   declared("ZAPP_WORKER_ENGINE_BARE_MQJS"),
     "bare-hermes": declared("ZAPP_WORKER_ENGINE_BARE_HERMES"),
+    zjs:           declared("ZAPP_WORKER_ENGINE_ZJS"),
   };
 
   // 2. Walk headless config — pick up any `engine:` field.
@@ -307,6 +323,7 @@ export async function generateEngineOverlay(opts: {
                 : w === "bare-quickjs"  ? "ZAPP_WORKER_ENGINE_BARE_QUICKJS"
                 : w === "bare-mqjs"     ? "ZAPP_WORKER_ENGINE_BARE_MQJS"
                 : w === "bare-hermes"   ? "ZAPP_WORKER_ENGINE_BARE_HERMES"
+                : w === "zjs"           ? "ZAPP_WORKER_ENGINE_ZJS"
                 : null;
       if (def) missing.push(def);
     }
@@ -370,6 +387,7 @@ export async function generatePlatformConfig(
   }
   hasJsc   = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_JSC\b/m.test(buildContent);
   hasTxiki = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_TXIKI/m.test(buildContent);
+  const hasZjs = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_ZJS\b/m.test(buildContent);
   if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_V8/m.test(buildContent)) bareEngines.push("v8");
   if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_JSC/m.test(buildContent)) bareEngines.push("jsc");
   if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_QUICKJS/m.test(buildContent)) bareEngines.push("quickjs");
@@ -391,6 +409,10 @@ export async function generatePlatformConfig(
     // engine but the dispatcher code is the same.
     const bareC = path.join(nativeDir, "worker", "engines", "bare.c");
     if (existsSync(bareC)) sources.push(bareC);
+  }
+  if (hasZjs) {
+    const zjsC = path.join(nativeDir, "worker", "engines", "zjs.c");
+    if (existsSync(zjsC)) sources.push(zjsC);
   }
 
   let content = "// AUTO-GENERATED by zapp CLI. Do not edit.\n// Platform-specific compilation sources.\n\n";
@@ -842,6 +864,87 @@ export async function generatePlatformConfig(
       ...allLinkLibs,
     ];
     content += `//> link: ${allFlags.join(" ")}\n`;
+  }
+
+  // zjs engine — independent of bare. Auto-builds libzjs.a if missing
+  // (one `make -C vendor/zjs` invocation; zjs's own Makefile handles
+  // the rest), then emits the include + link directives. macOS-only
+  // for now — iOS / Windows plumbing follows once zjs ships uv-free
+  // platform shims or we vendor libuv ourselves.
+  if (hasZjs && target === "macos") {
+    const { resolveVendorDir } = await import("./paths");
+    const vendorDir = resolveVendorDir();
+    const zjsDir = path.join(vendorDir, "zjs");
+    const zjsInclude = path.join(zjsDir, "include");
+    // Use the dylib, not the .a. Both the framework and libzjs.a embed
+    // zenc's stdlib (Vec / String / Option / Arena / …) — linking the
+    // .a fails with hundreds of duplicate-symbol errors on those
+    // shared internals. The dylib resolves symbols per-binary, so the
+    // framework sees only zjs's exported zjs_* surface and its own
+    // copy of the stdlib stays unconflicted.
+    //
+    // Long-term fix lives upstream in zjs: ship an embed-friendly .a
+    // with internal symbols stripped (ld -r + -unexported_symbols_list,
+    // or build a relocatable .o with `-hidden`). Until then the dylib
+    // is the right pragmatic choice — runtime dylib dependency is
+    // acceptable since libzjs.dylib lives next to the binary in dev
+    // and bundles into the .app in prod.
+    const zjsLib = path.join(zjsDir, "build", "libzjs.dylib");
+
+    if (!existsSync(zjsLib)) {
+      process.stdout.write(`[zapp] building vendor/zjs (first run; ~30s)...\n`);
+      const proc = Bun.spawn(["make", "-C", zjsDir], {
+        stdout: "pipe", stderr: "pipe",
+      });
+      const exitCode = await proc.exited;
+      if (exitCode !== 0 || !existsSync(zjsLib)) {
+        const stderr = await new Response(proc.stderr).text();
+        throw new Error(
+          `[zapp] failed to build vendor/zjs (exit ${exitCode}). ` +
+          `Tried: make -C ${zjsDir}. Build vendor/zjs by hand and rerun.\n${stderr}`
+        );
+      }
+    }
+
+    // zjs's Makefile bakes a relative install_name ("build/libzjs.dylib")
+    // because the dylib is normally consumed in-tree (its own smoke test
+    // run from the project root finds it via @loader_path). For Zapp
+    // we're linking from a different cwd, so the runtime loader can't
+    // resolve the relative path. Rewrite the install_name to the
+    // absolute vendor location once — idempotent, fast, no rebuild.
+    const otoolD = Bun.spawnSync(["otool", "-D", zjsLib]);
+    const installName = new TextDecoder().decode(otoolD.stdout).split("\n")[1]?.trim();
+    if (installName && installName !== zjsLib) {
+      const fix = Bun.spawnSync(["install_name_tool", "-id", zjsLib, zjsLib]);
+      if (fix.exitCode !== 0) {
+        throw new Error(
+          `[zapp] failed to set absolute install_name on ${zjsLib}: ` +
+          new TextDecoder().decode(fix.stderr)
+        );
+      }
+    }
+
+    // Headers: zjs's own + system libuv (engines/zjs.c uses uv_loop +
+    // friends). brew install libuv on macOS dev hosts puts it under
+    // /opt/homebrew (Apple Silicon) or /usr/local (Intel).
+    const uvIncludeCandidates = ["/opt/homebrew/include", "/usr/local/include"];
+    const uvLibCandidates     = ["/opt/homebrew/lib",     "/usr/local/lib"];
+    const uvInclude = uvIncludeCandidates.find(p => existsSync(path.join(p, "uv.h")));
+    const uvLibDir  = uvLibCandidates.find(p => existsSync(path.join(p, "libuv.dylib")));
+    if (!uvInclude || !uvLibDir) {
+      throw new Error(
+        `[zapp] zjs engine requires libuv (brew install libuv). ` +
+        `Searched ${uvIncludeCandidates.join(", ")} for uv.h.`
+      );
+    }
+
+    // -rpath so the framework binary finds libzjs.dylib at runtime
+    // from the vendor build dir. Production builds will copy the dylib
+    // into the .app bundle's Frameworks dir and use @loader_path
+    // instead — Z5 follow-up.
+    const zjsBuildDir = path.dirname(zjsLib);
+    content += `//> macos: cflags: -I${shortPath(zjsInclude)} -I${uvInclude}\n`;
+    content += `//> macos: link: ${shortPath(zjsLib)} -L${uvLibDir} -luv -Wl,-rpath,${zjsBuildDir}\n`;
   }
 
   if (process.platform === "win32" && sources.length > 0) {

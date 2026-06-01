@@ -41,6 +41,16 @@ interface WorkerEntry {
    * worker that asked for a different engine.
    */
   engine?: string;
+  /**
+   * Pre-compile to zjs bytecode after the Vite bundle runs. Only
+   * meaningful when `engine === "zjs"`. When true, the plugin invokes
+   * `zjs compile` on the post-bundle .mjs and writes a sibling .zbc
+   * file; the engine loader detects the extension and dispatches via
+   * `zjs_eval_bytecode` instead of `zjs_eval`. Always false for
+   * auto-discovered (webview-spawned) workers — only headless workers
+   * carry the flag from zapp.config.ts.
+   */
+  bytecode?: boolean;
 }
 
 /** Recursively scan for source files. */
@@ -87,20 +97,50 @@ async function discoverWorkers(srcDir: string): Promise<WorkerEntry[]> {
   return [...found.values()];
 }
 
-// Apply Hermes-compat downlevel to auto-discovered workers when any
-// headless worker uses `bare-hermes`. The native runtime falls back
-// to the first compiled-in engine if the JS-requested one isn't
-// available, so an auto-discovered worker that JS asks for "jsc"
-// will land on bare-hermes in a Hermes-only build — and crash on
-// load without the lowering. Inheriting closes that hole.
+// Inherit engine choice from headless workers to auto-discovered
+// (`new Worker(...)`) workers. Two reasons:
+//
+//   1. Per-engine compat transforms (hermesCompatLower) need to match
+//      the runtime engine that ends up loading the bundle.
+//   2. Per-engine SHIM gating (Z7 — bare-* packages only injected for
+//      bare-* engines, never zjs/txiki/jsc) needs the engine on the
+//      WorkerEntry so the gate sees it. Without inheritance, the
+//      auto-discovered worker's engine stays undefined and the bare-*
+//      shim injection trips runtime `Bare.Addon` crashes on zjs.
+//
+// Strategy: pick a single inherited engine if all headless workers
+// agree. If they disagree, leave auto-discovered workers undefined —
+// the resolver fallback chain handles mixed projects. If there are
+// no headless workers at all (auto-discovered only), default to
+// `zjs` (the recommended default for new projects).
 function inheritAutoWorkerEngine(
   autoWorkers: WorkerEntry[],
   headlessEntries: WorkerEntry[],
 ): void {
-  const hasHermes = headlessEntries.some((e) => e.engine === "bare-hermes");
-  if (!hasHermes) return;
+  // Collect the distinct engines headless workers explicitly request.
+  // Headless entries with no engine default to the resolver's choice
+  // at runtime; they don't constrain auto-discovered inheritance.
+  const declared = new Set<string>();
+  for (const e of headlessEntries) {
+    if (e.engine) declared.add(e.engine);
+  }
+
+  let chosen: string | undefined;
+  if (declared.size === 1) {
+    // Unique pick across the project — inherit it.
+    chosen = declared.values().next().value;
+  } else if (declared.size === 0) {
+    // No headless workers declare an engine — default to zjs (the
+    // recommended default for new projects). Avoids the bare-*
+    // shim injection misfire when the project hasn't picked.
+    chosen = "zjs";
+  }
+  // size > 1: leave auto-discovered workers undefined. Mixed projects
+  // ship multiple engines and the resolver picks at create time.
+
+  if (!chosen) return;
   for (const w of autoWorkers) {
-    if (!w.engine) w.engine = "bare-hermes";
+    if (!w.engine) w.engine = chosen;
   }
 }
 
@@ -346,10 +386,51 @@ const WORKER_MODULE_BINDINGS: Record<string, { pkg: string; ident: string; body:
   encoding:  null,  // TODO: bare-encoding global install
 };
 
+// Engines that consume the `bare-*` shim packages. Non-bare engines
+// (zjs, txiki, legacy jsc) have either intrinsic web APIs or rely on
+// engine-specific runtime extensions — they MUST NOT pull in bare-fetch
+// et al., which call `globalThis.Bare.Addon.load(...)` at module-init
+// time and crash on engines that don't expose `Bare`.
+//
+// When workerModules: ["fetch"] is requested on a non-bare engine, we
+// skip the shim injection and surface a warning so the user knows the
+// capability isn't being satisfied this run. zjs will ship its own
+// fetch/WebSocket via its runtime layer; once that lands the warning
+// table here grows engine-specific entries.
+function engineConsumesBareShims(engine: string | undefined): boolean {
+  // Undefined here is the "mixed-engine project" case where
+  // `inheritAutoWorkerEngine` couldn't pick a single inheritance
+  // target. Leaving bare-* shims OFF in that case is the safer
+  // default — non-bare engines crash hard on the `Bare.Addon`
+  // initialiser; bare-* engines without the shim just lack the
+  // global, which surfaces as a clear ReferenceError instead of
+  // a confusing TypeError.
+  if (!engine) return false;
+  return engine.startsWith("bare-");
+}
+
 function workerModulesPrelude(
   entryAbsPath: string,
   workerModules: readonly string[],
+  engine: string | undefined,
 ): Plugin | null {
+  // Hard gate on engine — non-bare engines never get bare-* shims even
+  // if the user asked for them. The shims unconditionally call
+  // `Bare.Addon.load(...)` at module-init, which is a runtime crash on
+  // anything that isn't a bare-* engine.
+  if (!engineConsumesBareShims(engine) && workerModules.length > 0) {
+    const requested = workerModules.filter(c => WORKER_MODULE_BINDINGS[c] != null);
+    if (requested.length > 0) {
+      console.warn(
+        `[zapp] worker "${path.basename(entryAbsPath)}" (engine: "${engine}") requested ` +
+        `workerModules: [${requested.map(c => `"${c}"`).join(", ")}] — those globals ` +
+        `come from bare-* shim packages and are only injected for bare-* engines. ` +
+        `Skipping shim injection. (For zjs, the capability will be served by the ` +
+        `engine's own runtime layer once it lands; for now the global will be undefined.)`
+      );
+    }
+    return null;
+  }
   const importLines: string[] = [];
   const bindBodies: string[] = [];
   for (const cap of workerModules) {
@@ -418,7 +499,7 @@ async function bundleWorker(
     // still override). Only present for worker bundling.
     const workerAliases: Record<string, string> = { ...BARE_STDLIB_ALIASES, ...aliases };
 
-    const prelude = workerModulesPrelude(entry.sourcePath, workerModules);
+    const prelude = workerModulesPrelude(entry.sourcePath, workerModules, entry.engine);
     const plugins: Plugin[] = [bareBindingTransform()];
     // Only Hermes needs the post-bundle ES2017 + class lowering pass.
     // JSC / V8 / QuickJS / mQJS run modern JS natively — we don't pay
@@ -486,6 +567,37 @@ async function bundleWorker(
         conditions: ["bare", "import", "module", "default"],
       },
     });
+
+    // bytecode: true (zjs only) — pre-compile the bundled .mjs to a
+    // sibling .zbc so the worker engine can dispatch via
+    // zjs_eval_bytecode instead of zjs_eval. Parse-free start, smaller
+    // embedded asset on iOS.
+    //
+    // Resolves zjs's CLI relative to where the plugin file lives
+    // (the package is published from this monorepo, so vendor/zjs is
+    // a sibling of vite/). For published consumption the zjs binary
+    // would need to be discovered from a different anchor; flagging
+    // as a follow-up.
+    if (entry.bytecode) {
+      const { existsSync } = await import("node:fs");
+      const mjsPath = path.join(outDir, entry.outputName);
+      const zbcPath = mjsPath.replace(/\.mjs$/, ".zbc");
+      const zjsCli = path.resolve(root, "..", "vendor", "zjs", "build", "zjs");
+      if (!existsSync(zjsCli)) {
+        console.warn(
+          `[zapp] bytecode: true requires vendor/zjs/build/zjs — not found at ${zjsCli}. ` +
+          `Skipping bytecode compile for ${entry.outputName}; falling back to .mjs.`
+        );
+      } else {
+        const { spawnSync } = await import("node:child_process");
+        const proc = spawnSync(zjsCli, ["compile", mjsPath, "-o", zbcPath], { encoding: "utf-8" });
+        if (proc.status !== 0) {
+          console.warn(
+            `[zapp] zjs compile failed for ${entry.outputName}, falling back to .mjs:\n${proc.stderr || proc.stdout}`
+          );
+        }
+      }
+    }
     return true;
   } catch (e) {
     console.error(`[zapp] worker bundle failed: ${entry.specifier}`, e);
@@ -503,7 +615,7 @@ interface ZappWorkersOptions {
    * Output URL is `/_workers/_headless_<id>.mjs` — the native runtime
    * loads these at app startup via generated Zen-C code.
    */
-  headless?: Record<string, string | { script: string; restart?: unknown; engine?: string }>;
+  headless?: Record<string, string | { script: string; restart?: unknown; engine?: string; bytecode?: boolean }>;
   /**
    * Worker capabilities (see ZappConfig.workerModules). For each entry
    * we prepend `import "@zappdev/runtime/worker-globals/<subpath>"` to
@@ -536,13 +648,26 @@ function resolveHeadlessEntries(root: string, headless?: ZappWorkersOptions["hea
   for (const [id, value] of Object.entries(headless)) {
     const srcPath = typeof value === "string" ? value : value.script;
     const engine = typeof value === "string" ? undefined : value.engine;
+    const bytecode = typeof value === "object" && value !== null ? !!value.bytecode : false;
     const abs = path.resolve(root, srcPath);
     if (!existsSync(abs)) {
       console.warn(`[zapp] headless worker "${id}" not found at ${srcPath}`);
       continue;
     }
+    if (bytecode && engine !== "zjs") {
+      console.warn(
+        `[zapp] headless worker "${id}": \`bytecode: true\` is only honoured for ` +
+        `\`engine: "zjs"\` — ignoring on engine "${engine ?? "jsc"}".`
+      );
+    }
+    // outputName/Url stay .mjs through the Vite bundle phase; the
+    // bytecode compile step (run after bundleWorker) emits a sibling
+    // .zbc, and the CLI's generated zapp_start_headless_worker_full
+    // call points at the .zbc when bytecode is on. Two artifacts on
+    // disk; the engine loader picks based on what the URL points at.
     entries.push({
       engine,
+      bytecode: bytecode && engine === "zjs",
       specifier: srcPath,
       sourcePath: abs,
       outputName: `_headless_${id}.mjs`,

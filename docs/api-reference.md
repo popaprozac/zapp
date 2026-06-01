@@ -25,6 +25,8 @@ import {
   // System integration
   Clipboard, type ClipboardFormat,
   Shortcuts,
+  Tray, type TrayOptions, type TrayHandle, type AttachWindowOptions,
+  Protocols, type ProtocolRequest, type ProtocolResponse, type ProtocolHandler,
 
   // Native UI
   Dialog, type OpenFileOptions, type SaveFileOptions, type MessageOptions,
@@ -239,6 +241,31 @@ them in a headless worker.
 
 Resolve an enum value to its string event name (`"window:ready"`,
 `"app:started"`, etc.). Useful for debugging / logging.
+
+### Worker lifecycle events
+
+Three engine-fired events let webviews observe supervised headless workers:
+
+- `worker:crashed` — fires on every uncaught throw in a worker (top-level eval OR async callback). Payload:
+  ```ts
+  { id: string; message: string; stack: string; incarnation: number }
+  ```
+- `worker:restarted` — fires after a successful restart (incarnation ≥ 2). Payload:
+  ```ts
+  { id: string; incarnation: number }
+  ```
+- `worker:gave-up` — fires once when the supervisor's `maxRetries` cap is exhausted. Payload:
+  ```ts
+  { id: string; finalIncarnation: number; retriesAttempted: number }
+  ```
+
+`incarnation` lets a UI correlate which restart cycle a crash belongs to.
+Webviews wanting to gate sends on a clean worker should listen for
+`worker:restarted` after a `worker:crashed`.
+
+Restart is supervised when `restart: { maxRetries, withinMs }` is set on a
+headless worker's config; see [Headless worker auto-restart](patterns.md#headless-worker-auto-restart)
+for the full lifecycle pattern.
 
 ---
 
@@ -817,6 +844,94 @@ that lands.
 
 ---
 
+## `Tray` — menu-bar / status item (macOS)
+
+A `Tray` is an icon in the macOS menu bar (top-right of the screen). Each
+tray is either **menu-driven** (left-click opens a popup menu) or
+**click-driven** (your handler runs on left/right click). Trays are owned
+by the app, not by any window — they survive across window opens and
+closes.
+
+```ts
+import { Tray, App, Window } from "@zappdev/runtime";
+
+// Menu-driven
+const status = Tray.create({
+  icon: "build/menubar-icon.png",   // 18×18 template PNG, system-tinted
+  tooltip: "My App",
+  menu: [
+    { label: "Open", action: () => Window.current().show() },
+    { type: "separator" },
+    { label: "Quit", role: "quit" },
+  ],
+});
+
+// Click-driven (no `menu`)
+const ping = Tray.create({ icon: "build/ping.png" });
+ping.on("click",       () => console.log("clicked"));
+ping.on("right-click", () => console.log("right-clicked"));
+```
+
+### `Tray.create(opts): TrayHandle`
+
+```ts
+{
+  icon: string                // path to PNG (template style recommended)
+  title?: string              // text next to the icon
+  tooltip?: string            // hover tooltip
+  menu?: MenuItemDef[]        // popup menu on click (omit for click events)
+  template?: boolean          // default: true — system tints for dark/light
+}
+```
+
+### `TrayHandle`
+
+```ts
+readonly id: number
+setIcon(path: string, opts?: { template?: boolean }): void
+setTitle(title: string): void
+setTooltip(tooltip: string): void
+setMenu(items: MenuItemDef[]): void
+on(event: "click" | "right-click", handler: () => void): () => void
+attachWindow(window: WindowHandle, opts?: AttachWindowOptions): void
+detachWindow(): void
+destroy(): void
+```
+
+### `attachWindow` — popover-style menu-bar apps
+
+Attaches a borderless window to the tray icon. Left-click toggles the
+window's visibility; the window auto-positions relative to the icon and
+(by default) hides on blur. Coexists with `setMenu` — left-click drives
+the window, right-click opens the menu.
+
+```ts
+const panel = await Window.create({
+  title: "Stats",
+  width: 320, height: 480,
+  borderless: true, visible: false,
+});
+status.attachWindow(panel, { position: "centerBelow" });
+```
+
+`AttachWindowOptions`:
+```ts
+{
+  position?: "centerBelow" | "centerAbove" | "rightCenter"  // default: centerBelow
+  dismissOnBlur?: boolean                                    // default: true
+  dismissOnOutsideClick?: boolean                            // default: true
+  toggleOnClick?: boolean                                    // default: true
+  offset?: { x?: number; y?: number }                        // default: { x: 0, y: 4 }
+}
+```
+
+### Platform support
+
+macOS only today. iOS has no menu-bar equivalent by design. Windows
+system-tray support is a separate gap on the Windows-parity roadmap.
+
+---
+
 ## `Clipboard`
 
 Read and write the system clipboard. Works in webviews and workers —
@@ -933,6 +1048,85 @@ Releases every accelerator the app has registered. Useful for
 
 macOS only today. Windows is a no-op until Win32 `RegisterHotKey`
 wires up.
+
+---
+
+## `Protocols` — custom in-webview URL schemes
+
+Intercept requests inside Zapp's own WebViews on a custom scheme
+(`asset://`, `media://`, etc.) and answer them from JavaScript. Useful
+for serving generated content (thumbnails, decoded media, IndexedDB
+blobs) without spinning up a local HTTP server.
+
+**Different from `deepLinkSchemes`.** Deep links are *system-wide* — the
+OS routes `myapp://...` URLs to your app even when it's not running, and
+they fire `App.on(AppEvent.OPEN_URL)`. Protocols are *webview-internal*
+— they intercept requests inside Zapp's WebViews only.
+
+### Setup
+
+Declare schemes in `zapp.config.ts` (config-time only; WKWebView's scheme
+registration runs at webview creation):
+
+```ts
+// zapp.config.ts
+export default defineConfig({
+  name: "My App",
+  protocols: ["asset"],
+});
+```
+
+Register a handler at runtime:
+
+```ts
+import { Protocols } from "@zappdev/runtime";
+
+Protocols.register("asset", async (req) => {
+  const id = new URL(req.url).pathname.slice(1);   // /thumb-123 → thumb-123
+  const bytes = await loadAssetBytes(id);
+  return { body: bytes, contentType: "image/jpeg" };
+});
+
+// Then anywhere in your HTML / CSS:
+//   <img src="asset://thumb-123" />
+```
+
+### `Protocols.register(scheme, handler): () => void`
+
+Returns an unsubscribe function. Calling it removes the handler; the
+scheme stays registered with WKWebView, so a later `Protocols.register`
+for the same scheme reattaches without re-rendering the webview.
+
+Re-registering the same scheme replaces the previous handler — listeners
+don't accumulate.
+
+### `ProtocolRequest`
+
+```ts
+{
+  url: string      // full URL, e.g. "asset://thumb-123"
+  method: string   // HTTP method, usually "GET"
+}
+```
+
+### `ProtocolResponse`
+
+```ts
+{
+  body: Uint8Array | string    // binary or UTF-8 string
+  contentType?: string         // default: "application/octet-stream"
+  status?: number              // default: 200
+}
+```
+
+Throwing inside the handler replies with status 500 so WebKit cancels
+the request cleanly (no hangs).
+
+### Platform support
+
+macOS + iOS today (shipped in alpha.54). Windows route through WebView2's
+`AddWebResourceRequestedFilter` — planned as part of the Windows-parity
+push.
 
 ---
 

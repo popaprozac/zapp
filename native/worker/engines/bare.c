@@ -25,6 +25,7 @@
 #include <bare.h>
 #include <js.h>
 #include <uv.h>
+#include <stdatomic.h>
 
 #include <pthread.h>
 #include <stdbool.h>
@@ -85,6 +86,8 @@ extern void worker_dispatch_to_webview(const char* worker_id, const char* data_j
 extern void worker_post_message(char* worker_id, char* data_json);
 extern void dispatch_event_to_all(const char* event_name, const char* payload);
 extern int  zapp_worker_supervisor_record_failure(const char* worker_id);
+extern int  zapp_worker_supervisor_get_window_state(
+    const char* worker_id, int* out_count, int* out_cap, int* out_window_ms);
 
 // Sync API + window creation. darwin_sync_handle is thread-safe (uses
 // pthread_mutex), so workers can call directly without bouncing to
@@ -174,6 +177,16 @@ typedef struct {
     int async_initialized;
     BareMsgQueue inbox;       // postMessage payloads (JSON strings)
     BareMsgQueue eval_inbox;  // raw JS to eval (broadcast path)
+
+    // Reincarnation counter — 1 on first start, +1 each successful restart.
+    // Written from the outer loop in bare_worker_thread (Task 2.3).
+    int incarnation;
+
+    // Control flags — written from bare_host_worker_crash (worker thread)
+    // and bare_worker_terminate (any thread). The outer reincarnation
+    // loop reads these after bare_run returns. wants_terminate wins.
+    _Atomic int wants_restart;
+    _Atomic int wants_terminate;
 } BareWorkerSlot;
 
 static BareWorkerSlot bare_workers[BARE_MAX_WORKERS] = {0};
@@ -1207,14 +1220,11 @@ void bare_worker_eval_js(const char* worker_id, const char* js) {
 
 // __zappBridge.workerCrash(message, stack) — the worker bootstrap
 // calls this when an uncaught error escapes a setTimeout callback or
-// event handler. Dispatches `worker:crashed` to anyone listening AND
-// asks the supervisor whether to restart.
-//
-// Restart support is deferred for bare — same as txiki today (see
-// `project_txiki_worker_restart.md`). For now we just record the
-// failure + emit the event; the supervisor's record_failure caps
-// retry attempts, so apps with a configured policy will eventually
-// see `worker:gave-up` even without active restart.
+// event handler. Dispatches `worker:crashed`, asks the supervisor for
+// a verdict, and on verdict==1 sets wants_restart + bare_terminate
+// (the outer reincarnation loop in bare_worker_thread handles the
+// rest). On verdict==2 fires `worker:gave-up`. Same shape as
+// host_worker_crash in zjs.c.
 static js_value_t* bare_host_worker_crash(js_env_t* env, js_callback_info_t* info) {
     size_t argc = 2;
     js_value_t* argv[2];
@@ -1231,26 +1241,40 @@ static js_value_t* bare_host_worker_crash(js_env_t* env, js_callback_info_t* inf
     char* esc_message = bare_json_escape_dup(message);
     char* esc_stack   = bare_json_escape_dup(stack);
 
-    // Build the JSON payload {"id":..., "message":..., "stack":...}.
-    // Length-bounded snprintf into a heap buffer sized to fit; we don't
-    // want a 4 KB stack buffer truncating long stacks (bug class noted
-    // in project_buffer_truncation_sweep.md). The escape helper above
-    // already heap-allocates so we just length-account here.
+    // Build the JSON payload {"id":..., "message":..., "stack":..., "incarnation":N}.
     size_t need = strlen(slot->worker_id) +
                   (esc_message ? strlen(esc_message) : 0) +
-                  (esc_stack ? strlen(esc_stack) : 0) + 64;
+                  (esc_stack ? strlen(esc_stack) : 0) + 128;
     char* payload = (char*)malloc(need);
     if (payload) {
         snprintf(payload, need,
-                 "{\"id\":\"%s\",\"message\":\"%s\",\"stack\":\"%s\"}",
+                 "{\"id\":\"%s\",\"message\":\"%s\",\"stack\":\"%s\",\"incarnation\":%d}",
                  slot->worker_id,
                  esc_message ? esc_message : "",
-                 esc_stack ? esc_stack : "");
+                 esc_stack ? esc_stack : "",
+                 slot->incarnation);
         dispatch_event_to_all("worker:crashed", payload);
         free(payload);
     }
 
-    zapp_worker_supervisor_record_failure(slot->worker_id);
+    int decision = zapp_worker_supervisor_record_failure(slot->worker_id);
+    if (decision == 1) {
+        // Restart approved. Set the atomic flag and bare_terminate to
+        // break bare_run; the outer loop in bare_worker_thread sees
+        // wants_restart and re-incarnates the JS state. worker:restarted
+        // fires from there after setup_state completes.
+        atomic_store(&slot->wants_restart, 1);
+        if (slot->bare) bare_terminate(slot->bare);
+    } else if (decision == 2) {
+        // Supervisor cap exhausted — gave_up flag in registry is now sticky.
+        char gave_up[256];
+        snprintf(gave_up, sizeof(gave_up),
+                 "{\"id\":\"%s\",\"finalIncarnation\":%d,\"retriesAttempted\":%d}",
+                 slot->worker_id, slot->incarnation,
+                 slot->incarnation > 0 ? slot->incarnation - 1 : 0);
+        dispatch_event_to_all("worker:gave-up", gave_up);
+    }
+    // decision == 0: no policy configured; worker idles in current state.
 
     free(esc_message);
     free(esc_stack);
@@ -1259,21 +1283,76 @@ static js_value_t* bare_host_worker_crash(js_env_t* env, js_callback_info_t* inf
     return undef;
 }
 
-// --- Worker thread entry ---
+// --- Worker thread helpers ---
 
-static void* bare_worker_thread(void* data) {
-    BareWorkerSlot* slot = (BareWorkerSlot*)data;
-    int err;
+typedef enum {
+    BARE_SETUP_OK      = 0,
+    BARE_SETUP_CRASHED = 1,
+    BARE_SETUP_FATAL   = 2,
+} BareSetupResult;
 
-    uv_loop_t loop;
-    err = uv_loop_init(&loop);
-    if (err) {
-        fprintf(stderr, "[zapp] bare worker '%s' uv_loop_init failed: %s\n",
-            slot->worker_id, uv_strerror(err));
-        slot->active = false;
-        return NULL;
+// Forward declarations
+static BareSetupResult bare_worker_setup_state(BareWorkerSlot* slot);
+static void bare_worker_teardown_state(BareWorkerSlot* slot, int keep_loop);
+
+// Synthetic crash signal — called from setup_state when the wrapped
+// js_run_script fails to eval the user script wrap (rare; usually a
+// parse error in the wrap itself), or when script_source is missing
+// or empty. Mirrors bare_host_worker_crash's dispatch + supervisor
+// handshake without needing a live JS frame.
+//
+// Caller returns BARE_SETUP_CRASHED so the outer loop in
+// bare_worker_thread teardown + iterates per supervisor verdict.
+static void bare_setup_synthesize_crash(BareWorkerSlot* slot,
+                                        const char* msg,
+                                        const char* stack) {
+    char* esc_message = bare_json_escape_dup(msg ? msg : "");
+    char* esc_stack   = bare_json_escape_dup(stack ? stack : "");
+
+    size_t need = strlen(slot->worker_id) +
+                  (esc_message ? strlen(esc_message) : 0) +
+                  (esc_stack ? strlen(esc_stack) : 0) + 128;
+    char* payload = (char*)malloc(need);
+    if (payload) {
+        snprintf(payload, need,
+                 "{\"id\":\"%s\",\"message\":\"%s\",\"stack\":\"%s\",\"incarnation\":%d}",
+                 slot->worker_id,
+                 esc_message ? esc_message : "",
+                 esc_stack   ? esc_stack   : "",
+                 slot->incarnation);
+        dispatch_event_to_all("worker:crashed", payload);
+        free(payload);
     }
-    slot->loop = &loop;
+
+    int decision = zapp_worker_supervisor_record_failure(slot->worker_id);
+    if (decision == 1) {
+        atomic_store(&slot->wants_restart, 1);
+        // No bare_terminate here — we're inside setup_state, not running
+        // bare_run yet. The outer while-loop in bare_worker_thread sees
+        // SETUP_CRASHED return value and proceeds to teardown + iterate.
+    } else if (decision == 2) {
+        char gp[256];
+        snprintf(gp, sizeof(gp),
+                 "{\"id\":\"%s\",\"finalIncarnation\":%d,\"retriesAttempted\":%d}",
+                 slot->worker_id, slot->incarnation,
+                 slot->incarnation > 0 ? slot->incarnation - 1 : 0);
+        dispatch_event_to_all("worker:gave-up", gp);
+    }
+
+    free(esc_message);
+    free(esc_stack);
+}
+
+// bare_worker_setup_state — called from bare_worker_thread after
+// uv_loop_init + slot->loop assignment. Initialises the bare runtime,
+// registers all host functions on __zappBridge, evals both bootstrap
+// scripts, and evals the user worker script. Returns BARE_SETUP_FATAL
+// if the platform or bare_setup step fails (caller closes the loop
+// directly). Returns BARE_SETUP_OK on success. BARE_SETUP_CRASHED is
+// defined but not yet returned here — Task 2.5 will wire it for
+// script-eval errors.
+static BareSetupResult bare_worker_setup_state(BareWorkerSlot* slot) {
+    int err;
 
     // Share a single js_platform_t across all bare workers in the
     // process. Required by V8 (which has process-wide global state and
@@ -1285,27 +1364,25 @@ static void* bare_worker_thread(void* data) {
     if (!platform) {
         fprintf(stderr, "[zapp] bare worker '%s' shared platform unavailable\n",
             slot->worker_id);
-        uv_loop_close(&loop);
         slot->active = false;
-        return NULL;
+        return BARE_SETUP_FATAL;
     }
     slot->platform = platform;  // recorded for diagnostics; NOT owned by the slot
 
     bare_options_t bare_opts = {0};
     const char* argv[] = { "zapp-bare-worker", NULL };
-    err = bare_setup(&loop, platform, &slot->env, 1, argv, &bare_opts, &slot->bare);
+    err = bare_setup(slot->loop, platform, &slot->env, 1, argv, &bare_opts, &slot->bare);
     if (err) {
         fprintf(stderr, "[zapp] bare worker '%s' bare_setup failed (err=%d)\n",
             slot->worker_id, err);
-        uv_loop_close(&loop);
         slot->active = false;
-        return NULL;
+        return BARE_SETUP_FATAL;
     }
 
     // Register the uv_async_t BEFORE any host-side post can race in. Once
     // active=true is visible to other threads they may call uv_async_send
     // through bare_worker_post_message; the handle has to exist by then.
-    uv_async_init(&loop, &slot->async, bare_on_async_message);
+    uv_async_init(slot->loop, &slot->async, bare_on_async_message);
     slot->async.data = slot;
     slot->async_initialized = 1;
 
@@ -1571,23 +1648,39 @@ static void* bare_worker_thread(void* data) {
         js_create_string_utf8(slot->env, (utf8_t*)wrapped,
                               strlen(wrapped), &src);
         js_value_t* run_result;
-        err = js_run_script(slot->env, slot->script_url, -1, 0, src, &run_result);
-        if (err) {
+        int run_err = js_run_script(slot->env, slot->script_url, -1, 0, src, &run_result);
+        if (run_err) {
             // Should be rare now — the JS-side try/catch swallows most
             // user-script errors. If we still see this, the wrap
             // itself is malformed (parse error in our generated JS,
             // not in user code).
             fprintf(stderr,
                 "[zapp] bare worker '%s' wrapper eval failed (err=%d) — generated wrap may be malformed\n",
-                slot->worker_id, err);
+                slot->worker_id, run_err);
         }
         free(wrapped);
         js_close_handle_scope(slot->env, run_scope);
+
+        if (run_err) {
+            bare_setup_synthesize_crash(slot, "script wrap eval failed", "");
+            return BARE_SETUP_CRASHED;
+        }
+    } else {
+        fprintf(stderr, "[zapp] bare worker '%s' missing script source\n",
+                slot->worker_id);
+        bare_setup_synthesize_crash(slot, "script load failed", "");
+        return BARE_SETUP_CRASHED;
     }
 
-    // Run the loop until something terminates the bare instance.
-    bare_run(slot->bare, UV_RUN_DEFAULT);
+    return BARE_SETUP_OK;
+}
 
+// bare_worker_teardown_state — tears down the bare runtime, async
+// handle, message queues, and slot fields. If keep_loop is non-zero,
+// skips uv_loop_close (used when the caller intends to re-init the
+// loop for a restart; Task 2.3 will use this). The final "exited" log
+// line is emitted here so it always appears regardless of call site.
+static void bare_worker_teardown_state(BareWorkerSlot* slot, int keep_loop) {
     int exit_code = 0;
     bare_teardown(slot->bare, UV_RUN_NOWAIT, &exit_code);
     if (slot->async_initialized) {
@@ -1597,10 +1690,14 @@ static void* bare_worker_thread(void* data) {
     // The platform is process-wide (see bare_get_shared_platform). We
     // recorded a pointer for diagnostics but DO NOT own it — never
     // call js_destroy_platform from the worker thread.
-    uv_loop_close(&loop);
+    if (!keep_loop) {
+        uv_loop_close(slot->loop);
+    }
 
-    bare_msgqueue_destroy(&slot->inbox);
-    bare_msgqueue_destroy(&slot->eval_inbox);
+    if (!keep_loop) {
+        bare_msgqueue_destroy(&slot->inbox);
+        bare_msgqueue_destroy(&slot->eval_inbox);
+    }
 
     free(slot->script_source);
     slot->script_source = NULL;
@@ -1612,6 +1709,77 @@ static void* bare_worker_thread(void* data) {
 
     fprintf(stderr, "[zapp] bare worker exited: %s (code=%d)\n",
         slot->worker_id, exit_code);
+}
+
+// --- Worker thread entry ---
+
+static void* bare_worker_thread(void* data) {
+    BareWorkerSlot* slot = (BareWorkerSlot*)data;
+
+    uv_loop_t loop;
+    int err = uv_loop_init(&loop);
+    if (err) {
+        fprintf(stderr, "[zapp] bare worker '%s' uv_loop_init failed: %s\n",
+                slot->worker_id, uv_strerror(err));
+        slot->active = false;
+        return NULL;
+    }
+    slot->loop = &loop;
+    slot->incarnation = 0;
+
+    while (1) {
+        slot->incarnation++;
+        slot->active = true;
+
+        // teardown_state(keep_loop=1) nulls slot->loop to protect against
+        // stale access; re-arm it at the top of each iteration so that
+        // setup_state and bare_run always see a live pointer.
+        slot->loop = &loop;
+
+        BareSetupResult setup = bare_worker_setup_state(slot);
+
+        if (setup == BARE_SETUP_FATAL) {
+            fprintf(stderr, "[zapp] bare worker '%s' setup fatal (incarnation %d)\n",
+                    slot->worker_id, slot->incarnation);
+            break;
+        }
+
+        if (setup == BARE_SETUP_CRASHED) {
+            // host_worker_crash already fired; wants_restart set per
+            // supervisor verdict. Skip bare_run — nothing live to run.
+            // (No path returns CRASHED yet — Task 2.5 adds it.)
+            bare_worker_teardown_state(slot, /*keep_loop=*/1);
+        } else {
+            // BARE_SETUP_OK
+            if (slot->incarnation > 1) {
+                char payload[128];
+                snprintf(payload, sizeof(payload),
+                         "{\"id\":\"%s\",\"incarnation\":%d}",
+                         slot->worker_id, slot->incarnation);
+                dispatch_event_to_all("worker:restarted", payload);
+                int fc = 0, cap = 0, win = 0;
+                zapp_worker_supervisor_get_window_state(slot->worker_id, &fc, &cap, &win);
+                fprintf(stderr, "[zapp] bare worker '%s' restarting "
+                                "(incarnation %d, fail_count %d/%d in %dms window)\n",
+                        slot->worker_id, slot->incarnation, fc, cap, win);
+            }
+
+            bare_run(slot->bare, UV_RUN_DEFAULT);
+
+            bare_worker_teardown_state(slot, /*keep_loop=*/1);
+        }
+
+        if (atomic_load(&slot->wants_terminate)) break;
+        if (!atomic_load(&slot->wants_restart)) break;
+        atomic_store(&slot->wants_restart, 0);
+    }
+
+    // Final cleanup — close the loop now that we're really exiting.
+    uv_run(&loop, UV_RUN_NOWAIT);
+    uv_loop_close(&loop);
+    bare_msgqueue_destroy(&slot->inbox);
+    bare_msgqueue_destroy(&slot->eval_inbox);
+    slot->active = false;
     return NULL;
 }
 
@@ -1672,7 +1840,10 @@ void bare_worker_post_message(const char* worker_id, const char* data_json) {
     if (!worker_id || !data_json) return;
     pthread_mutex_lock(&bare_mutex);
     BareWorkerSlot* slot = bare_find_slot(worker_id);
-    if (!slot || !slot->async_initialized) {
+    if (!slot || !slot->active || !slot->async_initialized || !slot->bare) {
+        fprintf(stderr, "[zapp] bare worker '%s' message dropped "
+                        "(worker not ready; incarnation %d)\n",
+                worker_id, slot ? slot->incarnation : 0);
         pthread_mutex_unlock(&bare_mutex);
         return;
     }
@@ -1699,8 +1870,11 @@ void bare_broadcast_eval_js(const char* js) {
 void bare_worker_terminate(const char* worker_id) {
     pthread_mutex_lock(&bare_mutex);
     BareWorkerSlot* slot = bare_find_slot(worker_id);
-    if (slot && slot->bare) {
-        bare_terminate(slot->bare);  // signals bare_run to return; thread cleans up
+    if (slot) {
+        atomic_store(&slot->wants_terminate, 1);
+        if (slot->bare) {
+            bare_terminate(slot->bare);  // signals bare_run to return; thread cleans up
+        }
     }
     pthread_mutex_unlock(&bare_mutex);
 }
@@ -1710,9 +1884,11 @@ void bare_worker_terminate_owner(const char* owner_id) {
     pthread_mutex_lock(&bare_mutex);
     for (int i = 0; i < BARE_MAX_WORKERS; i++) {
         if (bare_workers[i].active &&
-            strcmp(bare_workers[i].owner_id, owner_id) == 0 &&
-            bare_workers[i].bare) {
-            bare_terminate(bare_workers[i].bare);
+            strcmp(bare_workers[i].owner_id, owner_id) == 0) {
+            atomic_store(&bare_workers[i].wants_terminate, 1);
+            if (bare_workers[i].bare) {
+                bare_terminate(bare_workers[i].bare);
+            }
         }
     }
     pthread_mutex_unlock(&bare_mutex);
