@@ -86,6 +86,9 @@ extern void worker_post_message(char* worker_id, char* data_json);
 // window cap is exhausted. Same callee bare.c uses from workerCrash.
 extern int zapp_worker_supervisor_record_failure(const char* worker_id);
 
+extern int zapp_worker_supervisor_get_window_state(
+    const char* worker_id, int* out_count, int* out_cap, int* out_window_ms);
+
 // ---------------------------------------------------------------------------
 // Worker slot table — same shape as txiki, sized identically.
 // ---------------------------------------------------------------------------
@@ -1302,8 +1305,11 @@ static void* zjs_worker_thread(void* arg) {
                          "{\"id\":\"%s\",\"incarnation\":%d}",
                          slot->worker_id, slot->incarnation);
                 dispatch_event_to_all("worker:restarted", payload);
-                fprintf(stderr, "[zapp] zjs worker '%s' restarting (incarnation %d)\n",
-                        slot->worker_id, slot->incarnation);
+                int fc = 0, cap = 0, win = 0;
+                zapp_worker_supervisor_get_window_state(slot->worker_id, &fc, &cap, &win);
+                fprintf(stderr, "[zapp] zjs worker '%s' restarting "
+                                "(incarnation %d, fail_count %d/%d in %dms window)\n",
+                        slot->worker_id, slot->incarnation, fc, cap, win);
             }
 
             uv_run(&slot->loop, UV_RUN_DEFAULT);
@@ -1368,7 +1374,14 @@ void zjs_worker_post_message(const char* worker_id, const char* data_json) {
     if (!worker_id || !data_json) return;
     pthread_mutex_lock(&zjs_workers_mutex);
     ZjsWorkerSlot* slot = zjs_find_slot(worker_id);
-    if (!slot || !slot->loop_initialized) {
+    if (!slot || !slot->active || !slot->ctx) {
+        pthread_mutex_unlock(&zjs_workers_mutex);
+        fprintf(stderr, "[zapp] zjs worker '%s' message dropped "
+                        "(worker not ready; incarnation %d)\n",
+                worker_id, slot ? slot->incarnation : 0);
+        return;
+    }
+    if (!slot->loop_initialized) {
         pthread_mutex_unlock(&zjs_workers_mutex);
         fprintf(stderr, "[zapp] zjs worker '%s' not active for postMessage — dropping\n",
             worker_id);
