@@ -1429,9 +1429,9 @@ void zjs_worker_terminate_owner(const char* owner_id) {
 }
 
 // Broadcast a JS snippet (bridge._onEvent IIFE) to every active zjs worker.
-// Counterpart of txiki_broadcast_eval_js / bare_broadcast_eval_js — the
-// dispatcher fans events emitted from the webview (or anywhere else) into
-// the worker pool by calling this. zjs workers each run their own libuv
+// Counterpart of bare_broadcast_eval_js — the dispatcher fans events emitted
+// from the webview (or anywhere else) into the worker pool by calling this.
+// zjs workers each run their own libuv
 // loop, so we push the snippet into the slot's eval_inbox and signal the
 // async; on_eval_inbox_async drains and evals on the worker thread.
 void zjs_broadcast_eval_js(const char* js) {

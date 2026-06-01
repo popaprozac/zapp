@@ -657,7 +657,7 @@ function resolveHeadlessEntries(root: string, headless?: ZappWorkersOptions["hea
     if (bytecode && engine !== "zjs") {
       console.warn(
         `[zapp] headless worker "${id}": \`bytecode: true\` is only honoured for ` +
-        `\`engine: "zjs"\` — ignoring on engine "${engine ?? "jsc"}".`
+        `\`engine: "zjs"\` — ignoring on engine "${engine}".`
       );
     }
     // outputName/Url stay .mjs through the Vite bundle phase; the

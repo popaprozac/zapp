@@ -16,12 +16,12 @@ Build the smallest, fastest desktop framework. macOS first, Windows next.
 
 Current headline numbers (M4 Max, one-window hello-world):
 
-| Metric | Zapp (JSC) | Zapp (txiki) |
-|---|---|---|
-| Binary | 450 KB | 6.5 MB |
-| Memory | 26 MB | 25 MB |
-| IPC round-trip (webview) | 135 µs | 130 µs |
-| IPC round-trip (worker) | ~5 µs | ~5 µs |
+| Metric | Zapp (zjs) |
+|---|---|
+| Binary | 445 KB |
+| Memory | 26 MB |
+| IPC round-trip (webview) | 135 µs |
+| IPC round-trip (worker) | 0.45 µs |
 
 Full comparison vs Tauri / Wails / Electron / Electrobun: `benchmarks/RESULTS.md`.
 
@@ -68,8 +68,8 @@ zapp/
 │   │   ├── worker.zc               # Engine abstraction
 │   │   ├── registry.zc             # Worker slots, owner tracking
 │   │   └── engines/
-│   │       ├── jsc.{h,m,zc}        # JSC engine (macOS)
-│   │       └── txiki.{h,c,zc}      # txiki.js engine (cross-platform)
+│   │       ├── zjs.{h,c}            # First-party engine (cross-platform, default)
+│   │       └── bare-*.{h,c}        # bare-jsc / bare-v8 / bare-quickjs / bare-mqjs / bare-hermes
 │   ├── dialog/dialog.zc            # Native dialog wrappers
 │   ├── notification/notification.zc # Native notification wrappers
 │   ├── dock/dock.zc                # Native dock wrappers (macOS)
@@ -81,7 +81,7 @@ zapp/
 │
 ├── bootstrap/                      # Injected JS (codegen'd into binary)
 │   ├── webview.ts                  # WKWebView / WebView2 bridge
-│   ├── worker.ts                   # Unified worker bootstrap (JSC + txiki)
+│   ├── worker.ts                   # Unified worker bootstrap (all engines)
 │   └── codegen.ts                  # TS → minified → escaped → Zen-C string
 │
 ├── runtime/                        # @zappdev/runtime (TS API)
@@ -103,7 +103,7 @@ zapp/
 │   │   ├── paths.ts                # Resolve native/, bootstrap/, vendor/
 │   │   ├── generate.ts, workers.ts, bundle.ts, package.ts, icon.ts
 │   │   └── assets.ts               # Brotli-embed dist/ as C struct array
-│   └── patches/                    # Applied to cloned txiki.js
+│   └── patches/                    # Applied to vendored engine sources
 │
 ├── vite/                           # @zappdev/vite
 │   └── src/index.ts                # zappWorkers() plugin
@@ -200,8 +200,8 @@ Special method names prefixed `__` (e.g. `__window:create`, `__notif:show`,
 `native/window/callbacks.zc` is the single place window events get
 dispatched. For each event, it:
 1. **Layer 1** — invokes native Zen-C callback (can return CANCEL).
-2. **Layer 2** — broadcasts to every active worker via
-   `jsc_broadcast_eval_js` / `txiki_broadcast_eval_js`.
+2. **Layer 2** — broadcasts to every active worker via each engine's
+   `broadcast_eval_js` function.
 3. **Layer 3** — posts to the owning window's WebView JS.
 
 Per-window listener bitmask in `callbacks.zc` skips Layer 3 when no
@@ -232,7 +232,7 @@ C string literals compiled into the binary via
 - `zapp_webview_bootstrap_script()` — injected into WKWebView via
   `WKUserScript` at document-start
 - `zapp_worker_bootstrap_script()` — eval'd into each worker context
-  during `jsc_setup_bridge` / `txiki_setup_bridge`
+  during the engine's `setup_bridge` step
 
 There is **no separate backend-bootstrap** anymore.
 
@@ -245,8 +245,8 @@ There is **no separate backend-bootstrap** anymore.
 - **`darwin_*`** prefix for platform-specific C API; **`zapp_*`** for
   internal C helpers in .m files; plain names for Zen-C trampolines
 - **`@cfg(apple)` / `@cfg(windows)`** on top-level imports and functions
-- **`#ifdef __APPLE__`** inside .c files (txiki.c) for conditional
-  platform host objects
+- **`#ifdef __APPLE__`** inside .c files for conditional platform host
+  objects (used until a cross-platform `zapp_*` extern layer lands)
 - **`_Thread_local` static buffer** for service return values (avoids
   malloc in the hot path)
 
@@ -256,13 +256,10 @@ There is **no separate backend-bootstrap** anymore.
   a namespace for `Zapp::inspectable_auto()` etc. Zen-C's struct literal
   limitation prevents using `ZappInspectable::Auto()` as a bare value in
   some contexts, so we provide these wrappers.
-- `txiki.c` has `#ifdef __APPLE__` around notif/dock dispatcher bodies.
-  Those are placeholders for the day `darwin_*` externs get replaced
-  with a cross-platform `zapp_*` layer. When that lands, drop the guards.
-- `cli/patches/txiki-cookie-jar-path.patch` — upstream gap in
-  `saghul/txiki.js`. Embedders need to set an lws cookie jar path; the
-  upstream API doesn't expose a setter. We add one via this patch, apply
-  after cloning. See the patch file for the small diff.
+- `zjs.c` and bare-* engine files may have `#ifdef __APPLE__` around
+  notif/dock dispatcher bodies. Those are placeholders for the day
+  `darwin_*` externs get replaced with a cross-platform `zapp_*` layer.
+  When that lands, drop the guards.
 - `cli/package.json` has `prepack` / `postpack` scripts that copy
   `native/`, `bootstrap/`, `assets/`, `vendor/webview2/` into `cli/`
   before npm pack, then delete them after. This ships the framework
@@ -274,8 +271,9 @@ There is **no separate backend-bootstrap** anymore.
 - **Inclusive language**: allowlist/blocklist, not white/black.
 - **`hello-world/`** is the playground — test changes here end-to-end.
 - **`benchmarks/`** is the performance regression harness.
-- Before publishing: `bun run build` in `hello-world/` must pass with JSC
-  engine AND with txiki (change the `define` in `build.zc`).
+- Before publishing: `bun run build` in `hello-world/` must pass with the
+  `zjs` engine (default). Test bare-* engines by changing the `engine:`
+  field in `hello-world/zapp.config.ts` for cross-engine verification.
 
 ## Public docs
 
@@ -299,6 +297,6 @@ hacking on the framework itself.
 |---|---|
 | Zen-C docs | https://docs.zenc-lang.org/ |
 | Zen-C repo | https://github.com/zenc-lang/zenc |
-| txiki.js | https://github.com/saghul/txiki.js |
+| Bare runtime | https://github.com/nicolo-ribaudo/bare |
 | WebView2 host objects | https://learn.microsoft.com/en-us/microsoft-edge/webview2/how-to/hostobject |
 | Apple WKWebView | https://developer.apple.com/documentation/webkit/wkwebview |

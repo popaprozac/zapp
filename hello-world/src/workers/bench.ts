@@ -5,9 +5,9 @@
 //   2. Events.emit(name, payload)  — worker → all-webview broadcast (one-way)
 //   3. Workers.send(target, ch, d) — worker → worker direct (one-way)
 //
-// Three copies of this worker run side-by-side, one per engine
-// (configured in zapp.config.ts as `bench-jsc`, `bench-txiki`,
-// `bench-bare-jsc`). They self-trigger on startup with a 1.5s grace
+// Multiple copies of this worker can run side-by-side, one per engine
+// (configured in zapp.config.ts as `bench-bare-jsc`, `bench-zjs`, etc.).
+// They self-trigger on startup with a 1.5s grace
 // period so the app finishes its own bootstrap before the timing loop
 // starts. Results are logged to stderr in CSV-friendly format so the
 // CLI dev console captures them.

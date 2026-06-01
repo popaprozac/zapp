@@ -16,7 +16,7 @@
 #include <libkern/OSAtomic.h>
 #include <objc/runtime.h>
 
-// Synchronous HTTP fetcher used by txiki.c on iOS to load worker
+// Synchronous HTTP fetcher used by worker engines on iOS to load worker
 // bundles from the Vite dev server in dev mode (the host filesystem
 // isn't reachable from inside the Simulator's app sandbox). Returns
 // a malloc'd UTF-8 string or NULL; caller frees. Synchronous on

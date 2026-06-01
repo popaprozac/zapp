@@ -5,8 +5,6 @@
 // without caring which engine owns each worker.
 //
 // Build flags:
-//   - `ZAPP_WORKER_ENGINE_JSC`          — legacy: native Cocoa JSC
-//   - `ZAPP_WORKER_ENGINE_TXIKI`        — legacy: txiki.js (QuickJS)
 //   - `ZAPP_WORKER_ENGINE_BARE_JSC`     — Bare + libjsc
 //   - `ZAPP_WORKER_ENGINE_BARE_V8`      — Bare + libjs (V8)
 //   - `ZAPP_WORKER_ENGINE_BARE_QUICKJS` — Bare + libqjs
@@ -21,8 +19,6 @@ import "./registry.zc";
 
 // Engine .zc files just import their respective C headers so the
 // extern symbols are visible to the raw-block dispatchers below.
-import "./engines/jsc.zc";
-import "./engines/txiki.zc";
 import "./engines/bare.zc";
 import "./engines/zjs.zc";
 
@@ -37,8 +33,7 @@ raw {
 
 fn workers_enabled() -> bool {
     raw {
-        #if defined(ZAPP_WORKER_ENGINE_JSC) || defined(ZAPP_WORKER_ENGINE_TXIKI) \
-         || defined(ZAPP_WORKER_ENGINE_ZJS) || ZAPP_HAS_BARE
+        #if defined(ZAPP_WORKER_ENGINE_ZJS) || ZAPP_HAS_BARE
         return true;
         #else
         return false;
@@ -52,31 +47,6 @@ fn workers_enabled() -> bool {
 // disabled, so the dispatcher below can call the same symbol names
 // regardless of which engines were chosen at build time.
 raw {
-    #if !defined(ZAPP_WORKER_ENGINE_JSC)
-    bool jsc_worker_create(const char* a, const char* b, const char* c) {
-        (void)a; (void)b; (void)c; return false;
-    }
-    void jsc_worker_post_message(const char* a, const char* b) { (void)a; (void)b; }
-    void jsc_worker_terminate(const char* a) { (void)a; }
-    void jsc_worker_terminate_owner(const char* a) { (void)a; }
-    // sync.m's `darwin_sync_dispatch_to_worker` falls through to
-    // jsc_worker_eval_js as the last-ditch result-delivery path.
-    // When JSC isn't compiled in, we still need the symbol so the
-    // sync subsystem links — it's a no-op (sync results route to
-    // bare workers via bare_worker_eval_js / to txiki via
-    // txiki_worker_dispatch_sync_result).
-    void jsc_worker_eval_js(const char* a, const char* b) { (void)a; (void)b; }
-    #endif
-
-    #if !defined(ZAPP_WORKER_ENGINE_TXIKI)
-    bool txiki_worker_create(const char* a, const char* b, const char* c) {
-        (void)a; (void)b; (void)c; return false;
-    }
-    void txiki_worker_post_message(const char* a, const char* b) { (void)a; (void)b; }
-    void txiki_worker_terminate(const char* a) { (void)a; }
-    void txiki_worker_terminate_owner(const char* a) { (void)a; }
-    #endif
-
     #if !ZAPP_HAS_BARE
     bool bare_worker_create(const char* a, const char* b, const char* c) {
         (void)a; (void)b; (void)c; return false;
@@ -101,14 +71,14 @@ raw {
 // --- Unified dispatchers ---
 //
 // `engine` matches `ZAPP_ENGINE_*` constants from registry.zc:
-//   0 = JSC, 1 = txiki, 2 = bare-jsc, 3 = bare-v8,
-//   4 = bare-quickjs, 5 = bare-mqjs.
+//   2 = bare-jsc, 3 = bare-v8, 4 = bare-quickjs, 5 = bare-mqjs,
+//   6 = bare-hermes, 7 = zjs.
 //
 // Dispatch is a runtime switch — engines that aren't compiled in are
 // stubbed (see the raw block above) so calls go to no-ops rather than
 // link errors. When the requested engine isn't compiled in we log a
 // downgrade and fall back to whichever IS available, in priority
-// order: bare-jsc > bare-v8 > bare-quickjs > bare-mqjs > txiki > jsc.
+// order: zjs > bare-jsc > bare-v8 > bare-hermes > bare-quickjs > bare-mqjs.
 
 raw {
     // Helper: which engine should we actually run on? Returns the
@@ -116,12 +86,6 @@ raw {
     // fallback. Logs the downgrade once per worker create.
     static int zapp_resolve_engine(int requested, const char* worker_id) {
         int present[9] = {0};  // index = ZAPP_ENGINE_*
-        #ifdef ZAPP_WORKER_ENGINE_JSC
-        present[0] = 1;
-        #endif
-        #ifdef ZAPP_WORKER_ENGINE_TXIKI
-        present[1] = 1;
-        #endif
         #ifdef ZAPP_WORKER_ENGINE_BARE_JSC
         present[2] = 1;
         #endif
@@ -149,7 +113,7 @@ raw {
         // between V8 and QuickJS — AOT bytecode + tier-up beats plain
         // QJS but loses to V8's full JIT on macOS.
         int order[8] = {7, 2, 3, 6, 4, 5, 1, 0};
-        const char* names[9] = {"jsc","txiki","bare-jsc","bare-v8","bare-quickjs","bare-mqjs","bare-hermes","zjs",""};
+        const char* names[9] = {"(removed)","(removed)","bare-jsc","bare-v8","bare-quickjs","bare-mqjs","bare-hermes","zjs",""};
         for (int i = 0; i < 8; i++) {
             if (present[order[i]]) {
                 if (requested != order[i]) {
@@ -167,8 +131,6 @@ raw {
 
     static bool zapp_dispatch_worker_create(int eng, const char* script_url, const char* owner_id, const char* worker_id) {
         switch (eng) {
-            case 0: return jsc_worker_create(script_url, owner_id, worker_id);
-            case 1: return txiki_worker_create(script_url, owner_id, worker_id);
             case 2: case 3: case 4: case 5: case 6:
                 return bare_worker_create(script_url, owner_id, worker_id);
             case 7: return zjs_worker_create(script_url, owner_id, worker_id);
@@ -178,8 +140,6 @@ raw {
 
     static void zapp_dispatch_worker_post(int eng, const char* worker_id, const char* data) {
         switch (eng) {
-            case 0: jsc_worker_post_message(worker_id, data); break;
-            case 1: txiki_worker_post_message(worker_id, data); break;
             case 2: case 3: case 4: case 5: case 6:
                 bare_worker_post_message(worker_id, data); break;
             case 7: zjs_worker_post_message(worker_id, data); break;
@@ -188,8 +148,6 @@ raw {
 
     static void zapp_dispatch_worker_terminate(int eng, const char* worker_id) {
         switch (eng) {
-            case 0: jsc_worker_terminate(worker_id); break;
-            case 1: txiki_worker_terminate(worker_id); break;
             case 2: case 3: case 4: case 5: case 6:
                 bare_worker_terminate(worker_id); break;
             case 7: zjs_worker_terminate(worker_id); break;
@@ -241,12 +199,6 @@ fn worker_terminate(worker_id: string) -> void {
 // engine's terminate_owner; each iterates its own slot table.
 fn worker_terminate_owner(owner_id: string) -> void {
     raw {
-        #ifdef ZAPP_WORKER_ENGINE_JSC
-        jsc_worker_terminate_owner((const char*)owner_id);
-        #endif
-        #ifdef ZAPP_WORKER_ENGINE_TXIKI
-        txiki_worker_terminate_owner((const char*)owner_id);
-        #endif
         #if ZAPP_HAS_BARE
         bare_worker_terminate_owner((const char*)owner_id);
         #endif
@@ -279,8 +231,7 @@ impl Workers {
         // refcount handling, registry cleanup) — the Zen-C wrapper just
         // forwards. Bypassing the router would duplicate that policy.
         raw {
-            #if defined(ZAPP_WORKER_ENGINE_JSC) || defined(ZAPP_WORKER_ENGINE_TXIKI) \
-             || defined(ZAPP_WORKER_ENGINE_ZJS) || ZAPP_HAS_BARE
+            #if defined(ZAPP_WORKER_ENGINE_ZJS) || ZAPP_HAS_BARE
             extern int zapp_worker_registry_is_shared(const char* worker_id);
             extern void zapp_worker_registry_remove(const char* worker_id);
             if (!zapp_worker_registry_is_shared((const char*)id)) {

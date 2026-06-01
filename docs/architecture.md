@@ -11,7 +11,7 @@ users import).
 │                                                                      │
 │    ┌──────────────────────────────────────────────────────────────┐  │
 │    │  App / Windows / Services / Menus / Dialogs / Notifications │  │
-│    │  / Dock / Sync / Worker engines (JSC + txiki.js)            │  │
+│    │  / Dock / Sync / Worker engines (zjs + bare-*)              │  │
 │    └──────────────────────────────────────────────────────────────┘  │
 │                                                                      │
 └──────┬────────────────────────────────────┬──────────────────────────┘
@@ -52,8 +52,8 @@ native/
 │   ├── worker.zc        # Engine abstraction (worker_create, terminate, etc.)
 │   ├── registry.zc      # Slot table tracking all active workers
 │   └── engines/
-│       ├── jsc.m/.h     # JavaScriptCore engine (macOS only)
-│       └── txiki.c/.h   # txiki.js engine (cross-platform)
+│       ├── zjs.c/.h     # First-party engine (cross-platform, default)
+│       └── bare-*.c/.h  # bare-jsc / bare-v8 / bare-quickjs / bare-mqjs / bare-hermes
 ├── dialog/              # Typed Zen-C wrappers for file/message dialogs
 ├── notification/
 ├── menu/
@@ -134,7 +134,7 @@ At runtime, the platform code injects the right script at context
 creation:
 - **Webview**: WKWebView `userContentController` with a document-start
   `WKUserScript` calls `evaluateJavaScript`.
-- **Worker**: `jsc_setup_bridge` / `txiki_setup_bridge` calls
+- **Worker**: the engine's `setup_bridge` function calls
   `ctx.evaluateScript(zapp_worker_bootstrap_script())` after setting up
   host objects.
 
@@ -210,10 +210,10 @@ A new `new Worker("./foo.ts")` from a webview goes through these steps:
    (worker lifecycle message with action=`create`).
 3. Native router in `app/router.zc` receives the message, routes to
    `worker_create(app, scriptUrl, owner_id, worker_id)`.
-4. Engine-specific code (`jsc_worker_create` or `txiki_worker_create`)
-   allocates a fresh JS context on a serial dispatch queue (JSC) or
-   background thread with libuv (txiki), sets up host objects, runs the
-   bootstrap, then fetches and evaluates the user's worker script.
+4. Engine-specific code allocates a fresh JS context (on a serial dispatch
+   queue or background thread depending on the engine), sets up host
+   objects, runs the bootstrap, then fetches and evaluates the user's
+   worker script.
 
 Headless workers follow the same path but:
 - Spawn happens at `app.run()` via the CLI-generated
@@ -256,7 +256,7 @@ Measured: ~135 µs median round-trip on M4 Max.
 ```
 JS: Services.invoke("ping", {x:1})
   → __zappBridge.invokeService("ping", {x:1})           [runtime, detect-worker fast path]
-    → zapp_bridge_invoke_service host object             [jsc.m / txiki.c]
+    → zapp_bridge_invoke_service host object             [engine host object]
       → service.invoke(app, "ping", args_json_value)      [direct C call]
         → user handler returns string
       → parse JSON, return JSValue to JS

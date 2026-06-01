@@ -1,5 +1,7 @@
-// QuickJS worker engine (cross-platform).
-// Future: replaced by txiki.js (gets web APIs for free).
+// QuickJS worker engine (cross-platform) — stub placeholder.
+// bare-quickjs (ZAPP_WORKER_ENGINE_BARE_QUICKJS) is the supported
+// path for QuickJS workers; this file is kept as a reference sketch
+// for a potential future standalone QJS engine.
 
 // Host objects exposed via JS_NewCFunctionData + JS_SetPropertyStr:
 // - __zappBridge.emitToHost(name, payload)
@@ -8,6 +10,5 @@
 // - __zappBridge.syncWait/syncNotify/syncCancel
 // - console.log/error/warn/info/debug
 
-// TODO: Port from v1 src/platform/darwin/worker/qjs.zc
-// When txiki.js replaces QJS: remove polyfill code (fetch, WebSocket,
-// timers, crypto, encoding, URL, base64) — txiki.js provides these natively.
+// TODO: Port from v1 src/platform/darwin/worker/qjs.zc if a
+// standalone QJS engine path is ever revived.

@@ -10,8 +10,9 @@ raw {
     // Engine selector — tracked per-worker so dispatchers can route
     // post / terminate / restart to the right engine without
     // re-passing the choice on every call.
-    #define ZAPP_ENGINE_JSC          0
-    #define ZAPP_ENGINE_TXIKI        1
+    // Values 0 and 1 were jsc/txiki (removed). Keep numeric slots intact
+    // so existing serialised IDs and the dispatch switch in worker.zc
+    // don't need renumbering.
     #define ZAPP_ENGINE_BARE_JSC     2
     #define ZAPP_ENGINE_BARE_V8      3
     #define ZAPP_ENGINE_BARE_QUICKJS 4
@@ -26,7 +27,7 @@ raw {
         int owner_count;
         int shared;       // 0 = dedicated, 1 = shared
         int active;
-        int engine;       // ZAPP_ENGINE_JSC | ZAPP_ENGINE_TXIKI
+        int engine;       // ZAPP_ENGINE_BARE_JSC | ZAPP_ENGINE_BARE_V8 | ... | ZAPP_ENGINE_ZJS
 
         // --- Supervisor / restart policy ---
         // Failures inside a sliding window of `restart_window_ms` are
@@ -95,15 +96,14 @@ raw {
         return -1;
     }
 
-    // Backward-compat wrapper — defaults engine to JSC. Existing
-    // callsites in router / app.zc keep working without a sweep.
+    // Backward-compat wrapper — defaults engine to -1 (resolver picks).
+    // Existing callsites in router / app.zc keep working without a sweep.
     int zapp_worker_registry_add_full(const char* worker_id, const char* owner_id,
                                       int shared, const char* script_url) {
-        return zapp_worker_registry_add_full_with_engine(worker_id, owner_id, shared, script_url, ZAPP_ENGINE_JSC);
+        return zapp_worker_registry_add_full_with_engine(worker_id, owner_id, shared, script_url, -1);
     }
 
-    // Look up the engine for a worker. Returns ZAPP_ENGINE_JSC if not
-    // found (safe default — the JSC path is always present on Apple).
+    // Look up the engine for a worker. Returns -1 (resolver picks) if not found.
     int zapp_worker_registry_get_engine(const char* worker_id) {
         for (int i = 0; i < ZAPP_MAX_WORKERS; i++) {
             if (zapp_worker_registry[i].active &&
@@ -111,13 +111,13 @@ raw {
                 return zapp_worker_registry[i].engine;
             }
         }
-        return ZAPP_ENGINE_JSC;
+        return -1;
     }
 
     // Update the engine recorded for a worker. Called from worker_create
     // after `zapp_resolve_engine` picks the engine that actually ran (which
-    // may differ from the one the user requested when fallback fires —
-    // e.g. requested "jsc" but only bare-v8 is compiled in). Without
+    // may differ from the one the user requested when fallback fires).
+    // Without
     // this update the registry keeps the *requested* engine, and
     // post_message/terminate dispatch routes to the wrong engine's
     // (no-op stub) functions, silently dropping every message.
@@ -131,7 +131,6 @@ raw {
         }
     }
 
-    // Non-static: called from jsc.m
     void zapp_worker_registry_remove(const char* worker_id) {
         for (int i = 0; i < ZAPP_MAX_WORKERS; i++) {
             if (zapp_worker_registry[i].active &&
@@ -155,7 +154,6 @@ raw {
         return NULL;
     }
 
-    // Check if a worker is shared (non-static: called from jsc.m)
     int zapp_worker_registry_is_shared(const char* worker_id) {
         for (int i = 0; i < ZAPP_MAX_WORKERS; i++) {
             if (zapp_worker_registry[i].active &&
@@ -198,7 +196,6 @@ raw {
     }
 
     // Remove an owner from a shared worker. Returns remaining owner count, or -1 if not found.
-    // Non-static: called from jsc.m
     int zapp_worker_registry_remove_owner(const char* worker_id, const char* owner_id) {
         for (int i = 0; i < ZAPP_MAX_WORKERS; i++) {
             if (zapp_worker_registry[i].active &&
@@ -233,10 +230,10 @@ raw {
 
     // --- Supervisor public API ---
     //
-    // The engine (jsc.m, txiki.c) calls these on uncaught worker errors.
-    // The split is deliberate: the engine knows when a fault has fired,
-    // the supervisor knows whether to retry. Engine-agnostic policy
-    // lives here so adding a new engine doesn't duplicate it.
+    // Engines call these on uncaught worker errors. The split is deliberate:
+    // the engine knows when a fault has fired, the supervisor knows whether
+    // to retry. Engine-agnostic policy lives here so adding a new engine
+    // doesn't duplicate it.
 
     #include <sys/time.h>
 

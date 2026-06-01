@@ -205,18 +205,6 @@ static OSStatus shortcut_event_handler(EventHandlerCallRef nextHandler,
         payload);
     darwin_webview_eval_all(js);
 
-    // Workers — broadcast through the same path Events.emit uses.
-    // Gated on which engine is compiled in; the broadcast helpers are
-    // only defined when their engine is linked.
-    #if defined(ZAPP_WORKER_ENGINE_JSC)
-    extern void jsc_broadcast_eval_js(const char* js);
-    jsc_broadcast_eval_js(js);
-    #endif
-    #if defined(ZAPP_WORKER_ENGINE_TXIKI)
-    extern void txiki_broadcast_eval_js(const char* js);
-    txiki_broadcast_eval_js(js);
-    #endif
-
     return noErr;
 }
 

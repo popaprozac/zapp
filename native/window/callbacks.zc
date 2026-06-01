@@ -125,40 +125,12 @@ raw {
         }
 
         // Layer 3: Backend worker (if subscribed to this window+event)
-        if (zapp_window_backend_listeners[window_id] & (1u << event_id)) {
-            // Dispatch window event to backend JSC/txiki context
-            #if defined(ZAPP_WORKER_ENGINE_JSC) || defined(ZAPP_WORKER_ENGINE_TXIKI)
-            static char __be_buf[512];
-
-            // Event name lookup
-            static const char* __event_names[] = {
-                "ready","focus","blur","resize","move","close",
-                "minimize","maximize","restore","fullscreen","unfullscreen"
-            };
-            const char* ename = (event_id >= 0 && event_id < 11) ? __event_names[event_id] : "unknown";
-
-            if (w || h || x || y) {
-                snprintf(__be_buf, sizeof(__be_buf),
-                    "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
-                    "if(b&&b._onEvent)b._onEvent('window:%s','{\"windowId\":\"win-%d\",\"size\":{\"width\":%d,\"height\":%d},\"position\":{\"x\":%d,\"y\":%d}}');})();",
-                    ename, window_id, w, h, x, y);
-            } else {
-                snprintf(__be_buf, sizeof(__be_buf),
-                    "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
-                    "if(b&&b._onEvent)b._onEvent('window:%s','{\"windowId\":\"win-%d\"}');})();",
-                    ename, window_id);
-            }
-
-            // Broadcast to every active worker (headless + webview-owned)
-            #if defined(ZAPP_WORKER_ENGINE_TXIKI)
-            extern void txiki_broadcast_eval_js(const char* js);
-            txiki_broadcast_eval_js(__be_buf);
-            #elif defined(ZAPP_WORKER_ENGINE_JSC)
-            extern void jsc_broadcast_eval_js(const char* js);
-            jsc_broadcast_eval_js(__be_buf);
-            #endif
-            #endif
-        }
+        // TODO: Worker-side window event broadcast (bare/zjs) is a pre-existing
+        // gap inherited from the JSC-era Layer 3 design. zapp_window_backend_listeners
+        // bit-field is still set by bare's subscribeWindowEvent but no consumer
+        // reads it post-jsc-removal. Tracked in supervisor-restart followups memory.
+        // Adding bare_broadcast_eval_js + zjs_broadcast_eval_js here is the obvious
+        // fix shape; deferred until a real consumer surfaces the need.
 
         return 0; // ALLOW
     }

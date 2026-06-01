@@ -196,9 +196,9 @@ fn run_app() -> int {
 // On Windows / Linux, engine: "bare-v8" is the perf opt-in — JIT but
 // ~30 MB bundle increase. Same per-worker selection in zapp.config.ts.
 //
-// Deprecated: ZAPP_WORKER_ENGINE_JSC and ZAPP_WORKER_ENGINE_TXIKI
-// are kept compiling for existing apps but the CLI warns if used.
-// Don't use for new projects. See docs/engines.md.
+// Removed engines: ZAPP_WORKER_ENGINE_JSC (legacy) and
+// ZAPP_WORKER_ENGINE_TXIKI (legacy) are no longer supported.
+// See docs/engines.md for the supported engine list.
 
 //> macos: framework: Cocoa
 //> macos: framework: WebKit

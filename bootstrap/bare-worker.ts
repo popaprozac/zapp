@@ -1,11 +1,10 @@
 /**
  * Bare engine worker bootstrap — installs the JS-side methods on
  * `globalThis.__zappBridge` that the bare-jsc / bare-v8 / bare-quickjs /
- * bare-mqjs engines rely on. Counterpart to the per-engine bootstrap
- * shapes in jsc.m and txiki.c, but written here in TypeScript so it
- * gets the same review/edit ergonomics as the rest of the runtime
- * (and so all four bare variants share one JS source instead of each
- * carrying a copy).
+ * bare-mqjs / bare-hermes engines rely on. Shared TypeScript source so
+ * all bare engine variants get the same review/edit ergonomics as the
+ * rest of the runtime (and so all variants share one JS source instead
+ * of each carrying a copy).
  *
  * Bundle pipeline: `bootstrap/codegen.ts` minifies this into a C
  * string literal exposed as `zapp_bare_worker_bootstrap_script()`.
@@ -33,7 +32,7 @@ declare const Bare: any;
   // parse on the way out.
   //
   // We tried walking the JS value tree directly via libjs's
-  // reflection API (matching jsc.m / txiki.c's "zero-JSON" path) —
+  // reflection API (the "zero-JSON" path used by the legacy engines) —
   // it benched slower on realistic payloads because libjs's
   // js_get_named_property + js_typeof have per-call overhead that
   // dominates the cost. The string path is faster on bare specifically.
@@ -121,8 +120,8 @@ declare const Bare: any;
   // `self.postMessage({__zc:ch, d:data})` — so without this alias,
   // every worker that calls `send(...)` to reply to a `receive(...)`
   // throws silently because `postMessage` is undefined.
-  // jsc.m and txiki.c install this same alias inside their per-engine
-  // bridge setup; bare needs it here.
+  // The legacy per-engine bootstraps installed this alias inline; bare
+  // and zjs engines need it here in the shared JS bootstrap instead.
   globalThis.postMessage = function (data: unknown): void {
     b._postToWebviewRaw(_stringify(data));
   };

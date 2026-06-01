@@ -33,8 +33,8 @@ function clipboardHost(): ((action: string, args?: unknown) => unknown) | null {
 // --- base64 helpers (PNG bytes wire format) ---
 //
 // The bridge is JSON-only, so PNG bytes cross as base64 strings. Browsers
-// have atob/btoa; workers (JSC plain context, txiki) may not — fall back
-// to manual encoding.
+// have atob/btoa; bare-* and zjs workers may not — fall back to manual
+// encoding.
 const B64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 function bytesToBase64(bytes: Uint8Array): string {

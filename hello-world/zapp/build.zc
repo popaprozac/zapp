@@ -3,12 +3,14 @@
 
 //> macos: define: apple
 //> windows: define: windows
-// G8 demo: enable BOTH engines so per-worker `engine: "jsc" | "txiki"`
-// selection in zapp.config.ts actually takes effect. Apps that don't
-// need to mix can keep just one of these defines (no binary cost
-// difference for JSC-only on Apple — JSC is a system framework).
-// //> macos: define: ZAPP_WORKER_ENGINE_TXIKI
-//> macos: define: ZAPP_WORKER_ENGINE_JSC
+// Enable zjs (first-party engine — smallest binary, correct microtask
+// semantics out of the box). To also enable a bare-* engine for workers
+// that need bare-fetch / bare-tls etc., add the corresponding define:
+//   ZAPP_WORKER_ENGINE_BARE_JSC (macOS/iOS default)
+//   ZAPP_WORKER_ENGINE_BARE_V8  (Windows/Linux JIT opt-in)
+//   ZAPP_WORKER_ENGINE_BARE_HERMES (AOT bytecode, iOS perf)
+//> macos: define: ZAPP_WORKER_ENGINE_ZJS
+// //> macos: define: ZAPP_WORKER_ENGINE_BARE_JSC
 // //> macos: define: ZAPP_WORKER_ENGINE_BARE_HERMES
 
 //> macos: framework: Cocoa

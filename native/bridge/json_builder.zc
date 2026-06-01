@@ -4,7 +4,7 @@
 // you already have a heap-allocated child node. These helpers transfer
 // ownership directly into the parent's map/vec, eliminating that copy.
 //
-// Used by JS-engine walkers (txiki.c, jsc.m) to build JsonValue trees from
+// Used by JS-engine walkers to build JsonValue trees from
 // JS values without going through JSON.stringify+parse.
 
 import "std/json.zc";

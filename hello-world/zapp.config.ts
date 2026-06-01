@@ -23,7 +23,7 @@ const config: ZappConfig = {
   // round-trip needed), send/receive (worker→worker postMessage),
   // dispatchEventToAll, postToWebview, and workerCrash → supervisor
   // record_failure → `worker:crashed` / `worker:gave-up`, and
-  // restart-on-crash works end-to-end across zjs, bare-*, and txiki
+  // restart-on-crash works end-to-end across zjs and bare-* engines
   // (the supervisor recreates the JS context within the configured
   // cap, then fires worker:gave-up). Verified Phase 1+2+3 of
   // docs/superpowers/plans/2026-06-01-worker-supervisor-restart.md.
@@ -43,7 +43,7 @@ const config: ZappConfig = {
     // Cross-engine smoke matrix (manual verification — click force-crash 4 times):
     //   zjs       → crashed×3, restarted×2, gave-up×1, 4th click silent
     //   bare-jsc  → same sequence
-    //   txiki     → same sequence
+    //   bare-v8   → same sequence (Win/Linux JIT)
     // Verified Phase 4 / Task 4.1 of the supervisor-restart plan.
     supervised: {
       script: "src/workers/supervised.ts",
@@ -72,8 +72,7 @@ const config: ZappConfig = {
     // ad-hoc first-pass measurement.
     //
     // "bench-bare-jsc": { script: "src/workers/bench.ts", engine: "bare-jsc" },
-    // "bench-jsc":      { script: "src/workers/bench.ts", engine: "jsc" },
-    // "bench-txiki":    { script: "src/workers/bench.ts", engine: "txiki" },
+    // "bench-zjs":      { script: "src/workers/bench.ts", engine: "zjs" },
   },
 };
 

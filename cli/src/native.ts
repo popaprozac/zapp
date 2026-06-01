@@ -3,7 +3,7 @@
 import path from "node:path";
 import { existsSync, unlinkSync } from "node:fs";
 import { readdir } from "node:fs/promises";
-import { resolveTxikiDir, resolveBareDir } from "./paths";
+import { resolveBareDir } from "./paths";
 
 /**
  * Build target — what platform/architecture the binary is being
@@ -60,12 +60,9 @@ export function getPlatformSources(nativeDir: string, target: BuildTarget = dete
       path.join(darwinDir, "clipboard.m"),
       path.join(darwinDir, "shortcuts.m"),
     ];
-    // jsc.m / txiki.c / bare.c are NOT listed here — they're added by
+    // bare.c / zjs.c are NOT listed here — they're added by
     // `generatePlatformConfig` only when the corresponding
-    // ZAPP_WORKER_ENGINE_* directive is enabled. Otherwise the engine
-    // file's symbols collide with `worker.zc`'s `#if !defined(...)`
-    // stub block, producing duplicate-symbol link errors when a
-    // project disables that engine.
+    // ZAPP_WORKER_ENGINE_* directive is enabled.
     return sources.filter(f => existsSync(f));
   }
   if (isIOSTarget(target)) {
@@ -75,10 +72,9 @@ export function getPlatformSources(nativeDir: string, target: BuildTarget = dete
     // (darwin_window_create, darwin_clipboard_read_text, etc.) so
     // the Zen-C framework calls bind unchanged across platforms.
     //
-    // Worker engines (jsc.m, txiki.c, bare.c) are gated in
+    // Worker engines (bare.c, zjs.c) are gated in
     // `generatePlatformConfig` and only added when the
-    // corresponding ZAPP_WORKER_ENGINE_* directive is set. See the
-    // darwin branch above for the rationale.
+    // corresponding ZAPP_WORKER_ENGINE_* directive is set.
     const sources = [
       path.join(iosDir, "platform.m"),
       path.join(iosDir, "window.m"),
@@ -149,84 +145,6 @@ export async function getUserProjectSources(root: string, target: BuildTarget = 
   return results;
 }
 
-// Per-target build directory for txiki. Each platform/SDK gets its own
-// out-of-tree build dir so artifacts coexist (macOS dev + iOS Sim + iOS
-// device side by side, no rebuild churn switching targets).
-export function txikiBuildDirName(target: BuildTarget): string {
-  if (target === "ios-simulator") return "build-ios-sim";
-  if (target === "ios-device") return "build-ios-dev";
-  return "build";
-}
-
-// Ensure txiki.js is available and built (cmake) for the given target.
-// On iOS, cross-builds via the iphonesimulator / iphoneos SDK with FFI
-// disabled (App Store ban on dlopen) — see vendor/txiki.js patches.
-export async function ensureTxikiBuilt(_nativeDir: string, target: BuildTarget = detectTarget()): Promise<string> {
-  const txikiDir = await resolveTxikiDir();
-  const buildDir = txikiBuildDirName(target);
-  const libPath = path.join(txikiDir, buildDir, "libtjs_core.a");
-
-  if (existsSync(libPath)) return txikiDir; // already built for this target
-
-  const label = target === "macos" ? "macOS"
-    : target === "ios-simulator" ? "iOS Simulator (arm64)"
-    : target === "ios-device" ? "iOS device (arm64)"
-    : target;
-  process.stdout.write(`[zapp] building txiki.js for ${label} (first time only, may take a minute)...\n`);
-
-  const configureArgs = ["-B", buildDir, "-DCMAKE_BUILD_TYPE=Release"];
-  if (isIOSTarget(target)) {
-    const sdk = target === "ios-simulator" ? "iphonesimulator" : "iphoneos";
-    const proc = Bun.spawn(["xcrun", "--sdk", sdk, "--show-sdk-path"], { stdout: "pipe" });
-    const sdkPath = (await new Response(proc.stdout).text()).trim();
-    if (await proc.exited !== 0 || !sdkPath) {
-      throw new Error(`[zapp] failed to resolve ${sdk} SDK path via xcrun`);
-    }
-    configureArgs.push(
-      "-DCMAKE_SYSTEM_NAME=iOS",
-      "-DCMAKE_SYSTEM_PROCESSOR=arm64",
-      `-DCMAKE_OSX_SYSROOT=${sdkPath}`,
-      "-DCMAKE_OSX_ARCHITECTURES=arm64",
-      "-DCMAKE_OSX_DEPLOYMENT_TARGET=15.0",
-      "-DBUILD_WITH_FFI=OFF",
-      "-DBUILD_WITH_MIMALLOC=OFF",
-      "-DWAMR_BUILD_TARGET=AARCH64",
-      "-DWAMR_BUILD_PLATFORM=darwin",
-      "-DCMAKE_ASM_FLAGS=-DBH_PLATFORM_DARWIN",
-    );
-  }
-
-  const cmake1 = Bun.spawn(["cmake", ...configureArgs], {
-    cwd: txikiDir, stdout: "inherit", stderr: "inherit",
-  });
-  if (await cmake1.exited !== 0) throw new Error("[zapp] txiki.js cmake configure failed");
-
-  // Build only the static `tjs` target — we don't need the CLI executable
-  // or test fixtures (ffi-test / sqlite-test) to ship in our binary.
-  const cmake2 = Bun.spawn(["cmake", "--build", buildDir, "--target", "tjs", "-j4"], {
-    cwd: txikiDir, stdout: "inherit", stderr: "inherit",
-  });
-  if (await cmake2.exited !== 0) throw new Error("[zapp] txiki.js cmake build failed");
-
-  process.stdout.write("[zapp] txiki.js built successfully\n");
-  return txikiDir;
-}
-
-// Check if user's build.zc (or the CLI-generated engine overlay) enables
-// txiki. The overlay path is optional: when generateEngineOverlay added
-// directives because the user named "txiki" in zapp.config.ts headless
-// map, we want to honor those too — otherwise we'd skip the txiki build.
-export async function hasTxikiEnabled(root: string, overlayFile?: string): Promise<boolean> {
-  const sources = [path.join(root, "zapp", "build.zc")];
-  if (overlayFile) sources.push(overlayFile);
-  for (const f of sources) {
-    try {
-      const content = await Bun.file(f).text();
-      if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_TXIKI/m.test(content)) return true;
-    } catch {}
-  }
-  return false;
-}
 
 /** Bare's pluggable JS engine — picks the C library that backs `js.h`. */
 export type BareEngine = "v8" | "jsc" | "quickjs" | "mqjs" | "hermes";
@@ -946,8 +864,6 @@ export async function hasBareEnabled(root: string): Promise<boolean> {
 
 /** Engine identifier returned by `hasAnyWorkerEngine`. */
 export type WorkerEngine =
-  | "jsc"           // legacy: native Cocoa JSContext
-  | "txiki"         // legacy: QuickJS via txiki.js
   | "bare-v8"
   | "bare-jsc"
   | "bare-quickjs"
@@ -960,10 +876,7 @@ export type WorkerEngine =
 // ZAPP_WORKER_ENGINE_* directives — the dispatcher in worker.zc routes
 // per-worker at runtime).
 //
-// Priority order: bare-jsc > bare-v8 > bare-quickjs > bare-mqjs > txiki > jsc.
-// "Newer / more capable" wins so the preflight messages reflect what
-// most workers actually use; legacy engines stay compiled in as
-// fallback.
+// Priority order: bare-jsc > bare-v8 > bare-hermes > bare-quickjs > bare-mqjs > zjs.
 export async function hasAnyWorkerEngine(root: string): Promise<WorkerEngine | null> {
   const buildFile = path.join(root, "zapp", "build.zc");
   try {
@@ -974,24 +887,21 @@ export async function hasAnyWorkerEngine(root: string): Promise<WorkerEngine | n
     if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_MQJS/m.test(content)) return "bare-mqjs";
     if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_HERMES/m.test(content)) return "bare-hermes";
     if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_ZJS\b/m.test(content)) return "zjs";
-    if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_TXIKI/m.test(content)) return "txiki";
-    if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_JSC/m.test(content)) return "jsc";
     return null;
   } catch { return null; }
 }
 
-// True when this project links a JSC-backed worker engine (legacy `jsc`
-// or `bare-jsc`). On Apple Silicon, JSC's tiered JIT is gated by the
-// `com.apple.security.cs.allow-jit` entitlement — without it JSC stays
-// in LLInt interpreter mode, ~12× slower on JIT-friendly workloads.
-// `cli/src/entitlements.ts` consults this and auto-merges the entitlement
-// so users don't have to configure it by hand to get JSC's speed claim.
+// True when this project links the bare-jsc engine. On Apple Silicon,
+// JSC's tiered JIT is gated by the `com.apple.security.cs.allow-jit`
+// entitlement — without it JSC stays in LLInt interpreter mode, ~12×
+// slower on JIT-friendly workloads. `cli/src/entitlements.ts` consults
+// this and auto-merges the entitlement so users don't have to configure
+// it by hand to get JSC's speed claim.
 export async function hasJscClassWorkerEngine(root: string): Promise<boolean> {
   const buildFile = path.join(root, "zapp", "build.zc");
   try {
     const content = await Bun.file(buildFile).text();
-    return /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_JSC\b/m.test(content)
-        || /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_JSC/m.test(content);
+    return /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_JSC/m.test(content);
   } catch { return false; }
 }
 

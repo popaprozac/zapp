@@ -224,7 +224,7 @@ void darwin_sync_handle(const char* action, const char* payload_json) {
     if (![parsed isKindOfClass:[NSDictionary class]]) return;
 
     // Two callers package payloads differently:
-    //   - Workers (jsc.m / txiki.c) pass a flat dict: {id, key, targetWorkerId}
+    //   - Workers pass a flat dict: {id, key, targetWorkerId}
     //   - Webviews route through the bridge as {t:6, m:"wait", a:{id, key, ...}}
     //     and the router forwards the *full* message as payload_json.
     // Unwrap the nested "a" field when present so both shapes work.
@@ -265,23 +265,12 @@ void darwin_sync_dispatch_to_webviews(const char* payload_json) {
     }
 }
 
-#ifdef ZAPP_WORKER_ENGINE_TXIKI
-extern int txiki_worker_dispatch_sync_result(const char* worker_id, const char* payload_json);
-#endif
-
 void darwin_sync_dispatch_to_worker(const char* worker_id, const char* payload_json) {
     if (!worker_id || !payload_json) return;
 
-#ifdef ZAPP_WORKER_ENGINE_TXIKI
-    // Try txiki first — its host objects track pending promise resolvers in
-    // a C-level map keyed by request_id, so dispatch just wakes the worker
-    // thread with the payload. Returns 1 if the worker was found.
-    if (txiki_worker_dispatch_sync_result(worker_id, payload_json)) return;
-#endif
-
-    // Build the dispatch JS — same shape regardless of engine. The
-    // worker bootstrap installs `bridge.dispatchSyncResult` which
-    // looks up `_syncPending[id]` and resolves the stored promise.
+    // Build the dispatch JS — engine-agnostic. The worker bootstrap installs
+    // `bridge.dispatchSyncResult` which looks up `_syncPending[id]` and
+    // resolves the stored promise.
     NSString* escaped = [[NSString stringWithUTF8String:payload_json]
         stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
     NSString* js = [NSString stringWithFormat:
@@ -297,17 +286,11 @@ void darwin_sync_dispatch_to_worker(const char* worker_id, const char* payload_j
  || defined(ZAPP_WORKER_ENGINE_BARE_HERMES)
     // bare_worker_eval_js is a no-op when the worker_id doesn't
     // belong to a bare worker, so this is safe to call unconditionally
-    // when bare is compiled in. We try it before falling through to
-    // jsc to give bare workers their own pre-resolution path.
+    // when bare is compiled in.
     extern void bare_worker_eval_js(const char* worker_id, const char* js);
     bare_worker_eval_js(worker_id, js_c);
 #endif
 
-    // Fall back to JSC: eval the dispatch JS via the worker's JSContext.
-    // Same call is safe to make even when the worker isn't a JSC one;
-    // jsc_worker_eval_js no-ops on miss.
-    extern void jsc_worker_eval_js(const char* worker_id, const char* js);
-    jsc_worker_eval_js(worker_id, js_c);
 }
 
 // --- Blocking wait (for background threads ONLY) ---

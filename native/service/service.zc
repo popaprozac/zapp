@@ -158,7 +158,7 @@ fn service_invoke_native(app_ptr: void*, method: string, args: JsonValue*) -> st
     return "";
 }
 
-// Worker JSON-string path: callers (jsc.m) hand us a JSON string. We parse it
+// Worker JSON-string path: worker engines hand us a JSON string. We parse it
 // once here so handlers always see a JsonValue*. This gives the worker path
 // one parse total (vs. the previous path where handlers had to re-parse).
 fn service_invoke_sync(app_ptr: void*, method: string, args_json: string) -> string {

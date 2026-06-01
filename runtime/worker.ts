@@ -63,12 +63,9 @@ export class Worker {
    *   - `"bare-hermes"` — Hermes AOT bytecode. Mostly subsumed by zjs's
    *     own bytecode option once mature.
    *
-   *   **Deprecated** (compat tier — keep working, no new features):
-   *   - `"jsc"` — legacy native `JSContext`. Migrate to `"bare-jsc"` or `"zjs"`.
-   *   - `"txiki"` — legacy QuickJS+libuv runtime. Migrate to `"zjs"`.
    */
   constructor(scriptUrl: string, opts?: {
-    engine?: "jsc" | "txiki" | "bare-jsc" | "bare-v8" | "bare-quickjs" | "bare-mqjs" | "bare-hermes" | "zjs";
+    engine?: "zjs" | "bare-jsc" | "bare-v8" | "bare-quickjs" | "bare-mqjs" | "bare-hermes";
   }) {
     this._bridge = getBridge();
     this.id = (this._bridge as any).createWorker(scriptUrl, opts);

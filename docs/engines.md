@@ -15,7 +15,6 @@ the framework dispatches at runtime based on `engine: "..."` in
 | **Perf opt-in (Win/Linux)** | **`bare-v8`** | JIT on Windows / Linux where there's no system JSC. ~30 MB bundle increase. Only worth it for JIT-heavy workloads (numeric / hot loops / heavy JS). |
 | **Niche** | `bare-quickjs`, `bare-mqjs` | Small cross-platform variants for size-constrained targets. zjs is usually the better fit — pick these only if you specifically need that engine's perf or feature profile. |
 | **Niche** | `bare-hermes` | Hermes AOT bytecode. Mostly subsumed by zjs's bytecode option (see below) once mature. |
-| **Deprecated (compat tier)** | `jsc`, `txiki` | Kept compiling for existing apps; no new features. CLI warns on use. Migrate to `zjs` or `bare-jsc`. |
 
 ## Platform recommendations
 
@@ -72,7 +71,7 @@ When a worker requests an engine that isn't compiled into the binary
 falls back through priority order:
 
 ```
-zjs > bare-jsc > bare-v8 > bare-hermes > bare-quickjs > bare-mqjs > txiki > jsc
+zjs > bare-jsc > bare-v8 > bare-hermes > bare-quickjs > bare-mqjs
 ```
 
 The framework logs the downgrade so it's visible in dev.
@@ -94,7 +93,5 @@ projects.
 
 | If you have | Move to | Notes |
 |---|---|---|
-| `engine: "jsc"` | `engine: "zjs"` or `engine: "bare-jsc"` | bare-jsc keeps JIT on macOS; zjs is cross-platform. |
-| `engine: "txiki"` | `engine: "zjs"` | Web APIs land as zjs's runtime layer ships them. Use `engine: "bare-jsc"` + `workerModules: ["fetch"]` if you need fetch today on macOS. |
 | `engine: "bare-quickjs"` | `engine: "zjs"` (usually) | Both small + cross-platform. zjs has the direct host bridge perf wedge. |
 | `engine: "bare-hermes"` | Stay or move to `engine: "zjs"` + `bytecode: true` | zjs's bytecode covers Hermes's main iOS use case. |
