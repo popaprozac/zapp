@@ -22,10 +22,11 @@ const config: ZappConfig = {
   // Services.invokeSync (direct in-thread service call, no syncWait
   // round-trip needed), send/receive (worker→worker postMessage),
   // dispatchEventToAll, postToWebview, and workerCrash → supervisor
-  // record_failure → `worker:crashed` / `worker:gave-up`. Restart-
-  // on-crash itself is still the same gap as bare/txiki (tracked in
-  // project_txiki_worker_restart) — the supervisor records failures
-  // and gives up after the cap, but doesn't relaunch yet.
+  // record_failure → `worker:crashed` / `worker:gave-up`, and
+  // restart-on-crash works end-to-end across zjs, bare-*, and txiki
+  // (the supervisor recreates the JS context within the configured
+  // cap, then fires worker:gave-up). Verified Phase 1+2+3 of
+  // docs/superpowers/plans/2026-06-01-worker-supervisor-restart.md.
   // Declarative worker capabilities. The CLI verifies each entry's
   // underlying npm package is installed, and the Vite plugin auto-
   // prepends `import "@zappdev/runtime/worker-globals/<sub>"` to
@@ -39,6 +40,11 @@ const config: ZappConfig = {
     autoplayWithoutUserGesture: true,
   },
   headless: {
+    // Cross-engine smoke matrix (manual verification — click force-crash 4 times):
+    //   zjs       → crashed×3, restarted×2, gave-up×1, 4th click silent
+    //   bare-jsc  → same sequence
+    //   txiki     → same sequence
+    // Verified Phase 4 / Task 4.1 of the supervisor-restart plan.
     supervised: {
       script: "src/workers/supervised.ts",
       restart: { maxRetries: 2, withinMs: 30_000 },

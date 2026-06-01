@@ -242,6 +242,31 @@ them in a headless worker.
 Resolve an enum value to its string event name (`"window:ready"`,
 `"app:started"`, etc.). Useful for debugging / logging.
 
+### Worker lifecycle events
+
+Three engine-fired events let webviews observe supervised headless workers:
+
+- `worker:crashed` — fires on every uncaught throw in a worker (top-level eval OR async callback). Payload:
+  ```ts
+  { id: string; message: string; stack: string; incarnation: number }
+  ```
+- `worker:restarted` — fires after a successful restart (incarnation ≥ 2). Payload:
+  ```ts
+  { id: string; incarnation: number }
+  ```
+- `worker:gave-up` — fires once when the supervisor's `maxRetries` cap is exhausted. Payload:
+  ```ts
+  { id: string; finalIncarnation: number; retriesAttempted: number }
+  ```
+
+`incarnation` lets a UI correlate which restart cycle a crash belongs to.
+Webviews wanting to gate sends on a clean worker should listen for
+`worker:restarted` after a `worker:crashed`.
+
+Restart is supervised when `restart: { maxRetries, withinMs }` is set on a
+headless worker's config; see [Headless worker auto-restart](patterns.md#headless-worker-auto-restart)
+for the full lifecycle pattern.
+
 ---
 
 ## `Window`
