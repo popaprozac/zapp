@@ -625,12 +625,12 @@ static JSValue zapp_bridge_create_window(JSContext* ctx, JSValueConst this_val, 
 }
 
 // workerCrash(message, stack) — bootstrap calls this when an uncaught
-// error escapes a setTimeout callback or an event handler. We dispatch
-// `worker:crashed` so observers can react, then ask the supervisor for
-// a decision. Restart on txiki is more involved than JSC (separate
-// pthread + uv_loop per worker) — for v1 we record the failure and
-// dispatch `worker:gave-up`, leaving txiki workers alive-but-broken.
-// JSC engine has full restart support.
+// error escapes a setTimeout callback or event handler. Dispatches
+// `worker:crashed`, asks the supervisor for a verdict, and on verdict==1
+// sets wants_restart + TJS_Stop to break TJS_Run; the outer reincarnation
+// loop in txiki_worker_thread handles the rest. On verdict==2 fires
+// `worker:gave-up`. Same shape as host_worker_crash in zjs.c and
+// bare_host_worker_crash in bare.c.
 extern int  zapp_worker_supervisor_record_failure(const char* worker_id);
 extern void dispatch_event_to_all(const char* event_name, const char* payload);
 
@@ -641,32 +641,46 @@ static JSValue zapp_bridge_worker_crash(JSContext* ctx, JSValueConst this_val, i
     const char* msg = (argc > 0 && JS_IsString(argv[0])) ? JS_ToCString(ctx, argv[0]) : "";
     const char* stk = (argc > 1 && JS_IsString(argv[1])) ? JS_ToCString(ctx, argv[1]) : "";
 
-    // Build {"id":wid,"message":msg,"stack":stk} — minimal escape since
-    // dispatch_event_to_all does its own escape on the payload.
+    // Look up the slot so we can set the atomic flag and call TJS_Stop on
+    // restart. Done before payload build so the incarnation value reflects
+    // the current (about-to-crash) incarnation.
+    TxikiWorkerSlot* slot = txiki_find_slot(wid);
+    int incarnation = slot ? slot->incarnation : 0;
+
+    // Build {"id":wid,"message":msg,"stack":stk,"incarnation":N}.
     char* payload = NULL;
     int needed = snprintf(NULL, 0,
-        "{\"id\":\"%s\",\"message\":\"%s\",\"stack\":\"%s\"}",
-        wid, msg ? msg : "", stk ? stk : "");
+        "{\"id\":\"%s\",\"message\":\"%s\",\"stack\":\"%s\",\"incarnation\":%d}",
+        wid, msg ? msg : "", stk ? stk : "", incarnation);
     if (needed > 0) {
         payload = (char*)malloc((size_t)needed + 1);
         if (payload) {
             snprintf(payload, (size_t)needed + 1,
-                "{\"id\":\"%s\",\"message\":\"%s\",\"stack\":\"%s\"}",
-                wid, msg ? msg : "", stk ? stk : "");
+                "{\"id\":\"%s\",\"message\":\"%s\",\"stack\":\"%s\",\"incarnation\":%d}",
+                wid, msg ? msg : "", stk ? stk : "", incarnation);
             dispatch_event_to_all("worker:crashed", payload);
             free(payload);
         }
     }
 
-    // Supervisor decision. txiki can't currently restart in-place, so
-    // any "restart approved" verdict still surfaces as gave-up for the
-    // user — at least they know the worker won't auto-recover.
     int decision = zapp_worker_supervisor_record_failure(wid);
-    if (decision != 0) {
-        char giveUp[256];
-        snprintf(giveUp, sizeof(giveUp), "{\"id\":\"%s\"}", wid);
-        dispatch_event_to_all("worker:gave-up", giveUp);
+    if (decision == 1 && slot) {
+        // Restart approved. Set the atomic flag and TJS_Stop to break
+        // TJS_Run; the outer loop in txiki_worker_thread sees
+        // wants_restart and re-incarnates. worker:restarted fires from
+        // there after setup_state completes.
+        atomic_store(&slot->wants_restart, 1);
+        if (slot->runtime) TJS_Stop(slot->runtime);
+    } else if (decision == 2) {
+        // Supervisor cap exhausted — gave_up flag in registry is now sticky.
+        char gave_up[256];
+        snprintf(gave_up, sizeof(gave_up),
+                 "{\"id\":\"%s\",\"finalIncarnation\":%d,\"retriesAttempted\":%d}",
+                 wid, incarnation,
+                 incarnation > 0 ? incarnation - 1 : 0);
+        dispatch_event_to_all("worker:gave-up", gave_up);
     }
+    // decision == 0: no policy configured; worker idles in current state.
 
     if (msg && argc > 0 && JS_IsString(argv[0])) JS_FreeCString(ctx, msg);
     if (stk && argc > 1 && JS_IsString(argv[1])) JS_FreeCString(ctx, stk);
