@@ -129,3 +129,48 @@ export function extractHandler(content: string, handlerName: string): HandlerSli
   }
   return { commentBlock, body };
 }
+
+export interface ServiceTypeDecls {
+  argsDecl: string;   // full `export interface XxxArgs { … }` or `export type XxxArgs = …;`
+  resultDecl: string; // full `export interface XxxResult { … }` or `export type XxxResult = …;`
+  argsName: string;   // "XxxArgs"
+  resultName: string; // "XxxResult"
+}
+
+function fieldsToBody(fields: ArgField[]): string {
+  return "{ " + fields.map((f) => `${f.name}?: ${f.tsType}`).join("; ") + " }";
+}
+
+// Resolve the args + result type declarations for one service. `fileName` is
+// the PascalCase base (e.g. "Greet"); `content` is the full .zc source the
+// handler lives in; `handlerName` is the Zen-C fn name.
+//
+// Precedence — args: @zapp:args override > inferred fields > loose.
+//              result: @zapp:returns annotation > loose (unknown).
+export function resolveServiceTypes(
+  fileName: string,
+  content: string,
+  handlerName: string
+): ServiceTypeDecls {
+  const argsName = `${fileName}Args`;
+  const resultName = `${fileName}Result`;
+  const slice = extractHandler(content, handlerName);
+  const ann = slice ? parseAnnotation(slice.commentBlock) : {};
+
+  let argsDecl: string;
+  if (ann.argsFragment) {
+    argsDecl = `export interface ${argsName} ${ann.argsFragment}`;
+  } else {
+    const fields = slice ? inferArgs(slice.body) : [];
+    argsDecl =
+      fields.length > 0
+        ? `export interface ${argsName} ${fieldsToBody(fields)}`
+        : `export type ${argsName} = Record<string, unknown>;`;
+  }
+
+  const resultDecl = ann.returnsFragment
+    ? `export interface ${resultName} ${ann.returnsFragment}`
+    : `export type ${resultName} = unknown;`;
+
+  return { argsDecl, resultDecl, argsName, resultName };
+}

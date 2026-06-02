@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { inferArgs, parseAnnotation, extractHandler } from "./service-types";
+import { inferArgs, parseAnnotation, extractHandler, resolveServiceTypes } from "./service-types";
 
 test("inferArgs maps each primitive accessor to its TS type", () => {
   const body = `{
@@ -102,4 +102,44 @@ test("extractHandler returns empty comment block when there is none", () => {
 
 test("extractHandler returns null when the handler is absent", () => {
   expect(extractHandler(SAMPLE, "missing")).toBeNull();
+});
+
+const SRC = `// @zapp:returns { greeting: string }
+fn greet(_app: App*, args: JsonValue*) -> string {
+    let n = args.get_string("name");
+    return "";
+}
+
+fn noop(_app: App*, _args: JsonValue*) -> string { return "{}"; }
+
+// @zapp:args { id: number }
+fn lookup(_app: App*, args: JsonValue*) -> string {
+    let raw = args.get_string("ignored");
+    return "";
+}`;
+
+test("resolveServiceTypes: inferred args interface + annotated result interface", () => {
+  const t = resolveServiceTypes("Greet", SRC, "greet");
+  expect(t.argsName).toBe("GreetArgs");
+  expect(t.resultName).toBe("GreetResult");
+  expect(t.argsDecl).toBe("export interface GreetArgs { name?: string }");
+  expect(t.resultDecl).toBe("export interface GreetResult { greeting: string }");
+});
+
+test("resolveServiceTypes: no args + no annotation falls back to loose aliases", () => {
+  const t = resolveServiceTypes("Noop", SRC, "noop");
+  expect(t.argsDecl).toBe("export type NoopArgs = Record<string, unknown>;");
+  expect(t.resultDecl).toBe("export type NoopResult = unknown;");
+});
+
+test("resolveServiceTypes: @zapp:args overrides inference, no @zapp:returns -> unknown", () => {
+  const t = resolveServiceTypes("Lookup", SRC, "lookup");
+  expect(t.argsDecl).toBe("export interface LookupArgs { id: number }");
+  expect(t.resultDecl).toBe("export type LookupResult = unknown;");
+});
+
+test("resolveServiceTypes: handler not found -> loose aliases", () => {
+  const t = resolveServiceTypes("Gone", SRC, "gone");
+  expect(t.argsDecl).toBe("export type GoneArgs = Record<string, unknown>;");
+  expect(t.resultDecl).toBe("export type GoneResult = unknown;");
 });
