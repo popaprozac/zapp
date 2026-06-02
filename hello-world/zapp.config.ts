@@ -41,9 +41,10 @@ const config: ZappConfig = {
   },
   headless: {
     // Cross-engine smoke matrix (manual verification — click force-crash 4 times):
-    //   zjs       → crashed×3, restarted×2, gave-up×1, 4th click silent
-    //   bare-jsc  → same sequence
-    //   bare-v8   → same sequence (Win/Linux JIT)
+    //   zjs (macOS)      → crashed×4, restarted×2, gave-up×2
+    //   zjs (iOS Sim)    → same sequence (pending human verification — kqueue + CFRunLoop path)
+    //   bare-jsc (macOS) → same sequence
+    //   bare-v8          → same sequence (Win/Linux JIT)
     // Verified Phase 4 / Task 4.1 of the supervisor-restart plan.
     supervised: {
       script: "src/workers/supervised.ts",

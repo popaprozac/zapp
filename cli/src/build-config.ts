@@ -194,8 +194,19 @@ ${body}
  *
  * Also injects the iOS-needed defines (apple, ZAPP_WORKER_ENGINE_*)
  * since the user's `macos:` versions of those just got stripped.
+ *
+ * Engine selection is taken from BOTH the user's build.zc declarations
+ * AND `zapp.config.ts` headless entries' `engine:` field. The latter
+ * is the modern path — without it, a config-only engine (e.g.
+ * `engine: "zjs"`) would silently fall back to the bare-jsc default
+ * because the iOS overlay used to only look at build.zc text.
  */
-export async function generateIOSBuildFile(root: string, originalBuildFile: string): Promise<string> {
+export async function generateIOSBuildFile(
+  root: string,
+  originalBuildFile: string,
+  config?: ResolvedConfig,
+): Promise<string> {
+  void root;
   let content = "";
   try {
     content = await Bun.file(originalBuildFile).text();
@@ -209,18 +220,40 @@ export async function generateIOSBuildFile(root: string, originalBuildFile: stri
     .filter(line => !/^\/\/>\s*macos:/.test(line.trim()))
     .join("\n");
 
-  // Worker engine selection on iOS — mirror whatever the user picked
-  // on macOS, falling back to bare-jsc (zero binary cost via the JSC
-  // system framework; JIT-less on iOS by Apple policy). Note that
+  // Worker engine selection on iOS — union of:
+  //   1. build.zc `//> define: ZAPP_WORKER_ENGINE_*` declarations (the
+  //      escape hatch path).
+  //   2. zapp.config.ts headless entries' `engine:` field (the
+  //      modern path — what hello-world and most apps use).
+  // Falls back to bare-jsc (zero binary cost via the JSC system
+  // framework; JIT-less on iOS by Apple policy) when neither source
+  // names an engine.
+  //
   // bare-v8 is intentionally NOT exposed for iOS — V8 needs JIT pages
   // (`MAP_JIT`) which Apple gates behind entitlements not granted to
-  // App Store apps.
-  // - Nothing declared: default to bare-jsc.
+  // App Store apps. If the user named bare-v8 in either source, we
+  // warn and fall back to bare-jsc.
   const userPickedBareJsc   = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_JSC/m.test(content);
   const userPickedBareQuick = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_QUICKJS/m.test(content);
   const userPickedBareV8    = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_V8/m.test(content);
   const userPickedBareHermes = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_HERMES/m.test(content);
   const userPickedZjs       = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_ZJS\b/m.test(content);
+
+  // Walk zapp.config.ts headless entries to pick up engines named
+  // there but not declared in build.zc. Same engine set the
+  // engine-overlay generator looks at — they need to stay in sync
+  // so the iOS build sees the same engine list as the macOS build.
+  const configEngines = new Set<string>();
+  for (const value of Object.values(config?.headless ?? {})) {
+    if (typeof value === "object" && value && "engine" in value && value.engine) {
+      configEngines.add(value.engine);
+    }
+  }
+  const configHasBareJsc    = configEngines.has("bare-jsc");
+  const configHasBareQuick  = configEngines.has("bare-quickjs");
+  const configHasBareV8     = configEngines.has("bare-v8");
+  const configHasBareHermes = configEngines.has("bare-hermes");
+  const configHasZjs        = configEngines.has("zjs");
 
   // V8 on iOS is a dead end: full V8 needs JIT pages (`mmap(PROT_EXEC)`)
   // which Apple gates behind a JIT entitlement not granted to App
@@ -228,7 +261,7 @@ export async function generateIOSBuildFile(root: string, originalBuildFile: stri
   // interpreter — perf is on par with bare-quickjs at ~1.5 MB.
   // Surface this explicitly so users don't think they're getting V8
   // speed on their iOS build.
-  if (userPickedBareV8) {
+  if (userPickedBareV8 || configHasBareV8) {
     process.stdout.write(
       "[zapp] note: bare-v8 isn't useful on iOS (no JIT entitlement for App Store apps).\n" +
       "       Falling back to bare-jsc for this build.\n" +
@@ -237,10 +270,10 @@ export async function generateIOSBuildFile(root: string, originalBuildFile: stri
   }
 
   const engineDefines: string[] = [];
-  if (userPickedBareJsc)    engineDefines.push("ZAPP_WORKER_ENGINE_BARE_JSC");
-  if (userPickedBareQuick)  engineDefines.push("ZAPP_WORKER_ENGINE_BARE_QUICKJS");
-  if (userPickedBareHermes) engineDefines.push("ZAPP_WORKER_ENGINE_BARE_HERMES");
-  if (userPickedZjs)        engineDefines.push("ZAPP_WORKER_ENGINE_ZJS");
+  if (userPickedBareJsc    || configHasBareJsc)    engineDefines.push("ZAPP_WORKER_ENGINE_BARE_JSC");
+  if (userPickedBareQuick  || configHasBareQuick)  engineDefines.push("ZAPP_WORKER_ENGINE_BARE_QUICKJS");
+  if (userPickedBareHermes || configHasBareHermes) engineDefines.push("ZAPP_WORKER_ENGINE_BARE_HERMES");
+  if (userPickedZjs        || configHasZjs)        engineDefines.push("ZAPP_WORKER_ENGINE_ZJS");
   if (engineDefines.length === 0) engineDefines.push("ZAPP_WORKER_ENGINE_BARE_JSC");
 
   const iosOverlay = `
@@ -876,34 +909,66 @@ export async function generatePlatformConfig(
     content += `//> link: ${allFlags.join(" ")}\n`;
   }
 
-  // zjs engine — independent of bare. Auto-builds libzjs.a if missing
-  // (one `make -C vendor/zjs` invocation; zjs's own Makefile handles
-  // the rest), then emits the include + link directives. macOS-only
-  // for now — iOS / Windows plumbing follows once zjs ships uv-free
-  // platform shims or we vendor libuv ourselves.
-  if (hasZjs && target === "macos") {
+  // zjs engine — independent of bare. Auto-builds the right libzjs
+  // artifact if missing (one `make -C vendor/zjs [target]` invocation;
+  // zjs's own Makefile handles the rest), then emits the include + link
+  // directives. macOS + iOS Simulator today — Linux / Windows plumbing
+  // follows once zjs ships uv-free platform shims for those targets or
+  // we vendor libuv ourselves.
+  //
+  // iOS device (`ios-device`) is intentionally NOT covered yet — the
+  // device toolchain build path is a separate follow-up (the kqueue-
+  // apple branch scopes to Simulator only).
+  if (hasZjs && (target === "macos" || target === "ios-simulator")) {
     const { resolveVendorDir } = await import("./paths");
     const vendorDir = resolveVendorDir();
     const zjsDir = path.join(vendorDir, "zjs");
     const zjsInclude = path.join(zjsDir, "include");
-    // Use the dylib, not the .a. Both the framework and libzjs.a embed
-    // zenc's stdlib (Vec / String / Option / Arena / …) — linking the
-    // .a fails with hundreds of duplicate-symbol errors on those
-    // shared internals. The dylib resolves symbols per-binary, so the
-    // framework sees only zjs's exported zjs_* surface and its own
-    // copy of the stdlib stays unconflicted.
+
+    // Branch make invocation + output artifact by target.
     //
-    // Long-term fix lives upstream in zjs: ship an embed-friendly .a
-    // with internal symbols stripped (ld -r + -unexported_symbols_list,
-    // or build a relocatable .o with `-hidden`). Until then the dylib
-    // is the right pragmatic choice — runtime dylib dependency is
-    // acceptable since libzjs.dylib lives next to the binary in dev
-    // and bundles into the .app in prod.
-    const zjsLib = path.join(zjsDir, "build", "libzjs.dylib");
+    // macOS: link the dylib, not the .a. Both the framework and
+    //   libzjs.a embed zenc's stdlib (Vec / String / Option / Arena / …)
+    //   — linking the .a fails with hundreds of duplicate-symbol errors
+    //   on those shared internals. The dylib resolves symbols per-binary,
+    //   so the framework sees only zjs's exported zjs_* surface and its
+    //   own copy of the stdlib stays unconflicted.
+    //
+    //   Long-term fix lives upstream in zjs: ship an embed-friendly .a
+    //   with internal symbols stripped (ld -r + -unexported_symbols_list,
+    //   or build a relocatable .o with `-hidden`). Until then the dylib
+    //   is the right pragmatic choice — runtime dylib dependency is
+    //   acceptable since libzjs.dylib lives next to the binary in dev
+    //   and bundles into the .app in prod.
+    //
+    // iOS Simulator: same duplicate-symbol risk as macOS would have
+    //   with the .a, but dylibs aren't viable on iOS (Apple's toolchain
+    //   expects third-party native libs to link statically into the
+    //   app binary). We work around it by post-processing libzjs.a
+    //   into an "embed-friendly" archive (libzjs_embed.a) where every
+    //   non-`_zjs_*` symbol is `ld -r`'d into a single relocatable
+    //   .o with private-extern visibility (`-exported_symbols_list`
+    //   restricted to `_zjs_*`). The framework only ever calls into
+    //   `zjs_*`, so hiding the rest is safe — and the framework's own
+    //   copy of zenc's stdlib (Arena / Vec / String / …) wins the link.
+    //   See the build step below the install_name section.
+    let zjsLib: string;
+    let makeCmd: string[];
+    let buildLabel: string;
+    if (target === "ios-simulator") {
+      zjsLib = path.join(zjsDir, "build", "ios", "simulator-arm64", "libzjs.a");
+      makeCmd = ["make", "-C", zjsDir, "ios-simulator-arm64"];
+      buildLabel = "vendor/zjs (iOS Sim arm64; first run; ~30s)";
+    } else {
+      // target === "macos"
+      zjsLib = path.join(zjsDir, "build", "libzjs.dylib");
+      makeCmd = ["make", "-C", zjsDir];
+      buildLabel = "vendor/zjs (first run; ~30s)";
+    }
 
     if (!existsSync(zjsLib)) {
-      process.stdout.write(`[zapp] building vendor/zjs (first run; ~30s)...\n`);
-      const proc = Bun.spawn(["make", "-C", zjsDir], {
+      process.stdout.write(`[zapp] building ${buildLabel}...\n`);
+      const proc = Bun.spawn(makeCmd, {
         stdout: "pipe", stderr: "pipe",
       });
       const exitCode = await proc.exited;
@@ -911,50 +976,163 @@ export async function generatePlatformConfig(
         const stderr = await new Response(proc.stderr).text();
         throw new Error(
           `[zapp] failed to build vendor/zjs (exit ${exitCode}). ` +
-          `Tried: make -C ${zjsDir}. Build vendor/zjs by hand and rerun.\n${stderr}`
+          `Tried: ${makeCmd.join(" ")}. Build vendor/zjs by hand and rerun.\n${stderr}`
         );
       }
     }
 
+    // install_name_tool rewrite is macOS-only — iOS uses a static .a,
+    // which has no install_name (it's a dylib-only concept).
+    //
     // zjs's Makefile bakes a relative install_name ("build/libzjs.dylib")
     // because the dylib is normally consumed in-tree (its own smoke test
     // run from the project root finds it via @loader_path). For Zapp
     // we're linking from a different cwd, so the runtime loader can't
     // resolve the relative path. Rewrite the install_name to the
     // absolute vendor location once — idempotent, fast, no rebuild.
-    const otoolD = Bun.spawnSync(["otool", "-D", zjsLib]);
-    const installName = new TextDecoder().decode(otoolD.stdout).split("\n")[1]?.trim();
-    if (installName && installName !== zjsLib) {
-      const fix = Bun.spawnSync(["install_name_tool", "-id", zjsLib, zjsLib]);
-      if (fix.exitCode !== 0) {
-        throw new Error(
-          `[zapp] failed to set absolute install_name on ${zjsLib}: ` +
-          new TextDecoder().decode(fix.stderr)
-        );
+    if (target === "macos") {
+      const otoolD = Bun.spawnSync(["otool", "-D", zjsLib]);
+      const installName = new TextDecoder().decode(otoolD.stdout).split("\n")[1]?.trim();
+      if (installName && installName !== zjsLib) {
+        const fix = Bun.spawnSync(["install_name_tool", "-id", zjsLib, zjsLib]);
+        if (fix.exitCode !== 0) {
+          throw new Error(
+            `[zapp] failed to set absolute install_name on ${zjsLib}: ` +
+            new TextDecoder().decode(fix.stderr)
+          );
+        }
       }
     }
 
-    // Headers: zjs's own + system libuv (engines/zjs.c uses uv_loop +
-    // friends). brew install libuv on macOS dev hosts puts it under
-    // /opt/homebrew (Apple Silicon) or /usr/local (Intel).
-    const uvIncludeCandidates = ["/opt/homebrew/include", "/usr/local/include"];
-    const uvLibCandidates     = ["/opt/homebrew/lib",     "/usr/local/lib"];
-    const uvInclude = uvIncludeCandidates.find(p => existsSync(path.join(p, "uv.h")));
-    const uvLibDir  = uvLibCandidates.find(p => existsSync(path.join(p, "libuv.dylib")));
-    if (!uvInclude || !uvLibDir) {
-      throw new Error(
-        `[zapp] zjs engine requires libuv (brew install libuv). ` +
-        `Searched ${uvIncludeCandidates.join(", ")} for uv.h.`
-      );
-    }
+    // Headers: zjs's own. The Apple loop in engines/zjs.c is kqueue +
+    // CFRunLoop (Task 2 of the kqueue-apple migration), so libuv is no
+    // longer a build- or runtime-time dependency on Apple. Linux /
+    // Windows zjs ports will reintroduce libuv (or an equivalent shim)
+    // under their own platform branches when they land.
+    //
+    // Per-target framework + link emission:
+    //   macOS: -rpath so the framework binary finds libzjs.dylib at
+    //     runtime from the vendor build dir. Production builds will
+    //     copy the dylib into the .app bundle's Frameworks dir and use
+    //     @loader_path instead — Z5 follow-up. CoreFoundation
+    //     (CFRunLoopRunInMode) is already in the unconditional macOS
+    //     framework set above. Foundation (NSURLSession in zjs's
+    //     http_apple.m + ws_apple.m) is not, so we add it here scoped
+    //     to the zjs branch.
+    //   iOS: no rpath — static lib links directly into the binary.
+    //     Foundation is already in the iOS unconditional framework set
+    //     (every iOS .m source imports <Foundation/Foundation.h>);
+    //     CoreFoundation is brought in transitively by Foundation on
+    //     iOS, so neither needs to be re-emitted here.
+    //
+    // iOS directives use NO platform prefix (mirrors the iOS branch
+    // above). zc filters platform-prefixed directives by HOST
+    // platform, not build target — so `//> ios:` on a macOS host
+    // would get dropped. Plain `//> cflags:` / `//> link:` bypass
+    // the filter and apply unconditionally, which is what we want
+    // for an iOS build running on a macOS host.
+    if (target === "ios-simulator") {
+      // Produce an embed-friendly archive: ld -r merges libzjs.a's
+      // objects into a single relocatable .o, then `-exported_symbols_list`
+      // restricts globally-visible symbols to `_zjs_*`. Every other
+      // symbol (Arena__*, Vec__*, the zenc-stdlib runtime that both
+      // Zapp's framework and libzjs.a embed) becomes a private extern,
+      // resolved within the merged .o and invisible to the final ld
+      // pass. That sidesteps the ~37 duplicate-symbol clashes between
+      // libzjs.a's stdlib copy and the framework's stdlib copy.
+      //
+      // Cached by mtime — re-runs after the first build are no-ops.
+      const sdkPath = await resolveSDKPath("iphonesimulator");
+      const versionMinFlag = "-mios-simulator-version-min=15.0";
+      const iosBuildDir = path.join(zjsDir, "build", "ios", "simulator-arm64");
+      const embedLib = path.join(iosBuildDir, "libzjs_embed.a");
+      const embedObj = path.join(iosBuildDir, "libzjs_embed.o");
+      const symsList = path.join(iosBuildDir, "libzjs_embed.syms");
+      const aesGcmObj = path.join(iosBuildDir, "aes_gcm.o");
+      const aesGcmSrc = path.join(zjsDir, "src", "third-party", "aes-gcm", "aes_gcm.c");
+      const fs = await import("node:fs");
+      const srcMtime = fs.statSync(zjsLib).mtimeMs;
+      const aesGcmSrcMtime = existsSync(aesGcmSrc) ? fs.statSync(aesGcmSrc).mtimeMs : 0;
+      const stale = !existsSync(embedLib)
+        || fs.statSync(embedLib).mtimeMs < srcMtime
+        || fs.statSync(embedLib).mtimeMs < aesGcmSrcMtime;
+      if (stale) {
+        process.stdout.write("[zapp] post-processing libzjs.a → libzjs_embed.a (iOS Sim)...\n");
 
-    // -rpath so the framework binary finds libzjs.dylib at runtime
-    // from the vendor build dir. Production builds will copy the dylib
-    // into the .app bundle's Frameworks dir and use @loader_path
-    // instead — Z5 follow-up.
-    const zjsBuildDir = path.dirname(zjsLib);
-    content += `//> macos: cflags: -I${shortPath(zjsInclude)} -I${uvInclude}\n`;
-    content += `//> macos: link: ${shortPath(zjsLib)} -L${uvLibDir} -luv -Wl,-rpath,${zjsBuildDir}\n`;
+        // Compile aes_gcm.c into an object so we can include it in
+        // the ld -r merge (libzjs.a references zjs_pc_aes_gcm_* but
+        // doesn't contain them — vendor zjs's iOS Makefile target
+        // misses this source. Until that's fixed upstream, build it
+        // here so the merged .o is self-contained.)
+        if (existsSync(aesGcmSrc)) {
+          const cc = Bun.spawnSync([
+            "clang",
+            "-O3",
+            "-arch", "arm64",
+            "-isysroot", sdkPath,
+            versionMinFlag,
+            "-I" + path.join(zjsDir, "src"),
+            "-c", aesGcmSrc,
+            "-o", aesGcmObj,
+          ]);
+          if (cc.exitCode !== 0) {
+            throw new Error(
+              `[zapp] failed to compile aes_gcm.c for iOS Sim: ` +
+              new TextDecoder().decode(cc.stderr)
+            );
+          }
+        }
+
+        // The exported-symbols list is a single-pattern file matching
+        // every `_zjs_*` symbol. `*` is the glob meta in ld's
+        // -exported_symbols_list grammar.
+        await Bun.write(symsList, "_zjs_*\n");
+        const ldArgs = [
+          "-r",
+          "-arch", "arm64",
+          "-platform_version", "ios-simulator", "15.0", "15.0",
+          "-syslibroot", sdkPath,
+          "-exported_symbols_list", symsList,
+          // Force-load every .o in the .a — ld -r otherwise skips
+          // unreferenced objects, which would lose half of libzjs.
+          "-force_load", zjsLib,
+          ...(existsSync(aesGcmObj) ? [aesGcmObj] : []),
+          "-o", embedObj,
+        ];
+        const ld = Bun.spawnSync(["ld", ...ldArgs]);
+        if (ld.exitCode !== 0) {
+          throw new Error(
+            `[zapp] failed to build libzjs_embed.o: ` +
+            new TextDecoder().decode(ld.stderr)
+          );
+        }
+        if (existsSync(embedLib)) fs.unlinkSync(embedLib);
+        const ar = Bun.spawnSync(["ar", "-rcs", embedLib, embedObj]);
+        if (ar.exitCode !== 0) {
+          throw new Error(
+            `[zapp] failed to repack libzjs_embed.a: ` +
+            new TextDecoder().decode(ar.stderr)
+          );
+        }
+      }
+      content += `//> cflags: -I${shortPath(zjsInclude)}\n`;
+      // Security.framework — `SecRandomCopyBytes` (used by zjs's
+      // crypto.subtle key-generation path) lives there. Already in
+      // the macOS unconditional framework set above; iOS's
+      // unconditional set doesn't include it, so we add it here
+      // scoped to the zjs branch.
+      content += `//> framework: Security\n`;
+      // aes_gcm.c is folded into the embed .o above (vendor zjs's
+      // iOS Makefile target misses it — see the embed step). No
+      // separate cflags entry needed here.
+      content += `//> link: ${shortPath(embedLib)}\n`;
+    } else {
+      // target === "macos"
+      const zjsBuildDir = path.dirname(zjsLib);
+      content += `//> macos: cflags: -I${shortPath(zjsInclude)}\n`;
+      content += `//> macos: framework: Foundation\n`;
+      content += `//> macos: link: ${shortPath(zjsLib)} -Wl,-rpath,${zjsBuildDir}\n`;
+    }
   }
 
   if (process.platform === "win32" && sources.length > 0) {
