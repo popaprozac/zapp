@@ -515,7 +515,7 @@ without Promise overhead.
 Spawn JavaScript workers from a webview. (From inside another worker,
 use `new Worker()` the same way.)
 
-### `new Worker(scriptUrl: string)`
+### `new Worker(scriptUrl: string, opts?: { name?: string })`
 
 ```ts
 const w = new Worker("./my-worker.ts");
@@ -523,7 +523,16 @@ w.postMessage({ task: "compute", data: [1, 2, 3] });
 w.onmessage = (e) => console.log("result:", e.data);
 w.onerror = (err) => console.error(err);
 w.terminate();
+
+// Optional display name — surfaces in logs ([zapp/<name>] ...) and in
+// Workers.list(), making it easy to tell workers apart while debugging.
+const sync = new Worker("./sync.ts", { name: "sync-engine" });
 ```
+
+`name` is a display-only label — it has no effect on routing or
+identity (the worker is still addressed by its `id`). When set, the
+framework's per-worker log lines use it (`[zapp/sync-engine] ...`) and
+it appears as `WorkerInfo.name` in `Workers.list()`.
 
 ### Named channels (optional; typed routing layer)
 
@@ -579,6 +588,55 @@ import { Workers } from "@zappdev/runtime";
 Workers.terminate("h-sync");
 ```
 
+### `Workers.list(): Promise<WorkerInfo[]>`
+
+Enumerate the active worker registry — a runtime debug / introspection
+API. Returns one `WorkerInfo` per live worker (headless, dedicated, and
+shared). Available from both webview and worker contexts; same shape
+either way (the webview round-trips through native IPC, a worker calls
+its host bridge directly — both resolve to the same array).
+
+```ts
+import { Workers } from "@zappdev/runtime";
+
+const workers = await Workers.list();
+console.log(JSON.stringify(workers, null, 2));
+// [
+//   {
+//     "id": "h-supervised",
+//     "name": "sync-engine",
+//     "scriptUrl": "/_workers/_headless_supervised.mjs",
+//     "engine": "zjs",
+//     "shared": false,
+//     "owners": [],
+//     "supervisor": { "maxRetries": 2, "withinMs": 30000, "failCount": 0, "gaveUp": false }
+//   },
+//   { "id": "h-ticker", "scriptUrl": "...", "engine": "zjs", "shared": false, "owners": [] }
+// ]
+```
+
+```ts
+interface WorkerInfo {
+  id: string;                    // runtime id — "h-<key>", "w-N", "sw-N"
+  name?: string;                 // display label, if set (config or new Worker)
+  scriptUrl: string;
+  engine: "zjs" | "bare-jsc" | "bare-v8" | "bare-quickjs"
+        | "bare-mqjs" | "bare-hermes" | "pending";  // "pending" = not yet resolved
+  shared: boolean;
+  owners: string[];              // owning window ids (empty for headless)
+  supervisor?: {                 // present only for workers with a restart policy
+    maxRetries: number;
+    withinMs: number;
+    failCount: number;
+    gaveUp: boolean;
+  };
+}
+```
+
+`list()` is read-only — it reflects a point-in-time snapshot of the
+registry. `name` is omitted when unset, and `supervisor` is omitted for
+workers without a `restart` policy.
+
 ### Headless workers — `HeadlessWorkerConfig`
 
 Headless workers are background JS threads the framework spawns at app
@@ -599,8 +657,9 @@ const config: ZappConfig = {
       engine: "zjs",        // optional; see "Engine selection" below
       bytecode: true,       // optional; only on bytecode-capable engines
     },
-    "sync-engine": {
+    supervised: {
       script: "src/workers/sync.ts",
+      name: "sync-engine",  // optional display label (logs + Workers.list())
       engine: "bare-jsc",
       restart: { maxRetries: 2, withinMs: 30_000 },
     },
@@ -610,8 +669,14 @@ const config: ZappConfig = {
 export default config;
 ```
 
-The keys (`ticker`, `sync-engine`) become the worker IDs at runtime, each
+The keys (`ticker`, `supervised`) become the worker IDs at runtime, each
 prefixed with `h-` — so `Workers.terminate("h-ticker")` stops the ticker.
+
+The optional `name` is a display label independent of the key/ID: it's
+what per-worker log lines use (`[zapp/sync-engine] ...` instead of
+`[zapp/h-supervised] ...`) and what `Workers.list()` reports as
+`WorkerInfo.name`. The key still defines the `h-<key>` ID you pass to
+`Workers.terminate(...)`.
 
 ### Engine selection — `engine: "..."`
 
