@@ -30,12 +30,12 @@ export const Sync = {
    * @returns "notified" or "timed-out"
    *
    * Written as `wait: async function()` rather than `async wait()` shorthand
-   * to work around zjs's parser, which accepts async function expressions
-   * but rejects the ES2017 async-method-shorthand form inside object
-   * literals. Vite's worker bundle target is es2017 so esbuild preserves
-   * the shorthand form — without this longhand, every zjs worker that
-   * imports `Sync` fails to parse with `SyntaxError: module parse error`.
-   * See [[reference_zjs_async_method_shorthand]].
+   * to work around a zjs parser case. Repro: `var x = { async m(e, n=3e4) {} }`
+   * (declaration form + default parameter + multi-method object literal +
+   * module mode) → `SyntaxError: module parse error`. Inline expression
+   * forms `({ async m() {} }).m()` parse fine. The exact trigger is one of:
+   * declaration vs expression, default parameter, mixed async/non-async,
+   * or module vs script mode. See [[reference_zjs_async_method_shorthand]].
    */
   wait: async function(
     key: string,
