@@ -195,9 +195,10 @@ typedef struct {
     int incarnation;
 
     // Control flags — set from host_worker_crash (worker thread) or
-    // from zjs_worker_terminate (any thread). The shutdown_async signal
-    // wakes the loop; the while-loop in zjs_worker_thread reads these
-    // after uv_run returns. wants_terminate wins over wants_restart.
+    // from zjs_worker_terminate (any thread). The kqueue trigger
+    // (apple_trigger_shutdown) / uv_async_send (libuv) wakes the loop;
+    // the inner loop in zjs_worker_thread reads these atomics each
+    // iteration. wants_terminate wins over wants_restart.
     _Atomic int wants_restart;
     _Atomic int wants_terminate;
 } ZjsWorkerSlot;
@@ -900,6 +901,15 @@ static void drain_eval_inbox_apple(ZjsWorkerSlot* slot) {
 // both the worker thread (re-arm on batch overflow) and any thread
 // that signals the worker (zjs_worker_post_message, terminate, etc).
 // EV_CLEAR | NOTE_TRIGGER is the documented one-shot wake pattern.
+//
+// Note: callers guard each trigger with `slot->kq_initialized` (or
+// `slot->loop_initialized` on libuv) under `zjs_workers_mutex`, but
+// the worker thread mutates that flag inside teardown_state WITHOUT
+// holding the workers mutex — so a trigger call can race a teardown.
+// On Apple the worst case is kevent() against a closed fd returning
+// EBADF, which is harmless; on libuv, uv_async_send against a closed
+// handle is undefined behavior. The pattern is preserved from the
+// libuv path; tightening it is out of scope for this commit.
 static void apple_trigger_inbox(ZjsWorkerSlot* slot) {
     struct kevent trigger;
     EV_SET(&trigger, FILTER_INBOX, EVFILT_USER, 0, NOTE_TRIGGER, 0, NULL);
@@ -1575,15 +1585,25 @@ static void* zjs_worker_thread(void* arg) {
                     }
                 }
 
-                // Tick CFRunLoop for NSURLSession completions
-                // (zjs fetch / WebSocket use NSURLSession on Apple,
-                // which dispatches its callbacks through CFRunLoop).
-                // 0.0 timeout = non-blocking; returns after handling
-                // pending sources or immediately if none.
-                CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.0, true);
-                // CFRunLoop callbacks may have scheduled microtasks
-                // (e.g. fetch().then resolutions); drain them before
-                // blocking again.
+                // Tick CFRunLoop for NSURLSession completions. With
+                // returnAfterSourceHandled=true and a 0.0 timeout, each
+                // call returns kCFRunLoopRunHandledSource after one
+                // fetch/WebSocket completion fires, or
+                // kCFRunLoopRunFinished / kCFRunLoopRunTimedOut when
+                // nothing else is pending. Loop until drained so a
+                // burst of parallel fetch responses doesn't stack up
+                // across iterations of the outer kevent loop (which
+                // would otherwise drain at most one completion per
+                // second when the worker is idle).
+                //
+                // Each completion may fire JS callbacks that schedule
+                // microtasks; drain those once after the burst, then
+                // let the outer loop's top-of-iteration drain handle
+                // any cascade.
+                while (CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.0, true)
+                       == kCFRunLoopRunHandledSource) {
+                    /* drained one source; keep going */
+                }
                 zjs_drain_microtasks(slot->ctx);
             }
 #else
