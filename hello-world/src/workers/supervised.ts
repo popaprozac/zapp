@@ -11,7 +11,7 @@
 //   - 2nd crash:  worker:crashed → worker:restarted
 //   - 3rd crash:  worker:crashed → worker:gave-up
 
-import { Events, Workers } from "@zappdev/runtime";
+import { Events, Sync, Workers } from "@zappdev/runtime";
 // `workerModules` in zapp.config.ts (now ["fetch"]) drives the
 // install — no manual side-effect import needed here.
 
@@ -86,29 +86,30 @@ Events.on("app:notification-click", (data: any) => {
   console.log(`[supervised] app:notification-click received: ${JSON.stringify(data)}`);
 });
 
-// Sync result — INTENTIONALLY OMITTED from this worker.
+// Sync result — exercise the targeted-delivery path landed in T4
+// (sync.m:294 `worker_eval_js((char*)worker_id, (char*)js_c)`).
 //
-// Two reasons:
-//   1. There's no `Events.on("sync:result", …)` surface; the host calls
-//      `bridge.dispatchSyncResult(id)` directly (native/platform/darwin/
-//      sync.m:259) and the worker bootstrap resolves a pending promise
-//      registered by `Sync.wait`. So the natural smoke shape is calling
-//      `Sync.wait` from here and logging when it resolves.
-//   2. `Sync.wait` from @zappdev/runtime/sync uses `async` method
-//      shorthand (`{ async wait(...) {...} }`), and after Vite's bundler
-//      drag-along the supervised.mjs entry hits zjs's parser which
-//      currently rejects that exact shape with `SyntaxError: module
-//      parse error` (vendor/zjs/src/context.zc:21470). The crash blocks
-//      worker boot, taking out the other 5 listeners too.
+// Flow when the user clicks the webview's "Run supervised sync test" pair:
+//   1. Webview emits `supervised-sync-test` → this worker calls
+//      `await Sync.wait("__supervised-sync-audit", 10000)`
+//   2. The Sync.wait registers a pending promise + asks the host bridge
+//      to block until a notify with that key arrives (or the timeout).
+//   3. Webview clicks "Wake supervised's sync.wait" → calls
+//      `Sync.notify("__supervised-sync-audit")` → reaches sync.m, which
+//      builds the `bridge.dispatchSyncResult(payload)` IIFE and calls
+//      worker_eval_js(worker_id, js) to deliver it to THIS worker
+//      specifically (routed via the registry's engine field).
+//   4. This worker's pending promise resolves with "notified"; we log it.
 //
-// Sync delivery to workers is still covered by other vehicles:
-//   - The webview "try-sync-wait" path that already exists in
-//     hello-world's UI exercises bridge.syncWait + dispatchSyncResult
-//     from the page side (different worker, different engine paths).
-//   - benchmarks/apps/zapp-host-bridge exercises sync round-trip on
-//     bare-jsc, where async-shorthand parses fine.
+// If the log fires, T4's engine-agnostic targeted dispatch is reaching
+// zjs workers end-to-end (the bug Gap C documented).
 //
-// Re-enable here once zjs's parser supports async-method shorthand (or
-// the runtime's Sync wrapper is rewritten without it).
+// Requires the runtime/sync.ts longhand rewrite (commit 68d0403) —
+// the async-method-shorthand form crashed zjs's parser on import.
+Events.on("supervised-sync-test", async () => {
+  console.log(`[supervised] Sync.wait("__supervised-sync-audit", 10000) started`);
+  const result = await Sync.wait("__supervised-sync-audit", 10000);
+  console.log(`[supervised] Sync.wait("__supervised-sync-audit") → ${result}`);
+});
 
 console.log("[supervised] ready");
