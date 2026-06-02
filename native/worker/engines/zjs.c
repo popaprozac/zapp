@@ -1,24 +1,30 @@
 // zjs worker engine — first-party JS engine for Zapp workers.
 //
-// Each worker runs on its own pthread with its own uv_loop_t and
-// ZjsContext. The thread structure mirrors txiki.c (slot table + mutex,
-// per-worker async/inbox plumbing, embedded-asset → filesystem → iOS
-// dev-URL script load chain). The novel piece is how zjs drives its
-// timer queue from libuv: zjs has no embedded loop of its own, so we
-// pump it from a uv_check_t and re-arm a uv_timer_t to zjs_next_timer_ms
-// to wake libuv at the right time.
+// Each worker runs on its own pthread with its own ZjsContext. The
+// thread structure mirrors txiki.c (slot table + mutex, per-worker
+// async/inbox plumbing, embedded-asset → filesystem → iOS dev-URL
+// script load chain).
 //
-// This first cut wires:
-//   - context lifecycle (create / teardown)
-//   - script loading + eval
-//   - console.log host function
-//   - setInterval / setTimeout (provided by zjs itself, surfaced via
-//     the timer queue we pump from uv)
+// The novel piece is how zjs's timer queue is driven from the
+// embedder's event loop. zjs ships no embedded loop of its own —
+// instead it exposes a pure polling interface (`zjs_has_pending_work`
+// / `zjs_next_timer_ms` / `zjs_run_pending_timers` /
+// `zjs_drain_microtasks`). Two embeddings here:
 //
-// The full host bridge (invokeService, dispatchEventToAll, send/receive,
-// syncWait/syncNotify, workerCrash) lands in subsequent cuts. The
-// surface is small on purpose — this file should compile and run
-// hello-world's ticker.ts the moment Z4 wires the CLI + router.
+//   - **Apple (macOS + iOS)** — kqueue + CFRunLoop hybrid. EVFILT_USER
+//     triggers (FILTER_SHUTDOWN / FILTER_INBOX / FILTER_EVAL_INBOX)
+//     replace libuv's uv_async_t for cross-thread signaling; the
+//     kevent() timeout is fed by zjs_next_timer_ms each iteration;
+//     CFRunLoop is ticked once per iteration to drain NSURLSession
+//     completions for zjs's fetch / WebSocket. No libuv dependency.
+//   - **Linux / Windows** — libuv (uv_loop_t + uv_check_t pump +
+//     uv_timer_t armed to zjs_next_timer_ms + 3× uv_async_t).
+//     Preserved unchanged until those targets ship their own
+//     platform-native loops.
+//
+// Host bridge (invokeService, dispatchEventToAll, send/receive,
+// syncWait/syncNotify, workerCrash) is wired through the same
+// __zappBridge global as the other engines.
 
 #include "zjs.h"
 #include <zjs.h>  // include/zjs.h from vendor/zjs — embed ABI
@@ -1128,8 +1134,9 @@ static char* zjs_load_script(const char* script_url, long* out_len) {
 }
 
 // ---------------------------------------------------------------------------
-// Worker thread — owns its uv_loop + ZjsContext for the lifetime of the
-// worker. The slot.active flag is the authoritative "this worker is up"
+// Worker thread — owns its event loop (kqueue+CFRunLoop on Apple,
+// uv_loop_t elsewhere) + ZjsContext for the lifetime of the worker.
+// The slot.active flag is the authoritative "this worker is up"
 // state; the supervisor / dispatch path uses it to gate routing.
 // ---------------------------------------------------------------------------
 
