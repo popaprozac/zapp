@@ -139,7 +139,7 @@ ${argsDecl}
 ${resultDecl}
 
 export async function ${fnName}(args?: ${argsName}): Promise<${resultName}> {
-    return Services.invoke<${resultName}>("${binding.name}", args ?? {});
+    return Services.invoke<${resultName}, ${argsName}>("${binding.name}", args ?? {});
 }
 `;
       } else {
