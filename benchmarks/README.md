@@ -3,8 +3,10 @@
 Head-to-head comparison of Zapp against the four other major desktop webview
 frameworks on macOS:
 
-- **Zapp** in two flavors — JSC engine (smallest, macOS-only, no web APIs in
-  workers) and txiki.js engine (cross-platform, full web APIs)
+- **Zapp** — first-party `zjs` engine (default, cross-platform, ~4.5 MB) with
+  five additional `bare-*` engines available as opt-ins. The `host-bridge`
+  bench under `apps/zapp-host-bridge/` compares per-call cost across engines
+  side by side.
 - **Tauri v2** (Rust + system webview)
 - **Wails v3** (Go + system webview)
 - **Electron** (Node + Chromium)
@@ -39,7 +41,7 @@ Latest numbers live in `RESULTS.md`. The shape you should expect:
   verified)
 - **Bun** 1.3+ — used as the package manager and task runner everywhere
 - **Zen-C** (`zc`) on `$PATH` — for Zapp builds
-- **cmake** — required by the txiki.js build inside Zapp
+- **cmake** — required when building any `bare-*` engine for Zapp (first build only)
 - **Rust toolchain** (`rustup`) — for Tauri
 - **Go 1.25+** and **wails3** CLI — for Wails
   (`go install github.com/wailsapp/wails/v3/cmd/wails3@latest`)
@@ -124,7 +126,7 @@ Per-framework wipe list (inside the project directory only):
 
 | Framework | Cold wipe |
 |---|---|
-| zapp-jsc / zapp-txiki | `.zapp/` `bin/` `dist/` `release/` |
+| zapp-host-bridge | `.zapp/` `bin/` `dist/` `release/` |
 | tauri | `src-tauri/target/` `dist/` |
 | wails | `bin/` `frontend/dist/` `frontend/bindings/` |
 | electron | `out/` |
@@ -355,8 +357,7 @@ benchmarks/
 ├── bench.sh              # single-app measurement script
 ├── bridge-bench.js       # paste-in-devtools IPC latency bench
 ├── apps/
-│   ├── zapp-jsc/         # Zapp with JSC engine (macOS-only, tiny)
-│   ├── zapp-txiki/       # Zapp with txiki engine (full web APIs)
+│   ├── zapp-host-bridge/ # Zapp host-bridge bench across all engines
 │   ├── tauri/            # Tauri v2 vanilla-ts scaffold
 │   ├── wails/            # Wails v3 vanilla-ts scaffold
 │   ├── electron/         # Electron + electron-forge

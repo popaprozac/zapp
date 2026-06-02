@@ -41,8 +41,8 @@ This means:
 
 ## Bytecode (AOT) option
 
-Engines that ship a bytecode pipeline (`zjs`, `bare-hermes`) accept
-`bytecode: true` in the headless worker config:
+Engines that ship a bytecode pipeline accept `bytecode: true` in the
+headless worker config:
 
 ```ts
 headless: {
@@ -59,10 +59,19 @@ worker, ships the bytecode artifact, and the engine loads it
 parse-free. Cold-start win is biggest on iOS where JIT is gated and
 parse cost is the dominant startup cost.
 
-Setting `bytecode: true` on an engine that doesn't support it is a
-**TypeScript compile error** (the `HeadlessWorkerConfig` type is a
-discriminated union). The runtime would have errored anyway, but the
-type catches it earlier.
+**Pipeline status:**
+- **`zjs`** ships today — `.zbc` artifacts compile and load end-to-end on
+  macOS + iOS Simulator (the kqueue migration unblocked iOS).
+- **`bare-hermes`** is in the type as a `BytecodeCapableEngine` for
+  forward-compatibility, but the CLI compile step lands with the
+  bare-hermes iOS work. Setting `bytecode: true` on `bare-hermes` today
+  type-checks but the worker still ships as source — track via the
+  pending bare-hermes runtime work.
+
+Setting `bytecode: true` on a non-bytecode engine (`bare-jsc`,
+`bare-v8`, `bare-quickjs`, `bare-mqjs`) is a **TypeScript compile
+error** (the `HeadlessWorkerConfig` type is a discriminated union).
+The runtime would have errored anyway; the type catches it earlier.
 
 ## Fallback chain
 
