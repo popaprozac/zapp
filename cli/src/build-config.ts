@@ -156,11 +156,13 @@ export async function generateHeadlessWorkers(opts: {
       const max = restart ? (restart.maxRetries ?? 3) : 0;
       const within = restart ? (restart.withinMs ?? 60_000) : 0;
       // Optional display name — escaped for embedding as a C string
-      // literal in the generated Zen-C source. Backslashes first, then
-      // double-quotes (order matters: escaping quotes first would
-      // double-escape the backslashes the quote-escape introduces).
-      const name = typeof value === "string" ? "" : (value.name ?? "");
-      const escapedName = name.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+      // literal in the generated Zen-C source. JSON.stringify produces a
+      // fully-escaped double-quoted string (handles \, ", \n, \r, \t and
+      // other control chars); .slice(1, -1) strips the surrounding quotes
+      // since the codegen template below already wraps it in "...".
+      // Same idiom as fsAllowJson / protocolsJson above.
+      const name = value.name ?? "";
+      const escapedName = JSON.stringify(name).slice(1, -1);
       // bytecode: true is only meaningful for zjs. The CLI build step
       // produces a sibling .zbc file via `zjs compile`; the engine
       // detects the extension and dispatches to zjs_eval_bytecode.
