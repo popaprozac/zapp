@@ -178,7 +178,7 @@ async function runDev(root: string) {
   //     bare-jsc).
   const userBuildFileEarly = path.join(root, "zapp", "build.zc");
   const iosBuildFile = isIOS
-    ? await generateIOSBuildFile(root, userBuildFileEarly)
+    ? await generateIOSBuildFile(root, userBuildFileEarly, config)
     : null;
 
   // 2. Generate service bindings + bundle workers
@@ -532,7 +532,7 @@ async function runBuild(root: string) {
   // strips `//> macos:` directives (zc gates those by host, not build
   // target) and re-emits iOS-appropriate ones.
   const buildFile = isIOSTarget(target)
-    ? await generateIOSBuildFile(root, userBuildFile)
+    ? await generateIOSBuildFile(root, userBuildFile, config)
     : userBuildFile;
   await compileNative({
     root,
