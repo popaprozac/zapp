@@ -132,6 +132,7 @@ export async function generateHeadlessWorkers(opts: {
   root: string;
   headless?: Record<string, string | {
     script: string;
+    name?: string;
     restart?: { maxRetries?: number; withinMs?: number } | false;
     engine?: "bare-jsc" | "bare-v8" | "bare-quickjs" | "bare-mqjs" | "bare-hermes" | "zjs";
     bytecode?: boolean;  // type-narrowed at the user-facing HeadlessWorkerConfig boundary
@@ -154,6 +155,12 @@ export async function generateHeadlessWorkers(opts: {
       const restart = value.restart;
       const max = restart ? (restart.maxRetries ?? 3) : 0;
       const within = restart ? (restart.withinMs ?? 60_000) : 0;
+      // Optional display name — escaped for embedding as a C string
+      // literal in the generated Zen-C source. Backslashes first, then
+      // double-quotes (order matters: escaping quotes first would
+      // double-escape the backslashes the quote-escape introduces).
+      const name = typeof value === "string" ? "" : (value.name ?? "");
+      const escapedName = name.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
       // bytecode: true is only meaningful for zjs. The CLI build step
       // produces a sibling .zbc file via `zjs compile`; the engine
       // detects the extension and dispatches to zjs_eval_bytecode.
@@ -165,7 +172,7 @@ export async function generateHeadlessWorkers(opts: {
       }
       const ext = value.bytecode ? "zbc" : "mjs";
       const url = `/_workers/_headless_${id}.${ext}`;
-      return `    zapp_start_headless_worker_full("h-${id}", "${url}", ${engineId}, ${max}, ${within});`;
+      return `    zapp_start_headless_worker_full("h-${id}", "${url}", ${engineId}, ${max}, ${within}, "${escapedName}");`;
     })
     .join("\n");
 
