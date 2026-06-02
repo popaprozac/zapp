@@ -871,22 +871,26 @@ export type WorkerEngine =
   | "bare-hermes"
   | "zjs";          // first-party: popaprozac/zjs, direct value bridge
 
-// Check if any worker engine is defined. Returns the highest-priority
-// engine when multiple are enabled (build.zc allows several
+// Check if any worker engine is defined. Returns the first engine that
+// matches when multiple are enabled (build.zc allows several
 // ZAPP_WORKER_ENGINE_* directives — the dispatcher in worker.zc routes
-// per-worker at runtime).
+// per-worker at runtime, so this return value is informational only).
 //
-// Priority order: bare-jsc > bare-v8 > bare-hermes > bare-quickjs > bare-mqjs > zjs.
+// Both call sites (zapp-cli.ts:154, :460) treat the return value as a
+// truthy/null check; they never read which specific engine came back.
+// The order below matches the documented fallback chain in
+// cli/src/config.ts:HeadlessWorkerConfig:
+// `zjs > bare-jsc > bare-v8 > bare-hermes > bare-quickjs > bare-mqjs`.
 export async function hasAnyWorkerEngine(root: string): Promise<WorkerEngine | null> {
   const buildFile = path.join(root, "zapp", "build.zc");
   try {
     const content = await Bun.file(buildFile).text();
+    if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_ZJS\b/m.test(content)) return "zjs";
     if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_JSC/m.test(content)) return "bare-jsc";
     if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_V8/m.test(content)) return "bare-v8";
+    if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_HERMES/m.test(content)) return "bare-hermes";
     if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_QUICKJS/m.test(content)) return "bare-quickjs";
     if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_MQJS/m.test(content)) return "bare-mqjs";
-    if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_HERMES/m.test(content)) return "bare-hermes";
-    if (/^\/\/>.*define:.*ZAPP_WORKER_ENGINE_ZJS\b/m.test(content)) return "zjs";
     return null;
   } catch { return null; }
 }
