@@ -2,6 +2,7 @@
 // Supports both dedicated (single-owner) and shared (multi-owner, refcounted) workers.
 
 import "string.h" as str;
+import "stdlib.h";
 
 raw {
     #define ZAPP_MAX_WORKERS 64
@@ -22,6 +23,7 @@ raw {
 
     typedef struct {
         char worker_id[64];
+        char name[64];    // display label from zapp.config.ts; empty string when unset
         char script_url[256];
         char owners[ZAPP_MAX_OWNERS_PER_WORKER][64];
         int owner_count;
@@ -48,6 +50,7 @@ raw {
         for (int i = 0; i < ZAPP_MAX_WORKERS; i++) {
             if (!zapp_worker_registry[i].active) {
                 strncpy(zapp_worker_registry[i].worker_id, worker_id, 63);
+                zapp_worker_registry[i].name[0] = 0;
                 strncpy(zapp_worker_registry[i].owners[0], owner_id, 63);
                 zapp_worker_registry[i].owner_count = 1;
                 zapp_worker_registry[i].shared = 0;
@@ -81,6 +84,7 @@ raw {
         for (int i = 0; i < ZAPP_MAX_WORKERS; i++) {
             if (!zapp_worker_registry[i].active) {
                 strncpy(zapp_worker_registry[i].worker_id, worker_id, 63);
+                zapp_worker_registry[i].name[0] = 0;
                 strncpy(zapp_worker_registry[i].owners[0], owner_id, 63);
                 zapp_worker_registry[i].owner_count = 1;
                 zapp_worker_registry[i].shared = shared;
@@ -101,6 +105,29 @@ raw {
     int zapp_worker_registry_add_full(const char* worker_id, const char* owner_id,
                                       int shared, const char* script_url) {
         return zapp_worker_registry_add_full_with_engine(worker_id, owner_id, shared, script_url, -1);
+    }
+
+    // As add_full_with_engine, but also records a display `name`. The name
+    // is copied into the slot the underlying add resolved (new or refreshed),
+    // so a non-empty name always wins over whatever was there before. An
+    // empty/NULL name leaves the slot's existing name untouched.
+    int zapp_worker_registry_add_full_with_engine_and_name(const char* worker_id, const char* owner_id,
+                                                            int shared, const char* script_url,
+                                                            int engine, const char* name) {
+        int slot = zapp_worker_registry_add_full_with_engine(worker_id, owner_id, shared, script_url, engine);
+        if (slot >= 0 && name && name[0]) {
+            strncpy(zapp_worker_registry[slot].name, name, 63);
+            zapp_worker_registry[slot].name[63] = 0;
+        }
+        return slot;
+    }
+
+    // Backward-compat wrapper — defaults engine to -1 (resolver picks),
+    // matching zapp_worker_registry_add_full.
+    int zapp_worker_registry_add_full_with_name(const char* worker_id, const char* owner_id,
+                                                int shared, const char* script_url, const char* name) {
+        return zapp_worker_registry_add_full_with_engine_and_name(
+            worker_id, owner_id, shared, script_url, -1, name);
     }
 
     // Look up the engine for a worker. Returns -1 (resolver picks) if not found.
@@ -226,6 +253,69 @@ raw {
             }
         }
         return NULL;
+    }
+
+    // Display label for a worker: the configured `name` if set, otherwise
+    // the worker_id. Returns the literal "" for a NULL id, and falls back to
+    // the passed-in worker_id when the worker isn't registered. Used by the
+    // log-format revamp and any human-facing worker listing.
+    const char* zapp_worker_registry_get_display_name(const char* worker_id) {
+        if (!worker_id) return "";
+        ZappWorkerEntry* e = zapp_worker_registry_get(worker_id);
+        if (!e) return worker_id;
+        if (e->name[0]) return e->name;
+        return e->worker_id;
+    }
+
+    // Heap-allocated JSON array of all ACTIVE workers. Caller frees with
+    // free(). Single source of truth for Workers.list() — consumed by the
+    // per-engine host objects (zjs.c / bare.c) and the webview IPC route.
+    char* zapp_workers_registry_list_json() {
+        size_t cap = 4096;
+        char* buf = (char*)malloc(cap);
+        if (!buf) return NULL;
+        size_t off = 0;
+        off += snprintf(buf + off, cap - off, "[");
+        int first = 1;
+        for (int i = 0; i < ZAPP_MAX_WORKERS; i++) {
+            ZappWorkerEntry* e = &zapp_worker_registry[i];
+            if (!e->active) continue;
+            if (off + 1024 > cap) {
+                cap *= 2;
+                char* nb = (char*)realloc(buf, cap);
+                if (!nb) { free(buf); return NULL; }
+                buf = nb;
+            }
+            const char* engine_str = "zjs";
+            switch (e->engine) {
+                case ZAPP_ENGINE_ZJS:           engine_str = "zjs"; break;
+                case ZAPP_ENGINE_BARE_JSC:      engine_str = "bare-jsc"; break;
+                case ZAPP_ENGINE_BARE_V8:       engine_str = "bare-v8"; break;
+                case ZAPP_ENGINE_BARE_QUICKJS:  engine_str = "bare-quickjs"; break;
+                case ZAPP_ENGINE_BARE_MQJS:     engine_str = "bare-mqjs"; break;
+                case ZAPP_ENGINE_BARE_HERMES:   engine_str = "bare-hermes"; break;
+            }
+            off += snprintf(buf + off, cap - off, "%s{\"id\":\"%s\"", first ? "" : ",", e->worker_id);
+            if (e->name[0]) {
+                off += snprintf(buf + off, cap - off, ",\"name\":\"%s\"", e->name);
+            }
+            off += snprintf(buf + off, cap - off,
+                ",\"scriptUrl\":\"%s\",\"engine\":\"%s\",\"shared\":%s,\"owners\":[",
+                e->script_url, engine_str, e->shared ? "true" : "false");
+            for (int o = 0; o < e->owner_count; o++) {
+                off += snprintf(buf + off, cap - off, "%s\"%s\"", o == 0 ? "" : ",", e->owners[o]);
+            }
+            off += snprintf(buf + off, cap - off, "]");
+            if (e->restart_max > 0) {
+                off += snprintf(buf + off, cap - off,
+                    ",\"supervisor\":{\"maxRetries\":%d,\"withinMs\":%d,\"failCount\":%d,\"gaveUp\":%s}",
+                    e->restart_max, e->restart_window_ms, e->fail_count, e->gave_up ? "true" : "false");
+            }
+            off += snprintf(buf + off, cap - off, "}");
+            first = 0;
+        }
+        off += snprintf(buf + off, cap - off, "]");
+        return buf;
     }
 
     // --- Supervisor public API ---
