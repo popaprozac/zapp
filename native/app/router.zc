@@ -714,6 +714,13 @@ fn router_handle_worker(app: App*, action: string, payload: string, window_id: i
             else if s == "zjs"          { engine = 7; }
         }
 
+        // Optional display name (`new Worker(url, { name })`). Defaults to
+        // "" when absent; the registry treats an empty name as "leave the
+        // slot's existing name untouched".
+        let worker_name: string = "";
+        let name_opt = pre_args.get_string("name");
+        if name_opt.is_some() { worker_name = name_opt.unwrap(); }
+
         if is_shared {
             // Check for existing shared worker with same script URL
             let existing_id: string = "";
@@ -732,14 +739,14 @@ fn router_handle_worker(app: App*, action: string, payload: string, window_id: i
             }
             // First shared worker with this URL — create it
             raw {
-                zapp_worker_registry_add_full_with_engine((const char*)worker_id, owner_id,
-                    1, (const char*)script_url, (int)engine);
+                zapp_worker_registry_add_full_with_engine_and_name((const char*)worker_id, owner_id,
+                    1, (const char*)script_url, (int)engine, (const char*)worker_name);
             }
         } else {
             // Dedicated worker
             raw {
-                zapp_worker_registry_add_full_with_engine((const char*)worker_id, owner_id,
-                    0, (const char*)script_url, (int)engine);
+                zapp_worker_registry_add_full_with_engine_and_name((const char*)worker_id, owner_id,
+                    0, (const char*)script_url, (int)engine, (const char*)worker_name);
             }
         }
 

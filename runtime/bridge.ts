@@ -12,6 +12,8 @@ export interface ZappBridge {
   _onInvokeResult(id: number, ok: boolean, payload: string): void;
   _onEvent(name: string, payload: string): void;
   dispatchWindowEvent(windowId: string, eventName: string, dataJson?: string): void;
+  createWorker(scriptUrl: string, opts?: { engine?: string; name?: string }): string;
+  listWorkers(): Promise<unknown> | string;
 }
 
 export function getBridge(): ZappBridge {
