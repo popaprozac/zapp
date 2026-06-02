@@ -86,16 +86,27 @@ fn greet(_app: App*, args: JsonValue*) -> string { … }
 | `args.get_int("k")` | `k?: number` |
 | `args.get_float("k")` | `k?: number` |
 | `args.get_bool("k")` | `k?: boolean` |
+| `args.get("k")` (nested object/array) | `k?: unknown` |
 
-- Inferred args are **optional** (`k?:`) — handlers read them through the
-  `Option`/`is_some` pattern, so optional is the accurate reflection.
+- Inferred args are **optional** (`k?:`). A `get_*("k")` call only proves the
+  handler *may read* `k` — not that it's mandatory; required-ness can't be
+  read reliably from a bare accessor (the `is_some` guard can sit behind any
+  control flow). Most handlers use the `Option`/`is_some` + default pattern
+  (`hello-world/zapp/app.zc:19-22`), so optional is the accurate, safe
+  default — it never produces a false compile error and never breaks a caller
+  that legitimately omits an arg. A developer who wants a **required** arg
+  expresses it explicitly via `// @zapp:args { name: string }` (no `?`). So
+  inference stays permissive; strictness is opt-in.
+- There is **no `get_array`/`get_object`** in the API — nested objects and
+  arrays both go through the generic `args.get("k") -> Option<JsonValue*>`
+  (`docs/zen-c-services.md:94-115`), walked with `.array_len()`/`.array_get()`.
+  We infer `args.get("k")` → `k?: unknown`: it captures the key (autocompletes,
+  known to exist) but the element/field shape can't be inferred from `.get()`
+  alone — `unknown` is the honest floor, and the precise shape (`Foo[]`,
+  `{ a: string }`) comes from an `@zapp:args` annotation.
 - A field name read more than once collapses to a single field. If the same
-  key is read via two different accessors (unlikely), the first wins and a
-  warning is logged.
-- Accessors beyond these four (e.g. `get_array`/`get_object` if they exist)
-  are **not** inferred today — a handler using them with no `@zapp:args`
-  falls back to the loose `Record<string, unknown>` arg type. Deferred to a
-  later pass.
+  key is read via two different accessors (e.g. `get_string` then `get`), the
+  first wins and a warning is logged.
 
 ## Generated output shape
 
@@ -193,9 +204,28 @@ Every fallback degrades to today's loose shape, so no existing project regresses
 
 ## Testing / verification
 
-The repo has no unit-test harness, and `inferArgs`/`parseAnnotation` are pure
-functions — unit-test-ready if a harness ever lands. For now, verify via the
-hello-world generated output (matching repo culture):
+### Unit tests (new — repo's first TS tests)
+
+`inferArgs` and `parseAnnotation` are pure `string → data` functions — ideal
+unit-test targets. Add table-driven tests via **Bun's built-in runner**
+(`import { test, expect } from "bun:test"`, run with `bun test` from `cli/`).
+No new dependency; this seeds the repo's first TS unit tests. Cases to cover:
+
+- `inferArgs`: each accessor → its TS type (`get_string`→`string`, …,
+  `get`→`unknown`); multiple keys; same key read twice (collapse + warn);
+  body with no accessors → empty; nested/irrelevant code ignored.
+- `parseAnnotation`: `@zapp:returns { … }` extracted; `@zapp:args { … }`
+  extracted; both present; neither present; balanced braces with nested `{}`;
+  malformed/unbalanced → returns nothing for that direction (no throw).
+
+(The Zen-C unit-testing framework is the tool for *native* code; T2.A adds no
+Zen-C logic, so it doesn't apply here. A repo-wide testing spike — task #246 —
+will lean on it for the native side.)
+
+### Manual / build verification
+
+End-to-end, verify via the hello-world generated output (matching repo
+culture):
 
 1. Add `// @zapp:returns { greeting: string }` above `greet` in
    `hello-world/zapp/app.zc`; run `zapp generate` (or `bun run build`).
@@ -214,8 +244,10 @@ hello-world generated output (matching repo culture):
 
 - No separate IDL/DSL file — Zen-C source stays the single source of truth.
 - No return-type inference from `snprintf` format strings (too fragile).
-- No inference of `get_array`/`get_object`/nested-object args in v1 (loose
-  fallback; revisit later).
+- No inference of the *shape* of nested `args.get("k")` values — the key is
+  captured as `unknown`; precise element/field types come from `@zapp:args`.
+- No detection of required-ness from the `is_some` guard pattern (brittle);
+  required args are expressed via annotation.
 - No change to the three generator call sites or the runtime invoke wire
   protocol — types are a compile-time-only layer.
 
