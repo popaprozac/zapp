@@ -8,6 +8,7 @@
 // When a custom menu item is clicked, dispatch its ID back to JS.
 
 extern void darwin_webview_eval_all(const char* js);
+extern void worker_broadcast_eval_js(char* js);
 
 @interface ZappMenuTarget : NSObject
 @end
@@ -28,6 +29,7 @@ extern void darwin_webview_eval_all(const char* js);
             "if(b&&b._onEvent)b._onEvent('__menu:click','{\"id\":\"%@\"}');})();",
             escaped];
         darwin_webview_eval_all([js UTF8String]);
+        worker_broadcast_eval_js((char*)[js UTF8String]);
     });
 }
 @end

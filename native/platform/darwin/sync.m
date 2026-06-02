@@ -11,6 +11,13 @@
 #import <pthread.h>
 #import "sync.h"
 
+// Forward declarations for cross-module worker / webview broadcast.
+// Hoisted to file scope to avoid shadowing the `js` parameter name
+// (the prototype) inside `dispatch_async` blocks that also use a
+// local `js` NSString.
+extern void darwin_webview_eval_all(const char* js);
+extern void worker_broadcast_eval_js(char* js);
+
 // --- State ---
 
 // requestId → { key, targetWorkerId, dispatched }
@@ -254,13 +261,14 @@ void darwin_sync_dispatch_to_webviews(const char* payload_json) {
 
     // evaluateJavaScript: on WKWebView requires the main thread. Workers call
     // this from their own thread, so bounce if we're not already on main.
-    extern void darwin_webview_eval_all(const char* js);
     if ([NSThread isMainThread]) {
         darwin_webview_eval_all([js UTF8String]);
+        worker_broadcast_eval_js((char*)[js UTF8String]);
     } else {
         NSString* jsCopy = [js copy];
         dispatch_async(dispatch_get_main_queue(), ^{
             darwin_webview_eval_all([jsCopy UTF8String]);
+            worker_broadcast_eval_js((char*)[jsCopy UTF8String]);
         });
     }
 }
@@ -279,18 +287,12 @@ void darwin_sync_dispatch_to_worker(const char* worker_id, const char* payload_j
         escaped];
     const char* js_c = [js UTF8String];
 
-#if defined(ZAPP_WORKER_ENGINE_BARE_V8)      \
- || defined(ZAPP_WORKER_ENGINE_BARE_JSC)     \
- || defined(ZAPP_WORKER_ENGINE_BARE_QUICKJS) \
- || defined(ZAPP_WORKER_ENGINE_BARE_MQJS)    \
- || defined(ZAPP_WORKER_ENGINE_BARE_HERMES)
-    // bare_worker_eval_js is a no-op when the worker_id doesn't
-    // belong to a bare worker, so this is safe to call unconditionally
-    // when bare is compiled in.
-    extern void bare_worker_eval_js(const char* worker_id, const char* js);
-    bare_worker_eval_js(worker_id, js_c);
-#endif
-
+    // Engine-agnostic targeted delivery — worker_eval_js looks up the
+    // worker's engine via zapp_worker_registry_get_engine and dispatches
+    // to bare_worker_eval_js / zjs_worker_eval_js as appropriate. Silent
+    // no-op when the worker has terminated between request and result.
+    extern void worker_eval_js(char* worker_id, char* js);
+    worker_eval_js((char*)worker_id, (char*)js_c);
 }
 
 // --- Blocking wait (for background threads ONLY) ---

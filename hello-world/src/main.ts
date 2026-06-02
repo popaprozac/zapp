@@ -118,6 +118,9 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
         <button id="btn-sync-wait">Wait for "demo" (10s)</button>
         <button id="btn-sync-notify">Notify "demo" (one)</button>
         <button id="btn-sync-notify-all">Notify "demo" (all)</button>
+        <br>
+        <button id="btn-sync-trigger-supervised">Run supervised sync test</button>
+        <button id="btn-sync-wake-supervised">Wake supervised's sync.wait</button>
         <div id="sync-result" class="result"></div>
       </section>
 
@@ -460,6 +463,24 @@ $("btn-sync-notify-all").addEventListener("click", () => {
   Sync.notifyAll("demo");
   $("sync-result").textContent = `Notified "demo" (all)`;
   log(`Sync.notifyAll("demo") — wakes every waiter`);
+});
+
+// Worker-event-delivery audit smoke (2026-06): exercise T4's targeted
+// `worker_eval_js` path in sync.m end-to-end. Click "Run supervised
+// sync test" first — supervised starts Sync.wait on "__supervised-sync-audit".
+// Then "Wake supervised's sync.wait" — Sync.notify reaches sync.m, which
+// routes the dispatchSyncResult IIFE through the engine-agnostic targeted
+// helper. The promise resolves, supervised logs "Sync.wait → notified".
+$("btn-sync-trigger-supervised").addEventListener("click", () => {
+  Events.emit("supervised-sync-test", {});
+  $("sync-result").textContent = `Asked supervised to start Sync.wait("__supervised-sync-audit", 10000) — check dev console for "[supervised]" logs`;
+  log(`Events.emit("supervised-sync-test") — supervised worker starts its Sync.wait`);
+});
+
+$("btn-sync-wake-supervised").addEventListener("click", () => {
+  Sync.notify("__supervised-sync-audit");
+  $("sync-result").textContent = `Notified "__supervised-sync-audit" — supervised's Sync.wait should resolve`;
+  log(`Sync.notify("__supervised-sync-audit") — wakes supervised via worker_eval_js targeted path (audit Gap C)`);
 });
 
 let guardEnabled = false;

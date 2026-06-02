@@ -18,6 +18,7 @@ extern int zapp_app_dispatch(int event_id, const char* data);
 // subscribes via Events.on("app:shortcut-triggered", ...) anyway. This
 // avoids a synchronized constant across events.zc / events.ts / bootstrap.
 extern void darwin_webview_eval_all(const char* js);
+extern void worker_broadcast_eval_js(char* js);
 
 // --- Accelerator → Carbon constants ---
 
@@ -204,6 +205,7 @@ static OSStatus shortcut_event_handler(EventHandlerCallRef nextHandler,
         "if(b&&b._onEvent)b._onEvent('app:shortcut-triggered','%s');})();",
         payload);
     darwin_webview_eval_all(js);
+    worker_broadcast_eval_js(js);
 
     return noErr;
 }

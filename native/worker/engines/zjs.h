@@ -29,6 +29,12 @@ void zjs_worker_terminate(const char* worker_id);
 // Terminate all workers owned by a window.
 void zjs_worker_terminate_owner(const char* owner_id);
 
+// Evaluate JS in a specific zjs worker's context. Used by sync.m to
+// deliver bridge.dispatchSyncResult(payload) to the right worker.
+// No-op if the worker isn't found / not yet initialized. Mirrors
+// bare_worker_eval_js (bare.h:37).
+void zjs_worker_eval_js(const char* worker_id, const char* js);
+
 // Broadcast a JS snippet to every active zjs worker. Used by the
 // dispatcher (bridge/dispatch.zc) to fan webview/native-emitted events
 // into worker contexts so their `bridge._onEvent` listeners fire — same
