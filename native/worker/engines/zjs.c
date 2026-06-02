@@ -115,6 +115,11 @@ extern int zapp_worker_supervisor_record_failure(const char* worker_id);
 extern int zapp_worker_supervisor_get_window_state(
     const char* worker_id, int* out_count, int* out_cap, int* out_window_ms);
 
+// Heap JSON array of all active workers (registry.zc). Single source of
+// truth for Workers.list(); the worker-context host fn returns this string
+// verbatim and the JS runtime wrapper JSON.parses it. Caller free()s.
+extern char* zapp_workers_registry_list_json(void);
+
 // ---------------------------------------------------------------------------
 // Worker slot table — same shape as txiki, sized identically.
 // ---------------------------------------------------------------------------
@@ -470,6 +475,29 @@ static ZjsValue host_invoke_service(ZjsContext* ctx, ZjsValue* argv, uint32_t ar
 }
 
 // ---------------------------------------------------------------------------
+// __zappBridge.listWorkers() -> string (JSON array of active workers)
+//
+// Worker-context Workers.list() on zjs. Returns the registry's JSON string
+// verbatim; the JS runtime wrapper JSON.parses it (it accepts a string or a
+// parsed array). Workers.list() is a rarely-called debug API, not a hot
+// path, so returning the string keeps the native side minimal — no JS array
+// value to build by hand. Returns "[]" (a valid empty array) on alloc
+// failure so the JS side always gets something parseable.
+// ---------------------------------------------------------------------------
+
+static ZjsValue host_list_workers(ZjsContext* ctx, ZjsValue* argv, uint32_t argc) {
+    (void) argv;
+    (void) argc;
+    char* json = zapp_workers_registry_list_json();
+    if (!json) return zjs_new_string(ctx, "[]", 2);
+    // zjs_new_string copies the bytes into engine-managed storage, so the
+    // heap buffer is ours to free immediately after construction.
+    ZjsValue result = zjs_new_string(ctx, json, (uint32_t) strlen(json));
+    free(json);
+    return result;
+}
+
+// ---------------------------------------------------------------------------
 // __zappBridge.dispatchEventToAll(name: string, payload?: any) -> undefined
 //
 // Fire-and-forget broadcast. dispatch_event_to_all takes a JSON string,
@@ -803,6 +831,8 @@ static void zjs_setup_bridge(ZjsWorkerSlot* slot) {
                                                         host_post_to_worker);
     ZjsValue crash_fn  = zjs_register_host_function(ctx, "__zapp_worker_crash",
                                                     host_worker_crash);
+    ZjsValue list_fn   = zjs_register_host_function(ctx, "__zapp_list_workers",
+                                                    host_list_workers);
     zjs_set_property(ctx, bridge, "invokeService",      invoke_fn);
     zjs_set_property(ctx, bridge, "dispatchEventToAll", emit_fn);
     // Alias to match the legacy name some runtime code still uses.
@@ -810,6 +840,7 @@ static void zjs_setup_bridge(ZjsWorkerSlot* slot) {
     zjs_set_property(ctx, bridge, "postToWebview",      post_fn);
     zjs_set_property(ctx, bridge, "postToWorker",       post_worker_fn);
     zjs_set_property(ctx, bridge, "workerCrash",        crash_fn);
+    zjs_set_property(ctx, bridge, "listWorkers",        list_fn);
     // workerId — bench harness + bare-worker.ts sync-coordination both
     // read `bridge.workerId` to identify the slot. Bare/jsc/txiki set
     // the same property; mirror here so engine-agnostic bootstrap +
