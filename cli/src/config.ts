@@ -307,6 +307,8 @@ export type WorkerEngineName = BytecodeCapableEngine | ScriptOnlyEngine;
 interface HeadlessWorkerConfigBase {
   /** Script path (same as the bare-string form). */
   script: string;
+  /** Display label shown in logs and Workers.list(). Optional. */
+  name?: string;
   /** Optional restart policy. Omit / `false` to disable auto-restart. */
   restart?: RestartPolicy | false;
 }

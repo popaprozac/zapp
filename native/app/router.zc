@@ -51,6 +51,14 @@ fn router_handle_message(app: App*, msg: string, window_id: int) -> void {
             return;
         }
 
+        // Check for __zapp: prefix (framework introspection — Workers.list(), etc.)
+        let is_zapp: bool = false;
+        is_zapp = str::strncmp(parsed.method, "__zapp:", 7) == 0;
+        if is_zapp {
+            router_handle_zapp(parsed.method, window_id, parsed.request_id);
+            return;
+        }
+
         // __protocol:respond — runtime calls this from
         // Protocols.register's handler with { id, body, contentType,
         // status }. Route directly to the native respond function;
@@ -706,6 +714,13 @@ fn router_handle_worker(app: App*, action: string, payload: string, window_id: i
             else if s == "zjs"          { engine = 7; }
         }
 
+        // Optional display name (`new Worker(url, { name })`). Defaults to
+        // "" when absent; the registry treats an empty name as "leave the
+        // slot's existing name untouched".
+        let worker_name: string = "";
+        let name_opt = pre_args.get_string("name");
+        if name_opt.is_some() { worker_name = name_opt.unwrap(); }
+
         if is_shared {
             // Check for existing shared worker with same script URL
             let existing_id: string = "";
@@ -724,14 +739,14 @@ fn router_handle_worker(app: App*, action: string, payload: string, window_id: i
             }
             // First shared worker with this URL — create it
             raw {
-                zapp_worker_registry_add_full_with_engine((const char*)worker_id, owner_id,
-                    1, (const char*)script_url, (int)engine);
+                zapp_worker_registry_add_full_with_engine_and_name((const char*)worker_id, owner_id,
+                    1, (const char*)script_url, (int)engine, (const char*)worker_name);
             }
         } else {
             // Dedicated worker
             raw {
-                zapp_worker_registry_add_full_with_engine((const char*)worker_id, owner_id,
-                    0, (const char*)script_url, (int)engine);
+                zapp_worker_registry_add_full_with_engine_and_name((const char*)worker_id, owner_id,
+                    0, (const char*)script_url, (int)engine, (const char*)worker_name);
             }
         }
 
@@ -801,6 +816,36 @@ fn router_handle_worker(app: App*, action: string, payload: string, window_id: i
         }
         return;
     }
+}
+
+// --- Zapp framework introspection handler ---
+//
+// Webview path for framework-level queries. Today the only method is
+// __zapp:workers-list, which backs Workers.list() from a webview context:
+// it returns the active worker registry as a JSON array. Workers query the
+// same registry via their per-engine host object and never hit this route.
+//
+// Memory: zapp_workers_registry_list_json() returns a heap string the
+// caller must free(). dispatch_invoke_response escapes + copies the payload
+// into its own heap buffer synchronously (and the platform eval primitives
+// copy that synchronously too — see bridge/dispatch.zc), so freeing the
+// registry string immediately after the call is safe.
+fn router_handle_zapp(method: string, window_id: int, request_id: int) -> void {
+    if method == "__zapp:workers-list" {
+        let json: string = NULL;
+        raw {
+            extern char* zapp_workers_registry_list_json(void);
+            json = zapp_workers_registry_list_json();
+        }
+        if json == NULL {
+            dispatch_invoke_response(window_id, request_id, false, "ALLOC_FAILED");
+            return;
+        }
+        dispatch_invoke_response(window_id, request_id, true, json);
+        raw { free((void*)json); }
+        return;
+    }
+    dispatch_invoke_response(window_id, request_id, false, "UNKNOWN_ZAPP_METHOD");
 }
 
 // --- Dialog handler ---

@@ -89,6 +89,19 @@ extern int  zapp_worker_supervisor_record_failure(const char* worker_id);
 extern int  zapp_worker_supervisor_get_window_state(
     const char* worker_id, int* out_count, int* out_cap, int* out_window_ms);
 
+// Active-worker registry — single source of truth shared with zjs.c and
+// the webview IPC route. Returns a heap JSON array the caller free()s.
+// Explicit char* return type: an implicit-int declaration would truncate
+// the 64-bit pointer.
+extern char* zapp_workers_registry_list_json(void);
+
+// Per-worker log helpers (registry.zc). Both return const char* — declare the
+// explicit return type so the 64-bit pointer isn't truncated by implicit-int.
+// get_display_name returns the configured name or falls back to the worker_id;
+// fmt_compact_ms compacts a ms duration ("30000ms" -> "30s") into a static buf.
+extern const char* zapp_worker_registry_get_display_name(const char* worker_id);
+extern const char* zapp_fmt_compact_ms(int ms);
+
 // Sync API + window creation. darwin_sync_handle is thread-safe (uses
 // pthread_mutex), so workers can call directly without bouncing to
 // the main queue. Window creation is NOT thread-safe — must run on
@@ -437,8 +450,8 @@ static void bare_on_async_message(uv_async_t* handle) {
         js_value_t* result;
         int err = js_run_script(slot->env, "<event-broadcast>", -1, 0, src, &result);
         if (err) {
-            fprintf(stderr, "[zapp] bare worker '%s' broadcast eval failed (err=%d)\n",
-                slot->worker_id, err);
+            fprintf(stderr, "[zapp/%s] broadcast eval failed (err=%d)\n",
+                zapp_worker_registry_get_display_name(slot->worker_id), err);
         }
         free(wrapped);
         free(eval_msg);
@@ -464,8 +477,8 @@ static void bare_on_async_message(uv_async_t* handle) {
         js_value_t* result;
         int err = js_run_script(slot->env, "<post-message>", -1, 0, src, &result);
         if (err) {
-            fprintf(stderr, "[zapp] bare worker '%s' postMessage dispatch failed (err=%d)\n",
-                slot->worker_id, err);
+            fprintf(stderr, "[zapp/%s] postMessage dispatch failed (err=%d)\n",
+                zapp_worker_registry_get_display_name(slot->worker_id), err);
         }
         free(code);
         free(msg);
@@ -556,6 +569,33 @@ static js_value_t* bare_host_invoke_service(js_env_t* env, js_callback_info_t* i
     js_value_t* out;
     js_create_string_utf8(env, (const utf8_t*)result, strlen(result), &out);
     (void)slot;  // currently unused; reserved for per-worker accounting
+    return out;
+}
+
+// __zappBridge.listWorkers() -> string (JSON array of active workers)
+//
+// Worker-context Workers.list() on bare. Parity counterpart to zjs.c's
+// host_list_workers: returns the registry's JSON string verbatim and the
+// JS runtime wrapper JSON.parses it. Returns "[]" (a valid empty array)
+// when the registry yields NULL so the JS side always gets something
+// parseable — never null/undefined.
+//
+// js_create_string_utf8 copies the bytes into engine-managed storage
+// (the libjs JSC backend's js_to_string_utf8 builds a fresh JSString;
+// the zero-copy path is the separate js_create_external_string_utf8,
+// which takes a finalize callback this plain variant lacks). So the heap
+// buffer is ours to free() immediately after construction — same
+// free-after-construct pattern used by bare_host_clipboard above.
+static js_value_t* bare_host_list_workers(js_env_t* env, js_callback_info_t* info) {
+    (void)info;
+    char* json = zapp_workers_registry_list_json();
+    js_value_t* out;
+    if (!json) {
+        js_create_string_utf8(env, (const utf8_t*)"[]", 2, &out);
+        return out;
+    }
+    js_create_string_utf8(env, (const utf8_t*)json, strlen(json), &out);
+    free(json);
     return out;
 }
 
@@ -1362,8 +1402,8 @@ static BareSetupResult bare_worker_setup_state(BareWorkerSlot* slot) {
     // doesn't compete with worker loops.
     js_platform_t* platform = bare_get_shared_platform();
     if (!platform) {
-        fprintf(stderr, "[zapp] bare worker '%s' shared platform unavailable\n",
-            slot->worker_id);
+        fprintf(stderr, "[zapp/%s] shared platform unavailable\n",
+            zapp_worker_registry_get_display_name(slot->worker_id));
         slot->active = false;
         return BARE_SETUP_FATAL;
     }
@@ -1373,8 +1413,8 @@ static BareSetupResult bare_worker_setup_state(BareWorkerSlot* slot) {
     const char* argv[] = { "zapp-bare-worker", NULL };
     err = bare_setup(slot->loop, platform, &slot->env, 1, argv, &bare_opts, &slot->bare);
     if (err) {
-        fprintf(stderr, "[zapp] bare worker '%s' bare_setup failed (err=%d)\n",
-            slot->worker_id, err);
+        fprintf(stderr, "[zapp/%s] bare_setup failed (err=%d)\n",
+            zapp_worker_registry_get_display_name(slot->worker_id), err);
         slot->active = false;
         return BARE_SETUP_FATAL;
     }
@@ -1409,6 +1449,15 @@ static BareSetupResult bare_worker_setup_state(BareWorkerSlot* slot) {
     js_create_function(slot->env, "_invokeServiceRaw", -1,
                        bare_host_invoke_service, slot, &invoke_fn);
     js_set_named_property(slot->env, bridge, "_invokeServiceRaw", invoke_fn);
+
+    // listWorkers — worker-context Workers.list(). Returns the registry
+    // JSON string verbatim ("[]" on alloc failure); the JS runtime wrapper
+    // JSON.parses it. Same "listWorkers" property + string contract as
+    // zjs.c so Workers.list() behaves identically across engines.
+    js_value_t* list_workers_fn;
+    js_create_function(slot->env, "listWorkers", -1,
+                       bare_host_list_workers, slot, &list_workers_fn);
+    js_set_named_property(slot->env, bridge, "listWorkers", list_workers_fn);
 
     // Worker → host plumbing. Each takes JSON-string payloads from JS
     // (the worker bootstrap stringifies before calling). Output is
@@ -1566,8 +1615,8 @@ static BareSetupResult bare_worker_setup_state(BareWorkerSlot* slot) {
                                  src, &result);
         if (berr) {
             fprintf(stderr,
-                "[zapp] bare worker '%s' bare-worker-bootstrap failed (err=%d)\n",
-                slot->worker_id, berr);
+                "[zapp/%s] bare-worker-bootstrap failed (err=%d)\n",
+                zapp_worker_registry_get_display_name(slot->worker_id), berr);
         }
     }
 
@@ -1589,14 +1638,15 @@ static BareSetupResult bare_worker_setup_state(BareWorkerSlot* slot) {
                                      boot_src, &boot_result);
         if (boot_err) {
             fprintf(stderr,
-                "[zapp] bare worker '%s' bootstrap script failed (err=%d)\n",
-                slot->worker_id, boot_err);
+                "[zapp/%s] bootstrap script failed (err=%d)\n",
+                zapp_worker_registry_get_display_name(slot->worker_id), boot_err);
         }
     }
 
     js_close_handle_scope(slot->env, scope);
 
-    fprintf(stderr, "[zapp] bare worker created: %s\n", slot->worker_id);
+    fprintf(stderr, "[zapp/%s] created\n",
+        zapp_worker_registry_get_display_name(slot->worker_id));
 
     // Run the user's worker script. We use `js_run_script` rather than
     // `bare_load` because bare-module's CJS/ESM resolver rejects our
@@ -1655,8 +1705,8 @@ static BareSetupResult bare_worker_setup_state(BareWorkerSlot* slot) {
             // itself is malformed (parse error in our generated JS,
             // not in user code).
             fprintf(stderr,
-                "[zapp] bare worker '%s' wrapper eval failed (err=%d) — generated wrap may be malformed\n",
-                slot->worker_id, run_err);
+                "[zapp/%s] wrapper eval failed (err=%d) — generated wrap may be malformed\n",
+                zapp_worker_registry_get_display_name(slot->worker_id), run_err);
         }
         free(wrapped);
         js_close_handle_scope(slot->env, run_scope);
@@ -1666,8 +1716,8 @@ static BareSetupResult bare_worker_setup_state(BareWorkerSlot* slot) {
             return BARE_SETUP_CRASHED;
         }
     } else {
-        fprintf(stderr, "[zapp] bare worker '%s' missing script source\n",
-                slot->worker_id);
+        fprintf(stderr, "[zapp/%s] missing script source\n",
+                zapp_worker_registry_get_display_name(slot->worker_id));
         bare_setup_synthesize_crash(slot, "script load failed", "");
         return BARE_SETUP_CRASHED;
     }
@@ -1713,8 +1763,8 @@ static void bare_worker_teardown_state(BareWorkerSlot* slot, int keep_loop) {
     slot->loop = NULL;
     slot->active = false;
 
-    fprintf(stderr, "[zapp] bare worker exited: %s (code=%d)\n",
-        slot->worker_id, exit_code);
+    fprintf(stderr, "[zapp/%s] exited (code=%d)\n",
+        zapp_worker_registry_get_display_name(slot->worker_id), exit_code);
 }
 
 // --- Worker thread entry ---
@@ -1725,8 +1775,8 @@ static void* bare_worker_thread(void* data) {
     uv_loop_t loop;
     int err = uv_loop_init(&loop);
     if (err) {
-        fprintf(stderr, "[zapp] bare worker '%s' uv_loop_init failed: %s\n",
-                slot->worker_id, uv_strerror(err));
+        fprintf(stderr, "[zapp/%s] uv_loop_init failed: %s\n",
+                zapp_worker_registry_get_display_name(slot->worker_id), uv_strerror(err));
         slot->active = false;
         return NULL;
     }
@@ -1745,8 +1795,8 @@ static void* bare_worker_thread(void* data) {
         BareSetupResult setup = bare_worker_setup_state(slot);
 
         if (setup == BARE_SETUP_FATAL) {
-            fprintf(stderr, "[zapp] bare worker '%s' setup fatal (incarnation %d)\n",
-                    slot->worker_id, slot->incarnation);
+            fprintf(stderr, "[zapp/%s] setup fatal (incarnation %d)\n",
+                    zapp_worker_registry_get_display_name(slot->worker_id), slot->incarnation);
             break;
         }
 
@@ -1765,9 +1815,9 @@ static void* bare_worker_thread(void* data) {
                 dispatch_event_to_all("worker:restarted", payload);
                 int fc = 0, cap = 0, win = 0;
                 zapp_worker_supervisor_get_window_state(slot->worker_id, &fc, &cap, &win);
-                fprintf(stderr, "[zapp] bare worker '%s' restarting "
-                                "(incarnation %d, fail_count %d/%d in %dms window)\n",
-                        slot->worker_id, slot->incarnation, fc, cap, win);
+                fprintf(stderr, "[zapp/%s] restart %d (fail %d/%d in %s)\n",
+                        zapp_worker_registry_get_display_name(slot->worker_id),
+                        slot->incarnation, fc, cap, zapp_fmt_compact_ms(win));
             }
 
             bare_run(slot->bare, UV_RUN_DEFAULT);
@@ -1833,8 +1883,8 @@ bool bare_worker_create(const char* script_url, const char* owner_id, const char
 
     int err = pthread_create(&slot->thread, NULL, bare_worker_thread, slot);
     if (err) {
-        fprintf(stderr, "[zapp] bare worker '%s' pthread_create failed (err=%d)\n",
-            slot->worker_id, err);
+        fprintf(stderr, "[zapp/%s] pthread_create failed (err=%d)\n",
+            zapp_worker_registry_get_display_name(slot->worker_id), err);
         free(slot->script_source);
         slot->script_source = NULL;
         slot->active = false;
@@ -1849,9 +1899,9 @@ void bare_worker_post_message(const char* worker_id, const char* data_json) {
     pthread_mutex_lock(&bare_mutex);
     BareWorkerSlot* slot = bare_find_slot(worker_id);
     if (!slot || !slot->active || !slot->async_initialized || !slot->bare) {
-        fprintf(stderr, "[zapp] bare worker '%s' message dropped "
-                        "(worker not ready; incarnation %d)\n",
-                worker_id, slot ? slot->incarnation : 0);
+        fprintf(stderr, "[zapp/%s] message dropped (not ready; incarnation %d)\n",
+                zapp_worker_registry_get_display_name(worker_id),
+                slot ? slot->incarnation : 0);
         pthread_mutex_unlock(&bare_mutex);
         return;
     }

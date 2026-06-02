@@ -137,12 +137,20 @@
 
     // --- Worker lifecycle ---
 
-    createWorker(scriptUrl: string, opts?: { engine?: string }): string {
+    createWorker(scriptUrl: string, opts?: { engine?: string; name?: string }): string {
       const id = "w-" + nextId++;
       if (nextId > 65535) nextId = 1;
       bridge._workers[id] = { onmessage: null, _messageHandlers: [] };
-      post(JSON.stringify({ t: 5, m: "create", a: { scriptUrl, workerId: id, engine: opts?.engine } }));
+      post(JSON.stringify({ t: 5, m: "create", a: { scriptUrl, workerId: id, engine: opts?.engine, name: opts?.name } }));
       return id;
+    },
+
+    // Workers.list() (webview context). Round-trips the framework
+    // introspection route, which returns the registry as a JSON array;
+    // `invoke` already JSON-parses the success payload, so this resolves
+    // to an array of worker objects. The route ignores `a`.
+    listWorkers() {
+      return bridge.invoke("__zapp:workers-list", {});
     },
 
     postToWorker(workerId: string, data: any): void {

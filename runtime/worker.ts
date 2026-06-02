@@ -66,9 +66,13 @@ export class Worker {
    */
   constructor(scriptUrl: string, opts?: {
     engine?: "zjs" | "bare-jsc" | "bare-v8" | "bare-quickjs" | "bare-mqjs" | "bare-hermes";
+    name?: string;
   }) {
     this._bridge = getBridge();
-    this.id = (this._bridge as any).createWorker(scriptUrl, opts);
+    this.id = (this._bridge as any).createWorker(scriptUrl, {
+      engine: opts?.engine,
+      name: opts?.name,
+    });
 
     // Register this instance for message dispatch
     (this._bridge as any)._workers[this.id] = this;
@@ -171,6 +175,29 @@ export class SharedWorker {
 }
 
 /**
+ * Snapshot of one active worker, as returned by `Workers.list()`.
+ *
+ * Mirrors the native registry's JSON shape. `name` and `supervisor` are
+ * omitted when not applicable (no display name; not a supervised headless
+ * worker). `engine` is `"pending"` until the native resolver picks the
+ * engine that actually runs the worker.
+ */
+export interface WorkerInfo {
+  id: string;
+  name?: string;
+  scriptUrl: string;
+  engine: "zjs" | "bare-jsc" | "bare-v8" | "bare-quickjs" | "bare-mqjs" | "bare-hermes" | "pending";
+  shared: boolean;
+  owners: string[];
+  supervisor?: {
+    maxRetries: number;
+    withinMs: number;
+    failCount: number;
+    gaveUp: boolean;
+  };
+}
+
+/**
  * Workers — namespace for managing workers by ID, complementing the
  * `Worker` class which is instance-scoped. Use this when you only have
  * a string ID and no live `Worker` handle — most commonly for headless
@@ -257,5 +284,29 @@ export const Workers = {
       [CHANNEL_KEY]: channel,
       [DATA_KEY]: data,
     });
+  },
+
+  /**
+   * Snapshot every active worker — dedicated, shared, and headless —
+   * across all engines. Resolves to an array of {@link WorkerInfo}.
+   *
+   * Works from both the webview and inside a worker. The two contexts
+   * reach the native registry differently (the webview round-trips the
+   * `__zapp:workers-list` IPC route, which already JSON-parses the
+   * result; a worker calls its host bridge synchronously and gets a JSON
+   * string back), so this normalizes both shapes.
+   *
+   * @example
+   * ```ts
+   * for (const w of await Workers.list()) {
+   *   console.log(w.id, w.engine, w.name ?? "(unnamed)");
+   * }
+   * ```
+   */
+  async list(): Promise<WorkerInfo[]> {
+    const bridge = getBridge() as any;
+    const result = await bridge.listWorkers();
+    if (typeof result === "string") return JSON.parse(result) as WorkerInfo[];
+    return (result ?? []) as WorkerInfo[];
   },
 };

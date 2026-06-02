@@ -2,6 +2,9 @@
 // Supports both dedicated (single-owner) and shared (multi-owner, refcounted) workers.
 
 import "string.h" as str;
+import "stdlib.h";
+import "stdio.h";
+import "stdarg.h";
 
 raw {
     #define ZAPP_MAX_WORKERS 64
@@ -22,6 +25,7 @@ raw {
 
     typedef struct {
         char worker_id[64];
+        char name[64];    // display label from zapp.config.ts; empty string when unset
         char script_url[256];
         char owners[ZAPP_MAX_OWNERS_PER_WORKER][64];
         int owner_count;
@@ -48,6 +52,7 @@ raw {
         for (int i = 0; i < ZAPP_MAX_WORKERS; i++) {
             if (!zapp_worker_registry[i].active) {
                 strncpy(zapp_worker_registry[i].worker_id, worker_id, 63);
+                zapp_worker_registry[i].name[0] = 0;
                 strncpy(zapp_worker_registry[i].owners[0], owner_id, 63);
                 zapp_worker_registry[i].owner_count = 1;
                 zapp_worker_registry[i].shared = 0;
@@ -81,6 +86,7 @@ raw {
         for (int i = 0; i < ZAPP_MAX_WORKERS; i++) {
             if (!zapp_worker_registry[i].active) {
                 strncpy(zapp_worker_registry[i].worker_id, worker_id, 63);
+                zapp_worker_registry[i].name[0] = 0;
                 strncpy(zapp_worker_registry[i].owners[0], owner_id, 63);
                 zapp_worker_registry[i].owner_count = 1;
                 zapp_worker_registry[i].shared = shared;
@@ -101,6 +107,29 @@ raw {
     int zapp_worker_registry_add_full(const char* worker_id, const char* owner_id,
                                       int shared, const char* script_url) {
         return zapp_worker_registry_add_full_with_engine(worker_id, owner_id, shared, script_url, -1);
+    }
+
+    // As add_full_with_engine, but also records a display `name`. The name
+    // is copied into the slot the underlying add resolved (new or refreshed),
+    // so a non-empty name always wins over whatever was there before. An
+    // empty/NULL name leaves the slot's existing name untouched.
+    int zapp_worker_registry_add_full_with_engine_and_name(const char* worker_id, const char* owner_id,
+                                                            int shared, const char* script_url,
+                                                            int engine, const char* name) {
+        int slot = zapp_worker_registry_add_full_with_engine(worker_id, owner_id, shared, script_url, engine);
+        if (slot >= 0 && name && name[0]) {
+            strncpy(zapp_worker_registry[slot].name, name, 63);
+            zapp_worker_registry[slot].name[63] = 0;
+        }
+        return slot;
+    }
+
+    // Backward-compat wrapper — defaults engine to -1 (resolver picks),
+    // matching zapp_worker_registry_add_full.
+    int zapp_worker_registry_add_full_with_name(const char* worker_id, const char* owner_id,
+                                                int shared, const char* script_url, const char* name) {
+        return zapp_worker_registry_add_full_with_engine_and_name(
+            worker_id, owner_id, shared, script_url, -1, name);
     }
 
     // Look up the engine for a worker. Returns -1 (resolver picks) if not found.
@@ -226,6 +255,177 @@ raw {
             }
         }
         return NULL;
+    }
+
+    // Display label for a worker: the configured `name` if set, otherwise
+    // the worker_id. Returns the literal "" for a NULL id, and falls back to
+    // the passed-in worker_id when the worker isn't registered. Used by the
+    // log-format revamp and any human-facing worker listing.
+    const char* zapp_worker_registry_get_display_name(const char* worker_id) {
+        if (!worker_id) return "";
+        ZappWorkerEntry* e = zapp_worker_registry_get(worker_id);
+        if (!e) return worker_id;
+        if (e->name[0]) return e->name;
+        return e->worker_id;
+    }
+
+    // Compact a millisecond duration for logs: <1000ms -> "500ms"; >=1000ms -> "30s" or "1.5s".
+    // Returns a static buffer (single-use per call site — consumed immediately by the log).
+    const char* zapp_fmt_compact_ms(int ms) {
+        static char buf[32];
+        if (ms < 1000) {
+            snprintf(buf, sizeof(buf), "%dms", ms);
+        } else {
+            int s = ms / 1000;
+            int frac = (ms % 1000) / 100;
+            if (frac == 0) snprintf(buf, sizeof(buf), "%ds", s);
+            else snprintf(buf, sizeof(buf), "%d.%ds", s, frac);
+        }
+        return buf;
+    }
+
+    // Escape a string for a JSON double-quoted context. Escapes ", \, the
+    // named control chars (\b \f \n \r \t) and any other char < 0x20 as
+    // \u00xx. Returns a freshly malloc'd buffer the caller frees, or NULL on
+    // OOM. NOTE: bridge/dispatch.zc's zapp_escape_dup is for JS single-quoted
+    // strings and does NOT escape ", so it is wrong for JSON — hence this.
+    static char* zapp_json_escape_dup(const char* s) {
+        if (!s) s = "";
+        size_t len = strlen(s);
+        char* out = (char*)malloc(len * 6 + 1);   // worst case every char -> \u00xx
+        if (!out) return NULL;
+        size_t o = 0;
+        for (size_t i = 0; i < len; i++) {
+            unsigned char c = (unsigned char)s[i];
+            switch (c) {
+                case '"':  out[o++]='\\'; out[o++]='"';  break;
+                case '\\': out[o++]='\\'; out[o++]='\\'; break;
+                case '\b': out[o++]='\\'; out[o++]='b';  break;
+                case '\f': out[o++]='\\'; out[o++]='f';  break;
+                case '\n': out[o++]='\\'; out[o++]='n';  break;
+                case '\r': out[o++]='\\'; out[o++]='r';  break;
+                case '\t': out[o++]='\\'; out[o++]='t';  break;
+                default:
+                    if (c < 0x20) { o += (size_t)sprintf(out + o, "\\u%04x", c); }
+                    else out[o++] = (char)c;
+            }
+        }
+        out[o] = 0;
+        return out;
+    }
+
+    // Append formatted text to *buf, growing the allocation as needed. The
+    // grow-on-truncation loop reads vsnprintf's return value (the length it
+    // WOULD have written) to decide whether the write fit; if not it doubles
+    // capacity and retries. This is provably correct regardless of how large
+    // an escaped entry serialises to — no fixed-headroom guessing, so the
+    // offset can never be pushed past capacity (which previously underflowed
+    // cap - off and produced an unbounded heap write). Returns 0 on success,
+    // -1 on allocation failure.
+    static int zapp_json_append(char** buf, size_t* cap, size_t* off, const char* fmt, ...) {
+        while (1) {
+            va_list ap;
+            va_start(ap, fmt);
+            int n = vsnprintf(*buf + *off, *cap - *off, fmt, ap);
+            va_end(ap);
+            if (n < 0) return -1;
+            if ((size_t)n < *cap - *off) { *off += (size_t)n; return 0; }
+            size_t need = *off + (size_t)n + 1;
+            size_t newcap = *cap ? *cap : 256;
+            while (newcap < need) newcap *= 2;
+            char* nb = (char*)realloc(*buf, newcap);
+            if (!nb) return -1;
+            *buf = nb; *cap = newcap;
+        }
+    }
+
+    // Heap-allocated JSON array of all ACTIVE workers. Caller frees with
+    // free(). Single source of truth for Workers.list() — consumed by the
+    // per-engine host objects (zjs.c / bare.c) and the webview IPC route.
+    char* zapp_workers_registry_list_json() {
+        size_t cap = 1024;
+        size_t off = 0;
+        char* buf = (char*)malloc(cap);
+        if (!buf) return NULL;
+        buf[0] = 0;
+        if (zapp_json_append(&buf, &cap, &off, "[") < 0) { free(buf); return NULL; }
+        int first = 1;
+        for (int i = 0; i < ZAPP_MAX_WORKERS; i++) {
+            ZappWorkerEntry* e = &zapp_worker_registry[i];
+            if (!e->active) continue;
+
+            // Unresolved/unknown engine (including the resolver-default -1)
+            // is reported as "pending" rather than misleadingly coerced to
+            // "zjs" in this debug dump.
+            const char* engine_str = "pending";
+            switch (e->engine) {
+                case ZAPP_ENGINE_ZJS:           engine_str = "zjs"; break;
+                case ZAPP_ENGINE_BARE_JSC:      engine_str = "bare-jsc"; break;
+                case ZAPP_ENGINE_BARE_V8:       engine_str = "bare-v8"; break;
+                case ZAPP_ENGINE_BARE_QUICKJS:  engine_str = "bare-quickjs"; break;
+                case ZAPP_ENGINE_BARE_MQJS:     engine_str = "bare-mqjs"; break;
+                case ZAPP_ENGINE_BARE_HERMES:   engine_str = "bare-hermes"; break;
+            }
+
+            // Escape every user-influenced string into a JSON-safe temp.
+            // worker_id / script_url can carry quotes or backslashes; name is
+            // author-supplied in zapp.config.ts. Each temp is freed the moment
+            // it has been appended (or on the error path below).
+            char* eid = zapp_json_escape_dup(e->worker_id);
+            if (!eid) { free(buf); return NULL; }
+            if (zapp_json_append(&buf, &cap, &off, "%s{\"id\":\"%s\"", first ? "" : ",", eid) < 0) {
+                free(eid); free(buf); return NULL;
+            }
+            free(eid);
+
+            if (e->name[0]) {
+                char* ename = zapp_json_escape_dup(e->name);
+                if (!ename) { free(buf); return NULL; }
+                if (zapp_json_append(&buf, &cap, &off, ",\"name\":\"%s\"", ename) < 0) {
+                    free(ename); free(buf); return NULL;
+                }
+                free(ename);
+            }
+
+            char* eurl = zapp_json_escape_dup(e->script_url);
+            if (!eurl) { free(buf); return NULL; }
+            if (zapp_json_append(&buf, &cap, &off,
+                    ",\"scriptUrl\":\"%s\",\"engine\":\"%s\",\"shared\":%s,\"owners\":[",
+                    eurl, engine_str, e->shared ? "true" : "false") < 0) {
+                free(eurl); free(buf); return NULL;
+            }
+            free(eurl);
+
+            // Skip empty owner slots (headless workers register with an
+            // owner of "", which has no real owning window) so the debug
+            // payload reports owners:[] rather than owners:[""]. A separate
+            // first_owner flag keeps the comma logic correct across skips.
+            int first_owner = 1;
+            for (int o = 0; o < e->owner_count; o++) {
+                if (!e->owners[o][0]) continue;
+                char* eowner = zapp_json_escape_dup(e->owners[o]);
+                if (!eowner) { free(buf); return NULL; }
+                if (zapp_json_append(&buf, &cap, &off, "%s\"%s\"", first_owner ? "" : ",", eowner) < 0) {
+                    free(eowner); free(buf); return NULL;
+                }
+                free(eowner);
+                first_owner = 0;
+            }
+            if (zapp_json_append(&buf, &cap, &off, "]") < 0) { free(buf); return NULL; }
+
+            if (e->restart_max > 0) {
+                if (zapp_json_append(&buf, &cap, &off,
+                        ",\"supervisor\":{\"maxRetries\":%d,\"withinMs\":%d,\"failCount\":%d,\"gaveUp\":%s}",
+                        e->restart_max, e->restart_window_ms, e->fail_count,
+                        e->gave_up ? "true" : "false") < 0) {
+                    free(buf); return NULL;
+                }
+            }
+            if (zapp_json_append(&buf, &cap, &off, "}") < 0) { free(buf); return NULL; }
+            first = 0;
+        }
+        if (zapp_json_append(&buf, &cap, &off, "]") < 0) { free(buf); return NULL; }
+        return buf;
     }
 
     // --- Supervisor public API ---
