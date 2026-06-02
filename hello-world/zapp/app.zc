@@ -12,6 +12,7 @@ fn log(msg: string) -> void {
     }
 }
 
+// @zapp:returns { greeting: string }
 fn greet(_app: App*, args: JsonValue*) -> string {
     log("service: greet called");
     // Pre-parsed args — extract typed fields directly, no JSON parse needed.
