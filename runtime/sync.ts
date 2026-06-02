@@ -28,16 +28,8 @@ export const Sync = {
    * @param key - Sync key (non-empty string)
    * @param timeoutOrOptions - Timeout in ms, options object, or null for indefinite
    * @returns "notified" or "timed-out"
-   *
-   * Written as `wait: async function()` rather than `async wait()` shorthand
-   * to work around a zjs parser case. Repro: `var x = { async m(e, n=3e4) {} }`
-   * (declaration form + default parameter + multi-method object literal +
-   * module mode) → `SyntaxError: module parse error`. Inline expression
-   * forms `({ async m() {} }).m()` parse fine. The exact trigger is one of:
-   * declaration vs expression, default parameter, mixed async/non-async,
-   * or module vs script mode. See [[reference_zjs_async_method_shorthand]].
    */
-  wait: async function(
+  async wait(
     key: string,
     timeoutOrOptions: number | SyncWaitOptions | null = 30000
   ): Promise<"notified" | "timed-out"> {
