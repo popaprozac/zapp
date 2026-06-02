@@ -42,3 +42,39 @@ export function inferArgs(body: string): ArgField[] {
   }
   return [...fields].map(([name, tsType]) => ({ name, tsType }));
 }
+
+export interface Annotation {
+  argsFragment?: string;
+  returnsFragment?: string;
+}
+
+// Extract the balanced-brace { … } fragment that follows `keyword` in `text`.
+// Returns undefined if the keyword is absent or its braces are unbalanced.
+function extractFragment(text: string, keyword: string): string | undefined {
+  const at = text.indexOf(keyword);
+  if (at === -1) return undefined;
+  const after = text.slice(at + keyword.length);
+  const open = after.indexOf("{");
+  if (open === -1) return undefined;
+  let depth = 0;
+  for (let i = open; i < after.length; i++) {
+    if (after[i] === "{") depth++;
+    else if (after[i] === "}") {
+      depth--;
+      if (depth === 0) return after.slice(open, i + 1).trim();
+    }
+  }
+  return undefined; // unbalanced
+}
+
+// Parse the comment block above a handler for @zapp:args / @zapp:returns.
+// Line-comment markers are stripped first so the brace scan ignores them.
+export function parseAnnotation(commentBlock: string): Annotation {
+  const text = commentBlock.replace(/^\s*\/\/+/gm, " ");
+  const result: Annotation = {};
+  const returns = extractFragment(text, "@zapp:returns");
+  const args = extractFragment(text, "@zapp:args");
+  if (returns !== undefined) result.returnsFragment = returns;
+  if (args !== undefined) result.argsFragment = args;
+  return result;
+}

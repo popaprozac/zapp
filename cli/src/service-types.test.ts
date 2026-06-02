@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { inferArgs } from "./service-types";
+import { inferArgs, parseAnnotation } from "./service-types";
 
 test("inferArgs maps each primitive accessor to its TS type", () => {
   const body = `{
@@ -41,4 +41,33 @@ test("inferArgs ignores .get calls on receivers other than args", () => {
     { name: "name", tsType: "string" },
     { name: "items", tsType: "unknown" },
   ]);
+});
+
+test("parseAnnotation extracts a returns fragment", () => {
+  const block = `// @zapp:returns { greeting: string }`;
+  expect(parseAnnotation(block)).toEqual({ returnsFragment: "{ greeting: string }" });
+});
+
+test("parseAnnotation extracts both args and returns", () => {
+  const block = `// @zapp:returns { ok: boolean }
+// @zapp:args { name: string; count?: number }`;
+  expect(parseAnnotation(block)).toEqual({
+    returnsFragment: "{ ok: boolean }",
+    argsFragment: "{ name: string; count?: number }",
+  });
+});
+
+test("parseAnnotation handles nested braces", () => {
+  const block = `// @zapp:returns { user: { id: number; tags: string[] } }`;
+  expect(parseAnnotation(block)).toEqual({
+    returnsFragment: "{ user: { id: number; tags: string[] } }",
+  });
+});
+
+test("parseAnnotation returns empty object when no annotations present", () => {
+  expect(parseAnnotation(`// just a normal comment`)).toEqual({});
+});
+
+test("parseAnnotation ignores an unbalanced fragment (no throw)", () => {
+  expect(parseAnnotation(`// @zapp:returns { greeting: string`)).toEqual({});
 });
