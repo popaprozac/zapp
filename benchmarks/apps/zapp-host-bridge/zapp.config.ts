@@ -22,14 +22,18 @@ export default {
     },
   },
   headless: {
-    // zjs — Zapp's first-party engine.
+    // Two-engine matrix today. Multi-bare-engine builds fail with
+    // duplicate-library / bad-path link errors — appears the CLI's
+    // build-config.ts emits stomping link directives when more than
+    // one bare-* engine is enabled. Workaround: swap engines between
+    // runs and merge the RESULTS.md numbers by hand.
+    //
+    // Engines deliberately excluded today:
+    //   bare-hermes — #168 fetch hang; numbers wouldn't be honest.
+    //   bare-mqjs   — vendor/bare's libmqjs cmake step needs the
+    //                 `mqjs-build` external tool not shipped with the
+    //                 toolchain. Tracked.
     "bench-zjs":      { script: "src/bench-worker.ts", engine: "zjs" },
-    // bare-jsc — system JavaScriptCore on macOS (with allow-jit). JIT-on
-    // baseline. Add bare-quickjs / bare-v8 entries here when comparing
-    // the Win/Linux defaults — first build of each adds ~60s of cmake
-    // work, so leave commented when not actively measuring.
     "bench-bare-jsc": { script: "src/bench-worker.ts", engine: "bare-jsc" },
-    // "bench-bare-quickjs": { script: "src/bench-worker.ts", engine: "bare-quickjs" },
-    // "bench-bare-v8":      { script: "src/bench-worker.ts", engine: "bare-v8" },
   },
 };

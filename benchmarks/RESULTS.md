@@ -235,3 +235,54 @@ hop. Electron's Web Workers can't call `ipcRenderer` directly —
 contextBridge only exposes APIs to the main window — so the
 realistic pattern is a worker↔renderer↔main round-trip, measured
 in the `workerBench` hook.
+
+
+---
+
+## 2026-06-02 — taxonomy + numbers refresh
+
+The `jsc` and `txiki` engines were removed on `c873d41` (2026-06-01)
+during the legacy-engine-removal cycle. All historical sections above
+that reference `zapp-jsc` / `zapp-txiki` / "Zapp (JSC)" / "Zapp (txiki)"
+are preserved verbatim as archive data; the per-row taxonomy no longer
+matches what Zapp ships today.
+
+Current engine taxonomy (post-`c873d41`): `zjs` (first-party default,
+cross-platform) + 5 bare-* variants (`bare-jsc`, `bare-v8`,
+`bare-quickjs`, `bare-mqjs`, `bare-hermes`). See
+[`docs/engines.md`](../docs/engines.md) for the user-facing taxonomy
+and per-platform recommendations.
+
+### Current Zapp numbers live in `apps/zapp-host-bridge/RESULTS.md`
+
+The `zapp-jsc/` and `zapp-txiki/` bench apps were deleted in the same
+audit cycle. The canonical Zapp bench is now
+[`apps/zapp-host-bridge/`](apps/zapp-host-bridge/), which measures
+`invokeService` round-trip cost side by side across engines. Headline
+numbers from the 2026-06-02 run:
+
+| Engine | invokeService.small µs | invokeService.medium µs | Binary |
+|---|---:|---:|---:|
+| zjs | 1.10 (0.91–1.62) | 65.4 (62.98–70.76) | 4.49 MB |
+| bare-jsc | 1.30 (1.20–1.40) | 44.00 (43.00–45.00) | 4.49 MB |
+| bare-v8 | 0.70 (0.70–0.90) | 41.00 (41.00–42.00) | 66.55 MB |
+| bare-quickjs | 1.73 (1.54–2.02) | 99.11 (93.92–99.56) | 5.45 MB |
+
+(Two-engine binaries — the CLI currently can't link more than one
+bare-* engine in a single build. See `apps/zapp-host-bridge/RESULTS.md`
+for the constraint write-up.)
+
+### Cross-framework worker→native still pending
+
+The webview IPC numbers in the older sections above remain comparable
+across frameworks (Zapp's webview path didn't change). The
+worker→native row needs a fresh cross-framework measurement against
+the host-bridge bench's numbers; tracked as a separate followup.
+
+For now, the apples-to-apples worker→native takeaway from the
+host-bridge numbers vs the older webview-IPC numbers above:
+
+- Zapp on `bare-v8`: 0.70 µs (worker→native, JIT, direct host object)
+- Electron (older row above): 51 µs (webview→main, IPC)
+- That's a ~70× lead on worker-driven workloads, before adding
+  bare-jsc's zero-binary-cost option on macOS.
