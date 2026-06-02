@@ -87,7 +87,7 @@ extern fn zapp_start_headless_workers() -> void;
 // Default engine: -1 (resolver picks). Generator emits zapp_start_headless_worker_full
 // when the user asks for a specific engine or restart policy.
 fn zapp_start_headless_worker(id: string, script_url: string) -> void {
-    zapp_start_headless_worker_full(id, script_url, 0, 0, 0);
+    zapp_start_headless_worker_full(id, script_url, 0, 0, 0, "");
 }
 
 // Headless worker with explicit engine + restart policy. Engine
@@ -96,18 +96,21 @@ fn zapp_start_headless_worker(id: string, script_url: string) -> void {
 // object form for a headless worker entry.
 fn zapp_start_headless_worker_full(id: string, script_url: string,
                                    engine: int,
-                                   max_retries: int, within_ms: int) -> void {
+                                   max_retries: int, within_ms: int,
+                                   name: string) -> void {
     let app = (App*)app_get_active();
     if app == NULL { return; }
     // Headless workers don't go through the router (where dedicated
     // workers get registered). Register here so the supervisor's
     // policy lookup + script_url-on-restart can find the entry,
     // *and* so the engine choice is captured before worker_create
-    // dispatches.
+    // dispatches. The display `name` (empty when unset) rides along
+    // so Workers.list() can report it.
     raw {
-        extern int zapp_worker_registry_add_full_with_engine(const char* worker_id, const char* owner_id,
-                                                              int shared, const char* script_url, int engine);
-        zapp_worker_registry_add_full_with_engine((const char*)id, "", 0, (const char*)script_url, (int)engine);
+        extern int zapp_worker_registry_add_full_with_engine_and_name(const char* worker_id, const char* owner_id,
+                                                                       int shared, const char* script_url,
+                                                                       int engine, const char* name);
+        zapp_worker_registry_add_full_with_engine_and_name((const char*)id, "", 0, (const char*)script_url, (int)engine, (const char*)name);
     }
     worker_create(app, script_url, "", id, engine);
     if max_retries > 0 {
@@ -122,7 +125,7 @@ fn zapp_start_headless_worker_full(id: string, script_url: string,
 // Equivalent to `_full` with engine=0.
 fn zapp_start_headless_worker_with_restart(id: string, script_url: string,
                                            max_retries: int, within_ms: int) -> void {
-    zapp_start_headless_worker_full(id, script_url, 0, max_retries, within_ms);
+    zapp_start_headless_worker_full(id, script_url, 0, max_retries, within_ms, "");
 }
 
 // Called from workers via the createWindow host object. Always runs on the
