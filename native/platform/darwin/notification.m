@@ -7,6 +7,25 @@
 
 static char notif_result[2048];
 
+// +[UNUserNotificationCenter currentNotificationCenter] raises (and aborts the
+// process) when there is no bundle identifier — i.e. the raw executable is run
+// directly instead of via its .app bundle. Funnel every access through this
+// accessor: it returns nil in that case, and ObjC message-sends to nil are safe
+// no-ops, so notifications degrade gracefully (disabled) rather than crashing at
+// startup. Warns once so the cause is visible in the logs.
+static UNUserNotificationCenter* zapp_notification_center(void) {
+    if ([[NSBundle mainBundle] bundleIdentifier] == nil) {
+        static BOOL warned = NO;
+        if (!warned) {
+            warned = YES;
+            fprintf(stderr, "[zapp] notifications unavailable: process has no bundle "
+                            "identifier (run the .app bundle, not the raw binary)\n");
+        }
+        return nil;
+    }
+    return [UNUserNotificationCenter currentNotificationCenter];
+}
+
 // --- Notification delegate (handles clicks + action buttons) ---
 
 extern void darwin_webview_eval_all(const char* js);
@@ -125,7 +144,7 @@ static ZappNotificationDelegate* zapp_notif_delegate = nil;
 void darwin_notification_setup_delegate(void) {
     if (zapp_notif_delegate) return;
     zapp_notif_delegate = [[ZappNotificationDelegate alloc] init];
-    [[UNUserNotificationCenter currentNotificationCenter] setDelegate:zapp_notif_delegate];
+    [zapp_notification_center() setDelegate:zapp_notif_delegate];
 }
 
 // --- Permission ---
@@ -142,7 +161,7 @@ static const char* status_string(UNAuthorizationStatus status) {
 void darwin_notification_request_permission(int32_t window_id, int32_t request_id, notif_callback_fn cb) {
     darwin_notification_setup_delegate();
 
-    [[UNUserNotificationCenter currentNotificationCenter]
+    [zapp_notification_center()
         requestAuthorizationWithOptions:(UNAuthorizationOptionAlert | UNAuthorizationOptionSound | UNAuthorizationOptionBadge)
         completionHandler:^(BOOL granted, NSError* error) {
             (void)error;
@@ -159,7 +178,7 @@ const char* darwin_notification_get_permission(void) {
     __block const char* result_status = "not-determined";
     dispatch_semaphore_t sem = dispatch_semaphore_create(0);
 
-    [[UNUserNotificationCenter currentNotificationCenter]
+    [zapp_notification_center()
         getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings* settings) {
             result_status = status_string(settings.authorizationStatus);
             dispatch_semaphore_signal(sem);
@@ -243,7 +262,7 @@ void darwin_notification_show(const char* options_json, int32_t window_id, int32
         [UNNotificationRequest requestWithIdentifier:identifier content:content trigger:trigger];
 
     NSString* idCopy = [identifier copy];
-    [[UNUserNotificationCenter currentNotificationCenter]
+    [zapp_notification_center()
         addNotificationRequest:request
         withCompletionHandler:^(NSError* error) {
             if (error) NSLog(@"[zapp] notification error: %@", error);
@@ -295,7 +314,7 @@ void darwin_notification_schedule(const char* options_json, int32_t window_id, i
         [UNNotificationRequest requestWithIdentifier:identifier content:content trigger:trigger];
 
     NSString* idCopy = [identifier copy];
-    [[UNUserNotificationCenter currentNotificationCenter]
+    [zapp_notification_center()
         addNotificationRequest:request
         withCompletionHandler:^(NSError* error) {
             if (error) NSLog(@"[zapp] schedule error: %@", error);
@@ -311,12 +330,12 @@ void darwin_notification_schedule(const char* options_json, int32_t window_id, i
 void darwin_notification_cancel(const char* notification_id) {
     if (!notification_id) return;
     NSString* identifier = [NSString stringWithUTF8String:notification_id];
-    [[UNUserNotificationCenter currentNotificationCenter]
+    [zapp_notification_center()
         removePendingNotificationRequestsWithIdentifiers:@[identifier]];
 }
 
 void darwin_notification_cancel_all(void) {
-    [[UNUserNotificationCenter currentNotificationCenter]
+    [zapp_notification_center()
         removeAllPendingNotificationRequests];
 }
 
@@ -328,7 +347,7 @@ static NSMutableDictionary<NSString*, UNNotificationCategory*>* zapp_notif_categ
 static void zapp_notif_sync_categories(void) {
     if (!zapp_notif_categories) return;
     NSSet* catSet = [NSSet setWithArray:[zapp_notif_categories allValues]];
-    [[UNUserNotificationCenter currentNotificationCenter] setNotificationCategories:catSet];
+    [zapp_notification_center() setNotificationCategories:catSet];
 }
 
 // Register a notification category from typed Zen-C structs
@@ -461,7 +480,7 @@ void darwin_notification_show_with_category(const char* title, const char* body,
     UNNotificationRequest* request =
         [UNNotificationRequest requestWithIdentifier:identifier content:content trigger:trigger];
 
-    [[UNUserNotificationCenter currentNotificationCenter]
+    [zapp_notification_center()
         addNotificationRequest:request withCompletionHandler:^(NSError* error) {
             if (error) NSLog(@"[zapp] notification error: %@", error);
         }];
@@ -509,7 +528,7 @@ void darwin_notification_show_typed(const char* title, const char* subtitle, con
     UNNotificationRequest* request =
         [UNNotificationRequest requestWithIdentifier:identifier content:content trigger:trigger];
 
-    [[UNUserNotificationCenter currentNotificationCenter]
+    [zapp_notification_center()
         addNotificationRequest:request withCompletionHandler:^(NSError* error) {
             if (error) NSLog(@"[zapp] notification error: %@", error);
         }];
@@ -529,7 +548,7 @@ void darwin_notification_schedule_typed(const char* title, const char* body, dou
     UNNotificationRequest* request =
         [UNNotificationRequest requestWithIdentifier:identifier content:content trigger:trigger];
 
-    [[UNUserNotificationCenter currentNotificationCenter]
+    [zapp_notification_center()
         addNotificationRequest:request withCompletionHandler:^(NSError* error) {
             if (error) NSLog(@"[zapp] schedule error: %@", error);
         }];
@@ -541,13 +560,13 @@ void darwin_notification_schedule_typed(const char* title, const char* body, dou
 void darwin_notification_remove_delivered(const char* notification_id) {
     if (!notification_id) return;
     NSString* nid = [NSString stringWithUTF8String:notification_id];
-    [[UNUserNotificationCenter currentNotificationCenter]
+    [zapp_notification_center()
         removeDeliveredNotificationsWithIdentifiers:@[nid]];
 }
 
 // Remove all delivered notifications from notification center.
 void darwin_notification_remove_all_delivered(void) {
-    [[UNUserNotificationCenter currentNotificationCenter] removeAllDeliveredNotifications];
+    [zapp_notification_center() removeAllDeliveredNotifications];
 }
 
 // Update an existing notification by re-posting with the same ID.
@@ -569,7 +588,7 @@ void darwin_notification_update(const char* notification_id, const char* title,
     UNNotificationRequest* request =
         [UNNotificationRequest requestWithIdentifier:identifier content:content trigger:trigger];
 
-    [[UNUserNotificationCenter currentNotificationCenter]
+    [zapp_notification_center()
         addNotificationRequest:request withCompletionHandler:^(NSError* error) {
             if (error) NSLog(@"[zapp] notification update error: %@", error);
         }];
@@ -611,7 +630,7 @@ void darwin_notification_show_with_attachment(const char* options_json,
         [UNNotificationRequest requestWithIdentifier:identifier content:content trigger:trigger];
 
     NSString* idCopy = [identifier copy];
-    [[UNUserNotificationCenter currentNotificationCenter]
+    [zapp_notification_center()
         addNotificationRequest:request
         withCompletionHandler:^(NSError* error) {
             if (error) NSLog(@"[zapp] notification error: %@", error);
