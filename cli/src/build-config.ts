@@ -530,8 +530,10 @@ export async function generatePlatformConfig(
     content += `//> macos: framework: Carbon\n`;
     // libcompression — embedded-asset brotli decode path.
     content += `//> macos: link: -lcompression\n`;
-    // App-declared extras from zapp.config.ts.
-    for (const fw of userExtraFrameworks) content += `//> macos: framework: ${fw}\n`;
+    // libz (zlib) — zjs's host_zlib_codec. Resolved transitively from
+    // libSystem on macOS today, but declared explicitly so the dependency
+    // is honest and can't silently regress (the iOS link needs it outright).
+    content += `//> macos: link: -lz\n`;
     if (userExtraLinkFlags.length > 0) {
       content += `//> macos: link: ${userExtraLinkFlags.join(" ")}\n`;
     }
@@ -575,6 +577,11 @@ export async function generatePlatformConfig(
     // libcompression — used by jsc.m for embedded-asset brotli decode.
     // Available on iOS as a system library; just needs the link flag.
     content += `//> link: -lcompression\n`;
+    // libz (zlib) — zjs's host_zlib_codec calls deflate/inflate. macOS
+    // resolves these transitively from libSystem, but the iOS link line
+    // does not, so it must be requested explicitly (libz.tbd ships in the
+    // iOS SDK). Without it: "Undefined symbols: _deflate, _deflateInit2_".
+    content += `//> link: -lz\n`;
     // App-declared extras from zapp.config.ts.
     for (const fw of userExtraFrameworks) content += `//> framework: ${fw}\n`;
     if (userExtraLinkFlags.length > 0) {
