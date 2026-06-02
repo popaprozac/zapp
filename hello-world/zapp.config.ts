@@ -48,6 +48,7 @@ const config: ZappConfig = {
     // Verified Phase 4 / Task 4.1 of the supervisor-restart plan.
     supervised: {
       script: "src/workers/supervised.ts",
+      name: "sync-engine",
       restart: { maxRetries: 2, withinMs: 30_000 },
       engine: "zjs",
     },

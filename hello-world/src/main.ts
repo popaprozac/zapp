@@ -155,6 +155,7 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
         <button id="btn-worker-service">Invoke Service</button>
         <button id="btn-worker-terminate">Terminate</button>
         <button id="btn-worker-terminate-by-id">Workers.terminate("h-supervised")</button>
+        <button id="btn-workers-list">Show workers</button>
         <div id="worker-result" class="result"></div>
       </section>
 
@@ -689,6 +690,20 @@ $("btn-worker-terminate").addEventListener("click", () => {
 $("btn-worker-terminate-by-id").addEventListener("click", () => {
   Workers.terminate("h-supervised");
   log(`Workers.terminate("h-supervised") — supervised headless worker killed`);
+});
+
+// Workers.list() — enumerate every live worker (headless + dedicated)
+// with id, engine, and configured display name. Pretty-print the JSON
+// into the result div.
+$("btn-workers-list").addEventListener("click", async () => {
+  try {
+    const list = await Workers.list();
+    $("worker-result").textContent = JSON.stringify(list, null, 2);
+    log(`Workers.list() → ${list.length} worker(s)`);
+  } catch (e) {
+    $("worker-result").textContent = "Workers.list() error: " + String(e);
+    log(`Workers.list() error: ${e}`);
+  }
 });
 
 // --- Supervisor (G6) ---
