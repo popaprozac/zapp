@@ -26,6 +26,41 @@ Events.on("force-crash", () => {
   }, 0);
 });
 
+// --- Crash-containment smoke (#154) ---
+// Demonstrates that a worker throw never takes down the host, across the
+// two containment tiers. The webview "Verify host alive" button proves
+// host survival via Workers.list(); the alive-check echo below proves
+// THIS worker survived the no-restart path.
+
+// Tier 1 — sync throw in a MESSAGE handler. The bootstrap's message-handler
+// try/catch logs it and the worker keeps running: NO supervisor restart,
+// failCount stays 0. Triggered by Workers.send("h-supervised",
+// "throw-in-message", …) from the UI.
+receive("throw-in-message", () => {
+  console.log("[supervised] throwing synchronously in a message handler (expect: contained, no restart)");
+  throw new Error("forced throw in message handler (#154)");
+});
+
+// Liveness echo — proves this worker is still running after the Tier 1
+// throw (a fresh incarnation re-registers this on restart, so the echo
+// counter resetting to 1 is itself a signal that a restart happened).
+let aliveEchoes = 0;
+receive("alive-check", () => {
+  aliveEchoes++;
+  console.log(`[supervised] alive-check → still running (echo #${aliveEchoes})`);
+  Events.emit("supervised:alive", { echo: aliveEchoes, ts: Date.now() });
+});
+
+// Tier 2 — sync throw in an EVENT handler. The bootstrap's event-handler
+// catch calls reportCrash() → supervisor → restart (or gave-up after the
+// policy is exhausted). Distinct from force-crash, which defers via
+// setTimeout (the timer path); this one throws synchronously in the
+// Events.on callback. Triggered by Events.emit("throw-in-event", …).
+Events.on("throw-in-event", () => {
+  console.log("[supervised] throwing synchronously in an event handler (expect: supervisor restart)");
+  throw new Error("forced throw in event handler (#154)");
+});
+
 // Worker→worker pipeline demo: when the UI emits `relay-to-ticker`,
 // this worker sends a `ping` directly to the ticker headless worker
 // via `Workers.send` (no broadcast fan-out, no webview hop). The

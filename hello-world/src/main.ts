@@ -182,6 +182,22 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
       </section>
 
       <section>
+        <h2>Crash containment (#154)</h2>
+        <p style="font-size: 12px; opacity: 0.7; margin: 0 0 8px 0;">
+          Worker throws never take down the host. A throw in a
+          <strong>message handler</strong> is logged and the worker keeps
+          running (<em>no restart</em>); a throw in an <strong>event</strong>
+          or timer handler escalates to the supervisor (<em>restart</em>).
+          After any crash, "Verify host alive" calls
+          <code>Workers.list()</code> — if it returns, the host survived.
+        </p>
+        <button id="btn-crash-msg">Throw in message handler (no restart)</button>
+        <button id="btn-crash-event">Throw in event handler (restart)</button>
+        <button id="btn-crash-verify-alive">Verify host alive</button>
+        <div id="crash-result" class="result"></div>
+      </section>
+
+      <section>
         <h2>Clipboard</h2>
         <button id="btn-clip-write-text">Write text</button>
         <button id="btn-clip-read-text">Read text</button>
@@ -727,6 +743,50 @@ Events.on("worker:gave-up", (data: any) => {
 $("btn-supervisor-crash").addEventListener("click", () => {
   Events.emit("force-crash", {});
   log("emitted force-crash to supervised worker");
+});
+
+// --- Crash containment (#154) ---
+
+// Tier 1: message-handler throw — contained, no restart. failCount should
+// stay 0; the worker keeps running (the alive-check echo below confirms).
+$("btn-crash-msg").addEventListener("click", () => {
+  Workers.send("h-supervised", "throw-in-message", {});
+  log('sent throw-in-message to h-supervised (expect: contained, NO restart)');
+});
+
+// Tier 2: event-handler throw — escalates to the supervisor → restart
+// (or gave-up once the 2/30s policy is exhausted).
+$("btn-crash-event").addEventListener("click", () => {
+  Events.emit("throw-in-event", {});
+  log('emitted throw-in-event (expect: supervisor restart)');
+});
+
+// Host-alive probe: Workers.list() returning at all proves the
+// webview↔native↔registry path survived the crash. We also surface
+// h-supervised's supervisor counters and ping the worker to confirm it
+// (the worker itself, not just the host) is still running.
+$("btn-crash-verify-alive").addEventListener("click", async () => {
+  try {
+    const list = await Workers.list();
+    const sup = list.find((w) => w.id === "h-supervised");
+    const detail = sup
+      ? `h-supervised present (failCount=${sup.supervisor?.failCount ?? "n/a"}, gaveUp=${sup.supervisor?.gaveUp ?? "n/a"})`
+      : `h-supervised absent (gave up / terminated)`;
+    const summary = `host alive ✓ — ${list.length} worker(s); ${detail}`;
+    $("crash-result").textContent = summary;
+    log(summary);
+    // Ping the worker to prove it survived (the no-restart Tier 1 path).
+    Workers.send("h-supervised", "alive-check", {});
+  } catch (e) {
+    $("crash-result").textContent = "Workers.list() FAILED — host may be down: " + String(e);
+    log("Workers.list() failed: " + String(e));
+  }
+});
+
+Events.on("supervised:alive", (data: any) => {
+  const d = typeof data === "string" ? JSON.parse(data) : data;
+  $("crash-result").textContent += `  |  worker replied (echo #${d.echo}) — worker still running`;
+  log(`supervised:alive echo #${d.echo}`);
 });
 
 // --- Worker channels (G7) ---
