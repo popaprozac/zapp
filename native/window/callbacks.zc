@@ -124,13 +124,31 @@ raw {
             zapp_dispatch_event_to_js(window_id, event_id, w, h, x, y);
         }
 
-        // Layer 3: Backend worker (if subscribed to this window+event)
-        // TODO: Worker-side window event broadcast (bare/zjs) is a pre-existing
-        // gap inherited from the JSC-era Layer 3 design. zapp_window_backend_listeners
-        // bit-field is still set by bare's subscribeWindowEvent but no consumer
-        // reads it post-jsc-removal. Tracked in supervisor-restart followups memory.
-        // Adding bare_broadcast_eval_js + zjs_broadcast_eval_js here is the obvious
-        // fix shape; deferred until a real consumer surfaces the need.
+        // Layer 3: Backend worker (if subscribed to this window+event).
+        // Build an IIFE the worker bridge routes via _onEvent.
+        // Mirrors the IIFE shape dispatch_event_to_all uses.
+        if (zapp_window_backend_listeners[window_id] & (1u << event_id)) {
+            const char* tmpl =
+                "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+                "if(b&&typeof b._onEvent==='function'){"
+                "b._onEvent('window:event',"
+                "'{\"windowId\":%d,\"event\":%d,\"w\":%d,\"h\":%d,\"x\":%d,\"y\":%d}');"
+                "}})();";
+            int needed = snprintf(NULL, 0, tmpl,
+                                  (int)window_id, (int)event_id,
+                                  (int)w, (int)h, (int)x, (int)y);
+            if (needed > 0) {
+                char* js = (char*)malloc((size_t)needed + 1);
+                if (js) {
+                    snprintf(js, (size_t)needed + 1, tmpl,
+                             (int)window_id, (int)event_id,
+                             (int)w, (int)h, (int)x, (int)y);
+                    extern void worker_broadcast_eval_js(char* js);
+                    worker_broadcast_eval_js(js);
+                    free(js);
+                }
+            }
+        }
 
         return 0; // ALLOW
     }

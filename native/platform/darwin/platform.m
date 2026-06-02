@@ -136,6 +136,8 @@ const char* darwin_get_theme(void) {
             "if(b&&b._onEvent)b._onEvent('app:open-url','{\"url\":\\'%@\\'}');})();",
             escapedForJs];
         darwin_webview_eval_all([js UTF8String]);
+        extern void worker_broadcast_eval_js(char* js);
+        worker_broadcast_eval_js((char*)[js UTF8String]);
     }
 }
 @end

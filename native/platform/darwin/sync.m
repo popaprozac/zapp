@@ -257,10 +257,14 @@ void darwin_sync_dispatch_to_webviews(const char* payload_json) {
     extern void darwin_webview_eval_all(const char* js);
     if ([NSThread isMainThread]) {
         darwin_webview_eval_all([js UTF8String]);
+        extern void worker_broadcast_eval_js(char* js);
+        worker_broadcast_eval_js((char*)[js UTF8String]);
     } else {
         NSString* jsCopy = [js copy];
         dispatch_async(dispatch_get_main_queue(), ^{
             darwin_webview_eval_all([jsCopy UTF8String]);
+            extern void worker_broadcast_eval_js(char* js);
+            worker_broadcast_eval_js((char*)[jsCopy UTF8String]);
         });
     }
 }

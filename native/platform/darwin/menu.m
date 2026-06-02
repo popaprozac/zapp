@@ -28,6 +28,8 @@ extern void darwin_webview_eval_all(const char* js);
             "if(b&&b._onEvent)b._onEvent('__menu:click','{\"id\":\"%@\"}');})();",
             escaped];
         darwin_webview_eval_all([js UTF8String]);
+        extern void worker_broadcast_eval_js(char* js);
+        worker_broadcast_eval_js((char*)[js UTF8String]);
     });
 }
 @end

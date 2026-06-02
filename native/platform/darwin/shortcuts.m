@@ -204,6 +204,8 @@ static OSStatus shortcut_event_handler(EventHandlerCallRef nextHandler,
         "if(b&&b._onEvent)b._onEvent('app:shortcut-triggered','%s');})();",
         payload);
     darwin_webview_eval_all(js);
+    extern void worker_broadcast_eval_js(char* js);
+    worker_broadcast_eval_js(js);
 
     return noErr;
 }

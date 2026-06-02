@@ -22,6 +22,8 @@ void darwin_notification_set_bridge_ready(void) {
     if (zapp_pending_notif_events && zapp_pending_notif_events.count > 0) {
         for (NSString* js in zapp_pending_notif_events) {
             darwin_webview_eval_all([js UTF8String]);
+            extern void worker_broadcast_eval_js(char* js);
+            worker_broadcast_eval_js((char*)[js UTF8String]);
         }
         [zapp_pending_notif_events removeAllObjects];
     }
@@ -30,6 +32,8 @@ void darwin_notification_set_bridge_ready(void) {
 static void dispatch_notif_event(NSString* js) {
     if (zapp_notif_bridge_ready) {
         darwin_webview_eval_all([js UTF8String]);
+        extern void worker_broadcast_eval_js(char* js);
+        worker_broadcast_eval_js((char*)[js UTF8String]);
     } else {
         if (!zapp_pending_notif_events) {
             zapp_pending_notif_events = [NSMutableArray new];
