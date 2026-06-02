@@ -89,6 +89,12 @@ extern int  zapp_worker_supervisor_record_failure(const char* worker_id);
 extern int  zapp_worker_supervisor_get_window_state(
     const char* worker_id, int* out_count, int* out_cap, int* out_window_ms);
 
+// Active-worker registry — single source of truth shared with zjs.c and
+// the webview IPC route. Returns a heap JSON array the caller free()s.
+// Explicit char* return type: an implicit-int declaration would truncate
+// the 64-bit pointer.
+extern char* zapp_workers_registry_list_json(void);
+
 // Sync API + window creation. darwin_sync_handle is thread-safe (uses
 // pthread_mutex), so workers can call directly without bouncing to
 // the main queue. Window creation is NOT thread-safe — must run on
@@ -556,6 +562,33 @@ static js_value_t* bare_host_invoke_service(js_env_t* env, js_callback_info_t* i
     js_value_t* out;
     js_create_string_utf8(env, (const utf8_t*)result, strlen(result), &out);
     (void)slot;  // currently unused; reserved for per-worker accounting
+    return out;
+}
+
+// __zappBridge.listWorkers() -> string (JSON array of active workers)
+//
+// Worker-context Workers.list() on bare. Parity counterpart to zjs.c's
+// host_list_workers: returns the registry's JSON string verbatim and the
+// JS runtime wrapper JSON.parses it. Returns "[]" (a valid empty array)
+// when the registry yields NULL so the JS side always gets something
+// parseable — never null/undefined.
+//
+// js_create_string_utf8 copies the bytes into engine-managed storage
+// (the libjs JSC backend's js_to_string_utf8 builds a fresh JSString;
+// the zero-copy path is the separate js_create_external_string_utf8,
+// which takes a finalize callback this plain variant lacks). So the heap
+// buffer is ours to free() immediately after construction — same
+// free-after-construct pattern used by bare_host_clipboard above.
+static js_value_t* bare_host_list_workers(js_env_t* env, js_callback_info_t* info) {
+    (void)info;
+    char* json = zapp_workers_registry_list_json();
+    js_value_t* out;
+    if (!json) {
+        js_create_string_utf8(env, (const utf8_t*)"[]", 2, &out);
+        return out;
+    }
+    js_create_string_utf8(env, (const utf8_t*)json, strlen(json), &out);
+    free(json);
     return out;
 }
 
@@ -1409,6 +1442,15 @@ static BareSetupResult bare_worker_setup_state(BareWorkerSlot* slot) {
     js_create_function(slot->env, "_invokeServiceRaw", -1,
                        bare_host_invoke_service, slot, &invoke_fn);
     js_set_named_property(slot->env, bridge, "_invokeServiceRaw", invoke_fn);
+
+    // listWorkers — worker-context Workers.list(). Returns the registry
+    // JSON string verbatim ("[]" on alloc failure); the JS runtime wrapper
+    // JSON.parses it. Same "listWorkers" property + string contract as
+    // zjs.c so Workers.list() behaves identically across engines.
+    js_value_t* list_workers_fn;
+    js_create_function(slot->env, "listWorkers", -1,
+                       bare_host_list_workers, slot, &list_workers_fn);
+    js_set_named_property(slot->env, bridge, "listWorkers", list_workers_fn);
 
     // Worker → host plumbing. Each takes JSON-string payloads from JS
     // (the worker bootstrap stringifies before calling). Output is
