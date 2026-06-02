@@ -33,8 +33,28 @@
 #include <TargetConditionals.h>
 #include <compression.h>
 #endif
-#include <uv.h>
+#if defined(__APPLE__)
+  // Apple loop: kqueue + CFRunLoop hybrid replaces libuv. kqueue handles
+  // timers + cross-thread EVFILT_USER triggers; CFRunLoop is ticked each
+  // iteration to drain NSURLSession completions (zjs fetch/WebSocket).
+  #include <sys/event.h>
+  #include <sys/time.h>
+  #include <errno.h>
+  #include <CoreFoundation/CoreFoundation.h>
+#else
+  #include <uv.h>
+#endif
 #include <stdatomic.h>
+
+#if defined(__APPLE__)
+// EVFILT_USER idents for cross-thread signaling. Each is one-shot
+// (EV_CLEAR) so the trigger fires once per kevent() drain. Coalesces
+// naturally — multiple triggers between drains = one wake (matches
+// uv_async_send semantics).
+#define FILTER_SHUTDOWN     1
+#define FILTER_INBOX        2
+#define FILTER_EVAL_INBOX   3
+#endif
 
 // Mirror txiki.c's embedded-asset struct (the macro that defines it is
 // local to zapp_assets's translation unit).
@@ -102,17 +122,28 @@ typedef struct {
     int          active;
 
     pthread_t    thread;
-    uv_loop_t    loop;
     ZjsContext*  ctx;
 
-    // Loop integration: drained on every uv_check, re-armed to next zjs
-    // timer deadline so libuv knows when to wake.
+#if defined(__APPLE__)
+    // Apple loop: kqueue() fd + EVFILT_USER triggers (FILTER_SHUTDOWN /
+    // FILTER_INBOX / FILTER_EVAL_INBOX). zjs's timer queue is polled
+    // each iteration via zjs_next_timer_ms; no separate uv_timer_t /
+    // uv_check_t needed (drain happens inline after kevent returns).
+    // CFRunLoopRunInMode is ticked each iteration to drain NSURLSession
+    // completions for zjs's fetch/WebSocket.
+    int          kq;
+    int          kq_initialized;
+#else
+    // Non-Apple loop: libuv (Linux/Windows). Apple targets use the
+    // kqueue + CFRunLoop path above.
+    uv_loop_t    loop;
     uv_check_t   check;
     uv_timer_t   zjs_wake;
     uv_async_t   shutdown_async;     // signaled from terminate to wake the loop
     uv_async_t   inbox_async;        // signaled from post_message to drain inbox
     uv_async_t   eval_inbox_async;   // signaled from broadcast_eval_js to drain eval ring
     int          loop_initialized;
+#endif
 
     // Cross-thread inbox — postMessage queues here; the inbox_async
     // callback drains on the worker thread. Simple ring with a mutex;
@@ -173,6 +204,14 @@ typedef struct {
 
 static ZjsWorkerSlot zjs_workers[ZJS_MAX_WORKERS] = {{0}};
 static pthread_mutex_t zjs_workers_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+#if defined(__APPLE__)
+// Forward decls — Apple-only kqueue trigger helpers used by host_worker_crash
+// (defined earlier in the file than the helper bodies).
+static void apple_trigger_inbox(ZjsWorkerSlot* slot);
+static void apple_trigger_eval_inbox(ZjsWorkerSlot* slot);
+static void apple_trigger_shutdown(ZjsWorkerSlot* slot);
+#endif
 
 static ZjsWorkerSlot* zjs_find_slot(const char* worker_id) {
     for (int i = 0; i < ZJS_MAX_WORKERS; i++) {
@@ -621,11 +660,15 @@ static ZjsValue host_worker_crash(ZjsContext* ctx, ZjsValue* argv, uint32_t argc
     int decision = zapp_worker_supervisor_record_failure(slot->worker_id);
     if (decision == 1) {
         // Restart approved. Signal the outer loop in zjs_worker_thread
-        // to break uv_run and re-incarnate the JS state. The
+        // to break the inner loop and re-incarnate the JS state. The
         // worker:restarted event fires from there after setup_state
         // completes for the next incarnation.
         atomic_store(&slot->wants_restart, 1);
+#if defined(__APPLE__)
+        if (slot->kq_initialized) apple_trigger_shutdown(slot);
+#else
         uv_async_send(&slot->shutdown_async);
+#endif
     } else if (decision == 2) {
         // Supervisor cap exhausted — gave_up flag in registry is now sticky.
         char gave_up[256];
@@ -774,7 +817,112 @@ static void zjs_setup_bridge(ZjsWorkerSlot* slot) {
 }
 
 // ---------------------------------------------------------------------------
-// uv ↔ zjs timer bridge.
+// Loop integration — Apple uses kqueue + CFRunLoop with inline drain
+// helpers; non-Apple targets use libuv callbacks (definitions below).
+// ---------------------------------------------------------------------------
+
+// Cap on entries drained per inbox fire. Without it the `while (pop)`
+// loop starves the worker's own JS thread when several other workers
+// are emitting at high frequency: new IIFEs land in the inbox during
+// the drain itself, the loop never exits, and the bench loop (or any
+// foreground work) makes no forward progress. Capping yields back to
+// the loop between batches; if entries remain we re-arm the trigger so
+// the next loop tick picks up the rest. 32 was picked empirically —
+// large enough to amortise the fire cost, small enough to keep response
+// latency tight when broadcasts spike.
+#define ZJS_EVAL_INBOX_DRAIN_BATCH 32
+
+#if defined(__APPLE__)
+// Apple drain helpers — called from the kqueue+CFRunLoop main loop in
+// zjs_worker_thread after kevent() returns a triggered FILTER_INBOX /
+// FILTER_EVAL_INBOX event. Same body as the libuv on_*_async callbacks
+// below, minus the `(ZjsWorkerSlot*) h->data` unpack at the top.
+// (apple_trigger_* forward decls live near the slot table at the top.)
+
+static void drain_inbox_apple(ZjsWorkerSlot* slot) {
+    if (atomic_load(&slot->wants_terminate)) return;
+
+    char* msg;
+    while ((msg = inbox_pop(slot)) != NULL) {
+        ZjsValue arg = zjs_new_string(slot->ctx, msg, (uint32_t) strlen(msg));
+        ZjsValue dispatch = zjs_root_get(slot->ctx, slot->dispatch_message_root);
+        zjs_call(slot->ctx, dispatch, zjs_undefined(), &arg, 1);
+        zjs_drain_microtasks(slot->ctx);
+        if (zjs_had_error(slot->ctx)) {
+            ZjsValue err = zjs_get_error(slot->ctx);
+            uint32_t len = 0;
+            ZjsValue mv = zjs_get_property(slot->ctx, err, "message");
+            const char* m = zjs_is_string(mv)
+                ? zjs_string_bytes(mv, &len)
+                : zjs_string_bytes(err, &len);
+            fprintf(stderr, "[zapp] zjs worker '%s' message handler threw: %.*s\n",
+                slot->worker_id, (int) len, m ? m : "<unreadable>");
+        }
+        free(msg);
+    }
+}
+
+static void drain_eval_inbox_apple(ZjsWorkerSlot* slot) {
+    if (atomic_load(&slot->wants_terminate)) return;
+
+    char* js;
+    int drained = 0;
+    while (drained < ZJS_EVAL_INBOX_DRAIN_BATCH && (js = eval_inbox_pop(slot)) != NULL) {
+        zjs_eval(slot->ctx, js);
+        zjs_drain_microtasks(slot->ctx);
+        if (zjs_had_error(slot->ctx)) {
+            ZjsValue err = zjs_get_error(slot->ctx);
+            uint32_t len = 0;
+            ZjsValue mv = zjs_get_property(slot->ctx, err, "message");
+            const char* m = zjs_is_string(mv)
+                ? zjs_string_bytes(mv, &len)
+                : zjs_string_bytes(err, &len);
+            fprintf(stderr, "[zapp] zjs worker '%s' broadcast eval threw: %.*s\n",
+                slot->worker_id, (int) len, m ? m : "<unreadable>");
+        }
+        free(js);
+        drained++;
+    }
+
+    // If we hit the batch cap and the inbox still has entries, re-arm
+    // the EVFILT_USER trigger so the next kevent() drain picks it up.
+    // Bounded peek under the inbox mutex so we don't race with a
+    // producer push.
+    pthread_mutex_lock(&slot->eval_inbox_mutex);
+    int remaining = slot->eval_inbox_count;
+    pthread_mutex_unlock(&slot->eval_inbox_mutex);
+    if (remaining > 0) {
+        apple_trigger_eval_inbox(slot);
+    }
+}
+
+// Tiny kevent trigger helpers — one per EVFILT_USER ident. Used from
+// both the worker thread (re-arm on batch overflow) and any thread
+// that signals the worker (zjs_worker_post_message, terminate, etc).
+// EV_CLEAR | NOTE_TRIGGER is the documented one-shot wake pattern.
+static void apple_trigger_inbox(ZjsWorkerSlot* slot) {
+    struct kevent trigger;
+    EV_SET(&trigger, FILTER_INBOX, EVFILT_USER, 0, NOTE_TRIGGER, 0, NULL);
+    kevent(slot->kq, &trigger, 1, NULL, 0, NULL);
+}
+
+static void apple_trigger_eval_inbox(ZjsWorkerSlot* slot) {
+    struct kevent trigger;
+    EV_SET(&trigger, FILTER_EVAL_INBOX, EVFILT_USER, 0, NOTE_TRIGGER, 0, NULL);
+    kevent(slot->kq, &trigger, 1, NULL, 0, NULL);
+}
+
+static void apple_trigger_shutdown(ZjsWorkerSlot* slot) {
+    struct kevent trigger;
+    EV_SET(&trigger, FILTER_SHUTDOWN, EVFILT_USER, 0, NOTE_TRIGGER, 0, NULL);
+    kevent(slot->kq, &trigger, 1, NULL, 0, NULL);
+}
+#endif // __APPLE__
+
+#if !defined(__APPLE__)
+// ---------------------------------------------------------------------------
+// libuv loop integration (Linux / Windows). Apple targets use the
+// kqueue + CFRunLoop helpers above.
 // ---------------------------------------------------------------------------
 
 static void on_zjs_wake(uv_timer_t* h) { (void) h; /* work happens in on_check */ }
@@ -826,17 +974,6 @@ static void on_inbox_async(uv_async_t* h) {
 // Drains JS snippets pushed by dispatch_event_to_all → zjs_broadcast_eval_js.
 // Each entry is a self-invoking IIFE that calls `bridge._onEvent(name,
 // payload)` — same shape webviews / bare workers / txiki workers see.
-// Cap on entries drained per async fire. Without it the `while (pop)`
-// loop starves the worker's own JS thread when several other workers
-// are emitting at high frequency: new IIFEs land in the inbox during
-// the drain itself, the loop never exits, and the bench loop (or any
-// foreground work) makes no forward progress. Capping yields back to
-// libuv between batches; if entries remain we re-arm via
-// uv_async_send so the next loop tick picks up the rest. 32 was
-// picked empirically — large enough to amortise the async-fire cost,
-// small enough to keep response latency tight when broadcasts spike.
-#define ZJS_EVAL_INBOX_DRAIN_BATCH 32
-
 static void on_eval_inbox_async(uv_async_t* h) {
     ZjsWorkerSlot* slot = (ZjsWorkerSlot*) h->data;
     if (atomic_load(&slot->wants_terminate)) return;
@@ -892,6 +1029,7 @@ static void on_check(uv_check_t* h) {
     if (next_ms == 0) next_ms = 1;       // uv_timer_start treats 0 specially
     uv_timer_start(&slot->zjs_wake, on_zjs_wake, (uint64_t) next_ms, 0);
 }
+#endif // !__APPLE__
 
 // ---------------------------------------------------------------------------
 // Script loading — mirrors txiki.c's embedded → filesystem → iOS-dev-URL
@@ -1124,6 +1262,34 @@ static ZjsSetupResult zjs_worker_setup_state(ZjsWorkerSlot* slot) {
 
     // Hook the loop wiring BEFORE eval so any setInterval / setTimeout
     // the script registers immediately gets pumped from the first tick.
+#if defined(__APPLE__)
+    // kqueue fd + three EVFILT_USER triggers (one per signal channel).
+    // EV_CLEAR makes each trigger one-shot — coalesces back-to-back
+    // signals into a single wake, matching uv_async_send semantics.
+    slot->kq = kqueue();
+    if (slot->kq < 0) {
+        fprintf(stderr, "[zapp] zjs worker '%s' kqueue() failed: %s\n",
+                slot->worker_id, strerror(errno));
+        return ZJS_SETUP_FATAL;
+    }
+    slot->kq_initialized = 1;
+    {
+        struct kevent change[3];
+        EV_SET(&change[0], FILTER_SHUTDOWN,   EVFILT_USER, EV_ADD|EV_CLEAR, 0, 0, NULL);
+        EV_SET(&change[1], FILTER_INBOX,      EVFILT_USER, EV_ADD|EV_CLEAR, 0, 0, NULL);
+        EV_SET(&change[2], FILTER_EVAL_INBOX, EVFILT_USER, EV_ADD|EV_CLEAR, 0, 0, NULL);
+        if (kevent(slot->kq, change, 3, NULL, 0, NULL) < 0) {
+            fprintf(stderr, "[zapp] zjs worker '%s' kevent EV_ADD failed: %s\n",
+                    slot->worker_id, strerror(errno));
+            close(slot->kq);
+            slot->kq = -1;
+            slot->kq_initialized = 0;
+            return ZJS_SETUP_FATAL;
+        }
+    }
+    pthread_mutex_init(&slot->inbox_mutex, NULL);
+    pthread_mutex_init(&slot->eval_inbox_mutex, NULL);
+#else
     uv_check_init(&slot->loop, &slot->check);
     slot->check.data = slot;
     uv_check_start(&slot->check, on_check);
@@ -1141,6 +1307,7 @@ static ZjsSetupResult zjs_worker_setup_state(ZjsWorkerSlot* slot) {
     pthread_mutex_init(&slot->eval_inbox_mutex, NULL);
     uv_async_init(&slot->loop, &slot->eval_inbox_async, on_eval_inbox_async);
     slot->eval_inbox_async.data = slot;
+#endif
 
     long  code_len = 0;
     char* code = zjs_load_script(slot->script_url, &code_len);
@@ -1220,16 +1387,36 @@ static ZjsSetupResult zjs_worker_setup_state(ZjsWorkerSlot* slot) {
     // Arm the wake timer for the first scheduled callback (if any). uv
     // would otherwise idle until the next setInterval period; this
     // guarantees the loop wakes for whatever the script just registered.
-    int64_t next_ms = zjs_next_timer_ms(slot->ctx);
-    if (next_ms >= 0) {
-        if (next_ms == 0) next_ms = 1;
-        uv_timer_start(&slot->zjs_wake, on_zjs_wake, (uint64_t) next_ms, 0);
+    //
+    // Apple loop polls zjs_next_timer_ms each iteration before kevent(),
+    // so there's no separate timer handle to pre-arm — first iteration
+    // picks up whatever the script just scheduled.
+#if !defined(__APPLE__)
+    {
+        int64_t next_ms = zjs_next_timer_ms(slot->ctx);
+        if (next_ms >= 0) {
+            if (next_ms == 0) next_ms = 1;
+            uv_timer_start(&slot->zjs_wake, on_zjs_wake, (uint64_t) next_ms, 0);
+        }
     }
+#endif
 
     return ZJS_SETUP_OK;
 }
 
 static void zjs_worker_teardown_state(ZjsWorkerSlot* slot, int keep_loop) {
+#if defined(__APPLE__)
+    // Closing the kqueue fd reclaims all registered EVFILT_USER
+    // triggers atomically — no per-handle close needed. `keep_loop` is
+    // a no-op here (close-and-reopen is cheap on Apple); the next
+    // incarnation's setup_state will kqueue() again.
+    (void) keep_loop;
+    if (slot->kq_initialized) {
+        close(slot->kq);
+        slot->kq = -1;
+        slot->kq_initialized = 0;
+    }
+#else
     if (slot->loop_initialized) {
         uv_check_stop(&slot->check);
         uv_timer_stop(&slot->zjs_wake);
@@ -1245,6 +1432,7 @@ static void zjs_worker_teardown_state(ZjsWorkerSlot* slot, int keep_loop) {
             slot->loop_initialized = 0;
         }
     }
+#endif
     // Free any messages stranded in the inbox before context teardown
     // (the worker may have been terminated mid-flight with pending
     // messages the JS side never got to process).
@@ -1273,12 +1461,18 @@ static void zjs_worker_teardown_state(ZjsWorkerSlot* slot, int keep_loop) {
 static void* zjs_worker_thread(void* arg) {
     ZjsWorkerSlot* slot = (ZjsWorkerSlot*) arg;
 
+#if defined(__APPLE__)
+    // Apple loop: kqueue is created inside setup_state per incarnation.
+    // Nothing to allocate up front — the kq fd is the loop, and
+    // close-and-reopen across reincarnations is cheap.
+#else
     if (uv_loop_init(&slot->loop) != 0) {
         fprintf(stderr, "[zapp] zjs worker '%s' uv_loop_init failed\n", slot->worker_id);
         slot->active = 0;
         return NULL;
     }
     slot->loop_initialized = 1;
+#endif
     slot->incarnation = 0;
 
     while (1) {
@@ -1295,8 +1489,7 @@ static void* zjs_worker_thread(void* arg) {
 
         if (setup == ZJS_SETUP_CRASHED) {
             // host_worker_crash already fired; wants_restart set per
-            // supervisor verdict. Skip uv_run — nothing live to run.
-            // (No path returns CRASHED yet — Task 1.5 adds it.)
+            // supervisor verdict. Skip the loop — nothing live to run.
             zjs_worker_teardown_state(slot, /*keep_loop=*/1);
         } else {
             // SETUP_OK
@@ -1313,7 +1506,89 @@ static void* zjs_worker_thread(void* arg) {
                         slot->worker_id, slot->incarnation, fc, cap, win);
             }
 
+#if defined(__APPLE__)
+            // Main loop — kqueue + CFRunLoop hybrid.
+            //
+            // Each iteration:
+            //   1. Drain any pending JS work (timers + microtasks) BEFORE
+            //      blocking so anything queued by the previous iteration
+            //      fires immediately.
+            //   2. Check shutdown/restart flags; bail before sleeping.
+            //   3. Compute next sleep duration from zjs_next_timer_ms, capped
+            //      at 1s so CFRunLoop sources (NSURLSession completions
+            //      driving zjs fetch/WebSocket) can't be starved when the
+            //      worker is otherwise idle.
+            //   4. kevent() — sleeps until a timer fires OR an EVFILT_USER
+            //      trigger comes in (post_message / broadcast / shutdown).
+            //   5. Dispatch triggered events to their drain helpers.
+            //   6. CFRunLoopRunInMode tick (0.0 timeout = non-blocking) to
+            //      drain any NSURLSession completions that arrived. JS
+            //      callbacks scheduled by them may have queued microtasks,
+            //      so re-drain at the bottom.
+            while (1) {
+                zjs_run_pending_timers(slot->ctx);
+                if (zjs_had_error(slot->ctx)) {
+                    ZjsValue err = zjs_get_error(slot->ctx);
+                    uint32_t len = 0;
+                    const char* msg = zjs_string_bytes(err, &len);
+                    fprintf(stderr, "[zapp] zjs worker '%s' timer threw: %.*s\n",
+                        slot->worker_id, (int) len, msg ? msg : "<non-string throw>");
+                    // Same recovery posture as on_check — surface but keep running.
+                }
+                zjs_drain_microtasks(slot->ctx);
+
+                if (atomic_load(&slot->wants_terminate)) break;
+                if (atomic_load(&slot->wants_restart))   break;
+
+                int64_t next_ms = zjs_next_timer_ms(slot->ctx);
+                struct timespec ts;
+                if (next_ms < 0 || next_ms > 1000) {
+                    ts.tv_sec  = 1;
+                    ts.tv_nsec = 0;
+                } else if (next_ms == 0) {
+                    ts.tv_sec  = 0;
+                    ts.tv_nsec = 1000000;  // 1ms minimum to avoid spin
+                } else {
+                    ts.tv_sec  = next_ms / 1000;
+                    ts.tv_nsec = (next_ms % 1000) * 1000000;
+                }
+
+                struct kevent events[8];
+                int n = kevent(slot->kq, NULL, 0, events, 8, &ts);
+                if (n < 0) {
+                    if (errno == EINTR) continue;
+                    fprintf(stderr, "[zapp] zjs worker '%s' kevent() failed: %s\n",
+                            slot->worker_id, strerror(errno));
+                    break;
+                }
+
+                // Drain triggered EVFILT_USER events.
+                for (int i = 0; i < n; i++) {
+                    if (events[i].filter != EVFILT_USER) continue;
+                    if (events[i].ident == FILTER_SHUTDOWN) {
+                        // Wake-only — handled above via wants_terminate /
+                        // wants_restart on the next iteration's check.
+                    } else if (events[i].ident == FILTER_INBOX) {
+                        drain_inbox_apple(slot);
+                    } else if (events[i].ident == FILTER_EVAL_INBOX) {
+                        drain_eval_inbox_apple(slot);
+                    }
+                }
+
+                // Tick CFRunLoop for NSURLSession completions
+                // (zjs fetch / WebSocket use NSURLSession on Apple,
+                // which dispatches its callbacks through CFRunLoop).
+                // 0.0 timeout = non-blocking; returns after handling
+                // pending sources or immediately if none.
+                CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.0, true);
+                // CFRunLoop callbacks may have scheduled microtasks
+                // (e.g. fetch().then resolutions); drain them before
+                // blocking again.
+                zjs_drain_microtasks(slot->ctx);
+            }
+#else
             uv_run(&slot->loop, UV_RUN_DEFAULT);
+#endif
 
             zjs_worker_teardown_state(slot, /*keep_loop=*/1);
         }
@@ -1323,12 +1598,17 @@ static void* zjs_worker_thread(void* arg) {
         atomic_store(&slot->wants_restart, 0);
     }
 
-    // Final cleanup — close the loop now that we're really exiting.
+    // Final cleanup — release the loop now that we're really exiting.
+#if defined(__APPLE__)
+    // No-op on Apple — kqueue fd was already closed in teardown_state
+    // for the final incarnation. Nothing to release here.
+#else
     if (slot->loop_initialized) {
         uv_run(&slot->loop, UV_RUN_NOWAIT);
         uv_loop_close(&slot->loop);
         slot->loop_initialized = 0;
     }
+#endif
     slot->active = 0;
     fprintf(stderr, "[zapp] zjs worker '%s' exited\n", slot->worker_id);
     return NULL;
@@ -1382,7 +1662,11 @@ void zjs_worker_post_message(const char* worker_id, const char* data_json) {
                 worker_id, slot ? slot->incarnation : 0);
         return;
     }
+#if defined(__APPLE__)
+    if (!slot->kq_initialized) {
+#else
     if (!slot->loop_initialized) {
+#endif
         pthread_mutex_unlock(&zjs_workers_mutex);
         fprintf(stderr, "[zapp] zjs worker '%s' not active for postMessage — dropping\n",
             worker_id);
@@ -1390,7 +1674,11 @@ void zjs_worker_post_message(const char* worker_id, const char* data_json) {
     }
     int err = inbox_push(slot, data_json);
     if (err == 0) {
+#if defined(__APPLE__)
+        apple_trigger_inbox(slot);
+#else
         uv_async_send(&slot->inbox_async);
+#endif
     }
     pthread_mutex_unlock(&zjs_workers_mutex);
     if (err != 0) {
@@ -1404,11 +1692,14 @@ void zjs_worker_terminate(const char* worker_id) {
     ZjsWorkerSlot* slot = zjs_find_slot(worker_id);
     if (slot) {
         atomic_store(&slot->wants_terminate, 1);
-        // uv_async_send is the only uv_* call that's thread-safe to
-        // invoke from outside the loop's thread — it's how we wake the
-        // worker. The async fires on_shutdown_async which uv_stops the
-        // loop; the worker thread then unwinds via the teardown label.
+        // Wake the worker so it observes wants_terminate immediately
+        // (kevent / uv_async_send are the thread-safe wake primitives).
+        // The worker thread then unwinds via the teardown label.
+#if defined(__APPLE__)
+        if (slot->kq_initialized) apple_trigger_shutdown(slot);
+#else
         if (slot->loop_initialized) uv_async_send(&slot->shutdown_async);
+#endif
     }
     pthread_mutex_unlock(&zjs_workers_mutex);
     // Thread is detached — slot.active flips to 0 when it exits.
@@ -1420,9 +1711,13 @@ void zjs_worker_terminate_owner(const char* owner_id) {
     for (int i = 0; i < ZJS_MAX_WORKERS; i++) {
         if (zjs_workers[i].active && strcmp(zjs_workers[i].owner_id, owner_id) == 0) {
             atomic_store(&zjs_workers[i].wants_terminate, 1);
+#if defined(__APPLE__)
+            if (zjs_workers[i].kq_initialized) apple_trigger_shutdown(&zjs_workers[i]);
+#else
             if (zjs_workers[i].loop_initialized) {
                 uv_async_send(&zjs_workers[i].shutdown_async);
             }
+#endif
         }
     }
     pthread_mutex_unlock(&zjs_workers_mutex);
@@ -1431,21 +1726,28 @@ void zjs_worker_terminate_owner(const char* owner_id) {
 // Broadcast a JS snippet (bridge._onEvent IIFE) to every active zjs worker.
 // Counterpart of bare_broadcast_eval_js — the dispatcher fans events emitted
 // from the webview (or anywhere else) into the worker pool by calling this.
-// zjs workers each run their own libuv
-// loop, so we push the snippet into the slot's eval_inbox and signal the
-// async; on_eval_inbox_async drains and evals on the worker thread.
+// Each zjs worker owns its own loop, so we push the snippet into the
+// slot's eval_inbox and signal it; the worker thread drains and evals.
 void zjs_broadcast_eval_js(const char* js) {
     if (!js) return;
     pthread_mutex_lock(&zjs_workers_mutex);
     for (int i = 0; i < ZJS_MAX_WORKERS; i++) {
         ZjsWorkerSlot* slot = &zjs_workers[i];
+#if defined(__APPLE__)
+        if (!slot->active || !slot->kq_initialized) continue;
+#else
         if (!slot->active || !slot->loop_initialized) continue;
+#endif
         if (eval_inbox_push(slot, js) != 0) {
             fprintf(stderr, "[zapp] zjs worker '%s' eval inbox full — dropped broadcast\n",
                 slot->worker_id);
             continue;
         }
+#if defined(__APPLE__)
+        apple_trigger_eval_inbox(slot);
+#else
         uv_async_send(&slot->eval_inbox_async);
+#endif
     }
     pthread_mutex_unlock(&zjs_workers_mutex);
 }
