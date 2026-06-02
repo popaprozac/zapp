@@ -460,13 +460,15 @@ No manual windowId checking needed.
 Call native Zen-C handlers registered via `app.service.add(name, fn)` or
 `app.service.register(name, state, &ServiceImpl{...})`.
 
-### `Services.invoke<T>(method, args?, opts?): CancellablePromise<T>`
+### `Services.invoke<TReturn, TArgs>(method, args?, opts?): CancellablePromise<TReturn>`
+
+Prefer the generated, fully-typed wrappers in `src/zapp/` (`import { greet } from "./zapp"`) — the codegen infers arg types from the handler body and return types from `// @zapp:returns` annotations (see [Zen-C services](zen-c-services.md)). `Services.invoke` is the lower-level escape hatch; both type parameters are optional and default to `unknown` / `Record<string, unknown>`.
 
 ```ts
 const result = await Services.invoke<{ pong: number }>("ping");
 
-// With args
-const user = await Services.invoke<User>("user:get", { id: 123 });
+// With args — type both the return and the args
+const user = await Services.invoke<User, { id: number }>("user:get", { id: 123 });
 
 // With options
 const data = await Services.invoke("slow-op", {}, { timeout: 60000 });

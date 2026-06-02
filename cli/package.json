@@ -21,6 +21,7 @@
     "vendor/webview2/"
   ],
   "scripts": {
+    "test": "bun test",
     "prepack": "bun build src/config.ts --outdir dist --format esm --target node && cp -r ../native ./native && cp -r ../bootstrap ./bootstrap && cp -r ../assets ./assets && mkdir -p ./vendor && cp -r ../vendor/webview2 ./vendor/webview2",
     "postpack": "rm -rf ./native ./bootstrap ./assets ./vendor"
   },

@@ -26,12 +26,16 @@ export const Services = {
    * In WebView/backend: async bridge call (returns CancellablePromise).
    * In workers: sync host object call (returns resolved Promise).
    */
-  invoke<T = unknown>(method: string, args?: Record<string, unknown>, opts?: InvokeOptions): CancellablePromise<T> {
+  invoke<TReturn = unknown, TArgs = Record<string, unknown>>(
+    method: string,
+    args?: TArgs,
+    opts?: InvokeOptions
+  ): CancellablePromise<TReturn> {
     // Worker/backend context: use host object for sync invocation
     const hostBridge = (globalThis as any).__zappBridge;
     if (hostBridge?.invokeService) {
-      const result = hostBridge.invokeService(method, args) as T;
-      const p = Promise.resolve(result) as CancellablePromise<T>;
+      const result = hostBridge.invokeService(method, args) as TReturn;
+      const p = Promise.resolve(result) as CancellablePromise<TReturn>;
       p.cancel = () => {};
       // Also expose sync result directly for worker convenience
       (p as any).value = result;
@@ -39,7 +43,7 @@ export const Services = {
     }
 
     // WebView context: async bridge call
-    return getBridge().invoke(method, args, opts) as CancellablePromise<T>;
+    return getBridge().invoke(method, args as Record<string, unknown> | undefined, opts) as CancellablePromise<TReturn>;
   },
 
   /**
