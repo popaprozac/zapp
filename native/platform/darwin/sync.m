@@ -11,6 +11,13 @@
 #import <pthread.h>
 #import "sync.h"
 
+// Forward declarations for cross-module worker / webview broadcast.
+// Hoisted to file scope to avoid shadowing the `js` parameter name
+// (the prototype) inside `dispatch_async` blocks that also use a
+// local `js` NSString.
+extern void darwin_webview_eval_all(const char* js);
+extern void worker_broadcast_eval_js(char* js);
+
 // --- State ---
 
 // requestId → { key, targetWorkerId, dispatched }
@@ -254,16 +261,13 @@ void darwin_sync_dispatch_to_webviews(const char* payload_json) {
 
     // evaluateJavaScript: on WKWebView requires the main thread. Workers call
     // this from their own thread, so bounce if we're not already on main.
-    extern void darwin_webview_eval_all(const char* js);
     if ([NSThread isMainThread]) {
         darwin_webview_eval_all([js UTF8String]);
-        extern void worker_broadcast_eval_js(char* js);
         worker_broadcast_eval_js((char*)[js UTF8String]);
     } else {
         NSString* jsCopy = [js copy];
         dispatch_async(dispatch_get_main_queue(), ^{
             darwin_webview_eval_all([jsCopy UTF8String]);
-            extern void worker_broadcast_eval_js(char* js);
             worker_broadcast_eval_js((char*)[jsCopy UTF8String]);
         });
     }

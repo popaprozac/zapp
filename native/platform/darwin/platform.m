@@ -135,9 +135,10 @@ const char* darwin_get_theme(void) {
             @"(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
             "if(b&&b._onEvent)b._onEvent('app:open-url','{\"url\":\\'%@\\'}');})();",
             escapedForJs];
+        // Workers receive this event via Layer 2 (zapp_app_dispatch
+        // → _dispatchAppEvent) — don't broadcast here or Events.on
+        // handlers fire twice.
         darwin_webview_eval_all([js UTF8String]);
-        extern void worker_broadcast_eval_js(char* js);
-        worker_broadcast_eval_js((char*)[js UTF8String]);
     }
 }
 @end

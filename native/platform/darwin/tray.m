@@ -20,6 +20,7 @@
 #import "window.h"
 
 extern void darwin_webview_eval_all(const char* js);
+extern void worker_broadcast_eval_js(char* js);
 
 #define ZAPP_MAX_TRAYS 16
 
@@ -165,7 +166,6 @@ static void zapp_tray_dispatch_event(int32_t tray_id, const char* event_name) {
             "if(b&&b._onEvent)b._onEvent('%s','{\"id\":%d}');})();",
             name, (int)tid);
         darwin_webview_eval_all(js);
-        extern void worker_broadcast_eval_js(char* js);
         worker_broadcast_eval_js(js);
     });
 }

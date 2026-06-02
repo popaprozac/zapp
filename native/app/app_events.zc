@@ -106,8 +106,8 @@ raw {
                 extern void windows_webview_eval_all(const char* js);
                 windows_webview_eval_all(js_buf);
                 #endif
-                extern void worker_broadcast_eval_js(char* js);
-                worker_broadcast_eval_js(js_buf);
+                // NOTE: do NOT broadcast to workers here — Layer 2 above
+                // already delivered this event via _dispatchAppEvent.
             }
         }
 
