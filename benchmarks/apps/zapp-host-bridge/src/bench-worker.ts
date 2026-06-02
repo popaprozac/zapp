@@ -98,25 +98,30 @@ setTimeout(() => {
     }));
 
     // invokeService.medium — 50-item array of objects. Highlights
-    // argument-walk cost. This is where bare's zero-JSON tree walk
-    // should beat its old stringify-then-parse path.
+    // argument-walk cost. The engines that ship a zero-JSON walker
+    // (zjs, bare-jsc, txiki) pull ahead of the legacy stringify-then-
+    // parse path here.
     emit(run("invokeService.medium", 1_000, () => {
       bridge.invokeService("echo", buildMedium(1));
     }));
 
-    // Events.emit.small — broadcast with one-property payload.
-    // Cost dominated by native dispatch_event_to_all walking all
-    // registered webviews + workers.
-    emit(run("emit.small", 10_000, () => {
-      Events.emit("__bench:tick", { i: 1 });
-    }));
-
-    // Events.emit.medium — broadcast with realistic payload. All
-    // three engines JSON.stringify on the way out, so this column
-    // should grow proportionally for everyone.
-    emit(run("emit.medium", 1_000, () => {
-      Events.emit("__bench:tick", buildMedium(2));
-    }));
+    // emit.* benches disabled — running 10K Events.emit per engine
+    // floods every OTHER worker's broadcast inbox with the same
+    // 10K IIFEs (dispatch_event_to_all has no per-worker filtering
+    // today), so when 3 workers each run emit.small the system sees
+    // ~30K events / sec, saturating the consumer-side inbox before
+    // the producing worker can finish its bench. We need a different
+    // shape to measure broadcast cost honestly — either run one
+    // engine at a time, or scope dispatch to webview-only when the
+    // payload is synthetic. Track separately.
+    //
+    // emit(run("emit.small", 10_000, () => {
+    //   Events.emit("__bench:tick", { i: 1 });
+    // }));
+    //
+    // emit(run("emit.medium", 1_000, () => {
+    //   Events.emit("__bench:tick", buildMedium(2));
+    // }));
 
     console.log(`[bench:${engineLabel}] === done ===`);
   } catch (e: any) {

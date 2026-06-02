@@ -70,7 +70,7 @@ with open('$CSV') as f:
 # Stable column order — small first, then medium; engine order matches
 # zapp.config.ts.
 labels = ['invokeService.small', 'invokeService.medium', 'emit.small', 'emit.medium']
-engines = ['jsc', 'txiki', 'bare-jsc', 'bare-quickjs', 'bare-v8']
+engines = ['zjs', 'jsc', 'txiki', 'bare-jsc', 'bare-quickjs', 'bare-v8']
 engines = [e for e in engines if any((e, l) in data for l in labels)]
 
 print()
