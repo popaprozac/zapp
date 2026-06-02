@@ -4,7 +4,7 @@
 import path from "node:path";
 import { mkdir, readdir, unlink } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { resolveServiceTypes } from "./service-types";
+import { resolveServiceTypes, renderTsBinding } from "./service-types";
 
 interface ServiceBinding {
   name: string;
@@ -128,20 +128,8 @@ export async function generateBindings(root: string, typescript: boolean = true)
       let content: string;
       if (typescript) {
         const src = await readSource(binding.source);
-        const { argsDecl, resultDecl, argsName, resultName } = resolveServiceTypes(
-          fileName,
-          src,
-          binding.handlerName
-        );
-        content = `import { Services } from "@zappdev/runtime";
-
-${argsDecl}
-${resultDecl}
-
-export async function ${fnName}(args?: ${argsName}): Promise<${resultName}> {
-    return Services.invoke<${resultName}, ${argsName}>("${binding.name}", args ?? {});
-}
-`;
+        const decls = resolveServiceTypes(fileName, src, binding.handlerName);
+        content = renderTsBinding(binding.name, fnName, decls);
       } else {
         content = `import { Services } from "@zappdev/runtime";
 

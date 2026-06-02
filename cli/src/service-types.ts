@@ -174,3 +174,22 @@ export function resolveServiceTypes(
 
   return { argsDecl, resultDecl, argsName, resultName };
 }
+
+// Render the full TypeScript binding file content for one service.
+// `serviceName` is the raw service name (the invoke() string), `fnName` is
+// the JS identifier (camelCased), `decls` are the resolved type declarations.
+export function renderTsBinding(
+  serviceName: string,
+  fnName: string,
+  decls: ServiceTypeDecls
+): string {
+  return `import { Services } from "@zappdev/runtime";
+
+${decls.argsDecl}
+${decls.resultDecl}
+
+export async function ${fnName}(args?: ${decls.argsName}): Promise<${decls.resultName}> {
+    return Services.invoke<${decls.resultName}, ${decls.argsName}>("${serviceName}", args ?? ({} as ${decls.argsName}));
+}
+`;
+}

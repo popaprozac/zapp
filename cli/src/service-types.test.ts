@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { inferArgs, parseAnnotation, extractHandler, resolveServiceTypes } from "./service-types";
+import { inferArgs, parseAnnotation, extractHandler, resolveServiceTypes, renderTsBinding } from "./service-types";
 
 test("inferArgs maps each primitive accessor to its TS type", () => {
   const body = `{
@@ -142,4 +142,21 @@ test("resolveServiceTypes: handler not found -> loose aliases", () => {
   const t = resolveServiceTypes("Gone", SRC, "gone");
   expect(t.argsDecl).toBe("export type GoneArgs = Record<string, unknown>;");
   expect(t.resultDecl).toBe("export type GoneResult = unknown;");
+});
+
+test("renderTsBinding emits a typed wrapper with the safe empty-arg cast", () => {
+  const decls = {
+    argsDecl: "export interface LookupArgs { id: number }",
+    resultDecl: "export interface LookupResult { ok: boolean }",
+    argsName: "LookupArgs",
+    resultName: "LookupResult",
+  };
+  const out = renderTsBinding("lookup", "lookup", decls);
+  // Both type args passed to invoke (single-arg would default TArgs to Record and reject the interface).
+  expect(out).toContain('Services.invoke<LookupResult, LookupArgs>("lookup", args ?? ({} as LookupArgs))');
+  // The decls are embedded.
+  expect(out).toContain("export interface LookupArgs { id: number }");
+  expect(out).toContain("export interface LookupResult { ok: boolean }");
+  // Wrapper signature uses the named types.
+  expect(out).toContain("export async function lookup(args?: LookupArgs): Promise<LookupResult>");
 });
