@@ -4,6 +4,7 @@
 import path from "node:path";
 import { mkdir, readdir, unlink } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { resolveServiceTypes } from "./service-types";
 
 interface ServiceBinding {
   name: string;
@@ -109,25 +110,56 @@ export async function generateBindings(root: string, typescript: boolean = true)
   if (bindings.length > 0) {
     await mkdir(outDir, { recursive: true });
 
+    // Cache .zc source by path — several services can share one file.
+    const sourceCache = new Map<string, string>();
+    async function readSource(file: string): Promise<string> {
+      let s = sourceCache.get(file);
+      if (s === undefined) {
+        s = await Bun.file(file).text();
+        sourceCache.set(file, s);
+      }
+      return s;
+    }
+
     for (const binding of bindings) {
       const fnName = toIdent(binding.name);
       const fileName = toFileName(binding.name);
-      const content = typescript
-        ? `import { Services } from "@zappdev/runtime";
 
-export async function ${fnName}(args?: Record<string, unknown>): Promise<unknown> {
-    return Services.invoke("${binding.name}", args ?? {});
+      let content: string;
+      if (typescript) {
+        const src = await readSource(binding.source);
+        const { argsDecl, resultDecl, argsName, resultName } = resolveServiceTypes(
+          fileName,
+          src,
+          binding.handlerName
+        );
+        content = `import { Services } from "@zappdev/runtime";
+
+${argsDecl}
+${resultDecl}
+
+export async function ${fnName}(args?: ${argsName}): Promise<${resultName}> {
+    return Services.invoke<${resultName}>("${binding.name}", args ?? {});
 }
-`
-        : `import { Services } from "@zappdev/runtime";
+`;
+      } else {
+        content = `import { Services } from "@zappdev/runtime";
 
 export async function ${fnName}(args) {
     return Services.invoke("${binding.name}", args ?? {});
 }
 `;
+      }
 
       await Bun.write(path.join(outDir, `${fileName}${ext}`), content);
-      exports.push(`export { ${fnName} } from "./${fileName}";`);
+      if (typescript) {
+        const argsName = `${fileName}Args`;
+        const resultName = `${fileName}Result`;
+        exports.push(`export { ${fnName} } from "./${fileName}";`);
+        exports.push(`export type { ${argsName}, ${resultName} } from "./${fileName}";`);
+      } else {
+        exports.push(`export { ${fnName} } from "./${fileName}";`);
+      }
       keep.add(`${fileName}${ext}`);
     }
 
