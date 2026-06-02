@@ -201,7 +201,7 @@ async function runDev(root: string) {
 
   // 4. Generate build config + bootstrap (dev mode)
   const buildConfigFile = await generateBuildConfig({ root, config, mode: "dev", devUrl });
-  const platformFile = await generatePlatformConfig(root, target, iosBuildFile ?? undefined, engineOverlayFile ?? undefined);
+  const platformFile = await generatePlatformConfig(root, target, iosBuildFile ?? undefined, engineOverlayFile ?? undefined, config);
   const headlessFile = await generateHeadlessWorkers({ root, headless: config.headless });
   const zappDir = path.join(root, ".zapp");
   process.stdout.write("[zapp] generating bootstrap...\n");
@@ -327,6 +327,7 @@ async function runDev(root: string) {
       output: nativeOut,
       nativeDir,
       optimize: false,
+      config,
       target,
     });
   } catch (err) {
@@ -502,7 +503,7 @@ async function runBuild(root: string) {
 
   // 6. Generate build config + bootstrap (prod mode, embedded assets)
   const buildConfigFile = await generateBuildConfig({ root, config, mode: "prod", embedAssets: true });
-  const platformFile = await generatePlatformConfig(root, target, undefined, engineOverlayFile ?? undefined);
+  const platformFile = await generatePlatformConfig(root, target, undefined, engineOverlayFile ?? undefined, config);
   const headlessFile = await generateHeadlessWorkers({ root, headless: config.headless });
   const bootstrapFile = await generateBootstrap(zappDir);
 
@@ -544,6 +545,7 @@ async function runBuild(root: string) {
     output: nativeOut,
     nativeDir,
     optimize: true,
+    config,
     target,
   });
 

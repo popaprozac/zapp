@@ -411,6 +411,76 @@ export const WORKER_MODULE_CAPABILITIES: Record<WorkerModuleId, WorkerModuleSpec
   encoding:  { packages: ["bare-encoding"], globals: "/encoding" },
 };
 
+/**
+ * Webview-engine preferences. Each field maps to a single underlying
+ * setting on the platform's webview (WKWebView on Apple, WebView2 on
+ * Windows, WebKitGTK on Linux). When a field is unset the platform's
+ * default is preserved — so users only need to declare the toggles
+ * they care about.
+ *
+ * Windows / Linux mapping lands once those platforms reach feature parity.
+ * Fields that don't map cleanly (or differ in semantics) on non-Apple
+ * platforms will be documented per-field.
+ */
+export interface WebviewPreferences {
+  /**
+   * Allow HTML5 `<video>` / `<audio>` to autoplay without a user gesture.
+   *
+   * - Apple: maps to `WKWebViewConfiguration.mediaTypesRequiringUserActionForPlayback`
+   *   — set to `WKAudiovisualMediaTypeNone` when `true`, left at the
+   *   platform default (`all`, gesture required) otherwise.
+   *
+   * Useful for: media players, dashboards, ambient displays. Avoid in
+   * apps that embed third-party HTML — Safari's gesture requirement is
+   * an anti-UX-abuse default for a reason.
+   *
+   * @default false (platform default — gesture required)
+   */
+  autoplayWithoutUserGesture?: boolean;
+
+  /**
+   * Whether the webview shows two-finger swipe-back / swipe-forward to
+   * navigate the in-webview history (the same gesture Safari uses).
+   *
+   * - Apple: maps to `WKWebView.allowsBackForwardNavigationGestures`.
+   *   Defaults to `false` on WKWebView (unlike Safari).
+   *
+   * Most Zapp apps want this off — they're single-page app shells where
+   * "back" doesn't have a meaningful in-app interpretation. Browser-
+   * shaped tools (docs viewers, in-app help) may want it on.
+   *
+   * @default false (platform default for WKWebView)
+   */
+  backForwardNavigationGestures?: boolean;
+
+  /**
+   * Whether the user can select text inside the webview. Disabling this
+   * removes the system text-selection UI (copy, look up, share menu)
+   * for kiosk / display-only screens.
+   *
+   * - Apple: maps to `WKPreferences.isTextInteractionEnabled`
+   *   (macOS 11+ / iOS 14.5+). Default is `true`. On older OS versions
+   *   the setter is a no-op (KVC-set via the legacy private key).
+   *
+   * @default true (platform default — selection enabled)
+   */
+  textInteractionEnabled?: boolean;
+
+  /**
+   * Minimum font size the renderer will lay out, in CSS pixels. Smaller
+   * font-size declarations get clamped to this value.
+   *
+   * - Apple: maps to `WKPreferences.minimumFontSize`. Default `0` (no
+   *   floor). Set to e.g. `14` for an accessibility floor or a kiosk
+   *   that needs guaranteed readability at arm's length.
+   *
+   * Set to `0` or omit to disable (no floor).
+   *
+   * @default 0 (no floor)
+   */
+  minimumFontSize?: number;
+}
+
 export interface ZappConfig {
   name: string;
   identifier?: string;
@@ -545,6 +615,117 @@ export interface ZappConfig {
    * @default "system"
    */
   webEngine?: "system" | "chromium";
+
+  /**
+   * Webview-engine preferences applied at WKWebView / WebView2 / WebKitGTK
+   * construction time. Every field is optional — unset fields keep the
+   * platform default. macOS + iOS share the same WKWebView code path
+   * and respect all fields below; Windows / Linux land later.
+   *
+   * @example
+   * ```ts
+   * webviewPreferences: {
+   *   autoplayWithoutUserGesture: true,    // media-player / dashboard apps
+   *   backForwardNavigationGestures: false, // app-shell, not a browser
+   *   textInteractionEnabled: false,        // kiosk / display-only screens
+   *   minimumFontSize: 14,                  // a11y floor
+   * }
+   * ```
+   */
+  webviewPreferences?: WebviewPreferences;
+
+  /**
+   * Extra native source files to compile into the app binary. Use this
+   * to ship a custom ObjC service (`.m`), Win32 helper (`.c`), or any
+   * other native module that the framework's own platform plumbing
+   * doesn't already include.
+   *
+   * Each path is resolved relative to the project root and forwarded
+   * to the platform's cflags line in `.zapp/zapp_platform.zc`. You
+   * still need to declare the service in Zen-C (typically
+   * `zapp/app.zc` calling `app.service.add("name", c_handler)` plus
+   * an `extern fn c_handler(...)` declaration).
+   *
+   * Either a single list (applied on every platform that compiles it)
+   * or a per-platform map. Per-platform is the usual case — ObjC
+   * sources only make sense on Apple, COM/Win32 sources only on
+   * Windows.
+   *
+   * @example
+   * ```ts
+   * // ObjC service on macOS only
+   * nativeSources: { macos: ["src/native/MyService.m"] }
+   *
+   * // Cross-platform C helper
+   * nativeSources: ["src/native/helper.c"]
+   * ```
+   */
+  nativeSources?: PlatformValue<string[]>;
+
+  /**
+   * Additional system frameworks to link into the app binary, beyond
+   * the framework-internal set Zapp already pulls (Cocoa / WebKit /
+   * JavaScriptCore / UserNotifications / Carbon / Foundation / …).
+   *
+   * Names are passed straight to `clang -framework`. No-op on Windows
+   * (frameworks are Apple-specific); use `extraLinkFlags.windows` for
+   * `-l<name>` on that platform.
+   *
+   * @example
+   * ```ts
+   * // App uses Metal on Apple, nothing extra on Windows.
+   * extraFrameworks: { macos: ["Metal"], ios: ["Metal"] }
+   * ```
+   */
+  extraFrameworks?: PlatformValue<string[]>;
+
+  /**
+   * Extra raw link flags appended to the platform's `//> link:` line.
+   * Use for `-l<name>` libraries the framework doesn't pull, custom
+   * search paths (`-L/path`), or platform-specific link-time options.
+   *
+   * Per-platform is the usual case — `-l` syntax is the same shape on
+   * Apple and Linux but the library names differ.
+   *
+   * @example
+   * ```ts
+   * extraLinkFlags: {
+   *   macos:   ["-lsqlite3"],
+   *   windows: ["-lws2_32"],
+   * }
+   * ```
+   */
+  extraLinkFlags?: PlatformValue<string[]>;
+}
+
+/**
+ * Generic helper for fields that can either be applied on every
+ * platform (provide just the value) or scoped per-platform (provide
+ * the map). The generator normalises both shapes to a per-platform
+ * lookup before emitting build directives.
+ */
+export type PlatformValue<T> =
+  | T
+  | {
+      macos?:   T;
+      ios?:     T;
+      windows?: T;
+    };
+
+/**
+ * Normalise a `PlatformValue<T[]>` into a flat array of entries for a
+ * given target. Returns `[]` if nothing is configured for that target.
+ * Concatenating array forms across platforms isn't supported — users
+ * either declare cross-platform (raw `T[]`) or per-platform (map);
+ * mixing isn't a use case we've seen.
+ */
+export function resolvePlatformValue<T>(
+  v: PlatformValue<T[]> | undefined,
+  target: "macos" | "ios" | "windows",
+): T[] {
+  if (!v) return [];
+  if (Array.isArray(v)) return v;
+  return v[target] ?? [];
 }
 
 export interface ResolvedConfig extends ZappConfig {

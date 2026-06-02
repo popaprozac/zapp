@@ -791,6 +791,33 @@ void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first
     [ucc addScriptMessageHandler:handler name:@"zapp"];
     [config setUserContentController:ucc];
 
+    // --- User-declared webview preferences (zapp.config.ts) ---
+    // Tri-state encoding for booleans: getter returns -1 when the
+    // user didn't set the field — we leave the WKWebView default
+    // untouched in that case. iOS path mirrors darwin/webview.m.
+    extern int zapp_build_webview_autoplay_without_user_gesture(void);
+    extern int zapp_build_webview_text_interaction_enabled(void);
+    extern int zapp_build_webview_minimum_font_size(void);
+    {
+        int autoplay = zapp_build_webview_autoplay_without_user_gesture();
+        if (autoplay == 1) {
+            [config setMediaTypesRequiringUserActionForPlayback:WKAudiovisualMediaTypeNone];
+        } else if (autoplay == 0) {
+            [config setMediaTypesRequiringUserActionForPlayback:WKAudiovisualMediaTypeAll];
+        }
+        int textIA = zapp_build_webview_text_interaction_enabled();
+        if (textIA != -1) {
+            WKPreferences* prefs = [config preferences];
+            if (@available(iOS 14.5, *)) {
+                [prefs setValue:(textIA ? @YES : @NO) forKey:@"textInteractionEnabled"];
+            }
+        }
+        int minFont = zapp_build_webview_minimum_font_size();
+        if (minFont >= 0) {
+            [[config preferences] setMinimumFontSize:(CGFloat)minFont];
+        }
+    }
+
     // Use full screen bounds for the initial frame. window.bounds may
     // be CGRectZero pre-UIApplicationMain (windows created from Zen-C
     // app.run() startup before UIApplicationMain takes over);
@@ -802,6 +829,15 @@ void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first
         webview.inspectable = inspectable ? YES : NO;
     }
     webview.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+
+    // Back/forward swipe gestures — webview-level, not config-level.
+    extern int zapp_build_webview_back_forward_gestures(void);
+    {
+        int backFwd = zapp_build_webview_back_forward_gestures();
+        if (backFwd != -1) {
+            webview.allowsBackForwardNavigationGestures = (backFwd ? YES : NO);
+        }
+    }
 
     if (!zapp_ios_shared_nav_delegate) {
         zapp_ios_shared_nav_delegate = [[ZappIOSNavDelegate alloc] init];

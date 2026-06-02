@@ -29,6 +29,13 @@ void zjs_worker_terminate(const char* worker_id);
 // Terminate all workers owned by a window.
 void zjs_worker_terminate_owner(const char* owner_id);
 
+// Broadcast a JS snippet to every active zjs worker. Used by the
+// dispatcher (bridge/dispatch.zc) to fan webview/native-emitted events
+// into worker contexts so their `bridge._onEvent` listeners fire — same
+// route txiki_broadcast_eval_js / bare_broadcast_eval_js take for their
+// engines.
+void zjs_broadcast_eval_js(const char* js);
+
 // Dispatch a message from a worker back to the WebView (provided by
 // the router; defined in worker.zc).
 extern void worker_dispatch_to_webview(char* worker_id, char* data_json);

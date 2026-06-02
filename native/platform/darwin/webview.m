@@ -922,12 +922,48 @@ void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first
         [[config preferences] setValue:@YES forKey:@"developerExtrasEnabled"];
     }
 
+    // --- User-declared webview preferences (zapp.config.ts) ---
+    // Each getter returns -1 when the field is unset; we only touch
+    // the underlying WKWebView property in that case, preserving the
+    // platform default. Booleans use tri-state (-1/0/1), the font
+    // size getter returns -1 / requested-pixels.
+    extern int zapp_build_webview_autoplay_without_user_gesture(void);
+    extern int zapp_build_webview_text_interaction_enabled(void);
+    extern int zapp_build_webview_minimum_font_size(void);
+    {
+        int autoplay = zapp_build_webview_autoplay_without_user_gesture();
+        if (autoplay == 1) {
+            [config setMediaTypesRequiringUserActionForPlayback:WKAudiovisualMediaTypeNone];
+        } else if (autoplay == 0) {
+            [config setMediaTypesRequiringUserActionForPlayback:WKAudiovisualMediaTypeAll];
+        }
+        int textIA = zapp_build_webview_text_interaction_enabled();
+        if (textIA != -1) {
+            WKPreferences* prefs = [config preferences];
+            if (@available(macOS 11.3, *)) {
+                [prefs setValue:(textIA ? @YES : @NO) forKey:@"textInteractionEnabled"];
+            }
+        }
+        int minFont = zapp_build_webview_minimum_font_size();
+        if (minFont >= 0) {
+            [[config preferences] setMinimumFontSize:(CGFloat)minFont];
+        }
+    }
+
     // --- Create WebView ---
     ZappWebView* webview = [[ZappWebView alloc] initWithFrame:bounds configuration:config];
     webview.acceptFirstMouse = accept_first_mouse ? YES : NO;
     [webview setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
     if ([webview respondsToSelector:@selector(setInspectable:)]) {
         [webview setInspectable:inspectable ? YES : NO];
+    }
+    // Back/forward swipe gestures — set on the WebView, not the config.
+    extern int zapp_build_webview_back_forward_gestures(void);
+    {
+        int backFwd = zapp_build_webview_back_forward_gestures();
+        if (backFwd != -1) {
+            [webview setAllowsBackForwardNavigationGestures:(backFwd ? YES : NO)];
+        }
     }
     // Background handling: when the window opts into vibrancy, we
     // need the WKWebView to paint nothing behind content so the

@@ -1,18 +1,8 @@
-// Build directives — host-bridge benchmark app. Enables bare-jsc by
-// default for macOS benchmarks. To compare additional engines, add the
-// corresponding define here AND a worker entry in zapp.config.ts.
-
-//> macos: define: apple
-//> macos: define: ZAPP_WORKER_ENGINE_BARE_JSC
-
-//> macos: framework: Cocoa
-//> macos: framework: WebKit
-//> macos: framework: CoreFoundation
-//> macos: framework: JavaScriptCore
-//> macos: framework: Security
-//> macos: framework: UserNotifications
-//> macos: link: -lcompression
-//> macos: cflags: -fobjc-arc
+// App entry point. Platform glue + worker-engine wiring is generated
+// by the Zapp CLI into `.zapp/zapp_platform.zc` and
+// `.zapp/zapp_engine_overlay.zc`, derived from `zapp.config.ts`.
+// Don't add `//>` build directives here — use `extraFrameworks` /
+// `extraLinkFlags` / `nativeSources` in `zapp.config.ts` instead.
 
 import "app.zc";
 

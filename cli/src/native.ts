@@ -917,6 +917,14 @@ interface CompileOptions {
   nativeDir: string;         // Framework source dir
   optimize: boolean;         // Size optimizations
   target?: BuildTarget;      // Build target (default: host platform)
+  /**
+   * Resolved zapp.config.ts. Threaded into the platform-overlay
+   * generator so user-declared `nativeSources` / `extraFrameworks`
+   * / `extraLinkFlags` land in `.zapp/zapp_platform.zc` and the
+   * deferred regen path (re-running platform-overlay generation from
+   * inside compileNative) sees them too.
+   */
+  config?: import("./config").ResolvedConfig;
 }
 
 export async function compileNative(opts: CompileOptions): Promise<void> {
@@ -931,7 +939,7 @@ export async function compileNative(opts: CompileOptions): Promise<void> {
   // don't apply to the iOS target, producing wrong -L/-l flags.
   const { generatePlatformConfig } = await import("./build-config");
   const platformFile = await generatePlatformConfig(
-    root, target, buildFile, engineOverlayFile,
+    root, target, buildFile, engineOverlayFile, opts.config,
   );
 
   const verbose = process.argv.includes("--verbose") || process.argv.includes("-v");
