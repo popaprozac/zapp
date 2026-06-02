@@ -197,11 +197,69 @@ uploadButton.addEventListener("click", () => {
 });
 ```
 
-Note: `fetch` and `WebSocket` in workers require a `workerModules:
-["fetch"]` capability declaration in `zapp.config.ts` (for bare-* engines)
-or native engine support (zjs ships fetch as its runtime layer matures).
-Move network calls to a webview (which has full DOM APIs) if the target
-engine doesn't provide them.
+Note: `fetch` and `WebSocket` in workers require a capability declaration
+in `zapp.config.ts` for bare-* engines:
+
+```ts
+workerModules: ["fetch", "websocket"],
+```
+
+The CLI installs `bare-fetch` + `bare-ws`, links them in, and the Vite
+plugin injects the matching globals into the worker bundle. On `zjs`,
+the runtime layer provides intrinsics as they mature; `workerModules`
+declarations are no-ops for zjs workers and the globals are undefined
+until the engine ships them. Move network calls to a webview (which has
+full DOM APIs) if the target engine doesn't provide them yet.
+
+See [api-reference.md → Worker modules](api-reference.md) for the full
+capability matrix.
+
+## Mixing engines per worker
+
+When part of your app needs JIT (numeric / hot loops / compute-bound
+service) but the rest is happy on `zjs`, declare engines per worker.
+The CLI compiles every engine the config references; the runtime
+dispatcher picks per worker at create time.
+
+```ts
+// zapp.config.ts
+const config: ZappConfig = {
+  name: "split-engine",
+  identifier: "com.example.split",
+  version: "0.1.0",
+  headless: {
+    // Sync-engine worker — small payloads, latency-sensitive.
+    // zjs's direct value-marshalling host bridge wins here.
+    sync: {
+      script: "src/workers/sync.ts",
+      engine: "zjs",
+    },
+    // Codec worker — CPU-heavy. JIT pays for itself.
+    codec: {
+      script: "src/workers/codec.ts",
+      engine: "bare-jsc",        // macOS JIT via system JSC
+    },
+  },
+  workerModules: ["fetch"],       // bare-jsc gets fetch via bare-fetch;
+                                  // zjs gets it once its runtime layer ships
+};
+
+export default config;
+```
+
+The binary links both engines. Each worker boots in its own engine
+context with the same `__zappBridge` shape, so user code reads
+identically across engines — only the underlying perf profile differs.
+
+Per-worker engine choice also covers the iOS case: on Apple,
+`bare-jsc` runs in interpreter mode (Apple denies JIT entitlements to
+App Store apps), so an iOS build of the same config has `codec`
+silently drop to JSC-interpreter speed. If `codec`'s perf matters on
+iOS too, switch it to `zjs` + `bytecode: true` — parse-free start
+recovers most of the JIT-lost ground without changing the JS.
+
+See [docs/engines.md](engines.md) for the full taxonomy and platform
+recommendations.
 
 ## Service that calls ObjC (Keychain, AVFoundation, NSWorkspace)
 

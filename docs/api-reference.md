@@ -579,6 +579,101 @@ import { Workers } from "@zappdev/runtime";
 Workers.terminate("h-sync");
 ```
 
+### Headless workers — `HeadlessWorkerConfig`
+
+Headless workers are background JS threads the framework spawns at app
+startup. They live in `zapp.config.ts`'s `headless` map and run for the
+app's lifetime (subject to the optional supervisor restart policy).
+
+```ts
+// zapp.config.ts
+import type { ZappConfig } from "@zappdev/cli/config";
+
+const config: ZappConfig = {
+  name: "my-app",
+  identifier: "com.example.app",
+  version: "0.1.0",
+  headless: {
+    ticker: {
+      script: "src/workers/ticker.ts",
+      engine: "zjs",        // optional; see "Engine selection" below
+      bytecode: true,       // optional; only on bytecode-capable engines
+    },
+    "sync-engine": {
+      script: "src/workers/sync.ts",
+      engine: "bare-jsc",
+      restart: { maxRetries: 2, withinMs: 30_000 },
+    },
+  },
+};
+
+export default config;
+```
+
+The keys (`ticker`, `sync-engine`) become the worker IDs at runtime, each
+prefixed with `h-` — so `Workers.terminate("h-ticker")` stops the ticker.
+
+### Engine selection — `engine: "..."`
+
+Each headless worker picks an engine. The discriminated-union type
+constrains `bytecode` to engines that support AOT:
+
+| Engine | Available `bytecode: true` | Notes |
+|---|---|---|
+| `"zjs"` | ✓ ships today | First-party, cross-platform, ~1 MB, recommended default. Direct value-marshalling host bridge. |
+| `"bare-jsc"` | ✗ | System JSC on macOS — JIT with auto-merged entitlement. Smallest binary on Apple (~300–500 KB lighter than zjs). |
+| `"bare-v8"` | ✗ | JIT for Windows / Linux. ~30 MB bundle increase. |
+| `"bare-quickjs"` | ✗ | QuickJS interpreter (~1.5 MB). Cross-platform, no JIT. |
+| `"bare-mqjs"` | ✗ | QuickJS-NG fork. Same shape as quickjs with different perf/feature profile. |
+| `"bare-hermes"` | ✓ in type, runtime pending | Hermes AOT bytecode pipeline lands with the bare-hermes iOS work. |
+
+Setting `bytecode: true` on a non-bytecode engine is a TypeScript compile
+error. Setting an engine that isn't compiled in falls back through the
+documented chain (`zjs > bare-jsc > bare-v8 > bare-hermes > bare-quickjs
+> bare-mqjs`); the framework logs the downgrade.
+
+For the full taxonomy + when-to-pick guidance, see
+[`docs/engines.md`](engines.md).
+
+### Worker modules — `workerModules`
+
+Bare-* engines don't ship web APIs intrinsically — `fetch`, `WebSocket`,
+`crypto`, etc. come from à-la-carte `bare-*` packages. Declare the
+capabilities your workers need in `zapp.config.ts` and the CLI installs
+the matching packages, links the native bindings, and the Vite plugin
+auto-imports the worker-globals shim.
+
+```ts
+const config: ZappConfig = {
+  // ...
+  workerModules: ["fetch", "websocket", "crypto"],
+};
+```
+
+Capability → package → global:
+
+| Capability | Package(s) | Worker global |
+|---|---|---|
+| `"fetch"` | `bare-fetch` | `fetch` |
+| `"websocket"` | `bare-ws` | `WebSocket` |
+| `"fs"` | `bare-fs` | (none — import from `@zappdev/runtime/bare/fs`) |
+| `"streams"` | `bare-stream` | `ReadableStream`, `WritableStream`, `TransformStream` |
+| `"crypto"` | `bare-crypto` | `crypto` |
+| `"url"` | `bare-url` | `URL`, `URLSearchParams` |
+| `"encoding"` | `bare-encoding` | `TextEncoder`, `TextDecoder` |
+
+`workerModules` only affects bare-* engines. On `zjs`, the runtime layer
+provides intrinsics as they mature; bare-* shims are skipped (the
+declared module is a no-op for zjs workers). If you mix engines, the
+intersection is what each worker actually gets — declare the union of
+capabilities, and per-engine reality decides what runs.
+
+`fs` is the only capability that doesn't expose a global — `bare-fs` is
+imported explicitly via `import { readFile } from "@zappdev/runtime/bare/fs"`
+because the Node-style `fs` module isn't a browser global. Allowlist
+enforcement is in `runtime/bare/fs.ts` (paths must match
+`zapp.config.ts`'s `fsAllowList`).
+
 ---
 
 ## `Dialog`

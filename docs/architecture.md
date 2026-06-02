@@ -52,8 +52,9 @@ native/
 │   ├── worker.zc        # Engine abstraction (worker_create, terminate, etc.)
 │   ├── registry.zc      # Slot table tracking all active workers
 │   └── engines/
-│       ├── zjs.c/.h     # First-party engine (cross-platform, default)
-│       └── bare-*.c/.h  # bare-jsc / bare-v8 / bare-quickjs / bare-mqjs / bare-hermes
+│       ├── zjs.c/.h     # First-party engine — popaprozac/zjs, kqueue+CFRunLoop on Apple
+│       ├── bare.h       # Shared bare-* host bridge surface
+│       └── bare.c       # Implementation; built once per bare-* engine variant
 ├── dialog/              # Typed Zen-C wrappers for file/message dialogs
 ├── notification/
 ├── menu/
@@ -63,6 +64,31 @@ native/
     ├── darwin/*.m       # macOS impls (NSWindow, WKWebView, etc.)
     └── windows/*.c      # Windows impls (partial — see WINDOWS_PORTING.md)
 ```
+
+### Worker engine layer
+
+Six engines ship — five `bare-*` variants plus the first-party `zjs`.
+Each engine implements the same host-bridge surface so user JS doesn't
+care which engine runs it; the runtime dispatcher in `worker.zc` routes
+per worker at create time.
+
+| Engine | Underlying runtime | Where built | Default on |
+|---|---|---|---|
+| `zjs` | popaprozac/zjs (vendor/zjs) | Cross-platform; Apple uses kqueue+CFRunLoop, Linux/Windows libuv | All platforms (recommended) |
+| `bare-jsc` | JavaScriptCore (system framework) | macOS / iOS (no engine bundle cost) | macOS opt-in |
+| `bare-v8` | V8 via bare's libv8 | Windows / Linux | JIT opt-in on Win/Linux |
+| `bare-quickjs` | QuickJS via bare's libqjs | Cross-platform | Niche |
+| `bare-mqjs` | QuickJS-NG fork via bare's libmqjs | Cross-platform | Niche |
+| `bare-hermes` | Hermes via popaprozac/libhermes | Cross-platform (host hermesc required) | iOS bytecode opt-in (pending) |
+
+The five `bare-*` engines share `bare.c` / `bare.h` — they differ only
+in which Bare static lib + host-bridge implementation they link against
+(NAPI for the bare engines, since bare uses its own NAPI-shaped ABI).
+The `zjs` engine is structurally separate because its host bridge
+marshals JS values directly (no JSON serialization on `Services.invokeSync`).
+
+For the user-facing taxonomy + when-to-pick guidance, see
+[`docs/engines.md`](engines.md).
 
 ### Two-tier API inside native
 
@@ -172,6 +198,15 @@ Host objects (`__zappBridge.invokeService`, `.createWindow`, `.notif`,
 bootstrap mutates `__zappBridge` in place to add pure-JS behaviors (event
 registry, channels) and **exposes the same object** under
 `Symbol.for('zapp.bridge')` — no wrapper, no overhead.
+
+**Per-engine host-object marshalling differs.** `zjs` exposes host
+methods that take JS values directly (e.g. `Services.invokeSync(name,
+{...})` passes the object reference through unchanged). `bare-*` engines
+marshal via NAPI + JSON — the JS side runs `JSON.stringify` on each
+argument, the native side runs the reverse on the way back. The
+bootstrap doesn't know or care which path is in use; it's the same
+`__zappBridge` shape. The perf consequence shows up in the bench
+numbers (see `benchmarks/apps/zapp-host-bridge/RESULTS.md`).
 
 ## Layer 3: runtime (`@zappdev/runtime`)
 
