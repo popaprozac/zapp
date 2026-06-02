@@ -934,27 +934,25 @@ export async function generatePlatformConfig(
       }
     }
 
-    // Headers: zjs's own + system libuv (engines/zjs.c uses uv_loop +
-    // friends). brew install libuv on macOS dev hosts puts it under
-    // /opt/homebrew (Apple Silicon) or /usr/local (Intel).
-    const uvIncludeCandidates = ["/opt/homebrew/include", "/usr/local/include"];
-    const uvLibCandidates     = ["/opt/homebrew/lib",     "/usr/local/lib"];
-    const uvInclude = uvIncludeCandidates.find(p => existsSync(path.join(p, "uv.h")));
-    const uvLibDir  = uvLibCandidates.find(p => existsSync(path.join(p, "libuv.dylib")));
-    if (!uvInclude || !uvLibDir) {
-      throw new Error(
-        `[zapp] zjs engine requires libuv (brew install libuv). ` +
-        `Searched ${uvIncludeCandidates.join(", ")} for uv.h.`
-      );
-    }
-
+    // Headers: zjs's own. The Apple loop in engines/zjs.c is kqueue +
+    // CFRunLoop (Task 2 of the kqueue-apple migration), so libuv is no
+    // longer a build- or runtime-time dependency on macOS. Linux /
+    // Windows zjs ports will reintroduce libuv (or an equivalent shim)
+    // under their own platform branches when they land.
+    //
     // -rpath so the framework binary finds libzjs.dylib at runtime
     // from the vendor build dir. Production builds will copy the dylib
     // into the .app bundle's Frameworks dir and use @loader_path
     // instead — Z5 follow-up.
+    //
+    // CoreFoundation (CFRunLoopRunInMode) is already in the
+    // unconditional macOS framework set above. Foundation
+    // (NSURLSession in zjs's http_apple.m + ws_apple.m) is not, so we
+    // add it here, scoped to the zjs branch.
     const zjsBuildDir = path.dirname(zjsLib);
-    content += `//> macos: cflags: -I${shortPath(zjsInclude)} -I${uvInclude}\n`;
-    content += `//> macos: link: ${shortPath(zjsLib)} -L${uvLibDir} -luv -Wl,-rpath,${zjsBuildDir}\n`;
+    content += `//> macos: cflags: -I${shortPath(zjsInclude)}\n`;
+    content += `//> macos: framework: Foundation\n`;
+    content += `//> macos: link: ${shortPath(zjsLib)} -Wl,-rpath,${zjsBuildDir}\n`;
   }
 
   if (process.platform === "win32" && sources.length > 0) {
