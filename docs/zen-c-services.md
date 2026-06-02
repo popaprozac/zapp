@@ -356,10 +356,66 @@ removing a `service.add` call removes its binding on the next
 generate. Treat `src/zapp/` as fully generated — don't hand-edit;
 your edits will be overwritten.
 
-The generator can't read your Zen-C code to infer argument or return
-types, so the wrappers are typed as `(args?: Record<string, unknown>)
-=> Promise<unknown>`. For typed call sites, pass a type parameter:
-`Services.invoke<{ token: string }>("keychain:get", { key })`.
+### Generated types — inferred args, annotated returns
+
+The generated wrappers are typed, not `Record<string, unknown>`. Each
+service emits a named `XxxArgs` / `XxxResult` interface (re-exported from
+`src/zapp/index.ts`, so you can `import type { GreetResult }` and reuse
+the shapes):
+
+```ts
+export interface GreetArgs { name?: string }
+export interface GreetResult { greeting: string }
+export async function greet(args?: GreetArgs): Promise<GreetResult> {
+    return Services.invoke<GreetResult, GreetArgs>("greet", args ?? ({} as GreetArgs));
+}
+```
+
+**Argument types are inferred from the handler body.** The generator
+reads the `args.get_*("key")` calls and maps each to a field:
+
+| Accessor | Inferred field |
+|---|---|
+| `args.get_string("k")` | `k?: string` |
+| `args.get_int("k")` | `k?: number` |
+| `args.get_float("k")` | `k?: number` |
+| `args.get_bool("k")` | `k?: boolean` |
+| `args.get("k")` (nested object/array) | `k?: unknown` |
+
+Inferred fields are optional (handlers read args through the
+`Option`/`is_some` pattern). Only reads off the handler's `args`
+parameter are inferred — `someMap.get("x")` or a nested
+`child.get_string("y")` are ignored.
+
+**Return types come from an annotation.** Add a `// @zapp:returns { … }`
+comment directly above the handler; the `{ … }` is emitted verbatim as
+the `XxxResult` interface (any TypeScript type — nested, arrays, unions,
+optional `?` — works, and `tsc` validates it):
+
+```zc
+// @zapp:returns { greeting: string }
+fn greet(_app: App*, args: JsonValue*) -> string { … }
+```
+
+Without a `@zapp:returns`, the result type is `unknown`.
+
+**Override inferred args** with `// @zapp:args { … }` when inference
+can't see the shape (dynamic keys, nested objects, or to mark a field
+required by omitting `?`):
+
+```zc
+// @zapp:args { id: number; filters: { tag: string }[] }
+// @zapp:returns { rows: Row[] }
+fn db_query(_app: App*, args: JsonValue*) -> string { … }
+```
+
+Precedence — args: `@zapp:args` override > inferred fields > loose
+`Record<string, unknown>`; result: `@zapp:returns` > `unknown`. A handler
+the generator can't locate falls back to the loose form (no regression).
+
+**Typed escape hatch.** `Services.invoke` is generic on both return and
+args, so you can call services directly with types when you're not using
+a generated wrapper: `Services.invoke<{ token: string }, { key: string }>("keychain:get", { key })`.
 
 ## Keeping registration next to handlers
 
