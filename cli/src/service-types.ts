@@ -78,3 +78,54 @@ export function parseAnnotation(commentBlock: string): Annotation {
   if (args !== undefined) result.argsFragment = args;
   return result;
 }
+
+export interface HandlerSlice {
+  commentBlock: string; // contiguous // lines directly above the fn ("" if none)
+  body: string;         // brace-matched function body, including the outer { }
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Locate `fn <handlerName>(` in Zen-C source. Returns its preceding comment
+// block (contiguous // lines, blank lines between fn and comment tolerated)
+// and its brace-matched body. Returns null if the handler isn't found.
+export function extractHandler(content: string, handlerName: string): HandlerSlice | null {
+  const fnRe = new RegExp(`\\bfn\\s+${escapeRegExp(handlerName)}\\s*\\(`, "g");
+  const m = fnRe.exec(content);
+  if (!m) return null;
+  const fnStart = m.index;
+
+  // Walk backwards over the lines before `fn`, collecting contiguous // lines.
+  const lines = content.slice(0, fnStart).split("\n");
+  const commentLines: string[] = [];
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const t = lines[i].trim();
+    if (t === "") {
+      if (commentLines.length === 0) continue; // whitespace between fn and comment
+      break; // blank line ends an earlier comment block
+    }
+    if (t.startsWith("//")) commentLines.unshift(lines[i]);
+    else break;
+  }
+  const commentBlock = commentLines.join("\n");
+
+  // Brace-match the body from the first { after the signature.
+  let body = "";
+  const open = content.indexOf("{", fnStart);
+  if (open !== -1) {
+    let depth = 0;
+    for (let i = open; i < content.length; i++) {
+      if (content[i] === "{") depth++;
+      else if (content[i] === "}") {
+        depth--;
+        if (depth === 0) {
+          body = content.slice(open, i + 1);
+          break;
+        }
+      }
+    }
+  }
+  return { commentBlock, body };
+}

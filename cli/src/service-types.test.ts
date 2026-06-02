@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { inferArgs, parseAnnotation } from "./service-types";
+import { inferArgs, parseAnnotation, extractHandler } from "./service-types";
 
 test("inferArgs maps each primitive accessor to its TS type", () => {
   const body = `{
@@ -70,4 +70,36 @@ test("parseAnnotation returns empty object when no annotations present", () => {
 
 test("parseAnnotation ignores an unbalanced fragment (no throw)", () => {
   expect(parseAnnotation(`// @zapp:returns { greeting: string`)).toEqual({});
+});
+
+const SAMPLE = `import "std/json.zc";
+
+// @zapp:returns { greeting: string }
+fn greet(_app: App*, args: JsonValue*) -> string {
+    let name_opt = args.get_string("name");
+    return "";
+}
+
+fn noop(_app: App*, _args: JsonValue*) -> string {
+    return "{}";
+}`;
+
+test("extractHandler returns the comment block and body for a handler", () => {
+  const slice = extractHandler(SAMPLE, "greet");
+  expect(slice).not.toBeNull();
+  expect(slice!.commentBlock).toContain("@zapp:returns { greeting: string }");
+  expect(slice!.body).toContain(`args.get_string("name")`);
+  // body is brace-matched — it must not bleed into the next fn
+  expect(slice!.body).not.toContain("noop");
+});
+
+test("extractHandler returns empty comment block when there is none", () => {
+  const slice = extractHandler(SAMPLE, "noop");
+  expect(slice).not.toBeNull();
+  expect(slice!.commentBlock).toBe("");
+  expect(slice!.body).toContain(`return "{}"`);
+});
+
+test("extractHandler returns null when the handler is absent", () => {
+  expect(extractHandler(SAMPLE, "missing")).toBeNull();
 });
