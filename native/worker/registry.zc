@@ -396,13 +396,20 @@ raw {
             }
             free(eurl);
 
+            // Skip empty owner slots (headless workers register with an
+            // owner of "", which has no real owning window) so the debug
+            // payload reports owners:[] rather than owners:[""]. A separate
+            // first_owner flag keeps the comma logic correct across skips.
+            int first_owner = 1;
             for (int o = 0; o < e->owner_count; o++) {
+                if (!e->owners[o][0]) continue;
                 char* eowner = zapp_json_escape_dup(e->owners[o]);
                 if (!eowner) { free(buf); return NULL; }
-                if (zapp_json_append(&buf, &cap, &off, "%s\"%s\"", o == 0 ? "" : ",", eowner) < 0) {
+                if (zapp_json_append(&buf, &cap, &off, "%s\"%s\"", first_owner ? "" : ",", eowner) < 0) {
                     free(eowner); free(buf); return NULL;
                 }
                 free(eowner);
+                first_owner = 0;
             }
             if (zapp_json_append(&buf, &cap, &off, "]") < 0) { free(buf); return NULL; }
 
