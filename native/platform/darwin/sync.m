@@ -287,18 +287,12 @@ void darwin_sync_dispatch_to_worker(const char* worker_id, const char* payload_j
         escaped];
     const char* js_c = [js UTF8String];
 
-#if defined(ZAPP_WORKER_ENGINE_BARE_V8)      \
- || defined(ZAPP_WORKER_ENGINE_BARE_JSC)     \
- || defined(ZAPP_WORKER_ENGINE_BARE_QUICKJS) \
- || defined(ZAPP_WORKER_ENGINE_BARE_MQJS)    \
- || defined(ZAPP_WORKER_ENGINE_BARE_HERMES)
-    // bare_worker_eval_js is a no-op when the worker_id doesn't
-    // belong to a bare worker, so this is safe to call unconditionally
-    // when bare is compiled in.
-    extern void bare_worker_eval_js(const char* worker_id, const char* js);
-    bare_worker_eval_js(worker_id, js_c);
-#endif
-
+    // Engine-agnostic targeted delivery — worker_eval_js looks up the
+    // worker's engine via zapp_worker_registry_get_engine and dispatches
+    // to bare_worker_eval_js / zjs_worker_eval_js as appropriate. Silent
+    // no-op when the worker has terminated between request and result.
+    extern void worker_eval_js(char* worker_id, char* js);
+    worker_eval_js((char*)worker_id, (char*)js_c);
 }
 
 // --- Blocking wait (for background threads ONLY) ---
