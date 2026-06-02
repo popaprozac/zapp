@@ -1750,6 +1750,40 @@ void zjs_worker_terminate_owner(const char* owner_id) {
     pthread_mutex_unlock(&zjs_workers_mutex);
 }
 
+// --- zjs_worker_eval_js: target a specific worker's eval_inbox ---
+//
+// Same idea as zjs_broadcast_eval_js but scoped to one slot, looked
+// up by worker_id. Mirrors bare_worker_eval_js (bare.c:1210).
+//
+// Slot lock + eval_inbox push + cross-thread wake (kqueue trigger on
+// Apple, uv_async_send elsewhere). Safe to call from any thread.
+void zjs_worker_eval_js(const char* worker_id, const char* js) {
+    if (!worker_id || !js) return;
+    pthread_mutex_lock(&zjs_workers_mutex);
+    for (int i = 0; i < ZJS_MAX_WORKERS; i++) {
+        ZjsWorkerSlot* slot = &zjs_workers[i];
+        if (!slot->active) continue;
+        if (strcmp(slot->worker_id, worker_id) != 0) continue;
+#if defined(__APPLE__)
+        if (!slot->kq_initialized) break;
+#else
+        if (!slot->loop_initialized) break;
+#endif
+        if (eval_inbox_push(slot, js) != 0) {
+            fprintf(stderr, "[zapp] zjs worker '%s' eval inbox full — dropped targeted eval\n",
+                slot->worker_id);
+            break;
+        }
+#if defined(__APPLE__)
+        apple_trigger_eval_inbox(slot);
+#else
+        uv_async_send(&slot->eval_inbox_async);
+#endif
+        break;
+    }
+    pthread_mutex_unlock(&zjs_workers_mutex);
+}
+
 // Broadcast a JS snippet (bridge._onEvent IIFE) to every active zjs worker.
 // Counterpart of bare_broadcast_eval_js — the dispatcher fans events emitted
 // from the webview (or anywhere else) into the worker pool by calling this.
