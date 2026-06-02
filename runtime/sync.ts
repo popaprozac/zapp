@@ -28,8 +28,16 @@ export const Sync = {
    * @param key - Sync key (non-empty string)
    * @param timeoutOrOptions - Timeout in ms, options object, or null for indefinite
    * @returns "notified" or "timed-out"
+   *
+   * Written as `wait: async function()` rather than `async wait()` shorthand
+   * to work around zjs's parser, which accepts async function expressions
+   * but rejects the ES2017 async-method-shorthand form inside object
+   * literals. Vite's worker bundle target is es2017 so esbuild preserves
+   * the shorthand form — without this longhand, every zjs worker that
+   * imports `Sync` fails to parse with `SyntaxError: module parse error`.
+   * See [[reference_zjs_async_method_shorthand]].
    */
-  async wait(
+  wait: async function(
     key: string,
     timeoutOrOptions: number | SyncWaitOptions | null = 30000
   ): Promise<"notified" | "timed-out"> {
