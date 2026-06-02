@@ -92,6 +92,48 @@ fn dispatch_invoke_response(window_id: int, request_id: int, ok: bool, payload: 
     }
 }
 
+// Broadcast a JS snippet to every active worker across every engine
+// compiled in. Identical to dispatch_event_to_all's inline worker
+// block, extracted so other native-emit call sites (shortcuts.m,
+// notification.m, menu.m, tray.m, sync.m, app_events.zc, etc.) can
+// fan their events to workers in one line.
+//
+// JS is shared across all engines — each engine strdup/copies on push
+// so the caller may free immediately after this returns.
+fn worker_broadcast_eval_js(js: string) -> void {
+    raw {
+        #if defined(ZAPP_WORKER_ENGINE_ZJS)
+        extern void zjs_broadcast_eval_js(const char* js);
+        zjs_broadcast_eval_js((const char*)js);
+        #endif
+        #if defined(ZAPP_WORKER_ENGINE_BARE_V8)      \
+         || defined(ZAPP_WORKER_ENGINE_BARE_JSC)     \
+         || defined(ZAPP_WORKER_ENGINE_BARE_QUICKJS) \
+         || defined(ZAPP_WORKER_ENGINE_BARE_MQJS)    \
+         || defined(ZAPP_WORKER_ENGINE_BARE_HERMES)
+        extern void bare_broadcast_eval_js(const char* js);
+        bare_broadcast_eval_js((const char*)js);
+        #endif
+    }
+}
+
+// Targeted JS eval — sends the snippet to one specific worker, routed
+// by the registry's engine field. No-op when worker_id doesn't resolve
+// (e.g. worker terminated between caller and dispatch).
+//
+// Used by sync.m to deliver bridge.dispatchSyncResult(payload) to the
+// requesting worker; the same shape works for any future native code
+// that needs per-worker delivery.
+fn worker_eval_js(worker_id: string, js: string) -> void {
+    raw {
+        extern int  zapp_worker_registry_get_engine(const char* worker_id);
+        extern void zapp_dispatch_worker_eval_js(int eng, const char* worker_id, const char* js);
+        int eng = zapp_worker_registry_get_engine((const char*)worker_id);
+        if (eng < 0) return;
+        zapp_dispatch_worker_eval_js(eng, (const char*)worker_id, (const char*)js);
+    }
+}
+
 // Send event to all windows (and broadcast to all workers).
 fn dispatch_event_to_all(event_name: string, payload: string) -> void {
     raw {
@@ -121,21 +163,12 @@ fn dispatch_event_to_all(event_name: string, payload: string) -> void {
         windows_webview_eval_all(js);
         #endif
 
-        // Workers — each engine strdup/copies on push, so free after
-        // all branches return. The ZAPP_HAS_BARE macro is defined in
-        // worker.zc and resolves to 1 when any bare-* engine is built.
-        #if defined(ZAPP_WORKER_ENGINE_ZJS)
-        extern void zjs_broadcast_eval_js(const char* js);
-        zjs_broadcast_eval_js(js);
-        #endif
-        #if defined(ZAPP_WORKER_ENGINE_BARE_V8)      \
-         || defined(ZAPP_WORKER_ENGINE_BARE_JSC)     \
-         || defined(ZAPP_WORKER_ENGINE_BARE_QUICKJS) \
-         || defined(ZAPP_WORKER_ENGINE_BARE_MQJS)    \
-         || defined(ZAPP_WORKER_ENGINE_BARE_HERMES)
-        extern void bare_broadcast_eval_js(const char* js);
-        bare_broadcast_eval_js(js);
-        #endif
+        // Workers — single source of truth in worker_broadcast_eval_js
+        // (above in this file). One unified fanout point ensures any
+        // future engine picks up dispatches here AND at the new direct
+        // call sites in shortcuts.m/menu.m/etc., not just one of them.
+        extern void worker_broadcast_eval_js(char* js);
+        worker_broadcast_eval_js(js);
 
         free(js);
     }

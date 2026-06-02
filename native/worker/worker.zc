@@ -65,6 +65,7 @@ raw {
     void zjs_worker_post_message(const char* a, const char* b) { (void)a; (void)b; }
     void zjs_worker_terminate(const char* a) { (void)a; }
     void zjs_worker_terminate_owner(const char* a) { (void)a; }
+    void zjs_worker_eval_js(const char* a, const char* b) { (void)a; (void)b; }
     #endif
 }
 
@@ -151,6 +152,22 @@ raw {
             case 2: case 3: case 4: case 5: case 6:
                 bare_worker_terminate(worker_id); break;
             case 7: zjs_worker_terminate(worker_id); break;
+        }
+    }
+
+    // Engine-aware targeted JS eval — called from dispatch.zc:worker_eval_js
+    // after looking up the worker's engine via zapp_worker_registry_get_engine.
+    // Switch on engine ID matches zapp_dispatch_worker_post's structure.
+    // Engines that aren't compiled in stub out via the #if-stub machinery
+    // above (each engine block provides no-op stubs when its define is
+    // missing), so this compiles regardless of engine selection.
+    //
+    // Non-static (callable from dispatch.zc).
+    void zapp_dispatch_worker_eval_js(int eng, const char* worker_id, const char* js) {
+        switch (eng) {
+            case 2: case 3: case 4: case 5: case 6:
+                bare_worker_eval_js(worker_id, js); break;
+            case 7: zjs_worker_eval_js(worker_id, js); break;
         }
     }
 }
