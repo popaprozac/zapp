@@ -18,9 +18,9 @@ the framework dispatches at runtime based on `engine: "..."` in
 
 ## Platform recommendations
 
-- **macOS**: `zjs` (default) OR `bare-jsc` (near-tie — pick `bare-jsc` for smallest binary + JIT; pick `zjs` for cross-platform consistency).
-- **iOS**: `zjs`. `bare-jsc` works but Apple denies JIT entitlements to App Store apps, so it runs in interpreter mode with no perf advantage and a larger bundle than `zjs`.
-- **Windows / Linux**: `zjs` (default). Opt into `bare-v8` only if you need JIT-perf and accept the ~30 MB tradeoff.
+- **macOS**: `zjs` (default) OR `bare-jsc` (near-tie — pick `bare-jsc` for smallest binary + JIT; pick `zjs` for cross-platform consistency). On Apple platforms zjs runs on kqueue + CFRunLoop — no libuv dependency.
+- **iOS**: `zjs` (recommended). Same kqueue + CFRunLoop event loop as macOS — iOS Simulator builds end-to-end with no libuv on the Apple path. `bare-jsc` works but Apple denies JIT entitlements to App Store apps, so it runs in interpreter mode with no perf advantage and a larger bundle than `zjs`.
+- **Windows / Linux**: `zjs` (default; still on libuv until the platform-native event-loop ports land). Opt into `bare-v8` only if you need JIT-perf and accept the ~30 MB tradeoff.
 
 ## Web API hierarchy
 
