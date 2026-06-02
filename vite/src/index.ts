@@ -783,8 +783,15 @@ export function zappWorkers(options?: ZappWorkersOptions): Plugin {
         if (ok) console.log(`[zapp] dev-bundled worker: ${entry.outputName}`);
       }
 
-      // Still expose middleware so WebView fetch of /_workers/<name>.mjs works
-      // (e.g. native engines that pull via dev URL like jsc.m).
+      // Still expose middleware so WebView fetch of /_workers/<name>.mjs
+      // (or .zbc bytecode) works — iOS Sim falls through to this dev URL
+      // path when the local filesystem doesn't have the artifact.
+      //
+      // Binary artifacts (.zbc = zjs bytecode, .hbc = hermes bytecode) MUST
+      // be served as raw Buffers, not UTF-8 strings. Reading binary as utf-8
+      // mangles every non-ASCII byte (U+FFFD replacement), which corrupts
+      // the bytecode header / opcodes and the worker fails to deserialize.
+      // Repro: any iOS Sim build using `bytecode: true` on a headless worker.
       server.middlewares.use(async (req, res, next) => {
         if (!req.url?.startsWith("/_workers/")) return next();
 
@@ -792,9 +799,17 @@ export function zappWorkers(options?: ZappWorkersOptions): Plugin {
         const filePath = path.join(devOutDir, fileName);
 
         if (existsSync(filePath)) {
-          const content = await readFile(filePath, "utf-8");
-          res.setHeader("Content-Type", "application/javascript");
-          res.end(content);
+          const isBinary = fileName.endsWith(".zbc") || fileName.endsWith(".hbc");
+          if (isBinary) {
+            const content = await readFile(filePath);  // Buffer, raw bytes
+            res.setHeader("Content-Type", "application/octet-stream");
+            res.setHeader("Content-Length", String(content.length));
+            res.end(content);
+          } else {
+            const content = await readFile(filePath, "utf-8");
+            res.setHeader("Content-Type", "application/javascript");
+            res.end(content);
+          }
         } else {
           res.statusCode = 404;
           res.end("Worker not found");
