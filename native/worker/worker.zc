@@ -82,6 +82,12 @@ raw {
 // order: zjs > bare-jsc > bare-v8 > bare-hermes > bare-quickjs > bare-mqjs.
 
 raw {
+    // Display label for a worker (registry.zc): the configured name if set,
+    // else the worker_id. Explicit const char* — implicit-int would truncate
+    // the 64-bit pointer. Falls back to the worker_id when the worker isn't
+    // registered yet, so it's safe at engine-resolution time (pre-create).
+    extern const char* zapp_worker_registry_get_display_name(const char* worker_id);
+
     // Helper: which engine should we actually run on? Returns the
     // requested engine if compiled in, otherwise the first available
     // fallback. Logs the downgrade once per worker create.
@@ -119,8 +125,8 @@ raw {
             if (present[order[i]]) {
                 if (requested != order[i]) {
                     fprintf(stderr,
-                        "[zapp] worker '%s' requested %s but it's not compiled in — using %s.\n",
-                        worker_id ? worker_id : "?",
+                        "[zapp/%s] requested %s but it's not compiled in — using %s.\n",
+                        zapp_worker_registry_get_display_name(worker_id),
                         (requested >= 0 && requested < 9) ? names[requested] : "?",
                         names[order[i]]);
                 }

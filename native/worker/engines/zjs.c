@@ -120,6 +120,13 @@ extern int zapp_worker_supervisor_get_window_state(
 // verbatim and the JS runtime wrapper JSON.parses it. Caller free()s.
 extern char* zapp_workers_registry_list_json(void);
 
+// Per-worker log helpers (registry.zc). Both return const char* — declare the
+// explicit return type so the 64-bit pointer isn't truncated by implicit-int.
+// get_display_name returns the configured name or falls back to the worker_id;
+// fmt_compact_ms compacts a ms duration ("30000ms" -> "30s") into a static buf.
+extern const char* zapp_worker_registry_get_display_name(const char* worker_id);
+extern const char* zapp_fmt_compact_ms(int ms);
+
 // ---------------------------------------------------------------------------
 // Worker slot table — same shape as txiki, sized identically.
 // ---------------------------------------------------------------------------
@@ -893,8 +900,9 @@ static void drain_inbox_apple(ZjsWorkerSlot* slot) {
             const char* m = zjs_is_string(mv)
                 ? zjs_string_bytes(mv, &len)
                 : zjs_string_bytes(err, &len);
-            fprintf(stderr, "[zapp] zjs worker '%s' message handler threw: %.*s\n",
-                slot->worker_id, (int) len, m ? m : "<unreadable>");
+            fprintf(stderr, "[zapp/%s] message handler threw: %.*s\n",
+                zapp_worker_registry_get_display_name(slot->worker_id),
+                (int) len, m ? m : "<unreadable>");
         }
         free(msg);
     }
@@ -915,8 +923,9 @@ static void drain_eval_inbox_apple(ZjsWorkerSlot* slot) {
             const char* m = zjs_is_string(mv)
                 ? zjs_string_bytes(mv, &len)
                 : zjs_string_bytes(err, &len);
-            fprintf(stderr, "[zapp] zjs worker '%s' broadcast eval threw: %.*s\n",
-                slot->worker_id, (int) len, m ? m : "<unreadable>");
+            fprintf(stderr, "[zapp/%s] broadcast eval threw: %.*s\n",
+                zapp_worker_registry_get_display_name(slot->worker_id),
+                (int) len, m ? m : "<unreadable>");
         }
         free(js);
         drained++;
@@ -1011,8 +1020,9 @@ static void on_inbox_async(uv_async_t* h) {
             const char* m = zjs_is_string(mv)
                 ? zjs_string_bytes(mv, &len)
                 : zjs_string_bytes(err, &len);
-            fprintf(stderr, "[zapp] zjs worker '%s' message handler threw: %.*s\n",
-                slot->worker_id, (int) len, m ? m : "<unreadable>");
+            fprintf(stderr, "[zapp/%s] message handler threw: %.*s\n",
+                zapp_worker_registry_get_display_name(slot->worker_id),
+                (int) len, m ? m : "<unreadable>");
         }
         free(msg);
     }
@@ -1037,8 +1047,9 @@ static void on_eval_inbox_async(uv_async_t* h) {
             const char* m = zjs_is_string(mv)
                 ? zjs_string_bytes(mv, &len)
                 : zjs_string_bytes(err, &len);
-            fprintf(stderr, "[zapp] zjs worker '%s' broadcast eval threw: %.*s\n",
-                slot->worker_id, (int) len, m ? m : "<unreadable>");
+            fprintf(stderr, "[zapp/%s] broadcast eval threw: %.*s\n",
+                zapp_worker_registry_get_display_name(slot->worker_id),
+                (int) len, m ? m : "<unreadable>");
         }
         free(js);
         drained++;
@@ -1065,8 +1076,9 @@ static void on_check(uv_check_t* h) {
         ZjsValue err = zjs_get_error(slot->ctx);
         uint32_t len = 0;
         const char* msg = zjs_string_bytes(err, &len);
-        fprintf(stderr, "[zapp] zjs worker '%s' timer threw: %.*s\n",
-            slot->worker_id, (int) len, msg ? msg : "<non-string throw>");
+        fprintf(stderr, "[zapp/%s] timer threw: %.*s\n",
+            zapp_worker_registry_get_display_name(slot->worker_id),
+            (int) len, msg ? msg : "<non-string throw>");
         // Surface but keep running — matches txiki / bare behaviour, where
         // a single throw in a setInterval cb doesn't tear the worker down.
     }
@@ -1236,7 +1248,8 @@ static void zjs_setup_synthesize_crash(ZjsWorkerSlot* slot,
 static ZjsSetupResult zjs_worker_setup_state(ZjsWorkerSlot* slot) {
     slot->ctx = zjs_new_context();
     if (!slot->ctx) {
-        fprintf(stderr, "[zapp] zjs worker '%s' zjs_new_context failed\n", slot->worker_id);
+        fprintf(stderr, "[zapp/%s] zjs_new_context failed\n",
+            zapp_worker_registry_get_display_name(slot->worker_id));
         return ZJS_SETUP_FATAL;
     }
 
@@ -1263,8 +1276,8 @@ static ZjsSetupResult zjs_worker_setup_state(ZjsWorkerSlot* slot) {
     // so alias it to globalThis here once before running the bootstrap.
     zjs_eval(slot->ctx, "var self = globalThis;");
     if (zjs_had_error(slot->ctx)) {
-        fprintf(stderr, "[zapp] zjs worker '%s' could not install `self` alias\n",
-            slot->worker_id);
+        fprintf(stderr, "[zapp/%s] could not install `self` alias\n",
+            zapp_worker_registry_get_display_name(slot->worker_id));
     }
 
     {
@@ -1299,8 +1312,9 @@ static ZjsSetupResult zjs_worker_setup_state(ZjsWorkerSlot* slot) {
                 const char* m = zjs_is_string(mv)
                     ? zjs_string_bytes(mv, &mlen)
                     : zjs_string_bytes(err, &mlen);
-                fprintf(stderr, "[zapp] zjs worker '%s' bootstrap threw: %.*s\n",
-                    slot->worker_id, (int) mlen, m ? m : "<unreadable>");
+                fprintf(stderr, "[zapp/%s] bootstrap threw: %.*s\n",
+                    zapp_worker_registry_get_display_name(slot->worker_id),
+                    (int) mlen, m ? m : "<unreadable>");
                 // Continue anyway — partial bootstrap may still be useful
                 // for diagnostics; the user script just won't have full
                 // bridge access.
@@ -1316,8 +1330,8 @@ static ZjsSetupResult zjs_worker_setup_state(ZjsWorkerSlot* slot) {
     // signals into a single wake, matching uv_async_send semantics.
     slot->kq = kqueue();
     if (slot->kq < 0) {
-        fprintf(stderr, "[zapp] zjs worker '%s' kqueue() failed: %s\n",
-                slot->worker_id, strerror(errno));
+        fprintf(stderr, "[zapp/%s] kqueue() failed: %s\n",
+                zapp_worker_registry_get_display_name(slot->worker_id), strerror(errno));
         return ZJS_SETUP_FATAL;
     }
     slot->kq_initialized = 1;
@@ -1327,8 +1341,8 @@ static ZjsSetupResult zjs_worker_setup_state(ZjsWorkerSlot* slot) {
         EV_SET(&change[1], FILTER_INBOX,      EVFILT_USER, EV_ADD|EV_CLEAR, 0, 0, NULL);
         EV_SET(&change[2], FILTER_EVAL_INBOX, EVFILT_USER, EV_ADD|EV_CLEAR, 0, 0, NULL);
         if (kevent(slot->kq, change, 3, NULL, 0, NULL) < 0) {
-            fprintf(stderr, "[zapp] zjs worker '%s' kevent EV_ADD failed: %s\n",
-                    slot->worker_id, strerror(errno));
+            fprintf(stderr, "[zapp/%s] kevent EV_ADD failed: %s\n",
+                    zapp_worker_registry_get_display_name(slot->worker_id), strerror(errno));
             close(slot->kq);
             slot->kq = -1;
             slot->kq_initialized = 0;
@@ -1360,7 +1374,8 @@ static ZjsSetupResult zjs_worker_setup_state(ZjsWorkerSlot* slot) {
     long  code_len = 0;
     char* code = zjs_load_script(slot->script_url, &code_len);
     if (!code) {
-        fprintf(stderr, "[zapp] zjs worker script not found: %s\n", slot->script_url);
+        fprintf(stderr, "[zapp/%s] script not found: %s\n",
+            zapp_worker_registry_get_display_name(slot->worker_id), slot->script_url);
         zjs_setup_synthesize_crash(slot, "script load failed", "");
         return ZJS_SETUP_CRASHED;
     }
@@ -1412,8 +1427,8 @@ static ZjsSetupResult zjs_worker_setup_state(ZjsWorkerSlot* slot) {
         ZjsValue    stack_val = zjs_get_property(slot->ctx, err, "stack");
         if (zjs_is_string(stack_val)) stack = zjs_string_bytes(stack_val, &slen);
 
-        fprintf(stderr, "[zapp] zjs worker '%s' script threw: %.*s%s%.*s\n",
-            slot->worker_id,
+        fprintf(stderr, "[zapp/%s] script threw: %.*s%s%.*s\n",
+            zapp_worker_registry_get_display_name(slot->worker_id),
             (int) len, msg ? msg : "<unreadable>",
             stack ? "\n" : "",
             (int) slen, stack ? stack : "");
@@ -1515,7 +1530,8 @@ static void* zjs_worker_thread(void* arg) {
     // close-and-reopen across reincarnations is cheap.
 #else
     if (uv_loop_init(&slot->loop) != 0) {
-        fprintf(stderr, "[zapp] zjs worker '%s' uv_loop_init failed\n", slot->worker_id);
+        fprintf(stderr, "[zapp/%s] uv_loop_init failed\n",
+            zapp_worker_registry_get_display_name(slot->worker_id));
         slot->active = 0;
         return NULL;
     }
@@ -1530,8 +1546,8 @@ static void* zjs_worker_thread(void* arg) {
         ZjsSetupResult setup = zjs_worker_setup_state(slot);
 
         if (setup == ZJS_SETUP_FATAL) {
-            fprintf(stderr, "[zapp] zjs worker '%s' setup fatal (incarnation %d)\n",
-                    slot->worker_id, slot->incarnation);
+            fprintf(stderr, "[zapp/%s] setup fatal (incarnation %d)\n",
+                    zapp_worker_registry_get_display_name(slot->worker_id), slot->incarnation);
             break;
         }
 
@@ -1549,9 +1565,9 @@ static void* zjs_worker_thread(void* arg) {
                 dispatch_event_to_all("worker:restarted", payload);
                 int fc = 0, cap = 0, win = 0;
                 zapp_worker_supervisor_get_window_state(slot->worker_id, &fc, &cap, &win);
-                fprintf(stderr, "[zapp] zjs worker '%s' restarting "
-                                "(incarnation %d, fail_count %d/%d in %dms window)\n",
-                        slot->worker_id, slot->incarnation, fc, cap, win);
+                fprintf(stderr, "[zapp/%s] restart %d (fail %d/%d in %s)\n",
+                        zapp_worker_registry_get_display_name(slot->worker_id),
+                        slot->incarnation, fc, cap, zapp_fmt_compact_ms(win));
             }
 
 #if defined(__APPLE__)
@@ -1579,8 +1595,9 @@ static void* zjs_worker_thread(void* arg) {
                     ZjsValue err = zjs_get_error(slot->ctx);
                     uint32_t len = 0;
                     const char* msg = zjs_string_bytes(err, &len);
-                    fprintf(stderr, "[zapp] zjs worker '%s' timer threw: %.*s\n",
-                        slot->worker_id, (int) len, msg ? msg : "<non-string throw>");
+                    fprintf(stderr, "[zapp/%s] timer threw: %.*s\n",
+                        zapp_worker_registry_get_display_name(slot->worker_id),
+                        (int) len, msg ? msg : "<non-string throw>");
                     // Same recovery posture as on_check — surface but keep running.
                 }
                 zjs_drain_microtasks(slot->ctx);
@@ -1605,8 +1622,8 @@ static void* zjs_worker_thread(void* arg) {
                 int n = kevent(slot->kq, NULL, 0, events, 8, &ts);
                 if (n < 0) {
                     if (errno == EINTR) continue;
-                    fprintf(stderr, "[zapp] zjs worker '%s' kevent() failed: %s\n",
-                            slot->worker_id, strerror(errno));
+                    fprintf(stderr, "[zapp/%s] kevent() failed: %s\n",
+                            zapp_worker_registry_get_display_name(slot->worker_id), strerror(errno));
                     break;
                 }
 
@@ -1668,7 +1685,8 @@ static void* zjs_worker_thread(void* arg) {
     }
 #endif
     slot->active = 0;
-    fprintf(stderr, "[zapp] zjs worker '%s' exited\n", slot->worker_id);
+    fprintf(stderr, "[zapp/%s] exited\n",
+        zapp_worker_registry_get_display_name(slot->worker_id));
     return NULL;
 }
 
@@ -1701,7 +1719,8 @@ bool zjs_worker_create(const char* script_url, const char* owner_id, const char*
     pthread_mutex_unlock(&zjs_workers_mutex);
 
     if (pthread_create(&slot->thread, NULL, zjs_worker_thread, slot) != 0) {
-        fprintf(stderr, "[zapp] zjs pthread_create failed for '%s'\n", worker_id);
+        fprintf(stderr, "[zapp/%s] pthread_create failed\n",
+            zapp_worker_registry_get_display_name(worker_id));
         slot->active = 0;
         return false;
     }
@@ -1715,9 +1734,9 @@ void zjs_worker_post_message(const char* worker_id, const char* data_json) {
     ZjsWorkerSlot* slot = zjs_find_slot(worker_id);
     if (!slot || !slot->active || !slot->ctx) {
         pthread_mutex_unlock(&zjs_workers_mutex);
-        fprintf(stderr, "[zapp] zjs worker '%s' message dropped "
-                        "(worker not ready; incarnation %d)\n",
-                worker_id, slot ? slot->incarnation : 0);
+        fprintf(stderr, "[zapp/%s] message dropped (not ready; incarnation %d)\n",
+                zapp_worker_registry_get_display_name(worker_id),
+                slot ? slot->incarnation : 0);
         return;
     }
 #if defined(__APPLE__)
@@ -1726,8 +1745,8 @@ void zjs_worker_post_message(const char* worker_id, const char* data_json) {
     if (!slot->loop_initialized) {
 #endif
         pthread_mutex_unlock(&zjs_workers_mutex);
-        fprintf(stderr, "[zapp] zjs worker '%s' not active for postMessage — dropping\n",
-            worker_id);
+        fprintf(stderr, "[zapp/%s] not active for postMessage — dropping\n",
+            zapp_worker_registry_get_display_name(worker_id));
         return;
     }
     int err = inbox_push(slot, data_json);
@@ -1740,7 +1759,8 @@ void zjs_worker_post_message(const char* worker_id, const char* data_json) {
     }
     pthread_mutex_unlock(&zjs_workers_mutex);
     if (err != 0) {
-        fprintf(stderr, "[zapp] zjs worker '%s' inbox full — dropped message\n", worker_id);
+        fprintf(stderr, "[zapp/%s] inbox full — dropped message\n",
+            zapp_worker_registry_get_display_name(worker_id));
     }
 }
 
@@ -1801,8 +1821,8 @@ void zjs_worker_eval_js(const char* worker_id, const char* js) {
         if (!slot->loop_initialized) break;
 #endif
         if (eval_inbox_push(slot, js) != 0) {
-            fprintf(stderr, "[zapp] zjs worker '%s' eval inbox full — dropped targeted eval\n",
-                slot->worker_id);
+            fprintf(stderr, "[zapp/%s] eval inbox full — dropped targeted eval\n",
+                zapp_worker_registry_get_display_name(slot->worker_id));
             break;
         }
 #if defined(__APPLE__)
@@ -1831,8 +1851,8 @@ void zjs_broadcast_eval_js(const char* js) {
         if (!slot->active || !slot->loop_initialized) continue;
 #endif
         if (eval_inbox_push(slot, js) != 0) {
-            fprintf(stderr, "[zapp] zjs worker '%s' eval inbox full — dropped broadcast\n",
-                slot->worker_id);
+            fprintf(stderr, "[zapp/%s] eval inbox full — dropped broadcast\n",
+                zapp_worker_registry_get_display_name(slot->worker_id));
             continue;
         }
 #if defined(__APPLE__)
