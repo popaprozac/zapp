@@ -216,7 +216,6 @@ export async function generateIOSBuildFile(
   originalBuildFile: string,
   config?: ResolvedConfig,
 ): Promise<string> {
-  void root;
   let content = "";
   try {
     content = await Bun.file(originalBuildFile).text();
@@ -294,11 +293,15 @@ export async function generateIOSBuildFile(
 ${engineDefines.map(d => `//> define: ${d}`).join("\n")}
 `;
 
-  // Write next to the user's build.zc so relative imports
-  // (`import "app.zc"`) still resolve. Using an underscore prefix
-  // makes it visually distinct from hand-authored sources; safe to
-  // gitignore via `zapp/_zapp_build_ios.zc`.
-  const iosBuildFile = path.join(path.dirname(originalBuildFile), "_zapp_build_ios.zc");
+  // Write into the hidden `.zapp/` dir alongside the other generated
+  // artifacts (zapp_platform.zc, engine overlay, worker bundles) so the
+  // visible `zapp/` dir only ever shows the user's own files. The
+  // generated file re-emits the user's build.zc body (which uses bare
+  // module names like `import "app.zc"` resolved against zc's include
+  // path), so its location is independent of the original.
+  const zappDir = path.join(root, ".zapp");
+  await mkdir(zappDir, { recursive: true });
+  const iosBuildFile = path.join(zappDir, "_zapp_build_ios.zc");
   await Bun.write(iosBuildFile, iosOverlay + filtered);
   return iosBuildFile;
 }
