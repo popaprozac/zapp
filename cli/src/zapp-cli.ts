@@ -395,7 +395,14 @@ async function runDev(root: string) {
     // User sees the same output they'd get from a desktop dev run.
     appProc = Bun.spawn(
       ["xcrun", "simctl", "launch", "--console-pty", "booted", bundleId],
-      { cwd: root, stdout: "inherit", stderr: "inherit" }
+      {
+        cwd: root,
+        stdout: "inherit",
+        stderr: "inherit",
+        // simctl forwards SIMCTL_CHILD_<VAR> to the launched app's env, so
+        // the app's getenv("ZAPP_LOG") sees the CLI's chosen log level.
+        env: { ...process.env, SIMCTL_CHILD_ZAPP_LOG: envFromLevel(getCliLevel()) },
+      }
     );
 
     // Wait for either Vite or the launch wrapper to exit. Note the
@@ -427,6 +434,10 @@ async function runDev(root: string) {
     cwd: root,
     stdout: "inherit",
     stderr: "inherit",
+    // Bun.spawn with no env: inherits a start-time snapshot of process.env,
+    // not runtime mutations. Spread the current env so the ZAPP_LOG we set
+    // during dispatch reaches the app's getenv("ZAPP_LOG").
+    env: { ...process.env, ZAPP_LOG: envFromLevel(getCliLevel()) },
   });
 
   // Wait for either to exit
