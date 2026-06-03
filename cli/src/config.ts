@@ -806,6 +806,33 @@ export function defineConfig(config: ZappConfig): ZappConfig {
 // CEF / Chromium is gated on a real customer surfacing a reproducible
 // "system WebView won't render X" requirement — see
 // /Users/zach/.claude/plans/polished-mapping-ullman.md.
+// Validate the native: block — each of frameworks/linkFlags/sources must be a
+// string[] or a per-platform map of string[]. Throws a clear error otherwise.
+export function validateNative(config: ZappConfig): void {
+  const n = config.native;
+  if (!n) return;
+  const checkList = (v: unknown, where: string) => {
+    if (!Array.isArray(v)) throw new Error(`[zapp] ${where} must be a string[] (got ${typeof v})`);
+    for (const item of v) {
+      if (typeof item !== "string") throw new Error(`[zapp] ${where} entries must be strings (got ${typeof item})`);
+    }
+  };
+  const checkField = (v: unknown, name: string) => {
+    if (v === undefined) return;
+    if (Array.isArray(v)) { checkList(v, `native.${name}`); return; }
+    if (v && typeof v === "object") {
+      for (const [plat, list] of Object.entries(v as Record<string, unknown>)) {
+        checkList(list, `native.${name}.${plat}`);
+      }
+      return;
+    }
+    throw new Error(`[zapp] native.${name} must be a string[] or a per-platform map (got ${typeof v})`);
+  };
+  checkField(n.frameworks, "frameworks");
+  checkField(n.linkFlags, "linkFlags");
+  checkField(n.sources, "sources");
+}
+
 function validateWebEngine(engine?: ZappConfig["webEngine"]): void {
   if (engine === undefined || engine === "system") return;
   if (engine === "chromium") {
@@ -855,6 +882,7 @@ export async function loadConfig(root: string): Promise<ResolvedConfig> {
     const config = (typeof mod.default === "function" ? mod.default() : mod.default) as ZappConfig;
     validateWebEngine(config.webEngine);
     rejectRemovedEngines(config);
+    validateNative(config);
     return {
       ...config,
       assetDir: config.assetDir ?? "./dist",

@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { resolveNative } from "./config";
+import { resolveNative, validateNative } from "./config";
 
 test("resolveNative reads the grouped native block", () => {
   const cfg = { native: { frameworks: ["CoreLocation"], linkFlags: ["-lfoo"], sources: ["a.m"] } } as any;
@@ -28,4 +28,18 @@ test("resolveNative resolves per-platform PlatformValue maps for the target", ()
 
 test("resolveNative returns empty arrays when nothing is set", () => {
   expect(resolveNative({} as any, "macos")).toEqual({ frameworks: [], linkFlags: [], sources: [] });
+});
+
+test("validateNative accepts arrays + per-platform maps", () => {
+  expect(() => validateNative({ native: { frameworks: ["A"], linkFlags: ["-lx"] } } as any)).not.toThrow();
+  expect(() => validateNative({ native: { frameworks: { macos: ["A"], ios: ["B"] } } } as any)).not.toThrow();
+  expect(() => validateNative({} as any)).not.toThrow();
+});
+
+test("validateNative rejects a non-array / non-map value", () => {
+  expect(() => validateNative({ native: { frameworks: "CoreLocation" } } as any)).toThrow(/native\.frameworks/);
+});
+
+test("validateNative rejects non-string array entries", () => {
+  expect(() => validateNative({ native: { linkFlags: [1, 2] } } as any)).toThrow(/native\.linkFlags/);
 });
