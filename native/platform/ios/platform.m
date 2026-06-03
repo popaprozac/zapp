@@ -88,6 +88,13 @@ void darwin_trash_item(const char* path) {
     }
 }
 
+// Background-app readiness — macOS-only; inert on iOS (spec Q4).
+void darwin_set_quit_guard(bool enabled) { (void)enabled; }
+void darwin_app_quit(bool force)         { (void)force; }
+void darwin_app_activate(void)           { }
+bool darwin_set_login_item(bool enabled) { (void)enabled; return false; }
+bool darwin_get_login_item(void)         { return false; }
+
 // --- JS string escape helper (mirrors darwin/webview.m export) ---
 
 const char* darwin_escape_js_string(const char* raw) {

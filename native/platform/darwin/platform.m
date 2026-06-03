@@ -99,8 +99,12 @@ bool darwin_get_login_item(void) {
 
 - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication*)sender {
     (void)sender;
-    // No guard, or a forced quit (App.quit({force:true})) → proceed.
-    if (zapp_force_quit || !zapp_quit_guard_enabled) return NSTerminateNow;
+    // Forced quit (App.quit({force:true})): consume the latch and proceed.
+    // Resetting here ensures an AppKit-vetoed terminate doesn't leave the
+    // latch permanently set — a subsequent plain Cmd-Q re-engages the guard.
+    if (zapp_force_quit) { zapp_force_quit = NO; return NSTerminateNow; }
+    // No guard armed → proceed.
+    if (!zapp_quit_guard_enabled) return NSTerminateNow;
     // Guard armed: tell JS a quit was requested and cancel this attempt.
     // The app runs its own (possibly async) confirmation, then re-issues
     // App.quit({force:true}) to actually terminate. Mirrors setCloseGuard;
