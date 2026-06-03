@@ -988,34 +988,36 @@ export async function compileNative(opts: CompileOptions): Promise<void> {
 
   const exitCode = await proc.exited;
   if (exitCode !== 0) {
-    if (!verbose && stderrText) {
-      // Filter out warning/note lines; keep error lines + surrounding context.
+    const debug = process.argv.includes("--debug");
+    if (debug) {
+      // Full output (warnings, notes, the whole invocation).
+      process.stderr.write(stderrText);
+    } else if (stderrText) {
+      // Default: print error/linker lines + their context, but NEVER swallow —
+      // if the filter matches nothing, dump the whole stderr (the old code threw
+      // it all away, which hid linker "Undefined symbols" / ld: blocks).
       const lines = stderrText.split("\n");
-      const errorLines: string[] = [];
+      const kept: string[] = [];
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
-        if (line.includes("error:") || line.includes("error :")) {
-          // Include a bit of context (the error line itself and up to 3 following indented/source lines).
-          errorLines.push(line);
+        if (line.includes("error:") || line.includes("error :") ||
+            line.includes("Undefined symbols") || line.startsWith("ld:") ||
+            line.includes("symbol(s) not found")) {
+          kept.push(line);
           for (let j = 1; j <= 4 && i + j < lines.length; j++) {
             const next = lines[i + j];
             if (next.startsWith(" ") || next.startsWith("|") || next.match(/^\s*\d+\s*\|/)) {
-              errorLines.push(next);
-            } else {
-              break;
-            }
+              kept.push(next);
+            } else break;
           }
         }
       }
-      if (errorLines.length > 0) {
-        process.stderr.write(errorLines.join("\n") + "\n");
-      } else {
-        // Couldn't find anything that looks like an error — dump the full stderr
-        // so users aren't left staring at just "compilation failed".
-        process.stderr.write(stderrText);
-      }
+      process.stderr.write(kept.length > 0 ? kept.join("\n") + "\n" : stderrText);
     }
-    throw new Error(`[zapp] compilation failed (exit ${exitCode}). Run with --verbose for full output.`);
+    throw new Error(
+      `[zapp] native build failed (exit ${exitCode})` +
+      (debug ? "" : " — run with --debug for the full compiler invocation")
+    );
   }
 
   // Strip deferred for v2 baseline
