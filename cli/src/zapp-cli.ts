@@ -13,7 +13,7 @@ import { runInit } from "./init";
 import { createDevBundle } from "./bundle";
 import { createProductionBundle } from "./package";
 import { generateAssetManifest } from "./assets";
-import { setCliLevel, levelFromArgv, clog } from "./log";
+import { setCliLevel, levelFromArgv, getCliLevel, envFromLevel, clog } from "./log";
 
 // Bootstrap codegen lives outside cli/ in the monorepo but is bundled
 // alongside it in the published package. Dynamic import so the path
@@ -242,6 +242,9 @@ async function runDev(root: string) {
     cwd: root,
     stdout: "inherit",
     stderr: "inherit",
+    // Spread process.env so the vite plugin sees the runtime-set ZAPP_LOG
+    // (Bun.spawn otherwise snapshots env at process start, missing mutations).
+    env: { ...process.env },
   });
 
   // Wait for Vite to be ready — but also fail fast if the spawned process dies
@@ -478,6 +481,9 @@ async function runBuild(root: string) {
     cwd: root,
     stdout: "inherit",
     stderr: "inherit",
+    // Spread process.env so the vite plugin sees the runtime-set ZAPP_LOG
+    // (Bun.spawn otherwise snapshots env at process start, missing mutations).
+    env: { ...process.env },
   });
   const viteExit = await viteProc.exited;
   if (viteExit !== 0) {
@@ -629,6 +635,9 @@ const root = path.resolve(cwd, process.argv.includes("-r")
 // Set the CLI log level once from argv (--verbose/-v → 1, --debug → 2).
 // clog(level, …) lines below gate on this: 0 always prints, 1/2 are opt-in.
 setCliLevel(levelFromArgv(process.argv.slice(2)));
+// Export the level so cross-package consumers (the vite plugin, and later the
+// spawned native app) read it from ONE source of truth. "" = default/quiet.
+process.env.ZAPP_LOG = envFromLevel(getCliLevel());
 
 switch (command) {
   case "init": {

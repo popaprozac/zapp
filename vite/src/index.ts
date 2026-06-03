@@ -17,6 +17,13 @@ import path from "node:path";
 import { existsSync } from "node:fs";
 import { mkdir, readdir, stat, readFile } from "node:fs/promises";
 
+// Mirrors the CLI ZAPP_LOG levels so the plugin's progress logs are quiet by
+// default and reappear under --verbose/--debug (the CLI sets process.env.ZAPP_LOG).
+function zappLogLevel(): number {
+  const v = process.env.ZAPP_LOG;
+  return v === "debug" ? 2 : v === "verbose" ? 1 : 0;
+}
+
 const WORKER_PATTERN =
   /new\s+(?:SharedWorker|Worker)\s*\(\s*(?:new\s+URL\(\s*["'`](.+?)["'`]\s*,\s*import\.meta\.url\s*\)|["'`](.+?)["'`])/g;
 
@@ -409,6 +416,12 @@ function engineConsumesBareShims(engine: string | undefined): boolean {
   return engine.startsWith("bare-");
 }
 
+// Emit the "shims skipped" advisory at most once at default level (the full
+// per-worker detail goes to --verbose). The advisory has a runtime consequence
+// (requested globals will be undefined), so it must not be fully hidden — but
+// it shouldn't repeat per worker either.
+let shimAdvisoryShown = false;
+
 function workerModulesPrelude(
   entryAbsPath: string,
   workerModules: readonly string[],
@@ -421,13 +434,24 @@ function workerModulesPrelude(
   if (!engineConsumesBareShims(engine) && workerModules.length > 0) {
     const requested = workerModules.filter(c => WORKER_MODULE_BINDINGS[c] != null);
     if (requested.length > 0) {
-      console.warn(
-        `[zapp] worker "${path.basename(entryAbsPath)}" (engine: "${engine}") requested ` +
-        `workerModules: [${requested.map(c => `"${c}"`).join(", ")}] — those globals ` +
-        `come from bare-* shim packages and are only injected for bare-* engines. ` +
-        `Skipping shim injection. (For zjs, the capability will be served by the ` +
-        `engine's own runtime layer once it lands; for now the global will be undefined.)`
-      );
+      if (zappLogLevel() >= 1) {
+        // Full per-worker detail — verbose.
+        console.warn(
+          `[zapp] worker "${path.basename(entryAbsPath)}" (engine: "${engine}") requested ` +
+          `workerModules: [${requested.map(c => `"${c}"`).join(", ")}] — those globals ` +
+          `come from bare-* shim packages and are only injected for bare-* engines. ` +
+          `Skipping shim injection. (For zjs, the capability will be served by the ` +
+          `engine's own runtime layer once it lands; for now the global will be undefined.)`
+        );
+      } else if (!shimAdvisoryShown) {
+        // One concise advisory at default level — it has a runtime consequence.
+        shimAdvisoryShown = true;
+        console.warn(
+          `[zapp] note: workerModules shims aren't injected on the "${engine}" engine — ` +
+          `requested globals (e.g. fetch) will be undefined in those workers. ` +
+          `Run with --verbose for per-worker detail.`
+        );
+      }
     }
     return null;
   }
@@ -731,11 +755,13 @@ export function zappWorkers(options?: ZappWorkersOptions): Plugin {
       // downlevel so the resulting bundle is Hermes-safe.
       inheritAutoWorkerEngine(workers, headlessEntries);
 
-      if (workers.length > 0) {
-        console.log(`[zapp] discovered ${workers.length} worker(s)`);
-      }
-      for (const entry of headlessEntries) {
-        console.log(`[zapp] headless worker: ${path.relative(root, entry.sourcePath)}`);
+      if (zappLogLevel() >= 1) {
+        if (workers.length > 0) {
+          console.log(`[zapp] discovered ${workers.length} worker(s)`);
+        }
+        for (const entry of headlessEntries) {
+          console.log(`[zapp] headless worker: ${path.relative(root, entry.sourcePath)}`);
+        }
       }
     },
 
@@ -780,7 +806,7 @@ export function zappWorkers(options?: ZappWorkersOptions): Plugin {
       const allEntries = [...workers, ...headlessEntries];
       for (const entry of allEntries) {
         const ok = await bundleWorker(entry, devOutDir, aliases, root, mode, options?.workerModules ?? []);
-        if (ok) console.log(`[zapp] dev-bundled worker: ${entry.outputName}`);
+        if (ok && zappLogLevel() >= 1) console.log(`[zapp] dev-bundled worker: ${entry.outputName}`);
       }
 
       // Still expose middleware so WebView fetch of /_workers/<name>.mjs
@@ -827,7 +853,7 @@ export function zappWorkers(options?: ZappWorkersOptions): Plugin {
 
       for (const entry of allEntries) {
         const ok = await bundleWorker(entry, outDir, aliases, root, mode, options?.workerModules ?? []);
-        if (ok) {
+        if (ok && zappLogLevel() >= 1) {
           console.log(`[zapp] bundled worker: ${entry.outputName}`);
         }
       }
