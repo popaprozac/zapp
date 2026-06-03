@@ -173,6 +173,43 @@ headless: {
 See [`docs/engines.md`](../docs/engines.md) for the full taxonomy
 (zjs, bare-jsc, bare-v8, bare-quickjs, bare-mqjs, bare-hermes).
 
+## Native linking — `native:`
+
+`zapp/build.zc` is your Zen-C **service code** (imports,
+`app.service.add(...)`, handler `fn`s). The CLI injects platform
+frameworks, link flags, ObjC ARC, and the sysroot into
+`.zapp/zapp_platform.zc` and derives worker engines from
+`zapp.config.ts → headless[].engine`, so the default template has no
+`//>` build directives or `ZAPP_WORKER_ENGINE_*` defines.
+
+To link beyond the defaults, declare it in `zapp.config.ts → native`:
+
+```ts
+// zapp.config.ts
+native: {
+  frameworks: ["CoreLocation"],   // extra system frameworks (Apple)
+  linkFlags: ["-lsqlite3"],       // raw linker flags
+  sources: ["src/native/Foo.m"],  // extra source files compiled in
+}
+```
+
+Each value also accepts a per-platform map — `{ macos?, ios?, windows? }`
+— to scope it to one OS:
+
+```ts
+native: {
+  frameworks: { macos: ["CoreLocation"], ios: ["CoreLocation"] },
+  linkFlags:  { macos: ["-lsqlite3"], windows: ["-lws2_32"] },
+}
+```
+
+The flat `extraFrameworks` / `extraLinkFlags` / `nativeSources` fields are
+**deprecated aliases** for `native.frameworks` / `native.linkFlags` /
+`native.sources` (still honored, merged with the grouped block). Raw
+`//> macos: framework: …` / `//> macos: link: …` directives in any `.zc`
+remain a supported power-user escape hatch but aren't needed for normal
+linking.
+
 ## Troubleshooting
 
 **"port 5173 is already in use"** — a previous `zapp dev` died with a
