@@ -728,7 +728,13 @@ static ZjsValue host_worker_crash(ZjsContext* ctx, ZjsValue* argv, uint32_t argc
 }
 
 static ZjsValue host_console_log(ZjsContext* ctx, ZjsValue* argv, uint32_t argc) {
-    fputs("[js-console]", stderr);
+    // Worker console is the app's OWN output — always shown, never gated by
+    // verbosity. Prefix with the registry display name ([zapp/<worker>]) the
+    // same way the lifecycle log sites do, mapping ctx -> slot via the shared
+    // zjs_slot_for_ctx helper (host fns only receive ctx, not the slot).
+    ZjsWorkerSlot* cslot = zjs_slot_for_ctx(ctx);
+    const char* cwid = cslot ? cslot->worker_id : "?";
+    fprintf(stderr, "[zapp/%s]", zapp_worker_registry_get_display_name(cwid));
     for (uint32_t i = 0; i < argc; i++) {
         fputc(' ', stderr);
         if (zjs_is_string(argv[i])) {

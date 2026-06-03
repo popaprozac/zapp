@@ -505,8 +505,12 @@ static js_value_t* bare_host_log(js_env_t* env, js_callback_info_t* info) {
         size_t len = 0;
         js_get_value_string_utf8(env, argv[0], (utf8_t*)buf, sizeof(buf) - 1, &len);
         buf[len] = '\0';
+        // Worker console is the app's OWN output — always shown, never gated
+        // by verbosity. Prefix with the registry display name ([zapp/<worker>])
+        // to unify with the #150 lifecycle log format.
         const char* worker_id = slot ? slot->worker_id : "?";
-        fprintf(stderr, "[bare:%s] %s\n", worker_id, buf);
+        fprintf(stderr, "[zapp/%s] %s\n",
+            zapp_worker_registry_get_display_name(worker_id), buf);
     }
 
     js_value_t* undef;
