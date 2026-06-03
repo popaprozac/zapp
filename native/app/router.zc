@@ -256,6 +256,35 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
     // to JsonValue__get_string(pre_args, ...) — pointer receiver, no copy.
     if !has_pre_args { return; }
 
+    // App-level lifecycle actions (no window handle needed). macOS-only;
+    // raw blocks no-op elsewhere (Windows -> #167).
+    let is_set_quit_guard = action == "setQuitGuard";
+    if is_set_quit_guard {
+        let on_opt = pre_args.get_bool("enabled");
+        let on: bool = false;
+        if on_opt.is_some() { on = on_opt.unwrap(); }
+        raw {
+            #ifdef __APPLE__
+            extern void darwin_set_quit_guard(bool enabled);
+            darwin_set_quit_guard(on);
+            #endif
+        }
+        return;
+    }
+    let is_quit = action == "quit";
+    if is_quit {
+        let force_opt = pre_args.get_bool("force");
+        let force: bool = false;
+        if force_opt.is_some() { force = force_opt.unwrap(); }
+        raw {
+            #ifdef __APPLE__
+            extern void darwin_app_quit(bool force);
+            darwin_app_quit(force);
+            #endif
+        }
+        return;
+    }
+
     // Window operations — get the window handle from the manager
     let win = app.window.get(window_id);
     if !win.is_valid() { return; }

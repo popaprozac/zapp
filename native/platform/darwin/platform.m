@@ -9,6 +9,8 @@
 // --- App Delegate ---
 
 static BOOL zapp_should_terminate_after_last_window_closed = NO;
+static BOOL zapp_quit_guard_enabled = NO;
+static BOOL zapp_force_quit = NO;
 
 @interface ZappAppDelegate : NSObject <NSApplicationDelegate>
 @property (nonatomic, assign) BOOL themeObserverInstalled;
@@ -35,6 +37,15 @@ extern int zapp_app_dispatch(int event_id, const char* data);
 #define ZAPP_EVENT_APP_BEFORE_QUIT        113
 #endif
 
+void darwin_set_quit_guard(bool enabled) {
+    zapp_quit_guard_enabled = enabled ? YES : NO;
+}
+
+void darwin_app_quit(bool force) {
+    if (force) zapp_force_quit = YES;
+    dispatch_async(dispatch_get_main_queue(), ^{ [NSApp terminate:nil]; });
+}
+
 // Read the current effective appearance and return "light" or "dark".
 // Returns string literals — caller must not free. Falls back to "light"
 // on macOS < 10.14 (pre-dark-mode) or if NSApp isn't ready yet.
@@ -54,6 +65,18 @@ const char* darwin_get_theme(void) {
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication*)sender {
     (void)sender;
     return zapp_should_terminate_after_last_window_closed;
+}
+
+- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication*)sender {
+    (void)sender;
+    // No guard, or a forced quit (App.quit({force:true})) → proceed.
+    if (zapp_force_quit || !zapp_quit_guard_enabled) return NSTerminateNow;
+    // Guard armed: tell JS a quit was requested and cancel this attempt.
+    // The app runs its own (possibly async) confirmation, then re-issues
+    // App.quit({force:true}) to actually terminate. Mirrors setCloseGuard;
+    // avoids the NSTerminateLater "must reply or hang" footgun.
+    zapp_app_dispatch(ZAPP_EVENT_APP_BEFORE_QUIT, "{}");
+    return NSTerminateCancel;
 }
 
 - (void)applicationDidFinishLaunching:(NSNotification*)notification {

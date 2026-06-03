@@ -54,9 +54,27 @@ export const App = {
     return Events.on(name, handler);
   },
 
-  /** Quit the application. */
-  quit(): void {
-    getBridge().emit("app:quit");
+  /**
+   * Quit the application.
+   *
+   * If a quit guard is armed via {@link App.setQuitGuard}, a plain
+   * `App.quit()` is intercepted: the app stays open and fires
+   * `AppEvent.BEFORE_QUIT` instead. Call `App.quit({ force: true })`
+   * (e.g. after the user confirms in your "unsaved changes?" dialog) to
+   * actually terminate.
+   */
+  quit(opts?: { force?: boolean }): void {
+    appAction("quit", { force: opts?.force ?? false });
+  },
+
+  /**
+   * Arm/disarm the app-level quit guard. When armed, Cmd-Q / the menu
+   * Quit / `App.quit()` fire `AppEvent.BEFORE_QUIT` and do NOT terminate;
+   * call `App.quit({ force: true })` to proceed. The App analog of
+   * `WindowHandle.setCloseGuard`. macOS only.
+   */
+  setQuitGuard(enabled: boolean): void {
+    appAction("setQuitGuard", { enabled });
   },
 
   /** Open a URL in the system browser. */
