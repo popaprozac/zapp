@@ -15,7 +15,7 @@
 import type { Plugin, ViteDevServer } from "vite";
 import path from "node:path";
 import { existsSync } from "node:fs";
-import { mkdir, readdir, stat, readFile } from "node:fs/promises";
+import { mkdir, readdir, stat, readFile, rm } from "node:fs/promises";
 
 // Mirrors the CLI ZAPP_LOG levels so the plugin's progress logs are quiet by
 // default and reappear under --verbose/--debug (the CLI sets process.env.ZAPP_LOG).
@@ -797,6 +797,13 @@ export function zappWorkers(options?: ZappWorkersOptions): Plugin {
     // (buildStart's results aren't yet available).
     async configureServer(server: ViteDevServer) {
       const devOutDir = path.join(root, ".zapp", "workers");
+      // Wipe stale bundles first — otherwise renaming/deleting a worker,
+      // changing a headless id, or flipping `bytecode` leaves orphaned
+      // artifacts behind that the middleware (and the native filesystem
+      // fallback) can still serve. We rebuild every discovered entry on the
+      // next lines, so a full wipe is safe. configureServer runs once at
+      // Vite startup, before the CLI spawns the native app.
+      await rm(devOutDir, { recursive: true, force: true });
       await mkdir(devOutDir, { recursive: true });
 
       workers = await discoverWorkers(srcDir);
