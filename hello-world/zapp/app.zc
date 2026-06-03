@@ -1,17 +1,5 @@
 import "app/app.zc";
 
-// Log to stderr — platform-appropriate logging
-fn log(msg: string) -> void {
-    raw {
-        #ifdef __APPLE__
-        extern void NSLog(id, ...);
-        NSLog(@"[native] %s", (const char*)msg);
-        #else
-        fprintf(stderr, "[native] %s\n", (const char*)msg);
-        #endif
-    }
-}
-
 // @zapp:returns { greeting: string }
 fn greet(_app: App*, args: JsonValue*) -> string {
     log("service: greet called");
