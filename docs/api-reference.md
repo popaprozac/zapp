@@ -1333,6 +1333,70 @@ or worker), same keyspace.
 
 ---
 
+## Logging
+
+### Zen-C app logging
+
+Three functions write to the app's log output. All three prefix the message
+with `[zapp]` so log lines are easy to grep:
+
+```c
+log("app started");                // default — always visible
+logv("connecting to sync");        // verbose — shown with --verbose / ZAPP_LOG=verbose
+logd("detailed trace point");      // debug — shown with --debug / ZAPP_LOG=debug
+```
+
+The three levels map to the CLI flags and the `ZAPP_LOG` env var:
+
+| Zen-C function | CLI flag | `ZAPP_LOG` value | Always visible? |
+|---|---|---|---|
+| `log(msg)` | — | — | yes |
+| `logv(msg)` | `--verbose` / `-v` | `verbose` | no |
+| `logd(msg)` | `--debug` | `debug` | no |
+
+Each has the signature `fn log(msg: string) -> void` — a single string
+argument, no `printf`-style varargs. A `%s` in the message prints
+literally; build any interpolated text with string concatenation before
+the call. Output goes to the app's stderr, visible in the terminal where
+`zapp dev` is running or when the app is launched manually.
+
+### Worker `console.log`
+
+`console.log(...)` in a worker prints as `[zapp/<name>]` where `<name>` is
+the worker's configured display name (the `name` key in `zapp.config.ts →
+headless`, or the second argument to `new Worker(url, { name })`). Falls
+back to the runtime ID (`h-ticker`, `w-3`, etc.) when no name is set.
+
+```
+[zapp/sync-engine] connected to server
+[zapp/h-ticker]    tick 42
+```
+
+Worker log lines respect the same verbosity levels — `console.log` is
+always shown. The framework's own **routine** worker lifecycle messages
+(script loaded, created, exited) are gated on `--verbose` / `--debug`, so
+they stay out of a default `zapp dev` run. Errors (a worker throwing, a
+spawn failing) and supervisor restart / gave-up notices remain at the
+default level — those signal a crash you want to see.
+
+### Controlling log level
+
+Pass flags to `zapp dev` or `zapp build`:
+
+```bash
+zapp dev --verbose   # framework lifecycle + build-step detail
+zapp dev --debug     # full compiler invocation + complete build output
+```
+
+Or set `ZAPP_LOG` — this also works on **packaged apps** without a rebuild:
+
+```bash
+ZAPP_LOG=verbose zapp dev
+ZAPP_LOG=debug   ./MyApp.app/Contents/MacOS/MyApp   # field debug a shipped build
+```
+
+---
+
 ## Bridge detection
 
 The runtime uses `Symbol.for("zapp.bridge")` to find the bridge. In

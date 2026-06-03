@@ -127,6 +127,12 @@ extern char* zapp_workers_registry_list_json(void);
 extern const char* zapp_worker_registry_get_display_name(const char* worker_id);
 extern const char* zapp_fmt_compact_ms(int ms);
 
+// Framework log level (native/log/log.zc): 0=default, 1=verbose, 2=debug.
+// Routine per-worker lifecycle lines below are gated to >= 1 (verbose) so they
+// don't spam the default dev run; errors and supervisor restart/gave-up stay
+// at default.
+extern int zapp_log_level;
+
 // ---------------------------------------------------------------------------
 // Worker slot table — same shape as txiki, sized identically.
 // ---------------------------------------------------------------------------
@@ -728,7 +734,13 @@ static ZjsValue host_worker_crash(ZjsContext* ctx, ZjsValue* argv, uint32_t argc
 }
 
 static ZjsValue host_console_log(ZjsContext* ctx, ZjsValue* argv, uint32_t argc) {
-    fputs("[js-console]", stderr);
+    // Worker console is the app's OWN output — always shown, never gated by
+    // verbosity. Prefix with the registry display name ([zapp/<worker>]) the
+    // same way the lifecycle log sites do, mapping ctx -> slot via the shared
+    // zjs_slot_for_ctx helper (host fns only receive ctx, not the slot).
+    ZjsWorkerSlot* cslot = zjs_slot_for_ctx(ctx);
+    const char* cwid = cslot ? cslot->worker_id : "?";
+    fprintf(stderr, "[zapp/%s]", zapp_worker_registry_get_display_name(cwid));
     for (uint32_t i = 0; i < argc; i++) {
         fputc(' ', stderr);
         if (zjs_is_string(argv[i])) {
@@ -1130,7 +1142,9 @@ static char* zjs_load_script(const char* script_url, long* out_len) {
                     memcpy(code, zapp_embedded_assets[ai].data, code_len);
                     code[code_len] = '\0';
                 }
-                fprintf(stderr, "[zapp] zjs worker script loaded from embedded: %s\n", script_url);
+                if (zapp_log_level >= 1) {
+                    fprintf(stderr, "[zapp] zjs worker script loaded from embedded: %s\n", script_url);
+                }
                 break;
             }
         }
@@ -1148,7 +1162,9 @@ static char* zjs_load_script(const char* script_url, long* out_len) {
                     free(code); code = NULL; code_len = 0;
                 } else {
                     code[code_len] = '\0';
-                    fprintf(stderr, "[zapp] zjs worker script loaded: %s\n", script_path);
+                    if (zapp_log_level >= 1) {
+                        fprintf(stderr, "[zapp] zjs worker script loaded: %s\n", script_path);
+                    }
                 }
             }
             fclose(f);
@@ -1166,7 +1182,9 @@ static char* zjs_load_script(const char* script_url, long* out_len) {
             if (fetched) {
                 code = fetched;
                 code_len = fetched_len;
-                fprintf(stderr, "[zapp] zjs worker loaded from dev server: %s\n", full_url);
+                if (zapp_log_level >= 1) {
+                    fprintf(stderr, "[zapp] zjs worker loaded from dev server: %s\n", full_url);
+                }
             }
         }
     }
@@ -1685,8 +1703,10 @@ static void* zjs_worker_thread(void* arg) {
     }
 #endif
     slot->active = 0;
-    fprintf(stderr, "[zapp/%s] exited\n",
-        zapp_worker_registry_get_display_name(slot->worker_id));
+    if (zapp_log_level >= 1) {
+        fprintf(stderr, "[zapp/%s] exited\n",
+            zapp_worker_registry_get_display_name(slot->worker_id));
+    }
     return NULL;
 }
 

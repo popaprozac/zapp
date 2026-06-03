@@ -85,10 +85,30 @@ calls.
 
 ## Flags
 
-- `--verbose` / `-v` — stream full `zc` + `clang` output. By default only
-  error lines are shown (framework + stdlib generate ~200 warnings that
-  are noise).
 - `-r <path>` — operate on a project at a different directory.
+
+### Logging & verbosity
+
+By default `zapp dev` and `zapp build` show app output, build milestones,
+and errors. Two flags increase detail:
+
+- `--verbose` / `-v` — add framework lifecycle and per-build-step messages.
+- `--debug` — add the full `zc` compiler invocation and complete build
+  output. Useful when diagnosing a build failure in CI or when the
+  default error output isn't enough.
+
+**`ZAPP_LOG` env var** is the environment equivalent of these flags and,
+uniquely, also works on **packaged apps** (no rebuild needed):
+
+```bash
+ZAPP_LOG=verbose  zapp dev           # same as --verbose
+ZAPP_LOG=debug    zapp build         # same as --debug
+
+# Field debugging a shipped .app:
+ZAPP_LOG=debug ./MyApp.app/Contents/MacOS/MyApp
+```
+
+Valid values: `verbose`, `debug`. Unset (default) is quiet mode.
 
 ## Project structure
 

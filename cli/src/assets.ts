@@ -5,6 +5,7 @@ import path from "node:path";
 import { mkdir, readdir, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { brotliCompressSync, constants } from "node:zlib";
+import { clog } from "./log";
 
 interface AssetEntry {
   relPath: string;   // e.g. "/index.html"
@@ -116,10 +117,10 @@ export async function generateAssetManifest(root: string, assetDir: string): Pro
   const outPath = path.join(zappDir, "zapp_assets.zc");
   await Bun.write(outPath, zc);
 
-  process.stdout.write(
-    `[zapp] compressed ${assets.length} assets: ` +
+  clog(1,
+    `compressed ${assets.length} assets: ` +
     `${Math.round(totalOriginal / 1024)} KB → ${Math.round(totalCompressed / 1024)} KB ` +
-    `(${Math.round((1 - totalCompressed / totalOriginal) * 100)}% reduction)\n`
+    `(${Math.round((1 - totalCompressed / totalOriginal) * 100)}% reduction)`
   );
 
   return outPath;

@@ -13,6 +13,7 @@ import { runInit } from "./init";
 import { createDevBundle } from "./bundle";
 import { createProductionBundle } from "./package";
 import { generateAssetManifest } from "./assets";
+import { setCliLevel, levelFromArgv, getCliLevel, envFromLevel, clog } from "./log";
 
 // Bootstrap codegen lives outside cli/ in the monorepo but is bundled
 // alongside it in the published package. Dynamic import so the path
@@ -144,7 +145,7 @@ async function runDev(root: string) {
   const devUrl = `http://localhost:${port}`;
   const isIOS = isIOSTarget(target);
   if (isIOS) {
-    process.stdout.write(`[zapp] target: ${target}\n`);
+    clog(0, `target: ${target}`);
   }
 
   // 0. Check worker engine. Project either declares one in build.zc OR
@@ -156,7 +157,7 @@ async function runDev(root: string) {
   if (!workerEngine && !hasHeadlessWorkers) {
     // No workers anywhere. The build still succeeds — the user just
     // doesn't get the worker subsystem. Webview Workers still work.
-    process.stdout.write("[zapp] no worker engine configured — workers disabled.\n");
+    clog(0, "no worker engine configured — workers disabled.");
   }
 
   // 0a. workers.modules — verify each declared capability's
@@ -182,9 +183,9 @@ async function runDev(root: string) {
     : null;
 
   // 2. Generate service bindings + bundle workers
-  process.stdout.write("[zapp] scanning for services...\n");
+  clog(1, "scanning for services...");
   const count = await generateBindings(root);
-  if (count > 0) process.stdout.write(`[zapp] generated ${count} binding(s) in src/zapp/\n`);
+  if (count > 0) clog(1, `generated ${count} binding(s) in src/zapp/`);
   // Workers are bundled by the Vite plugin during vite build/dev
 
   // 3. Build vendored worker engines that the user opted into (either
@@ -204,7 +205,7 @@ async function runDev(root: string) {
   const platformFile = await generatePlatformConfig(root, target, iosBuildFile ?? undefined, engineOverlayFile ?? undefined, config);
   const headlessFile = await generateHeadlessWorkers({ root, headless: config.headless });
   const zappDir = path.join(root, ".zapp");
-  process.stdout.write("[zapp] generating bootstrap...\n");
+  clog(1, "generating bootstrap...");
   const bootstrapFile = await generateBootstrap(zappDir);
 
   // Generate stub assets file (no embedded assets in dev, but symbols must exist for linking)
@@ -236,11 +237,14 @@ async function runDev(root: string) {
     }
   }
 
-  process.stdout.write("[zapp] starting vite dev server...\n");
+  clog(1, "starting vite dev server...");
   const viteProc = Bun.spawn(["bunx", "vite", "--port", String(port), "--strictPort"], {
     cwd: root,
     stdout: "inherit",
     stderr: "inherit",
+    // Spread process.env so the vite plugin sees the runtime-set ZAPP_LOG
+    // (Bun.spawn otherwise snapshots env at process start, missing mutations).
+    env: { ...process.env },
   });
 
   // Wait for Vite to be ready — but also fail fast if the spawned process dies
@@ -296,7 +300,7 @@ async function runDev(root: string) {
   });
 
   // 4. Compile native binary. If this throws, cleanup() above kills vite.
-  process.stdout.write("[zapp] compiling native binary...\n");
+  clog(1, "compiling native binary...");
   const binDir = path.join(root, "bin");
   await mkdir(binDir, { recursive: true });
   const exeName = config.name.replace(/\s+/g, "-").toLowerCase();
@@ -374,7 +378,7 @@ async function runDev(root: string) {
       stdout: "ignore", stderr: "ignore",
     });
 
-    process.stdout.write("[zapp] installing on booted simulator...\n");
+    clog(0, "installing on booted simulator...");
     const installProc = Bun.spawn(["xcrun", "simctl", "install", "booted", appBundle], {
       stdout: "pipe", stderr: "pipe",
     });
@@ -386,12 +390,19 @@ async function runDev(root: string) {
     }
 
     const bundleId = config.identifier ?? `com.zapp.${exeName}.dev`;
-    process.stdout.write(`[zapp] launching ${bundleId}...\n`);
+    clog(0, `launching ${bundleId}...`);
     // --console-pty captures stderr (workers use fprintf for dev logs).
     // User sees the same output they'd get from a desktop dev run.
     appProc = Bun.spawn(
       ["xcrun", "simctl", "launch", "--console-pty", "booted", bundleId],
-      { cwd: root, stdout: "inherit", stderr: "inherit" }
+      {
+        cwd: root,
+        stdout: "inherit",
+        stderr: "inherit",
+        // simctl forwards SIMCTL_CHILD_<VAR> to the launched app's env, so
+        // the app's getenv("ZAPP_LOG") sees the CLI's chosen log level.
+        env: { ...process.env, SIMCTL_CHILD_ZAPP_LOG: envFromLevel(getCliLevel()) },
+      }
     );
 
     // Wait for either Vite or the launch wrapper to exit. Note the
@@ -408,21 +419,25 @@ async function runDev(root: string) {
 
   if (process.platform === "darwin") {
     // 5. Create .app bundle for dev mode (enables notifications, dock icon, app name)
-    process.stdout.write("[zapp] creating dev bundle...\n");
+    clog(1, "creating dev bundle...");
     const appDir = await createDevBundle(root, nativeOut, config);
     const execName = path.basename(nativeOut);
     execPath = path.join(appDir, "Contents", "MacOS", execName);
-    process.stdout.write(`[zapp] launching ${appDir}\n`);
+    clog(0, `launching ${appDir}`);
   } else {
     // Windows: self-contained WebView2 loader — no external DLL needed
     execPath = nativeOut;
-    process.stdout.write(`[zapp] launching ${execPath}\n`);
+    clog(0, `launching ${execPath}`);
   }
 
   appProc = Bun.spawn([execPath], {
     cwd: root,
     stdout: "inherit",
     stderr: "inherit",
+    // Bun.spawn with no env: inherits a start-time snapshot of process.env,
+    // not runtime mutations. Spread the current env so the ZAPP_LOG we set
+    // during dispatch reaches the app's getenv("ZAPP_LOG").
+    env: { ...process.env, ZAPP_LOG: envFromLevel(getCliLevel()) },
   });
 
   // Wait for either to exit
@@ -447,7 +462,7 @@ async function runBuild(root: string) {
     process.exit(1);
   }
   if (isIOSTarget(target)) {
-    process.stdout.write(`[zapp] target: ${target}\n`);
+    clog(0, `target: ${target}`);
   }
 
   const config = await loadConfig(root);
@@ -460,23 +475,26 @@ async function runBuild(root: string) {
   const workerEngine = await hasAnyWorkerEngine(root);
   const hasHeadlessWorkers = !!(config.headless && Object.keys(config.headless).length > 0);
   if (!workerEngine && !hasHeadlessWorkers) {
-    process.stdout.write("[zapp] no worker engine configured — workers disabled.\n");
+    clog(0, "no worker engine configured — workers disabled.");
   }
 
   await verifyWorkerModules(root, config.workerModules);
 
   // 1. Generate service bindings + bundle workers
-  process.stdout.write("[zapp] scanning for services...\n");
+  clog(1, "scanning for services...");
   const count = await generateBindings(root);
-  if (count > 0) process.stdout.write(`[zapp] generated ${count} binding(s) in src/zapp/\n`);
+  if (count > 0) clog(1, `generated ${count} binding(s) in src/zapp/`);
   // Workers are bundled by the Vite plugin during vite build
 
   // 2. Build frontend with Vite
-  process.stdout.write("[zapp] building frontend...\n");
+  clog(1, "building frontend...");
   const viteProc = Bun.spawn(["bunx", "vite", "build"], {
     cwd: root,
     stdout: "inherit",
     stderr: "inherit",
+    // Spread process.env so the vite plugin sees the runtime-set ZAPP_LOG
+    // (Bun.spawn otherwise snapshots env at process start, missing mutations).
+    env: { ...process.env },
   });
   const viteExit = await viteProc.exited;
   if (viteExit !== 0) {
@@ -485,7 +503,7 @@ async function runBuild(root: string) {
   }
 
   // 3. Compress + embed assets with brotli
-  process.stdout.write("[zapp] embedding assets with brotli...\n");
+  clog(1, "embedding assets with brotli...");
   const zappDir = path.join(root, ".zapp");
   const assetsFile = await generateAssetManifest(root, config.assetDir);
 
@@ -508,7 +526,7 @@ async function runBuild(root: string) {
   const bootstrapFile = await generateBootstrap(zappDir);
 
   // 5. Compile native binary (assets embedded in binary)
-  process.stdout.write("[zapp] compiling native binary...\n");
+  clog(1, "compiling native binary...");
   // Output paths differ by target. macOS / Windows: bin/<name>(.exe).
   // iOS: bin/ios/<name>.app/<name> — the binary lives inside a bundle
   // since simctl install / .ipa packaging both expect the bundled
@@ -576,17 +594,17 @@ async function runBuild(root: string) {
     // CFBundleIdentifier, which is `config.identifier` (or our
     // generated fallback when omitted).
     const bundleId = config.identifier ?? `com.zapp.${config.name.replace(/\s+/g, "-").toLowerCase()}.dev`;
-    process.stdout.write(
-      `[zapp] iOS bundle: ${appBundle}\n` +
+    clog(0,
+      `iOS bundle: ${appBundle}\n` +
       `[zapp] to install + launch:\n` +
       `         xcrun simctl install booted ${path.relative(root, appBundle)}\n` +
-      `         xcrun simctl launch --console booted ${bundleId}\n`
+      `         xcrun simctl launch --console booted ${bundleId}`
     );
   }
 
   const stat = Bun.file(nativeOut);
   const size = stat.size;
-  process.stdout.write(`[zapp] build complete: ${nativeOut} (${Math.round(size / 1024)} KB)\n`);
+  clog(0, `build complete: ${nativeOut} (${Math.round(size / 1024)} KB)`);
 }
 
 async function runPackage(root: string) {
@@ -616,7 +634,7 @@ async function runPackage(root: string) {
 
 async function runGenerate(root: string) {
   const count = await generateBindings(root);
-  process.stdout.write(`[zapp] generated ${count} binding(s) in src/zapp/\n`);
+  clog(0, `generated ${count} binding(s) in src/zapp/`);
 }
 
 // --- CLI ---
@@ -624,6 +642,13 @@ const command = process.argv[2];
 const root = path.resolve(cwd, process.argv.includes("-r")
   ? process.argv[process.argv.indexOf("-r") + 1] || "."
   : ".");
+
+// Set the CLI log level once from argv (--verbose/-v → 1, --debug → 2).
+// clog(level, …) lines below gate on this: 0 always prints, 1/2 are opt-in.
+setCliLevel(levelFromArgv(process.argv.slice(2)));
+// Export the level so cross-package consumers (the vite plugin, and later the
+// spawned native app) read it from ONE source of truth. "" = default/quiet.
+process.env.ZAPP_LOG = envFromLevel(getCliLevel());
 
 switch (command) {
   case "init": {

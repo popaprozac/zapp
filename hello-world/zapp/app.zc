@@ -1,17 +1,5 @@
 import "app/app.zc";
 
-// Log to stderr — platform-appropriate logging
-fn log(msg: string) -> void {
-    raw {
-        #ifdef __APPLE__
-        extern void NSLog(id, ...);
-        NSLog(@"[native] %s", (const char*)msg);
-        #else
-        fprintf(stderr, "[native] %s\n", (const char*)msg);
-        #endif
-    }
-}
-
 // @zapp:returns { greeting: string }
 fn greet(_app: App*, args: JsonValue*) -> string {
     log("service: greet called");
@@ -47,31 +35,31 @@ fn on_ready(_id: int, _handle: void*) -> void {
 // --- Native app-level event handlers ---
 
 fn on_notification_click(_event: int, _data: string) -> void {
-    log("app event: notification clicked");
+    logv("app event: notification clicked");
 }
 
 fn on_notification_action(_event: int, _data: string) -> void {
-    log("app event: notification action");
+    logv("app event: notification action");
 }
 
 fn on_reopen(_event: int, _data: string) -> void {
-    log("app event: reopen");
+    logv("app event: reopen");
 }
 
 fn on_open_url(_event: int, _data: string) -> void {
-    log("app event: deep link opened");
+    logv("app event: deep link opened");
 }
 
 fn on_app_started(_event: int, _data: string) -> void {
-    log("app event: started");
+    logv("app event: started");
 }
 
 fn on_became_active(_event: int, _data: string) -> void {
-    log("app event: became active");
+    logv("app event: became active");
 }
 
 fn on_resigned_active(_event: int, _data: string) -> void {
-    log("app event: resigned active");
+    logv("app event: resigned active");
 }
 
 // --- Native menu action callbacks ---
@@ -98,12 +86,12 @@ fn counter_startup(ptr: void*) -> void {
     let svc = (CounterService*)ptr;
     svc.count = 0;
     svc.ready = 1;
-    log("service lifecycle: counter started");
+    logv("service lifecycle: counter started");
 }
 
 fn counter_shutdown(ptr: void*) -> void {
     let svc = (CounterService*)ptr;
-    log("service lifecycle: counter shutdown");
+    logv("service lifecycle: counter shutdown");
     svc.ready = 0;
 }
 
@@ -132,18 +120,18 @@ fn run_app() -> int {
         qjsStackSize: 0,
     };
     let app = App::new(config);
-    log("app created");
+    logv("app created");
 
     // Simple service (no state, no lifecycle)
     app.service.add("greet", greet);
-    log("service registered: greet");
+    logv("service registered: greet");
 
     // Bench harness service — minimal handler that just returns a
     // constant JSON. Used by src/workers/bench.ts to measure
     // invokeService round-trip latency without service work skewing
     // the number.
     app.service.add("noop", noop);
-    log("service registered: noop");
+    logv("service registered: noop");
 
     // Stateful service with lifecycle
     let counter_impl = ServiceImpl{
@@ -152,7 +140,7 @@ fn run_app() -> int {
         shutdown: counter_shutdown,
     };
     app.service.register("counter", (void*)&counter_svc, &counter_impl);
-    log("service registered: counter (with lifecycle)");
+    logv("service registered: counter (with lifecycle)");
 
     // Register app-level event handlers
     app.on(AppEvent.STARTED, on_app_started);
@@ -162,7 +150,7 @@ fn run_app() -> int {
     app.on(AppEvent.DID_BECOME_ACTIVE, on_became_active);
     app.on(AppEvent.DID_RESIGN_ACTIVE, on_resigned_active);
     app.on(AppEvent.OPEN_URL, on_open_url);
-    log("app events registered");
+    logv("app events registered");
 
     // Build native menu
     let about = MenuItem::item_with_action("About hello-world", on_about);
@@ -187,7 +175,7 @@ fn run_app() -> int {
 
     let menus = [app_menu, file_menu, edit_menu];
     app.menu.set(&menus[0], 3);
-    log("menu set: app, File, Edit");
+    logv("menu set: app, File, Edit");
 
     // Register notification category with action buttons (native-first
     // API). The reply text-input action is added automatically when
@@ -206,15 +194,15 @@ fn run_app() -> int {
         reply_button_title: "Reply",
     };
     app.notification.register_category(&msg_category);
-    log("notification category registered: message (delete, reply field)");
+    logv("notification category registered: message (delete, reply field)");
 
     // Create window
     let opts = WindowOptions::create("hello-world");
     opts.visible = false;
     let win = app.window.create(&opts);
-    log("window created");
+    logv("window created");
     win.on_ready(on_ready);
 
-    log("starting event loop...");
+    logv("starting event loop...");
     return app.run();
 }

@@ -13,6 +13,7 @@ import "../tray/tray.zc";
 import "../fs/fs.zc";
 import "../clipboard/clipboard.zc";
 import "../shortcuts/shortcuts.zc";
+import "../log/log.zc";
 import "../bridge/json_safe.zc";
 import "./app_events.zc";
 
@@ -383,6 +384,7 @@ impl App {
             },
         }
 
+        raw { extern void zapp_log_init(void); zapp_log_init(); }
         platform_init(config.name);
 
         return App{
