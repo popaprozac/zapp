@@ -22,6 +22,11 @@ extern int zapp_app_dispatch(int event_id, const char* data);
 #define ZAPP_EVENT_APP_DID_BECOME_ACTIVE  106
 #define ZAPP_EVENT_APP_DID_RESIGN_ACTIVE  107
 #define ZAPP_EVENT_APP_THEME_CHANGED      108
+#define ZAPP_EVENT_APP_WILL_SLEEP         109
+#define ZAPP_EVENT_APP_DID_WAKE           110
+#define ZAPP_EVENT_APP_SCREEN_LOCKED      111
+#define ZAPP_EVENT_APP_SCREEN_UNLOCKED    112
+#define ZAPP_EVENT_APP_BEFORE_QUIT        113
 #endif
 
 // --- Theme detection ---
@@ -82,6 +87,13 @@ void darwin_trash_item(const char* path) {
         [[NSFileManager defaultManager] removeItemAtPath:[NSString stringWithUTF8String:path] error:nil];
     }
 }
+
+// Background-app readiness — macOS-only; inert on iOS (spec Q4).
+void darwin_set_quit_guard(bool enabled) { (void)enabled; }
+void darwin_app_quit(bool force)         { (void)force; }
+void darwin_app_activate(void)           { }
+bool darwin_set_login_item(bool enabled) { (void)enabled; return false; }
+bool darwin_get_login_item(void)         { return false; }
 
 // --- JS string escape helper (mirrors darwin/webview.m export) ---
 

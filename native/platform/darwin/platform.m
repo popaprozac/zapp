@@ -4,11 +4,14 @@
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
 #import <dispatch/dispatch.h>
+#import <ServiceManagement/ServiceManagement.h>
 #import "platform.h"
 
 // --- App Delegate ---
 
 static BOOL zapp_should_terminate_after_last_window_closed = NO;
+static BOOL zapp_quit_guard_enabled = NO;
+static BOOL zapp_force_quit = NO;
 
 @interface ZappAppDelegate : NSObject <NSApplicationDelegate>
 @property (nonatomic, assign) BOOL themeObserverInstalled;
@@ -28,7 +31,25 @@ extern int zapp_app_dispatch(int event_id, const char* data);
 #define ZAPP_EVENT_APP_DID_BECOME_ACTIVE  106
 #define ZAPP_EVENT_APP_DID_RESIGN_ACTIVE  107
 #define ZAPP_EVENT_APP_THEME_CHANGED      108
+#define ZAPP_EVENT_APP_WILL_SLEEP         109
+#define ZAPP_EVENT_APP_DID_WAKE           110
+#define ZAPP_EVENT_APP_SCREEN_LOCKED      111
+#define ZAPP_EVENT_APP_SCREEN_UNLOCKED    112
+#define ZAPP_EVENT_APP_BEFORE_QUIT        113
 #endif
+
+void darwin_set_quit_guard(bool enabled) {
+    zapp_quit_guard_enabled = enabled ? YES : NO;
+}
+
+void darwin_app_quit(bool force) {
+    if (force) zapp_force_quit = YES;
+    dispatch_async(dispatch_get_main_queue(), ^{ [NSApp terminate:nil]; });
+}
+
+void darwin_app_activate(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{ [NSApp activateIgnoringOtherApps:YES]; });
+}
 
 // Read the current effective appearance and return "light" or "dark".
 // Returns string literals — caller must not free. Falls back to "light"
@@ -45,10 +66,51 @@ const char* darwin_get_theme(void) {
     return [best isEqualToString:NSAppearanceNameDarkAqua] ? "dark" : "light";
 }
 
+// --- Launch-at-login (SMAppService.mainApp, macOS 13+) ---
+//
+// Backs App.setLoginItem / getLoginItemEnabled. registerAndReturnError:
+// adds the app as a login item; unregisterAndReturnError: removes it.
+// The .status property reports whether the main-app service is currently
+// enabled. No-op (false) on macOS 12, where SMAppService is unavailable.
+bool darwin_set_login_item(bool enabled) {
+    if (@available(macOS 13.0, *)) {
+        SMAppService* svc = [SMAppService mainAppService];
+        NSError* err = nil;
+        BOOL ok = enabled ? [svc registerAndReturnError:&err]
+                          : [svc unregisterAndReturnError:&err];
+        if (!ok && err) NSLog(@"[zapp] setLoginItem error: %@", err);
+        return ok ? true : false;
+    }
+    return false; // login-item API unavailable on macOS 12
+}
+
+bool darwin_get_login_item(void) {
+    if (@available(macOS 13.0, *)) {
+        return [SMAppService mainAppService].status == SMAppServiceStatusEnabled ? true : false;
+    }
+    return false;
+}
+
 @implementation ZappAppDelegate
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication*)sender {
     (void)sender;
     return zapp_should_terminate_after_last_window_closed;
+}
+
+- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication*)sender {
+    (void)sender;
+    // Forced quit (App.quit({force:true})): consume the latch and proceed.
+    // Resetting here ensures an AppKit-vetoed terminate doesn't leave the
+    // latch permanently set — a subsequent plain Cmd-Q re-engages the guard.
+    if (zapp_force_quit) { zapp_force_quit = NO; return NSTerminateNow; }
+    // No guard armed → proceed.
+    if (!zapp_quit_guard_enabled) return NSTerminateNow;
+    // Guard armed: tell JS a quit was requested and cancel this attempt.
+    // The app runs its own (possibly async) confirmation, then re-issues
+    // App.quit({force:true}) to actually terminate. Mirrors setCloseGuard;
+    // avoids the NSTerminateLater "must reply or hang" footgun.
+    zapp_app_dispatch(ZAPP_EVENT_APP_BEFORE_QUIT, "{}");
+    return NSTerminateCancel;
 }
 
 - (void)applicationDidFinishLaunching:(NSNotification*)notification {
@@ -67,6 +129,22 @@ const char* darwin_get_theme(void) {
                    context:NULL];
         self.themeObserverInstalled = YES;
     }
+
+    // Power / session observers. Sleep/wake come from NSWorkspace's own
+    // notification center (NOT the default center); lock/unlock come from
+    // the distributed center via the documented com.apple.screenIs* names.
+    // All are torn down in applicationWillTerminate.
+    NSNotificationCenter* wsCenter = [[NSWorkspace sharedWorkspace] notificationCenter];
+    [wsCenter addObserver:self selector:@selector(zappWillSleep:)
+                     name:NSWorkspaceWillSleepNotification object:nil];
+    [wsCenter addObserver:self selector:@selector(zappDidWake:)
+                     name:NSWorkspaceDidWakeNotification object:nil];
+
+    NSDistributedNotificationCenter* dist = [NSDistributedNotificationCenter defaultCenter];
+    [dist addObserver:self selector:@selector(zappScreenLocked:)
+                 name:@"com.apple.screenIsLocked" object:nil];
+    [dist addObserver:self selector:@selector(zappScreenUnlocked:)
+                 name:@"com.apple.screenIsUnlocked" object:nil];
 
     zapp_app_dispatch(ZAPP_EVENT_APP_STARTED, NULL);
 }
@@ -90,6 +168,8 @@ const char* darwin_get_theme(void) {
         } @catch (NSException* ignored) { (void)ignored; }
         self.themeObserverInstalled = NO;
     }
+    [[[NSWorkspace sharedWorkspace] notificationCenter] removeObserver:self];
+    [[NSDistributedNotificationCenter defaultCenter] removeObserver:self];
     // Service shutdown in reverse registration order (before SHUTDOWN event)
     extern void service_run_shutdown_all(void);
     service_run_shutdown_all();
@@ -111,6 +191,11 @@ const char* darwin_get_theme(void) {
     (void)notification;
     zapp_app_dispatch(ZAPP_EVENT_APP_DID_RESIGN_ACTIVE, NULL);
 }
+
+- (void)zappWillSleep:(NSNotification*)note     { (void)note; zapp_app_dispatch(ZAPP_EVENT_APP_WILL_SLEEP, "{}"); }
+- (void)zappDidWake:(NSNotification*)note        { (void)note; zapp_app_dispatch(ZAPP_EVENT_APP_DID_WAKE, "{}"); }
+- (void)zappScreenLocked:(NSNotification*)note   { (void)note; zapp_app_dispatch(ZAPP_EVENT_APP_SCREEN_LOCKED, "{}"); }
+- (void)zappScreenUnlocked:(NSNotification*)note { (void)note; zapp_app_dispatch(ZAPP_EVENT_APP_SCREEN_UNLOCKED, "{}"); }
 
 // Deep link handler: receives URLs when app is opened via custom scheme (e.g., myapp://path)
 - (void)application:(NSApplication*)application openURLs:(NSArray<NSURL*>*)urls {

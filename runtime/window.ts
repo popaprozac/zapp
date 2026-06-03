@@ -192,6 +192,8 @@ export interface WindowHandle {
   setSize(width: number, height: number): void;
   setPosition(x: number, y: number): void;
   minimize(): void;
+  /** Raise this window and bring the app to the foreground (macOS). */
+  setFocus(): void;
   maximize(): void;
   setFullscreen(on: boolean): void;
   setAlwaysOnTop(on: boolean): void;
@@ -262,6 +264,7 @@ function createWindowHandle(windowId: string): WindowHandle {
     setSize(width: number, h: number) { windowAction("setSize", { windowId, width, height: h }); },
     setPosition(x: number, y: number) { windowAction("setPosition", { windowId, x, y }); },
     minimize()                        { windowAction("minimize", { windowId }); },
+    setFocus()                        { windowAction("setFocus", { windowId }); },
     maximize()                        { windowAction("maximize", { windowId }); },
     setFullscreen(on: boolean)        { windowAction("setFullscreen", { windowId, on }); },
     setAlwaysOnTop(on: boolean)       { windowAction("setAlwaysOnTop", { windowId, on }); },
