@@ -143,6 +143,21 @@ void darwin_window_create(WindowOptions* opts) {
 This keeps the .m file decoupled from Zen-C struct layout (which can
 change between compiler versions).
 
+### Verifying native changes
+
+The iOS target compiles `native/platform/ios/*.m` — **not** `native/platform/darwin/*.m`. But the cross-platform Zen-C (`.zc`, e.g. `native/app/router.zc`) is compiled into *every* target, and its `#ifdef __APPLE__` blocks are active on iOS too (`__APPLE__` is defined on both macOS and iOS). So any `darwin_*` function the shared `.zc` calls must have a definition on the iOS side as well, or the iOS link fails with `Undefined symbols`.
+
+Two checks guard this:
+
+1. **Automatic:** `bun test cli/src` runs a symbol-parity lint (`cli/src/ios-platform-parity.test.ts`) that fails if a `darwin_*` referenced from `.zc` is defined in `darwin/` but missing in `ios/`. This catches the most common cross-platform regression for free on every test run.
+2. **Before merging native changes:** also run a real iOS compile —
+
+   ```sh
+   bun run build --platform ios-simulator
+   ```
+
+   and require its `[zapp] build complete:` line. This is the broader backstop the lint can't replace (it catches Cocoa-only APIs used in shared code, macro mismatches, and other divergences — not just missing symbols). A passing macOS build alone is **not** sufficient verification for changes under `native/`.
+
 ## Layer 2: bridge (bootstrap)
 
 `bootstrap/webview.ts` and `bootstrap/worker.ts` are **TypeScript source
