@@ -102,6 +102,12 @@ extern char* zapp_workers_registry_list_json(void);
 extern const char* zapp_worker_registry_get_display_name(const char* worker_id);
 extern const char* zapp_fmt_compact_ms(int ms);
 
+// Framework log level (native/log/log.zc): 0=default, 1=verbose, 2=debug.
+// Routine per-worker lifecycle lines below are gated to >= 1 (verbose) so they
+// don't spam the default dev run; errors and supervisor restart/gave-up stay
+// at default.
+extern int zapp_log_level;
+
 // Sync API + window creation. darwin_sync_handle is thread-safe (uses
 // pthread_mutex), so workers can call directly without bouncing to
 // the main queue. Window creation is NOT thread-safe — must run on
@@ -353,7 +359,9 @@ static char* bare_load_script(const char* script_url, int* out_len) {
                 memcpy(code, zapp_embedded_assets[i].data, code_len);
                 code[code_len] = '\0';
             }
-            fprintf(stderr, "[zapp] bare worker loaded from embedded: %s\n", script_url);
+            if (zapp_log_level >= 1) {
+                fprintf(stderr, "[zapp] bare worker loaded from embedded: %s\n", script_url);
+            }
             *out_len = code_len;
             return code;
         }
@@ -376,7 +384,9 @@ static char* bare_load_script(const char* script_url, int* out_len) {
                 fread(code, 1, len, f);
                 code[len] = '\0';
                 fclose(f);
-                fprintf(stderr, "[zapp] bare worker loaded from disk: %s\n", path_buf);
+                if (zapp_log_level >= 1) {
+                    fprintf(stderr, "[zapp] bare worker loaded from disk: %s\n", path_buf);
+                }
                 *out_len = (int)len;
                 return code;
             }
@@ -1649,8 +1659,10 @@ static BareSetupResult bare_worker_setup_state(BareWorkerSlot* slot) {
 
     js_close_handle_scope(slot->env, scope);
 
-    fprintf(stderr, "[zapp/%s] created\n",
-        zapp_worker_registry_get_display_name(slot->worker_id));
+    if (zapp_log_level >= 1) {
+        fprintf(stderr, "[zapp/%s] created\n",
+            zapp_worker_registry_get_display_name(slot->worker_id));
+    }
 
     // Run the user's worker script. We use `js_run_script` rather than
     // `bare_load` because bare-module's CJS/ESM resolver rejects our
@@ -1767,8 +1779,10 @@ static void bare_worker_teardown_state(BareWorkerSlot* slot, int keep_loop) {
     slot->loop = NULL;
     slot->active = false;
 
-    fprintf(stderr, "[zapp/%s] exited (code=%d)\n",
-        zapp_worker_registry_get_display_name(slot->worker_id), exit_code);
+    if (zapp_log_level >= 1) {
+        fprintf(stderr, "[zapp/%s] exited (code=%d)\n",
+            zapp_worker_registry_get_display_name(slot->worker_id), exit_code);
+    }
 }
 
 // --- Worker thread entry ---

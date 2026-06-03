@@ -1337,25 +1337,27 @@ or worker), same keyspace.
 
 ### Zen-C app logging
 
-Three macros write to the app's log output. All three prefix the message
+Three functions write to the app's log output. All three prefix the message
 with `[zapp]` so log lines are easy to grep:
 
 ```c
-log("app started");          // default — always visible
-logv("connecting to sync");  // verbose — shown with --verbose / ZAPP_LOG=verbose
-logd("raw response: %s", buf); // debug — shown with --debug / ZAPP_LOG=debug
+log("app started");                // default — always visible
+logv("connecting to sync");        // verbose — shown with --verbose / ZAPP_LOG=verbose
+logd("detailed trace point");      // debug — shown with --debug / ZAPP_LOG=debug
 ```
 
 The three levels map to the CLI flags and the `ZAPP_LOG` env var:
 
-| Zen-C macro | CLI flag | `ZAPP_LOG` value | Always visible? |
+| Zen-C function | CLI flag | `ZAPP_LOG` value | Always visible? |
 |---|---|---|---|
 | `log(msg)` | — | — | yes |
 | `logv(msg)` | `--verbose` / `-v` | `verbose` | no |
 | `logd(msg)` | `--debug` | `debug` | no |
 
-`log` / `logv` / `logd` accept a format string + arguments (same as
-`printf`). Output goes to the app's stderr, visible in the terminal where
+Each has the signature `fn log(msg: string) -> void` — a single string
+argument, no `printf`-style varargs. A `%s` in the message prints
+literally; build any interpolated text with string concatenation before
+the call. Output goes to the app's stderr, visible in the terminal where
 `zapp dev` is running or when the app is launched manually.
 
 ### Worker `console.log`
@@ -1371,8 +1373,11 @@ back to the runtime ID (`h-ticker`, `w-3`, etc.) when no name is set.
 ```
 
 Worker log lines respect the same verbosity levels — `console.log` is
-always shown; the framework's own worker lifecycle messages are gated on
-`--verbose` / `--debug`.
+always shown. The framework's own **routine** worker lifecycle messages
+(script loaded, created, exited) are gated on `--verbose` / `--debug`, so
+they stay out of a default `zapp dev` run. Errors (a worker throwing, a
+spawn failing) and supervisor restart / gave-up notices remain at the
+default level — those signal a crash you want to see.
 
 ### Controlling log level
 
