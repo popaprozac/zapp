@@ -15,10 +15,10 @@ import { Events, Sync, Workers } from "@zappdev/runtime";
 // `workerModules` in zapp.config.ts (now ["fetch"]) drives the
 // install — no manual side-effect import needed here.
 
-console.log("[supervised] starting");
+console.log("starting");
 
 Events.on("force-crash", () => {
-  console.log("[supervised] received force-crash → throwing in 0ms");
+  console.log("received force-crash → throwing in 0ms");
   // setTimeout dispatches into the worker queue; the callback runs
   // unwrapped, so a throw becomes uncaught at top level.
   setTimeout(() => {
@@ -37,7 +37,7 @@ Events.on("force-crash", () => {
 // failCount stays 0. Triggered by Workers.send("h-supervised",
 // "throw-in-message", …) from the UI.
 receive("throw-in-message", () => {
-  console.log("[supervised] throwing synchronously in a message handler (expect: contained, no restart)");
+  console.log("throwing synchronously in a message handler (expect: contained, no restart)");
   throw new Error("forced throw in message handler (#154)");
 });
 
@@ -47,7 +47,7 @@ receive("throw-in-message", () => {
 let aliveEchoes = 0;
 receive("alive-check", () => {
   aliveEchoes++;
-  console.log(`[supervised] alive-check → still running (echo #${aliveEchoes})`);
+  console.log(`alive-check → still running (echo #${aliveEchoes})`);
   Events.emit("supervised:alive", { echo: aliveEchoes, ts: Date.now() });
 });
 
@@ -57,7 +57,7 @@ receive("alive-check", () => {
 // setTimeout (the timer path); this one throws synchronously in the
 // Events.on callback. Triggered by Events.emit("throw-in-event", …).
 Events.on("throw-in-event", () => {
-  console.log("[supervised] throwing synchronously in an event handler (expect: supervisor restart)");
+  console.log("throwing synchronously in an event handler (expect: supervisor restart)");
   throw new Error("forced throw in event handler (#154)");
 });
 
@@ -66,12 +66,12 @@ Events.on("throw-in-event", () => {
 // via `Workers.send` (no broadcast fan-out, no webview hop). The
 // ticker echoes back to *this* worker on the `pong` channel.
 receive("pong", (data: any) => {
-  console.log("[supervised] got pong from ticker:", JSON.stringify(data));
+  console.log("got pong from ticker:", JSON.stringify(data));
   Events.emit("supervised:pipeline-done", { hop: "supervised → ticker → supervised", ts: Date.now() });
 });
 
 Events.on("relay-to-ticker", () => {
-  console.log("[supervised] relaying ping to h-ticker");
+  console.log("relaying ping to h-ticker");
   Workers.send("h-ticker", "ping", { replyTo: "h-supervised", from: "h-supervised" });
 });
 
@@ -87,7 +87,7 @@ Events.on("relay-to-ticker", () => {
 // Payload: { windowId, event, w, h, x, y }. Fires for resize/move/focus/etc.
 // when the host has subscribed the worker to that window+event bitmask.
 Events.on("window:event", (data: any) => {
-  console.log(`[supervised] window:event received: ${JSON.stringify(data)}`);
+  console.log(`window:event received: ${JSON.stringify(data)}`);
 });
 
 // Global shortcut — native/platform/darwin/shortcuts.m:205
@@ -95,21 +95,21 @@ Events.on("window:event", (data: any) => {
 // shortcut id string (no JSON.parse needed — bootstrap leaves it as the
 // raw string when parse fails).
 Events.on("app:shortcut-triggered", (data: any) => {
-  console.log(`[supervised] app:shortcut-triggered received: ${JSON.stringify(data)}`);
+  console.log(`app:shortcut-triggered received: ${JSON.stringify(data)}`);
 });
 
 // Menu item click — native/platform/darwin/menu.m:29
 // (`_onEvent('__menu:click', '{"id":"…"}')`). Covers app menu bar +
 // context menus; payload is { id }.
 Events.on("__menu:click", (data: any) => {
-  console.log(`[supervised] __menu:click received: ${JSON.stringify(data)}`);
+  console.log(`__menu:click received: ${JSON.stringify(data)}`);
 });
 
 // Tray status-item click — native/platform/darwin/tray.m:153 + :166
 // (`_onEvent('__tray:click', '{"id":<int>}')`). Payload is { id } (the
 // tray slot id).
 Events.on("__tray:click", (data: any) => {
-  console.log(`[supervised] __tray:click received: ${JSON.stringify(data)}`);
+  console.log(`__tray:click received: ${JSON.stringify(data)}`);
 });
 
 // Notification click — workers receive this via the Layer 2
@@ -118,7 +118,7 @@ Events.on("__tray:click", (data: any) => {
 // `_onEvent` is intentionally NOT broadcast to workers (see
 // native/platform/darwin/notification.m:23-27 comment — would double-fire).
 Events.on("app:notification-click", (data: any) => {
-  console.log(`[supervised] app:notification-click received: ${JSON.stringify(data)}`);
+  console.log(`app:notification-click received: ${JSON.stringify(data)}`);
 });
 
 // Sync result — exercise the targeted-delivery path landed in T4
@@ -142,9 +142,9 @@ Events.on("app:notification-click", (data: any) => {
 // Requires the runtime/sync.ts longhand rewrite (commit 68d0403) —
 // the async-method-shorthand form crashed zjs's parser on import.
 Events.on("supervised-sync-test", async () => {
-  console.log(`[supervised] Sync.wait("__supervised-sync-audit", 10000) started`);
+  console.log(`Sync.wait("__supervised-sync-audit", 10000) started`);
   const result = await Sync.wait("__supervised-sync-audit", 10000);
-  console.log(`[supervised] Sync.wait("__supervised-sync-audit") → ${result}`);
+  console.log(`Sync.wait("__supervised-sync-audit") → ${result}`);
 });
 
-console.log("[supervised] ready");
+console.log("ready");
