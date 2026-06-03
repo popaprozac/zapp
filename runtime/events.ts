@@ -51,6 +51,11 @@ export enum AppEvent {
    * (System Settings → Appearance, auto schedule, or per-window
    * override). Payload: `{ theme: "light" | "dark" }`. */
   THEME_CHANGED = 108,
+  WILL_SLEEP = 109,        // system about to sleep
+  DID_WAKE = 110,          // system woke from sleep
+  SCREEN_LOCKED = 111,     // screen locked
+  SCREEN_UNLOCKED = 112,   // screen unlocked
+  BEFORE_QUIT = 113,       // quit requested while a quit guard is armed
 }
 
 /** Map WindowEvent enum to string event names. */
@@ -77,6 +82,11 @@ const APP_EVENT_NAMES: Record<number, string> = {
   [AppEvent.DID_BECOME_ACTIVE]: "app:active",
   [AppEvent.DID_RESIGN_ACTIVE]: "app:inactive",
   [AppEvent.THEME_CHANGED]: "app:theme-changed",
+  [AppEvent.WILL_SLEEP]: "app:will-sleep",
+  [AppEvent.DID_WAKE]: "app:did-wake",
+  [AppEvent.SCREEN_LOCKED]: "app:screen-locked",
+  [AppEvent.SCREEN_UNLOCKED]: "app:screen-unlocked",
+  [AppEvent.BEFORE_QUIT]: "app:before-quit",
 };
 
 /** Payload for window events that include size and position. */
@@ -117,7 +127,7 @@ type SimpleEvents = "window:ready" | "window:focus" | "window:blur" | "window:cl
   | "window:minimize" | "window:fullscreen" | "window:unfullscreen";
 
 /** App event string names. */
-type AppEvents = "app:started" | "app:shutdown" | "app:reopen" | "app:open-url" | "app:active" | "app:inactive" | "app:theme-changed";
+type AppEvents = "app:started" | "app:shutdown" | "app:reopen" | "app:open-url" | "app:active" | "app:inactive" | "app:theme-changed" | "app:will-sleep" | "app:did-wake" | "app:screen-locked" | "app:screen-unlocked" | "app:before-quit";
 
 /** All known event names. Arbitrary strings also work. */
 export type EventName = SizeEvents | SimpleEvents | AppEvents | (string & {});
