@@ -63,11 +63,36 @@ existing window.
 
 ## `App`
 
-### `App.quit(): void`
+### `App.quit(opts?: { force?: boolean }): void`
 
 Terminates the application. On macOS, this fires the normal
 `applicationShouldTerminate` delegate chain — if a window has a close
 guard active, the quit will block until the guard is resolved.
+
+If the **app-level quit guard** is armed via `App.setQuitGuard(true)`,
+a plain `App.quit()` (or Cmd-Q / menu Quit) does **not** terminate —
+it fires `AppEvent.BEFORE_QUIT` instead and leaves the app open. To
+actually quit after confirming with the user, call `App.quit({ force:
+true })`:
+
+```ts
+App.setQuitGuard(true);
+
+App.on(AppEvent.BEFORE_QUIT, async () => {
+  const r = await Dialog.message({
+    title: "Unsaved changes",
+    message: "Quit without saving?",
+    buttons: ["Quit", "Cancel"],
+    kind: "warning",
+  });
+  if (r.button === 0) {
+    App.quit({ force: true });
+  }
+});
+```
+
+See [`App.setQuitGuard`](#appsetquitguardenabled-boolean-void) for
+the full guard API.
 
 ### `App.openExternal(url: string): void`
 
@@ -145,6 +170,115 @@ App.on(AppEvent.OPEN_URL, (data) => {
   console.log("deep link:", data.url);
 });
 ```
+
+The power/screen events are useful for sync-engine apps — pause
+expensive work before the system sleeps and resume on wake:
+
+```ts
+import { App, AppEvent } from "@zappdev/runtime";
+
+App.on(AppEvent.WILL_SLEEP, () => {
+  syncEngine.pause();
+});
+
+App.on(AppEvent.DID_WAKE, () => {
+  syncEngine.resume();
+});
+
+App.on(AppEvent.SCREEN_LOCKED, () => {
+  // Optional: close authenticated sessions for security
+  sessionManager.lock();
+});
+
+App.on(AppEvent.SCREEN_UNLOCKED, () => {
+  sessionManager.unlock();
+});
+```
+
+All four payloads are empty `{}` — there is no additional data beyond
+the event itself.
+
+### `App.setQuitGuard(enabled: boolean): void`
+
+Arm or disarm the app-level quit guard. When armed, Cmd-Q / the menu
+Quit item / `App.quit()` fire `AppEvent.BEFORE_QUIT` and do **not**
+terminate the process. Call `App.quit({ force: true })` (e.g. after the
+user confirms in an "unsaved changes?" dialog) to actually quit.
+
+The quit guard is the app-wide analog of `WindowHandle.setCloseGuard`.
+macOS only; no-op on iOS/Windows.
+
+```ts
+App.setQuitGuard(true);
+
+App.on(AppEvent.BEFORE_QUIT, async () => {
+  const r = await Dialog.message({
+    title: "Unsaved changes",
+    message: "Quit without saving?",
+    buttons: ["Quit", "Cancel"],
+    kind: "warning",
+  });
+  if (r.button === 0) {
+    App.quit({ force: true });
+  }
+});
+```
+
+`BEFORE_QUIT` handlers are fire-and-forget — the framework discards the returned Promise, so wrap async work in `try/catch` inside the handler; an unhandled rejection will not be caught by the framework.
+
+Disarm before force-quitting is not required — `App.quit({ force: true
+})` bypasses the guard regardless of whether it is still armed.
+
+### `App.activate(): void`
+
+Bring the app to the foreground without targeting a specific window.
+Useful for a tray-icon summon when no window is currently visible
+(the app process is running but hidden). macOS only; no-op on
+iOS/Windows.
+
+```ts
+tray.on("click", () => {
+  App.activate();
+});
+```
+
+To raise a *specific* window use `WindowHandle.setFocus()`.
+
+### `App.setLoginItem(enabled: boolean): Promise<boolean>`
+
+Enable or disable launch-at-login via `SMAppService`. Returns `true`
+when the change took effect, `false` when it did not.
+
+**Platform notes:**
+- macOS 13+: backed by `SMAppService.mainApp`. Returns the actual
+  result from the OS.
+- macOS 12: no-op, always returns `false` (SMAppService API unavailable).
+- iOS / Windows: always returns `false`.
+
+**Bundle requirement.** The login item is registered against the app's
+bundle ID. A raw unbundled binary (e.g. the `bin/` output of `zapp
+build` run without packaging) has no bundle ID, so the call is a
+no-op. Run `zapp package` and launch the resulting `.app` for the
+setting to take effect.
+
+```ts
+const ok = await App.setLoginItem(true);
+if (!ok) {
+  console.warn("Login item could not be registered — is the app bundled?");
+}
+```
+
+### `App.getLoginItemEnabled(): Promise<boolean>`
+
+Whether this app is currently registered to launch at login.
+
+```ts
+const enabled = await App.getLoginItemEnabled();
+console.log("launch at login:", enabled);
+```
+
+Returns `false` on macOS 12, iOS, and Windows (same conditions as
+`setLoginItem`).
 
 ### `App.getConfig(): Record<string, unknown>`
 
@@ -232,10 +366,21 @@ REOPEN (104)           — dock icon clicked, no window present
 OPEN_URL (105)         — deep link fired
 DID_BECOME_ACTIVE (106)
 DID_RESIGN_ACTIVE (107)
+THEME_CHANGED (108)    — see App.getTheme()
+WILL_SLEEP (109)       — system is about to sleep (macOS)
+DID_WAKE (110)         — system woke from sleep (macOS)
+SCREEN_LOCKED (111)    — screen locked (macOS)
+SCREEN_UNLOCKED (112)  — screen unlocked (macOS)
+BEFORE_QUIT (113)      — quit requested while quit guard is armed (macOS)
 ```
 
 STARTED and SHUTDOWN fire before/after webview existence — listen for
 them in a headless worker.
+
+The power/screen events (WILL_SLEEP, DID_WAKE, SCREEN_LOCKED,
+SCREEN_UNLOCKED) and BEFORE_QUIT are macOS-only today; they are no-ops
+on iOS/Windows. See the [Background-app platform note](#background-app-platform-note)
+below.
 
 ### `eventName(event: WindowEvent | AppEvent): string`
 
@@ -375,6 +520,7 @@ setSize(width: number, height: number): void
 setPosition(x: number, y: number): void
 
 minimize(): void
+setFocus(): void          // raise this window and bring app to foreground (macOS)
 maximize(): void
 setFullscreen(on: boolean): void
 setAlwaysOnTop(on: boolean): void
@@ -452,6 +598,36 @@ on the parent).
 
 `on()` auto-filters — only fires for events targeting this specific window.
 No manual windowId checking needed.
+
+### `WindowHandle.setFocus(): void`
+
+Raise this window to the front and bring the app to the foreground,
+even if another application is currently frontmost. Internally calls
+`makeKeyAndOrderFront:` (which makes a hidden window visible and
+brings it forward) followed by `[NSApp activateIgnoringOtherApps:YES]`
+(which raises the app over other applications). Because
+`makeKeyAndOrderFront:` both shows and raises the window, a preceding
+`show()` call is redundant — `setFocus()` alone is sufficient to
+summon a hidden window.
+
+macOS only; no-op on iOS/Windows.
+
+```ts
+// Tray-driven summon: setFocus() shows the panel if hidden AND brings
+// it to the front — no separate show() needed.
+const panel = await Window.create({
+  title: "Quick panel",
+  width: 320, height: 480,
+  borderless: true, visible: false,
+});
+
+tray.on("click", () => {
+  panel.setFocus(); // shows if hidden, raises, activates app
+});
+```
+
+To bring the app forward *without* targeting a specific window (e.g.
+when no window is currently open), use `App.activate()`.
 
 ---
 
@@ -1141,6 +1317,116 @@ status.attachWindow(panel, { position: "centerBelow" });
 
 macOS only today. iOS has no menu-bar equivalent by design. Windows
 system-tray support is a separate gap on the Windows-parity roadmap.
+
+---
+
+## Background-app / menu-bar app recipe
+
+A background-app or pure menu-bar app combines three things:
+
+1. **Keep the app alive after the last window closes** — set
+   `applicationShouldTerminateAfterLastWindowClosed: false` in the
+   `AppConfig` struct inside your `zapp/app.zc`, then pass it to
+   `App::new(config)`. This is a native-first knob, not a
+   `zapp.config.ts` field. The hello-world template sets this to
+   `false` by default.
+
+2. **Hide the Dock icon** — call `Dock.hideIcon()` in JS (from a
+   worker or `src/main.ts`) to remove the app from the Dock entirely.
+   Without a Dock icon the app is invisible to the user unless it has
+   a tray.
+
+3. **Tray + window summon** — create a `Tray` for the menu-bar
+   presence, and use `WindowHandle.setFocus()` / `App.activate()` to
+   bring the UI forward on click.
+
+```ts
+// src/main.ts (or a headless worker)
+import { App, AppEvent, Dialog, Dock, Tray, Window } from "@zappdev/runtime";
+
+// Hide Dock presence — pure menu-bar app.
+Dock.hideIcon();
+
+const panel = await Window.create({
+  title: "Quick panel",
+  width: 320, height: 480,
+  borderless: true,
+  visible: false,
+});
+
+const tray = Tray.create({
+  icon: "build/menubar-icon.png",
+  tooltip: "My App",
+});
+tray.attachWindow(panel, { position: "centerBelow" });
+
+// Also wire a global shortcut so power users can summon without clicking.
+// tray.on("click") is handled by attachWindow's toggleOnClick:true.
+
+// Re-sync on wake; pause on sleep.
+App.on(AppEvent.DID_WAKE, () => syncEngine.resume());
+App.on(AppEvent.WILL_SLEEP, () => syncEngine.pause());
+
+// Graceful quit with unsaved-changes guard.
+App.setQuitGuard(true);
+App.on(AppEvent.BEFORE_QUIT, async () => {
+  // NOTE: BEFORE_QUIT handlers are fire-and-forget — the framework discards
+  // the returned Promise. Wrap all async work in try/catch here; an unhandled
+  // rejection will NOT be caught by the framework.
+  if (!hasPendingChanges()) {
+    App.quit({ force: true });
+    return;
+  }
+  const r = await Dialog.message({
+    title: "Quit",
+    message: "There are pending changes. Quit anyway?",
+    buttons: ["Quit", "Cancel"],
+    kind: "warning",
+  });
+  if (r.button === 0) App.quit({ force: true });
+});
+```
+
+**`applicationShouldTerminateAfterLastWindowClosed`** lives in your
+`zapp/app.zc`, not in `zapp.config.ts`. Look for (or add) the
+`AppConfig` literal in `app.zc`, then pass it to `App::new`:
+
+```c
+// zapp/app.zc
+let config = AppConfig{
+  name: "my-app",
+  applicationShouldTerminateAfterLastWindowClosed: false,
+  webContentInspectable: Zapp::inspectable_auto(),
+  maxWorkers: 4,
+  qjsStackSize: 0,
+};
+let app = App::new(config);
+// ... register services, set up windows ...
+return app.run();
+```
+
+This is intentionally a native-first surface — it controls the macOS
+`NSApplicationDelegate` callback before any JS runs.
+
+### Background-app platform note
+
+The background-app APIs documented in this section are macOS-only
+today:
+
+| Feature | macOS | iOS | Windows |
+|---|---|---|---|
+| `AppEvent.WILL_SLEEP` / `DID_WAKE` | supported | — | Windows tracking #167 |
+| `AppEvent.SCREEN_LOCKED` / `SCREEN_UNLOCKED` | supported | — | Windows tracking #167 |
+| `AppEvent.BEFORE_QUIT` | supported | — | Windows tracking #167 |
+| `App.setQuitGuard` | supported | no-op | no-op |
+| `App.activate` | supported | no-op | no-op |
+| `App.setLoginItem` / `getLoginItemEnabled` | macOS 13+ | `false` | `false` |
+| `WindowHandle.setFocus` | supported | no-op | no-op |
+
+iOS foreground/background transitions are covered by the existing
+`AppEvent.DID_BECOME_ACTIVE` (`app:active`) and
+`AppEvent.DID_RESIGN_ACTIVE` (`app:inactive`) events, which fire on
+both platforms.
 
 ---
 
