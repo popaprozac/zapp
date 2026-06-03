@@ -1,6 +1,7 @@
 // Zapp config loader — reads zapp.config.ts
 
 import path from "node:path";
+import { isIOSTarget, type BuildTarget } from "./native";
 
 export interface MacOSConfig {
   /**
@@ -661,6 +662,8 @@ export interface ZappConfig {
    * // Cross-platform C helper
    * nativeSources: ["src/native/helper.c"]
    * ```
+   *
+   * @deprecated use `native.sources`
    */
   nativeSources?: PlatformValue<string[]>;
 
@@ -678,6 +681,8 @@ export interface ZappConfig {
    * // App uses Metal on Apple, nothing extra on Windows.
    * extraFrameworks: { macos: ["Metal"], ios: ["Metal"] }
    * ```
+   *
+   * @deprecated use `native.frameworks`
    */
   extraFrameworks?: PlatformValue<string[]>;
 
@@ -696,8 +701,34 @@ export interface ZappConfig {
    *   windows: ["-lws2_32"],
    * }
    * ```
+   *
+   * @deprecated use `native.linkFlags`
    */
   extraLinkFlags?: PlatformValue<string[]>;
+
+  /**
+   * Native build extras — the Tauri-style escape hatch for linking system
+   * frameworks, raw linker flags, and extra native source files. Each value is
+   * either an array (all targets) or a per-platform map (PlatformValue).
+   *
+   * This grouped block supersedes the flat `extraFrameworks` /
+   * `extraLinkFlags` / `nativeSources` fields. Both are still honored and
+   * merged (grouped first, then flat, de-duplicated) via `resolveNative`.
+   *
+   * @example
+   * ```ts
+   * native: {
+   *   frameworks: { macos: ["CoreLocation"], ios: ["CoreLocation"] },
+   *   linkFlags:  { macos: ["-lsqlite3"], windows: ["-lws2_32"] },
+   *   sources:    { macos: ["src/native/MyService.m"] },
+   * }
+   * ```
+   */
+  native?: {
+    frameworks?: PlatformValue<string[]>;
+    linkFlags?: PlatformValue<string[]>;
+    sources?: PlatformValue<string[]>;
+  };
 }
 
 /**
@@ -728,6 +759,38 @@ export function resolvePlatformValue<T>(
   if (!v) return [];
   if (Array.isArray(v)) return v;
   return v[target] ?? [];
+}
+
+/**
+ * Merge the grouped `native:` block with the deprecated flat fields
+ * (`extraFrameworks` / `extraLinkFlags` / `nativeSources`), resolved for
+ * `target`. Grouped values come first, then flat, de-duplicated (order
+ * preserved). Both iOS subtargets collapse to the `ios` map key — the same
+ * bucket `resolvePlatformValue` uses elsewhere in the build.
+ */
+export function resolveNative(
+  config: ZappConfig,
+  target: BuildTarget,
+): { frameworks: string[]; linkFlags: string[]; sources: string[] } {
+  // Collapse BuildTarget → the narrow per-platform bucket key that
+  // resolvePlatformValue reads (both iOS subtargets share the "ios" set).
+  const platformKey: "macos" | "ios" | "windows" =
+    target === "macos"   ? "macos"
+    : isIOSTarget(target) ? "ios"
+    : "windows";
+  const dedupe = (xs: string[]) => [...new Set(xs)];
+  const merge = (
+    grouped: PlatformValue<string[]> | undefined,
+    flat: PlatformValue<string[]> | undefined,
+  ) => dedupe([
+    ...resolvePlatformValue(grouped, platformKey),
+    ...resolvePlatformValue(flat, platformKey),
+  ]);
+  return {
+    frameworks: merge(config.native?.frameworks, config.extraFrameworks),
+    linkFlags: merge(config.native?.linkFlags, config.extraLinkFlags),
+    sources: merge(config.native?.sources, config.nativeSources),
+  };
 }
 
 export interface ResolvedConfig extends ZappConfig {
