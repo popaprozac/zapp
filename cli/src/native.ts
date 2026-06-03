@@ -4,6 +4,7 @@ import path from "node:path";
 import { existsSync, unlinkSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { resolveBareDir } from "./paths";
+import { clog } from "./log";
 
 /**
  * Build target — what platform/architecture the binary is being
@@ -290,7 +291,7 @@ export async function ensureBareBuilt(
   // Bare's CMakeLists requires its node_modules deps (cmake-bare,
   // cmake-fetch, cmake-drive, etc.) — install them on first build.
   if (!existsSync(path.join(bareDir, "node_modules", "cmake-bare"))) {
-    process.stdout.write("[zapp] installing Bare cmake dependencies...\n");
+    clog(1, "installing Bare cmake dependencies...");
     const install = Bun.spawn(["bun", "install"], {
       cwd: bareDir, stdout: "inherit", stderr: "inherit",
     });
@@ -301,7 +302,7 @@ export async function ensureBareBuilt(
     : target === "ios-simulator" ? "iOS Simulator (arm64)"
     : target === "ios-device" ? "iOS device (arm64)"
     : target;
-  process.stdout.write(`[zapp] building Bare (${engine}) for ${label} (first time only, may take a few minutes)...\n`);
+  clog(0, `building Bare (${engine}) for ${label} (first time only, may take a few minutes)...`);
 
   const configureArgs = [
     "-B", buildDir,
@@ -457,7 +458,7 @@ export async function ensureBareBuilt(
   }
   await ensureBareModulesArchive(path.join(bareDir, buildDir), projectRoot);
 
-  process.stdout.write(`[zapp] Bare (${engine}) built successfully\n`);
+  clog(0, `Bare (${engine}) built successfully`);
   return bareDir;
 }
 
@@ -563,7 +564,7 @@ async function ensureUserBareModulesCompiled(
   if (linkSpecs.length === 0) return;
 
   const summary = linkSpecs.map((s) => s.name).join(", ");
-  process.stdout.write(`[zapp] compiling bare modules: ${summary}\n`);
+  clog(1, `compiling bare modules: ${summary}`);
 
   // Generate the overlay project.
   const overlayDir = path.join(bareDir, buildDir, "zapp-user-modules");

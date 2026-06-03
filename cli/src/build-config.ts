@@ -8,6 +8,7 @@ import { existsSync } from "node:fs";
 import { resolvePlatformValue, type ResolvedConfig } from "./config";
 import { getPlatformSources, getUserProjectSources, type BuildTarget, detectTarget, isIOSTarget } from "./native";
 import { resolveNativeDir, resolveVendorDir } from "./paths";
+import { clog, clogError } from "./log";
 
 // xcrun-resolved iOS SDK paths. Cached for the life of the CLI process
 // — calling xcrun is ~80ms, called only once per build now.
@@ -271,10 +272,10 @@ export async function generateIOSBuildFile(
   // Surface this explicitly so users don't think they're getting V8
   // speed on their iOS build.
   if (userPickedBareV8 || configHasBareV8) {
-    process.stdout.write(
-      "[zapp] note: bare-v8 isn't useful on iOS (no JIT entitlement for App Store apps).\n" +
+    clog(0,
+      "note: bare-v8 isn't useful on iOS (no JIT entitlement for App Store apps).\n" +
       "       Falling back to bare-jsc for this build.\n" +
-      "       Use 'bare-quickjs' explicitly if you want cross-platform interpreter parity.\n"
+      "       Use 'bare-quickjs' explicitly if you want cross-platform interpreter parity."
     );
   }
 
@@ -349,12 +350,12 @@ export async function generateEngineOverlay(opts: {
     .map(([k]) => k);
   if (declaredInBuildZc.length > 0 && !_engineBuildZcWarned) {
     _engineBuildZcWarned = true;
-    process.stderr.write(
-      `[zapp] zapp/build.zc declares engine define(s) for ${declaredInBuildZc.join(", ")} ` +
+    clogError(
+      `zapp/build.zc declares engine define(s) for ${declaredInBuildZc.join(", ")} ` +
       `via \`//> define: ZAPP_WORKER_ENGINE_*\`. Engine selection has moved to ` +
       `zapp.config.ts — set \`engine: "..."\` on the relevant headless entry (and ` +
       `the CLI emits the matching define). The build.zc form still works but is ` +
-      `deprecated; expect removal in a future alpha.\n`
+      `deprecated; expect removal in a future alpha.`
     );
   }
 
@@ -445,7 +446,7 @@ export async function generatePlatformConfig(
   if (userSources.length > 0) {
     sources.push(...userSources);
     const relPaths = userSources.map(s => path.relative(root, s));
-    process.stdout.write(`[zapp] user sources: ${relPaths.join(", ")}\n`);
+    clog(1, `user sources: ${relPaths.join(", ")}`);
   }
 
   // Check enabled worker engines from user's build.zc directives AND
@@ -983,7 +984,7 @@ export async function generatePlatformConfig(
     }
 
     if (!existsSync(zjsLib)) {
-      process.stdout.write(`[zapp] building ${buildLabel}...\n`);
+      clog(1, `building ${buildLabel}...`);
       const proc = Bun.spawn(makeCmd, {
         stdout: "pipe", stderr: "pipe",
       });
@@ -1073,7 +1074,7 @@ export async function generatePlatformConfig(
         || fs.statSync(embedLib).mtimeMs < srcMtime
         || fs.statSync(embedLib).mtimeMs < aesGcmSrcMtime;
       if (stale) {
-        process.stdout.write("[zapp] post-processing libzjs.a → libzjs_embed.a (iOS Sim)...\n");
+        clog(1, "post-processing libzjs.a → libzjs_embed.a (iOS Sim)...");
 
         // Compile aes_gcm.c into an object so we can include it in
         // the ld -r merge (libzjs.a references zjs_pc_aes_gcm_* but
