@@ -1,6 +1,7 @@
 // Zapp config loader — reads zapp.config.ts
 
 import path from "node:path";
+import { isIOSTarget, type BuildTarget } from "./native";
 
 export interface MacOSConfig {
   /**
@@ -661,6 +662,8 @@ export interface ZappConfig {
    * // Cross-platform C helper
    * nativeSources: ["src/native/helper.c"]
    * ```
+   *
+   * @deprecated use `native.sources`
    */
   nativeSources?: PlatformValue<string[]>;
 
@@ -678,6 +681,8 @@ export interface ZappConfig {
    * // App uses Metal on Apple, nothing extra on Windows.
    * extraFrameworks: { macos: ["Metal"], ios: ["Metal"] }
    * ```
+   *
+   * @deprecated use `native.frameworks`
    */
   extraFrameworks?: PlatformValue<string[]>;
 
@@ -696,8 +701,34 @@ export interface ZappConfig {
    *   windows: ["-lws2_32"],
    * }
    * ```
+   *
+   * @deprecated use `native.linkFlags`
    */
   extraLinkFlags?: PlatformValue<string[]>;
+
+  /**
+   * Native build extras — the Tauri-style escape hatch for linking system
+   * frameworks, raw linker flags, and extra native source files. Each value is
+   * either an array (all targets) or a per-platform map (PlatformValue).
+   *
+   * This grouped block supersedes the flat `extraFrameworks` /
+   * `extraLinkFlags` / `nativeSources` fields. Both are still honored and
+   * merged (grouped first, then flat, de-duplicated) via `resolveNative`.
+   *
+   * @example
+   * ```ts
+   * native: {
+   *   frameworks: { macos: ["CoreLocation"], ios: ["CoreLocation"] },
+   *   linkFlags:  { macos: ["-lsqlite3"], windows: ["-lws2_32"] },
+   *   sources:    { macos: ["src/native/MyService.m"] },
+   * }
+   * ```
+   */
+  native?: {
+    frameworks?: PlatformValue<string[]>;
+    linkFlags?: PlatformValue<string[]>;
+    sources?: PlatformValue<string[]>;
+  };
 }
 
 /**
@@ -730,6 +761,38 @@ export function resolvePlatformValue<T>(
   return v[target] ?? [];
 }
 
+/**
+ * Merge the grouped `native:` block with the deprecated flat fields
+ * (`extraFrameworks` / `extraLinkFlags` / `nativeSources`), resolved for
+ * `target`. Grouped values come first, then flat, de-duplicated (order
+ * preserved). Both iOS subtargets collapse to the `ios` map key — the same
+ * bucket `resolvePlatformValue` uses elsewhere in the build.
+ */
+export function resolveNative(
+  config: ZappConfig,
+  target: BuildTarget,
+): { frameworks: string[]; linkFlags: string[]; sources: string[] } {
+  // Collapse BuildTarget → the narrow per-platform bucket key that
+  // resolvePlatformValue reads (both iOS subtargets share the "ios" set).
+  const platformKey: "macos" | "ios" | "windows" =
+    target === "macos"   ? "macos"
+    : isIOSTarget(target) ? "ios"
+    : "windows";
+  const dedupe = (xs: string[]) => [...new Set(xs)];
+  const merge = (
+    grouped: PlatformValue<string[]> | undefined,
+    flat: PlatformValue<string[]> | undefined,
+  ) => dedupe([
+    ...resolvePlatformValue(grouped, platformKey),
+    ...resolvePlatformValue(flat, platformKey),
+  ]);
+  return {
+    frameworks: merge(config.native?.frameworks, config.extraFrameworks),
+    linkFlags: merge(config.native?.linkFlags, config.extraLinkFlags),
+    sources: merge(config.native?.sources, config.nativeSources),
+  };
+}
+
 export interface ResolvedConfig extends ZappConfig {
   assetDir: string;
 }
@@ -743,6 +806,33 @@ export function defineConfig(config: ZappConfig): ZappConfig {
 // CEF / Chromium is gated on a real customer surfacing a reproducible
 // "system WebView won't render X" requirement — see
 // /Users/zach/.claude/plans/polished-mapping-ullman.md.
+// Validate the native: block — each of frameworks/linkFlags/sources must be a
+// string[] or a per-platform map of string[]. Throws a clear error otherwise.
+export function validateNative(config: ZappConfig): void {
+  const n = config.native;
+  if (!n) return;
+  const checkList = (v: unknown, where: string) => {
+    if (!Array.isArray(v)) throw new Error(`[zapp] ${where} must be a string[] (got ${typeof v})`);
+    for (const item of v) {
+      if (typeof item !== "string") throw new Error(`[zapp] ${where} entries must be strings (got ${typeof item})`);
+    }
+  };
+  const checkField = (v: unknown, name: string) => {
+    if (v === undefined) return;
+    if (Array.isArray(v)) { checkList(v, `native.${name}`); return; }
+    if (v && typeof v === "object") {
+      for (const [plat, list] of Object.entries(v as Record<string, unknown>)) {
+        checkList(list, `native.${name}.${plat}`);
+      }
+      return;
+    }
+    throw new Error(`[zapp] native.${name} must be a string[] or a per-platform map (got ${typeof v})`);
+  };
+  checkField(n.frameworks, "frameworks");
+  checkField(n.linkFlags, "linkFlags");
+  checkField(n.sources, "sources");
+}
+
 function validateWebEngine(engine?: ZappConfig["webEngine"]): void {
   if (engine === undefined || engine === "system") return;
   if (engine === "chromium") {
@@ -792,6 +882,7 @@ export async function loadConfig(root: string): Promise<ResolvedConfig> {
     const config = (typeof mod.default === "function" ? mod.default() : mod.default) as ZappConfig;
     validateWebEngine(config.webEngine);
     rejectRemovedEngines(config);
+    validateNative(config);
     return {
       ...config,
       assetDir: config.assetDir ?? "./dist",

@@ -743,6 +743,56 @@ enforcement is in `runtime/bare/fs.ts` (paths must match
 
 ---
 
+## Native build config
+
+Your `zapp/build.zc` is **service code** — Zen-C imports,
+`app.service.add(...)` registrations, and handler `fn`s. The framework
+injects all platform boilerplate (system frameworks, link flags, ObjC
+ARC, sysroot) into `.zapp/zapp_platform.zc` and derives worker engines
+from `zapp.config.ts`'s `headless[].engine`, so the default template
+carries no `//> framework:` / `//> link:` directives or
+`ZAPP_WORKER_ENGINE_*` defines.
+
+When you need to link beyond the defaults — a system framework, a raw
+linker flag, or an extra native source file — declare it in the
+`native:` block:
+
+```ts
+native: {
+  frameworks: ["CoreLocation"],   // extra system frameworks (Apple)
+  linkFlags: ["-lsqlite3"],       // raw linker flags
+  sources: ["src/native/Foo.m"],  // extra source files compiled in
+}
+```
+
+Each value also accepts a per-platform map to scope it to one OS:
+
+```ts
+native: {
+  frameworks: { macos: ["CoreLocation"], ios: ["CoreLocation"] },
+  linkFlags:  { macos: ["-lsqlite3"], windows: ["-lws2_32"] },
+  sources:    { macos: ["src/native/Foo.m"] },
+}
+```
+
+| Field | Type | Purpose |
+|---|---|---|
+| `frameworks` | `string[]` \| `{ macos?, ios?, windows? }` | System frameworks to link (Apple-only concept). |
+| `linkFlags` | `string[]` \| `{ macos?, ios?, windows? }` | Raw linker flags (`-l…`, library paths). |
+| `sources` | `string[]` \| `{ macos?, ios?, windows? }` | Extra native source files (`.m`/`.c`) compiled into the binary. |
+
+The flat fields `extraFrameworks`, `extraLinkFlags`, and `nativeSources`
+are **deprecated aliases** for `native.frameworks` / `native.linkFlags` /
+`native.sources`. They still work and are merged with the grouped block,
+but prefer `native:` in new code.
+
+Raw `//> macos: framework: …` / `//> macos: link: …` directives in
+`build.zc` (or any `.zc` the build scans) remain a supported power-user
+escape hatch — the zc compiler still honors them — but they aren't needed
+for normal linking and aren't emitted in the default templates.
+
+---
+
 ## `Dialog`
 
 Native file + message dialogs.

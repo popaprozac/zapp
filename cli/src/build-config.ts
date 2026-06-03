@@ -5,7 +5,7 @@
 import path from "node:path";
 import { mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { resolvePlatformValue, type ResolvedConfig } from "./config";
+import { resolveNative, type ResolvedConfig } from "./config";
 import { getPlatformSources, getUserProjectSources, type BuildTarget, detectTarget, isIOSTarget } from "./native";
 import { resolveNativeDir, resolveVendorDir } from "./paths";
 import { clog, clogError } from "./log";
@@ -216,7 +216,6 @@ export async function generateIOSBuildFile(
   originalBuildFile: string,
   config?: ResolvedConfig,
 ): Promise<string> {
-  void root;
   let content = "";
   try {
     content = await Bun.file(originalBuildFile).text();
@@ -294,11 +293,15 @@ export async function generateIOSBuildFile(
 ${engineDefines.map(d => `//> define: ${d}`).join("\n")}
 `;
 
-  // Write next to the user's build.zc so relative imports
-  // (`import "app.zc"`) still resolve. Using an underscore prefix
-  // makes it visually distinct from hand-authored sources; safe to
-  // gitignore via `zapp/_zapp_build_ios.zc`.
-  const iosBuildFile = path.join(path.dirname(originalBuildFile), "_zapp_build_ios.zc");
+  // Write into the hidden `.zapp/` dir alongside the other generated
+  // artifacts (zapp_platform.zc, engine overlay, worker bundles) so the
+  // visible `zapp/` dir only ever shows the user's own files. The
+  // generated file re-emits the user's build.zc body (which uses bare
+  // module names like `import "app.zc"` resolved against zc's include
+  // path), so its location is independent of the original.
+  const zappDir = path.join(root, ".zapp");
+  await mkdir(zappDir, { recursive: true });
+  const iosBuildFile = path.join(zappDir, "_zapp_build_ios.zc");
   await Bun.write(iosBuildFile, iosOverlay + filtered);
   return iosBuildFile;
 }
@@ -493,15 +496,15 @@ export async function generatePlatformConfig(
     return rel.length < abs.length ? rel : abs;
   };
 
-  // Per-target bucket key for `resolvePlatformValue` (collapses both
-  // iOS subtargets to "ios" — same source set + same extras apply).
-  const platformKey: "macos" | "ios" | "windows" =
-    target === "macos"   ? "macos"
-    : isIOSTarget(target) ? "ios"
-    : "windows";
-  const userNativeSources = resolvePlatformValue(config?.nativeSources,  platformKey);
-  const userExtraFrameworks = resolvePlatformValue(config?.extraFrameworks, platformKey);
-  const userExtraLinkFlags  = resolvePlatformValue(config?.extraLinkFlags,  platformKey);
+  // Native extras from zapp.config.ts — the grouped `native:` block AND
+  // the deprecated flat fields (`extraFrameworks` / `extraLinkFlags` /
+  // `nativeSources`), merged + de-duped per-target by `resolveNative`,
+  // which collapses both iOS subtargets to the "ios" bucket internally.
+  const {
+    frameworks: userExtraFrameworks,
+    linkFlags: userExtraLinkFlags,
+    sources: userNativeSources,
+  } = resolveNative(config ?? ({} as ResolvedConfig), target);
   // Resolve user source paths relative to project root.
   const resolvedUserSources = userNativeSources.map(s => path.resolve(root, s));
 
@@ -535,6 +538,8 @@ export async function generatePlatformConfig(
     // libSystem on macOS today, but declared explicitly so the dependency
     // is honest and can't silently regress (the iOS link needs it outright).
     content += `//> macos: link: -lz\n`;
+    // App-declared extras from zapp.config.ts.
+    for (const fw of userExtraFrameworks) content += `//> macos: framework: ${fw}\n`;
     if (userExtraLinkFlags.length > 0) {
       content += `//> macos: link: ${userExtraLinkFlags.join(" ")}\n`;
     }

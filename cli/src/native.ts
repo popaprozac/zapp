@@ -959,6 +959,12 @@ export async function compileNative(opts: CompileOptions): Promise<void> {
     ...(headlessFile ? [headlessFile] : []),
     ...(engineOverlayFile ? [engineOverlayFile] : []),
     "-I", nativeDir,
+    // The user's `zapp/` source dir on the include path so bare imports
+    // in the build manifest (`import "app.zc";`) resolve to the user's
+    // sources regardless of where the manifest itself lives. On iOS the
+    // manifest is the generated `.zapp/_zapp_build_ios.zc`, so relative
+    // resolution against the manifest's own dir would miss `zapp/app.zc`.
+    "-I", path.join(root, "zapp"),
     "-o", output,
     // Apple targets (macOS + iOS) need --objective-c so the generated
     // .c file is parsed as ObjC (raw blocks contain NSLog, NSString*,

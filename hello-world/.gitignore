@@ -27,5 +27,4 @@ dist-ssr
 .zapp/
 bin/
 src/zapp/
-zapp/_zapp_build_*.zc
 *.dSYM/
