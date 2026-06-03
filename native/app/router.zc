@@ -292,6 +292,16 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
         }
         return;
     }
+    let is_activate = action == "activate";
+    if is_activate {
+        raw {
+            #ifdef __APPLE__
+            extern void darwin_app_activate(void);
+            darwin_app_activate();
+            #endif
+        }
+        return;
+    }
 
     // Window operations — get the window handle from the manager
     let win = app.window.get(window_id);
@@ -300,6 +310,7 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
     let is_show = action == "show";
     let is_hide = action == "hide";
     let is_minimize = action == "minimize";
+    let is_set_focus = action == "setFocus";
     let is_maximize = action == "maximize";
     let is_subscribe = action == "subscribe";
     let is_unsubscribe = action == "unsubscribe";
@@ -618,6 +629,7 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
     if is_show { win.show(); return; }
     if is_hide { win.hide(); return; }
     if is_minimize { window_minimize(win.handle); return; }
+    if is_set_focus { window_focus(win.handle); return; }
     if is_maximize { window_maximize(win.handle); return; }
 
     if is_set_title {

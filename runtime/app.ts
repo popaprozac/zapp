@@ -78,6 +78,14 @@ export const App = {
   },
 
   /**
+   * Bring the app to the foreground without targeting a specific window
+   * (e.g. summon from a tray click). macOS only; no-op on iOS/Windows.
+   */
+  activate(): void {
+    appAction("activate");
+  },
+
+  /**
    * Enable or disable launch-at-login. Returns whether the change took
    * effect. macOS 13+; on macOS 12 this is a no-op that returns `false`.
    * iOS/Windows: `false`.

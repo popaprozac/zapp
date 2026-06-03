@@ -726,6 +726,8 @@ fn window_register_numeric_id(handle: void*, id: int) -> void { darwin_win::darw
 @cfg(apple)
 fn window_minimize(handle: void*) -> void { darwin_win::darwin_window_minimize(handle); }
 @cfg(apple)
+fn window_focus(handle: void*) -> void { darwin_win::darwin_window_focus(handle); }
+@cfg(apple)
 fn window_maximize(handle: void*) -> void { darwin_win::darwin_window_maximize(handle); }
 @cfg(apple)
 fn window_set_title(handle: void*, title: string) -> void { darwin_win::darwin_window_set_title(handle, title); }
@@ -779,6 +781,8 @@ fn window_force_close(handle: void*) -> void { win_window::windows_window_force_
 fn window_register_numeric_id(handle: void*, id: int) -> void { win_window::windows_window_register_numeric_id(handle, id); }
 @cfg(windows)
 fn window_minimize(handle: void*) -> void { win_window::windows_window_minimize(handle); }
+@cfg(windows)
+fn window_focus(handle: void*) -> void { /* no-op on Windows — see #167 */ }
 @cfg(windows)
 fn window_maximize(handle: void*) -> void { win_window::windows_window_maximize(handle); }
 @cfg(windows)

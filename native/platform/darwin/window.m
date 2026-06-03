@@ -588,6 +588,17 @@ void darwin_window_minimize(void* handle) {
     [(__bridge NSWindow*)handle miniaturize:nil];
 }
 
+void darwin_window_focus(void* handle) {
+    if (!handle) return;
+    NSWindow* window = (__bridge NSWindow*)handle;
+    void (^run)(void) = ^{
+        [window makeKeyAndOrderFront:nil];
+        [NSApp activateIgnoringOtherApps:YES];  // raise the APP over others
+    };
+    if ([NSThread isMainThread]) run();
+    else dispatch_async(dispatch_get_main_queue(), run);
+}
+
 void darwin_window_maximize(void* handle) {
     NSWindow* w = (__bridge NSWindow*)handle;
     if (![w isZoomed]) [w zoom:nil];
