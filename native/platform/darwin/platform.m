@@ -73,6 +73,22 @@ const char* darwin_get_theme(void) {
         self.themeObserverInstalled = YES;
     }
 
+    // Power / session observers. Sleep/wake come from NSWorkspace's own
+    // notification center (NOT the default center); lock/unlock come from
+    // the distributed center via the documented com.apple.screenIs* names.
+    // All are torn down in applicationWillTerminate.
+    NSNotificationCenter* wsCenter = [[NSWorkspace sharedWorkspace] notificationCenter];
+    [wsCenter addObserver:self selector:@selector(zappWillSleep:)
+                     name:NSWorkspaceWillSleepNotification object:nil];
+    [wsCenter addObserver:self selector:@selector(zappDidWake:)
+                     name:NSWorkspaceDidWakeNotification object:nil];
+
+    NSDistributedNotificationCenter* dist = [NSDistributedNotificationCenter defaultCenter];
+    [dist addObserver:self selector:@selector(zappScreenLocked:)
+                 name:@"com.apple.screenIsLocked" object:nil];
+    [dist addObserver:self selector:@selector(zappScreenUnlocked:)
+                 name:@"com.apple.screenIsUnlocked" object:nil];
+
     zapp_app_dispatch(ZAPP_EVENT_APP_STARTED, NULL);
 }
 
@@ -95,6 +111,8 @@ const char* darwin_get_theme(void) {
         } @catch (NSException* ignored) { (void)ignored; }
         self.themeObserverInstalled = NO;
     }
+    [[[NSWorkspace sharedWorkspace] notificationCenter] removeObserver:self];
+    [[NSDistributedNotificationCenter defaultCenter] removeObserver:self];
     // Service shutdown in reverse registration order (before SHUTDOWN event)
     extern void service_run_shutdown_all(void);
     service_run_shutdown_all();
@@ -116,6 +134,11 @@ const char* darwin_get_theme(void) {
     (void)notification;
     zapp_app_dispatch(ZAPP_EVENT_APP_DID_RESIGN_ACTIVE, NULL);
 }
+
+- (void)zappWillSleep:(NSNotification*)note     { (void)note; zapp_app_dispatch(ZAPP_EVENT_APP_WILL_SLEEP, "{}"); }
+- (void)zappDidWake:(NSNotification*)note        { (void)note; zapp_app_dispatch(ZAPP_EVENT_APP_DID_WAKE, "{}"); }
+- (void)zappScreenLocked:(NSNotification*)note   { (void)note; zapp_app_dispatch(ZAPP_EVENT_APP_SCREEN_LOCKED, "{}"); }
+- (void)zappScreenUnlocked:(NSNotification*)note { (void)note; zapp_app_dispatch(ZAPP_EVENT_APP_SCREEN_UNLOCKED, "{}"); }
 
 // Deep link handler: receives URLs when app is opened via custom scheme (e.g., myapp://path)
 - (void)application:(NSApplication*)application openURLs:(NSArray<NSURL*>*)urls {
