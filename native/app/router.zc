@@ -59,6 +59,14 @@ fn router_handle_message(app: App*, msg: string, window_id: int) -> void {
             return;
         }
 
+        // Check for __app: prefix (app-level request/response — setLoginItem, etc.)
+        let is_app: bool = false;
+        is_app = str::strncmp(parsed.method, "__app:", 6) == 0;
+        if is_app {
+            router_handle_app(parsed.method, parsed.args, parsed.has_args, window_id, parsed.request_id);
+            return;
+        }
+
         // __protocol:respond — runtime calls this from
         // Protocols.register's handler with { id, body, contentType,
         // status }. Route directly to the native respond function;
@@ -875,6 +883,40 @@ fn router_handle_zapp(method: string, window_id: int, request_id: int) -> void {
         return;
     }
     dispatch_invoke_response(window_id, request_id, false, "UNKNOWN_ZAPP_METHOD");
+}
+
+// __app:* request/response handlers. macOS-only (SMAppService, 13+);
+// returns "false" (a JSON boolean the runtime JSON.parses) elsewhere or
+// when the OS API is unavailable.
+fn router_handle_app(method: string, args: JsonValue*, has_args: bool, window_id: int, request_id: int) -> void {
+    let is_set = method == "__app:setLoginItem";
+    let is_get = method == "__app:getLoginItem";
+    if !is_set && !is_get { dispatch_invoke_response(window_id, request_id, false, "UNKNOWN"); return; }
+
+    let result: bool = false;
+    if is_set {
+        let enabled: bool = false;
+        if has_args {
+            let e_opt = args.get_bool("enabled");
+            if e_opt.is_some() { enabled = e_opt.unwrap(); }
+        }
+        raw {
+            #ifdef __APPLE__
+            extern bool darwin_set_login_item(bool enabled);
+            result = darwin_set_login_item(enabled);
+            #endif
+        }
+    } else {
+        raw {
+            #ifdef __APPLE__
+            extern bool darwin_get_login_item(void);
+            result = darwin_get_login_item();
+            #endif
+        }
+    }
+
+    if result { dispatch_invoke_response(window_id, request_id, true, "true"); }
+    else      { dispatch_invoke_response(window_id, request_id, true, "false"); }
 }
 
 // --- Dialog handler ---

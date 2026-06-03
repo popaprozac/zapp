@@ -77,6 +77,20 @@ export const App = {
     appAction("setQuitGuard", { enabled });
   },
 
+  /**
+   * Enable or disable launch-at-login. Returns whether the change took
+   * effect. macOS 13+; on macOS 12 this is a no-op that returns `false`.
+   * iOS/Windows: `false`.
+   */
+  async setLoginItem(enabled: boolean): Promise<boolean> {
+    return (await getBridge().invoke("__app:setLoginItem", { enabled })) as boolean;
+  },
+
+  /** Whether this app is registered to launch at login. */
+  async getLoginItemEnabled(): Promise<boolean> {
+    return (await getBridge().invoke("__app:getLoginItem")) as boolean;
+  },
+
   /** Open a URL in the system browser. */
   openExternal(url: string): void {
     appAction("openExternal", { url });

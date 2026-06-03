@@ -532,6 +532,8 @@ export async function generatePlatformConfig(
     content += `//> macos: framework: UserNotifications\n`;
     // Carbon — RegisterEventHotKey + friends for shortcuts.m.
     content += `//> macos: framework: Carbon\n`;
+    // ServiceManagement — SMAppService.mainApp for App.setLoginItem (macOS 13+).
+    content += `//> macos: framework: ServiceManagement\n`;
     // libcompression — embedded-asset brotli decode path.
     content += `//> macos: link: -lcompression\n`;
     // libz (zlib) — zjs's host_zlib_codec. Resolved transitively from

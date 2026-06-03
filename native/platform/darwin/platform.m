@@ -4,6 +4,7 @@
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
 #import <dispatch/dispatch.h>
+#import <ServiceManagement/ServiceManagement.h>
 #import "platform.h"
 
 // --- App Delegate ---
@@ -59,6 +60,31 @@ const char* darwin_get_theme(void) {
         NSAppearanceNameAqua, NSAppearanceNameDarkAqua
     ]];
     return [best isEqualToString:NSAppearanceNameDarkAqua] ? "dark" : "light";
+}
+
+// --- Launch-at-login (SMAppService.mainApp, macOS 13+) ---
+//
+// Backs App.setLoginItem / getLoginItemEnabled. registerAndReturnError:
+// adds the app as a login item; unregisterAndReturnError: removes it.
+// The .status property reports whether the main-app service is currently
+// enabled. No-op (false) on macOS 12, where SMAppService is unavailable.
+bool darwin_set_login_item(bool enabled) {
+    if (@available(macOS 13.0, *)) {
+        SMAppService* svc = [SMAppService mainAppService];
+        NSError* err = nil;
+        BOOL ok = enabled ? [svc registerAndReturnError:&err]
+                          : [svc unregisterAndReturnError:&err];
+        if (!ok && err) NSLog(@"[zapp] setLoginItem error: %@", err);
+        return ok ? true : false;
+    }
+    return false; // login-item API unavailable on macOS 12
+}
+
+bool darwin_get_login_item(void) {
+    if (@available(macOS 13.0, *)) {
+        return [SMAppService mainAppService].status == SMAppServiceStatusEnabled ? true : false;
+    }
+    return false;
 }
 
 @implementation ZappAppDelegate
