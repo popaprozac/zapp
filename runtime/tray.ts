@@ -72,10 +72,14 @@ export interface AttachWindowOptions {
 
 export interface TrayOptions {
   /**
-   * Path to icon image. PNG (template style — black silhouette on
-   * transparent) is recommended; the system tints it for light/dark
-   * mode automatically. `.icns` and full-color images work too.
-   * Required.
+   * Path to icon image. Shown as-is by default (WYSIWYG) — a small
+   * (≈18×18) PNG works best. For automatic light/dark tinting, provide a
+   * monochrome glyph (black silhouette on transparent) and set
+   * `template: true`. Absolute paths, or paths relative to the app's
+   * working directory / bundle resources, both resolve. Required.
+   *
+   * **Note:** a large full-color image (e.g. a 1024×1024 app icon) is
+   * scaled down to menu-bar size; for a crisp result supply a small icon.
    */
   icon: string;
   /** Optional text shown next to the icon in the menu bar. */
@@ -88,10 +92,12 @@ export interface TrayOptions {
    * trays where you want to wire `on("click", ...)` yourself.
    */
   menu?: MenuItemDef[];
-  /**
-   * Treat the icon as a template image — auto-tinted for light/dark
-   * mode. Defaults to `true`. Set `false` for full-color icons (e.g.
-   * branded glyphs).
+   /**
+   * Treat the icon as a template image — macOS ignores its color and
+   * auto-tints the opaque region for light/dark mode. **Defaults to
+   * `false`** (the icon renders as-is). Set `true` ONLY for a monochrome
+   * glyph designed as a template; applying it to a normal full-color
+   * icon renders a solid silhouette (a white/black blob), not your icon.
    */
   template?: boolean;
 }
