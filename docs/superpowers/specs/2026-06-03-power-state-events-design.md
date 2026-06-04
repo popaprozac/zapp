@@ -72,8 +72,8 @@ Inert. `getPowerState()` returns the unknown/inert default; the event never fire
 ## 7. Testing
 
 - **`bun test`:** extend `runtime/events.test.ts` to assert `eventName(AppEvent.POWER_STATE_CHANGED) === "app:power-state-changed"`.
-- **Symbol-parity lint:** `cli/src/ios-platform-parity.test.ts` (shipped in #281) automatically covers `darwin_get_power_state` — it's referenced from `.zc` and must be defined in **both** `darwin/` and `ios/` (which the B scope provides). No new test needed; it just has to stay green.
-- **Build:** macOS `bun run build` → `[zapp] build complete:`, **and** (per the #281 convention, since this touches `native/`) `bun run build --platform ios-simulator` → `[zapp] build complete:`.
+- **Symbol-parity lint:** does NOT cover this — `darwin_get_power_state` is called only from `.m` files (bootstrap seed + observers), not from any `.zc`, and `cli/src/ios-platform-parity.test.ts` scans `.zc` for `darwin_*` references. The lint just has to stay green (no new obligation). iOS parity is verified by the ios-simulator build below, which actually compiles+links `ios/platform.m`+`ios/webview.m`.
+- **Build:** macOS `bun run build` → `[zapp] build complete:`, **and** (per the #281 convention, since this touches `native/`) `bun run build --platform ios-simulator` → `[zapp] build complete:` — this is the real iOS gate (each platform's `.m` files call their own `darwin_get_power_state`).
 - **Manual smoke (macOS):** unplug/replug power → `app:power-state-changed` with `source` flip + correct `charging`; toggle Low Power Mode (System Settings ▸ Battery) → event with `lowPowerMode` flip; `App.getPowerState()` returns live values; a headless worker subscriber also receives the event.
 - **Manual smoke (iOS):** Low Power Mode toggle on a device (the Simulator doesn't model battery well — note device-only). `getPowerState()` returns sane values.
 
