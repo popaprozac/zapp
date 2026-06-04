@@ -47,6 +47,40 @@ let _theme: "light" | "dark" = "light";
   } catch { /* bridge not available — fine for non-Zapp imports */ }
 }
 
+/** Snapshot of the device's power state. See {@link App.getPowerState}. */
+export interface PowerState {
+  source: "ac" | "battery";
+  lowPowerMode: boolean;
+  percent: number | null;
+  charging: boolean;
+}
+
+const _powerDefault: PowerState = { source: "ac", lowPowerMode: false, percent: null, charging: false };
+let _powerState: PowerState = { ..._powerDefault };
+
+function _coercePowerState(v: any): PowerState {
+  if (!v || typeof v !== "object") return { ..._powerDefault };
+  return {
+    source: v.source === "battery" ? "battery" : "ac",
+    lowPowerMode: v.lowPowerMode === true,
+    percent: (typeof v.percent === "number" && isFinite(v.percent)) ? v.percent : null,
+    charging: v.charging === true,
+  };
+}
+
+{
+  const cfg = (globalThis as any)[Symbol.for("zapp.bootstrapConfig")];
+  if (cfg && cfg.powerState) _powerState = _coercePowerState(cfg.powerState);
+  try {
+    Events.on("app:power-state-changed", (data: any) => {
+      _powerState = _coercePowerState(data);
+    });
+    Events.on("app:battery-level-changed", (data: any) => {
+      _powerState = _coercePowerState(data);
+    });
+  } catch { /* bridge not available — fine for non-Zapp imports */ }
+}
+
 export const App = {
   /** Listen for app lifecycle events. Returns unsubscribe function. */
   on(event: AppEvent, handler: (data?: any) => void): () => void {
@@ -186,5 +220,26 @@ export const App = {
    */
   getTheme(): "light" | "dark" {
     return _theme;
+  },
+
+  /**
+   * Current device power state — synchronous, backed by an in-memory cache
+   * seeded at startup and refreshed on every `AppEvent.POWER_STATE_CHANGED`.
+   * `percent` is `null` on a battery-less desktop Mac. macOS + iOS; on
+   * Windows (and before the first read) returns the inert default
+   * `{ source: "ac", lowPowerMode: false, percent: null, charging: false }`.
+   *
+   * @example
+   * ```ts
+   * const p = App.getPowerState();
+   * if (p.source === "battery" || p.lowPowerMode) deferHeavySync();
+   * App.on(AppEvent.POWER_STATE_CHANGED, (s) => updateThrottle(s));
+   * ```
+   *
+   * **Worker caveat** (same as `getTheme`): workers don't receive bootstrap
+   * config, so this is the default until the first event arrives.
+   */
+  getPowerState(): PowerState {
+    return { ..._powerState };
   },
 };

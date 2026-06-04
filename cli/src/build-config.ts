@@ -534,6 +534,8 @@ export async function generatePlatformConfig(
     content += `//> macos: framework: Carbon\n`;
     // ServiceManagement — SMAppService.mainApp for App.setLoginItem (macOS 13+).
     content += `//> macos: framework: ServiceManagement\n`;
+    // IOKit — IOPowerSources for App.getPowerState() AC/battery monitoring.
+    content += `//> macos: framework: IOKit\n`;
     // libcompression — embedded-asset brotli decode path.
     content += `//> macos: link: -lcompression\n`;
     // libz (zlib) — zjs's host_zlib_codec. Resolved transitively from

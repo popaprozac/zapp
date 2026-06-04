@@ -14,7 +14,7 @@
  * ```
  */
 
-export { App } from "./app";
+export { App, type PowerState } from "./app";
 export { Window, type WindowHandle, type WindowOptions } from "./window";
 export { Events, WindowEvent, AppEvent, eventName, type WindowPayload, type WindowSizePayload, type EventName } from "./events";
 export { Services, type InvokeOptions, type CancellablePromise } from "./services";

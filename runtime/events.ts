@@ -56,6 +56,8 @@ export enum AppEvent {
   SCREEN_LOCKED = 111,     // screen locked
   SCREEN_UNLOCKED = 112,   // screen unlocked
   BEFORE_QUIT = 113,       // quit requested while a quit guard is armed
+  POWER_STATE_CHANGED = 114, // AC/battery or Low Power Mode changed
+  BATTERY_LEVEL_CHANGED = 115, // battery percent or charging changed
 }
 
 /** Map WindowEvent enum to string event names. */
@@ -87,6 +89,8 @@ const APP_EVENT_NAMES: Record<number, string> = {
   [AppEvent.SCREEN_LOCKED]: "app:screen-locked",
   [AppEvent.SCREEN_UNLOCKED]: "app:screen-unlocked",
   [AppEvent.BEFORE_QUIT]: "app:before-quit",
+  [AppEvent.POWER_STATE_CHANGED]: "app:power-state-changed",
+  [AppEvent.BATTERY_LEVEL_CHANGED]: "app:battery-level-changed",
 };
 
 /** Payload for window events that include size and position. */
@@ -127,7 +131,7 @@ type SimpleEvents = "window:ready" | "window:focus" | "window:blur" | "window:cl
   | "window:minimize" | "window:fullscreen" | "window:unfullscreen";
 
 /** App event string names. */
-type AppEvents = "app:started" | "app:shutdown" | "app:reopen" | "app:open-url" | "app:active" | "app:inactive" | "app:theme-changed" | "app:will-sleep" | "app:did-wake" | "app:screen-locked" | "app:screen-unlocked" | "app:before-quit";
+type AppEvents = "app:started" | "app:shutdown" | "app:reopen" | "app:open-url" | "app:active" | "app:inactive" | "app:theme-changed" | "app:will-sleep" | "app:did-wake" | "app:screen-locked" | "app:screen-unlocked" | "app:before-quit" | "app:power-state-changed" | "app:battery-level-changed";
 
 /** All known event names. Arbitrary strings also work. */
 export type EventName = SizeEvents | SimpleEvents | AppEvents | (string & {});

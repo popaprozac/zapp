@@ -5,6 +5,8 @@
 #import <WebKit/WebKit.h>
 #import <dispatch/dispatch.h>
 #import <ServiceManagement/ServiceManagement.h>
+#import <IOKit/ps/IOPowerSources.h>
+#import <IOKit/ps/IOPSKeys.h>
 #import "platform.h"
 
 // --- App Delegate ---
@@ -36,6 +38,8 @@ extern int zapp_app_dispatch(int event_id, const char* data);
 #define ZAPP_EVENT_APP_SCREEN_LOCKED      111
 #define ZAPP_EVENT_APP_SCREEN_UNLOCKED    112
 #define ZAPP_EVENT_APP_BEFORE_QUIT        113
+#define ZAPP_EVENT_APP_POWER_STATE_CHANGED 114
+#define ZAPP_EVENT_APP_BATTERY_LEVEL_CHANGED 115
 #endif
 
 void darwin_set_quit_guard(bool enabled) {
@@ -65,6 +69,113 @@ const char* darwin_get_theme(void) {
     ]];
     return [best isEqualToString:NSAppearanceNameDarkAqua] ? "dark" : "light";
 }
+
+// Returns the current power state as a JSON object literal. Static buffer —
+// callers (bootstrap seed + event dispatch) copy immediately on the main thread.
+const char* darwin_get_power_state(void) {
+    static char buf[160];
+    BOOL low = NSProcessInfo.processInfo.isLowPowerModeEnabled;
+    const char* source = "ac";
+    int percent = -1;          // -1 -> emit null
+    BOOL charging = NO;
+
+    CFTypeRef blob = IOPSCopyPowerSourcesInfo();
+    if (blob) {
+        CFArrayRef list = IOPSCopyPowerSourcesList(blob);
+        if (list) {
+            if (CFArrayGetCount(list) > 0) {
+                CFDictionaryRef d = IOPSGetPowerSourceDescription(blob, CFArrayGetValueAtIndex(list, 0));
+                if (d) {
+                    CFStringRef st = CFDictionaryGetValue(d, CFSTR(kIOPSPowerSourceStateKey));
+                    if (st && CFEqual(st, CFSTR(kIOPSBatteryPowerValue))) source = "battery";
+                    CFBooleanRef chg = CFDictionaryGetValue(d, CFSTR(kIOPSIsChargingKey));
+                    if (chg && CFBooleanGetValue(chg)) charging = YES;
+                    CFNumberRef cur = CFDictionaryGetValue(d, CFSTR(kIOPSCurrentCapacityKey));
+                    CFNumberRef max = CFDictionaryGetValue(d, CFSTR(kIOPSMaxCapacityKey));
+                    int c = 0, m = 0;
+                    if (cur) CFNumberGetValue(cur, kCFNumberIntType, &c);
+                    if (max) CFNumberGetValue(max, kCFNumberIntType, &m);
+                    if (m > 0) percent = (c * 100 + m / 2) / m;   // integer round, no <math.h>
+                }
+            }
+            CFRelease(list);
+        }
+        CFRelease(blob);
+    }
+
+    if (percent >= 0) {
+        snprintf(buf, sizeof(buf),
+            "{\"source\":\"%s\",\"lowPowerMode\":%s,\"percent\":%d,\"charging\":%s}",
+            source, low ? "true" : "false", percent, charging ? "true" : "false");
+    } else {
+        snprintf(buf, sizeof(buf),
+            "{\"source\":\"%s\",\"lowPowerMode\":%s,\"percent\":null,\"charging\":%s}",
+            source, low ? "true" : "false", charging ? "true" : "false");
+    }
+    return buf;
+}
+
+static char zapp_power_last_source[16] = "";
+static int  zapp_power_last_low = -1;
+static int zapp_power_last_percent = -2;   // -2 = unset (-1 = "null/unknown" is a valid value)
+static int zapp_power_last_charging = -1;
+static CFRunLoopSourceRef zapp_power_rls = NULL;
+
+static void zapp_power_read(const char** out_source, int* out_low, int* out_percent, int* out_charging) {
+    *out_low = NSProcessInfo.processInfo.isLowPowerModeEnabled ? 1 : 0;
+    const char* source = "ac"; int percent = -1; int charging = 0;
+    CFTypeRef blob = IOPSCopyPowerSourcesInfo();
+    if (blob) {
+        CFArrayRef list = IOPSCopyPowerSourcesList(blob);
+        if (list) {
+            if (CFArrayGetCount(list) > 0) {
+                CFDictionaryRef d = IOPSGetPowerSourceDescription(blob, CFArrayGetValueAtIndex(list, 0));
+                if (d) {
+                    CFStringRef st = CFDictionaryGetValue(d, CFSTR(kIOPSPowerSourceStateKey));
+                    if (st && CFEqual(st, CFSTR(kIOPSBatteryPowerValue))) source = "battery";
+                    CFBooleanRef chg = CFDictionaryGetValue(d, CFSTR(kIOPSIsChargingKey));
+                    if (chg && CFBooleanGetValue(chg)) charging = 1;
+                    CFNumberRef cur = CFDictionaryGetValue(d, CFSTR(kIOPSCurrentCapacityKey));
+                    CFNumberRef max = CFDictionaryGetValue(d, CFSTR(kIOPSMaxCapacityKey));
+                    int c = 0, m = 0;
+                    if (cur) CFNumberGetValue(cur, kCFNumberIntType, &c);
+                    if (max) CFNumberGetValue(max, kCFNumberIntType, &m);
+                    if (m > 0) percent = (c * 100 + m / 2) / m;
+                }
+            }
+            CFRelease(list);
+        }
+        CFRelease(blob);
+    }
+    *out_source = source; *out_percent = percent; *out_charging = charging;
+}
+static void zapp_power_init_cache(void) {
+    const char* source; int low, percent, charging;
+    zapp_power_read(&source, &low, &percent, &charging);
+    strncpy(zapp_power_last_source, source, sizeof(zapp_power_last_source) - 1);
+    zapp_power_last_source[sizeof(zapp_power_last_source) - 1] = '\0';
+    zapp_power_last_low = low;
+    zapp_power_last_percent = percent;
+    zapp_power_last_charging = charging;
+}
+static void zapp_power_on_change(void) {
+    const char* source; int low, percent, charging;
+    zapp_power_read(&source, &low, &percent, &charging);
+    int sl_changed  = (strcmp(source, zapp_power_last_source) != 0) || (low != zapp_power_last_low);
+    int lvl_changed = (percent != zapp_power_last_percent) || (charging != zapp_power_last_charging);
+    strncpy(zapp_power_last_source, source, sizeof(zapp_power_last_source) - 1);
+    zapp_power_last_source[sizeof(zapp_power_last_source) - 1] = '\0';
+    zapp_power_last_low = low;
+    zapp_power_last_percent = percent;
+    zapp_power_last_charging = charging;
+    if (sl_changed || lvl_changed) {
+        char payload[160];
+        snprintf(payload, sizeof(payload), "%s", darwin_get_power_state());
+        if (sl_changed)  zapp_app_dispatch(ZAPP_EVENT_APP_POWER_STATE_CHANGED, payload);
+        if (lvl_changed) zapp_app_dispatch(ZAPP_EVENT_APP_BATTERY_LEVEL_CHANGED, payload);
+    }
+}
+static void zapp_power_iops_cb(void* ctx) { (void)ctx; zapp_power_on_change(); }
 
 // --- Launch-at-login (SMAppService.mainApp, macOS 13+) ---
 //
@@ -146,6 +257,19 @@ bool darwin_get_login_item(void) {
     [dist addObserver:self selector:@selector(zappScreenUnlocked:)
                  name:@"com.apple.screenIsUnlocked" object:nil];
 
+    // Power-state monitoring: IOKit run-loop source for AC/battery, plus the
+    // NSProcessInfo notification for Low Power Mode toggles. Seed the cache
+    // first so the first real transition compares correctly.
+    zapp_power_init_cache();
+    zapp_power_rls = IOPSNotificationCreateRunLoopSource(zapp_power_iops_cb, NULL);
+    if (zapp_power_rls) {
+        CFRunLoopAddSource(CFRunLoopGetMain(), zapp_power_rls, kCFRunLoopDefaultMode);
+    }
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(zappPowerStateChanged:)
+                                                 name:NSProcessInfoPowerStateDidChangeNotification
+                                               object:nil];
+
     zapp_app_dispatch(ZAPP_EVENT_APP_STARTED, NULL);
 }
 
@@ -170,6 +294,12 @@ bool darwin_get_login_item(void) {
     }
     [[[NSWorkspace sharedWorkspace] notificationCenter] removeObserver:self];
     [[NSDistributedNotificationCenter defaultCenter] removeObserver:self];
+    if (zapp_power_rls) {
+        CFRunLoopRemoveSource(CFRunLoopGetMain(), zapp_power_rls, kCFRunLoopDefaultMode);
+        CFRelease(zapp_power_rls);
+        zapp_power_rls = NULL;
+    }
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
     // Service shutdown in reverse registration order (before SHUTDOWN event)
     extern void service_run_shutdown_all(void);
     service_run_shutdown_all();
@@ -196,6 +326,7 @@ bool darwin_get_login_item(void) {
 - (void)zappDidWake:(NSNotification*)note        { (void)note; zapp_app_dispatch(ZAPP_EVENT_APP_DID_WAKE, "{}"); }
 - (void)zappScreenLocked:(NSNotification*)note   { (void)note; zapp_app_dispatch(ZAPP_EVENT_APP_SCREEN_LOCKED, "{}"); }
 - (void)zappScreenUnlocked:(NSNotification*)note { (void)note; zapp_app_dispatch(ZAPP_EVENT_APP_SCREEN_UNLOCKED, "{}"); }
+- (void)zappPowerStateChanged:(NSNotification*)note { (void)note; zapp_power_on_change(); }
 
 // Deep link handler: receives URLs when app is opened via custom scheme (e.g., myapp://path)
 - (void)application:(NSApplication*)application openURLs:(NSArray<NSURL*>*)urls {

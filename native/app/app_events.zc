@@ -96,6 +96,8 @@ raw {
                 case 111: js_name = "app:screen-locked"; break;
                 case 112: js_name = "app:screen-unlocked"; break;
                 case 113: js_name = "app:before-quit"; break;
+                case 114: js_name = "app:power-state-changed"; break;
+                case 115: js_name = "app:battery-level-changed"; break;
             }
             if (js_name) {
                 const char* safe_data = data ? data : "{}";

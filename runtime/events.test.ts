@@ -13,3 +13,11 @@ test("existing AppEvent mapping is unchanged", () => {
   expect(eventName(AppEvent.THEME_CHANGED)).toBe("app:theme-changed");
   expect(eventName(AppEvent.REOPEN)).toBe("app:reopen");
 });
+
+test("POWER_STATE_CHANGED maps to app:power-state-changed", () => {
+  expect(eventName(AppEvent.POWER_STATE_CHANGED)).toBe("app:power-state-changed");
+});
+
+test("BATTERY_LEVEL_CHANGED maps to app:battery-level-changed", () => {
+  expect(eventName(AppEvent.BATTERY_LEVEL_CHANGED)).toBe("app:battery-level-changed");
+});
