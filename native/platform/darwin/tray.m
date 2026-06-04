@@ -382,16 +382,32 @@ static NSDictionary* extract_args(const char* payload_json) {
     return (NSDictionary*)args;
 }
 
-// Apply an icon path with optional template flag. Templates auto-tint
-// for light/dark mode — best UX for menu-bar icons. Falls back to a
-// stock symbol if the path can't be loaded.
+// Apply an icon path with optional template flag. The icon renders as-is
+// unless template_flag is set (template mode auto-tints a monochrome glyph
+// for light/dark — applying it to a full-color icon yields a solid blob).
+// Resolves relative paths against the cwd (dev) and the bundle resources
+// (packaged), logs on load failure, and shows a visible placeholder so a
+// missing icon reads as "?" rather than a silent blank/white square.
 static void apply_icon(NSStatusItem* item, NSString* path, BOOL template_flag) {
     if (!item || path.length == 0) return;
-    NSImage* img = [[NSImage alloc] initWithContentsOfFile:path];
+
+    NSString* resolved = path;
+    if (![path isAbsolutePath]) {
+        NSFileManager* fm = [NSFileManager defaultManager];
+        NSString* cwdRel = [[fm currentDirectoryPath] stringByAppendingPathComponent:path];
+        NSString* resPath = [NSBundle mainBundle].resourcePath;
+        NSString* resRel = resPath ? [resPath stringByAppendingPathComponent:path] : nil;
+        if ([fm fileExistsAtPath:cwdRel]) resolved = cwdRel;
+        else if (resRel && [fm fileExistsAtPath:resRel]) resolved = resRel;
+    }
+
+    NSImage* img = [[NSImage alloc] initWithContentsOfFile:resolved];
     if (!img) {
+        NSLog(@"[zapp] tray: could not load icon at %@ — showing a placeholder", resolved);
         if (@available(macOS 11.0, *)) {
             img = [NSImage imageWithSystemSymbolName:@"questionmark.circle"
                                 accessibilityDescription:nil];
+            template_flag = NO;  // placeholder must stay visible, never a tinted blob
         }
     }
     if (img) {
@@ -465,7 +481,7 @@ void darwin_tray_create_from_payload(const char* payload_json) {
         slot->item = (__bridge_retained void*)item;
 
         NSString* iconPath = args[@"icon"];
-        BOOL templateFlag = args[@"template"] ? [args[@"template"] boolValue] : YES;
+        BOOL templateFlag = args[@"template"] ? [args[@"template"] boolValue] : NO;
         if ([iconPath isKindOfClass:[NSString class]]) apply_icon(item, iconPath, templateFlag);
 
         NSString* title = args[@"title"];
@@ -504,7 +520,7 @@ void darwin_tray_set_icon_from_payload(const char* payload_json) {
         ZappTraySlot* slot = find_tray(tid);
         if (!slot) return;
         NSString* path = args[@"path"];
-        BOOL templateFlag = args[@"template"] ? [args[@"template"] boolValue] : YES;
+        BOOL templateFlag = args[@"template"] ? [args[@"template"] boolValue] : NO;
         if ([path isKindOfClass:[NSString class]]) apply_icon(slot_item(slot), path, templateFlag);
     }
 }

@@ -1324,7 +1324,7 @@ import { Tray, App, Window } from "@zappdev/runtime";
 
 // Menu-driven
 const status = Tray.create({
-  icon: "build/menubar-icon.png",   // 18×18 template PNG, system-tinted
+  icon: "build/menubar-icon.png",   // ~18×18 PNG, shown as-is
   tooltip: "My App",
   menu: [
     { label: "Open", action: () => Window.current().show() },
@@ -1343,13 +1343,22 @@ ping.on("right-click", () => console.log("right-clicked"));
 
 ```ts
 {
-  icon: string                // path to PNG (template style recommended)
+  icon: string                // path to a ~18×18 PNG; shown as-is
   title?: string              // text next to the icon
   tooltip?: string            // hover tooltip
   menu?: MenuItemDef[]        // popup menu on click (omit for click events)
-  template?: boolean          // default: true — system tints for dark/light
+  template?: boolean          // default: false (WYSIWYG). true ONLY for a
+                              // monochrome glyph — macOS auto-tints it for
+                              // light/dark; applying it to a full-color icon
+                              // renders a solid blob, not your icon.
 }
 ```
+
+The `icon` renders as-is by default. Relative paths resolve against the app's
+working directory (dev) or bundle resources (packaged); if the file can't be
+loaded, the framework logs `[zapp] tray: could not load icon …` and shows a
+`?` placeholder. A large full-color image (e.g. a 1024×1024 app icon) is scaled
+to menu-bar size — supply a small icon for a crisp result.
 
 ### `TrayHandle`
 
