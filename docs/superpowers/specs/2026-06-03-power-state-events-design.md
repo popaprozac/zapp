@@ -23,15 +23,18 @@ interface PowerState {
 App.getPowerState(): PowerState
 ```
 
-`getPowerState()` mirrors `App.getTheme()`: a runtime-cached value seeded at startup from the bootstrap config (native computes the initial state and injects it the same way `theme` is injected), refreshed on every `app:power-state-changed` event. **Worker caveat** identical to theme: workers don't receive bootstrap config, so the cached value is the default until the first event arrives (native dispatches app events to workers via the existing fan-out).
+`getPowerState()` mirrors `App.getTheme()`: a runtime-cached value seeded at startup from the bootstrap config (native computes the initial state and injects it the same way `theme` is injected), refreshed on **both** the `app:power-state-changed` and `app:battery-level-changed` events. Because the level event fires on every percent/charging change, **`getPowerState()` is effectively live for all four fields** — read it whenever you choose, at your own cadence. **Worker caveat** identical to theme: workers don't receive bootstrap config, so the cached value is the default until the first event arrives (native dispatches app events to workers via the existing fan-out).
 
 **Unknown / inert default:** `{ source: "ac", lowPowerMode: false, percent: null, charging: false }` — "no known power constraint," so apps never throttle on missing data (Windows, or before the first read).
 
-## 2. New event
+## 2. Two events — quiet transitions + a battery-level feed
 
-`AppEvent.POWER_STATE_CHANGED = 114` → `"app:power-state-changed"`. Payload = the full `PowerState` JSON.
+The OS notifications (IOKit / `UIDevice`) fire on *every* power change, including each percent tick. The native handler reads the full state once, compares each signal against the cache, and fires **up to two** events so the noisy battery-level feed never clutters the rare source/low-power transitions:
 
-**Transition-only firing.** The OS notifications (IOKit / `UIDevice` battery) fire on *every* power-source change, including each percentage tick. The native handler recomputes the full state, compares `source` and `lowPowerMode` against the last-dispatched values, and dispatches `POWER_STATE_CHANGED` **only when one of those two changed**. A percentage-only change updates the cached state (so the getter is live) but does **not** dispatch. This keeps the event quiet.
+- **`AppEvent.POWER_STATE_CHANGED = 114`** → `"app:power-state-changed"` — fires **only when `source` or `lowPowerMode` changes** (the quiet "should I throttle?" trigger). Payload = the full `PowerState`.
+- **`AppEvent.BATTERY_LEVEL_CHANGED = 115`** → `"app:battery-level-changed"` — fires when **`percent` or `charging`** changes (≈ per 1%, minutes apart — not a firehose). Payload = the full `PowerState`. This is the battery-gauge feed; it also keeps the `getPowerState()` cache current so the getter stays live.
+
+A single notification can fire both (e.g. unplug → `source` flips AND `charging`/`percent` semantics change). The runtime updates its `PowerState` cache from both event names.
 
 ## 3. Native — macOS (`native/platform/darwin/platform.m` + IOKit)
 
@@ -42,7 +45,7 @@ App.getPowerState(): PowerState
   - `lowPowerMode = NSProcessInfo.processInfo.isLowPowerModeEnabled` (macOS 12+; our floor is 12.0).
   - Static buffer like `darwin_get_theme` (caller copies before next call), or heap-dup — match the existing pattern in the file.
 - **Registration** in `applicationDidFinishLaunching`:
-  - `IOPSNotificationCreateRunLoopSource(callback, context)` → `CFRunLoopAddSource(CFRunLoopGetMain(), src, kCFRunLoopDefaultMode)`. The C callback recomputes state and dispatches `POWER_STATE_CHANGED` only on a `source`/`lowPowerMode` transition (compares against file-static last-dispatched values).
+  - `IOPSNotificationCreateRunLoopSource(callback, context)` → `CFRunLoopAddSource(CFRunLoopGetMain(), src, kCFRunLoopDefaultMode)`. The C callback reads all four signals once and compares against the file-static cache: dispatches `POWER_STATE_CHANGED` if `source`/`lowPowerMode` changed, and `BATTERY_LEVEL_CHANGED` if `percent`/`charging` changed (either, both, or neither).
   - `NSProcessInfoPowerStateDidChangeNotification` observer on `[NSNotificationCenter defaultCenter]` → same recompute+maybe-dispatch (covers Low Power Mode toggles, which IOPS may not surface).
 - **Teardown** in `applicationWillTerminate`: `CFRunLoopRemoveSource` + `CFRelease` the source; the blanket `removeObserver:self` already added for the other observers covers the NSProcessInfo one.
 - **Seed** initial state into the bootstrap config (same injection path as `theme`) so the webview getter is correct on first read.
@@ -55,15 +58,15 @@ App.getPowerState(): PowerState
   - `percent`: `batteryLevel >= 0 ? round(batteryLevel*100) : null` (`batteryLevel` is `-1` when unknown).
   - `charging`: `batteryState == UIDeviceBatteryStateCharging`.
   - `lowPowerMode`: `NSProcessInfo.processInfo.isLowPowerModeEnabled` (same API as macOS).
-- **Registration:** observe `UIDeviceBatteryStateDidChangeNotification` + `NSProcessInfoPowerStateDidChangeNotification` → recompute + dispatch on `source`/`lowPowerMode` transition. (`UIDeviceBatteryLevelDidChangeNotification` updates the cache only — no dispatch.)
+- **Registration:** observe `UIDeviceBatteryStateDidChangeNotification`, `UIDeviceBatteryLevelDidChangeNotification`, and `NSProcessInfoPowerStateDidChangeNotification` → each reads all four signals once and dispatches `POWER_STATE_CHANGED` on a `source`/`lowPowerMode` change and `BATTERY_LEVEL_CHANGED` on a `percent`/`charging` change.
 - Seed bootstrap config like macOS.
 
 ## 5. Runtime + event wiring
 
-- `runtime/events.ts`: add `AppEvent.POWER_STATE_CHANGED = 114`, the `APP_EVENT_NAMES` entry `"app:power-state-changed"`, and widen the `AppEvents` union.
-- `native/app/app_events.zc`: add `case 114: js_name = "app:power-state-changed"; break;`.
-- Both `platform.m` files: add the `#define ZAPP_EVENT_APP_POWER_STATE_CHANGED 114` macro (in the same `#ifndef` block as the others, darwin + ios, for parity).
-- `runtime/app.ts`: the `PowerState` interface (exported), `getPowerState()` (cached value seeded from bootstrap config + refreshed by an `Events.on("app:power-state-changed", …)` subscription at module load, exactly like `_theme`).
+- `runtime/events.ts`: add `AppEvent.POWER_STATE_CHANGED = 114` and `AppEvent.BATTERY_LEVEL_CHANGED = 115`, the `APP_EVENT_NAMES` entries `"app:power-state-changed"` / `"app:battery-level-changed"`, and widen the `AppEvents` union.
+- `native/app/app_events.zc`: add `case 114: …"app:power-state-changed"…` and `case 115: …"app:battery-level-changed"…`.
+- Both `platform.m` files: add `#define ZAPP_EVENT_APP_POWER_STATE_CHANGED 114` and `#define ZAPP_EVENT_APP_BATTERY_LEVEL_CHANGED 115` (same `#ifndef` block, darwin + ios, for parity).
+- `runtime/app.ts`: the `PowerState` interface (exported), `getPowerState()` (cached value seeded from bootstrap config + refreshed by `Events.on(...)` subscriptions for **both** `"app:power-state-changed"` and `"app:battery-level-changed"` at module load, like `_theme`).
 
 ## 6. Windows
 
