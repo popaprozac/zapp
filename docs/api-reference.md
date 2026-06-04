@@ -198,6 +198,11 @@ App.on(AppEvent.SCREEN_UNLOCKED, () => {
 All four payloads are empty `{}` — there is no additional data beyond
 the event itself.
 
+For battery and Low Power Mode awareness, see
+[`App.getPowerState()`](#apppowerstate) and
+`AppEvent.POWER_STATE_CHANGED` / `AppEvent.BATTERY_LEVEL_CHANGED`
+below.
+
 ### `App.setQuitGuard(enabled: boolean): void`
 
 Arm or disarm the app-level quit guard. When armed, Cmd-Q / the menu
@@ -317,6 +322,76 @@ cached value defaults to `"light"` until the first
 `app:theme-changed` event arrives. If a worker needs the theme
 synchronously before then, gate that work on the first event.
 
+### `PowerState`
+
+Snapshot of the device's power state. Returned by `App.getPowerState()` and
+carried as the payload for both `AppEvent.POWER_STATE_CHANGED` and
+`AppEvent.BATTERY_LEVEL_CHANGED`.
+
+```ts
+interface PowerState {
+  source: "ac" | "battery";  // current power source
+  lowPowerMode: boolean;      // Low Power Mode enabled (macOS / iOS)
+  percent: number | null;     // 0–100; null on a battery-less desktop Mac or when unknown
+  charging: boolean;          // actively charging — false when full or unplugged
+}
+```
+
+`percent` is `null` on a desktop Mac that has no battery (Mac mini,
+Mac Pro, iMac, etc.) or on Windows. `charging` means *actively charging* —
+it is `false` when the battery is already full, when the device is
+unplugged, or on platforms where the value is unknown.
+
+### `App.getPowerState(): PowerState`
+
+Current device power state. Synchronous — backed by an in-memory cache
+seeded at startup from the bootstrap config and refreshed on every
+`AppEvent.POWER_STATE_CHANGED` **and** `AppEvent.BATTERY_LEVEL_CHANGED`.
+The cache is therefore **live for all four fields** — call it at any polling
+interval you choose (e.g. just before a heavy sync) without fear of stale
+data.
+
+```ts
+import { App, AppEvent } from "@zappdev/runtime";
+
+// Query on demand (e.g. before a heavy sync):
+const p = App.getPowerState();
+if (p.source === "battery" || p.lowPowerMode) deferHeavySync();
+
+// React to AC/battery or Low Power Mode flips:
+App.on(AppEvent.POWER_STATE_CHANGED, (s) => updateThrottle(s));
+
+// React to the battery gauge:
+App.on(AppEvent.BATTERY_LEVEL_CHANGED, (s) => {
+  if (s.source === "battery" && s.percent !== null && s.percent <= 20) pauseUntilCharged();
+});
+```
+
+**`AppEvent.POWER_STATE_CHANGED`** fires when `source` (AC↔battery) or
+`lowPowerMode` changes — the quiet "should I throttle?" trigger. Payload:
+`PowerState`.
+
+**`AppEvent.BATTERY_LEVEL_CHANGED`** fires when `percent` or `charging`
+changes (approximately every 1%, minutes apart — not a firehose). The
+battery-gauge feed. Payload: `PowerState`.
+
+Both events carry the full `PowerState` snapshot and both update the
+`getPowerState()` cache.
+
+**Platform support.** macOS (IOKit) and iOS (`UIDevice` battery +
+`NSProcessInfo` Low Power Mode) are fully supported. On Windows, no events
+fire and `getPowerState()` always returns the inert default
+`{ source: "ac", lowPowerMode: false, percent: null, charging: false }`
+(Windows power-monitoring wired in #167). Cross-reference the related power
+lifecycle events: `AppEvent.WILL_SLEEP`, `AppEvent.DID_WAKE`,
+`AppEvent.SCREEN_LOCKED`, and `AppEvent.SCREEN_UNLOCKED`.
+
+**Worker caveat** (same as `getTheme`): workers don't receive bootstrap
+config, so `getPowerState()` returns the default until the first power
+event arrives. If a worker needs a real reading before then, gate the work
+on the first `AppEvent.POWER_STATE_CHANGED` or
+`AppEvent.BATTERY_LEVEL_CHANGED` event.
+
 ---
 
 ## `Events`
@@ -372,6 +447,8 @@ DID_WAKE (110)         — system woke from sleep (macOS)
 SCREEN_LOCKED (111)    — screen locked (macOS)
 SCREEN_UNLOCKED (112)  — screen unlocked (macOS)
 BEFORE_QUIT (113)      — quit requested while quit guard is armed (macOS)
+POWER_STATE_CHANGED (114)   — AC/battery source or Low Power Mode changed; payload: PowerState
+BATTERY_LEVEL_CHANGED (115) — battery percent or charging status changed; payload: PowerState
 ```
 
 STARTED and SHUTDOWN fire before/after webview existence — listen for
@@ -379,8 +456,10 @@ them in a headless worker.
 
 The power/screen events (WILL_SLEEP, DID_WAKE, SCREEN_LOCKED,
 SCREEN_UNLOCKED) and BEFORE_QUIT are macOS-only today; they are no-ops
-on iOS/Windows. See the [Background-app platform note](#background-app-platform-note)
-below.
+on iOS/Windows. POWER_STATE_CHANGED and BATTERY_LEVEL_CHANGED are
+macOS + iOS; Windows fires no events and `App.getPowerState()` returns
+the inert default (Windows power-monitoring tracked in #167). See the
+[Background-app platform note](#background-app-platform-note) below.
 
 ### `eventName(event: WindowEvent | AppEvent): string`
 
@@ -1418,6 +1497,8 @@ today:
 | `AppEvent.WILL_SLEEP` / `DID_WAKE` | supported | — | Windows tracking #167 |
 | `AppEvent.SCREEN_LOCKED` / `SCREEN_UNLOCKED` | supported | — | Windows tracking #167 |
 | `AppEvent.BEFORE_QUIT` | supported | — | Windows tracking #167 |
+| `AppEvent.POWER_STATE_CHANGED` / `BATTERY_LEVEL_CHANGED` | supported (IOKit) | supported (`UIDevice` + `NSProcessInfo`) | inert default, no events (#167) |
+| `App.getPowerState()` | supported | supported | inert default (#167) |
 | `App.setQuitGuard` | supported | no-op | no-op |
 | `App.activate` | supported | no-op | no-op |
 | `App.setLoginItem` / `getLoginItemEnabled` | macOS 13+ | `false` | `false` |
