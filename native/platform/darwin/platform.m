@@ -36,6 +36,7 @@ extern int zapp_app_dispatch(int event_id, const char* data);
 #define ZAPP_EVENT_APP_SCREEN_LOCKED      111
 #define ZAPP_EVENT_APP_SCREEN_UNLOCKED    112
 #define ZAPP_EVENT_APP_BEFORE_QUIT        113
+#define ZAPP_EVENT_APP_POWER_STATE_CHANGED 114
 #endif
 
 void darwin_set_quit_guard(bool enabled) {
