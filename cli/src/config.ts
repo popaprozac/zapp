@@ -178,9 +178,13 @@ export interface FsConfig {
  */
 export interface IOSConfig {
   /**
-   * Path to a 1024×1024 PNG icon source. The CLI generates the iOS
-   * Assets.xcassets/AppIcon.appiconset/ scales from this. If omitted,
-   * looks for `build/ios/icon.png`, then `build/icon.png`.
+   * Path to a 1024×1024 PNG icon source for the iOS app icon (compiled
+   * into the app's `Assets.car` via `actool`). If omitted, the CLI
+   * looks, in order, for `build/ios/icon.png`, `build/icon.png`, then
+   * reuses the macOS icon (`macos.icon` if it's a `.png`, else
+   * `build/macos/icon.png`), then the framework default. Must be a
+   * **PNG** — iOS asset catalogs don't accept `.icns`/`.iconset`; if
+   * no PNG is found the iOS build proceeds without an app icon.
    */
   icon?: string;
 

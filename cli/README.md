@@ -130,6 +130,11 @@ The `build/` directory is where you put **build inputs you control**:
 
 - `build/macos/icon.{icon,icns,iconset,png}` — app icon (any of these
   formats). CLI auto-detects.
+- `build/ios/icon.png` — iOS app icon source (1024×1024 PNG). The CLI
+  compiles it into the app's `Assets.car` via `actool`. Alternatively,
+  set `ios.icon` in `zapp.config.ts`. If neither is provided, the CLI
+  falls back through `build/icon.png` → `macos.icon` (if it's a PNG) →
+  `build/macos/icon.png` → the framework default.
 - `build/macos/Info.plist.extra` — optional partial Info.plist; key/value
   pairs are merged into the generated plist at package time.
 - `build/macos/app.entitlements` — optional code-signing entitlements
