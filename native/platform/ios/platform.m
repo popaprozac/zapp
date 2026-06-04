@@ -28,6 +28,7 @@ extern int zapp_app_dispatch(int event_id, const char* data);
 #define ZAPP_EVENT_APP_SCREEN_UNLOCKED    112
 #define ZAPP_EVENT_APP_BEFORE_QUIT        113
 #define ZAPP_EVENT_APP_POWER_STATE_CHANGED 114
+#define ZAPP_EVENT_APP_BATTERY_LEVEL_CHANGED 115
 #endif
 
 // --- Power state (iOS) ---
@@ -59,29 +60,43 @@ const char* darwin_get_power_state(void) {
 
 static char zapp_power_last_source[16] = "";
 static int  zapp_power_last_low = -1;
+static int zapp_power_last_percent = -2;   // -2 = unset (-1 = "null/unknown" is a valid value)
+static int zapp_power_last_charging = -1;
 
-static void zapp_power_signals(const char** out_source, int* out_low) {
+static void zapp_power_read(const char** out_source, int* out_low, int* out_percent, int* out_charging) {
     *out_low = NSProcessInfo.processInfo.isLowPowerModeEnabled ? 1 : 0;
-    UIDeviceBatteryState st = [UIDevice currentDevice].batteryState;
+    UIDevice* dev = [UIDevice currentDevice];
+    UIDeviceBatteryState st = dev.batteryState;
     *out_source = (st == UIDeviceBatteryStateUnplugged) ? "battery" : "ac";
+    *out_charging = (st == UIDeviceBatteryStateCharging) ? 1 : 0;
+    float level = dev.batteryLevel;
+    *out_percent = (level >= 0.0f) ? (int)(level * 100.0f + 0.5f) : -1;
 }
 static void zapp_power_init_cache(void) {
-    const char* source; int low;
-    zapp_power_signals(&source, &low);
+    const char* source; int low, percent, charging;
+    zapp_power_read(&source, &low, &percent, &charging);
     strncpy(zapp_power_last_source, source, sizeof(zapp_power_last_source) - 1);
     zapp_power_last_source[sizeof(zapp_power_last_source) - 1] = '\0';
     zapp_power_last_low = low;
+    zapp_power_last_percent = percent;
+    zapp_power_last_charging = charging;
 }
-static void zapp_power_maybe_dispatch(void) {
-    const char* source; int low;
-    zapp_power_signals(&source, &low);
-    if (strcmp(source, zapp_power_last_source) == 0 && low == zapp_power_last_low) return;
+static void zapp_power_on_change(void) {
+    const char* source; int low, percent, charging;
+    zapp_power_read(&source, &low, &percent, &charging);
+    int sl_changed  = (strcmp(source, zapp_power_last_source) != 0) || (low != zapp_power_last_low);
+    int lvl_changed = (percent != zapp_power_last_percent) || (charging != zapp_power_last_charging);
     strncpy(zapp_power_last_source, source, sizeof(zapp_power_last_source) - 1);
     zapp_power_last_source[sizeof(zapp_power_last_source) - 1] = '\0';
     zapp_power_last_low = low;
-    char payload[160];
-    snprintf(payload, sizeof(payload), "%s", darwin_get_power_state());
-    zapp_app_dispatch(ZAPP_EVENT_APP_POWER_STATE_CHANGED, payload);
+    zapp_power_last_percent = percent;
+    zapp_power_last_charging = charging;
+    if (sl_changed || lvl_changed) {
+        char payload[160];
+        snprintf(payload, sizeof(payload), "%s", darwin_get_power_state());
+        if (sl_changed)  zapp_app_dispatch(ZAPP_EVENT_APP_POWER_STATE_CHANGED, payload);
+        if (lvl_changed) zapp_app_dispatch(ZAPP_EVENT_APP_BATTERY_LEVEL_CHANGED, payload);
+    }
 }
 
 // --- Theme detection ---
@@ -189,6 +204,10 @@ const char* darwin_escape_js_string(const char* raw) {
                                                object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(zappPowerStateChanged:)
+                                                 name:UIDeviceBatteryLevelDidChangeNotification
+                                               object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(zappPowerStateChanged:)
                                                  name:NSProcessInfoPowerStateDidChangeNotification
                                                object:nil];
     zapp_app_dispatch(ZAPP_EVENT_APP_STARTED, NULL);
@@ -211,7 +230,7 @@ const char* darwin_escape_js_string(const char* raw) {
     return YES;
 }
 
-- (void)zappPowerStateChanged:(NSNotification*)note { (void)note; zapp_power_maybe_dispatch(); }
+- (void)zappPowerStateChanged:(NSNotification*)note { (void)note; zapp_power_on_change(); }
 
 - (void)applicationDidBecomeActive:(UIApplication*)application {
     (void)application;

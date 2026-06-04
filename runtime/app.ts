@@ -75,6 +75,9 @@ function _coercePowerState(v: any): PowerState {
     Events.on("app:power-state-changed", (data: any) => {
       _powerState = _coercePowerState(data);
     });
+    Events.on("app:battery-level-changed", (data: any) => {
+      _powerState = _coercePowerState(data);
+    });
   } catch { /* bridge not available — fine for non-Zapp imports */ }
 }
 
