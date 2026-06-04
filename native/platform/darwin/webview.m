@@ -832,14 +832,20 @@ void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first
     const char* themeC = darwin_get_theme();
     NSString* themeStr = [NSString stringWithUTF8String:themeC ? themeC : "light"];
 
+    // powerState: seed the current AC/battery state into the bootstrap config
+    // so App.getPowerState() returns a valid value synchronously on first call,
+    // without waiting for the first IOKit notification.
+    extern const char* darwin_get_power_state(void);
+    const char* powerStateC = darwin_get_power_state();
+
     NSString* configScript = [NSString stringWithFormat:
         @"(function(){globalThis[Symbol.for('zapp.bootstrapConfig')]="
         "{name:'%@',applicationShouldTerminateAfterLastWindowClosed:%@,"
-        "webContentInspectable:%@,maxWorkers:%d,theme:'%@'%@};})();",
+        "webContentInspectable:%@,maxWorkers:%d,theme:'%@',powerState:%s%@};})();",
         appName,
         terminate ? @"true" : @"false",
         inspect ? @"true" : @"false",
-        maxWorkers, themeStr, cspExtra];
+        maxWorkers, themeStr, powerStateC, cspExtra];
     [ucc addUserScript:[[WKUserScript alloc] initWithSource:configScript
         injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
 
