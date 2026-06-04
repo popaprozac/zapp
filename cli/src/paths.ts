@@ -84,6 +84,38 @@ export function resolveAppIconPath(root: string, configIcon?: string): string {
   return "";
 }
 
+/**
+ * Resolve a 1024×1024 PNG source for the iOS app icon. iOS asset catalogs
+ * require a PNG, so non-PNG sources (.icns/.icon/.iconset) are skipped.
+ * Precedence: config.ios.icon (.png) → build/ios/icon.png → build/icon.png →
+ * config.macos.icon (.png, reuse) → build/macos/icon.png → framework zapp.png.
+ * Returns "" if no PNG is found.
+ */
+export function resolveIOSIconPng(
+  root: string,
+  config: { ios?: { icon?: string }; macos?: { icon?: string } },
+): string {
+  const absExistsPng = (p: string): string | "" => {
+    const abs = path.isAbsolute(p) ? p : path.resolve(root, p);
+    return abs.toLowerCase().endsWith(".png") && existsSync(abs) ? abs : "";
+  };
+
+  if (config.ios?.icon) { const p = absExistsPng(config.ios.icon); if (p) return p; }
+  const buildIos = path.join(root, "build", "ios", "icon.png");
+  if (existsSync(buildIos)) return buildIos;
+  const buildRoot = path.join(root, "build", "icon.png");
+  if (existsSync(buildRoot)) return buildRoot;
+  if (config.macos?.icon) { const p = absExistsPng(config.macos.icon); if (p) return p; }
+  const buildMac = path.join(root, "build", "macos", "icon.png");
+  if (existsSync(buildMac)) return buildMac;
+  const frameworkAssets = resolveAssetsDir();
+  if (frameworkAssets) {
+    const def = path.join(frameworkAssets, "zapp.png");
+    if (existsSync(def)) return def;
+  }
+  return "";
+}
+
 export function resolveVendorDir(): string {
   // Check monorepo then published locations.
   const monorepo = path.resolve(CLI_SRC_DIR, "../../vendor");

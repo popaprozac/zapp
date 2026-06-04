@@ -171,6 +171,75 @@ async function buildAssetCatalog(pngPath: string, tempDir: string): Promise<Icon
   };
 }
 
+/**
+ * Build + compile an iOS app-icon asset catalog from a single 1024² PNG.
+ * Modern single-size form (idiom "universal", platform "ios"); actool
+ * downscales. Returns an IconResult (Assets.car + CFBundleIconName), or
+ * null if actool fails / produces no Assets.car (caller logs + skips).
+ */
+export async function buildIOSAssetCatalog(
+  pngPath: string,
+  tempDir: string,
+  target: "ios-simulator" | "ios-device",
+  minDeploymentTarget: string,
+): Promise<IconResult | null> {
+  if (!existsSync(pngPath)) {
+    process.stderr.write(`[zapp] icon: iOS source PNG not found: ${pngPath}\n`);
+    return null;
+  }
+
+  const workDir = path.join(tempDir, "ios-icon");
+  const xcassetsDir = path.join(workDir, "Assets.xcassets");
+  const iconsetDir = path.join(xcassetsDir, "AppIcon.appiconset");
+  await mkdir(iconsetDir, { recursive: true });
+
+  await Bun.write(path.join(iconsetDir, "icon_1024x1024.png"), Bun.file(pngPath));
+
+  // Modern single-size form (Xcode 14+): one universal/iOS 1024² image;
+  // actool downscales. Requires a current Xcode (the repo's iOS builds do).
+  const contentsJson = {
+    images: [
+      { filename: "icon_1024x1024.png", idiom: "universal", platform: "ios", size: "1024x1024" },
+    ],
+    info: { author: "xcode", version: 1 },
+  };
+  await Bun.write(path.join(iconsetDir, "Contents.json"), JSON.stringify(contentsJson, null, 2));
+  await Bun.write(
+    path.join(xcassetsDir, "Contents.json"),
+    JSON.stringify({ info: { author: "xcode", version: 1 } }, null, 2),
+  );
+
+  const outputDir = path.join(workDir, "actool-output");
+  await mkdir(outputDir, { recursive: true });
+  const platform = target === "ios-simulator" ? "iphonesimulator" : "iphoneos";
+
+  const proc = Bun.spawn(
+    [
+      "xcrun", "actool", xcassetsDir,
+      "--compile", outputDir,
+      "--platform", platform,
+      "--minimum-deployment-target", minDeploymentTarget,
+      "--app-icon", "AppIcon",
+      "--output-partial-info-plist", path.join(workDir, "actool-partial.plist"),
+    ],
+    { stdout: "pipe", stderr: "pipe" },
+  );
+  const exitCode = await proc.exited;
+  const carPath = path.join(outputDir, "Assets.car");
+  if (exitCode !== 0 || !existsSync(carPath)) {
+    const stderr = await new Response(proc.stderr).text();
+    process.stderr.write(`[zapp] actool (iOS) failed: ${stderr}\n`);
+    return null;
+  }
+
+  return {
+    type: "assetcatalog",
+    files: [{ src: carPath, dest: "Assets.car" }],
+    plistKey: "CFBundleIconName",
+    plistValue: "AppIcon",
+  };
+}
+
 /** Fallback: convert a single PNG to .icns via iconutil (generates all sizes with sips) */
 async function fallbackPngToIcns(pngPath: string, tempDir: string): Promise<IconResult> {
   const iconsetDir = path.join(tempDir, "AppIcon.iconset");
