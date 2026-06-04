@@ -68,6 +68,7 @@ extern bool app_get_bootstrap_application_should_terminate_after_last_window_clo
 extern int app_get_bootstrap_max_workers(void);
 extern const char* service_get_manifest_json(void);
 extern const char* darwin_get_theme(void);
+extern const char* darwin_get_power_state(void);
 extern const char* darwin_escape_js_string(const char* raw);
 extern int32_t darwin_window_id_for_webview(void* webview);
 extern void zapp_handle_message_from_window(void* app, char* msg, int32_t window_id);
@@ -752,9 +753,9 @@ void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first
     NSString* configScript = [NSString stringWithFormat:
         @"(function(){globalThis[Symbol.for('zapp.bootstrapConfig')]="
         "{name:'%@',applicationShouldTerminateAfterLastWindowClosed:%@,"
-        "webContentInspectable:%@,maxWorkers:%d,theme:'%@'};})();",
+        "webContentInspectable:%@,maxWorkers:%d,theme:'%@',powerState:%s};})();",
         appName, terminate ? @"true" : @"false", inspect ? @"true" : @"false",
-        maxWorkers, themeStr];
+        maxWorkers, themeStr, darwin_get_power_state()];
     [ucc addUserScript:[[WKUserScript alloc] initWithSource:configScript
         injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
 

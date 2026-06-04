@@ -30,6 +30,60 @@ extern int zapp_app_dispatch(int event_id, const char* data);
 #define ZAPP_EVENT_APP_POWER_STATE_CHANGED 114
 #endif
 
+// --- Power state (iOS) ---
+//
+// iOS power state from UIDevice battery + NSProcessInfo low-power. Same symbol
+// name as the macOS definition (each platform compiles its own .m). Static
+// buffer — callers copy immediately on the main thread.
+const char* darwin_get_power_state(void) {
+    static char buf[160];
+    UIDevice* dev = [UIDevice currentDevice];
+    BOOL low = NSProcessInfo.processInfo.isLowPowerModeEnabled;
+    UIDeviceBatteryState st = dev.batteryState;
+    const char* source = (st == UIDeviceBatteryStateUnplugged) ? "battery" : "ac"; // charging/full/unknown -> ac
+    BOOL charging = (st == UIDeviceBatteryStateCharging);
+    float level = dev.batteryLevel;     // 0.0-1.0, or -1 when unknown
+    int percent = (level >= 0.0f) ? (int)(level * 100.0f + 0.5f) : -1;
+
+    if (percent >= 0) {
+        snprintf(buf, sizeof(buf),
+            "{\"source\":\"%s\",\"lowPowerMode\":%s,\"percent\":%d,\"charging\":%s}",
+            source, low ? "true" : "false", percent, charging ? "true" : "false");
+    } else {
+        snprintf(buf, sizeof(buf),
+            "{\"source\":\"%s\",\"lowPowerMode\":%s,\"percent\":null,\"charging\":%s}",
+            source, low ? "true" : "false", charging ? "true" : "false");
+    }
+    return buf;
+}
+
+static char zapp_power_last_source[16] = "";
+static int  zapp_power_last_low = -1;
+
+static void zapp_power_signals(const char** out_source, int* out_low) {
+    *out_low = NSProcessInfo.processInfo.isLowPowerModeEnabled ? 1 : 0;
+    UIDeviceBatteryState st = [UIDevice currentDevice].batteryState;
+    *out_source = (st == UIDeviceBatteryStateUnplugged) ? "battery" : "ac";
+}
+static void zapp_power_init_cache(void) {
+    const char* source; int low;
+    zapp_power_signals(&source, &low);
+    strncpy(zapp_power_last_source, source, sizeof(zapp_power_last_source) - 1);
+    zapp_power_last_source[sizeof(zapp_power_last_source) - 1] = '\0';
+    zapp_power_last_low = low;
+}
+static void zapp_power_maybe_dispatch(void) {
+    const char* source; int low;
+    zapp_power_signals(&source, &low);
+    if (strcmp(source, zapp_power_last_source) == 0 && low == zapp_power_last_low) return;
+    strncpy(zapp_power_last_source, source, sizeof(zapp_power_last_source) - 1);
+    zapp_power_last_source[sizeof(zapp_power_last_source) - 1] = '\0';
+    zapp_power_last_low = low;
+    char payload[160];
+    snprintf(payload, sizeof(payload), "%s", darwin_get_power_state());
+    zapp_app_dispatch(ZAPP_EVENT_APP_POWER_STATE_CHANGED, payload);
+}
+
 // --- Theme detection ---
 //
 // iOS exposes the same NSAppearance machinery via UITraitCollection.
@@ -127,6 +181,16 @@ const char* darwin_escape_js_string(const char* raw) {
 
 - (BOOL)application:(UIApplication*)application didFinishLaunchingWithOptions:(NSDictionary<UIApplicationLaunchOptionsKey, id>*)launchOptions {
     (void)application; (void)launchOptions;
+    [UIDevice currentDevice].batteryMonitoringEnabled = YES;
+    zapp_power_init_cache();
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(zappPowerStateChanged:)
+                                                 name:UIDeviceBatteryStateDidChangeNotification
+                                               object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(zappPowerStateChanged:)
+                                                 name:NSProcessInfoPowerStateDidChangeNotification
+                                               object:nil];
     zapp_app_dispatch(ZAPP_EVENT_APP_STARTED, NULL);
 
     // Drain the deferred-window queue from window.m. The framework's
@@ -147,6 +211,8 @@ const char* darwin_escape_js_string(const char* raw) {
     return YES;
 }
 
+- (void)zappPowerStateChanged:(NSNotification*)note { (void)note; zapp_power_maybe_dispatch(); }
+
 - (void)applicationDidBecomeActive:(UIApplication*)application {
     (void)application;
     zapp_app_dispatch(ZAPP_EVENT_APP_DID_BECOME_ACTIVE, NULL);
@@ -159,6 +225,7 @@ const char* darwin_escape_js_string(const char* raw) {
 
 - (void)applicationWillTerminate:(UIApplication*)application {
     (void)application;
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
     extern void service_run_shutdown_all(void);
     service_run_shutdown_all();
     zapp_app_dispatch(ZAPP_EVENT_APP_SHUTDOWN, NULL);
