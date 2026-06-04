@@ -1,13 +1,14 @@
 #!/usr/bin/env bun
 import path from "node:path";
 import process from "node:process";
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm, cp } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { loadConfig, WORKER_MODULE_CAPABILITIES, type WorkerModuleId } from "./config";
 import { generateBuildConfig, generatePlatformConfig, generateHeadlessWorkers, generateIOSBuildFile, generateEngineOverlay } from "./build-config";
 import { generateBindings } from "./generate";
 import { compileNative, ensureBareBuilt, bareEnginesEnabled, hasAnyWorkerEngine, detectTarget, isIOSTarget, type BuildTarget } from "./native";
-import { resolveNativeDir, resolveBootstrapDir } from "./paths";
+import { resolveNativeDir, resolveBootstrapDir, resolveIOSIconPng } from "./paths";
+import { buildIOSAssetCatalog } from "./icon";
 import { runInit } from "./init";
 // bundleWorkers removed — Vite plugin handles worker bundling now
 import { createDevBundle } from "./bundle";
@@ -23,6 +24,40 @@ const { generateBootstrap } = await import(path.join(bootstrapDir, "codegen.ts")
 
 const cwd = process.cwd();
 
+// Resolve a PNG icon for iOS, compile it to Assets.car, copy it into the
+// .app, and return "AppIcon" (the CFBundleIconName) — or null if no PNG
+// icon is available or actool fails (the build proceeds without an icon).
+async function prepareIOSIcon(
+  root: string,
+  config: { ios?: { icon?: string; minimumSystemVersion?: string }; macos?: { icon?: string } },
+  target: BuildTarget,
+  appBundle: string,
+): Promise<string | null> {
+  if (!isIOSTarget(target)) return null;
+  const png = resolveIOSIconPng(root, config);
+  if (!png) {
+    clog(0, "[zapp] no PNG app icon for iOS (ios.icon / build/ios/icon.png / build/icon.png / macOS icon / framework default) — skipping icon");
+    return null;
+  }
+  const tempDir = path.join(root, ".zapp", "ios-icon-tmp");
+  await rm(tempDir, { recursive: true, force: true });
+  await mkdir(tempDir, { recursive: true });
+  try {
+    const result = await buildIOSAssetCatalog(
+      png, tempDir,
+      target === "ios-device" ? "ios-device" : "ios-simulator",
+      config.ios?.minimumSystemVersion ?? "15.0",
+    );
+    if (!result) return null;
+    for (const f of result.files) {
+      await cp(f.src, path.join(appBundle, f.dest));
+    }
+    return result.plistValue; // "AppIcon"
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
 // Minimal Info.plist for iOS dev/spike builds. Enough for simctl
 // install + launch to succeed; production packaging (Phase 3) replaces
 // this with the full plist + icons + entitlements path.
@@ -30,8 +65,9 @@ async function writeIOSDevPlist(opts: {
   binaryPath: string;
   config: { name: string; identifier?: string; version?: string; ios?: { minimumSystemVersion?: string; deviceFamily?: string } };
   target: BuildTarget;
+  iconName?: string | null;
 }): Promise<void> {
-  const { binaryPath, config, target } = opts;
+  const { binaryPath, config, target, iconName } = opts;
   const appBundle = path.dirname(binaryPath);
   const exeName = path.basename(binaryPath);
   const bundleId = config.identifier ?? `com.zapp.${config.name.replace(/\s+/g, "-").toLowerCase()}.dev`;
@@ -60,6 +96,7 @@ async function writeIOSDevPlist(opts: {
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleSupportedPlatforms</key><array><string>${platformName === "iphonesimulator" ? "iPhoneSimulator" : "iPhoneOS"}</string></array>
+  ${iconName ? `<key>CFBundleIconName</key><string>${iconName}</string>` : ""}
   <key>DTPlatformName</key><string>${platformName}</string>
   <key>LSRequiresIPhoneOS</key><true/>
   <key>MinimumOSVersion</key><string>${minVersion}</string>
@@ -344,8 +381,9 @@ async function runDev(root: string) {
   if (isIOS) {
     // iOS: write Info.plist into the bundle, ad-hoc sign, install +
     // launch on the booted sim. Same flow as runBuild's iOS path.
-    await writeIOSDevPlist({ binaryPath: nativeOut, config, target });
     const appBundle = path.dirname(nativeOut);
+    const iconName = await prepareIOSIcon(root, config, target, appBundle);
+    await writeIOSDevPlist({ binaryPath: nativeOut, config, target, iconName });
     const signProc = Bun.spawn(["codesign", "--force", "--sign", "-", appBundle], {
       stdout: "pipe", stderr: "pipe",
     });
@@ -572,7 +610,8 @@ async function runBuild(root: string) {
   // entitlements, code-sign, etc. — this is the spike-grade plist
   // that just makes the app launch.
   if (isIOSTarget(target)) {
-    await writeIOSDevPlist({ binaryPath: nativeOut, config, target });
+    const iconName = await prepareIOSIcon(root, config, target, path.dirname(nativeOut));
+    await writeIOSDevPlist({ binaryPath: nativeOut, config, target, iconName });
     // Re-sign the bundle ad-hoc so the Info.plist is bound into the
     // signature. clang's linker emits an `adhoc,linker-signed` blob
     // covering only the Mach-O — modern iOS Simulator (macOS Sequoia+)
