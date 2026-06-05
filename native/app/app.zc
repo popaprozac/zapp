@@ -1,6 +1,7 @@
 // Application lifecycle and configuration — pure Zen-C.
 
 import "../window/window.zc";
+import "../panel/panel.zc";
 import "../window/callbacks.zc";
 import "../service/service.zc";
 import "../dialog/dialog.zc";

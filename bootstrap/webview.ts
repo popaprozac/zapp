@@ -135,6 +135,15 @@
       bridge._onEvent(evName, JSON.stringify(payload));
     },
 
+    dispatchPanelEvent(panelId: string, eventName: string, dataJson?: string): void {
+      let data: any = undefined;
+      if (dataJson) {
+        try { data = JSON.parse(dataJson); } catch {}
+      }
+      // Routed to runtime/webview.ts via the "panel:<panelId>" event name.
+      bridge._onEvent("panel:" + panelId, JSON.stringify({ event: eventName, data }));
+    },
+
     // --- Worker lifecycle ---
 
     createWorker(scriptUrl: string, opts?: { engine?: string; name?: string }): string {

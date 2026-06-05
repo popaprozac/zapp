@@ -492,6 +492,9 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
         return;
     }
 
+    // Embedded-webview (panel) actions — delegate to panel.zc.
+    if panel_route(window_id, action, pre_args) { return; }
+
     // Dock actions
     if action == "dock:showIcon" { dock_show_icon(); return; }
     if action == "dock:hideIcon" { dock_hide_icon(); return; }

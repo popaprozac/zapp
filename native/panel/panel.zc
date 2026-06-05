@@ -1,0 +1,149 @@
+// Embedded-webview ("panel") routing. router.zc delegates panel* actions
+// here; this reads args and calls the darwin_panel_* C primitives. macOS
+// real impl; iOS stubs (panel.m); other platforms: the #ifdef leaves the
+// calls out, so the action is a silent no-op.
+import "std/json.zc";
+
+fn panel_str(args: JsonValue*, key: string) -> string {
+    let o = args.get_string(key);
+    if o.is_some() { return o.unwrap(); }
+    return "";
+}
+
+fn panel_int(args: JsonValue*, key: string) -> int {
+    let o = args.get_int(key);
+    if o.is_some() { return o.unwrap(); }
+    return 0;
+}
+
+// Returns true if `action` was a panel action (handled), false otherwise.
+fn panel_route(window_id: int, action: string, args: JsonValue*) -> bool {
+    if action == "panelCreate" {
+        let pid = panel_str(args, "panelId");
+        let url = panel_str(args, "url");
+        let part = panel_str(args, "partition");
+        let bridge_opt = args.get_bool("bridge");
+        let has_bridge: bool = false;
+        if bridge_opt.is_some() { has_bridge = bridge_opt.unwrap(); }
+        raw {
+            #ifdef __APPLE__
+            extern void darwin_panel_create(int32_t window_id, const char* panel_id,
+                                            const char* url, bool bridge, const char* partition);
+            darwin_panel_create(window_id, (const char*)pid, (const char*)url,
+                                has_bridge, (const char*)part);
+            #endif
+        }
+        return true;
+    }
+    if action == "panelSetBounds" {
+        let pid = panel_str(args, "panelId");
+        let x = panel_int(args, "x");
+        let y = panel_int(args, "y");
+        let w = panel_int(args, "w");
+        let h = panel_int(args, "h");
+        raw {
+            #ifdef __APPLE__
+            extern void darwin_panel_set_bounds(const char* panel_id, int32_t x, int32_t y,
+                                                int32_t w, int32_t h);
+            darwin_panel_set_bounds((const char*)pid, x, y, w, h);
+            #endif
+        }
+        return true;
+    }
+    if action == "panelLoadUrl" {
+        let pid = panel_str(args, "panelId");
+        let url = panel_str(args, "url");
+        raw {
+            #ifdef __APPLE__
+            extern void darwin_panel_load_url(const char* panel_id, const char* url);
+            darwin_panel_load_url((const char*)pid, (const char*)url);
+            #endif
+        }
+        return true;
+    }
+    if action == "panelExecJs" {
+        let pid = panel_str(args, "panelId");
+        let code = panel_str(args, "code");
+        raw {
+            #ifdef __APPLE__
+            extern void darwin_panel_eval_js(const char* panel_id, const char* js);
+            darwin_panel_eval_js((const char*)pid, (const char*)code);
+            #endif
+        }
+        return true;
+    }
+    if action == "panelPostMessage" {
+        // Host -> embed structured message. Built on the heap in panel.m (no
+        // fixed buffer) so large payloads aren't truncated.
+        let pid = panel_str(args, "panelId");
+        let data = panel_str(args, "data"); // already JSON-encoded by the runtime
+        raw {
+            #ifdef __APPLE__
+            extern void darwin_panel_post_message(const char* panel_id, const char* data_json);
+            darwin_panel_post_message((const char*)pid, (const char*)data);
+            #endif
+        }
+        return true;
+    }
+    if action == "panelShow" {
+        let pid = panel_str(args, "panelId");
+        raw {
+            #ifdef __APPLE__
+            extern void darwin_panel_show(const char* panel_id);
+            darwin_panel_show((const char*)pid);
+            #endif
+        }
+        return true;
+    }
+    if action == "panelHide" {
+        let pid = panel_str(args, "panelId");
+        raw {
+            #ifdef __APPLE__
+            extern void darwin_panel_hide(const char* panel_id);
+            darwin_panel_hide((const char*)pid);
+            #endif
+        }
+        return true;
+    }
+    if action == "panelReload" {
+        let pid = panel_str(args, "panelId");
+        raw {
+            #ifdef __APPLE__
+            extern void darwin_panel_reload(const char* panel_id);
+            darwin_panel_reload((const char*)pid);
+            #endif
+        }
+        return true;
+    }
+    if action == "panelBack" {
+        let pid = panel_str(args, "panelId");
+        raw {
+            #ifdef __APPLE__
+            extern void darwin_panel_go_back(const char* panel_id);
+            darwin_panel_go_back((const char*)pid);
+            #endif
+        }
+        return true;
+    }
+    if action == "panelForward" {
+        let pid = panel_str(args, "panelId");
+        raw {
+            #ifdef __APPLE__
+            extern void darwin_panel_go_forward(const char* panel_id);
+            darwin_panel_go_forward((const char*)pid);
+            #endif
+        }
+        return true;
+    }
+    if action == "panelDestroy" {
+        let pid = panel_str(args, "panelId");
+        raw {
+            #ifdef __APPLE__
+            extern void darwin_panel_destroy(const char* panel_id);
+            darwin_panel_destroy((const char*)pid);
+            #endif
+        }
+        return true;
+    }
+    return false;
+}

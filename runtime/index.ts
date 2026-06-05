@@ -16,6 +16,7 @@
 
 export { App, type PowerState } from "./app";
 export { Window, type WindowHandle, type WindowOptions } from "./window";
+export { Webview, ZappWebviewElement, type PanelEvent, type WebviewCreateOptions } from "./webview";
 export { Events, WindowEvent, AppEvent, eventName, type WindowPayload, type WindowSizePayload, type EventName } from "./events";
 export { Services, type InvokeOptions, type CancellablePromise } from "./services";
 export { Worker, SharedWorker, SharedWorkerPort, Workers, type WorkerMessageEvent } from "./worker";
