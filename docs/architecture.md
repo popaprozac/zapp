@@ -158,6 +158,14 @@ Two checks guard this:
 
    and require its `[zapp] build complete:` line. This is the broader backstop the lint can't replace (it catches Cocoa-only APIs used in shared code, macro mismatches, and other divergences — not just missing symbols). A passing macOS build alone is **not** sufficient verification for changes under `native/`.
 
+### Running the tests
+
+- **`bun run test`** — the TypeScript suite (`cli/src` + `runtime`, via `bun:test`). TS tests live in `*.test.ts` next to the module they cover (the `ios-platform-parity` lint above rides this suite).
+- **`bun run test:native`** — the native Zen-C tests. Each `native/tests/*_test.zc` uses Zen-C's built-in framework — `test "name" { assert(cond, msg); expect(cond, msg); }` — and is run via `zc run` (the binary exits with the failure count). Only pure-logic `.zc` (no Cocoa/UIKit) is unit-testable this way; platform `.m` code is build + manual smoke.
+- **`bun run test:all`** — both.
+
+Run `bun run test:all` before merging changes that touch `cli/`, `runtime/`, or pure-logic `native/` code. (ObjC `.m` and broader native behavior still rely on the build + the ios-simulator build + manual smoke described above.)
+
 ## Layer 2: bridge (bootstrap)
 
 `bootstrap/webview.ts` and `bootstrap/worker.ts` are **TypeScript source
