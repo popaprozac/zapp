@@ -21,7 +21,7 @@ Implement the infrastructure + a proof batch for **both** layers; backlog the re
 Create a root `package.json` (the repo has none — only per-package files) with `private: true` and:
 ```json
 "scripts": {
-  "test":        "bun test cli/src runtime",
+  "test":        "bun test ./cli/src/*.test.ts ./runtime/*.test.ts",
   "test:native": "bun run cli/src/test-native.ts",
   "test:all":    "bun run test && bun run test:native"
 }

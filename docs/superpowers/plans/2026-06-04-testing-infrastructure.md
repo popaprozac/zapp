@@ -32,7 +32,7 @@
   "name": "zapp-monorepo",
   "private": true,
   "scripts": {
-    "test": "bun test cli/src runtime",
+    "test": "bun test ./cli/src/*.test.ts ./runtime/*.test.ts",
     "test:native": "bun run cli/src/test-native.ts",
     "test:all": "bun run test && bun run test:native"
   }
