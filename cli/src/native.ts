@@ -90,6 +90,7 @@ export function getPlatformSources(nativeDir: string, target: BuildTarget = dete
       path.join(iosDir, "fs.m"),
       path.join(iosDir, "clipboard.m"),
       path.join(iosDir, "shortcuts.m"),
+      path.join(iosDir, "panel.m"),
     ];
     return sources.filter(f => existsSync(f));
   }
