@@ -62,7 +62,7 @@ async function lowerForHermes(jsSource: string): Promise<string> {
     sourcemap: false,
   });
 
-  const babel = await import("@babel/core");
+  const babel = await import("@babel/core" as string);
   // Babel's plugin export is CJS-shaped — pick `.default` after
   // dynamic import.
   const transformClasses = (await import("@babel/plugin-transform-classes" as string))

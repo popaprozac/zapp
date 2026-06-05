@@ -177,7 +177,7 @@
 
     // --- Sync wait/notify ---
 
-    _syncPending: {} as Record<string, { resolve: (v: string) => void; timer?: ReturnType<typeof setTimeout> }>,
+    _syncPending: {} as Record<string, { resolve: (v: "notified" | "timed-out") => void; timer?: ReturnType<typeof setTimeout> }>,
 
     syncWait(key: string, timeoutMs?: number | null): Promise<"notified" | "timed-out"> {
       const id = "sync-" + nextId++ + "-" + Date.now();

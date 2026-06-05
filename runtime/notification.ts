@@ -174,26 +174,28 @@ export const Notification = {
   on(event: "click" | "action" | "response", handler: ((response: NotificationResponse) => void) | ((notificationId: string, actionId?: string) => void)): () => void {
     if (event === "response") {
       // Unified handler — fires for both clicks and actions
+      const responseHandler = handler as (response: NotificationResponse) => void;
       const offClick = Events.on("__notif:click", (payload: any) => {
         const data = typeof payload === "string" ? JSON.parse(payload) : payload;
-        handler({ id: data.id, actionId: "DEFAULT" } as NotificationResponse);
+        responseHandler({ id: data.id, actionId: "DEFAULT" });
       });
       const offAction = Events.on("__notif:action", (payload: any) => {
         const data = typeof payload === "string" ? JSON.parse(payload) : payload;
-        handler({
+        responseHandler({
           id: data.id,
           actionId: data.action,
           userText: data.userText,
-        } as NotificationResponse);
+        });
       });
       return () => { offClick(); offAction(); };
     }
 
     // Legacy click/action handlers
+    const legacyHandler = handler as (notificationId: string, actionId?: string) => void;
     const eventName = event === "click" ? "__notif:click" : "__notif:action";
     return Events.on(eventName, (payload: any) => {
       const data = typeof payload === "string" ? JSON.parse(payload) : payload;
-      handler(data.id, data.action);
+      legacyHandler(data.id, data.action);
     });
   },
 };

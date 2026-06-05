@@ -51,7 +51,7 @@ if (mod) {
         const h = mod.createHash(nodeName);
         h.update(buf);
         const out: Uint8Array = h.digest();
-        return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength);
+        return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength) as ArrayBuffer;
       },
     },
   };

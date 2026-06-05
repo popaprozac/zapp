@@ -126,6 +126,7 @@ export async function getUserProjectSources(root: string, target: BuildTarget = 
     : target === "windows" ? ".c"
     : null;
   if (!ext) return [];
+  const fileExt: string = ext;
 
   const results: string[] = [];
   async function walk(dir: string): Promise<void> {
@@ -137,7 +138,7 @@ export async function getUserProjectSources(root: string, target: BuildTarget = 
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         await walk(full);
-      } else if (entry.isFile() && entry.name.endsWith(ext)) {
+      } else if (entry.isFile() && entry.name.endsWith(fileExt)) {
         results.push(full);
       }
     }
