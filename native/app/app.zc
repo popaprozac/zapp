@@ -2,6 +2,7 @@
 
 import "../window/window.zc";
 import "../panel/panel.zc";
+import "../screen/screen.zc";
 import "../window/callbacks.zc";
 import "../service/service.zc";
 import "../dialog/dialog.zc";

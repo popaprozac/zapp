@@ -23,6 +23,9 @@ import {
   // Workers
   Worker, SharedWorker, SharedWorkerPort, Workers, type WorkerMessageEvent,
 
+  // Screen / displays
+  Screen, type Display,
+
   // System integration
   Clipboard, type ClipboardFormat,
   Shortcuts,
@@ -615,6 +618,10 @@ attachModal(modal: WindowHandle): void
 detachModal(modal: WindowHandle): void
 ```
 
+> **Coordinates are top-left global** (origin at the primary display's
+> top-left, y down) — consistent with the `Screen` API. (Changed from the
+> earlier macOS-native bottom-left in the Screen/Displays release.)
+
 ### Modal sheets
 
 `attachModal` shows another window as a macOS sheet anchored to this
@@ -708,6 +715,43 @@ tray.on("click", () => {
 
 To bring the app forward *without* targeting a specific window (e.g.
 when no window is currently open), use `App.activate()`.
+
+---
+
+## Screen (displays)
+
+Enumerate displays + geometry. All coordinates are **top-left global** —
+origin at the primary display's top-left, y grows down — the same system
+`Window.setPosition`/`getPosition`/`create({x,y})` use, so you can place a
+window on a display by its bounds.
+
+```ts
+import { Screen, Window, App, AppEvent } from "@zappdev/runtime";
+
+const displays = await Screen.getAll();      // Display[]
+const primary  = await Screen.getPrimary();  // Display | null
+const byId     = await Screen.getById(id);   // Display | null
+const cursor   = await Screen.getCursorPoint(); // { x, y, display }
+const onScreen = await Window.current().getScreen(); // Display
+
+// open a window centered on the display under the cursor:
+const c = await Screen.getCursorPoint();
+await Window.create({
+  x: c.display.workArea.x + (c.display.workArea.width - 400) / 2,
+  y: c.display.workArea.y + (c.display.workArea.height - 300) / 2,
+  width: 400, height: 300,
+});
+
+// re-layout when displays change (monitor plug/unplug, resolution change):
+App.on(AppEvent.SCREENS_CHANGED, async () => relayout(await Screen.getAll()));
+```
+
+**`Display`:** `id` (stable), `name`, `bounds` `{x,y,width,height}`, `workArea`
+(minus menu bar/dock), `scaleFactor` (1 or 2), `isPrimary`, `rotation`
+(0/90/180/270).
+
+**Platform:** macOS full. iOS reports one display (`UIScreen`); `getCursorPoint`
+returns `{0,0}`. Windows: empty list (stub).
 
 ---
 

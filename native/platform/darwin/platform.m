@@ -40,6 +40,7 @@ extern int zapp_app_dispatch(int event_id, const char* data);
 #define ZAPP_EVENT_APP_BEFORE_QUIT        113
 #define ZAPP_EVENT_APP_POWER_STATE_CHANGED 114
 #define ZAPP_EVENT_APP_BATTERY_LEVEL_CHANGED 115
+#define ZAPP_EVENT_APP_SCREENS_CHANGED       116
 #endif
 
 void darwin_set_quit_guard(bool enabled) {
@@ -257,6 +258,12 @@ bool darwin_get_login_item(void) {
     [dist addObserver:self selector:@selector(zappScreenUnlocked:)
                  name:@"com.apple.screenIsUnlocked" object:nil];
 
+    // Display reconfiguration (monitor plug/unplug, resolution change) — posted
+    // by NSApplication on the DEFAULT center, not the distributed one.
+    [[NSNotificationCenter defaultCenter] addObserver:self
+        selector:@selector(zappScreensChanged:)
+        name:NSApplicationDidChangeScreenParametersNotification object:nil];
+
     // Power-state monitoring: IOKit run-loop source for AC/battery, plus the
     // NSProcessInfo notification for Low Power Mode toggles. Seed the cache
     // first so the first real transition compares correctly.
@@ -326,6 +333,7 @@ bool darwin_get_login_item(void) {
 - (void)zappDidWake:(NSNotification*)note        { (void)note; zapp_app_dispatch(ZAPP_EVENT_APP_DID_WAKE, "{}"); }
 - (void)zappScreenLocked:(NSNotification*)note   { (void)note; zapp_app_dispatch(ZAPP_EVENT_APP_SCREEN_LOCKED, "{}"); }
 - (void)zappScreenUnlocked:(NSNotification*)note { (void)note; zapp_app_dispatch(ZAPP_EVENT_APP_SCREEN_UNLOCKED, "{}"); }
+- (void)zappScreensChanged:(NSNotification*)note { (void)note; zapp_app_dispatch(ZAPP_EVENT_APP_SCREENS_CHANGED, "{}"); }
 - (void)zappPowerStateChanged:(NSNotification*)note { (void)note; zapp_power_on_change(); }
 
 // Deep link handler: receives URLs when app is opened via custom scheme (e.g., myapp://path)

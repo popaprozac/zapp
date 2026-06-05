@@ -29,6 +29,7 @@ extern int zapp_app_dispatch(int event_id, const char* data);
 #define ZAPP_EVENT_APP_BEFORE_QUIT        113
 #define ZAPP_EVENT_APP_POWER_STATE_CHANGED 114
 #define ZAPP_EVENT_APP_BATTERY_LEVEL_CHANGED 115
+#define ZAPP_EVENT_APP_SCREENS_CHANGED       116
 #endif
 
 // --- Power state (iOS) ---
