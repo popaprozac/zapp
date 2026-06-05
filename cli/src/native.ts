@@ -60,6 +60,7 @@ export function getPlatformSources(nativeDir: string, target: BuildTarget = dete
       path.join(darwinDir, "fs.m"),
       path.join(darwinDir, "clipboard.m"),
       path.join(darwinDir, "shortcuts.m"),
+      path.join(darwinDir, "panel.m"),
     ];
     // bare.c / zjs.c are NOT listed here — they're added by
     // `generatePlatformConfig` only when the corresponding

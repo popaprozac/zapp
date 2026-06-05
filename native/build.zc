@@ -13,7 +13,7 @@
 //> macos: framework: Security
 //> macos: link: -lcompression
 //> macos: cflags: -fobjc-arc -x objective-c
-//> macos: cflags: platform/darwin/platform.m platform/darwin/window.m platform/darwin/webview.m
+//> macos: cflags: platform/darwin/platform.m platform/darwin/window.m platform/darwin/webview.m platform/darwin/panel.m
 
 // --- Windows ---
 //> windows: cflags: -DUNICODE -D_UNICODE -DCINTERFACE -DCOBJMACROS
