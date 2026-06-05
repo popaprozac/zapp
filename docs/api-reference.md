@@ -15,6 +15,7 @@ import {
   // Windows
   Window, WindowEvent, type WindowHandle, type WindowOptions,
   type WindowPayload, type WindowSizePayload,
+  Webview, ZappWebviewElement, type PanelEvent, type WebviewCreateOptions,
 
   // Services (IPC to native Zen-C)
   Services, type InvokeOptions, type CancellablePromise,
@@ -707,6 +708,50 @@ tray.on("click", () => {
 
 To bring the app forward *without* targeting a specific window (e.g.
 when no window is currently open), use `App.activate()`.
+
+---
+
+## Webview (embedded webviews) — macOS
+
+`<zapp-webview>` embeds a **full native webview** inside your page — like an
+`<iframe>`, but it can load sites that block iframing (`X-Frame-Options` /
+`frame-ancestors`), runs in its own process, and keeps its own session.
+
+```html
+<zapp-webview src="https://example.com" style="width:360px;height:480px"></zapp-webview>
+```
+```ts
+import { Webview } from "@zappdev/runtime";
+
+const v = document.querySelector("zapp-webview") as import("@zappdev/runtime").ZappWebviewElement;
+await /* host -> embed */ v.execJS("document.title");
+v.postMessage({ hello: "embed" });               // host -> embed (a MessageEvent)
+v.on("did-navigate", (d) => console.log("nav", d));
+v.on("message", (d) => console.log("from embed", d)); // embed called window.zappHost.postMessage(d)
+v.loadURL("https://wails.io"); v.reload(); v.goBack(); v.destroy();
+
+// programmatic:
+const v2 = Webview.create({ src: "https://example.com" });
+document.querySelector(".sidebar")!.appendChild(v2);
+```
+
+**Attributes:** `src` (URL); `bridge` (reserved — app-origin bridge injection is
+a follow-up; inert in v1); `partition` (reserved — named sessions are a follow-up;
+inert in v1).
+
+**Events** (via `.on(event, cb)` or DOM `CustomEvent`): `did-navigate` `{url}`,
+`title-change` `{title}`, `load-finished`, `load-failed` `{code,description}`,
+`message` (data from `window.zappHost.postMessage` in the embed).
+
+**Security:** embeds are **sandboxed** — they do NOT get `__zappBridge`/Services.
+Host↔embed communication is only `execJS`/`postMessage` ↔ `window.zappHost.postMessage`.
+
+**Known limitations (v1).** The embed is a separate OS layer composited over your
+page, so: (1) it can lag a frame on fast scroll ("swim"); (2) it always paints
+**above** your DOM — app modals/dropdowns can't cover it; (3) it won't clip to
+`overflow:hidden`/`border-radius` ancestors or follow CSS `transform`. Mitigations
+are a planned follow-up. macOS only in v1 (iOS/Windows are no-ops). DevTools can't
+be opened programmatically on macOS (right-click → Inspect Element).
 
 ---
 
