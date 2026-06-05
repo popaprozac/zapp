@@ -133,7 +133,7 @@ type SimpleEvents = "window:ready" | "window:focus" | "window:blur" | "window:cl
   | "window:minimize" | "window:fullscreen" | "window:unfullscreen";
 
 /** App event string names. */
-type AppEvents = "app:started" | "app:shutdown" | "app:reopen" | "app:open-url" | "app:active" | "app:inactive" | "app:theme-changed" | "app:will-sleep" | "app:did-wake" | "app:screen-locked" | "app:screen-unlocked" | "app:before-quit" | "app:power-state-changed" | "app:battery-level-changed";
+type AppEvents = "app:started" | "app:shutdown" | "app:reopen" | "app:open-url" | "app:active" | "app:inactive" | "app:theme-changed" | "app:will-sleep" | "app:did-wake" | "app:screen-locked" | "app:screen-unlocked" | "app:before-quit" | "app:power-state-changed" | "app:battery-level-changed" | "app:screens-changed";
 
 /** All known event names. Arbitrary strings also work. */
 export type EventName = SizeEvents | SimpleEvents | AppEvents | (string & {});

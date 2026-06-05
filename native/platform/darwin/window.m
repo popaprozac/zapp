@@ -205,7 +205,10 @@ static const char kZappWindowDelegateKey = 0;
     if (self.numericId < 0 || !window) return;
     NSRect frame = [window frame];
     int w = (int)frame.size.width, h = (int)frame.size.height;
-    int x = (int)frame.origin.x, y = (int)frame.origin.y;
+    // Report position in top-left global coords, consistent with
+    // darwin_window_get_position / the Screen API.
+    int x = (int)frame.origin.x;
+    int y = (int)(zapp_primary_screen_height() - frame.origin.y - frame.size.height);
     zapp_dispatch_event(self.numericId, ZAPP_EVENT_WINDOW_RESIZE, w, h, x, y);
     BOOL isZoomed = [window isZoomed];
     if (isZoomed && !self.wasZoomed)
@@ -219,9 +222,11 @@ static const char kZappWindowDelegateKey = 0;
     NSWindow* window = (NSWindow*)[notification object];
     if (self.numericId < 0 || !window) return;
     NSRect frame = [window frame];
+    // top-left global y, consistent with get_position / the Screen API.
+    int y = (int)(zapp_primary_screen_height() - frame.origin.y - frame.size.height);
     zapp_dispatch_event(self.numericId, ZAPP_EVENT_WINDOW_MOVE,
         (int)frame.size.width, (int)frame.size.height,
-        (int)frame.origin.x, (int)frame.origin.y);
+        (int)frame.origin.x, y);
 }
 
 - (void)windowDidMiniaturize:(NSNotification*)notification {
