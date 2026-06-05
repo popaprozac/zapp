@@ -11,6 +11,8 @@ extern void darwin_webview_create(void* window_ptr, bool inspectable, bool accep
                                   const char* url_override, int32_t numeric_id_pre_alloc,
                                   bool transparent_background);
 extern int zapp_dispatch_event(int window_id, int event_id, int w, int h, int x, int y);
+// Primary display height (top-left global origin flip). Defined in screen.m.
+extern double zapp_primary_screen_height(void);
 
 // Event IDs (mirrored from window/events.zc)
 #ifndef ZAPP_EVENT_WINDOW_READY
@@ -366,7 +368,12 @@ void* darwin_window_create(WindowOptions* opts) {
             styleMask = NSWindowStyleMaskBorderless;
         }
 
-        NSRect frame = NSMakeRect(wopts_x(opts), wopts_y(opts), wopts_width(opts), wopts_height(opts));
+        // x,y are top-left global; NSWindow's content rect wants bottom-left.
+        // Auto-center (below) overrides this origin when requested, so the
+        // flip only matters for the explicit-position case.
+        CGFloat _createTopY = (CGFloat)wopts_y(opts);
+        CGFloat _createBLY = zapp_primary_screen_height() - _createTopY - (CGFloat)wopts_height(opts);
+        NSRect frame = NSMakeRect(wopts_x(opts), _createBLY, wopts_width(opts), wopts_height(opts));
         NSWindow* window = [[NSWindow alloc] initWithContentRect:frame
             styleMask:styleMask backing:NSBackingStoreBuffered defer:NO];
         [window setReleasedWhenClosed:NO];
@@ -581,7 +588,10 @@ void darwin_window_set_size(void* handle, int32_t width, int32_t height) {
 }
 
 void darwin_window_set_position(void* handle, int32_t x, int32_t y) {
-    [(__bridge NSWindow*)handle setFrameOrigin:NSMakePoint(x, y)];
+    // x,y are top-left global; setFrameOrigin wants bottom-left.
+    NSWindow* w = (__bridge NSWindow*)handle;
+    CGFloat blY = zapp_primary_screen_height() - (CGFloat)y - w.frame.size.height;
+    [w setFrameOrigin:NSMakePoint((CGFloat)x, blY)];
 }
 
 void darwin_window_minimize(void* handle) {
@@ -731,7 +741,7 @@ void darwin_window_get_size(void* handle, int32_t* out_w, int32_t* out_h) {
 void darwin_window_get_position(void* handle, int32_t* out_x, int32_t* out_y) {
     NSRect frame = [(__bridge NSWindow*)handle frame];
     *out_x = (int32_t)frame.origin.x;
-    *out_y = (int32_t)frame.origin.y;
+    *out_y = (int32_t)(zapp_primary_screen_height() - frame.origin.y - frame.size.height);
 }
 
 void darwin_window_register_numeric_id(void* handle, int32_t numeric_id) {
