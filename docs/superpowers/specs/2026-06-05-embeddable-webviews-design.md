@@ -90,6 +90,7 @@ Standard chain (C primitive → Zen-C → router → TS runtime → docs):
 - **Leak mitigations** — scroll-pinning, clip masks for `overflow`/`border-radius`, modal-aware z-lowering. Separate follow-up.
 - **Windows / Linux / iOS real implementations** — stubs only.
 - **Ephemeral/incognito partitions**, per-embed proxy, **programmatic DevTools-open** (macOS lacks a public API — same limit Wails documented).
+- **App-origin bridge *injection*** (`bridge` attribute making `__zappBridge`/Services work *inside* a panel) — **deferred to a follow-up** during planning. The `bridge` + `partition` attributes are plumbed end-to-end (API + `darwin_panel_create` signature) but are **inert in v1**: every embed is sandboxed, shared default `WKWebsiteDataStore`. Reason: panel↔bridge invoke-response routing would balloon v1, and the killer value (embedding external sites) is entirely in the sandboxed path. Forward-compatible — adding injection later is non-breaking.
 - **CSS transform following** (rotate/scale/3D) — flat rect only.
 - **Pre-render/pooling** of panels for instant show — later perf work.
 
