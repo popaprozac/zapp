@@ -43,9 +43,8 @@ static NSString* zapp_panel_js_escape(const char* raw) {
 // Eval `bridge.dispatchPanelEvent(panelId, event, dataJson)` into the owner window.
 static void zapp_panel_emit(ZappPanel* p, NSString* event, NSString* dataJson) {
     if (!p) return;
-    NSString* dataArg = dataJson ? [NSString stringWithFormat:@"'%@'",
-        [dataJson stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"]] : @"undefined";
-    // dataJson is already JSON; escape only backslashes + quotes for the JS literal.
+    // dataJson is already JSON; escape backslashes + single-quotes for the JS literal.
+    NSString* dataArg = @"undefined";
     if (dataJson) {
         NSString* esc = [dataJson stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
         esc = [esc stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
@@ -170,6 +169,21 @@ void darwin_panel_eval_js(const char* panel_id, const char* js) {
     if (!p || !js) return;
     NSString* code = [NSString stringWithUTF8String:js];
     zapp_panel_on_main(^{ [p.webview evaluateJavaScript:code completionHandler:nil]; });
+}
+
+// host -> embed structured message. data_json is an already-JSON value (object/
+// array/string/null) — itself a valid JS literal. Built on the heap (no fixed
+// buffer) so large payloads are never truncated.
+void darwin_panel_post_message(const char* panel_id, const char* data_json) {
+    ZappPanel* p = zapp_panel_get(panel_id);
+    if (!p || !data_json) return;
+    NSString* data = [NSString stringWithUTF8String:data_json];
+    if (!data) return;
+    zapp_panel_on_main(^{
+        NSString* js = [NSString stringWithFormat:
+            @"window.dispatchEvent(new MessageEvent('message',{data:%@}));", data];
+        [p.webview evaluateJavaScript:js completionHandler:nil];
+    });
 }
 
 void darwin_panel_show(const char* panel_id) {

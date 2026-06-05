@@ -73,18 +73,14 @@ fn panel_route(window_id: int, action: string, args: JsonValue*) -> bool {
         return true;
     }
     if action == "panelPostMessage" {
-        // Deliver as: window.dispatchEvent or a host->embed message. We wrap the
-        // JSON payload into a CustomEvent the embed can listen for on `message`.
+        // Host -> embed structured message. Built on the heap in panel.m (no
+        // fixed buffer) so large payloads aren't truncated.
         let pid = panel_str(args, "panelId");
         let data = panel_str(args, "data"); // already JSON-encoded by the runtime
         raw {
             #ifdef __APPLE__
-            extern void darwin_panel_eval_js(const char* panel_id, const char* js);
-            char js[4096];
-            snprintf(js, sizeof(js),
-                "window.dispatchEvent(new MessageEvent('message',{data:%s}));",
-                (const char*)data);
-            darwin_panel_eval_js((const char*)pid, js);
+            extern void darwin_panel_post_message(const char* panel_id, const char* data_json);
+            darwin_panel_post_message((const char*)pid, (const char*)data);
             #endif
         }
         return true;

@@ -14,6 +14,7 @@ void darwin_panel_set_bounds(const char* panel_id, int32_t x, int32_t y, int32_t
 }
 void darwin_panel_load_url(const char* panel_id, const char* url) { (void)panel_id; (void)url; }
 void darwin_panel_eval_js(const char* panel_id, const char* js) { (void)panel_id; (void)js; }
+void darwin_panel_post_message(const char* panel_id, const char* data_json) { (void)panel_id; (void)data_json; }
 void darwin_panel_show(const char* panel_id) { (void)panel_id; }
 void darwin_panel_hide(const char* panel_id) { (void)panel_id; }
 void darwin_panel_reload(const char* panel_id) { (void)panel_id; }
