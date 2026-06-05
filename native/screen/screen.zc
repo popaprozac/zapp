@@ -1,0 +1,58 @@
+// Screen/display query routing. router.zc delegates __screen:* invoke
+// methods here; these call the darwin_screen_* C primitives and respond via
+// dispatch_invoke_response (request/response, like __zapp:workers-list).
+import "std/json.zc";
+
+fn screen_route(method: string, window_id: int, request_id: int, args: JsonValue*) -> bool {
+    if method == "__screen:list" {
+        let json: string = NULL;
+        raw {
+            #ifdef __APPLE__
+            extern char* darwin_screen_list_json(void);
+            json = darwin_screen_list_json();
+            #endif
+        }
+        if json == NULL { dispatch_invoke_response(window_id, request_id, true, "[]"); return true; }
+        dispatch_invoke_response(window_id, request_id, true, json);
+        raw { free((void*)json); }
+        return true;
+    }
+    if method == "__screen:cursor" {
+        let json: string = NULL;
+        raw {
+            #ifdef __APPLE__
+            extern char* darwin_screen_cursor_json(void);
+            json = darwin_screen_cursor_json();
+            #endif
+        }
+        if json == NULL { dispatch_invoke_response(window_id, request_id, false, "null"); return true; }
+        dispatch_invoke_response(window_id, request_id, true, json);
+        raw { free((void*)json); }
+        return true;
+    }
+    if method == "__screen:forWindow" {
+        let target: int = -1;
+        let wid_opt = args.get_string("windowId");
+        if wid_opt.is_some() {
+            let ws: string = wid_opt.unwrap();
+            raw {
+                #ifdef __APPLE__
+                extern int32_t darwin_window_numeric_id_for_string(const char* wid);
+                target = (int)darwin_window_numeric_id_for_string((const char*)ws);
+                #endif
+            }
+        }
+        let json: string = NULL;
+        raw {
+            #ifdef __APPLE__
+            extern char* darwin_screen_for_window_json(int32_t window_id);
+            json = darwin_screen_for_window_json(target);
+            #endif
+        }
+        if json == NULL { dispatch_invoke_response(window_id, request_id, false, "null"); return true; }
+        dispatch_invoke_response(window_id, request_id, true, json);
+        raw { free((void*)json); }
+        return true;
+    }
+    return false;
+}

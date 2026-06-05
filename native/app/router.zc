@@ -59,6 +59,14 @@ fn router_handle_message(app: App*, msg: string, window_id: int) -> void {
             return;
         }
 
+        // Check for __screen: prefix (display enumeration — Screen.getAll(), etc.)
+        let is_screen: bool = false;
+        is_screen = str::strncmp(parsed.method, "__screen:", 9) == 0;
+        if is_screen {
+            screen_route(parsed.method, window_id, parsed.request_id, parsed.args);
+            return;
+        }
+
         // Check for __app: prefix (app-level request/response — setLoginItem, etc.)
         let is_app: bool = false;
         is_app = str::strncmp(parsed.method, "__app:", 6) == 0;
