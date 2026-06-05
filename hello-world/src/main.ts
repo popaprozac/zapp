@@ -335,7 +335,7 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
         <button id="btn-screen-primary">Primary</button>
         <button id="btn-screen-cursor">Cursor point</button>
         <button id="btn-screen-window">This window's screen</button>
-        <button id="btn-screen-place">Place window top-left @ 50,50</button>
+        <button id="btn-screen-place">Place 50px into work area</button>
         <div id="screen-result" class="result"></div>
       </section>
     </div>
@@ -1340,11 +1340,15 @@ $("btn-screen-window").addEventListener("click", async () => {
   log(`Window.getScreen() → ${s.name} ${s.bounds.width}×${s.bounds.height}`);
 });
 
-// Verify top-left placement: the new window's top-left corner should sit
-// ~50px from the screen's top-left (not the bottom).
+// Idiomatic placement: 50px INTO the work area (below the menu bar), using
+// the primary display's workArea origin. Verifies top-left coords + that the
+// window's title bar clears the menu bar.
 $("btn-screen-place").addEventListener("click", async () => {
-  const child = await Window.create({ title: "top-left @ 50,50", x: 50, y: 50, width: 420, height: 300 });
-  log(`Window.create({x:50,y:50}) → ${child.id} (top-left should be ~50px from the screen top)`);
+  const p = await Screen.getPrimary();
+  const x = (p?.workArea.x ?? 0) + 50;
+  const y = (p?.workArea.y ?? 0) + 50;
+  const child = await Window.create({ title: "50px into work area", x, y, width: 420, height: 300 });
+  log(`Window.create({x:${x},y:${y}}) → ${child.id} (50px into the work area, below the menu bar)`);
 });
 
 // Re-query when the display arrangement changes (plug/unplug, resolution).

@@ -373,12 +373,12 @@ void* darwin_window_create(WindowOptions* opts) {
             styleMask = NSWindowStyleMaskBorderless;
         }
 
-        // x,y are top-left global; NSWindow's content rect wants bottom-left.
-        // Auto-center (below) overrides this origin when requested, so the
-        // flip only matters for the explicit-position case.
-        CGFloat _createTopY = (CGFloat)wopts_y(opts);
-        CGFloat _createBLY = zapp_primary_screen_height() - _createTopY - (CGFloat)wopts_height(opts);
-        NSRect frame = NSMakeRect(wopts_x(opts), _createBLY, wopts_width(opts), wopts_height(opts));
+        // Content rect — the SIZE is authoritative here; the on-screen origin
+        // is set AFTER creation (auto-center, or the explicit top-left flip
+        // below) once the full window frame height incl. title bar is known.
+        // Baking the flip in here against the *content* height pushed the title
+        // bar above the menu bar (which macOS then clamped), so we don't.
+        NSRect frame = NSMakeRect(wopts_x(opts), 0, wopts_width(opts), wopts_height(opts));
         NSWindow* window = [[NSWindow alloc] initWithContentRect:frame
             styleMask:styleMask backing:NSBackingStoreBuffered defer:NO];
         [window setReleasedWhenClosed:NO];
@@ -448,6 +448,13 @@ void* darwin_window_create(WindowOptions* opts) {
         // autoCenter is only the first-launch fallback.
         if (wopts_auto_center(opts)) {
             [window center];
+        } else {
+            // Explicit top-left global position. Use the full window frame
+            // height (incl. title bar) so the WINDOW top — not the content
+            // top — lands at y, matching darwin_window_set_position /
+            // get_position. (A saved autosave frame below still wins.)
+            CGFloat blY = zapp_primary_screen_height() - (CGFloat)wopts_y(opts) - window.frame.size.height;
+            [window setFrameOrigin:NSMakePoint((CGFloat)wopts_x(opts), blY)];
         }
 
         // Frame autosave — AppKit persists frame to NSUserDefaults under
