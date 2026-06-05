@@ -5,7 +5,7 @@
 import path from "node:path";
 import { mkdir, readdir, readFile, stat } from "node:fs/promises";
 
-const WORKER_PATTERN =
+export const WORKER_PATTERN =
   /new\s+(?:SharedWorker|Worker)\s*\(\s*(?:new\s+URL\(\s*["'`](.+?)["'`]\s*,\s*import\.meta\.url\s*\)|["'`](.+?)["'`])/g;
 
 async function scanSourceFiles(dir: string): Promise<string[]> {

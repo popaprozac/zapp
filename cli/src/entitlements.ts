@@ -15,14 +15,14 @@ import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import type { MacOSConfig, ResolvedConfig } from "./config";
 
-function xmlEscape(str: string): string {
+export function xmlEscape(str: string): string {
   return str
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
 }
 
-function renderValue(v: string | number | boolean | string[]): string {
+export function renderValue(v: string | number | boolean | string[]): string {
   if (typeof v === "boolean") return v ? "<true/>" : "<false/>";
   if (typeof v === "number") {
     return Number.isInteger(v)
