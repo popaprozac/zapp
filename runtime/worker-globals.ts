@@ -32,9 +32,6 @@ declare global {
   /** Post a raw message to the owning WebView. */
   function postMessage(data: unknown): void;
 
-  /** Raw message handler — receives all messages from the WebView. */
-  var onmessage: ((event: { data: unknown }) => void) | null;
-
   /** The native bridge — host objects for direct C calls. */
   var __zappBridge: {
     /** Invoke a native service synchronously. Returns the result directly. */
@@ -49,8 +46,6 @@ declare global {
     /** Sync notify — wake waiters on a key. */
     syncNotify(key: string, count?: number): void;
   };
-
-  var self: typeof globalThis;
 }
 
 // The no-subpath aggregator does NOT auto-import per-capability shims

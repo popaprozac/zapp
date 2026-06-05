@@ -162,7 +162,8 @@ Two checks guard this:
 
 - **`bun run test`** — the TypeScript suite (`cli/src` + `runtime`, via `bun:test`). TS tests live in `*.test.ts` next to the module they cover (the `ios-platform-parity` lint above rides this suite).
 - **`bun run test:native`** — the native Zen-C tests. Each `native/tests/*_test.zc` uses Zen-C's built-in framework — `test "name" { assert(cond, msg); expect(cond, msg); }` — and is run via `zc run` (the binary exits with the failure count). Only pure-logic `.zc` (no Cocoa/UIKit) is unit-testable this way; platform `.m` code is build + manual smoke.
-- **`bun run test:all`** — both.
+- **`bun run check`** — `tsc --noEmit` over `cli/src` + `runtime` + `bootstrap` via the root `tsconfig.json` (`vite/src` is excluded for now). `bun run build` does NOT type-check (esbuild strips types), so this is the type gate.
+- **`bun run test:all`** — all three (TS suite, native tests, type-check).
 
 Run `bun run test:all` before merging changes that touch `cli/`, `runtime/`, or pure-logic `native/` code. (ObjC `.m` and broader native behavior still rely on the build + the ios-simulator build + manual smoke described above.)
 
