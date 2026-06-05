@@ -151,7 +151,19 @@ void darwin_panel_create(int32_t window_id, const char* panel_id, const char* ur
 void darwin_panel_set_bounds(const char* panel_id, int32_t x, int32_t y, int32_t w, int32_t h) {
     ZappPanel* p = zapp_panel_get(panel_id);
     if (!p) return;
-    zapp_panel_on_main(^{ [p.webview setFrame:NSMakeRect(x, y, w, h)]; });
+    zapp_panel_on_main(^{
+        // x,y arrive as CSS top-left (viewport) points. Convert into the parent
+        // view's coordinate space. WKWebView is flipped (top-left origin) so y
+        // is used directly; a non-flipped NSView needs the bottom-left flip.
+        // Using the actual superview adapts to either, with no window.innerHeight
+        // assumption.
+        NSView* parent = p.webview.superview;
+        CGFloat oy = (CGFloat)y;
+        if (parent && !parent.isFlipped) {
+            oy = parent.bounds.size.height - (CGFloat)y - (CGFloat)h;
+        }
+        [p.webview setFrame:NSMakeRect((CGFloat)x, oy, (CGFloat)w, (CGFloat)h)];
+    });
 }
 
 void darwin_panel_load_url(const char* panel_id, const char* url) {

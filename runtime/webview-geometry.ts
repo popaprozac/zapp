@@ -1,21 +1,21 @@
 // Pure geometry for embedded webviews — no DOM/native deps so it unit-tests
-// under bun:test. The host WKWebView fills the window content view 1:1 at
-// zoom 1, so contentHeight ≈ window.innerHeight and CSS px ≈ native points.
+// under bun:test.
 
 export interface NativeRect { x: number; y: number; w: number; h: number; }
 
 /**
- * Convert a DOMRect-like (CSS px, viewport top-left origin) to native
- * content-view points (macOS bottom-left origin). Rounded to whole points
- * (WKWebView setFrame wants integers; subpixel frames blur the embed).
+ * Round a DOMRect-like (CSS px, viewport TOP-LEFT origin) to whole-point
+ * integers. The top-left → native-origin flip is done NATIVE-side in
+ * panel.m using the actual superview's `isFlipped` + bounds (WKWebView is
+ * flipped/top-left), which avoids the unreliable window.innerHeight
+ * assumption. So this stays a pure top-left rounder.
  */
 export function toNativeRect(
   rect: { left: number; top: number; width: number; height: number },
-  contentHeight: number,
 ): NativeRect {
   return {
     x: Math.round(rect.left),
-    y: Math.round(contentHeight - rect.top - rect.height),
+    y: Math.round(rect.top),
     w: Math.round(rect.width),
     h: Math.round(rect.height),
   };
