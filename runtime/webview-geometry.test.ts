@@ -1,17 +1,13 @@
 import { test, expect } from "bun:test";
 import { toNativeRect, rectsEqual, isVisibleRect } from "./webview-geometry";
 
-test("toNativeRect flips top-left CSS to bottom-left native", () => {
-  // contentHeight 600; element top=100 height=200 → native y = 600-100-200 = 300
-  expect(toNativeRect({ left: 50, top: 100, width: 300, height: 200 }, 600))
-    .toEqual({ x: 50, y: 300, w: 300, h: 200 });
-});
-test("element at top of viewport sits at native y = contentHeight - height", () => {
-  expect(toNativeRect({ left: 0, top: 0, width: 100, height: 100 }, 600).y).toBe(500);
+test("toNativeRect passes through top-left coords (native does the flip)", () => {
+  expect(toNativeRect({ left: 50, top: 100, width: 300, height: 200 }))
+    .toEqual({ x: 50, y: 100, w: 300, h: 200 });
 });
 test("toNativeRect rounds subpixel values to whole points", () => {
-  expect(toNativeRect({ left: 50.4, top: 100.6, width: 300.5, height: 200.2 }, 600))
-    .toEqual({ x: 50, y: 299, w: 301, h: 200 });
+  expect(toNativeRect({ left: 50.4, top: 100.6, width: 300.5, height: 200.2 }))
+    .toEqual({ x: 50, y: 101, w: 301, h: 200 });
 });
 test("rectsEqual compares all fields and handles null", () => {
   const a = { x: 1, y: 2, w: 3, h: 4 };

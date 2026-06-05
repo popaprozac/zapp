@@ -108,11 +108,13 @@ export class ZappWebviewElement extends HTMLElement {
     this._sync();
     this._ro = new ResizeObserver(() => this._schedule());
     this._ro.observe(this);
-    this._armIO();
+    // Attach the scroll/resize listeners FIRST so they always register even if
+    // _armIO throws (a bad rootMargin would otherwise skip them — that left an
+    // embed stuck/untracked). capture-phase scroll catches scrolling in ANY
+    // ancestor; it's the correctness backstop for the IO re-arm.
     window.addEventListener("resize", this._onWinChange, { passive: true });
-    // capture-phase scroll catches scrolling in ANY ancestor (reflow-free read
-    // happens in _sync via the IO entry / a single rAF-coalesced gBCR).
     window.addEventListener("scroll", this._onWinChange, { passive: true, capture: true });
+    try { this._armIO(); } catch { /* IO is an optimization; listeners cover correctness */ }
   }
   private _stopTracking(): void {
     if (this._io) { this._io.disconnect(); this._io = null; }
@@ -154,7 +156,7 @@ export class ZappWebviewElement extends HTMLElement {
       this._lastRect = null;
       return;
     }
-    const native = toNativeRect(r, window.innerHeight);
+    const native = toNativeRect(r);
     if (rectsEqual(native, this._lastRect)) return;
     const firstShow = this._lastRect === null;
     this._lastRect = native;
