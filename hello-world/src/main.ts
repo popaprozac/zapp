@@ -31,6 +31,8 @@ import {
   Shortcuts,
   Protocols,
   Sync,
+  Webview,
+  Screen,
 } from "@zappdev/runtime";
 import { greet } from "./zapp";
 
@@ -299,6 +301,42 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
         <h2>Other</h2>
         <button id="btn-external">Open zapp.dev</button>
         <button id="btn-ctx-menu">Right-click menu</button>
+      </section>
+
+      <section>
+        <h2>Embedded Webview (&lt;zapp-webview&gt;)</h2>
+        <p style="font-size: 12px; opacity: 0.7; margin: 0 0 8px 0;">
+          A native child WKWebView embedded in the page — loads sites that
+          block iframes (<code>X-Frame-Options</code>). Sandboxed (no bridge).
+          The three v1 leaks (scroll-swim, z-order, clipping) are expected.
+          "Get title" runs JS in the embed that posts <code>document.title</code>
+          back via <code>window.zappHost.postMessage</code> (host←embed).
+        </p>
+        <input id="embed-url" type="text" value="https://example.com" />
+        <button id="btn-embed-mount">Mount</button>
+        <button id="btn-embed-load">Load URL</button>
+        <button id="btn-embed-title">Get title (round-trip)</button>
+        <button id="btn-embed-post">postMessage → embed</button>
+        <button id="btn-embed-reload">Reload</button>
+        <button id="btn-embed-back">Back</button>
+        <button id="btn-embed-destroy">Destroy</button>
+        <div id="embed-host" style="height: 320px; margin-top: 8px; border: 1px solid currentColor; border-radius: 8px; overflow: hidden;"></div>
+        <div id="embed-result" class="result"></div>
+      </section>
+
+      <section>
+        <h2>Screen (displays)</h2>
+        <p style="font-size: 12px; opacity: 0.7; margin: 0 0 8px 0;">
+          Enumerate displays + geometry (top-left global coords). "Place
+          top-left @ 50,50" verifies the new top-left window placement — the
+          new window's top-left should sit ~50px from the screen's top.
+        </p>
+        <button id="btn-screen-all">List displays</button>
+        <button id="btn-screen-primary">Primary</button>
+        <button id="btn-screen-cursor">Cursor point</button>
+        <button id="btn-screen-window">This window's screen</button>
+        <button id="btn-screen-place">Place window top-left @ 50,50</button>
+        <div id="screen-result" class="result"></div>
       </section>
     </div>
 
@@ -658,7 +696,7 @@ $("btn-worker-create").addEventListener("click", () => {
     log("Worker already running");
     return;
   }
-  myWorker = new Worker("./worker.ts");
+  myWorker = new Worker("./worker.ts", { bytecode: true });
 
   // Listen for pong responses on channel
   myWorker.receive("pong", (data) => {
@@ -1214,6 +1252,106 @@ $("btn-ctx-menu").addEventListener("click", (e) => {
     ],
     { x: e.clientX, y: e.clientY },
   );
+});
+
+// --- Embedded Webview (<zapp-webview>) ---
+//
+// A native child WKWebView glued to #embed-host's rect. v1 is sandboxed:
+// the embed gets a `window.zappHost.postMessage(d)` shim (embed→host) but
+// NO __zappBridge. Host→embed is execJS / postMessage; embed→host arrives
+// on the element's "message" event.
+
+let embed: ReturnType<typeof Webview.create> | null = null;
+
+function mountEmbed() {
+  if (embed) { log("[embed] already mounted"); return; }
+  const url = ($("embed-url") as HTMLInputElement).value || "https://example.com";
+  embed = Webview.create({ src: url });
+  embed.style.cssText = "display:block;width:100%;height:100%;";
+  embed.on("load-finished", () => { $("embed-result").textContent = "load-finished"; log("[embed] load-finished"); });
+  embed.on("did-navigate", (d: any) => log(`[embed] did-navigate ${d?.url ?? ""}`));
+  embed.on("title-change", (d: any) => log(`[embed] title-change ${d?.title ?? ""}`));
+  embed.on("load-failed", (d: any) => log(`[embed] load-failed ${JSON.stringify(d)}`));
+  embed.on("message", (d: any) => {
+    $("embed-result").textContent = `from embed: ${JSON.stringify(d)}`;
+    log(`[embed] message ← embed: ${JSON.stringify(d)}`);
+  });
+  $("embed-host").appendChild(embed);
+  log(`[embed] mounted ${url}`);
+}
+
+$("btn-embed-mount").addEventListener("click", mountEmbed);
+
+$("btn-embed-load").addEventListener("click", () => {
+  const url = ($("embed-url") as HTMLInputElement).value;
+  if (!embed) { mountEmbed(); return; }
+  embed.loadURL(url);
+  log(`[embed] loadURL ${url}`);
+});
+
+// Host→embed→host round-trip: run JS in the embed that posts back via the
+// injected zappHost shim; the result surfaces on the "message" handler above.
+$("btn-embed-title").addEventListener("click", () => {
+  if (!embed) { log("[embed] mount first"); return; }
+  embed.execJS("window.zappHost && window.zappHost.postMessage({ title: document.title, url: location.href })");
+  log("[embed] execJS → zappHost.postMessage(title) (watch for 'message ← embed')");
+});
+
+$("btn-embed-post").addEventListener("click", () => {
+  if (!embed) { log("[embed] mount first"); return; }
+  embed.postMessage({ hello: "from host", ts: Date.now() });
+  log("[embed] postMessage → embed (the embed receives a MessageEvent on window)");
+});
+
+$("btn-embed-reload").addEventListener("click", () => { if (embed) { embed.reload(); log("[embed] reload"); } });
+$("btn-embed-back").addEventListener("click", () => { if (embed) { embed.goBack(); log("[embed] back"); } });
+
+$("btn-embed-destroy").addEventListener("click", () => {
+  if (!embed) { log("[embed] nothing to destroy"); return; }
+  embed.destroy();
+  embed = null;
+  $("embed-result").textContent = "(destroyed)";
+  log("[embed] destroyed");
+});
+
+// --- Screen / displays ---
+
+$("btn-screen-all").addEventListener("click", async () => {
+  const all = await Screen.getAll();
+  $("screen-result").textContent = JSON.stringify(all, null, 2);
+  log(`Screen.getAll() → ${all.length} display(s)`);
+});
+
+$("btn-screen-primary").addEventListener("click", async () => {
+  const p = await Screen.getPrimary();
+  $("screen-result").textContent = JSON.stringify(p, null, 2);
+  log(`Screen.getPrimary() → ${p?.name ?? "(none)"}`);
+});
+
+$("btn-screen-cursor").addEventListener("click", async () => {
+  const c = await Screen.getCursorPoint();
+  $("screen-result").textContent = JSON.stringify(c, null, 2);
+  log(`Screen.getCursorPoint() → (${c.x}, ${c.y}) on ${c.display.name}`);
+});
+
+$("btn-screen-window").addEventListener("click", async () => {
+  const s = await win.getScreen();
+  $("screen-result").textContent = JSON.stringify(s, null, 2);
+  log(`Window.getScreen() → ${s.name} ${s.bounds.width}×${s.bounds.height}`);
+});
+
+// Verify top-left placement: the new window's top-left corner should sit
+// ~50px from the screen's top-left (not the bottom).
+$("btn-screen-place").addEventListener("click", async () => {
+  const child = await Window.create({ title: "top-left @ 50,50", x: 50, y: 50, width: 420, height: 300 });
+  log(`Window.create({x:50,y:50}) → ${child.id} (top-left should be ~50px from the screen top)`);
+});
+
+// Re-query when the display arrangement changes (plug/unplug, resolution).
+App.on(AppEvent.SCREENS_CHANGED, async () => {
+  const all = await Screen.getAll();
+  $("screen-result").textContent = "screens changed →\n" + JSON.stringify(all, null, 2);
+  log(`SCREENS_CHANGED → now ${all.length} display(s)`);
 });
 
 // --- App Events (frontend) ---
