@@ -1,0 +1,26 @@
+// Native unit tests for the heap JSON parser (native/bridge/json_safe.zc).
+// Run via `zc run` (the cli/src/test-native.ts runner does this).
+//
+// Accessor API mirrors how native/bridge/protocol.zc consumes the parse
+// result in production: Result<JsonValue*> with .is_err()/.unwrap(), and
+// JsonValue.get_int()/.get_string() returning Option with .is_some()/.unwrap().
+// get_string yields a char*, so content comparison uses strcmp (== on char*
+// would be a pointer compare). string.h is imported transitively by json_safe.
+import "../bridge/json_safe.zc";
+
+test "parses an object with an int and a string field" {
+    // Literal braces must be escaped as {{ / }} — a bare { in a string
+    // literal is parsed as Zen-C f-string interpolation.
+    let r = zapp_json_parse("{{\"t\":1,\"m\":\"greet\"}}");
+    assert(!r.is_err(), "valid object should parse");
+    let j = r.unwrap();
+    let t = j.get_int("t");
+    assert(t.is_some() && t.unwrap() == 1, "t should be 1");
+    let m = j.get_string("m");
+    assert(m.is_some() && strcmp(m.unwrap(), "greet") == 0, "m should be 'greet'");
+}
+
+test "reports an error on malformed JSON" {
+    let r = zapp_json_parse("{{not valid json");
+    assert(r.is_err(), "malformed input should error");
+}
