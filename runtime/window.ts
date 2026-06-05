@@ -18,6 +18,7 @@
 
 import { getBridge } from "./bridge";
 import { WindowEvent, eventName, type WindowSizePayload, type WindowPayload, type ModalDismissedPayload } from "./events";
+import type { Display } from "./screen";
 
 /**
  * Per-traffic-light state. `disabled` greys the button, `hidden` removes
@@ -199,6 +200,8 @@ export interface WindowHandle {
   setAlwaysOnTop(on: boolean): void;
   setCloseGuard(enabled: boolean): void;
   loadUrl(url: string): void;
+  /** The display this window is currently on (top-left global coords). */
+  getScreen(): Promise<Display>;
 
   /**
    * Attach `modal` as a sheet on this window. The modal slides down from
@@ -270,6 +273,11 @@ function createWindowHandle(windowId: string): WindowHandle {
     setAlwaysOnTop(on: boolean)       { windowAction("setAlwaysOnTop", { windowId, on }); },
     setCloseGuard(on: boolean)        { windowAction("setCloseGuard", { windowId, on }); },
     loadUrl(url: string)              { windowAction("loadUrl", { windowId, url }); },
+
+    async getScreen(): Promise<Display> {
+      const r = await bridge.invoke("__screen:forWindow", { windowId });
+      return (typeof r === "string" ? JSON.parse(r) : r) as Display;
+    },
 
     attachModal(modal: WindowHandle) {
       // Pass string IDs straight through — the native router resolves
