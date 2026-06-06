@@ -31,6 +31,12 @@ export interface MenuItemDef {
   role?: "editMenu" | "windowMenu" | "appMenu" | "copy" | "cut" | "paste" | "selectAll" | "undo" | "redo" | "quit";
   action?: () => void;
   submenu?: MenuItemDef[];
+  /** Icon for this item (macOS). "sf:gear" (SF Symbol) | "build/logo.png"
+   *  (file path, relative-resolved) | "data:image/png;base64,…" (dynamic). */
+  icon?: string;
+  /** Force template rendering (monochrome, auto-tinted to menu text/dark mode)
+   *  on/off. Default: "sf:" icons → true, file/data icons → false. */
+  iconTemplate?: boolean;
 }
 
 export interface MenuHandle {

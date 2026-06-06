@@ -1234,6 +1234,8 @@ Menu.build([
     | "undo" | "redo" | "quit"
   action?: () => void
   submenu?: MenuItemDef[]
+  icon?: string                                // "sf:gear" | "build/x.png" | "data:image/png;base64,…" (macOS)
+  iconTemplate?: boolean                        // force template tint on/off
 }
 ```
 
@@ -1246,6 +1248,23 @@ When you only need one system item: `{ role: "copy" }`.
 
 `action` fires on click. No need to wire up listeners separately —
 `Menu.build` tracks them internally via the Events bus.
+
+### Menu item icons (macOS)
+
+Any menu item — in an app menu, a context menu, or a tray menu — can show an
+icon via `icon`:
+
+```ts
+{ label: "Settings", icon: "sf:gear", action }              // SF Symbol
+{ label: "Brand",    icon: "build/logo.png" }               // file path (relative-resolved)
+{ label: "Status",   icon: canvas.toDataURL("image/png") }  // dynamic PNG (data URL)
+```
+
+- **Template tinting:** `sf:` icons render as templates (monochrome, auto-tinted
+  to the menu text + dark mode); file/data icons render full-color. Override with
+  `iconTemplate: true | false`.
+- Icons are sized to ~16px. A bad path/symbol logs and renders the item without an
+  icon (no crash). macOS only — ignored on other platforms.
 
 ---
 
