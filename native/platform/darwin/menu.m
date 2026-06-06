@@ -131,6 +131,59 @@ static NSMenu* build_role_app_menu(void) {
 
 static NSMenu* build_menu_from_json(NSArray* items);
 
+// Resolve a menu-icon spec to an NSImage (or nil). Forms:
+//   "sf:<name>"                  -> SF Symbol (macOS 11+)
+//   "data:<mime>;base64,<data>"  -> decode + initWithData
+//   else                         -> file path, relative-resolved (cwd + bundle
+//                                   resources), like tray.m apply_icon
+// templateMode: -1 auto (template iff "sf:"), 0 off, 1 on. Sized to `size`.
+// nil on failure (caller renders the item icon-less); logs once.
+static NSImage* zapp_resolve_icon(NSString* spec, CGFloat size, int templateMode) {
+    if (spec.length == 0) return nil;
+    BOOL isSf = [spec hasPrefix:@"sf:"];
+    NSImage* img = nil;
+    if (isSf) {
+        if (@available(macOS 11.0, *)) {
+            img = [NSImage imageWithSystemSymbolName:[spec substringFromIndex:3]
+                                accessibilityDescription:nil];
+        }
+    } else if ([spec hasPrefix:@"data:"]) {
+        NSRange comma = [spec rangeOfString:@","];
+        if (comma.location != NSNotFound) {
+            NSString* b64 = [spec substringFromIndex:comma.location + 1];
+            NSData* data = [[NSData alloc] initWithBase64EncodedString:b64
+                              options:NSDataBase64DecodingIgnoreUnknownCharacters];
+            if (data) img = [[NSImage alloc] initWithData:data];
+        }
+    } else {
+        NSString* resolved = spec;
+        if (![spec isAbsolutePath]) {
+            NSFileManager* fm = [NSFileManager defaultManager];
+            NSString* cwdRel = [[fm currentDirectoryPath] stringByAppendingPathComponent:spec];
+            NSString* resPath = [NSBundle mainBundle].resourcePath;
+            NSString* resRel = resPath ? [resPath stringByAppendingPathComponent:spec] : nil;
+            if ([fm fileExistsAtPath:cwdRel]) resolved = cwdRel;
+            else if (resRel && [fm fileExistsAtPath:resRel]) resolved = resRel;
+        }
+        img = [[NSImage alloc] initWithContentsOfFile:resolved];
+    }
+    if (!img) {
+        NSLog(@"[zapp] menu: could not load icon '%@'", spec);
+        return nil;
+    }
+    BOOL templateFlag = (templateMode == -1) ? isSf : (templateMode == 1);
+    img.size = NSMakeSize(size, size);
+    img.template = templateFlag;
+    return img;
+}
+
+// iconTemplate: present -> 0/1; absent -> -1 (auto).
+static int zapp_menu_template_mode(NSDictionary* def) {
+    NSNumber* t = def[@"iconTemplate"];
+    if (t != nil) return [t boolValue] ? 1 : 0;
+    return -1;
+}
+
 static void add_menu_item(NSMenu* menu, NSDictionary* def) {
     // Separator
     NSString* type = def[@"type"];
@@ -217,6 +270,12 @@ static void add_menu_item(NSMenu* menu, NSDictionary* def) {
 
     NSNumber* checked = def[@"checked"];
     if (checked) [item setState:[checked boolValue] ? NSControlStateValueOn : NSControlStateValueOff];
+
+    NSString* iconSpec = def[@"icon"];
+    if ([iconSpec isKindOfClass:[NSString class]] && iconSpec.length > 0) {
+        NSImage* iconImg = zapp_resolve_icon(iconSpec, 16.0, zapp_menu_template_mode(def));
+        if (iconImg) item.image = iconImg;
+    }
 
     // Submenu
     NSArray* submenu = def[@"submenu"];
