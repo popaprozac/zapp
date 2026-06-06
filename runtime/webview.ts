@@ -33,7 +33,19 @@ function panelPost(action: string, args: Record<string, unknown>): void {
   else bridge.emit("__panel:" + action, args);
 }
 
-export class ZappWebviewElement extends HTMLElement {
+// Base class: the real HTMLElement in a DOM/webview context, or a no-op
+// stand-in when there is no DOM (e.g. a zjs worker that imports
+// @zappdev/runtime — webview.ts gets pulled in by its top-level
+// customElements.define side effect). The `extends` clause is evaluated at
+// module-load time, so it must reference a defined value or the worker's
+// module fails to compile. The element is only registered/used in a DOM
+// context (the customElements guard at the bottom of this file).
+const HostElement: typeof HTMLElement =
+  typeof HTMLElement !== "undefined"
+    ? HTMLElement
+    : (class {} as unknown as typeof HTMLElement);
+
+export class ZappWebviewElement extends HostElement {
   static get observedAttributes() { return ["src"]; }
 
   private _panelId = nextPanelId();
