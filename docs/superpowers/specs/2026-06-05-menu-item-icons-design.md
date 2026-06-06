@@ -45,11 +45,13 @@ A shared native resolver `NSImage* zapp_resolve_icon(NSString* spec, CGFloat siz
 
 ## Native architecture
 
-- **New `native/platform/darwin/icon.m`** holds `zapp_resolve_icon` (+ the relative-path-resolve helper, factored out of tray's inline copy). Registered in `cli/src/native.ts getPlatformSources` (darwin) + `native/build.zc` macOS cflags. iOS: a no-op `zapp_resolve_icon` stub in `native/platform/ios/icon.m` (returns nil) so any shared `.zc`/`.m` reference links — but menus are no-op on iOS anyway, so the menu builders simply won't call it there. (Confirm during planning whether an iOS stub is even needed: it's only referenced from `.m` builders compiled per-platform, so likely darwin-only. If darwin-only, skip the iOS stub.)
-- **`menu.m build_menu_from_json`** — after each `NSMenuItem` is created (the `addItemWithTitle:` path), if `def[@"icon"]` is a non-empty string, set `item.image = zapp_resolve_icon(icon, 16, templateModeFrom(def))`. Covers app + context menus.
-- **`tray.m zapp_tray_apply_menu`** — same `item.image` wiring for tray menu items.
-- **`templateModeFrom(def)`** helper: `def[@"iconTemplate"]` present → `boolValue ? 1 : 0`; else `-1` (auto).
-- The tray **status-bar** icon (`tray.m apply_icon`) is **unchanged** in v1 (it has distinct "?" placeholder semantics + a fixed 18px). Follow-up: it could delegate to `zapp_resolve_icon` to gain `sf:`/`data:` support — out of scope here.
+**Single builder, single insertion.** Investigation showed all three surfaces funnel through `menu.m`'s `add_menu_item`: app menus build there directly; context menus call `build_menu_from_json` (menu.m:305 in `darwin_menu_show_context_from_payload`); tray menus call `darwin_menu_build_from_items_json` (menu.m:565) which calls the same builder. So **wiring icons in `add_menu_item` covers app + context + tray with one change** — `tray.m` is NOT touched, and no separate `icon.m` is needed.
+
+- **`zapp_resolve_icon`** — a `static NSImage* zapp_resolve_icon(NSString* spec, CGFloat size, int templateMode)` helper **in `native/platform/darwin/menu.m`** (one caller, so file-local; the tray status-bar icon could de-static + reuse it later). Form dispatch + template + size + nil-on-failure as in "Icon resolution" above. Relative-path resolve mirrors `tray.m apply_icon` (cwd + bundle resources).
+- **`add_menu_item`** — after the existing `enabled`/`checked` wiring (menu.m ~line 219), read `def[@"icon"]`; if a non-empty string, `item.image = zapp_resolve_icon(icon, 16, templateModeFrom(def))`.
+- **`templateModeFrom(def)`** — `static int`: `def[@"iconTemplate"]` present → `[v boolValue] ? 1 : 0`; else `-1` (auto = `[spec hasPrefix:@"sf:"]`).
+- **No `cli/src/native.ts` / `build.zc` / iOS changes** — `menu.m` is already compiled (darwin); the helper is darwin-only + `.m`-internal (not referenced from `.zc`), so no parity/stub work. iOS menus stay no-op.
+- The tray **status-bar** icon (`tray.m apply_icon`) is **unchanged** in v1 (distinct "?" placeholder + fixed 18px). Follow-up: de-static `zapp_resolve_icon` and have `apply_icon` reuse it to gain `sf:`/`data:` — out of scope here.
 
 ## TS chain
 
