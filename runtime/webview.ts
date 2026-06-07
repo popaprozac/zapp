@@ -48,14 +48,6 @@ const HostElement: typeof HTMLElement =
 export class ZappWebviewElement extends HostElement {
   static get observedAttributes() { return ["src"]; }
 
-  // Explicit zero-arg constructor so esbuild's class-field lowering emits
-  // `super()` rather than `constructor(...args){super(...args)}`. The
-  // spread-to-super form is valid JS (qjs compiles it) but zjs's bytecode
-  // compiler rejects it ("module compile error"), which broke every worker
-  // that imports @zappdev/runtime (webview.ts rides along via the index
-  // re-export). Custom-element constructors take no args, so super() is correct.
-  constructor() { super(); }
-
   private _panelId = nextPanelId();
   private _created = false;
   private _lastRect: NativeRect | null = null;
