@@ -41,10 +41,15 @@ export function isAllowedByManifest(id: string, manifest: PermissionsManifest | 
 }
 
 // Platform support matrix (v1: static; the native parity audit keeps it
-// honest). Keyed by bare module — verbs resolve through their module.
-// "windows" entries reflect the current partial port.
+// honest). Entries may be bare modules (e.g. "tray") or exact verb ids
+// (e.g. "shell:reveal"). "windows" entries reflect the current partial port.
 const UNSUPPORTED: Record<string, string[]> = {
-  ios: ["tray", "menu", "shortcuts", "dock", "shell"],
+  ios: [
+    "tray", "menu", "shortcuts",
+    // dock kept module-level: badge works on iOS but there's no dock:badge verb to report it; conservative "unsupported".
+    "dock",
+    "shell:reveal", "shell:trash",  // shell:open (openExternal/openPath) works via Safari/openURL handoff
+  ],
   windows: ["clipboard", "tray", "dock", "embed", "notifications", "shell", "screen"],
   macos: [],
 };
@@ -53,7 +58,7 @@ export function supportStatus(id: string, platform: string): "supported" | "unsu
   const colon = id.indexOf(":");
   const module = colon > 0 ? id.slice(0, colon) : id;
   const list = UNSUPPORTED[platform] ?? [];
-  return list.includes(module) ? "unsupported" : "supported";
+  return (list.includes(id) || list.includes(module)) ? "unsupported" : "supported";
 }
 
 function bootstrapManifest(): PermissionsManifest | undefined {
@@ -82,15 +87,6 @@ async function manifest(): Promise<PermissionsManifest | undefined> {
 export function ensurePermission(id: string): void {
   const boot = bootstrapManifest();
   if (boot && !isAllowedByManifest(id, boot)) throw new PermissionDeniedError(id);
-}
-
-/** Detects the native deny reply and rethrows it typed. */
-export function rethrowPermissionError(e: unknown): never {
-  const msg = e instanceof Error ? e.message : String(e);
-  if (msg.startsWith("PERMISSION_DENIED:")) {
-    throw new PermissionDeniedError(msg.slice("PERMISSION_DENIED:".length));
-  }
-  throw e;
 }
 
 export const Permissions = {

@@ -20,6 +20,8 @@ describe("supportStatus (platform axis)", () => {
   test("clipboard supported on ios", () => expect(supportStatus("clipboard:read", "ios")).toBe("supported"));
   test("tray supported on macos", () => expect(supportStatus("tray", "macos")).toBe("supported"));
   test("verb resolves via its module", () => expect(supportStatus("menu", "ios")).toBe("unsupported"));
+  test("shell:open supported on ios (openExternal works)", () => expect(supportStatus("shell:open", "ios")).toBe("supported"));
+  test("shell:reveal unsupported on ios", () => expect(supportStatus("shell:reveal", "ios")).toBe("unsupported"));
 });
 
 describe("PermissionDeniedError", () => {
