@@ -101,7 +101,12 @@
           p.resolve(payload);
         }
       } else {
-        p.reject(new Error(payload));
+        const err: any = new Error(payload);
+        if (typeof payload === "string" && payload.startsWith("PERMISSION_DENIED:")) {
+          err.code = "PERMISSION_DENIED";
+          err.permission = payload.slice("PERMISSION_DENIED:".length);
+        }
+        p.reject(err);
       }
     },
 

@@ -32,6 +32,7 @@
 
 import { getBridge } from "./bridge";
 import { Events } from "./events";
+import { ensurePermission } from "./permissions";
 import type { MenuItemDef } from "./menu";
 import type { WindowHandle } from "./window";
 
@@ -204,6 +205,7 @@ function postAction(method: string, args: Record<string, unknown>) {
 
 export const Tray = {
   create(opts: TrayOptions): TrayHandle {
+    ensurePermission("tray");
     ensureEventsWired();
     const id = ++trayCounter;
 

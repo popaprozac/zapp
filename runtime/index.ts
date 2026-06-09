@@ -31,6 +31,7 @@ export { Tray, type TrayOptions, type TrayHandle, type AttachWindowOptions } fro
 export { Clipboard, type ClipboardFormat } from "./clipboard";
 export { Shortcuts } from "./shortcuts";
 export { Protocols, type ProtocolRequest, type ProtocolResponse, type ProtocolHandler } from "./protocols";
+export { Permissions, PermissionDeniedError, type PermissionState } from "./permissions";
 
 // Re-export worker globals type declarations.
 // Workers should add: import "@zappdev/runtime/worker-globals";

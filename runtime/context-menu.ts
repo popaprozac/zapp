@@ -27,6 +27,7 @@
 
 import { getBridge } from "./bridge";
 import { Events } from "./events";
+import { ensurePermission } from "./permissions";
 import type { MenuItemDef } from "./menu";
 
 let ctxActionCounter = 0;
@@ -102,6 +103,7 @@ function resolvePosition(options?: ContextMenuOptions): { x: number; y: number }
 
 export const ContextMenu = {
   show(items: MenuItemDef[], options?: ContextMenuOptions): void {
+    ensurePermission("menu");
     const { clean, actions } = collectAndStrip(items);
 
     // One-shot event listener for action clicks
