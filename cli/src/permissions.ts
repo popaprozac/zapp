@@ -31,7 +31,7 @@ export interface ResolvedPermissions {
   /** false when the config field is absent — allow-all (legacy behavior). */
   active: boolean;
   /** Deduped, order-preserving allowlist. Empty + active=true → deny-all. */
-  allow: string[];
+  allow: ZappPermission[];
 }
 
 export function resolvePermissions(field: ZappPermission[] | undefined): ResolvedPermissions {
@@ -61,11 +61,16 @@ export function validatePermissions(field: ZappPermission[] | undefined): string
   if (field === undefined) return [];
   const errors: string[] = [];
   const set = new Set<string>(field);
-  for (const id of field) {
+  for (const id of new Set(field)) {
     if (!PERMISSION_IDS.includes(id)) {
       const best = [...PERMISSION_IDS]
         .sort((x, y) => editDistance(id, x) - editDistance(id, y))[0];
-      errors.push(`[zapp] unknown permission "${id}" — did you mean "${best}"?`);
+      const dist = editDistance(id, best);
+      errors.push(
+        dist <= 3
+          ? `[zapp] unknown permission "${id}" — did you mean "${best}"?`
+          : `[zapp] unknown permission "${id}". Valid permissions: ${PERMISSION_IDS.join(", ")}`,
+      );
       continue;
     }
     const colon = id.indexOf(":");
@@ -81,8 +86,8 @@ export function validatePermissions(field: ZappPermission[] | undefined): string
 /** Verb semantics shared with native permissions.zc — keep in lockstep. */
 export function isPermissionAllowed(id: string, resolved: ResolvedPermissions): boolean {
   if (!resolved.active) return true;
-  if (resolved.allow.includes(id)) return true;
+  if (resolved.allow.includes(id as ZappPermission)) return true;
   const colon = id.indexOf(":");
-  if (colon > 0 && resolved.allow.includes(id.slice(0, colon))) return true;
+  if (colon > 0 && resolved.allow.includes(id.slice(0, colon) as ZappPermission)) return true;
   return false;
 }

@@ -37,6 +37,18 @@ describe("validatePermissions", () => {
   test("valid list passes", () => {
     expect(validatePermissions(["fs:read", "dialog", "shell:open"])).toEqual([]);
   });
+
+  test("duplicate invalid id emits exactly one error", () => {
+    const errs = validatePermissions(["xyz", "xyz"] as never[]);
+    expect(errs.length).toBe(1);
+  });
+
+  test("far-off unknown id lists valid permissions instead of guessing", () => {
+    const errs = validatePermissions(["location" as never]);
+    expect(errs.length).toBe(1);
+    expect(errs[0]).not.toContain("did you mean");
+    expect(errs[0]).toContain("Valid permissions:");
+  });
 });
 
 describe("isPermissionAllowed (verb semantics, mirrors native)", () => {
