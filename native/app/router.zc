@@ -40,7 +40,10 @@ fn permission_id_for_invoke(method: string) -> string {
 fn permission_id_for_action(action: string) -> string {
     if str::strncmp(action, "tray:", 5) == 0 { return "tray"; }
     if str::strncmp(action, "dock:", 5) == 0 { return "dock"; }
-    if str::strncmp(action, "panel", 5) == 0 { return "embed"; }
+    if action == "panelCreate" || action == "panelSetBounds" || action == "panelLoadUrl" ||
+       action == "panelExecJs" || action == "panelPostMessage" || action == "panelShow" ||
+       action == "panelHide" || action == "panelReload" || action == "panelBack" ||
+       action == "panelForward" || action == "panelDestroy" { return "embed"; }
     if action == "setMenu" { return "menu"; }
     if action == "showContextMenu" { return "menu"; }
     if action == "openExternal" { return "shell:open"; }
@@ -85,7 +88,7 @@ fn router_handle_message(app: App*, msg: string, window_id: int) -> void {
 
         // Check for __notif: prefix
         let is_notif: bool = false;
-        is_notif = str::strncmp(parsed.method, "__notif:", 7) == 0;
+        is_notif = str::strncmp(parsed.method, "__notif:", 8) == 0;
         if is_notif {
             router_handle_notification(parsed.method, parsed.payload, window_id, parsed.request_id);
             return;
