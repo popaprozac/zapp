@@ -6,6 +6,7 @@ Longer-form guides that complement the single-file
 | File | What's in it |
 |---|---|
 | [`api-reference.md`](api-reference.md) | Full runtime API with extended examples and edge cases |
+| [`security.md`](security.md) | Trust model, permissions manifest, allowlists |
 | [`zen-c-services.md`](zen-c-services.md) | Writing native services: JsonValue args, lifecycle, thread-safety |
 | [`patterns.md`](patterns.md) | Cookbook of common app patterns with complete examples |
 | [`architecture.md`](architecture.md) | Under-the-hood walkthrough: layers, bridge, worker lifecycle |

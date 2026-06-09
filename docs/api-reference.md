@@ -1832,6 +1832,81 @@ push.
 
 ---
 
+## `Permissions` — capability manifest
+
+Declare which built-in native capabilities your app may use via the
+`permissions` field in `zapp.config.ts`. Absent means allow-all (legacy
+behavior); present is an exhaustive allowlist enforced natively in the
+webview and all workers.
+
+```ts
+// zapp.config.ts
+export default defineConfig({
+  name: "My App",
+  permissions: ["clipboard:read", "fs", "dialog", "notifications", "window:create"],
+});
+```
+
+A bare module name grants all its verbs (`"clipboard"` ⊇ `clipboard:read` +
+`clipboard:write`). Unknown ids are a build error — the typed
+`ZappPermission` union gives editor autocomplete.
+
+### Catalog
+
+| Permission | Verbs | Covers |
+|---|---|---|
+| `clipboard` | `:read`, `:write` | Clipboard reads / writes+clear |
+| `fs` | `:read`, `:write` | FS API (additionally path-allowlisted) |
+| `dialog` | — | file open/save + message dialogs |
+| `notifications` | — | show/schedule/categories |
+| `shortcuts` | — | global hotkeys |
+| `tray` | — | status items |
+| `dock` | — | badge/bounce/icon |
+| `menu` | — | app menu + context menus |
+| `screen` | — | display enumeration / cursor |
+| `embed` | — | `<zapp-webview>` panels |
+| `window:create` | — | creating new windows (ops on existing windows are never gated) |
+| `shell` | `:open`, `:reveal`, `:trash` | openExternal/openPath · showItemInFolder · trashItem |
+
+Not gated in v1: window ops on existing windows, app lifecycle, `Events`,
+`Sync`, user `Services`, `protocols`/`deepLinkSchemes` (config declaration
+is the grant).
+
+### Denied-call behavior
+
+- **Invoke-style APIs** (Clipboard, Dialog, Notification, Shortcuts, Screen,
+  `Window.create`) — **reject** with an error where
+  `error.code === "PERMISSION_DENIED"` and `error.permission` names the id.
+- **Fire-and-forget APIs** (Tray, Dock, Menu, ContextMenu, shell helpers,
+  `Webview.create`) — **throw `PermissionDeniedError` synchronously** in the
+  webview; in workers the native layer logs `[zapp] permission denied: <id>`
+  (once per id) and drops the call.
+
+### `Permissions.query(id): Promise<"granted" | "denied" | "unsupported">`
+
+```ts
+import { Permissions } from "@zappdev/runtime";
+const status = await Permissions.query("tray");
+// "granted"     — in the allowlist (or no manifest → allow-all)
+// "denied"      — manifest present and id not listed
+// "unsupported" — platform doesn't support this capability (e.g. tray on iOS)
+```
+
+`"unsupported"` is answered before the manifest is consulted — unsupported
+APIs still silently no-op when called (v1 keeps legacy behavior);
+`query()` is how you detect them.
+
+### `Permissions.list(): Promise<string[]>`
+
+Returns the active allowlist — the `permissions` array from your config
+as resolved at startup. Returns `[]` when no manifest is present (allow-all
+mode); use `Permissions.query()` per-id to check individual capabilities.
+
+For the full trust model — navigation allowlist, FS path allowlist,
+sandboxed embeds, and v2 roadmap — see [`docs/security.md`](security.md).
+
+---
+
 ## `Sync` — cross-context wait/notify
 
 Low-level coordination. Like `pthread_cond_*` but keyed by string and
