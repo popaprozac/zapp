@@ -13,6 +13,7 @@ import "../menu/menu.zc";
 import "../dock/dock.zc";
 import "../tray/tray.zc";
 import "../fs/fs.zc";
+import "../permissions/permissions.zc";
 import "../clipboard/clipboard.zc";
 import "../shortcuts/shortcuts.zc";
 import "../log/log.zc";

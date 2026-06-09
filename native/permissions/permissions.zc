@@ -1,0 +1,193 @@
+// Permissions — native-side manifest parser + verb-semantics check.
+//
+// The CLI (build-config.ts) emits `zapp_build_permissions_json()` returning
+// the resolved per-platform manifest:
+//   {"platform":"macos","active":false,"allow":["clipboard","fs:read",...]}
+// `active:false` (or an absent/unparseable manifest) means NO manifest was
+// declared in zapp.config.ts — the framework runs unrestricted. Once a
+// manifest is declared the gate flips: only the listed module/verb ids pass.
+//
+// Lazy init (mirrors fs.zc's allowlist): the generated JSON is parsed once on
+// the first permission check, not at startup, so module-load order is
+// irrelevant and there is no global ctor. State lives in a `raw` block of
+// C statics; the parsed allow strings are strdup'd so they outlive the
+// (immediately freed) JSON tree.
+//
+// C linkage: these fns compile to plain C symbols. The webview bridge
+// (webview.m) and the worker engines call permissions_check() /
+// permissions_is_allowed() via `extern` declarations — keep the names and
+// signatures below stable.
+//
+// Fail-open rationale: the manifest is produced + validated by the CLI at
+// build time, so a malformed string here means a corrupted build, not user
+// intent. Failing open (treat as "no manifest") preserves the contract that
+// apps without a permissions block are unrestricted, rather than bricking a
+// shipped app on a parser hiccup.
+
+import "../bridge/json_safe.zc";
+import "string.h" as str;
+import "stdlib.h";
+
+// Emitted by the CLI into .zapp/zapp_build_config.zc.
+extern fn zapp_build_permissions_json() -> string;
+
+// --- Module state ---
+//
+// permissions_loaded — has the generated JSON been parsed yet?
+// permissions_active — did the manifest declare active:true?
+// permissions_allow  — the granted module/verb ids (strdup'd copies).
+// permissions_logged — ids already logged as denied (one-shot, anti-spam).
+
+raw {
+    #define PERMISSIONS_MAX 64
+
+    static int   permissions_loaded = 0;
+    static int   permissions_active = 0;
+    static char* permissions_allow[PERMISSIONS_MAX];
+    static int   permissions_allow_count = 0;
+    static char* permissions_logged[PERMISSIONS_MAX];
+    static int   permissions_logged_count = 0;
+}
+
+// Reset all state and (re)parse `json`. On parse error or a missing/false
+// `active` field the manifest stays inactive (fail-open). When active, up to
+// PERMISSIONS_MAX allow strings are copied out of the parse tree.
+fn permissions_reset_and_load(json: string) -> void {
+    // Reset: free any previously-stored copies, clear the logged set.
+    raw {
+        for (int i = 0; i < permissions_allow_count; i++) {
+            free(permissions_allow[i]);
+            permissions_allow[i] = NULL;
+        }
+        permissions_allow_count = 0;
+        for (int i = 0; i < permissions_logged_count; i++) {
+            free(permissions_logged[i]);
+            permissions_logged[i] = NULL;
+        }
+        permissions_logged_count = 0;
+        permissions_active = 0;
+        permissions_loaded = 1;
+    }
+
+    let parse_result = zapp_json_parse(json);
+    if parse_result.is_err() {
+        // Unparseable → stay inactive (fail-open). Nothing more to do.
+        return;
+    }
+    let root = parse_result.unwrap();
+
+    // `active` must be present AND true to engage the gate.
+    let active_opt = (*root).get_bool("active");
+    let is_active: bool = active_opt.is_some() && active_opt.unwrap();
+
+    if is_active {
+        raw { permissions_active = 1; }
+
+        let arr_opt = (*root).get_array("allow");
+        if arr_opt.is_some() {
+            let arr = arr_opt.unwrap();
+            let n: usize = (*arr).len();
+            let i: usize = 0;
+            while i < n {
+                let elem_opt = (*arr).at(i);
+                if elem_opt.is_some() {
+                    let elem = elem_opt.unwrap();
+                    let s_opt = (*elem).as_string();
+                    if s_opt.is_some() {
+                        // `_s` borrows into the parse tree, which is freed
+                        // below. strdup so the stored id outlives it. (Only
+                        // referenced from the raw block, hence the _ prefix.)
+                        let _s = s_opt.unwrap();
+                        raw {
+                            if (permissions_allow_count < PERMISSIONS_MAX && _s != NULL) {
+                                permissions_allow[permissions_allow_count] = strdup((const char*)_s);
+                                permissions_allow_count++;
+                            }
+                        }
+                    }
+                }
+                i = i + 1;
+            }
+        }
+    }
+
+    // Free the parse tree — stored allow ids are independent strdup copies.
+    raw {
+        JsonValue__Drop__drop(root);
+        free(root);
+    }
+}
+
+// Parse the generated manifest on first use. Idempotent after load.
+fn permissions_ensure_init() -> void {
+    let already: bool = false;
+    raw { already = (permissions_loaded != 0); }
+    if already { return; }
+    permissions_reset_and_load(zapp_build_permissions_json());
+}
+
+// Is `id` (a module id like "clipboard" or a verb id like "fs:read") granted?
+//   - inactive manifest        => always true (unrestricted)
+//   - exact match in allow set  => true
+//   - "module:verb" id          => true if the bare "module" is in the set
+//   - otherwise                 => false
+fn permissions_is_allowed(id: string) -> bool {
+    permissions_ensure_init();
+
+    let allowed: bool = false;
+    raw {
+        if (!permissions_active) return true;
+        if (id == NULL || id[0] == '\0') return false;
+
+        // Exact id match.
+        for (int i = 0; i < permissions_allow_count; i++) {
+            if (strcmp((const char*)id, permissions_allow[i]) == 0) return true;
+        }
+
+        // "module:verb" → a bare "module" grant covers all its verbs.
+        const char* colon = strchr((const char*)id, ':');
+        if (colon != NULL) {
+            size_t mlen = (size_t)(colon - (const char*)id);
+            if (mlen > 0) {
+                for (int i = 0; i < permissions_allow_count; i++) {
+                    const char* cand = permissions_allow[i];
+                    if (strlen(cand) == mlen &&
+                        strncmp((const char*)id, cand, mlen) == 0) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    return allowed;
+}
+
+// Gate `id` for `method` (a human-readable call site, e.g. "Clipboard.read").
+// Allowed → true. Denied → log ONCE per id to stderr and return false.
+fn permissions_check(id: string, method: string) -> bool {
+    if permissions_is_allowed(id) {
+        return true;
+    }
+
+    raw {
+        // One-shot denial log per id (anti-spam).
+        int seen = 0;
+        for (int i = 0; i < permissions_logged_count; i++) {
+            if (strcmp((const char*)id, permissions_logged[i]) == 0) { seen = 1; break; }
+        }
+        if (!seen && permissions_logged_count < PERMISSIONS_MAX) {
+            permissions_logged[permissions_logged_count] = strdup((const char*)id);
+            permissions_logged_count++;
+            fprintf(stderr,
+                "[zapp] permission denied: %s (%s) — add \"%s\" to permissions in zapp.config.ts\n",
+                (const char*)id, (const char*)method, (const char*)id);
+        }
+    }
+    return false;
+}
+
+// Raw generated manifest JSON — for consumers (e.g. a worker engine) that
+// want to forward the manifest into a JS context.
+fn permissions_bootstrap_json() -> string {
+    return zapp_build_permissions_json();
+}
