@@ -2,6 +2,9 @@
 
 import path from "node:path";
 import { isIOSTarget, type BuildTarget } from "./native";
+import type { ZappPermission } from "./permissions";
+import { validatePermissions } from "./permissions";
+export type { ZappPermission };
 
 export interface MacOSConfig {
   /**
@@ -594,6 +597,15 @@ export interface ZappConfig {
   singleInstance?: boolean;
   /** Filesystem allowlist. See {@link FsConfig}. */
   fs?: FsConfig;
+  /**
+   * Declarative native-capability allowlist (built-ins only in v1).
+   *
+   * Absent → everything allowed (legacy behavior). Present → exhaustive:
+   * any built-in capability not listed is denied, enforced natively.
+   * A bare module name grants all its verbs ("clipboard" ⊇ ":read"+":write").
+   * See docs/security.md for the catalog and trust model.
+   */
+  permissions?: ZappPermission[];
   macos?: MacOSConfig;
   /** iOS-specific configuration. See {@link IOSConfig}. */
   ios?: IOSConfig;
@@ -887,6 +899,11 @@ export async function loadConfig(root: string): Promise<ResolvedConfig> {
     validateWebEngine(config.webEngine);
     rejectRemovedEngines(config);
     validateNative(config);
+    const permErrors = validatePermissions(config.permissions);
+    if (permErrors.length > 0) {
+      for (const e of permErrors) process.stderr.write(e + "\n");
+      throw new Error(permErrors[0]);
+    }
     return {
       ...config,
       assetDir: config.assetDir ?? "./dist",
