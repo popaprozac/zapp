@@ -1879,7 +1879,7 @@ is the grant).
   `error.code === "PERMISSION_DENIED"` and `error.permission` names the id.
 - **Fire-and-forget APIs** (Tray, Dock, Menu, ContextMenu, shell helpers,
   `Webview.create`) — **throw `PermissionDeniedError` synchronously** in the
-  webview; in workers the native layer logs `[zapp] permission denied: <id>`
+  webview; in workers the native layer logs `[zapp] permission denied: <id> (<method>)`
   (once per id) and drops the call.
 
 ### `Permissions.query(id): Promise<"granted" | "denied" | "unsupported">`

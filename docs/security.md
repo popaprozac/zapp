@@ -69,7 +69,7 @@ arrives with per-context grants in v2), `protocols`/`deepLinkSchemes`
 - Fire-and-forget APIs (Tray, Dock, Menu, ContextMenu, shell helpers,
   `Webview.create`) **throw `PermissionDeniedError` synchronously** in the
   webview; in workers the native layer logs
-  `[zapp] permission denied: <id>` (once per id) and drops the call.
+  `[zapp] permission denied: <id> (<method>)` (once per id) and drops the call.
 
 ## Detection
 
