@@ -243,7 +243,7 @@ async function runDev(root: string) {
   }
 
   // 4. Generate build config + bootstrap (dev mode)
-  const buildConfigFile = await generateBuildConfig({ root, config, mode: "dev", devUrl });
+  const buildConfigFile = await generateBuildConfig({ root, config, mode: "dev", devUrl, target });
   const platformFile = await generatePlatformConfig(root, target, iosBuildFile ?? undefined, engineOverlayFile ?? undefined, config);
   const headlessFile = await generateHeadlessWorkers({ root, headless: config.headless });
   const zappDir = path.join(root, ".zapp");
@@ -567,7 +567,7 @@ async function runBuild(root: string) {
   }
 
   // 6. Generate build config + bootstrap (prod mode, embedded assets)
-  const buildConfigFile = await generateBuildConfig({ root, config, mode: "prod", embedAssets: true });
+  const buildConfigFile = await generateBuildConfig({ root, config, mode: "prod", embedAssets: true, target });
   const platformFile = await generatePlatformConfig(root, target, undefined, engineOverlayFile ?? undefined, config);
   const headlessFile = await generateHeadlessWorkers({ root, headless: config.headless });
   const bootstrapFile = await generateBootstrap(zappDir);
