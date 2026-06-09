@@ -27,6 +27,9 @@ extern int app_get_bootstrap_max_workers(void);
 // Service bindings
 extern const char* service_get_manifest_json(void);
 
+// Permissions manifest
+extern const char* permissions_bootstrap_json(void);
+
 // --- Helpers ---
 
 // Single-pass JS string escape — one allocation instead of four.
@@ -838,14 +841,20 @@ void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first
     extern const char* darwin_get_power_state(void);
     const char* powerStateC = darwin_get_power_state();
 
+    // permissions: forward the permissions manifest so the runtime can answer
+    // Permissions.query() synchronously and throw PermissionDeniedError on
+    // gated fire-and-forget calls without a round-trip to native.
+    const char* permsJson = permissions_bootstrap_json();
+    if (!permsJson || !permsJson[0]) permsJson = "{\"platform\":\"macos\",\"active\":false,\"allow\":[]}";
+
     NSString* configScript = [NSString stringWithFormat:
         @"(function(){globalThis[Symbol.for('zapp.bootstrapConfig')]="
         "{name:'%@',applicationShouldTerminateAfterLastWindowClosed:%@,"
-        "webContentInspectable:%@,maxWorkers:%d,theme:'%@',powerState:%s%@};})();",
+        "webContentInspectable:%@,maxWorkers:%d,theme:'%@',powerState:%s,permissions:%s%@};})();",
         appName,
         terminate ? @"true" : @"false",
         inspect ? @"true" : @"false",
-        maxWorkers, themeStr, powerStateC, cspExtra];
+        maxWorkers, themeStr, powerStateC, permsJson, cspExtra];
     [ucc addUserScript:[[WKUserScript alloc] initWithSource:configScript
         injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
 

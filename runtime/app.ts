@@ -13,6 +13,7 @@
 
 import { getBridge } from "./bridge";
 import { Events, AppEvent, eventName } from "./events";
+import { ensurePermission } from "./permissions";
 
 // Send a window-action-style message (t:4) for fire-and-forget app
 // commands that don't need a request/response. Same wire format as
@@ -135,6 +136,7 @@ export const App = {
 
   /** Open a URL in the system browser. */
   openExternal(url: string): void {
+    ensurePermission("shell:open");
     appAction("openExternal", { url });
   },
 
@@ -155,6 +157,7 @@ export const App = {
    * action that doesn't mutate disk state.
    */
   showItemInFolder(path: string): void {
+    ensurePermission("shell:reveal");
     appAction("showItemInFolder", { path });
   },
 
@@ -172,6 +175,7 @@ export const App = {
    * user-visible and the user can cancel.
    */
   openPath(path: string): void {
+    ensurePermission("shell:open");
     appAction("openPath", { path });
   },
 
@@ -190,6 +194,7 @@ export const App = {
    * "user picks file → app trashes it" flow works out of the box.
    */
   trashItem(path: string): void {
+    ensurePermission("shell:trash");
     appAction("trashItem", { path });
   },
 

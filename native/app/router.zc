@@ -8,17 +8,76 @@ import "../bridge/json_builder.zc";
 import "../service/service.zc";
 import "../window/events.zc";
 import "../fs/fs.zc";
+import "../permissions/permissions.zc";
 // darwin_win imported via dispatch.zc → darwin/window.h
 @cfg(apple)
 import "../platform/darwin/dialog.h" as darwin_dialog;
 @cfg(windows)
 import "../platform/windows/dialog.h" as win_dialog;
 
+// Map a t:1 invoke method to a permission id ("" = ungated: __app:,
+// __zapp:, __protocol:respond, user services). Spec catalog:
+// docs/superpowers/specs/2026-06-09-permissions-system-design.md
+fn permission_id_for_invoke(method: string) -> string {
+    if str::strncmp(method, "__clipboard:", 12) == 0 {
+        // read* / has → :read; write* / clear → :write
+        let rest: string = "";
+        raw { rest = (char*)((const char*)method + 12); }
+        if str::strncmp(rest, "read", 4) == 0 { return "clipboard:read"; }
+        if str::strncmp(rest, "has", 3) == 0 { return "clipboard:read"; }
+        return "clipboard:write";
+    }
+    if str::strncmp(method, "__dialog:", 9) == 0 { return "dialog"; }
+    if str::strncmp(method, "__notif:", 8) == 0 { return "notifications"; }
+    if str::strncmp(method, "__shortcuts:", 12) == 0 { return "shortcuts"; }
+    if str::strncmp(method, "__screen:", 9) == 0 { return "screen"; }
+    if method == "__window:create" { return "window:create"; }
+    return "";
+}
+
+// Map a t:4 fire-and-forget action to a permission id ("" = ungated:
+// window ops on existing windows, app lifecycle, plumbing).
+fn permission_id_for_action(action: string) -> string {
+    if str::strncmp(action, "tray:", 5) == 0 { return "tray"; }
+    if str::strncmp(action, "dock:", 5) == 0 { return "dock"; }
+    if action == "panelCreate" || action == "panelSetBounds" || action == "panelLoadUrl" ||
+       action == "panelExecJs" || action == "panelPostMessage" || action == "panelShow" ||
+       action == "panelHide" || action == "panelReload" || action == "panelBack" ||
+       action == "panelForward" || action == "panelDestroy" { return "embed"; }
+    if action == "setMenu" { return "menu"; }
+    if action == "showContextMenu" { return "menu"; }
+    if action == "openExternal" { return "shell:open"; }
+    if action == "openPath" { return "shell:open"; }
+    if action == "showItemInFolder" { return "shell:reveal"; }
+    if action == "trashItem" { return "shell:trash"; }
+    return "";
+}
+
 fn router_handle_message(app: App*, msg: string, window_id: int) -> void {
     let parsed = bridge_parse(msg);
     if !parsed.valid { return; }
 
     if parsed.msg_type == MsgType.INVOKE {
+        // Permission gate (t:1). Maps the invoke method to a catalog id;
+        // ungated methods ("") fall straight through. When a manifest is
+        // active and the id isn't granted, reply so the JS promise rejects.
+        let perm_id = permission_id_for_invoke(parsed.method);
+        let perm_gated: bool = false;
+        raw { perm_gated = ((const char*)perm_id)[0] != '\0'; }
+        if perm_gated {
+            if !permissions_check(perm_id, parsed.method) {
+                // Reply so the JS promise rejects (bootstrap rejects with
+                // new Error(payload)); runtime detects the prefix and
+                // decorates with code/permission fields.
+                raw {
+                    char denied[160];
+                    snprintf(denied, sizeof(denied), "PERMISSION_DENIED:%s", (const char*)perm_id);
+                    dispatch_invoke_response(window_id, parsed.request_id, false, denied);
+                }
+                return;
+            }
+        }
+
         // Check for __dialog: prefix
         let is_dialog: bool = false;
         is_dialog = str::strncmp(parsed.method, "__dialog:", 9) == 0;
@@ -29,7 +88,7 @@ fn router_handle_message(app: App*, msg: string, window_id: int) -> void {
 
         // Check for __notif: prefix
         let is_notif: bool = false;
-        is_notif = str::strncmp(parsed.method, "__notif:", 7) == 0;
+        is_notif = str::strncmp(parsed.method, "__notif:", 8) == 0;
         if is_notif {
             router_handle_notification(parsed.method, parsed.payload, window_id, parsed.request_id);
             return;
@@ -223,6 +282,16 @@ fn event_name_to_id(name: string) -> int {
 }
 
 fn router_handle_window_action(app: App*, action: string, payload: string, window_id: int, pre_args: JsonValue*, has_pre_args: bool) -> void {
+    // Permission gate (t:4 fire-and-forget). Gated actions (tray/dock/
+    // panel/menu/shell) have no reply channel — denial logs once per id
+    // and drops the action. Ungated actions ("") fall straight through.
+    let act_perm = permission_id_for_action(action);
+    let act_gated: bool = false;
+    raw { act_gated = ((const char*)act_perm)[0] != '\0'; }
+    if act_gated {
+        if !permissions_check(act_perm, action) { return; } // log + drop (no reply channel)
+    }
+
     // Handle bridge ready signal
     let is_ready = action == "ready";
     if is_ready {
@@ -903,6 +972,10 @@ fn router_handle_zapp(method: string, window_id: int, request_id: int) -> void {
         }
         dispatch_invoke_response(window_id, request_id, true, json);
         raw { free((void*)json); }
+        return;
+    }
+    if method == "__zapp:permissions" {
+        dispatch_invoke_response(window_id, request_id, true, permissions_bootstrap_json());
         return;
     }
     dispatch_invoke_response(window_id, request_id, false, "UNKNOWN_ZAPP_METHOD");

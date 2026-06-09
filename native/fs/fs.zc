@@ -29,6 +29,13 @@ import "stdlib.h";
 extern fn zapp_build_fs_allowlist_json() -> string;
 extern fn zapp_build_fs_persist_grants() -> bool;
 
+// Permission gate (native/permissions/permissions.zc). Declared extern
+// rather than imported to avoid an import cycle — fs.zc is imported by
+// both router.zc and app.zc, and permissions.zc pulls in json_safe.zc.
+// permissions_check(id, method) returns true when the manifest is
+// inactive or grants `id`; otherwise it logs once per id and returns false.
+extern fn permissions_check(id: string, method: string) -> bool;
+
 // --- Path resolution ---
 
 // Expand `$var/…` and `~/…` prefixes into absolute paths. Caller's input
@@ -247,6 +254,7 @@ fn fs_grant_path(path: string) -> void {
 
 @cfg(apple)
 fn fs_read_file_native(path: string) -> string {
+    if !permissions_check("fs:read", "fs") { return ""; }
     let result: string = "";
     raw {
         char* buf = darwin_fs_read_file((const char*)path);
@@ -265,6 +273,7 @@ fn fs_read_file_native(path: string) -> string {
 
 @cfg(apple)
 fn fs_write_file_native(path: string, data: string) -> bool {
+    if !permissions_check("fs:write", "fs") { return false; }
     let ok: bool = false;
     raw {
         ok = darwin_fs_write_file((const char*)path, (const char*)data);
@@ -274,6 +283,7 @@ fn fs_write_file_native(path: string, data: string) -> bool {
 
 @cfg(apple)
 fn fs_append_file_native(path: string, data: string) -> bool {
+    if !permissions_check("fs:write", "fs") { return false; }
     let ok: bool = false;
     raw {
         ok = darwin_fs_append_file((const char*)path, (const char*)data);
@@ -283,6 +293,7 @@ fn fs_append_file_native(path: string, data: string) -> bool {
 
 @cfg(apple)
 fn fs_exists_native(path: string) -> bool {
+    if !permissions_check("fs:read", "fs") { return false; }
     let ok: bool = false;
     raw {
         ok = darwin_fs_exists((const char*)path);
@@ -292,6 +303,7 @@ fn fs_exists_native(path: string) -> bool {
 
 @cfg(apple)
 fn fs_read_dir_native(path: string) -> string {
+    if !permissions_check("fs:read", "fs") { return ""; }
     let result: string = "";
     raw {
         char* json = darwin_fs_read_dir((const char*)path);
@@ -307,6 +319,7 @@ fn fs_read_dir_native(path: string) -> string {
 
 @cfg(apple)
 fn fs_mkdir_native(path: string, recursive: bool) -> bool {
+    if !permissions_check("fs:write", "fs") { return false; }
     let ok: bool = false;
     raw {
         ok = darwin_fs_mkdir((const char*)path, recursive);
@@ -316,6 +329,7 @@ fn fs_mkdir_native(path: string, recursive: bool) -> bool {
 
 @cfg(apple)
 fn fs_remove_native(path: string) -> bool {
+    if !permissions_check("fs:write", "fs") { return false; }
     let ok: bool = false;
     raw {
         ok = darwin_fs_remove((const char*)path);
@@ -325,6 +339,7 @@ fn fs_remove_native(path: string) -> bool {
 
 @cfg(apple)
 fn fs_rmdir_native(path: string, recursive: bool) -> bool {
+    if !permissions_check("fs:write", "fs") { return false; }
     let ok: bool = false;
     raw {
         ok = darwin_fs_rmdir((const char*)path, recursive);
@@ -334,6 +349,7 @@ fn fs_rmdir_native(path: string, recursive: bool) -> bool {
 
 @cfg(apple)
 fn fs_rename_native(from: string, to: string) -> bool {
+    if !permissions_check("fs:write", "fs") { return false; }
     let ok: bool = false;
     raw {
         ok = darwin_fs_rename((const char*)from, (const char*)to);
@@ -343,6 +359,7 @@ fn fs_rename_native(from: string, to: string) -> bool {
 
 @cfg(apple)
 fn fs_copy_native(from: string, to: string) -> bool {
+    if !permissions_check("fs:write", "fs") { return false; }
     let ok: bool = false;
     raw {
         ok = darwin_fs_copy((const char*)from, (const char*)to);

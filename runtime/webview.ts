@@ -5,6 +5,7 @@
 // getBoundingClientRect in a scroll handler. See pretext (github.com/chenglou/
 // pretext) for the "avoid forced sync layout" rationale.
 import { getBridge } from "./bridge";
+import { ensurePermission } from "./permissions";
 import { toNativeRect, rectsEqual, isVisibleRect, type NativeRect } from "./webview-geometry";
 
 export type PanelEvent = "did-navigate" | "title-change" | "load-finished" | "load-failed" | "message";
@@ -65,6 +66,7 @@ export class ZappWebviewElement extends HostElement {
     const src = this.getAttribute("src") ?? "";
     const bridge = this.hasAttribute("bridge");
     const partition = this.getAttribute("partition") ?? "";
+    ensurePermission("embed");
     panelPost("panelCreate", {
       windowId: currentWindowId(), panelId: this._panelId, url: src, bridge, partition,
     });
@@ -180,6 +182,7 @@ export class ZappWebviewElement extends HostElement {
 export const Webview = {
   /** Programmatically create + insert a <zapp-webview>. Append it where you want it. */
   create(opts: WebviewCreateOptions): ZappWebviewElement {
+    ensurePermission("embed");
     const el = document.createElement("zapp-webview") as ZappWebviewElement;
     if (opts.bridge) el.setAttribute("bridge", "");
     if (opts.partition) el.setAttribute("partition", opts.partition);

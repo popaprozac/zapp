@@ -142,7 +142,7 @@ For nested dicts/arrays, drop a partial XML file into `build/macos/Info.plist.ex
 - **Screens** — `Screen.getAll()` / `getPrimary()` / `getCursorPoint()` + `Window.getScreen()` with bounds, work area, scale factor, and a `SCREENS_CHANGED` event. Top-left global coordinates everywhere.
 - **Sync** — `wait`/`notify` across contexts without SharedArrayBuffer.
 - **Events** — Typed cross-context events with autocomplete.
-- **Security** — CSP, navigation restrictions, path traversal prevention, dev tools disabled in production.
+- **Security** — Declarative permissions manifest (`permissions` in zapp.config.ts — allow/deny native capability, enforced natively), navigation allowlist, FS path allowlist, sandboxed embeds, path traversal prevention, dev tools disabled in production. See [`docs/security.md`](docs/security.md).
 - **Packaging** — `.app` bundles with icon generation (including macOS Tahoe liquid glass).
 - **iOS** — Same source compiles to iOS Simulator / device via `--platform ios`. UIKit-native presentation: `Window.create({ asSheetOf, presentation: "page" | "form" | "fullscreen" | "bottomSheet", detents, grabber })` for sheets and drawers, `UIDocumentPickerViewController` for file pickers, `UNUserNotificationCenter` for notifications + actions + reply field, `UIPasteboard` for full clipboard (text / HTML / image / files), `UIDropInteraction` for file drag-drop, custom `WKURLSchemeHandler` protocols, navigation allowlist with Safari handoff for external links.
 

@@ -12,6 +12,7 @@
  */
 
 import { getBridge } from "./bridge";
+import { ensurePermission } from "./permissions";
 
 // In worker contexts, __zappBridge.dock is a sync host dispatcher that
 // calls darwin_dock_* directly. Webview fallback uses IPC-style post.
@@ -23,6 +24,7 @@ function dockHost(): ((action: string, args?: unknown) => void) | null {
 export const Dock = {
   /** Show the app icon in the dock/taskbar. */
   showIcon(): void {
+    ensurePermission("dock");
     const host = dockHost();
     if (host) { host("showIcon"); return; }
     (getBridge() as any).post(JSON.stringify({ t: 4, m: "dock:showIcon", a: {} }));
@@ -30,6 +32,7 @@ export const Dock = {
 
   /** Hide the app icon from the dock/taskbar. */
   hideIcon(): void {
+    ensurePermission("dock");
     const host = dockHost();
     if (host) { host("hideIcon"); return; }
     (getBridge() as any).post(JSON.stringify({ t: 4, m: "dock:hideIcon", a: {} }));
@@ -37,6 +40,7 @@ export const Dock = {
 
   /** Set a text badge on the dock icon (e.g. "5", "new"). */
   setBadge(label: string): void {
+    ensurePermission("dock");
     const host = dockHost();
     if (host) { host("setBadge", { label }); return; }
     (getBridge() as any).post(JSON.stringify({ t: 4, m: "dock:setBadge", a: { label } }));
@@ -44,6 +48,7 @@ export const Dock = {
 
   /** Remove the badge from the dock icon. */
   removeBadge(): void {
+    ensurePermission("dock");
     const host = dockHost();
     if (host) { host("removeBadge"); return; }
     (getBridge() as any).post(JSON.stringify({ t: 4, m: "dock:removeBadge", a: {} }));
@@ -53,6 +58,7 @@ export const Dock = {
    * @param type "informational" (bounces once) or "critical" (bounces until activated). Default: "informational"
    */
   bounce(type: "informational" | "critical" = "informational"): void {
+    ensurePermission("dock");
     const host = dockHost();
     if (host) { host("bounce", { type: type === "critical" ? 1 : 0 }); return; }
     (getBridge() as any).post(JSON.stringify({
@@ -62,6 +68,7 @@ export const Dock = {
 
   /** Set a custom dock icon from a file path. */
   setIcon(path: string): void {
+    ensurePermission("dock");
     const host = dockHost();
     if (host) { host("setIcon", { path }); return; }
     (getBridge() as any).post(JSON.stringify({ t: 4, m: "dock:setIcon", a: { path } }));
@@ -69,6 +76,7 @@ export const Dock = {
 
   /** Reset the dock icon to the app bundle default. */
   resetIcon(): void {
+    ensurePermission("dock");
     const host = dockHost();
     if (host) { host("resetIcon"); return; }
     (getBridge() as any).post(JSON.stringify({ t: 4, m: "dock:resetIcon", a: {} }));

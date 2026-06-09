@@ -81,6 +81,16 @@ extern const char* zapp_build_fs_allowlist_json(void);
 extern void* app_get_active(void);
 extern const char* service_invoke_sync(void* app, const char* method, const char* args);
 
+// Permission gates (native/permissions/permissions.zc + router.zc — Zen-C,
+// plain C symbols). The router gates the webview invoke path; workers reach
+// native through these host objects, bypassing the router, so the worker path
+// runs the SAME mapping + check here. permission_id_for_invoke returns "" for
+// ungated methods; the tier-1 host objects (clipboard/notif/shortcuts) and
+// createWindow bypass invokeService entirely, so they call permissions_check
+// directly with their catalog id.
+extern bool permissions_check(const char* id, const char* method);
+extern const char* permission_id_for_invoke(const char* method);
+
 // Worker → host plumbing. All take JSON-stringified payloads from JS.
 extern void worker_dispatch_to_webview(const char* worker_id, const char* data_json);
 extern void worker_post_message(char* worker_id, char* data_json);
@@ -561,6 +571,18 @@ static js_value_t* bare_host_invoke_service(js_env_t* env, js_callback_info_t* i
     js_get_value_string_utf8(env, argv[0], (utf8_t*)method, sizeof(method) - 1, &method_len);
     method[method_len] = '\0';
 
+    // Permission gate (same mapping the router runs for the webview path).
+    // Gated method + manifest active + not granted → throw so the synchronous
+    // invokeService() call rejects/throws on the JS side (parity with the
+    // webview path, which rejects with new Error("PERMISSION_DENIED:<id>")).
+    const char* perm_id = permission_id_for_invoke(method);
+    if (perm_id && perm_id[0] && !permissions_check(perm_id, method)) {
+        char denied[160];
+        snprintf(denied, sizeof(denied), "PERMISSION_DENIED:%s", perm_id);
+        js_throw_error(env, NULL, denied);
+        return undef;
+    }
+
     // Read args JSON. The two-call probe pattern (size first, then
     // read) is libjs's idiom for dynamic-length strings.
     size_t args_len = 0;
@@ -800,7 +822,13 @@ static js_value_t* bare_host_clipboard(js_env_t* env, js_callback_info_t* info) 
 
     js_value_t* args = argc >= 2 ? argv[1] : NULL;
 
+    // Per-branch permission gate: read* / has → "clipboard:read",
+    // write* / clear → "clipboard:write". This host object bypasses
+    // invokeService + the router, so the check lives here. Denied →
+    // return the branch's own empty/false value (silent; permissions_check
+    // logs the denial once).
     if (strcmp(action, "readText") == 0) {
+        if (!permissions_check("clipboard:read", "clipboard.readText")) return undef;
         char* s = darwin_clipboard_read_text();
         js_value_t* out;
         js_create_string_utf8(env, (const utf8_t*)(s ? s : ""), s ? strlen(s) : 0, &out);
@@ -808,12 +836,14 @@ static js_value_t* bare_host_clipboard(js_env_t* env, js_callback_info_t* info) 
         return out;
     }
     if (strcmp(action, "writeText") == 0) {
+        if (!permissions_check("clipboard:write", "clipboard.writeText")) return undef;
         char* text = bare_get_string_prop(env, args, "text");
         darwin_clipboard_write_text(text ? text : "");
         free(text);
         return undef;
     }
     if (strcmp(action, "readHtml") == 0) {
+        if (!permissions_check("clipboard:read", "clipboard.readHtml")) return undef;
         char* s = darwin_clipboard_read_html();
         js_value_t* out;
         js_create_string_utf8(env, (const utf8_t*)(s ? s : ""), s ? strlen(s) : 0, &out);
@@ -821,12 +851,18 @@ static js_value_t* bare_host_clipboard(js_env_t* env, js_callback_info_t* info) 
         return out;
     }
     if (strcmp(action, "writeHtml") == 0) {
+        if (!permissions_check("clipboard:write", "clipboard.writeHtml")) return undef;
         char* html = bare_get_string_prop(env, args, "html");
         darwin_clipboard_write_html(html ? html : "");
         free(html);
         return undef;
     }
     if (strcmp(action, "readFiles") == 0) {
+        if (!permissions_check("clipboard:read", "clipboard.readFiles")) {
+            js_value_t* empty;
+            js_create_string_utf8(env, (const utf8_t*)"[]", 2, &empty);
+            return empty;
+        }
         // Native returns a JSON-array string; runtime wrapper JSON.parses it.
         char* j = darwin_clipboard_read_files();
         js_value_t* out;
@@ -835,6 +871,7 @@ static js_value_t* bare_host_clipboard(js_env_t* env, js_callback_info_t* info) 
         return out;
     }
     if (strcmp(action, "readImage") == 0) {
+        if (!permissions_check("clipboard:read", "clipboard.readImage")) return undef;
         char* b64 = darwin_clipboard_read_image_png_b64();
         js_value_t* out;
         js_create_string_utf8(env, (const utf8_t*)(b64 ? b64 : ""), b64 ? strlen(b64) : 0, &out);
@@ -842,12 +879,18 @@ static js_value_t* bare_host_clipboard(js_env_t* env, js_callback_info_t* info) 
         return out;
     }
     if (strcmp(action, "writeImage") == 0) {
+        if (!permissions_check("clipboard:write", "clipboard.writeImage")) return undef;
         char* data = bare_get_string_prop(env, args, "data");
         darwin_clipboard_write_image_png_b64(data ? data : "");
         free(data);
         return undef;
     }
     if (strcmp(action, "has") == 0) {
+        if (!permissions_check("clipboard:read", "clipboard.has")) {
+            js_value_t* out;
+            js_get_boolean(env, false, &out);
+            return out;
+        }
         char* fmt = bare_get_string_prop(env, args, "format");
         bool h = darwin_clipboard_has(fmt ? fmt : "");
         free(fmt);
@@ -856,6 +899,7 @@ static js_value_t* bare_host_clipboard(js_env_t* env, js_callback_info_t* info) 
         return out;
     }
     if (strcmp(action, "clear") == 0) {
+        if (!permissions_check("clipboard:write", "clipboard.clear")) return undef;
         darwin_clipboard_clear();
         return undef;
     }
@@ -884,6 +928,10 @@ static js_value_t* bare_host_notif(js_env_t* env, js_callback_info_t* info) {
     size_t alen = 0;
     js_get_value_string_utf8(env, argv[0], (utf8_t*)action, sizeof(action) - 1, &alen);
     action[alen] = '\0';
+
+    // Permission gate — notifications bypass invokeService + the router, so
+    // the check lives here. Denied → undef (the fn's own miss/error return).
+    if (!permissions_check("notifications", "Notification")) return undef;
 
     js_value_t* args = argc >= 2 ? argv[1] : NULL;
 
@@ -981,6 +1029,10 @@ static js_value_t* bare_host_dock(js_env_t* env, js_callback_info_t* info) {
     js_get_undefined(env, &undef);
     if (argc < 1) return undef;
 
+    // Permission gate — dock bypasses invokeService + the router, so
+    // the check lives here. Denied → undef (the fn's own miss return).
+    if (!permissions_check("dock", "Dock")) return undef;
+
     char action[32];
     size_t alen = 0;
     js_get_value_string_utf8(env, argv[0], (utf8_t*)action, sizeof(action) - 1, &alen);
@@ -1055,6 +1107,9 @@ static js_value_t* bare_host_show_notification(js_env_t* env, js_callback_info_t
     js_value_t* undef;
     js_get_undefined(env, &undef);
 
+    // Permission gate — same id as the modern notif() host object.
+    if (!permissions_check("notifications", "Notification.show")) return undef;
+
     char* title = argc >= 1 ? bare_read_js_string_dup(env, argv[0]) : NULL;
     char* body  = argc >= 2 ? bare_read_js_string_dup(env, argv[1]) : NULL;
     darwin_notification_show_typed(title ? title : "", "",
@@ -1082,6 +1137,10 @@ static js_value_t* bare_host_shortcuts(js_env_t* env, js_callback_info_t* info) 
     size_t alen = 0;
     js_get_value_string_utf8(env, argv[0], (utf8_t*)action, sizeof(action) - 1, &alen);
     action[alen] = '\0';
+
+    // Permission gate — global shortcuts bypass invokeService + the router,
+    // so the check lives here. Denied → undef (the fn's own miss return).
+    if (!permissions_check("shortcuts", "GlobalShortcut")) return undef;
 
     if (strcmp(action, "unregisterAll") == 0) {
         darwin_shortcut_unregister_all();
@@ -1220,6 +1279,11 @@ static js_value_t* bare_host_create_window(js_env_t* env, js_callback_info_t* in
     js_value_t* undef;
     js_get_undefined(env, &undef);
     if (argc < 1) return undef;
+
+    // Permission gate — window creation from a worker bypasses invokeService
+    // + the router (zjs falls back to invokeService("__window:create"); bare
+    // has this direct host). Denied → undef (the fn's own miss return).
+    if (!permissions_check("window:create", "createWindow")) return undef;
 
     char* opts_json = bare_read_js_string_dup(env, argv[0]);
     if (!opts_json) return undef;

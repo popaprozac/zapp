@@ -9,6 +9,7 @@ import { resolveNative, type ResolvedConfig } from "./config";
 import { getPlatformSources, getUserProjectSources, type BuildTarget, detectTarget, isIOSTarget } from "./native";
 import { resolveNativeDir, resolveVendorDir } from "./paths";
 import { clog, clogError } from "./log";
+import { resolvePermissions } from "./permissions";
 
 // xcrun-resolved iOS SDK paths. Cached for the life of the CLI process
 // — calling xcrun is ~80ms, called only once per build now.
@@ -38,10 +39,11 @@ interface BuildConfigOptions {
   mode: "dev" | "prod";
   devUrl?: string;
   embedAssets?: boolean;
+  target?: BuildTarget;
 }
 
 export async function generateBuildConfig(opts: BuildConfigOptions): Promise<string> {
-  const { root, config, mode, devUrl, embedAssets } = opts;
+  const { root, config, mode, devUrl, embedAssets, target } = opts;
   const zappDir = path.join(root, ".zapp");
   await mkdir(zappDir, { recursive: true });
 
@@ -61,6 +63,36 @@ export async function generateBuildConfig(opts: BuildConfigOptions): Promise<str
   const fsAllow = config.fs?.allow ?? [];
   const fsAllowJson = JSON.stringify(fsAllow).replace(/"/g, '\\"');
   const fsPersistGrants = config.fs?.persistDialogGrants ? "true" : "false";
+
+  // Permissions manifest (v1, app-global). Emitted as an escaped JSON
+  // object literal; native/permissions/permissions.zc parses it lazily.
+  // platform is baked here so the runtime support table needs no extra
+  // carrier. active:false (field absent) short-circuits to allow-all.
+  const resolvedPerms = resolvePermissions(config.permissions);
+  const resolvedTarget = target ?? detectTarget();
+  const permsPlatform = isIOSTarget(resolvedTarget)
+    ? "ios"
+    : resolvedTarget === "windows"
+      ? "windows"
+      : "macos";
+  const permsObj = {
+    platform: permsPlatform,
+    active: resolvedPerms.active,
+    allow: resolvedPerms.allow,
+  };
+  // Zen-C treats bare `{` / `}` in string literals as f-string
+  // interpolation delimiters (same gotcha as the test-infra cycle).
+  // Escape them by doubling: `{` → `{{`, `}` → `}}` — the Zen-C
+  // runtime emits a single literal brace. Apply AFTER the JSON-escape
+  // pass so the `\"` sequences are already in place.
+  // fsAllowJson/protocolsJson encode arrays ([…]) so they never emit
+  // bare braces — permsObj is the first object-valued JSON in this file,
+  // hence the first time brace-escaping is required. Backslash-in-ids is
+  // safe because the permission catalog is fixed lowercase ASCII.
+  const permissionsJson = JSON.stringify(permsObj)
+    .replace(/"/g, '\\"')
+    .replace(/\{/g, "{{")
+    .replace(/\}/g, "}}");
 
   // Custom protocols (G19) — declared schemes registered as
   // WKURLSchemeHandlers on every webview. Each scheme name must be
@@ -98,6 +130,7 @@ fn zapp_build_is_dev() -> int { return ${isDev ? 1 : 0}; }
 fn zapp_build_fs_allowlist_json() -> string { return "${fsAllowJson}"; }
 fn zapp_build_fs_persist_grants() -> bool { return ${fsPersistGrants}; }
 fn zapp_build_custom_protocols_json() -> string { return "${protocolsJson}"; }
+fn zapp_build_permissions_json() -> string { return "${permissionsJson}"; }
 fn zapp_build_webview_autoplay_without_user_gesture() -> int { return ${wpAutoplay}; }
 fn zapp_build_webview_back_forward_gestures() -> int { return ${wpBackFwd}; }
 fn zapp_build_webview_text_interaction_enabled() -> int { return ${wpTextIA}; }

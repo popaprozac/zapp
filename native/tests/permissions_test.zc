@@ -1,0 +1,53 @@
+// Native unit tests for the permissions manifest parser + verb semantics.
+// Run via `zc run` (cli/src/test-native.ts). Literal braces in strings are
+// escaped {{ }} (Zen-C f-string rule).
+//
+// permissions.zc declares `extern fn zapp_build_permissions_json()`, which
+// the CLI emits into the generated build config — that symbol does not exist
+// when `zc run`ning this test file in isolation. The stub below satisfies the
+// linker; it is never exercised because every test calls
+// permissions_reset_and_load(...) explicitly.
+import "../permissions/permissions.zc";
+
+fn zapp_build_permissions_json() -> string {
+    return "{{\"platform\":\"macos\",\"active\":false,\"allow\":[]}}";
+}
+
+test "inactive manifest allows everything" {
+    permissions_reset_and_load("{{\"platform\":\"macos\",\"active\":false,\"allow\":[]}}");
+    assert(permissions_is_allowed("clipboard:read"), "inactive => allowed");
+    assert(permissions_is_allowed("tray"), "inactive => allowed");
+}
+
+test "active empty manifest denies everything" {
+    permissions_reset_and_load("{{\"platform\":\"macos\",\"active\":true,\"allow\":[]}}");
+    assert(!permissions_is_allowed("clipboard:read"), "active empty => denied");
+}
+
+test "bare module grants its verbs" {
+    permissions_reset_and_load("{{\"platform\":\"macos\",\"active\":true,\"allow\":[\"clipboard\"]}}");
+    assert(permissions_is_allowed("clipboard:read"), "bare grants :read");
+    assert(permissions_is_allowed("clipboard:write"), "bare grants :write");
+    assert(permissions_is_allowed("clipboard"), "bare grants bare");
+    assert(!permissions_is_allowed("fs:read"), "other modules still denied");
+}
+
+test "verb grant is exact, no sibling bleed" {
+    permissions_reset_and_load("{{\"platform\":\"macos\",\"active\":true,\"allow\":[\"fs:read\",\"shell:open\"]}}");
+    assert(permissions_is_allowed("fs:read"), "exact verb allowed");
+    assert(!permissions_is_allowed("fs:write"), "sibling verb denied");
+    assert(!permissions_is_allowed("fs"), "bare not granted by a verb");
+    assert(permissions_is_allowed("shell:open"), "shell:open allowed");
+    assert(!permissions_is_allowed("shell:trash"), "shell:trash denied");
+}
+
+// permissions_check's one-per-id denial log can't be asserted without stderr
+// capture; its return value delegates to permissions_is_allowed (covered above).
+
+test "malformed json fails open as inactive" {
+    permissions_reset_and_load("{{not json");
+    // Unparseable manifest: the CLI validated + emitted it, so this only
+    // happens with a corrupted build; failing OPEN preserves the
+    // no-manifest contract.
+    assert(permissions_is_allowed("clipboard"), "unparseable => inactive");
+}

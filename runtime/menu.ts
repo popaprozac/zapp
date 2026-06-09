@@ -20,6 +20,7 @@
 
 import { getBridge } from "./bridge";
 import { Events } from "./events";
+import { ensurePermission } from "./permissions";
 
 export interface MenuItemDef {
   id?: string;
@@ -75,6 +76,7 @@ function stripActions(items: MenuItemDef[]): any[] {
 
 export const Menu = {
   build(items: MenuItemDef[]): MenuHandle {
+    ensurePermission("menu");
     const actions = collectActions(items);
     const clean = stripActions(items);
 

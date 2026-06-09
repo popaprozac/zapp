@@ -94,6 +94,14 @@ extern void json_free_tree(JsonValue* v);
 extern void* app_get_active(void);
 extern const char* service_invoke_native(void* app, const char* method, JsonValue* args);
 
+// Permission gates (native/permissions/permissions.zc + router.zc — Zen-C,
+// plain C symbols). The router gates the webview invoke path; workers reach
+// native through this host object, bypassing the router, so the worker path
+// runs the SAME mapping + check here. permission_id_for_invoke returns "" for
+// ungated methods (user services, __app:/__zapp: plumbing).
+extern bool permissions_check(const char* id, const char* method);
+extern const char* permission_id_for_invoke(const char* method);
+
 // Fan-out fire-and-forget events to every webview's
 // __zappBridge._onEvent listener. Same destination JSC / txiki / bare
 // hit; the per-engine difference is how we get the JS payload value
@@ -460,6 +468,37 @@ static ZjsValue host_invoke_service(ZjsContext* ctx, ZjsValue* argv, uint32_t ar
     if (!method) return zjs_undefined();
     memcpy(method, method_bytes, method_len);
     method[method_len] = '\0';
+
+    // Permission gate (same mapping the router runs for the webview path).
+    // Gated method + manifest active + not granted → throw so the synchronous
+    // invokeService() call rejects/throws on the JS side (parity with the
+    // webview path, which rejects with new Error("PERMISSION_DENIED:<id>")).
+    const char* perm_id = permission_id_for_invoke(method);
+    if (perm_id && perm_id[0] && !permissions_check(perm_id, method)) {
+        char msg[160];
+        snprintf(msg, sizeof(msg), "PERMISSION_DENIED:%s", perm_id);
+        // Build `new Error(msg)` across several allocating zjs_* calls. Per
+        // zjs's value-lifetime contract (zjs.h), a ZjsValue is live only until
+        // the NEXT allocating call, so err_ctor/err_msg must be pinned across
+        // the construction or GC under pressure could reclaim them mid-build
+        // (use-after-free). Mirrors the zjsvalue_to_jsonvalue walker's
+        // pin/unpin stack discipline.
+        ZjsValue err_ctor = zjs_get_global(ctx, "Error");
+        zjs_pin(ctx, err_ctor);
+        ZjsValue err_msg = zjs_new_string(ctx, msg, (uint32_t) strlen(msg));
+        zjs_pin(ctx, err_msg);
+        ZjsValue err = zjs_call(ctx, err_ctor, zjs_undefined(), &err_msg, 1);
+        // Capture the error flag immediately after the call — zjs_had_error is
+        // sticky, so reading it later could reflect an unrelated earlier op.
+        bool ctor_failed = zjs_had_error(ctx);
+        // If Error construction somehow failed, fall back to throwing the
+        // message string itself — still surfaces as a throw on the JS side.
+        zjs_throw(ctx, ctor_failed ? err_msg : err);
+        zjs_unpin(ctx);   // err_msg
+        zjs_unpin(ctx);   // err_ctor
+        free(method);
+        return zjs_undefined();
+    }
 
     JsonValue* args_jv = NULL;
     if (argc >= 2 && !zjs_is_undefined(argv[1]) && !zjs_is_null(argv[1])) {
