@@ -229,6 +229,17 @@ void* darwin_window_get_webview(int32_t numeric_id) {
     return NULL;
 }
 
+// Look up the UIWindow for a numeric window id (mirrors macOS
+// darwin_window_get_by_numeric_id, which returns the NSWindow). panel.m uses
+// this to reach the owner window's rootViewController.view as the host view
+// for a child WKWebView.
+void* darwin_window_get_by_numeric_id(int32_t numeric_id) {
+    if (numeric_id >= 0 && numeric_id < ZAPP_MAX_WINDOW_CALLBACKS && zapp_ios_windows[numeric_id]) {
+        return (__bridge void*)zapp_ios_windows[numeric_id];
+    }
+    return NULL;
+}
+
 void darwin_window_eval_js(int32_t window_id, const char* js) {
     if (window_id < 0 || window_id >= ZAPP_MAX_WINDOW_CALLBACKS) return;
     WKWebView* webview = zapp_ios_webviews[window_id];

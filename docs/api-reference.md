@@ -755,7 +755,7 @@ returns `{0,0}`. Windows: empty list (stub).
 
 ---
 
-## Webview (embedded webviews) — macOS
+## Webview (embedded webviews) — macOS + iOS
 
 `<zapp-webview>` embeds a **full native webview** inside your page — like an
 `<iframe>`, but it can load sites that block iframing (`X-Frame-Options` /
@@ -794,8 +794,14 @@ Host↔embed communication is only `execJS`/`postMessage` ↔ `window.zappHost.p
 page, so: (1) it can lag a frame on fast scroll ("swim"); (2) it always paints
 **above** your DOM — app modals/dropdowns can't cover it; (3) it won't clip to
 `overflow:hidden`/`border-radius` ancestors or follow CSS `transform`. Mitigations
-are a planned follow-up. macOS only in v1 (iOS/Windows are no-ops). DevTools can't
-be opened programmatically on macOS (right-click → Inspect Element).
+are a planned follow-up. Windows is still a no-op (iOS is supported — see below).
+DevTools can't be opened programmatically on macOS (right-click → Inspect Element).
+
+**iOS.** Embedded webviews work on iOS with the same API and the same v1
+limitations. One nuance: on iOS the native embed paints above the page (flat
+z-order, like macOS), so app sheets/modals/popovers cannot cover an embed —
+keep embeds clear of regions you'll overlay with native iOS UI. iPad
+multi-window (UIScene) bucketing is a follow-up; iPhone single-window works today.
 
 ---
 
