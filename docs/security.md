@@ -23,6 +23,9 @@ Additional standing boundaries:
 - **FS path allowlist** — `fs.allow` in zapp.config.ts; every FS call is
   prefix-checked natively before the syscall (plus session grants from
   user-picked dialog paths). Composes with the `fs` permission below.
+  (Note: the `fs` permission gates the framework FS API. The `bare-fs`
+  worker module — `@zappdev/runtime/bare/fs` — is governed by the path
+  allowlist only, not the `fs` permission.)
 - DevTools are disabled in production builds.
 
 ## Permissions manifest
