@@ -67,6 +67,7 @@ extern bool app_get_bootstrap_web_content_inspectable(void);
 extern bool app_get_bootstrap_application_should_terminate_after_last_window_closed(void);
 extern int app_get_bootstrap_max_workers(void);
 extern const char* service_get_manifest_json(void);
+extern const char* permissions_bootstrap_json(void);
 extern const char* darwin_get_theme(void);
 extern const char* darwin_get_power_state(void);
 extern const char* darwin_escape_js_string(const char* raw);
@@ -750,12 +751,18 @@ void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first
 
     NSString* themeStr = [NSString stringWithUTF8String:darwin_get_theme() ?: "light"];
 
+    // permissions: forward the permissions manifest so the runtime can answer
+    // Permissions.query() synchronously and throw PermissionDeniedError on
+    // gated fire-and-forget calls without a round-trip to native.
+    const char* permsJson = permissions_bootstrap_json();
+    if (!permsJson || !permsJson[0]) permsJson = "{\"platform\":\"ios\",\"active\":false,\"allow\":[]}";
+
     NSString* configScript = [NSString stringWithFormat:
         @"(function(){globalThis[Symbol.for('zapp.bootstrapConfig')]="
         "{name:'%@',applicationShouldTerminateAfterLastWindowClosed:%@,"
-        "webContentInspectable:%@,maxWorkers:%d,theme:'%@',powerState:%s};})();",
+        "webContentInspectable:%@,maxWorkers:%d,theme:'%@',powerState:%s,permissions:%s};})();",
         appName, terminate ? @"true" : @"false", inspect ? @"true" : @"false",
-        maxWorkers, themeStr, darwin_get_power_state()];
+        maxWorkers, themeStr, darwin_get_power_state(), permsJson];
     [ucc addUserScript:[[WKUserScript alloc] initWithSource:configScript
         injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
 
