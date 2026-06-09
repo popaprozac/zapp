@@ -218,7 +218,7 @@ export const Tray = {
       icon: opts.icon,
       title: opts.title ?? "",
       tooltip: opts.tooltip ?? "",
-      template: opts.template ?? true,
+      template: opts.template ?? false,
       menu: cleanMenu,
     });
 
@@ -228,7 +228,7 @@ export const Tray = {
       setIcon(path: string, iconOpts?: { template?: boolean }) {
         postAction("tray:setIcon", {
           id, path,
-          template: iconOpts?.template ?? true,
+          template: iconOpts?.template ?? false,
         });
       },
 

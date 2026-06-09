@@ -32,7 +32,7 @@ async function prepareIOSIcon(
   config: { ios?: { icon?: string; minimumSystemVersion?: string }; macos?: { icon?: string } },
   target: BuildTarget,
   appBundle: string,
-): Promise<string | null> {
+): Promise<{ iconName: string; plistFragment: string } | null> {
   if (!isIOSTarget(target)) return null;
   const png = resolveIOSIconPng(root, config);
   if (!png) {
@@ -52,7 +52,10 @@ async function prepareIOSIcon(
     for (const f of result.files) {
       await cp(f.src, path.join(appBundle, f.dest));
     }
-    return result.plistValue; // "AppIcon"
+    // plistValue = "AppIcon" (top-level CFBundleIconName); plistFragment =
+    // actool's CFBundleIcons / CFBundleIcons~ipad dicts that SpringBoard
+    // needs to actually render the home-screen icon.
+    return { iconName: result.plistValue, plistFragment: result.plistFragment ?? "" };
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -66,8 +69,9 @@ async function writeIOSDevPlist(opts: {
   config: { name: string; identifier?: string; version?: string; ios?: { minimumSystemVersion?: string; deviceFamily?: string } };
   target: BuildTarget;
   iconName?: string | null;
+  iconPlistFragment?: string | null;
 }): Promise<void> {
-  const { binaryPath, config, target, iconName } = opts;
+  const { binaryPath, config, target, iconName, iconPlistFragment } = opts;
   const appBundle = path.dirname(binaryPath);
   const exeName = path.basename(binaryPath);
   const bundleId = config.identifier ?? `com.zapp.${config.name.replace(/\s+/g, "-").toLowerCase()}.dev`;
@@ -97,6 +101,7 @@ async function writeIOSDevPlist(opts: {
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleSupportedPlatforms</key><array><string>${platformName === "iphonesimulator" ? "iPhoneSimulator" : "iPhoneOS"}</string></array>
   ${iconName ? `<key>CFBundleIconName</key><string>${iconName}</string>` : ""}
+  ${iconPlistFragment ?? ""}
   <key>DTPlatformName</key><string>${platformName}</string>
   <key>LSRequiresIPhoneOS</key><true/>
   <key>MinimumOSVersion</key><string>${minVersion}</string>
@@ -382,8 +387,12 @@ async function runDev(root: string) {
     // iOS: write Info.plist into the bundle, ad-hoc sign, install +
     // launch on the booted sim. Same flow as runBuild's iOS path.
     const appBundle = path.dirname(nativeOut);
-    const iconName = await prepareIOSIcon(root, config, target, appBundle);
-    await writeIOSDevPlist({ binaryPath: nativeOut, config, target, iconName });
+    const iconInfo = await prepareIOSIcon(root, config, target, appBundle);
+    await writeIOSDevPlist({
+      binaryPath: nativeOut, config, target,
+      iconName: iconInfo?.iconName ?? null,
+      iconPlistFragment: iconInfo?.plistFragment ?? null,
+    });
     const signProc = Bun.spawn(["codesign", "--force", "--sign", "-", appBundle], {
       stdout: "pipe", stderr: "pipe",
     });
@@ -610,8 +619,12 @@ async function runBuild(root: string) {
   // entitlements, code-sign, etc. — this is the spike-grade plist
   // that just makes the app launch.
   if (isIOSTarget(target)) {
-    const iconName = await prepareIOSIcon(root, config, target, path.dirname(nativeOut));
-    await writeIOSDevPlist({ binaryPath: nativeOut, config, target, iconName });
+    const iconInfo = await prepareIOSIcon(root, config, target, path.dirname(nativeOut));
+    await writeIOSDevPlist({
+      binaryPath: nativeOut, config, target,
+      iconName: iconInfo?.iconName ?? null,
+      iconPlistFragment: iconInfo?.plistFragment ?? null,
+    });
     // Re-sign the bundle ad-hoc so the Info.plist is bound into the
     // signature. clang's linker emits an `adhoc,linker-signed` blob
     // covering only the Mach-O — modern iOS Simulator (macOS Sequoia+)

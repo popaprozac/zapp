@@ -16,6 +16,16 @@ export interface IconResult {
   plistKey: "CFBundleIconName" | "CFBundleIconFile";
   /** Info.plist value */
   plistValue: string;
+  /**
+   * Extra raw Info.plist `<dict>` body (XML key/value pairs) to splice
+   * verbatim into the app Info.plist. iOS only: actool's
+   * `--output-partial-info-plist` emits the `CFBundleIcons` /
+   * `CFBundleIcons~ipad` dicts (`CFBundlePrimaryIcon → CFBundleIconFiles`)
+   * that SpringBoard reads to render the home-screen icon. A normal Xcode
+   * build merges this partial plist into Info.plist; `CFBundleIconName`
+   * ALONE leaves the icon blank.
+   */
+  plistFragment?: string;
 }
 
 /**
@@ -232,11 +242,28 @@ export async function buildIOSAssetCatalog(
     return null;
   }
 
+  // actool's partial plist carries the CFBundleIcons / CFBundleIcons~ipad
+  // dicts (CFBundlePrimaryIcon → CFBundleIconFiles) that SpringBoard reads
+  // to render the home-screen icon. A normal Xcode build merges this into
+  // Info.plist; we splice its <dict> body verbatim. Without it, a bundle
+  // with only CFBundleIconName shows a blank icon (Assets.car present but
+  // never resolved).
+  let plistFragment = "";
+  try {
+    const partialXml = await Bun.file(path.join(workDir, "actool-partial.plist")).text();
+    const open = partialXml.indexOf("<dict>");
+    const close = partialXml.lastIndexOf("</dict>");
+    if (open >= 0 && close > open) {
+      plistFragment = partialXml.slice(open + "<dict>".length, close).trim();
+    }
+  } catch { /* best-effort; CFBundleIconName remains as the fallback */ }
+
   return {
     type: "assetcatalog",
     files: [{ src: carPath, dest: "Assets.car" }],
     plistKey: "CFBundleIconName",
     plistValue: "AppIcon",
+    plistFragment,
   };
 }
 
