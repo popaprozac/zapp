@@ -25,11 +25,17 @@ import {
   Window, WindowEvent, type WindowHandle, type WindowOptions,
   type WindowPayload, type WindowSizePayload,
 
+  // Screens / displays
+  Screen, type Display, type DisplayRect, type CursorPoint,
+
+  // Embedded webviews (<zapp-webview>)
+  Webview, ZappWebviewElement, type PanelEvent, type WebviewCreateOptions,
+
   // IPC to native services
   Services, type InvokeOptions, type CancellablePromise,
 
   // Workers
-  Worker, SharedWorker, SharedWorkerPort, type WorkerMessageEvent,
+  Worker, SharedWorker, SharedWorkerPort, Workers, type WorkerMessageEvent,
 
   // UI surfaces
   Dialog, type OpenFileOptions, type SaveFileOptions, type MessageOptions,
@@ -37,6 +43,12 @@ import {
   ContextMenu, type ContextMenuOptions,
   Notification, type NotificationOptions, type ScheduleOptions, type PermissionStatus,
   Dock,
+  Tray, type TrayOptions, type TrayHandle, type AttachWindowOptions,
+
+  // System integration
+  Clipboard, type ClipboardFormat,
+  Shortcuts,
+  Protocols, type ProtocolRequest, type ProtocolResponse, type ProtocolHandler,
 
   // Cross-context coordination
   Sync, type SyncWaitOptions,
@@ -96,6 +108,18 @@ await Dialog.openFile({ multiple: true });
 Menu.build([{ role: "appMenu" }, ...]);
 await Notification.show({ title: "Hello", body: "World" });
 Dock.setBadge("3");
+const tray = Tray.create({ icon: "build/menubar.png", menu: [...] });
+
+// System integration
+await Clipboard.writeText("hello");
+await Shortcuts.register("CmdOrCtrl+Shift+K", () => { ... });  // macOS
+Protocols.register("asset", async (req) => ({ body: ..., mime: "image/svg+xml" }));
+
+// Screens
+const displays = await Screen.getAll();   // bounds / workArea / scaleFactor
+
+// Embedded webview (loads X-Frame-Options-blocked sites; sandboxed)
+document.body.appendChild(Webview.create({ src: "https://github.com" }));
 ```
 
 ## Reference

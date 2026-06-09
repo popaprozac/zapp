@@ -759,7 +759,9 @@ returns `{0,0}`. Windows: empty list (stub).
 
 `<zapp-webview>` embeds a **full native webview** inside your page — like an
 `<iframe>`, but it can load sites that block iframing (`X-Frame-Options` /
-`frame-ancestors`), runs in its own process, and keeps its own session.
+`frame-ancestors`) and runs in its own webview process. (In v1 the embed shares
+the app's default session/data store — per-embed sessions are what the reserved
+`partition` attribute will enable.)
 
 ```html
 <zapp-webview src="https://example.com" style="width:360px;height:480px"></zapp-webview>
@@ -1682,8 +1684,11 @@ reads that might return empty/null.
 
 ### Platform support
 
-macOS only today. Windows is a no-op until WebView2 / Win32 clipboard
-integration lands (planned in `WINDOWS_PORTING.md`).
+macOS (NSPasteboard) + iOS (UIPasteboard) — text / HTML / image on both.
+`readFiles()` on iOS is best-effort: it returns `file://` URLs found on the
+pasteboard, but most iOS share flows hand files through extension contexts
+rather than the pasteboard, so it's commonly empty. Windows is a no-op until
+WebView2 / Win32 clipboard integration lands (planned in `WINDOWS_PORTING.md`).
 
 ---
 

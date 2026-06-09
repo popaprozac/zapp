@@ -131,13 +131,15 @@ For nested dicts/arrays, drop a partial XML file into `build/macos/Info.plist.ex
 ## Features
 
 - **Window Management** — Create, resize, fullscreen, always-on-top. 11 typed events with payloads.
-- **Application Menus** — Default OS menus + custom menu API with roles, accelerators, and inline actions.
+- **Application Menus** — Default OS menus + custom menu API with roles, accelerators, inline actions, and optional item icons (SF Symbols, file paths, or data URLs).
 - **Context Menus** — Filtered default (no Reload/Back) + `ContextMenu.show()` for custom native menus.
 - **Dialogs** — Native file open/save and message dialogs.
 - **Draggable Regions** — `data-zapp-drag-region` for custom titlebar apps. Buttons, inputs, links, and other interactive elements inside a drag region stay clickable by default; override with `style="--zapp-drag: drag"` or `--zapp-drag: no-drag` to force either behavior. Native window metrics (`--zapp-titlebar-height`, `--zapp-content-inset-left`) are injected as CSS variables so custom titlebars size correctly without hard-coded magic numbers.
 - **Close Prevention** — Cancellable close events from native or JS. "Unsaved changes?" dialogs.
 - **Services** — Define native RPC in Zen-C, call from JS. Auto-generated TypeScript bindings. Drop `.m` (macOS) or `.c` (Windows) files anywhere under `zapp/` for ObjC/C-backed services (Keychain, AVFoundation, libsqlite3, etc.) — auto-compiled and linked.
 - **Workers (unified)** — Webview-spawned (`new Worker("./foo.ts")`) or headless (declared in `zapp.config.ts`). Both share the full runtime API — `Window.create`, `Events`, `Services`, `Notification`, `Dock`, `Sync` — via a zero-overhead direct host bridge (no IPC). Six engines available per-worker (zjs default; bare-jsc, bare-v8, bare-quickjs, bare-mqjs, bare-hermes also ship). Bytecode AOT via `bytecode: true` on zjs / bare-hermes.
+- **Embedded Webviews** — `<zapp-webview src>` embeds a full native webview inside your page (macOS + iOS). Like an `<iframe>`, but it loads sites that block iframing (`X-Frame-Options` / `frame-ancestors`) and stays sandboxed — no bridge access; host↔embed talk only via `postMessage`/`execJS`.
+- **Screens** — `Screen.getAll()` / `getPrimary()` / `getCursorPoint()` + `Window.getScreen()` with bounds, work area, scale factor, and a `SCREENS_CHANGED` event. Top-left global coordinates everywhere.
 - **Sync** — `wait`/`notify` across contexts without SharedArrayBuffer.
 - **Events** — Typed cross-context events with autocomplete.
 - **Security** — CSP, navigation restrictions, path traversal prevention, dev tools disabled in production.
@@ -157,6 +159,8 @@ For nested dicts/arrays, drop a partial XML file into `build/macos/Info.plist.ex
 | Clipboard (text / HTML / image / files) | ✅ | ✅ UIPasteboard | ⚠️ text only |
 | File drag-drop into webview | ✅ | ✅ UIDropInteraction | ⏳ |
 | Custom protocols (`asset://`, ...) | ✅ | ✅ | ⏳ |
+| Embedded webviews (`<zapp-webview>`) | ✅ | ✅ | ⏳ |
+| Screens / displays API | ✅ | ✅ (built-in display) | ⏳ |
 | Navigation allowlist | ✅ | ✅ | ⏳ |
 | Workers — `zjs` (default, cross-platform) | ✅ | ✅ | ✅ |
 | Workers — `bare-jsc` (macOS JIT) | ✅ (JIT) | ✅ (no JIT, Apple policy) | n/a |
