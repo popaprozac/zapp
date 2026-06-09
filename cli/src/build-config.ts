@@ -69,9 +69,10 @@ export async function generateBuildConfig(opts: BuildConfigOptions): Promise<str
   // platform is baked here so the runtime support table needs no extra
   // carrier. active:false (field absent) short-circuits to allow-all.
   const resolvedPerms = resolvePermissions(config.permissions);
-  const permsPlatform = isIOSTarget(target ?? detectTarget())
+  const resolvedTarget = target ?? detectTarget();
+  const permsPlatform = isIOSTarget(resolvedTarget)
     ? "ios"
-    : process.platform === "win32"
+    : resolvedTarget === "windows"
       ? "windows"
       : "macos";
   const permsObj = {
@@ -84,6 +85,10 @@ export async function generateBuildConfig(opts: BuildConfigOptions): Promise<str
   // Escape them by doubling: `{` → `{{`, `}` → `}}` — the Zen-C
   // runtime emits a single literal brace. Apply AFTER the JSON-escape
   // pass so the `\"` sequences are already in place.
+  // fsAllowJson/protocolsJson encode arrays ([…]) so they never emit
+  // bare braces — permsObj is the first object-valued JSON in this file,
+  // hence the first time brace-escaping is required. Backslash-in-ids is
+  // safe because the permission catalog is fixed lowercase ASCII.
   const permissionsJson = JSON.stringify(permsObj)
     .replace(/"/g, '\\"')
     .replace(/\{/g, "{{")
