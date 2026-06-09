@@ -1029,6 +1029,10 @@ static js_value_t* bare_host_dock(js_env_t* env, js_callback_info_t* info) {
     js_get_undefined(env, &undef);
     if (argc < 1) return undef;
 
+    // Permission gate — dock bypasses invokeService + the router, so
+    // the check lives here. Denied → undef (the fn's own miss return).
+    if (!permissions_check("dock", "Dock")) return undef;
+
     char action[32];
     size_t alen = 0;
     js_get_value_string_utf8(env, argv[0], (utf8_t*)action, sizeof(action) - 1, &alen);
