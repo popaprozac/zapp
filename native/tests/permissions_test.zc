@@ -41,6 +41,9 @@ test "verb grant is exact, no sibling bleed" {
     assert(!permissions_is_allowed("shell:trash"), "shell:trash denied");
 }
 
+// permissions_check's one-per-id denial log can't be asserted without stderr
+// capture; its return value delegates to permissions_is_allowed (covered above).
+
 test "malformed json fails open as inactive" {
     permissions_reset_and_load("{{not json");
     // Unparseable manifest: the CLI validated + emitted it, so this only

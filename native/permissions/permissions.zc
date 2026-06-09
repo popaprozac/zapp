@@ -45,10 +45,14 @@ raw {
     static int   permissions_active = 0;
     static char* permissions_allow[PERMISSIONS_MAX];
     static int   permissions_allow_count = 0;
+    // Denial log caps at PERMISSIONS_MAX distinct ids; extras skip logging (never overflow).
     static char* permissions_logged[PERMISSIONS_MAX];
     static int   permissions_logged_count = 0;
 }
 
+// Exposed for testing (permissions_test.zc). In production, call only once at
+// startup; calling mid-run resets the allow list.
+//
 // Reset all state and (re)parse `json`. On parse error or a missing/false
 // `active` field the manifest stays inactive (fail-open). When active, up to
 // PERMISSIONS_MAX allow strings are copied out of the parse tree.
@@ -134,7 +138,6 @@ fn permissions_ensure_init() -> void {
 fn permissions_is_allowed(id: string) -> bool {
     permissions_ensure_init();
 
-    let allowed: bool = false;
     raw {
         if (!permissions_active) return true;
         if (id == NULL || id[0] == '\0') return false;
@@ -159,7 +162,8 @@ fn permissions_is_allowed(id: string) -> bool {
             }
         }
     }
-    return allowed;
+    // All positive paths return directly from the raw block above.
+    return false;
 }
 
 // Gate `id` for `method` (a human-readable call site, e.g. "Clipboard.read").
