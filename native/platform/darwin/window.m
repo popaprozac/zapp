@@ -10,6 +10,32 @@
 extern void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first_mouse,
                                   const char* url_override, int32_t numeric_id_pre_alloc,
                                   bool transparent_background);
+// Extended creation path (native-sidebar). container_view mounts the webview
+// into a caller-provided NSView; identity_window_id (>=0) injects win-<that>
+// as the JS identity while transport stays on numeric_id_pre_alloc; is_sidebar
+// sets the isSidebar marker. Declared in webview.h; redeclared here because
+// window.m imports window.h, not webview.h.
+extern void darwin_webview_create_ext(void* window_ptr, bool inspectable, bool accept_first_mouse,
+                                      const char* url_override, int32_t numeric_id_pre_alloc,
+                                      bool transparent_background,
+                                      void* container_view, int32_t identity_window_id,
+                                      bool is_sidebar);
+// Sidebar split registry (sidebar.m). register wires KVO + resize observation
+// and emits sidebar-collapsed/expanded/resized into both panes; unregister
+// tears the observers down. Keyed by the host NSWindow pointer.
+extern void zapp_sidebar_register(void* window_ptr, void* splitVC, void* sidebarItem,
+                                  int32_t host_id, int32_t sidebar_slot_id);
+extern void zapp_sidebar_unregister(void* window_ptr);
+// Sidebar opts accessors (window.zc). sidebarNumericId is the SECOND slot
+// pre-allocated from WindowManager.next_id for the sidebar webview's transport.
+extern const char* wopts_sidebar_url(void* opts);
+extern const char* wopts_sidebar_material(void* opts);
+extern int32_t wopts_sidebar_width(void* opts);
+extern int32_t wopts_sidebar_min_width(void* opts);
+extern int32_t wopts_sidebar_max_width(void* opts);
+extern bool wopts_sidebar_collapsible(void* opts);
+extern bool wopts_sidebar_collapsed(void* opts);
+extern int32_t wopts_sidebar_numeric_id(void* opts);
 extern int zapp_dispatch_event(int window_id, int event_id, int w, int h, int x, int y);
 // Primary display height (top-left global origin flip). Defined in screen.m.
 extern double zapp_primary_screen_height(void);
@@ -42,6 +68,28 @@ extern double zapp_primary_screen_height(void);
 
 static WKWebView* zapp_webviews[ZAPP_MAX_WINDOW_CALLBACKS] = {0};
 static NSString* zapp_window_ids[ZAPP_MAX_WINDOW_CALLBACKS] = {0};
+
+// host slot -> sidebar slot, for window-event fan-out. -1 = no sidebar. Set in
+// the sidebar construction branch; the entry is harmless to leave set after a
+// close (the dispatch helpers no-op on a nil-ed slot), so we don't clear it.
+static int32_t zapp_sidebar_slot_of[ZAPP_MAX_WINDOW_CALLBACKS];
+static bool zapp_sidebar_slot_of_init = false;
+
+static void zapp_set_sidebar_slot(int32_t host_slot, int32_t sidebar_slot) {
+    if (!zapp_sidebar_slot_of_init) {
+        for (int i = 0; i < ZAPP_MAX_WINDOW_CALLBACKS; i++) zapp_sidebar_slot_of[i] = -1;
+        zapp_sidebar_slot_of_init = true;
+    }
+    if (host_slot >= 0 && host_slot < ZAPP_MAX_WINDOW_CALLBACKS) {
+        zapp_sidebar_slot_of[host_slot] = sidebar_slot;
+    }
+}
+
+static int32_t zapp_sidebar_slot_for(int32_t host_slot) {
+    if (!zapp_sidebar_slot_of_init) return -1;
+    if (host_slot < 0 || host_slot >= ZAPP_MAX_WINDOW_CALLBACKS) return -1;
+    return zapp_sidebar_slot_of[host_slot];
+}
 
 static void zapp_register_webview(int32_t numericId, WKWebView* webview, NSString* windowId) {
     if (numericId >= 0 && numericId < ZAPP_MAX_WINDOW_CALLBACKS) {
@@ -110,6 +158,19 @@ void zapp_dispatch_event_to_js(int32_t window_id, int32_t event_id, int32_t w, i
         encoding:NSUTF8StringEncoding
         freeWhenDone:NO];
     [webview evaluateJavaScript:js completionHandler:nil];
+
+    // Fan out to the sidebar pane: it identifies as the same host window, so
+    // the SAME JS (targeting wid = win-<host>) lands its handlers there too.
+    // The sidebar already receives its own collapse/resize events from
+    // sidebar.m; this is for the host's resize/focus/blur/fullscreen/etc.
+    int32_t sidebar_slot = zapp_sidebar_slot_for(window_id);
+    if (sidebar_slot >= 0 && sidebar_slot != window_id &&
+        sidebar_slot < ZAPP_MAX_WINDOW_CALLBACKS) {
+        WKWebView* sidebarWebview = zapp_webviews[sidebar_slot];
+        if (sidebarWebview) {
+            [sidebarWebview evaluateJavaScript:js completionHandler:nil];
+        }
+    }
 }
 
 // --- Window Delegate ---
@@ -121,6 +182,16 @@ static const char kZappWindowDelegateKey = 0;
 @property (nonatomic, copy) NSString* ownerId;
 @property (nonatomic, copy) NSString* windowId;
 @property (nonatomic, assign) int32_t numericId;
+// Sidebar webview's transport slot, or -1 for non-sidebar windows. Set in the
+// construction branch; used to fan window events into the sidebar pane and to
+// clear/tear-down its dispatch slot on close/destroy.
+@property (nonatomic, assign) int32_t sidebarNumericId;
+// Weak refs to the two pane webviews — needed because in a split layout the
+// host window's contentView is the NSSplitView, not a WKWebView, so the
+// teardown path can't rederive them via [window contentView]. Weak so they
+// don't keep the webviews alive past the split controller / window release.
+@property (nonatomic, weak) WKWebView* mainWebview;
+@property (nonatomic, weak) WKWebView* sidebarWebview;
 @property (nonatomic, assign) BOOL bridgeReady;
 @property (nonatomic, assign) BOOL pendingFocusEvent;
 @property (nonatomic, assign) BOOL wasZoomed;
@@ -137,6 +208,7 @@ static const char kZappWindowDelegateKey = 0;
     self = [super init];
     if (self) {
         _numericId = -1;
+        _sidebarNumericId = -1;
         _bridgeReady = NO;
         _pendingFocusEvent = NO;
         _wasZoomed = NO;
@@ -181,6 +253,13 @@ static const char kZappWindowDelegateKey = 0;
     if (self.numericId >= 0 && self.numericId < ZAPP_MAX_WINDOW_CALLBACKS) {
         zapp_webviews[self.numericId] = nil;
         zapp_window_ids[self.numericId] = nil;
+    }
+    // Sidebar pane shares the same reversible-close contract: clear its
+    // dispatch slot (no stale evals into a closed pane) but DON'T tear the
+    // WKWebView down here — that's darwin_window_destroy's job.
+    if (self.sidebarNumericId >= 0 && self.sidebarNumericId < ZAPP_MAX_WINDOW_CALLBACKS) {
+        zapp_webviews[self.sidebarNumericId] = nil;
+        zapp_window_ids[self.sidebarNumericId] = nil;
     }
 }
 
@@ -359,6 +438,28 @@ void darwin_window_set_bridge_ready(const char* window_id) {
     }
 }
 
+// --- Material name → NSVisualEffectMaterial ---
+// Shared by the vibrancy path (whole-window blur) and the sidebar's optional
+// per-pane material override. Names mirror runtime/window.ts's Material const.
+// Unknown / empty names fall back to WindowBackground.
+static NSVisualEffectMaterial zapp_material_from_name(const char* name) {
+    if (!name || !name[0]) return NSVisualEffectMaterialWindowBackground;
+    NSString* mat = [NSString stringWithUTF8String:name];
+    if (!mat) return NSVisualEffectMaterialWindowBackground;
+    if      ([mat isEqualToString:@"sidebar"])               return NSVisualEffectMaterialSidebar;
+    else if ([mat isEqualToString:@"headerView"])            return NSVisualEffectMaterialHeaderView;
+    else if ([mat isEqualToString:@"titlebar"])              return NSVisualEffectMaterialTitlebar;
+    else if ([mat isEqualToString:@"menu"])                  return NSVisualEffectMaterialMenu;
+    else if ([mat isEqualToString:@"popover"])               return NSVisualEffectMaterialPopover;
+    else if ([mat isEqualToString:@"hudWindow"])             return NSVisualEffectMaterialHUDWindow;
+    else if ([mat isEqualToString:@"fullScreenUI"])          return NSVisualEffectMaterialFullScreenUI;
+    else if ([mat isEqualToString:@"sheet"])                 return NSVisualEffectMaterialSheet;
+    else if ([mat isEqualToString:@"contentBackground"])     return NSVisualEffectMaterialContentBackground;
+    else if ([mat isEqualToString:@"underWindowBackground"]) return NSVisualEffectMaterialUnderWindowBackground;
+    else if ([mat isEqualToString:@"underPageBackground"])   return NSVisualEffectMaterialUnderPageBackground;
+    return NSVisualEffectMaterialWindowBackground;
+}
+
 // --- Window C API ---
 
 void* darwin_window_create(WindowOptions* opts) {
@@ -480,21 +581,137 @@ void* darwin_window_create(WindowOptions* opts) {
         // time out — observed in dev).
         const char* vibrancyName = wopts_vibrancy(opts);
         bool useVibrancy = (vibrancyName && vibrancyName[0] != '\0');
-        if (useVibrancy) {
-            NSString* mat = [NSString stringWithUTF8String:vibrancyName];
-            NSVisualEffectMaterial material = NSVisualEffectMaterialWindowBackground;
-            if      ([mat isEqualToString:@"sidebar"])               material = NSVisualEffectMaterialSidebar;
-            else if ([mat isEqualToString:@"headerView"])            material = NSVisualEffectMaterialHeaderView;
-            else if ([mat isEqualToString:@"titlebar"])              material = NSVisualEffectMaterialTitlebar;
-            else if ([mat isEqualToString:@"menu"])                  material = NSVisualEffectMaterialMenu;
-            else if ([mat isEqualToString:@"popover"])               material = NSVisualEffectMaterialPopover;
-            else if ([mat isEqualToString:@"hudWindow"])             material = NSVisualEffectMaterialHUDWindow;
-            else if ([mat isEqualToString:@"fullScreenUI"])          material = NSVisualEffectMaterialFullScreenUI;
-            else if ([mat isEqualToString:@"sheet"])                 material = NSVisualEffectMaterialSheet;
-            else if ([mat isEqualToString:@"contentBackground"])     material = NSVisualEffectMaterialContentBackground;
-            else if ([mat isEqualToString:@"underWindowBackground"]) material = NSVisualEffectMaterialUnderWindowBackground;
-            else if ([mat isEqualToString:@"underPageBackground"])   material = NSVisualEffectMaterialUnderPageBackground;
+        // Material enum shared by the whole-window vibrancy path and the
+        // sidebar's optional per-pane material override (helper above).
+        NSVisualEffectMaterial material = zapp_material_from_name(vibrancyName);
 
+        const char* sidebarUrl = wopts_sidebar_url(opts);
+        bool useSidebar = (sidebarUrl && sidebarUrl[0] != '\0');
+
+        // Sidebar webview's transport slot is pre-allocated by
+        // WindowManager.create from the SAME id-space as the host's (window.zc).
+        // -1 when no sidebar; cached on the delegate below for fan-out/teardown.
+        int32_t host_slot = wopts_numeric_id_pre_alloc(opts);
+        int32_t sidebar_slot = wopts_sidebar_numeric_id(opts);
+
+        // Captured for the delegate (teardown reaches webviews through these,
+        // since [window contentView] is the NSSplitView in the sidebar case).
+        WKWebView* mainWebviewRef = nil;
+        WKWebView* sidebarWebviewRef = nil;
+
+        if (useSidebar) {
+            // Sidebar windows root on an NSSplitViewController (the split must
+            // be the window's root BEFORE any webview loads — re-parenting a
+            // WKWebView after first load resets its content process and breaks
+            // the bridge bootstrap). Two full webviews are born in their final
+            // containers, never re-parented.
+            //
+            // Chrome: default to the standard sidebar-app look (full-size
+            // content, hidden title, transparent titlebar) unless titleBarStyle
+            // was set explicitly. tbs==0 is Default/unset (wopts_title_bar_style_tag).
+            if (tbs == 0) {
+                [window setStyleMask:([window styleMask] | NSWindowStyleMaskFullSizeContentView)];
+                [window setTitleVisibility:NSWindowTitleHidden];
+                [window setTitlebarAppearsTransparent:YES];
+            }
+
+            NSViewController* sideVC = [[NSViewController alloc] init];
+            sideVC.view = [[NSView alloc] initWithFrame:
+                NSMakeRect(0, 0, (CGFloat)wopts_sidebar_width(opts), (CGFloat)wopts_height(opts))];
+            NSViewController* contentVC = [[NSViewController alloc] init];
+            contentVC.view = [[NSView alloc] initWithFrame:[window contentView].frame];
+
+            // Vibrancy on the MAIN pane only (orthogonal to the sidebar
+            // material): wrap contentVC's view in the vfx exactly like the
+            // legacy path, and mount the main webview into it.
+            NSView* mainContainer = contentVC.view;
+            if (useVibrancy) {
+                NSVisualEffectView* vfx = [[NSVisualEffectView alloc] initWithFrame:contentVC.view.frame];
+                vfx.material = material;
+                vfx.blendingMode = NSVisualEffectBlendingModeBehindWindow;
+                vfx.state = NSVisualEffectStateFollowsWindowActiveState;
+                vfx.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+                contentVC.view = vfx;
+                mainContainer = vfx;
+            }
+
+            // Sidebar material override: only when the app asked for a specific
+            // material other than the default "sidebar"/empty. Default leaves
+            // the .sidebar split item's own system material (liquid glass on
+            // macOS 26) untouched. When overridden, install a behind-window vfx
+            // as the sidebar pane's view so the webview (transparent) shows it.
+            NSView* sidebarContainer = sideVC.view;
+            const char* sidebarMaterialName = wopts_sidebar_material(opts);
+            bool sidebarMaterialOverride = sidebarMaterialName && sidebarMaterialName[0] != '\0' &&
+                                           strcmp(sidebarMaterialName, "sidebar") != 0;
+            if (sidebarMaterialOverride) {
+                NSVisualEffectView* svfx = [[NSVisualEffectView alloc] initWithFrame:sideVC.view.bounds];
+                svfx.material = zapp_material_from_name(sidebarMaterialName);
+                svfx.blendingMode = NSVisualEffectBlendingModeBehindWindow;
+                svfx.state = NSVisualEffectStateFollowsWindowActiveState;
+                svfx.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+                sideVC.view = svfx;
+                sidebarContainer = svfx;
+            }
+
+            NSSplitViewItem* sideItem = [NSSplitViewItem sidebarWithViewController:sideVC];
+            sideItem.minimumThickness = (CGFloat)wopts_sidebar_min_width(opts);
+            sideItem.maximumThickness = (CGFloat)wopts_sidebar_max_width(opts);
+            sideItem.canCollapse = wopts_sidebar_collapsible(opts);
+            NSSplitViewItem* contentItem = [NSSplitViewItem splitViewItemWithViewController:contentVC];
+
+            NSSplitViewController* splitVC = [[NSSplitViewController alloc] init];
+            [splitVC addSplitViewItem:sideItem];
+            [splitVC addSplitViewItem:contentItem];
+            window.contentViewController = splitVC;
+
+            // Initial width: position the divider after the controller is the
+            // window's root. Collapse last so KVO has the registry (Task 3)
+            // wired — but register happens below, so a create-time collapsed
+            // sidebar just starts collapsed; no event is expected at create.
+            [splitVC.splitView setPosition:(CGFloat)wopts_sidebar_width(opts) ofDividerAtIndex:0];
+            if (wopts_sidebar_collapsed(opts)) sideItem.collapsed = YES;
+
+            // Two full webviews. Main → host slot, self identity, legacy
+            // transparent rule (useVibrancy). Sidebar → its own transport slot,
+            // HOST identity (win-<host> in JS), always transparent so the pane
+            // material shows through, is_sidebar marker set.
+            darwin_webview_create_ext((__bridge void*)window, inspectable, accept_first_mouse,
+                                      custom_url, host_slot, useVibrancy,
+                                      (__bridge void*)mainContainer, -1, false);
+            darwin_webview_create_ext((__bridge void*)window, inspectable, accept_first_mouse,
+                                      sidebarUrl, sidebar_slot, true,
+                                      (__bridge void*)sidebarContainer, host_slot, true);
+
+            // Register BOTH webviews in the dispatch table here. The normal
+            // registration path (darwin_window_register_numeric_id) walks
+            // [window contentView] which is now the NSSplitView — it can't find
+            // either webview that way, so we register them explicitly from the
+            // containers we hold. zapp_register_webview is static-in-file.
+            NSString* hostWindowId = [NSString stringWithFormat:@"win-%d", host_slot];
+            for (NSView* sub in mainContainer.subviews) {
+                if ([sub isKindOfClass:[WKWebView class]]) {
+                    mainWebviewRef = (WKWebView*)sub;
+                    zapp_register_webview(host_slot, mainWebviewRef, hostWindowId);
+                    break;
+                }
+            }
+            for (NSView* sub in sidebarContainer.subviews) {
+                if ([sub isKindOfClass:[WKWebView class]]) { sidebarWebviewRef = (WKWebView*)sub; break; }
+            }
+            if (sidebarWebviewRef) {
+                // The sidebar's JS identity is the HOST id (win-<host>), so its
+                // window-id table entry mirrors that — transport routes by the
+                // slot index, identity by this string. (See _ext's identity note.)
+                zapp_register_webview(sidebar_slot, sidebarWebviewRef, hostWindowId);
+            }
+
+            // Record host→sidebar for window-event fan-out (zapp_dispatch_event_to_js).
+            zapp_set_sidebar_slot(host_slot, sidebar_slot);
+
+            zapp_sidebar_register((__bridge void*)window, (__bridge void*)splitVC,
+                                  (__bridge void*)sideItem, host_slot, sidebar_slot);
+        } else if (useVibrancy) {
             NSRect contentRect = [window contentView].frame;
             NSVisualEffectView* vfx = [[NSVisualEffectView alloc] initWithFrame:contentRect];
             vfx.material = material;
@@ -504,15 +721,23 @@ void* darwin_window_create(WindowOptions* opts) {
             [window setContentView:vfx];
         }
 
-        darwin_webview_create((__bridge void*)window, inspectable, accept_first_mouse,
-                              custom_url, wopts_numeric_id_pre_alloc(opts), useVibrancy);
+        if (!useSidebar) {
+            // Legacy single-webview path — byte-for-byte equivalent to before
+            // (the vibrancy vfx, if any, was installed as contentView above).
+            darwin_webview_create((__bridge void*)window, inspectable, accept_first_mouse,
+                                  custom_url, host_slot, useVibrancy);
+        }
 
         NSString* windowId = [NSString stringWithFormat:@"win-%p", window];
         NSString* ownerId = [NSString stringWithFormat:@"owner-%p", window];
         ZappWindowDelegate* delegate = [[ZappWindowDelegate alloc] init];
         delegate.windowId = windowId;
         delegate.ownerId = ownerId;
-        // numericId set by darwin_window_register_numeric_id after creation
+        // numericId set by darwin_window_register_numeric_id after creation.
+        // Sidebar bookkeeping for event fan-out + teardown (-1 when no sidebar).
+        delegate.sidebarNumericId = useSidebar ? sidebar_slot : -1;
+        delegate.mainWebview = mainWebviewRef;       // nil in the non-sidebar path
+        delegate.sidebarWebview = sidebarWebviewRef;  // nil in the non-sidebar path
 
         // Visibility model: visible:true is cosmetic — apps say "show me
         // when ready", not "show me right now even if blank". The window
@@ -534,6 +759,22 @@ void* darwin_window_create(WindowOptions* opts) {
 
         return (__bridge_retained void*)window;
     }
+}
+
+// Tear a single WKWebView down (alpha.29 ProcessThrottler brk#1 hardening):
+// stop pending loads → remove the script message handler (drops WebKit's strong
+// ref to ZappMsgHandler + captured blocks) → nil delegates (final in-flight
+// callbacks become no-ops instead of retaining the webview through destruction).
+// No-op on nil. Used for the main webview and (in the split case) both panes.
+static void zapp_teardown_webview(WKWebView* wv) {
+    if (!wv) return;
+    [wv stopLoading];
+    WKUserContentController* ucc = wv.configuration.userContentController;
+    @try {
+        [ucc removeScriptMessageHandlerForName:@"zapp"];
+    } @catch (NSException* ex) { (void)ex; }
+    [wv setNavigationDelegate:nil];
+    [wv setUIDelegate:nil];
 }
 
 void darwin_window_destroy(void* handle) {
@@ -559,14 +800,19 @@ void darwin_window_destroy(void* handle) {
     // terminal point.
     NSView* content = [window contentView];
     if ([content isKindOfClass:[WKWebView class]]) {
-        WKWebView* wv = (WKWebView*)content;
-        [wv stopLoading];
-        WKUserContentController* ucc = wv.configuration.userContentController;
-        @try {
-            [ucc removeScriptMessageHandlerForName:@"zapp"];
-        } @catch (NSException* ex) { (void)ex; }
-        [wv setNavigationDelegate:nil];
-        [wv setUIDelegate:nil];
+        zapp_teardown_webview((WKWebView*)content);
+    }
+
+    // Sidebar windows: the contentView is the NSSplitView, so neither the main
+    // nor the sidebar webview is reachable via [window contentView]. Tear both
+    // down via the delegate's stored refs (same alpha.29 hardening), and drop
+    // the split registry (KVO + resize observers). The delegate is still the
+    // window's delegate here (release happens at [window close] below).
+    ZappWindowDelegate* delegate = (ZappWindowDelegate*)[window delegate];
+    if ([delegate isKindOfClass:[ZappWindowDelegate class]] && delegate.sidebarNumericId >= 0) {
+        zapp_teardown_webview(delegate.mainWebview);
+        zapp_teardown_webview(delegate.sidebarWebview);
+        zapp_sidebar_unregister(handle);
     }
 
     [window close];
