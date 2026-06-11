@@ -14,6 +14,7 @@ import path from "node:path";
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import type { MacOSConfig, ResolvedConfig } from "./config";
+import { clogError } from "./log";
 
 export function xmlEscape(str: string): string {
   return str
@@ -103,8 +104,8 @@ export async function resolveEntitlements(
     const fileKeys = new Set(extractKeys(fileContent));
     for (const k of mapKeys) {
       if (fileKeys.has(k)) {
-        process.stderr.write(
-          `[zapp] entitlements: key "${k}" defined in both ${path.relative(root, filePath)} and zapp.config.ts — config value wins\n`
+        clogError(
+          `entitlements: key "${k}" defined in both ${path.relative(root, filePath)} and zapp.config.ts — config value wins`
         );
       }
     }
@@ -120,8 +121,8 @@ export async function resolveEntitlements(
       k === "com.apple.security.app-sandbox"
     );
     if (privileged.length > 0) {
-      process.stderr.write(
-        `[zapp] entitlements: ad-hoc signing ignores privileged entitlements (${privileged.join(", ")}). Set macos.signingIdentity to activate them.\n`
+      clogError(
+        `entitlements: ad-hoc signing ignores privileged entitlements (${privileged.join(", ")}). Set macos.signingIdentity to activate them.`
       );
     }
   }

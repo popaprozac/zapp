@@ -10,6 +10,7 @@ import { processIcon, type IconResult } from "./icon";
 import { resolveAppIconPath } from "./paths";
 import { resolveEntitlements } from "./entitlements";
 import { notarizeApp } from "./notarize";
+import { clog, clogError } from "./log";
 
 interface PackageOptions {
   root: string;
@@ -48,12 +49,12 @@ export async function createProductionBundle(opts: PackageOptions): Promise<stri
   // The build step sets use_embedded_assets=1, so we skip the copy
   const zappAssetsFile = path.join(root, ".zapp", "zapp_assets.zc");
   if (existsSync(zappAssetsFile)) {
-    process.stdout.write("[zapp] assets embedded in binary (skipping resource copy)\n");
+    clog(1, "assets embedded in binary (skipping resource copy)");
   } else if (existsSync(assetSrc)) {
     await cp(assetSrc, resourcesDir, { recursive: true });
-    process.stdout.write(`[zapp] bundled assets from ${config.assetDir}\n`);
+    clog(1, `bundled assets from ${config.assetDir}`);
   } else {
-    process.stderr.write(`[zapp] warning: asset directory not found: ${assetSrc}\n`);
+    clogError(`warning: asset directory not found: ${assetSrc}`);
   }
 
   // Copy worker scripts into .app bundle (workers load from filesystem, not embedded)
@@ -62,7 +63,7 @@ export async function createProductionBundle(opts: PackageOptions): Promise<stri
     const bundleWorkersDir = path.join(resourcesDir, ".zapp", "workers");
     await mkdir(bundleWorkersDir, { recursive: true });
     await cp(workersDir, bundleWorkersDir, { recursive: true });
-    process.stdout.write("[zapp] bundled worker scripts\n");
+    clog(1, "bundled worker scripts");
   }
 
   // Process app icon. Priority: macos.icon → build/macos/icon.* → framework default.
@@ -88,7 +89,7 @@ export async function createProductionBundle(opts: PackageOptions): Promise<stri
           }
         }
         const format = iconResult.type === "assetcatalog" ? "asset catalog (liquid glass)" : ".icns";
-        process.stdout.write(`[zapp] bundled icon: ${format}\n`);
+        clog(1, `bundled icon: ${format}`);
       } finally {
         await rm(tempDir, { recursive: true, force: true });
       }
@@ -111,10 +112,10 @@ export async function createProductionBundle(opts: PackageOptions): Promise<stri
 
   const entitlements = await resolveEntitlements(root, config);
 
-  process.stdout.write(
-    `[zapp] signing (${identity === "-" ? "ad-hoc" : identity})` +
+  clog(0,
+    `signing (${identity === "-" ? "ad-hoc" : identity})` +
     (entitlements.used ? ` with entitlements` : ``) +
-    `...\n`
+    `...`
   );
 
   const codesignArgs = ["codesign", "--force", "--deep", "-s", identity];
@@ -134,7 +135,7 @@ export async function createProductionBundle(opts: PackageOptions): Promise<stri
   const signExit = await signProc.exited;
   if (signExit !== 0) {
     const stderr = await new Response(signProc.stderr).text();
-    process.stderr.write(`[zapp] signing failed: ${stderr}\n`);
+    clogError(`signing failed: ${stderr}`);
   }
 
   // Notarize: only meaningful with a real Developer ID. Ad-hoc signed
@@ -142,9 +143,9 @@ export async function createProductionBundle(opts: PackageOptions): Promise<stri
   // `macos.signingIdentity` first. Surface that clearly.
   if (notarize) {
     if (identity === "-") {
-      process.stderr.write(
-        "[zapp] notarization skipped: ad-hoc signed bundle. " +
-        "Set `macos.signingIdentity` to a Developer ID and rerun.\n"
+      clogError(
+        "notarization skipped: ad-hoc signed bundle. " +
+        "Set `macos.signingIdentity` to a Developer ID and rerun."
       );
     } else {
       await notarizeApp({ appPath: outDir, notarize: macosConfig?.notarize });
@@ -154,8 +155,8 @@ export async function createProductionBundle(opts: PackageOptions): Promise<stri
   // Report sizes
   const binaryStat = Bun.file(execPath);
   const appSize = await getDirectorySize(outDir);
+  clog(0, `package complete: ${outDir}`);
   process.stdout.write(
-    `[zapp] package complete: ${outDir}\n` +
     `  binary: ${Math.round(binaryStat.size / 1024)} KB\n` +
     `  total:  ${Math.round(appSize / 1024)} KB\n`
   );
@@ -316,8 +317,8 @@ export async function generateInfoPlist(opts: PlistGenOptions): Promise<string> 
   // plistExtras (typed map). Warn on overrides.
   for (const [key, value] of Object.entries(plistExtras)) {
     if (cliEmittedKeys.has(key)) {
-      process.stdout.write(
-        `[zapp] plistExtras: overriding CLI-derived key "${key}"\n`
+      clogError(
+        `plistExtras: overriding CLI-derived key "${key}"`
       );
     }
     cliEmittedKeys.add(key);
@@ -331,8 +332,8 @@ export async function generateInfoPlist(opts: PlistGenOptions): Promise<string> 
     const extraKeys = extractPlistKeys(extraContent);
     for (const key of extraKeys) {
       if (cliEmittedKeys.has(key)) {
-        process.stdout.write(
-          `[zapp] Info.plist.extra: overriding key "${key}"\n`
+        clogError(
+          `Info.plist.extra: overriding key "${key}"`
         );
       }
     }

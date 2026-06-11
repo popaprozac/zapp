@@ -17,6 +17,7 @@ import { mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import * as readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
+import { clog, clogError } from "./log";
 
 // Vite templates we surface as first-class. Each entry maps the display
 // name to the `create-vite` template flag. Restricted to the "main four"
@@ -104,7 +105,7 @@ export async function runInit(opts: InitOptions) {
   const projectDir = path.join(root, name);
 
   if (existsSync(projectDir)) {
-    process.stderr.write(`[zapp] directory '${name}' already exists\n`);
+    clogError(`directory '${name}' already exists`);
     process.exit(1);
   }
 
@@ -115,7 +116,7 @@ export async function runInit(opts: InitOptions) {
     // create-vite as a power-user override (Vite supports more templates
     // than we surface in the prompt).
     template = opts.template;
-    process.stdout.write(`[zapp] using unrecognized template '${opts.template}' as create-vite passthrough\n`);
+    clog(1, `using unrecognized template '${opts.template}' as create-vite passthrough`);
   }
   if (!template) {
     if (yes) {
@@ -143,13 +144,13 @@ export async function runInit(opts: InitOptions) {
   // create-vite has an --immediate flag that auto-installs + starts the dev
   // server, and an interactive prompt that does the same if confirmed.
   // --no-interactive skips the prompt and defaults to no install.
-  process.stdout.write(`\n[zapp] creating ${name} with template ${template}...\n`);
+  clog(0, `creating ${name} with template ${template}...`);
   const viteProc = Bun.spawn(
     ["bunx", "create-vite@latest", name, "--template", template, "--no-interactive"],
     { cwd: root, stdout: "inherit", stderr: "inherit" },
   );
   if ((await viteProc.exited) !== 0) {
-    process.stderr.write("[zapp] vite scaffold failed\n");
+    clogError("vite scaffold failed");
     process.exit(1);
   }
 
@@ -391,12 +392,12 @@ manifest, resource file). Windows packaging is in progress.
 
   // 8. Auto-install dependencies if the user opted in.
   if (install) {
-    process.stdout.write(`\n[zapp] installing dependencies (bun install)...\n`);
+    clog(0, "installing dependencies (bun install)...");
     const installProc = Bun.spawn(["bun", "install"], {
       cwd: projectDir, stdout: "inherit", stderr: "inherit",
     });
     if ((await installProc.exited) !== 0) {
-      process.stderr.write("[zapp] bun install failed — you can re-run it manually inside the project dir\n");
+      clogError("bun install failed — you can re-run it manually inside the project dir");
     }
   }
 

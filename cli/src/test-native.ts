@@ -3,6 +3,7 @@
 // count (0 = all passed); we aggregate and exit non-zero if any file fails.
 import { Glob } from "bun";
 import path from "node:path";
+import { clog } from "./log";
 
 const ROOT = path.resolve(import.meta.dir, "..", ".."); // cli/src -> repo root
 const zc = Bun.which("zc") ?? "zc";
@@ -10,7 +11,7 @@ const zc = Bun.which("zc") ?? "zc";
 const files = [...new Glob("native/tests/*_test.zc").scanSync({ cwd: ROOT })].sort();
 
 if (files.length === 0) {
-  console.log("[zapp] no native tests found (native/tests/*_test.zc)");
+  clog(0, "no native tests found (native/tests/*_test.zc)");
   process.exit(0);
 }
 

@@ -16,6 +16,7 @@
 
 import path from "node:path";
 import type { MacOSConfig } from "./config";
+import { clog, clogError } from "./log";
 
 interface ResolvedCredentials {
   /** Args appended to `xcrun notarytool submit ...` for auth. */
@@ -116,12 +117,12 @@ export async function notarizeApp(opts: {
 }): Promise<boolean> {
   const resolved = resolveNotarizeCredentials(opts.notarize);
   if (!resolved.ok) {
-    process.stderr.write(`[zapp] notarization skipped: ${resolved.reason}\n`);
+    clogError(`notarization skipped: ${resolved.reason}`);
     return false;
   }
 
-  process.stdout.write(`[zapp] notarizing via ${resolved.creds.describe}…\n`);
-  process.stdout.write(`[zapp] (Apple typically takes 1–5 min — be patient)\n`);
+  clog(0, `notarizing via ${resolved.creds.describe}…`);
+  clog(0, "(Apple typically takes 1–5 min — be patient)");
 
   // Apple notarytool needs a flat archive — `ditto` preserves bundle
   // metadata better than `zip` for .app trees.
@@ -133,7 +134,7 @@ export async function notarizeApp(opts: {
   const dittoExit = await dittoProc.exited;
   if (dittoExit !== 0) {
     const err = await new Response(dittoProc.stderr).text();
-    process.stderr.write(`[zapp] zip for notarization failed:\n${err}\n`);
+    clogError(`zip for notarization failed:\n${err}`);
     return false;
   }
 
@@ -168,15 +169,15 @@ export async function notarizeApp(opts: {
   }
 
   if (submitExit !== 0 || status !== "Accepted") {
-    process.stderr.write(
-      `[zapp] notarization ${status ? `returned ${status}` : "failed"}\n`,
+    clogError(
+      `notarization ${status ? `returned ${status}` : "failed"}`,
     );
     if (submitErr.trim().length > 0) process.stderr.write(submitErr);
     if (submissionId) {
       // Fetch the log to surface the actual reason — Apple's "Invalid"
       // status without a log message is the most common confusion
       // point ("why did it fail?").
-      process.stderr.write(`[zapp] fetching submission log (${submissionId})…\n`);
+      clogError(`fetching submission log (${submissionId})…`);
       const logProc = Bun.spawn(
         ["xcrun", "notarytool", "log", submissionId, ...resolved.creds.authArgs],
         { stdout: "inherit", stderr: "inherit" },
@@ -188,7 +189,7 @@ export async function notarizeApp(opts: {
 
   // Staple — embeds the ticket in the .app so Gatekeeper doesn't have
   // to phone home on first launch.
-  process.stdout.write(`[zapp] notarization accepted, stapling…\n`);
+  clog(0, "notarization accepted, stapling…");
   const stapleProc = Bun.spawn(
     ["xcrun", "stapler", "staple", opts.appPath],
     { stdout: "pipe", stderr: "pipe" },
@@ -196,9 +197,9 @@ export async function notarizeApp(opts: {
   const stapleExit = await stapleProc.exited;
   if (stapleExit !== 0) {
     const err = await new Response(stapleProc.stderr).text();
-    process.stderr.write(`[zapp] stapling failed:\n${err}\n`);
+    clogError(`stapling failed:\n${err}`);
     return false;
   }
-  process.stdout.write(`[zapp] notarization complete: ${opts.appPath}\n`);
+  clog(0, `notarization complete: ${opts.appPath}`);
   return true;
 }

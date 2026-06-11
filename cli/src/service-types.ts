@@ -2,6 +2,8 @@
 // the generated wrapper. No I/O — every function takes strings and returns
 // data, so they are unit-testable in isolation (see service-types.test.ts).
 
+import { clogError } from "./log";
+
 export interface ArgField {
   name: string;
   tsType: string; // "string" | "number" | "boolean" | "unknown"
@@ -35,8 +37,8 @@ export function inferArgs(body: string): ArgField[] {
     if (existing === undefined) {
       fields.set(key, tsType);
     } else if (existing !== tsType) {
-      console.warn(
-        `[zapp] service arg "${key}" is read as both ${existing} and ${tsType}; keeping ${existing}.`
+      clogError(
+        `service arg "${key}" is read as both ${existing} and ${tsType}; keeping ${existing}.`
       );
     }
   }
