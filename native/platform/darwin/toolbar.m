@@ -9,25 +9,56 @@
 // the creator's action map and any pane's win.on(TOOLBAR_CLICKED).
 
 #import <Cocoa/Cocoa.h>
+#import <WebKit/WebKit.h>
 
 extern void darwin_webview_eval_all(const char* js);
 extern void worker_broadcast_eval_js(char* js);
 // menu.m (de-static'ed): sf:/file-path/data-URL icon resolver.
 extern NSImage* zapp_resolve_icon(NSString* spec, CGFloat size, int templateMode);
+// window.m dispatch-table lookups: pane webviews for chrome-metrics injection.
+extern WKWebView* zapp_webview_for_slot(int32_t slot);
+extern int32_t zapp_sidebar_slot_lookup(int32_t host_slot);
 
 // Tracking separator's private identifier (never user-visible).
 static NSString* const kZappTrackingSeparatorId = @"zapp.trackingSeparator";
+
+void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_user_script);
 
 @interface ZappToolbarController : NSObject <NSToolbarDelegate>
 @property (nonatomic, weak) NSWindow* window;
 @property (nonatomic, assign) int32_t windowNumericId;
 @property (nonatomic, strong) NSArray<NSToolbarItemIdentifier>* identifiers;
 @property (nonatomic, strong) NSDictionary<NSString*, NSDictionary*>* buttonsById;
+// Chrome-metrics bookkeeping: KVO on the window's contentLayoutRect fires on
+// every layout change (incl. live resize); the queue flag coalesces to one
+// re-measure per runloop tick and the cached values skip no-op re-injections.
+@property (nonatomic, assign) BOOL metricsUpdateQueued;
+@property (nonatomic, assign) CGFloat lastInjectedInset;
+@property (nonatomic, assign) CGFloat lastInjectedToolbarH;
 @end
 
 static NSMutableDictionary<NSValue*, ZappToolbarController*>* zapp_toolbars = nil;
 
 @implementation ZappToolbarController
+
+// Live chrome-metric updates: the user can right-click the toolbar and switch
+// Icon Only / Text Only / Icon and Text at runtime — the band height changes
+// with no window resize, but contentLayoutRect (KVO-compliant) tracks it.
+- (void)observeValueForKeyPath:(NSString*)keyPath ofObject:(id)object
+                        change:(NSDictionary*)change context:(void*)context {
+    (void)object; (void)change; (void)context;
+    if (![keyPath isEqualToString:@"contentLayoutRect"]) return;
+    if (self.metricsUpdateQueued) return;
+    self.metricsUpdateQueued = YES;
+    __weak ZappToolbarController* weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        ZappToolbarController* s = weakSelf;
+        if (!s) return;
+        s.metricsUpdateQueued = NO;
+        NSWindow* w = s.window;
+        if (w) zapp_toolbar_inject_metrics((__bridge void*)w, s.windowNumericId, false);
+    });
+}
 
 - (NSArray<NSToolbarItemIdentifier>*)toolbarDefaultItemIdentifiers:(NSToolbar*)toolbar {
     (void)toolbar;
@@ -178,10 +209,93 @@ void darwin_toolbar_attach(void* window_ptr, const char* toolbar_json, int32_t w
     if (!zapp_toolbars) zapp_toolbars = [NSMutableDictionary dictionary];
     zapp_toolbars[[NSValue valueWithPointer:window_ptr]] = c;
     window.toolbar = tb;
+
+    // Live metric updates: re-measure whenever the chrome geometry changes
+    // (user toggles Icon/Text display modes via the toolbar context menu).
+    // Removed in zapp_toolbar_unregister.
+    [window addObserver:c forKeyPath:@"contentLayoutRect" options:0 context:NULL];
+}
+
+// Measure + inject the chrome-metric CSS vars into the window's pane(s).
+//   --zapp-titlebar-height = the full top chrome inset (frame − contentLayoutRect)
+//   --zapp-toolbar-height  = the measured NSToolbarView row height (== the band
+//                            in unified styles; the sub-row in "expanded")
+// Called one tick after attach (initial, add_user_script=true so reloads keep
+// the value) and from the contentLayoutRect KVO on runtime display-mode
+// changes (add_user_script=false — WKUserContentController can't remove
+// individual scripts, so repeated adds would pile up; after a mode change a
+// reloaded page briefly sees the attach-time value until the next KVO fires).
+void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_user_script) {
+    NSWindow* window = (__bridge NSWindow*)window_ptr;
+    if (!window) return;
+    NSCAssert([NSThread isMainThread], @"zapp toolbar metrics are main-thread-only");
+
+    CGFloat totalInset = window.frame.size.height - window.contentLayoutRect.size.height;
+    if (totalInset < 0) totalInset = 0;
+
+    // The row that CONTAINS the toolbar items. Class-name walk is the only
+    // way to find it; fall back to the full band (== unified behavior) if
+    // AppKit ever renames NSToolbarView.
+    CGFloat toolbarH = 0;
+    NSView* theme = window.contentView.superview;
+    for (NSView* container in theme.subviews) {
+        if (![NSStringFromClass([container class]) containsString:@"TitlebarContainer"]) continue;
+        for (NSView* tb1 in container.subviews) {
+            for (NSView* tb2 in tb1.subviews) {
+                if ([NSStringFromClass([tb2 class]) containsString:@"NSToolbarView"]) {
+                    toolbarH = tb2.frame.size.height;
+                    break;
+                }
+            }
+            if (toolbarH > 0) break;
+        }
+        break;
+    }
+    if (toolbarH <= 0) toolbarH = totalInset;
+
+    // Skip no-op re-injections (the KVO also fires during plain window
+    // resizes, where the chrome height doesn't change). Initial injection
+    // (add_user_script) always runs.
+    ZappToolbarController* c = zapp_toolbars[[NSValue valueWithPointer:window_ptr]];
+    if (!add_user_script && c &&
+        c.lastInjectedInset == totalInset && c.lastInjectedToolbarH == toolbarH) {
+        return;
+    }
+    if (c) {
+        c.lastInjectedInset = totalInset;
+        c.lastInjectedToolbarH = toolbarH;
+    }
+
+    NSString* js = [NSString stringWithFormat:
+        @"(function(){try{var r=document.documentElement;"
+        @"if(r){r.style.setProperty('--zapp-titlebar-height','%.0fpx');"
+        @"r.style.setProperty('--zapp-toolbar-height','%.0fpx');}}catch(e){}})();",
+        totalInset, toolbarH];
+
+    int32_t slots[2] = { host_slot, zapp_sidebar_slot_lookup(host_slot) };
+    for (int i = 0; i < 2; i++) {
+        WKWebView* wv = zapp_webview_for_slot(slots[i]);
+        if (!wv) continue;
+        if (add_user_script) {
+            [wv.configuration.userContentController addUserScript:
+                [[WKUserScript alloc] initWithSource:js
+                    injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
+        }
+        [wv evaluateJavaScript:js completionHandler:nil];
+    }
 }
 
 void zapp_toolbar_unregister(void* window_ptr) {
     if (!window_ptr || !zapp_toolbars) return;
     NSCAssert([NSThread isMainThread], @"zapp toolbar registry is main-thread-only");
-    [zapp_toolbars removeObjectForKey:[NSValue valueWithPointer:window_ptr]];
+    NSValue* key = [NSValue valueWithPointer:window_ptr];
+    ZappToolbarController* c = zapp_toolbars[key];
+    if (c) {
+        @try {
+            [(__bridge NSWindow*)window_ptr removeObserver:c forKeyPath:@"contentLayoutRect"];
+        } @catch (NSException* e) {
+            (void)e; // not registered — harmless
+        }
+    }
+    [zapp_toolbars removeObjectForKey:key];
 }

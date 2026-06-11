@@ -124,6 +124,17 @@ void zapp_registered_webviews_eval(const char* js) {
     else dispatch_async(dispatch_get_main_queue(), run);
 }
 
+// Slot lookups for toolbar.m's chrome-metrics injection: a window's host pane
+// plus (for split windows) the sidebar pane share the same chrome metrics.
+WKWebView* zapp_webview_for_slot(int32_t slot) {
+    if (slot < 0 || slot >= ZAPP_MAX_WINDOW_CALLBACKS) return nil;
+    return zapp_webviews[slot];
+}
+
+int32_t zapp_sidebar_slot_lookup(int32_t host_slot) {
+    return zapp_sidebar_slot_for(host_slot);
+}
+
 // --- Event name resolution (static strings, zero alloc) ---
 
 static const char* zapp_event_names[] = {
@@ -799,75 +810,17 @@ void* darwin_window_create(WindowOptions* opts) {
         const char* toolbarJson = wopts_toolbar_json(opts);
         if (toolbarJson && toolbarJson[0]) {
             darwin_toolbar_attach((__bridge void*)window, toolbarJson, host_slot);
-            // Defer one runloop tick: contentLayoutRect picks the toolbar up
-            // in the next layout pass, and by then the panes' initial
-            // navigations are committing — both the user script (future
-            // navigations/reloads) and the direct eval (current page) stick.
+            // Initial chrome-metrics injection, one runloop tick later: the
+            // titlebar band picks the toolbar up in the next layout pass, and
+            // by then both panes are registered in the dispatch table (the
+            // create call chain completes before the tick runs). Subsequent
+            // updates — the user can switch Icon/Text display modes from the
+            // toolbar's context menu at runtime — re-inject via the
+            // controller's contentLayoutRect KVO (toolbar.m).
+            extern void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_user_script);
             NSWindow* toolbarWindow = window;
-            WKWebView* paneA = mainWebviewRef;     // nil in the non-sidebar path
-            WKWebView* paneB = sidebarWebviewRef;  // nil in the non-sidebar path
             dispatch_async(dispatch_get_main_queue(), ^{
-                // --zapp-titlebar-height = the FULL top chrome inset ("pad by
-                // this"). Unified styles merge the toolbar INTO the titlebar:
-                // one NSTitlebarContainerView spans the whole band and the
-                // traffic lights center within it, so this is re-injected
-                // with the post-attach total.
-                CGFloat postInset = toolbarWindow.frame.size.height - toolbarWindow.contentLayoutRect.size.height;
-                // --zapp-toolbar-height = the measured height of the row that
-                // CONTAINS the toolbar items (the NSToolbarView frame). In
-                // unified styles it equals the whole band (== titlebar
-                // height); in "expanded" it's the sub-row below the title.
-                // Measuring the real view also tracks any display-mode/style
-                // automatically. Class-name walk is the only way to find it;
-                // fall back to the full inset (== unified behavior) if AppKit
-                // ever renames it.
-                CGFloat toolbarH = 0;
-                NSView* theme = toolbarWindow.contentView.superview;
-                for (NSView* container in theme.subviews) {
-                    if (![NSStringFromClass([container class]) containsString:@"TitlebarContainer"]) continue;
-                    for (NSView* tb1 in container.subviews) {
-                        for (NSView* tb2 in tb1.subviews) {
-                            if ([NSStringFromClass([tb2 class]) containsString:@"NSToolbarView"]) {
-                                toolbarH = tb2.frame.size.height;
-                                break;
-                            }
-                        }
-                        if (toolbarH > 0) break;
-                    }
-                    break;
-                }
-                if (toolbarH <= 0) toolbarH = postInset;
-                NSString* js = [NSString stringWithFormat:
-                    @"(function(){try{var r=document.documentElement;"
-                    @"if(r){r.style.setProperty('--zapp-titlebar-height','%.0fpx');"
-                    @"r.style.setProperty('--zapp-toolbar-height','%.0fpx');}}catch(e){}})();",
-                    postInset, toolbarH];
-                // Collect the pane webviews: split windows hold direct refs;
-                // plain (and vibrancy) windows mount the webview as the
-                // contentView or one level below it.
-                NSMutableArray<WKWebView*>* panes = [NSMutableArray array];
-                if (paneA) [panes addObject:paneA];
-                if (paneB) [panes addObject:paneB];
-                if (panes.count == 0) {
-                    NSView* content = [toolbarWindow contentView];
-                    if ([content isKindOfClass:[WKWebView class]]) {
-                        [panes addObject:(WKWebView*)content];
-                    } else {
-                        for (NSView* sub in content.subviews) {
-                            if ([sub isKindOfClass:[WKWebView class]]) { [panes addObject:(WKWebView*)sub]; break; }
-                        }
-                    }
-                }
-                for (WKWebView* wv in panes) {
-                    // User script: survives reloads + catches the initial
-                    // navigation if it hasn't committed yet (document-start
-                    // scripts are snapshotted at commit time).
-                    [wv.configuration.userContentController addUserScript:
-                        [[WKUserScript alloc] initWithSource:js
-                            injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
-                    // Direct eval: covers a page that already committed.
-                    [wv evaluateJavaScript:js completionHandler:nil];
-                }
+                zapp_toolbar_inject_metrics((__bridge void*)toolbarWindow, host_slot, true);
             });
         }
 
