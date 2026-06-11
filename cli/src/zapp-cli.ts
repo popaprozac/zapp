@@ -14,7 +14,7 @@ import { runInit } from "./init";
 import { createDevBundle } from "./bundle";
 import { createProductionBundle } from "./package";
 import { generateAssetManifest } from "./assets";
-import { setCliLevel, levelFromArgv, getCliLevel, envFromLevel, clog } from "./log";
+import { setCliLevel, levelFromArgv, getCliLevel, envFromLevel, clog, clogError } from "./log";
 
 // Bootstrap codegen lives outside cli/ in the monorepo but is bundled
 // alongside it in the published package. Dynamic import so the path
@@ -149,7 +149,7 @@ async function verifyWorkerModules(
   for (const cap of workerModules) {
     const spec = WORKER_MODULE_CAPABILITIES[cap];
     if (!spec) {
-      process.stdout.write(`[zapp] warning: unknown workerModules entry '${cap}'\n`);
+      clogError(`warning: unknown workerModules entry '${cap}'`);
       continue;
     }
     for (const pkg of spec.packages) {
@@ -158,23 +158,23 @@ async function verifyWorkerModules(
     }
   }
   if (missing.length === 0) return;
-  process.stdout.write("[zapp] workerModules: missing packages —\n");
+  clogError("workerModules: missing packages —");
   for (const { capability, pkg } of missing) {
-    process.stdout.write(`  - "${capability}" needs '${pkg}'\n`);
+    process.stderr.write(`  - "${capability}" needs '${pkg}'\n`);
   }
   const all = missing.map((m) => m.pkg).join(" ");
-  process.stdout.write(`[zapp] run:  bun install ${all}\n`);
+  clogError(`run:  bun install ${all}`);
 }
 
 async function runDev(root: string) {
   if (process.platform !== "darwin" && process.platform !== "win32") {
-    process.stderr.write("[zapp] dev mode is currently macOS, iOS, and Windows only.\n");
+    clogError("dev mode is currently macOS, iOS, and Windows only.");
     process.exit(1);
   }
 
   const target: BuildTarget = detectTarget();
   if (isIOSTarget(target) && process.platform !== "darwin") {
-    process.stderr.write("[zapp] iOS dev requires macOS host (Xcode SDK).\n");
+    clogError("iOS dev requires macOS host (Xcode SDK).");
     process.exit(1);
   }
 
@@ -270,10 +270,10 @@ async function runDev(root: string) {
     const lsof = Bun.spawnSync(["lsof", "-ti", `:${port}`], { stdout: "pipe", stderr: "ignore" });
     const pids = lsof.stdout.toString().trim().split("\n").filter(Boolean);
     if (pids.length > 0) {
-      process.stderr.write(
-        `[zapp] port ${port} is already in use (pid ${pids.join(", ")}).\n` +
+      clogError(
+        `port ${port} is already in use (pid ${pids.join(", ")}).\n` +
         `  Likely a stale Vite from a previous dev run. Run:\n` +
-        `    kill ${pids.join(" ")}\n`
+        `    kill ${pids.join(" ")}`
       );
       process.exit(1);
     }
@@ -296,7 +296,7 @@ async function runDev(root: string) {
     viteProc.exited.then(() => "vite-died" as const),
   ]);
   if (ready !== true) {
-    process.stderr.write(`[zapp] vite dev server failed to start on port ${port}\n`);
+    clogError(`vite dev server failed to start on port ${port}`);
     try { viteProc.kill(); } catch {}
     process.exit(1);
   }
@@ -333,11 +333,11 @@ async function runDev(root: string) {
   process.on("SIGTERM", () => cleanup(0));
   process.on("exit", () => { cleaned = true; killProc(viteProc); killProc(appProc); });
   process.on("uncaughtException", (err) => {
-    console.error("[zapp] uncaught exception:", err);
+    clogError("uncaught exception:", (err as Error)?.stack ?? err);
     cleanup(1);
   });
   process.on("unhandledRejection", (err) => {
-    console.error("[zapp] unhandled rejection:", err);
+    clogError("unhandled rejection:", (err as Error)?.stack ?? err);
     cleanup(1);
   });
 
@@ -398,7 +398,7 @@ async function runDev(root: string) {
     });
     if (await signProc.exited !== 0) {
       const errOutput = await new Response(signProc.stderr).text();
-      process.stderr.write(`[zapp] warning: ad-hoc sign failed\n${errOutput}`);
+      clogError(`warning: ad-hoc sign failed\n${errOutput}`);
     }
 
     // Need a booted sim to install onto. Tell the user clearly if
@@ -408,10 +408,10 @@ async function runDev(root: string) {
     });
     const bootedOut = listed.stdout.toString();
     if (!/\(Booted\)/.test(bootedOut)) {
-      process.stderr.write(
-        "[zapp] no iOS Simulator booted. Boot one first:\n" +
+      clogError(
+        "no iOS Simulator booted. Boot one first:\n" +
         "         xcrun simctl boot \"iPhone 17\"   # or any device from\n" +
-        "         xcrun simctl list devices available\n"
+        "         xcrun simctl list devices available"
       );
       killProc(viteProc);
       process.exit(1);
@@ -431,7 +431,7 @@ async function runDev(root: string) {
     });
     if (await installProc.exited !== 0) {
       const errOutput = await new Response(installProc.stderr).text();
-      process.stderr.write(`[zapp] simctl install failed\n${errOutput}`);
+      clogError(`simctl install failed\n${errOutput}`);
       killProc(viteProc);
       process.exit(1);
     }
@@ -498,14 +498,14 @@ async function runDev(root: string) {
 
 async function runBuild(root: string) {
   if (process.platform !== "darwin" && process.platform !== "win32") {
-    process.stderr.write("[zapp] build is currently macOS and Windows only.\n");
+    clogError("build is currently macOS and Windows only.");
     process.exit(1);
   }
 
   const target: BuildTarget = detectTarget();
   // iOS targets only build on macOS (Xcode SDK requirement).
   if (isIOSTarget(target) && process.platform !== "darwin") {
-    process.stderr.write("[zapp] iOS builds require macOS host (Xcode SDK).\n");
+    clogError("iOS builds require macOS host (Xcode SDK).");
     process.exit(1);
   }
   if (isIOSTarget(target)) {
@@ -545,7 +545,7 @@ async function runBuild(root: string) {
   });
   const viteExit = await viteProc.exited;
   if (viteExit !== 0) {
-    process.stderr.write("[zapp] vite build failed\n");
+    clogError("vite build failed");
     process.exit(1);
   }
 
@@ -639,7 +639,7 @@ async function runBuild(root: string) {
     const signExit = await signProc.exited;
     if (signExit !== 0) {
       const errOutput = await new Response(signProc.stderr).text();
-      process.stderr.write(`[zapp] warning: ad-hoc sign failed (exit ${signExit})\n${errOutput}`);
+      clogError(`warning: ad-hoc sign failed (exit ${signExit})\n${errOutput}`);
     }
     // Surface the launch invocation so the user doesn't have to dig
     // into Info.plist for the bundle ID. simctl's identifier is
@@ -661,7 +661,7 @@ async function runBuild(root: string) {
 
 async function runPackage(root: string) {
   if (process.platform !== "darwin") {
-    process.stderr.write("[zapp] package is currently macOS-only.\n");
+    clogError("package is currently macOS-only.");
     process.exit(1);
   }
 

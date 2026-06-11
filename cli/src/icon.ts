@@ -6,6 +6,7 @@
 import path from "node:path";
 import { mkdir, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { clogError } from "./log";
 
 export interface IconResult {
   /** "assetcatalog" (PNG → Assets.car) or "icns" (direct .icns) */
@@ -154,7 +155,7 @@ async function buildAssetCatalog(pngPath: string, tempDir: string): Promise<Icon
   const exitCode = await proc.exited;
   if (exitCode !== 0) {
     const stderr = await new Response(proc.stderr).text();
-    process.stderr.write(`[zapp] actool warning: ${stderr}\n`);
+    clogError(`actool warning: ${stderr}`);
     // Fallback: try iconutil approach (create .iconset from PNG, then .icns)
     return await fallbackPngToIcns(pngPath, tempDir);
   }
@@ -194,7 +195,7 @@ export async function buildIOSAssetCatalog(
   minDeploymentTarget: string,
 ): Promise<IconResult | null> {
   if (!existsSync(pngPath)) {
-    process.stderr.write(`[zapp] icon: iOS source PNG not found: ${pngPath}\n`);
+    clogError(`icon: iOS source PNG not found: ${pngPath}`);
     return null;
   }
 
@@ -238,7 +239,7 @@ export async function buildIOSAssetCatalog(
   const carPath = path.join(outputDir, "Assets.car");
   if (exitCode !== 0 || !existsSync(carPath)) {
     const stderr = await new Response(proc.stderr).text();
-    process.stderr.write(`[zapp] actool (iOS) failed: ${stderr}\n`);
+    clogError(`actool (iOS) failed: ${stderr}`);
     return null;
   }
 

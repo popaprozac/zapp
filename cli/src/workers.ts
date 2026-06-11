@@ -4,6 +4,7 @@
 
 import path from "node:path";
 import { mkdir, readdir, readFile, stat } from "node:fs/promises";
+import { clog, clogError } from "./log";
 
 export const WORKER_PATTERN =
   /new\s+(?:SharedWorker|Worker)\s*\(\s*(?:new\s+URL\(\s*["'`](.+?)["'`]\s*,\s*import\.meta\.url\s*\)|["'`](.+?)["'`])/g;
@@ -57,7 +58,7 @@ export async function bundleWorkers(root: string, backendConfig?: string): Promi
     try {
       await stat(worker.entryPath);
     } catch {
-      process.stderr.write(`[zapp] worker script not found: ${worker.entryPath}\n`);
+      clogError(`worker script not found: ${worker.entryPath}`);
       continue;
     }
 
@@ -74,7 +75,7 @@ export async function bundleWorkers(root: string, backendConfig?: string): Promi
     });
 
     if (!result.success) {
-      process.stderr.write(`[zapp] worker bundle failed: ${worker.specifier}\n`);
+      clogError(`worker bundle failed: ${worker.specifier}`);
       for (const log of result.logs) {
         process.stderr.write(`  ${log}\n`);
       }
@@ -97,9 +98,9 @@ export async function bundleWorkers(root: string, backendConfig?: string): Promi
       minify: false,
     });
     if (result.success) {
-      process.stdout.write(`[zapp] backend worker: ${path.relative(root, backendPath)}\n`);
+      clog(1, `backend worker: ${path.relative(root, backendPath)}`);
     } else {
-      process.stderr.write("[zapp] backend bundle failed\n");
+      clogError("backend bundle failed");
     }
   } catch {
     // No backend file — that's fine, backend is optional

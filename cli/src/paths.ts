@@ -10,6 +10,7 @@ import path from "node:path";
 import os from "node:os";
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
+import { clog } from "./log";
 
 const CLI_SRC_DIR = import.meta.dir;
 
@@ -151,7 +152,7 @@ export async function resolveBareDir(): Promise<string> {
   // engine sub-modules (libjs/libjsc) drift more, so the libjs commit
   // pin is the load-bearing version lock.
   const BARE_COMMIT = "bfbc127"; // v1.28.5
-  process.stdout.write("[zapp] downloading Bare runtime (first time only)...\n");
+  clog(0, "downloading Bare runtime (first time only)...");
   await mkdir(path.dirname(cacheDir), { recursive: true });
 
   const clone = Bun.spawn([
@@ -167,6 +168,6 @@ export async function resolveBareDir(): Promise<string> {
     throw new Error(`[zapp] Failed to checkout Bare @ ${BARE_COMMIT}`);
   }
 
-  process.stdout.write(`[zapp] Bare downloaded (pinned to ${BARE_COMMIT})\n`);
+  clog(0, `Bare downloaded (pinned to ${BARE_COMMIT})`);
   return cacheDir;
 }

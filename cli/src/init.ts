@@ -17,6 +17,7 @@ import { mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import * as readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
+import { clog, clogError } from "./log";
 
 // Vite templates we surface as first-class. Each entry maps the display
 // name to the `create-vite` template flag. Restricted to the "main four"
@@ -104,7 +105,7 @@ export async function runInit(opts: InitOptions) {
   const projectDir = path.join(root, name);
 
   if (existsSync(projectDir)) {
-    process.stderr.write(`[zapp] directory '${name}' already exists\n`);
+    clogError(`directory '${name}' already exists`);
     process.exit(1);
   }
 
@@ -115,7 +116,7 @@ export async function runInit(opts: InitOptions) {
     // create-vite as a power-user override (Vite supports more templates
     // than we surface in the prompt).
     template = opts.template;
-    process.stdout.write(`[zapp] using unrecognized template '${opts.template}' as create-vite passthrough\n`);
+    clog(1, `using unrecognized template '${opts.template}' as create-vite passthrough`);
   }
   if (!template) {
     if (yes) {
@@ -143,13 +144,13 @@ export async function runInit(opts: InitOptions) {
   // create-vite has an --immediate flag that auto-installs + starts the dev
   // server, and an interactive prompt that does the same if confirmed.
   // --no-interactive skips the prompt and defaults to no install.
-  process.stdout.write(`\n[zapp] creating ${name} with template ${template}...\n`);
+  clog(0, `creating ${name} with template ${template}...`);
   const viteProc = Bun.spawn(
     ["bunx", "create-vite@latest", name, "--template", template, "--no-interactive"],
     { cwd: root, stdout: "inherit", stderr: "inherit" },
   );
   if ((await viteProc.exited) !== 0) {
-    process.stderr.write("[zapp] vite scaffold failed\n");
+    clogError("vite scaffold failed");
     process.exit(1);
   }
 
@@ -206,11 +207,16 @@ fn main() -> int {
 }
 `);
 
-  // 3. Add zapp.config.ts — typed via defineConfig for autocomplete
+  // 3. Add zapp.config.ts — typed via an \`import type\` annotation. Same
+  // IntelliSense as a defineConfig() wrapper, but the import is erased at
+  // compile time: the config loads with zero runtime module resolution, so
+  // it works in any layout (npm install, workspaces, the zapp monorepo)
+  // and can never fail at vite-config load time.
   const identifier = `com.zapp.${name.toLowerCase().replace(/[^a-z0-9]/g, "")}`;
-  await Bun.write(path.join(projectDir, "zapp.config.ts"), `import { defineConfig } from "@zappdev/cli/config";
+  await Bun.write(path.join(projectDir, "zapp.config.ts"), `// \`import type\` is erased at compile time — typed config with no runtime import.
+import type { ZappConfig } from "@zappdev/cli/config";
 
-export default defineConfig({
+const config: ZappConfig = {
   name: "${name}",
   identifier: "${identifier}",
   version: "0.1.0",
@@ -223,7 +229,9 @@ export default defineConfig({
   //   headless: {
   //     db: { script: "src/workers/db.ts", engine: "zjs" },
   //   },
-});
+};
+
+export default config;
 `);
 
   // 4. Update package.json — add deps and scripts
@@ -384,12 +392,12 @@ manifest, resource file). Windows packaging is in progress.
 
   // 8. Auto-install dependencies if the user opted in.
   if (install) {
-    process.stdout.write(`\n[zapp] installing dependencies (bun install)...\n`);
+    clog(0, "installing dependencies (bun install)...");
     const installProc = Bun.spawn(["bun", "install"], {
       cwd: projectDir, stdout: "inherit", stderr: "inherit",
     });
     if ((await installProc.exited) !== 0) {
-      process.stderr.write("[zapp] bun install failed — you can re-run it manually inside the project dir\n");
+      clogError("bun install failed — you can re-run it manually inside the project dir");
     }
   }
 

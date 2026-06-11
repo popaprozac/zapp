@@ -42,6 +42,7 @@
 import { existsSync } from "node:fs";
 import { readFile, writeFile, utimes } from "node:fs/promises";
 import path from "node:path";
+import { clog } from "./log";
 
 const MARKER = "/* zapp-hermes-downleveled */";
 
@@ -153,7 +154,7 @@ export async function downlevelBareJsForHermes(bareDir: string): Promise<boolean
   const nameMatch = content.match(/unsigned\s+char\s+(\w+)\s*\[\s*\]/);
   const arrayName = nameMatch ? nameMatch[1] : "bare_js";
 
-  process.stdout.write(`[zapp] downleveling bare.js bundle for Hermes...\n`);
+  clog(0, "downleveling bare.js bundle for Hermes...");
   const jsSource = extractJsBytes(content);
   const lowered = await lowerForHermes(jsSource);
   const newHeader = emitCHeader(arrayName, lowered);
@@ -165,9 +166,9 @@ export async function downlevelBareJsForHermes(bareDir: string): Promise<boolean
 
   const inSize = jsSource.length;
   const outSize = lowered.length;
-  process.stdout.write(
-    `[zapp] bare.js downleveled: ${inSize} → ${outSize} bytes ` +
-    `(+${((outSize - inSize) / 1024).toFixed(1)} KB)\n`,
+  clog(1,
+    `bare.js downleveled: ${inSize} → ${outSize} bytes ` +
+    `(+${((outSize - inSize) / 1024).toFixed(1)} KB)`,
   );
   return true;
 }

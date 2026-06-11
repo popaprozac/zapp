@@ -5,6 +5,7 @@ import path from "node:path";
 import { mkdir, readdir, unlink } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { resolveServiceTypes, renderTsBinding } from "./service-types";
+import { clogError } from "./log";
 
 interface ServiceBinding {
   name: string;
@@ -54,8 +55,8 @@ export async function scanServices(root: string): Promise<ServiceBinding[]> {
       const [, name, handlerName] = match;
       const prior = seen.get(name);
       if (prior) {
-        console.warn(
-          `[zapp] service "${name}" is registered in multiple files ` +
+        clogError(
+          `service "${name}" is registered in multiple files ` +
           `(${path.relative(root, prior)} and ${path.relative(root, file)}); ` +
           `keeping the first one.`
         );

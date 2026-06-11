@@ -5,6 +5,8 @@
 // all of its verbs ("clipboard" ⊇ "clipboard:read" + "clipboard:write").
 // The union type gives editors autocomplete + typo errors in zapp.config.ts.
 
+import { clogError } from "./log";
+
 export type ZappPermission =
   | "clipboard" | "clipboard:read" | "clipboard:write"
   | "fs" | "fs:read" | "fs:write"
@@ -75,8 +77,8 @@ export function validatePermissions(field: ZappPermission[] | undefined): string
     }
     const colon = id.indexOf(":");
     if (colon > 0 && set.has(id.slice(0, colon))) {
-      process.stderr.write(
-        `[zapp] permissions: "${id}" is redundant — bare "${id.slice(0, colon)}" already grants it\n`,
+      clogError(
+        `permissions: "${id}" is redundant — bare "${id.slice(0, colon)}" already grants it`,
       );
     }
   }
