@@ -798,11 +798,6 @@ void* darwin_window_create(WindowOptions* opts) {
         // window's contentViewController) and after delegate setup.
         const char* toolbarJson = wopts_toolbar_json(opts);
         if (toolbarJson && toolbarJson[0]) {
-            // Top-chrome inset before the toolbar exists — the toolbar's own
-            // height is the post-attach delta. (The metrics user script in
-            // webview.m measured --zapp-titlebar-height at webview creation,
-            // i.e. this same pre-toolbar value.)
-            CGFloat preInset = window.frame.size.height - window.contentLayoutRect.size.height;
             darwin_toolbar_attach((__bridge void*)window, toolbarJson, host_slot);
             // Defer one runloop tick: contentLayoutRect picks the toolbar up
             // in the next layout pass, and by then the panes' initial
@@ -812,16 +807,36 @@ void* darwin_window_create(WindowOptions* opts) {
             WKWebView* paneA = mainWebviewRef;     // nil in the non-sidebar path
             WKWebView* paneB = sidebarWebviewRef;  // nil in the non-sidebar path
             dispatch_async(dispatch_get_main_queue(), ^{
+                // --zapp-titlebar-height = the FULL top chrome inset ("pad by
+                // this"). Unified styles merge the toolbar INTO the titlebar:
+                // one NSTitlebarContainerView spans the whole band and the
+                // traffic lights center within it, so this is re-injected
+                // with the post-attach total.
                 CGFloat postInset = toolbarWindow.frame.size.height - toolbarWindow.contentLayoutRect.size.height;
-                CGFloat toolbarH = postInset - preInset;
-                if (toolbarH < 0) toolbarH = 0;
-                // Unified styles merge the toolbar INTO the titlebar — on
-                // screen there is ONE NSTitlebarContainerView of height
-                // postInset (verified against the theme frame). So
-                // --zapp-titlebar-height keeps its contract ("the full top
-                // chrome inset; pad by this") and is RE-injected with the
-                // post-attach total; --zapp-toolbar-height carries the
-                // toolbar's share of it (informational — do NOT add the two).
+                // --zapp-toolbar-height = the measured height of the row that
+                // CONTAINS the toolbar items (the NSToolbarView frame). In
+                // unified styles it equals the whole band (== titlebar
+                // height); in "expanded" it's the sub-row below the title.
+                // Measuring the real view also tracks any display-mode/style
+                // automatically. Class-name walk is the only way to find it;
+                // fall back to the full inset (== unified behavior) if AppKit
+                // ever renames it.
+                CGFloat toolbarH = 0;
+                NSView* theme = toolbarWindow.contentView.superview;
+                for (NSView* container in theme.subviews) {
+                    if (![NSStringFromClass([container class]) containsString:@"TitlebarContainer"]) continue;
+                    for (NSView* tb1 in container.subviews) {
+                        for (NSView* tb2 in tb1.subviews) {
+                            if ([NSStringFromClass([tb2 class]) containsString:@"NSToolbarView"]) {
+                                toolbarH = tb2.frame.size.height;
+                                break;
+                            }
+                        }
+                        if (toolbarH > 0) break;
+                    }
+                    break;
+                }
+                if (toolbarH <= 0) toolbarH = postInset;
                 NSString* js = [NSString stringWithFormat:
                     @"(function(){try{var r=document.documentElement;"
                     @"if(r){r.style.setProperty('--zapp-titlebar-height','%.0fpx');"

@@ -639,9 +639,12 @@ light width:
   `0` on fully borderless windows. On windows with a native `toolbar`,
   the unified titlebar+toolbar band is one piece of chrome and this
   variable updates to its total height once the toolbar attaches.
-- `--zapp-toolbar-height`: the toolbar's share of that inset (`0px` on
-  windows without one). Informational — useful for sizing
-  toolbar-aligned elements; do **not** add it to `--zapp-titlebar-height`.
+- `--zapp-toolbar-height`: the measured height of the row that contains
+  the toolbar items (`0px` on windows without a toolbar). In the unified
+  styles the toolbar lives in the titlebar, so this **equals**
+  `--zapp-titlebar-height`; in the `expanded` style it's the toolbar row
+  below the title. Use it to size toolbar-aligned elements; do **not**
+  add it to `--zapp-titlebar-height`.
 - `--zapp-content-inset-left`: the horizontal offset of the right edge
   of the traffic-light buttons (+ 8pt breathing room). Pad your content
   by this amount to avoid overlap.

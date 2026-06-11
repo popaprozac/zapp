@@ -940,9 +940,11 @@ void darwin_webview_create_ext(void* window_ptr, bool inspectable, bool accept_f
     //      pre-toolbar; on toolbar windows window.m RE-injects it with the
     //      post-attach total (unified styles merge the toolbar into one
     //      NSTitlebarContainerView — there is no separate strip on screen).
-    //    - --zapp-toolbar-height: the toolbar's share of that inset (0
-    //      unless the window declares toolbar items; set post-attach from
-    //      window.m). Informational — never add it to titlebar-height.
+    //    - --zapp-toolbar-height: measured height of the row containing
+    //      the toolbar items (0 unless the window declares toolbar items;
+    //      set post-attach from window.m). Equals titlebar-height in the
+    //      unified styles (the toolbar row IS the titlebar band); never
+    //      add the two.
     //    - --zapp-content-inset-left: horizontal distance from the window's
     //      left edge to the right side of the zoom (green) standard button,
     //      plus a small pad. Apps pad their content by this amount so the

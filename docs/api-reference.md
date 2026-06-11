@@ -865,12 +865,14 @@ The `toggleSidebar` button needs no wiring: macOS routes it to the split
 view directly, and the existing `SIDEBAR_COLLAPSED` / `SIDEBAR_EXPANDED`
 events still fire (same state as `win.sidebar.toggle()`).
 
-**Layout metric.** Pad fixed headers by `var(--zapp-titlebar-height)` —
-on toolbar windows it updates to the full unified titlebar+toolbar
-height once the toolbar attaches (the chrome is one band; there is no
-separate toolbar strip). `--zapp-toolbar-height` (`0px` on windows
-without a toolbar) reports the toolbar's share of that inset for
-toolbar-aligned layouts; don't add the two.
+**Layout metrics.** Pad fixed headers by `var(--zapp-titlebar-height)` —
+it always means the full top chrome inset, and on toolbar windows it
+updates to the unified titlebar+toolbar band height once the toolbar
+attaches. `--zapp-toolbar-height` (`0px` without a toolbar) is the
+measured height of the row containing the toolbar items: in the unified
+styles that row IS the titlebar band (the two variables are equal, and
+the traffic lights center in the same row); in the `expanded` style it's
+the toolbar row below the title. Never add the two variables.
 
 v1 is create-time only — no `setItems` after creation; no search field;
 `allowsUserCustomization` is off.
