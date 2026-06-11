@@ -24,6 +24,22 @@ void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first
                            const char* url_override, int32_t numeric_id_pre_alloc,
                            bool transparent_background);
 
+// Extended creation path (native-sidebar feature). The three trailing params
+// widen the legacy signature; at their defaults (NULL / -1 / false) behavior is
+// byte-for-byte equivalent to darwin_webview_create.
+//   - container_view: NSView* to mount the WKWebView into (the .sidebar split
+//     item's view, or the main pane's vibrancy host). NULL = legacy mount
+//     (replace the window's contentView / vibrancy-subview detection).
+//   - identity_window_id: numeric id baked into Symbol.for('zapp.windowId').
+//     A sidebar webview passes the HOST window's id so its runtime identifies
+//     as the host while TRANSPORT stays on numeric_id_pre_alloc. -1 = self.
+//   - is_sidebar: sets Symbol.for('zapp.isSidebar')=true at document start.
+void darwin_webview_create_ext(void* window_ptr, bool inspectable, bool accept_first_mouse,
+                               const char* url_override, int32_t numeric_id_pre_alloc,
+                               bool transparent_background,
+                               void* container_view, int32_t identity_window_id,
+                               bool is_sidebar);
+
 // Evaluate JavaScript on a specific window's WebView.
 void darwin_webview_eval(void* window_ptr, const char* js);
 

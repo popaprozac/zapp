@@ -759,9 +759,36 @@ void darwin_webview_set_drag_region(int32_t window_id, bool drag) {
 
 // --- WebView Creation ---
 
-void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first_mouse,
-                           const char* url_override, int32_t numeric_id_pre_alloc,
-                           bool transparent_background) {
+// darwin_webview_create_ext — the full creation path, parameterized for the
+// native-sidebar feature (Task 4). The three trailing params widen the legacy
+// signature without changing its behavior when they're at their defaults
+// (NULL / -1 / false), which is exactly how the thin darwin_webview_create
+// delegator below calls it. Sidebar callers (window.m, Task 5) pass:
+//   - container_view: the NSSplitViewItem's view to mount into, instead of
+//     the host's contentView/vibrancy detection.
+//   - identity_window_id: the HOST window's numeric id, baked into the
+//     Symbol.for('zapp.windowId') JS identity so the sidebar's runtime
+//     reports the host's windowId. The sidebar's TRANSPORT registration
+//     keeps using its own slot (numeric_id_pre_alloc) — only the JS-visible
+//     identity string switches. (-1 = self identity, i.e. legacy.)
+//   - is_sidebar: sets Symbol.for('zapp.isSidebar')=true at document start.
+//
+// Subscribe note: when a sidebar webview's runtime sends a window-event
+// `subscribe` (bootstrap/webview.ts: {t:4,m:"subscribe"}), the router keys
+// the JS-listener bitmask on the message's TRANSPORT slot
+// (router_handle_window_action's window_id = sender slot = this webview's own
+// numeric_id_pre_alloc), NOT on the identity id. That slot is a valid
+// app.window entry (registered for this webview), so the subscribe is not
+// rejected. Native fans the event to the same slot and the runtime filters by
+// the host windowId carried in the payload (runtime/window.ts). Identity and
+// transport stay cleanly separated; nothing keys off identity_window_id but
+// the JS identity string itself.
+void darwin_webview_create_ext(void* window_ptr, bool inspectable, bool accept_first_mouse,
+                               const char* url_override, int32_t numeric_id_pre_alloc,
+                               bool transparent_background,
+                               void* container_view /* NSView*; NULL = legacy mount */,
+                               int32_t identity_window_id /* -1 = self identity */,
+                               bool is_sidebar) {
     NSWindow* window = (__bridge NSWindow*)window_ptr;
     NSView* hostView = [window contentView];
     NSRect bounds = [hostView bounds];
@@ -806,8 +833,14 @@ void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first
     // the pre-allocated numeric id from WindowManager. -1 = no id yet;
     // we leave the symbol unset and let darwin_window_register_numeric_id
     // fix it via eval (works for the rare internal-construction paths).
-    NSString* windowId = (numeric_id_pre_alloc >= 0)
-        ? [NSString stringWithFormat:@"win-%d", numeric_id_pre_alloc]
+    // JS identity: a sidebar webview reports the HOST window's id so its
+    // runtime's Window.current() / event filtering resolve to the host, while
+    // its TRANSPORT (the dispatch slot it registers under) stays on its own
+    // numeric_id_pre_alloc. Only this identity string switches; see the
+    // subscribe note on darwin_webview_create_ext above.
+    int32_t identity_id = (identity_window_id >= 0) ? identity_window_id : numeric_id_pre_alloc;
+    NSString* windowId = (identity_id >= 0)
+        ? [NSString stringWithFormat:@"win-%d", identity_id]
         : @"";
 
     // --- Inject user scripts before page load ---
@@ -878,6 +911,14 @@ void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first
         NSString* windowIdScript = [NSString stringWithFormat:
             @"(function(){globalThis[Symbol.for('zapp.windowId')]='%@';})();", windowId];
         [ucc addUserScript:[[WKUserScript alloc] initWithSource:windowIdScript
+            injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
+    }
+
+    // 3b. Sidebar marker — lets the runtime branch on a sidebar webview at
+    //     bootstrap (e.g. to render the sidebar surface) without a round-trip.
+    if (is_sidebar) {
+        [ucc addUserScript:[[WKUserScript alloc] initWithSource:
+            @"(function(){globalThis[Symbol.for('zapp.isSidebar')]=true;})();"
             injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
     }
 
@@ -1034,14 +1075,33 @@ void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first
     // its first load would reset the WKWebView's content process and
     // interrupt the bridge bootstrap, so we install into the final
     // tree before any of that happens.
-    NSView* finalHost = [window contentView];
-    if ([finalHost isKindOfClass:[NSVisualEffectView class]]) {
-        [webview setFrame:finalHost.bounds];
+    // Sidebar path (Task 5): mount into the caller-provided container (the
+    // NSSplitViewItem's view) instead of touching the host's contentView or
+    // running vibrancy detection. The legacy branch below is unchanged.
+    if (container_view) {
+        NSView* host = (__bridge NSView*)container_view;
+        [webview setFrame:host.bounds];
         [webview setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
-        [finalHost addSubview:webview];
+        [host addSubview:webview];
     } else {
-        [window setContentView:webview];
+        NSView* finalHost = [window contentView];
+        if ([finalHost isKindOfClass:[NSVisualEffectView class]]) {
+            [webview setFrame:finalHost.bounds];
+            [webview setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+            [finalHost addSubview:webview];
+        } else {
+            [window setContentView:webview];
+        }
     }
+}
+
+// Legacy entry point — delegates to the ext path with sidebar params at their
+// no-op defaults, so the no-sidebar behavior is byte-for-byte equivalent.
+void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first_mouse,
+                           const char* url_override, int32_t numeric_id_pre_alloc,
+                           bool transparent_background) {
+    darwin_webview_create_ext(window_ptr, inspectable, accept_first_mouse, url_override,
+                              numeric_id_pre_alloc, transparent_background, NULL, -1, false);
 }
 
 // --- JS evaluation ---

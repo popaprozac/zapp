@@ -61,6 +61,7 @@ export function getPlatformSources(nativeDir: string, target: BuildTarget = dete
       path.join(darwinDir, "clipboard.m"),
       path.join(darwinDir, "shortcuts.m"),
       path.join(darwinDir, "panel.m"),
+      path.join(darwinDir, "sidebar.m"),
       path.join(darwinDir, "screen.m"),
     ];
     // bare.c / zjs.c are NOT listed here — they're added by
@@ -92,6 +93,7 @@ export function getPlatformSources(nativeDir: string, target: BuildTarget = dete
       path.join(iosDir, "clipboard.m"),
       path.join(iosDir, "shortcuts.m"),
       path.join(iosDir, "panel.m"),
+      path.join(iosDir, "sidebar.m"),
       path.join(iosDir, "screen.m"),
     ];
     return sources.filter(f => existsSync(f));

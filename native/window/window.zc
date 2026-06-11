@@ -86,6 +86,16 @@ struct WindowOptions {
     // "underWindowBackground", "underPageBackground".
     vibrancy: string;
     _vibrancy_heap: bool;
+    // Sidebar (native NSSplitViewItem sidebar; macOS only).
+    sidebarUrl: string;        // empty = no sidebar
+    _sidebarUrl_heap: bool;
+    sidebarMaterial: string;   // default "sidebar"
+    _sidebarMaterial_heap: bool;
+    sidebarWidth: int;         // default 260
+    sidebarMinWidth: int;      // default 180
+    sidebarMaxWidth: int;      // default 400
+    sidebarCollapsible: bool;  // default true
+    sidebarCollapsed: bool;    // default false
     // Numeric window id pre-assigned by WindowManager.create *before*
     // the native window is built. Native code uses this so the JS
     // bootstrap user script can bake in the canonical "win-<N>" id —
@@ -93,6 +103,13 @@ struct WindowOptions {
     // throws at module-top before darwin_window_register_numeric_id
     // can finish. -1 = unassigned (treated as "use ptr fallback").
     numericIdPreAlloc: int;
+    // Second pre-allocated id, drawn from the SAME WindowManager.next_id
+    // space as numericIdPreAlloc, reserved for the sidebar webview's
+    // TRANSPORT slot when sidebar opts are present (native window.m mounts
+    // a second WKWebView into the .sidebar split item and registers it at
+    // this slot). Identity stays the host's (numericIdPreAlloc); only the
+    // dispatch/transport slot differs. -1 = no sidebar (single webview).
+    sidebarNumericId: int;
     // Center on the active screen at create time. Overrides x/y if both
     // are set. With frameAutosaveName, the saved frame still wins on
     // restore — autoCenter is the first-launch fallback.
@@ -172,7 +189,17 @@ impl WindowOptions {
             sheetGrabber: false,
             vibrancy: "",
             _vibrancy_heap: false,
+            sidebarUrl: "",
+            _sidebarUrl_heap: false,
+            sidebarMaterial: "",
+            _sidebarMaterial_heap: false,
+            sidebarWidth: 260,
+            sidebarMinWidth: 180,
+            sidebarMaxWidth: 400,
+            sidebarCollapsible: true,
+            sidebarCollapsed: false,
             numericIdPreAlloc: -1,
+            sidebarNumericId: -1,
             autoCenter: false,
             frameAutosaveName: "",
             _frameAutosaveName_heap: false,
@@ -207,7 +234,15 @@ fn wopts_accept_first_mouse(opts: WindowOptions*) -> bool { return opts.acceptFi
 fn wopts_auto_center(opts: WindowOptions*) -> bool { return opts.autoCenter; }
 fn wopts_frame_autosave_name(opts: WindowOptions*) -> string { return opts.frameAutosaveName; }
 fn wopts_numeric_id_pre_alloc(opts: WindowOptions*) -> int { return opts.numericIdPreAlloc; }
+fn wopts_sidebar_numeric_id(opts: WindowOptions*) -> int { return opts.sidebarNumericId; }
 fn wopts_vibrancy(opts: WindowOptions*) -> string { return opts.vibrancy; }
+fn wopts_sidebar_url(opts: WindowOptions*) -> string { return opts.sidebarUrl; }
+fn wopts_sidebar_material(opts: WindowOptions*) -> string { return opts.sidebarMaterial; }
+fn wopts_sidebar_width(opts: WindowOptions*) -> int { return opts.sidebarWidth; }
+fn wopts_sidebar_min_width(opts: WindowOptions*) -> int { return opts.sidebarMinWidth; }
+fn wopts_sidebar_max_width(opts: WindowOptions*) -> int { return opts.sidebarMaxWidth; }
+fn wopts_sidebar_collapsible(opts: WindowOptions*) -> bool { return opts.sidebarCollapsible; }
+fn wopts_sidebar_collapsed(opts: WindowOptions*) -> bool { return opts.sidebarCollapsed; }
 fn wopts_sheet_presentation(opts: WindowOptions*) -> int { return opts.sheetPresentation; }
 fn wopts_sheet_detents(opts: WindowOptions*) -> int { return opts.sheetDetents; }
 fn wopts_sheet_grabber(opts: WindowOptions*) -> bool { return opts.sheetGrabber; }
@@ -327,6 +362,39 @@ fn window_opts_apply_json(opts: WindowOptions*, args: JsonValue*) -> void {
             opts->_vibrancy_heap = 1;
         }
     }
+    // Sidebar: a nested object { url, material, width, minWidth, maxWidth,
+    // collapsible, collapsed }. get_object returns the BORROWED child node
+    // straight out of the parent's Map (no copy / no alloc), so its lifetime
+    // is the parent tree's — we strdup the strings out and must NOT free the
+    // node itself.
+    let sb_opt = args.get_object("sidebar");
+    if sb_opt.is_some() {
+        let sb = sb_opt.unwrap();
+        let su = (*sb).get_string("url");
+        if su.is_some() {
+            let src = su.unwrap();
+            raw {
+                if (opts->_sidebarUrl_heap && opts->sidebarUrl) free((void*)opts->sidebarUrl);
+                opts->sidebarUrl = strdup((const char*)src);
+                opts->_sidebarUrl_heap = 1;
+            }
+        }
+        let sm = (*sb).get_string("material");
+        if sm.is_some() {
+            let src = sm.unwrap();
+            raw {
+                if (opts->_sidebarMaterial_heap && opts->sidebarMaterial) free((void*)opts->sidebarMaterial);
+                opts->sidebarMaterial = strdup((const char*)src);
+                opts->_sidebarMaterial_heap = 1;
+            }
+        }
+        let sw = (*sb).get_int("width");        if sw.is_some() { opts.sidebarWidth = sw.unwrap(); }
+        let smin = (*sb).get_int("minWidth");   if smin.is_some() { opts.sidebarMinWidth = smin.unwrap(); }
+        let smax = (*sb).get_int("maxWidth");   if smax.is_some() { opts.sidebarMaxWidth = smax.unwrap(); }
+        let sc = (*sb).get_bool("collapsible"); if sc.is_some() { opts.sidebarCollapsible = sc.unwrap(); }
+        let sco = (*sb).get_bool("collapsed");  if sco.is_some() { opts.sidebarCollapsed = sco.unwrap(); }
+    }
+
     let afm_opt = args.get_bool("acceptFirstMouse");
     if afm_opt.is_some() { opts.acceptFirstMouse = afm_opt.unwrap(); }
 
@@ -500,6 +568,16 @@ fn window_opts_free(opts: WindowOptions*) -> void {
             opts->vibrancy = "";
             opts->_vibrancy_heap = 0;
         }
+        if (opts->_sidebarUrl_heap && opts->sidebarUrl) {
+            free((void*)opts->sidebarUrl);
+            opts->sidebarUrl = "";
+            opts->_sidebarUrl_heap = 0;
+        }
+        if (opts->_sidebarMaterial_heap && opts->sidebarMaterial) {
+            free((void*)opts->sidebarMaterial);
+            opts->sidebarMaterial = "";
+            opts->_sidebarMaterial_heap = 0;
+        }
     }
 }
 
@@ -663,6 +741,15 @@ impl WindowManager {
         let id = self.next_id;
         self.next_id += 1;
         options.numericIdPreAlloc = id;
+        // Sidebar windows mount a SECOND webview (the .sidebar pane) that
+        // needs its own transport slot in the native dispatch table. Draw
+        // it from the SAME monotonic id-space — never a parallel allocator —
+        // so it can never collide with a future window's id. Only reserved
+        // when sidebar opts are actually present (empty url = no sidebar).
+        if options.sidebarUrl != "" {
+            options.sidebarNumericId = self.next_id;
+            self.next_id += 1;
+        }
         let handle = window_create(options);
         let key: char[32];
         c::snprintf(key, 32, "win-%d", id);

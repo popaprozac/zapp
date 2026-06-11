@@ -5,7 +5,7 @@
 Zapp has three trust zones:
 
 1. **Your native code (Zen-C / ObjC / C)** — fully privileged.
-2. **Your app's JS** (the main webview + workers, loaded from `zapp://` or
+2. **Your app's JS** (the main webview, sidebar webviews, + workers, loaded from `zapp://` or
    your dev server) — trusted by default. It talks to native over the
    bridge; the `permissions` manifest (below) lets you narrow what it can
    reach.
@@ -59,7 +59,7 @@ permissions: ["clipboard:read", "fs", "dialog", "notifications", "window:create"
 | `window:create` | — | creating new windows (ops on existing windows are never gated) |
 | `shell` | `:open`, `:reveal`, `:trash` | openExternal/openPath · showItemInFolder · trashItem |
 
-Not gated in v1 (by design): window ops on existing windows, app lifecycle,
+Not gated in v1 (by design): window ops on existing windows (including sidebar toggle/resize), app lifecycle,
 `Events`, `Sync`, user `Services` (you wrote both sides; per-service gating
 arrives with per-context grants in v2), `protocols`/`deepLinkSchemes`
 (their config declaration is the grant).
