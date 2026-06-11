@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { normalizeToolbar, type ToolbarOptions } from "./window";
+import { eventName, WindowEvent } from "./events";
 
 describe("normalizeToolbar", () => {
   test("strips actions and stringifies items in declared order", () => {
@@ -10,6 +11,7 @@ describe("normalizeToolbar", () => {
         { type: "trackingSeparator" },
         { id: "compose", icon: "sf:square.and.pencil", label: "Compose", action: () => { hit++; } },
         { type: "flexibleSpace" },
+        { type: "space" },
         { id: "filter", icon: "sf:line.3.horizontal.decrease" },
       ],
     };
@@ -21,6 +23,7 @@ describe("normalizeToolbar", () => {
       { type: "trackingSeparator" },
       { type: "button", id: "compose", label: "Compose", icon: "sf:square.and.pencil" },
       { type: "flexibleSpace" },
+      { type: "space" },
       { type: "button", id: "filter", label: "", icon: "sf:line.3.horizontal.decrease" },
     ]);
     expect(json).not.toContain("action");
@@ -50,5 +53,9 @@ describe("normalizeToolbar", () => {
       false,
     );
     expect(JSON.parse(json).items).toEqual([{ type: "button", id: "a", label: "", icon: "" }]);
+  });
+
+  test("TOOLBAR_CLICKED maps to the window:toolbar-clicked wire name", () => {
+    expect(eventName(WindowEvent.TOOLBAR_CLICKED)).toBe("window:toolbar-clicked");
   });
 });

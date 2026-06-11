@@ -241,14 +241,15 @@ export interface ToolbarOptions {
 }
 
 /** Toolbar action callbacks keyed "<windowId>:<itemId>" — Menu.build's
- * collect/strip/listen shape (runtime/menu.ts), but per-window. */
+ * collect/strip/listen shape (runtime/menu.ts), but per-window.
+ * Entries persist for the app lifetime — no sweep on window close (v1; a native close-sweep is a follow-up). Menus have the same shape app-lifetime by nature; windows die, so this is a deliberate v1 tradeoff. */
 const toolbarActions = new Map<string, () => void>();
 let toolbarClickWired = false;
 
 function wireToolbarClicks(): void {
   if (toolbarClickWired) return;
   toolbarClickWired = true;
-  getBridge().on("window:toolbar-clicked", (payload: any) => {
+  getBridge().on(eventName(WindowEvent.TOOLBAR_CLICKED), (payload: any) => {
     const fn = toolbarActions.get(`${payload?.windowId}:${payload?.id}`);
     if (fn) fn();
   });
@@ -532,8 +533,8 @@ export const Window = {
     let pendingToolbarActions: Map<string, () => void> | undefined;
     if (opts?.toolbar) {
       const { json, actions } = normalizeToolbar(opts.toolbar, opts.sidebar !== undefined);
-      (normalized as any).toolbarJson = json;
-      delete (normalized as any).toolbar;
+      normalized.toolbarJson = json;
+      delete normalized.toolbar;
       if (actions.size > 0) pendingToolbarActions = actions;
     }
     const registerToolbarActions = (windowId: string) => {
