@@ -630,15 +630,28 @@ light width:
 ```css
 .titlebar {
   height: var(--zapp-titlebar-height, 38px);
-  padding-left: var(--zapp-content-inset-left, 78px);
+  padding-left: var(--zapp-window-controls-inset-left, 78px);
 }
 ```
 
-- `--zapp-titlebar-height`: the vertical inset the native titlebar
-  occupies. `0` on fully borderless windows.
-- `--zapp-content-inset-left`: the horizontal offset of the right edge
-  of the traffic-light buttons (+ 8pt breathing room). Pad your content
-  by this amount to avoid overlap.
+- `--zapp-titlebar-height`: the full vertical inset the native chrome
+  occupies at the top of the window — pad fixed headers by this alone.
+  `0` on fully borderless windows. On windows with a native `toolbar`,
+  the unified titlebar+toolbar band is one piece of chrome and this
+  variable updates to its total height once the toolbar attaches.
+- `--zapp-toolbar-height`: the measured height of the row that contains
+  the toolbar items (`0px` on windows without a toolbar). In the unified
+  styles the toolbar lives in the titlebar, so this **equals**
+  `--zapp-titlebar-height`; in the `expanded` style it's the toolbar row
+  below the title. Use it to size toolbar-aligned elements; do **not**
+  add it to `--zapp-titlebar-height`.
+- `--zapp-window-controls-inset-left`: the horizontal offset of the
+  right edge of the window-control buttons (the traffic lights, + 8pt
+  breathing room). Pad your content by this amount to avoid overlap.
+  ("left" because macOS puts the controls on the left; a Windows port
+  will add a `-right` twin for caption buttons.) The old name
+  `--zapp-content-inset-left` is **deprecated** but still emitted with
+  the same value.
 - `data-zapp-titlebar-style` on `<html>`: `"default"`, `"hidden"`, or
   `"hiddenInset"`. Use as a CSS attribute selector for style-conditional
   layout.

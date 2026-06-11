@@ -935,12 +935,24 @@ void darwin_webview_create_ext(void* window_ptr, bool inspectable, bool accept_f
 
     // 4. Window metrics — expose native values as CSS custom properties so
     //    custom-titlebar apps don't have to eyeball 28px / 78px guesses.
-    //    - --zapp-titlebar-height: vertical inset taken by the native
-    //      titlebar (0 on truly borderless windows).
-    //    - --zapp-content-inset-left: horizontal distance from the window's
-    //      left edge to the right side of the zoom (green) standard button,
-    //      plus a small pad. Apps pad their content by this amount so the
-    //      traffic lights don't overlap their own UI.
+    //    - --zapp-titlebar-height: the FULL top chrome inset — pad content
+    //      by this alone (0 on truly borderless windows). Measured here
+    //      pre-toolbar; on toolbar windows window.m RE-injects it with the
+    //      post-attach total (unified styles merge the toolbar into one
+    //      NSTitlebarContainerView — there is no separate strip on screen).
+    //    - --zapp-toolbar-height: measured height of the row containing
+    //      the toolbar items (0 unless the window declares toolbar items;
+    //      set post-attach from window.m). Equals titlebar-height in the
+    //      unified styles (the toolbar row IS the titlebar band); never
+    //      add the two.
+    //    - --zapp-window-controls-inset-left: horizontal distance from the
+    //      window's left edge to the right side of the zoom (green) standard
+    //      button, plus a small pad. Apps pad their content by this amount so
+    //      the window controls (traffic lights) don't overlap their own UI.
+    //      ("left" because macOS puts the controls on the left; a Windows
+    //      port adds a -right twin for caption buttons.)
+    //      --zapp-content-inset-left is the DEPRECATED old name, still
+    //      emitted with the same value for published-alpha compatibility.
     //    - data-zapp-titlebar-style on <html>: "default" | "hidden" |
     //      "hiddenInset", for style-conditional CSS.
     {
@@ -964,9 +976,11 @@ void darwin_webview_create_ext(void* window_ptr, bool inspectable, bool accept_f
         NSString* metricsScript = [NSString stringWithFormat:
             @"(function(){try{var r=document.documentElement;"
             @"if(r){r.style.setProperty('--zapp-titlebar-height','%.0fpx');"
-            @"r.style.setProperty('--zapp-content-inset-left','%.0fpx');"
+            @"r.style.setProperty('--zapp-toolbar-height','0px');"
+            @"r.style.setProperty('--zapp-window-controls-inset-left','%.0fpx');"
+            @"r.style.setProperty('--zapp-content-inset-left','%.0fpx');" /* deprecated alias */
             @"r.setAttribute('data-zapp-titlebar-style','%@');}}catch(e){}})();",
-            titlebarHeight, contentInsetLeft, styleName];
+            titlebarHeight, contentInsetLeft, contentInsetLeft, styleName];
         [ucc addUserScript:[[WKUserScript alloc] initWithSource:metricsScript
             injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
     }

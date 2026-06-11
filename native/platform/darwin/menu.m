@@ -138,7 +138,8 @@ static NSMenu* build_menu_from_json(NSArray* items);
 //                                   resources), like tray.m apply_icon
 // templateMode: -1 auto (template iff "sf:"), 0 off, 1 on. Sized to `size`.
 // nil on failure (caller renders the item icon-less); logs once.
-static NSImage* zapp_resolve_icon(NSString* spec, CGFloat size, int templateMode) {
+// Shared with toolbar.m (declared extern there). sf:/file-path/data-URL.
+NSImage* zapp_resolve_icon(NSString* spec, CGFloat size, int templateMode) {
     if (spec.length == 0) return nil;
     BOOL isSf = [spec hasPrefix:@"sf:"];
     NSImage* img = nil;

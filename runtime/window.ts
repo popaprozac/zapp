@@ -193,6 +193,8 @@ export interface WindowOptions {
   frameAutosaveName?: string;
   /** Attach a native sidebar (NSSplitViewItem) to this window. macOS only. */
   sidebar?: SidebarOptions;
+  /** Attach a native toolbar (NSToolbar). macOS only; no-op elsewhere. */
+  toolbar?: ToolbarOptions;
 }
 
 /** Options for a native sidebar (NSSplitViewItem) attached to a window. */
@@ -210,6 +212,85 @@ export interface SidebarOptions {
   collapsed?: boolean;
   /** Background material. Default Material.Sidebar (liquid glass on macOS 26+). */
   material?: Material;
+}
+
+/** One toolbar item. `type` defaults to "button". */
+export interface ToolbarItemDef {
+  /** Identifier for custom buttons — REQUIRED for type "button" (keys
+   *  click routing). Ignored for system types. Allowed charset: letters,
+   *  digits, `.`, `_`, `-`. Prefixes `"zapp."` and `"NSToolbar"` are reserved. */
+  id?: string;
+  /** "button" (default) | system items. `toggleSidebar` is AppKit's
+   *  standard sidebar button (auto-wired to the split view controller);
+   *  `trackingSeparator` makes the toolbar divider track the sidebar
+   *  split. Both require the window to have a `sidebar` (warned + dropped
+   *  otherwise). */
+  type?: "button" | "toggleSidebar" | "trackingSeparator" | "space" | "flexibleSpace";
+  /** Tooltip; visible text in the "expanded" style. */
+  label?: string;
+  /** Icon via the shared resolver: "sf:<symbol>", file path, or data URL. */
+  icon?: string;
+  /** Creator-context callback (menu pattern). Stripped before the wire. */
+  action?: () => void;
+}
+
+/** Options for a native toolbar (NSToolbar) attached at Window.create. */
+export interface ToolbarOptions {
+  items: ToolbarItemDef[];
+  /** NSWindow.toolbarStyle. Default "unified". macOS only. */
+  style?: "unified" | "unifiedCompact" | "expanded";
+}
+
+/** Toolbar action callbacks keyed "<windowId>:<itemId>" — Menu.build's
+ * collect/strip/listen shape (runtime/menu.ts), but per-window.
+ * Entries persist for the app lifetime — no sweep on window close (v1; a native close-sweep is a follow-up). Menus have the same shape app-lifetime by nature; windows die, so this is a deliberate v1 tradeoff. */
+const toolbarActions = new Map<string, () => void>();
+let toolbarClickWired = false;
+
+function wireToolbarClicks(): void {
+  if (toolbarClickWired) return;
+  toolbarClickWired = true;
+  getBridge().on(eventName(WindowEvent.TOOLBAR_CLICKED), (payload: any) => {
+    const fn = toolbarActions.get(`${payload?.windowId}:${payload?.id}`);
+    if (fn) fn();
+  });
+}
+
+/** Validate a ToolbarOptions and split it into the wire JSON (actions
+ * stripped, defaults applied) and the action map. Pure — unit-tested. */
+export function normalizeToolbar(
+  toolbar: ToolbarOptions,
+  hasSidebar: boolean,
+): { json: string; actions: Map<string, () => void> } {
+  const actions = new Map<string, () => void>();
+  const seen = new Set<string>();
+  const items: Record<string, unknown>[] = [];
+  for (const item of toolbar.items ?? []) {
+    const type = item.type ?? "button";
+    if (type === "toggleSidebar" || type === "trackingSeparator") {
+      if (!hasSidebar) {
+        console.warn(`[zapp] toolbar: "${type}" requires the window to have a sidebar — item dropped`);
+        continue;
+      }
+      items.push({ type });
+      continue;
+    }
+    if (type === "space" || type === "flexibleSpace") {
+      items.push({ type });
+      continue;
+    }
+    if (!item.id) throw new Error('[zapp] toolbar: button items require an "id"');
+    if (!/^[A-Za-z0-9._-]+$/.test(item.id) || item.id.startsWith("zapp.") || item.id.startsWith("NSToolbar")) {
+      throw new Error(
+        `[zapp] toolbar: invalid item id "${item.id}" — use letters, digits, ".", "_", "-" (ids prefixed "zapp." or "NSToolbar" are reserved)`,
+      );
+    }
+    if (seen.has(item.id)) throw new Error(`[zapp] toolbar: duplicate item id "${item.id}"`);
+    seen.add(item.id);
+    if (item.action) actions.set(item.id, item.action);
+    items.push({ type: "button", id: item.id, label: item.label ?? "", icon: item.icon ?? "" });
+  }
+  return { json: JSON.stringify({ style: toolbar.style ?? "unified", items }), actions };
 }
 
 /** A handle to the sidebar attached to a window. */
@@ -452,14 +533,31 @@ export const Window = {
       if (idStr) normalized.asSheetOf = idStr;
       else delete normalized.asSheetOf;
     }
+    // Toolbar: validate, strip actions, pre-stringify (window.zc stores the
+    // raw JSON; toolbar.m parses it). Actions register post-create once the
+    // windowId is known.
+    let pendingToolbarActions: Map<string, () => void> | undefined;
+    if (opts?.toolbar) {
+      const { json, actions } = normalizeToolbar(opts.toolbar, opts.sidebar !== undefined);
+      normalized.toolbarJson = json;
+      delete normalized.toolbar;
+      if (actions.size > 0) pendingToolbarActions = actions;
+    }
+    const registerToolbarActions = (windowId: string) => {
+      if (!pendingToolbarActions) return;
+      wireToolbarClicks();
+      for (const [id, fn] of pendingToolbarActions) toolbarActions.set(`${windowId}:${id}`, fn);
+    };
     // Worker context: call the createWindow host directly (sync C call).
     const host = (globalThis as any).__zappBridge;
     if (host?.createWindow) {
       const r = host.createWindow(normalized) as { windowId: string };
+      registerToolbarActions(r.windowId);
       return createWindowHandle(r.windowId, opts?.sidebar);
     }
     // Webview context: async IPC roundtrip through the WKWebView bridge.
     const result = await getBridge().invoke("__window:create", normalized) as { windowId: string };
+    registerToolbarActions(result.windowId);
     return createWindowHandle(result.windowId, opts?.sidebar);
   },
 };

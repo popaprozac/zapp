@@ -813,6 +813,70 @@ window ops, they are not gated by the `permissions` manifest.
 **Window slots.** Each sidebar window occupies 2 of the 64 available
 window slots (one for the host, one for the sidebar webview).
 
+### Toolbar (macOS)
+
+Pass `toolbar` in `Window.create` to attach a real `NSToolbar`. With
+`style: "unified"` (the default) the toolbar merges into the titlebar next
+to the traffic lights — the standard modern-macOS look. macOS only; the
+option is a no-op elsewhere.
+
+```ts
+const win = await Window.create({
+  url: "/",
+  sidebar: { url: "/nav", width: 240 },
+  toolbar: {
+    style: "unified",        // "unified" | "unifiedCompact" | "expanded"
+    items: [
+      { type: "toggleSidebar" },      // system button — icon, animation, behavior supplied by macOS
+      { type: "trackingSeparator" },  // toolbar divider tracks the sidebar split
+      { id: "compose", icon: "sf:square.and.pencil", label: "Compose",
+        action: () => console.log("compose clicked") },
+      { type: "flexibleSpace" },
+      { id: "filter", icon: "sf:line.3.horizontal.decrease", label: "Filter" },
+    ],
+  },
+});
+```
+
+**Items.** `type` defaults to `"button"`. Buttons require an `id` (it keys
+click routing; letters/digits/`.`/`_`/`-` only, `zapp.`/`NSToolbar`
+prefixes reserved, duplicates are an error), take an `icon`
+(`sf:<symbol>` / file path / data URL — same resolver as menu icons), a
+`label` (tooltip; visible text in the `expanded` style), and an optional
+`action` callback. System types: `toggleSidebar`, `trackingSeparator`
+(both require the window to have a `sidebar` — warned and dropped
+otherwise), `space`, `flexibleSpace`.
+
+**Clicks — the menu pattern.** A button click broadcasts
+`window:toolbar-clicked` with `{ windowId, id }` to every webview and
+worker. Two ways to consume the same emit:
+
+```ts
+// 1. action callback — runs in the context that called Window.create
+{ id: "compose", icon: "sf:square.and.pencil", action: () => { ... } }
+
+// 2. window event — any pane of the window (or anyone holding a handle)
+win.on(WindowEvent.TOOLBAR_CLICKED, ({ id }) => {
+  if (id === "compose") startCompose();
+});
+```
+
+The `toggleSidebar` button needs no wiring: macOS routes it to the split
+view directly, and the existing `SIDEBAR_COLLAPSED` / `SIDEBAR_EXPANDED`
+events still fire (same state as `win.sidebar.toggle()`).
+
+**Layout metrics.** Pad fixed headers by `var(--zapp-titlebar-height)` —
+it always means the full top chrome inset, and on toolbar windows it
+updates to the unified titlebar+toolbar band height once the toolbar
+attaches. `--zapp-toolbar-height` (`0px` without a toolbar) is the
+measured height of the row containing the toolbar items: in the unified
+styles that row IS the titlebar band (the two variables are equal, and
+the traffic lights center in the same row); in the `expanded` style it's
+the toolbar row below the title. Never add the two variables.
+
+v1 is create-time only — no `setItems` after creation; no search field;
+`allowsUserCustomization` is off.
+
 ### `WindowHandle.setFocus(): void`
 
 Raise this window to the front and bring the app to the foreground,

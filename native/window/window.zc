@@ -110,6 +110,10 @@ struct WindowOptions {
     // this slot). Identity stays the host's (numericIdPreAlloc); only the
     // dispatch/transport slot differs. -1 = no sidebar (single webview).
     sidebarNumericId: int;
+    // Toolbar (native NSToolbar; macOS only). Pre-stringified JSON
+    // {style, items} from the runtime — opaque here, parsed by toolbar.m.
+    toolbarJson: string;       // empty = no toolbar
+    _toolbarJson_heap: bool;
     // Center on the active screen at create time. Overrides x/y if both
     // are set. With frameAutosaveName, the saved frame still wins on
     // restore — autoCenter is the first-launch fallback.
@@ -121,7 +125,8 @@ struct WindowOptions {
     frameAutosaveName: string;
     _frameAutosaveName_heap: bool;
 
-    // Ownership flags for the two string fields. `window_opts_apply_json`
+    // Ownership flags for heap-allocated string fields (the other _*_heap
+    // flags above follow the same contract). `window_opts_apply_json`
     // strdups values it pulls from a JsonValue tree and sets the flag;
     // `window_opts_free` frees only what it allocated. Direct assignment
     // (e.g. `opts.title = "Zapp"` with a literal or caller-owned string)
@@ -200,6 +205,8 @@ impl WindowOptions {
             sidebarCollapsed: false,
             numericIdPreAlloc: -1,
             sidebarNumericId: -1,
+            toolbarJson: "",
+            _toolbarJson_heap: false,
             autoCenter: false,
             frameAutosaveName: "",
             _frameAutosaveName_heap: false,
@@ -235,6 +242,7 @@ fn wopts_auto_center(opts: WindowOptions*) -> bool { return opts.autoCenter; }
 fn wopts_frame_autosave_name(opts: WindowOptions*) -> string { return opts.frameAutosaveName; }
 fn wopts_numeric_id_pre_alloc(opts: WindowOptions*) -> int { return opts.numericIdPreAlloc; }
 fn wopts_sidebar_numeric_id(opts: WindowOptions*) -> int { return opts.sidebarNumericId; }
+fn wopts_toolbar_json(opts: WindowOptions*) -> string { return opts.toolbarJson; }
 fn wopts_vibrancy(opts: WindowOptions*) -> string { return opts.vibrancy; }
 fn wopts_sidebar_url(opts: WindowOptions*) -> string { return opts.sidebarUrl; }
 fn wopts_sidebar_material(opts: WindowOptions*) -> string { return opts.sidebarMaterial; }
@@ -393,6 +401,18 @@ fn window_opts_apply_json(opts: WindowOptions*, args: JsonValue*) -> void {
         let smax = (*sb).get_int("maxWidth");   if smax.is_some() { opts.sidebarMaxWidth = smax.unwrap(); }
         let sc = (*sb).get_bool("collapsible"); if sc.is_some() { opts.sidebarCollapsible = sc.unwrap(); }
         let sco = (*sb).get_bool("collapsed");  if sco.is_some() { opts.sidebarCollapsed = sco.unwrap(); }
+    }
+
+    // Toolbar: pre-stringified by the runtime (actions already stripped).
+    // Stored as an opaque string — toolbar.m parses it at attach time.
+    let tb_opt = args.get_string("toolbarJson");
+    if tb_opt.is_some() {
+        let src = tb_opt.unwrap();
+        raw {
+            if (opts->_toolbarJson_heap && opts->toolbarJson) free((void*)opts->toolbarJson);
+            opts->toolbarJson = strdup((const char*)src);
+            opts->_toolbarJson_heap = 1;
+        }
     }
 
     let afm_opt = args.get_bool("acceptFirstMouse");
@@ -577,6 +597,11 @@ fn window_opts_free(opts: WindowOptions*) -> void {
             free((void*)opts->sidebarMaterial);
             opts->sidebarMaterial = "";
             opts->_sidebarMaterial_heap = 0;
+        }
+        if (opts->_toolbarJson_heap && opts->toolbarJson) {
+            free((void*)opts->toolbarJson);
+            opts->toolbarJson = "";
+            opts->_toolbarJson_heap = 0;
         }
     }
 }

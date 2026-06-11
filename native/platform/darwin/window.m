@@ -36,6 +36,10 @@ extern int32_t wopts_sidebar_max_width(void* opts);
 extern bool wopts_sidebar_collapsible(void* opts);
 extern bool wopts_sidebar_collapsed(void* opts);
 extern int32_t wopts_sidebar_numeric_id(void* opts);
+// Toolbar (toolbar.m + window.zc accessor).
+extern const char* wopts_toolbar_json(void* opts);
+extern void darwin_toolbar_attach(void* window_ptr, const char* toolbar_json, int32_t window_numeric_id);
+extern void zapp_toolbar_unregister(void* window_ptr);
 extern int zapp_dispatch_event(int window_id, int event_id, int w, int h, int x, int y);
 // Primary display height (top-left global origin flip). Defined in screen.m.
 extern double zapp_primary_screen_height(void);
@@ -118,6 +122,17 @@ void zapp_registered_webviews_eval(const char* js) {
     };
     if ([NSThread isMainThread]) run();
     else dispatch_async(dispatch_get_main_queue(), run);
+}
+
+// Slot lookups for toolbar.m's chrome-metrics injection: a window's host pane
+// plus (for split windows) the sidebar pane share the same chrome metrics.
+WKWebView* zapp_webview_for_slot(int32_t slot) {
+    if (slot < 0 || slot >= ZAPP_MAX_WINDOW_CALLBACKS) return nil;
+    return zapp_webviews[slot];
+}
+
+int32_t zapp_sidebar_slot_lookup(int32_t host_slot) {
+    return zapp_sidebar_slot_for(host_slot);
 }
 
 // --- Event name resolution (static strings, zero alloc) ---
@@ -789,6 +804,26 @@ void* darwin_window_create(WindowOptions* opts) {
             delegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [window setDelegate:delegate];
 
+        // Native toolbar (toolbar.m). Attach AFTER split construction (the
+        // tracking separator resolves the live NSSplitView through the
+        // window's contentViewController) and after delegate setup.
+        const char* toolbarJson = wopts_toolbar_json(opts);
+        if (toolbarJson && toolbarJson[0]) {
+            darwin_toolbar_attach((__bridge void*)window, toolbarJson, host_slot);
+            // Initial chrome-metrics injection, one runloop tick later: the
+            // titlebar band picks the toolbar up in the next layout pass, and
+            // by then both panes are registered in the dispatch table (the
+            // create call chain completes before the tick runs). Subsequent
+            // updates — the user can switch Icon/Text display modes from the
+            // toolbar's context menu at runtime — re-inject via the
+            // controller's contentLayoutRect KVO (toolbar.m).
+            extern void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_user_script);
+            NSWindow* toolbarWindow = window;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                zapp_toolbar_inject_metrics((__bridge void*)toolbarWindow, host_slot, true);
+            });
+        }
+
         return (__bridge_retained void*)window;
     }
 }
@@ -846,6 +881,7 @@ void darwin_window_destroy(void* handle) {
         zapp_teardown_webview(delegate.sidebarWebview);
         zapp_sidebar_unregister(handle);
     }
+    zapp_toolbar_unregister(handle);
 
     [window close];
     (void)window;
