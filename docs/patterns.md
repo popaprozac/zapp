@@ -636,6 +636,10 @@ light width:
 
 - `--zapp-titlebar-height`: the vertical inset the native titlebar
   occupies. `0` on fully borderless windows.
+- `--zapp-toolbar-height`: extra vertical inset added by a native toolbar
+  (`0px` on windows without one). Pad fixed headers by
+  `calc(var(--zapp-titlebar-height) + var(--zapp-toolbar-height))` to
+  clear the full native chrome.
 - `--zapp-content-inset-left`: the horizontal offset of the right edge
   of the traffic-light buttons (+ 8pt breathing room). Pad your content
   by this amount to avoid overlap.

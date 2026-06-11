@@ -798,7 +798,54 @@ void* darwin_window_create(WindowOptions* opts) {
         // window's contentViewController) and after delegate setup.
         const char* toolbarJson = wopts_toolbar_json(opts);
         if (toolbarJson && toolbarJson[0]) {
+            // Top-chrome inset before the toolbar exists — the toolbar's own
+            // height is the post-attach delta. (The metrics user script in
+            // webview.m measured --zapp-titlebar-height at webview creation,
+            // i.e. this same pre-toolbar value.)
+            CGFloat preInset = window.frame.size.height - window.contentLayoutRect.size.height;
             darwin_toolbar_attach((__bridge void*)window, toolbarJson, host_slot);
+            // Defer one runloop tick: contentLayoutRect picks the toolbar up
+            // in the next layout pass, and by then the panes' initial
+            // navigations are committing — both the user script (future
+            // navigations/reloads) and the direct eval (current page) stick.
+            NSWindow* toolbarWindow = window;
+            WKWebView* paneA = mainWebviewRef;     // nil in the non-sidebar path
+            WKWebView* paneB = sidebarWebviewRef;  // nil in the non-sidebar path
+            dispatch_async(dispatch_get_main_queue(), ^{
+                CGFloat postInset = toolbarWindow.frame.size.height - toolbarWindow.contentLayoutRect.size.height;
+                CGFloat toolbarH = postInset - preInset;
+                if (toolbarH < 0) toolbarH = 0;
+                NSString* js = [NSString stringWithFormat:
+                    @"(function(){try{var r=document.documentElement;"
+                    @"if(r){r.style.setProperty('--zapp-toolbar-height','%.0fpx');}}catch(e){}})();",
+                    toolbarH];
+                // Collect the pane webviews: split windows hold direct refs;
+                // plain (and vibrancy) windows mount the webview as the
+                // contentView or one level below it.
+                NSMutableArray<WKWebView*>* panes = [NSMutableArray array];
+                if (paneA) [panes addObject:paneA];
+                if (paneB) [panes addObject:paneB];
+                if (panes.count == 0) {
+                    NSView* content = [toolbarWindow contentView];
+                    if ([content isKindOfClass:[WKWebView class]]) {
+                        [panes addObject:(WKWebView*)content];
+                    } else {
+                        for (NSView* sub in content.subviews) {
+                            if ([sub isKindOfClass:[WKWebView class]]) { [panes addObject:(WKWebView*)sub]; break; }
+                        }
+                    }
+                }
+                for (WKWebView* wv in panes) {
+                    // User script: survives reloads + catches the initial
+                    // navigation if it hasn't committed yet (document-start
+                    // scripts are snapshotted at commit time).
+                    [wv.configuration.userContentController addUserScript:
+                        [[WKUserScript alloc] initWithSource:js
+                            injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
+                    // Direct eval: covers a page that already committed.
+                    [wv evaluateJavaScript:js completionHandler:nil];
+                }
+            });
         }
 
         return (__bridge_retained void*)window;

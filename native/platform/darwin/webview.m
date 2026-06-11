@@ -937,6 +937,9 @@ void darwin_webview_create_ext(void* window_ptr, bool inspectable, bool accept_f
     //    custom-titlebar apps don't have to eyeball 28px / 78px guesses.
     //    - --zapp-titlebar-height: vertical inset taken by the native
     //      titlebar (0 on truly borderless windows).
+    //    - --zapp-toolbar-height: extra inset added by a native toolbar (0
+    //      unless the window declares toolbar items; set post-attach from
+    //      window.m).
     //    - --zapp-content-inset-left: horizontal distance from the window's
     //      left edge to the right side of the zoom (green) standard button,
     //      plus a small pad. Apps pad their content by this amount so the
@@ -964,6 +967,7 @@ void darwin_webview_create_ext(void* window_ptr, bool inspectable, bool accept_f
         NSString* metricsScript = [NSString stringWithFormat:
             @"(function(){try{var r=document.documentElement;"
             @"if(r){r.style.setProperty('--zapp-titlebar-height','%.0fpx');"
+            @"r.style.setProperty('--zapp-toolbar-height','0px');"
             @"r.style.setProperty('--zapp-content-inset-left','%.0fpx');"
             @"r.setAttribute('data-zapp-titlebar-style','%@');}}catch(e){}})();",
             titlebarHeight, contentInsetLeft, styleName];

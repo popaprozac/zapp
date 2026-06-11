@@ -865,6 +865,11 @@ The `toggleSidebar` button needs no wiring: macOS routes it to the split
 view directly, and the existing `SIDEBAR_COLLAPSED` / `SIDEBAR_EXPANDED`
 events still fire (same state as `win.sidebar.toggle()`).
 
+**Layout metric.** Toolbar windows update the injected CSS variable
+`--zapp-toolbar-height` (`0px` on windows without one) — pad fixed
+headers by `calc(var(--zapp-titlebar-height) + var(--zapp-toolbar-height))`
+to clear the full native chrome.
+
 v1 is create-time only — no `setItems` after creation; no search field;
 `allowsUserCustomization` is off.
 
