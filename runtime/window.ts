@@ -217,7 +217,8 @@ export interface SidebarOptions {
 /** One toolbar item. `type` defaults to "button". */
 export interface ToolbarItemDef {
   /** Identifier for custom buttons — REQUIRED for type "button" (keys
-   *  click routing). Ignored for system types. */
+   *  click routing). Ignored for system types. Allowed charset: letters,
+   *  digits, `.`, `_`, `-`. Prefixes `"zapp."` and `"NSToolbar"` are reserved. */
   id?: string;
   /** "button" (default) | system items. `toggleSidebar` is AppKit's
    *  standard sidebar button (auto-wired to the split view controller);
@@ -279,6 +280,11 @@ export function normalizeToolbar(
       continue;
     }
     if (!item.id) throw new Error('[zapp] toolbar: button items require an "id"');
+    if (!/^[A-Za-z0-9._-]+$/.test(item.id) || item.id.startsWith("zapp.") || item.id.startsWith("NSToolbar")) {
+      throw new Error(
+        `[zapp] toolbar: invalid item id "${item.id}" — use letters, digits, ".", "_", "-" (ids prefixed "zapp." or "NSToolbar" are reserved)`,
+      );
+    }
     if (seen.has(item.id)) throw new Error(`[zapp] toolbar: duplicate item id "${item.id}"`);
     seen.add(item.id);
     if (item.action) actions.set(item.id, item.action);

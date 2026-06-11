@@ -55,6 +55,17 @@ describe("normalizeToolbar", () => {
     expect(JSON.parse(json).items).toEqual([{ type: "button", id: "a", label: "", icon: "" }]);
   });
 
+  test("ids with unsafe characters throw", () => {
+    expect(() => normalizeToolbar({ items: [{ id: 'a"b' }] }, false)).toThrow(/invalid item id/);
+    expect(() => normalizeToolbar({ items: [{ id: "a\\b" }] }, false)).toThrow(/invalid item id/);
+    expect(() => normalizeToolbar({ items: [{ id: "a b" }] }, false)).toThrow(/invalid item id/);
+  });
+
+  test("reserved id prefixes throw", () => {
+    expect(() => normalizeToolbar({ items: [{ id: "zapp.trackingSeparator" }] }, false)).toThrow(/reserved/);
+    expect(() => normalizeToolbar({ items: [{ id: "NSToolbarFlexibleSpaceItem" }] }, false)).toThrow(/reserved/);
+  });
+
   test("TOOLBAR_CLICKED maps to the window:toolbar-clicked wire name", () => {
     expect(eventName(WindowEvent.TOOLBAR_CLICKED)).toBe("window:toolbar-clicked");
   });

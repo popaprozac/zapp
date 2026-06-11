@@ -107,11 +107,17 @@ static NSMutableDictionary<NSValue*, ZappToolbarController*>* zapp_toolbars = ni
 
 void darwin_toolbar_attach(void* window_ptr, const char* toolbar_json, int32_t window_numeric_id) {
     if (!window_ptr || !toolbar_json || !toolbar_json[0]) return;
+    NSCAssert([NSThread isMainThread], @"zapp toolbar registry is main-thread-only");
     NSWindow* window = (__bridge NSWindow*)window_ptr;
 
     NSData* data = [NSData dataWithBytes:toolbar_json length:strlen(toolbar_json)];
-    NSDictionary* root = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-    if (![root isKindOfClass:[NSDictionary class]]) return;
+    NSError* err = nil;
+    NSDictionary* root = [NSJSONSerialization JSONObjectWithData:data options:0 error:&err];
+    if (![root isKindOfClass:[NSDictionary class]]) {
+        NSLog(@"[zapp] toolbar: invalid toolbarJson (%@) — toolbar not attached",
+              err ? err.localizedDescription : @"not an object");
+        return;
+    }
     NSArray* items = root[@"items"];
     if (![items isKindOfClass:[NSArray class]] || items.count == 0) return;
 
@@ -176,5 +182,6 @@ void darwin_toolbar_attach(void* window_ptr, const char* toolbar_json, int32_t w
 
 void zapp_toolbar_unregister(void* window_ptr) {
     if (!window_ptr || !zapp_toolbars) return;
+    NSCAssert([NSThread isMainThread], @"zapp toolbar registry is main-thread-only");
     [zapp_toolbars removeObjectForKey:[NSValue valueWithPointer:window_ptr]];
 }
