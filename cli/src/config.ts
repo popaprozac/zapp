@@ -1,7 +1,12 @@
 // Zapp config loader — reads zapp.config.ts
 
 import path from "node:path";
-import { isIOSTarget, type BuildTarget } from "./native";
+// Type-only import — erased at compile time. config.ts is bundled standalone
+// by the cli prepack (dist/config.js backs the `@zappdev/cli/config` export
+// for user zapp.config.ts files); a VALUE import of ./native would drag the
+// entire build machinery (incl. babel's dynamic requires) into that bundle
+// and break `npm pack`.
+import type { BuildTarget } from "./native";
 import type { ZappPermission } from "./permissions";
 import { validatePermissions } from "./permissions";
 export type { ZappPermission };
@@ -791,8 +796,9 @@ export function resolveNative(
   // Collapse BuildTarget → the narrow per-platform bucket key that
   // resolvePlatformValue reads (both iOS subtargets share the "ios" set).
   const platformKey: "macos" | "ios" | "windows" =
-    target === "macos"   ? "macos"
-    : isIOSTarget(target) ? "ios"
+    target === "macos" ? "macos"
+    // Inlined isIOSTarget (./native) — see the type-only import note at top.
+    : (target === "ios-simulator" || target === "ios-device") ? "ios"
     : "windows";
   const dedupe = (xs: string[]) => [...new Set(xs)];
   const merge = (
