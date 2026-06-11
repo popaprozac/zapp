@@ -63,12 +63,24 @@ export interface SidebarOptions {
   /** Start collapsed. Default false. */
   collapsed?: boolean;
   /**
-   * Background material. Default "sidebar" — the system sidebar material
-   * (liquid glass on macOS 26+, classic sidebar vibrancy earlier). Accepts the
-   * same material names as the `vibrancy` window option.
+   * Background material. Default Material.Sidebar — the system sidebar
+   * material (liquid glass on macOS 26+, classic sidebar vibrancy earlier).
    */
-  material?: string;
+  material?: Material;
 }
+
+// New typed material catalog (WindowEvent-style const object + derived union —
+// not a TS `enum`). Values are the existing wire strings, so plain literals
+// still type-check and nothing changes native-side:
+//   export const Material = {
+//     Sidebar: "sidebar", HeaderView: "headerView", Titlebar: "titlebar",
+//     Menu: "menu", WindowBackground: "windowBackground", /* …the full set
+//     the vibrancy option accepts today (enumerate from window.m's material
+//     mapping during implementation) */
+//   } as const;
+//   export type Material = (typeof Material)[keyof typeof Material];
+// The existing `vibrancy?: string-union` option is retyped to `Material` —
+// non-breaking (same literal values), unifying both material surfaces.
 
 export interface SidebarHandle {
   toggle(): void;
@@ -87,6 +99,9 @@ export interface SidebarHandle {
 //   Window.isSidebar(): boolean;        // true when running in a sidebar webview
 // WindowEvent gains:
 //   SIDEBAR_COLLAPSED, SIDEBAR_EXPANDED (payload: { windowId })
+//   SIDEBAR_RESIZED (payload: { windowId, width }) — fires during divider
+//   drag (apps debounce for persistence); also how the main pane learns the
+//   user-chosen width, since divider drags don't resize the host window.
 ```
 
 Usage:
@@ -168,10 +183,25 @@ path; the plan must keep the no-sidebar path byte-for-byte equivalent.
   they route by the message's slot id — so injecting the host id is safe; the
   plan must verify the one place the injected id IS used for transport, the
   subscribe action, and route sidebar subscriptions to the host id.)
-- **Window events forward to the sidebar:** native window-event emission for
-  window N additionally evals into N's sidebar slot when one exists (small
-  addition at the existing emit helper), so `win.on(WindowEvent.RESIZE)` works
-  in sidebar code.
+- **Routing model (the recommendation): own transport slot, host identity,
+  fan-out at the emit helper.** Transport (which webview gets bytes) and
+  identity (what JS thinks it is) are deliberately split: invoke
+  request/replies route by the sidebar's own slot id (zero transport
+  changes, replies can't land in the wrong pane), while identity is the
+  host's windowId (one window identity in JS). The single native addition:
+  the window-event **emit helper fans out to both slots** — when window N
+  emits, eval into N's main slot AND N's sidebar slot, unconditionally (the
+  eval is cheap; no per-slot subscribe bookkeeping). Both panes identify as
+  win-N, so their handlers fire with no runtime changes. The sidebar thus
+  receives ALL host window events — resize, focus/blur, fullscreen, close,
+  theme, collapse/expand — exactly as the main pane does.
+- **Divider-drag sizing:** dragging the divider resizes the sidebar webview
+  but NOT the host window, so `RESIZE` does not fire for it. Inside the
+  sidebar, the DOM `resize` event / `innerWidth` already track the divider
+  (the WKWebView's bounds change) — sidebar layout just works. The pane that
+  can't see drags is the MAIN pane, hence `SIDEBAR_RESIZED { width }` from
+  the split-view delegate — which is also how apps persist the user-chosen
+  width.
 - **Events bus:** broadcasts already reach every registered webview — the
   sidebar participates with no changes. Sidebar↔main communication is the
   normal `Events` bus; no new channel.
@@ -209,8 +239,8 @@ path; the plan must keep the no-sidebar path byte-for-byte equivalent.
 - No attach/detach after create; no Model B native rows; no per-sidebar
   devtools special-casing (inspect via the normal inspectable flag — both
   webviews honor it).
-- `width` after user drag is not queryable in v1 (no getState route);
-  `setWidth` is fire-and-forget.
+- No native width-query route; `setWidth` is fire-and-forget. Apps track the
+  live width via `SIDEBAR_RESIZED` (debounce to persist).
 
 ## Verification
 
@@ -241,7 +271,7 @@ path; the plan must keep the no-sidebar path byte-for-byte equivalent.
 
 | File | Change |
 |---|---|
-| `runtime/window.ts` | `SidebarOptions`, `SidebarHandle`, `WindowOptions.sidebar`, `WindowHandle.sidebar`, `Window.isSidebar()`, 2 new `WindowEvent`s, collapsed-state tracking |
+| `runtime/window.ts` | `SidebarOptions`, `SidebarHandle`, `WindowOptions.sidebar`, `WindowHandle.sidebar`, `Window.isSidebar()`, `Material` const+type (vibrancy retyped to it, non-breaking), 3 new `WindowEvent`s (`SIDEBAR_COLLAPSED`/`EXPANDED`/`RESIZED`), collapsed-state tracking |
 | `native/window/window.zc` | sidebar fields on `WindowOptions` + `window_opts_apply_json` parsing |
 | `native/app/router.zc` | t:4 `sidebar:*` action routing → `darwin_sidebar_*` |
 | `native/platform/darwin/window.m` | construction branch: NSSplitViewController root when sidebar opts present; chrome defaults |
