@@ -935,11 +935,14 @@ void darwin_webview_create_ext(void* window_ptr, bool inspectable, bool accept_f
 
     // 4. Window metrics — expose native values as CSS custom properties so
     //    custom-titlebar apps don't have to eyeball 28px / 78px guesses.
-    //    - --zapp-titlebar-height: vertical inset taken by the native
-    //      titlebar (0 on truly borderless windows).
-    //    - --zapp-toolbar-height: extra inset added by a native toolbar (0
+    //    - --zapp-titlebar-height: the FULL top chrome inset — pad content
+    //      by this alone (0 on truly borderless windows). Measured here
+    //      pre-toolbar; on toolbar windows window.m RE-injects it with the
+    //      post-attach total (unified styles merge the toolbar into one
+    //      NSTitlebarContainerView — there is no separate strip on screen).
+    //    - --zapp-toolbar-height: the toolbar's share of that inset (0
     //      unless the window declares toolbar items; set post-attach from
-    //      window.m).
+    //      window.m). Informational — never add it to titlebar-height.
     //    - --zapp-content-inset-left: horizontal distance from the window's
     //      left edge to the right side of the zoom (green) standard button,
     //      plus a small pad. Apps pad their content by this amount so the

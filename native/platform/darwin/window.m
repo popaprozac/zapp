@@ -815,10 +815,18 @@ void* darwin_window_create(WindowOptions* opts) {
                 CGFloat postInset = toolbarWindow.frame.size.height - toolbarWindow.contentLayoutRect.size.height;
                 CGFloat toolbarH = postInset - preInset;
                 if (toolbarH < 0) toolbarH = 0;
+                // Unified styles merge the toolbar INTO the titlebar — on
+                // screen there is ONE NSTitlebarContainerView of height
+                // postInset (verified against the theme frame). So
+                // --zapp-titlebar-height keeps its contract ("the full top
+                // chrome inset; pad by this") and is RE-injected with the
+                // post-attach total; --zapp-toolbar-height carries the
+                // toolbar's share of it (informational — do NOT add the two).
                 NSString* js = [NSString stringWithFormat:
                     @"(function(){try{var r=document.documentElement;"
-                    @"if(r){r.style.setProperty('--zapp-toolbar-height','%.0fpx');}}catch(e){}})();",
-                    toolbarH];
+                    @"if(r){r.style.setProperty('--zapp-titlebar-height','%.0fpx');"
+                    @"r.style.setProperty('--zapp-toolbar-height','%.0fpx');}}catch(e){}})();",
+                    postInset, toolbarH];
                 // Collect the pane webviews: split windows hold direct refs;
                 // plain (and vibrancy) windows mount the webview as the
                 // contentView or one level below it.
