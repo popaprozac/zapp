@@ -17,7 +17,7 @@
  */
 
 import { getBridge } from "./bridge";
-import { WindowEvent, eventName, type WindowSizePayload, type WindowPayload, type ModalDismissedPayload } from "./events";
+import { WindowEvent, eventName, type WindowSizePayload, type WindowPayload, type ModalDismissedPayload, type SidebarResizedPayload } from "./events";
 import type { Display } from "./screen";
 
 /**
@@ -235,6 +235,7 @@ export interface WindowHandle {
 
   on(event: SizeEvent, handler: (payload: WindowSizePayload) => void): () => void;
   on(event: WindowEvent.MODAL_DISMISSED, handler: (payload: ModalDismissedPayload) => void): () => void;
+  on(event: WindowEvent.SIDEBAR_RESIZED, handler: (payload: SidebarResizedPayload) => void): () => void;
   on(event: WindowEvent, handler: (payload: WindowPayload) => void): () => void;
 
   show(): void;
@@ -296,32 +297,59 @@ function windowAction(action: string, args: Record<string, unknown> = {}): void 
   (bridge as any).post ? (bridge as any).post(msg) : bridge.emit("__window_action:" + action, args);
 }
 
+/**
+ * Module-scope state records keyed by windowId. All SidebarHandle instances
+ * for the same window share a single record so repeated Window.current()
+ * calls in a sidebar see consistent collapsed/width values.
+ */
+const sidebarState = new Map<string, { collapsed: boolean; width: number }>();
+
+/**
+ * Track which windowIds have already had their three bridge listeners
+ * registered. Prevents subscription accumulation when Window.current() is
+ * called multiple times (each call constructs a new handle but must not
+ * add another set of listeners to the global bus).
+ */
+const sidebarWired = new Set<string>();
+
 /** Create a SidebarHandle that tracks collapsed/width state via events. */
 function createSidebarHandle(
   windowId: string,
   initialCollapsed: boolean,
   initialWidth: number,
 ): SidebarHandle {
-  const bridge = getBridge();
-  let collapsed = initialCollapsed;
-  let width = initialWidth;
+  // Seed the shared state record on first creation; leave it alone if a
+  // previous handle already seeded it (state may have been updated by events).
+  if (!sidebarState.has(windowId)) {
+    sidebarState.set(windowId, { collapsed: initialCollapsed, width: initialWidth });
+  }
 
-  // Subscribe to sidebar events to keep state up to date.
-  bridge.on(eventName(WindowEvent.SIDEBAR_COLLAPSED), (payload: any) => {
-    if (payload?.windowId === windowId) collapsed = true;
-  });
-  bridge.on(eventName(WindowEvent.SIDEBAR_EXPANDED), (payload: any) => {
-    if (payload?.windowId === windowId) collapsed = false;
-  });
-  bridge.on(eventName(WindowEvent.SIDEBAR_RESIZED), (payload: any) => {
-    if (payload?.windowId === windowId && typeof payload.width === "number") {
-      width = payload.width;
-    }
-  });
+  if (!sidebarWired.has(windowId)) {
+    // Use bridge.on directly here — the WindowHandle being built isn't
+    // returned yet, so handle.on() isn't available. bridge.on uses the same
+    // event bus and the same windowId filter as handle.on() would.
+    const bridge = getBridge();
+    bridge.on(eventName(WindowEvent.SIDEBAR_COLLAPSED), (payload: any) => {
+      if (payload?.windowId === windowId) {
+        sidebarState.get(windowId)!.collapsed = true;
+      }
+    });
+    bridge.on(eventName(WindowEvent.SIDEBAR_EXPANDED), (payload: any) => {
+      if (payload?.windowId === windowId) {
+        sidebarState.get(windowId)!.collapsed = false;
+      }
+    });
+    bridge.on(eventName(WindowEvent.SIDEBAR_RESIZED), (payload: any) => {
+      if (payload?.windowId === windowId && typeof payload.width === "number") {
+        sidebarState.get(windowId)!.width = payload.width;
+      }
+    });
+    sidebarWired.add(windowId);
+  }
 
   return {
-    get collapsed() { return collapsed; },
-    get width() { return width; },
+    get collapsed() { return sidebarState.get(windowId)!.collapsed; },
+    get width()     { return sidebarState.get(windowId)!.width; },
     toggle()              { windowAction("sidebar:toggle",   { windowId }); },
     collapse()            { windowAction("sidebar:collapse", { windowId }); },
     expand()              { windowAction("sidebar:expand",   { windowId }); },
@@ -393,12 +421,17 @@ export const Window = {
     // When running inside a sidebar webview, the host window has a sidebar —
     // attach a handle seeded with defaults (state will sync via events).
     const sidebarOpts: SidebarOptions | undefined = Window.isSidebar()
-      ? { url: "" }
+      ? { url: "" }  // url is unused here — the sidebar's webview is already running this code;
+                     // we only need the options shape so createWindowHandle wires up the SidebarHandle.
       : undefined;
     return createWindowHandle(id, sidebarOpts);
   },
 
-  /** True when this code runs inside a window's sidebar webview. */
+  /** True when this code runs inside a window's sidebar webview.
+   *
+   * Native sets Symbol.for('zapp.isSidebar') in the sidebar webview's
+   * bootstrap (window.m/webview.m, sidebar cycle).
+   */
   isSidebar(): boolean {
     return (globalThis as any)[Symbol.for("zapp.isSidebar")] === true;
   },

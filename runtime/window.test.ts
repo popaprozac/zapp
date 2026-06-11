@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Material } from "./window";
+import { WindowEvent, eventName } from "./events";
 
 describe("Material", () => {
   test("values are the wire strings", () => {
@@ -15,4 +16,10 @@ describe("Material", () => {
       "underPageBackground", "underWindowBackground", "windowBackground",
     ].sort());
   });
+});
+
+test("sidebar window event wire names", () => {
+  expect(eventName(WindowEvent.SIDEBAR_COLLAPSED)).toBe("window:sidebar-collapsed");
+  expect(eventName(WindowEvent.SIDEBAR_EXPANDED)).toBe("window:sidebar-expanded");
+  expect(eventName(WindowEvent.SIDEBAR_RESIZED)).toBe("window:sidebar-resized");
 });
