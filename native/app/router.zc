@@ -597,46 +597,43 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
     }
 
     // Sidebar actions — native NSSplitViewItem sidebar (macOS only).
-    // window_id is the SENDER's transport slot, which may be the sidebar
-    // webview's OWN slot rather than the host window's — that's by design;
-    // the sidebar registry (Task 3) resolves slot -> owning window.
-    // Symbols land with sidebar.m in the next commit; macOS link is pending
-    // on that, compile is clean.
-    if action == "sidebar:toggle" {
+    // Target resolution: SidebarHandle always sends the host window's id in
+    // the payload — resolve it (same pattern as attachModal above) so handles
+    // held OUTSIDE the sidebar window (e.g. the creator's Window.create
+    // handle) target the right window. Fall back to the SENDER's transport
+    // slot, which from either pane resolves to the owning window via the
+    // sidebar registry.
+    let is_sb_toggle = action == "sidebar:toggle";
+    let is_sb_collapse = action == "sidebar:collapse";
+    let is_sb_expand = action == "sidebar:expand";
+    let is_sb_set_width = action == "sidebar:setWidth";
+    if is_sb_toggle || is_sb_collapse || is_sb_expand || is_sb_set_width {
+        let sb_target = window_id;
+        let sb_wid_opt = pre_args.get_string("windowId");
+        if sb_wid_opt.is_some() {
+            raw {
+                #ifdef __APPLE__
+                extern int32_t darwin_window_numeric_id_for_string(const char* wid);
+                int32_t sb_resolved = darwin_window_numeric_id_for_string((const char*)sb_wid_opt.val);
+                if (sb_resolved >= 0) sb_target = sb_resolved;
+                #endif
+            }
+        }
+        let sb_w = 0;
+        if is_sb_set_width {
+            let width_opt = pre_args.get_int("width");
+            if width_opt.is_some() { sb_w = width_opt.unwrap(); }
+        }
         raw {
             #ifdef __APPLE__
             extern void darwin_sidebar_toggle(int32_t window_id);
-            darwin_sidebar_toggle((int32_t)window_id);
-            #endif
-        }
-        return;
-    }
-    if action == "sidebar:collapse" {
-        raw {
-            #ifdef __APPLE__
             extern void darwin_sidebar_collapse(int32_t window_id);
-            darwin_sidebar_collapse((int32_t)window_id);
-            #endif
-        }
-        return;
-    }
-    if action == "sidebar:expand" {
-        raw {
-            #ifdef __APPLE__
             extern void darwin_sidebar_expand(int32_t window_id);
-            darwin_sidebar_expand((int32_t)window_id);
-            #endif
-        }
-        return;
-    }
-    if action == "sidebar:setWidth" {
-        let width_opt = pre_args.get_int("width");
-        let w = 0;
-        if width_opt.is_some() { w = width_opt.unwrap(); }
-        raw {
-            #ifdef __APPLE__
             extern void darwin_sidebar_set_width(int32_t window_id, int32_t width);
-            darwin_sidebar_set_width((int32_t)window_id, (int32_t)w);
+            if (is_sb_toggle) darwin_sidebar_toggle((int32_t)sb_target);
+            else if (is_sb_collapse) darwin_sidebar_collapse((int32_t)sb_target);
+            else if (is_sb_expand) darwin_sidebar_expand((int32_t)sb_target);
+            else darwin_sidebar_set_width((int32_t)sb_target, (int32_t)sb_w);
             #endif
         }
         return;
