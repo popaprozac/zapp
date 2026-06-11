@@ -361,6 +361,11 @@ int32_t darwin_window_numeric_id_for_string(const char* window_id_string) {
     if (!window_id_string || !window_id_string[0]) return -1;
     NSString* target = [NSString stringWithUTF8String:window_id_string];
     if (!target) return -1;
+    // First-match-wins is intentional: a sidebar window registers BOTH its panes
+    // under the same "win-<host>" id string (two slots, one logical window). The
+    // host slot is always allocated + registered before the sidebar slot, so the
+    // ascending scan returns the HOST — which is what every consumer (modal
+    // attach, getScreen) wants.
     for (int i = 0; i < ZAPP_MAX_WINDOW_CALLBACKS; i++) {
         if (zapp_window_ids[i] && [zapp_window_ids[i] isEqualToString:target]) {
             return i;
@@ -703,6 +708,7 @@ void* darwin_window_create(WindowOptions* opts) {
                 // The sidebar's JS identity is the HOST id (win-<host>), so its
                 // window-id table entry mirrors that — transport routes by the
                 // slot index, identity by this string. (See _ext's identity note.)
+                // Note: each sidebar window consumes 2 of the ZAPP_MAX_WINDOW_CALLBACKS slots.
                 zapp_register_webview(sidebar_slot, sidebarWebviewRef, hostWindowId);
             }
 
