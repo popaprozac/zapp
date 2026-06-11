@@ -131,6 +131,7 @@ For nested dicts/arrays, drop a partial XML file into `build/macos/Info.plist.ex
 ## Features
 
 - **Window Management** — Create, resize, fullscreen, always-on-top. 11 typed events with payloads.
+- **Native Sidebars** — `Window.create({ sidebar: { url } })` renders a real `NSSplitViewItem` sidebar: the actual system material (liquid glass on macOS 26), full-height under the titlebar, system collapse animation — with your web content inside it. No other web-shell framework can do this.
 - **Application Menus** — Default OS menus + custom menu API with roles, accelerators, inline actions, and optional item icons (SF Symbols, file paths, or data URLs).
 - **Context Menus** — Filtered default (no Reload/Back) + `ContextMenu.show()` for custom native menus.
 - **Dialogs** — Native file open/save and message dialogs.
@@ -160,6 +161,7 @@ For nested dicts/arrays, drop a partial XML file into `build/macos/Info.plist.ex
 | File drag-drop into webview | ✅ | ✅ UIDropInteraction | ⏳ |
 | Custom protocols (`asset://`, ...) | ✅ | ✅ | ⏳ |
 | Embedded webviews (`<zapp-webview>`) | ✅ | ✅ | ⏳ |
+| Native sidebar windows | ✅ | ⏳ UISplitViewController | ⏳ |
 | Screens / displays API | ✅ | ✅ (built-in display) | ⏳ |
 | Navigation allowlist | ✅ | ✅ | ⏳ |
 | Workers — `zjs` (default, cross-platform) | ✅ | ✅ | ✅ |

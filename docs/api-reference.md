@@ -686,6 +686,131 @@ on the parent).
 `on()` auto-filters — only fires for events targeting this specific window.
 No manual windowId checking needed.
 
+### Sidebar (native NSSplitViewItem)
+
+Pass `sidebar` in `Window.create` to attach a real native sidebar to the
+window. macOS renders it as an `NSSplitViewController` root with a
+`.sidebar`-styled `NSSplitViewItem`: system sidebar material (liquid glass
+on macOS 26, classic vibrancy on earlier releases), full-height under the
+titlebar with proper traffic-light inset, system collapse animation, and a
+resizable divider clamped to your configured min/max. iOS ignores the
+option and renders the main `url` full-screen (UISplitViewController is
+planned). Windows ignores it.
+
+```ts
+const win = await Window.create({
+  title: "My App",
+  width: 900, height: 600,
+  sidebar: {
+    url: "/sidebar",        // required — entry route for the sidebar webview
+    width: 240,             // initial width (default 260)
+    minWidth: 180,          // divider drag minimum (default 180)
+    maxWidth: 400,          // divider drag maximum (default 400)
+    collapsible: true,      // system collapse gestures allowed (default true)
+    collapsed: false,       // start collapsed (default false)
+    material: Material.Sidebar,  // background material (default Material.Sidebar)
+  },
+});
+```
+
+**`SidebarOptions` defaults**
+
+| Option | Type | Default |
+|---|---|---|
+| `url` | `string` | — (required) |
+| `width` | `number` | `260` |
+| `minWidth` | `number` | `180` |
+| `maxWidth` | `number` | `400` |
+| `collapsible` | `boolean` | `true` |
+| `collapsed` | `boolean` | `false` |
+| `material` | `Material` | `Material.Sidebar` |
+
+**`Material` const** — typed const for `NSVisualEffectMaterial` names:
+`Material.Sidebar`, `Material.Titlebar`, `Material.Menu`,
+`Material.Popover`, `Material.HudWindow`, `Material.FullScreenUI`,
+`Material.Sheet`, `Material.ContentBackground`,
+`Material.UnderWindowBackground`, `Material.UnderPageBackground`,
+`Material.WindowBackground`. The `vibrancy` window option accepts the same
+`Material` type; plain string literals still type-check for both.
+
+**`SidebarHandle`** — available as `win.sidebar` on the host handle, and
+identically from inside the sidebar pane via `Window.current().sidebar`:
+
+```ts
+win.sidebar?.toggle()           // collapse if expanded, expand if collapsed
+win.sidebar?.collapse()
+win.sidebar?.expand()
+win.sidebar?.setWidth(220)      // programmatic resize
+
+win.sidebar?.collapsed          // reactive: tracks SIDEBAR_COLLAPSED/EXPANDED
+win.sidebar?.width              // reactive: tracks SIDEBAR_RESIZED; seeded by create option
+```
+
+**Identity rules.** Both panes see the same host window through
+`Window.current()` — code in the sidebar can call
+`Window.current().setTitle("…")`, `setSize`, etc. and it targets the host
+window. The sidebar's own handle is `win.sidebar` (a `SidebarHandle`),
+reachable the same way from either pane. Use `Window.isSidebar()` to tell
+which pane you're in at runtime.
+
+**Code inside the sidebar pane:**
+
+```ts
+import { Window, Events, WindowEvent } from "@zappdev/runtime";
+
+// Are we in the sidebar?
+if (Window.isSidebar()) {
+  // Window.current() is still the HOST window handle:
+  Window.current().setTitle("Updated from sidebar");
+
+  // Reach the SidebarHandle:
+  const sb = Window.current().sidebar!;
+  sb.setWidth(300);
+
+  // Cross-pane communication via Events:
+  Events.emit("nav:selected", { route: "/settings" });
+}
+```
+
+**Events** — fired on the host `WindowHandle`:
+
+| Event | Payload | Notes |
+|---|---|---|
+| `WindowEvent.SIDEBAR_COLLAPSED` | `{ windowId, timestamp }` | Sidebar collapsed (button or programmatic) |
+| `WindowEvent.SIDEBAR_EXPANDED` | `{ windowId, timestamp }` | Sidebar expanded |
+| `WindowEvent.SIDEBAR_RESIZED` | `{ windowId, width, timestamp }` | Divider dragged — fires continuously |
+
+`SIDEBAR_RESIZED` is how the main pane observes and persists the
+user-chosen width. Inside the sidebar itself, the DOM `resize` event and
+`window.innerWidth` already track the divider in real time — you don't
+need the event there.
+
+```ts
+win.on(WindowEvent.SIDEBAR_RESIZED, ({ width }) => {
+  localStorage.setItem("sidebarWidth", String(width));
+});
+win.on(WindowEvent.SIDEBAR_COLLAPSED, () => console.log("collapsed"));
+```
+
+The sidebar receives all host window events (focus, resize, close, etc.)
+automatically — no separate subscription is needed.
+
+**Teardown.** The sidebar lives for the window's lifetime. There is no
+attach/detach API — pass `sidebar` at create time or not at all. Closing
+the window destroys both panes.
+
+**Not permission-gated.** `SidebarHandle` operations (`toggle`, `collapse`,
+`expand`, `setWidth`) are window ops on an existing window. Like other
+window ops, they are not gated by the `permissions` manifest.
+
+**Worker subscriptions (v1 gap).** Sidebar events (`SIDEBAR_COLLAPSED`,
+`SIDEBAR_EXPANDED`, `SIDEBAR_RESIZED`) do not reach worker-context
+`Events` subscribers in v1. This is the same pre-existing gap as
+`MODAL_DISMISSED`. Subscribe from a webview context instead.
+
+**Window slots.** Each sidebar window occupies 2 of the 64 available
+window slots (one for the host, one for the sidebar webview).
+
 ### `WindowHandle.setFocus(): void`
 
 Raise this window to the front and bring the app to the foreground,
