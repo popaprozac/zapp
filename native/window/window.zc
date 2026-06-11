@@ -125,7 +125,8 @@ struct WindowOptions {
     frameAutosaveName: string;
     _frameAutosaveName_heap: bool;
 
-    // Ownership flags for the two string fields. `window_opts_apply_json`
+    // Ownership flags for heap-allocated string fields (the other _*_heap
+    // flags above follow the same contract). `window_opts_apply_json`
     // strdups values it pulls from a JsonValue tree and sets the flag;
     // `window_opts_free` frees only what it allocated. Direct assignment
     // (e.g. `opts.title = "Zapp"` with a literal or caller-owned string)
