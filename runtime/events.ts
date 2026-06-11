@@ -41,6 +41,11 @@ export enum WindowEvent {
   SIDEBAR_EXPANDED = 13,
   /** Fires when the sidebar is resized. Payload: `{ windowId, width, timestamp }`. */
   SIDEBAR_RESIZED = 14,
+  /** Fires when a custom toolbar button is clicked. Broadcast to ALL
+   * webviews + workers (menu pattern) — the creator's `action` callbacks
+   * and any pane's `win.on(...)` both consume the same emit.
+   * Payload: `{ windowId, id }`. */
+  TOOLBAR_CLICKED = 15,
 }
 
 /** App lifecycle events.
@@ -84,6 +89,7 @@ const WINDOW_EVENT_NAMES: Record<number, string> = {
   [WindowEvent.SIDEBAR_COLLAPSED]: "window:sidebar-collapsed",
   [WindowEvent.SIDEBAR_EXPANDED]: "window:sidebar-expanded",
   [WindowEvent.SIDEBAR_RESIZED]: "window:sidebar-resized",
+  [WindowEvent.TOOLBAR_CLICKED]: "window:toolbar-clicked",
 };
 
 const APP_EVENT_NAMES: Record<number, string> = {
