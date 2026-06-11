@@ -35,6 +35,12 @@ export enum WindowEvent {
    * Payload: `{ windowId, modalId, code, timestamp }`. `code` is the
    * NSModalResponse value (1 = OK, 0 = Cancel, -1000 = Stop, etc.). */
   MODAL_DISMISSED = 11,
+  /** Fires when the sidebar collapses. Payload: `{ windowId, timestamp }`. */
+  SIDEBAR_COLLAPSED = 12,
+  /** Fires when the sidebar expands. Payload: `{ windowId, timestamp }`. */
+  SIDEBAR_EXPANDED = 13,
+  /** Fires when the sidebar is resized. Payload: `{ windowId, width, timestamp }`. */
+  SIDEBAR_RESIZED = 14,
 }
 
 /** App lifecycle events.
@@ -75,6 +81,9 @@ const WINDOW_EVENT_NAMES: Record<number, string> = {
   [WindowEvent.FULLSCREEN]: "window:fullscreen",
   [WindowEvent.UNFULLSCREEN]: "window:unfullscreen",
   [WindowEvent.MODAL_DISMISSED]: "window:modal-dismissed",
+  [WindowEvent.SIDEBAR_COLLAPSED]: "window:sidebar-collapsed",
+  [WindowEvent.SIDEBAR_EXPANDED]: "window:sidebar-expanded",
+  [WindowEvent.SIDEBAR_RESIZED]: "window:sidebar-resized",
 };
 
 const APP_EVENT_NAMES: Record<number, string> = {

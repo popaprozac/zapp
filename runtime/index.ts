@@ -15,7 +15,7 @@
  */
 
 export { App, type PowerState } from "./app";
-export { Window, type WindowHandle, type WindowOptions } from "./window";
+export { Window, Material, type WindowHandle, type WindowOptions, type SidebarOptions, type SidebarHandle } from "./window";
 export { Screen, type Display, type DisplayRect, type CursorPoint } from "./screen";
 export { Webview, ZappWebviewElement, type PanelEvent, type WebviewCreateOptions } from "./webview";
 export { Events, WindowEvent, AppEvent, eventName, type WindowPayload, type WindowSizePayload, type EventName } from "./events";

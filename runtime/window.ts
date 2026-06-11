@@ -21,6 +21,28 @@ import { WindowEvent, eventName, type WindowSizePayload, type WindowPayload, typ
 import type { Display } from "./screen";
 
 /**
+ * Native background materials (NSVisualEffectMaterial names). Used by the
+ * window `vibrancy` option and `sidebar.material`. WindowEvent-style const —
+ * `Material.Sidebar` autocompletes; plain string literals still type-check.
+ * Keep in lockstep with the mapping in native/platform/darwin/window.m.
+ */
+export const Material = {
+  Sidebar: "sidebar",
+  HeaderView: "headerView",
+  Titlebar: "titlebar",
+  Menu: "menu",
+  Popover: "popover",
+  HudWindow: "hudWindow",
+  FullScreenUI: "fullScreenUI",
+  Sheet: "sheet",
+  ContentBackground: "contentBackground",
+  UnderWindowBackground: "underWindowBackground",
+  UnderPageBackground: "underPageBackground",
+  WindowBackground: "windowBackground",
+} as const;
+export type Material = (typeof Material)[keyof typeof Material];
+
+/**
  * Per-traffic-light state. `disabled` greys the button, `hidden` removes
  * it entirely (leaves a gap unless paired with a custom titlebar).
  */
@@ -73,11 +95,7 @@ export interface WindowOptions {
    *
    * No-op on iOS / Windows.
    */
-  vibrancy?:
-    | "sidebar" | "headerView" | "titlebar" | "menu"
-    | "popover" | "hudWindow" | "fullScreenUI" | "sheet"
-    | "windowBackground" | "contentBackground"
-    | "underWindowBackground" | "underPageBackground";
+  vibrancy?: Material;
   titleBarStyle?: "default" | "hidden" | "hiddenInset";
   /**
    * Atomic create-and-attach-as-sheet. Equivalent to creating the window
@@ -173,6 +191,37 @@ export interface WindowOptions {
    * ```
    */
   frameAutosaveName?: string;
+  /** Attach a native sidebar (NSSplitViewItem) to this window. macOS only. */
+  sidebar?: SidebarOptions;
+}
+
+/** Options for a native sidebar (NSSplitViewItem) attached to a window. */
+export interface SidebarOptions {
+  /** Entry URL/route for the sidebar webview (resolved like the window url). Required. */
+  url: string;
+  /** Initial width in points. Default 260. */
+  width?: number;
+  /** Divider drag limits. Defaults 180 / 400. */
+  minWidth?: number;
+  maxWidth?: number;
+  /** User can collapse via system behaviors. Default true. */
+  collapsible?: boolean;
+  /** Start collapsed. Default false. */
+  collapsed?: boolean;
+  /** Background material. Default Material.Sidebar (liquid glass on macOS 26+). */
+  material?: Material;
+}
+
+/** A handle to the sidebar attached to a window. */
+export interface SidebarHandle {
+  toggle(): void;
+  collapse(): void;
+  expand(): void;
+  setWidth(px: number): void;
+  /** Tracked from SIDEBAR_COLLAPSED/EXPANDED events, seeded by the create option. */
+  readonly collapsed: boolean;
+  /** Last width from SIDEBAR_RESIZED (the create option until the first event). */
+  readonly width: number;
 }
 
 /** Size events that include width/height/position data. */
@@ -181,6 +230,8 @@ type SizeEvent = WindowEvent.RESIZE | WindowEvent.MOVE | WindowEvent.MAXIMIZE | 
 /** A handle to a specific window. */
 export interface WindowHandle {
   readonly id: string;
+  /** Handle for the sidebar attached to this window, if any. */
+  readonly sidebar?: SidebarHandle;
 
   on(event: SizeEvent, handler: (payload: WindowSizePayload) => void): () => void;
   on(event: WindowEvent.MODAL_DISMISSED, handler: (payload: ModalDismissedPayload) => void): () => void;
@@ -245,7 +296,40 @@ function windowAction(action: string, args: Record<string, unknown> = {}): void 
   (bridge as any).post ? (bridge as any).post(msg) : bridge.emit("__window_action:" + action, args);
 }
 
-function createWindowHandle(windowId: string): WindowHandle {
+/** Create a SidebarHandle that tracks collapsed/width state via events. */
+function createSidebarHandle(
+  windowId: string,
+  initialCollapsed: boolean,
+  initialWidth: number,
+): SidebarHandle {
+  const bridge = getBridge();
+  let collapsed = initialCollapsed;
+  let width = initialWidth;
+
+  // Subscribe to sidebar events to keep state up to date.
+  bridge.on(eventName(WindowEvent.SIDEBAR_COLLAPSED), (payload: any) => {
+    if (payload?.windowId === windowId) collapsed = true;
+  });
+  bridge.on(eventName(WindowEvent.SIDEBAR_EXPANDED), (payload: any) => {
+    if (payload?.windowId === windowId) collapsed = false;
+  });
+  bridge.on(eventName(WindowEvent.SIDEBAR_RESIZED), (payload: any) => {
+    if (payload?.windowId === windowId && typeof payload.width === "number") {
+      width = payload.width;
+    }
+  });
+
+  return {
+    get collapsed() { return collapsed; },
+    get width() { return width; },
+    toggle()              { windowAction("sidebar:toggle",   { windowId }); },
+    collapse()            { windowAction("sidebar:collapse", { windowId }); },
+    expand()              { windowAction("sidebar:expand",   { windowId }); },
+    setWidth(px: number)  { windowAction("sidebar:setWidth", { windowId, width: px }); },
+  };
+}
+
+function createWindowHandle(windowId: string, sidebarOpts?: SidebarOptions): WindowHandle {
   const bridge = getBridge();
 
   return {
@@ -289,6 +373,9 @@ function createWindowHandle(windowId: string): WindowHandle {
     detachModal(modal: WindowHandle) {
       windowAction("detachModal", { windowId, parentId: windowId, modalId: modal.id });
     },
+    sidebar: sidebarOpts !== undefined
+      ? createSidebarHandle(windowId, sidebarOpts.collapsed ?? false, sidebarOpts.width ?? 260)
+      : undefined,
   };
 }
 
@@ -303,7 +390,17 @@ export const Window = {
     if (!id) {
       throw new Error("[zapp] Window.current() is only available in WebView context. Use Window.create() in backend/workers.");
     }
-    return createWindowHandle(id);
+    // When running inside a sidebar webview, the host window has a sidebar —
+    // attach a handle seeded with defaults (state will sync via events).
+    const sidebarOpts: SidebarOptions | undefined = Window.isSidebar()
+      ? { url: "" }
+      : undefined;
+    return createWindowHandle(id, sidebarOpts);
+  },
+
+  /** True when this code runs inside a window's sidebar webview. */
+  isSidebar(): boolean {
+    return (globalThis as any)[Symbol.for("zapp.isSidebar")] === true;
   },
 
   /** Create a new window. Returns a handle for the new window. */
@@ -322,10 +419,10 @@ export const Window = {
     const host = (globalThis as any).__zappBridge;
     if (host?.createWindow) {
       const r = host.createWindow(normalized) as { windowId: string };
-      return createWindowHandle(r.windowId);
+      return createWindowHandle(r.windowId, opts?.sidebar);
     }
     // Webview context: async IPC roundtrip through the WKWebView bridge.
     const result = await getBridge().invoke("__window:create", normalized) as { windowId: string };
-    return createWindowHandle(result.windowId);
+    return createWindowHandle(result.windowId, opts?.sidebar);
   },
 };
