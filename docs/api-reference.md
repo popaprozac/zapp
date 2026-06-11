@@ -733,8 +733,10 @@ const win = await Window.create({
 `Material.WindowBackground`. The `vibrancy` window option accepts the same
 `Material` type; plain string literals still type-check for both.
 
-**`SidebarHandle`** — available as `win.sidebar` on the host handle, and
-identically from inside the sidebar pane via `Window.current().sidebar`:
+**`SidebarHandle`** — available as `win.sidebar` on the creator's
+`Window.create` handle, and via `Window.current().sidebar` from **either
+pane** of the window (main pane and sidebar pane alike). The rule is simply:
+get a window handle — if its window has a sidebar, `.sidebar` is set.
 
 ```ts
 win.sidebar?.toggle()           // collapse if expanded, expand if collapsed

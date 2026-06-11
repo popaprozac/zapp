@@ -418,10 +418,14 @@ export const Window = {
     if (!id) {
       throw new Error("[zapp] Window.current() is only available in WebView context. Use Window.create() in backend/workers.");
     }
-    // When running inside a sidebar webview, the host window has a sidebar —
-    // attach a handle seeded with defaults (state will sync via events).
-    const sidebarOpts: SidebarOptions | undefined = Window.isSidebar()
-      ? { url: "" }  // url is unused here — the sidebar's webview is already running this code;
+    // Attach a SidebarHandle when this webview belongs to a window that has
+    // a sidebar — either pane qualifies: the sidebar pane (zapp.isSidebar)
+    // and the main pane (zapp.hasSidebar, injected into both panes at window
+    // construction). State seeds defaults and syncs via sidebar-* events.
+    const inSidebarWindow = Window.isSidebar() ||
+      (globalThis as any)[Symbol.for("zapp.hasSidebar")] === true;
+    const sidebarOpts: SidebarOptions | undefined = inSidebarWindow
+      ? { url: "" }  // url is unused here — the pane's webview is already running;
                      // we only need the options shape so createWindowHandle wires up the SidebarHandle.
       : undefined;
     return createWindowHandle(id, sidebarOpts);

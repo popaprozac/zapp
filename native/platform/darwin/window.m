@@ -98,6 +98,28 @@ static void zapp_register_webview(int32_t numericId, WKWebView* webview, NSStrin
     }
 }
 
+// Broadcast a JS snippet to every REGISTERED webview (the dispatch table).
+// darwin_webview_eval_all (webview.m) used to walk [NSApp windows] checking
+// each contentView — that misses any webview not mounted AS the contentView:
+// both panes of a sidebar window (contentView is the NSSplitView) and
+// vibrancy windows (NSVisualEffectView wrapper). The dispatch table is the
+// source of truth for "panes with a live bridge", so broadcasts iterate it.
+// Closed windows are absent (windowWillClose clears their slots) — same
+// reversible-close contract as window events.
+void zapp_registered_webviews_eval(const char* js) {
+    if (!js) return;
+    NSString* script = [NSString stringWithUTF8String:js];
+    if (!script) return;
+    void (^run)(void) = ^{
+        for (int i = 0; i < ZAPP_MAX_WINDOW_CALLBACKS; i++) {
+            WKWebView* wv = zapp_webviews[i];
+            if (wv) [wv evaluateJavaScript:script completionHandler:nil];
+        }
+    };
+    if ([NSThread isMainThread]) run();
+    else dispatch_async(dispatch_get_main_queue(), run);
+}
+
 // --- Event name resolution (static strings, zero alloc) ---
 
 static const char* zapp_event_names[] = {
@@ -352,11 +374,11 @@ const char* darwin_window_id_string(int32_t numeric_id) {
     return NULL;
 }
 
-// Reverse lookup: pointer-based JS-visible string ID → numeric ID.
-// JS holds windowId as "win-<NSWindow*>" (set by webview.m bootstrap),
-// but WindowManager keys by the numeric ID darwin_window_register_numeric_id
-// assigns. Multi-window APIs (attachModal/detachModal, asSheetOf) need the
-// numeric form to look up the WindowOptions instance, so this maps back.
+// Reverse lookup: JS-visible string ID → numeric ID.
+// JS holds windowId as "win-<numericId>" (set by darwin_window_register_numeric_id),
+// but WindowManager keys by the numeric ID itself. Multi-window APIs
+// (attachModal/detachModal, asSheetOf) need the numeric form to look up the
+// WindowOptions instance, so this maps back.
 int32_t darwin_window_numeric_id_for_string(const char* window_id_string) {
     if (!window_id_string || !window_id_string[0]) return -1;
     NSString* target = [NSString stringWithUTF8String:window_id_string];
@@ -712,6 +734,10 @@ void* darwin_window_create(WindowOptions* opts) {
                 zapp_register_webview(sidebar_slot, sidebarWebviewRef, hostWindowId);
             }
 
+            // (zapp.hasSidebar is injected into BOTH panes as a document-start
+            // user script in darwin_webview_create_ext — a one-shot eval here
+            // raced the page commit and got wiped with the throwaway context.)
+
             // Record host→sidebar for window-event fan-out (zapp_dispatch_event_to_js).
             zapp_set_sidebar_slot(host_slot, sidebar_slot);
 
@@ -1018,10 +1044,17 @@ void darwin_window_register_numeric_id(void* handle, int32_t numeric_id) {
     // pointer-based form was a footgun — the two paths diverged.
     NSString* windowId = [NSString stringWithFormat:@"win-%d", numeric_id];
 
-    // Cache numericId on delegate for O(1) event dispatch
+    // Cache numericId on delegate for O(1) event dispatch. Also migrate
+    // delegate.windowId off the construction-time pointer form ("win-%p") to
+    // the canonical numeric form: darwin_window_set_bridge_ready matches the
+    // router's wid ("win-%d") against delegate.windowId, and with the stale
+    // pointer form it never matched — bridgeReady stayed NO, so every FOCUS
+    // event was parked in pendingFocusEvent forever (blur is ungated, which
+    // is why windows blurred but never focused).
     ZappWindowDelegate* delegate = (ZappWindowDelegate*)[w delegate];
     if ([delegate isKindOfClass:[ZappWindowDelegate class]]) {
         delegate.numericId = numeric_id;
+        delegate.windowId = windowId;
     }
 
     // Register WebView in direct dispatch table.

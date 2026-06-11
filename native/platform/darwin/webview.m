@@ -922,6 +922,17 @@ void darwin_webview_create_ext(void* window_ptr, bool inspectable, bool accept_f
             injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
     }
 
+    // 3c. hasSidebar marker — set in BOTH panes of a split window (only
+    //     sidebar windows mount via container_view), so Window.current()
+    //     attaches a SidebarHandle from either pane. Must be a document-start
+    //     user script: a one-shot evaluateJavaScript at construction lands in
+    //     the pre-navigation context and is wiped when the real page commits.
+    if (container_view != NULL) {
+        [ucc addUserScript:[[WKUserScript alloc] initWithSource:
+            @"(function(){globalThis[Symbol.for('zapp.hasSidebar')]=true;})();"
+            injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
+    }
+
     // 4. Window metrics — expose native values as CSS custom properties so
     //    custom-titlebar apps don't have to eyeball 28px / 78px guesses.
     //    - --zapp-titlebar-height: vertical inset taken by the native
@@ -1151,17 +1162,11 @@ void darwin_window_load_url(int32_t window_id, const char* url) {
 }
 
 void darwin_webview_eval_all(const char* js) {
-    if (!js) return;
-    NSString* script = [NSString stringWithUTF8String:js];
-    if (!script) return;
-    void (^run)(void) = ^{
-        for (NSWindow* window in [NSApp windows]) {
-            NSView* content = [window contentView];
-            if ([content isKindOfClass:[WKWebView class]]) {
-                [(WKWebView*)content evaluateJavaScript:script completionHandler:nil];
-            }
-        }
-    };
-    if ([NSThread isMainThread]) run();
-    else dispatch_async(dispatch_get_main_queue(), run);
+    // Iterate the dispatch table (window.m), not [NSApp windows]: the old
+    // contentView walk missed every webview not mounted as the contentView
+    // itself — both panes of a sidebar window (contentView is the
+    // NSSplitView) and vibrancy windows (NSVisualEffectView wrapper) never
+    // received Events broadcasts. The helper bounces to main internally.
+    extern void zapp_registered_webviews_eval(const char* js);
+    zapp_registered_webviews_eval(js);
 }
