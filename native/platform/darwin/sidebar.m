@@ -55,9 +55,11 @@ static int zapp_sidebar_current_width(ZappSidebarController* c) {
     return (int)lround(v.frame.size.width);
 }
 
-// Emit a window event into BOTH panes. eventName is the FULL wire name
-// ("window:sidebar-collapsed" etc.); dataJson may be nil. Mirrors the JS
-// shape + escaping of window.m's dispatchWindowEvent evals (and panel.m's
+// Emit a window event into BOTH panes. eventName is the BARE suffix
+// ("sidebar-collapsed" etc.); dispatchWindowEvent in bootstrap/webview.ts
+// prepends "window:" itself (same convention as window.m's zapp_event_names
+// and panel.m's event args). dataJson may be nil. Mirrors the JS shape +
+// escaping of window.m's dispatchWindowEvent evals (and panel.m's
 // zapp_panel_emit): single-quoted JSON literal, backslash + quote escaped.
 static void zapp_sidebar_emit(ZappSidebarController* c, const char* eventName, NSString* dataJson) {
     if (!c || !eventName) return;
@@ -96,8 +98,8 @@ static void zapp_sidebar_sync_collapse(ZappSidebarController* c) {
     BOOL collapsed = c.sidebarItem.isCollapsed;
     if (collapsed == c.lastCollapsed) return;
     c.lastCollapsed = collapsed;
-    zapp_sidebar_emit(c, collapsed ? "window:sidebar-collapsed"
-                                   : "window:sidebar-expanded", nil);
+    zapp_sidebar_emit(c, collapsed ? "sidebar-collapsed"
+                                   : "sidebar-expanded", nil);
 }
 
 @implementation ZappSidebarController
@@ -121,7 +123,7 @@ static void zapp_sidebar_sync_collapse(ZappSidebarController* c) {
     if (w <= 0 || w == self.lastWidth) return;
     self.lastWidth = w;
     NSString* json = [NSString stringWithFormat:@"{\"width\":%d}", w];
-    zapp_sidebar_emit(self, "window:sidebar-resized", json);
+    zapp_sidebar_emit(self, "sidebar-resized", json);
 }
 
 @end
