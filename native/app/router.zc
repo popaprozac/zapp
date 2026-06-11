@@ -40,6 +40,7 @@ fn permission_id_for_invoke(method: string) -> string {
 fn permission_id_for_action(action: string) -> string {
     if str::strncmp(action, "tray:", 5) == 0 { return "tray"; }
     if str::strncmp(action, "dock:", 5) == 0 { return "dock"; }
+    // sidebar:* = window ops on an existing window — ungated by design (docs/security.md).
     if action == "panelCreate" || action == "panelSetBounds" || action == "panelLoadUrl" ||
        action == "panelExecJs" || action == "panelPostMessage" || action == "panelShow" ||
        action == "panelHide" || action == "panelReload" || action == "panelBack" ||
@@ -592,6 +593,52 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
     if action == "dock:setIcon" {
         let path_opt = pre_args.get_string("path");
         if path_opt.is_some() { dock_set_icon(path_opt.unwrap()); }
+        return;
+    }
+
+    // Sidebar actions — native NSSplitViewItem sidebar (macOS only).
+    // window_id is the SENDER's transport slot, which may be the sidebar
+    // webview's OWN slot rather than the host window's — that's by design;
+    // the sidebar registry (Task 3) resolves slot -> owning window.
+    // Symbols land with sidebar.m in the next commit; macOS link is pending
+    // on that, compile is clean.
+    if action == "sidebar:toggle" {
+        raw {
+            #ifdef __APPLE__
+            extern void darwin_sidebar_toggle(int32_t window_id);
+            darwin_sidebar_toggle((int32_t)window_id);
+            #endif
+        }
+        return;
+    }
+    if action == "sidebar:collapse" {
+        raw {
+            #ifdef __APPLE__
+            extern void darwin_sidebar_collapse(int32_t window_id);
+            darwin_sidebar_collapse((int32_t)window_id);
+            #endif
+        }
+        return;
+    }
+    if action == "sidebar:expand" {
+        raw {
+            #ifdef __APPLE__
+            extern void darwin_sidebar_expand(int32_t window_id);
+            darwin_sidebar_expand((int32_t)window_id);
+            #endif
+        }
+        return;
+    }
+    if action == "sidebar:setWidth" {
+        let width_opt = pre_args.get_int("width");
+        let w = 0;
+        if width_opt.is_some() { w = width_opt.unwrap(); }
+        raw {
+            #ifdef __APPLE__
+            extern void darwin_sidebar_set_width(int32_t window_id, int32_t width);
+            darwin_sidebar_set_width((int32_t)window_id, (int32_t)w);
+            #endif
+        }
         return;
     }
 
