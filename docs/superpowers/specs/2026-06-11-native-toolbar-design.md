@@ -2,7 +2,11 @@
 
 **Date:** 2026-06-11
 **Branch:** `feat/native-toolbar`
-**Status:** Approved
+**Status:** Approved + implemented (see plan). Two approved refinements
+during implementation: the broadcast uses the window-event name
+`window:toolbar-clicked` directly (no `__`-prefixed name + re-dispatch),
+and the runtime pre-stringifies `toolbarJson` (see Wire section). A
+`--zapp-toolbar-height` CSS metric was added as a follow-on (user request).
 
 ## Goal
 
@@ -70,11 +74,11 @@ through the native table at all (see Click delivery).
 ## Click delivery — one emit, two surfaces
 
 Native custom-button click → app-wide broadcast, verbatim menu.m pattern
-(escape id, `__toolbar:click`, `darwin_webview_eval_all` +
+(escape id, `window:toolbar-clicked`, `darwin_webview_eval_all` +
 `worker_broadcast_eval_js`):
 
 ```
-__toolbar:click  payload {"windowId":"win-<n>","id":"<itemId>"}
+window:toolbar-clicked  payload {"windowId":"win-<n>","id":"<itemId>"}
 ```
 
 (The windowId field is the one addition vs `__menu:click` — toolbars are
@@ -85,7 +89,7 @@ On top of that single emit:
 1. **Creator callbacks** — `Window.create` collects `action` fns into a
    module-level map keyed `"<windowId>:<itemId>"` (populated after create
    resolves and the windowId is known), with one module-level
-   `Events.on("__toolbar:click")` listener running matches. Exactly
+   `Events.on("window:toolbar-clicked")` listener running matches. Exactly
    Menu.build's collect/strip/listen shape (runtime/menu.ts:78–96).
 2. **Pane window event** — `win.on(WindowEvent.TOOLBAR_CLICKED, h)` is
    runtime-only sugar in `createWindowHandle`: subscribes the same
@@ -126,7 +130,7 @@ Registry + delegate module, sidebar.m's shape:
     built).
   - `button` → `NSToolbarItem` with image via `zapp_resolve_icon`
     (menu-icons resolver: `sf:`/path/data-URL), label/tooltip from
-    `label`, target = controller, action emits the `__toolbar:click`
+    `label`, target = controller, action emits the `window:toolbar-clicked`
     broadcast with the controller's windowId + the item's id.
 - `allowedToolbarItemIdentifiers` / `defaultToolbarItemIdentifiers`: the
   declared order, nothing more (`allowsUserCustomization` stays NO in v1).
@@ -143,10 +147,11 @@ Registry + delegate module, sidebar.m's shape:
    (+ `_toolbarJson_heap` flag, matching sidebarUrl's pattern) and accessor
    `fn wopts_toolbar_json(opts) -> string`. Native Zen-C apps set it
    directly on the options struct.
-3. **Router:** the `__window:create` route extracts the raw `toolbar`
-   sub-object from the create payload as a JSON string (same family as the
-   tray routes' payload-driven extraction) and stores it in `toolbarJson`
-   (actions already stripped runtime-side).
+3. **Router:** the runtime pre-stringifies the toolbar (actions already
+   stripped) and sends it as a `toolbarJson` STRING field on the create
+   payload, so `window_opts_apply_json` only needs `get_string` — no
+   JsonValue subtree serialization. (Refined from the original raw-extraction
+   idea during planning.)
 4. **window.m:** in `darwin_window_create`, AFTER the split construction
    (the tracking separator must find the live split view) and after
    delegate setup: `if (toolbarJson non-empty) darwin_toolbar_attach(...)`.
@@ -176,7 +181,7 @@ toolbar v1 has no post-create surface.)
 
 - **bun tests:** item validation (button-without-id error, duplicate ids,
   toggleSidebar-without-sidebar warn+drop), action-map routing (synthetic
-  `__toolbar:click` payload → correct callback, wrong-window filtered),
+  `window:toolbar-clicked` payload → correct callback, wrong-window filtered),
   TOOLBAR_CLICKED filter logic.
 - **Gates:** `bun run test:all`, hello-world build ending
   `[zapp] build complete:`, ios-simulator compile (stub coverage).
