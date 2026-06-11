@@ -210,9 +210,21 @@ path; the plan must keep the no-sidebar path byte-for-byte equivalent.
   v1. Control methods post t:4 actions `sidebar:toggle | sidebar:collapse |
   sidebar:expand | sidebar:setWidth` routed in `router.zc` →
   `darwin_sidebar_*`.
-- **Teardown:** window close tears the sidebar webview down through the same
-  per-webview WKWebView teardown path as the main one (stopLoading, handlers,
-  delegates), and clears its dispatch slot.
+- **Teardown (host window close destroys the sidebar — explicit checklist):**
+  1. The sidebar WKWebView goes through the SAME `windowWillClose:` teardown
+     as the main webview — `stopLoading` + nil delegates + remove script
+     message handler. This is load-bearing: skipping it reproduces the known
+     macOS 26.x ProcessThrottler `brk #1` crash the main webview's teardown
+     was hardened against (alpha.29).
+  2. Clear the sidebar's dispatch-table slot + window-id entry (no stale
+     evals into a dead webview; slot ids are not reused while stale).
+  3. Remove the `sidebar.m` split-registry entry and tear down the split-view
+     delegate / collapse observation for that window.
+  4. Runtime: the `SidebarHandle` goes dead with its window handle (same
+     semantics as calling methods on a closed window today — posts are
+     dropped natively once the slot is cleared).
+  Verification must include an open→close→reopen loop on a sidebar window
+  (no crash, no stale-slot eval warnings, memory not obviously climbing).
 
 ## Permissions / security
 
