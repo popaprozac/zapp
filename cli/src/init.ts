@@ -206,11 +206,16 @@ fn main() -> int {
 }
 `);
 
-  // 3. Add zapp.config.ts — typed via defineConfig for autocomplete
+  // 3. Add zapp.config.ts — typed via an \`import type\` annotation. Same
+  // IntelliSense as a defineConfig() wrapper, but the import is erased at
+  // compile time: the config loads with zero runtime module resolution, so
+  // it works in any layout (npm install, workspaces, the zapp monorepo)
+  // and can never fail at vite-config load time.
   const identifier = `com.zapp.${name.toLowerCase().replace(/[^a-z0-9]/g, "")}`;
-  await Bun.write(path.join(projectDir, "zapp.config.ts"), `import { defineConfig } from "@zappdev/cli/config";
+  await Bun.write(path.join(projectDir, "zapp.config.ts"), `// \`import type\` is erased at compile time — typed config with no runtime import.
+import type { ZappConfig } from "@zappdev/cli/config";
 
-export default defineConfig({
+const config: ZappConfig = {
   name: "${name}",
   identifier: "${identifier}",
   version: "0.1.0",
@@ -223,7 +228,9 @@ export default defineConfig({
   //   headless: {
   //     db: { script: "src/workers/db.ts", engine: "zjs" },
   //   },
-});
+};
+
+export default config;
 `);
 
   // 4. Update package.json — add deps and scripts
