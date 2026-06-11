@@ -46,6 +46,12 @@ function resolveTemplate(input: string | null): string | null {
 // Interactive prompt — readline-based, no new dep. Returns the chosen
 // template (create-vite name) + install-deps decision.
 async function promptFramework(): Promise<string> {
+  // Closed/non-TTY stdin (CI, piped scripts): readline never resolves on a
+  // closed stream — fall back to the default framework instead of hanging.
+  if (!input.isTTY) {
+    output.write(`  (non-interactive stdin — defaulting to ${FRAMEWORKS[0].label})\n`);
+    return FRAMEWORKS[0].template;
+  }
   const rl = readline.createInterface({ input, output });
   try {
     output.write("\n  Pick a frontend framework:\n");
@@ -71,6 +77,9 @@ async function promptFramework(): Promise<string> {
 }
 
 async function promptYesNo(question: string, defaultYes: boolean): Promise<boolean> {
+  // Closed/non-TTY stdin (CI, piped scripts): readline never resolves on a
+  // closed stream — return the default instead of hanging forever.
+  if (!input.isTTY) return defaultYes;
   const rl = readline.createInterface({ input, output });
   try {
     const suffix = defaultYes ? "(Y/n)" : "(y/N)";
@@ -116,12 +125,15 @@ export async function runInit(opts: InitOptions) {
     }
   }
 
-  // Resolve install decision: explicit flag wins. Otherwise prompt
-  // unless --yes (accept default = install).
+  // Resolve install decision: explicit flag wins. Otherwise prompt —
+  // unless --yes OR a template flag was passed: `-t` is documented as
+  // "non-interactive (no prompts)", so it must skip this prompt too
+  // (defaulting to install, same as --yes). Without this, `init -t x`
+  // with a closed stdin (CI, scripts) hung forever on the prompt.
   let install: boolean;
   if (opts.install !== undefined && opts.install !== null) {
     install = opts.install;
-  } else if (yes) {
+  } else if (yes || opts.template) {
     install = true;
   } else {
     install = await promptYesNo("install dependencies now?", true);
