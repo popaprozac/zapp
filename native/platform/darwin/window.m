@@ -36,6 +36,10 @@ extern int32_t wopts_sidebar_max_width(void* opts);
 extern bool wopts_sidebar_collapsible(void* opts);
 extern bool wopts_sidebar_collapsed(void* opts);
 extern int32_t wopts_sidebar_numeric_id(void* opts);
+// Toolbar (toolbar.m + window.zc accessor).
+extern const char* wopts_toolbar_json(void* opts);
+extern void darwin_toolbar_attach(void* window_ptr, const char* toolbar_json, int32_t window_numeric_id);
+extern void zapp_toolbar_unregister(void* window_ptr);
 extern int zapp_dispatch_event(int window_id, int event_id, int w, int h, int x, int y);
 // Primary display height (top-left global origin flip). Defined in screen.m.
 extern double zapp_primary_screen_height(void);
@@ -789,6 +793,14 @@ void* darwin_window_create(WindowOptions* opts) {
             delegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [window setDelegate:delegate];
 
+        // Native toolbar (toolbar.m). Attach AFTER split construction (the
+        // tracking separator resolves the live NSSplitView through the
+        // window's contentViewController) and after delegate setup.
+        const char* toolbarJson = wopts_toolbar_json(opts);
+        if (toolbarJson && toolbarJson[0]) {
+            darwin_toolbar_attach((__bridge void*)window, toolbarJson, host_slot);
+        }
+
         return (__bridge_retained void*)window;
     }
 }
@@ -846,6 +858,7 @@ void darwin_window_destroy(void* handle) {
         zapp_teardown_webview(delegate.sidebarWebview);
         zapp_sidebar_unregister(handle);
     }
+    zapp_toolbar_unregister(handle);
 
     [window close];
     (void)window;
