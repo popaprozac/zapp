@@ -771,7 +771,8 @@ void darwin_webview_set_drag_region(int32_t window_id, bool drag) {
 //     reports the host's windowId. The sidebar's TRANSPORT registration
 //     keeps using its own slot (numeric_id_pre_alloc) — only the JS-visible
 //     identity string switches. (-1 = self identity, i.e. legacy.)
-//   - is_sidebar: sets Symbol.for('zapp.isSidebar')=true at document start.
+//   - pane_role: 0 = main pane, 1 = sidebar pane (sets zapp.isSidebar),
+//     2 = popover pane (sets zapp.isPopover). Document-start markers.
 //
 // Subscribe note: when a sidebar webview's runtime sends a window-event
 // `subscribe` (bootstrap/webview.ts: {t:4,m:"subscribe"}), the router keys
@@ -788,7 +789,7 @@ void darwin_webview_create_ext(void* window_ptr, bool inspectable, bool accept_f
                                bool transparent_background,
                                void* container_view /* NSView*; NULL = legacy mount */,
                                int32_t identity_window_id /* -1 = self identity */,
-                               bool is_sidebar) {
+                               int32_t pane_role) {
     NSWindow* window = (__bridge NSWindow*)window_ptr;
     NSView* hostView = [window contentView];
     NSRect bounds = [hostView bounds];
@@ -914,11 +915,15 @@ void darwin_webview_create_ext(void* window_ptr, bool inspectable, bool accept_f
             injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
     }
 
-    // 3b. Sidebar marker — lets the runtime branch on a sidebar webview at
-    //     bootstrap (e.g. to render the sidebar surface) without a round-trip.
-    if (is_sidebar) {
+    // 3b. Pane role marker — lets the runtime branch on the pane type at
+    //     bootstrap without a round-trip.
+    if (pane_role == 1) {
         [ucc addUserScript:[[WKUserScript alloc] initWithSource:
             @"(function(){globalThis[Symbol.for('zapp.isSidebar')]=true;})();"
+            injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
+    } else if (pane_role == 2) {
+        [ucc addUserScript:[[WKUserScript alloc] initWithSource:
+            @"(function(){globalThis[Symbol.for('zapp.isPopover')]=true;})();"
             injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
     }
 
@@ -927,7 +932,9 @@ void darwin_webview_create_ext(void* window_ptr, bool inspectable, bool accept_f
     //     attaches a SidebarHandle from either pane. Must be a document-start
     //     user script: a one-shot evaluateJavaScript at construction lands in
     //     the pre-navigation context and is wiped when the real page commits.
-    if (container_view != NULL) {
+    //     popover panes also mount via containers but say nothing about the
+    //     window's sidebar — excluded.
+    if (container_view != NULL && pane_role != 2) {
         [ucc addUserScript:[[WKUserScript alloc] initWithSource:
             @"(function(){globalThis[Symbol.for('zapp.hasSidebar')]=true;})();"
             injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
@@ -1126,7 +1133,7 @@ void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first
                            const char* url_override, int32_t numeric_id_pre_alloc,
                            bool transparent_background) {
     darwin_webview_create_ext(window_ptr, inspectable, accept_first_mouse, url_override,
-                              numeric_id_pre_alloc, transparent_background, NULL, -1, false);
+                              numeric_id_pre_alloc, transparent_background, NULL, -1, 0);
 }
 
 // --- JS evaluation ---
