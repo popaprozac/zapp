@@ -755,6 +755,54 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
         return;
     }
 
+    // Toolbar lifecycle — window ops on an existing window, ungated like
+    // sidebar:* (docs/security.md). Payload-windowId resolution (sidebar
+    // pattern) so handles work from the creator, either pane, anywhere;
+    // fall back to the SENDER's slot. The numeric id doubles as the
+    // host_slot for chrome-metrics injection (window.m slot == window id).
+    let is_tb_set = action == "toolbar:setItems";
+    let is_tb_update = action == "toolbar:updateItem";
+    let is_tb_remove = action == "toolbar:remove";
+    if is_tb_set || is_tb_update || is_tb_remove {
+        let tb_target = window_id;
+        let tb_wid_opt = pre_args.get_string("windowId");
+        if tb_wid_opt.is_some() {
+            raw {
+                #ifdef __APPLE__
+                extern int32_t darwin_window_numeric_id_for_string(const char* wid);
+                int32_t tb_resolved = darwin_window_numeric_id_for_string((const char*)tb_wid_opt.val);
+                if (tb_resolved >= 0) tb_target = tb_resolved;
+                #endif
+            }
+        }
+        let tb_json: string = "";
+        if is_tb_set {
+            let tj_opt = pre_args.get_string("toolbarJson");
+            if !tj_opt.is_some() { return; }
+            tb_json = tj_opt.unwrap();
+        }
+        if is_tb_update {
+            let ij_opt = pre_args.get_string("itemJson");
+            if !ij_opt.is_some() { return; }
+            tb_json = ij_opt.unwrap();
+        }
+        raw {
+            #ifdef __APPLE__
+            extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
+            extern void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_t host_slot);
+            extern void darwin_toolbar_update_item(void* window_ptr, const char* item_json);
+            extern void darwin_toolbar_remove(void* window_ptr);
+            void* tb_wptr = darwin_window_get_by_numeric_id((int32_t)tb_target);
+            if (tb_wptr) {
+                if (is_tb_set) darwin_toolbar_set_items(tb_wptr, (const char*)tb_json, (int32_t)tb_target);
+                else if (is_tb_update) darwin_toolbar_update_item(tb_wptr, (const char*)tb_json);
+                else darwin_toolbar_remove(tb_wptr);
+            }
+            #endif
+        }
+        return;
+    }
+
     // Tray actions — payload-driven (the .m side extracts "a" itself).
     // Each maps directly to a darwin_tray_*_from_payload entry point.
     let is_tray_create = action == "tray:create";
