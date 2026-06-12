@@ -13,6 +13,9 @@
 @cfg(apple)
 import "../platform/darwin/clipboard.h" as darwin_cb;
 
+@cfg(windows)
+import "../platform/windows/clipboard.h" as win_cb;
+
 import "stdlib.h";
 
 struct Clipboard {}
@@ -109,19 +112,86 @@ impl Clipboard {
         }
     }
 
-    // --- Windows stubs (no-op) ---
+    // --- Windows (Win32 clipboard via platform/windows/clipboard.c) ---
+    // Same ownership idiom as the apple branches: the C side returns a
+    // malloc'd buffer; we keep it alive in a static slot until the next
+    // call so the returned `string` stays valid for the caller.
     @cfg(windows)
-    fn read_text() -> string { return ""; }
+    fn read_text() -> string {
+        let result: string = "";
+        raw {
+            char* buf = windows_clipboard_read_text();
+            if (buf) {
+                static char* cb_last_text = NULL;
+                if (cb_last_text) free(cb_last_text);
+                cb_last_text = buf;
+                result = buf;
+            }
+        }
+        return result;
+    }
+
     @cfg(windows)
-    fn write_text(text: string) -> bool { return false; }
+    fn write_text(text: string) -> bool {
+        let ok: bool = false;
+        raw {
+            ok = windows_clipboard_write_text((const char*)text);
+        }
+        return ok;
+    }
+
     @cfg(windows)
-    fn read_html() -> string { return ""; }
+    fn read_html() -> string {
+        let result: string = "";
+        raw {
+            char* buf = windows_clipboard_read_html();
+            if (buf) {
+                static char* cb_last_html = NULL;
+                if (cb_last_html) free(cb_last_html);
+                cb_last_html = buf;
+                result = buf;
+            }
+        }
+        return result;
+    }
+
     @cfg(windows)
-    fn write_html(html: string) -> bool { return false; }
+    fn write_html(html: string) -> bool {
+        let ok: bool = false;
+        raw {
+            ok = windows_clipboard_write_html((const char*)html);
+        }
+        return ok;
+    }
+
     @cfg(windows)
-    fn read_files() -> string { return "[]"; }
+    fn read_files() -> string {
+        let result: string = "[]";
+        raw {
+            char* buf = windows_clipboard_read_files();
+            if (buf) {
+                static char* cb_last_files = NULL;
+                if (cb_last_files) free(cb_last_files);
+                cb_last_files = buf;
+                result = buf;
+            }
+        }
+        return result;
+    }
+
     @cfg(windows)
-    fn has(fmt: string) -> bool { return false; }
+    fn has(fmt: string) -> bool {
+        let ok: bool = false;
+        raw {
+            ok = windows_clipboard_has((const char*)fmt);
+        }
+        return ok;
+    }
+
     @cfg(windows)
-    fn clear() -> void {}
+    fn clear() -> void {
+        raw {
+            windows_clipboard_clear();
+        }
+    }
 }

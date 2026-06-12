@@ -118,6 +118,64 @@ extern const char* zapp_fmt_compact_ms(int ms);
 // at default.
 extern int zapp_log_level;
 
+#ifndef __APPLE__
+// --- Windows fallbacks for the Apple-named host shims ---
+//
+// The host objects below (clipboard, notifications, dock, shortcuts)
+// call darwin_* directly — a transitional shape pending the planned
+// zapp_* platform layer. Until the Windows backends land (M3 parity
+// work), these definitions keep the link green and give workers the
+// same silent no-op behavior the webview routes have on Windows.
+// Sync is the exception: Windows has a real implementation, so it
+// forwards. Delete entries from this block as real windows_* backends
+// arrive.
+extern void windows_sync_handle(const char* action, const char* payload_json);
+void darwin_sync_handle(const char* action, const char* payload_json) {
+    windows_sync_handle(action, payload_json);
+}
+#include "../../platform/windows/clipboard.h"
+char* darwin_clipboard_read_text(void) { return windows_clipboard_read_text(); }
+bool  darwin_clipboard_write_text(const char* text) { return windows_clipboard_write_text(text); }
+char* darwin_clipboard_read_html(void) { return windows_clipboard_read_html(); }
+bool  darwin_clipboard_write_html(const char* html) { return windows_clipboard_write_html(html); }
+char* darwin_clipboard_read_files(void) { return windows_clipboard_read_files(); }
+char* darwin_clipboard_read_image_png_b64(void) { return windows_clipboard_read_image_png_b64(); }
+bool  darwin_clipboard_write_image_png_b64(const char* b64) { return windows_clipboard_write_image_png_b64(b64); }
+bool  darwin_clipboard_has(const char* fmt) { return windows_clipboard_has(fmt); }
+void  darwin_clipboard_clear(void) { windows_clipboard_clear(); }
+const char* darwin_notification_get_permission(void) { return "denied"; }
+void darwin_notification_show_typed(const char* a, const char* b, const char* c, const char* d) { (void)a; (void)b; (void)c; (void)d; }
+void darwin_notification_schedule_typed(const char* a, const char* b, double c) { (void)a; (void)b; (void)c; }
+void darwin_notification_cancel(const char* a) { (void)a; }
+void darwin_notification_cancel_all(void) {}
+void darwin_notification_remove_delivered(const char* a) { (void)a; }
+void darwin_notification_remove_all_delivered(void) {}
+void darwin_notification_update(const char* a, const char* b, const char* c, const char* d) { (void)a; (void)b; (void)c; (void)d; }
+extern void windows_dock_show_icon(void);
+extern void windows_dock_hide_icon(void);
+extern void windows_dock_set_badge(const char* label);
+extern void windows_dock_remove_badge(void);
+extern void windows_dock_bounce(int bounce_type);
+extern void windows_dock_set_icon(const char* path);
+extern void windows_dock_reset_icon(void);
+void darwin_dock_show_icon(void) { windows_dock_show_icon(); }
+void darwin_dock_hide_icon(void) { windows_dock_hide_icon(); }
+void darwin_dock_set_badge(const char* a) { windows_dock_set_badge(a); }
+void darwin_dock_remove_badge(void) { windows_dock_remove_badge(); }
+void darwin_dock_bounce(int a) { windows_dock_bounce(a); }
+void darwin_dock_set_icon(const char* a) { windows_dock_set_icon(a); }
+void darwin_dock_reset_icon(void) { windows_dock_reset_icon(); }
+// Shortcuts stay false from worker threads: RegisterHotKey binds the
+// hotkey to the CALLING thread's message queue, and worker threads
+// run a libuv loop, not a Win32 message pump — a registration here
+// would never fire. Needs the WM_ZAPP_TASK main-thread funnel (M2
+// deferred item) to forward to platform/windows/shortcuts.c.
+bool darwin_shortcut_register(const char* a) { (void)a; return false; }
+bool darwin_shortcut_unregister(const char* a) { (void)a; return false; }
+bool darwin_shortcut_is_registered(const char* a) { (void)a; return false; }
+void darwin_shortcut_unregister_all(void) {}
+#endif
+
 // Sync API + window creation. darwin_sync_handle is thread-safe (uses
 // pthread_mutex), so workers can call directly without bouncing to
 // the main queue. Window creation is NOT thread-safe — must run on
@@ -970,7 +1028,7 @@ static js_value_t* bare_host_notif(js_env_t* env, js_callback_info_t* info) {
         // expose the native delivery ID synchronously today.
         char idbuf[64];
         snprintf(idbuf, sizeof(idbuf), "notif-%lu-%u",
-                 (unsigned long)time(NULL), (unsigned int)random());
+                 (unsigned long)time(NULL), (unsigned int)rand());
         js_value_t* obj;
         js_create_object(env, &obj);
         js_value_t* id_val;
@@ -1270,6 +1328,7 @@ static js_value_t* bare_host_notify(js_env_t* env, js_callback_info_t* info) {
 // dispatch_async; the worker thread blocks on a semaphore until the
 // main thread fills in the result.
 
+#ifdef __APPLE__
 #include <dispatch/dispatch.h>
 
 static js_value_t* bare_host_create_window(js_env_t* env, js_callback_info_t* info) {
@@ -1316,6 +1375,18 @@ static js_value_t* bare_host_create_window(js_env_t* env, js_callback_info_t* in
     js_set_named_property(env, out, "windowId", id_val);
     return out;
 }
+#else
+// Windows: worker-spawned windows need the main-thread funnel
+// (PostMessage(WM_ZAPP_TASK) + event-wait — see WINDOWS_PORTING.md
+// lesson 6), which doesn't exist yet. Undef until the M2 worker pass;
+// the GCD path above is the shape to mirror.
+static js_value_t* bare_host_create_window(js_env_t* env, js_callback_info_t* info) {
+    (void)info;
+    js_value_t* undef;
+    js_get_undefined(env, &undef);
+    return undef;
+}
+#endif
 
 // --- bare_worker_eval_js: target a specific worker's eval_inbox ---
 //

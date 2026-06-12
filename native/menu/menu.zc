@@ -72,6 +72,26 @@ fn menu_show_context(items: MenuItem*, count: int, x: int, y: int, window_id: in
     darwin_menu::darwin_menu_show_context_typed((MenuItem*)items, count, x, y, window_id);
 }
 
+@cfg(windows)
+import "../platform/windows/menu.h" as win_menu;
+
+// Raw C casts to ZappMenuItem* — the layouts match by contract (see
+// the is_separator comment on the struct) but GCC, unlike clang,
+// errors on the mismatched pointer types.
+@cfg(windows)
+fn menu_set(items: MenuItem*, count: int) -> void {
+    raw {
+        windows_menu_set_typed((ZappMenuItem*)items, count);
+    }
+}
+
+@cfg(windows)
+fn menu_show_context(items: MenuItem*, count: int, x: int, y: int, window_id: int) -> void {
+    raw {
+        windows_menu_show_context_typed((ZappMenuItem*)items, count, x, y, window_id);
+    }
+}
+
 // --- Manager (namespaced via app.menu) ---
 
 struct MenuManager {}

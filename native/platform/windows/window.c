@@ -69,13 +69,18 @@ static LONG zapp_pre_fullscreen_style[ZAPP_MAX_WINDOWS] = {0};
 static RECT zapp_pre_fullscreen_rect[ZAPP_MAX_WINDOWS] = {{0}};
 static int zapp_is_fullscreen[ZAPP_MAX_WINDOWS] = {0};
 
-// Map HWND → numeric ID (stored as window user data)
+// Map HWND → numeric ID (stored as window user data). Stored as id+1
+// so an UNREGISTERED window reads back as -1, not as window 0 —
+// CreateWindowExW fires WM_SIZE synchronously before registration, and
+// a raw 0 default made the modal's creation-time resize land on the
+// main window's webview (the bug where the main webview mirrored a
+// new modal's dimensions).
 static void zapp_set_window_id(HWND hwnd, int32_t id) {
-    SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)id);
+    SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)(id + 1));
 }
 
 static int32_t zapp_get_window_id(HWND hwnd) {
-    return (int32_t)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+    return (int32_t)GetWindowLongPtrW(hwnd, GWLP_USERDATA) - 1;
 }
 
 // --- UTF conversion helpers ---
@@ -130,29 +135,31 @@ void zapp_dispatch_event_to_js(int32_t window_id, int32_t event_id, int32_t w, i
         default: return;
     }
 
-    // Build JS call into static buffer
-    static char js_buf[512];
+    // Build the JS call on the heap — no fixed-size buffers for
+    // outgoing JS (repo lesson; 512B/4KB truncation bug class), and a
+    // static buffer here would also race across threads.
     const char* wid = zapp_window_ids[window_id];
-
-    // Include payload for resize/move/maximize/restore
+    const char* fmt;
     if (event_id == ZAPP_EVENT_RESIZE || event_id == ZAPP_EVENT_MAXIMIZE || event_id == ZAPP_EVENT_RESTORE) {
-        snprintf(js_buf, sizeof(js_buf),
-            "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
-            "if(b&&b.dispatchWindowEvent)b.dispatchWindowEvent('%s','%s','{\"width\":%d,\"height\":%d}');})();",
-            wid, name, w, h);
+        fmt = "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+              "if(b&&b.dispatchWindowEvent)b.dispatchWindowEvent('%s','%s','{\"width\":%d,\"height\":%d}');})();";
     } else if (event_id == ZAPP_EVENT_MOVE) {
-        snprintf(js_buf, sizeof(js_buf),
-            "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
-            "if(b&&b.dispatchWindowEvent)b.dispatchWindowEvent('%s','%s','{\"x\":%d,\"y\":%d}');})();",
-            wid, name, x, y);
+        fmt = "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+              "if(b&&b.dispatchWindowEvent)b.dispatchWindowEvent('%s','%s','{\"x\":%d,\"y\":%d}');})();";
     } else {
-        snprintf(js_buf, sizeof(js_buf),
-            "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
-            "if(b&&b.dispatchWindowEvent)b.dispatchWindowEvent('%s','%s','{}');})();",
-            wid, name);
+        fmt = "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+              "if(b&&b.dispatchWindowEvent)b.dispatchWindowEvent('%s','%s','{}');})();";
     }
+    int arg1 = (event_id == ZAPP_EVENT_MOVE) ? x : w;
+    int arg2 = (event_id == ZAPP_EVENT_MOVE) ? y : h;
+    int needed = snprintf(NULL, 0, fmt, wid, name, arg1, arg2);
+    if (needed < 0) return;
+    char* js_buf = (char*)malloc((size_t)needed + 1);
+    if (!js_buf) return;
+    snprintf(js_buf, (size_t)needed + 1, fmt, wid, name, arg1, arg2);
 
     windows_webview_eval_by_id(window_id, js_buf);
+    free(js_buf);
 }
 
 // --- WndProc ---
@@ -160,7 +167,25 @@ void zapp_dispatch_event_to_js(int32_t window_id, int32_t event_id, int32_t w, i
 LRESULT CALLBACK zapp_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     int32_t wid = zapp_get_window_id(hwnd);
 
+    // Messages arriving before registration (inside CreateWindowExW)
+    // have no window identity yet — every per-window handler below
+    // indexes dispatch tables by wid, so let DefWindowProc have them.
+    if (wid < 0 || wid >= ZAPP_MAX_WINDOWS) {
+        return DefWindowProcW(hwnd, msg, wParam, lParam);
+    }
+
     switch (msg) {
+        case WM_SETTINGCHANGE: {
+            // Apps light/dark preference flipped. The lParam string is
+            // "ImmersiveColorSet" for theme flips; the handler re-reads
+            // the registry and dedupes, so over-matching here is cheap.
+            if (lParam && lstrcmpW((LPCWSTR)lParam, L"ImmersiveColorSet") == 0) {
+                extern void windows_theme_setting_changed(void);
+                windows_theme_setting_changed();
+            }
+            break;
+        }
+
         case WM_SIZE: {
             // Get client rect for accurate content dimensions
             RECT client;
@@ -210,6 +235,9 @@ LRESULT CALLBACK zapp_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 zapp_dispatch_event(wid, ZAPP_EVENT_FOCUS, 0, 0, 0, 0);
             } else if (activateState == WA_INACTIVE) {
                 zapp_dispatch_event(wid, ZAPP_EVENT_BLUR, 0, 0, 0, 0);
+                // Tray-attached windows with dismissOnBlur hide here.
+                extern void windows_tray_notify_window_blur(void* hwnd);
+                windows_tray_notify_window_blur((void*)hwnd);
             }
             return 0;
         }
@@ -235,6 +263,16 @@ LRESULT CALLBACK zapp_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
 
         case WM_DESTROY: {
+            // Modal safety net: if this window owned a disabled parent
+            // (attach_modal) and is going away without a detach (user
+            // hit the X), re-enable the parent or it's stuck dead.
+            {
+                HWND owner = (HWND)GetWindowLongPtrW(hwnd, GWLP_HWNDPARENT);
+                if (owner && !IsWindowEnabled(owner)) {
+                    EnableWindow(owner, TRUE);
+                    SetForegroundWindow(owner);
+                }
+            }
             // Clear dispatch table entry
             if (wid >= 0 && wid < ZAPP_MAX_WINDOWS) {
                 zapp_hwnds[wid] = NULL;
@@ -320,6 +358,18 @@ void* windows_window_create(WindowOptions* opts) {
     if (!hwnd) return NULL;
 
     zapp_increment_window_count();
+
+    // Register the hwnd ↔ numeric-id mapping NOW, from the id the
+    // WindowManager pre-allocated, before anything that depends on
+    // window identity runs (ShowWindow re-enters the wndproc; the
+    // webview-create slot lookup needs zapp_hwnds populated —
+    // previously it guessed "next free slot", which is a race).
+    // window.zc's later windows_window_register_numeric_id call is
+    // idempotent over this.
+    int32_t pre_id = wopts_numeric_id_pre_alloc(opts);
+    if (pre_id >= 0 && pre_id < ZAPP_MAX_WINDOWS) {
+        windows_window_register_numeric_id((void*)hwnd, pre_id);
+    }
 
     // Don't show yet — let the app call window_show after on_ready
     // But if visible is true, show immediately
@@ -503,17 +553,56 @@ void windows_window_load_url(int32_t window_id, const char* url) {
     windows_webview_navigate(window_id, url);
 }
 
-// --- Modal sheets (stubs) ---
-// macOS sheets don't have a clean Win32 equivalent. The closest pattern is
-// EnableWindow(parent, FALSE) + own a topmost modal child + restore on
-// dismiss. Until we have a real Windows modal use case, no-op.
+// Bring every app window to the foreground (App.activate). Restores
+// minimized windows first — SetForegroundWindow on an iconic window
+// flashes the taskbar instead of raising it.
+void windows_window_activate_app(void) {
+    HWND last = NULL;
+    for (int i = 0; i < ZAPP_MAX_WINDOWS; i++) {
+        if (!zapp_hwnds[i] || !IsWindow(zapp_hwnds[i])) continue;
+        if (IsIconic(zapp_hwnds[i])) ShowWindow(zapp_hwnds[i], SW_RESTORE);
+        last = zapp_hwnds[i];
+    }
+    if (last) SetForegroundWindow(last);
+}
+
+// --- Modal sheets ---
+// macOS sheets don't have a literal Win32 equivalent, but Windows DOES
+// have the owned-modal idiom: set the parent as the modal's OWNER (the
+// modal then always stays above it, minimizes with it) and disable the
+// parent so interaction is blocked until the modal closes — the same
+// contract as beginSheet. The modal is centered over the parent.
 void windows_window_attach_modal(void* parent_handle, void* modal_handle) {
-    (void)parent_handle;
-    (void)modal_handle;
+    HWND parent = (HWND)parent_handle;
+    HWND modal = (HWND)modal_handle;
+    if (!parent || !modal) return;
+
+    // Owner, not WS_CHILD parent — GWLP_HWNDPARENT on a top-level
+    // window sets ownership (z-order glue) without re-parenting.
+    SetWindowLongPtrW(modal, GWLP_HWNDPARENT, (LONG_PTR)parent);
+    EnableWindow(parent, FALSE);
+
+    // Center over the parent.
+    RECT pr, mr;
+    if (GetWindowRect(parent, &pr) && GetWindowRect(modal, &mr)) {
+        int mw = mr.right - mr.left;
+        int mh = mr.bottom - mr.top;
+        int x = pr.left + ((pr.right - pr.left) - mw) / 2;
+        int y = pr.top + ((pr.bottom - pr.top) - mh) / 2;
+        SetWindowPos(modal, NULL, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+    }
 }
 void windows_window_detach_modal(void* parent_handle, void* modal_handle) {
-    (void)parent_handle;
-    (void)modal_handle;
+    HWND parent = (HWND)parent_handle;
+    HWND modal = (HWND)modal_handle;
+    // Re-enable BEFORE clearing ownership — destroying/hiding an owned
+    // window while its owner is disabled makes Windows activate some
+    // OTHER app's window (classic modal-teardown flicker).
+    if (parent) {
+        EnableWindow(parent, TRUE);
+        SetForegroundWindow(parent);
+    }
+    if (modal) SetWindowLongPtrW(modal, GWLP_HWNDPARENT, (LONG_PTR)NULL);
 }
 
 // --- Drag region ---

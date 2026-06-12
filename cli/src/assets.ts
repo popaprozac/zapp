@@ -38,6 +38,14 @@ export async function generateAssetManifest(root: string, assetDir: string): Pro
   const brDir = path.join(zappDir, "assets");
   await mkdir(brDir, { recursive: true });
 
+  // Windows embeds RAW bytes: the brotli decode at runtime uses Apple's
+  // libcompression (bare.c bare_load_script / the darwin scheme handler),
+  // which has no Windows counterpart yet. Workers read embedded assets
+  // on Windows (the webview serves from the on-disk dist folder), so
+  // compressed embeds mean headless workers silently fail to load.
+  // Costs binary size only; revisit if a portable brotli decoder lands.
+  const compress = process.platform !== "win32";
+
   // Collect all files from Vite dist/ output (includes _workers/ from Vite plugin)
   const files = await walkDir(distDir);
   const assets: AssetEntry[] = [];
@@ -47,12 +55,14 @@ export async function generateAssetManifest(root: string, assetDir: string): Pro
   for (const file of files) {
     const relPath = "/" + path.relative(distDir, file).replace(/\\/g, "/");
     const source = await Bun.file(file).arrayBuffer();
-    const compressed = brotliCompressSync(new Uint8Array(source), {
-      params: { [constants.BROTLI_PARAM_QUALITY]: 11 },
-    });
+    const compressed = compress
+      ? brotliCompressSync(new Uint8Array(source), {
+          params: { [constants.BROTLI_PARAM_QUALITY]: 11 },
+        })
+      : new Uint8Array(source);
 
-    // Write compressed file
-    const brRelPath = relPath + ".br";
+    // Write the embed payload (compressed or raw copy)
+    const brRelPath = relPath + (compress ? ".br" : "");
     const brPath = path.join(brDir, brRelPath);
     await mkdir(path.dirname(brPath), { recursive: true });
     await Bun.write(brPath, compressed);
@@ -66,9 +76,12 @@ export async function generateAssetManifest(root: string, assetDir: string): Pro
   let zc = "// AUTO-GENERATED — embedded assets with brotli compression.\n";
   zc += `// ${assets.length} files, ${Math.round(totalOriginal / 1024)} KB → ${Math.round(totalCompressed / 1024)} KB\n\n`;
 
-  // Embed directives — each asset becomes a byte array in the binary
+  // Embed directives — each asset becomes a byte array in the binary.
+  // Forward slashes: Windows backslash paths ("C:\Users\...") land in
+  // generated C where \U starts a universal character name and fails
+  // to compile.
   for (let i = 0; i < assets.length; i++) {
-    zc += `let __zapp_asset_${i} = embed "${assets[i].brPath}" as u8[];\n`;
+    zc += `let __zapp_asset_${i} = embed "${assets[i].brPath.replace(/\\/g, "/")}" as u8[];\n`;
   }
 
   // Accessor functions — bridge Zen-C embed results to C
@@ -79,7 +92,12 @@ export async function generateAssetManifest(root: string, assetDir: string): Pro
 
   // Asset array initialization (raw C)
   zc += `\nraw {\n`;
-  zc += `    #include <compression.h>\n\n`;
+  // libcompression is Apple-only; the darwin scheme handler does the
+  // brotli decode. Windows serves assets via WebView2 virtual-host
+  // mapping and never touches this header.
+  zc += `    #if defined(__APPLE__)\n`;
+  zc += `    #include <compression.h>\n`;
+  zc += `    #endif\n\n`;
   zc += `    #ifndef ZAPP_EMBEDDED_ASSET_DEFINED\n`;
   zc += `    #define ZAPP_EMBEDDED_ASSET_DEFINED\n`;
   zc += `    typedef struct {\n`;
@@ -108,7 +126,7 @@ export async function generateAssetManifest(root: string, assetDir: string): Pro
     zc += `        zapp_embedded_assets[${i}].data = __zapp_asset_${i}_data();\n`;
     zc += `        zapp_embedded_assets[${i}].len = __zapp_asset_${i}_len();\n`;
     zc += `        zapp_embedded_assets[${i}].uncompressed_len = ${a.originalSize};\n`;
-    zc += `        zapp_embedded_assets[${i}].is_brotli = 1;\n`;
+    zc += `        zapp_embedded_assets[${i}].is_brotli = ${compress ? 1 : 0};\n`;
   }
 
   zc += `    }\n`;

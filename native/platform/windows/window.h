@@ -33,6 +33,7 @@ bool wopts_always_on_top(WindowOptions* opts);
 int32_t wopts_title_bar_style_tag(WindowOptions* opts);
 int32_t wopts_inspectable(WindowOptions* opts);
 bool wopts_accept_first_mouse(WindowOptions* opts);
+int32_t wopts_numeric_id_pre_alloc(WindowOptions* opts);
 
 // --- Window lifecycle ---
 void* windows_window_create(WindowOptions* opts);

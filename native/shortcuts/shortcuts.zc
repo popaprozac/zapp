@@ -18,6 +18,9 @@
 @cfg(apple)
 import "../platform/darwin/shortcuts.h" as darwin_sc;
 
+@cfg(windows)
+import "../platform/windows/shortcuts.h" as win_sc;
+
 struct Shortcuts {}
 
 impl Shortcuts {
@@ -55,13 +58,41 @@ impl Shortcuts {
         }
     }
 
-    // --- Windows stubs (no-op until Win32 RegisterHotKey wires up) ---
+    // --- Windows (RegisterHotKey via platform/windows/shortcuts.c) ---
+    // Must run on the main/UI thread — RegisterHotKey binds the hotkey
+    // to the calling thread's message queue (the bridge router path
+    // satisfies this; worker host objects do not, see bare.c).
     @cfg(windows)
-    fn register(accelerator: string) -> bool { return false; }
+    fn register(accelerator: string) -> bool {
+        let ok: bool = false;
+        raw {
+            ok = windows_shortcut_register((const char*)accelerator);
+        }
+        return ok;
+    }
+
     @cfg(windows)
-    fn unregister(accelerator: string) -> bool { return false; }
+    fn unregister(accelerator: string) -> bool {
+        let ok: bool = false;
+        raw {
+            ok = windows_shortcut_unregister((const char*)accelerator);
+        }
+        return ok;
+    }
+
     @cfg(windows)
-    fn is_registered(accelerator: string) -> bool { return false; }
+    fn is_registered(accelerator: string) -> bool {
+        let ok: bool = false;
+        raw {
+            ok = windows_shortcut_is_registered((const char*)accelerator);
+        }
+        return ok;
+    }
+
     @cfg(windows)
-    fn unregister_all() -> void {}
+    fn unregister_all() -> void {
+        raw {
+            windows_shortcut_unregister_all();
+        }
+    }
 }

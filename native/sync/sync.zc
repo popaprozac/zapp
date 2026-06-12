@@ -35,6 +35,26 @@ fn sync_wait(key: string, timeout_ms: int) -> string {
     return "timed-out";
 }
 
+@cfg(windows)
+import "../platform/windows/sync.h" as win_sync;
+
+@cfg(windows)
+fn sync_notify(key: string, count: int) -> void {
+    if count < 1 { count = 1; }
+    raw {
+        char buf[384];
+        snprintf(buf, sizeof(buf), "{\"key\":\"%s\",\"count\":%d}", (const char*)key, count);
+        windows_sync_handle("notify", buf);
+    }
+}
+
+@cfg(windows)
+fn sync_wait(key: string, timeout_ms: int) -> string {
+    let result: int = win_sync::windows_sync_wait_blocking(key, timeout_ms);
+    if result == 1 { return "notified"; }
+    return "timed-out";
+}
+
 // --- Manager (namespaced via app.sync) ---
 
 struct SyncManager {}

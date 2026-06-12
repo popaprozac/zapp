@@ -420,6 +420,9 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
             #ifdef __APPLE__
             extern void darwin_set_quit_guard(bool enabled);
             darwin_set_quit_guard(on);
+            #else
+            extern void windows_set_quit_guard(bool enabled);
+            windows_set_quit_guard(on);
             #endif
         }
         return;
@@ -433,6 +436,9 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
             #ifdef __APPLE__
             extern void darwin_app_quit(bool force);
             darwin_app_quit(force);
+            #else
+            extern void windows_app_quit(bool force);
+            windows_app_quit(force);
             #endif
         }
         return;
@@ -443,6 +449,9 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
             #ifdef __APPLE__
             extern void darwin_app_activate(void);
             darwin_app_activate();
+            #else
+            extern void windows_app_activate(void);
+            windows_app_activate();
             #endif
         }
         return;
@@ -522,7 +531,12 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
             else if (is_open_path) darwin_open_path((const char*)abs);
             else if (is_trash_item) darwin_trash_item((const char*)abs);
             #else
-            // Windows stubs — TODO when WebView2 / shell integration lands.
+            extern void windows_show_item_in_folder(const char* p);
+            extern void windows_open_path(const char* p);
+            extern void windows_trash_item(const char* p);
+            if (is_show_item) windows_show_item_in_folder((const char*)abs);
+            else if (is_open_path) windows_open_path((const char*)abs);
+            else if (is_trash_item) windows_trash_item((const char*)abs);
             #endif
         }
         return;
@@ -592,6 +606,9 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
                     #ifdef __APPLE__
                     extern int32_t darwin_window_numeric_id_for_string(const char* wid);
                     parent_numeric = (int)darwin_window_numeric_id_for_string((const char*)ps);
+                    #else
+                    int parsed = -1;
+                    if (sscanf((const char*)ps, "win-%d", &parsed) == 1) parent_numeric = parsed;
                     #endif
                 }
             }
@@ -604,6 +621,9 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
                     #ifdef __APPLE__
                     extern int32_t darwin_window_numeric_id_for_string(const char* wid);
                     modal_numeric = (int)darwin_window_numeric_id_for_string((const char*)ms);
+                    #else
+                    int parsed = -1;
+                    if (sscanf((const char*)ms, "win-%d", &parsed) == 1) modal_numeric = parsed;
                     #endif
                 }
             }
@@ -750,6 +770,9 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
             #ifdef __APPLE__
             extern void darwin_tray_create_from_payload(const char* payload_json);
             darwin_tray_create_from_payload((const char*)payload);
+            #else
+            extern void windows_tray_create_from_payload(const char* payload_json);
+            windows_tray_create_from_payload((const char*)payload);
             #endif
         }
         return;
@@ -759,6 +782,9 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
             #ifdef __APPLE__
             extern void darwin_tray_set_icon_from_payload(const char* payload_json);
             darwin_tray_set_icon_from_payload((const char*)payload);
+            #else
+            extern void windows_tray_set_icon_from_payload(const char* payload_json);
+            windows_tray_set_icon_from_payload((const char*)payload);
             #endif
         }
         return;
@@ -768,6 +794,9 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
             #ifdef __APPLE__
             extern void darwin_tray_set_title_from_payload(const char* payload_json);
             darwin_tray_set_title_from_payload((const char*)payload);
+            #else
+            extern void windows_tray_set_title_from_payload(const char* payload_json);
+            windows_tray_set_title_from_payload((const char*)payload);
             #endif
         }
         return;
@@ -777,6 +806,9 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
             #ifdef __APPLE__
             extern void darwin_tray_set_tooltip_from_payload(const char* payload_json);
             darwin_tray_set_tooltip_from_payload((const char*)payload);
+            #else
+            extern void windows_tray_set_tooltip_from_payload(const char* payload_json);
+            windows_tray_set_tooltip_from_payload((const char*)payload);
             #endif
         }
         return;
@@ -786,6 +818,9 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
             #ifdef __APPLE__
             extern void darwin_tray_set_menu_from_payload(const char* payload_json);
             darwin_tray_set_menu_from_payload((const char*)payload);
+            #else
+            extern void windows_tray_set_menu_from_payload(const char* payload_json);
+            windows_tray_set_menu_from_payload((const char*)payload);
             #endif
         }
         return;
@@ -795,6 +830,9 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
             #ifdef __APPLE__
             extern void darwin_tray_destroy_from_payload(const char* payload_json);
             darwin_tray_destroy_from_payload((const char*)payload);
+            #else
+            extern void windows_tray_destroy_from_payload(const char* payload_json);
+            windows_tray_destroy_from_payload((const char*)payload);
             #endif
         }
         return;
@@ -804,6 +842,9 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
             #ifdef __APPLE__
             extern void darwin_tray_attach_window_from_payload(const char* payload_json);
             darwin_tray_attach_window_from_payload((const char*)payload);
+            #else
+            extern void windows_tray_attach_window_from_payload(const char* payload_json);
+            windows_tray_attach_window_from_payload((const char*)payload);
             #endif
         }
         return;
@@ -813,6 +854,9 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
             #ifdef __APPLE__
             extern void darwin_tray_detach_window_from_payload(const char* payload_json);
             darwin_tray_detach_window_from_payload((const char*)payload);
+            #else
+            extern void windows_tray_detach_window_from_payload(const char* payload_json);
+            windows_tray_detach_window_from_payload((const char*)payload);
             #endif
         }
         return;
@@ -1565,7 +1609,12 @@ fn router_handle_clipboard(method: string, args: JsonValue*, has_args: bool, win
         // free of Foundation imports.
         let b64: string = "";
         raw {
+            #ifdef __APPLE__
             char* encoded = darwin_clipboard_read_image_png_b64();
+            #else
+            extern char* windows_clipboard_read_image_png_b64(void);
+            char* encoded = windows_clipboard_read_image_png_b64();
+            #endif
             if (encoded) {
                 static char* cb_last_b64 = NULL;
                 if (cb_last_b64) free(cb_last_b64);
@@ -1583,7 +1632,12 @@ fn router_handle_clipboard(method: string, args: JsonValue*, has_args: bool, win
             if b64_opt.is_some() {
                 let b64: string = b64_opt.unwrap();
                 raw {
+                    #ifdef __APPLE__
                     darwin_clipboard_write_image_png_b64((const char*)b64);
+                    #else
+                    extern bool windows_clipboard_write_image_png_b64(const char* b64);
+                    windows_clipboard_write_image_png_b64((const char*)b64);
+                    #endif
                 }
             }
         }

@@ -475,6 +475,13 @@ static HRESULT STDMETHODCALLTYPE ZappCtrl_Invoke(
     char window_id_str[32];
     snprintf(window_id_str, sizeof(window_id_str), "win-%d", wid);
 
+    // theme: seed the current light/dark value so App.getTheme() is
+    // correct synchronously on first call — without it, a dark-mode
+    // first render would briefly assume "light" (same flash darwin's
+    // webview.m seeds against).
+    extern const char* windows_get_theme(void);
+    const char* theme = windows_get_theme();
+
     // Build config JS
     static char config_js[4096];
     snprintf(config_js, sizeof(config_js),
@@ -483,7 +490,8 @@ static HRESULT STDMETHODCALLTYPE ZappCtrl_Invoke(
         "webContentInspectable:%s,"
         "applicationShouldTerminateAfterLastWindowClosed:%s,"
         "maxWorkers:%d,"
-        "csp:'%s'"
+        "csp:'%s',"
+        "theme:'%s'"
         "};"
         "globalThis.__zappServiceManifest=%s;"
         "globalThis[Symbol.for('zapp.owner')]='%s';"
@@ -493,6 +501,7 @@ static HRESULT STDMETHODCALLTYPE ZappCtrl_Invoke(
         terminate_cfg ? "true" : "false",
         max_workers,
         csp ? csp : "",
+        theme ? theme : "light",
         manifest ? manifest : "[]",
         window_id_str,
         window_id_str);
