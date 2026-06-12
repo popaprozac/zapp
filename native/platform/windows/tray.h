@@ -11,6 +11,13 @@
 #ifndef ZAPP_WINDOWS_TRAY_H
 #define ZAPP_WINDOWS_TRAY_H
 
+// _WIN32 body guard: zc emits @cfg(windows) imports' #includes into EVERY
+// platform's generated TU (@cfg gates functions, not import emission —
+// vendor-ledger item). Without this, type definitions here collide with
+// the darwin headers in macOS/iOS builds (ZappMenuItem broke the macOS
+// build). On Windows _WIN32 is always defined, so this is inert there.
+#ifdef _WIN32
+
 void windows_tray_create_from_payload(const char* payload_json);
 void windows_tray_set_icon_from_payload(const char* payload_json);
 void windows_tray_set_title_from_payload(const char* payload_json);
@@ -20,4 +27,5 @@ void windows_tray_destroy_from_payload(const char* payload_json);
 void windows_tray_attach_window_from_payload(const char* payload_json);
 void windows_tray_detach_window_from_payload(const char* payload_json);
 
+#endif // _WIN32
 #endif

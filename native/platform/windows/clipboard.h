@@ -7,6 +7,13 @@
 #ifndef ZAPP_WINDOWS_CLIPBOARD_H
 #define ZAPP_WINDOWS_CLIPBOARD_H
 
+// _WIN32 body guard: zc emits @cfg(windows) imports' #includes into EVERY
+// platform's generated TU (@cfg gates functions, not import emission —
+// vendor-ledger item). Without this, type definitions here collide with
+// the darwin headers in macOS/iOS builds (ZappMenuItem broke the macOS
+// build). On Windows _WIN32 is always defined, so this is inert there.
+#ifdef _WIN32
+
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -32,4 +39,5 @@ bool  windows_clipboard_write_image_png_b64(const char* b64);
 bool windows_clipboard_has(const char* fmt);
 void windows_clipboard_clear(void);
 
+#endif // _WIN32
 #endif

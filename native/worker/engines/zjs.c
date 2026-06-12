@@ -1032,7 +1032,21 @@ static void apple_trigger_shutdown(ZjsWorkerSlot* slot) {
 // kqueue + CFRunLoop helpers above.
 // ---------------------------------------------------------------------------
 
-static void on_zjs_wake(uv_timer_t* h) { (void) h; /* work happens in on_check */ }
+// Forward decl — the timer callback and the check handle share the
+// same pump (see the phase-ordering note on zjs_pump below).
+static void zjs_pump(ZjsWorkerSlot* slot);
+
+static void on_zjs_wake(uv_timer_t* h) {
+    ZjsWorkerSlot* s = (ZjsWorkerSlot*) h->data;
+    // The drain MUST happen here, not only in the check handle: libuv
+    // runs check handles AFTER the poll phase, and once this one-shot
+    // timer is consumed the poll timeout computes as infinite (only
+    // async handles remain) — the loop blocks before the check phase
+    // ever runs. Symptom: a fetch whose wake timer fired still never
+    // resolved until unrelated traffic (a ping) tripped an async and
+    // let the iteration complete.
+    zjs_pump(s);
+}
 
 // Fires when zjs_worker_terminate (or terminate_owner) sets
 // wants_terminate. We stop the loop here — the on_check tick also bails,
@@ -1117,8 +1131,15 @@ static void on_eval_inbox_async(uv_async_t* h) {
     }
 }
 
-static void on_check(uv_check_t* h) {
-    ZjsWorkerSlot* slot = (ZjsWorkerSlot*) h->data;
+// Shared drain + re-arm. Called from BOTH the wake-timer callback and
+// the check handle:
+//   - on_zjs_wake: timers/IO due — drain NOW, because once the
+//     one-shot timer is consumed the poll phase blocks indefinitely
+//     and the check phase (which runs post-poll) is unreachable.
+//   - on_check: runs whenever the loop iterates for any other reason
+//     (inbox/eval asyncs) so JS activity from those paths re-arms the
+//     wake timer for whatever it scheduled.
+static void zjs_pump(ZjsWorkerSlot* slot) {
     if (atomic_load(&slot->wants_terminate)) return;
 
     zjs_run_pending_timers(slot->ctx);
@@ -1135,9 +1156,25 @@ static void on_check(uv_check_t* h) {
     }
 
     int64_t next_ms = zjs_next_timer_ms(slot->ctx);
-    if (next_ms < 0) return;             // no timers pending — idle
+    if (next_ms < 0) {
+        // No timers — but zjs's polling contract surfaces in-flight
+        // async I/O (fetch / WebSocket / net) through has_pending_work,
+        // and completions only drain inside zjs_run_pending_timers.
+        // Without this, a worker whose script holds an in-flight fetch
+        // but registered no timers parks the uv loop forever and the
+        // response never resolves (the bug class: fetch works in a
+        // worker WITH a setInterval, hangs in one without). Poll at
+        // 10ms while I/O is outstanding; stay fully idle otherwise.
+        if (!zjs_has_pending_work(slot->ctx)) return;   // truly idle
+        next_ms = 10;
+    }
     if (next_ms == 0) next_ms = 1;       // uv_timer_start treats 0 specially
     uv_timer_start(&slot->zjs_wake, on_zjs_wake, (uint64_t) next_ms, 0);
+}
+
+static void on_check(uv_check_t* h) {
+    ZjsWorkerSlot* slot = (ZjsWorkerSlot*) h->data;
+    zjs_pump(slot);
 }
 #endif // !__APPLE__
 
@@ -1190,7 +1227,12 @@ static char* zjs_load_script(const char* script_url, long* out_len) {
     }
 
     if (!code) {
-        FILE* f = fopen(script_path, "r");
+        // "rb", not "r": on Windows text mode translates CRLF and stops
+        // at Ctrl-Z, so fread returns fewer bytes than ftell's length
+        // for any binary artifact (.zbc bytecode) — the strict length
+        // check below then frees the buffer and the load reports
+        // "script not found". POSIX ignores the 'b'.
+        FILE* f = fopen(script_path, "rb");
         if (f) {
             fseek(f, 0, SEEK_END);
             code_len = ftell(f);
@@ -1514,6 +1556,10 @@ static ZjsSetupResult zjs_worker_setup_state(ZjsWorkerSlot* slot) {
 #if !defined(__APPLE__)
     {
         int64_t next_ms = zjs_next_timer_ms(slot->ctx);
+        // Same in-flight-I/O fallback as on_check: a script whose
+        // module-top code started a fetch but registered no timers
+        // still needs the loop ticking to drain the completion.
+        if (next_ms < 0 && zjs_has_pending_work(slot->ctx)) next_ms = 10;
         if (next_ms >= 0) {
             if (next_ms == 0) next_ms = 1;
             uv_timer_start(&slot->zjs_wake, on_zjs_wake, (uint64_t) next_ms, 0);

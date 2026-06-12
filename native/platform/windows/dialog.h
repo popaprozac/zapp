@@ -4,6 +4,13 @@
 #ifndef ZAPP_WINDOWS_DIALOG_H
 #define ZAPP_WINDOWS_DIALOG_H
 
+// _WIN32 body guard: zc emits @cfg(windows) imports' #includes into EVERY
+// platform's generated TU (@cfg gates functions, not import emission —
+// vendor-ledger item). Without this, type definitions here collide with
+// the darwin headers in macOS/iOS builds (ZappMenuItem broke the macOS
+// build). On Windows _WIN32 is always defined, so this is inert there.
+#ifdef _WIN32
+
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -30,4 +37,5 @@ int windows_dialog_message_typed(const char* message, const char* title, int sty
 int windows_dialog_message_buttons_typed(const char* message, const char* title, int style,
                                          const char* btn1, const char* btn2, const char* btn3);
 
+#endif // _WIN32
 #endif

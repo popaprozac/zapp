@@ -5,6 +5,13 @@
 #ifndef ZAPP_WINDOWS_WINDOW_H
 #define ZAPP_WINDOWS_WINDOW_H
 
+// _WIN32 body guard: zc emits @cfg(windows) imports' #includes into EVERY
+// platform's generated TU (@cfg gates functions, not import emission —
+// vendor-ledger item). Without this, type definitions here collide with
+// the darwin headers in macOS/iOS builds (ZappMenuItem broke the macOS
+// build). On Windows _WIN32 is always defined, so this is inert there.
+#ifdef _WIN32
+
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -86,4 +93,5 @@ void windows_window_load_url(int32_t window_id, const char* url);
 void windows_window_attach_modal(void* parent_handle, void* modal_handle);
 void windows_window_detach_modal(void* parent_handle, void* modal_handle);
 
+#endif // _WIN32
 #endif

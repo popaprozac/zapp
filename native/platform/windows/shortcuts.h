@@ -11,6 +11,13 @@
 #ifndef ZAPP_WINDOWS_SHORTCUTS_H
 #define ZAPP_WINDOWS_SHORTCUTS_H
 
+// _WIN32 body guard: zc emits @cfg(windows) imports' #includes into EVERY
+// platform's generated TU (@cfg gates functions, not import emission —
+// vendor-ledger item). Without this, type definitions here collide with
+// the darwin headers in macOS/iOS builds (ZappMenuItem broke the macOS
+// build). On Windows _WIN32 is always defined, so this is inert there.
+#ifdef _WIN32
+
 #include <stdbool.h>
 
 bool windows_shortcut_register(const char* accelerator);
@@ -22,4 +29,5 @@ void windows_shortcut_unregister_all(void);
 // messages have no HWND, so DispatchMessage can't route them).
 void windows_shortcut_handle_wm_hotkey(int hotkey_id);
 
+#endif // _WIN32
 #endif

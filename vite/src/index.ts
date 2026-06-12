@@ -611,7 +611,8 @@ async function bundleWorker(
       const { existsSync } = await import("node:fs");
       const mjsPath = path.join(outDir, entry.outputName);
       const zbcPath = mjsPath.replace(/\.mjs$/, ".zbc");
-      const zjsCli = path.resolve(root, "..", "vendor", "zjs", "build", "zjs");
+      const zjsCli = path.resolve(root, "..", "vendor", "zjs", "build",
+        process.platform === "win32" ? "zjs.exe" : "zjs");
       if (!existsSync(zjsCli)) {
         console.warn(
           `[zapp] bytecode: true requires vendor/zjs/build/zjs — not found at ${zjsCli}. ` +
@@ -671,13 +672,23 @@ const WORKER_MODULE_GLOBALS: Record<string, string | null> = {
   encoding:  "/encoding",
 };
 
-// Mirrors substituteZjsOnWindows in cli/src/config.ts — zjs doesn't
-// build on Windows yet, so the CLI swaps zjs workers to the default
-// bare engine there. The plugin must agree or engine-dependent bundle
-// decisions (workerModules shim injection, bytecode artifacts) diverge
-// from what actually runs. Remove both when zjs ships Windows support.
-function effectiveEngine(engine: string | undefined): string | undefined {
-  if (engine === "zjs" && process.platform === "win32") return "bare-quickjs";
+// Mirrors substituteZjsOnWindows in cli/src/config.ts — on Windows,
+// zjs only builds when the vendor checkout is present; without it the
+// CLI swaps zjs workers to the default bare engine. The plugin must
+// agree or engine-dependent bundle decisions (workerModules shim
+// injection, bytecode artifacts) diverge from what actually runs.
+function zjsAvailableOnWindows(root: string): boolean {
+  const candidates = [
+    path.resolve(root, "..", "vendor", "zjs", "src", "lib.zc"),          // monorepo
+    path.resolve(root, "node_modules", "@zappdev", "cli", "vendor", "zjs", "src", "lib.zc"),
+  ];
+  return candidates.some((c) => existsSync(c));
+}
+
+function effectiveEngine(engine: string | undefined, root: string): string | undefined {
+  if (engine === "zjs" && process.platform === "win32" && !zjsAvailableOnWindows(root)) {
+    return "bare-quickjs";
+  }
   return engine;
 }
 
@@ -687,7 +698,7 @@ function resolveHeadlessEntries(root: string, headless?: ZappWorkersOptions["hea
   for (const [id, value] of Object.entries(headless)) {
     const srcPath = typeof value === "string" ? value : value.script;
     const configuredEngine = typeof value === "string" ? undefined : value.engine;
-    const engine = effectiveEngine(configuredEngine);
+    const engine = effectiveEngine(configuredEngine, root);
     // The Windows zjs substitution drops bytecode silently (the CLI
     // already warns); a non-zjs engine configured WITH bytecode is a
     // user mistake and keeps its warning below.

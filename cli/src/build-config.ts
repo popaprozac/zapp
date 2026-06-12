@@ -638,6 +638,9 @@ export async function generatePlatformConfig(
   // -l<name> flags into a single `//> link:` directive emitted at the end.
   const allLinkSearchDirs: string[] = [];
   const allLinkLibs: string[] = [];
+  // Windows link flags destined for the GCC @file response file —
+  // written once at the end (bare flush + zjs block both contribute).
+  const windowsRspFlags: string[] = [];
 
   // Bare runtime — link each enabled engine. Use zc's dedicated
   // `//> include:` (for -I) and `//> lib:` (for -L) directives rather
@@ -1002,9 +1005,7 @@ export async function generatePlatformConfig(
       // "lwindowscodecs"). Route the long dynamic set through a GCC
       // response file: gcc expands @file natively and the directive
       // stays ~30 chars. (Vendor ledger: Zen-C should grow the buffer.)
-      const rspPath = path.join(zappDir, "zapp_link.rsp");
-      await Bun.write(rspPath, allFlags.map(f => f.replace(/\\/g, "/")).join(" ") + "\n");
-      content += `//> link: @${shortPath(rspPath).replace(/\\/g, "/")}\n`;
+      windowsRspFlags.push(...allFlags.map(f => f.replace(/\\/g, "/")));
     } else {
       content += `//> link: ${allFlags.join(" ")}\n`;
     }
@@ -1020,6 +1021,107 @@ export async function generatePlatformConfig(
   // iOS device (`ios-device`) is intentionally NOT covered yet — the
   // device toolchain build path is a separate follow-up (the kqueue-
   // apple branch scopes to Simulator only).
+  // Windows: zjs ships Windows parity (libuv loop on the zapp side,
+  // winhttp/ws2_32-backed platform layer on the zjs side). The library
+  // artifact is an "embed-friendly" archive mirroring the iOS approach:
+  // zc-transpiled engine + windows platform objects merged via `ld -r`,
+  // then objcopy --keep-global-symbol="zjs_*" so the zenc stdlib that
+  // BOTH zapp and libzjs embed (Arena__/Vec__/…) can't collide at link.
+  if (hasZjs && target === "windows") {
+    const { resolveVendorDir } = await import("./paths");
+    const vendorDir = resolveVendorDir();
+    const zjsDir = path.join(vendorDir, "zjs");
+    const winBuildDir = path.join(zjsDir, "build", "windows");
+    const embedLib = path.join(winBuildDir, "libzjs_embed.a");
+
+    if (!existsSync(embedLib)) {
+      clog(0, "building vendor/zjs (Windows embed archive; first run)...");
+      const fsp = await import("node:fs/promises");
+      await fsp.mkdir(winBuildDir, { recursive: true });
+      // 1. CLI build script — creates the std junction + stdlib .gen.h
+      //    embeds (idempotent). Needs zc + MinGW gcc + python3 on PATH.
+      const ps = Bun.spawnSync(["powershell", "-File", path.join(zjsDir, "scripts", "build-windows.ps1")], { cwd: zjsDir, stdout: "inherit", stderr: "inherit" });
+      if (ps.exitCode !== 0) throw new Error("[zapp] vendor/zjs scripts/build-windows.ps1 failed");
+      // 2. Transpile the library entry.
+      const libC = path.join(winBuildDir, "libzjs.c");
+      const tr = Bun.spawnSync(["zc", "transpile", "-w", "--release", "-Isrc", "src/lib.zc", "-o", libC], { cwd: zjsDir, stdout: "inherit", stderr: "inherit" });
+      if (tr.exitCode !== 0) throw new Error("[zapp] zc transpile of vendor/zjs lib.zc failed");
+      // 3. Compile engine + windows platform + qjs-regex objects.
+      const zcRoot = process.env.ZC_ROOT ?? path.dirname(Bun.which("zc") ?? "zc");
+      const qjsre = path.join(zjsDir, "src", "third-party", "qjs-regex");
+      const cflags = ["-O2", "-w", "-ffunction-sections", "-fdata-sections",
+        `-I${path.join(zjsDir, "src")}`, `-I${zcRoot}`,
+        `-I${path.join(zcRoot, "std", "third-party", "tre", "include")}`,
+        `-I${qjsre}`, "-DCONFIG_ALL_UNICODE"];
+      const units: Array<[string, string]> = [
+        [libC, "libzjs.o"],
+        [path.join(zjsDir, "src", "platform", "http_windows.c"), "http_windows.o"],
+        [path.join(zjsDir, "src", "platform", "ws_windows.c"), "ws_windows.o"],
+        [path.join(zjsDir, "src", "platform", "process_windows.c"), "process_windows.o"],
+        [path.join(zjsDir, "src", "platform", "socket_windows.c"), "socket_windows.o"],
+        [path.join(zjsDir, "src", "platform", "qjs_regex_shim.c"), "qjs_regex_shim.o"],
+        [path.join(qjsre, "libregexp.c"), "qjs_libregexp.o"],
+        [path.join(qjsre, "libunicode.c"), "qjs_libunicode.o"],
+      ];
+      const objs: string[] = [];
+      for (const [src, obj] of units) {
+        const out = path.join(winBuildDir, obj);
+        const cc = Bun.spawnSync(["gcc", ...cflags, "-c", src, "-o", out], { stdout: "inherit", stderr: "inherit" });
+        if (cc.exitCode !== 0) throw new Error(`[zapp] vendor/zjs compile failed: ${src}`);
+        objs.push(out);
+      }
+      // 4. Merge + localize + archive.
+      const embedObj = path.join(winBuildDir, "libzjs_embed.o");
+      const ldr = Bun.spawnSync(["ld", "-r", ...objs, "-o", embedObj], { stdout: "inherit", stderr: "inherit" });
+      if (ldr.exitCode !== 0) throw new Error("[zapp] vendor/zjs ld -r merge failed");
+      const oc = Bun.spawnSync(["objcopy", "--wildcard", "--keep-global-symbol=zjs_*", embedObj], { stdout: "inherit", stderr: "inherit" });
+      if (oc.exitCode !== 0) throw new Error("[zapp] vendor/zjs objcopy localize failed");
+      const arr = Bun.spawnSync(["ar", "rcs", embedLib, embedObj], { stdout: "inherit", stderr: "inherit" });
+      if (arr.exitCode !== 0) throw new Error("[zapp] vendor/zjs ar failed");
+      clog(0, "vendor/zjs Windows embed archive built");
+    }
+
+    content += `//> cflags: -I${shortPath(path.join(zjsDir, "include"))}\n`;
+
+    // zapp's engine host (native/worker/engines/zjs.c) drives a libuv
+    // loop per worker on non-Apple platforms — reuse the libuv that the
+    // bare engine build already produced. A zjs-only app on a machine
+    // with no bare build yet has no libuv: vendoring libuv standalone
+    // is the documented follow-up (WINDOWS_PORTING.md zjs ledger row).
+    const { resolveBareDir } = await import("./paths");
+    const bareDir = await resolveBareDir();
+    let uvInclude = "";
+    let uvLib = "";
+    const bareBuilds = ["build-windows-quickjs", "build-windows-v8", "build-windows-mqjs", "build-windows-hermes"];
+    for (const b of bareBuilds) {
+      const inc = path.join(bareDir, b, "_deps", "github+libuv+libuv-src", "include");
+      const lib = path.join(bareDir, b, "_deps", "github+libuv+libuv-build", "libuv.a");
+      if (existsSync(inc) && existsSync(lib)) { uvInclude = inc; uvLib = lib; break; }
+    }
+    if (!uvInclude) {
+      throw new Error(
+        "[zapp] zjs on Windows needs libuv headers + libuv.a; none found under " +
+        "vendor/bare/build-windows-*/. Build any bare engine once (or wait for " +
+        "the vendored-libuv follow-up).");
+    }
+    content += `//> cflags: -I${shortPath(uvInclude)}\n`;
+
+    // Link args ride the same response file as the bare set (the zc
+    // link-directive buffer is 1024 bytes — see the rsp note above).
+    // -lz: MinGW-w64 bundles libz (zjs node:zlib). The rest mirror
+    // src/lib.zc's //> windows: link: line.
+    // System import libs repeated AFTER libuv.a: GNU ld is single-pass
+    // and zjs pulls libuv members (process.c → dbghelp/userenv,
+    // util.c → iphlpapi) that the base `//> windows: link:` line —
+    // which precedes the rsp — can't satisfy retroactively.
+    windowsRspFlags.push(
+      shortPath(embedLib).replace(/\\/g, "/"),
+      shortPath(uvLib).replace(/\\/g, "/"),
+      "-lwinhttp", "-lws2_32", "-lbcrypt", "-lpsapi", "-lz",
+      "-ldbghelp", "-liphlpapi", "-luserenv",
+    );
+  }
+
   if (hasZjs && (target === "macos" || target === "ios-simulator")) {
     const { resolveVendorDir } = await import("./paths");
     const vendorDir = resolveVendorDir();
@@ -1149,23 +1251,29 @@ export async function generatePlatformConfig(
       const embedLib = path.join(iosBuildDir, "libzjs_embed.a");
       const embedObj = path.join(iosBuildDir, "libzjs_embed.o");
       const symsList = path.join(iosBuildDir, "libzjs_embed.syms");
-      const aesGcmObj = path.join(iosBuildDir, "aes_gcm.o");
-      const aesGcmSrc = path.join(zjsDir, "src", "third-party", "aes-gcm", "aes_gcm.c");
+      // Sources libzjs.a REFERENCES but vendor zjs's iOS Makefile target
+      // doesn't compile (file upstream; built here until fixed):
+      //   - aes-gcm/aes_gcm.c        → zjs_pc_aes_gcm_*
+      //   - platform/process_posix.c → zjs_process_spawn_capture
+      //     (child_process host API added in the Windows-parity sprint)
+      const extraSrcs = [
+        path.join(zjsDir, "src", "third-party", "aes-gcm", "aes_gcm.c"),
+        path.join(zjsDir, "src", "platform", "process_posix.c"),
+      ].filter((p) => existsSync(p));
       const fs = await import("node:fs");
       const srcMtime = fs.statSync(zjsLib).mtimeMs;
-      const aesGcmSrcMtime = existsSync(aesGcmSrc) ? fs.statSync(aesGcmSrc).mtimeMs : 0;
+      const extraMtime = Math.max(0, ...extraSrcs.map((p) => fs.statSync(p).mtimeMs));
       const stale = !existsSync(embedLib)
         || fs.statSync(embedLib).mtimeMs < srcMtime
-        || fs.statSync(embedLib).mtimeMs < aesGcmSrcMtime;
+        || fs.statSync(embedLib).mtimeMs < extraMtime;
       if (stale) {
         clog(1, "post-processing libzjs.a → libzjs_embed.a (iOS Sim)...");
 
-        // Compile aes_gcm.c into an object so we can include it in
-        // the ld -r merge (libzjs.a references zjs_pc_aes_gcm_* but
-        // doesn't contain them — vendor zjs's iOS Makefile target
-        // misses this source. Until that's fixed upstream, build it
-        // here so the merged .o is self-contained.)
-        if (existsSync(aesGcmSrc)) {
+        // Compile each missing source into an object for the ld -r merge
+        // so the merged .o is self-contained.
+        const extraObjs: string[] = [];
+        for (const src of extraSrcs) {
+          const obj = path.join(iosBuildDir, path.basename(src).replace(/\.c$/, ".o"));
           const cc = Bun.spawnSync([
             "clang",
             "-O3",
@@ -1173,15 +1281,16 @@ export async function generatePlatformConfig(
             "-isysroot", sdkPath,
             versionMinFlag,
             "-I" + path.join(zjsDir, "src"),
-            "-c", aesGcmSrc,
-            "-o", aesGcmObj,
+            "-c", src,
+            "-o", obj,
           ]);
           if (cc.exitCode !== 0) {
             throw new Error(
-              `[zapp] failed to compile aes_gcm.c for iOS Sim: ` +
+              `[zapp] failed to compile ${path.basename(src)} for iOS Sim: ` +
               new TextDecoder().decode(cc.stderr)
             );
           }
+          extraObjs.push(obj);
         }
 
         // The exported-symbols list is a single-pattern file matching
@@ -1197,7 +1306,7 @@ export async function generatePlatformConfig(
           // Force-load every .o in the .a — ld -r otherwise skips
           // unreferenced objects, which would lose half of libzjs.
           "-force_load", zjsLib,
-          ...(existsSync(aesGcmObj) ? [aesGcmObj] : []),
+          ...extraObjs,
           "-o", embedObj,
         ];
         const ld = Bun.spawnSync(["ld", ...ldArgs]);
@@ -1263,6 +1372,12 @@ export async function generatePlatformConfig(
     if (userExtraLinkFlags.length > 0) {
       content += `//> windows: link: ${userExtraLinkFlags.join(" ")}\n`;
     }
+  }
+
+  if (target === "windows" && windowsRspFlags.length > 0) {
+    const rspPath = path.join(zappDir, "zapp_link.rsp");
+    await Bun.write(rspPath, windowsRspFlags.join(" ") + "\n");
+    content += `//> link: @${shortPath(rspPath).replace(/\\/g, "/")}\n`;
   }
 
   const outPath = path.join(zappDir, "zapp_platform.zc");

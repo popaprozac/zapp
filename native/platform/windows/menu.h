@@ -4,6 +4,13 @@
 #ifndef ZAPP_WINDOWS_MENU_H
 #define ZAPP_WINDOWS_MENU_H
 
+// _WIN32 body guard: zc emits @cfg(windows) imports' #includes into EVERY
+// platform's generated TU (@cfg gates functions, not import emission —
+// vendor-ledger item). Without this, type definitions here collide with
+// the darwin headers in macOS/iOS builds (ZappMenuItem broke the macOS
+// build). On Windows _WIN32 is always defined, so this is inert there.
+#ifdef _WIN32
+
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -36,4 +43,5 @@ typedef struct ZappMenuItem {
 void windows_menu_set_typed(ZappMenuItem* items, int count);
 void windows_menu_show_context_typed(ZappMenuItem* items, int count, int x, int y, int32_t window_id);
 
+#endif // _WIN32
 #endif
