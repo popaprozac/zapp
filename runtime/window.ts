@@ -19,6 +19,7 @@
 import { getBridge } from "./bridge";
 import { WindowEvent, eventName, type WindowSizePayload, type WindowPayload, type ModalDismissedPayload, type SidebarResizedPayload } from "./events";
 import type { Display } from "./screen";
+import type { MenuItemDef } from "./menu";
 
 /**
  * Native background materials (NSVisualEffectMaterial names). Used by the
@@ -232,6 +233,10 @@ export interface ToolbarItemDef {
   icon?: string;
   /** Creator-context callback (menu pattern). Stripped before the wire. */
   action?: () => void;
+  /** Pull-down menu (NSMenuToolbarItem — e.g. Mail's filter button). Items
+   *  are the same MenuItemDef used by Menu/ContextMenu/Tray; their `action`
+   *  callbacks run in this (creator) context via the __menu:click pipeline. */
+  menu?: MenuItemDef[];
 }
 
 /** Options for a native toolbar (NSToolbar) attached at Window.create. */
@@ -261,7 +266,7 @@ export function normalizeAnchor(anchor: Anchor): { x: number; y: number; width: 
   }
   const r = anchor as { x: number; y: number; width?: number; height?: number };
   if (typeof r?.x !== "number" || typeof r?.y !== "number") {
-    throw new Error("[zapp] popover: invalid anchor — pass an Element, a MouseEvent, or {x, y, width?, height?}");
+    throw new Error("[zapp] anchor: invalid anchor — pass an Element, a MouseEvent, or {x, y, width?, height?}");
   }
   return { x: r.x, y: r.y, width: r.width ?? 1, height: r.height ?? 1 };
 }
@@ -314,18 +319,53 @@ function wireToolbarClicks(): void {
   });
 }
 
+let tbMenuIdCounter = 0;
+/** Toolbar pull-down menu actions, keyed by menu-item id ("__menu:click"
+ * carries only the id — app-global like Menu.build; reused ids across
+ * windows collide, same caveat as Menu). App-lifetime, like toolbarActions. */
+const toolbarMenuActions = new Map<string, () => void>();
+let toolbarMenuClickWired = false;
+
+function wireToolbarMenuClicks(): void {
+  if (toolbarMenuClickWired) return;
+  toolbarMenuClickWired = true;
+  getBridge().on("__menu:click", (payload: any) => {
+    const id = typeof payload === "string" ? JSON.parse(payload).id : payload?.id;
+    const fn = toolbarMenuActions.get(id);
+    if (fn) fn();
+  });
+}
+
+/** Strip `action` callbacks out of a MenuItemDef tree (recursing submenus),
+ * collecting them into `out` keyed by (possibly auto-generated) id. Mirrors
+ * context-menu.ts's collectAndStrip. */
+function stripMenuActions(items: MenuItemDef[], out: Map<string, () => void>): any[] {
+  return items.map((item) => {
+    const clean: any = { ...item };
+    if (clean.action) {
+      if (!clean.id) clean.id = `__tbmenu_${++tbMenuIdCounter}`;
+      out.set(clean.id, clean.action);
+      delete clean.action;
+    }
+    if (clean.submenu) clean.submenu = stripMenuActions(clean.submenu, out);
+    return clean;
+  });
+}
+
 /** Validate a ToolbarOptions and split it into the wire JSON (actions
- * stripped, defaults applied) and the action map. Pure — unit-tested. */
+ * stripped, defaults applied) and the action maps. Pure — unit-tested. */
 export function normalizeToolbar(
   toolbar: ToolbarOptions,
   hasSidebar: boolean,
-): { json: string; actions: Map<string, () => void> } {
+): { json: string; actions: Map<string, () => void>; menuActions: Map<string, () => void> } {
   const actions = new Map<string, () => void>();
+  const menuActions = new Map<string, () => void>();
   const seen = new Set<string>();
   const items: Record<string, unknown>[] = [];
   for (const item of toolbar.items ?? []) {
     const type = item.type ?? "button";
     if (type === "toggleSidebar" || type === "trackingSeparator") {
+      if ((item as any).menu) throw new Error('[zapp] toolbar: "menu" is only valid on button items');
       if (!hasSidebar) {
         console.warn(`[zapp] toolbar: "${type}" requires the window to have a sidebar — item dropped`);
         continue;
@@ -334,6 +374,7 @@ export function normalizeToolbar(
       continue;
     }
     if (type === "space" || type === "flexibleSpace") {
+      if ((item as any).menu) throw new Error('[zapp] toolbar: "menu" is only valid on button items');
       items.push({ type });
       continue;
     }
@@ -346,9 +387,11 @@ export function normalizeToolbar(
     if (seen.has(item.id)) throw new Error(`[zapp] toolbar: duplicate item id "${item.id}"`);
     seen.add(item.id);
     if (item.action) actions.set(item.id, item.action);
-    items.push({ type: "button", id: item.id, label: item.label ?? "", icon: item.icon ?? "" });
+    const wire: Record<string, unknown> = { type: "button", id: item.id, label: item.label ?? "", icon: item.icon ?? "" };
+    if (item.menu) wire.menu = stripMenuActions(item.menu, menuActions);
+    items.push(wire);
   }
-  return { json: JSON.stringify({ style: toolbar.style ?? "unified", items }), actions };
+  return { json: JSON.stringify({ style: toolbar.style ?? "unified", items }), actions, menuActions };
 }
 
 /** A handle to the sidebar attached to a window. */
@@ -631,10 +674,14 @@ export const Window = {
     // windowId is known.
     let pendingToolbarActions: Map<string, () => void> | undefined;
     if (opts?.toolbar) {
-      const { json, actions } = normalizeToolbar(opts.toolbar, opts.sidebar !== undefined);
+      const { json, actions, menuActions } = normalizeToolbar(opts.toolbar, opts.sidebar !== undefined);
       normalized.toolbarJson = json;
       delete normalized.toolbar;
       if (actions.size > 0) pendingToolbarActions = actions;
+      if (menuActions.size > 0) {
+        wireToolbarMenuClicks();
+        for (const [id, fn] of menuActions) toolbarMenuActions.set(id, fn);
+      }
     }
     const registerToolbarActions = (windowId: string) => {
       if (!pendingToolbarActions) return;

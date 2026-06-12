@@ -70,3 +70,48 @@ describe("normalizeToolbar", () => {
     expect(eventName(WindowEvent.TOOLBAR_CLICKED)).toBe("window:toolbar-clicked");
   });
 });
+
+describe("normalizeToolbar menu items", () => {
+  test("menu actions stripped into menuActions, wire shape keeps menu", () => {
+    let hit = "";
+    const { json, menuActions } = normalizeToolbar({
+      items: [{
+        id: "filter", icon: "sf:line.3.horizontal.decrease", label: "Filter",
+        menu: [
+          { id: "all", label: "All", action: () => { hit = "all"; } },
+          { id: "unread", label: "Unread" },
+        ],
+      }],
+    }, false);
+    const item = JSON.parse(json).items[0];
+    expect(item.menu).toEqual([
+      { id: "all", label: "All" },
+      { id: "unread", label: "Unread" },
+    ]);
+    expect(JSON.stringify(item)).not.toContain("action");
+    expect(menuActions.size).toBe(1);
+    menuActions.get("all")!();
+    expect(hit).toBe("all");
+  });
+
+  test("action-bearing menu items without id get auto-ids", () => {
+    const { json, menuActions } = normalizeToolbar({
+      items: [{ id: "f", menu: [{ label: "X", action: () => {} }] }],
+    }, false);
+    const autoId = JSON.parse(json).items[0].menu[0].id;
+    expect(autoId).toMatch(/^__tbmenu_\d+$/);
+    expect(menuActions.has(autoId)).toBe(true);
+  });
+
+  test("submenus are walked", () => {
+    const { menuActions } = normalizeToolbar({
+      items: [{ id: "f", menu: [{ label: "More", submenu: [{ id: "deep", label: "D", action: () => {} }] }] }],
+    }, false);
+    expect(menuActions.has("deep")).toBe(true);
+  });
+
+  test("menu on non-button types throws", () => {
+    expect(() => normalizeToolbar({ items: [{ type: "flexibleSpace", menu: [] } as any] }, false))
+      .toThrow(/only valid on button/);
+  });
+});
