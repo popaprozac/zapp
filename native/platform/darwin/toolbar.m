@@ -199,9 +199,13 @@ static NSArray<NSToolbarItemIdentifier>* zapp_toolbar_parse_items(
             // stays consistent with win.sidebar.* — both mutate the same
             // NSSplitViewItem.collapsed, so sidebar.m's KVO still emits
             // SIDEBAR_COLLAPSED/EXPANDED either way.
-            [ids addObject:NSToolbarToggleSidebarItemIdentifier];
+            // NSToolbar raises on duplicate non-space identifiers; AppKit's
+            // own default-identifiers attach path filters dups, so mirror it.
+            if (![ids containsObject:NSToolbarToggleSidebarItemIdentifier])
+                [ids addObject:NSToolbarToggleSidebarItemIdentifier];
         } else if ([type isEqualToString:@"trackingSeparator"]) {
-            [ids addObject:kZappTrackingSeparatorId];
+            if (![ids containsObject:kZappTrackingSeparatorId])
+                [ids addObject:kZappTrackingSeparatorId];
         } else if ([type isEqualToString:@"space"]) {
             [ids addObject:NSToolbarSpaceItemIdentifier];
         } else if ([type isEqualToString:@"flexibleSpace"]) {
@@ -321,8 +325,12 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
         c.identifiers = ids;
         c.buttonsById = buttons;
         while (tb.items.count > 0) [tb removeItemAtIndex:0];
-        for (NSUInteger i = 0; i < ids.count; i++) {
-            [tb insertItemWithItemIdentifier:ids[i] atIndex:(NSInteger)i];
+        for (NSToolbarItemIdentifier ident in ids) {
+            // Append-at-count, NOT at the loop index: when the delegate
+            // returns nil for an identifier (trackingSeparator without a
+            // split view, pre-10.15 fallthrough) AppKit skips the insert
+            // and an indexed loop would drift out of range and throw.
+            [tb insertItemWithItemIdentifier:ident atIndex:(NSInteger)tb.items.count];
         }
         // The contentLayoutRect KVO catches band-height changes; this covers
         // the same-height case cheaply (no-op-skip cache absorbs it).
