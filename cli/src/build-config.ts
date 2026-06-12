@@ -1251,23 +1251,29 @@ export async function generatePlatformConfig(
       const embedLib = path.join(iosBuildDir, "libzjs_embed.a");
       const embedObj = path.join(iosBuildDir, "libzjs_embed.o");
       const symsList = path.join(iosBuildDir, "libzjs_embed.syms");
-      const aesGcmObj = path.join(iosBuildDir, "aes_gcm.o");
-      const aesGcmSrc = path.join(zjsDir, "src", "third-party", "aes-gcm", "aes_gcm.c");
+      // Sources libzjs.a REFERENCES but vendor zjs's iOS Makefile target
+      // doesn't compile (file upstream; built here until fixed):
+      //   - aes-gcm/aes_gcm.c        → zjs_pc_aes_gcm_*
+      //   - platform/process_posix.c → zjs_process_spawn_capture
+      //     (child_process host API added in the Windows-parity sprint)
+      const extraSrcs = [
+        path.join(zjsDir, "src", "third-party", "aes-gcm", "aes_gcm.c"),
+        path.join(zjsDir, "src", "platform", "process_posix.c"),
+      ].filter((p) => existsSync(p));
       const fs = await import("node:fs");
       const srcMtime = fs.statSync(zjsLib).mtimeMs;
-      const aesGcmSrcMtime = existsSync(aesGcmSrc) ? fs.statSync(aesGcmSrc).mtimeMs : 0;
+      const extraMtime = Math.max(0, ...extraSrcs.map((p) => fs.statSync(p).mtimeMs));
       const stale = !existsSync(embedLib)
         || fs.statSync(embedLib).mtimeMs < srcMtime
-        || fs.statSync(embedLib).mtimeMs < aesGcmSrcMtime;
+        || fs.statSync(embedLib).mtimeMs < extraMtime;
       if (stale) {
         clog(1, "post-processing libzjs.a → libzjs_embed.a (iOS Sim)...");
 
-        // Compile aes_gcm.c into an object so we can include it in
-        // the ld -r merge (libzjs.a references zjs_pc_aes_gcm_* but
-        // doesn't contain them — vendor zjs's iOS Makefile target
-        // misses this source. Until that's fixed upstream, build it
-        // here so the merged .o is self-contained.)
-        if (existsSync(aesGcmSrc)) {
+        // Compile each missing source into an object for the ld -r merge
+        // so the merged .o is self-contained.
+        const extraObjs: string[] = [];
+        for (const src of extraSrcs) {
+          const obj = path.join(iosBuildDir, path.basename(src).replace(/\.c$/, ".o"));
           const cc = Bun.spawnSync([
             "clang",
             "-O3",
@@ -1275,15 +1281,16 @@ export async function generatePlatformConfig(
             "-isysroot", sdkPath,
             versionMinFlag,
             "-I" + path.join(zjsDir, "src"),
-            "-c", aesGcmSrc,
-            "-o", aesGcmObj,
+            "-c", src,
+            "-o", obj,
           ]);
           if (cc.exitCode !== 0) {
             throw new Error(
-              `[zapp] failed to compile aes_gcm.c for iOS Sim: ` +
+              `[zapp] failed to compile ${path.basename(src)} for iOS Sim: ` +
               new TextDecoder().decode(cc.stderr)
             );
           }
+          extraObjs.push(obj);
         }
 
         // The exported-symbols list is a single-pattern file matching
@@ -1299,7 +1306,7 @@ export async function generatePlatformConfig(
           // Force-load every .o in the .a — ld -r otherwise skips
           // unreferenced objects, which would lose half of libzjs.
           "-force_load", zjsLib,
-          ...(existsSync(aesGcmObj) ? [aesGcmObj] : []),
+          ...extraObjs,
           "-o", embedObj,
         ];
         const ld = Bun.spawnSync(["ld", ...ldArgs]);
