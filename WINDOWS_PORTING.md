@@ -1,17 +1,23 @@
 # Windows Porting Guide
 
 State of the Windows port and the handoff brief for the Windows parity
-sprint (task #167 / competitive-plan T2.C). Updated 2026-06-11, immediately
-after the macOS native-chrome trilogy (sidebars, toolbars, popovers) merged
-— this doc is written to seed a brainstorming session on a Windows machine.
+sprint (task #167 / competitive-plan T2.C).
 
-macOS is the reference platform with full coverage; iOS shares most of the
-Zen-C layer. Windows has v1-era scaffolding whose functional state is
-**UNVERIFIED against current main** — treat every "works" claim below as
-"worked in the v1 port" until re-proven. **The first task on a PC is a
-build + runtime inventory: `bun run build --platform windows` in
-hello-world, fix until it compiles/links, then catalog what actually
-functions.**
+**Status update 2026-06-11 (Windows sprint, `windows-parity` branch):
+M0–M2 are DONE and runtime-verified on a real Windows 11 machine.**
+`bun run build` in hello-world (no flag needed — win32 hosts default to
+the windows target) produces a working .exe: window + WebView2 + bridge
+ready-handshake + `greet` round-trip, native Win32 menus, and headless
+bare-quickjs workers end-to-end (embedded script load, libuv timers,
+worker console, supervisor restart/gave-up contract, sync dispatch to
+workers). All 60 `windows_*` symbols referenced from Zen-C are defined
+(enforced by `cli/src/windows-platform-parity.test.ts`); the Tier 1
+link gate below is CLOSED. Remaining gaps are Tier 2 feature breadth
+(M3) and packaging/CI (M4). See "Windows prerequisites" and the
+"Vendor/upstream ledger" sections below before building on a fresh PC.
+
+macOS is the reference platform with full coverage; iOS shares most of
+the Zen-C layer.
 
 For general framework orientation read [`SKILLS.md`](SKILLS.md) and
 `docs/architecture.md`. This file is Windows-specific.
