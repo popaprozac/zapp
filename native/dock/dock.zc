@@ -41,26 +41,28 @@ fn dock_set_icon(path: string) -> void { darwin_dock::darwin_dock_set_icon(path)
 @cfg(apple)
 fn dock_reset_icon() -> void { darwin_dock::darwin_dock_reset_icon(); }
 
-// Windows: no dock. Badge/flash analogues exist via ITaskbarList3 —
-// tracked for the parity sprint (M3); until then these are no-ops so
-// shared callers (app.zc dock routes) compile and behave like the
-// documented "macOS only" runtime API.
+// Windows: taskbar analogues. Badge → ITaskbarList3 overlay icon,
+// bounce → FlashWindowEx, set/reset_icon → WM_SETICON. show/hide_icon
+// stay no-ops (no taskbar-button analogue).
 @cfg(windows)
-fn dock_show_icon() -> void {}
+import "../platform/windows/dock.h" as win_dock;
+
 @cfg(windows)
-fn dock_hide_icon() -> void {}
+fn dock_show_icon() -> void { win_dock::windows_dock_show_icon(); }
 @cfg(windows)
-fn dock_set_badge(label: string) -> void {}
+fn dock_hide_icon() -> void { win_dock::windows_dock_hide_icon(); }
 @cfg(windows)
-fn dock_remove_badge() -> void {}
+fn dock_set_badge(label: string) -> void { win_dock::windows_dock_set_badge(label); }
 @cfg(windows)
-fn dock_get_badge() -> string { return ""; }
+fn dock_remove_badge() -> void { win_dock::windows_dock_remove_badge(); }
 @cfg(windows)
-fn dock_bounce(bounce_type: int) -> void {}
+fn dock_get_badge() -> string { return win_dock::windows_dock_get_badge(); }
 @cfg(windows)
-fn dock_set_icon(path: string) -> void {}
+fn dock_bounce(bounce_type: int) -> void { win_dock::windows_dock_bounce(bounce_type); }
 @cfg(windows)
-fn dock_reset_icon() -> void {}
+fn dock_set_icon(path: string) -> void { win_dock::windows_dock_set_icon(path); }
+@cfg(windows)
+fn dock_reset_icon() -> void { win_dock::windows_dock_reset_icon(); }
 
 // --- Manager (namespaced via app.dock) ---
 

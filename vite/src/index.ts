@@ -485,11 +485,16 @@ function workerModulesPrelude(
 
   const prelude = importLines.join("\n") + "\n" + helper + "\n" + bindBodies.join("\n") + "\n";
 
+  // Vite/Rolldown module ids use forward slashes on every platform;
+  // path.resolve gives backslashes on Windows — normalize or the
+  // comparison silently never matches and the shim is never injected
+  // (fetch undefined in every worker on Windows).
+  const entryId = entryAbsPath.replace(/\\/g, "/");
   return {
     name: "zapp-worker-modules-prelude",
     enforce: "pre",
     transform(code, id) {
-      if (id !== entryAbsPath) return null;
+      if (id.replace(/\\/g, "/") !== entryId) return null;
       return { code: prelude + code, map: null };
     },
   };

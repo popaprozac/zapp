@@ -606,6 +606,9 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
                     #ifdef __APPLE__
                     extern int32_t darwin_window_numeric_id_for_string(const char* wid);
                     parent_numeric = (int)darwin_window_numeric_id_for_string((const char*)ps);
+                    #else
+                    int parsed = -1;
+                    if (sscanf((const char*)ps, "win-%d", &parsed) == 1) parent_numeric = parsed;
                     #endif
                 }
             }
@@ -618,6 +621,9 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
                     #ifdef __APPLE__
                     extern int32_t darwin_window_numeric_id_for_string(const char* wid);
                     modal_numeric = (int)darwin_window_numeric_id_for_string((const char*)ms);
+                    #else
+                    int parsed = -1;
+                    if (sscanf((const char*)ms, "win-%d", &parsed) == 1) modal_numeric = parsed;
                     #endif
                 }
             }

@@ -994,7 +994,20 @@ export async function generatePlatformConfig(
       ...allLinkSearchDirs.map(d => `-L${d}`),
       ...libs,
     ];
-    content += `//> link: ${allFlags.join(" ")}\n`;
+    if (target === "windows") {
+      // zc accumulates ALL link directives into a fixed 1024-byte
+      // buffer (compiler_config.h link_flags) and silently truncates —
+      // with the bare engine's full dep set this line alone is ~900
+      // chars and truncation ate flags mid-token ("-lwindowscodecs" →
+      // "lwindowscodecs"). Route the long dynamic set through a GCC
+      // response file: gcc expands @file natively and the directive
+      // stays ~30 chars. (Vendor ledger: Zen-C should grow the buffer.)
+      const rspPath = path.join(zappDir, "zapp_link.rsp");
+      await Bun.write(rspPath, allFlags.map(f => f.replace(/\\/g, "/")).join(" ") + "\n");
+      content += `//> link: @${shortPath(rspPath).replace(/\\/g, "/")}\n`;
+    } else {
+      content += `//> link: ${allFlags.join(" ")}\n`;
+    }
   }
 
   // zjs engine — independent of bare. Auto-builds the right libzjs

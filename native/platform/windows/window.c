@@ -235,6 +235,9 @@ LRESULT CALLBACK zapp_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 zapp_dispatch_event(wid, ZAPP_EVENT_FOCUS, 0, 0, 0, 0);
             } else if (activateState == WA_INACTIVE) {
                 zapp_dispatch_event(wid, ZAPP_EVENT_BLUR, 0, 0, 0, 0);
+                // Tray-attached windows with dismissOnBlur hide here.
+                extern void windows_tray_notify_window_blur(void* hwnd);
+                windows_tray_notify_window_blur((void*)hwnd);
             }
             return 0;
         }
@@ -260,6 +263,16 @@ LRESULT CALLBACK zapp_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
 
         case WM_DESTROY: {
+            // Modal safety net: if this window owned a disabled parent
+            // (attach_modal) and is going away without a detach (user
+            // hit the X), re-enable the parent or it's stuck dead.
+            {
+                HWND owner = (HWND)GetWindowLongPtrW(hwnd, GWLP_HWNDPARENT);
+                if (owner && !IsWindowEnabled(owner)) {
+                    EnableWindow(owner, TRUE);
+                    SetForegroundWindow(owner);
+                }
+            }
             // Clear dispatch table entry
             if (wid >= 0 && wid < ZAPP_MAX_WINDOWS) {
                 zapp_hwnds[wid] = NULL;
@@ -553,17 +566,43 @@ void windows_window_activate_app(void) {
     if (last) SetForegroundWindow(last);
 }
 
-// --- Modal sheets (stubs) ---
-// macOS sheets don't have a clean Win32 equivalent. The closest pattern is
-// EnableWindow(parent, FALSE) + own a topmost modal child + restore on
-// dismiss. Until we have a real Windows modal use case, no-op.
+// --- Modal sheets ---
+// macOS sheets don't have a literal Win32 equivalent, but Windows DOES
+// have the owned-modal idiom: set the parent as the modal's OWNER (the
+// modal then always stays above it, minimizes with it) and disable the
+// parent so interaction is blocked until the modal closes — the same
+// contract as beginSheet. The modal is centered over the parent.
 void windows_window_attach_modal(void* parent_handle, void* modal_handle) {
-    (void)parent_handle;
-    (void)modal_handle;
+    HWND parent = (HWND)parent_handle;
+    HWND modal = (HWND)modal_handle;
+    if (!parent || !modal) return;
+
+    // Owner, not WS_CHILD parent — GWLP_HWNDPARENT on a top-level
+    // window sets ownership (z-order glue) without re-parenting.
+    SetWindowLongPtrW(modal, GWLP_HWNDPARENT, (LONG_PTR)parent);
+    EnableWindow(parent, FALSE);
+
+    // Center over the parent.
+    RECT pr, mr;
+    if (GetWindowRect(parent, &pr) && GetWindowRect(modal, &mr)) {
+        int mw = mr.right - mr.left;
+        int mh = mr.bottom - mr.top;
+        int x = pr.left + ((pr.right - pr.left) - mw) / 2;
+        int y = pr.top + ((pr.bottom - pr.top) - mh) / 2;
+        SetWindowPos(modal, NULL, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+    }
 }
 void windows_window_detach_modal(void* parent_handle, void* modal_handle) {
-    (void)parent_handle;
-    (void)modal_handle;
+    HWND parent = (HWND)parent_handle;
+    HWND modal = (HWND)modal_handle;
+    // Re-enable BEFORE clearing ownership — destroying/hiding an owned
+    // window while its owner is disabled makes Windows activate some
+    // OTHER app's window (classic modal-teardown flicker).
+    if (parent) {
+        EnableWindow(parent, TRUE);
+        SetForegroundWindow(parent);
+    }
+    if (modal) SetWindowLongPtrW(modal, GWLP_HWNDPARENT, (LONG_PTR)NULL);
 }
 
 // --- Drag region ---

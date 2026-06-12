@@ -117,6 +117,7 @@ export function getPlatformSources(nativeDir: string, target: BuildTarget = dete
       path.join(windowsDir, "shortcuts.c"),
       path.join(windowsDir, "shell.c"),
       path.join(windowsDir, "tray.c"),
+      path.join(windowsDir, "dock.c"),
     ];
     return sources.filter(f => existsSync(f));
   }
@@ -576,7 +577,15 @@ async function ensureUserBareModulesCompiled(
   // `bare_bin` target is gated off (MACOSX_BUNDLE conflict — see
   // vendor/bare/CMakeLists.txt patch), so we ALSO have to compile
   // vendor's bare-* bindings ourselves through the overlay.
+  //
+  // Windows compiles EVERY project-installed binding: addon lookup is
+  // exact name@version and the bundled JS resolves bare-* from the
+  // project's node_modules — a vendor-compiled binding at a different
+  // version registers under a name nothing requests ("No addon
+  // registered for 'bare-url@2.4.5'"). The project copy is always the
+  // one the bundle will ask for.
   const onlyUserNeeded = userBareWithBinding.filter((name) => {
+    if (target === "windows") return true;
     return !existsSync(path.join(vendorModulesDir, name, "binding.c"));
   });
 
@@ -596,8 +605,19 @@ async function ensureUserBareModulesCompiled(
     "bare-tty",
   ];
   const vendorNeeded: string[] = [];
-  if (isIOSTarget(target)) {
+  // Windows also skips bare_bin (MinGW link failure — see ensureBareBuilt),
+  // so it needs the same vendor-binding compilation as iOS. Without this,
+  // bare-fetch workers die at runtime with "No addon registered for
+  // 'bare-dns@x.y.z'" — the JS half bundles fine, the native binding for
+  // its transitive deps was never compiled into libbare_modules.a.
+  //
+  // On Windows, vendor copies fill only the gaps the project doesn't
+  // cover (user copies take precedence above — exact-version match).
+  // iOS keeps vendor-preference until the user-copy treatment is
+  // verified on a mac (it likely wants the same).
+  if (isIOSTarget(target) || target === "windows") {
     for (const name of VENDOR_BARE_NATIVE_DEPS) {
+      if (target === "windows" && userBareWithBinding.includes(name)) continue;
       if (existsSync(path.join(vendorModulesDir, name, "binding.c"))) {
         vendorNeeded.push(name);
       }

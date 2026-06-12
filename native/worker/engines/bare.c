@@ -151,13 +151,20 @@ void darwin_notification_cancel_all(void) {}
 void darwin_notification_remove_delivered(const char* a) { (void)a; }
 void darwin_notification_remove_all_delivered(void) {}
 void darwin_notification_update(const char* a, const char* b, const char* c, const char* d) { (void)a; (void)b; (void)c; (void)d; }
-void darwin_dock_show_icon(void) {}
-void darwin_dock_hide_icon(void) {}
-void darwin_dock_set_badge(const char* a) { (void)a; }
-void darwin_dock_remove_badge(void) {}
-void darwin_dock_bounce(int a) { (void)a; }
-void darwin_dock_set_icon(const char* a) { (void)a; }
-void darwin_dock_reset_icon(void) {}
+extern void windows_dock_show_icon(void);
+extern void windows_dock_hide_icon(void);
+extern void windows_dock_set_badge(const char* label);
+extern void windows_dock_remove_badge(void);
+extern void windows_dock_bounce(int bounce_type);
+extern void windows_dock_set_icon(const char* path);
+extern void windows_dock_reset_icon(void);
+void darwin_dock_show_icon(void) { windows_dock_show_icon(); }
+void darwin_dock_hide_icon(void) { windows_dock_hide_icon(); }
+void darwin_dock_set_badge(const char* a) { windows_dock_set_badge(a); }
+void darwin_dock_remove_badge(void) { windows_dock_remove_badge(); }
+void darwin_dock_bounce(int a) { windows_dock_bounce(a); }
+void darwin_dock_set_icon(const char* a) { windows_dock_set_icon(a); }
+void darwin_dock_reset_icon(void) { windows_dock_reset_icon(); }
 // Shortcuts stay false from worker threads: RegisterHotKey binds the
 // hotkey to the CALLING thread's message queue, and worker threads
 // run a libuv loop, not a Win32 message pump — a registration here

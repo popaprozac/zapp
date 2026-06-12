@@ -136,7 +136,16 @@ static HICON tray_icon_from_bgra(const BYTE* pixels, UINT width, UINT height) {
     return icon;
 }
 
+// Exported: dock.c (window icons) reuses this loader. Decodes a file
+// path or data: URL via WIC, scaled to (cx, cy), alpha preserved.
+HICON windows_load_icon_spec(const char* spec, int cx, int cy);
+
 static HICON tray_load_icon(const char* spec) {
+    return windows_load_icon_spec(spec,
+        GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON));
+}
+
+HICON windows_load_icon_spec(const char* spec, int cx_in, int cy_in) {
     if (!spec || !spec[0]) return NULL;
     IWICImagingFactory* wic = tray_wic();
     if (!wic) return NULL;
@@ -176,8 +185,8 @@ static HICON tray_load_icon(const char* spec) {
         IWICBitmapFrameDecode* frame = NULL;
         IWICFormatConverter* conv = NULL;
         IWICBitmapScaler* scaler = NULL;
-        UINT cx = (UINT)GetSystemMetrics(SM_CXSMICON);
-        UINT cy = (UINT)GetSystemMetrics(SM_CYSMICON);
+        UINT cx = (UINT)cx_in;
+        UINT cy = (UINT)cy_in;
         if (SUCCEEDED(IWICBitmapDecoder_GetFrame(decoder, 0, &frame)) &&
             SUCCEEDED(IWICImagingFactory_CreateBitmapScaler(wic, &scaler)) &&
             SUCCEEDED(IWICBitmapScaler_Initialize(scaler, (IWICBitmapSource*)frame,
@@ -218,24 +227,71 @@ static void tray_dispatch_event(int32_t tray_id, const char* event_name) {
 
 // --- Click handling ---
 
+// Windows where dismiss-on-blur is armed — checked from the activation
+// hook below. (The flyout-anchored-to-tray pattern is native to Windows
+// — volume/wifi flyouts — so this mirrors the macOS UX.)
+static HWND zapp_tray_blur_windows[ZAPP_MAX_TRAYS] = {0};
+
+// Called by zapp_wndproc on WA_INACTIVE for any app window — hides it
+// when a tray attach armed dismissOnBlur for it.
+void windows_tray_notify_window_blur(void* hwnd_ptr) {
+    HWND hwnd = (HWND)hwnd_ptr;
+    for (int i = 0; i < ZAPP_MAX_TRAYS; i++) {
+        if (zapp_tray_blur_windows[i] == hwnd && IsWindowVisible(hwnd)) {
+            ShowWindow(hwnd, SW_HIDE);
+            return;
+        }
+    }
+}
+
+static void tray_arm_blur_dismiss(ZappTraySlot* slot, HWND hwnd) {
+    for (int i = 0; i < ZAPP_MAX_TRAYS; i++) {
+        if (&zapp_trays[i] == slot) {
+            zapp_tray_blur_windows[i] = slot->dismiss_on_blur ? hwnd : NULL;
+            return;
+        }
+    }
+}
+
 static void tray_toggle_attached(ZappTraySlot* slot) {
     HWND hwnd = (HWND)windows_window_get_webview(slot->attached_window);
     if (!hwnd) return;
     if (IsWindowVisible(hwnd)) {
         ShowWindow(hwnd, SW_HIDE);
     } else {
-        // Position near the tray area (bottom-right of the work area) —
-        // a faithful per-icon anchor needs Shell_NotifyIconGetRect;
-        // good-enough v1: snap above the taskbar corner.
-        RECT wa;
-        SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0);
+        // Anchor to the actual icon rect when the shell can tell us;
+        // fall back to the work-area corner.
         RECT wr;
         GetWindowRect(hwnd, &wr);
         int w = wr.right - wr.left;
         int h = wr.bottom - wr.top;
-        SetWindowPos(hwnd, HWND_TOP, wa.right - w - 8, wa.bottom - h - 8, 0, 0,
-                     SWP_NOSIZE | SWP_SHOWWINDOW);
+
+        RECT wa;
+        SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0);
+        int x = wa.right - w - 8;
+        int y = wa.bottom - h - 8;
+
+        NOTIFYICONIDENTIFIER nii;
+        memset(&nii, 0, sizeof(nii));
+        nii.cbSize = sizeof(nii);
+        nii.hWnd = zapp_tray_hwnd;
+        nii.uID = (UINT)slot->id;
+        RECT ir;
+        if (SUCCEEDED(Shell_NotifyIconGetRect(&nii, &ir))) {
+            // Centered above (taskbar at bottom) or below (top) the icon,
+            // clamped into the work area.
+            int icon_cx = (ir.left + ir.right) / 2;
+            x = icon_cx - w / 2;
+            if (ir.top >= wa.bottom) y = wa.bottom - h - 8;          // bottom taskbar
+            else if (ir.bottom <= wa.top) y = wa.top + 8;            // top taskbar
+            else y = (ir.top > (wa.top + wa.bottom) / 2) ? ir.top - h - 8 : ir.bottom + 8;
+            if (x < wa.left + 8) x = wa.left + 8;
+            if (x + w > wa.right - 8) x = wa.right - w - 8;
+        }
+
+        SetWindowPos(hwnd, HWND_TOP, x, y, 0, 0, SWP_NOSIZE | SWP_SHOWWINDOW);
         SetForegroundWindow(hwnd);
+        tray_arm_blur_dismiss(slot, hwnd);
     }
 }
 

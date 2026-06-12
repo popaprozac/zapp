@@ -54,6 +54,14 @@ void zapp_handle_menu_command(UINT cmd_id) {
                 zapp_menu_entries[i].action();
                 return;
             }
+            // The quit role quits natively (honoring the quit guard) —
+            // dispatching it as a JS __menu:click went nowhere because
+            // no JS handler owns "__quit".
+            if (strcmp(zapp_menu_entries[i].js_id, "__quit") == 0) {
+                extern void windows_app_quit(bool force);
+                windows_app_quit(false);
+                return;
+            }
             // JS bridge dispatch
             if (zapp_menu_entries[i].js_id[0]) {
                 char js[512];
@@ -212,8 +220,9 @@ void windows_menu_show_context_typed(ZappMenuItem* items, int count, int x, int 
     HWND hwnd = zapp_get_hwnd(window_id);
     if (!hwnd) { DestroyMenu(menu); return; }
 
-    // Convert client coords to screen coords
-    POINT pt = { x, y };
+    // Convert client coords (CSS px) to device px, then to screen.
+    UINT dpi = GetDpiForWindow(hwnd);
+    POINT pt = { MulDiv(x, (int)dpi, 96), MulDiv(y, (int)dpi, 96) };
     ClientToScreen(hwnd, &pt);
     TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN, pt.x, pt.y, 0, hwnd, NULL);
     DestroyMenu(menu);
@@ -467,7 +476,11 @@ void windows_menu_show_context_from_payload(const char* payload_json, int32_t wi
     HWND hwnd = zapp_get_hwnd(window_id);
     if (!hwnd) { DestroyMenu(menu); return; }
 
-    POINT pt = { x, y };
+    // x/y arrive as CSS pixels from the webview; the client area is in
+    // device pixels — scale by the window's DPI or the menu lands short
+    // of the cursor on >100% displays.
+    UINT dpi = GetDpiForWindow(hwnd);
+    POINT pt = { MulDiv(x, (int)dpi, 96), MulDiv(y, (int)dpi, 96) };
     ClientToScreen(hwnd, &pt);
     // TPM_RETURNCMD not used — clicks dispatch through WM_COMMAND like
     // menubar items, sharing zapp_handle_menu_command.
