@@ -59,14 +59,21 @@ static ZappSyncWaiter* alloc_waiter(void) {
 // --- Result dispatch ---
 
 static void dispatch_result(const char* request_id, const char* status, const char* target_worker_id) {
+    // Inputs are bounded by the ZappSyncWaiter field sizes above, so the
+    // fixed buffer is safe here (id ≤ 128, status is a short literal).
+    if (target_worker_id && target_worker_id[0] != '\0') {
+        char payload[256];
+        snprintf(payload, sizeof(payload),
+            "{\"id\":\"%s\",\"ok\":true,\"status\":\"%s\"}", request_id, status);
+        windows_sync_dispatch_to_worker(target_worker_id, payload);
+        return;
+    }
     char js[512];
     snprintf(js, sizeof(js),
         "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
         "if(b&&typeof b.dispatchSyncResult==='function')"
         "b.dispatchSyncResult('{\"id\":\"%s\",\"ok\":true,\"status\":\"%s\"}');})();",
         request_id, status);
-    // TODO: worker dispatch when workers are implemented on Windows
-    (void)target_worker_id;
     windows_webview_eval_all(js);
 }
 
@@ -212,9 +219,39 @@ void windows_sync_dispatch_to_webviews(const char* payload_json) {
 }
 
 void windows_sync_dispatch_to_worker(const char* worker_id, const char* payload_json) {
-    // TODO: dispatch to bare/zjs worker when workers are implemented on Windows
-    (void)worker_id;
-    (void)payload_json;
+    if (!worker_id || !payload_json) return;
+
+    // Escape for embedding inside a single-quoted JS string literal.
+    // Heap-built — payload size isn't bounded here (sync keys are
+    // user-controlled), and outgoing JS must never use fixed buffers.
+    size_t plen = strlen(payload_json);
+    char* escaped = (char*)malloc(plen * 2 + 1);
+    if (!escaped) return;
+    size_t j = 0;
+    for (size_t i = 0; i < plen; i++) {
+        if (payload_json[i] == '\'' || payload_json[i] == '\\') escaped[j++] = '\\';
+        escaped[j++] = payload_json[i];
+    }
+    escaped[j] = '\0';
+
+    // Same JS shape as darwin_sync_dispatch_to_worker (sync.m): the
+    // worker bootstrap installs bridge.dispatchSyncResult which resolves
+    // the stored _syncPending promise.
+    const char* tmpl =
+        "(function(){var b=self.__zappBridge||globalThis.__zappBridge;"
+        "if(b&&typeof b.dispatchSyncResult==='function')b.dispatchSyncResult('%s');})();";
+    size_t js_len = strlen(tmpl) + j + 1;
+    char* js = (char*)malloc(js_len);
+    if (!js) { free(escaped); return; }
+    snprintf(js, js_len, tmpl, escaped);
+    free(escaped);
+
+    // Engine-agnostic targeted delivery — worker_eval_js (dispatch.zc)
+    // resolves the worker's engine and routes to bare_worker_eval_js /
+    // zjs_worker_eval_js. Silent no-op when the worker has terminated.
+    extern void worker_eval_js(char* worker_id, char* js);
+    worker_eval_js((char*)worker_id, js);
+    free(js);
 }
 
 // --- Blocking wait (for background threads / workers ONLY) ---

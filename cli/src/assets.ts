@@ -38,6 +38,14 @@ export async function generateAssetManifest(root: string, assetDir: string): Pro
   const brDir = path.join(zappDir, "assets");
   await mkdir(brDir, { recursive: true });
 
+  // Windows embeds RAW bytes: the brotli decode at runtime uses Apple's
+  // libcompression (bare.c bare_load_script / the darwin scheme handler),
+  // which has no Windows counterpart yet. Workers read embedded assets
+  // on Windows (the webview serves from the on-disk dist folder), so
+  // compressed embeds mean headless workers silently fail to load.
+  // Costs binary size only; revisit if a portable brotli decoder lands.
+  const compress = process.platform !== "win32";
+
   // Collect all files from Vite dist/ output (includes _workers/ from Vite plugin)
   const files = await walkDir(distDir);
   const assets: AssetEntry[] = [];
@@ -47,12 +55,14 @@ export async function generateAssetManifest(root: string, assetDir: string): Pro
   for (const file of files) {
     const relPath = "/" + path.relative(distDir, file).replace(/\\/g, "/");
     const source = await Bun.file(file).arrayBuffer();
-    const compressed = brotliCompressSync(new Uint8Array(source), {
-      params: { [constants.BROTLI_PARAM_QUALITY]: 11 },
-    });
+    const compressed = compress
+      ? brotliCompressSync(new Uint8Array(source), {
+          params: { [constants.BROTLI_PARAM_QUALITY]: 11 },
+        })
+      : new Uint8Array(source);
 
-    // Write compressed file
-    const brRelPath = relPath + ".br";
+    // Write the embed payload (compressed or raw copy)
+    const brRelPath = relPath + (compress ? ".br" : "");
     const brPath = path.join(brDir, brRelPath);
     await mkdir(path.dirname(brPath), { recursive: true });
     await Bun.write(brPath, compressed);
@@ -116,7 +126,7 @@ export async function generateAssetManifest(root: string, assetDir: string): Pro
     zc += `        zapp_embedded_assets[${i}].data = __zapp_asset_${i}_data();\n`;
     zc += `        zapp_embedded_assets[${i}].len = __zapp_asset_${i}_len();\n`;
     zc += `        zapp_embedded_assets[${i}].uncompressed_len = ${a.originalSize};\n`;
-    zc += `        zapp_embedded_assets[${i}].is_brotli = 1;\n`;
+    zc += `        zapp_embedded_assets[${i}].is_brotli = ${compress ? 1 : 0};\n`;
   }
 
   zc += `    }\n`;
