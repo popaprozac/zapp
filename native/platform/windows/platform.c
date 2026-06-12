@@ -10,6 +10,8 @@
 extern LRESULT CALLBACK zapp_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 extern int zapp_app_dispatch(int event_id, const char* data);
 extern void service_run_shutdown_all(void);
+extern void windows_shortcut_handle_wm_hotkey(int hotkey_id);
+extern void windows_shortcut_unregister_all(void);
 
 // App event IDs (must match events.zc)
 #define ZAPP_EVENT_APP_STARTED  100
@@ -66,11 +68,19 @@ int windows_platform_run(bool terminate_after_last_window) {
     // Win32 message loop
     MSG msg;
     while (GetMessageW(&msg, NULL, 0, 0) > 0) {
+        // Global hotkeys registered with a NULL hwnd arrive as
+        // thread-queue messages — DispatchMessage can't route those
+        // (no window), so handle them here.
+        if (msg.message == WM_HOTKEY) {
+            windows_shortcut_handle_wm_hotkey((int)msg.wParam);
+            continue;
+        }
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
 
     // Fire APP_SHUTDOWN event
+    windows_shortcut_unregister_all();
     service_run_shutdown_all();
     zapp_app_dispatch(ZAPP_EVENT_APP_SHUTDOWN, NULL);
 

@@ -158,6 +158,11 @@ void darwin_dock_remove_badge(void) {}
 void darwin_dock_bounce(int a) { (void)a; }
 void darwin_dock_set_icon(const char* a) { (void)a; }
 void darwin_dock_reset_icon(void) {}
+// Shortcuts stay false from worker threads: RegisterHotKey binds the
+// hotkey to the CALLING thread's message queue, and worker threads
+// run a libuv loop, not a Win32 message pump — a registration here
+// would never fire. Needs the WM_ZAPP_TASK main-thread funnel (M2
+// deferred item) to forward to platform/windows/shortcuts.c.
 bool darwin_shortcut_register(const char* a) { (void)a; return false; }
 bool darwin_shortcut_unregister(const char* a) { (void)a; return false; }
 bool darwin_shortcut_is_registered(const char* a) { (void)a; return false; }
