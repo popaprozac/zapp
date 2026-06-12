@@ -16,3 +16,15 @@ void zapp_toolbar_unregister(void* window_ptr) {
 void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_user_script) {
     (void)window_ptr; (void)host_slot; (void)add_user_script;
 }
+
+void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_t host_slot) {
+    (void)window_ptr; (void)toolbar_json; (void)host_slot;
+}
+
+void darwin_toolbar_update_item(void* window_ptr, const char* item_json) {
+    (void)window_ptr; (void)item_json;
+}
+
+void darwin_toolbar_remove(void* window_ptr) {
+    (void)window_ptr;
+}
