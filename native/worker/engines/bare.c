@@ -133,15 +133,16 @@ extern void windows_sync_handle(const char* action, const char* payload_json);
 void darwin_sync_handle(const char* action, const char* payload_json) {
     windows_sync_handle(action, payload_json);
 }
-char* darwin_clipboard_read_text(void) { return NULL; }
-bool  darwin_clipboard_write_text(const char* text) { (void)text; return false; }
-char* darwin_clipboard_read_html(void) { return NULL; }
-bool  darwin_clipboard_write_html(const char* html) { (void)html; return false; }
-char* darwin_clipboard_read_files(void) { return NULL; }
-char* darwin_clipboard_read_image_png_b64(void) { return NULL; }
-bool  darwin_clipboard_write_image_png_b64(const char* b64) { (void)b64; return false; }
-bool  darwin_clipboard_has(const char* fmt) { (void)fmt; return false; }
-void  darwin_clipboard_clear(void) {}
+#include "../../platform/windows/clipboard.h"
+char* darwin_clipboard_read_text(void) { return windows_clipboard_read_text(); }
+bool  darwin_clipboard_write_text(const char* text) { return windows_clipboard_write_text(text); }
+char* darwin_clipboard_read_html(void) { return windows_clipboard_read_html(); }
+bool  darwin_clipboard_write_html(const char* html) { return windows_clipboard_write_html(html); }
+char* darwin_clipboard_read_files(void) { return windows_clipboard_read_files(); }
+char* darwin_clipboard_read_image_png_b64(void) { return windows_clipboard_read_image_png_b64(); }
+bool  darwin_clipboard_write_image_png_b64(const char* b64) { return windows_clipboard_write_image_png_b64(b64); }
+bool  darwin_clipboard_has(const char* fmt) { return windows_clipboard_has(fmt); }
+void  darwin_clipboard_clear(void) { windows_clipboard_clear(); }
 const char* darwin_notification_get_permission(void) { return "denied"; }
 void darwin_notification_show_typed(const char* a, const char* b, const char* c, const char* d) { (void)a; (void)b; (void)c; (void)d; }
 void darwin_notification_schedule_typed(const char* a, const char* b, double c) { (void)a; (void)b; (void)c; }

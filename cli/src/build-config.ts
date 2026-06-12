@@ -1241,6 +1241,8 @@ export async function generatePlatformConfig(
     // worker engine is compiled in — unreferenced import libs are
     // dropped by the linker.
     content += `//> windows: link: -lws2_32 -liphlpapi -luserenv -ldbghelp -lpsapi\n`;
+    // windowscodecs: WIC PNG codec for clipboard image read/write.
+    content += `//> windows: link: -lwindowscodecs\n`;
     // App-declared extras from zapp.config.ts. `extraFrameworks` is
     // a no-op here (Apple-only concept); use `extraLinkFlags.windows`
     // for `-l<name>` and similar.

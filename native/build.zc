@@ -19,9 +19,11 @@
 //> windows: cflags: -DUNICODE -D_UNICODE -DCINTERFACE -DCOBJMACROS
 //> windows: cflags: platform/windows/platform.c platform/windows/window.c platform/windows/webview.c
 //> windows: cflags: platform/windows/dialog.c platform/windows/menu.c platform/windows/notification.c platform/windows/sync.c
+//> windows: cflags: platform/windows/clipboard.c
 //> windows: cflags: -I../vendor/webview2/include
 //> windows: link: -lole32 -lshell32 -luuid -luser32 -lgdi32 -lcomctl32 -lcomdlg32 -lshlwapi
 //> windows: link: -lwinhttp -lbcrypt -ladvapi32 -lrpcrt4 -lcrypt32 -lversion
+//> windows: link: -lwindowscodecs
 
 import "app/app.zc";
 

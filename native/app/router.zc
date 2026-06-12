@@ -1565,7 +1565,12 @@ fn router_handle_clipboard(method: string, args: JsonValue*, has_args: bool, win
         // free of Foundation imports.
         let b64: string = "";
         raw {
+            #ifdef __APPLE__
             char* encoded = darwin_clipboard_read_image_png_b64();
+            #else
+            extern char* windows_clipboard_read_image_png_b64(void);
+            char* encoded = windows_clipboard_read_image_png_b64();
+            #endif
             if (encoded) {
                 static char* cb_last_b64 = NULL;
                 if (cb_last_b64) free(cb_last_b64);
@@ -1583,7 +1588,12 @@ fn router_handle_clipboard(method: string, args: JsonValue*, has_args: bool, win
             if b64_opt.is_some() {
                 let b64: string = b64_opt.unwrap();
                 raw {
+                    #ifdef __APPLE__
                     darwin_clipboard_write_image_png_b64((const char*)b64);
+                    #else
+                    extern bool windows_clipboard_write_image_png_b64(const char* b64);
+                    windows_clipboard_write_image_png_b64((const char*)b64);
+                    #endif
                 }
             }
         }
