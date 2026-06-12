@@ -494,6 +494,10 @@ impl App {
             extern const char* darwin_get_theme(void);
             const char* t = darwin_get_theme();
             if (t) result = (char*)t;
+            #else
+            extern const char* windows_get_theme(void);
+            const char* t = windows_get_theme();
+            if (t) result = (char*)t;
             #endif
         }
         return result;

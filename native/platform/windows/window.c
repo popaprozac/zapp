@@ -163,6 +163,17 @@ LRESULT CALLBACK zapp_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     int32_t wid = zapp_get_window_id(hwnd);
 
     switch (msg) {
+        case WM_SETTINGCHANGE: {
+            // Apps light/dark preference flipped. The lParam string is
+            // "ImmersiveColorSet" for theme flips; the handler re-reads
+            // the registry and dedupes, so over-matching here is cheap.
+            if (lParam && lstrcmpW((LPCWSTR)lParam, L"ImmersiveColorSet") == 0) {
+                extern void windows_theme_setting_changed(void);
+                windows_theme_setting_changed();
+            }
+            break;
+        }
+
         case WM_SIZE: {
             // Get client rect for accurate content dimensions
             RECT client;
@@ -503,6 +514,19 @@ void windows_window_set_bridge_ready(const char* window_id) {
 void windows_window_load_url(int32_t window_id, const char* url) {
     extern void windows_webview_navigate(int32_t window_id, const char* url);
     windows_webview_navigate(window_id, url);
+}
+
+// Bring every app window to the foreground (App.activate). Restores
+// minimized windows first — SetForegroundWindow on an iconic window
+// flashes the taskbar instead of raising it.
+void windows_window_activate_app(void) {
+    HWND last = NULL;
+    for (int i = 0; i < ZAPP_MAX_WINDOWS; i++) {
+        if (!zapp_hwnds[i] || !IsWindow(zapp_hwnds[i])) continue;
+        if (IsIconic(zapp_hwnds[i])) ShowWindow(zapp_hwnds[i], SW_RESTORE);
+        last = zapp_hwnds[i];
+    }
+    if (last) SetForegroundWindow(last);
 }
 
 // --- Modal sheets (stubs) ---

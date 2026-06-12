@@ -420,6 +420,9 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
             #ifdef __APPLE__
             extern void darwin_set_quit_guard(bool enabled);
             darwin_set_quit_guard(on);
+            #else
+            extern void windows_set_quit_guard(bool enabled);
+            windows_set_quit_guard(on);
             #endif
         }
         return;
@@ -433,6 +436,9 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
             #ifdef __APPLE__
             extern void darwin_app_quit(bool force);
             darwin_app_quit(force);
+            #else
+            extern void windows_app_quit(bool force);
+            windows_app_quit(force);
             #endif
         }
         return;
@@ -443,6 +449,9 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
             #ifdef __APPLE__
             extern void darwin_app_activate(void);
             darwin_app_activate();
+            #else
+            extern void windows_app_activate(void);
+            windows_app_activate();
             #endif
         }
         return;

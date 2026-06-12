@@ -4,6 +4,8 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <objbase.h>
+#include <stdio.h>
+#include <string.h>
 #include "platform.h"
 
 // Forward declarations
@@ -14,8 +16,10 @@ extern void windows_shortcut_handle_wm_hotkey(int hotkey_id);
 extern void windows_shortcut_unregister_all(void);
 
 // App event IDs (must match events.zc)
-#define ZAPP_EVENT_APP_STARTED  100
-#define ZAPP_EVENT_APP_SHUTDOWN 101
+#define ZAPP_EVENT_APP_STARTED        100
+#define ZAPP_EVENT_APP_SHUTDOWN       101
+#define ZAPP_EVENT_APP_THEME_CHANGED  108
+#define ZAPP_EVENT_APP_BEFORE_QUIT    113
 
 // Global state
 static const char* zapp_app_name = "Zapp";
@@ -35,6 +39,62 @@ void zapp_decrement_window_count(void) {
     if (zapp_window_count <= 0 && zapp_terminate_after_last_window) {
         PostQuitMessage(0);
     }
+}
+
+// --- App lifecycle (quit guard / quit / activate) ---
+//
+// Mirrors darwin/platform.m: an armed guard turns a plain quit into an
+// app:before-quit event so JS can run its (possibly async) confirm and
+// re-issue App.quit({force:true}). The force latch is consumed on use.
+
+static bool zapp_quit_guard_enabled = false;
+
+void windows_set_quit_guard(bool enabled) {
+    zapp_quit_guard_enabled = enabled;
+}
+
+void windows_app_quit(bool force) {
+    if (!force && zapp_quit_guard_enabled) {
+        zapp_app_dispatch(ZAPP_EVENT_APP_BEFORE_QUIT, "{}");
+        return;
+    }
+    PostQuitMessage(0);
+}
+
+// Bring the app's windows to the foreground — the Windows analogue of
+// [NSApp activateIgnoringOtherApps:]. window.c owns the HWND table.
+extern void windows_window_activate_app(void);
+void windows_app_activate(void) {
+    windows_window_activate_app();
+}
+
+// --- Theme (light/dark) ---
+//
+// Windows apps-theme preference lives in the registry; there's no
+// per-process effectiveAppearance. WM_SETTINGCHANGE("ImmersiveColorSet")
+// lands on top-level windows when it flips — zapp_wndproc calls
+// windows_theme_setting_changed below.
+
+const char* windows_get_theme(void) {
+    DWORD value = 1; // default: light
+    DWORD size = sizeof(value);
+    RegGetValueW(HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+        L"AppsUseLightTheme", RRF_RT_REG_DWORD, NULL, &value, &size);
+    return value == 0 ? "dark" : "light";
+}
+
+void windows_theme_setting_changed(void) {
+    // WM_SETTINGCHANGE fires several times per flip (and for unrelated
+    // settings whose lParam also reads "ImmersiveColorSet") — dedupe on
+    // the resolved value so JS sees one event per actual change.
+    static const char* last_theme = NULL;
+    const char* theme = windows_get_theme();
+    if (last_theme && strcmp(last_theme, theme) == 0) return;
+    last_theme = theme;
+    char payload[64];
+    snprintf(payload, sizeof(payload), "{\"theme\":\"%s\"}", theme);
+    zapp_app_dispatch(ZAPP_EVENT_APP_THEME_CHANGED, payload);
 }
 
 void windows_platform_init(const char* app_name) {
