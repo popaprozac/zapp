@@ -69,13 +69,18 @@ static LONG zapp_pre_fullscreen_style[ZAPP_MAX_WINDOWS] = {0};
 static RECT zapp_pre_fullscreen_rect[ZAPP_MAX_WINDOWS] = {{0}};
 static int zapp_is_fullscreen[ZAPP_MAX_WINDOWS] = {0};
 
-// Map HWND → numeric ID (stored as window user data)
+// Map HWND → numeric ID (stored as window user data). Stored as id+1
+// so an UNREGISTERED window reads back as -1, not as window 0 —
+// CreateWindowExW fires WM_SIZE synchronously before registration, and
+// a raw 0 default made the modal's creation-time resize land on the
+// main window's webview (the bug where the main webview mirrored a
+// new modal's dimensions).
 static void zapp_set_window_id(HWND hwnd, int32_t id) {
-    SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)id);
+    SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)(id + 1));
 }
 
 static int32_t zapp_get_window_id(HWND hwnd) {
-    return (int32_t)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+    return (int32_t)GetWindowLongPtrW(hwnd, GWLP_USERDATA) - 1;
 }
 
 // --- UTF conversion helpers ---
@@ -161,6 +166,13 @@ void zapp_dispatch_event_to_js(int32_t window_id, int32_t event_id, int32_t w, i
 
 LRESULT CALLBACK zapp_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     int32_t wid = zapp_get_window_id(hwnd);
+
+    // Messages arriving before registration (inside CreateWindowExW)
+    // have no window identity yet — every per-window handler below
+    // indexes dispatch tables by wid, so let DefWindowProc have them.
+    if (wid < 0 || wid >= ZAPP_MAX_WINDOWS) {
+        return DefWindowProcW(hwnd, msg, wParam, lParam);
+    }
 
     switch (msg) {
         case WM_SETTINGCHANGE: {
@@ -333,6 +345,18 @@ void* windows_window_create(WindowOptions* opts) {
     if (!hwnd) return NULL;
 
     zapp_increment_window_count();
+
+    // Register the hwnd ↔ numeric-id mapping NOW, from the id the
+    // WindowManager pre-allocated, before anything that depends on
+    // window identity runs (ShowWindow re-enters the wndproc; the
+    // webview-create slot lookup needs zapp_hwnds populated —
+    // previously it guessed "next free slot", which is a race).
+    // window.zc's later windows_window_register_numeric_id call is
+    // idempotent over this.
+    int32_t pre_id = wopts_numeric_id_pre_alloc(opts);
+    if (pre_id >= 0 && pre_id < ZAPP_MAX_WINDOWS) {
+        windows_window_register_numeric_id((void*)hwnd, pre_id);
+    }
 
     // Don't show yet — let the app call window_show after on_ready
     // But if visible is true, show immediately
