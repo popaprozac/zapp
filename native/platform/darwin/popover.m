@@ -113,7 +113,10 @@ void darwin_popover_show(const char* popover_id, const char* args_json) {
     ZappPopoverController* c = zapp_popovers[[NSString stringWithUTF8String:popover_id]];
     if (!c || !c.popover) return;
     NSWindow* window = c.hostWindow;
-    if (!window) return;
+    // Liveness guard for ALL anchor paths: a reversibly-closed window is
+    // ordered out but alive (releasedWhenClosed:NO) — showing a popover
+    // against it would float the bubble over nothing.
+    if (!window || !window.isVisible) return;
 
     NSDictionary* args = nil;
     if (args_json) {

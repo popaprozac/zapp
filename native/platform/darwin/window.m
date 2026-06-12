@@ -904,8 +904,8 @@ void darwin_window_destroy(void* handle) {
         zapp_sidebar_unregister(handle);
     }
     zapp_toolbar_unregister(handle);
-        extern void zapp_popover_unregister_window(void* window_ptr);
-        zapp_popover_unregister_window(handle);
+    extern void zapp_popover_unregister_window(void* window_ptr);
+    zapp_popover_unregister_window(handle);
 
     [window close];
     (void)window;
