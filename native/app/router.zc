@@ -764,6 +764,9 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
             #ifdef __APPLE__
             extern void darwin_tray_create_from_payload(const char* payload_json);
             darwin_tray_create_from_payload((const char*)payload);
+            #else
+            extern void windows_tray_create_from_payload(const char* payload_json);
+            windows_tray_create_from_payload((const char*)payload);
             #endif
         }
         return;
@@ -773,6 +776,9 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
             #ifdef __APPLE__
             extern void darwin_tray_set_icon_from_payload(const char* payload_json);
             darwin_tray_set_icon_from_payload((const char*)payload);
+            #else
+            extern void windows_tray_set_icon_from_payload(const char* payload_json);
+            windows_tray_set_icon_from_payload((const char*)payload);
             #endif
         }
         return;
@@ -782,6 +788,9 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
             #ifdef __APPLE__
             extern void darwin_tray_set_title_from_payload(const char* payload_json);
             darwin_tray_set_title_from_payload((const char*)payload);
+            #else
+            extern void windows_tray_set_title_from_payload(const char* payload_json);
+            windows_tray_set_title_from_payload((const char*)payload);
             #endif
         }
         return;
@@ -791,6 +800,9 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
             #ifdef __APPLE__
             extern void darwin_tray_set_tooltip_from_payload(const char* payload_json);
             darwin_tray_set_tooltip_from_payload((const char*)payload);
+            #else
+            extern void windows_tray_set_tooltip_from_payload(const char* payload_json);
+            windows_tray_set_tooltip_from_payload((const char*)payload);
             #endif
         }
         return;
@@ -800,6 +812,9 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
             #ifdef __APPLE__
             extern void darwin_tray_set_menu_from_payload(const char* payload_json);
             darwin_tray_set_menu_from_payload((const char*)payload);
+            #else
+            extern void windows_tray_set_menu_from_payload(const char* payload_json);
+            windows_tray_set_menu_from_payload((const char*)payload);
             #endif
         }
         return;
@@ -809,6 +824,9 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
             #ifdef __APPLE__
             extern void darwin_tray_destroy_from_payload(const char* payload_json);
             darwin_tray_destroy_from_payload((const char*)payload);
+            #else
+            extern void windows_tray_destroy_from_payload(const char* payload_json);
+            windows_tray_destroy_from_payload((const char*)payload);
             #endif
         }
         return;
@@ -818,6 +836,9 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
             #ifdef __APPLE__
             extern void darwin_tray_attach_window_from_payload(const char* payload_json);
             darwin_tray_attach_window_from_payload((const char*)payload);
+            #else
+            extern void windows_tray_attach_window_from_payload(const char* payload_json);
+            windows_tray_attach_window_from_payload((const char*)payload);
             #endif
         }
         return;
@@ -827,6 +848,9 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
             #ifdef __APPLE__
             extern void darwin_tray_detach_window_from_payload(const char* payload_json);
             darwin_tray_detach_window_from_payload((const char*)payload);
+            #else
+            extern void windows_tray_detach_window_from_payload(const char* payload_json);
+            windows_tray_detach_window_from_payload((const char*)payload);
             #endif
         }
         return;

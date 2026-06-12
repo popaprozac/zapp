@@ -116,6 +116,7 @@ export function getPlatformSources(nativeDir: string, target: BuildTarget = dete
       path.join(windowsDir, "screen.c"),
       path.join(windowsDir, "shortcuts.c"),
       path.join(windowsDir, "shell.c"),
+      path.join(windowsDir, "tray.c"),
     ];
     return sources.filter(f => existsSync(f));
   }
