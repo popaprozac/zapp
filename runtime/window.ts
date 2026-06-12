@@ -241,6 +241,64 @@ export interface ToolbarOptions {
   style?: "unified" | "unifiedCompact" | "expanded";
 }
 
+/** Shared anchor vocabulary — also accepted by ContextMenu.show's anchor.
+ * Element is measured at show time (one-shot); MouseEvent becomes a 1x1
+ * point rect at clientX/Y; rects are pane-viewport CSS pixels. */
+export type Anchor =
+  | Element
+  | { x: number; y: number; width?: number; height?: number }
+  | MouseEvent;
+
+/** Normalize any Anchor to the wire rect. Pure — unit-tested. */
+export function normalizeAnchor(anchor: Anchor): { x: number; y: number; width: number; height: number } {
+  if (typeof (anchor as any)?.getBoundingClientRect === "function") {
+    const r = (anchor as Element).getBoundingClientRect();
+    return { x: r.left, y: r.top, width: r.width, height: r.height };
+  }
+  if (typeof (anchor as any)?.clientX === "number" && typeof (anchor as any)?.clientY === "number") {
+    const e = anchor as MouseEvent;
+    return { x: e.clientX, y: e.clientY, width: 1, height: 1 };
+  }
+  const r = anchor as { x: number; y: number; width?: number; height?: number };
+  if (typeof r?.x !== "number" || typeof r?.y !== "number") {
+    throw new Error("[zapp] popover: invalid anchor — pass an Element, a MouseEvent, or {x, y, width?, height?}");
+  }
+  return { x: r.x, y: r.y, width: r.width ?? 1, height: r.height ?? 1 };
+}
+
+/** Options for a native popover (NSPopover) hosting trusted web content. */
+export interface PopoverOptions {
+  /** Entry URL/route — resolves like sidebar.url (app routes only). Required. */
+  url: string;
+  /** Content size in points. Defaults 320x400. */
+  width?: number;
+  height?: number;
+  /** NSPopover.behavior. Default "transient" (auto-dismiss on outside click). */
+  behavior?: "transient" | "semitransient" | "applicationDefined";
+}
+
+const POPOVER_BEHAVIORS = ["transient", "semitransient", "applicationDefined"];
+
+/** Validate + default PopoverOptions. Pure — unit-tested. */
+export function normalizePopoverOptions(opts: PopoverOptions): { url: string; width: number; height: number; behavior: string } {
+  if (!opts?.url) throw new Error('[zapp] popover: "url" is required');
+  const behavior = opts.behavior ?? "transient";
+  if (!POPOVER_BEHAVIORS.includes(behavior)) {
+    throw new Error(`[zapp] popover: invalid behavior "${behavior}"`);
+  }
+  return { url: opts.url, width: opts.width ?? 320, height: opts.height ?? 400, behavior };
+}
+
+/** A handle to a persistent popover. The pane webview loads once at create
+ * (warm); show()/hide() reuse it and page state survives; destroy() frees
+ * the webview and its dispatch slot. */
+export interface PopoverHandle {
+  readonly id: string;
+  show(anchor: Anchor | { toolbarItem: string }, opts?: { edge?: "top" | "bottom" | "left" | "right" }): void;
+  hide(): void;
+  destroy(): void;
+}
+
 /** Toolbar action callbacks keyed "<windowId>:<itemId>" — Menu.build's
  * collect/strip/listen shape (runtime/menu.ts), but per-window.
  * Entries persist for the app lifetime — no sweep on window close (v1; a native close-sweep is a follow-up). Menus have the same shape app-lifetime by nature; windows die, so this is a deliberate v1 tradeoff. */
@@ -368,6 +426,9 @@ export interface WindowHandle {
    * gone — that path auto-detaches anyway.
    */
   detachModal(modal: WindowHandle): void;
+
+  /** Create a persistent native popover owned by this window. macOS only. */
+  createPopover(opts: PopoverOptions): Promise<PopoverHandle>;
 }
 
 /** Send a window action to native. Uses message type 4 (WINDOW_ACTION). */
@@ -485,6 +546,38 @@ function createWindowHandle(windowId: string, sidebarOpts?: SidebarOptions): Win
     sidebar: sidebarOpts !== undefined
       ? createSidebarHandle(windowId, sidebarOpts.collapsed ?? false, sidebarOpts.width ?? 260)
       : undefined,
+
+    async createPopover(opts: PopoverOptions): Promise<PopoverHandle> {
+      // Worker contexts can't measure elements and the worker bridges
+      // don't route __popover:create — webview-only in v1.
+      if ((globalThis as any).__zappBridge) {
+        throw new Error("[zapp] createPopover is only available in WebView contexts (v1)");
+      }
+      const norm = normalizePopoverOptions(opts);
+      const r = await bridge.invoke("__popover:create", { windowId, ...norm }) as { popoverId: string };
+      const popoverId = r.popoverId;
+      return {
+        id: popoverId,
+        show(anchor: Anchor | { toolbarItem: string }, showOpts?: { edge?: "top" | "bottom" | "left" | "right" }) {
+          const isToolbar = typeof anchor === "object" && anchor !== null &&
+            "toolbarItem" in anchor &&
+            typeof (anchor as any).getBoundingClientRect !== "function";
+          let a: Record<string, unknown>;
+          if (isToolbar) {
+            const tid = (anchor as { toolbarItem: string }).toolbarItem;
+            if (!/^[A-Za-z0-9._-]+$/.test(tid)) {
+              throw new Error(`[zapp] popover: invalid toolbarItem id "${tid}"`);
+            }
+            a = { toolbarItem: tid };
+          } else {
+            a = normalizeAnchor(anchor as Anchor);
+          }
+          windowAction("popover:show", { windowId, popoverId, anchor: a, edge: showOpts?.edge ?? "bottom" });
+        },
+        hide()    { windowAction("popover:hide",    { windowId, popoverId }); },
+        destroy() { windowAction("popover:destroy", { windowId, popoverId }); },
+      };
+    },
   };
 }
 
