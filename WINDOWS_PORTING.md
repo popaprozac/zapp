@@ -1,164 +1,196 @@
 # Windows Porting Guide
 
-Current state of the Windows port and what's needed to finish it.
+State of the Windows port and the handoff brief for the Windows parity
+sprint (task #167 / competitive-plan T2.C). Updated 2026-06-11, immediately
+after the macOS native-chrome trilogy (sidebars, toolbars, popovers) merged
+— this doc is written to seed a brainstorming session on a Windows machine.
 
-macOS is the reference platform and has full coverage. Windows has partial
-scaffolding in place — basic WebView2 + window + dialogs + menus + Toast
-notifications + clipboard (text) + global hotkeys (`RegisterHotKey`) work
-today. Tray, file-drop, custom protocols, MSIX packaging, and code-signing
-are the remaining gaps for a "production beta" Windows release (see
-[`project_doc_audit_2026-06`](https://github.com/zappdev/zapp) task #167).
+macOS is the reference platform with full coverage; iOS shares most of the
+Zen-C layer. Windows has v1-era scaffolding whose functional state is
+**UNVERIFIED against current main** — treat every "works" claim below as
+"worked in the v1 port" until re-proven. **The first task on a PC is a
+build + runtime inventory: `bun run build --platform windows` in
+hello-world, fix until it compiles/links, then catalog what actually
+functions.**
 
-For general framework orientation, read [`SKILLS.md`](SKILLS.md) first. This
-file is Windows-specific.
+For general framework orientation read [`SKILLS.md`](SKILLS.md) and
+`docs/architecture.md`. This file is Windows-specific.
 
-## Repo Structure (Windows-relevant)
-
-```
-zapp/
-├── native/platform/
-│   ├── platform.zc             # @cfg(apple) / @cfg(windows) dispatch
-│   ├── darwin/*.{h,m}          # macOS: complete
-│   └── windows/                # Windows: partial stubs
-├── native/worker/engines/
-│   ├── zjs.{h,c}               # Default. Cross-platform first-party engine.
-│   ├── bare-*.{h,c}            # bare-jsc / bare-v8 / bare-quickjs / bare-mqjs / bare-hermes
-│   ├── jsc.{h,m}               # Deprecated compat (macOS-only — JSC is Apple)
-│   └── txiki.{h,c}             # Deprecated compat (cross-platform; #ifdef __APPLE__ guards on host objects)
-├── vendor/webview2/            # Windows WebView2 headers + static loader
-└── old/src/platform/windows/   # v1 Windows impl — reference, not code-path
-```
-
-## What's Complete (macOS)
-
-Windows stubs exist for everything in this list; fill them in:
-
-- Windows (create, show, hide, close, resize, fullscreen, titlebar styles,
-  close guard, loadUrl)
-- WebView (zapp:// scheme, brotli-decompressed asset serving, navigation
-  allowlist, drag regions)
-- Bridge (JSON protocol, 7 message types, cancellation, timeout) — **platform-
-  agnostic, shared with Windows**
-- Services (register + lifecycle startup/shutdown, invoke from JS and
-  workers) — **platform-agnostic**
-- Events (11 window events + 8 app events, unified dispatcher, per-window
-  bitmask) — **platform-agnostic; window events need Windows window procs to
-  call into `zapp_window_event`**
-- Workers — **`zjs` (default) is cross-platform**; `bare-jsc` is macOS-only
-  (Apple JSC framework); `bare-v8` is the JIT option on Windows / Linux
-- Unified worker model (no separate "backend worker" — all workers share
-  the same API via `bootstrap/worker.ts`)
-- Dialogs (open file, save file, message) — Windows: IFileDialog,
-  TaskDialogIndirect
-- Menus (app menu, context menu) — Windows: HMENU, TrackPopupMenu
-- Notifications — Windows: Toast XML via `ToastNotificationManager`
-- Dock → Taskbar — Windows: `ITaskbarList3` for badges, thumbnail buttons
-- Sync (wait/notify) — **platform-agnostic**; needs a Windows-safe
-  condition variable primitive (std::condition_variable via a small C
-  wrapper, or CONDITION_VARIABLE)
-- Deep links — Windows: URL scheme registration in the registry + command
-  line parsing on `WM_COPYDATA`
-- Packaging — Windows: MSIX or plain `.exe` + resource icons
-
-## Cross-platform host-object layer
-
-When each Windows backend lands (notifications, taskbar, etc.), introduce a
-cross-platform `zapp_*` extern layer that both darwin and windows impls
-fulfill:
+## What exists today
 
 ```
-Before (darwin-only):
-  extern void darwin_notification_show_typed(...)   // in darwin/notification.m
-  used directly in zjs.c and zapp routing
-
-After (platform-agnostic):
-  extern void zapp_notification_show(...)            // declared in native/notification/notification.zc
-    → on darwin, lowered to darwin_notification_show_typed
-    → on windows, lowered to ToastNotificationManager call
-  zjs.c calls zapp_notification_show unconditionally — no #ifdef
-```
-
-This is already the direction for `zjs.c` (the default engine). Any
-remaining `#ifdef __APPLE__` guards in engine files are placeholders for
-the day this layer is complete.
-
-## Windows-Specific Notes
-
-### WebView2
-
-- Use `WebView2LoaderStatic.lib` (in `vendor/webview2/lib/x64/`) for a
-  self-contained loader — no DLL needed at runtime.
-- `ICoreWebView2` for the WebView, `ICoreWebView2Controller` for embedding.
-- Custom `zapp://` scheme via
-  `ICoreWebView2_22::AddWebResourceRequestedFilterWithRequestSourceKinds`.
-- JS ↔ native bridge via `ICoreWebView2::PostWebMessageAsString` /
-  `add_WebMessageReceived`.
-
-### Main-thread-hop equivalent
-
-On macOS we use `dispatch_sync(dispatch_get_main_queue(), ^{ ... })` to
-call window / dialog / menu APIs from worker threads. On Windows the
-equivalents:
-
-- **Async fire-and-forget**: `PostMessage(g_main_hwnd, WM_ZAPP_TASK, ...)`
-  with a WndProc handler that executes the task and posts back.
-- **Sync with return value**: `PostMessage` + `WaitForSingleObject` on an
-  event set by the handler, with the return value stashed in a shared
-  struct. Be careful not to deadlock when called from the main thread
-  itself — mirror the `NSThread.isMainThread` check used in engine impls.
-
-### Workers on Windows
-
-- JSC is **not available** — it's Apple's engine. The `jsc` / `bare-jsc`
-  engines fall back through the resolver chain on Windows builds.
-- Default is **`zjs`** — Zapp's first-party engine, cross-platform,
-  ~1 MB, no JIT entitlement gymnastics. Same source compiles on
-  Windows; bytecode AOT works the same way.
-- For JIT-heavy workloads, **`bare-v8`** adds ~30 MB and gives you a
-  full V8 with optimizer + GC tuning. Opt in per worker via
-  `engine: "bare-v8"` in `zapp.config.ts`.
-- `bare-quickjs` / `bare-mqjs` / `bare-hermes` also build on Windows
-  for size-constrained or niche scenarios.
-- See [`docs/engines.md`](docs/engines.md) for the full per-platform
-  recommendation table.
-
-### Build System
-
-- Zen-C compiler (`zc`) works on Windows.
-- Build directives in `zapp/build.zc`:
-  ```
-  //> windows: define: windows
+native/platform/windows/        # 7 C translation units, v1-era
+  platform.{c,h,zc}  window.{c,h,zc}  webview.{c,h,zc}
+  dialog.{c,h,zc}    menu.{c,h}       notification.{c,h}   sync.{c,h}
+vendor/webview2/                # WebView2.h + EnvironmentOptions + lib/x64 static loader
+old/src/platform/windows/       # v1 implementation — reference for Win32 shapes only
+cli/src/native.ts               # --platform windows accepted; getPlatformSources
+                                #   lists the 7 .c files (filtered by existsSync)
+zapp/build.zc templates         # windows cflags/link lines already generated:
   //> windows: cflags: -DUNICODE -D_UNICODE -DCINTERFACE -DCOBJMACROS
-  //> windows: link: -lole32 -lshell32 -luuid -luser32 -lgdi32 -lcomctl32 -lcomdlg32 -lshlwapi
-  //> windows: link: -lwinhttp -lbcrypt -ladvapi32 -lrpcrt4 -lcrypt32 -lversion
-  ```
-- `cli/src/build-config.ts` already generates the Windows cflags/link
-  entries from `.zapp/zapp_platform.zc` — no changes needed there.
-- WebView2 headers are included via `-I${webview2Dir}/include`.
+  //> windows: link: -lole32 -lshell32 -luuid -luser32 -lgdi32 -lcomctl32 ...
+```
 
-## V1 Windows Reference (in `old/`)
+The npm-published `@zappdev/cli` already ships `vendor/webview2` in its
+tarball, so the loader story is solved for distribution.
 
-The v1 Windows implementation is in `old/src/platform/windows/`. Useful
-as a reference for Win32 patterns (WndProc, COM init, WebView2 embedding),
-but don't port it line-by-line — the architecture shifted between v1 and
-v2. Read it for shape, then write fresh against the current `darwin/`
-patterns.
+## The gap inventory — two tiers
 
-## Design Principles (Windows-relevant)
+### Tier 1: link-required `windows_*` symbols (the build gate)
 
-1. **Native-first**: Zen-C owns the app. WebView is a view into state,
-   not a shell around JS.
-2. **Services run natively**: Written in Zen-C, invoked from JS — same
-   across platforms.
-3. **App events fire natively**: STARTED, SHUTDOWN, OPEN_URL. On macOS
-   from `NSApplicationDelegate`; on Windows from WndProc /
-   `WM_COPYDATA` for single-instance URL handoff.
-4. **Unified worker model**: All workers have the same API (`Window.create`,
-   `Events`, `Services`, `Notification`, `Dock/Taskbar`, `Sync`). Spawn-
-   location differs (`zapp.config.ts → headless` vs `new Worker()`) but
-   capability does not.
-5. **Two-tier native API**: JSON bridge for JS callers, typed Zen-C wrappers
-   for native callers. The typed path skips serialization entirely.
+These are referenced from shared Zen-C in `#else` (non-Apple) branches —
+a Windows build of current main does not LINK until all exist:
+
+```
+windows_window_set_bridge_ready   windows_window_id_string
+windows_window_eval_js            windows_window_load_url
+windows_webview_eval_all          windows_webview_set_drag_region
+windows_open_external             windows_sync_handle
+windows_dialog_extract_args       windows_dialog_open_file
+windows_dialog_save_file          windows_dialog_message
+windows_menu_set_from_payload     windows_menu_show_context_from_payload
+windows_notification_show         windows_notification_schedule
+windows_notification_cancel       windows_notification_cancel_all
+windows_notification_get_permission
+windows_notification_request_permission
+windows_notification_register_category
+windows_notification_remove_category
+windows_notification_set_bridge_ready
+```
+
+Some may exist in the v1-era .c files — verify signatures against the
+current `darwin/` counterparts (several changed: e.g. window ids are now
+canonically `"win-<numericId>"` strings, and `set_bridge_ready` matching
+broke on macOS when the formats diverged — see Lessons below).
+
+### Tier 2: Apple-only feature routes (silent no-ops on Windows)
+
+router.zc has ~43 `#ifdef __APPLE__` blocks; most have NO `#else` — those
+routes compile on Windows and silently do nothing. Each is a parity work
+item. By feature area, with the darwin source of truth and the Windows
+candidate tech:
+
+| Area | darwin module | Windows candidate |
+| --- | --- | --- |
+| Tray | tray.m | `Shell_NotifyIcon` + popup menu |
+| Global shortcuts | shortcuts.m (Carbon) | `RegisterHotKey` |
+| Clipboard (text/html/image/files) | clipboard.m | `OpenClipboard` family |
+| Screen/Displays API | screen.m | `EnumDisplayMonitors` / `GetMonitorInfo` |
+| Theme detection + THEME_CHANGED | theme in app/webview | registry `AppsUseLightTheme` + `WM_SETTINGCHANGE` |
+| Power/battery events | power.m (IOKit) | `RegisterPowerSettingNotification` |
+| Auto-launch | autolaunch.m (SMAppService) | Run registry key / startup folder |
+| Single instance | LSMultipleInstancesProhibited | named mutex + `WM_COPYDATA` handoff |
+| Deep links | Info.plist schemes + AppDelegate | registry protocol handler + `WM_COPYDATA` |
+| Dock badge/bounce | dock.m | `ITaskbarList3` |
+| Custom protocols (zapp:// + user) | protocol.m | `ICoreWebView2` WebResourceRequested |
+| Embedded webviews (`<zapp-webview>`) | panel.m | child `ICoreWebView2Controller` w/ bounds |
+| Window sheets/modals | window.m beginSheet | owned modal window (no native sheet idiom) |
+| Native sidebar / toolbar / popover | sidebar.m / toolbar.m / popover.m | **explicit non-goal for the sprint** — document as macOS-only chrome; revisit analogues later |
+| Window metrics CSS vars | webview.m metrics script | titlebar metrics + **`--zapp-window-controls-inset-right`** (caption buttons are on the RIGHT — the var was named for this) |
+| fs module path expansion + allowlist | fs.zc (POSIX `~`, `$userData`) | Win32 paths, `%APPDATA%`; the PERMISSIONS gates themselves are shared Zen-C and carry over free |
+| Packaging/signing | notarize.ts / package.ts | SignTool / Azure Trusted Signing; MSIX vs portable exe decision |
+
+## What transfers for free (don't rebuild)
+
+- **Bridge protocol** (7 message types, cancellation, PERMISSION_DENIED
+  contract), **router**, **services**, **permissions gates**, **events
+  dispatcher shape**, **worker registry** — all shared Zen-C/TS.
+- **runtime/ + bootstrap/** TypeScript — platform-agnostic by design. The
+  webview bootstrap only needs the native side to provide: document-start
+  script injection, script-message channel, and eval.
+- **Workers:** `zjs` (default) RETAINED its libuv event loop for
+  Linux/Windows when macOS moved to kqueue+CFRunLoop (zjs.c documents both
+  paths) — but the Windows path is untested and needs a libuv dependency
+  story on Windows (vendored? static?). `bare-v8` is the JIT option;
+  `bare-quickjs/mqjs/hermes` claim Windows support, untested. `bare-jsc`
+  is Apple-only. Worker host objects in engine files still carry
+  `#ifdef __APPLE__` placeholders pending the `zapp_*` platform layer.
+
+## WebView2 ↔ WKWebView mapping (the bootstrap contract)
+
+| Need | WKWebView (darwin) | WebView2 |
+| --- | --- | --- |
+| Document-start scripts (bootstrap, windowId, pane markers, metrics vars) | WKUserScript atDocumentStart | `AddScriptToExecuteOnDocumentCreated` |
+| JS → native messages | WKScriptMessageHandler "zapp" | `add_WebMessageReceived` / `postMessage` |
+| native → JS eval | evaluateJavaScript | `ExecuteScript` |
+| zapp:// scheme + brotli assets | WKURLSchemeHandler | `AddWebResourceRequestedFilter` (use the `_22` source-kinds variant) |
+| Static loader | n/a | `WebView2LoaderStatic.lib` (vendored, x64) |
+
+## Lessons from the macOS cycles that BIND the Windows port
+
+These were bugs on macOS; the Windows implementation must respect them
+from day one:
+
+1. **Window ids are canonically `"win-<numericId>"` everywhere** — JS
+   identity, dispatch-table registration, bridge-ready matching, event
+   payloads, click payloads. macOS focus events were broken for weeks
+   because one delegate kept a pointer-formatted id (`win-0x…`) that the
+   ready-route string-match never hit.
+2. **Broadcasts iterate a registered-webview dispatch table, not a
+   top-level window walk.** `darwin_webview_eval_all` originally walked
+   windows checking `contentView` — it silently missed every webview not
+   mounted as the root view. `windows_webview_eval_all` must be
+   registry-backed from the start.
+3. **Identity/role markers must be document-start scripts, not one-shot
+   evals** — a one-shot eval lands in the throwaway pre-navigation context
+   and is wiped at commit. WebView2's `AddScriptToExecuteOnDocumentCreated`
+   is the equivalent; it persists across navigations like WKUserScript.
+4. **`dispatchWindowEvent` takes BARE event suffixes** ("focus",
+   "sidebar-collapsed") — bootstrap prepends `window:`. Passing prefixed
+   names dispatches `window:window:*` and silently matches nothing.
+5. **No fixed-size buffers for outgoing JS/JSON** — the repo has a history
+   of 512B/3KB/4KB truncation bugs (zapp_escape_dup heap allocator is the
+   pattern; `darwin_dialog_extract_args`'s 4KB static buffer is a watched
+   legacy exception). Don't add new ones in windows/*.c.
+6. **Main-thread funneling:** WebView2 is STA/UI-thread-bound like AppKit.
+   macOS uses dispatch_async(main); Windows needs the
+   `PostMessage(WM_ZAPP_TASK)` + (for sync) event-wait pattern, with a
+   same-thread short-circuit to avoid self-deadlock.
+
+## Open questions for the brainstorm (decide these first)
+
+1. **Toolchain:** does `zc` (Zen-C 0.4.4+) actually run on Windows, and
+   against which C compiler? The existing cflags (`-DCOBJMACROS
+   -DCINTERFACE`, `-l` link style) imply clang/gcc-style C COM, not
+   MSVC `cl`. Candidates: llvm-mingw, clang targeting MSVC ABI, or MSYS2.
+   **Verify zc + clang + a hello-window link before anything else (M0).**
+2. **Dev loop:** Bun + Vite run fine on Windows; `zapp dev` spawns the
+   binary — confirm the spawn/env/log plumbing (cli passes ZAPP_LOG env;
+   Bun.spawn env snapshot gotcha applies).
+3. **zjs-on-Windows libuv:** vendor libuv? static link? Or revisit the old
+   idea of WebView2-native web workers as the Windows default engine
+   (memory: project_windows_webview2_workers) with zjs opt-in?
+4. **CI gate:** mirror the ios-simulator pattern — a `windows-latest`
+   GitHub Actions job that builds hello-world, plus a
+   `windows-platform-parity.test.ts` mirroring the iOS one (#281): every
+   `windows_*` referenced from `.zc` must be defined in
+   `native/platform/windows/`.
+5. **Milestone slicing (proposal to refine):**
+   - **M0** — toolchain smoke: zc + compiler + WebView2 loader link on PC.
+   - **M1** — hello-world boots: window + WebView2 + bridge + `greet`
+     round-trip + Tier-1 symbols all real.
+   - **M2** — events + workers: window events via WndProc, zjs worker
+     end-to-end, Events bus cross-context.
+   - **M3** — table stakes: tray, shortcuts, notifications, theme,
+     clipboard, dialogs, single-instance, deep links, fs paths.
+   - **M4** — ship: icon/resources, packaging (MSIX vs exe), signing, CI
+     gate, docs + README platform table flip.
+6. **Scope fences:** native-chrome trilogy = documented no-op (the runtime
+   APIs already exist and the options are ignored gracefully); iOS-style
+   per-feature stubs keep the link green as new macOS features land —
+   consider requiring `windows/*.c` stubs in the same commit the way
+   ios stubs are required today.
+
+## Where to look while porting
+
+- The current `darwin/` module for each feature is the source of truth —
+  v2 architecture. `old/src/platform/windows/` is v1: read for Win32
+  shape (WndProc, COM init, WebView2 embedding), never port line-by-line.
+- `docs/architecture.md` "Verifying native changes" — extend it with the
+  Windows gate once it exists.
+- Wire contracts live in: `bootstrap/webview.ts` (message envelope,
+  dispatchWindowEvent), `native/bridge/dispatch.zc` (broadcast fanout),
+  `native/app/router.zc` (every route the platform must back).
 
 ## Zen-C Docs
 
