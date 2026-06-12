@@ -220,15 +220,258 @@ void windows_menu_show_context_typed(ZappMenuItem* items, int count, int x, int 
 }
 
 // --- JSON API (from JS bridge) ---
+//
+// Payload shape (the bridge envelope; we walk to a.items):
+//   { t, m, a: { items: [ { id?, label?, type?, enabled?, checked?,
+//                           accelerator?, role?, submenu? } ], x?, y? } }
+// A small cursor-based walker — not a general JSON parser, but a
+// correct one for this grammar (handles nesting, string escapes, and
+// skips unknown keys/values), unlike the strstr-pattern helpers above
+// which can't cope with nested arrays.
+
+typedef struct { const char* p; } MenuCursor;
+
+static void mc_ws(MenuCursor* c) {
+    while (*c->p == ' ' || *c->p == '\t' || *c->p == '\n' || *c->p == '\r') c->p++;
+}
+
+// Parse a JSON string (cursor on the opening quote) into buf.
+// Advances past the closing quote. Returns 0 on malformed input.
+static int mc_string(MenuCursor* c, char* buf, size_t buf_size) {
+    if (*c->p != '"') return 0;
+    c->p++;
+    size_t i = 0;
+    while (*c->p && *c->p != '"') {
+        char ch = *c->p;
+        if (ch == '\\' && c->p[1]) {
+            c->p++;
+            char esc = *c->p;
+            switch (esc) {
+                case 'n': ch = '\n'; break;
+                case 't': ch = '\t'; break;
+                case 'r': ch = '\r'; break;
+                case 'b': ch = '\b'; break;
+                case 'f': ch = '\f'; break;
+                case 'u':
+                    // Keep it simple: skip the 4 hex digits, emit '?'.
+                    // Menu labels are UTF-8 in the wire format; \u only
+                    // shows up for exotic producers.
+                    if (c->p[1] && c->p[2] && c->p[3] && c->p[4]) c->p += 4;
+                    ch = '?';
+                    break;
+                default: ch = esc; break;
+            }
+        }
+        if (i + 1 < buf_size) buf[i++] = ch;
+        c->p++;
+    }
+    if (*c->p != '"') return 0;
+    c->p++;
+    buf[i] = '\0';
+    return 1;
+}
+
+// Skip any JSON value (cursor on its first char).
+static void mc_skip_value(MenuCursor* c) {
+    mc_ws(c);
+    if (*c->p == '"') {
+        char tmp[2];
+        // mc_string truncates into tmp but still consumes correctly.
+        mc_string(c, tmp, sizeof(tmp));
+        return;
+    }
+    if (*c->p == '{' || *c->p == '[') {
+        char open = *c->p;
+        char close = (open == '{') ? '}' : ']';
+        int depth = 0;
+        while (*c->p) {
+            if (*c->p == '"') { char tmp[2]; mc_string(c, tmp, sizeof(tmp)); continue; }
+            if (*c->p == open) depth++;
+            else if (*c->p == close) {
+                depth--;
+                if (depth == 0) { c->p++; return; }
+            }
+            c->p++;
+        }
+        return;
+    }
+    // number / true / false / null
+    while (*c->p && *c->p != ',' && *c->p != '}' && *c->p != ']') c->p++;
+}
+
+static HMENU build_hmenu_from_json_array(MenuCursor* c);
+
+// Parse one item object (cursor on '{') and append it to `menu`.
+static int append_json_item(HMENU menu, MenuCursor* c) {
+    if (*c->p != '{') return 0;
+    c->p++;
+
+    char id[128] = "";
+    char label[256] = "";
+    char type[32] = "";
+    char accelerator[64] = "";
+    char role[32] = "";
+    int enabled = 1;
+    int checked = 0;
+    HMENU submenu = NULL;
+
+    mc_ws(c);
+    while (*c->p && *c->p != '}') {
+        char key[64];
+        if (!mc_string(c, key, sizeof(key))) return 0;
+        mc_ws(c);
+        if (*c->p != ':') return 0;
+        c->p++;
+        mc_ws(c);
+
+        if (strcmp(key, "id") == 0 && *c->p == '"') mc_string(c, id, sizeof(id));
+        else if (strcmp(key, "label") == 0 && *c->p == '"') mc_string(c, label, sizeof(label));
+        else if (strcmp(key, "type") == 0 && *c->p == '"') mc_string(c, type, sizeof(type));
+        else if (strcmp(key, "accelerator") == 0 && *c->p == '"') mc_string(c, accelerator, sizeof(accelerator));
+        else if (strcmp(key, "role") == 0 && *c->p == '"') mc_string(c, role, sizeof(role));
+        else if (strcmp(key, "enabled") == 0) { enabled = strncmp(c->p, "false", 5) != 0; mc_skip_value(c); }
+        else if (strcmp(key, "checked") == 0) { checked = strncmp(c->p, "true", 4) == 0; mc_skip_value(c); }
+        else if (strcmp(key, "submenu") == 0 && *c->p == '[') submenu = build_hmenu_from_json_array(c);
+        else mc_skip_value(c);
+
+        mc_ws(c);
+        if (*c->p == ',') { c->p++; mc_ws(c); }
+    }
+    if (*c->p != '}') { if (submenu) DestroyMenu(submenu); return 0; }
+    c->p++;
+
+    // --- Append to menu (same role policy as the typed path) ---
+    if (strcmp(type, "separator") == 0) {
+        if (submenu) DestroyMenu(submenu);
+        AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+        return 1;
+    }
+    if (role[0]) {
+        if (strcmp(role, "appMenu") == 0 || strcmp(role, "windowMenu") == 0 ||
+            strcmp(role, "editMenu") == 0) {
+            // macOS-only chrome / WebView2-native edit handling.
+            if (submenu) DestroyMenu(submenu);
+            return 1;
+        }
+        if (strcmp(role, "quit") == 0) {
+            if (submenu) DestroyMenu(submenu);
+            UINT qid = alloc_menu_id("__quit", NULL);
+            wchar_t* wl = menu_utf8_to_wchar(label[0] ? label : "Quit");
+            AppendMenuW(menu, MF_STRING, qid, wl ? wl : L"Quit");
+            if (wl) free(wl);
+            return 1;
+        }
+        // copy/cut/paste/selectAll/undo/redo — WebView2 handles the
+        // keyboard forms natively; menu-driven forms are a follow-up.
+        if (submenu) DestroyMenu(submenu);
+        return 1;
+    }
+    if (submenu) {
+        wchar_t* wl = menu_utf8_to_wchar(label[0] ? label : "Menu");
+        AppendMenuW(menu, MF_POPUP, (UINT_PTR)submenu, wl ? wl : L"Menu");
+        if (wl) free(wl);
+        return 1;
+    }
+
+    UINT cmd = alloc_menu_id(id, NULL);
+    UINT flags = MF_STRING;
+    if (!enabled) flags |= MF_GRAYED;
+    if (checked) flags |= MF_CHECKED;
+    char label_buf[336];
+    if (accelerator[0]) snprintf(label_buf, sizeof(label_buf), "%s\t%s", label, accelerator);
+    else snprintf(label_buf, sizeof(label_buf), "%s", label);
+    wchar_t* wl = menu_utf8_to_wchar(label_buf);
+    AppendMenuW(menu, flags, cmd, wl ? wl : L"");
+    if (wl) free(wl);
+    return 1;
+}
+
+// Cursor on '[' — builds the HMENU and advances past the closing ']'.
+static HMENU build_hmenu_from_json_array(MenuCursor* c) {
+    if (*c->p != '[') return NULL;
+    c->p++;
+    HMENU menu = CreatePopupMenu();
+    mc_ws(c);
+    while (*c->p && *c->p != ']') {
+        if (!append_json_item(menu, c)) { DestroyMenu(menu); return NULL; }
+        mc_ws(c);
+        if (*c->p == ',') { c->p++; mc_ws(c); }
+    }
+    if (*c->p == ']') c->p++;
+    return menu;
+}
+
+// Find `"items":` inside the payload's args and return a cursor on the
+// '[' (or NULL). The envelope nests it as {a:{items:[...]}} — items
+// only appears once.
+static const char* menu_find_items_array(const char* payload_json) {
+    if (!payload_json) return NULL;
+    const char* p = strstr(payload_json, "\"items\":");
+    if (!p) return NULL;
+    p += strlen("\"items\":");
+    while (*p == ' ' || *p == '\t') p++;
+    return (*p == '[') ? p : NULL;
+}
+
+// Shared with tray.c: build an HMENU directly from an items JSON array
+// string (the tray payload carries "menu": [...]). void* in the
+// signature to keep windows.h out of menu.h.
+void* windows_menu_build_from_items_json(const char* items_json) {
+    if (!items_json) return NULL;
+    MenuCursor c = { items_json };
+    mc_ws(&c);
+    return (void*)build_hmenu_from_json_array(&c);
+}
 
 void windows_menu_set_from_payload(const char* payload_json) {
-    // For now, JS menus are handled via the typed API path
-    // Full JSON parsing would be needed for complete parity
-    // The typed API covers native Zen-C menus
-    (void)payload_json;
+    const char* items = menu_find_items_array(payload_json);
+    if (!items) return;
+    reset_menu_entries();
+
+    // Top-level items become menubar entries; the JSON builder
+    // produces a popup whose items we re-parent? No — build the
+    // menubar directly: iterate the top-level array and append POPUP
+    // entries, mirroring windows_menu_set_typed's shape.
+    MenuCursor c = { items };
+    if (*c.p != '[') return;
+    c.p++;
+    HMENU menubar = CreateMenu();
+    mc_ws(&c);
+    while (*c.p && *c.p != ']') {
+        if (!append_json_item(menubar, &c)) { DestroyMenu(menubar); return; }
+        mc_ws(&c);
+        if (*c.p == ',') { c.p++; mc_ws(&c); }
+    }
+
+    for (int i = 0; i < 64; i++) {
+        HWND hwnd = zapp_get_hwnd(i);
+        if (hwnd) SetMenu(hwnd, menubar);
+    }
 }
 
 void windows_menu_show_context_from_payload(const char* payload_json, int32_t window_id) {
-    (void)payload_json;
-    (void)window_id;
+    const char* items = menu_find_items_array(payload_json);
+    if (!items) return;
+
+    // x/y live alongside items in the args object. The strstr helper
+    // is fine here — x/y are flat numeric keys.
+    int x = 0, y = 0;
+    const char* px = strstr(payload_json, "\"x\":");
+    if (px) x = atoi(px + 4);
+    const char* py = strstr(payload_json, "\"y\":");
+    if (py) y = atoi(py + 4);
+
+    MenuCursor c = { items };
+    HMENU menu = build_hmenu_from_json_array(&c);
+    if (!menu) return;
+    HWND hwnd = zapp_get_hwnd(window_id);
+    if (!hwnd) { DestroyMenu(menu); return; }
+
+    POINT pt = { x, y };
+    ClientToScreen(hwnd, &pt);
+    // TPM_RETURNCMD not used — clicks dispatch through WM_COMMAND like
+    // menubar items, sharing zapp_handle_menu_command.
+    SetForegroundWindow(hwnd);
+    TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN, pt.x, pt.y, 0, hwnd, NULL);
+    DestroyMenu(menu);
 }
