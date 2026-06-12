@@ -130,29 +130,31 @@ void zapp_dispatch_event_to_js(int32_t window_id, int32_t event_id, int32_t w, i
         default: return;
     }
 
-    // Build JS call into static buffer
-    static char js_buf[512];
+    // Build the JS call on the heap — no fixed-size buffers for
+    // outgoing JS (repo lesson; 512B/4KB truncation bug class), and a
+    // static buffer here would also race across threads.
     const char* wid = zapp_window_ids[window_id];
-
-    // Include payload for resize/move/maximize/restore
+    const char* fmt;
     if (event_id == ZAPP_EVENT_RESIZE || event_id == ZAPP_EVENT_MAXIMIZE || event_id == ZAPP_EVENT_RESTORE) {
-        snprintf(js_buf, sizeof(js_buf),
-            "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
-            "if(b&&b.dispatchWindowEvent)b.dispatchWindowEvent('%s','%s','{\"width\":%d,\"height\":%d}');})();",
-            wid, name, w, h);
+        fmt = "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+              "if(b&&b.dispatchWindowEvent)b.dispatchWindowEvent('%s','%s','{\"width\":%d,\"height\":%d}');})();";
     } else if (event_id == ZAPP_EVENT_MOVE) {
-        snprintf(js_buf, sizeof(js_buf),
-            "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
-            "if(b&&b.dispatchWindowEvent)b.dispatchWindowEvent('%s','%s','{\"x\":%d,\"y\":%d}');})();",
-            wid, name, x, y);
+        fmt = "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+              "if(b&&b.dispatchWindowEvent)b.dispatchWindowEvent('%s','%s','{\"x\":%d,\"y\":%d}');})();";
     } else {
-        snprintf(js_buf, sizeof(js_buf),
-            "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
-            "if(b&&b.dispatchWindowEvent)b.dispatchWindowEvent('%s','%s','{}');})();",
-            wid, name);
+        fmt = "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+              "if(b&&b.dispatchWindowEvent)b.dispatchWindowEvent('%s','%s','{}');})();";
     }
+    int arg1 = (event_id == ZAPP_EVENT_MOVE) ? x : w;
+    int arg2 = (event_id == ZAPP_EVENT_MOVE) ? y : h;
+    int needed = snprintf(NULL, 0, fmt, wid, name, arg1, arg2);
+    if (needed < 0) return;
+    char* js_buf = (char*)malloc((size_t)needed + 1);
+    if (!js_buf) return;
+    snprintf(js_buf, (size_t)needed + 1, fmt, wid, name, arg1, arg2);
 
     windows_webview_eval_by_id(window_id, js_buf);
+    free(js_buf);
 }
 
 // --- WndProc ---
