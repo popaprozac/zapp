@@ -896,18 +896,24 @@ function rejectRemovedEngines(config: ZappConfig): void {
   }
 }
 
-// zjs doesn't build on Windows yet — its libuv event-loop path is
-// written but the vendor build has no Windows story (tracked as a
-// separate parity workstream). Until it lands, configs that pin
-// `engine: "zjs"` get the platform's default bare engine instead of a
-// cryptic `zjs.h: No such file` compile error, so the same
-// zapp.config.ts keeps working on both platforms. Remove this pass
-// when zjs ships Windows support.
+// zjs Windows support gates on the vendor checkout being present —
+// vendor/zjs now ships Windows parity (libuv loop + winhttp/ws2_32
+// platform layer), so when the submodule/junction is initialized the
+// engine passes through and builds. On machines WITHOUT vendor/zjs,
+// configs that pin `engine: "zjs"` still get the platform's default
+// bare engine instead of a cryptic `zjs.h: No such file` compile
+// error, so the same zapp.config.ts keeps working everywhere.
 let _zjsSubstituteWarned = false;
 async function substituteZjsOnWindows(config: ZappConfig): Promise<void> {
   const { detectTarget, defaultBareEngine } = await import("./native");
   const target = detectTarget();
   if (target !== "windows") return;
+  // Available when the vendor checkout has the library entry — the
+  // build-config zjs block compiles the embed archive from it on
+  // demand. Mirrored in vite/src/index.ts effectiveEngine.
+  const { resolveVendorDir } = await import("./paths");
+  const { existsSync } = await import("node:fs");
+  if (existsSync(path.join(resolveVendorDir(), "zjs", "src", "lib.zc"))) return;
   const fallback = `bare-${defaultBareEngine(target)}` as const;
   const substituted: string[] = [];
   for (const [id, entry] of Object.entries(config.headless ?? {})) {
