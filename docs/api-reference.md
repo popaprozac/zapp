@@ -877,6 +877,58 @@ the toolbar row below the title. Never add the two variables.
 v1 is create-time only — no `setItems` after creation; no search field;
 `allowsUserCustomization` is off.
 
+### Popovers (macOS)
+
+A real `NSPopover` — bubble chrome, anchor arrow, transient auto-dismissal —
+hosting your app's web content as a trusted pane (full bridge, identifies as
+its window, Events crosses panes; `Window.isPopover()`-style detection via
+`Symbol.for('zapp.isPopover')`). Persistent: the page loads once at create
+and stays warm across show/hide, so state survives.
+
+```ts
+const pop = await win.createPopover({ url: "#filter-panel", width: 320, height: 400 });
+
+pop.show(buttonElement);                 // anchored to a DOM element
+pop.show({ toolbarItem: "compose" });    // anchored to a toolbar button (macOS 14+)
+pop.show(mouseEvent);                    // at the click point
+pop.show({ x: 40, y: 90, width: 120, height: 20 }, { edge: "right" });
+pop.hide();                              // dismiss — webview stays warm
+pop.destroy();                           // teardown + slot freed
+
+win.on(WindowEvent.POPOVER_CLOSED, ({ popoverId }) => { ... }); // hide() AND transient dismissal
+```
+
+`behavior` controls dismissal: `"transient"` (default — outside click
+closes), `"semitransient"`, `"applicationDefined"` (only your code closes
+it). Element/MouseEvent anchors are measured in the calling pane, so call
+`show(element)` from the pane that owns the element. Each live popover
+costs one dispatch slot (same 64-slot pool as windows).
+
+### Pull-down toolbar menus
+
+A `menu:` array on a toolbar button builds a real `NSMenuToolbarItem`
+(Mail's filter button) — same `MenuItemDef` as `Menu`/`ContextMenu`/`Tray`,
+same `action` callbacks:
+
+```ts
+{ id: "filter", icon: "sf:line.3.horizontal.decrease", label: "Filter",
+  menu: [
+    { id: "all", label: "All", action: () => setFilter("all") },
+    { id: "unread", label: "Unread", action: () => setFilter("unread") },
+  ] }
+```
+
+### Pick your surface
+
+| You want | Use |
+| --- | --- |
+| Native menu items at a point (right-click, dropdown button) | `ContextMenu.show(items, { anchor })` |
+| Native menu items from a toolbar button | toolbar item `menu:` |
+| Your own web UI in a native bubble, anchored to anything | `win.createPopover` |
+
+`ContextMenu.show`'s `anchor` and `popover.show` share the same `Anchor`
+vocabulary (Element / `{x, y, width?, height?}` / MouseEvent).
+
 ### `WindowHandle.setFocus(): void`
 
 Raise this window to the front and bring the app to the foreground,
