@@ -522,7 +522,12 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
             else if (is_open_path) darwin_open_path((const char*)abs);
             else if (is_trash_item) darwin_trash_item((const char*)abs);
             #else
-            // Windows stubs — TODO when WebView2 / shell integration lands.
+            extern void windows_show_item_in_folder(const char* p);
+            extern void windows_open_path(const char* p);
+            extern void windows_trash_item(const char* p);
+            if (is_show_item) windows_show_item_in_folder((const char*)abs);
+            else if (is_open_path) windows_open_path((const char*)abs);
+            else if (is_trash_item) windows_trash_item((const char*)abs);
             #endif
         }
         return;
