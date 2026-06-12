@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { normalizeToolbar, type ToolbarOptions } from "./window";
+import { normalizeToolbar, assertToolbarItemsNonEmpty, type ToolbarOptions } from "./window";
 import { eventName, WindowEvent } from "./events";
 
 describe("normalizeToolbar", () => {
@@ -219,6 +219,31 @@ describe("normalizeToolbarPatch", () => {
     const autoId = JSON.parse(json).menu[0].id;
     expect(autoId).toMatch(/^__tbmenu_\d+$/);
     expect(menuActions.has(autoId)).toBe(true);
+  });
+});
+
+describe("assertToolbarItemsNonEmpty", () => {
+  test("assertToolbarItemsNonEmpty throws on empty items", () => {
+    expect(() => assertToolbarItemsNonEmpty('{"style":"unified","items":[]}'))
+      .toThrow(/use toolbar.remove\(\)/);
+    expect(() => assertToolbarItemsNonEmpty('{"items":[{"type":"button","id":"a"}]}'))
+      .not.toThrow();
+  });
+
+  test("sidebar-dependent-only item sets normalize to empty (the guard's input case)", () => {
+    const { json } = normalizeToolbar({ items: [{ type: "toggleSidebar" }] }, false);
+    expect(JSON.parse(json).items).toEqual([]);
+  });
+});
+
+describe("normalizeToolbarPatch explicit-undefined guard", () => {
+  test("patch of only explicit-undefined values throws empty patch", () => {
+    expect(() => normalizeToolbarPatch("x", { label: undefined })).toThrow(/empty patch/);
+  });
+
+  test("action-only patch is valid (action is not in wire, but is a real change)", () => {
+    const fn = () => {};
+    expect(() => normalizeToolbarPatch("x", { action: fn })).not.toThrow();
   });
 });
 

@@ -456,6 +456,15 @@ export function recordToolbarMenuIds(
   for (const [itemId, ids] of menuIdsByItem) perItem.set(itemId, ids);
 }
 
+/** Guard for ToolbarHandle.setItems: an empty (post-validation) item set
+ * is almost always a mistake — native keeps the old toolbar and the purge
+ * would have killed its callbacks. Exported for tests. */
+export function assertToolbarItemsNonEmpty(json: string): void {
+  if (JSON.parse(json).items.length === 0) {
+    throw new Error("[zapp] toolbar: setItems with no items — use toolbar.remove() to destroy the toolbar");
+  }
+}
+
 /** Validate a ToolbarOptions and split it into the wire JSON (actions
  * stripped, defaults applied) and the action maps. Pure — unit-tested. */
 export function normalizeToolbar(
@@ -545,6 +554,11 @@ export function normalizeToolbarPatch(
   if (patch.enabled !== undefined) wire.enabled = patch.enabled;
   if (patch.indicator !== undefined) wire.indicator = patch.indicator;
   if (patch.menu !== undefined) wire.menu = stripMenuActions(patch.menu, menuActions);
+  // Explicit-undefined values pass the keys.length guard above (key exists,
+  // value is undefined) but produce a wire with only the id — detect here.
+  if (Object.keys(wire).length === 1 && !patch.action) {
+    throw new Error('[zapp] toolbar: empty patch — pass at least one of label/icon/enabled/indicator/menu/action');
+  }
   return { json: JSON.stringify(wire), action: patch.action, menuActions };
 }
 
@@ -751,15 +765,14 @@ function createWindowHandle(windowId: string, sidebarOpts?: SidebarOptions): Win
       setItems(items: ToolbarItemDef[], setOpts?: { style?: "unified" | "unifiedCompact" | "expanded" }) {
         const { json, actions, menuActions, menuIdsByItem } =
           normalizeToolbar({ items, style: setOpts?.style }, sidebarOpts !== undefined);
+        // Parse once: guard on empty items, then conditionally strip style.
         // Only send style when the caller set one — native warns when style
         // arrives for an already-attached toolbar, and normalizeToolbar
         // always defaults it.
-        let wireJson = json;
-        if (setOpts?.style === undefined) {
-          const parsed = JSON.parse(json);
-          delete parsed.style;
-          wireJson = JSON.stringify(parsed);
-        }
+        const parsed = JSON.parse(json);
+        assertToolbarItemsNonEmpty(json);
+        if (setOpts?.style === undefined) delete parsed.style;
+        const wireJson = JSON.stringify(parsed);
         purgeWindowToolbarActions(windowId, toolbarActions, toolbarMenuActions, toolbarMenuIdsByWindow);
         if (actions.size > 0) {
           wireToolbarClicks();
@@ -779,6 +792,9 @@ function createWindowHandle(windowId: string, sidebarOpts?: SidebarOptions): Win
           toolbarActions.set(`${windowId}:${id}`, action);
         }
         if (patch.menu !== undefined) {
+          // The item is becoming (or refreshing) a menu button — its click is
+          // consumed by the menu, so any old action callback can never fire.
+          toolbarActions.delete(`${windowId}:${id}`);
           purgeItemToolbarMenuActions(windowId, id, toolbarMenuActions, toolbarMenuIdsByWindow);
           if (menuActions.size > 0) {
             wireToolbarMenuClicks();
