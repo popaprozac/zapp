@@ -279,6 +279,28 @@ async function runDev(root: string) {
       );
       process.exit(1);
     }
+  } else {
+    // Windows: netstat instead of lsof. Without this check a stale
+    // Vite from a crashed dev run keeps the port, our new Vite dies on
+    // --strictPort, and the app silently loads the STALE server's old
+    // bundle — the most confusing failure mode dev mode has.
+    const ns = Bun.spawnSync(["netstat", "-ano", "-p", "TCP"], { stdout: "pipe", stderr: "ignore" });
+    const pids = new Set<string>();
+    for (const line of ns.stdout.toString().split("\n")) {
+      if (line.includes(`:${port}`) && line.includes("LISTENING")) {
+        const pid = line.trim().split(/\s+/).pop();
+        if (pid && pid !== "0") pids.add(pid);
+      }
+    }
+    if (pids.size > 0) {
+      const list = [...pids];
+      clogError(
+        `port ${port} is already in use (pid ${list.join(", ")}).\n` +
+        `  Likely a stale Vite from a previous dev run. Run:\n` +
+        `    taskkill /F /PID ${list.join(" /PID ")}`
+      );
+      process.exit(1);
+    }
   }
 
   clog(1, "starting vite dev server...");
