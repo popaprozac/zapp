@@ -1135,7 +1135,18 @@ static void on_check(uv_check_t* h) {
     }
 
     int64_t next_ms = zjs_next_timer_ms(slot->ctx);
-    if (next_ms < 0) return;             // no timers pending — idle
+    if (next_ms < 0) {
+        // No timers — but zjs's polling contract surfaces in-flight
+        // async I/O (fetch / WebSocket / net) through has_pending_work,
+        // and completions only drain inside zjs_run_pending_timers.
+        // Without this, a worker whose script holds an in-flight fetch
+        // but registered no timers parks the uv loop forever and the
+        // response never resolves (the bug class: fetch works in a
+        // worker WITH a setInterval, hangs in one without). Poll at
+        // 10ms while I/O is outstanding; stay fully idle otherwise.
+        if (!zjs_has_pending_work(slot->ctx)) return;   // truly idle
+        next_ms = 10;
+    }
     if (next_ms == 0) next_ms = 1;       // uv_timer_start treats 0 specially
     uv_timer_start(&slot->zjs_wake, on_zjs_wake, (uint64_t) next_ms, 0);
 }
@@ -1514,6 +1525,10 @@ static ZjsSetupResult zjs_worker_setup_state(ZjsWorkerSlot* slot) {
 #if !defined(__APPLE__)
     {
         int64_t next_ms = zjs_next_timer_ms(slot->ctx);
+        // Same in-flight-I/O fallback as on_check: a script whose
+        // module-top code started a fetch but registered no timers
+        // still needs the loop ticking to drain the completion.
+        if (next_ms < 0 && zjs_has_pending_work(slot->ctx)) next_ms = 10;
         if (next_ms >= 0) {
             if (next_ms == 0) next_ms = 1;
             uv_timer_start(&slot->zjs_wake, on_zjs_wake, (uint64_t) next_ms, 0);

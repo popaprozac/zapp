@@ -123,11 +123,15 @@ raw {
         const char* names[9] = {"(removed)","(removed)","bare-jsc","bare-v8","bare-quickjs","bare-mqjs","bare-hermes","zjs",""};
         for (int i = 0; i < 8; i++) {
             if (present[order[i]]) {
-                if (requested != order[i]) {
+                // Only warn for an EXPLICIT request that can't be
+                // honored — requested < 0 means "no preference", and
+                // "requested ? but it's not compiled in" reads like an
+                // error for the completely normal default path.
+                if (requested >= 0 && requested != order[i]) {
                     fprintf(stderr,
                         "[zapp/%s] requested %s but it's not compiled in — using %s.\n",
                         zapp_worker_registry_get_display_name(worker_id),
-                        (requested >= 0 && requested < 9) ? names[requested] : "?",
+                        (requested < 9) ? names[requested] : "?",
                         names[order[i]]);
                 }
                 return order[i];
