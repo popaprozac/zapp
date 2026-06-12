@@ -104,6 +104,11 @@ void windows_platform_init(const char* app_name) {
     // Initialize COM (apartment-threaded for WebView2)
     CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
 
+    // Main-thread eval funnel — must exist before any worker thread can
+    // post webview evals (WebView2 is STA-bound; see webview.c).
+    extern void zapp_webview_init_eval_funnel(void);
+    zapp_webview_init_eval_funnel();
+
     // DPI awareness
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 

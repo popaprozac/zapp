@@ -157,8 +157,28 @@ static char* zapp_pending_js[ZAPP_MAX_WINDOWS][ZAPP_MAX_PENDING_JS] = {{0}};
 static int zapp_pending_js_count[ZAPP_MAX_WINDOWS] = {0};
 
 // --- Eval JS on a window ---
+//
+// Main-thread funnel (WINDOWS_PORTING.md lesson 6): WebView2 is
+// STA/UI-thread-bound — ICoreWebView2_ExecuteScript from a worker
+// thread is a cross-apartment COM call that fails silently, which made
+// every worker→webview surface (postToWebview ping/pong, Events.emit
+// broadcasts, sync results) reach native and then vanish. Off-thread
+// callers heap-package the eval and PostMessage it to a message-only
+// window owned by the main thread; same-thread calls short-circuit.
+// Marshaling BEFORE the pending-JS buffering also makes those arrays
+// main-thread-only (they were racy when workers buffered directly).
 
-void windows_webview_eval_by_id(int32_t window_id, const char* js) {
+#define ZAPP_WM_EVAL (WM_APP + 0x45) // 'E'
+
+typedef struct {
+    int32_t window_id;
+    char* js;
+} ZappEvalTask;
+
+static DWORD zapp_ui_thread_id = 0;
+static HWND zapp_eval_hwnd = NULL;
+
+static void zapp_eval_on_main(int32_t window_id, const char* js) {
     if (window_id < 0 || window_id >= ZAPP_MAX_WINDOWS) return;
     ICoreWebView2* webview = zapp_webviews_wv[window_id];
     if (!webview) {
@@ -172,6 +192,52 @@ void windows_webview_eval_by_id(int32_t window_id, const char* js) {
     if (wjs) {
         ICoreWebView2_ExecuteScript(webview, wjs, NULL);
         free(wjs);
+    }
+}
+
+static LRESULT CALLBACK zapp_eval_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (msg == ZAPP_WM_EVAL) {
+        ZappEvalTask* task = (ZappEvalTask*) lParam;
+        if (task) {
+            zapp_eval_on_main(task->window_id, task->js);
+            free(task->js);
+            free(task);
+        }
+        return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+// Called from windows_platform_init (main/UI thread, before any worker
+// exists) — records the UI thread and creates the funnel target.
+void zapp_webview_init_eval_funnel(void) {
+    if (zapp_eval_hwnd) return;
+    zapp_ui_thread_id = GetCurrentThreadId();
+    static const wchar_t* cls = L"ZappEvalFunnel";
+    WNDCLASSEXW wc = {0};
+    wc.cbSize = sizeof(wc);
+    wc.lpfnWndProc = zapp_eval_wndproc;
+    wc.hInstance = GetModuleHandleW(NULL);
+    wc.lpszClassName = cls;
+    RegisterClassExW(&wc);
+    zapp_eval_hwnd = CreateWindowExW(0, cls, L"", 0, 0, 0, 0, 0,
+                                     HWND_MESSAGE, NULL, GetModuleHandleW(NULL), NULL);
+}
+
+void windows_webview_eval_by_id(int32_t window_id, const char* js) {
+    if (window_id < 0 || window_id >= ZAPP_MAX_WINDOWS || !js) return;
+    if (zapp_ui_thread_id == 0 || GetCurrentThreadId() == zapp_ui_thread_id) {
+        zapp_eval_on_main(window_id, js);
+        return;
+    }
+    ZappEvalTask* task = (ZappEvalTask*) malloc(sizeof(ZappEvalTask));
+    if (!task) return;
+    task->window_id = window_id;
+    task->js = _strdup(js);
+    if (!task->js) { free(task); return; }
+    if (!zapp_eval_hwnd || !PostMessageW(zapp_eval_hwnd, ZAPP_WM_EVAL, 0, (LPARAM) task)) {
+        free(task->js);
+        free(task);
     }
 }
 
