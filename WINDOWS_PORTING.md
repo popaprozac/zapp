@@ -192,6 +192,41 @@ from day one:
   dispatchWindowEvent), `native/bridge/dispatch.zc` (broadcast fanout),
   `native/app/router.zc` (every route the platform must back).
 
+## Windows prerequisites (verified 2026-06-11, first working build pass)
+
+The goal: someone on a stock Windows 11 machine gets zapp building with
+clear steps and no source surgery. Current requirement set:
+
+- **MinGW-w64 gcc** (scoop `mingw`, tested 15.2.0) — `zc`'s default C
+  compiler drives the whole app link, so the bare engine build is
+  pinned to the same toolchain (Ninja + gcc; see `ensureBareBuilt`).
+  MSVC/clang-cl is NOT the supported path — mixing MSVC-built C++
+  statics into the MinGW link fails.
+- **cmake ≥ 4** + **ninja** (scoop) — bare engine build.
+- **NASM** (scoop `nasm`) — vendor/bare's `CMakeLists.txt` does
+  `enable_language(ASM_NASM)` on win32-x64 at configure time, even
+  though BoringSSL asm is disabled (below).
+- **bun**, **git**; `git submodule update --init vendor/bare`.
+- **Zen-C (`zc`)** built from source: `cmd /c build.bat` with
+  `ZC_HAS_JIT=0` unless libtcc is installed. Keep the checkout current
+  — zapp tracks recent zc.
+
+## Vendor/upstream ledger — DO NOT patch vendors locally
+
+Policy (2026-06-11): vendored/third-party code (Zen-C, zjs, bare,
+BoringSSL, libuv…) is never patched in-tree here. Needed fixes are
+worked around via build flags/config where possible and recorded below
+for upstreaming.
+
+| Vendor | Issue | Status / workaround |
+| --- | --- | --- |
+| **Zen-C** | Importing the same C header (e.g. `"string.h"`) from two files is misreported as "Circular import detected" — the `.h` early-return in `src/parser/stmt/stmt_import.c` never removes the header from the `currently_parsing` cycle set. Regression after v0.4.4 (~300 commits); breaks ALL zapp builds on current Zen-C main, every platform. | ⚠️ **One-off local working-tree fix applied in `C:\Users\Zach\code\Zen-C` (uncommitted), made before the no-vendor-patches policy was set.** Needs upstreaming ASAP — until then, fresh Windows machines either apply the same 1-line fix (add `zmap_remove(&ctx->imports.currently_parsing, fn);` to the `.h` early-return branch) or pin a pre-regression zc. |
+| **Zen-C** | `Map<void*>` instantiation also emits a phantom `MapEntry__void` struct containing `void val;` — invalid C, fails any backend compiler. Repro: `import "std/map.zc"; let m = Map<void*>::new();` → transpile. Regression vs the pre-0.4.4-300 zc macOS runs. | Worked around in zapp: `WindowManager.handles` is `Map<u64>` with casts at its 4 call sites (native/window/window.zc). Revert when fixed upstream. |
+| **libuv 1.52.1** (via bare) | `src/win/util.c` trips `-Wincompatible-pointer-types`, an error on GCC ≥ 14. | Worked around: CLI passes `-DCMAKE_C_FLAGS=-Wno-error=incompatible-pointer-types` to the bare configure. Upstream fix wanted. |
+| **BoringSSL** (via bare-tls/crypto) | fiat adx asm (`fiat_p256_adx_mul/sqr`) only assembles for ELF/Apple; MinGW COFF gets the C references but no definitions → link failure. | Worked around: `-DOPENSSL_NO_ASM=1` on Windows (pure-C crypto, slower EC only). Upstream: MinGW asm support. |
+| **bare** | `bare_bin` (bare.exe) link fails under MinGW: `exports.def` demands `js_enable/disable_garbage_collection_tracking` (not defined by the QuickJS libjs backend) + the BoringSSL issue above. | Avoided: Windows builds `bare_static` (like iOS) — we never ship bare.exe. Module bindings come via the user-modules overlay. Upstream: libjs-quickjs GC-tracking stubs. |
+| **zjs** | Windows entirely untested; libuv-path code-complete. Brotli embedded-asset decode uses Apple `compression_decode_buffer` only (possibly moot — WebView2 may serve `Content-Encoding: br` natively, unconfirmed). libuv vendoring story undefined. No Windows CI. | Out of scope this sprint (parallel session). CLI substitutes the default bare engine for `engine: "zjs"` on Windows (`substituteZjsOnWindows` in cli/src/config.ts) — remove when zjs lands. |
+
 ## Zen-C Docs
 
 https://docs.zenc-lang.org/

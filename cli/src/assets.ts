@@ -66,9 +66,12 @@ export async function generateAssetManifest(root: string, assetDir: string): Pro
   let zc = "// AUTO-GENERATED — embedded assets with brotli compression.\n";
   zc += `// ${assets.length} files, ${Math.round(totalOriginal / 1024)} KB → ${Math.round(totalCompressed / 1024)} KB\n\n`;
 
-  // Embed directives — each asset becomes a byte array in the binary
+  // Embed directives — each asset becomes a byte array in the binary.
+  // Forward slashes: Windows backslash paths ("C:\Users\...") land in
+  // generated C where \U starts a universal character name and fails
+  // to compile.
   for (let i = 0; i < assets.length; i++) {
-    zc += `let __zapp_asset_${i} = embed "${assets[i].brPath}" as u8[];\n`;
+    zc += `let __zapp_asset_${i} = embed "${assets[i].brPath.replace(/\\/g, "/")}" as u8[];\n`;
   }
 
   // Accessor functions — bridge Zen-C embed results to C
@@ -79,7 +82,12 @@ export async function generateAssetManifest(root: string, assetDir: string): Pro
 
   // Asset array initialization (raw C)
   zc += `\nraw {\n`;
-  zc += `    #include <compression.h>\n\n`;
+  // libcompression is Apple-only; the darwin scheme handler does the
+  // brotli decode. Windows serves assets via WebView2 virtual-host
+  // mapping and never touches this header.
+  zc += `    #if defined(__APPLE__)\n`;
+  zc += `    #include <compression.h>\n`;
+  zc += `    #endif\n\n`;
   zc += `    #ifndef ZAPP_EMBEDDED_ASSET_DEFINED\n`;
   zc += `    #define ZAPP_EMBEDDED_ASSET_DEFINED\n`;
   zc += `    typedef struct {\n`;

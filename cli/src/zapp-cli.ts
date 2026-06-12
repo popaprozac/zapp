@@ -209,8 +209,8 @@ async function runDev(root: string) {
 
   // 1. Generate engine overlay (auto-define engines named in headless
   //    config but not declared in build.zc). Must run BEFORE the engine
-  //    builds below so bareEnginesEnabled / hasTxikiEnabled see the
-  //    generated overlay too.
+  //    builds below so bareEnginesEnabled sees the generated overlay
+  //    too.
   const engineOverlayFile = await generateEngineOverlay({ root, target, config });
 
   // 1a. iOS-specific: generate the platform-scoped build file NOW so
@@ -252,7 +252,9 @@ async function runDev(root: string) {
 
   // Generate stub assets file (no embedded assets in dev, but symbols must exist for linking)
   const stubAssets = `// Stub — no embedded assets in dev mode.\nraw {\n` +
+    `    #if defined(__APPLE__)\n` +
     `    #include <compression.h>\n` +
+    `    #endif\n` +
     `    #ifndef ZAPP_EMBEDDED_ASSET_DEFINED\n` +
     `    #define ZAPP_EMBEDDED_ASSET_DEFINED\n` +
     `    typedef struct { const char* path; uint8_t* data; int len; int uncompressed_len; int is_brotli; } ZappEmbeddedAsset;\n` +

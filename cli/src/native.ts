@@ -260,7 +260,7 @@ export async function ensureBareBuilt(
     // for iOS install rules). We just rebuild bare_static. Apps that
     // need bare-tcp/tls/dns/zlib on iOS surface via the user-modules
     // overlay path (`workerModules: ["fetch"]` in zapp.config.ts).
-    const bareTarget = isIOSTarget(target) ? "bare_static" : "bare_bin";
+    const bareTarget = isIOSTarget(target) || target === "windows" ? "bare_static" : "bare_bin";
 
     // Same split-build dance for Hermes — see the matching block
     // below in the first-build path. Idempotent: the downleveler
@@ -295,7 +295,7 @@ export async function ensureBareBuilt(
     // Ensure the combined modules archive exists too — it's a
     // post-build step we own (cmake doesn't bundle the bare-*
     // module bindings into libbare.a).
-    await ensureBareModulesArchive(path.join(bareDir, buildDir), projectRoot);
+    await ensureBareModulesArchive(path.join(bareDir, buildDir), projectRoot, target);
     return bareDir;
   }
 
@@ -324,6 +324,31 @@ export async function ensureBareBuilt(
     // JSC / QuickJS / mQJS / Hermes we build the engine from source.
     `-DBARE_PREBUILDS=${engine === "v8" ? "ON" : "OFF"}`,
   ];
+
+  if (target === "windows") {
+    // The whole app links with MinGW gcc (zc's default cc), so bare
+    // must be MinGW too — MSVC-built C++ statics can't mix into a
+    // MinGW link (different STL + CRT). Without this pin CMake picks
+    // the Visual Studio generator when BuildTools are installed,
+    // which also breaks every artifact path this file checks
+    // (multi-config Release/ subdirs, bare.lib instead of libbare.a,
+    // binding.c.obj instead of binding.c.o). Ninja + gcc gives the
+    // same single-config flat layout as the macOS Makefile path.
+    configureArgs.push(
+      "-G", "Ninja",
+      "-DCMAKE_C_COMPILER=gcc",
+      "-DCMAKE_CXX_COMPILER=g++",
+      // GCC 14+ promoted incompatible-pointer-types to an error;
+      // vendored deps (libuv 1.52.1 src/win/util.c) still trip it.
+      // Downgrade back to a warning — these are upstream's to fix.
+      "-DCMAKE_C_FLAGS=-Wno-error=incompatible-pointer-types",
+      // BoringSSL's fiat adx assembly only assembles for ELF/Apple —
+      // on MinGW COFF the C code references fiat_p256_adx_mul/sqr but
+      // nothing defines them and the final link fails. Pure-C crypto
+      // until upstream grows MinGW asm support (slower EC ops only).
+      "-DOPENSSL_NO_ASM=1",
+    );
+  }
 
   // (libhermes used to ship local-only here; now lives at
   // github:popaprozac/libhermes so cmake-fetch clones it like every
@@ -433,7 +458,14 @@ export async function ensureBareBuilt(
   // See the short-circuit branch above for why iOS targets fall back
   // to `bare_static`. `bare_bin` is a macOS-only convenience to force
   // bare-* module bindings to compile.
-  const bareTarget = isIOSTarget(target) ? "bare_static" : "bare_bin";
+  //
+  // Windows also uses `bare_static`: the bare.exe link fails under
+  // MinGW (exports.def wants js_*_garbage_collection_tracking symbols
+  // the QuickJS backend doesn't define, and BoringSSL's fiat adx asm
+  // doesn't land in libcrypto.a) — and we never ship the exe anyway.
+  // bare-* bindings surface via the user-modules overlay path
+  // (`ensureUserBareModulesCompiled`), same as iOS.
+  const bareTarget = isIOSTarget(target) || target === "windows" ? "bare_static" : "bare_bin";
 
   // For the Hermes engine we need to patch bare's embedded
   // `bare.js.h` after it's generated but before `bare.c.o` is
@@ -467,7 +499,7 @@ export async function ensureBareBuilt(
   if (projectRoot) {
     await ensureUserBareModulesCompiled(bareDir, buildDir, projectRoot, target);
   }
-  await ensureBareModulesArchive(path.join(bareDir, buildDir), projectRoot);
+  await ensureBareModulesArchive(path.join(bareDir, buildDir), projectRoot, target);
 
   clog(0, `Bare (${engine}) built successfully`);
   return bareDir;
@@ -594,16 +626,21 @@ async function ensureUserBareModulesCompiled(
   // 'cmake-npm'".
   const overlayNodeModules = path.join(overlayDir, "node_modules");
   if (!existsSync(overlayNodeModules)) {
+    // "junction" on Windows — real symlinks need Developer Mode or
+    // admin (EPERM otherwise); junctions don't. Node ignores the type
+    // argument on POSIX, so passing it unconditionally is safe.
     await fs.symlink(
       path.join(bareDir, "node_modules"),
       overlayNodeModules,
-      "dir"
+      process.platform === "win32" ? "junction" : "dir"
     );
   }
 
   const linkCalls = linkSpecs
     .map((s) =>
-      `link_bare_module(zapp_user_modules ${s.name} WORKING_DIRECTORY "${s.workingDir}")`
+      // Forward slashes — cmake treats backslashes in quoted strings
+      // as escapes ("C:\Users" → invalid escape '\U').
+      `link_bare_module(zapp_user_modules ${s.name} WORKING_DIRECTORY "${s.workingDir.replace(/\\/g, "/")}")`
     )
     .join("\n");
   const cmakeLists = `cmake_minimum_required(VERSION 4.0)
@@ -648,6 +685,19 @@ ${linkCalls}
     "-B", overlayBuildDir,
     "-DCMAKE_BUILD_TYPE=Release",
   ];
+  if (target === "windows") {
+    // Same toolchain pin as the main bare configure in ensureBareBuilt
+    // — the overlay's objects must link into the MinGW app build, and
+    // the default VS generator breaks both the ABI and the flat
+    // single-config artifact layout swept by ensureBareModulesArchive.
+    configureArgs.push(
+      "-G", "Ninja",
+      "-DCMAKE_C_COMPILER=gcc",
+      "-DCMAKE_CXX_COMPILER=g++",
+      "-DCMAKE_C_FLAGS=-Wno-error=incompatible-pointer-types",
+      "-DOPENSSL_NO_ASM=1", // see matching flag in ensureBareBuilt
+    );
+  }
   if (isIOSTarget(target)) {
     const sdk = target === "ios-simulator" ? "iphonesimulator" : "iphoneos";
     const proc = Bun.spawn(["xcrun", "--sdk", sdk, "--show-sdk-path"], { stdout: "pipe" });
@@ -691,10 +741,31 @@ ${linkCalls}
 async function ensureBareModulesArchive(
   buildDir: string,
   projectRoot?: string,
+  target?: BuildTarget,
 ): Promise<void> {
   const fs = await import("node:fs/promises");
   const archivePath = path.join(buildDir, "libbare_modules.a");
   const objects: string[] = [];
+
+  // 0. Windows only: liblog (holepunchto) builds as a CMake OBJECT
+  //    library that bare_bin normally absorbs — but Windows builds
+  //    bare_static, leaving log_error/log_warn/... undefined for the
+  //    binding.c objects below. Sweep its objects into this archive.
+  //    NOT on macOS: libbare.a defines log_* there, and force_load of
+  //    a duplicate copy would break that link.
+  if (target === "windows") {
+    const liblogDir = path.join(
+      buildDir, "_deps", "github+holepunchto+liblog-build", "CMakeFiles", "log.dir", "src",
+    );
+    if (existsSync(liblogDir)) {
+      const logObjs = await fs.readdir(liblogDir);
+      for (const o of logObjs) {
+        if (o.endsWith(".o") || o.endsWith(".obj")) {
+          objects.push(path.join(liblogDir, o));
+        }
+      }
+    }
+  }
 
   // 1. bare-* npm module bindings (binding.c.o) — each registers itself
   //    via static-init so they must be force-loaded at the final link.
@@ -707,8 +778,12 @@ async function ensureBareModulesArchive(
       const dirs = await fs.readdir(cmakeFiles);
       for (const d of dirs) {
         if (d.endsWith("_module.dir")) continue;
-        const candidate = path.join(cmakeFiles, d, "binding.c.o");
-        if (existsSync(candidate)) objects.push(candidate);
+        // CMake names objects binding.c.o on Unix and binding.c.obj on
+        // Windows (even under MinGW gcc).
+        for (const objName of ["binding.c.o", "binding.c.obj"]) {
+          const candidate = path.join(cmakeFiles, d, objName);
+          if (existsSync(candidate)) objects.push(candidate);
+        }
       }
     }
   }
@@ -725,8 +800,10 @@ async function ensureBareModulesArchive(
       const dirs = await fs.readdir(cmakeFiles);
       for (const d of dirs) {
         if (d.endsWith("_module.dir")) continue;
-        const candidate = path.join(cmakeFiles, d, "binding.c.o");
-        if (existsSync(candidate)) objects.push(candidate);
+        for (const objName of ["binding.c.o", "binding.c.obj"]) {
+          const candidate = path.join(cmakeFiles, d, objName);
+          if (existsSync(candidate)) objects.push(candidate);
+        }
       }
     }
     // The overlay also fetches per-module C deps (e.g. madler/zlib for

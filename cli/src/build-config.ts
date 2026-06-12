@@ -49,7 +49,10 @@ export async function generateBuildConfig(opts: BuildConfigOptions): Promise<str
 
   const isDev = mode === "dev";
   const initialUrl = isDev && devUrl ? devUrl : "";
-  const assetRoot = isDev ? "" : path.resolve(root, config.assetDir);
+  // Forward slashes: this lands inside a C string literal where
+  // Windows "\U..." paths are parsed as universal character names and
+  // fail to compile. Win32 file APIs accept forward slashes.
+  const assetRoot = isDev ? "" : path.resolve(root, config.assetDir).replace(/\\/g, "/");
   const devTools = isDev ? 1 : 0;
 
   // Runtime policies (acceptFirstMouse, allowNavigation) moved to Zen-C
@@ -780,7 +783,10 @@ export async function generatePlatformConfig(
             allLinkSearchDirs.push(shortPath(
               path.join(bareBuild, "_deps", "github+quickjs-ng+quickjs-build")
             ));
-            allLinkLibs.push("-lqjs", "-lc++");
+            // C++ runtime: Apple links libc++; the MinGW link (gcc
+            // driver, see the Windows pin in ensureBareBuilt) needs
+            // libstdc++ spelled explicitly.
+            allLinkLibs.push("-lqjs", target === "windows" ? "-lstdc++" : "-lc++");
           }
           if (engine === "mqjs") {
             allLinkLibs.push("-lmqjs");
@@ -883,7 +889,16 @@ export async function generatePlatformConfig(
           // in cli/src/native.ts after the bare cmake build.
           const libBareModules = path.join(bareBuild, "libbare_modules.a");
           if (existsSync(libBareModules)) {
-            allLinkLibs.push(`-Wl,-force_load,${shortPath(libBareModules)}`);
+            if (target === "windows") {
+              // GNU ld spelling of force_load.
+              allLinkLibs.push(
+                "-Wl,--whole-archive",
+                shortPath(libBareModules),
+                "-Wl,--no-whole-archive",
+              );
+            } else {
+              allLinkLibs.push(`-Wl,-force_load,${shortPath(libBareModules)}`);
+            }
           }
 
           // Several bare-* bindings have heavyweight transitive
@@ -935,19 +950,26 @@ export async function generatePlatformConfig(
               // Pull any existing `-lc++` out of the list first, then
               // re-push it here. Idempotent in the dedup sense, but
               // order-sensitive — which is the whole point.
-              const cppIdx = allLinkLibs.indexOf("-lc++");
+              const cxxLib = target === "windows" ? "-lstdc++" : "-lc++";
+              const cppIdx = allLinkLibs.indexOf(cxxLib);
               if (cppIdx >= 0) allLinkLibs.splice(cppIdx, 1);
-              allLinkLibs.push("-lc++");
+              allLinkLibs.push(cxxLib);
             }
             const caresLib = path.join(depRoot, "github+c-ares+c-ares-build", "src", "lib", "libcares.a");
             if (existsSync(caresLib)) {
               const flag = shortPath(caresLib);
               if (!allLinkLibs.includes(flag)) allLinkLibs.push(flag);
             }
-            const zlibLib = path.join(depRoot, "github+madler+zlib-build", "libz.a");
-            if (existsSync(zlibLib)) {
-              const flag = shortPath(zlibLib);
-              if (!allLinkLibs.includes(flag)) allLinkLibs.push(flag);
+            // zlib's cmake names the static archive libz.a on Unix but
+            // libzlibstatic.a on Windows (to avoid clashing with the
+            // import lib of the DLL it also builds).
+            for (const zlibName of ["libz.a", "libzlibstatic.a"]) {
+              const zlibLib = path.join(depRoot, "github+madler+zlib-build", zlibName);
+              if (existsSync(zlibLib)) {
+                const flag = shortPath(zlibLib);
+                if (!allLinkLibs.includes(flag)) allLinkLibs.push(flag);
+                break;
+              }
             }
           }
         }
@@ -961,9 +983,16 @@ export async function generatePlatformConfig(
   // link: lines caused only the first to be honored in tests on
   // zc v0.4.3.
   if (allLinkLibs.length > 0 || allLinkSearchDirs.length > 0) {
+    // GNU ld (Windows/MinGW) resolves archives in a single left-to-right
+    // pass, so the whole-archive modules .a can't see symbols from
+    // -lutf/-lbare listed before it. --start/end-group makes ld iterate
+    // the set to a fixed point — order-insensitive like Apple's ld.
+    const libs = target === "windows"
+      ? ["-Wl,--start-group", ...allLinkLibs, "-Wl,--end-group"]
+      : allLinkLibs;
     const allFlags = [
       ...allLinkSearchDirs.map(d => `-L${d}`),
-      ...allLinkLibs,
+      ...libs,
     ];
     content += `//> link: ${allFlags.join(" ")}\n`;
   }
@@ -1208,6 +1237,10 @@ export async function generatePlatformConfig(
     // additional libs go in `extraLinkFlags.windows` in zapp.config.ts.
     content += `//> windows: link: -lole32 -lshell32 -luuid -luser32 -lgdi32 -lcomctl32 -lcomdlg32 -lshlwapi\n`;
     content += `//> windows: link: -lwinhttp -lbcrypt -ladvapi32 -lrpcrt4 -lcrypt32 -lversion\n`;
+    // libuv (via bare) and BoringSSL system deps. Harmless when no
+    // worker engine is compiled in — unreferenced import libs are
+    // dropped by the linker.
+    content += `//> windows: link: -lws2_32 -liphlpapi -luserenv -ldbghelp -lpsapi\n`;
     // App-declared extras from zapp.config.ts. `extraFrameworks` is
     // a no-op here (Apple-only concept); use `extraLinkFlags.windows`
     // for `-l<name>` and similar.

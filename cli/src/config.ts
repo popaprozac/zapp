@@ -896,6 +896,39 @@ function rejectRemovedEngines(config: ZappConfig): void {
   }
 }
 
+// zjs doesn't build on Windows yet — its libuv event-loop path is
+// written but the vendor build has no Windows story (tracked as a
+// separate parity workstream). Until it lands, configs that pin
+// `engine: "zjs"` get the platform's default bare engine instead of a
+// cryptic `zjs.h: No such file` compile error, so the same
+// zapp.config.ts keeps working on both platforms. Remove this pass
+// when zjs ships Windows support.
+let _zjsSubstituteWarned = false;
+async function substituteZjsOnWindows(config: ZappConfig): Promise<void> {
+  const { detectTarget, defaultBareEngine } = await import("./native");
+  const target = detectTarget();
+  if (target !== "windows") return;
+  const fallback = `bare-${defaultBareEngine(target)}` as const;
+  const substituted: string[] = [];
+  for (const [id, entry] of Object.entries(config.headless ?? {})) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const e = entry as { engine?: string; bytecode?: boolean };
+    if (e.engine !== "zjs") continue;
+    e.engine = fallback;
+    if (e.bytecode) delete e.bytecode; // zjs-only feature
+    substituted.push(id);
+  }
+  if (substituted.length > 0 && !_zjsSubstituteWarned) {
+    _zjsSubstituteWarned = true;
+    const { clogError } = await import("./log");
+    clogError(
+      `engine "zjs" is not yet available on Windows — substituting "${fallback}" ` +
+      `for headless worker(s): ${substituted.join(", ")} (bytecode disabled where set). ` +
+      `zjs Windows support is tracked separately; this substitution will be removed when it lands.`
+    );
+  }
+}
+
 export async function loadConfig(root: string): Promise<ResolvedConfig> {
   const configPath = path.join(root, "zapp.config.ts");
   try {
@@ -904,6 +937,7 @@ export async function loadConfig(root: string): Promise<ResolvedConfig> {
     const config = (typeof mod.default === "function" ? mod.default() : mod.default) as ZappConfig;
     validateWebEngine(config.webEngine);
     rejectRemovedEngines(config);
+    await substituteZjsOnWindows(config);
     validateNative(config);
     const permErrors = validatePermissions(config.permissions);
     if (permErrors.length > 0) {

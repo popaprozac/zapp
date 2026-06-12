@@ -41,6 +41,27 @@ fn dock_set_icon(path: string) -> void { darwin_dock::darwin_dock_set_icon(path)
 @cfg(apple)
 fn dock_reset_icon() -> void { darwin_dock::darwin_dock_reset_icon(); }
 
+// Windows: no dock. Badge/flash analogues exist via ITaskbarList3 —
+// tracked for the parity sprint (M3); until then these are no-ops so
+// shared callers (app.zc dock routes) compile and behave like the
+// documented "macOS only" runtime API.
+@cfg(windows)
+fn dock_show_icon() -> void {}
+@cfg(windows)
+fn dock_hide_icon() -> void {}
+@cfg(windows)
+fn dock_set_badge(label: string) -> void {}
+@cfg(windows)
+fn dock_remove_badge() -> void {}
+@cfg(windows)
+fn dock_get_badge() -> string { return ""; }
+@cfg(windows)
+fn dock_bounce(bounce_type: int) -> void {}
+@cfg(windows)
+fn dock_set_icon(path: string) -> void {}
+@cfg(windows)
+fn dock_reset_icon() -> void {}
+
 // --- Manager (namespaced via app.dock) ---
 
 struct DockManager {}

@@ -666,22 +666,37 @@ const WORKER_MODULE_GLOBALS: Record<string, string | null> = {
   encoding:  "/encoding",
 };
 
+// Mirrors substituteZjsOnWindows in cli/src/config.ts — zjs doesn't
+// build on Windows yet, so the CLI swaps zjs workers to the default
+// bare engine there. The plugin must agree or engine-dependent bundle
+// decisions (workerModules shim injection, bytecode artifacts) diverge
+// from what actually runs. Remove both when zjs ships Windows support.
+function effectiveEngine(engine: string | undefined): string | undefined {
+  if (engine === "zjs" && process.platform === "win32") return "bare-quickjs";
+  return engine;
+}
+
 function resolveHeadlessEntries(root: string, headless?: ZappWorkersOptions["headless"]): WorkerEntry[] {
   if (!headless) return [];
   const entries: WorkerEntry[] = [];
   for (const [id, value] of Object.entries(headless)) {
     const srcPath = typeof value === "string" ? value : value.script;
-    const engine = typeof value === "string" ? undefined : value.engine;
-    const bytecode = typeof value === "object" && value !== null ? !!value.bytecode : false;
+    const configuredEngine = typeof value === "string" ? undefined : value.engine;
+    const engine = effectiveEngine(configuredEngine);
+    // The Windows zjs substitution drops bytecode silently (the CLI
+    // already warns); a non-zjs engine configured WITH bytecode is a
+    // user mistake and keeps its warning below.
+    const bytecode = (typeof value === "object" && value !== null ? !!value.bytecode : false)
+      && engine === "zjs";
     const abs = path.resolve(root, srcPath);
     if (!existsSync(abs)) {
       console.warn(`[zapp] headless worker "${id}" not found at ${srcPath}`);
       continue;
     }
-    if (bytecode && engine !== "zjs") {
+    if (typeof value === "object" && value !== null && value.bytecode && configuredEngine !== "zjs") {
       console.warn(
         `[zapp] headless worker "${id}": \`bytecode: true\` is only honoured for ` +
-        `\`engine: "zjs"\` — ignoring on engine "${engine}".`
+        `\`engine: "zjs"\` — ignoring on engine "${configuredEngine}".`
       );
     }
     // outputName/Url stay .mjs through the Vite bundle phase; the

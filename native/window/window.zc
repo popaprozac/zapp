@@ -730,7 +730,12 @@ struct App;
 struct WindowManager {
     app: App*;
     webContentInspectable: bool;
-    handles: Map<void*>;
+    // u64, not void*: `Map<void*>` makes current zc also emit a phantom
+    // `MapEntry__void` ("void val;" — invalid C). See the Zen-C entry in
+    // WINDOWS_PORTING.md's vendor ledger; revert to Map<void*> when the
+    // upstream fix lands. Values are window handles, cast at the 4 call
+    // sites below.
+    handles: Map<u64>;
     next_id: int;
 }
 
@@ -739,7 +744,7 @@ impl WindowManager {
         return WindowManager{
             app: NULL,
             webContentInspectable: true,
-            handles: Map<void*>::new(),
+            handles: Map<u64>::new(),
             next_id: 0,
         };
     }
@@ -778,7 +783,7 @@ impl WindowManager {
         let handle = window_create(options);
         let key: char[32];
         c::snprintf(key, 32, "win-%d", id);
-        self.handles.put(key, handle);
+        self.handles.put(key, (u64)handle);
         window_register_numeric_id(handle, id);
         let new_window = Window{ id: id, handle: handle };
 
@@ -808,7 +813,7 @@ impl WindowManager {
         c::snprintf(key, 32, "win-%d", id);
         let maybe = self.handles.get(key);
         if maybe.is_some() {
-            return Window{ id: id, handle: maybe.unwrap() };
+            return Window{ id: id, handle: (void*)maybe.unwrap() };
         }
         return Window{ id: id, handle: NULL };
     }
@@ -819,7 +824,7 @@ impl WindowManager {
         let maybe = self.handles.get(key);
         if maybe.is_some() {
             self.handles.remove(key);
-            window_destroy(maybe.unwrap());
+            window_destroy((void*)maybe.unwrap());
         }
     }
 }
@@ -937,3 +942,6 @@ fn window_get_position(handle: void*) -> WindowPosition {
     win_window::windows_window_get_position(handle, &x, &y);
     return WindowPosition{ x: x, y: y };
 }
+
+@cfg(windows)
+fn window_load_url(id: int, url: string) -> void { win_window::windows_window_load_url(id, url); }
