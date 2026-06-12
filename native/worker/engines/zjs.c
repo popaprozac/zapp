@@ -1227,7 +1227,12 @@ static char* zjs_load_script(const char* script_url, long* out_len) {
     }
 
     if (!code) {
-        FILE* f = fopen(script_path, "r");
+        // "rb", not "r": on Windows text mode translates CRLF and stops
+        // at Ctrl-Z, so fread returns fewer bytes than ftell's length
+        // for any binary artifact (.zbc bytecode) — the strict length
+        // check below then frees the buffer and the load reports
+        // "script not found". POSIX ignores the 'b'.
+        FILE* f = fopen(script_path, "rb");
         if (f) {
             fseek(f, 0, SEEK_END);
             code_len = ftell(f);

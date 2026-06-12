@@ -442,7 +442,9 @@ static char* bare_load_script(const char* script_url, int* out_len) {
         basename = basename ? basename + 1 : script_url;
         char path_buf[512];
         snprintf(path_buf, sizeof(path_buf), "%s/.zapp/workers/%s", cwd, basename);
-        FILE* f = fopen(path_buf, "r");
+        // "rb" — see zjs.c's loader: Windows text mode corrupts binary
+        // artifacts and shortens reads. POSIX ignores the 'b'.
+        FILE* f = fopen(path_buf, "rb");
         if (f) {
             fseek(f, 0, SEEK_END);
             long len = ftell(f);
