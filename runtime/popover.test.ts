@@ -20,7 +20,8 @@ describe("normalizeAnchor", () => {
 
   test("garbage throws", () => {
     expect(() => normalizeAnchor({} as any)).toThrow(/invalid anchor/);
-    expect(() => normalizeAnchor(null as any)).toThrow(/invalid anchor/);
+    // null gets the e.currentTarget-after-await hint (the common real cause)
+    expect(() => normalizeAnchor(null as any)).toThrow(/BEFORE any await/);
   });
 });
 

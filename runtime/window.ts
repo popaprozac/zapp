@@ -256,6 +256,15 @@ export type Anchor =
 
 /** Normalize any Anchor to the wire rect. Pure — unit-tested. */
 export function normalizeAnchor(anchor: Anchor): { x: number; y: number; width: number; height: number } {
+  if (anchor == null) {
+    // The most common way to get here: `show(e.currentTarget)` after an
+    // `await` — currentTarget is nulled when event dispatch ends. Spell
+    // that out; the generic message below sends people in circles.
+    throw new Error(
+      "[zapp] anchor: got null/undefined — if this was e.currentTarget, " +
+      "capture it in a variable BEFORE any await (currentTarget is null once dispatch ends)",
+    );
+  }
   if (typeof (anchor as any)?.getBoundingClientRect === "function") {
     const r = (anchor as Element).getBoundingClientRect();
     return { x: r.left, y: r.top, width: r.width, height: r.height };
