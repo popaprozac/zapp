@@ -29,6 +29,8 @@ import { getBridge } from "./bridge";
 import { Events } from "./events";
 import { ensurePermission } from "./permissions";
 import type { MenuItemDef } from "./menu";
+import type { Anchor } from "./window";
+import { normalizeAnchor } from "./window";
 
 let ctxActionCounter = 0;
 
@@ -80,11 +82,12 @@ export interface ContextMenuOptions {
    */
   event?: MouseEvent | PointerEvent;
   /**
-   * Show the menu anchored to this element — positions the menu at the
-   * element's bottom-left corner, matching the native dropdown-button
-   * convention. Uses `getBoundingClientRect()`.
+   * Show the menu anchored to this Anchor (shared vocabulary with
+   * popover.show): an Element (menu at its bottom-left, the dropdown-button
+   * convention), a MouseEvent (at clientX/Y), or a {x, y, width?, height?}
+   * rect (at its bottom-left).
    */
-  anchor?: Element;
+  anchor?: Anchor;
 }
 
 function resolvePosition(options?: ContextMenuOptions): { x: number; y: number } {
@@ -95,8 +98,8 @@ function resolvePosition(options?: ContextMenuOptions): { x: number; y: number }
     return { x: options.event.clientX, y: options.event.clientY };
   }
   if (options?.anchor) {
-    const r = options.anchor.getBoundingClientRect();
-    return { x: r.left, y: r.bottom };
+    const r = normalizeAnchor(options.anchor);
+    return { x: r.x, y: r.y + r.height };  // bottom-left, dropdown convention
   }
   return { x: lastPointerX, y: lastPointerY };
 }

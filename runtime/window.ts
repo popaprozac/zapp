@@ -19,6 +19,7 @@
 import { getBridge } from "./bridge";
 import { WindowEvent, eventName, type WindowSizePayload, type WindowPayload, type ModalDismissedPayload, type SidebarResizedPayload } from "./events";
 import type { Display } from "./screen";
+import type { MenuItemDef } from "./menu";
 
 /**
  * Native background materials (NSVisualEffectMaterial names). Used by the
@@ -232,6 +233,10 @@ export interface ToolbarItemDef {
   icon?: string;
   /** Creator-context callback (menu pattern). Stripped before the wire. */
   action?: () => void;
+  /** Pull-down menu (NSMenuToolbarItem — e.g. Mail's filter button). Items
+   *  are the same MenuItemDef used by Menu/ContextMenu/Tray; their `action`
+   *  callbacks run in this (creator) context via the __menu:click pipeline. */
+  menu?: MenuItemDef[];
 }
 
 /** Options for a native toolbar (NSToolbar) attached at Window.create. */
@@ -239,6 +244,73 @@ export interface ToolbarOptions {
   items: ToolbarItemDef[];
   /** NSWindow.toolbarStyle. Default "unified". macOS only. */
   style?: "unified" | "unifiedCompact" | "expanded";
+}
+
+/** Shared anchor vocabulary — also accepted by ContextMenu.show's anchor.
+ * Element is measured at show time (one-shot); MouseEvent becomes a 1x1
+ * point rect at clientX/Y; rects are pane-viewport CSS pixels. */
+export type Anchor =
+  | Element
+  | { x: number; y: number; width?: number; height?: number }
+  | MouseEvent;
+
+/** Normalize any Anchor to the wire rect. Pure — unit-tested. */
+export function normalizeAnchor(anchor: Anchor): { x: number; y: number; width: number; height: number } {
+  if (anchor == null) {
+    // The most common way to get here: `show(e.currentTarget)` after an
+    // `await` — currentTarget is nulled when event dispatch ends. Spell
+    // that out; the generic message below sends people in circles.
+    throw new Error(
+      "[zapp] anchor: got null/undefined — if this was e.currentTarget, " +
+      "capture it in a variable BEFORE any await (currentTarget is null once dispatch ends)",
+    );
+  }
+  if (typeof (anchor as any)?.getBoundingClientRect === "function") {
+    const r = (anchor as Element).getBoundingClientRect();
+    return { x: r.left, y: r.top, width: r.width, height: r.height };
+  }
+  if (typeof (anchor as any)?.clientX === "number" && typeof (anchor as any)?.clientY === "number") {
+    const e = anchor as MouseEvent;
+    return { x: e.clientX, y: e.clientY, width: 1, height: 1 };
+  }
+  const r = anchor as { x: number; y: number; width?: number; height?: number };
+  if (typeof r?.x !== "number" || typeof r?.y !== "number") {
+    throw new Error("[zapp] anchor: invalid anchor — pass an Element, a MouseEvent, or {x, y, width?, height?}");
+  }
+  return { x: r.x, y: r.y, width: r.width ?? 1, height: r.height ?? 1 };
+}
+
+/** Options for a native popover (NSPopover) hosting trusted web content. */
+export interface PopoverOptions {
+  /** Entry URL/route — resolves like sidebar.url (app routes only). Required. */
+  url: string;
+  /** Content size in points. Defaults 320x400. */
+  width?: number;
+  height?: number;
+  /** NSPopover.behavior. Default "transient" (auto-dismiss on outside click). */
+  behavior?: "transient" | "semitransient" | "applicationDefined";
+}
+
+const POPOVER_BEHAVIORS = ["transient", "semitransient", "applicationDefined"];
+
+/** Validate + default PopoverOptions. Pure — unit-tested. */
+export function normalizePopoverOptions(opts: PopoverOptions): { url: string; width: number; height: number; behavior: string } {
+  if (!opts?.url) throw new Error('[zapp] popover: "url" is required');
+  const behavior = opts.behavior ?? "transient";
+  if (!POPOVER_BEHAVIORS.includes(behavior)) {
+    throw new Error(`[zapp] popover: invalid behavior "${behavior}"`);
+  }
+  return { url: opts.url, width: opts.width ?? 320, height: opts.height ?? 400, behavior };
+}
+
+/** A handle to a persistent popover. The pane webview loads once at create
+ * (warm); show()/hide() reuse it and page state survives; destroy() frees
+ * the webview and its dispatch slot. */
+export interface PopoverHandle {
+  readonly id: string;
+  show(anchor: Anchor | { toolbarItem: string }, opts?: { edge?: "top" | "bottom" | "left" | "right" }): void;
+  hide(): void;
+  destroy(): void;
 }
 
 /** Toolbar action callbacks keyed "<windowId>:<itemId>" — Menu.build's
@@ -256,18 +328,53 @@ function wireToolbarClicks(): void {
   });
 }
 
+let tbMenuIdCounter = 0;
+/** Toolbar pull-down menu actions, keyed by menu-item id ("__menu:click"
+ * carries only the id — app-global like Menu.build; reused ids across
+ * windows collide, same caveat as Menu). App-lifetime, like toolbarActions. */
+const toolbarMenuActions = new Map<string, () => void>();
+let toolbarMenuClickWired = false;
+
+function wireToolbarMenuClicks(): void {
+  if (toolbarMenuClickWired) return;
+  toolbarMenuClickWired = true;
+  getBridge().on("__menu:click", (payload: any) => {
+    const id = typeof payload === "string" ? JSON.parse(payload).id : payload?.id;
+    const fn = toolbarMenuActions.get(id);
+    if (fn) fn();
+  });
+}
+
+/** Strip `action` callbacks out of a MenuItemDef tree (recursing submenus),
+ * collecting them into `out` keyed by (possibly auto-generated) id. Mirrors
+ * context-menu.ts's collectAndStrip. */
+function stripMenuActions(items: MenuItemDef[], out: Map<string, () => void>): any[] {
+  return items.map((item) => {
+    const clean: any = { ...item };
+    if (clean.action) {
+      if (!clean.id) clean.id = `__tbmenu_${++tbMenuIdCounter}`;
+      out.set(clean.id, clean.action);
+      delete clean.action;
+    }
+    if (clean.submenu) clean.submenu = stripMenuActions(clean.submenu, out);
+    return clean;
+  });
+}
+
 /** Validate a ToolbarOptions and split it into the wire JSON (actions
- * stripped, defaults applied) and the action map. Pure — unit-tested. */
+ * stripped, defaults applied) and the action maps. Pure — unit-tested. */
 export function normalizeToolbar(
   toolbar: ToolbarOptions,
   hasSidebar: boolean,
-): { json: string; actions: Map<string, () => void> } {
+): { json: string; actions: Map<string, () => void>; menuActions: Map<string, () => void> } {
   const actions = new Map<string, () => void>();
+  const menuActions = new Map<string, () => void>();
   const seen = new Set<string>();
   const items: Record<string, unknown>[] = [];
   for (const item of toolbar.items ?? []) {
     const type = item.type ?? "button";
     if (type === "toggleSidebar" || type === "trackingSeparator") {
+      if ((item as any).menu) throw new Error('[zapp] toolbar: "menu" is only valid on button items');
       if (!hasSidebar) {
         console.warn(`[zapp] toolbar: "${type}" requires the window to have a sidebar — item dropped`);
         continue;
@@ -276,10 +383,14 @@ export function normalizeToolbar(
       continue;
     }
     if (type === "space" || type === "flexibleSpace") {
+      if ((item as any).menu) throw new Error('[zapp] toolbar: "menu" is only valid on button items');
       items.push({ type });
       continue;
     }
     if (!item.id) throw new Error('[zapp] toolbar: button items require an "id"');
+    if (item.action && item.menu) {
+      throw new Error('[zapp] toolbar: a button cannot have both "action" and "menu" — the menu consumes the click');
+    }
     if (!/^[A-Za-z0-9._-]+$/.test(item.id) || item.id.startsWith("zapp.") || item.id.startsWith("NSToolbar")) {
       throw new Error(
         `[zapp] toolbar: invalid item id "${item.id}" — use letters, digits, ".", "_", "-" (ids prefixed "zapp." or "NSToolbar" are reserved)`,
@@ -288,9 +399,11 @@ export function normalizeToolbar(
     if (seen.has(item.id)) throw new Error(`[zapp] toolbar: duplicate item id "${item.id}"`);
     seen.add(item.id);
     if (item.action) actions.set(item.id, item.action);
-    items.push({ type: "button", id: item.id, label: item.label ?? "", icon: item.icon ?? "" });
+    const wire: Record<string, unknown> = { type: "button", id: item.id, label: item.label ?? "", icon: item.icon ?? "" };
+    if (item.menu) wire.menu = stripMenuActions(item.menu, menuActions);
+    items.push(wire);
   }
-  return { json: JSON.stringify({ style: toolbar.style ?? "unified", items }), actions };
+  return { json: JSON.stringify({ style: toolbar.style ?? "unified", items }), actions, menuActions };
 }
 
 /** A handle to the sidebar attached to a window. */
@@ -368,6 +481,9 @@ export interface WindowHandle {
    * gone — that path auto-detaches anyway.
    */
   detachModal(modal: WindowHandle): void;
+
+  /** Create a persistent native popover owned by this window. macOS only. */
+  createPopover(opts: PopoverOptions): Promise<PopoverHandle>;
 }
 
 /** Send a window action to native. Uses message type 4 (WINDOW_ACTION). */
@@ -485,6 +601,38 @@ function createWindowHandle(windowId: string, sidebarOpts?: SidebarOptions): Win
     sidebar: sidebarOpts !== undefined
       ? createSidebarHandle(windowId, sidebarOpts.collapsed ?? false, sidebarOpts.width ?? 260)
       : undefined,
+
+    async createPopover(opts: PopoverOptions): Promise<PopoverHandle> {
+      // Worker contexts can't measure elements and the worker bridges
+      // don't route __popover:create — webview-only in v1.
+      if ((globalThis as any).__zappBridge) {
+        throw new Error("[zapp] createPopover is only available in WebView contexts (v1)");
+      }
+      const norm = normalizePopoverOptions(opts);
+      const r = await bridge.invoke("__popover:create", { windowId, ...norm }) as { popoverId: string };
+      const popoverId = r.popoverId;
+      return {
+        id: popoverId,
+        show(anchor: Anchor | { toolbarItem: string }, showOpts?: { edge?: "top" | "bottom" | "left" | "right" }) {
+          const isToolbar = typeof anchor === "object" && anchor !== null &&
+            "toolbarItem" in anchor &&
+            typeof (anchor as any).getBoundingClientRect !== "function";
+          let a: Record<string, unknown>;
+          if (isToolbar) {
+            const tid = (anchor as { toolbarItem: string }).toolbarItem;
+            if (!/^[A-Za-z0-9._-]+$/.test(tid)) {
+              throw new Error(`[zapp] popover: invalid toolbarItem id "${tid}"`);
+            }
+            a = { toolbarItem: tid };
+          } else {
+            a = normalizeAnchor(anchor as Anchor);
+          }
+          windowAction("popover:show", { windowId, popoverId, anchor: a, edge: showOpts?.edge ?? "bottom" });
+        },
+        hide()    { windowAction("popover:hide",    { windowId, popoverId }); },
+        destroy() { windowAction("popover:destroy", { windowId, popoverId }); },
+      };
+    },
   };
 }
 
@@ -538,10 +686,14 @@ export const Window = {
     // windowId is known.
     let pendingToolbarActions: Map<string, () => void> | undefined;
     if (opts?.toolbar) {
-      const { json, actions } = normalizeToolbar(opts.toolbar, opts.sidebar !== undefined);
+      const { json, actions, menuActions } = normalizeToolbar(opts.toolbar, opts.sidebar !== undefined);
       normalized.toolbarJson = json;
       delete normalized.toolbar;
       if (actions.size > 0) pendingToolbarActions = actions;
+      if (menuActions.size > 0) {
+        wireToolbarMenuClicks();
+        for (const [id, fn] of menuActions) toolbarMenuActions.set(id, fn);
+      }
     }
     const registerToolbarActions = (windowId: string) => {
       if (!pendingToolbarActions) return;

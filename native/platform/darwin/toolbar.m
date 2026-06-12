@@ -15,6 +15,9 @@ extern void darwin_webview_eval_all(const char* js);
 extern void worker_broadcast_eval_js(char* js);
 // menu.m (de-static'ed): sf:/file-path/data-URL icon resolver.
 extern NSImage* zapp_resolve_icon(NSString* spec, CGFloat size, int templateMode);
+// menu.m: builds a retained NSMenu from a MenuItemDef JSON array; clicks
+// ride the existing __menu:click broadcast (zero new plumbing here).
+extern void* darwin_menu_build_from_items_json(const char* items_json);
 // window.m dispatch-table lookups: pane webviews for chrome-metrics injection.
 extern WKWebView* zapp_webview_for_slot(int32_t slot);
 extern int32_t zapp_sidebar_slot_lookup(int32_t host_slot);
@@ -95,6 +98,31 @@ static NSMutableDictionary<NSValue*, ZappToolbarController*>* zapp_toolbars = ni
     // AppKit builds toggle/space items itself).
     NSDictionary* def = self.buttonsById[identifier];
     if (!def) return nil;
+
+    // Pull-down menu item (Mail's filter button). The runtime stripped the
+    // action callbacks; this re-serializes the cleaned MenuItemDef array for
+    // menu.m's JSON builder. Clicks dispatch via __menu:click as usual.
+    NSArray* menuItems = [def[@"menu"] isKindOfClass:[NSArray class]] ? def[@"menu"] : nil;
+    if (menuItems.count) {
+        if (@available(macOS 10.15, *)) {
+            NSMenuToolbarItem* mitem = [[NSMenuToolbarItem alloc] initWithItemIdentifier:identifier];
+            NSString* mlabel = [def[@"label"] isKindOfClass:[NSString class]] ? def[@"label"] : @"";
+            mitem.label = mlabel;
+            mitem.paletteLabel = mlabel.length ? mlabel : identifier;
+            mitem.toolTip = mlabel;
+            NSString* micon = [def[@"icon"] isKindOfClass:[NSString class]] ? def[@"icon"] : @"";
+            if (micon.length) {
+                mitem.image = zapp_resolve_icon(micon, 18.0, 1);
+            }
+            NSData* mdata = [NSJSONSerialization dataWithJSONObject:menuItems options:0 error:nil];
+            NSString* mjson = mdata ? [[NSString alloc] initWithData:mdata encoding:NSUTF8StringEncoding] : nil;
+            NSMenu* menu = mjson ? (__bridge_transfer NSMenu*)darwin_menu_build_from_items_json([mjson UTF8String]) : nil;
+            if (menu) mitem.menu = menu;
+            mitem.showsIndicator = YES; // the chevron
+            return mitem;
+        }
+        // < 10.15: fall through to a plain button (clicks still broadcast).
+    }
 
     NSToolbarItem* item = [[NSToolbarItem alloc] initWithItemIdentifier:identifier];
     NSString* label = [def[@"label"] isKindOfClass:[NSString class]] ? def[@"label"] : @"";

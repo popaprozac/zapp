@@ -10,16 +10,17 @@
 extern void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first_mouse,
                                   const char* url_override, int32_t numeric_id_pre_alloc,
                                   bool transparent_background);
-// Extended creation path (native-sidebar). container_view mounts the webview
-// into a caller-provided NSView; identity_window_id (>=0) injects win-<that>
-// as the JS identity while transport stays on numeric_id_pre_alloc; is_sidebar
-// sets the isSidebar marker. Declared in webview.h; redeclared here because
-// window.m imports window.h, not webview.h.
+// Extended creation path (native-sidebar + popovers). container_view mounts
+// the webview into a caller-provided NSView; identity_window_id (>=0) injects
+// win-<that> as the JS identity while transport stays on numeric_id_pre_alloc;
+// pane_role (0=main, 1=sidebar, 2=popover) sets the role marker.
+// Declared in webview.h; redeclared here because window.m imports window.h,
+// not webview.h.
 extern void darwin_webview_create_ext(void* window_ptr, bool inspectable, bool accept_first_mouse,
                                       const char* url_override, int32_t numeric_id_pre_alloc,
                                       bool transparent_background,
                                       void* container_view, int32_t identity_window_id,
-                                      bool is_sidebar);
+                                      int32_t pane_role);
 // Sidebar split registry (sidebar.m). register wires KVO + resize observation
 // and emits sidebar-collapsed/expanded/resized into both panes; unregister
 // tears the observers down. Keyed by the host NSWindow pointer.
@@ -133,6 +134,22 @@ WKWebView* zapp_webview_for_slot(int32_t slot) {
 
 int32_t zapp_sidebar_slot_lookup(int32_t host_slot) {
     return zapp_sidebar_slot_for(host_slot);
+}
+
+// Pane registration/teardown for popover.m — popover panes register OUTSIDE
+// window construction (sidebar panes register inline there), and the table
+// + teardown helper are static in this file.
+void zapp_register_pane_webview(int32_t slot, WKWebView* wv, int32_t host_slot) {
+    if (host_slot < 0 || host_slot >= ZAPP_MAX_WINDOW_CALLBACKS) return;
+    NSString* hostId = zapp_window_ids[host_slot];
+    if (!hostId) hostId = [NSString stringWithFormat:@"win-%d", host_slot];
+    zapp_register_webview(slot, wv, hostId);
+}
+
+void zapp_clear_pane_slot(int32_t slot) {
+    if (slot < 0 || slot >= ZAPP_MAX_WINDOW_CALLBACKS) return;
+    zapp_webviews[slot] = nil;
+    zapp_window_ids[slot] = nil;
 }
 
 // --- Event name resolution (static strings, zero alloc) ---
@@ -717,13 +734,13 @@ void* darwin_window_create(WindowOptions* opts) {
             // Two full webviews. Main → host slot, self identity, legacy
             // transparent rule (useVibrancy). Sidebar → its own transport slot,
             // HOST identity (win-<host> in JS), always transparent so the pane
-            // material shows through, is_sidebar marker set.
+            // material shows through, pane_role=1 (sidebar) marker.
             darwin_webview_create_ext((__bridge void*)window, inspectable, accept_first_mouse,
                                       custom_url, host_slot, useVibrancy,
-                                      (__bridge void*)mainContainer, -1, false);
+                                      (__bridge void*)mainContainer, -1, 0);
             darwin_webview_create_ext((__bridge void*)window, inspectable, accept_first_mouse,
                                       sidebarUrl, sidebar_slot, true,
-                                      (__bridge void*)sidebarContainer, host_slot, true);
+                                      (__bridge void*)sidebarContainer, host_slot, 1);
 
             // Register BOTH webviews in the dispatch table here. The normal
             // registration path (darwin_window_register_numeric_id) walks
@@ -844,6 +861,11 @@ static void zapp_teardown_webview(WKWebView* wv) {
     [wv setUIDelegate:nil];
 }
 
+// Public wrapper for popover.m (the helper itself stays static/local).
+void zapp_teardown_pane_webview(WKWebView* wv) {
+    zapp_teardown_webview(wv);
+}
+
 void darwin_window_destroy(void* handle) {
     NSWindow* window = (__bridge_transfer NSWindow*)handle;
 
@@ -882,6 +904,8 @@ void darwin_window_destroy(void* handle) {
         zapp_sidebar_unregister(handle);
     }
     zapp_toolbar_unregister(handle);
+    extern void zapp_popover_unregister_window(void* window_ptr);
+    zapp_popover_unregister_window(handle);
 
     [window close];
     (void)window;

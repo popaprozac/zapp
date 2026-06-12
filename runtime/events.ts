@@ -46,6 +46,10 @@ export enum WindowEvent {
    * and any pane's `win.on(...)` both consume the same emit.
    * Payload: `{ windowId, id }`. */
   TOOLBAR_CLICKED = 15,
+  /** Fires when a popover closes — both explicit hide() and transient
+   * auto-dismissal. Broadcast to ALL webviews + workers (toolbar-click
+   * pattern). Payload: `{ windowId, popoverId }`. */
+  POPOVER_CLOSED = 16,
 }
 
 /** App lifecycle events.
@@ -90,6 +94,7 @@ const WINDOW_EVENT_NAMES: Record<number, string> = {
   [WindowEvent.SIDEBAR_EXPANDED]: "window:sidebar-expanded",
   [WindowEvent.SIDEBAR_RESIZED]: "window:sidebar-resized",
   [WindowEvent.TOOLBAR_CLICKED]: "window:toolbar-clicked",
+  [WindowEvent.POPOVER_CLOSED]: "window:popover-closed",
 };
 
 const APP_EVENT_NAMES: Record<number, string> = {

@@ -794,6 +794,15 @@ impl WindowManager {
         return new_window;
     }
 
+    // Draw one dispatch slot from the same monotonic id-space windows and
+    // sidebar panes use (never a parallel allocator — collisions impossible).
+    // Used by the router's __popover:create route.
+    fn alloc_slot(self) -> int {
+        let id = self.next_id;
+        self.next_id += 1;
+        return id;
+    }
+
     fn get(self, id: int) -> Window {
         let key: char[32];
         c::snprintf(key, 32, "win-%d", id);
