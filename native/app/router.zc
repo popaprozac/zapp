@@ -203,6 +203,62 @@ fn router_handle_message(app: App*, msg: string, window_id: int) -> void {
             return;
         }
 
+        // __popover:create — persistent popover owned by a window. Resolves
+        // the payload windowId (attachModal pattern, sender-slot fallback),
+        // allocates the pane's dispatch slot, returns {"popoverId":"pop-<n>"}.
+        let is_popover_create: bool = false;
+        is_popover_create = parsed.method == "__popover:create";
+        if is_popover_create {
+            let target = window_id;
+            let url_s: string = "";
+            let behavior_s: string = "transient";
+            let pw = 320;
+            let ph = 400;
+            if parsed.has_args {
+                let wid_opt = parsed.args.get_string("windowId");
+                if wid_opt.is_some() {
+                    raw {
+                        #ifdef __APPLE__
+                        extern int32_t darwin_window_numeric_id_for_string(const char* wid);
+                        int32_t resolved = darwin_window_numeric_id_for_string((const char*)wid_opt.val);
+                        if (resolved >= 0) target = resolved;
+                        #endif
+                    }
+                }
+                let url_opt = parsed.args.get_string("url");
+                if url_opt.is_some() { url_s = url_opt.unwrap(); }
+                let b_opt = parsed.args.get_string("behavior");
+                if b_opt.is_some() { behavior_s = b_opt.unwrap(); }
+                let pw_opt = parsed.args.get_int("width");
+                if pw_opt.is_some() { pw = pw_opt.unwrap(); }
+                let ph_opt = parsed.args.get_int("height");
+                if ph_opt.is_some() { ph = ph_opt.unwrap(); }
+            }
+            let slot = app.window.alloc_slot();
+            raw {
+                #ifdef __APPLE__
+                extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
+                extern void darwin_popover_create(void* window_ptr, const char* popover_id,
+                                                  const char* url, int32_t width, int32_t height,
+                                                  const char* behavior, int32_t host_slot,
+                                                  int32_t popover_slot);
+                void* host = darwin_window_get_by_numeric_id((int32_t)target);
+                if (host) {
+                    char pid[32];
+                    snprintf(pid, sizeof(pid), "pop-%d", slot);
+                    darwin_popover_create(host, pid, (const char*)url_s, (int32_t)pw, (int32_t)ph,
+                                          (const char*)behavior_s, (int32_t)target, (int32_t)slot);
+                }
+                #endif
+            }
+            raw {
+                char resp[64];
+                snprintf(resp, sizeof(resp), "{\"popoverId\":\"pop-%d\"}", slot);
+                dispatch_invoke_response(window_id, parsed.request_id, true, resp);
+            }
+            return;
+        }
+
         let result = service_invoke(app, parsed.method, parsed.args);
         if result.is_ok() {
             dispatch_invoke_response(window_id, parsed.request_id, true, result.unwrap());
@@ -634,6 +690,35 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
             else if (is_sb_collapse) darwin_sidebar_collapse((int32_t)sb_target);
             else if (is_sb_expand) darwin_sidebar_expand((int32_t)sb_target);
             else darwin_sidebar_set_width((int32_t)sb_target, (int32_t)sb_w);
+            #endif
+        }
+        return;
+    }
+
+    // Popover actions — keyed by popoverId (popover.m registry). show passes
+    // the raw args subtree through: popover.m parses anchor/edge itself
+    // (tray-style payload-driven extraction).
+    let is_pop_show = action == "popover:show";
+    let is_pop_hide = action == "popover:hide";
+    let is_pop_destroy = action == "popover:destroy";
+    if is_pop_show || is_pop_hide || is_pop_destroy {
+        let pid_opt = pre_args.get_string("popoverId");
+        if !pid_opt.is_some() { return; }
+        let pid: string = pid_opt.unwrap();
+        raw {
+            #ifdef __APPLE__
+            extern void darwin_popover_show(const char* popover_id, const char* args_json);
+            extern void darwin_popover_hide(const char* popover_id);
+            extern void darwin_popover_destroy(const char* popover_id);
+            extern const char* darwin_dialog_extract_args(const char* full_json);
+            if (is_pop_show) {
+                const char* args_json = darwin_dialog_extract_args((const char*)payload);
+                darwin_popover_show((const char*)pid, args_json);
+            } else if (is_pop_hide) {
+                darwin_popover_hide((const char*)pid);
+            } else {
+                darwin_popover_destroy((const char*)pid);
+            }
             #endif
         }
         return;
