@@ -1242,7 +1242,8 @@ export async function generatePlatformConfig(
     // dropped by the linker.
     content += `//> windows: link: -lws2_32 -liphlpapi -luserenv -ldbghelp -lpsapi\n`;
     // windowscodecs: WIC PNG codec for clipboard image read/write.
-    content += `//> windows: link: -lwindowscodecs\n`;
+    // shcore: GetDpiForMonitor for screen.c's scaleFactor.
+    content += `//> windows: link: -lwindowscodecs -lshcore\n`;
     // App-declared extras from zapp.config.ts. `extraFrameworks` is
     // a no-op here (Apple-only concept); use `extraLinkFlags.windows`
     // for `-l<name>` and similar.

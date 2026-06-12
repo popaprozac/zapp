@@ -10,6 +10,9 @@ fn screen_route(method: string, window_id: int, request_id: int, args: JsonValue
             #ifdef __APPLE__
             extern char* darwin_screen_list_json(void);
             json = darwin_screen_list_json();
+            #else
+            extern char* windows_screen_list_json(void);
+            json = windows_screen_list_json();
             #endif
         }
         if json == NULL { dispatch_invoke_response(window_id, request_id, true, "[]"); return true; }
@@ -23,6 +26,9 @@ fn screen_route(method: string, window_id: int, request_id: int, args: JsonValue
             #ifdef __APPLE__
             extern char* darwin_screen_cursor_json(void);
             json = darwin_screen_cursor_json();
+            #else
+            extern char* windows_screen_cursor_json(void);
+            json = windows_screen_cursor_json();
             #endif
         }
         if json == NULL { dispatch_invoke_response(window_id, request_id, false, "null"); return true; }
@@ -39,6 +45,10 @@ fn screen_route(method: string, window_id: int, request_id: int, args: JsonValue
                 #ifdef __APPLE__
                 extern int32_t darwin_window_numeric_id_for_string(const char* wid);
                 target = (int)darwin_window_numeric_id_for_string((const char*)ws);
+                #else
+                // Window ids are canonically "win-<numericId>".
+                int parsed = -1;
+                if (sscanf((const char*)ws, "win-%d", &parsed) == 1) target = parsed;
                 #endif
             }
         }
@@ -47,6 +57,9 @@ fn screen_route(method: string, window_id: int, request_id: int, args: JsonValue
             #ifdef __APPLE__
             extern char* darwin_screen_for_window_json(int32_t window_id);
             json = darwin_screen_for_window_json(target);
+            #else
+            extern char* windows_screen_for_window_json(int32_t window_id);
+            json = windows_screen_for_window_json(target);
             #endif
         }
         if json == NULL { dispatch_invoke_response(window_id, request_id, false, "null"); return true; }

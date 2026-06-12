@@ -113,6 +113,7 @@ export function getPlatformSources(nativeDir: string, target: BuildTarget = dete
       path.join(windowsDir, "notification.c"),
       path.join(windowsDir, "sync.c"),
       path.join(windowsDir, "clipboard.c"),
+      path.join(windowsDir, "screen.c"),
     ];
     return sources.filter(f => existsSync(f));
   }
