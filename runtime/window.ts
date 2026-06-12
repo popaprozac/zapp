@@ -379,6 +379,9 @@ export function normalizeToolbar(
       continue;
     }
     if (!item.id) throw new Error('[zapp] toolbar: button items require an "id"');
+    if (item.action && item.menu) {
+      throw new Error('[zapp] toolbar: a button cannot have both "action" and "menu" — the menu consumes the click');
+    }
     if (!/^[A-Za-z0-9._-]+$/.test(item.id) || item.id.startsWith("zapp.") || item.id.startsWith("NSToolbar")) {
       throw new Error(
         `[zapp] toolbar: invalid item id "${item.id}" — use letters, digits, ".", "_", "-" (ids prefixed "zapp." or "NSToolbar" are reserved)`,

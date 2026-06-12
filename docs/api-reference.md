@@ -881,8 +881,7 @@ v1 is create-time only — no `setItems` after creation; no search field;
 
 A real `NSPopover` — bubble chrome, anchor arrow, transient auto-dismissal —
 hosting your app's web content as a trusted pane (full bridge, identifies as
-its window, Events crosses panes; `Window.isPopover()`-style detection via
-`Symbol.for('zapp.isPopover')`). Persistent: the page loads once at create
+its window, Events crosses panes; detect a popover pane via `globalThis[Symbol.for('zapp.isPopover')]`). Persistent: the page loads once at create
 and stays warm across show/hide, so state survives.
 
 ```ts
@@ -901,8 +900,10 @@ win.on(WindowEvent.POPOVER_CLOSED, ({ popoverId }) => { ... }); // hide() AND tr
 `behavior` controls dismissal: `"transient"` (default — outside click
 closes), `"semitransient"`, `"applicationDefined"` (only your code closes
 it). Element/MouseEvent anchors are measured in the calling pane, so call
-`show(element)` from the pane that owns the element. Each live popover
-costs one dispatch slot (same 64-slot pool as windows).
+`show(element)` from the pane that owns the element (rect anchors position
+against the calling pane's viewport). Each popover consumes one dispatch
+slot for its lifetime; ids are not recycled after `destroy()` (same
+monotonic pool as windows).
 
 ### Pull-down toolbar menus
 

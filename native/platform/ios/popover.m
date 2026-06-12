@@ -11,8 +11,8 @@ void darwin_popover_create(void* window_ptr, const char* popover_id,
     (void)behavior; (void)host_slot; (void)popover_slot;
 }
 
-void darwin_popover_show(const char* popover_id, const char* args_json) {
-    (void)popover_id; (void)args_json;
+void darwin_popover_show(const char* popover_id, const char* args_json, int32_t sender_slot) {
+    (void)popover_id; (void)args_json; (void)sender_slot;
 }
 
 void darwin_popover_hide(const char* popover_id) { (void)popover_id; }

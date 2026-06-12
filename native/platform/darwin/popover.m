@@ -103,11 +103,12 @@ void darwin_popover_create(void* window_ptr, const char* popover_id,
 }
 
 // args_json: {"popoverId":..., "anchor":{...}, "edge":"bottom"} — anchor is
-// either {"toolbarItem":"id"} or {"x","y","width","height"} in the HOST
-// pane's CSS pixels. WKWebView is flipped (top-left origin, panel.m
+// either {"toolbarItem":"id"} or {"x","y","width","height"} in CSS pixels.
+// rect coords are CSS px of the SENDER pane's webview — the pane that
+// measured the element. WKWebView is flipped (top-left origin, panel.m
 // precedent) so DOM rects map directly to view coordinates; flipped-view
 // edges: top=MinY, bottom=MaxY, left=MinX, right=MaxX.
-void darwin_popover_show(const char* popover_id, const char* args_json) {
+void darwin_popover_show(const char* popover_id, const char* args_json, int32_t sender_slot) {
     if (!popover_id || !zapp_popovers) return;
     NSCAssert([NSThread isMainThread], @"zapp popover show is main-thread-only");
     ZappPopoverController* c = zapp_popovers[[NSString stringWithUTF8String:popover_id]];
@@ -131,6 +132,17 @@ void darwin_popover_show(const char* popover_id, const char* args_json) {
     else if ([edgeName isEqualToString:@"left"])  edge = NSRectEdgeMinX;
     else if ([edgeName isEqualToString:@"right"]) edge = NSRectEdgeMaxX;
 
+    // Position against the SENDER's pane when it belongs to this popover's
+    // window (element rects are measured in the calling pane's viewport —
+    // sidebar panes are offset from the main pane). Foreign/worker senders
+    // fall back to the host's main pane. All candidates are WKWebViews
+    // (flipped, top-left origin), so DOM rects map directly.
+    WKWebView* anchorView = zapp_webview_for_slot(sender_slot);
+    if (!anchorView || anchorView.window != window) {
+        anchorView = zapp_webview_for_slot(c.hostSlot);
+    }
+    if (!anchorView) return;
+
     NSString* toolbarItemId = [anchor[@"toolbarItem"] isKindOfClass:[NSString class]] ? anchor[@"toolbarItem"] : nil;
     if (toolbarItemId.length) {
         if (@available(macOS 14.0, *)) {
@@ -142,10 +154,8 @@ void darwin_popover_show(const char* popover_id, const char* args_json) {
             }
         }
         NSLog(@"[zapp] popover: toolbar item \"%@\" not found (or macOS < 14) — anchoring to titlebar", toolbarItemId);
-        WKWebView* hostPane = zapp_webview_for_slot(c.hostSlot);
-        if (!hostPane) return;
-        [c.popover showRelativeToRect:NSMakeRect(0, 0, hostPane.bounds.size.width, 1)
-                               ofView:hostPane preferredEdge:NSRectEdgeMaxY];
+        [c.popover showRelativeToRect:NSMakeRect(0, 0, anchorView.bounds.size.width, 1)
+                               ofView:anchorView preferredEdge:NSRectEdgeMaxY];
         return;
     }
 
@@ -155,9 +165,7 @@ void darwin_popover_show(const char* popover_id, const char* args_json) {
     CGFloat h = [anchor[@"height"] isKindOfClass:[NSNumber class]] ? [anchor[@"height"] doubleValue] : 1;
     if (w < 1) w = 1;
     if (h < 1) h = 1;
-    WKWebView* hostPane = zapp_webview_for_slot(c.hostSlot);
-    if (!hostPane) return;
-    [c.popover showRelativeToRect:NSMakeRect(x, y, w, h) ofView:hostPane preferredEdge:edge];
+    [c.popover showRelativeToRect:NSMakeRect(x, y, w, h) ofView:anchorView preferredEdge:edge];
 }
 
 void darwin_popover_hide(const char* popover_id) {

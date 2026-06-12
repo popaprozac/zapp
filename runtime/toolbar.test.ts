@@ -66,6 +66,11 @@ describe("normalizeToolbar", () => {
     expect(() => normalizeToolbar({ items: [{ id: "NSToolbarFlexibleSpaceItem" }] }, false)).toThrow(/reserved/);
   });
 
+  test("button with both action and menu throws", () => {
+    expect(() => normalizeToolbar({ items: [{ id: "x", action: () => {}, menu: [] }] }, false))
+      .toThrow(/both "action" and "menu"/);
+  });
+
   test("TOOLBAR_CLICKED maps to the window:toolbar-clicked wire name", () => {
     expect(eventName(WindowEvent.TOOLBAR_CLICKED)).toBe("window:toolbar-clicked");
   });

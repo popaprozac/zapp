@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-11
 **Branch:** `feat/native-popover`
-**Status:** Approved
+**Status:** Approved + implemented; refinements: sender-pane anchor positioning threaded through popover:show; create responds ok=false on bad window/url; action+menu mutually exclusive on toolbar buttons.
 
 ## Goal
 
@@ -81,10 +81,11 @@ menu?: MenuItemDef[];          // pull-down NSMenuToolbarItem; icon/label as usu
   converts both to the rect form before the wire. `{ toolbarItem }` and
   raw rects work from anywhere.
 - Default `edge`: `"bottom"` (arrow on top edge of the popover, below
-  the anchor) — matches NSPopover convention `NSRectEdgeMinY` mapping.
+  the anchor) — matches NSPopover convention `NSRectEdgeMaxY` mapping
+  (WKWebView is flipped — bottom = MaxY).
 - Validation: `url` required; `toolbarItem` id must satisfy the toolbar
-  id charset; unknown `toolbarItem` at show time → native no-op + NSLog
-  warn.
+  id charset; unknown `toolbarItem` at show time → NSLog warn +
+  titlebar-rect fallback.
 
 ### ContextMenu alignment (small refactor, non-breaking)
 
