@@ -925,7 +925,7 @@ Caveats worth knowing:
   as a plain button), then `updateItem(id, { action })` — a single patch
   can't carry both.
 - **Icons can be swapped but not cleared** — an empty `icon` string is
-  ignored.
+  stripped from the patch (an icon-only `""` patch throws "empty patch").
 
 No search field; `allowsUserCustomization` is off.
 

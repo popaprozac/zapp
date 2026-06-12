@@ -220,6 +220,13 @@ describe("normalizeToolbarPatch", () => {
     expect(autoId).toMatch(/^__tbmenu_\d+$/);
     expect(menuActions.has(autoId)).toBe(true);
   });
+
+  test("empty icon strings are stripped (icons swap, never clear)", () => {
+    const { json } = normalizeToolbarPatch("x", { icon: "", label: "Keep" });
+    expect(JSON.parse(json)).toEqual({ id: "x", label: "Keep" });
+    // icon-only "" patch leaves nothing to send — hits the empty-patch guard
+    expect(() => normalizeToolbarPatch("x", { icon: "" })).toThrow(/empty patch/);
+  });
 });
 
 describe("assertToolbarItemsNonEmpty", () => {

@@ -550,7 +550,10 @@ export function normalizeToolbarPatch(
   const menuActions = new Map<string, () => void>();
   const wire: Record<string, unknown> = { id };
   if (patch.label !== undefined) wire.label = patch.label;
-  if (patch.icon !== undefined) wire.icon = patch.icon;
+  // Empty icon strings are stripped: native ignores them on the live item,
+  // but a merged stored def carrying "" would silently lose the icon on the
+  // next shape rebuild. Icons can be swapped, not cleared (documented).
+  if (patch.icon !== undefined && patch.icon !== "") wire.icon = patch.icon;
   if (patch.enabled !== undefined) wire.enabled = patch.enabled;
   if (patch.indicator !== undefined) wire.indicator = patch.indicator;
   if (patch.menu !== undefined) wire.menu = stripMenuActions(patch.menu, menuActions);
