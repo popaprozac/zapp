@@ -29,8 +29,16 @@ void windows_notification_set_bridge_ready(void);
 void windows_notification_show_typed(const char* title, const char* subtitle, const char* body, const char* sound);
 
 // --- Category registration ---
+// JSON path (JS bridge): args_json carries hasReplyField / actions / etc.
 void windows_notification_register_category(const char* cat_id, const char* args_json);
 void windows_notification_remove_category(const char* cat_id);
+
+// Typed path (native Zen-C) — mirrors darwin's struct signature.
+typedef struct { char* id; char* title; int destructive; } ZappWinNotifAction;
+void windows_notification_register_category_typed(
+    const char* cat_id, ZappWinNotifAction* actions, int action_count,
+    int has_reply, const char* reply_placeholder, const char* reply_button);
+void windows_notification_show_with_category(const char* title, const char* body, const char* category_id);
 
 #endif // _WIN32
 #endif

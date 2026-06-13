@@ -169,11 +169,17 @@ static int zapp_pending_js_count[ZAPP_MAX_WINDOWS] = {0};
 // main-thread-only (they were racy when workers buffered directly).
 
 #define ZAPP_WM_EVAL (WM_APP + 0x45) // 'E'
+#define ZAPP_WM_TASK (WM_APP + 0x54) // 'T' — generic fn+arg marshal
 
 typedef struct {
     int32_t window_id;
     char* js;
 } ZappEvalTask;
+
+typedef struct {
+    void (*fn)(void* arg);
+    void* arg;
+} ZappUiTask;
 
 static DWORD zapp_ui_thread_id = 0;
 static HWND zapp_eval_hwnd = NULL;
@@ -205,7 +211,35 @@ static LRESULT CALLBACK zapp_eval_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LP
         }
         return 0;
     }
+    if (msg == ZAPP_WM_TASK) {
+        ZappUiTask* task = (ZappUiTask*) lParam;
+        if (task) {
+            task->fn(task->arg);
+            free(task);
+        }
+        return 0;
+    }
     return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+// Run fn(arg) on the UI thread (immediately when already there).
+// `arg` ownership passes to `fn`. Returns false when the post failed —
+// the caller still owns `arg` in that case.
+bool zapp_post_to_ui_thread(void (*fn)(void* arg), void* arg) {
+    if (!fn) return false;
+    if (zapp_ui_thread_id != 0 && GetCurrentThreadId() == zapp_ui_thread_id) {
+        fn(arg);
+        return true;
+    }
+    ZappUiTask* task = (ZappUiTask*) malloc(sizeof(ZappUiTask));
+    if (!task) return false;
+    task->fn = fn;
+    task->arg = arg;
+    if (!zapp_eval_hwnd || !PostMessageW(zapp_eval_hwnd, ZAPP_WM_TASK, 0, (LPARAM) task)) {
+        free(task);
+        return false;
+    }
+    return true;
 }
 
 // Called from windows_platform_init (main/UI thread, before any worker
