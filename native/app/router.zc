@@ -1184,6 +1184,9 @@ fn router_handle_app(method: string, args: JsonValue*, has_args: bool, window_id
             #ifdef __APPLE__
             extern bool darwin_set_login_item(bool enabled);
             result = darwin_set_login_item(enabled);
+            #else
+            extern bool windows_set_login_item(bool enabled);
+            result = windows_set_login_item(enabled);
             #endif
         }
     } else {
@@ -1191,6 +1194,9 @@ fn router_handle_app(method: string, args: JsonValue*, has_args: bool, window_id
             #ifdef __APPLE__
             extern bool darwin_get_login_item(void);
             result = darwin_get_login_item();
+            #else
+            extern bool windows_get_login_item(void);
+            result = windows_get_login_item();
             #endif
         }
     }

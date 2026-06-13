@@ -97,6 +97,66 @@ void windows_theme_setting_changed(void) {
     zapp_app_dispatch(ZAPP_EVENT_APP_THEME_CHANGED, payload);
 }
 
+// --- Login item (launch at login) ---
+//
+// Backs App.setLoginItem / getLoginItemEnabled. The standard Windows
+// mechanism is a value under HKCU\...\Run holding the quoted exe path;
+// Windows auto-runs it at sign-in. Keyed by the app identifier so apps
+// don't clobber each other's entries. (macOS uses SMAppService.)
+
+extern const char* zapp_build_identifier(void);
+
+static const wchar_t* LOGIN_RUN_KEY =
+    L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+
+static void login_value_name(wchar_t* out, int out_size) {
+    const char* ident = zapp_build_identifier();
+    if (!ident || !ident[0]) ident = "com.zapp.app";
+    MultiByteToWideChar(CP_UTF8, 0, ident, -1, out, out_size);
+}
+
+bool windows_set_login_item(bool enabled) {
+    wchar_t name[160];
+    login_value_name(name, 160);
+    HKEY key;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, LOGIN_RUN_KEY, 0, KEY_SET_VALUE, &key)
+        != ERROR_SUCCESS) {
+        return false;
+    }
+    bool ok = false;
+    if (enabled) {
+        wchar_t exe[MAX_PATH];
+        if (GetModuleFileNameW(NULL, exe, MAX_PATH)) {
+            // Quote the path so spaces in the install dir survive.
+            wchar_t quoted[MAX_PATH + 4];
+            _snwprintf(quoted, MAX_PATH + 3, L"\"%s\"", exe);
+            quoted[MAX_PATH + 3] = L'\0';
+            ok = RegSetValueExW(key, name, 0, REG_SZ, (const BYTE*) quoted,
+                                (DWORD) ((wcslen(quoted) + 1) * sizeof(wchar_t)))
+                 == ERROR_SUCCESS;
+        }
+    } else {
+        LONG r = RegDeleteValueW(key, name);
+        // Absent == already disabled — report success either way.
+        ok = (r == ERROR_SUCCESS || r == ERROR_FILE_NOT_FOUND);
+    }
+    RegCloseKey(key);
+    return ok;
+}
+
+bool windows_get_login_item(void) {
+    wchar_t name[160];
+    login_value_name(name, 160);
+    HKEY key;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, LOGIN_RUN_KEY, 0, KEY_QUERY_VALUE, &key)
+        != ERROR_SUCCESS) {
+        return false;
+    }
+    LONG r = RegQueryValueExW(key, name, NULL, NULL, NULL, NULL);
+    RegCloseKey(key);
+    return r == ERROR_SUCCESS;
+}
+
 void windows_platform_init(const char* app_name) {
     zapp_app_name = app_name;
     zapp_hinstance = GetModuleHandleW(NULL);
