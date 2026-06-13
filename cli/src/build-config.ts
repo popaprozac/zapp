@@ -106,6 +106,13 @@ export async function generateBuildConfig(opts: BuildConfigOptions): Promise<str
   const protocols = (config.protocols ?? []).filter(s => /^[a-z][a-z0-9.+-]*$/.test(s));
   const protocolsJson = JSON.stringify(protocols).replace(/"/g, '\\"');
 
+  // Deep-link URL schemes (system-wide myapp:// handlers). On macOS
+  // these go in Info.plist (CFBundleURLSchemes); on Windows the native
+  // platform layer registers them under HKCU\Software\Classes at
+  // startup. Same scheme grammar as custom protocols.
+  const deepLinkSchemes = (config.deepLinkSchemes ?? []).filter(s => /^[a-z][a-z0-9.+-]*$/.test(s));
+  const deepLinkJson = JSON.stringify(deepLinkSchemes).replace(/"/g, '\\"');
+
   // Webview preferences. Tri-state encoding for booleans so the
   // platform-side code can distinguish "user explicitly set false"
   // from "user didn't touch it" — preserves the WKWebView default
@@ -134,6 +141,8 @@ fn zapp_build_is_dev() -> int { return ${isDev ? 1 : 0}; }
 fn zapp_build_fs_allowlist_json() -> string { return "${fsAllowJson}"; }
 fn zapp_build_fs_persist_grants() -> bool { return ${fsPersistGrants}; }
 fn zapp_build_custom_protocols_json() -> string { return "${protocolsJson}"; }
+fn zapp_build_deep_link_schemes_json() -> string { return "${deepLinkJson}"; }
+fn zapp_build_single_instance() -> int { return ${config.singleInstance ? 1 : 0}; }
 fn zapp_build_permissions_json() -> string { return "${permissionsJson}"; }
 fn zapp_build_webview_autoplay_without_user_gesture() -> int { return ${wpAutoplay}; }
 fn zapp_build_webview_back_forward_gestures() -> int { return ${wpBackFwd}; }

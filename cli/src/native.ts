@@ -118,6 +118,7 @@ export function getPlatformSources(nativeDir: string, target: BuildTarget = dete
       path.join(windowsDir, "shell.c"),
       path.join(windowsDir, "tray.c"),
       path.join(windowsDir, "dock.c"),
+      path.join(windowsDir, "deeplink.c"),
     ];
     return sources.filter(f => existsSync(f));
   }

@@ -101,6 +101,17 @@ void windows_platform_init(const char* app_name) {
     zapp_app_name = app_name;
     zapp_hinstance = GetModuleHandleW(NULL);
 
+    // Single-instance gate FIRST: a secondary launch forwards its
+    // command line (deep-link URL) to the primary and exits before
+    // standing up any window or COM apartment.
+    extern int windows_single_instance_check(void);
+    extern void windows_register_url_schemes(void);
+    if (!windows_single_instance_check()) {
+        ExitProcess(0);
+    }
+    // Register myapp:// handlers so the OS routes deep links to us.
+    windows_register_url_schemes();
+
     // Initialize COM (apartment-threaded for WebView2)
     CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
 
@@ -129,6 +140,14 @@ int windows_platform_run(bool terminate_after_last_window) {
 
     // Fire APP_STARTED event
     zapp_app_dispatch(ZAPP_EVENT_APP_STARTED, NULL);
+
+    // Cold deep-link launch: if we were started with a myapp:// URL
+    // (registry handler → argv[1]), surface it now. Native App.on
+    // handlers are already registered (run() registers them before
+    // platform_run); the JS layer no-ops until a webview is ready,
+    // same as a cold launch on macOS.
+    extern void windows_dispatch_deep_link_from_argv(void);
+    windows_dispatch_deep_link_from_argv();
 
     // Win32 message loop
     MSG msg;
