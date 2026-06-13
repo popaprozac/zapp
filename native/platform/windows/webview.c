@@ -13,6 +13,7 @@
 // WebView2 SDK
 #include "WebView2.h"
 #include <shlobj.h>
+#include <wincrypt.h> // CryptStringToBinaryA (protocol body decode)
 
 #include "webview.h"
 
@@ -100,6 +101,9 @@ static HRESULT zapp_create_environment(
     PCWSTR userDataDir,
     ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler* handler) {
     if (!zapp_webview2_loader_init()) return E_FAIL;
+    // NULL options: the internal loader rejects caller-provided
+    // environment options. Custom schemes are handled per-webview via
+    // WebResourceRequested instead.
     return zapp_CreateEnvInternal(0, 0, userDataDir, NULL, handler);
 }
 
@@ -487,6 +491,231 @@ static ICoreWebView2NavigationCompletedEventHandlerVtbl ZappNav_Vtbl = {
 };
 
 // ============================================================
+// Custom protocols (WebResourceRequested + custom-scheme registration)
+//
+// Mirrors darwin's WKURLSchemeHandler path. Chromium blocks unknown
+// schemes before WebResourceRequested fires, so each declared scheme
+// (zapp.config.ts `protocols: [...]`) must be registered at
+// environment-creation via ICoreWebView2EnvironmentOptions4. Then a
+// per-webview WebResourceRequested filter intercepts the request, takes
+// a deferral, fires __protocol:request to the window's JS bridge, and
+// completes when the runtime calls __protocol:respond (base64 body).
+// ============================================================
+
+#include <shlwapi.h> // SHCreateMemStream
+
+extern char* zapp_escape_dup(const char* src);
+extern char* zapp_build_custom_protocols_json(void);
+
+static ICoreWebView2Environment* zapp_webview_environment = NULL;
+
+// --- Pending request table (id → deferral + args), UI-thread only ---
+#define ZAPP_MAX_PROTO_PENDING 64
+typedef struct {
+    int active;
+    char id[16];
+    ICoreWebView2Deferral* deferral;
+    ICoreWebView2WebResourceRequestedEventArgs* args;
+} ZappProtoPending;
+static ZappProtoPending zapp_proto_pending[ZAPP_MAX_PROTO_PENDING] = {0};
+static LONG zapp_proto_counter = 0;
+
+// --- Declared scheme names (for WebResourceRequested filters) ---
+//
+// WebResourceRequested fires for custom-scheme SUBRESOURCE requests
+// (<img src="asset://...">, fetch, CSS url()) without environment-level
+// custom-scheme registration — Chromium delivers the event and lets us
+// respond via deferral. (Top-level navigation to a custom scheme would
+// need ICoreWebView2EnvironmentOptions4 registration, which the
+// self-contained internal loader rejects; webview-internal asset
+// loading — the actual use case, matching macOS — doesn't.)
+#define ZAPP_MAX_SCHEMES 16
+static wchar_t zapp_schemes[ZAPP_MAX_SCHEMES][64];
+static int zapp_scheme_count = 0;
+
+static void zapp_parse_protocol_schemes(void) {
+    static int parsed = 0;
+    if (parsed) return;
+    parsed = 1;
+    const char* json = zapp_build_custom_protocols_json();
+    if (!json || !json[0]) return;
+    const char* p = strchr(json, '[');
+    const char* end = p ? strchr(p, ']') : NULL;
+    while (p && end && p < end && zapp_scheme_count < ZAPP_MAX_SCHEMES) {
+        const char* q = strchr(p, '"');
+        if (!q || q > end) break;
+        q++;
+        char scheme[64];
+        int i = 0;
+        while (*q && *q != '"' && i < 63) scheme[i++] = *q++;
+        scheme[i] = ' ';
+        p = (*q == '"') ? q + 1 : end;
+        if (!scheme[0]) continue;
+        MultiByteToWideChar(CP_UTF8, 0, scheme, -1, zapp_schemes[zapp_scheme_count], 64);
+        zapp_scheme_count++;
+    }
+}
+
+// --- WebResourceRequested handler (per window) ---
+typedef struct {
+    const ICoreWebView2WebResourceRequestedEventHandlerVtbl* lpVtbl;
+    int32_t window_id;
+} ZappResHandler;
+
+static HRESULT STDMETHODCALLTYPE Res_QI(ICoreWebView2WebResourceRequestedEventHandler* This, REFIID riid, void** ppv) {
+    if (IsEqualIID(riid, &IID_IUnknown) || IsEqualIID(riid, &IID_ICoreWebView2WebResourceRequestedEventHandler)) {
+        *ppv = This; return S_OK;
+    }
+    *ppv = NULL; return E_NOINTERFACE;
+}
+static ULONG STDMETHODCALLTYPE Res_AddRef(ICoreWebView2WebResourceRequestedEventHandler* This) { (void)This; return 1; }
+static ULONG STDMETHODCALLTYPE Res_Release(ICoreWebView2WebResourceRequestedEventHandler* This) { (void)This; return 1; }
+
+static HRESULT STDMETHODCALLTYPE Res_Invoke(ICoreWebView2WebResourceRequestedEventHandler* This,
+        ICoreWebView2* sender, ICoreWebView2WebResourceRequestedEventArgs* args) {
+    (void)sender;
+    ZappResHandler* self = (ZappResHandler*)This;
+
+    ICoreWebView2WebResourceRequest* req = NULL;
+    if (FAILED(ICoreWebView2WebResourceRequestedEventArgs_get_Request(args, &req)) || !req) return S_OK;
+    LPWSTR wuri = NULL, wmethod = NULL;
+    ICoreWebView2WebResourceRequest_get_Uri(req, &wuri);
+    ICoreWebView2WebResourceRequest_get_Method(req, &wmethod);
+    char* url = wuri ? wchar_to_utf8_wv(wuri) : NULL;
+    char* method = wmethod ? wchar_to_utf8_wv(wmethod) : NULL;
+    if (wuri) CoTaskMemFree(wuri);
+    if (wmethod) CoTaskMemFree(wmethod);
+    ICoreWebView2WebResourceRequest_Release(req);
+    if (!url) { free(method); return S_OK; }
+
+    // scheme = up to "://"
+    char scheme[64] = "";
+    const char* sep = strstr(url, "://");
+    if (sep && (size_t)(sep - url) < sizeof(scheme)) {
+        memcpy(scheme, url, (size_t)(sep - url));
+        scheme[sep - url] = '\0';
+    }
+
+    // Stash a pending slot + deferral so __protocol:respond can finish.
+    ZappProtoPending* slot = NULL;
+    for (int i = 0; i < ZAPP_MAX_PROTO_PENDING; i++) {
+        if (!zapp_proto_pending[i].active) { slot = &zapp_proto_pending[i]; break; }
+    }
+    if (!slot) { free(url); free(method); return S_OK; } // table full → let WebView2 fail it
+
+    ICoreWebView2Deferral* deferral = NULL;
+    if (FAILED(ICoreWebView2WebResourceRequestedEventArgs_GetDeferral(args, &deferral)) || !deferral) {
+        free(url); free(method); return S_OK;
+    }
+    int n = (int)InterlockedIncrement(&zapp_proto_counter);
+    snprintf(slot->id, sizeof(slot->id), "p%d", n);
+    slot->deferral = deferral;
+    slot->args = args;
+    ICoreWebView2WebResourceRequestedEventArgs_AddRef(args);
+    slot->active = 1;
+
+    // Fire __protocol:request to this window's bridge.
+    char* esc_url = zapp_escape_dup(url);
+    char* esc_scheme = zapp_escape_dup(scheme);
+    char* esc_method = zapp_escape_dup(method ? method : "GET");
+    if (esc_url && esc_scheme && esc_method) {
+        const char* tmpl =
+            "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+            "if(b&&b._onEvent)b._onEvent('__protocol:request',"
+            "'{\"id\":\"%s\",\"scheme\":\"%s\",\"url\":\"%s\",\"method\":\"%s\"}');})();";
+        int needed = snprintf(NULL, 0, tmpl, slot->id, esc_scheme, esc_url, esc_method);
+        if (needed > 0) {
+            char* js = (char*)malloc((size_t)needed + 1);
+            if (js) {
+                snprintf(js, (size_t)needed + 1, tmpl, slot->id, esc_scheme, esc_url, esc_method);
+                windows_webview_eval_by_id(self->window_id, js);
+                free(js);
+            }
+        }
+    }
+    free(esc_url); free(esc_scheme); free(esc_method);
+    free(url); free(method);
+    return S_OK;
+}
+
+static const ICoreWebView2WebResourceRequestedEventHandlerVtbl Res_Vtbl = {
+    Res_QI, Res_AddRef, Res_Release, Res_Invoke,
+};
+static ZappResHandler zapp_res_handlers[ZAPP_MAX_WINDOWS];
+
+// Register a WebResourceRequested filter per declared scheme + the
+// handler. Called from ZappCtrl_Invoke once the webview exists.
+static void zapp_register_protocol_filters(ICoreWebView2* webview, int32_t wid) {
+    zapp_parse_protocol_schemes();
+    if (zapp_scheme_count == 0) return;
+    for (int i = 0; i < zapp_scheme_count; i++) {
+        wchar_t filter[96];
+        _snwprintf(filter, 95, L"%s://*", zapp_schemes[i]);
+        filter[95] = L'\0';
+        ICoreWebView2_AddWebResourceRequestedFilter(webview, filter,
+            COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
+    }
+    zapp_res_handlers[wid].lpVtbl = &Res_Vtbl;
+    zapp_res_handlers[wid].window_id = wid;
+    EventRegistrationToken token;
+    ICoreWebView2_add_WebResourceRequested(webview,
+        (ICoreWebView2WebResourceRequestedEventHandler*)&zapp_res_handlers[wid], &token);
+}
+
+// Called by the router on __protocol:respond { id, body (base64),
+// contentType, status }. Completes the deferred request. UI thread.
+void windows_protocol_respond(const char* request_id, const char* body_base64,
+                              const char* content_type, int32_t status) {
+    if (!request_id) return;
+    ZappProtoPending* slot = NULL;
+    for (int i = 0; i < ZAPP_MAX_PROTO_PENDING; i++) {
+        if (zapp_proto_pending[i].active && strcmp(zapp_proto_pending[i].id, request_id) == 0) {
+            slot = &zapp_proto_pending[i]; break;
+        }
+    }
+    if (!slot || !zapp_webview_environment) return;
+
+    // Decode base64 body.
+    BYTE* bytes = NULL;
+    DWORD blen = 0;
+    if (body_base64 && body_base64[0]) {
+        if (CryptStringToBinaryA(body_base64, 0, CRYPT_STRING_BASE64, NULL, &blen, NULL, NULL) && blen > 0) {
+            bytes = (BYTE*)malloc(blen);
+            if (bytes && !CryptStringToBinaryA(body_base64, 0, CRYPT_STRING_BASE64, bytes, &blen, NULL, NULL)) {
+                free(bytes); bytes = NULL; blen = 0;
+            }
+        }
+    }
+
+    IStream* stream = SHCreateMemStream(bytes ? bytes : (const BYTE*)"", bytes ? blen : 0);
+    free(bytes);
+
+    int code = (status > 0) ? status : 200;
+    const char* mime = (content_type && content_type[0]) ? content_type : "application/octet-stream";
+    char headers_utf8[256];
+    snprintf(headers_utf8, sizeof(headers_utf8), "Content-Type: %s", mime);
+    wchar_t* wheaders = utf8_to_wchar_wv(headers_utf8);
+
+    ICoreWebView2WebResourceResponse* response = NULL;
+    HRESULT hr = ICoreWebView2Environment_CreateWebResourceResponse(
+        zapp_webview_environment, stream, code, (code == 200) ? L"OK" : L"",
+        wheaders ? wheaders : L"Content-Type: application/octet-stream", &response);
+    if (SUCCEEDED(hr) && response) {
+        ICoreWebView2WebResourceRequestedEventArgs_put_Response(slot->args, response);
+        ICoreWebView2WebResourceResponse_Release(response);
+    }
+    ICoreWebView2Deferral_Complete(slot->deferral);
+
+    ICoreWebView2Deferral_Release(slot->deferral);
+    ICoreWebView2WebResourceRequestedEventArgs_Release(slot->args);
+    if (stream) IStream_Release(stream);
+    free(wheaders);
+    slot->active = 0;
+    slot->deferral = NULL;
+    slot->args = NULL;
+}
+
+// ============================================================
 // 2. Controller completed handler
 // ============================================================
 
@@ -559,6 +788,9 @@ static HRESULT STDMETHODCALLTYPE ZappCtrl_Invoke(
     EventRegistrationToken navToken;
     ICoreWebView2_add_NavigationCompleted(webview,
         (ICoreWebView2NavigationCompletedEventHandler*)navHandler, &navToken);
+
+    // Custom-protocol interception (asset://, etc.) for this webview.
+    zapp_register_protocol_filters(webview, wid);
 
     // Build bootstrap injection script
     // 1. Config object
@@ -722,6 +954,13 @@ static HRESULT STDMETHODCALLTYPE ZappEnv_Invoke(
         return S_OK;
     }
 
+    // Capture the environment for CreateWebResourceResponse (custom
+    // protocol responses). One AddRef'd reference for the app lifetime.
+    if (!zapp_webview_environment) {
+        zapp_webview_environment = env;
+        ICoreWebView2Environment_AddRef(env);
+    }
+
     int32_t wid = self->window_id;
 
     // Set up controller handler
@@ -794,7 +1033,10 @@ void windows_webview_create(void* hwnd_ptr, bool inspectable, const char* url_ov
     // Ensure directory exists
     CreateDirectoryW(udf, NULL);
 
-    // Use self-contained loader (no WebView2Loader.dll needed)
+    // Use self-contained loader (no WebView2Loader.dll needed). Custom
+    // protocols don't need environment options — WebResourceRequested
+    // intercepts their subresource requests directly (see
+    // zapp_register_protocol_filters).
     zapp_create_environment(udf,
         (ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler*)&zapp_env_handlers[wid]);
 }
