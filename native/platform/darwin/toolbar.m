@@ -25,6 +25,11 @@ extern int32_t zapp_sidebar_slot_lookup(int32_t host_slot);
 // Tracking separator's private identifier (never user-visible).
 static NSString* const kZappTrackingSeparatorId = @"zapp.trackingSeparator";
 
+static void zapp_toolbar_on_main(void (^block)(void)) {
+    if ([NSThread isMainThread]) block();
+    else dispatch_async(dispatch_get_main_queue(), block);
+}
+
 void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_user_script);
 
 @interface ZappToolbarController : NSObject <NSToolbarDelegate>
@@ -118,7 +123,13 @@ static NSMutableDictionary<NSValue*, ZappToolbarController*>* zapp_toolbars = ni
             NSString* mjson = mdata ? [[NSString alloc] initWithData:mdata encoding:NSUTF8StringEncoding] : nil;
             NSMenu* menu = mjson ? (__bridge_transfer NSMenu*)darwin_menu_build_from_items_json([mjson UTF8String]) : nil;
             if (menu) mitem.menu = menu;
-            mitem.showsIndicator = YES; // the chevron
+            NSNumber* ind = [def[@"indicator"] isKindOfClass:[NSNumber class]] ? def[@"indicator"] : nil;
+            mitem.showsIndicator = ind ? ind.boolValue : YES; // the chevron
+            // No action → AppKit never validates this item; own .enabled
+            // directly (mirrors validateToolbarItem: for action buttons).
+            mitem.autovalidates = NO;
+            NSNumber* men = [def[@"enabled"] isKindOfClass:[NSNumber class]] ? def[@"enabled"] : nil;
+            mitem.enabled = men ? men.boolValue : YES;
             return mitem;
         }
         // < 10.15: fall through to a plain button (clicks still broadcast).
@@ -143,6 +154,16 @@ static NSMutableDictionary<NSValue*, ZappToolbarController*>* zapp_toolbars = ni
     return item;
 }
 
+// AppKit's canonical enabled mechanism for action items: the toolbar
+// revalidates on its own schedule (key-window changes, event loop idle),
+// overwriting any bare `.enabled` set — so the stored def is the source of
+// truth and this answers every revalidation pass. Default YES.
+- (BOOL)validateToolbarItem:(NSToolbarItem*)item {
+    NSDictionary* def = self.buttonsById[item.itemIdentifier];
+    NSNumber* en = [def[@"enabled"] isKindOfClass:[NSNumber class]] ? def[@"enabled"] : nil;
+    return en ? en.boolValue : YES;
+}
+
 - (void)zappToolbarItemClicked:(NSToolbarItem*)sender {
     NSString* itemId = sender.itemIdentifier;
     if (!itemId.length) return;
@@ -164,6 +185,45 @@ static NSMutableDictionary<NSValue*, ZappToolbarController*>* zapp_toolbars = ni
 
 @end
 
+// Parse the wire items array into the identifier list + custom-button defs.
+// Shared by darwin_toolbar_attach and darwin_toolbar_set_items.
+static NSArray<NSToolbarItemIdentifier>* zapp_toolbar_parse_items(
+    NSArray* items, NSMutableDictionary<NSString*, NSDictionary*>* buttons) {
+    NSMutableArray<NSToolbarItemIdentifier>* ids = [NSMutableArray array];
+    for (NSDictionary* def in items) {
+        if (![def isKindOfClass:[NSDictionary class]]) continue;
+        NSString* type = [def[@"type"] isKindOfClass:[NSString class]] ? def[@"type"] : @"button";
+        if ([type isEqualToString:@"toggleSidebar"]) {
+            // System item: AppKit supplies icon/animation and routes the
+            // action to the split view controller's toggleSidebar:. State
+            // stays consistent with win.sidebar.* — both mutate the same
+            // NSSplitViewItem.collapsed, so sidebar.m's KVO still emits
+            // SIDEBAR_COLLAPSED/EXPANDED either way.
+            // NSToolbar raises on duplicate non-space identifiers; AppKit's
+            // own default-identifiers attach path filters dups, so mirror it.
+            if (![ids containsObject:NSToolbarToggleSidebarItemIdentifier])
+                [ids addObject:NSToolbarToggleSidebarItemIdentifier];
+        } else if ([type isEqualToString:@"trackingSeparator"]) {
+            if (![ids containsObject:kZappTrackingSeparatorId])
+                [ids addObject:kZappTrackingSeparatorId];
+        } else if ([type isEqualToString:@"space"]) {
+            [ids addObject:NSToolbarSpaceItemIdentifier];
+        } else if ([type isEqualToString:@"flexibleSpace"]) {
+            [ids addObject:NSToolbarFlexibleSpaceItemIdentifier];
+        } else {
+            // Custom button. The runtime validated id presence/uniqueness;
+            // belt-and-suspenders here because native Zen-C apps can set
+            // toolbarJson directly.
+            NSString* itemId = def[@"id"];
+            if (![itemId isKindOfClass:[NSString class]] || itemId.length == 0) continue;
+            if (buttons[itemId]) continue;
+            [ids addObject:itemId];
+            buttons[itemId] = def;
+        }
+    }
+    return ids;
+}
+
 void darwin_toolbar_attach(void* window_ptr, const char* toolbar_json, int32_t window_numeric_id) {
     if (!window_ptr || !toolbar_json || !toolbar_json[0]) return;
     NSCAssert([NSThread isMainThread], @"zapp toolbar registry is main-thread-only");
@@ -180,35 +240,8 @@ void darwin_toolbar_attach(void* window_ptr, const char* toolbar_json, int32_t w
     NSArray* items = root[@"items"];
     if (![items isKindOfClass:[NSArray class]] || items.count == 0) return;
 
-    NSMutableArray<NSToolbarItemIdentifier>* ids = [NSMutableArray array];
     NSMutableDictionary<NSString*, NSDictionary*>* buttons = [NSMutableDictionary dictionary];
-    for (NSDictionary* def in items) {
-        if (![def isKindOfClass:[NSDictionary class]]) continue;
-        NSString* type = [def[@"type"] isKindOfClass:[NSString class]] ? def[@"type"] : @"button";
-        if ([type isEqualToString:@"toggleSidebar"]) {
-            // System item: AppKit supplies icon/animation and routes the
-            // action to the split view controller's toggleSidebar:. State
-            // stays consistent with win.sidebar.* — both mutate the same
-            // NSSplitViewItem.collapsed, so sidebar.m's KVO still emits
-            // SIDEBAR_COLLAPSED/EXPANDED either way.
-            [ids addObject:NSToolbarToggleSidebarItemIdentifier];
-        } else if ([type isEqualToString:@"trackingSeparator"]) {
-            [ids addObject:kZappTrackingSeparatorId];
-        } else if ([type isEqualToString:@"space"]) {
-            [ids addObject:NSToolbarSpaceItemIdentifier];
-        } else if ([type isEqualToString:@"flexibleSpace"]) {
-            [ids addObject:NSToolbarFlexibleSpaceItemIdentifier];
-        } else {
-            // Custom button. The runtime validated id presence/uniqueness;
-            // belt-and-suspenders here because native Zen-C apps can set
-            // toolbarJson directly.
-            NSString* itemId = def[@"id"];
-            if (![itemId isKindOfClass:[NSString class]] || itemId.length == 0) continue;
-            if (buttons[itemId]) continue;
-            [ids addObject:itemId];
-            buttons[itemId] = def;
-        }
-    }
+    NSArray<NSToolbarItemIdentifier>* ids = zapp_toolbar_parse_items(items, buttons);
     if (ids.count == 0) return;
 
     ZappToolbarController* c = [[ZappToolbarController alloc] init];
@@ -242,6 +275,194 @@ void darwin_toolbar_attach(void* window_ptr, const char* toolbar_json, int32_t w
     // (user toggles Icon/Text display modes via the toolbar context menu).
     // Removed in zapp_toolbar_unregister.
     [window addObserver:c forKeyPath:@"contentLayoutRect" options:0 context:NULL];
+}
+
+// Replace the full item set. Registry hit: reconcile the SAME NSToolbar
+// instance (the delegate serves the new defs). Registry miss: late-attach
+// via darwin_toolbar_attach (style honored), then schedule this path's own
+// metrics injection — window.m's construction-time injection already ran
+// (toolbar-less) and stays unchanged.
+void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_t host_slot) {
+    if (!window_ptr || !toolbar_json || !toolbar_json[0]) return;
+    NSString* json = [NSString stringWithUTF8String:toolbar_json];
+    NSWindow* window = (__bridge NSWindow*)window_ptr;
+    zapp_toolbar_on_main(^{
+        NSData* data = [json dataUsingEncoding:NSUTF8StringEncoding];
+        NSError* err = nil;
+        NSDictionary* root = [NSJSONSerialization JSONObjectWithData:data options:0 error:&err];
+        if (![root isKindOfClass:[NSDictionary class]]) {
+            NSLog(@"[zapp] toolbar: invalid toolbarJson (%@) — setItems ignored",
+                  err ? err.localizedDescription : @"not an object");
+            return;
+        }
+        NSValue* key = [NSValue valueWithPointer:(__bridge void*)window];
+        ZappToolbarController* c = zapp_toolbars ? zapp_toolbars[key] : nil;
+        if (!c) {
+            // Late attach. Style in the json is honored here (fresh attach).
+            darwin_toolbar_attach((__bridge void*)window, [json UTF8String], host_slot);
+            if (!zapp_toolbars || !zapp_toolbars[key]) return; // attach rejected (no items)
+            // One tick so AppKit lays the band out before measuring;
+            // add_user_script=true so reloads keep the value (attach parity).
+            dispatch_async(dispatch_get_main_queue(), ^{
+                zapp_toolbar_inject_metrics((__bridge void*)window, host_slot, true);
+            });
+            return;
+        }
+        if (root[@"style"]) {
+            NSLog(@"[zapp] toolbar: style can only be set when attaching — ignored (toolbar already present)");
+        }
+        NSArray* items = [root[@"items"] isKindOfClass:[NSArray class]] ? root[@"items"] : @[];
+        NSMutableDictionary<NSString*, NSDictionary*>* buttons = [NSMutableDictionary dictionary];
+        NSArray<NSToolbarItemIdentifier>* ids = zapp_toolbar_parse_items(items, buttons);
+        if (ids.count == 0) {
+            NSLog(@"[zapp] toolbar: setItems with no items — use toolbar.remove() to destroy the toolbar");
+            return;
+        }
+        NSToolbar* tb = window.toolbar;
+        if (!tb) return; // registered but no toolbar — shouldn't happen; bail
+        // New defs BEFORE reconcile — insertItemWithItemIdentifier: consults
+        // the delegate (allowed list + item construction) synchronously.
+        c.identifiers = ids;
+        c.buttonsById = buttons;
+        while (tb.items.count > 0) [tb removeItemAtIndex:0];
+        for (NSToolbarItemIdentifier ident in ids) {
+            // Append-at-count, NOT at the loop index: when the delegate
+            // returns nil for an identifier (trackingSeparator without a
+            // split view, pre-10.15 fallthrough) AppKit skips the insert
+            // and an indexed loop would drift out of range and throw.
+            [tb insertItemWithItemIdentifier:ident atIndex:(NSInteger)tb.items.count];
+        }
+        // The contentLayoutRect KVO catches band-height changes; this covers
+        // the same-height case cheaply (no-op-skip cache absorbs it).
+        zapp_toolbar_inject_metrics((__bridge void*)window, host_slot, false);
+    });
+}
+
+// Patch one item in place. item_json = {"id", ...only patched keys}.
+// Merges into the stored def first (future delegate rebuilds must agree),
+// then mutates the live NSToolbarItem. A shape change (menu added to a
+// plain button, or removed) rebuilds that one item at its index instead —
+// NSToolbarItem and NSMenuToolbarItem can't convert in place.
+void darwin_toolbar_update_item(void* window_ptr, const char* item_json) {
+    if (!window_ptr || !item_json || !item_json[0]) return;
+    NSString* json = [NSString stringWithUTF8String:item_json];
+    NSWindow* window = (__bridge NSWindow*)window_ptr;
+    zapp_toolbar_on_main(^{
+        NSValue* key = [NSValue valueWithPointer:(__bridge void*)window];
+        ZappToolbarController* c = zapp_toolbars ? zapp_toolbars[key] : nil;
+        if (!c || !window.toolbar) {
+            NSLog(@"[zapp] toolbar: updateItem on a window without a toolbar — ignored");
+            return;
+        }
+        NSData* data = [json dataUsingEncoding:NSUTF8StringEncoding];
+        NSDictionary* patch = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+        if (![patch isKindOfClass:[NSDictionary class]]) return;
+        NSString* itemId = [patch[@"id"] isKindOfClass:[NSString class]] ? patch[@"id"] : nil;
+        if (!itemId.length) return;
+        NSDictionary* def = c.buttonsById[itemId];
+        if (!def) {
+            NSLog(@"[zapp] toolbar: updateItem unknown id \"%@\" — ignored", itemId);
+            return;
+        }
+
+        // Merge patched keys into the stored def (source of truth for the
+        // delegate and validateToolbarItem:).
+        NSMutableDictionary* merged = [def mutableCopy];
+        for (NSString* k in patch) {
+            if (![k isEqualToString:@"id"]) merged[k] = patch[k];
+        }
+        NSMutableDictionary<NSString*, NSDictionary*>* buttons = [c.buttonsById mutableCopy];
+        buttons[itemId] = merged;
+        c.buttonsById = buttons;
+
+        // Find the live item.
+        NSToolbarItem* live = nil;
+        NSInteger idx = -1;
+        NSArray<NSToolbarItem*>* arr = window.toolbar.items;
+        for (NSInteger i = 0; i < (NSInteger)arr.count; i++) {
+            if ([arr[(NSUInteger)i].itemIdentifier isEqualToString:itemId]) {
+                live = arr[(NSUInteger)i];
+                idx = i;
+                break;
+            }
+        }
+        if (!live) return; // def updated; nothing displayed to mutate
+
+        BOOL wantsMenu = [merged[@"menu"] isKindOfClass:[NSArray class]] && ((NSArray*)merged[@"menu"]).count > 0;
+        BOOL isMenuItem = NO;
+        if (@available(macOS 10.15, *)) isMenuItem = [live isKindOfClass:[NSMenuToolbarItem class]];
+        if (wantsMenu != isMenuItem) {
+            // Shape change: rebuild this one item — the delegate serves the
+            // merged def (becomes/stops being an NSMenuToolbarItem).
+            [window.toolbar removeItemAtIndex:idx];
+            [window.toolbar insertItemWithItemIdentifier:itemId atIndex:idx];
+            return;
+        }
+
+        if ([patch[@"label"] isKindOfClass:[NSString class]]) {
+            NSString* label = patch[@"label"];
+            live.label = label;
+            live.paletteLabel = label.length ? label : itemId;
+            live.toolTip = label;
+        }
+        if ([patch[@"icon"] isKindOfClass:[NSString class]] && ((NSString*)patch[@"icon"]).length) {
+            live.image = zapp_resolve_icon(patch[@"icon"], 18.0, 1);
+        }
+        if (@available(macOS 10.15, *)) {
+            if (isMenuItem) {
+                NSMenuToolbarItem* mlive = (NSMenuToolbarItem*)live;
+                if ([patch[@"menu"] isKindOfClass:[NSArray class]]) {
+                    // Fresh NSMenu — the flicker-free checkmark refresh.
+                    NSData* mdata = [NSJSONSerialization dataWithJSONObject:patch[@"menu"] options:0 error:nil];
+                    NSString* mjson = mdata ? [[NSString alloc] initWithData:mdata encoding:NSUTF8StringEncoding] : nil;
+                    NSMenu* menu = mjson ? (__bridge_transfer NSMenu*)darwin_menu_build_from_items_json([mjson UTF8String]) : nil;
+                    if (menu) mlive.menu = menu;
+                }
+                if ([patch[@"indicator"] isKindOfClass:[NSNumber class]]) {
+                    mlive.showsIndicator = [patch[@"indicator"] boolValue];
+                }
+                if ([patch[@"enabled"] isKindOfClass:[NSNumber class]]) {
+                    mlive.enabled = [patch[@"enabled"] boolValue]; // autovalidates is NO
+                }
+            }
+        }
+        // Action buttons: enabled lives in the merged def; force a
+        // validation pass so it applies now, not on the next idle.
+        [window.toolbar validateVisibleItems];
+    });
+}
+
+// Destroy the toolbar. ORDER IS LOAD-BEARING:
+//  1. remove the contentLayoutRect KVO observer — the controller is about
+//     to lose its only strong ref (the registry), and the coalesced KVO
+//     block holds it weakly: it would silently skip the final re-inject;
+//  2. detach the NSToolbar;
+//  3. one tick later, re-measure capturing the WINDOW + SLOT (not the
+//     controller) — titlebar height shrinks back, toolbar-height → 0px;
+//  4. drop the registry entry (controller deallocates).
+// No-op when not registered.
+void darwin_toolbar_remove(void* window_ptr) {
+    if (!window_ptr) return;
+    NSWindow* window = (__bridge NSWindow*)window_ptr;
+    zapp_toolbar_on_main(^{
+        NSValue* key = [NSValue valueWithPointer:(__bridge void*)window];
+        ZappToolbarController* c = zapp_toolbars ? zapp_toolbars[key] : nil;
+        if (!c) return;
+        int32_t slot = c.windowNumericId;
+        @try {
+            [window removeObserver:c forKeyPath:@"contentLayoutRect"];
+        } @catch (NSException* e) {
+            (void)e; // not registered — harmless
+        }
+        window.toolbar = nil;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            // Registry entry is gone by now → the no-op-skip cache is
+            // bypassed and inject runs unconditionally (block captures the
+            // window strongly through the tick).
+            zapp_toolbar_inject_metrics((__bridge void*)window, slot, false);
+        });
+        [zapp_toolbars removeObjectForKey:key];
+    });
 }
 
 // Measure + inject the chrome-metric CSS vars into the window's pane(s).
@@ -279,7 +500,10 @@ void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_u
         }
         break;
     }
-    if (toolbarH <= 0) toolbarH = totalInset;
+    // No NSToolbarView found: with a live toolbar that's the class-name-walk
+    // fallback (treat the full band as the row, == unified behavior); with no
+    // toolbar (post-remove re-inject) the row is genuinely gone — 0px.
+    if (toolbarH <= 0) toolbarH = window.toolbar ? totalInset : 0;
 
     // Skip no-op re-injections (the KVO also fires during plain window
     // resizes, where the chrome height doesn't change). Initial injection
