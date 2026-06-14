@@ -25,8 +25,11 @@ extern void darwin_inspector_toggle(int32_t window_id);
 extern int32_t zapp_inspector_divider_index(void* window_ptr);
 extern int32_t zapp_inspector_slot_lookup(int32_t host_slot);
 
-// Tracking separator's private identifier (never user-visible).
-static NSString* const kZappTrackingSeparatorId = @"zapp.trackingSeparator";
+// Tracking separator's private identifiers (never user-visible).
+// Sidebar/default uses the original id (byte-stable for shipped sidebar behavior).
+// Inspector gets a distinct id so both can coexist in the same toolbar.
+static NSString* const kZappTrackingSeparatorId          = @"zapp.trackingSeparator";
+static NSString* const kZappTrackingSeparatorInspectorId = @"zapp.trackingSeparator.inspector";
 static NSString* const kZappToggleInspectorId = @"zapp.toggleInspector";
 
 static void zapp_toolbar_on_main(void (^block)(void)) {
@@ -102,7 +105,8 @@ static NSMutableDictionary<NSValue*, ZappToolbarController*>* zapp_toolbars = ni
         return item;
     }
 
-    if ([identifier isEqualToString:kZappTrackingSeparatorId]) {
+    if ([identifier isEqualToString:kZappTrackingSeparatorId] ||
+        [identifier isEqualToString:kZappTrackingSeparatorInspectorId]) {
         // Divider tracks a split pane. "pane" in the stored def determines
         // which divider: "inspector" → zapp_inspector_divider_index,
         // anything else (including absent/nil) → divider 0 (sidebar).
@@ -240,9 +244,12 @@ static NSArray<NSToolbarItemIdentifier>* zapp_toolbar_parse_items(
             if (![ids containsObject:kZappToggleInspectorId])
                 [ids addObject:kZappToggleInspectorId];
         } else if ([type isEqualToString:@"trackingSeparator"]) {
-            if (![ids containsObject:kZappTrackingSeparatorId]) {
-                [ids addObject:kZappTrackingSeparatorId];
-                buttons[kZappTrackingSeparatorId] = def;  // carries "pane"
+            NSString* tsPane = [def[@"pane"] isKindOfClass:[NSString class]] ? def[@"pane"] : @"sidebar";
+            NSString* tsId = [tsPane isEqualToString:@"inspector"]
+                ? kZappTrackingSeparatorInspectorId : kZappTrackingSeparatorId;
+            if (![ids containsObject:tsId]) {
+                [ids addObject:tsId];
+                buttons[tsId] = def;  // carries "pane"
             }
         } else if ([type isEqualToString:@"space"]) {
             [ids addObject:NSToolbarSpaceItemIdentifier];
