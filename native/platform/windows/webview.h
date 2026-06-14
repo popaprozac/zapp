@@ -19,6 +19,14 @@
 // url_override: if non-NULL and non-empty, load this URL instead of the default.
 void windows_webview_create(void* hwnd_ptr, bool inspectable, const char* url_override);
 
+// Generalized create for sidebar/inspector panes: mount into an arbitrary HWND
+// (a pane's child window) at transport slot `slot` with JS identity
+// `identity_id` (<0 → slot), optional transparent background, and pane role
+// (0 content, 1 sidebar, 3 inspector) + has_sidebar/has_inspector flags.
+void windows_webview_create_ext(void* hwnd_ptr, bool inspectable, const char* url_override,
+                                int32_t slot, int32_t identity_id, bool transparent,
+                                int pane_role, bool has_sidebar, bool has_inspector);
+
 // Evaluate JavaScript on a specific window's WebView.
 void windows_webview_eval(void* hwnd_ptr, const char* js);
 

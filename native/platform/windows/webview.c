@@ -741,9 +741,14 @@ ICoreWebView2Environment* zapp_get_webview_environment(void) {
 typedef struct {
     ICoreWebView2CreateCoreWebView2ControllerCompletedHandlerVtbl* lpVtbl;
     HWND hwnd;
-    int32_t window_id;
+    int32_t window_id;     // transport slot (where it registers + routes)
     bool inspectable;
     char* url_override;
+    // Sidebar/inspector pane support (defaults: identity_id<0, role 0, no panes).
+    int32_t identity_id;   // JS window identity (win-<id>); <0 → use window_id
+    int pane_role;         // 0 content/host, 1 sidebar, 3 inspector
+    bool has_sidebar;      // window has a sidebar (injected into ALL its panes)
+    bool has_inspector;    // window has an inspector (injected into ALL its panes)
 } ZappControllerHandler;
 
 static HRESULT STDMETHODCALLTYPE ZappCtrl_QueryInterface(
@@ -837,9 +842,12 @@ static HRESULT STDMETHODCALLTYPE ZappCtrl_Invoke(
     // 2. Service manifest
     const char* manifest = service_get_manifest_json();
 
-    // 3. Window/owner IDs
+    // 3. Window/owner IDs. A sidebar/inspector pane registers + routes at its
+    // own transport slot (wid) but presents the HOST's identity to JS, so
+    // Window.current() and window-event targeting resolve to the host window.
+    int32_t ident = (self->identity_id >= 0) ? self->identity_id : wid;
     char window_id_str[32];
-    snprintf(window_id_str, sizeof(window_id_str), "win-%d", wid);
+    snprintf(window_id_str, sizeof(window_id_str), "win-%d", ident);
 
     // theme: seed the current light/dark value so App.getTheme() is
     // correct synchronously on first call — without it, a dark-mode
@@ -888,6 +896,27 @@ static HRESULT STDMETHODCALLTYPE ZappCtrl_Invoke(
     if (wconfig) {
         ICoreWebView2_AddScriptToExecuteOnDocumentCreated(webview, wconfig, NULL);
         free(wconfig);
+    }
+
+    // Sidebar/inspector pane markers (parity with darwin create_ext). hasSidebar/
+    // hasInspector go into ALL panes of the window so Window.current() exposes the
+    // handles; isSidebar/isInspector mark the specific pane. document-start so
+    // they're present before the page's own scripts run.
+    if (self->has_sidebar || self->has_inspector || self->pane_role != 0) {
+        char pane_js[320];
+        int pj = 0;
+        if (self->has_sidebar)
+            pj += snprintf(pane_js + pj, sizeof(pane_js) - pj, "globalThis[Symbol.for('zapp.hasSidebar')]=true;");
+        if (self->has_inspector)
+            pj += snprintf(pane_js + pj, sizeof(pane_js) - pj, "globalThis[Symbol.for('zapp.hasInspector')]=true;");
+        if (self->pane_role == 1)
+            pj += snprintf(pane_js + pj, sizeof(pane_js) - pj, "globalThis[Symbol.for('zapp.isSidebar')]=true;");
+        if (self->pane_role == 3)
+            pj += snprintf(pane_js + pj, sizeof(pane_js) - pj, "globalThis[Symbol.for('zapp.isInspector')]=true;");
+        if (pj > 0) {
+            wchar_t* wpane = utf8_to_wchar_wv(pane_js);
+            if (wpane) { ICoreWebView2_AddScriptToExecuteOnDocumentCreated(webview, wpane, NULL); free(wpane); }
+        }
     }
 
     // Window-metrics CSS vars (parity with darwin/webview.m's injection)
@@ -1017,6 +1046,10 @@ typedef struct {
     int32_t window_id;
     bool inspectable;
     char* url_override;
+    int32_t identity_id;
+    int pane_role;
+    bool has_sidebar;
+    bool has_inspector;
 } ZappEnvHandler;
 
 static HRESULT STDMETHODCALLTYPE ZappEnv_QueryInterface(
@@ -1056,6 +1089,10 @@ static HRESULT STDMETHODCALLTYPE ZappEnv_Invoke(
     zapp_ctrl_handlers[wid].window_id = wid;
     zapp_ctrl_handlers[wid].inspectable = self->inspectable;
     zapp_ctrl_handlers[wid].url_override = self->url_override;
+    zapp_ctrl_handlers[wid].identity_id = self->identity_id;
+    zapp_ctrl_handlers[wid].pane_role = self->pane_role;
+    zapp_ctrl_handlers[wid].has_sidebar = self->has_sidebar;
+    zapp_ctrl_handlers[wid].has_inspector = self->has_inspector;
     self->url_override = NULL; // Transfer ownership
 
     ICoreWebView2Environment_CreateCoreWebView2Controller(
@@ -1078,52 +1115,63 @@ static ZappEnvHandler zapp_env_handlers[ZAPP_MAX_WINDOWS];
 // Main entry: create WebView2 in a window
 // ============================================================
 
-void windows_webview_create(void* hwnd_ptr, bool inspectable, const char* url_override) {
+// Generalized create: mount a webview into `hwnd` (the main window OR a pane's
+// child HWND) at transport slot `slot`, with JS identity `identity_id` (<0 →
+// slot), optional transparent background, and pane role/flags. The host path
+// (windows_webview_create) is a thin wrapper; sidebar/inspector panes call this
+// directly with their own slot + the host's identity. Mirrors darwin create_ext.
+void windows_webview_create_ext(void* hwnd_ptr, bool inspectable, const char* url_override,
+                                int32_t slot, int32_t identity_id, bool transparent,
+                                int pane_role, bool has_sidebar, bool has_inspector) {
     HWND hwnd = (HWND)hwnd_ptr;
+    if (slot < 0 || slot >= ZAPP_MAX_WINDOWS) return;
 
-    // Find the window ID for this HWND
-    int32_t wid = -1;
-    for (int i = 0; i < ZAPP_MAX_WINDOWS; i++) {
-        if (zapp_get_hwnd(i) == hwnd) {
-            wid = i;
-            break;
-        }
-    }
-    if (wid < 0) {
-        // Not registered yet — will be registered after window_create returns
-        // Use the next available slot
-        for (int i = 0; i < ZAPP_MAX_WINDOWS; i++) {
-            if (zapp_get_hwnd(i) == NULL) {
-                wid = i;
-                break;
-            }
-        }
-    }
-    if (wid < 0) return;
+    zapp_webview_transparent[slot] = transparent;
 
-    // Set up environment handler
-    zapp_env_handlers[wid].lpVtbl = &ZappEnv_Vtbl;
-    zapp_env_handlers[wid].hwnd = hwnd;
-    zapp_env_handlers[wid].window_id = wid;
-    zapp_env_handlers[wid].inspectable = inspectable;
-    zapp_env_handlers[wid].url_override = url_override ? _strdup(url_override) : NULL;
+    zapp_env_handlers[slot].lpVtbl = &ZappEnv_Vtbl;
+    zapp_env_handlers[slot].hwnd = hwnd;
+    zapp_env_handlers[slot].window_id = slot;
+    zapp_env_handlers[slot].inspectable = inspectable;
+    zapp_env_handlers[slot].url_override = url_override ? _strdup(url_override) : NULL;
+    zapp_env_handlers[slot].identity_id = identity_id;
+    zapp_env_handlers[slot].pane_role = pane_role;
+    zapp_env_handlers[slot].has_sidebar = has_sidebar;
+    zapp_env_handlers[slot].has_inspector = has_inspector;
 
-    // User data directory for WebView2 — use app-specific path
+    // User data directory for WebView2 — app-specific, shared across windows.
     wchar_t udf[MAX_PATH];
-    // Use LocalAppData for persistent user data dir
     if (SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, udf))) {
         wcscat_s(udf, MAX_PATH, L"\\zapp\\webview2");
     } else {
         GetTempPathW(MAX_PATH, udf);
         wcscat_s(udf, MAX_PATH, L"zapp_webview2");
     }
-    // Ensure directory exists
     CreateDirectoryW(udf, NULL);
 
-    // Use self-contained loader (no WebView2Loader.dll needed). Custom
-    // protocols don't need environment options — WebResourceRequested
-    // intercepts their subresource requests directly (see
-    // zapp_register_protocol_filters).
+    // Self-contained loader (no WebView2Loader.dll). Custom protocols don't need
+    // environment options — WebResourceRequested intercepts subresources.
     zapp_create_environment(udf,
-        (ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler*)&zapp_env_handlers[wid]);
+        (ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler*)&zapp_env_handlers[slot]);
+}
+
+void windows_webview_create(void* hwnd_ptr, bool inspectable, const char* url_override) {
+    HWND hwnd = (HWND)hwnd_ptr;
+
+    // Find the window ID for this HWND (registered by window_create, or the
+    // next free slot if not yet registered).
+    int32_t wid = -1;
+    for (int i = 0; i < ZAPP_MAX_WINDOWS; i++) {
+        if (zapp_get_hwnd(i) == hwnd) { wid = i; break; }
+    }
+    if (wid < 0) {
+        for (int i = 0; i < ZAPP_MAX_WINDOWS; i++) {
+            if (zapp_get_hwnd(i) == NULL) { wid = i; break; }
+        }
+    }
+    if (wid < 0) return;
+
+    // Host path: self identity, no panes; transparent was set by window.c
+    // (vibrancy/Mica) into the per-slot flag before this call.
+    windows_webview_create_ext(hwnd_ptr, inspectable, url_override, wid, -1,
+                               zapp_webview_transparent[wid], 0, false, false);
 }
