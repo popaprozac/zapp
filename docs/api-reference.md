@@ -813,6 +813,58 @@ window ops, they are not gated by the `permissions` manifest.
 **Window slots.** Each sidebar window occupies 2 of the 64 available
 window slots (one for the host, one for the sidebar webview).
 
+### Inspector (macOS)
+
+Pass `inspector` in `Window.create` to attach a trailing utility pane —
+the right-hand "inspector" in Mail/Xcode/Notes — completing the
+`sidebar | content | inspector` three-column shell. It is a web-content
+pane (loads an app route like the sidebar) and mirrors the `SidebarHandle`:
+declared at create, toggled/collapsed/resized at runtime. macOS only; the
+option is a no-op elsewhere.
+
+```ts
+const win = await Window.create({
+  url: "/",
+  sidebar: { url: "/nav", width: 240 },
+  inspector: { url: "/inspector", width: 300, collapsed: true },
+  toolbar: {
+    items: [
+      { type: "toggleSidebar" },
+      { type: "trackingSeparator" },                 // tracks the sidebar edge
+      { id: "compose", icon: "sf:square.and.pencil", label: "Compose", action: () => {} },
+      { type: "flexibleSpace" },
+      { type: "trackingSeparator", pane: "inspector" }, // tracks the inspector edge
+      { type: "toggleInspector" },                   // toggles the inspector
+    ],
+  },
+});
+
+const insp = Window.current().inspector!;
+insp.toggle();
+insp.setWidth(360);
+win.on(WindowEvent.INSPECTOR_RESIZED, ({ width }) => console.log("inspector", width));
+```
+
+**Options:** `url` (required), `width` (default 280), `minWidth`/`maxWidth`
+(180/400), `collapsible` (default true), `collapsed` (default false — set
+true for the common "hidden until summoned" inspector), `material`.
+
+**Handle (`win.inspector`, present only when the window has one):**
+`toggle()` / `collapse()` / `expand()` / `setWidth(px)`, plus `collapsed`
+and `width` (tracked from `INSPECTOR_COLLAPSED` / `INSPECTOR_EXPANDED` /
+`INSPECTOR_RESIZED`). `Window.isInspector()` is true inside the inspector
+pane.
+
+**Toolbar integration:** `{ type: "toggleInspector" }` adds a button (SF
+symbol `sidebar.right`) that toggles the inspector;
+`{ type: "trackingSeparator", pane: "inspector" }` aligns toolbar controls
+to the content↔inspector divider. Both require the window to have an
+inspector (warned + dropped otherwise).
+
+A window with an inspector but no sidebar roots on a 2-item split (content
++ inspector); with both, a 3-item split. Each pane consumes one dispatch
+slot.
+
 ### Toolbar (macOS)
 
 Pass `toolbar` in `Window.create` to attach a real `NSToolbar`. With

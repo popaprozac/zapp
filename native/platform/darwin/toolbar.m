@@ -21,9 +21,16 @@ extern void* darwin_menu_build_from_items_json(const char* items_json);
 // window.m dispatch-table lookups: pane webviews for chrome-metrics injection.
 extern WKWebView* zapp_webview_for_slot(int32_t slot);
 extern int32_t zapp_sidebar_slot_lookup(int32_t host_slot);
+extern void darwin_inspector_toggle(int32_t window_id);
+extern int32_t zapp_inspector_divider_index(void* window_ptr);
+extern int32_t zapp_inspector_slot_lookup(int32_t host_slot);
 
-// Tracking separator's private identifier (never user-visible).
-static NSString* const kZappTrackingSeparatorId = @"zapp.trackingSeparator";
+// Tracking separator's private identifiers (never user-visible).
+// Sidebar/default uses the original id (byte-stable for shipped sidebar behavior).
+// Inspector gets a distinct id so both can coexist in the same toolbar.
+static NSString* const kZappTrackingSeparatorId          = @"zapp.trackingSeparator";
+static NSString* const kZappTrackingSeparatorInspectorId = @"zapp.trackingSeparator.inspector";
+static NSString* const kZappToggleInspectorId = @"zapp.toggleInspector";
 
 static void zapp_toolbar_on_main(void (^block)(void)) {
     if ([NSThread isMainThread]) block();
@@ -83,17 +90,42 @@ static NSMutableDictionary<NSValue*, ZappToolbarController*>* zapp_toolbars = ni
     willBeInsertedIntoToolbar:(BOOL)flag {
     (void)toolbar; (void)flag;
 
-    if ([identifier isEqualToString:kZappTrackingSeparatorId]) {
-        // Divider tracks the sidebar split. The split view lives on the
-        // window's NSSplitViewController root (sidebar construction path).
+    if ([identifier isEqualToString:kZappToggleInspectorId]) {
+        NSToolbarItem* item = [[NSToolbarItem alloc] initWithItemIdentifier:identifier];
+        item.label = @"Inspector";
+        item.paletteLabel = @"Toggle Inspector";
+        item.toolTip = @"Toggle Inspector";
+        if (@available(macOS 11.0, *)) {
+            item.image = [NSImage imageWithSystemSymbolName:@"sidebar.right"
+                          accessibilityDescription:@"Toggle Inspector"];
+        }
+        item.target = self;
+        item.action = @selector(zappToggleInspectorClicked:);
+        if (@available(macOS 10.15, *)) item.bordered = YES;
+        return item;
+    }
+
+    if ([identifier isEqualToString:kZappTrackingSeparatorId] ||
+        [identifier isEqualToString:kZappTrackingSeparatorInspectorId]) {
+        // Divider tracks a split pane. "pane" in the stored def determines
+        // which divider: "inspector" → zapp_inspector_divider_index,
+        // anything else (including absent/nil) → divider 0 (sidebar).
         if (@available(macOS 11.0, *)) {
             NSViewController* vc = self.window.contentViewController;
             if ([vc isKindOfClass:[NSSplitViewController class]]) {
                 NSSplitView* sv = ((NSSplitViewController*)vc).splitView;
+                NSDictionary* def = self.buttonsById[identifier];
+                NSString* pane = [def[@"pane"] isKindOfClass:[NSString class]] ? def[@"pane"] : @"sidebar";
+                NSInteger dividerIndex = 0;
+                if ([pane isEqualToString:@"inspector"]) {
+                    int32_t di = zapp_inspector_divider_index((__bridge void*)self.window);
+                    if (di < 0) return nil; // no inspector — drop
+                    dividerIndex = (NSInteger)di;
+                }
                 return [NSTrackingSeparatorToolbarItem
                     trackingSeparatorToolbarItemWithIdentifier:identifier
                                                      splitView:sv
-                                                  dividerIndex:0];
+                                                  dividerIndex:dividerIndex];
             }
         }
         return nil;
@@ -164,6 +196,11 @@ static NSMutableDictionary<NSValue*, ZappToolbarController*>* zapp_toolbars = ni
     return en ? en.boolValue : YES;
 }
 
+- (void)zappToggleInspectorClicked:(NSToolbarItem*)sender {
+    (void)sender;
+    darwin_inspector_toggle(self.windowNumericId);
+}
+
 - (void)zappToolbarItemClicked:(NSToolbarItem*)sender {
     NSString* itemId = sender.itemIdentifier;
     if (!itemId.length) return;
@@ -203,9 +240,17 @@ static NSArray<NSToolbarItemIdentifier>* zapp_toolbar_parse_items(
             // own default-identifiers attach path filters dups, so mirror it.
             if (![ids containsObject:NSToolbarToggleSidebarItemIdentifier])
                 [ids addObject:NSToolbarToggleSidebarItemIdentifier];
+        } else if ([type isEqualToString:@"toggleInspector"]) {
+            if (![ids containsObject:kZappToggleInspectorId])
+                [ids addObject:kZappToggleInspectorId];
         } else if ([type isEqualToString:@"trackingSeparator"]) {
-            if (![ids containsObject:kZappTrackingSeparatorId])
-                [ids addObject:kZappTrackingSeparatorId];
+            NSString* tsPane = [def[@"pane"] isKindOfClass:[NSString class]] ? def[@"pane"] : @"sidebar";
+            NSString* tsId = [tsPane isEqualToString:@"inspector"]
+                ? kZappTrackingSeparatorInspectorId : kZappTrackingSeparatorId;
+            if (![ids containsObject:tsId]) {
+                [ids addObject:tsId];
+                buttons[tsId] = def;  // carries "pane"
+            }
         } else if ([type isEqualToString:@"space"]) {
             [ids addObject:NSToolbarSpaceItemIdentifier];
         } else if ([type isEqualToString:@"flexibleSpace"]) {
@@ -524,8 +569,8 @@ void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_u
         @"r.style.setProperty('--zapp-toolbar-height','%.0fpx');}}catch(e){}})();",
         totalInset, toolbarH];
 
-    int32_t slots[2] = { host_slot, zapp_sidebar_slot_lookup(host_slot) };
-    for (int i = 0; i < 2; i++) {
+    int32_t slots[3] = { host_slot, zapp_sidebar_slot_lookup(host_slot), zapp_inspector_slot_lookup(host_slot) };
+    for (int i = 0; i < 3; i++) {
         WKWebView* wv = zapp_webview_for_slot(slots[i]);
         if (!wv) continue;
         if (add_user_script) {

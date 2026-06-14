@@ -50,6 +50,12 @@ export enum WindowEvent {
    * auto-dismissal. Broadcast to ALL webviews + workers (toolbar-click
    * pattern). Payload: `{ windowId, popoverId }`. */
   POPOVER_CLOSED = 16,
+  /** Fires when the inspector collapses. Payload: `{ windowId, timestamp }`. */
+  INSPECTOR_COLLAPSED = 17,
+  /** Fires when the inspector expands. Payload: `{ windowId, timestamp }`. */
+  INSPECTOR_EXPANDED = 18,
+  /** Fires when the inspector is resized. Payload: `{ windowId, width, timestamp }`. */
+  INSPECTOR_RESIZED = 19,
 }
 
 /** App lifecycle events.
@@ -95,6 +101,9 @@ const WINDOW_EVENT_NAMES: Record<number, string> = {
   [WindowEvent.SIDEBAR_RESIZED]: "window:sidebar-resized",
   [WindowEvent.TOOLBAR_CLICKED]: "window:toolbar-clicked",
   [WindowEvent.POPOVER_CLOSED]: "window:popover-closed",
+  [WindowEvent.INSPECTOR_COLLAPSED]: "window:inspector-collapsed",
+  [WindowEvent.INSPECTOR_EXPANDED]: "window:inspector-expanded",
+  [WindowEvent.INSPECTOR_RESIZED]: "window:inspector-resized",
 };
 
 const APP_EVENT_NAMES: Record<number, string> = {
@@ -147,6 +156,13 @@ export interface ModalDismissedPayload {
 
 /** Payload for `WindowEvent.SIDEBAR_RESIZED` — fires when the divider is dragged. */
 export interface SidebarResizedPayload {
+  windowId: string;
+  width: number;
+  timestamp?: number;
+}
+
+/** Payload for `WindowEvent.INSPECTOR_RESIZED` — fires when the divider is dragged. */
+export interface InspectorResizedPayload {
   windowId: string;
   width: number;
   timestamp?: number;
