@@ -814,16 +814,26 @@ static HRESULT STDMETHODCALLTYPE ZappCtrl_Invoke(
     extern const char* windows_get_theme(void);
     const char* theme = windows_get_theme();
 
-    // Build config JS
+    // powerState: seed the current AC/battery state so App.getPowerState()
+    // is correct synchronously on first call (same as darwin's seed).
+    extern const char* windows_get_power_state(void);
+    const char* power_state = windows_get_power_state();
+
+    // Build config JS. The runtime reads this from
+    // Symbol.for('zapp.bootstrapConfig') (App.getTheme / getPowerState /
+    // etc.) — the earlier globalThis.__zappConfig was a dead global
+    // nothing consumed, so the initial theme/maxWorkers/powerState seed
+    // never reached JS on Windows (theme only updated via change events).
     static char config_js[4096];
     snprintf(config_js, sizeof(config_js),
-        "globalThis.__zappConfig={"
+        "globalThis[Symbol.for('zapp.bootstrapConfig')]={"
         "name:'%s',"
         "webContentInspectable:%s,"
         "applicationShouldTerminateAfterLastWindowClosed:%s,"
         "maxWorkers:%d,"
         "csp:'%s',"
-        "theme:'%s'"
+        "theme:'%s',"
+        "powerState:%s"
         "};"
         "globalThis.__zappServiceManifest=%s;"
         "globalThis[Symbol.for('zapp.owner')]='%s';"
@@ -834,6 +844,7 @@ static HRESULT STDMETHODCALLTYPE ZappCtrl_Invoke(
         max_workers,
         csp ? csp : "",
         theme ? theme : "light",
+        power_state ? power_state : "null",
         manifest ? manifest : "[]",
         window_id_str,
         window_id_str);
@@ -843,6 +854,48 @@ static HRESULT STDMETHODCALLTYPE ZappCtrl_Invoke(
     if (wconfig) {
         ICoreWebView2_AddScriptToExecuteOnDocumentCreated(webview, wconfig, NULL);
         free(wconfig);
+    }
+
+    // Window-metrics CSS vars (parity with darwin/webview.m's injection)
+    // — apps can rely on these existing cross-platform.
+    //
+    // On standard Windows windows the webview IS the client area, BELOW
+    // the OS title bar, so content never underlaps the chrome: every
+    // inset is 0 (unlike macOS FullSizeContentView, where content slides
+    // under the traffic lights and inset-left is non-zero). The
+    // Windows-specific --zapp-window-controls-inset-right (caption
+    // buttons are on the RIGHT) only becomes non-zero with an
+    // extended-frame title bar (DwmExtendFrameIntoClientArea); when that
+    // lands it sets the value below to the real caption-button cluster
+    // width (~138px at 96dpi, DPI-scaled). data-zapp-titlebar-style is
+    // useful today for style-conditional CSS.
+    {
+        LONG_PTR wstyle = GetWindowLongPtrW(self->hwnd, GWL_STYLE);
+        int borderless = (wstyle & WS_CAPTION) != WS_CAPTION;
+        // Reserved for the extended-frame feature; 0 until then.
+        int controls_inset_right = 0;
+        const char* titlebar_style = borderless ? "hidden" : "default";
+        // Defer to DOM-ready: AddScriptToExecuteOnDocumentCreated runs
+        // BEFORE the parser builds the real <html>, so vars set on the
+        // transient documentElement at document-create are discarded
+        // (WebKit's atDocumentStart runs later, after it exists). Apply
+        // on DOMContentLoaded (or immediately if already past loading).
+        char metrics_js[768];
+        snprintf(metrics_js, sizeof(metrics_js),
+            "(function(){var apply=function(){try{var r=document.documentElement;if(r){"
+            "r.style.setProperty('--zapp-titlebar-height','0px');"
+            "r.style.setProperty('--zapp-toolbar-height','0px');"
+            "r.style.setProperty('--zapp-window-controls-inset-left','0px');"
+            "r.style.setProperty('--zapp-window-controls-inset-right','%dpx');"
+            "r.setAttribute('data-zapp-titlebar-style','%s');}}catch(e){}};"
+            "if(document.readyState!=='loading')apply();"
+            "else document.addEventListener('DOMContentLoaded',apply);})();",
+            controls_inset_right, titlebar_style);
+        wchar_t* wmetrics = utf8_to_wchar_wv(metrics_js);
+        if (wmetrics) {
+            ICoreWebView2_AddScriptToExecuteOnDocumentCreated(webview, wmetrics, NULL);
+            free(wmetrics);
+        }
     }
 
     // Inject bootstrap (bridge + event system)

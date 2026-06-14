@@ -172,6 +172,10 @@ void windows_platform_init(const char* app_name) {
     // Register myapp:// handlers so the OS routes deep links to us.
     windows_register_url_schemes();
 
+    // Power-state change notifications (sleep/wake, AC/battery, %).
+    extern void windows_power_init(void);
+    windows_power_init();
+
     // Initialize COM (apartment-threaded for WebView2)
     CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
 
@@ -225,6 +229,8 @@ int windows_platform_run(bool terminate_after_last_window) {
 
     // Fire APP_SHUTDOWN event
     windows_shortcut_unregister_all();
+    extern void windows_power_shutdown(void);
+    windows_power_shutdown();
     service_run_shutdown_all();
     zapp_app_dispatch(ZAPP_EVENT_APP_SHUTDOWN, NULL);
 
