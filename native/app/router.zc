@@ -726,6 +726,42 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
         return;
     }
 
+    let is_in_toggle = action == "inspector:toggle";
+    let is_in_collapse = action == "inspector:collapse";
+    let is_in_expand = action == "inspector:expand";
+    let is_in_set_width = action == "inspector:setWidth";
+    if is_in_toggle || is_in_collapse || is_in_expand || is_in_set_width {
+        let in_target = window_id;
+        let in_wid_opt = pre_args.get_string("windowId");
+        if in_wid_opt.is_some() {
+            raw {
+                #ifdef __APPLE__
+                extern int32_t darwin_window_numeric_id_for_string(const char* wid);
+                int32_t in_resolved = darwin_window_numeric_id_for_string((const char*)in_wid_opt.val);
+                if (in_resolved >= 0) in_target = in_resolved;
+                #endif
+            }
+        }
+        let in_w = 0;
+        if is_in_set_width {
+            let width_opt = pre_args.get_int("width");
+            if width_opt.is_some() { in_w = width_opt.unwrap(); }
+        }
+        raw {
+            #ifdef __APPLE__
+            extern void darwin_inspector_toggle(int32_t window_id);
+            extern void darwin_inspector_collapse(int32_t window_id);
+            extern void darwin_inspector_expand(int32_t window_id);
+            extern void darwin_inspector_set_width(int32_t window_id, int32_t width);
+            if (is_in_toggle) darwin_inspector_toggle((int32_t)in_target);
+            else if (is_in_collapse) darwin_inspector_collapse((int32_t)in_target);
+            else if (is_in_expand) darwin_inspector_expand((int32_t)in_target);
+            else darwin_inspector_set_width((int32_t)in_target, (int32_t)in_w);
+            #endif
+        }
+        return;
+    }
+
     // Popover actions — keyed by popoverId (popover.m registry). show passes
     // the raw args subtree through: popover.m parses anchor/edge itself
     // (tray-style payload-driven extraction).
