@@ -161,6 +161,13 @@ export interface SidebarResizedPayload {
   timestamp?: number;
 }
 
+/** Payload for `WindowEvent.INSPECTOR_RESIZED` — fires when the divider is dragged. */
+export interface InspectorResizedPayload {
+  windowId: string;
+  width: number;
+  timestamp?: number;
+}
+
 /** Known window events that carry size+position data. */
 type SizeEvents = "window:resize" | "window:move" | "window:maximize" | "window:restore";
 
