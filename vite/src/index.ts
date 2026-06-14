@@ -455,14 +455,28 @@ function workerModulesPrelude(
   if (!engineConsumesBareShims(engine) && workerModules.length > 0) {
     const requested = workerModules.filter(c => WORKER_MODULE_BINDINGS[c] != null);
     if (requested.length > 0) {
-      if (zappLogLevel() >= 1) {
-        // Full per-worker detail — verbose.
+      const base = path.basename(entryAbsPath);
+      const list = requested.map(c => `"${c}"`).join(", ");
+      if (engine === "zjs") {
+        // zjs serves fetch/etc. from its own runtime (unless that was opted
+        // out when zjs itself was built), so the bare-* shims are deliberately
+        // skipped and these globals are NOT undefined. No runtime consequence
+        // in the common case → informational, verbose-only.
+        if (zappLogLevel() >= 1) {
+          console.warn(
+            `[zapp] worker "${base}" (engine: "zjs") requested workerModules: [${list}] — ` +
+            `bare-* shims aren't injected for zjs; these globals (e.g. fetch) are provided by ` +
+            `zjs's own runtime. Skipping shim injection.`
+          );
+        }
+      } else if (zappLogLevel() >= 1) {
+        // Non-bare, non-zjs (the undefined/mixed-engine case): globals may
+        // genuinely be undefined. Full per-worker detail — verbose.
         console.warn(
-          `[zapp] worker "${path.basename(entryAbsPath)}" (engine: "${engine}") requested ` +
-          `workerModules: [${requested.map(c => `"${c}"`).join(", ")}] — those globals ` +
-          `come from bare-* shim packages and are only injected for bare-* engines. ` +
-          `Skipping shim injection. (For zjs, the capability will be served by the ` +
-          `engine's own runtime layer once it lands; for now the global will be undefined.)`
+          `[zapp] worker "${base}" (engine: "${engine}") requested ` +
+          `workerModules: [${list}] — those globals come from bare-* shim packages and are ` +
+          `only injected for bare-* engines. Skipping shim injection — they will be undefined ` +
+          `in this worker.`
         );
       } else if (!shimAdvisoryShown) {
         // One concise advisory at default level — it has a runtime consequence.
