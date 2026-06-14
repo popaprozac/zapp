@@ -113,6 +113,24 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
         <button id="btn-new-window-form">Sheet (form)</button>
         <button id="btn-new-window-fullscreen">Sheet (fullscreen)</button>
         <button id="btn-new-window-bottom">Bottom Sheet (medium+large+grabber)</button>
+        <button id="btn-new-window-sidebar">New Window (sidebar)</button>
+        <button id="btn-toggle-sidebar">Toggle Sidebar (last)</button>
+        <button id="btn-toggle-inspector">Toggle Inspector (last)</button>
+        <button id="btn-inspector-360">Inspector → 360px (last)</button>
+      </section>
+
+      <section>
+        <h2>Dynamic Toolbar</h2>
+        <p style="font-size: 12px; opacity: 0.7; margin: 0 0 8px 0;">
+          Open <strong>New Window (sidebar)</strong> first — the toolbar lives on that window.
+          The filter button uses <code>indicator: false</code> (no chevron, Messages-app look).
+          Selecting a filter calls <code>updateItem</code> — reopen the menu to see the checkmark move.
+          Watch the sidebar-window titlebar shrink/grow when you remove and re-attach.
+        </p>
+        <button id="btn-tb-toggle-compose">Toggle compose enabled</button>
+        <button id="btn-tb-remove">Remove toolbar</button>
+        <button id="btn-tb-attach">Attach toolbar</button>
+        <div id="tb-result" class="result"></div>
       </section>
 
       <section>
@@ -1130,7 +1148,11 @@ $("btn-emit").addEventListener("click", () => {
 // workers are the supported way to do app-wide background work.)
 
 Events.on("counter:tick", (data: any) => {
-  $("counter-display").textContent =
+  // Null-safe: sidebar-demo panes replace #app (the display is gone) but
+  // this handler — registered before the pane override — still receives
+  // the broadcast.
+  const el = document.getElementById("counter-display");
+  if (el) el.textContent =
     `Counter: ${data.value}  (ts: ${new Date(data.ts).toLocaleTimeString()})`;
 });
 
@@ -1414,3 +1436,216 @@ Notification.on("response", (r: NotificationResponse) => {
 });
 
 log("App initialized");
+
+// --- Native Sidebar demo ---
+// "New Window (sidebar)" opens a real NSSplitViewItem sidebar (liquid glass
+// on macOS 26) hosting web content. Both panes load this same index.html with
+// a pane hash; the override block below swaps in a mini UI for pane windows.
+// NOTE: window events (incl. sidebar-*) are delivered only into that window's
+// own webviews — subscribing on the creator's handle here never fires. The
+// SIDEBAR_* subscriptions live in the #main-pane block below instead.
+
+// --- Dynamic Toolbar state (drives gates 1–3 in the toolbar demo) ---
+// tbFilter tracks the active filter choice so tbFilterMenu() can stamp the
+// correct checked:true entry. setTbFilter rebuilds the pull-down in place via
+// updateItem — the moving-checkmark gate.
+let tbFilter = "all";
+const tbFilterMenu = (): any[] => [
+  { id: "tbf-all",     label: "All",     checked: tbFilter === "all",     action: () => setTbFilter("all") },
+  { id: "tbf-unread",  label: "Unread",  checked: tbFilter === "unread",  action: () => setTbFilter("unread") },
+  { id: "tbf-flagged", label: "Flagged", checked: tbFilter === "flagged", action: () => setTbFilter("flagged") },
+];
+function setTbFilter(f: string) {
+  tbFilter = f;
+  log(`[demo] toolbar filter → ${f}`);
+  lastSidebarWin?.toolbar.updateItem("filter", { menu: tbFilterMenu() });
+}
+
+// Full toolbar item set — defined once, reused by both create and re-attach.
+const tbItems = () => [
+  { type: "toggleSidebar" } as const,
+  { type: "trackingSeparator" } as const,
+  { id: "compose", icon: "sf:square.and.pencil", label: "Compose",
+    action: () => log("toolbar action: compose (creator callback)") },
+  { type: "flexibleSpace" } as const,
+  { id: "filter", icon: "sf:line.3.horizontal.decrease", label: "Filter",
+    indicator: false, menu: tbFilterMenu() },
+  { type: "trackingSeparator", pane: "inspector" } as const,
+  { type: "toggleInspector" } as const,
+];
+
+let lastSidebarWin: Awaited<ReturnType<typeof Window.create>> | undefined;
+$("btn-new-window-sidebar")?.addEventListener("click", async () => {
+  lastSidebarWin = await Window.create({
+    title: "Sidebar Demo", width: 1100, height: 600,
+    url: "#main-pane",
+    sidebar: { url: "#sidebar-pane", width: 240, minWidth: 180, maxWidth: 360 },
+    inspector: { url: "#inspector-pane", width: 300, collapsed: true },
+    toolbar: { items: tbItems() },
+  });
+  lastSidebarWin.on(WindowEvent.INSPECTOR_RESIZED, (d: any) => log(`[demo] inspector width ${d.width}`));
+  lastSidebarWin.on(WindowEvent.INSPECTOR_COLLAPSED, () => log("[demo] inspector collapsed"));
+  lastSidebarWin.on(WindowEvent.INSPECTOR_EXPANDED, () => log("[demo] inspector expanded"));
+});
+
+// Remote control from the launcher: the create-handle's SidebarHandle posts
+// sidebar:toggle with the demo window's id. Recovers a drag-collapsed sidebar
+// until the NSToolbar toggle button ships.
+$("btn-toggle-sidebar")?.addEventListener("click", () => {
+  if (!lastSidebarWin?.sidebar) { log("no sidebar window yet"); return; }
+  lastSidebarWin.sidebar.toggle();
+  log("sidebar toggled");
+});
+
+$("btn-toggle-inspector")?.addEventListener("click", () => {
+  if (!lastSidebarWin?.inspector) { log("no inspector window yet — open sidebar window first"); return; }
+  lastSidebarWin.inspector.toggle();
+  log("inspector toggled");
+});
+
+$("btn-inspector-360")?.addEventListener("click", () => {
+  if (!lastSidebarWin?.inspector) { log("no inspector window yet — open sidebar window first"); return; }
+  lastSidebarWin.inspector.setWidth(360);
+  log("inspector → 360px");
+});
+
+// --- Dynamic Toolbar demo handlers ---
+// All ops act on lastSidebarWin's toolbar. Open "New Window (sidebar)" first.
+
+let tbComposeEnabled = true;
+
+// Gate 2: enable/disable — greys out + unclickable when false.
+$("btn-tb-toggle-compose")?.addEventListener("click", () => {
+  if (!lastSidebarWin) { log("[toolbar demo] open sidebar window first"); return; }
+  tbComposeEnabled = !tbComposeEnabled;
+  lastSidebarWin.toolbar.updateItem("compose", { enabled: tbComposeEnabled });
+  $("tb-result").textContent = `compose enabled: ${tbComposeEnabled}`;
+  log(`[toolbar demo] compose ${tbComposeEnabled ? "enabled" : "disabled"}`);
+});
+
+// Gate 3: remove — --zapp-titlebar-height shrinks back to bare titlebar;
+// --zapp-toolbar-height → 0px. Visible as titlebar height change in sidebar win.
+$("btn-tb-remove")?.addEventListener("click", () => {
+  if (!lastSidebarWin) { log("[toolbar demo] open sidebar window first"); return; }
+  lastSidebarWin.toolbar.remove();
+  $("tb-result").textContent = "toolbar removed — watch titlebar height in sidebar window";
+  log("[toolbar demo] toolbar removed");
+});
+
+// Gate 4: re-attach — late setItems on a window that currently has no toolbar.
+// Style is honored only on a fresh attach; tbFilter state is preserved so the
+// checkmark resumes from wherever the user left it.
+$("btn-tb-attach")?.addEventListener("click", () => {
+  if (!lastSidebarWin) { log("[toolbar demo] open sidebar window first"); return; }
+  tbComposeEnabled = true; // reset enable state on re-attach
+  lastSidebarWin.toolbar.setItems(tbItems());
+  $("tb-result").textContent = "toolbar attached — titlebar height should grow back";
+  log("[toolbar demo] toolbar re-attached via setItems");
+});
+
+// Pane override: when this bundle runs inside a sidebar-demo pane, replace the
+// full demo shell with a mini UI. (Runs last so it wins the #app innerHTML.)
+if (location.hash === "#sidebar-pane" || location.hash === "#main-pane" || location.hash === "#inspector-pane") {
+  const app = document.querySelector<HTMLDivElement>("#app")!;
+  document.body.style.background = "transparent";
+  if (Window.isInspector()) {
+    app.innerHTML = `
+      <div style="padding:var(--zapp-titlebar-height, 52px) 12px 12px;font:13px -apple-system">
+        <div style="opacity:.5;font-size:11px;margin-bottom:8px">NATIVE INSPECTOR</div>
+        <div id="insp-status" style="font-size:12px;opacity:.6;margin-bottom:8px">width 300</div>
+        <button id="insp-toggle">Toggle inspector</button>
+      </div>`;
+    win.on(WindowEvent.INSPECTOR_RESIZED, (d: any) => {
+      const el = document.querySelector("#insp-status");
+      if (el) el.textContent = `width ${d.width}`;
+      console.log(`[inspector pane] resized → ${d.width}`);
+    });
+    win.on(WindowEvent.INSPECTOR_COLLAPSED, () => {
+      console.log("[inspector pane] collapsed");
+    });
+    win.on(WindowEvent.INSPECTOR_EXPANDED, () => {
+      console.log("[inspector pane] expanded");
+    });
+    document.querySelector("#insp-toggle")!.addEventListener("click", () => {
+      Window.current().inspector?.toggle();
+    });
+  } else if (Window.isSidebar()) {
+    app.innerHTML = `
+      <div style="padding:var(--zapp-titlebar-height, 52px) 12px 12px;font:13px -apple-system">
+        <div style="opacity:.5;font-size:11px;margin-bottom:8px">NATIVE SIDEBAR</div>
+        ${["Inbox", "Drafts", "Sent", "Archive"].map(n =>
+          `<div class="sb-item" data-n="${n}" style="padding:6px 10px;border-radius:6px;cursor:default">${n}</div>`).join("")}
+      </div>`;
+    app.querySelectorAll(".sb-item").forEach(el =>
+      el.addEventListener("click", () => {
+        console.log(`[sidebar pane] click → Events.emit sb:nav ${(el as HTMLElement).dataset.n}`);
+        Events.emit("sb:nav", { item: (el as HTMLElement).dataset.n });
+      }));
+  } else {
+    app.innerHTML = `
+      <div style="padding:var(--zapp-titlebar-height, 52px) 24px;font:14px -apple-system">
+        <h2 style="margin:0 0 8px">Main pane</h2>
+        <p>Click items in the native sidebar — selections arrive over the Events bus.</p>
+        <div id="sb-selection" style="font-size:20px;font-weight:600">—</div>
+        <div id="sb-status" style="opacity:.6;font-size:12px;margin-top:12px">sidebar: width 240</div>
+        <button id="sb-toggle" style="margin-top:12px">Toggle sidebar</button>
+        <button id="sb-popover-btn" style="margin-top:12px">Popover (this button)</button>
+        <button id="sb-popover-tb" style="margin-top:12px">Popover (compose toolbar item)</button>
+      </div>`;
+    // The canonical shape: any pane of this window gets a handle with
+    // .sidebar attached (zapp.hasSidebar) — if it has one, toggle it.
+    document.querySelector("#sb-toggle")!.addEventListener("click", () => {
+      Window.current().sidebar?.toggle();
+    });
+    // Toolbar clicks land here as a window event (same broadcast the
+    // creator's action callback consumes).
+    win.on(WindowEvent.TOOLBAR_CLICKED, (p: any) => {
+      console.log(`[main pane] toolbar clicked: ${p.id}`);
+      document.querySelector("#sb-status")!.textContent = `toolbar: ${p.id}`;
+    });
+    // Popover demos: one anchored to the compose toolbar button, one to a
+    // DOM element. Created lazily on first use, reused after (persistent —
+    // the counter in the popover page proves state survives hide/show).
+    let tbPopover: any, elPopover: any;
+    document.querySelector("#sb-popover-btn")!.addEventListener("click", async (e) => {
+      // Capture before the await — e.currentTarget is null once dispatch ends.
+      const btn = e.currentTarget as Element;
+      elPopover ??= await win.createPopover({ url: "#popover-pane", width: 280, height: 180 });
+      elPopover.show(btn);
+    });
+    document.querySelector("#sb-popover-tb")!.addEventListener("click", async () => {
+      tbPopover ??= await win.createPopover({ url: "#popover-pane", width: 280, height: 180 });
+      tbPopover.show({ toolbarItem: "compose" });
+    });
+    win.on(WindowEvent.POPOVER_CLOSED, (p: any) => console.log(`[main pane] popover closed: ${p.popoverId}`));
+    Events.on("sb:nav", (d: any) => {
+      console.log(`[main pane] sb:nav arrived: ${d?.item}`);
+      document.querySelector("#sb-selection")!.textContent = d?.item ?? "?";
+    });
+    // Sidebar events deliver into this window's panes (not the creator window),
+    // so this is where the main pane observes the divider / collapse state.
+    const status = (s: string) => {
+      console.log(`[main pane] ${s}`);
+      document.querySelector("#sb-status")!.textContent = `sidebar: ${s}`;
+    };
+    win.on(WindowEvent.SIDEBAR_COLLAPSED, () => status("collapsed"));
+    win.on(WindowEvent.SIDEBAR_EXPANDED, () => status("expanded"));
+    win.on(WindowEvent.SIDEBAR_RESIZED, (d: any) => status(`width ${d.width}`));
+  }
+} else if (location.hash === "#popover-pane") {
+  const app = document.querySelector<HTMLDivElement>("#app")!;
+  document.body.style.background = "transparent";
+  let n = 0;
+  app.innerHTML = `
+      <div style="padding:14px;font:13px -apple-system">
+        <div style="font-weight:600;margin-bottom:8px">Web content in an NSPopover</div>
+        <button id="pp-count">Count: 0</button>
+        <button id="pp-emit">Events.emit → main pane</button>
+      </div>`;
+  document.querySelector("#pp-count")!.addEventListener("click", (e) => {
+    (e.currentTarget as HTMLElement).textContent = `Count: ${++n}`;  // survives hide/show
+  });
+  document.querySelector("#pp-emit")!.addEventListener("click", () => {
+    Events.emit("sb:nav", { item: "from-popover" });                 // crosses panes
+  });
+}
