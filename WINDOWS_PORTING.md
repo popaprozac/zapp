@@ -188,6 +188,20 @@ from day one:
    CSS background, the exact same opt-in as macOS vibrancy. All DWM calls
    no-op gracefully on Win10 / pre-22H2 (`platform/windows/material.c`).
 
+9. **`TaskDialogIndirect` (modern message dialog) needs comctl32 v6 — and
+   statically importing it bricks app launch.** zapp has no application
+   manifest, so the loader binds `-lcomctl32` imports to comctl32 **v5.82**,
+   which doesn't export `TaskDialogIndirect` → unresolved import → the EXE
+   exits instantly before `main`, no error output. Fix (`dialog.c`): resolve it
+   **dynamically** (`GetProcAddress`) — never via the import lib — after
+   activating a comctl32 v6 activation context. Build that context from a tiny
+   Common-Controls-6.0.0.0 manifest written to a temp file (deterministic; the
+   "borrow shell32's manifest resource" trick relies on an undocumented
+   resource ID and silently returned a v5 module here). Activate the context
+   again around the call so the dialog is themed. Falls back to `MessageBoxW`
+   if resolution fails. `IFileOpenDialog`/`IFileSaveDialog` (shell COM) and
+   WinRT toasts are already modern without any of this.
+
 ## Open questions for the brainstorm (decide these first)
 
 1. **Toolchain:** does `zc` (Zen-C 0.4.4+) actually run on Windows, and
