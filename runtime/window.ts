@@ -242,9 +242,11 @@ export interface ToolbarItemDef {
   id?: string;
   /** "button" (default) | system items. `toggleSidebar` is AppKit's
    *  standard sidebar button (auto-wired to the split view controller);
-   *  `trackingSeparator` makes the toolbar divider track the sidebar
-   *  split. Both require the window to have a `sidebar` (warned + dropped
-   *  otherwise). */
+   *  `toggleInspector` toggles the trailing inspector pane;
+   *  `trackingSeparator` makes a toolbar divider track a split divider
+   *  (the `pane` field selects which). `toggleSidebar`/sidebar-tracking
+   *  require a `sidebar`; `toggleInspector`/inspector-tracking require an
+   *  `inspector` (warned + dropped otherwise). */
   type?: "button" | "toggleSidebar" | "toggleInspector" | "trackingSeparator" | "space" | "flexibleSpace";
   /** For `trackingSeparator`: which split divider to track. Default "sidebar". */
   pane?: "sidebar" | "inspector";
@@ -528,7 +530,7 @@ export function normalizeToolbar(
       const pane = item.pane ?? "sidebar";
       const ok = pane === "inspector" ? hasInspector : hasSidebar;
       if (!ok) {
-        console.warn(`[zapp] toolbar: "trackingSeparator" (pane: "${pane}") requires the window to have a ${pane} — item dropped`);
+        console.warn(`[zapp] toolbar: "trackingSeparator" (pane: "${pane}") requires the window to have ${pane === "inspector" ? "an" : "a"} ${pane} — item dropped`);
         continue;
       }
       items.push({ type, pane });
