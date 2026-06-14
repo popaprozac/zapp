@@ -336,6 +336,13 @@ static void panel_apply_bounds(ZappWinPanel* p, RECT css) {
     SetWindowPos(p->host_hwnd, HWND_TOP, x, y, w, h, flags);
     RECT b = { 0, 0, w, h }; // controller fills its child window
     ICoreWebView2Controller_put_Bounds(p->controller, b);
+    // WebView2 caches the parent window's screen position for compositing.
+    // Moving the child HWND via SetWindowPos doesn't notify it, so content
+    // composites at the stale position until an unrelated event nudges it
+    // (the "renders center-ish, snaps into place on scroll" bug). Tell the
+    // controller its parent moved — same call the host webview makes on
+    // window move (windows_webview_notify_position).
+    ICoreWebView2Controller_NotifyParentWindowPositionChanged(p->controller);
 }
 
 // Lazily register the child window class (DefWindowProc; NULL background so
