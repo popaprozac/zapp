@@ -15,12 +15,12 @@ describe("normalizeToolbar", () => {
         { id: "filter", icon: "sf:line.3.horizontal.decrease" },
       ],
     };
-    const { json, actions } = normalizeToolbar(tb, true);
+    const { json, actions } = normalizeToolbar(tb, true, false);
     const parsed = JSON.parse(json);
     expect(parsed.style).toBe("unified"); // default
     expect(parsed.items).toEqual([
       { type: "toggleSidebar" },
-      { type: "trackingSeparator" },
+      { type: "trackingSeparator", pane: "sidebar" },
       { type: "button", id: "compose", label: "Compose", icon: "sf:square.and.pencil" },
       { type: "flexibleSpace" },
       { type: "space" },
@@ -33,17 +33,17 @@ describe("normalizeToolbar", () => {
   });
 
   test("passes style through", () => {
-    const { json } = normalizeToolbar({ style: "expanded", items: [{ id: "a" }] }, false);
+    const { json } = normalizeToolbar({ style: "expanded", items: [{ id: "a" }] }, false, false);
     expect(JSON.parse(json).style).toBe("expanded");
   });
 
   test("button without id throws", () => {
-    expect(() => normalizeToolbar({ items: [{ label: "Nope" }] }, false))
+    expect(() => normalizeToolbar({ items: [{ label: "Nope" }] }, false, false))
       .toThrow(/require an "id"/);
   });
 
   test("duplicate button ids throw", () => {
-    expect(() => normalizeToolbar({ items: [{ id: "x" }, { id: "x" }] }, false))
+    expect(() => normalizeToolbar({ items: [{ id: "x" }, { id: "x" }] }, false, false))
       .toThrow(/duplicate/);
   });
 
@@ -51,23 +51,24 @@ describe("normalizeToolbar", () => {
     const { json } = normalizeToolbar(
       { items: [{ type: "toggleSidebar" }, { type: "trackingSeparator" }, { id: "a" }] },
       false,
+      false,
     );
     expect(JSON.parse(json).items).toEqual([{ type: "button", id: "a", label: "", icon: "" }]);
   });
 
   test("ids with unsafe characters throw", () => {
-    expect(() => normalizeToolbar({ items: [{ id: 'a"b' }] }, false)).toThrow(/invalid item id/);
-    expect(() => normalizeToolbar({ items: [{ id: "a\\b" }] }, false)).toThrow(/invalid item id/);
-    expect(() => normalizeToolbar({ items: [{ id: "a b" }] }, false)).toThrow(/invalid item id/);
+    expect(() => normalizeToolbar({ items: [{ id: 'a"b' }] }, false, false)).toThrow(/invalid item id/);
+    expect(() => normalizeToolbar({ items: [{ id: "a\\b" }] }, false, false)).toThrow(/invalid item id/);
+    expect(() => normalizeToolbar({ items: [{ id: "a b" }] }, false, false)).toThrow(/invalid item id/);
   });
 
   test("reserved id prefixes throw", () => {
-    expect(() => normalizeToolbar({ items: [{ id: "zapp.trackingSeparator" }] }, false)).toThrow(/reserved/);
-    expect(() => normalizeToolbar({ items: [{ id: "NSToolbarFlexibleSpaceItem" }] }, false)).toThrow(/reserved/);
+    expect(() => normalizeToolbar({ items: [{ id: "zapp.trackingSeparator" }] }, false, false)).toThrow(/reserved/);
+    expect(() => normalizeToolbar({ items: [{ id: "NSToolbarFlexibleSpaceItem" }] }, false, false)).toThrow(/reserved/);
   });
 
   test("button with both action and menu throws", () => {
-    expect(() => normalizeToolbar({ items: [{ id: "x", action: () => {}, menu: [] }] }, false))
+    expect(() => normalizeToolbar({ items: [{ id: "x", action: () => {}, menu: [] }] }, false, false))
       .toThrow(/both "action" and "menu"/);
   });
 
@@ -87,7 +88,7 @@ describe("normalizeToolbar menu items", () => {
           { id: "unread", label: "Unread" },
         ],
       }],
-    }, false);
+    }, false, false);
     const item = JSON.parse(json).items[0];
     expect(item.menu).toEqual([
       { id: "all", label: "All" },
@@ -102,7 +103,7 @@ describe("normalizeToolbar menu items", () => {
   test("action-bearing menu items without id get auto-ids", () => {
     const { json, menuActions } = normalizeToolbar({
       items: [{ id: "f", menu: [{ label: "X", action: () => {} }] }],
-    }, false);
+    }, false, false);
     const autoId = JSON.parse(json).items[0].menu[0].id;
     expect(autoId).toMatch(/^__tbmenu_\d+$/);
     expect(menuActions.has(autoId)).toBe(true);
@@ -111,12 +112,12 @@ describe("normalizeToolbar menu items", () => {
   test("submenus are walked", () => {
     const { menuActions } = normalizeToolbar({
       items: [{ id: "f", menu: [{ label: "More", submenu: [{ id: "deep", label: "D", action: () => {} }] }] }],
-    }, false);
+    }, false, false);
     expect(menuActions.has("deep")).toBe(true);
   });
 
   test("menu on non-button types throws", () => {
-    expect(() => normalizeToolbar({ items: [{ type: "flexibleSpace", menu: [] } as any] }, false))
+    expect(() => normalizeToolbar({ items: [{ type: "flexibleSpace", menu: [] } as any] }, false, false))
       .toThrow(/only valid on button/);
   });
 });
@@ -136,7 +137,7 @@ describe("normalizeToolbar enabled/indicator wire shape", () => {
         { id: "filter", indicator: false, menu: [{ id: "all", label: "All" }] },
         { id: "plain" },
       ],
-    }, false);
+    }, false, false);
     const items = JSON.parse(json).items;
     expect(items[0].enabled).toBe(false);
     expect(items[1].indicator).toBe(false);
@@ -153,7 +154,7 @@ describe("normalizeToolbar enabled/indicator wire shape", () => {
         ] },
         { id: "plain" },                               // no menu — no entry
       ],
-    }, false);
+    }, false, false);
     expect(menuIdsByItem.get("filter")).toEqual(new Set(["all"]));
     expect(menuIdsByItem.has("plain")).toBe(false);
   });
@@ -238,7 +239,7 @@ describe("assertToolbarItemsNonEmpty", () => {
   });
 
   test("sidebar-dependent-only item sets normalize to empty (the guard's input case)", () => {
-    const { json } = normalizeToolbar({ items: [{ type: "toggleSidebar" }] }, false);
+    const { json } = normalizeToolbar({ items: [{ type: "toggleSidebar" }] }, false, false);
     expect(JSON.parse(json).items).toEqual([]);
   });
 });
@@ -305,5 +306,49 @@ describe("toolbar registry hygiene helpers", () => {
     const byWindow = new Map<string, Map<string, Set<string>>>();
     recordToolbarMenuIds("win-1", new Map(), byWindow);
     expect(byWindow.size).toBe(0);
+  });
+});
+
+describe("normalizeToolbar inspector integration", () => {
+  test("toggleInspector kept when window has an inspector", () => {
+    const { json } = normalizeToolbar(
+      { items: [{ type: "toggleInspector" }] } as any, false, true,
+    );
+    expect(JSON.parse(json).items).toEqual([{ type: "toggleInspector" }]);
+  });
+
+  test("toggleInspector dropped + warned when no inspector", () => {
+    const { json } = normalizeToolbar(
+      { items: [{ type: "toggleInspector" }, { id: "a" }] } as any, false, false,
+    );
+    expect(JSON.parse(json).items).toEqual([{ type: "button", id: "a", label: "", icon: "" }]);
+  });
+
+  test("trackingSeparator pane defaults to sidebar", () => {
+    const { json } = normalizeToolbar(
+      { items: [{ type: "trackingSeparator" }] }, true, false,
+    );
+    expect(JSON.parse(json).items).toEqual([{ type: "trackingSeparator", pane: "sidebar" }]);
+  });
+
+  test("inspector trackingSeparator kept when window has an inspector", () => {
+    const { json } = normalizeToolbar(
+      { items: [{ type: "trackingSeparator", pane: "inspector" }] } as any, false, true,
+    );
+    expect(JSON.parse(json).items).toEqual([{ type: "trackingSeparator", pane: "inspector" }]);
+  });
+
+  test("inspector trackingSeparator dropped when no inspector", () => {
+    const { json } = normalizeToolbar(
+      { items: [{ type: "trackingSeparator", pane: "inspector" }, { id: "a" }] } as any, false, false,
+    );
+    expect(JSON.parse(json).items).toEqual([{ type: "button", id: "a", label: "", icon: "" }]);
+  });
+
+  test("sidebar trackingSeparator still requires a sidebar", () => {
+    const { json } = normalizeToolbar(
+      { items: [{ type: "trackingSeparator" }, { id: "a" }] }, false, false,
+    );
+    expect(JSON.parse(json).items).toEqual([{ type: "button", id: "a", label: "", icon: "" }]);
   });
 });

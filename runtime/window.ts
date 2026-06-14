@@ -245,7 +245,9 @@ export interface ToolbarItemDef {
    *  `trackingSeparator` makes the toolbar divider track the sidebar
    *  split. Both require the window to have a `sidebar` (warned + dropped
    *  otherwise). */
-  type?: "button" | "toggleSidebar" | "trackingSeparator" | "space" | "flexibleSpace";
+  type?: "button" | "toggleSidebar" | "toggleInspector" | "trackingSeparator" | "space" | "flexibleSpace";
+  /** For `trackingSeparator`: which split divider to track. Default "sidebar". */
+  pane?: "sidebar" | "inspector";
   /** Tooltip; visible text in the "expanded" style. */
   label?: string;
   /** Icon via the shared resolver: "sf:<symbol>", file path, or data URL. */
@@ -489,6 +491,7 @@ export function assertToolbarItemsNonEmpty(json: string): void {
 export function normalizeToolbar(
   toolbar: ToolbarOptions,
   hasSidebar: boolean,
+  hasInspector: boolean,
 ): {
   json: string;
   actions: Map<string, () => void>;
@@ -502,13 +505,33 @@ export function normalizeToolbar(
   const items: Record<string, unknown>[] = [];
   for (const item of toolbar.items ?? []) {
     const type = item.type ?? "button";
-    if (type === "toggleSidebar" || type === "trackingSeparator") {
+    if (type === "toggleSidebar") {
       if ((item as any).menu) throw new Error('[zapp] toolbar: "menu" is only valid on button items');
       if (!hasSidebar) {
-        console.warn(`[zapp] toolbar: "${type}" requires the window to have a sidebar — item dropped`);
+        console.warn(`[zapp] toolbar: "toggleSidebar" requires the window to have a sidebar — item dropped`);
         continue;
       }
       items.push({ type });
+      continue;
+    }
+    if (type === "toggleInspector") {
+      if ((item as any).menu) throw new Error('[zapp] toolbar: "menu" is only valid on button items');
+      if (!hasInspector) {
+        console.warn(`[zapp] toolbar: "toggleInspector" requires the window to have an inspector — item dropped`);
+        continue;
+      }
+      items.push({ type });
+      continue;
+    }
+    if (type === "trackingSeparator") {
+      if ((item as any).menu) throw new Error('[zapp] toolbar: "menu" is only valid on button items');
+      const pane = item.pane ?? "sidebar";
+      const ok = pane === "inspector" ? hasInspector : hasSidebar;
+      if (!ok) {
+        console.warn(`[zapp] toolbar: "trackingSeparator" (pane: "${pane}") requires the window to have a ${pane} — item dropped`);
+        continue;
+      }
+      items.push({ type, pane });
       continue;
     }
     if (type === "space" || type === "flexibleSpace") {
@@ -843,7 +866,7 @@ function createWindowHandle(windowId: string, sidebarOpts?: SidebarOptions, insp
     toolbar: {
       setItems(items: ToolbarItemDef[], setOpts?: { style?: "unified" | "unifiedCompact" | "expanded" }) {
         const { json, actions, menuActions, menuIdsByItem } =
-          normalizeToolbar({ items, style: setOpts?.style }, sidebarOpts !== undefined);
+          normalizeToolbar({ items, style: setOpts?.style }, sidebarOpts !== undefined, inspectorOpts !== undefined);
         // Parse once: guard on empty items, then conditionally strip style.
         // Only send style when the caller set one — native warns when style
         // arrives for an already-attached toolbar, and normalizeToolbar
@@ -984,7 +1007,7 @@ export const Window = {
     let pendingToolbarActions: Map<string, () => void> | undefined;
     let pendingToolbarMenuIds: Map<string, Set<string>> | undefined;
     if (opts?.toolbar) {
-      const { json, actions, menuActions, menuIdsByItem } = normalizeToolbar(opts.toolbar, opts.sidebar !== undefined);
+      const { json, actions, menuActions, menuIdsByItem } = normalizeToolbar(opts.toolbar, opts.sidebar !== undefined, opts.inspector !== undefined);
       normalized.toolbarJson = json;
       delete normalized.toolbar;
       if (actions.size > 0) pendingToolbarActions = actions;
