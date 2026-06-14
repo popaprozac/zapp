@@ -715,6 +715,14 @@ void windows_protocol_respond(const char* request_id, const char* body_base64,
     slot->args = NULL;
 }
 
+// Accessor for the shared WebView2 environment (AddRef'd, app-lifetime).
+// Panels (platform/windows/panel.c) reuse it to spin up child controllers
+// so they share the host's user-data store + GPU process. NULL until the
+// first window's environment-completed handler has run.
+ICoreWebView2Environment* zapp_get_webview_environment(void) {
+    return zapp_webview_environment;
+}
+
 // ============================================================
 // 2. Controller completed handler
 // ============================================================

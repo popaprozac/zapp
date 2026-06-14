@@ -153,6 +153,23 @@ from day one:
    `PostMessage(WM_ZAPP_TASK)` + (for sync) event-wait pattern, with a
    same-thread short-circuit to avoid self-deadlock.
 
+7. **Embedded webviews (`<zapp-webview>` panels) need their own child
+   HWND for z-order.** macOS adds the child `WKWebView` as a subview
+   (subview order = z-order, content shows on top for free). On Windows a
+   second `ICoreWebView2Controller` parented to the *same* HWND as the host
+   webview renders **behind** the opaque host surface — events fire, nothing
+   paints. Fix (`platform/windows/panel.c`): give each panel an intermediate
+   `WS_CHILD | WS_CLIPSIBLINGS` window, parent the controller to it, and
+   `SetWindowPos(HWND_TOP)` it above the host on every bounds update + show.
+   Bounds arrive as CSS px (host viewport, top-left) and convert to physical
+   px via the controller's `RasterizationScale` (= DPI/96). The runtime
+   tracker places the panel at the element's *viewport* position, so a panel
+   whose `<zapp-webview>` is scrolled below the fold is correctly positioned
+   off-screen (child-clipped) until scrolled into view — that is not a bug.
+   Controller creation is async: buffer bounds/show/url and apply them in the
+   completed handler. Reuse the host's cached `ICoreWebView2Environment`
+   (`zapp_get_webview_environment()`) so panels share its user-data store.
+
 ## Open questions for the brainstorm (decide these first)
 
 1. **Toolchain:** does `zc` (Zen-C 0.4.4+) actually run on Windows, and
