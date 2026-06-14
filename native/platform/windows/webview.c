@@ -365,6 +365,32 @@ void windows_open_external(const char* url) {
     }
 }
 
+// Resolve a possibly-relative window URL ("#route", "?query", "/path") against
+// the app's base URL — parity with darwin's zapp_resolve_url
+// (URLWithString:relativeToURL:). Window.create({url}) and sidebar/inspector
+// pane URLs arrive relative; WebView2's Navigate needs an absolute URL.
+// Returns a wchar_t* the caller frees (NULL on failure).
+extern char* zapp_build_initial_url(void);
+static wchar_t* zapp_resolve_nav_url(const char* url_override) {
+    const char* initial = zapp_build_initial_url();
+    const char* base = (initial && initial[0]) ? initial : "https://zapp.local/index.html";
+    if (!url_override || !url_override[0]) return utf8_to_wchar_wv(base);
+    if (strstr(url_override, "://")) return utf8_to_wchar_wv(url_override); // already absolute
+
+    wchar_t* wbase = utf8_to_wchar_wv(base);
+    wchar_t* wrel = utf8_to_wchar_wv(url_override);
+    wchar_t* out = NULL;
+    if (wbase && wrel) {
+        wchar_t buf[2048];
+        DWORD len = 2048;
+        if (SUCCEEDED(UrlCombineW(wbase, wrel, buf, &len, 0))) out = _wcsdup(buf);
+    }
+    if (!out && wrel) out = _wcsdup(wrel); // fallback: raw (better than nothing)
+    free(wbase);
+    free(wrel);
+    return out;
+}
+
 // --- Resize WebView2 controller ---
 
 void windows_webview_resize(int32_t window_id, int w, int h) {
@@ -999,17 +1025,9 @@ static HRESULT STDMETHODCALLTYPE ZappCtrl_Invoke(
     GetClientRect(self->hwnd, &bounds);
     ICoreWebView2Controller_put_Bounds(controller, bounds);
 
-    // Navigate to initial URL
-    const char* initial_url = zapp_build_initial_url();
-    const char* nav_url = NULL;
-    if (self->url_override && self->url_override[0]) {
-        nav_url = self->url_override;
-    } else if (initial_url && initial_url[0]) {
-        nav_url = initial_url;
-    } else {
-        nav_url = "https://zapp.local/index.html";
-    }
-    wchar_t* wnav = utf8_to_wchar_wv(nav_url);
+    // Navigate to the (relative-or-absolute) override URL resolved against the
+    // app base, or the base itself when there's no override.
+    wchar_t* wnav = zapp_resolve_nav_url(self->url_override);
     if (wnav) {
         ICoreWebView2_Navigate(webview, wnav);
         free(wnav);

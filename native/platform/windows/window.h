@@ -36,6 +36,24 @@ bool wopts_fullscreen(WindowOptions* opts);
 bool wopts_borderless(WindowOptions* opts);
 bool wopts_transparent(WindowOptions* opts);
 char* wopts_vibrancy(WindowOptions* opts);
+
+// Sidebar / inspector pane options (native split panes).
+int wopts_sidebar_numeric_id(WindowOptions* opts);
+char* wopts_sidebar_url(WindowOptions* opts);
+char* wopts_sidebar_material(WindowOptions* opts);
+int wopts_sidebar_width(WindowOptions* opts);
+int wopts_sidebar_min_width(WindowOptions* opts);
+int wopts_sidebar_max_width(WindowOptions* opts);
+bool wopts_sidebar_collapsible(WindowOptions* opts);
+bool wopts_sidebar_collapsed(WindowOptions* opts);
+int wopts_inspector_numeric_id(WindowOptions* opts);
+char* wopts_inspector_url(WindowOptions* opts);
+char* wopts_inspector_material(WindowOptions* opts);
+int wopts_inspector_width(WindowOptions* opts);
+int wopts_inspector_min_width(WindowOptions* opts);
+int wopts_inspector_max_width(WindowOptions* opts);
+bool wopts_inspector_collapsible(WindowOptions* opts);
+bool wopts_inspector_collapsed(WindowOptions* opts);
 bool wopts_hidden(WindowOptions* opts);
 bool wopts_always_on_top(WindowOptions* opts);
 int32_t wopts_title_bar_style_tag(WindowOptions* opts);

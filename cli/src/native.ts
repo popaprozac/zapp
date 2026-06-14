@@ -124,6 +124,7 @@ export function getPlatformSources(nativeDir: string, target: BuildTarget = dete
       path.join(windowsDir, "power.c"),
       path.join(windowsDir, "panel.c"),
       path.join(windowsDir, "material.c"),
+      path.join(windowsDir, "sidebar.c"),
     ];
     return sources.filter(f => existsSync(f));
   }

@@ -193,9 +193,14 @@ LRESULT CALLBACK zapp_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             int w = client.right - client.left;
             int h = client.bottom - client.top;
 
-            // Resize WebView2 controller bounds
+            // Resize WebView2 controller bounds. Windows with native panes
+            // reflow the whole split; otherwise the single host webview fills
+            // the client area.
+            extern int windows_panes_layout(int32_t host_slot);
             extern void windows_webview_resize(int32_t window_id, int w, int h);
-            windows_webview_resize(wid, w, h);
+            if (!windows_panes_layout(wid)) {
+                windows_webview_resize(wid, w, h);
+            }
 
             WORD sizeType = LOWORD(wParam);
             if (sizeType == SIZE_MINIMIZED) {
@@ -220,7 +225,9 @@ LRESULT CALLBACK zapp_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         case WM_MOVE: {
             // Notify WebView2 controller of position change
             extern void windows_webview_notify_position(int32_t window_id);
+            extern void windows_panes_notify_move(int32_t host_slot);
             windows_webview_notify_position(wid);
+            windows_panes_notify_move(wid); // no-op when no panes
 
             RECT rc;
             GetWindowRect(hwnd, &rc);
@@ -273,6 +280,9 @@ LRESULT CALLBACK zapp_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                     SetForegroundWindow(owner);
                 }
             }
+            // Tear down native panes (child windows) if any.
+            extern void windows_panes_destroy(int32_t host_slot);
+            windows_panes_destroy(wid);
             // Clear dispatch table entry
             if (wid >= 0 && wid < ZAPP_MAX_WINDOWS) {
                 zapp_hwnds[wid] = NULL;
@@ -398,8 +408,36 @@ void* windows_window_create(WindowOptions* opts) {
     const char* url = wopts_url(opts);
     const char* url_override = (url && url[0]) ? url : NULL;
 
-    // Create WebView2 in this window
-    windows_webview_create((void*)hwnd, inspectable > 0, url_override);
+    // Native sidebar / inspector split panes (macOS parity). When either is
+    // configured, the host webview is mounted into a content child window and
+    // the panes get their own host-twin webviews; otherwise the plain
+    // single-webview path. The pane transport slots are pre-allocated by the
+    // runtime (window.zc), in the same id-space as pre_id.
+    const char* sidebar_url = wopts_sidebar_url(opts);
+    const char* inspector_url = wopts_inspector_url(opts);
+    bool has_sidebar = sidebar_url && sidebar_url[0];
+    bool has_inspector = inspector_url && inspector_url[0];
+
+    if (has_sidebar || has_inspector) {
+        extern void windows_panes_init(HWND host_hwnd, int32_t host_slot, int inspectable,
+                                       const char* host_url,
+                                       int32_t sidebar_slot, const char* sidebar_url,
+                                       int sb_width, int sb_min, int sb_max, int sb_collapsed,
+                                       int32_t inspector_slot, const char* inspector_url,
+                                       int insp_width, int insp_min, int insp_max, int insp_collapsed);
+        windows_panes_init(hwnd, pre_id, inspectable > 0, url_override,
+            has_sidebar ? wopts_sidebar_numeric_id(opts) : -1,
+            has_sidebar ? sidebar_url : NULL,
+            wopts_sidebar_width(opts), wopts_sidebar_min_width(opts),
+            wopts_sidebar_max_width(opts), wopts_sidebar_collapsed(opts) ? 1 : 0,
+            has_inspector ? wopts_inspector_numeric_id(opts) : -1,
+            has_inspector ? inspector_url : NULL,
+            wopts_inspector_width(opts), wopts_inspector_min_width(opts),
+            wopts_inspector_max_width(opts), wopts_inspector_collapsed(opts) ? 1 : 0);
+    } else {
+        // Plain single-webview path.
+        windows_webview_create((void*)hwnd, inspectable > 0, url_override);
+    }
 
     return (void*)hwnd;
 }
