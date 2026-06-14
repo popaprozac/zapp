@@ -301,18 +301,28 @@ static ICoreWebView2DocumentTitleChangedEventHandlerVtbl PTitle_Vtbl = {
 // Bounds (CSS px -> physical px via the controller's RasterizationScale)
 // ============================================================
 
+// CSS px -> physical px factor. Use the window's DPI, NOT the controller's
+// RasterizationScale: right after CreateCoreWebView2Controller the controller
+// still reports the default scale 1.0 (it hasn't detected the monitor scale
+// yet), so first-mount bounds came out as css*1.0 and the panel landed up-left
+// on a >100% display, snapping correct only once a later event refreshed the
+// scale. GetDpiForWindow is right immediately. Loaded dynamically so the build
+// doesn't depend on a specific MinGW header WINVER; falls back to 1.0 pre-Win10
+// (where WebView2 isn't supported anyway).
 static double panel_scale(ZappWinPanel* p) {
-    double scale = 1.0;
-    if (!p->controller) return scale;
-    ICoreWebView2Controller3* c3 = NULL;
-    if (SUCCEEDED(ICoreWebView2Controller_QueryInterface(p->controller,
-            &IID_ICoreWebView2Controller3, (void**)&c3)) && c3) {
-        double s = 1.0;
-        if (SUCCEEDED(ICoreWebView2Controller3_get_RasterizationScale(c3, &s)) && s > 0.0)
-            scale = s;
-        ICoreWebView2Controller3_Release(c3);
+    typedef UINT (WINAPI *GetDpiForWindow_t)(HWND);
+    static GetDpiForWindow_t fn = NULL;
+    static int looked = 0;
+    if (!looked) {
+        looked = 1;
+        HMODULE u = GetModuleHandleW(L"user32.dll");
+        if (u) fn = (GetDpiForWindow_t)(void*)GetProcAddress(u, "GetDpiForWindow");
     }
-    return scale;
+    if (fn && p->owner_hwnd) {
+        UINT dpi = fn(p->owner_hwnd);
+        if (dpi > 0) return (double)dpi / 96.0;
+    }
+    return 1.0;
 }
 
 // Position the panel's child HWND in the owner's client area and fill it with
@@ -385,6 +395,18 @@ static HRESULT STDMETHODCALLTYPE PCtrl_Invoke(ICoreWebView2CreateCoreWebView2Con
     p->controller = controller;
     ICoreWebView2Controller_AddRef(controller);
     ICoreWebView2Controller_put_IsVisible(controller, FALSE); // shown on first panelShow
+
+    // Pin the controller's RasterizationScale to the window DPI now, so content
+    // renders crisp on the first frame instead of at the default 1.0 until
+    // WebView2 detects the monitor (matches the bounds scale in panel_scale).
+    {
+        ICoreWebView2Controller3* c3 = NULL;
+        if (SUCCEEDED(ICoreWebView2Controller_QueryInterface(controller,
+                &IID_ICoreWebView2Controller3, (void**)&c3)) && c3) {
+            ICoreWebView2Controller3_put_RasterizationScale(c3, panel_scale(p));
+            ICoreWebView2Controller3_Release(c3);
+        }
+    }
 
     ICoreWebView2* webview = NULL;
     ICoreWebView2Controller_get_CoreWebView2(controller, &webview);
