@@ -1203,7 +1203,7 @@ Protocols.register("asset", (req) => {
     `<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80">` +
     `<rect width="80" height="80" fill="${swatch}" rx="12"/>` +
     `<text x="50%" y="55%" text-anchor="middle" fill="white" font-size="14" ` +
-    `font-family="-apple-system, sans-serif">${id.replace("thumb-", "")}</text>` +
+    `font-family="system-ui, sans-serif">${id.replace("thumb-", "")}</text>` +
     `</svg>`;
   return { body: svg, contentType: "image/svg+xml" };
 });
@@ -1550,7 +1550,7 @@ if (location.hash === "#sidebar-pane" || location.hash === "#main-pane" || locat
   document.body.style.background = "transparent";
   if (Window.isInspector()) {
     app.innerHTML = `
-      <div style="padding:var(--zapp-titlebar-height, 52px) 12px 12px;font:13px -apple-system">
+      <div style="padding:var(--zapp-titlebar-height, 52px) 12px 12px;font:13px system-ui">
         <div style="opacity:.5;font-size:11px;margin-bottom:8px">NATIVE INSPECTOR</div>
         <div id="insp-status" style="font-size:12px;opacity:.6;margin-bottom:8px">width 300</div>
         <button id="insp-toggle">Toggle inspector</button>
@@ -1571,7 +1571,7 @@ if (location.hash === "#sidebar-pane" || location.hash === "#main-pane" || locat
     });
   } else if (Window.isSidebar()) {
     app.innerHTML = `
-      <div style="padding:var(--zapp-titlebar-height, 52px) 12px 12px;font:13px -apple-system">
+      <div style="padding:var(--zapp-titlebar-height, 52px) 12px 12px;font:13px system-ui">
         <div style="opacity:.5;font-size:11px;margin-bottom:8px">NATIVE SIDEBAR</div>
         ${["Inbox", "Drafts", "Sent", "Archive"].map(n =>
           `<div class="sb-item" data-n="${n}" style="padding:6px 10px;border-radius:6px;cursor:default">${n}</div>`).join("")}
@@ -1583,7 +1583,7 @@ if (location.hash === "#sidebar-pane" || location.hash === "#main-pane" || locat
       }));
   } else {
     app.innerHTML = `
-      <div style="padding:var(--zapp-titlebar-height, 52px) 24px;font:14px -apple-system">
+      <div style="padding:var(--zapp-titlebar-height, 52px) 24px;font:14px system-ui">
         <h2 style="margin:0 0 8px">Main pane</h2>
         <p>Click items in the native sidebar — selections arrive over the Events bus.</p>
         <div id="sb-selection" style="font-size:20px;font-weight:600">—</div>
@@ -1637,7 +1637,7 @@ if (location.hash === "#sidebar-pane" || location.hash === "#main-pane" || locat
   document.body.style.background = "transparent";
   let n = 0;
   app.innerHTML = `
-      <div style="padding:14px;font:13px -apple-system">
+      <div style="padding:14px;font:13px system-ui">
         <div style="font-weight:600;margin-bottom:8px">Web content in an NSPopover</div>
         <button id="pp-count">Count: 0</button>
         <button id="pp-emit">Events.emit → main pane</button>
