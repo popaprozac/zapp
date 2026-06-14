@@ -15,10 +15,10 @@
  */
 
 export { App, type PowerState } from "./app";
-export { Window, Material, type WindowHandle, type WindowOptions, type SidebarOptions, type SidebarHandle } from "./window";
+export { Window, Material, type WindowHandle, type WindowOptions, type SidebarOptions, type SidebarHandle, type InspectorOptions, type InspectorHandle, type ToolbarHandle, type ToolbarItemPatch, type ToolbarOptions, type ToolbarItemDef } from "./window";
 export { Screen, type Display, type DisplayRect, type CursorPoint } from "./screen";
 export { Webview, ZappWebviewElement, type PanelEvent, type WebviewCreateOptions } from "./webview";
-export { Events, WindowEvent, AppEvent, eventName, type WindowPayload, type WindowSizePayload, type EventName, type ModalDismissedPayload, type SidebarResizedPayload } from "./events";
+export { Events, WindowEvent, AppEvent, eventName, type WindowPayload, type WindowSizePayload, type EventName, type ModalDismissedPayload, type SidebarResizedPayload, type InspectorResizedPayload } from "./events";
 export { Services, type InvokeOptions, type CancellablePromise } from "./services";
 export { Worker, SharedWorker, SharedWorkerPort, Workers, type WorkerMessageEvent } from "./worker";
 export { Dialog, type OpenFileOptions, type SaveFileOptions, type MessageOptions, type OpenFileResult, type SaveFileResult, type MessageResult } from "./dialog";

@@ -96,6 +96,16 @@ struct WindowOptions {
     sidebarMaxWidth: int;      // default 400
     sidebarCollapsible: bool;  // default true
     sidebarCollapsed: bool;    // default false
+    // Inspector (trailing NSSplitViewItem inspector; macOS only).
+    inspectorUrl: string;        // empty = no inspector
+    _inspectorUrl_heap: bool;
+    inspectorMaterial: string;   // default "sidebar"
+    _inspectorMaterial_heap: bool;
+    inspectorWidth: int;         // default 280
+    inspectorMinWidth: int;      // default 180
+    inspectorMaxWidth: int;      // default 400
+    inspectorCollapsible: bool;  // default true
+    inspectorCollapsed: bool;    // default false
     // Numeric window id pre-assigned by WindowManager.create *before*
     // the native window is built. Native code uses this so the JS
     // bootstrap user script can bake in the canonical "win-<N>" id —
@@ -110,6 +120,9 @@ struct WindowOptions {
     // this slot). Identity stays the host's (numericIdPreAlloc); only the
     // dispatch/transport slot differs. -1 = no sidebar (single webview).
     sidebarNumericId: int;
+    // Transport slot for the inspector webview (same id-space as
+    // numericIdPreAlloc / sidebarNumericId). -1 = no inspector.
+    inspectorNumericId: int;
     // Toolbar (native NSToolbar; macOS only). Pre-stringified JSON
     // {style, items} from the runtime — opaque here, parsed by toolbar.m.
     toolbarJson: string;       // empty = no toolbar
@@ -203,8 +216,18 @@ impl WindowOptions {
             sidebarMaxWidth: 400,
             sidebarCollapsible: true,
             sidebarCollapsed: false,
+            inspectorUrl: "",
+            _inspectorUrl_heap: false,
+            inspectorMaterial: "",
+            _inspectorMaterial_heap: false,
+            inspectorWidth: 280,
+            inspectorMinWidth: 180,
+            inspectorMaxWidth: 400,
+            inspectorCollapsible: true,
+            inspectorCollapsed: false,
             numericIdPreAlloc: -1,
             sidebarNumericId: -1,
+            inspectorNumericId: -1,
             toolbarJson: "",
             _toolbarJson_heap: false,
             autoCenter: false,
@@ -251,6 +274,14 @@ fn wopts_sidebar_min_width(opts: WindowOptions*) -> int { return opts.sidebarMin
 fn wopts_sidebar_max_width(opts: WindowOptions*) -> int { return opts.sidebarMaxWidth; }
 fn wopts_sidebar_collapsible(opts: WindowOptions*) -> bool { return opts.sidebarCollapsible; }
 fn wopts_sidebar_collapsed(opts: WindowOptions*) -> bool { return opts.sidebarCollapsed; }
+fn wopts_inspector_numeric_id(opts: WindowOptions*) -> int { return opts.inspectorNumericId; }
+fn wopts_inspector_url(opts: WindowOptions*) -> string { return opts.inspectorUrl; }
+fn wopts_inspector_material(opts: WindowOptions*) -> string { return opts.inspectorMaterial; }
+fn wopts_inspector_width(opts: WindowOptions*) -> int { return opts.inspectorWidth; }
+fn wopts_inspector_min_width(opts: WindowOptions*) -> int { return opts.inspectorMinWidth; }
+fn wopts_inspector_max_width(opts: WindowOptions*) -> int { return opts.inspectorMaxWidth; }
+fn wopts_inspector_collapsible(opts: WindowOptions*) -> bool { return opts.inspectorCollapsible; }
+fn wopts_inspector_collapsed(opts: WindowOptions*) -> bool { return opts.inspectorCollapsed; }
 fn wopts_sheet_presentation(opts: WindowOptions*) -> int { return opts.sheetPresentation; }
 fn wopts_sheet_detents(opts: WindowOptions*) -> int { return opts.sheetDetents; }
 fn wopts_sheet_grabber(opts: WindowOptions*) -> bool { return opts.sheetGrabber; }
@@ -401,6 +432,33 @@ fn window_opts_apply_json(opts: WindowOptions*, args: JsonValue*) -> void {
         let smax = (*sb).get_int("maxWidth");   if smax.is_some() { opts.sidebarMaxWidth = smax.unwrap(); }
         let sc = (*sb).get_bool("collapsible"); if sc.is_some() { opts.sidebarCollapsible = sc.unwrap(); }
         let sco = (*sb).get_bool("collapsed");  if sco.is_some() { opts.sidebarCollapsed = sco.unwrap(); }
+    }
+    let insp_opt = args.get_object("inspector");
+    if insp_opt.is_some() {
+        let insp = insp_opt.unwrap();
+        let iu = (*insp).get_string("url");
+        if iu.is_some() {
+            let src = iu.unwrap();
+            raw {
+                if (opts->_inspectorUrl_heap && opts->inspectorUrl) free((void*)opts->inspectorUrl);
+                opts->inspectorUrl = strdup((const char*)src);
+                opts->_inspectorUrl_heap = 1;
+            }
+        }
+        let im = (*insp).get_string("material");
+        if im.is_some() {
+            let src = im.unwrap();
+            raw {
+                if (opts->_inspectorMaterial_heap && opts->inspectorMaterial) free((void*)opts->inspectorMaterial);
+                opts->inspectorMaterial = strdup((const char*)src);
+                opts->_inspectorMaterial_heap = 1;
+            }
+        }
+        let iw = (*insp).get_int("width");        if iw.is_some() { opts.inspectorWidth = iw.unwrap(); }
+        let imin = (*insp).get_int("minWidth");   if imin.is_some() { opts.inspectorMinWidth = imin.unwrap(); }
+        let imax = (*insp).get_int("maxWidth");   if imax.is_some() { opts.inspectorMaxWidth = imax.unwrap(); }
+        let ic = (*insp).get_bool("collapsible"); if ic.is_some() { opts.inspectorCollapsible = ic.unwrap(); }
+        let ico = (*insp).get_bool("collapsed");  if ico.is_some() { opts.inspectorCollapsed = ico.unwrap(); }
     }
 
     // Toolbar: pre-stringified by the runtime (actions already stripped).
@@ -598,6 +656,16 @@ fn window_opts_free(opts: WindowOptions*) -> void {
             opts->sidebarMaterial = "";
             opts->_sidebarMaterial_heap = 0;
         }
+        if (opts->_inspectorUrl_heap && opts->inspectorUrl) {
+            free((void*)opts->inspectorUrl);
+            opts->inspectorUrl = "";
+            opts->_inspectorUrl_heap = 0;
+        }
+        if (opts->_inspectorMaterial_heap && opts->inspectorMaterial) {
+            free((void*)opts->inspectorMaterial);
+            opts->inspectorMaterial = "";
+            opts->_inspectorMaterial_heap = 0;
+        }
         if (opts->_toolbarJson_heap && opts->toolbarJson) {
             free((void*)opts->toolbarJson);
             opts->toolbarJson = "";
@@ -778,6 +846,10 @@ impl WindowManager {
         // when sidebar opts are actually present (empty url = no sidebar).
         if options.sidebarUrl != "" {
             options.sidebarNumericId = self.next_id;
+            self.next_id += 1;
+        }
+        if options.inspectorUrl != "" {
+            options.inspectorNumericId = self.next_id;
             self.next_id += 1;
         }
         let handle = window_create(options);

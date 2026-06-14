@@ -196,6 +196,8 @@ export interface WindowOptions {
   sidebar?: SidebarOptions;
   /** Attach a native toolbar (NSToolbar). macOS only; no-op elsewhere. */
   toolbar?: ToolbarOptions;
+  /** Attach a native inspector (trailing NSSplitViewItem). macOS only; no-op elsewhere. */
+  inspector?: InspectorOptions;
 }
 
 /** Options for a native sidebar (NSSplitViewItem) attached to a window. */
@@ -215,6 +217,23 @@ export interface SidebarOptions {
   material?: Material;
 }
 
+/** Options for a native inspector (trailing NSSplitViewItem) attached to a window. */
+export interface InspectorOptions {
+  /** Entry URL/route for the inspector webview (resolved like sidebar.url). Required. */
+  url: string;
+  /** Initial width in points. Default 280. */
+  width?: number;
+  /** Divider drag limits. Defaults 180 / 400. */
+  minWidth?: number;
+  maxWidth?: number;
+  /** User can collapse via system behaviors. Default true. */
+  collapsible?: boolean;
+  /** Start collapsed (the common "hidden until summoned" inspector). Default false. */
+  collapsed?: boolean;
+  /** Background material. Default matches the sidebar pane default. */
+  material?: Material;
+}
+
 /** One toolbar item. `type` defaults to "button". */
 export interface ToolbarItemDef {
   /** Identifier for custom buttons — REQUIRED for type "button" (keys
@@ -223,10 +242,14 @@ export interface ToolbarItemDef {
   id?: string;
   /** "button" (default) | system items. `toggleSidebar` is AppKit's
    *  standard sidebar button (auto-wired to the split view controller);
-   *  `trackingSeparator` makes the toolbar divider track the sidebar
-   *  split. Both require the window to have a `sidebar` (warned + dropped
-   *  otherwise). */
-  type?: "button" | "toggleSidebar" | "trackingSeparator" | "space" | "flexibleSpace";
+   *  `toggleInspector` toggles the trailing inspector pane;
+   *  `trackingSeparator` makes a toolbar divider track a split divider
+   *  (the `pane` field selects which). `toggleSidebar`/sidebar-tracking
+   *  require a `sidebar`; `toggleInspector`/inspector-tracking require an
+   *  `inspector` (warned + dropped otherwise). */
+  type?: "button" | "toggleSidebar" | "toggleInspector" | "trackingSeparator" | "space" | "flexibleSpace";
+  /** For `trackingSeparator`: which split divider to track. Default "sidebar". */
+  pane?: "sidebar" | "inspector";
   /** Tooltip; visible text in the "expanded" style. */
   label?: string;
   /** Icon via the shared resolver: "sf:<symbol>", file path, or data URL. */
@@ -237,6 +260,12 @@ export interface ToolbarItemDef {
    *  are the same MenuItemDef used by Menu/ContextMenu/Tray; their `action`
    *  callbacks run in this (creator) context via the __menu:click pipeline. */
   menu?: MenuItemDef[];
+  /** Buttons: enabled state. Default true. AppKit-validated, so it sticks
+   *  across revalidation. Patchable via win.toolbar.updateItem. */
+  enabled?: boolean;
+  /** Menu buttons: show the pull-down chevron. Default true; false is the
+   *  Messages-app no-chevron look. */
+  indicator?: boolean;
 }
 
 /** Options for a native toolbar (NSToolbar) attached at Window.create. */
@@ -244,6 +273,36 @@ export interface ToolbarOptions {
   items: ToolbarItemDef[];
   /** NSWindow.toolbarStyle. Default "unified". macOS only. */
   style?: "unified" | "unifiedCompact" | "expanded";
+}
+
+/** Patch for one toolbar item (win.toolbar.updateItem). Omitted keys are
+ * left unchanged on the live item. */
+export interface ToolbarItemPatch {
+  label?: string;
+  /** Icon via the shared resolver: "sf:<symbol>", file path, or data URL. */
+  icon?: string;
+  enabled?: boolean;
+  /** Menu buttons: show the pull-down chevron. */
+  indicator?: boolean;
+  /** REPLACES the pull-down menu (the moving-checkmark refresh). Actions
+   *  are stripped + re-registered like setItems. */
+  menu?: MenuItemDef[];
+  /** Replaces the creator callback for this button. */
+  action?: () => void;
+}
+
+/** Lifecycle handle for a window's NSToolbar — present on every
+ * WindowHandle. macOS only; all ops no-op elsewhere. */
+export interface ToolbarHandle {
+  /** Replace the full item set; ATTACHES a toolbar when none exists
+   *  (late-attach). `style` applies only on a fresh attach — native warns
+   *  and ignores it when a toolbar is already present. */
+  setItems(items: ToolbarItemDef[], opts?: { style?: "unified" | "unifiedCompact" | "expanded" }): void;
+  /** In-place patch of one item by id. Unknown id → native warn + no-op. */
+  updateItem(id: string, patch: ToolbarItemPatch): void;
+  /** Destroy the toolbar. Chrome metrics re-inject (--zapp-titlebar-height
+   *  shrinks back; --zapp-toolbar-height → 0px). No-op when none. */
+  remove(): void;
 }
 
 /** Shared anchor vocabulary — also accepted by ContextMenu.show's anchor.
@@ -315,7 +374,9 @@ export interface PopoverHandle {
 
 /** Toolbar action callbacks keyed "<windowId>:<itemId>" — Menu.build's
  * collect/strip/listen shape (runtime/menu.ts), but per-window.
- * Entries persist for the app lifetime — no sweep on window close (v1; a native close-sweep is a follow-up). Menus have the same shape app-lifetime by nature; windows die, so this is a deliberate v1 tradeoff. */
+ * Hygiene: setItems/remove purge the window's entries; updateItem swaps
+ * one entry. Only windows that never touch their toolbar again keep
+ * entries for the app lifetime (create-time-only apps — the v1 behavior). */
 const toolbarActions = new Map<string, () => void>();
 let toolbarClickWired = false;
 
@@ -361,25 +422,118 @@ function stripMenuActions(items: MenuItemDef[], out: Map<string, () => void>): a
   });
 }
 
+/** Per-window record of which menu-action ids each toolbar item registered
+ * (windowId → itemId → menu ids). Lets setItems/updateItem/remove purge
+ * exactly what that window's toolbar put into the app-global
+ * toolbarMenuActions map. */
+const toolbarMenuIdsByWindow = new Map<string, Map<string, Set<string>>>();
+
+/** Remove a window's toolbar registrations from both action maps.
+ * Maps are injected for unit tests; production callers pass the module
+ * maps. */
+export function purgeWindowToolbarActions(
+  windowId: string,
+  actions: Map<string, () => void>,
+  menuActions: Map<string, () => void>,
+  menuIdsByWindow: Map<string, Map<string, Set<string>>>,
+): void {
+  for (const key of [...actions.keys()]) {
+    if (key.startsWith(`${windowId}:`)) actions.delete(key);
+  }
+  const perItem = menuIdsByWindow.get(windowId);
+  if (perItem) {
+    for (const ids of perItem.values()) {
+      for (const mid of ids) menuActions.delete(mid);
+    }
+    menuIdsByWindow.delete(windowId);
+  }
+}
+
+/** Remove the menu-action ids previously registered for ONE item
+ * (updateItem with a replacement menu). */
+export function purgeItemToolbarMenuActions(
+  windowId: string,
+  itemId: string,
+  menuActions: Map<string, () => void>,
+  menuIdsByWindow: Map<string, Map<string, Set<string>>>,
+): void {
+  const perItem = menuIdsByWindow.get(windowId);
+  const ids = perItem?.get(itemId);
+  if (!ids) return;
+  for (const mid of ids) menuActions.delete(mid);
+  perItem!.delete(itemId);
+}
+
+/** Record which menu ids a window's items registered (merges per item). */
+export function recordToolbarMenuIds(
+  windowId: string,
+  menuIdsByItem: Map<string, Set<string>>,
+  menuIdsByWindow: Map<string, Map<string, Set<string>>>,
+): void {
+  if (menuIdsByItem.size === 0) return;
+  let perItem = menuIdsByWindow.get(windowId);
+  if (!perItem) {
+    perItem = new Map();
+    menuIdsByWindow.set(windowId, perItem);
+  }
+  for (const [itemId, ids] of menuIdsByItem) perItem.set(itemId, ids);
+}
+
+/** Guard for ToolbarHandle.setItems: an empty (post-validation) item set
+ * is almost always a mistake — native keeps the old toolbar and the purge
+ * would have killed its callbacks. Exported for tests. */
+export function assertToolbarItemsNonEmpty(json: string): void {
+  if (JSON.parse(json).items.length === 0) {
+    throw new Error("[zapp] toolbar: setItems with no items — use toolbar.remove() to destroy the toolbar");
+  }
+}
+
 /** Validate a ToolbarOptions and split it into the wire JSON (actions
  * stripped, defaults applied) and the action maps. Pure — unit-tested. */
 export function normalizeToolbar(
   toolbar: ToolbarOptions,
   hasSidebar: boolean,
-): { json: string; actions: Map<string, () => void>; menuActions: Map<string, () => void> } {
+  hasInspector: boolean,
+): {
+  json: string;
+  actions: Map<string, () => void>;
+  menuActions: Map<string, () => void>;
+  menuIdsByItem: Map<string, Set<string>>;
+} {
   const actions = new Map<string, () => void>();
   const menuActions = new Map<string, () => void>();
+  const menuIdsByItem = new Map<string, Set<string>>();
   const seen = new Set<string>();
   const items: Record<string, unknown>[] = [];
   for (const item of toolbar.items ?? []) {
     const type = item.type ?? "button";
-    if (type === "toggleSidebar" || type === "trackingSeparator") {
+    if (type === "toggleSidebar") {
       if ((item as any).menu) throw new Error('[zapp] toolbar: "menu" is only valid on button items');
       if (!hasSidebar) {
-        console.warn(`[zapp] toolbar: "${type}" requires the window to have a sidebar — item dropped`);
+        console.warn(`[zapp] toolbar: "toggleSidebar" requires the window to have a sidebar — item dropped`);
         continue;
       }
       items.push({ type });
+      continue;
+    }
+    if (type === "toggleInspector") {
+      if ((item as any).menu) throw new Error('[zapp] toolbar: "menu" is only valid on button items');
+      if (!hasInspector) {
+        console.warn(`[zapp] toolbar: "toggleInspector" requires the window to have an inspector — item dropped`);
+        continue;
+      }
+      items.push({ type });
+      continue;
+    }
+    if (type === "trackingSeparator") {
+      if ((item as any).menu) throw new Error('[zapp] toolbar: "menu" is only valid on button items');
+      const pane = item.pane ?? "sidebar";
+      const ok = pane === "inspector" ? hasInspector : hasSidebar;
+      if (!ok) {
+        console.warn(`[zapp] toolbar: "trackingSeparator" (pane: "${pane}") requires the window to have ${pane === "inspector" ? "an" : "a"} ${pane} — item dropped`);
+        continue;
+      }
+      items.push({ type, pane });
       continue;
     }
     if (type === "space" || type === "flexibleSpace") {
@@ -400,10 +554,59 @@ export function normalizeToolbar(
     seen.add(item.id);
     if (item.action) actions.set(item.id, item.action);
     const wire: Record<string, unknown> = { type: "button", id: item.id, label: item.label ?? "", icon: item.icon ?? "" };
-    if (item.menu) wire.menu = stripMenuActions(item.menu, menuActions);
+    if (item.enabled !== undefined) wire.enabled = item.enabled;
+    if (item.indicator !== undefined) wire.indicator = item.indicator;
+    if (item.menu) {
+      const itemMenuActions = new Map<string, () => void>();
+      wire.menu = stripMenuActions(item.menu, itemMenuActions);
+      for (const [mid, fn] of itemMenuActions) menuActions.set(mid, fn);
+      if (itemMenuActions.size > 0) menuIdsByItem.set(item.id, new Set(itemMenuActions.keys()));
+    }
     items.push(wire);
   }
-  return { json: JSON.stringify({ style: toolbar.style ?? "unified", items }), actions, menuActions };
+  return { json: JSON.stringify({ style: toolbar.style ?? "unified", items }), actions, menuActions, menuIdsByItem };
+}
+
+const TOOLBAR_PATCH_KEYS = new Set(["label", "icon", "enabled", "indicator", "menu", "action"]);
+
+/** Validate a ToolbarItemPatch and split it into the wire JSON (only
+ * patched keys, plus id), the replacement action, and stripped menu
+ * actions. Pure — unit-tested. */
+export function normalizeToolbarPatch(
+  id: string,
+  patch: ToolbarItemPatch,
+): { json: string; action?: () => void; menuActions: Map<string, () => void> } {
+  if (!id || !/^[A-Za-z0-9._-]+$/.test(id) || id.startsWith("zapp.") || id.startsWith("NSToolbar")) {
+    throw new Error(
+      `[zapp] toolbar: invalid item id "${id}" — use letters, digits, ".", "_", "-" (ids prefixed "zapp." or "NSToolbar" are reserved)`,
+    );
+  }
+  const keys = Object.keys(patch ?? {});
+  if (keys.length === 0) {
+    throw new Error('[zapp] toolbar: empty patch — pass at least one of label/icon/enabled/indicator/menu/action');
+  }
+  for (const k of keys) {
+    if (!TOOLBAR_PATCH_KEYS.has(k)) throw new Error(`[zapp] toolbar: unknown patch key "${k}"`);
+  }
+  if (patch.action && patch.menu) {
+    throw new Error('[zapp] toolbar: a button cannot have both "action" and "menu" — the menu consumes the click');
+  }
+  const menuActions = new Map<string, () => void>();
+  const wire: Record<string, unknown> = { id };
+  if (patch.label !== undefined) wire.label = patch.label;
+  // Empty icon strings are stripped: native ignores them on the live item,
+  // but a merged stored def carrying "" would silently lose the icon on the
+  // next shape rebuild. Icons can be swapped, not cleared (documented).
+  if (patch.icon !== undefined && patch.icon !== "") wire.icon = patch.icon;
+  if (patch.enabled !== undefined) wire.enabled = patch.enabled;
+  if (patch.indicator !== undefined) wire.indicator = patch.indicator;
+  if (patch.menu !== undefined) wire.menu = stripMenuActions(patch.menu, menuActions);
+  // Explicit-undefined values pass the keys.length guard above (key exists,
+  // value is undefined) but produce a wire with only the id — detect here.
+  if (Object.keys(wire).length === 1 && !patch.action) {
+    throw new Error('[zapp] toolbar: empty patch — pass at least one of label/icon/enabled/indicator/menu/action');
+  }
+  return { json: JSON.stringify(wire), action: patch.action, menuActions };
 }
 
 /** A handle to the sidebar attached to a window. */
@@ -418,6 +621,18 @@ export interface SidebarHandle {
   readonly width: number;
 }
 
+/** A handle to the inspector attached to a window. Mirrors SidebarHandle. */
+export interface InspectorHandle {
+  toggle(): void;
+  collapse(): void;
+  expand(): void;
+  setWidth(px: number): void;
+  /** Tracked from INSPECTOR_COLLAPSED/EXPANDED, seeded by the create option. */
+  readonly collapsed: boolean;
+  /** Last width from INSPECTOR_RESIZED (the create option until the first event). */
+  readonly width: number;
+}
+
 /** Size events that include width/height/position data. */
 type SizeEvent = WindowEvent.RESIZE | WindowEvent.MOVE | WindowEvent.MAXIMIZE | WindowEvent.RESTORE;
 
@@ -426,6 +641,11 @@ export interface WindowHandle {
   readonly id: string;
   /** Handle for the sidebar attached to this window, if any. */
   readonly sidebar?: SidebarHandle;
+  /** Handle for the inspector attached to this window, if any. */
+  readonly inspector?: InspectorHandle;
+  /** Lifecycle handle for this window's native toolbar (macOS). Always
+   *  present — setItems attaches when no toolbar exists. */
+  readonly toolbar: ToolbarHandle;
 
   on(event: SizeEvent, handler: (payload: WindowSizePayload) => void): () => void;
   on(event: WindowEvent.MODAL_DISMISSED, handler: (payload: ModalDismissedPayload) => void): () => void;
@@ -554,7 +774,46 @@ function createSidebarHandle(
   };
 }
 
-function createWindowHandle(windowId: string, sidebarOpts?: SidebarOptions): WindowHandle {
+/** Per-window inspector state, shared across repeated Window.current() calls. */
+const inspectorState = new Map<string, { collapsed: boolean; width: number }>();
+/** Windows whose inspector event listeners are already registered. */
+const inspectorWired = new Set<string>();
+
+/** Create an InspectorHandle that tracks collapsed/width state via events. */
+function createInspectorHandle(
+  windowId: string,
+  initialCollapsed: boolean,
+  initialWidth: number,
+): InspectorHandle {
+  if (!inspectorState.has(windowId)) {
+    inspectorState.set(windowId, { collapsed: initialCollapsed, width: initialWidth });
+  }
+  if (!inspectorWired.has(windowId)) {
+    const bridge = getBridge();
+    bridge.on(eventName(WindowEvent.INSPECTOR_COLLAPSED), (payload: any) => {
+      if (payload?.windowId === windowId) inspectorState.get(windowId)!.collapsed = true;
+    });
+    bridge.on(eventName(WindowEvent.INSPECTOR_EXPANDED), (payload: any) => {
+      if (payload?.windowId === windowId) inspectorState.get(windowId)!.collapsed = false;
+    });
+    bridge.on(eventName(WindowEvent.INSPECTOR_RESIZED), (payload: any) => {
+      if (payload?.windowId === windowId && typeof payload.width === "number") {
+        inspectorState.get(windowId)!.width = payload.width;
+      }
+    });
+    inspectorWired.add(windowId);
+  }
+  return {
+    get collapsed() { return inspectorState.get(windowId)!.collapsed; },
+    get width()     { return inspectorState.get(windowId)!.width; },
+    toggle()              { windowAction("inspector:toggle",   { windowId }); },
+    collapse()            { windowAction("inspector:collapse", { windowId }); },
+    expand()              { windowAction("inspector:expand",   { windowId }); },
+    setWidth(px: number)  { windowAction("inspector:setWidth", { windowId, width: px }); },
+  };
+}
+
+function createWindowHandle(windowId: string, sidebarOpts?: SidebarOptions, inspectorOpts?: InspectorOptions): WindowHandle {
   const bridge = getBridge();
 
   return {
@@ -601,6 +860,59 @@ function createWindowHandle(windowId: string, sidebarOpts?: SidebarOptions): Win
     sidebar: sidebarOpts !== undefined
       ? createSidebarHandle(windowId, sidebarOpts.collapsed ?? false, sidebarOpts.width ?? 260)
       : undefined,
+
+    inspector: inspectorOpts !== undefined
+      ? createInspectorHandle(windowId, inspectorOpts.collapsed ?? false, inspectorOpts.width ?? 280)
+      : undefined,
+
+    toolbar: {
+      setItems(items: ToolbarItemDef[], setOpts?: { style?: "unified" | "unifiedCompact" | "expanded" }) {
+        const { json, actions, menuActions, menuIdsByItem } =
+          normalizeToolbar({ items, style: setOpts?.style }, sidebarOpts !== undefined, inspectorOpts !== undefined);
+        // Parse once: guard on empty items, then conditionally strip style.
+        // Only send style when the caller set one — native warns when style
+        // arrives for an already-attached toolbar, and normalizeToolbar
+        // always defaults it.
+        const parsed = JSON.parse(json);
+        assertToolbarItemsNonEmpty(json);
+        if (setOpts?.style === undefined) delete parsed.style;
+        const wireJson = JSON.stringify(parsed);
+        purgeWindowToolbarActions(windowId, toolbarActions, toolbarMenuActions, toolbarMenuIdsByWindow);
+        if (actions.size > 0) {
+          wireToolbarClicks();
+          for (const [id, fn] of actions) toolbarActions.set(`${windowId}:${id}`, fn);
+        }
+        if (menuActions.size > 0) {
+          wireToolbarMenuClicks();
+          for (const [id, fn] of menuActions) toolbarMenuActions.set(id, fn);
+        }
+        recordToolbarMenuIds(windowId, menuIdsByItem, toolbarMenuIdsByWindow);
+        windowAction("toolbar:setItems", { windowId, toolbarJson: wireJson });
+      },
+      updateItem(id: string, patch: ToolbarItemPatch) {
+        const { json, action, menuActions } = normalizeToolbarPatch(id, patch);
+        if (action) {
+          wireToolbarClicks();
+          toolbarActions.set(`${windowId}:${id}`, action);
+        }
+        if (patch.menu !== undefined) {
+          // The item is becoming (or refreshing) a menu button — its click is
+          // consumed by the menu, so any old action callback can never fire.
+          toolbarActions.delete(`${windowId}:${id}`);
+          purgeItemToolbarMenuActions(windowId, id, toolbarMenuActions, toolbarMenuIdsByWindow);
+          if (menuActions.size > 0) {
+            wireToolbarMenuClicks();
+            for (const [mid, fn] of menuActions) toolbarMenuActions.set(mid, fn);
+            recordToolbarMenuIds(windowId, new Map([[id, new Set(menuActions.keys())]]), toolbarMenuIdsByWindow);
+          }
+        }
+        windowAction("toolbar:updateItem", { windowId, itemJson: json });
+      },
+      remove() {
+        purgeWindowToolbarActions(windowId, toolbarActions, toolbarMenuActions, toolbarMenuIdsByWindow);
+        windowAction("toolbar:remove", { windowId });
+      },
+    },
 
     async createPopover(opts: PopoverOptions): Promise<PopoverHandle> {
       // Worker contexts can't measure elements and the worker bridges
@@ -657,7 +969,12 @@ export const Window = {
       ? { url: "" }  // url is unused here — the pane's webview is already running;
                      // we only need the options shape so createWindowHandle wires up the SidebarHandle.
       : undefined;
-    return createWindowHandle(id, sidebarOpts);
+    const inInspectorWindow = Window.isInspector() ||
+      (globalThis as any)[Symbol.for("zapp.hasInspector")] === true;
+    const inspectorOpts: InspectorOptions | undefined = inInspectorWindow
+      ? { url: "" }  // url unused here — the pane is already running; we only need the shape.
+      : undefined;
+    return createWindowHandle(id, sidebarOpts, inspectorOpts);
   },
 
   /** True when this code runs inside a window's sidebar webview.
@@ -667,6 +984,11 @@ export const Window = {
    */
   isSidebar(): boolean {
     return (globalThis as any)[Symbol.for("zapp.isSidebar")] === true;
+  },
+
+  /** True when this code runs inside a window's inspector webview. */
+  isInspector(): boolean {
+    return (globalThis as any)[Symbol.for("zapp.isInspector")] === true;
   },
 
   /** Create a new window. Returns a handle for the new window. */
@@ -685,17 +1007,20 @@ export const Window = {
     // raw JSON; toolbar.m parses it). Actions register post-create once the
     // windowId is known.
     let pendingToolbarActions: Map<string, () => void> | undefined;
+    let pendingToolbarMenuIds: Map<string, Set<string>> | undefined;
     if (opts?.toolbar) {
-      const { json, actions, menuActions } = normalizeToolbar(opts.toolbar, opts.sidebar !== undefined);
+      const { json, actions, menuActions, menuIdsByItem } = normalizeToolbar(opts.toolbar, opts.sidebar !== undefined, opts.inspector !== undefined);
       normalized.toolbarJson = json;
       delete normalized.toolbar;
       if (actions.size > 0) pendingToolbarActions = actions;
+      if (menuIdsByItem.size > 0) pendingToolbarMenuIds = menuIdsByItem;
       if (menuActions.size > 0) {
         wireToolbarMenuClicks();
         for (const [id, fn] of menuActions) toolbarMenuActions.set(id, fn);
       }
     }
     const registerToolbarActions = (windowId: string) => {
+      if (pendingToolbarMenuIds) recordToolbarMenuIds(windowId, pendingToolbarMenuIds, toolbarMenuIdsByWindow);
       if (!pendingToolbarActions) return;
       wireToolbarClicks();
       for (const [id, fn] of pendingToolbarActions) toolbarActions.set(`${windowId}:${id}`, fn);
@@ -705,11 +1030,11 @@ export const Window = {
     if (host?.createWindow) {
       const r = host.createWindow(normalized) as { windowId: string };
       registerToolbarActions(r.windowId);
-      return createWindowHandle(r.windowId, opts?.sidebar);
+      return createWindowHandle(r.windowId, opts?.sidebar, opts?.inspector);
     }
     // Webview context: async IPC roundtrip through the WKWebView bridge.
     const result = await getBridge().invoke("__window:create", normalized) as { windowId: string };
     registerToolbarActions(result.windowId);
-    return createWindowHandle(result.windowId, opts?.sidebar);
+    return createWindowHandle(result.windowId, opts?.sidebar, opts?.inspector);
   },
 };

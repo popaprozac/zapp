@@ -131,18 +131,17 @@
       if (dataJson) {
         try {
           const d = JSON.parse(dataJson);
-          // Generic window-resize/move shape — skip for sidebar-resized which
-          // carries bare width only (no height) and uses a different payload contract.
-          if (eventName !== "sidebar-resized") {
+          // sidebar-resized / inspector-resized carry a bare width (no height)
+          // and use the top-level `width` payload contract (Sidebar/Inspector
+          // ResizedPayload); everything else is the generic window-resize/move
+          // size+position shape.
+          const bareWidth = eventName === "sidebar-resized" || eventName === "inspector-resized";
+          if (!bareWidth) {
             Object.assign(payload, {
               size: { width: d.width, height: d.height },
               position: { x: d.x, y: d.y },
             });
-          }
-          // Sidebar divider resize carries a bare width (no height) — surface it
-          // top-level per SidebarResizedPayload; the generic size mapping above is
-          // for window-resize shapes.
-          if (eventName === "sidebar-resized" && typeof d.width === "number") {
+          } else if (typeof d.width === "number") {
             payload.width = d.width;
           }
         } catch {}

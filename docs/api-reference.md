@@ -813,6 +813,58 @@ window ops, they are not gated by the `permissions` manifest.
 **Window slots.** Each sidebar window occupies 2 of the 64 available
 window slots (one for the host, one for the sidebar webview).
 
+### Inspector (macOS)
+
+Pass `inspector` in `Window.create` to attach a trailing utility pane —
+the right-hand "inspector" in Mail/Xcode/Notes — completing the
+`sidebar | content | inspector` three-column shell. It is a web-content
+pane (loads an app route like the sidebar) and mirrors the `SidebarHandle`:
+declared at create, toggled/collapsed/resized at runtime. macOS only; the
+option is a no-op elsewhere.
+
+```ts
+const win = await Window.create({
+  url: "/",
+  sidebar: { url: "/nav", width: 240 },
+  inspector: { url: "/inspector", width: 300, collapsed: true },
+  toolbar: {
+    items: [
+      { type: "toggleSidebar" },
+      { type: "trackingSeparator" },                 // tracks the sidebar edge
+      { id: "compose", icon: "sf:square.and.pencil", label: "Compose", action: () => {} },
+      { type: "flexibleSpace" },
+      { type: "trackingSeparator", pane: "inspector" }, // tracks the inspector edge
+      { type: "toggleInspector" },                   // toggles the inspector
+    ],
+  },
+});
+
+const insp = Window.current().inspector!;
+insp.toggle();
+insp.setWidth(360);
+win.on(WindowEvent.INSPECTOR_RESIZED, ({ width }) => console.log("inspector", width));
+```
+
+**Options:** `url` (required), `width` (default 280), `minWidth`/`maxWidth`
+(180/400), `collapsible` (default true), `collapsed` (default false — set
+true for the common "hidden until summoned" inspector), `material`.
+
+**Handle (`win.inspector`, present only when the window has one):**
+`toggle()` / `collapse()` / `expand()` / `setWidth(px)`, plus `collapsed`
+and `width` (tracked from `INSPECTOR_COLLAPSED` / `INSPECTOR_EXPANDED` /
+`INSPECTOR_RESIZED`). `Window.isInspector()` is true inside the inspector
+pane.
+
+**Toolbar integration:** `{ type: "toggleInspector" }` adds a button (SF
+symbol `sidebar.right`) that toggles the inspector;
+`{ type: "trackingSeparator", pane: "inspector" }` aligns toolbar controls
+to the content↔inspector divider. Both require the window to have an
+inspector (warned + dropped otherwise).
+
+A window with an inspector but no sidebar roots on a 2-item split (content
++ inspector); with both, a 3-item split. Each pane consumes one dispatch
+slot.
+
 ### Toolbar (macOS)
 
 Pass `toolbar` in `Window.create` to attach a real `NSToolbar`. With
@@ -843,7 +895,10 @@ click routing; letters/digits/`.`/`_`/`-` only, `zapp.`/`NSToolbar`
 prefixes reserved, duplicates are an error), take an `icon`
 (`sf:<symbol>` / file path / data URL — same resolver as menu icons), a
 `label` (tooltip; visible text in the `expanded` style), and an optional
-`action` callback. System types: `toggleSidebar`, `trackingSeparator`
+`action` callback. Buttons also take `enabled?: boolean` (default `true`; greyed out and
+unclickable when `false`) and — on menu buttons — `indicator?: boolean`
+(default `true`; `false` hides the pull-down chevron, the Messages-app
+look). System types: `toggleSidebar`, `trackingSeparator`
 (both require the window to have a `sidebar` — warned and dropped
 otherwise), `space`, `flexibleSpace`.
 
@@ -874,8 +929,57 @@ styles that row IS the titlebar band (the two variables are equal, and
 the traffic lights center in the same row); in the `expanded` style it's
 the toolbar row below the title. Never add the two variables.
 
-v1 is create-time only — no `setItems` after creation; no search field;
-`allowsUserCustomization` is off.
+**Dynamic updates — `win.toolbar`.** Every `WindowHandle` carries a
+`ToolbarHandle` (macOS; ops no-op elsewhere):
+
+```ts
+const win = Window.current();
+
+// Attach-or-replace the full item set. Attaches a toolbar when the window
+// has none (late attach — style honored only then; warned + ignored on a
+// live toolbar). An empty item set throws — use remove() to destroy.
+win.toolbar.setItems([
+  { id: "compose", icon: "sf:square.and.pencil", label: "Compose",
+    action: () => startCompose() },
+  { type: "flexibleSpace" },
+  { id: "filter", icon: "sf:line.3.horizontal.decrease", label: "Filter",
+    indicator: false,
+    menu: filterMenu("all") },
+]);
+
+// Patch one item in place — the moving-checkmark case. menu REPLACES the
+// pull-down; label/icon/enabled/indicator patch individually; action
+// replaces the creator callback. Unknown id → native warn, no-op.
+win.toolbar.updateItem("filter", { menu: filterMenu("unread") });
+win.toolbar.updateItem("compose", { enabled: false });
+
+// Destroy. Chrome metrics re-inject: --zapp-titlebar-height shrinks back
+// to the bare-titlebar inset and --zapp-toolbar-height goes to 0px.
+win.toolbar.remove();
+```
+
+`setItems` re-runs the create-time validation (ids, reserved prefixes,
+action/menu exclusivity) and re-registers action callbacks in the calling
+context, purging the window's previous registrations.
+
+Caveats worth knowing:
+
+- **Webview contexts only (v1).** Worker-held `WindowHandle`s carry the
+  `toolbar` property, but worker window-actions don't reach the native
+  router yet — call toolbar ops from a webview pane.
+- **Menu-item ids are app-global.** `__menu:click` carries only the item
+  id, so two windows using the same menu ids (`"all"`, `"unread"`, …)
+  collide: the last registration wins, and one window's
+  `setItems`/`remove` purges the shared id. Use per-window ids (or omit
+  ids and let auto-ids handle it) in multi-window apps.
+- **Converting a menu button to an action button** takes two calls:
+  `updateItem(id, { menu: [] })` (drops the pull-down; the item rebuilds
+  as a plain button), then `updateItem(id, { action })` — a single patch
+  can't carry both.
+- **Icons can be swapped but not cleared** — an empty `icon` string is
+  stripped from the patch (an icon-only `""` patch throws "empty patch").
+
+No search field; `allowsUserCustomization` is off.
 
 ### Popovers (macOS)
 

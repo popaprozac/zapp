@@ -464,6 +464,52 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
         return;
     }
 
+    // Accessory-pane sender resolution. A window action (t:4) carries the
+    // SENDER's transport slot as window_id. For the host pane (or a standalone
+    // window) that slot IS a WindowManager window. But a sidebar/inspector/
+    // popover pane registers under its OWN dispatch slot, which is NOT a
+    // WindowManager entry — only the host is. So a window action posted from
+    // INSIDE an accessory pane (e.g. Window.current().inspector.toggle() in the
+    // inspector pane's own JS) arrives with an accessory slot that fails the
+    // is_valid() guard below and gets silently dropped — even though every
+    // accessory action block resolves its real target afterward.
+    //
+    // Accessory slots are registered under the HOST's "win-<host>" id string
+    // (window.m zapp_register_webview), so slot -> string -> numeric round-trips
+    // to the host slot (first-match-wins). Remap the sender to its host window
+    // when it isn't a WindowManager window itself; window-scoped actions then
+    // operate on the host, matching the launcher path. (t:3 Events skip this
+    // path entirely — EMIT never validates the sender — which is why sidebar
+    // Events.emit always worked while this t:4 path did not.)
+    let sender_probe = app.window.get(window_id);
+    if !sender_probe.is_valid() {
+        raw {
+            #ifdef __APPLE__
+            extern const char* darwin_window_id_string(int32_t numeric_id);
+            extern int32_t darwin_window_numeric_id_for_string(const char* wid);
+            const char* host_str = darwin_window_id_string(window_id);
+            if (host_str) {
+                int32_t host_id = darwin_window_numeric_id_for_string(host_str);
+                if (host_id >= 0) window_id = host_id;
+            }
+            #else
+            // Windows has no accessory panes (sidebar/inspector are Apple-only),
+            // so every sender slot is already a real window — this branch is a
+            // no-op in practice. Parse "win-N" back to N (same approach as the
+            // attachModal Windows path) rather than depend on a numeric-id
+            // reverse-lookup symbol that doesn't exist on Windows.
+            extern const char* windows_window_id_string(int32_t numeric_id);
+            const char* host_str = windows_window_id_string(window_id);
+            if (host_str) {
+                int parsed_host = -1;
+                if (sscanf(host_str, "win-%d", &parsed_host) == 1 && parsed_host >= 0) {
+                    window_id = parsed_host;
+                }
+            }
+            #endif
+        }
+    }
+
     // Window operations — get the window handle from the manager
     let win = app.window.get(window_id);
     if !win.is_valid() { return; }
@@ -733,6 +779,42 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
         return;
     }
 
+    let is_in_toggle = action == "inspector:toggle";
+    let is_in_collapse = action == "inspector:collapse";
+    let is_in_expand = action == "inspector:expand";
+    let is_in_set_width = action == "inspector:setWidth";
+    if is_in_toggle || is_in_collapse || is_in_expand || is_in_set_width {
+        let in_target = window_id;
+        let in_wid_opt = pre_args.get_string("windowId");
+        if in_wid_opt.is_some() {
+            raw {
+                #ifdef __APPLE__
+                extern int32_t darwin_window_numeric_id_for_string(const char* wid);
+                int32_t in_resolved = darwin_window_numeric_id_for_string((const char*)in_wid_opt.val);
+                if (in_resolved >= 0) in_target = in_resolved;
+                #endif
+            }
+        }
+        let in_w = 0;
+        if is_in_set_width {
+            let width_opt = pre_args.get_int("width");
+            if width_opt.is_some() { in_w = width_opt.unwrap(); }
+        }
+        raw {
+            #ifdef __APPLE__
+            extern void darwin_inspector_toggle(int32_t window_id);
+            extern void darwin_inspector_collapse(int32_t window_id);
+            extern void darwin_inspector_expand(int32_t window_id);
+            extern void darwin_inspector_set_width(int32_t window_id, int32_t width);
+            if (is_in_toggle) darwin_inspector_toggle((int32_t)in_target);
+            else if (is_in_collapse) darwin_inspector_collapse((int32_t)in_target);
+            else if (is_in_expand) darwin_inspector_expand((int32_t)in_target);
+            else darwin_inspector_set_width((int32_t)in_target, (int32_t)in_w);
+            #endif
+        }
+        return;
+    }
+
     // Popover actions — keyed by popoverId (popover.m registry). show passes
     // the raw args subtree through: popover.m parses anchor/edge itself
     // (tray-style payload-driven extraction).
@@ -756,6 +838,54 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
                 darwin_popover_hide((const char*)pid);
             } else {
                 darwin_popover_destroy((const char*)pid);
+            }
+            #endif
+        }
+        return;
+    }
+
+    // Toolbar lifecycle — window ops on an existing window, ungated like
+    // sidebar:* (docs/security.md). Payload-windowId resolution (sidebar
+    // pattern) so handles work from the creator, either pane, anywhere;
+    // fall back to the SENDER's slot. The numeric id doubles as the
+    // host_slot for chrome-metrics injection (window.m slot == window id).
+    let is_tb_set = action == "toolbar:setItems";
+    let is_tb_update = action == "toolbar:updateItem";
+    let is_tb_remove = action == "toolbar:remove";
+    if is_tb_set || is_tb_update || is_tb_remove {
+        let tb_target = window_id;
+        let tb_wid_opt = pre_args.get_string("windowId");
+        if tb_wid_opt.is_some() {
+            raw {
+                #ifdef __APPLE__
+                extern int32_t darwin_window_numeric_id_for_string(const char* wid);
+                int32_t tb_resolved = darwin_window_numeric_id_for_string((const char*)tb_wid_opt.val);
+                if (tb_resolved >= 0) tb_target = tb_resolved;
+                #endif
+            }
+        }
+        let tb_json: string = "";
+        if is_tb_set {
+            let tj_opt = pre_args.get_string("toolbarJson");
+            if !tj_opt.is_some() { return; }
+            tb_json = tj_opt.unwrap();
+        }
+        if is_tb_update {
+            let ij_opt = pre_args.get_string("itemJson");
+            if !ij_opt.is_some() { return; }
+            tb_json = ij_opt.unwrap();
+        }
+        raw {
+            #ifdef __APPLE__
+            extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
+            extern void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_t host_slot);
+            extern void darwin_toolbar_update_item(void* window_ptr, const char* item_json);
+            extern void darwin_toolbar_remove(void* window_ptr);
+            void* tb_wptr = darwin_window_get_by_numeric_id((int32_t)tb_target);
+            if (tb_wptr) {
+                if (is_tb_set) darwin_toolbar_set_items(tb_wptr, (const char*)tb_json, (int32_t)tb_target);
+                else if (is_tb_update) darwin_toolbar_update_item(tb_wptr, (const char*)tb_json);
+                else darwin_toolbar_remove(tb_wptr);
             }
             #endif
         }
