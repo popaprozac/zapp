@@ -18,6 +18,7 @@ void windows_dock_set_badge(const char* label);
 void windows_dock_remove_badge(void);
 const char* windows_dock_get_badge(void);
 void windows_dock_bounce(int bounce_type);
+void windows_dock_set_progress(int permille, int mode);
 void windows_dock_set_icon(const char* path);
 void windows_dock_reset_icon(void);
 

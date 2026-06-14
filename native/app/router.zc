@@ -730,6 +730,18 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
         dock_bounce(t);
         return;
     }
+    if action == "dock:setProgress" {
+        // permille 0..1000 (<0 clears); mode 0 normal/1 indeterminate/2 error/
+        // 3 paused/4 none. Runtime sends ints to avoid float JSON parsing.
+        let pm_opt = pre_args.get_int("permille");
+        let mode_opt = pre_args.get_int("mode");
+        let pm = -1;
+        let mode = 0;
+        if pm_opt.is_some() { pm = pm_opt.unwrap(); }
+        if mode_opt.is_some() { mode = mode_opt.unwrap(); }
+        dock_set_progress(pm, mode);
+        return;
+    }
     if action == "dock:setIcon" {
         let path_opt = pre_args.get_string("path");
         if path_opt.is_some() { dock_set_icon(path_opt.unwrap()); }

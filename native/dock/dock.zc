@@ -33,6 +33,12 @@ fn dock_get_badge() -> string { return darwin_dock::darwin_dock_get_badge(); }
 @cfg(apple)
 fn dock_bounce(bounce_type: int) -> void { darwin_dock::darwin_dock_bounce(bounce_type); }
 
+// Taskbar/dock progress. permille 0..1000 (<0 clears); mode: 0 normal,
+// 1 indeterminate, 2 error, 3 paused, 4 none. Windows draws it on the taskbar
+// button; macOS dock-tile progress isn't wired yet, so this no-ops there.
+@cfg(apple)
+fn dock_set_progress(permille: int, mode: int) -> void {}
+
 // Set a custom dock icon from a file path.
 @cfg(apple)
 fn dock_set_icon(path: string) -> void { darwin_dock::darwin_dock_set_icon(path); }
@@ -60,6 +66,8 @@ fn dock_get_badge() -> string { return win_dock::windows_dock_get_badge(); }
 @cfg(windows)
 fn dock_bounce(bounce_type: int) -> void { win_dock::windows_dock_bounce(bounce_type); }
 @cfg(windows)
+fn dock_set_progress(permille: int, mode: int) -> void { win_dock::windows_dock_set_progress(permille, mode); }
+@cfg(windows)
 fn dock_set_icon(path: string) -> void { win_dock::windows_dock_set_icon(path); }
 @cfg(windows)
 fn dock_reset_icon() -> void { win_dock::windows_dock_reset_icon(); }
@@ -76,6 +84,7 @@ impl DockManager {
     fn remove_badge(self) -> void { dock_remove_badge(); }
     fn get_badge(self) -> string { return dock_get_badge(); }
     fn bounce(self, bounce_type: int) -> void { dock_bounce(bounce_type); }
+    fn set_progress(self, permille: int, mode: int) -> void { dock_set_progress(permille, mode); }
     fn set_icon(self, path: string) -> void { dock_set_icon(path); }
     fn reset_icon(self) -> void { dock_reset_icon(); }
 }

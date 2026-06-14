@@ -236,6 +236,8 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
         <button id="btn-dock-badge">Badge "3"</button>
         <button id="btn-dock-clear">Clear Badge</button>
         <button id="btn-dock-bounce">Bounce (in 3s)</button>
+        <button id="btn-dock-progress">Progress (animate)</button>
+        <button id="btn-dock-progress-clear">Clear Progress</button>
         <button id="btn-dock-hide">Hide Icon</button>
         <button id="btn-dock-show">Show Icon</button>
       </section>
@@ -952,6 +954,22 @@ $("btn-dock-bounce").addEventListener("click", () => {
   setTimeout(() => {
     Dock.bounce("critical");
   }, 3000);
+});
+
+$("btn-dock-progress").addEventListener("click", () => {
+  // Animate 0→100% on the taskbar button (Windows), then clear. No-op on macOS.
+  let p = 0;
+  log("Dock progress animating 0→100% (watch the taskbar button)");
+  const t = setInterval(() => {
+    p += 0.1;
+    if (p > 1.0001) { Dock.clearProgress(); clearInterval(t); log("Dock progress cleared"); return; }
+    Dock.setProgress(p);
+  }, 350);
+});
+
+$("btn-dock-progress-clear").addEventListener("click", () => {
+  Dock.clearProgress();
+  log("Dock progress cleared");
 });
 
 $("btn-dock-hide").addEventListener("click", () => {
