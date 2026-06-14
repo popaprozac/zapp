@@ -20,7 +20,8 @@ extern void darwin_webview_create_ext(void* window_ptr, bool inspectable, bool a
                                       const char* url_override, int32_t numeric_id_pre_alloc,
                                       bool transparent_background,
                                       void* container_view, int32_t identity_window_id,
-                                      int32_t pane_role);
+                                      int32_t pane_role, bool host_has_sidebar,
+                                      bool host_has_inspector);
 // Sidebar split registry (sidebar.m). register wires KVO + resize observation
 // and emits sidebar-collapsed/expanded/resized into both panes; unregister
 // tears the observers down. Keyed by the host NSWindow pointer.
@@ -737,10 +738,10 @@ void* darwin_window_create(WindowOptions* opts) {
             // material shows through, pane_role=1 (sidebar) marker.
             darwin_webview_create_ext((__bridge void*)window, inspectable, accept_first_mouse,
                                       custom_url, host_slot, useVibrancy,
-                                      (__bridge void*)mainContainer, -1, 0);
+                                      (__bridge void*)mainContainer, -1, 0, useSidebar, false);
             darwin_webview_create_ext((__bridge void*)window, inspectable, accept_first_mouse,
                                       sidebarUrl, sidebar_slot, true,
-                                      (__bridge void*)sidebarContainer, host_slot, 1);
+                                      (__bridge void*)sidebarContainer, host_slot, 1, useSidebar, false);
 
             // Register BOTH webviews in the dispatch table here. The normal
             // registration path (darwin_window_register_numeric_id) walks

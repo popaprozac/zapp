@@ -760,10 +760,11 @@ void darwin_webview_set_drag_region(int32_t window_id, bool drag) {
 // --- WebView Creation ---
 
 // darwin_webview_create_ext — the full creation path, parameterized for the
-// native-sidebar feature (Task 4). The three trailing params widen the legacy
-// signature without changing its behavior when they're at their defaults
-// (NULL / -1 / false), which is exactly how the thin darwin_webview_create
-// delegator below calls it. Sidebar callers (window.m, Task 5) pass:
+// native-sidebar feature (Task 4) and inspector panes (Task 5). The trailing
+// params widen the legacy signature without changing its behavior when they're
+// at their defaults (NULL / -1 / 0 / false / false), which is exactly how the
+// thin darwin_webview_create delegator below calls it. Sidebar/inspector
+// callers (window.m) pass:
 //   - container_view: the NSSplitViewItem's view to mount into, instead of
 //     the host's contentView/vibrancy detection.
 //   - identity_window_id: the HOST window's numeric id, baked into the
@@ -772,7 +773,14 @@ void darwin_webview_set_drag_region(int32_t window_id, bool drag) {
 //     keeps using its own slot (numeric_id_pre_alloc) — only the JS-visible
 //     identity string switches. (-1 = self identity, i.e. legacy.)
 //   - pane_role: 0 = main pane, 1 = sidebar pane (sets zapp.isSidebar),
-//     2 = popover pane (sets zapp.isPopover). Document-start markers.
+//     2 = popover pane (sets zapp.isPopover),
+//     3 = inspector pane (sets zapp.isInspector). Document-start markers.
+//   - host_has_sidebar: inject zapp.hasSidebar into this pane when true.
+//     Set in BOTH panes of a sidebar window so Window.current() in any pane
+//     wires the SidebarHandle correctly.
+//   - host_has_inspector: inject zapp.hasInspector into this pane when true.
+//     Driven by explicit composition flags; the old container_view heuristic
+//     mis-fired for inspector-only windows and has been removed.
 //
 // Subscribe note: when a sidebar webview's runtime sends a window-event
 // `subscribe` (bootstrap/webview.ts: {t:4,m:"subscribe"}), the router keys
@@ -789,7 +797,9 @@ void darwin_webview_create_ext(void* window_ptr, bool inspectable, bool accept_f
                                bool transparent_background,
                                void* container_view /* NSView*; NULL = legacy mount */,
                                int32_t identity_window_id /* -1 = self identity */,
-                               int32_t pane_role) {
+                               int32_t pane_role,
+                               bool host_has_sidebar,
+                               bool host_has_inspector) {
     NSWindow* window = (__bridge NSWindow*)window_ptr;
     NSView* hostView = [window contentView];
     NSRect bounds = [hostView bounds];
@@ -925,18 +935,27 @@ void darwin_webview_create_ext(void* window_ptr, bool inspectable, bool accept_f
         [ucc addUserScript:[[WKUserScript alloc] initWithSource:
             @"(function(){globalThis[Symbol.for('zapp.isPopover')]=true;})();"
             injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
+    } else if (pane_role == 3) {
+        [ucc addUserScript:[[WKUserScript alloc] initWithSource:
+            @"(function(){globalThis[Symbol.for('zapp.isInspector')]=true;})();"
+            injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
     }
 
-    // 3c. hasSidebar marker — set in BOTH panes of a split window (only
-    //     sidebar windows mount via container_view), so Window.current()
-    //     attaches a SidebarHandle from either pane. Must be a document-start
-    //     user script: a one-shot evaluateJavaScript at construction lands in
-    //     the pre-navigation context and is wiped when the real page commits.
-    //     popover panes also mount via containers but say nothing about the
-    //     window's sidebar — excluded.
-    if (container_view != NULL && pane_role != 2) {
+    // 3c. has{Sidebar,Inspector} markers — injected into every pane of a window
+    //     that has the corresponding accessory, so Window.current() in ANY pane
+    //     wires the matching handle. Driven by explicit composition flags (the
+    //     old container_view heuristic mis-fired for inspector-only windows).
+    //     Must be document-start user scripts: a one-shot evaluateJavaScript at
+    //     construction lands in the pre-navigation context and is wiped when the
+    //     real page commits.
+    if (host_has_sidebar) {
         [ucc addUserScript:[[WKUserScript alloc] initWithSource:
             @"(function(){globalThis[Symbol.for('zapp.hasSidebar')]=true;})();"
+            injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
+    }
+    if (host_has_inspector) {
+        [ucc addUserScript:[[WKUserScript alloc] initWithSource:
+            @"(function(){globalThis[Symbol.for('zapp.hasInspector')]=true;})();"
             injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
     }
 
@@ -1133,7 +1152,7 @@ void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first
                            const char* url_override, int32_t numeric_id_pre_alloc,
                            bool transparent_background) {
     darwin_webview_create_ext(window_ptr, inspectable, accept_first_mouse, url_override,
-                              numeric_id_pre_alloc, transparent_background, NULL, -1, 0);
+                              numeric_id_pre_alloc, transparent_background, NULL, -1, 0, false, false);
 }
 
 // --- JS evaluation ---

@@ -34,12 +34,16 @@ void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first
 //     A sidebar webview passes the HOST window's id so its runtime identifies
 //     as the host while TRANSPORT stays on numeric_id_pre_alloc. -1 = self.
 //   - pane_role: 0 = main pane, 1 = sidebar pane (sets zapp.isSidebar),
-//     2 = popover pane (sets zapp.isPopover). Document-start markers.
+//     2 = popover pane (sets zapp.isPopover),
+//     3 = inspector pane (sets zapp.isInspector). Document-start markers.
+//   - host_has_sidebar: inject zapp.hasSidebar into this pane when true.
+//   - host_has_inspector: inject zapp.hasInspector into this pane when true.
 void darwin_webview_create_ext(void* window_ptr, bool inspectable, bool accept_first_mouse,
                                const char* url_override, int32_t numeric_id_pre_alloc,
                                bool transparent_background,
                                void* container_view, int32_t identity_window_id,
-                               int32_t pane_role);
+                               int32_t pane_role, bool host_has_sidebar,
+                               bool host_has_inspector);
 
 // Evaluate JavaScript on a specific window's WebView.
 void darwin_webview_eval(void* window_ptr, const char* js);

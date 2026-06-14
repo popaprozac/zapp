@@ -16,7 +16,8 @@ extern void darwin_webview_create_ext(void* window_ptr, bool inspectable, bool a
                                       const char* url_override, int32_t numeric_id_pre_alloc,
                                       bool transparent_background,
                                       void* container_view, int32_t identity_window_id,
-                                      int32_t pane_role);
+                                      int32_t pane_role, bool host_has_sidebar,
+                                      bool host_has_inspector);
 extern void darwin_webview_eval_all(const char* js);
 extern void worker_broadcast_eval_js(char* js);
 extern WKWebView* zapp_webview_for_slot(int32_t slot);
@@ -77,7 +78,7 @@ void darwin_popover_create(void* window_ptr, const char* popover_id,
     NSView* container = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, width, height)];
     c.container = container;
     darwin_webview_create_ext(window_ptr, true, true, url, popover_slot, true,
-                              (__bridge void*)container, host_slot, 2);
+                              (__bridge void*)container, host_slot, 2, false, false);
     for (NSView* sub in container.subviews) {
         if ([sub isKindOfClass:[WKWebView class]]) { c.webview = (WKWebView*)sub; break; }
     }
