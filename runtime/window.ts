@@ -196,6 +196,8 @@ export interface WindowOptions {
   sidebar?: SidebarOptions;
   /** Attach a native toolbar (NSToolbar). macOS only; no-op elsewhere. */
   toolbar?: ToolbarOptions;
+  /** Attach a native inspector (trailing NSSplitViewItem). macOS only; no-op elsewhere. */
+  inspector?: InspectorOptions;
 }
 
 /** Options for a native sidebar (NSSplitViewItem) attached to a window. */
@@ -212,6 +214,23 @@ export interface SidebarOptions {
   /** Start collapsed. Default false. */
   collapsed?: boolean;
   /** Background material. Default Material.Sidebar (liquid glass on macOS 26+). */
+  material?: Material;
+}
+
+/** Options for a native inspector (trailing NSSplitViewItem) attached to a window. */
+export interface InspectorOptions {
+  /** Entry URL/route for the inspector webview (resolved like sidebar.url). Required. */
+  url: string;
+  /** Initial width in points. Default 280. */
+  width?: number;
+  /** Divider drag limits. Defaults 180 / 400. */
+  minWidth?: number;
+  maxWidth?: number;
+  /** User can collapse via system behaviors. Default true. */
+  collapsible?: boolean;
+  /** Start collapsed (the common "hidden until summoned" inspector). Default false. */
+  collapsed?: boolean;
+  /** Background material. Default matches the sidebar pane default. */
   material?: Material;
 }
 
@@ -577,6 +596,18 @@ export interface SidebarHandle {
   readonly width: number;
 }
 
+/** A handle to the inspector attached to a window. Mirrors SidebarHandle. */
+export interface InspectorHandle {
+  toggle(): void;
+  collapse(): void;
+  expand(): void;
+  setWidth(px: number): void;
+  /** Tracked from INSPECTOR_COLLAPSED/EXPANDED, seeded by the create option. */
+  readonly collapsed: boolean;
+  /** Last width from INSPECTOR_RESIZED (the create option until the first event). */
+  readonly width: number;
+}
+
 /** Size events that include width/height/position data. */
 type SizeEvent = WindowEvent.RESIZE | WindowEvent.MOVE | WindowEvent.MAXIMIZE | WindowEvent.RESTORE;
 
@@ -585,6 +616,8 @@ export interface WindowHandle {
   readonly id: string;
   /** Handle for the sidebar attached to this window, if any. */
   readonly sidebar?: SidebarHandle;
+  /** Handle for the inspector attached to this window, if any. */
+  readonly inspector?: InspectorHandle;
   /** Lifecycle handle for this window's native toolbar (macOS). Always
    *  present — setItems attaches when no toolbar exists. */
   readonly toolbar: ToolbarHandle;
@@ -716,7 +749,46 @@ function createSidebarHandle(
   };
 }
 
-function createWindowHandle(windowId: string, sidebarOpts?: SidebarOptions): WindowHandle {
+/** Per-window inspector state, shared across repeated Window.current() calls. */
+const inspectorState = new Map<string, { collapsed: boolean; width: number }>();
+/** Windows whose inspector event listeners are already registered. */
+const inspectorWired = new Set<string>();
+
+/** Create an InspectorHandle that tracks collapsed/width state via events. */
+function createInspectorHandle(
+  windowId: string,
+  initialCollapsed: boolean,
+  initialWidth: number,
+): InspectorHandle {
+  if (!inspectorState.has(windowId)) {
+    inspectorState.set(windowId, { collapsed: initialCollapsed, width: initialWidth });
+  }
+  if (!inspectorWired.has(windowId)) {
+    const bridge = getBridge();
+    bridge.on(eventName(WindowEvent.INSPECTOR_COLLAPSED), (payload: any) => {
+      if (payload?.windowId === windowId) inspectorState.get(windowId)!.collapsed = true;
+    });
+    bridge.on(eventName(WindowEvent.INSPECTOR_EXPANDED), (payload: any) => {
+      if (payload?.windowId === windowId) inspectorState.get(windowId)!.collapsed = false;
+    });
+    bridge.on(eventName(WindowEvent.INSPECTOR_RESIZED), (payload: any) => {
+      if (payload?.windowId === windowId && typeof payload.width === "number") {
+        inspectorState.get(windowId)!.width = payload.width;
+      }
+    });
+    inspectorWired.add(windowId);
+  }
+  return {
+    get collapsed() { return inspectorState.get(windowId)!.collapsed; },
+    get width()     { return inspectorState.get(windowId)!.width; },
+    toggle()              { windowAction("inspector:toggle",   { windowId }); },
+    collapse()            { windowAction("inspector:collapse", { windowId }); },
+    expand()              { windowAction("inspector:expand",   { windowId }); },
+    setWidth(px: number)  { windowAction("inspector:setWidth", { windowId, width: px }); },
+  };
+}
+
+function createWindowHandle(windowId: string, sidebarOpts?: SidebarOptions, inspectorOpts?: InspectorOptions): WindowHandle {
   const bridge = getBridge();
 
   return {
@@ -762,6 +834,10 @@ function createWindowHandle(windowId: string, sidebarOpts?: SidebarOptions): Win
     },
     sidebar: sidebarOpts !== undefined
       ? createSidebarHandle(windowId, sidebarOpts.collapsed ?? false, sidebarOpts.width ?? 260)
+      : undefined,
+
+    inspector: inspectorOpts !== undefined
+      ? createInspectorHandle(windowId, inspectorOpts.collapsed ?? false, inspectorOpts.width ?? 280)
       : undefined,
 
     toolbar: {
@@ -868,7 +944,12 @@ export const Window = {
       ? { url: "" }  // url is unused here — the pane's webview is already running;
                      // we only need the options shape so createWindowHandle wires up the SidebarHandle.
       : undefined;
-    return createWindowHandle(id, sidebarOpts);
+    const inInspectorWindow = Window.isInspector() ||
+      (globalThis as any)[Symbol.for("zapp.hasInspector")] === true;
+    const inspectorOpts: InspectorOptions | undefined = inInspectorWindow
+      ? { url: "" }  // url unused here — the pane is already running; we only need the shape.
+      : undefined;
+    return createWindowHandle(id, sidebarOpts, inspectorOpts);
   },
 
   /** True when this code runs inside a window's sidebar webview.
@@ -878,6 +959,11 @@ export const Window = {
    */
   isSidebar(): boolean {
     return (globalThis as any)[Symbol.for("zapp.isSidebar")] === true;
+  },
+
+  /** True when this code runs inside a window's inspector webview. */
+  isInspector(): boolean {
+    return (globalThis as any)[Symbol.for("zapp.isInspector")] === true;
   },
 
   /** Create a new window. Returns a handle for the new window. */
@@ -919,11 +1005,11 @@ export const Window = {
     if (host?.createWindow) {
       const r = host.createWindow(normalized) as { windowId: string };
       registerToolbarActions(r.windowId);
-      return createWindowHandle(r.windowId, opts?.sidebar);
+      return createWindowHandle(r.windowId, opts?.sidebar, opts?.inspector);
     }
     // Webview context: async IPC roundtrip through the WKWebView bridge.
     const result = await getBridge().invoke("__window:create", normalized) as { windowId: string };
     registerToolbarActions(result.windowId);
-    return createWindowHandle(result.windowId, opts?.sidebar);
+    return createWindowHandle(result.windowId, opts?.sidebar, opts?.inspector);
   },
 };
