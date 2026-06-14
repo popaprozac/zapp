@@ -614,10 +614,17 @@ async function bundleWorker(
       const zjsCli = path.resolve(root, "..", "vendor", "zjs", "build",
         process.platform === "win32" ? "zjs.exe" : "zjs");
       if (!existsSync(zjsCli)) {
-        console.warn(
-          `[zapp] bytecode: true requires vendor/zjs/build/zjs — not found at ${zjsCli}. ` +
-          `Skipping bytecode compile for ${entry.outputName}; falling back to .mjs.`
-        );
+        // Benign, fully-working fallback: the bundled .mjs runs identically;
+        // only the parse-free-start (.zbc) optimization is skipped. No runtime
+        // consequence, so it's verbose-only noise (the zjs binary isn't built
+        // on every machine — e.g. Windows until zjs-on-Windows ships). A real
+        // compile *failure* below still warns at default level.
+        if (zappLogLevel() >= 1) {
+          console.warn(
+            `[zapp] bytecode: true requires vendor/zjs/build/zjs — not found at ${zjsCli}. ` +
+            `Skipping bytecode compile for ${entry.outputName}; falling back to .mjs.`
+          );
+        }
       } else {
         const { spawnSync } = await import("node:child_process");
         const proc = spawnSync(zjsCli, ["compile", mjsPath, "-o", zbcPath], { encoding: "utf-8" });
