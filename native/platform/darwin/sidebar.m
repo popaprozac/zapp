@@ -55,14 +55,14 @@ static int zapp_sidebar_current_width(ZappSidebarController* c) {
     return (int)lround(v.frame.size.width);
 }
 
-// Emit a window event into BOTH panes. eventName is the BARE suffix
-// ("sidebar-collapsed" etc.); dispatchWindowEvent in bootstrap/webview.ts
-// prepends "window:" itself (same convention as window.m's zapp_event_names
-// and panel.m's event args). dataJson may be nil. Mirrors the JS shape +
-// escaping of window.m's dispatchWindowEvent evals (and panel.m's
-// zapp_panel_emit): single-quoted JSON literal, backslash + quote escaped.
-static void zapp_sidebar_emit(ZappSidebarController* c, const char* eventName, NSString* dataJson) {
-    if (!c || !eventName) return;
+// Shared pane event-emit: dispatch a window event into the host pane and one
+// accessory pane (sidebar or inspector). eventName is the BARE suffix
+// ("sidebar-collapsed" / "inspector-resized" etc.); dispatchWindowEvent in
+// bootstrap/webview.ts prepends "window:". dataJson may be nil. Single-quoted
+// JSON literal, backslash + quote escaped. Exported — also used by inspector.m.
+void zapp_pane_emit(int32_t host_id, int32_t accessory_slot,
+                    const char* eventName, NSString* dataJson) {
+    if (!eventName) return;
 
     NSString* dataArg = @"undefined";
     if (dataJson) {
@@ -75,18 +75,23 @@ static void zapp_sidebar_emit(ZappSidebarController* c, const char* eventName, N
     // Build per-target because dispatchWindowEvent's first arg is the target
     // window id ("win-<hostId>"). Both panes belong to the same logical
     // window, so both receive the host's id.
-    int32_t hostId = c.hostWindowId;
     NSString* js = [NSString stringWithFormat:
         @"(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
         @"if(b&&typeof b.dispatchWindowEvent==='function'){"
         @"b.dispatchWindowEvent('win-%d','%@',%@);}})();",
-        hostId, event, dataArg];
+        host_id, event, dataArg];
     const char* jsc = [js UTF8String];
 
-    darwin_window_eval_js(c.hostWindowId, jsc);
-    if (c.sidebarSlotId >= 0 && c.sidebarSlotId != c.hostWindowId) {
-        darwin_window_eval_js(c.sidebarSlotId, jsc);
+    darwin_window_eval_js(host_id, jsc);
+    if (accessory_slot >= 0 && accessory_slot != host_id) {
+        darwin_window_eval_js(accessory_slot, jsc);
     }
+}
+
+// Emit a window event into both sidebar panes (host + sidebar slot).
+static void zapp_sidebar_emit(ZappSidebarController* c, const char* eventName, NSString* dataJson) {
+    if (!c) return;
+    zapp_pane_emit(c.hostWindowId, c.sidebarSlotId, eventName, dataJson);
 }
 
 // Re-evaluate collapse state and emit a single-shot transition event.
