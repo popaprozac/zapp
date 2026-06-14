@@ -24,6 +24,27 @@ function zappLogLevel(): number {
   return v === "debug" ? 2 : v === "verbose" ? 1 : 0;
 }
 
+// Locate the zjs CLI (compiles .mjs -> .zbc bytecode). The Makefile emits
+// build/zjs[.exe], but zjs's release/Windows builds (scripts/build-windows.ps1)
+// emit to a per-platform dir build/<os>-<arch>/ (e.g. build/win-x64/zjs.exe).
+// Check the canonical path first, then scan one level down so either layout
+// works without the vendor having to mirror the binary.
+async function resolveZjsCli(buildDir: string): Promise<string | null> {
+  const { existsSync } = await import("node:fs");
+  const bin = process.platform === "win32" ? "zjs.exe" : "zjs";
+  const direct = path.join(buildDir, bin);
+  if (existsSync(direct)) return direct;
+  try {
+    for (const e of await readdir(buildDir, { withFileTypes: true })) {
+      if (e.isDirectory()) {
+        const cand = path.join(buildDir, e.name, bin);
+        if (existsSync(cand)) return cand;
+      }
+    }
+  } catch { /* build dir absent — caller handles null */ }
+  return null;
+}
+
 const WORKER_PATTERN =
   /new\s+(?:SharedWorker|Worker)\s*\(\s*(?:new\s+URL\(\s*["'`](.+?)["'`]\s*,\s*import\.meta\.url\s*\)|["'`](.+?)["'`])/g;
 
@@ -608,12 +629,11 @@ async function bundleWorker(
     // would need to be discovered from a different anchor; flagging
     // as a follow-up.
     if (entry.bytecode) {
-      const { existsSync } = await import("node:fs");
       const mjsPath = path.join(outDir, entry.outputName);
       const zbcPath = mjsPath.replace(/\.mjs$/, ".zbc");
-      const zjsCli = path.resolve(root, "..", "vendor", "zjs", "build",
-        process.platform === "win32" ? "zjs.exe" : "zjs");
-      if (!existsSync(zjsCli)) {
+      const buildDir = path.resolve(root, "..", "vendor", "zjs", "build");
+      const zjsCli = await resolveZjsCli(buildDir);
+      if (!zjsCli) {
         // Benign, fully-working fallback: the bundled .mjs runs identically;
         // only the parse-free-start (.zbc) optimization is skipped. No runtime
         // consequence, so it's verbose-only noise (the zjs binary isn't built
@@ -621,7 +641,8 @@ async function bundleWorker(
         // compile *failure* below still warns at default level.
         if (zappLogLevel() >= 1) {
           console.warn(
-            `[zapp] bytecode: true requires vendor/zjs/build/zjs — not found at ${zjsCli}. ` +
+            `[zapp] bytecode: true requires a zjs CLI under ${buildDir} ` +
+            `(build/zjs[.exe] or build/<os>-<arch>/zjs[.exe]) — not found. ` +
             `Skipping bytecode compile for ${entry.outputName}; falling back to .mjs.`
           );
         }
