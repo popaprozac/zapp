@@ -48,8 +48,8 @@ fn dock_set_icon(path: string) -> void { darwin_dock::darwin_dock_set_icon(path)
 fn dock_reset_icon() -> void { darwin_dock::darwin_dock_reset_icon(); }
 
 // Windows: taskbar analogues. Badge → ITaskbarList3 overlay icon,
-// bounce → FlashWindowEx, set/reset_icon → WM_SETICON. show/hide_icon
-// stay no-ops (no taskbar-button analogue).
+// bounce → FlashWindowEx, set/reset_icon → WM_SETICON, progress →
+// ITaskbarList3 SetProgressValue, show/hide_icon → ITaskbarList AddTab/DeleteTab.
 @cfg(windows)
 import "../platform/windows/dock.h" as win_dock;
 

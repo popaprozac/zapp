@@ -1,8 +1,8 @@
 // Windows "dock" — taskbar analogues for the macOS dock API.
 // Badge → ITaskbarList3::SetOverlayIcon with a GDI-drawn red badge
 // (the wails v3 dock_windows.go approach); bounce → FlashWindowEx;
-// custom window icon → WM_SETICON from the shared WIC loader.
-// show_icon/hide_icon have no taskbar-button analogue and no-op.
+// custom window icon → WM_SETICON from the shared WIC loader;
+// show/hide_icon → ITaskbarList AddTab/DeleteTab (toggle the taskbar button).
 
 #define WIN32_LEAN_AND_MEAN
 #ifndef COBJMACROS
@@ -232,5 +232,25 @@ void windows_dock_reset_icon(void) {
     }
 }
 
-void windows_dock_show_icon(void) {} // no taskbar-button analogue
-void windows_dock_hide_icon(void) {}
+// Show/hide the taskbar button — the closest analogue to macOS dock
+// show/hide. ITaskbarList::DeleteTab removes a window's button; AddTab
+// restores it. Applied to every window so the app's taskbar presence
+// toggles as a whole. (The window itself stays open/visible — only its
+// taskbar button is affected.)
+void windows_dock_show_icon(void) {
+    ITaskbarList3* tbl = dock_taskbar();
+    if (!tbl) return;
+    for (int i = 0; i < ZAPP_DOCK_MAX_WINDOWS; i++) {
+        HWND hwnd = (HWND)windows_window_get_webview(i);
+        if (hwnd && IsWindow(hwnd)) ITaskbarList3_AddTab(tbl, hwnd);
+    }
+}
+
+void windows_dock_hide_icon(void) {
+    ITaskbarList3* tbl = dock_taskbar();
+    if (!tbl) return;
+    for (int i = 0; i < ZAPP_DOCK_MAX_WINDOWS; i++) {
+        HWND hwnd = (HWND)windows_window_get_webview(i);
+        if (hwnd && IsWindow(hwnd)) ITaskbarList3_DeleteTab(tbl, hwnd);
+    }
+}

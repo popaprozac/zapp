@@ -956,18 +956,27 @@ $("btn-dock-bounce").addEventListener("click", () => {
   }, 3000);
 });
 
+let dockProgressTimer: ReturnType<typeof setInterval> | null = null;
 $("btn-dock-progress").addEventListener("click", () => {
   // Animate 0→100% on the taskbar button (Windows), then clear. No-op on macOS.
+  if (dockProgressTimer) clearInterval(dockProgressTimer);
   let p = 0;
   log("Dock progress animating 0→100% (watch the taskbar button)");
-  const t = setInterval(() => {
+  dockProgressTimer = setInterval(() => {
     p += 0.1;
-    if (p > 1.0001) { Dock.clearProgress(); clearInterval(t); log("Dock progress cleared"); return; }
+    if (p > 1.0001) {
+      Dock.clearProgress();
+      if (dockProgressTimer) { clearInterval(dockProgressTimer); dockProgressTimer = null; }
+      log("Dock progress cleared");
+      return;
+    }
     Dock.setProgress(p);
   }, 350);
 });
 
 $("btn-dock-progress-clear").addEventListener("click", () => {
+  // Stop the animation too, or the next tick re-sets progress.
+  if (dockProgressTimer) { clearInterval(dockProgressTimer); dockProgressTimer = null; }
   Dock.clearProgress();
   log("Dock progress cleared");
 });
