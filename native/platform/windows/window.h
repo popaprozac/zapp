@@ -35,6 +35,7 @@ bool wopts_maximizable(WindowOptions* opts);
 bool wopts_fullscreen(WindowOptions* opts);
 bool wopts_borderless(WindowOptions* opts);
 bool wopts_transparent(WindowOptions* opts);
+char* wopts_vibrancy(WindowOptions* opts);
 bool wopts_hidden(WindowOptions* opts);
 bool wopts_always_on_top(WindowOptions* opts);
 int32_t wopts_title_bar_style_tag(WindowOptions* opts);

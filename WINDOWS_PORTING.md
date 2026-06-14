@@ -169,6 +169,24 @@ from day one:
    Controller creation is async: buffer bounds/show/url and apply them in the
    completed handler. Reuse the host's cached `ICoreWebView2Environment`
    (`zapp_get_webview_environment()`) so panels share its user-data store.
+   Derive the CSS→physical scale from `GetDpiForWindow(owner)/96`, NOT the
+   controller's `RasterizationScale` — the latter reads a stale 1.0 for the
+   first frames after creation (monitor scale not yet detected), which placed
+   panels up-left on >100% displays until a later event refreshed it. After
+   moving the child window, call `NotifyParentWindowPositionChanged` or
+   WebView2 composites at the stale screen position until an unrelated event.
+
+8. **Win11 window material is DWM attributes + a transparent web surface.**
+   macOS vibrancy mounts an `NSVisualEffectView`; Windows has no widget — it's
+   `DwmSetWindowAttribute`. The `vibrancy` option drives
+   `DWMWA_SYSTEMBACKDROP_TYPE` (Mica/Acrylic) and the app theme drives
+   `DWMWA_USE_IMMERSIVE_DARK_MODE` (re-applied to every window on the
+   `WM_SETTINGCHANGE`/`ImmersiveColorSet` theme flip). Crucially the backdrop
+   only shows where the **web content is transparent** — set the host
+   controller's `DefaultBackgroundColor` to `{0,0,0,0}` via
+   `ICoreWebView2Controller2` (`webview.c`) AND the page must use a transparent
+   CSS background, the exact same opt-in as macOS vibrancy. All DWM calls
+   no-op gracefully on Win10 / pre-22H2 (`platform/windows/material.c`).
 
 ## Open questions for the brainstorm (decide these first)
 

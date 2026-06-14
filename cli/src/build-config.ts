@@ -1403,7 +1403,8 @@ export async function generatePlatformConfig(
     // windowscodecs: WIC PNG codec for clipboard image read/write.
     // shcore: GetDpiForMonitor for screen.c's scaleFactor.
     // runtimeobject: WinRT activation + HSTRING (toast notifications).
-    content += `//> windows: link: -lwindowscodecs -lshcore -lruntimeobject\n`;
+    // dwmapi: DwmSetWindowAttribute for Mica/Acrylic + dark caption (material.c).
+    content += `//> windows: link: -lwindowscodecs -lshcore -lruntimeobject -ldwmapi\n`;
     // App-declared extras from zapp.config.ts. `extraFrameworks` is
     // a no-op here (Apple-only concept); use `extraLinkFlags.windows`
     // for `-l<name>` and similar.

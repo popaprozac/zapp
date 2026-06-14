@@ -371,6 +371,22 @@ void* windows_window_create(WindowOptions* opts) {
         windows_window_register_numeric_id((void*)hwnd, pre_id);
     }
 
+    // Win11 material + theme-synced caption (Mica/Acrylic via the vibrancy
+    // option; immersive dark/light title bar from the app theme). When a
+    // backdrop is requested the web surface must be transparent for it to show
+    // through — flag the webview before its controller is built. Both no-op
+    // gracefully on Win10 / pre-22H2.
+    const char* vibrancy = wopts_vibrancy(opts);
+    bool transparent = wopts_transparent(opts);
+    extern void windows_material_apply(HWND hwnd, const char* vibrancy);
+    extern int windows_material_wants_transparent(const char* vibrancy);
+    extern void windows_webview_set_transparent(int32_t window_id, bool transparent);
+    windows_material_apply(hwnd, vibrancy);
+    if (pre_id >= 0 && pre_id < ZAPP_MAX_WINDOWS) {
+        windows_webview_set_transparent(pre_id,
+            transparent || windows_material_wants_transparent(vibrancy));
+    }
+
     // Don't show yet — let the app call window_show after on_ready
     // But if visible is true, show immediately
     if (visible) {

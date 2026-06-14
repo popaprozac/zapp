@@ -155,6 +155,17 @@ static char* wchar_to_utf8_wv(const wchar_t* ws) {
 static ICoreWebView2Controller* zapp_controllers[ZAPP_MAX_WINDOWS] = {0};
 static ICoreWebView2* zapp_webviews_wv[ZAPP_MAX_WINDOWS] = {0};
 
+// Per-window: render the web surface with a transparent default background so
+// a DWM system backdrop (Mica/Acrylic, see material.c) shows through where the
+// page background is transparent. Set by windows_window_create before the
+// controller is built; read in ZappCtrl_Invoke.
+static bool zapp_webview_transparent[ZAPP_MAX_WINDOWS] = {0};
+
+void windows_webview_set_transparent(int32_t window_id, bool transparent) {
+    if (window_id < 0 || window_id >= ZAPP_MAX_WINDOWS) return;
+    zapp_webview_transparent[window_id] = transparent;
+}
+
 // Pending JS eval buffer (before WebView2 is ready)
 #define ZAPP_MAX_PENDING_JS 32
 static char* zapp_pending_js[ZAPP_MAX_WINDOWS][ZAPP_MAX_PENDING_JS] = {{0}};
@@ -762,6 +773,21 @@ static HRESULT STDMETHODCALLTYPE ZappCtrl_Invoke(
 
     // Make controller visible
     ICoreWebView2Controller_put_IsVisible(controller, TRUE);
+
+    // Transparent default background (vibrancy/Mica): without this WebView2
+    // paints opaque white and the DWM backdrop never shows. Needs
+    // ICoreWebView2Controller2; harmless to skip on older runtimes. The page
+    // itself must also be transparent (body { background: transparent }) — the
+    // same opt-in as macOS vibrancy.
+    if (zapp_webview_transparent[wid]) {
+        ICoreWebView2Controller2* controller2 = NULL;
+        if (SUCCEEDED(ICoreWebView2Controller_QueryInterface(controller,
+                &IID_ICoreWebView2Controller2, (void**)&controller2)) && controller2) {
+            COREWEBVIEW2_COLOR transparent = { 0, 0, 0, 0 }; // A,R,G,B
+            ICoreWebView2Controller2_put_DefaultBackgroundColor(controller2, transparent);
+            ICoreWebView2Controller2_Release(controller2);
+        }
+    }
 
     // Get WebView2 core
     ICoreWebView2* webview = NULL;

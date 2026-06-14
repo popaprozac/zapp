@@ -95,6 +95,15 @@ void windows_theme_setting_changed(void) {
     char payload[64];
     snprintf(payload, sizeof(payload), "{\"theme\":\"%s\"}", theme);
     zapp_app_dispatch(ZAPP_EVENT_APP_THEME_CHANGED, payload);
+
+    // Re-sync every window's immersive dark/light caption to the new theme
+    // (material.c reads windows_get_theme()).
+    extern HWND zapp_get_hwnd(int32_t window_id);
+    extern void windows_material_apply_theme(HWND hwnd);
+    for (int i = 0; i < 64; i++) {
+        HWND h = zapp_get_hwnd(i);
+        if (h) windows_material_apply_theme(h);
+    }
 }
 
 // --- Login item (launch at login) ---

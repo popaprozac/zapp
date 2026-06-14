@@ -94,7 +94,12 @@ export interface WindowOptions {
    *   `"windowBackground"`, `"contentBackground"`,
    *   `"underWindowBackground"`, `"underPageBackground"`.
    *
-   * No-op on iOS / Windows.
+   * On Windows 11 this maps to a DWM system backdrop: transient/floating
+   * materials (`popover`, `menu`, `hudWindow`, `sheet`, `tooltip`) → Acrylic,
+   * everything else → Mica. Windows-native values are also accepted:
+   * `"mica"`, `"mica-alt"`, `"acrylic"`, `"none"`. The same transparent-CSS
+   * requirement applies. Falls back to a normal opaque window on Windows 10 /
+   * pre-22H2. No-op on iOS.
    */
   vibrancy?: Material;
   titleBarStyle?: "default" | "hidden" | "hiddenInset";

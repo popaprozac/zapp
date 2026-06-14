@@ -123,6 +123,7 @@ export function getPlatformSources(nativeDir: string, target: BuildTarget = dete
       path.join(windowsDir, "deeplink.c"),
       path.join(windowsDir, "power.c"),
       path.join(windowsDir, "panel.c"),
+      path.join(windowsDir, "material.c"),
     ];
     return sources.filter(f => existsSync(f));
   }
