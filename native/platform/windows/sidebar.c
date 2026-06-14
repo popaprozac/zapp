@@ -1,32 +1,36 @@
 // Windows native sidebar + inspector split panes.
 //
 // macOS uses an NSSplitViewController with .sidebar / inspector NSSplitViewItems
-// that host host-twin WKWebViews. Windows has no split widget, so we carve the
+// hosting host-twin WKWebViews. Windows has no split widget, so we carve the
 // main window's client area into [sidebar | splitter | content | splitter |
 // inspector] using child HWNDs, each hosting a WebView2 controller (the panes
 // are full host-twins via windows_webview_create_ext — own transport slot, host
-// JS identity). The splitters are thin child windows; WM_SIZE reflows everything.
+// JS identity). The splitters are thin draggable child windows; WM_SIZE reflows.
 //
-// This file: layout + registry + (next slice) splitter drag, collapse, events,
-// and the sidebar:/inspector:* control ops. Keyed by host transport slot.
+// Control ops (windows_sidebar_* / windows_inspector_*) are the router entry
+// points for sidebar:/inspector:* actions. Collapse/resize emit
+// dispatchWindowEvent('win-<host>', ...) into both panes (parity with darwin's
+// zapp_pane_emit). Keyed by host transport slot.
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 extern HINSTANCE zapp_get_hinstance(void);
-extern HWND zapp_get_hwnd(int32_t window_id);
 extern void windows_webview_create_ext(void* hwnd_ptr, bool inspectable, const char* url_override,
                                        int32_t slot, int32_t identity_id, bool transparent,
                                        int pane_role, bool has_sidebar, bool has_inspector);
 extern void windows_webview_resize(int32_t window_id, int w, int h);
 extern void windows_webview_notify_position(int32_t window_id);
+extern void windows_webview_eval_by_id(int32_t window_id, const char* js);
+extern char* zapp_escape_dup(const char* src); // dispatch.zc — JS single-quote escape
 
 #define ZAPP_MAX_PANE_WINDOWS 64
-#define ZAPP_SPLITTER_PX 6   // splitter thickness (physical px scaled below)
+#define ZAPP_SPLITTER_PX 6
 
 typedef struct {
     int      active;
@@ -48,7 +52,7 @@ typedef struct {
     int      inspector_collapsed;
 
     HWND     content_child;    // host webview's child window
-    int      splitter_px;      // DPI-scaled splitter thickness
+    int      splitter_px;
 } ZappPaneWindow;
 
 static ZappPaneWindow zapp_panes[ZAPP_MAX_PANE_WINDOWS];
@@ -59,7 +63,6 @@ static ZappPaneWindow* panes_for(int32_t host_slot) {
     return p->active ? p : NULL;
 }
 
-// 1 if this window has native panes (window.c WM_SIZE consults this).
 int windows_panes_has(int32_t host_slot) { return panes_for(host_slot) != NULL; }
 
 static double panes_scale(HWND hwnd) {
@@ -75,15 +78,98 @@ static double panes_scale(HWND hwnd) {
 }
 static int sx(HWND h, int v) { return (int)(v * panes_scale(h) + 0.5); }
 
-// --- Child window classes (content/pane host + splitter) ---
+// Eval dispatchWindowEvent('win-<host>', event, data) into the host + accessory
+// panes (both carry the host identity). data_json already-JSON or NULL.
+static void pane_emit(int32_t host_slot, int32_t accessory_slot,
+                      const char* event, const char* data_json) {
+    char* esc = NULL;
+    char* data_arg = NULL;
+    if (data_json) {
+        esc = zapp_escape_dup(data_json);
+        if (esc) {
+            size_t n = strlen(esc) + 3;
+            data_arg = (char*)malloc(n);
+            if (data_arg) snprintf(data_arg, n, "'%s'", esc);
+        }
+    }
+    const char* arg = data_arg ? data_arg : "undefined";
+    const char* tmpl =
+        "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+        "if(b&&typeof b.dispatchWindowEvent==='function'){"
+        "b.dispatchWindowEvent('win-%d','%s',%s);}})();";
+    int needed = snprintf(NULL, 0, tmpl, host_slot, event, arg);
+    if (needed > 0) {
+        char* js = (char*)malloc((size_t)needed + 1);
+        if (js) {
+            snprintf(js, (size_t)needed + 1, tmpl, host_slot, event, arg);
+            windows_webview_eval_by_id(host_slot, js);
+            if (accessory_slot >= 0 && accessory_slot != host_slot)
+                windows_webview_eval_by_id(accessory_slot, js);
+            free(js);
+        }
+    }
+    free(esc);
+    free(data_arg);
+}
 
-static const wchar_t* PANE_HOST_CLASS = L"ZappPaneHost";
+// --- Splitter drag ---
+
+static struct { int active; int32_t host; int which; int start_x; int start_w; } g_drag;
+
+static const wchar_t* PANE_HOST_CLASS  = L"ZappPaneHost";
 static const wchar_t* PANE_SPLIT_CLASS = L"ZappPaneSplitter";
 
+static int clampi(int v, int lo, int hi) {
+    if (lo > 0 && v < lo) v = lo;
+    if (hi > 0 && v > hi) v = hi;
+    if (v < 0) v = 0;
+    return v;
+}
+
 static LRESULT CALLBACK splitter_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    if (msg == WM_SETCURSOR) {
-        SetCursor(LoadCursorW(NULL, IDC_SIZEWE));
-        return TRUE;
+    switch (msg) {
+        case WM_SETCURSOR:
+            SetCursor(LoadCursorW(NULL, IDC_SIZEWE));
+            return TRUE;
+        case WM_LBUTTONDOWN: {
+            int32_t host = (int32_t)GetWindowLongPtrW(hwnd, GWLP_USERDATA) - 1;
+            ZappPaneWindow* p = panes_for(host);
+            if (!p) break;
+            int which = (hwnd == p->inspector_splitter) ? 1 : 0;
+            POINT pt; GetCursorPos(&pt);
+            g_drag.active = 1; g_drag.host = host; g_drag.which = which;
+            g_drag.start_x = pt.x;
+            g_drag.start_w = which ? p->inspector_width : p->sidebar_width;
+            SetCapture(hwnd);
+            return 0;
+        }
+        case WM_MOUSEMOVE: {
+            if (!g_drag.active || GetCapture() != hwnd) break;
+            ZappPaneWindow* p = panes_for(g_drag.host);
+            if (!p) break;
+            POINT pt; GetCursorPos(&pt);
+            int delta = pt.x - g_drag.start_x;
+            int neww;
+            int32_t slot;
+            const char* evt;
+            if (g_drag.which == 0) {           // sidebar grows rightward
+                neww = clampi(g_drag.start_w + delta, p->sidebar_min, p->sidebar_max);
+                p->sidebar_width = neww; slot = p->sidebar_slot; evt = "sidebar-resized";
+            } else {                            // inspector grows leftward
+                neww = clampi(g_drag.start_w - delta, p->inspector_min, p->inspector_max);
+                p->inspector_width = neww; slot = p->inspector_slot; evt = "inspector-resized";
+            }
+            extern int windows_panes_layout(int32_t);
+            windows_panes_layout(g_drag.host);
+            int logical = (int)(neww / panes_scale(p->host_hwnd) + 0.5);
+            char json[40];
+            snprintf(json, sizeof(json), "{\"width\":%d}", logical);
+            pane_emit(g_drag.host, slot, evt, json);
+            return 0;
+        }
+        case WM_LBUTTONUP:
+            if (g_drag.active) { ReleaseCapture(); g_drag.active = 0; }
+            return 0;
     }
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
@@ -113,9 +199,8 @@ static HWND make_child(HWND parent, const wchar_t* cls) {
                            parent, NULL, zapp_get_hinstance(), NULL);
 }
 
-// Lay out [sidebar | splitter | content | splitter | inspector] in the host
-// client area and resize each controller to fill its child. Returns 1 when the
-// window has panes (so WM_SIZE skips the plain single-webview resize).
+// Lay out [sidebar | splitter | content | splitter | inspector]. Returns 1 when
+// the window has panes (WM_SIZE then skips the single-webview resize).
 int windows_panes_layout(int32_t host_slot) {
     ZappPaneWindow* p = panes_for(host_slot);
     if (!p) return 0;
@@ -129,7 +214,6 @@ int windows_panes_layout(int32_t host_slot) {
     int content_left = 0;
     int content_right = W;
 
-    // Leading sidebar.
     if (p->sidebar_slot >= 0 && !p->sidebar_collapsed && p->sidebar_child) {
         int w = p->sidebar_width;
         if (w > W - sp) w = (W - sp > 0) ? W - sp : 0;
@@ -139,12 +223,15 @@ int windows_panes_layout(int32_t host_slot) {
         if (p->sidebar_splitter)
             SetWindowPos(p->sidebar_splitter, HWND_TOP, w, 0, sp, H, SWP_SHOWWINDOW);
         content_left = w + sp;
-    } else {
-        if (p->sidebar_child) ShowWindow(p->sidebar_child, SW_HIDE);
+    } else if (p->sidebar_slot >= 0 && p->sidebar_child) {
+        // Collapsed: keep the child SIZED (just hidden) so its WebView2 still
+        // navigates/loads — a 0-size controller never loads, leaving the pane
+        // blank when later expanded. Park it under the content area, hidden.
+        SetWindowPos(p->sidebar_child, NULL, 0, 0, p->sidebar_width, H, SWP_NOZORDER | SWP_HIDEWINDOW);
+        windows_webview_resize(p->sidebar_slot, p->sidebar_width, H);
         if (p->sidebar_splitter) ShowWindow(p->sidebar_splitter, SW_HIDE);
     }
 
-    // Trailing inspector.
     if (p->inspector_slot >= 0 && !p->inspector_collapsed && p->inspector_child) {
         int w = p->inspector_width;
         if (w > W - content_left - sp) w = (W - content_left - sp > 0) ? W - content_left - sp : 0;
@@ -155,12 +242,13 @@ int windows_panes_layout(int32_t host_slot) {
         if (p->inspector_splitter)
             SetWindowPos(p->inspector_splitter, HWND_TOP, x - sp, 0, sp, H, SWP_SHOWWINDOW);
         content_right = x - sp;
-    } else {
-        if (p->inspector_child) ShowWindow(p->inspector_child, SW_HIDE);
+    } else if (p->inspector_slot >= 0 && p->inspector_child) {
+        // Collapsed: keep sized (hidden) so the webview still loads (see sidebar).
+        SetWindowPos(p->inspector_child, NULL, content_left, 0, p->inspector_width, H, SWP_NOZORDER | SWP_HIDEWINDOW);
+        windows_webview_resize(p->inspector_slot, p->inspector_width, H);
         if (p->inspector_splitter) ShowWindow(p->inspector_splitter, SW_HIDE);
     }
 
-    // Content fills the middle.
     int cw = content_right - content_left;
     if (cw < 0) cw = 0;
     SetWindowPos(p->content_child, NULL, content_left, 0, cw, H, SWP_NOZORDER | SWP_SHOWWINDOW);
@@ -169,7 +257,6 @@ int windows_panes_layout(int32_t host_slot) {
     return 1;
 }
 
-// WM_MOVE: WebView2 caches parent screen position — nudge every pane controller.
 void windows_panes_notify_move(int32_t host_slot) {
     ZappPaneWindow* p = panes_for(host_slot);
     if (!p) return;
@@ -178,10 +265,6 @@ void windows_panes_notify_move(int32_t host_slot) {
     if (p->inspector_slot >= 0) windows_webview_notify_position(p->inspector_slot);
 }
 
-// Create the split: child windows + host-twin pane webviews. Called from
-// windows_window_create when sidebar and/or inspector options are present.
-// Widths/min/max are logical px (DPI-scaled here). The host webview is mounted
-// into a content child window (not the main HWND) so the layout owns its bounds.
 void windows_panes_init(HWND host_hwnd, int32_t host_slot, int inspectable,
                         const char* host_url,
                         int32_t sidebar_slot, const char* sidebar_url,
@@ -203,7 +286,6 @@ void windows_panes_init(HWND host_hwnd, int32_t host_slot, int inspectable,
     bool has_sidebar = (sidebar_slot >= 0 && sidebar_url && sidebar_url[0]);
     bool has_inspector = (inspector_slot >= 0 && inspector_url && inspector_url[0]);
 
-    // Content child (host webview). Created first so it's beneath the panes.
     p->content_child = make_child(host_hwnd, PANE_HOST_CLASS);
 
     if (has_sidebar) {
@@ -214,6 +296,7 @@ void windows_panes_init(HWND host_hwnd, int32_t host_slot, int inspectable,
         p->sidebar_collapsed = sb_collapsed ? 1 : 0;
         p->sidebar_child = make_child(host_hwnd, PANE_HOST_CLASS);
         p->sidebar_splitter = make_child(host_hwnd, PANE_SPLIT_CLASS);
+        SetWindowLongPtrW(p->sidebar_splitter, GWLP_USERDATA, host_slot + 1);
     }
     if (has_inspector) {
         p->inspector_slot = inspector_slot;
@@ -223,14 +306,11 @@ void windows_panes_init(HWND host_hwnd, int32_t host_slot, int inspectable,
         p->inspector_collapsed = insp_collapsed ? 1 : 0;
         p->inspector_child = make_child(host_hwnd, PANE_HOST_CLASS);
         p->inspector_splitter = make_child(host_hwnd, PANE_SPLIT_CLASS);
+        SetWindowLongPtrW(p->inspector_splitter, GWLP_USERDATA, host_slot + 1);
     }
 
-    // Position the children before the (async) controllers attach.
     windows_panes_layout(host_slot);
 
-    // Host webview → content child, self identity, pane flags so Window.current()
-    // exposes the sidebar/inspector handles. Panes → own slot, HOST identity,
-    // transparent so a backdrop can show, role 1 (sidebar) / 3 (inspector).
     windows_webview_create_ext((void*)p->content_child, inspectable != 0, host_url,
                                host_slot, -1, false, 0, has_sidebar, has_inspector);
     if (has_sidebar) {
@@ -252,4 +332,66 @@ void windows_panes_destroy(int32_t host_slot) {
     if (p->inspector_child) DestroyWindow(p->inspector_child);
     if (p->content_child) DestroyWindow(p->content_child);
     memset(p, 0, sizeof(*p));
+}
+
+// --- Control ops (router entry points for sidebar:/inspector:*) ---
+
+void windows_sidebar_collapse(int32_t host_slot) {
+    ZappPaneWindow* p = panes_for(host_slot);
+    if (!p || p->sidebar_slot < 0 || p->sidebar_collapsed) return;
+    p->sidebar_collapsed = 1;
+    windows_panes_layout(host_slot);
+    pane_emit(host_slot, p->sidebar_slot, "sidebar-collapsed", NULL);
+}
+void windows_sidebar_expand(int32_t host_slot) {
+    ZappPaneWindow* p = panes_for(host_slot);
+    if (!p || p->sidebar_slot < 0 || !p->sidebar_collapsed) return;
+    p->sidebar_collapsed = 0;
+    windows_panes_layout(host_slot);
+    pane_emit(host_slot, p->sidebar_slot, "sidebar-expanded", NULL);
+}
+void windows_sidebar_toggle(int32_t host_slot) {
+    ZappPaneWindow* p = panes_for(host_slot);
+    if (!p || p->sidebar_slot < 0) return;
+    if (p->sidebar_collapsed) windows_sidebar_expand(host_slot);
+    else windows_sidebar_collapse(host_slot);
+}
+void windows_sidebar_set_width(int32_t host_slot, int32_t width) {
+    ZappPaneWindow* p = panes_for(host_slot);
+    if (!p || p->sidebar_slot < 0) return;
+    p->sidebar_width = clampi(sx(p->host_hwnd, width), p->sidebar_min, p->sidebar_max);
+    windows_panes_layout(host_slot);
+    int logical = (int)(p->sidebar_width / panes_scale(p->host_hwnd) + 0.5);
+    char json[40]; snprintf(json, sizeof(json), "{\"width\":%d}", logical);
+    pane_emit(host_slot, p->sidebar_slot, "sidebar-resized", json);
+}
+
+void windows_inspector_collapse(int32_t host_slot) {
+    ZappPaneWindow* p = panes_for(host_slot);
+    if (!p || p->inspector_slot < 0 || p->inspector_collapsed) return;
+    p->inspector_collapsed = 1;
+    windows_panes_layout(host_slot);
+    pane_emit(host_slot, p->inspector_slot, "inspector-collapsed", NULL);
+}
+void windows_inspector_expand(int32_t host_slot) {
+    ZappPaneWindow* p = panes_for(host_slot);
+    if (!p || p->inspector_slot < 0 || !p->inspector_collapsed) return;
+    p->inspector_collapsed = 0;
+    windows_panes_layout(host_slot);
+    pane_emit(host_slot, p->inspector_slot, "inspector-expanded", NULL);
+}
+void windows_inspector_toggle(int32_t host_slot) {
+    ZappPaneWindow* p = panes_for(host_slot);
+    if (!p || p->inspector_slot < 0) return;
+    if (p->inspector_collapsed) windows_inspector_expand(host_slot);
+    else windows_inspector_collapse(host_slot);
+}
+void windows_inspector_set_width(int32_t host_slot, int32_t width) {
+    ZappPaneWindow* p = panes_for(host_slot);
+    if (!p || p->inspector_slot < 0) return;
+    p->inspector_width = clampi(sx(p->host_hwnd, width), p->inspector_min, p->inspector_max);
+    windows_panes_layout(host_slot);
+    int logical = (int)(p->inspector_width / panes_scale(p->host_hwnd) + 0.5);
+    char json[40]; snprintf(json, sizeof(json), "{\"width\":%d}", logical);
+    pane_emit(host_slot, p->inspector_slot, "inspector-resized", json);
 }

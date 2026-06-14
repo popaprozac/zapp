@@ -202,6 +202,25 @@ from day one:
    if resolution fails. `IFileOpenDialog`/`IFileSaveDialog` (shell COM) and
    WinRT toasts are already modern without any of this.
 
+10. **Native sidebar/inspector = child-HWND split, not a widget.** macOS uses
+    NSSplitViewController with .sidebar/inspector items hosting host-twin
+    WKWebViews. Windows has no split control, so `platform/windows/sidebar.c`
+    carves the client area into `[sidebar | splitter | content | splitter |
+    inspector]` child HWNDs, each hosting a WebView2 controller. The panes are
+    full host-twins via `windows_webview_create_ext` (own pre-allocated
+    transport slot, host JS identity) — NOT sandboxed panels. The host webview
+    moves into a content child window so the layout owns its bounds; `WM_SIZE`
+    reflows, `WM_MOVE` re-notifies every controller. Splitters are thin
+    `WS_CHILD` windows (SIZEWE cursor) that `SetCapture` on mousedown and
+    resize the pane on drag (clamped to min/max). Collapse/expand hide the pane
+    + its splitter and give the space to content. Control ops
+    (`windows_sidebar_*`/`windows_inspector_*`) are the router entry points;
+    collapse/resize emit `dispatchWindowEvent('win-<host>', …)` into both panes
+    (parity with darwin `zapp_pane_emit`). Relative window/pane URLs
+    (`#route`, `?q`) must be resolved against the app base with `UrlCombineW`
+    (`zapp_resolve_nav_url`) — WebView2 `Navigate` needs an absolute URL, unlike
+    WKWebView's `URLWithString:relativeToURL:`.
+
 ## Open questions for the brainstorm (decide these first)
 
 1. **Toolchain:** does `zc` (Zen-C 0.4.4+) actually run on Windows, and

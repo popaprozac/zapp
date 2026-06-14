@@ -684,3 +684,12 @@ HWND zapp_get_hwnd(int32_t window_id) {
     }
     return NULL;
 }
+
+// Resolve a JS window-id string ("win-<n>") to its numeric slot. The Windows
+// id is numeric (see webview.c config injection), so this is a simple parse —
+// parity with darwin_window_numeric_id_for_string. -1 when unparseable.
+int32_t windows_window_numeric_id_for_string(const char* wid) {
+    if (!wid) return -1;
+    if (strncmp(wid, "win-", 4) == 0) return (int32_t)atoi(wid + 4);
+    return -1;
+}
