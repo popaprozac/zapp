@@ -48,3 +48,12 @@ proc runShutdownAll*() =
   ## (service.zc:service_run_shutdown_all).
   for i in countdown(gRegistry.len - 1, 0):
     if gRegistry[i].shutdown != nil: gRegistry[i].shutdown()
+
+proc serviceManifestJson*(): string =
+  ## The JS bindings manifest webview.m injects as zapp.bindingsManifest. Shape
+  ## matches service.zc:service_get_manifest_json exactly: {"v":1,"services":[…]}.
+  ## std/json (compact `$`) replaces the zc static char[4096] snprintf builder.
+  var services = newJArray()
+  for rec in gRegistry:
+    services.add(%*{"name": rec.name})
+  $(%*{"v": 1, "services": services})
