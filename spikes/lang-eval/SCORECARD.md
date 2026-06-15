@@ -17,6 +17,7 @@ the language floor.)
 | C3   | 145064 B (`-Oz`+strip; `-Oz` = "tiny code, no debug info") | yes (640x480 'zapp-spike', exit 0) | `std::encoding::json` `json::tparse((String)data)` → `Object*?` tagged union; `cfg.get_int("w")` → `int?`, `cfg.get_string("title")` → `String?` — real, ergonomic, type-coercing optionals. Verified driving values (tampered json → window showed 321x654 'json-works', not defaults). JSON numbers stored as int128/double internally; getters coerce | NO C-header import — C3 can't consume `probe.h`. Hand-declare `extern fn void spike_cocoa_open_window(int w, int h, ZString title)`; symbol = fn name, `ZString` is `inline char*` so it bridges to C `const char*` directly. Clean once you know it, but it's manual (no `@cImport`/`importc`-style auto-binding) | compile-time `$if env::DARWIN: … $else … $endif`. `env::DARWIN` is a real stdlib `const bool` (core/env.c3); dead branch elided at compile time | LLVM targets — PARTIAL test: `compile-only --target windows-x64` emitted a real amd64 COFF `.obj` from macOS (cross-codegen works). Full PE link not attempted (needs a Windows `probe_cocoa.o` twin + `fetch-sdk windows`). `--list-targets` shows windows-x64/aarch64, mingw-x64, linux-x64, etc. | Mid maturity. Language ergonomics are pleasant — `try x = …` optional-unwrap binding, typed JSON getters, comptime `$if` with stdlib `const bool` predicates all read cleanly and beat manual C marshalling. The PAIN is toolchain/docs immaturity vs Zen-C: (1) NO C-header consumption — every C symbol is a hand-written `extern fn`, and you must KNOW `ZString = inline char*` and that the link name is the bare fn name (no `@extern("…")` needed here, but undocumented in-tool). (2) The link incantation took the longest to find: extra object files go through `-z <arg>` (raw linker passthrough), frameworks are `-z -framework -z Cocoa` (each token separate), `-l objc` for libobjc — discovered by reading `c3c compile --help` + iterating; no in-repo manifest needed for a single-file compile. (3) stdlib is undocumented in-tool — had to grep `$(brew --prefix c3c)/lib/c3/std/**` to find `json::tparse`, `Object.get_int`, `file::load_temp`, `String.zstr_tcopy`, `env::DARWIN`. (4) Error messages are decent (LLVM-backed, clear on type mismatches). (5) Harmless `ld` warning: prebuilt `.o` is macOS 26.0, c3c defaults min to 11.0 (could pin via `--macos-min-version`). Net: ~20 min to first working link, almost all of it API/flag discovery, not fighting the compiler. Size sits BETWEEN Nim (102 KB) and Zig (188 KB) — no GC, no heavy runtime; the ~145 KB is mostly stdlib + panic/temp-allocator scaffolding. Younger ecosystem than the others; viable but you live in the source tree for API discovery. |
 | Odin | 234008 B (`-o:size`+`strip`; `-o:size` = optimize for binary size) | yes (640x480 'zapp-spike', exit 0) | `core:encoding/json` `json.parse(data) -> (Value, Error)`; `Value` is a union; `Object` = `distinct map[string]Value`. Access via type-assert: `obj, ok := value.(json.Object)`, then `v, has := obj["w"]`, `f, fok := v.(json.Float)`. GOTCHA confirmed: `parse_integers=false` by default → JSON ints decode as `json.Float` (f64), so `i32(f)` cast needed (`json.Integer`/i64 only if you pass `parse_integers=true`). Ergonomic, tagged-union switch is clean. Verified driving values (tampered json → window showed 321x654 'json-works', not defaults) | NO C-header import — Odin can't consume `probe.h`. Hand-declare: `foreign import probe "../shared/probe_cocoa.o"` (path relative to the .odin SOURCE file) + `@(default_calling_convention="c") foreign probe { spike_cocoa_open_window :: proc(w,h: i32, title: cstring) --- }`. The `foreign import` of a bare `.o` pulls the object into the link automatically — clean, no separate binding gen. `cstring` maps directly to `const char*`; `strings.clone_to_cstring` NUL-terminates an Odin `string`. Manual (no `@cImport`-style auto-binding) but tidy once known | `when ODIN_OS == .Darwin { … } else { … }` — compile-time `when`; `ODIN_OS` is a built-in enum (`.Darwin`/`.Windows`/…); dead branch elided | `-target:` flag exists (windows_amd64, linux_*, wasm, etc. via `-target:"?"`), but on this dev-2026-06 build cross-LINKING is NOT supported: `-target:windows_amd64` → "Linking for cross compilation for this platform is not yet supported (windows amd64)". So: target codegen selectable, but no usable Windows binary from macOS out-of-box (weaker than Zig/C3 here) | STARTER API was stale — real friction was discovering live signatures, not language fighting. `os.read_entire_file` in dev-2026-06 is a proc GROUP requiring an EXPLICIT allocator (`context.allocator`) and returns `(data: []byte, err: os.Error)` — the `data, ok :=` bool form errors ("Assignment count mismatch"); `err` is a union compared to `nil`. Error messages are EXCELLENT: the compiler printed the exact overload signatures + a "Did you mean…" suggestion, so the fix was immediate. JSON is genuinely usable (no need to hardcode). Interop is the cleanest of the C-header-less langs: `foreign import "<relative .o>"` does the link wiring with zero flag-hunting (only `-framework Cocoa -lobjc` via `-extra-linker-flags`, all real first-try). vs Zen-C: Odin is a standalone backend (LLVM), not a C-emitter, so there's no `raw` C-block / `passC` escape hatch — every C symbol is a hand-written `foreign` decl (like C3, unlike Nim/Zen-C). Size sits HIGHEST of the four probes (~234 KB) — Odin's default `core:fmt`/runtime/`context` machinery + json set a heavier floor than Nim(102)/C3(145)/Zig(188). ~15 min total, almost all of it the read_entire_file signature + json union shape; flags & link worked first try. Mature, pleasant ergonomics; main caveats = binary-size floor and no cross-link today |
 | C    | 50824 B (`-Os`+strip — THE FLOOR; smallest binary in the set) | yes (640x480 'zapp-spike', exit 0) | **none in stdlib** — C has no JSON parser. Values hardcoded (w=640, h=480, title="zapp-spike") — the absence IS the finding: any real use requires a third-party lib (cJSON, jansson, etc.) or hand-rolling. Exactly the ergonomic gap that caused Zapp to ship `json_safe.zc` | Native/trivial — `#include "probe.h"` directly; no binding tool, no extern hand-decl, no pragma. This IS the reference model everything else is measured against | `#ifdef __APPLE__` — the universally-understood preprocessor baseline; dead branch is NOT elided at the object level (just not linked). This is the `@cfg`/`_WIN32` mechanism Zapp already fights every day | Needs a per-target cross toolchain (e.g. osxcross for Linux→macOS, mingw64 for macOS→Windows); nothing is bundled — contrast with Zig's self-contained cross-compile | The ergonomic FLOOR: no Option/Result, no map/struct-impl, no safe strings, no GC, no generics, no error propagation sugar. Manual memory, manual NUL-termination, manual JSON, manual everything. Every feature the other candidates add is measured against the extra friction of NOT having it in C. Zero adoption risk; zero runtime; the only reason to stay here is binary size (50 KB vs Nim 102 KB / C3 145 KB / Zig 188 KB / Odin 234 KB) or absolute ABI control |
+| Swift (added 2026-06-15) | 56424 B (`-Osize`+strip, **DYNAMIC** — Apple runtime is OS-resident) | yes (640x480 'zapp-spike', exit 0) | Foundation `JSONDecoder().decode(Config.self, from: data)` over a `Codable` struct — type-safe, throwing/**catchable**, the most robust JSON in the set: explicit optionals, a missing *required* key throws (vs Zig's `.?` trap / Nim's `[]` raise) | **BEST-IN-SET.** Native ObjC/C interop: `-import-objc-header probe.h` exposes `spike_cocoa_open_window` directly, and a Swift `String` **auto-bridges** to `const char*` for the call — no NUL-term, no cast, no shim. Swift wouldn't even need the plain-C wrapper; it can call ObjC/AppKit directly | `#if os(macOS)` compile-time, dead branch elided — best-tier, no emit footgun, no stub twin (like Zig/Nim). Also a native string `switch` (like Nim) | N/A from macOS. **THE SIZE CAVEAT:** `-static-stdlib` is **disallowed on Apple** (Swift 6.3: "no longer supported for Apple platforms") — the 56 KB is **OS-SUBSIDIZED** (runtime in the OS, can't be statically linked). Off-Apple (Windows/Linux) you **ship the Swift runtime** (multi-MB) and can't slim it the way the others static-link. Swift's tiny Apple number does NOT transfer cross-platform | LOWEST authoring friction — Codable, bridging header, String bridging, `#if os`, string `switch` all worked **first try, zero API drift** (probe + slice). (SourceKit flags "cannot find spike_… in scope" — editor false positive, doesn't see `-import-objc-header`; real build clean.) MATURITY/ADOPTION = **HIGHEST of the field** (Apple's own language, massive community) — the opposite pole from Zen-C. The cost is *strategic, not ergonomic*: cross-platform (Windows) maturity + runtime-shipping is the risk for a framework whose pitch includes Windows |
 
 ## Gate decision
 
@@ -47,6 +48,19 @@ philosophies:
   standalone backend (no raw-C escape hatch). Excellent error messages + good
   web docs (odin-lang.org).
 - **plain C** (50 KB) — the implicit baseline/yardstick, not separately sliced.
+
+**Reopened 2026-06-15 — maturity + adoption elevated to the PRIMARY lens (user
+direction).** The first gate ranked on six co-equal axes; the user reframed the
+decision around *stability + how many people use it*, which (a) excludes **Rust**
+and **Go** — both viable but their markets are saturated (Tauri owns Rust, Wails
+owns Go), so no differentiation for Zapp — and (b) added **Swift**. It also
+*re-rates* the survivors: **Zig's pre-1.0 risk is materially lower than first
+framed** because **Vercel Labs' `zero-native` already ships a Zig desktop shell in
+the same problem domain** — a well-resourced precedent. So the live migration
+field on the maturity lens is **Zig (Vercel-validated, fast-growing), Swift
+(Apple's own — highest adoption, best interop, cross-platform tax), and Nim
+(small-but-stable, approachable, cleanest migration)**. Swift advanced to a Phase
+2 slice alongside Zig + Nim.
 
 ## Phase 2 — vertical slice (survivors)
 
@@ -134,12 +148,54 @@ carry over: the raise-on-missing-key JSON access (defensive guards needed for
 untrusted frames) and the ORC GC (default, ~free in size, correct to keep for a
 real long-lived orchestration layer).
 
+### Swift slice (added 2026-06-15)
+
+76968 B stripped (`-Osize`, **dynamic** — runtime OS-resident), vs the 56424 B
+Phase 1 probe (+20.5 KB for the second Codable type + router `switch`; still
+tiny, still OS-subsidized). Reimplements the `router_handle_window_action` shape:
+decode a bridge frame, dispatch on `m`, and for `window:create` build a
+`WindowOptions` value type and call `.apply()`. Per-axis vs the Zen-C friction
+inventory: **Routing/JSON ergonomics — top-tier and the most *robust* of the
+set.** `JSONDecoder().decode(BridgeMsg.self, …)` over `Codable` structs is fully
+typed — no dictionary access at all — and the optional `a: WindowArgs?` field
+models "present only for window:create" exactly (nil when absent, a *missing
+required* key throws a catchable `DecodingError`). Dispatch is a native Swift
+string `switch` with a `default` — exhaustive-by-shape like Nim, unlike Zig's
+`eql` chain. The only nit vs the raw-Value parsers: Codable wants a declared
+shape up front (more ceremony than `obj.get("m")`), which is *more* safety, not
+less. **Platform branch — best-tier, no emit footgun.** `#if os(macOS)` is a
+compile-time fold; the dead branch is elided (`spike_print_windows` never linked
+on macOS). Like Zig/Nim and unlike Zen-C `@cfg`, there is NO per-platform-stub
+duplication and nothing emitted into "every TU" — the iOS-stub-parity tax simply
+does not exist. **Struct + method — clean, zero boilerplate.** `struct
+WindowOptions { … func apply() }` is a value type with a method; `WindowOptions(…)
+.apply()` reads exactly like the real builder. **Const-correctness — BEST in the
+set, literally zero marshalling.** `title` is an immutable Swift `String`;
+calling `spike_cocoa_open_window(w, h, title)` *auto-bridges* the String to a
+NUL-terminated `const char*` for the call — no `dupeZ` (Zig), no `.cstring` view
+(Nim), no `strdup`/cast (C/Zen-C). The interop layer is invisible. **raw→wrapper —
+confirmed, and Swift wouldn't even need the wrapper.** The ObjC lives in
+`probe_cocoa.m` behind plain C; `apply()` just forwards — ZERO inline ObjC. But
+note the asymmetry: Swift has *native* ObjC interop, so in a real port the `.m`
+files could be called directly (or rewritten in Swift) with no C-ABI shim at all
+— strictly more capable than every other candidate including Zen-C's `raw{}`.
+**Maturity/adoption — the highest in the field** (Apple's own language; the
+opposite pole from Zen-C's near-solo bus factor). **Swift friction:** none new
+this slice — Codable, the string `switch`, `#if os`, and String→`const char*`
+bridging all worked first try, zero API drift. **The standing caveat is
+strategic, not ergonomic:** the size is OS-subsidized (no static-stdlib on
+Apple), and the cross-platform story — shipping the Swift runtime on Windows/Linux
++ the relative immaturity of Swift-on-Windows — is the real risk for a framework
+whose pitch includes Windows. Swift is the **Apple-first champion with a
+cross-platform tax**.
+
 ## Recommendation
 
 ### Binary-size comparison (the criterion that turned out not to decide it)
 
 | Lang   | Stripped probe | Δ over C floor | Runtime/stdlib tax |
 | ---    | ---            | ---            | ---                |
+| Swift  | 56,424 B*      | +5,600 B*      | *OS-resident runtime — NOT shipped on Apple (see note) |
 | C      | 50,824 B       | —              | none (the floor)   |
 | Nim    | 102,408 B      | +51,584 B      | std/json + stdlib + ORC GC |
 | **Zen-C** (incumbent) | **112,472 B** | +61,648 B | std/json + Vec/Map/Option/Result codegen |
@@ -147,6 +203,13 @@ real long-lived orchestration layer).
 | Zig    | 188,008 B      | +137,184 B     | stdlib + comptime scaffolding |
 | Odin   | 234,008 B      | +183,184 B     | core:fmt/runtime/context + json |
 | Zig (Windows cross) | 488,448 B | n/a (PE32+) | self-contained cross-compile, from the Mac |
+
+\* **Swift's 56 KB is misleading** — it's the dynamic-linked Apple number, where
+the Swift runtime lives in the OS and isn't counted (and `-static-stdlib` is
+*disallowed* on Apple in Swift 6.3). Off-Apple (Windows/Linux) you ship the
+runtime — multi-MB — so Swift is effectively the *largest* shipped footprint on
+the platforms where size would matter, not the smallest. On Apple it's free; on
+Windows it's a tax.
 
 The spike's headline finding **inverts the question the user led with.** "If they
 produce the same tiny binaries" was the gate — and they all do, *including the
@@ -163,34 +226,44 @@ and migration cost.
 
 ### Outcome A — adopt a new language
 
-If we migrate, the field narrows to **Zig or Nim** (C3 and Odin are viable but
-each lost a decisive axis — see Gate decision; both have solid *web* docs
-[c3-lang.org/standard-library, odin-lang.org/docs] and the earlier "undocumented"
-framing should read as *weak in-tool/in-editor discoverability*, not *no docs*).
+Under the **maturity + adoption lens** (the user's primary criterion), the field
+is **Zig, Swift, or Nim** — Rust and Go are out (viable but their markets are
+saturated: Tauri owns Rust, Wails owns Go, so Zapp gains no differentiation), and
+C3/Odin lost a decisive axis (see Gate decision; both have solid *web* docs
+[c3-lang.org, odin-lang.org] — "weak in-tool discoverability," not "no docs").
 
-- **Zig** is the most *tempting* single property in the entire spike: real
-  self-contained cross-compilation produced a working Windows PE32+ from the Mac
-  with no toolchain install. That alone could end the "Windows must be built on
-  the PC" split that currently fragments the project. It also has the best C
-  interop (`@cImport` auto-reads our 52 headers), and the best platform branch —
-  `if (builtin.os.tag == .macos)` folds at comptime with **no emit footgun and no
-  iOS-stub-parity tax** (the exact `#ifdef __APPLE__`-true-on-iOS pain we pay
-  today via the #281 lint simply does not exist). The cost is real: 0.16's pre-1.0
-  IO redesign broke the starter probe mid-spike — adopting Zig means **trading a
-  known tax (Zen-C's quirks) for an unknown one (tracking a moving pre-1.0
-  language).** And as a standalone backend it has no raw-C escape hatch, so all
-  221 `raw {}` inline-ObjC blocks must move into `.m` files (better architecture,
-  but a large migration).
+- **Zig** — pre-1.0, BUT its adoption risk is **materially lower than the spike
+  first framed**: Vercel Labs' `zero-native` ships a Zig desktop shell in this
+  exact domain, a well-resourced precedent. Strengths: best C interop
+  (`@cImport` auto-reads our 52 headers), best platform branch (comptime fold, no
+  iOS-stub-parity tax), and the standout — self-contained cross-compilation (a
+  real Windows PE32+ from the Mac) that could end the "Windows builds on the PC"
+  split. Cost: 0.16's IO redesign broke the starter probe mid-spike (the churn is
+  real even if backed); no raw-C escape hatch, so the 221 `raw {}` ObjC blocks
+  move into `.m` files.
 
-- **Nim** is the *cleanest migration shape*: it compiles to C exactly like
-  Zen-C, so `importc`+`passC`/`passL` ≈ Zen-C's link/cfg directives and `{.emit.}`
-  is a near-mechanical drop-in for those 221 `raw` blocks. It produced the
-  smallest non-C binary (102 KB), has the most router-like syntax (real string
-  `case … of`), and was the **only candidate whose probe and slice both ran with
-  zero API drift** — the strongest maturity signal in the set. Costs: an ORC GC
-  in the orchestration layer (tunable, ~free in size, correct to keep), and
-  `parseJson` raises on missing keys (defensive guards needed for untrusted
-  bridge frames).
+- **Swift** — the **highest-adoption candidate** (Apple's own language) and the
+  one with a *qualitatively different* structural payoff: it doesn't just *call*
+  ObjC behind a C ABI like every other candidate — it can **delete the ObjC layer
+  on Apple entirely**. On macOS + iOS you'd write Swift directly against
+  AppKit/UIKit/WebKit, collapsing today's Zen-C→C-ABI→ObjC `.m` (≈8k lines) into
+  one Swift codebase, and the JSON/interop ergonomics were the best in the spike
+  (Codable, String auto-bridge). The cost is **strategic, concentrated on the
+  non-Apple side**: the tiny size is OS-subsidized (no static-stdlib on Apple; you
+  ship a multi-MB runtime on Windows/Linux), and Swift-on-Windows is the least
+  battle-tested toolchain of the three — a direct tension with the Windows-parity
+  mandate. Swift is the **Apple-first champion that bets the cross-platform core
+  on Swift-on-Windows**.
+
+- **Nim** — the *cleanest migration shape* and best small-but-stable fit: compiles
+  to C exactly like Zen-C, so `importc`+`passC`/`passL` ≈ Zen-C's link/cfg
+  directives and `{.emit.}` is a near-mechanical drop-in for the 221 `raw` blocks
+  (the ObjC `.m` layer stays as-is, called the same way). Smallest non-C binary
+  (102 KB), most router-like syntax (real string `case … of`), and the **only
+  candidate with zero API drift across probe + slice**. Approachable. Costs: an
+  ORC GC (tunable, ~free in size) and `parseJson` raises on missing keys
+  (defensive guards for untrusted frames). The adoption counter: a *small*
+  community — stable, but niche.
 
 ### Outcome B — stay on Zen-C
 
@@ -237,24 +310,37 @@ JSON-routing and string-marshalling.
 
 ### If we had to ship the decision today
 
-**Stay on Zen-C — eyes open, with two named re-evaluation triggers.**
+**Two readings, depending on which lens is primary.**
 
-The spike did its job: it tested the hypothesis ("a more mature language with
-equally tiny binaries would be a better fit") and the hypothesis did not hold
-strongly enough to act on. Binary size — the headline criterion — is a
-non-differentiator. On the axes that remain, no candidate beats a working
-7,500-line native layer by enough to justify rewriting it. Do **not** drop to C
-(it un-solves the problems Zen-C solved).
+*On the original six-axis rubric:* **stay on Zen-C** — binary size is a
+non-differentiator, and no candidate beats a working ~7,500-line layer by enough
+to justify the rewrite. Do not drop to C (it un-solves what Zen-C solved).
 
-Keep Zig and Nim as **live triggers**, not background noise:
-- **Reopen for Zig** if the Windows-build split becomes a serious enough drag
-  (its self-contained cross-compile is the single most valuable property any
-  candidate showed) **and/or Zig reaches 1.0** (retiring the pre-1.0 churn tax).
-- **Reopen for Nim** if Zen-C *compiler* maintenance (the local patches, parser
-  gaps) becomes a burden we'd rather offload to a compiles-to-C language with a
-  real community — its migration path is the most mechanical of any candidate.
+*On the maturity + adoption lens (the user's elevated criterion):* the answer
+shifts, because **on that axis Zen-C ranks LAST** — it is the least-adopted of
+every option here (a pre-1.0 language we carry local patches for, with a
+near-solo bus factor). Once "stable + widely used" is the priority, the "stay"
+case rests almost entirely on *migration cost/inertia*, not on Zen-C being
+better. That makes the decision genuinely live, and it comes down to three
+contenders with sharply different bets:
 
-The honest one-liner: *Zen-C's tax is real but paid; every alternative either
-charges a new tax (Zig's churn, Nim's GC) or refunds the ergonomics we bought
-(C). Stay, and revisit the day Windows cross-compilation or compiler upkeep
-tips the math.*
+- **Swift** — the boldest: highest adoption, and the only option that **deletes
+  the ObjC layer on Apple** (write Swift directly against AppKit/UIKit, ≈8k lines
+  of `.m` collapse in). Best ergonomics + interop. The bet is cross-platform:
+  Swift-on-Windows is the least-proven toolchain and you ship a runtime there.
+  Pick this if Zapp is willing to be **Apple-first with Windows as the harder
+  half**.
+- **Zig** — the cross-platform pragmatist: self-contained cross-compile could
+  *unify* the build (Windows from the Mac), best C interop, and Vercel's
+  zero-native de-risks the "is Zig ready?" question. The bet is pre-1.0 churn.
+  Pick this if **one toolchain building every target** is the priority.
+- **Nim** — the low-risk evolution: the *cleanest migration* (compiles-to-C, the
+  `.m` layer and `raw`-block model survive almost unchanged), stable, approachable,
+  zero API drift. The bet is a *small community* + a GC. Pick this if the goal is
+  **off-ramp Zen-C's compiler-maintenance burden with the least disruption**.
+
+The honest one-liner: *if size were the question, stay; since maturity + adoption
+is the question, Zen-C is the weakest option on its own terms — so the real
+choice is Swift (Apple-first, boldest), Zig (one-toolchain cross-platform), or
+Nim (lowest-risk migration), and it turns on how much Zapp will bet on
+Swift-on-Windows vs. how much it values collapsing the ObjC layer.*
