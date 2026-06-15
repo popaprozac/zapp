@@ -69,7 +69,11 @@ Five, evaluated with a plain-C baseline as the yardstick:
   headers directly; `ReleaseSmall` → tiny; `zig cc` can also build the `.m`/
   `.c`. Platform-conditional via `comptime` + `@import("builtin").os.tag` +
   the build graph selecting files per target (no header-emit footgun). No
-  inline ObjC → ObjC stays in `.m` behind C wrappers.
+  inline ObjC → ObjC stays in `.m` behind C wrappers. **Standout perk:
+  first-class cross-compilation** — `zig build -Dtarget=…` builds any target
+  (macOS / Windows / iOS) from one host with libc bundled, which could
+  collapse today's "Windows must be built on the PC" friction into a single-
+  machine / single-CI build.
 - **Nim** — compiles to C like Zen-C → tiny binaries + native C/ObjC interop
   (`importc`, `{.emit.}` raw-C ≈ `raw` blocks), ~15 yrs mature. Platform
   via `when defined(macosx|windows)`. Probe its GC mode (ARC / `--mm:none`).
@@ -114,6 +118,7 @@ friction inventory + real binary size.
 | **C/C++/ObjC interop** | clean call into `.m`/`.c` C-ABI + C-header consume + the `raw`→`.m`-wrapper pattern; no contortions for JSON / struct-impl |
 | **Platform-conditional ergonomics** | express "mac vs windows" cleanly; **no** Zen-C-style emit-into-every-TU footgun or duplicated per-platform bodies |
 | **General ergonomics vs the friction inventory** | const/cast handling, string handling, error/Option-style flow, stdlib quality — graded against the documented Zen-C pains above |
+| **Cross-compilation** | can it build all targets (macOS / Windows / iOS) from one host? Zig is best-in-class here (`-Dtarget=…`, libc bundled) and it could end the "Windows must be built on a PC" split; grade the others (Nim cross-compiles via its C backend / `zig cc`; C3/Odin via LLVM targets but less turnkey; plain C needs a cross toolchain per target) |
 | **Maturity / adoption risk** | **materially lower than Zen-C** — release stability, ecosystem, community/contributor pool, longevity, hiring |
 | **Migration cost** | qualitative, from the slice: rewriting `cli/src/native.ts` build + the `.zc`-emitting codegen + replacing `std/json`; team retraining |
 
