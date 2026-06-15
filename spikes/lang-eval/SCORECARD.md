@@ -78,5 +78,53 @@ literals rather than reading a file; `@cImport`, `std.json.parseFromSlice`,
 `builtin.os.tag`, and `dupeZ`→`.ptr` all worked first try, build + run + exit 0
 on the first attempt.
 
+### Nim slice
+
+101816 B stripped (`-d:release --opt:size`) — ~592 B UNDER the Phase 1 Nim probe
+(102408 B), i.e. the router/struct/method/cfg-branch/two-route logic adds nothing
+measurable over the bare interop probe (std/json was already linked; the slice
+just exercises more of it). Reimplements the `router_handle_window_action` shape:
+`parseJson` a bridge message, dispatch on `m`, and for `window:create` build a
+`WindowOptions` object and call `.apply()`. Per-axis vs the Zen-C friction
+inventory: **Routing/JSON ergonomics — strong, arguably the cleanest in the set.**
+`parseJson("""…""")` over a triple-quoted raw string literal then `node["m"].getStr`
+/ `a["w"].getInt` typed getters read like the real router; and unlike Zig (no
+native string-switch → `if eql(...)` chain) Nim has a real **string `case … of`**,
+so dispatch is exhaustive-by-shape with a single `else` default — the most
+router-like syntax of any candidate. (Caveat: `parseJson` + `[]` *raises* on
+missing keys rather than returning an optional — fine for trusted bridge frames,
+but a hostile/partial frame throws; the real router would want a `hasKey`/`getOrDefault`
+guard.) **`when defined(macosx)` platform branch — best-tier, NO emit footgun.**
+It's a compile-time predicate the codegen folds: only the cocoa path is emitted,
+the macOS binary never references `spike_print_windows`. Unlike Zen-C `@cfg`,
+nothing is emitted into "every TU" and there is no per-platform-stub obligation —
+the exact iOS-stub-parity tax we keep paying (`#ifdef __APPLE__` is true on iOS too,
+so every `darwin_*` needs an iOS twin) simply does not arise; `when` just drops the
+dead branch. **Object + proc — clean, near-zero boilerplate.** `type WindowOptions
+= object` with `proc apply(self: WindowOptions)` is a normal value type + a
+free-standing proc dispatched by first-arg type (UFCS), so `opts.apply()` reads as
+a method with no class/impl ceremony; routing parse→build-object→`apply` is
+natural. **Const-correctness — clean, ZERO cast wrangling.** The parsed `title` is
+an immutable Nim `string`; threading it through the object field and calling
+`.cstring` views the backing buffer as a NUL-terminated `const char*` with no copy
+and no discard-qualifier / cast fight — exactly the kind of const-through-the-struct
+flow that bit us in Zen-C, here it just works. **raw→wrapper — confirmed, no inline
+ObjC.** The ObjC that sets `win.title` lives in `probe_cocoa.m` behind the plain C
+`spike_cocoa_open_window`; `apply()` only forwards the marshalled string, so the
+slice contains ZERO inline ObjC — proving the target architecture (ObjC in `.m`,
+orchestration lang marshals strings only). And the direct analogue to Zen-C's
+`raw { … }` blocks, if inline C were ever genuinely needed, is Nim's `{.emit:
+"…".}` pragma (noted, deliberately unused). **Compiles-to-C parallel — the
+decisive edge over Zig here.** Nim emits C and links it exactly like Zen-C, so the
+whole interop model is the closest migration: `importc`+`passC`/`passL` ≈ Zen-C's
+link/cfg directives, `{.emit.}` is a drop-in for the 221 `raw` blocks, and the
+existing inline C/ObjC could migrate almost mechanically. **Nim friction:** none new
+this slice — `parseJson`, typed getters, the string `case`, `when defined`, and
+`.cstring` bridging all worked first try; build + run + exit 0 on the first attempt
+with zero API drift (the same maturity signal as Phase 1). Only standing caveats
+carry over: the raise-on-missing-key JSON access (defensive guards needed for
+untrusted frames) and the ORC GC (default, ~free in size, correct to keep for a
+real long-lived orchestration layer).
+
 ## Recommendation
 (filled at the end — covers adopt-X / stay-Zen-C / drop-to-C)
