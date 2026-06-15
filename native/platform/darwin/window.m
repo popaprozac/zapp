@@ -38,6 +38,8 @@ extern int32_t wopts_sidebar_max_width(void* opts);
 extern bool wopts_sidebar_collapsible(void* opts);
 extern bool wopts_sidebar_collapsed(void* opts);
 extern int32_t wopts_sidebar_numeric_id(void* opts);
+// App-set window background color ("#rrggbb"); applied on opaque windows.
+extern const char* wopts_background_color(void* opts);
 // Inspector split registry (inspector.m). Mirrors the sidebar pattern.
 extern void zapp_inspector_register(void* window_ptr, void* splitVC, void* inspectorItem,
                                     int32_t host_id, int32_t inspector_slot_id);
@@ -560,6 +562,14 @@ void darwin_window_set_bridge_ready(const char* window_id) {
 // Shared by the vibrancy path (whole-window blur) and the sidebar's optional
 // per-pane material override. Names mirror runtime/window.ts's Material const.
 // Unknown / empty names fall back to WindowBackground.
+// Parse "#rrggbb" -> r,g,b (0-255). false on malformed input. Mirrors the
+// Windows sscanf parse (windows/window.c) so both platforms accept the same
+// backgroundColor string.
+static bool zapp_parse_hex_color(const char* hex, int* r, int* g, int* b) {
+    if (!hex || hex[0] != '#' || strlen(hex) < 7) return false;
+    return sscanf(hex + 1, "%2x%2x%2x", r, g, b) == 3;
+}
+
 static NSVisualEffectMaterial zapp_material_from_name(const char* name) {
     if (!name || !name[0]) return NSVisualEffectMaterialWindowBackground;
     NSString* mat = [NSString stringWithUTF8String:name];
@@ -702,6 +712,25 @@ void* darwin_window_create(WindowOptions* opts) {
         // Material enum shared by the whole-window vibrancy path and the
         // sidebar's optional per-pane material override (helper above).
         NSVisualEffectMaterial material = zapp_material_from_name(vibrancyName);
+
+        // App-set window background color ("#rrggbb"). Opaque windows only —
+        // skip when transparent or vibrancy is set (those intentionally own a
+        // clear/material background). Replaces the windowBackgroundColor
+        // default set at window creation; also seeds the host webview's
+        // underPageBackgroundColor below. NOTE: unlike Windows (where
+        // WebView2's repaint lags during live resize and flashes white),
+        // WKWebView repaints fast — on macOS this is window-background
+        // customization + the pre-render fill, not a resize-flash fix. The
+        // page's own CSS background still paints over it.
+        NSColor* bgColor = nil;
+        {
+            int cr, cg, cb;
+            if (!wopts_transparent(opts) && !useVibrancy &&
+                zapp_parse_hex_color(wopts_background_color(opts), &cr, &cg, &cb)) {
+                bgColor = [NSColor colorWithSRGBRed:cr/255.0 green:cg/255.0 blue:cb/255.0 alpha:1.0];
+                [window setBackgroundColor:bgColor];
+            }
+        }
 
         const char* sidebarUrl = wopts_sidebar_url(opts);
         bool useSidebar = (sidebarUrl && sidebarUrl[0] != '\0');
@@ -945,6 +974,22 @@ void* darwin_window_create(WindowOptions* opts) {
         delegate.mainWebview = mainWebviewRef;         // nil in the non-split path
         delegate.sidebarWebview = sidebarWebviewRef;   // nil when no sidebar
         delegate.inspectorWebview = inspectorWebviewRef; // nil when no inspector
+
+        // Seed the host webview's underpage fill (the WebView2
+        // DefaultBackgroundColor analogue) with the app-set background. Split
+        // path: the main pane is mainWebviewRef. Plain opaque path: the
+        // contentView IS the WKWebView (its dispatch-table registration runs
+        // later, so read it directly here). bgColor is non-nil only for opaque
+        // windows (see the parse above).
+        if (bgColor) {
+            if (@available(macOS 12.0, *)) {
+                WKWebView* hostWv = mainWebviewRef;
+                if (!hostWv && [[window contentView] isKindOfClass:[WKWebView class]]) {
+                    hostWv = (WKWebView*)[window contentView];
+                }
+                if (hostWv) hostWv.underPageBackgroundColor = bgColor;
+            }
+        }
 
         // Visibility model: visible:true is cosmetic — apps say "show me
         // when ready", not "show me right now even if blank". The window

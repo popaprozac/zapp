@@ -79,12 +79,21 @@ export interface WindowOptions {
   borderless?: boolean;
   transparent?: boolean;
   /**
-   * Webview background color as `"#rrggbb"`. The page's own CSS background
-   * always paints over it — this only fills the color WebView shows *before*
-   * the page renders and in the transient gap during an async resize, which
-   * otherwise flashes white against a dark UI. Leave unset for the platform
-   * default (white). Windows: seeds the WebView2 DefaultBackgroundColor. iOS/
-   * macOS: not yet wired (no-op).
+   * Window/webview background color as `"#rrggbb"`. The page's own CSS
+   * background always paints over it — this only fills the color shown
+   * *before* the page's first paint (and any transient gap). Leave unset for
+   * the platform default.
+   *
+   * - **Windows:** seeds the WebView2 background. Most impactful here because
+   *   WebView2's repaint lags during live resize, otherwise flashing white
+   *   against a dark UI.
+   * - **macOS:** sets the window background + the webview's
+   *   `underPageBackgroundColor`. Opaque windows only — ignored when
+   *   `transparent` or `vibrancy` is set (those own their background).
+   *   WKWebView repaints fast, so this is mainly background customization +
+   *   the pre-render fill, not a resize-flash fix.
+   * - **iOS:** sets the window/root + webview background (launch/pre-render
+   *   fill; iOS is full-screen with no live resize).
    */
   backgroundColor?: string;
   alwaysOnTop?: boolean;

@@ -423,6 +423,7 @@ $("btn-new-window").addEventListener("click", async () => {
       title: "Zapp Child Window",
       width: 800,
       height: 600,
+      backgroundColor: "#1e1e1e", // dark window backing (no white pre-render/resize gap)
     });
     log(`New window: ${child.id}`);
   } catch (e) {
