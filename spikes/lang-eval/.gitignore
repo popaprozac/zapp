@@ -1,0 +1,3 @@
+spikes/lang-eval/**/*.o
+spikes/lang-eval/**/probe
+spikes/lang-eval/**/probe.exe
