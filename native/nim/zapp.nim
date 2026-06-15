@@ -21,8 +21,16 @@
 {.compile("../platform/darwin/screen.m", "-fobjc-arc").}
 {.compile("../platform/darwin/panel.m", "-fobjc-arc").}
 
+import std/os          # parentDir for the zjs.c {.compile.}/{.passL.} paths below
 import app
 import window
+# worker_service is imported only for its {.exportc.} side-effect symbol
+# (service_invoke_native — the zjs worker→native seam). No Nim symbol from it is
+# referenced here, so silence UnusedImport (registerWorkerServices() is wired in
+# the next task when the worker is spawned).
+{.push warning[UnusedImport]: off.}
+import worker_service
+{.pop.}
 
 # CLI-generated config + bootstrap modules. `buildNativeNim` writes these into
 # the project's `.zapp/` dir and passes `--path:<.zapp>`, so they resolve by
@@ -181,6 +189,92 @@ type ZappEmbeddedAsset {.exportc, bycopy.} = object
 
 var zapp_embedded_assets {.exportc.}: array[1, ZappEmbeddedAsset]
 var zapp_embedded_assets_count {.exportc.}: cint = 0
+
+# ---------------------------------------------------------------------------
+# zjs worker engine (native/worker/engines/zjs.c — REUSED UNTOUCHED).
+#
+# Compiled into the Nim build to benchmark the worker→native fast path. zjs.c
+# builds/reads JsonValue trees via the JsonValue C-ABI provided by
+# .zapp/zjson_provider.o (linked through `--passL:<...>/zjson_provider.o`, which
+# buildNativeNim appends to the `nim c` args — the path is the USER project's
+# .zapp dir, unknown at framework-compile time, so it can't be a {.passL.}
+# literal here). zjs's runtime is libzjs.dylib (vendor/zjs/build).
+#
+# CALL-form {.compile.} (third arg = per-file clang flags). zjs.c needs zjs's
+# own header (vendor/zjs/include/zjs.h) — passed both as a {.passC.} (so other
+# Nim-emitted C sees it if needed) and inline in the compile flags.
+# ---------------------------------------------------------------------------
+# currentSourcePath().parentDir resolves the framework's native/nim dir at
+# compile time (parentDir comes from `import std/os` above); vendor/zjs is two
+# levels up. Matches the path style of the platform-.m pragmas at the top.
+{.passC: "-I" & currentSourcePath().parentDir & "/../../vendor/zjs/include".}
+{.compile("../worker/engines/zjs.c",
+          "-I" & currentSourcePath().parentDir & "/../../vendor/zjs/include").}
+{.passL: "-framework Foundation".}
+{.passL: "-lcompression".}  # zjs.c:1208 compression_decode_buffer (embedded-asset decode)
+{.passL: currentSourcePath().parentDir & "/../../vendor/zjs/build/libzjs.dylib".}
+{.passL: "-Wl,-rpath," & currentSourcePath().parentDir & "/../../vendor/zjs/build".}
+
+# zjs.c extern surface NOT satisfied by the provider .o / worker_service /
+# skeleton. Real impls live in not-yet-ported modules (permissions, the
+# event/dispatch layer, the worker supervisor + registry, bridge/dispatch.zc).
+# TEMP no-op/default stubs for the perf gate — breadth replaces. Signatures
+# match zjs.c's `extern` decls EXACTLY (see native/worker/engines/zjs.c:102-142,
+# 1304). app_get_active + service_invoke_native + the JsonValue/build-config
+# symbols are provided elsewhere (skeleton sentinel / worker_service / provider.o
+# / generated zapp_build_config) and are deliberately NOT redefined here.
+#
+# zapp_log_level: framework log level (0=default,1=verbose,2=debug). zjs.c gates
+# its verbose worker-lifecycle lines on `>= 1`; 0 keeps the default-quiet path.
+var zapp_log_level {.exportc.}: cint = 0
+
+# Permission gates (permissions.zc + router.zc). Workers reach native through
+# the host object bypassing the router, so zjs.c re-runs the mapping+check here.
+# Skeleton: every method ungated/allowed.
+proc permissions_check(id: cstring, m: cstring): bool {.exportc, cdecl, gcsafe.} = true
+proc permission_id_for_invoke(m: cstring): cstring {.exportc, cdecl, gcsafe.} = cstring""
+
+# Fire-and-forget fan-out to every webview's __zappBridge._onEvent. No event
+# layer ported yet.
+proc dispatch_event_to_all(event_name: cstring, payload: cstring) {.exportc, cdecl, gcsafe.} =
+  discard
+
+# Worker→worker delivery via the dispatcher (worker.zc). No dispatcher yet.
+proc worker_post_message(worker_id: cstring, data_json: cstring) {.exportc, cdecl, gcsafe.} =
+  discard
+
+# Worker→webview message delivery (worker.zc dispatcher → __zappBridge). zjs.c's
+# host_post_to_webview owns + free()s the args after this returns, so the stub
+# neither frees nor retains them. No webview message routing yet.
+proc worker_dispatch_to_webview(worker_id: cstring, data_json: cstring) {.exportc, cdecl, gcsafe.} =
+  discard
+
+# Worker-context bootstrap JS (the worker-side bridge: invokeSync, postMessage,
+# console). zjs.c evals the returned string before the user script. "" => no
+# bootstrap; the worker won't be spawned in this gate. TEMP until the worker
+# bootstrap module lands (its codegen twin of zapp_webview_bootstrap_script).
+proc zapp_worker_bootstrap_script(): cstring {.exportc, cdecl, gcsafe.} = cstring""
+
+# Worker supervisor (restart policy + window state). No supervisor yet:
+# record_failure → 0 (no restart accounting); get_window_state → 0 (not found).
+proc zapp_worker_supervisor_record_failure(worker_id: cstring): cint {.exportc, cdecl, gcsafe.} = 0
+proc zapp_worker_supervisor_get_window_state(worker_id: cstring,
+    out_count, out_cap, out_window_ms: ptr cint): cint {.exportc, cdecl, gcsafe.} = 0
+
+# Worker registry (registry.zc). Single source of truth for Workers.list() +
+# per-worker log labels. Empty registry: "[]" / "" / "".
+proc zapp_workers_registry_list_json(): cstring {.exportc, cdecl, gcsafe.} = cstring"[]"
+proc zapp_worker_registry_get_display_name(worker_id: cstring): cstring {.exportc, cdecl, gcsafe.} = cstring""
+proc zapp_fmt_compact_ms(ms: cint): cstring {.exportc, cdecl, gcsafe.} = cstring""
+
+# bridge/dispatch.zc JSON-escape helper. zjs.c uses it only on the worker-setup
+# crash-synthesis path (zjs.c:1314-1315), where the returned pointer is free()d.
+# Honour that heap-return contract with strdup (NOT returning `s` — that would
+# free() a non-heap/const pointer). No actual escaping: the skeleton never hits
+# this path (it only fires on a worker-setup crash, not exercised by the gate).
+proc c_strdup(s: cstring): cstring {.importc: "strdup", header: "<string.h>".}
+proc zapp_escape_dup(s: cstring): cstring {.exportc, cdecl, gcsafe.} =
+  c_strdup(if s.isNil: cstring"" else: s)
 
 # ---------------------------------------------------------------------------
 # Boot: register services, open one window, then enter the Cocoa run loop.

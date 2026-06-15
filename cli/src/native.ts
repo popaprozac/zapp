@@ -1159,8 +1159,13 @@ async function buildNativeNim(
   // zapp.nim resolve relative to that file, so cwd doesn't matter for them.
   // `--path:<.zapp>` makes the generated modules importable by name.
   const nimRoot = path.join(nativeDir, "nim", "zapp.nim");
+  // Link the JsonValue C-ABI provider object emitted just above. zjs.c (compiled
+  // into the Nim build via {.compile.} in zapp.nim) builds/reads JsonValue trees
+  // through this object's symbols. Passed here rather than a {.passL.} literal in
+  // zapp.nim because the path is the USER project's .zapp dir, unknown at
+  // framework-compile time.
   const args = ["c", "--cc:clang", "--mm:orc", "-d:release", "--opt:size",
-                `--path:${zappDir}`,
+                `--path:${zappDir}`, `--passL:${providerO}`,
                 `-o:${output}`, ...(verbose ? [] : ["--hints:off"]), nimRoot];
   const proc = Bun.spawn(["nim", ...args], { cwd: nativeDir, stdout: "inherit", stderr: "inherit" });
   const code = await proc.exited;
