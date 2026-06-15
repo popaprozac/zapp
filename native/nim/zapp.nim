@@ -32,8 +32,12 @@ import window
 import worker_service
 # callbacks provides the {.exportc.} window-event dispatcher + registries
 # (zapp_dispatch_event, zapp_window_set_js_listener, close guard, on-ready, …)
-# the .m window delegate + router call. No Nim symbol is referenced here.
+# the .m window delegate + router call. app_events provides the {.exportc.}
+# app-event dispatcher + registry (zapp_app_dispatch, zapp_app_on) the platform
+# .m layer calls. Neither references a Nim symbol here — imported only for their
+# {.exportc.} side-effect symbols.
 import callbacks
+import app_events
 {.pop.}
 
 # CLI-generated config + bootstrap modules. `buildNativeNim` writes these into
@@ -52,13 +56,10 @@ import zapp_build_config, zapp_bootstrap
 # platform.m callback dependencies (defined in not-yet-ported modules)
 # ---------------------------------------------------------------------------
 
-# zapp_app_dispatch — was app/app_events.zc. Fans an app event out to native
-# callbacks + workers; returns the count fired. No subscribers yet, so 0.
-# TEMP until the event/dispatch layer lands.
-proc zapp_app_dispatch(eventId: cint, data: cstring): cint {.exportc, cdecl.} =
-  discard eventId
-  discard data
-  0
+# zapp_app_dispatch + zapp_app_on now live in app_events.nim (imported above),
+# ported from native/app/app_events.zc. The dispatcher fans an app event out to
+# native callbacks + the webview (via webview.m's darwin_webview_eval_all);
+# worker fan-out is a deferred no-op (Batch 4/7).
 
 # service_run_shutdown_all — was service/service.zc. Tears down services in
 # reverse order at quit. No services yet. TEMP until service.nim.
