@@ -30,6 +30,10 @@ import window
 # referenced in THIS module, so silence UnusedImport.
 {.push warning[UnusedImport]: off.}
 import worker_service
+# callbacks provides the {.exportc.} window-event dispatcher + registries
+# (zapp_dispatch_event, zapp_window_set_js_listener, close guard, on-ready, …)
+# the .m window delegate + router call. No Nim symbol is referenced here.
+import callbacks
 {.pop.}
 
 # CLI-generated config + bootstrap modules. `buildNativeNim` writes these into
@@ -103,11 +107,10 @@ proc zapp_toolbar_inject_metrics(windowPtr: pointer, hostSlot: int32,
 proc zapp_popover_unregister_window(windowPtr: pointer) {.exportc, cdecl.} =
   discard
 
-# zapp_dispatch_event — window.m asks the event layer whether a window action
-# (close/resize/move) is allowed; 0 = ALLOW. Real impl gates reversible-close
-# etc. TEMP (returns ALLOW) until the event/dispatch layer lands.
-proc zapp_dispatch_event(windowId, eventId, w, h, x, y: cint): cint {.exportc, cdecl.} =
-  0
+# zapp_dispatch_event + the window-event registries (set_js_listener, close
+# guard, on-ready, etc.) now live in callbacks.nim (imported above), ported from
+# native/window/callbacks.zc. JS delivery delegates to window.m's
+# zapp_dispatch_event_to_js; worker fan-out is a deferred no-op (Batch 4/7).
 
 # ---------------------------------------------------------------------------
 # webview.m callback dependencies — app config, build config, bootstrap,
