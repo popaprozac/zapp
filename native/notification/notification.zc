@@ -53,7 +53,7 @@ fn notification_show_with_actions(title: string, body: string, category_id: stri
 }
 @cfg(windows)
 fn notification_show_with_actions(title: string, body: string, category_id: string) -> void {
-    // TODO: Windows notification actions
+    win_notif::windows_notification_show_with_category(title, body, category_id);
 }
 
 // Register a notification category with action buttons.
@@ -65,7 +65,12 @@ fn notification_register_category(cat: NotificationCategory*) -> void {
 }
 @cfg(windows)
 fn notification_register_category(cat: NotificationCategory*) -> void {
-    // TODO: Windows notification categories
+    // The Windows ZappNotifAction struct ({id, title, destructive})
+    // matches NotificationAction's leading layout, so the actions array
+    // casts directly — same trick the menu typed path uses.
+    win_notif::windows_notification_register_category_typed(
+        cat.id, (win_notif::ZappWinNotifAction*)cat.actions, cat.action_count,
+        cat.has_reply_field, cat.reply_placeholder, cat.reply_button_title);
 }
 
 // Remove a registered notification category.
@@ -75,7 +80,7 @@ fn notification_remove_category(id: string) -> void {
 }
 @cfg(windows)
 fn notification_remove_category(id: string) -> void {
-    // TODO: Windows notification categories
+    win_notif::windows_notification_remove_category(id);
 }
 
 // Schedule a notification after a delay (seconds).

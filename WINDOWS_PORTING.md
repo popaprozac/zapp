@@ -153,6 +153,108 @@ from day one:
    `PostMessage(WM_ZAPP_TASK)` + (for sync) event-wait pattern, with a
    same-thread short-circuit to avoid self-deadlock.
 
+7. **Embedded webviews (`<zapp-webview>` panels) need their own child
+   HWND for z-order.** macOS adds the child `WKWebView` as a subview
+   (subview order = z-order, content shows on top for free). On Windows a
+   second `ICoreWebView2Controller` parented to the *same* HWND as the host
+   webview renders **behind** the opaque host surface — events fire, nothing
+   paints. Fix (`platform/windows/panel.c`): give each panel an intermediate
+   `WS_CHILD | WS_CLIPSIBLINGS` window, parent the controller to it, and
+   `SetWindowPos(HWND_TOP)` it above the host on every bounds update + show.
+   Bounds arrive as CSS px (host viewport, top-left) and convert to physical
+   px via the controller's `RasterizationScale` (= DPI/96). The runtime
+   tracker places the panel at the element's *viewport* position, so a panel
+   whose `<zapp-webview>` is scrolled below the fold is correctly positioned
+   off-screen (child-clipped) until scrolled into view — that is not a bug.
+   Controller creation is async: buffer bounds/show/url and apply them in the
+   completed handler. Reuse the host's cached `ICoreWebView2Environment`
+   (`zapp_get_webview_environment()`) so panels share its user-data store.
+   Derive the CSS→physical scale from `GetDpiForWindow(owner)/96`, NOT the
+   controller's `RasterizationScale` — the latter reads a stale 1.0 for the
+   first frames after creation (monitor scale not yet detected), which placed
+   panels up-left on >100% displays until a later event refreshed it. After
+   moving the child window, call `NotifyParentWindowPositionChanged` or
+   WebView2 composites at the stale screen position until an unrelated event.
+
+8. **Win11 window material is DWM attributes + a transparent web surface.**
+   macOS vibrancy mounts an `NSVisualEffectView`; Windows has no widget — it's
+   `DwmSetWindowAttribute`. The `vibrancy` option drives
+   `DWMWA_SYSTEMBACKDROP_TYPE` (Mica/Acrylic) and the app theme drives
+   `DWMWA_USE_IMMERSIVE_DARK_MODE` (re-applied to every window on the
+   `WM_SETTINGCHANGE`/`ImmersiveColorSet` theme flip). Crucially the backdrop
+   only shows where the **web content is transparent** — set the host
+   controller's `DefaultBackgroundColor` to `{0,0,0,0}` via
+   `ICoreWebView2Controller2` (`webview.c`) AND the page must use a transparent
+   CSS background, the exact same opt-in as macOS vibrancy. All DWM calls
+   no-op gracefully on Win10 / pre-22H2 (`platform/windows/material.c`).
+
+9. **`TaskDialogIndirect` (modern message dialog) needs comctl32 v6 — and
+   statically importing it bricks app launch.** zapp has no application
+   manifest, so the loader binds `-lcomctl32` imports to comctl32 **v5.82**,
+   which doesn't export `TaskDialogIndirect` → unresolved import → the EXE
+   exits instantly before `main`, no error output. Fix (`dialog.c`): resolve it
+   **dynamically** (`GetProcAddress`) — never via the import lib — after
+   activating a comctl32 v6 activation context. Build that context from a tiny
+   Common-Controls-6.0.0.0 manifest written to a temp file (deterministic; the
+   "borrow shell32's manifest resource" trick relies on an undocumented
+   resource ID and silently returned a v5 module here). Activate the context
+   again around the call so the dialog is themed. Falls back to `MessageBoxW`
+   if resolution fails. `IFileOpenDialog`/`IFileSaveDialog` (shell COM) and
+   WinRT toasts are already modern without any of this.
+
+10. **Native sidebar/inspector = child-HWND split, not a widget.** macOS uses
+    NSSplitViewController with .sidebar/inspector items hosting host-twin
+    WKWebViews. Windows has no split control, so `platform/windows/sidebar.c`
+    carves the client area into `[sidebar | splitter | content | splitter |
+    inspector]` child HWNDs, each hosting a WebView2 controller. The panes are
+    full host-twins via `windows_webview_create_ext` (own pre-allocated
+    transport slot, host JS identity) — NOT sandboxed panels. The host webview
+    moves into a content child window so the layout owns its bounds; `WM_SIZE`
+    reflows, `WM_MOVE` re-notifies every controller. Splitters are thin
+    `WS_CHILD` windows (SIZEWE cursor) that `SetCapture` on mousedown and
+    resize the pane on drag (clamped to min/max). Collapse/expand hide the pane
+    + its splitter and give the space to content. Control ops
+    (`windows_sidebar_*`/`windows_inspector_*`) are the router entry points;
+    collapse/resize emit `dispatchWindowEvent('win-<host>', …)` into both panes
+    (parity with darwin `zapp_pane_emit`). Relative window/pane URLs
+    (`#route`, `?q`) must be resolved against the app base with `UrlCombineW`
+    (`zapp_resolve_nav_url`) — WebView2 `Navigate` needs an absolute URL, unlike
+    WKWebView's `URLWithString:relativeToURL:`.
+
+## Native-UI follow-ups (next list)
+
+As of 2026-06-14, every macOS/iOS native surface has a Windows implementation
+(window material/vibrancy → Mica/Acrylic + immersive dark caption, modern
+TaskDialog + IFileDialog, Win32 menus/tray, WinRT toasts, dock → taskbar
+badge/bounce/progress/show-hide, `<zapp-webview>` panels, sidebar + inspector
+split panes, popover/flyout, power/deep-links/screen/clipboard/shortcuts).
+Remaining native work, in rough priority:
+
+1. **Custom / extended title bar (Tier 2).** The one big remaining native item
+   and the highest-risk: `DwmExtendFrameIntoClientArea` + `WM_NCCALCSIZE`
+   caption removal, self-drawn min/max/close caption buttons, `WM_NCHITTEST`
+   for drag (`HTCAPTION`) / resize borders / Snap Layouts (`HTMAXBUTTON`).
+   Unlocks content-under-caption, themed caption buttons, and makes
+   `--zapp-window-controls-inset-right` non-zero (currently injected at 0;
+   webview.c metrics block is ready for it). Needs heavy interactive visual
+   iteration (drag/resize/maximize/Snap) — do it deliberately, ideally after a
+   clean regression baseline. The web drag-region machinery
+   (`windows_webview_set_drag_region`/`zapp_is_in_drag_region`) is present but
+   currently inert — wire it via WM_NCHITTEST here.
+2. **Taskbar jump lists** (`ICustomDestinationList`) + **thumbnail toolbar**
+   (`ITaskbarList3::ThumbBarAddButtons`). Windows-only polish; needs a small
+   app-facing config surface (tasks/recent items). No macOS analog.
+3. **Snap Layouts** — mostly comes free once the custom title bar's maximize
+   button reports `HTMAXBUTTON`.
+
+macOS to-do queued from the Windows side:
+- **`backgroundColor` window option**: exists cross-platform (runtime type +
+  `window.zc`), wired on Windows (WebView2 DefaultBackgroundColor). macOS/iOS
+  parse it but no-op — wire to `NSWindow.backgroundColor` /
+  `WKWebView.underPageBackgroundColor`.
+- White-on-resize is inherent WebView2 async-repaint (no "repaint faster"
+  knob); the `backgroundColor` option is the mitigation (gap color, not white).
+
 ## Open questions for the brainstorm (decide these first)
 
 1. **Toolchain:** does `zc` (Zen-C 0.4.4+) actually run on Windows, and

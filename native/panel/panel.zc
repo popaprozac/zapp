@@ -31,6 +31,11 @@ fn panel_route(window_id: int, action: string, args: JsonValue*) -> bool {
                                             const char* url, bool bridge, const char* partition);
             darwin_panel_create(window_id, (const char*)pid, (const char*)url,
                                 has_bridge, (const char*)part);
+            #else
+            extern void windows_panel_create(int32_t window_id, const char* panel_id,
+                                             const char* url, bool bridge, const char* partition);
+            windows_panel_create(window_id, (const char*)pid, (const char*)url,
+                                 has_bridge, (const char*)part);
             #endif
         }
         return true;
@@ -46,6 +51,10 @@ fn panel_route(window_id: int, action: string, args: JsonValue*) -> bool {
             extern void darwin_panel_set_bounds(const char* panel_id, int32_t x, int32_t y,
                                                 int32_t w, int32_t h);
             darwin_panel_set_bounds((const char*)pid, x, y, w, h);
+            #else
+            extern void windows_panel_set_bounds(const char* panel_id, int32_t x, int32_t y,
+                                                 int32_t w, int32_t h);
+            windows_panel_set_bounds((const char*)pid, x, y, w, h);
             #endif
         }
         return true;
@@ -57,6 +66,9 @@ fn panel_route(window_id: int, action: string, args: JsonValue*) -> bool {
             #ifdef __APPLE__
             extern void darwin_panel_load_url(const char* panel_id, const char* url);
             darwin_panel_load_url((const char*)pid, (const char*)url);
+            #else
+            extern void windows_panel_load_url(const char* panel_id, const char* url);
+            windows_panel_load_url((const char*)pid, (const char*)url);
             #endif
         }
         return true;
@@ -68,6 +80,9 @@ fn panel_route(window_id: int, action: string, args: JsonValue*) -> bool {
             #ifdef __APPLE__
             extern void darwin_panel_eval_js(const char* panel_id, const char* js);
             darwin_panel_eval_js((const char*)pid, (const char*)code);
+            #else
+            extern void windows_panel_eval_js(const char* panel_id, const char* js);
+            windows_panel_eval_js((const char*)pid, (const char*)code);
             #endif
         }
         return true;
@@ -81,6 +96,9 @@ fn panel_route(window_id: int, action: string, args: JsonValue*) -> bool {
             #ifdef __APPLE__
             extern void darwin_panel_post_message(const char* panel_id, const char* data_json);
             darwin_panel_post_message((const char*)pid, (const char*)data);
+            #else
+            extern void windows_panel_post_message(const char* panel_id, const char* data_json);
+            windows_panel_post_message((const char*)pid, (const char*)data);
             #endif
         }
         return true;
@@ -91,6 +109,9 @@ fn panel_route(window_id: int, action: string, args: JsonValue*) -> bool {
             #ifdef __APPLE__
             extern void darwin_panel_show(const char* panel_id);
             darwin_panel_show((const char*)pid);
+            #else
+            extern void windows_panel_show(const char* panel_id);
+            windows_panel_show((const char*)pid);
             #endif
         }
         return true;
@@ -101,6 +122,9 @@ fn panel_route(window_id: int, action: string, args: JsonValue*) -> bool {
             #ifdef __APPLE__
             extern void darwin_panel_hide(const char* panel_id);
             darwin_panel_hide((const char*)pid);
+            #else
+            extern void windows_panel_hide(const char* panel_id);
+            windows_panel_hide((const char*)pid);
             #endif
         }
         return true;
@@ -111,6 +135,9 @@ fn panel_route(window_id: int, action: string, args: JsonValue*) -> bool {
             #ifdef __APPLE__
             extern void darwin_panel_reload(const char* panel_id);
             darwin_panel_reload((const char*)pid);
+            #else
+            extern void windows_panel_reload(const char* panel_id);
+            windows_panel_reload((const char*)pid);
             #endif
         }
         return true;
@@ -121,6 +148,9 @@ fn panel_route(window_id: int, action: string, args: JsonValue*) -> bool {
             #ifdef __APPLE__
             extern void darwin_panel_go_back(const char* panel_id);
             darwin_panel_go_back((const char*)pid);
+            #else
+            extern void windows_panel_go_back(const char* panel_id);
+            windows_panel_go_back((const char*)pid);
             #endif
         }
         return true;
@@ -131,6 +161,9 @@ fn panel_route(window_id: int, action: string, args: JsonValue*) -> bool {
             #ifdef __APPLE__
             extern void darwin_panel_go_forward(const char* panel_id);
             darwin_panel_go_forward((const char*)pid);
+            #else
+            extern void windows_panel_go_forward(const char* panel_id);
+            windows_panel_go_forward((const char*)pid);
             #endif
         }
         return true;
@@ -141,6 +174,9 @@ fn panel_route(window_id: int, action: string, args: JsonValue*) -> bool {
             #ifdef __APPLE__
             extern void darwin_panel_destroy(const char* panel_id);
             darwin_panel_destroy((const char*)pid);
+            #else
+            extern void windows_panel_destroy(const char* panel_id);
+            windows_panel_destroy((const char*)pid);
             #endif
         }
         return true;

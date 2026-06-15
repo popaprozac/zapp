@@ -13,6 +13,7 @@
 // WebView2 SDK
 #include "WebView2.h"
 #include <shlobj.h>
+#include <wincrypt.h> // CryptStringToBinaryA (protocol body decode)
 
 #include "webview.h"
 
@@ -100,6 +101,9 @@ static HRESULT zapp_create_environment(
     PCWSTR userDataDir,
     ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler* handler) {
     if (!zapp_webview2_loader_init()) return E_FAIL;
+    // NULL options: the internal loader rejects caller-provided
+    // environment options. Custom schemes are handled per-webview via
+    // WebResourceRequested instead.
     return zapp_CreateEnvInternal(0, 0, userDataDir, NULL, handler);
 }
 
@@ -151,14 +155,64 @@ static char* wchar_to_utf8_wv(const wchar_t* ws) {
 static ICoreWebView2Controller* zapp_controllers[ZAPP_MAX_WINDOWS] = {0};
 static ICoreWebView2* zapp_webviews_wv[ZAPP_MAX_WINDOWS] = {0};
 
+// Per-window: render the web surface with a transparent default background so
+// a DWM system backdrop (Mica/Acrylic, see material.c) shows through where the
+// page background is transparent. Set by windows_window_create before the
+// controller is built; read in ZappCtrl_Invoke.
+static bool zapp_webview_transparent[ZAPP_MAX_WINDOWS] = {0};
+
+void windows_webview_set_transparent(int32_t window_id, bool transparent) {
+    if (window_id < 0 || window_id >= ZAPP_MAX_WINDOWS) return;
+    zapp_webview_transparent[window_id] = transparent;
+}
+
+// App-set default background color (the `backgroundColor` window option) — fills
+// the load/resize gap so it isn't a white flash. Opaque; the page's own CSS
+// background still paints over it. Set before the controller is built.
+static int zapp_webview_bg_set[ZAPP_MAX_WINDOWS] = {0};
+static COREWEBVIEW2_COLOR zapp_webview_bg[ZAPP_MAX_WINDOWS];
+
+void windows_webview_set_bgcolor(int32_t window_id, int r, int g, int b) {
+    if (window_id < 0 || window_id >= ZAPP_MAX_WINDOWS) return;
+    COREWEBVIEW2_COLOR c = { 255, (BYTE)r, (BYTE)g, (BYTE)b }; // A,R,G,B
+    zapp_webview_bg[window_id] = c;
+    zapp_webview_bg_set[window_id] = 1;
+}
+
 // Pending JS eval buffer (before WebView2 is ready)
 #define ZAPP_MAX_PENDING_JS 32
 static char* zapp_pending_js[ZAPP_MAX_WINDOWS][ZAPP_MAX_PENDING_JS] = {{0}};
 static int zapp_pending_js_count[ZAPP_MAX_WINDOWS] = {0};
 
 // --- Eval JS on a window ---
+//
+// Main-thread funnel (WINDOWS_PORTING.md lesson 6): WebView2 is
+// STA/UI-thread-bound — ICoreWebView2_ExecuteScript from a worker
+// thread is a cross-apartment COM call that fails silently, which made
+// every worker→webview surface (postToWebview ping/pong, Events.emit
+// broadcasts, sync results) reach native and then vanish. Off-thread
+// callers heap-package the eval and PostMessage it to a message-only
+// window owned by the main thread; same-thread calls short-circuit.
+// Marshaling BEFORE the pending-JS buffering also makes those arrays
+// main-thread-only (they were racy when workers buffered directly).
 
-void windows_webview_eval_by_id(int32_t window_id, const char* js) {
+#define ZAPP_WM_EVAL (WM_APP + 0x45) // 'E'
+#define ZAPP_WM_TASK (WM_APP + 0x54) // 'T' — generic fn+arg marshal
+
+typedef struct {
+    int32_t window_id;
+    char* js;
+} ZappEvalTask;
+
+typedef struct {
+    void (*fn)(void* arg);
+    void* arg;
+} ZappUiTask;
+
+static DWORD zapp_ui_thread_id = 0;
+static HWND zapp_eval_hwnd = NULL;
+
+static void zapp_eval_on_main(int32_t window_id, const char* js) {
     if (window_id < 0 || window_id >= ZAPP_MAX_WINDOWS) return;
     ICoreWebView2* webview = zapp_webviews_wv[window_id];
     if (!webview) {
@@ -172,6 +226,80 @@ void windows_webview_eval_by_id(int32_t window_id, const char* js) {
     if (wjs) {
         ICoreWebView2_ExecuteScript(webview, wjs, NULL);
         free(wjs);
+    }
+}
+
+static LRESULT CALLBACK zapp_eval_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (msg == ZAPP_WM_EVAL) {
+        ZappEvalTask* task = (ZappEvalTask*) lParam;
+        if (task) {
+            zapp_eval_on_main(task->window_id, task->js);
+            free(task->js);
+            free(task);
+        }
+        return 0;
+    }
+    if (msg == ZAPP_WM_TASK) {
+        ZappUiTask* task = (ZappUiTask*) lParam;
+        if (task) {
+            task->fn(task->arg);
+            free(task);
+        }
+        return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+// Run fn(arg) on the UI thread (immediately when already there).
+// `arg` ownership passes to `fn`. Returns false when the post failed —
+// the caller still owns `arg` in that case.
+bool zapp_post_to_ui_thread(void (*fn)(void* arg), void* arg) {
+    if (!fn) return false;
+    if (zapp_ui_thread_id != 0 && GetCurrentThreadId() == zapp_ui_thread_id) {
+        fn(arg);
+        return true;
+    }
+    ZappUiTask* task = (ZappUiTask*) malloc(sizeof(ZappUiTask));
+    if (!task) return false;
+    task->fn = fn;
+    task->arg = arg;
+    if (!zapp_eval_hwnd || !PostMessageW(zapp_eval_hwnd, ZAPP_WM_TASK, 0, (LPARAM) task)) {
+        free(task);
+        return false;
+    }
+    return true;
+}
+
+// Called from windows_platform_init (main/UI thread, before any worker
+// exists) — records the UI thread and creates the funnel target.
+void zapp_webview_init_eval_funnel(void) {
+    if (zapp_eval_hwnd) return;
+    zapp_ui_thread_id = GetCurrentThreadId();
+    static const wchar_t* cls = L"ZappEvalFunnel";
+    WNDCLASSEXW wc = {0};
+    wc.cbSize = sizeof(wc);
+    wc.lpfnWndProc = zapp_eval_wndproc;
+    wc.hInstance = GetModuleHandleW(NULL);
+    wc.lpszClassName = cls;
+    RegisterClassExW(&wc);
+    zapp_eval_hwnd = CreateWindowExW(0, cls, L"", 0, 0, 0, 0, 0,
+                                     HWND_MESSAGE, NULL, GetModuleHandleW(NULL), NULL);
+}
+
+void windows_webview_eval_by_id(int32_t window_id, const char* js) {
+    if (window_id < 0 || window_id >= ZAPP_MAX_WINDOWS || !js) return;
+    if (zapp_ui_thread_id == 0 || GetCurrentThreadId() == zapp_ui_thread_id) {
+        zapp_eval_on_main(window_id, js);
+        return;
+    }
+    ZappEvalTask* task = (ZappEvalTask*) malloc(sizeof(ZappEvalTask));
+    if (!task) return;
+    task->window_id = window_id;
+    task->js = _strdup(js);
+    if (!task->js) { free(task); return; }
+    if (!zapp_eval_hwnd || !PostMessageW(zapp_eval_hwnd, ZAPP_WM_EVAL, 0, (LPARAM) task)) {
+        free(task->js);
+        free(task);
     }
 }
 
@@ -248,6 +376,32 @@ void windows_open_external(const char* url) {
         ShellExecuteW(NULL, L"open", wurl, NULL, NULL, SW_SHOWNORMAL);
         free(wurl);
     }
+}
+
+// Resolve a possibly-relative window URL ("#route", "?query", "/path") against
+// the app's base URL — parity with darwin's zapp_resolve_url
+// (URLWithString:relativeToURL:). Window.create({url}) and sidebar/inspector
+// pane URLs arrive relative; WebView2's Navigate needs an absolute URL.
+// Returns a wchar_t* the caller frees (NULL on failure).
+extern char* zapp_build_initial_url(void);
+static wchar_t* zapp_resolve_nav_url(const char* url_override) {
+    const char* initial = zapp_build_initial_url();
+    const char* base = (initial && initial[0]) ? initial : "https://zapp.local/index.html";
+    if (!url_override || !url_override[0]) return utf8_to_wchar_wv(base);
+    if (strstr(url_override, "://")) return utf8_to_wchar_wv(url_override); // already absolute
+
+    wchar_t* wbase = utf8_to_wchar_wv(base);
+    wchar_t* wrel = utf8_to_wchar_wv(url_override);
+    wchar_t* out = NULL;
+    if (wbase && wrel) {
+        wchar_t buf[2048];
+        DWORD len = 2048;
+        if (SUCCEEDED(UrlCombineW(wbase, wrel, buf, &len, 0))) out = _wcsdup(buf);
+    }
+    if (!out && wrel) out = _wcsdup(wrel); // fallback: raw (better than nothing)
+    free(wbase);
+    free(wrel);
+    return out;
 }
 
 // --- Resize WebView2 controller ---
@@ -387,15 +541,253 @@ static ICoreWebView2NavigationCompletedEventHandlerVtbl ZappNav_Vtbl = {
 };
 
 // ============================================================
+// Custom protocols (WebResourceRequested + custom-scheme registration)
+//
+// Mirrors darwin's WKURLSchemeHandler path. Chromium blocks unknown
+// schemes before WebResourceRequested fires, so each declared scheme
+// (zapp.config.ts `protocols: [...]`) must be registered at
+// environment-creation via ICoreWebView2EnvironmentOptions4. Then a
+// per-webview WebResourceRequested filter intercepts the request, takes
+// a deferral, fires __protocol:request to the window's JS bridge, and
+// completes when the runtime calls __protocol:respond (base64 body).
+// ============================================================
+
+#include <shlwapi.h> // SHCreateMemStream
+
+extern char* zapp_escape_dup(const char* src);
+extern char* zapp_build_custom_protocols_json(void);
+
+static ICoreWebView2Environment* zapp_webview_environment = NULL;
+
+// --- Pending request table (id → deferral + args), UI-thread only ---
+#define ZAPP_MAX_PROTO_PENDING 64
+typedef struct {
+    int active;
+    char id[16];
+    ICoreWebView2Deferral* deferral;
+    ICoreWebView2WebResourceRequestedEventArgs* args;
+} ZappProtoPending;
+static ZappProtoPending zapp_proto_pending[ZAPP_MAX_PROTO_PENDING] = {0};
+static LONG zapp_proto_counter = 0;
+
+// --- Declared scheme names (for WebResourceRequested filters) ---
+//
+// WebResourceRequested fires for custom-scheme SUBRESOURCE requests
+// (<img src="asset://...">, fetch, CSS url()) without environment-level
+// custom-scheme registration — Chromium delivers the event and lets us
+// respond via deferral. (Top-level navigation to a custom scheme would
+// need ICoreWebView2EnvironmentOptions4 registration, which the
+// self-contained internal loader rejects; webview-internal asset
+// loading — the actual use case, matching macOS — doesn't.)
+#define ZAPP_MAX_SCHEMES 16
+static wchar_t zapp_schemes[ZAPP_MAX_SCHEMES][64];
+static int zapp_scheme_count = 0;
+
+static void zapp_parse_protocol_schemes(void) {
+    static int parsed = 0;
+    if (parsed) return;
+    parsed = 1;
+    const char* json = zapp_build_custom_protocols_json();
+    if (!json || !json[0]) return;
+    const char* p = strchr(json, '[');
+    const char* end = p ? strchr(p, ']') : NULL;
+    while (p && end && p < end && zapp_scheme_count < ZAPP_MAX_SCHEMES) {
+        const char* q = strchr(p, '"');
+        if (!q || q > end) break;
+        q++;
+        char scheme[64];
+        int i = 0;
+        while (*q && *q != '"' && i < 63) scheme[i++] = *q++;
+        scheme[i] = ' ';
+        p = (*q == '"') ? q + 1 : end;
+        if (!scheme[0]) continue;
+        MultiByteToWideChar(CP_UTF8, 0, scheme, -1, zapp_schemes[zapp_scheme_count], 64);
+        zapp_scheme_count++;
+    }
+}
+
+// --- WebResourceRequested handler (per window) ---
+typedef struct {
+    const ICoreWebView2WebResourceRequestedEventHandlerVtbl* lpVtbl;
+    int32_t window_id;
+} ZappResHandler;
+
+static HRESULT STDMETHODCALLTYPE Res_QI(ICoreWebView2WebResourceRequestedEventHandler* This, REFIID riid, void** ppv) {
+    if (IsEqualIID(riid, &IID_IUnknown) || IsEqualIID(riid, &IID_ICoreWebView2WebResourceRequestedEventHandler)) {
+        *ppv = This; return S_OK;
+    }
+    *ppv = NULL; return E_NOINTERFACE;
+}
+static ULONG STDMETHODCALLTYPE Res_AddRef(ICoreWebView2WebResourceRequestedEventHandler* This) { (void)This; return 1; }
+static ULONG STDMETHODCALLTYPE Res_Release(ICoreWebView2WebResourceRequestedEventHandler* This) { (void)This; return 1; }
+
+static HRESULT STDMETHODCALLTYPE Res_Invoke(ICoreWebView2WebResourceRequestedEventHandler* This,
+        ICoreWebView2* sender, ICoreWebView2WebResourceRequestedEventArgs* args) {
+    (void)sender;
+    ZappResHandler* self = (ZappResHandler*)This;
+
+    ICoreWebView2WebResourceRequest* req = NULL;
+    if (FAILED(ICoreWebView2WebResourceRequestedEventArgs_get_Request(args, &req)) || !req) return S_OK;
+    LPWSTR wuri = NULL, wmethod = NULL;
+    ICoreWebView2WebResourceRequest_get_Uri(req, &wuri);
+    ICoreWebView2WebResourceRequest_get_Method(req, &wmethod);
+    char* url = wuri ? wchar_to_utf8_wv(wuri) : NULL;
+    char* method = wmethod ? wchar_to_utf8_wv(wmethod) : NULL;
+    if (wuri) CoTaskMemFree(wuri);
+    if (wmethod) CoTaskMemFree(wmethod);
+    ICoreWebView2WebResourceRequest_Release(req);
+    if (!url) { free(method); return S_OK; }
+
+    // scheme = up to "://"
+    char scheme[64] = "";
+    const char* sep = strstr(url, "://");
+    if (sep && (size_t)(sep - url) < sizeof(scheme)) {
+        memcpy(scheme, url, (size_t)(sep - url));
+        scheme[sep - url] = '\0';
+    }
+
+    // Stash a pending slot + deferral so __protocol:respond can finish.
+    ZappProtoPending* slot = NULL;
+    for (int i = 0; i < ZAPP_MAX_PROTO_PENDING; i++) {
+        if (!zapp_proto_pending[i].active) { slot = &zapp_proto_pending[i]; break; }
+    }
+    if (!slot) { free(url); free(method); return S_OK; } // table full → let WebView2 fail it
+
+    ICoreWebView2Deferral* deferral = NULL;
+    if (FAILED(ICoreWebView2WebResourceRequestedEventArgs_GetDeferral(args, &deferral)) || !deferral) {
+        free(url); free(method); return S_OK;
+    }
+    int n = (int)InterlockedIncrement(&zapp_proto_counter);
+    snprintf(slot->id, sizeof(slot->id), "p%d", n);
+    slot->deferral = deferral;
+    slot->args = args;
+    ICoreWebView2WebResourceRequestedEventArgs_AddRef(args);
+    slot->active = 1;
+
+    // Fire __protocol:request to this window's bridge.
+    char* esc_url = zapp_escape_dup(url);
+    char* esc_scheme = zapp_escape_dup(scheme);
+    char* esc_method = zapp_escape_dup(method ? method : "GET");
+    if (esc_url && esc_scheme && esc_method) {
+        const char* tmpl =
+            "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+            "if(b&&b._onEvent)b._onEvent('__protocol:request',"
+            "'{\"id\":\"%s\",\"scheme\":\"%s\",\"url\":\"%s\",\"method\":\"%s\"}');})();";
+        int needed = snprintf(NULL, 0, tmpl, slot->id, esc_scheme, esc_url, esc_method);
+        if (needed > 0) {
+            char* js = (char*)malloc((size_t)needed + 1);
+            if (js) {
+                snprintf(js, (size_t)needed + 1, tmpl, slot->id, esc_scheme, esc_url, esc_method);
+                windows_webview_eval_by_id(self->window_id, js);
+                free(js);
+            }
+        }
+    }
+    free(esc_url); free(esc_scheme); free(esc_method);
+    free(url); free(method);
+    return S_OK;
+}
+
+static const ICoreWebView2WebResourceRequestedEventHandlerVtbl Res_Vtbl = {
+    Res_QI, Res_AddRef, Res_Release, Res_Invoke,
+};
+static ZappResHandler zapp_res_handlers[ZAPP_MAX_WINDOWS];
+
+// Register a WebResourceRequested filter per declared scheme + the
+// handler. Called from ZappCtrl_Invoke once the webview exists.
+static void zapp_register_protocol_filters(ICoreWebView2* webview, int32_t wid) {
+    zapp_parse_protocol_schemes();
+    if (zapp_scheme_count == 0) return;
+    for (int i = 0; i < zapp_scheme_count; i++) {
+        wchar_t filter[96];
+        _snwprintf(filter, 95, L"%s://*", zapp_schemes[i]);
+        filter[95] = L'\0';
+        ICoreWebView2_AddWebResourceRequestedFilter(webview, filter,
+            COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
+    }
+    zapp_res_handlers[wid].lpVtbl = &Res_Vtbl;
+    zapp_res_handlers[wid].window_id = wid;
+    EventRegistrationToken token;
+    ICoreWebView2_add_WebResourceRequested(webview,
+        (ICoreWebView2WebResourceRequestedEventHandler*)&zapp_res_handlers[wid], &token);
+}
+
+// Called by the router on __protocol:respond { id, body (base64),
+// contentType, status }. Completes the deferred request. UI thread.
+void windows_protocol_respond(const char* request_id, const char* body_base64,
+                              const char* content_type, int32_t status) {
+    if (!request_id) return;
+    ZappProtoPending* slot = NULL;
+    for (int i = 0; i < ZAPP_MAX_PROTO_PENDING; i++) {
+        if (zapp_proto_pending[i].active && strcmp(zapp_proto_pending[i].id, request_id) == 0) {
+            slot = &zapp_proto_pending[i]; break;
+        }
+    }
+    if (!slot || !zapp_webview_environment) return;
+
+    // Decode base64 body.
+    BYTE* bytes = NULL;
+    DWORD blen = 0;
+    if (body_base64 && body_base64[0]) {
+        if (CryptStringToBinaryA(body_base64, 0, CRYPT_STRING_BASE64, NULL, &blen, NULL, NULL) && blen > 0) {
+            bytes = (BYTE*)malloc(blen);
+            if (bytes && !CryptStringToBinaryA(body_base64, 0, CRYPT_STRING_BASE64, bytes, &blen, NULL, NULL)) {
+                free(bytes); bytes = NULL; blen = 0;
+            }
+        }
+    }
+
+    IStream* stream = SHCreateMemStream(bytes ? bytes : (const BYTE*)"", bytes ? blen : 0);
+    free(bytes);
+
+    int code = (status > 0) ? status : 200;
+    const char* mime = (content_type && content_type[0]) ? content_type : "application/octet-stream";
+    char headers_utf8[256];
+    snprintf(headers_utf8, sizeof(headers_utf8), "Content-Type: %s", mime);
+    wchar_t* wheaders = utf8_to_wchar_wv(headers_utf8);
+
+    ICoreWebView2WebResourceResponse* response = NULL;
+    HRESULT hr = ICoreWebView2Environment_CreateWebResourceResponse(
+        zapp_webview_environment, stream, code, (code == 200) ? L"OK" : L"",
+        wheaders ? wheaders : L"Content-Type: application/octet-stream", &response);
+    if (SUCCEEDED(hr) && response) {
+        ICoreWebView2WebResourceRequestedEventArgs_put_Response(slot->args, response);
+        ICoreWebView2WebResourceResponse_Release(response);
+    }
+    ICoreWebView2Deferral_Complete(slot->deferral);
+
+    ICoreWebView2Deferral_Release(slot->deferral);
+    ICoreWebView2WebResourceRequestedEventArgs_Release(slot->args);
+    if (stream) IStream_Release(stream);
+    free(wheaders);
+    slot->active = 0;
+    slot->deferral = NULL;
+    slot->args = NULL;
+}
+
+// Accessor for the shared WebView2 environment (AddRef'd, app-lifetime).
+// Panels (platform/windows/panel.c) reuse it to spin up child controllers
+// so they share the host's user-data store + GPU process. NULL until the
+// first window's environment-completed handler has run.
+ICoreWebView2Environment* zapp_get_webview_environment(void) {
+    return zapp_webview_environment;
+}
+
+// ============================================================
 // 2. Controller completed handler
 // ============================================================
 
 typedef struct {
     ICoreWebView2CreateCoreWebView2ControllerCompletedHandlerVtbl* lpVtbl;
     HWND hwnd;
-    int32_t window_id;
+    int32_t window_id;     // transport slot (where it registers + routes)
     bool inspectable;
     char* url_override;
+    // Sidebar/inspector pane support (defaults: identity_id<0, role 0, no panes).
+    int32_t identity_id;   // JS window identity (win-<id>); <0 → use window_id
+    int pane_role;         // 0 content/host, 1 sidebar, 3 inspector
+    bool has_sidebar;      // window has a sidebar (injected into ALL its panes)
+    bool has_inspector;    // window has an inspector (injected into ALL its panes)
 } ZappControllerHandler;
 
 static HRESULT STDMETHODCALLTYPE ZappCtrl_QueryInterface(
@@ -425,6 +817,27 @@ static HRESULT STDMETHODCALLTYPE ZappCtrl_Invoke(
 
     // Make controller visible
     ICoreWebView2Controller_put_IsVisible(controller, TRUE);
+
+    // Default background color (ICoreWebView2Controller2) — the color WebView2
+    // paints behind/before page content (load + the transient gap during async
+    // resize, which otherwise flashes white against a dark UI). The page's own
+    // opaque CSS background paints over it, so this never overrides the app's
+    // rendered background; it only fills the gap. Transparent (vibrancy/Mica)
+    // takes precedence; otherwise an app-set backgroundColor is applied. Unset
+    // → WebView2's default (white).
+    {
+        ICoreWebView2Controller2* controller2 = NULL;
+        if (SUCCEEDED(ICoreWebView2Controller_QueryInterface(controller,
+                &IID_ICoreWebView2Controller2, (void**)&controller2)) && controller2) {
+            if (zapp_webview_transparent[wid]) {
+                COREWEBVIEW2_COLOR transparent = { 0, 0, 0, 0 }; // A,R,G,B
+                ICoreWebView2Controller2_put_DefaultBackgroundColor(controller2, transparent);
+            } else if (zapp_webview_bg_set[wid]) {
+                ICoreWebView2Controller2_put_DefaultBackgroundColor(controller2, zapp_webview_bg[wid]);
+            }
+            ICoreWebView2Controller2_Release(controller2);
+        }
+    }
 
     // Get WebView2 core
     ICoreWebView2* webview = NULL;
@@ -460,6 +873,9 @@ static HRESULT STDMETHODCALLTYPE ZappCtrl_Invoke(
     ICoreWebView2_add_NavigationCompleted(webview,
         (ICoreWebView2NavigationCompletedEventHandler*)navHandler, &navToken);
 
+    // Custom-protocol interception (asset://, etc.) for this webview.
+    zapp_register_protocol_filters(webview, wid);
+
     // Build bootstrap injection script
     // 1. Config object
     const char* app_name = app_get_bootstrap_name();
@@ -471,9 +887,12 @@ static HRESULT STDMETHODCALLTYPE ZappCtrl_Invoke(
     // 2. Service manifest
     const char* manifest = service_get_manifest_json();
 
-    // 3. Window/owner IDs
+    // 3. Window/owner IDs. A sidebar/inspector pane registers + routes at its
+    // own transport slot (wid) but presents the HOST's identity to JS, so
+    // Window.current() and window-event targeting resolve to the host window.
+    int32_t ident = (self->identity_id >= 0) ? self->identity_id : wid;
     char window_id_str[32];
-    snprintf(window_id_str, sizeof(window_id_str), "win-%d", wid);
+    snprintf(window_id_str, sizeof(window_id_str), "win-%d", ident);
 
     // theme: seed the current light/dark value so App.getTheme() is
     // correct synchronously on first call — without it, a dark-mode
@@ -482,16 +901,26 @@ static HRESULT STDMETHODCALLTYPE ZappCtrl_Invoke(
     extern const char* windows_get_theme(void);
     const char* theme = windows_get_theme();
 
-    // Build config JS
+    // powerState: seed the current AC/battery state so App.getPowerState()
+    // is correct synchronously on first call (same as darwin's seed).
+    extern const char* windows_get_power_state(void);
+    const char* power_state = windows_get_power_state();
+
+    // Build config JS. The runtime reads this from
+    // Symbol.for('zapp.bootstrapConfig') (App.getTheme / getPowerState /
+    // etc.) — the earlier globalThis.__zappConfig was a dead global
+    // nothing consumed, so the initial theme/maxWorkers/powerState seed
+    // never reached JS on Windows (theme only updated via change events).
     static char config_js[4096];
     snprintf(config_js, sizeof(config_js),
-        "globalThis.__zappConfig={"
+        "globalThis[Symbol.for('zapp.bootstrapConfig')]={"
         "name:'%s',"
         "webContentInspectable:%s,"
         "applicationShouldTerminateAfterLastWindowClosed:%s,"
         "maxWorkers:%d,"
         "csp:'%s',"
-        "theme:'%s'"
+        "theme:'%s',"
+        "powerState:%s"
         "};"
         "globalThis.__zappServiceManifest=%s;"
         "globalThis[Symbol.for('zapp.owner')]='%s';"
@@ -502,6 +931,7 @@ static HRESULT STDMETHODCALLTYPE ZappCtrl_Invoke(
         max_workers,
         csp ? csp : "",
         theme ? theme : "light",
+        power_state ? power_state : "null",
         manifest ? manifest : "[]",
         window_id_str,
         window_id_str);
@@ -511,6 +941,69 @@ static HRESULT STDMETHODCALLTYPE ZappCtrl_Invoke(
     if (wconfig) {
         ICoreWebView2_AddScriptToExecuteOnDocumentCreated(webview, wconfig, NULL);
         free(wconfig);
+    }
+
+    // Sidebar/inspector pane markers (parity with darwin create_ext). hasSidebar/
+    // hasInspector go into ALL panes of the window so Window.current() exposes the
+    // handles; isSidebar/isInspector mark the specific pane. document-start so
+    // they're present before the page's own scripts run.
+    if (self->has_sidebar || self->has_inspector || self->pane_role != 0) {
+        char pane_js[320];
+        int pj = 0;
+        if (self->has_sidebar)
+            pj += snprintf(pane_js + pj, sizeof(pane_js) - pj, "globalThis[Symbol.for('zapp.hasSidebar')]=true;");
+        if (self->has_inspector)
+            pj += snprintf(pane_js + pj, sizeof(pane_js) - pj, "globalThis[Symbol.for('zapp.hasInspector')]=true;");
+        if (self->pane_role == 1)
+            pj += snprintf(pane_js + pj, sizeof(pane_js) - pj, "globalThis[Symbol.for('zapp.isSidebar')]=true;");
+        if (self->pane_role == 3)
+            pj += snprintf(pane_js + pj, sizeof(pane_js) - pj, "globalThis[Symbol.for('zapp.isInspector')]=true;");
+        if (pj > 0) {
+            wchar_t* wpane = utf8_to_wchar_wv(pane_js);
+            if (wpane) { ICoreWebView2_AddScriptToExecuteOnDocumentCreated(webview, wpane, NULL); free(wpane); }
+        }
+    }
+
+    // Window-metrics CSS vars (parity with darwin/webview.m's injection)
+    // — apps can rely on these existing cross-platform.
+    //
+    // On standard Windows windows the webview IS the client area, BELOW
+    // the OS title bar, so content never underlaps the chrome: every
+    // inset is 0 (unlike macOS FullSizeContentView, where content slides
+    // under the traffic lights and inset-left is non-zero). The
+    // Windows-specific --zapp-window-controls-inset-right (caption
+    // buttons are on the RIGHT) only becomes non-zero with an
+    // extended-frame title bar (DwmExtendFrameIntoClientArea); when that
+    // lands it sets the value below to the real caption-button cluster
+    // width (~138px at 96dpi, DPI-scaled). data-zapp-titlebar-style is
+    // useful today for style-conditional CSS.
+    {
+        LONG_PTR wstyle = GetWindowLongPtrW(self->hwnd, GWL_STYLE);
+        int borderless = (wstyle & WS_CAPTION) != WS_CAPTION;
+        // Reserved for the extended-frame feature; 0 until then.
+        int controls_inset_right = 0;
+        const char* titlebar_style = borderless ? "hidden" : "default";
+        // Defer to DOM-ready: AddScriptToExecuteOnDocumentCreated runs
+        // BEFORE the parser builds the real <html>, so vars set on the
+        // transient documentElement at document-create are discarded
+        // (WebKit's atDocumentStart runs later, after it exists). Apply
+        // on DOMContentLoaded (or immediately if already past loading).
+        char metrics_js[768];
+        snprintf(metrics_js, sizeof(metrics_js),
+            "(function(){var apply=function(){try{var r=document.documentElement;if(r){"
+            "r.style.setProperty('--zapp-titlebar-height','0px');"
+            "r.style.setProperty('--zapp-toolbar-height','0px');"
+            "r.style.setProperty('--zapp-window-controls-inset-left','0px');"
+            "r.style.setProperty('--zapp-window-controls-inset-right','%dpx');"
+            "r.setAttribute('data-zapp-titlebar-style','%s');}}catch(e){}};"
+            "if(document.readyState!=='loading')apply();"
+            "else document.addEventListener('DOMContentLoaded',apply);})();",
+            controls_inset_right, titlebar_style);
+        wchar_t* wmetrics = utf8_to_wchar_wv(metrics_js);
+        if (wmetrics) {
+            ICoreWebView2_AddScriptToExecuteOnDocumentCreated(webview, wmetrics, NULL);
+            free(wmetrics);
+        }
     }
 
     // Inject bootstrap (bridge + event system)
@@ -551,17 +1044,9 @@ static HRESULT STDMETHODCALLTYPE ZappCtrl_Invoke(
     GetClientRect(self->hwnd, &bounds);
     ICoreWebView2Controller_put_Bounds(controller, bounds);
 
-    // Navigate to initial URL
-    const char* initial_url = zapp_build_initial_url();
-    const char* nav_url = NULL;
-    if (self->url_override && self->url_override[0]) {
-        nav_url = self->url_override;
-    } else if (initial_url && initial_url[0]) {
-        nav_url = initial_url;
-    } else {
-        nav_url = "https://zapp.local/index.html";
-    }
-    wchar_t* wnav = utf8_to_wchar_wv(nav_url);
+    // Navigate to the (relative-or-absolute) override URL resolved against the
+    // app base, or the base itself when there's no override.
+    wchar_t* wnav = zapp_resolve_nav_url(self->url_override);
     if (wnav) {
         ICoreWebView2_Navigate(webview, wnav);
         free(wnav);
@@ -598,6 +1083,10 @@ typedef struct {
     int32_t window_id;
     bool inspectable;
     char* url_override;
+    int32_t identity_id;
+    int pane_role;
+    bool has_sidebar;
+    bool has_inspector;
 } ZappEnvHandler;
 
 static HRESULT STDMETHODCALLTYPE ZappEnv_QueryInterface(
@@ -622,6 +1111,13 @@ static HRESULT STDMETHODCALLTYPE ZappEnv_Invoke(
         return S_OK;
     }
 
+    // Capture the environment for CreateWebResourceResponse (custom
+    // protocol responses). One AddRef'd reference for the app lifetime.
+    if (!zapp_webview_environment) {
+        zapp_webview_environment = env;
+        ICoreWebView2Environment_AddRef(env);
+    }
+
     int32_t wid = self->window_id;
 
     // Set up controller handler
@@ -630,6 +1126,10 @@ static HRESULT STDMETHODCALLTYPE ZappEnv_Invoke(
     zapp_ctrl_handlers[wid].window_id = wid;
     zapp_ctrl_handlers[wid].inspectable = self->inspectable;
     zapp_ctrl_handlers[wid].url_override = self->url_override;
+    zapp_ctrl_handlers[wid].identity_id = self->identity_id;
+    zapp_ctrl_handlers[wid].pane_role = self->pane_role;
+    zapp_ctrl_handlers[wid].has_sidebar = self->has_sidebar;
+    zapp_ctrl_handlers[wid].has_inspector = self->has_inspector;
     self->url_override = NULL; // Transfer ownership
 
     ICoreWebView2Environment_CreateCoreWebView2Controller(
@@ -652,49 +1152,63 @@ static ZappEnvHandler zapp_env_handlers[ZAPP_MAX_WINDOWS];
 // Main entry: create WebView2 in a window
 // ============================================================
 
-void windows_webview_create(void* hwnd_ptr, bool inspectable, const char* url_override) {
+// Generalized create: mount a webview into `hwnd` (the main window OR a pane's
+// child HWND) at transport slot `slot`, with JS identity `identity_id` (<0 →
+// slot), optional transparent background, and pane role/flags. The host path
+// (windows_webview_create) is a thin wrapper; sidebar/inspector panes call this
+// directly with their own slot + the host's identity. Mirrors darwin create_ext.
+void windows_webview_create_ext(void* hwnd_ptr, bool inspectable, const char* url_override,
+                                int32_t slot, int32_t identity_id, bool transparent,
+                                int pane_role, bool has_sidebar, bool has_inspector) {
     HWND hwnd = (HWND)hwnd_ptr;
+    if (slot < 0 || slot >= ZAPP_MAX_WINDOWS) return;
 
-    // Find the window ID for this HWND
-    int32_t wid = -1;
-    for (int i = 0; i < ZAPP_MAX_WINDOWS; i++) {
-        if (zapp_get_hwnd(i) == hwnd) {
-            wid = i;
-            break;
-        }
-    }
-    if (wid < 0) {
-        // Not registered yet — will be registered after window_create returns
-        // Use the next available slot
-        for (int i = 0; i < ZAPP_MAX_WINDOWS; i++) {
-            if (zapp_get_hwnd(i) == NULL) {
-                wid = i;
-                break;
-            }
-        }
-    }
-    if (wid < 0) return;
+    zapp_webview_transparent[slot] = transparent;
 
-    // Set up environment handler
-    zapp_env_handlers[wid].lpVtbl = &ZappEnv_Vtbl;
-    zapp_env_handlers[wid].hwnd = hwnd;
-    zapp_env_handlers[wid].window_id = wid;
-    zapp_env_handlers[wid].inspectable = inspectable;
-    zapp_env_handlers[wid].url_override = url_override ? _strdup(url_override) : NULL;
+    zapp_env_handlers[slot].lpVtbl = &ZappEnv_Vtbl;
+    zapp_env_handlers[slot].hwnd = hwnd;
+    zapp_env_handlers[slot].window_id = slot;
+    zapp_env_handlers[slot].inspectable = inspectable;
+    zapp_env_handlers[slot].url_override = url_override ? _strdup(url_override) : NULL;
+    zapp_env_handlers[slot].identity_id = identity_id;
+    zapp_env_handlers[slot].pane_role = pane_role;
+    zapp_env_handlers[slot].has_sidebar = has_sidebar;
+    zapp_env_handlers[slot].has_inspector = has_inspector;
 
-    // User data directory for WebView2 — use app-specific path
+    // User data directory for WebView2 — app-specific, shared across windows.
     wchar_t udf[MAX_PATH];
-    // Use LocalAppData for persistent user data dir
     if (SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, udf))) {
         wcscat_s(udf, MAX_PATH, L"\\zapp\\webview2");
     } else {
         GetTempPathW(MAX_PATH, udf);
         wcscat_s(udf, MAX_PATH, L"zapp_webview2");
     }
-    // Ensure directory exists
     CreateDirectoryW(udf, NULL);
 
-    // Use self-contained loader (no WebView2Loader.dll needed)
+    // Self-contained loader (no WebView2Loader.dll). Custom protocols don't need
+    // environment options — WebResourceRequested intercepts subresources.
     zapp_create_environment(udf,
-        (ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler*)&zapp_env_handlers[wid]);
+        (ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler*)&zapp_env_handlers[slot]);
+}
+
+void windows_webview_create(void* hwnd_ptr, bool inspectable, const char* url_override) {
+    HWND hwnd = (HWND)hwnd_ptr;
+
+    // Find the window ID for this HWND (registered by window_create, or the
+    // next free slot if not yet registered).
+    int32_t wid = -1;
+    for (int i = 0; i < ZAPP_MAX_WINDOWS; i++) {
+        if (zapp_get_hwnd(i) == hwnd) { wid = i; break; }
+    }
+    if (wid < 0) {
+        for (int i = 0; i < ZAPP_MAX_WINDOWS; i++) {
+            if (zapp_get_hwnd(i) == NULL) { wid = i; break; }
+        }
+    }
+    if (wid < 0) return;
+
+    // Host path: self identity, no panes; transparent was set by window.c
+    // (vibrancy/Mica) into the per-slot flag before this call.
+    windows_webview_create_ext(hwnd_ptr, inspectable, url_override, wid, -1,
+                               zapp_webview_transparent[wid], 0, false, false);
 }

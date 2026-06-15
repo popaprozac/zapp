@@ -120,6 +120,12 @@ export function getPlatformSources(nativeDir: string, target: BuildTarget = dete
       path.join(windowsDir, "shell.c"),
       path.join(windowsDir, "tray.c"),
       path.join(windowsDir, "dock.c"),
+      path.join(windowsDir, "deeplink.c"),
+      path.join(windowsDir, "power.c"),
+      path.join(windowsDir, "panel.c"),
+      path.join(windowsDir, "material.c"),
+      path.join(windowsDir, "sidebar.c"),
+      path.join(windowsDir, "popover.c"),
     ];
     return sources.filter(f => existsSync(f));
   }

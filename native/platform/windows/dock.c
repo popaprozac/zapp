@@ -1,8 +1,8 @@
 // Windows "dock" — taskbar analogues for the macOS dock API.
 // Badge → ITaskbarList3::SetOverlayIcon with a GDI-drawn red badge
 // (the wails v3 dock_windows.go approach); bounce → FlashWindowEx;
-// custom window icon → WM_SETICON from the shared WIC loader.
-// show_icon/hide_icon have no taskbar-button analogue and no-op.
+// custom window icon → WM_SETICON from the shared WIC loader;
+// show/hide_icon → ITaskbarList AddTab/DeleteTab (toggle the taskbar button).
 
 #define WIN32_LEAN_AND_MEAN
 #ifndef COBJMACROS
@@ -169,6 +169,38 @@ void windows_dock_bounce(int bounce_type) {
     }
 }
 
+// Taskbar progress bar (no macOS dock analogue beyond a custom tile view —
+// darwin no-ops for now). permille is 0..1000; <0 clears. mode: 0 normal,
+// 1 indeterminate, 2 error, 3 paused, 4 none. Applied to the first/primary
+// window's taskbar button (like bounce) — the app's progress is conceptually
+// global, and Windows progress is per-taskbar-button.
+void windows_dock_set_progress(int permille, int mode) {
+    ITaskbarList3* tbl = dock_taskbar();
+    if (!tbl) return;
+
+    TBPFLAG flag;
+    switch (mode) {
+        case 1:  flag = TBPF_INDETERMINATE; break;
+        case 2:  flag = TBPF_ERROR;         break;
+        case 3:  flag = TBPF_PAUSED;        break;
+        case 4:  flag = TBPF_NOPROGRESS;    break;
+        default: flag = TBPF_NORMAL;        break;
+    }
+    if (permille < 0) flag = TBPF_NOPROGRESS;
+
+    for (int i = 0; i < ZAPP_DOCK_MAX_WINDOWS; i++) {
+        HWND hwnd = (HWND)windows_window_get_webview(i);
+        if (!hwnd || !IsWindow(hwnd)) continue;
+        ITaskbarList3_SetProgressState(tbl, hwnd, flag);
+        // A determinate state also needs a value; indeterminate/none don't.
+        if (flag == TBPF_NORMAL || flag == TBPF_ERROR || flag == TBPF_PAUSED) {
+            ULONGLONG v = (ULONGLONG)(permille < 0 ? 0 : (permille > 1000 ? 1000 : permille));
+            ITaskbarList3_SetProgressValue(tbl, hwnd, v, 1000);
+        }
+        break; // first window's taskbar button is the app's
+    }
+}
+
 void windows_dock_set_icon(const char* path) {
     // ("small" is a macro in the Windows headers — hence the names.)
     HICON icon_big = windows_load_icon_spec(path, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON));
@@ -200,5 +232,25 @@ void windows_dock_reset_icon(void) {
     }
 }
 
-void windows_dock_show_icon(void) {} // no taskbar-button analogue
-void windows_dock_hide_icon(void) {}
+// Show/hide the taskbar button — the closest analogue to macOS dock
+// show/hide. ITaskbarList::DeleteTab removes a window's button; AddTab
+// restores it. Applied to every window so the app's taskbar presence
+// toggles as a whole. (The window itself stays open/visible — only its
+// taskbar button is affected.)
+void windows_dock_show_icon(void) {
+    ITaskbarList3* tbl = dock_taskbar();
+    if (!tbl) return;
+    for (int i = 0; i < ZAPP_DOCK_MAX_WINDOWS; i++) {
+        HWND hwnd = (HWND)windows_window_get_webview(i);
+        if (hwnd && IsWindow(hwnd)) ITaskbarList3_AddTab(tbl, hwnd);
+    }
+}
+
+void windows_dock_hide_icon(void) {
+    ITaskbarList3* tbl = dock_taskbar();
+    if (!tbl) return;
+    for (int i = 0; i < ZAPP_DOCK_MAX_WINDOWS; i++) {
+        HWND hwnd = (HWND)windows_window_get_webview(i);
+        if (hwnd && IsWindow(hwnd)) ITaskbarList3_DeleteTab(tbl, hwnd);
+    }
+}

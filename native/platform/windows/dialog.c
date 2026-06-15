@@ -6,6 +6,7 @@
 #include <windows.h>
 #include <shobjidl.h>
 #include <shlwapi.h>
+#include <commctrl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -257,6 +258,173 @@ const char* windows_dialog_save_file(const char* options_json) {
     return dialog_result;
 }
 
+// --- Message Dialog (modern TaskDialog) ---
+//
+// TaskDialogIndirect renders the current Win11 dialog (vs. MessageBox's legacy
+// box) AND shows the real custom button labels MessageBox can't. It needs the
+// comctl32 v6 activation context to be themed — we have no app manifest, so we
+// borrow shell32's embedded manifest (resource 124) as an activation context
+// for the duration of the call. Falls back to MessageBoxW if TaskDialog fails.
+
+// comctl6 activation context, created once from a temp manifest file declaring
+// the Common-Controls 6.0.0.0 dependency. (A temp file is deterministic; the
+// "borrow shell32's manifest resource" trick depends on an undocumented
+// resource ID.) Without this, TaskDialog loads comctl32 v5 (unthemed / no
+// TaskDialogIndirect export).
+static HANDLE g_comctl6_ctx = NULL;
+static int    g_comctl6_init = 0;
+static void dlg_ensure_comctl6(void) {
+    if (g_comctl6_init) return;
+    g_comctl6_init = 1;
+
+    static const char* manifest =
+        "<?xml version='1.0' encoding='UTF-8' standalone='yes'?>\r\n"
+        "<assembly xmlns='urn:schemas-microsoft-com:asm.v1' manifestVersion='1.0'>\r\n"
+        "  <dependency><dependentAssembly><assemblyIdentity\r\n"
+        "    type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0'\r\n"
+        "    processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'/>\r\n"
+        "  </dependentAssembly></dependency>\r\n"
+        "</assembly>\r\n";
+
+    wchar_t path[MAX_PATH];
+    DWORD n = GetTempPathW(MAX_PATH, path);
+    if (n == 0 || n > MAX_PATH) return;
+    wcsncat_s(path, MAX_PATH, L"zapp_comctl6.manifest", _TRUNCATE);
+
+    HANDLE f = CreateFileW(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+                           FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f == INVALID_HANDLE_VALUE) return;
+    DWORD written = 0;
+    WriteFile(f, manifest, (DWORD)strlen(manifest), &written, NULL);
+    CloseHandle(f);
+
+    ACTCTXW ac = { sizeof(ac) };
+    ac.lpSource = path;
+    g_comctl6_ctx = CreateActCtxW(&ac);
+}
+
+// Resolve TaskDialogIndirect DYNAMICALLY — never via the import lib. A static
+// import binds at EXE-load to comctl32 v5.82 (the unmanifested default), which
+// doesn't export TaskDialogIndirect, so the whole app fails to start. Loading
+// comctl32 under the active v6 context instead maps v6 (which exports it).
+typedef HRESULT (WINAPI *TaskDialogIndirect_t)(const TASKDIALOGCONFIG*, int*, int*, BOOL*);
+static TaskDialogIndirect_t g_pTaskDialog = NULL;
+static int g_taskdialog_init = 0;
+static TaskDialogIndirect_t dlg_resolve_taskdialog(void) {
+    if (g_taskdialog_init) return g_pTaskDialog;
+    g_taskdialog_init = 1;
+    dlg_ensure_comctl6();
+    ULONG_PTR cookie = 0;
+    BOOL act = (g_comctl6_ctx && g_comctl6_ctx != INVALID_HANDLE_VALUE)
+        ? ActivateActCtx(g_comctl6_ctx, &cookie) : FALSE;
+    HMODULE comctl = LoadLibraryW(L"comctl32.dll"); // v6 under the active context
+    if (comctl) g_pTaskDialog = (TaskDialogIndirect_t)(void*)GetProcAddress(comctl, "TaskDialogIndirect");
+    if (act) DeactivateActCtx(0, cookie);
+    return g_pTaskDialog; // comctl intentionally kept loaded (process lifetime)
+}
+
+// Extract string elements of a JSON "buttons":[...] array into labels[][256].
+// Crude (matches this file's other JSON helpers) — labels are simple strings.
+static int dlg_parse_buttons(const char* json, char labels[][256], int max) {
+    const char* p = strstr(json, "\"buttons\"");
+    if (!p) return 0;
+    p = strchr(p, '[');
+    if (!p) return 0;
+    p++;
+    int count = 0;
+    while (*p && *p != ']' && count < max) {
+        const char* q = strchr(p, '"');
+        const char* close = strchr(p, ']');
+        if (!q || (close && close < q)) break; // no more strings before ]
+        q++;
+        int i = 0;
+        while (*q && *q != '"' && i < 255) {
+            if (*q == '\\' && q[1]) q++; // minimal unescape
+            labels[count][i++] = *q++;
+        }
+        labels[count][i] = '\0';
+        count++;
+        p = (*q == '"') ? q + 1 : q;
+    }
+    return count;
+}
+
+// Show a modern TaskDialog. labels[0..count-1] are button captions (count 0 →
+// a single OK). Returns the 0-based index of the clicked button (labels[0] is
+// the default, matching macOS NSAlert). X/ESC maps to a "Cancel"-labelled
+// button if present, else 0. style: 0 info, 1 warning, 2 critical.
+static int dlg_task_dialog(const char* title, const char* message, int style,
+                           char labels[][256], int count) {
+    wchar_t* wtitle = (title && title[0]) ? dlg_utf8_to_wchar(title) : NULL;
+    wchar_t* wmsg   = dlg_utf8_to_wchar(message && message[0] ? message : "");
+
+    if (count > 8) count = 8;
+    TASKDIALOG_BUTTON tbuttons[8];
+    wchar_t* wlabels[8] = {0};
+    int cancel_idx = -1;
+    for (int i = 0; i < count; i++) {
+        wlabels[i] = dlg_utf8_to_wchar(labels[i]);
+        tbuttons[i].nButtonID = 100 + i;
+        tbuttons[i].pszButtonText = wlabels[i] ? wlabels[i] : L"";
+        if (cancel_idx < 0 && _stricmp(labels[i], "cancel") == 0) cancel_idx = i;
+    }
+
+    TASKDIALOGCONFIG cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.cbSize = sizeof(cfg);
+    cfg.hwndParent = GetActiveWindow();
+    cfg.dwFlags = TDF_POSITION_RELATIVE_TO_WINDOW;
+    // Allow X/ESC only when there's a cancel target (or the OK-only case);
+    // otherwise the user must choose a button (matches NSAlert with no Cancel).
+    if (cancel_idx >= 0 || count == 0) cfg.dwFlags |= TDF_ALLOW_DIALOG_CANCELLATION;
+    cfg.pszWindowTitle = wtitle; // NULL → exe name in the caption
+    cfg.pszMainInstruction = wmsg ? wmsg : L"";
+    cfg.pszMainIcon = (style == 1) ? TD_WARNING_ICON
+                    : (style == 2) ? TD_ERROR_ICON
+                    : TD_INFORMATION_ICON;
+    if (count > 0) {
+        cfg.cButtons = (UINT)count;
+        cfg.pButtons = tbuttons;
+        cfg.nDefaultButton = 100; // labels[0]
+    } else {
+        cfg.dwCommonButtons = TDCBF_OK_BUTTON;
+    }
+
+    int idx = 0, clicked = 0;
+    TaskDialogIndirect_t pTaskDialog = dlg_resolve_taskdialog();
+    HRESULT hr = E_NOTIMPL;
+    if (pTaskDialog) {
+        // Activate the v6 context around the call so the dialog is themed.
+        ULONG_PTR cookie = 0;
+        BOOL activated = (g_comctl6_ctx && g_comctl6_ctx != INVALID_HANDLE_VALUE)
+            ? ActivateActCtx(g_comctl6_ctx, &cookie) : FALSE;
+        hr = pTaskDialog(&cfg, &clicked, NULL, NULL);
+        if (activated) DeactivateActCtx(0, cookie);
+    }
+
+    if (SUCCEEDED(hr)) {
+        if (clicked >= 100 && clicked < 100 + count) idx = clicked - 100;
+        else if (clicked == IDCANCEL) idx = (cancel_idx >= 0) ? cancel_idx : 0;
+        else idx = 0; // IDOK (no-buttons case)
+    } else {
+        // Fallback: classic MessageBox.
+        UINT mt = (style == 1) ? MB_ICONWARNING : (style == 2) ? MB_ICONERROR : MB_ICONINFORMATION;
+        if (count >= 3) mt |= MB_YESNOCANCEL; else if (count == 2) mt |= MB_YESNO; else mt |= MB_OK;
+        int r = MessageBoxW(NULL, wmsg ? wmsg : L"", wtitle ? wtitle : L"", mt);
+        switch (r) {
+            case IDOK: case IDYES: idx = 0; break;
+            case IDNO: idx = 1; break;
+            case IDCANCEL: idx = (cancel_idx >= 0) ? cancel_idx : 2; break;
+            default: idx = 0;
+        }
+    }
+
+    for (int i = 0; i < count; i++) free(wlabels[i]);
+    free(wtitle);
+    free(wmsg);
+    return idx;
+}
+
 // --- Message Dialog ---
 
 const char* windows_dialog_message(const char* options_json) {
@@ -267,39 +435,15 @@ const char* windows_dialog_message(const char* options_json) {
 
     char kind_buf[32] = {0};
     json_get_string(options_json, "kind", kind_buf, sizeof(kind_buf));
+    int style = (strcmp(kind_buf, "warning") == 0) ? 1
+              : (strcmp(kind_buf, "critical") == 0) ? 2 : 0;
 
-    UINT type = MB_OK;
-    if (strcmp(kind_buf, "warning") == 0) type |= MB_ICONWARNING;
-    else if (strcmp(kind_buf, "critical") == 0) type |= MB_ICONERROR;
-    else type |= MB_ICONINFORMATION;
+    // Real custom button labels (TaskDialog shows them verbatim).
+    char labels[8][256];
+    int count = dlg_parse_buttons(options_json, labels, 8);
 
-    // Check for custom buttons — if present, use Yes/No/Cancel style
-    // (MessageBox is limited, but good enough for most cases)
-    const char* btns = strstr(options_json, "\"buttons\":");
-    if (btns) {
-        // Count buttons
-        int count = 0;
-        const char* p = btns;
-        while (*p) { if (*p == '"') count++; p++; }
-        count = (count - 2) / 2; // rough estimate: "buttons":["a","b"]
-        if (count >= 3) type = (type & 0xF0) | MB_YESNOCANCEL;
-        else if (count == 2) type = (type & 0xF0) | MB_YESNO;
-    }
-
-    wchar_t* wmsg = dlg_utf8_to_wchar(message_buf[0] ? message_buf : "Message");
-    wchar_t* wtitle = dlg_utf8_to_wchar(title_buf[0] ? title_buf : "");
-
-    int result = MessageBoxW(NULL, wmsg ? wmsg : L"", wtitle ? wtitle : L"", type);
-    if (wmsg) free(wmsg);
-    if (wtitle) free(wtitle);
-
-    // Map MessageBox return to 0-based button index
-    int button = 0;
-    switch (result) {
-        case IDOK: case IDYES: button = 0; break;
-        case IDNO: button = 1; break;
-        case IDCANCEL: button = 2; break;
-    }
+    int button = dlg_task_dialog(title_buf, message_buf[0] ? message_buf : "Message",
+                                 style, labels, count);
 
     snprintf(dialog_result, sizeof(dialog_result), "{\"button\":%d}", button);
     return dialog_result;
@@ -400,41 +544,16 @@ const char* windows_dialog_save_file_typed(const char* title, const char* defaul
 }
 
 int windows_dialog_message_typed(const char* message, const char* title, int style) {
-    UINT type = MB_OK;
-    if (style == 1) type |= MB_ICONWARNING;
-    else if (style == 2) type |= MB_ICONERROR;
-    else type |= MB_ICONINFORMATION;
-
-    wchar_t* wmsg = dlg_utf8_to_wchar(message);
-    wchar_t* wtitle = dlg_utf8_to_wchar(title);
-    int result = MessageBoxW(NULL, wmsg ? wmsg : L"", wtitle ? wtitle : L"", type);
-    if (wmsg) free(wmsg);
-    if (wtitle) free(wtitle);
-    return (result == IDOK) ? 0 : result;
+    return dlg_task_dialog(title, message, style, NULL, 0);
 }
 
 int windows_dialog_message_buttons_typed(const char* message, const char* title, int style,
                                          const char* btn1, const char* btn2, const char* btn3) {
-    // MessageBox doesn't support custom button labels — use standard mapping
-    UINT type = 0;
-    if (style == 1) type |= MB_ICONWARNING;
-    else if (style == 2) type |= MB_ICONERROR;
-    else type |= MB_ICONINFORMATION;
-
-    if (btn3 && btn3[0]) type |= MB_YESNOCANCEL;
-    else if (btn2 && btn2[0]) type |= MB_YESNO;
-    else type |= MB_OK;
-
-    wchar_t* wmsg = dlg_utf8_to_wchar(message);
-    wchar_t* wtitle = dlg_utf8_to_wchar(title);
-    int result = MessageBoxW(NULL, wmsg ? wmsg : L"", wtitle ? wtitle : L"", type);
-    if (wmsg) free(wmsg);
-    if (wtitle) free(wtitle);
-
-    switch (result) {
-        case IDOK: case IDYES: return 0;
-        case IDNO: return 1;
-        case IDCANCEL: return 2;
-        default: return 0;
-    }
+    // Real custom button labels, unlike MessageBox's fixed Yes/No/Cancel.
+    char labels[8][256];
+    int count = 0;
+    if (btn1 && btn1[0]) { snprintf(labels[count++], 256, "%s", btn1); }
+    if (btn2 && btn2[0]) { snprintf(labels[count++], 256, "%s", btn2); }
+    if (btn3 && btn3[0]) { snprintf(labels[count++], 256, "%s", btn3); }
+    return dlg_task_dialog(title, message, style, labels, count);
 }

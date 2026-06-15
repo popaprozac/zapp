@@ -193,9 +193,14 @@ LRESULT CALLBACK zapp_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             int w = client.right - client.left;
             int h = client.bottom - client.top;
 
-            // Resize WebView2 controller bounds
+            // Resize WebView2 controller bounds. Windows with native panes
+            // reflow the whole split; otherwise the single host webview fills
+            // the client area.
+            extern int windows_panes_layout(int32_t host_slot);
             extern void windows_webview_resize(int32_t window_id, int w, int h);
-            windows_webview_resize(wid, w, h);
+            if (!windows_panes_layout(wid)) {
+                windows_webview_resize(wid, w, h);
+            }
 
             WORD sizeType = LOWORD(wParam);
             if (sizeType == SIZE_MINIMIZED) {
@@ -220,7 +225,9 @@ LRESULT CALLBACK zapp_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         case WM_MOVE: {
             // Notify WebView2 controller of position change
             extern void windows_webview_notify_position(int32_t window_id);
+            extern void windows_panes_notify_move(int32_t host_slot);
             windows_webview_notify_position(wid);
+            windows_panes_notify_move(wid); // no-op when no panes
 
             RECT rc;
             GetWindowRect(hwnd, &rc);
@@ -273,6 +280,9 @@ LRESULT CALLBACK zapp_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                     SetForegroundWindow(owner);
                 }
             }
+            // Tear down native panes (child windows) if any.
+            extern void windows_panes_destroy(int32_t host_slot);
+            windows_panes_destroy(wid);
             // Clear dispatch table entry
             if (wid >= 0 && wid < ZAPP_MAX_WINDOWS) {
                 zapp_hwnds[wid] = NULL;
@@ -371,6 +381,32 @@ void* windows_window_create(WindowOptions* opts) {
         windows_window_register_numeric_id((void*)hwnd, pre_id);
     }
 
+    // Win11 material + theme-synced caption (Mica/Acrylic via the vibrancy
+    // option; immersive dark/light title bar from the app theme). When a
+    // backdrop is requested the web surface must be transparent for it to show
+    // through — flag the webview before its controller is built. Both no-op
+    // gracefully on Win10 / pre-22H2.
+    const char* vibrancy = wopts_vibrancy(opts);
+    bool transparent = wopts_transparent(opts);
+    extern void windows_material_apply(HWND hwnd, const char* vibrancy);
+    extern int windows_material_wants_transparent(const char* vibrancy);
+    extern void windows_webview_set_transparent(int32_t window_id, bool transparent);
+    windows_material_apply(hwnd, vibrancy);
+    if (pre_id >= 0 && pre_id < ZAPP_MAX_WINDOWS) {
+        windows_webview_set_transparent(pre_id,
+            transparent || windows_material_wants_transparent(vibrancy));
+        // App-set webview background ("#rrggbb"): seeds the load/resize gap so
+        // it isn't a white flash. The page's CSS background still wins.
+        const char* bg = wopts_background_color(opts);
+        if (bg && bg[0] == '#' && strlen(bg) >= 7) {
+            int r = 0, g = 0, b = 0;
+            if (sscanf(bg + 1, "%2x%2x%2x", &r, &g, &b) == 3) {
+                extern void windows_webview_set_bgcolor(int32_t window_id, int r, int g, int b);
+                windows_webview_set_bgcolor(pre_id, r, g, b);
+            }
+        }
+    }
+
     // Don't show yet — let the app call window_show after on_ready
     // But if visible is true, show immediately
     if (visible) {
@@ -382,8 +418,36 @@ void* windows_window_create(WindowOptions* opts) {
     const char* url = wopts_url(opts);
     const char* url_override = (url && url[0]) ? url : NULL;
 
-    // Create WebView2 in this window
-    windows_webview_create((void*)hwnd, inspectable > 0, url_override);
+    // Native sidebar / inspector split panes (macOS parity). When either is
+    // configured, the host webview is mounted into a content child window and
+    // the panes get their own host-twin webviews; otherwise the plain
+    // single-webview path. The pane transport slots are pre-allocated by the
+    // runtime (window.zc), in the same id-space as pre_id.
+    const char* sidebar_url = wopts_sidebar_url(opts);
+    const char* inspector_url = wopts_inspector_url(opts);
+    bool has_sidebar = sidebar_url && sidebar_url[0];
+    bool has_inspector = inspector_url && inspector_url[0];
+
+    if (has_sidebar || has_inspector) {
+        extern void windows_panes_init(HWND host_hwnd, int32_t host_slot, int inspectable,
+                                       const char* host_url,
+                                       int32_t sidebar_slot, const char* sidebar_url,
+                                       int sb_width, int sb_min, int sb_max, int sb_collapsed,
+                                       int32_t inspector_slot, const char* inspector_url,
+                                       int insp_width, int insp_min, int insp_max, int insp_collapsed);
+        windows_panes_init(hwnd, pre_id, inspectable > 0, url_override,
+            has_sidebar ? wopts_sidebar_numeric_id(opts) : -1,
+            has_sidebar ? sidebar_url : NULL,
+            wopts_sidebar_width(opts), wopts_sidebar_min_width(opts),
+            wopts_sidebar_max_width(opts), wopts_sidebar_collapsed(opts) ? 1 : 0,
+            has_inspector ? wopts_inspector_numeric_id(opts) : -1,
+            has_inspector ? inspector_url : NULL,
+            wopts_inspector_width(opts), wopts_inspector_min_width(opts),
+            wopts_inspector_max_width(opts), wopts_inspector_collapsed(opts) ? 1 : 0);
+    } else {
+        // Plain single-webview path.
+        windows_webview_create((void*)hwnd, inspectable > 0, url_override);
+    }
 
     return (void*)hwnd;
 }
@@ -512,6 +576,19 @@ void windows_window_register_numeric_id(void* handle, int32_t numeric_id) {
     snprintf(zapp_window_ids[numeric_id], 32, "win-%d", numeric_id);
 }
 
+// Register a sidebar/inspector pane's transport slot under the HOST window's
+// id string ("win-<host>"). A pane slot is NOT a WindowManager window, so a
+// window action posted from inside a pane (Window.current().inspector.toggle())
+// arrives with the pane slot and would be dropped by the router's is_valid()
+// guard. The router remaps an invalid sender to its host via
+// windows_window_id_string(slot) → "win-<host>" → numeric; this populates that
+// mapping. (Parity with darwin's zapp_register_webview(slot, …, hostWindowId).)
+void windows_window_register_pane_id(int32_t slot, int32_t host_slot) {
+    if (slot < 0 || slot >= ZAPP_MAX_WINDOWS) return;
+    if (host_slot < 0 || host_slot >= ZAPP_MAX_WINDOWS) return;
+    snprintf(zapp_window_ids[slot], 32, "win-%d", host_slot);
+}
+
 void windows_window_eval_js(int32_t window_id, const char* js) {
     windows_webview_eval_by_id(window_id, js);
 }
@@ -629,4 +706,13 @@ HWND zapp_get_hwnd(int32_t window_id) {
         return zapp_hwnds[window_id];
     }
     return NULL;
+}
+
+// Resolve a JS window-id string ("win-<n>") to its numeric slot. The Windows
+// id is numeric (see webview.c config injection), so this is a simple parse —
+// parity with darwin_window_numeric_id_for_string. -1 when unparseable.
+int32_t windows_window_numeric_id_for_string(const char* wid) {
+    if (!wid) return -1;
+    if (strncmp(wid, "win-", 4) == 0) return (int32_t)atoi(wid + 4);
+    return -1;
 }
