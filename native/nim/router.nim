@@ -3,7 +3,7 @@
 ## (emit / window-action / worker / sync) are framework breadth not exercised by
 ## the walking skeleton — they fall through silently for now.
 import std/[options, json, strutils]
-import bridge, service, clipboard
+import bridge, service, clipboard, callbacks, events
 
 proc routeClipboard(m: string, a: JsonNode, windowId, id: int) =
   ## Handle a `__clipboard:*` INVOKE natively (NOT via the service registry),
@@ -53,6 +53,21 @@ proc routeMessage*(msg: string, windowId: int) =
   let parsed = parseBridge(msg)
   if parsed.isNone: return
   let f = parsed.get
+
+  # t:4 window-action — Batch 1 handles ONLY subscribe/unsubscribe (rest of the
+  # t:4 window-action surface = a later batch). The webview posts
+  # {t:4,m:"subscribe",a:{event:"window:..."}} on the first JS listener for an
+  # event (and "unsubscribe" when the last is removed); route it to
+  # callbacks.zapp_window_set_js_listener so zapp_dispatch_event's Layer-2 JS
+  # delivery is gated correctly.
+  if f.t == 4 and (f.m == "subscribe" or f.m == "unsubscribe"):
+    let evName = (if f.a.isNil: "" else: f.a{"event"}.getStr(""))
+    let evId = eventNameToId(evName)
+    if evId >= 0:
+      zapp_window_set_js_listener(windowId.cint, evId.cint,
+        (if f.m == "subscribe": 1.cint else: 0.cint))
+    return
+
   if f.t != 1: return            # skeleton answers INVOKE only
 
   # `__clipboard:*` INVOKEs are handled natively (NOT via the service registry),

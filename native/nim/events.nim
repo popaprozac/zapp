@@ -22,3 +22,27 @@ type
 ## 0 = ALLOW (proceed), 1 = CANCEL (stop the native action).
 const EVENT_ALLOW* = 0
 const EVENT_CANCEL* = 1
+
+import std/strutils
+
+proc eventNameToId*(name: string): int =
+  ## Map a `window:eventname` (or bare `eventname`) subscription string to the
+  ## window-event bitmask id. Source of truth: native/app/router.zc:355-374
+  ## (event_name_to_id) — strip the "window:" prefix, then ready=0..unfullscreen=10.
+  ## Returns -1 for an unknown name. Kept here (the pure events module, no importc
+  ## deps) so it's unit-testable without linking platform symbols.
+  var n = name
+  if n.startsWith("window:"): n = n[7 .. ^1]
+  case n
+  of "ready": 0
+  of "focus": 1
+  of "blur": 2
+  of "resize": 3
+  of "move": 4
+  of "close": 5
+  of "minimize": 6
+  of "maximize": 7
+  of "restore": 8
+  of "fullscreen": 9
+  of "unfullscreen": 10
+  else: -1
