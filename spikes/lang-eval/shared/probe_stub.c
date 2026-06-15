@@ -7,3 +7,6 @@ void spike_cocoa_open_window(int w, int h, const char* title) {
 void spike_print_windows(void) {
     (void)fprintf(stdout, "[spike] windows path (stub)\n");
 }
+void spike_cocoa_beep(void) {
+    (void)fprintf(stdout, "[spike] beep (stub)\n");
+}

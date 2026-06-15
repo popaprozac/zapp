@@ -14,7 +14,31 @@ Baseline: Zen-C hello-world ~708 KB. Probe links the SAME prebuilt
 | C    | 50824 B (`-Os`+strip — THE FLOOR; smallest binary in the set) | yes (640x480 'zapp-spike', exit 0) | **none in stdlib** — C has no JSON parser. Values hardcoded (w=640, h=480, title="zapp-spike") — the absence IS the finding: any real use requires a third-party lib (cJSON, jansson, etc.) or hand-rolling. Exactly the ergonomic gap that caused Zapp to ship `json_safe.zc` | Native/trivial — `#include "probe.h"` directly; no binding tool, no extern hand-decl, no pragma. This IS the reference model everything else is measured against | `#ifdef __APPLE__` — the universally-understood preprocessor baseline; dead branch is NOT elided at the object level (just not linked). This is the `@cfg`/`_WIN32` mechanism Zapp already fights every day | Needs a per-target cross toolchain (e.g. osxcross for Linux→macOS, mingw64 for macOS→Windows); nothing is bundled — contrast with Zig's self-contained cross-compile | The ergonomic FLOOR: no Option/Result, no map/struct-impl, no safe strings, no GC, no generics, no error propagation sugar. Manual memory, manual NUL-termination, manual JSON, manual everything. Every feature the other candidates add is measured against the extra friction of NOT having it in C. Zero adoption risk; zero runtime; the only reason to stay here is binary size (50 KB vs Nim 102 KB / C3 145 KB / Zig 188 KB / Odin 234 KB) or absolute ABI control |
 
 ## Gate decision
-(survivors + why — filled at the gate)
+
+All five cleared the basic bar (window opens; every binary 50–234 KB, far under
+any multi-MB concern) — so this was a ranking gate, not a kill gate.
+
+**Survivors advanced to Phase 2: Zig + Nim.** They are the two options genuinely
+competitive with Zen-C, and they represent the two distinct migration
+philosophies:
+- **Zig** — best C interop (`@cImport` auto-reads our headers; matters for the
+  52 header imports + 221 raw-block externs), and the standout
+  cross-compilation (real Windows `.exe` from the Mac, 488 KB) that could end
+  the "Windows must be built on the PC" split. Counter: Zig 0.16's pre-1.0 IO
+  API churn broke the starter probe (an ongoing adoption tax).
+- **Nim** — compiles to C exactly like Zen-C, `{.emit.}` is a drop-in for the
+  221 `raw` blocks (most natural migration of the existing inline C), smallest
+  non-C binary (102 KB), and the ONLY candidate whose probe ran with zero API
+  drift (strongest maturity signal). Counter: GC (ORC; tunable, ~free in size).
+
+**Not advanced (viable, but each lost a decisive axis):**
+- **C3** (145 KB) — no C-header import (every symbol hand-declared); youngest
+  ecosystem; good *web* docs (c3-lang.org) but weak in-tool/in-editor
+  discoverability. Cross-compile partial (COFF obj only).
+- **Odin** (234 KB) — heaviest binary; no cross-LINK from macOS in this build;
+  standalone backend (no raw-C escape hatch). Excellent error messages + good
+  web docs (odin-lang.org).
+- **plain C** (50 KB) — the implicit baseline/yardstick, not separately sliced.
 
 ## Phase 2 — vertical slice (survivors)
 (filled in Phase 2)

@@ -32,3 +32,9 @@ void spike_cocoa_open_window(int w, int h, const char* title) {
 void spike_print_windows(void) {
     (void)fprintf(stdout, "[spike] windows path (stub)\n");
 }
+
+// Phase 2: the macOS branch of a platform-gated action (dock:bounce-ish).
+void spike_cocoa_beep(void) {
+    NSBeep();
+    (void)fprintf(stdout, "[spike] cocoa beep\n");
+}
