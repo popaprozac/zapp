@@ -1098,6 +1098,14 @@ async function buildNativeNim(
     path.join(resolveBootstrapDir(), "codegen.ts")
   );
 
+  // Permissions manifest — mirrors the zc path (build-config.ts:74-85). The
+  // resolved allow/active is baked into the Nim build config so permissions.nim
+  // can importc zapp_build_permissions_json(). platform is macos for the Nim
+  // dev path (the only target wired so far).
+  const { resolvePermissions } = await import("./permissions");
+  const resolvedPerms = resolvePermissions(config.permissions);
+  const permsObj = { platform: "macos", active: resolvedPerms.active, allow: resolvedPerms.allow };
+
   const configNim = renderBuildConfigNim({
     initialUrl: "zapp://index.html",
     identifier: config.identifier ?? config.name ?? "com.zapp.helloworld",
@@ -1105,6 +1113,7 @@ async function buildNativeNim(
     embedAssets: false, // filesystem asset path (sub-gate A); brotli deferred
     devTools: 1,
     isDev: true,
+    permissionsJson: JSON.stringify(permsObj),
   });
   await fs.writeFile(path.join(zappDir, "zapp_build_config.nim"), configNim, "utf-8");
 

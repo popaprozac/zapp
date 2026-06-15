@@ -9,6 +9,7 @@ test("renderBuildConfigNim emits exportc getters the .m layer calls", () => {
     embedAssets: true,
     devTools: 1,
     isDev: false,
+    permissionsJson: '{"platform":"macos","active":false,"allow":[]}',
   });
   expect(out).toContain('proc zapp_build_initial_url(): cstring {.exportc, cdecl.}');
   expect(out).toContain('proc zapp_build_use_embedded_assets(): cint {.exportc, cdecl.}');
@@ -43,4 +44,19 @@ test("renderHeadlessNim emits zjs_worker_create for zjs entries, skips non-zjs",
 test("renderHeadlessNim with no zjs entries emits a discard body", () => {
   const out = renderHeadlessNim({ "x": { script: "a.ts", engine: "bare-jsc" } });
   expect(out).toContain("proc zapp_start_headless_workers*() =\n  discard");
+});
+
+test("renderBuildConfigNim emits zapp_build_permissions_json from the manifest", () => {
+  const out = renderBuildConfigNim({
+    initialUrl: "zapp://index.html",
+    identifier: "com.example.app",
+    assetRoot: "",
+    embedAssets: true,
+    devTools: 1,
+    isDev: false,
+    permissionsJson: '{"platform":"macos","active":true,"allow":["clipboard"]}',
+  });
+  expect(out).toContain('proc zapp_build_permissions_json(): cstring {.exportc, cdecl.}');
+  expect(out).toContain('let zappPermissionsJson');
+  expect(out).toContain('clipboard');
 });
