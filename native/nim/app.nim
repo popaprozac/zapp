@@ -40,7 +40,7 @@ proc greetService(args: JsonNode): string =
 
 proc registerSkeletonServices*() =
   ## Register the walking-skeleton's services. Called from zapp.nim before run().
-  addService("greet", greetService)
+  registerService("greet", greetService)
 
 # --- Message bridge entry point ---------------------------------------------
 
