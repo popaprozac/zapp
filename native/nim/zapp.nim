@@ -21,6 +21,7 @@
 {.compile("../platform/darwin/screen.m", "-fobjc-arc").}
 {.compile("../platform/darwin/panel.m", "-fobjc-arc").}
 
+import std/json
 import app
 import window
 
@@ -105,9 +106,16 @@ proc zapp_dispatch_event(windowId, eventId, w, h, x, y: cint): cint {.exportc, c
 # ---------------------------------------------------------------------------
 
 # app_get_active — app.zc returned the active App* (passed to the bridge as the
-# message receiver). No App* yet; NULL is fine — the bridge stub ignores it.
-# TEMP until app.nim exposes the active app pointer (Task 5).
-proc app_get_active(): pointer {.exportc, cdecl.} = nil
+# message receiver). webview.m's didReceiveScriptMessage GATES the bridge on
+# `app_get_active() != NULL` (webview.m:376-378): a NULL here means EVERY JS->
+# native message (including invokes) is silently dropped before reaching
+# zapp_handle_message_from_window. The pointer is opaque to webview.m — it is
+# only forwarded straight back to the handler, never dereferenced (verified:
+# the only use site is webview.m:376). So a stable non-NULL sentinel is enough
+# to open the bridge. Our handler ignores the value.
+# TEMP until app.nim exposes a real active App* (Task 5).
+var gActiveAppSentinel: int
+proc app_get_active(): pointer {.exportc, cdecl.} = addr gActiveAppSentinel
 
 # app_get_bootstrap_* — app.zc/AppConfig accessors. Reasonable skeleton values.
 # TEMP until app config is ported.
@@ -133,11 +141,73 @@ proc permissions_bootstrap_json(): cstring {.exportc, cdecl.} = "".cstring
 # zapp_webview_bootstrap_script is now provided by the generated zapp_bootstrap
 # module (imported above) — the real minified webview bridge JS.
 
+# darwin_window_eval_js — defined in the (compiled) window.m. Evaluates a JS
+# snippet in the given window's WKWebView on the main thread; it copies `js`
+# synchronously, so the caller may free immediately after the call.
+proc darwin_window_eval_js(windowId: int32, js: cstring) {.importc, cdecl.}
+
+# Escape a string as the CONTENTS of a JS single-quoted literal. Mirrors
+# bridge/dispatch.zc's zapp_escape_dup usage: the payload is interpolated into
+#   b._onInvokeResult(<id>,<ok>,'<payload>')
+# so backslash, single-quote, and the line terminators must be escaped.
+proc escapeJsSingleQuoted(s: string): string =
+  result = newStringOfCap(s.len + 8)
+  for c in s:
+    case c
+    of '\\': result.add("\\\\")
+    of '\'': result.add("\\'")
+    of '\n': result.add("\\n")
+    of '\r': result.add("\\r")
+    else: result.add(c)
+
+# Send an invoke result back to the webview's bridge. Matches the wire shape
+# emitted by bridge/dispatch.zc:dispatch_invoke_response so the bootstrap's
+# `_onInvokeResult(id, ok, payload)` resolves/rejects the pending promise.
+proc dispatchInvokeResponse(windowId: int32, requestId: int, ok: bool,
+                            payload: string) =
+  let okLit = if ok: "true" else: "false"
+  let js = "(function(){var b=globalThis[Symbol.for('zapp.bridge')];" &
+           "if(b&&typeof b._onInvokeResult==='function'){" &
+           "b._onInvokeResult(" & $requestId & "," & okLit & ",'" &
+           escapeJsSingleQuoted(payload) & "');}})();"
+  darwin_window_eval_js(windowId, js.cstring)
+
 # zapp_handle_message_from_window — the JS->native message bridge entry point.
-# TEMP no-op until the bridge lands (Task 5).
+# The bootstrap bridge posts JSON envelopes `{t, id, m, a}` (protocol in
+# native/bridge/protocol.zc). For sub-gate A we implement the minimum needed
+# to RENDER the hello-world UI: the entry module top-level-awaits
+# `greet({name:"World"})` (an invoke, t==1) BEFORE it mounts `#app`, so a dead
+# bridge => the await never resolves => blank webview. We answer `t==1` invokes
+# (the `greet` demo service mirrors native/build.zc's greet_service) and ignore
+# every other envelope type. Full routing (emit/window-action/worker/sync, the
+# real service registry) is Task 5.
 proc zapp_handle_message_from_window(app: pointer, msg: cstring,
                                      windowId: int32) {.exportc, cdecl.} =
-  discard
+  discard app
+  if msg == nil: return
+  var env: JsonNode
+  try:
+    env = parseJson($msg)
+  except CatchableError:
+    return
+  if env.kind != JObject: return
+  let t = env{"t"}
+  if t == nil or t.kind != JInt: return
+  if t.getInt() != 1: return            # only invokes need answering for render
+
+  let idNode = env{"id"}
+  let mNode = env{"m"}
+  if idNode == nil or idNode.kind != JInt: return
+  if mNode == nil or mNode.kind != JString: return
+  let requestId = idNode.getInt()
+  let methodName = mNode.getStr()
+
+  if methodName == "greet":
+    # Static result mirrors native/build.zc:greet_service (the zc reference).
+    dispatchInvokeResponse(windowId, requestId, true,
+                           "{\"greeting\":\"hello from native\"}")
+  else:
+    dispatchInvokeResponse(windowId, requestId, false, "NOT_FOUND")
 
 # --- Build-time config ------------------------------------------------------
 # The `zapp_build_*` getters (initial_url, asset_root, use_embedded_assets,
