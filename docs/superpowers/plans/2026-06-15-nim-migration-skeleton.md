@@ -157,7 +157,7 @@ proc platformRun*(terminateAfterLastWindow: bool): int =
 ## THROWAWAY (deleted in Task 3). Proves: Nim {.compile.}s an ObjC .m with ARC,
 ## links Cocoa, and calls into it. Compiles only platform.m (its only dep here).
 {.passL: "-framework Cocoa -framework CoreFoundation".}
-{.compile: ("../platform/darwin/platform.m", "-fobjc-arc").}
+{.compile("../platform/darwin/platform.m", "-fobjc-arc").}
 
 import platform
 
@@ -165,7 +165,7 @@ platformInit("nim-smoke")
 echo "darwin_platform_init returned — ObjC-via-Nim build works"
 # Do NOT call platformRun here (it blocks in NSApp run); init is enough to prove linkage.
 ```
-> If `platform.m` pulls in other `.m` symbols at link time (undefined symbols), add the minimal extra `{.compile: ("../platform/darwin/<file>.m", "-fobjc-arc").}` lines until it links — and record which were needed (informs Task 3/4).
+> If `platform.m` pulls in other `.m` symbols at link time (undefined symbols), add the minimal extra `{.compile("../platform/darwin/<file>.m", "-fobjc-arc").}` lines until it links — and record which were needed (informs Task 3/4).
 
 - [ ] **Step 3: Build it**
 
@@ -342,7 +342,7 @@ proc zapp_log_init() {.importc, cdecl.}  # provided by generated config (Task 2)
 {.passC: "-I " & currentSourcePath().parentDir & "/../platform/darwin".}
 {.passL: "-framework Cocoa -framework WebKit -framework CoreFoundation -framework JavaScriptCore -framework Security".}
 {.passL: "-lcompression -lz".}
-{.compile: ("../platform/darwin/platform.m", "-fobjc-arc").}
+{.compile("../platform/darwin/platform.m", "-fobjc-arc").}
 # webview.m/window.m/etc. added in Task 4 when the window path lands.
 
 import app
@@ -492,10 +492,10 @@ Extend the CLI (Task 2 emitters + a Nim assets emitter): write `.zapp/zapp_build
 
 In `native/nim/zapp.nim`, add the `.m` compile set and create a window:
 ```nim
-{.compile: ("../platform/darwin/window.m", "-fobjc-arc").}
-{.compile: ("../platform/darwin/webview.m", "-fobjc-arc").}
-{.compile: ("../platform/darwin/screen.m", "-fobjc-arc").}
-{.compile: ("../platform/darwin/panel.m", "-fobjc-arc").}
+{.compile("../platform/darwin/window.m", "-fobjc-arc").}
+{.compile("../platform/darwin/webview.m", "-fobjc-arc").}
+{.compile("../platform/darwin/screen.m", "-fobjc-arc").}
+{.compile("../platform/darwin/panel.m", "-fobjc-arc").}
 import app, window
 let a = newApp("Zapp Nim Skeleton")
 let opts = newWindowOptions("Zapp v2 (Nim)")
