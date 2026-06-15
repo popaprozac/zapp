@@ -1,0 +1,1 @@
+# Nim orchestration layer (feat/nim-native). Greenfield rebuild of the .zc layer; see docs/superpowers/specs/2026-06-15-nim-migration-design.md and docs/superpowers/plans/2026-06-15-nim-migration-skeleton.md
