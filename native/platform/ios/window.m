@@ -54,6 +54,12 @@ typedef struct ZappIOSDeferred {
     int32_t sheet_presentation;   // 0=page, 1=form, 2=fullscreen, 3=bottomSheet
     int32_t sheet_detents;        // bitmask: 1=medium, 2=large
     bool    sheet_grabber;
+    // App-set window background ("#rrggbb"), parsed at create, applied at
+    // materialize. iOS is full-screen / no live resize, so this is the
+    // launch/pre-render fill + brand customization (vs. Windows' resize flash,
+    // where WebView2 repaint lag exposes a white gap).
+    bool    has_bg;
+    int     bg_r, bg_g, bg_b;
 } ZappIOSDeferred;
 
 #define ZAPP_MAX_DEFERRED 16
@@ -98,9 +104,14 @@ void zapp_ios_materialize_pending_windows(void) {
 
         UIViewController* root = [[UIViewController alloc] init];
         root.view.frame = window.bounds;
-        root.view.backgroundColor = [UIColor systemBackgroundColor];
+        // App-set background ("#rrggbb") or the adaptive system default. Fills
+        // the launch / pre-render gap; the page's CSS background paints over it.
+        UIColor* bgColor = d->has_bg
+            ? [UIColor colorWithRed:d->bg_r/255.0 green:d->bg_g/255.0 blue:d->bg_b/255.0 alpha:1.0]
+            : [UIColor systemBackgroundColor];
+        root.view.backgroundColor = bgColor;
         window.rootViewController = root;
-        window.backgroundColor = [UIColor systemBackgroundColor];
+        window.backgroundColor = bgColor;
 
         // Plug the materialized UIWindow into the numeric-ID dispatch
         // table BEFORE darwin_webview_create runs — its callback
@@ -130,6 +141,13 @@ void zapp_ios_materialize_pending_windows(void) {
                 NSString* setIdJs = [NSString stringWithFormat:
                     @"globalThis[Symbol.for('zapp.windowId')]='win-%d';", d->numeric_id];
                 [d->real_webview evaluateJavaScript:setIdJs completionHandler:nil];
+                // Seed the webview's underpage fill (WebView2 DefaultBackground
+                // analogue) when the app set a background color.
+                if (d->has_bg) {
+                    if (@available(iOS 15.0, *)) {
+                        d->real_webview.underPageBackgroundColor = bgColor;
+                    }
+                }
             }
         }
 
@@ -333,6 +351,14 @@ void* darwin_window_create(void* opts) {
         d->sheet_presentation = (int32_t)wopts_sheet_presentation(opts);
         d->sheet_detents = (int32_t)wopts_sheet_detents(opts);
         d->sheet_grabber = wopts_sheet_grabber(opts);
+        // App-set background color ("#rrggbb") — parsed now, applied at
+        // materialize (same string + parse as macOS / Windows).
+        extern const char* wopts_background_color(void* opts);
+        const char* bg = wopts_background_color(opts);
+        if (bg && bg[0] == '#' && strlen(bg) >= 7 &&
+            sscanf(bg + 1, "%2x%2x%2x", &d->bg_r, &d->bg_g, &d->bg_b) == 3) {
+            d->has_bg = true;
+        }
     }
     for (int i = 0; i < ZAPP_MAX_DEFERRED; i++) {
         if (!zapp_ios_deferred_list[i]) {
