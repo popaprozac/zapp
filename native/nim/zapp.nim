@@ -61,11 +61,6 @@ import zapp_build_config, zapp_bootstrap
 # native callbacks + the webview (via webview.m's darwin_webview_eval_all);
 # worker fan-out is a deferred no-op (Batch 4/7).
 
-# service_run_shutdown_all — was service/service.zc. Tears down services in
-# reverse order at quit. No services yet. TEMP until service.nim.
-proc service_run_shutdown_all() {.exportc, cdecl.} =
-  discard
-
 # darwin_notification_setup_delegate — defined in notification.m; platform.m
 # calls it on launch to install the UN delegate. Not compiling notification.m
 # yet. TEMP until the notification layer lands.
@@ -145,14 +140,6 @@ proc app_get_bootstrap_max_workers(): cint {.exportc, cdecl.} = 0
 # app_get_allowed_navigation_json — extra navigation allowlist (JSON array).
 # "" => webview.m falls back to the empty allowlist. TEMP until app config.
 proc app_get_allowed_navigation_json(): cstring {.exportc, cdecl.} = "".cstring
-
-# service_get_manifest_json — the WEBVIEW service-bindings manifest (JSON array)
-# consumed by webview.m to expose JS proxies. Distinct from the native registry
-# in service.nim (which the router dispatches to). Empty set: the skeleton's
-# greet is invoked via the bootstrap bridge's generic invoke(), not a generated
-# proxy. TEMP until the CLI emits the real manifest.
-let gServiceManifest = "[]"
-proc service_get_manifest_json(): cstring {.exportc, cdecl.} = gServiceManifest.cstring
 
 # permissions_bootstrap_json — permissions manifest. "" => webview.m uses its
 # inactive-permissions default. TEMP until the permissions layer is ported.

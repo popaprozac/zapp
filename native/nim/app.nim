@@ -20,11 +20,14 @@ proc newApp*(name: string, terminateAfterLastWindowClosed = true): App =
   App(name: name, terminateAfterLastWindowClosed: terminateAfterLastWindowClosed)
 
 proc run*(app: App): int =
-  ## Register worker-path services, spawn the configured zjs headless workers,
-  ## then enter the Cocoa run loop (blocks). registerWorkerServices() MUST run
-  ## before the spawn so service_invoke_native has the bench handlers when the
-  ## worker's first invokeService round-trips back into native.
+  ## Register worker-path services, run service startup hooks, spawn the
+  ## configured zjs headless workers, then enter the Cocoa run loop (blocks).
+  ## registerWorkerServices() MUST run before the spawn so service_invoke_native
+  ## has the bench handlers when the worker's first invokeService round-trips
+  ## back into native; runStartupAll() runs before the spawn so services are
+  ## started before any worker can invoke them.
   registerWorkerServices()
+  runStartupAll()
   zapp_start_headless_workers()
   platformRun(app.terminateAfterLastWindowClosed)
 

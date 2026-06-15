@@ -57,3 +57,19 @@ proc serviceManifestJson*(): string =
   for rec in gRegistry:
     services.add(%*{"name": rec.name})
   $(%*{"v": 1, "services": services})
+
+# --- C-ABI seam (the .m / platform layer calls these) -----------------------
+
+# service_get_manifest_json — consumed by webview.m (zapp.bindingsManifest). The
+# built JSON is cached in a module-level var so the returned cstring outlives the
+# call (webview.m copies it synchronously).
+var gManifestCache: string
+proc service_get_manifest_json*(): cstring {.exportc, cdecl.} =
+  gManifestCache = serviceManifestJson()
+  gManifestCache.cstring
+
+# service_run_shutdown_all — called by platform.m / platform.c / ios platform.m
+# at teardown. service_run_startup_all needs no C-ABI export: its only caller was
+# app.zc, and in the Nim build app.nim calls runStartupAll() directly.
+proc service_run_shutdown_all*() {.exportc, cdecl.} =
+  runShutdownAll()
