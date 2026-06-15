@@ -1,0 +1,61 @@
+// Zen-C baseline probe — the incumbent, measured under the SAME contract as the
+// candidates: read shared/sample.json, parse it, open an NSWindow through the
+// plain-C-ABI wrapper. This is the apples-to-apples baseline the other rows are
+// compared against (the ~708 KB hello-world is a whole app; this is the language
+// floor for identical minimal work). Mirrors Zapp's real layer: orchestration in
+// .zc, ObjC behind plain C in the prebuilt probe_cocoa.o.
+//
+//> macos: framework: Cocoa
+//> macos: link: spikes/lang-eval/shared/probe_cocoa.o
+
+import "std/json.zc";
+import "probe.h" as spike;
+
+// File read needs a raw{} block — Zen-C has no stdlib file-read helper (the same
+// "drop to raw C for I/O" friction the .m layer normally absorbs). The candidates
+// each had a one-call stdlib read (Zig readFileAlloc, Nim parseFile, etc.).
+fn read_text(path: char*) -> char* {
+    let out: char* = NULL;
+    raw {
+        FILE* f = fopen(path, "rb");
+        if (f) {
+            fseek(f, 0, SEEK_END);
+            long n = ftell(f);
+            fseek(f, 0, SEEK_SET);
+            char* buf = (char*)malloc((size_t)n + 1);
+            if (buf) {
+                size_t rd = fread(buf, 1, (size_t)n, f);
+                buf[rd] = '\0';
+                out = buf;
+            }
+            fclose(f);
+        }
+    }
+    return out;
+}
+
+// Platform branch the Zapp way: @cfg duplicates the whole fn per platform — the
+// exact tax the comptime-folding candidates (Zig `if builtin.os.tag`, Nim `when
+// defined`) avoid by writing one fn whose dead branch is elided.
+@cfg(apple)
+fn open_window(w: int, h: int, title: char*) -> void {
+    spike::spike_cocoa_open_window(w, h, title);
+}
+
+@cfg(windows)
+fn open_window(w: int, h: int, title: char*) -> void {
+    raw { spike_print_windows(); }
+}
+
+fn main() -> int {
+    let text = read_text("spikes/lang-eval/shared/sample.json");
+    if (text == NULL) { return 1; }
+    let r = JsonValue::parse(text);
+    if (r.is_err()) { return 1; }
+    let j = r.unwrap();
+    let w = j.get_int("w").unwrap_or(640);
+    let h = j.get_int("h").unwrap_or(480);
+    let title = j.get_string("title").unwrap_or("zapp-spike");
+    open_window(w, h, title);
+    return 0;
+}

@@ -1,12 +1,17 @@
 # Native Language Eval — Scorecard
 
-Baseline: Zen-C hello-world ~708 KB. Probe links the SAME prebuilt
-`probe_cocoa.o`, so size deltas reflect the language's runtime/stdlib overhead.
+Every probe links the SAME prebuilt `probe_cocoa.o`, so size deltas reflect the
+language's runtime/stdlib overhead. The incumbent **Zen-C now has its own probe
+row** (112 KB) — the true apples-to-apples baseline. (The ~708 KB figure quoted
+elsewhere is the full Zen-C *hello-world app* — router, window manager, every
+native feature — NOT comparable to these minimal probes; it measures the app, not
+the language floor.)
 
 ## Phase 1 — interop + size probe (macOS)
 
 | Lang | Stripped size | Opens window? | JSON parse | C-header consume | Platform branch | Cross-compile | Authoring friction (vs Zen-C inventory) |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| **Zen-C** (incumbent) | 112472 B (`-Oz --release`+strip) | yes (640x480 'zapp-spike', exit 0) | `std/json.zc` `JsonValue::parse(text)` → `Result<JsonValue*>`; `j.get_int("w")` → `Option<int>`, `j.get_string("title")` → `Option<char*>`, `.unwrap_or(default)` — typed getters, ergonomic, on par with the candidates. CAVEAT: stdlib `JsonValue::parse` carries the known **4 KB stack-buffer overflow** on long string tokens (fine for this tiny input; production Zapp ships the heap-allocating `json_safe.zc` replacement — the maturity ding that *forced* that file, the direct analogue of C's "no stdlib JSON" gap) | NATIVE — `import "probe.h" as spike;` consumes the C header directly (resolved via `-I`), then `spike::spike_cocoa_open_window(...)`. Best-tier interop alongside C's `#include` and Zig's `@cImport`; no hand-declared `extern` like C3/Odin | `@cfg(apple)` / `@cfg(windows)` — but **DUPLICATES THE WHOLE FN per platform** (had to write `open_window` twice). This IS the per-platform-stub tax the comptime-folding candidates (Zig `if builtin.os.tag`, Nim `when defined`) avoid by eliding a dead branch of ONE fn. zc also analyzes the non-targeted branch (spurious "unused param" warnings on the windows fn during a macOS build) | needs a per-target cross toolchain like plain C — no bundled self-contained cross-compile à la Zig; not exercised here | THE INCUMBENT — this row IS the friction inventory's baseline. Re-confirmed live: (1) compiles-to-C, so `raw { … }` is the native inline-C/ObjC escape hatch — the **221 existing raw blocks need ZERO migration** (they're already Zen-C); (2) toolchain just works — 0.7 s build, zero errors, zero API drift (it's the daily driver); (3) `raw{}` blocks are OPAQUE to zc's usage analysis → a param used only inside a raw block is wrongly flagged "unused" (`path` in `read_text`); (4) no stdlib file-read → dropped to a raw `fopen` block (candidates each had a 1-call stdlib read); (5) harmless `ld` `__common` alignment warning. Version `v0.4.4-217-g10cf66d-dirty` — itself a **pre-1.0 language** (the exact maturity concern that prompted this spike). Size 112 KB = **MID-PACK**: above C(51)/Nim(102), below C3(145)/Zig(188)/Odin(234); std/json + Vec/Map/Option/Result codegen sets the floor |
 | Zig  | 188008 B (ReleaseSmall+strip) | yes (640x480 'zapp-spike', exit 0) | `std.json.parseFromSlice(Value)` — ergonomic; `.object.get(k).?.integer/.string` tagged-union access, clean | `@cImport(@cInclude("probe.h"))` — clean, zero binding boilerplate; pass `title.ptr` for `[*:0]const u8` | `builtin.os.tag == .macos` comptime `if` (dead branch elided) | yes — `x86_64-windows-gnu -lc` → PE32+ x86-64 from macOS, 488448 B, no toolchain install | 0.16 IO redesign drift: `std.fs.cwd().readFileAlloc(a,path,max)` → `std.Io.Dir.cwd().readFileAlloc(io,path,a,.limited(max))` w/ a `std.Io.Threaded` provider; otherwise terser & safer than Zen-C (explicit casts `@intCast`, `dupeZ` for NUL-term, no manual frees via arena) |
 | Nim  | 102408 B (ORC default GC, `-d:release --opt:size`+strip); `--mm:none` also builds → 102520 B (+112 B — GC code negligible vs std/json+stdlib) | yes (640x480 'zapp-spike', exit 0) | `std/json` `parseFile(path)` → `JsonNode`; `cfg["w"].getInt`, `cfg["title"].getStr` — ergonomic, indexing + typed getters; raises on missing key | `proc … {.importc, cdecl.}` + `{.passC: "-I …".}` / `{.passL: "…probe_cocoa.o -framework Cocoa -lobjc".}` pragmas — clean, no separate binding gen; `cstring` maps directly to `const char*` | `when defined(macosx)` compile-time branch (dead `else` elided; only cocoa path codegen'd) | via C backend, not tested — `nim c --cpu:amd64 --os:windows -d:mingw …` cross-compiles by emitting C + invoking a cross C compiler (mingw); feasible, needs the cross toolchain installed | Nim COMPILES TO C like Zen-C, so the interop model is near-identical: `importc`+`passC`/`passL` ≈ Zen-C's link/cfg directives, and `{.emit: "…".}` drops raw C ≈ Zen-C `raw` blocks. GC story: default ORC (cycle-aware ref-counting) "just works" and adds only ~112 B here; `--mm:none` builds for this one-shot probe but is unsafe for long-lived/allocating code (no reclamation) — a real Zapp orchestration layer would keep ORC. Friction is low: typed JSON getters + auto `cstring` bridging beat manual C marshalling; main surprise is the ~100 KB binary floor — smaller than Zig's 188 KB, but std/json + stdlib + ORC set a higher baseline than a no-runtime lang. nimcache lands in `~/.cache/nim/` (outside repo). |
 | C3   | 145064 B (`-Oz`+strip; `-Oz` = "tiny code, no debug info") | yes (640x480 'zapp-spike', exit 0) | `std::encoding::json` `json::tparse((String)data)` → `Object*?` tagged union; `cfg.get_int("w")` → `int?`, `cfg.get_string("title")` → `String?` — real, ergonomic, type-coercing optionals. Verified driving values (tampered json → window showed 321x654 'json-works', not defaults). JSON numbers stored as int128/double internally; getters coerce | NO C-header import — C3 can't consume `probe.h`. Hand-declare `extern fn void spike_cocoa_open_window(int w, int h, ZString title)`; symbol = fn name, `ZString` is `inline char*` so it bridges to C `const char*` directly. Clean once you know it, but it's manual (no `@cImport`/`importc`-style auto-binding) | compile-time `$if env::DARWIN: … $else … $endif`. `env::DARWIN` is a real stdlib `const bool` (core/env.c3); dead branch elided at compile time | LLVM targets — PARTIAL test: `compile-only --target windows-x64` emitted a real amd64 COFF `.obj` from macOS (cross-codegen works). Full PE link not attempted (needs a Windows `probe_cocoa.o` twin + `fetch-sdk windows`). `--list-targets` shows windows-x64/aarch64, mingw-x64, linux-x64, etc. | Mid maturity. Language ergonomics are pleasant — `try x = …` optional-unwrap binding, typed JSON getters, comptime `$if` with stdlib `const bool` predicates all read cleanly and beat manual C marshalling. The PAIN is toolchain/docs immaturity vs Zen-C: (1) NO C-header consumption — every C symbol is a hand-written `extern fn`, and you must KNOW `ZString = inline char*` and that the link name is the bare fn name (no `@extern("…")` needed here, but undocumented in-tool). (2) The link incantation took the longest to find: extra object files go through `-z <arg>` (raw linker passthrough), frameworks are `-z -framework -z Cocoa` (each token separate), `-l objc` for libobjc — discovered by reading `c3c compile --help` + iterating; no in-repo manifest needed for a single-file compile. (3) stdlib is undocumented in-tool — had to grep `$(brew --prefix c3c)/lib/c3/std/**` to find `json::tparse`, `Object.get_int`, `file::load_temp`, `String.zstr_tcopy`, `env::DARWIN`. (4) Error messages are decent (LLVM-backed, clear on type mismatches). (5) Harmless `ld` warning: prebuilt `.o` is macOS 26.0, c3c defaults min to 11.0 (could pin via `--macos-min-version`). Net: ~20 min to first working link, almost all of it API/flag discovery, not fighting the compiler. Size sits BETWEEN Nim (102 KB) and Zig (188 KB) — no GC, no heavy runtime; the ~145 KB is mostly stdlib + panic/temp-allocator scaffolding. Younger ecosystem than the others; viable but you live in the source tree for API discovery. |
@@ -15,8 +20,11 @@ Baseline: Zen-C hello-world ~708 KB. Probe links the SAME prebuilt
 
 ## Gate decision
 
-All five cleared the basic bar (window opens; every binary 50–234 KB, far under
-any multi-MB concern) — so this was a ranking gate, not a kill gate.
+All five candidates cleared the basic bar (window opens; every binary 50–234 KB,
+far under any multi-MB concern) — so this was a ranking gate, not a kill gate.
+The incumbent **Zen-C measured 112 KB** under the identical contract, landing
+mid-pack — so size is not a reason to leave it *or* a reason it uniquely wins
+(Nim's 102 KB floor is actually smaller).
 
 **Survivors advanced to Phase 2: Zig + Nim.** They are the two options genuinely
 competitive with Zen-C, and they represent the two distinct migration
@@ -134,19 +142,24 @@ real long-lived orchestration layer).
 | ---    | ---            | ---            | ---                |
 | C      | 50,824 B       | —              | none (the floor)   |
 | Nim    | 102,408 B      | +51,584 B      | std/json + stdlib + ORC GC |
+| **Zen-C** (incumbent) | **112,472 B** | +61,648 B | std/json + Vec/Map/Option/Result codegen |
 | C3     | 145,064 B      | +94,240 B      | stdlib + panic/temp-allocator |
 | Zig    | 188,008 B      | +137,184 B     | stdlib + comptime scaffolding |
 | Odin   | 234,008 B      | +183,184 B     | core:fmt/runtime/context + json |
 | Zig (Windows cross) | 488,448 B | n/a (PE32+) | self-contained cross-compile, from the Mac |
 
 The spike's headline finding **inverts the question the user led with.** "If they
-produce the same tiny binaries" was the gate — and they all do. The full Zen-C
-hello-world is ~708 KB *because it implements a real app* (router, window
-manager, every native feature); these probes measure only the language's runtime
-*floor*. Even the heaviest floor (Odin, +183 KB over C) is noise against a real
-app bundle + WKWebView. **Binary size eliminates no candidate.** The decision
-therefore rests entirely on the other axes: interop, platform-conditional
-ergonomics, general ergonomics, cross-compilation, maturity, and migration cost.
+produce the same tiny binaries" was the gate — and they all do, *including the
+incumbent*: the Zen-C probe measured **112 KB** under the identical contract,
+landing mid-pack. (The ~708 KB Zen-C hello-world quoted elsewhere is a *whole
+app* — router, window manager, every native feature — not the language floor;
+the apples-to-apples baseline is this 112 KB probe.) Two honest consequences:
+**(1) size eliminates no candidate** — even the heaviest floor (Odin, +183 KB
+over C) is noise against a real app bundle + WKWebView; and **(2) Zen-C is not
+uniquely small** — Nim's 102 KB floor actually undercuts it, and C is half its
+size. The decision therefore rests entirely on the other axes: interop,
+platform-conditional ergonomics, general ergonomics, cross-compilation, maturity,
+and migration cost.
 
 ### Outcome A — adopt a new language
 
@@ -181,22 +194,32 @@ framing should read as *weak in-tool/in-editor discoverability*, not *no docs*).
 
 ### Outcome B — stay on Zen-C
 
-The friction inventory is real and was documented honestly (const/cast
-wrangling, `@cfg` emitting into every TU, the local `compat.h`/`--objective-c`
-compiler patches, the std/json 4 KB stack overflow we replaced with
-`json_safe.zc`, dispatch-buffer truncation, `{` f-string escaping). But three
-facts weigh the other way:
+The friction inventory is real and was documented honestly — and the Zen-C probe
+*re-demonstrated* part of it live: the `@cfg` per-platform branch forced writing
+`open_window` **twice** (the very stub-duplication tax Zig/Nim fold into one
+comptime-elided fn), and `raw{}` blocks are opaque to zc's usage analysis
+(spurious "unused param" warnings). Add the standing items: const/cast wrangling,
+the local `compat.h`/`--objective-c` compiler patches, the std/json 4 KB stack
+overflow we replaced with `json_safe.zc`, dispatch-buffer truncation, `{`
+f-string escaping, and the plain fact that zc is itself a **pre-1.0 language**
+(`v0.4.4`). But four facts weigh the other way — and the probe strengthened two:
 
 1. **The whole native layer is already written in it** — ~7,500 lines across 43
    `.zc` files, 221 raw blocks, 179 `@cfg` gates, load-bearing std/json+map+result.
    A rewrite is enormous and risky against a layer that *works and ships today*.
-2. **The friction is now known and worked-around**, not open: `json_safe.zc` heap
+2. **Interop + the raw-block escape hatch are best-tier and migration-free.** The
+   probe confirmed `import "probe.h"` consumes a C header *natively* (no
+   hand-declared externs), and because Zen-C compiles to C, the 221 `raw {}`
+   blocks are already in the target form — a switch to anything but Nim would
+   have to relocate all of them.
+3. **The friction is now known and worked-around**, not open: `json_safe.zc` heap
    parser, the compat.h patch, the #281 iOS-symbol-parity lint, the build-success
    gate. These were one-time taxes already paid.
-3. **No candidate is decisively better enough to justify the rewrite.** Zig wins
-   interop + cross-compile but adds pre-1.0 churn; Nim wins migration-shape but
-   adds a GC. Neither is a step-change — they're lateral moves with different
-   trade-offs. *The pains we know beat the pains we don't.*
+4. **No candidate is decisively better enough to justify the rewrite.** Zig wins
+   interop + cross-compile but adds pre-1.0 churn; Nim wins migration-shape +
+   undercuts Zen-C's size by ~10 KB but adds a GC. Neither is a step-change —
+   they're lateral moves with different trade-offs. *The pains we know beat the
+   pains we don't.*
 
 ### Outcome C — drop to plain C
 
