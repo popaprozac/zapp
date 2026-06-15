@@ -86,6 +86,11 @@ struct WindowOptions {
     // "underWindowBackground", "underPageBackground".
     vibrancy: string;
     _vibrancy_heap: bool;
+    // App-set webview background color ("#rrggbb"). On Windows this seeds the
+    // WebView2 default background (the load/resize gap) so it isn't a white
+    // flash against a dark UI; the page's CSS background still paints over it.
+    backgroundColor: string;
+    _backgroundColor_heap: bool;
     // Sidebar (native NSSplitViewItem sidebar; macOS only).
     sidebarUrl: string;        // empty = no sidebar
     _sidebarUrl_heap: bool;
@@ -207,6 +212,8 @@ impl WindowOptions {
             sheetGrabber: false,
             vibrancy: "",
             _vibrancy_heap: false,
+            backgroundColor: "",
+            _backgroundColor_heap: false,
             sidebarUrl: "",
             _sidebarUrl_heap: false,
             sidebarMaterial: "",
@@ -267,6 +274,7 @@ fn wopts_numeric_id_pre_alloc(opts: WindowOptions*) -> int { return opts.numeric
 fn wopts_sidebar_numeric_id(opts: WindowOptions*) -> int { return opts.sidebarNumericId; }
 fn wopts_toolbar_json(opts: WindowOptions*) -> string { return opts.toolbarJson; }
 fn wopts_vibrancy(opts: WindowOptions*) -> string { return opts.vibrancy; }
+fn wopts_background_color(opts: WindowOptions*) -> string { return opts.backgroundColor; }
 fn wopts_sidebar_url(opts: WindowOptions*) -> string { return opts.sidebarUrl; }
 fn wopts_sidebar_material(opts: WindowOptions*) -> string { return opts.sidebarMaterial; }
 fn wopts_sidebar_width(opts: WindowOptions*) -> int { return opts.sidebarWidth; }
@@ -399,6 +407,15 @@ fn window_opts_apply_json(opts: WindowOptions*, args: JsonValue*) -> void {
             if (opts->_vibrancy_heap && opts->vibrancy) free((void*)opts->vibrancy);
             opts->vibrancy = strdup((const char*)src);
             opts->_vibrancy_heap = 1;
+        }
+    }
+    let bgcolor_opt = args.get_string("backgroundColor");
+    if bgcolor_opt.is_some() {
+        let src = bgcolor_opt.unwrap();
+        raw {
+            if (opts->_backgroundColor_heap && opts->backgroundColor) free((void*)opts->backgroundColor);
+            opts->backgroundColor = strdup((const char*)src);
+            opts->_backgroundColor_heap = 1;
         }
     }
     // Sidebar: a nested object { url, material, width, minWidth, maxWidth,

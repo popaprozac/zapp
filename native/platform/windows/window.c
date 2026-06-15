@@ -395,6 +395,16 @@ void* windows_window_create(WindowOptions* opts) {
     if (pre_id >= 0 && pre_id < ZAPP_MAX_WINDOWS) {
         windows_webview_set_transparent(pre_id,
             transparent || windows_material_wants_transparent(vibrancy));
+        // App-set webview background ("#rrggbb"): seeds the load/resize gap so
+        // it isn't a white flash. The page's CSS background still wins.
+        const char* bg = wopts_background_color(opts);
+        if (bg && bg[0] == '#' && strlen(bg) >= 7) {
+            int r = 0, g = 0, b = 0;
+            if (sscanf(bg + 1, "%2x%2x%2x", &r, &g, &b) == 3) {
+                extern void windows_webview_set_bgcolor(int32_t window_id, int r, int g, int b);
+                windows_webview_set_bgcolor(pre_id, r, g, b);
+            }
+        }
     }
 
     // Don't show yet — let the app call window_show after on_ready

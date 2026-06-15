@@ -36,6 +36,7 @@ bool wopts_fullscreen(WindowOptions* opts);
 bool wopts_borderless(WindowOptions* opts);
 bool wopts_transparent(WindowOptions* opts);
 char* wopts_vibrancy(WindowOptions* opts);
+char* wopts_background_color(WindowOptions* opts);
 
 // Sidebar / inspector pane options (native split panes).
 int wopts_sidebar_numeric_id(WindowOptions* opts);

@@ -19,6 +19,10 @@
 // url_override: if non-NULL and non-empty, load this URL instead of the default.
 void windows_webview_create(void* hwnd_ptr, bool inspectable, const char* url_override);
 
+// App-set webview default background color (the `backgroundColor` window
+// option). Fills the load/resize gap; the page's CSS background paints over it.
+void windows_webview_set_bgcolor(int32_t window_id, int r, int g, int b);
+
 // Generalized create for sidebar/inspector panes: mount into an arbitrary HWND
 // (a pane's child window) at transport slot `slot` with JS identity
 // `identity_id` (<0 → slot), optional transparent background, and pane role

@@ -166,6 +166,19 @@ void windows_webview_set_transparent(int32_t window_id, bool transparent) {
     zapp_webview_transparent[window_id] = transparent;
 }
 
+// App-set default background color (the `backgroundColor` window option) — fills
+// the load/resize gap so it isn't a white flash. Opaque; the page's own CSS
+// background still paints over it. Set before the controller is built.
+static int zapp_webview_bg_set[ZAPP_MAX_WINDOWS] = {0};
+static COREWEBVIEW2_COLOR zapp_webview_bg[ZAPP_MAX_WINDOWS];
+
+void windows_webview_set_bgcolor(int32_t window_id, int r, int g, int b) {
+    if (window_id < 0 || window_id >= ZAPP_MAX_WINDOWS) return;
+    COREWEBVIEW2_COLOR c = { 255, (BYTE)r, (BYTE)g, (BYTE)b }; // A,R,G,B
+    zapp_webview_bg[window_id] = c;
+    zapp_webview_bg_set[window_id] = 1;
+}
+
 // Pending JS eval buffer (before WebView2 is ready)
 #define ZAPP_MAX_PENDING_JS 32
 static char* zapp_pending_js[ZAPP_MAX_WINDOWS][ZAPP_MAX_PENDING_JS] = {{0}};
@@ -805,17 +818,23 @@ static HRESULT STDMETHODCALLTYPE ZappCtrl_Invoke(
     // Make controller visible
     ICoreWebView2Controller_put_IsVisible(controller, TRUE);
 
-    // Transparent default background (vibrancy/Mica): without this WebView2
-    // paints opaque white and the DWM backdrop never shows. Needs
-    // ICoreWebView2Controller2; harmless to skip on older runtimes. The page
-    // itself must also be transparent (body { background: transparent }) — the
-    // same opt-in as macOS vibrancy.
-    if (zapp_webview_transparent[wid]) {
+    // Default background color (ICoreWebView2Controller2) — the color WebView2
+    // paints behind/before page content (load + the transient gap during async
+    // resize, which otherwise flashes white against a dark UI). The page's own
+    // opaque CSS background paints over it, so this never overrides the app's
+    // rendered background; it only fills the gap. Transparent (vibrancy/Mica)
+    // takes precedence; otherwise an app-set backgroundColor is applied. Unset
+    // → WebView2's default (white).
+    {
         ICoreWebView2Controller2* controller2 = NULL;
         if (SUCCEEDED(ICoreWebView2Controller_QueryInterface(controller,
                 &IID_ICoreWebView2Controller2, (void**)&controller2)) && controller2) {
-            COREWEBVIEW2_COLOR transparent = { 0, 0, 0, 0 }; // A,R,G,B
-            ICoreWebView2Controller2_put_DefaultBackgroundColor(controller2, transparent);
+            if (zapp_webview_transparent[wid]) {
+                COREWEBVIEW2_COLOR transparent = { 0, 0, 0, 0 }; // A,R,G,B
+                ICoreWebView2Controller2_put_DefaultBackgroundColor(controller2, transparent);
+            } else if (zapp_webview_bg_set[wid]) {
+                ICoreWebView2Controller2_put_DefaultBackgroundColor(controller2, zapp_webview_bg[wid]);
+            }
             ICoreWebView2Controller2_Release(controller2);
         }
     }

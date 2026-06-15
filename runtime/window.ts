@@ -78,6 +78,15 @@ export interface WindowOptions {
   fullscreen?: boolean;
   borderless?: boolean;
   transparent?: boolean;
+  /**
+   * Webview background color as `"#rrggbb"`. The page's own CSS background
+   * always paints over it — this only fills the color WebView shows *before*
+   * the page renders and in the transient gap during an async resize, which
+   * otherwise flashes white against a dark UI. Leave unset for the platform
+   * default (white). Windows: seeds the WebView2 DefaultBackgroundColor. iOS/
+   * macOS: not yet wired (no-op).
+   */
+  backgroundColor?: string;
   alwaysOnTop?: boolean;
   /**
    * macOS vibrancy / blur material (G12). When set, an
