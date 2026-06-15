@@ -1,0 +1,3 @@
+# Compiled Nim unit-test binaries (produced by `nim c -r`).
+# Sources are *_test.nim and stay tracked; the built executables are *_test.
+*_test
