@@ -31,6 +31,36 @@ actual codebase before committing to the full breadth port.
 - **Not** a `main` merge until full parity is reached. `main` keeps shipping on
   `zc` the entire time.
 
+## Guiding principle — write idiomatic Nim
+
+The migration is a **re-expression in idiomatic Nim, not a mechanical
+transliteration of Zen-C**. Just as the Zen-C layer made it an explicit goal to
+lean into native Zen-C features and drop to `raw {}` only when necessary, the Nim
+port leans into Nim's features and reaches for inline C (`{.emit.}`) only when
+genuinely unavoidable. **Where Zen-C used a pattern but Nim has a better
+mechanism, use Nim's.** Illustrative (not exhaustive — the real list is
+discovered per module and recorded in the assessment):
+
+- Manual `char*` + `malloc`/`free` + static-slot lifetime hacks → native `string`
+  / `seq[byte]` with ORC-managed memory (the clipboard static-slot idiom simply
+  disappears).
+- `if str::strncmp(method, …)` dispatch chains → a native string `case … of`.
+- Sentinel / empty-string error returns → `Option[T]` (std/options) or
+  exceptions, whichever reads cleaner per call site.
+- Magic int event / message codes → an `enum`.
+- Opaque `void*` handles → `distinct` types for compile-time safety.
+- Repetitive registration / dispatch boilerplate → a `template`/`macro` **only
+  where it genuinely removes noise** (no macro-for-its-own-sake).
+- `raw { … }` ObjC/C blocks → a clean `{.importc.}` of the existing `.m` C-ABI;
+  `{.emit.}` is reserved for the rare unavoidable case (the analogue of "`raw`
+  only when necessary").
+
+This is not gold-plating — it **is the evaluation**. The point of a greenfield is
+to learn Nim's ergonomics on real code, and writing idiomatic Nim (not
+transliterated Zen-C) is the only way to find out whether Nim is meaningfully
+nicer. The ergonomics assessment (the deliverable) records, per module, **where
+idiomatic Nim improved on the Zen-C pattern** — and where it didn't.
+
 ## Success criteria (the go/no-go gate)
 
 The skeleton passes when, on macOS:
@@ -156,18 +186,28 @@ not weeks — which is the entire point of skeleton-first.
 
 ## The reusable module-port recipe
 
+The recipe is **re-express idiomatically** (see *Guiding principle*), not
+transliterate. The mappings below are sensible defaults, not a ceiling — if Nim
+offers a cleaner mechanism than the Zen-C pattern, take it.
+
 For each remaining `.zc` module:
 
 1. Create `<module>.nim`.
 2. `importc` the platform C-ABI it calls (from the existing `.h` signatures).
-3. Rewrite each `raw { … }` block as a direct `importc` call — **no inline ObjC**.
-4. `struct` + `impl` → Nim `object` + `proc`; `@cfg(apple/windows)` →
+3. Rewrite each `raw { … }` block as a direct `importc` call — **no inline ObjC**
+   (`{.emit.}` only if genuinely unavoidable).
+4. Re-express the orchestration in idiomatic Nim — default mappings: `struct` +
+   `impl` → `object` + `proc` (UFCS); `@cfg(apple/windows)` →
    `when defined(macosx/windows)`; `std/json` (`JsonValue::parse`, `get_int`,
-   `get_string`) → Nim `std/json` (`parseJson`, typed getters / `case … of`),
-   adding `hasKey`/`getOrDefault` guards on any untrusted bridge frames (Nim's
-   `[]` raises on missing keys).
+   `get_string`) → Nim `std/json` (`parseJson` + typed getters, or `to(T)` object
+   mapping where it reads better), with `hasKey`/`getOrDefault` guards on
+   untrusted bridge frames (Nim's `[]` raises on a missing key); manual memory →
+   native `string`/`seq`; magic codes → `enum`; opaque handles → `distinct` — and
+   reach further into Nim (variants, templates) where it genuinely simplifies.
 5. Expose the module's API as a normal Nim module (no `exportc`).
 6. Delete the `.zc`; add the module to the Nim root import.
+7. Note in the ergonomics assessment where idiomatic Nim beat (or didn't beat) the
+   Zen-C original.
 
 ---
 
