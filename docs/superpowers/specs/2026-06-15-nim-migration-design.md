@@ -156,6 +156,27 @@ was considered and rejected: cleaner in the abstract but requires editing every
 `.m` for no functional gain — churn/gold-plating we don't need. Noted as a
 far-future option only.)
 
+### Performance parity (non-negotiable)
+
+Least-overhead webview↔native and **zero-overhead worker↔native** are top-tier
+priorities; the migration must preserve them, not just functionally work.
+
+- **Webview bridge:** inherently async (WKWebView has no sync JS→native). The Nim
+  layer reproduces the existing `zc` wire protocol exactly (`postMessage` →
+  `zapp_handle_message_from_window` → `darwin_window_eval_js` →
+  `_onInvokeResult`). Verified wire-identical in the skeleton. No new concession
+  permitted here — same single JSON parse + eval-back.
+- **Worker host objects (Phase 2, the differentiator):** `Services.invokeSync`
+  and the zero-JSON `service_invoke_native` direct path must stay
+  **synchronous, in-process, and allocation-free**. A Nim `{.exportc, cdecl.}`
+  proc is a plain C symbol — calling it from a JS engine host object is identical
+  overhead to a `zc`-emitted C function — BUT the hot path must NOT convert
+  `cstring`→Nim `string` or marshal JSON (those allocate via ORC). Keep
+  pointer/scalar-based; ORC must never touch the zero-JSON call path.
+- **Gate:** the worker-engine migration is not accepted until a **micro-benchmark
+  proves host-object round-trip parity with the `zc` baseline** (~2.1 µs JSC /
+  0.3 µs txiki today). The ergonomics assessment records the numbers.
+
 ### Repo layout
 
 - Work **in place in `native/`** on `feat/nim-native`. Keep the `.zc` files as
