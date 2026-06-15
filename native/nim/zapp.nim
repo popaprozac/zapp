@@ -24,10 +24,10 @@
 import std/os          # parentDir for the zjs.c {.compile.}/{.passL.} paths below
 import app
 import window
-# worker_service is imported only for its {.exportc.} side-effect symbol
-# (service_invoke_native — the zjs worker→native seam). No Nim symbol from it is
-# referenced here, so silence UnusedImport (registerWorkerServices() is wired in
-# the next task when the worker is spawned).
+# worker_service provides the {.exportc.} side-effect symbol service_invoke_native
+# (the zjs worker→native seam zjs.c calls) and registerWorkerServices() (called
+# from app.nim's run() before the workers spawn). No Nim symbol from it is
+# referenced in THIS module, so silence UnusedImport.
 {.push warning[UnusedImport]: off.}
 import worker_service
 {.pop.}
@@ -250,10 +250,10 @@ proc worker_dispatch_to_webview(worker_id: cstring, data_json: cstring) {.export
   discard
 
 # Worker-context bootstrap JS (the worker-side bridge: invokeSync, postMessage,
-# console). zjs.c evals the returned string before the user script. "" => no
-# bootstrap; the worker won't be spawned in this gate. TEMP until the worker
-# bootstrap module lands (its codegen twin of zapp_webview_bootstrap_script).
-proc zapp_worker_bootstrap_script(): cstring {.exportc, cdecl, gcsafe.} = cstring""
+# console) is now provided by the generated zapp_bootstrap module (imported
+# above) as zapp_worker_bootstrap_script — the real minified bridge JS bundled
+# from bootstrap/worker.ts. zjs.c evals it after installing the native
+# __zappBridge, so the bench worker's invokeService resolves.
 
 # Worker supervisor (restart policy + window state). No supervisor yet:
 # record_failure → 0 (no restart accounting); get_window_state → 0 (not found).

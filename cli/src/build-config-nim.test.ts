@@ -15,9 +15,32 @@ test("renderBuildConfigNim emits exportc getters the .m layer calls", () => {
   expect(out).toContain('"zapp://index.html"');
 });
 
-import { renderBootstrapNim } from "./build-config";
-test("renderBootstrapNim emits the bootstrap script exportc, backed by a let", () => {
-  const out = renderBootstrapNim("globalThis.__x=1;");
+import { renderBootstrapNim, renderHeadlessNim } from "./build-config";
+test("renderBootstrapNim emits webview + worker bootstrap getters, backed by lets", () => {
+  const out = renderBootstrapNim("globalThis.__x=1;", "globalThis.__w=2;");
   expect(out).toContain('proc zapp_webview_bootstrap_script(): cstring {.exportc, cdecl.}');
   expect(out).toContain('let zappWebviewBootstrap');
+  // Worker twin — emitted from the 2nd arg so zjs workers get their bridge JS.
+  expect(out).toContain('proc zapp_worker_bootstrap_script(): cstring {.exportc, cdecl, gcsafe.}');
+  expect(out).toContain('let zappWorkerBootstrap');
+  expect(out).toContain('globalThis.__w=2;');
+});
+
+test("renderHeadlessNim emits zjs_worker_create for zjs entries, skips non-zjs", () => {
+  const out = renderHeadlessNim({
+    "bench-zjs": { script: "src/bench-worker.ts", engine: "zjs" },
+    "bench-bare-jsc": { script: "src/bench-worker.ts", engine: "bare-jsc" },
+  });
+  // zjs entry → spawn call with the dist/_workers URL + h-<id> worker id.
+  expect(out).toContain(
+    'discard zjs_worker_create(cstring"/_workers/_headless_bench-zjs.mjs", cstring"", cstring"h-bench-zjs")',
+  );
+  // non-zjs entry → no spawn call.
+  expect(out).not.toContain("bench-bare-jsc");
+  expect(out).toContain("proc zapp_start_headless_workers*()");
+});
+
+test("renderHeadlessNim with no zjs entries emits a discard body", () => {
+  const out = renderHeadlessNim({ "x": { script: "a.ts", engine: "bare-jsc" } });
+  expect(out).toContain("proc zapp_start_headless_workers*() =\n  discard");
 });

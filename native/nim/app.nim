@@ -5,6 +5,10 @@
 import std/json
 import platform
 import router, service
+import worker_service          # registerWorkerServices — worker→native service seam
+# zapp_headless is CLI-generated into the project's .zapp/ dir (--path:<.zapp>),
+# providing zapp_start_headless_workers() which spawns the configured zjs workers.
+import zapp_headless
 
 type App* = object
   name*: string
@@ -16,7 +20,12 @@ proc newApp*(name: string, terminateAfterLastWindowClosed = true): App =
   App(name: name, terminateAfterLastWindowClosed: terminateAfterLastWindowClosed)
 
 proc run*(app: App): int =
-  ## Enters the Cocoa run loop (blocks). Services/workers wired later.
+  ## Register worker-path services, spawn the configured zjs headless workers,
+  ## then enter the Cocoa run loop (blocks). registerWorkerServices() MUST run
+  ## before the spawn so service_invoke_native has the bench handlers when the
+  ## worker's first invokeService round-trips back into native.
+  registerWorkerServices()
+  zapp_start_headless_workers()
   platformRun(app.terminateAfterLastWindowClosed)
 
 # --- Services ---------------------------------------------------------------

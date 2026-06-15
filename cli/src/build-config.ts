@@ -214,17 +214,54 @@ proc zapp_log_init() {.exportc, cdecl.} = discard
 }
 
 /**
- * Render the WebView bootstrap script as a Nim `{.exportc, cdecl.}` getter.
- * Uses a Nim raw string literal (r""" ... """) to avoid escaping the
+ * Render the WebView + worker bootstrap scripts as Nim `{.exportc, cdecl.}`
+ * getters. Uses Nim raw string literals (r""" ... """) to avoid escaping the
  * minified bridge JS; the `"""` close-sequence is the one thing a raw
- * literal can't contain, so it's broken up. Backed by a module-level `let`
- * per the boundary rule (the `.m` caller holds the pointer past the call).
+ * literal can't contain, so it's broken up. Each is backed by a module-level
+ * `let` per the boundary rule (the `.m`/zjs.c caller may hold the pointer past
+ * the call). The worker getter (`zapp_worker_bootstrap_script`) is the twin of
+ * the webview one: zjs.c evals it in each worker context after installing the
+ * native `__zappBridge`, so the bench's `invokeService` works.
  */
-export function renderBootstrapNim(webviewJs: string): string {
-  const safe = webviewJs.replace(/"""/g, '"" & "\\"" & "');
+export function renderBootstrapNim(webviewJs: string, workerJs: string): string {
+  const esc = (s: string) => s.replace(/"""/g, '"" & "\\"" & "');
   return `## AUTO-GENERATED bootstrap (Nim).
-let zappWebviewBootstrap = r"""${safe}"""
+let zappWebviewBootstrap = r"""${esc(webviewJs)}"""
 proc zapp_webview_bootstrap_script(): cstring {.exportc, cdecl.} = zappWebviewBootstrap.cstring
+let zappWorkerBootstrap = r"""${esc(workerJs)}"""
+proc zapp_worker_bootstrap_script(): cstring {.exportc, cdecl, gcsafe.} =
+  ## zjs.c calls this from a worker pthread, hence gcsafe. The backing \`let\` is
+  ## an immutable module global initialized at startup (before any worker
+  ## spawns) and never mutated; \`.cstring\` just hands back its data pointer. The
+  ## cast asserts that read is thread-safe (Nim can't prove it for a GC'd global).
+  {.cast(gcsafe).}: zappWorkerBootstrap.cstring
+`;
+}
+
+/**
+ * Render the headless-worker spawn calls as a Nim module (zjs-only).
+ *
+ * Nim analog of `generateHeadlessWorkers` (the `.zc` emitter), but scoped to
+ * the worker perf gate: only `engine: "zjs"` entries are emitted — other
+ * engines (e.g. bare-jsc) aren't wired in the Nim path and would SIGSEGV. Each
+ * zjs entry becomes one `zjs_worker_create` call with the same script URL the
+ * `.zc` path uses (`/_workers/_headless_<id>.mjs`, served from dist/_workers)
+ * and the same `h-<id>` worker id. `zapp_start_headless_workers()` is called at
+ * app boot (app.nim's run()).
+ */
+export function renderHeadlessNim(headless: Record<string, any> | undefined): string {
+  const lines: string[] = [];
+  for (const [id, v] of Object.entries(headless ?? {})) {
+    const engine = typeof v === "string" ? undefined : v?.engine;
+    if (engine !== "zjs") continue; // zjs only for the perf gate
+    lines.push(
+      `  discard zjs_worker_create(cstring"/_workers/_headless_${id}.mjs", cstring"", cstring"h-${id}")`,
+    );
+  }
+  return `## AUTO-GENERATED (Nim). zjs headless workers.
+proc zjs_worker_create(scriptUrl, ownerId, workerId: cstring): bool {.importc, cdecl.}
+proc zapp_start_headless_workers*() =
+${lines.length ? lines.join("\n") : "  discard"}
 `;
 }
 

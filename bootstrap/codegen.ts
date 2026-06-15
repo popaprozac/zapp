@@ -69,6 +69,19 @@ export async function bundleWebviewBootstrapRaw(): Promise<string> {
 }
 
 /**
+ * Bundle + minify the WORKER bootstrap and return the RAW JS string.
+ * Worker twin of `bundleWebviewBootstrapRaw` — same source the `.zc` path
+ * bundles into `zapp_worker_bootstrap_script` (bootstrap/worker.ts), which
+ * zjs.c evals in each worker context after it installs the native
+ * `__zappBridge` (so `invokeService` exists before this script runs). Used by
+ * the Nim build path, whose `renderBootstrapNim` does its own raw-string-literal
+ * escaping rather than C-string escaping.
+ */
+export async function bundleWorkerBootstrapRaw(): Promise<string> {
+  return bundleRaw(path.join(bootstrapDir, "worker.ts"));
+}
+
+/**
  * Generate .zapp/zapp_bootstrap.zc containing minified bridge JS
  * as Zen-C functions returning C strings.
  */

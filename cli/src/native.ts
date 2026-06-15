@@ -1092,9 +1092,9 @@ async function buildNativeNim(
   // benign inside the generated Nim string literal.
   const assetRoot = path.resolve(root, config.assetDir).replace(/\\/g, "/");
 
-  const { renderBuildConfigNim, renderBootstrapNim } = await import("./build-config");
+  const { renderBuildConfigNim, renderBootstrapNim, renderHeadlessNim } = await import("./build-config");
   const { resolveBootstrapDir } = await import("./paths");
-  const { bundleWebviewBootstrapRaw } = await import(
+  const { bundleWebviewBootstrapRaw, bundleWorkerBootstrapRaw } = await import(
     path.join(resolveBootstrapDir(), "codegen.ts")
   );
 
@@ -1108,9 +1108,42 @@ async function buildNativeNim(
   });
   await fs.writeFile(path.join(zappDir, "zapp_build_config.nim"), configNim, "utf-8");
 
-  const webviewJs = await bundleWebviewBootstrapRaw();
-  const bootstrapNim = renderBootstrapNim(webviewJs);
+  // Bundle BOTH bootstraps from the same TS sources the `.zc` path uses.
+  // The worker JS becomes `zapp_worker_bootstrap_script` — zjs.c evals it in
+  // each worker context (after installing the native `__zappBridge`), so the
+  // bench worker's `invokeService` resolves.
+  const [webviewJs, workerJs] = await Promise.all([
+    bundleWebviewBootstrapRaw(),
+    bundleWorkerBootstrapRaw(),
+  ]);
+  const bootstrapNim = renderBootstrapNim(webviewJs, workerJs);
   await fs.writeFile(path.join(zappDir, "zapp_bootstrap.nim"), bootstrapNim, "utf-8");
+
+  // zjs-only headless-worker spawn module. `zapp_start_headless_workers()` is
+  // called at app boot (app.nim's run()). Only `engine: "zjs"` entries emit a
+  // spawn call; other engines aren't wired in the Nim path.
+  const headlessNim = renderHeadlessNim(config.headless);
+  await fs.writeFile(path.join(zappDir, "zapp_headless.nim"), headlessNim, "utf-8");
+
+  // Stage worker scripts where zjs.c's filesystem fallback looks for them.
+  // The Vite plugin bundles workers to dist/_workers/, but zjs.c's
+  // zjs_load_script (native/worker/engines/zjs.c) resolves a script URL to
+  // `<cwd>/.zapp/workers/<basename>`. The `.zc` prod path bridges this in
+  // package.ts (copy into the .app's Resources/.zapp/workers). The Nim path
+  // produces a bare `bin/` binary run from the project dir, so mirror that copy
+  // here → the spawned worker's script is found without packaging.
+  const distWorkers = path.join(root, "dist", "_workers");
+  const zappWorkers = path.join(zappDir, "workers");
+  try {
+    const names = await fs.readdir(distWorkers);
+    await fs.mkdir(zappWorkers, { recursive: true });
+    for (const name of names) {
+      if (!name.endsWith(".mjs") && !name.endsWith(".zbc")) continue;
+      await fs.copyFile(path.join(distWorkers, name), path.join(zappWorkers, name));
+    }
+  } catch {
+    // dist/_workers absent (no workers configured) — nothing to stage.
+  }
 
   // Emit the JsonValue C-ABI object for the Nim build to link against.
   //
@@ -1164,7 +1197,8 @@ async function buildNativeNim(
   // through this object's symbols. Passed here rather than a {.passL.} literal in
   // zapp.nim because the path is the USER project's .zapp dir, unknown at
   // framework-compile time.
-  const args = ["c", "--cc:clang", "--mm:orc", "-d:release", "--opt:size",
+  // --threads:on — zjs spawns a pthread per worker; ORC must be thread-safe.
+  const args = ["c", "--cc:clang", "--mm:orc", "--threads:on", "-d:release", "--opt:size",
                 `--path:${zappDir}`, `--passL:${providerO}`,
                 `-o:${output}`, ...(verbose ? [] : ["--hints:off"]), nimRoot];
   const proc = Bun.spawn(["nim", ...args], { cwd: nativeDir, stdout: "inherit", stderr: "inherit" });
