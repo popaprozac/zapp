@@ -1053,9 +1053,37 @@ interface CompileOptions {
   config?: import("./config").ResolvedConfig;
 }
 
+/**
+ * Nim-driven native build (opt-in via ZAPP_NATIVE_LANG=nim). Drives the build
+ * with `nim c` against the Nim build root (`native/nim/zapp.nim`), which
+ * {.compile.}s the untouched darwin platform layer and links the frameworks.
+ * The default build path stays `zc build` (compileNative below); this is the
+ * walking-skeleton route while the native layer is rebuilt in Nim.
+ */
+async function buildNativeNim(nativeDir: string, output: string, verbose: boolean): Promise<void> {
+  // The Nim build root lives in the framework's native/ dir (nativeDir), not
+  // the user project — same as the zc sources. `{.compile.}` paths inside
+  // zapp.nim resolve relative to that file, so cwd doesn't matter for them.
+  const nimRoot = path.join(nativeDir, "nim", "zapp.nim");
+  const args = ["c", "--cc:clang", "--mm:orc", "-d:release", "--opt:size",
+                `-o:${output}`, ...(verbose ? [] : ["--hints:off"]), nimRoot];
+  const proc = Bun.spawn(["nim", ...args], { cwd: nativeDir, stdout: "inherit", stderr: "inherit" });
+  const code = await proc.exited;
+  if (code !== 0) throw new Error(`nim c failed (exit ${code})`);
+}
+
 export async function compileNative(opts: CompileOptions): Promise<void> {
   const { root, buildFile, buildConfigFile, bootstrapFile, assetsFile, headlessFile, engineOverlayFile, output, nativeDir, optimize } = opts;
   const target: BuildTarget = opts.target ?? detectTarget();
+
+  // Opt-in Nim build path. Branches before any zc setup so the Nim driver owns
+  // the whole compile; the caller still emits the canonical "build complete"
+  // line. The zc path below stays the untouched default.
+  if (process.env.ZAPP_NATIVE_LANG === "nim") {
+    const verbose = process.argv.includes("--verbose") || process.argv.includes("-v");
+    await buildNativeNim(nativeDir, output, verbose);
+    return;
+  }
 
   // Generate platform config with .m file paths. Forward the
   // caller's buildFile + engineOverlayFile so the platform config's
