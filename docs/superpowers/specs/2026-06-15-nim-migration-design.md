@@ -1,0 +1,222 @@
+# Nim Migration — Design
+
+**Status:** Design (approved 2026-06-15). Implementation plan to follow.
+**Branch:** `feat/nim-native` (off `main`).
+**Decision provenance:** the native-language-eval spike (`spike/native-language-eval`,
+`spikes/lang-eval/SCORECARD.md`) evaluated Zig / Nim / C3 / Odin / plain-C / Swift
+against Zen-C. On the **maturity + adoption** lens the user elected **Nim**:
+cleanest migration (compiles to C exactly like Zen-C, `{.emit.}` ≈ `raw` blocks),
+stable, approachable, small binaries (102 KB probe floor, *under* the 112 KB Zen-C
+baseline), zero API drift across probe + slice.
+
+---
+
+## Goal
+
+Replace Zapp's ~7,500-line **Zen-C** (`.zc`) native orchestration layer with
+**Nim**, validated by a **skeleton-first greenfield rebuild** on an isolated
+branch — proving the real Nim-driven build + orchestration ergonomics on the
+actual codebase before committing to the full breadth port.
+
+## Non-goals (this spec)
+
+- **Not** a coexistence pilot (Nim modules linked into the `zc` binary). We
+  evaluated that and rejected it: the coexistence scaffolding is throwaway work
+  that does not transfer to the end state, and it keeps `zc` as the build driver —
+  hiding the exact Nim-driven-build ergonomics we want to learn.
+- **Not** the platform layer. The 18 darwin `.m`, 18 iOS `.m`, and 19 Windows
+  `.c` files (~20k lines) are **reused untouched**, called via Nim `importc`.
+- **Not** iOS or Windows for the skeleton — macOS only. iOS + Windows are Phase 2
+  parity work.
+- **Not** a `main` merge until full parity is reached. `main` keeps shipping on
+  `zc` the entire time.
+
+## Success criteria (the go/no-go gate)
+
+The skeleton passes when, on macOS:
+
+1. **Sub-gate A — build ergonomics:** the Nim-driven build (`nim c`, not
+   `zc build`) produces a `.app` that shows a window whose `WKWebView` loads the
+   bundled assets. Proves Nim drives the build, `.m` files compile via
+   `{.compile.}`, frameworks link, and assets embed.
+2. **Gate B — language ergonomics on the hard path:** hello-world round-trips one
+   bridge call (a button invokes the `greet` service and renders the response)
+   **and** clipboard read/write works (text + html + files). The build's final
+   line is `[zapp] build complete: <path>` with a fresh binary mtime; verified by
+   manual smoke.
+
+The **deliverable** is not just a passing gate — it is a written **ergonomics
+assessment**: the Nim-driven build + the orchestration port graded against the
+Zen-C friction inventory, so we can decide "continue to full migration" vs "stop"
+with evidence. `main` is unaffected throughout.
+
+---
+
+## Architecture
+
+### Build model — Nim is the driver
+
+Today: `cli/src/native.ts` assembles a `zc build <build.zc> <generated .zc> -I … -o …`
+invocation; `zc` walks `import` statements from `native/build.zc` → `app/app.zc` →
+~15 module imports, emits one C file, and invokes clang once (compiling the `.m`
+platform sources passed via `//> cflags:` directives and linking frameworks via
+`//> link:`).
+
+After: the native-build step calls **`nim c`**. A Nim root module
+(`native/zapp.nim`) imports the orchestration modules. The platform layer and
+build flags come in through Nim pragmas:
+
+- **`{.compile: "platform/darwin/window.m".}`** — one per platform `.m`/`.c`
+  source; Nim compiles and links it. (Replaces the `//> cflags: <.m list>`.)
+- **`{.passC: "-fobjc-arc -x objective-c -I native".}`** — ObjC ARC + the include
+  path for the platform `.h` files.
+- **`{.passL: "-framework Cocoa -framework WebKit …".}`** — frameworks + link
+  libraries. (Replaces `//> link:`.)
+- **`--mm:orc -d:release --opt:size`** — the ORC GC (kept, ~free in size per the
+  spike) and size-optimized release.
+
+### The interop boundary
+
+- **Nim ↔ `.m` (the only C-ABI boundary):** Nim binds the existing `darwin_*` /
+  `windows_*` C symbols with `proc darwin_window_create(opts: pointer): pointer
+  {.importc, cdecl.}`. This is the direct analogue of today's `import
+  "…/window.h" as darwin`. A `raw { darwin_clipboard_write_text(...) }` block in
+  `.zc` becomes a direct `importc` call in Nim — **no inline ObjC**, same
+  architecture (ObjC stays in `.m`).
+- **Nim ↔ Nim (orchestration):** normal Nim `import` between modules. **No
+  `exportc`/C-ABI gymnastics between orchestration modules** — this is the key
+  simplification over the rejected coexistence approach, where a still-`.zc`
+  caller would have needed C-extern declarations to reach a migrated module.
+
+### Repo layout
+
+- Work **in place in `native/`** on `feat/nim-native`. Keep the `.zc` files as
+  living reference; add `.nim` files beside them; **delete each `.zc` as its
+  `.nim` replacement lands**. The Nim build compiles only `.nim` + the `.m`/`.c`
+  it `{.compile.}`s, so leftover `.zc` is inert until removed.
+- The platform layer (`native/platform/{darwin,ios,windows}/`) is untouched.
+
+### Codegen (CLI, Bun/TS)
+
+- `cli/src/generate.ts` (TS service wrappers in `src/zapp/`) — **unchanged**
+  (runtime-side, language-agnostic).
+- `cli/src/build-config.ts` — **changed**: the generated build-config / platform /
+  headless / bootstrap / assets files become generated **`.nim`** (emitting
+  `{.compile.}` / `{.passL.}` directives + embedded asset/bootstrap data) instead
+  of `.zc`. This is the bulk of the CLI change.
+- `cli/src/native.ts` — swap the `zc build …` argv assembly for `nim c …`.
+
+---
+
+## Phase 1 — the walking skeleton
+
+Port only the load-bearing spine, in dependency order:
+
+| Order | Module(s) | Proves |
+| --- | --- | --- |
+| 1 | build entry (`native/zapp.nim` root) + generated Nim build config | Nim drives the build; `.m` compiles; frameworks link |
+| 2 | `platform/platform.zc` → `platform.nim` (`platform_init`) | `importc` of `darwin_platform_init`; `when defined(macosx)` |
+| 3 | `app/app.zc` → `app.nim` (lifecycle, `App.run` → platform run loop) | app object + run loop via `importc` |
+| 4 | `window/window.zc` (+ events/callbacks) → `window.nim` (one window + webview) | window create + `WKWebView` + asset load (→ **sub-gate A**) |
+| 5 | `bridge/protocol.zc` + `bridge/dispatch.zc` + `app/router.zc` → `.nim` (one round-trip) | JSON parse + dispatch + the host-bridge round-trip (the crux) |
+| 6 | `service/service.zc` → `service.nim` (register + invoke one service) | `greet` service invoked from JS |
+| 7 | `clipboard/clipboard.zc` → `clipboard.nim` (first leaf feature) | the full module-port recipe end-to-end (→ **gate B**) |
+
+**Sub-gate A** falls out of step 4; **gate B** falls out of steps 5–7. If a
+Zen-C feature with no clean Nim equivalent exists, it surfaces *here* — days in,
+not weeks — which is the entire point of skeleton-first.
+
+### Clipboard as the recipe exemplar
+
+`clipboard.zc` (197 lines) is the template every later module follows:
+
+- Current shape: `struct Clipboard {}` + `impl Clipboard` with `@cfg`-gated
+  methods, each a `raw { … }` block calling `darwin_clipboard_*` /
+  `windows_clipboard_*`, plus a manual static-buffer ownership idiom (keep the
+  malloc'd C buffer alive in a `static char*` slot until the next call).
+- Nim shape: a module that `importc`s the `darwin_clipboard_*` C-ABI, exposes
+  `proc readText(): string` etc. The static-slot memory hack collapses — Nim
+  converts the returned `cstring` to a `string` (copying) and the C buffer is
+  freed immediately; no slot needed. `@cfg(apple)`/`@cfg(windows)` →
+  `when defined(macosx)` / `when defined(windows)`. JSON for `read_files` is just
+  the returned string (services parse it; clipboard does not).
+- Caller change: `router.zc:1774-1815` calls `Clipboard::read_text()`,
+  `write_text`, `read_html`, `write_html`, `read_files`, `has`, `clear`. In the
+  Nim router these become normal Nim calls into `clipboard.nim`
+  (`clipboard.readText()`), because the router is *also* Nim by the time clipboard
+  lands (step 5 precedes step 7). The image path
+  (`darwin_clipboard_read_image_png_b64`, router:1825/1848) stays a direct
+  `importc` call — image bytes are intentionally absent from the high-level
+  surface — so that boundary is unchanged.
+- Windows branch: ported as a `when defined(windows)` block calling
+  `windows_clipboard_*`; **compile-checked only on macOS** (the dead branch isn't
+  compiled), verified for real later on the Windows machine.
+
+---
+
+## The reusable module-port recipe
+
+For each remaining `.zc` module:
+
+1. Create `<module>.nim`.
+2. `importc` the platform C-ABI it calls (from the existing `.h` signatures).
+3. Rewrite each `raw { … }` block as a direct `importc` call — **no inline ObjC**.
+4. `struct` + `impl` → Nim `object` + `proc`; `@cfg(apple/windows)` →
+   `when defined(macosx/windows)`; `std/json` (`JsonValue::parse`, `get_int`,
+   `get_string`) → Nim `std/json` (`parseJson`, typed getters / `case … of`),
+   adding `hasKey`/`getOrDefault` guards on any untrusted bridge frames (Nim's
+   `[]` raises on missing keys).
+5. Expose the module's API as a normal Nim module (no `exportc`).
+6. Delete the `.zc`; add the module to the Nim root import.
+
+---
+
+## Phase 2 — breadth + parity (post-gate, separate plans)
+
+After the gate passes, the remaining ~35 modules are mechanical ports of the
+recipe: `menu`, `tray`, `dock`, `dialog`, `notification`, `screen`, `sidebar`,
+`inspector`, `toolbar`, `popover`, `panel`, `fs`, `permissions`, `shortcuts`,
+`sync`, `log`, `app_events`, plus worker-engine wiring. Then **iOS** and
+**Windows** parity. **Merge to `main` once, at full parity.** Each module (and
+each platform parity pass) is its own task in a later plan — this spec covers
+through the gate.
+
+---
+
+## Risks & mitigations
+
+- **ObjC-via-Nim build (highest-priority unknown):** does `-x objective-c
+  -fobjc-arc` thread cleanly through Nim's `{.compile.}` of the `.m` files, and
+  do the frameworks link? This is the *first* thing the skeleton proves
+  (sub-gate A). If it doesn't work out of the box, the fallback is precompiling
+  the `.m` files to a `.a` (as the Bare runtime already does) and `{.passL.}`-ing
+  that archive — a known-good pattern in the repo.
+- **GC init:** Nim-as-driver owns `main`, so the ORC GC initializes normally (no
+  manual `NimMain()` — that was only needed for the rejected staticlib/coexistence
+  path).
+- **Showstopper feature:** any `.zc` construct with no clean Nim equivalent
+  surfaces during the spine port (skeleton-first guarantees early discovery).
+- **Asset/bootstrap embedding:** the generated `.zc` that embeds brotli assets +
+  the JS bootstrap must be reproduced as generated `.nim` (embedded `const`
+  byte arrays / `staticRead`); validated at sub-gate A.
+
+## Future (out of scope, recorded)
+
+- **`zig cc` as Nim's C backend compiler** for self-contained
+  **Windows-from-Mac** cross-compilation — Nim lets you pick the backend C
+  compiler, and `zig cc` bundles Zig's cross-compile. Closes the one axis Nim
+  lost to Zig in the spike. Applies to the Phase 2 Windows parity work (the
+  Windows platform layer is plain C; Cocoa/`.m` is Apple-only regardless of
+  compiler).
+- **iOS toolchain gating** reuses the lessons from the bare-hermes iOS build
+  (cross-compile tool gating, SDK selection).
+
+## References
+
+- `spikes/lang-eval/SCORECARD.md` — the evaluation + recommendation.
+- The Zen-C friction inventory (in the scorecard + project memory) — the baseline
+  the ergonomics assessment grades against.
+- `cli/src/native.ts:1073-1101` — current `zc build` invocation (becomes `nim c`).
+- `cli/src/build-config.ts` — current `.zc` codegen (becomes `.nim` codegen).
+- `native/clipboard/clipboard.zc` + `native/app/router.zc:1774-1848` — the pilot
+  module + its callers.
