@@ -221,6 +221,40 @@ from day one:
     (`zapp_resolve_nav_url`) — WebView2 `Navigate` needs an absolute URL, unlike
     WKWebView's `URLWithString:relativeToURL:`.
 
+## Native-UI follow-ups (next list)
+
+As of 2026-06-14, every macOS/iOS native surface has a Windows implementation
+(window material/vibrancy → Mica/Acrylic + immersive dark caption, modern
+TaskDialog + IFileDialog, Win32 menus/tray, WinRT toasts, dock → taskbar
+badge/bounce/progress/show-hide, `<zapp-webview>` panels, sidebar + inspector
+split panes, popover/flyout, power/deep-links/screen/clipboard/shortcuts).
+Remaining native work, in rough priority:
+
+1. **Custom / extended title bar (Tier 2).** The one big remaining native item
+   and the highest-risk: `DwmExtendFrameIntoClientArea` + `WM_NCCALCSIZE`
+   caption removal, self-drawn min/max/close caption buttons, `WM_NCHITTEST`
+   for drag (`HTCAPTION`) / resize borders / Snap Layouts (`HTMAXBUTTON`).
+   Unlocks content-under-caption, themed caption buttons, and makes
+   `--zapp-window-controls-inset-right` non-zero (currently injected at 0;
+   webview.c metrics block is ready for it). Needs heavy interactive visual
+   iteration (drag/resize/maximize/Snap) — do it deliberately, ideally after a
+   clean regression baseline. The web drag-region machinery
+   (`windows_webview_set_drag_region`/`zapp_is_in_drag_region`) is present but
+   currently inert — wire it via WM_NCHITTEST here.
+2. **Taskbar jump lists** (`ICustomDestinationList`) + **thumbnail toolbar**
+   (`ITaskbarList3::ThumbBarAddButtons`). Windows-only polish; needs a small
+   app-facing config surface (tasks/recent items). No macOS analog.
+3. **Snap Layouts** — mostly comes free once the custom title bar's maximize
+   button reports `HTMAXBUTTON`.
+
+macOS to-do queued from the Windows side:
+- **`backgroundColor` window option**: exists cross-platform (runtime type +
+  `window.zc`), wired on Windows (WebView2 DefaultBackgroundColor). macOS/iOS
+  parse it but no-op — wire to `NSWindow.backgroundColor` /
+  `WKWebView.underPageBackgroundColor`.
+- White-on-resize is inherent WebView2 async-repaint (no "repaint faster"
+  knob); the `backgroundColor` option is the mitigation (gap color, not white).
+
 ## Open questions for the brainstorm (decide these first)
 
 1. **Toolchain:** does `zc` (Zen-C 0.4.4+) actually run on Windows, and
