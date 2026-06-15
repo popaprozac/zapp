@@ -1,0 +1,19 @@
+// Forces zc to emit the JsonValue implementation (std/json + the heap-safe
+// json_safe parser + the ownership-transfer builder helpers) as C, so the
+// Nim-linked zjs.c can build/read JsonValue trees. Reused untouched from the
+// zc stdlib + bridge — NOT ported to Nim.
+//
+// This is the full JsonValue C-ABI surface zjs.c links against:
+//   - std/json.zc       JsonValue struct + JsonValue__*_ptr / accessors
+//   - json_safe.zc      zapp_json_parse (heap-safe parser)
+//   - json_builder.zc   json_object_set_owned / json_array_push_owned /
+//                       json_free_tree (used by zjsvalue_to_jsonvalue)
+//
+// EMIT (recorded working command — zc's `-c` is broken for stdlib generics,
+// so we transpile to C then clang -c; see cli/src/native.ts buildNativeNim):
+//   zc transpile native/nim/zjson_provider.zc -o <out>.c
+//   clang -c <out>.c -o <out>.o
+import "std/json.zc";
+import "../bridge/json_safe.zc";
+import "../bridge/json_builder.zc";
+fn _zjson_anchor() -> int { return 0; }

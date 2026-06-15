@@ -1112,6 +1112,48 @@ async function buildNativeNim(
   const bootstrapNim = renderBootstrapNim(webviewJs);
   await fs.writeFile(path.join(zappDir, "zapp_bootstrap.nim"), bootstrapNim, "utf-8");
 
+  // Emit the JsonValue C-ABI object for the Nim build to link against.
+  //
+  // zjs.c (reused untouched) builds/reads JsonValue trees via the zc
+  // std/json + json_safe + json_builder C-ABI. The Nim path does NO zc
+  // compilation, so those symbols would be absent → link error. We compile
+  // a tiny provider .zc to an object and drop it at .zapp/zjson_provider.o;
+  // a later step (passL in native/nim/zapp.nim) links it in. Both the zc and
+  // Nim builds then share the IDENTICAL JsonValue impl.
+  //
+  // zc's `-c` (compile-only) is broken for the stdlib generic
+  // instantiations json_safe pulls in (map.zc/vec.zc type-mismatch errors
+  // that do NOT occur in a full `zc build`), so we transpile to C and
+  // clang -c it. The emitted C is self-contained (standard headers only,
+  // no main) — recorded working command, do not "simplify" to `zc -c`.
+  const providerZc = path.join(nativeDir, "nim", "zjson_provider.zc");
+  const providerC = path.join(zappDir, "zjson_provider.c");
+  const providerO = path.join(zappDir, "zjson_provider.o");
+  if (!(await Bun.file(providerZc).exists())) {
+    throw new Error(`[zapp] Nim build: JsonValue provider missing at ${providerZc}`);
+  }
+  const transpile = Bun.spawn(
+    ["zc", "transpile", providerZc, "-o", providerC],
+    { cwd: nativeDir, stdout: verbose ? "inherit" : "ignore", stderr: "inherit" },
+  );
+  const transpileCode = await transpile.exited;
+  if (transpileCode !== 0) {
+    throw new Error(
+      `[zapp] Nim build: 'zc transpile' of the JsonValue provider failed ` +
+      `(exit ${transpileCode}). Is zc on PATH? (zc v0.4.4+ expected)`,
+    );
+  }
+  const clangO = Bun.spawn(
+    ["clang", "-c", providerC, "-o", providerO],
+    { cwd: nativeDir, stdout: verbose ? "inherit" : "ignore", stderr: "inherit" },
+  );
+  const clangCode = await clangO.exited;
+  if (clangCode !== 0) {
+    throw new Error(
+      `[zapp] Nim build: clang -c of the JsonValue provider failed (exit ${clangCode}).`,
+    );
+  }
+
   // The Nim build root lives in the framework's native/ dir (nativeDir), not
   // the user project — same as the zc sources. `{.compile.}` paths inside
   // zapp.nim resolve relative to that file, so cwd doesn't matter for them.
