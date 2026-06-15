@@ -55,15 +55,8 @@ proc routeMessage*(msg: string, windowId: int) =
   let f = parsed.get
   if f.t != 1: return            # skeleton answers INVOKE only
 
-  # --- Task 6 (clipboard) seam ---------------------------------------------
-  # The clipboard methods arrive as INVOKEs whose `m` is prefixed `__clipboard:`
-  # (e.g. `__clipboard:readText`). They are handled natively, NOT via the
-  # service registry, so the dispatch below must NOT see them. Task 6 inserts
-  # its handling block HERE, right before the registry lookup — e.g.:
-  #   if f.m.startsWith("__clipboard:"):
-  #     routeClipboard(f.m, f.a, windowId, f.id)   # owns its own sendInvokeResponse
-  #     return
-  # -------------------------------------------------------------------------
+  # `__clipboard:*` INVOKEs are handled natively (NOT via the service registry),
+  # so they must be intercepted before the registry lookup below.
   if f.m.startsWith("__clipboard:"):
     routeClipboard(f.m, f.a, windowId, f.id)   # owns its own sendInvokeResponse
     return

@@ -29,7 +29,12 @@ import window
 # name. They provide the `zapp_build_*` getters + `zapp_log_init`
 # (zapp_build_config) and `zapp_webview_bootstrap_script` (zapp_bootstrap) as
 # {.exportc, cdecl.} — replacing the TEMP stubs that used to live here.
+# Imported only for their {.exportc.} side-effect symbols (no Nim symbols are
+# referenced here), so silence UnusedImport — keeps the warning channel clean
+# for real unused imports as the module set grows in breadth.
+{.push warning[UnusedImport]: off.}
 import zapp_build_config, zapp_bootstrap
+{.pop.}
 
 # ---------------------------------------------------------------------------
 # platform.m callback dependencies (defined in not-yet-ported modules)

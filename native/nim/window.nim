@@ -154,7 +154,14 @@ proc createWindow*(o: WindowOptions): tuple[id: int32, handle: pointer] =
   let id = gNextWindowId
   inc gNextWindowId
   o.numericIdPrealloc = id
-  GC_ref(o)                  # C holds the pointer past this call; pin vs ORC.
+  # window.m reads `o` ONLY synchronously inside darwin_window_create (via the
+  # wopts_* accessors); it copies what it needs (e.g. auto-show flags) into the
+  # window delegate and never retains the pointer (verified: window.m:307/335).
+  # Pin across the call so ORC can't collect mid-read, then unpin — no leak.
+  # This pin/unpin pairing is the template for every module that hands a Nim ref
+  # to the .m layer (do NOT leave a bare GC_ref dangling at breadth).
+  GC_ref(o)
   let h = darwin_window_create(cast[pointer](o))
+  GC_unref(o)
   darwin_window_register_numeric_id(h, id)
   (id, h)

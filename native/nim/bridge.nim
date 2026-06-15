@@ -53,6 +53,9 @@ proc sendInvokeResponse*(windowId, requestId: int, ok: bool, payload: string) =
   ## `_onInvokeResult(id, ok, payload)` resolves/rejects the pending promise.
   ## NB arg order: window id first, request id second (matches the zc
   ## (int window_id, int request_id) signature).
+  ## TODO(phase2): reintroduce the cancellation guard — zc dispatch_invoke_response
+  ## drops the response when zapp_is_cancelled(requestId); no cancellation
+  ## machinery exists in the skeleton yet.
   let okLit = if ok: "true" else: "false"
   let js = "(function(){var b=globalThis[Symbol.for('zapp.bridge')];" &
            "if(b&&typeof b._onInvokeResult==='function'){" &
