@@ -14,8 +14,11 @@
 ## clipboard.h: `darwin_clipboard_read_*` return a malloc'd C string the caller
 ## must free; `read_files` returns a JSON array string ("[]" when none).
 ##
-## Image methods (`__clipboard:readImagePng` / `writeImagePng`) are out of scope
-## for the walking skeleton (deferred to breadth) and intentionally absent.
+## Image bytes (`readImagePng` / `writeImagePng`) cross the JSON-only bridge as
+## base64; clipboard.m encodes/decodes server-side via the `*_b64` helpers so
+## this module needs no Foundation. `read_image_png_b64` returns a malloc'd
+## base64 C string (NULL when no image) — same caller-frees contract as the
+## other reads.
 
 {.compile("../platform/darwin/clipboard.m", "-fobjc-arc").}
 
@@ -24,6 +27,8 @@ proc darwin_clipboard_write_text(s: cstring): bool {.importc, cdecl.}
 proc darwin_clipboard_read_html(): cstring {.importc, cdecl.}
 proc darwin_clipboard_write_html(s: cstring): bool {.importc, cdecl.}
 proc darwin_clipboard_read_files(): cstring {.importc, cdecl.}
+proc darwin_clipboard_read_image_png_b64(): cstring {.importc, cdecl.}
+proc darwin_clipboard_write_image_png_b64(b64: cstring): bool {.importc, cdecl.}
 proc darwin_clipboard_has(fmt: cstring): bool {.importc, cdecl.}
 proc darwin_clipboard_clear() {.importc, cdecl.}
 proc c_free(p: pointer) {.importc: "free", header: "<stdlib.h>".}
@@ -47,6 +52,15 @@ proc readFiles*(): string =
   ## Returns a JSON array of absolute path strings; "[]" when none.
   let s = takeCString(darwin_clipboard_read_files())
   if s.len == 0: "[]" else: s
+
+proc readImagePngB64*(): string =
+  ## Base64 PNG of the clipboard image; "" when no image present. clipboard.m
+  ## does the PNG->base64 encode so the bridge stays JSON-only.
+  takeCString(darwin_clipboard_read_image_png_b64())
+
+proc writeImagePngB64*(b64: string): bool =
+  ## Decode the base64 PNG and place it on the clipboard.
+  darwin_clipboard_write_image_png_b64(b64.cstring)
 
 proc has*(fmt: string): bool = darwin_clipboard_has(fmt.cstring)
 proc clear*() = darwin_clipboard_clear()

@@ -9,8 +9,7 @@ proc routeClipboard(m: string, a: JsonNode, windowId, id: int) =
   ## Handle a `__clipboard:*` INVOKE natively (NOT via the service registry),
   ## mirroring native/app/router.zc:router_handle_clipboard. Arg keys match the
   ## runtime (runtime/clipboard.ts) + the zc reference: writeText reads "text",
-  ## writeHtml reads "html", has reads "format". The image methods (readImagePng
-  ## / writeImagePng) are out of scope for the skeleton.
+  ## writeHtml reads "html", has reads "format", writeImagePng reads "data".
   ##
   ## Payload contract (consumed by bootstrap/webview.ts:_onInvokeResult →
   ## JSON.parse): text/html reads -> a JSON STRING literal of the content (via
@@ -26,6 +25,13 @@ proc routeClipboard(m: string, a: JsonNode, windowId, id: int) =
     sendInvokeResponse(windowId, id, true, $(%clipboard.readHtml()))
   of "__clipboard:readFiles":
     sendInvokeResponse(windowId, id, true, clipboard.readFiles())
+  of "__clipboard:readImagePng":
+    # base64 PNG as a JSON string ("" => runtime treats as null / no image).
+    sendInvokeResponse(windowId, id, true, $(%clipboard.readImagePngB64()))
+  of "__clipboard:writeImagePng":
+    # arg key is "data" (runtime/clipboard.ts writeImage sends { data }), NOT b64.
+    discard clipboard.writeImagePngB64(args{"data"}.getStr(""))
+    sendInvokeResponse(windowId, id, true, "null")
   of "__clipboard:has":
     let ok = clipboard.has(args{"format"}.getStr(""))
     sendInvokeResponse(windowId, id, true, (if ok: "true" else: "false"))
