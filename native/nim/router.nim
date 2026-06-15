@@ -5,6 +5,16 @@
 import std/[options, json, strutils]
 import bridge, service, clipboard, callbacks, events
 
+# Bridge-ready signal: the webview posts {t:4,m:"ready"} once its bootstrap bridge
+# is up (bootstrap/webview.ts). The .m window delegate defers the FIRST focus
+# event (window.m:384 — window becomes key before the bridge is ready →
+# pendingFocusEvent) and only flushes it when darwin_window_set_bridge_ready
+# fires (window.m:550-554). So without routing "ready", window:focus is stuck
+# deferred forever (every other window event dispatches unconditionally).
+proc darwin_window_id_string(numericId: int32): cstring {.importc, cdecl.}
+proc darwin_window_set_bridge_ready(windowId: cstring) {.importc, cdecl.}
+proc zapp_window_trigger_on_ready(id: int32) {.importc, cdecl.}  # def in callbacks.nim
+
 proc routeClipboard(m: string, a: JsonNode, windowId, id: int) =
   ## Handle a `__clipboard:*` INVOKE natively (NOT via the service registry),
   ## mirroring native/app/router.zc:router_handle_clipboard. Arg keys match the
@@ -66,6 +76,15 @@ proc routeMessage*(msg: string, windowId: int) =
     if evId >= 0:
       zapp_window_set_js_listener(windowId.cint, evId.cint,
         (if f.m == "subscribe": 1.cint else: 0.cint))
+    return
+
+  # t:4 "ready" — the webview's bridge is up. Signal bridge-ready (flushes the
+  # deferred first-focus event in window.m) + fire the native on_ready callback.
+  # (worker_terminate_owner on refresh is worker-deferred — Batch 7.)
+  if f.t == 4 and f.m == "ready":
+    let wid = darwin_window_id_string(windowId.int32)
+    if not wid.isNil: darwin_window_set_bridge_ready(wid)
+    zapp_window_trigger_on_ready(windowId.int32)
     return
 
   if f.t != 1: return            # skeleton answers INVOKE only
