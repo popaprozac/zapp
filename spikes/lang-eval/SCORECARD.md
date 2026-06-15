@@ -127,4 +127,111 @@ untrusted frames) and the ORC GC (default, ~free in size, correct to keep for a
 real long-lived orchestration layer).
 
 ## Recommendation
-(filled at the end — covers adopt-X / stay-Zen-C / drop-to-C)
+
+### Binary-size comparison (the criterion that turned out not to decide it)
+
+| Lang   | Stripped probe | Δ over C floor | Runtime/stdlib tax |
+| ---    | ---            | ---            | ---                |
+| C      | 50,824 B       | —              | none (the floor)   |
+| Nim    | 102,408 B      | +51,584 B      | std/json + stdlib + ORC GC |
+| C3     | 145,064 B      | +94,240 B      | stdlib + panic/temp-allocator |
+| Zig    | 188,008 B      | +137,184 B     | stdlib + comptime scaffolding |
+| Odin   | 234,008 B      | +183,184 B     | core:fmt/runtime/context + json |
+| Zig (Windows cross) | 488,448 B | n/a (PE32+) | self-contained cross-compile, from the Mac |
+
+The spike's headline finding **inverts the question the user led with.** "If they
+produce the same tiny binaries" was the gate — and they all do. The full Zen-C
+hello-world is ~708 KB *because it implements a real app* (router, window
+manager, every native feature); these probes measure only the language's runtime
+*floor*. Even the heaviest floor (Odin, +183 KB over C) is noise against a real
+app bundle + WKWebView. **Binary size eliminates no candidate.** The decision
+therefore rests entirely on the other axes: interop, platform-conditional
+ergonomics, general ergonomics, cross-compilation, maturity, and migration cost.
+
+### Outcome A — adopt a new language
+
+If we migrate, the field narrows to **Zig or Nim** (C3 and Odin are viable but
+each lost a decisive axis — see Gate decision; both have solid *web* docs
+[c3-lang.org/standard-library, odin-lang.org/docs] and the earlier "undocumented"
+framing should read as *weak in-tool/in-editor discoverability*, not *no docs*).
+
+- **Zig** is the most *tempting* single property in the entire spike: real
+  self-contained cross-compilation produced a working Windows PE32+ from the Mac
+  with no toolchain install. That alone could end the "Windows must be built on
+  the PC" split that currently fragments the project. It also has the best C
+  interop (`@cImport` auto-reads our 52 headers), and the best platform branch —
+  `if (builtin.os.tag == .macos)` folds at comptime with **no emit footgun and no
+  iOS-stub-parity tax** (the exact `#ifdef __APPLE__`-true-on-iOS pain we pay
+  today via the #281 lint simply does not exist). The cost is real: 0.16's pre-1.0
+  IO redesign broke the starter probe mid-spike — adopting Zig means **trading a
+  known tax (Zen-C's quirks) for an unknown one (tracking a moving pre-1.0
+  language).** And as a standalone backend it has no raw-C escape hatch, so all
+  221 `raw {}` inline-ObjC blocks must move into `.m` files (better architecture,
+  but a large migration).
+
+- **Nim** is the *cleanest migration shape*: it compiles to C exactly like
+  Zen-C, so `importc`+`passC`/`passL` ≈ Zen-C's link/cfg directives and `{.emit.}`
+  is a near-mechanical drop-in for those 221 `raw` blocks. It produced the
+  smallest non-C binary (102 KB), has the most router-like syntax (real string
+  `case … of`), and was the **only candidate whose probe and slice both ran with
+  zero API drift** — the strongest maturity signal in the set. Costs: an ORC GC
+  in the orchestration layer (tunable, ~free in size, correct to keep), and
+  `parseJson` raises on missing keys (defensive guards needed for untrusted
+  bridge frames).
+
+### Outcome B — stay on Zen-C
+
+The friction inventory is real and was documented honestly (const/cast
+wrangling, `@cfg` emitting into every TU, the local `compat.h`/`--objective-c`
+compiler patches, the std/json 4 KB stack overflow we replaced with
+`json_safe.zc`, dispatch-buffer truncation, `{` f-string escaping). But three
+facts weigh the other way:
+
+1. **The whole native layer is already written in it** — ~7,500 lines across 43
+   `.zc` files, 221 raw blocks, 179 `@cfg` gates, load-bearing std/json+map+result.
+   A rewrite is enormous and risky against a layer that *works and ships today*.
+2. **The friction is now known and worked-around**, not open: `json_safe.zc` heap
+   parser, the compat.h patch, the #281 iOS-symbol-parity lint, the build-success
+   gate. These were one-time taxes already paid.
+3. **No candidate is decisively better enough to justify the rewrite.** Zig wins
+   interop + cross-compile but adds pre-1.0 churn; Nim wins migration-shape but
+   adds a GC. Neither is a step-change — they're lateral moves with different
+   trade-offs. *The pains we know beat the pains we don't.*
+
+### Outcome C — drop to plain C
+
+C is the floor (50 KB), zero adoption risk, zero runtime, and the reference
+interop model (native `#include`, no binding tool). But it **re-introduces every
+ergonomic pain Zen-C was adopted to eliminate**: no stdlib JSON (the exact gap
+that forced `json_safe.zc` — we'd own a JSON lib again), no Option/Result, no
+map/struct-impl, no safe strings, no generics, no error-propagation sugar,
+manual memory and NUL-termination everywhere. The only rational driver is
+absolute ABI control, or a blanket distrust of *all* young languages — and if
+young-language risk is the real fear, note that C is the one fully de-risked
+option *and that Zen-C itself is the young language in question*. The ergonomic
+regression is severe; this is the worst fit for a layer that's mostly
+JSON-routing and string-marshalling.
+
+### If we had to ship the decision today
+
+**Stay on Zen-C — eyes open, with two named re-evaluation triggers.**
+
+The spike did its job: it tested the hypothesis ("a more mature language with
+equally tiny binaries would be a better fit") and the hypothesis did not hold
+strongly enough to act on. Binary size — the headline criterion — is a
+non-differentiator. On the axes that remain, no candidate beats a working
+7,500-line native layer by enough to justify rewriting it. Do **not** drop to C
+(it un-solves the problems Zen-C solved).
+
+Keep Zig and Nim as **live triggers**, not background noise:
+- **Reopen for Zig** if the Windows-build split becomes a serious enough drag
+  (its self-contained cross-compile is the single most valuable property any
+  candidate showed) **and/or Zig reaches 1.0** (retiring the pre-1.0 churn tax).
+- **Reopen for Nim** if Zen-C *compiler* maintenance (the local patches, parser
+  gaps) becomes a burden we'd rather offload to a compiles-to-C language with a
+  real community — its migration path is the most mechanical of any candidate.
+
+The honest one-liner: *Zen-C's tax is real but paid; every alternative either
+charges a new tax (Zig's churn, Nim's GC) or refunds the ergonomics we bought
+(C). Stay, and revisit the day Windows cross-compilation or compiler upkeep
+tips the math.*
