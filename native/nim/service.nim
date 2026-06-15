@@ -36,3 +36,15 @@ proc invokeService*(name: string, args: JsonNode): Option[string] =
   for rec in gRegistry:
     if rec.name == name: return some rec.handler(args)
   none(string)
+
+proc runStartupAll*() =
+  ## Fire startup() for every service that has one, in registration order
+  ## (service.zc:service_run_startup_all).
+  for rec in gRegistry:
+    if rec.startup != nil: rec.startup()
+
+proc runShutdownAll*() =
+  ## Fire shutdown() in REVERSE registration order
+  ## (service.zc:service_run_shutdown_all).
+  for i in countdown(gRegistry.len - 1, 0):
+    if gRegistry[i].shutdown != nil: gRegistry[i].shutdown()
