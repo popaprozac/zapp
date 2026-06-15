@@ -566,6 +566,19 @@ void windows_window_register_numeric_id(void* handle, int32_t numeric_id) {
     snprintf(zapp_window_ids[numeric_id], 32, "win-%d", numeric_id);
 }
 
+// Register a sidebar/inspector pane's transport slot under the HOST window's
+// id string ("win-<host>"). A pane slot is NOT a WindowManager window, so a
+// window action posted from inside a pane (Window.current().inspector.toggle())
+// arrives with the pane slot and would be dropped by the router's is_valid()
+// guard. The router remaps an invalid sender to its host via
+// windows_window_id_string(slot) → "win-<host>" → numeric; this populates that
+// mapping. (Parity with darwin's zapp_register_webview(slot, …, hostWindowId).)
+void windows_window_register_pane_id(int32_t slot, int32_t host_slot) {
+    if (slot < 0 || slot >= ZAPP_MAX_WINDOWS) return;
+    if (host_slot < 0 || host_slot >= ZAPP_MAX_WINDOWS) return;
+    snprintf(zapp_window_ids[slot], 32, "win-%d", host_slot);
+}
+
 void windows_window_eval_js(int32_t window_id, const char* js) {
     windows_webview_eval_by_id(window_id, js);
 }

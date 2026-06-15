@@ -493,11 +493,12 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
                 if (host_id >= 0) window_id = host_id;
             }
             #else
-            // Windows has no accessory panes (sidebar/inspector are Apple-only),
-            // so every sender slot is already a real window — this branch is a
-            // no-op in practice. Parse "win-N" back to N (same approach as the
-            // attachModal Windows path) rather than depend on a numeric-id
-            // reverse-lookup symbol that doesn't exist on Windows.
+            // Windows DOES have accessory panes (sidebar/inspector, Tier 3) —
+            // a pane's transport slot is registered under the host's id string
+            // via windows_window_register_pane_id, so windows_window_id_string
+            // returns "win-<host>". Parse it back to the host numeric id (same
+            // approach as the attachModal Windows path) — no reverse-lookup
+            // symbol needed.
             extern const char* windows_window_id_string(int32_t numeric_id);
             const char* host_str = windows_window_id_string(window_id);
             if (host_str) {

@@ -28,6 +28,7 @@ extern void windows_webview_resize(int32_t window_id, int w, int h);
 extern void windows_webview_notify_position(int32_t window_id);
 extern void windows_webview_eval_by_id(int32_t window_id, const char* js);
 extern char* zapp_escape_dup(const char* src); // dispatch.zc — JS single-quote escape
+extern void windows_window_register_pane_id(int32_t slot, int32_t host_slot); // window.c
 
 #define ZAPP_MAX_PANE_WINDOWS 64
 #define ZAPP_SPLITTER_PX 6
@@ -297,6 +298,7 @@ void windows_panes_init(HWND host_hwnd, int32_t host_slot, int inspectable,
         p->sidebar_child = make_child(host_hwnd, PANE_HOST_CLASS);
         p->sidebar_splitter = make_child(host_hwnd, PANE_SPLIT_CLASS);
         SetWindowLongPtrW(p->sidebar_splitter, GWLP_USERDATA, host_slot + 1);
+        windows_window_register_pane_id(sidebar_slot, host_slot); // sender→host remap
     }
     if (has_inspector) {
         p->inspector_slot = inspector_slot;
@@ -307,6 +309,7 @@ void windows_panes_init(HWND host_hwnd, int32_t host_slot, int inspectable,
         p->inspector_child = make_child(host_hwnd, PANE_HOST_CLASS);
         p->inspector_splitter = make_child(host_hwnd, PANE_SPLIT_CLASS);
         SetWindowLongPtrW(p->inspector_splitter, GWLP_USERDATA, host_slot + 1);
+        windows_window_register_pane_id(inspector_slot, host_slot); // sender→host remap
     }
 
     windows_panes_layout(host_slot);
