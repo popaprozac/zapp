@@ -24,6 +24,13 @@
 import app
 import window
 
+# CLI-generated config + bootstrap modules. `buildNativeNim` writes these into
+# the project's `.zapp/` dir and passes `--path:<.zapp>`, so they resolve by
+# name. They provide the `zapp_build_*` getters + `zapp_log_init`
+# (zapp_build_config) and `zapp_webview_bootstrap_script` (zapp_bootstrap) as
+# {.exportc, cdecl.} — replacing the TEMP stubs that used to live here.
+import zapp_build_config, zapp_bootstrap
+
 # ---------------------------------------------------------------------------
 # platform.m callback dependencies (defined in not-yet-ported modules)
 # ---------------------------------------------------------------------------
@@ -123,10 +130,8 @@ proc service_get_manifest_json(): cstring {.exportc, cdecl.} = gServiceManifest.
 # inactive-permissions default. TEMP until the permissions layer is ported.
 proc permissions_bootstrap_json(): cstring {.exportc, cdecl.} = "".cstring
 
-# zapp_webview_bootstrap_script — the runtime bootstrap (generated from TS).
-# "" => no bootstrap user script injected (blank webview is the 4a milestone).
-# TEMP until 4b wires the generated bootstrap.
-proc zapp_webview_bootstrap_script(): cstring {.exportc, cdecl.} = "".cstring
+# zapp_webview_bootstrap_script is now provided by the generated zapp_bootstrap
+# module (imported above) — the real minified webview bridge JS.
 
 # zapp_handle_message_from_window — the JS->native message bridge entry point.
 # TEMP no-op until the bridge lands (Task 5).
@@ -134,22 +139,13 @@ proc zapp_handle_message_from_window(app: pointer, msg: cstring,
                                      windowId: int32) {.exportc, cdecl.} =
   discard
 
-# --- Build-time config (CLI-generated zapp_build_config in real builds) ------
-# All TEMP until 4b generates them. initial_url points at the canonical asset
-# entry; with use_embedded_assets=0 + empty asset table, the zapp:// scheme
-# handler finds nothing and serves a graceful 404 (blank page) — exactly the
-# 4a "window appears, content is next" milestone.
-let gBuildInitialUrl = "zapp://index.html"
-proc zapp_build_initial_url(): cstring {.exportc, cdecl.} = gBuildInitialUrl.cstring
-proc zapp_build_asset_root(): cstring {.exportc, cdecl.} = "".cstring
-proc zapp_build_csp(): cstring {.exportc, cdecl.} = "".cstring
-proc zapp_build_custom_protocols_json(): cstring {.exportc, cdecl.} = "".cstring
-proc zapp_build_use_embedded_assets(): cint {.exportc, cdecl.} = 0
-proc zapp_build_is_dev(): cint {.exportc, cdecl.} = 0
-proc zapp_build_webview_autoplay_without_user_gesture(): cint {.exportc, cdecl.} = 0
-proc zapp_build_webview_text_interaction_enabled(): cint {.exportc, cdecl.} = 0
-proc zapp_build_webview_minimum_font_size(): cint {.exportc, cdecl.} = 0
-proc zapp_build_webview_back_forward_gestures(): cint {.exportc, cdecl.} = 0
+# --- Build-time config ------------------------------------------------------
+# The `zapp_build_*` getters (initial_url, asset_root, use_embedded_assets,
+# is_dev, csp, custom_protocols_json, the webview_* prefs) + `zapp_log_init`
+# are now provided by the generated zapp_build_config module (imported above).
+# For sub-gate A it emits: initial_url=zapp://index.html, use_embedded_assets=0,
+# asset_root=<built web dist> — so webview.m's zapp:// scheme handler serves the
+# real hello-world UI off the filesystem.
 
 # --- Embedded asset table (CLI-generated in real builds) --------------------
 # webview.m's scheme handler loops `for (i = 0; i < zapp_embedded_assets_count;

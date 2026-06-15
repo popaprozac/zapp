@@ -43,6 +43,31 @@ async function bundleAndEscape(entrypoint: string): Promise<string> {
     .replace(/\r/g, "");
 }
 
+/** Bundle + minify a TS file, returning the RAW JS (no C-string escaping). */
+async function bundleRaw(entrypoint: string): Promise<string> {
+  const result = await Bun.build({
+    entrypoints: [entrypoint],
+    minify: true,
+    target: "browser",
+  });
+  if (!result.success) {
+    const errors = result.logs.map((l) => l.message).join("\n");
+    throw new Error(`[zapp] bootstrap build failed for ${entrypoint}:\n${errors}`);
+  }
+  return await result.outputs[0].text();
+}
+
+/**
+ * Bundle + minify the WebView bootstrap and return the RAW JS string.
+ * Used by the Nim build path, whose `renderBootstrapNim` does its own
+ * (raw-string-literal) escaping — unlike `generateBootstrap` which
+ * escapes for embedding in a Zen-C C-string. Same source + bundler as
+ * the `.zc` path so the two stay in lockstep.
+ */
+export async function bundleWebviewBootstrapRaw(): Promise<string> {
+  return bundleRaw(path.join(bootstrapDir, "webview.ts"));
+}
+
 /**
  * Generate .zapp/zapp_bootstrap.zc containing minified bridge JS
  * as Zen-C functions returning C strings.

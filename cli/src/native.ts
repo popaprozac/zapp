@@ -1059,13 +1059,66 @@ interface CompileOptions {
  * {.compile.}s the untouched darwin platform layer and links the frameworks.
  * The default build path stays `zc build` (compileNative below); this is the
  * walking-skeleton route while the native layer is rebuilt in Nim.
+ *
+ * Before invoking `nim c`, generates the two CLI-owned config modules into the
+ * project's `.zapp/` dir (the same dir the zc path uses) and `--path`-imports
+ * them so zapp.nim's `import zapp_build_config, zapp_bootstrap` resolves:
+ *   - zapp_build_config.nim — the `zapp_build_*` getters + `zapp_log_init`.
+ *   - zapp_bootstrap.nim     — `zapp_webview_bootstrap_script` (the minified
+ *                              webview bridge JS).
+ * The webview loads the real UI via the filesystem asset path:
+ * use_embedded_assets=0 + asset_root=<built web dist> (webview.m's zapp://
+ * scheme handler reads files from asset_root). Brotli-embedded-asset Nim
+ * emission is deferred — the empty asset table in zapp.nim keeps the symbols
+ * linking until then.
  */
-async function buildNativeNim(nativeDir: string, output: string, verbose: boolean): Promise<void> {
+async function buildNativeNim(
+  nativeDir: string,
+  output: string,
+  verbose: boolean,
+  root: string,
+  config: import("./config").ResolvedConfig,
+): Promise<void> {
+  const fs = await import("node:fs/promises");
+
+  // Generated Nim modules live alongside the zc path's artifacts in the
+  // project's `.zapp/` dir — NOT staged (build output).
+  const zappDir = path.join(root, ".zapp");
+  await fs.mkdir(zappDir, { recursive: true });
+
+  // asset_root = the built web dist dir (the one containing index.html).
+  // Same computation the zc prod path uses (build-config.ts:generateBuildConfig
+  // → path.resolve(root, config.assetDir)). Forward slashes so the value is
+  // benign inside the generated Nim string literal.
+  const assetRoot = path.resolve(root, config.assetDir).replace(/\\/g, "/");
+
+  const { renderBuildConfigNim, renderBootstrapNim } = await import("./build-config");
+  const { resolveBootstrapDir } = await import("./paths");
+  const { bundleWebviewBootstrapRaw } = await import(
+    path.join(resolveBootstrapDir(), "codegen.ts")
+  );
+
+  const configNim = renderBuildConfigNim({
+    initialUrl: "zapp://index.html",
+    identifier: config.identifier ?? config.name ?? "com.zapp.helloworld",
+    assetRoot,
+    embedAssets: false, // filesystem asset path (sub-gate A); brotli deferred
+    devTools: 1,
+    isDev: true,
+  });
+  await fs.writeFile(path.join(zappDir, "zapp_build_config.nim"), configNim, "utf-8");
+
+  const webviewJs = await bundleWebviewBootstrapRaw();
+  const bootstrapNim = renderBootstrapNim(webviewJs);
+  await fs.writeFile(path.join(zappDir, "zapp_bootstrap.nim"), bootstrapNim, "utf-8");
+
   // The Nim build root lives in the framework's native/ dir (nativeDir), not
   // the user project — same as the zc sources. `{.compile.}` paths inside
   // zapp.nim resolve relative to that file, so cwd doesn't matter for them.
+  // `--path:<.zapp>` makes the generated modules importable by name.
   const nimRoot = path.join(nativeDir, "nim", "zapp.nim");
   const args = ["c", "--cc:clang", "--mm:orc", "-d:release", "--opt:size",
+                `--path:${zappDir}`,
                 `-o:${output}`, ...(verbose ? [] : ["--hints:off"]), nimRoot];
   const proc = Bun.spawn(["nim", ...args], { cwd: nativeDir, stdout: "inherit", stderr: "inherit" });
   const code = await proc.exited;
@@ -1081,7 +1134,10 @@ export async function compileNative(opts: CompileOptions): Promise<void> {
   // line. The zc path below stays the untouched default.
   if (process.env.ZAPP_NATIVE_LANG === "nim") {
     const verbose = process.argv.includes("--verbose") || process.argv.includes("-v");
-    await buildNativeNim(nativeDir, output, verbose);
+    if (!opts.config) {
+      throw new Error("[zapp] Nim build path requires a resolved config (opts.config).");
+    }
+    await buildNativeNim(nativeDir, output, verbose, root, opts.config);
     return;
   }
 
