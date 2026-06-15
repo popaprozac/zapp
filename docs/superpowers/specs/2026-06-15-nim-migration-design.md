@@ -105,18 +105,56 @@ build flags come in through Nim pragmas:
 - **`--mm:orc -d:release --opt:size`** — the ORC GC (kept, ~free in size per the
   spike) and size-optimized release.
 
-### The interop boundary
+### The interop boundary — bidirectional, good patterns (not debt)
 
-- **Nim ↔ `.m` (the only C-ABI boundary):** Nim binds the existing `darwin_*` /
-  `windows_*` C symbols with `proc darwin_window_create(opts: pointer): pointer
-  {.importc, cdecl.}`. This is the direct analogue of today's `import
-  "…/window.h" as darwin`. A `raw { darwin_clipboard_write_text(...) }` block in
-  `.zc` becomes a direct `importc` call in Nim — **no inline ObjC**, same
-  architecture (ObjC stays in `.m`).
-- **Nim ↔ Nim (orchestration):** normal Nim `import` between modules. **No
-  `exportc`/C-ABI gymnastics between orchestration modules** — this is the key
-  simplification over the rejected coexistence approach, where a still-`.zc`
-  caller would have needed C-extern declarations to reach a migrated module.
+The `.m` files are reused untouched, so the boundary is **bidirectional C-ABI** —
+and a deliberate review (2026-06-15) confirmed each interaction is a standard,
+functionally-correct pattern, *not* carried-over Zen-C debt. The debt risk in
+this migration is transliterating Zen-C's compiler-fighting idioms (raw blocks,
+manual memory, sentinel returns) into Nim — which the *Guiding principle* already
+forbids; that cruft lives in the `.zc` and evaporates in Nim regardless of the
+boundary.
+
+- **Nim → `.m` (`importc`):** bind the existing `darwin_*` / `windows_*` C symbols
+  (`proc darwin_window_create(opts: pointer): pointer {.importc, cdecl.}`). Plain
+  FFI — the analogue of today's `import "…/window.h"`. A `raw { darwin_… }` block
+  becomes a direct `importc` call — **no inline ObjC**. *Fundamental, good.*
+- **`.m` → Nim (`exportc`):** the untouched `.m` files call *back* into the
+  orchestration layer via C symbols Nim must `{.exportc, cdecl.}`:
+  - `zapp_handle_message_from_window(app, msg, window_id)` — WKWebView delivers JS
+    messages here. *Fundamental* (something must bridge the Cocoa callback to the
+    router).
+  - `zapp_build_*()` config getters (~12) + `zapp_webview_bootstrap_script()` —
+    config "pull" for cheap build-time constants. *Standard pattern* (push-a-struct
+    would only add coupling). These are GENERATED as Nim.
+  - `wopts_*(opts)` accessors (~40) — `window.m` reads `WindowOptions` through an
+    **opaque handle + accessors**. This is textbook C encapsulation (decouples the
+    `.m` from the struct layout; the shared-struct alternative is terser but
+    couples `.m` to exact field layout → silent ABI mismatch on change). *Kept as a
+    deliberate decoupling choice, not a Zen-C artifact.* Verbosity is the only cost
+    and it is mechanical.
+- **Nim ↔ Nim (orchestration):** normal Nim `import` between modules — **no
+  `exportc` between orchestration modules** (only at the Nim↔`.m` edge). A key
+  simplification over the rejected coexistence approach.
+
+**Three boundary rules (to design out latent footguns — the only real debt
+risks):**
+1. **cstring lifetime:** every `exportc` getter returns a `cstring` backed by a
+   module-level `let`, never a temporary string literal (the `.m` may read it past
+   the call). Use-after-free otherwise.
+2. **No `{.emit.}`:** any C-struct ABI the `.m` reads directly (e.g. the
+   `ZappEmbeddedAsset` asset array) is a layout-matched `{.exportc.}` Nim object,
+   not an inline `{.emit.}` block. `{.emit.}` is the Nim analogue of a `raw` block —
+   reserved for the genuinely unavoidable, and flagged when used.
+3. **Build-path fork is time-boxed:** the `ZAPP_NATIVE_LANG=nim` switch that
+   selects `nim c` vs `zc build` is explicit temporary scaffolding, **deleted at
+   cutover** when Nim becomes the only native build. Documented as temporary, not
+   silently permanent.
+
+(A single "host vtable" struct the `.m` calls through instead of loose C symbols
+was considered and rejected: cleaner in the abstract but requires editing every
+`.m` for no functional gain — churn/gold-plating we don't need. Noted as a
+far-future option only.)
 
 ### Repo layout
 
