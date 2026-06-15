@@ -41,7 +41,42 @@ philosophies:
 - **plain C** (50 KB) — the implicit baseline/yardstick, not separately sliced.
 
 ## Phase 2 — vertical slice (survivors)
-(filled in Phase 2)
+
+### Zig slice
+
+187896 B stripped (ReleaseSmall) — within ~100 B of the Phase 1 Zig probe
+(188008 B), i.e. the router/struct/method/two-route logic adds essentially zero
+size over the bare interop probe. Reimplements the `router_handle_window_action`
+shape: parse a bridge message, dispatch on `m`, and for `window:create` build a
+`WindowOptions` struct and call `.apply()`. Per-axis vs the Zen-C friction
+inventory: **Routing/JSON ergonomics — strong.** `std.json.parseFromSlice(Value,
+…)` over a multiline string literal (`\\…`) then `obj.get("m").?.string` /
+`.integer` tagged-union access is clean and reads like the real router; the only
+nit is no native string-switch, so dispatch is an `if (std.mem.eql(u8, m, …))`
+chain (still tidy, exhaustive-by-intent with a default `else`). **Comptime
+platform branch — best in the set, NO emit footgun.** `if (builtin.os.tag ==
+.macos)` is a normal `if` on a comptime-known value; the dead branch is fully
+elided (the macOS binary never references `spike_print_windows`). Unlike Zen-C
+`@cfg`, nothing is emitted into "every TU" and there is no per-platform stub
+obligation — the exact iOS-stub-parity tax we keep paying (`#ifdef __APPLE__`
+true on iOS, every `darwin_*` needs an iOS twin) simply does not exist here; the
+compiler just folds the constant. **Struct + method — clean.** `WindowOptions {
+w, h, title }` with `fn apply(self) void` calling the C fn; routing
+parse→build→`.apply()` is natural, methods are just namespaced fns, no
+boilerplate. **Const-correctness — clean, ZERO cast wrangling.** `title` is a
+`[:0]const u8` (immutable, sentinel-terminated via `a.dupeZ`), and `.ptr` yields
+exactly `[*:0]const u8`, which `@cImport` mapped `const char*` to — it threads
+JSON-const → struct field → C param with no discard-qualifier / cast fights of
+the kind that bit us in Zen-C. **raw→wrapper — confirmed, no inline ObjC.** The
+ObjC that sets `win.title` lives in `probe_cocoa.m` behind the plain C
+`spike_cocoa_open_window`; the Zig `apply()` just forwards the const slice, so
+the slice contains ZERO inline ObjC — proving the target architecture (ObjC in
+`.m`, orchestration lang only marshals strings) vs Zen-C's `raw { … }` inline
+blocks. **0.16 friction:** none new this slice — the Phase 1 IO-redesign drift
+(`readFileAlloc` signature) didn't recur because the slice parses inline string
+literals rather than reading a file; `@cImport`, `std.json.parseFromSlice`,
+`builtin.os.tag`, and `dupeZ`→`.ptr` all worked first try, build + run + exit 0
+on the first attempt.
 
 ## Recommendation
 (filled at the end — covers adopt-X / stay-Zen-C / drop-to-C)
