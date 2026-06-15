@@ -1,3 +1,4 @@
-spikes/lang-eval/**/*.o
-spikes/lang-eval/**/probe
-spikes/lang-eval/**/probe.exe
+# build artifacts — patterns are relative to THIS file's dir
+**/*.o
+**/probe
+**/probe.exe
