@@ -80,6 +80,16 @@ proc darwin_tray_destroy_from_payload(payloadJson: cstring) {.importc, cdecl.}
 proc darwin_tray_attach_window_from_payload(payloadJson: cstring) {.importc, cdecl.}
 proc darwin_tray_detach_window_from_payload(payloadJson: cstring) {.importc, cdecl.}
 
+# --- t:4 dock targets (dock.m; arg-based, not payload). No darwin set_progress
+# (macOS dock has no standard progress — dock.zc:40 is a no-op). ---
+proc darwin_dock_show_icon() {.importc, cdecl.}
+proc darwin_dock_hide_icon() {.importc, cdecl.}
+proc darwin_dock_remove_badge() {.importc, cdecl.}
+proc darwin_dock_reset_icon() {.importc, cdecl.}
+proc darwin_dock_set_badge(label: cstring) {.importc, cdecl.}
+proc darwin_dock_bounce(bounceType: cint) {.importc, cdecl.}
+proc darwin_dock_set_icon(imagePath: cstring) {.importc, cdecl.}
+
 proc resolveWinId(a: JsonNode, key: string): int32 =
   ## parentId/modalId may be an int OR a "win-<n>" pointer-string; -1 if absent
   ## (router.zc:666-700). Mirrors the int-then-string resolution.
@@ -375,6 +385,25 @@ proc routeWindowAction(action: string, a: JsonNode, windowId: int, payload: stri
     of "tray:attachWindow": darwin_tray_attach_window_from_payload(payload.cstring)
     of "tray:detachWindow": darwin_tray_detach_window_from_payload(payload.cstring)
     else: discard      # unknown tray:* — no-op (matches the zc fallthrough)
+    return
+
+  # --- dock ops (dock.m; arg-based; gated "dock" at the head) ---
+  if action.startsWith("dock:"):
+    case action
+    of "dock:showIcon": darwin_dock_show_icon()
+    of "dock:hideIcon": darwin_dock_hide_icon()
+    of "dock:removeBadge": darwin_dock_remove_badge()
+    of "dock:resetIcon": darwin_dock_reset_icon()
+    of "dock:setBadge":
+      let label = a{"label"}
+      if not label.isNil: darwin_dock_set_badge(label.getStr("").cstring)
+    of "dock:bounce":
+      darwin_dock_bounce(a{"type"}.getInt(0).cint)
+    of "dock:setProgress": discard      # macOS: no-op (dock.zc:40 empty Apple body)
+    of "dock:setIcon":
+      let path = a{"path"}
+      if not path.isNil: darwin_dock_set_icon(path.getStr("").cstring)
+    else: discard
     return
 
   # --- handle-based window ops (resolve the NSWindow from the numeric id) ---

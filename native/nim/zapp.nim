@@ -26,6 +26,7 @@
 {.compile("../platform/darwin/shortcuts.m", "-fobjc-arc").}
 {.compile("../platform/darwin/menu.m", "-fobjc-arc").}
 {.compile("../platform/darwin/tray.m", "-fobjc-arc").}
+{.compile("../platform/darwin/dock.m", "-fobjc-arc").}
 
 import std/os          # parentDir for the zjs.c {.compile.}/{.passL.} paths below
 import app
