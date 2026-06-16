@@ -4,7 +4,7 @@
 ## (zapp_handle_message_from_window), delegating dispatch to router.nim.
 import std/json
 import platform
-import router, service, permissions
+import router, service, permissions, appconfig
 import worker_service          # registerWorkerServices — worker→native service seam
 # zapp_headless is CLI-generated into the project's .zapp/ dir (--path:<.zapp>),
 # providing zapp_start_headless_workers() which spawns the configured zjs workers.
@@ -15,8 +15,13 @@ type App* = object
   terminateAfterLastWindowClosed*: bool
 
 proc newApp*(name: string, terminateAfterLastWindowClosed = true): App =
-  ## Mirrors App::new — init the platform, return the app value.
+  ## Mirrors App::new — init the platform, store the app config, return the value.
   platformInit(name)
+  setAppConfig(AppConfig(
+    name: name,
+    terminateAfterLastWindowClosed: terminateAfterLastWindowClosed,
+    inspectable: Inspectable.Auto,
+    maxWorkers: 0))
   App(name: name, terminateAfterLastWindowClosed: terminateAfterLastWindowClosed)
 
 proc run*(app: App): int =

@@ -129,17 +129,9 @@ proc zapp_popover_unregister_window(windowPtr: pointer) {.exportc, cdecl.} =
 var gActiveAppSentinel: int
 proc app_get_active(): pointer {.exportc, cdecl.} = addr gActiveAppSentinel
 
-# app_get_bootstrap_* — app.zc/AppConfig accessors. Reasonable skeleton values.
-# TEMP until app config is ported.
-let gBootstrapName = "Zapp Nim Skeleton"
-proc app_get_bootstrap_name(): cstring {.exportc, cdecl.} = gBootstrapName.cstring
-proc app_get_bootstrap_web_content_inspectable(): bool {.exportc, cdecl.} = true
-proc app_get_bootstrap_application_should_terminate_after_last_window_closed(): bool {.exportc, cdecl.} = true
-proc app_get_bootstrap_max_workers(): cint {.exportc, cdecl.} = 0
-
-# app_get_allowed_navigation_json — extra navigation allowlist (JSON array).
-# "" => webview.m falls back to the empty allowlist. TEMP until app config.
-proc app_get_allowed_navigation_json(): cstring {.exportc, cdecl.} = "".cstring
+# app_get_bootstrap_* + app_get_allowed_navigation_json now live in
+# appconfig.nim (imported transitively via app.nim), reading the real AppConfig
+# stored at newApp. The former skeleton stubs are gone.
 
 # zapp_webview_bootstrap_script is now provided by the generated zapp_bootstrap
 # module (imported above) — the real minified webview bridge JS.
