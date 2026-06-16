@@ -11,7 +11,23 @@
 ## never sets get sane defaults — window.m guards every optional feature behind
 ## a "url set?" / tag!=0 check, so the defaults never activate a code path.
 
+import coretypes
+export coretypes   # WindowOptions.inspectable is a coretypes.TriState
+
 type
+  TitleBarStyle* {.pure.} = enum   ## NSWindow title-bar style (window.m tag 0/1/2)
+    Default = 0
+    Hidden = 1
+    HiddenInset = 2
+
+  ButtonState* {.pure.} = enum      ## a traffic-light button (window.m tag 0/1/2)
+    Enabled = 0
+    Disabled = 1
+    Hidden = 2
+
+  TrafficLights* = object           ## the three window buttons (zc TrafficLights struct)
+    close*, minimize*, zoom*: ButtonState
+
   WindowOptions* = ref object
     # --- set by the skeleton ---
     title*: string
@@ -32,14 +48,12 @@ type
     acceptFirstMouse*: bool
     backgroundColor*: string
     numericIdPrealloc*: int32
-    inspectable*: int32           # -1 = unset (window.m: inspectable = tag > 0)
+    inspectable*: TriState        # unset/off/on; window.m treats `> 0` as on
     frameAutosaveName*: string
     vibrancy*: string
-    # --- title-bar / traffic-light tags (0 = Default/Enabled = unset) ---
-    titleBarStyleTag*: int32
-    trafficLightCloseTag*: int32
-    trafficLightMinimizeTag*: int32
-    trafficLightZoomTag*: int32
+    # --- title-bar style + traffic-light buttons ---
+    titleBarStyle*: TitleBarStyle
+    trafficLights*: TrafficLights
     # --- sidebar (feature unused by the skeleton; "" url => never built) ---
     sidebarUrl*: string
     sidebarMaterial*: string
@@ -69,11 +83,13 @@ proc newWindowOptions*(title: string): WindowOptions =
     hidden: false, fullscreen: false, acceptFirstMouse: false,
     backgroundColor: "",
     numericIdPrealloc: -1,
-    inspectable: -1,
+    inspectable: TriState.Unset,
     frameAutosaveName: "",
     vibrancy: "",
-    titleBarStyleTag: 0,
-    trafficLightCloseTag: 0, trafficLightMinimizeTag: 0, trafficLightZoomTag: 0,
+    titleBarStyle: TitleBarStyle.Default,
+    trafficLights: TrafficLights(close: ButtonState.Enabled,
+                                 minimize: ButtonState.Enabled,
+                                 zoom: ButtonState.Enabled),
     sidebarUrl: "", sidebarMaterial: "",
     sidebarWidth: 0, sidebarMinWidth: 0, sidebarMaxWidth: 0,
     sidebarCollapsible: false, sidebarCollapsed: false, sidebarNumericId: -1,
@@ -111,13 +127,13 @@ proc wopts_always_on_top(p: pointer): bool {.exportc, cdecl.} = opt(p).alwaysOnT
 proc wopts_accept_first_mouse(p: pointer): bool {.exportc, cdecl.} = opt(p).acceptFirstMouse
 proc wopts_background_color(p: pointer): cstring {.exportc, cdecl.} = opt(p).backgroundColor.cstring
 proc wopts_numeric_id_pre_alloc(p: pointer): int32 {.exportc, cdecl.} = opt(p).numericIdPrealloc
-proc wopts_inspectable(p: pointer): int32 {.exportc, cdecl.} = opt(p).inspectable
+proc wopts_inspectable(p: pointer): int32 {.exportc, cdecl.} = opt(p).inspectable.int32
 proc wopts_frame_autosave_name(p: pointer): cstring {.exportc, cdecl.} = opt(p).frameAutosaveName.cstring
 proc wopts_vibrancy(p: pointer): cstring {.exportc, cdecl.} = opt(p).vibrancy.cstring
-proc wopts_title_bar_style_tag(p: pointer): int32 {.exportc, cdecl.} = opt(p).titleBarStyleTag
-proc wopts_traffic_light_close_tag(p: pointer): int32 {.exportc, cdecl.} = opt(p).trafficLightCloseTag
-proc wopts_traffic_light_minimize_tag(p: pointer): int32 {.exportc, cdecl.} = opt(p).trafficLightMinimizeTag
-proc wopts_traffic_light_zoom_tag(p: pointer): int32 {.exportc, cdecl.} = opt(p).trafficLightZoomTag
+proc wopts_title_bar_style_tag(p: pointer): int32 {.exportc, cdecl.} = opt(p).titleBarStyle.int32
+proc wopts_traffic_light_close_tag(p: pointer): int32 {.exportc, cdecl.} = opt(p).trafficLights.close.int32
+proc wopts_traffic_light_minimize_tag(p: pointer): int32 {.exportc, cdecl.} = opt(p).trafficLights.minimize.int32
+proc wopts_traffic_light_zoom_tag(p: pointer): int32 {.exportc, cdecl.} = opt(p).trafficLights.zoom.int32
 
 # sidebar accessors — unused feature; "" url short-circuits the sidebar branch.
 proc wopts_sidebar_url(p: pointer): cstring {.exportc, cdecl.} = opt(p).sidebarUrl.cstring

@@ -18,10 +18,8 @@ type
     aeNotificationAction = 103, aeReopen = 104, aeOpenUrl = 105,
     aeDidBecomeActive = 106, aeDidResignActive = 107, aeThemeChanged = 108
 
-## EventResult: zapp_dispatch_event's return contract (events.zc enum EventResult).
-## 0 = ALLOW (proceed), 1 = CANCEL (stop the native action).
-const EVENT_ALLOW* = 0
-const EVENT_CANCEL* = 1
+## zapp_dispatch_event's return contract now lives in coretypes.nim as the
+## `EventResult` {.pure.} enum (Allow/Cancel) — see callbacks.nim.
 
 import std/strutils
 

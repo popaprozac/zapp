@@ -22,7 +22,7 @@
 ##   zapp_window_trigger_on_ready(int)             callbacks.zc:63
 ##   zapp_dispatch_event(int,int,int,int,int,int)->int  callbacks.zc:94
 
-import events
+import events, coretypes
 
 type
   ## callbacks.zc's event cb is `int(*)(WindowEventData*)`. WindowEventData* is a
@@ -90,18 +90,18 @@ proc workerBroadcastEvalJs(js: cstring) = discard
 #   Layer 2   targeted JS bridge (gated on the JS-subscription bitmask),
 #   Layer 3   backend worker fan-out (deferred no-op).
 proc zapp_dispatch_event(windowId, eventId, w, h, x, y: cint): cint {.exportc, cdecl.} =
-  if not inBounds(windowId, eventId): return EVENT_ALLOW
+  if not inBounds(windowId, eventId): return EventResult.Allow.cint
 
   # Layer 1: native callback (none registered in Batch 1).
   let cb = gEventCbs[windowId][eventId]
   if cb != nil:
     let r = cb(nil)
-    if r != 0: return r          # CANCEL — stop propagation
+    if r != EventResult.Allow.cint: return r   # CANCEL — stop propagation
 
   # Layer 1.5: JS close guard. JS decides (force-close via Window.close, or ignore).
   if eventId == weClose.cint and gCloseGuard[windowId] != 0:
     zapp_dispatch_event_to_js(windowId, eventId, 0, 0, 0, 0)
-    return EVENT_CANCEL
+    return EventResult.Cancel.cint
 
   # Layer 2: targeted JS bridge — only if JS has a listener for this event.
   if (gJsListeners[windowId] and (1'u32 shl eventId.uint32)) != 0:
@@ -111,4 +111,4 @@ proc zapp_dispatch_event(windowId, eventId, w, h, x, y: cint): cint {.exportc, c
   if (gBackendListeners[windowId] and (1'u32 shl eventId.uint32)) != 0:
     workerBroadcastEvalJs(cstring"")
 
-  return EVENT_ALLOW
+  return EventResult.Allow.cint

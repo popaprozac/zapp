@@ -273,9 +273,9 @@ let opts = newWindowOptions("Zapp v2 (Nim)")
 opts.width = 900
 opts.height = 650
 # Web Inspector: window.m enables WKWebView.inspectable when wopts_inspectable()
-# > 0. The skeleton left the tag unset (-1 => never inspectable). Mirror the zc
-# `Auto` behavior — gate on the build's dev-tools flag: 1 in dev => inspectable
-# (Safari → Develop → this app), 0 in prod => off.
-opts.inspectable = zapp_build_dev_tools_default().int32
+# > 0. Mirror the zc `Auto` resolution — gate on the build's dev-tools flag
+# (app.zc:55): On in dev => inspectable (Safari → Develop → this app), Off in
+# prod. (TriState.Unset = -1 would read as off, so resolve to On/Off here.)
+opts.inspectable = (if zapp_build_dev_tools_default() > 0: TriState.On else: TriState.Off)
 discard createWindow(opts)
 quit(a.run())
