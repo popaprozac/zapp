@@ -104,6 +104,22 @@ proc darwin_panel_go_back(panelId: cstring) {.importc, cdecl.}
 proc darwin_panel_go_forward(panelId: cstring) {.importc, cdecl.}
 proc darwin_panel_destroy(panelId: cstring) {.importc, cdecl.}
 
+# --- t:4 native-chrome targets (sidebar/inspector/toolbar/popover .m, B8) ----
+proc darwin_sidebar_toggle(windowId: int32) {.importc, cdecl.}
+proc darwin_sidebar_collapse(windowId: int32) {.importc, cdecl.}
+proc darwin_sidebar_expand(windowId: int32) {.importc, cdecl.}
+proc darwin_sidebar_set_width(windowId: int32, width: int32) {.importc, cdecl.}
+proc darwin_inspector_toggle(windowId: int32) {.importc, cdecl.}
+proc darwin_inspector_collapse(windowId: int32) {.importc, cdecl.}
+proc darwin_inspector_expand(windowId: int32) {.importc, cdecl.}
+proc darwin_inspector_set_width(windowId: int32, width: int32) {.importc, cdecl.}
+proc darwin_toolbar_set_items(windowPtr: pointer, toolbarJson: cstring, hostSlot: int32) {.importc, cdecl.}
+proc darwin_toolbar_update_item(windowPtr: pointer, itemJson: cstring) {.importc, cdecl.}
+proc darwin_toolbar_remove(windowPtr: pointer) {.importc, cdecl.}
+proc darwin_popover_show(popoverId: cstring, argsJson: cstring, senderSlot: int32) {.importc, cdecl.}
+proc darwin_popover_hide(popoverId: cstring) {.importc, cdecl.}
+proc darwin_popover_destroy(popoverId: cstring) {.importc, cdecl.}
+
 proc resolveWinId(a: JsonNode, key: string): int32 =
   ## parentId/modalId may be an int OR a "win-<n>" pointer-string; -1 if absent
   ## (router.zc:666-700). Mirrors the int-then-string resolution.
@@ -472,6 +488,50 @@ proc routeWindowAction(action: string, a: JsonNode, rawWindowId: int, payload: s
 
   # --- panel (embedded-webview) ops (panel.m; embed-gated at the head) ------
   if routePanel(action, a, windowId): return
+
+  # --- native-chrome ops (sidebar/inspector/toolbar/popover; ungated like window ops) ---
+  if action.startsWith("sidebar:") or action.startsWith("inspector:"):
+    # target = "windowId" arg (a real window) else the resolved sender host
+    let widArg = a{"windowId"}.getStr("")
+    let target = (if widArg.len > 0: darwin_window_numeric_id_for_string(widArg.cstring) else: windowId.int32)
+    let width = a{"width"}.getInt(0).int32
+    case action
+    of "sidebar:toggle": darwin_sidebar_toggle(target)
+    of "sidebar:collapse": darwin_sidebar_collapse(target)
+    of "sidebar:expand": darwin_sidebar_expand(target)
+    of "sidebar:setWidth": darwin_sidebar_set_width(target, width)
+    of "inspector:toggle": darwin_inspector_toggle(target)
+    of "inspector:collapse": darwin_inspector_collapse(target)
+    of "inspector:expand": darwin_inspector_expand(target)
+    of "inspector:setWidth": darwin_inspector_set_width(target, width)
+    else: discard
+    return
+  if action.startsWith("toolbar:"):
+    let widArg = a{"windowId"}.getStr("")
+    let target = (if widArg.len > 0: darwin_window_numeric_id_for_string(widArg.cstring) else: windowId.int32)
+    let h = darwin_window_get_by_numeric_id(target)
+    if h.isNil: return
+    case action
+    of "toolbar:setItems":
+      let tj = a{"toolbarJson"}.getStr("")
+      if tj.len > 0: darwin_toolbar_set_items(h, tj.cstring, target)
+    of "toolbar:updateItem":
+      let ij = a{"itemJson"}.getStr("")
+      if ij.len > 0: darwin_toolbar_update_item(h, ij.cstring)
+    of "toolbar:remove": darwin_toolbar_remove(h)
+    else: discard
+    return
+  if action.startsWith("popover:"):
+    let pid = a{"popoverId"}.getStr("")
+    if pid.len == 0: return
+    case action
+    of "popover:show":
+      let argsJson = $a
+      darwin_popover_show(pid.cstring, argsJson.cstring, windowId.int32)
+    of "popover:hide": darwin_popover_hide(pid.cstring)
+    of "popover:destroy": darwin_popover_destroy(pid.cstring)
+    else: discard      # popover:create deferred (needs a Nim window-slot allocator)
+    return
 
   # --- handle-based window ops (resolve the NSWindow from the numeric id) ---
   let h = darwin_window_get_by_numeric_id(windowId.int32)
