@@ -27,6 +27,10 @@
 {.compile("../platform/darwin/menu.m", "-fobjc-arc").}
 {.compile("../platform/darwin/tray.m", "-fobjc-arc").}
 {.compile("../platform/darwin/dock.m", "-fobjc-arc").}
+{.compile("../platform/darwin/sidebar.m", "-fobjc-arc").}
+{.compile("../platform/darwin/inspector.m", "-fobjc-arc").}
+{.compile("../platform/darwin/toolbar.m", "-fobjc-arc").}
+{.compile("../platform/darwin/popover.m", "-fobjc-arc").}
 
 import std/os          # parentDir for the zjs.c {.compile.}/{.passL.} paths below
 import app
@@ -69,40 +73,12 @@ import zapp_build_config, zapp_bootstrap
 # worker fan-out is a deferred no-op (Batch 4/7).
 
 # ---------------------------------------------------------------------------
-# window.m callback dependencies for split/toolbar/popover features. The
-# skeleton never sets sidebar/inspector/toolbar URLs, so window.m's runtime
-# guards keep these unreached — but they must still LINK. Real defs live in
-# sidebar.m / inspector.m / toolbar.m / popover.m (not compiled here).
-# TEMP until those native-chrome modules are ported.
+# window.m's split/toolbar/popover features link against sidebar.m / inspector.m
+# / toolbar.m / popover.m (compiled in the {.compile.} block above), so the real
+# zapp_sidebar_*/zapp_inspector_*/darwin_toolbar_attach/zapp_toolbar_*/
+# zapp_popover_unregister_window defs are provided there now (the former TEMP
+# stubs are gone).
 # ---------------------------------------------------------------------------
-
-proc zapp_sidebar_register(windowPtr, splitVC, sidebarItem: pointer,
-                           hostId, sidebarSlotId: int32) {.exportc, cdecl.} =
-  discard
-
-proc zapp_sidebar_unregister(windowPtr: pointer) {.exportc, cdecl.} =
-  discard
-
-proc zapp_inspector_register(windowPtr, splitVC, inspectorItem: pointer,
-                             hostId, inspectorSlotId: int32) {.exportc, cdecl.} =
-  discard
-
-proc zapp_inspector_unregister(windowPtr: pointer) {.exportc, cdecl.} =
-  discard
-
-proc darwin_toolbar_attach(windowPtr: pointer, toolbarJson: cstring,
-                           windowNumericId: int32) {.exportc, cdecl.} =
-  discard
-
-proc zapp_toolbar_unregister(windowPtr: pointer) {.exportc, cdecl.} =
-  discard
-
-proc zapp_toolbar_inject_metrics(windowPtr: pointer, hostSlot: int32,
-                                 addUserScript: bool) {.exportc, cdecl.} =
-  discard
-
-proc zapp_popover_unregister_window(windowPtr: pointer) {.exportc, cdecl.} =
-  discard
 
 # zapp_dispatch_event + the window-event registries (set_js_listener, close
 # guard, on-ready, etc.) now live in callbacks.nim (imported above), ported from

@@ -319,7 +319,18 @@ proc routePanel(action: string, a: JsonNode, windowId: int): bool =
   else: return false      # "panel"-prefixed but not a real panel action
   return true
 
-proc routeWindowAction(action: string, a: JsonNode, windowId: int, payload: string) =
+proc resolveAccessoryHost(windowId: int): int =
+  ## A t:4 window/chrome op from inside a sidebar/inspector/popover pane carries
+  ## the pane's transport slot as windowId, which is NOT a real NSWindow. Remap to
+  ## the host via the id-string round-trip (router.zc:484-512). Real windows pass
+  ## through unchanged.
+  if not darwin_window_get_by_numeric_id(windowId.int32).isNil: return windowId
+  let hostStr = darwin_window_id_string(windowId.int32)
+  if hostStr.isNil: return windowId
+  let hostId = darwin_window_numeric_id_for_string(hostStr).int
+  if hostId >= 0: hostId else: windowId
+
+proc routeWindowAction(action: string, a: JsonNode, rawWindowId: int, payload: string) =
   ## t:4 fire-and-forget window/app action dispatch. HEAD = the action permission
   ## gate (router.zc:376-385): ungated ("") falls through; a gated action not
   ## granted is dropped (fire-and-forget has no reply channel — permissions_check
@@ -340,17 +351,22 @@ proc routeWindowAction(action: string, a: JsonNode, windowId: int, payload: stri
       notifSetBridgeReady()        # flush buffered notification responses
     let evId = eventNameToId(evName)
     if evId >= 0:
-      zapp_window_set_js_listener(windowId.cint, evId.cint,
+      zapp_window_set_js_listener(rawWindowId.cint, evId.cint,
         (if action == "subscribe": 1.cint else: 0.cint))
     return
 
   # ready: the webview's bridge is up — signal bridge-ready (flushes window.m's
   # deferred first-focus event) + fire the native on_ready callback.
   if action == "ready":
-    let wid = darwin_window_id_string(windowId.int32)
+    let wid = darwin_window_id_string(rawWindowId.int32)
     if not wid.isNil: darwin_window_set_bridge_ready(wid)
-    zapp_window_trigger_on_ready(windowId.int32)
+    zapp_window_trigger_on_ready(rawWindowId.int32)
     return
+
+  # Accessory-pane sender resolution: window + chrome ops from inside a pane
+  # target the host window (router.zc:484-512). subscribe/ready above keep the
+  # sender's own slot.
+  let windowId = resolveAccessoryHost(rawWindowId)
 
   # --- id-based window ops (take the numeric id; self-guard in the .m) -------
   if action == "loadUrl":
