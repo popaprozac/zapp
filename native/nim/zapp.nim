@@ -141,10 +141,6 @@ proc app_get_bootstrap_max_workers(): cint {.exportc, cdecl.} = 0
 # "" => webview.m falls back to the empty allowlist. TEMP until app config.
 proc app_get_allowed_navigation_json(): cstring {.exportc, cdecl.} = "".cstring
 
-# permissions_bootstrap_json — permissions manifest. "" => webview.m uses its
-# inactive-permissions default. TEMP until the permissions layer is ported.
-proc permissions_bootstrap_json(): cstring {.exportc, cdecl.} = "".cstring
-
 # zapp_webview_bootstrap_script is now provided by the generated zapp_bootstrap
 # module (imported above) — the real minified webview bridge JS.
 
@@ -218,12 +214,6 @@ var zapp_embedded_assets_count {.exportc.}: cint = 0
 # zapp_log_level: framework log level (0=default,1=verbose,2=debug). zjs.c gates
 # its verbose worker-lifecycle lines on `>= 1`; 0 keeps the default-quiet path.
 var zapp_log_level {.exportc.}: cint = 0
-
-# Permission gates (permissions.zc + router.zc). Workers reach native through
-# the host object bypassing the router, so zjs.c re-runs the mapping+check here.
-# Skeleton: every method ungated/allowed.
-proc permissions_check(id: cstring, m: cstring): bool {.exportc, cdecl, gcsafe.} = true
-proc permission_id_for_invoke(m: cstring): cstring {.exportc, cdecl, gcsafe.} = cstring""
 
 # Fire-and-forget fan-out to every webview's __zappBridge._onEvent. No event
 # layer ported yet.

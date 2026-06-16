@@ -3,7 +3,7 @@
 ## (emit / window-action / worker / sync) are framework breadth not exercised by
 ## the walking skeleton — they fall through silently for now.
 import std/[options, json, strutils]
-import bridge, service, clipboard, callbacks, events
+import bridge, service, clipboard, callbacks, events, permissions
 
 # Bridge-ready signal: the webview posts {t:4,m:"ready"} once its bootstrap bridge
 # is up (bootstrap/webview.ts). The .m window delegate defers the FIRST focus
@@ -88,6 +88,16 @@ proc routeMessage*(msg: string, windowId: int) =
     return
 
   if f.t != 1: return            # skeleton answers INVOKE only
+
+  # Permission gate (t:1). Map the method to a catalog id; ungated ("") falls
+  # through. Manifest active + id not granted => reply so the JS promise rejects
+  # (PERMISSION_DENIED:<id>; the runtime decorates it into PermissionDeniedError).
+  # Mirrors native/app/router.zc:62-80.
+  let permId = permission_id_for_invoke(f.m.cstring)
+  if not permId.isNil and permId[0] != '\0':
+    if not permissions_check(permId, f.m.cstring):
+      sendInvokeResponse(windowId, f.id, false, "PERMISSION_DENIED:" & $permId)
+      return
 
   # `__clipboard:*` INVOKEs are handled natively (NOT via the service registry),
   # so they must be intercepted before the registry lookup below.

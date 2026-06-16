@@ -4,7 +4,7 @@
 ## (zapp_handle_message_from_window), delegating dispatch to router.nim.
 import std/json
 import platform
-import router, service
+import router, service, permissions
 import worker_service          # registerWorkerServices — worker→native service seam
 # zapp_headless is CLI-generated into the project's .zapp/ dir (--path:<.zapp>),
 # providing zapp_start_headless_workers() which spawns the configured zjs workers.
@@ -20,12 +20,15 @@ proc newApp*(name: string, terminateAfterLastWindowClosed = true): App =
   App(name: name, terminateAfterLastWindowClosed: terminateAfterLastWindowClosed)
 
 proc run*(app: App): int =
-  ## Register worker-path services, run service startup hooks, spawn the
-  ## configured zjs headless workers, then enter the Cocoa run loop (blocks).
+  ## Init permissions (main-thread parse), register worker-path services, run
+  ## startup hooks, spawn zjs headless workers, then enter the Cocoa run loop
+  ## (blocks). permissionsEnsureInit() runs FIRST so the manifest is parsed on
+  ## the main thread before any window or worker can issue a permission check.
   ## registerWorkerServices() MUST run before the spawn so service_invoke_native
   ## has the bench handlers when the worker's first invokeService round-trips
   ## back into native; runStartupAll() runs before the spawn so services are
   ## started before any worker can invoke them.
+  permissionsEnsureInit()
   registerWorkerServices()
   runStartupAll()
   zapp_start_headless_workers()
