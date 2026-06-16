@@ -56,6 +56,14 @@ proc darwin_show_item_in_folder(p: cstring) {.importc, cdecl.}
 proc darwin_open_path(p: cstring) {.importc, cdecl.}
 proc darwin_trash_item(p: cstring) {.importc, cdecl.}
 
+# --- t:1 screen-query targets (screen.m, already compiled; B6e). Each returns
+# a heap char* the caller frees. darwin_window_numeric_id_for_string is already
+# importc'd above (B5b). ---
+proc darwin_screen_list_json(): cstring {.importc, cdecl.}
+proc darwin_screen_cursor_json(): cstring {.importc, cdecl.}
+proc darwin_screen_for_window_json(windowId: int32): cstring {.importc, cdecl.}
+proc c_free(p: cstring) {.importc: "free", cdecl.}
+
 proc resolveWinId(a: JsonNode, key: string): int32 =
   ## parentId/modalId may be an int OR a "win-<n>" pointer-string; -1 if absent
   ## (router.zc:666-700). Mirrors the int-then-string resolution.
@@ -213,6 +221,30 @@ proc routeShortcuts(meth: string, a: JsonNode, windowId, id: int) =
     sendInvokeResponse(windowId, id, true, "null")
   else:
     sendInvokeResponse(windowId, id, false, "UNKNOWN_SHORTCUT")
+
+proc routeScreen(meth: string, a: JsonNode, windowId, id: int) =
+  ## t:1 `__screen:*` (mirror screen.zc:screen_route). darwin_screen_*_json
+  ## return heap char* — copy ($) into the reply, then free. NULL → safe default.
+  case meth
+  of "__screen:list":
+    let j = darwin_screen_list_json()
+    if j.isNil: sendInvokeResponse(windowId, id, true, "[]")
+    else:
+      sendInvokeResponse(windowId, id, true, $j); c_free(j)
+  of "__screen:cursor":
+    let j = darwin_screen_cursor_json()
+    if j.isNil: sendInvokeResponse(windowId, id, false, "null")
+    else:
+      sendInvokeResponse(windowId, id, true, $j); c_free(j)
+  of "__screen:forWindow":
+    let ws = a{"windowId"}.getStr("")
+    let target = (if ws.len > 0: darwin_window_numeric_id_for_string(ws.cstring) else: -1'i32)
+    let j = darwin_screen_for_window_json(target)
+    if j.isNil: sendInvokeResponse(windowId, id, false, "null")
+    else:
+      sendInvokeResponse(windowId, id, true, $j); c_free(j)
+  else:
+    sendInvokeResponse(windowId, id, false, "UNKNOWN_SCREEN")
 
 proc routeWindowAction(action: string, a: JsonNode, windowId: int) =
   ## t:4 fire-and-forget window/app action dispatch. HEAD = the action permission
@@ -386,6 +418,9 @@ proc routeMessage*(msg: string, windowId: int) =
     return
   if f.m.startsWith("__shortcuts:"):
     routeShortcuts(f.m, f.a, windowId, f.id)
+    return
+  if f.m.startsWith("__screen:"):
+    routeScreen(f.m, f.a, windowId, f.id)
     return
 
   let res = invokeService(f.m, f.a)
