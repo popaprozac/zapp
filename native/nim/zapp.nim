@@ -31,6 +31,7 @@
 {.compile("../platform/darwin/inspector.m", "-fobjc-arc").}
 {.compile("../platform/darwin/toolbar.m", "-fobjc-arc").}
 {.compile("../platform/darwin/popover.m", "-fobjc-arc").}
+{.compile("../platform/darwin/sync.m", "-fobjc-arc").}
 
 import std/os          # parentDir for the zjs.c {.compile.}/{.passL.} paths below
 import app

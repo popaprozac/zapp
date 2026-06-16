@@ -88,6 +88,10 @@ proc darwin_tray_destroy_from_payload(payloadJson: cstring) {.importc, cdecl.}
 proc darwin_tray_attach_window_from_payload(payloadJson: cstring) {.importc, cdecl.}
 proc darwin_tray_detach_window_from_payload(payloadJson: cstring) {.importc, cdecl.}
 
+# --- t:6 SYNC (sync.m, B7c). darwin_sync_handle's 2nd arg is the FULL RAW
+# envelope ({t:6,m,a}); sync.m:233-242 unwraps the nested "a" itself. ---
+proc darwin_sync_handle(action, payloadJson: cstring) {.importc, cdecl.}
+
 # --- t:4 dock targets (dock.m; arg-based, not payload). No darwin set_progress
 # (macOS dock has no standard progress — dock.zc:40 is a no-op). ---
 proc darwin_dock_show_icon() {.importc, cdecl.}
@@ -676,6 +680,10 @@ proc routeMessage*(msg: string, windowId: int) =
   # (port of router.zc:router_handle_worker). Fire-and-forget.
   if f.t == 5:
     routeWorker(f.m, f.a, windowId)
+    return
+
+  if f.t == 6:        # SYNC envelope (protocol.zc:27) — Sync.wait/notify/cancel
+    darwin_sync_handle(f.m.cstring, msg.cstring)   # msg = full raw envelope (== zc parsed.payload); sync.m unwraps "a"
     return
 
   if f.t != 1: return            # skeleton answers INVOKE only

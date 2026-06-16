@@ -20,6 +20,7 @@ proc zjs_worker_create(scriptUrl, ownerId, workerId: cstring): bool
 proc zjs_worker_post_message(workerId, dataJson: cstring) {.exportc, cdecl.} = discard
 proc zjs_worker_terminate(workerId: cstring) {.exportc, cdecl.} = discard
 proc zjs_worker_terminate_owner(ownerId: cstring) {.exportc, cdecl.} = discard
+proc zjs_worker_eval_js(workerId, js: cstring) {.exportc, cdecl.} = discard
 proc darwin_window_numeric_id_for_string(wid: cstring): int32
   {.exportc, cdecl.} = -1
 proc darwin_window_eval_js(numericId: int32, js: cstring) {.exportc, cdecl.} = discard

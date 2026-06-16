@@ -28,6 +28,7 @@ proc zjs_worker_create(scriptUrl, ownerId, workerId: cstring): bool {.importc, c
 proc zjs_worker_post_message(workerId, dataJson: cstring) {.importc, cdecl.}
 proc zjs_worker_terminate(workerId: cstring) {.importc, cdecl.}
 proc zjs_worker_terminate_owner(ownerId: cstring) {.importc, cdecl.}
+proc zjs_worker_eval_js(workerId, js: cstring) {.importc, cdecl.}
 
 # --- registry C-ABI (registry.nim {.exportc.} surface) ----------------------
 proc zapp_worker_registry_set_engine(workerId: cstring, engine: cint) {.importc, cdecl.}
@@ -101,6 +102,14 @@ proc worker_create*(app: pointer, scriptUrl, ownerId, workerId: cstring,
 proc worker_post_message*(workerId, dataJson: cstring) {.exportc, cdecl, gcsafe.} =
   if zapp_worker_registry_get_engine(workerId) == ZAPP_ENGINE_ZJS:
     zjs_worker_post_message(workerId, dataJson)
+
+# worker_eval_js (port of dispatch.zc worker_eval_js → zapp_dispatch_worker_eval_js).
+# sync.m's darwin_sync_dispatch_to_worker (sync.m:294-295) calls this to deliver a
+# wait-result to ONE worker — possibly off the main thread, hence gcsafe. zjs-only:
+# look up the worker's recorded engine and dispatch to zjs.
+proc worker_eval_js*(workerId, js: cstring) {.exportc, cdecl, gcsafe.} =
+  if zapp_worker_registry_get_engine(workerId) == ZAPP_ENGINE_ZJS:
+    zjs_worker_eval_js(workerId, js)
 
 # worker_terminate (worker.zc:217-223).
 proc worker_terminate*(workerId: cstring) {.exportc, cdecl, gcsafe.} =
