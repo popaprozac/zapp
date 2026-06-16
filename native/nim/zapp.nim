@@ -260,10 +260,22 @@ proc zapp_escape_dup(s: cstring): cstring {.exportc, cdecl, gcsafe.} =
 # ---------------------------------------------------------------------------
 # Boot: register services, open one window, then enter the Cocoa run loop.
 # ---------------------------------------------------------------------------
+
+# zapp_build_dev_tools_default — CLI-emitted dev-tools flag (1 in dev, 0 in
+# prod), defined in the generated zapp_build_config module (exportc, so it is
+# imported as a C symbol, not by Nim name). Used to gate the Web Inspector
+# dev-vs-prod, mirroring the zc's `Auto` resolution (app.zc:55).
+proc zapp_build_dev_tools_default(): cint {.importc, cdecl.}
+
 let a = newApp("Zapp Nim Skeleton")
 registerSkeletonServices()   # wire greet into the service registry (app.nim)
 let opts = newWindowOptions("Zapp v2 (Nim)")
 opts.width = 900
 opts.height = 650
+# Web Inspector: window.m enables WKWebView.inspectable when wopts_inspectable()
+# > 0. The skeleton left the tag unset (-1 => never inspectable). Mirror the zc
+# `Auto` behavior — gate on the build's dev-tools flag: 1 in dev => inspectable
+# (Safari → Develop → this app), 0 in prod => off.
+opts.inspectable = zapp_build_dev_tools_default().int32
 discard createWindow(opts)
 quit(a.run())
