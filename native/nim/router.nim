@@ -3,7 +3,7 @@
 ## (emit / window-action / worker / sync) are framework breadth not exercised by
 ## the walking skeleton — they fall through silently for now.
 import std/[options, json, strutils]
-import bridge, service, clipboard, callbacks, events, permissions, fs
+import bridge, service, clipboard, callbacks, events, permissions, fs, dialog
 
 # Bridge-ready signal: the webview posts {t:4,m:"ready"} once its bootstrap bridge
 # is up (bootstrap/webview.ts). The .m window delegate defers the FIRST focus
@@ -132,6 +132,28 @@ proc routeClipboard(m: string, a: JsonNode, windowId, id: int) =
     sendInvokeResponse(windowId, id, true, "null")
   else:
     sendInvokeResponse(windowId, id, false, "UNKNOWN_CLIPBOARD")
+
+proc routeDialog(meth: string, a: JsonNode, windowId, id: int) =
+  ## t:1 `__dialog:*` — desktop path (mirror router.zc:1430-1535). Pass the
+  ## options object (JSON) to the darwin_dialog_* JSON variant; reply with the
+  ## result JSON the runtime JSON.parses. On `__dialog:open`, grant each picked
+  ## path to the FS session allowlist (so FS/shell-path ops can act on it).
+  ## (iOS async + Windows branches are out of scope; macOS desktop only.)
+  let optionsJson = (if a.isNil: "{}" else: $a)
+  var resultStr = ""
+  case meth
+  of "__dialog:open":   resultStr = dialogOpenFile(optionsJson)
+  of "__dialog:save":   resultStr = dialogSaveFile(optionsJson)
+  of "__dialog:message": resultStr = dialogMessage(optionsJson)
+  else:
+    sendInvokeResponse(windowId, id, false, "UNKNOWN_DIALOG")
+    return
+  if meth == "__dialog:open" and resultStr.len > 0:
+    for p in dialogGrantedPaths(resultStr): fsGrantPath(p)
+  if resultStr.len > 0:
+    sendInvokeResponse(windowId, id, true, resultStr)
+  else:
+    sendInvokeResponse(windowId, id, false, "UNKNOWN_DIALOG")
 
 proc routeWindowAction(action: string, a: JsonNode, windowId: int) =
   ## t:4 fire-and-forget window/app action dispatch. HEAD = the action permission
@@ -294,6 +316,9 @@ proc routeMessage*(msg: string, windowId: int) =
     return
   if f.m.startsWith("__app:"):
     routeApp(f.m, f.a, windowId, f.id)
+    return
+  if f.m.startsWith("__dialog:"):
+    routeDialog(f.m, f.a, windowId, f.id)
     return
 
   let res = invokeService(f.m, f.a)
