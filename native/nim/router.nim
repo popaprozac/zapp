@@ -3,7 +3,7 @@
 ## (emit / window-action / worker / sync) are framework breadth not exercised by
 ## the walking skeleton — they fall through silently for now.
 import std/[options, json, strutils]
-import bridge, service, clipboard, callbacks, events, permissions, fs, dialog, notification
+import bridge, service, clipboard, callbacks, events, permissions, fs, dialog, notification, shortcuts
 
 # Bridge-ready signal: the webview posts {t:4,m:"ready"} once its bootstrap bridge
 # is up (bootstrap/webview.ts). The .m window delegate defers the FIRST focus
@@ -193,6 +193,27 @@ proc routeNotification(meth: string, a: JsonNode, windowId, id: int) =
   else:
     sendInvokeResponse(windowId, id, false, "UNKNOWN_NOTIFICATION")
 
+proc routeShortcuts(meth: string, a: JsonNode, windowId, id: int) =
+  ## t:1 `__shortcuts:*` (mirror router.zc:1717-1762). register/unregister/
+  ## isRegistered reply the boolean; unregisterAll replies null; missing arg /
+  ## unknown → UNKNOWN_SHORTCUT. Arg key "accelerator".
+  let acc = a{"accelerator"}.getStr("")
+  case meth
+  of "__shortcuts:register":
+    if acc.len == 0: sendInvokeResponse(windowId, id, false, "UNKNOWN_SHORTCUT")
+    else: sendInvokeResponse(windowId, id, true, (if shortcutRegister(acc): "true" else: "false"))
+  of "__shortcuts:unregister":
+    if acc.len == 0: sendInvokeResponse(windowId, id, false, "UNKNOWN_SHORTCUT")
+    else: sendInvokeResponse(windowId, id, true, (if shortcutUnregister(acc): "true" else: "false"))
+  of "__shortcuts:isRegistered":
+    if acc.len == 0: sendInvokeResponse(windowId, id, false, "UNKNOWN_SHORTCUT")
+    else: sendInvokeResponse(windowId, id, true, (if shortcutIsRegistered(acc): "true" else: "false"))
+  of "__shortcuts:unregisterAll":
+    shortcutUnregisterAll()
+    sendInvokeResponse(windowId, id, true, "null")
+  else:
+    sendInvokeResponse(windowId, id, false, "UNKNOWN_SHORTCUT")
+
 proc routeWindowAction(action: string, a: JsonNode, windowId: int) =
   ## t:4 fire-and-forget window/app action dispatch. HEAD = the action permission
   ## gate (router.zc:376-385): ungated ("") falls through; a gated action not
@@ -362,6 +383,9 @@ proc routeMessage*(msg: string, windowId: int) =
     return
   if f.m.startsWith("__notif:"):
     routeNotification(f.m, f.a, windowId, f.id)
+    return
+  if f.m.startsWith("__shortcuts:"):
+    routeShortcuts(f.m, f.a, windowId, f.id)
     return
 
   let res = invokeService(f.m, f.a)

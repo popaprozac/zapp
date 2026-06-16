@@ -9,7 +9,7 @@
 ## this walking-skeleton boot we satisfy each with a Nim {.exportc, cdecl.} stub
 ## (NOT {.emit.} — Nim is the host language now). Each is marked TEMP with the
 ## task/module that makes it real (4b = assets/config/bootstrap, Task 5 = bridge).
-{.passL: "-framework Cocoa -framework WebKit -framework CoreFoundation -framework JavaScriptCore -framework Security -framework IOKit -framework ServiceManagement -framework UserNotifications".}
+{.passL: "-framework Cocoa -framework WebKit -framework CoreFoundation -framework JavaScriptCore -framework Security -framework IOKit -framework ServiceManagement -framework UserNotifications -framework Carbon".}
 # NOTE the CALL form `{.compile(file, flags).}` — the THIRD arg is per-file
 # clang flags. The TUPLE form `{.compile: (file, dest).}` treats the 2nd elem
 # as the OUTPUT OBJECT NAME, so "-fobjc-arc" would (a) drop ARC and (b) make
@@ -23,6 +23,7 @@
 {.compile("../platform/darwin/fs.m", "-fobjc-arc").}
 {.compile("../platform/darwin/dialog.m", "-fobjc-arc").}
 {.compile("../platform/darwin/notification.m", "-fobjc-arc").}
+{.compile("../platform/darwin/shortcuts.m", "-fobjc-arc").}
 
 import std/os          # parentDir for the zjs.c {.compile.}/{.passL.} paths below
 import app
