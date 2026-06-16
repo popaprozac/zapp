@@ -3,7 +3,7 @@
 ## (emit / window-action / worker / sync) are framework breadth not exercised by
 ## the walking skeleton — they fall through silently for now.
 import std/[options, json, strutils]
-import bridge, service, clipboard, callbacks, events, permissions
+import bridge, service, clipboard, callbacks, events, permissions, fs
 
 # Bridge-ready signal: the webview posts {t:4,m:"ready"} once its bootstrap bridge
 # is up (bootstrap/webview.ts). The .m window delegate defers the FIRST focus
@@ -50,6 +50,11 @@ proc darwin_app_quit(force: bool) {.importc, cdecl.}
 proc darwin_app_activate() {.importc, cdecl.}
 proc darwin_set_quit_guard(enabled: bool) {.importc, cdecl.}
 proc darwin_open_external(url: cstring) {.importc, cdecl.}
+
+# --- t:4 shell-path targets (webview.m, compiled; B6a) ---------------------
+proc darwin_show_item_in_folder(p: cstring) {.importc, cdecl.}
+proc darwin_open_path(p: cstring) {.importc, cdecl.}
+proc darwin_trash_item(p: cstring) {.importc, cdecl.}
 
 proc resolveWinId(a: JsonNode, key: string): int32 =
   ## parentId/modalId may be an int OR a "win-<n>" pointer-string; -1 if absent
@@ -201,6 +206,22 @@ proc routeWindowAction(action: string, a: JsonNode, windowId: int) =
   if action == "openExternal":
     let url = (if a.isNil: "" else: a{"url"}.getStr(""))
     if url.len > 0: darwin_open_external(url.cstring)
+    return
+
+  # --- shell-path ops (B6a; permission-gated at the head as shell:open/reveal/
+  # trash). trashItem ADDS the FS-allowlist gate so JS can't trash an arbitrary
+  # path (router.zc:576-593); showItemInFolder/openPath are non-destructive. ---
+  if action == "showItemInFolder" or action == "openPath" or action == "trashItem":
+    let p = a{"path"}
+    if p.isNil: return
+    let path = p.getStr("")
+    if path.len == 0: return
+    let abs = fsExpandPath(path)
+    if action == "trashItem":
+      if not fsIsAllowed(abs): return
+    if action == "showItemInFolder": darwin_show_item_in_folder(abs.cstring)
+    elif action == "openPath": darwin_open_path(abs.cstring)
+    else: darwin_trash_item(abs.cstring)
     return
 
   # --- handle-based window ops (resolve the NSWindow from the numeric id) ---

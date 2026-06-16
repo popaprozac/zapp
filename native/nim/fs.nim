@@ -11,6 +11,11 @@
 ## declares it extern.
 import std/[json, strutils]
 
+# NB: the raw darwin_fs_* this module importc's are defined in
+# native/platform/darwin/fs.m, which is compiled by the build root (zapp.nim's
+# {.compile.} block) — NOT self-compiled here, so fs_test.nim can import this
+# module and stub the C-ABI symbols without pulling in fs.m + Foundation.
+
 # --- C-ABI: fs.m raw syscalls + path-var resolver -------------------------
 proc darwin_fs_path_var(name: cstring): cstring {.importc, cdecl.}
 proc darwin_fs_read_file(path: cstring): cstring {.importc, cdecl.}

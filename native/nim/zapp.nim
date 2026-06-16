@@ -20,6 +20,7 @@
 {.compile("../platform/darwin/webview.m", "-fobjc-arc").}
 {.compile("../platform/darwin/screen.m", "-fobjc-arc").}
 {.compile("../platform/darwin/panel.m", "-fobjc-arc").}
+{.compile("../platform/darwin/fs.m", "-fobjc-arc").}
 
 import std/os          # parentDir for the zjs.c {.compile.}/{.passL.} paths below
 import app
