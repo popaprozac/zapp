@@ -41,6 +41,19 @@ proc test() =
   doAssert $permission_id_for_invoke(cstring"__screen:list") == "screen"
   doAssert $permission_id_for_invoke(cstring"__window:create") == "window:create"
   doAssert $permission_id_for_invoke(cstring"greet") == ""
+  # permission_id_for_action mapping (router.zc:40-54)
+  doAssert $permission_id_for_action(cstring"tray:create") == "tray"
+  doAssert $permission_id_for_action(cstring"dock:setBadge") == "dock"
+  doAssert $permission_id_for_action(cstring"panelCreate") == "embed"
+  doAssert $permission_id_for_action(cstring"panelDestroy") == "embed"
+  doAssert $permission_id_for_action(cstring"setMenu") == "menu"
+  doAssert $permission_id_for_action(cstring"showContextMenu") == "menu"
+  doAssert $permission_id_for_action(cstring"openExternal") == "shell:open"
+  doAssert $permission_id_for_action(cstring"openPath") == "shell:open"
+  doAssert $permission_id_for_action(cstring"showItemInFolder") == "shell:reveal"
+  doAssert $permission_id_for_action(cstring"trashItem") == "shell:trash"
+  doAssert $permission_id_for_action(cstring"setTitle") == ""        # window op — ungated
+  doAssert $permission_id_for_action(cstring"subscribe") == ""       # plumbing — ungated
   # permissions_check delegates to isAllowed
   permissionsResetAndLoad("{\"platform\":\"macos\",\"active\":true,\"allow\":[\"clipboard\"]}")
   doAssert permissions_check(cstring"clipboard:read", cstring"Clipboard.read")

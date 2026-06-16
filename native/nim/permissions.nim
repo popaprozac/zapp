@@ -116,3 +116,29 @@ proc permission_id_for_invoke*(meth: cstring): cstring {.exportc, cdecl, gcsafe.
   if c_strncmp(meth, cstring"__screen:", 9) == 0: return cstring"screen"
   if c_strcmp(meth, cstring"__window:create") == 0: return cstring"window:create"
   return cstring""
+
+proc permission_id_for_action*(action: cstring): cstring =
+  ## Map a t:4 fire-and-forget action to a permission id ("" = ungated: window
+  ## ops, app lifecycle, plumbing). Pure cstring logic; mirrors router.zc:40-54.
+  ## Router-internal (no worker-engine caller) → plain exported Nim proc, no
+  ## exportc. String literals returned as cstring are static storage.
+  if c_strncmp(action, cstring"tray:", 5) == 0: return cstring"tray"
+  if c_strncmp(action, cstring"dock:", 5) == 0: return cstring"dock"
+  if c_strcmp(action, cstring"panelCreate") == 0 or
+     c_strcmp(action, cstring"panelSetBounds") == 0 or
+     c_strcmp(action, cstring"panelLoadUrl") == 0 or
+     c_strcmp(action, cstring"panelExecJs") == 0 or
+     c_strcmp(action, cstring"panelPostMessage") == 0 or
+     c_strcmp(action, cstring"panelShow") == 0 or
+     c_strcmp(action, cstring"panelHide") == 0 or
+     c_strcmp(action, cstring"panelReload") == 0 or
+     c_strcmp(action, cstring"panelBack") == 0 or
+     c_strcmp(action, cstring"panelForward") == 0 or
+     c_strcmp(action, cstring"panelDestroy") == 0: return cstring"embed"
+  if c_strcmp(action, cstring"setMenu") == 0: return cstring"menu"
+  if c_strcmp(action, cstring"showContextMenu") == 0: return cstring"menu"
+  if c_strcmp(action, cstring"openExternal") == 0: return cstring"shell:open"
+  if c_strcmp(action, cstring"openPath") == 0: return cstring"shell:open"
+  if c_strcmp(action, cstring"showItemInFolder") == 0: return cstring"shell:reveal"
+  if c_strcmp(action, cstring"trashItem") == 0: return cstring"shell:trash"
+  return cstring""
