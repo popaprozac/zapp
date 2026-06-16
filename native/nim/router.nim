@@ -25,6 +25,36 @@ proc zapp_workers_registry_list_json(): cstring {.importc, cdecl.}
 proc darwin_set_login_item(enabled: bool): bool {.importc, cdecl.}
 proc darwin_get_login_item(): bool {.importc, cdecl.}
 
+# --- t:4 window-op targets (window.m / webview.h, all compiled) -------------
+proc darwin_window_get_by_numeric_id(numericId: int32): pointer {.importc, cdecl.}
+proc darwin_window_numeric_id_for_string(wid: cstring): int32 {.importc, cdecl.}
+proc darwin_window_show(handle: pointer) {.importc, cdecl.}
+proc darwin_window_hide(handle: pointer) {.importc, cdecl.}
+proc darwin_window_minimize(handle: pointer) {.importc, cdecl.}
+proc darwin_window_maximize(handle: pointer) {.importc, cdecl.}
+proc darwin_window_focus(handle: pointer) {.importc, cdecl.}
+proc darwin_window_force_close(handle: pointer) {.importc, cdecl.}
+proc darwin_window_set_title(handle: pointer, title: cstring) {.importc, cdecl.}
+proc darwin_window_set_size(handle: pointer, w, h: int32) {.importc, cdecl.}
+proc darwin_window_set_position(handle: pointer, x, y: int32) {.importc, cdecl.}
+proc darwin_window_set_fullscreen(handle: pointer, on: bool) {.importc, cdecl.}
+proc darwin_window_set_always_on_top(handle: pointer, on: bool) {.importc, cdecl.}
+proc darwin_window_attach_modal(parent, modal: pointer) {.importc, cdecl.}
+proc darwin_window_detach_modal(parent, modal: pointer) {.importc, cdecl.}
+proc darwin_window_load_url(windowId: int32, url: cstring) {.importc, cdecl.}
+proc darwin_webview_set_drag_region(windowId: int32, drag: bool) {.importc, cdecl.}
+proc zapp_window_set_close_guard(id, enabled: cint) {.importc, cdecl.}  # def in callbacks.nim (exportc)
+
+proc resolveWinId(a: JsonNode, key: string): int32 =
+  ## parentId/modalId may be an int OR a "win-<n>" pointer-string; -1 if absent
+  ## (router.zc:666-700). Mirrors the int-then-string resolution.
+  if a.isNil: return -1
+  let v = a{key}
+  if v.isNil: return -1
+  if v.kind == JInt: return v.getInt(-1).int32
+  if v.kind == JString: return darwin_window_numeric_id_for_string(v.getStr("").cstring)
+  -1
+
 proc routeZapp(meth: string, windowId, id: int) =
   ## __zapp:* routes (router.zc:1352-1375).
   if meth == "__zapp:workers-list":
@@ -122,7 +152,69 @@ proc routeWindowAction(action: string, a: JsonNode, windowId: int) =
     zapp_window_trigger_on_ready(windowId.int32)
     return
 
-  # window / app / panel / shell action arms → Batch 5b (added below this point).
+  # --- id-based window ops (take the numeric id; self-guard in the .m) -------
+  if action == "loadUrl":
+    let url = (if a.isNil: "" else: a{"url"}.getStr(""))
+    if url.len > 0: darwin_window_load_url(windowId.int32, url.cstring)
+    return
+  if action == "setDragRegion":
+    let drag = a{"drag"}            # {} is nil-safe on a nil / non-object node
+    if not drag.isNil:
+      darwin_webview_set_drag_region(windowId.int32, drag.getBool(false))
+    return
+  if action == "setCloseGuard":
+    let on = a{"on"}
+    if not on.isNil:
+      zapp_window_set_close_guard(windowId.cint, (if on.getBool(false): 1.cint else: 0.cint))
+    return
+
+  # --- attach/detach modal (resolve BOTH windows' handles) ------------------
+  if action == "attachModal" or action == "detachModal":
+    let pNum = resolveWinId(a, "parentId")
+    let mNum = resolveWinId(a, "modalId")
+    if pNum < 0 or mNum < 0: return
+    let pH = darwin_window_get_by_numeric_id(pNum)
+    let mH = darwin_window_get_by_numeric_id(mNum)
+    if pH.isNil or mH.isNil: return
+    if action == "attachModal": darwin_window_attach_modal(pH, mH)
+    else: darwin_window_detach_modal(pH, mH)
+    return
+
+  # --- app ops + openExternal → Batch 5b Task 2 (seam) ----------------------
+
+  # --- handle-based window ops (resolve the NSWindow from the numeric id) ---
+  let h = darwin_window_get_by_numeric_id(windowId.int32)
+  if h.isNil: return                       # window gone — nothing to act on
+  case action
+  of "show": darwin_window_show(h)
+  of "hide": darwin_window_hide(h)
+  of "minimize": darwin_window_minimize(h)
+  of "maximize": darwin_window_maximize(h)
+  of "setFocus": darwin_window_focus(h)
+  of "close":
+    # clear the close guard first (router.zc:652-654): force_close is just
+    # [NSWindow close], which fires windowShouldClose:; a set guard would veto
+    # it. Window.close() is the documented force path, so it must override.
+    zapp_window_set_close_guard(windowId.cint, 0.cint)
+    darwin_window_force_close(h)
+  of "setTitle":
+    let title = a{"title"}
+    if not title.isNil: darwin_window_set_title(h, title.getStr("").cstring)
+  of "setSize":
+    let w = a{"width"}; let ht = a{"height"}      # getFloat: zc stores numbers as
+    if not w.isNil and not ht.isNil:              # double, truncates to int (parity)
+      darwin_window_set_size(h, w.getFloat(0).int32, ht.getFloat(0).int32)
+  of "setPosition":
+    let x = a{"x"}; let y = a{"y"}
+    if not x.isNil and not y.isNil:
+      darwin_window_set_position(h, x.getFloat(0).int32, y.getFloat(0).int32)
+  of "setFullscreen":
+    let on = a{"on"}
+    if not on.isNil: darwin_window_set_fullscreen(h, on.getBool(false))
+  of "setAlwaysOnTop":
+    let on = a{"on"}
+    if not on.isNil: darwin_window_set_always_on_top(h, on.getBool(false))
+  else: discard
 
 proc routeMessage*(msg: string, windowId: int) =
   ## Entry point for a single webview->native message. Owns parse + dispatch +
