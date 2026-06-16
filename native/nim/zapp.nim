@@ -49,6 +49,13 @@ import worker_service
 # {.exportc.} side-effect symbols.
 import callbacks
 import app_events
+# registry provides the {.exportc.} worker-registry surface (list_json, display
+# name, fmt_compact_ms, the supervisor record_failure/get_window_state + the
+# add/get/set/remove/owner functions zjs.c / bare.c / the router call by C name).
+# POD + {.gcsafe.} (read + supervisor-written from worker pthreads). No Nim symbol
+# from it is referenced here — imported only for its {.exportc.} side-effect
+# symbols. Replaces the former 5 registry stubs below.
+import registry
 {.pop.}
 
 # CLI-generated config + bootstrap modules. `buildNativeNim` writes these into
@@ -203,17 +210,11 @@ proc worker_dispatch_to_webview(worker_id: cstring, data_json: cstring) {.export
 # from bootstrap/worker.ts. zjs.c evals it after installing the native
 # __zappBridge, so the bench worker's invokeService resolves.
 
-# Worker supervisor (restart policy + window state). No supervisor yet:
-# record_failure → 0 (no restart accounting); get_window_state → 0 (not found).
-proc zapp_worker_supervisor_record_failure(worker_id: cstring): cint {.exportc, cdecl, gcsafe.} = 0
-proc zapp_worker_supervisor_get_window_state(worker_id: cstring,
-    out_count, out_cap, out_window_ms: ptr cint): cint {.exportc, cdecl, gcsafe.} = 0
-
-# Worker registry (registry.zc). Single source of truth for Workers.list() +
-# per-worker log labels. Empty registry: "[]" / "" / "".
-proc zapp_workers_registry_list_json(): cstring {.exportc, cdecl, gcsafe.} = cstring"[]"
-proc zapp_worker_registry_get_display_name(worker_id: cstring): cstring {.exportc, cdecl, gcsafe.} = cstring""
-proc zapp_fmt_compact_ms(ms: cint): cstring {.exportc, cdecl, gcsafe.} = cstring""
+# Worker supervisor (restart policy + window state) + worker registry
+# (Workers.list() JSON, per-worker log labels, fmt_compact_ms) are now provided
+# by registry.nim (imported above) — the faithful POD/gcsafe port of
+# native/worker/registry.zc. The former 5 stubs (list_json→"[]", display_name→"",
+# fmt_compact_ms→"", record_failure→0, get_window_state→0) are gone.
 
 # ---------------------------------------------------------------------------
 # Boot: register services, open one window, then enter the Cocoa run loop.
