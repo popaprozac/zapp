@@ -92,6 +92,38 @@ proc routeClipboard(m: string, a: JsonNode, windowId, id: int) =
   else:
     sendInvokeResponse(windowId, id, false, "UNKNOWN_CLIPBOARD")
 
+proc routeWindowAction(action: string, a: JsonNode, windowId: int) =
+  ## t:4 fire-and-forget window/app action dispatch. HEAD = the action permission
+  ## gate (router.zc:376-385): ungated ("") falls through; a gated action not
+  ## granted is dropped (fire-and-forget has no reply channel — permissions_check
+  ## logs once). The window/app/panel/shell action ARMS are Batch 5b; dock/
+  ## sidebar/inspector/popover/toolbar are Batch 8. Only the framework + the
+  ## already-ported subscribe/unsubscribe/ready land here.
+  let permId = permission_id_for_action(action.cstring)
+  if not permId.isNil and permId[0] != '\0':
+    if not permissions_check(permId, action.cstring):
+      return
+
+  # subscribe / unsubscribe: gate the per-window JS-subscription bitmask so
+  # zapp_dispatch_event's Layer-2 JS delivery fires only for subscribed events.
+  if action == "subscribe" or action == "unsubscribe":
+    let evName = (if a.isNil: "" else: a{"event"}.getStr(""))
+    let evId = eventNameToId(evName)
+    if evId >= 0:
+      zapp_window_set_js_listener(windowId.cint, evId.cint,
+        (if action == "subscribe": 1.cint else: 0.cint))
+    return
+
+  # ready: the webview's bridge is up — signal bridge-ready (flushes window.m's
+  # deferred first-focus event) + fire the native on_ready callback.
+  if action == "ready":
+    let wid = darwin_window_id_string(windowId.int32)
+    if not wid.isNil: darwin_window_set_bridge_ready(wid)
+    zapp_window_trigger_on_ready(windowId.int32)
+    return
+
+  # window / app / panel / shell action arms → Batch 5b (added below this point).
+
 proc routeMessage*(msg: string, windowId: int) =
   ## Entry point for a single webview->native message. Owns parse + dispatch +
   ## response so app.nim's C-ABI handler stays a thin shim.
@@ -99,27 +131,10 @@ proc routeMessage*(msg: string, windowId: int) =
   if parsed.isNone: return
   let f = parsed.get
 
-  # t:4 window-action — Batch 1 handles ONLY subscribe/unsubscribe (rest of the
-  # t:4 window-action surface = a later batch). The webview posts
-  # {t:4,m:"subscribe",a:{event:"window:..."}} on the first JS listener for an
-  # event (and "unsubscribe" when the last is removed); route it to
-  # callbacks.zapp_window_set_js_listener so zapp_dispatch_event's Layer-2 JS
-  # delivery is gated correctly.
-  if f.t == 4 and (f.m == "subscribe" or f.m == "unsubscribe"):
-    let evName = (if f.a.isNil: "" else: f.a{"event"}.getStr(""))
-    let evId = eventNameToId(evName)
-    if evId >= 0:
-      zapp_window_set_js_listener(windowId.cint, evId.cint,
-        (if f.m == "subscribe": 1.cint else: 0.cint))
-    return
-
-  # t:4 "ready" — the webview's bridge is up. Signal bridge-ready (flushes the
-  # deferred first-focus event in window.m) + fire the native on_ready callback.
-  # (worker_terminate_owner on refresh is worker-deferred — Batch 7.)
-  if f.t == 4 and f.m == "ready":
-    let wid = darwin_window_id_string(windowId.int32)
-    if not wid.isNil: darwin_window_set_bridge_ready(wid)
-    zapp_window_trigger_on_ready(windowId.int32)
+  # t:4 fire-and-forget window/app action — dispatched (+ permission-gated) in
+  # routeWindowAction.
+  if f.t == 4:
+    routeWindowAction(f.m, f.a, windowId)
     return
 
   if f.t != 1: return            # skeleton answers INVOKE only
