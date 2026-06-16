@@ -15,6 +15,41 @@ proc darwin_window_id_string(numericId: int32): cstring {.importc, cdecl.}
 proc darwin_window_set_bridge_ready(windowId: cstring) {.importc, cdecl.}
 proc zapp_window_trigger_on_ready(id: int32) {.importc, cdecl.}  # def in callbacks.nim
 
+# __zapp: route targets. zapp_workers_registry_list_json is the zapp.nim stub →
+# a STATIC "[]" (NOT malloc'd) — do NOT free it (the zc frees a malloc'd registry
+# string; B7's real registry will re-add the free here). permissions_bootstrap_json
+# is in permissions.nim (B3, already imported).
+proc zapp_workers_registry_list_json(): cstring {.importc, cdecl.}
+
+# __app: route targets (platform.m — SMAppService login item, macOS).
+proc darwin_set_login_item(enabled: bool): bool {.importc, cdecl.}
+proc darwin_get_login_item(): bool {.importc, cdecl.}
+
+proc routeZapp(meth: string, windowId, id: int) =
+  ## __zapp:* routes (router.zc:1352-1375).
+  if meth == "__zapp:workers-list":
+    let json = zapp_workers_registry_list_json()
+    sendInvokeResponse(windowId, id, true, (if json.isNil: "[]" else: $json))
+    return
+  if meth == "__zapp:permissions":
+    sendInvokeResponse(windowId, id, true, $permissions_bootstrap_json())
+    return
+  sendInvokeResponse(windowId, id, false, "UNKNOWN_ZAPP_METHOD")
+
+proc routeApp(meth: string, a: JsonNode, windowId, id: int) =
+  ## __app:* routes (router.zc:1377-1415). Login item (macOS); reply the bool as
+  ## a JSON literal the runtime JSON.parses.
+  if meth == "__app:setLoginItem":
+    let enabled = (if a.isNil: false else: a{"enabled"}.getBool(false))
+    let ok = darwin_set_login_item(enabled)
+    sendInvokeResponse(windowId, id, true, (if ok: "true" else: "false"))
+    return
+  if meth == "__app:getLoginItem":
+    let ok = darwin_get_login_item()
+    sendInvokeResponse(windowId, id, true, (if ok: "true" else: "false"))
+    return
+  sendInvokeResponse(windowId, id, false, "UNKNOWN")
+
 proc routeClipboard(m: string, a: JsonNode, windowId, id: int) =
   ## Handle a `__clipboard:*` INVOKE natively (NOT via the service registry),
   ## mirroring native/app/router.zc:router_handle_clipboard. Arg keys match the
@@ -103,6 +138,13 @@ proc routeMessage*(msg: string, windowId: int) =
   # so they must be intercepted before the registry lookup below.
   if f.m.startsWith("__clipboard:"):
     routeClipboard(f.m, f.a, windowId, f.id)   # owns its own sendInvokeResponse
+    return
+
+  if f.m.startsWith("__zapp:"):
+    routeZapp(f.m, windowId, f.id)
+    return
+  if f.m.startsWith("__app:"):
+    routeApp(f.m, f.a, windowId, f.id)
     return
 
   let res = invokeService(f.m, f.a)
