@@ -45,6 +45,12 @@ proc darwin_window_load_url(windowId: int32, url: cstring) {.importc, cdecl.}
 proc darwin_webview_set_drag_region(windowId: int32, drag: bool) {.importc, cdecl.}
 proc zapp_window_set_close_guard(id, enabled: cint) {.importc, cdecl.}  # def in callbacks.nim (exportc)
 
+# --- t:4 app-op + shell targets (platform.m / webview.h) -------------------
+proc darwin_app_quit(force: bool) {.importc, cdecl.}
+proc darwin_app_activate() {.importc, cdecl.}
+proc darwin_set_quit_guard(enabled: bool) {.importc, cdecl.}
+proc darwin_open_external(url: cstring) {.importc, cdecl.}
+
 proc resolveWinId(a: JsonNode, key: string): int32 =
   ## parentId/modalId may be an int OR a "win-<n>" pointer-string; -1 if absent
   ## (router.zc:666-700). Mirrors the int-then-string resolution.
@@ -180,7 +186,22 @@ proc routeWindowAction(action: string, a: JsonNode, windowId: int) =
     else: darwin_window_detach_modal(pH, mH)
     return
 
-  # --- app ops + openExternal → Batch 5b Task 2 (seam) ----------------------
+  # --- app ops (platform.m; ungated) ----------------------------------------
+  if action == "quit":
+    darwin_app_quit(if a.isNil: false else: a{"force"}.getBool(false))
+    return
+  if action == "activate":
+    darwin_app_activate()
+    return
+  if action == "setQuitGuard":
+    darwin_set_quit_guard(if a.isNil: false else: a{"enabled"}.getBool(false))
+    return
+
+  # --- openExternal (shell:open — gated at the head) ------------------------
+  if action == "openExternal":
+    let url = (if a.isNil: "" else: a{"url"}.getStr(""))
+    if url.len > 0: darwin_open_external(url.cstring)
+    return
 
   # --- handle-based window ops (resolve the NSWindow from the numeric id) ---
   let h = darwin_window_get_by_numeric_id(windowId.int32)
