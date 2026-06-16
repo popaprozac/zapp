@@ -56,6 +56,14 @@ import app_events
 # from it is referenced here — imported only for its {.exportc.} side-effect
 # symbols. Replaces the former 5 registry stubs below.
 import registry
+# worker provides the {.exportc.} worker engine dispatcher (worker_create /
+# worker_post_message / worker_terminate / worker_terminate_owner) + the worker→
+# webview delivery (worker_dispatch_to_webview). gcsafe + libc — zjs.c calls
+# worker_dispatch_to_webview / worker_post_message (possibly on a worker pthread)
+# by C name. No Nim symbol from it is referenced here — imported only for its
+# {.exportc.} side-effect symbols. Replaces the worker_post_message +
+# worker_dispatch_to_webview stubs below.
+import worker
 {.pop.}
 
 # CLI-generated config + bootstrap modules. `buildNativeNim` writes these into
@@ -194,15 +202,10 @@ var zapp_log_level {.exportc.}: cint = 0
 # dispatch_event_to_all + zapp_escape_dup now live in dispatch.nim (the real
 # escaping broadcast helpers), imported transitively via callbacks/app_events.
 
-# Worker→worker delivery via the dispatcher (worker.zc). No dispatcher yet.
-proc worker_post_message(worker_id: cstring, data_json: cstring) {.exportc, cdecl, gcsafe.} =
-  discard
-
-# Worker→webview message delivery (worker.zc dispatcher → __zappBridge). zjs.c's
-# host_post_to_webview owns + free()s the args after this returns, so the stub
-# neither frees nor retains them. No webview message routing yet.
-proc worker_dispatch_to_webview(worker_id: cstring, data_json: cstring) {.exportc, cdecl, gcsafe.} =
-  discard
+# worker_post_message (worker→worker dispatch) + worker_dispatch_to_webview
+# (worker→webview delivery) now live in worker.nim (imported above) — the
+# faithful gcsafe/libc port of worker.zc's dispatcher + app.zc's
+# worker_dispatch_to_webview/window. The former 2 no-op stubs are gone.
 
 # Worker-context bootstrap JS (the worker-side bridge: invokeSync, postMessage,
 # console) is now provided by the generated zapp_bootstrap module (imported

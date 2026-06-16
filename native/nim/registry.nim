@@ -186,6 +186,31 @@ proc zapp_worker_registry_is_shared*(workerId: cstring): cint
   let i = registryIndex(workerId)
   if i >= 0: gReg[i].shared else: 0
 
+# --- Owner-access for worker→webview delivery (B7b) --------------------------
+# worker.nim's worker_dispatch_to_webview needs a worker's owner(s) to target
+# the right window(s). B7a kept owner state private; these gcsafe reads return
+# cstrings into the static gReg (stable across the read), "" / 0 when absent —
+# mirroring the zc's static `owner`/`get` accessors. Worker-thread-reachable
+# (zjs.c may call worker_dispatch_to_webview on a worker pthread), so NO Nim GC.
+
+# First owner of a worker (dedicated workers have exactly one), "" if none.
+proc registryFirstOwner*(workerId: cstring): cstring {.gcsafe.} =
+  let i = registryIndex(workerId)
+  if i < 0 or gReg[i].ownerCount <= 0: return cstring""
+  bufStr(gReg[i].owners[0])
+
+# Owner count for a worker; 0 if not found.
+proc registryOwnerCount*(workerId: cstring): cint {.gcsafe.} =
+  let i = registryIndex(workerId)
+  if i < 0: return 0
+  gReg[i].ownerCount
+
+# Owner at index (shared-worker broadcast), "" if out of range / not found.
+proc registryOwnerAt*(workerId: cstring, idx: cint): cstring {.gcsafe.} =
+  let i = registryIndex(workerId)
+  if i < 0 or idx < 0 or idx >= gReg[i].ownerCount: return cstring""
+  bufStr(gReg[i].owners[idx])
+
 # Find an existing shared worker by script URL (registry.zc:197-206). Returns
 # the worker_id (a pointer into the static entry) or nil. registry.zc keeps this
 # `static`; the plan exports it as a Nim proc (no exportc) for B7b's router path.
