@@ -4,6 +4,14 @@
 ## the walking skeleton — they fall through silently for now.
 import std/[options, json, strutils]
 import bridge, service, clipboard, callbacks, events, permissions, fs, dialog, notification, shortcuts
+# worker: worker_create / worker_post_message / worker_terminate (B7b.1
+#   dispatcher). registry: every proc routeWorker needs is a plain Nim `*`
+#   export — registryFindShared / registryAddOwner (Nim-only) AND the C-ABI
+#   procs (zapp_worker_registry_add_full_with_engine_and_name / _is_shared /
+#   _remove / _remove_owner — declared `proc … *(…) {.exportc,…}`, so the `*`
+#   makes them callable as Nim procs too). So routeWorker reaches them by import
+#   — NO importc here (importc'ing our own exportc symbols would re-declare them).
+import worker, registry
 
 # Bridge-ready signal: the webview posts {t:4,m:"ready"} once its bootstrap bridge
 # is up (bootstrap/webview.ts). The .m window delegate defers the FIRST focus
@@ -154,6 +162,89 @@ proc routeApp(meth: string, a: JsonNode, windowId, id: int) =
     sendInvokeResponse(windowId, id, true, (if ok: "true" else: "false"))
     return
   sendInvokeResponse(windowId, id, false, "UNKNOWN")
+
+proc routeWorker(action: string, a: JsonNode, windowId: int) =
+  ## t:5 WORKER envelope — port of native/app/router.zc:router_handle_worker
+  ## (1182-1338). Fire-and-forget (no per-action reply) EXCEPT the shared-worker
+  ## dedup, which replies the canonical id via sendInvokeResponse(windowId, 0, …)
+  ## exactly like the zc's dispatch_invoke_response(window_id, 0, true, eid).
+  ## Args (`a`) come straight from the parsed envelope; nil-safe `a{"…"}` reads.
+  let args = if a.isNil: newJObject() else: a
+  case action
+  of "create":
+    # scriptUrl + workerId are required (zc returns if either absent).
+    let scriptUrl = args{"scriptUrl"}.getStr("")
+    let workerId = args{"workerId"}.getStr("")
+    if scriptUrl.len == 0 or workerId.len == 0: return
+
+    # Owner id derived from the window's string id ("win-<n>"); bail if the
+    # window has no string id (zc: `if owner_id == NULL return`).
+    let ownerId = darwin_window_id_string(windowId.int32)
+    if ownerId.isNil: return
+
+    let isShared = args{"shared"}.getBool(false)
+
+    # Per-worker engine selection (G8): string → id, mirroring router.zc:1228-1233.
+    # Default -1 = "no preference" (the resolver picks the highest-priority
+    # compiled engine — zjs here).
+    var engine: int32 = -1
+    case args{"engine"}.getStr("")
+    of "bare-jsc": engine = 2
+    of "bare-v8": engine = 3
+    of "bare-quickjs": engine = 4
+    of "bare-mqjs": engine = 5
+    of "bare-hermes": engine = 6
+    of "zjs": engine = 7
+    else: discard
+
+    # Optional display name (`new Worker(url, { name })`); "" = leave untouched.
+    let name = args{"name"}.getStr("")
+
+    if isShared:
+      # Connect to an existing shared worker with the same script URL if any.
+      let existing = registryFindShared(scriptUrl.cstring)
+      if not existing.isNil:
+        discard registryAddOwner(existing, ownerId)
+        # Notify JS of the actual (canonical) worker id (zc id 0, ok true).
+        sendInvokeResponse(windowId, 0, true, $existing)
+        return
+      # First shared worker with this URL — register it (shared=1) + spawn.
+      discard zapp_worker_registry_add_full_with_engine_and_name(
+        workerId.cstring, ownerId, 1, scriptUrl.cstring, engine, name.cstring)
+    else:
+      # Dedicated worker.
+      discard zapp_worker_registry_add_full_with_engine_and_name(
+        workerId.cstring, ownerId, 0, scriptUrl.cstring, engine, name.cstring)
+
+    # app is unused in the zjs-only dispatcher (ABI parity only) — pass nil.
+    discard worker_create(nil, scriptUrl.cstring, ownerId, workerId.cstring, engine)
+
+  of "post":
+    let workerId = args{"workerId"}.getStr("")
+    if workerId.len == 0: return
+    let dataJson = args{"data"}.getStr("")
+    worker_post_message(workerId.cstring, dataJson.cstring)
+
+  of "terminate":
+    let workerId = args{"workerId"}.getStr("")
+    if workerId.len == 0: return
+    # Shared workers can't be torn down by a single window — use disconnect.
+    if zapp_worker_registry_is_shared(workerId.cstring) != 0: return
+    worker_terminate(workerId.cstring)
+    zapp_worker_registry_remove(workerId.cstring)
+
+  of "disconnect":
+    # Drop this window's owner ref; terminate the worker only at refcount 0.
+    let workerId = args{"workerId"}.getStr("")
+    if workerId.len == 0: return
+    let ownerId = darwin_window_id_string(windowId.int32)
+    if ownerId.isNil: return
+    let remaining = zapp_worker_registry_remove_owner(workerId.cstring, ownerId)
+    if remaining <= 0:
+      worker_terminate(workerId.cstring)
+      zapp_worker_registry_remove(workerId.cstring)
+
+  else: discard      # unknown worker action — no-op (matches the zc fallthrough)
 
 proc routeClipboard(m: string, a: JsonNode, windowId, id: int) =
   ## Handle a `__clipboard:*` INVOKE natively (NOT via the service registry),
@@ -578,6 +669,13 @@ proc routeMessage*(msg: string, windowId: int) =
   # routeWindowAction.
   if f.t == 4:
     routeWindowAction(f.m, f.a, windowId, msg)
+    return
+
+  # t:5 WORKER envelope (protocol.zc:26) — new Worker(url) lifecycle
+  # (create/post/terminate/disconnect), routed to routeWorker
+  # (port of router.zc:router_handle_worker). Fire-and-forget.
+  if f.t == 5:
+    routeWorker(f.m, f.a, windowId)
     return
 
   if f.t != 1: return            # skeleton answers INVOKE only
