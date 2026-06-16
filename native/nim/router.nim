@@ -90,6 +90,20 @@ proc darwin_dock_set_badge(label: cstring) {.importc, cdecl.}
 proc darwin_dock_bounce(bounceType: cint) {.importc, cdecl.}
 proc darwin_dock_set_icon(imagePath: cstring) {.importc, cdecl.}
 
+# --- t:4 panel (embedded-webview) targets (panel.m, already compiled; B6i).
+# Arg-based; embed-gated at the head. ---
+proc darwin_panel_create(windowId: int32, panelId, url: cstring, bridge: bool, partition: cstring) {.importc, cdecl.}
+proc darwin_panel_set_bounds(panelId: cstring, x, y, w, h: int32) {.importc, cdecl.}
+proc darwin_panel_load_url(panelId, url: cstring) {.importc, cdecl.}
+proc darwin_panel_eval_js(panelId, js: cstring) {.importc, cdecl.}
+proc darwin_panel_post_message(panelId, dataJson: cstring) {.importc, cdecl.}
+proc darwin_panel_show(panelId: cstring) {.importc, cdecl.}
+proc darwin_panel_hide(panelId: cstring) {.importc, cdecl.}
+proc darwin_panel_reload(panelId: cstring) {.importc, cdecl.}
+proc darwin_panel_go_back(panelId: cstring) {.importc, cdecl.}
+proc darwin_panel_go_forward(panelId: cstring) {.importc, cdecl.}
+proc darwin_panel_destroy(panelId: cstring) {.importc, cdecl.}
+
 proc resolveWinId(a: JsonNode, key: string): int32 =
   ## parentId/modalId may be an int OR a "win-<n>" pointer-string; -1 if absent
   ## (router.zc:666-700). Mirrors the int-then-string resolution.
@@ -272,13 +286,47 @@ proc routeScreen(meth: string, a: JsonNode, windowId, id: int) =
   else:
     sendInvokeResponse(windowId, id, false, "UNKNOWN_SCREEN")
 
+proc routePanel(action: string, a: JsonNode, windowId: int): bool =
+  ## t:4 embedded-webview ("panel") actions (mirror panel.zc:panel_route).
+  ## Returns true if `action` was a panel action (so routeWindowAction stops).
+  ## Arg-based; embed-gated at routeWindowAction's head. panel.m owns the WKWebView.
+  if not action.startsWith("panel"): return false
+  let pid = a{"panelId"}.getStr("")
+  case action
+  of "panelCreate":
+    let url = a{"url"}.getStr("")
+    let partition = a{"partition"}.getStr("")
+    darwin_panel_create(windowId.int32, pid.cstring, url.cstring,
+                        a{"bridge"}.getBool(false), partition.cstring)
+  of "panelSetBounds":
+    darwin_panel_set_bounds(pid.cstring, a{"x"}.getInt(0).int32, a{"y"}.getInt(0).int32,
+                            a{"w"}.getInt(0).int32, a{"h"}.getInt(0).int32)
+  of "panelLoadUrl":
+    let url = a{"url"}.getStr("")
+    darwin_panel_load_url(pid.cstring, url.cstring)
+  of "panelExecJs":
+    let code = a{"code"}.getStr("")
+    darwin_panel_eval_js(pid.cstring, code.cstring)
+  of "panelPostMessage":
+    let data = a{"data"}.getStr("")
+    darwin_panel_post_message(pid.cstring, data.cstring)
+  of "panelShow": darwin_panel_show(pid.cstring)
+  of "panelHide": darwin_panel_hide(pid.cstring)
+  of "panelReload": darwin_panel_reload(pid.cstring)
+  of "panelBack": darwin_panel_go_back(pid.cstring)
+  of "panelForward": darwin_panel_go_forward(pid.cstring)
+  of "panelDestroy": darwin_panel_destroy(pid.cstring)
+  else: return false      # "panel"-prefixed but not a real panel action
+  return true
+
 proc routeWindowAction(action: string, a: JsonNode, windowId: int, payload: string) =
   ## t:4 fire-and-forget window/app action dispatch. HEAD = the action permission
   ## gate (router.zc:376-385): ungated ("") falls through; a gated action not
   ## granted is dropped (fire-and-forget has no reply channel — permissions_check
-  ## logs once). The window/app/panel/shell action ARMS are Batch 5b; dock/
-  ## sidebar/inspector/popover/toolbar are Batch 8. Only the framework + the
-  ## already-ported subscribe/unsubscribe/ready land here.
+  ## logs once). Ported arms: subscribe/unsubscribe/ready, id-based + handle-based
+  ## window ops + attach/detachModal (B5b), app ops + openExternal (B5b),
+  ## shell-path (B6a), menu (B6f), tray (B6g), dock (B6h), panel (B6i). Remaining:
+  ## sidebar/inspector/popover/toolbar t:4 + accessory-pane sender resolution (B8).
   let permId = permission_id_for_action(action.cstring)
   if not permId.isNil and permId[0] != '\0':
     if not permissions_check(permId, action.cstring):
@@ -405,6 +453,9 @@ proc routeWindowAction(action: string, a: JsonNode, windowId: int, payload: stri
       if not path.isNil: darwin_dock_set_icon(path.getStr("").cstring)
     else: discard
     return
+
+  # --- panel (embedded-webview) ops (panel.m; embed-gated at the head) ------
+  if routePanel(action, a, windowId): return
 
   # --- handle-based window ops (resolve the NSWindow from the numeric id) ---
   let h = darwin_window_get_by_numeric_id(windowId.int32)
