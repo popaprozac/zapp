@@ -1,0 +1,49 @@
+:root {
+  --text: #6b6375; --text-h: #08060d; --bg: #fff; --border: #e5e4e7;
+  --code-bg: #f4f3ec; --accent: #aa3bff; --accent-bg: rgba(170, 59, 255, 0.1);
+  --accent-border: rgba(170, 59, 255, 0.5);
+  font: 14px/1.45 system-ui, "Segoe UI", Roboto, sans-serif;
+  color-scheme: light dark; color: var(--text); background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --text: #9ca3af; --text-h: #f3f4f6; --bg: #16171d; --border: #2e303a;
+    --code-bg: #1f2028; --accent: #c084fc; --accent-bg: rgba(192, 132, 252, 0.15);
+    --accent-border: rgba(192, 132, 252, 0.5);
+  }
+}
+body { margin: 0; }
+h1 { font-size: 28px; color: var(--text-h); margin: 0 0 8px; font-weight: 600; }
+h2 { font-size: 16px; color: var(--text-h); margin: 0 0 8px; font-weight: 600; }
+.muted { opacity: 0.6; font-size: 12px; }
+
+/* Sidebar pane */
+.sidebar-pane { padding: var(--zapp-titlebar-height, 52px) 8px 8px; }
+.sidebar-title { opacity: 0.5; font-size: 11px; letter-spacing: 0.06em; padding: 0 8px 8px; }
+.nav-item {
+  display: block; width: 100%; text-align: left; border: 0; background: transparent;
+  color: var(--text-h); padding: 7px 10px; border-radius: 6px; font: inherit; cursor: default;
+}
+.nav-item:hover { background: var(--accent-bg); }
+.nav-item.active { background: var(--accent-bg); color: var(--accent); font-weight: 600; }
+
+/* Main pane */
+.main-pane { padding: var(--zapp-titlebar-height, 52px) 24px 24px; max-width: 720px; }
+.landing { margin-bottom: 16px; }
+.stage { display: flex; flex-direction: column; gap: 16px; }
+.card { border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+.card .intro { margin: 0 0 12px; opacity: 0.7; font-size: 12px; }
+.card .row { display: flex; flex-wrap: wrap; gap: 8px; }
+.card button {
+  font: inherit; color: var(--accent); background: var(--accent-bg);
+  border: 1px solid transparent; border-radius: 6px; padding: 6px 12px; cursor: default;
+}
+.card button:hover { border-color: var(--accent-border); }
+.card .result { font-family: ui-monospace, Consolas, monospace; font-size: 12px;
+  opacity: 0.8; margin-top: 10px; white-space: pre-wrap; min-height: 16px; }
+
+/* Inspector pane */
+.inspector-pane { padding: var(--zapp-titlebar-height, 52px) 12px 12px; }
+.inspector-title { opacity: 0.5; font-size: 11px; letter-spacing: 0.06em; margin-bottom: 10px; }
+.kv b { color: var(--text-h); display: block; margin-bottom: 4px; }

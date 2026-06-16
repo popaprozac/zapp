@@ -1,0 +1,28 @@
+import { Events } from "@zappdev/runtime";
+import { registry } from "../sections/registry";
+import { findSection } from "../sections/types";
+
+export function renderInspectorPane(app: HTMLElement) {
+  document.body.style.background = "transparent";
+  app.innerHTML = `
+    <div class="inspector-pane">
+      <div class="inspector-title">INSPECTOR</div>
+      <div class="inspector-body" data-body>
+        <p class="muted">Select a feature to see live state.</p>
+      </div>
+    </div>`;
+  const body = app.querySelector<HTMLElement>("[data-body]")!;
+  let teardown: void | (() => void);
+
+  Events.on("ks:nav", ({ id }: any) => {
+    if (typeof teardown === "function") teardown();
+    const section = findSection(registry, id);
+    body.innerHTML = "";
+    if (section?.inspector) {
+      teardown = section.inspector(body);
+    } else {
+      body.innerHTML = `<p class="muted">No inspector for this section.</p>`;
+      teardown = undefined;
+    }
+  });
+}
