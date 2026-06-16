@@ -10,6 +10,8 @@ test("renderBuildConfigNim emits exportc getters the .m layer calls", () => {
     devTools: 1,
     isDev: false,
     permissionsJson: '{"platform":"macos","active":false,"allow":[]}',
+    fsAllowlistJson: "[]",
+    fsPersistGrants: false,
   });
   expect(out).toContain('proc zapp_build_initial_url(): cstring {.exportc, cdecl.}');
   expect(out).toContain('proc zapp_build_use_embedded_assets(): cint {.exportc, cdecl.}');
@@ -55,8 +57,29 @@ test("renderBuildConfigNim emits zapp_build_permissions_json from the manifest",
     devTools: 1,
     isDev: false,
     permissionsJson: '{"platform":"macos","active":true,"allow":["clipboard"]}',
+    fsAllowlistJson: "[]",
+    fsPersistGrants: false,
   });
   expect(out).toContain('proc zapp_build_permissions_json(): cstring {.exportc, cdecl.}');
   expect(out).toContain('let zappPermissionsJson');
   expect(out).toContain('clipboard');
+});
+
+test("renderBuildConfigNim emits fs allowlist + persist-grants getters", () => {
+  const out = renderBuildConfigNim({
+    initialUrl: "zapp://index.html",
+    identifier: "com.zapp.test",
+    assetRoot: "/tmp/assets",
+    embedAssets: false,
+    devTools: 1,
+    isDev: true,
+    permissionsJson: '{"platform":"macos","active":false,"allow":[]}',
+    fsAllowlistJson: '["$userData","/tmp/zapp"]',
+    fsPersistGrants: true,
+  });
+  // The allowlist JSON is embedded as a Nim string literal whose VALUE is the
+  // raw array (fs.nim's parser reads it via std/json).
+  expect(out).toContain('let zappFsAllowlistJson = "[\\"$userData\\",\\"/tmp/zapp\\"]"');
+  expect(out).toContain("proc zapp_build_fs_allowlist_json(): cstring {.exportc, cdecl.} = zappFsAllowlistJson.cstring");
+  expect(out).toContain("proc zapp_build_fs_persist_grants(): bool {.exportc, cdecl.} = true");
 });

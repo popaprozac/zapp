@@ -180,6 +180,8 @@ export interface BuildConfigNimOpts {
   devTools: number;
   isDev: boolean;
   permissionsJson: string;
+  fsAllowlistJson: string;
+  fsPersistGrants: boolean;
 }
 
 /**
@@ -199,10 +201,13 @@ let zappInitialUrl = ${s(o.initialUrl)}
 let zappIdentifier = ${s(o.identifier)}
 let zappAssetRoot = ${s(o.assetRoot)}
 let zappPermissionsJson = ${s(o.permissionsJson)}
+let zappFsAllowlistJson = ${s(o.fsAllowlistJson)}
 proc zapp_build_initial_url(): cstring {.exportc, cdecl.} = zappInitialUrl.cstring
 proc zapp_build_identifier(): cstring {.exportc, cdecl.} = zappIdentifier.cstring
 proc zapp_build_asset_root(): cstring {.exportc, cdecl.} = zappAssetRoot.cstring
 proc zapp_build_permissions_json(): cstring {.exportc, cdecl.} = zappPermissionsJson.cstring
+proc zapp_build_fs_allowlist_json(): cstring {.exportc, cdecl.} = zappFsAllowlistJson.cstring
+proc zapp_build_fs_persist_grants(): bool {.exportc, cdecl.} = ${o.fsPersistGrants ? "true" : "false"}
 proc zapp_build_use_embedded_assets(): cint {.exportc, cdecl.} = return ${b(o.embedAssets)}.cint
 proc zapp_build_csp(): cstring {.exportc, cdecl.} = "".cstring
 proc zapp_build_is_dev(): cint {.exportc, cdecl.} = return ${b(o.isDev)}.cint

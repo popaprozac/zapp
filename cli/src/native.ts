@@ -1114,6 +1114,8 @@ async function buildNativeNim(
     devTools: 1,
     isDev: true,
     permissionsJson: JSON.stringify(permsObj),
+    fsAllowlistJson: JSON.stringify(config.fs?.allow ?? []),
+    fsPersistGrants: config.fs?.persistDialogGrants ?? false,
   });
   await fs.writeFile(path.join(zappDir, "zapp_build_config.nim"), configNim, "utf-8");
 
