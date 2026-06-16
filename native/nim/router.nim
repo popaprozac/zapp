@@ -64,6 +64,11 @@ proc darwin_screen_cursor_json(): cstring {.importc, cdecl.}
 proc darwin_screen_for_window_json(windowId: int32): cstring {.importc, cdecl.}
 proc c_free(p: cstring) {.importc: "free", cdecl.}
 
+# --- t:4 menu targets (menu.m; payload = the FULL bridge envelope, menu.m
+# extracts "a"). menu.m builds the NSMenu + icons + click delivery itself. ---
+proc darwin_menu_set_from_payload(payloadJson: cstring) {.importc, cdecl.}
+proc darwin_menu_show_context_from_payload(payloadJson: cstring, windowId: int32) {.importc, cdecl.}
+
 proc resolveWinId(a: JsonNode, key: string): int32 =
   ## parentId/modalId may be an int OR a "win-<n>" pointer-string; -1 if absent
   ## (router.zc:666-700). Mirrors the int-then-string resolution.
@@ -246,7 +251,7 @@ proc routeScreen(meth: string, a: JsonNode, windowId, id: int) =
   else:
     sendInvokeResponse(windowId, id, false, "UNKNOWN_SCREEN")
 
-proc routeWindowAction(action: string, a: JsonNode, windowId: int) =
+proc routeWindowAction(action: string, a: JsonNode, windowId: int, payload: string) =
   ## t:4 fire-and-forget window/app action dispatch. HEAD = the action permission
   ## gate (router.zc:376-385): ungated ("") falls through; a gated action not
   ## granted is dropped (fire-and-forget has no reply channel — permissions_check
@@ -339,6 +344,14 @@ proc routeWindowAction(action: string, a: JsonNode, windowId: int) =
     else: darwin_trash_item(abs.cstring)
     return
 
+  # --- menu ops (menu.m parses the full payload; gated "menu" at the head) ---
+  if action == "setMenu":
+    darwin_menu_set_from_payload(payload.cstring)
+    return
+  if action == "showContextMenu":
+    darwin_menu_show_context_from_payload(payload.cstring, windowId.int32)
+    return
+
   # --- handle-based window ops (resolve the NSWindow from the numeric id) ---
   let h = darwin_window_get_by_numeric_id(windowId.int32)
   if h.isNil: return                       # window gone — nothing to act on
@@ -383,7 +396,7 @@ proc routeMessage*(msg: string, windowId: int) =
   # t:4 fire-and-forget window/app action — dispatched (+ permission-gated) in
   # routeWindowAction.
   if f.t == 4:
-    routeWindowAction(f.m, f.a, windowId)
+    routeWindowAction(f.m, f.a, windowId, msg)
     return
 
   if f.t != 1: return            # skeleton answers INVOKE only
