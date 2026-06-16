@@ -69,6 +69,17 @@ proc c_free(p: cstring) {.importc: "free", cdecl.}
 proc darwin_menu_set_from_payload(payloadJson: cstring) {.importc, cdecl.}
 proc darwin_menu_show_context_from_payload(payloadJson: cstring, windowId: int32) {.importc, cdecl.}
 
+# --- t:4 tray targets (tray.m; payload = the FULL bridge envelope, tray.m
+# extracts "a"). tray.m owns the NSStatusItem + icon + menu + click delivery. ---
+proc darwin_tray_create_from_payload(payloadJson: cstring) {.importc, cdecl.}
+proc darwin_tray_set_icon_from_payload(payloadJson: cstring) {.importc, cdecl.}
+proc darwin_tray_set_title_from_payload(payloadJson: cstring) {.importc, cdecl.}
+proc darwin_tray_set_tooltip_from_payload(payloadJson: cstring) {.importc, cdecl.}
+proc darwin_tray_set_menu_from_payload(payloadJson: cstring) {.importc, cdecl.}
+proc darwin_tray_destroy_from_payload(payloadJson: cstring) {.importc, cdecl.}
+proc darwin_tray_attach_window_from_payload(payloadJson: cstring) {.importc, cdecl.}
+proc darwin_tray_detach_window_from_payload(payloadJson: cstring) {.importc, cdecl.}
+
 proc resolveWinId(a: JsonNode, key: string): int32 =
   ## parentId/modalId may be an int OR a "win-<n>" pointer-string; -1 if absent
   ## (router.zc:666-700). Mirrors the int-then-string resolution.
@@ -350,6 +361,20 @@ proc routeWindowAction(action: string, a: JsonNode, windowId: int, payload: stri
     return
   if action == "showContextMenu":
     darwin_menu_show_context_from_payload(payload.cstring, windowId.int32)
+    return
+
+  # --- tray ops (tray.m parses the full payload; gated "tray" at the head) ---
+  if action.startsWith("tray:"):
+    case action
+    of "tray:create": darwin_tray_create_from_payload(payload.cstring)
+    of "tray:setIcon": darwin_tray_set_icon_from_payload(payload.cstring)
+    of "tray:setTitle": darwin_tray_set_title_from_payload(payload.cstring)
+    of "tray:setTooltip": darwin_tray_set_tooltip_from_payload(payload.cstring)
+    of "tray:setMenu": darwin_tray_set_menu_from_payload(payload.cstring)
+    of "tray:destroy": darwin_tray_destroy_from_payload(payload.cstring)
+    of "tray:attachWindow": darwin_tray_attach_window_from_payload(payload.cstring)
+    of "tray:detachWindow": darwin_tray_detach_window_from_payload(payload.cstring)
+    else: discard      # unknown tray:* — no-op (matches the zc fallthrough)
     return
 
   # --- handle-based window ops (resolve the NSWindow from the numeric id) ---
