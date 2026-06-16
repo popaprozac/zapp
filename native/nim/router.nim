@@ -3,7 +3,7 @@
 ## (emit / window-action / worker / sync) are framework breadth not exercised by
 ## the walking skeleton — they fall through silently for now.
 import std/[options, json, strutils]
-import bridge, service, clipboard, callbacks, events, permissions, fs, dialog
+import bridge, service, clipboard, callbacks, events, permissions, fs, dialog, notification
 
 # Bridge-ready signal: the webview posts {t:4,m:"ready"} once its bootstrap bridge
 # is up (bootstrap/webview.ts). The .m window delegate defers the FIRST focus
@@ -155,6 +155,44 @@ proc routeDialog(meth: string, a: JsonNode, windowId, id: int) =
   else:
     sendInvokeResponse(windowId, id, false, "UNKNOWN_DIALOG")
 
+proc routeNotification(meth: string, a: JsonNode, windowId, id: int) =
+  ## t:1 `__notif:*` (mirror router.zc:1551-1690). Async ops (requestPermission/
+  ## show/schedule) reply LATER via notifResponseCb — this proc returns without
+  ## replying for those. Sync ops reply inline ("{}" or the result). macOS only.
+  let argsJson = (if a.isNil: "{}" else: $a)
+  case meth
+  of "__notif:requestPermission": notifRequestPermission(windowId, id)   # async
+  of "__notif:show":              notifShow(argsJson, windowId, id)       # async
+  of "__notif:schedule":          notifSchedule(argsJson, windowId, id)   # async
+  of "__notif:getPermission":
+    sendInvokeResponse(windowId, id, true, notifGetPermission())
+  of "__notif:cancel":
+    let nid = a{"id"}.getStr("")
+    if nid.len > 0: notifCancel(nid)
+    sendInvokeResponse(windowId, id, true, "{}")
+  of "__notif:cancelAll":
+    notifCancelAll()
+    sendInvokeResponse(windowId, id, true, "{}")
+  of "__notif:registerCategory":
+    let cid = a{"id"}.getStr("")
+    if cid.len > 0: notifRegisterCategory(cid, argsJson)
+    sendInvokeResponse(windowId, id, true, "{}")
+  of "__notif:removeCategory":
+    let cid = a{"id"}.getStr("")
+    if cid.len > 0: notifRemoveCategory(cid)
+    sendInvokeResponse(windowId, id, true, "{}")
+  of "__notif:removeDelivered":
+    notifRemoveDelivered(argsJson)
+    sendInvokeResponse(windowId, id, true, "{}")
+  of "__notif:removeAllDelivered":
+    notifRemoveAllDelivered()
+    sendInvokeResponse(windowId, id, true, "{}")
+  of "__notif:update":
+    notifUpdate(argsJson)
+    sendInvokeResponse(windowId, id, true, "{}")
+  else:
+    sendInvokeResponse(windowId, id, false, "UNKNOWN_NOTIFICATION")
+
 proc routeWindowAction(action: string, a: JsonNode, windowId: int) =
   ## t:4 fire-and-forget window/app action dispatch. HEAD = the action permission
   ## gate (router.zc:376-385): ungated ("") falls through; a gated action not
@@ -171,6 +209,8 @@ proc routeWindowAction(action: string, a: JsonNode, windowId: int) =
   # zapp_dispatch_event's Layer-2 JS delivery fires only for subscribed events.
   if action == "subscribe" or action == "unsubscribe":
     let evName = (if a.isNil: "" else: a{"event"}.getStr(""))
+    if action == "subscribe" and evName.startsWith("__notif:"):
+      notifSetBridgeReady()        # flush buffered notification responses
     let evId = eventNameToId(evName)
     if evId >= 0:
       zapp_window_set_js_listener(windowId.cint, evId.cint,
@@ -319,6 +359,9 @@ proc routeMessage*(msg: string, windowId: int) =
     return
   if f.m.startsWith("__dialog:"):
     routeDialog(f.m, f.a, windowId, f.id)
+    return
+  if f.m.startsWith("__notif:"):
+    routeNotification(f.m, f.a, windowId, f.id)
     return
 
   let res = invokeService(f.m, f.a)

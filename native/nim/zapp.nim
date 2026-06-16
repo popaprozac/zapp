@@ -9,7 +9,7 @@
 ## this walking-skeleton boot we satisfy each with a Nim {.exportc, cdecl.} stub
 ## (NOT {.emit.} — Nim is the host language now). Each is marked TEMP with the
 ## task/module that makes it real (4b = assets/config/bootstrap, Task 5 = bridge).
-{.passL: "-framework Cocoa -framework WebKit -framework CoreFoundation -framework JavaScriptCore -framework Security -framework IOKit -framework ServiceManagement".}
+{.passL: "-framework Cocoa -framework WebKit -framework CoreFoundation -framework JavaScriptCore -framework Security -framework IOKit -framework ServiceManagement -framework UserNotifications".}
 # NOTE the CALL form `{.compile(file, flags).}` — the THIRD arg is per-file
 # clang flags. The TUPLE form `{.compile: (file, dest).}` treats the 2nd elem
 # as the OUTPUT OBJECT NAME, so "-fobjc-arc" would (a) drop ARC and (b) make
@@ -22,6 +22,7 @@
 {.compile("../platform/darwin/panel.m", "-fobjc-arc").}
 {.compile("../platform/darwin/fs.m", "-fobjc-arc").}
 {.compile("../platform/darwin/dialog.m", "-fobjc-arc").}
+{.compile("../platform/darwin/notification.m", "-fobjc-arc").}
 
 import std/os          # parentDir for the zjs.c {.compile.}/{.passL.} paths below
 import app
@@ -62,12 +63,6 @@ import zapp_build_config, zapp_bootstrap
 # ported from native/app/app_events.zc. The dispatcher fans an app event out to
 # native callbacks + the webview (via webview.m's darwin_webview_eval_all);
 # worker fan-out is a deferred no-op (Batch 4/7).
-
-# darwin_notification_setup_delegate — defined in notification.m; platform.m
-# calls it on launch to install the UN delegate. Not compiling notification.m
-# yet. TEMP until the notification layer lands.
-proc darwin_notification_setup_delegate() {.exportc, cdecl.} =
-  discard
 
 # ---------------------------------------------------------------------------
 # window.m callback dependencies for split/toolbar/popover features. The
