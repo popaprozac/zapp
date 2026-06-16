@@ -23,7 +23,7 @@
 ## data interpolation in the .zc is an UNESCAPED passthrough, so `$data` here
 ## matches it (no extra escaping the source doesn't have).
 
-import events  # aeStarted (100) / aeShutdown (101) for the skip-list
+import events, dispatch  # events: aeStarted/aeShutdown skip-list; dispatch: worker_broadcast_eval_js + darwin_webview_eval_all
 
 const
   ZAPP_APP_EVENT_BASE = 100
@@ -45,13 +45,12 @@ proc zapp_app_on(eventId: cint, cb: AppEventCb) {.exportc, cdecl.} =
       gAppCbs[idx][i] = cb
       return
 
-# --- JS delivery (delegated to the untouched webview.m) --------------------
-# webview.m:1204 `void darwin_webview_eval_all(const char* js)`.
+# --- JS delivery -----------------------------------------------------------
+# worker_broadcast_eval_js comes from the imported dispatch module (exportc,
+# Nim-visible). darwin_webview_eval_all (webview.m:1204) is importc-only there
+# (not Nim-exported), so re-declare it here for the Layer-3 call by Nim name —
+# both decls resolve to the same C symbol, so the link is unaffected.
 proc darwin_webview_eval_all(js: cstring) {.importc, cdecl.}
-
-# Layer 2 worker broadcast is deferred to Batch 4/7 — TEMP no-op so the
-# dispatch DECISION lands now without pulling in the worker supervisor.
-proc workerBroadcastAppEvent(js: cstring) = discard
 
 ## EXACT map copied from app_events.zc:88-102 Layer-3 switch.
 ## Events outside this set (incl. 100/101/102/103) produce no WebView forward.
@@ -88,8 +87,13 @@ proc zapp_app_dispatch(eventId: cint, data: cstring): cint {.exportc, cdecl.} =
       gAppCbs[idx][i](eventId, data)
       inc fired
 
-  # Layer 2: broadcast to every active worker — DEFERRED (Batch 4/7).
-  workerBroadcastAppEvent(cstring"")
+  # Layer 2: broadcast to every worker via _dispatchAppEvent (app_events.zc:59-64).
+  block:
+    let safeData = (if data.isNil: "" else: $data)
+    let wjs = "(function(){var b=self.__zappBridge||globalThis.__zappBridge;" &
+              "if(b&&b._dispatchAppEvent)b._dispatchAppEvent(" & $eventId &
+              ",'" & safeData & "');})();"
+    worker_broadcast_eval_js(wjs.cstring)
 
   # Layer 3: forward to all WebViews, skipping STARTED/SHUTDOWN.
   if eventId != aeStarted.cint and eventId != aeShutdown.cint:

@@ -215,10 +215,8 @@ var zapp_embedded_assets_count {.exportc.}: cint = 0
 # its verbose worker-lifecycle lines on `>= 1`; 0 keeps the default-quiet path.
 var zapp_log_level {.exportc.}: cint = 0
 
-# Fire-and-forget fan-out to every webview's __zappBridge._onEvent. No event
-# layer ported yet.
-proc dispatch_event_to_all(event_name: cstring, payload: cstring) {.exportc, cdecl, gcsafe.} =
-  discard
+# dispatch_event_to_all + zapp_escape_dup now live in dispatch.nim (the real
+# escaping broadcast helpers), imported transitively via callbacks/app_events.
 
 # Worker→worker delivery via the dispatcher (worker.zc). No dispatcher yet.
 proc worker_post_message(worker_id: cstring, data_json: cstring) {.exportc, cdecl, gcsafe.} =
@@ -247,15 +245,6 @@ proc zapp_worker_supervisor_get_window_state(worker_id: cstring,
 proc zapp_workers_registry_list_json(): cstring {.exportc, cdecl, gcsafe.} = cstring"[]"
 proc zapp_worker_registry_get_display_name(worker_id: cstring): cstring {.exportc, cdecl, gcsafe.} = cstring""
 proc zapp_fmt_compact_ms(ms: cint): cstring {.exportc, cdecl, gcsafe.} = cstring""
-
-# bridge/dispatch.zc JSON-escape helper. zjs.c uses it only on the worker-setup
-# crash-synthesis path (zjs.c:1314-1315), where the returned pointer is free()d.
-# Honour that heap-return contract with strdup (NOT returning `s` — that would
-# free() a non-heap/const pointer). No actual escaping: the skeleton never hits
-# this path (it only fires on a worker-setup crash, not exercised by the gate).
-proc c_strdup(s: cstring): cstring {.importc: "strdup", header: "<string.h>".}
-proc zapp_escape_dup(s: cstring): cstring {.exportc, cdecl, gcsafe.} =
-  c_strdup(if s.isNil: cstring"" else: s)
 
 # ---------------------------------------------------------------------------
 # Boot: register services, open one window, then enter the Cocoa run loop.

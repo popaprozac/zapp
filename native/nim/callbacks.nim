@@ -22,7 +22,7 @@
 ##   zapp_window_trigger_on_ready(int)             callbacks.zc:63
 ##   zapp_dispatch_event(int,int,int,int,int,int)->int  callbacks.zc:94
 
-import events, coretypes
+import events, coretypes, dispatch
 
 type
   ## callbacks.zc's event cb is `int(*)(WindowEventData*)`. WindowEventData* is a
@@ -49,7 +49,7 @@ proc zapp_window_set_js_listener*(id, eventId, hasListener: cint) {.exportc, cde
   if hasListener != 0: gJsListeners[id] = gJsListeners[id] or (1'u32 shl eventId.uint32)
   else: gJsListeners[id] = gJsListeners[id] and not (1'u32 shl eventId.uint32)
 
-proc zapp_window_set_backend_listener(id, eventId, hasListener: cint) {.exportc, cdecl.} =
+proc zapp_window_set_backend_listener*(id, eventId, hasListener: cint) {.exportc, cdecl.} =
   if not inBounds(id, eventId): return
   if hasListener != 0: gBackendListeners[id] = gBackendListeners[id] or (1'u32 shl eventId.uint32)
   else: gBackendListeners[id] = gBackendListeners[id] and not (1'u32 shl eventId.uint32)
@@ -79,17 +79,13 @@ proc willDeliverToJs*(id, eventId: cint): bool =
 # window.m:214 `void zapp_dispatch_event_to_js(int32_t,...)` — cint == int32.
 proc zapp_dispatch_event_to_js(windowId, eventId, w, h, x, y: cint) {.importc, cdecl.}
 
-# Worker (backend) fan-out is deferred to Batch 4/7 — TEMP no-op stub so the
-# dispatch DECISION lands now without pulling in the worker supervisor.
-proc workerBroadcastEvalJs(js: cstring) = discard
-
 # --- Unified dispatch ------------------------------------------------------
 # Called by the platform window delegate. Mirrors callbacks.zc:94 exactly:
 #   Layer 1   native callback (can CANCEL),
 #   Layer 1.5 JS close guard (dispatch + CANCEL),
 #   Layer 2   targeted JS bridge (gated on the JS-subscription bitmask),
 #   Layer 3   backend worker fan-out (deferred no-op).
-proc zapp_dispatch_event(windowId, eventId, w, h, x, y: cint): cint {.exportc, cdecl.} =
+proc zapp_dispatch_event*(windowId, eventId, w, h, x, y: cint): cint {.exportc, cdecl.} =
   if not inBounds(windowId, eventId): return EventResult.Allow.cint
 
   # Layer 1: native callback (none registered in Batch 1).
@@ -107,8 +103,14 @@ proc zapp_dispatch_event(windowId, eventId, w, h, x, y: cint): cint {.exportc, c
   if (gJsListeners[windowId] and (1'u32 shl eventId.uint32)) != 0:
     zapp_dispatch_event_to_js(windowId, eventId, w, h, x, y)
 
-  # Layer 3: backend worker fan-out — deferred (Batch 4/7).
+  # Layer 3: backend worker fan-out — build the window:event IIFE (all-integer,
+  # no escaping) and broadcast to every worker (callbacks.zc:131-136).
   if (gBackendListeners[windowId] and (1'u32 shl eventId.uint32)) != 0:
-    workerBroadcastEvalJs(cstring"")
+    let js = "(function(){var b=globalThis[Symbol.for('zapp.bridge')];" &
+             "if(b&&typeof b._onEvent==='function'){" &
+             "b._onEvent('window:event','{\"windowId\":" & $windowId &
+             ",\"event\":" & $eventId & ",\"w\":" & $w & ",\"h\":" & $h &
+             ",\"x\":" & $x & ",\"y\":" & $y & "}');}})();"
+    worker_broadcast_eval_js(js.cstring)
 
   return EventResult.Allow.cint
