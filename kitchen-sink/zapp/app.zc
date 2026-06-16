@@ -1,0 +1,40 @@
+import "app/app.zc";
+
+fn greet(_app: App*, _args: JsonValue*) -> string {
+    return "Hello from Zapp!";
+}
+
+fn on_ready(_id: int, _handle: void*) -> void {
+    Window{id: _id, handle: _handle}.show();
+}
+
+fn run_app() -> int {
+    let config = AppConfig{
+        name: "kitchen-sink",
+        applicationShouldTerminateAfterLastWindowClosed: true,
+        webContentInspectable: Zapp::inspectable_auto(),
+        maxWorkers: 0,
+        qjsStackSize: 0,
+    };
+    let app = App::new(config);
+    app.service.add("greet", greet);
+
+    // The kitchen-sink main window IS the native-chrome shell: a leading
+    // NSSplitViewItem sidebar (nav) + a trailing inspector. All panes load
+    // the same bundle, branched on location.hash. "#sidebar-pane" /
+    // "#inspector-pane" resolve against the app's base URL natively
+    // (webview.m zapp_resolve_url), so a bare hash is correct here.
+    let opts = WindowOptions::create("Kitchen Sink");
+    opts.visible = false;
+    opts.width = 1100;
+    opts.height = 700;
+    opts.sidebarUrl = "#sidebar-pane";
+    opts.sidebarWidth = 240;
+    opts.inspectorUrl = "#inspector-pane";
+    opts.inspectorWidth = 300;
+    opts.inspectorCollapsed = true;
+    let win = app.window.create(&opts);
+    win.on_ready(on_ready);
+
+    return app.run();
+}
