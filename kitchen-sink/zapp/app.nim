@@ -11,11 +11,18 @@ proc greet(args: JsonNode): string =
   ## Mirrors app.zc's greet — the real value (no more [object Object]).
   "Hello from Zapp!"
 
+proc onReady(id: cint, handle: pointer) {.cdecl.} =
+  ## Mirrors app.zc's on_ready — reveal the window once its webview bridge is up,
+  ## so the native-chrome shell never flashes empty. Must be a top-level cdecl
+  ## proc (it's registered as a C function pointer).
+  showWindow(handle)
+
 proc runApp(): int =
   let a = newApp("kitchen-sink", terminateAfterLastWindowClosed = true)
   registerService("greet", greet)
 
   var opts = newWindowOptions("Kitchen Sink")
+  opts.visible = false   # deferred show — revealed by onReady when content can paint
   opts.width = 1100
   opts.height = 700
   opts.sidebarUrl = "#sidebar-pane"
@@ -25,7 +32,8 @@ proc runApp(): int =
   opts.inspectorCollapsed = true
   # Web Inspector parity: on in dev, off in prod (mirrors the skeleton).
   opts.inspectable = (if zapp_build_dev_tools_default() > 0: TriState.On else: TriState.Off)
-  discard createWindow(opts)
+  let win = createWindow(opts)
+  win.setOnReady(onReady)
 
   a.run()
 

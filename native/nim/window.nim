@@ -222,6 +222,28 @@ proc allocSlot*(): int32 =
   result = gNextWindowId
   inc gNextWindowId
 
+# --- on-ready + show (port of Window.on_ready / Window.show) -----------------
+# The webview posts {t:4,m:"ready"} once its bootstrap bridge is up; the router
+# calls zapp_window_trigger_on_ready (router.nim:485), which invokes the cb the
+# app registered. `zapp_window_set_on_ready` is a C symbol from callbacks.nim
+# (exportc, NOT a Nim `*` export), so we reach it by importc — the same pattern
+# router.nim uses for zapp_window_trigger_on_ready / zapp_window_set_close_guard.
+type ReadyProc* = proc(id: cint, handle: pointer) {.cdecl.}
+proc zapp_window_set_on_ready(id: cint, handle: pointer, cb: ReadyProc) {.importc, cdecl.}
+proc darwin_window_show(handle: pointer) {.importc, cdecl.}
+
+proc setOnReady*(win: tuple[id: int32, handle: pointer], cb: ReadyProc) =
+  ## Register `cb` to fire once the window's webview bridge is ready — the Nim
+  ## analog of `win.on_ready(cb)`. Pair with `opts.visible = false` to defer the
+  ## first paint until content can render (no empty-window flash). `cb` must be a
+  ## top-level `{.cdecl.}` proc taking `(id: cint, handle: pointer)`.
+  zapp_window_set_on_ready(win.id.cint, win.handle, cb)
+
+proc showWindow*(handle: pointer) =
+  ## Show a window (port of Window.show()). Typically called from an on-ready
+  ## callback to reveal a window created with `opts.visible = false`.
+  darwin_window_show(handle)
+
 # --- JSON → WindowOptions (port of window.zc:window_opts_apply_json) -----------
 # nil-safe readers. Numeric reads use getFloat so a fractional dim from the bridge
 # (which stores all JSON numbers as doubles) isn't silently truncated to 0 by the
