@@ -11,7 +11,7 @@ import bridge, service, clipboard, callbacks, events, permissions, fs, dialog, n
 #   _remove / _remove_owner — declared `proc … *(…) {.exportc,…}`, so the `*`
 #   makes them callable as Nim procs too). So routeWorker reaches them by import
 #   — NO importc here (importc'ing our own exportc symbols would re-declare them).
-import worker, registry
+import worker, registry, window
 
 # Bridge-ready signal: the webview posts {t:4,m:"ready"} once its bootstrap bridge
 # is up (bootstrap/webview.ts). The .m window delegate defers the FIRST focus
@@ -128,6 +128,9 @@ proc darwin_inspector_set_width(windowId: int32, width: int32) {.importc, cdecl.
 proc darwin_toolbar_set_items(windowPtr: pointer, toolbarJson: cstring, hostSlot: int32) {.importc, cdecl.}
 proc darwin_toolbar_update_item(windowPtr: pointer, itemJson: cstring) {.importc, cdecl.}
 proc darwin_toolbar_remove(windowPtr: pointer) {.importc, cdecl.}
+proc darwin_popover_create(windowPtr: pointer, popoverId: cstring, url: cstring,
+                           width, height: int32, behavior: cstring,
+                           hostSlot, popoverSlot: int32) {.importc, cdecl.}
 proc darwin_popover_show(popoverId: cstring, argsJson: cstring, senderSlot: int32) {.importc, cdecl.}
 proc darwin_popover_hide(popoverId: cstring) {.importc, cdecl.}
 proc darwin_popover_destroy(popoverId: cstring) {.importc, cdecl.}
@@ -721,6 +724,44 @@ proc routeMessage*(msg: string, windowId: int) =
     return
   if f.m.startsWith("__screen:"):
     routeScreen(f.m, f.a, windowId, f.id)
+    return
+
+  if f.m == "__window:create":
+    let o = newWindowOptions("Zapp")
+    if not f.a.isNil: windowOptsApplyJson(o, f.a)
+    let (newId, _) = createWindow(o)
+    sendInvokeResponse(windowId, f.id, true, "{\"windowId\":\"win-" & $newId & "\"}")
+    return
+
+  if f.m == "__popover:create":
+    var target = windowId.int32
+    var url = ""
+    var behavior = "transient"
+    var pw: int32 = 320
+    var ph: int32 = 400
+    if not f.a.isNil and f.a.kind == JObject:
+      let widv = f.a{"windowId"}
+      if not widv.isNil and widv.kind == JString:
+        let resolved = darwin_window_numeric_id_for_string(widv.getStr.cstring)
+        if resolved >= 0: target = resolved
+      let urlv = f.a{"url"}
+      if not urlv.isNil and urlv.kind == JString: url = urlv.getStr
+      let bv = f.a{"behavior"}
+      if not bv.isNil and bv.kind == JString: behavior = bv.getStr
+      let wv = f.a{"width"}
+      if not wv.isNil and (wv.kind == JInt or wv.kind == JFloat): pw = wv.getFloat.int32
+      let hv = f.a{"height"}
+      if not hv.isNil and (hv.kind == JInt or hv.kind == JFloat): ph = hv.getFloat.int32
+    if url.len > 0:
+      let slot = allocSlot()
+      let host = darwin_window_get_by_numeric_id(target)
+      if host != nil:
+        let pid = "pop-" & $slot
+        darwin_popover_create(host, pid.cstring, url.cstring, pw, ph,
+                              behavior.cstring, target, slot)
+        sendInvokeResponse(windowId, f.id, true, "{\"popoverId\":\"" & pid & "\"}")
+        return
+    sendInvokeResponse(windowId, f.id, false, "[zapp] popover: window not found or url missing")
     return
 
   let res = invokeService(f.m, f.a)
