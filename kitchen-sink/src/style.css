@@ -30,7 +30,6 @@ h2 { font-size: 16px; color: var(--text-h); margin: 0 0 8px; font-weight: 600; }
 
 /* Main pane */
 .main-pane { padding: var(--zapp-titlebar-height, 52px) 24px 24px; max-width: 720px; }
-.landing { margin-bottom: 16px; }
 .stage { display: flex; flex-direction: column; gap: 16px; }
 .card { border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
 .card .intro { margin: 0 0 12px; opacity: 0.7; font-size: 12px; }

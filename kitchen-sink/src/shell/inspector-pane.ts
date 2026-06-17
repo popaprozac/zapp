@@ -14,15 +14,18 @@ export function renderInspectorPane(app: HTMLElement) {
   const body = app.querySelector<HTMLElement>("[data-body]")!;
   let teardown: void | (() => void);
 
-  Events.on("ks:nav", ({ id }: any) => {
+  const show = (id: string) => {
     if (typeof teardown === "function") teardown();
+    teardown = undefined;
     const section = findSection(registry, id);
     body.innerHTML = "";
     if (section?.inspector) {
       teardown = section.inspector(body);
     } else {
       body.innerHTML = `<p class="muted">No inspector for this section.</p>`;
-      teardown = undefined;
     }
-  });
+  };
+
+  Events.on("ks:nav", ({ id }: any) => show(id));
+  if (registry[0]) show(registry[0].id);   // self-init
 }

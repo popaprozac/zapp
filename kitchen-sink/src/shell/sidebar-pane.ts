@@ -15,4 +15,5 @@ export function renderSidebarPane(app: HTMLElement) {
       items.forEach((i) => i.classList.toggle("active", i === el));
       Events.emit("ks:nav", { id: el.dataset.id! });
     }));
+  items[0]?.classList.add("active");   // mark Home active on launch (visual only; no emit)
 }
