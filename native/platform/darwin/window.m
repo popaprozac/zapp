@@ -38,6 +38,7 @@ extern int32_t wopts_sidebar_max_width(void* opts);
 extern bool wopts_sidebar_collapsible(void* opts);
 extern bool wopts_sidebar_collapsed(void* opts);
 extern bool wopts_sidebar_can_resize(void* opts);
+extern const char* wopts_sidebar_background_color(void* opts);
 extern int32_t wopts_sidebar_numeric_id(void* opts);
 // App-set window background color ("#rrggbb"); applied on opaque windows.
 extern const char* wopts_background_color(void* opts);
@@ -54,6 +55,7 @@ extern int32_t wopts_inspector_max_width(void* opts);
 extern bool wopts_inspector_collapsible(void* opts);
 extern bool wopts_inspector_collapsed(void* opts);
 extern bool wopts_inspector_can_resize(void* opts);
+extern const char* wopts_inspector_background_color(void* opts);
 extern int32_t wopts_inspector_numeric_id(void* opts);
 
 // Runtime resize-lock ops (sidebar.m / inspector.m) — used at create time to
@@ -814,6 +816,17 @@ void* darwin_window_create(WindowOptions* opts) {
                     svfx.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
                     sideVC.view = svfx;
                     sidebarContainer = svfx;
+                } else {
+                    // No material override: a solid backgroundColor (if set) paints
+                    // an opaque backdrop behind the transparent webview — the pane
+                    // analog of the window backgroundColor, filling the pre-paint gap.
+                    int cr, cg, cb;
+                    const char* sbg = wopts_sidebar_background_color(opts);
+                    if (sbg && sbg[0] != '\0' && zapp_parse_hex_color(sbg, &cr, &cg, &cb)) {
+                        sideVC.view.wantsLayer = YES;
+                        sideVC.view.layer.backgroundColor =
+                            [NSColor colorWithSRGBRed:cr/255.0 green:cg/255.0 blue:cb/255.0 alpha:1.0].CGColor;
+                    }
                 }
                 sideItem = [NSSplitViewItem sidebarWithViewController:sideVC];
                 sideItem.minimumThickness = (CGFloat)wopts_sidebar_min_width(opts);
@@ -845,6 +858,14 @@ void* darwin_window_create(WindowOptions* opts) {
                     ivfx.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
                     inspVC.view = ivfx;
                     inspectorContainer = ivfx;
+                } else {
+                    int cr, cg, cb;
+                    const char* ibg = wopts_inspector_background_color(opts);
+                    if (ibg && ibg[0] != '\0' && zapp_parse_hex_color(ibg, &cr, &cg, &cb)) {
+                        inspVC.view.wantsLayer = YES;
+                        inspVC.view.layer.backgroundColor =
+                            [NSColor colorWithSRGBRed:cr/255.0 green:cg/255.0 blue:cb/255.0 alpha:1.0].CGColor;
+                    }
                 }
                 if (@available(macOS 11.0, *)) {
                     inspItem = [NSSplitViewItem inspectorWithViewController:inspVC];

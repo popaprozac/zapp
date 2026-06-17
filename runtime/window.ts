@@ -239,6 +239,11 @@ export interface SidebarOptions {
   /** User can resize by dragging the divider. Default true; false locks the
    *  pane at `width`. Toggle later with `win.sidebar.setResizable(...)`. */
   resizable?: boolean;
+  /** Solid backdrop color (e.g. "#1e1e1e") behind the transparent pane webview —
+   *  the analog of the window `backgroundColor`. Fills the pre-first-paint gap and
+   *  gives a flat (non-vibrant) pane. `material` takes precedence if both are set;
+   *  for the native vibrant look, prefer `material`. macOS; create-time only. */
+  backgroundColor?: string;
   /** Background material. Default Material.Sidebar (liquid glass on macOS 26+). */
   material?: Material;
 }
@@ -259,6 +264,11 @@ export interface InspectorOptions {
   /** User can resize by dragging the divider. Default true; false locks the
    *  pane at `width`. Toggle later with `win.inspector.setResizable(...)`. */
   resizable?: boolean;
+  /** Solid backdrop color (e.g. "#1e1e1e") behind the transparent pane webview —
+   *  the analog of the window `backgroundColor`. Fills the pre-first-paint gap and
+   *  gives a flat (non-vibrant) pane. `material` takes precedence if both are set;
+   *  for the native vibrant look, prefer `material`. macOS; create-time only. */
+  backgroundColor?: string;
   /** Background material. Default matches the sidebar pane default. */
   material?: Material;
 }

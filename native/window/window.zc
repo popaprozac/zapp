@@ -96,6 +96,8 @@ struct WindowOptions {
     _sidebarUrl_heap: bool;
     sidebarMaterial: string;   // default "sidebar"
     _sidebarMaterial_heap: bool;
+    sidebarBackgroundColor: string;   // "" = none; solid backdrop hex
+    _sidebarBackgroundColor_heap: bool;
     sidebarWidth: int;         // default 260
     sidebarMinWidth: int;      // default 180
     sidebarMaxWidth: int;      // default 400
@@ -107,6 +109,8 @@ struct WindowOptions {
     _inspectorUrl_heap: bool;
     inspectorMaterial: string;   // default "sidebar"
     _inspectorMaterial_heap: bool;
+    inspectorBackgroundColor: string;   // "" = none; solid backdrop hex
+    _inspectorBackgroundColor_heap: bool;
     inspectorWidth: int;         // default 280
     inspectorMinWidth: int;      // default 180
     inspectorMaxWidth: int;      // default 400
@@ -220,6 +224,8 @@ impl WindowOptions {
             _sidebarUrl_heap: false,
             sidebarMaterial: "",
             _sidebarMaterial_heap: false,
+            sidebarBackgroundColor: "",
+            _sidebarBackgroundColor_heap: false,
             sidebarWidth: 260,
             sidebarMinWidth: 180,
             sidebarMaxWidth: 400,
@@ -230,6 +236,8 @@ impl WindowOptions {
             _inspectorUrl_heap: false,
             inspectorMaterial: "",
             _inspectorMaterial_heap: false,
+            inspectorBackgroundColor: "",
+            _inspectorBackgroundColor_heap: false,
             inspectorWidth: 280,
             inspectorMinWidth: 180,
             inspectorMaxWidth: 400,
@@ -287,6 +295,7 @@ fn wopts_sidebar_max_width(opts: WindowOptions*) -> int { return opts.sidebarMax
 fn wopts_sidebar_collapsible(opts: WindowOptions*) -> bool { return opts.sidebarCollapsible; }
 fn wopts_sidebar_collapsed(opts: WindowOptions*) -> bool { return opts.sidebarCollapsed; }
 fn wopts_sidebar_can_resize(opts: WindowOptions*) -> bool { return opts.sidebarCanResize; }
+fn wopts_sidebar_background_color(opts: WindowOptions*) -> string { return opts.sidebarBackgroundColor; }
 fn wopts_inspector_numeric_id(opts: WindowOptions*) -> int { return opts.inspectorNumericId; }
 fn wopts_inspector_url(opts: WindowOptions*) -> string { return opts.inspectorUrl; }
 fn wopts_inspector_material(opts: WindowOptions*) -> string { return opts.inspectorMaterial; }
@@ -296,6 +305,7 @@ fn wopts_inspector_max_width(opts: WindowOptions*) -> int { return opts.inspecto
 fn wopts_inspector_collapsible(opts: WindowOptions*) -> bool { return opts.inspectorCollapsible; }
 fn wopts_inspector_collapsed(opts: WindowOptions*) -> bool { return opts.inspectorCollapsed; }
 fn wopts_inspector_can_resize(opts: WindowOptions*) -> bool { return opts.inspectorCanResize; }
+fn wopts_inspector_background_color(opts: WindowOptions*) -> string { return opts.inspectorBackgroundColor; }
 fn wopts_sheet_presentation(opts: WindowOptions*) -> int { return opts.sheetPresentation; }
 fn wopts_sheet_detents(opts: WindowOptions*) -> int { return opts.sheetDetents; }
 fn wopts_sheet_grabber(opts: WindowOptions*) -> bool { return opts.sheetGrabber; }
@@ -450,6 +460,15 @@ fn window_opts_apply_json(opts: WindowOptions*, args: JsonValue*) -> void {
                 opts->_sidebarMaterial_heap = 1;
             }
         }
+        let sbg = (*sb).get_string("backgroundColor");
+        if sbg.is_some() {
+            let src = sbg.unwrap();
+            raw {
+                if (opts->_sidebarBackgroundColor_heap && opts->sidebarBackgroundColor) free((void*)opts->sidebarBackgroundColor);
+                opts->sidebarBackgroundColor = strdup((const char*)src);
+                opts->_sidebarBackgroundColor_heap = 1;
+            }
+        }
         let sw = (*sb).get_int("width");        if sw.is_some() { opts.sidebarWidth = sw.unwrap(); }
         let smin = (*sb).get_int("minWidth");   if smin.is_some() { opts.sidebarMinWidth = smin.unwrap(); }
         let smax = (*sb).get_int("maxWidth");   if smax.is_some() { opts.sidebarMaxWidth = smax.unwrap(); }
@@ -476,6 +495,15 @@ fn window_opts_apply_json(opts: WindowOptions*, args: JsonValue*) -> void {
                 if (opts->_inspectorMaterial_heap && opts->inspectorMaterial) free((void*)opts->inspectorMaterial);
                 opts->inspectorMaterial = strdup((const char*)src);
                 opts->_inspectorMaterial_heap = 1;
+            }
+        }
+        let ibg = (*insp).get_string("backgroundColor");
+        if ibg.is_some() {
+            let src = ibg.unwrap();
+            raw {
+                if (opts->_inspectorBackgroundColor_heap && opts->inspectorBackgroundColor) free((void*)opts->inspectorBackgroundColor);
+                opts->inspectorBackgroundColor = strdup((const char*)src);
+                opts->_inspectorBackgroundColor_heap = 1;
             }
         }
         let iw = (*insp).get_int("width");        if iw.is_some() { opts.inspectorWidth = iw.unwrap(); }

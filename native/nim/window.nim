@@ -58,6 +58,7 @@ type
     # --- sidebar (feature unused by the skeleton; "" url => never built) ---
     sidebarUrl*: string
     sidebarMaterial*: string
+    sidebarBackgroundColor*: string
     sidebarWidth*, sidebarMinWidth*, sidebarMaxWidth*: int32
     sidebarCollapsible*, sidebarCollapsed*: bool
     sidebarCanResize*: bool
@@ -65,6 +66,7 @@ type
     # --- inspector pane (feature unused; "" url => never built) ---
     inspectorUrl*: string
     inspectorMaterial*: string
+    inspectorBackgroundColor*: string
     inspectorWidth*, inspectorMinWidth*, inspectorMaxWidth*: int32
     inspectorCollapsible*, inspectorCollapsed*: bool
     inspectorCanResize*: bool
@@ -98,11 +100,11 @@ proc newWindowOptions*(title: string): WindowOptions =
     trafficLights: TrafficLights(close: ButtonState.Enabled,
                                  minimize: ButtonState.Enabled,
                                  zoom: ButtonState.Enabled),
-    sidebarUrl: "", sidebarMaterial: "",
+    sidebarUrl: "", sidebarMaterial: "", sidebarBackgroundColor: "",
     sidebarWidth: 0, sidebarMinWidth: 0, sidebarMaxWidth: 0,
     sidebarCollapsible: false, sidebarCollapsed: false, sidebarCanResize: true,
     sidebarNumericId: -1,
-    inspectorUrl: "", inspectorMaterial: "",
+    inspectorUrl: "", inspectorMaterial: "", inspectorBackgroundColor: "",
     inspectorWidth: 0, inspectorMinWidth: 0, inspectorMaxWidth: 0,
     inspectorCollapsible: false, inspectorCollapsed: false, inspectorCanResize: true,
     inspectorNumericId: -1,
@@ -156,6 +158,7 @@ proc wopts_sidebar_max_width(p: pointer): int32 {.exportc, cdecl.} = opt(p).side
 proc wopts_sidebar_collapsible(p: pointer): bool {.exportc, cdecl.} = opt(p).sidebarCollapsible
 proc wopts_sidebar_collapsed(p: pointer): bool {.exportc, cdecl.} = opt(p).sidebarCollapsed
 proc wopts_sidebar_can_resize(p: pointer): bool {.exportc, cdecl.} = opt(p).sidebarCanResize
+proc wopts_sidebar_background_color(p: pointer): cstring {.exportc, cdecl.} = opt(p).sidebarBackgroundColor.cstring
 proc wopts_sidebar_numeric_id(p: pointer): int32 {.exportc, cdecl.} = opt(p).sidebarNumericId
 
 # inspector accessors — unused feature; "" url short-circuits the branch.
@@ -167,6 +170,7 @@ proc wopts_inspector_max_width(p: pointer): int32 {.exportc, cdecl.} = opt(p).in
 proc wopts_inspector_collapsible(p: pointer): bool {.exportc, cdecl.} = opt(p).inspectorCollapsible
 proc wopts_inspector_collapsed(p: pointer): bool {.exportc, cdecl.} = opt(p).inspectorCollapsed
 proc wopts_inspector_can_resize(p: pointer): bool {.exportc, cdecl.} = opt(p).inspectorCanResize
+proc wopts_inspector_background_color(p: pointer): cstring {.exportc, cdecl.} = opt(p).inspectorBackgroundColor.cstring
 proc wopts_inspector_numeric_id(p: pointer): int32 {.exportc, cdecl.} = opt(p).inspectorNumericId
 
 # toolbar accessor — unused feature; "" json short-circuits darwin_toolbar_attach.
@@ -286,6 +290,7 @@ proc windowOptsApplyJson*(o: WindowOptions, a: JsonNode) =
   if not sb.isNil and sb.kind == JObject:
     if jHasStr(sb, "url"): o.sidebarUrl = jStr(sb, "url")
     if jHasStr(sb, "material"): o.sidebarMaterial = jStr(sb, "material")
+    if jHasStr(sb, "backgroundColor"): o.sidebarBackgroundColor = jStr(sb, "backgroundColor")
     if jHasNum(sb, "width"): o.sidebarWidth = jI32(sb, "width", o.sidebarWidth)
     if jHasNum(sb, "minWidth"): o.sidebarMinWidth = jI32(sb, "minWidth", o.sidebarMinWidth)
     if jHasNum(sb, "maxWidth"): o.sidebarMaxWidth = jI32(sb, "maxWidth", o.sidebarMaxWidth)
@@ -296,6 +301,7 @@ proc windowOptsApplyJson*(o: WindowOptions, a: JsonNode) =
   if not insp.isNil and insp.kind == JObject:
     if jHasStr(insp, "url"): o.inspectorUrl = jStr(insp, "url")
     if jHasStr(insp, "material"): o.inspectorMaterial = jStr(insp, "material")
+    if jHasStr(insp, "backgroundColor"): o.inspectorBackgroundColor = jStr(insp, "backgroundColor")
     if jHasNum(insp, "width"): o.inspectorWidth = jI32(insp, "width", o.inspectorWidth)
     if jHasNum(insp, "minWidth"): o.inspectorMinWidth = jI32(insp, "minWidth", o.inspectorMinWidth)
     if jHasNum(insp, "maxWidth"): o.inspectorMaxWidth = jI32(insp, "maxWidth", o.inspectorMaxWidth)

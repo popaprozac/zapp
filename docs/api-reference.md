@@ -709,6 +709,7 @@ const win = await Window.create({
     collapsible: true,      // system collapse gestures allowed (default true)
     collapsed: false,       // start collapsed (default false)
     resizable: true,        // user can drag the divider (default true; false locks at `width`)
+    backgroundColor: "#1e1e1e",  // solid backdrop (optional; `material` wins if both set)
     material: Material.Sidebar,  // background material (default Material.Sidebar)
   },
 });
@@ -725,7 +726,14 @@ const win = await Window.create({
 | `collapsible` | `boolean` | `true` |
 | `collapsed` | `boolean` | `false` |
 | `resizable` | `boolean` | `true` |
+| `backgroundColor` | `string` | — (material) |
 | `material` | `Material` | `Material.Sidebar` |
+
+`backgroundColor` (e.g. `"#1e1e1e"`) paints a solid, opaque backdrop behind the
+transparent pane webview — the pane analog of the window `backgroundColor`,
+filling the pre-first-paint gap with a flat (non-vibrant) color. `material`
+takes precedence if both are set; for the native vibrant look, prefer
+`material`. macOS; create-time only.
 
 **`Material` const** — typed const for `NSVisualEffectMaterial` names:
 `Material.Sidebar`, `Material.Titlebar`, `Material.Menu`,
@@ -853,7 +861,8 @@ win.on(WindowEvent.INSPECTOR_RESIZED, ({ width }) => console.log("inspector", wi
 **Options:** `url` (required), `width` (default 280), `minWidth`/`maxWidth`
 (180/400), `collapsible` (default true), `collapsed` (default false — set
 true for the common "hidden until summoned" inspector), `resizable`
-(default true; false locks the pane at `width`), `material`.
+(default true; false locks the pane at `width`), `backgroundColor`
+(solid backdrop hex — `material` wins if both set), `material`.
 
 **Handle (`win.inspector`, present only when the window has one):**
 `toggle()` / `collapse()` / `expand()` / `setWidth(px)` /
