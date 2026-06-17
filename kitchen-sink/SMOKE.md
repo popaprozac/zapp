@@ -1,15 +1,19 @@
 # Kitchen Sink — Smoke Test Matrix
 
 The authoritative manual-smoke surface. Two builds, run from `kitchen-sink/`:
-- **zc** (default, the baseline): `bun run dev`
-- **nim** (the migration target): `ZAPP_NATIVE_LANG=nim bun run dev`
+- **zc** (default, the baseline): `bun run dev` — compiles `zapp/app.zc`
+- **nim** (the migration target): `ZAPP_NATIVE_LANG=nim bun run dev` — now compiles the app's own `zapp/app.nim` (the idiomatic-Nim analog of app.zc), NOT just the skeleton
 
 **Goal: parity** — nim should match zc except the documented caveats below.
 
 **Legend (fill the zc/nim cells as you smoke):** `✓` pass · `✗` fail · `—` n/a · `⚠️` known caveat (see notes). zc cells are pre-marked `✓` (cycle-1 was smoked); nim cells are `?` = needs your smoke (expected to pass unless noted).
 
+## ⭐ Headline of THIS smoke — the app.nim port (NimApp cycle)
+The Nim build now runs `kitchen-sink/zapp/app.nim` (commit `e129cb7`), so the app's OWN native code runs in Nim — not the hardcoded skeleton. **Two things to confirm above all else:**
+1. **Home greet now shows `greet → Hello from Zapp!` on nim** (was `[object Object]`). The Nim build runs app.nim's real `greet` handler. This is the proof the whole NimApp cycle landed — if it still shows `[object Object]`, the app.nim entry isn't being compiled.
+2. **Deferred show (no empty-window flash) on nim** (commit `862de92`). app.nim creates the window `visible=false` and reveals it from an `on_ready` callback once the webview bridge is up — same as app.zc. The shell should appear already-painted, not flash empty first.
+
 ## Known caveats on nim (NOT regressions — expected at this stage)
-- **Home greet line shows `greet → [object Object]`** on nim (zc shows "Hello from Zapp!"). App **services** are Zen-C handlers in `app.zc` the Nim build can't run; nim registers only the skeleton `greet` (returns a JSON object). Service parity is a separate deferred milestone. Window title ("Kitchen Sink") + menu name ("kitchen-sink") DO match. **Same root cause** affects the Workers section's "Invoke greet (from worker)" — the round-trip works on both builds, but the returned `greet` value is the skeleton object on nim vs the real string on zc.
 - **Inspector toggle may not reveal the inspector** on nim (tracked #460 — the toolbar's `toggleInspector` → `darwin_inspector_toggle` binding; the *sidebar* toggle works). The inspector pane itself mounts (collapsed).
 
 ---
@@ -18,9 +22,10 @@ The authoritative manual-smoke surface. Two builds, run from `kitchen-sink/`:
 | Check | Expected | zc | nim |
 |---|---|---|---|
 | Launch chrome | Window boots as the shell: native sidebar (Home/Sidebar/Inspector/Toolbar/Popover/Multi-window), main pane, collapsed inspector, native toolbar | ✓ | ? |
+| **Deferred show (no flash)** ⭐ | window appears already-painted — does NOT flash empty first (app.nim `visible=false` + `on_ready`) | ✓ | ? |
 | Window title | Title bar reads **"Kitchen Sink"** | ✓ | ? |
 | App/menu name | Menu bar app menu + About/Quit read **"kitchen-sink"** (not "Zapp v2 (Nim)" / "Zapp Nim Skeleton") | ✓ | ? |
-| Home greet | zc: "greet → Hello from Zapp!"  ·  nim: "greet → [object Object]" (⚠️ skeleton service, expected) | ✓ | ⚠️ |
+| **Home greet** ⭐ | **both** builds now read **"greet → Hello from Zapp!"** (nim runs app.nim's real `greet`; `[object Object]` = app.nim NOT compiled) | ✓ | ? |
 | Nav | Clicking a sidebar row swaps main pane + inspector; **Home** returns to welcome | ✓ | ? |
 
 ## B. Sidebar section
@@ -66,7 +71,7 @@ Backed by the headless `greeter` worker (id `h-greeter`, engine zjs) declared in
 | Check | Expected | zc | nim |
 |---|---|---|---|
 | Send ping | result shows `pong → {…}` (worker echoes over the Events bus, worker→webview fan-out) | ? | ? |
-| Invoke greet (from worker) | result shows `service-result → {"result":…}` — worker called the native `greet` via Services.invokeSync (⚠️ value is skeleton object on nim, real string on zc; round-trip itself works on both) | ? | ⚠️ |
+| Invoke greet (from worker) | result shows `service-result → {"result":"Hello from Zapp!"}` — worker called the native `greet` via Services.invokeSync (now the real string on BOTH builds; app.nim runs the real handler) | ? | ? |
 | Workers.list() | result lists `h-greeter` (engine `zjs`, name `greeter`) | ? | ? |
 
 ## H. Sync section (cross-context wait / notify — needs 2 windows)
@@ -173,4 +178,4 @@ Routes through `tray:*` (nim ported). macOS — look at the top-right of the men
 
 ---
 
-*Sections grow as cycles land: Workers + Sync → Dialogs + Clipboard + Notifications → Screen + Shortcuts → Dock + Events + File Drop. Each row should match zc↔nim except the ⚠️ caveats. Still to mirror from hello-world: Tray, Embedded Webview, and Theme (deferred — `App.getTheme()`'s initial value reads bootstrap config; needs a smoke to confirm nim seeds it, vs the live `THEME_CHANGED` event which is wired).*
+*Sections grow as cycles land: Workers + Sync → Dialogs + Clipboard + Notifications → Screen + Shortcuts → Dock + Events + File Drop → Tray. Each row should match zc↔nim except the ⚠️ caveats. Still to mirror from hello-world: Embedded Webview, and Theme (deferred — `App.getTheme()`'s initial value reads bootstrap config; needs a smoke to confirm nim seeds it, vs the live `THEME_CHANGED` event which is wired).*
