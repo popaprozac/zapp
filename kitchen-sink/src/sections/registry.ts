@@ -5,6 +5,8 @@ import { inspectorSection } from "./inspector";
 import { toolbarSection } from "./toolbar";
 import { popoverSection } from "./popover";
 import { multiwindowSection } from "./multiwindow";
+import { workersSection } from "./workers";
+import { syncSection } from "./sync";
 
 export const registry: Section[] = [
   homeSection,
@@ -13,4 +15,6 @@ export const registry: Section[] = [
   toolbarSection,
   popoverSection,
   multiwindowSection,
+  workersSection,
+  syncSection,
 ];

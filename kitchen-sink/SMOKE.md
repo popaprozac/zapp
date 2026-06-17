@@ -9,7 +9,7 @@ The authoritative manual-smoke surface. Two builds, run from `kitchen-sink/`:
 **Legend (fill the zc/nim cells as you smoke):** `✓` pass · `✗` fail · `—` n/a · `⚠️` known caveat (see notes). zc cells are pre-marked `✓` (cycle-1 was smoked); nim cells are `?` = needs your smoke (expected to pass unless noted).
 
 ## Known caveats on nim (NOT regressions — expected at this stage)
-- **Home greet line shows `greet → [object Object]`** on nim (zc shows "Hello from Zapp!"). App **services** are Zen-C handlers in `app.zc` the Nim build can't run; nim registers only the skeleton `greet` (returns a JSON object). Service parity is a separate deferred milestone. Window title ("Kitchen Sink") + menu name ("kitchen-sink") DO match.
+- **Home greet line shows `greet → [object Object]`** on nim (zc shows "Hello from Zapp!"). App **services** are Zen-C handlers in `app.zc` the Nim build can't run; nim registers only the skeleton `greet` (returns a JSON object). Service parity is a separate deferred milestone. Window title ("Kitchen Sink") + menu name ("kitchen-sink") DO match. **Same root cause** affects the Workers section's "Invoke greet (from worker)" — the round-trip works on both builds, but the returned `greet` value is the skeleton object on nim vs the real string on zc.
 - **Inspector toggle may not reveal the inspector** on nim (tracked #460 — the toolbar's `toggleInspector` → `darwin_inspector_toggle` binding; the *sidebar* toggle works). The inspector pane itself mounts (collapsed).
 
 ---
@@ -57,6 +57,24 @@ The authoritative manual-smoke surface. Two builds, run from `kitchen-sink/`:
 | **New window (sidebar shell)** | a 2nd full native-chrome window opens (sidebar + inspector) — chrome-on-nim | ✓ | ? |
 | Sheets (page/form/bottom) | a sheet attaches to the shell window | ✓ | ? |
 
+## G. Workers section (headless zjs worker — the marquee differentiator)
+Backed by the headless `greeter` worker (id `h-greeter`, engine zjs) declared in `zapp.config.ts` — it boots with the app and is what compiles the worker engine into the binary. Same `src/worker.ts` source runs on both builds.
+| Check | Expected | zc | nim |
+|---|---|---|---|
+| Send ping | result shows `pong → {…}` (worker echoes over the Events bus, worker→webview fan-out) | ? | ? |
+| Invoke greet (from worker) | result shows `service-result → {"result":…}` — worker called the native `greet` via Services.invokeSync (⚠️ value is skeleton object on nim, real string on zc; round-trip itself works on both) | ? | ⚠️ |
+| Workers.list() | result lists `h-greeter` (engine `zjs`, name `greeter`) | ? | ? |
+
+## H. Sync section (cross-context wait / notify — needs 2 windows)
+Open a 2nd window first (Multi-window → **New window (sidebar shell)**), then drive wait/notify across the two.
+| Check | Expected | zc | nim |
+|---|---|---|---|
+| Wait + Notify (cross-window) | click **Wait** in window A, **Notify "demo" (one)** in window B → A's result flips to `resolved → …` | ? | ? |
+| notifyAll | click **Wait** in 2+ windows, then **Notify "demo" (all)** in any → every waiter resolves | ? | ? |
+| Wait timeout | click **Wait** and don't notify → resolves with a timeout value after 10s (no hang) | ? | ? |
+
+> Note: G/H cells are `?` on BOTH builds — these sections are new this cycle, so neither has been smoked yet (the zc path reuses the proven hello-world worker/sync APIs, so it's expected to pass).
+
 ---
 
 ## Appendix — hello-world (nim), WindowManager core
@@ -71,4 +89,4 @@ The authoritative manual-smoke surface. Two builds, run from `kitchen-sink/`:
 
 ---
 
-*Sections grow as cycles land (next: Workers + Sync). Each row should match zc↔nim except the ⚠️ caveats.*
+*Sections grow as cycles land (Workers + Sync landed this cycle). Each row should match zc↔nim except the ⚠️ caveats.*

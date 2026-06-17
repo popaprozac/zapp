@@ -16,15 +16,18 @@ const config: ZappConfig = {
     sidebar: { url: "#sidebar-pane", width: 240 },
     inspector: { url: "#inspector-pane", width: 300, collapsed: true },
   },
-  // Add headless TypeScript workers that start when the app boots.
-  // New projects default to `engine: "zjs"` — first-party,
-  // cross-platform, small, iOS-friendly. On macOS you can opt into
-  // `engine: "bare-jsc"` for JIT (zero bundle cost via system JSC)
-  // at the price of opting into bare-* packages for web APIs.
+  // Headless TypeScript workers that start when the app boots. New projects
+  // default to `engine: "zjs"` — first-party, cross-platform, small,
+  // iOS-friendly. On macOS you can opt into `engine: "bare-jsc"` for JIT
+  // (zero bundle cost via system JSC) at the price of opting into bare-*
+  // packages for web APIs.
   //
-  //   headless: {
-  //     db: { script: "src/workers/db.ts", engine: "zjs" },
-  //   },
+  // `greeter` (id "h-greeter") backs the Workers section — declaring it here
+  // is also what compiles a worker engine into the native binary (without a
+  // declared worker, the build reports "workers disabled").
+  headless: {
+    greeter: { script: "src/worker.ts", name: "greeter", engine: "zjs" },
+  },
 };
 
 export default config;
