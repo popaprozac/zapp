@@ -13,19 +13,19 @@ The Nim build now runs `kitchen-sink/zapp/app.nim` (commit `e129cb7`), so the ap
 1. **Home greet now shows `greet → Hello from Zapp!` on nim** (was `[object Object]`). The Nim build runs app.nim's real `greet` handler. This is the proof the whole NimApp cycle landed — if it still shows `[object Object]`, the app.nim entry isn't being compiled.
 2. **Deferred show (no empty-window flash) on nim** (commit `862de92`). app.nim creates the window `visible=false` and reveals it from an `on_ready` callback once the webview bridge is up — same as app.zc. The shell should appear already-painted, not flash empty first.
 
-## Known caveats on nim (NOT regressions — expected at this stage)
-- **Inspector toggle may not reveal the inspector** on nim (tracked #460 — the toolbar's `toggleInspector` → `darwin_inspector_toggle` binding; the *sidebar* toggle works). The inspector pane itself mounts (collapsed).
+## Known caveats on nim
+- *(none open)* — the sidebar-invisible + inspector-toggle (#460) bug is **FIXED** (commit `2af6950`): nim `newWindowOptions` had zeroed the pane min/max widths + collapsible flags vs zc's 260/180/400/true, so `window.m` clamped the panes to zero width. Smoke-verified 2026-06-17 (sidebar visible + nav, inspector reveals).
 
 ---
 
 ## A. Shell boot (the headline — initial-window-from-config)
 | Check | Expected | zc | nim |
 |---|---|---|---|
-| Launch chrome | Window boots as the shell: native sidebar (Home/Sidebar/Inspector/Toolbar/Popover/Multi-window), main pane, collapsed inspector, native toolbar | ✓ | ? |
+| Launch chrome | Window boots as the shell: native sidebar (Home/Sidebar/Inspector/Toolbar/Popover/Multi-window), main pane, collapsed inspector, native toolbar | ✓ | ✓ |
 | **Deferred show (no flash)** ⭐ | window appears already-painted — does NOT flash empty first (app.nim `visible=false` + `on_ready`) | ✓ | ? |
-| Window title | Title bar reads **"Kitchen Sink"** | ✓ | ? |
+| Window title | Title bar reads **"Kitchen Sink"** | ✓ | ✓ |
 | App/menu name | Menu bar app menu + About/Quit read **"kitchen-sink"** (not "Zapp v2 (Nim)" / "Zapp Nim Skeleton") | ✓ | ? |
-| **Home greet** ⭐ | **both** builds now read **"greet → Hello from Zapp!"** (nim runs app.nim's real `greet`; `[object Object]` = app.nim NOT compiled) | ✓ | ? |
+| **Home greet** ⭐ | **both** builds now read **"greet → Hello from Zapp!"** (nim runs app.nim's real `greet`; `[object Object]` = app.nim NOT compiled) | ✓ | ✓ |
 | Nav | Clicking a sidebar row swaps main pane + inspector; **Home** returns to welcome | ✓ | ? |
 
 ## B. Sidebar section
@@ -40,7 +40,7 @@ The Nim build now runs `kitchen-sink/zapp/app.nim` (commit `e129cb7`), so the ap
 ## C. Inspector section
 | Check | Expected | zc | nim |
 |---|---|---|---|
-| Toggle | trailing inspector hides/shows | ✓ | ⚠️ (#460) |
+| Toggle | trailing inspector hides/shows | ✓ | ✓ (#460 fixed `2af6950`) |
 | Width 360 | inspector resizes; its own pane reads `width 360` | ✓ | ? |
 | Collapsible off | "Collapsible: off" → user can't collapse the inspector by dragging | ? | ? |
 | Resizable off | "Resizable: off" → the divider no longer drags; "on" restores it | ? | ? |
@@ -174,7 +174,7 @@ Routes through `tray:*` (nim ported). macOS — look at the top-right of the men
 | New Window (sidebar) | window opens WITH native sidebar + toolbar chrome | ✓ (smoked 06-16) |
 | Popover buttons | native web-content popover appears | ✓ (smoked 06-16) |
 | Sidebar item click → main | main pane updates (t:3 EMIT) | ✓ (smoked 06-16) |
-| Inspector toggle | reveals inspector | ⚠️ #460 (renders as labeled button, doesn't toggle) |
+| Inspector toggle | reveals inspector | re-smoke — #460 root-caused + fixed (`2af6950`, confirmed on kitchen-sink app.nim). hello-world uses the JS `Window.create` path; re-verify the inspector reveals here too. |
 
 ---
 
