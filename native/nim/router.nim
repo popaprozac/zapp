@@ -12,6 +12,10 @@ import bridge, service, clipboard, callbacks, events, permissions, fs, dialog, n
 #   makes them callable as Nim procs too). So routeWorker reaches them by import
 #   — NO importc here (importc'ing our own exportc symbols would re-declare them).
 import worker, registry, window
+# dispatch: dispatch_event_to_all (t:3 EMIT broadcast). It's a `*`-exported Nim
+# proc in dispatch.nim, so importing the module makes it callable by name — NO
+# importc (it's a Nim proc, not a C symbol; mixing would risk a duplicate).
+import dispatch
 
 # Bridge-ready signal: the webview posts {t:4,m:"ready"} once its bootstrap bridge
 # is up (bootstrap/webview.ts). The .m window delegate defers the FIRST focus
@@ -671,6 +675,13 @@ proc routeMessage*(msg: string, windowId: int) =
   let parsed = parseBridge(msg)
   if parsed.isNone: return
   let f = parsed.get
+
+  if f.t == 3:        # EMIT envelope (protocol.zc:24) — JS Events.emit broadcast
+    # f.a is already the parsed args object (the zc extracts "a" from the full
+    # envelope; we already have it). Serialize it for the _onEvent payload;
+    # "null" when absent. Mirrors router.zc:311-325 -> dispatch_event_to_all.
+    dispatch_event_to_all(f.m.cstring, (if f.a.isNil: "null" else: $f.a).cstring)
+    return
 
   # t:4 fire-and-forget window/app action — dispatched (+ permission-gated) in
   # routeWindowAction.
