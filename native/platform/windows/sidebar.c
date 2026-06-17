@@ -398,3 +398,10 @@ void windows_inspector_set_width(int32_t host_slot, int32_t width) {
     char json[40]; snprintf(json, sizeof(json), "{\"width\":%d}", logical);
     pane_emit(host_slot, p->inspector_slot, "inspector-resized", json);
 }
+
+// Collapse/resize gating is a macOS NSSplitViewItem affordance; the Win32 pane
+// splitter doesn't expose an equivalent yet, so these are no-ops (router parity).
+void windows_sidebar_set_collapsible(int32_t host_slot, bool can_collapse) { (void)host_slot; (void)can_collapse; }
+void windows_sidebar_set_resizable(int32_t host_slot, bool resizable) { (void)host_slot; (void)resizable; }
+void windows_inspector_set_collapsible(int32_t host_slot, bool can_collapse) { (void)host_slot; (void)can_collapse; }
+void windows_inspector_set_resizable(int32_t host_slot, bool resizable) { (void)host_slot; (void)resizable; }

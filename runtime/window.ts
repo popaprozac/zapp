@@ -236,6 +236,9 @@ export interface SidebarOptions {
   collapsible?: boolean;
   /** Start collapsed. Default false. */
   collapsed?: boolean;
+  /** User can resize by dragging the divider. Default true; false locks the
+   *  pane at `width`. Toggle later with `win.sidebar.setResizable(...)`. */
+  resizable?: boolean;
   /** Background material. Default Material.Sidebar (liquid glass on macOS 26+). */
   material?: Material;
 }
@@ -253,6 +256,9 @@ export interface InspectorOptions {
   collapsible?: boolean;
   /** Start collapsed (the common "hidden until summoned" inspector). Default false. */
   collapsed?: boolean;
+  /** User can resize by dragging the divider. Default true; false locks the
+   *  pane at `width`. Toggle later with `win.inspector.setResizable(...)`. */
+  resizable?: boolean;
   /** Background material. Default matches the sidebar pane default. */
   material?: Material;
 }
@@ -638,6 +644,11 @@ export interface SidebarHandle {
   collapse(): void;
   expand(): void;
   setWidth(px: number): void;
+  /** Allow/disallow the user collapsing the pane (system behaviors: divider
+   *  snap, toolbar toggle). Programmatic collapse/expand still work. */
+  setCollapsible(allowed: boolean): void;
+  /** Allow/disallow resizing by dragging the divider. false locks the current width. */
+  setResizable(allowed: boolean): void;
   /** Tracked from SIDEBAR_COLLAPSED/EXPANDED events, seeded by the create option. */
   readonly collapsed: boolean;
   /** Last width from SIDEBAR_RESIZED (the create option until the first event). */
@@ -650,6 +661,10 @@ export interface InspectorHandle {
   collapse(): void;
   expand(): void;
   setWidth(px: number): void;
+  /** Allow/disallow the user collapsing the pane. Programmatic collapse/expand still work. */
+  setCollapsible(allowed: boolean): void;
+  /** Allow/disallow resizing by dragging the divider. false locks the current width. */
+  setResizable(allowed: boolean): void;
   /** Tracked from INSPECTOR_COLLAPSED/EXPANDED, seeded by the create option. */
   readonly collapsed: boolean;
   /** Last width from INSPECTOR_RESIZED (the create option until the first event). */
@@ -794,6 +809,8 @@ function createSidebarHandle(
     collapse()            { windowAction("sidebar:collapse", { windowId }); },
     expand()              { windowAction("sidebar:expand",   { windowId }); },
     setWidth(px: number)  { windowAction("sidebar:setWidth", { windowId, width: px }); },
+    setCollapsible(allowed: boolean) { windowAction("sidebar:setCollapsible", { windowId, value: allowed }); },
+    setResizable(allowed: boolean)   { windowAction("sidebar:setResizable",   { windowId, value: allowed }); },
   };
 }
 
@@ -833,6 +850,8 @@ function createInspectorHandle(
     collapse()            { windowAction("inspector:collapse", { windowId }); },
     expand()              { windowAction("inspector:expand",   { windowId }); },
     setWidth(px: number)  { windowAction("inspector:setWidth", { windowId, width: px }); },
+    setCollapsible(allowed: boolean) { windowAction("inspector:setCollapsible", { windowId, value: allowed }); },
+    setResizable(allowed: boolean)   { windowAction("inspector:setResizable",   { windowId, value: allowed }); },
   };
 }
 

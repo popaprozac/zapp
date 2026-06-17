@@ -37,6 +37,7 @@ extern int32_t wopts_sidebar_min_width(void* opts);
 extern int32_t wopts_sidebar_max_width(void* opts);
 extern bool wopts_sidebar_collapsible(void* opts);
 extern bool wopts_sidebar_collapsed(void* opts);
+extern bool wopts_sidebar_can_resize(void* opts);
 extern int32_t wopts_sidebar_numeric_id(void* opts);
 // App-set window background color ("#rrggbb"); applied on opaque windows.
 extern const char* wopts_background_color(void* opts);
@@ -52,7 +53,13 @@ extern int32_t wopts_inspector_min_width(void* opts);
 extern int32_t wopts_inspector_max_width(void* opts);
 extern bool wopts_inspector_collapsible(void* opts);
 extern bool wopts_inspector_collapsed(void* opts);
+extern bool wopts_inspector_can_resize(void* opts);
 extern int32_t wopts_inspector_numeric_id(void* opts);
+
+// Runtime resize-lock ops (sidebar.m / inspector.m) — used at create time to
+// honor a `resizable: false` option once the controller is registered.
+extern void darwin_sidebar_set_resizable(int32_t window_id, bool resizable);
+extern void darwin_inspector_set_resizable(int32_t window_id, bool resizable);
 // Toolbar (toolbar.m + window.zc accessor).
 extern const char* wopts_toolbar_json(void* opts);
 extern void darwin_toolbar_attach(void* window_ptr, const char* toolbar_json, int32_t window_numeric_id);
@@ -938,12 +945,16 @@ void* darwin_window_create(WindowOptions* opts) {
                 zapp_set_sidebar_slot(host_slot, sidebar_slot);
                 zapp_sidebar_register((__bridge void*)window, (__bridge void*)splitVC,
                                       (__bridge void*)sideItem, host_slot, sidebar_slot);
+                // Honor create-time `resizable: false` — register captured the
+                // configured min/max first, so a later setResizable(true) restores it.
+                if (!wopts_sidebar_can_resize(opts)) darwin_sidebar_set_resizable(host_slot, false);
             }
             if (useInspector) {
                 // Record host→inspector for window-event fan-out (zapp_dispatch_event_to_js).
                 zapp_set_inspector_slot(host_slot, inspector_slot);
                 zapp_inspector_register((__bridge void*)window, (__bridge void*)splitVC,
                                         (__bridge void*)inspItem, host_slot, inspector_slot);
+                if (!wopts_inspector_can_resize(opts)) darwin_inspector_set_resizable(host_slot, false);
             }
         } else if (useVibrancy) {
             NSRect contentRect = [window contentView].frame;

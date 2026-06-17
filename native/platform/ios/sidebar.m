@@ -2,9 +2,12 @@
 // no-ops satisfy the shared router.zc references on iOS (#ifdef __APPLE__
 // is true on iOS too). UISplitViewController is the planned v2.
 #import <Foundation/Foundation.h>
+#import <stdbool.h>
 #import <stdint.h>
 
 void darwin_sidebar_toggle(int32_t window_id) { (void)window_id; }
 void darwin_sidebar_collapse(int32_t window_id) { (void)window_id; }
 void darwin_sidebar_expand(int32_t window_id) { (void)window_id; }
 void darwin_sidebar_set_width(int32_t window_id, int32_t width) { (void)window_id; (void)width; }
+void darwin_sidebar_set_collapsible(int32_t window_id, bool can_collapse) { (void)window_id; (void)can_collapse; }
+void darwin_sidebar_set_resizable(int32_t window_id, bool resizable) { (void)window_id; (void)resizable; }

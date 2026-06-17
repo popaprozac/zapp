@@ -60,12 +60,14 @@ type
     sidebarMaterial*: string
     sidebarWidth*, sidebarMinWidth*, sidebarMaxWidth*: int32
     sidebarCollapsible*, sidebarCollapsed*: bool
+    sidebarCanResize*: bool
     sidebarNumericId*: int32
     # --- inspector pane (feature unused; "" url => never built) ---
     inspectorUrl*: string
     inspectorMaterial*: string
     inspectorWidth*, inspectorMinWidth*, inspectorMaxWidth*: int32
     inspectorCollapsible*, inspectorCollapsed*: bool
+    inspectorCanResize*: bool
     inspectorNumericId*: int32
     # --- toolbar (feature unused; "" json => never attached) ---
     toolbarJson*: string
@@ -98,10 +100,12 @@ proc newWindowOptions*(title: string): WindowOptions =
                                  zoom: ButtonState.Enabled),
     sidebarUrl: "", sidebarMaterial: "",
     sidebarWidth: 0, sidebarMinWidth: 0, sidebarMaxWidth: 0,
-    sidebarCollapsible: false, sidebarCollapsed: false, sidebarNumericId: -1,
+    sidebarCollapsible: false, sidebarCollapsed: false, sidebarCanResize: true,
+    sidebarNumericId: -1,
     inspectorUrl: "", inspectorMaterial: "",
     inspectorWidth: 0, inspectorMinWidth: 0, inspectorMaxWidth: 0,
-    inspectorCollapsible: false, inspectorCollapsed: false, inspectorNumericId: -1,
+    inspectorCollapsible: false, inspectorCollapsed: false, inspectorCanResize: true,
+    inspectorNumericId: -1,
     toolbarJson: "",
     asSheetOfId: -1,
     sheetPresentation: 0, sheetDetents: 0, sheetGrabber: false,
@@ -151,6 +155,7 @@ proc wopts_sidebar_min_width(p: pointer): int32 {.exportc, cdecl.} = opt(p).side
 proc wopts_sidebar_max_width(p: pointer): int32 {.exportc, cdecl.} = opt(p).sidebarMaxWidth
 proc wopts_sidebar_collapsible(p: pointer): bool {.exportc, cdecl.} = opt(p).sidebarCollapsible
 proc wopts_sidebar_collapsed(p: pointer): bool {.exportc, cdecl.} = opt(p).sidebarCollapsed
+proc wopts_sidebar_can_resize(p: pointer): bool {.exportc, cdecl.} = opt(p).sidebarCanResize
 proc wopts_sidebar_numeric_id(p: pointer): int32 {.exportc, cdecl.} = opt(p).sidebarNumericId
 
 # inspector accessors — unused feature; "" url short-circuits the branch.
@@ -161,6 +166,7 @@ proc wopts_inspector_min_width(p: pointer): int32 {.exportc, cdecl.} = opt(p).in
 proc wopts_inspector_max_width(p: pointer): int32 {.exportc, cdecl.} = opt(p).inspectorMaxWidth
 proc wopts_inspector_collapsible(p: pointer): bool {.exportc, cdecl.} = opt(p).inspectorCollapsible
 proc wopts_inspector_collapsed(p: pointer): bool {.exportc, cdecl.} = opt(p).inspectorCollapsed
+proc wopts_inspector_can_resize(p: pointer): bool {.exportc, cdecl.} = opt(p).inspectorCanResize
 proc wopts_inspector_numeric_id(p: pointer): int32 {.exportc, cdecl.} = opt(p).inspectorNumericId
 
 # toolbar accessor — unused feature; "" json short-circuits darwin_toolbar_attach.
@@ -285,6 +291,7 @@ proc windowOptsApplyJson*(o: WindowOptions, a: JsonNode) =
     if jHasNum(sb, "maxWidth"): o.sidebarMaxWidth = jI32(sb, "maxWidth", o.sidebarMaxWidth)
     if jHasBool(sb, "collapsible"): o.sidebarCollapsible = jBool(sb, "collapsible", o.sidebarCollapsible)
     if jHasBool(sb, "collapsed"): o.sidebarCollapsed = jBool(sb, "collapsed", o.sidebarCollapsed)
+    if jHasBool(sb, "resizable"): o.sidebarCanResize = jBool(sb, "resizable", o.sidebarCanResize)
   let insp = a{"inspector"}
   if not insp.isNil and insp.kind == JObject:
     if jHasStr(insp, "url"): o.inspectorUrl = jStr(insp, "url")
@@ -294,6 +301,7 @@ proc windowOptsApplyJson*(o: WindowOptions, a: JsonNode) =
     if jHasNum(insp, "maxWidth"): o.inspectorMaxWidth = jI32(insp, "maxWidth", o.inspectorMaxWidth)
     if jHasBool(insp, "collapsible"): o.inspectorCollapsible = jBool(insp, "collapsible", o.inspectorCollapsible)
     if jHasBool(insp, "collapsed"): o.inspectorCollapsed = jBool(insp, "collapsed", o.inspectorCollapsed)
+    if jHasBool(insp, "resizable"): o.inspectorCanResize = jBool(insp, "resizable", o.inspectorCanResize)
   let aso = a{"asSheetOf"}
   if not aso.isNil:
     if aso.kind == JInt or aso.kind == JFloat:

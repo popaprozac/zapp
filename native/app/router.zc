@@ -777,7 +777,9 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
     let is_sb_collapse = action == "sidebar:collapse";
     let is_sb_expand = action == "sidebar:expand";
     let is_sb_set_width = action == "sidebar:setWidth";
-    if is_sb_toggle || is_sb_collapse || is_sb_expand || is_sb_set_width {
+    let is_sb_set_collapsible = action == "sidebar:setCollapsible";
+    let is_sb_set_resizable = action == "sidebar:setResizable";
+    if is_sb_toggle || is_sb_collapse || is_sb_expand || is_sb_set_width || is_sb_set_collapsible || is_sb_set_resizable {
         let sb_target = window_id;
         let sb_wid_opt = pre_args.get_string("windowId");
         if sb_wid_opt.is_some() {
@@ -798,25 +800,38 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
             let width_opt = pre_args.get_int("width");
             if width_opt.is_some() { sb_w = width_opt.unwrap(); }
         }
+        let sb_flag = true;
+        if is_sb_set_collapsible || is_sb_set_resizable {
+            let flag_opt = pre_args.get_bool("value");
+            if flag_opt.is_some() { sb_flag = flag_opt.unwrap(); }
+        }
         raw {
             #ifdef __APPLE__
             extern void darwin_sidebar_toggle(int32_t window_id);
             extern void darwin_sidebar_collapse(int32_t window_id);
             extern void darwin_sidebar_expand(int32_t window_id);
             extern void darwin_sidebar_set_width(int32_t window_id, int32_t width);
+            extern void darwin_sidebar_set_collapsible(int32_t window_id, bool can_collapse);
+            extern void darwin_sidebar_set_resizable(int32_t window_id, bool resizable);
             if (is_sb_toggle) darwin_sidebar_toggle((int32_t)sb_target);
             else if (is_sb_collapse) darwin_sidebar_collapse((int32_t)sb_target);
             else if (is_sb_expand) darwin_sidebar_expand((int32_t)sb_target);
-            else darwin_sidebar_set_width((int32_t)sb_target, (int32_t)sb_w);
+            else if (is_sb_set_width) darwin_sidebar_set_width((int32_t)sb_target, (int32_t)sb_w);
+            else if (is_sb_set_collapsible) darwin_sidebar_set_collapsible((int32_t)sb_target, sb_flag);
+            else darwin_sidebar_set_resizable((int32_t)sb_target, sb_flag);
             #else
             extern void windows_sidebar_toggle(int32_t window_id);
             extern void windows_sidebar_collapse(int32_t window_id);
             extern void windows_sidebar_expand(int32_t window_id);
             extern void windows_sidebar_set_width(int32_t window_id, int32_t width);
+            extern void windows_sidebar_set_collapsible(int32_t window_id, bool can_collapse);
+            extern void windows_sidebar_set_resizable(int32_t window_id, bool resizable);
             if (is_sb_toggle) windows_sidebar_toggle((int32_t)sb_target);
             else if (is_sb_collapse) windows_sidebar_collapse((int32_t)sb_target);
             else if (is_sb_expand) windows_sidebar_expand((int32_t)sb_target);
-            else windows_sidebar_set_width((int32_t)sb_target, (int32_t)sb_w);
+            else if (is_sb_set_width) windows_sidebar_set_width((int32_t)sb_target, (int32_t)sb_w);
+            else if (is_sb_set_collapsible) windows_sidebar_set_collapsible((int32_t)sb_target, sb_flag);
+            else windows_sidebar_set_resizable((int32_t)sb_target, sb_flag);
             #endif
         }
         return;
@@ -826,7 +841,9 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
     let is_in_collapse = action == "inspector:collapse";
     let is_in_expand = action == "inspector:expand";
     let is_in_set_width = action == "inspector:setWidth";
-    if is_in_toggle || is_in_collapse || is_in_expand || is_in_set_width {
+    let is_in_set_collapsible = action == "inspector:setCollapsible";
+    let is_in_set_resizable = action == "inspector:setResizable";
+    if is_in_toggle || is_in_collapse || is_in_expand || is_in_set_width || is_in_set_collapsible || is_in_set_resizable {
         let in_target = window_id;
         let in_wid_opt = pre_args.get_string("windowId");
         if in_wid_opt.is_some() {
@@ -847,25 +864,38 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
             let width_opt = pre_args.get_int("width");
             if width_opt.is_some() { in_w = width_opt.unwrap(); }
         }
+        let in_flag = true;
+        if is_in_set_collapsible || is_in_set_resizable {
+            let flag_opt = pre_args.get_bool("value");
+            if flag_opt.is_some() { in_flag = flag_opt.unwrap(); }
+        }
         raw {
             #ifdef __APPLE__
             extern void darwin_inspector_toggle(int32_t window_id);
             extern void darwin_inspector_collapse(int32_t window_id);
             extern void darwin_inspector_expand(int32_t window_id);
             extern void darwin_inspector_set_width(int32_t window_id, int32_t width);
+            extern void darwin_inspector_set_collapsible(int32_t window_id, bool can_collapse);
+            extern void darwin_inspector_set_resizable(int32_t window_id, bool resizable);
             if (is_in_toggle) darwin_inspector_toggle((int32_t)in_target);
             else if (is_in_collapse) darwin_inspector_collapse((int32_t)in_target);
             else if (is_in_expand) darwin_inspector_expand((int32_t)in_target);
-            else darwin_inspector_set_width((int32_t)in_target, (int32_t)in_w);
+            else if (is_in_set_width) darwin_inspector_set_width((int32_t)in_target, (int32_t)in_w);
+            else if (is_in_set_collapsible) darwin_inspector_set_collapsible((int32_t)in_target, in_flag);
+            else darwin_inspector_set_resizable((int32_t)in_target, in_flag);
             #else
             extern void windows_inspector_toggle(int32_t window_id);
             extern void windows_inspector_collapse(int32_t window_id);
             extern void windows_inspector_expand(int32_t window_id);
             extern void windows_inspector_set_width(int32_t window_id, int32_t width);
+            extern void windows_inspector_set_collapsible(int32_t window_id, bool can_collapse);
+            extern void windows_inspector_set_resizable(int32_t window_id, bool resizable);
             if (is_in_toggle) windows_inspector_toggle((int32_t)in_target);
             else if (is_in_collapse) windows_inspector_collapse((int32_t)in_target);
             else if (is_in_expand) windows_inspector_expand((int32_t)in_target);
-            else windows_inspector_set_width((int32_t)in_target, (int32_t)in_w);
+            else if (is_in_set_width) windows_inspector_set_width((int32_t)in_target, (int32_t)in_w);
+            else if (is_in_set_collapsible) windows_inspector_set_collapsible((int32_t)in_target, in_flag);
+            else windows_inspector_set_resizable((int32_t)in_target, in_flag);
             #endif
         }
         return;

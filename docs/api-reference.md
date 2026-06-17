@@ -708,6 +708,7 @@ const win = await Window.create({
     maxWidth: 400,          // divider drag maximum (default 400)
     collapsible: true,      // system collapse gestures allowed (default true)
     collapsed: false,       // start collapsed (default false)
+    resizable: true,        // user can drag the divider (default true; false locks at `width`)
     material: Material.Sidebar,  // background material (default Material.Sidebar)
   },
 });
@@ -723,6 +724,7 @@ const win = await Window.create({
 | `maxWidth` | `number` | `400` |
 | `collapsible` | `boolean` | `true` |
 | `collapsed` | `boolean` | `false` |
+| `resizable` | `boolean` | `true` |
 | `material` | `Material` | `Material.Sidebar` |
 
 **`Material` const** — typed const for `NSVisualEffectMaterial` names:
@@ -743,6 +745,9 @@ win.sidebar?.toggle()           // collapse if expanded, expand if collapsed
 win.sidebar?.collapse()
 win.sidebar?.expand()
 win.sidebar?.setWidth(220)      // programmatic resize
+
+win.sidebar?.setCollapsible(false)  // disallow user collapse (programmatic toggle still works)
+win.sidebar?.setResizable(false)    // lock the width — divider no longer drags
 
 win.sidebar?.collapsed          // reactive: tracks SIDEBAR_COLLAPSED/EXPANDED
 win.sidebar?.width              // reactive: tracks SIDEBAR_RESIZED; seeded by create option
@@ -847,10 +852,12 @@ win.on(WindowEvent.INSPECTOR_RESIZED, ({ width }) => console.log("inspector", wi
 
 **Options:** `url` (required), `width` (default 280), `minWidth`/`maxWidth`
 (180/400), `collapsible` (default true), `collapsed` (default false — set
-true for the common "hidden until summoned" inspector), `material`.
+true for the common "hidden until summoned" inspector), `resizable`
+(default true; false locks the pane at `width`), `material`.
 
 **Handle (`win.inspector`, present only when the window has one):**
-`toggle()` / `collapse()` / `expand()` / `setWidth(px)`, plus `collapsed`
+`toggle()` / `collapse()` / `expand()` / `setWidth(px)` /
+`setCollapsible(bool)` / `setResizable(bool)`, plus `collapsed`
 and `width` (tracked from `INSPECTOR_COLLAPSED` / `INSPECTOR_EXPANDED` /
 `INSPECTOR_RESIZED`). `Window.isInspector()` is true inside the inspector
 pane.

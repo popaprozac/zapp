@@ -101,6 +101,7 @@ struct WindowOptions {
     sidebarMaxWidth: int;      // default 400
     sidebarCollapsible: bool;  // default true
     sidebarCollapsed: bool;    // default false
+    sidebarCanResize: bool;    // default true (false locks the pane width)
     // Inspector (trailing NSSplitViewItem inspector; macOS only).
     inspectorUrl: string;        // empty = no inspector
     _inspectorUrl_heap: bool;
@@ -111,6 +112,7 @@ struct WindowOptions {
     inspectorMaxWidth: int;      // default 400
     inspectorCollapsible: bool;  // default true
     inspectorCollapsed: bool;    // default false
+    inspectorCanResize: bool;    // default true (false locks the pane width)
     // Numeric window id pre-assigned by WindowManager.create *before*
     // the native window is built. Native code uses this so the JS
     // bootstrap user script can bake in the canonical "win-<N>" id —
@@ -223,6 +225,7 @@ impl WindowOptions {
             sidebarMaxWidth: 400,
             sidebarCollapsible: true,
             sidebarCollapsed: false,
+            sidebarCanResize: true,
             inspectorUrl: "",
             _inspectorUrl_heap: false,
             inspectorMaterial: "",
@@ -232,6 +235,7 @@ impl WindowOptions {
             inspectorMaxWidth: 400,
             inspectorCollapsible: true,
             inspectorCollapsed: false,
+            inspectorCanResize: true,
             numericIdPreAlloc: -1,
             sidebarNumericId: -1,
             inspectorNumericId: -1,
@@ -282,6 +286,7 @@ fn wopts_sidebar_min_width(opts: WindowOptions*) -> int { return opts.sidebarMin
 fn wopts_sidebar_max_width(opts: WindowOptions*) -> int { return opts.sidebarMaxWidth; }
 fn wopts_sidebar_collapsible(opts: WindowOptions*) -> bool { return opts.sidebarCollapsible; }
 fn wopts_sidebar_collapsed(opts: WindowOptions*) -> bool { return opts.sidebarCollapsed; }
+fn wopts_sidebar_can_resize(opts: WindowOptions*) -> bool { return opts.sidebarCanResize; }
 fn wopts_inspector_numeric_id(opts: WindowOptions*) -> int { return opts.inspectorNumericId; }
 fn wopts_inspector_url(opts: WindowOptions*) -> string { return opts.inspectorUrl; }
 fn wopts_inspector_material(opts: WindowOptions*) -> string { return opts.inspectorMaterial; }
@@ -290,6 +295,7 @@ fn wopts_inspector_min_width(opts: WindowOptions*) -> int { return opts.inspecto
 fn wopts_inspector_max_width(opts: WindowOptions*) -> int { return opts.inspectorMaxWidth; }
 fn wopts_inspector_collapsible(opts: WindowOptions*) -> bool { return opts.inspectorCollapsible; }
 fn wopts_inspector_collapsed(opts: WindowOptions*) -> bool { return opts.inspectorCollapsed; }
+fn wopts_inspector_can_resize(opts: WindowOptions*) -> bool { return opts.inspectorCanResize; }
 fn wopts_sheet_presentation(opts: WindowOptions*) -> int { return opts.sheetPresentation; }
 fn wopts_sheet_detents(opts: WindowOptions*) -> int { return opts.sheetDetents; }
 fn wopts_sheet_grabber(opts: WindowOptions*) -> bool { return opts.sheetGrabber; }
@@ -449,6 +455,7 @@ fn window_opts_apply_json(opts: WindowOptions*, args: JsonValue*) -> void {
         let smax = (*sb).get_int("maxWidth");   if smax.is_some() { opts.sidebarMaxWidth = smax.unwrap(); }
         let sc = (*sb).get_bool("collapsible"); if sc.is_some() { opts.sidebarCollapsible = sc.unwrap(); }
         let sco = (*sb).get_bool("collapsed");  if sco.is_some() { opts.sidebarCollapsed = sco.unwrap(); }
+        let sr = (*sb).get_bool("resizable");   if sr.is_some() { opts.sidebarCanResize = sr.unwrap(); }
     }
     let insp_opt = args.get_object("inspector");
     if insp_opt.is_some() {
@@ -476,6 +483,7 @@ fn window_opts_apply_json(opts: WindowOptions*, args: JsonValue*) -> void {
         let imax = (*insp).get_int("maxWidth");   if imax.is_some() { opts.inspectorMaxWidth = imax.unwrap(); }
         let ic = (*insp).get_bool("collapsible"); if ic.is_some() { opts.inspectorCollapsible = ic.unwrap(); }
         let ico = (*insp).get_bool("collapsed");  if ico.is_some() { opts.inspectorCollapsed = ico.unwrap(); }
+        let ir = (*insp).get_bool("resizable");   if ir.is_some() { opts.inspectorCanResize = ir.unwrap(); }
     }
 
     // Toolbar: pre-stringified by the runtime (actions already stripped).

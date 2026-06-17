@@ -28,6 +28,10 @@ extern void darwin_window_eval_js(int32_t window_id, const char* js);
 @property (nonatomic, assign) int32_t sidebarSlotId;  // sidebar webview's slot
 @property (nonatomic, assign) BOOL lastCollapsed;
 @property (nonatomic, assign) int lastWidth;
+// Configured resize bounds captured at register (before any lock), so
+// setResizable(true) can restore the original drag range after a lock.
+@property (nonatomic, assign) CGFloat cfgMinThickness;
+@property (nonatomic, assign) CGFloat cfgMaxThickness;
 @end
 
 static NSMutableDictionary<NSValue*, ZappSidebarController*>* zapp_sidebars = nil;
@@ -176,6 +180,36 @@ void darwin_sidebar_set_width(int32_t window_id, int32_t width) {
     });
 }
 
+// Allow/disallow the user collapsing the sidebar (NSSplitViewItem.canCollapse).
+// Programmatic collapse/expand still work regardless — this gates the system
+// behaviors (divider snap, toolbar toggle).
+void darwin_sidebar_set_collapsible(int32_t window_id, bool can_collapse) {
+    zapp_sidebar_on_main(^{
+        ZappSidebarController* c = zapp_sidebar_for_slot(window_id);
+        if (!c || !c.sidebarItem) return;
+        c.sidebarItem.canCollapse = can_collapse ? YES : NO;
+    });
+}
+
+// Allow/disallow resizing the sidebar by dragging the divider. Disallow locks
+// the pane at its current width (min==max); allow restores the configured
+// min/max drag range captured at register.
+void darwin_sidebar_set_resizable(int32_t window_id, bool resizable) {
+    zapp_sidebar_on_main(^{
+        ZappSidebarController* c = zapp_sidebar_for_slot(window_id);
+        if (!c || !c.sidebarItem) return;
+        if (resizable) {
+            c.sidebarItem.minimumThickness = c.cfgMinThickness;
+            c.sidebarItem.maximumThickness = c.cfgMaxThickness;
+        } else {
+            CGFloat w = (CGFloat)zapp_sidebar_current_width(c);
+            if (w <= 0) w = c.sidebarItem.minimumThickness; // pre-layout fallback
+            c.sidebarItem.minimumThickness = w;
+            c.sidebarItem.maximumThickness = w;
+        }
+    });
+}
+
 // --- Registry API for window.m (Task 5) ---
 
 void zapp_sidebar_register(void* window_ptr, NSSplitViewController* splitVC,
@@ -193,6 +227,10 @@ void zapp_sidebar_register(void* window_ptr, NSSplitViewController* splitVC,
         c.sidebarSlotId = sidebar_slot_id;
         c.lastCollapsed = sidebarItem.isCollapsed;
         c.lastWidth = zapp_sidebar_current_width(c);
+        // Capture configured drag bounds before any setResizable lock so we
+        // can restore the range on a later setResizable(true).
+        c.cfgMinThickness = sidebarItem.minimumThickness;
+        c.cfgMaxThickness = sidebarItem.maximumThickness;
 
         [sidebarItem addObserver:c forKeyPath:@"collapsed"
                          options:NSKeyValueObservingOptionNew context:NULL];

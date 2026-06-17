@@ -29,12 +29,16 @@ The authoritative manual-smoke surface. Two builds, run from `kitchen-sink/`:
 | Toggle | native sidebar hides/shows; toolbar sidebar button also toggles | ✓ | ? |
 | Width 180 / 320 | sidebar resizes; inspector pane shows `width 180`/`320` | ✓ | ? |
 | **Interaction (EMIT)** | clicking an item updates the main pane (cross-pane `Events.emit`, t:3 fix) | ✓ | ? |
+| Collapsible off | "Collapsible: off" → dragging the divider can't snap it collapsed (toolbar/Toggle still work) | ? | ? |
+| Resizable off | "Resizable: off" → the divider no longer drags; "on" restores it | ? | ? |
 
 ## C. Inspector section
 | Check | Expected | zc | nim |
 |---|---|---|---|
 | Toggle | trailing inspector hides/shows | ✓ | ⚠️ (#460) |
 | Width 360 | inspector resizes; its own pane reads `width 360` | ✓ | ? |
+| Collapsible off | "Collapsible: off" → user can't collapse the inspector by dragging | ? | ? |
+| Resizable off | "Resizable: off" → the divider no longer drags; "on" restores it | ? | ? |
 
 ## D. Toolbar section
 | Check | Expected | zc | nim |

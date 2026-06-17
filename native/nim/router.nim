@@ -125,10 +125,14 @@ proc darwin_sidebar_toggle(windowId: int32) {.importc, cdecl.}
 proc darwin_sidebar_collapse(windowId: int32) {.importc, cdecl.}
 proc darwin_sidebar_expand(windowId: int32) {.importc, cdecl.}
 proc darwin_sidebar_set_width(windowId: int32, width: int32) {.importc, cdecl.}
+proc darwin_sidebar_set_collapsible(windowId: int32, canCollapse: bool) {.importc, cdecl.}
+proc darwin_sidebar_set_resizable(windowId: int32, resizable: bool) {.importc, cdecl.}
 proc darwin_inspector_toggle(windowId: int32) {.importc, cdecl.}
 proc darwin_inspector_collapse(windowId: int32) {.importc, cdecl.}
 proc darwin_inspector_expand(windowId: int32) {.importc, cdecl.}
 proc darwin_inspector_set_width(windowId: int32, width: int32) {.importc, cdecl.}
+proc darwin_inspector_set_collapsible(windowId: int32, canCollapse: bool) {.importc, cdecl.}
+proc darwin_inspector_set_resizable(windowId: int32, resizable: bool) {.importc, cdecl.}
 proc darwin_toolbar_set_items(windowPtr: pointer, toolbarJson: cstring, hostSlot: int32) {.importc, cdecl.}
 proc darwin_toolbar_update_item(windowPtr: pointer, itemJson: cstring) {.importc, cdecl.}
 proc darwin_toolbar_remove(windowPtr: pointer) {.importc, cdecl.}
@@ -597,15 +601,20 @@ proc routeWindowAction(action: string, a: JsonNode, rawWindowId: int, payload: s
     let widArg = a{"windowId"}.getStr("")
     let target = (if widArg.len > 0: darwin_window_numeric_id_for_string(widArg.cstring) else: windowId.int32)
     let width = a{"width"}.getInt(0).int32
+    let flag = a{"value"}.getBool(true)  # setCollapsible/setResizable bool
     case action
     of "sidebar:toggle": darwin_sidebar_toggle(target)
     of "sidebar:collapse": darwin_sidebar_collapse(target)
     of "sidebar:expand": darwin_sidebar_expand(target)
     of "sidebar:setWidth": darwin_sidebar_set_width(target, width)
+    of "sidebar:setCollapsible": darwin_sidebar_set_collapsible(target, flag)
+    of "sidebar:setResizable": darwin_sidebar_set_resizable(target, flag)
     of "inspector:toggle": darwin_inspector_toggle(target)
     of "inspector:collapse": darwin_inspector_collapse(target)
     of "inspector:expand": darwin_inspector_expand(target)
     of "inspector:setWidth": darwin_inspector_set_width(target, width)
+    of "inspector:setCollapsible": darwin_inspector_set_collapsible(target, flag)
+    of "inspector:setResizable": darwin_inspector_set_resizable(target, flag)
     else: discard
     return
   if action.startsWith("toolbar:"):

@@ -7,16 +7,34 @@ export const inspectorSection: Section = {
   label: "Inspector",
   render(host) {
     const win = Window.current();
+    let collapsible = true;
+    let resizable = true;
     host.appendChild(card({
       title: "Native Inspector",
-      intro: "A trailing NSSplitViewItem inspector. This section drives the very pane it reports into (right).",
+      intro: "A trailing NSSplitViewItem inspector. This section drives the very pane it reports into (right). Collapse/resize gating toggles whether the user can collapse it or drag the divider.",
       buttons: [
         { act: "toggle", label: "Toggle" },
         { act: "w360", label: "Width 360" },
+        { act: "collapsible", label: "Collapsible: on" },
+        { act: "resizable", label: "Resizable: on" },
       ],
     }));
     onAct(host, "toggle", () => { win.inspector?.toggle(); setResult(host, "toggled"); });
     onAct(host, "w360", () => { win.inspector?.setWidth(360); setResult(host, "width → 360"); });
+    onAct(host, "collapsible", () => {
+      collapsible = !collapsible;
+      win.inspector?.setCollapsible(collapsible);
+      const btn = host.querySelector<HTMLButtonElement>('[data-act="collapsible"]');
+      if (btn) btn.textContent = `Collapsible: ${collapsible ? "on" : "off"}`;
+      setResult(host, `collapsible → ${collapsible}`);
+    });
+    onAct(host, "resizable", () => {
+      resizable = !resizable;
+      win.inspector?.setResizable(resizable);
+      const btn = host.querySelector<HTMLButtonElement>('[data-act="resizable"]');
+      if (btn) btn.textContent = `Resizable: ${resizable ? "on" : "off"}`;
+      setResult(host, `resizable → ${resizable} (try dragging the divider)`);
+    });
   },
   inspector(host) {
     const win = Window.current();

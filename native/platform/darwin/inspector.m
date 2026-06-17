@@ -28,6 +28,10 @@ extern void zapp_pane_emit(int32_t host_id, int32_t accessory_slot,
 @property (nonatomic, assign) NSInteger inspectorDividerIndex;  // divider before the trailing item
 @property (nonatomic, assign) BOOL lastCollapsed;
 @property (nonatomic, assign) int lastWidth;
+// Configured resize bounds captured at register (before any lock), so
+// setResizable(true) can restore the original drag range after a lock.
+@property (nonatomic, assign) CGFloat cfgMinThickness;
+@property (nonatomic, assign) CGFloat cfgMaxThickness;
 @end
 
 static NSMutableDictionary<NSValue*, ZappInspectorController*>* zapp_inspectors = nil;
@@ -146,6 +150,35 @@ void darwin_inspector_set_width(int32_t window_id, int32_t width) {
     });
 }
 
+// Allow/disallow the user collapsing the inspector (NSSplitViewItem.canCollapse).
+// Programmatic collapse/expand still work regardless.
+void darwin_inspector_set_collapsible(int32_t window_id, bool can_collapse) {
+    zapp_inspector_on_main(^{
+        ZappInspectorController* c = zapp_inspector_for_slot(window_id);
+        if (!c || !c.inspectorItem) return;
+        c.inspectorItem.canCollapse = can_collapse ? YES : NO;
+    });
+}
+
+// Allow/disallow resizing the inspector by dragging the divider. Disallow locks
+// the pane at its current width (min==max); allow restores the configured
+// min/max drag range captured at register.
+void darwin_inspector_set_resizable(int32_t window_id, bool resizable) {
+    zapp_inspector_on_main(^{
+        ZappInspectorController* c = zapp_inspector_for_slot(window_id);
+        if (!c || !c.inspectorItem) return;
+        if (resizable) {
+            c.inspectorItem.minimumThickness = c.cfgMinThickness;
+            c.inspectorItem.maximumThickness = c.cfgMaxThickness;
+        } else {
+            CGFloat w = (CGFloat)zapp_inspector_current_width(c);
+            if (w <= 0) w = c.inspectorItem.minimumThickness; // pre-layout fallback
+            c.inspectorItem.minimumThickness = w;
+            c.inspectorItem.maximumThickness = w;
+        }
+    });
+}
+
 // --- Registry API for window.m (Task 6) ---
 
 void zapp_inspector_register(void* window_ptr, void* splitVCp, void* inspectorItemp,
@@ -165,6 +198,10 @@ void zapp_inspector_register(void* window_ptr, void* splitVCp, void* inspectorIt
         c.inspectorDividerIndex = [splitVC.splitViewItems indexOfObject:inspectorItem] - 1;
         c.lastCollapsed = inspectorItem.isCollapsed;
         c.lastWidth = zapp_inspector_current_width(c);
+        // Capture configured drag bounds before any setResizable lock so we
+        // can restore the range on a later setResizable(true).
+        c.cfgMinThickness = inspectorItem.minimumThickness;
+        c.cfgMaxThickness = inspectorItem.maximumThickness;
 
         [inspectorItem addObserver:c forKeyPath:@"collapsed"
                            options:NSKeyValueObservingOptionNew context:NULL];
