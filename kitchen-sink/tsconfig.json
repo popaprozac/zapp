@@ -1,8 +1,9 @@
 {
   "compilerOptions": {
-    "target": "es2023",
-    "module": "esnext",
-    "lib": ["ES2023", "DOM"],
+    "target": "ES2023",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "types": ["vite/client"],
     "skipLibCheck": true,
 
@@ -13,11 +14,22 @@
     "moduleDetection": "force",
     "noEmit": true,
 
+    /* Path aliases — mirror hello-world so `tsc --noEmit` can resolve the
+       runtime (the Vite alias only covers the build, which esbuild type-erases). */
+    "paths": {
+      "@zappdev/runtime": ["../runtime/index.ts"],
+      "@zappdev/runtime/worker-globals": ["../runtime/worker-globals.ts"],
+      "@zappdev/cli/config": ["../cli/src/config.ts"]
+    },
+
     /* Linting */
+    "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "erasableSyntaxOnly": true,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedSideEffectImports": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": ["**/*.test.ts"]
 }
