@@ -10,6 +10,8 @@ import { syncSection } from "./sync";
 import { dialogsSection } from "./dialogs";
 import { clipboardSection } from "./clipboard";
 import { notificationsSection } from "./notifications";
+import { screenSection } from "./screen";
+import { shortcutsSection } from "./shortcuts";
 
 export const registry: Section[] = [
   homeSection,
@@ -23,4 +25,6 @@ export const registry: Section[] = [
   dialogsSection,
   clipboardSection,
   notificationsSection,
+  screenSection,
+  shortcutsSection,
 ];

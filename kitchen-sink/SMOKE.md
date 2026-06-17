@@ -102,6 +102,24 @@ Native system notifications (notification.m + nim routeNotification). Dev runs i
 
 > Note: I/J/K are new this cycle — `?` on both builds. All three are host features already ported to nim (B6 batch), so parity is expected.
 
+## L. Screen section (displays — read-only)
+Enumerate displays + geometry. Routes through `__screen:*` (explicit nim routes), so a real parity surface.
+| Check | Expected | zc | nim |
+|---|---|---|---|
+| List displays | result lists each display name + WxH (primary marked) | ? | ? |
+| Primary | result shows the primary display name + size + scale | ? | ? |
+| Cursor point | result shows the mouse x,y + the display it's on (macOS; iOS returns 0,0) | ? | ? |
+
+## M. Shortcuts section (global input)
+Register/unregister a global accelerator (`CmdOrCtrl+Shift+K`). Routes through `__shortcuts:*` (explicit nim routes).
+| Check | Expected | zc | nim |
+|---|---|---|---|
+| Register + fire | Register, switch to another app, press the combo → result shows "fired at …" | ? | ? |
+| Is registered? | reports true after Register, false after Unregister | ? | ? |
+| Unregister | combo no longer fires | ? | ? |
+
+> Note: L/M are new this cycle — `?` on both builds; both have explicit `__screen:*` / `__shortcuts:*` nim routes, so parity is expected.
+
 ---
 
 ## Appendix — hello-world (nim), WindowManager core
@@ -116,4 +134,4 @@ Native system notifications (notification.m + nim routeNotification). Dev runs i
 
 ---
 
-*Sections grow as cycles land (Workers + Sync, then Dialogs + Clipboard + Notifications). Each row should match zc↔nim except the ⚠️ caveats. Still to mirror from hello-world: Shortcuts, Theme, Dock, Tray, Screen, Events, File Drop, Embedded Webview.*
+*Sections grow as cycles land: Workers + Sync → Dialogs + Clipboard + Notifications → Screen + Shortcuts. Each row should match zc↔nim except the ⚠️ caveats. Still to mirror from hello-world: Dock, Tray, Events, File Drop, Embedded Webview, and Theme (deferred — `App.getTheme()`'s initial value reads bootstrap config; needs a smoke to confirm nim seeds it, vs the live `THEME_CHANGED` event which is wired).*
