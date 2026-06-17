@@ -148,6 +148,17 @@ Native drag-and-drop from Finder. Drop detection is in the shared webview.m; eve
 
 > Note: N/O/P are new this cycle — `?` on both builds. Dock/Events/File-drop are all ported to nim (dock:* routes, events bus, shared webview.m drop), so parity is expected.
 
+## Q. Tray section (menu-bar status item)
+Routes through `tray:*` (nim ported). macOS — look at the top-right of the menu bar. Ungated (no permissions block).
+| Check | Expected | zc | nim |
+|---|---|---|---|
+| Create | a status item with an SF Symbol (bolt) icon + tooltip appears; result shows its id; clicking shows the menu | ? | ? |
+| Set / clear title | the status item shows "5" next to the icon, then clears | ? | ? |
+| Swap menu | reopening the menu shows the swapped items | ? | ? |
+| Destroy | the status item disappears | ? | ? |
+
+> Note: Q is new this cycle — `?` on both builds; tray:* is nim-ported, so parity is expected.
+
 ---
 
 ## Appendix — hello-world (nim), WindowManager core
