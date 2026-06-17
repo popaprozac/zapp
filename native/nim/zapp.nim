@@ -34,6 +34,7 @@
 {.compile("../platform/darwin/sync.m", "-fobjc-arc").}
 
 import std/os          # parentDir for the zjs.c {.compile.}/{.passL.} paths below
+import std/json        # parseJson — initial window from config (zapp_window_config_json)
 import app
 import window
 # worker_service provides the {.exportc.} side-effect symbol service_invoke_native
@@ -78,6 +79,10 @@ import worker
 {.push warning[UnusedImport]: off.}
 import zapp_build_config, zapp_bootstrap
 {.pop.}
+# Generated initial-window config — exposes zapp_window_config_json() (the
+# zapp.config.ts `window` block as windowOptsApplyJson-shaped JSON, "" when
+# absent). Referenced at boot below, so a normal import (not side-effect-only).
+import zapp_initial_window
 
 # ---------------------------------------------------------------------------
 # platform.m callback dependencies (defined in not-yet-ported modules)
@@ -232,9 +237,18 @@ proc zapp_build_dev_tools_default(): cint {.importc, cdecl.}
 
 let a = newApp("Zapp Nim Skeleton")
 registerSkeletonServices()   # wire greet into the service registry (app.nim)
-let opts = newWindowOptions("Zapp v2 (Nim)")
-opts.width = 900
-opts.height = 650
+# Initial window: prefer the app's config (CLI-generated zapp_window_config_json,
+# the `window` block in zapp.config.ts) parsed via windowOptsApplyJson; else the
+# skeleton defaults. The zc build is driven by app.zc instead.
+let windowJson = $zapp_window_config_json()
+var opts: WindowOptions
+if windowJson.len > 0:
+  opts = newWindowOptions("Zapp")
+  windowOptsApplyJson(opts, parseJson(windowJson))
+else:
+  opts = newWindowOptions("Zapp v2 (Nim)")
+  opts.width = 900
+  opts.height = 650
 # Web Inspector: window.m enables WKWebView.inspectable when wopts_inspectable()
 # > 0. Mirror the zc `Auto` resolution — gate on the build's dev-tools flag
 # (app.zc:55): On in dev => inspectable (Safari → Develop → this app), Off in
