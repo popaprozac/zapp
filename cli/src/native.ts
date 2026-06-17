@@ -1109,6 +1109,7 @@ async function buildNativeNim(
   const configNim = renderBuildConfigNim({
     initialUrl: "zapp://index.html",
     identifier: config.identifier ?? config.name ?? "com.zapp.helloworld",
+    name: config.name ?? "Zapp",
     assetRoot,
     embedAssets: false, // filesystem asset path (sub-gate A); brotli deferred
     devTools: 1,

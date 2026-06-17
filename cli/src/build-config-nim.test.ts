@@ -5,6 +5,7 @@ test("renderBuildConfigNim emits exportc getters the .m layer calls", () => {
   const out = renderBuildConfigNim({
     initialUrl: "zapp://index.html",
     identifier: "com.example.app",
+    name: "Example App",
     assetRoot: "",
     embedAssets: true,
     devTools: 1,
@@ -16,6 +17,9 @@ test("renderBuildConfigNim emits exportc getters the .m layer calls", () => {
   expect(out).toContain('proc zapp_build_initial_url(): cstring {.exportc, cdecl.}');
   expect(out).toContain('proc zapp_build_use_embedded_assets(): cint {.exportc, cdecl.}');
   expect(out).toContain('"zapp://index.html"');
+  // App name getter (drives the Nim build's newApp / menu name).
+  expect(out).toContain('proc zapp_build_name(): cstring {.exportc, cdecl.} = zappName.cstring');
+  expect(out).toContain('let zappName = "Example App"');
 });
 
 import { renderBootstrapNim, renderHeadlessNim } from "./build-config";
@@ -52,6 +56,7 @@ test("renderBuildConfigNim emits zapp_build_permissions_json from the manifest",
   const out = renderBuildConfigNim({
     initialUrl: "zapp://index.html",
     identifier: "com.example.app",
+    name: "Example App",
     assetRoot: "",
     embedAssets: true,
     devTools: 1,
@@ -69,6 +74,7 @@ test("renderBuildConfigNim emits fs allowlist + persist-grants getters", () => {
   const out = renderBuildConfigNim({
     initialUrl: "zapp://index.html",
     identifier: "com.zapp.test",
+    name: "Test App",
     assetRoot: "/tmp/assets",
     embedAssets: false,
     devTools: 1,

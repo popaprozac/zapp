@@ -234,8 +234,13 @@ var zapp_log_level {.exportc.}: cint = 0
 # imported as a C symbol, not by Nim name). Used to gate the Web Inspector
 # dev-vs-prod, mirroring the zc's `Auto` resolution (app.zc:55).
 proc zapp_build_dev_tools_default(): cint {.importc, cdecl.}
+# zapp_build_name — the app's display name (zapp.config.ts `name`), generated into
+# zapp_build_config (exportc). Drives newApp -> the app/menu name, matching the zc
+# build's AppConfig.name. Empty falls back to the skeleton name.
+proc zapp_build_name(): cstring {.importc, cdecl.}
 
-let a = newApp("Zapp Nim Skeleton")
+let appName = $zapp_build_name()
+let a = newApp(if appName.len > 0: appName else: "Zapp Nim Skeleton")
 registerSkeletonServices()   # wire greet into the service registry (app.nim)
 # Initial window: prefer the app's config (CLI-generated zapp_window_config_json,
 # the `window` block in zapp.config.ts) parsed via windowOptsApplyJson; else the
