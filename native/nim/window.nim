@@ -100,13 +100,19 @@ proc newWindowOptions*(title: string): WindowOptions =
     trafficLights: TrafficLights(close: ButtonState.Enabled,
                                  minimize: ButtonState.Enabled,
                                  zoom: ButtonState.Enabled),
+    # Sidebar/inspector geometry defaults MUST mirror zc WindowOptions::create
+    # (window.zc:229-246). window.m sets NSSplitViewItem.maximumThickness =
+    # wopts_sidebar_max_width(opts) literally — a 0 default constrains the pane to
+    # ZERO width (invisible sidebar), and collapsible:false disables the toolbar's
+    # Hide-Sidebar/inspector toggle. These bit the first app.nim chrome-shell smoke
+    # (sidebar absent) + the inspector-toggle bug (#460, inspectorMaxWidth 0).
     sidebarUrl: "", sidebarMaterial: "", sidebarBackgroundColor: "",
-    sidebarWidth: 0, sidebarMinWidth: 0, sidebarMaxWidth: 0,
-    sidebarCollapsible: false, sidebarCollapsed: false, sidebarCanResize: true,
+    sidebarWidth: 260, sidebarMinWidth: 180, sidebarMaxWidth: 400,
+    sidebarCollapsible: true, sidebarCollapsed: false, sidebarCanResize: true,
     sidebarNumericId: -1,
     inspectorUrl: "", inspectorMaterial: "", inspectorBackgroundColor: "",
-    inspectorWidth: 0, inspectorMinWidth: 0, inspectorMaxWidth: 0,
-    inspectorCollapsible: false, inspectorCollapsed: false, inspectorCanResize: true,
+    inspectorWidth: 280, inspectorMinWidth: 180, inspectorMaxWidth: 400,
+    inspectorCollapsible: true, inspectorCollapsed: false, inspectorCanResize: true,
     inspectorNumericId: -1,
     toolbarJson: "",
     asSheetOfId: -1,
