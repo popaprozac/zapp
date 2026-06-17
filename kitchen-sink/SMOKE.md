@@ -75,6 +75,33 @@ Open a 2nd window first (Multi-window → **New window (sidebar shell)**), then 
 
 > Note: G/H cells are `?` on BOTH builds — these sections are new this cycle, so neither has been smoked yet (the zc path reuses the proven hello-world worker/sync APIs, so it's expected to pass).
 
+## I. Dialogs section (host system integration)
+Native file open/save + message dialogs. The native routes ship in both binaries (dialog.m + nim routeDialog), so it's a real parity surface. No permission block on kitchen-sink → ungated.
+| Check | Expected | zc | nim |
+|---|---|---|---|
+| Open file | native open panel; result shows the absolute path (or "cancelled") | ? | ? |
+| Save file | native save panel; result shows the chosen path | ? | ? |
+| Message | native alert with OK/Cancel; result shows the button index | ? | ? |
+| Reveal / Open last | after picking a file, reveals it in Finder / opens with the default app | ? | ? |
+
+## J. Clipboard section
+Read/write system clipboard (text + image). clipboard module is in both binaries.
+| Check | Expected | zc | nim |
+|---|---|---|---|
+| Write / Read text | Write then Read round-trips the text | ? | ? |
+| Has image / Read image | copy an image elsewhere → "has(image) → true" + "got N-byte PNG" | ? | ? |
+| Clear | clipboard cleared (subsequent Read shows empty) | ? | ? |
+
+## K. Notifications section
+Native system notifications (notification.m + nim routeNotification). Dev runs inside the .app bundle so the notification center is available.
+| Check | Expected | zc | nim |
+|---|---|---|---|
+| Request permission | result shows the permission status | ? | ? |
+| Show | a system notification appears; result shows its id | ? | ? |
+| Update / Remove last | the last notification updates in place / is removed | ? | ? |
+
+> Note: I/J/K are new this cycle — `?` on both builds. All three are host features already ported to nim (B6 batch), so parity is expected.
+
 ---
 
 ## Appendix — hello-world (nim), WindowManager core
@@ -89,4 +116,4 @@ Open a 2nd window first (Multi-window → **New window (sidebar shell)**), then 
 
 ---
 
-*Sections grow as cycles land (Workers + Sync landed this cycle). Each row should match zc↔nim except the ⚠️ caveats.*
+*Sections grow as cycles land (Workers + Sync, then Dialogs + Clipboard + Notifications). Each row should match zc↔nim except the ⚠️ caveats. Still to mirror from hello-world: Shortcuts, Theme, Dock, Tray, Screen, Events, File Drop, Embedded Webview.*

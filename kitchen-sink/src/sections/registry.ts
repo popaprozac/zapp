@@ -7,6 +7,9 @@ import { popoverSection } from "./popover";
 import { multiwindowSection } from "./multiwindow";
 import { workersSection } from "./workers";
 import { syncSection } from "./sync";
+import { dialogsSection } from "./dialogs";
+import { clipboardSection } from "./clipboard";
+import { notificationsSection } from "./notifications";
 
 export const registry: Section[] = [
   homeSection,
@@ -17,4 +20,7 @@ export const registry: Section[] = [
   multiwindowSection,
   workersSection,
   syncSection,
+  dialogsSection,
+  clipboardSection,
+  notificationsSection,
 ];
