@@ -1507,6 +1507,41 @@ Raw `//> macos: framework: …` / `//> macos: link: …` directives in
 escape hatch — the zc compiler still honors them — but they aren't needed
 for normal linking and aren't emitted in the default templates.
 
+### Authoring an app in Nim
+
+The Nim build (`ZAPP_NATIVE_LANG=nim`) compiles an app's `zapp/app.nim`
+as its native entry when present, falling back to a built-in skeleton
+otherwise. The default zc build uses `zapp/app.zc` — that remains the
+default; the Nim build is opt-in and macOS-only today.
+
+An `app.nim` is idiomatic Nim — `import zapp` re-exports the app surface:
+
+```nim
+import zapp
+
+proc greet(args: JsonNode): string = "Hello from Zapp!"
+
+proc runApp(): int =
+  let a = newApp("my-app")
+  registerService("greet", greet)
+  var opts = newWindowOptions("My App")
+  opts.width = 1100; opts.height = 700
+  discard createWindow(opts)
+  a.run()
+
+quit(runApp())
+```
+
+Service handlers are `proc(args: JsonNode): string`, registered with
+`registerService("name", handler)`; they're reachable from the webview
+via `Services.invoke("name", …)`. Power users can `import` any native
+library through Nim's `importc`, wrap it in a proc, and expose it as a
+service — first-class native extensibility, no C shim required.
+
+TS stays the default home for app logic — UI lives in the webview and
+background work in headless workers. Reach for a native Nim service only
+for genuinely-native needs.
+
 ---
 
 ## `Dialog`
