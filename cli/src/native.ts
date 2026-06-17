@@ -1053,6 +1053,12 @@ interface CompileOptions {
   config?: import("./config").ResolvedConfig;
 }
 
+/** Pick the Nim compile root: the app's own zapp/app.nim if it exists, else the skeleton. */
+export function chooseNimRoot(root: string, nativeDir: string): string {
+  const appNim = path.join(root, "zapp", "app.nim");
+  return existsSync(appNim) ? appNim : path.join(nativeDir, "nim", "zapp.nim");
+}
+
 /**
  * Nim-driven native build (opt-in via ZAPP_NATIVE_LANG=nim). Drives the build
  * with `nim c` against the Nim build root (`native/nim/zapp.nim`), which
@@ -1210,15 +1216,16 @@ async function buildNativeNim(
   // the user project — same as the zc sources. `{.compile.}` paths inside
   // zapp.nim resolve relative to that file, so cwd doesn't matter for them.
   // `--path:<.zapp>` makes the generated modules importable by name.
-  const nimRoot = path.join(nativeDir, "nim", "zapp.nim");
+  const nimRoot = chooseNimRoot(root, nativeDir);
   // Link the JsonValue C-ABI provider object emitted just above. zjs.c (compiled
   // into the Nim build via {.compile.} in zapp.nim) builds/reads JsonValue trees
   // through this object's symbols. Passed here rather than a {.passL.} literal in
   // zapp.nim because the path is the USER project's .zapp dir, unknown at
   // framework-compile time.
   // --threads:on — zjs spawns a pthread per worker; ORC must be thread-safe.
+  const nimFrameworkDir = path.join(nativeDir, "nim");
   const args = ["c", "--cc:clang", "--mm:orc", "--threads:on", "-d:release", "--opt:size",
-                `--path:${zappDir}`, `--passL:${providerO}`,
+                `--path:${zappDir}`, `--path:${nimFrameworkDir}`, `--passL:${providerO}`,
                 `-o:${output}`, ...(verbose ? [] : ["--hints:off"]), nimRoot];
   const proc = Bun.spawn(["nim", ...args], { cwd: nativeDir, stdout: "inherit", stderr: "inherit" });
   const code = await proc.exited;
