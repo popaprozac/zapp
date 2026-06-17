@@ -113,6 +113,15 @@ proc newWindowOptions*(title: string): WindowOptions =
     sheetPresentation: 0, sheetDetents: 0, sheetGrabber: false,
   )
 
+# Web-inspector dev gate: resolve the CLI-emitted dev-tools flag (1 in dev, 0 in
+# prod, generated into .zapp/) to a per-window TriState. Lets an app write
+# `opts.inspectable = inspectableAuto()` without redeclaring the C-ABI importc.
+proc zapp_build_dev_tools_default(): cint {.importc, cdecl.}
+proc inspectableAuto*(): TriState =
+  ## Web Inspector on in dev, off in prod — the Nim analog of
+  ## `Zapp::inspectable_auto()`. Assign to `WindowOptions.inspectable`.
+  if zapp_build_dev_tools_default() > 0: TriState.On else: TriState.Off
+
 template opt(p: pointer): WindowOptions = cast[WindowOptions](p)
 
 # --- wopts_* C-ABI accessors (read by window.m) -----------------------------

@@ -3,10 +3,6 @@
 ## build still uses app.zc. greet is a real Nim service handler.
 import zapp
 
-# Web-inspector dev gate (C-ABI getter generated into .zapp/zapp_build_config;
-# zapp.nim declares the same importc privately, so redeclare it here).
-proc zapp_build_dev_tools_default(): cint {.importc, cdecl.}
-
 proc greet(args: JsonNode): string =
   ## Mirrors app.zc's greet — the real value (no more [object Object]).
   "Hello from Zapp!"
@@ -31,7 +27,7 @@ proc runApp(): int =
   opts.inspectorWidth = 300
   opts.inspectorCollapsed = true
   # Web Inspector parity: on in dev, off in prod (mirrors the skeleton).
-  opts.inspectable = (if zapp_build_dev_tools_default() > 0: TriState.On else: TriState.Off)
+  opts.inspectable = inspectableAuto()
   let win = createWindow(opts)
   win.setOnReady(onReady)
 
