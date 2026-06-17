@@ -8,7 +8,8 @@
 // Pipeline:
 //   1. (interactive) prompt name / framework / install-deps
 //   2. `bun create-vite` with the chosen template
-//   3. Drop in zapp/{app,build}.zc, zapp.config.ts, build/macos/.gitkeep
+//   3. Drop in zapp/{app,build}.zc + zapp/app.nim (opt-in Nim entry),
+//      zapp.config.ts, build/macos/.gitkeep
 //   4. Inject `zappWorkers()` into the template's vite.config.{ts,js}
 //   5. (optional) `bun install` in the project dir
 
@@ -205,6 +206,42 @@ import "app.zc";
 fn main() -> int {
     return run_app();
 }
+`);
+
+  // 2b. Add zapp/app.nim — the Nim native entry (opt-in via ZAPP_NATIVE_LANG=nim;
+  // macOS-only today). The idiomatic-Nim analog of app.zc: one file, no build.nim
+  // (the entry is `quit(runApp())` at top level). Harmless for the default zc
+  // build (which compiles app.zc and ignores this). Power users link/include
+  // native libs right here with Nim pragmas ({.passL.}, {.compile.}); everyone
+  // else drives frameworks/links declaratively via \`native:\` in zapp.config.ts.
+  await Bun.write(path.join(zappDir, "app.nim"), `## Your app's native entry, authored in Nim — the idiomatic analog of app.zc.
+## The Nim build (\`ZAPP_NATIVE_LANG=nim\`) compiles this; the default zc build
+## uses app.zc. \`import zapp\` re-exports the app surface (newApp, registerService,
+## newWindowOptions, createWindow, …). Service handlers are \`proc(args: JsonNode):
+## string\`, reachable from the webview via \`Services.invoke("name", …)\`.
+import zapp
+
+proc greet(args: JsonNode): string =
+  "Hello from Zapp!"
+
+proc onReady(id: cint, handle: pointer) {.cdecl.} =
+  ## Reveal the window once its webview bridge is up (no empty-window flash).
+  ## Must be a top-level cdecl proc — it's registered as a C function pointer.
+  showWindow(handle)
+
+proc runApp(): int =
+  let a = newApp("${name}", terminateAfterLastWindowClosed = true)
+  registerService("greet", greet)
+
+  var opts = newWindowOptions("${name}")
+  opts.visible = false                   # deferred show — revealed by onReady
+  opts.inspectable = inspectableAuto()   # web inspector: on in dev, off in prod
+  let win = createWindow(opts)
+  win.setOnReady(onReady)
+
+  a.run()
+
+quit(runApp())
 `);
 
   // 3. Add zapp.config.ts — typed via an \`import type\` annotation. Same
