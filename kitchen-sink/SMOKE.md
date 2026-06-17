@@ -124,6 +124,30 @@ Register/unregister a global accelerator (`CmdOrCtrl+Shift+K`). Routes through `
 
 > Note: L/M are new this cycle — `?` on both builds; both have explicit `__screen:*` / `__shortcuts:*` nim routes, so parity is expected.
 
+## N. Dock section (macOS Dock tile)
+Routes through `dock:*` (nim ported). macOS-only — no-ops on iOS/Windows.
+| Check | Expected | zc | nim |
+|---|---|---|---|
+| Badge / Clear | Dock tile shows "3" then clears | ? | ? |
+| Bounce | after 3s (switch apps) the Dock icon bounces | ? | ? |
+| Progress | a 0→100% progress bar animates on the Dock tile, then clears | ? | ? |
+| Hide / Show icon | Dock icon disappears then reappears | ? | ? |
+
+## O. Events section (app-wide pub/sub)
+| Check | Expected | zc | nim |
+|---|---|---|---|
+| Emit + receive | clicking Emit shows `received → {"n":N,…}` (same-pane round-trip over the bridge bus) | ? | ? |
+| Cross-window | with a 2nd window open, an emit from one is observed in both | ? | ? |
+
+## P. File Drop section
+Native drag-and-drop from Finder. Drop detection is in the shared webview.m; events fan out via the bus.
+| Check | Expected | zc | nim |
+|---|---|---|---|
+| Drag enter/leave | dragging a file over the window highlights the drop zone ("dragging N file(s)…"); leaving resets it | ? | ? |
+| Drop | dropping shows the absolute path(s); result line lists them | ? | ? |
+
+> Note: N/O/P are new this cycle — `?` on both builds. Dock/Events/File-drop are all ported to nim (dock:* routes, events bus, shared webview.m drop), so parity is expected.
+
 ---
 
 ## Appendix — hello-world (nim), WindowManager core
@@ -138,4 +162,4 @@ Register/unregister a global accelerator (`CmdOrCtrl+Shift+K`). Routes through `
 
 ---
 
-*Sections grow as cycles land: Workers + Sync → Dialogs + Clipboard + Notifications → Screen + Shortcuts. Each row should match zc↔nim except the ⚠️ caveats. Still to mirror from hello-world: Dock, Tray, Events, File Drop, Embedded Webview, and Theme (deferred — `App.getTheme()`'s initial value reads bootstrap config; needs a smoke to confirm nim seeds it, vs the live `THEME_CHANGED` event which is wired).*
+*Sections grow as cycles land: Workers + Sync → Dialogs + Clipboard + Notifications → Screen + Shortcuts → Dock + Events + File Drop. Each row should match zc↔nim except the ⚠️ caveats. Still to mirror from hello-world: Tray, Embedded Webview, and Theme (deferred — `App.getTheme()`'s initial value reads bootstrap config; needs a smoke to confirm nim seeds it, vs the live `THEME_CHANGED` event which is wired).*

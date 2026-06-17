@@ -12,6 +12,9 @@ import { clipboardSection } from "./clipboard";
 import { notificationsSection } from "./notifications";
 import { screenSection } from "./screen";
 import { shortcutsSection } from "./shortcuts";
+import { dockSection } from "./dock";
+import { eventsSection } from "./events";
+import { filedropSection } from "./filedrop";
 
 export const registry: Section[] = [
   homeSection,
@@ -27,4 +30,7 @@ export const registry: Section[] = [
   notificationsSection,
   screenSection,
   shortcutsSection,
+  dockSection,
+  eventsSection,
+  filedropSection,
 ];
