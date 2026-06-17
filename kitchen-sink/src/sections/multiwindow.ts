@@ -20,11 +20,12 @@ export const multiwindowSection: Section = {
     const win = Window.current();
     host.appendChild(card({
       title: "Windows & Sheets",
-      intro: "Open additional windows. On the Nim build these are gated on the WindowManager port — the result line says so.",
+      intro: "Open additional windows. Works on both builds now (the WindowManager port landed on Nim). \"Sidebar shell\" opens a second full native-chrome window — the chrome-on-Nim demo.",
       buttons: [
         { act: "plain", label: "New window" },
         { act: "small", label: "New window (small)" },
         { act: "vibrant", label: "Vibrancy (sidebar)" },
+        { act: "shell", label: "New window (sidebar shell)" },
         { act: "sheet-page", label: "Sheet (page)" },
         { act: "sheet-form", label: "Sheet (form)" },
         { act: "sheet-bottom", label: "Bottom sheet" },
@@ -36,6 +37,15 @@ export const multiwindowSection: Section = {
       Window.create({ title: "Small", width: 400, height: 300 })));
     onAct(host, "vibrant", () => open(host, "vibrant window", () =>
       Window.create({ title: "Vibrancy", width: 480, height: 360, vibrancy: "sidebar", titleBarStyle: "hiddenInset" })));
+    // A second full native-chrome shell (sidebar + inspector panes, same bundle
+    // branched on the hash). Mounts native chrome on the Nim build too — the
+    // chrome-on-Nim demo reachable from kitchen-sink itself.
+    onAct(host, "shell", () => open(host, "sidebar-shell window", () =>
+      Window.create({
+        title: "Kitchen Sink — Shell 2", width: 1000, height: 680,
+        sidebar: { url: "#sidebar-pane", width: 240 },
+        inspector: { url: "#inspector-pane", width: 300, collapsed: true },
+      })));
     onAct(host, "sheet-page", () => open(host, "page sheet", () =>
       Window.create({ title: "Settings", width: 480, height: 600, asSheetOf: win, presentation: "page", grabber: true })));
     onAct(host, "sheet-form", () => open(host, "form sheet", () =>
