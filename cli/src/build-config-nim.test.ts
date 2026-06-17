@@ -83,3 +83,23 @@ test("renderBuildConfigNim emits fs allowlist + persist-grants getters", () => {
   expect(out).toContain("proc zapp_build_fs_allowlist_json(): cstring {.exportc, cdecl.} = zappFsAllowlistJson.cstring");
   expect(out).toContain("proc zapp_build_fs_persist_grants(): bool {.exportc, cdecl.} = true");
 });
+
+import { renderInitialWindowNim } from "./build-config";
+test("renderInitialWindowNim emits empty getter when no window block", () => {
+  const out = renderInitialWindowNim(undefined);
+  expect(out).toContain("proc zapp_window_config_json*(): cstring");
+  expect(out).toContain('"".cstring');
+});
+
+test("renderInitialWindowNim emits the window JSON (windowOptsApplyJson shape)", () => {
+  const out = renderInitialWindowNim({
+    title: "Kitchen Sink", width: 1100, height: 700,
+    sidebar: { url: "#sidebar-pane", width: 240 },
+    inspector: { url: "#inspector-pane", width: 300, collapsed: true },
+  });
+  expect(out).toContain("zapp_window_config_json");
+  expect(out).toContain('\\"title\\":\\"Kitchen Sink\\"');
+  expect(out).toContain('\\"sidebar\\":{\\"url\\":\\"#sidebar-pane\\"');
+  expect(out).toContain('\\"inspector\\":');
+  expect(out).toContain('\\"collapsed\\":true');
+});

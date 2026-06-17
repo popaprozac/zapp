@@ -1092,7 +1092,7 @@ async function buildNativeNim(
   // benign inside the generated Nim string literal.
   const assetRoot = path.resolve(root, config.assetDir).replace(/\\/g, "/");
 
-  const { renderBuildConfigNim, renderBootstrapNim, renderHeadlessNim } = await import("./build-config");
+  const { renderBuildConfigNim, renderBootstrapNim, renderHeadlessNim, renderInitialWindowNim } = await import("./build-config");
   const { resolveBootstrapDir } = await import("./paths");
   const { bundleWebviewBootstrapRaw, bundleWorkerBootstrapRaw } = await import(
     path.join(resolveBootstrapDir(), "codegen.ts")
@@ -1135,6 +1135,13 @@ async function buildNativeNim(
   // spawn call; other engines aren't wired in the Nim path.
   const headlessNim = renderHeadlessNim(config.headless);
   await fs.writeFile(path.join(zappDir, "zapp_headless.nim"), headlessNim, "utf-8");
+
+  // Initial-window config module (S1): exposes the optional `window` block from
+  // zapp.config.ts as windowOptsApplyJson-shaped JSON via zapp_window_config_json().
+  // Generated unconditionally; "" when no `window` block. Harmless until the Nim
+  // build root imports it (S2).
+  const initialWindowNim = renderInitialWindowNim(config.window);
+  await fs.writeFile(path.join(zappDir, "zapp_initial_window.nim"), initialWindowNim, "utf-8");
 
   // Stage worker scripts where zjs.c's filesystem fallback looks for them.
   // The Vite plugin bundles workers to dist/_workers/, but zjs.c's

@@ -496,6 +496,32 @@ export interface WebviewPreferences {
   minimumFontSize?: number;
 }
 
+export interface InitialWindowPaneConfig {
+  /** Pane entry URL/route (e.g. "#sidebar-pane"). Empty = no pane. */
+  url?: string;
+  /** macOS NSVisualEffectView material. Default "sidebar". */
+  material?: string;
+  width?: number;
+  minWidth?: number;
+  maxWidth?: number;
+  /** User can collapse via system behaviors. Default true. */
+  collapsible?: boolean;
+  /** Start collapsed. Default false. */
+  collapsed?: boolean;
+}
+
+export interface InitialWindowConfig {
+  title?: string;
+  width?: number;
+  height?: number;
+  /** Native sidebar (leading NSSplitViewItem) pane. */
+  sidebar?: InitialWindowPaneConfig;
+  /** Native inspector (trailing NSSplitViewItem) pane. */
+  inspector?: InitialWindowPaneConfig;
+  /** Pre-stringified toolbar JSON ({style, items}) — opaque; parsed natively. */
+  toolbarJson?: string;
+}
+
 export interface ZappConfig {
   name: string;
   identifier?: string;
@@ -657,6 +683,13 @@ export interface ZappConfig {
    * ```
    */
   webviewPreferences?: WebviewPreferences;
+
+  /**
+   * Initial main-window config. Applies to the **Nim build** only (the zc build
+   * is driven by app.zc's run_app). Each field optional; absent → skeleton
+   * defaults. Migration-era bridge toward config-as-source.
+   */
+  window?: InitialWindowConfig;
 
   /**
    * Extra native source files to compile into the app binary. Use this
