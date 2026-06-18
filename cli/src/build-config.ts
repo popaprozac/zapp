@@ -267,12 +267,25 @@ export function renderHeadlessNim(headless: Record<string, any> | undefined): st
   for (const [id, v] of Object.entries(headless ?? {})) {
     const engine = typeof v === "string" ? undefined : v?.engine;
     if (engine !== "zjs") continue; // zjs only for the perf gate
+    const engineId = engineNameToId(engine);                  // zjs => 7
+    const name = typeof v === "string" ? "" : (v?.name ?? "");
+    const escapedName = JSON.stringify(name).slice(1, -1);     // strip surrounding quotes
+    const url = `/_workers/_headless_${id}.mjs`;
+    // REGISTER (engine + display name) before SPAWNING — the .zc path's
+    // zapp_start_headless_worker_full does both. Without the registry entry,
+    // Workers.list() is empty AND the router's Workers.send can't resolve the
+    // worker to deliver to, so the headless worker is silently unreachable.
     lines.push(
-      `  discard zjs_worker_create(cstring"/_workers/_headless_${id}.mjs", cstring"", cstring"h-${id}")`,
+      `  discard zapp_worker_registry_add_full_with_engine_and_name(cstring"h-${id}", cstring"", cint(0), cstring"${url}", cint(${engineId}), cstring"${escapedName}")`,
+    );
+    lines.push(
+      `  discard zjs_worker_create(cstring"${url}", cstring"", cstring"h-${id}")`,
     );
   }
   return `## AUTO-GENERATED (Nim). zjs headless workers.
 proc zjs_worker_create(scriptUrl, ownerId, workerId: cstring): bool {.importc, cdecl.}
+proc zapp_worker_registry_add_full_with_engine_and_name(workerId, ownerId: cstring,
+    shared: cint, scriptUrl: cstring, engine: cint, name: cstring): cint {.importc, cdecl.}
 proc zapp_start_headless_workers*() =
 ${lines.length ? lines.join("\n") : "  discard"}
 `;

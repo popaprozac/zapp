@@ -35,14 +35,18 @@ test("renderBootstrapNim emits webview + worker bootstrap getters, backed by let
 
 test("renderHeadlessNim emits zjs_worker_create for zjs entries, skips non-zjs", () => {
   const out = renderHeadlessNim({
-    "bench-zjs": { script: "src/bench-worker.ts", engine: "zjs" },
+    "bench-zjs": { script: "src/bench-worker.ts", name: "bench", engine: "zjs" },
     "bench-bare-jsc": { script: "src/bench-worker.ts", engine: "bare-jsc" },
   });
-  // zjs entry → spawn call with the dist/_workers URL + h-<id> worker id.
+  // zjs entry → registry registration (engine 7 + display name) THEN spawn,
+  // both keyed by h-<id> (matches the .zc zapp_start_headless_worker_full path).
+  expect(out).toContain(
+    'discard zapp_worker_registry_add_full_with_engine_and_name(cstring"h-bench-zjs", cstring"", cint(0), cstring"/_workers/_headless_bench-zjs.mjs", cint(7), cstring"bench")',
+  );
   expect(out).toContain(
     'discard zjs_worker_create(cstring"/_workers/_headless_bench-zjs.mjs", cstring"", cstring"h-bench-zjs")',
   );
-  // non-zjs entry → no spawn call.
+  // non-zjs entry → neither registration nor spawn.
   expect(out).not.toContain("bench-bare-jsc");
   expect(out).toContain("proc zapp_start_headless_workers*()");
 });
