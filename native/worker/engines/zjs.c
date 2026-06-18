@@ -1642,6 +1642,12 @@ static void* zjs_worker_thread(void* arg) {
 #endif
     slot->incarnation = 0;
 
+    // Initialize Nim foreign-thread GC for this worker pthread so the Nim service
+    // registry + handlers can run inline here (service_invoke_native). Extern;
+    // the zc build provides a no-op stub (zc has no GC).
+    extern void zapp_worker_thread_gc_init(void);
+    zapp_worker_thread_gc_init();
+
     while (1) {
         slot->incarnation++;
         slot->active = 1;

@@ -198,6 +198,10 @@ fn service_invoke_sync(app_ptr: void*, method: string, args_json: string) -> str
     return "";
 }
 
+// zjs.c calls this once per worker thread to set up Nim foreign-thread GC.
+// No-op in the zc build (zc has no managed GC).
+fn zapp_worker_thread_gc_init() -> void { }
+
 // Get bindings manifest as JSON (for bootstrap injection).
 fn service_get_manifest_json() -> string {
     raw {

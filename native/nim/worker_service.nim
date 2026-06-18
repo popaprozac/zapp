@@ -16,6 +16,11 @@ const okResult = "{\"ok\":1}".cstring   # const cstring: zero GC interaction, gc
 proc benchNoop(app: pointer, args: pointer): cstring {.cdecl, gcsafe.} = okResult
 proc benchEcho(app: pointer, args: pointer): cstring {.cdecl, gcsafe.} = okResult
 
+proc zapp_worker_thread_gc_init*() {.exportc, cdecl.} =
+  ## Called by zjs.c ONCE on each worker pthread before its message loop, so the
+  ## thread can run Nim GC code (service handlers alloc on this thread's heap).
+  setupForeignThreadGc()
+
 proc registerWorkerServices*() =
   gServices[0] = WorkerServiceEntry(name: cstring"noop", fn: benchNoop)
   gServices[1] = WorkerServiceEntry(name: cstring"echo", fn: benchEcho)
