@@ -45,10 +45,11 @@ import window
 import service
 import appconfig
 import coretypes
-# worker_service provides the {.exportc.} side-effect symbol service_invoke_native
-# (the zjs worker→native seam zjs.c calls) and registerWorkerServices() (called
-# from app.nim's run() before the workers spawn). No Nim symbol from it is
-# referenced in THIS module, so silence UnusedImport.
+# worker_service provides the {.exportc.} side-effect symbols service_invoke_native
+# (the zjs worker→native seam zjs.c calls) and zapp_worker_thread_gc_init (called
+# by zjs.c per worker pthread). buildWorkerServiceSnapshot is called from app.nim's
+# run() before workers spawn. No Nim symbol from it is referenced in THIS module,
+# so silence UnusedImport.
 {.push warning[UnusedImport]: off.}
 import worker_service
 # callbacks provides the {.exportc.} window-event dispatcher + registries
