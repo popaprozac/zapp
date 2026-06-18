@@ -236,8 +236,8 @@ proc runApp(): int =
   var opts = newWindowOptions("${name}")
   opts.visible = false                   # deferred show — revealed by onReady
   opts.inspectable = inspectableAuto()   # web inspector: on in dev, off in prod
-  let win = createWindow(opts)
-  win.setOnReady(onReady)
+  let win = a.window.create(opts)
+  win.onReady(onReady)
 
   a.run()
 

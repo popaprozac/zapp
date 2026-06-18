@@ -111,7 +111,7 @@ proc greet(app: App, args: JsonNode): string = "Hello from Zapp!"
 import apptypes   # WindowManager
 proc create*(wm: WindowManager, o: WindowOptions): Window = createWindow(o)
 ```
-- [ ] **Step 2: Rename `setOnReady` → `onReady`** (mirror zc `on_ready`; in Nim `onReady` ≡ `on_ready`). Keep `show*`. Update the one router/app/scaffold/doc reference.
+- [x] **Step 2: Rename to `onReady`** (mirror zc `on_ready`; in Nim `onReady` ≡ `on_ready`). Keep `show*`. Update the one router/app/scaffold/doc reference.
 - [ ] **Step 3: Convert kitchen-sink app.nim + scaffold:** `let win = a.window.create(opts)` + `win.onReady(onReady)`. (`createWindow`/`allocSlot` stay as primitives used by the router — unchanged.)
 - [ ] **Step 4: Build nim + zc + tsc + cli tests** → all green.
 - [ ] **Step 5: Commit.** `feat(nim): app.window.create + win.onReady (Shape A)`.

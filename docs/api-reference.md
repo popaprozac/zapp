@@ -1542,7 +1542,7 @@ service — first-class native extensibility, no C shim required.
 `win.show()`. Windows are `visible` by default, so the simplest path is to
 `discard createWindow(opts)` and let it paint as content loads. To avoid the
 brief empty-window flash, set `opts.visible = false` and reveal the window once
-its webview bridge is ready with `setOnReady` — the Nim analog of `win.on_ready`:
+its webview bridge is ready with `onReady` — the Nim analog of `win.on_ready`:
 
 ```nim
 proc onReady(id: cint, handle: pointer) {.cdecl.} =
@@ -1552,13 +1552,13 @@ proc runApp(): int =
   let a = newApp("my-app")
   var opts = newWindowOptions("My App")
   opts.visible = false          # deferred show — no flash
-  let win = createWindow(opts)
-  win.setOnReady(onReady)       # cb fires when the bridge signals ready
+  let win = a.window.create(opts)
+  win.onReady(onReady)          # cb fires when the bridge signals ready
   a.run()
 ```
 
 The callback must be a top-level `{.cdecl.}` proc (it's registered as a C
-function pointer). `setOnReady` is independent of visibility — it's a
+function pointer). `onReady` is independent of visibility — it's a
 general "bridge ready" hook; omit it and the window simply shows at
 create time.
 

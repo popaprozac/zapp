@@ -15,8 +15,8 @@ proc onReady(id: cint, handle: pointer) {.cdecl.} =
   Window(id: id, handle: handle).show()
 
 proc runApp(): int =
-  let a = newApp("kitchen-sink", terminateAfterLastWindowClosed = true)
-  a.service.add("greet", greet)
+  let app = newApp("kitchen-sink", terminateAfterLastWindowClosed = true)
+  app.service.add("greet", greet)
 
   var opts = newWindowOptions("Kitchen Sink")
   opts.visible = false   # deferred show — revealed by onReady when content can paint
@@ -29,9 +29,9 @@ proc runApp(): int =
   opts.inspectorCollapsed = true
   # Web Inspector parity: on in dev, off in prod (mirrors the skeleton).
   opts.inspectable = inspectableAuto()
-  let win = createWindow(opts)
-  win.setOnReady(onReady)
+  let win = app.window.create(opts)
+  win.onReady(onReady)
 
-  a.run()
+  app.run()
 
 quit(runApp())

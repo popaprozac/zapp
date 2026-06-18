@@ -14,6 +14,8 @@
 import coretypes
 export coretypes   # WindowOptions.inspectable is a coretypes.TriState
 import std/json
+import apptypes
+export apptypes    # WindowManager visible to callers of window.nim
 
 type
   TitleBarStyle* {.pure.} = enum   ## NSWindow title-bar style (window.m tag 0/1/2)
@@ -201,7 +203,7 @@ proc darwin_window_numeric_id_for_string(wid: cstring): int32 {.importc, cdecl.}
 type
   Window* = object
     ## A created window — its monotonic numeric id + the opaque NSWindow* handle.
-    ## Methods (`show`, `setOnReady`, …) hang off this so apps write `win.show()`,
+    ## Methods (`show`, `onReady`, …) hang off this so apps write `win.show()`,
     ## mirroring app.zc's `Window{id, handle}`.
     id*: int32
     handle*: pointer
@@ -245,6 +247,11 @@ proc allocSlot*(): int32 =
   result = gNextWindowId
   inc gNextWindowId
 
+proc create*(wm: WindowManager, o: WindowOptions): Window =
+  ## app.window.create(opts) — mirrors zc app.window.create. Delegates to the
+  ## createWindow primitive (also used directly by the router for __window:create).
+  createWindow(o)
+
 # --- on-ready + show (port of Window.on_ready / Window.show) -----------------
 # The webview posts {t:4,m:"ready"} once its bootstrap bridge is up; the router
 # calls zapp_window_trigger_on_ready (router.nim:485), which invokes the cb the
@@ -255,12 +262,13 @@ type ReadyProc* = proc(id: cint, handle: pointer) {.cdecl.}
 proc zapp_window_set_on_ready(id: cint, handle: pointer, cb: ReadyProc) {.importc, cdecl.}
 proc darwin_window_show(handle: pointer) {.importc, cdecl.}
 
-proc setOnReady*(win: Window, cb: ReadyProc) =
+proc onReady*(win: Window, cb: ReadyProc) =
   ## Register `cb` to fire once the window's webview bridge is ready — the Nim
-  ## analog of `win.on_ready(cb)`. Pair with `opts.visible = false` to defer the
-  ## first paint until content can render (no empty-window flash). `cb` must be a
-  ## top-level `{.cdecl.}` proc taking `(id: cint, handle: pointer)`; reconstruct
-  ## the window inside it with `Window(id: id, handle: handle).show()`.
+  ## analog of `win.on_ready(cb)` (mirrors zc `win.on_ready`). Pair with
+  ## `opts.visible = false` to defer the first paint until content can render
+  ## (no empty-window flash). `cb` must be a top-level `{.cdecl.}` proc taking
+  ## `(id: cint, handle: pointer)`; reconstruct the window inside it with
+  ## `Window(id: id, handle: handle).show()`.
   zapp_window_set_on_ready(win.id.cint, win.handle, cb)
 
 proc show*(win: Window) =

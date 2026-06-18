@@ -81,8 +81,8 @@ proc runApp(): int =
   opts.visible = false
   opts.sidebarUrl = "#sidebar"
   opts.inspectable = inspectableAuto()
-  let win = createWindow(opts)
-  win.setOnReady(onReady)
+  let win = app.window.create(opts)
+  win.onReady(onReady)
   setDockBadge("3")
   app.run()
 
@@ -104,7 +104,7 @@ quit(runApp())
 | **Refactor cost now** | higher — add `App.window/service/…` manager objects, rethread handler sig | none (already there) |
 
 ### Nim-specific facts that matter
-- **Nim identifiers are case/underscore-insensitive** (after the first char): `onReady` ≡ `on_ready`, `setBadge` ≡ `set_badge`. So zc's snake_case method names work *verbatim* in Nim app code — **the naming divergence (`setOnReady` vs `on_ready`, etc.) essentially evaporates under Shape A**; both spellings compile to the same call. We just standardize the *canonical* spelling in docs.
+- **Nim identifiers are case/underscore-insensitive** (after the first char): `onReady` ≡ `on_ready`, `setBadge` ≡ `set_badge`. So zc's snake_case method names work *verbatim* in Nim app code — **the naming divergence (old `on_ready` naming, etc.) essentially evaporates under Shape A**; both spellings compile to the same call. We just standardize the *canonical* spelling in docs.
 - **UFCS** means `app.window.create(opts)` is just `create(app.window, opts)` — no OO machinery needed; `app.window` is a plain field holding a small manager object (same as zc's `WindowManager` field).
 - **Handler `app` param**: Shape A threads it (explicit, testable); Shape B would add a module-global `activeApp` so a free-proc handler can still reach windows/managers. Threading is cleaner.
 
@@ -120,7 +120,7 @@ Pick B only if we explicitly want to lean into a Nim-native re-shape and accept 
 1. `App` gains manager fields: `window`, `service`, and (as they're ported) `dock`/`tray`/`menu`/`dialog`/`notification`/`sync`/`fs`/`security` — each a thin Nim object whose methods call the existing procs.
 2. Service handler signature → `proc(app: App, args: JsonNode): string`; `registerService` becomes `app.service.add`.
 3. `newApp` accepts an `AppConfig` (surface `inspectable`/`maxWorkers`/qjsStackSize) — keep the `newApp(name)` shorthand as a convenience overload.
-4. `createWindow`→`app.window.create`; `Window.show/setOnReady` stay methods (already are).
+4. `createWindow`→`app.window.create`; `Window.show/onReady` stay methods (already are).
 5. Update kitchen-sink `app.nim`, the `zapp init` scaffold, and docs. Both builds + tsc + tests green.
 6. (Bundle in the orthogonal fixes: default-value bugs, retire `registerSkeletonServices`.)
 

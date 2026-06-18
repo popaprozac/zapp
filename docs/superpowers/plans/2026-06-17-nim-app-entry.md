@@ -310,7 +310,7 @@ EOF
 
 ## Out of scope (this cycle)
 
-- **`on_ready` / window-ready callback in Nim** (`win.on_ready` in app.zc): the C-ABI exists (`callbacks.nim` `zapp_window_set_on_ready/trigger`), but `window.nim` has no app-facing wrapper. The port sets `visible=true` instead. Add `window.nim setOnReady*` + a `show`/ready path as a fast follow-up if the flash matters.
+- **`on_ready` / window-ready callback in Nim** (`win.on_ready` in app.zc): the C-ABI exists (`callbacks.nim` `zapp_window_set_on_ready/trigger`), but `window.nim` has no app-facing wrapper. The port sets `visible=true` instead. Add `window.nim onReady*` + a `show`/ready path as a fast follow-up if the flash matters.
 - **hello-world `app.nim`** — port after kitchen-sink proves the path.
 - **nim→js services / Nim-sourced TS client codegen** — future spike (JS backend has no C-FFI/threads; pure-logic subset only).
 - **Flipping the default to Nim / retiring Zen-C** — later cycle, once Nim-app parity is proven across apps.
