@@ -1053,10 +1053,23 @@ interface CompileOptions {
   config?: import("./config").ResolvedConfig;
 }
 
-/** Pick the Nim compile root: the app's own zapp/app.nim if it exists, else the skeleton. */
-export function chooseNimRoot(root: string, nativeDir: string): string {
+/**
+ * Resolve the Nim compile root — the app's own `zapp/app.nim`, which is REQUIRED
+ * (like `app.zc` for the zc build, and like every other framework's native
+ * entry). Throws a clear, actionable error when absent — there is no skeleton
+ * fallback.
+ */
+export function chooseNimRoot(root: string): string {
   const appNim = path.join(root, "zapp", "app.nim");
-  return existsSync(appNim) ? appNim : path.join(nativeDir, "nim", "zapp.nim");
+  if (!existsSync(appNim)) {
+    throw new Error(
+      `[zapp] no native entry: ${appNim} not found.\n` +
+      `The Nim build requires a zapp/app.nim (the app's native entry point). ` +
+      `Run \`zapp init\` to scaffold one, or create zapp/app.nim — see the ` +
+      `"Authoring an app in Nim" section of docs/api-reference.md.`,
+    );
+  }
+  return appNim;
 }
 
 /**
@@ -1098,7 +1111,7 @@ async function buildNativeNim(
   // benign inside the generated Nim string literal.
   const assetRoot = path.resolve(root, config.assetDir).replace(/\\/g, "/");
 
-  const { renderBuildConfigNim, renderBootstrapNim, renderHeadlessNim, renderInitialWindowNim } = await import("./build-config");
+  const { renderBuildConfigNim, renderBootstrapNim, renderHeadlessNim } = await import("./build-config");
   const { resolveBootstrapDir } = await import("./paths");
   const { bundleWebviewBootstrapRaw, bundleWorkerBootstrapRaw } = await import(
     path.join(resolveBootstrapDir(), "codegen.ts")
@@ -1142,13 +1155,6 @@ async function buildNativeNim(
   // spawn call; other engines aren't wired in the Nim path.
   const headlessNim = renderHeadlessNim(config.headless);
   await fs.writeFile(path.join(zappDir, "zapp_headless.nim"), headlessNim, "utf-8");
-
-  // Initial-window config module (S1): exposes the optional `window` block from
-  // zapp.config.ts as windowOptsApplyJson-shaped JSON via zapp_window_config_json().
-  // Generated unconditionally; "" when no `window` block. Harmless until the Nim
-  // build root imports it (S2).
-  const initialWindowNim = renderInitialWindowNim(config.window);
-  await fs.writeFile(path.join(zappDir, "zapp_initial_window.nim"), initialWindowNim, "utf-8");
 
   // Stage worker scripts where zjs.c's filesystem fallback looks for them.
   // The Vite plugin bundles workers to dist/_workers/, but zjs.c's
@@ -1216,7 +1222,7 @@ async function buildNativeNim(
   // the user project — same as the zc sources. `{.compile.}` paths inside
   // zapp.nim resolve relative to that file, so cwd doesn't matter for them.
   // `--path:<.zapp>` makes the generated modules importable by name.
-  const nimRoot = chooseNimRoot(root, nativeDir);
+  const nimRoot = chooseNimRoot(root);
   // Link the JsonValue C-ABI provider object emitted just above. zjs.c (compiled
   // into the Nim build via {.compile.} in zapp.nim) builds/reads JsonValue trees
   // through this object's symbols. Passed here rather than a {.passL.} literal in

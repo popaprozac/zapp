@@ -34,7 +34,7 @@
 {.compile("../platform/darwin/sync.m", "-fobjc-arc").}
 
 import std/os          # parentDir for the zjs.c {.compile.}/{.passL.} paths below
-import std/json        # parseJson — initial window from config (zapp_window_config_json)
+import std/json        # re-exported below (`export json`) for app.nim's JsonNode service handlers
 import app
 import window
 # service/appconfig/coretypes are imported here so `import zapp` can re-export
@@ -86,10 +86,6 @@ import worker
 {.push warning[UnusedImport]: off.}
 import zapp_build_config, zapp_bootstrap
 {.pop.}
-# Generated initial-window config — exposes zapp_window_config_json() (the
-# zapp.config.ts `window` block as windowOptsApplyJson-shaped JSON, "" when
-# absent). Referenced at boot below, so a normal import (not side-effect-only).
-import zapp_initial_window
 
 # Re-export the app-facing surface so an app's `app.nim` gets everything via
 # `import zapp` (newApp/run, AppConfig, WindowOptions/newWindowOptions/createWindow,
@@ -242,47 +238,7 @@ var zapp_log_level {.exportc.}: cint = 0
 # native/worker/registry.zc. The former 5 stubs (list_json→"[]", display_name→"",
 # fmt_compact_ms→"", record_failure→0, get_window_state→0) are gone.
 
-# ---------------------------------------------------------------------------
-# Boot: register services, open one window, then enter the Cocoa run loop.
-# ---------------------------------------------------------------------------
-
-# zapp_build_dev_tools_default — CLI-emitted dev-tools flag (1 in dev, 0 in
-# prod), defined in the generated zapp_build_config module (exportc, so it is
-# imported as a C symbol, not by Nim name). Used to gate the Web Inspector
-# dev-vs-prod, mirroring the zc's `Auto` resolution (app.zc:55).
-proc zapp_build_dev_tools_default(): cint {.importc, cdecl.}
-# zapp_build_name — the app's display name (zapp.config.ts `name`), generated into
-# zapp_build_config (exportc). Drives newApp -> the app/menu name, matching the zc
-# build's AppConfig.name. Empty falls back to the skeleton name.
-proc zapp_build_name(): cstring {.importc, cdecl.}
-
-proc zappDefaultMain*(): int =
-  ## The skeleton boot — the fallback when an app provides no app.nim.
-  ## Run only when zapp.nim is itself the compiled root (see `when isMainModule`
-  ## below); importing `zapp` from an app's app.nim must NOT trigger this.
-  let appName = $zapp_build_name()
-  let a = newApp(if appName.len > 0: appName else: "Zapp Nim Skeleton")
-  registerSkeletonServices()   # wire greet into the service registry (app.nim)
-  # Initial window: prefer the app's config (CLI-generated zapp_window_config_json,
-  # the `window` block in zapp.config.ts) parsed via windowOptsApplyJson; else the
-  # skeleton defaults. The zc build is driven by app.zc instead.
-  let windowJson = $zapp_window_config_json()
-  var opts: WindowOptions
-  if windowJson.len > 0:
-    opts = newWindowOptions("Zapp")
-    windowOptsApplyJson(opts, parseJson(windowJson))
-  else:
-    opts = newWindowOptions("Zapp v2 (Nim)")
-    opts.width = 900
-    opts.height = 650
-  # Web Inspector: window.m enables WKWebView.inspectable when wopts_inspectable()
-  # > 0. Mirror the zc `Auto` resolution — gate on the build's dev-tools flag
-  # (app.zc:55): On in dev => inspectable (Safari → Develop → this app), Off in
-  # prod. (TriState.Unset = -1 would read as off, so resolve to On/Off here.)
-  opts.inspectable = (if zapp_build_dev_tools_default() > 0: TriState.On else: TriState.Off)
-  discard createWindow(opts)
-  a.run()
-
-when isMainModule:
-  ## Compiled directly (no app.nim) → run the skeleton.
-  quit(zappDefaultMain())
+# No boot here. An app's own `zapp/app.nim` is the REQUIRED Nim entry — the CLI
+# compiles it as the build root (and errors if it's absent). zapp.nim is purely
+# the importable framework umbrella (the exports above). This mirrors the zc
+# build, where `app.zc` is likewise required (no skeleton fallback).
