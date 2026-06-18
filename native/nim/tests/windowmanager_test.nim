@@ -16,30 +16,30 @@ proc darwin_window_numeric_id_for_string(wid: cstring): int32 {.exportc, cdecl.}
   else: -1'i32
 
 block:
-  let a = createWindow(newWindowOptions("a"))
-  let b = createWindow(newWindowOptions("b"))
+  let a = createWindow(WindowOptions(title: "a"))
+  let b = createWindow(WindowOptions(title: "b"))
   doAssert b.id == a.id + 1, "plain windows must consume exactly one id each"
 
 block:
-  let o = newWindowOptions("sb")
+  let o = WindowOptions(title: "sb")
   o.sidebarUrl = "#sidebar-pane"
   let w = createWindow(o)
   doAssert o.sidebarNumericId == w.id + 1, "sidebar slot must follow the window id"
-  let after = createWindow(newWindowOptions("after"))
+  let after = createWindow(WindowOptions(title: "after"))
   doAssert after.id == w.id + 2, "sidebar must consume a second id from the same space"
 
 block:
-  let o = newWindowOptions("both")
+  let o = WindowOptions(title: "both")
   o.sidebarUrl = "#sidebar-pane"
   o.inspectorUrl = "#inspector-pane"
   let w = createWindow(o)
   doAssert o.sidebarNumericId == w.id + 1
   doAssert o.inspectorNumericId == w.id + 2
-  let after = createWindow(newWindowOptions("after2"))
+  let after = createWindow(WindowOptions(title: "after2"))
   doAssert after.id == w.id + 3, "sidebar+inspector consume two extra ids"
 
 block:
-  let o = newWindowOptions("plain")
+  let o = WindowOptions(title: "plain")
   discard createWindow(o)
   doAssert o.sidebarNumericId == -1 and o.inspectorNumericId == -1
 
@@ -49,7 +49,7 @@ block:
   doAssert s2 == s1 + 1, "allocSlot must be monotonic"
 
 block:
-  let o = newWindowOptions("base")
+  let o = WindowOptions(title: "base")
   o.width = 100; o.height = 100
   let a = parseJson("""{
     "title":"Hi","width":800.5,"height":600,"vibrancy":"sidebar",
@@ -74,7 +74,7 @@ block:
   doAssert o.sheetGrabber == true
 
 block:
-  let o = newWindowOptions("def")
+  let o = WindowOptions(title: "def")
   doAssert o.titleBarStyle == TitleBarStyle.Unset, "default titleBarStyle must be Unset (use chrome default)"
   windowOptsApplyJson(o, parseJson("{}"))
   doAssert o.title == "def" and o.asSheetOfId == -1'i32
@@ -82,5 +82,21 @@ block:
   windowOptsApplyJson(o, parseJson("""{"titleBarStyle":"default"}"""))
   doAssert o.titleBarStyle == TitleBarStyle.Default,
     "explicit 'default' must force Default (overrides the split-window chrome default)"
+
+block:
+  # Partial object-literal construction must fill the field defaults — the
+  # load-bearing guarantee (window.m clamps panes to wopts_sidebar_max_width
+  # literally, so a 0 default = invisible sidebar, #460). Replaces the old
+  # newWindowOptions defaults.
+  let o = WindowOptions(title: "x")
+  doAssert o.width == 1200'i32 and o.height == 800'i32
+  doAssert o.visible == true and o.acceptFirstMouse == true and o.autoCenter == false
+  doAssert o.sidebarWidth == 260'i32 and o.sidebarMaxWidth == 400'i32
+  doAssert o.inspectorWidth == 280'i32 and o.inspectorMaxWidth == 400'i32
+  doAssert o.sidebarCollapsible == true and o.inspectorCollapsible == true
+  doAssert o.numericIdPrealloc == -1'i32 and o.asSheetOfId == -1'i32
+  doAssert o.inspectable == TriState.Unset
+  doAssert o.titleBarStyle == TitleBarStyle.Unset, "Unset (ord 3) must be the default, not Default"
+  doAssert o.trafficLights.close == ButtonState.Enabled
 
 echo "windowmanager ok"

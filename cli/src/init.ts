@@ -219,7 +219,7 @@ fn main() -> int {
   await Bun.write(path.join(zappDir, "app.nim"), `## Your app's native entry, authored in Nim — the idiomatic analog of app.zc.
 ## The Nim build (\`ZAPP_NATIVE_LANG=nim\`) compiles this; the default zc build
 ## uses app.zc. \`import zapp\` re-exports the app surface (newApp, registerService,
-## newWindowOptions, createWindow, …). Service handlers are \`proc(args: JsonNode):
+## WindowOptions, createWindow, …). Service handlers are \`proc(args: JsonNode):
 ## string\`, reachable from the webview via \`Services.invoke("name", …)\`.
 import zapp
 
@@ -235,10 +235,11 @@ proc runApp(): int =
   let a = newApp("${name}", terminateAfterLastWindowClosed = true)
   a.service.add("greet", greet)
 
-  var opts = newWindowOptions("${name}")
-  opts.visible = false                   # deferred show — revealed by onReady
-  opts.inspectable = inspectableAuto()   # web inspector: on in dev, off in prod
-  let win = a.window.create(opts)
+  let win = a.window.create(WindowOptions(
+    title: "${name}",
+    visible: false,                   # deferred show — revealed by onReady
+    inspectable: inspectableAuto(),   # web inspector: on in dev, off in prod
+  ))
   win.onReady(onReady)
 
   a.run()

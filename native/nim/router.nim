@@ -748,7 +748,7 @@ proc routeMessage*(msg: string, windowId: int) =
     return
 
   if f.m == "__window:create":
-    let o = newWindowOptions("Zapp")
+    let o = WindowOptions(title: "Zapp")
     if not f.a.isNil: windowOptsApplyJson(o, f.a)
     let newId = createWindow(o).id
     sendInvokeResponse(windowId, f.id, true, "{\"windowId\":\"win-" & $newId & "\"}")

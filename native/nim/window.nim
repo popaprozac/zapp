@@ -41,91 +41,68 @@ type
     # --- set by the skeleton ---
     title*: string
     url*: string
-    width*, height*: int32
+    width*: int32 = 1200
+    height*: int32 = 800
     x*, y*: int32
     autoCenter*: bool
-    visible*: bool
-    resizable*: bool
-    closable*: bool
-    minimizable*: bool
-    maximizable*: bool
+    visible*: bool = true
+    resizable*: bool = true
+    closable*: bool = true
+    minimizable*: bool = true
+    maximizable*: bool = true
     borderless*: bool
     transparent*: bool
     alwaysOnTop*: bool
     hidden*: bool
     fullscreen*: bool
-    acceptFirstMouse*: bool
+    acceptFirstMouse*: bool = true
     backgroundColor*: string
-    numericIdPrealloc*: int32
-    inspectable*: TriState        # unset/off/on; window.m treats `> 0` as on
+    numericIdPrealloc*: int32 = -1
+    inspectable*: TriState = TriState.Unset  # unset/off/on; window.m treats `> 0` as on
     frameAutosaveName*: string
     vibrancy*: string
     # --- title-bar style + traffic-light buttons ---
-    titleBarStyle*: TitleBarStyle
-    trafficLights*: TrafficLights
+    # titleBarStyle MUST be explicit: Unset is ord 3 (appended last), NOT the
+    # enum's zero value (Default=0). Without `= TitleBarStyle.Unset` an
+    # unspecified titleBarStyle would default to Default and re-break the
+    # split-window title-bar logic (window.m only applies the sidebar chrome
+    # default for tbs==3/Unset).
+    titleBarStyle*: TitleBarStyle = TitleBarStyle.Unset
+    trafficLights*: TrafficLights = TrafficLights(
+      close: ButtonState.Enabled, minimize: ButtonState.Enabled, zoom: ButtonState.Enabled)
     # --- sidebar (feature unused by the skeleton; "" url => never built) ---
+    # Sidebar/inspector geometry defaults MUST stay non-zero: window.m sets
+    # NSSplitViewItem.maximumThickness = wopts_sidebar_max_width(opts) literally,
+    # so a 0 default clamps the pane to ZERO width (invisible sidebar — #460).
     sidebarUrl*: string
     sidebarMaterial*: string
     sidebarBackgroundColor*: string
-    sidebarWidth*, sidebarMinWidth*, sidebarMaxWidth*: int32
-    sidebarCollapsible*, sidebarCollapsed*: bool
-    sidebarCanResize*: bool
-    sidebarNumericId*: int32
+    sidebarWidth*: int32 = 260
+    sidebarMinWidth*: int32 = 180
+    sidebarMaxWidth*: int32 = 400
+    sidebarCollapsible*: bool = true
+    sidebarCollapsed*: bool
+    sidebarCanResize*: bool = true
+    sidebarNumericId*: int32 = -1
     # --- inspector pane (feature unused; "" url => never built) ---
     inspectorUrl*: string
     inspectorMaterial*: string
     inspectorBackgroundColor*: string
-    inspectorWidth*, inspectorMinWidth*, inspectorMaxWidth*: int32
-    inspectorCollapsible*, inspectorCollapsed*: bool
-    inspectorCanResize*: bool
-    inspectorNumericId*: int32
+    inspectorWidth*: int32 = 280
+    inspectorMinWidth*: int32 = 180
+    inspectorMaxWidth*: int32 = 400
+    inspectorCollapsible*: bool = true
+    inspectorCollapsed*: bool
+    inspectorCanResize*: bool = true
+    inspectorNumericId*: int32 = -1
     # --- toolbar (feature unused; "" json => never attached) ---
     toolbarJson*: string
-    # --- runtime Window.create extras (JS-driven; the skeleton boot never sets these) ---
-    asSheetOfId*: int32          # -1 = not a sheet; else parent window numeric id
-    sheetPresentation*: int32    # iOS sheet style 0=page/1=form/2=fullscreen/3=bottomSheet (macOS no-op)
-    sheetDetents*: int32         # iOS bottomSheet detent bitmask (macOS no-op)
-    sheetGrabber*: bool          # iOS sheet grabber (macOS no-op)
+    # --- runtime Window.create extras (JS-driven) ---
+    asSheetOfId*: int32 = -1
+    sheetPresentation*: int32
+    sheetDetents*: int32
+    sheetGrabber*: bool
 
-proc newWindowOptions*(title: string): WindowOptions =
-  ## Mirrors WindowOptions::new — sane macOS window defaults.
-  WindowOptions(
-    title: title,
-    url: "",
-    width: 1200, height: 800,
-    x: 0, y: 0,
-    autoCenter: false,
-    visible: true,
-    resizable: true, closable: true, minimizable: true, maximizable: true,
-    borderless: false, transparent: false, alwaysOnTop: false,
-    hidden: false, fullscreen: false, acceptFirstMouse: true,
-    backgroundColor: "",
-    numericIdPrealloc: -1,
-    inspectable: TriState.Unset,
-    frameAutosaveName: "",
-    vibrancy: "",
-    titleBarStyle: TitleBarStyle.Unset,
-    trafficLights: TrafficLights(close: ButtonState.Enabled,
-                                 minimize: ButtonState.Enabled,
-                                 zoom: ButtonState.Enabled),
-    # Sidebar/inspector geometry defaults MUST mirror zc WindowOptions::create
-    # (window.zc:229-246). window.m sets NSSplitViewItem.maximumThickness =
-    # wopts_sidebar_max_width(opts) literally — a 0 default constrains the pane to
-    # ZERO width (invisible sidebar), and collapsible:false disables the toolbar's
-    # Hide-Sidebar/inspector toggle. These bit the first app.nim chrome-shell smoke
-    # (sidebar absent) + the inspector-toggle bug (#460, inspectorMaxWidth 0).
-    sidebarUrl: "", sidebarMaterial: "", sidebarBackgroundColor: "",
-    sidebarWidth: 260, sidebarMinWidth: 180, sidebarMaxWidth: 400,
-    sidebarCollapsible: true, sidebarCollapsed: false, sidebarCanResize: true,
-    sidebarNumericId: -1,
-    inspectorUrl: "", inspectorMaterial: "", inspectorBackgroundColor: "",
-    inspectorWidth: 280, inspectorMinWidth: 180, inspectorMaxWidth: 400,
-    inspectorCollapsible: true, inspectorCollapsed: false, inspectorCanResize: true,
-    inspectorNumericId: -1,
-    toolbarJson: "",
-    asSheetOfId: -1,
-    sheetPresentation: 0, sheetDetents: 0, sheetGrabber: false,
-  )
 
 # Web-inspector dev gate: resolve the CLI-emitted dev-tools flag (1 in dev, 0 in
 # prod, generated into .zapp/) to a per-window TriState. Lets an app write
@@ -313,7 +290,7 @@ proc buttonStateFromStr(s: string, dflt: ButtonState): ButtonState =
 
 proc windowOptsApplyJson*(o: WindowOptions, a: JsonNode) =
   ## Set each WindowOptions field from the JSON args when present. Missing keys
-  ## leave the newWindowOptions defaults. Faithful to window_opts_apply_json
+  ## leave the type's field defaults. Faithful to window_opts_apply_json
   ## (incl. closable/minimizable/maximizable=false disabling the matching
   ## traffic-light button, and asSheetOf accepting a number or a "win-<n>" string).
   if a.isNil or a.kind != JObject: return

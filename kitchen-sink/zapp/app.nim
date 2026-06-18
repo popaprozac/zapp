@@ -18,18 +18,14 @@ proc runApp(): int =
   let app = newApp("kitchen-sink", terminateAfterLastWindowClosed = true)
   app.service.add("greet", greet)
 
-  var opts = newWindowOptions("Kitchen Sink")
-  opts.visible = false   # deferred show — revealed by onReady when content can paint
-  opts.width = 1100
-  opts.height = 700
-  opts.sidebarUrl = "#sidebar-pane"
-  opts.sidebarWidth = 240
-  opts.inspectorUrl = "#inspector-pane"
-  opts.inspectorWidth = 300
-  opts.inspectorCollapsed = true
-  # Web Inspector parity: on in dev, off in prod (mirrors the skeleton).
-  opts.inspectable = inspectableAuto()
-  let win = app.window.create(opts)
+  let win = app.window.create(WindowOptions(
+    title: "Kitchen Sink",
+    visible: false,            # deferred show — revealed by onReady
+    width: 1100, height: 700,
+    sidebarUrl: "#sidebar-pane", sidebarWidth: 240,
+    inspectorUrl: "#inspector-pane", inspectorWidth: 300, inspectorCollapsed: true,
+    inspectable: inspectableAuto(),
+  ))
   win.onReady(onReady)
 
   app.run()

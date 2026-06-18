@@ -89,11 +89,11 @@ import zapp_build_config, zapp_bootstrap
 {.pop.}
 
 # Re-export the app-facing surface so an app's `app.nim` gets everything via
-# `import zapp` (newApp/run, AppConfig, WindowOptions/newWindowOptions/createWindow,
+# `import zapp` (newApp/run, AppConfig, WindowOptions/createWindow,
 # registerService, TriState, JsonNode).
 export apptypes     # App, ServiceManager, WindowManager, AppServiceHandler
 export app          # newApp, run
-export window       # WindowOptions, newWindowOptions, createWindow, windowOptsApplyJson
+export window       # WindowOptions, createWindow, windowOptsApplyJson
 export service      # registerService, ServiceManager.add, LifecycleHook
 export appconfig    # AppConfig, Inspectable
 export coretypes    # TriState, etc.
