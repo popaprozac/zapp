@@ -1510,15 +1510,17 @@ for normal linking and aren't emitted in the default templates.
 ### Authoring an app in Nim
 
 The Nim build (`ZAPP_NATIVE_LANG=nim`) compiles an app's `zapp/app.nim`
-as its native entry when present, falling back to a built-in skeleton
-otherwise. The default zc build uses `zapp/app.zc` — that remains the
-default; the Nim build is opt-in and macOS-only today.
+as its native entry — it's **required** (the build errors if absent, like
+`zapp/app.zc` for the zc build); there's no skeleton fallback. The default
+zc build uses `zapp/app.zc` — that remains the default; the Nim build is
+opt-in and macOS-only today.
 
 The Nim app surface **mirrors `app.zc`**: managers live on `App`
 (`a.service.add`, `a.window.create`), service handlers receive `app` as
 their first argument (matching zc's `fn(app, args)`), and `newApp` maps
-to `App::new`. More managers (dock, tray, menu, …) arrive on `app` as
-the migration ports them; today the surface covers app + service + window.
+to `App::new`. More of the zc surface — managers (dock, tray, menu, …) and
+App methods (`getTheme`, `openExternal`, `on`, …) — arrive on `app` as the
+migration ports them; today the surface covers app + service + window.
 
 ```nim
 import zapp
