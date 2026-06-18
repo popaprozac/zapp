@@ -1111,7 +1111,7 @@ async function buildNativeNim(
   // benign inside the generated Nim string literal.
   const assetRoot = path.resolve(root, config.assetDir).replace(/\\/g, "/");
 
-  const { renderBuildConfigNim, renderBootstrapNim, renderHeadlessNim } = await import("./build-config");
+  const { renderBuildConfigNim, renderBootstrapNim, renderHeadlessNim, renderNimCfg } = await import("./build-config");
   const { resolveBootstrapDir } = await import("./paths");
   const { bundleWebviewBootstrapRaw, bundleWorkerBootstrapRaw } = await import(
     path.join(resolveBootstrapDir(), "codegen.ts")
@@ -1230,6 +1230,21 @@ async function buildNativeNim(
   // framework-compile time.
   // --threads:on — zjs spawns a pthread per worker; ORC must be thread-safe.
   const nimFrameworkDir = path.join(nativeDir, "nim");
+
+  // Editor config: write zapp/nim.cfg so nimsuggest/nimlangserver resolve
+  // `import zapp` with the SAME paths this build uses. Gitignored + regenerated
+  // each build (the build itself passes --path explicitly; this file is purely
+  // for the editor). Best-effort: never fail the build over the editor cfg.
+  try {
+    const appZappDir = path.join(root, "zapp");
+    await fs.mkdir(appZappDir, { recursive: true });
+    await fs.writeFile(
+      path.join(appZappDir, "nim.cfg"),
+      renderNimCfg({ frameworkNimDir: nimFrameworkDir, zappDir }),
+      "utf-8",
+    );
+  } catch { /* editor cfg is non-fatal */ }
+
   const args = ["c", "--cc:clang", "--mm:orc", "--threads:on", "-d:release", "--opt:size",
                 `--path:${zappDir}`, `--path:${nimFrameworkDir}`, `--passL:${providerO}`,
                 `-o:${output}`, ...(verbose ? [] : ["--hints:off"]), nimRoot];
