@@ -1546,10 +1546,12 @@ proc runApp(): int =
   let a = newApp("my-app")                 # or newApp(AppConfig(name: "my-app", inspectable: Inspectable.Auto))
   a.service.add("greet", greet)            # handler reachable from the webview via Services.invoke("greet", …)
 
-  var opts = newWindowOptions("My App")
-  opts.visible = false                     # deferred show; omit to show immediately
-  opts.inspectable = inspectableAuto()     # web inspector: on in dev, off in prod
-  let win = a.window.create(opts)
+  let win = a.window.create(WindowOptions(
+    title: "My App",
+    visible: false,                        # deferred show; omit to show immediately
+    inspectable: inspectableAuto(),        # web inspector: on in dev, off in prod
+    # sidebarUrl: "#sidebar", inspectorUrl: "#inspector",  # optional panes
+  ))
   win.onReady(onReady)
   a.run()
 
@@ -1560,16 +1562,17 @@ Service handlers are `proc(app: App, args: JsonNode): string`, registered
 with `a.service.add("name", handler)`; they're reachable from the webview
 via `Services.invoke("name", …)`.
 
-`a.window.create(opts)` returns a `Window` with methods `win.show()` and
-`win.onReady(cb)`. Set `opts.visible = false` and reveal with `onReady` to
-avoid the brief empty-window flash (both are optional). The `onReady`
-callback must be a top-level `{.cdecl.}` proc — it is registered as a C
-function pointer; reconstruct the window inside it with
-`Window(id: id, handle: handle)`.
+`a.window.create(WindowOptions(...))` returns a `Window` with methods
+`win.show()` and `win.onReady(cb)`. Construction is the `WindowOptions(...)`
+object literal — pass it directly to `a.window.create`; defaults live on
+the type. Set `visible: false` and reveal with `onReady` to avoid the brief
+empty-window flash (both are optional). The `onReady` callback must be a
+top-level `{.cdecl.}` proc — it is registered as a C function pointer;
+reconstruct the window inside it with `Window(id: id, handle: handle)`.
 
-`opts.inspectable = inspectableAuto()` enables the web inspector in dev
-builds and disables it in production. It corresponds to the `inspectable`
-field on `AppConfig` / `WindowOptions`.
+`inspectable: inspectableAuto()` enables the web inspector in dev builds and
+disables it in production. It corresponds to the `inspectable` field on
+`AppConfig` / `WindowOptions`.
 
 Power users can still `import` native libraries via Nim pragmas and expose
 them as services — first-class native extensibility, no C shim required.
