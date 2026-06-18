@@ -1237,18 +1237,23 @@ framework passes a **nil `App` context** to the service handler on this
 path. Handlers called via `invokeSync` must not touch `App`, windows, or
 any other native UI object — use them for pure computation (e.g. counters,
 caches, data transforms). For service calls that need to read or mutate
-App / window state from a worker, use the async `Services.invoke(...)`,
-which marshals the call to the main thread where App is live (*async
-worker→main-thread App-capable invoke is the planned Phase-2 follow-up and
-is not yet shipped*). Alternatively, emit an event and handle it on the
-main thread.
+App / window state from a worker, use the async `Services.invoke(...)`:
+it marshals the call to the **main thread** where the real `App` is live,
+so App / window / UI access is safe in the handler. Returns a `Promise`
+(the result resolves once the main-thread handler returns).
+
+> **Nim build:** `Services.invoke` from a worker dispatches to the main thread
+> via `zapp_worker_invoke_on_main` and runs the handler with the real `App`.
+> **Zen-C build:** worker `invoke` currently falls back to the sync inline
+> path (nil app); main-thread dispatch for the Zen-C build is a future
+> parity item.
 
 **Context × path matrix:**
 
 | Context | `Services.invoke` (async) | `Services.invokeSync` (inline) |
 |---|---|---|
 | Webview | ✅ runs on the main thread via the WebKit bridge (~135 µs) | ❌ throws |
-| Worker / backend | ✅ direct C call — planned Phase-2 for App-capable work | ✅ inline on the worker thread (~5 µs); handler must not touch App/UI |
+| Worker / backend | ✅ marshals to main thread — handler runs with real App/UI (nim build); zc build falls back to inline | ✅ inline on the worker thread (~5 µs); handler must not touch App/UI |
 
 Useful when you need tight loops against native services from a worker
 without Promise overhead.
