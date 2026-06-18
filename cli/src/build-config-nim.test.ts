@@ -93,3 +93,27 @@ test("renderBuildConfigNim emits fs allowlist + persist-grants getters", () => {
   expect(out).toContain("proc zapp_build_fs_allowlist_json(): cstring {.exportc, cdecl.} = zappFsAllowlistJson.cstring");
   expect(out).toContain("proc zapp_build_fs_persist_grants(): bool {.exportc, cdecl.} = true");
 });
+
+import { renderNimCfg } from "./build-config";
+test("renderNimCfg emits absolute --path lines, fidelity flags, and a do-not-edit header", () => {
+  const out = renderNimCfg({
+    frameworkNimDir: "/abs/native/nim",
+    zappDir: "/abs/project/.zapp",
+  });
+  expect(out).toContain('--path:"/abs/native/nim"');
+  expect(out).toContain('--path:"/abs/project/.zapp"');
+  expect(out).toContain("--mm:orc");
+  expect(out).toContain("--threads:on");
+  expect(out.toLowerCase()).toContain("do not edit");
+  // Escape hatch is advertised so power users don't fight the generator.
+  expect(out).toContain("app.nim.cfg");
+});
+
+test("renderNimCfg normalizes backslashes so Windows paths are benign in the cfg", () => {
+  const out = renderNimCfg({
+    frameworkNimDir: "C:\\app\\native\\nim",
+    zappDir: "C:\\app\\.zapp",
+  });
+  expect(out).toContain('--path:"C:/app/native/nim"');
+  expect(out).toContain('--path:"C:/app/.zapp"');
+});
