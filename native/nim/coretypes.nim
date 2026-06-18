@@ -7,13 +7,14 @@
 ## genuinely-shared atoms belong here.
 
 type
-  TriState* {.pure.} = enum
-    ## The recurring -1/0/1 tag: unset (inherit) / off / on. Used by the window
-    ## `inspectable` tag (and, later, the webview prefs). window.m reads the
-    ## ordinal and treats `> 0` as on, so Unset and Off are both "not on".
-    Unset = -1
-    Off   = 0
-    On    = 1
+  Inspectable* {.pure.} = enum
+    ## Web-inspector enablement, used by both AppConfig (app-wide) and
+    ## WindowOptions (per-window) and resolved as a cascade
+    ## (window-explicit > AppConfig > dev-vs-prod default).
+    Inherit   ## defer to the level above (window → AppConfig); app-level Inherit == Auto
+    Auto      ## decide by build: dev-tools flag on → on, else off
+    On        ## force on
+    Off       ## force off
 
   EventResult* {.pure.} = enum
     ## A window-event dispatch verdict (callbacks.nim zapp_dispatch_event,

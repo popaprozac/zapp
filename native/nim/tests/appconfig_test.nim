@@ -21,5 +21,9 @@ proc test() =
                          inspectable: Inspectable.On, maxWorkers: 0))
   doAssert app_get_bootstrap_web_content_inspectable()           # On -> true
   doAssert $app_get_allowed_navigation_json() == ""             # security.zc not ported
+  # Inherit at AppConfig level resolves like Auto (tracks the dev-tools flag)
+  setAppConfig(AppConfig(name: "Z", terminateAfterLastWindowClosed: true,
+                         inspectable: Inspectable.Inherit, maxWorkers: 0))
+  doAssert app_get_bootstrap_web_content_inspectable()           # Inherit + dev_tools=1 -> true
   echo "appconfig ok"
 test()

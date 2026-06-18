@@ -12,10 +12,11 @@
 ## a "url set?" / tag!=0 check, so the defaults never activate a code path.
 
 import coretypes
-export coretypes   # WindowOptions.inspectable is a coretypes.TriState
+export coretypes   # WindowOptions.inspectable is a coretypes.Inspectable
 import std/json
 import apptypes
 export apptypes    # WindowManager visible to callers of window.nim
+import appconfig
 
 type
   TitleBarStyle* {.pure.} = enum   ## NSWindow title-bar style (window.m tag 0/1/2/3)
@@ -26,7 +27,7 @@ type
     ## Default (explicit "standard title bar"). On a sidebar/inspector window only
     ## Unset gets the unified hidden-title chrome default; an explicit Default
     ## opts back into a standard title bar. Mirrors zc's TitleBarStyle + the
-    ## inspectable TriState (Unset/Off/On). Appended last to keep tags 0/1/2.
+    ## inspectable cascade enum. Appended last to keep tags 0/1/2.
     Unset = 3
 
   ButtonState* {.pure.} = enum      ## a traffic-light button (window.m tag 0/1/2)
@@ -58,7 +59,7 @@ type
     acceptFirstMouse*: bool = true
     backgroundColor*: string
     numericIdPrealloc*: int32 = -1
-    inspectable*: TriState = TriState.Unset  # unset/off/on; window.m treats `> 0` as on
+    inspectable*: Inspectable = Inspectable.Inherit  # cascade: window > AppConfig > dev/prod
     frameAutosaveName*: string
     vibrancy*: string
     # --- title-bar style + traffic-light buttons ---
@@ -104,14 +105,16 @@ type
     sheetGrabber*: bool
 
 
-# Web-inspector dev gate: resolve the CLI-emitted dev-tools flag (1 in dev, 0 in
-# prod, generated into .zapp/) to a per-window TriState. Lets an app write
-# `opts.inspectable = inspectableAuto()` without redeclaring the C-ABI importc.
+# Resolve a per-window Inspectable to the effective bool. Cascade:
+#   On/Off → forced; Auto → dev-tools flag; Inherit → AppConfig's resolution
+#   (app On/Off forced, app Auto/Inherit → dev-tools flag). Mirrors zc's intent.
 proc zapp_build_dev_tools_default(): cint {.importc, cdecl.}
-proc inspectableAuto*(): TriState =
-  ## Web Inspector on in dev, off in prod — the Nim analog of
-  ## `Zapp::inspectable_auto()`. Assign to `WindowOptions.inspectable`.
-  if zapp_build_dev_tools_default() > 0: TriState.On else: TriState.Off
+proc resolveInspectable*(w: Inspectable): bool =
+  case w
+  of Inspectable.On: true
+  of Inspectable.Off: false
+  of Inspectable.Auto: zapp_build_dev_tools_default() > 0
+  of Inspectable.Inherit: app_get_bootstrap_web_content_inspectable()
 
 template opt(p: pointer): WindowOptions = cast[WindowOptions](p)
 
@@ -141,7 +144,8 @@ proc wopts_always_on_top(p: pointer): bool {.exportc, cdecl.} = opt(p).alwaysOnT
 proc wopts_accept_first_mouse(p: pointer): bool {.exportc, cdecl.} = opt(p).acceptFirstMouse
 proc wopts_background_color(p: pointer): cstring {.exportc, cdecl.} = opt(p).backgroundColor.cstring
 proc wopts_numeric_id_pre_alloc(p: pointer): int32 {.exportc, cdecl.} = opt(p).numericIdPrealloc
-proc wopts_inspectable(p: pointer): int32 {.exportc, cdecl.} = opt(p).inspectable.int32
+proc wopts_inspectable(p: pointer): int32 {.exportc, cdecl.} =
+  if resolveInspectable(opt(p).inspectable): 1 else: 0
 proc wopts_frame_autosave_name(p: pointer): cstring {.exportc, cdecl.} = opt(p).frameAutosaveName.cstring
 proc wopts_vibrancy(p: pointer): cstring {.exportc, cdecl.} = opt(p).vibrancy.cstring
 proc wopts_title_bar_style_tag(p: pointer): int32 {.exportc, cdecl.} = opt(p).titleBarStyle.int32

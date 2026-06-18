@@ -238,7 +238,7 @@ proc runApp(): int =
   let win = a.window.create(WindowOptions(
     title: "${name}",
     visible: false,                   # deferred show — revealed by onReady
-    inspectable: inspectableAuto(),   # web inspector: on in dev, off in prod
+    inspectable: Inspectable.Auto,   # web inspector: on in dev, off in prod
   ))
   win.onReady(onReady)
 

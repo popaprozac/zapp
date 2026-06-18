@@ -3,6 +3,7 @@
 import std/json
 import std/strutils
 import ../window
+import ../appconfig
 
 proc darwin_window_create(opts: pointer): pointer {.exportc, cdecl.} = cast[pointer](1)
 proc darwin_window_register_numeric_id(handle: pointer, id: int32) {.exportc, cdecl.} = discard
@@ -14,6 +15,9 @@ proc darwin_window_numeric_id_for_string(wid: cstring): int32 {.exportc, cdecl.}
   if s.len > 4 and s[0..3] == "win-":
     (try: parseInt(s[4..^1]).int32 except ValueError: -1'i32)
   else: -1'i32
+
+var gDevTools: cint = 0
+proc zapp_build_dev_tools_default(): cint {.exportc, cdecl.} = gDevTools
 
 block:
   let a = createWindow(WindowOptions(title: "a"))
@@ -95,8 +99,27 @@ block:
   doAssert o.inspectorWidth == 280'i32 and o.inspectorMaxWidth == 400'i32
   doAssert o.sidebarCollapsible == true and o.inspectorCollapsible == true
   doAssert o.numericIdPrealloc == -1'i32 and o.asSheetOfId == -1'i32
-  doAssert o.inspectable == TriState.Unset
+  doAssert o.inspectable == Inspectable.Inherit, "window inspectable defaults to Inherit"
   doAssert o.titleBarStyle == TitleBarStyle.Unset, "Unset (ord 3) must be the default, not Default"
   doAssert o.trafficLights.close == ButtonState.Enabled
+
+block:
+  # Inspectable cascade: window-explicit > AppConfig > dev/prod.
+  gDevTools = 0
+  doAssert resolveInspectable(Inspectable.On)
+  doAssert not resolveInspectable(Inspectable.Off)
+  gDevTools = 1
+  doAssert resolveInspectable(Inspectable.Auto)
+  gDevTools = 0
+  doAssert not resolveInspectable(Inspectable.Auto)
+  setAppConfig(AppConfig(name: "t", inspectable: Inspectable.On, maxWorkers: 0))
+  doAssert resolveInspectable(Inspectable.Inherit)
+  setAppConfig(AppConfig(name: "t", inspectable: Inspectable.Off, maxWorkers: 0))
+  doAssert not resolveInspectable(Inspectable.Inherit)
+  setAppConfig(AppConfig(name: "t", inspectable: Inspectable.Auto, maxWorkers: 0))
+  gDevTools = 1
+  doAssert resolveInspectable(Inspectable.Inherit)
+  gDevTools = 0
+  doAssert not resolveInspectable(Inspectable.Inherit)
 
 echo "windowmanager ok"

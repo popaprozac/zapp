@@ -24,7 +24,7 @@ proc runApp(): int =
     width: 1100, height: 700,
     sidebarUrl: "#sidebar-pane", sidebarWidth: 240,
     inspectorUrl: "#inspector-pane", inspectorWidth: 300, inspectorCollapsed: true,
-    inspectable: inspectableAuto(),
+    inspectable: Inspectable.Auto,
   ))
   win.onReady(onReady)
 

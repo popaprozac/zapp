@@ -3,16 +3,15 @@
 ## bootstrap accessors). Leaf module (only importc's the dev-tools flag) so it's
 ## unit-testable without booting the platform; app.nim sets the config at newApp.
 ##
-## Inspectable {.pure.} is the user-facing config enum (the type-modeling
-## convention's deferred item, mirroring app.zc:296 ZappInspectable) — distinct
-## from the window-tag coretypes.TriState: this resolves to a bool at the getter.
+## Inspectable is the shared enum (coretypes) used by both AppConfig (app-wide)
+## and WindowOptions (per-window). The getter resolves it to a bool at the
+## AppConfig level; the per-window cascade in window.nim resolves Inherit by
+## calling back into this getter.
+
+import coretypes
+export coretypes   # re-export Inspectable so callers of appconfig get it
 
 type
-  Inspectable* {.pure.} = enum
-    Auto   ## dev-gated: on when dev-tools are enabled
-    On
-    Off
-
   AppConfig* = object
     name*: string
     terminateAfterLastWindowClosed*: bool
@@ -41,7 +40,7 @@ proc app_get_bootstrap_web_content_inspectable*(): bool {.exportc, cdecl.} =
   case gAppConfig.inspectable
   of Inspectable.On: true
   of Inspectable.Off: false
-  of Inspectable.Auto: zapp_build_dev_tools_default() > 0
+  of Inspectable.Auto, Inspectable.Inherit: zapp_build_dev_tools_default() > 0
 
 proc app_get_bootstrap_application_should_terminate_after_last_window_closed*(): bool
     {.exportc, cdecl.} =
