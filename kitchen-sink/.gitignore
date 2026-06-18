@@ -27,3 +27,4 @@ dist-ssr
 .zapp/
 bin/
 src/zapp/
+zapp/nim.cfg
