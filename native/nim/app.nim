@@ -10,17 +10,22 @@ import worker_service          # registerWorkerServices — worker→native serv
 # providing zapp_start_headless_workers() which spawns the configured zjs workers.
 import zapp_headless
 
-proc newApp*(name: string, terminateAfterLastWindowClosed = true): App =
-  ## Mirrors App::new — init the platform, store config, wire managers, return the App.
-  platformInit(name)
-  setAppConfig(AppConfig(
-    name: name,
-    terminateAfterLastWindowClosed: terminateAfterLastWindowClosed,
-    inspectable: Inspectable.Auto,
-    maxWorkers: 0))
-  result = App(name: name, terminateAfterLastWindowClosed: terminateAfterLastWindowClosed,
+proc newApp*(config: AppConfig): App =
+  ## Mirrors App::new(config) — init the platform, store the config, wire the
+  ## managers, set the current app. The AppConfig form surfaces inspectable /
+  ## maxWorkers (like zc's App::new(config)).
+  platformInit(config.name)
+  setAppConfig(config)
+  result = App(name: config.name,
+               terminateAfterLastWindowClosed: config.terminateAfterLastWindowClosed,
                service: ServiceManager(), window: WindowManager())
   setCurrentApp(result)
+
+proc newApp*(name: string, terminateAfterLastWindowClosed = true): App =
+  ## Convenience shorthand — sensible AppConfig defaults (inspectable Auto, no
+  ## worker cap). Delegates to newApp(AppConfig).
+  newApp(AppConfig(name: name, terminateAfterLastWindowClosed: terminateAfterLastWindowClosed,
+                   inspectable: Inspectable.Auto, maxWorkers: 0))
 
 proc run*(app: App): int =
   ## Init permissions (main-thread parse), register worker-path services, run
