@@ -47,6 +47,10 @@
   #include <sys/time.h>
   #include <errno.h>
   #include <CoreFoundation/CoreFoundation.h>
+  // GCD — used by the nim-build async invoke host fn (dispatch_async to main).
+  // Included unconditionally on Apple; the #ifdef ZAPP_NIM_BUILD gate on the
+  // fn body keeps the zc build from generating any dispatch_async call-sites.
+  #include <dispatch/dispatch.h>
 #else
   #include <uv.h>
 #endif
@@ -527,6 +531,85 @@ static ZjsValue host_invoke_service(ZjsContext* ctx, ZjsValue* argv, uint32_t ar
 }
 
 // ---------------------------------------------------------------------------
+// __zappBridge.invokeServiceAsync(method, args?) -> int (request id)   [NIM BUILD]
+//
+// Async companion to invokeService. The worker thread does NOT block —
+// it allocates a monotonic request id, strdups method + JSON-stringified
+// args, then fires a GCD block to the main queue that calls the Nim entry
+// zapp_worker_invoke_on_main (runs the real service handler with gCurrentApp,
+// then delivers the result back via zjs_worker_eval_js → bridge._resolveInvoke).
+// The JS bootstrap (Task 3) wraps the returned id in a Promise and stores
+// { resolve, reject } in bridge._pendingInvokes[id].
+//
+// Gated to ZAPP_NIM_BUILD because the zc build's worker invoke uses the
+// synchronous host path (zc async-from-worker is a future parity item).
+// ---------------------------------------------------------------------------
+
+#ifdef ZAPP_NIM_BUILD
+extern void zapp_worker_invoke_on_main(const char* worker_id, int req_id,
+                                       const char* method, const char* args_json);
+static _Atomic int g_async_req_id = 1;
+
+static ZjsValue host_invoke_service_async(ZjsContext* ctx, ZjsValue* argv, uint32_t argc) {
+    ZjsWorkerSlot* slot = zjs_slot_for_ctx(ctx);
+    if (!slot || argc < 1 || !zjs_is_string(argv[0])) return zjs_undefined();
+
+    // Extract method — mirror host_invoke_service exactly.
+    uint32_t method_len = 0;
+    const char* method_bytes = zjs_string_bytes(argv[0], &method_len);
+    if (!method_bytes) return zjs_undefined();
+    char* method = (char*) malloc((size_t) method_len + 1);
+    if (!method) return zjs_undefined();
+    memcpy(method, method_bytes, method_len);
+    method[method_len] = '\0';
+
+    // Stringify args — mirror host_dispatch_event_to_all / host_post_to_webview:
+    // call the cached JSON.stringify (json_stringify_root) on argv[1].
+    // Falls back to strdup("null") when args is absent/undefined/null.
+    char* args_json = NULL;
+    if (argc >= 2 && !zjs_is_undefined(argv[1]) && !zjs_is_null(argv[1])) {
+        ZjsValue stringified = zjs_call(ctx, zjs_root_get(ctx, slot->json_stringify_root),
+                                        zjs_undefined(), &argv[1], 1);
+        zjs_drain_microtasks(ctx);
+        if (!zjs_had_error(ctx) && zjs_is_string(stringified)) {
+            uint32_t plen = 0;
+            const char* pbytes = zjs_string_bytes(stringified, &plen);
+            if (pbytes) {
+                args_json = (char*) malloc((size_t) plen + 1);
+                if (args_json) {
+                    memcpy(args_json, pbytes, plen);
+                    args_json[plen] = '\0';
+                }
+            }
+        }
+    }
+    if (!args_json) {
+        args_json = strdup("null");
+        if (!args_json) { free(method); return zjs_undefined(); }
+    }
+
+    // Allocate a monotonic request id (worker thread never blocks on this).
+    int id = atomic_fetch_add(&g_async_req_id, 1);
+
+    // Strdup worker_id for the block — slot->worker_id is stack-adjacent static
+    // storage in the workers[] table; it is stable but we strdup for symmetry
+    // with method/args_json (all three freed inside the block after the call).
+    char* wid = strdup(slot->worker_id);
+    if (!wid) { free(method); free(args_json); return zjs_undefined(); }
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        zapp_worker_invoke_on_main(wid, id, method, args_json);
+        free(method);
+        free(args_json);
+        free(wid);
+    });
+
+    // Return the request id so the JS bootstrap can build a Promise around it.
+    return zjs_int32(id);
+}
+#endif  // ZAPP_NIM_BUILD
+
+// ---------------------------------------------------------------------------
 // __zappBridge.listWorkers() -> string (JSON array of active workers)
 //
 // Worker-context Workers.list() on zjs. Returns the registry's JSON string
@@ -899,6 +982,14 @@ static void zjs_setup_bridge(ZjsWorkerSlot* slot) {
     zjs_set_property(ctx, bridge, "postToWorker",       post_worker_fn);
     zjs_set_property(ctx, bridge, "workerCrash",        crash_fn);
     zjs_set_property(ctx, bridge, "listWorkers",        list_fn);
+#ifdef ZAPP_NIM_BUILD
+    // Async invoke — marshals to the main thread via GCD; JS side wraps the
+    // returned request id in a Promise and stores resolve/reject in
+    // bridge._pendingInvokes[id]. Main resolves via bridge._resolveInvoke.
+    ZjsValue invoke_async_fn = zjs_register_host_function(ctx, "__zapp_invoke_service_async",
+                                                          host_invoke_service_async);
+    zjs_set_property(ctx, bridge, "invokeServiceAsync", invoke_async_fn);
+#endif  // ZAPP_NIM_BUILD
     // workerId — bench harness + bare-worker.ts sync-coordination both
     // read `bridge.workerId` to identify the slot. Bare/jsc/txiki set
     // the same property; mirror here so engine-agnostic bootstrap +
