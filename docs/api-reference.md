@@ -1576,6 +1576,14 @@ them as services — first-class native extensibility, no C shim required.
 TS stays the default home for app logic — UI lives in the webview and
 background work in headless workers.
 
+**Editor setup (nimsuggest / nimlangserver).** `zapp init` and every Nim build
+generate a `zapp/nim.cfg` so your editor's Nim language server resolves
+`import zapp` and the framework surface. It's a generated, gitignored artifact —
+do not edit it; it's overwritten on each build. If you need custom Nim flags for
+your app, add `zapp/app.nim.cfg` or `zapp/config.nims` (the CLI never touches
+those). If your editor still can't resolve `import zapp`, run a build once to
+(re)generate the cfg, then reload the Nim language server.
+
 ---
 
 ## `Dialog`
