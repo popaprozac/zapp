@@ -746,7 +746,8 @@ void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first
     NSString* appName = bootstrapName ? [NSString stringWithUTF8String:bootstrapName] : @"Zapp";
     appName = [NSString stringWithUTF8String:darwin_escape_js_string([appName UTF8String])];
     BOOL terminate = app_get_bootstrap_application_should_terminate_after_last_window_closed();
-    BOOL inspect = app_get_bootstrap_web_content_inspectable();
+    // Per-window resolved inspectable — consistent with the native inspector gate.
+    BOOL inspect = inspectable;
     int maxWorkers = app_get_bootstrap_max_workers();
 
     NSString* themeStr = [NSString stringWithUTF8String:darwin_get_theme() ?: "light"];
