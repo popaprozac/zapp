@@ -1218,14 +1218,37 @@ try {
 
 ### `Services.invokeSync<T>(method, args?): T`
 
-**Worker-only** synchronous invoke. Throws in webview context. Returns
-the raw result, not a Promise.
+**Worker / backend only** — throws `"only available in workers and backend
+contexts"` if called from a webview.
+
+The handler runs **inline on the caller's thread** (the worker pthread),
+with no round-trip to the main thread. This makes it the fastest path for
+pure-compute services. Returns the raw result, not a Promise.
 
 ```ts
-// in a worker
+// in a worker or headless backend script
 const r = Services.invokeSync<{ count: number }>("counter:get");
 console.log(r.count);
 ```
+
+**Important constraint — no App / UI access in the handler.** Because the
+handler executes on the worker thread rather than the main thread, the
+framework passes a **nil `App` context** to the service handler on this
+path. Handlers called via `invokeSync` must not touch `App`, windows, or
+any other native UI object — use them for pure computation (e.g. counters,
+caches, data transforms). For service calls that need to read or mutate
+App / window state from a worker, use the async `Services.invoke(...)`,
+which marshals the call to the main thread where App is live (*async
+worker→main-thread App-capable invoke is the planned Phase-2 follow-up and
+is not yet shipped*). Alternatively, emit an event and handle it on the
+main thread.
+
+**Context × path matrix:**
+
+| Context | `Services.invoke` (async) | `Services.invokeSync` (inline) |
+|---|---|---|
+| Webview | ✅ runs on the main thread via the WebKit bridge (~135 µs) | ❌ throws |
+| Worker / backend | ✅ direct C call — planned Phase-2 for App-capable work | ✅ inline on the worker thread (~5 µs); handler must not touch App/UI |
 
 Useful when you need tight loops against native services from a worker
 without Promise overhead.
