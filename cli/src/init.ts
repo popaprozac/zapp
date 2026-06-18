@@ -19,6 +19,8 @@ import { existsSync } from "node:fs";
 import * as readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { clog, clogError } from "./log";
+import { renderNimCfg } from "./build-config";
+import { resolveNativeDir } from "./paths";
 
 // Vite templates we surface as first-class. Each entry maps the display
 // name to the `create-vite` template flag. Restricted to the "main four"
@@ -244,6 +246,15 @@ proc runApp(): int =
 quit(runApp())
 `);
 
+  // Editor config for the scaffolded Nim entry — so `import zapp` resolves in the
+  // editor immediately, before the first build. Same generator the build uses.
+  // Gitignored below; the build regenerates it.
+  const frameworkNimDir = path.join(resolveNativeDir(), "nim");
+  await Bun.write(
+    path.join(zappDir, "nim.cfg"),
+    renderNimCfg({ frameworkNimDir, zappDir: path.join(projectDir, ".zapp") }),
+  );
+
   // 3. Add zapp.config.ts — typed via an \`import type\` annotation. Same
   // IntelliSense as a defineConfig() wrapper, but the import is erased at
   // compile time: the config loads with zero runtime module resolution, so
@@ -423,7 +434,7 @@ manifest, resource file). Windows packaging is in progress.
   let gitignore = "";
   try { gitignore = await Bun.file(gitignorePath).text(); } catch {}
   if (!gitignore.includes(".zapp")) {
-    gitignore += "\n# Zapp build artifacts\n.zapp/\nbin/\nsrc/zapp/\n";
+    gitignore += "\n# Zapp build artifacts\n.zapp/\nbin/\nsrc/zapp/\nzapp/nim.cfg\n";
     await Bun.write(gitignorePath, gitignore);
   }
 
