@@ -55,16 +55,19 @@ regenerated), exactly like the `.zapp/` build output.
 # Lets nimsuggest/nimlangserver resolve `import zapp`. Regenerated each build.
 # Custom flags? Add zapp/app.nim.cfg or zapp/config.nims (the CLI won't touch those).
 --path:"/abs/path/to/node_modules/@zappdev/cli/native/nim"
---path:"../.zapp"
+--path:"/abs/path/to/project/.zapp"
 --mm:orc
 --threads:on
 ```
 
-- **Framework path is absolute** — straight from `resolveNativeDir()/nim`. Works
+- **Both `--path` lines are absolute** — the framework path straight from
+  `resolveNativeDir()/nim`, the project's `.zapp` from `<root>/.zapp`. Works
   identically in the monorepo (`<repo>/native/nim`) and an installed app
   (`node_modules/@zappdev/cli/native/nim`); since the file is regenerated and
   gitignored, machine-specificity is fine and it can never mismatch the build.
-- **`.zapp` is `../.zapp`** — relative to `zapp/` (where `nim.cfg` lives).
+  Absolute (rather than relative `../.zapp`) eliminates any ambiguity about what
+  directory nimsuggest resolves a relative cfg path against — the reported
+  symptom was a resolution failure, so we remove that variable.
 - **`--mm:orc --threads:on`** mirror the build so nimsuggest's semantic checks
   match the real compile. Without `--threads:on`, the `gcsafe`/thread analysis in
   framework modules (e.g. worker/registry) reports phantom errors when the LSP
@@ -95,9 +98,9 @@ touches the latter two. CLI-owned generation and user customization don't collid
 
 ## Components
 
-- `cli/src/build-config.ts` (or a small new sibling) — `renderNimCfg(opts)`: pure
-  string renderer. Inputs: absolute framework `native/nim` dir. Output: the file
-  text above (`.zapp` path is the fixed `../.zapp`).
+- `cli/src/build-config.ts` — `renderNimCfg({ frameworkNimDir, zappDir })`: pure
+  string renderer. Inputs: absolute framework `native/nim` dir + absolute project
+  `.zapp` dir. Output: the file text above.
 - `cli/src/native.ts` `buildNativeNim` — after computing `nimFrameworkDir`, write
   `renderNimCfg(...)` to `<root>/zapp/nim.cfg`.
 - `cli/src/init.ts` — in the Nim-scaffold block, write `zapp/nim.cfg` and ensure
