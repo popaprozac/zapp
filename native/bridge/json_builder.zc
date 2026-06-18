@@ -26,7 +26,7 @@ fn json_object_set_owned(obj: JsonValue*, key: char*, val: JsonValue*) -> void {
             if (val != NULL) { JsonValue__Drop__drop(val); free(val); }
             return;
         }
-        if (obj->kind != JsonType__JSON_OBJECT) {
+        if (obj->kind != JsonType__JSON_OBJECT()) {
             JsonValue__Drop__drop(val); free(val); return;
         }
         Map__JsonValuePtr__put(obj->object_val, (char*)key, val);
@@ -40,7 +40,7 @@ fn json_array_push_owned(arr: JsonValue*, val: JsonValue*) -> void {
             if (val != NULL) { JsonValue__Drop__drop(val); free(val); }
             return;
         }
-        if (arr->kind != JsonType__JSON_ARRAY) {
+        if (arr->kind != JsonType__JSON_ARRAY()) {
             JsonValue__Drop__drop(val); free(val); return;
         }
         Vec__JsonValuePtr__push(arr->array_val, val);

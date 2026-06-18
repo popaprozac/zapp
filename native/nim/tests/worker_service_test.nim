@@ -39,6 +39,13 @@ proc jvObj():   pointer {.importc: "JsonValue__object_ptr", cdecl.}
 proc vecJVPush(v: pointer; val: pointer) {.importc: "Vec__JsonValuePtr__push", cdecl.}
 proc mapJVPut(m: pointer; key: cstring; val: pointer) {.importc: "Map__JsonValuePtr__put", cdecl.}
 proc jvFree(v: pointer) {.importc: "json_free_tree", cdecl.}
+# json_builder.zc's high-level owned-transfer helpers (guard fixed in FIX A)
+proc jsonArrayPushOwned(arr: pointer; val: pointer) {.importc: "json_array_push_owned", cdecl.}
+proc jsonObjectSetOwned(obj: pointer; key: cstring; val: pointer) {.importc: "json_object_set_owned", cdecl.}
+# Vec/Map length/slot accessors to verify contents without walking via Nim
+proc vecJVLen2(v: pointer): csize_t {.importc: "Vec__JsonValuePtr__length", cdecl.}
+proc mapJVCap2(m: pointer): csize_t {.importc: "Map__JsonValuePtr__capacity", cdecl.}
+proc mapJVOcc2(m: pointer; i: csize_t): bool {.importc: "Map__JsonValuePtr__is_slot_occupied", cdecl.}
 
 # ---------------------------------------------------------------------------
 # Test helpers: build array/object by directly pushing into the inner
@@ -90,11 +97,23 @@ void* _zapp_test_obj_set(void* obj_jv, const char* key, void* val_jv) {
     Map__JsonValuePtr__put(o->object_val, (char*)key, (struct JsonValue*)val_jv);
     return obj_jv;
 }
+
+/* Helpers to extract inner Vec/Map pointers for length assertions (FIX-A test) */
+void* _zapp_test_jv_array_val(void* jv) {
+    return ((struct JsonValue*)jv)->array_val;
+}
+void* _zapp_test_jv_object_val(void* jv) {
+    return ((struct JsonValue*)jv)->object_val;
+}
 """.}
 proc testArrPush(arr: pointer; val: pointer): pointer
     {.importc: "_zapp_test_arr_push", cdecl, nodecl.}
 proc testObjSet(obj: pointer; key: cstring; val: pointer): pointer
     {.importc: "_zapp_test_obj_set", cdecl, nodecl.}
+proc jvArrayVal(jv: pointer): pointer
+    {.importc: "_zapp_test_jv_array_val", cdecl, nodecl.}
+proc jvObjectVal(jv: pointer): pointer
+    {.importc: "_zapp_test_jv_object_val", cdecl, nodecl.}
 
 # ---------------------------------------------------------------------------
 
@@ -197,5 +216,40 @@ proc testJsonValueToNode() =
 
   echo "worker_service jsonValueToNode ok"
 
+proc testContainerBuilders() =
+  ## FIX A regression: json_array_push_owned and json_object_set_owned silently
+  ## dropped every element because the kind-guard compared arr->kind against the
+  ## JsonType__JSON_ARRAY function POINTER (always != kind int) instead of calling
+  ## it.  After the fix the guard compares kind against JsonType__JSON_ARRAY().
+  ## Assert the pushed element is NOT dropped (array len == 1, map has 1 slot).
+
+  # --- array: push one element, expect length 1 (not 0) ---
+  let arr = jvArr()
+  doAssert arr != nil
+  jsonArrayPushOwned(arr, jvBool(true))     # uses the fixed guard path
+  let innerVec = jvArrayVal(arr)
+  doAssert innerVec != nil
+  let arrLen = vecJVLen2(innerVec)
+  doAssert arrLen == 1, "json_array_push_owned dropped the element (len=" & $arrLen & "); guard fix not effective"
+  jvFree(arr)
+  echo "  json_array_push_owned guard fix ok (len=1)"
+
+  # --- object: set one key, expect at least one occupied slot ---
+  let obj = jvObj()
+  doAssert obj != nil
+  jsonObjectSetOwned(obj, cstring"k", jvNum(42.0))   # uses the fixed guard path
+  let innerMap = jvObjectVal(obj)
+  doAssert innerMap != nil
+  let mapCap = mapJVCap2(innerMap)
+  var occupied = 0
+  for i in 0.csize_t ..< mapCap:
+    if mapJVOcc2(innerMap, i): inc occupied
+  doAssert occupied == 1, "json_object_set_owned dropped the element (occupied=" & $occupied & "); guard fix not effective"
+  jvFree(obj)
+  echo "  json_object_set_owned guard fix ok (occupied=1)"
+
+  echo "worker_service container_builders ok"
+
 testSnapshot()
+testContainerBuilders()
 testJsonValueToNode()
