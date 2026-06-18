@@ -5,7 +5,7 @@
 import platform
 import apptypes
 import router, service, permissions, appconfig
-import worker_service          # registerWorkerServices — worker→native service seam
+import worker_service          # buildWorkerServiceSnapshot — worker→native service seam
 # zapp_headless is CLI-generated into the project's .zapp/ dir (--path:<.zapp>),
 # providing zapp_start_headless_workers() which spawns the configured zjs workers.
 import zapp_headless
@@ -28,16 +28,16 @@ proc newApp*(name: string, terminateAfterLastWindowClosed = true): App =
                    inspectable: Inspectable.Auto, maxWorkers: 0))
 
 proc run*(app: App): int =
-  ## Init permissions (main-thread parse), register worker-path services, run
-  ## startup hooks, spawn zjs headless workers, then enter the Cocoa run loop
-  ## (blocks). permissionsEnsureInit() runs FIRST so the manifest is parsed on
-  ## the main thread before any window or worker can issue a permission check.
-  ## registerWorkerServices() MUST run before the spawn so service_invoke_native
-  ## has the bench handlers when the worker's first invokeService round-trips
-  ## back into native; runStartupAll() runs before the spawn so services are
-  ## started before any worker can invoke them.
+  ## Init permissions (main-thread parse), build the worker service snapshot,
+  ## run startup hooks, spawn zjs headless workers, then enter the Cocoa run
+  ## loop (blocks). permissionsEnsureInit() runs FIRST so the manifest is
+  ## parsed on the main thread before any window or worker can issue a
+  ## permission check. buildWorkerServiceSnapshot() MUST run AFTER services
+  ## are registered (app.service.add) and BEFORE workers spawn so the worker
+  ## pthreads see a complete snapshot; runStartupAll() runs before the spawn
+  ## so services are started before any worker can invoke them.
   permissionsEnsureInit()
-  registerWorkerServices()
+  buildWorkerServiceSnapshot()
   runStartupAll()
   zapp_start_headless_workers()
   platformRun(app.terminateAfterLastWindowClosed)

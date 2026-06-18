@@ -37,6 +37,11 @@ proc add*(sm: ServiceManager, name: string, handler: AppServiceHandler) =
   ## app.service.add("name", handler) — mirrors zc app.service.add.
   registerService(name, handler)
 
+iterator registeredServices*(): tuple[name: string, handler: AppServiceHandler] =
+  ## Enumerate all registered services (name + handler pointer). Used by
+  ## worker_service.nim to build the per-boot POD snapshot; read-only walk.
+  for rec in gRegistry: yield (rec.name, rec.handler)
+
 proc invokeService*(name: string, args: JsonNode): Option[string] =
   ## Run the handler for `name`; none when unregistered (router maps that to a
   ## NOT_FOUND rejection). Linear scan — service counts are tiny, matching zc.
