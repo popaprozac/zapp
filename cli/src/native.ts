@@ -1111,6 +1111,7 @@ async function buildNativeNim(
   // benign inside the generated Nim string literal.
   const assetRoot = path.resolve(root, config.assetDir).replace(/\\/g, "/");
 
+  const { generateAssetManifestNim } = await import("./assets");
   const { renderBuildConfigNim, renderBootstrapNim, renderHeadlessNim, renderNimCfg } = await import("./build-config");
   const { resolveBootstrapDir } = await import("./paths");
   const { bundleWebviewBootstrapRaw, bundleWorkerBootstrapRaw } = await import(
@@ -1217,6 +1218,11 @@ async function buildNativeNim(
       `[zapp] Nim build: clang -c of the JsonValue provider failed (exit ${clangCode}).`,
     );
   }
+
+  // Emit the Nim asset module. Dev stub (embed:false) keeps `import zapp_assets`
+  // resolving; Task 3 flips embed:true for prod. Must run before `nim c` so the
+  // generated .zapp/zapp_assets.nim is on --path:${zappDir}.
+  await generateAssetManifestNim(root, config.assetDir, { embed: false });
 
   // The Nim build root lives in the framework's native/ dir (nativeDir), not
   // the user project — same as the zc sources. `{.compile.}` paths inside

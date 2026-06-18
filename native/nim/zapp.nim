@@ -86,7 +86,7 @@ import worker
 # referenced here), so silence UnusedImport — keeps the warning channel clean
 # for real unused imports as the module set grows in breadth.
 {.push warning[UnusedImport]: off.}
-import zapp_build_config, zapp_bootstrap
+import zapp_build_config, zapp_bootstrap, zapp_assets
 {.pop.}
 
 # Re-export the app-facing surface so an app's `app.nim` gets everything via
@@ -165,23 +165,11 @@ proc app_get_active(): pointer {.exportc, cdecl.} = addr gActiveAppSentinel
 # asset_root=<built web dist> — so webview.m's zapp:// scheme handler serves the
 # real hello-world UI off the filesystem.
 
-# --- Embedded asset table (CLI-generated in real builds) --------------------
-# webview.m's scheme handler loops `for (i = 0; i < zapp_embedded_assets_count;
-# i++)`. We export an EMPTY set: count 0 + a 1-element layout-matched dummy
-# array (a zero-length C array is awkward to export cleanly; count 0 means the
-# array is never read). The object mirrors ZappEmbeddedAsset exactly:
-#   { const char* path; uint8_t* data; int len; int uncompressed_len; int is_brotli; }
-# (authoritative layout: cli/src/assets.ts / native/platform/ios/webview.m).
-# TEMP until 4b emits the real table.
-type ZappEmbeddedAsset {.exportc, bycopy.} = object
-  path: cstring
-  data: ptr uint8
-  len: cint
-  uncompressed_len: cint
-  is_brotli: cint
-
-var zapp_embedded_assets {.exportc.}: array[1, ZappEmbeddedAsset]
-var zapp_embedded_assets_count {.exportc.}: cint = 0
+# --- Embedded asset table ---------------------------------------------------
+# ZappEmbeddedAsset type + zapp_embedded_assets/zapp_embedded_assets_count are
+# now provided by the CLI-generated `zapp_assets` module (imported above via the
+# UnusedImport-suppressed block). `buildNativeNim` emits a count-0 dev stub so
+# `import zapp_assets` always resolves; Task 3 flips it to a full prod embed.
 
 # ---------------------------------------------------------------------------
 # zjs worker engine (native/worker/engines/zjs.c — REUSED UNTOUCHED).

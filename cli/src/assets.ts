@@ -2,15 +2,20 @@
 // Assets are compiled directly into the binary. Decompressed at runtime in the scheme handler.
 
 import path from "node:path";
-import { mkdir, readdir, stat } from "node:fs/promises";
+import { mkdir, readdir, rm, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { brotliCompressSync, constants } from "node:zlib";
 import { clog } from "./log";
+
+/** Marker written by both prod asset emitters (zc + Nim) to signal that
+ *  assets are baked into the binary. The zc DEV stub path does NOT write it. */
+export const ASSETS_EMBEDDED_MARKER = ".zapp/assets-embedded";
 
 export interface AssetEntry {
   relPath: string;   // e.g. "/index.html"
   brPath: string;    // absolute path to .br file
   originalSize: number;
+  compressedSize?: number;  // set by collectAssets; optional so test fixtures stay concise
 }
 
 /** Recursively walk a directory and return all file paths. */
@@ -29,10 +34,13 @@ async function walkDir(dir: string): Promise<string[]> {
 }
 
 /**
- * Compress all files in distDir with brotli, generate a Zen-C file with embed directives.
- * Returns the path to the generated .zapp/zapp_assets.zc file.
+ * Walk `assetDir`, brotli-compress each file into `.zapp/assets/`, and return
+ * the collected asset metadata. Shared by the zc and Nim emitters.
  */
-export async function generateAssetManifest(root: string, assetDir: string): Promise<string> {
+async function collectAssets(
+  root: string,
+  assetDir: string,
+): Promise<{ assets: AssetEntry[]; compress: boolean }> {
   const distDir = path.resolve(root, assetDir);
   const zappDir = path.join(root, ".zapp");
   const brDir = path.join(zappDir, "assets");
@@ -46,11 +54,8 @@ export async function generateAssetManifest(root: string, assetDir: string): Pro
   // Costs binary size only; revisit if a portable brotli decoder lands.
   const compress = process.platform !== "win32";
 
-  // Collect all files from Vite dist/ output (includes _workers/ from Vite plugin)
   const files = await walkDir(distDir);
   const assets: AssetEntry[] = [];
-  let totalOriginal = 0;
-  let totalCompressed = 0;
 
   for (const file of files) {
     const relPath = "/" + path.relative(distDir, file).replace(/\\/g, "/");
@@ -67,9 +72,26 @@ export async function generateAssetManifest(root: string, assetDir: string): Pro
     await mkdir(path.dirname(brPath), { recursive: true });
     await Bun.write(brPath, compressed);
 
-    assets.push({ relPath, brPath, originalSize: source.byteLength });
-    totalOriginal += source.byteLength;
-    totalCompressed += compressed.byteLength;
+    assets.push({ relPath, brPath, originalSize: source.byteLength, compressedSize: compressed.byteLength });
+  }
+
+  return { assets, compress };
+}
+
+/**
+ * Compress all files in distDir with brotli, generate a Zen-C file with embed directives.
+ * Returns the path to the generated .zapp/zapp_assets.zc file.
+ */
+export async function generateAssetManifest(root: string, assetDir: string): Promise<string> {
+  const zappDir = path.join(root, ".zapp");
+  await mkdir(zappDir, { recursive: true });
+
+  const { assets, compress } = await collectAssets(root, assetDir);
+  let totalOriginal = 0;
+  let totalCompressed = 0;
+  for (const a of assets) {
+    totalOriginal += a.originalSize;
+    totalCompressed += a.compressedSize ?? a.originalSize;
   }
 
   // Generate Zen-C file with embed directives
@@ -135,6 +157,9 @@ export async function generateAssetManifest(root: string, assetDir: string): Pro
   const outPath = path.join(zappDir, "zapp_assets.zc");
   await Bun.write(outPath, zc);
 
+  // Marker: present iff assets are baked into the binary (both prod emitters write it).
+  await Bun.write(path.join(root, ASSETS_EMBEDDED_MARKER), "");
+
   clog(1,
     `compressed ${assets.length} assets: ` +
     `${Math.round(totalOriginal / 1024)} KB → ${Math.round(totalCompressed / 1024)} KB ` +
@@ -184,4 +209,38 @@ export function renderAssetsNim(assets: AssetEntry[], compress: boolean): string
   s += "]\n";
   s += `var zapp_embedded_assets_count* {.exportc.}: cint = cint(${assets.length})\n`;
   return s;
+}
+
+/**
+ * Generate `.zapp/zapp_assets.nim` for the Nim build path.
+ *
+ * - opts.embed = false (dev): emits a count-0 stub so `import zapp_assets`
+ *   resolves; webview falls back to filesystem (unchanged dev behaviour).
+ *   Removes the marker so callers can detect "no embed".
+ * - opts.embed = true (prod): walks + brotli-compresses assets (via
+ *   collectAssets), renders the full table, and writes the embed marker.
+ *
+ * Returns the path to the generated `.zapp/zapp_assets.nim`.
+ */
+export async function generateAssetManifestNim(
+  root: string,
+  assetDir: string,
+  opts: { embed: boolean },
+): Promise<string> {
+  const zappDir = path.join(root, ".zapp");
+  await mkdir(zappDir, { recursive: true });
+  const outPath = path.join(zappDir, "zapp_assets.nim");
+  const markerPath = path.join(root, ASSETS_EMBEDDED_MARKER);
+
+  if (!opts.embed) {
+    // Dev: count-0 stub so `import zapp_assets` resolves; filesystem fallback.
+    await Bun.write(outPath, renderAssetsNim([], true));
+    await rm(markerPath, { force: true }); // no embed → no marker
+    return outPath;
+  }
+
+  const { assets, compress } = await collectAssets(root, assetDir);
+  await Bun.write(outPath, renderAssetsNim(assets, compress));
+  await Bun.write(markerPath, ""); // embed → marker
+  return outPath;
 }
