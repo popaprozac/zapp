@@ -8,8 +8,10 @@
 ## called by zjs.c once per worker pthread before its message loop; without it,
 ## any Nim alloc on the worker would be UB under ORC.
 import std/json
+import std/options
 import apptypes        # App, AppServiceHandler
-import service         # registeredServices
+import service         # registeredServices, invokeService
+import bridge          # escapeJsSingleQuoted
 
 # ---------------------------------------------------------------------------
 # JsonValue C-ABI mirror (Task 4: JsonValue* → JsonNode walker)
@@ -179,6 +181,11 @@ proc zapp_worker_thread_gc_init*() {.exportc, cdecl.} =
 
 var tlResult {.threadvar.}: string   # per-worker-thread root; cstring borrows this buffer
 
+# worker_eval_js — defined in worker.nim ({.exportc, cdecl.}); importc by C name
+# so worker_service.nim can deliver a JS snippet to a specific worker without a
+# circular import (worker.nim ← service.nim path that would arise from importing worker).
+proc worker_eval_js(workerId, js: cstring) {.importc, cdecl.}
+
 proc service_invoke_native*(app: pointer, methodName: cstring, args: pointer): cstring
     {.exportc, cdecl.} =
   ## Worker pthread (foreign-thread GC already set up by zapp_worker_thread_gc_init).
@@ -191,3 +198,35 @@ proc service_invoke_native*(app: pointer, methodName: cstring, args: pointer): c
       tlResult = e.handler(nil, node)     # nil app — pure-only contract (spec)
       return tlResult.cstring
   return cstring""
+
+# ---------------------------------------------------------------------------
+# Async worker invoke — MAIN-THREAD entry (Task 2 zjs.c host fn calls this
+# from a dispatch_async(main) block).
+# ---------------------------------------------------------------------------
+
+proc zapp_worker_invoke_on_main*(workerId: cstring, reqId: cint,
+                                 methodName: cstring, argsJson: cstring)
+    {.exportc, cdecl.} =
+  ## MAIN thread. Real registry (gCurrentApp valid via service.nim's invokeService)
+  ## for an async worker invoke. Resolves the worker-side promise via
+  ## worker_eval_js → _resolveInvoke (JS side added in Task 3).
+  var ok = true
+  var payload: string
+  try:
+    let args =
+      if argsJson.isNil or argsJson[0] == '\0': newJNull()
+      else: parseJson($argsJson)
+    let r = invokeService($methodName, args)
+    if r.isSome:
+      payload = r.get
+    else:
+      ok = false
+      payload = "NOT_FOUND"
+  except CatchableError as e:
+    ok = false
+    payload = e.msg
+  let iife =
+    "(function(){var b=self.__zappBridge;if(b&&b._resolveInvoke){b._resolveInvoke(" &
+    $reqId.int & "," & (if ok: "true" else: "false") & ",'" &
+    escapeJsSingleQuoted(payload) & "');}})();"
+  worker_eval_js(workerId, iife.cstring)

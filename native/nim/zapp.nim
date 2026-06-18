@@ -202,7 +202,8 @@ var zapp_embedded_assets_count {.exportc.}: cint = 0
 # levels up. Matches the path style of the platform-.m pragmas at the top.
 {.passC: "-I" & currentSourcePath().parentDir & "/../../vendor/zjs/include".}
 {.compile("../worker/engines/zjs.c",
-          "-I" & currentSourcePath().parentDir & "/../../vendor/zjs/include").}
+          "-I" & currentSourcePath().parentDir & "/../../vendor/zjs/include" &
+          " -DZAPP_NIM_BUILD").}
 {.passL: "-framework Foundation".}
 {.passL: "-lcompression".}  # zjs.c:1208 compression_decode_buffer (embedded-asset decode)
 {.passL: currentSourcePath().parentDir & "/../../vendor/zjs/build/libzjs.dylib".}
