@@ -10,6 +10,11 @@ import ../apptypes
 import ../service
 import ../worker_service
 
+# Stub for worker_eval_js — defined in worker.nim in the full app build.
+# worker_service.nim importc's it for zapp_worker_invoke_on_main (Task 2);
+# this test doesn't exercise that path but the linker needs the symbol.
+proc worker_eval_js(workerId, js: cstring) {.exportc, cdecl.} = discard
+
 proc greetHandler(app: App, args: JsonNode): string = "Hello from Zapp!"
 
 var tlResult {.threadvar.}: string  # per-thread root so cstring stays alive

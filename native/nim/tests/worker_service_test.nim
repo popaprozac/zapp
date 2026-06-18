@@ -25,6 +25,11 @@ import ../apptypes  # App, AppServiceHandler
 import ../service   # registerService (populate the real registry)
 import ../worker_service
 
+# Stub for worker_eval_js — defined in worker.nim in the full app build.
+# worker_service.nim importc's it for zapp_worker_invoke_on_main (Task 2);
+# these tests don't exercise that path but the linker needs the symbol.
+proc worker_eval_js(workerId, js: cstring) {.exportc, cdecl.} = discard
+
 # ---------------------------------------------------------------------------
 # JsonValue builder C-ABI — from zjson_provider.o (opaque pointer ABI).
 # worker_service.nim already emits the struct declarations.
