@@ -1549,7 +1549,7 @@ proc runApp(): int =
   let win = a.window.create(WindowOptions(
     title: "My App",
     visible: false,                        # deferred show; omit to show immediately
-    inspectable: inspectableAuto(),        # web inspector: on in dev, off in prod
+    inspectable: Inspectable.Auto,         # web inspector: on in dev, off in prod
     # sidebarUrl: "#sidebar", inspectorUrl: "#inspector",  # optional panes
   ))
   win.onReady(onReady)
@@ -1570,9 +1570,12 @@ empty-window flash (both are optional). The `onReady` callback must be a
 top-level `{.cdecl.}` proc — it is registered as a C function pointer;
 reconstruct the window inside it with `Window(id: id, handle: handle)`.
 
-`inspectable: inspectableAuto()` enables the web inspector in dev builds and
-disables it in production. It corresponds to the `inspectable` field on
-`AppConfig` / `WindowOptions`.
+`inspectable` controls the web inspector and accepts the `Inspectable` enum:
+`Inspectable.Auto` (dev → on, prod → off), `Inspectable.On`, `Inspectable.Off`,
+or `Inspectable.Inherit`. Resolution is a cascade — most-specific wins:
+**per-window explicit > AppConfig global > dev-vs-prod default**. The default
+for `WindowOptions.inspectable` is `Inspectable.Inherit` (defer to the app
+level); the default for `AppConfig.inspectable` is `Inspectable.Auto`.
 
 Power users can still `import` native libraries via Nim pragmas and expose
 them as services — first-class native extensibility, no C shim required.
