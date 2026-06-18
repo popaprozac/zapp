@@ -12,6 +12,13 @@ enum TitleBarStyle {
     Default,
     Hidden,
     HiddenInset,
+    // Unset = "app didn't pick a style; use the chrome default". Distinct from
+    // Default (an explicit "give me a standard title bar"). Lets a sidebar/
+    // inspector window — which otherwise forces the unified hidden-title look —
+    // opt back into a standard title bar by setting Default explicitly. Appended
+    // last so Default/Hidden/HiddenInset keep tags 0/1/2 (window.m depends on
+    // them); Unset is tag 3. Mirrors the inspectable TriState Unset/Off/On.
+    Unset,
 }
 
 // Per-button state for the macOS traffic lights (close/minimize/zoom).
@@ -204,7 +211,7 @@ impl WindowOptions {
             transparent: false,
             hidden: false,
             alwaysOnTop: false,
-            titleBarStyle: TitleBarStyle::Default(),
+            titleBarStyle: TitleBarStyle::Unset(),
             trafficLights: TrafficLights{
                 close: ButtonState::Enabled(),
                 minimize: ButtonState::Enabled(),
@@ -732,8 +739,9 @@ fn wopts_title_bar_style_tag(opts: WindowOptions*) -> int {
         TitleBarStyle::Default => { return 0; },
         TitleBarStyle::Hidden => { return 1; },
         TitleBarStyle::HiddenInset => { return 2; },
+        TitleBarStyle::Unset => { return 3; },
     }
-    return 0;
+    return 3;
 }
 
 // --- Window struct ---

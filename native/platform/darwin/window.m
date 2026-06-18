@@ -769,8 +769,11 @@ void* darwin_window_create(WindowOptions* opts) {
             //
             // Chrome: default to the standard sidebar/inspector-app look (full-
             // size content, hidden title, transparent titlebar) unless titleBarStyle
-            // was set explicitly. tbs==0 is Default/unset (wopts_title_bar_style_tag).
-            if (tbs == 0) {
+            // was set explicitly. tbs==3 is Unset — "app didn't pick a style" — and
+            // is the ONLY value that gets this chrome default. An explicit Default
+            // (tbs==0) falls through here, leaving a standard title bar even on a
+            // split window; Hidden/HiddenInset (1/2) already hid it above.
+            if (tbs == 3) {
                 [window setStyleMask:([window styleMask] | NSWindowStyleMaskFullSizeContentView)];
                 [window setTitleVisibility:NSWindowTitleHidden];
                 [window setTitlebarAppearsTransparent:YES];

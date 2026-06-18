@@ -18,10 +18,16 @@ import apptypes
 export apptypes    # WindowManager visible to callers of window.nim
 
 type
-  TitleBarStyle* {.pure.} = enum   ## NSWindow title-bar style (window.m tag 0/1/2)
+  TitleBarStyle* {.pure.} = enum   ## NSWindow title-bar style (window.m tag 0/1/2/3)
     Default = 0
     Hidden = 1
     HiddenInset = 2
+    ## Unset = "app didn't pick a style; use the chrome default" — distinct from
+    ## Default (explicit "standard title bar"). On a sidebar/inspector window only
+    ## Unset gets the unified hidden-title chrome default; an explicit Default
+    ## opts back into a standard title bar. Mirrors zc's TitleBarStyle + the
+    ## inspectable TriState (Unset/Off/On). Appended last to keep tags 0/1/2.
+    Unset = 3
 
   ButtonState* {.pure.} = enum      ## a traffic-light button (window.m tag 0/1/2)
     Enabled = 0
@@ -98,7 +104,7 @@ proc newWindowOptions*(title: string): WindowOptions =
     inspectable: TriState.Unset,
     frameAutosaveName: "",
     vibrancy: "",
-    titleBarStyle: TitleBarStyle.Default,
+    titleBarStyle: TitleBarStyle.Unset,
     trafficLights: TrafficLights(close: ButtonState.Enabled,
                                  minimize: ButtonState.Enabled,
                                  zoom: ButtonState.Enabled),

@@ -120,6 +120,15 @@ export interface WindowOptions {
    * pre-22H2. No-op on iOS.
    */
   vibrancy?: Material;
+  /**
+   * macOS title-bar style. `"hidden"`/`"hiddenInset"` hide the title and let
+   * content extend under the title bar; `"default"` is a standard title bar.
+   * Omitting this is distinct from `"default"`: a plain window with no value
+   * gets a standard title bar, but a window with a `sidebar`/`inspector` pane
+   * defaults to the unified hidden-title chrome (standard sidebar-app look).
+   * Set `"default"` explicitly to force a standard title bar on such a window.
+   * No-op on iOS.
+   */
   titleBarStyle?: "default" | "hidden" | "hiddenInset";
   /**
    * Atomic create-and-attach-as-sheet. Equivalent to creating the window

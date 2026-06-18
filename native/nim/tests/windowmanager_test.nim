@@ -75,7 +75,12 @@ block:
 
 block:
   let o = newWindowOptions("def")
+  doAssert o.titleBarStyle == TitleBarStyle.Unset, "default titleBarStyle must be Unset (use chrome default)"
   windowOptsApplyJson(o, parseJson("{}"))
   doAssert o.title == "def" and o.asSheetOfId == -1'i32
+  doAssert o.titleBarStyle == TitleBarStyle.Unset, "omitting titleBarStyle must keep Unset"
+  windowOptsApplyJson(o, parseJson("""{"titleBarStyle":"default"}"""))
+  doAssert o.titleBarStyle == TitleBarStyle.Default,
+    "explicit 'default' must force Default (overrides the split-window chrome default)"
 
 echo "windowmanager ok"

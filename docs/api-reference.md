@@ -567,6 +567,18 @@ wire `on(READY, () => show())` themselves — that pattern is no longer
 needed. Pass `visible: false` if you want to defer showing yourself and
 call `show()` manually when your app's logic decides it's time.
 
+**Title bar (macOS).** `titleBarStyle` controls the title bar:
+`"hidden"` and `"hiddenInset"` hide the title and extend content under the
+title bar (full-bleed); `"default"` is a standard title bar. **Omitting
+`titleBarStyle` is distinct from setting `"default"`.** When you omit it, a
+plain window gets a standard title bar, but a window with a `sidebar` or
+`inspector` pane automatically uses the unified hidden-title chrome (the
+standard macOS sidebar-app look). Setting `titleBarStyle: "default"`
+*explicitly* opts a sidebar/inspector window back into a standard title bar.
+(Note: on a window that also has a `toolbar`, the toolbar's own `style`
+governs the toolbar appearance, so `"hidden"` vs `"hiddenInset"` won't
+differ visibly there.)
+
 **Traffic lights:** per-button control over the macOS close/minimize/zoom
 buttons. `"enabled"` is the default clickable state; `"disabled"` greys
 the button; `"hidden"` removes it entirely (leaves a gap unless paired
