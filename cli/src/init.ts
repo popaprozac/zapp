@@ -227,7 +227,7 @@ proc greet(args: JsonNode): string =
 proc onReady(id: cint, handle: pointer) {.cdecl.} =
   ## Reveal the window once its webview bridge is up (no empty-window flash).
   ## Must be a top-level cdecl proc — it's registered as a C function pointer.
-  showWindow(handle)
+  Window(id: id, handle: handle).show()
 
 proc runApp(): int =
   let a = newApp("${name}", terminateAfterLastWindowClosed = true)

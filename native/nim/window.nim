@@ -198,9 +198,17 @@ proc darwin_window_get_by_numeric_id(numericId: int32): pointer {.importc, cdecl
 proc darwin_window_attach_modal(parent, modal: pointer) {.importc, cdecl.}
 proc darwin_window_numeric_id_for_string(wid: cstring): int32 {.importc, cdecl.}
 
+type
+  Window* = object
+    ## A created window — its monotonic numeric id + the opaque NSWindow* handle.
+    ## Methods (`show`, `setOnReady`, …) hang off this so apps write `win.show()`,
+    ## mirroring app.zc's `Window{id, handle}`.
+    id*: int32
+    handle*: pointer
+
 var gNextWindowId: int32 = 0
 
-proc createWindow*(o: WindowOptions): tuple[id: int32, handle: pointer] =
+proc createWindow*(o: WindowOptions): Window =
   ## Full WindowManager.create (port of window.zc:837-889). Allocate the window's
   ## numeric id, then — only when those panes are requested — the sidebar/inspector
   ## transport slots, all from the SAME monotonic id-space (never a parallel
@@ -229,7 +237,7 @@ proc createWindow*(o: WindowOptions): tuple[id: int32, handle: pointer] =
     let parent = darwin_window_get_by_numeric_id(o.asSheetOfId)
     if parent != nil:
       darwin_window_attach_modal(parent, h)
-  (id, h)
+  Window(id: id, handle: h)
 
 proc allocSlot*(): int32 =
   ## Draw one dispatch slot from the same monotonic id-space windows + panes use
@@ -247,17 +255,17 @@ type ReadyProc* = proc(id: cint, handle: pointer) {.cdecl.}
 proc zapp_window_set_on_ready(id: cint, handle: pointer, cb: ReadyProc) {.importc, cdecl.}
 proc darwin_window_show(handle: pointer) {.importc, cdecl.}
 
-proc setOnReady*(win: tuple[id: int32, handle: pointer], cb: ReadyProc) =
+proc setOnReady*(win: Window, cb: ReadyProc) =
   ## Register `cb` to fire once the window's webview bridge is ready — the Nim
   ## analog of `win.on_ready(cb)`. Pair with `opts.visible = false` to defer the
   ## first paint until content can render (no empty-window flash). `cb` must be a
-  ## top-level `{.cdecl.}` proc taking `(id: cint, handle: pointer)`.
+  ## top-level `{.cdecl.}` proc taking `(id: cint, handle: pointer)`; reconstruct
+  ## the window inside it with `Window(id: id, handle: handle).show()`.
   zapp_window_set_on_ready(win.id.cint, win.handle, cb)
 
-proc showWindow*(handle: pointer) =
-  ## Show a window (port of Window.show()). Typically called from an on-ready
-  ## callback to reveal a window created with `opts.visible = false`.
-  darwin_window_show(handle)
+proc show*(win: Window) =
+  ## Show the window — `win.show()`, the Nim analog of `Window.show()`.
+  darwin_window_show(win.handle)
 
 # --- JSON → WindowOptions (port of window.zc:window_opts_apply_json) -----------
 # nil-safe readers. Numeric reads use getFloat so a fractional dim from the bridge

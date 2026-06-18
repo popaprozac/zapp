@@ -10,8 +10,9 @@ proc greet(args: JsonNode): string =
 proc onReady(id: cint, handle: pointer) {.cdecl.} =
   ## Mirrors app.zc's on_ready — reveal the window once its webview bridge is up,
   ## so the native-chrome shell never flashes empty. Must be a top-level cdecl
-  ## proc (it's registered as a C function pointer).
-  showWindow(handle)
+  ## proc (it's registered as a C function pointer); reconstruct the Window from
+  ## the (id, handle) the callback receives, just like app.zc's Window{id,handle}.
+  Window(id: id, handle: handle).show()
 
 proc runApp(): int =
   let a = newApp("kitchen-sink", terminateAfterLastWindowClosed = true)

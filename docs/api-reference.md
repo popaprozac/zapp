@@ -1538,15 +1538,15 @@ via `Services.invoke("name", …)`. Power users can `import` any native
 library through Nim's `importc`, wrap it in a proc, and expose it as a
 service — first-class native extensibility, no C shim required.
 
-`createWindow` returns `(id, handle)`. Windows are `visible` by default,
-so the simplest path is to `discard createWindow(opts)` and let it paint
-as content loads. To avoid the brief empty-window flash, set
-`opts.visible = false` and reveal the window once its webview bridge is
-ready with `setOnReady` — the Nim analog of `win.on_ready`:
+`createWindow` returns a `Window` (`{ id, handle }`) with methods like
+`win.show()`. Windows are `visible` by default, so the simplest path is to
+`discard createWindow(opts)` and let it paint as content loads. To avoid the
+brief empty-window flash, set `opts.visible = false` and reveal the window once
+its webview bridge is ready with `setOnReady` — the Nim analog of `win.on_ready`:
 
 ```nim
 proc onReady(id: cint, handle: pointer) {.cdecl.} =
-  showWindow(handle)            # reveal once content can paint
+  Window(id: id, handle: handle).show()   # reveal once content can paint
 
 proc runApp(): int =
   let a = newApp("my-app")
