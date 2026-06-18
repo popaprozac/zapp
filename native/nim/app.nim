@@ -1,28 +1,26 @@
 ## App value + lifecycle. Mirrors the old Zen-C `App` (app.zc): construct it,
 ## which boots the platform, then `run` enters the Cocoa run loop. Also owns the
-## skeleton's service registration and the webview->native message entry point
-## (zapp_handle_message_from_window), delegating dispatch to router.nim.
-import std/json
+## webview->native message entry point (zapp_handle_message_from_window),
+## delegating dispatch to router.nim.
 import platform
+import apptypes
 import router, service, permissions, appconfig
 import worker_service          # registerWorkerServices — worker→native service seam
 # zapp_headless is CLI-generated into the project's .zapp/ dir (--path:<.zapp>),
 # providing zapp_start_headless_workers() which spawns the configured zjs workers.
 import zapp_headless
 
-type App* = object
-  name*: string
-  terminateAfterLastWindowClosed*: bool
-
 proc newApp*(name: string, terminateAfterLastWindowClosed = true): App =
-  ## Mirrors App::new — init the platform, store the app config, return the value.
+  ## Mirrors App::new — init the platform, store config, wire managers, return the App.
   platformInit(name)
   setAppConfig(AppConfig(
     name: name,
     terminateAfterLastWindowClosed: terminateAfterLastWindowClosed,
     inspectable: Inspectable.Auto,
     maxWorkers: 0))
-  App(name: name, terminateAfterLastWindowClosed: terminateAfterLastWindowClosed)
+  result = App(name: name, terminateAfterLastWindowClosed: terminateAfterLastWindowClosed,
+               service: ServiceManager(), window: WindowManager())
+  setCurrentApp(result)
 
 proc run*(app: App): int =
   ## Init permissions (main-thread parse), register worker-path services, run
@@ -38,20 +36,6 @@ proc run*(app: App): int =
   runStartupAll()
   zapp_start_headless_workers()
   platformRun(app.terminateAfterLastWindowClosed)
-
-# --- Services ---------------------------------------------------------------
-
-proc greetService(args: JsonNode): string =
-  ## Demo service. Static result mirrors native/build.zc:greet_service (the zc
-  ## reference) and the inline sub-gate-A bridge. The hello-world entry module
-  ## top-level-awaits greet() before mounting #app, so this resolving is what
-  ## makes the UI render.
-  discard args
-  """{"greeting":"hello from native"}"""
-
-proc registerSkeletonServices*() =
-  ## Register the walking-skeleton's services. Called from zapp.nim before run().
-  registerService("greet", greetService)
 
 # --- Message bridge entry point ---------------------------------------------
 

@@ -221,7 +221,7 @@ fn main() -> int {
 ## string\`, reachable from the webview via \`Services.invoke("name", …)\`.
 import zapp
 
-proc greet(args: JsonNode): string =
+proc greet(app: App, args: JsonNode): string =
   "Hello from Zapp!"
 
 proc onReady(id: cint, handle: pointer) {.cdecl.} =
@@ -231,7 +231,7 @@ proc onReady(id: cint, handle: pointer) {.cdecl.} =
 
 proc runApp(): int =
   let a = newApp("${name}", terminateAfterLastWindowClosed = true)
-  registerService("greet", greet)
+  a.service.add("greet", greet)
 
   var opts = newWindowOptions("${name}")
   opts.visible = false                   # deferred show — revealed by onReady

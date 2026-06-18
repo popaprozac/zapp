@@ -3,7 +3,7 @@
 ## build still uses app.zc. greet is a real Nim service handler.
 import zapp
 
-proc greet(args: JsonNode): string =
+proc greet(app: App, args: JsonNode): string =
   ## Mirrors app.zc's greet — the real value (no more [object Object]).
   "Hello from Zapp!"
 
@@ -16,7 +16,7 @@ proc onReady(id: cint, handle: pointer) {.cdecl.} =
 
 proc runApp(): int =
   let a = newApp("kitchen-sink", terminateAfterLastWindowClosed = true)
-  registerService("greet", greet)
+  a.service.add("greet", greet)
 
   var opts = newWindowOptions("Kitchen Sink")
   opts.visible = false   # deferred show — revealed by onReady when content can paint

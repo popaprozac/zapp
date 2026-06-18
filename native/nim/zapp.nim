@@ -35,6 +35,7 @@
 
 import std/os          # parentDir for the zjs.c {.compile.}/{.passL.} paths below
 import std/json        # re-exported below (`export json`) for app.nim's JsonNode service handlers
+import apptypes        # App / ServiceManager / WindowManager / AppServiceHandler (leaf types)
 import app
 import window
 # service/appconfig/coretypes are imported here so `import zapp` can re-export
@@ -90,9 +91,10 @@ import zapp_build_config, zapp_bootstrap
 # Re-export the app-facing surface so an app's `app.nim` gets everything via
 # `import zapp` (newApp/run, AppConfig, WindowOptions/newWindowOptions/createWindow,
 # registerService, TriState, JsonNode).
-export app          # newApp, run, App, registerSkeletonServices
+export apptypes     # App, ServiceManager, WindowManager, AppServiceHandler
+export app          # newApp, run
 export window       # WindowOptions, newWindowOptions, createWindow, windowOptsApplyJson
-export service      # registerService, ServiceHandler, LifecycleHook
+export service      # registerService, ServiceManager.add, LifecycleHook
 export appconfig    # AppConfig, Inspectable
 export coretypes    # TriState, etc.
 export json         # JsonNode for service handlers

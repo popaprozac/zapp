@@ -11,30 +11,37 @@
 ## register(service_ptr) + the worker JSON-string invoke_sync are deferred (no
 ## consumer until the worker-subsystem / leaf-service batches).
 import std/[json, options]
+import apptypes
 
 type
-  ServiceHandler* = proc(args: JsonNode): string {.nimcall.}
   LifecycleHook*  = proc() {.nimcall.}
   ServiceRecord = object
     name: string
-    handler: ServiceHandler
+    handler: AppServiceHandler
     startup, shutdown: LifecycleHook
 
 var gRegistry: seq[ServiceRecord]
+var gCurrentApp: App   ## set by newApp (app.nim); passed to handlers by invokeService
 
-proc registerService*(name: string, handler: ServiceHandler,
+proc setCurrentApp*(a: App) = gCurrentApp = a
+
+proc registerService*(name: string, handler: AppServiceHandler,
                       startup: LifecycleHook = nil,
                       shutdown: LifecycleHook = nil) =
-  ## Register a service (registration order preserved for lifecycle). Mirrors
-  ## ServiceManager.add — stateless handler; optional startup/shutdown hooks.
+  ## Low-level registration primitive (registration order preserved for
+  ## lifecycle). Apps use `app.service.add`; optional startup/shutdown hooks.
   gRegistry.add ServiceRecord(name: name, handler: handler,
                               startup: startup, shutdown: shutdown)
+
+proc add*(sm: ServiceManager, name: string, handler: AppServiceHandler) =
+  ## app.service.add("name", handler) — mirrors zc app.service.add.
+  registerService(name, handler)
 
 proc invokeService*(name: string, args: JsonNode): Option[string] =
   ## Run the handler for `name`; none when unregistered (router maps that to a
   ## NOT_FOUND rejection). Linear scan — service counts are tiny, matching zc.
   for rec in gRegistry:
-    if rec.name == name: return some rec.handler(args)
+    if rec.name == name: return some rec.handler(gCurrentApp, args)
   none(string)
 
 proc runStartupAll*() =
