@@ -13,6 +13,13 @@ async function open(host: HTMLElement, label: string, fn: () => Promise<{ id: st
   }
 }
 
+// Shared toolbar items for the three toolbar-style showcase windows.
+const showcaseToolbarItems = () => [
+  { id: "tb-back",    icon: "sf:chevron.left",  label: "Back" },
+  { id: "tb-forward", icon: "sf:chevron.right", label: "Forward" },
+  { id: "tb-refresh", icon: "sf:arrow.clockwise", label: "Refresh" },
+];
+
 export const multiwindowSection: Section = {
   id: "multiwindow",
   label: "Multi-window",
@@ -52,5 +59,64 @@ export const multiwindowSection: Section = {
       Window.create({ title: "Quick Add", width: 400, height: 300, asSheetOf: win, presentation: "form", grabber: true })));
     onAct(host, "sheet-bottom", () => open(host, "bottom sheet", () =>
       Window.create({ title: "Drawer", asSheetOf: win, presentation: "bottomSheet", detents: ["medium", "large"], grabber: true })));
+
+    // ── Title bar & toolbar showcase ─────────────────────────────────────────
+    host.appendChild(card({
+      title: "Title bar & toolbar",
+      intro: "Launch five windows with distinct title-bar / toolbar configurations so they can be compared side by side. Each window names its own config.",
+      buttons: [
+        { act: "tb-standard",       label: "1. Standard title bar" },
+        { act: "tb-hidden",         label: "2. Hidden title bar" },
+        { act: "tb-unified",        label: "3. Unified toolbar" },
+        { act: "tb-unified-compact", label: "4. Unified compact" },
+        { act: "tb-expanded",       label: "5. Expanded toolbar" },
+      ],
+    }));
+
+    // 1. Standard title bar — titleBarStyle: "default", no toolbar.
+    onAct(host, "tb-standard", () => open(host, "standard title bar", () =>
+      Window.create({
+        title: "Standard title bar",
+        url: "#titlebar-showcase/standard",
+        titleBarStyle: "default",
+        width: 460, height: 300,
+      })));
+
+    // 2. Hidden title bar — titleBarStyle: "hidden", no toolbar.
+    onAct(host, "tb-hidden", () => open(host, "hidden title bar", () =>
+      Window.create({
+        title: "Hidden title bar",
+        url: "#titlebar-showcase/hidden",
+        titleBarStyle: "hidden",
+        width: 460, height: 300,
+      })));
+
+    // 3. Unified toolbar — toolbar style "unified", 3 SF-symbol items.
+    onAct(host, "tb-unified", () => open(host, "unified toolbar", () =>
+      Window.create({
+        title: "Unified toolbar",
+        url: "#titlebar-showcase/unified",
+        width: 460, height: 300,
+        toolbar: { style: "unified", items: showcaseToolbarItems() },
+      })));
+
+    // 4. Unified compact — titleBarStyle "hiddenInset" + toolbar style "unifiedCompact".
+    onAct(host, "tb-unified-compact", () => open(host, "unified compact", () =>
+      Window.create({
+        title: "Unified compact",
+        url: "#titlebar-showcase/unified-compact",
+        titleBarStyle: "hiddenInset",
+        width: 460, height: 300,
+        toolbar: { style: "unifiedCompact", items: showcaseToolbarItems() },
+      })));
+
+    // 5. Expanded toolbar — toolbar style "expanded" (icon + label row below title bar).
+    onAct(host, "tb-expanded", () => open(host, "expanded toolbar", () =>
+      Window.create({
+        title: "Expanded toolbar",
+        url: "#titlebar-showcase/expanded",
+        width: 460, height: 300,
+        toolbar: { style: "expanded", items: showcaseToolbarItems() },
+      })));
   },
 };
