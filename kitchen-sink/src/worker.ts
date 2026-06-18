@@ -26,3 +26,11 @@ receive("invoke-service", (data: any) => {
   const result = Services.invokeSync("greet", data);
   Events.emit("greeter:service-result", { result });
 });
+
+// Async main-thread round-trip: Services.invoke marshals to the main thread so
+// the handler receives a real App — enabling window creation and other
+// App-touching APIs that are unsafe on the worker thread.
+receive("open-window", async (_data: any) => {
+  const result = await Services.invoke("openInfoWindow", {});
+  Events.emit("greeter:open-window-result", { result });
+});

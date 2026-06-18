@@ -21,6 +21,7 @@ export const workersSection: Section = {
       buttons: [
         { act: "ping", label: "Send ping" },
         { act: "service", label: "Invoke greet (from worker)" },
+        { act: "open-window", label: "Open window from worker" },
         { act: "list", label: "Workers.list()" },
       ],
     }));
@@ -31,6 +32,10 @@ export const workersSection: Section = {
     onAct(host, "service", () => {
       Workers.send(WORKER_ID, "invoke-service", { name: "Kitchen Sink" });
       setResult(host, "asked worker to invoke greet…");
+    });
+    onAct(host, "open-window", () => {
+      Workers.send(WORKER_ID, "open-window", {});
+      setResult(host, "asked worker to open a window via async Services.invoke…");
     });
     onAct(host, "list", async () => {
       const list = await Workers.list();
@@ -43,6 +48,8 @@ export const workersSection: Section = {
       Events.on("greeter:pong", (d: any) => setResult(host, `pong → ${JSON.stringify(d)}`)),
       Events.on("greeter:service-result", (d: any) =>
         setResult(host, `service-result → ${JSON.stringify(d)}`)),
+      Events.on("greeter:open-window-result", (d: any) =>
+        setResult(host, `open-window-result → ${JSON.stringify(d)}`)),
     ];
     return () => off.forEach((fn) => fn());
   },

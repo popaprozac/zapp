@@ -7,6 +7,13 @@ proc greet(app: App, args: JsonNode): string =
   ## Mirrors app.zc's greet — the real value (no more [object Object]).
   "Hello from Zapp!"
 
+proc openInfoWindow(app: App, args: JsonNode): string =
+  ## App-using service — opens a window. Only safe via the async (main-thread)
+  ## worker invoke path; would crash on the sync (nil-app) path.
+  let win = app.window.create(WindowOptions(title: "Opened from a worker", width: 380, height: 220))
+  win.show()
+  "opened"
+
 proc onReady(id: cint, handle: pointer) {.cdecl.} =
   ## Mirrors app.zc's on_ready — reveal the window once its webview bridge is up,
   ## so the native-chrome shell never flashes empty. Must be a top-level cdecl
@@ -17,6 +24,7 @@ proc onReady(id: cint, handle: pointer) {.cdecl.} =
 proc runApp(): int =
   let app = newApp("kitchen-sink", terminateAfterLastWindowClosed = true)
   app.service.add("greet", greet)
+  app.service.add("openInfoWindow", openInfoWindow)
 
   let win = app.window.create(WindowOptions(
     title: "Kitchen Sink",
