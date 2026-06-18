@@ -4,7 +4,11 @@ import { findSection } from "../sections/types";
 import { shellToolbar } from "./toolbar-def";
 
 export function renderMainPane(app: HTMLElement) {
-  app.innerHTML = `<div class="main-pane"><div class="stage" data-stage></div></div>`;
+  app.innerHTML = `
+    <div class="drag-strip" data-zapp-drag-region>
+      <span class="drag-strip-label">⠿ Kitchen Sink — drag to move</span>
+    </div>
+    <div class="main-pane"><div class="stage" data-stage></div></div>`;
 
   // Attach the shell toolbar (late-attach to a toolbar-less window works).
   try {

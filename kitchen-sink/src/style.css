@@ -18,6 +18,22 @@ h1 { font-size: 28px; color: var(--text-h); margin: 0 0 8px; font-weight: 600; }
 h2 { font-size: 16px; color: var(--text-h); margin: 0 0 8px; font-weight: 600; }
 .muted { opacity: 0.6; font-size: 12px; }
 
+/* Drag strip — spans full width, sits above sidebar/inspector panes via position:fixed.
+   Left inset 78px preserves the macOS traffic-light button zone (close/min/zoom). */
+.drag-strip {
+  position: fixed; top: 0; left: 0; right: 0;
+  height: var(--zapp-titlebar-height, 34px);
+  padding-left: 78px;
+  display: flex; align-items: center;
+  -webkit-app-region: drag;
+  z-index: 100;
+}
+.drag-strip-label {
+  font-size: 11px; letter-spacing: 0.04em;
+  color: var(--text); opacity: 0.35;
+  pointer-events: none; user-select: none;
+}
+
 /* Sidebar pane */
 .sidebar-pane { padding: var(--zapp-titlebar-height, 52px) 8px 8px; }
 .sidebar-title { opacity: 0.5; font-size: 11px; letter-spacing: 0.06em; padding: 0 8px 8px; }
