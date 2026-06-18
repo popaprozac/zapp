@@ -7,7 +7,7 @@ import { existsSync } from "node:fs";
 import { brotliCompressSync, constants } from "node:zlib";
 import { clog } from "./log";
 
-interface AssetEntry {
+export interface AssetEntry {
   relPath: string;   // e.g. "/index.html"
   brPath: string;    // absolute path to .br file
   originalSize: number;
@@ -142,4 +142,46 @@ export async function generateAssetManifest(root: string, assetDir: string): Pro
   );
 
   return outPath;
+}
+
+/**
+ * Render a Nim source module that embeds all assets via `staticRead`.
+ * The emitted module exposes `{.exportc.}` symbols that the native scheme
+ * handler (native/platform/darwin/webview.m) reads via the C ABI:
+ *   - zapp_embedded_assets: array[N, ZappEmbeddedAsset]
+ *   - zapp_embedded_assets_count: cint
+ *
+ * The `staticRead` path is reconstructed from `relPath` (the `brPath` field
+ * is not used here). The module is written into `.zapp/`, so paths are
+ * relative to that dir (e.g. "assets/index.html.br").
+ */
+export function renderAssetsNim(assets: AssetEntry[], compress: boolean): string {
+  const brotli = compress ? 1 : 0;
+  let s = "## AUTO-GENERATED — embedded assets (brotli), Nim build. DO NOT EDIT.\n";
+  s += "type ZappEmbeddedAsset {.exportc, bycopy.} = object\n";
+  s += "  path: cstring\n  data: ptr uint8\n  len: cint\n  uncompressed_len: cint\n  is_brotli: cint\n\n";
+  if (assets.length === 0) {
+    // Empty/dev: keep the symbols linking; count 0 → webview falls back to filesystem.
+    s += "var zapp_embedded_assets* {.exportc.}: array[1, ZappEmbeddedAsset]\n";
+    s += "var zapp_embedded_assets_count* {.exportc.}: cint = cint(0)\n";
+    return s;
+  }
+  // `let` (not const) so unsafeAddr is valid; bytes are baked at compile time,
+  // the global lives for program lifetime (webview reads synchronously).
+  assets.forEach((a, i) => {
+    // relPath is Vite-generated (hashed, [a-zA-Z0-9_-./]) → no quote escaping
+    // needed for the staticRead literal; the cstring path below escapes anyway.
+    const rel = "assets" + a.relPath + (compress ? ".br" : "");
+    s += `let a${i} = staticRead("${rel}")\n`;
+  });
+  s += `\nvar zapp_embedded_assets* {.exportc.}: array[${assets.length}, ZappEmbeddedAsset] = [\n`;
+  assets.forEach((a, i) => {
+    const esc = a.relPath.replace(/\\/g, "/").replace(/"/g, '\\"');
+    s += `  ZappEmbeddedAsset(path: cstring"${esc}", ` +
+         `data: cast[ptr uint8](unsafeAddr a${i}[0]), len: a${i}.len.cint, ` +
+         `uncompressed_len: cint(${a.originalSize}), is_brotli: cint(${brotli})),\n`;
+  });
+  s += "]\n";
+  s += `var zapp_embedded_assets_count* {.exportc.}: cint = cint(${assets.length})\n`;
+  return s;
 }
