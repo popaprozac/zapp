@@ -382,39 +382,29 @@ static NSDictionary* extract_args(const char* payload_json) {
     return (NSDictionary*)args;
 }
 
-// Apply an icon path with optional template flag. The icon renders as-is
-// unless template_flag is set (template mode auto-tints a monochrome glyph
-// for light/dark — applying it to a full-color icon yields a solid blob).
-// Resolves relative paths against the cwd (dev) and the bundle resources
-// (packaged), logs on load failure, and shows a visible placeholder so a
-// missing icon reads as "?" rather than a silent blank/white square.
+// menu.m (de-static'd): the shared icon resolver — sf:<name> SF Symbols, data:
+// URLs, and file paths (abs/cwd/bundle-relative), sized + template-tagged.
+extern NSImage* zapp_resolve_icon(NSString* spec, CGFloat size, int templateMode);
+
+// Apply an icon spec to the status item. Routes through the shared resolver so
+// sf:/data:/file specs all work (the old file-only path silently failed every
+// sf: symbol). templateMode -1 = auto (template iff sf:) → menu-bar SF glyphs
+// adapt to light/dark while file/color icons stay WYSIWYG (#286); an explicit
+// template:true forces template on. Logs + shows a "?" placeholder on failure
+// so a bad icon reads as missing rather than a silent blank square.
 static void apply_icon(NSStatusItem* item, NSString* path, BOOL template_flag) {
     if (!item || path.length == 0) return;
 
-    NSString* resolved = path;
-    if (![path isAbsolutePath]) {
-        NSFileManager* fm = [NSFileManager defaultManager];
-        NSString* cwdRel = [[fm currentDirectoryPath] stringByAppendingPathComponent:path];
-        NSString* resPath = [NSBundle mainBundle].resourcePath;
-        NSString* resRel = resPath ? [resPath stringByAppendingPathComponent:path] : nil;
-        if ([fm fileExistsAtPath:cwdRel]) resolved = cwdRel;
-        else if (resRel && [fm fileExistsAtPath:resRel]) resolved = resRel;
-    }
-
-    NSImage* img = [[NSImage alloc] initWithContentsOfFile:resolved];
+    NSImage* img = zapp_resolve_icon(path, 18.0, template_flag ? 1 : -1);
     if (!img) {
-        NSLog(@"[zapp] tray: could not load icon at %@ — showing a placeholder", resolved);
+        NSLog(@"[zapp] tray: could not load icon at %@ — showing a placeholder", path);
         if (@available(macOS 11.0, *)) {
             img = [NSImage imageWithSystemSymbolName:@"questionmark.circle"
                                 accessibilityDescription:nil];
-            template_flag = NO;  // placeholder must stay visible, never a tinted blob
+            if (img) { img.size = NSMakeSize(18, 18); img.template = NO; }
         }
     }
-    if (img) {
-        img.size = NSMakeSize(18, 18);
-        img.template = template_flag;
-        item.button.image = img;
-    }
+    if (img) item.button.image = img;
 }
 
 // Build an NSMenu from the items array. Returns CF-retained pointer
