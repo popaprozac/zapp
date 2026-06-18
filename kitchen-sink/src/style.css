@@ -33,6 +33,8 @@ h2 { font-size: 16px; color: var(--text-h); margin: 0 0 8px; font-weight: 600; }
   color: var(--text); opacity: 0.35;
   pointer-events: none; user-select: none;
 }
+/* Trailing (inspector) pane — not adjacent to traffic lights, no left inset needed. */
+.drag-strip--no-inset { padding-left: 0; }
 
 /* Sidebar pane */
 .sidebar-pane { padding: var(--zapp-titlebar-height, 52px) 8px 8px; }

@@ -5,6 +5,7 @@ import { findSection } from "../sections/types";
 export function renderInspectorPane(app: HTMLElement) {
   document.body.style.background = "transparent";
   app.innerHTML = `
+    <div class="drag-strip drag-strip--no-inset" data-zapp-drag-region></div>
     <div class="inspector-pane">
       <div class="inspector-title">INSPECTOR</div>
       <div class="inspector-body" data-body>

@@ -4,6 +4,7 @@ import { registry } from "../sections/registry";
 export function renderSidebarPane(app: HTMLElement) {
   document.body.style.background = "transparent";
   app.innerHTML = `
+    <div class="drag-strip" data-zapp-drag-region></div>
     <div class="sidebar-pane">
       <div class="sidebar-title">KITCHEN SINK</div>
       <nav>${registry.map((s) =>
