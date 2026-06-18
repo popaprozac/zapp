@@ -31,6 +31,10 @@ import service         # registeredServices
 #                              size_t len; size_t cap; };
 # ---------------------------------------------------------------------------
 
+# NOTE: the {.emit.} block below crosses this module's "no {.emit.}" boundary
+# as a workaround — the provider (.zapp/zjson_provider.o) ships with no header,
+# so we inline the struct layout here.  Tracked follow-up: once the provider
+# build emits a header, convert to {.importc, header: "zjson_provider.h".}.
 {.emit: """
 #include <stddef.h>
 #include <stdbool.h>
