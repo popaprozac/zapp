@@ -1514,57 +1514,53 @@ as its native entry when present, falling back to a built-in skeleton
 otherwise. The default zc build uses `zapp/app.zc` — that remains the
 default; the Nim build is opt-in and macOS-only today.
 
-An `app.nim` is idiomatic Nim — `import zapp` re-exports the app surface:
+The Nim app surface **mirrors `app.zc`**: managers live on `App`
+(`a.service.add`, `a.window.create`), service handlers receive `app` as
+their first argument (matching zc's `fn(app, args)`), and `newApp` maps
+to `App::new`. More managers (dock, tray, menu, …) arrive on `app` as
+the migration ports them; today the surface covers app + service + window.
 
 ```nim
 import zapp
 
-proc greet(args: JsonNode): string = "Hello from Zapp!"
+proc greet(app: App, args: JsonNode): string = "Hello from Zapp!"
+
+proc onReady(id: cint, handle: pointer) {.cdecl.} =
+  Window(id: id, handle: handle).show()   # reveal once content can paint (no flash)
 
 proc runApp(): int =
-  let a = newApp("my-app")
-  registerService("greet", greet)
+  let a = newApp("my-app")                 # or newApp(AppConfig(name: "my-app", inspectable: Inspectable.Auto))
+  a.service.add("greet", greet)            # handler reachable from the webview via Services.invoke("greet", …)
+
   var opts = newWindowOptions("My App")
-  opts.width = 1100; opts.height = 700
-  discard createWindow(opts)
+  opts.visible = false                     # deferred show; omit to show immediately
+  opts.inspectable = inspectableAuto()     # web inspector: on in dev, off in prod
+  let win = a.window.create(opts)
+  win.onReady(onReady)
   a.run()
 
 quit(runApp())
 ```
 
-Service handlers are `proc(args: JsonNode): string`, registered with
-`registerService("name", handler)`; they're reachable from the webview
-via `Services.invoke("name", …)`. Power users can `import` any native
-library through Nim's `importc`, wrap it in a proc, and expose it as a
-service — first-class native extensibility, no C shim required.
+Service handlers are `proc(app: App, args: JsonNode): string`, registered
+with `a.service.add("name", handler)`; they're reachable from the webview
+via `Services.invoke("name", …)`.
 
-`createWindow` returns a `Window` (`{ id, handle }`) with methods like
-`win.show()`. Windows are `visible` by default, so the simplest path is to
-`discard createWindow(opts)` and let it paint as content loads. To avoid the
-brief empty-window flash, set `opts.visible = false` and reveal the window once
-its webview bridge is ready with `onReady` — the Nim analog of `win.on_ready`:
+`a.window.create(opts)` returns a `Window` with methods `win.show()` and
+`win.onReady(cb)`. Set `opts.visible = false` and reveal with `onReady` to
+avoid the brief empty-window flash (both are optional). The `onReady`
+callback must be a top-level `{.cdecl.}` proc — it is registered as a C
+function pointer; reconstruct the window inside it with
+`Window(id: id, handle: handle)`.
 
-```nim
-proc onReady(id: cint, handle: pointer) {.cdecl.} =
-  Window(id: id, handle: handle).show()   # reveal once content can paint
+`opts.inspectable = inspectableAuto()` enables the web inspector in dev
+builds and disables it in production. It corresponds to the `inspectable`
+field on `AppConfig` / `WindowOptions`.
 
-proc runApp(): int =
-  let a = newApp("my-app")
-  var opts = newWindowOptions("My App")
-  opts.visible = false          # deferred show — no flash
-  let win = a.window.create(opts)
-  win.onReady(onReady)          # cb fires when the bridge signals ready
-  a.run()
-```
-
-The callback must be a top-level `{.cdecl.}` proc (it's registered as a C
-function pointer). `onReady` is independent of visibility — it's a
-general "bridge ready" hook; omit it and the window simply shows at
-create time.
-
+Power users can still `import` native libraries via Nim pragmas and expose
+them as services — first-class native extensibility, no C shim required.
 TS stays the default home for app logic — UI lives in the webview and
-background work in headless workers. Reach for a native Nim service only
-for genuinely-native needs.
+background work in headless workers.
 
 ---
 
