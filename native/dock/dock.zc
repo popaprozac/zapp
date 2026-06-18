@@ -35,9 +35,9 @@ fn dock_bounce(bounce_type: int) -> void { darwin_dock::darwin_dock_bounce(bounc
 
 // Taskbar/dock progress. permille 0..1000 (<0 clears); mode: 0 normal,
 // 1 indeterminate, 2 error, 3 paused, 4 none. Windows draws it on the taskbar
-// button; macOS dock-tile progress isn't wired yet, so this no-ops there.
+// button; macOS renders a custom dock-tile contentView (dock.m).
 @cfg(apple)
-fn dock_set_progress(permille: int, mode: int) -> void {}
+fn dock_set_progress(permille: int, mode: int) -> void { darwin_dock::darwin_dock_set_progress(permille, mode); }
 
 // Set a custom dock icon from a file path.
 @cfg(apple)

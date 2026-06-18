@@ -88,8 +88,10 @@ export const Dock = {
    * @param options.mode "normal" (default), "indeterminate" (animated, ignores
    *   fraction), "error" (red), or "paused" (yellow).
    *
-   * Windows-native (ITaskbarList3). No-op on macOS for now (dock-tile progress
-   * isn't wired) and inert on iOS — safe to call cross-platform.
+   * Windows: native taskbar button (ITaskbarList3). macOS: a custom dock-tile
+   * overlay — app icon + a bar filled to `fraction`, colored by mode (normal =
+   * accent, error = red, paused = orange, indeterminate = animated sweep).
+   * Inert on iOS (no dock) — safe to call cross-platform.
    */
   setProgress(
     fraction: number,

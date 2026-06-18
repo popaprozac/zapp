@@ -48,5 +48,6 @@ const char* darwin_dock_get_badge(void) {
 }
 
 void darwin_dock_bounce(int type) { (void)type; /* no iOS equivalent */ }
+void darwin_dock_set_progress(int permille, int mode) { (void)permille; (void)mode; /* no iOS dock */ }
 void darwin_dock_set_icon(const char* image_path) { (void)image_path; /* alternate icons exist but require Info.plist setup; defer */ }
 void darwin_dock_reset_icon(void) { /* no-op */ }

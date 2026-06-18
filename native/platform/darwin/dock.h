@@ -17,6 +17,13 @@ const char* darwin_dock_get_badge(void);
 // type: 0 = informational (bounces once), 1 = critical (bounces until activated)
 void darwin_dock_bounce(int type);
 
+// Dock-tile progress bar. macOS has no first-class progress API (unlike Windows
+// ITaskbarList3), so this renders a custom NSDockTile contentView (app icon +
+// bar overlay; see dock.m). permille 0..1000; permille<0 or mode 4 clears.
+// mode: 0 normal (accent), 1 indeterminate (animated sweep), 2 error (red),
+// 3 paused (orange).
+void darwin_dock_set_progress(int permille, int mode);
+
 // Set a custom dock icon from a file path.
 void darwin_dock_set_icon(const char* image_path);
 

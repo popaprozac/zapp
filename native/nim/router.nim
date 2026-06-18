@@ -96,14 +96,14 @@ proc darwin_tray_detach_window_from_payload(payloadJson: cstring) {.importc, cde
 # envelope ({t:6,m,a}); sync.m:233-242 unwraps the nested "a" itself. ---
 proc darwin_sync_handle(action, payloadJson: cstring) {.importc, cdecl.}
 
-# --- t:4 dock targets (dock.m; arg-based, not payload). No darwin set_progress
-# (macOS dock has no standard progress — dock.zc:40 is a no-op). ---
+# --- t:4 dock targets (dock.m; arg-based, not payload). ---
 proc darwin_dock_show_icon() {.importc, cdecl.}
 proc darwin_dock_hide_icon() {.importc, cdecl.}
 proc darwin_dock_remove_badge() {.importc, cdecl.}
 proc darwin_dock_reset_icon() {.importc, cdecl.}
 proc darwin_dock_set_badge(label: cstring) {.importc, cdecl.}
 proc darwin_dock_bounce(bounceType: cint) {.importc, cdecl.}
+proc darwin_dock_set_progress(permille, mode: cint) {.importc, cdecl.}
 proc darwin_dock_set_icon(imagePath: cstring) {.importc, cdecl.}
 
 # --- t:4 panel (embedded-webview) targets (panel.m, already compiled; B6i).
@@ -585,7 +585,8 @@ proc routeWindowAction(action: string, a: JsonNode, rawWindowId: int, payload: s
       if not label.isNil: darwin_dock_set_badge(label.getStr("").cstring)
     of "dock:bounce":
       darwin_dock_bounce(a{"type"}.getInt(0).cint)
-    of "dock:setProgress": discard      # macOS: no-op (dock.zc:40 empty Apple body)
+    of "dock:setProgress":
+      darwin_dock_set_progress(a{"permille"}.getInt(-1).cint, a{"mode"}.getInt(0).cint)
     of "dock:setIcon":
       let path = a{"path"}
       if not path.isNil: darwin_dock_set_icon(path.getStr("").cstring)
