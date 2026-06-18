@@ -31,14 +31,16 @@ export const Services = {
     args?: TArgs,
     opts?: InvokeOptions
   ): CancellablePromise<TReturn> {
-    // Worker/backend context: use host object for sync invocation
+    // Worker context: bridge.invoke routes through invokeAsync (which falls
+    // back to sync when invokeServiceAsync is absent on zc builds). This
+    // returns a real async Promise when the nim host wires invokeServiceAsync.
     const hostBridge = (globalThis as any).__zappBridge;
     if (hostBridge?.invokeService) {
-      const result = hostBridge.invokeService(method, args) as TReturn;
-      const p = Promise.resolve(result) as CancellablePromise<TReturn>;
+      const p = (hostBridge.invoke
+        ? hostBridge.invoke(method, args) as Promise<TReturn>
+        : Promise.resolve(hostBridge.invokeService(method, args) as TReturn)
+      ) as CancellablePromise<TReturn>;
       p.cancel = () => {};
-      // Also expose sync result directly for worker convenience
-      (p as any).value = result;
       return p;
     }
 

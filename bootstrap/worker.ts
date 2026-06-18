@@ -65,11 +65,36 @@
   // No wrapper, just rename.
   bridge.emit = bridge.dispatchEventToAll;
 
-  // Runtime's getBridge().invoke() — pure alias to invokeService (zero JS
-  // overhead). Runtime APIs that need something other than a user service
-  // (Window.create, Notification.*, Dock.*) detect worker context and call
-  // the appropriate host dispatcher directly, so there's no branching here.
-  bridge.invoke = bridge.invokeService;
+  // Async invoke (App-capable): host returns a request id; main resolves via _resolveInvoke.
+  bridge._pendingInvokes = bridge._pendingInvokes || {};
+  bridge.invokeAsync = function (method: string, args?: Record<string, unknown>): Promise<unknown> {
+    if (typeof bridge.invokeServiceAsync !== "function") {
+      // No async host fn (e.g. zc build): fall back to the sync path.
+      return Promise.resolve(bridge.invokeService(method, args));
+    }
+    const id: number = bridge.invokeServiceAsync(method, args);
+    return new Promise(function (resolve, reject) {
+      bridge._pendingInvokes[id] = { resolve, reject };
+    });
+  };
+  bridge._resolveInvoke = function (id: number, ok: boolean, payload: string): void {
+    const p = bridge._pendingInvokes[id];
+    if (!p) return;
+    delete bridge._pendingInvokes[id];
+    if (ok) {
+      try { p.resolve(payload ? JSON.parse(payload) : undefined); } catch { p.resolve(payload); }
+    } else {
+      p.reject(new Error(payload));
+    }
+  };
+
+  // Runtime's getBridge().invoke() — routes through invokeAsync so workers
+  // get a real async Promise when the nim build wires invokeServiceAsync.
+  // invokeAsync falls back to the sync path when invokeServiceAsync is
+  // absent (zc build), so both build variants still work.
+  bridge.invoke = function (method: string, args?: Record<string, unknown>): Promise<unknown> {
+    return bridge.invokeAsync(method, args);
+  };
 
   // Headless workers have no webview to post to; webview-owned workers
   // use postToWebview. Alias so getBridge().post(...) works either way.
