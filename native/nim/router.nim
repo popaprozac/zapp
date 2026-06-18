@@ -485,20 +485,28 @@ proc routeWindowAction(action: string, a: JsonNode, rawWindowId: int, payload: s
     zapp_window_trigger_on_ready(rawWindowId.int32)
     return
 
+  # setDragRegion: targets the SENDER's own webview (not the host remap).
+  # Each pane (sidebar, inspector, popover) has its own WKWebView with its own
+  # mouseDownCanMoveWindow — the drag flag must land on the pane that sent it.
+  # darwin_window_get_webview resolves the slot → that pane's WKWebView.
+  if action == "setDragRegion":
+    # Sender's OWN slot (not the accessory-host remap): each pane's webview has
+    # its own mouseDownCanMoveWindow, so the drag flag must land on the pane that
+    # sent it. darwin_window_get_webview resolves the slot → that pane's webview.
+    let drag = a{"drag"}
+    if not drag.isNil:
+      darwin_webview_set_drag_region(rawWindowId.int32, drag.getBool(false))
+    return
+
   # Accessory-pane sender resolution: window + chrome ops from inside a pane
-  # target the host window (router.zc:484-512). subscribe/ready above keep the
-  # sender's own slot.
+  # target the host window (router.zc:484-512). subscribe/ready/setDragRegion
+  # above keep the sender's own slot.
   let windowId = resolveAccessoryHost(rawWindowId)
 
   # --- id-based window ops (take the numeric id; self-guard in the .m) -------
   if action == "loadUrl":
     let url = (if a.isNil: "" else: a{"url"}.getStr(""))
     if url.len > 0: darwin_window_load_url(windowId.int32, url.cstring)
-    return
-  if action == "setDragRegion":
-    let drag = a{"drag"}            # {} is nil-safe on a nil / non-object node
-    if not drag.isNil:
-      darwin_webview_set_drag_region(windowId.int32, drag.getBool(false))
     return
   if action == "setCloseGuard":
     let on = a{"on"}

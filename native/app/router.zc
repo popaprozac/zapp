@@ -481,6 +481,33 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
         return;
     }
 
+    // setDragRegion: targets the SENDER's own webview (not the accessory-host
+    // remap below). Each pane (sidebar, inspector, popover) has its own
+    // WKWebView / WebView2 with its own mouseDownCanMoveWindow / drag behavior —
+    // the drag flag must land on the pane that sent it.
+    // darwin_webview_set_drag_region / windows_webview_set_drag_region resolve
+    // the slot → that pane's webview. Main-pane senders are unaffected (their
+    // window_id already equals the host window id).
+    let is_set_drag_pre: bool = false;
+    is_set_drag_pre = action == "setDragRegion";
+    if is_set_drag_pre {
+        if has_pre_args {
+            let drag_opt = pre_args.get_bool("drag");
+            if drag_opt.is_some() {
+                raw {
+                    #ifdef __APPLE__
+                    extern void darwin_webview_set_drag_region(int32_t window_id, bool drag);
+                    darwin_webview_set_drag_region(window_id, drag_opt.val);
+                    #else
+                    extern void windows_webview_set_drag_region(int32_t window_id, bool drag);
+                    windows_webview_set_drag_region(window_id, drag_opt.val);
+                    #endif
+                }
+            }
+        }
+        return;
+    }
+
     // Accessory-pane sender resolution. A window action (t:4) carries the
     // SENDER's transport slot as window_id. For the host pane (or a standalone
     // window) that slot IS a WindowManager window. But a sidebar/inspector/
@@ -609,25 +636,6 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
             else if (is_open_path) windows_open_path((const char*)abs);
             else if (is_trash_item) windows_trash_item((const char*)abs);
             #endif
-        }
-        return;
-    }
-
-    // Draggable regions
-    let is_set_drag: bool = false;
-    is_set_drag = action == "setDragRegion";
-    if is_set_drag {
-        let drag_opt = pre_args.get_bool("drag");
-        if drag_opt.is_some() {
-            raw {
-                #ifdef __APPLE__
-                extern void darwin_webview_set_drag_region(int32_t window_id, bool drag);
-                darwin_webview_set_drag_region(window_id, drag_opt.val);
-                #else
-                extern void windows_webview_set_drag_region(int32_t window_id, bool drag);
-                windows_webview_set_drag_region(window_id, drag_opt.val);
-                #endif
-            }
         }
         return;
     }
