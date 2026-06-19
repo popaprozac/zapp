@@ -705,9 +705,10 @@ window. macOS renders it as an `NSSplitViewController` root with a
 `.sidebar`-styled `NSSplitViewItem`: system sidebar material (liquid glass
 on macOS 26, classic vibrancy on earlier releases), full-height under the
 titlebar with proper traffic-light inset, system collapse animation, and a
-resizable divider clamped to your configured min/max. iOS ignores the
-option and renders the main `url` full-screen (UISplitViewController is
-planned). Windows ignores it.
+resizable divider clamped to your configured min/max. iOS renders the same
+`sidebar | content` split through a native `UISplitViewController` — side-by-side
+on iPad-regular, and a **chrome-less master-detail** stack on iPhone-compact
+(see [Sidebar on iOS](#sidebar-on-ios) below). Windows ignores it.
 
 ```ts
 const win = await Window.create({
@@ -769,9 +770,16 @@ win.sidebar?.setWidth(220)      // programmatic resize
 win.sidebar?.setCollapsible(false)  // disallow user collapse (programmatic toggle still works)
 win.sidebar?.setResizable(false)    // lock the width — divider no longer drags
 
+win.sidebar?.showContent()      // iPhone master-detail: reveal the content column (no-op on macOS/iPad)
+win.sidebar?.showSidebar()      // iPhone master-detail: go back to the sidebar list (no-op on macOS/iPad)
+
 win.sidebar?.collapsed          // reactive: tracks SIDEBAR_COLLAPSED/EXPANDED
 win.sidebar?.width              // reactive: tracks SIDEBAR_RESIZED; seeded by create option
 ```
+
+`showContent()` / `showSidebar()` drive the iPhone master-detail navigation
+(see [Sidebar on iOS](#sidebar-on-ios)). They are no-ops on macOS and
+iPad-regular, where both panes are always side-by-side.
 
 **Identity rules.** Both panes see the same host window through
 `Window.current()` — code in the sidebar can call
@@ -837,6 +845,74 @@ window ops, they are not gated by the `permissions` manifest.
 
 **Window slots.** Each sidebar window occupies 2 of the 64 available
 window slots (one for the host, one for the sidebar webview).
+
+#### Sidebar on iOS
+
+iOS hosts the same `sidebar | content` panes in a native
+`UISplitViewController`. Behavior splits by horizontal size class:
+
+- **iPad-regular** — both columns are visible side-by-side, just like macOS.
+  `showContent()` / `showSidebar()` are no-ops (there's nothing to navigate
+  to; both panes are already on screen).
+- **iPhone-compact** — the split collapses to a **chrome-less master-detail**
+  stack. There is **no native toolbar** (no system back chevron, no
+  `toggleSidebar` button). The app launches on the sidebar list; selecting an
+  item pushes the content full-screen. Move between the two columns with the
+  `SidebarHandle`:
+  - `showContent()` — reveal the content (detail) column. Call it from the
+    sidebar pane right after a list item is tapped.
+  - `showSidebar()` — return to the sidebar (master) list. Drive it from an
+    in-page back control in the content pane. The system edge-swipe back gesture
+    also returns to the list.
+
+The flow on iPhone, end to end: land on the sidebar list → tap an item →
+content reveals full-screen → tap your in-page "‹ Menu" / back button (or
+edge-swipe) → back to the sidebar list.
+
+Because there's no native chrome on iPhone, **the app supplies the back
+affordance**. Gate it on `Platform.isIOS` so it renders only where it's needed:
+
+```ts
+import { Window, Platform } from "@zappdev/runtime";
+
+// Sidebar pane — reveal the content column when an item is tapped.
+if (Platform.isIOS) Window.current().sidebar?.showContent();
+
+// Content pane — render an in-page back control (iOS only) that returns
+// to the sidebar list. On macOS/iPad both panes are visible, so it's not
+// rendered there.
+if (Platform.isIOS) {
+  const back = document.createElement("button");
+  back.textContent = "‹ Menu";
+  back.addEventListener("click", () => Window.current().sidebar?.showSidebar());
+  document.body.prepend(back);
+}
+```
+
+**`Platform` API** — runtime platform check for conditional app logic
+(`@zappdev/runtime`). Reads the platform baked into the per-webview bootstrap
+manifest by the native layer; defaults to `"macos"` when absent (SSR/tests):
+
+```ts
+import { Platform } from "@zappdev/runtime";
+
+Platform.current()   // "macos" | "ios" | "windows"
+Platform.isMacOS     // boolean
+Platform.isIOS       // boolean
+Platform.isWindows   // boolean
+```
+
+**macOS ↔ iOS degradations** (sidebar):
+
+| Capability | macOS | iOS |
+|---|---|---|
+| Layout | `NSSplitViewController` side-by-side | `UISplitViewController` — side-by-side (iPad), master-detail (iPhone) |
+| `showContent()` / `showSidebar()` | no-op (always side-by-side) | navigate the iPhone master-detail stack (no-op on iPad) |
+| `material` / vibrancy | liquid glass / `NSVisualEffectMaterial` | deferred — flat background (future cycle) |
+| `setResizable(...)` | locks/unlocks the divider | no-op (no draggable divider) |
+| `setWidth(px)` | exact divider position | best-effort (system-managed column width) |
+| Native toolbar (`toggleSidebar`, back chevron) | full NSToolbar | none — app renders its own back control (future cycle) |
+| Back navigation | divider / toolbar toggle | in-page control + system edge-swipe |
 
 ### Inspector (macOS)
 
