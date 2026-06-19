@@ -107,6 +107,26 @@ static NSURL* zapp_ios_initial_url(void) {
     return [NSURL URLWithString:@"zapp://index.html"];
 }
 
+// Resolve a per-window url_override as an RFC 3986 relative-reference against the
+// initial URL — so "#sidebar-pane", "?tab=2", "/path", or a bare path work in
+// dev (http://...) and prod (zapp://index.html) alike. Mirrors macOS
+// zapp_resolve_url (darwin/webview.m). The sidebar/inspector panes pass a bare
+// "#..." that MUST resolve against the base, or the pane loads blank (a plain
+// [NSURL URLWithString:@"#x"] has no scheme/host → loads nothing).
+static NSURL* zapp_ios_resolve_url(const char* url_cstr) {
+    if (!url_cstr || url_cstr[0] == '\0') return zapp_ios_initial_url();
+    NSString* s = [NSString stringWithUTF8String:url_cstr];
+    if (!s) return zapp_ios_initial_url();
+    if ([s rangeOfString:@"://"].location != NSNotFound) {
+        NSURL* absolute = [NSURL URLWithString:s];
+        if (absolute) return absolute;
+    }
+    NSURL* base = zapp_ios_initial_url();
+    NSURL* resolved = [NSURL URLWithString:s relativeToURL:base];
+    if (resolved) return [resolved absoluteURL];
+    return base;
+}
+
 static NSString* zapp_ios_asset_root_path(void) {
     const char* configured = zapp_build_asset_root();
     if (configured && configured[0] != '\0') {
@@ -919,10 +939,10 @@ void darwin_webview_create_ext(void* window_ptr, bool inspectable, bool accept_f
     // the createWebViewWithConfiguration: callback never fires.
     webview.UIDelegate = zapp_ios_shared_nav_delegate;
 
-    NSURL* url = (url_override && url_override[0] != '\0')
-        ? [NSURL URLWithString:[NSString stringWithUTF8String:url_override]]
-        : zapp_ios_initial_url();
-    if (!url) url = zapp_ios_initial_url();
+    // Resolve relative refs ("#sidebar-pane", "?tab=2", "/path") against the
+    // base URL — a bare [NSURL URLWithString:@"#x"] has no scheme/host and the
+    // pane loads blank. (Mirrors macOS zapp_resolve_url.)
+    NSURL* url = zapp_ios_resolve_url(url_override);
     [webview loadRequest:[NSURLRequest requestWithURL:url]];
 
     // Mount: pane path (container_view != NULL) adds the webview into the
