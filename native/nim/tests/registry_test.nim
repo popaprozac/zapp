@@ -11,7 +11,6 @@ proc test() =
     cstring"w-1", cstring"win-1", 0, cstring"/x.mjs", 7, cstring"Greeter") >= 0
   doAssert zapp_worker_registry_get_engine(cstring"w-1") == 7
   doAssert $zapp_worker_registry_get_display_name(cstring"w-1") == "Greeter"
-  doAssert zapp_worker_registry_is_shared(cstring"w-1") == 0
 
   # display name falls back to id when unset
   doAssert zapp_worker_registry_add_full_with_engine(
@@ -26,11 +25,10 @@ proc test() =
 
   # ---- idempotent refresh-in-place (no double-alloc) ----------------------
   let slotA = zapp_worker_registry_add_full_with_engine(
-    cstring"w-1", cstring"win-1", 1, cstring"/x2.mjs", 2)
+    cstring"w-1", cstring"win-1", 0, cstring"/x2.mjs", 2)
   doAssert slotA >= 0
-  # same id refreshed: engine + shared updated in place, name untouched
+  # same id refreshed: engine updated in place, name untouched
   doAssert zapp_worker_registry_get_engine(cstring"w-1") == 2
-  doAssert zapp_worker_registry_is_shared(cstring"w-1") == 1
   doAssert $zapp_worker_registry_get_display_name(cstring"w-1") == "Greeter"
 
   # ---- add_full (engine defaults to -1) -----------------------------------
@@ -59,28 +57,13 @@ proc test() =
     doAssert j.contains("\"engine\":\"zjs\"")        # w-2 engine 7
     doAssert j.contains("\"engine\":\"bare-jsc\"")   # w-1 engine 2
     doAssert j.contains("\"engine\":\"bare-hermes\"")  # w-3 engine 6
-    doAssert j.contains("\"shared\":true")           # w-1
-    doAssert j.contains("\"shared\":false")          # w-2/w-3
+    doAssert j.contains("\"shared\":false")          # all workers are dedicated
     doAssert j.contains("\"scriptUrl\":\"/x2.mjs\"") # w-1 refreshed url
     doAssert j.contains("\"owners\":[\"win-1\"]")
-
-  # ---- shared-worker owner add (via find_shared path) + remove_owner ------
-  # w-1 is shared (refreshed above). find_shared by its url returns its id.
-  doAssert $registryFindShared(cstring"/x2.mjs") == "w-1"
-  doAssert registryFindShared(cstring"/nope.mjs") == nil
-  # add a second owner; duplicate is a no-op
-  doAssert registryAddOwner(cstring"w-1", cstring"win-9") == 0
-  doAssert registryAddOwner(cstring"w-1", cstring"win-9") == 0   # dup
-  # remove_owner returns the remaining count
-  doAssert zapp_worker_registry_remove_owner(cstring"w-1", cstring"win-1") == 1
-  doAssert zapp_worker_registry_remove_owner(cstring"w-1", cstring"win-9") == 0
-  # removing from a missing worker => -1
-  doAssert zapp_worker_registry_remove_owner(cstring"ghost", cstring"x") == -1
 
   # ---- remove (clears active) ---------------------------------------------
   zapp_worker_registry_remove(cstring"w-1")
   doAssert zapp_worker_registry_get_engine(cstring"w-1") == -1
-  doAssert zapp_worker_registry_is_shared(cstring"w-1") == 0
 
   # ---- fmt_compact_ms ------------------------------------------------------
   doAssert $zapp_fmt_compact_ms(500) == "500ms"

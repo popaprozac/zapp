@@ -7,7 +7,7 @@
 ## worker.nim importc's the zjs engine + window + escape C symbols; none are
 ## CALLED by these tests, but the link needs them, so stub them as {.exportc.}
 ## Nim defs — the permissions_test / callbacks_test pattern. The registry C-ABI
-## (set_engine/get_engine/is_shared/get_display_name) is satisfied by the real
+## (set_engine/get_engine/get_display_name) is satisfied by the real
 ## registry.nim (transitively imported by worker.nim). zappResolveEngine is
 ## exported, so a plain `import` reaches it.
 

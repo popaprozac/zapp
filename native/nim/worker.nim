@@ -19,8 +19,7 @@
 ## safe to call from any thread (window.m). The compiler enforces gcsafe under
 ## --threads:on (cli/src/native.ts:1212).
 
-import registry   # registryFirstOwner / registryOwnerCount / registryOwnerAt /
-                  # zapp_worker_registry_is_shared (all gcsafe)
+import registry   # registryFirstOwner (gcsafe)
 
 # --- zjs engine C-ABI (compiled in native/worker/engines/zjs.c) -------------
 # Signatures match zjs.c:1802/1836/1872/1891 EXACTLY (importc by C name).
@@ -33,7 +32,6 @@ proc zjs_worker_eval_js(workerId, js: cstring) {.importc, cdecl.}
 # --- registry C-ABI (registry.nim {.exportc.} surface) ----------------------
 proc zapp_worker_registry_set_engine(workerId: cstring, engine: cint) {.importc, cdecl.}
 proc zapp_worker_registry_get_engine(workerId: cstring): cint {.importc, cdecl.}
-proc zapp_worker_registry_is_shared(workerId: cstring): cint {.importc, cdecl.}
 proc zapp_worker_registry_get_display_name(workerId: cstring): cstring {.importc, cdecl.}
 
 # --- escaping (dispatch.nim B4) + platform window eval (window.m) -----------
@@ -161,17 +159,12 @@ proc dispatchToWindow(workerId, dataJson, ownerId: cstring) {.gcsafe.} =
 # worker_dispatch_to_webview (app.zc:245-275). REPLACES the zapp.nim stub.
 # zjs.c:645 calls this (possibly on a worker pthread) and owns + free()s both
 # args after we return — so we neither free nor retain them, only copy into the
-# eval JS. Shared workers broadcast to every owner; dedicated workers deliver to
-# the single owner. gcsafe + libc only.
+# eval JS. Dedicated workers deliver to their single owner; headless workers
+# have an empty owner ("") and the guard below correctly drops the delivery.
+# gcsafe + libc only.
 proc worker_dispatch_to_webview*(workerId, dataJson: cstring)
     {.exportc, cdecl, gcsafe.} =
-  if zapp_worker_registry_is_shared(workerId) != 0:
-    # Broadcast to all owners.
-    let n = registryOwnerCount(workerId)
-    for i in 0 ..< n:
-      dispatchToWindow(workerId, dataJson, registryOwnerAt(workerId, i))
-  else:
-    # Dedicated worker — single owner.
-    let owner = registryFirstOwner(workerId)
-    if owner[0] != '\0':
-      dispatchToWindow(workerId, dataJson, owner)
+  # Dedicated worker — single owner.
+  let owner = registryFirstOwner(workerId)
+  if owner[0] != '\0':
+    dispatchToWindow(workerId, dataJson, owner)
