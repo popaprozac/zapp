@@ -31,9 +31,13 @@
 #include <string.h>
 #include <objc/runtime.h>
 
-extern void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first_mouse,
-                                  const char* url_override, int32_t numeric_id_pre_alloc,
-                                  bool transparent_background);
+// darwin_webview_create + darwin_webview_create_ext (defined in ios/webview.m,
+// same iOS link unit). Pulled in via the shared cross-platform header rather
+// than re-declared `extern` here: the ios-platform-parity lint can't parse the
+// _ext definition's inline-comment'd param list, so a bare `extern` of it would
+// trip a false "unsatisfied cross-layer extern" — the header include sidesteps
+// that (the lint only scans for the literal `extern` keyword in .m files).
+#include "../darwin/webview.h"
 
 #ifndef ZAPP_MAX_WINDOW_CALLBACKS
 #define ZAPP_MAX_WINDOW_CALLBACKS 64
@@ -60,6 +64,24 @@ typedef struct ZappIOSDeferred {
     // where WebView2 repaint lag exposes a white gap).
     bool    has_bg;
     int     bg_r, bg_g, bg_b;
+    // Create-time sidebar opts (read from wopts_sidebar_* in
+    // darwin_window_create, consumed at materialize). Mirrors the macOS
+    // create-time sidebar reads in darwin/window.m. hasSidebar gates the
+    // UISplitViewController path; sidebarUrl is strdup'd to survive until
+    // materialize, like queued_title. Inspector is a separate future task.
+    bool    hasSidebar;
+    char*   sidebarUrl;          // strdup'd; freed in destroy
+    int32_t sidebarNumericId;    // sidebar webview's transport slot
+    bool    sidebarCollapsed;
+    int32_t sidebarWidth;
+    int32_t sidebarMinWidth;
+    int32_t sidebarMaxWidth;
+    bool    sidebarCollapsible;
+    bool    sidebarResizable;
+    // Optional sidebar pane backdrop ("#rrggbb"); paints behind the
+    // transparent sidebar webview (the pane analog of the window bg).
+    bool    sidebar_has_bg;
+    int     sidebar_bg_r, sidebar_bg_g, sidebar_bg_b;
 } ZappIOSDeferred;
 
 #define ZAPP_MAX_DEFERRED 16
@@ -72,6 +94,55 @@ static ZappIOSDeferred* zapp_ios_deferred_list[ZAPP_MAX_DEFERRED] = {0};
 static UIWindow* zapp_ios_windows[ZAPP_MAX_WINDOW_CALLBACKS] = {0};
 static WKWebView* zapp_ios_webviews[ZAPP_MAX_WINDOW_CALLBACKS] = {0};
 static NSString* zapp_ios_window_ids[ZAPP_MAX_WINDOW_CALLBACKS] = {0};
+
+// host slot -> sidebar transport slot, for window-event fan-out (mirrors
+// darwin/window.m's zapp_sidebar_slot_of). -1 = no sidebar. Initialized
+// lazily so a 0-filled table doesn't read as "host 0 -> sidebar 0".
+static int32_t zapp_ios_sidebar_slot_of[ZAPP_MAX_WINDOW_CALLBACKS];
+static bool zapp_ios_sidebar_slot_of_init = false;
+
+static void zapp_ios_set_sidebar_slot(int32_t host_slot, int32_t sidebar_slot) {
+    if (!zapp_ios_sidebar_slot_of_init) {
+        for (int i = 0; i < ZAPP_MAX_WINDOW_CALLBACKS; i++) zapp_ios_sidebar_slot_of[i] = -1;
+        zapp_ios_sidebar_slot_of_init = true;
+    }
+    if (host_slot >= 0 && host_slot < ZAPP_MAX_WINDOW_CALLBACKS) {
+        zapp_ios_sidebar_slot_of[host_slot] = sidebar_slot;
+    }
+}
+
+static int32_t zapp_ios_sidebar_slot_for(int32_t host_slot) {
+    if (!zapp_ios_sidebar_slot_of_init) return -1;
+    if (host_slot < 0 || host_slot >= ZAPP_MAX_WINDOW_CALLBACKS) return -1;
+    return zapp_ios_sidebar_slot_of[host_slot];
+}
+
+// Register a webview directly into a specific transport slot + window-id
+// string (mirrors darwin/window.m's zapp_register_webview). The pane path
+// needs this because zapp_ios_register_webview routes by UIWindow — both
+// panes share one UIWindow, so the second create would otherwise clobber
+// the first's slot. The pane's JS identity (windowId) is the HOST id.
+static void zapp_ios_register_webview_slot(int32_t slot, WKWebView* webview, NSString* windowId) {
+    if (slot >= 0 && slot < ZAPP_MAX_WINDOW_CALLBACKS) {
+        zapp_ios_webviews[slot] = webview;
+        zapp_ios_window_ids[slot] = windowId;
+    }
+}
+
+// TEMPORARY SHIM — T3 (iOS sidebar runtime: toggle / setWidth / collapsible /
+// resizable) OWNS this. Materialize calls it with the split + both column VCs +
+// the host/sidebar ids so the sidebar manager can drive the UISplitViewController
+// later. Until T3 lands its real registry, this is a no-op so the iOS link
+// resolves. T3: REPLACE this definition (store into a per-host record keyed by
+// host_id, like darwin/sidebar.m's zapp_sidebar_register). Marked __attribute__
+// ((weak)) so T3's strong definition in another TU wins at link time without a
+// duplicate-symbol error.
+__attribute__((weak))
+void zapp_ios_sidebar_register(void* window, void* split, void* sidebarVC,
+                              void* contentVC, int32_t host_id, int32_t sidebar_id) {
+    (void)window; (void)split; (void)sidebarVC; (void)contentVC;
+    (void)host_id; (void)sidebar_id;
+}
 
 static ZappIOSDeferred* zapp_ios_find_deferred(void* handle) {
     if (!handle) return NULL;
@@ -102,15 +173,61 @@ void zapp_ios_materialize_pending_windows(void) {
             : [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
         window.frame = scene ? scene.coordinateSpace.bounds : [UIScreen mainScreen].bounds;
 
-        UIViewController* root = [[UIViewController alloc] init];
-        root.view.frame = window.bounds;
         // App-set background ("#rrggbb") or the adaptive system default. Fills
         // the launch / pre-render gap; the page's CSS background paints over it.
         UIColor* bgColor = d->has_bg
             ? [UIColor colorWithRed:d->bg_r/255.0 green:d->bg_g/255.0 blue:d->bg_b/255.0 alpha:1.0]
             : [UIColor systemBackgroundColor];
-        root.view.backgroundColor = bgColor;
-        window.rootViewController = root;
+
+        // The view controller holding the content webview — either the lone
+        // root VC (no sidebar) or the split's secondary column (sidebar). The
+        // sidebar VC is the split's primary column; nil when there's no sidebar.
+        UIViewController* contentVC = nil;
+        UIViewController* sidebarVC = nil;
+
+        if (d->hasSidebar) {
+            // Sidebar window: root on a UISplitViewController (the iOS analog
+            // of macOS's NSSplitViewController). The split MUST be the window's
+            // rootViewController BEFORE either pane webview is created —
+            // re-parenting a WKWebView resets its content process and kills the
+            // bridge, so every pane is born in its final container. (Mirrors
+            // the darwin/window.m create-ordering note.)
+            UISplitViewController* split =
+                [[UISplitViewController alloc] initWithStyle:UISplitViewControllerStyleDoubleColumn];
+            sidebarVC = [[UIViewController alloc] init];   // primary column
+            contentVC = [[UIViewController alloc] init];   // secondary column
+
+            contentVC.view.backgroundColor = bgColor;
+            // Sidebar pane backdrop: explicit "#rrggbb" if the app set one,
+            // else the adaptive system background (the pane analog of the
+            // window bg, filling the pre-paint gap behind the webview).
+            sidebarVC.view.backgroundColor = d->sidebar_has_bg
+                ? [UIColor colorWithRed:d->sidebar_bg_r/255.0 green:d->sidebar_bg_g/255.0
+                                   blue:d->sidebar_bg_b/255.0 alpha:1.0]
+                : [UIColor systemBackgroundColor];
+
+            [split setViewController:sidebarVC forColumn:UISplitViewControllerColumnPrimary];
+            [split setViewController:contentVC forColumn:UISplitViewControllerColumnSecondary];
+            split.preferredDisplayMode = d->sidebarCollapsed
+                ? UISplitViewControllerDisplayModeSecondaryOnly
+                : UISplitViewControllerDisplayModeOneBesideSecondary;
+            if (d->sidebarWidth > 0) {
+                // Best-effort width hint. iOS clamps to its own min/max; the
+                // configured sidebarMinWidth/MaxWidth aren't directly settable
+                // on UISplitViewController like NSSplitViewItem thicknesses.
+                split.preferredSupplementaryColumnWidth = (CGFloat)d->sidebarWidth;
+            }
+            split.view.backgroundColor = bgColor;
+
+            window.rootViewController = split;   // BEFORE any webview creation
+        } else {
+            // Single-pane window: lone root VC hosting the content webview.
+            UIViewController* root = [[UIViewController alloc] init];
+            root.view.frame = window.bounds;
+            root.view.backgroundColor = bgColor;
+            contentVC = root;
+            window.rootViewController = root;
+        }
         window.backgroundColor = bgColor;
 
         // Plug the materialized UIWindow into the numeric-ID dispatch
@@ -125,27 +242,98 @@ void zapp_ios_materialize_pending_windows(void) {
             zapp_ios_window_ids[d->numeric_id] = [NSString stringWithFormat:@"win-%d", d->numeric_id];
         }
 
-        // darwin_webview_create allocates the WKWebView, attaches it to
-        // root.view, and registers the (window, webview) pair in
-        // zapp_ios_webviews via zapp_ios_register_webview. Crucially,
-        // the WKWebView is being added to a scene-bound window — its
-        // gesture recognizers form against a live responder chain.
-        darwin_webview_create((__bridge void*)window, d->inspectable, d->first_mouse, NULL, d->numeric_id, false);
+        // T3 (sidebar runtime wiring) will reach the split + columns + ids
+        // through this hook. Stash now so the registration table is populated
+        // before any sidebar method call; the temporary shim below no-ops
+        // until T3 replaces it.
+        if (d->hasSidebar) {
+            extern void zapp_ios_sidebar_register(void* window, void* split,
+                                                  void* sidebarVC, void* contentVC,
+                                                  int32_t host_id, int32_t sidebar_id);
+            zapp_ios_sidebar_register((__bridge void*)window,
+                                      (__bridge void*)window.rootViewController,
+                                      (__bridge void*)sidebarVC,
+                                      (__bridge void*)contentVC,
+                                      d->numeric_id, d->sidebarNumericId);
+        }
 
-        if (d->numeric_id >= 0 && d->numeric_id < ZAPP_MAX_WINDOW_CALLBACKS) {
-            d->real_webview = zapp_ios_webviews[d->numeric_id];
-            // Push the canonical "win-<numericId>" into the JS context
-            // so Window.current() returns the same string format that
-            // Window.create() produces. Mirrors the macOS flow.
-            if (d->real_webview) {
-                NSString* setIdJs = [NSString stringWithFormat:
-                    @"globalThis[Symbol.for('zapp.windowId')]='win-%d';", d->numeric_id];
-                [d->real_webview evaluateJavaScript:setIdJs completionHandler:nil];
-                // Seed the webview's underpage fill (WebView2 DefaultBackground
-                // analogue) when the app set a background color.
-                if (d->has_bg) {
-                    if (@available(iOS 15.0, *)) {
-                        d->real_webview.underPageBackgroundColor = bgColor;
+        if (d->hasSidebar) {
+            // Content pane → host slot, host identity, pane_role 0, host_has_
+            // sidebar=true. Created into contentVC.view (the split's secondary
+            // column), which is now attached to the window. Mirrors the macOS
+            // content-pane darwin_webview_create_ext call.
+            darwin_webview_create_ext((__bridge void*)window, d->inspectable, d->first_mouse,
+                                      NULL, d->numeric_id, false,
+                                      (__bridge void*)contentVC.view, d->numeric_id, 0,
+                                      /*host_has_sidebar*/true, /*host_has_inspector*/false);
+            // _ext auto-registers by UIWindow → the content webview landed in
+            // the host slot. Capture it before the sidebar create clobbers it.
+            WKWebView* contentWebview = (d->numeric_id >= 0 && d->numeric_id < ZAPP_MAX_WINDOW_CALLBACKS)
+                ? zapp_ios_webviews[d->numeric_id] : nil;
+            d->real_webview = contentWebview;
+
+            // Sidebar pane → its OWN transport slot, HOST identity (win-<host>
+            // in JS), always-transparent intent, pane_role 1 (sets isSidebar),
+            // host_has_sidebar=true. Created into sidebarVC.view (the primary
+            // column). Mirrors the macOS sidebar-pane call.
+            darwin_webview_create_ext((__bridge void*)window, d->inspectable, d->first_mouse,
+                                      d->sidebarUrl, d->sidebarNumericId, true,
+                                      (__bridge void*)sidebarVC.view, d->numeric_id, 1,
+                                      /*host_has_sidebar*/true, /*host_has_inspector*/false);
+
+            // _ext registered the sidebar webview by UIWindow → it overwrote
+            // the HOST slot (both panes share one UIWindow). Pull the sidebar
+            // webview out of its container and register BOTH panes into their
+            // correct transport slots, with the sidebar's JS-visible window-id
+            // mirroring the host (its identity is the host id; transport routes
+            // by slot). Then restore the content webview to the host slot.
+            NSString* hostWindowId = [NSString stringWithFormat:@"win-%d", d->numeric_id];
+            WKWebView* sidebarWebview = nil;
+            for (UIView* sub in sidebarVC.view.subviews) {
+                if ([sub isKindOfClass:[WKWebView class]]) { sidebarWebview = (WKWebView*)sub; break; }
+            }
+            if (sidebarWebview) {
+                zapp_ios_register_webview_slot(d->sidebarNumericId, sidebarWebview, hostWindowId);
+            }
+            if (contentWebview) {
+                zapp_ios_register_webview_slot(d->numeric_id, contentWebview, hostWindowId);
+            }
+            // Record host→sidebar for window-event fan-out (zapp_dispatch_event_to_js).
+            zapp_ios_set_sidebar_slot(d->numeric_id, d->sidebarNumericId);
+
+            // Underpage fill on both panes when the app set a background color.
+            if (d->has_bg) {
+                if (@available(iOS 15.0, *)) {
+                    if (contentWebview) contentWebview.underPageBackgroundColor = bgColor;
+                    if (sidebarWebview) sidebarWebview.underPageBackgroundColor = bgColor;
+                }
+            }
+            // (windowId / isSidebar / hasSidebar are injected as document-start
+            // user scripts inside darwin_webview_create_ext — a one-shot eval
+            // here would race the page commit, as the macOS path notes.)
+        } else {
+            // darwin_webview_create allocates the WKWebView, attaches it to
+            // contentVC.view, and registers the (window, webview) pair in
+            // zapp_ios_webviews via zapp_ios_register_webview. Crucially,
+            // the WKWebView is being added to a scene-bound window — its
+            // gesture recognizers form against a live responder chain.
+            darwin_webview_create((__bridge void*)window, d->inspectable, d->first_mouse, NULL, d->numeric_id, false);
+
+            if (d->numeric_id >= 0 && d->numeric_id < ZAPP_MAX_WINDOW_CALLBACKS) {
+                d->real_webview = zapp_ios_webviews[d->numeric_id];
+                // Push the canonical "win-<numericId>" into the JS context
+                // so Window.current() returns the same string format that
+                // Window.create() produces. Mirrors the macOS flow.
+                if (d->real_webview) {
+                    NSString* setIdJs = [NSString stringWithFormat:
+                        @"globalThis[Symbol.for('zapp.windowId')]='win-%d';", d->numeric_id];
+                    [d->real_webview evaluateJavaScript:setIdJs completionHandler:nil];
+                    // Seed the webview's underpage fill (WebView2 DefaultBackground
+                    // analogue) when the app set a background color.
+                    if (d->has_bg) {
+                        if (@available(iOS 15.0, *)) {
+                            d->real_webview.underPageBackgroundColor = bgColor;
+                        }
                     }
                 }
             }
@@ -325,7 +513,20 @@ void zapp_dispatch_event_to_js(int32_t window_id, int32_t event_id, int32_t w, i
         length:strlen(zapp_ios_event_js_buf)
         encoding:NSUTF8StringEncoding
         freeWhenDone:NO];
-    void (^run)(void) = ^{ [webview evaluateJavaScript:js completionHandler:nil]; };
+
+    // Fan out to the sidebar pane: it identifies as the same host window, so
+    // the SAME JS (targeting wid = win-<host>) lands its handlers there too.
+    // Mirrors darwin/window.m's sidebar fan-out. (T3 wires the sidebar's own
+    // collapse/resize events; this carries the host's resize/focus/blur/etc.)
+    int32_t sidebar_slot = zapp_ios_sidebar_slot_for(window_id);
+    WKWebView* sidebarWebview = (sidebar_slot >= 0 && sidebar_slot != window_id &&
+                                 sidebar_slot < ZAPP_MAX_WINDOW_CALLBACKS)
+        ? zapp_ios_webviews[sidebar_slot] : nil;
+
+    void (^run)(void) = ^{
+        [webview evaluateJavaScript:js completionHandler:nil];
+        if (sidebarWebview) [sidebarWebview evaluateJavaScript:js completionHandler:nil];
+    };
     if ([NSThread isMainThread]) run();
     else dispatch_async(dispatch_get_main_queue(), run);
 }
@@ -359,6 +560,39 @@ void* darwin_window_create(void* opts) {
             sscanf(bg + 1, "%2x%2x%2x", &d->bg_r, &d->bg_g, &d->bg_b) == 3) {
             d->has_bg = true;
         }
+
+        // Create-time sidebar opts — read from the SAME wopts_sidebar_*
+        // accessors macOS uses (darwin/window.m). hasSidebar gates the
+        // UISplitViewController materialize path. The url is strdup'd to
+        // survive until materialize (the WindowOptions is only pinned across
+        // this call). Inspector panes are a separate future task on iOS.
+        extern const char* wopts_sidebar_url(void* opts);
+        extern int32_t wopts_sidebar_numeric_id(void* opts);
+        extern int32_t wopts_sidebar_width(void* opts);
+        extern int32_t wopts_sidebar_min_width(void* opts);
+        extern int32_t wopts_sidebar_max_width(void* opts);
+        extern bool wopts_sidebar_collapsible(void* opts);
+        extern bool wopts_sidebar_collapsed(void* opts);
+        extern bool wopts_sidebar_can_resize(void* opts);
+        extern const char* wopts_sidebar_background_color(void* opts);
+        const char* sbUrl = wopts_sidebar_url(opts);
+        if (sbUrl && sbUrl[0] != '\0') {
+            d->hasSidebar = true;
+            d->sidebarUrl = strdup(sbUrl);
+            d->sidebarNumericId = wopts_sidebar_numeric_id(opts);
+            d->sidebarWidth = wopts_sidebar_width(opts);
+            d->sidebarMinWidth = wopts_sidebar_min_width(opts);
+            d->sidebarMaxWidth = wopts_sidebar_max_width(opts);
+            d->sidebarCollapsible = wopts_sidebar_collapsible(opts);
+            d->sidebarCollapsed = wopts_sidebar_collapsed(opts);
+            d->sidebarResizable = wopts_sidebar_can_resize(opts);
+            const char* sbg = wopts_sidebar_background_color(opts);
+            if (sbg && sbg[0] == '#' && strlen(sbg) >= 7 &&
+                sscanf(sbg + 1, "%2x%2x%2x",
+                       &d->sidebar_bg_r, &d->sidebar_bg_g, &d->sidebar_bg_b) == 3) {
+                d->sidebar_has_bg = true;
+            }
+        }
     }
     for (int i = 0; i < ZAPP_MAX_DEFERRED; i++) {
         if (!zapp_ios_deferred_list[i]) {
@@ -375,6 +609,7 @@ void darwin_window_destroy(void* handle) {
     if (d) {
         if (d->real_window) d->real_window.hidden = YES;
         free(d->queued_title);
+        free(d->sidebarUrl);
         for (int i = 0; i < ZAPP_MAX_DEFERRED; i++) {
             if (zapp_ios_deferred_list[i] == d) zapp_ios_deferred_list[i] = NULL;
         }
