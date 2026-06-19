@@ -9,9 +9,18 @@
 // It's a `declare global` + `export {}` module — pure types, so it bundles to a
 // no-op; it just makes the ambient worker globals visible to `tsc`.
 import "@zappdev/runtime/worker-globals";
-import { Events, Services } from "@zappdev/runtime";
+import { Events, Services, WindowEvent } from "@zappdev/runtime";
 
 console.log("started");
+
+// Window lifecycle delivery (gap #3): a zjs worker can now receive native
+// window events. `Events.on` arms the per-window backend listener (via the zjs
+// `subscribeWindowEvent` host fn) and the worker bootstrap reverse-maps the
+// internal `window:event` envelope to this typed listener. Resize the window →
+// this logs `[zapp/greeter] window:resize received: {…,"windowId":…}`.
+Events.on(WindowEvent.RESIZE, (data: any) => {
+  console.log(`window:resize received: ${JSON.stringify(data)}`);
+});
 
 // Point-to-point in: the Workers section sends "ping" via Workers.send.
 // Reply by broadcasting "greeter:pong" — the section listens via Events.on.
