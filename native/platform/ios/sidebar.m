@@ -25,27 +25,29 @@
 //     TopColumn:` returns UISplitViewControllerColumnPrimary, so the collapsed
 //     stack's root is the sidebar.
 //
-//  2. HIDE THE NAV BAR. A .doubleColumn split builds its collapsed stack inside
-//     a UINavigationController it manages; you can't reliably reach that managed
-//     controller to hide its bar from the outside, and even when you can it can
-//     re-show the bar on push. The robust, documented path (and the one this
-//     file takes) is to OWN the navigation controllers: wrap each column VC in a
-//     UINavigationController with navigationBarHidden = YES and hand those back
-//     to the split via setViewController:forColumn:. We ALSO provide an explicit
-//     compact column — a third bar-hidden UINavigationController rooted at the
-//     sidebar VC — via setViewController:forColumn:UISplitViewControllerColumnCompact.
-//     When the split collapses it uses THAT controller for the single-column
-//     stack, so the bar is hidden by construction and stays hidden across pushes.
+//  2. HIDE THE NAV BAR. We OWN the navigation controllers: each column VC is
+//     wrapped in a UINavigationController with navigationBarHidden = YES, handed
+//     back to the split via setViewController:forColumn:. We do NOT set an
+//     explicit compact column — an explicit compact column is shown VERBATIM on
+//     collapse, so an empty one paints a blank screen and a populated one would
+//     need to re-root a column VC that the primary/secondary nav already owns
+//     (a VC has one parent). Instead we let UIKit build the collapsed stack: for
+//     a .doubleColumn split whose columns are themselves navigation controllers,
+//     UIKit COMBINES them into a single navigation controller for the compact
+//     presentation (reusing one of ours, so navigationBarHidden carries over).
+//     `splitViewControllerDidCollapse:` then captures that combined controller
+//     (`collapsedNav`) and force-hides its bar belt-and-suspenders.
 //
 //  3. DRIVE THE STACK. showContent / showSidebar:
 //       - iOS 16+: [split showColumn:] / [split hideColumn:] is the supported
 //         way to push/pop the collapsed stack (and to slide columns on regular).
-//         With our own bar-hidden compact nav controller, this presents the
-//         target column full-bleed with no visible bar.
+//         With our combined bar-hidden nav controller, this presents the target
+//         column full-bleed with no visible bar.
 //       - Fallback (pre-iOS 16, or if showColumn no-ops while collapsed): drive
-//         the compact UINavigationController directly — push the content VC for
-//         showContent, popToRootViewController for showSidebar. Same effect,
-//         still no bar. On regular width we nudge preferredDisplayMode instead.
+//         the combined collapsed UINavigationController directly — push the
+//         content VC for showContent, popToRootViewController for showSidebar.
+//         Same effect, still no bar. On regular width we nudge
+//         preferredDisplayMode instead.
 //
 // Re-parenting note: this wrapping happens in zapp_ios_sidebar_register, which
 // window.m calls AFTER setViewController:forColumn: but BEFORE either pane's
@@ -76,7 +78,7 @@ extern void darwin_window_eval_js(int32_t window_id, const char* js);
 @property (nonatomic, weak) UIViewController* contentVC;   // secondary column content
 @property (nonatomic, strong) UINavigationController* sidebarNav;   // primary column nav (bar hidden)
 @property (nonatomic, strong) UINavigationController* contentNav;   // secondary column nav (bar hidden)
-@property (nonatomic, strong) UINavigationController* compactNav;   // collapsed single-stack (bar hidden)
+@property (nonatomic, weak)   UINavigationController* collapsedNav; // the combined stack while collapsed (bar hidden)
 @property (nonatomic, assign) int32_t hostWindowId;    // content webview's slot
 @property (nonatomic, assign) int32_t sidebarSlotId;   // sidebar webview's slot
 @property (nonatomic, assign) BOOL lastCollapsedEmit;  // last collapse state we emitted
@@ -104,6 +106,22 @@ static ZappIOSSidebarController* zapp_ios_sidebar_for_slot(int32_t slot_id) {
 static BOOL zapp_ios_sidebar_is_compact(ZappIOSSidebarController* c) {
     if (!c || !c.splitVC) return NO;
     return c.splitVC.isCollapsed;
+}
+
+// While collapsed, UIKit combines the column nav controllers into one stack and
+// parents it under the split. Find it so we can keep its bar hidden and drive
+// it on the pre-iOS-16 fallback path. `viewControllers` (classic property) holds
+// the single combined controller when collapsed; childViewControllers is the
+// belt-and-suspenders fallback.
+static UINavigationController* zapp_ios_collapsed_nav(UISplitViewController* svc) {
+    if (!svc) return nil;
+    for (UIViewController* vc in svc.viewControllers) {
+        if ([vc isKindOfClass:[UINavigationController class]]) return (UINavigationController*)vc;
+    }
+    for (UIViewController* vc in svc.childViewControllers) {
+        if ([vc isKindOfClass:[UINavigationController class]]) return (UINavigationController*)vc;
+    }
+    return nil;
 }
 
 // --- Event fan-out (mirrors darwin/sidebar.m's zapp_sidebar_emit) ---------
@@ -148,11 +166,14 @@ static void zapp_ios_sidebar_sync_collapse(ZappIOSSidebarController* c, BOOL col
 }
 
 // On collapse (entered compact): the stack roots at the sidebar → expanded
-// (sidebar visible). Belt-and-suspenders: also force the compact nav bar hidden
-// in case UIKit re-installed one while building the collapsed stack.
+// (sidebar visible). Capture the combined nav controller UIKit built and force
+// its bar hidden in case UIKit re-installed one while building the stack.
 - (void)splitViewControllerDidCollapse:(UISplitViewController*)svc {
-    (void)svc;
-    if (self.compactNav) self.compactNav.navigationBarHidden = YES;
+    UINavigationController* nav = zapp_ios_collapsed_nav(svc);
+    if (nav) {
+        nav.navigationBarHidden = YES;
+        self.collapsedNav = nav;
+    }
     zapp_ios_sidebar_sync_collapse(self, NO);
 }
 
@@ -203,20 +224,12 @@ void zapp_ios_sidebar_register(void* window, void* split, void* sidebarVC,
         [svc setViewController:sbNav forColumn:UISplitViewControllerColumnPrimary];
         [svc setViewController:ctNav forColumn:UISplitViewControllerColumnSecondary];
 
-        // Explicit COMPACT column: the single stack used when collapsed on
-        // iPhone. Rooting it at the sidebar VC's nav controller would conflict
-        // with the secondary nav owning the same content VC, so we give the
-        // compact stack its OWN nav controller and (when revealing content)
-        // push the content VC onto it. Bar hidden → chrome-less. We DON'T put
-        // the column VCs into it here (they're owned by the primary/secondary
-        // navs); UIKit moves the topColumn's content in on collapse. Providing
-        // our own compactNav guarantees navigationBarHidden across that move.
-        UINavigationController* compactNav = [[UINavigationController alloc] init];
-        compactNav.navigationBarHidden = YES;
-        c.compactNav = compactNav;
-        if (@available(iOS 14.0, *)) {
-            [svc setViewController:compactNav forColumn:UISplitViewControllerColumnCompact];
-        }
+        // NO explicit compact column. An explicit compact column is presented
+        // VERBATIM on collapse (an empty one = blank screen); a populated one
+        // would need to re-root a column VC the primary/secondary nav already
+        // owns. Instead we let UIKit COMBINE the two bar-hidden column nav
+        // controllers into one collapsed stack — `splitViewControllerDidCollapse:`
+        // captures it (collapsedNav) and re-asserts the hidden bar.
 
         svc.delegate = c;
 
@@ -254,12 +267,13 @@ void darwin_sidebar_show_content(int32_t window_id) {
         if (!zapp_ios_sidebar_is_compact(c)) return;  // regular: already visible
         if (@available(iOS 16.0, *)) {
             // Supported reveal: slides the secondary column to the top of the
-            // collapsed stack (chrome-less via our bar-hidden compact nav).
+            // collapsed stack (chrome-less via our combined bar-hidden nav).
             [c.splitVC showColumn:UISplitViewControllerColumnSecondary];
         } else {
-            // Fallback: push the content VC onto the compact stack directly.
-            if (c.compactNav && c.contentVC && c.compactNav.topViewController != c.contentVC) {
-                [c.compactNav pushViewController:c.contentVC animated:YES];
+            // Fallback: push the content VC onto the combined collapsed stack.
+            UINavigationController* nav = c.collapsedNav ?: zapp_ios_collapsed_nav(c.splitVC);
+            if (nav && c.contentVC && nav.topViewController != c.contentVC) {
+                [nav pushViewController:c.contentVC animated:YES];
             }
         }
         zapp_ios_sidebar_sync_collapse(c, YES);  // content visible == collapsed
@@ -276,8 +290,9 @@ void darwin_sidebar_show_sidebar(int32_t window_id) {
         if (@available(iOS 16.0, *)) {
             [c.splitVC showColumn:UISplitViewControllerColumnPrimary];
         } else {
-            if (c.compactNav && c.compactNav.viewControllers.count > 1) {
-                [c.compactNav popToRootViewControllerAnimated:YES];
+            UINavigationController* nav = c.collapsedNav ?: zapp_ios_collapsed_nav(c.splitVC);
+            if (nav && nav.viewControllers.count > 1) {
+                [nav popToRootViewControllerAnimated:YES];
             }
         }
         zapp_ios_sidebar_sync_collapse(c, NO);  // sidebar visible == expanded
