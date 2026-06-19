@@ -8,13 +8,13 @@ import std/strutils   # contains(string, string) substring check
 proc test() =
   # ---- add (engine + name) + read back ------------------------------------
   doAssert zapp_worker_registry_add_full_with_engine_and_name(
-    cstring"w-1", cstring"win-1", 0, cstring"/x.mjs", 7, cstring"Greeter") >= 0
+    cstring"w-1", cstring"win-1", cstring"/x.mjs", 7, cstring"Greeter") >= 0
   doAssert zapp_worker_registry_get_engine(cstring"w-1") == 7
   doAssert $zapp_worker_registry_get_display_name(cstring"w-1") == "Greeter"
 
   # display name falls back to id when unset
   doAssert zapp_worker_registry_add_full_with_engine(
-    cstring"w-2", cstring"win-1", 0, cstring"/y.mjs", 7) >= 0
+    cstring"w-2", cstring"win-1", cstring"/y.mjs", 7) >= 0
   doAssert $zapp_worker_registry_get_display_name(cstring"w-2") == "w-2"
 
   # display name of a NULL id is "", of an unregistered id is the id itself
@@ -25,7 +25,7 @@ proc test() =
 
   # ---- idempotent refresh-in-place (no double-alloc) ----------------------
   let slotA = zapp_worker_registry_add_full_with_engine(
-    cstring"w-1", cstring"win-1", 0, cstring"/x2.mjs", 2)
+    cstring"w-1", cstring"win-1", cstring"/x2.mjs", 2)
   doAssert slotA >= 0
   # same id refreshed: engine updated in place, name untouched
   doAssert zapp_worker_registry_get_engine(cstring"w-1") == 2
@@ -33,7 +33,7 @@ proc test() =
 
   # ---- add_full (engine defaults to -1) -----------------------------------
   doAssert zapp_worker_registry_add_full(
-    cstring"w-3", cstring"win-2", 0, cstring"/z.mjs") >= 0
+    cstring"w-3", cstring"win-2", cstring"/z.mjs") >= 0
   doAssert zapp_worker_registry_get_engine(cstring"w-3") == -1
 
   # ---- set_engine ----------------------------------------------------------
@@ -57,7 +57,7 @@ proc test() =
     doAssert j.contains("\"engine\":\"zjs\"")        # w-2 engine 7
     doAssert j.contains("\"engine\":\"bare-jsc\"")   # w-1 engine 2
     doAssert j.contains("\"engine\":\"bare-hermes\"")  # w-3 engine 6
-    doAssert j.contains("\"shared\":false")          # all workers are dedicated
+    doAssert not j.contains("\"shared\"")            # `shared` removed from the wire
     doAssert j.contains("\"scriptUrl\":\"/x2.mjs\"") # w-1 refreshed url
     doAssert j.contains("\"owners\":[\"win-1\"]")
 

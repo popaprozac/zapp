@@ -130,7 +130,7 @@ export interface WorkerInfo {
   name?: string;
   scriptUrl: string;
   engine: "zjs" | "bare-jsc" | "bare-v8" | "bare-quickjs" | "bare-mqjs" | "bare-hermes" | "pending";
-  shared: boolean;
+  /** Owning window ids — one entry for a dedicated worker, empty for headless. */
   owners: string[];
   supervisor?: {
     maxRetries: number;

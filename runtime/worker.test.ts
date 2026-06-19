@@ -46,8 +46,8 @@ describe("Workers.get", () => {
 
   test("info resolves to the matching WorkerInfo snapshot", async () => {
     cap.listResult = [
-      { id: "h-db", scriptUrl: "/x", engine: "zjs", shared: false, owners: [] },
-      { id: "w-1", scriptUrl: "/y", engine: "zjs", shared: false, owners: [] },
+      { id: "h-db", scriptUrl: "/x", engine: "zjs", owners: [] },
+      { id: "w-1", scriptUrl: "/y", engine: "zjs", owners: [] },
     ];
     const info = await Workers.get("h-db").info();
     expect(info?.id).toBe("h-db");
@@ -55,7 +55,7 @@ describe("Workers.get", () => {
   });
 
   test("info resolves to null for an unknown id", async () => {
-    cap.listResult = [{ id: "w-1", scriptUrl: "/y", engine: "zjs", shared: false, owners: [] }];
+    cap.listResult = [{ id: "w-1", scriptUrl: "/y", engine: "zjs", owners: [] }];
     expect(await Workers.get("h-missing").info()).toBeNull();
   });
 });

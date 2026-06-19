@@ -112,9 +112,9 @@ fn zapp_start_headless_worker_full(id: string, script_url: string,
     // so Workers.list() can report it.
     raw {
         extern int zapp_worker_registry_add_full_with_engine_and_name(const char* worker_id, const char* owner_id,
-                                                                       int shared, const char* script_url,
+                                                                       const char* script_url,
                                                                        int engine, const char* name);
-        zapp_worker_registry_add_full_with_engine_and_name((const char*)id, "", 0, (const char*)script_url, (int)engine, (const char*)name);
+        zapp_worker_registry_add_full_with_engine_and_name((const char*)id, "", (const char*)script_url, (int)engine, (const char*)name);
     }
     worker_create(app, script_url, "", id, engine);
     if max_retries > 0 {

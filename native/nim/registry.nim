@@ -15,7 +15,6 @@
 
 const
   ZAPP_MAX_WORKERS = 64
-  ZAPP_MAX_OWNERS_PER_WORKER = 16
 
   # Engine selector ids — mirror registry.zc:19-24 EXACTLY. 0/1 were jsc/txiki
   # (removed); slots kept intact so serialised ids + the dispatch switch don't
@@ -32,9 +31,7 @@ type
     workerId: array[64, char]
     name: array[64, char]          # display label; empty when unset
     scriptUrl: array[256, char]
-    owners: array[ZAPP_MAX_OWNERS_PER_WORKER, array[64, char]]
-    ownerCount: cint
-    shared: cint                   # 0 = dedicated, 1 = shared
+    owner: array[64, char]         # owning window id; "" for headless
     active: cint
     engine: cint
     # --- Supervisor / restart policy ---
@@ -88,9 +85,7 @@ proc registryAdd(workerId, ownerId: cstring): cint {.gcsafe.} =
     if gReg[i].active == 0:
       c_strncpy(bufBase(gReg[i].workerId), workerId, 63)
       gReg[i].name[0] = '\0'
-      c_strncpy(bufBase(gReg[i].owners[0]), ownerId, 63)
-      gReg[i].ownerCount = 1
-      gReg[i].shared = 0
+      c_strncpy(bufBase(gReg[i].owner), ownerId, 63)
       gReg[i].scriptUrl[0] = '\0'
       gReg[i].active = 1
       return cint(i)
@@ -108,11 +103,10 @@ proc registryIndex(workerId: cstring): int {.gcsafe.} =
 # Add a worker with full options (registry.zc:71-103). Idempotent: a duplicate
 # id is refreshed in place rather than double-allocated.
 proc zapp_worker_registry_add_full_with_engine*(workerId, ownerId: cstring,
-    shared: cint, scriptUrl: cstring, engine: cint): cint {.exportc, cdecl, gcsafe.} =
+    scriptUrl: cstring, engine: cint): cint {.exportc, cdecl, gcsafe.} =
   # Update an existing entry if present.
   for i in 0 ..< ZAPP_MAX_WORKERS:
     if gReg[i].active != 0 and c_strcmp(bufStr(gReg[i].workerId), workerId) == 0:
-      gReg[i].shared = shared
       gReg[i].engine = engine
       if scriptUrl != nil:
         c_strncpy(bufBase(gReg[i].scriptUrl), scriptUrl, 255)
@@ -122,9 +116,7 @@ proc zapp_worker_registry_add_full_with_engine*(workerId, ownerId: cstring,
     if gReg[i].active == 0:
       c_strncpy(bufBase(gReg[i].workerId), workerId, 63)
       gReg[i].name[0] = '\0'
-      c_strncpy(bufBase(gReg[i].owners[0]), ownerId, 63)
-      gReg[i].ownerCount = 1
-      gReg[i].shared = shared
+      c_strncpy(bufBase(gReg[i].owner), ownerId, 63)
       gReg[i].engine = engine
       if scriptUrl != nil:
         c_strncpy(bufBase(gReg[i].scriptUrl), scriptUrl, 255)
@@ -136,8 +128,8 @@ proc zapp_worker_registry_add_full_with_engine*(workerId, ownerId: cstring,
 
 # Backward-compat wrapper — engine defaults to -1 (registry.zc:107-110).
 proc zapp_worker_registry_add_full*(workerId, ownerId: cstring,
-    shared: cint, scriptUrl: cstring): cint {.exportc, cdecl, gcsafe.} =
-  zapp_worker_registry_add_full_with_engine(workerId, ownerId, shared, scriptUrl, -1)
+    scriptUrl: cstring): cint {.exportc, cdecl, gcsafe.} =
+  zapp_worker_registry_add_full_with_engine(workerId, ownerId, scriptUrl, -1)
 
 # Backward-compat dedicated add (registry.zc:51 made non-static for the C-ABI
 # surface in the plan). Mirrors registryAdd.
@@ -148,9 +140,9 @@ proc zapp_worker_registry_add*(workerId, ownerId: cstring): cint
 # As add_full_with_engine, but also records a display name (registry.zc:116-125).
 # A non-empty name always wins; empty/NULL leaves the existing name untouched.
 proc zapp_worker_registry_add_full_with_engine_and_name*(workerId, ownerId: cstring,
-    shared: cint, scriptUrl: cstring, engine: cint, name: cstring): cint
+    scriptUrl: cstring, engine: cint, name: cstring): cint
     {.exportc, cdecl, gcsafe.} =
-  let slot = zapp_worker_registry_add_full_with_engine(workerId, ownerId, shared, scriptUrl, engine)
+  let slot = zapp_worker_registry_add_full_with_engine(workerId, ownerId, scriptUrl, engine)
   if slot >= 0 and name != nil and name[0] != '\0':
     c_strncpy(bufBase(gReg[slot].name), name, 63)
     gReg[slot].name[63] = '\0'
@@ -158,9 +150,9 @@ proc zapp_worker_registry_add_full_with_engine_and_name*(workerId, ownerId: cstr
 
 # Backward-compat wrapper — engine -1 (registry.zc:129-133).
 proc zapp_worker_registry_add_full_with_name*(workerId, ownerId: cstring,
-    shared: cint, scriptUrl: cstring, name: cstring): cint
+    scriptUrl: cstring, name: cstring): cint
     {.exportc, cdecl, gcsafe.} =
-  zapp_worker_registry_add_full_with_engine_and_name(workerId, ownerId, shared, scriptUrl, -1, name)
+  zapp_worker_registry_add_full_with_engine_and_name(workerId, ownerId, scriptUrl, -1, name)
 
 # Look up the engine for a worker; -1 if not found (registry.zc:136-144).
 proc zapp_worker_registry_get_engine*(workerId: cstring): cint
@@ -187,11 +179,11 @@ proc zapp_worker_registry_remove*(workerId: cstring)
 # `owner` accessor. Worker-thread-reachable (zjs.c may call
 # worker_dispatch_to_webview on a worker pthread), so NO Nim GC.
 
-# First owner of a worker (dedicated workers have exactly one), "" if none.
+# Owning window of a worker, "" if not found or headless (no owning window).
 proc registryFirstOwner*(workerId: cstring): cstring {.gcsafe.} =
   let i = registryIndex(workerId)
-  if i < 0 or gReg[i].ownerCount <= 0: return cstring""
-  bufStr(gReg[i].owners[0])
+  if i < 0: return cstring""
+  bufStr(gReg[i].owner)
 
 # Display label: configured name if set, else worker_id (registry.zc:264-270).
 # "" for NULL id; falls back to the passed-in id when unregistered.
@@ -300,8 +292,7 @@ const
   litNameKey = cstring("\",\"name\":\"")     # close id quote → ,"name":"<ename>
   litUrlKey = cstring("\",\"scriptUrl\":\"") # close prev quote → ,"scriptUrl":"<eurl>
   litEngineKey = cstring("\",\"engine\":\"") # close url quote → ,"engine":"<estr>
-  litSharedKey = cstring("\",\"shared\":")   # close engine quote → ,"shared":
-  litOwnersKey = cstring(",\"owners\":[")
+  litOwnersKey = cstring("\",\"owners\":[")  # close engine quote → ,"owners":[
   litQuote = cstring("\"")
   # supervisor fragment carries 4 ints — rendered via c_snprintf into a bounded
   # scratch (matches registry.zc:417-420 exactly).
@@ -309,7 +300,7 @@ const
 
 # Heap JSON array of all ACTIVE workers (registry.zc:345-429). Caller free()s.
 # Built so the bytes are identical to the zc: each {"id":"<id>"[,"name":"<n>"],
-# "scriptUrl":"<u>","engine":"<e>","shared":<b>,"owners":[<o>,...]
+# "scriptUrl":"<u>","engine":"<e>","owners":[<o>]
 # [,"supervisor":{...}]}.
 proc zapp_workers_registry_list_json*(): cstring {.exportc, cdecl, gcsafe.} =
   var cap: csize_t = 1024
@@ -351,24 +342,17 @@ proc zapp_workers_registry_list_json*(): cstring {.exportc, cdecl, gcsafe.} =
     c_free(eurl)
     ap(litEngineKey)            # closes url quote, opens "engine":"
     ap(estr)
-    ap(litSharedKey)            # closes engine quote, opens "shared":
-    ap(if gReg[i].shared != 0: cstring"true" else: cstring"false")
-    ap(litOwnersKey)
+    ap(litOwnersKey)            # closes engine quote, opens "owners":[
 
-    # Skip empty owner slots (headless workers register owner "") so the payload
-    # reports owners:[] not owners:[""] (registry.zc:403-413).
-    var firstOwner = 1
-    for o in 0 ..< gReg[i].ownerCount:
-      if gReg[i].owners[o][0] == '\0': continue
-      let eowner = jsonEscapeDup(bufStr(gReg[i].owners[o]))
+    # One owning window (headless register owner "") → owners:["w-N"] for
+    # dedicated, owners:[] for headless rather than owners:[""].
+    if gReg[i].owner[0] != '\0':
+      let eowner = jsonEscapeDup(bufStr(gReg[i].owner))
       if eowner == nil: c_free(buf); return nil
-      if jsonAppendStr(buf, cap, off, (if firstOwner != 0: fmtEmpty else: fmtComma)) < 0:
-        c_free(eowner); c_free(buf); return nil
       if jsonAppendStr(buf, cap, off, litQuote) < 0: c_free(eowner); c_free(buf); return nil
       if jsonAppendStr(buf, cap, off, eowner) < 0: c_free(eowner); c_free(buf); return nil
       if jsonAppendStr(buf, cap, off, litQuote) < 0: c_free(eowner); c_free(buf); return nil
       c_free(eowner)
-      firstOwner = 0
     ap(fmtClose)                # close owners array
 
     if gReg[i].restartMax > 0:
@@ -426,8 +410,8 @@ proc zapp_worker_supervisor_get_script_url*(workerId: cstring): cstring
 proc zapp_worker_supervisor_get_owner*(workerId: cstring): cstring
     {.exportc, cdecl, gcsafe.} =
   let i = registryIndex(workerId)
-  if i < 0 or gReg[i].ownerCount == 0: return cstring""
-  bufStr(gReg[i].owners[0])
+  if i < 0: return cstring""
+  bufStr(gReg[i].owner)
 
 # Read-only window-state inspection (registry.zc:504-516). 0 ok, -1 if missing.
 proc zapp_worker_supervisor_get_window_state*(workerId: cstring,

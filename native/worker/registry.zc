@@ -1,5 +1,7 @@
 // Worker registry — tracks which workers belong to which window.
-// Supports both dedicated (single-owner) and shared (multi-owner, refcounted) workers.
+// Each worker has a single owning window ("" for headless workers, which
+// have no owning window). (Shared/multi-owner workers were removed — the
+// platform-native SharedWorker is used instead; see the SharedWorker drop.)
 
 import "string.h" as str;
 import "stdlib.h";
@@ -8,7 +10,6 @@ import "stdarg.h";
 
 raw {
     #define ZAPP_MAX_WORKERS 64
-    #define ZAPP_MAX_OWNERS_PER_WORKER 16
 
     // Engine selector — tracked per-worker so dispatchers can route
     // post / terminate / restart to the right engine without
@@ -27,9 +28,7 @@ raw {
         char worker_id[64];
         char name[64];    // display label from zapp.config.ts; empty string when unset
         char script_url[256];
-        char owners[ZAPP_MAX_OWNERS_PER_WORKER][64];
-        int owner_count;
-        int shared;       // 0 = dedicated, 1 = shared
+        char owner[64];   // owning window id; "" for headless (no owning window)
         int active;
         int engine;       // ZAPP_ENGINE_BARE_JSC | ZAPP_ENGINE_BARE_V8 | ... | ZAPP_ENGINE_ZJS
 
@@ -53,9 +52,7 @@ raw {
             if (!zapp_worker_registry[i].active) {
                 strncpy(zapp_worker_registry[i].worker_id, worker_id, 63);
                 zapp_worker_registry[i].name[0] = 0;
-                strncpy(zapp_worker_registry[i].owners[0], owner_id, 63);
-                zapp_worker_registry[i].owner_count = 1;
-                zapp_worker_registry[i].shared = 0;
+                strncpy(zapp_worker_registry[i].owner, owner_id, 63);
                 zapp_worker_registry[i].script_url[0] = '\0';
                 zapp_worker_registry[i].active = 1;
                 return i;
@@ -64,17 +61,16 @@ raw {
         return -1;
     }
 
-    // Add a worker with full options (shared flag + script URL +
-    // engine). Non-static so app.zc can register headless workers
-    // (they don't go through the router add path). Idempotent: a
-    // duplicate id is refreshed in place rather than double-allocated.
+    // Add a worker with full options (script URL + engine). Non-static so
+    // app.zc can register headless workers (they don't go through the router
+    // add path). Idempotent: a duplicate id is refreshed in place rather
+    // than double-allocated.
     int zapp_worker_registry_add_full_with_engine(const char* worker_id, const char* owner_id,
-                                                   int shared, const char* script_url, int engine) {
+                                                   const char* script_url, int engine) {
         // Update an existing entry if present.
         for (int i = 0; i < ZAPP_MAX_WORKERS; i++) {
             if (zapp_worker_registry[i].active &&
                 strcmp(zapp_worker_registry[i].worker_id, worker_id) == 0) {
-                zapp_worker_registry[i].shared = shared;
                 zapp_worker_registry[i].engine = engine;
                 if (script_url) {
                     strncpy(zapp_worker_registry[i].script_url, script_url, 255);
@@ -87,9 +83,7 @@ raw {
             if (!zapp_worker_registry[i].active) {
                 strncpy(zapp_worker_registry[i].worker_id, worker_id, 63);
                 zapp_worker_registry[i].name[0] = 0;
-                strncpy(zapp_worker_registry[i].owners[0], owner_id, 63);
-                zapp_worker_registry[i].owner_count = 1;
-                zapp_worker_registry[i].shared = shared;
+                strncpy(zapp_worker_registry[i].owner, owner_id, 63);
                 zapp_worker_registry[i].engine = engine;
                 if (script_url)
                     strncpy(zapp_worker_registry[i].script_url, script_url, 255);
@@ -105,8 +99,8 @@ raw {
     // Backward-compat wrapper — defaults engine to -1 (resolver picks).
     // Existing callsites in router / app.zc keep working without a sweep.
     int zapp_worker_registry_add_full(const char* worker_id, const char* owner_id,
-                                      int shared, const char* script_url) {
-        return zapp_worker_registry_add_full_with_engine(worker_id, owner_id, shared, script_url, -1);
+                                      const char* script_url) {
+        return zapp_worker_registry_add_full_with_engine(worker_id, owner_id, script_url, -1);
     }
 
     // As add_full_with_engine, but also records a display `name`. The name
@@ -114,9 +108,9 @@ raw {
     // so a non-empty name always wins over whatever was there before. An
     // empty/NULL name leaves the slot's existing name untouched.
     int zapp_worker_registry_add_full_with_engine_and_name(const char* worker_id, const char* owner_id,
-                                                            int shared, const char* script_url,
+                                                            const char* script_url,
                                                             int engine, const char* name) {
-        int slot = zapp_worker_registry_add_full_with_engine(worker_id, owner_id, shared, script_url, engine);
+        int slot = zapp_worker_registry_add_full_with_engine(worker_id, owner_id, script_url, engine);
         if (slot >= 0 && name && name[0]) {
             strncpy(zapp_worker_registry[slot].name, name, 63);
             zapp_worker_registry[slot].name[63] = 0;
@@ -127,9 +121,9 @@ raw {
     // Backward-compat wrapper — defaults engine to -1 (resolver picks),
     // matching zapp_worker_registry_add_full.
     int zapp_worker_registry_add_full_with_name(const char* worker_id, const char* owner_id,
-                                                int shared, const char* script_url, const char* name) {
+                                                const char* script_url, const char* name) {
         return zapp_worker_registry_add_full_with_engine_and_name(
-            worker_id, owner_id, shared, script_url, -1, name);
+            worker_id, owner_id, script_url, -1, name);
     }
 
     // Look up the engine for a worker. Returns -1 (resolver picks) if not found.
@@ -170,14 +164,13 @@ raw {
         }
     }
 
-    // Returns first owner_id for a worker, or NULL (dedicated workers have exactly one)
+    // Returns the owning window id for a worker, or NULL if not found.
+    // Dedicated workers have one owner; headless register with "" (no window).
     static const char* zapp_worker_registry_owner(const char* worker_id) {
         for (int i = 0; i < ZAPP_MAX_WORKERS; i++) {
             if (zapp_worker_registry[i].active &&
                 strcmp(zapp_worker_registry[i].worker_id, worker_id) == 0) {
-                if (zapp_worker_registry[i].owner_count > 0)
-                    return zapp_worker_registry[i].owners[0];
-                return NULL;
+                return zapp_worker_registry[i].owner;
             }
         }
         return NULL;
@@ -327,26 +320,22 @@ raw {
             char* eurl = zapp_json_escape_dup(e->script_url);
             if (!eurl) { free(buf); return NULL; }
             if (zapp_json_append(&buf, &cap, &off,
-                    ",\"scriptUrl\":\"%s\",\"engine\":\"%s\",\"shared\":%s,\"owners\":[",
-                    eurl, engine_str, e->shared ? "true" : "false") < 0) {
+                    ",\"scriptUrl\":\"%s\",\"engine\":\"%s\",\"owners\":[",
+                    eurl, engine_str) < 0) {
                 free(eurl); free(buf); return NULL;
             }
             free(eurl);
 
-            // Skip empty owner slots (headless workers register with an
-            // owner of "", which has no real owning window) so the debug
-            // payload reports owners:[] rather than owners:[""]. A separate
-            // first_owner flag keeps the comma logic correct across skips.
-            int first_owner = 1;
-            for (int o = 0; o < e->owner_count; o++) {
-                if (!e->owners[o][0]) continue;
-                char* eowner = zapp_json_escape_dup(e->owners[o]);
+            // One owning window (headless register with "", which has no real
+            // owning window) → report owners:["w-N"] for dedicated, owners:[]
+            // for headless rather than owners:[""].
+            if (e->owner[0]) {
+                char* eowner = zapp_json_escape_dup(e->owner);
                 if (!eowner) { free(buf); return NULL; }
-                if (zapp_json_append(&buf, &cap, &off, "%s\"%s\"", first_owner ? "" : ",", eowner) < 0) {
+                if (zapp_json_append(&buf, &cap, &off, "\"%s\"", eowner) < 0) {
                     free(eowner); free(buf); return NULL;
                 }
                 free(eowner);
-                first_owner = 0;
             }
             if (zapp_json_append(&buf, &cap, &off, "]") < 0) { free(buf); return NULL; }
 
@@ -431,8 +420,7 @@ raw {
     }
     const char* zapp_worker_supervisor_get_owner(const char* worker_id) {
         ZappWorkerEntry* e = zapp_worker_registry_get(worker_id);
-        if (!e || e->owner_count == 0) return "";
-        return e->owners[0];
+        return e ? e->owner : "";
     }
 
     // Read-only window-state inspection. Used by engine dev logs on

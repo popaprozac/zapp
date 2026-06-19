@@ -282,7 +282,7 @@ export function renderHeadlessNim(headless: Record<string, any> | undefined): st
     // Workers.list() is empty AND the router's Workers.send can't resolve the
     // worker to deliver to, so the headless worker is silently unreachable.
     lines.push(
-      `  discard zapp_worker_registry_add_full_with_engine_and_name(cstring"h-${id}", cstring"", cint(0), cstring"${url}", cint(${engineId}), cstring"${escapedName}")`,
+      `  discard zapp_worker_registry_add_full_with_engine_and_name(cstring"h-${id}", cstring"", cstring"${url}", cint(${engineId}), cstring"${escapedName}")`,
     );
     lines.push(
       `  discard zjs_worker_create(cstring"${url}", cstring"", cstring"h-${id}")`,
@@ -291,7 +291,7 @@ export function renderHeadlessNim(headless: Record<string, any> | undefined): st
   return `## AUTO-GENERATED (Nim). zjs headless workers.
 proc zjs_worker_create(scriptUrl, ownerId, workerId: cstring): bool {.importc, cdecl.}
 proc zapp_worker_registry_add_full_with_engine_and_name(workerId, ownerId: cstring,
-    shared: cint, scriptUrl: cstring, engine: cint, name: cstring): cint {.importc, cdecl.}
+    scriptUrl: cstring, engine: cint, name: cstring): cint {.importc, cdecl.}
 proc zapp_start_headless_workers*() =
 ${lines.length ? lines.join("\n") : "  discard"}
 `;

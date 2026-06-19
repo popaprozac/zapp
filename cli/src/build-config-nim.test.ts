@@ -41,7 +41,7 @@ test("renderHeadlessNim emits zjs_worker_create for zjs entries, skips non-zjs",
   // zjs entry → registry registration (engine 7 + display name) THEN spawn,
   // both keyed by h-<id> (matches the .zc zapp_start_headless_worker_full path).
   expect(out).toContain(
-    'discard zapp_worker_registry_add_full_with_engine_and_name(cstring"h-bench-zjs", cstring"", cint(0), cstring"/_workers/_headless_bench-zjs.mjs", cint(7), cstring"bench")',
+    'discard zapp_worker_registry_add_full_with_engine_and_name(cstring"h-bench-zjs", cstring"", cstring"/_workers/_headless_bench-zjs.mjs", cint(7), cstring"bench")',
   );
   expect(out).toContain(
     'discard zjs_worker_create(cstring"/_workers/_headless_bench-zjs.mjs", cstring"", cstring"h-bench-zjs")',

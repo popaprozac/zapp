@@ -212,7 +212,7 @@ proc routeWorker(action: string, a: JsonNode, windowId: int) =
 
     # Dedicated worker.
     discard zapp_worker_registry_add_full_with_engine_and_name(
-      workerId.cstring, ownerId, 0, scriptUrl.cstring, engine, name.cstring)
+      workerId.cstring, ownerId, scriptUrl.cstring, engine, name.cstring)
 
     # app is unused in the zjs-only dispatcher (ABI parity only) — pass nil.
     discard worker_create(nil, scriptUrl.cstring, ownerId, workerId.cstring, engine)
