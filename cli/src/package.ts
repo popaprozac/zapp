@@ -11,6 +11,7 @@ import { resolveAppIconPath } from "./paths";
 import { resolveEntitlements } from "./entitlements";
 import { notarizeApp } from "./notarize";
 import { clog, clogError } from "./log";
+import { ASSETS_EMBEDDED_MARKER } from "./assets";
 
 interface PackageOptions {
   root: string;
@@ -41,14 +42,17 @@ export async function createProductionBundle(opts: PackageOptions): Promise<stri
   await Bun.write(execPath, Bun.file(binaryPath));
   await chmod(execPath, 0o755);
 
-  // Copy Vite build output into Resources/ (skip if assets are embedded in binary)
-  // Check if this is an embedded build by looking at the binary size vs a threshold
-  // Assets are embedded when `zapp build` runs (which runPackage calls first)
+  // Copy Vite build output into Resources/ (skip if assets are embedded in binary).
+  // The marker file `.zapp/assets-embedded` is written by BOTH prod asset emitters:
+  //   - zc:  generateAssetManifest (native/codegen/assets.ts)
+  //   - Nim: generateAssetManifestNim({ embed: true })
+  // It is NOT written by the zc dev stub or any non-embedding path.
+  // Using this language-agnostic marker (instead of the old `.zapp/zapp_assets.zc`
+  // heuristic) also fixes a pre-existing zc bug: the zc dev stub wrote `zapp_assets.zc`
+  // and would wrongly take the embedded branch, shipping an app with no web assets.
   const assetSrc = path.resolve(root, config.assetDir);
-  // Only copy assets if they're NOT embedded in the binary
-  // The build step sets use_embedded_assets=1, so we skip the copy
-  const zappAssetsFile = path.join(root, ".zapp", "zapp_assets.zc");
-  if (existsSync(zappAssetsFile)) {
+  const embeddedMarker = path.join(root, ASSETS_EMBEDDED_MARKER);
+  if (existsSync(embeddedMarker)) {
     clog(1, "assets embedded in binary (skipping resource copy)");
   } else if (existsSync(assetSrc)) {
     await cp(assetSrc, resourcesDir, { recursive: true });
