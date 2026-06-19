@@ -40,6 +40,24 @@ export function isIOSTarget(t: BuildTarget): boolean {
 }
 
 /**
+ * Build the permissions manifest object baked into the Nim build config.
+ * Mirrors the zc path's manifest shape (build-config.ts permissions block):
+ * `{ platform, active, allow }`. The `platform` string is TARGET-DERIVED —
+ * `"ios"` for any iOS target, `"macos"` otherwise — so permissions.nim sees
+ * the right platform without a hardcoded value.
+ */
+export function buildPermissionsManifest(
+  target: BuildTarget,
+  resolved: { active: boolean; allow: string[] },
+): { platform: "ios" | "macos"; active: boolean; allow: string[] } {
+  return {
+    platform: isIOSTarget(target) ? "ios" : "macos",
+    active: resolved.active,
+    allow: resolved.allow,
+  };
+}
+
+/**
  * Get the platform-specific .m / .c files to compile for a given target.
  * Falls through to host platform when the target's source dir doesn't
  * exist yet (iOS during the initial port).
@@ -1105,6 +1123,7 @@ async function buildNativeNim(
   root: string,
   config: import("./config").ResolvedConfig,
   optimize: boolean,
+  target: BuildTarget,
   devUrl?: string,
 ): Promise<void> {
   const fs = await import("node:fs/promises");
@@ -1133,11 +1152,11 @@ async function buildNativeNim(
 
   // Permissions manifest — mirrors the zc path (build-config.ts:74-85). The
   // resolved allow/active is baked into the Nim build config so permissions.nim
-  // can importc zapp_build_permissions_json(). platform is macos for the Nim
-  // dev path (the only target wired so far).
+  // can importc zapp_build_permissions_json(). `platform` is TARGET-DERIVED
+  // (ios|macos) via buildPermissionsManifest — no longer hardcoded.
   const { resolvePermissions } = await import("./permissions");
   const resolvedPerms = resolvePermissions(config.permissions);
-  const permsObj = { platform: "macos", active: resolvedPerms.active, allow: resolvedPerms.allow };
+  const permsObj = buildPermissionsManifest(target, resolvedPerms);
 
   // Custom protocols — mirrors the zc path (build-config.ts:106-107).
   const protocols = (config.protocols ?? []).filter(s => /^[a-z][a-z0-9.+-]*$/.test(s));
@@ -1234,8 +1253,34 @@ async function buildNativeNim(
     );
   } catch { /* editor cfg is non-fatal */ }
 
+  // iOS targets cross-compile to the simulator via GLOBAL clang/link flags
+  // (Nim has no native iOS target; we steer its clang backend with --passC /
+  // --passL). Resolve the SDK at build time with xcrun — never hardcode the
+  // versioned SDK dir. Reuses the zc path's resolveSDKPath (build-config.ts) so
+  // there's a single source of truth for the xcrun invocation + caching.
+  // macOS leaves `iosArgs` empty → the arg array below is byte-for-byte today's.
+  //
+  // NOTE: this only threads the SDK/flags; no iOS sources/frameworks are
+  // emitted yet (next task), so an iOS build is NOT expected to fully link here.
+  const iosArgs: string[] = [];
+  if (isIOSTarget(target)) {
+    const { resolveSDKPath } = await import("./build-config");
+    const sdk = target === "ios-simulator" ? "iphonesimulator" : "iphoneos";
+    const sdkPath = await resolveSDKPath(sdk);
+    // Match the zc path's min version (build-config.ts) — 15.0.
+    const triple = sdk === "iphonesimulator"
+      ? "arm64-apple-ios15.0-simulator"
+      : "arm64-apple-ios15.0";
+    const versionMinFlag = sdk === "iphonesimulator"
+      ? "-mios-simulator-version-min=15.0"
+      : "-miphoneos-version-min=15.0";
+    const cFlags = `-isysroot ${sdkPath} -target ${triple} ${versionMinFlag}`;
+    iosArgs.push(`--passC:${cFlags}`, `--passL:${cFlags}`);
+  }
+
   const args = ["c", "--cc:clang", "--mm:orc", "--threads:on", "-d:release", "--opt:size",
                 `--path:${zappDir}`, `--path:${nimFrameworkDir}`,
+                ...iosArgs,
                 `-o:${output}`, ...(verbose ? [] : ["--hints:off"]), nimRoot];
   const proc = Bun.spawn(["nim", ...args], { cwd: nativeDir, stdout: "inherit", stderr: "inherit" });
   const code = await proc.exited;
@@ -1254,7 +1299,7 @@ export async function compileNative(opts: CompileOptions): Promise<void> {
     if (!opts.config) {
       throw new Error("[zapp] Nim build path requires a resolved config (opts.config).");
     }
-    await buildNativeNim(nativeDir, output, verbose, root, opts.config, opts.optimize, opts.devUrl);
+    await buildNativeNim(nativeDir, output, verbose, root, opts.config, opts.optimize, target, opts.devUrl);
     return;
   }
 

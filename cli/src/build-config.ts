@@ -14,7 +14,7 @@ import { resolvePermissions } from "./permissions";
 // xcrun-resolved iOS SDK paths. Cached for the life of the CLI process
 // — calling xcrun is ~80ms, called only once per build now.
 const sdkPathCache = new Map<string, string>();
-async function resolveSDKPath(sdk: "iphonesimulator" | "iphoneos"): Promise<string> {
+export async function resolveSDKPath(sdk: "iphonesimulator" | "iphoneos"): Promise<string> {
   const cached = sdkPathCache.get(sdk);
   if (cached) return cached;
   const proc = Bun.spawn(["xcrun", "--sdk", sdk, "--show-sdk-path"], {

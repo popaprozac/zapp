@@ -94,6 +94,20 @@ test("renderBuildConfigNim emits fs allowlist + persist-grants getters", () => {
   expect(out).toContain("proc zapp_build_fs_persist_grants(): bool {.exportc, cdecl.} = true");
 });
 
+import { buildPermissionsManifest } from "./native";
+test("buildPermissionsManifest derives platform from the build target (ios vs macos)", () => {
+  const resolved = { active: true, allow: ["clipboard"] };
+  // iOS targets → platform:"ios" (not the hardcoded macos).
+  expect(buildPermissionsManifest("ios-simulator", resolved).platform).toBe("ios");
+  expect(buildPermissionsManifest("ios-device", resolved).platform).toBe("ios");
+  // Everything else → platform:"macos" (today's behavior preserved).
+  expect(buildPermissionsManifest("macos", resolved).platform).toBe("macos");
+  // active/allow are passed through untouched.
+  const ios = buildPermissionsManifest("ios-simulator", resolved);
+  expect(ios.active).toBe(true);
+  expect(ios.allow).toEqual(["clipboard"]);
+});
+
 import { renderNimCfg } from "./build-config";
 test("renderNimCfg emits absolute --path lines, fidelity flags, and a do-not-edit header", () => {
   const out = renderNimCfg({
