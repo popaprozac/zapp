@@ -46,8 +46,48 @@ h2 { font-size: 16px; color: var(--text-h); margin: 0 0 8px; font-weight: 600; }
 .nav-item:hover { background: var(--accent-bg); }
 .nav-item.active { background: var(--accent-bg); color: var(--accent); font-weight: 600; }
 
+/* iOS-only top bar (rendered via JS when Platform.isIOS).
+   Sits at the very top of the content pane, padded below the status bar. */
+.ks-ios-topbar {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 50;
+  /* Push content below the status-bar notch */
+  padding-top: env(safe-area-inset-top);
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(12px) saturate(1.4);
+  -webkit-backdrop-filter: blur(12px) saturate(1.4);
+  border-bottom: 0.5px solid rgba(0, 0, 0, 0.12);
+}
+@media (prefers-color-scheme: dark) {
+  .ks-ios-topbar {
+    background: rgba(22, 23, 29, 0.84);
+    border-bottom-color: rgba(255, 255, 255, 0.1);
+  }
+}
+.ks-ios-topbar-inner {
+  display: flex; align-items: center;
+  height: 44px; padding: 0 4px;
+}
+.ks-ios-topbar-menu {
+  font-size: 20px; line-height: 1;
+  width: 44px; height: 44px;
+  display: flex; align-items: center; justify-content: center;
+  border: none; background: transparent; color: var(--text-h);
+  cursor: pointer; border-radius: 8px; flex-shrink: 0;
+}
+.ks-ios-topbar-menu:active { background: var(--accent-bg); }
+.ks-ios-topbar-title {
+  flex: 1; text-align: center;
+  font-size: 17px; font-weight: 600;
+  color: var(--text-h); letter-spacing: -0.01em;
+  /* don't overlap the leading button on narrow screens */
+  margin-right: 44px;
+  pointer-events: none; user-select: none;
+}
+
 /* Main pane */
 .main-pane { padding: var(--zapp-titlebar-height, 52px) 24px 24px; max-width: 720px; }
+/* On iOS the native titlebar is absent; offset by the topbar instead */
+.main-pane--ios-offset { padding-top: calc(env(safe-area-inset-top) + 44px + 8px); }
 .stage { display: flex; flex-direction: column; gap: 16px; }
 .card { border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
 .card .intro { margin: 0 0 12px; opacity: 0.7; font-size: 12px; }

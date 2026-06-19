@@ -4,31 +4,38 @@ import { findSection } from "../sections/types";
 import { shellToolbar } from "./toolbar-def";
 
 export function renderMainPane(app: HTMLElement) {
-  // iPhone master-detail: there's no native toolbar to host a sidebar toggle,
-  // so render an in-page "‹ Menu" control that drives the split view back to
-  // the sidebar (showSidebar). Not rendered on macOS / iPad — both panes are
-  // visible there, so a back affordance would be meaningless.
-  const backControl = Platform.isIOS
-    ? `<button data-back-to-sidebar
-         style="position:fixed;top:12px;left:12px;z-index:10;padding:6px 12px;
-                font:inherit;border-radius:8px;border:1px solid rgba(0,0,0,0.15);
-                background:rgba(255,255,255,0.85);cursor:pointer">‹ Menu</button>`
+  // iPhone: render a static top bar that showcases in-page chrome. It hosts a
+  // hamburger button wired to sidebar.toggle() (reads live native state, so
+  // tap-out dismiss never desyncs it). macOS uses the real native window chrome
+  // and sidebar — the top bar must NOT appear there.
+  const iosTopBar = Platform.isIOS
+    ? `<header class="ks-ios-topbar" aria-label="Navigation">
+        <div class="ks-ios-topbar-inner">
+          <button class="ks-ios-topbar-menu" data-sidebar-toggle aria-label="Toggle sidebar">☰</button>
+          <span class="ks-ios-topbar-title">Kitchen Sink</span>
+        </div>
+      </header>`
     : "";
   const dragStrip = Platform.isIOS
     ? ""
     : `<div class="drag-strip" data-zapp-drag-region>
       <span class="drag-strip-label">⠿ Kitchen Sink — drag to move</span>
     </div>`;
+  // On iOS the main-pane top padding must clear the fixed top bar instead of
+  // the native titlebar. Add the --ios-offset modifier class accordingly.
+  const mainPaneClass = Platform.isIOS
+    ? "main-pane main-pane--ios-offset"
+    : "main-pane";
   app.innerHTML = `
     ${dragStrip}
-    ${backControl}
-    <div class="main-pane"><div class="stage" data-stage></div></div>`;
+    ${iosTopBar}
+    <div class="${mainPaneClass}"><div class="stage" data-stage></div></div>`;
 
-  // iOS back-to-sidebar: reveal the primary (sidebar) column. No-op elsewhere
-  // (the control isn't rendered off-iOS).
+  // iOS top bar: use sidebar.toggle() so the native split-view state is always
+  // the source of truth — tap-out dismiss no longer desyncs the button.
   app
-    .querySelector<HTMLButtonElement>("[data-back-to-sidebar]")
-    ?.addEventListener("click", () => Window.current().sidebar?.showSidebar());
+    .querySelector<HTMLButtonElement>("[data-sidebar-toggle]")
+    ?.addEventListener("click", () => Window.current().sidebar?.toggle());
 
   // Attach the shell toolbar (late-attach to a toolbar-less window works).
   try {
