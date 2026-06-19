@@ -326,6 +326,112 @@ export function renderNimCfg(o: NimCfgOpts): string {
 `;
 }
 
+export interface PlatformNimOpts {
+  nativeDir: string; // absolute path to the framework's native/ dir
+}
+
+/**
+ * Render `.zapp/zapp_platform.nim` — the per-TARGET native link surface for the
+ * Nim build path. Replaces the hardcoded darwin-only pragmas that used to live
+ * in native/nim/zapp.nim so the Nim build picks the right .m sources, frameworks
+ * and libzjs artifact by target (macOS vs iOS).
+ *
+ * What this module owns (per target):
+ *   - the `{.compile(<abs .m>, "-fobjc-arc").}` list (CALL form — the THIRD arg
+ *     is per-file clang flags; the TUPLE form `{.compile: (f, x).}` treats the
+ *     2nd elem as the OUTPUT OBJECT NAME and would drop ARC + clobber objects,
+ *     so it is never used). window.m's weak WKWebView properties REQUIRE ARC.
+ *   - the framework `{.passL.}` (Cocoa/Carbon/… on macOS; UIKit/… on iOS).
+ *   - the libs `{.passL.}` (-lcompression always; -lz added on iOS).
+ *   - the libzjs link `{.passL.}` (libzjs.dylib + rpath on macOS; the static
+ *     libzjs_embed.a on iOS, no rpath).
+ *
+ * What it does NOT own (stays in zapp.nim, target-agnostic):
+ *   - the zjs.c `{.compile.}` itself + its `-I vendor/zjs/include` `{.passC.}`
+ *     (SDK flags reach it globally via `nim c --passC/--passL`).
+ *   - clipboard.m, which clipboard.nim compiles + owns (double-compiling it here
+ *     would break the macOS link with duplicate symbols). It is filtered out of
+ *     the source list below even though getPlatformSources returns it.
+ *
+ * Paths are ABSOLUTE (computed from nativeDir + the vendor dir). The generated
+ * module lives in the project's .zapp/ dir, so a relative `../platform/...`
+ * `{.compile.}` would resolve against .zapp/ (= <project>/platform/...) instead
+ * of the framework's native/ — absolute paths sidestep that quirk entirely.
+ * Pure (no disk I/O); buildNativeNim writes the returned source to disk.
+ */
+export function renderPlatformNim(target: BuildTarget, o: PlatformNimOpts): string {
+  // Forward slashes so the emitted Nim string literals are benign everywhere.
+  const slash = (s: string) => s.replace(/\\/g, "/");
+  const ios = isIOSTarget(target);
+
+  // .m source list for the target (darwin vs ios). getPlatformSources returns
+  // absolute paths filtered to existing files. clipboard.m is dropped — it is
+  // compiled by clipboard.nim, not this module (see the doc comment).
+  const sources = getPlatformSources(o.nativeDir, target)
+    .filter((f) => path.basename(f) !== "clipboard.m");
+  const compileLines = sources
+    .map((f) => `{.compile("${slash(f)}", "-fobjc-arc").}`)
+    .join("\n");
+
+  // libzjs lives at <native>/../vendor/zjs/build (vendor is a sibling of
+  // native/) — the same two-levels-up location the old zapp.nim resolved via
+  // currentSourcePath().parentDir & "/../../vendor/zjs/build". Resolve it
+  // absolutely from nativeDir so the .zapp/ module doesn't depend on its own
+  // location.
+  const zjsBuildDir = slash(path.join(o.nativeDir, "..", "vendor", "zjs", "build"));
+
+  if (ios) {
+    // iOS: UIKit replaces Cocoa; no Carbon (RegisterEventHotKey is macOS-only,
+    // ios/shortcuts.m is a no-op stub). Mirrors build-config.ts's iOS framework
+    // set (the .zc path) so both build paths agree.
+    const frameworks = [
+      "UIKit",
+      "Foundation",
+      "WebKit",
+      "JavaScriptCore",
+      "UserNotifications",
+      "UniformTypeIdentifiers",
+      "Security",
+    ].map((f) => `-framework ${f}`).join(" ");
+    // simulator-arm64 static slice; -device targets get their own slice in a
+    // later task. -lz (zlib) is required on iOS (libz.tbd in the SDK) — the
+    // macOS link resolves deflate/inflate transitively from libSystem but the
+    // iOS link does not. No rpath: the .a is linked statically.
+    const embed = `${zjsBuildDir}/ios/simulator-arm64/libzjs_embed.a`;
+    return `## AUTO-GENERATED (Nim) — per-target native link surface. Do not edit.
+## Target: ${target}. Regenerated each build by buildNativeNim (cli/src/native.ts).
+## Owns the .m compile list + frameworks + libzjs link for this target; the
+## zjs.c compile + its -Ivendor/zjs/include passC stay in zapp.nim (SDK flags
+## reach them globally). The clipboard ObjC source is compiled by clipboard.nim, not here.
+${compileLines}
+{.passL: "${frameworks}".}
+{.passL: "-lcompression".}  # zjs.c embedded-asset decode (compression_decode_buffer)
+{.passL: "-lz".}            # zjs host_zlib_codec deflate/inflate (libz.tbd, iOS SDK)
+{.passL: "${embed}".}
+`;
+  }
+
+  // macOS: reproduce today's zapp.nim pragmas verbatim — same framework set
+  // (line 12), -lcompression, libzjs.dylib absolute path + an -rpath so the
+  // raw bin/ binary finds the dylib at run time.
+  const frameworks =
+    "-framework Cocoa -framework WebKit -framework CoreFoundation -framework JavaScriptCore " +
+    "-framework Security -framework IOKit -framework ServiceManagement -framework UserNotifications " +
+    "-framework Carbon -framework Foundation";
+  const dylib = `${zjsBuildDir}/libzjs.dylib`;
+  return `## AUTO-GENERATED (Nim) — per-target native link surface. Do not edit.
+## Target: ${target}. Regenerated each build by buildNativeNim (cli/src/native.ts).
+## Owns the .m compile list + frameworks + libzjs link for this target; the
+## zjs.c compile + its -Ivendor/zjs/include passC stay in zapp.nim (SDK flags
+## reach them globally). The clipboard ObjC source is compiled by clipboard.nim, not here.
+${compileLines}
+{.passL: "${frameworks}".}
+{.passL: "-lcompression".}  # zjs.c:1208 compression_decode_buffer (embedded-asset decode)
+{.passL: "${dylib}".}
+{.passL: "-Wl,-rpath,${zjsBuildDir}".}
+`;
+}
+
 // Generate .zapp/zapp_headless_workers.zc — the function native/app/app.zc
 // declares as `extern fn zapp_start_headless_workers()`. Body contains one
 // call per entry in zappConfig.headless; empty body when no headless workers

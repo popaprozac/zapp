@@ -1140,7 +1140,7 @@ async function buildNativeNim(
   const assetRoot = path.resolve(root, config.assetDir).replace(/\\/g, "/");
 
   const { generateAssetManifestNim } = await import("./assets");
-  const { renderBuildConfigNim, renderBootstrapNim, renderHeadlessNim, renderNimCfg } = await import("./build-config");
+  const { renderBuildConfigNim, renderBootstrapNim, renderHeadlessNim, renderNimCfg, renderPlatformNim } = await import("./build-config");
   const { resolveBootstrapDir } = await import("./paths");
   const { bundleWebviewBootstrapRaw, bundleWorkerBootstrapRaw } = await import(
     path.join(resolveBootstrapDir(), "codegen.ts")
@@ -1199,6 +1199,17 @@ async function buildNativeNim(
   // spawn call; other engines aren't wired in the Nim path.
   const headlessNim = renderHeadlessNim(config.headless);
   await fs.writeFile(path.join(zappDir, "zapp_headless.nim"), headlessNim, "utf-8");
+
+  // Per-TARGET native link surface: the .m compile list (darwin vs ios via
+  // getPlatformSources), the framework {.passL.} (Cocoa/Carbon… vs UIKit…), and
+  // the libzjs link (libzjs.dylib + rpath on macOS; the static libzjs_embed.a +
+  // -lz on iOS). De-hardcodes what used to live in native/nim/zapp.nim so the
+  // Nim build picks sources/frameworks/libzjs by `target`. zapp.nim imports the
+  // generated module (UnusedImport-suppressed) so its pragmas join the compile
+  // graph. zjs.c's own {.compile.} stays in zapp.nim (target-agnostic; SDK flags
+  // reach it globally via the --passC/--passL above). .zapp is on --path:${zappDir}.
+  const platformNim = renderPlatformNim(target, { nativeDir });
+  await fs.writeFile(path.join(zappDir, "zapp_platform.nim"), platformNim, "utf-8");
 
   // Stage worker scripts where zjs.c's filesystem fallback looks for them.
   // The Vite plugin bundles workers to dist/_workers/, but zjs.c's

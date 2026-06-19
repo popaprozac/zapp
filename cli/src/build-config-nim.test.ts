@@ -131,3 +131,78 @@ test("renderNimCfg normalizes backslashes so Windows paths are benign in the cfg
   expect(out).toContain('--path:"C:/app/native/nim"');
   expect(out).toContain('--path:"C:/app/.zapp"');
 });
+
+import { renderPlatformNim } from "./build-config";
+import { resolveNativeDir } from "./paths";
+
+test("renderPlatformNim (macos) reproduces today's darwin pragmas", () => {
+  const nativeDir = resolveNativeDir();
+  const out = renderPlatformNim("macos", { nativeDir });
+  // Per-file CALL form (NOT the tuple form) with -fobjc-arc for each darwin .m.
+  // The compile paths are ABSOLUTE (CLI-resolved from nativeDir): the generated
+  // module lives in the project's .zapp/, where a relative ../platform/darwin/*
+  // would resolve to <project>/platform/darwin/* (wrong dir) and break the build.
+  // The spike confirmed both relative-to-module and absolute compile paths work;
+  // absolute is correct here because the .m sources live in the FRAMEWORK's
+  // native/, not the project. End-of-path is the darwin/<file>.m signature.
+  expect(out).toMatch(/\{\.compile\("\/.*\/platform\/darwin\/platform\.m", "-fobjc-arc"\)\.\}/);
+  expect(out).toMatch(/\{\.compile\("\/.*\/platform\/darwin\/window\.m", "-fobjc-arc"\)\.\}/);
+  expect(out).toMatch(/\{\.compile\("\/.*\/platform\/darwin\/webview\.m", "-fobjc-arc"\)\.\}/);
+  expect(out).toMatch(/\{\.compile\("\/.*\/platform\/darwin\/sync\.m", "-fobjc-arc"\)\.\}/);
+  // clipboard.m is compiled by clipboard.nim, NOT here — must not be emitted
+  // (double-compile would break the macOS link with duplicate symbols).
+  expect(out).not.toContain("clipboard.m");
+  // NO ios sources in the macOS branch.
+  expect(out).not.toContain("/platform/ios/");
+  // Full macOS framework set (current zapp.nim line 12), verbatim.
+  expect(out).toContain("-framework Cocoa");
+  expect(out).toContain("-framework Carbon");
+  expect(out).toContain("-framework WebKit");
+  expect(out).toContain("-framework CoreFoundation");
+  expect(out).toContain("-framework JavaScriptCore");
+  expect(out).toContain("-framework Security");
+  expect(out).toContain("-framework IOKit");
+  expect(out).toContain("-framework ServiceManagement");
+  expect(out).toContain("-framework UserNotifications");
+  expect(out).toContain("-framework Foundation");
+  // NO UIKit on macOS.
+  expect(out).not.toContain("-framework UIKit");
+  // libcompression + libzjs.dylib + rpath (macOS link surface).
+  expect(out).toContain("-lcompression");
+  expect(out).toContain("vendor/zjs/build/libzjs.dylib");
+  expect(out).toContain("-Wl,-rpath,");
+  // libzjs.dylib path is ABSOLUTE (CLI-resolved), not currentSourcePath-relative.
+  expect(out).toMatch(/\{\.passL: "\/.*vendor\/zjs\/build\/libzjs\.dylib"\.\}/);
+  // -lz is iOS-only; must NOT appear on macOS.
+  expect(out).not.toContain("-lz");
+});
+
+test("renderPlatformNim (ios-simulator) emits ios sources + UIKit + libzjs_embed.a", () => {
+  const nativeDir = resolveNativeDir();
+  const out = renderPlatformNim("ios-simulator", { nativeDir });
+  // iOS .m sources via the call form (ABSOLUTE path, same reasoning as macOS).
+  expect(out).toMatch(/\{\.compile\("\/.*\/platform\/ios\/platform\.m", "-fobjc-arc"\)\.\}/);
+  expect(out).toMatch(/\{\.compile\("\/.*\/platform\/ios\/window\.m", "-fobjc-arc"\)\.\}/);
+  expect(out).toMatch(/\{\.compile\("\/.*\/platform\/ios\/webview\.m", "-fobjc-arc"\)\.\}/);
+  // clipboard.m still owned by clipboard.nim — not here.
+  expect(out).not.toContain("clipboard.m");
+  // NO darwin sources in the iOS branch.
+  expect(out).not.toContain("/platform/darwin/");
+  // iOS framework set (UIKit replaces Cocoa; no Carbon).
+  expect(out).toContain("-framework UIKit");
+  expect(out).toContain("-framework Foundation");
+  expect(out).toContain("-framework WebKit");
+  expect(out).toContain("-framework JavaScriptCore");
+  expect(out).toContain("-framework UserNotifications");
+  expect(out).toContain("-framework UniformTypeIdentifiers");
+  expect(out).toContain("-framework Security");
+  expect(out).not.toContain("-framework Cocoa");
+  expect(out).not.toContain("-framework Carbon");
+  // libs: -lcompression + -lz (zlib, iOS SDK).
+  expect(out).toContain("-lcompression");
+  expect(out).toContain("-lz");
+  // Static libzjs_embed.a for the simulator-arm64 slice; NO dylib, NO rpath.
+  expect(out).toContain("vendor/zjs/build/ios/simulator-arm64/libzjs_embed.a");
+  expect(out).not.toContain("libzjs.dylib");
+  expect(out).not.toContain("-Wl,-rpath,");
+});
