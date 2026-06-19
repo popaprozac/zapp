@@ -98,6 +98,10 @@ extern void json_free_tree(JsonValue* v);
 extern void* app_get_active(void);
 extern const char* service_invoke_native(void* app, const char* method, JsonValue* args);
 
+// Per-window backend-listener bitmask (callbacks.nim Layer 3 gates window-event
+// fan-out to workers on this). Armed by host_subscribe_window_event below.
+extern void zapp_window_set_backend_listener(int id, int event_id, int has_listener);
+
 // Permission gates (native/permissions/permissions.zc + router.zc — Zen-C,
 // plain C symbols). The router gates the webview invoke path; workers reach
 // native through this host object, bypassing the router, so the worker path
@@ -632,6 +636,23 @@ static ZjsValue host_list_workers(ZjsContext* ctx, ZjsValue* argv, uint32_t argc
     return result;
 }
 
+// __zappBridge.subscribeWindowEvent(windowId, eventId) — arm this worker's
+// window-event backend listener (negative windowId = all windows). Mirrors
+// bare.c:bare_host_subscribe_window_event. The fan-out itself is callbacks.nim
+// Layer 3 (gated on the bitmask this sets) -> worker_broadcast_eval_js.
+static ZjsValue host_subscribe_window_event(ZjsContext* ctx, ZjsValue* argv, uint32_t argc) {
+    (void) ctx;
+    if (argc < 2) return zjs_undefined();
+    int wId = zjs_as_int32(argv[0]);
+    int eId = zjs_as_int32(argv[1]);
+    if (wId < 0) {
+        for (int i = 0; i < 64; i++) zapp_window_set_backend_listener(i, eId, 1);
+    } else {
+        zapp_window_set_backend_listener(wId, eId, 1);
+    }
+    return zjs_undefined();
+}
+
 // ---------------------------------------------------------------------------
 // __zappBridge.dispatchEventToAll(name: string, payload?: any) -> undefined
 //
@@ -982,6 +1003,9 @@ static void zjs_setup_bridge(ZjsWorkerSlot* slot) {
     zjs_set_property(ctx, bridge, "postToWorker",       post_worker_fn);
     zjs_set_property(ctx, bridge, "workerCrash",        crash_fn);
     zjs_set_property(ctx, bridge, "listWorkers",        list_fn);
+    ZjsValue sub_fn = zjs_register_host_function(ctx, "__zapp_subscribe_window_event",
+                                                 host_subscribe_window_event);
+    zjs_set_property(ctx, bridge, "subscribeWindowEvent", sub_fn);
 #ifdef ZAPP_NIM_BUILD
     // Async invoke — marshals to the main thread via GCD; JS side wraps the
     // returned request id in a Promise and stores resolve/reject in
