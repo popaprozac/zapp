@@ -786,9 +786,13 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
     let is_sb_collapse = action == "sidebar:collapse";
     let is_sb_expand = action == "sidebar:expand";
     let is_sb_set_width = action == "sidebar:setWidth";
+    // iPhone master-detail column reveal (iOS UISplitViewController). No-op on
+    // macOS/iPad-regular + Windows where both panes are always visible.
+    let is_sb_show_content = action == "sidebar:showContent";
+    let is_sb_show_sidebar = action == "sidebar:showSidebar";
     let is_sb_set_collapsible = action == "sidebar:setCollapsible";
     let is_sb_set_resizable = action == "sidebar:setResizable";
-    if is_sb_toggle || is_sb_collapse || is_sb_expand || is_sb_set_width || is_sb_set_collapsible || is_sb_set_resizable {
+    if is_sb_toggle || is_sb_collapse || is_sb_expand || is_sb_set_width || is_sb_show_content || is_sb_show_sidebar || is_sb_set_collapsible || is_sb_set_resizable {
         let sb_target = window_id;
         let sb_wid_opt = pre_args.get_string("windowId");
         if sb_wid_opt.is_some() {
@@ -820,12 +824,16 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
             extern void darwin_sidebar_collapse(int32_t window_id);
             extern void darwin_sidebar_expand(int32_t window_id);
             extern void darwin_sidebar_set_width(int32_t window_id, int32_t width);
+            extern void darwin_sidebar_show_content(int32_t window_id);
+            extern void darwin_sidebar_show_sidebar(int32_t window_id);
             extern void darwin_sidebar_set_collapsible(int32_t window_id, bool can_collapse);
             extern void darwin_sidebar_set_resizable(int32_t window_id, bool resizable);
             if (is_sb_toggle) darwin_sidebar_toggle((int32_t)sb_target);
             else if (is_sb_collapse) darwin_sidebar_collapse((int32_t)sb_target);
             else if (is_sb_expand) darwin_sidebar_expand((int32_t)sb_target);
             else if (is_sb_set_width) darwin_sidebar_set_width((int32_t)sb_target, (int32_t)sb_w);
+            else if (is_sb_show_content) darwin_sidebar_show_content((int32_t)sb_target);
+            else if (is_sb_show_sidebar) darwin_sidebar_show_sidebar((int32_t)sb_target);
             else if (is_sb_set_collapsible) darwin_sidebar_set_collapsible((int32_t)sb_target, sb_flag);
             else darwin_sidebar_set_resizable((int32_t)sb_target, sb_flag);
             #else
@@ -833,12 +841,16 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
             extern void windows_sidebar_collapse(int32_t window_id);
             extern void windows_sidebar_expand(int32_t window_id);
             extern void windows_sidebar_set_width(int32_t window_id, int32_t width);
+            extern void windows_sidebar_show_content(int32_t window_id);
+            extern void windows_sidebar_show_sidebar(int32_t window_id);
             extern void windows_sidebar_set_collapsible(int32_t window_id, bool can_collapse);
             extern void windows_sidebar_set_resizable(int32_t window_id, bool resizable);
             if (is_sb_toggle) windows_sidebar_toggle((int32_t)sb_target);
             else if (is_sb_collapse) windows_sidebar_collapse((int32_t)sb_target);
             else if (is_sb_expand) windows_sidebar_expand((int32_t)sb_target);
             else if (is_sb_set_width) windows_sidebar_set_width((int32_t)sb_target, (int32_t)sb_w);
+            else if (is_sb_show_content) windows_sidebar_show_content((int32_t)sb_target);
+            else if (is_sb_show_sidebar) windows_sidebar_show_sidebar((int32_t)sb_target);
             else if (is_sb_set_collapsible) windows_sidebar_set_collapsible((int32_t)sb_target, sb_flag);
             else windows_sidebar_set_resizable((int32_t)sb_target, sb_flag);
             #endif

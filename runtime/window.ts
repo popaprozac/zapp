@@ -663,6 +663,19 @@ export interface SidebarHandle {
   collapse(): void;
   expand(): void;
   setWidth(px: number): void;
+  /**
+   * Reveal the content (secondary) column. The iPhone master-detail move:
+   * after a sidebar item is tapped, drive the collapsed nav stack to the
+   * full-bleed content pane. No-op on macOS / iPad-regular where both panes
+   * are always side-by-side.
+   */
+  showContent(): void;
+  /**
+   * Reveal the sidebar (primary) column — the "back" of master-detail.
+   * Pair with an HTML back button (and the system edge-swipe) on iPhone.
+   * No-op on macOS / iPad-regular (panes always visible).
+   */
+  showSidebar(): void;
   /** Allow/disallow the user collapsing the pane (system behaviors: divider
    *  snap, toolbar toggle). Programmatic collapse/expand still work. */
   setCollapsible(allowed: boolean): void;
@@ -830,6 +843,8 @@ function createSidebarHandle(
     collapse()            { windowAction("sidebar:collapse", { windowId }); },
     expand()              { windowAction("sidebar:expand",   { windowId }); },
     setWidth(px: number)  { windowAction("sidebar:setWidth", { windowId, width: px }); },
+    showContent()         { windowAction("sidebar:showContent", { windowId }); },
+    showSidebar()         { windowAction("sidebar:showSidebar", { windowId }); },
     setCollapsible(allowed: boolean) { windowAction("sidebar:setCollapsible", { windowId, value: allowed }); },
     setResizable(allowed: boolean)   { windowAction("sidebar:setResizable",   { windowId, value: allowed }); },
   };

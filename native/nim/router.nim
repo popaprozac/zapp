@@ -125,6 +125,10 @@ proc darwin_sidebar_toggle(windowId: int32) {.importc, cdecl.}
 proc darwin_sidebar_collapse(windowId: int32) {.importc, cdecl.}
 proc darwin_sidebar_expand(windowId: int32) {.importc, cdecl.}
 proc darwin_sidebar_set_width(windowId: int32, width: int32) {.importc, cdecl.}
+# iPhone master-detail column reveal (iOS UISplitViewController). No-op on
+# macOS/iPad-regular where both panes are always visible.
+proc darwin_sidebar_show_content(windowId: int32) {.importc, cdecl.}
+proc darwin_sidebar_show_sidebar(windowId: int32) {.importc, cdecl.}
 proc darwin_sidebar_set_collapsible(windowId: int32, canCollapse: bool) {.importc, cdecl.}
 proc darwin_sidebar_set_resizable(windowId: int32, resizable: bool) {.importc, cdecl.}
 proc darwin_inspector_toggle(windowId: int32) {.importc, cdecl.}
@@ -587,6 +591,8 @@ proc routeWindowAction(action: string, a: JsonNode, rawWindowId: int, payload: s
     of "sidebar:collapse": darwin_sidebar_collapse(target)
     of "sidebar:expand": darwin_sidebar_expand(target)
     of "sidebar:setWidth": darwin_sidebar_set_width(target, width)
+    of "sidebar:showContent": darwin_sidebar_show_content(target)
+    of "sidebar:showSidebar": darwin_sidebar_show_sidebar(target)
     of "sidebar:setCollapsible": darwin_sidebar_set_collapsible(target, flag)
     of "sidebar:setResizable": darwin_sidebar_set_resizable(target, flag)
     of "inspector:toggle": darwin_inspector_toggle(target)

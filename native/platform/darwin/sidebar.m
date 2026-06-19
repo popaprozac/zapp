@@ -167,6 +167,15 @@ void darwin_sidebar_expand(int32_t window_id) {
     });
 }
 
+// iPhone master-detail column reveal — meaningful only on a collapsed iOS
+// UISplitViewController. On macOS the sidebar + content panes are always
+// side-by-side (NSSplitViewController never "collapses" to a single column),
+// so there's nothing to reveal: no-ops. Defined here so the shared router's
+// `#ifdef __APPLE__` branch links into the macOS build (parity with
+// ios/sidebar.m, which carries the real implementation).
+void darwin_sidebar_show_content(int32_t window_id) { (void)window_id; }
+void darwin_sidebar_show_sidebar(int32_t window_id) { (void)window_id; }
+
 void darwin_sidebar_set_width(int32_t window_id, int32_t width) {
     zapp_sidebar_on_main(^{
         ZappSidebarController* c = zapp_sidebar_for_slot(window_id);

@@ -399,6 +399,12 @@ void windows_inspector_set_width(int32_t host_slot, int32_t width) {
     pane_emit(host_slot, p->inspector_slot, "inspector-resized", json);
 }
 
+// iPhone master-detail column reveal (iOS UISplitViewController). Windows panes
+// are always side-by-side (no compact collapse), so there's nothing to reveal:
+// no-ops (router parity with ios/sidebar.m + darwin/sidebar.m).
+void windows_sidebar_show_content(int32_t host_slot) { (void)host_slot; }
+void windows_sidebar_show_sidebar(int32_t host_slot) { (void)host_slot; }
+
 // Collapse/resize gating is a macOS NSSplitViewItem affordance; the Win32 pane
 // splitter doesn't expose an equivalent yet, so these are no-ops (router parity).
 void windows_sidebar_set_collapsible(int32_t host_slot, bool can_collapse) { (void)host_slot; (void)can_collapse; }

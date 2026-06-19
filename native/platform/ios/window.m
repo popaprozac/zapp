@@ -129,20 +129,15 @@ static void zapp_ios_register_webview_slot(int32_t slot, WKWebView* webview, NSS
     }
 }
 
-// TEMPORARY SHIM — T3 (iOS sidebar runtime: toggle / setWidth / collapsible /
-// resizable) OWNS this. Materialize calls it with the split + both column VCs +
-// the host/sidebar ids so the sidebar manager can drive the UISplitViewController
-// later. Until T3 lands its real registry, this is a no-op so the iOS link
-// resolves. T3: REPLACE this definition (store into a per-host record keyed by
-// host_id, like darwin/sidebar.m's zapp_sidebar_register). Marked __attribute__
-// ((weak)) so T3's strong definition in another TU wins at link time without a
-// duplicate-symbol error.
-__attribute__((weak))
-void zapp_ios_sidebar_register(void* window, void* split, void* sidebarVC,
-                              void* contentVC, int32_t host_id, int32_t sidebar_id) {
-    (void)window; (void)split; (void)sidebarVC; (void)contentVC;
-    (void)host_id; (void)sidebar_id;
-}
+// Implemented in ios/sidebar.m (T3 — chrome-less master-detail). Materialize
+// calls it with the split + both column VCs + the host/sidebar ids; sidebar.m
+// wraps the columns in bar-hidden navigation controllers, installs the
+// UISplitViewControllerDelegate (land-on-sidebar + hidden nav bar), and stores
+// a per-host record keyed by the UIWindow (like darwin/sidebar.m's
+// zapp_sidebar_register). The old __attribute__((weak)) no-op shim that lived
+// here is gone now that the strong definition exists in another TU.
+extern void zapp_ios_sidebar_register(void* window, void* split, void* sidebarVC,
+                                      void* contentVC, int32_t host_id, int32_t sidebar_id);
 
 static ZappIOSDeferred* zapp_ios_find_deferred(void* handle) {
     if (!handle) return NULL;
@@ -245,14 +240,13 @@ void zapp_ios_materialize_pending_windows(void) {
             zapp_ios_window_ids[d->numeric_id] = [NSString stringWithFormat:@"win-%d", d->numeric_id];
         }
 
-        // T3 (sidebar runtime wiring) will reach the split + columns + ids
-        // through this hook. Stash now so the registration table is populated
-        // before any sidebar method call; the temporary shim below no-ops
-        // until T3 replaces it.
+        // Hand the split + columns + ids to the sidebar manager (ios/sidebar.m).
+        // It runs SYNCHRONOUSLY on this (main) thread, wrapping the still-empty
+        // column VCs in bar-hidden navigation controllers + installing the
+        // collapse delegate, all BEFORE the pane webviews are created below — so
+        // the webviews are born inside their final (nav-wrapped) containers and
+        // never re-parent. (zapp_ios_sidebar_register declared at file scope.)
         if (d->hasSidebar) {
-            extern void zapp_ios_sidebar_register(void* window, void* split,
-                                                  void* sidebarVC, void* contentVC,
-                                                  int32_t host_id, int32_t sidebar_id);
             zapp_ios_sidebar_register((__bridge void*)window,
                                       (__bridge void*)window.rootViewController,
                                       (__bridge void*)sidebarVC,
