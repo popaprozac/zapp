@@ -141,6 +141,29 @@ export interface WorkerInfo {
 }
 
 /**
+ * A lightweight handle to a worker addressed by id (returned by
+ * {@link Workers.get}). Mirrors the operations of a dedicated `Worker`
+ * instance for a worker you didn't create — chiefly headless workers.
+ *
+ * `receive()` (subscribing to messages FROM the worker, webview ← headless)
+ * is intentionally absent: a headless worker has no single owner webview, so
+ * receiving requires the worker to address subscribers — a separate piece of
+ * worker→subscriber routing, planned as a follow-up.
+ */
+export interface WorkerHandle {
+  /** The worker id this handle wraps (e.g. `"h-db"`). */
+  readonly id: string;
+  /** Send a raw message to the worker (fire-and-forget). */
+  postMessage(data: unknown): void;
+  /** Send a channel-typed message — the worker's `self.receive("<channel>")` picks it up. */
+  send(channel: string, data: unknown): void;
+  /** Terminate the worker. No-op for an unknown/terminated id. */
+  terminate(): void;
+  /** The worker's registry snapshot, or `null` if it isn't running. */
+  info(): Promise<WorkerInfo | null>;
+}
+
+/**
  * Workers — namespace for managing workers by ID, complementing the
  * `Worker` class which is instance-scoped. Use this when you only have
  * a string ID and no live `Worker` handle — most commonly for headless
@@ -226,8 +249,8 @@ export const Workers = {
   },
 
   /**
-   * Snapshot every active worker — dedicated, shared, and headless —
-   * across all engines. Resolves to an array of {@link WorkerInfo}.
+   * Snapshot every active worker — dedicated and headless — across all
+   * engines. Resolves to an array of {@link WorkerInfo}.
    *
    * Works from both the webview and inside a worker. The two contexts
    * reach the native registry differently (the webview round-trips the
@@ -247,5 +270,35 @@ export const Workers = {
     const result = await bridge.listWorkers();
     if (typeof result === "string") return JSON.parse(result) as WorkerInfo[];
     return (result ?? []) as WorkerInfo[];
+  },
+
+  /**
+   * Get an ergonomic {@link WorkerHandle} for a worker you didn't create —
+   * most usefully a **headless** worker (`"h-<key>"`), which has no JS-side
+   * `Worker` instance. The complement to `list()` (discover) → `get()`
+   * (interact): instead of repeating the id to `Workers.send`/`terminate`,
+   * hold a handle that mirrors the `Worker` instance surface.
+   *
+   * Synchronous and cheap — it just binds the id; no registry round-trip.
+   * `send`/`postMessage`/`terminate` are fire-and-forget (an unknown or
+   * terminated id is a silent no-op, like `Workers.send`); `info()` is async
+   * (it reads the registry) and resolves to `null` for an unknown id.
+   *
+   * @example
+   * ```ts
+   * const db = Workers.get("h-db");
+   * db.send("write", { row: { ... } });
+   * const info = await db.info();   // WorkerInfo | null
+   * db.terminate();
+   * ```
+   */
+  get(id: string): WorkerHandle {
+    return {
+      id,
+      postMessage: (data: unknown) => Workers.postMessage(id, data),
+      send: (channel: string, data: unknown) => Workers.send(id, channel, data),
+      terminate: () => Workers.terminate(id),
+      info: async () => (await Workers.list()).find((w) => w.id === id) ?? null,
+    };
   },
 };

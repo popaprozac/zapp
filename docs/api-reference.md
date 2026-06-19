@@ -1360,7 +1360,7 @@ console.log(JSON.stringify(workers, null, 2));
 
 ```ts
 interface WorkerInfo {
-  id: string;                    // runtime id — "h-<key>", "w-N", "sw-N"
+  id: string;                    // runtime id — "h-<key>" (headless), "w-N" (dedicated)
   name?: string;                 // display label, if set (config or new Worker)
   scriptUrl: string;
   engine: "zjs" | "bare-jsc" | "bare-v8" | "bare-quickjs"
@@ -1375,6 +1375,44 @@ interface WorkerInfo {
   };
 }
 ```
+
+### `Workers.get(id: string): WorkerHandle`
+
+The complement to `list()` (discover) → `get()` (interact). Returns a
+lightweight handle to a worker you didn't create — chiefly a **headless**
+worker, which has no JS-side `Worker` instance. Instead of repeating the id to
+`Workers.send`/`terminate`, hold a handle that mirrors the `Worker` instance
+surface.
+
+Synchronous and cheap — it just binds the id, no registry round-trip.
+`send`/`postMessage`/`terminate` are fire-and-forget (an unknown or terminated
+id is a silent no-op); `info()` is async and resolves to `null` if the worker
+isn't running.
+
+```ts
+import { Workers } from "@zappdev/runtime";
+
+const db = Workers.get("h-db");        // for headless: { db: "..." }
+db.send("write", { row: { id: 1 } });  // → the worker's self.receive("write")
+const info = await db.info();          // WorkerInfo | null
+db.terminate();
+```
+
+```ts
+interface WorkerHandle {
+  readonly id: string;
+  postMessage(data: unknown): void;
+  send(channel: string, data: unknown): void;
+  terminate(): void;
+  info(): Promise<WorkerInfo | null>;
+}
+```
+
+> Subscribing to messages *from* a worker via a handle (`handle.receive(...)`,
+> webview ← headless) isn't available yet — a headless worker has no single
+> owner webview, so it needs worker→subscriber addressing (planned follow-up).
+> Today, the creating webview of a dedicated `new Worker()` receives via
+> `worker.onmessage` / `worker.receive(...)` as usual.
 
 `list()` is read-only — it reflects a point-in-time snapshot of the
 registry. `name` is omitted when unset, and `supervisor` is omitted for

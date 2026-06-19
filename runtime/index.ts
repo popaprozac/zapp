@@ -20,7 +20,7 @@ export { Screen, type Display, type DisplayRect, type CursorPoint } from "./scre
 export { Webview, ZappWebviewElement, type PanelEvent, type WebviewCreateOptions } from "./webview";
 export { Events, WindowEvent, AppEvent, eventName, type WindowPayload, type WindowSizePayload, type EventName, type ModalDismissedPayload, type SidebarResizedPayload, type InspectorResizedPayload } from "./events";
 export { Services, type InvokeOptions, type CancellablePromise } from "./services";
-export { Worker, Workers, type WorkerMessageEvent } from "./worker";
+export { Worker, Workers, type WorkerMessageEvent, type WorkerInfo, type WorkerHandle } from "./worker";
 export { Dialog, type OpenFileOptions, type SaveFileOptions, type MessageOptions, type OpenFileResult, type SaveFileResult, type MessageResult } from "./dialog";
 export { Menu, type MenuItemDef, type MenuHandle } from "./menu";
 export { ContextMenu, type ContextMenuOptions } from "./context-menu";
