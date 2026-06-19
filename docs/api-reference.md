@@ -1610,6 +1610,17 @@ them as services — first-class native extensibility, no C shim required.
 TS stays the default home for app logic — UI lives in the webview and
 background work in headless workers.
 
+**Building & packaging.** `ZAPP_NATIVE_LANG=nim zapp build` (and `… zapp
+package`) produce a **distributable** macOS binary: the web assets are
+brotli-compressed and embedded directly into the executable via Nim's
+stdlib `staticRead` (no sibling `dist/` needed at runtime), the build-config
+is prod-shaped (web inspector off, `isDev` false), and `zapp package` emits
+a self-contained `.app`. `… zapp dev` keeps the dev shape (filesystem assets,
+inspector on). Embedded assets are decoded at runtime via Apple
+`libcompression` — the same scheme handler the zc build uses, so the runtime
+contract is identical. (The asset embed is now fully Nim-native — no Zen-C
+involved in that layer.)
+
 **Editor setup (nimsuggest / nimlangserver).** `zapp init` and every Nim build
 generate a `zapp/nim.cfg` so your editor's Nim language server resolves
 `import zapp` and the framework surface. It's a generated, gitignored artifact —
