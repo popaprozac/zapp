@@ -16,9 +16,9 @@ test("matches single-quoted specifier", () => {
 test("matches new URL(..., import.meta.url) form", () => {
   expect(firstWorkerSpec(`new Worker(new URL("./w.ts", import.meta.url))`)).toBe("./w.ts");
 });
-test("matches SharedWorker", () => {
-  expect(firstWorkerSpec(`new SharedWorker("./s.ts")`)).toBe("./s.ts");
-});
 test("does not match unrelated constructors", () => {
   expect(firstWorkerSpec(`const x = new Foo("y")`)).toBeNull();
+});
+test("does not match SharedWorker (web-native; not Zapp-bundled)", () => {
+  expect(firstWorkerSpec(`new SharedWorker("./s.ts")`)).toBeNull();
 });

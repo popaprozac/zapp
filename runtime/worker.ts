@@ -109,70 +109,13 @@ export class Worker {
   }
 }
 
-/** Port for SharedWorker communication — mirrors Worker API. */
-export class SharedWorkerPort {
-  readonly id: string;
-  private _bridge: ZappBridge;
-  onmessage: ((event: WorkerMessageEvent) => void) | null = null;
-
-  /** @internal */
-  _messageHandlers: Array<(event: WorkerMessageEvent) => void> = [];
-
-  /** @internal */
-  constructor(workerId: string, bridge: ZappBridge) {
-    this.id = workerId;
-    this._bridge = bridge;
-  }
-
-  /** Send a raw message to the shared worker. */
-  postMessage(data: unknown): void {
-    (this._bridge as any).postToWorker(this.id, data);
-  }
-
-  /** Send a message on a named channel. */
-  send(channel: string, data: unknown): void {
-    this.postMessage({ [CHANNEL_KEY]: channel, [DATA_KEY]: data });
-  }
-
-  /** Listen for messages on a named channel. Returns unsubscribe function. */
-  receive(channel: string, handler: (data: unknown) => void): () => void {
-    const listener = (event: WorkerMessageEvent) => {
-      const msg = event.data as Record<string, unknown>;
-      if (msg && msg[CHANNEL_KEY] === channel) {
-        handler(msg[DATA_KEY]);
-      }
-    };
-    this._messageHandlers.push(listener);
-    return () => {
-      this._messageHandlers = this._messageHandlers.filter(h => h !== listener);
-    };
-  }
-}
-
 /**
- * SharedWorker — persists as long as any window holds a reference.
- * Multiple windows creating SharedWorker with the same URL connect to the same native worker.
- *
- * @example
- * ```ts
- * const sw = new SharedWorker("./shared-worker.ts");
- * sw.port.postMessage({ task: "sync" });
- * sw.port.onmessage = (e) => console.log(e.data);
- * sw.port.send("channel", data);
- * ```
+ * Note: `SharedWorker` is intentionally NOT provided by `@zappdev/runtime`.
+ * Use the platform-native `new SharedWorker()` (WKWebView / WebView2) for the
+ * web-standard refcounted-across-windows worker; for a Zapp-engine background
+ * worker that any window or the backend can talk to, use a **headless** worker
+ * (`zapp.config.ts` `headless`) plus the `Workers` namespace below.
  */
-export class SharedWorker {
-  readonly port: SharedWorkerPort;
-
-  constructor(scriptUrl: string) {
-    const bridge = getBridge();
-    const workerId = (bridge as any).createSharedWorker(scriptUrl);
-    this.port = new SharedWorkerPort(workerId, bridge);
-
-    // Register port for message dispatch
-    (bridge as any)._workers[workerId] = this.port;
-  }
-}
 
 /**
  * Snapshot of one active worker, as returned by `Workers.list()`.
@@ -223,12 +166,8 @@ export const Workers = {
    * Recognised ID forms:
    * - `"w-N"` — dedicated worker instance (same as `worker.terminate()`)
    * - `"h-<key>"` — headless worker keyed by `zapp.config.ts` `headless`
-   * - `"sw-N"` — **rejected at the native layer**. Shared workers must
-   *   be released via `port` disconnect; the last disconnect auto-
-   *   terminates. Calling this for a SharedWorker ID is a no-op rather
-   *   than an error so callers don't have to care about the distinction.
    *
-   * Unknown IDs are also a silent no-op (native logs but doesn't throw).
+   * Unknown IDs are a silent no-op (native logs but doesn't throw).
    */
   terminate(id: string): void {
     if (!id) return;

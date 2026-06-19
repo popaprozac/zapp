@@ -1,8 +1,10 @@
 /**
  * Zapp Vite Plugin — bundles workers and backend scripts.
  *
- * Discovers `new Worker("./path")` and `new SharedWorker("./path")` patterns,
- * bundles each as a separate entry, outputs to dist/_workers/.
+ * Discovers `new Worker("./path")` patterns, bundles each as a separate
+ * entry, outputs to dist/_workers/. (`new SharedWorker()` is the web-native
+ * API — use Vite's standard `new URL(..., import.meta.url)` worker handling;
+ * Zapp's shared-background path is headless workers.)
  * Also handles the backend worker convention (src/backend.ts).
  *
  * @example
@@ -46,7 +48,7 @@ async function resolveZjsCli(buildDir: string): Promise<string | null> {
 }
 
 const WORKER_PATTERN =
-  /new\s+(?:SharedWorker|Worker)\s*\(\s*(?:new\s+URL\(\s*["'`](.+?)["'`]\s*,\s*import\.meta\.url\s*\)|["'`](.+?)["'`])/g;
+  /new\s+Worker\s*\(\s*(?:new\s+URL\(\s*["'`](.+?)["'`]\s*,\s*import\.meta\.url\s*\)|["'`](.+?)["'`])/g;
 
 interface WorkerEntry {
   /** Original specifier from source: "./worker.ts" */
@@ -849,7 +851,7 @@ export function zappWorkers(options?: ZappWorkersOptions): Plugin {
       for (const entry of workers) {
         // Replace the specifier in new Worker("./worker.ts") with the output URL
         const escaped = entry.specifier.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        const regex = new RegExp(`(new\\s+(?:SharedWorker|Worker)\\s*\\(\\s*["'\`])${escaped}(["'\`])`, "g");
+        const regex = new RegExp(`(new\\s+Worker\\s*\\(\\s*["'\`])${escaped}(["'\`])`, "g");
         const replaced = result.replace(regex, `$1${entry.outputUrl}$2`);
         if (replaced !== result) {
           result = replaced;

@@ -7,7 +7,7 @@ import { mkdir, readdir, readFile, stat } from "node:fs/promises";
 import { clog, clogError } from "./log";
 
 export const WORKER_PATTERN =
-  /new\s+(?:SharedWorker|Worker)\s*\(\s*(?:new\s+URL\(\s*["'`](.+?)["'`]\s*,\s*import\.meta\.url\s*\)|["'`](.+?)["'`])/g;
+  /new\s+Worker\s*\(\s*(?:new\s+URL\(\s*["'`](.+?)["'`]\s*,\s*import\.meta\.url\s*\)|["'`](.+?)["'`])/g;
 
 async function scanSourceFiles(dir: string): Promise<string[]> {
   const results: string[] = [];

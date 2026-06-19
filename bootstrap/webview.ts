@@ -184,20 +184,6 @@
       post(JSON.stringify({ t: 5, m: "terminate", a: { workerId } }));
     },
 
-    // --- Shared Worker lifecycle ---
-
-    createSharedWorker(scriptUrl: string): string {
-      const id = "sw-" + nextId++;
-      if (nextId > 65535) nextId = 1;
-      bridge._workers[id] = { onmessage: null, _messageHandlers: [] };
-      post(JSON.stringify({ t: 5, m: "create", a: { scriptUrl, workerId: id, shared: true } }));
-      return id;
-    },
-
-    disconnectSharedWorker(workerId: string): void {
-      post(JSON.stringify({ t: 5, m: "disconnect", a: { workerId } }));
-    },
-
     // --- Sync wait/notify ---
 
     _syncPending: {} as Record<string, { resolve: (v: "notified" | "timed-out") => void; timer?: ReturnType<typeof setTimeout> }>,
@@ -263,16 +249,11 @@
 
   (globalThis as any)[BRIDGE_KEY] = bridge;
 
-  // Cleanup workers on page unload
+  // Cleanup workers on page unload — terminate every worker this webview owns.
   window.addEventListener("pagehide", () => {
     const ids = Object.keys(bridge._workers);
     for (let i = 0; i < ids.length; i++) {
-      if (ids[i].startsWith("sw-")) {
-        // Shared workers: disconnect (remove owner ref), don't terminate
-        bridge.disconnectSharedWorker(ids[i]);
-      } else {
-        bridge.terminateWorker(ids[i]);
-      }
+      bridge.terminateWorker(ids[i]);
     }
     bridge._workers = {};
   });
