@@ -698,14 +698,41 @@ static ZappIOSNavDelegate* zapp_ios_shared_nav_delegate = nil;
 
 // --- WebView creation ---
 //
-// `darwin_webview_create` matches the macOS signature so app.zc can
-// call into it the same way. The window_ptr here is a UIWindow (the
-// caller passes its UIWindow*); we attach a UIViewController hosting
-// a WKWebView as its rootViewController.
+// `darwin_webview_create_ext` is the iOS port of darwin/webview.m's extended
+// entry, matching its signature EXACTLY (param names, order, types) so the
+// sidebar/inspector call sites (window.m) and the ios-platform-parity lint
+// stay aligned with the macOS contract. The trailing params widen the legacy
+// signature without changing behavior at their defaults (NULL / -1 / 0 /
+// false / false) — which is how the thin darwin_webview_create delegator
+// below calls it. Sidebar/inspector callers pass:
+//   - container_view: the UIView* to mount into (a pane's container view),
+//     instead of the window's rootViewController.view. NULL = legacy mount.
+//   - identity_window_id: the HOST window's numeric id, baked into the
+//     Symbol.for('zapp.windowId') JS identity so a pane's runtime reports the
+//     host's windowId. TRANSPORT registration stays on numeric_id_pre_alloc;
+//     only the JS-visible identity switches. -1 = self identity (legacy).
+//   - pane_role: 0 = main pane, 1 = sidebar pane (sets zapp.isSidebar),
+//     2 = popover pane (sets zapp.isPopover),
+//     3 = inspector pane (sets zapp.isInspector). Document-start markers.
+//   - host_has_sidebar: inject zapp.hasSidebar into this pane when true.
+//   - host_has_inspector: inject zapp.hasInspector into this pane when true.
+//
+// The window_ptr here is a UIWindow (the caller passes its UIWindow*); the
+// legacy mount path attaches a UIViewController hosting the WKWebView as its
+// rootViewController.
+//
+// iOS-specific notes: accept_first_mouse and transparent_background have no
+// iOS equivalent yet (vibrancy is UIBlurEffect/UIVisualEffectView — Phase 2);
+// both are accepted to keep the signature identical and ignored via (void).
 
-void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first_mouse,
-                           const char* url_override, int32_t numeric_id_pre_alloc,
-                           bool transparent_background) {
+void darwin_webview_create_ext(void* window_ptr, bool inspectable, bool accept_first_mouse,
+                               const char* url_override, int32_t numeric_id_pre_alloc,
+                               bool transparent_background,
+                               void* container_view /* UIView*; NULL = legacy mount */,
+                               int32_t identity_window_id /* -1 = self identity */,
+                               int32_t pane_role,
+                               bool host_has_sidebar,
+                               bool host_has_inspector) {
     (void)accept_first_mouse;       // iOS has no equivalent
     (void)transparent_background;   // iOS vibrancy is a separate model (UIBlurEffect / UIVisualEffectView) — Phase 2
     UIWindow* window = (__bridge UIWindow*)window_ptr;
@@ -782,11 +809,47 @@ void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first
     [ucc addUserScript:[[WKUserScript alloc] initWithSource:ownerScript
         injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
 
-    if (numeric_id_pre_alloc >= 0) {
+    // JS identity: a pane (sidebar/inspector) webview reports the HOST window's
+    // id so its runtime's Window.current() / event filtering resolve to the
+    // host, while its TRANSPORT (the dispatch slot it registers under) stays on
+    // its own numeric_id_pre_alloc. Only this identity string switches — mirrors
+    // darwin/webview.m. -1 identity_window_id = self identity (legacy).
+    int32_t identity_id = (identity_window_id >= 0) ? identity_window_id : numeric_id_pre_alloc;
+    if (identity_id >= 0) {
         NSString* windowIdScript = [NSString stringWithFormat:
             @"(function(){globalThis[Symbol.for('zapp.windowId')]='win-%d';})();",
-            numeric_id_pre_alloc];
+            identity_id];
         [ucc addUserScript:[[WKUserScript alloc] initWithSource:windowIdScript
+            injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
+    }
+
+    // Pane role marker — lets the runtime branch on the pane type at bootstrap
+    // without a round-trip. Mirrors the macOS user-script strings exactly.
+    if (pane_role == 1) {
+        [ucc addUserScript:[[WKUserScript alloc] initWithSource:
+            @"(function(){globalThis[Symbol.for('zapp.isSidebar')]=true;})();"
+            injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
+    } else if (pane_role == 2) {
+        [ucc addUserScript:[[WKUserScript alloc] initWithSource:
+            @"(function(){globalThis[Symbol.for('zapp.isPopover')]=true;})();"
+            injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
+    } else if (pane_role == 3) {
+        [ucc addUserScript:[[WKUserScript alloc] initWithSource:
+            @"(function(){globalThis[Symbol.for('zapp.isInspector')]=true;})();"
+            injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
+    }
+
+    // has{Sidebar,Inspector} markers — injected into every pane of a window that
+    // has the corresponding accessory, so Window.current() in ANY pane wires the
+    // matching handle. Document-start so they survive the real page commit.
+    if (host_has_sidebar) {
+        [ucc addUserScript:[[WKUserScript alloc] initWithSource:
+            @"(function(){globalThis[Symbol.for('zapp.hasSidebar')]=true;})();"
+            injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
+    }
+    if (host_has_inspector) {
+        [ucc addUserScript:[[WKUserScript alloc] initWithSource:
+            @"(function(){globalThis[Symbol.for('zapp.hasInspector')]=true;})();"
             injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
     }
 
@@ -862,18 +925,28 @@ void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first
     if (!url) url = zapp_ios_initial_url();
     [webview loadRequest:[NSURLRequest requestWithURL:url]];
 
-    // Add the webview to the window's root view controller. Setting
-    // root.view.frame here too — on pre-UIApplicationMain creation,
-    // accessing root.view triggers loadView which produces a 0x0 frame;
-    // forcing it to screen bounds matches what UIApplicationMain would
-    // do once layout starts.
-    UIViewController* root = window.rootViewController;
-    if (!root) {
-        root = [[UIViewController alloc] init];
-        window.rootViewController = root;
+    // Mount: pane path (container_view != NULL) adds the webview into the
+    // caller-provided container (a sidebar/inspector pane's view) and fills it
+    // via frame + autoresizing, instead of touching the window's
+    // rootViewController. The legacy branch below is unchanged: add the webview
+    // to the window's root view controller. Setting root.view.frame here too —
+    // on pre-UIApplicationMain creation, accessing root.view triggers loadView
+    // which produces a 0x0 frame; forcing it to screen bounds matches what
+    // UIApplicationMain would do once layout starts.
+    if (container_view) {
+        UIView* host = (__bridge UIView*)container_view;
+        webview.frame = host.bounds;
+        webview.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        [host addSubview:webview];
+    } else {
+        UIViewController* root = window.rootViewController;
+        if (!root) {
+            root = [[UIViewController alloc] init];
+            window.rootViewController = root;
+        }
+        root.view.frame = initialFrame;
+        [root.view addSubview:webview];
     }
-    root.view.frame = initialFrame;
-    [root.view addSubview:webview];
 
     // File drag-drop (G10 port). WKWebView ships internal
     // UIDropInteractions on WKContentView (private subview) that claim
@@ -922,6 +995,19 @@ void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first
     // Stash for later lookups (window.m's dispatch table).
     extern void zapp_ios_register_webview(void* window_ptr, void* webview_ptr);
     zapp_ios_register_webview(window_ptr, (__bridge void*)webview);
+}
+
+// Legacy entry point — delegates to the ext path with pane params at their
+// no-op defaults, so the single-pane behavior is byte-for-byte equivalent.
+// Matches the macOS signature so app.zc can call into it the same way.
+void darwin_webview_create(void* window_ptr, bool inspectable, bool accept_first_mouse,
+                           const char* url_override, int32_t numeric_id_pre_alloc,
+                           bool transparent_background) {
+    darwin_webview_create_ext(window_ptr, inspectable, accept_first_mouse, url_override,
+                              numeric_id_pre_alloc, transparent_background,
+                              /*container_view*/NULL, /*identity_window_id*/-1,
+                              /*pane_role*/0, /*host_has_sidebar*/false,
+                              /*host_has_inspector*/false);
 }
 
 // --- JS evaluation ---
