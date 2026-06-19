@@ -424,6 +424,16 @@ extern void zapp_handle_message_from_window(void* app, char* msg, int32_t window
 }
 - (void)mouseDown:(NSEvent*)event {
     if (self.inDragRegion) {
+        // Double-click the draggable background = standard macOS title-bar zoom
+        // toggle. This is the ONLY place that observes the double-click: clicks
+        // on a drag region are consumed here for window-dragging (we don't call
+        // super), so the web layer never sees a dblclick. inDragRegion is false
+        // over interactive controls (button/input/...) — they opt out of drag —
+        // so this never fires on a button, only the empty strip.
+        if (event.clickCount == 2) {
+            [self.window zoom:nil];
+            return;
+        }
         [self.window performWindowDragWithEvent:event];
         return;
     }

@@ -315,49 +315,12 @@
     }
   });
 
-  // Double-click a drag region → toggle window zoom (macOS title-bar behavior).
-  // Reuses the same drag-region walk as the mousemove handler above: explicit
-  // `--zapp-drag` override wins, interactive controls opt out, then the
-  // `data-zapp-drag-region` attribute marks a handle. The router infers the
-  // sender window (same as setDragRegion — no windowId is sent). iOS has no
-  // window zoom; its native handler no-ops, so an extra post is harmless.
-  document.addEventListener("dblclick", (e: MouseEvent) => {
-    let el: HTMLElement | null = e.target as HTMLElement;
-    let isDrag = false;
-    while (el && el !== document.body && el !== (document as any)) {
-      const style = window.getComputedStyle(el);
-      const val = style.getPropertyValue("--zapp-drag").trim();
-      if (val === "no-drag") {
-        isDrag = false;
-        break;
-      }
-      if (val === "drag") {
-        isDrag = true;
-        break;
-      }
-      const tag = el.tagName;
-      if (
-        tag === "BUTTON" ||
-        tag === "INPUT" ||
-        tag === "SELECT" ||
-        tag === "TEXTAREA" ||
-        (tag === "A" && el.hasAttribute("href")) ||
-        el.getAttribute("role") === "button" ||
-        el.isContentEditable
-      ) {
-        isDrag = false;
-        break;
-      }
-      if (el.hasAttribute && el.hasAttribute("data-zapp-drag-region")) {
-        isDrag = true;
-        break;
-      }
-      el = el.parentElement;
-    }
-    if (isDrag) {
-      post(JSON.stringify({ t: 4, m: "zoom", a: {} }));
-    }
-  });
+  // Double-click a drag region → window zoom (toggle maximize) is handled
+  // NATIVELY in the macOS WKWebView subclass (mouseDown, clickCount == 2): a
+  // drag region consumes mouseDown for window-dragging and never forwards the
+  // clicks to the web layer, so a DOM dblclick listener here would never fire on
+  // a drag region. `Window.zoom()` remains available for programmatic toggling.
+  // (Re-add a JS path only for a platform whose drag regions surface DOM clicks.)
 
   // Signal bridge is ready
   post(JSON.stringify({ t: 4, m: "ready" }));
