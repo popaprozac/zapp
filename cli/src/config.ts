@@ -503,6 +503,14 @@ export interface ZappConfig {
   assetDir?: string;  // Default: "./dist" (Vite), configurable for static sites
   devPort?: number;   // Default: 5173
   /**
+   * Brotli-compress embedded web assets in prod builds (`zapp build`/`package`).
+   * Default `true`. Already-compressed types (png/jpg/woff2/...) are stored raw
+   * regardless — q11 on them is wasted build time for ~0 gain. Set `false` to
+   * skip compression entirely (faster builds, larger binary). On Windows, embeds
+   * are always raw (no runtime brotli decoder yet — see task #516).
+   */
+  compressAssets?: boolean;
+  /**
    * Headless workers to start at app boot, keyed by ID.
    *
    * Two shapes per entry:

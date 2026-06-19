@@ -1247,7 +1247,7 @@ async function buildNativeNim(
   // resolving; prod (embed:true) bakes the real brotli-compressed table.
   // Must run before `nim c` so the generated .zapp/zapp_assets.nim is on
   // --path:${zappDir}.
-  await generateAssetManifestNim(root, config.assetDir, { embed: prod });
+  await generateAssetManifestNim(root, config.assetDir, { embed: prod, compress: config.compressAssets !== false });
 
   // The Nim build root lives in the framework's native/ dir (nativeDir), not
   // the user project — same as the zc sources. `{.compile.}` paths inside

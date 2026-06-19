@@ -13,9 +13,27 @@ export const ASSETS_EMBEDDED_MARKER = ".zapp/assets-embedded";
 
 export interface AssetEntry {
   relPath: string;   // e.g. "/index.html"
-  brPath: string;    // absolute path to .br file
+  brPath: string;    // absolute path to the stored payload (.br when brotli'd)
   originalSize: number;
   compressedSize?: number;  // set by collectAssets; optional so test fixtures stay concise
+  /** Whether THIS asset's stored payload is brotli-compressed. Per-asset (not
+   *  global): already-compressed types (png/woff2/...) are stored raw even when
+   *  compression is on, since brotli q11 on them burns build time for ~0 gain.
+   *  Optional so test fixtures stay concise; the emitters default it to true. */
+  brotli?: boolean;
+}
+
+/** Extensions whose bytes are already compressed — brotli q11 on them costs
+ *  build time + a runtime decode for negligible (often negative) size change,
+ *  so they're embedded raw even when compression is enabled. */
+const INCOMPRESSIBLE_EXTS = new Set([
+  ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".ico",
+  ".woff", ".woff2", ".mp4", ".webm", ".mov", ".mp3", ".ogg", ".m4a",
+  ".br", ".gz", ".zip", ".zst",
+]);
+
+function isIncompressible(relPath: string): boolean {
+  return INCOMPRESSIBLE_EXTS.has(path.extname(relPath).toLowerCase());
 }
 
 /** Recursively walk a directory and return all file paths. */
@@ -40,19 +58,19 @@ async function walkDir(dir: string): Promise<string[]> {
 async function collectAssets(
   root: string,
   assetDir: string,
-): Promise<{ assets: AssetEntry[]; compress: boolean }> {
+  compress: boolean,
+): Promise<{ assets: AssetEntry[] }> {
   const distDir = path.resolve(root, assetDir);
   const zappDir = path.join(root, ".zapp");
   const brDir = path.join(zappDir, "assets");
   await mkdir(brDir, { recursive: true });
 
-  // Windows embeds RAW bytes: the brotli decode at runtime uses Apple's
-  // libcompression (bare.c bare_load_script / the darwin scheme handler),
-  // which has no Windows counterpart yet. Workers read embedded assets
-  // on Windows (the webview serves from the on-disk dist folder), so
-  // compressed embeds mean headless workers silently fail to load.
-  // Costs binary size only; revisit if a portable brotli decoder lands.
-  const compress = process.platform !== "win32";
+  // Windows embeds RAW bytes regardless of the `compress` preference: the brotli
+  // decode at runtime uses Apple's libcompression (bare.c bare_load_script / the
+  // darwin scheme handler), which has no Windows counterpart yet. Workers read
+  // embedded assets on Windows, so compressed embeds would silently fail to load.
+  // Costs binary size only; revisit if a portable brotli decoder lands (task #516).
+  const compressOk = compress && process.platform !== "win32";
 
   const files = await walkDir(distDir);
   const assets: AssetEntry[] = [];
@@ -60,22 +78,25 @@ async function collectAssets(
   for (const file of files) {
     const relPath = "/" + path.relative(distDir, file).replace(/\\/g, "/");
     const source = await Bun.file(file).arrayBuffer();
-    const compressed = compress
+    // Per-asset: skip brotli for already-compressed types (png/woff2/...) even
+    // when compression is on — q11 on them is wasted build time + a useless
+    // runtime decode. The runtime reads is_brotli per asset, so a mixed table is fine.
+    const brotli = compressOk && !isIncompressible(relPath);
+    const payload = brotli
       ? brotliCompressSync(new Uint8Array(source), {
           params: { [constants.BROTLI_PARAM_QUALITY]: 11 },
         })
       : new Uint8Array(source);
 
-    // Write the embed payload (compressed or raw copy)
-    const brRelPath = relPath + (compress ? ".br" : "");
-    const brPath = path.join(brDir, brRelPath);
+    // Write the embed payload (compressed → .br suffix, raw → bare name).
+    const brPath = path.join(brDir, relPath + (brotli ? ".br" : ""));
     await mkdir(path.dirname(brPath), { recursive: true });
-    await Bun.write(brPath, compressed);
+    await Bun.write(brPath, payload);
 
-    assets.push({ relPath, brPath, originalSize: source.byteLength, compressedSize: compressed.byteLength });
+    assets.push({ relPath, brPath, originalSize: source.byteLength, compressedSize: payload.byteLength, brotli });
   }
 
-  return { assets, compress };
+  return { assets };
 }
 
 /**
@@ -86,11 +107,12 @@ async function collectAssets(
  * as part of its normal flow. It MUST NOT be called from any dev or stub-emit path —
  * only call it when assets are genuinely being baked into the binary (prod builds).
  */
-export async function generateAssetManifest(root: string, assetDir: string): Promise<string> {
+export async function generateAssetManifest(root: string, assetDir: string,
+                                            compress = true): Promise<string> {
   const zappDir = path.join(root, ".zapp");
   await mkdir(zappDir, { recursive: true });
 
-  const { assets, compress } = await collectAssets(root, assetDir);
+  const { assets } = await collectAssets(root, assetDir, compress);
   let totalOriginal = 0;
   let totalCompressed = 0;
   for (const a of assets) {
@@ -152,7 +174,7 @@ export async function generateAssetManifest(root: string, assetDir: string): Pro
     zc += `        zapp_embedded_assets[${i}].data = __zapp_asset_${i}_data();\n`;
     zc += `        zapp_embedded_assets[${i}].len = __zapp_asset_${i}_len();\n`;
     zc += `        zapp_embedded_assets[${i}].uncompressed_len = ${a.originalSize};\n`;
-    zc += `        zapp_embedded_assets[${i}].is_brotli = ${compress ? 1 : 0};\n`;
+    zc += `        zapp_embedded_assets[${i}].is_brotli = ${a.brotli ? 1 : 0};\n`;
   }
 
   zc += `    }\n`;
@@ -182,10 +204,10 @@ export async function generateAssetManifest(root: string, assetDir: string): Pro
  *
  * The `staticRead` path is reconstructed from `relPath` (the `brPath` field
  * is not used here). The module is written into `.zapp/`, so paths are
- * relative to that dir (e.g. "assets/index.html.br").
+ * relative to that dir (e.g. "assets/index.html.br"). brotli is decided
+ * per-asset (`a.brotli`): incompressible types are stored raw + is_brotli=0.
  */
-export function renderAssetsNim(assets: AssetEntry[], compress: boolean): string {
-  const brotli = compress ? 1 : 0;
+export function renderAssetsNim(assets: AssetEntry[]): string {
   let s = "## AUTO-GENERATED — embedded assets (brotli), Nim build. DO NOT EDIT.\n";
   s += "type ZappEmbeddedAsset {.exportc, bycopy.} = object\n";
   s += "  path: cstring\n  data: ptr uint8\n  len: cint\n  uncompressed_len: cint\n  is_brotli: cint\n\n";
@@ -210,7 +232,7 @@ export function renderAssetsNim(assets: AssetEntry[], compress: boolean): string
   assets.forEach((a, i) => {
     // relPath is Vite-generated (hashed, [a-zA-Z0-9_-./]) → no quote escaping
     // needed for the staticRead literal; the cstring path below escapes anyway.
-    const rel = "assets" + a.relPath + (compress ? ".br" : "");
+    const rel = "assets" + a.relPath + (a.brotli ? ".br" : "");
     s += `const a${i}Const = staticRead("${rel}")\n`;
     s += `let a${i}: string = a${i}Const\n`;
   });
@@ -219,7 +241,7 @@ export function renderAssetsNim(assets: AssetEntry[], compress: boolean): string
     const esc = a.relPath.replace(/\\/g, "/").replace(/"/g, '\\"');
     s += `  ZappEmbeddedAsset(path: cstring"${esc}", ` +
          `data: cast[ptr uint8](unsafeAddr a${i}[0]), len: a${i}.len.cint, ` +
-         `uncompressed_len: cint(${a.originalSize}), is_brotli: cint(${brotli})),\n`;
+         `uncompressed_len: cint(${a.originalSize}), is_brotli: cint(${a.brotli ? 1 : 0})),\n`;
   });
   s += "]\n";
   s += `var zapp_embedded_assets_count* {.exportc.}: cint = cint(${assets.length})\n`;
@@ -240,7 +262,7 @@ export function renderAssetsNim(assets: AssetEntry[], compress: boolean): string
 export async function generateAssetManifestNim(
   root: string,
   assetDir: string,
-  opts: { embed: boolean },
+  opts: { embed: boolean; compress?: boolean },
 ): Promise<string> {
   const zappDir = path.join(root, ".zapp");
   await mkdir(zappDir, { recursive: true });
@@ -249,13 +271,13 @@ export async function generateAssetManifestNim(
 
   if (!opts.embed) {
     // Dev: count-0 stub so `import zapp_assets` resolves; filesystem fallback.
-    await Bun.write(outPath, renderAssetsNim([], true));
+    await Bun.write(outPath, renderAssetsNim([]));
     await rm(markerPath, { force: true }); // no embed → no marker
     return outPath;
   }
 
-  const { assets, compress } = await collectAssets(root, assetDir);
-  await Bun.write(outPath, renderAssetsNim(assets, compress));
+  const { assets } = await collectAssets(root, assetDir, opts.compress ?? true);
+  await Bun.write(outPath, renderAssetsNim(assets));
   await Bun.write(markerPath, ""); // embed → marker
 
   let totalOriginal = 0;

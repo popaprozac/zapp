@@ -577,7 +577,7 @@ async function runBuild(root: string) {
   // 3. Compress + embed assets with brotli
   clog(1, "embedding assets with brotli...");
   const zappDir = path.join(root, ".zapp");
-  const assetsFile = await generateAssetManifest(root, config.assetDir);
+  const assetsFile = await generateAssetManifest(root, config.assetDir, config.compressAssets !== false);
 
   // 4. Generate engine overlay (auto-defines for engines named in
   // zapp.config.ts headless map but not declared in build.zc) BEFORE
