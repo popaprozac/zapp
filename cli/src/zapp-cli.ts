@@ -397,6 +397,7 @@ async function runDev(root: string) {
       output: nativeOut,
       nativeDir,
       optimize: false,
+      devUrl,
       config,
       target,
     });

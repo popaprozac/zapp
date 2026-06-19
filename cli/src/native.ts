@@ -1042,6 +1042,13 @@ interface CompileOptions {
   output: string;            // Binary output path
   nativeDir: string;         // Framework source dir
   optimize: boolean;         // Size optimizations
+  /**
+   * Vite dev-server URL (e.g. http://localhost:5173), set only for `zapp dev`.
+   * The Nim build loads this as the initial URL in dev so the webview hits the
+   * HMR server instead of the on-disk dist/ — matching the zc path's
+   * generateBuildConfig({mode:"dev", devUrl}). Absent/empty → embedded/filesystem.
+   */
+  devUrl?: string;
   target?: BuildTarget;      // Build target (default: host platform)
   /**
    * Resolved zapp.config.ts. Threaded into the platform-overlay
@@ -1098,6 +1105,7 @@ async function buildNativeNim(
   root: string,
   config: import("./config").ResolvedConfig,
   optimize: boolean,
+  devUrl?: string,
 ): Promise<void> {
   const fs = await import("node:fs/promises");
 
@@ -1135,8 +1143,14 @@ async function buildNativeNim(
   const protocols = (config.protocols ?? []).filter(s => /^[a-z][a-z0-9.+-]*$/.test(s));
   const protocolsJson = JSON.stringify(protocols);
 
+  // Initial URL — mirrors the zc path's generateBuildConfig: in dev, load the
+  // Vite dev server (HMR, no dependence on a built dist/); in prod, the
+  // zapp:// scheme handler serves the embedded asset table. Without this the
+  // Nim dev build served the on-disk dist/ and broke when dist/ was absent.
+  const initialUrl = (!prod && devUrl) ? devUrl : "zapp://index.html";
+
   const configNim = renderBuildConfigNim({
-    initialUrl: "zapp://index.html",
+    initialUrl,
     identifier: config.identifier ?? config.name ?? "com.zapp.helloworld",
     name: config.name ?? "Zapp",
     assetRoot: prod ? "" : assetRoot,
@@ -1282,7 +1296,7 @@ export async function compileNative(opts: CompileOptions): Promise<void> {
     if (!opts.config) {
       throw new Error("[zapp] Nim build path requires a resolved config (opts.config).");
     }
-    await buildNativeNim(nativeDir, output, verbose, root, opts.config, opts.optimize);
+    await buildNativeNim(nativeDir, output, verbose, root, opts.config, opts.optimize, opts.devUrl);
     return;
   }
 
