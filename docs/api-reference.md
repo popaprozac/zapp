@@ -722,6 +722,7 @@ const win = await Window.create({
     collapsible: true,      // system collapse gestures allowed (default true)
     collapsed: false,       // start collapsed (default false)
     resizable: true,        // user can drag the divider (default true; false locks at `width`)
+    presentation: "tile",   // "tile" (default) | "overlay" — see below
     backgroundColor: "#1e1e1e",  // solid backdrop (optional; `material` wins if both set)
     material: Material.Sidebar,  // background material (default Material.Sidebar)
   },
@@ -739,6 +740,7 @@ const win = await Window.create({
 | `collapsible` | `boolean` | `true` |
 | `collapsed` | `boolean` | `false` |
 | `resizable` | `boolean` | `true` |
+| `presentation` | `"tile" \| "overlay"` | `"tile"` |
 | `backgroundColor` | `string` | — (material) |
 | `material` | `Material` | `Material.Sidebar` |
 
@@ -747,6 +749,27 @@ transparent pane webview — the pane analog of the window `backgroundColor`,
 filling the pre-first-paint gap with a flat (non-vibrant) color. `material`
 takes precedence if both are set; for the native vibrant look, prefer
 `material`. macOS; create-time only.
+
+**`presentation`** controls the sidebar split behavior on iPad-regular (maps to
+`UISplitViewController.preferredSplitBehavior`):
+
+- `"tile"` *(default)* — sidebar sits beside content; both columns are always
+  on screen. Equivalent to `UISplitBehaviorTile`.
+- `"overlay"` — sidebar floats over the content as a flyout and dismisses on an
+  outside tap. Equivalent to `UISplitBehaviorOverlay`. Useful for transient
+  navigation panels that should not permanently reduce the content area.
+
+**Platform matrix for `presentation`:**
+
+| Platform | Effect |
+|---|---|
+| iPad-regular | `tile` or `overlay` as specified |
+| iPhone-compact | no-op — the split always collapses to a master-detail nav stack regardless of this option |
+| macOS | no-op — `NSSplitViewController` tiles only; sidebar stays tiled-collapsible |
+| Windows | no-op — sidebar not implemented |
+
+> **iOS drag regions.** `data-zapp-drag-region` elements are inert on iOS —
+> iOS windows are not user-draggable.
 
 **`Material` const** — typed const for `NSVisualEffectMaterial` names:
 `Material.Sidebar`, `Material.Titlebar`, `Material.Menu`,
