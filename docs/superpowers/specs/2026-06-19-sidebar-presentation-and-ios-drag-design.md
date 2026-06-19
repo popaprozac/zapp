@@ -79,9 +79,11 @@ sidebar block forwards `presentation`; add it if the renderer enumerates keys.
 config path isn't what we smoke, but it must stay correct for config-driven apps.)
 
 The `SidebarHandle.showContent/showSidebar/toggle/collapse/expand` doc comments
-already describe iPhone vs macOS/iPad-regular. Extend them to mention the overlay
-case: on **iPad-overlay**, `toggle`/`showSidebar`/`showContent` drive the
-flyout (reveal/dismiss), not a no-op.
+currently say "no-op on iPad-regular" — that's now wrong (and was the user's
+"sidebar not collapsible on iPad" report). Update them: these act on **every**
+platform with a sidebar — push/pop the nav stack on iPhone, and **collapse/reveal
+on iPad-regular** (`tile` slides the sidebar beside content; `overlay` floats it
+over). They only truly no-op when the window has no sidebar.
 
 ### 2. Native option parsing — `window.zc` + `window.nim` (parity)
 
@@ -111,24 +113,34 @@ split.preferredSplitBehavior = UISplitViewControllerSplitBehaviorOverlay;
 split.preferredDisplayMode = UISplitViewControllerDisplayModeSecondaryOnly;
 ```
 
-Otherwise leave the defaults (tile). Pass an overlay flag into
-`zapp_ios_sidebar_register` so the controller knows its presentation.
+Otherwise leave the defaults (tile). No new `zapp_ios_sidebar_register` param is
+needed — the control ops below use `showColumn:`/`hideColumn:`, which adapt to the
+split's configured behavior.
 
-**sidebar.m (control ops):** `ZappIOSSidebarController` gains a
-`BOOL overlay` (or a presentation enum). The reveal/hide guard changes from
-"only act when compact" to "act when compact OR overlay":
+**sidebar.m (control ops) — make them work on iPad-regular (fixes "not
+collapsible"):** today the reveal/hide ops early-return unless
+`c.splitVC.isCollapsed` (compact/iPhone), so the sidebar can't be collapsed on
+iPad. Drop that guard and drive the split with `showColumn:`/`hideColumn:`
+(iOS 16+) uniformly — the same calls adapt to the split's state:
 
-- `zapp_ios_sidebar_is_actionable(c)` = `c.splitVC.isCollapsed || c.overlay`.
-- `darwin_sidebar_show_content` → on overlay-regular, `hideColumn:Primary`
-  (dismiss the flyout); on compact, existing `showColumn:Secondary`.
-- `darwin_sidebar_show_sidebar` → on overlay-regular, `showColumn:Primary`
-  (present the flyout); on compact, existing `showColumn:Primary`.
-- `darwin_sidebar_toggle` → flip based on tracked state (existing
-  `lastCollapsedEmit`), now also firing on overlay-regular.
-- `tile`-regular keeps the current no-op early-return (both columns visible).
+- **compact (iPhone):** push/pop the collapsed nav stack (existing behavior).
+- **tile (iPad regular):** `hideColumn:Primary` collapses the sidebar (gives
+  content the full width); `showColumn:Primary` brings it back — matching macOS's
+  collapsible tiled sidebar.
+- **overlay (iPad regular):** `showColumn:Primary` floats the flyout in;
+  `hideColumn:Primary` dismisses it.
 
-`setWidth` on overlay maps to `preferredPrimaryColumnWidth` (the flyout width) —
-already wired; keep.
+Mapping: `collapse`/`showContent` → hide primary; `expand`/`showSidebar` → show
+primary; `toggle` flips on the tracked `lastCollapsedEmit`. The pre-iOS-16
+fallback keeps the compact nav push/pop and nudges `preferredDisplayMode` on
+regular. `setWidth` → `preferredPrimaryColumnWidth` (already wired). The
+construction-time `preferredSplitBehavior` (tile vs overlay) decides the visual;
+the control-op code is identical for both.
+
+The only true no-op stays `tile` when the window is genuinely showing both
+columns and the caller is content with that — but `collapse()`/`toggle()` now
+have an effect there too (collapsing the tiled sidebar), so the kitchen-sink's
+"‹ Menu" button becomes functional on iPad instead of inert.
 
 ### 4. macOS — `native/platform/darwin/window.m`
 
@@ -155,7 +167,9 @@ verifies ordering and picks the robust form.
 
 **Kitchen-sink — shell panes:** stop rendering the visual `data-zapp-drag-region`
 strips when `Platform.isIOS` (the titlebar-height strip + sidebar/inspector drag
-strips added in #510/#513). macOS keeps them (window dragging is real there).
+strips added in #510/#513). `Platform.isIOS` is true on iPad too — this removes
+the spurious drag-to-move strip the user saw on iPad. macOS keeps them (window
+dragging is real there).
 
 ### 6. Kitchen-sink showcase + docs
 
@@ -185,14 +199,24 @@ zapp.config.ts / app code: sidebar: { url, width, presentation: "overlay" }
   cli/src` ios-platform-parity lint stays green (no new `darwin_*` symbol unless
   stubbed both platforms).
 - **Human smoke:**
-  - **iPad simulator:** kitchen-sink → sidebar overlays content as a flyout;
-    `win.sidebar.toggle()` / edge-swipe reveals + dismisses; tap-out dismisses.
+  - **iPad simulator:** kitchen-sink (overlay) → sidebar floats over content as a
+    flyout; the "‹ Menu" button + edge-swipe reveal it, tap-out dismisses; **no
+    drag strip**. Sanity-check `tile` too (temporarily): the sidebar starts
+    beside content and `toggle()`/"‹ Menu" collapses + restores it (the
+    "collapsible on iPad" fix).
   - **iPhone simulator:** unchanged master-detail (land on sidebar, tap → content,
     back); **no drag strips** visible.
   - **macOS:** unchanged tiled sidebar; **drag strips still present** and working.
 
 ## Out of scope
 
+- **Inspector pane on iOS** (the trailing pane). Currently fully stubbed
+  (`native/platform/ios/inspector.m` is all no-ops; `window.m` builds only
+  `.doubleColumn` and explicitly defers it). Real support needs
+  `UISplitViewController` `.tripleColumn` (sidebar + content + inspector) plus a
+  third webview slot and inspector control ops — a meatier, separate cycle.
+  Surfaced by the user's iPad test ("inspector not compat?"); recommended as a
+  dedicated follow-up.
 - Custom hamburger/overlay drawer on iPhone (non-conventional; not faked).
 - `.displace` split behavior (trivial future enum addition).
 - Runtime `setPresentation()` (create-time only for v1).
