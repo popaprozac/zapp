@@ -14,10 +14,13 @@ export function renderMainPane(app: HTMLElement) {
                 font:inherit;border-radius:8px;border:1px solid rgba(0,0,0,0.15);
                 background:rgba(255,255,255,0.85);cursor:pointer">‹ Menu</button>`
     : "";
-  app.innerHTML = `
-    <div class="drag-strip" data-zapp-drag-region>
+  const dragStrip = Platform.isIOS
+    ? ""
+    : `<div class="drag-strip" data-zapp-drag-region>
       <span class="drag-strip-label">⠿ Kitchen Sink — drag to move</span>
-    </div>
+    </div>`;
+  app.innerHTML = `
+    ${dragStrip}
     ${backControl}
     <div class="main-pane"><div class="stage" data-stage></div></div>`;
 

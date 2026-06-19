@@ -3,8 +3,11 @@ import { registry } from "../sections/registry";
 
 export function renderSidebarPane(app: HTMLElement) {
   document.body.style.background = "transparent";
+  const dragStrip = Platform.isIOS
+    ? ""
+    : `<div class="drag-strip" data-zapp-drag-region></div>`;
   app.innerHTML = `
-    <div class="drag-strip" data-zapp-drag-region></div>
+    ${dragStrip}
     <div class="sidebar-pane">
       <div class="sidebar-title">KITCHEN SINK</div>
       <nav>${registry

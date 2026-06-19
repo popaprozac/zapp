@@ -275,45 +275,54 @@
   // every toolbar button; the sensible default is "interactive elements
   // win." Users who actually want a draggable button can still do so with
   // `style="--zapp-drag: drag"` on the element.
-  let inDrag = false;
-  document.addEventListener("mousemove", (e: MouseEvent) => {
-    let el: HTMLElement | null = e.target as HTMLElement;
-    let isDrag = false;
-    while (el && el !== document.body && el !== (document as any)) {
-      const style = window.getComputedStyle(el);
-      const val = style.getPropertyValue("--zapp-drag").trim();
-      if (val === "no-drag") {
-        isDrag = false;
-        break;
+  // iOS windows aren't user-draggable (no performWindowDragWithEvent), so
+  // drag-region tracking is dead weight there. Skip it on iOS. Platform comes
+  // from the bootstrap-config carrier the native webview injects — it is
+  // added to WKUserContentController BEFORE the bootstrap script, so the
+  // symbol is guaranteed present when this IIFE runs.
+  const _cfg = (globalThis as any)[Symbol.for("zapp.bootstrapConfig")];
+  const _isIOS = _cfg?.permissions?.platform === "ios";
+  if (!_isIOS) {
+    let inDrag = false;
+    document.addEventListener("mousemove", (e: MouseEvent) => {
+      let el: HTMLElement | null = e.target as HTMLElement;
+      let isDrag = false;
+      while (el && el !== document.body && el !== (document as any)) {
+        const style = window.getComputedStyle(el);
+        const val = style.getPropertyValue("--zapp-drag").trim();
+        if (val === "no-drag") {
+          isDrag = false;
+          break;
+        }
+        if (val === "drag") {
+          isDrag = true;
+          break;
+        }
+        const tag = el.tagName;
+        if (
+          tag === "BUTTON" ||
+          tag === "INPUT" ||
+          tag === "SELECT" ||
+          tag === "TEXTAREA" ||
+          (tag === "A" && el.hasAttribute("href")) ||
+          el.getAttribute("role") === "button" ||
+          el.isContentEditable
+        ) {
+          isDrag = false;
+          break;
+        }
+        if (el.hasAttribute && el.hasAttribute("data-zapp-drag-region")) {
+          isDrag = true;
+          break;
+        }
+        el = el.parentElement;
       }
-      if (val === "drag") {
-        isDrag = true;
-        break;
+      if (isDrag !== inDrag) {
+        inDrag = isDrag;
+        post(JSON.stringify({ t: 4, m: "setDragRegion", a: { drag: inDrag } }));
       }
-      const tag = el.tagName;
-      if (
-        tag === "BUTTON" ||
-        tag === "INPUT" ||
-        tag === "SELECT" ||
-        tag === "TEXTAREA" ||
-        (tag === "A" && el.hasAttribute("href")) ||
-        el.getAttribute("role") === "button" ||
-        el.isContentEditable
-      ) {
-        isDrag = false;
-        break;
-      }
-      if (el.hasAttribute && el.hasAttribute("data-zapp-drag-region")) {
-        isDrag = true;
-        break;
-      }
-      el = el.parentElement;
-    }
-    if (isDrag !== inDrag) {
-      inDrag = isDrag;
-      post(JSON.stringify({ t: 4, m: "setDragRegion", a: { drag: inDrag } }));
-    }
-  });
+    });
+  }
 
   // Double-click a drag region → window zoom (toggle maximize) is handled
   // NATIVELY in the macOS WKWebView subclass (mouseDown, clickCount == 2): a

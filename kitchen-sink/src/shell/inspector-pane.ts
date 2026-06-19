@@ -1,11 +1,14 @@
-import { Events } from "@zappdev/runtime";
+import { Events, Platform } from "@zappdev/runtime";
 import { registry } from "../sections/registry";
 import { findSection } from "../sections/types";
 
 export function renderInspectorPane(app: HTMLElement) {
   document.body.style.background = "transparent";
+  const dragStrip = Platform.isIOS
+    ? ""
+    : `<div class="drag-strip drag-strip--no-inset" data-zapp-drag-region></div>`;
   app.innerHTML = `
-    <div class="drag-strip drag-strip--no-inset" data-zapp-drag-region></div>
+    ${dragStrip}
     <div class="inspector-pane">
       <div class="inspector-title">INSPECTOR</div>
       <div class="inspector-body" data-body>
