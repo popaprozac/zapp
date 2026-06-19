@@ -137,10 +137,23 @@
     catch (loopErr) { console.error("[worker]", loopErr); }
   }
 
+  // Inverse of windowEventIds (numeric id → "window:<name>"), built once. The
+  // native layer delivers ALL window-lifecycle events under the internal
+  // 'window:event' envelope ({windowId,event,w,h,x,y}); we re-route to the
+  // specific typed listener (e.g. 'window:resize') the user subscribed to.
+  // 'window:event' is internal — never a user-facing listener name.
+  const windowEventNameById: Record<number, string> = {};
+  for (const [n, id] of Object.entries(windowEventIds)) windowEventNameById[id] = n;
+
   bridge._onEvent = function (name: string, payload: string) {
-    let parsed: unknown = payload;
+    let parsed: any = payload;
     try { parsed = JSON.parse(payload); } catch {}
-    for (const h of listeners[name] || []) {
+    let target = name;
+    if (name === "window:event" && parsed && typeof parsed === "object") {
+      const specific = windowEventNameById[parsed.event];
+      if (specific) target = specific;
+    }
+    for (const h of listeners[target] || []) {
       try { h(parsed); } catch (e) {
         console.error("[worker]", e);
         reportCrash(e);

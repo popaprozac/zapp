@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { AppEvent, WindowEvent, eventName } from "./events";
+import { AppEvent, Events, WindowEvent, eventName } from "./events";
 
 test("new background-app AppEvents map to their wire names", () => {
   expect(eventName(AppEvent.WILL_SLEEP)).toBe("app:will-sleep");
@@ -28,4 +28,22 @@ describe("inspector window events", () => {
     expect(eventName(WindowEvent.INSPECTOR_EXPANDED)).toBe("window:inspector-expanded");
     expect(eventName(WindowEvent.INSPECTOR_RESIZED)).toBe("window:inspector-resized");
   });
+});
+
+const BRIDGE = Symbol.for("zapp.bridge");
+
+test("Events.on coerces a WindowEvent enum to its string name before subscribing", () => {
+  const calls: string[] = [];
+  (globalThis as any)[BRIDGE] = { on: (name: string) => { calls.push(name); return () => {}; } };
+  Events.on(WindowEvent.RESIZE, () => {});
+  expect(calls).toEqual(["window:resize"]);
+  delete (globalThis as any)[BRIDGE];
+});
+
+test("Events.on passes a plain custom event name through unchanged", () => {
+  const calls: string[] = [];
+  (globalThis as any)[BRIDGE] = { on: (name: string) => { calls.push(name); return () => {}; } };
+  Events.on("my-custom-event", () => {});
+  expect(calls).toEqual(["my-custom-event"]);
+  delete (globalThis as any)[BRIDGE];
 });

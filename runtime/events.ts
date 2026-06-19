@@ -192,8 +192,11 @@ export const Events = {
   /**
    * Subscribe to an event. Returns an unsubscribe function.
    */
-  on(name: EventName, handler: EventHandler): () => void {
-    return getBridge().on(name, handler);
+  on(name: EventName | WindowEvent | AppEvent, handler: EventHandler): () => void {
+    // WindowEvent/AppEvent are numeric enums; map them to their wire string.
+    // Plain custom event names (strings) pass through unchanged.
+    const resolved = typeof name === "number" ? eventName(name) : name;
+    return getBridge().on(resolved, handler);
   },
 
   /**
