@@ -72,7 +72,38 @@ regular width (iPad) and collapses to an overlay/drawer on compact width
 (iPhone). Same code, both behaviors; `toggle/collapse/expand` remain meaningful
 in each mode.
 
+**Toggle trigger — web-driven on iOS (for now):** on macOS the usual collapse
+trigger is the native `NSToolbar` `toggleSidebar` button. iOS has no native
+toolbar yet (a later cycle = `UINavigationBar`), so the app drives
+`win.sidebar.toggle()` from its **own web UI** (plus `UISplitViewController`'s
+built-in edge-swipe gesture for free). So an app conditionally renders an
+in-page toggle on iOS. That conditional needs a runtime platform check — see the
+**Platform runtime API** component below.
+
 ## Components / decomposition
+
+### T0 — `Platform` runtime API (TS-only, no native change)
+
+Apps need a runtime platform check for conditional rendering (the iOS in-page
+sidebar toggle, and beyond). The value already exists per-webview — the
+bootstrap config injects `globalThis[Symbol.for("zapp.bootstrapConfig")]
+.permissions.platform` (`"macos"|"ios"|"windows"`, target-correct after gap #5
+T2 made the Nim build's manifest platform target-derived; the zc path already
+emits it). It's read **internally** by `permissions.ts` (`bootstrapManifest()`)
+but has **no public API**.
+
+Add a small public `Platform` (new `runtime/platform.ts`, exported from
+`runtime/index.ts`):
+```ts
+Platform.current(): "macos" | "ios" | "windows"   // reads the manifest; defaults "macos"
+Platform.isMacOS / isIOS / isWindows              // boolean conveniences
+```
+Reads the same `Symbol.for("zapp.bootstrapConfig")?.permissions?.platform` that
+`permissions.ts` uses (factor a shared read or import it). Pure runtime,
+unit-testable by mocking the global (same pattern as `worker.test.ts` /
+`events.test.ts`). No native or C-ABI change. (Alternative shape considered:
+`App.platform` — chose a dedicated `Platform` namespace for discoverability +
+the boolean conveniences; not blocking.)
 
 ### T1 — port `darwin_webview_create_ext` to iOS (`native/platform/ios/webview.m`)
 
@@ -121,10 +152,14 @@ Replace the no-op stubs with real impls + a per-window registry (keyed by
 ### T4 — kitchen-sink smoke + docs
 
 The kitchen-sink Sidebar section is web UI that already branches on the pane
-markers, so it should render natively once T1–T3 land. Verify on an **iPad** sim
-(side-by-side) and an **iPhone** sim (drawer). Update docs (api-reference /
-the native-chrome doc) to record iOS sidebar support + the explicit macOS↔iOS
-degradations.
+markers, so it should render natively once T1–T3 land. Add the **iOS conditional
+toggle**: the section renders an in-page "Toggle sidebar" button when
+`Platform.isIOS` (driving `win.sidebar.toggle()`), since iOS has no native
+toolbar button yet — same sidebar content + API as macOS, just the extra trigger
+on iOS. Verify on an **iPad** sim (side-by-side) and an **iPhone** sim (drawer):
+the toggle button collapses/expands the native split, and `window:sidebar-*`
+events fire. Update docs (api-reference / the native-chrome doc) to record iOS
+sidebar support, the `Platform` API, and the explicit macOS↔iOS degradations.
 
 ## C-ABI / parity constraints
 
