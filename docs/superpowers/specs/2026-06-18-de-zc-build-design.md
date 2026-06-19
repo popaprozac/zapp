@@ -7,10 +7,17 @@
 
 ## Goal
 
-A machine with **no Zen-C (`zc`) toolchain installed** can run
-`ZAPP_NATIVE_LANG=nim bun run build` end-to-end and produce a working macOS
-binary. Today the Nim build still shells out to `zc transpile` in two places;
-this gap removes both.
+Remove the **per-build `zc transpile` dependency** from the Nim build. Today
+`buildNativeNim` shells out to `zc transpile` on *every* Nim build (the
+JsonValue provider); this gap eliminates that call so day-to-day Nim builds need
+no `zc` on a machine that already has the prebuilt zjs artifact.
+
+**Scope note (2026-06-18):** the gap originally bundled a second piece —
+vendoring a prebuilt zjs artifact so a *clean clone on a zc-less machine* could
+build. That piece is **deferred** (see "Piece B — deferred"): the Nim build
+already links a prebuilt `libzjs.dylib` without invoking `zc`, so zjs is not a
+per-build zc dependency. Committing a binary / churning the submodule to support
+a multi-machine future is premature while Zapp is single-developer alpha.
 
 ## Background
 
@@ -30,10 +37,10 @@ two residual `zc transpile` dependencies:
    Makefile (`make -C vendor/zjs lib`), which internally runs
    `zc transpile src/lib.zc`. The Nim build links the resulting library.
 
-The two dependencies are asymmetric: (1) is a *real transpile invoked by the
-Zapp build*, while (2) is a *prebuilt artifact of an upstream project* (zjs is
-the user's first-party from-scratch JS engine, inspired by QuickJS). They are
-solved by different means.
+The two dependencies are asymmetric: (1) is a *real transpile invoked on every
+Zapp build*, while (2) is already a *prebuilt artifact linked without `zc`* (zjs
+is the user's first-party from-scratch JS engine, inspired by QuickJS). They
+differ in necessity — (1) is removed here; (2) is deferred (see Decisions).
 
 ### What the exploration proved
 
@@ -62,10 +69,11 @@ solved by different means.
   the C-ABI constructors build a `std/json` `JsonNode` *directly*. This removes
   the walker the Nim port introduced and restores the zc build's single-tree
   efficiency in Nim terms.
-- **Piece B approach: Z1 — commit a prebuilt static `libzjs.a` and link it.**
-  No `zc` at app-build time. The maintainer regenerates the artifact when
-  bumping zjs. Static (not dynamic) so the eventual `.app` is self-contained.
-  This is the interim state; the future Nim rewrite of zjs replaces the blob.
+- **Piece B: deferred.** zjs is already vendored as a prebuilt `libzjs.dylib`
+  the Nim build links without `zc`; it is not a per-build zc dependency.
+  Vendoring a committed artifact (for clean-clone / CI / shipping) is deferred
+  until a machine without `zc` actually needs it (a second dev/CI host, the
+  prod-packaging cycle, or gap #7's full zc removal).
 
 ## Piece A — JsonValue provider → Nim (unify on `JsonNode`)
 
@@ -170,40 +178,27 @@ nine symbols and never dereferences the pointer.
 - **#503** — the hardcoded `$HOME`-absolute provider `.o` `--passL` path is
   deleted with the `.o` itself.
 
-## Piece B — vendored static zjs (`libzjs.a`)
+## Piece B — deferred (was: vendored static zjs)
 
-### Architecture
+**Deferred 2026-06-18.** Originally this gap would commit a prebuilt static
+`libzjs.a` so a clean clone on a zc-less machine could build. Descoped after
+confirming it is not needed yet:
 
-The Nim build links a committed, prebuilt **static** archive. No `zc` runs at
-app-build time and `make -C vendor/zjs` is never invoked on the Nim path.
+- The Nim build already links the **prebuilt `vendor/zjs/build/libzjs.dylib`**
+  via `{.passL.}` and does **not** invoke `make -C vendor/zjs` (and thus not
+  `zc`) per build. zjs is a *prebuilt-link* dependency, not a per-build zc one.
+- `vendor/zjs` is a **git submodule** and `build/libzjs.a` is gitignored inside
+  it, so "commit the artifact" means either committing build outputs into the
+  zjs source repo (anti-pattern + submodule pointer churn) or copying a 2.4 MB
+  binary into the main repo. Both are real costs.
+- The only payoffs — clean-clone / CI without `zc`, and static-link-for-shipping
+  — matter only with a second machine or the prod-packaging cycle, neither of
+  which exists in single-developer alpha.
 
-### Components
-
-- **Commit `vendor/zjs/build/libzjs.a`** — un-`.gitignore` the static archive so
-  it is tracked. Headers already live in `vendor/zjs/include`.
-- **Modified: `native/nim/zapp.nim`** — change the zjs `{.passL.}` from
-  `vendor/zjs/build/libzjs.dylib` + `-Wl,-rpath,...` to the static
-  `vendor/zjs/build/libzjs.a`. Keep the `-lcompression` and `-framework
-  Foundation` link flags zjs.c needs.
-- **Confirm nothing on the Nim path invokes the zjs Makefile.** (The zc path may
-  still build zjs via `make`; that is out of scope.)
-
-### Duplicate-symbol verification
-
-`libzjs.a` has previously hit duplicate-symbol errors from the bundled zen-c
-stdlib (it bit the iOS Simulator port; worked around with a `libzjs_embed.a`
-repack). Piece A removes `zjson_provider.o` — the only *other* zc-origin object
-in the Nim build — so after this gap there is no second copy of the zen-c stdlib
-to collide with on macOS. The implementation plan **verifies** a clean static
-link as a build-gate step. If the link is not clean, the documented fallback is
-to keep the `.dylib` for this gap and revisit static linking in the prod-bundle
-work.
-
-### Regeneration discipline (documented)
-
-When bumping zjs, the maintainer runs `make -C vendor/zjs lib-static` and
-re-commits `vendor/zjs/build/libzjs.a`. This is the interim arrangement; the
-future Nim rewrite of zjs (separate spec) eventually replaces the vendored blob.
+**When to revive:** the moment a zc-less machine must build Zapp (a second
+dev/CI host, the prod-bundle/packaging cycle, or gap #7's full zc removal). At
+that point decide `.a`-into-main-repo vs `.a`-into-submodule, and whether to
+static-link for a self-contained `.app`. Until then the prebuilt `.dylib` stays.
 
 ## Testing
 
@@ -218,8 +213,10 @@ future Nim rewrite of zjs (separate spec) eventually replaces the vendored blob.
   `JsonNode` path.
 - **Integration gate:** kitchen-sink "greet from worker" synchronous invoke on
   the zjs engine, Nim build.
-- **Definitive proof:** a full `ZAPP_NATIVE_LANG=nim bun run build` with `zc`
-  removed from `PATH`, producing a working binary; plus `bun test cli/src` and
+- **Definitive proof:** with the prebuilt `vendor/zjs/build/libzjs.dylib`
+  already present (it is), a full `ZAPP_NATIVE_LANG=nim bun run build` with `zc`
+  removed from `PATH` completes and produces a working binary — proving piece A
+  removed the per-build `zc transpile`. Plus `bun test cli/src` and
   `bunx tsc --noEmit`.
 - **Final cross-implementation review:** confirm the `jsonvalue.nim` `{.exportc.}`
   signatures match `zjs.c`'s `extern` declarations exactly, and that the seam
@@ -227,10 +224,11 @@ future Nim rewrite of zjs (separate spec) eventually replaces the vendored blob.
 
 ## Out of scope
 
+- **Vendoring a committed zjs artifact for zc-less clean-clone / CI / shipping**
+  — deferred (see "Piece B — deferred").
 - **Primitives without a JSON tree** for hot typed service calls — a separate
   future perf cycle (the handler API is `JsonNode`-typed regardless).
-- **The Nim rewrite of zjs** — a separate future spec; this gap only vendors the
-  prebuilt artifact in the interim.
+- **The Nim rewrite of zjs** — a separate future spec.
 - **Windows brotli / build de-zc** — gap #6 (#516).
 
 ## Risks
@@ -239,8 +237,6 @@ future Nim rewrite of zjs (separate spec) eventually replaces the vendored blob.
   Mitigated by `GC_ref`/`GC_unref` pinning and same-thread (worker pthread,
   foreign-GC-initialized) construction/free. This is the *same* risk profile as
   plain P3 — no new risk introduced by unifying on `JsonNode`.
-- **Static `libzjs.a` dup symbols.** Mitigated by piece A removing the only other
-  zc-origin object; verified at the build gate with a `.dylib` fallback.
 - **Parity drift.** Mitigated by the unchanged seam signature and the final
   cross-impl review.
 
