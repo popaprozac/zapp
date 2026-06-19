@@ -72,7 +72,7 @@ extern void darwin_window_eval_js(int32_t window_id, const char* js);
 // transport slot; both resolve to the same host UIWindow via
 // darwin_window_get_by_numeric_id, so the host-window key catches both.
 
-@interface ZappIOSSidebarController : NSObject <UISplitViewControllerDelegate>
+@interface ZappIOSSidebarController : NSObject <UISplitViewControllerDelegate, UIGestureRecognizerDelegate>
 @property (nonatomic, weak) UISplitViewController* splitVC;
 @property (nonatomic, weak) UIViewController* sidebarVC;   // primary column content
 @property (nonatomic, weak) UIViewController* contentVC;   // secondary column content
@@ -173,6 +173,11 @@ static void zapp_ios_sidebar_sync_collapse(ZappIOSSidebarController* c, BOOL col
     if (nav) {
         nav.navigationBarHidden = YES;
         self.collapsedNav = nav;
+        // The hidden nav bar disables UIKit's interactive-pop gesture; re-arm it
+        // so chrome-less still gets edge-swipe-back. Our delegate gates it to
+        // "only when there's something to pop" (avoids a no-op swipe at root).
+        nav.interactivePopGestureRecognizer.enabled = YES;
+        nav.interactivePopGestureRecognizer.delegate = self;
     }
     zapp_ios_sidebar_sync_collapse(self, NO);
 }
@@ -181,6 +186,17 @@ static void zapp_ios_sidebar_sync_collapse(ZappIOSSidebarController* c, BOOL col
     (void)svc;
     // Back to side-by-side: both panes visible → expanded.
     zapp_ios_sidebar_sync_collapse(self, NO);
+}
+
+// Gate the re-armed interactive-pop gesture: only begin when the collapsed
+// stack actually has something to pop (depth > 1). Avoids a no-op edge swipe
+// at the root (the sidebar), where UIKit would otherwise fire it.
+- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer*)g {
+    UINavigationController* nav = self.collapsedNav;
+    if (nav && g == nav.interactivePopGestureRecognizer) {
+        return nav.viewControllers.count > 1;
+    }
+    return YES;
 }
 
 @end
@@ -306,12 +322,22 @@ void darwin_sidebar_show_sidebar(int32_t window_id) {
 void darwin_sidebar_toggle(int32_t window_id) {
     zapp_ios_sidebar_on_main(^{
         ZappIOSSidebarController* c = zapp_ios_sidebar_for_slot(window_id);
-        if (!c) return;
-        // c.lastCollapsedEmit tracks "content visible" (collapsed). Flip it.
+        if (!c || !c.splitVC) return;
+        BOOL sidebarVisible;
+        if (c.splitVC.isCollapsed) {
+            // compact (iPhone): no system tap-out dismiss; tracked state is
+            // authoritative (lastCollapsedEmit YES == sidebar hidden).
+            sidebarVisible = !c.lastCollapsedEmit;
+        } else {
+            // regular (iPad): the overlay can be dismissed by the system
+            // (tap-out), so read the LIVE displayMode, not the cached flag —
+            // otherwise lastCollapsedEmit goes stale and toggle needs two taps.
+            sidebarVisible = (c.splitVC.displayMode != UISplitViewControllerDisplayModeSecondaryOnly);
+        }
         // The show_* ops re-dispatch to main (already on it here — they run
         // inline since [NSThread isMainThread] is true).
-        if (c.lastCollapsedEmit) darwin_sidebar_show_sidebar(window_id);
-        else darwin_sidebar_show_content(window_id);
+        if (sidebarVisible) darwin_sidebar_show_content(window_id);  // hide it
+        else darwin_sidebar_show_sidebar(window_id);                 // show it
     });
 }
 

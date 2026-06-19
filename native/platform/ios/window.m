@@ -226,6 +226,10 @@ void zapp_ios_materialize_pending_windows(void) {
                 split.preferredSplitBehavior = UISplitViewControllerSplitBehaviorOverlay;
                 split.preferredDisplayMode = UISplitViewControllerDisplayModeSecondaryOnly;
             }
+            // Left-edge swipe reveals the sidebar (esp. in overlay, where the
+            // flyout starts hidden). This is the system default, but set it
+            // explicitly/intentionally so the reveal affordance is guaranteed.
+            split.presentsWithGesture = YES;
             split.view.backgroundColor = bgColor;
 
             window.rootViewController = split;   // BEFORE any webview creation
