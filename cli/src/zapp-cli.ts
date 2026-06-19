@@ -574,10 +574,19 @@ async function runBuild(root: string) {
     process.exit(1);
   }
 
-  // 3. Compress + embed assets with brotli
-  clog(1, "embedding assets with brotli...");
+  // 3. Compress + embed assets with brotli.
+  // The Nim build path emits its OWN asset module (+ the embed marker) inside
+  // buildNativeNim via generateAssetManifestNim, so skip the zc emitter here —
+  // running both doubles the brotli pass and leaves a dead .zapp/zapp_assets.zc.
+  // (compileNative's nim branch ignores `assetsFile`.)
   const zappDir = path.join(root, ".zapp");
-  const assetsFile = await generateAssetManifest(root, config.assetDir, config.compressAssets !== false);
+  let assetsFile: string | undefined;
+  if (process.env.ZAPP_NATIVE_LANG === "nim") {
+    clog(1, "embedding assets with brotli (Nim emitter, in native build)...");
+  } else {
+    clog(1, "embedding assets with brotli...");
+    assetsFile = await generateAssetManifest(root, config.assetDir, config.compressAssets !== false);
+  }
 
   // 4. Generate engine overlay (auto-defines for engines named in
   // zapp.config.ts headless map but not declared in build.zc) BEFORE
