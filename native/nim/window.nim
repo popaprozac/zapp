@@ -84,6 +84,7 @@ type
     sidebarCollapsible*: bool = true
     sidebarCollapsed*: bool
     sidebarCanResize*: bool = true
+    sidebarPresentation*: string
     sidebarNumericId*: int32 = -1
     # --- inspector pane (feature unused; "" url => never built) ---
     inspectorUrl*: string
@@ -163,6 +164,7 @@ proc wopts_sidebar_collapsible(p: pointer): bool {.exportc, cdecl.} = opt(p).sid
 proc wopts_sidebar_collapsed(p: pointer): bool {.exportc, cdecl.} = opt(p).sidebarCollapsed
 proc wopts_sidebar_can_resize(p: pointer): bool {.exportc, cdecl.} = opt(p).sidebarCanResize
 proc wopts_sidebar_background_color(p: pointer): cstring {.exportc, cdecl.} = opt(p).sidebarBackgroundColor.cstring
+proc wopts_sidebar_presentation(p: pointer): cstring {.exportc, cdecl.} = opt(p).sidebarPresentation.cstring
 proc wopts_sidebar_numeric_id(p: pointer): int32 {.exportc, cdecl.} = opt(p).sidebarNumericId
 
 # inspector accessors — unused feature; "" url short-circuits the branch.
@@ -346,6 +348,7 @@ proc windowOptsApplyJson*(o: WindowOptions, a: JsonNode) =
     if jHasBool(sb, "collapsible"): o.sidebarCollapsible = jBool(sb, "collapsible", o.sidebarCollapsible)
     if jHasBool(sb, "collapsed"): o.sidebarCollapsed = jBool(sb, "collapsed", o.sidebarCollapsed)
     if jHasBool(sb, "resizable"): o.sidebarCanResize = jBool(sb, "resizable", o.sidebarCanResize)
+    if jHasStr(sb, "presentation"): o.sidebarPresentation = jStr(sb, "presentation")
   let insp = a{"inspector"}
   if not insp.isNil and insp.kind == JObject:
     if jHasStr(insp, "url"): o.inspectorUrl = jStr(insp, "url")

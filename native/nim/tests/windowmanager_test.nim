@@ -88,6 +88,18 @@ block:
     "explicit 'default' must force Default (overrides the split-window chrome default)"
 
 block:
+  # sidebar.presentation parses into sidebarPresentation.
+  let o = WindowOptions(title: "pres")
+  windowOptsApplyJson(o, parseJson("""{"sidebar":{"url":"#sb","width":240,"presentation":"overlay"}}"""))
+  doAssert o.sidebarPresentation == "overlay", "sidebar.presentation must parse to sidebarPresentation"
+
+block:
+  # sidebar.presentation absent → sidebarPresentation defaults to "".
+  let o = WindowOptions(title: "pres-default")
+  windowOptsApplyJson(o, parseJson("""{"sidebar":{"url":"#sb"}}"""))
+  doAssert o.sidebarPresentation == "", "absent sidebar.presentation must default to empty string"
+
+block:
   # Partial object-literal construction must fill the field defaults — the
   # load-bearing guarantee (window.m clamps panes to wopts_sidebar_max_width
   # literally, so a 0 default = invisible sidebar, #460). Replaces the old

@@ -111,6 +111,8 @@ struct WindowOptions {
     sidebarCollapsible: bool;  // default true
     sidebarCollapsed: bool;    // default false
     sidebarCanResize: bool;    // default true (false locks the pane width)
+    sidebarPresentation: string; // "" = tile (default); "overlay" = overlay mode
+    _sidebarPresentation_heap: bool;
     // Inspector (trailing NSSplitViewItem inspector; macOS only).
     inspectorUrl: string;        // empty = no inspector
     _inspectorUrl_heap: bool;
@@ -239,6 +241,8 @@ impl WindowOptions {
             sidebarCollapsible: true,
             sidebarCollapsed: false,
             sidebarCanResize: true,
+            sidebarPresentation: "",
+            _sidebarPresentation_heap: false,
             inspectorUrl: "",
             _inspectorUrl_heap: false,
             inspectorMaterial: "",
@@ -303,6 +307,7 @@ fn wopts_sidebar_collapsible(opts: WindowOptions*) -> bool { return opts.sidebar
 fn wopts_sidebar_collapsed(opts: WindowOptions*) -> bool { return opts.sidebarCollapsed; }
 fn wopts_sidebar_can_resize(opts: WindowOptions*) -> bool { return opts.sidebarCanResize; }
 fn wopts_sidebar_background_color(opts: WindowOptions*) -> string { return opts.sidebarBackgroundColor; }
+fn wopts_sidebar_presentation(opts: WindowOptions*) -> string { return opts.sidebarPresentation; }
 fn wopts_inspector_numeric_id(opts: WindowOptions*) -> int { return opts.inspectorNumericId; }
 fn wopts_inspector_url(opts: WindowOptions*) -> string { return opts.inspectorUrl; }
 fn wopts_inspector_material(opts: WindowOptions*) -> string { return opts.inspectorMaterial; }
@@ -482,6 +487,15 @@ fn window_opts_apply_json(opts: WindowOptions*, args: JsonValue*) -> void {
         let sc = (*sb).get_bool("collapsible"); if sc.is_some() { opts.sidebarCollapsible = sc.unwrap(); }
         let sco = (*sb).get_bool("collapsed");  if sco.is_some() { opts.sidebarCollapsed = sco.unwrap(); }
         let sr = (*sb).get_bool("resizable");   if sr.is_some() { opts.sidebarCanResize = sr.unwrap(); }
+        let sp = (*sb).get_string("presentation");
+        if sp.is_some() {
+            let src = sp.unwrap();
+            raw {
+                if (opts->_sidebarPresentation_heap && opts->sidebarPresentation) free((void*)opts->sidebarPresentation);
+                opts->sidebarPresentation = strdup((const char*)src);
+                opts->_sidebarPresentation_heap = 1;
+            }
+        }
     }
     let insp_opt = args.get_object("inspector");
     if insp_opt.is_some() {
@@ -715,6 +729,11 @@ fn window_opts_free(opts: WindowOptions*) -> void {
             free((void*)opts->sidebarMaterial);
             opts->sidebarMaterial = "";
             opts->_sidebarMaterial_heap = 0;
+        }
+        if (opts->_sidebarPresentation_heap && opts->sidebarPresentation) {
+            free((void*)opts->sidebarPresentation);
+            opts->sidebarPresentation = "";
+            opts->_sidebarPresentation_heap = 0;
         }
         if (opts->_inspectorUrl_heap && opts->inspectorUrl) {
             free((void*)opts->inspectorUrl);
