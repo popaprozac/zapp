@@ -719,6 +719,8 @@ export interface WindowHandle {
   /** Raise this window and bring the app to the foreground (macOS). */
   setFocus(): void;
   maximize(): void;
+  /** Toggle between standard and zoomed (macOS `zoom:` toggle). No-op on iOS. */
+  zoom(): void;
   setFullscreen(on: boolean): void;
   setAlwaysOnTop(on: boolean): void;
   setCloseGuard(enabled: boolean): void;
@@ -898,6 +900,7 @@ function createWindowHandle(windowId: string, sidebarOpts?: SidebarOptions, insp
     minimize()                        { windowAction("minimize", { windowId }); },
     setFocus()                        { windowAction("setFocus", { windowId }); },
     maximize()                        { windowAction("maximize", { windowId }); },
+    zoom()                            { windowAction("zoom", { windowId }); },
     setFullscreen(on: boolean)        { windowAction("setFullscreen", { windowId, on }); },
     setAlwaysOnTop(on: boolean)       { windowAction("setAlwaysOnTop", { windowId, on }); },
     setCloseGuard(on: boolean)        { windowAction("setCloseGuard", { windowId, on }); },

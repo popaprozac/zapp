@@ -43,6 +43,7 @@ proc darwin_window_show(handle: pointer) {.importc, cdecl.}
 proc darwin_window_hide(handle: pointer) {.importc, cdecl.}
 proc darwin_window_minimize(handle: pointer) {.importc, cdecl.}
 proc darwin_window_maximize(handle: pointer) {.importc, cdecl.}
+proc darwin_window_zoom(handle: pointer) {.importc, cdecl.}
 proc darwin_window_focus(handle: pointer) {.importc, cdecl.}
 proc darwin_window_force_close(handle: pointer) {.importc, cdecl.}
 proc darwin_window_set_title(handle: pointer, title: cstring) {.importc, cdecl.}
@@ -631,6 +632,7 @@ proc routeWindowAction(action: string, a: JsonNode, rawWindowId: int, payload: s
   of "hide": darwin_window_hide(h)
   of "minimize": darwin_window_minimize(h)
   of "maximize": darwin_window_maximize(h)
+  of "zoom": darwin_window_zoom(h)
   of "setFocus": darwin_window_focus(h)
   of "close":
     # clear the close guard first (router.zc:652-654): force_close is just

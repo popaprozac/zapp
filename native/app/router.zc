@@ -564,6 +564,7 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
     let is_minimize = action == "minimize";
     let is_set_focus = action == "setFocus";
     let is_maximize = action == "maximize";
+    let is_zoom = action == "zoom";
     let is_subscribe = action == "subscribe";
     let is_unsubscribe = action == "unsubscribe";
     let is_set_title = action == "setTitle";
@@ -1139,6 +1140,7 @@ fn router_handle_window_action(app: App*, action: string, payload: string, windo
     if is_minimize { window_minimize(win.handle); return; }
     if is_set_focus { window_focus(win.handle); return; }
     if is_maximize { window_maximize(win.handle); return; }
+    if is_zoom { window_zoom(win.handle); return; }
 
     if is_set_title {
         let title_opt = pre_args.get_string("title");

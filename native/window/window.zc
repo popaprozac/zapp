@@ -989,6 +989,8 @@ fn window_focus(handle: void*) -> void { darwin_win::darwin_window_focus(handle)
 @cfg(apple)
 fn window_maximize(handle: void*) -> void { darwin_win::darwin_window_maximize(handle); }
 @cfg(apple)
+fn window_zoom(handle: void*) -> void { darwin_win::darwin_window_zoom(handle); }
+@cfg(apple)
 fn window_set_title(handle: void*, title: string) -> void { darwin_win::darwin_window_set_title(handle, title); }
 @cfg(apple)
 fn window_set_size(handle: void*, w: int, h: int) -> void { darwin_win::darwin_window_set_size(handle, w, h); }
@@ -1044,6 +1046,8 @@ fn window_minimize(handle: void*) -> void { win_window::windows_window_minimize(
 fn window_focus(handle: void*) -> void { /* no-op on Windows — see #167 */ }
 @cfg(windows)
 fn window_maximize(handle: void*) -> void { win_window::windows_window_maximize(handle); }
+@cfg(windows)
+fn window_zoom(handle: void*) -> void { /* no NSWindow-style zoom toggle on Windows — see #167 */ }
 @cfg(windows)
 fn window_set_title(handle: void*, title: string) -> void { win_window::windows_window_set_title(handle, title); }
 @cfg(windows)

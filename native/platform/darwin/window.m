@@ -1197,6 +1197,14 @@ void darwin_window_maximize(void* handle) {
     if (![w isZoomed]) [w zoom:nil];
 }
 
+// Toggle zoom (standard / zoomed) — NSWindow zoom: toggles each call, so this
+// is the title-bar double-click behavior. Unlike darwin_window_maximize (which
+// only ever maximizes), this restores when already zoomed.
+void darwin_window_zoom(void* handle) {
+    NSWindow* w = (__bridge NSWindow*)handle;
+    [w zoom:nil];
+}
+
 void darwin_window_set_fullscreen(void* handle, bool on) {
     NSWindow* w = (__bridge NSWindow*)handle;
     bool isFS = (([w styleMask] & NSWindowStyleMaskFullScreen) != 0);

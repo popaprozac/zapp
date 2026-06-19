@@ -55,6 +55,7 @@ void darwin_window_set_position(void* handle, int32_t x, int32_t y);
 void darwin_window_minimize(void* handle);
 void darwin_window_focus(void* handle);
 void darwin_window_maximize(void* handle);
+void darwin_window_zoom(void* handle);
 void darwin_window_set_fullscreen(void* handle, bool on);
 void darwin_window_set_always_on_top(void* handle, bool on);
 
