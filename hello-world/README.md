@@ -40,7 +40,7 @@ hello-world/
 ```ts
 import {
   App, Window, WindowEvent, Events, Services,
-  Worker, SharedWorker, Dialog, Menu, ContextMenu,
+  Worker, Workers, Dialog, Menu, ContextMenu,
   Notification, Sync
 } from "@zappdev/runtime";
 

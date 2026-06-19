@@ -678,7 +678,7 @@ proc routeMessage*(msg: string, windowId: int) =
     return
 
   # t:5 WORKER envelope (protocol.zc:26) — new Worker(url) lifecycle
-  # (create/post/terminate/disconnect), routed to routeWorker
+  # (create/post/terminate), routed to routeWorker
   # (port of router.zc:router_handle_worker). Fire-and-forget.
   if f.t == 5:
     routeWorker(f.m, f.a, windowId)

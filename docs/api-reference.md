@@ -21,7 +21,7 @@ import {
   Services, type InvokeOptions, type CancellablePromise,
 
   // Workers
-  Worker, SharedWorker, SharedWorkerPort, Workers, type WorkerMessageEvent,
+  Worker, Workers, type WorkerMessageEvent,
 
   // Screen / displays
   Screen, type Display,
@@ -1268,10 +1268,16 @@ without Promise overhead.
 
 ---
 
-## `Worker` / `SharedWorker`
+## `Worker`
 
 Spawn JavaScript workers from a webview. (From inside another worker,
 use `new Worker()` the same way.)
+
+> **`SharedWorker` is not provided by `@zappdev/runtime`.** `new SharedWorker()`
+> (without a Zapp import) is the platform-native web API (WKWebView / WebView2).
+> For a Zapp-engine background worker that any window — or the backend — can
+> talk to, use a **headless** worker (`zapp.config.ts` `headless`) plus the
+> `Workers` namespace below; it's named, supervised, and app-scoped.
 
 ### `new Worker(scriptUrl: string, opts?: { name?: string })`
 
@@ -1303,22 +1309,6 @@ off();
 The channel API is sugar over `postMessage` / `onmessage` — no perf cost,
 just avoids a switch statement in your handler.
 
-### `new SharedWorker(scriptUrl: string)`
-
-```ts
-const sw = new SharedWorker("./shared.ts");
-sw.port.postMessage({ hello: "world" });
-sw.port.onmessage = (e) => console.log(e.data);
-```
-
-Shared workers are URL-keyed and refcounted — if two webviews call
-`new SharedWorker("./same-script.ts")`, they both talk to the same
-underlying worker instance. The last webview releasing it lets the
-worker tear down.
-
-Each webview gets its own `SharedWorkerPort` — messages posted from the
-worker via `worker.clients` broadcast to every connected port.
-
 ### `Workers.terminate(id: string): void`
 
 Terminate a worker by ID. Use this when you only have a string ID and
@@ -1331,13 +1321,8 @@ Recognised ID forms:
   `worker.terminate()`).
 - `"h-<key>"` — headless worker keyed by `zapp.config.ts`. For
   `headless: { sync: "..." }` the runtime ID is `"h-sync"`.
-- `"sw-N"` — **rejected at the native layer.** Shared workers are
-  refcounted — drop your last `SharedWorker` reference (or call
-  `port.disconnect()`) and the last release auto-terminates. Calling
-  `Workers.terminate("sw-…")` is a silent no-op rather than an error
-  so callers don't have to branch on worker type.
 
-Unknown IDs are also a silent no-op (native logs but doesn't throw).
+Unknown IDs are a silent no-op (native logs but doesn't throw).
 
 ```ts
 import { Workers } from "@zappdev/runtime";
@@ -1349,8 +1334,8 @@ Workers.terminate("h-sync");
 ### `Workers.list(): Promise<WorkerInfo[]>`
 
 Enumerate the active worker registry — a runtime debug / introspection
-API. Returns one `WorkerInfo` per live worker (headless, dedicated, and
-shared). Available from both webview and worker contexts; same shape
+API. Returns one `WorkerInfo` per live worker (headless and dedicated).
+Available from both webview and worker contexts; same shape
 either way (the webview round-trips through native IPC, a worker calls
 its host bridge directly — both resolve to the same array).
 

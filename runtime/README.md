@@ -35,7 +35,7 @@ import {
   Services, type InvokeOptions, type CancellablePromise,
 
   // Workers
-  Worker, SharedWorker, SharedWorkerPort, Workers, type WorkerMessageEvent,
+  Worker, Workers, type WorkerMessageEvent,
 
   // UI surfaces
   Dialog, type OpenFileOptions, type SaveFileOptions, type MessageOptions,
