@@ -10,6 +10,10 @@ test("renderAssetsNim emits an exportc table from staticRead, brotli on", () => 
   // staticRead of each .br, path relative to .zapp/ (where the module lives)
   expect(out).toContain('staticRead("assets/index.html.br")');
   expect(out).toContain('staticRead("assets/assets/app.js.br")');
+  // const (compile-time embed) + let (addressable, immutable) — NOT `let = staticRead`
+  // directly, which doesn't compile (staticRead needs a compile-time context).
+  expect(out).toContain('const a0Const = staticRead(');
+  expect(out).toContain('let a0: string = a0Const');
   // exportc symbols the .m reads
   expect(out).toContain("zapp_embedded_assets");
   expect(out).toContain("zapp_embedded_assets_count");

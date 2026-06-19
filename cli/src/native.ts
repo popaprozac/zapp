@@ -1097,6 +1097,7 @@ async function buildNativeNim(
   verbose: boolean,
   root: string,
   config: import("./config").ResolvedConfig,
+  optimize: boolean,
 ): Promise<void> {
   const fs = await import("node:fs/promises");
 
@@ -1118,6 +1119,10 @@ async function buildNativeNim(
     path.join(resolveBootstrapDir(), "codegen.ts")
   );
 
+  // prod = release build (`zapp build`/`package`): embed assets into the binary,
+  // no devtools, isDev=false. dev (`zapp dev`): filesystem assets, devtools on.
+  const prod = optimize;
+
   // Permissions manifest — mirrors the zc path (build-config.ts:74-85). The
   // resolved allow/active is baked into the Nim build config so permissions.nim
   // can importc zapp_build_permissions_json(). platform is macos for the Nim
@@ -1126,17 +1131,22 @@ async function buildNativeNim(
   const resolvedPerms = resolvePermissions(config.permissions);
   const permsObj = { platform: "macos", active: resolvedPerms.active, allow: resolvedPerms.allow };
 
+  // Custom protocols — mirrors the zc path (build-config.ts:106-107).
+  const protocols = (config.protocols ?? []).filter(s => /^[a-z][a-z0-9.+-]*$/.test(s));
+  const protocolsJson = JSON.stringify(protocols);
+
   const configNim = renderBuildConfigNim({
     initialUrl: "zapp://index.html",
     identifier: config.identifier ?? config.name ?? "com.zapp.helloworld",
     name: config.name ?? "Zapp",
-    assetRoot,
-    embedAssets: false, // filesystem asset path (sub-gate A); brotli deferred
-    devTools: 1,
-    isDev: true,
+    assetRoot: prod ? "" : assetRoot,
+    embedAssets: prod,
+    devTools: prod ? 0 : 1,
+    isDev: !prod,
     permissionsJson: JSON.stringify(permsObj),
     fsAllowlistJson: JSON.stringify(config.fs?.allow ?? []),
     fsPersistGrants: config.fs?.persistDialogGrants ?? false,
+    customProtocolsJson: protocolsJson,
   });
   await fs.writeFile(path.join(zappDir, "zapp_build_config.nim"), configNim, "utf-8");
 
@@ -1220,9 +1230,10 @@ async function buildNativeNim(
   }
 
   // Emit the Nim asset module. Dev stub (embed:false) keeps `import zapp_assets`
-  // resolving; Task 3 flips embed:true for prod. Must run before `nim c` so the
-  // generated .zapp/zapp_assets.nim is on --path:${zappDir}.
-  await generateAssetManifestNim(root, config.assetDir, { embed: false });
+  // resolving; prod (embed:true) bakes the real brotli-compressed table.
+  // Must run before `nim c` so the generated .zapp/zapp_assets.nim is on
+  // --path:${zappDir}.
+  await generateAssetManifestNim(root, config.assetDir, { embed: prod });
 
   // The Nim build root lives in the framework's native/ dir (nativeDir), not
   // the user project — same as the zc sources. `{.compile.}` paths inside
@@ -1271,7 +1282,7 @@ export async function compileNative(opts: CompileOptions): Promise<void> {
     if (!opts.config) {
       throw new Error("[zapp] Nim build path requires a resolved config (opts.config).");
     }
-    await buildNativeNim(nativeDir, output, verbose, root, opts.config);
+    await buildNativeNim(nativeDir, output, verbose, root, opts.config, opts.optimize);
     return;
   }
 

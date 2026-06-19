@@ -81,6 +81,10 @@ async function collectAssets(
 /**
  * Compress all files in distDir with brotli, generate a Zen-C file with embed directives.
  * Returns the path to the generated .zapp/zapp_assets.zc file.
+ *
+ * NOTE: This function writes the `.zapp/assets-embedded` marker (ASSETS_EMBEDDED_MARKER)
+ * as part of its normal flow. It MUST NOT be called from any dev or stub-emit path —
+ * only call it when assets are genuinely being baked into the binary (prod builds).
  */
 export async function generateAssetManifest(root: string, assetDir: string): Promise<string> {
   const zappDir = path.join(root, ".zapp");
@@ -191,13 +195,24 @@ export function renderAssetsNim(assets: AssetEntry[], compress: boolean): string
     s += "var zapp_embedded_assets_count* {.exportc.}: cint = cint(0)\n";
     return s;
   }
-  // `let` (not const) so unsafeAddr is valid; bytes are baked at compile time,
-  // the global lives for program lifetime (webview reads synchronously).
+  // `staticRead` requires a compile-time (const) context in Nim 2.x — calling
+  // it in a `let`/`var` initializer fails ("'staticRead' can only be used in
+  // compile-time context"). So read into a `const`, then bind a module-level
+  // `let` copy that `unsafeAddr` can target:
+  //   const a0Const = staticRead(...)  ← compile-time embed (rodata)
+  //   let a0: string = a0Const         ← addressable, immutable, program-lifetime
+  // `let` (not `var`) makes the buffer compiler-enforced immutable: the raw
+  // `ptr uint8` we hand the .m scheme handler can never be invalidated by a
+  // later reassignment. NOTE: this is a GC heap copy of the rodata bytes (≈1×
+  // the compressed-asset size resident at runtime) — unlike the zc `embed`
+  // path which points straight into rodata. Acceptable now; revisit if total
+  // embedded-asset size grows large.
   assets.forEach((a, i) => {
     // relPath is Vite-generated (hashed, [a-zA-Z0-9_-./]) → no quote escaping
     // needed for the staticRead literal; the cstring path below escapes anyway.
     const rel = "assets" + a.relPath + (compress ? ".br" : "");
-    s += `let a${i} = staticRead("${rel}")\n`;
+    s += `const a${i}Const = staticRead("${rel}")\n`;
+    s += `let a${i}: string = a${i}Const\n`;
   });
   s += `\nvar zapp_embedded_assets* {.exportc.}: array[${assets.length}, ZappEmbeddedAsset] = [\n`;
   assets.forEach((a, i) => {
@@ -242,5 +257,18 @@ export async function generateAssetManifestNim(
   const { assets, compress } = await collectAssets(root, assetDir);
   await Bun.write(outPath, renderAssetsNim(assets, compress));
   await Bun.write(markerPath, ""); // embed → marker
+
+  let totalOriginal = 0;
+  let totalCompressed = 0;
+  for (const a of assets) {
+    totalOriginal += a.originalSize;
+    totalCompressed += a.compressedSize ?? a.originalSize;
+  }
+  clog(1,
+    `compressed ${assets.length} assets: ` +
+    `${Math.round(totalOriginal / 1024)} KB → ${Math.round(totalCompressed / 1024)} KB ` +
+    `(${Math.round((1 - totalCompressed / totalOriginal) * 100)}% reduction)`
+  );
+
   return outPath;
 }

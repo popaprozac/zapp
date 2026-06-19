@@ -185,6 +185,11 @@ export interface BuildConfigNimOpts {
   permissionsJson: string;
   fsAllowlistJson: string;
   fsPersistGrants: boolean;
+  /** JSON array string of custom protocol schemes (e.g. `'["myapp"]'`).
+   *  Mirrors the zc path's `protocolsJson` (build-config.ts:107). Backed by a
+   *  module-level `let` per the cstring boundary rule (non-empty pointers must
+   *  not dangle). */
+  customProtocolsJson: string;
 }
 
 /**
@@ -206,6 +211,7 @@ let zappName = ${s(o.name)}
 let zappAssetRoot = ${s(o.assetRoot)}
 let zappPermissionsJson = ${s(o.permissionsJson)}
 let zappFsAllowlistJson = ${s(o.fsAllowlistJson)}
+let zappCustomProtocolsJson = ${s(o.customProtocolsJson)}
 proc zapp_build_initial_url(): cstring {.exportc, cdecl.} = zappInitialUrl.cstring
 proc zapp_build_identifier(): cstring {.exportc, cdecl.} = zappIdentifier.cstring
 proc zapp_build_name(): cstring {.exportc, cdecl.} = zappName.cstring
@@ -217,7 +223,7 @@ proc zapp_build_use_embedded_assets(): cint {.exportc, cdecl.} = return ${b(o.em
 proc zapp_build_csp(): cstring {.exportc, cdecl.} = "".cstring
 proc zapp_build_is_dev(): cint {.exportc, cdecl.} = return ${b(o.isDev)}.cint
 proc zapp_build_dev_tools_default(): cint {.exportc, cdecl.} = return ${o.devTools}.cint
-proc zapp_build_custom_protocols_json(): cstring {.exportc, cdecl.} = "[]".cstring
+proc zapp_build_custom_protocols_json(): cstring {.exportc, cdecl.} = zappCustomProtocolsJson.cstring
 proc zapp_build_webview_autoplay_without_user_gesture(): cint {.exportc, cdecl.} = return 0.cint
 proc zapp_build_webview_back_forward_gestures(): cint {.exportc, cdecl.} = return 0.cint
 proc zapp_build_webview_text_interaction_enabled(): cint {.exportc, cdecl.} = return 1.cint
