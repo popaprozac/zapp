@@ -3,7 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- viewport-fit=cover is REQUIRED on iOS for env(safe-area-inset-*) to
+         resolve to non-zero values. Without it the iOS faux top-bar's
+         padding-top: env(safe-area-inset-top) collapses to 0 and the bar can't
+         extend its opaque background under the status bar. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>kitchen-sink</title>
   </head>
   <body>

@@ -46,11 +46,17 @@ h2 { font-size: 16px; color: var(--text-h); margin: 0 0 8px; font-weight: 600; }
 .nav-item:hover { background: var(--accent-bg); }
 .nav-item.active { background: var(--accent-bg); color: var(--accent); font-weight: 600; }
 
-/* iOS-only top bar (rendered via JS when Platform.isIOS).
-   Sits at the very top of the content pane, padded below the status bar. */
+/* iOS-only faux nav bar (rendered via JS when Platform.isIOS).
+   Fixed to the very top, spanning full width and extending UP under the status
+   bar. The opaque/blur background + hairline border live on the OUTER element so
+   they paint the full box INCLUDING the safe-area padding region — the status
+   bar reads as part of the bar, and scrolled content passes UNDER it (not above).
+   The inner row holds the hamburger + title at the normal 44px bar height, below
+   the status bar. REQUIRES viewport-fit=cover in index.html, else
+   env(safe-area-inset-top) is 0 on iOS and the bar can't reach the status bar. */
 .ks-ios-topbar {
   position: fixed; top: 0; left: 0; right: 0; z-index: 50;
-  /* Push content below the status-bar notch */
+  /* Extend the bar's box up under the status bar (notch / Dynamic Island). */
   padding-top: env(safe-area-inset-top);
   background: rgba(255, 255, 255, 0.82);
   backdrop-filter: blur(12px) saturate(1.4);

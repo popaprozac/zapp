@@ -124,6 +124,27 @@ static UINavigationController* zapp_ios_collapsed_nav(UISplitViewController* svc
     return nil;
 }
 
+// Re-arm the interactive-pop (swipe-back) gesture on the combined collapsed nav.
+// A hidden nav bar disables this gesture by default, so on chrome-less iPhone we
+// re-enable it and route it through our delegate (which gates it to "only when
+// there's something to pop"). Idempotent — safe to call repeatedly.
+//
+// Called from BOTH `splitViewControllerDidCollapse:` AND
+// `darwin_sidebar_show_content`: on iPhone the split is often created ALREADY
+// collapsed, so `splitViewControllerDidCollapse:` may never fire at launch and
+// the re-arm there alone would be missed. Re-arming at navigation time (after we
+// push/show the content column) guarantees the gesture is live whenever a
+// content VC is actually on the stack. Lazily captures collapsedNav if it wasn't
+// set by the didCollapse path.
+static void zapp_ios_sidebar_rearm_pop(ZappIOSSidebarController* c) {
+    if (!c) return;
+    UINavigationController* nav = c.collapsedNav ?: zapp_ios_collapsed_nav(c.splitVC);
+    if (!nav) return;
+    c.collapsedNav = nav;
+    nav.interactivePopGestureRecognizer.enabled = YES;
+    nav.interactivePopGestureRecognizer.delegate = c;
+}
+
 // --- Event fan-out (mirrors darwin/sidebar.m's zapp_sidebar_emit) ---------
 //
 // dispatchWindowEvent's first arg is the target window id ("win-<hostId>");
@@ -176,8 +197,7 @@ static void zapp_ios_sidebar_sync_collapse(ZappIOSSidebarController* c, BOOL col
         // The hidden nav bar disables UIKit's interactive-pop gesture; re-arm it
         // so chrome-less still gets edge-swipe-back. Our delegate gates it to
         // "only when there's something to pop" (avoids a no-op swipe at root).
-        nav.interactivePopGestureRecognizer.enabled = YES;
-        nav.interactivePopGestureRecognizer.delegate = self;
+        zapp_ios_sidebar_rearm_pop(self);
     }
     zapp_ios_sidebar_sync_collapse(self, NO);
 }
@@ -283,12 +303,21 @@ void darwin_sidebar_show_content(int32_t window_id) {
         if (!c || !c.splitVC) return;
         BOOL compact = zapp_ios_sidebar_is_compact(c);
         if (@available(iOS 16.0, *)) {
-            if (compact) [c.splitVC showColumn:UISplitViewControllerColumnSecondary];
-            else [c.splitVC hideColumn:UISplitViewControllerColumnPrimary];
+            if (compact) {
+                [c.splitVC showColumn:UISplitViewControllerColumnSecondary];
+                // The split may have been created already-collapsed on iPhone, so
+                // splitViewControllerDidCollapse: (which normally re-arms the
+                // swipe-back gesture) may never have fired. Re-arm defensively now
+                // that a content VC is on the stack.
+                zapp_ios_sidebar_rearm_pop(c);
+            } else {
+                [c.splitVC hideColumn:UISplitViewControllerColumnPrimary];
+            }
         } else if (compact) {
             UINavigationController* nav = c.collapsedNav ?: zapp_ios_collapsed_nav(c.splitVC);
             if (nav && c.contentVC && nav.topViewController != c.contentVC)
                 [nav pushViewController:c.contentVC animated:YES];
+            zapp_ios_sidebar_rearm_pop(c);  // defensive re-arm (see above)
         } else {
             c.splitVC.preferredDisplayMode = UISplitViewControllerDisplayModeSecondaryOnly;
         }
