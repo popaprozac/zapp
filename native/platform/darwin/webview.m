@@ -3,7 +3,23 @@
 
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
+#import <compression.h>
 #import "webview.h"
+
+// Embedded asset struct — local mirror of the layout defined in the
+// generated asset table (zc: zapp_assets.zc; Nim: zapp_assets.nim, both
+// from cli/src/assets.ts). Weak externs let the final link succeed even
+// when assets aren't embedded (dev mode → a count-0 stub table, or no
+// table at all). Mirrors native/platform/ios/webview.m.
+typedef struct {
+    const char* path;
+    uint8_t* data;
+    int len;
+    int uncompressed_len;
+    int is_brotli;
+} ZappEmbeddedAsset;
+extern ZappEmbeddedAsset zapp_embedded_assets[] __attribute__((weak));
+extern int zapp_embedded_assets_count __attribute__((weak));
 
 // --- Forward declarations from Zen-C / other .m files ---
 extern void* app_get_active(void);
@@ -180,11 +196,13 @@ static NSString* zapp_asset_root_path(void) {
         return;
     }
 
-    // Embedded asset lookup (brotli decompression)
-    if (zapp_build_use_embedded_assets()) {
-        #ifdef ZAPP_EMBEDDED_ASSET_DEFINED
-        extern ZappEmbeddedAsset zapp_embedded_assets[];
-        extern int zapp_embedded_assets_count;
+    // Embedded asset lookup (brotli decompression). The weak-symbol address
+    // check (not a compile-time #ifdef — that can't see a macro #define'd in
+    // the generated table's *separate* translation unit) guards the case where
+    // no asset table is linked; the generated table always links the symbols
+    // (count 0 in dev), so this is true in any real build and falls through to
+    // the filesystem when count is 0 or the asset isn't found. Mirrors ios/webview.m.
+    if (zapp_build_use_embedded_assets() && &zapp_embedded_assets_count != NULL) {
         NSString* lookupPath = [@"/" stringByAppendingString:rel];
         for (int i = 0; i < zapp_embedded_assets_count; i++) {
             NSString* assetPath = [NSString stringWithUTF8String:zapp_embedded_assets[i].path];
@@ -211,7 +229,6 @@ static NSString* zapp_asset_root_path(void) {
                 return;
             }
         }
-        #endif
     }
 
     // Filesystem fallback (dev mode or asset not found in embedded)
