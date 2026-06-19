@@ -289,10 +289,40 @@ zapp.config.ts / app code: sidebar: { url, width, presentation: "overlay" }
 - **Inspector sheet detent config** on iOS — v1 uses default `[medium, large]`
   detents; a future `InspectorOptions` detent field can override (cf.
   [[project_ios_custom_detents]]).
+- **Native iOS toolbar primitive** (UINavigationBar/UIToolbar, the iOS parallel
+  to macOS NSToolbar) — surfaced by the Phase-A smoke (the kitchen-sink "‹ Menu"
+  reveal stays an HTML showcase for now). Tracked as a future feature.
 - Custom hamburger/overlay drawer on iPhone (non-conventional; not faked).
 - `.displace` split behavior (trivial future enum addition).
 - Runtime `setPresentation()` (create-time only for v1).
 - Windows split-view presentation (tracked separately under the Windows gap).
+
+## Phase-A smoke findings (2026-06-19) → remediation (A6/A7)
+
+Phase A passed on macOS; iPad/iPhone smoke surfaced fixes folded in as a
+remediation pass before Phase B:
+
+- **A6 (native):**
+  1. *Overlay toggle state desync (real bug):* tapping outside dismisses the iPad
+     overlay, but native state only updated on explicit show/hide → a stale
+     "expanded" state caused a double-click. Fix: make `darwin_sidebar_toggle`
+     decide from the live split `displayMode` on regular width (keep
+     `lastCollapsedEmit` for compact), and emit `sidebar-collapsed` when the
+     system dismisses the overlay.
+  2. *iPad edge-swipe reveal:* set `presentsWithGesture` explicitly; investigate
+     the content WKWebView eating the pan. Best-effort — the button is the
+     guaranteed affordance.
+  3. *iPhone swipe-back (chrome-less):* the hidden nav bar disables UIKit's
+     interactive-pop gesture; re-arm `interactivePopGestureRecognizer` (enabled +
+     permissive delegate when stack depth > 1) so edge-swipe-back works without a
+     toolbar.
+- **A7 (kitchen-sink):** replace the bare "‹ Menu" with a static top-bar showcase
+  (HTML/CSS) so the reveal affordance looks intentional. Native iOS toolbar
+  primitive is deferred (Out of scope).
+
+Confirmed by-design (no action): inspector toggle is a no-op until Phase B;
+`setCollapsible`/`setResizable` are documented iOS no-ops (no UISplitViewController
+API to lock the divider / gate collapse); iPhone sidebar presentation is a no-op.
 
 ## Files touched
 
