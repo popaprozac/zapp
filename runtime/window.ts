@@ -255,9 +255,33 @@ export interface SidebarOptions {
   backgroundColor?: string;
   /** Background material. Default Material.Sidebar (liquid glass on macOS 26+). */
   material?: Material;
+  /**
+   * How the sidebar is presented when there's room for both columns.
+   * Maps to UISplitViewController's split behavior.
+   *
+   * - "tile" (default): sidebar sits beside content (the classic split).
+   * - "overlay": sidebar floats OVER content as a flyout; dims content
+   *   behind it; tapping outside dismisses it.
+   *
+   * Platform behavior:
+   * - iPad (regular width): fully honored — "overlay" is the native flyout.
+   * - macOS: NO-OP. NSSplitViewController tiles only (slide-in collapse,
+   *   never floats over content); the sidebar stays tiled-collapsible.
+   * - iPhone (compact width): NO-OP. The split always collapses to a
+   *   master-detail navigation stack regardless of this value.
+   *
+   * Create-time only. Default "tile".
+   */
+  presentation?: "tile" | "overlay";
 }
 
-/** Options for a native inspector (trailing NSSplitViewItem) attached to a window. */
+/** Options for a native inspector pane attached to a window.
+ *  Platform behavior:
+ *  - macOS / iPad (regular width): a trailing pane beside the content.
+ *  - iPhone (compact width): presented as a sheet (summon-only; never shown
+ *    at launch). Detents default to medium+large.
+ *  Width/min/max/resizable apply to the pane; on the iPhone sheet they are
+ *  ignored (the sheet is full-width with system detents). */
 export interface InspectorOptions {
   /** Entry URL/route for the inspector webview (resolved like sidebar.url). Required. */
   url: string;
@@ -664,16 +688,20 @@ export interface SidebarHandle {
   expand(): void;
   setWidth(px: number): void;
   /**
-   * Reveal the content (secondary) column. The iPhone master-detail move:
-   * after a sidebar item is tapped, drive the collapsed nav stack to the
-   * full-bleed content pane. No-op on macOS / iPad-regular where both panes
-   * are always side-by-side.
+   * Reveal the content (secondary) column / collapse the sidebar.
+   * - iPhone (compact): drives the collapsed nav stack to the content pane.
+   * - iPad (regular): hides the sidebar — `tile` collapses it beside content,
+   *   `overlay` dismisses the flyout.
+   * - macOS: collapses the tiled sidebar.
+   * Only a true no-op when the window has no sidebar.
    */
   showContent(): void;
   /**
-   * Reveal the sidebar (primary) column — the "back" of master-detail.
-   * Pair with an HTML back button (and the system edge-swipe) on iPhone.
-   * No-op on macOS / iPad-regular (panes always visible).
+   * Reveal the sidebar (primary) column.
+   * - iPhone (compact): pops the nav stack back to the sidebar ("back").
+   * - iPad (regular): shows the sidebar — `tile` slides it beside content,
+   *   `overlay` floats the flyout in.
+   * - macOS: expands the tiled sidebar.
    */
   showSidebar(): void;
   /** Allow/disallow the user collapsing the pane (system behaviors: divider
@@ -687,7 +715,8 @@ export interface SidebarHandle {
   readonly width: number;
 }
 
-/** A handle to the inspector attached to a window. Mirrors SidebarHandle. */
+/** Handle to a window's inspector. On iPhone the pane ops present/dismiss a
+ *  sheet; on iPad/macOS they show/hide the trailing pane. */
 export interface InspectorHandle {
   toggle(): void;
   collapse(): void;
