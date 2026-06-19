@@ -2,8 +2,6 @@
 # Verifies service_invoke_native works correctly when called from a raw
 # pthread (not a Nim-created thread) with foreign-thread GC set up — the
 # exact production path: snapshot built on main thread, dispatch on worker.
-# NOTE: hardcoded provider .o path — tracked follow-up (portability).
-{.passL: "/Users/zach/code/zapp/kitchen-sink/.zapp/zjson_provider.o".}
 import std/posix
 import std/json
 import ../apptypes

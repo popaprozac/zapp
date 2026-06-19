@@ -175,11 +175,10 @@ proc app_get_active(): pointer {.exportc, cdecl.} = addr gActiveAppSentinel
 # zjs worker engine (native/worker/engines/zjs.c — REUSED UNTOUCHED).
 #
 # Compiled into the Nim build to benchmark the worker→native fast path. zjs.c
-# builds/reads JsonValue trees via the JsonValue C-ABI provided by
-# .zapp/zjson_provider.o (linked through `--passL:<...>/zjson_provider.o`, which
-# buildNativeNim appends to the `nim c` args — the path is the USER project's
-# .zapp dir, unknown at framework-compile time, so it can't be a {.passL.}
-# literal here). zjs's runtime is libzjs.dylib (vendor/zjs/build).
+# builds/reads JsonValue trees via the JsonValue C-ABI, now provided by
+# native/nim/jsonvalue.nim (pulled into the build via worker_service's import),
+# so there is no external provider object and no provider `--passL`. zjs's
+# runtime is libzjs.dylib (vendor/zjs/build).
 #
 # CALL-form {.compile.} (third arg = per-file clang flags). zjs.c needs zjs's
 # own header (vendor/zjs/include/zjs.h) — passed both as a {.passC.} (so other

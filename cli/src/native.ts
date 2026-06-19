@@ -1201,47 +1201,10 @@ async function buildNativeNim(
     // dist/_workers absent (no workers configured) — nothing to stage.
   }
 
-  // Emit the JsonValue C-ABI object for the Nim build to link against.
-  //
-  // zjs.c (reused untouched) builds/reads JsonValue trees via the zc
-  // std/json + json_safe + json_builder C-ABI. The Nim path does NO zc
-  // compilation, so those symbols would be absent → link error. We compile
-  // a tiny provider .zc to an object and drop it at .zapp/zjson_provider.o;
-  // a later step (passL in native/nim/zapp.nim) links it in. Both the zc and
-  // Nim builds then share the IDENTICAL JsonValue impl.
-  //
-  // zc's `-c` (compile-only) is broken for the stdlib generic
-  // instantiations json_safe pulls in (map.zc/vec.zc type-mismatch errors
-  // that do NOT occur in a full `zc build`), so we transpile to C and
-  // clang -c it. The emitted C is self-contained (standard headers only,
-  // no main) — recorded working command, do not "simplify" to `zc -c`.
-  const providerZc = path.join(nativeDir, "nim", "zjson_provider.zc");
-  const providerC = path.join(zappDir, "zjson_provider.c");
-  const providerO = path.join(zappDir, "zjson_provider.o");
-  if (!(await Bun.file(providerZc).exists())) {
-    throw new Error(`[zapp] Nim build: JsonValue provider missing at ${providerZc}`);
-  }
-  const transpile = Bun.spawn(
-    ["zc", "transpile", providerZc, "-o", providerC],
-    { cwd: nativeDir, stdout: verbose ? "inherit" : "ignore", stderr: "inherit" },
-  );
-  const transpileCode = await transpile.exited;
-  if (transpileCode !== 0) {
-    throw new Error(
-      `[zapp] Nim build: 'zc transpile' of the JsonValue provider failed ` +
-      `(exit ${transpileCode}). Is zc on PATH? (zc v0.4.4+ expected)`,
-    );
-  }
-  const clangO = Bun.spawn(
-    ["clang", "-c", providerC, "-o", providerO],
-    { cwd: nativeDir, stdout: verbose ? "inherit" : "ignore", stderr: "inherit" },
-  );
-  const clangCode = await clangO.exited;
-  if (clangCode !== 0) {
-    throw new Error(
-      `[zapp] Nim build: clang -c of the JsonValue provider failed (exit ${clangCode}).`,
-    );
-  }
+  // JsonValue C-ABI: provided by native/nim/jsonvalue.nim (compiled into the Nim
+  // build via the module graph — worker_service.nim imports it). No zc transpile,
+  // no external .o. zjs.c links the nine JsonValue__*/json_*_owned/json_free_tree
+  // symbols straight from the Nim binary.
 
   // Emit the Nim asset module. Dev stub (embed:false) keeps `import zapp_assets`
   // resolving; prod (embed:true) bakes the real brotli-compressed table.
@@ -1254,11 +1217,6 @@ async function buildNativeNim(
   // zapp.nim resolve relative to that file, so cwd doesn't matter for them.
   // `--path:<.zapp>` makes the generated modules importable by name.
   const nimRoot = chooseNimRoot(root);
-  // Link the JsonValue C-ABI provider object emitted just above. zjs.c (compiled
-  // into the Nim build via {.compile.} in zapp.nim) builds/reads JsonValue trees
-  // through this object's symbols. Passed here rather than a {.passL.} literal in
-  // zapp.nim because the path is the USER project's .zapp dir, unknown at
-  // framework-compile time.
   // --threads:on — zjs spawns a pthread per worker; ORC must be thread-safe.
   const nimFrameworkDir = path.join(nativeDir, "nim");
 
@@ -1277,7 +1235,7 @@ async function buildNativeNim(
   } catch { /* editor cfg is non-fatal */ }
 
   const args = ["c", "--cc:clang", "--mm:orc", "--threads:on", "-d:release", "--opt:size",
-                `--path:${zappDir}`, `--path:${nimFrameworkDir}`, `--passL:${providerO}`,
+                `--path:${zappDir}`, `--path:${nimFrameworkDir}`,
                 `-o:${output}`, ...(verbose ? [] : ["--hints:off"]), nimRoot];
   const proc = Bun.spawn(["nim", ...args], { cwd: nativeDir, stdout: "inherit", stderr: "inherit" });
   const code = await proc.exited;
