@@ -7,7 +7,8 @@
 ## JS delivery itself is delegated to the UNTOUCHED window.m function
 ## `zapp_dispatch_event_to_js` (importc, gated on the per-window JS-subscription
 ## bitmask) — Nim owns the registries + the dispatch DECISIONS, not the IIFE
-## synthesis. Worker (backend) fan-out is a deferred no-op (Batch 4/7).
+## synthesis. Worker (backend) fan-out is wired (Batch 4 / 87d745a), gated on the
+## per-window backend-listener bitmask (set via the zjs subscribeWindowEvent host fn).
 ##
 ## Runs on the Cocoa MAIN thread (NSWindow delegate), never a worker pthread —
 ## normal ORC / allocation is fine here.
@@ -84,7 +85,7 @@ proc zapp_dispatch_event_to_js(windowId, eventId, w, h, x, y: cint) {.importc, c
 #   Layer 1   native callback (can CANCEL),
 #   Layer 1.5 JS close guard (dispatch + CANCEL),
 #   Layer 2   targeted JS bridge (gated on the JS-subscription bitmask),
-#   Layer 3   backend worker fan-out (deferred no-op).
+#   Layer 3   backend worker fan-out (gated on the backend-listener bitmask).
 proc zapp_dispatch_event*(windowId, eventId, w, h, x, y: cint): cint {.exportc, cdecl.} =
   if not inBounds(windowId, eventId): return EventResult.Allow.cint
 

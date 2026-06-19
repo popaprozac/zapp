@@ -6,7 +6,7 @@
 ## wake / screen-lock / power-state / etc.).
 ##
 ##   Layer 1  native Zen-C/Nim app callbacks (registered via zapp_app_on),
-##   Layer 2  broadcast to every active worker — DEFERRED no-op (Batch 4/7),
+##   Layer 2  broadcast to every active worker (wired Batch 4 / 87d745a),
 ##   Layer 3  forward to all WebViews via the UNTOUCHED webview.m
 ##            `darwin_webview_eval_all` (importc) with the `_onEvent` IIFE,
 ##            skipping STARTED(100)/SHUTDOWN(101) (no WebViews exist yet/anymore).
@@ -74,7 +74,7 @@ proc appEventJsName(eventId: cint): string =
 # --- Unified app dispatch --------------------------------------------------
 # Called by the platform layer (.m). Mirrors app_events.zc:42 exactly:
 #   Layer 1  native callbacks (returns the count fired),
-#   Layer 2  worker broadcast (deferred no-op),
+#   Layer 2  worker broadcast (wired Batch 4 / 87d745a),
 #   Layer 3  WebView fan-out (skip STARTED/SHUTDOWN; gated on the name map).
 proc zapp_app_dispatch(eventId: cint, data: cstring): cint {.exportc, cdecl.} =
   let idx = eventId - ZAPP_APP_EVENT_BASE

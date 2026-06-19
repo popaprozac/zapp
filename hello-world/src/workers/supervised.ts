@@ -11,7 +11,7 @@
 //   - 2nd crash:  worker:crashed → worker:restarted
 //   - 3rd crash:  worker:crashed → worker:gave-up
 
-import { Events, Sync, Workers } from "@zappdev/runtime";
+import { Events, Sync, WindowEvent, Workers } from "@zappdev/runtime";
 // `workerModules` in zapp.config.ts (now ["fetch"]) drives the
 // install — no manual side-effect import needed here.
 
@@ -83,11 +83,11 @@ Events.on("relay-to-ticker", () => {
 // were discovered by grepping `_onEvent(` and `_dispatchAppEvent`
 // translations in the worker bootstrap.
 
-// Window event — native/window/callbacks.zc:134 (`_onEvent('window:event', …)`).
-// Payload: { windowId, event, w, h, x, y }. Fires for resize/move/focus/etc.
-// when the host has subscribed the worker to that window+event bitmask.
-Events.on("window:event", (data: any) => {
-  console.log(`window:event received: ${JSON.stringify(data)}`);
+// Window lifecycle event — now delivered to the specific typed listener.
+// Payload: { windowId, event, w, h, x, y }. Arms the backend listener via
+// Events.on -> subscribeWindowEvent, then receives on resize.
+Events.on(WindowEvent.RESIZE, (data: any) => {
+  console.log(`window:resize received: ${JSON.stringify(data)}`);
 });
 
 // Global shortcut — native/platform/darwin/shortcuts.m:205
