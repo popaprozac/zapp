@@ -180,6 +180,15 @@ proc wopts_inspector_numeric_id(p: pointer): int32 {.exportc, cdecl.} = opt(p).i
 # toolbar accessor — unused feature; "" json short-circuits darwin_toolbar_attach.
 proc wopts_toolbar_json(p: pointer): cstring {.exportc, cdecl.} = opt(p).toolbarJson.cstring
 
+# sheet accessors — read by ios/window.m's darwin_window_create to configure a
+# UISheetPresentationController (presentation style, detents bitmask, grabber).
+# macOS' darwin/window.m never reads these (sheets are a UIKit feature), so the
+# macOS link doesn't reference them; the iOS link does, hence these {.exportc.}s.
+# Mirror window.zc:316-318 (wopts_sheet_presentation/detents/grabber).
+proc wopts_sheet_presentation(p: pointer): int32 {.exportc, cdecl.} = opt(p).sheetPresentation
+proc wopts_sheet_detents(p: pointer): int32 {.exportc, cdecl.} = opt(p).sheetDetents
+proc wopts_sheet_grabber(p: pointer): bool {.exportc, cdecl.} = opt(p).sheetGrabber
+
 # --- Window creation --------------------------------------------------------
 proc darwin_window_create(opts: pointer): pointer {.importc, cdecl.}
 proc darwin_window_register_numeric_id(handle: pointer, id: int32) {.importc, cdecl.}

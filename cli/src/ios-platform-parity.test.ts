@@ -80,3 +80,131 @@ test("the lint actually sees the darwin_* surface (sanity: non-empty)", () => {
   // vacuously pass (empty referenced set → no violations possible).
   expect(darwinSymbolsReferencedInZc().size).toBeGreaterThan(50);
 });
+
+// ---------------------------------------------------------------------------
+// Nim-layer cross-link parity (added when the M1 iOS build gate landed).
+//
+// The `darwin_*`/.m parity above catches one bug class: a darwin_* defined in
+// darwin/*.m but missing in ios/*.m. The iOS Nim build surfaced a SECOND class:
+// an `ios/*.m` file `extern`-references a C symbol that is NOT defined in ANY
+// `.m` — it's provided by the Nim layer's `{.exportc.}` (e.g. `wopts_sheet_*`
+// from window.nim, `fs_grant_path` from fs.nim). On macOS the equivalent
+// darwin/*.m doesn't reference those iOS-only features, so the macOS link never
+// needs them and a missing Nim `{.exportc.}` goes unnoticed — until the iOS link
+// fails with "Undefined symbols". This lint asserts every such cross-layer
+// extern in ios/*.m is satisfied by either an `.m` definition OR a Nim
+// `{.exportc.}` (the Nim port forgetting to export it is the exact regression).
+// ---------------------------------------------------------------------------
+
+// `extern` declarations whose name is actually a C preprocessor/attribute token,
+// not a real cross-layer symbol (regex noise — e.g. `extern "C"` blocks or an
+// `__attribute__((...))` that follows an `extern` return type).
+const EXTERN_NOISE = new Set(["__attribute__"]);
+
+// Every `extern <type> <name>(` C-function declaration in ios/*.m. These are the
+// symbols ios/*.m reaches OUT to (provided by the Nim/zc layer or another .m).
+function externFnsDeclaredInIosM(): Set<string> {
+  const syms = new Set<string>();
+  const glob = new Bun.Glob("**/*.m");
+  const dir = path.join(ROOT, "native/platform/ios");
+  for (const f of glob.scanSync({ cwd: dir })) {
+    const src = readFileSync(path.join(dir, f), "utf8");
+    // `extern` + a return type (word chars / spaces / `*`) + the name + `(`.
+    for (const m of src.matchAll(/\bextern\s+[A-Za-z_][\w *]*\b([A-Za-z_]\w*)\s*\(/g)) {
+      if (!EXTERN_NOISE.has(m[1])) syms.add(m[1]);
+    }
+  }
+  return syms;
+}
+
+// All C symbol names provided by a Nim `{.exportc.}` — across the framework's
+// `native/nim/**.nim` AND the CLI-generated Nim emitted from `build-config.ts`
+// (zapp_build_config.nim / zapp_bootstrap.nim are rendered, never on disk, so a
+// disk scan alone would miss zapp_build_* / zapp_webview_bootstrap_script).
+//
+// Nim proc signatures + pragmas span multiple lines, so a per-symbol same-line
+// regex is too brittle (it false-negatives on `proc foo(a,\n b) {.exportc.}` and
+// on long names whose pragma sits on a continuation line). Instead: parse the
+// blob ONCE, walking every `{.…exportc…}` pragma block and attaching it to the
+// nearest preceding `proc <name>`; also collect explicit `exportc: "<name>"`
+// renames. Returns the full provided set; callers intersect with their candidates.
+function nimExportcProvidedSymbols(): Set<string> {
+  const provided = new Set<string>();
+  const sources: string[] = [];
+  const nimGlob = new Bun.Glob("native/nim/**/*.nim");
+  for (const rel of nimGlob.scanSync({ cwd: ROOT })) {
+    sources.push(readFileSync(path.join(ROOT, rel), "utf8"));
+  }
+  // The CLI-generated Nim modules' renderers (zapp_build_* + bootstrap getters).
+  sources.push(readFileSync(path.join(ROOT, "cli/src/build-config.ts"), "utf8"));
+  const blob = sources.join("\n");
+
+  // Explicit C-name renames: `{.exportc: "the_c_name"...}`.
+  for (const m of blob.matchAll(/exportc:\s*"([A-Za-z_]\w*)"/g)) provided.add(m[1]);
+
+  // Default exportc (C name == proc name): find each `proc <name>` and, if an
+  // `exportc` pragma appears before the proc BODY starts (`=` for a Nim def or
+  // the `{.exportc.}` literal in the renderer templates), record <name>. We
+  // scan a bounded window after the proc name so an unrelated later exportc
+  // can't bleed in.
+  for (const m of blob.matchAll(/\bproc\s+([A-Za-z_]\w*)\*?\s*\(/g)) {
+    const name = m[1];
+    const start = m.index ?? 0;
+    // Window = up to the next `proc ` keyword or 400 chars, whichever first.
+    const rest = blob.slice(start, start + 400);
+    const nextProc = rest.indexOf("\nproc ", 1);
+    const windowText = nextProc >= 0 ? rest.slice(0, nextProc) : rest;
+    if (/\bexportc\b/.test(windowText)) provided.add(name);
+  }
+  return provided;
+}
+
+// Which of `candidates` are provided by a Nim `{.exportc.}`.
+function nimExportcSymbols(candidates: Set<string>): Set<string> {
+  const all = nimExportcProvidedSymbols();
+  const found = new Set<string>();
+  for (const name of candidates) if (all.has(name)) found.add(name);
+  return found;
+}
+
+test("every cross-layer extern in ios/*.m is satisfied by an .m def or a Nim {.exportc.}", () => {
+  const externs = externFnsDeclaredInIosM();
+  const definedIos = definedSymbolsIn("native/platform/ios", externs);
+  const definedDarwin = definedSymbolsIn("native/platform/darwin", externs);
+  const fromNim = nimExportcSymbols(externs);
+
+  // A cross-layer extern is unsatisfied when no .m defines it (ios or darwin —
+  // darwin/ never compiles into the iOS link, but a same-named def there is a
+  // strong signal it's an .m-owned symbol, not a Nim one) AND the Nim layer
+  // doesn't {.exportc.} it. That's the iOS-link "Undefined symbols" bug.
+  const violations = [...externs]
+    .filter((s) => !definedIos.has(s) && !definedDarwin.has(s) && !fromNim.has(s))
+    .sort();
+
+  if (violations.length > 0) {
+    throw new Error(
+      "iOS Nim-link parity: these symbols are `extern`-referenced from " +
+        "native/platform/ios/*.m but are defined NEITHER in any *.m NOR by a Nim " +
+        "`{.exportc.}` — the iOS Nim build will fail to link. Add the missing Nim " +
+        "`{.exportc.}` (mirror window.nim's wopts_* / fs.nim's fs_grant_path):\n  - " +
+        violations.join("\n  - "),
+    );
+  }
+  expect(violations).toEqual([]);
+});
+
+test("the Nim-link lint sees the ios/*.m extern surface (sanity: non-empty)", () => {
+  // The fix that landed with this lint: wopts_sheet_* + fs_grant_path are
+  // cross-layer externs now provided by Nim {.exportc.}. Assert they're seen so
+  // a glob/regex regression can't make the lint vacuously pass.
+  const externs = externFnsDeclaredInIosM();
+  expect(externs.size).toBeGreaterThan(5);
+  expect(externs.has("fs_grant_path")).toBe(true);
+  expect(externs.has("wopts_sheet_presentation")).toBe(true);
+  // And they ARE resolved by the Nim layer (the regression this gate guards).
+  const fromNim = nimExportcSymbols(externs);
+  expect(fromNim.has("fs_grant_path")).toBe(true);
+  expect(fromNim.has("wopts_sheet_presentation")).toBe(true);
+  expect(fromNim.has("wopts_sheet_detents")).toBe(true);
+  expect(fromNim.has("wopts_sheet_grabber")).toBe(true);
+});

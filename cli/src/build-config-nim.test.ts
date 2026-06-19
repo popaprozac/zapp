@@ -149,9 +149,10 @@ test("renderPlatformNim (macos) reproduces today's darwin pragmas", () => {
   expect(out).toMatch(/\{\.compile\("\/.*\/platform\/darwin\/window\.m", "-fobjc-arc"\)\.\}/);
   expect(out).toMatch(/\{\.compile\("\/.*\/platform\/darwin\/webview\.m", "-fobjc-arc"\)\.\}/);
   expect(out).toMatch(/\{\.compile\("\/.*\/platform\/darwin\/sync\.m", "-fobjc-arc"\)\.\}/);
-  // clipboard.m is compiled by clipboard.nim, NOT here — must not be emitted
-  // (double-compile would break the macOS link with duplicate symbols).
-  expect(out).not.toContain("clipboard.m");
+  // clipboard.m is now owned HERE (target-correct via getPlatformSources), not
+  // clipboard.nim — on macOS that's darwin/clipboard.m. clipboard.nim dropped its
+  // own `{.compile.}`, so only one source compiles it (no duplicate symbols).
+  expect(out).toMatch(/\{\.compile\("\/.*\/platform\/darwin\/clipboard\.m", "-fobjc-arc"\)\.\}/);
   // NO ios sources in the macOS branch.
   expect(out).not.toContain("/platform/ios/");
   // Full macOS framework set (current zapp.nim line 12), verbatim.
@@ -184,8 +185,9 @@ test("renderPlatformNim (ios-simulator) emits ios sources + UIKit + libzjs_embed
   expect(out).toMatch(/\{\.compile\("\/.*\/platform\/ios\/platform\.m", "-fobjc-arc"\)\.\}/);
   expect(out).toMatch(/\{\.compile\("\/.*\/platform\/ios\/window\.m", "-fobjc-arc"\)\.\}/);
   expect(out).toMatch(/\{\.compile\("\/.*\/platform\/ios\/webview\.m", "-fobjc-arc"\)\.\}/);
-  // clipboard.m still owned by clipboard.nim — not here.
-  expect(out).not.toContain("clipboard.m");
+  // clipboard.m owned HERE on iOS too — ios/clipboard.m (UIPasteboard), NOT the
+  // darwin one. clipboard.nim no longer compiles a hardcoded darwin/clipboard.m.
+  expect(out).toMatch(/\{\.compile\("\/.*\/platform\/ios\/clipboard\.m", "-fobjc-arc"\)\.\}/);
   // NO darwin sources in the iOS branch.
   expect(out).not.toContain("/platform/darwin/");
   // iOS framework set (UIKit replaces Cocoa; no Carbon).

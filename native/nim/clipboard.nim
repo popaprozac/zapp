@@ -7,20 +7,21 @@
 ## collapses: assigning a `cstring` into a `string` COPIES the bytes, so we can
 ## free the C buffer immediately — no static slot, no `raw{}`, no Foundation.
 ##
-## The ObjC backing (`native/platform/darwin/clipboard.m`, reused UNTOUCHED) is
-## compiled in here with the same `-fobjc-arc` flag the other platform .m files
-## use in zapp.nim, keeping this module self-contained: it owns both the C-ABI
-## declarations and the compilation of their definitions. Ownership per
-## clipboard.h: `darwin_clipboard_read_*` return a malloc'd C string the caller
-## must free; `read_files` returns a JSON array string ("[]" when none).
+## The ObjC backing is the TARGET-CORRECT clipboard.m — darwin/clipboard.m
+## (AppKit/NSPasteboard) on macOS, ios/clipboard.m (UIPasteboard) on iOS. Its
+## `{.compile.}` is owned by the CLI-generated `.zapp/zapp_platform.nim` (via
+## getPlatformSources), NOT this module: compiling darwin/clipboard.m here
+## unconditionally pulled AppKit into the UIKit iOS target and broke the link.
+## This module owns only the C-ABI `importc` declarations + the Nim wrappers.
+## Ownership per clipboard.h: `darwin_clipboard_read_*` return a malloc'd C
+## string the caller must free; `read_files` returns a JSON array string ("[]"
+## when none).
 ##
 ## Image bytes (`readImagePng` / `writeImagePng`) cross the JSON-only bridge as
 ## base64; clipboard.m encodes/decodes server-side via the `*_b64` helpers so
 ## this module needs no Foundation. `read_image_png_b64` returns a malloc'd
 ## base64 C string (NULL when no image) — same caller-frees contract as the
 ## other reads.
-
-{.compile("../platform/darwin/clipboard.m", "-fobjc-arc").}
 
 proc darwin_clipboard_read_text(): cstring {.importc, cdecl.}
 proc darwin_clipboard_write_text(s: cstring): bool {.importc, cdecl.}

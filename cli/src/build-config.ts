@@ -349,9 +349,13 @@ export interface PlatformNimOpts {
  * What it does NOT own (stays in zapp.nim, target-agnostic):
  *   - the zjs.c `{.compile.}` itself + its `-I vendor/zjs/include` `{.passC.}`
  *     (SDK flags reach it globally via `nim c --passC/--passL`).
- *   - clipboard.m, which clipboard.nim compiles + owns (double-compiling it here
- *     would break the macOS link with duplicate symbols). It is filtered out of
- *     the source list below even though getPlatformSources returns it.
+ *
+ * clipboard.m is now ALSO owned here (via getPlatformSources) so it is
+ * TARGET-CORRECT — darwin/clipboard.m on macOS (AppKit/NSPasteboard),
+ * ios/clipboard.m on iOS (UIPasteboard). clipboard.nim used to compile
+ * darwin/clipboard.m unconditionally, which pulled AppKit into the UIKit iOS
+ * target and broke the link; that `{.compile.}` was dropped from clipboard.nim
+ * when ownership moved here. No double-compile (only one source owns it now).
  *
  * Paths are ABSOLUTE (computed from nativeDir + the vendor dir). The generated
  * module lives in the project's .zapp/ dir, so a relative `../platform/...`
@@ -365,10 +369,10 @@ export function renderPlatformNim(target: BuildTarget, o: PlatformNimOpts): stri
   const ios = isIOSTarget(target);
 
   // .m source list for the target (darwin vs ios). getPlatformSources returns
-  // absolute paths filtered to existing files. clipboard.m is dropped — it is
-  // compiled by clipboard.nim, not this module (see the doc comment).
-  const sources = getPlatformSources(o.nativeDir, target)
-    .filter((f) => path.basename(f) !== "clipboard.m");
+  // absolute paths filtered to existing files — INCLUDING clipboard.m, which
+  // this module now owns (target-correct: darwin/clipboard.m on macOS,
+  // ios/clipboard.m on iOS). clipboard.nim no longer compiles it (see doc comment).
+  const sources = getPlatformSources(o.nativeDir, target);
   const compileLines = sources
     .map((f) => `{.compile("${slash(f)}", "-fobjc-arc").}`)
     .join("\n");
@@ -402,7 +406,8 @@ export function renderPlatformNim(target: BuildTarget, o: PlatformNimOpts): stri
 ## Target: ${target}. Regenerated each build by buildNativeNim (cli/src/native.ts).
 ## Owns the .m compile list + frameworks + libzjs link for this target; the
 ## zjs.c compile + its -Ivendor/zjs/include passC stay in zapp.nim (SDK flags
-## reach them globally). The clipboard ObjC source is compiled by clipboard.nim, not here.
+## reach them globally). The clipboard ObjC source is in the .m compile list above
+## (target-correct: darwin/clipboard.m on macOS, ios/clipboard.m on iOS).
 ${compileLines}
 {.passL: "${frameworks}".}
 {.passL: "-lcompression".}  # zjs.c embedded-asset decode (compression_decode_buffer)
@@ -423,7 +428,8 @@ ${compileLines}
 ## Target: ${target}. Regenerated each build by buildNativeNim (cli/src/native.ts).
 ## Owns the .m compile list + frameworks + libzjs link for this target; the
 ## zjs.c compile + its -Ivendor/zjs/include passC stay in zapp.nim (SDK flags
-## reach them globally). The clipboard ObjC source is compiled by clipboard.nim, not here.
+## reach them globally). The clipboard ObjC source is in the .m compile list above
+## (target-correct: darwin/clipboard.m on macOS, ios/clipboard.m on iOS).
 ${compileLines}
 {.passL: "${frameworks}".}
 {.passL: "-lcompression".}  # zjs.c:1208 compression_decode_buffer (embedded-asset decode)

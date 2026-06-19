@@ -108,6 +108,15 @@ proc fsGrantPath*(path: string) =
     if g == expanded: return
   gSessionGrants.add(expanded)
 
+# C-ABI grant entry — ios/webview.m's drop delegate persists a dropped file's
+# read grant by calling `extern void fs_grant_path(char*)` directly (the same
+# C symbol native/fs/fs.zc exposes via `fn fs_grant_path`). macOS' Nim path
+# reaches fsGrantPath from router.nim (Nim->Nim) so it never needs the C name;
+# the iOS .m drop path does, hence this {.exportc.} thin wrapper. NULL-safe.
+proc fs_grant_path(path: cstring) {.exportc, cdecl.} =
+  if path.isNil: return
+  fsGrantPath($path)
+
 # --- Gated IO (mirror the fs.zc public API: expand -> allowlist -> perm -> IO)
 proc fsReadFile*(path: string): string =
   let abs = fsExpandPath(path)
