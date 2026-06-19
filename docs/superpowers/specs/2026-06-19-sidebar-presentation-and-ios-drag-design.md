@@ -210,13 +210,18 @@ zapp.config.ts / app code: sidebar: { url, width, presentation: "overlay" }
 
 ## Out of scope
 
-- **Inspector pane on iOS** (the trailing pane). Currently fully stubbed
+- **Inspector pane on iOS** (the trailing inspector). Currently fully stubbed
   (`native/platform/ios/inspector.m` is all no-ops; `window.m` builds only
-  `.doubleColumn` and explicitly defers it). Real support needs
-  `UISplitViewController` `.tripleColumn` (sidebar + content + inspector) plus a
-  third webview slot and inspector control ops — a meatier, separate cycle.
-  Surfaced by the user's iPad test ("inspector not compat?"); recommended as a
-  dedicated follow-up.
+  `.doubleColumn`). The native idiom — matching SwiftUI's iOS 17+ `.inspector`
+  (`inspectorColumnWidth` on regular; `presentationDetents` as a sheet on
+  compact) — is a **trailing pane on iPad/macOS-regular** and a **sheet on
+  iPhone/compact**. It is NOT a `UISplitViewController` `.tripleColumn`
+  supplementary column (that's a *middle* column, the wrong role). Building it in
+  UIKit: a trailing container view alongside the content (iPad-regular) + reuse
+  Zapp's existing iOS sheet support (UISheetPresentationController + detents — see
+  [[project_ios_custom_detents]]) on iPhone, plus un-stubbing `darwin_inspector_*`.
+  A meatier, separate cycle — recommended as the immediate follow-up. Surfaced by
+  the user's iPad test + the SwiftUI `.inspector` reference.
 - Custom hamburger/overlay drawer on iPhone (non-conventional; not faked).
 - `.displace` split behavior (trivial future enum addition).
 - Runtime `setPresentation()` (create-time only for v1).
