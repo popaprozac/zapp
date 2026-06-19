@@ -40,6 +40,7 @@ extern bool wopts_sidebar_collapsed(void* opts);
 extern bool wopts_sidebar_can_resize(void* opts);
 extern const char* wopts_sidebar_background_color(void* opts);
 extern int32_t wopts_sidebar_numeric_id(void* opts);
+extern const char* wopts_sidebar_presentation(void* opts);
 // App-set window background color ("#rrggbb"); applied on opaque windows.
 extern const char* wopts_background_color(void* opts);
 // Inspector split registry (inspector.m). Mirrors the sidebar pattern.
@@ -743,6 +744,11 @@ void* darwin_window_create(WindowOptions* opts) {
 
         const char* sidebarUrl = wopts_sidebar_url(opts);
         bool useSidebar = (sidebarUrl && sidebarUrl[0] != '\0');
+
+        // sidebar.presentation is iOS-only (UISplitViewController split behavior).
+        // AppKit's NSSplitViewController tiles/collapses and never overlays content,
+        // so the value is intentionally ignored on macOS. Read for symmetry/docs.
+        (void)wopts_sidebar_presentation(opts);
 
         // Sidebar webview's transport slot is pre-allocated by
         // WindowManager.create from the SAME id-space as the host's (window.zc).

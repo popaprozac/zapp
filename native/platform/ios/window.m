@@ -74,6 +74,7 @@ typedef struct ZappIOSDeferred {
     int32_t sidebarNumericId;    // sidebar webview's transport slot
     bool    sidebarCollapsed;
     int32_t sidebarWidth;
+    char*   sidebarPresentation;  // strdup'd; freed in destroy. "" / NULL = tile; "overlay" = flyout
     int32_t sidebarMinWidth;
     int32_t sidebarMaxWidth;
     bool    sidebarCollapsible;
@@ -214,6 +215,16 @@ void zapp_ios_materialize_pending_windows(void) {
                 // sidebarMinWidth/MaxWidth aren't directly settable like
                 // NSSplitViewItem thicknesses.
                 split.preferredPrimaryColumnWidth = (CGFloat)d->sidebarWidth;
+            }
+            // Sidebar presentation → UISplitViewController split behavior.
+            // "overlay" = iPad flyout (sidebar floats over content, dims it,
+            // tap-out dismisses); start hidden so it reads as summon-able. The
+            // system provides an edge-swipe (presentsWithGesture defaults YES).
+            // Default/"tile" leaves the side-by-side behavior unchanged. No-op on
+            // iPhone (the split always collapses to a nav stack).
+            if (d->sidebarPresentation && strcmp(d->sidebarPresentation, "overlay") == 0) {
+                split.preferredSplitBehavior = UISplitViewControllerSplitBehaviorOverlay;
+                split.preferredDisplayMode = UISplitViewControllerDisplayModeSecondaryOnly;
             }
             split.view.backgroundColor = bgColor;
 
@@ -572,12 +583,15 @@ void* darwin_window_create(void* opts) {
         extern bool wopts_sidebar_collapsed(void* opts);
         extern bool wopts_sidebar_can_resize(void* opts);
         extern const char* wopts_sidebar_background_color(void* opts);
+        extern const char* wopts_sidebar_presentation(void* opts);
         const char* sbUrl = wopts_sidebar_url(opts);
         if (sbUrl && sbUrl[0] != '\0') {
             d->hasSidebar = true;
             d->sidebarUrl = strdup(sbUrl);
             d->sidebarNumericId = wopts_sidebar_numeric_id(opts);
             d->sidebarWidth = wopts_sidebar_width(opts);
+            const char* _sbPres = wopts_sidebar_presentation(opts);
+            d->sidebarPresentation = (_sbPres && _sbPres[0]) ? strdup(_sbPres) : NULL;
             d->sidebarMinWidth = wopts_sidebar_min_width(opts);
             d->sidebarMaxWidth = wopts_sidebar_max_width(opts);
             d->sidebarCollapsible = wopts_sidebar_collapsible(opts);
@@ -607,6 +621,7 @@ void darwin_window_destroy(void* handle) {
         if (d->real_window) d->real_window.hidden = YES;
         free(d->queued_title);
         free(d->sidebarUrl);
+        free(d->sidebarPresentation);
         for (int i = 0; i < ZAPP_MAX_DEFERRED; i++) {
             if (zapp_ios_deferred_list[i] == d) zapp_ios_deferred_list[i] = NULL;
         }

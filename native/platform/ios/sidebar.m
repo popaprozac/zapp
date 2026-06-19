@@ -258,42 +258,44 @@ void zapp_ios_sidebar_unregister(void* window) {
 // All keyed by a transport slot (host OR sidebar pane); zapp_ios_sidebar_for_slot
 // resolves either to the host record.
 
-// Reveal the CONTENT (secondary) column. On compact this is the master->detail
-// push; on regular it's a no-op (content already visible side-by-side).
+// Reveal the CONTENT (hide the sidebar). compact(iPhone): existing nav move.
+// regular(iPad): tile → collapse the sidebar to full content width; overlay →
+// dismiss the flyout. (hideColumn:Primary adapts to the split's behavior.)
 void darwin_sidebar_show_content(int32_t window_id) {
     zapp_ios_sidebar_on_main(^{
         ZappIOSSidebarController* c = zapp_ios_sidebar_for_slot(window_id);
         if (!c || !c.splitVC) return;
-        if (!zapp_ios_sidebar_is_compact(c)) return;  // regular: already visible
+        BOOL compact = zapp_ios_sidebar_is_compact(c);
         if (@available(iOS 16.0, *)) {
-            // Supported reveal: slides the secondary column to the top of the
-            // collapsed stack (chrome-less via our combined bar-hidden nav).
-            [c.splitVC showColumn:UISplitViewControllerColumnSecondary];
-        } else {
-            // Fallback: push the content VC onto the combined collapsed stack.
+            if (compact) [c.splitVC showColumn:UISplitViewControllerColumnSecondary];
+            else [c.splitVC hideColumn:UISplitViewControllerColumnPrimary];
+        } else if (compact) {
             UINavigationController* nav = c.collapsedNav ?: zapp_ios_collapsed_nav(c.splitVC);
-            if (nav && c.contentVC && nav.topViewController != c.contentVC) {
+            if (nav && c.contentVC && nav.topViewController != c.contentVC)
                 [nav pushViewController:c.contentVC animated:YES];
-            }
+        } else {
+            c.splitVC.preferredDisplayMode = UISplitViewControllerDisplayModeSecondaryOnly;
         }
         zapp_ios_sidebar_sync_collapse(c, YES);  // content visible == collapsed
     });
 }
 
-// Reveal the SIDEBAR (primary) column — the "back" of master-detail. On compact
-// pops to the list; on regular a no-op (sidebar already visible).
+// Reveal the SIDEBAR. compact(iPhone): existing pop-to-sidebar.
+// regular(iPad): tile → slide the sidebar in beside content; overlay → float
+// the flyout in. showColumn:Primary works on both compact and regular.
 void darwin_sidebar_show_sidebar(int32_t window_id) {
     zapp_ios_sidebar_on_main(^{
         ZappIOSSidebarController* c = zapp_ios_sidebar_for_slot(window_id);
         if (!c || !c.splitVC) return;
-        if (!zapp_ios_sidebar_is_compact(c)) return;  // regular: already visible
+        BOOL compact = zapp_ios_sidebar_is_compact(c);
         if (@available(iOS 16.0, *)) {
             [c.splitVC showColumn:UISplitViewControllerColumnPrimary];
-        } else {
+        } else if (compact) {
             UINavigationController* nav = c.collapsedNav ?: zapp_ios_collapsed_nav(c.splitVC);
-            if (nav && nav.viewControllers.count > 1) {
+            if (nav && nav.viewControllers.count > 1)
                 [nav popToRootViewControllerAnimated:YES];
-            }
+        } else {
+            c.splitVC.preferredDisplayMode = UISplitViewControllerDisplayModeOneBesideSecondary;
         }
         zapp_ios_sidebar_sync_collapse(c, NO);  // sidebar visible == expanded
     });
