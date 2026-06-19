@@ -212,10 +212,13 @@ void zapp_ios_materialize_pending_windows(void) {
                 ? UISplitViewControllerDisplayModeSecondaryOnly
                 : UISplitViewControllerDisplayModeOneBesideSecondary;
             if (d->sidebarWidth > 0) {
-                // Best-effort width hint. iOS clamps to its own min/max; the
-                // configured sidebarMinWidth/MaxWidth aren't directly settable
-                // on UISplitViewController like NSSplitViewItem thicknesses.
-                split.preferredSupplementaryColumnWidth = (CGFloat)d->sidebarWidth;
+                // Sidebar = the PRIMARY column in .doubleColumn style, so its
+                // width is preferredPrimaryColumnWidth. (preferredSupplementary*
+                // exists ONLY in .tripleColumn and THROWS NSInvalidArgument on
+                // double-column.) iOS clamps to its own min/max; the configured
+                // sidebarMinWidth/MaxWidth aren't directly settable like
+                // NSSplitViewItem thicknesses.
+                split.preferredPrimaryColumnWidth = (CGFloat)d->sidebarWidth;
             }
             split.view.backgroundColor = bgColor;
 
