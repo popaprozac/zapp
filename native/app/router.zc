@@ -1225,7 +1225,6 @@ fn router_handle_worker(app: App*, action: string, payload: string, window_id: i
     let is_create = action == "create";
     let is_post = action == "post";
     let is_terminate = action == "terminate";
-    let is_disconnect = action == "disconnect";
 
     if is_create {
         let url_opt = pre_args.get_string("scriptUrl");
@@ -1246,11 +1245,6 @@ fn router_handle_worker(app: App*, action: string, payload: string, window_id: i
             #endif
         }
         if owner_id == NULL { return; }
-
-        // Check if this is a shared worker
-        let is_shared: bool = false;
-        let shared_opt = pre_args.get_bool("shared");
-        if shared_opt.is_some() { is_shared = shared_opt.unwrap(); }
 
         // Per-worker engine selection (G8). JS callers pass
         // `engine: "bare-jsc" | "bare-v8" | "bare-quickjs" | "bare-mqjs"
@@ -1278,33 +1272,10 @@ fn router_handle_worker(app: App*, action: string, payload: string, window_id: i
         let name_opt = pre_args.get_string("name");
         if name_opt.is_some() { worker_name = name_opt.unwrap(); }
 
-        if is_shared {
-            // Check for existing shared worker with same script URL
-            let existing_id: string = "";
-            raw {
-                const char* eid = zapp_worker_registry_find_shared((const char*)script_url);
-                if (eid) existing_id = (char*)eid;
-            }
-            if existing_id != "" {
-                // Connect to existing shared worker — just add this window as an owner
-                raw {
-                    zapp_worker_registry_add_owner((const char*)existing_id, owner_id);
-                }
-                // Notify JS of the actual worker ID (may differ from requested)
-                dispatch_invoke_response(window_id, 0, true, existing_id);
-                return;
-            }
-            // First shared worker with this URL — create it
-            raw {
-                zapp_worker_registry_add_full_with_engine_and_name((const char*)worker_id, owner_id,
-                    1, (const char*)script_url, (int)engine, (const char*)worker_name);
-            }
-        } else {
-            // Dedicated worker
-            raw {
-                zapp_worker_registry_add_full_with_engine_and_name((const char*)worker_id, owner_id,
-                    0, (const char*)script_url, (int)engine, (const char*)worker_name);
-            }
+        // Dedicated worker
+        raw {
+            zapp_worker_registry_add_full_with_engine_and_name((const char*)worker_id, owner_id,
+                0, (const char*)script_url, (int)engine, (const char*)worker_name);
         }
 
         worker_create(app, script_url, owner_id, worker_id, engine);
@@ -1325,51 +1296,9 @@ fn router_handle_worker(app: App*, action: string, payload: string, window_id: i
         let wid_opt = pre_args.get_string("workerId");
         if !wid_opt.is_some() { return; }
         let wid = wid_opt.unwrap();
-
-        // For shared workers, check refcount before terminating
-        let should_terminate: bool = true;
+        worker_terminate(wid);
         raw {
-            if (zapp_worker_registry_is_shared((const char*)wid)) {
-                // Shared workers can't be terminated by a single window — use disconnect instead
-                should_terminate = false;
-            }
-        }
-        if should_terminate {
-            worker_terminate(wid);
-            raw {
-                zapp_worker_registry_remove((const char*)wid);
-            }
-        }
-        return;
-    }
-
-    // Disconnect from a shared worker (remove owner reference, terminate if refcount=0)
-    if is_disconnect {
-        let wid_opt = pre_args.get_string("workerId");
-        if !wid_opt.is_some() { return; }
-        let wid = wid_opt.unwrap();
-
-        let owner_id: string = NULL;
-        raw {
-            #ifdef __APPLE__
-            extern const char* darwin_window_id_string(int32_t numeric_id);
-            owner_id = (char*)darwin_window_id_string(window_id);
-            #else
-            extern const char* windows_window_id_string(int32_t numeric_id);
-            owner_id = (char*)windows_window_id_string(window_id);
-            #endif
-        }
-        if owner_id == NULL { return; }
-
-        let remaining: int = 0;
-        raw {
-            remaining = zapp_worker_registry_remove_owner((const char*)wid, owner_id);
-        }
-        if remaining <= 0 {
-            worker_terminate(wid);
-            raw {
-                zapp_worker_registry_remove((const char*)wid);
-            }
+            zapp_worker_registry_remove((const char*)wid);
         }
         return;
     }

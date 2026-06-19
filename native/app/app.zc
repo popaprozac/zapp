@@ -243,28 +243,9 @@ fn worker_dispatch_to_window(worker_id: string, data_json: string, owner_id: str
 }
 
 // Worker → WebView dispatch (called by worker engine's postToWebview host object).
-// For shared workers, broadcasts to all connected windows.
+// Dedicated workers deliver to their single owner; headless workers have an
+// empty owner ("") and the guard below correctly drops the delivery.
 fn worker_dispatch_to_webview(worker_id: string, data_json: string) -> void {
-    // Check if shared — broadcast to all owners
-    let is_shared: bool = false;
-    raw {
-        is_shared = zapp_worker_registry_is_shared((const char*)worker_id) != 0;
-    }
-
-    if is_shared {
-        // Broadcast to all owners
-        raw {
-            ZappWorkerEntry* entry = zapp_worker_registry_get((const char*)worker_id);
-            if (entry) {
-                for (int i = 0; i < entry->owner_count; i++) {
-                    worker_dispatch_to_window(worker_id, data_json, (char*)entry->owners[i]);
-                }
-            }
-        }
-        return;
-    }
-
-    // Dedicated worker — single owner
     let owner_id: string = "";
     raw {
         const char* oid = zapp_worker_registry_owner((const char*)worker_id);

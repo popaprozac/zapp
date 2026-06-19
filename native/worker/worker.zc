@@ -246,25 +246,18 @@ fn worker_terminate_owner(owner_id: string) -> void {
 // Usage:
 //   Workers::terminate("h-sync");
 //
-// Recognised ID forms match the JS side: dedicated workers ("w-N"),
-// headless workers ("h-<key>"), shared workers ("sw-N" — silently
-// no-op since shared workers are refcount-based).
+// Recognised ID forms match the JS side: dedicated workers ("w-N") and
+// headless workers ("h-<key>").
 struct Workers {}
 
 impl Workers {
     fn terminate(id: string) -> void {
         if id == "" { return; }
-        // The native router already has all the policy (shared-vs-dedicated
-        // refcount handling, registry cleanup) — the Zen-C wrapper just
-        // forwards. Bypassing the router would duplicate that policy.
         raw {
             #if defined(ZAPP_WORKER_ENGINE_ZJS) || ZAPP_HAS_BARE
-            extern int zapp_worker_registry_is_shared(const char* worker_id);
             extern void zapp_worker_registry_remove(const char* worker_id);
-            if (!zapp_worker_registry_is_shared((const char*)id)) {
-                worker_terminate((char*)id);
-                zapp_worker_registry_remove((const char*)id);
-            }
+            worker_terminate((char*)id);
+            zapp_worker_registry_remove((const char*)id);
             #endif
         }
     }
