@@ -15,6 +15,7 @@ import { createDevBundle } from "./bundle";
 import { createProductionBundle } from "./package";
 import { generateAssetManifest } from "./assets";
 import { setCliLevel, levelFromArgv, getCliLevel, envFromLevel, clog, clogError } from "./log";
+import { useNimNative } from "./native-lang";
 
 // Bootstrap codegen lives outside cli/ in the monorepo but is bundled
 // alongside it in the published package. Dynamic import so the path
@@ -581,7 +582,7 @@ async function runBuild(root: string) {
   // (compileNative's nim branch ignores `assetsFile`.)
   const zappDir = path.join(root, ".zapp");
   let assetsFile: string | undefined;
-  if (process.env.ZAPP_NATIVE_LANG === "nim") {
+  if (useNimNative()) {
     clog(1, "embedding assets with brotli (Nim emitter, in native build)...");
   } else {
     clog(1, "embedding assets with brotli...");

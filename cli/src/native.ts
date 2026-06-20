@@ -5,6 +5,7 @@ import { existsSync, unlinkSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { resolveBareDir } from "./paths";
 import { clog } from "./log";
+import { useNimNative } from "./native-lang";
 
 /**
  * Build target — what platform/architecture the binary is being
@@ -1302,10 +1303,10 @@ export async function compileNative(opts: CompileOptions): Promise<void> {
   const { root, buildFile, buildConfigFile, bootstrapFile, assetsFile, headlessFile, engineOverlayFile, output, nativeDir, optimize } = opts;
   const target: BuildTarget = opts.target ?? detectTarget();
 
-  // Opt-in Nim build path. Branches before any zc setup so the Nim driver owns
+  // Default Nim build path. Branches before any zc setup so the Nim driver owns
   // the whole compile; the caller still emits the canonical "build complete"
-  // line. The zc path below stays the untouched default.
-  if (process.env.ZAPP_NATIVE_LANG === "nim") {
+  // line. `ZAPP_NATIVE_LANG=zc` opts out to the legacy zc path below.
+  if (useNimNative()) {
     const verbose = process.argv.includes("--verbose") || process.argv.includes("-v");
     if (!opts.config) {
       throw new Error("[zapp] Nim build path requires a resolved config (opts.config).");
