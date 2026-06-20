@@ -1,0 +1,8 @@
+# spikes/swiftui-nim/.gitignore — build artifacts only; sources + FINDINGS tracked
+probe
+*.a
+*.o
+*.swiftmodule
+*.swiftdoc
+nimcache/
+.build/
