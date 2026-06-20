@@ -208,3 +208,39 @@ test("renderPlatformNim (ios-simulator) emits ios sources + UIKit + libzjs_embed
   expect(out).not.toContain("libzjs.dylib");
   expect(out).not.toContain("-Wl,-rpath,");
 });
+
+import { generateIOSBuildFile } from "./build-config";
+import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+
+test("generateIOSBuildFile: no engine named → defaults to zjs, NOT bare-jsc", async () => {
+  // A fresh app with no workers / no engine must not trigger a Bare-from-source
+  // build on iOS. zjs.c is always linked in the Nim build, so zjs is the correct
+  // zero-extra-build default; bare is opt-in only (named explicitly).
+  const dir = await mkdtemp(`${tmpdir()}/zapp-ios-engine-`);
+  try {
+    const buildFile = `${dir}/build.zc`;
+    await writeFile(buildFile, 'import "app.zc";\nfn main() -> int { return run_app(); }\n');
+    const outPath = await generateIOSBuildFile(dir, buildFile, undefined);
+    const out = await readFile(outPath, "utf-8");
+    expect(out).toContain("//> define: ZAPP_WORKER_ENGINE_ZJS");
+    expect(out).not.toContain("ZAPP_WORKER_ENGINE_BARE_JSC");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("generateIOSBuildFile: explicitly-named bare-jsc is still honored", async () => {
+  // Bare stays available when the app opts in (future worker-flexibility spike).
+  const dir = await mkdtemp(`${tmpdir()}/zapp-ios-engine-`);
+  try {
+    const buildFile = `${dir}/build.zc`;
+    await writeFile(buildFile, 'import "app.zc";\n');
+    const cfg = { headless: { w: { script: "a.ts", engine: "bare-jsc" } } } as any;
+    const outPath = await generateIOSBuildFile(dir, buildFile, cfg);
+    const out = await readFile(outPath, "utf-8");
+    expect(out).toContain("//> define: ZAPP_WORKER_ENGINE_BARE_JSC");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

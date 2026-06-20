@@ -563,14 +563,15 @@ export async function generateIOSBuildFile(
   //      escape hatch path).
   //   2. zapp.config.ts headless entries' `engine:` field (the
   //      modern path — what hello-world and most apps use).
-  // Falls back to bare-jsc (zero binary cost via the JSC system
-  // framework; JIT-less on iOS by Apple policy) when neither source
-  // names an engine.
+  // Falls back to zjs (the privileged default, always linked in the Nim
+  // build — zero from-source build) when neither source names an engine.
+  // Bare is opt-in only (named explicitly), pending the future
+  // worker-flexibility spike.
   //
   // bare-v8 is intentionally NOT exposed for iOS — V8 needs JIT pages
   // (`MAP_JIT`) which Apple gates behind entitlements not granted to
   // App Store apps. If the user named bare-v8 in either source, we
-  // warn and fall back to bare-jsc.
+  // warn and fall back to the default engine.
   const userPickedBareJsc   = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_JSC/m.test(content);
   const userPickedBareQuick = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_QUICKJS/m.test(content);
   const userPickedBareV8    = /^\/\/>.*define:.*ZAPP_WORKER_ENGINE_BARE_V8/m.test(content);
@@ -602,7 +603,7 @@ export async function generateIOSBuildFile(
   if (userPickedBareV8 || configHasBareV8) {
     clog(0,
       "note: bare-v8 isn't useful on iOS (no JIT entitlement for App Store apps).\n" +
-      "       Falling back to bare-jsc for this build.\n" +
+      "       Falling back to the default engine (zjs) for this build.\n" +
       "       Use 'bare-quickjs' explicitly if you want cross-platform interpreter parity."
     );
   }
@@ -612,7 +613,12 @@ export async function generateIOSBuildFile(
   if (userPickedBareQuick  || configHasBareQuick)  engineDefines.push("ZAPP_WORKER_ENGINE_BARE_QUICKJS");
   if (userPickedBareHermes || configHasBareHermes) engineDefines.push("ZAPP_WORKER_ENGINE_BARE_HERMES");
   if (userPickedZjs        || configHasZjs)        engineDefines.push("ZAPP_WORKER_ENGINE_ZJS");
-  if (engineDefines.length === 0) engineDefines.push("ZAPP_WORKER_ENGINE_BARE_JSC");
+  // Default to zjs (the privileged cross-platform engine) when no engine is
+  // named — NOT bare-jsc. zjs.c is always linked into the Nim build, so this
+  // adds zero from-source build cost (no `ensureBareBuilt`), and a no-worker app
+  // builds clean on iOS just like macOS. Bare is opt-in only (named explicitly)
+  // pending the future worker-flexibility spike.
+  if (engineDefines.length === 0) engineDefines.push("ZAPP_WORKER_ENGINE_ZJS");
 
   const iosOverlay = `
 // AUTO-GENERATED for iOS builds. Strips macos:-prefixed directives
