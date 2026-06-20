@@ -168,14 +168,18 @@ test("renderPlatformNim (macos) reproduces today's darwin pragmas", () => {
   expect(out).toContain("-framework Foundation");
   // NO UIKit on macOS.
   expect(out).not.toContain("-framework UIKit");
-  // libcompression + libzjs.dylib + rpath (macOS link surface).
+  // libcompression + STATIC libzjs_embed.a (macOS link surface). The Nim path
+  // links the symbol-hidden repack — NOT the dylib — so a packaged .app is
+  // standalone by construction (no dylib to bundle, no -rpath to rewrite).
   expect(out).toContain("-lcompression");
-  expect(out).toContain("vendor/zjs/build/libzjs.dylib");
-  expect(out).toContain("-Wl,-rpath,");
-  // libzjs.dylib path is ABSOLUTE (CLI-resolved), not currentSourcePath-relative.
-  expect(out).toMatch(/\{\.passL: "\/.*vendor\/zjs\/build\/libzjs\.dylib"\.\}/);
-  // -lz is iOS-only; must NOT appear on macOS.
-  expect(out).not.toContain("-lz");
+  expect(out).toContain("vendor/zjs/build/libzjs_embed.a");
+  expect(out).not.toContain("libzjs.dylib");
+  expect(out).not.toContain("-Wl,-rpath,");
+  // libzjs_embed.a path is ABSOLUTE (CLI-resolved), not currentSourcePath-relative.
+  expect(out).toMatch(/\{\.passL: "\/.*vendor\/zjs\/build\/libzjs_embed\.a"\.\}/);
+  // -lz (zlib) is now required on macOS too: static-linking libzjs leaves
+  // host_zlib_codec's deflate/inflate undefined (the old dylib carried its own).
+  expect(out).toContain("-lz");
 });
 
 test("renderPlatformNim (ios-simulator) emits ios sources + UIKit + libzjs_embed.a", () => {

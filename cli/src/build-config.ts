@@ -11,10 +11,10 @@ import { resolveNativeDir, resolveVendorDir } from "./paths";
 import { clog, clogError, getCliLevel } from "./log";
 import { resolvePermissions } from "./permissions";
 
-// xcrun-resolved iOS SDK paths. Cached for the life of the CLI process
-// — calling xcrun is ~80ms, called only once per build now.
+// xcrun-resolved SDK paths (iOS + macOS). Cached for the life of the CLI
+// process — calling xcrun is ~80ms, called only once per SDK per build.
 const sdkPathCache = new Map<string, string>();
-export async function resolveSDKPath(sdk: "iphonesimulator" | "iphoneos"): Promise<string> {
+export async function resolveSDKPath(sdk: "iphonesimulator" | "iphoneos" | "macosx"): Promise<string> {
   const cached = sdkPathCache.get(sdk);
   if (cached) return cached;
   const proc = Bun.spawn(["xcrun", "--sdk", sdk, "--show-sdk-path"], {
@@ -398,9 +398,9 @@ export function renderPlatformNim(target: BuildTarget, o: PlatformNimOpts): stri
       "Security",
     ].map((f) => `-framework ${f}`).join(" ");
     // simulator-arm64 static slice; -device targets get their own slice in a
-    // later task. -lz (zlib) is required on iOS (libz.tbd in the SDK) — the
-    // macOS link resolves deflate/inflate transitively from libSystem but the
-    // iOS link does not. No rpath: the .a is linked statically.
+    // later task. -lz (zlib) resolves zjs's host_zlib_codec deflate/inflate
+    // (libz.tbd in the SDK) — required whenever libzjs links statically (both
+    // iOS here and macOS below). No rpath: the .a is linked statically.
     const embed = `${zjsBuildDir}/ios/simulator-arm64/libzjs_embed.a`;
     return `## AUTO-GENERATED (Nim) — per-target native link surface. Do not edit.
 ## Target: ${target}. Regenerated each build by buildNativeNim (cli/src/native.ts).
@@ -416,14 +416,20 @@ ${compileLines}
 `;
   }
 
-  // macOS: reproduce today's zapp.nim pragmas verbatim — same framework set
-  // (line 12), -lcompression, libzjs.dylib absolute path + an -rpath so the
-  // raw bin/ binary finds the dylib at run time.
+  // macOS: same framework set (line 12) + -lcompression. libzjs links as the
+  // STATIC symbol-hidden repack (libzjs_embed.a) — NOT the dylib — exactly like
+  // iOS. The repack's `-exported_symbols_list _zjs_*` demotes every non-zjs
+  // symbol to private-extern, sidestepping the duplicate-symbol clash that
+  // originally forced a dynamic link. Static-linking bakes libzjs into the
+  // binary, so a packaged .app is standalone by construction (no dylib to copy
+  // into Contents/Frameworks, no -rpath to rewrite). generatePlatformConfig
+  // produces this .a (it runs before `nim c` on both paths). The legacy `=zc`
+  // path still links the raw dylib (+ rpath / install_name rewrite).
   const frameworks =
     "-framework Cocoa -framework WebKit -framework CoreFoundation -framework JavaScriptCore " +
     "-framework Security -framework IOKit -framework ServiceManagement -framework UserNotifications " +
     "-framework Carbon -framework Foundation";
-  const dylib = `${zjsBuildDir}/libzjs.dylib`;
+  const embed = `${zjsBuildDir}/libzjs_embed.a`;
   return `## AUTO-GENERATED (Nim) — per-target native link surface. Do not edit.
 ## Target: ${target}. Regenerated each build by buildNativeNim (cli/src/native.ts).
 ## Owns the .m compile list + frameworks + libzjs link for this target; the
@@ -433,8 +439,10 @@ ${compileLines}
 ${compileLines}
 {.passL: "${frameworks}".}
 {.passL: "-lcompression".}  # zjs.c:1208 compression_decode_buffer (embedded-asset decode)
-{.passL: "${dylib}".}
-{.passL: "-Wl,-rpath,${zjsBuildDir}".}
+{.passL: "-lz".}            # zjs host_zlib_codec deflate/inflate (libz.tbd). Needed now
+                            # that libzjs links statically — the old dylib carried its own
+                            # -lz, but the static archive leaves these undefined for us.
+{.passL: "${embed}".}
 `;
 }
 
@@ -758,6 +766,103 @@ ${missing.map(d => `//> define: ${d}`).join("\n")}
   const overlayPath = path.join(zappDir, "zapp_engine_overlay.zc");
   await Bun.write(overlayPath, body);
   return overlayPath;
+}
+
+// Post-process a built libzjs.a into an embed-friendly archive
+// (libzjs_embed.a) for STATIC linking into the Zapp binary. `ld -r` merges
+// every object into a single relocatable .o, then `-exported_symbols_list
+// _zjs_*` demotes all non-`_zjs_*` symbols (Arena__*, Vec__*, the zenc-stdlib
+// runtime that both Zapp's framework and libzjs.a embed) to private-extern,
+// resolved within the merged .o and invisible to the final ld pass. That
+// sidesteps the ~37 duplicate-symbol clashes between libzjs.a's stdlib copy
+// and the framework's stdlib copy — the reason a raw `.a` can't be linked
+// directly.
+//
+// Used for BOTH iOS (dylibs aren't viable — Apple's toolchain expects
+// third-party native libs to link statically into the app binary) and macOS
+// (static = a standalone .app by construction, no dylib to bundle into
+// Contents/Frameworks). Cached by mtime — re-runs after the first build are
+// no-ops. Returns the libzjs_embed.a path.
+async function repackZjsEmbedArchive(opts: {
+  zjsDir: string;
+  staticLib: string;                          // input libzjs.a (force-load source + mtime ref)
+  outDir: string;                             // dir for libzjs_embed.{a,o,syms}
+  arch: string;                               // e.g. "arm64"
+  sdkPath: string;                            // -syslibroot (+ -isysroot when compiling extraSrcs)
+  platformVersion: [string, string, string];  // `ld -platform_version` args (platform, minos, sdk)
+  versionMinFlag: string;                     // clang min-version flag for compiling extraSrcs
+  extraSrcs: string[];                        // sources libzjs.a references but its Makefile target omits
+  label: string;                              // log/error label, e.g. "iOS Sim" / "macOS"
+}): Promise<string> {
+  const { zjsDir, staticLib, outDir, arch, sdkPath, platformVersion, versionMinFlag, extraSrcs, label } = opts;
+  const fs = await import("node:fs");
+  if (!existsSync(staticLib)) {
+    throw new Error(
+      `[zapp] libzjs static archive missing: ${staticLib}. ` +
+      `Build vendor/zjs (\`make -C ${zjsDir}\`) and rerun.`
+    );
+  }
+  const embedLib = path.join(outDir, "libzjs_embed.a");
+  const embedObj = path.join(outDir, "libzjs_embed.o");
+  const symsList = path.join(outDir, "libzjs_embed.syms");
+  const srcMtime = fs.statSync(staticLib).mtimeMs;
+  const extraMtime = Math.max(0, ...extraSrcs.map((p) => fs.statSync(p).mtimeMs));
+  const stale = !existsSync(embedLib)
+    || fs.statSync(embedLib).mtimeMs < srcMtime
+    || fs.statSync(embedLib).mtimeMs < extraMtime;
+  if (!stale) return embedLib;
+
+  clog(1, `post-processing libzjs.a → libzjs_embed.a (${label})...`);
+
+  // Compile each extra source (referenced by libzjs.a but omitted by its
+  // Makefile target) into an object so the merged .o is self-contained.
+  const extraObjs: string[] = [];
+  for (const src of extraSrcs) {
+    const obj = path.join(outDir, path.basename(src).replace(/\.c$/, ".o"));
+    const cc = Bun.spawnSync([
+      "clang", "-O3", "-arch", arch, "-isysroot", sdkPath, versionMinFlag,
+      "-I" + path.join(zjsDir, "src"), "-c", src, "-o", obj,
+    ]);
+    if (cc.exitCode !== 0) {
+      throw new Error(
+        `[zapp] failed to compile ${path.basename(src)} for ${label}: ` +
+        new TextDecoder().decode(cc.stderr)
+      );
+    }
+    extraObjs.push(obj);
+  }
+
+  // Single-pattern exported-symbols list: every `_zjs_*` symbol stays global;
+  // everything else becomes private-extern in the merged .o. `*` is the glob
+  // meta in ld's -exported_symbols_list grammar.
+  await Bun.write(symsList, "_zjs_*\n");
+  const ld = Bun.spawnSync(["ld",
+    "-r",
+    "-arch", arch,
+    "-platform_version", platformVersion[0], platformVersion[1], platformVersion[2],
+    "-syslibroot", sdkPath,
+    "-exported_symbols_list", symsList,
+    // Force-load every .o in the .a — ld -r otherwise skips unreferenced
+    // objects, which would lose half of libzjs.
+    "-force_load", staticLib,
+    ...extraObjs,
+    "-o", embedObj,
+  ]);
+  if (ld.exitCode !== 0) {
+    throw new Error(
+      `[zapp] failed to build libzjs_embed.o (${label}): ` +
+      new TextDecoder().decode(ld.stderr)
+    );
+  }
+  if (existsSync(embedLib)) fs.unlinkSync(embedLib);
+  const ar = Bun.spawnSync(["ar", "-rcs", embedLib, embedObj]);
+  if (ar.exitCode !== 0) {
+    throw new Error(
+      `[zapp] failed to repack libzjs_embed.a (${label}): ` +
+      new TextDecoder().decode(ar.stderr)
+    );
+  }
+  return embedLib;
 }
 
 // Generate .zapp/zapp_platform.zc with .m file cflags. The optional
@@ -1456,31 +1561,26 @@ export async function generatePlatformConfig(
 
     // Branch make invocation + output artifact by target.
     //
-    // macOS: link the dylib, not the .a. Both the framework and
-    //   libzjs.a embed zenc's stdlib (Vec / String / Option / Arena / …)
-    //   — linking the .a fails with hundreds of duplicate-symbol errors
-    //   on those shared internals. The dylib resolves symbols per-binary,
-    //   so the framework sees only zjs's exported zjs_* surface and its
-    //   own copy of the stdlib stays unconflicted.
+    // Both targets ultimately link the SAME symbol-hidden static repack
+    // (libzjs_embed.a — see repackZjsEmbedArchive below). Linking a RAW
+    // libzjs.a fails with ~37 duplicate-symbol errors: both the framework
+    // and libzjs.a embed zenc's stdlib (Vec / String / Option / Arena / …).
+    // The repack's `-exported_symbols_list _zjs_*` demotes every non-zjs
+    // symbol to private-extern, so the framework's own stdlib copy wins the
+    // link and only zjs's exported `zjs_*` surface stays global.
     //
-    //   Long-term fix lives upstream in zjs: ship an embed-friendly .a
-    //   with internal symbols stripped (ld -r + -unexported_symbols_list,
-    //   or build a relocatable .o with `-hidden`). Until then the dylib
-    //   is the right pragmatic choice — runtime dylib dependency is
-    //   acceptable since libzjs.dylib lives next to the binary in dev
-    //   and bundles into the .app in prod.
+    // macOS: `make` (the default `all` target) builds BOTH libzjs.dylib and
+    //   a complete libzjs.a. The Nim path links the repacked static .a (a
+    //   standalone .app by construction — no dylib to bundle into
+    //   Contents/Frameworks, no -rpath/install_name to rewrite). The legacy
+    //   `=zc` path still links the raw dylib (resolves symbols per-binary,
+    //   so the dup-symbol clash never arises) + an -rpath; the install_name
+    //   rewrite below keeps that path working.
     //
-    // iOS Simulator: same duplicate-symbol risk as macOS would have
-    //   with the .a, but dylibs aren't viable on iOS (Apple's toolchain
-    //   expects third-party native libs to link statically into the
-    //   app binary). We work around it by post-processing libzjs.a
-    //   into an "embed-friendly" archive (libzjs_embed.a) where every
-    //   non-`_zjs_*` symbol is `ld -r`'d into a single relocatable
-    //   .o with private-extern visibility (`-exported_symbols_list`
-    //   restricted to `_zjs_*`). The framework only ever calls into
-    //   `zjs_*`, so hiding the rest is safe — and the framework's own
-    //   copy of zenc's stdlib (Arena / Vec / String / …) wins the link.
-    //   See the build step below the install_name section.
+    // iOS Simulator: dylibs aren't viable (Apple's toolchain expects
+    //   third-party native libs to link statically into the app binary), so
+    //   the static repack is the only option. `make ios-simulator-arm64`
+    //   builds just libzjs.a (the simulator-arm64 slice).
     let zjsLib: string;
     let makeCmd: string[];
     let buildLabel: string;
@@ -1561,96 +1661,24 @@ export async function generatePlatformConfig(
     // the filter and apply unconditionally, which is what we want
     // for an iOS build running on a macOS host.
     if (target === "ios-simulator") {
-      // Produce an embed-friendly archive: ld -r merges libzjs.a's
-      // objects into a single relocatable .o, then `-exported_symbols_list`
-      // restricts globally-visible symbols to `_zjs_*`. Every other
-      // symbol (Arena__*, Vec__*, the zenc-stdlib runtime that both
-      // Zapp's framework and libzjs.a embed) becomes a private extern,
-      // resolved within the merged .o and invisible to the final ld
-      // pass. That sidesteps the ~37 duplicate-symbol clashes between
-      // libzjs.a's stdlib copy and the framework's stdlib copy.
-      //
-      // Cached by mtime — re-runs after the first build are no-ops.
-      const sdkPath = await resolveSDKPath("iphonesimulator");
-      const versionMinFlag = "-mios-simulator-version-min=15.0";
-      const iosBuildDir = path.join(zjsDir, "build", "ios", "simulator-arm64");
-      const embedLib = path.join(iosBuildDir, "libzjs_embed.a");
-      const embedObj = path.join(iosBuildDir, "libzjs_embed.o");
-      const symsList = path.join(iosBuildDir, "libzjs_embed.syms");
-      // Sources libzjs.a REFERENCES but vendor zjs's iOS Makefile target
-      // doesn't compile (file upstream; built here until fixed):
-      //   - aes-gcm/aes_gcm.c        → zjs_pc_aes_gcm_*
-      //   - platform/process_posix.c → zjs_process_spawn_capture
-      //     (child_process host API added in the Windows-parity sprint)
-      const extraSrcs = [
-        path.join(zjsDir, "src", "third-party", "aes-gcm", "aes_gcm.c"),
-        path.join(zjsDir, "src", "platform", "process_posix.c"),
-      ].filter((p) => existsSync(p));
-      const fs = await import("node:fs");
-      const srcMtime = fs.statSync(zjsLib).mtimeMs;
-      const extraMtime = Math.max(0, ...extraSrcs.map((p) => fs.statSync(p).mtimeMs));
-      const stale = !existsSync(embedLib)
-        || fs.statSync(embedLib).mtimeMs < srcMtime
-        || fs.statSync(embedLib).mtimeMs < extraMtime;
-      if (stale) {
-        clog(1, "post-processing libzjs.a → libzjs_embed.a (iOS Sim)...");
-
-        // Compile each missing source into an object for the ld -r merge
-        // so the merged .o is self-contained.
-        const extraObjs: string[] = [];
-        for (const src of extraSrcs) {
-          const obj = path.join(iosBuildDir, path.basename(src).replace(/\.c$/, ".o"));
-          const cc = Bun.spawnSync([
-            "clang",
-            "-O3",
-            "-arch", "arm64",
-            "-isysroot", sdkPath,
-            versionMinFlag,
-            "-I" + path.join(zjsDir, "src"),
-            "-c", src,
-            "-o", obj,
-          ]);
-          if (cc.exitCode !== 0) {
-            throw new Error(
-              `[zapp] failed to compile ${path.basename(src)} for iOS Sim: ` +
-              new TextDecoder().decode(cc.stderr)
-            );
-          }
-          extraObjs.push(obj);
-        }
-
-        // The exported-symbols list is a single-pattern file matching
-        // every `_zjs_*` symbol. `*` is the glob meta in ld's
-        // -exported_symbols_list grammar.
-        await Bun.write(symsList, "_zjs_*\n");
-        const ldArgs = [
-          "-r",
-          "-arch", "arm64",
-          "-platform_version", "ios-simulator", "15.0", "15.0",
-          "-syslibroot", sdkPath,
-          "-exported_symbols_list", symsList,
-          // Force-load every .o in the .a — ld -r otherwise skips
-          // unreferenced objects, which would lose half of libzjs.
-          "-force_load", zjsLib,
-          ...extraObjs,
-          "-o", embedObj,
-        ];
-        const ld = Bun.spawnSync(["ld", ...ldArgs]);
-        if (ld.exitCode !== 0) {
-          throw new Error(
-            `[zapp] failed to build libzjs_embed.o: ` +
-            new TextDecoder().decode(ld.stderr)
-          );
-        }
-        if (existsSync(embedLib)) fs.unlinkSync(embedLib);
-        const ar = Bun.spawnSync(["ar", "-rcs", embedLib, embedObj]);
-        if (ar.exitCode !== 0) {
-          throw new Error(
-            `[zapp] failed to repack libzjs_embed.a: ` +
-            new TextDecoder().decode(ar.stderr)
-          );
-        }
-      }
+      // Symbol-hidden static repack — see repackZjsEmbedArchive. zjsLib here
+      // IS the simulator-arm64 libzjs.a (iOS only builds static). aes_gcm.c +
+      // process_posix.c are referenced by libzjs.a but the iOS Makefile target
+      // omits them (file upstream), so they're folded into the merged .o.
+      const embedLib = await repackZjsEmbedArchive({
+        zjsDir,
+        staticLib: zjsLib,
+        outDir: path.join(zjsDir, "build", "ios", "simulator-arm64"),
+        arch: "arm64",
+        sdkPath: await resolveSDKPath("iphonesimulator"),
+        platformVersion: ["ios-simulator", "15.0", "15.0"],
+        versionMinFlag: "-mios-simulator-version-min=15.0",
+        extraSrcs: [
+          path.join(zjsDir, "src", "third-party", "aes-gcm", "aes_gcm.c"),
+          path.join(zjsDir, "src", "platform", "process_posix.c"),
+        ].filter((p) => existsSync(p)),
+        label: "iOS Sim",
+      });
       content += `//> cflags: -I${shortPath(zjsInclude)}\n`;
       // Security.framework — `SecRandomCopyBytes` (used by zjs's
       // crypto.subtle key-generation path) lives there. Already in
@@ -1663,8 +1691,25 @@ export async function generatePlatformConfig(
       // separate cflags entry needed here.
       content += `//> link: ${shortPath(embedLib)}\n`;
     } else {
-      // target === "macos"
+      // target === "macos". zjsLib here is build/libzjs.dylib. The Nim path
+      // links the STATIC symbol-hidden repack (libzjs_embed.a) for a
+      // standalone .app — produce it here so it exists before `nim c` links
+      // (renderPlatformNim references build/libzjs_embed.a). `make all` builds
+      // a complete libzjs.a, so no extraSrcs are needed (unlike iOS). The
+      // legacy `=zc` path below still links the raw dylib (+ rpath /
+      // install_name rewrite).
       const zjsBuildDir = path.dirname(zjsLib);
+      await repackZjsEmbedArchive({
+        zjsDir,
+        staticLib: path.join(zjsBuildDir, "libzjs.a"),
+        outDir: zjsBuildDir,
+        arch: process.arch === "arm64" ? "arm64" : "x86_64",
+        sdkPath: await resolveSDKPath("macosx"),
+        platformVersion: ["macos", "12.0", "12.0"],
+        versionMinFlag: "-mmacosx-version-min=12.0",
+        extraSrcs: [],
+        label: "macOS",
+      });
       content += `//> macos: cflags: -I${shortPath(zjsInclude)}\n`;
       content += `//> macos: framework: Foundation\n`;
       content += `//> macos: link: ${shortPath(zjsLib)} -Wl,-rpath,${zjsBuildDir}\n`;
