@@ -2,7 +2,7 @@
 // (open/save) require UIDocumentPickerViewController which has a richer
 // presentation flow than NSOpenPanel; deferred to Phase 2 for full
 // parity. For Phase 1 spike the Dialog.message path is the most
-// important since it's what hello-world templates exercise.
+// important since it's what sample apps exercise.
 //
 // Returns JSON results matching the macOS contract. Buffers are
 // reusable statics matching darwin/dialog.m's style.

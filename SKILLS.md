@@ -14,7 +14,7 @@ code**: directory layout, conventions, invariants, file roles.
 
 Build the smallest, fastest desktop framework. macOS first, Windows next.
 
-Current headline numbers (M4 Max, one-window hello-world):
+Current headline numbers (M4 Max, one-window kitchen-sink):
 
 | Metric | Zapp (zjs) |
 |---|---|
@@ -109,7 +109,7 @@ zapp/
 │   └── src/index.ts                # zappWorkers() plugin
 │
 ├── benchmarks/                     # Zapp vs Tauri/Wails/Electron/Electrobun
-├── hello-world/                    # Playground (features-rich, not minimal)
+├── kitchen-sink/                   # Showcase + smoke app (native chrome, workers, etc.)
 ├── llms.txt                        # Public API reference (single file)
 ├── docs/                           # Long-form guides
 └── SKILLS.md                       # This file
@@ -269,11 +269,11 @@ There is **no separate backend-bootstrap** anymore.
 
 - **Bun everywhere**, never Node.
 - **Inclusive language**: allowlist/blocklist, not white/black.
-- **`hello-world/`** is the playground — test changes here end-to-end.
+- **`kitchen-sink/`** is the showcase + smoke app — test changes here end-to-end.
 - **`benchmarks/`** is the performance regression harness.
-- Before publishing: `bun run build` in `hello-world/` must pass with the
+- Before publishing: `bun run build` in `kitchen-sink/` must pass with the
   `zjs` engine (default). Test bare-* engines by changing the `engine:`
-  field in `hello-world/zapp.config.ts` for cross-engine verification.
+  field in `kitchen-sink/zapp.config.ts` for cross-engine verification.
 
 ## Public docs
 

@@ -2153,8 +2153,7 @@ A background-app or pure menu-bar app combines three things:
    `applicationShouldTerminateAfterLastWindowClosed: false` in the
    `AppConfig` struct inside your `zapp/app.zc`, then pass it to
    `App::new(config)`. This is a native-first knob, not a
-   `zapp.config.ts` field. The hello-world template sets this to
-   `false` by default.
+   `zapp.config.ts` field.
 
 2. **Hide the Dock icon** — call `Dock.hideIcon()` in JS (from a
    worker or `src/main.ts`) to remove the app from the Dock entirely.

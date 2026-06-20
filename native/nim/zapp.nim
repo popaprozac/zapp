@@ -156,7 +156,7 @@ proc app_get_active(): pointer {.exportc, cdecl.} = addr gActiveAppSentinel
 # are now provided by the generated zapp_build_config module (imported above).
 # For sub-gate A it emits: initial_url=zapp://index.html, use_embedded_assets=0,
 # asset_root=<built web dist> — so webview.m's zapp:// scheme handler serves the
-# real hello-world UI off the filesystem.
+# real kitchen-sink UI off the filesystem.
 
 # --- Embedded asset table ---------------------------------------------------
 # ZappEmbeddedAsset type + zapp_embedded_assets/zapp_embedded_assets_count are

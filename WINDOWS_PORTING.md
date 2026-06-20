@@ -5,7 +5,7 @@ sprint (task #167 / competitive-plan T2.C).
 
 **Status update 2026-06-11 (Windows sprint, `windows-parity` branch):
 M0–M2 are DONE and runtime-verified on a real Windows 11 machine.**
-`bun run build` in hello-world (no flag needed — win32 hosts default to
+`bun run build` in kitchen-sink (no flag needed — win32 hosts default to
 the windows target) produces a working .exe: window + WebView2 + bridge
 ready-handshake + `greet` round-trip, native Win32 menus, and headless
 bare-quickjs workers end-to-end (embedded script load, libuv timers,
@@ -269,13 +269,13 @@ macOS to-do queued from the Windows side:
    idea of WebView2-native web workers as the Windows default engine
    (memory: project_windows_webview2_workers) with zjs opt-in?
 4. **CI gate:** mirror the ios-simulator pattern — a `windows-latest`
-   GitHub Actions job that builds hello-world, plus a
+   GitHub Actions job that builds kitchen-sink, plus a
    `windows-platform-parity.test.ts` mirroring the iOS one (#281): every
    `windows_*` referenced from `.zc` must be defined in
    `native/platform/windows/`.
 5. **Milestone slicing (proposal to refine):**
    - **M0** — toolchain smoke: zc + compiler + WebView2 loader link on PC.
-   - **M1** — hello-world boots: window + WebView2 + bridge + `greet`
+   - **M1** — kitchen-sink boots: window + WebView2 + bridge + `greet`
      round-trip + Tier-1 symbols all real.
    - **M2** — events + workers: window events via WndProc, zjs worker
      end-to-end, Events bus cross-context.

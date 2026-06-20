@@ -24,7 +24,7 @@ guides.
 
 ## Benchmarks
 
-Real numbers. Same hello-world app (1 window, 1 service call) on each framework. macOS ARM64, M4 Max.
+Real numbers. Same kitchen-sink app (1 window, 1 service call) on each framework. macOS ARM64, M4 Max.
 
 | | Zapp (zjs) | Tauri v2 | Wails v3 | Electron | Electrobun |
 |---|---|---|---|---|---|

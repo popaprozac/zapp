@@ -7,9 +7,9 @@ cost on top of the webview baseline.
 ## Results
 
 Measured 2026-06-02. Two reference apps:
-- **hello-world** (`hello-world/`) — the canonical small-app shape, single
-  zjs ticker worker, supervised demo worker. Webview UI is ~12 KB of brotli
-  assets.
+- **hello-world** — REMOVED 2026-06-20 (superseded by kitchen-sink; the
+  default-flip cycle). The Zapp binary-size data point is pending rehoming to
+  a `benchmarks/apps/` sample — tracked under the "revisit benchmarks" follow-up.
 - **bench-host-bridge** (`benchmarks/apps/zapp-host-bridge/`) — two-worker
   bench harness, both workers run the same TS source. Used here as the
   per-engine multi-worker size reference.
@@ -17,7 +17,7 @@ Measured 2026-06-02. Two reference apps:
 | Variant | Engines linked | Binary | Δ vs no-workers |
 |---|---|---:|---:|
 | **no-workers** | (none) | **520 KB** | baseline |
-| **hello-world today** | zjs only | **529 KB** | +9 KB |
+| **hello-world today** | zjs only | _(pending — sample removed)_ | _(pending — sample removed)_ |
 | **bench (zjs + bare-jsc)** | zjs + bare-jsc | **4.49 MB** | +3.97 MB |
 | **bench (zjs + bare-quickjs)** | zjs + bare-quickjs | **5.45 MB** | +4.93 MB |
 | **bench (zjs + bare-v8)** | zjs + bare-v8 | **66.55 MB** | +66.03 MB |
@@ -26,7 +26,7 @@ Same numbers ranked smallest → largest:
 
 ```
 no-workers                  ▏ 520 KB
-hello-world (zjs)           ▏ 529 KB     +9 KB    (zjs ships ~0 binary overhead — its lib is small)
+hello-world (zjs)           ▏ pending    (sample removed — see bullet above)
 bench (zjs + bare-jsc)      ▎ 4.49 MB    +3.97 MB (Bare runtime + system JSC binding)
 bench (zjs + bare-quickjs)  ▎ 5.45 MB    +4.93 MB (Bare + QuickJS interpreter ~1 MB on top of jsc baseline)
 bench (zjs + bare-v8)       █████████████████████████████ 66.55 MB  +66.03 MB
@@ -35,7 +35,7 @@ bench (zjs + bare-v8)       █████████████████�
 ## Reading the numbers
 
 **zjs is essentially free.** Adding the first-party `zjs` worker engine
-to hello-world adds **9 KB** (529 KB vs 520 KB no-workers baseline). The
+to a zjs-worker app adds **9 KB** (529 KB vs 520 KB no-workers baseline). The
 zjs static lib is small and ships entirely without bare's NAPI runtime
 or libuv. This is the cross-platform default for new projects.
 
