@@ -29,6 +29,10 @@ case "$STAGE" in
     build_swift_lib
     nim_build "$(swift_link_flags)"
     ;;
+  swiftui)
+    build_swift_lib
+    nim_build "$(swift_link_flags) -framework SwiftUI -framework AppKit"
+    ;;
   *)
     echo "stage '$STAGE' not implemented until later tasks"; exit 2
     ;;
