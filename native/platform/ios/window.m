@@ -204,6 +204,14 @@ void zapp_ios_materialize_pending_windows(void) {
         // sidebar VC is the split's primary column; nil when there's no sidebar.
         UIViewController* contentVC = nil;
         UIViewController* sidebarVC = nil;
+        // The CONTENT webview, captured canonically. d->real_webview is NOT
+        // reliable past the pane-create dance: each darwin_webview_create_ext
+        // ends with zapp_ios_register_webview (auto-register by UIWindow), which
+        // overwrites d->real_webview with the LAST-created pane (sidebar, then
+        // inspector). We restore the canonical content webview after the panes
+        // are built so the inspector capture + re-slot + downstream consumers
+        // all get the content webview, not a pane.
+        WKWebView* canonicalContentWebview = nil;
 
         if (d->hasSidebar) {
             // Sidebar window: root on a UISplitViewController (the iOS analog
@@ -307,6 +315,7 @@ void zapp_ios_materialize_pending_windows(void) {
             WKWebView* contentWebview = (d->numeric_id >= 0 && d->numeric_id < ZAPP_MAX_WINDOW_CALLBACKS)
                 ? zapp_ios_webviews[d->numeric_id] : nil;
             d->real_webview = contentWebview;
+            canonicalContentWebview = contentWebview;  // captured BEFORE the sidebar _ext clobbers d->real_webview
 
             // Sidebar pane → its OWN transport slot, HOST identity (win-<host>
             // in JS), always-transparent intent, pane_role 1 (sets isSidebar),
@@ -357,6 +366,7 @@ void zapp_ios_materialize_pending_windows(void) {
 
             if (d->numeric_id >= 0 && d->numeric_id < ZAPP_MAX_WINDOW_CALLBACKS) {
                 d->real_webview = zapp_ios_webviews[d->numeric_id];
+                canonicalContentWebview = d->real_webview;  // no-sidebar: real_webview IS the content webview
                 // Push the canonical "win-<numericId>" into the JS context
                 // so Window.current() returns the same string format that
                 // Window.create() produces. Mirrors the macOS flow.
@@ -383,12 +393,17 @@ void zapp_ios_materialize_pending_windows(void) {
         // is born in its OWN persistent VC and never re-parented (re-parenting a
         // live WKWebView resets its content process and kills the bridge).
         //
-        // contentVC holds the content webview in both branches; capture the
-        // content webview here so the inspector block works whether the content
-        // came from darwin_webview_create_ext (sidebar branch) or
-        // darwin_webview_create (no-sidebar branch) — d->real_webview is the
-        // canonical content webview in both.
-        WKWebView* contentWebviewForInspector = d->real_webview;
+        // Use the CANONICAL content webview, NOT d->real_webview: in the sidebar
+        // branch the sidebar pane's darwin_webview_create_ext ended with
+        // zapp_ios_register_webview, which overwrote d->real_webview (and the host
+        // slot, since restored) with the SIDEBAR webview. Capturing d->real_webview
+        // here would hand the inspector block the sidebar webview — crashing the
+        // iPad content re-constrain (sidebar webview lives in sidebarVC.view, no
+        // common ancestor with contentVC.view) and routing the host content slot
+        // to the sidebar webview (greet times out). Restore the canonical content
+        // webview as real_webview too, so downstream consumers are correct.
+        if (canonicalContentWebview) d->real_webview = canonicalContentWebview;
+        WKWebView* contentWebviewForInspector = canonicalContentWebview;
         if (d->hasInspector) {
             // Persistent inspector VC owns the inspector webview for life (never
             // re-parented). Created here so the webview is born in its final home.
