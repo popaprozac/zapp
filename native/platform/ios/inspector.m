@@ -22,6 +22,7 @@
 #include <stdbool.h>
 
 extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
+extern void darwin_window_eval_js(int32_t window_id, const char* js);
 
 // --- Per-window registry --------------------------------------------------
 //
@@ -30,7 +31,7 @@ extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
 // pane's transport slot; all resolve to the same host UIWindow via
 // darwin_window_get_by_numeric_id, so the host-window key catches them all.
 
-@interface ZappIOSInspectorController : NSObject
+@interface ZappIOSInspectorController : NSObject <UISheetPresentationControllerDelegate, UIAdaptivePresentationControllerDelegate>
 @property (nonatomic, weak)   UIViewController* inspectorVC;     // persistent inspector pane VC
 @property (nonatomic, weak)   UIViewController* contentVC;       // the content pane VC it trails
 @property (nonatomic, weak)   WKWebView* contentWebview;         // content webview (re-constrained, never re-parented)
@@ -46,7 +47,22 @@ extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
 @property (nonatomic, strong) UIViewController* heldInspectorVC;
 @end
 
+// Forward-declared so the swipe-dismiss delegate (in @implementation below) can
+// call the emit helper; the definitions live after the registry helpers.
+static void zapp_ios_inspector_emit(ZappIOSInspectorController* c, const char* eventName);
+
 @implementation ZappIOSInspectorController
+
+// iPhone-compact swipe-down dismiss: the system tears the sheet down without
+// going through darwin_inspector_collapse, so sync `shown` + emit collapsed
+// here to keep the JS `win.inspector.collapsed` state honest (same lesson as
+// the sidebar overlay tap-out).
+- (void)presentationControllerDidDismiss:(UIPresentationController*)pc {
+    (void)pc;
+    self.shown = NO;
+    zapp_ios_inspector_emit(self, "inspector-collapsed");
+}
+
 @end
 
 static NSMutableDictionary<NSValue*, ZappIOSInspectorController*>* zapp_ios_inspectors = nil;
@@ -57,15 +73,57 @@ static void zapp_ios_inspector_on_main(void (^block)(void)) {
 }
 
 // slot -> owning UIWindow -> registry key. Works from ANY pane's slot (content,
-// sidebar, or inspector) since they all share the host UIWindow. The NEXT task
-// (control ops) uses this; defined now so the wiring is in place.
-__attribute__((unused))
+// sidebar, or inspector) since they all share the host UIWindow.
 static ZappIOSInspectorController* zapp_ios_inspector_for_slot(int32_t slot_id) {
     if (!zapp_ios_inspectors) return nil;
     void* win_ptr = darwin_window_get_by_numeric_id(slot_id);
     if (!win_ptr) return nil;
     NSValue* key = [NSValue valueWithPointer:win_ptr];
     return zapp_ios_inspectors[key];
+}
+
+// --- Event fan-out (mirrors darwin/sidebar.m's zapp_pane_emit) ------------
+//
+// dispatchWindowEvent's first arg is the target window id ("win-<hostId>");
+// both panes carry the host id. eventName is the bare suffix
+// ("inspector-collapsed" / "inspector-resized"); bootstrap/webview.ts prepends
+// "window:". dataJson is the optional 3rd arg — nil emits `undefined`, otherwise
+// a single-quoted JSON literal (mirroring macOS's zapp_pane_emit), which the
+// runtime parses for the bare-`width` resize payload. Eval'd to BOTH the host
+// slot AND (when distinct) the inspector slot.
+static void zapp_ios_inspector_emit_data(ZappIOSInspectorController* c,
+                                         const char* eventName, NSString* dataJson) {
+    if (!c || !eventName) return;
+    NSString* dataArg = @"undefined";
+    if (dataJson) {
+        NSString* esc = [dataJson stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+        esc = [esc stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
+        dataArg = [NSString stringWithFormat:@"'%@'", esc];
+    }
+    NSString* event = [NSString stringWithUTF8String:eventName];
+    char js[256];
+    snprintf(js, sizeof(js),
+        "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+        "if(b&&typeof b.dispatchWindowEvent==='function'){"
+        "b.dispatchWindowEvent('win-%d','%s',%s);}})();",
+        c.hostWindowId, event.UTF8String, dataArg.UTF8String);
+    darwin_window_eval_js(c.hostWindowId, js);
+    if (c.inspectorSlotId >= 0 && c.inspectorSlotId != c.hostWindowId) {
+        darwin_window_eval_js(c.inspectorSlotId, js);
+    }
+}
+
+// Name-only emit (no payload) — collapse/expand transitions.
+static void zapp_ios_inspector_emit(ZappIOSInspectorController* c, const char* eventName) {
+    zapp_ios_inspector_emit_data(c, eventName, nil);
+}
+
+// inspector-resized carries a bare width under the top-level `width` key
+// ({"width":N}), matching darwin/inspector.m's resize payload + the
+// bareWidth branch in bootstrap/webview.ts's dispatchWindowEvent.
+static void zapp_ios_inspector_emit_resize(ZappIOSInspectorController* c, int32_t width) {
+    NSString* json = [NSString stringWithFormat:@"{\"width\":%d}", (int)width];
+    zapp_ios_inspector_emit_data(c, "inspector-resized", json);
 }
 
 // --- Registry API consumed by window.m ------------------------------------
@@ -165,15 +223,115 @@ void zapp_ios_inspector_unregister(void* window) {
     });
 }
 
-// --- Control ops (router entry points) — STILL STUBS ----------------------
+// --- Control ops (router entry points) ------------------------------------
 //
-// NSSplitViewController is AppKit-only; the router references these four/six
-// control symbols under #ifdef __APPLE__ (true on iOS), so they must exist.
-// The NEXT task implements them against the registry above (toggle the
-// widthConstraint on iPad-regular, present/dismiss the sheet on iPhone-compact).
-void darwin_inspector_toggle(int32_t window_id) { (void)window_id; }
-void darwin_inspector_collapse(int32_t window_id) { (void)window_id; }
-void darwin_inspector_expand(int32_t window_id) { (void)window_id; }
-void darwin_inspector_set_width(int32_t window_id, int32_t width) { (void)window_id; (void)width; }
-void darwin_inspector_set_collapsible(int32_t window_id, bool can_collapse) { (void)window_id; (void)can_collapse; }
-void darwin_inspector_set_resizable(int32_t window_id, bool resizable) { (void)window_id; (void)resizable; }
+// NSSplitViewController is AppKit-only; on iOS we drive the trailing pane's
+// widthConstraint (iPad-regular) or present/dismiss the held VC as a sheet
+// (iPhone-compact). All keyed by a transport slot (host OR inspector pane);
+// zapp_ios_inspector_for_slot resolves either to the host record.
+
+// Show the inspector. iPad-regular: animate the trailing pane in (width 0 ->
+// configured). iPhone-compact: present the held VC as a sheet (medium + large
+// detents, grabber). Never re-parents the webview — the sheet PRESENTS the held
+// VC, which already owns its webview.
+void darwin_inspector_expand(int32_t window_id) {
+    zapp_ios_inspector_on_main(^{
+        ZappIOSInspectorController* c = zapp_ios_inspector_for_slot(window_id);
+        if (!c) return;
+        if (c.compact) {
+            // iPhone: present the held VC as a sheet.
+            UIViewController* ivc = c.heldInspectorVC;
+            if (!ivc || ivc.presentingViewController) return; // already presented
+            void* winptr = darwin_window_get_by_numeric_id(c.hostWindowId);
+            UIWindow* win = (__bridge UIWindow*)winptr;
+            UIViewController* presenter = win.rootViewController;
+            while (presenter.presentedViewController) presenter = presenter.presentedViewController;
+            ivc.modalPresentationStyle = UIModalPresentationPageSheet;
+            if (@available(iOS 15.0, *)) {
+                UISheetPresentationController* sheet = ivc.sheetPresentationController;
+                if (sheet) {
+                    sheet.detents = @[UISheetPresentationControllerDetent.mediumDetent,
+                                      UISheetPresentationControllerDetent.largeDetent];
+                    sheet.prefersGrabberVisible = YES;
+                    sheet.delegate = c; // for swipe-dismiss sync (presentationControllerDidDismiss:)
+                }
+            }
+            ivc.presentationController.delegate = c; // UIAdaptivePresentationControllerDelegate
+            [presenter presentViewController:ivc animated:YES completion:nil];
+        } else {
+            // iPad: animate the trailing pane in (widthConstraint 0 -> width).
+            c.widthConstraint.constant = (c.width > 0 ? c.width : 280);
+            [UIView animateWithDuration:0.25 animations:^{ [c.contentVC.view layoutIfNeeded]; }];
+        }
+        c.shown = YES;
+        zapp_ios_inspector_emit(c, "inspector-expanded");
+    });
+}
+
+// Hide the inspector. iPad-regular: animate the trailing pane out (width -> 0).
+// iPhone-compact: dismiss the presented sheet.
+void darwin_inspector_collapse(int32_t window_id) {
+    zapp_ios_inspector_on_main(^{
+        ZappIOSInspectorController* c = zapp_ios_inspector_for_slot(window_id);
+        if (!c) return;
+        if (c.compact) {
+            UIViewController* ivc = c.heldInspectorVC;
+            if (ivc && ivc.presentingViewController)
+                [ivc dismissViewControllerAnimated:YES completion:nil];
+        } else {
+            c.widthConstraint.constant = 0;
+            [UIView animateWithDuration:0.25 animations:^{ [c.contentVC.view layoutIfNeeded]; }];
+        }
+        c.shown = NO;
+        zapp_ios_inspector_emit(c, "inspector-collapsed");
+    });
+}
+
+// Toggle from LIVE state — the iPhone sheet can be swipe-dismissed out from
+// under us, and the iPad pane width is authoritative, so never trust a cached
+// flag here.
+void darwin_inspector_toggle(int32_t window_id) {
+    zapp_ios_inspector_on_main(^{
+        ZappIOSInspectorController* c = zapp_ios_inspector_for_slot(window_id);
+        if (!c) return;
+        BOOL isShown;
+        if (c.compact) isShown = (c.heldInspectorVC && c.heldInspectorVC.presentingViewController != nil);
+        else isShown = (c.widthConstraint.constant > 0.5);
+        // The collapse/expand ops re-dispatch to main (already on it here — they
+        // run inline since [NSThread isMainThread] is true).
+        if (isShown) darwin_inspector_collapse(window_id);
+        else darwin_inspector_expand(window_id);
+    });
+}
+
+// Set the (expanded) inspector width. iPad: re-animate the pane if currently
+// shown; otherwise just stores for the next expand. iPhone: the sheet is full
+// width, so width is n/a there (no-op). Emits inspector-resized either way for
+// state parity with the runtime InspectorHandle.
+void darwin_inspector_set_width(int32_t window_id, int32_t width) {
+    zapp_ios_inspector_on_main(^{
+        ZappIOSInspectorController* c = zapp_ios_inspector_for_slot(window_id);
+        if (!c) return;
+        c.width = width;
+        if (!c.compact && c.widthConstraint.constant > 0.5) {  // only if currently shown
+            c.widthConstraint.constant = width;
+            [UIView animateWithDuration:0.15 animations:^{ [c.contentVC.view layoutIfNeeded]; }];
+        }
+        // compact: full-width sheet — width is n/a (documented no-op there).
+        zapp_ios_inspector_emit_resize(c, width);
+    });
+}
+
+// User-collapsible gating is an NSSplitViewItem affordance; the iOS inspector is
+// driven explicitly (pane constraint / sheet present-dismiss), so there's no
+// equivalent knob. No-op for router parity (documented).
+void darwin_inspector_set_collapsible(int32_t window_id, bool can_collapse) {
+    (void)window_id; (void)can_collapse;
+}
+
+// Divider-drag resize isn't a UIKit affordance (the trailing pane width is set
+// programmatically, the sheet is full-width). No-op for router parity
+// (documented).
+void darwin_inspector_set_resizable(int32_t window_id, bool resizable) {
+    (void)window_id; (void)resizable;
+}
