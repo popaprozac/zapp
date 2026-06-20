@@ -3,8 +3,10 @@
 **Status:** living doc. Last assessed 2026-06-18 (branch `feat/nim-native`).
 
 **Goal:** the Nim native layer (`native/nim/`) fully REPLACES the Zen-C (`.zc`)
-native layer — not coexist. Today the Nim build is opt-in via
-`ZAPP_NATIVE_LANG=nim`; the zc build is the default. (Decision background:
+native layer — not coexist. **The Nim build is now the default.** The legacy
+Zen-C build is opt-out via `ZAPP_NATIVE_LANG=zc` — a transitional escape hatch.
+**Windows-on-Nim is in progress** (gap #6); until that sprint lands, build
+Windows with `ZAPP_NATIVE_LANG=zc`. (Decision background:
 `docs/superpowers/specs/2026-06-15-nim-migration-design.md` and the
 `2026-06-17-nim-app-*` specs.)
 
@@ -63,14 +65,14 @@ So a day-to-day Nim build on a machine that already has the vendored
 | 4 | **bare-* engines** — **DEFERRED** | Large | **Deferred** per the worker-engine strategy: the post-gap-#3 path is **zjs-centric** (iOS gap #5, Windows gap #6, default-flip gap #7). Nim build is **zjs-only** (`worker.nim:6-8,65-97`; `zapp.nim:204`). The whole bare-jsc/v8/quickjs/mqjs/hermes machinery — `ensureBareBuilt` (~450 lines, `native.ts:252-919`) incl. iOS/Windows engine cross-compiles — is never invoked from the Nim path. |
 | 5 | **iOS** | Large | `buildNativeNim` is macOS-only: no `target` threading (hardcoded `platform:"macos"` at `native.ts:1126`, macOS clang/frameworks at `:1248`), the 18 `native/platform/ios/*.m` are unwired, no SDK/arch/bundle/plist/sign. A whole platform. zc reference: `native.ts:75-105,372-448`. |
 | 6 | **Windows** | Large | No Windows in the Nim path at all (no MinGW/`cc` handling, no `windows/*.c` compile, no WebView2 link). zc reference: `native.ts:107-131,342-365`. |
-| 7 | **Default-flip + zc removal** | Medium | Invert/delete the single env gate (`native.ts:1263`). hello-world was REMOVED (superseded by kitchen-sink); the binary-size benchmark data point is pending rehoming to `benchmarks/apps/`. Rewrite zc-coupled tests: `ios-platform-parity.test.ts` + `windows-platform-parity.test.ts` (scan `.zc` for `darwin_*`/symbols), `test-native.ts` (runs `zc run`). Then delete `native/**/*.zc`. |
+| 7a | ~~**Default-flip**~~ ✅ DONE | Small | The env gate is inverted: Nim is now the default; `ZAPP_NATIVE_LANG=zc` is the opt-out escape hatch. hello-world was REMOVED (superseded by kitchen-sink); the binary-size benchmark data point is pending rehoming to `benchmarks/apps/`. |
+| 7b | **zc removal** | Medium | Gated on Windows-on-Nim (#6) completing. Rewrite zc-coupled tests: `ios-platform-parity.test.ts` + `windows-platform-parity.test.ts` (scan `.zc` for `darwin_*`/symbols), `test-native.ts` (runs `zc run`). Then delete `native/**/*.zc`. |
 
-**Net shape:** macOS is ~there; #3 (worker event fan-out) is now ✅ done, so the
-remaining macOS surface is behavioral parity complete. The long pole is **iOS +
-Windows** (two Large items), gated behind **de-zc-ing** (Medium, Piece A done /
-Piece B deferred). **bare-* engines (#4) are deferred** per the worker-engine
-strategy — the post-gap-#3 path is **zjs-centric**: iOS (#5) → Windows (#6) →
-default-flip + zc removal (#7).
+**Net shape:** macOS is done; #3 (worker event fan-out) and #7a (default-flip) are
+both ✅ done — Nim is now the default build. The long pole is **iOS + Windows**
+(two Large items), gated behind **de-zc-ing** (Medium, Piece A done / Piece B
+deferred). **bare-* engines (#4) are deferred** per the worker-engine strategy —
+the path is **zjs-centric**: iOS (#5) → Windows (#6) → zc removal (#7b).
 
 ---
 

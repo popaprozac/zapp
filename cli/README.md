@@ -22,7 +22,8 @@ This guarantees your project keeps working even as the CLI evolves.
 ## Requirements
 
 - **Bun** ≥ 1.3
-- **Zen-C compiler (`zc`)** — https://github.com/zenc-lang/zenc
+- **Nim** — https://nim-lang.org (default native build on macOS/iOS/Linux)
+- **Zen-C compiler (`zc`)** — https://github.com/zenc-lang/zenc — only needed with `ZAPP_NATIVE_LANG=zc` (legacy opt-out; required for Windows until Windows-on-Nim lands)
 - **Xcode Command Line Tools** (macOS) — for `codesign`, `iconutil`
 - **cmake** — only required on first build of the `bare-*` worker engines
   (downloads + compiles into `~/.zapp/vendor/`). Not needed for the
@@ -58,7 +59,7 @@ Compiles the native binary, starts the Vite dev server on port 5173 (or the
 configured `devPort`), launches the packaged `.app` with a live-reloading
 webview. Workers re-bundle on source change.
 
-Watches `zapp/**` for Zen-C changes and recompiles. Kill with Ctrl-C.
+Watches `zapp/**` for native source changes and recompiles. Kill with Ctrl-C.
 
 ### `zapp build`
 
@@ -93,7 +94,7 @@ By default `zapp dev` and `zapp build` show app output, build milestones,
 and errors. Two flags increase detail:
 
 - `--verbose` / `-v` — add framework lifecycle and per-build-step messages.
-- `--debug` — add the full `zc` compiler invocation and complete build
+- `--debug` — add the full compiler invocation and complete build
   output. Useful when diagnosing a build failure in CI or when the
   default error output isn't enough.
 
@@ -118,7 +119,7 @@ Valid values: `verbose`, `debug`. Unset (default) is quiet mode.
 my-app/
 ├── package.json, tsconfig.json, vite.config.ts, index.html
 ├── src/                   # your TS / UI code
-├── zapp/                  # your Zen-C (native) code — app.zc, build.zc
+├── zapp/                  # your native code — app.nim (Nim default) or app.zc (ZAPP_NATIVE_LANG=zc)
 ├── zapp.config.ts         # app identity, headless workers, macOS opts
 ├── build/                 # platform-specific build inputs
 │   ├── README.md
@@ -180,9 +181,10 @@ See [`docs/engines.md`](../docs/engines.md) for the full taxonomy
 
 ## Native linking — `native:`
 
-`zapp/build.zc` is your Zen-C **service code** (imports,
-`app.service.add(...)`, handler `fn`s). The CLI injects platform
-frameworks, link flags, ObjC ARC, and the sysroot into
+In the **Nim build** (default), native service code lives in `zapp/app.nim`.
+In the **Zen-C build** (`ZAPP_NATIVE_LANG=zc`), `zapp/build.zc` is your
+Zen-C service code (imports, `app.service.add(...)`, handler `fn`s). The
+CLI injects platform frameworks, link flags, ObjC ARC, and the sysroot into
 `.zapp/zapp_platform.zc` and derives worker engines from
 `zapp.config.ts → headless[].engine`, so the default template has no
 `//>` build directives or `ZAPP_WORKER_ENGINE_*` defines.

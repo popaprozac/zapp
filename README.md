@@ -13,7 +13,7 @@
 
 ---
 
-Zapp is an application framework that produces **extraordinarily small binaries** by compiling to native code via [Zen-C](https://github.com/zenc-lang/zenc) and rendering UI in the system WebView. No bundled browser. No runtime overhead. Your frontend is your choice — React, Svelte, Vue, Solid, or vanilla; `zapp init -t <template>` scaffolds any of them.
+Zapp is an application framework that produces **extraordinarily small binaries** by compiling to native code (Nim by default; [Zen-C](https://github.com/zenc-lang/zenc) available as `ZAPP_NATIVE_LANG=zc`) and rendering UI in the system WebView. No bundled browser. No runtime overhead. Your frontend is your choice — React, Svelte, Vue, Solid, or vanilla; `zapp init -t <template>` scaffolds any of them.
 
 The same Zapp codebase ships to **macOS and iOS** today (Windows next). Desktop apps get the full multi-window / menu-bar / tray surface; iOS apps get UIKit-native modal sheets, file pickers, notifications, and clipboard — without any "this looks like a web app on a phone" feel.
 
@@ -74,7 +74,7 @@ headless: {
 ## Quick Start
 
 ```bash
-# Prerequisites: Zen-C compiler (zc) + Bun
+# Prerequisites: Nim + Bun (macOS/Linux/iOS). Windows builds use ZAPP_NATIVE_LANG=zc (Nim-Windows in progress).
 bunx @zappdev/cli init my-app
 cd my-app
 bun install

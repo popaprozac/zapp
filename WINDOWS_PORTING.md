@@ -16,6 +16,11 @@ link gate below is CLOSED. Remaining gaps are Tier 2 feature breadth
 (M3) and packaging/CI (M4). See "Windows prerequisites" and the
 "Vendor/upstream ledger" sections below before building on a fresh PC.
 
+> **Native build language note:** The framework now defaults to the **Nim**
+> native build on all platforms. Windows-on-Nim is in progress; until that
+> sprint lands, Windows builds require `ZAPP_NATIVE_LANG=zc` to use the
+> legacy Zen-C build path.
+
 macOS is the reference platform with full coverage; iOS shares most of
 the Zen-C layer.
 

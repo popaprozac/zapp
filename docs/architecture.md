@@ -1,13 +1,13 @@
 # Architecture
 
-Zapp is three layers: **native core** (Zen-C → C → binary), **bridge**
+Zapp is three layers: **native core** (Nim → binary by default; legacy Zen-C → C → binary with `ZAPP_NATIVE_LANG=zc`), **bridge**
 (JS injected into every webview and worker), and **runtime** (the TS API
 users import).
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │                                                                      │
-│   NATIVE CORE (Zen-C → C → single static binary)                     │
+│   NATIVE CORE (Nim → binary by default; Zen-C → C with ZAPP_NATIVE_LANG=zc) │
 │                                                                      │
 │    ┌──────────────────────────────────────────────────────────────┐  │
 │    │  App / Windows / Services / Menus / Dialogs / Notifications │  │
@@ -34,8 +34,10 @@ users import).
 
 ## Layer 1: native core
 
-Everything that's Zen-C, C, or ObjC/Windows-C ships inside the single
-binary. The framework's own source lives in `native/`.
+Everything native ships inside the single binary. The default build uses
+**Nim** (`native/nim/`); the legacy Zen-C path (`native/**/*.zc`) is available
+as an opt-out via `ZAPP_NATIVE_LANG=zc` and is required for Windows until the
+Windows-on-Nim sprint lands. The framework's own source lives in `native/`.
 
 ```
 native/
