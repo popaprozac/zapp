@@ -18,7 +18,11 @@ export const homeSection: Section = {
       </div>`;
     const greetEl = host.querySelector("[data-greet]")!;
     Services.invoke("greet", { name: "Kitchen Sink" })
-      .then((msg) => { greetEl.textContent = `greet → ${msg}`; })
-      .catch((e) => { greetEl.textContent = `greet error: ${e}`; });
+      .then((msg) => {
+        greetEl.textContent = `greet → ${msg}`;
+      })
+      .catch((e) => {
+        greetEl.textContent = `greet error: ${e}`;
+      });
   },
 };
