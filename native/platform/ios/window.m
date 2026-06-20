@@ -303,13 +303,15 @@ void zapp_ios_materialize_pending_windows(void) {
 
         if (d->hasSidebar) {
             // Content pane → host slot, host identity, pane_role 0, host_has_
-            // sidebar=true. Created into contentVC.view (the split's secondary
-            // column), which is now attached to the window. Mirrors the macOS
-            // content-pane darwin_webview_create_ext call.
+            // sidebar=true, host_has_inspector=d->hasInspector. Created into
+            // contentVC.view (the split's secondary column), which is now attached
+            // to the window. Mirrors the macOS content-pane call (which passes
+            // useSidebar/useInspector). host_has_inspector injects zapp.hasInspector
+            // so Window.current().inspector (and the kitchen-sink toggle) is wired.
             darwin_webview_create_ext((__bridge void*)window, d->inspectable, d->first_mouse,
                                       NULL, d->numeric_id, false,
                                       (__bridge void*)contentVC.view, d->numeric_id, 0,
-                                      /*host_has_sidebar*/true, /*host_has_inspector*/false);
+                                      /*host_has_sidebar*/true, /*host_has_inspector*/d->hasInspector);
             // _ext auto-registers by UIWindow → the content webview landed in
             // the host slot. Capture it before the sidebar create clobbers it.
             WKWebView* contentWebview = (d->numeric_id >= 0 && d->numeric_id < ZAPP_MAX_WINDOW_CALLBACKS)
@@ -324,7 +326,7 @@ void zapp_ios_materialize_pending_windows(void) {
             darwin_webview_create_ext((__bridge void*)window, d->inspectable, d->first_mouse,
                                       d->sidebarUrl, d->sidebarNumericId, true,
                                       (__bridge void*)sidebarVC.view, d->numeric_id, 1,
-                                      /*host_has_sidebar*/true, /*host_has_inspector*/false);
+                                      /*host_has_sidebar*/true, /*host_has_inspector*/d->hasInspector);
 
             // _ext registered the sidebar webview by UIWindow → it overwrote
             // the HOST slot (both panes share one UIWindow). Pull the sidebar
@@ -357,12 +359,16 @@ void zapp_ios_materialize_pending_windows(void) {
             // user scripts inside darwin_webview_create_ext — a one-shot eval
             // here would race the page commit, as the macOS path notes.)
         } else {
-            // darwin_webview_create allocates the WKWebView, attaches it to
-            // contentVC.view, and registers the (window, webview) pair in
-            // zapp_ios_webviews via zapp_ios_register_webview. Crucially,
-            // the WKWebView is being added to a scene-bound window — its
-            // gesture recognizers form against a live responder chain.
-            darwin_webview_create((__bridge void*)window, d->inspectable, d->first_mouse, NULL, d->numeric_id, false);
+            // _ext (container=NULL → adds to the scene-bound window's root view,
+            // same as the legacy darwin_webview_create) so the gesture recognizers
+            // form against a live responder chain. We use _ext (not the legacy
+            // wrapper) to pass host_has_inspector=d->hasInspector — injecting
+            // zapp.hasInspector so a no-sidebar window with an inspector still
+            // wires Window.current().inspector.
+            darwin_webview_create_ext((__bridge void*)window, d->inspectable, d->first_mouse,
+                                      NULL, d->numeric_id, false,
+                                      /*container*/NULL, /*identity*/-1, /*pane_role*/0,
+                                      /*host_has_sidebar*/false, /*host_has_inspector*/d->hasInspector);
 
             if (d->numeric_id >= 0 && d->numeric_id < ZAPP_MAX_WINDOW_CALLBACKS) {
                 d->real_webview = zapp_ios_webviews[d->numeric_id];
