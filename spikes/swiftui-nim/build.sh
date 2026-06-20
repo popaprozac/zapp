@@ -11,9 +11,23 @@ nim_build() {
     ${1:+--passL:"$1"} -o:probe probe.nim
 }
 
+SWIFT_LIBDIR="$(dirname "$(xcrun --find swiftc)")/../lib/swift/macosx"
+
+build_swift_lib() {
+  swiftc -emit-library -static -O -module-name zappswift -o libzappswift.a probe.swift
+}
+
+swift_link_flags() {
+  echo "-L. -lzappswift -L${SWIFT_LIBDIR} -lswiftCore -lswiftFoundation -Xlinker -rpath -Xlinker ${SWIFT_LIBDIR} -Xlinker -rpath -Xlinker /usr/lib/swift"
+}
+
 case "$STAGE" in
   baseline)
     nim_build ""
+    ;;
+  bridge)
+    build_swift_lib
+    nim_build "$(swift_link_flags)"
     ;;
   *)
     echo "stage '$STAGE' not implemented until later tasks"; exit 2
