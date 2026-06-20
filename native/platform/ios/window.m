@@ -83,6 +83,18 @@ typedef struct ZappIOSDeferred {
     // transparent sidebar webview (the pane analog of the window bg).
     bool    sidebar_has_bg;
     int     sidebar_bg_r, sidebar_bg_g, sidebar_bg_b;
+    // Create-time inspector opts (read from wopts_inspector_* in
+    // darwin_window_create, consumed at materialize). Mirrors the sidebar
+    // fields above. hasInspector gates the trailing-pane materialize path;
+    // inspectorUrl is strdup'd to survive until materialize (freed in destroy).
+    // On iPad-regular the inspector is a trailing pane in the content VC; on
+    // iPhone-compact it is merely held (the sheet presentation + show/hide
+    // control ops are a separate next task).
+    bool    hasInspector;
+    char*   inspectorUrl;        // strdup'd; freed in destroy
+    int32_t inspectorNumericId;  // inspector webview's transport slot
+    int32_t inspectorWidth;
+    bool    inspectorCollapsed;
 } ZappIOSDeferred;
 
 #define ZAPP_MAX_DEFERRED 16
@@ -139,6 +151,18 @@ static void zapp_ios_register_webview_slot(int32_t slot, WKWebView* webview, NSS
 // here is gone now that the strong definition exists in another TU.
 extern void zapp_ios_sidebar_register(void* window, void* split, void* sidebarVC,
                                       void* contentVC, int32_t host_id, int32_t sidebar_id);
+
+// Implemented in ios/inspector.m. Materialize calls it AFTER both the content
+// and (optional) sidebar panes are built, handing it the persistent inspector
+// VC + the content VC + the content webview + the host/inspector ids + the
+// configured width and collapsed intent. On iPad-regular inspector.m embeds the
+// inspector VC trailing-in-content (re-constraining the content webview via Auto
+// Layout, never re-parenting it); on iPhone-compact it merely holds the VC (the
+// sheet presentation + show/hide ops are a separate next task).
+extern void zapp_ios_inspector_register(void* window, void* inspectorVC,
+                                        void* contentVC, void* contentWebview,
+                                        int32_t host_id, int32_t inspector_id,
+                                        int32_t width, bool collapsed);
 
 static ZappIOSDeferred* zapp_ios_find_deferred(void* handle) {
     if (!handle) return NULL;
@@ -349,6 +373,68 @@ void zapp_ios_materialize_pending_windows(void) {
                     }
                 }
             }
+        }
+
+        // --- Inspector pane (trailing, the iOS analog of macOS's trailing
+        // NSSplitViewItem) -----------------------------------------------------
+        //
+        // Built AFTER the content (+ optional sidebar) panes so contentVC and
+        // d->real_webview are set in BOTH branches above. The inspector webview
+        // is born in its OWN persistent VC and never re-parented (re-parenting a
+        // live WKWebView resets its content process and kills the bridge).
+        //
+        // contentVC holds the content webview in both branches; capture the
+        // content webview here so the inspector block works whether the content
+        // came from darwin_webview_create_ext (sidebar branch) or
+        // darwin_webview_create (no-sidebar branch) — d->real_webview is the
+        // canonical content webview in both.
+        WKWebView* contentWebviewForInspector = d->real_webview;
+        if (d->hasInspector) {
+            // Persistent inspector VC owns the inspector webview for life (never
+            // re-parented). Created here so the webview is born in its final home.
+            UIViewController* inspectorVC = [[UIViewController alloc] init];
+            inspectorVC.view.backgroundColor = [UIColor systemBackgroundColor];
+
+            // Create the inspector webview INTO inspectorVC.view (pane_role 3),
+            // host identity, transparent, host_has_inspector=true.
+            darwin_webview_create_ext((__bridge void*)window, d->inspectable, d->first_mouse,
+                                      d->inspectorUrl, d->inspectorNumericId, true,
+                                      (__bridge void*)inspectorVC.view, d->numeric_id, 3,
+                                      /*host_has_sidebar*/d->hasSidebar, /*host_has_inspector*/true);
+
+            // Re-slot dance (mirror the sidebar): _ext registers the new webview
+            // by UIWindow, which clobbered the host slot (all panes share one
+            // UIWindow). Find the inspector webview, register it in ITS slot,
+            // then restore the content webview to the host slot.
+            NSString* hostWindowId2 = [NSString stringWithFormat:@"win-%d", d->numeric_id];
+            WKWebView* inspectorWebview = nil;
+            for (UIView* sub in inspectorVC.view.subviews) {
+                if ([sub isKindOfClass:[WKWebView class]]) { inspectorWebview = (WKWebView*)sub; break; }
+            }
+            if (inspectorWebview) {
+                zapp_ios_register_webview_slot(d->inspectorNumericId, inspectorWebview, hostWindowId2);
+            }
+            if (contentWebviewForInspector) {
+                zapp_ios_register_webview_slot(d->numeric_id, contentWebviewForInspector, hostWindowId2);
+            }
+
+            // Underpage fill on the inspector pane when the app set a window bg
+            // (mirrors the sidebar/content underpage fill above).
+            if (d->has_bg && inspectorWebview) {
+                if (@available(iOS 15.0, *)) {
+                    inspectorWebview.underPageBackgroundColor = bgColor;
+                }
+            }
+
+            // Hand off to the inspector manager (ios/inspector.m): it embeds the
+            // VC trailing-in-content on iPad-regular (honoring collapsed) and just
+            // holds it on iPhone-compact (the sheet presentation is the next task).
+            zapp_ios_inspector_register((__bridge void*)window,
+                                        (__bridge void*)inspectorVC,
+                                        (__bridge void*)contentVC,
+                                        (__bridge void*)contentWebviewForInspector,
+                                        d->numeric_id, d->inspectorNumericId,
+                                        d->inspectorWidth, d->inspectorCollapsed);
         }
 
         // Replay queued setters.
@@ -608,6 +694,21 @@ void* darwin_window_create(void* opts) {
                 d->sidebar_has_bg = true;
             }
         }
+
+        // Create-time inspector opts — read from the SAME wopts_inspector_*
+        // accessors macOS uses (darwin/window.m). hasInspector gates the
+        // trailing-pane materialize path. The url is strdup'd to survive until
+        // materialize (the WindowOptions is only pinned across this call).
+        extern const char* wopts_inspector_url(void* opts);
+        extern int32_t wopts_inspector_numeric_id(void* opts);
+        extern int32_t wopts_inspector_width(void* opts);
+        extern bool wopts_inspector_collapsed(void* opts);
+        const char* _insUrl = wopts_inspector_url(opts);
+        d->hasInspector = (_insUrl && _insUrl[0]);
+        d->inspectorUrl = d->hasInspector ? strdup(_insUrl) : NULL;
+        d->inspectorNumericId = wopts_inspector_numeric_id(opts);
+        d->inspectorWidth = wopts_inspector_width(opts);
+        d->inspectorCollapsed = wopts_inspector_collapsed(opts);
     }
     for (int i = 0; i < ZAPP_MAX_DEFERRED; i++) {
         if (!zapp_ios_deferred_list[i]) {
@@ -626,6 +727,7 @@ void darwin_window_destroy(void* handle) {
         free(d->queued_title);
         free(d->sidebarUrl);
         free(d->sidebarPresentation);
+        free(d->inspectorUrl);
         for (int i = 0; i < ZAPP_MAX_DEFERRED; i++) {
             if (zapp_ios_deferred_list[i] == d) zapp_ios_deferred_list[i] = NULL;
         }
