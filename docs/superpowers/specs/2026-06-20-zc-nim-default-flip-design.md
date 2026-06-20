@@ -90,6 +90,11 @@ progress** (use `=zc` for Windows until its sprint)." Targets: `README.md`,
 getting-started, `cli/README.md`, `docs/architecture.md`, `docs/nim-migration-
 roadmap.md`. Keep it factual about the Windows interim.
 
+**Best-effort, not exhaustive.** A thorough audit of every `.md` is a separate
+future spike (see memory `project_doc_audit_2026-06`). In 7a, update the docs that
+obviously pertain to the flip + the hello-world removal; do NOT attempt a full
+doc sweep here. Anything missed is caught by that later audit.
+
 ## Data flow (the flip)
 
 ```
