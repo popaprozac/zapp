@@ -937,14 +937,27 @@ Platform.isWindows   // boolean
 | Native toolbar (`toggleSidebar`, back chevron) | full NSToolbar | none — app renders its own back control (future cycle) |
 | Back navigation | divider / toolbar toggle | in-page control + system edge-swipe |
 
-### Inspector (macOS)
+### Inspector (macOS + iOS)
 
 Pass `inspector` in `Window.create` to attach a trailing utility pane —
 the right-hand "inspector" in Mail/Xcode/Notes — completing the
 `sidebar | content | inspector` three-column shell. It is a web-content
 pane (loads an app route like the sidebar) and mirrors the `SidebarHandle`:
-declared at create, toggled/collapsed/resized at runtime. macOS only; the
-option is a no-op elsewhere.
+declared at create, toggled/collapsed/resized at runtime.
+
+**Platform behaviour:**
+
+| Platform | Presentation |
+|---|---|
+| macOS / iPad (regular width) | Trailing pane beside content (NSSplitView / UISplitViewController column) |
+| iPhone (compact width) | Sheet with medium + large detents and a grabber; summon-only (never shown at launch regardless of `collapsed: false`) |
+
+- `setWidth(px)` applies to the iPad pane; it is ignored on the iPhone sheet
+  (which is always full-width).
+- **Known limitation:** the inspector host is chosen once at launch based on
+  the initial size class. Live iPad ↔ compact transitions (e.g. Stage Manager
+  resize, split-screen) do not re-host the pane as a sheet or vice-versa.
+  This is a documented follow-up.
 
 ```ts
 const win = await Window.create({

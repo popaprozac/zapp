@@ -13,6 +13,7 @@ export function renderMainPane(app: HTMLElement) {
         <div class="ks-ios-topbar-inner">
           <button class="ks-ios-topbar-menu" data-sidebar-toggle aria-label="Toggle sidebar">☰</button>
           <span class="ks-ios-topbar-title">Kitchen Sink</span>
+          <button class="ks-ios-topbar-inspector" data-inspector-toggle aria-label="Toggle inspector">⊟</button>
         </div>
       </header>`
     : "";
@@ -36,6 +37,11 @@ export function renderMainPane(app: HTMLElement) {
   app
     .querySelector<HTMLButtonElement>("[data-sidebar-toggle]")
     ?.addEventListener("click", () => Window.current().sidebar?.toggle());
+
+  // iOS top bar: inspector toggle (trailing button, iOS-only).
+  app
+    .querySelector<HTMLButtonElement>("[data-inspector-toggle]")
+    ?.addEventListener("click", () => Window.current().inspector?.toggle());
 
   // Attach the shell toolbar (late-attach to a toolbar-less window works).
   try {

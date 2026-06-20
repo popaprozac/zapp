@@ -85,10 +85,17 @@ h2 { font-size: 16px; color: var(--text-h); margin: 0 0 8px; font-weight: 600; }
   flex: 1; text-align: center;
   font-size: 17px; font-weight: 600;
   color: var(--text-h); letter-spacing: -0.01em;
-  /* don't overlap the leading button on narrow screens */
-  margin-right: 44px;
+  /* flex: 1 between two equal-width flanking buttons keeps the title centered */
   pointer-events: none; user-select: none;
 }
+.ks-ios-topbar-inspector {
+  font-size: 20px; line-height: 1;
+  width: 44px; height: 44px;
+  display: flex; align-items: center; justify-content: center;
+  border: none; background: transparent; color: var(--text-h);
+  cursor: pointer; border-radius: 8px; flex-shrink: 0;
+}
+.ks-ios-topbar-inspector:active { background: var(--accent-bg); }
 
 /* Main pane */
 .main-pane { padding: var(--zapp-titlebar-height, 52px) 24px 24px; max-width: 720px; }
