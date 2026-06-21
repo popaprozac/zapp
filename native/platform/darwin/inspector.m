@@ -10,6 +10,8 @@ extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
 extern void darwin_window_eval_js(int32_t window_id, const char* js);
 extern void zapp_pane_emit(int32_t host_id, int32_t accessory_slot,
                            const char* eventName, NSString* dataJson);
+extern void zapp_swift_panes_set_inspector_presented(void* state, bool presented);
+extern void zapp_swift_panes_toggle_inspector(void* state);
 
 // --- Registry API consumed by window.m (Task 6) ---
 // No header — the codebase externs across .m files. window.m declares these
@@ -28,6 +30,7 @@ extern void zapp_pane_emit(int32_t host_id, int32_t accessory_slot,
 @property (nonatomic, assign) NSInteger inspectorDividerIndex;  // divider before the trailing item
 @property (nonatomic, assign) BOOL lastCollapsed;
 @property (nonatomic, assign) int lastWidth;
+@property (nonatomic, assign) void* swiftPaneState;  // non-owning; set for the SwiftUI path (nil = AppKit)
 // Configured resize bounds captured at register (before any lock), so
 // setResizable(true) can restore the original drag range after a lock.
 @property (nonatomic, assign) CGFloat cfgMinThickness;
@@ -109,7 +112,9 @@ static void zapp_inspector_sync_collapse(ZappInspectorController* c) {
 void darwin_inspector_toggle(int32_t window_id) {
     zapp_inspector_on_main(^{
         ZappInspectorController* c = zapp_inspector_for_slot(window_id);
-        if (!c || !c.inspectorItem) return;
+        if (!c) return;
+        if (c.swiftPaneState) { zapp_swift_panes_toggle_inspector(c.swiftPaneState); return; }
+        if (!c.inspectorItem) return;
         // Documented AppKit idiom: animate the collapsed property via the
         // item's animator proxy.
         [[c.inspectorItem animator] setCollapsed:!c.inspectorItem.isCollapsed];
@@ -119,7 +124,9 @@ void darwin_inspector_toggle(int32_t window_id) {
 void darwin_inspector_collapse(int32_t window_id) {
     zapp_inspector_on_main(^{
         ZappInspectorController* c = zapp_inspector_for_slot(window_id);
-        if (!c || !c.inspectorItem) return;
+        if (!c) return;
+        if (c.swiftPaneState) { zapp_swift_panes_set_inspector_presented(c.swiftPaneState, false); return; }
+        if (!c.inspectorItem) return;
         if (c.inspectorItem.isCollapsed) return; // idempotent
         [[c.inspectorItem animator] setCollapsed:YES];
     });
@@ -128,7 +135,9 @@ void darwin_inspector_collapse(int32_t window_id) {
 void darwin_inspector_expand(int32_t window_id) {
     zapp_inspector_on_main(^{
         ZappInspectorController* c = zapp_inspector_for_slot(window_id);
-        if (!c || !c.inspectorItem) return;
+        if (!c) return;
+        if (c.swiftPaneState) { zapp_swift_panes_set_inspector_presented(c.swiftPaneState, true); return; }
+        if (!c.inspectorItem) return;
         if (!c.inspectorItem.isCollapsed) return; // idempotent
         [[c.inspectorItem animator] setCollapsed:NO];
     });
@@ -137,7 +146,12 @@ void darwin_inspector_expand(int32_t window_id) {
 void darwin_inspector_set_width(int32_t window_id, int32_t width) {
     zapp_inspector_on_main(^{
         ZappInspectorController* c = zapp_inspector_for_slot(window_id);
-        if (!c || !c.inspectorItem || !c.splitVC) return;
+        if (!c) return;
+        if (c.swiftPaneState) {
+            if (getenv("ZAPP_LOG")) NSLog(@"[zapp] inspector width/lock ignored on SwiftUI path (Sub-cycle 2c)");
+            return;
+        }
+        if (!c.inspectorItem || !c.splitVC) return;
         CGFloat w = (CGFloat)width;
         CGFloat minT = c.inspectorItem.minimumThickness;
         CGFloat maxT = c.inspectorItem.maximumThickness;
@@ -155,7 +169,12 @@ void darwin_inspector_set_width(int32_t window_id, int32_t width) {
 void darwin_inspector_set_collapsible(int32_t window_id, bool can_collapse) {
     zapp_inspector_on_main(^{
         ZappInspectorController* c = zapp_inspector_for_slot(window_id);
-        if (!c || !c.inspectorItem) return;
+        if (!c) return;
+        if (c.swiftPaneState) {
+            if (getenv("ZAPP_LOG")) NSLog(@"[zapp] inspector width/lock ignored on SwiftUI path (Sub-cycle 2c)");
+            return;
+        }
+        if (!c.inspectorItem) return;
         c.inspectorItem.canCollapse = can_collapse ? YES : NO;
     });
 }
@@ -166,7 +185,12 @@ void darwin_inspector_set_collapsible(int32_t window_id, bool can_collapse) {
 void darwin_inspector_set_resizable(int32_t window_id, bool resizable) {
     zapp_inspector_on_main(^{
         ZappInspectorController* c = zapp_inspector_for_slot(window_id);
-        if (!c || !c.inspectorItem) return;
+        if (!c) return;
+        if (c.swiftPaneState) {
+            if (getenv("ZAPP_LOG")) NSLog(@"[zapp] inspector width/lock ignored on SwiftUI path (Sub-cycle 2c)");
+            return;
+        }
+        if (!c.inspectorItem) return;
         if (resizable) {
             c.inspectorItem.minimumThickness = c.cfgMinThickness;
             c.inspectorItem.maximumThickness = c.cfgMaxThickness;
@@ -180,6 +204,37 @@ void darwin_inspector_set_resizable(int32_t window_id, bool resizable) {
 }
 
 // --- Registry API for window.m (Task 6) ---
+
+// SwiftUI-backed register: no splitVC/NSSplitViewItem, no KVO/NSNotification
+// observers (the Swift callback is the observation source). lastCollapsed is the
+// dedup baseline, seeded from the visibility the PaneState was created with.
+void zapp_inspector_register_swiftui(void* window_ptr, void* paneState,
+                                     int32_t host_id, int32_t inspector_slot_id,
+                                     bool initial_collapsed) {
+    if (!window_ptr || !paneState) return;
+    zapp_inspector_on_main(^{
+        if (!zapp_inspectors) zapp_inspectors = [NSMutableDictionary dictionary];
+        NSValue* key = [NSValue valueWithPointer:window_ptr];
+        ZappInspectorController* c = [[ZappInspectorController alloc] init];
+        c.swiftPaneState = paneState;
+        c.hostWindowId = host_id;
+        c.inspectorSlotId = inspector_slot_id;
+        c.lastCollapsed = initial_collapsed ? YES : NO;
+        zapp_inspectors[key] = c;
+    });
+}
+
+// Reverse path: SwiftUI inspector visibility changed. Dedup against lastCollapsed,
+// then emit the same event the AppKit KVO path emits. Called by window.m's
+// reverse dispatcher (always on the main thread — SwiftUI bindings fire on main).
+void zapp_inspector_note_swiftui_visibility(void* window_ptr, bool collapsed) {
+    if (!window_ptr || !zapp_inspectors) return;
+    ZappInspectorController* c = zapp_inspectors[[NSValue valueWithPointer:window_ptr]];
+    if (!c) return;
+    if (collapsed == c.lastCollapsed) return;  // dedup (absorbs redundant sets)
+    c.lastCollapsed = collapsed;
+    zapp_inspector_emit(c, collapsed ? "inspector-collapsed" : "inspector-expanded", nil);
+}
 
 void zapp_inspector_register(void* window_ptr, void* splitVCp, void* inspectorItemp,
                               int32_t host_id, int32_t inspector_slot_id) {
@@ -222,10 +277,13 @@ void zapp_inspector_unregister(void* window_ptr) {
         NSValue* key = [NSValue valueWithPointer:window_ptr];
         ZappInspectorController* c = zapp_inspectors[key];
         if (!c) return;
-        @try {
-            [c.inspectorItem removeObserver:c forKeyPath:@"collapsed"];
-        } @catch (__unused NSException* e) {}
-        [[NSNotificationCenter defaultCenter] removeObserver:c];
+        if (!c.swiftPaneState) {  // AppKit-only observers; none installed on the SwiftUI path
+            @try {
+                [c.inspectorItem removeObserver:c forKeyPath:@"collapsed"];
+            } @catch (__unused NSException* e) {}
+            [[NSNotificationCenter defaultCenter] removeObserver:c];
+        }
+        // Do NOT release swiftPaneState here — the window delegate owns it.
         [zapp_inspectors removeObjectForKey:key];
     });
 }

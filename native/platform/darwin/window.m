@@ -112,6 +112,9 @@ static void zapp_swiftui_pane_changed(void* ctx, int32_t key, int64_t value) {
         case ZAPP_PANE_KEY_SIDEBAR_VISIBLE:
             zapp_sidebar_note_swiftui_visibility(ctx, value == 0);  // value=1 visible -> collapsed=false
             break;
+        case ZAPP_PANE_KEY_INSPECTOR_PRESENTED:
+            zapp_inspector_note_swiftui_visibility(ctx, value == 0);  // value=1 presented -> collapsed=false
+            break;
         default: break;
     }
 }
@@ -990,9 +993,6 @@ void* darwin_window_create(WindowOptions* opts) {
 
                 // Inspector webview: own transport slot, HOST identity (win-<host>), always
                 // transparent so the pane material shows through, pane_role=3 (inspector).
-                // NOTE: no zapp_inspector_register — that wires the splitVC + NSSplitViewItem
-                // for runtime collapse/resize, which the SwiftUI path has no handle to (a
-                // Sub-cycle-1 non-goal). Only zapp_set_inspector_slot (event fan-out) runs.
                 if (useInspector) {
                     darwin_webview_create_ext((__bridge void*)window, inspectable, accept_first_mouse,
                                               inspectorUrl, inspector_slot, true,
@@ -1003,6 +1003,10 @@ void* darwin_window_create(WindowOptions* opts) {
                     }
                     if (inspectorWebviewRef) zapp_register_webview(inspector_slot, inspectorWebviewRef, hostWindowId);
                     zapp_set_inspector_slot(host_slot, inspector_slot);   // event fan-out
+                    // Register a SwiftUI-backed controller so darwin_inspector_* ops
+                    // resolve + drive the PaneState (no splitVC/NSSplitViewItem).
+                    zapp_inspector_register_swiftui((__bridge void*)window, swiftPaneState,
+                                                    host_slot, inspector_slot, !inspectorPresented);
                 }
             } else
 #endif
