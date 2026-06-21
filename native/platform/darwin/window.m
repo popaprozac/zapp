@@ -75,6 +75,13 @@ extern int zapp_dispatch_event(int window_id, int event_id, int w, int h, int x,
 // Primary display height (top-left global origin flip). Defined in screen.m.
 extern double zapp_primary_screen_height(void);
 
+// SwiftUI pane host (panes.swift, macOS 14+). Wraps a populated content NSView in
+// an NSHostingView; +1-retained, consumed via __bridge_transfer. Only declared
+// when the swiftc tier is compiled in (native.swiftui != false + swiftc present).
+#ifdef ZAPP_HAS_SWIFTUI
+extern void* zapp_swift_panes_create(void* content);
+#endif
+
 // Event IDs (mirrored from window/events.zc)
 #ifndef ZAPP_EVENT_WINDOW_READY
 #define ZAPP_EVENT_WINDOW_READY       0
@@ -787,6 +794,60 @@ void* darwin_window_create(WindowOptions* opts) {
             // is the ONLY value that gets this chrome default. An explicit Default
             // (tbs==0) falls through here, leaving a standard title bar even on a
             // split window; Hidden/HiddenInset (1/2) already hid it above.
+            bool useSwiftUIPanes = false;
+#ifdef ZAPP_HAS_SWIFTUI
+            // Sub-cycle 1: sidebar/inspector accessory'd windows use the SwiftUI pane
+            // layout on macOS 14+. native-surface windows keep the AppKit split for now.
+            if ((useSidebar || useInspector) && !useNativeSurface) {
+                if (@available(macOS 14.0, *)) useSwiftUIPanes = true;
+            }
+#endif
+            if (getenv("ZAPP_LOG")) {
+                NSLog(@"[zapp] window panes: %s", useSwiftUIPanes ? "swiftui" : "appkit");
+            }
+
+            if (useSwiftUIPanes) {
+                // Task 1: content pane only (sidebar/inspector added in Tasks 2-3).
+                // Build the content container (mirror the AppKit branch's content-pane
+                // container construction at window.m:797-808): an NSView sized to the
+                // window content frame, wrapped in a vibrancy NSVisualEffectView when
+                // useVibrancy. The representable wraps the bare NSView, so we do NOT
+                // need the NSViewController — just the resulting NSView* mainContainer.
+                NSView* mainContainer = [[NSView alloc] initWithFrame:[window contentView].frame];
+                if (useVibrancy) {
+                    NSVisualEffectView* vfx = [[NSVisualEffectView alloc] initWithFrame:mainContainer.frame];
+                    vfx.material = material;
+                    vfx.blendingMode = NSVisualEffectBlendingModeBehindWindow;
+                    vfx.state = NSVisualEffectStateFollowsWindowActiveState;
+                    vfx.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+                    mainContainer = vfx;
+                }
+
+                // Install the SwiftUI host (wrapping the content container) as the window's
+                // contentView FIRST, so the container is in the window before the webview is
+                // created into it (mirrors the AppKit ordering where splitVC is root before _ext).
+                NSView* paneHost = (__bridge_transfer NSView*)zapp_swift_panes_create((__bridge void*)mainContainer);
+                window.contentView = paneHost;
+                [paneHost layoutSubtreeIfNeeded];
+
+                // Create the content webview INTO mainContainer (same call as the AppKit
+                // path; never re-parented). pane_role=0; host_has_sidebar/inspector=false
+                // this task (no accessories wired into this path yet).
+                darwin_webview_create_ext((__bridge void*)window, inspectable, accept_first_mouse,
+                                          custom_url, host_slot, useVibrancy,
+                                          (__bridge void*)mainContainer, -1, 0,
+                                          false, false);
+
+                // Register the content webview (routing/bridge essential).
+                NSString* hostWindowId = [NSString stringWithFormat:@"win-%d", host_slot];
+                for (NSView* sub in mainContainer.subviews) {
+                    if ([sub isKindOfClass:[WKWebView class]]) {
+                        mainWebviewRef = (WKWebView*)sub;
+                        zapp_register_webview(host_slot, mainWebviewRef, hostWindowId);
+                        break;
+                    }
+                }
+            } else {
             if (tbs == 3) {
                 [window setStyleMask:([window styleMask] | NSWindowStyleMaskFullSizeContentView)];
                 [window setTitleVisibility:NSWindowTitleHidden];
@@ -1011,6 +1072,7 @@ void* darwin_window_create(WindowOptions* opts) {
                                         (__bridge void*)inspItem, host_slot, inspector_slot);
                 if (!wopts_inspector_can_resize(opts)) darwin_inspector_set_resizable(host_slot, false);
             }
+            } // end AppKit (else) branch
         } else if (useVibrancy) {
             NSRect contentRect = [window contentView].frame;
             NSVisualEffectView* vfx = [[NSVisualEffectView alloc] initWithFrame:contentRect];
