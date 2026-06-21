@@ -49,33 +49,33 @@ struct PaneLayout: View {
   let sidebar: NSView?
   let inspector: NSView?
   @ObservedObject var state: PaneState
+  @ObservedObject var toolbar: ToolbarState
 
   var body: some View {
     rootView
+      // Keep the outer suppression too (harmless); the effective one is on the
+      // NavigationSplitView in rootView, where the auto toggle is generated.
       .toolbar(removing: .sidebarToggle)
-      .toolbar {
-        // TASK 1 PROBE — hardcoded; replaced by ToolbarState-driven content in Task 3.
-        ToolbarItem {
-          Button { state.sidebarVisible.toggle() } label: { Image(systemName: "sidebar.left") }
-        }
-        ToolbarItem {
-          Button { state.inspectorPresented.toggle() } label: { Image(systemName: "sidebar.right") }
-        }
-        ToolbarItem {
-          Button("Probe") { /* Task 1: no-op; proves a custom button renders */ }
-        }
-      }
+      .toolbar { ZappToolbarContent(state: toolbar, pane: state) }
+      .toolbarStyle(for: toolbar.style)
   }
 
   @ViewBuilder private var rootView: some View {
     if let sidebar {
       NavigationSplitView(columnVisibility: sidebarVisibilityBinding) {
         PaneHost(view: sidebar).ignoresSafeArea()
+          // Bound the sidebar drag so it can't run away past the window
+          // (runaway-resize observed at the Task-1 gate). Full width control is 2c.
+          .navigationSplitViewColumnWidth(min: 180, ideal: 260, max: 480)
       } detail: {
         detail
       }
       // Tiling vs overlay is Sub-cycle 2c; keep the Sub-cycle-1 style.
       .navigationSplitViewStyle(.balanced)
+      // Suppress SwiftUI's auto sidebar toggle HERE (Strategy A) — the
+      // NavigationSplitView is the navigation context that generates it; the
+      // outer `.toolbar(removing:)` on `body` alone did not suppress it (Task 1).
+      .toolbar(removing: .sidebarToggle)
     } else {
       detail
     }
@@ -151,15 +151,17 @@ public func zapp_swift_panes_toggle_inspector(_ state: UnsafeMutableRawPointer) 
 // title bar (Sub-cycle 2b risk gate).
 @_cdecl("zapp_swift_panes_create")
 public func zapp_swift_panes_create(_ state: UnsafeMutableRawPointer,
+                                    _ toolbarState: UnsafeMutableRawPointer,
                                     _ content: UnsafeMutableRawPointer,
                                     _ sidebar: UnsafeMutableRawPointer?,
                                     _ inspector: UnsafeMutableRawPointer?) -> UnsafeMutableRawPointer? {
   guard #available(macOS 14.0, *) else { return nil }
   let st = Unmanaged<PaneState>.fromOpaque(state).takeUnretainedValue()
+  let tb = Unmanaged<ToolbarState>.fromOpaque(toolbarState).takeUnretainedValue()
   let c = Unmanaged<NSView>.fromOpaque(content).takeUnretainedValue()
   let s = sidebar.map { Unmanaged<NSView>.fromOpaque($0).takeUnretainedValue() }
   let i = inspector.map { Unmanaged<NSView>.fromOpaque($0).takeUnretainedValue() }
-  let hc = NSHostingController(rootView: PaneLayout(content: c, sidebar: s, inspector: i, state: st))
+  let hc = NSHostingController(rootView: PaneLayout(content: c, sidebar: s, inspector: i, state: st, toolbar: tb))
   // Don't let the hosting controller drive the window's size from the SwiftUI
   // content's ideal size — the window keeps its configured frame; the view fills it.
   // (Default sizingOptions would collapse the window to a tiny strip before the

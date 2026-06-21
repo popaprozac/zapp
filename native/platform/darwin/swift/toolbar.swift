@@ -106,6 +106,80 @@ final class ToolbarState: ObservableObject, ZappNativeModule {
   func emitMenuClick(_ menuId: String) { menuId.withCString { cb?(ctx, kTbEvtMenuClick, $0) } }
 }
 
+// --- SwiftUI renderer --------------------------------------------------------
+// Renders the live ToolbarState into the NSWindow title bar via SwiftUI's
+// `.toolbar`. Toggle items bind directly to PaneState visibility (Strategy A:
+// the app authors the toggles; SwiftUI's auto sidebar toggle is suppressed in
+// panes.swift). All other items round-trip clicks back to native via emitClick.
+@available(macOS 14.0, *)
+struct ZappToolbarContent: ToolbarContent {
+  let state: ToolbarState
+  let pane: PaneState   // toggles bind directly to pane visibility (2a)
+
+  // NOTE (deviation): a dynamic `ForEach` directly inside `ToolbarContent`
+  // (each yielding a placed `ToolbarItem(id:)`) does NOT compile against the
+  // installed SDK — `ForEach`'s closure is evaluated as a `ViewBuilder`, so
+  // `ToolbarItem` (a ToolbarContent, not a View) is rejected. Per the task's
+  // IMPLEMENTER NOTE fallback, emit a single `ToolbarItemGroup` whose body IS a
+  // `ViewBuilder` `ForEach` over plain item Views. Per-item placement/ids are
+  // lost in this form (refined at Task 5's human gate); functionally the items
+  // still render + round-trip clicks.
+  var body: some ToolbarContent {
+    ToolbarItemGroup(placement: .automatic) {
+      ForEach(state.items) { item in itemView(item) }
+    }
+  }
+
+  @ViewBuilder private func itemView(_ item: ZappToolbarItem) -> some View {
+    switch item.type {
+    case "toggleSidebar":
+      Button { pane.sidebarVisible.toggle() } label: { glyph(item, fallback: "sidebar.left") }
+    case "toggleInspector":
+      Button { pane.inspectorPresented.toggle() } label: { glyph(item, fallback: "sidebar.right") }
+    case "space", "flexibleSpace", "trackingSeparator":
+      // Spacers/separators: NavigationSplitView auto-aligns toolbar sections to
+      // columns, so trackingSeparator is a no-op; space/flexibleSpace use the
+      // system spacer. (SwiftUI ToolbarSpacer is macOS 14+.)
+      Spacer()
+    default: // "button"
+      if let menu = item.menu, !menu.isEmpty {
+        Menu { ForEach(menu) { m in Button(m.label ?? m.id) { state.emitMenuClick(m.id) } } }
+          label: { label(item) }
+          .disabled(item.enabled == false)
+      } else {
+        Button { state.emitClick(item.id) } label: { label(item) }
+          .disabled(item.enabled == false)
+      }
+    }
+  }
+
+  @ViewBuilder private func glyph(_ item: ZappToolbarItem, fallback: String) -> some View {
+    if let icon = item.icon, icon.hasPrefix("sf:") { Image(systemName: String(icon.dropFirst(3))) }
+    else { Image(systemName: fallback) }
+  }
+  @ViewBuilder private func label(_ item: ZappToolbarItem) -> some View {
+    if let icon = item.icon, icon.hasPrefix("sf:") {
+      Label(item.label ?? "", systemImage: String(icon.dropFirst(3)))
+    } else if let t = item.label, !t.isEmpty {
+      Text(t)
+    } else {
+      Image(systemName: "circle")  // fallback so an iconless/labelless button is still tappable
+    }
+  }
+}
+
+// Maps the app's toolbar `style` string onto SwiftUI's `.toolbar(style:)`.
+// DEVIATION (Task 6 follow-up): `.toolbar(style:)` on a hosted view did NOT
+// resolve against the installed SDK — the compiler bound `self.toolbar(...)` to
+// the `ToolbarItem` overload (extra argument 'style' / cannot infer base
+// 'unifiedCompact'). Per the task's drop-if-it-won't-compile guidance, this is a
+// no-op passthrough for now; toolbar style is cosmetic. The `style` field still
+// flows through ToolbarState for when this is re-attempted.
+@available(macOS 14.0, *)
+extension View {
+  @ViewBuilder func toolbarStyle(for style: String) -> some View { self }
+}
+
 @_cdecl("zapp_swift_toolbar_state_create")
 public func zapp_swift_toolbar_state_create(_ ctx: UnsafeMutableRawPointer?,
                                             _ cb: ZappSwiftStringCallback?) -> UnsafeMutableRawPointer? {

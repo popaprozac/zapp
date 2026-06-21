@@ -91,7 +91,15 @@ extern void zapp_swift_panes_set_sidebar_visible(void* state, bool visible);
 extern void zapp_swift_panes_set_inspector_presented(void* state, bool presented);
 extern void zapp_swift_panes_toggle_sidebar(void* state);
 extern void zapp_swift_panes_toggle_inspector(void* state);
-extern void* zapp_swift_panes_create(void* state, void* content, void* sidebar, void* inspector);
+extern void* zapp_swift_panes_create(void* state, void* toolbarState, void* content, void* sidebar, void* inspector);
+
+// Reverse string channel from SwiftUI (toolbar.swift). Sibling of
+// ZappSwiftStateCallback; value is a C string (itemId / menuId). cb is wired in
+// Task 4; passed NULL here.
+typedef void (*ZappSwiftStringCallback)(void* ctx, int32_t key, const char* value);
+extern void* zapp_swift_toolbar_state_create(void* ctx, ZappSwiftStringCallback cb);
+extern void zapp_swift_toolbar_state_release(void* state);
+extern void zapp_swift_module_set_string(void* state, int32_t key, const char* value);
 
 // Reverse-emit entries (defined in sidebar.m / inspector.m — wired in Tasks 2/3).
 extern void zapp_sidebar_note_swiftui_visibility(void* window_ptr, bool collapsed);
@@ -361,6 +369,7 @@ static const char kZappWindowDelegateKey = 0;
 @property (nonatomic, weak) WKWebView* sidebarWebview;
 @property (nonatomic, weak) WKWebView* inspectorWebview;
 @property (nonatomic, assign) void* swiftPaneState;  // owning ref to the SwiftUI PaneState (NULL on AppKit path)
+@property (nonatomic, assign) void* swiftToolbarState;  // owning ref to the SwiftUI ToolbarState (NULL on AppKit path)
 @property (nonatomic, assign) BOOL bridgeReady;
 @property (nonatomic, assign) BOOL pendingFocusEvent;
 @property (nonatomic, assign) BOOL wasZoomed;
@@ -817,6 +826,7 @@ void* darwin_window_create(WindowOptions* opts) {
 
         WKWebView* inspectorWebviewRef = nil;
         void* swiftPaneState = NULL;  // SwiftUI PaneState handle (owned by the delegate; released once at teardown)
+        void* swiftToolbarState = NULL;  // SwiftUI ToolbarState handle (owned by the delegate; released once at teardown)
 
         // Native-surface pane (macOS, SwiftUI/AppKit). Rides the same split root;
         // requesting it alone (no sidebar/inspector) still builds the split.
@@ -940,12 +950,18 @@ void* darwin_window_create(WindowOptions* opts) {
                 swiftPaneState = zapp_swift_panes_state_create((__bridge void*)window,
                     zapp_swiftui_pane_changed, sidebarVisible, inspectorPresented);
 
+                // Shared, observable toolbar state. ctx = host NSWindow* (same registry
+                // key as the pane state); cb = NULL for now — the reverse dispatcher
+                // (click/menu-click -> native) is wired in Task 4. Nothing pushes items
+                // yet (config push is Task 4), so the toolbar renders empty here.
+                swiftToolbarState = zapp_swift_toolbar_state_create((__bridge void*)window, NULL);
+
                 // Install the SwiftUI host (wrapping the content container + optional
                 // sidebar + optional inspector) as the window's contentView FIRST, so
                 // the containers are in the window before the webviews are created into
                 // them (mirrors the AppKit ordering where splitVC is root before _ext).
                 NSViewController* paneVC = (__bridge_transfer NSViewController*)zapp_swift_panes_create(
-                    swiftPaneState, (__bridge void*)mainContainer,
+                    swiftPaneState, swiftToolbarState, (__bridge void*)mainContainer,
                     (__bridge void*)sidebarContainer, (__bridge void*)inspectorContainer);
                 window.contentViewController = paneVC;   // sets window.contentView = paneVC.view; window retains the VC
                 // NSHostingController overrides the window's content size on assignment; restore the
@@ -1270,6 +1286,7 @@ void* darwin_window_create(WindowOptions* opts) {
         delegate.sidebarWebview = sidebarWebviewRef;   // nil when no sidebar
         delegate.inspectorWebview = inspectorWebviewRef; // nil when no inspector
         delegate.swiftPaneState = swiftPaneState;       // NULL unless the SwiftUI path ran
+        delegate.swiftToolbarState = swiftToolbarState;  // NULL unless the SwiftUI path ran
 
         // Seed the host webview's underpage fill (the WebView2
         // DefaultBackgroundColor analogue) with the app-set background. Split
@@ -1407,6 +1424,10 @@ void darwin_window_destroy(void* handle) {
         if (delegate.swiftPaneState) {
             zapp_swift_panes_state_release(delegate.swiftPaneState);
             delegate.swiftPaneState = NULL;
+        }
+        if (delegate.swiftToolbarState) {
+            zapp_swift_toolbar_state_release(delegate.swiftToolbarState);
+            delegate.swiftToolbarState = NULL;
         }
 #endif
     }
