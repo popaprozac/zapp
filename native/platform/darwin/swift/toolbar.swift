@@ -108,27 +108,45 @@ final class ToolbarState: ObservableObject, ZappNativeModule {
 
 // --- SwiftUI renderer --------------------------------------------------------
 // Renders the live ToolbarState into the NSWindow title bar via SwiftUI's
-// `.toolbar`. Toggle items bind directly to PaneState visibility (Strategy A:
-// the app authors the toggles; SwiftUI's auto sidebar toggle is suppressed in
-// panes.swift). All other items round-trip clicks back to native via emitClick.
+// `.toolbar`. Items render as two `ToolbarItemGroup`s split at the first
+// `flexibleSpace`: items before it → leading (`.navigation`); items after it →
+// trailing (`.primaryAction`). Each group is a `ForEach` over the stable-`id`
+// `ZappToolbarItem` array — the spike-proven shape that survives NavigationSplit-
+// View re-layout AND dynamic setItems/updateItem/remove without dropping items
+// (the failure mode of the earlier single-ToolbarItem-HStack / bare-ForEach
+// attempts). `trackingSeparator` and `space` are dropped — they have no SwiftUI
+// toolbar equivalent and NavigationSplitView aligns the columns itself.
+// Toggle items bind directly to PaneState visibility (the app authors the
+// toggles; SwiftUI's auto sidebar toggle is suppressed in panes.swift); all
+// other items round-trip clicks back to native via emitClick.
 @available(macOS 14.0, *)
 struct ZappToolbarContent: ToolbarContent {
   let state: ToolbarState
   let pane: PaneState   // toggles bind directly to pane visibility (2a)
 
-  // Render ALL items as ONE ToolbarItem containing an HStack of item Views.
-  // SwiftUI's dynamic `ToolbarContent` diffing with `ForEach` is unreliable:
-  // it renders on the initial config push but drops the app's items after a
-  // runtime `setItems` update. A plain `View` (HStack + ForEach) re-renders
-  // deterministically when `state.items` changes (PaneLayout holds an
-  // `@ObservedObject` toolbar → change re-renders PaneLayout → rebuilds this
-  // ToolbarContent → the HStack reflects the new items). `space`/`flexibleSpace`
-  // map to `Spacer()`, which pushes items apart inside the HStack (correct);
-  // `trackingSeparator` is a no-op Spacer.
+  // Split state.items at the first `flexibleSpace`; filter out non-rendered
+  // types (space / flexibleSpace / trackingSeparator) from both sides so each
+  // list holds only renderable items (button / toggleSidebar / toggleInspector).
+  private var groups: (leading: [ZappToolbarItem], trailing: [ZappToolbarItem]) {
+    func renderable(_ items: ArraySlice<ZappToolbarItem>) -> [ZappToolbarItem] {
+      items.filter { $0.type != "space" && $0.type != "flexibleSpace" && $0.type != "trackingSeparator" }
+    }
+    if let split = state.items.firstIndex(where: { $0.type == "flexibleSpace" }) {
+      return (renderable(state.items[..<split]), renderable(state.items[(split + 1)...]))
+    }
+    return (renderable(state.items[...]), [])
+  }
+
   var body: some ToolbarContent {
-    ToolbarItem(placement: .automatic) {
-      HStack(spacing: 8) {
-        ForEach(state.items) { item in itemView(item) }
+    let g = groups
+    if !g.leading.isEmpty {
+      ToolbarItemGroup(placement: .navigation) {
+        ForEach(g.leading) { item in itemView(item) }
+      }
+    }
+    if !g.trailing.isEmpty {
+      ToolbarItemGroup(placement: .primaryAction) {
+        ForEach(g.trailing) { item in itemView(item) }
       }
     }
   }
@@ -139,11 +157,6 @@ struct ZappToolbarContent: ToolbarContent {
       Button { withAnimation { pane.sidebarVisible.toggle() } } label: { glyph(item, fallback: "sidebar.left") }
     case "toggleInspector":
       Button { withAnimation { pane.inspectorPresented.toggle() } } label: { glyph(item, fallback: "sidebar.right") }
-    case "space", "flexibleSpace", "trackingSeparator":
-      // Spacers/separators: NavigationSplitView auto-aligns toolbar sections to
-      // columns, so trackingSeparator is a no-op; space/flexibleSpace use the
-      // system spacer. (SwiftUI ToolbarSpacer is macOS 14+.)
-      Spacer()
     default: // "button"
       if let menu = item.menu, !menu.isEmpty {
         Menu { ForEach(menu) { m in Button(m.label ?? m.id) { state.emitMenuClick(m.id) } } }
