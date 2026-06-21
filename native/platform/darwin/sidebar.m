@@ -11,6 +11,8 @@
 
 extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
 extern void darwin_window_eval_js(int32_t window_id, const char* js);
+extern void zapp_swift_panes_set_sidebar_visible(void* state, bool visible);
+extern void zapp_swift_panes_toggle_sidebar(void* state);
 
 // --- Registry API consumed by window.m (Task 5) ---
 // No header — the codebase externs across .m files. window.m declares these
@@ -28,6 +30,7 @@ extern void darwin_window_eval_js(int32_t window_id, const char* js);
 @property (nonatomic, assign) int32_t sidebarSlotId;  // sidebar webview's slot
 @property (nonatomic, assign) BOOL lastCollapsed;
 @property (nonatomic, assign) int lastWidth;
+@property (nonatomic, assign) void* swiftPaneState;  // non-owning; set for the SwiftUI path (nil = AppKit)
 // Configured resize bounds captured at register (before any lock), so
 // setResizable(true) can restore the original drag range after a lock.
 @property (nonatomic, assign) CGFloat cfgMinThickness;
@@ -142,7 +145,9 @@ static void zapp_sidebar_sync_collapse(ZappSidebarController* c) {
 void darwin_sidebar_toggle(int32_t window_id) {
     zapp_sidebar_on_main(^{
         ZappSidebarController* c = zapp_sidebar_for_slot(window_id);
-        if (!c || !c.sidebarItem) return;
+        if (!c) return;
+        if (c.swiftPaneState) { zapp_swift_panes_toggle_sidebar(c.swiftPaneState); return; }
+        if (!c.sidebarItem) return;
         // Documented AppKit idiom: animate the collapsed property via the
         // item's animator proxy.
         [[c.sidebarItem animator] setCollapsed:!c.sidebarItem.isCollapsed];
@@ -152,7 +157,9 @@ void darwin_sidebar_toggle(int32_t window_id) {
 void darwin_sidebar_collapse(int32_t window_id) {
     zapp_sidebar_on_main(^{
         ZappSidebarController* c = zapp_sidebar_for_slot(window_id);
-        if (!c || !c.sidebarItem) return;
+        if (!c) return;
+        if (c.swiftPaneState) { zapp_swift_panes_set_sidebar_visible(c.swiftPaneState, false); return; }
+        if (!c.sidebarItem) return;
         if (c.sidebarItem.isCollapsed) return; // idempotent
         [[c.sidebarItem animator] setCollapsed:YES];
     });
@@ -161,7 +168,9 @@ void darwin_sidebar_collapse(int32_t window_id) {
 void darwin_sidebar_expand(int32_t window_id) {
     zapp_sidebar_on_main(^{
         ZappSidebarController* c = zapp_sidebar_for_slot(window_id);
-        if (!c || !c.sidebarItem) return;
+        if (!c) return;
+        if (c.swiftPaneState) { zapp_swift_panes_set_sidebar_visible(c.swiftPaneState, true); return; }
+        if (!c.sidebarItem) return;
         if (!c.sidebarItem.isCollapsed) return; // idempotent
         [[c.sidebarItem animator] setCollapsed:NO];
     });
@@ -179,7 +188,12 @@ void darwin_sidebar_show_sidebar(int32_t window_id) { (void)window_id; }
 void darwin_sidebar_set_width(int32_t window_id, int32_t width) {
     zapp_sidebar_on_main(^{
         ZappSidebarController* c = zapp_sidebar_for_slot(window_id);
-        if (!c || !c.sidebarItem || !c.splitVC) return;
+        if (!c) return;
+        if (c.swiftPaneState) {
+            if (getenv("ZAPP_LOG")) NSLog(@"[zapp] sidebar width/lock ignored on SwiftUI path (Sub-cycle 2c)");
+            return;
+        }
+        if (!c.sidebarItem || !c.splitVC) return;
         CGFloat w = (CGFloat)width;
         CGFloat minT = c.sidebarItem.minimumThickness;
         CGFloat maxT = c.sidebarItem.maximumThickness;
@@ -195,7 +209,12 @@ void darwin_sidebar_set_width(int32_t window_id, int32_t width) {
 void darwin_sidebar_set_collapsible(int32_t window_id, bool can_collapse) {
     zapp_sidebar_on_main(^{
         ZappSidebarController* c = zapp_sidebar_for_slot(window_id);
-        if (!c || !c.sidebarItem) return;
+        if (!c) return;
+        if (c.swiftPaneState) {
+            if (getenv("ZAPP_LOG")) NSLog(@"[zapp] sidebar width/lock ignored on SwiftUI path (Sub-cycle 2c)");
+            return;
+        }
+        if (!c.sidebarItem) return;
         c.sidebarItem.canCollapse = can_collapse ? YES : NO;
     });
 }
@@ -206,7 +225,12 @@ void darwin_sidebar_set_collapsible(int32_t window_id, bool can_collapse) {
 void darwin_sidebar_set_resizable(int32_t window_id, bool resizable) {
     zapp_sidebar_on_main(^{
         ZappSidebarController* c = zapp_sidebar_for_slot(window_id);
-        if (!c || !c.sidebarItem) return;
+        if (!c) return;
+        if (c.swiftPaneState) {
+            if (getenv("ZAPP_LOG")) NSLog(@"[zapp] sidebar width/lock ignored on SwiftUI path (Sub-cycle 2c)");
+            return;
+        }
+        if (!c.sidebarItem) return;
         if (resizable) {
             c.sidebarItem.minimumThickness = c.cfgMinThickness;
             c.sidebarItem.maximumThickness = c.cfgMaxThickness;
@@ -220,6 +244,37 @@ void darwin_sidebar_set_resizable(int32_t window_id, bool resizable) {
 }
 
 // --- Registry API for window.m (Task 5) ---
+
+// SwiftUI-backed register: no splitVC/NSSplitViewItem, no KVO/NSNotification
+// observers (the Swift callback is the observation source). lastCollapsed is the
+// dedup baseline, seeded from the visibility the PaneState was created with.
+void zapp_sidebar_register_swiftui(void* window_ptr, void* paneState,
+                                   int32_t host_id, int32_t sidebar_slot_id,
+                                   bool initial_collapsed) {
+    if (!window_ptr || !paneState) return;
+    zapp_sidebar_on_main(^{
+        if (!zapp_sidebars) zapp_sidebars = [NSMutableDictionary dictionary];
+        NSValue* key = [NSValue valueWithPointer:window_ptr];
+        ZappSidebarController* c = [[ZappSidebarController alloc] init];
+        c.swiftPaneState = paneState;
+        c.hostWindowId = host_id;
+        c.sidebarSlotId = sidebar_slot_id;
+        c.lastCollapsed = initial_collapsed ? YES : NO;
+        zapp_sidebars[key] = c;
+    });
+}
+
+// Reverse path: SwiftUI sidebar visibility changed. Dedup against lastCollapsed,
+// then emit the same event the AppKit KVO path emits. Called by window.m's
+// reverse dispatcher (always on the main thread — SwiftUI bindings fire on main).
+void zapp_sidebar_note_swiftui_visibility(void* window_ptr, bool collapsed) {
+    if (!window_ptr || !zapp_sidebars) return;
+    ZappSidebarController* c = zapp_sidebars[[NSValue valueWithPointer:window_ptr]];
+    if (!c) return;
+    if (collapsed == c.lastCollapsed) return;  // dedup (absorbs redundant sets)
+    c.lastCollapsed = collapsed;
+    zapp_sidebar_emit(c, collapsed ? "sidebar-collapsed" : "sidebar-expanded", nil);
+}
 
 void zapp_sidebar_register(void* window_ptr, NSSplitViewController* splitVC,
                            NSSplitViewItem* sidebarItem, int32_t host_id,
@@ -260,10 +315,13 @@ void zapp_sidebar_unregister(void* window_ptr) {
         NSValue* key = [NSValue valueWithPointer:window_ptr];
         ZappSidebarController* c = zapp_sidebars[key];
         if (!c) return;
-        @try {
-            [c.sidebarItem removeObserver:c forKeyPath:@"collapsed"];
-        } @catch (__unused NSException* e) {}
-        [[NSNotificationCenter defaultCenter] removeObserver:c];
+        if (!c.swiftPaneState) {  // AppKit-only observers; none installed on the SwiftUI path
+            @try {
+                [c.sidebarItem removeObserver:c forKeyPath:@"collapsed"];
+            } @catch (__unused NSException* e) {}
+            [[NSNotificationCenter defaultCenter] removeObserver:c];
+        }
+        // Do NOT release swiftPaneState here — the window delegate owns it.
         [zapp_sidebars removeObjectForKey:key];
     });
 }

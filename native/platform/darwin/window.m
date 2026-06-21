@@ -108,9 +108,12 @@ extern void zapp_inspector_register_swiftui(void* window_ptr, void* paneState,
 // key + new value (1=visible/0=collapsed). ctx is the host NSWindow*. The switch
 // arms are added in Tasks 2 (sidebar) and 3 (inspector); a stub today emits nothing.
 static void zapp_swiftui_pane_changed(void* ctx, int32_t key, int64_t value) {
-    (void)ctx; (void)key; (void)value;
-    // Task 2 adds: case ZAPP_PANE_KEY_SIDEBAR_VISIBLE -> zapp_sidebar_note_swiftui_visibility(ctx, value == 0);
-    // Task 3 adds: case ZAPP_PANE_KEY_INSPECTOR_PRESENTED -> zapp_inspector_note_swiftui_visibility(ctx, value == 0);
+    switch (key) {
+        case ZAPP_PANE_KEY_SIDEBAR_VISIBLE:
+            zapp_sidebar_note_swiftui_visibility(ctx, value == 0);  // value=1 visible -> collapsed=false
+            break;
+        default: break;
+    }
 }
 #endif
 
@@ -966,9 +969,9 @@ void* darwin_window_create(WindowOptions* opts) {
 
                 // Sidebar webview: own transport slot, HOST identity (win-<host>), always
                 // transparent so the pane material shows through, pane_role=1 (sidebar).
-                // NOTE: no zapp_sidebar_register — that wires the splitVC + NSSplitViewItem
-                // for runtime collapse/resize, which the SwiftUI path has no handle to (a
-                // Sub-cycle-1 non-goal). Only zapp_set_sidebar_slot (event fan-out) runs.
+                // NOTE: the SwiftUI register variant (below) wires a swiftPaneState-backed
+                // controller — no splitVC/NSSplitViewItem — so darwin_sidebar_* runtime ops
+                // resolve + drive the PaneState. zapp_set_sidebar_slot still runs (fan-out).
                 if (useSidebar) {
                     darwin_webview_create_ext((__bridge void*)window, inspectable, accept_first_mouse,
                                               sidebarUrl, sidebar_slot, true,
@@ -979,6 +982,10 @@ void* darwin_window_create(WindowOptions* opts) {
                     }
                     if (sidebarWebviewRef) zapp_register_webview(sidebar_slot, sidebarWebviewRef, hostWindowId);
                     zapp_set_sidebar_slot(host_slot, sidebar_slot);   // event fan-out
+                    // Register a SwiftUI-backed controller so darwin_sidebar_* ops
+                    // resolve + drive the PaneState (no splitVC/NSSplitViewItem).
+                    zapp_sidebar_register_swiftui((__bridge void*)window, swiftPaneState,
+                                                  host_slot, sidebar_slot, !sidebarVisible);
                 }
 
                 // Inspector webview: own transport slot, HOST identity (win-<host>), always
