@@ -51,6 +51,23 @@ struct PaneLayout: View {
   @ObservedObject var state: PaneState
 
   var body: some View {
+    rootView
+      .toolbar(removing: .sidebarToggle)
+      .toolbar {
+        // TASK 1 PROBE — hardcoded; replaced by ToolbarState-driven content in Task 3.
+        ToolbarItem {
+          Button { state.sidebarVisible.toggle() } label: { Image(systemName: "sidebar.left") }
+        }
+        ToolbarItem {
+          Button { state.inspectorPresented.toggle() } label: { Image(systemName: "sidebar.right") }
+        }
+        ToolbarItem {
+          Button("Probe") { /* Task 1: no-op; proves a custom button renders */ }
+        }
+      }
+  }
+
+  @ViewBuilder private var rootView: some View {
     if let sidebar {
       NavigationSplitView(columnVisibility: sidebarVisibilityBinding) {
         PaneHost(view: sidebar).ignoresSafeArea()
@@ -126,9 +143,12 @@ public func zapp_swift_panes_toggle_inspector(_ state: UnsafeMutableRawPointer) 
   withAnimation { Unmanaged<PaneState>.fromOpaque(state).takeUnretainedValue().inspectorPresented.toggle() }
 }
 
-// Build the hosting view. `state` carries initial visibility; the old
-// showInspector Bool param is gone. Returns a +1-retained NSHostingView;
-// ObjC consumes it with __bridge_transfer.
+// Build the hosting controller. `state` carries initial visibility; the old
+// showInspector Bool param is gone. Returns a +1-retained NSHostingController;
+// ObjC consumes it with __bridge_transfer NSViewController*. Hosting via an
+// NSHostingController (set as window.contentViewController) — not a bare
+// NSHostingView — is what lets SwiftUI `.toolbar` bridge into the NSWindow
+// title bar (Sub-cycle 2b risk gate).
 @_cdecl("zapp_swift_panes_create")
 public func zapp_swift_panes_create(_ state: UnsafeMutableRawPointer,
                                     _ content: UnsafeMutableRawPointer,
@@ -139,6 +159,6 @@ public func zapp_swift_panes_create(_ state: UnsafeMutableRawPointer,
   let c = Unmanaged<NSView>.fromOpaque(content).takeUnretainedValue()
   let s = sidebar.map { Unmanaged<NSView>.fromOpaque($0).takeUnretainedValue() }
   let i = inspector.map { Unmanaged<NSView>.fromOpaque($0).takeUnretainedValue() }
-  let host = NSHostingView(rootView: PaneLayout(content: c, sidebar: s, inspector: i, state: st))
-  return Unmanaged.passRetained(host).toOpaque()
+  let hc = NSHostingController(rootView: PaneLayout(content: c, sidebar: s, inspector: i, state: st))
+  return Unmanaged.passRetained(hc).toOpaque()   // +1; ObjC consumes via __bridge_transfer NSViewController*
 }

@@ -944,12 +944,11 @@ void* darwin_window_create(WindowOptions* opts) {
                 // sidebar + optional inspector) as the window's contentView FIRST, so
                 // the containers are in the window before the webviews are created into
                 // them (mirrors the AppKit ordering where splitVC is root before _ext).
-                NSView* paneHost = (__bridge_transfer NSView*)zapp_swift_panes_create(
+                NSViewController* paneVC = (__bridge_transfer NSViewController*)zapp_swift_panes_create(
                     swiftPaneState, (__bridge void*)mainContainer,
                     (__bridge void*)sidebarContainer, (__bridge void*)inspectorContainer);
-                paneHost.frame = [window contentView].frame;
-                window.contentView = paneHost;
-                [paneHost layoutSubtreeIfNeeded];
+                window.contentViewController = paneVC;   // sets window.contentView = paneVC.view; window retains the VC
+                [paneVC.view layoutSubtreeIfNeeded];
 
                 // Create the content webview INTO mainContainer (same call as the AppKit
                 // path; never re-parented). pane_role=0; host_has_sidebar=useSidebar +
@@ -1306,8 +1305,15 @@ void* darwin_window_create(WindowOptions* opts) {
         // Native toolbar (toolbar.m). Attach AFTER split construction (the
         // tracking separator resolves the live NSSplitView through the
         // window's contentViewController) and after delegate setup.
+        //
+        // Sub-cycle 2b: on the SwiftUI pane path the toolbar is rendered by SwiftUI
+        // `.toolbar` (panes.swift); do NOT attach an NSToolbar (it would collide).
+        bool swiftUIToolbar = false;
+#ifdef ZAPP_HAS_SWIFTUI
+        swiftUIToolbar = (delegate.swiftPaneState != NULL);
+#endif
         const char* toolbarJson = wopts_toolbar_json(opts);
-        if (toolbarJson && toolbarJson[0]) {
+        if (!swiftUIToolbar && toolbarJson && toolbarJson[0]) {
             darwin_toolbar_attach((__bridge void*)window, toolbarJson, host_slot);
             // Initial chrome-metrics injection, one runloop tick later: the
             // titlebar band picks the toolbar up in the next layout pass, and
