@@ -126,6 +126,28 @@ static void zapp_swiftui_pane_changed(void* ctx, int32_t key, int64_t value) {
         default: break;
     }
 }
+
+// Shared toolbar emit helpers (toolbar.m). Defined regardless of SwiftUI, but
+// only referenced from the SwiftUI reverse dispatcher below.
+extern void zapp_toolbar_emit_click(int32_t host_id, const char* item_id);
+extern void zapp_toolbar_emit_menu_click(int32_t host_id, const char* menu_id);
+// SET_ITEMS-family keys (toolbar->SwiftUI, set_string); EVT keys (SwiftUI->native).
+// Must match panes.swift / toolbar.swift.
+enum { ZAPP_TB_SET_ITEMS = 1, ZAPP_TB_UPDATE_ITEM = 2, ZAPP_TB_CLEAR = 3 };
+enum { ZAPP_TB_EVT_CLICK = 1, ZAPP_TB_EVT_MENU_CLICK = 2 };
+
+// Reverse dispatcher for the SwiftUI toolbar string channel. The toolbar
+// module's ctx is the numeric host id boxed as a pointer (NOT the window ptr) —
+// see the state-create call below. host_slot=0 -> NULL ctx -> unboxes to host 0,
+// which is correct (no special-casing).
+static void zapp_swiftui_toolbar_event(void* ctx, int32_t key, const char* value) {
+    int32_t host = (int32_t)(intptr_t)ctx;
+    switch (key) {
+        case ZAPP_TB_EVT_CLICK:      zapp_toolbar_emit_click(host, value); break;
+        case ZAPP_TB_EVT_MENU_CLICK: zapp_toolbar_emit_menu_click(host, value); break;
+        default: break;
+    }
+}
 #endif
 
 // Event IDs (mirrored from window/events.zc)
@@ -950,11 +972,13 @@ void* darwin_window_create(WindowOptions* opts) {
                 swiftPaneState = zapp_swift_panes_state_create((__bridge void*)window,
                     zapp_swiftui_pane_changed, sidebarVisible, inspectorPresented);
 
-                // Shared, observable toolbar state. ctx = host NSWindow* (same registry
-                // key as the pane state); cb = NULL for now — the reverse dispatcher
-                // (click/menu-click -> native) is wired in Task 4. Nothing pushes items
-                // yet (config push is Task 4), so the toolbar renders empty here.
-                swiftToolbarState = zapp_swift_toolbar_state_create((__bridge void*)window, NULL);
+                // Shared, observable toolbar state. ctx = the numeric host id boxed
+                // as a pointer (the dispatcher unboxes it for window:toolbar-clicked's
+                // win-<n> field); cb = the file-static reverse dispatcher (click /
+                // menu-click -> native). The delegate owns this handle and releases it
+                // once at teardown. The initial config toolbar is pushed below.
+                swiftToolbarState = zapp_swift_toolbar_state_create((void*)(intptr_t)host_slot,
+                    zapp_swiftui_toolbar_event);
 
                 // Install the SwiftUI host (wrapping the content container + optional
                 // sidebar + optional inspector) as the window's contentView FIRST, so
@@ -1025,6 +1049,16 @@ void* darwin_window_create(WindowOptions* opts) {
                     // resolve + drive the PaneState (no splitVC/NSSplitViewItem).
                     zapp_inspector_register_swiftui((__bridge void*)window, swiftPaneState,
                                                     host_slot, inspector_slot, !inspectorPresented);
+                }
+
+                // Initial config toolbar -> SwiftUI ToolbarState. On this path the
+                // AppKit NSToolbar attach is skipped (it would collide with the
+                // SwiftUI `.toolbar`); push the config items into the ToolbarState so
+                // a config-declared toolbar renders via SwiftUI on launch. Runtime
+                // setItems still routes to NSToolbar until Task 5 (the router fork).
+                {
+                    const char* tj0 = wopts_toolbar_json(opts);
+                    if (tj0 && tj0[0]) zapp_swift_module_set_string(swiftToolbarState, ZAPP_TB_SET_ITEMS, tj0);
                 }
             } else
 #endif

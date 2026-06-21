@@ -37,6 +37,57 @@ static void zapp_toolbar_on_main(void (^block)(void)) {
     else dispatch_async(dispatch_get_main_queue(), block);
 }
 
+// Shared toolbar emit — used by the NSToolbar handler AND the SwiftUI toolbar
+// reverse dispatcher (window.m). item_id must be non-NULL.
+// SAFETY: the SwiftUI side passes a const char* valid only during the call; the
+// NSString conversion below runs SYNCHRONOUSLY (before the dispatch_async), so
+// the captured `escaped` is a retained NSString and the raw pointer never
+// escapes onto the async block.
+void zapp_toolbar_emit_click(int32_t host_id, const char* item_id) {
+    if (!item_id) return;
+    NSString* itemId = [NSString stringWithUTF8String:item_id];
+    if (!itemId.length) return;
+    // Escape for JS string embedding (same trio as menu.m's click emit).
+    NSString* escaped = [itemId stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+    escaped = [escaped stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\""];
+    escaped = [escaped stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSString* js = [NSString stringWithFormat:
+            @"(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+            "if(b&&b._onEvent)b._onEvent('window:toolbar-clicked',"
+            "'{\"windowId\":\"win-%d\",\"id\":\"%@\"}');})();",
+            host_id, escaped];
+        darwin_webview_eval_all([js UTF8String]);
+        worker_broadcast_eval_js((char*)[js UTF8String]);
+    });
+}
+
+// Mirror menu.m's __menu:click emit so SwiftUI toolbar Menu items route
+// identically (NSMenuToolbarItem rides menu.m's broadcast; the SwiftUI path's
+// `Menu` buttons have no NSMenuItem to ride, so they re-emit the same event
+// shape here). menu.m emits, verbatim:
+//   b._onEvent('__menu:click','{"id":"<escaped>"}')
+// with the same backslash/double-quote/single-quote escaping trio and the same
+// darwin_webview_eval_all + worker_broadcast_eval_js fan-out. SAFETY identical
+// to zapp_toolbar_emit_click: the const char* is converted synchronously.
+void zapp_toolbar_emit_menu_click(int32_t host_id, const char* menu_id) {
+    (void)host_id;  // __menu:click is window-agnostic (matches menu.m's shape).
+    if (!menu_id) return;
+    NSString* menuId = [NSString stringWithUTF8String:menu_id];
+    if (!menuId.length) return;
+    NSString* escaped = [menuId stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+    escaped = [escaped stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\""];
+    escaped = [escaped stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSString* js = [NSString stringWithFormat:
+            @"(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+            "if(b&&b._onEvent)b._onEvent('__menu:click','{\"id\":\"%@\"}');})();",
+            escaped];
+        darwin_webview_eval_all([js UTF8String]);
+        worker_broadcast_eval_js((char*)[js UTF8String]);
+    });
+}
+
 void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_user_script);
 
 @interface ZappToolbarController : NSObject <NSToolbarDelegate>
@@ -202,22 +253,8 @@ static NSMutableDictionary<NSValue*, ZappToolbarController*>* zapp_toolbars = ni
 }
 
 - (void)zappToolbarItemClicked:(NSToolbarItem*)sender {
-    NSString* itemId = sender.itemIdentifier;
-    if (!itemId.length) return;
-    int32_t numericId = self.windowNumericId;
-    // Escape for JS string embedding (same trio as menu.m's click emit).
-    NSString* escaped = [itemId stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
-    escaped = [escaped stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\""];
-    escaped = [escaped stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
-    dispatch_async(dispatch_get_main_queue(), ^{
-        NSString* js = [NSString stringWithFormat:
-            @"(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
-            "if(b&&b._onEvent)b._onEvent('window:toolbar-clicked',"
-            "'{\"windowId\":\"win-%d\",\"id\":\"%@\"}');})();",
-            numericId, escaped];
-        darwin_webview_eval_all([js UTF8String]);
-        worker_broadcast_eval_js((char*)[js UTF8String]);
-    });
+    if (!sender.itemIdentifier.length) return;
+    zapp_toolbar_emit_click(self.windowNumericId, [sender.itemIdentifier UTF8String]);
 }
 
 @end
