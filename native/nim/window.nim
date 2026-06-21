@@ -17,6 +17,7 @@ import std/json
 import apptypes
 export apptypes    # WindowManager visible to callers of window.nim
 import appconfig
+import dispatch    # dispatch_event_to_all — native→JS/worker event broadcast
 
 type
   TitleBarStyle* {.pure.} = enum   ## NSWindow title-bar style (window.m tag 0/1/2/3)
@@ -97,6 +98,9 @@ type
     inspectorCollapsed*: bool
     inspectorCanResize*: bool = true
     inspectorNumericId*: int32 = -1
+    # --- native surface pane (macOS only; no-op off-Apple) ---
+    nativeSurface*: bool       ## macOS: attach a framework "native surface" pane
+                               ## (SwiftUI enhanced / AppKit baseline). No-op off-Apple.
     # --- toolbar (feature unused; "" json => never attached) ---
     toolbarJson*: string
     # --- runtime Window.create extras (JS-driven) ---
@@ -179,6 +183,10 @@ proc wopts_inspector_can_resize(p: pointer): bool {.exportc, cdecl.} = opt(p).in
 proc wopts_inspector_background_color(p: pointer): cstring {.exportc, cdecl.} = opt(p).inspectorBackgroundColor.cstring
 proc wopts_inspector_numeric_id(p: pointer): int32 {.exportc, cdecl.} = opt(p).inspectorNumericId
 
+# native-surface accessor — 1/0 gate read by window.m's split builder (macOS only).
+proc wopts_native_surface(p: pointer): cint {.exportc, cdecl.} =
+  (if opt(p).nativeSurface: 1 else: 0).cint
+
 # toolbar accessor — unused feature; "" json short-circuits darwin_toolbar_attach.
 proc wopts_toolbar_json(p: pointer): cstring {.exportc, cdecl.} = opt(p).toolbarJson.cstring
 
@@ -197,6 +205,7 @@ proc darwin_window_register_numeric_id(handle: pointer, id: int32) {.importc, cd
 proc darwin_window_get_by_numeric_id(numericId: int32): pointer {.importc, cdecl.}
 proc darwin_window_attach_modal(parent, modal: pointer) {.importc, cdecl.}
 proc darwin_window_numeric_id_for_string(wid: cstring): int32 {.importc, cdecl.}
+proc darwin_native_surface_backing(window_id: int32): cstring {.importc, cdecl.}
 
 type
   Window* = object
@@ -273,6 +282,11 @@ proc show*(win: Window) =
   ## Show the window — `win.show()`, the Nim analog of `Window.show()`.
   darwin_window_show(win.handle)
 
+proc nativeSurfaceBacking*(win: Window): string =
+  ## macOS: which backing the native-surface pane resolved to — "swiftui",
+  ## "appkit", or "" if the window has no native surface. Useful for DX/debug.
+  $darwin_native_surface_backing(win.id.int32)
+
 # --- JSON → WindowOptions (port of window.zc:window_opts_apply_json) -----------
 # nil-safe readers. Numeric reads use getFloat so a fractional dim from the bridge
 # (which stores all JSON numbers as doubles) isn't silently truncated to 0 by the
@@ -337,6 +351,7 @@ proc windowOptsApplyJson*(o: WindowOptions, a: JsonNode) =
   if jHasStr(a, "backgroundColor"): o.backgroundColor = jStr(a, "backgroundColor")
   if jHasStr(a, "frameAutosaveName"): o.frameAutosaveName = jStr(a, "frameAutosaveName")
   if jHasStr(a, "toolbarJson"): o.toolbarJson = jStr(a, "toolbarJson")
+  if jHasBool(a, "nativeSurface"): o.nativeSurface = jBool(a, "nativeSurface", o.nativeSurface)
   let sb = a{"sidebar"}
   if not sb.isNil and sb.kind == JObject:
     if jHasStr(sb, "url"): o.sidebarUrl = jStr(sb, "url")
@@ -400,8 +415,10 @@ proc windowOptsApplyJson*(o: WindowOptions, a: JsonNode) =
     if jHasStr(tl, "zoom"): o.trafficLights.zoom = buttonStateFromStr(jStr(tl, "zoom"), ButtonState.Enabled)
 
 proc zapp_native_surface_emit(window_id: int32, value: cstring) {.exportc, cdecl.} =
-  ## Forward stub (Task 4) — upgraded in Task 6 to emit a "native-surface:action"
-  ## event to web content. For now just logs so nativesurface.m links.
+  ## Called from nativesurface.m when the native-surface control fires. Emits a
+  ## "native-surface:action" event (detail = {value}) to every webview + worker
+  ## via dispatch_event_to_all, so web content can observe the native→Nim
+  ## round-trip. value is an ASCII backing tag like "swiftui:3"/"appkit:3".
   let v = if value.isNil: "" else: $value
-  when defined(release): discard
-  echo "[zapp] native-surface action: ", v
+  let detail = "{\"value\":\"" & v & "\"}"
+  dispatch_event_to_all("native-surface:action".cstring, detail.cstring)
