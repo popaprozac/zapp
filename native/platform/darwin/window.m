@@ -806,6 +806,7 @@ void* darwin_window_create(WindowOptions* opts) {
                 NSLog(@"[zapp] window panes: %s", useSwiftUIPanes ? "swiftui" : "appkit");
             }
 
+#ifdef ZAPP_HAS_SWIFTUI
             if (useSwiftUIPanes) {
                 // Task 1: content pane only (sidebar/inspector added in Tasks 2-3).
                 // Build the content container (mirror the AppKit branch's content-pane
@@ -954,7 +955,9 @@ void* darwin_window_create(WindowOptions* opts) {
                     if (inspectorWebviewRef) zapp_register_webview(inspector_slot, inspectorWebviewRef, hostWindowId);
                     zapp_set_inspector_slot(host_slot, inspector_slot);   // event fan-out
                 }
-            } else {
+            } else
+#endif
+            {
             if (tbs == 3) {
                 [window setStyleMask:([window styleMask] | NSWindowStyleMaskFullSizeContentView)];
                 [window setTitleVisibility:NSWindowTitleHidden];
