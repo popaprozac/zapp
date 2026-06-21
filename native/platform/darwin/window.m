@@ -79,7 +79,39 @@ extern double zapp_primary_screen_height(void);
 // an NSHostingView; +1-retained, consumed via __bridge_transfer. Only declared
 // when the swiftc tier is compiled in (native.swiftui != false + swiftc present).
 #ifdef ZAPP_HAS_SWIFTUI
-extern void* zapp_swift_panes_create(void* content, void* sidebar, void* inspector, bool showInspector);
+// Reverse state-change channel from SwiftUI (panes.swift). Scalar, main-thread,
+// change-driven. Keys match panes.swift; value is the new scalar (0/1 here).
+typedef void (*ZappSwiftStateCallback)(void* ctx, int32_t key, int64_t value);
+enum { ZAPP_PANE_KEY_SIDEBAR_VISIBLE = 1, ZAPP_PANE_KEY_INSPECTOR_PRESENTED = 2 };
+
+extern void* zapp_swift_panes_state_create(void* ctx, ZappSwiftStateCallback cb,
+                                           bool sidebarVisible, bool inspectorPresented);
+extern void zapp_swift_panes_state_release(void* state);
+extern void zapp_swift_panes_set_sidebar_visible(void* state, bool visible);
+extern void zapp_swift_panes_set_inspector_presented(void* state, bool presented);
+extern void zapp_swift_panes_toggle_sidebar(void* state);
+extern void zapp_swift_panes_toggle_inspector(void* state);
+extern void* zapp_swift_panes_create(void* state, void* content, void* sidebar, void* inspector);
+
+// Reverse-emit entries (defined in sidebar.m / inspector.m — wired in Tasks 2/3).
+extern void zapp_sidebar_note_swiftui_visibility(void* window_ptr, bool collapsed);
+extern void zapp_inspector_note_swiftui_visibility(void* window_ptr, bool collapsed);
+// SwiftUI controller register variants (defined in sidebar.m / inspector.m — Tasks 2/3).
+extern void zapp_sidebar_register_swiftui(void* window_ptr, void* paneState,
+                                          int32_t host_id, int32_t sidebar_slot_id,
+                                          bool initial_collapsed);
+extern void zapp_inspector_register_swiftui(void* window_ptr, void* paneState,
+                                            int32_t host_id, int32_t inspector_slot_id,
+                                            bool initial_collapsed);
+
+// File-static reverse dispatcher: PaneState's didSet fires this with the changed
+// key + new value (1=visible/0=collapsed). ctx is the host NSWindow*. The switch
+// arms are added in Tasks 2 (sidebar) and 3 (inspector); a stub today emits nothing.
+static void zapp_swiftui_pane_changed(void* ctx, int32_t key, int64_t value) {
+    (void)ctx; (void)key; (void)value;
+    // Task 2 adds: case ZAPP_PANE_KEY_SIDEBAR_VISIBLE -> zapp_sidebar_note_swiftui_visibility(ctx, value == 0);
+    // Task 3 adds: case ZAPP_PANE_KEY_INSPECTOR_PRESENTED -> zapp_inspector_note_swiftui_visibility(ctx, value == 0);
+}
 #endif
 
 // Event IDs (mirrored from window/events.zc)
@@ -322,6 +354,7 @@ static const char kZappWindowDelegateKey = 0;
 @property (nonatomic, weak) WKWebView* mainWebview;
 @property (nonatomic, weak) WKWebView* sidebarWebview;
 @property (nonatomic, weak) WKWebView* inspectorWebview;
+@property (nonatomic, assign) void* swiftPaneState;  // owning ref to the SwiftUI PaneState (NULL on AppKit path)
 @property (nonatomic, assign) BOOL bridgeReady;
 @property (nonatomic, assign) BOOL pendingFocusEvent;
 @property (nonatomic, assign) BOOL wasZoomed;
@@ -777,6 +810,7 @@ void* darwin_window_create(WindowOptions* opts) {
         int32_t inspector_slot = wopts_inspector_numeric_id(opts);
 
         WKWebView* inspectorWebviewRef = nil;
+        void* swiftPaneState = NULL;  // SwiftUI PaneState handle (owned by the delegate; released once at teardown)
 
         // Native-surface pane (macOS, SwiftUI/AppKit). Rides the same split root;
         // requesting it alone (no sidebar/inspector) still builds the split.
@@ -888,17 +922,25 @@ void* darwin_window_create(WindowOptions* opts) {
                     }
                     inspectorContainer.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
                 }
-                // Initial inspector visibility — shown unless created collapsed.
-                bool showInspector = useInspector && !wopts_inspector_collapsed(opts);
+                // Initial pane visibility for the shared PaneState: sidebar shown
+                // when present; inspector shown unless created collapsed.
+                bool sidebarVisible = useSidebar;
+                bool inspectorPresented = useInspector && !wopts_inspector_collapsed(opts);
+
+                // Shared, observable pane state. ctx = host NSWindow* (the registry
+                // key the reverse dispatcher resolves controllers by); cb = the
+                // file-static reverse dispatcher. The delegate owns this handle and
+                // releases it once at teardown.
+                swiftPaneState = zapp_swift_panes_state_create((__bridge void*)window,
+                    zapp_swiftui_pane_changed, sidebarVisible, inspectorPresented);
 
                 // Install the SwiftUI host (wrapping the content container + optional
-                // sidebar + optional inspector) as the window's contentView FIRST, so the
-                // containers are in the window before the webviews are created into them
-                // (mirrors the AppKit ordering where splitVC is root before _ext). A
-                // (__bridge void*)nil pointer passes NULL → Swift maps it to a nil pane.
+                // sidebar + optional inspector) as the window's contentView FIRST, so
+                // the containers are in the window before the webviews are created into
+                // them (mirrors the AppKit ordering where splitVC is root before _ext).
                 NSView* paneHost = (__bridge_transfer NSView*)zapp_swift_panes_create(
-                    (__bridge void*)mainContainer, (__bridge void*)sidebarContainer,
-                    (__bridge void*)inspectorContainer, showInspector);
+                    swiftPaneState, (__bridge void*)mainContainer,
+                    (__bridge void*)sidebarContainer, (__bridge void*)inspectorContainer);
                 paneHost.frame = [window contentView].frame;
                 window.contentView = paneHost;
                 [paneHost layoutSubtreeIfNeeded];
@@ -1214,6 +1256,7 @@ void* darwin_window_create(WindowOptions* opts) {
         delegate.mainWebview = mainWebviewRef;         // nil in the non-split path
         delegate.sidebarWebview = sidebarWebviewRef;   // nil when no sidebar
         delegate.inspectorWebview = inspectorWebviewRef; // nil when no inspector
+        delegate.swiftPaneState = swiftPaneState;       // NULL unless the SwiftUI path ran
 
         // Seed the host webview's underpage fill (the WebView2
         // DefaultBackgroundColor analogue) with the app-set background. Split
@@ -1340,6 +1383,12 @@ void darwin_window_destroy(void* handle) {
             zapp_teardown_webview(delegate.inspectorWebview);
             zapp_inspector_unregister(handle);
         }
+#ifdef ZAPP_HAS_SWIFTUI
+        if (delegate.swiftPaneState) {
+            zapp_swift_panes_state_release(delegate.swiftPaneState);
+            delegate.swiftPaneState = NULL;
+        }
+#endif
     }
     zapp_toolbar_unregister(handle);
     extern void zapp_popover_unregister_window(void* window_ptr);
