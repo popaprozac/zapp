@@ -23,7 +23,7 @@ The user-visible payoff: the inspector **renders and toggles** (Sub-cycle 1 left
 
 ## Approach — `PaneState` ObservableObject + scalar C-ABI (Approach A, approved)
 
-A `final class PaneState: ObservableObject` in `panes.swift` is the single piece of shared state crossing the boundary. `PaneLayout` observes it (`@ObservedObject`) and **derives** its bindings from it (the `NavigationSplitView` `columnVisibility` binding and the `.inspector(isPresented:)` binding). ObjC owns the `PaneState` lifetime: the `@_cdecl` create returns a `+1`-retained handle that the window's pane controller holds and releases on window close.
+A `final class PaneState: ObservableObject` in `panes.swift` is the single piece of shared state crossing the boundary. `PaneLayout` observes it (`@ObservedObject`) and **derives** its bindings from it (the `NavigationSplitView` `columnVisibility` binding and the `.inspector(isPresented:)` binding). ObjC owns the `PaneState` lifetime: the `@_cdecl` create returns a `+1`-retained handle. **Ownership lives in one place — the window delegate** (`ZappWindowDelegate.swiftPaneState`), released exactly once at window teardown. The per-pane `ZappSidebarController` / `ZappInspectorController` hold a **non-owning** copy of the same handle purely to route forward calls (both may point at the same `PaneState`, so neither releases it).
 
 The existing `ZappSidebarController` / `ZappInspectorController` gain a **SwiftUI backing**: a controller is backed by either its `NSSplitViewItem` (today) **or** a `swiftPaneState` handle. Each `darwin_*` op branches on which backing the resolved controller has — the runtime API surface is unchanged, only the controller internals fork. This reuses the existing slot→`NSWindow`→registry resolution (`zapp_sidebar_for_slot` / `zapp_inspector_for_slot`) and the existing emit helper (`zapp_pane_emit`) verbatim.
 
@@ -63,7 +63,7 @@ What 2a does **not** ship (→ #622): any app-facing key registration, a string/
 
 ### `native/platform/darwin/sidebar.m` and `inspector.m` (modify, parallel changes)
 
-- Add `@property (nonatomic, assign) void* swiftPaneState;` to `ZappSidebarController` / `ZappInspectorController` (assign — lifetime owned via the window; released through `zapp_swift_panes_state_release` at unregister).
+- Add `@property (nonatomic, assign) void* swiftPaneState;` to `ZappSidebarController` / `ZappInspectorController` (assign, **non-owning** — the window delegate owns the single reference; controllers only use it to route forward calls).
 - A **SwiftUI register variant**, e.g. `void zapp_sidebar_register_swiftui(void* window_ptr, void* paneState, int32_t host_id, int32_t sidebar_slot_id, bool initial_collapsed)` (and the inspector twin). It creates a controller with `swiftPaneState = paneState`, `splitVC`/`sidebarItem` nil, `lastCollapsed = initial_collapsed` (so the dedup baseline matches the visibility `PaneState` was created with), and **installs no KVO/`NSNotification` observers** (there is no `NSSplitView` to observe; the Swift callback is the observation source). It registers under the same host-`NSWindow` key so `zapp_sidebar_for_slot` resolves it.
 - **Branch each control op** at the top: if the resolved controller has `swiftPaneState`, route to the Swift setter and return; else the existing `NSSplitViewItem` path (byte-unchanged):
   - `darwin_sidebar_toggle` → `zapp_swift_panes_toggle_sidebar(state)` (direction decided Swift-side from the authoritative state — no `lastCollapsed` read).
@@ -71,7 +71,7 @@ What 2a does **not** ship (→ #622): any app-facing key registration, a string/
   - inspector twins → `zapp_swift_panes_toggle_inspector` / `set_inspector_presented`.
   - `darwin_sidebar_set_width` / `set_collapsible` / `set_resizable` (+ inspector twins) on a `swiftPaneState` controller: **documented no-op** with a `ZAPP_LOG` debug line ("[zapp] sidebar set_width ignored on SwiftUI path (2c)"). (2c work.)
 - A **reverse emit-and-dedup entry** exported for the dispatcher: `void zapp_sidebar_note_swiftui_visibility(void* window_ptr, bool collapsed)` — resolves the controller by `window_ptr`, dedups against `lastCollapsed` (early-return if unchanged), updates it, and calls the existing `zapp_sidebar_emit(c, collapsed ? "sidebar-collapsed" : "sidebar-expanded", nil)`. Inspector twin emits `inspector-collapsed`/`-expanded`. (Note: `value`/`visible` is inverted to `collapsed` for the existing event names — `visible == false ⇒ collapsed`.)
-- `zapp_sidebar_unregister` / `zapp_inspector_unregister`: when the controller is SwiftUI-backed (`swiftPaneState != NULL`), skip the KVO/observer removal (none were installed) and call `zapp_swift_panes_state_release(c.swiftPaneState)`.
+- `zapp_sidebar_unregister` / `zapp_inspector_unregister`: when the controller is SwiftUI-backed (`swiftPaneState != NULL`), skip the KVO/observer removal (none were installed) and **do not** release `swiftPaneState` (non-owning). The owning release happens once in window teardown (below).
 
 ### `native/platform/darwin/window.m` (modify — the existing SwiftUI fork)
 
@@ -83,7 +83,8 @@ In the `useSwiftUIPanes` branch (the `#ifdef ZAPP_HAS_SWIFTUI` block that today 
 - `paneHost = zapp_swift_panes_create(paneState, mainContainer, sidebarContainer, inspectorContainer);` (drop the old `showInspector` arg).
 - After setting `window.contentView = paneHost` (as today): **register the SwiftUI controllers** (the piece Sub-cycle 1 omitted), passing the initial collapsed baseline: `if (useSidebar) zapp_sidebar_register_swiftui(window, paneState, hostId, sidebarSlotId, !sidebarVisible);` and `if (useInspector) zapp_inspector_register_swiftui(window, paneState, hostId, inspectorSlotId, !inspectorPresented);`.
 - Declare the new externs (`zapp_swift_panes_state_create`/`_release`/`_set_sidebar_visible`/`_set_inspector_presented`/`_toggle_sidebar`/`_toggle_inspector`, the two `register_swiftui`, the two `note_swiftui_visibility`) under `#ifdef ZAPP_HAS_SWIFTUI`, alongside the existing `zapp_swift_panes_create` extern.
-- The AppKit `else` branch and teardown are unchanged.
+- **Own the `PaneState` lifetime:** add `@property (nonatomic, assign) void* swiftPaneState;` to `ZappWindowDelegate`; set it to the created `paneState` in the SwiftUI branch; in the existing window teardown (where `zapp_sidebar_unregister`/`zapp_inspector_unregister` are already called), after unregister, `if (delegate.swiftPaneState) { zapp_swift_panes_state_release(delegate.swiftPaneState); delegate.swiftPaneState = NULL; }` — released exactly once regardless of how many panes the window has.
+- The AppKit `else` branch is unchanged; the teardown gains only the single guarded release above.
 
 ### Nim / TS
 
