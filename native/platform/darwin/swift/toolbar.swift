@@ -133,9 +133,9 @@ struct ZappToolbarContent: ToolbarContent {
   @ViewBuilder private func itemView(_ item: ZappToolbarItem) -> some View {
     switch item.type {
     case "toggleSidebar":
-      Button { pane.sidebarVisible.toggle() } label: { glyph(item, fallback: "sidebar.left") }
+      Button { withAnimation { pane.sidebarVisible.toggle() } } label: { glyph(item, fallback: "sidebar.left") }
     case "toggleInspector":
-      Button { pane.inspectorPresented.toggle() } label: { glyph(item, fallback: "sidebar.right") }
+      Button { withAnimation { pane.inspectorPresented.toggle() } } label: { glyph(item, fallback: "sidebar.right") }
     case "space", "flexibleSpace", "trackingSeparator":
       // Spacers/separators: NavigationSplitView auto-aligns toolbar sections to
       // columns, so trackingSeparator is a no-op; space/flexibleSpace use the
