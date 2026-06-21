@@ -116,17 +116,20 @@ struct ZappToolbarContent: ToolbarContent {
   let state: ToolbarState
   let pane: PaneState   // toggles bind directly to pane visibility (2a)
 
-  // NOTE (deviation): a dynamic `ForEach` directly inside `ToolbarContent`
-  // (each yielding a placed `ToolbarItem(id:)`) does NOT compile against the
-  // installed SDK — `ForEach`'s closure is evaluated as a `ViewBuilder`, so
-  // `ToolbarItem` (a ToolbarContent, not a View) is rejected. Per the task's
-  // IMPLEMENTER NOTE fallback, emit a single `ToolbarItemGroup` whose body IS a
-  // `ViewBuilder` `ForEach` over plain item Views. Per-item placement/ids are
-  // lost in this form (refined at Task 5's human gate); functionally the items
-  // still render + round-trip clicks.
+  // Render ALL items as ONE ToolbarItem containing an HStack of item Views.
+  // SwiftUI's dynamic `ToolbarContent` diffing with `ForEach` is unreliable:
+  // it renders on the initial config push but drops the app's items after a
+  // runtime `setItems` update. A plain `View` (HStack + ForEach) re-renders
+  // deterministically when `state.items` changes (PaneLayout holds an
+  // `@ObservedObject` toolbar → change re-renders PaneLayout → rebuilds this
+  // ToolbarContent → the HStack reflects the new items). `space`/`flexibleSpace`
+  // map to `Spacer()`, which pushes items apart inside the HStack (correct);
+  // `trackingSeparator` is a no-op Spacer.
   var body: some ToolbarContent {
-    ToolbarItemGroup(placement: .automatic) {
-      ForEach(state.items) { item in itemView(item) }
+    ToolbarItem(placement: .automatic) {
+      HStack(spacing: 8) {
+        ForEach(state.items) { item in itemView(item) }
+      }
     }
   }
 
