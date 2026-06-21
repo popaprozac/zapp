@@ -948,6 +948,9 @@ void* darwin_window_create(WindowOptions* opts) {
                     swiftPaneState, (__bridge void*)mainContainer,
                     (__bridge void*)sidebarContainer, (__bridge void*)inspectorContainer);
                 window.contentViewController = paneVC;   // sets window.contentView = paneVC.view; window retains the VC
+                // NSHostingController overrides the window's content size on assignment; restore the
+                // configured size (sizingOptions=[] in panes.swift stops it re-driving on later layout).
+                [window setContentSize:NSMakeSize((CGFloat)wopts_width(opts), (CGFloat)wopts_height(opts))];
                 [paneVC.view layoutSubtreeIfNeeded];
 
                 // Create the content webview INTO mainContainer (same call as the AppKit
