@@ -8,16 +8,20 @@ BUNDLE_ID="dev.zapp.spike.swiftuiwebview"
 
 case "$STAGE" in
   macos)
-    swiftc -O -target arm64-apple-macos14.0 Probe.swift -o build/probe
-    echo "--- built build/probe ($(du -h build/probe | cut -f1)) ---"
-    echo "run it:  ./build/probe   (click the window if it opens behind)"
+    # NOTE: macOS uses a case-INSENSITIVE filesystem, so build/probe and
+    # build/Probe would collide. Keep macOS + iOS artifacts in separate subdirs.
+    mkdir -p build/macos
+    swiftc -O -target arm64-apple-macos14.0 Probe.swift -o build/macos/probe
+    echo "--- built build/macos/probe ($(du -h build/macos/probe | cut -f1)) ---"
+    echo "run it:  ./build/macos/probe"
     ;;
   ios-sim)
+    mkdir -p build/ios
     SDK="$(xcrun --sdk iphonesimulator --show-sdk-path)"
-    swiftc -O -sdk "$SDK" -target arm64-apple-ios17.0-simulator Probe.swift -o build/Probe
-    APP="build/Probe.app"
+    swiftc -O -sdk "$SDK" -target arm64-apple-ios17.0-simulator Probe.swift -o build/ios/ProbeBin
+    APP="build/ios/Probe.app"
     rm -rf "$APP"; mkdir -p "$APP"
-    cp build/Probe "$APP/Probe"
+    cp build/ios/ProbeBin "$APP/Probe"
     cat > "$APP/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

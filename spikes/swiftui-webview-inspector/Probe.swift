@@ -1,5 +1,8 @@
 import SwiftUI
 import WebKit
+#if canImport(AppKit)
+import AppKit
+#endif
 
 // Trivial page: a button posts to the native handler; a status line shows the
 // native round-trip. This is the *visible* proof the bridge survives the
@@ -112,11 +115,26 @@ struct RootView: View {
   }
 }
 
+// A bare swiftc-built SwiftUI binary (no .app bundle) launches as an accessory
+// process by default — no Dock icon, window not brought to front. This delegate
+// promotes it to a regular foreground app so the window actually appears.
+#if os(macOS)
+final class MacAppDelegate: NSObject, NSApplicationDelegate {
+  func applicationDidFinishLaunching(_ notification: Notification) {
+    NSApp.setActivationPolicy(.regular)
+    NSApp.activate(ignoringOtherApps: true)
+  }
+}
+#endif
+
 // Single-file SwiftUI app: use the script-style entry (top-level `App.main()`)
 // instead of `@main`. A lone .swift file compiles in "main" mode (here and in
 // SourceKit), where `@main` is disallowed but a top-level `.main()` call is the
 // entry point — so this is clean both at build time and in the editor.
 struct ProbeApp: App {
+  #if os(macOS)
+  @NSApplicationDelegateAdaptor(MacAppDelegate.self) var appDelegate
+  #endif
   var body: some Scene {
     WindowGroup { RootView() }
   }
