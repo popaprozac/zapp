@@ -2,6 +2,10 @@
 
 **Date:** 2026-06-21 · **Branch:** `feat/nim-native` (do not merge to main) · **Track:** Apple-only (macOS-first; iOS reuses this in a later sub-cycle)
 
+> **⚠️ PIVOT (2026-06-21, after implementing Strategy B): macOS uses `NSToolbar`, not SwiftUI `.toolbar`.**
+> Strategy B (the SwiftUI `.toolbar` renderer below) was built end-to-end (Tasks 1–5) and **hit a fundamental SwiftUI limitation**: SwiftUI `.toolbar` is designed for *statically-declared* items, and Zapp's toolbar is a *runtime-mutated data array*. It rendered on the initial config push but **dropped items on `setItems`/`updateItem`/`remove` updates**; the HStack-in-one-`ToolbarItem` workaround produced zero-size toolbar items (`ambiguous height/width` warnings). The proven `NSToolbar` (already shipped, what the AppKit path uses) handles dynamic toolbars perfectly.
+> **Reframed per-world principle:** use each platform's *native* toolbar — `NSToolbar` on macOS, SwiftUI `.toolbar` on iOS (no NSToolbar there). So macOS reverts to **Strategy A**: keep `NSToolbar` on the SwiftUI pane path, **suppress** SwiftUI's auto sidebar-toggle injection (`.toolbar(removing: .sidebarToggle)`) so it doesn't collide, and route the toolbar's sidebar/inspector toggle items to the 2a `PaneState` bridge (`darwin_sidebar_toggle`/`darwin_inspector_toggle`). The SwiftUI `.toolbar` renderer is **deferred to the iOS sub-cycle / a future SwiftUI feature expansion** (where it's the only option and the dynamic-content quirks can be solved properly). The Strategy-B sections below are retained for that future work; the macOS implementation follows the "Strategy A (NSToolbar)" addendum at the end.
+
 ## Where this sits
 
 Sub-cycle 2a shipped the runtime pane **control** bridge (visibility) on the SwiftUI path. It left two toolbar problems (Sub-cycle-1/2a known limitations): the **collision** (an `NSToolbar` is attached to the window in *both* fork branches, and on the SwiftUI path `NavigationSplitView`/`.inspector` auto-inject their own toggles + reflow it → app items flicker/vanish) and the **dead sidebar toggle** (the system `toggleSidebar` item auto-wires to an `NSSplitViewController`, which doesn't exist on the SwiftUI path).
@@ -80,9 +84,23 @@ No changes. `ToolbarItemDef` / `normalizeToolbar` / the `toolbar:*` wire / the `
 - **Build matrix:** macOS enabled (links + builds), opted-out (`swiftui:false`) → AppKit `NSToolbar` path unchanged, iOS-sim builds, `bun test cli/src` green.
 - **Final task — pinned B-for-toggles exploration (only if the A renderer is stable):** spike letting `NavigationSplitView` own the sidebar toggle (drop `.toolbar(removing:)` for it), capture placement/behavior differences vs A in a short findings note — info for a future A-vs-B decision, no commitment.
 
+## Strategy A (NSToolbar) — the shipped macOS implementation (post-pivot)
+
+Everything above (the SwiftUI `.toolbar` renderer, `ToolbarState`, the generic string channel, the router fork, the `NSHostingController` pivot) is **reverted** for macOS and retained only as the blueprint for the future iOS / SwiftUI-feature-expansion work. The shipped macOS toolbar is `NSToolbar`, made to coexist with the SwiftUI panes.
+
+**Revert:** restore `native/platform/darwin/swift/panes.swift`, `native/platform/darwin/window.m`, `native/platform/darwin/toolbar.m`, `native/nim/router.nim`, and `native/platform/ios/toolbar.m` to their post-2a state (commit `5fc25ba`), and delete `native/platform/darwin/swift/toolbar.swift`. This brings back: `NSHostingView` hosting (2a), `NSToolbar` attaching on the SwiftUI path, and the unforked `toolbar:*` router → `darwin_toolbar_*`. (It also restores the Sub-cycle-1 collision/dead-toggle, which the two changes below then fix.)
+
+**Change 1 — `panes.swift` (suppress SwiftUI's auto toolbar injection):** apply `.toolbar(removing: .sidebarToggle)` to the `NavigationSplitView` in `PaneLayout` so SwiftUI does **not** inject its own sidebar toggle into the window's `NSToolbar` (the source of the Sub-cycle-1 flicker/reflow). Hosting stays `NSHostingView` (2a). **RISK:** `.toolbar(removing:)` must actually suppress the auto toggle when hosted via `NSHostingView` — verified at the gate (no duplicate sidebar toggle).
+
+**Change 2 — `toolbar.m` (route the sidebar toggle to the SwiftUI panes):** on a **SwiftUI-pane window** (`delegate.swiftPaneState != NULL`, via a small `bool zapp_window_uses_swiftui_panes(void* window)` helper in `window.m`, darwin-only), build the `toggleSidebar` item as a **custom `NSToolbarItem`** whose action calls `darwin_sidebar_toggle(windowNumericId)` (→ the 2a `PaneState` bridge, animated), instead of the system `NSToolbarToggleSidebarItemIdentifier` (which auto-targets an `NSSplitViewController` that doesn't exist on the SwiftUI path). On the AppKit path, keep the system identifier (proven; trackingSeparator etc.). The `toggleInspector` item already calls `darwin_inspector_toggle` → works on both paths post-2a.
+
+**Net:** SwiftUI owns the panes; `NSToolbar` owns the macOS toolbar (dynamic items, `setItems`/`updateItem`/`remove`, menus, enabled/indicator — all already working); no collision (SwiftUI's auto toggle suppressed); both toggles drive the SwiftUI panes. No `ToolbarState`, no generic string channel, no router fork on macOS.
+
+**Gate (human visual):** the kitchen-sink toolbar renders all items via `NSToolbar`; navigation no longer collapses/reorgs; `setItems`/`updateItem` (cycle filter)/`remove`+re-add all work; exactly **one** sidebar toggle (no SwiftUI duplicate); the sidebar + inspector toggle items drive the SwiftUI panes (animated). Build matrix: macOS enabled + `swiftui:false` (AppKit `NSToolbar` unchanged) + iOS-sim + `bun test cli/src`.
+
 ## Non-goals
 
-- **iOS toolbar** — a later sub-cycle reuses this `.toolbar` renderer via `UIHostingController`.
+- **iOS toolbar** — a later sub-cycle reuses **this spec's Strategy-B** `.toolbar` renderer via `UIHostingController` (and solves the dynamic-content quirks there).
 - **Full BYO-native-module registration** (#622) — 2b ships the generic string channel + `ZappNativeModule` protocol (the seam), not the app-facing registration/discovery API, and does not retrofit `PaneState` onto the protocol.
 - **`native/nim` → `native/` promotion + zc removal** (#628) — a separate structural cleanup cycle; 2b uses current paths.
 - **Cross-pane event fan-out** (#627) — unrelated, separate.
