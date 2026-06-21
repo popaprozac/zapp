@@ -108,22 +108,22 @@ public func zapp_swift_panes_state_release(_ state: UnsafeMutableRawPointer) {
 
 @_cdecl("zapp_swift_panes_set_sidebar_visible")
 public func zapp_swift_panes_set_sidebar_visible(_ state: UnsafeMutableRawPointer, _ visible: Bool) {
-  Unmanaged<PaneState>.fromOpaque(state).takeUnretainedValue().sidebarVisible = visible
+  withAnimation { Unmanaged<PaneState>.fromOpaque(state).takeUnretainedValue().sidebarVisible = visible }
 }
 
 @_cdecl("zapp_swift_panes_set_inspector_presented")
 public func zapp_swift_panes_set_inspector_presented(_ state: UnsafeMutableRawPointer, _ presented: Bool) {
-  Unmanaged<PaneState>.fromOpaque(state).takeUnretainedValue().inspectorPresented = presented
+  withAnimation { Unmanaged<PaneState>.fromOpaque(state).takeUnretainedValue().inspectorPresented = presented }
 }
 
 @_cdecl("zapp_swift_panes_toggle_sidebar")
 public func zapp_swift_panes_toggle_sidebar(_ state: UnsafeMutableRawPointer) {
-  Unmanaged<PaneState>.fromOpaque(state).takeUnretainedValue().sidebarVisible.toggle()
+  withAnimation { Unmanaged<PaneState>.fromOpaque(state).takeUnretainedValue().sidebarVisible.toggle() }
 }
 
 @_cdecl("zapp_swift_panes_toggle_inspector")
 public func zapp_swift_panes_toggle_inspector(_ state: UnsafeMutableRawPointer) {
-  Unmanaged<PaneState>.fromOpaque(state).takeUnretainedValue().inspectorPresented.toggle()
+  withAnimation { Unmanaged<PaneState>.fromOpaque(state).takeUnretainedValue().inspectorPresented.toggle() }
 }
 
 // Build the hosting view. `state` carries initial visibility; the old
