@@ -3,8 +3,9 @@ import WebKit
 
 // Trivial page: a button posts to the native handler; a status line shows the
 // native round-trip. This is the *visible* proof the bridge survives the
-// SwiftUI representable.
-let probeHTML = """
+// SwiftUI representable. Kept inside a namespace (not a top-level `let`) so the
+// file has no top-level code and `@main` is unambiguous.
+enum ProbeHTML { static let value = """
 <!doctype html><html><head>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <style>
@@ -20,7 +21,7 @@ let probeHTML = """
     function nativeSays(s){ document.getElementById('status').textContent = 'status: ' + s; }
   </script>
 </body></html>
-"""
+""" }
 
 // Receives JS messages and echoes back via evaluateJavaScript — the bridge proof.
 final class WebCoordinator: NSObject, WKScriptMessageHandler {
@@ -56,7 +57,7 @@ struct WebView: PlatformViewRepresentable {
     cfg.userContentController = ucc
     let wv = WKWebView(frame: .zero, configuration: cfg)
     coordinator.webView = wv
-    wv.loadHTMLString(probeHTML, baseURL: nil)
+    wv.loadHTMLString(ProbeHTML.value, baseURL: nil)
     return wv
   }
 
