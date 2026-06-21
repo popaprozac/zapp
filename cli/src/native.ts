@@ -1292,9 +1292,38 @@ async function buildNativeNim(
     iosArgs.push(`--passC:${cFlags}`, `--passL:${cFlags}`);
   }
 
+  // SwiftUI enhanced tier (macOS only). Compile the framework's Swift sources to
+  // a static lib, then append the gated nim args (defines + Swift link flags).
+  // Decision is the pure resolveSwiftUIBuild (unit-tested); here we only do I/O.
+  const { resolveSwiftUIBuild } = await import("./swiftui-build");
+  const swiftcPath = Bun.which("swiftc");
+  const swiftPlan = resolveSwiftUIBuild({
+    target,
+    swiftuiConfig: config.native?.swiftui,
+    swiftcAvailable: !!swiftcPath,
+    swiftLibDir: zappDir,
+  });
+  if (swiftPlan.runSwiftc) {
+    const swiftSrcDir = path.join(nativeDir, "platform", "darwin", "swift");
+    const swiftSrcs = (await fs.readdir(swiftSrcDir)).filter((f) => f.endsWith(".swift")).map((f) => path.join(swiftSrcDir, f));
+    const swiftLib = path.join(zappDir, "libzappswift.a");
+    const sc = Bun.spawnSync([
+      "swiftc", "-emit-library", "-static", "-O", "-module-name", "zappswift",
+      "-o", swiftLib, ...swiftSrcs,
+    ]);
+    if (sc.exitCode !== 0) {
+      throw new Error(`[zapp] swiftc failed:\n${new TextDecoder().decode(sc.stderr)}`);
+    }
+  }
+  clog(1, `SwiftUI: ${swiftPlan.reason === "enabled" ? "enabled (enhanced tier)" :
+    swiftPlan.reason === "disabled-opt-out" ? "disabled (opt-out)" :
+    swiftPlan.reason === "skipped-no-swiftc" ? "skipped (swiftc not found — AppKit baseline)" :
+    "n/a (non-macOS)"}`);
+
   const args = ["c", "--cc:clang", "--mm:orc", "--threads:on", "-d:release", "--opt:size",
                 `--path:${zappDir}`, `--path:${nimFrameworkDir}`,
                 ...iosArgs,
+                ...swiftPlan.nimArgs,
                 `-o:${output}`, ...(verbose ? [] : ["--hints:off"]), nimRoot];
   const proc = Bun.spawn(["nim", ...args], { cwd: nativeDir, stdout: "inherit", stderr: "inherit" });
   const code = await proc.exited;
