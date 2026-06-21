@@ -398,3 +398,10 @@ proc windowOptsApplyJson*(o: WindowOptions, a: JsonNode) =
     if jHasStr(tl, "close"): o.trafficLights.close = buttonStateFromStr(jStr(tl, "close"), ButtonState.Enabled)
     if jHasStr(tl, "minimize"): o.trafficLights.minimize = buttonStateFromStr(jStr(tl, "minimize"), ButtonState.Enabled)
     if jHasStr(tl, "zoom"): o.trafficLights.zoom = buttonStateFromStr(jStr(tl, "zoom"), ButtonState.Enabled)
+
+proc zapp_native_surface_emit(window_id: int32, value: cstring) {.exportc, cdecl.} =
+  ## Forward stub (Task 4) — upgraded in Task 6 to emit a "native-surface:action"
+  ## event to web content. For now just logs so nativesurface.m links.
+  let v = if value.isNil: "" else: $value
+  when defined(release): discard
+  echo "[zapp] native-surface action: ", v
