@@ -32,6 +32,7 @@ proc runApp(): int =
     width: 1100, height: 700,
     sidebarUrl: "#sidebar-pane", sidebarWidth: 240, sidebarPresentation: "overlay",
     inspectorUrl: "#inspector-pane", inspectorWidth: 300, inspectorCollapsed: true,
+    nativeSurface: true,
     inspectable: Inspectable.Auto,
   ))
   win.onReady(onReady)
