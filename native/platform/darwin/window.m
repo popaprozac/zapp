@@ -633,6 +633,17 @@ void* zapp_window_swiftui_toolbar_state(void* handle) {
     (void)handle; return NULL;
 }
 
+#ifndef ZAPP_HAS_SWIFTUI
+// AppKit-only build (native.swiftui:false / macOS<14): router.nim's toolbar:* fork
+// references this Swift @_cdecl symbol (defined in toolbar.swift) unconditionally
+// at link time, even though the SwiftUI branch is never taken at runtime
+// (zapp_window_uses_swiftui_toolbar returns false). Provide a no-op so the
+// AppKit-only binary links. The real impl ships in toolbar.swift on the SwiftUI path.
+void zapp_swift_module_set_string(void* state, int32_t key, const char* value) {
+    (void)state; (void)key; (void)value;
+}
+#endif
+
 // --- JS eval on specific window (by numeric ID, O(1) lookup) ---
 
 void darwin_window_eval_js(int32_t window_id, const char* js) {
