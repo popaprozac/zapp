@@ -140,6 +140,12 @@ proc darwin_inspector_set_resizable(windowId: int32, resizable: bool) {.importc,
 proc darwin_toolbar_set_items(windowPtr: pointer, toolbarJson: cstring, hostSlot: int32) {.importc, cdecl.}
 proc darwin_toolbar_update_item(windowPtr: pointer, itemJson: cstring) {.importc, cdecl.}
 proc darwin_toolbar_remove(windowPtr: pointer) {.importc, cdecl.}
+# SwiftUI toolbar routing fork: when a window renders its toolbar via SwiftUI,
+# toolbar:* drives the SwiftUI ToolbarState (no NSToolbar). Resolvers compile on
+# all builds (false/NULL when ZAPP_HAS_SWIFTUI is undefined).
+proc zapp_window_uses_swiftui_toolbar(handle: pointer): bool {.importc, cdecl.}
+proc zapp_window_swiftui_toolbar_state(handle: pointer): pointer {.importc, cdecl.}
+proc zapp_swift_module_set_string(state: pointer, key: int32, value: cstring) {.importc, cdecl.}
 proc darwin_popover_create(windowPtr: pointer, popoverId: cstring, url: cstring,
                            width, height: int32, behavior: cstring,
                            hostSlot, popoverSlot: int32) {.importc, cdecl.}
@@ -608,14 +614,25 @@ proc routeWindowAction(action: string, a: JsonNode, rawWindowId: int, payload: s
     let target = (if widArg.len > 0: darwin_window_numeric_id_for_string(widArg.cstring) else: windowId.int32)
     let h = darwin_window_get_by_numeric_id(target)
     if h.isNil: return
+    # Fork: SwiftUI-toolbar windows drive the SwiftUI ToolbarState (no NSToolbar
+    # late-attach, which would collide with the config-declared SwiftUI toolbar);
+    # AppKit/opted-out windows keep routing to darwin_toolbar_*.
+    let swiftTb = zapp_window_uses_swiftui_toolbar(h)
+    let tbState = (if swiftTb: zapp_window_swiftui_toolbar_state(h) else: nil)
     case action
     of "toolbar:setItems":
       let tj = a{"toolbarJson"}.getStr("")
-      if tj.len > 0: darwin_toolbar_set_items(h, tj.cstring, target)
+      if tj.len > 0:
+        if swiftTb: zapp_swift_module_set_string(tbState, 1'i32, tj.cstring)   # ZAPP_TB_SET_ITEMS
+        else: darwin_toolbar_set_items(h, tj.cstring, target)
     of "toolbar:updateItem":
       let ij = a{"itemJson"}.getStr("")
-      if ij.len > 0: darwin_toolbar_update_item(h, ij.cstring)
-    of "toolbar:remove": darwin_toolbar_remove(h)
+      if ij.len > 0:
+        if swiftTb: zapp_swift_module_set_string(tbState, 2'i32, ij.cstring)   # ZAPP_TB_UPDATE_ITEM
+        else: darwin_toolbar_update_item(h, ij.cstring)
+    of "toolbar:remove":
+      if swiftTb: zapp_swift_module_set_string(tbState, 3'i32, "".cstring)      # ZAPP_TB_CLEAR
+      else: darwin_toolbar_remove(h)
     else: discard
     return
   if action.startsWith("popover:"):

@@ -604,6 +604,35 @@ void* darwin_window_get_by_numeric_id(int32_t numeric_id) {
     return (__bridge void*)w;
 }
 
+// --- SwiftUI toolbar routing resolvers (callable on ALL builds) ---
+//
+// router.nim's toolbar:* arm forks on these regardless of swiftc tier, so both
+// must compile when ZAPP_HAS_SWIFTUI is undefined — only the BODY guards the
+// SwiftUI bits (returns false/NULL on the AppKit path or opted-out windows).
+
+// True when this window renders its toolbar via SwiftUI (so the router routes
+// toolbar:* to the SwiftUI module instead of NSToolbar). False on AppKit/opted-out.
+bool zapp_window_uses_swiftui_toolbar(void* handle) {
+#ifdef ZAPP_HAS_SWIFTUI
+    if (!handle) return false;
+    NSWindow* window = (__bridge NSWindow*)handle;
+    ZappWindowDelegate* d = (ZappWindowDelegate*)[window delegate];
+    if ([d isKindOfClass:[ZappWindowDelegate class]]) return d.swiftToolbarState != NULL;
+#endif
+    (void)handle; return false;
+}
+
+// The SwiftUI ToolbarState handle for this window (NULL on the AppKit path).
+void* zapp_window_swiftui_toolbar_state(void* handle) {
+#ifdef ZAPP_HAS_SWIFTUI
+    if (!handle) return NULL;
+    NSWindow* window = (__bridge NSWindow*)handle;
+    ZappWindowDelegate* d = (ZappWindowDelegate*)[window delegate];
+    if ([d isKindOfClass:[ZappWindowDelegate class]]) return d.swiftToolbarState;
+#endif
+    (void)handle; return NULL;
+}
+
 // --- JS eval on specific window (by numeric ID, O(1) lookup) ---
 
 void darwin_window_eval_js(int32_t window_id, const char* js) {
