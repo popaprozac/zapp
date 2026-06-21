@@ -1009,6 +1009,14 @@ void* darwin_window_create(WindowOptions* opts) {
                 swiftToolbarState = zapp_swift_toolbar_state_create((void*)(intptr_t)host_slot,
                     zapp_swiftui_toolbar_event);
 
+                // REQUIRED for the SwiftUI pane path: NavigationSplitView only behaves
+                // consistently in a HOSTED NSWindow with a full-size content view — its
+                // toolbar/sidebar chrome otherwise differs under NSHostingController vs
+                // the SwiftUI app lifecycle (toolbar items shifted on sidebar collapse
+                // without this). `.fullSizeContentView` is the documented mitigation and
+                // also gives the modern full-height sidebar. (See native-ui-strategy.md.)
+                [window setStyleMask:([window styleMask] | NSWindowStyleMaskFullSizeContentView)];
+
                 // Install the SwiftUI host (wrapping the content container + optional
                 // sidebar + optional inspector) as the window's contentView FIRST, so
                 // the containers are in the window before the webviews are created into

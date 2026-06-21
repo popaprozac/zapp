@@ -52,11 +52,11 @@ struct PaneLayout: View {
   @ObservedObject var toolbar: ToolbarState
 
   var body: some View {
+    // NOTE: the content `.toolbar { ZappToolbarContent }` lives on `detail` (inside
+    // the NavigationSplitView), NOT here. A body-level `.toolbar` (outside the
+    // NavigationSplitView) re-introduces the navigation toolbar context and
+    // resurrects SwiftUI's auto sidebar toggle, defeating `.toolbar(removing:)`.
     rootView
-      // Keep the outer suppression too (harmless); the effective one is on the
-      // NavigationSplitView in rootView, where the auto toggle is generated.
-      .toolbar(removing: .sidebarToggle)
-      .toolbar { ZappToolbarContent(state: toolbar, pane: state) }
       .toolbarStyle(for: toolbar.style)
   }
 
@@ -72,10 +72,11 @@ struct PaneLayout: View {
       }
       // Tiling vs overlay is Sub-cycle 2c; keep the Sub-cycle-1 style.
       .navigationSplitViewStyle(.balanced)
-      // Suppress SwiftUI's auto sidebar toggle HERE (Strategy A) — the
-      // NavigationSplitView is the navigation context that generates it; the
-      // outer `.toolbar(removing:)` on `body` alone did not suppress it (Task 1).
-      .toolbar(removing: .sidebarToggle)
+      // We KEEP SwiftUI's native auto sidebar toggle (no `.toolbar(removing:)`):
+      // `.toolbar(removing:)` doesn't take across the AppKit↔SwiftUI hosting seam
+      // (it leaked a duplicate), and the native toggle drives this column's
+      // visibility (bound to PaneState) directly — so the app's `toggleSidebar`
+      // item is satisfied by it (we don't render our own; see toolbar.swift).
     } else {
       detail
     }
@@ -87,6 +88,10 @@ struct PaneLayout: View {
       .inspector(isPresented: inspectorPresentedBinding) {
         if let inspector { PaneHost(view: inspector).ignoresSafeArea() }
       }
+      // Toolbar on the DETAIL (matching the proven spike): keeps the
+      // NavigationSplitView's `.toolbar(removing: .sidebarToggle)` effective so
+      // SwiftUI's auto sidebar toggle stays suppressed (no duplicate).
+      .toolbar { ZappToolbarContent(state: toolbar, pane: state) }
   }
 
   // Map the visibility bool <-> NavigationSplitViewVisibility. `.all` shows the

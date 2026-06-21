@@ -121,40 +121,41 @@ final class ToolbarState: ObservableObject, ZappNativeModule {
 // other items round-trip clicks back to native via emitClick.
 @available(macOS 14.0, *)
 struct ZappToolbarContent: ToolbarContent {
-  let state: ToolbarState
+  @ObservedObject var state: ToolbarState   // observe directly so item mutations re-render the toolbar (spike pattern)
   let pane: PaneState   // toggles bind directly to pane visibility (2a)
 
-  // Split state.items at the first `flexibleSpace`; filter out non-rendered
-  // types (space / flexibleSpace / trackingSeparator) from both sides so each
-  // list holds only renderable items (button / toggleSidebar / toggleInspector).
-  private var groups: (leading: [ZappToolbarItem], trailing: [ZappToolbarItem]) {
-    func renderable(_ items: ArraySlice<ZappToolbarItem>) -> [ZappToolbarItem] {
-      items.filter { $0.type != "space" && $0.type != "flexibleSpace" && $0.type != "trackingSeparator" }
+  // All renderable items go in ONE trailing (.primaryAction) group, in declared
+  // order. Filtered out:
+  //   • space / flexibleSpace / trackingSeparator → no SwiftUI toolbar equivalent.
+  //   • toggleSidebar → we do NOT render our own; SwiftUI's *native* auto sidebar
+  //     toggle (NOT suppressed — `.toolbar(removing:)` doesn't take across the
+  //     AppKit↔SwiftUI hosting seam) sits leading and drives the NavigationSplit-
+  //     View column, which is bound to PaneState, so it toggles + syncs natively.
+  // NOTE: a leading/trailing placement split (compose-on-the-left) needs the
+  // `.navigation` placement, which ties items to the sidebar column's visibility
+  // (they shift/vanish when the sidebar collapses) — another casualty of the
+  // hosting seam. Flat trailing is stable; leading app items → the SwiftUI-window
+  // investigation (#644).
+  private var renderableItems: [ZappToolbarItem] {
+    state.items.filter {
+      $0.type != "space" && $0.type != "flexibleSpace"
+        && $0.type != "trackingSeparator" && $0.type != "toggleSidebar"
     }
-    if let split = state.items.firstIndex(where: { $0.type == "flexibleSpace" }) {
-      return (renderable(state.items[..<split]), renderable(state.items[(split + 1)...]))
-    }
-    return (renderable(state.items[...]), [])
   }
 
   var body: some ToolbarContent {
-    let g = groups
-    if !g.leading.isEmpty {
-      ToolbarItemGroup(placement: .navigation) {
-        ForEach(g.leading) { item in itemView(item) }
-      }
-    }
-    if !g.trailing.isEmpty {
+    let items = renderableItems
+    if !items.isEmpty {
       ToolbarItemGroup(placement: .primaryAction) {
-        ForEach(g.trailing) { item in itemView(item) }
+        ForEach(items) { item in itemView(item) }
       }
     }
   }
 
   @ViewBuilder private func itemView(_ item: ZappToolbarItem) -> some View {
     switch item.type {
-    case "toggleSidebar":
-      Button { withAnimation { pane.sidebarVisible.toggle() } } label: { glyph(item, fallback: "sidebar.left") }
+    // toggleSidebar is filtered out in `groups` — SwiftUI's native auto toggle
+    // handles it (see the `groups` comment). Only toggleInspector + buttons here.
     case "toggleInspector":
       Button { withAnimation { pane.inspectorPresented.toggle() } } label: { glyph(item, fallback: "sidebar.right") }
     default: // "button"
