@@ -63,8 +63,5 @@ export function renderMainPane(app: HTMLElement) {
   };
 
   Events.on("ks:nav", ({ id }: any) => show(id));
-  Events.on("native-surface:action", (detail: any) => {
-    console.log("[kitchen-sink] native surface →", detail?.value);
-  });
   if (registry[0]) show(registry[0].id); // self-init to Home (race-free, in-pane)
 }
