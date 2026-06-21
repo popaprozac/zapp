@@ -24,6 +24,11 @@ extern int32_t zapp_sidebar_slot_lookup(int32_t host_slot);
 extern void darwin_inspector_toggle(int32_t window_id);
 extern int32_t zapp_inspector_divider_index(void* window_ptr);
 extern int32_t zapp_inspector_slot_lookup(int32_t host_slot);
+// sidebar.m: toggles the sidebar; already branches on swiftPaneState, so on a
+// SwiftUI-pane window it drives the PaneState bridge (animated). window.m:
+// reports whether a window is on the SwiftUI pane path (NSHostingView) vs AppKit.
+extern void darwin_sidebar_toggle(int32_t window_id);
+extern bool zapp_window_uses_swiftui_panes(void* window);
 
 // Tracking separator's private identifiers (never user-visible).
 // Sidebar/default uses the original id (byte-stable for shipped sidebar behavior).
@@ -31,6 +36,9 @@ extern int32_t zapp_inspector_slot_lookup(int32_t host_slot);
 static NSString* const kZappTrackingSeparatorId          = @"zapp.trackingSeparator";
 static NSString* const kZappTrackingSeparatorInspectorId = @"zapp.trackingSeparator.inspector";
 static NSString* const kZappToggleInspectorId = @"zapp.toggleInspector";
+// Custom sidebar toggle for the SwiftUI pane path (the system identifier targets
+// an NSSplitViewController, absent when panes are hosted in an NSHostingView).
+static NSString* const kZappToggleSidebarId = @"zapp.toggleSidebar";
 
 static void zapp_toolbar_on_main(void (^block)(void)) {
     if ([NSThread isMainThread]) block();
@@ -101,6 +109,23 @@ static NSMutableDictionary<NSValue*, ZappToolbarController*>* zapp_toolbars = ni
         }
         item.target = self;
         item.action = @selector(zappToggleInspectorClicked:);
+        if (@available(macOS 10.15, *)) item.bordered = YES;
+        return item;
+    }
+
+    // Custom sidebar toggle (SwiftUI pane path only — parse_items emits this id
+    // in place of the system one when zapp_window_uses_swiftui_panes is true).
+    if ([identifier isEqualToString:kZappToggleSidebarId]) {
+        NSToolbarItem* item = [[NSToolbarItem alloc] initWithItemIdentifier:identifier];
+        item.label = @"Sidebar";
+        item.paletteLabel = @"Toggle Sidebar";
+        item.toolTip = @"Toggle Sidebar";
+        if (@available(macOS 11.0, *)) {
+            item.image = [NSImage imageWithSystemSymbolName:@"sidebar.left"
+                          accessibilityDescription:@"Toggle Sidebar"];
+        }
+        item.target = self;
+        item.action = @selector(zappToggleSidebarClicked:);
         if (@available(macOS 10.15, *)) item.bordered = YES;
         return item;
     }
@@ -201,6 +226,11 @@ static NSMutableDictionary<NSValue*, ZappToolbarController*>* zapp_toolbars = ni
     darwin_inspector_toggle(self.windowNumericId);
 }
 
+- (void)zappToggleSidebarClicked:(NSToolbarItem*)sender {
+    (void)sender;
+    darwin_sidebar_toggle(self.windowNumericId);
+}
+
 - (void)zappToolbarItemClicked:(NSToolbarItem*)sender {
     NSString* itemId = sender.itemIdentifier;
     if (!itemId.length) return;
@@ -225,21 +255,30 @@ static NSMutableDictionary<NSValue*, ZappToolbarController*>* zapp_toolbars = ni
 // Parse the wire items array into the identifier list + custom-button defs.
 // Shared by darwin_toolbar_attach and darwin_toolbar_set_items.
 static NSArray<NSToolbarItemIdentifier>* zapp_toolbar_parse_items(
-    NSArray* items, NSMutableDictionary<NSString*, NSDictionary*>* buttons) {
+    NSArray* items, NSMutableDictionary<NSString*, NSDictionary*>* buttons, bool swiftuiPanes) {
     NSMutableArray<NSToolbarItemIdentifier>* ids = [NSMutableArray array];
     for (NSDictionary* def in items) {
         if (![def isKindOfClass:[NSDictionary class]]) continue;
         NSString* type = [def[@"type"] isKindOfClass:[NSString class]] ? def[@"type"] : @"button";
         if ([type isEqualToString:@"toggleSidebar"]) {
-            // System item: AppKit supplies icon/animation and routes the
-            // action to the split view controller's toggleSidebar:. State
-            // stays consistent with win.sidebar.* — both mutate the same
-            // NSSplitViewItem.collapsed, so sidebar.m's KVO still emits
-            // SIDEBAR_COLLAPSED/EXPANDED either way.
             // NSToolbar raises on duplicate non-space identifiers; AppKit's
             // own default-identifiers attach path filters dups, so mirror it.
-            if (![ids containsObject:NSToolbarToggleSidebarItemIdentifier])
-                [ids addObject:NSToolbarToggleSidebarItemIdentifier];
+            if (swiftuiPanes) {
+                // SwiftUI pane path: the system toggle targets an
+                // NSSplitViewController that doesn't exist here (panes live in
+                // an NSHostingView). Emit the custom item instead — its action
+                // calls darwin_sidebar_toggle → the PaneState bridge (animated).
+                if (![ids containsObject:kZappToggleSidebarId])
+                    [ids addObject:kZappToggleSidebarId];
+            } else {
+                // AppKit path. System item: AppKit supplies icon/animation and
+                // routes the action to the split view controller's
+                // toggleSidebar:. State stays consistent with win.sidebar.* —
+                // both mutate the same NSSplitViewItem.collapsed, so sidebar.m's
+                // KVO still emits SIDEBAR_COLLAPSED/EXPANDED either way.
+                if (![ids containsObject:NSToolbarToggleSidebarItemIdentifier])
+                    [ids addObject:NSToolbarToggleSidebarItemIdentifier];
+            }
         } else if ([type isEqualToString:@"toggleInspector"]) {
             if (![ids containsObject:kZappToggleInspectorId])
                 [ids addObject:kZappToggleInspectorId];
@@ -286,7 +325,8 @@ void darwin_toolbar_attach(void* window_ptr, const char* toolbar_json, int32_t w
     if (![items isKindOfClass:[NSArray class]] || items.count == 0) return;
 
     NSMutableDictionary<NSString*, NSDictionary*>* buttons = [NSMutableDictionary dictionary];
-    NSArray<NSToolbarItemIdentifier>* ids = zapp_toolbar_parse_items(items, buttons);
+    NSArray<NSToolbarItemIdentifier>* ids =
+        zapp_toolbar_parse_items(items, buttons, zapp_window_uses_swiftui_panes(window_ptr));
     if (ids.count == 0) return;
 
     ZappToolbarController* c = [[ZappToolbarController alloc] init];
@@ -358,7 +398,8 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
         }
         NSArray* items = [root[@"items"] isKindOfClass:[NSArray class]] ? root[@"items"] : @[];
         NSMutableDictionary<NSString*, NSDictionary*>* buttons = [NSMutableDictionary dictionary];
-        NSArray<NSToolbarItemIdentifier>* ids = zapp_toolbar_parse_items(items, buttons);
+        NSArray<NSToolbarItemIdentifier>* ids =
+            zapp_toolbar_parse_items(items, buttons, zapp_window_uses_swiftui_panes((__bridge void*)window));
         if (ids.count == 0) {
             NSLog(@"[zapp] toolbar: setItems with no items — use toolbar.remove() to destroy the toolbar");
             return;

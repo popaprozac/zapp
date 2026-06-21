@@ -59,6 +59,11 @@ struct PaneLayout: View {
       }
       // Tiling vs overlay is Sub-cycle 2c; keep the Sub-cycle-1 style.
       .navigationSplitViewStyle(.balanced)
+      // Suppress SwiftUI's automatic sidebar-toggle injection into the window's
+      // NSToolbar — it collides with / reflows the app's NSToolbar items. The
+      // app's own toggleSidebar item (routed to darwin_sidebar_toggle in
+      // toolbar.m on this SwiftUI path) is the single source of truth.
+      .toolbar(removing: .sidebarToggle)
     } else {
       detail
     }

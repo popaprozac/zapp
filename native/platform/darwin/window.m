@@ -508,6 +508,19 @@ static const char kZappWindowDelegateKey = 0;
 }
 @end
 
+// Reports whether this window hosts its panes via SwiftUI (NSHostingView +
+// PaneState) rather than AppKit (NSSplitViewController). toolbar.m uses this to
+// route the sidebar-toggle item to the PaneState bridge instead of the system
+// NSToolbarToggleSidebarItemIdentifier (which targets an NSSplitViewController
+// that doesn't exist on the SwiftUI path).
+bool zapp_window_uses_swiftui_panes(void* window_ptr) {
+    if (!window_ptr) return false;
+    NSWindow* window = (__bridge NSWindow*)window_ptr;
+    id delegate = window.delegate;
+    if (![delegate isKindOfClass:[ZappWindowDelegate class]]) return false;
+    return ((ZappWindowDelegate*)delegate).swiftPaneState != NULL;
+}
+
 // --- Lookup numeric ID from WebView pointer ---
 
 int32_t darwin_window_id_for_webview(void* webview) {
