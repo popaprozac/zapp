@@ -10,8 +10,14 @@ extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
 extern void darwin_window_eval_js(int32_t window_id, const char* js);
 extern void zapp_pane_emit(int32_t host_id, int32_t accessory_slot,
                            const char* eventName, NSString* dataJson);
+// SwiftUI pane drivers (defined in panes.swift) — only linked in when the
+// swiftc tier is compiled (native.swiftui != false + swiftc present). Behind
+// ZAPP_HAS_SWIFTUI so the opted-out/AppKit-only build doesn't reference an
+// undefined symbol; swiftPaneState is never set on that path anyway.
+#ifdef ZAPP_HAS_SWIFTUI
 extern void zapp_swift_panes_set_inspector_presented(void* state, bool presented);
 extern void zapp_swift_panes_toggle_inspector(void* state);
+#endif
 
 // --- Registry API consumed by window.m (Task 6) ---
 // No header — the codebase externs across .m files. window.m declares these
@@ -113,7 +119,9 @@ void darwin_inspector_toggle(int32_t window_id) {
     zapp_inspector_on_main(^{
         ZappInspectorController* c = zapp_inspector_for_slot(window_id);
         if (!c) return;
+#ifdef ZAPP_HAS_SWIFTUI
         if (c.swiftPaneState) { zapp_swift_panes_toggle_inspector(c.swiftPaneState); return; }
+#endif
         if (!c.inspectorItem) return;
         // Documented AppKit idiom: animate the collapsed property via the
         // item's animator proxy.
@@ -125,7 +133,9 @@ void darwin_inspector_collapse(int32_t window_id) {
     zapp_inspector_on_main(^{
         ZappInspectorController* c = zapp_inspector_for_slot(window_id);
         if (!c) return;
+#ifdef ZAPP_HAS_SWIFTUI
         if (c.swiftPaneState) { zapp_swift_panes_set_inspector_presented(c.swiftPaneState, false); return; }
+#endif
         if (!c.inspectorItem) return;
         if (c.inspectorItem.isCollapsed) return; // idempotent
         [[c.inspectorItem animator] setCollapsed:YES];
@@ -136,7 +146,9 @@ void darwin_inspector_expand(int32_t window_id) {
     zapp_inspector_on_main(^{
         ZappInspectorController* c = zapp_inspector_for_slot(window_id);
         if (!c) return;
+#ifdef ZAPP_HAS_SWIFTUI
         if (c.swiftPaneState) { zapp_swift_panes_set_inspector_presented(c.swiftPaneState, true); return; }
+#endif
         if (!c.inspectorItem) return;
         if (!c.inspectorItem.isCollapsed) return; // idempotent
         [[c.inspectorItem animator] setCollapsed:NO];

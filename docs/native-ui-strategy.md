@@ -101,7 +101,9 @@ the representable's coordinator. That flip is its own cycle (see roadmap).
 |---|---|---|
 | Foundation + native-surface pane | Swift↔Nim bridge, `swiftc` build wiring, opt-out gating, resolver pattern, the pane primitive (macOS) | ✅ Done |
 | SwiftUI accessories **Sub-cycle 1** — macOS pane *render* | accessory'd macOS windows (macOS 14+, not opted out) build sidebar/content/inspector via a SwiftUI `NavigationSplitView`/`.inspector` pane layout (`native/platform/darwin/swift/panes.swift`) hosting the real webviews; AppKit `NSSplitViewController` fallback. Selection automatic; no new knob. | ✅ Done (render proven) |
-| SwiftUI accessories **Sub-cycle 2** — pane *chrome + control* | per-world toolbar (see below) · cross-platform sidebar **presentation** styles (tile/overlay) · runtime pane toggle/resize wired to the SwiftUI panes | ⏭ Next |
+| SwiftUI accessories **Sub-cycle 2a** — runtime pane *visibility* control | the app's sidebar/inspector toggle items + runtime visibility APIs drive the SwiftUI panes (the inspector renders + toggles), animated via `withAnimation`; the same reverse `window:sidebar-collapsed/expanded` + `window:inspector-collapsed/expanded` events the AppKit path emits | ✅ Done |
+| SwiftUI accessories **Sub-cycle 2b** — per-world toolbar | the toolbar is rendered in whichever world owns the content (SwiftUI `.toolbar` on the SwiftUI pane path, `NSToolbar` on AppKit) behind one app-facing toolbar spec (see below) | ⏭ Next |
+| SwiftUI accessories **Sub-cycle 2c** — presentation + resize | cross-platform sidebar **presentation** styles (tile/overlay) · width/resize control · `setCollapsible`/`setResizable` parity on the SwiftUI path · per-platform default docs | ⏭ Next |
 | SwiftUI accessories **Sub-cycle 3** — iOS | the same pane layout via `UIHostingController` — the adaptive payoff (iPhone sheet / iPad column); first checkpoint: `.inspector` sheet via `UIHostingController` | 🔜 |
 | DOM-overlay native view | native view *inline anywhere* in web content (reuses `panel.m` geometry tracking) — "native, no ceremony" | 🔜 Spike |
 | iOS native surface | `UIHostingController` + `swiftc` cross-compile so the native-surface pane works on iOS | 🔜 |
@@ -115,7 +117,7 @@ A window can't half-share its title-bar toolbar between SwiftUI and a manual `NS
 
 - **Toolbar glitch:** in the SwiftUI pane path, SwiftUI's auto sidebar/inspector toggles collide with the app's `NSToolbar` (items flicker/disappear). Fixed properly by the per-world toolbar above.
 - **Sidebar presents as overlay:** `.navigationSplitViewStyle(.balanced)` did not force tiling — needs `columnVisibility`/explicit column width (folds into the presentation-styles work).
-- **Runtime pane control not wired:** the SwiftUI path omits the `NSSplitViewItem` collapse/resize registries, so the app's sidebar/inspector toggle items + runtime APIs don't drive the SwiftUI panes yet (event fan-out *is* wired). The app toolbar will drive pane visibility once the per-world toolbar + control bridge land.
+- **Runtime pane control not wired** — *resolved in Sub-cycle 2a (visibility only):* the app's sidebar/inspector toggle items + runtime visibility APIs now drive the SwiftUI panes (the inspector renders + toggles, animated via `withAnimation`) and the reverse collapse/expand events fire on the SwiftUI path. Still deferred to **2c**: width/resize control + `setCollapsible`/`setResizable` parity + tiling/presentation styles — the SwiftUI path currently no-ops those with a `ZAPP_LOG` line.
 - **Per-platform sidebar defaults to document:** macOS tiles; iOS sidebar overlays — to be exposed as cross-platform `presentation` styles.
 
 ## Anchors

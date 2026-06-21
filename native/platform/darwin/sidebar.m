@@ -11,8 +11,14 @@
 
 extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
 extern void darwin_window_eval_js(int32_t window_id, const char* js);
+// SwiftUI pane drivers (defined in panes.swift) — only linked in when the
+// swiftc tier is compiled (native.swiftui != false + swiftc present). Behind
+// ZAPP_HAS_SWIFTUI so the opted-out/AppKit-only build doesn't reference an
+// undefined symbol; swiftPaneState is never set on that path anyway.
+#ifdef ZAPP_HAS_SWIFTUI
 extern void zapp_swift_panes_set_sidebar_visible(void* state, bool visible);
 extern void zapp_swift_panes_toggle_sidebar(void* state);
+#endif
 
 // --- Registry API consumed by window.m (Task 5) ---
 // No header — the codebase externs across .m files. window.m declares these
@@ -146,7 +152,9 @@ void darwin_sidebar_toggle(int32_t window_id) {
     zapp_sidebar_on_main(^{
         ZappSidebarController* c = zapp_sidebar_for_slot(window_id);
         if (!c) return;
+#ifdef ZAPP_HAS_SWIFTUI
         if (c.swiftPaneState) { zapp_swift_panes_toggle_sidebar(c.swiftPaneState); return; }
+#endif
         if (!c.sidebarItem) return;
         // Documented AppKit idiom: animate the collapsed property via the
         // item's animator proxy.
@@ -158,7 +166,9 @@ void darwin_sidebar_collapse(int32_t window_id) {
     zapp_sidebar_on_main(^{
         ZappSidebarController* c = zapp_sidebar_for_slot(window_id);
         if (!c) return;
+#ifdef ZAPP_HAS_SWIFTUI
         if (c.swiftPaneState) { zapp_swift_panes_set_sidebar_visible(c.swiftPaneState, false); return; }
+#endif
         if (!c.sidebarItem) return;
         if (c.sidebarItem.isCollapsed) return; // idempotent
         [[c.sidebarItem animator] setCollapsed:YES];
@@ -169,7 +179,9 @@ void darwin_sidebar_expand(int32_t window_id) {
     zapp_sidebar_on_main(^{
         ZappSidebarController* c = zapp_sidebar_for_slot(window_id);
         if (!c) return;
+#ifdef ZAPP_HAS_SWIFTUI
         if (c.swiftPaneState) { zapp_swift_panes_set_sidebar_visible(c.swiftPaneState, true); return; }
+#endif
         if (!c.sidebarItem) return;
         if (!c.sidebarItem.isCollapsed) return; // idempotent
         [[c.sidebarItem animator] setCollapsed:NO];
