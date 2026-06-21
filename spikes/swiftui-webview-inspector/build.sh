@@ -8,13 +8,13 @@ BUNDLE_ID="dev.zapp.spike.swiftuiwebview"
 
 case "$STAGE" in
   macos)
-    swiftc -O -parse-as-library -target arm64-apple-macos14.0 Probe.swift -o build/probe
+    swiftc -O -target arm64-apple-macos14.0 Probe.swift -o build/probe
     echo "--- built build/probe ($(du -h build/probe | cut -f1)) ---"
     echo "run it:  ./build/probe   (click the window if it opens behind)"
     ;;
   ios-sim)
     SDK="$(xcrun --sdk iphonesimulator --show-sdk-path)"
-    swiftc -O -parse-as-library -sdk "$SDK" -target arm64-apple-ios17.0-simulator Probe.swift -o build/Probe
+    swiftc -O -sdk "$SDK" -target arm64-apple-ios17.0-simulator Probe.swift -o build/Probe
     APP="build/Probe.app"
     rm -rf "$APP"; mkdir -p "$APP"
     cp build/Probe "$APP/Probe"

@@ -112,9 +112,14 @@ struct RootView: View {
   }
 }
 
-@main
+// Single-file SwiftUI app: use the script-style entry (top-level `App.main()`)
+// instead of `@main`. A lone .swift file compiles in "main" mode (here and in
+// SourceKit), where `@main` is disallowed but a top-level `.main()` call is the
+// entry point — so this is clean both at build time and in the editor.
 struct ProbeApp: App {
   var body: some Scene {
     WindowGroup { RootView() }
   }
 }
+
+ProbeApp.main()
