@@ -814,6 +814,7 @@ void* darwin_window_create(WindowOptions* opts) {
                 // useVibrancy. The representable wraps the bare NSView, so we do NOT
                 // need the NSViewController — just the resulting NSView* mainContainer.
                 NSView* mainContainer = [[NSView alloc] initWithFrame:[window contentView].frame];
+                mainContainer.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
                 if (useVibrancy) {
                     NSVisualEffectView* vfx = [[NSVisualEffectView alloc] initWithFrame:mainContainer.frame];
                     vfx.material = material;
@@ -827,6 +828,7 @@ void* darwin_window_create(WindowOptions* opts) {
                 // contentView FIRST, so the container is in the window before the webview is
                 // created into it (mirrors the AppKit ordering where splitVC is root before _ext).
                 NSView* paneHost = (__bridge_transfer NSView*)zapp_swift_panes_create((__bridge void*)mainContainer);
+                paneHost.frame = [window contentView].frame;
                 window.contentView = paneHost;
                 [paneHost layoutSubtreeIfNeeded];
 
