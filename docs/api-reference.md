@@ -1005,6 +1005,65 @@ A window with an inspector but no sidebar roots on a 2-item split (content
 + inspector); with both, a 3-item split. Each pane consumes one dispatch
 slot.
 
+### Native surface (macOS)
+
+Pass `nativeSurface: true` in `WindowOptions` (Nim only this cycle) to
+attach a framework-authored native pane to the window — a real AppKit view
+backed by either SwiftUI or plain AppKit depending on availability. macOS
+only; the option is a no-op on iOS, Windows, and Linux.
+
+```nim
+let win = a.window.create(WindowOptions(
+  title: "My App",
+  nativeSurface: true,   # macOS: attach the native-surface pane
+))
+```
+
+**Backing resolution** (chosen automatically):
+
+| Backing | Condition | Implementation |
+|---|---|---|
+| `"swiftui"` (enhanced) | SwiftUI available (macOS 10.15+) and opt-out not set | `NSHostingView` wrapping a SwiftUI view |
+| `"appkit"` (baseline) | SwiftUI unavailable, or `native: { swiftui: false }` | Plain `NSView` |
+
+Developers never write Swift — the framework provides the Swift layer. To
+inspect which backing the runtime chose:
+
+```nim
+let backing = win.nativeSurfaceBacking()
+# -> "swiftui" | "appkit" | "" (empty if no native surface on this window)
+```
+
+**Events.** The native-surface control emits a `native-surface:action`
+event to all web content and workers when activated. The payload is
+`{ value: string }` — a round-trip tag identifying the backing and a
+counter (e.g. `"swiftui:3"` or `"appkit:3"`).
+
+```ts
+Events.on("native-surface:action", ({ value }) => {
+  console.log("native surface fired:", value);
+});
+```
+
+**Opt-out.** Add `native: { swiftui: false }` to `zapp.config.ts` to
+force the AppKit baseline and skip the `swiftc` compilation step entirely:
+
+```ts
+// zapp.config.ts
+export default {
+  name: "my-app",
+  native: { swiftui: false },
+};
+```
+
+This is useful when Swift toolchain availability is uncertain in CI or
+when the AppKit baseline is sufficient. The `swiftui` flag is unrelated to
+the other `native:` fields (`frameworks`, `linkFlags`, `sources`) and can
+be combined with them freely.
+
+**Future work.** iOS and additional SwiftUI features are deferred to later
+cycles.
+
 ### Toolbar (macOS)
 
 Pass `toolbar` in `Window.create` to attach a real `NSToolbar`. With
