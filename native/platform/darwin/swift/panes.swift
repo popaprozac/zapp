@@ -160,5 +160,10 @@ public func zapp_swift_panes_create(_ state: UnsafeMutableRawPointer,
   let s = sidebar.map { Unmanaged<NSView>.fromOpaque($0).takeUnretainedValue() }
   let i = inspector.map { Unmanaged<NSView>.fromOpaque($0).takeUnretainedValue() }
   let hc = NSHostingController(rootView: PaneLayout(content: c, sidebar: s, inspector: i, state: st))
+  // Don't let the hosting controller drive the window's size from the SwiftUI
+  // content's ideal size — the window keeps its configured frame; the view fills it.
+  // (Default sizingOptions would collapse the window to a tiny strip before the
+  //  webviews lay out.)
+  if #available(macOS 13.0, *) { hc.sizingOptions = [] }
   return Unmanaged.passRetained(hc).toOpaque()   // +1; ObjC consumes via __bridge_transfer NSViewController*
 }
