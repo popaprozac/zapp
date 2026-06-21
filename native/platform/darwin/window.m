@@ -79,7 +79,7 @@ extern double zapp_primary_screen_height(void);
 // an NSHostingView; +1-retained, consumed via __bridge_transfer. Only declared
 // when the swiftc tier is compiled in (native.swiftui != false + swiftc present).
 #ifdef ZAPP_HAS_SWIFTUI
-extern void* zapp_swift_panes_create(void* content);
+extern void* zapp_swift_panes_create(void* content, void* sidebar);
 #endif
 
 // Event IDs (mirrored from window/events.zc)
@@ -824,21 +824,57 @@ void* darwin_window_create(WindowOptions* opts) {
                     mainContainer = vfx;
                 }
 
-                // Install the SwiftUI host (wrapping the content container) as the window's
-                // contentView FIRST, so the container is in the window before the webview is
-                // created into it (mirrors the AppKit ordering where splitVC is root before _ext).
-                NSView* paneHost = (__bridge_transfer NSView*)zapp_swift_panes_create((__bridge void*)mainContainer);
+                // Task 2: sidebar pane (when requested). Mirror the AppKit branch's
+                // sidebar-container construction (window.m sideVC.view path: NSView sized
+                // to sidebar_width × height, with the material-override vfx OR the
+                // backgroundColor backdrop) — but the SwiftUI representable wraps a bare
+                // NSView, so we keep ONLY the resulting NSView* sidebarContainer (no
+                // NSViewController / NSSplitViewItem; the NavigationSplitView is the split).
+                NSView* sidebarContainer = nil;
+                if (useSidebar) {
+                    sidebarContainer = [[NSView alloc] initWithFrame:
+                        NSMakeRect(0, 0, (CGFloat)wopts_sidebar_width(opts), (CGFloat)wopts_height(opts))];
+                    const char* sidebarMaterialName = wopts_sidebar_material(opts);
+                    bool sidebarMaterialOverride = sidebarMaterialName && sidebarMaterialName[0] != '\0' &&
+                                                   strcmp(sidebarMaterialName, "sidebar") != 0;
+                    if (sidebarMaterialOverride) {
+                        NSVisualEffectView* svfx = [[NSVisualEffectView alloc] initWithFrame:sidebarContainer.bounds];
+                        svfx.material = zapp_material_from_name(sidebarMaterialName);
+                        svfx.blendingMode = NSVisualEffectBlendingModeBehindWindow;
+                        svfx.state = NSVisualEffectStateFollowsWindowActiveState;
+                        svfx.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+                        sidebarContainer = svfx;
+                    } else {
+                        int cr, cg, cb;
+                        const char* sbg = wopts_sidebar_background_color(opts);
+                        if (sbg && sbg[0] != '\0' && zapp_parse_hex_color(sbg, &cr, &cg, &cb)) {
+                            sidebarContainer.wantsLayer = YES;
+                            sidebarContainer.layer.backgroundColor =
+                                [NSColor colorWithSRGBRed:cr/255.0 green:cg/255.0 blue:cb/255.0 alpha:1.0].CGColor;
+                        }
+                    }
+                    sidebarContainer.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+                }
+
+                // Install the SwiftUI host (wrapping the content container + optional
+                // sidebar) as the window's contentView FIRST, so the containers are in the
+                // window before the webviews are created into them (mirrors the AppKit
+                // ordering where splitVC is root before _ext). (__bridge void*)nil passes
+                // NULL → Swift maps it to sidebar == nil (content-only layout).
+                NSView* paneHost = (__bridge_transfer NSView*)zapp_swift_panes_create(
+                    (__bridge void*)mainContainer, (__bridge void*)sidebarContainer);
                 paneHost.frame = [window contentView].frame;
                 window.contentView = paneHost;
                 [paneHost layoutSubtreeIfNeeded];
 
                 // Create the content webview INTO mainContainer (same call as the AppKit
-                // path; never re-parented). pane_role=0; host_has_sidebar/inspector=false
-                // this task (no accessories wired into this path yet).
+                // path; never re-parented). pane_role=0; host_has_sidebar=useSidebar so the
+                // Window.current() handle wires the sidebar pane; host_has_inspector=false
+                // (inspector is Task 3, not wired into this path yet).
                 darwin_webview_create_ext((__bridge void*)window, inspectable, accept_first_mouse,
                                           custom_url, host_slot, useVibrancy,
                                           (__bridge void*)mainContainer, -1, 0,
-                                          false, false);
+                                          useSidebar, false);
 
                 // Register the content webview (routing/bridge essential).
                 NSString* hostWindowId = [NSString stringWithFormat:@"win-%d", host_slot];
@@ -848,6 +884,23 @@ void* darwin_window_create(WindowOptions* opts) {
                         zapp_register_webview(host_slot, mainWebviewRef, hostWindowId);
                         break;
                     }
+                }
+
+                // Sidebar webview: own transport slot, HOST identity (win-<host>), always
+                // transparent so the pane material shows through, pane_role=1 (sidebar).
+                // NOTE: no zapp_sidebar_register — that wires the splitVC + NSSplitViewItem
+                // for runtime collapse/resize, which the SwiftUI path has no handle to (a
+                // Sub-cycle-1 non-goal). Only zapp_set_sidebar_slot (event fan-out) runs.
+                if (useSidebar) {
+                    darwin_webview_create_ext((__bridge void*)window, inspectable, accept_first_mouse,
+                                              sidebarUrl, sidebar_slot, true,
+                                              (__bridge void*)sidebarContainer, host_slot, 1,
+                                              useSidebar, false);
+                    for (NSView* sub in sidebarContainer.subviews) {
+                        if ([sub isKindOfClass:[WKWebView class]]) { sidebarWebviewRef = (WKWebView*)sub; break; }
+                    }
+                    if (sidebarWebviewRef) zapp_register_webview(sidebar_slot, sidebarWebviewRef, hostWindowId);
+                    zapp_set_sidebar_slot(host_slot, sidebar_slot);   // event fan-out
                 }
             } else {
             if (tbs == 3) {
