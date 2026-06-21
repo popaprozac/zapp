@@ -14,16 +14,35 @@ struct PaneHost: NSViewRepresentable {
 struct PaneLayout: View {
   let content: NSView
   let sidebar: NSView?
+  let inspector: NSView?
+  @State private var showInspector: Bool
+
+  init(content: NSView, sidebar: NSView?, inspector: NSView?, showInspector: Bool) {
+    self.content = content; self.sidebar = sidebar; self.inspector = inspector
+    _showInspector = State(initialValue: showInspector)
+  }
+
   var body: some View {
     if let sidebar {
       NavigationSplitView {
         PaneHost(view: sidebar).ignoresSafeArea()
       } detail: {
-        PaneHost(view: content).ignoresSafeArea()
+        detail
       }
+      // Tile the columns (push content) instead of overlaying — matches the
+      // prior AppKit NSSplitViewItem sidebar behavior on macOS.
+      .navigationSplitViewStyle(.balanced)
     } else {
-      PaneHost(view: content).ignoresSafeArea()
+      detail
     }
+  }
+
+  @ViewBuilder private var detail: some View {
+    PaneHost(view: content)
+      .ignoresSafeArea()
+      .inspector(isPresented: $showInspector) {
+        if let inspector { PaneHost(view: inspector).ignoresSafeArea() }
+      }
   }
 }
 
@@ -31,10 +50,13 @@ struct PaneLayout: View {
 // `content` is an NSView* passed from ObjC (the populated content container).
 @_cdecl("zapp_swift_panes_create")
 public func zapp_swift_panes_create(_ content: UnsafeMutableRawPointer,
-                                    _ sidebar: UnsafeMutableRawPointer?) -> UnsafeMutableRawPointer? {
+                                    _ sidebar: UnsafeMutableRawPointer?,
+                                    _ inspector: UnsafeMutableRawPointer?,
+                                    _ showInspector: Bool) -> UnsafeMutableRawPointer? {
   guard #available(macOS 14.0, *) else { return nil }
-  let contentView = Unmanaged<NSView>.fromOpaque(content).takeUnretainedValue()
-  let sidebarView = sidebar.map { Unmanaged<NSView>.fromOpaque($0).takeUnretainedValue() }
-  let host = NSHostingView(rootView: PaneLayout(content: contentView, sidebar: sidebarView))
+  let c = Unmanaged<NSView>.fromOpaque(content).takeUnretainedValue()
+  let s = sidebar.map { Unmanaged<NSView>.fromOpaque($0).takeUnretainedValue() }
+  let i = inspector.map { Unmanaged<NSView>.fromOpaque($0).takeUnretainedValue() }
+  let host = NSHostingView(rootView: PaneLayout(content: c, sidebar: s, inspector: i, showInspector: showInspector))
   return Unmanaged.passRetained(host).toOpaque()
 }

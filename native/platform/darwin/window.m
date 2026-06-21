@@ -79,7 +79,7 @@ extern double zapp_primary_screen_height(void);
 // an NSHostingView; +1-retained, consumed via __bridge_transfer. Only declared
 // when the swiftc tier is compiled in (native.swiftui != false + swiftc present).
 #ifdef ZAPP_HAS_SWIFTUI
-extern void* zapp_swift_panes_create(void* content, void* sidebar);
+extern void* zapp_swift_panes_create(void* content, void* sidebar, void* inspector, bool showInspector);
 #endif
 
 // Event IDs (mirrored from window/events.zc)
@@ -856,25 +856,60 @@ void* darwin_window_create(WindowOptions* opts) {
                     sidebarContainer.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
                 }
 
+                // Task 3: inspector pane (when requested). Mirror the AppKit branch's
+                // inspector-container construction (the inspVC.view path: NSView sized to
+                // inspector_width × height, with the material-override vfx OR the
+                // backgroundColor backdrop) — but the SwiftUI representable wraps a bare
+                // NSView, so we keep ONLY the resulting NSView* inspectorContainer (no
+                // NSViewController / NSSplitViewItem; the .inspector modifier is the split).
+                NSView* inspectorContainer = nil;
+                if (useInspector) {
+                    inspectorContainer = [[NSView alloc] initWithFrame:
+                        NSMakeRect(0, 0, (CGFloat)wopts_inspector_width(opts), (CGFloat)wopts_height(opts))];
+                    const char* inspectorMaterialName = wopts_inspector_material(opts);
+                    bool inspectorMaterialOverride = inspectorMaterialName && inspectorMaterialName[0] != '\0' &&
+                                                     strcmp(inspectorMaterialName, "sidebar") != 0;
+                    if (inspectorMaterialOverride) {
+                        NSVisualEffectView* ivfx = [[NSVisualEffectView alloc] initWithFrame:inspectorContainer.bounds];
+                        ivfx.material = zapp_material_from_name(inspectorMaterialName);
+                        ivfx.blendingMode = NSVisualEffectBlendingModeBehindWindow;
+                        ivfx.state = NSVisualEffectStateFollowsWindowActiveState;
+                        ivfx.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+                        inspectorContainer = ivfx;
+                    } else {
+                        int cr, cg, cb;
+                        const char* ibg = wopts_inspector_background_color(opts);
+                        if (ibg && ibg[0] != '\0' && zapp_parse_hex_color(ibg, &cr, &cg, &cb)) {
+                            inspectorContainer.wantsLayer = YES;
+                            inspectorContainer.layer.backgroundColor =
+                                [NSColor colorWithSRGBRed:cr/255.0 green:cg/255.0 blue:cb/255.0 alpha:1.0].CGColor;
+                        }
+                    }
+                    inspectorContainer.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+                }
+                // Initial inspector visibility — shown unless created collapsed.
+                bool showInspector = useInspector && !wopts_inspector_collapsed(opts);
+
                 // Install the SwiftUI host (wrapping the content container + optional
-                // sidebar) as the window's contentView FIRST, so the containers are in the
-                // window before the webviews are created into them (mirrors the AppKit
-                // ordering where splitVC is root before _ext). (__bridge void*)nil passes
-                // NULL → Swift maps it to sidebar == nil (content-only layout).
+                // sidebar + optional inspector) as the window's contentView FIRST, so the
+                // containers are in the window before the webviews are created into them
+                // (mirrors the AppKit ordering where splitVC is root before _ext). A
+                // (__bridge void*)nil pointer passes NULL → Swift maps it to a nil pane.
                 NSView* paneHost = (__bridge_transfer NSView*)zapp_swift_panes_create(
-                    (__bridge void*)mainContainer, (__bridge void*)sidebarContainer);
+                    (__bridge void*)mainContainer, (__bridge void*)sidebarContainer,
+                    (__bridge void*)inspectorContainer, showInspector);
                 paneHost.frame = [window contentView].frame;
                 window.contentView = paneHost;
                 [paneHost layoutSubtreeIfNeeded];
 
                 // Create the content webview INTO mainContainer (same call as the AppKit
-                // path; never re-parented). pane_role=0; host_has_sidebar=useSidebar so the
-                // Window.current() handle wires the sidebar pane; host_has_inspector=false
-                // (inspector is Task 3, not wired into this path yet).
+                // path; never re-parented). pane_role=0; host_has_sidebar=useSidebar +
+                // host_has_inspector=useInspector so the Window.current() handle wires the
+                // sidebar + inspector panes.
                 darwin_webview_create_ext((__bridge void*)window, inspectable, accept_first_mouse,
                                           custom_url, host_slot, useVibrancy,
                                           (__bridge void*)mainContainer, -1, 0,
-                                          useSidebar, false);
+                                          useSidebar, useInspector);
 
                 // Register the content webview (routing/bridge essential).
                 NSString* hostWindowId = [NSString stringWithFormat:@"win-%d", host_slot];
@@ -895,12 +930,29 @@ void* darwin_window_create(WindowOptions* opts) {
                     darwin_webview_create_ext((__bridge void*)window, inspectable, accept_first_mouse,
                                               sidebarUrl, sidebar_slot, true,
                                               (__bridge void*)sidebarContainer, host_slot, 1,
-                                              useSidebar, false);
+                                              useSidebar, useInspector);
                     for (NSView* sub in sidebarContainer.subviews) {
                         if ([sub isKindOfClass:[WKWebView class]]) { sidebarWebviewRef = (WKWebView*)sub; break; }
                     }
                     if (sidebarWebviewRef) zapp_register_webview(sidebar_slot, sidebarWebviewRef, hostWindowId);
                     zapp_set_sidebar_slot(host_slot, sidebar_slot);   // event fan-out
+                }
+
+                // Inspector webview: own transport slot, HOST identity (win-<host>), always
+                // transparent so the pane material shows through, pane_role=3 (inspector).
+                // NOTE: no zapp_inspector_register — that wires the splitVC + NSSplitViewItem
+                // for runtime collapse/resize, which the SwiftUI path has no handle to (a
+                // Sub-cycle-1 non-goal). Only zapp_set_inspector_slot (event fan-out) runs.
+                if (useInspector) {
+                    darwin_webview_create_ext((__bridge void*)window, inspectable, accept_first_mouse,
+                                              inspectorUrl, inspector_slot, true,
+                                              (__bridge void*)inspectorContainer, host_slot, 3,
+                                              useSidebar, useInspector);
+                    for (NSView* sub in inspectorContainer.subviews) {
+                        if ([sub isKindOfClass:[WKWebView class]]) { inspectorWebviewRef = (WKWebView*)sub; break; }
+                    }
+                    if (inspectorWebviewRef) zapp_register_webview(inspector_slot, inspectorWebviewRef, hostWindowId);
+                    zapp_set_inspector_slot(host_slot, inspector_slot);   // event fan-out
                 }
             } else {
             if (tbs == 3) {
