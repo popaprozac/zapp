@@ -24,6 +24,7 @@ extern int32_t zapp_sidebar_slot_lookup(int32_t host_slot);
 extern void darwin_inspector_toggle(int32_t window_id);
 extern int32_t zapp_inspector_divider_index(void* window_ptr);
 extern int32_t zapp_inspector_slot_lookup(int32_t host_slot);
+extern bool zapp_inspector_is_collapsible(void* window_ptr);   // #665: grey the toggle when off
 
 // Tracking separator's private identifiers (never user-visible).
 // Sidebar/default uses the original id (byte-stable for shipped sidebar behavior).
@@ -242,6 +243,10 @@ static NSMutableDictionary<NSValue*, ZappToolbarController*>* zapp_toolbars = ni
 // overwriting any bare `.enabled` set — so the stored def is the source of
 // truth and this answers every revalidation pass. Default YES.
 - (BOOL)validateToolbarItem:(NSToolbarItem*)item {
+    // #665: grey the inspector toggle when the inspector is non-collapsible (parity with
+    // the SwiftUI path's .disabled). canCollapse on the NSSplitViewItem is the source.
+    if ([item.itemIdentifier isEqualToString:kZappToggleInspectorId])
+        return zapp_inspector_is_collapsible((__bridge void*)self.window);
     NSDictionary* def = self.buttonsById[item.itemIdentifier];
     NSNumber* en = [def[@"enabled"] isKindOfClass:[NSNumber class]] ? def[@"enabled"] : nil;
     return en ? en.boolValue : YES;

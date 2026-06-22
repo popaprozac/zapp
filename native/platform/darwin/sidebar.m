@@ -264,13 +264,20 @@ void darwin_sidebar_set_collapsible(int32_t window_id, bool can_collapse) {
             // AppKit-native canCollapse=NO on the SwiftUI-backed item (the clamp alone
             // leaves the drag glitchy). Same imperative-reach-through lever as setWidth.
             zapp_swift_panes_set_sidebar_collapsible(c.swiftPaneState, can_collapse);
-            if (zapp_sidebar_bind_swiftui(c) && c.sidebarItem)
-                c.sidebarItem.canCollapse = can_collapse ? YES : NO;
+            // NOTE (#665): the native sidebar toggle is gated by the @Published clamp above.
+            // NavigationSplitView ignores the item's canCollapse AND replacing its split
+            // delegate to clamp the drag CRASHES (NSSplitViewController asserts it must be
+            // its own split view's delegate). So the sidebar divider-DRAG collapse can't be
+            // forbidden on the SwiftUI path — documented limitation.
             return;
         }
 #endif
         if (!c.sidebarItem) return;
         c.sidebarItem.canCollapse = can_collapse ? YES : NO;
+        // #665: revalidate so the system NSToolbarToggleSidebarItem greys when the sidebar
+        // is non-collapsible (AppKit auto-validates the toggle against the item's canCollapse).
+        NSWindow* win = (__bridge NSWindow*)darwin_window_get_by_numeric_id(c.hostWindowId);
+        [win.toolbar validateVisibleItems];
     });
 }
 

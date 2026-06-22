@@ -244,6 +244,10 @@ void darwin_inspector_set_collapsible(int32_t window_id, bool can_collapse) {
 #endif
         if (!c.inspectorItem) return;
         c.inspectorItem.canCollapse = can_collapse ? YES : NO;
+        // #665: revalidate the toolbar so the toggleInspector button greys/ungreys now
+        // (validateToolbarItem: reads canCollapse). AppKit's own schedule is lazy.
+        NSWindow* win = (__bridge NSWindow*)darwin_window_get_by_numeric_id(c.hostWindowId);
+        [win.toolbar validateVisibleItems];
     });
 }
 
@@ -383,4 +387,18 @@ int32_t zapp_inspector_divider_index(void* window_ptr) {
     ZappInspectorController* c = zapp_inspectors[[NSValue valueWithPointer:window_ptr]];
     if (!c) return -1;
     return (int32_t)c.inspectorDividerIndex;
+}
+
+// #665: whether the inspector currently allows collapse. Used by toolbar.m's
+// validateToolbarItem: to grey the AppKit toggleInspector button when collapsible:false
+// (parity with the SwiftUI path's .disabled). Returns YES when there's no inspector
+// (don't disable a toggle the window doesn't have). AppKit path uses canCollapse; the
+// SwiftUI path reads inspectorCollapsible via the same controller's lastCollapsed? no —
+// SwiftUI uses its own toolbar, so this only matters on the AppKit path where inspectorItem
+// is the real NSSplitViewItem.
+bool zapp_inspector_is_collapsible(void* window_ptr) {
+    if (!window_ptr || !zapp_inspectors) return true;
+    ZappInspectorController* c = zapp_inspectors[[NSValue valueWithPointer:window_ptr]];
+    if (!c || !c.inspectorItem) return true;
+    return c.inspectorItem.canCollapse ? true : false;
 }

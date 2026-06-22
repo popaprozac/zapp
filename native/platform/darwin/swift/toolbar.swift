@@ -139,7 +139,7 @@ final class ToolbarState: ObservableObject, ZappNativeModule {
 @available(macOS 14.0, *)
 struct ZappToolbarContent: ToolbarContent {
   @ObservedObject var state: ToolbarState   // observe directly so item mutations re-render the toolbar (spike pattern)
-  let pane: PaneState   // toggles bind directly to pane visibility (2a)
+  @ObservedObject var pane: PaneState   // observe so toggle disabled-state reacts to collapsible changes (#665) + visibility binds (2a)
 
   // Items split at the first `flexibleSpace`: before → leading (.navigation, above
   // the sidebar column), after → trailing (.primaryAction, above the detail). This
@@ -187,7 +187,12 @@ struct ZappToolbarContent: ToolbarContent {
     // toggleSidebar is filtered out in `groups` — SwiftUI's native auto toggle
     // handles it (see the `groups` comment). Only toggleInspector + buttons here.
     case "toggleInspector":
+      // #665: disable (greyed, AppKit-parity) when the inspector is non-collapsible — so
+      // the toolbar toggle can't collapse it, matching collapsible:false. Reactive via the
+      // parent PaneLayout re-render when inspectorCollapsible changes. Programmatic
+      // toggle()/collapse() still works (separate path).
       Button { withAnimation { pane.inspectorPresented.toggle() } } label: { glyph(item, fallback: "sidebar.right") }
+        .disabled(item.enabled == false || !pane.inspectorCollapsible)
     default: // "button"
       if let menu = item.menu, !menu.isEmpty {
         Menu {
