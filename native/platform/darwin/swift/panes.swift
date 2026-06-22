@@ -62,6 +62,13 @@ final class PaneState: ObservableObject {
   // Reverse width-event dedup baselines (plain vars — not observed).
   private var lastSidebarWidthEmitted: Int = -1
   private var lastInspectorWidthEmitted: Int = -1
+  // Last rendered pane width (plain vars). The lock-at-current baseline for
+  // setResizable(false). Deliberately NOT @Published and NOT written into
+  // sidebarWidth/inspectorWidth — the modifier's source of truth is owned by
+  // setWidth. Mixing them let the geometry observer revert a programmatic setWidth
+  // (the #660 retest bug: width buttons had no effect).
+  var lastSidebarRendered: CGFloat = 0
+  var lastInspectorRendered: CGFloat = 0
 
   init(ctx: UnsafeMutableRawPointer?, cb: ZappSwiftStateCallback?,
        sidebarVisible: Bool, inspectorPresented: Bool, bleedTop: Bool,
@@ -85,13 +92,28 @@ final class PaneState: ObservableObject {
   func noteSidebarWidth(_ w: CGFloat) {
     let iw = Int(w.rounded())
     if iw <= 0 { return }
-    if iw != Int(sidebarWidth.rounded()) { sidebarWidth = CGFloat(iw) }
+    lastSidebarRendered = w
+    if sidebarPinned {
+      // A programmatic setWidth is in flight (pin forcing min==max==target). Release the
+      // pin once the snap lands; do NOT write sidebarWidth — that let the observer revert
+      // the set (the #660 retest bug: width buttons had no effect).
+      if abs(CGFloat(iw) - sidebarWidth) <= 1 { sidebarPinned = false }
+    } else if iw != Int(sidebarWidth.rounded()) {
+      // User drag / relayout: track the rendered width so a later relayout re-applies the
+      // CURRENT width (not a stale ideal) and setResizable(false) locks at the right place.
+      sidebarWidth = CGFloat(iw)
+    }
     if iw != lastSidebarWidthEmitted { lastSidebarWidthEmitted = iw; cb?(ctx, kPaneKeySidebarWidth, Int64(iw)) }
   }
   func noteInspectorWidth(_ w: CGFloat) {
     let iw = Int(w.rounded())
     if iw <= 0 { return }
-    if iw != Int(inspectorWidth.rounded()) { inspectorWidth = CGFloat(iw) }
+    lastInspectorRendered = w
+    if inspectorPinned {
+      if abs(CGFloat(iw) - inspectorWidth) <= 1 { inspectorPinned = false }
+    } else if iw != Int(inspectorWidth.rounded()) {
+      inspectorWidth = CGFloat(iw)
+    }
     if iw != lastInspectorWidthEmitted { lastInspectorWidthEmitted = iw; cb?(ctx, kPaneKeyInspectorWidth, Int64(iw)) }
   }
 }
@@ -285,16 +307,23 @@ public func zapp_swift_panes_toggle_inspector(_ state: UnsafeMutableRawPointer) 
 public func zapp_swift_panes_set_sidebar_width(_ state: UnsafeMutableRawPointer, _ w: Int32) {
   let st = Unmanaged<PaneState>.fromOpaque(state).takeUnretainedValue()
   st.sidebarWidth = CGFloat(w)
-  // Pin-and-release: force the snap this render, restore the drag range next tick.
+  // Pin-and-release: force the snap (min==max==w) for the next render, then widen the
+  // range back so it stays draggable. The release happens in noteSidebarWidth once the
+  // snap lands; this delayed release is a backstop so the pin can't get stuck if SwiftUI
+  // ignores the constraint (asyncAfter, NOT async — `async` coalesced before any render).
   if st.sidebarResizable {
     st.sidebarPinned = true
-    DispatchQueue.main.async { st.sidebarPinned = false }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { st.sidebarPinned = false }
   }
 }
 
 @_cdecl("zapp_swift_panes_set_sidebar_resizable")
 public func zapp_swift_panes_set_sidebar_resizable(_ state: UnsafeMutableRawPointer, _ resizable: Bool) {
-  Unmanaged<PaneState>.fromOpaque(state).takeUnretainedValue().sidebarResizable = resizable
+  let st = Unmanaged<PaneState>.fromOpaque(state).takeUnretainedValue()
+  // Lock at the CURRENT rendered width (AppKit parity), not a stale programmatic value —
+  // WidthReader no longer writes sidebarWidth, so capture the live width here.
+  if !resizable && st.lastSidebarRendered > 0 { st.sidebarWidth = st.lastSidebarRendered }
+  st.sidebarResizable = resizable
 }
 
 @_cdecl("zapp_swift_panes_set_sidebar_collapsible")
@@ -308,13 +337,15 @@ public func zapp_swift_panes_set_inspector_width(_ state: UnsafeMutableRawPointe
   st.inspectorWidth = CGFloat(w)
   if st.inspectorResizable {
     st.inspectorPinned = true
-    DispatchQueue.main.async { st.inspectorPinned = false }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { st.inspectorPinned = false }
   }
 }
 
 @_cdecl("zapp_swift_panes_set_inspector_resizable")
 public func zapp_swift_panes_set_inspector_resizable(_ state: UnsafeMutableRawPointer, _ resizable: Bool) {
-  Unmanaged<PaneState>.fromOpaque(state).takeUnretainedValue().inspectorResizable = resizable
+  let st = Unmanaged<PaneState>.fromOpaque(state).takeUnretainedValue()
+  if !resizable && st.lastInspectorRendered > 0 { st.inspectorWidth = st.lastInspectorRendered }
+  st.inspectorResizable = resizable
 }
 
 @_cdecl("zapp_swift_panes_set_inspector_collapsible")

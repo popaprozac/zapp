@@ -10,6 +10,13 @@ extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
 extern void darwin_window_eval_js(int32_t window_id, const char* js);
 extern void zapp_pane_emit(int32_t host_id, int32_t accessory_slot,
                            const char* eventName, NSString* dataJson);
+// Reach-through (#660 hybrid): resolve the SwiftUI `.inspector`'s OWN backing NSSplitView
+// so setWidth can re-pin its thickness imperatively. SwiftUI's `.inspectorColumnWidth` is
+// initial-only at runtime, so width MUST go through the thickness re-pin; the WidthReader
+// captures the result into @Published inspectorWidth for persistence.
+@class NSSplitViewController;
+extern NSSplitView* zapp_find_split_view(NSView* v);
+extern WKWebView* zapp_webview_for_slot(int32_t slot);
 // SwiftUI pane drivers (defined in panes.swift) — only linked in when the
 // swiftc tier is compiled (native.swiftui != false + swiftc present). Behind
 // ZAPP_HAS_SWIFTUI so the opted-out/AppKit-only build doesn't reference an
@@ -116,6 +123,39 @@ static void zapp_inspector_sync_collapse(ZappInspectorController* c) {
 
 @end
 
+// Bind the SwiftUI inspector's OWN backing split so setWidth can re-pin it imperatively
+// (#660 hybrid). CRITICAL: SwiftUI's `.inspector()` is a SEPARATE NSSplitView from the
+// NavigationSplitView's [sidebar, content] — resolve the inspector WKWebview from its slot
+// and walk UP to its enclosing NSSplitView, then bind the item that contains it. Only
+// setWidth uses this; setResizable/setCollapsible are declarative (@Published).
+static BOOL zapp_inspector_bind_swiftui(ZappInspectorController* c) {
+    if (c.splitVC && c.inspectorItem) return YES;            // already bound
+    if (!c.swiftPaneState) return NO;
+    WKWebView* iv = zapp_webview_for_slot(c.inspectorSlotId);
+    if (!iv) return NO;                                       // inspector webview not up yet
+    NSView* arranged = iv;
+    NSSplitView* isv = nil;
+    while (arranged.superview) {
+        if ([arranged.superview isKindOfClass:[NSSplitView class]]) { isv = (NSSplitView*)arranged.superview; break; }
+        arranged = arranged.superview;
+    }
+    NSSplitViewController* svc = [isv.delegate isKindOfClass:[NSSplitViewController class]]
+        ? (NSSplitViewController*)isv.delegate : nil;
+    if (!svc) return NO;
+    NSInteger itemIdx = -1;
+    for (NSInteger i = 0; i < (NSInteger)svc.splitViewItems.count; i++) {
+        NSView* itemView = svc.splitViewItems[i].viewController.view;
+        if (itemView == arranged || [iv isDescendantOf:itemView]) { itemIdx = i; break; }
+    }
+    if (itemIdx < 0) return NO;
+    c.splitVC = svc;
+    c.inspectorItem = svc.splitViewItems[itemIdx];
+    c.inspectorDividerIndex = (itemIdx > 0) ? itemIdx - 1 : 0;
+    if (c.cfgMinThickness <= 0) c.cfgMinThickness = c.inspectorItem.minimumThickness;
+    if (c.cfgMaxThickness <= 0) c.cfgMaxThickness = c.inspectorItem.maximumThickness;
+    return YES;
+}
+
 // --- Control ops (router entry points) ---
 
 void darwin_inspector_toggle(int32_t window_id) {
@@ -162,12 +202,21 @@ void darwin_inspector_set_width(int32_t window_id, int32_t width) {
     zapp_inspector_on_main(^{
         ZappInspectorController* c = zapp_inspector_for_slot(window_id);
         if (!c) return;
-#ifdef ZAPP_HAS_SWIFTUI
-        if (c.swiftPaneState) { zapp_swift_panes_set_inspector_width(c.swiftPaneState, width); return; }
-#endif
+        // #660 hybrid: width is imperative (SwiftUI `.inspectorColumnWidth` is initial-only).
+        // On the SwiftUI path, bind resolves the inspector's own split; the WidthReader then
+        // captures the result into @Published inspectorWidth for persistence.
+        if (c.swiftPaneState && !zapp_inspector_bind_swiftui(c)) {
+            if (getenv("ZAPP_LOG")) NSLog(@"[zapp] inspector: SwiftUI split not resolved yet — set_width skipped");
+            return;
+        }
         if (!c.inspectorItem || !c.splitVC) return;
         CGFloat w = (CGFloat)width;
         if (w < 50) w = 50;   // sanity floor
+        // #660 hybrid: move the inspector's own split divider (same mechanism as the sidebar)
+        // on BOTH paths. The old SwiftUI re-pin wrote item thickness directly, which SwiftUI's
+        // `.inspectorColumnWidth` modifier re-asserts its [min,max] over → no effect. Now that
+        // the inspector has a declarative resizable RANGE, setPosition within it works; the
+        // WidthReader then captures the result into @Published inspectorWidth for persistence.
         CGFloat minT = c.inspectorItem.minimumThickness;
         CGFloat maxT = c.inspectorItem.maximumThickness;
         if (minT > 0 && w < minT) w = minT;

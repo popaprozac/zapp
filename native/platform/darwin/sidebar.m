@@ -11,6 +11,14 @@
 
 extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
 extern void darwin_window_eval_js(int32_t window_id, const char* js);
+// Reach-through (#660 hybrid): resolve the SwiftUI-backed NSSplitView/Controller
+// (defined in window.m) so setWidth can drive it imperatively. SwiftUI's declarative
+// `.navigationSplitViewColumnWidth` is initial-only (runtime min/max/ideal changes are
+// ignored on an already-laid-out column), so width MUST go through setPosition; the
+// WidthReader then captures the result back into the @Published width for persistence.
+// (setResizable/setCollapsible stay declarative — those DO take at runtime.)
+@class NSSplitViewController;
+extern NSSplitView* zapp_find_split_view(NSView* v);
 // SwiftUI pane drivers (defined in panes.swift) — only linked in when the
 // swiftc tier is compiled (native.swiftui != false + swiftc present). Behind
 // ZAPP_HAS_SWIFTUI so the opted-out/AppKit-only build doesn't reference an
@@ -149,6 +157,27 @@ static void zapp_sidebar_sync_collapse(ZappSidebarController* c) {
 
 @end
 
+// Lazily bind the SwiftUI-backed split so setWidth can drive it imperatively
+// (#660 hybrid). A NavigationSplitView's NSSplitView lives in the VIEW tree with its
+// NSSplitViewController as the split view's delegate; resolve on first setWidth (the
+// split only exists after layout). Cached for the window's lifetime. Only setWidth uses
+// this — setResizable/setCollapsible are declarative (@Published).
+static BOOL zapp_sidebar_bind_swiftui(ZappSidebarController* c) {
+    if (c.splitVC && c.sidebarItem) return YES;            // already bound
+    if (!c.swiftPaneState) return NO;
+    void* win_ptr = darwin_window_get_by_numeric_id(c.hostWindowId);
+    NSWindow* win = (__bridge NSWindow*)win_ptr;
+    NSSplitView* sv = zapp_find_split_view(win.contentView);
+    NSSplitViewController* svc = [sv.delegate isKindOfClass:[NSSplitViewController class]]
+        ? (NSSplitViewController*)sv.delegate : nil;
+    if (!svc || svc.splitViewItems.count == 0) return NO;  // not laid out yet / not found
+    c.splitVC = svc;
+    c.sidebarItem = svc.splitViewItems.firstObject;
+    if (c.cfgMinThickness <= 0) c.cfgMinThickness = c.sidebarItem.minimumThickness;
+    if (c.cfgMaxThickness <= 0) c.cfgMaxThickness = c.sidebarItem.maximumThickness;
+    return YES;
+}
+
 // --- Control ops (router entry points) ---
 
 void darwin_sidebar_toggle(int32_t window_id) {
@@ -204,9 +233,14 @@ void darwin_sidebar_set_width(int32_t window_id, int32_t width) {
     zapp_sidebar_on_main(^{
         ZappSidebarController* c = zapp_sidebar_for_slot(window_id);
         if (!c) return;
-#ifdef ZAPP_HAS_SWIFTUI
-        if (c.swiftPaneState) { zapp_swift_panes_set_sidebar_width(c.swiftPaneState, width); return; }
-#endif
+        // #660 hybrid: width is imperative on BOTH paths (SwiftUI declarative column width
+        // is initial-only). On the SwiftUI path, bind resolves the NavigationSplitView's
+        // backing NSSplitView; setPosition moves the divider; the Swift WidthReader then
+        // captures the new width into @Published sidebarWidth so it persists.
+        if (c.swiftPaneState && !zapp_sidebar_bind_swiftui(c)) {
+            if (getenv("ZAPP_LOG")) NSLog(@"[zapp] sidebar: SwiftUI split not resolved yet — set_width skipped");
+            return;
+        }
         if (!c.sidebarItem || !c.splitVC) return;
         CGFloat w = (CGFloat)width;
         CGFloat minT = c.sidebarItem.minimumThickness;
