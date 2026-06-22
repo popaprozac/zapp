@@ -39,6 +39,43 @@ type
   TrafficLights* = object           ## the three window buttons (zc TrafficLights struct)
     close*, minimize*, zoom*: ButtonState
 
+  MenuItemOpt* = object              ## mirrors TS ZappMenuItem (toolbar pull-down item)
+    id*, label*, icon*: string
+    checked*: bool
+
+  ToolbarItemOpt* = object           ## mirrors TS ToolbarItemDef — DATA fields only (no action closure)
+    id*: string
+    `type`*: string                  ## "" ⇒ native treats as "button"
+    pane*: string                    ## trackingSeparator: "sidebar" | "inspector"
+    label*, icon*: string
+    enabled*: bool = true
+    indicator*: bool = true          ## menu chevron; native default YES; emitted only on menu items
+    menu*: seq[MenuItemOpt]
+
+  ToolbarOptions* = object
+    style*: string                   ## "" ⇒ "unified"
+    items*: seq[ToolbarItemOpt]
+
+  SidebarOptions* = object
+    url*, material*, backgroundColor*, presentation*: string
+    width*: int32 = 260
+    minWidth*: int32 = 180
+    maxWidth*: int32 = 400
+    collapsible*: bool = true
+    collapsed*: bool
+    resizable*: bool = true
+    numericId*: int32 = -1
+
+  InspectorOptions* = object
+    url*, material*, backgroundColor*: string
+    width*: int32 = 280
+    minWidth*: int32 = 180
+    maxWidth*: int32 = 400
+    collapsible*: bool = true
+    collapsed*: bool
+    resizable*: bool = true
+    numericId*: int32 = -1
+
   WindowOptions* = ref object
     # --- set by the skeleton ---
     title*: string
@@ -72,37 +109,19 @@ type
     titleBarStyle*: TitleBarStyle = TitleBarStyle.Unset
     trafficLights*: TrafficLights = TrafficLights(
       close: ButtonState.Enabled, minimize: ButtonState.Enabled, zoom: ButtonState.Enabled)
-    # --- sidebar (feature unused by the skeleton; "" url => never built) ---
+    # --- accessory chrome (nested; "" url / empty items ⇒ never built) -------
     # Sidebar/inspector geometry defaults MUST stay non-zero: window.m sets
     # NSSplitViewItem.maximumThickness = wopts_sidebar_max_width(opts) literally,
     # so a 0 default clamps the pane to ZERO width (invisible sidebar — #460).
-    sidebarUrl*: string
-    sidebarMaterial*: string
-    sidebarBackgroundColor*: string
-    sidebarWidth*: int32 = 260
-    sidebarMinWidth*: int32 = 180
-    sidebarMaxWidth*: int32 = 400
-    sidebarCollapsible*: bool = true
-    sidebarCollapsed*: bool
-    sidebarCanResize*: bool = true
-    sidebarPresentation*: string
-    sidebarNumericId*: int32 = -1
-    # --- inspector pane (feature unused; "" url => never built) ---
-    inspectorUrl*: string
-    inspectorMaterial*: string
-    inspectorBackgroundColor*: string
-    inspectorWidth*: int32 = 280
-    inspectorMinWidth*: int32 = 180
-    inspectorMaxWidth*: int32 = 400
-    inspectorCollapsible*: bool = true
-    inspectorCollapsed*: bool
-    inspectorCanResize*: bool = true
-    inspectorNumericId*: int32 = -1
+    # Those non-zero defaults are now carried by SidebarOptions/InspectorOptions.
+    sidebar*: SidebarOptions
+    inspector*: InspectorOptions
+    toolbar*: ToolbarOptions
+    toolbarJsonCache*: string   ## derived: wopts_toolbar_json serializes `toolbar` here
+                                ## so the returned cstring borrows a GC-pinned buffer (BOUNDARY RULE 1)
     # --- native surface pane (macOS only; no-op off-Apple) ---
     nativeSurface*: bool       ## macOS: attach a framework "native surface" pane
                                ## (SwiftUI enhanced / AppKit baseline). No-op off-Apple.
-    # --- toolbar (feature unused; "" json => never attached) ---
-    toolbarJson*: string
     # --- runtime Window.create extras (JS-driven) ---
     asSheetOfId*: int32 = -1
     sheetPresentation*: int32
@@ -159,36 +178,38 @@ proc wopts_traffic_light_minimize_tag(p: pointer): int32 {.exportc, cdecl.} = op
 proc wopts_traffic_light_zoom_tag(p: pointer): int32 {.exportc, cdecl.} = opt(p).trafficLights.zoom.int32
 
 # sidebar accessors — unused feature; "" url short-circuits the sidebar branch.
-proc wopts_sidebar_url(p: pointer): cstring {.exportc, cdecl.} = opt(p).sidebarUrl.cstring
-proc wopts_sidebar_material(p: pointer): cstring {.exportc, cdecl.} = opt(p).sidebarMaterial.cstring
-proc wopts_sidebar_width(p: pointer): int32 {.exportc, cdecl.} = opt(p).sidebarWidth
-proc wopts_sidebar_min_width(p: pointer): int32 {.exportc, cdecl.} = opt(p).sidebarMinWidth
-proc wopts_sidebar_max_width(p: pointer): int32 {.exportc, cdecl.} = opt(p).sidebarMaxWidth
-proc wopts_sidebar_collapsible(p: pointer): bool {.exportc, cdecl.} = opt(p).sidebarCollapsible
-proc wopts_sidebar_collapsed(p: pointer): bool {.exportc, cdecl.} = opt(p).sidebarCollapsed
-proc wopts_sidebar_can_resize(p: pointer): bool {.exportc, cdecl.} = opt(p).sidebarCanResize
-proc wopts_sidebar_background_color(p: pointer): cstring {.exportc, cdecl.} = opt(p).sidebarBackgroundColor.cstring
-proc wopts_sidebar_presentation(p: pointer): cstring {.exportc, cdecl.} = opt(p).sidebarPresentation.cstring
-proc wopts_sidebar_numeric_id(p: pointer): int32 {.exportc, cdecl.} = opt(p).sidebarNumericId
+proc wopts_sidebar_url(p: pointer): cstring {.exportc, cdecl.} = opt(p).sidebar.url.cstring
+proc wopts_sidebar_material(p: pointer): cstring {.exportc, cdecl.} = opt(p).sidebar.material.cstring
+proc wopts_sidebar_width(p: pointer): int32 {.exportc, cdecl.} = opt(p).sidebar.width
+proc wopts_sidebar_min_width(p: pointer): int32 {.exportc, cdecl.} = opt(p).sidebar.minWidth
+proc wopts_sidebar_max_width(p: pointer): int32 {.exportc, cdecl.} = opt(p).sidebar.maxWidth
+proc wopts_sidebar_collapsible(p: pointer): bool {.exportc, cdecl.} = opt(p).sidebar.collapsible
+proc wopts_sidebar_collapsed(p: pointer): bool {.exportc, cdecl.} = opt(p).sidebar.collapsed
+proc wopts_sidebar_can_resize(p: pointer): bool {.exportc, cdecl.} = opt(p).sidebar.resizable
+proc wopts_sidebar_background_color(p: pointer): cstring {.exportc, cdecl.} = opt(p).sidebar.backgroundColor.cstring
+proc wopts_sidebar_presentation(p: pointer): cstring {.exportc, cdecl.} = opt(p).sidebar.presentation.cstring
+proc wopts_sidebar_numeric_id(p: pointer): int32 {.exportc, cdecl.} = opt(p).sidebar.numericId
 
 # inspector accessors — unused feature; "" url short-circuits the branch.
-proc wopts_inspector_url(p: pointer): cstring {.exportc, cdecl.} = opt(p).inspectorUrl.cstring
-proc wopts_inspector_material(p: pointer): cstring {.exportc, cdecl.} = opt(p).inspectorMaterial.cstring
-proc wopts_inspector_width(p: pointer): int32 {.exportc, cdecl.} = opt(p).inspectorWidth
-proc wopts_inspector_min_width(p: pointer): int32 {.exportc, cdecl.} = opt(p).inspectorMinWidth
-proc wopts_inspector_max_width(p: pointer): int32 {.exportc, cdecl.} = opt(p).inspectorMaxWidth
-proc wopts_inspector_collapsible(p: pointer): bool {.exportc, cdecl.} = opt(p).inspectorCollapsible
-proc wopts_inspector_collapsed(p: pointer): bool {.exportc, cdecl.} = opt(p).inspectorCollapsed
-proc wopts_inspector_can_resize(p: pointer): bool {.exportc, cdecl.} = opt(p).inspectorCanResize
-proc wopts_inspector_background_color(p: pointer): cstring {.exportc, cdecl.} = opt(p).inspectorBackgroundColor.cstring
-proc wopts_inspector_numeric_id(p: pointer): int32 {.exportc, cdecl.} = opt(p).inspectorNumericId
+proc wopts_inspector_url(p: pointer): cstring {.exportc, cdecl.} = opt(p).inspector.url.cstring
+proc wopts_inspector_material(p: pointer): cstring {.exportc, cdecl.} = opt(p).inspector.material.cstring
+proc wopts_inspector_width(p: pointer): int32 {.exportc, cdecl.} = opt(p).inspector.width
+proc wopts_inspector_min_width(p: pointer): int32 {.exportc, cdecl.} = opt(p).inspector.minWidth
+proc wopts_inspector_max_width(p: pointer): int32 {.exportc, cdecl.} = opt(p).inspector.maxWidth
+proc wopts_inspector_collapsible(p: pointer): bool {.exportc, cdecl.} = opt(p).inspector.collapsible
+proc wopts_inspector_collapsed(p: pointer): bool {.exportc, cdecl.} = opt(p).inspector.collapsed
+proc wopts_inspector_can_resize(p: pointer): bool {.exportc, cdecl.} = opt(p).inspector.resizable
+proc wopts_inspector_background_color(p: pointer): cstring {.exportc, cdecl.} = opt(p).inspector.backgroundColor.cstring
+proc wopts_inspector_numeric_id(p: pointer): int32 {.exportc, cdecl.} = opt(p).inspector.numericId
 
 # native-surface accessor — 1/0 gate read by window.m's split builder (macOS only).
 proc wopts_native_surface(p: pointer): cint {.exportc, cdecl.} =
   (if opt(p).nativeSurface: 1 else: 0).cint
 
-# toolbar accessor — unused feature; "" json short-circuits darwin_toolbar_attach.
-proc wopts_toolbar_json(p: pointer): cstring {.exportc, cdecl.} = opt(p).toolbarJson.cstring
+# toolbar accessor — defined after the j* JSON helpers (serializeToolbar/
+# parseToolbarJson depend on jHasStr/jStr/jHasBool/jBool), just before
+# windowOptsApplyJson. C resolves wopts_toolbar_json by symbol name, so its
+# position relative to window.m's extern doesn't matter.
 
 # sheet accessors — read by ios/window.m's darwin_window_create to configure a
 # UISheetPresentationController (presentation style, detents bitmask, grabber).
@@ -227,11 +248,11 @@ proc createWindow*(o: WindowOptions): Window =
   let id = gNextWindowId
   inc gNextWindowId
   o.numericIdPrealloc = id
-  if o.sidebarUrl.len > 0:
-    o.sidebarNumericId = gNextWindowId
+  if o.sidebar.url.len > 0:
+    o.sidebar.numericId = gNextWindowId
     inc gNextWindowId
-  if o.inspectorUrl.len > 0:
-    o.inspectorNumericId = gNextWindowId
+  if o.inspector.url.len > 0:
+    o.inspector.numericId = gNextWindowId
     inc gNextWindowId
   if o.asSheetOfId >= 0:
     o.visible = false
@@ -310,6 +331,69 @@ proc jBool(a: JsonNode, k: string, dflt: bool): bool =
 proc jHasBool(a: JsonNode, k: string): bool =
   let v = a{k}; (not v.isNil and v.kind == JBool)
 
+# Serialize ToolbarOptions to the native toolbar wire JSON ({style, items:[...]})
+# consumed by toolbar.m's zapp_toolbar_parse_items (matches TS normalizeToolbar).
+proc serializeToolbar*(t: ToolbarOptions): string =
+  var items = newJArray()
+  for it in t.items:
+    case it.`type`
+    of "toggleSidebar", "toggleInspector", "space", "flexibleSpace":
+      items.add(%*{"type": it.`type`})
+    of "trackingSeparator":
+      items.add(%*{"type": "trackingSeparator",
+                   "pane": (if it.pane.len > 0: it.pane else: "sidebar")})
+    else:  # button (default)
+      var w = %*{"type": "button", "id": it.id, "label": it.label,
+                 "icon": it.icon, "enabled": it.enabled}
+      if it.menu.len > 0:
+        var m = newJArray()
+        for mi in it.menu:
+          m.add(%*{"id": mi.id, "label": mi.label, "icon": mi.icon, "checked": mi.checked})
+        w["menu"] = m
+        w["indicator"] = %it.indicator   # chevron — only meaningful on menu items
+      items.add(w)
+  $(%*{"style": (if t.style.len > 0: t.style else: "unified"), "items": items})
+
+# Inverse: parse a native toolbar wire string back into ToolbarOptions (used when
+# a window arrives over the JSON wire carrying a pre-serialized toolbarJson string).
+proc parseToolbarJson*(s: string): ToolbarOptions =
+  result.style = "unified"
+  if s.len == 0: return
+  let root = try: parseJson(s) except CatchableError: return
+  if root.kind != JObject: return
+  if jHasStr(root, "style"): result.style = jStr(root, "style")
+  let items = root{"items"}
+  if items.isNil or items.kind != JArray: return
+  for itn in items:
+    if itn.kind != JObject: continue
+    var item = ToolbarItemOpt(enabled: true, indicator: true)  # explicit: match field defaults
+    item.`type` = (if jHasStr(itn, "type"): jStr(itn, "type") else: "button")
+    if jHasStr(itn, "id"): item.id = jStr(itn, "id")
+    if jHasStr(itn, "pane"): item.pane = jStr(itn, "pane")
+    if jHasStr(itn, "label"): item.label = jStr(itn, "label")
+    if jHasStr(itn, "icon"): item.icon = jStr(itn, "icon")
+    if jHasBool(itn, "enabled"): item.enabled = jBool(itn, "enabled", true)
+    if jHasBool(itn, "indicator"): item.indicator = jBool(itn, "indicator", true)
+    let menu = itn{"menu"}
+    if not menu.isNil and menu.kind == JArray:
+      for mn in menu:
+        if mn.kind != JObject: continue
+        var m: MenuItemOpt
+        if jHasStr(mn, "id"): m.id = jStr(mn, "id")
+        if jHasStr(mn, "label"): m.label = jStr(mn, "label")
+        if jHasStr(mn, "icon"): m.icon = jStr(mn, "icon")
+        if jHasBool(mn, "checked"): m.checked = jBool(mn, "checked", false)
+        item.menu.add(m)
+    result.items.add(item)
+
+# toolbar accessor — serializes `toolbar` into the ref's own toolbarJsonCache so
+# the returned cstring borrows a GC-pinned buffer (BOUNDARY RULE 1). Empty items
+# ⇒ "" ⇒ window.m skips darwin_toolbar_attach (same short-circuit as the old flat field).
+proc wopts_toolbar_json(p: pointer): cstring {.exportc, cdecl.} =
+  let o = opt(p)
+  o.toolbarJsonCache = (if o.toolbar.items.len == 0: "" else: serializeToolbar(o.toolbar))
+  o.toolbarJsonCache.cstring
+
 proc buttonStateFromStr(s: string, dflt: ButtonState): ButtonState =
   case s
   of "hidden": ButtonState.Hidden
@@ -350,31 +434,31 @@ proc windowOptsApplyJson*(o: WindowOptions, a: JsonNode) =
   if jHasStr(a, "vibrancy"): o.vibrancy = jStr(a, "vibrancy")
   if jHasStr(a, "backgroundColor"): o.backgroundColor = jStr(a, "backgroundColor")
   if jHasStr(a, "frameAutosaveName"): o.frameAutosaveName = jStr(a, "frameAutosaveName")
-  if jHasStr(a, "toolbarJson"): o.toolbarJson = jStr(a, "toolbarJson")
+  if jHasStr(a, "toolbarJson"): o.toolbar = parseToolbarJson(jStr(a, "toolbarJson"))
   if jHasBool(a, "nativeSurface"): o.nativeSurface = jBool(a, "nativeSurface", o.nativeSurface)
   let sb = a{"sidebar"}
   if not sb.isNil and sb.kind == JObject:
-    if jHasStr(sb, "url"): o.sidebarUrl = jStr(sb, "url")
-    if jHasStr(sb, "material"): o.sidebarMaterial = jStr(sb, "material")
-    if jHasStr(sb, "backgroundColor"): o.sidebarBackgroundColor = jStr(sb, "backgroundColor")
-    if jHasNum(sb, "width"): o.sidebarWidth = jI32(sb, "width", o.sidebarWidth)
-    if jHasNum(sb, "minWidth"): o.sidebarMinWidth = jI32(sb, "minWidth", o.sidebarMinWidth)
-    if jHasNum(sb, "maxWidth"): o.sidebarMaxWidth = jI32(sb, "maxWidth", o.sidebarMaxWidth)
-    if jHasBool(sb, "collapsible"): o.sidebarCollapsible = jBool(sb, "collapsible", o.sidebarCollapsible)
-    if jHasBool(sb, "collapsed"): o.sidebarCollapsed = jBool(sb, "collapsed", o.sidebarCollapsed)
-    if jHasBool(sb, "resizable"): o.sidebarCanResize = jBool(sb, "resizable", o.sidebarCanResize)
-    if jHasStr(sb, "presentation"): o.sidebarPresentation = jStr(sb, "presentation")
+    if jHasStr(sb, "url"): o.sidebar.url = jStr(sb, "url")
+    if jHasStr(sb, "material"): o.sidebar.material = jStr(sb, "material")
+    if jHasStr(sb, "backgroundColor"): o.sidebar.backgroundColor = jStr(sb, "backgroundColor")
+    if jHasNum(sb, "width"): o.sidebar.width = jI32(sb, "width", o.sidebar.width)
+    if jHasNum(sb, "minWidth"): o.sidebar.minWidth = jI32(sb, "minWidth", o.sidebar.minWidth)
+    if jHasNum(sb, "maxWidth"): o.sidebar.maxWidth = jI32(sb, "maxWidth", o.sidebar.maxWidth)
+    if jHasBool(sb, "collapsible"): o.sidebar.collapsible = jBool(sb, "collapsible", o.sidebar.collapsible)
+    if jHasBool(sb, "collapsed"): o.sidebar.collapsed = jBool(sb, "collapsed", o.sidebar.collapsed)
+    if jHasBool(sb, "resizable"): o.sidebar.resizable = jBool(sb, "resizable", o.sidebar.resizable)
+    if jHasStr(sb, "presentation"): o.sidebar.presentation = jStr(sb, "presentation")
   let insp = a{"inspector"}
   if not insp.isNil and insp.kind == JObject:
-    if jHasStr(insp, "url"): o.inspectorUrl = jStr(insp, "url")
-    if jHasStr(insp, "material"): o.inspectorMaterial = jStr(insp, "material")
-    if jHasStr(insp, "backgroundColor"): o.inspectorBackgroundColor = jStr(insp, "backgroundColor")
-    if jHasNum(insp, "width"): o.inspectorWidth = jI32(insp, "width", o.inspectorWidth)
-    if jHasNum(insp, "minWidth"): o.inspectorMinWidth = jI32(insp, "minWidth", o.inspectorMinWidth)
-    if jHasNum(insp, "maxWidth"): o.inspectorMaxWidth = jI32(insp, "maxWidth", o.inspectorMaxWidth)
-    if jHasBool(insp, "collapsible"): o.inspectorCollapsible = jBool(insp, "collapsible", o.inspectorCollapsible)
-    if jHasBool(insp, "collapsed"): o.inspectorCollapsed = jBool(insp, "collapsed", o.inspectorCollapsed)
-    if jHasBool(insp, "resizable"): o.inspectorCanResize = jBool(insp, "resizable", o.inspectorCanResize)
+    if jHasStr(insp, "url"): o.inspector.url = jStr(insp, "url")
+    if jHasStr(insp, "material"): o.inspector.material = jStr(insp, "material")
+    if jHasStr(insp, "backgroundColor"): o.inspector.backgroundColor = jStr(insp, "backgroundColor")
+    if jHasNum(insp, "width"): o.inspector.width = jI32(insp, "width", o.inspector.width)
+    if jHasNum(insp, "minWidth"): o.inspector.minWidth = jI32(insp, "minWidth", o.inspector.minWidth)
+    if jHasNum(insp, "maxWidth"): o.inspector.maxWidth = jI32(insp, "maxWidth", o.inspector.maxWidth)
+    if jHasBool(insp, "collapsible"): o.inspector.collapsible = jBool(insp, "collapsible", o.inspector.collapsible)
+    if jHasBool(insp, "collapsed"): o.inspector.collapsed = jBool(insp, "collapsed", o.inspector.collapsed)
+    if jHasBool(insp, "resizable"): o.inspector.resizable = jBool(insp, "resizable", o.inspector.resizable)
   let aso = a{"asSheetOf"}
   if not aso.isNil:
     if aso.kind == JInt or aso.kind == JFloat:
