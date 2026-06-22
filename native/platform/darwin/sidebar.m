@@ -26,7 +26,6 @@ extern NSSplitView* zapp_find_split_view(NSView* v);
 #ifdef ZAPP_HAS_SWIFTUI
 extern void zapp_swift_panes_set_sidebar_visible(void* state, bool visible);
 extern void zapp_swift_panes_toggle_sidebar(void* state);
-extern void zapp_swift_panes_set_sidebar_width(void* state, int32_t w);
 extern void zapp_swift_panes_set_sidebar_resizable(void* state, bool resizable);
 extern void zapp_swift_panes_set_sidebar_collapsible(void* state, bool collapsible);
 #endif

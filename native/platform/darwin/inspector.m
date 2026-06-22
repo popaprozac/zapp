@@ -24,7 +24,6 @@ extern WKWebView* zapp_webview_for_slot(int32_t slot);
 #ifdef ZAPP_HAS_SWIFTUI
 extern void zapp_swift_panes_set_inspector_presented(void* state, bool presented);
 extern void zapp_swift_panes_toggle_inspector(void* state);
-extern void zapp_swift_panes_set_inspector_width(void* state, int32_t w);
 extern void zapp_swift_panes_set_inspector_resizable(void* state, bool resizable);
 extern void zapp_swift_panes_set_inspector_collapsible(void* state, bool collapsible);
 #endif
