@@ -233,7 +233,14 @@ void darwin_inspector_set_collapsible(int32_t window_id, bool can_collapse) {
         ZappInspectorController* c = zapp_inspector_for_slot(window_id);
         if (!c) return;
 #ifdef ZAPP_HAS_SWIFTUI
-        if (c.swiftPaneState) { zapp_swift_panes_set_inspector_collapsible(c.swiftPaneState, can_collapse); return; }
+        if (c.swiftPaneState) {
+            // Declarative flag gates the binding-clamp; #665: ALSO forbid divider-drag
+            // collapse imperatively via canCollapse=NO on the inspector's own split item.
+            zapp_swift_panes_set_inspector_collapsible(c.swiftPaneState, can_collapse);
+            if (zapp_inspector_bind_swiftui(c) && c.inspectorItem)
+                c.inspectorItem.canCollapse = can_collapse ? YES : NO;
+            return;
+        }
 #endif
         if (!c.inspectorItem) return;
         c.inspectorItem.canCollapse = can_collapse ? YES : NO;

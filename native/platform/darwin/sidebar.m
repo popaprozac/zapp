@@ -258,7 +258,16 @@ void darwin_sidebar_set_collapsible(int32_t window_id, bool can_collapse) {
         ZappSidebarController* c = zapp_sidebar_for_slot(window_id);
         if (!c) return;
 #ifdef ZAPP_HAS_SWIFTUI
-        if (c.swiftPaneState) { zapp_swift_panes_set_sidebar_collapsible(c.swiftPaneState, can_collapse); return; }
+        if (c.swiftPaneState) {
+            // Declarative flag gates the native sidebar toggle (binding-clamp refuses
+            // .detailOnly). #665: ALSO forbid divider-drag collapse imperatively — the
+            // AppKit-native canCollapse=NO on the SwiftUI-backed item (the clamp alone
+            // leaves the drag glitchy). Same imperative-reach-through lever as setWidth.
+            zapp_swift_panes_set_sidebar_collapsible(c.swiftPaneState, can_collapse);
+            if (zapp_sidebar_bind_swiftui(c) && c.sidebarItem)
+                c.sidebarItem.canCollapse = can_collapse ? YES : NO;
+            return;
+        }
 #endif
         if (!c.sidebarItem) return;
         c.sidebarItem.canCollapse = can_collapse ? YES : NO;
