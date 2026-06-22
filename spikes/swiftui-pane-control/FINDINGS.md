@@ -21,23 +21,52 @@ this directly.
 Build: `./build.sh` → `./build/macos/spike`. Drive every control from the
 detail-pane panel; watch the teal sidebar column.
 
-## Verdict
+## Verdict — PARTIAL GO (human visual run 2026-06-22)
 
-_(fill after human visual run)_ — GO (full) / PARTIAL (achievable parts +
-documented deviations) / NO-GO.
+The 2c core is achievable on the SwiftUI path: **exact-width set works**,
+**forced-tile (Messages-style) works via a window min-size**, and
+**collapsible must be a distinct control** (it's independent of width/lock). Two
+SwiftUI limitations get **documented deviations** (lock can't capture a live
+user-dragged width; `NavigationSplitViewStyle` is not the tile/overlay lever on
+macOS), plus a few quirks to mitigate. Build 2c.
 
 ## Probe results
 
 | Probe | Mechanism | Result |
 |---|---|---|
-| (1) setWidth(px) — pin to exact width | bind `min == ideal == max == px` to @State | _TBD_ — does the column jump there cleanly + survive re-layout? |
-| (2) setResizable(false) — lock drag | pin `min == max == current` | _TBD_ — does the divider stop dragging? unlock restores? |
-| (2) setResizable(true) — unlock | restore `min 180 / max 480` | _TBD_ |
-| (3) presentation — tile vs overlay | `.navigationSplitViewStyle(.automatic/.balanced/.prominentDetail)` × `columnVisibility` × window width | _TBD_ — which combo tiles (pushes content) vs overlays (floats)? Is it controllable, or window-width-driven only? |
-| (3b) forced tile (Messages-style) | window min-size (`minW + 360`) prevents squeeze past `min` | _TBD_ — does the sidebar hold tiled at its min width as the window narrows (not overlay/collapse)? |
+| (1) setWidth(px) — pin to exact width | bind `min == ideal == max == px` | ✅ column jumps to the exact width and holds. Side effects: still collapsible (width ≠ collapse — expected); not draggable while pinned (min==max — that's the lock). |
+| (2) setResizable(false) — lock | pin `min == max == ideal` | ⚠️ stops the drag, BUT **snaps to the @State `ideal` (~260)**, not the user's live-dragged width — SwiftUI doesn't report the live column width back, so "lock at the *dragged* width" is impossible. Locking at an **app-set** width works. |
+| (2) setResizable(true) — unlock | restore `min 180 / max 480` | ✅ divider drags again after unlock. |
+| (3) presentation — tile vs overlay | `.navigationSplitViewStyle(...)` toggle | ❌ style (`automatic`/`balanced`/`prominentDetail`) made **no visible difference** — it is NOT the tile/overlay lever on macOS. |
+| (3b) forced tile (Messages-style) | window min-size (`minW + 360`) | ✅ narrowing the window **bottoms out at a min width and does NOT auto-collapse/overlay** — the window min-size is the real forced-tile mechanism. |
 
-## Notes / gotchas
+## Notes / gotchas (→ design implications)
 
-_(fill in: animation behavior on pin, whether min==max truly disables the drag
-handle, what actually controls overlay vs tile on macOS, and any
-NavigationSplitView quirks that force a documented deviation.)_
+- **`setCollapsible(true|false)` is a required, distinct control.** Locked OR
+  unlocked, at any width, the sidebar can still be collapsed (toggle + buttons).
+  Width/resize do not gate collapse. Implement collapsible by clamping the
+  `columnVisibility` binding (refuse `.detailOnly` when non-collapsible) **and**
+  removing the titlebar sidebar toggle (`.toolbar(removing: .sidebarToggle)`).
+- **Tile vs overlay = window min-size, not style.** "tile" (Messages) = set a
+  window minimum ≥ sidebar width + content min so it can't be squeezed to
+  overlay/collapse. "overlay" = the default (no/low min). The
+  `NavigationSplitViewStyle` knob is a no-op for this and won't be exposed.
+- **DEVIATION — lock preserves the *app-set* width, not a live drag.** SwiftUI
+  doesn't surface the user's dragged column width, so `setResizable(false)` locks
+  at the last programmatic width (e.g. a `setWidth` value or the configured
+  width), not wherever the user last dragged. Document it.
+- **Quirk — drag-to-max then narrow → sidebar overflows left** (Image 1): if the
+  user drags to `max` (480) and then narrows the window, the column overflows
+  past the window's left edge. Pinning the width (setWidth 440) then narrowing is
+  clean (Image 2). Mitigation: the forced-tile window min-size must track the
+  *effective* (or max) sidebar width, not just `min`, so the window can't narrow
+  below `effectiveSidebarWidth + contentMin`.
+- **Quirk — re-expand after collapse grows the window** when the width is pinned
+  (`min==max==440`): expanding from collapsed forces the window wider to fit the
+  pinned column. Mitigation: same min-size accounting / relax the pin on collapse.
+- **Animation gap — collapse/show + the titlebar toggle do NOT animate** in the
+  spike (the `withAnimation { columnVisibility = … }` button didn't animate).
+  2a's runtime toggles DO animate via `zapp_swift_panes_toggle_*` (withAnimation
+  at the @_cdecl) — so verify/ensure the real 2c path animates; if the
+  binding-driven change won't animate, route collapse through the proven 2a
+  toggle path.
