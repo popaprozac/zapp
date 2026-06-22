@@ -122,6 +122,7 @@ A window can't half-share its title-bar toolbar between SwiftUI and a manual `NS
 - **`trackingSeparator`** has no SwiftUI `.toolbar` item — dropped on the SwiftUI path; `NavigationSplitView` auto-aligns the column boundary (#638).
 - **Sidebar `presentation` (overlay vs tile):** SwiftUI honors `overlay`; macOS AppKit tiles (#646).
 - **Toolbar display style beyond `unified`** (`unifiedCompact`/`expanded` from `setItems`) defaults to `unified` on the SwiftUI path.
+- **`toggleSidebar` position is SwiftUI-native (leading), not app-ordered, on the SwiftUI path.** AppKit renders the app's `toggleSidebar` item wherever it's declared; SwiftUI satisfies it with `NavigationSplitView`'s native auto sidebar toggle (always leading) and filters the app's explicit item out — `.toolbar(removing: .sidebarToggle)` leaked a duplicate across the `NSHostingController` seam, so we embrace the native toggle. Same "one spec, consistent outcomes" intent; only the toggle's *position* is the deviation.
 
 The unifying principle (the **split-world anchor**): one app-facing spec, each platform-renderer uses its *native* mechanism; aim for consistent OUTCOMES, not identical internals — and document where the seam forces a divergence.
 

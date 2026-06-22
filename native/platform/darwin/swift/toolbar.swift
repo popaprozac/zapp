@@ -36,8 +36,8 @@ public func zapp_swift_module_set_string(_ state: UnsafeMutableRawPointer,
 private let kTbSetItems: Int32 = 1     // value = full toolbarJson {style, items:[...]}
 private let kTbUpdateItem: Int32 = 2   // value = one itemJson
 private let kTbClear: Int32 = 3        // value = ""
-let kTbEvtClick: Int32 = 1             // reverse: value = itemId
-let kTbEvtMenuClick: Int32 = 2         // reverse: value = menuId
+private let kTbEvtClick: Int32 = 1     // reverse: value = itemId
+private let kTbEvtMenuClick: Int32 = 2 // reverse: value = menuId
 
 struct ZappMenuItem: Decodable, Identifiable {
   var id: String { dynId }
@@ -83,6 +83,11 @@ final class ToolbarState: ObservableObject, ZappNativeModule {
 
   init(ctx: UnsafeMutableRawPointer?, cb: ZappSwiftStringCallback?) { self.ctx = ctx; self.cb = cb }
 
+  // Main-thread only: the sole caller chain is the WKScriptMessageHandler
+  // (didReceiveScriptMessage → router toolbar:* fork → zapp_swift_module_set_string),
+  // which is always main-thread, so mutating @Published here is safe. The AppKit
+  // twin (darwin_toolbar_set_items) re-marshals via zapp_toolbar_on_main; a future
+  // off-main caller (e.g. a worker-driven update) MUST hop to main before calling this.
   func applyString(_ key: Int32, _ value: String) {
     switch key {
     case kTbSetItems:
