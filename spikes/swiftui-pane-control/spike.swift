@@ -94,6 +94,10 @@ struct ControlPanel: View {
           Text("Resize the WINDOW narrow/wide while toggling styles — note when the " +
                "sidebar TILES (pushes content) vs OVERLAYS (floats over content).")
             .font(.caption).foregroundStyle(.secondary)
+          Text("Messages-style forced tile: a window min-size (minW + 360) is set, " +
+               "so narrowing the window can't collapse/overlay the sidebar — it " +
+               "should bottom out at its min width. Confirm it holds (not collapse).")
+            .font(.caption).foregroundStyle(.secondary)
         }
       }
       .padding(20)
@@ -155,6 +159,11 @@ struct SpikeApp: App {
         ControlPanel(model: model).navigationTitle("2c probe")
       }
       .splitStyle(model.style)
+      // Messages-style forced TILE: a window minimum that accommodates the
+      // sidebar's min + a content min, so narrowing the window can't squeeze the
+      // sidebar past its min — it bottoms out narrow instead of overlaying or
+      // collapsing. Drag the window narrow and watch the sidebar hold at minW.
+      .frame(minWidth: model.minW + 360, minHeight: 360)
     }
   }
 }
