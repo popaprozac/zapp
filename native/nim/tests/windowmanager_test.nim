@@ -70,7 +70,7 @@ block:
   doAssert o.title == "Hi"
   doAssert o.width == 800'i32, "fractional dims must use getFloat (not truncate to 0)"
   doAssert o.height == 600'i32
-  doAssert o.vibrancy == "sidebar"
+  doAssert o.vibrancy == Material.Sidebar
   doAssert o.titleBarStyle == TitleBarStyle.HiddenInset
   doAssert o.closable == false and o.trafficLights.close == ButtonState.Disabled
   doAssert o.sidebar.url == "#sb" and o.sidebar.width == 240'i32
@@ -94,13 +94,13 @@ block:
   # sidebar.presentation parses into sidebar.presentation.
   let o = WindowOptions(title: "pres")
   windowOptsApplyJson(o, parseJson("""{"sidebar":{"url":"#sb","width":240,"presentation":"overlay"}}"""))
-  doAssert o.sidebar.presentation == "overlay", "sidebar.presentation must parse to o.sidebar.presentation"
+  doAssert o.sidebar.presentation == SidebarPresentation.Overlay, "sidebar.presentation must parse to the enum"
 
 block:
   # sidebar.presentation absent → sidebar.presentation defaults to "".
   let o = WindowOptions(title: "pres-default")
   windowOptsApplyJson(o, parseJson("""{"sidebar":{"url":"#sb"}}"""))
-  doAssert o.sidebar.presentation == "", "absent sidebar.presentation must default to empty string"
+  doAssert o.sidebar.presentation == SidebarPresentation.Default, "absent sidebar.presentation must default to Default"
 
 block:
   # Partial object-literal construction must fill the field defaults — the
@@ -117,6 +117,10 @@ block:
   doAssert o.inspectable == Inspectable.Inherit, "window inspectable defaults to Inherit"
   doAssert o.titleBarStyle == TitleBarStyle.Unset, "Unset (ord 3) must be the default, not Default"
   doAssert o.trafficLights.close == ButtonState.Enabled
+  doAssert o.sidebar.material == Material.Default and o.inspector.material == Material.Default
+  doAssert o.sidebar.presentation == SidebarPresentation.Default
+  doAssert o.toolbar.style == ToolbarStyle.Unified, "toolbar style defaults to Unified"
+  doAssert o.vibrancy == Material.Default
 
 block:
   # Inspectable cascade: window-explicit > AppConfig > dev/prod.
@@ -139,7 +143,7 @@ block:
 
 block:
   # serializeToolbar emits the native wire schema; parseToolbarJson is its inverse.
-  let t = ToolbarOptions(style: "unified", items: @[
+  let t = ToolbarOptions(style: ToolbarStyle.Expanded, items: @[
     ToolbarItemOpt(`type`: "toggleSidebar"),
     ToolbarItemOpt(`type`: "trackingSeparator", pane: "sidebar"),
     ToolbarItemOpt(`type`: "button", id: "compose", label: "Compose", icon: "sf:square.and.pencil"),
@@ -151,7 +155,7 @@ block:
                      MenuItemOpt(id: "unread", label: "Unread", checked: false)]),  # explicit checked:false
   ])
   let s = serializeToolbar(t)
-  doAssert "\"style\":\"unified\"" in s, "style must serialize"
+  doAssert "\"style\":\"expanded\"" in s, "toolbar style enum must serialize to its value"
   doAssert "\"type\":\"toggleSidebar\"" in s
   doAssert "\"pane\":\"sidebar\"" in s, "trackingSeparator must carry pane"
   doAssert "\"id\":\"compose\"" in s
@@ -168,5 +172,35 @@ block:
     """{"toolbarJson":"{\"style\":\"unified\",\"items\":[{\"type\":\"button\",\"id\":\"go\",\"label\":\"Go\",\"icon\":\"\"}]}"}"""))
   doAssert o.toolbar.items.len == 1, "toolbarJson string must parse into o.toolbar"
   doAssert o.toolbar.items[0].id == "go" and o.toolbar.items[0].label == "Go"
+
+block:
+  # enum string values must equal the native/TS wire strings.
+  doAssert $Material.Default == "", "Material.Default is the empty sentinel"
+  doAssert $Material.Sidebar == "sidebar"
+  doAssert $Material.HeaderView == "headerView"
+  doAssert $Material.UnderWindowBackground == "underWindowBackground"
+  doAssert $SidebarPresentation.Overlay == "overlay"
+  doAssert $SidebarPresentation.Default == ""
+  doAssert $ToolbarStyle.Unified == "unified"
+  doAssert $ToolbarStyle.Expanded == "expanded"
+
+block:
+  let o = WindowOptions(title: "chrome")
+  windowOptsApplyJson(o, parseJson("""{
+    "vibrancy":"sidebar",
+    "sidebar":{"url":"#sb","material":"headerView","presentation":"tile"},
+    "inspector":{"url":"#insp","material":"popover"}
+  }"""))
+  doAssert o.vibrancy == Material.Sidebar
+  doAssert o.sidebar.material == Material.HeaderView
+  doAssert o.sidebar.presentation == SidebarPresentation.Tile
+  doAssert o.inspector.material == Material.Popover
+
+block:
+  # unknown / absent enum strings fall back to the Default sentinel.
+  let o = WindowOptions(title: "chrome-bad")
+  windowOptsApplyJson(o, parseJson("""{"sidebar":{"material":"bogus","presentation":"nope"}}"""))
+  doAssert o.sidebar.material == Material.Default, "unknown material must fall back to Default"
+  doAssert o.sidebar.presentation == SidebarPresentation.Default, "unknown presentation must fall back to Default"
 
 echo "windowmanager ok"
