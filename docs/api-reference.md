@@ -522,6 +522,13 @@ const w = await Window.create({
 w.on(WindowEvent.READY, () => w.show());
 ```
 
+> **iOS is single-window.** A `Window.create()` *without* `asSheetOf` is a no-op
+> on iOS — it warns and returns the current window. Use a **sheet**
+> (`Window.create({ asSheetOf: parent })`) or a **sidebar/inspector pane** for
+> secondary surfaces. (Stacked top-level windows aren't an iOS pattern; iPad
+> multi-window via `UIWindowScene` is planned.) macOS supports multiple windows
+> normally.
+
 ### `WindowOptions`
 
 ```ts
