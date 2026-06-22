@@ -31,6 +31,31 @@ type
     ## inspectable cascade enum. Appended last to keep tags 0/1/2.
     Unset = 3
 
+  Material* {.pure.} = enum   ## NSVisualEffectMaterial name (matches TS Material const)
+    Default = ""              ## "" ⇒ native default
+    Sidebar = "sidebar"
+    HeaderView = "headerView"
+    Titlebar = "titlebar"
+    Menu = "menu"
+    Popover = "popover"
+    HudWindow = "hudWindow"
+    FullScreenUI = "fullScreenUI"
+    Sheet = "sheet"
+    ContentBackground = "contentBackground"
+    UnderWindowBackground = "underWindowBackground"
+    UnderPageBackground = "underPageBackground"
+    WindowBackground = "windowBackground"
+
+  SidebarPresentation* {.pure.} = enum   ## sidebar tiling vs overlay
+    Default = ""              ## "" ⇒ per-platform default (macOS tiles)
+    Tile = "tile"
+    Overlay = "overlay"
+
+  ToolbarStyle* {.pure.} = enum          ## NSWindow.toolbarStyle
+    Unified = "unified"       ## default
+    UnifiedCompact = "unifiedCompact"
+    Expanded = "expanded"
+
   ButtonState* {.pure.} = enum      ## a traffic-light button (window.m tag 0/1/2)
     Enabled = 0
     Disabled = 1
@@ -53,11 +78,13 @@ type
     menu*: seq[MenuItemOpt]
 
   ToolbarOptions* = object
-    style*: string                   ## "" ⇒ "unified"
+    style*: ToolbarStyle
     items*: seq[ToolbarItemOpt]
 
   SidebarOptions* = object
-    url*, material*, backgroundColor*, presentation*: string
+    url*, backgroundColor*: string
+    material*: Material
+    presentation*: SidebarPresentation
     width*: int32 = 260
     minWidth*: int32 = 180
     maxWidth*: int32 = 400
@@ -67,7 +94,8 @@ type
     numericId*: int32 = -1
 
   InspectorOptions* = object
-    url*, material*, backgroundColor*: string
+    url*, backgroundColor*: string
+    material*: Material
     width*: int32 = 280
     minWidth*: int32 = 180
     maxWidth*: int32 = 400
@@ -99,7 +127,7 @@ type
     numericIdPrealloc*: int32 = -1
     inspectable*: Inspectable = Inspectable.Inherit  # cascade: window > AppConfig > dev/prod
     frameAutosaveName*: string
-    vibrancy*: string
+    vibrancy*: Material
     # --- title-bar style + traffic-light buttons ---
     # titleBarStyle MUST be explicit: Unset is ord 3 (appended last), NOT the
     # enum's zero value (Default=0). Without `= TitleBarStyle.Unset` an
@@ -142,6 +170,24 @@ proc resolveInspectable*(w: Inspectable): bool =
 
 template opt(p: pointer): WindowOptions = cast[WindowOptions](p)
 
+# Enum→value lookup tables, derived once from the enum's own $ values (single
+# source of truth). Module-global + never reassigned ⇒ a borrowed cstring stays
+# valid for window.m's synchronous read.
+let materialStr = (block:
+  var a: array[Material, string]
+  for m in Material: a[m] = $m
+  a)
+let sidebarPresStr = (block:
+  var a: array[SidebarPresentation, string]
+  for p in SidebarPresentation: a[p] = $p
+  a)
+
+# Generic string→enum: returns the member whose $ equals `s`, else `dflt`.
+proc enumFromStr[T: enum](s: string, dflt: T): T =
+  for e in T:
+    if $e == s: return e
+  dflt
+
 # --- wopts_* C-ABI accessors (read by window.m) -----------------------------
 # Signatures match native/platform/darwin/window.h + the externs in window.m.
 # char*/const char* both map to Nim `cstring`. Returning `o.field.cstring`
@@ -171,7 +217,7 @@ proc wopts_numeric_id_pre_alloc(p: pointer): int32 {.exportc, cdecl.} = opt(p).n
 proc wopts_inspectable(p: pointer): int32 {.exportc, cdecl.} =
   if resolveInspectable(opt(p).inspectable): 1 else: 0
 proc wopts_frame_autosave_name(p: pointer): cstring {.exportc, cdecl.} = opt(p).frameAutosaveName.cstring
-proc wopts_vibrancy(p: pointer): cstring {.exportc, cdecl.} = opt(p).vibrancy.cstring
+proc wopts_vibrancy(p: pointer): cstring {.exportc, cdecl.} = materialStr[opt(p).vibrancy].cstring
 proc wopts_title_bar_style_tag(p: pointer): int32 {.exportc, cdecl.} = opt(p).titleBarStyle.int32
 proc wopts_traffic_light_close_tag(p: pointer): int32 {.exportc, cdecl.} = opt(p).trafficLights.close.int32
 proc wopts_traffic_light_minimize_tag(p: pointer): int32 {.exportc, cdecl.} = opt(p).trafficLights.minimize.int32
@@ -179,7 +225,7 @@ proc wopts_traffic_light_zoom_tag(p: pointer): int32 {.exportc, cdecl.} = opt(p)
 
 # sidebar accessors — unused feature; "" url short-circuits the sidebar branch.
 proc wopts_sidebar_url(p: pointer): cstring {.exportc, cdecl.} = opt(p).sidebar.url.cstring
-proc wopts_sidebar_material(p: pointer): cstring {.exportc, cdecl.} = opt(p).sidebar.material.cstring
+proc wopts_sidebar_material(p: pointer): cstring {.exportc, cdecl.} = materialStr[opt(p).sidebar.material].cstring
 proc wopts_sidebar_width(p: pointer): int32 {.exportc, cdecl.} = opt(p).sidebar.width
 proc wopts_sidebar_min_width(p: pointer): int32 {.exportc, cdecl.} = opt(p).sidebar.minWidth
 proc wopts_sidebar_max_width(p: pointer): int32 {.exportc, cdecl.} = opt(p).sidebar.maxWidth
@@ -187,12 +233,12 @@ proc wopts_sidebar_collapsible(p: pointer): bool {.exportc, cdecl.} = opt(p).sid
 proc wopts_sidebar_collapsed(p: pointer): bool {.exportc, cdecl.} = opt(p).sidebar.collapsed
 proc wopts_sidebar_can_resize(p: pointer): bool {.exportc, cdecl.} = opt(p).sidebar.resizable
 proc wopts_sidebar_background_color(p: pointer): cstring {.exportc, cdecl.} = opt(p).sidebar.backgroundColor.cstring
-proc wopts_sidebar_presentation(p: pointer): cstring {.exportc, cdecl.} = opt(p).sidebar.presentation.cstring
+proc wopts_sidebar_presentation(p: pointer): cstring {.exportc, cdecl.} = sidebarPresStr[opt(p).sidebar.presentation].cstring
 proc wopts_sidebar_numeric_id(p: pointer): int32 {.exportc, cdecl.} = opt(p).sidebar.numericId
 
 # inspector accessors — unused feature; "" url short-circuits the branch.
 proc wopts_inspector_url(p: pointer): cstring {.exportc, cdecl.} = opt(p).inspector.url.cstring
-proc wopts_inspector_material(p: pointer): cstring {.exportc, cdecl.} = opt(p).inspector.material.cstring
+proc wopts_inspector_material(p: pointer): cstring {.exportc, cdecl.} = materialStr[opt(p).inspector.material].cstring
 proc wopts_inspector_width(p: pointer): int32 {.exportc, cdecl.} = opt(p).inspector.width
 proc wopts_inspector_min_width(p: pointer): int32 {.exportc, cdecl.} = opt(p).inspector.minWidth
 proc wopts_inspector_max_width(p: pointer): int32 {.exportc, cdecl.} = opt(p).inspector.maxWidth
@@ -356,16 +402,16 @@ proc serializeToolbar*(t: ToolbarOptions): string =
         w["menu"] = m
         w["indicator"] = %it.indicator   # chevron — only meaningful on menu items
       items.add(w)
-  $(%*{"style": (if t.style.len > 0: t.style else: "unified"), "items": items})
+  $(%*{"style": $t.style, "items": items})
 
 # Inverse: parse a native toolbar wire string back into ToolbarOptions (used when
 # a window arrives over the JSON wire carrying a pre-serialized toolbarJson string).
 proc parseToolbarJson*(s: string): ToolbarOptions =
-  result.style = "unified"
+  result.style = ToolbarStyle.Unified
   if s.len == 0: return
   let root = try: parseJson(s) except CatchableError: return
   if root.kind != JObject: return
-  if jHasStr(root, "style"): result.style = jStr(root, "style")
+  if jHasStr(root, "style"): result.style = enumFromStr[ToolbarStyle](jStr(root, "style"), ToolbarStyle.Unified)
   let items = root{"items"}
   if items.isNil or items.kind != JArray: return
   for itn in items:
@@ -435,7 +481,7 @@ proc windowOptsApplyJson*(o: WindowOptions, a: JsonNode) =
   if jHasBool(a, "alwaysOnTop"): o.alwaysOnTop = jBool(a, "alwaysOnTop", o.alwaysOnTop)
   if jHasBool(a, "acceptFirstMouse"): o.acceptFirstMouse = jBool(a, "acceptFirstMouse", o.acceptFirstMouse)
   if jHasBool(a, "autoCenter"): o.autoCenter = jBool(a, "autoCenter", o.autoCenter)
-  if jHasStr(a, "vibrancy"): o.vibrancy = jStr(a, "vibrancy")
+  if jHasStr(a, "vibrancy"): o.vibrancy = enumFromStr[Material](jStr(a, "vibrancy"), Material.Default)
   if jHasStr(a, "backgroundColor"): o.backgroundColor = jStr(a, "backgroundColor")
   if jHasStr(a, "frameAutosaveName"): o.frameAutosaveName = jStr(a, "frameAutosaveName")
   if jHasStr(a, "toolbarJson"): o.toolbar = parseToolbarJson(jStr(a, "toolbarJson"))
@@ -443,7 +489,7 @@ proc windowOptsApplyJson*(o: WindowOptions, a: JsonNode) =
   let sb = a{"sidebar"}
   if not sb.isNil and sb.kind == JObject:
     if jHasStr(sb, "url"): o.sidebar.url = jStr(sb, "url")
-    if jHasStr(sb, "material"): o.sidebar.material = jStr(sb, "material")
+    if jHasStr(sb, "material"): o.sidebar.material = enumFromStr[Material](jStr(sb, "material"), Material.Default)
     if jHasStr(sb, "backgroundColor"): o.sidebar.backgroundColor = jStr(sb, "backgroundColor")
     if jHasNum(sb, "width"): o.sidebar.width = jI32(sb, "width", o.sidebar.width)
     if jHasNum(sb, "minWidth"): o.sidebar.minWidth = jI32(sb, "minWidth", o.sidebar.minWidth)
@@ -451,11 +497,11 @@ proc windowOptsApplyJson*(o: WindowOptions, a: JsonNode) =
     if jHasBool(sb, "collapsible"): o.sidebar.collapsible = jBool(sb, "collapsible", o.sidebar.collapsible)
     if jHasBool(sb, "collapsed"): o.sidebar.collapsed = jBool(sb, "collapsed", o.sidebar.collapsed)
     if jHasBool(sb, "resizable"): o.sidebar.resizable = jBool(sb, "resizable", o.sidebar.resizable)
-    if jHasStr(sb, "presentation"): o.sidebar.presentation = jStr(sb, "presentation")
+    if jHasStr(sb, "presentation"): o.sidebar.presentation = enumFromStr[SidebarPresentation](jStr(sb, "presentation"), SidebarPresentation.Default)
   let insp = a{"inspector"}
   if not insp.isNil and insp.kind == JObject:
     if jHasStr(insp, "url"): o.inspector.url = jStr(insp, "url")
-    if jHasStr(insp, "material"): o.inspector.material = jStr(insp, "material")
+    if jHasStr(insp, "material"): o.inspector.material = enumFromStr[Material](jStr(insp, "material"), Material.Default)
     if jHasStr(insp, "backgroundColor"): o.inspector.backgroundColor = jStr(insp, "backgroundColor")
     if jHasNum(insp, "width"): o.inspector.width = jI32(insp, "width", o.inspector.width)
     if jHasNum(insp, "minWidth"): o.inspector.minWidth = jI32(insp, "minWidth", o.inspector.minWidth)
