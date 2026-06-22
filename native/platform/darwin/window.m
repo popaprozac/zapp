@@ -1035,6 +1035,21 @@ void* darwin_window_create(WindowOptions* opts) {
                 if (tbs == 3) {
                     [window setTitleVisibility:NSWindowTitleHidden];
                     [window setTitlebarAppearsTransparent:YES];
+                    // KNOWN SwiftUI LIMITATION: hiding the title collapses SwiftUI's
+                    // .navigation/.primaryAction toolbar split (items pack leading) — the
+                    // placement split needs the title as a layout anchor, and there is no
+                    // reliable macOS-14 workaround (single-ToolbarItem+HStack+Spacer can't
+                    // expand). AppKit's flexibleSpace is title-independent, so it still splits.
+                    // So hidden-title SwiftUI windows get a flat (leading) toolbar. Documented.
+                }
+                // Toolbar-style parity: AppKit sets window.toolbarStyle from the toolbar
+                // `style` (darwin_toolbar_attach), which the SwiftUI path skips. Set the
+                // unified style here (tbs==2 already chose unifiedCompact up top). This
+                // ALSO restores the toolbar's leading/.navigation vs trailing/.primaryAction
+                // distribution — under the hidden-title transparent chrome, the default
+                // (automatic) style collapsed all items to the leading edge.
+                if (@available(macOS 11.0, *)) {
+                    if (tbs != 2) [window setToolbarStyle:NSWindowToolbarStyleUnified];
                 }
 
                 // Install the SwiftUI host (wrapping the content container + optional

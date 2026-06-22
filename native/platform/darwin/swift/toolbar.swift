@@ -44,17 +44,19 @@ struct ZappMenuItem: Decodable, Identifiable {
   let dynId: String
   let label: String?
   let icon: String?
-  enum CodingKeys: String, CodingKey { case dynId = "id", label, icon }
+  let checked: Bool?   // moving checkmark (e.g. the Mail filter pull-down)
+  enum CodingKeys: String, CodingKey { case dynId = "id", label, icon, checked }
 }
 
 struct ZappToolbarItem: Decodable, Identifiable {
   let id: String          // synthesized for spacer/separator (no app id)
   let type: String        // button | toggleSidebar | toggleInspector | trackingSeparator | space | flexibleSpace
-  let label: String?
-  let icon: String?
-  let enabled: Bool?
-  let indicator: Bool?
-  let menu: [ZappMenuItem]?
+  // var (not let): updateItem merges a partial patch into the existing item.
+  var label: String?
+  var icon: String?
+  var enabled: Bool?
+  var indicator: Bool?
+  var menu: [ZappMenuItem]?
 
   enum CodingKeys: String, CodingKey { case id, type, label, icon, enabled, indicator, menu }
   init(from dec: Decoder) throws {
@@ -90,10 +92,20 @@ final class ToolbarState: ObservableObject, ZappNativeModule {
         self.items = wire.items ?? []
       }
     case kTbUpdateItem:
+      // MERGE the patch into the existing item (the wire carries only the changed
+      // fields, e.g. `{id, menu}` — matching AppKit's darwin_toolbar_update_item).
+      // A whole-item replace dropped the unspecified fields (e.g. the icon → the
+      // button fell back to a circle glyph).
       if let data = value.data(using: .utf8),
          let patch = try? JSONDecoder().decode(ZappToolbarItem.self, from: data),
          let idx = items.firstIndex(where: { $0.id == patch.id }) {
-        items[idx] = patch   // whole-item replace (matches updateItem's merged-def wire)
+        var merged = items[idx]
+        if patch.label != nil { merged.label = patch.label }
+        if patch.icon != nil { merged.icon = patch.icon }
+        if patch.enabled != nil { merged.enabled = patch.enabled }
+        if patch.indicator != nil { merged.indicator = patch.indicator }
+        if patch.menu != nil { merged.menu = patch.menu }
+        items[idx] = merged
       }
     case kTbClear:
       items = []
@@ -173,7 +185,15 @@ struct ZappToolbarContent: ToolbarContent {
       Button { withAnimation { pane.inspectorPresented.toggle() } } label: { glyph(item, fallback: "sidebar.right") }
     default: // "button"
       if let menu = item.menu, !menu.isEmpty {
-        Menu { ForEach(menu) { m in Button(m.label ?? m.id) { state.emitMenuClick(m.id) } } }
+        Menu {
+          ForEach(menu) { m in
+            Button { state.emitMenuClick(m.id) } label: {
+              // Render the moving checkmark (AppKit shows it via NSMenuItem.state).
+              if m.checked == true { Label(m.label ?? m.id, systemImage: "checkmark") }
+              else { Text(m.label ?? m.id) }
+            }
+          }
+        }
           label: { label(item) }
           .disabled(item.enabled == false)
       } else {
