@@ -11,12 +11,6 @@
 
 extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
 extern void darwin_window_eval_js(int32_t window_id, const char* js);
-// Reach-through (Sub-cycle 2c): resolve the SwiftUI-backed NSSplitView/Controller
-// (defined in window.m) so the AppKit sidebar primitives can drive it.
-@class NSSplitViewController;
-extern NSSplitViewController* zapp_find_split_vc(NSViewController* vc);
-extern NSSplitView* zapp_find_split_view(NSView* v);
-extern void zapp_dump_view_tree(NSView* v, int depth);
 // SwiftUI pane drivers (defined in panes.swift) — only linked in when the
 // swiftc tier is compiled (native.swiftui != false + swiftc present). Behind
 // ZAPP_HAS_SWIFTUI so the opted-out/AppKit-only build doesn't reference an
@@ -24,6 +18,9 @@ extern void zapp_dump_view_tree(NSView* v, int depth);
 #ifdef ZAPP_HAS_SWIFTUI
 extern void zapp_swift_panes_set_sidebar_visible(void* state, bool visible);
 extern void zapp_swift_panes_toggle_sidebar(void* state);
+extern void zapp_swift_panes_set_sidebar_width(void* state, int32_t w);
+extern void zapp_swift_panes_set_sidebar_resizable(void* state, bool resizable);
+extern void zapp_swift_panes_set_sidebar_collapsible(void* state, bool collapsible);
 #endif
 
 // --- Registry API consumed by window.m (Task 5) ---
@@ -152,32 +149,6 @@ static void zapp_sidebar_sync_collapse(ZappSidebarController* c) {
 
 @end
 
-// Lazily bind the SwiftUI-backed split to the controller so the AppKit bodies
-// work on the SwiftUI path. A NavigationSplitView's NSSplitView lives in the
-// VIEW tree with its NSSplitViewController as the split view's delegate (proven
-// in the 2c risk gate — the child-VC walk does NOT find it). Resolve on first
-// control op because the split only exists after layout. items: [sidebar,
-// content, (inspector?)]. The AppKit bodies then drive c.splitVC.splitView,
-// which IS the sv we found here (svc is sv's delegate). Cached for the window's
-// lifetime — not re-resolved if SwiftUI ever tears down and rebuilds the split
-// (stable across nav + resize per the gate; under ARC a stale cache would no-op
-// safely rather than crash).
-static BOOL zapp_sidebar_bind_swiftui(ZappSidebarController* c) {
-    if (c.splitVC && c.sidebarItem) return YES;            // already bound
-    if (!c.swiftPaneState) return NO;
-    void* win_ptr = darwin_window_get_by_numeric_id(c.hostWindowId);
-    NSWindow* win = (__bridge NSWindow*)win_ptr;
-    NSSplitView* sv = zapp_find_split_view(win.contentView);
-    NSSplitViewController* svc = [sv.delegate isKindOfClass:[NSSplitViewController class]]
-        ? (NSSplitViewController*)sv.delegate : nil;
-    if (!svc || svc.splitViewItems.count == 0) return NO;  // not laid out yet / not found
-    c.splitVC = svc;
-    c.sidebarItem = svc.splitViewItems.firstObject;
-    if (c.cfgMinThickness <= 0) c.cfgMinThickness = c.sidebarItem.minimumThickness;
-    if (c.cfgMaxThickness <= 0) c.cfgMaxThickness = c.sidebarItem.maximumThickness;
-    return YES;
-}
-
 // --- Control ops (router entry points) ---
 
 void darwin_sidebar_toggle(int32_t window_id) {
@@ -233,10 +204,9 @@ void darwin_sidebar_set_width(int32_t window_id, int32_t width) {
     zapp_sidebar_on_main(^{
         ZappSidebarController* c = zapp_sidebar_for_slot(window_id);
         if (!c) return;
-        if (c.swiftPaneState && !zapp_sidebar_bind_swiftui(c)) {
-            if (getenv("ZAPP_LOG")) NSLog(@"[zapp] sidebar: SwiftUI split not resolved yet — set_width skipped");
-            return;
-        }
+#ifdef ZAPP_HAS_SWIFTUI
+        if (c.swiftPaneState) { zapp_swift_panes_set_sidebar_width(c.swiftPaneState, width); return; }
+#endif
         if (!c.sidebarItem || !c.splitVC) return;
         CGFloat w = (CGFloat)width;
         CGFloat minT = c.sidebarItem.minimumThickness;
@@ -254,10 +224,9 @@ void darwin_sidebar_set_collapsible(int32_t window_id, bool can_collapse) {
     zapp_sidebar_on_main(^{
         ZappSidebarController* c = zapp_sidebar_for_slot(window_id);
         if (!c) return;
-        if (c.swiftPaneState && !zapp_sidebar_bind_swiftui(c)) {
-            if (getenv("ZAPP_LOG")) NSLog(@"[zapp] sidebar: SwiftUI split not resolved yet — set_collapsible skipped");
-            return;
-        }
+#ifdef ZAPP_HAS_SWIFTUI
+        if (c.swiftPaneState) { zapp_swift_panes_set_sidebar_collapsible(c.swiftPaneState, can_collapse); return; }
+#endif
         if (!c.sidebarItem) return;
         c.sidebarItem.canCollapse = can_collapse ? YES : NO;
     });
@@ -270,17 +239,16 @@ void darwin_sidebar_set_resizable(int32_t window_id, bool resizable) {
     zapp_sidebar_on_main(^{
         ZappSidebarController* c = zapp_sidebar_for_slot(window_id);
         if (!c) return;
-        if (c.swiftPaneState && !zapp_sidebar_bind_swiftui(c)) {
-            if (getenv("ZAPP_LOG")) NSLog(@"[zapp] sidebar: SwiftUI split not resolved yet — set_resizable skipped");
-            return;
-        }
+#ifdef ZAPP_HAS_SWIFTUI
+        if (c.swiftPaneState) { zapp_swift_panes_set_sidebar_resizable(c.swiftPaneState, resizable); return; }
+#endif
         if (!c.sidebarItem) return;
         if (resizable) {
             c.sidebarItem.minimumThickness = c.cfgMinThickness;
             c.sidebarItem.maximumThickness = c.cfgMaxThickness;
         } else {
             CGFloat w = (CGFloat)zapp_sidebar_current_width(c);
-            if (w <= 0) w = c.sidebarItem.minimumThickness; // pre-layout fallback
+            if (w <= 0) w = c.sidebarItem.minimumThickness;
             c.sidebarItem.minimumThickness = w;
             c.sidebarItem.maximumThickness = w;
         }
@@ -318,6 +286,19 @@ void zapp_sidebar_note_swiftui_visibility(void* window_ptr, bool collapsed) {
     if (collapsed == c.lastCollapsed) return;  // dedup (absorbs redundant sets)
     c.lastCollapsed = collapsed;
     zapp_sidebar_emit(c, collapsed ? "sidebar-collapsed" : "sidebar-expanded", nil);
+}
+
+// Reverse path: SwiftUI sidebar rendered width changed (WidthReader). Dedup against
+// lastWidth, then emit the same "sidebar-resized" event the AppKit splitViewDidResize
+// path emits. Called by window.m's reverse dispatcher (always on the main thread).
+void zapp_sidebar_note_swiftui_width(void* window_ptr, int width) {
+    if (!window_ptr || !zapp_sidebars || width <= 0) return;
+    ZappSidebarController* c = zapp_sidebars[[NSValue valueWithPointer:window_ptr]];
+    if (!c) return;
+    if (width == c.lastWidth) return;  // dedup
+    c.lastWidth = width;
+    NSString* json = [NSString stringWithFormat:@"{\"width\":%d}", width];
+    zapp_sidebar_emit(c, "sidebar-resized", json);
 }
 
 void zapp_sidebar_register(void* window_ptr, NSSplitViewController* splitVC,
