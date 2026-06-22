@@ -16,6 +16,9 @@ proc darwin_window_numeric_id_for_string(wid: cstring): int32 {.exportc, cdecl.}
     (try: parseInt(s[4..^1]).int32 except ValueError: -1'i32)
   else: -1'i32
 
+proc darwin_webview_eval_all(js: cstring) {.exportc, cdecl.} = discard
+proc zjs_broadcast_eval_js(js: cstring) {.exportc, cdecl.} = discard
+
 var gDevTools: cint = 0
 proc zapp_build_dev_tools_default(): cint {.exportc, cdecl.} = gDevTools
 
@@ -26,26 +29,26 @@ block:
 
 block:
   let o = WindowOptions(title: "sb")
-  o.sidebarUrl = "#sidebar-pane"
+  o.sidebar.url = "#sidebar-pane"
   let w = createWindow(o)
-  doAssert o.sidebarNumericId == w.id + 1, "sidebar slot must follow the window id"
+  doAssert o.sidebar.numericId == w.id + 1, "sidebar slot must follow the window id"
   let after = createWindow(WindowOptions(title: "after"))
   doAssert after.id == w.id + 2, "sidebar must consume a second id from the same space"
 
 block:
   let o = WindowOptions(title: "both")
-  o.sidebarUrl = "#sidebar-pane"
-  o.inspectorUrl = "#inspector-pane"
+  o.sidebar.url = "#sidebar-pane"
+  o.inspector.url = "#inspector-pane"
   let w = createWindow(o)
-  doAssert o.sidebarNumericId == w.id + 1
-  doAssert o.inspectorNumericId == w.id + 2
+  doAssert o.sidebar.numericId == w.id + 1
+  doAssert o.inspector.numericId == w.id + 2
   let after = createWindow(WindowOptions(title: "after2"))
   doAssert after.id == w.id + 3, "sidebar+inspector consume two extra ids"
 
 block:
   let o = WindowOptions(title: "plain")
   discard createWindow(o)
-  doAssert o.sidebarNumericId == -1 and o.inspectorNumericId == -1
+  doAssert o.sidebar.numericId == -1 and o.inspector.numericId == -1
 
 block:
   let s1 = allocSlot()
@@ -70,8 +73,8 @@ block:
   doAssert o.vibrancy == "sidebar"
   doAssert o.titleBarStyle == TitleBarStyle.HiddenInset
   doAssert o.closable == false and o.trafficLights.close == ButtonState.Disabled
-  doAssert o.sidebarUrl == "#sb" and o.sidebarWidth == 240'i32
-  doAssert o.inspectorUrl == "#insp" and o.inspectorCollapsed == true
+  doAssert o.sidebar.url == "#sb" and o.sidebar.width == 240'i32
+  doAssert o.inspector.url == "#insp" and o.inspector.collapsed == true
   doAssert o.asSheetOfId == 7'i32, "asSheetOf string win-7 must parse to 7"
   doAssert o.sheetPresentation == 3'i32
   doAssert o.sheetDetents == 7'i32, "small|medium|large => bits 4|1|2 = 7"
@@ -91,13 +94,13 @@ block:
   # sidebar.presentation parses into sidebarPresentation.
   let o = WindowOptions(title: "pres")
   windowOptsApplyJson(o, parseJson("""{"sidebar":{"url":"#sb","width":240,"presentation":"overlay"}}"""))
-  doAssert o.sidebarPresentation == "overlay", "sidebar.presentation must parse to sidebarPresentation"
+  doAssert o.sidebar.presentation == "overlay", "sidebar.presentation must parse to sidebarPresentation"
 
 block:
   # sidebar.presentation absent → sidebarPresentation defaults to "".
   let o = WindowOptions(title: "pres-default")
   windowOptsApplyJson(o, parseJson("""{"sidebar":{"url":"#sb"}}"""))
-  doAssert o.sidebarPresentation == "", "absent sidebar.presentation must default to empty string"
+  doAssert o.sidebar.presentation == "", "absent sidebar.presentation must default to empty string"
 
 block:
   # Partial object-literal construction must fill the field defaults — the
@@ -107,9 +110,9 @@ block:
   let o = WindowOptions(title: "x")
   doAssert o.width == 1200'i32 and o.height == 800'i32
   doAssert o.visible == true and o.acceptFirstMouse == true and o.autoCenter == false
-  doAssert o.sidebarWidth == 260'i32 and o.sidebarMaxWidth == 400'i32
-  doAssert o.inspectorWidth == 280'i32 and o.inspectorMaxWidth == 400'i32
-  doAssert o.sidebarCollapsible == true and o.inspectorCollapsible == true
+  doAssert o.sidebar.width == 260'i32 and o.sidebar.maxWidth == 400'i32
+  doAssert o.inspector.width == 280'i32 and o.inspector.maxWidth == 400'i32
+  doAssert o.sidebar.collapsible == true and o.inspector.collapsible == true
   doAssert o.numericIdPrealloc == -1'i32 and o.asSheetOfId == -1'i32
   doAssert o.inspectable == Inspectable.Inherit, "window inspectable defaults to Inherit"
   doAssert o.titleBarStyle == TitleBarStyle.Unset, "Unset (ord 3) must be the default, not Default"
@@ -133,5 +136,34 @@ block:
   doAssert resolveInspectable(Inspectable.Inherit)
   gDevTools = 0
   doAssert not resolveInspectable(Inspectable.Inherit)
+
+block:
+  # serializeToolbar emits the native wire schema; parseToolbarJson is its inverse.
+  let t = ToolbarOptions(style: "unified", items: @[
+    ToolbarItemOpt(`type`: "toggleSidebar"),
+    ToolbarItemOpt(`type`: "trackingSeparator", pane: "sidebar"),
+    ToolbarItemOpt(`type`: "button", id: "compose", label: "Compose", icon: "sf:square.and.pencil"),
+    ToolbarItemOpt(`type`: "flexibleSpace"),
+    ToolbarItemOpt(`type`: "button", id: "filter", icon: "sf:line.3.horizontal.decrease",
+                   menu: @[
+                     MenuItemOpt(id: "all", label: "All", checked: true),
+                     MenuItemOpt(id: "unread", label: "Unread")]),
+  ])
+  let s = serializeToolbar(t)
+  doAssert "\"style\":\"unified\"" in s, "style must serialize"
+  doAssert "\"type\":\"toggleSidebar\"" in s
+  doAssert "\"pane\":\"sidebar\"" in s, "trackingSeparator must carry pane"
+  doAssert "\"id\":\"compose\"" in s
+  doAssert "\"checked\":true" in s, "menu checked must serialize"
+  doAssert "\"indicator\":true" in s, "menu items emit the chevron indicator"
+  doAssert parseToolbarJson(s) == t, "parse(serialize(t)) must round-trip"
+
+block:
+  # windowOptsApplyJson parses an incoming toolbarJson STRING into o.toolbar.
+  let o = WindowOptions(title: "tb")
+  windowOptsApplyJson(o, parseJson(
+    """{"toolbarJson":"{\"style\":\"unified\",\"items\":[{\"type\":\"button\",\"id\":\"go\",\"label\":\"Go\",\"icon\":\"\"}]}"}"""))
+  doAssert o.toolbar.items.len == 1, "toolbarJson string must parse into o.toolbar"
+  doAssert o.toolbar.items[0].id == "go" and o.toolbar.items[0].label == "Go"
 
 echo "windowmanager ok"
