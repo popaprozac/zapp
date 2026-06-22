@@ -63,9 +63,10 @@ struct PaneLayout: View {
   @ViewBuilder private var rootView: some View {
     if let sidebar {
       NavigationSplitView(columnVisibility: sidebarVisibilityBinding) {
-        PaneHost(view: sidebar).ignoresSafeArea()
-          // Bound the sidebar drag so it can't run away past the window
-          // (runaway-resize observed at the Task-1 gate). Full width control is 2c.
+        // 2c TILING FIX: the sidebar column must NOT .ignoresSafeArea() — that
+        // modifier is what made NavigationSplitView render the sidebar as a floating
+        // overlay (vs a tiled column) in our NSHostingController-hosted NSWindow.
+        PaneHost(view: sidebar)
           .navigationSplitViewColumnWidth(min: 180, ideal: 260, max: 480)
       } detail: {
         detail
@@ -83,10 +84,15 @@ struct PaneLayout: View {
   }
 
   @ViewBuilder private var detail: some View {
+    // 2c TILING FIX: NO pane may .ignoresSafeArea() — ANY pane that does flips the
+    // whole NavigationSplitView into the floating-overlay presentation (proven 2c).
+    // So the detail respects the safe area: content sits below the unified toolbar and
+    // the sidebar column is full-height — the native Mail/Messages layout. Content
+    // cannot bleed under the titlebar in tiled mode (that bleed IS the overlay trigger);
+    // for a full-bleed look use presentation:"overlay" or the AppKit path.
     PaneHost(view: content)
-      .ignoresSafeArea()
       .inspector(isPresented: inspectorPresentedBinding) {
-        if let inspector { PaneHost(view: inspector).ignoresSafeArea() }
+        if let inspector { PaneHost(view: inspector) }
       }
       // Toolbar on the DETAIL (matching the proven spike): it must live inside
       // the NavigationSplitView's content context, NOT on the body (a body-level
