@@ -103,7 +103,7 @@ the representable's coordinator. That flip is its own cycle (see roadmap).
 | SwiftUI accessories **Sub-cycle 1** — macOS pane *render* | accessory'd macOS windows (macOS 14+, not opted out) build sidebar/content/inspector via a SwiftUI `NavigationSplitView`/`.inspector` pane layout (`native/platform/darwin/swift/panes.swift`) hosting the real webviews; AppKit `NSSplitViewController` fallback. Selection automatic; no new knob. | ✅ Done (render proven) |
 | SwiftUI accessories **Sub-cycle 2a** — runtime pane *visibility* control | the app's sidebar/inspector toggle items + runtime visibility APIs drive the SwiftUI panes (the inspector renders + toggles), animated via `withAnimation`; the same reverse `window:sidebar-collapsed/expanded` + `window:inspector-collapsed/expanded` events the AppKit path emits | ✅ Done |
 | SwiftUI accessories **Sub-cycle 2b** — per-world toolbar | the toolbar renders in whichever world owns the content: SwiftUI `.toolbar` on the SwiftUI pane path (`toolbar.swift` `ZappToolbarContent`), `NSToolbar` on AppKit — behind one app-facing toolbar spec. Dynamic (`setItems`/`updateItem`/`remove`), no nav collapse, toggles drive `PaneState`. + an AppKit↔SwiftUI parity pass (launch-width, `titleBarStyle`, `toolbarStyle`, non-`sf:` icons, menu checkmarks). | ✅ Done (macOS) — deviations below |
-| SwiftUI accessories **Sub-cycle 2c** — presentation + resize | cross-platform sidebar **presentation** styles (tile/overlay) · width/resize control · `setCollapsible`/`setResizable` parity on the SwiftUI path · per-platform default docs | ⏭ Next |
+| SwiftUI accessories **Sub-cycle 2c** — presentation + resize | sidebar/inspector **tile** parity (drop `.ignoresSafeArea`), style-conditional titlebar bleed, create-time pane geometry, and **declarative** runtime width/resize/collapsible parity on the SwiftUI path (#660 — `@Published` `PaneState` → SwiftUI column modifiers) | ✅ Done (macOS) — see *Pane control* below |
 | SwiftUI accessories **Sub-cycle 3** — iOS | the same pane layout via `UIHostingController` — the adaptive payoff (iPhone sheet / iPad column); first checkpoint: `.inspector` sheet via `UIHostingController` | 🔜 |
 | DOM-overlay native view | native view *inline anywhere* in web content (reuses `panel.m` geometry tracking) — "native, no ceremony" | 🔜 Spike |
 | iOS native surface | `UIHostingController` + `swiftc` cross-compile so the native-surface pane works on iOS | 🔜 |
@@ -126,11 +126,24 @@ A window can't half-share its title-bar toolbar between SwiftUI and a manual `NS
 
 The unifying principle (the **split-world anchor**): one app-facing spec, each platform-renderer uses its *native* mechanism; aim for consistent OUTCOMES, not identical internals — and document where the seam forces a divergence.
 
+### Pane control — declarative (Sub-cycle 2c / #660, shipped)
+
+Runtime sidebar/inspector **width**, **resize-lock**, and **collapsible** are now **declarative and durable** on the SwiftUI path. The first cut reached *through* the `NSHostingController` to the SwiftUI-backed `NSSplitView` and drove `setPosition` / thickness-lock / `canCollapse` imperatively — but SwiftUI owns the `NavigationSplitView`/`.inspector` column layout and **re-asserts it on every relayout** (collapse→expand, a setWidth-triggered relayout, window resize), wiping the imperative state. Same "SwiftUI re-asserts" wall as the 2b toolbar clobber.
+
+**The fix:** one source of truth — `@Published` fields on `PaneState` (`native/platform/darwin/swift/panes.swift`) drive SwiftUI's *own* modifiers, so relayouts re-apply our current values (idempotent):
+- **Width/resize:** `.navigationSplitViewColumnWidth(min:ideal:max:)` (sidebar) / `.inspectorColumnWidth(min:ideal:max:)` (inspector), always in range form; "locked" collapses the range to `min==max==width`. A transient `pinned` flag does a one-render *pin-and-release* (`DispatchQueue.main.async`) so `setWidth` forces a snap while staying draggable.
+- **Collapsible:** the `columnVisibility` / `.inspector(isPresented:)` binding-clamps read the live `@Published` flag (refuse user-driven collapse when non-collapsible).
+- **Reverse parity:** a `GeometryReader` (`WidthReader`) observes the rendered width and emits `window:sidebar-resized` / `window:inspector-resized` — the same events the AppKit `splitViewDidResize` path emits, on both user drag and programmatic change.
+
+The runtime `darwin_sidebar_*` / `darwin_inspector_*` ops route their SwiftUI branch to `@Published` setters; the AppKit branch (`swiftui:false`) keeps the imperative reach-through, which is durable there (no SwiftUI relayout to fight). The runtime TS API (`SidebarHandle`/`InspectorHandle`, `SidebarOptions`/`InspectorOptions`) is unchanged — it's the parity point.
+
+**Pane collapsible semantics.** `collapsible: false` gates **user/system** collapse affordances only — the divider snap and SwiftUI's native sidebar toggle. Programmatic `collapse()`/`expand()`/`toggle()` and an app's own toolbar toggle button still work, on **both** the SwiftUI and AppKit paths (AppKit's `[item animator] setCollapsed:` ignores `canCollapse`). If you need a toggle button to also honor `collapsible: false`, gate it in app code.
+
 ### Sub-cycle 1 known limitations (→ Sub-cycle 2)
 
 - **Toolbar glitch:** in the SwiftUI pane path, SwiftUI's auto toggles + ownership of `window.toolbar` clobbered the app's `NSToolbar`. **Resolved in 2b** by the per-world toolbar above (SwiftUI `.toolbar` owns the SwiftUI path).
 - **Sidebar presents as overlay:** `.navigationSplitViewStyle(.balanced)` did not force tiling — needs `columnVisibility`/explicit column width (folds into the presentation-styles work; the overlay-vs-tile AppKit↔SwiftUI gap is #646).
-- **Runtime pane control not wired** — *resolved in Sub-cycle 2a (visibility only):* the app's sidebar/inspector toggle items + runtime visibility APIs now drive the SwiftUI panes (the inspector renders + toggles, animated via `withAnimation`) and the reverse collapse/expand events fire on the SwiftUI path. Still deferred to **2c**: width/resize control + `setCollapsible`/`setResizable` parity + tiling/presentation styles — the SwiftUI path currently no-ops those with a `ZAPP_LOG` line.
+- **Runtime pane control not wired** — *resolved:* visibility in Sub-cycle 2a; width/resize/`setCollapsible`/`setResizable` parity in Sub-cycle 2c via the declarative `@Published` `PaneState` rewrite (#660, see *Pane control* above) — the old `ZAPP_LOG` no-op reach-through is gone. Tiling shipped in 2c (drop `.ignoresSafeArea`).
 - **Per-platform sidebar defaults to document:** macOS tiles; iOS sidebar overlays — to be exposed as cross-platform `presentation` styles.
 
 ## Anchors
