@@ -183,6 +183,7 @@ let sidebarPresStr = (block:
   a)
 
 # Generic string→enum: returns the member whose $ equals `s`, else `dflt`.
+# (The "" Default/sentinel member is itself matchable, so `s == ""` returns it.)
 proc enumFromStr[T: enum](s: string, dflt: T): T =
   for e in T:
     if $e == s: return e
