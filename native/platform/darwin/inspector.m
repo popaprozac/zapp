@@ -8,6 +8,7 @@
 
 extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
 extern NSSplitView* zapp_find_split_view(NSView* v);
+extern WKWebView* zapp_webview_for_slot(int32_t slot);
 extern void darwin_window_eval_js(int32_t window_id, const char* js);
 extern void zapp_pane_emit(int32_t host_id, int32_t accessory_slot,
                            const char* eventName, NSString* dataJson);
@@ -156,21 +157,42 @@ void darwin_inspector_expand(int32_t window_id) {
     });
 }
 
-// Inspector twin of zapp_sidebar_bind_swiftui — same view-tree reach-through
-// (see that helper for the caching/lifetime + splitView-identity notes). The
-// inspector is the trailing split item; its divider is count-2.
+// Bind the SwiftUI inspector's backing split. CRITICAL: SwiftUI's `.inspector()`
+// is a SEPARATE NSSplitView from the NavigationSplitView's [sidebar, content] —
+// so zapp_find_split_view(contentView) (first split = sidebar/content) is WRONG:
+// it makes inspector ops drive the SIDEBAR divider. Instead resolve the inspector
+// WKWebView from its slot and walk UP to its OWN enclosing NSSplitView, then bind
+// the item that contains it. Structure-agnostic: works wherever SwiftUI puts the
+// inspector split in the view tree.
 static BOOL zapp_inspector_bind_swiftui(ZappInspectorController* c) {
-    if (c.splitVC && c.inspectorItem) return YES;
+    if (c.splitVC && c.inspectorItem) return YES;            // already bound
     if (!c.swiftPaneState) return NO;
-    void* win_ptr = darwin_window_get_by_numeric_id(c.hostWindowId);
-    NSWindow* win = (__bridge NSWindow*)win_ptr;
-    NSSplitView* sv = zapp_find_split_view(win.contentView);
-    NSSplitViewController* svc = [sv.delegate isKindOfClass:[NSSplitViewController class]]
-        ? (NSSplitViewController*)sv.delegate : nil;
-    if (!svc || svc.splitViewItems.count < 2) return NO;
+    WKWebView* iv = zapp_webview_for_slot(c.inspectorSlotId);
+    if (!iv) return NO;                                       // inspector webview not up yet
+    // Walk up to the first enclosing NSSplitView; `arranged` is the split's direct
+    // child that contains the inspector webview (== the inspector item's view).
+    NSView* arranged = iv;
+    NSSplitView* isv = nil;
+    while (arranged.superview) {
+        if ([arranged.superview isKindOfClass:[NSSplitView class]]) { isv = (NSSplitView*)arranged.superview; break; }
+        arranged = arranged.superview;
+    }
+    NSSplitViewController* svc = [isv.delegate isKindOfClass:[NSSplitViewController class]]
+        ? (NSSplitViewController*)isv.delegate : nil;
+    if (getenv("ZAPP_LOG"))
+        NSLog(@"[zapp] inspector bind: webview=%@ enclosingSplit=%@ controller=%@ items=%lu",
+              iv, isv, svc, (unsigned long)svc.splitViewItems.count);
+    if (!svc) return NO;   // inspector split has no NSSplitViewController (handle if this ever logs)
+    // Find the split item whose view contains the inspector webview + its divider.
+    NSInteger itemIdx = -1;
+    for (NSInteger i = 0; i < (NSInteger)svc.splitViewItems.count; i++) {
+        NSView* itemView = svc.splitViewItems[i].viewController.view;
+        if (itemView == arranged || [iv isDescendantOf:itemView]) { itemIdx = i; break; }
+    }
+    if (itemIdx < 0) return NO;
     c.splitVC = svc;
-    c.inspectorItem = svc.splitViewItems.lastObject;
-    c.inspectorDividerIndex = svc.splitViewItems.count - 2;  // divider before the last item
+    c.inspectorItem = svc.splitViewItems[itemIdx];
+    c.inspectorDividerIndex = (itemIdx > 0) ? itemIdx - 1 : 0;   // divider on the inspector's leading edge
     if (c.cfgMinThickness <= 0) c.cfgMinThickness = c.inspectorItem.minimumThickness;
     if (c.cfgMaxThickness <= 0) c.cfgMaxThickness = c.inspectorItem.maximumThickness;
     return YES;
@@ -186,14 +208,24 @@ void darwin_inspector_set_width(int32_t window_id, int32_t width) {
         }
         if (!c.inspectorItem || !c.splitVC) return;
         CGFloat w = (CGFloat)width;
-        CGFloat minT = c.inspectorItem.minimumThickness;
-        CGFloat maxT = c.inspectorItem.maximumThickness;
-        if (minT > 0 && w < minT) w = minT;
-        if (maxT > 0 && w > maxT) w = maxT;
-        // Trailing pane: the divider's x is measured from the left, so set it
-        // to (total width - inspector width).
-        CGFloat total = c.splitVC.splitView.bounds.size.width;
-        [c.splitVC.splitView setPosition:(total - w) ofDividerAtIndex:c.inspectorDividerIndex];
+        if (w < 50) w = 50;   // sanity floor
+        if (c.swiftPaneState) {
+            // SwiftUI's `.inspector()` PINS the column (minThickness==maxThickness),
+            // so setPosition is a no-op — resize by re-pinning to the target width.
+            // (The sidebar is a NavigationSplitView column and resizes via setPosition;
+            // the inspector is a separate locked SplitViewController column.)
+            c.inspectorItem.minimumThickness = w;
+            c.inspectorItem.maximumThickness = w;
+        } else {
+            CGFloat minT = c.inspectorItem.minimumThickness;
+            CGFloat maxT = c.inspectorItem.maximumThickness;
+            if (minT > 0 && w < minT) w = minT;
+            if (maxT > 0 && w > maxT) w = maxT;
+            // Trailing pane: the divider's x is measured from the left, so set it
+            // to (total width - inspector width).
+            CGFloat total = c.splitVC.splitView.bounds.size.width;
+            [c.splitVC.splitView setPosition:(total - w) ofDividerAtIndex:c.inspectorDividerIndex];
+        }
     });
 }
 
