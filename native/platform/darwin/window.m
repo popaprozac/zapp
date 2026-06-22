@@ -1027,6 +1027,15 @@ void* darwin_window_create(WindowOptions* opts) {
                 // without this). `.fullSizeContentView` is the documented mitigation and
                 // also gives the modern full-height sidebar. (See native-ui-strategy.md.)
                 [window setStyleMask:([window styleMask] | NSWindowStyleMaskFullSizeContentView)];
+                // Parity with the AppKit branch (tbs==3 below): a sidebar window with an
+                // unspecified title-bar style (Unset) gets the hidden-title unified chrome.
+                // Without this the SwiftUI path shows the native window title (duplicating
+                // the app's own heading). tbs 1/2 (explicit hidden/hiddenInset) were already
+                // hidden up top for all windows; this covers the Unset sidebar default.
+                if (tbs == 3) {
+                    [window setTitleVisibility:NSWindowTitleHidden];
+                    [window setTitlebarAppearsTransparent:YES];
+                }
 
                 // Install the SwiftUI host (wrapping the content container + optional
                 // sidebar + optional inspector) as the window's contentView FIRST, so
@@ -1237,6 +1246,13 @@ void* darwin_window_create(WindowOptions* opts) {
             }
 
             window.contentViewController = splitVC;
+            // Assigning a split-view controller with sidebar/inspector minimums makes
+            // AppKit grow the window to fit their SUM — so the panes would be added
+            // ON TOP of the configured width, launching wider than the SwiftUI path
+            // (and wider than a no-panes window). Reset to the configured content size
+            // so the panes lay out WITHIN it (content column shrinks), matching the
+            // SwiftUI path (which does the same after its NSHostingController).
+            [window setContentSize:NSMakeSize((CGFloat)wopts_width(opts), (CGFloat)wopts_height(opts))];
 
             // Initial geometry (controller is now the root). Sidebar divider is
             // index 0; the inspector divider is the one before the trailing item,
