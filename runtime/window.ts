@@ -17,6 +17,7 @@
  */
 
 import { getBridge } from "./bridge";
+import { Platform } from "./platform";
 import { WindowEvent, eventName, type WindowSizePayload, type WindowPayload, type ModalDismissedPayload, type SidebarResizedPayload } from "./events";
 import type { Display } from "./screen";
 import type { MenuItemDef } from "./menu";
@@ -1101,6 +1102,20 @@ export const Window = {
 
   /** Create a new window. Returns a handle for the new window. */
   async create(opts?: Partial<WindowOptions>): Promise<WindowHandle> {
+    // iOS is single-window. A secondary top-level window would materialize a
+    // stacked UIWindow, which corrupts UIKit's presentation state (presenting a
+    // sheet on top crashes — "unbalanced begin/end appearance transitions"). The
+    // supported secondary-surface patterns on iOS are sheets (`asSheetOf`) and
+    // sidebar/inspector panes. So a non-sheet create on iOS is a no-op that
+    // returns the current (main) window. iPad multi-window (UIScene) is planned.
+    if (Platform.isIOS && opts?.asSheetOf === undefined) {
+      console.warn(
+        "[zapp] iOS is single-window — Window.create() without `asSheetOf` is a no-op " +
+        "(returns the current window). Use a sheet (`asSheetOf`) or a sidebar/inspector " +
+        "pane for secondary surfaces; iPad multi-window is planned.",
+      );
+      return Window.current();
+    }
     // Normalize asSheetOf to its string window ID. The native side
     // resolves the JS-visible "win-0xPTR" string back to its internal
     // numeric ID via darwin_window_numeric_id_for_string.
