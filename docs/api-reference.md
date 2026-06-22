@@ -779,6 +779,13 @@ takes precedence if both are set; for the native vibrant look, prefer
 `Material.WindowBackground`. The `vibrancy` window option accepts the same
 `Material` type; plain string literals still type-check for both.
 
+> **Nim authoring:** chrome style fields are typed enums — `material: Material`
+> (`Material.Sidebar`, `Material.HeaderView`, …), `presentation:
+> SidebarPresentation` (`.Tile`/`.Overlay`), and toolbar `style: ToolbarStyle`
+> (`.Unified`/`.UnifiedCompact`/`.Expanded`); `vibrancy: Material`. Leave a field
+> at its `Default` (or `ToolbarStyle.Unified`) to get the native default. (The
+> TS API uses the equivalent `Material` const + string-literal unions.)
+
 **`SidebarHandle`** — available as `win.sidebar` on the creator's
 `Window.create` handle, and via `Window.current().sidebar` from **either
 pane** of the window (main pane and sidebar pane alike). The rule is simply:

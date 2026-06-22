@@ -30,7 +30,7 @@ proc runApp(): int =
     title: "Kitchen Sink",
     visible: false,            # deferred show — revealed by onReady
     width: 1100, height: 700,
-    sidebar: SidebarOptions(url: "#sidebar-pane", width: 240, presentation: "overlay"),
+    sidebar: SidebarOptions(url: "#sidebar-pane", width: 240, presentation: SidebarPresentation.Overlay),
     inspector: InspectorOptions(url: "#inspector-pane", width: 300, collapsed: true),
     inspectable: Inspectable.Auto,
   ))
