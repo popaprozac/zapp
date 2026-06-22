@@ -152,6 +152,32 @@ static void zapp_sidebar_sync_collapse(ZappSidebarController* c) {
 
 @end
 
+// Lazily bind the SwiftUI-backed split to the controller so the AppKit bodies
+// work on the SwiftUI path. A NavigationSplitView's NSSplitView lives in the
+// VIEW tree with its NSSplitViewController as the split view's delegate (proven
+// in the 2c risk gate — the child-VC walk does NOT find it). Resolve on first
+// control op because the split only exists after layout. items: [sidebar,
+// content, (inspector?)]. The AppKit bodies then drive c.splitVC.splitView,
+// which IS the sv we found here (svc is sv's delegate). Cached for the window's
+// lifetime — not re-resolved if SwiftUI ever tears down and rebuilds the split
+// (stable across nav + resize per the gate; under ARC a stale cache would no-op
+// safely rather than crash).
+static BOOL zapp_sidebar_bind_swiftui(ZappSidebarController* c) {
+    if (c.splitVC && c.sidebarItem) return YES;            // already bound
+    if (!c.swiftPaneState) return NO;
+    void* win_ptr = darwin_window_get_by_numeric_id(c.hostWindowId);
+    NSWindow* win = (__bridge NSWindow*)win_ptr;
+    NSSplitView* sv = zapp_find_split_view(win.contentView);
+    NSSplitViewController* svc = [sv.delegate isKindOfClass:[NSSplitViewController class]]
+        ? (NSSplitViewController*)sv.delegate : nil;
+    if (!svc || svc.splitViewItems.count == 0) return NO;  // not laid out yet / not found
+    c.splitVC = svc;
+    c.sidebarItem = svc.splitViewItems.firstObject;
+    if (c.cfgMinThickness <= 0) c.cfgMinThickness = c.sidebarItem.minimumThickness;
+    if (c.cfgMaxThickness <= 0) c.cfgMaxThickness = c.sidebarItem.maximumThickness;
+    return YES;
+}
+
 // --- Control ops (router entry points) ---
 
 void darwin_sidebar_toggle(int32_t window_id) {
@@ -207,29 +233,8 @@ void darwin_sidebar_set_width(int32_t window_id, int32_t width) {
     zapp_sidebar_on_main(^{
         ZappSidebarController* c = zapp_sidebar_for_slot(window_id);
         if (!c) return;
-        if (c.swiftPaneState) {
-            // 2c RISK GATE probe (v2): SwiftUI's NavigationSplitView keeps its NSSplitView
-            // in the VIEW tree (delegate = NSSplitViewController), NOT as a child VC — so
-            // walk the view hierarchy (how swiftui-introspect reaches it). If found, drive
-            // it with AppKit primitives; if not, dump the view tree to learn the structure.
-            void* win_ptr = darwin_window_get_by_numeric_id(window_id);
-            NSWindow* win = (__bridge NSWindow*)win_ptr;
-            NSSplitView* sv = zapp_find_split_view(win.contentView);
-            NSSplitViewController* svc = [sv.delegate isKindOfClass:[NSSplitViewController class]]
-                ? (NSSplitViewController*)sv.delegate : nil;
-            NSLog(@"[zapp] 2c probe: splitView=%@ controller=%@ items=%lu width=%d", sv, svc,
-                  (unsigned long)svc.splitViewItems.count, width);
-            if (sv) {
-                if (svc.splitViewItems.count > 0) {
-                    NSSplitViewItem* side = svc.splitViewItems.firstObject;
-                    side.canCollapse = NO;
-                    if (@available(macOS 11.0, *)) side.canCollapseFromWindowResize = NO;
-                }
-                [sv setPosition:(CGFloat)width ofDividerAtIndex:0];
-            } else {
-                NSLog(@"[zapp] 2c probe: NO NSSplitView found — dumping view tree:");
-                zapp_dump_view_tree(win.contentView, 0);
-            }
+        if (c.swiftPaneState && !zapp_sidebar_bind_swiftui(c)) {
+            if (getenv("ZAPP_LOG")) NSLog(@"[zapp] sidebar: SwiftUI split not resolved yet — set_width skipped");
             return;
         }
         if (!c.sidebarItem || !c.splitVC) return;
@@ -249,8 +254,8 @@ void darwin_sidebar_set_collapsible(int32_t window_id, bool can_collapse) {
     zapp_sidebar_on_main(^{
         ZappSidebarController* c = zapp_sidebar_for_slot(window_id);
         if (!c) return;
-        if (c.swiftPaneState) {
-            if (getenv("ZAPP_LOG")) NSLog(@"[zapp] sidebar width/lock ignored on SwiftUI path (Sub-cycle 2c)");
+        if (c.swiftPaneState && !zapp_sidebar_bind_swiftui(c)) {
+            if (getenv("ZAPP_LOG")) NSLog(@"[zapp] sidebar: SwiftUI split not resolved yet — set_collapsible skipped");
             return;
         }
         if (!c.sidebarItem) return;
@@ -265,8 +270,8 @@ void darwin_sidebar_set_resizable(int32_t window_id, bool resizable) {
     zapp_sidebar_on_main(^{
         ZappSidebarController* c = zapp_sidebar_for_slot(window_id);
         if (!c) return;
-        if (c.swiftPaneState) {
-            if (getenv("ZAPP_LOG")) NSLog(@"[zapp] sidebar width/lock ignored on SwiftUI path (Sub-cycle 2c)");
+        if (c.swiftPaneState && !zapp_sidebar_bind_swiftui(c)) {
+            if (getenv("ZAPP_LOG")) NSLog(@"[zapp] sidebar: SwiftUI split not resolved yet — set_resizable skipped");
             return;
         }
         if (!c.sidebarItem) return;

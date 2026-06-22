@@ -7,6 +7,7 @@
 #import <math.h>
 
 extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
+extern NSSplitView* zapp_find_split_view(NSView* v);
 extern void darwin_window_eval_js(int32_t window_id, const char* js);
 extern void zapp_pane_emit(int32_t host_id, int32_t accessory_slot,
                            const char* eventName, NSString* dataJson);
@@ -155,12 +156,32 @@ void darwin_inspector_expand(int32_t window_id) {
     });
 }
 
+// Inspector twin of zapp_sidebar_bind_swiftui — same view-tree reach-through
+// (see that helper for the caching/lifetime + splitView-identity notes). The
+// inspector is the trailing split item; its divider is count-2.
+static BOOL zapp_inspector_bind_swiftui(ZappInspectorController* c) {
+    if (c.splitVC && c.inspectorItem) return YES;
+    if (!c.swiftPaneState) return NO;
+    void* win_ptr = darwin_window_get_by_numeric_id(c.hostWindowId);
+    NSWindow* win = (__bridge NSWindow*)win_ptr;
+    NSSplitView* sv = zapp_find_split_view(win.contentView);
+    NSSplitViewController* svc = [sv.delegate isKindOfClass:[NSSplitViewController class]]
+        ? (NSSplitViewController*)sv.delegate : nil;
+    if (!svc || svc.splitViewItems.count < 2) return NO;
+    c.splitVC = svc;
+    c.inspectorItem = svc.splitViewItems.lastObject;
+    c.inspectorDividerIndex = svc.splitViewItems.count - 2;  // divider before the last item
+    if (c.cfgMinThickness <= 0) c.cfgMinThickness = c.inspectorItem.minimumThickness;
+    if (c.cfgMaxThickness <= 0) c.cfgMaxThickness = c.inspectorItem.maximumThickness;
+    return YES;
+}
+
 void darwin_inspector_set_width(int32_t window_id, int32_t width) {
     zapp_inspector_on_main(^{
         ZappInspectorController* c = zapp_inspector_for_slot(window_id);
         if (!c) return;
-        if (c.swiftPaneState) {
-            if (getenv("ZAPP_LOG")) NSLog(@"[zapp] inspector width/lock ignored on SwiftUI path (Sub-cycle 2c)");
+        if (c.swiftPaneState && !zapp_inspector_bind_swiftui(c)) {
+            if (getenv("ZAPP_LOG")) NSLog(@"[zapp] inspector: SwiftUI split not resolved yet — set_width skipped");
             return;
         }
         if (!c.inspectorItem || !c.splitVC) return;
@@ -182,8 +203,8 @@ void darwin_inspector_set_collapsible(int32_t window_id, bool can_collapse) {
     zapp_inspector_on_main(^{
         ZappInspectorController* c = zapp_inspector_for_slot(window_id);
         if (!c) return;
-        if (c.swiftPaneState) {
-            if (getenv("ZAPP_LOG")) NSLog(@"[zapp] inspector width/lock ignored on SwiftUI path (Sub-cycle 2c)");
+        if (c.swiftPaneState && !zapp_inspector_bind_swiftui(c)) {
+            if (getenv("ZAPP_LOG")) NSLog(@"[zapp] inspector: SwiftUI split not resolved yet — set_collapsible skipped");
             return;
         }
         if (!c.inspectorItem) return;
@@ -198,8 +219,8 @@ void darwin_inspector_set_resizable(int32_t window_id, bool resizable) {
     zapp_inspector_on_main(^{
         ZappInspectorController* c = zapp_inspector_for_slot(window_id);
         if (!c) return;
-        if (c.swiftPaneState) {
-            if (getenv("ZAPP_LOG")) NSLog(@"[zapp] inspector width/lock ignored on SwiftUI path (Sub-cycle 2c)");
+        if (c.swiftPaneState && !zapp_inspector_bind_swiftui(c)) {
+            if (getenv("ZAPP_LOG")) NSLog(@"[zapp] inspector: SwiftUI split not resolved yet — set_resizable skipped");
             return;
         }
         if (!c.inspectorItem) return;
