@@ -367,6 +367,19 @@ void zapp_dispatch_event_to_js(int32_t window_id, int32_t event_id, int32_t w, i
     }
 }
 
+// Reach-through (Sub-cycle 2c): a SwiftUI NavigationSplitView on macOS is backed
+// by an NSSplitViewController nested under our NSHostingController. Walk the VC
+// tree to find it so the existing AppKit sidebar/inspector primitives can drive it.
+NSSplitViewController* zapp_find_split_vc(NSViewController* vc) {
+    if (!vc) return nil;
+    if ([vc isKindOfClass:[NSSplitViewController class]]) return (NSSplitViewController*)vc;
+    for (NSViewController* child in vc.childViewControllers) {
+        NSSplitViewController* found = zapp_find_split_vc(child);
+        if (found) return found;
+    }
+    return nil;
+}
+
 // --- Window Delegate ---
 // numericId cached — zero lookup cost per event.
 

@@ -11,6 +11,10 @@
 
 extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
 extern void darwin_window_eval_js(int32_t window_id, const char* js);
+// Reach-through (Sub-cycle 2c): resolve the SwiftUI-backed NSSplitViewController
+// (defined in window.m) so the AppKit sidebar primitives can drive it.
+@class NSSplitViewController;
+extern NSSplitViewController* zapp_find_split_vc(NSViewController* vc);
 // SwiftUI pane drivers (defined in panes.swift) — only linked in when the
 // swiftc tier is compiled (native.swiftui != false + swiftc present). Behind
 // ZAPP_HAS_SWIFTUI so the opted-out/AppKit-only build doesn't reference an
@@ -202,7 +206,19 @@ void darwin_sidebar_set_width(int32_t window_id, int32_t width) {
         ZappSidebarController* c = zapp_sidebar_for_slot(window_id);
         if (!c) return;
         if (c.swiftPaneState) {
-            if (getenv("ZAPP_LOG")) NSLog(@"[zapp] sidebar width/lock ignored on SwiftUI path (Sub-cycle 2c)");
+            // 2c RISK GATE probe: resolve the SwiftUI-backed NSSplitViewController and
+            // try to drive it with AppKit primitives. If this sticks, the reach-through works.
+            void* win_ptr = darwin_window_get_by_numeric_id(window_id);
+            NSWindow* win = (__bridge NSWindow*)win_ptr;
+            NSSplitViewController* svc = zapp_find_split_vc(win.contentViewController);
+            NSLog(@"[zapp] 2c probe: split=%@ items=%lu width=%d", svc,
+                  (unsigned long)svc.splitViewItems.count, width);
+            if (svc.splitViewItems.count > 0) {
+                NSSplitViewItem* side = svc.splitViewItems.firstObject;
+                side.canCollapse = NO;
+                if (@available(macOS 11.0, *)) side.canCollapseFromWindowResize = NO;
+                [svc.splitView setPosition:(CGFloat)width ofDividerAtIndex:0];
+            }
             return;
         }
         if (!c.sidebarItem || !c.splitVC) return;
