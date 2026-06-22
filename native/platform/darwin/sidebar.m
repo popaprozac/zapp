@@ -11,10 +11,12 @@
 
 extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
 extern void darwin_window_eval_js(int32_t window_id, const char* js);
-// Reach-through (Sub-cycle 2c): resolve the SwiftUI-backed NSSplitViewController
+// Reach-through (Sub-cycle 2c): resolve the SwiftUI-backed NSSplitView/Controller
 // (defined in window.m) so the AppKit sidebar primitives can drive it.
 @class NSSplitViewController;
 extern NSSplitViewController* zapp_find_split_vc(NSViewController* vc);
+extern NSSplitView* zapp_find_split_view(NSView* v);
+extern void zapp_dump_view_tree(NSView* v, int depth);
 // SwiftUI pane drivers (defined in panes.swift) — only linked in when the
 // swiftc tier is compiled (native.swiftui != false + swiftc present). Behind
 // ZAPP_HAS_SWIFTUI so the opted-out/AppKit-only build doesn't reference an
@@ -206,18 +208,27 @@ void darwin_sidebar_set_width(int32_t window_id, int32_t width) {
         ZappSidebarController* c = zapp_sidebar_for_slot(window_id);
         if (!c) return;
         if (c.swiftPaneState) {
-            // 2c RISK GATE probe: resolve the SwiftUI-backed NSSplitViewController and
-            // try to drive it with AppKit primitives. If this sticks, the reach-through works.
+            // 2c RISK GATE probe (v2): SwiftUI's NavigationSplitView keeps its NSSplitView
+            // in the VIEW tree (delegate = NSSplitViewController), NOT as a child VC — so
+            // walk the view hierarchy (how swiftui-introspect reaches it). If found, drive
+            // it with AppKit primitives; if not, dump the view tree to learn the structure.
             void* win_ptr = darwin_window_get_by_numeric_id(window_id);
             NSWindow* win = (__bridge NSWindow*)win_ptr;
-            NSSplitViewController* svc = zapp_find_split_vc(win.contentViewController);
-            NSLog(@"[zapp] 2c probe: split=%@ items=%lu width=%d", svc,
+            NSSplitView* sv = zapp_find_split_view(win.contentView);
+            NSSplitViewController* svc = [sv.delegate isKindOfClass:[NSSplitViewController class]]
+                ? (NSSplitViewController*)sv.delegate : nil;
+            NSLog(@"[zapp] 2c probe: splitView=%@ controller=%@ items=%lu width=%d", sv, svc,
                   (unsigned long)svc.splitViewItems.count, width);
-            if (svc.splitViewItems.count > 0) {
-                NSSplitViewItem* side = svc.splitViewItems.firstObject;
-                side.canCollapse = NO;
-                if (@available(macOS 11.0, *)) side.canCollapseFromWindowResize = NO;
-                [svc.splitView setPosition:(CGFloat)width ofDividerAtIndex:0];
+            if (sv) {
+                if (svc.splitViewItems.count > 0) {
+                    NSSplitViewItem* side = svc.splitViewItems.firstObject;
+                    side.canCollapse = NO;
+                    if (@available(macOS 11.0, *)) side.canCollapseFromWindowResize = NO;
+                }
+                [sv setPosition:(CGFloat)width ofDividerAtIndex:0];
+            } else {
+                NSLog(@"[zapp] 2c probe: NO NSSplitView found — dumping view tree:");
+                zapp_dump_view_tree(win.contentView, 0);
             }
             return;
         }

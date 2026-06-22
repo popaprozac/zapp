@@ -368,8 +368,21 @@ void zapp_dispatch_event_to_js(int32_t window_id, int32_t event_id, int32_t w, i
 }
 
 // Reach-through (Sub-cycle 2c): a SwiftUI NavigationSplitView on macOS is backed
-// by an NSSplitViewController nested under our NSHostingController. Walk the VC
-// tree to find it so the existing AppKit sidebar/inspector primitives can drive it.
+// by an NSSplitView (whose delegate is an NSSplitViewController) living in the
+// VIEW tree — NOT installed as a child view controller of our NSHostingController.
+// So walk the view hierarchy for the NSSplitView (this is how swiftui-introspect
+// reaches it); its `.delegate` is the NSSplitViewController that owns the items.
+NSSplitView* zapp_find_split_view(NSView* v) {
+    if (!v) return nil;
+    if ([v isKindOfClass:[NSSplitView class]]) return (NSSplitView*)v;
+    for (NSView* sub in v.subviews) {
+        NSSplitView* found = zapp_find_split_view(sub);
+        if (found) return found;
+    }
+    return nil;
+}
+
+// Kept for the VC-tree path (some hosting shapes nest a child NSSplitViewController).
 NSSplitViewController* zapp_find_split_vc(NSViewController* vc) {
     if (!vc) return nil;
     if ([vc isKindOfClass:[NSSplitViewController class]]) return (NSSplitViewController*)vc;
@@ -378,6 +391,17 @@ NSSplitViewController* zapp_find_split_vc(NSViewController* vc) {
         if (found) return found;
     }
     return nil;
+}
+
+// Diagnostic (2c gate): dump the view-class tree so we can SEE what SwiftUI's
+// NavigationSplitView built on this macOS version when no NSSplitView is found.
+void zapp_dump_view_tree(NSView* v, int depth) {
+    if (!v || depth > 7) return;
+    NSMutableString* pad = [NSMutableString string];
+    for (int i = 0; i < depth; i++) [pad appendString:@"  "];
+    NSLog(@"[zapp] 2c view-tree: %@%@ (subs=%lu)", pad, NSStringFromClass([v class]),
+          (unsigned long)v.subviews.count);
+    for (NSView* sub in v.subviews) zapp_dump_view_tree(sub, depth + 1);
 }
 
 // --- Window Delegate ---
