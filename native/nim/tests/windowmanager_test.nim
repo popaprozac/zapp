@@ -91,13 +91,13 @@ block:
     "explicit 'default' must force Default (overrides the split-window chrome default)"
 
 block:
-  # sidebar.presentation parses into sidebarPresentation.
+  # sidebar.presentation parses into sidebar.presentation.
   let o = WindowOptions(title: "pres")
   windowOptsApplyJson(o, parseJson("""{"sidebar":{"url":"#sb","width":240,"presentation":"overlay"}}"""))
-  doAssert o.sidebar.presentation == "overlay", "sidebar.presentation must parse to sidebarPresentation"
+  doAssert o.sidebar.presentation == "overlay", "sidebar.presentation must parse to o.sidebar.presentation"
 
 block:
-  # sidebar.presentation absent → sidebarPresentation defaults to "".
+  # sidebar.presentation absent → sidebar.presentation defaults to "".
   let o = WindowOptions(title: "pres-default")
   windowOptsApplyJson(o, parseJson("""{"sidebar":{"url":"#sb"}}"""))
   doAssert o.sidebar.presentation == "", "absent sidebar.presentation must default to empty string"
@@ -143,20 +143,23 @@ block:
     ToolbarItemOpt(`type`: "toggleSidebar"),
     ToolbarItemOpt(`type`: "trackingSeparator", pane: "sidebar"),
     ToolbarItemOpt(`type`: "button", id: "compose", label: "Compose", icon: "sf:square.and.pencil"),
+    ToolbarItemOpt(`type`: "button", id: "archive", label: "Archive", enabled: false),  # non-default enabled
     ToolbarItemOpt(`type`: "flexibleSpace"),
     ToolbarItemOpt(`type`: "button", id: "filter", icon: "sf:line.3.horizontal.decrease",
                    menu: @[
                      MenuItemOpt(id: "all", label: "All", checked: true),
-                     MenuItemOpt(id: "unread", label: "Unread")]),
+                     MenuItemOpt(id: "unread", label: "Unread", checked: false)]),  # explicit checked:false
   ])
   let s = serializeToolbar(t)
   doAssert "\"style\":\"unified\"" in s, "style must serialize"
   doAssert "\"type\":\"toggleSidebar\"" in s
   doAssert "\"pane\":\"sidebar\"" in s, "trackingSeparator must carry pane"
   doAssert "\"id\":\"compose\"" in s
+  doAssert "\"enabled\":false" in s, "non-default enabled:false must serialize"
   doAssert "\"checked\":true" in s, "menu checked must serialize"
+  doAssert "\"checked\":false" in s, "explicit checked:false must serialize"
   doAssert "\"indicator\":true" in s, "menu items emit the chevron indicator"
-  doAssert parseToolbarJson(s) == t, "parse(serialize(t)) must round-trip"
+  doAssert parseToolbarJson(s) == t, "parse(serialize(t)) must round-trip (incl. enabled:false / checked:false)"
 
 block:
   # windowOptsApplyJson parses an incoming toolbarJson STRING into o.toolbar.

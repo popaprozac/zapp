@@ -333,6 +333,10 @@ proc jHasBool(a: JsonNode, k: string): bool =
 
 # Serialize ToolbarOptions to the native toolbar wire JSON ({style, items:[...]})
 # consumed by toolbar.m's zapp_toolbar_parse_items (matches TS normalizeToolbar).
+# Nim-vs-TS divergence (harmless): TS omits enabled/indicator when unset, whereas
+# we always emit `enabled` on buttons and `indicator` on menu items. Native defaults
+# both to YES when absent, so the emitted `true` is behaviorally identical — and the
+# always-emit keeps parseToolbarJson(serializeToolbar(t)) a lossless round-trip.
 proc serializeToolbar*(t: ToolbarOptions): string =
   var items = newJArray()
   for it in t.items:
