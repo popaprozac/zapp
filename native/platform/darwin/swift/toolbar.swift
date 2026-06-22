@@ -124,30 +124,43 @@ struct ZappToolbarContent: ToolbarContent {
   @ObservedObject var state: ToolbarState   // observe directly so item mutations re-render the toolbar (spike pattern)
   let pane: PaneState   // toggles bind directly to pane visibility (2a)
 
-  // All renderable items go in ONE trailing (.primaryAction) group, in declared
-  // order. Filtered out:
-  //   • space / flexibleSpace / trackingSeparator → no SwiftUI toolbar equivalent.
-  //   • toggleSidebar → we do NOT render our own; SwiftUI's *native* auto sidebar
-  //     toggle (NOT suppressed — `.toolbar(removing:)` doesn't take across the
-  //     AppKit↔SwiftUI hosting seam) sits leading and drives the NavigationSplit-
-  //     View column, which is bound to PaneState, so it toggles + syncs natively.
-  // NOTE: a leading/trailing placement split (compose-on-the-left) needs the
-  // `.navigation` placement, which ties items to the sidebar column's visibility
-  // (they shift/vanish when the sidebar collapses) — another casualty of the
-  // hosting seam. Flat trailing is stable; leading app items → the SwiftUI-window
-  // investigation (#644).
-  private var renderableItems: [ZappToolbarItem] {
-    state.items.filter {
-      $0.type != "space" && $0.type != "flexibleSpace"
-        && $0.type != "trackingSeparator" && $0.type != "toggleSidebar"
+  // Items split at the first `flexibleSpace`: before → leading (.navigation, above
+  // the sidebar column), after → trailing (.primaryAction, above the detail). This
+  // is the SwiftUI-native equivalent of the AppKit flexibleSpace + trackingSeparator
+  // (placement auto-aligns the toolbar boundary to the column split — no explicit
+  // separator item needed). Filtered out of both sides:
+  //   • space / flexibleSpace / trackingSeparator → no SwiftUI item; the split itself
+  //     carries the alignment intent.
+  //   • toggleSidebar → SwiftUI's *native* auto sidebar toggle (NOT suppressed —
+  //     `.toolbar(removing:)` doesn't take across the hosting seam) sits leading and
+  //     drives the NavigationSplitView column (bound to PaneState), so it toggles +
+  //     syncs natively. We don't render our own.
+  // NOTE: .navigation placement was unstable (items shifted on sidebar collapse)
+  // UNTIL NSWindowStyleMaskFullSizeContentView landed on the SwiftUI pane window
+  // (window.m) — that stabilized the toolbar, which is what makes this split viable.
+  private var groups: (leading: [ZappToolbarItem], trailing: [ZappToolbarItem]) {
+    func renderable(_ items: ArraySlice<ZappToolbarItem>) -> [ZappToolbarItem] {
+      items.filter {
+        $0.type != "space" && $0.type != "flexibleSpace"
+          && $0.type != "trackingSeparator" && $0.type != "toggleSidebar"
+      }
     }
+    if let split = state.items.firstIndex(where: { $0.type == "flexibleSpace" }) {
+      return (renderable(state.items[..<split]), renderable(state.items[(split + 1)...]))
+    }
+    return (renderable(state.items[...]), [])
   }
 
   var body: some ToolbarContent {
-    let items = renderableItems
-    if !items.isEmpty {
+    let g = groups
+    if !g.leading.isEmpty {
+      ToolbarItemGroup(placement: .navigation) {
+        ForEach(g.leading) { item in itemView(item) }
+      }
+    }
+    if !g.trailing.isEmpty {
       ToolbarItemGroup(placement: .primaryAction) {
-        ForEach(items) { item in itemView(item) }
+        ForEach(g.trailing) { item in itemView(item) }
       }
     }
   }
