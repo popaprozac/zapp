@@ -20,11 +20,16 @@ public typealias ZappSwiftStateCallback =
 // Keys must match the enum in window.m.
 private let kPaneKeySidebarVisible: Int32 = 1
 private let kPaneKeyInspectorPresented: Int32 = 2
+private let kPaneKeySidebarWidth: Int32 = 3
+private let kPaneKeyInspectorWidth: Int32 = 4
 
-// Shared, observable pane visibility crossing the ObjC<->Swift boundary. ObjC
-// drives it via the scalar setters/togglers below; SwiftUI drives it via the
-// derived bindings; every change fires `cb` (change-driven, never polled).
-// `didSet` is NOT called during init, so creating a PaneState never emits.
+// Shared, observable pane state crossing the ObjC<->Swift boundary. ObjC drives it
+// via the scalar setters below; SwiftUI drives visibility via the derived bindings
+// and width via WidthReader. Every visibility/width change fires `cb` (change-driven,
+// never polled). `didSet` is NOT called during init, so creating a PaneState never emits.
+//
+// 2c/#660: width/resizable/collapsible are LIVE (@Published) so SwiftUI relayouts
+// re-apply our CURRENT values (idempotent) instead of wiping an imperative state.
 final class PaneState: ObservableObject {
   @Published var sidebarVisible: Bool {
     didSet { cb?(ctx, kPaneKeySidebarVisible, sidebarVisible ? 1 : 0) }
@@ -32,38 +37,95 @@ final class PaneState: ObservableObject {
   @Published var inspectorPresented: Bool {
     didSet { cb?(ctx, kPaneKeyInspectorPresented, inspectorPresented ? 1 : 0) }
   }
+  // Live sidebar geometry. `sidebarWidth` is the single source of truth (modifier ideal +
+  // lock value); WidthReader keeps it tracking the rendered width. `sidebarPinned` is a
+  // transient one-render lock that lets setWidth force a snap while staying resizable.
+  @Published var sidebarWidth: CGFloat
+  @Published var sidebarResizable: Bool
+  @Published var sidebarCollapsible: Bool
+  @Published var sidebarPinned: Bool = false
+  // Live inspector geometry (was absent — inspector width lived only in inspector.m).
+  @Published var inspectorWidth: CGFloat
+  @Published var inspectorResizable: Bool
+  @Published var inspectorCollapsible: Bool
+  @Published var inspectorPinned: Bool = false
+
   let ctx: UnsafeMutableRawPointer?
   let cb: ZappSwiftStateCallback?
-  // 2c: bleed pane content up under the titlebar (full-height look) ONLY when the
-  // window has transparent/hidden chrome (titleBarStyle hidden/hiddenInset). For a
-  // standard `default` titlebar the panes respect the safe area (content below the
-  // title bar) — keeps AppKit/SwiftUI parity per resolved titlebar style.
   let bleedTop: Bool
-  // 2c: create-time sidebar column geometry (was hardcoded 180/260/480). Drives
-  // `.navigationSplitViewColumnWidth(min:ideal:max:)` from config (ideal == initial).
+  // Config-time bounds (not runtime-mutable in this cycle).
   let sidebarMinW: CGFloat
-  let sidebarIdealW: CGFloat
   let sidebarMaxW: CGFloat
-  // 2c: when false, the sidebar can't be user-collapsed via the toolbar toggle
-  // (binding-clamp in sidebarVisibilityBinding refuses .detailOnly); programmatic
-  // show/hide still works. CREATE-TIME only (a `let`): a runtime @Published toggle
-  // re-rendered the NavigationSplitView and re-applied the column-width constraints,
-  // which undid setResizable's thickness lock (regression). Runtime collapsible
-  // deferred — needs a non-re-rendering mechanism.
-  let sidebarCollapsible: Bool
+  let inspectorMinW: CGFloat
+  let inspectorMaxW: CGFloat
+
+  // Reverse width-event dedup baselines (plain vars — not observed).
+  private var lastSidebarWidthEmitted: Int = -1
+  private var lastInspectorWidthEmitted: Int = -1
 
   init(ctx: UnsafeMutableRawPointer?, cb: ZappSwiftStateCallback?,
        sidebarVisible: Bool, inspectorPresented: Bool, bleedTop: Bool,
-       sidebarMinW: CGFloat, sidebarIdealW: CGFloat, sidebarMaxW: CGFloat,
-       sidebarCollapsible: Bool) {
+       sidebarMinW: CGFloat, sidebarWidth: CGFloat, sidebarMaxW: CGFloat,
+       sidebarResizable: Bool, sidebarCollapsible: Bool,
+       inspectorMinW: CGFloat, inspectorWidth: CGFloat, inspectorMaxW: CGFloat,
+       inspectorResizable: Bool, inspectorCollapsible: Bool) {
     self.ctx = ctx; self.cb = cb
     self.sidebarVisible = sidebarVisible
     self.inspectorPresented = inspectorPresented
     self.bleedTop = bleedTop
-    self.sidebarMinW = sidebarMinW
-    self.sidebarIdealW = sidebarIdealW
-    self.sidebarMaxW = sidebarMaxW
-    self.sidebarCollapsible = sidebarCollapsible
+    self.sidebarMinW = sidebarMinW; self.sidebarWidth = sidebarWidth; self.sidebarMaxW = sidebarMaxW
+    self.sidebarResizable = sidebarResizable; self.sidebarCollapsible = sidebarCollapsible
+    self.inspectorMinW = inspectorMinW; self.inspectorWidth = inspectorWidth; self.inspectorMaxW = inspectorMaxW
+    self.inspectorResizable = inspectorResizable; self.inspectorCollapsible = inspectorCollapsible
+  }
+
+  // WidthReader -> here. Keep the source of truth current (so setResizable(false) locks
+  // at the rendered width, AppKit parity) AND emit a dedup'd reverse width event (parity
+  // with AppKit's splitViewDidResize). Runs on the main thread (onChange fires post-layout).
+  func noteSidebarWidth(_ w: CGFloat) {
+    let iw = Int(w.rounded())
+    if iw <= 0 { return }
+    if iw != Int(sidebarWidth.rounded()) { sidebarWidth = CGFloat(iw) }
+    if iw != lastSidebarWidthEmitted { lastSidebarWidthEmitted = iw; cb?(ctx, kPaneKeySidebarWidth, Int64(iw)) }
+  }
+  func noteInspectorWidth(_ w: CGFloat) {
+    let iw = Int(w.rounded())
+    if iw <= 0 { return }
+    if iw != Int(inspectorWidth.rounded()) { inspectorWidth = CGFloat(iw) }
+    if iw != lastInspectorWidthEmitted { lastInspectorWidthEmitted = iw; cb?(ctx, kPaneKeyInspectorWidth, Int64(iw)) }
+  }
+}
+
+// Always the min:ideal:max: form; "locked" collapses the range to min==max==width
+// (non-draggable). Reading the @Published fields here (from PaneLayout.body) registers
+// the SwiftUI dependency so relayouts re-apply current values.
+@available(macOS 14.0, *)
+extension View {
+  func paneSidebarWidth(_ s: PaneState) -> some View {
+    let locked = !s.sidebarResizable || s.sidebarPinned
+    return navigationSplitViewColumnWidth(
+      min: locked ? s.sidebarWidth : s.sidebarMinW,
+      ideal: s.sidebarWidth,
+      max: locked ? s.sidebarWidth : s.sidebarMaxW)
+  }
+  func paneInspectorWidth(_ s: PaneState) -> some View {
+    let locked = !s.inspectorResizable || s.inspectorPinned
+    return inspectorColumnWidth(
+      min: locked ? s.inspectorWidth : s.inspectorMinW,
+      ideal: s.inspectorWidth,
+      max: locked ? s.inspectorWidth : s.inspectorMaxW)
+  }
+}
+
+// Observes the rendered width of the view it backgrounds and reports changes.
+// `initial: true` reports the first laid-out width. macOS 14+ (two-param onChange).
+@available(macOS 14.0, *)
+struct WidthReader: View {
+  let onChange: (CGFloat) -> Void
+  var body: some View {
+    GeometryReader { geo in
+      Color.clear.onChange(of: geo.size.width, initial: true) { _, w in onChange(w) }
+    }
   }
 }
 
@@ -94,7 +156,8 @@ struct PaneLayout: View {
         // titlebar gets an empty edge set (= no-op) so content sits below the bar.
         PaneHost(view: sidebar)
           .ignoresSafeArea(.container, edges: state.bleedTop ? .top : [])
-          .navigationSplitViewColumnWidth(min: state.sidebarMinW, ideal: state.sidebarIdealW, max: state.sidebarMaxW)
+          .paneSidebarWidth(state)
+          .background(WidthReader { w in state.noteSidebarWidth(w) })
       } detail: {
         detail
       }
@@ -119,7 +182,10 @@ struct PaneLayout: View {
       .ignoresSafeArea(.container, edges: state.bleedTop ? .top : [])
       .inspector(isPresented: inspectorPresentedBinding) {
         if let inspector {
-          PaneHost(view: inspector).ignoresSafeArea(.container, edges: state.bleedTop ? .top : [])
+          PaneHost(view: inspector)
+            .ignoresSafeArea(.container, edges: state.bleedTop ? .top : [])
+            .paneInspectorWidth(state)
+            .background(WidthReader { w in state.noteInspectorWidth(w) })
         }
       }
       // Toolbar on the DETAIL (matching the proven spike): it must live inside
@@ -147,7 +213,12 @@ struct PaneLayout: View {
   private var inspectorPresentedBinding: Binding<Bool> {
     Binding(
       get: { state.inspectorPresented },
-      set: { state.inspectorPresented = $0 }
+      set: { newValue in
+        // Non-collapsible: refuse user-driven dismissal (parity with the sidebar clamp).
+        // Programmatic show/hide goes through PaneState directly and still works.
+        if !state.inspectorCollapsible && !newValue { return }
+        state.inspectorPresented = newValue
+      }
     )
   }
 }
@@ -162,14 +233,24 @@ public func zapp_swift_panes_state_create(_ ctx: UnsafeMutableRawPointer?,
                                           _ inspectorPresented: Bool,
                                           _ bleedTop: Bool,
                                           _ sidebarMinW: Double,
-                                          _ sidebarIdealW: Double,
+                                          _ sidebarWidth: Double,
                                           _ sidebarMaxW: Double,
-                                          _ sidebarCollapsible: Bool) -> UnsafeMutableRawPointer? {
+                                          _ sidebarResizable: Bool,
+                                          _ sidebarCollapsible: Bool,
+                                          _ inspectorMinW: Double,
+                                          _ inspectorWidth: Double,
+                                          _ inspectorMaxW: Double,
+                                          _ inspectorResizable: Bool,
+                                          _ inspectorCollapsible: Bool) -> UnsafeMutableRawPointer? {
   let state = PaneState(ctx: ctx, cb: cb,
                         sidebarVisible: sidebarVisible, inspectorPresented: inspectorPresented,
                         bleedTop: bleedTop,
-                        sidebarMinW: CGFloat(sidebarMinW), sidebarIdealW: CGFloat(sidebarIdealW),
-                        sidebarMaxW: CGFloat(sidebarMaxW), sidebarCollapsible: sidebarCollapsible)
+                        sidebarMinW: CGFloat(sidebarMinW), sidebarWidth: CGFloat(sidebarWidth),
+                        sidebarMaxW: CGFloat(sidebarMaxW),
+                        sidebarResizable: sidebarResizable, sidebarCollapsible: sidebarCollapsible,
+                        inspectorMinW: CGFloat(inspectorMinW), inspectorWidth: CGFloat(inspectorWidth),
+                        inspectorMaxW: CGFloat(inspectorMaxW),
+                        inspectorResizable: inspectorResizable, inspectorCollapsible: inspectorCollapsible)
   return Unmanaged.passRetained(state).toOpaque()
 }
 
@@ -196,6 +277,49 @@ public func zapp_swift_panes_toggle_sidebar(_ state: UnsafeMutableRawPointer) {
 @_cdecl("zapp_swift_panes_toggle_inspector")
 public func zapp_swift_panes_toggle_inspector(_ state: UnsafeMutableRawPointer) {
   withAnimation { Unmanaged<PaneState>.fromOpaque(state).takeUnretainedValue().inspectorPresented.toggle() }
+}
+
+// --- #660 runtime geometry setters (callers in sidebar.m / inspector.m run on main) ---
+
+@_cdecl("zapp_swift_panes_set_sidebar_width")
+public func zapp_swift_panes_set_sidebar_width(_ state: UnsafeMutableRawPointer, _ w: Int32) {
+  let st = Unmanaged<PaneState>.fromOpaque(state).takeUnretainedValue()
+  st.sidebarWidth = CGFloat(w)
+  // Pin-and-release: force the snap this render, restore the drag range next tick.
+  if st.sidebarResizable {
+    st.sidebarPinned = true
+    DispatchQueue.main.async { st.sidebarPinned = false }
+  }
+}
+
+@_cdecl("zapp_swift_panes_set_sidebar_resizable")
+public func zapp_swift_panes_set_sidebar_resizable(_ state: UnsafeMutableRawPointer, _ resizable: Bool) {
+  Unmanaged<PaneState>.fromOpaque(state).takeUnretainedValue().sidebarResizable = resizable
+}
+
+@_cdecl("zapp_swift_panes_set_sidebar_collapsible")
+public func zapp_swift_panes_set_sidebar_collapsible(_ state: UnsafeMutableRawPointer, _ collapsible: Bool) {
+  Unmanaged<PaneState>.fromOpaque(state).takeUnretainedValue().sidebarCollapsible = collapsible
+}
+
+@_cdecl("zapp_swift_panes_set_inspector_width")
+public func zapp_swift_panes_set_inspector_width(_ state: UnsafeMutableRawPointer, _ w: Int32) {
+  let st = Unmanaged<PaneState>.fromOpaque(state).takeUnretainedValue()
+  st.inspectorWidth = CGFloat(w)
+  if st.inspectorResizable {
+    st.inspectorPinned = true
+    DispatchQueue.main.async { st.inspectorPinned = false }
+  }
+}
+
+@_cdecl("zapp_swift_panes_set_inspector_resizable")
+public func zapp_swift_panes_set_inspector_resizable(_ state: UnsafeMutableRawPointer, _ resizable: Bool) {
+  Unmanaged<PaneState>.fromOpaque(state).takeUnretainedValue().inspectorResizable = resizable
+}
+
+@_cdecl("zapp_swift_panes_set_inspector_collapsible")
+public func zapp_swift_panes_set_inspector_collapsible(_ state: UnsafeMutableRawPointer, _ collapsible: Bool) {
+  Unmanaged<PaneState>.fromOpaque(state).takeUnretainedValue().inspectorCollapsible = collapsible
 }
 
 // Build the hosting controller. `state` carries initial visibility; the old

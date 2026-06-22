@@ -82,13 +82,16 @@ extern double zapp_primary_screen_height(void);
 // Reverse state-change channel from SwiftUI (panes.swift). Scalar, main-thread,
 // change-driven. Keys match panes.swift; value is the new scalar (0/1 here).
 typedef void (*ZappSwiftStateCallback)(void* ctx, int32_t key, int64_t value);
-enum { ZAPP_PANE_KEY_SIDEBAR_VISIBLE = 1, ZAPP_PANE_KEY_INSPECTOR_PRESENTED = 2 };
+enum { ZAPP_PANE_KEY_SIDEBAR_VISIBLE = 1, ZAPP_PANE_KEY_INSPECTOR_PRESENTED = 2,
+       ZAPP_PANE_KEY_SIDEBAR_WIDTH = 3, ZAPP_PANE_KEY_INSPECTOR_WIDTH = 4 };
 
 extern void* zapp_swift_panes_state_create(void* ctx, ZappSwiftStateCallback cb,
                                            bool sidebarVisible, bool inspectorPresented,
                                            bool bleedTop,
-                                           double sidebarMinW, double sidebarIdealW, double sidebarMaxW,
-                                           bool sidebarCollapsible);
+                                           double sidebarMinW, double sidebarWidth, double sidebarMaxW,
+                                           bool sidebarResizable, bool sidebarCollapsible,
+                                           double inspectorMinW, double inspectorWidth, double inspectorMaxW,
+                                           bool inspectorResizable, bool inspectorCollapsible);
 extern void zapp_swift_panes_state_release(void* state);
 extern void zapp_swift_panes_set_sidebar_visible(void* state, bool visible);
 extern void zapp_swift_panes_set_inspector_presented(void* state, bool presented);
@@ -1058,7 +1061,11 @@ void* darwin_window_create(WindowOptions* opts) {
                 swiftPaneState = zapp_swift_panes_state_create((__bridge void*)window,
                     zapp_swiftui_pane_changed, sidebarVisible, inspectorPresented, paneBleedTop,
                     (double)wopts_sidebar_min_width(opts), (double)wopts_sidebar_width(opts),
-                    (double)wopts_sidebar_max_width(opts), wopts_sidebar_collapsible(opts));
+                    (double)wopts_sidebar_max_width(opts),
+                    wopts_sidebar_can_resize(opts), wopts_sidebar_collapsible(opts),
+                    (double)wopts_inspector_min_width(opts), (double)wopts_inspector_width(opts),
+                    (double)wopts_inspector_max_width(opts),
+                    wopts_inspector_can_resize(opts), wopts_inspector_collapsible(opts));
 
                 // Shared, observable toolbar state. ctx = the numeric host id boxed
                 // as a pointer (the dispatcher unboxes it for window:toolbar-clicked's
