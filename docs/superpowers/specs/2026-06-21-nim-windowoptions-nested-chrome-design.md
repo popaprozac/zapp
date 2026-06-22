@@ -64,7 +64,7 @@ type
   ToolbarItemOpt* = object                 # mirrors TS ToolbarItemDef — DATA fields only
     id*, `type`*, pane*, label*, icon*: string   # type "" ⇒ native treats as "button"
     enabled*: bool = true
-    indicator*: bool
+    indicator*: bool = true              # menu chevron; native default YES; serialized only on menu items
     menu*: seq[MenuItemOpt]
 
   ToolbarOptions* = object
