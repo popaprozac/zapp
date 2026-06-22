@@ -275,7 +275,8 @@ void darwin_inspector_set_resizable(int32_t window_id, bool resizable) {
 // dedup baseline, seeded from the visibility the PaneState was created with.
 void zapp_inspector_register_swiftui(void* window_ptr, void* paneState,
                                      int32_t host_id, int32_t inspector_slot_id,
-                                     bool initial_collapsed) {
+                                     bool initial_collapsed,
+                                     int32_t min_width, int32_t max_width) {
     if (!window_ptr || !paneState) return;
     zapp_inspector_on_main(^{
         if (!zapp_inspectors) zapp_inspectors = [NSMutableDictionary dictionary];
@@ -285,6 +286,13 @@ void zapp_inspector_register_swiftui(void* window_ptr, void* paneState,
         c.hostWindowId = host_id;
         c.inspectorSlotId = inspector_slot_id;
         c.lastCollapsed = initial_collapsed ? YES : NO;
+        // Configured drag bounds from create-time config. SwiftUI's `.inspector()`
+        // LOCKS the item thickness (min==max==initial), so capturing min/max at bind
+        // time gives a degenerate 270/270 range — setResizable(true) then re-pins to
+        // 270 and the inspector snaps back. Seeding real bounds here lets the bind-time
+        // `if (cfg* <= 0)` guards no-op (they don't clobber a positive value).
+        c.cfgMinThickness = (CGFloat)min_width;
+        c.cfgMaxThickness = (CGFloat)max_width;
         zapp_inspectors[key] = c;
     });
 }

@@ -39,13 +39,31 @@ final class PaneState: ObservableObject {
   // standard `default` titlebar the panes respect the safe area (content below the
   // title bar) — keeps AppKit/SwiftUI parity per resolved titlebar style.
   let bleedTop: Bool
+  // 2c: create-time sidebar column geometry (was hardcoded 180/260/480). Drives
+  // `.navigationSplitViewColumnWidth(min:ideal:max:)` from config (ideal == initial).
+  let sidebarMinW: CGFloat
+  let sidebarIdealW: CGFloat
+  let sidebarMaxW: CGFloat
+  // 2c: when false, the sidebar can't be user-collapsed via the toolbar toggle
+  // (binding-clamp in sidebarVisibilityBinding refuses .detailOnly); programmatic
+  // show/hide still works. CREATE-TIME only (a `let`): a runtime @Published toggle
+  // re-rendered the NavigationSplitView and re-applied the column-width constraints,
+  // which undid setResizable's thickness lock (regression). Runtime collapsible
+  // deferred — needs a non-re-rendering mechanism.
+  let sidebarCollapsible: Bool
 
   init(ctx: UnsafeMutableRawPointer?, cb: ZappSwiftStateCallback?,
-       sidebarVisible: Bool, inspectorPresented: Bool, bleedTop: Bool) {
+       sidebarVisible: Bool, inspectorPresented: Bool, bleedTop: Bool,
+       sidebarMinW: CGFloat, sidebarIdealW: CGFloat, sidebarMaxW: CGFloat,
+       sidebarCollapsible: Bool) {
     self.ctx = ctx; self.cb = cb
     self.sidebarVisible = sidebarVisible
     self.inspectorPresented = inspectorPresented
     self.bleedTop = bleedTop
+    self.sidebarMinW = sidebarMinW
+    self.sidebarIdealW = sidebarIdealW
+    self.sidebarMaxW = sidebarMaxW
+    self.sidebarCollapsible = sidebarCollapsible
   }
 }
 
@@ -76,7 +94,7 @@ struct PaneLayout: View {
         // titlebar gets an empty edge set (= no-op) so content sits below the bar.
         PaneHost(view: sidebar)
           .ignoresSafeArea(.container, edges: state.bleedTop ? .top : [])
-          .navigationSplitViewColumnWidth(min: 180, ideal: 260, max: 480)
+          .navigationSplitViewColumnWidth(min: state.sidebarMinW, ideal: state.sidebarIdealW, max: state.sidebarMaxW)
       } detail: {
         detail
       }
@@ -118,7 +136,12 @@ struct PaneLayout: View {
   private var sidebarVisibilityBinding: Binding<NavigationSplitViewVisibility> {
     Binding(
       get: { state.sidebarVisible ? .all : .detailOnly },
-      set: { state.sidebarVisible = ($0 != .detailOnly) }
+      set: { newValue in
+        // Non-collapsible: refuse user-driven hide (the toolbar toggle / divider can't
+        // collapse it). Programmatic show/hide still goes through PaneState directly.
+        if !state.sidebarCollapsible && newValue == .detailOnly { return }
+        state.sidebarVisible = (newValue != .detailOnly)
+      }
     )
   }
   private var inspectorPresentedBinding: Binding<Bool> {
@@ -137,10 +160,16 @@ public func zapp_swift_panes_state_create(_ ctx: UnsafeMutableRawPointer?,
                                           _ cb: ZappSwiftStateCallback?,
                                           _ sidebarVisible: Bool,
                                           _ inspectorPresented: Bool,
-                                          _ bleedTop: Bool) -> UnsafeMutableRawPointer? {
+                                          _ bleedTop: Bool,
+                                          _ sidebarMinW: Double,
+                                          _ sidebarIdealW: Double,
+                                          _ sidebarMaxW: Double,
+                                          _ sidebarCollapsible: Bool) -> UnsafeMutableRawPointer? {
   let state = PaneState(ctx: ctx, cb: cb,
                         sidebarVisible: sidebarVisible, inspectorPresented: inspectorPresented,
-                        bleedTop: bleedTop)
+                        bleedTop: bleedTop,
+                        sidebarMinW: CGFloat(sidebarMinW), sidebarIdealW: CGFloat(sidebarIdealW),
+                        sidebarMaxW: CGFloat(sidebarMaxW), sidebarCollapsible: sidebarCollapsible)
   return Unmanaged.passRetained(state).toOpaque()
 }
 

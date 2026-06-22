@@ -86,7 +86,9 @@ enum { ZAPP_PANE_KEY_SIDEBAR_VISIBLE = 1, ZAPP_PANE_KEY_INSPECTOR_PRESENTED = 2 
 
 extern void* zapp_swift_panes_state_create(void* ctx, ZappSwiftStateCallback cb,
                                            bool sidebarVisible, bool inspectorPresented,
-                                           bool bleedTop);
+                                           bool bleedTop,
+                                           double sidebarMinW, double sidebarIdealW, double sidebarMaxW,
+                                           bool sidebarCollapsible);
 extern void zapp_swift_panes_state_release(void* state);
 extern void zapp_swift_panes_set_sidebar_visible(void* state, bool visible);
 extern void zapp_swift_panes_set_inspector_presented(void* state, bool presented);
@@ -111,7 +113,8 @@ extern void zapp_sidebar_register_swiftui(void* window_ptr, void* paneState,
                                           bool initial_collapsed);
 extern void zapp_inspector_register_swiftui(void* window_ptr, void* paneState,
                                             int32_t host_id, int32_t inspector_slot_id,
-                                            bool initial_collapsed);
+                                            bool initial_collapsed,
+                                            int32_t min_width, int32_t max_width);
 
 // File-static reverse dispatcher: PaneState's didSet fires this with the changed
 // key + new value (1=visible/0=collapsed). ctx is the host NSWindow*. The switch
@@ -1053,7 +1056,9 @@ void* darwin_window_create(WindowOptions* opts) {
                 // file-static reverse dispatcher. The delegate owns this handle and
                 // releases it once at teardown.
                 swiftPaneState = zapp_swift_panes_state_create((__bridge void*)window,
-                    zapp_swiftui_pane_changed, sidebarVisible, inspectorPresented, paneBleedTop);
+                    zapp_swiftui_pane_changed, sidebarVisible, inspectorPresented, paneBleedTop,
+                    (double)wopts_sidebar_min_width(opts), (double)wopts_sidebar_width(opts),
+                    (double)wopts_sidebar_max_width(opts), wopts_sidebar_collapsible(opts));
 
                 // Shared, observable toolbar state. ctx = the numeric host id boxed
                 // as a pointer (the dispatcher unboxes it for window:toolbar-clicked's
@@ -1156,7 +1161,8 @@ void* darwin_window_create(WindowOptions* opts) {
                     // Register a SwiftUI-backed controller so darwin_inspector_* ops
                     // resolve + drive the PaneState (no splitVC/NSSplitViewItem).
                     zapp_inspector_register_swiftui((__bridge void*)window, swiftPaneState,
-                                                    host_slot, inspector_slot, !inspectorPresented);
+                                                    host_slot, inspector_slot, !inspectorPresented,
+                                                    wopts_inspector_min_width(opts), wopts_inspector_max_width(opts));
                 }
 
                 // Initial config toolbar -> SwiftUI ToolbarState. On this path the
