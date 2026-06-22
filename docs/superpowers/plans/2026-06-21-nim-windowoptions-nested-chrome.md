@@ -392,12 +392,12 @@ EOF
 
 - [ ] **Step 2: Build the kitchen-sink Nim app (macOS).** This compiles `kitchen-sink/zapp/app.nim` (the Nim build root) + `window.nim`.
 
-Run: `cd /Users/zach/code/zapp/kitchen-sink && ZAPP_NATIVE_LANG=nim bun run ../cli/src/index.ts build 2>&1 | tail -20`
+Run: `cd /Users/zach/code/zapp/kitchen-sink && ZAPP_NATIVE_LANG=nim bun run ../cli/src/zapp-cli.ts build 2>&1 | tail -20`
 Expected: the LAST line is `[zapp] build complete: …` (per the verify-native-build rule — Vite's `✓ built` is NOT success). If the build fails on a nested-field error, fix the offending reference and rebuild. Confirm a fresh binary mtime.
 
 - [ ] **Step 3: iOS-sim build gate** (the `wopts_*` accessors compile into the iOS binary too).
 
-Run: `cd /Users/zach/code/zapp/kitchen-sink && ZAPP_NATIVE_LANG=nim bun run ../cli/src/index.ts build --platform ios 2>&1 | tail -20`
+Run: `cd /Users/zach/code/zapp/kitchen-sink && ZAPP_NATIVE_LANG=nim bun run ../cli/src/zapp-cli.ts build --platform ios 2>&1 | tail -20`
 Expected: LAST line `[zapp] build complete: …` (iOS-sim target). No `wopts_*`/`window.nim` compile errors.
 
 - [ ] **Step 4: TS suite (no CLI change, must stay green).**
@@ -428,7 +428,7 @@ EOF
 
 - [ ] **Step 1: Run the kitchen-sink app in dev.**
 
-Run: `cd /Users/zach/code/zapp/kitchen-sink && ZAPP_NATIVE_LANG=nim bun run ../cli/src/index.ts dev`
+Run: `cd /Users/zach/code/zapp/kitchen-sink && ZAPP_NATIVE_LANG=nim bun run ../cli/src/zapp-cli.ts dev`
 
 - [ ] **Step 2: Confirm chrome renders identically to before the refactor.** Ask the user to verify on the kitchen-sink window:
   - The **sidebar** appears (overlay presentation, ~240px) and its toggle works.
