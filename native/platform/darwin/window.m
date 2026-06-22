@@ -111,6 +111,7 @@ extern void zapp_swift_module_set_string(void* state, int32_t key, const char* v
 extern void zapp_sidebar_note_swiftui_visibility(void* window_ptr, bool collapsed);
 extern void zapp_inspector_note_swiftui_visibility(void* window_ptr, bool collapsed);
 extern void zapp_sidebar_note_swiftui_width(void* window_ptr, int width);
+extern void zapp_inspector_note_swiftui_width(void* window_ptr, int width);
 // SwiftUI controller register variants (defined in sidebar.m / inspector.m — Tasks 2/3).
 extern void zapp_sidebar_register_swiftui(void* window_ptr, void* paneState,
                                           int32_t host_id, int32_t sidebar_slot_id,
@@ -133,6 +134,9 @@ static void zapp_swiftui_pane_changed(void* ctx, int32_t key, int64_t value) {
             break;
         case ZAPP_PANE_KEY_INSPECTOR_PRESENTED:
             zapp_inspector_note_swiftui_visibility(ctx, value == 0);  // value=1 presented -> collapsed=false
+            break;
+        case ZAPP_PANE_KEY_INSPECTOR_WIDTH:
+            zapp_inspector_note_swiftui_width(ctx, (int)value);
             break;
         default: break;
     }
