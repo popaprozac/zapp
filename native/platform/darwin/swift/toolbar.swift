@@ -205,16 +205,32 @@ struct ZappToolbarContent: ToolbarContent {
 
   @ViewBuilder private func glyph(_ item: ZappToolbarItem, fallback: String) -> some View {
     if let icon = item.icon, icon.hasPrefix("sf:") { Image(systemName: String(icon.dropFirst(3))) }
+    else if let icon = item.icon, let img = Self.nsImage(for: icon) { Image(nsImage: img) }
     else { Image(systemName: fallback) }
   }
   @ViewBuilder private func label(_ item: ZappToolbarItem) -> some View {
     if let icon = item.icon, icon.hasPrefix("sf:") {
       Label(item.label ?? "", systemImage: String(icon.dropFirst(3)))
+    } else if let icon = item.icon, let img = Self.nsImage(for: icon) {
+      Label { Text(item.label ?? "") } icon: { Image(nsImage: img) }
     } else if let t = item.label, !t.isEmpty {
       Text(t)
     } else {
       Image(systemName: "circle")  // fallback so an iconless/labelless button is still tappable
     }
+  }
+
+  // Resolve a non-`sf:` icon (file path or `data:` URL) to an NSImage — parity with
+  // AppKit's zapp_resolve_icon families. `sf:` symbols are handled inline above.
+  private static func nsImage(for icon: String) -> NSImage? {
+    if icon.hasPrefix("data:") {
+      guard let comma = icon.firstIndex(of: ","),
+            icon[..<comma].contains(";base64"),
+            let data = Data(base64Encoded: String(icon[icon.index(after: comma)...])) else { return nil }
+      return NSImage(data: data)
+    }
+    if icon.hasPrefix("sf:") { return nil }
+    return NSImage(contentsOfFile: icon)   // file path
   }
 }
 
