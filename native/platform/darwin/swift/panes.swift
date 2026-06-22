@@ -88,9 +88,12 @@ struct PaneLayout: View {
       .inspector(isPresented: inspectorPresentedBinding) {
         if let inspector { PaneHost(view: inspector).ignoresSafeArea() }
       }
-      // Toolbar on the DETAIL (matching the proven spike): keeps the
-      // NavigationSplitView's `.toolbar(removing: .sidebarToggle)` effective so
-      // SwiftUI's auto sidebar toggle stays suppressed (no duplicate).
+      // Toolbar on the DETAIL (matching the proven spike): it must live inside
+      // the NavigationSplitView's content context, NOT on the body (a body-level
+      // `.toolbar` re-introduces the navigation toolbar context — see the body
+      // comment above). We do NOT use `.toolbar(removing: .sidebarToggle)`: it
+      // doesn't take across the hosting seam, and we intentionally KEEP SwiftUI's
+      // native auto sidebar toggle (see the `rootView` comment above).
       .toolbar { ZappToolbarContent(state: toolbar, pane: state) }
   }
 
