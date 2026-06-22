@@ -34,12 +34,18 @@ final class PaneState: ObservableObject {
   }
   let ctx: UnsafeMutableRawPointer?
   let cb: ZappSwiftStateCallback?
+  // 2c: bleed pane content up under the titlebar (full-height look) ONLY when the
+  // window has transparent/hidden chrome (titleBarStyle hidden/hiddenInset). For a
+  // standard `default` titlebar the panes respect the safe area (content below the
+  // title bar) — keeps AppKit/SwiftUI parity per resolved titlebar style.
+  let bleedTop: Bool
 
   init(ctx: UnsafeMutableRawPointer?, cb: ZappSwiftStateCallback?,
-       sidebarVisible: Bool, inspectorPresented: Bool) {
+       sidebarVisible: Bool, inspectorPresented: Bool, bleedTop: Bool) {
     self.ctx = ctx; self.cb = cb
     self.sidebarVisible = sidebarVisible
     self.inspectorPresented = inspectorPresented
+    self.bleedTop = bleedTop
   }
 }
 
@@ -63,10 +69,13 @@ struct PaneLayout: View {
   @ViewBuilder private var rootView: some View {
     if let sidebar {
       NavigationSplitView(columnVisibility: sidebarVisibilityBinding) {
-        // 2c TILING FIX: the sidebar column must NOT .ignoresSafeArea() — that
-        // modifier is what made NavigationSplitView render the sidebar as a floating
-        // overlay (vs a tiled column) in our NSHostingController-hosted NSWindow.
+        // 2c TILING FIX: never use ALL-edges .ignoresSafeArea() on a pane — that flips
+        // the whole NavigationSplitView into floating-overlay. A SCOPED top-only
+        // container ignore keeps the column tiled AND lets content bleed under the
+        // titlebar — but ONLY for transparent/hidden chrome (bleedTop); a `default`
+        // titlebar gets an empty edge set (= no-op) so content sits below the bar.
         PaneHost(view: sidebar)
+          .ignoresSafeArea(.container, edges: state.bleedTop ? .top : [])
           .navigationSplitViewColumnWidth(min: 180, ideal: 260, max: 480)
       } detail: {
         detail
@@ -84,15 +93,16 @@ struct PaneLayout: View {
   }
 
   @ViewBuilder private var detail: some View {
-    // 2c TILING FIX: NO pane may .ignoresSafeArea() — ANY pane that does flips the
-    // whole NavigationSplitView into the floating-overlay presentation (proven 2c).
-    // So the detail respects the safe area: content sits below the unified toolbar and
-    // the sidebar column is full-height — the native Mail/Messages layout. Content
-    // cannot bleed under the titlebar in tiled mode (that bleed IS the overlay trigger);
-    // for a full-bleed look use presentation:"overlay" or the AppKit path.
+    // 2c: scoped top-only safe-area ignore so content bleeds under the titlebar with
+    // transparent/hidden chrome, while the panes stay tiled (all-edges ignore would
+    // flip the whole NavigationSplitView into floating-overlay). Gated on bleedTop so
+    // a `default` titlebar keeps content below the bar (AppKit/SwiftUI parity).
     PaneHost(view: content)
+      .ignoresSafeArea(.container, edges: state.bleedTop ? .top : [])
       .inspector(isPresented: inspectorPresentedBinding) {
-        if let inspector { PaneHost(view: inspector) }
+        if let inspector {
+          PaneHost(view: inspector).ignoresSafeArea(.container, edges: state.bleedTop ? .top : [])
+        }
       }
       // Toolbar on the DETAIL (matching the proven spike): it must live inside
       // the NavigationSplitView's content context, NOT on the body (a body-level
@@ -126,9 +136,11 @@ struct PaneLayout: View {
 public func zapp_swift_panes_state_create(_ ctx: UnsafeMutableRawPointer?,
                                           _ cb: ZappSwiftStateCallback?,
                                           _ sidebarVisible: Bool,
-                                          _ inspectorPresented: Bool) -> UnsafeMutableRawPointer? {
+                                          _ inspectorPresented: Bool,
+                                          _ bleedTop: Bool) -> UnsafeMutableRawPointer? {
   let state = PaneState(ctx: ctx, cb: cb,
-                        sidebarVisible: sidebarVisible, inspectorPresented: inspectorPresented)
+                        sidebarVisible: sidebarVisible, inspectorPresented: inspectorPresented,
+                        bleedTop: bleedTop)
   return Unmanaged.passRetained(state).toOpaque()
 }
 

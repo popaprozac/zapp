@@ -11,7 +11,6 @@ proc openInfoWindow(app: App, args: JsonNode): string =
   ## App-using service — opens a window. Only safe via the async (main-thread)
   ## worker invoke path; would crash on the sync (nil-app) path.
   let win = app.window.create(WindowOptions(title: "Opened from a worker", width: 380, height: 220))
-  win.show()
   "opened"
 
 proc onReady(id: cint, handle: pointer) {.cdecl.} =
@@ -30,9 +29,13 @@ proc runApp(): int =
     title: "Kitchen Sink",
     visible: false,            # deferred show — revealed by onReady
     width: 1100, height: 700,
-    sidebar: SidebarOptions(url: "#sidebar-pane", width: 240, presentation: SidebarPresentation.Overlay),
+    sidebar: SidebarOptions(url: "#sidebar-pane", width: 240, presentation: SidebarPresentation.Default),
     inspector: InspectorOptions(url: "#inspector-pane", width: 300, collapsed: true),
     inspectable: Inspectable.Auto,
+    # Opt into the modern hidden unified chrome explicitly (the full-bleed tiled
+    # Mail/Messages look). With the 2c change, an UNSET titleBarStyle now resolves
+    # to `default` (standard titlebar) — apps choose the hidden look on purpose.
+    titleBarStyle: TitleBarStyle.Hidden,
   ))
   win.onReady(onReady)
 

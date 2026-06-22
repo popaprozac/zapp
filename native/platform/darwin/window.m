@@ -85,7 +85,8 @@ typedef void (*ZappSwiftStateCallback)(void* ctx, int32_t key, int64_t value);
 enum { ZAPP_PANE_KEY_SIDEBAR_VISIBLE = 1, ZAPP_PANE_KEY_INSPECTOR_PRESENTED = 2 };
 
 extern void* zapp_swift_panes_state_create(void* ctx, ZappSwiftStateCallback cb,
-                                           bool sidebarVisible, bool inspectorPresented);
+                                           bool sidebarVisible, bool inspectorPresented,
+                                           bool bleedTop);
 extern void zapp_swift_panes_state_release(void* state);
 extern void zapp_swift_panes_set_sidebar_visible(void* state, bool visible);
 extern void zapp_swift_panes_set_inspector_presented(void* state, bool presented);
@@ -1041,13 +1042,18 @@ void* darwin_window_create(WindowOptions* opts) {
                 // when present; inspector shown unless created collapsed.
                 bool sidebarVisible = useSidebar;
                 bool inspectorPresented = useInspector && !wopts_inspector_collapsed(opts);
+                // 2c: bleed pane content under the titlebar only for transparent/hidden
+                // chrome (titleBarStyle hidden=1 / hiddenInset=2). A `default` titlebar
+                // (tbs 0, and Unset=3 which now resolves to default) keeps content below
+                // the bar — matches the AppKit path per resolved style.
+                bool paneBleedTop = (tbs == 1 || tbs == 2);
 
                 // Shared, observable pane state. ctx = host NSWindow* (the registry
                 // key the reverse dispatcher resolves controllers by); cb = the
                 // file-static reverse dispatcher. The delegate owns this handle and
                 // releases it once at teardown.
                 swiftPaneState = zapp_swift_panes_state_create((__bridge void*)window,
-                    zapp_swiftui_pane_changed, sidebarVisible, inspectorPresented);
+                    zapp_swiftui_pane_changed, sidebarVisible, inspectorPresented, paneBleedTop);
 
                 // Shared, observable toolbar state. ctx = the numeric host id boxed
                 // as a pointer (the dispatcher unboxes it for window:toolbar-clicked's
@@ -1064,21 +1070,14 @@ void* darwin_window_create(WindowOptions* opts) {
                 // without this). `.fullSizeContentView` is the documented mitigation and
                 // also gives the modern full-height sidebar. (See native-ui-strategy.md.)
                 [window setStyleMask:([window styleMask] | NSWindowStyleMaskFullSizeContentView)];
-                // Parity with the AppKit branch (tbs==3 below): a sidebar window with an
-                // unspecified title-bar style (Unset) gets the hidden-title unified chrome.
-                // Without this the SwiftUI path shows the native window title (duplicating
-                // the app's own heading). tbs 1/2 (explicit hidden/hiddenInset) were already
-                // hidden up top for all windows; this covers the Unset sidebar default.
-                if (tbs == 3) {
-                    [window setTitleVisibility:NSWindowTitleHidden];
-                    [window setTitlebarAppearsTransparent:YES];
-                    // KNOWN SwiftUI LIMITATION: hiding the title collapses SwiftUI's
-                    // .navigation/.primaryAction toolbar split (items pack leading) — the
-                    // placement split needs the title as a layout anchor, and there is no
-                    // reliable macOS-14 workaround (single-ToolbarItem+HStack+Spacer can't
-                    // expand). AppKit's flexibleSpace is title-independent, so it still splits.
-                    // So hidden-title SwiftUI windows get a flat (leading) toolbar. Documented.
-                }
+                // titleBarStyle resolution (2c): Unset (tbs==3) now resolves to DEFAULT —
+                // a standard title bar — same as tbs==0. Apps opt into the hidden unified
+                // chrome explicitly via titleBarStyle hidden/hiddenInset (tbs 1/2), which
+                // the common block up top (~798) already applies for ALL windows. So no
+                // sidebar-specific hidden default here anymore (parity with AppKit + least
+                // surprise). KNOWN SwiftUI limitation when hidden IS chosen: the title-less
+                // .navigation/.primaryAction toolbar split packs leading (no title anchor) —
+                // documented in native-ui-strategy.md (#658).
                 // Toolbar-style parity: AppKit sets window.toolbarStyle from the toolbar
                 // `style` (darwin_toolbar_attach), which the SwiftUI path skips. Set the
                 // unified style here (tbs==2 already chose unifiedCompact up top). This
@@ -1172,11 +1171,11 @@ void* darwin_window_create(WindowOptions* opts) {
             } else
 #endif
             {
-            if (tbs == 3) {
-                [window setStyleMask:([window styleMask] | NSWindowStyleMaskFullSizeContentView)];
-                [window setTitleVisibility:NSWindowTitleHidden];
-                [window setTitlebarAppearsTransparent:YES];
-            }
+            // titleBarStyle resolution (2c): Unset (tbs==3) now resolves to DEFAULT (a
+            // standard title bar) — no sidebar-specific hidden chrome. Apps opt into the
+            // hidden unified chrome explicitly via hidden/hiddenInset (tbs 1/2), applied
+            // for ALL windows in the common block up top (~798). Parity with the SwiftUI
+            // branch + least surprise.
 
             // Content pane (always present). Vibrancy wraps the MAIN pane only.
             NSViewController* contentVC = [[NSViewController alloc] init];
