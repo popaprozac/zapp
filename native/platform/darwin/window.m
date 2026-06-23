@@ -1159,6 +1159,25 @@ void* darwin_window_create(WindowOptions* opts) {
                     // resolve + drive the PaneState (no splitVC/NSSplitViewItem).
                     zapp_sidebar_register_swiftui((__bridge void*)window, swiftPaneState,
                                                   host_slot, sidebar_slot, !sidebarVisible);
+                    // #671a: NavigationSplitView estimates the column narrow while the sidebar
+                    // webview is still mounting and ignores the modifier's `ideal` at runtime, so
+                    // the configured width doesn't take at launch. Snap to it deterministically
+                    // once the split has laid out — the automated version of the manual setWidth
+                    // "snap" (idempotent; re-setting the same width is harmless). setPosition stays
+                    // within the PaneGeometryLocker's [min,max], and WidthReader mirrors the
+                    // result back into PaneState.
+                    extern void darwin_sidebar_set_width(int32_t window_id, int32_t width);
+                    int32_t cfgSidebarW = (int32_t)wopts_sidebar_width(opts);
+                    int32_t hsForWidth = host_slot;
+                    if (cfgSidebarW > 0) {
+                        const double snapDelays[3] = {0.1, 0.4, 0.9};
+                        for (int si = 0; si < 3; si++) {
+                            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(snapDelays[si] * NSEC_PER_SEC)),
+                                           dispatch_get_main_queue(), ^{
+                                darwin_sidebar_set_width(hsForWidth, cfgSidebarW);
+                            });
+                        }
+                    }
                 }
 
                 // Inspector webview: own transport slot, HOST identity (win-<host>), always
@@ -1503,6 +1522,7 @@ void* darwin_window_create(WindowOptions* opts) {
         swiftUIToolbar = (delegate.swiftPaneState != NULL);
 #endif
         const char* toolbarJson = wopts_toolbar_json(opts);
+        extern void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_user_script);
         if (!swiftUIToolbar && toolbarJson && toolbarJson[0]) {
             darwin_toolbar_attach((__bridge void*)window, toolbarJson, host_slot);
             // Initial chrome-metrics injection, one runloop tick later: the
@@ -1512,12 +1532,35 @@ void* darwin_window_create(WindowOptions* opts) {
             // updates — the user can switch Icon/Text display modes from the
             // toolbar's context menu at runtime — re-inject via the
             // controller's contentLayoutRect KVO (toolbar.m).
-            extern void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_user_script);
             NSWindow* toolbarWindow = window;
             dispatch_async(dispatch_get_main_queue(), ^{
                 zapp_toolbar_inject_metrics((__bridge void*)toolbarWindow, host_slot, true);
             });
         }
+#ifdef ZAPP_HAS_SWIFTUI
+        else if (swiftUIToolbar) {
+            // #670: on the SwiftUI pane path we do NOT attach an NSToolbar (SwiftUI's
+            // `.toolbar` renders the chrome). But the chrome metrics are measured at
+            // webview-create time (webview.m) BEFORE that toolbar has rendered, so the
+            // titlebar band comes out short → --zapp-titlebar-height too small → content
+            // underlaps the toolbar (the overlap). Re-measure once the SwiftUI toolbar
+            // has laid out (frame−contentLayoutRect now spans the full unified band) and
+            // re-inject. Live (false) ticks fix the visible launch state; one persisted
+            // (true) once settled so reloads keep the corrected value (runs last on load
+            // → wins over webview.m's early script). No NSToolbar / KVO here — the band
+            // is static after launch on this path (no Icon/Text display-mode menu).
+            NSWindow* swWindow = window;
+            int32_t hsMetrics = host_slot;
+            const double metricDelays[3] = {0.1, 0.4, 0.9};
+            for (int mi = 0; mi < 3; mi++) {
+                bool persist = (mi == 2);
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(metricDelays[mi] * NSEC_PER_SEC)),
+                               dispatch_get_main_queue(), ^{
+                    zapp_toolbar_inject_metrics((__bridge void*)swWindow, hsMetrics, persist);
+                });
+            }
+        }
+#endif
 
         return (__bridge_retained void*)window;
     }
