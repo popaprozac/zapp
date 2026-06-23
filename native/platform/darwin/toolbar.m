@@ -364,6 +364,32 @@ void darwin_toolbar_attach(void* window_ptr, const char* toolbar_json, int32_t w
     [window addObserver:c forKeyPath:@"contentLayoutRect" options:0 context:NULL];
 }
 
+// SwiftUI pane path (#670): SwiftUI owns the `.toolbar`, so we do NOT attach an
+// NSToolbar — but the chrome CSS vars (--zapp-titlebar-height / --zapp-toolbar-height)
+// still need to track the band height, which only becomes correct once SwiftUI lays the
+// toolbar out (a tick or two after the hosting controller mounts). Instead of guessing
+// with dispatch_after, register the SAME deterministic `contentLayoutRect` KVO the AppKit
+// path uses (ZappToolbarController.observeValueForKeyPath → zapp_toolbar_inject_metrics),
+// reusing the controller purely as a metrics observer (no identifiers / NSToolbar). The
+// KVO fires the instant the toolbar lays out → correct vars with no visible settle delay.
+// Cleaned up by zapp_toolbar_unregister on window destroy (same registry).
+void zapp_metrics_observe_swiftui(void* window_ptr, int32_t window_numeric_id) {
+    if (!window_ptr) return;
+    NSCAssert([NSThread isMainThread], @"zapp toolbar registry is main-thread-only");
+    NSWindow* window = (__bridge NSWindow*)window_ptr;
+    if (!zapp_toolbars) zapp_toolbars = [NSMutableDictionary dictionary];
+    NSValue* key = [NSValue valueWithPointer:window_ptr];
+    if (zapp_toolbars[key]) return;   // already observing — don't double-register the KVO
+    ZappToolbarController* c = [[ZappToolbarController alloc] init];
+    c.window = window;
+    c.windowNumericId = window_numeric_id;
+    zapp_toolbars[key] = c;            // retains c + makes zapp_toolbar_unregister tear down the KVO
+    [window addObserver:c forKeyPath:@"contentLayoutRect" options:0 context:NULL];
+    // Inject once now (persisted, for reloads) — the KVO re-injects the corrected value the
+    // moment the SwiftUI toolbar lays out and changes contentLayoutRect.
+    zapp_toolbar_inject_metrics(window_ptr, window_numeric_id, true);
+}
+
 // Replace the full item set. Registry hit: reconcile the SAME NSToolbar
 // instance (the delegate serves the new defs). Registry miss: late-attach
 // via darwin_toolbar_attach (style honored), then schedule this path's own

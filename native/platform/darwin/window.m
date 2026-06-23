@@ -1539,26 +1539,14 @@ void* darwin_window_create(WindowOptions* opts) {
         }
 #ifdef ZAPP_HAS_SWIFTUI
         else if (swiftUIToolbar) {
-            // #670: on the SwiftUI pane path we do NOT attach an NSToolbar (SwiftUI's
-            // `.toolbar` renders the chrome). But the chrome metrics are measured at
-            // webview-create time (webview.m) BEFORE that toolbar has rendered, so the
-            // titlebar band comes out short → --zapp-titlebar-height too small → content
-            // underlaps the toolbar (the overlap). Re-measure once the SwiftUI toolbar
-            // has laid out (frame−contentLayoutRect now spans the full unified band) and
-            // re-inject. Live (false) ticks fix the visible launch state; one persisted
-            // (true) once settled so reloads keep the corrected value (runs last on load
-            // → wins over webview.m's early script). No NSToolbar / KVO here — the band
-            // is static after launch on this path (no Icon/Text display-mode menu).
-            NSWindow* swWindow = window;
-            int32_t hsMetrics = host_slot;
-            const double metricDelays[3] = {0.1, 0.4, 0.9};
-            for (int mi = 0; mi < 3; mi++) {
-                bool persist = (mi == 2);
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(metricDelays[mi] * NSEC_PER_SEC)),
-                               dispatch_get_main_queue(), ^{
-                    zapp_toolbar_inject_metrics((__bridge void*)swWindow, hsMetrics, persist);
-                });
-            }
+            // #670 (A1): on the SwiftUI pane path SwiftUI owns the `.toolbar`, so we do NOT
+            // attach an NSToolbar. The chrome metrics are measured at webview-create time
+            // (webview.m) BEFORE that toolbar lays out → titlebar band too short → content
+            // underlaps it. Register the deterministic `contentLayoutRect` KVO (same machinery
+            // as the AppKit path) so the metrics re-inject the INSTANT the toolbar lays out —
+            // no guessed dispatch_after, no visible settle delay.
+            extern void zapp_metrics_observe_swiftui(void* window_ptr, int32_t window_numeric_id);
+            zapp_metrics_observe_swiftui((__bridge void*)window, host_slot);
         }
 #endif
 
