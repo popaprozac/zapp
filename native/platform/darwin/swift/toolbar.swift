@@ -159,7 +159,7 @@ struct ZappToolbarContent: ToolbarContent {
     func renderable(_ items: ArraySlice<ZappToolbarItem>) -> [ZappToolbarItem] {
       items.filter {
         $0.type != "space" && $0.type != "flexibleSpace"
-          && $0.type != "trackingSeparator" && $0.type != "toggleSidebar"
+          && $0.type != "trackingSeparator"
       }
     }
     if let split = state.items.firstIndex(where: { $0.type == "flexibleSpace" }) {
@@ -184,8 +184,16 @@ struct ZappToolbarContent: ToolbarContent {
 
   @ViewBuilder private func itemView(_ item: ZappToolbarItem) -> some View {
     switch item.type {
-    // toggleSidebar is filtered out in `groups` — SwiftUI's native auto toggle
-    // handles it (see the `groups` comment). Only toggleInspector + buttons here.
+    case "toggleSidebar":
+      // #668: app-rendered sidebar toggle. The native auto toggle is removed
+      // (`.toolbar(removing: .sidebarToggle)` on the sidebar content in panes.swift) —
+      // it was an escape hatch (clicking it made NavigationSplitView re-derive the split
+      // item, resetting canCollapse and un-locking the #665 drag-gate) and couldn't be
+      // greyed. Mirror toggleInspector: drive sidebarVisible, disable (greyed,
+      // AppKit-parity) when the sidebar is non-collapsible. Programmatic show/hide
+      // still works via PaneState directly.
+      Button { withAnimation { pane.sidebarVisible.toggle() } } label: { glyph(item, fallback: "sidebar.left") }
+        .disabled(item.enabled == false || !pane.sidebarCollapsible)
     case "toggleInspector":
       // #665: disable (greyed, AppKit-parity) when the inspector is non-collapsible — so
       // the toolbar toggle can't collapse it, matching collapsible:false. Reactive via the

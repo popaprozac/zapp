@@ -228,16 +228,18 @@ struct PaneLayout: View {
           // #665: gate divider-drag collapse when collapsible:false (AppKit lock on
           // the backing NSSplitView — the only lever that stops the drag cleanly).
           .background(SplitViewLocker(state: state))
+          // #668: remove SwiftUI's native auto sidebar toggle and render the app's
+          // `toggleSidebar` item ourselves (toolbar.swift) — the native toggle was an
+          // escape hatch (it re-derived the split item, resetting canCollapse and
+          // un-locking the #665 drag-gate) and couldn't be greyed when collapsible:false.
+          // Placed on the sidebar CONTENT (not the body): on the body, `removing:` leaked
+          // a duplicate across the AppKit↔SwiftUI hosting seam (the 2b finding).
+          .toolbar(removing: .sidebarToggle)
       } detail: {
         detail
       }
       // Tiling vs overlay is Sub-cycle 2c; keep the Sub-cycle-1 style.
       .navigationSplitViewStyle(.balanced)
-      // We KEEP SwiftUI's native auto sidebar toggle (no `.toolbar(removing:)`):
-      // `.toolbar(removing:)` doesn't take across the AppKit↔SwiftUI hosting seam
-      // (it leaked a duplicate), and the native toggle drives this column's
-      // visibility (bound to PaneState) directly — so the app's `toggleSidebar`
-      // item is satisfied by it (we don't render our own; see toolbar.swift).
     } else {
       detail
     }
