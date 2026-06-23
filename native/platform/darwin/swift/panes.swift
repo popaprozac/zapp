@@ -139,6 +139,63 @@ struct WidthReader: View {
   }
 }
 
+// #665 sidebar collapsible:false gating. NavigationSplitView owns its own collapse
+// state machine and IGNORES the SwiftUI column-width modifier + the columnVisibility
+// binding-clamp for divider drags (the clamp catches it only AFTER a visual collapse
+// → glitch). The ONLY lever that gates the drag cleanly is at the AppKit layer: reach
+// NavigationSplitView's REAL backing NSSplitView and lock the sidebar SPLIT ITEM with
+// canCollapse=false + canCollapseFromWindowResize=false + a hard `minimumThickness`
+// floor (the divider physically can't cross it, so the collapse threshold is never
+// reached). Proven in spikes/swiftui-pane-control (FINDINGS.md, 2026-06-22).
+//
+// We reach the split view via a dependency-free view-tree walk (the same thing
+// swiftui-introspect does, but version-token-proof for macOS 26+) — Zapp also already
+// ships `zapp_find_split_view` for the width reach-through. Mounted in the sidebar
+// subtree as a `.background`, so `updateNSView` re-fires on every @Published change
+// (and a delayed re-apply catches NavigationSplitView re-deriving the item post-layout).
+@available(macOS 14.0, *)
+struct SplitViewLocker: NSViewRepresentable {
+  @ObservedObject var state: PaneState
+
+  func makeNSView(context: Context) -> NSView { NSView() }
+
+  func updateNSView(_ nsView: NSView, context: Context) {
+    let collapsible = state.sidebarCollapsible
+    let minW = state.sidebarMinW
+    for delay in [0.0, 0.1, 0.3] {
+      DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+        applyLock(from: nsView, collapsible: collapsible, minW: minW)
+      }
+    }
+  }
+
+  private func applyLock(from view: NSView, collapsible: Bool, minW: CGFloat) {
+    guard let split = findSplitView(from: view),
+          let controller = split.delegate as? NSSplitViewController,
+          let sidebarItem = controller.splitViewItems.first else { return }
+    sidebarItem.canCollapse = collapsible
+    sidebarItem.canCollapseFromWindowResize = collapsible
+    sidebarItem.minimumThickness = collapsible ? NSSplitViewItem.unspecifiedDimension : minW
+  }
+
+  private func findSplitView(from view: NSView) -> NSSplitView? {
+    var v: NSView? = view
+    while let cur = v {
+      if let sp = cur as? NSSplitView { return sp }
+      v = cur.superview
+    }
+    if let root = view.window?.contentView { return descend(root) }
+    return nil
+  }
+  private func descend(_ view: NSView) -> NSSplitView? {
+    if let sp = view as? NSSplitView { return sp }
+    for sub in view.subviews {
+      if let found = descend(sub) { return found }
+    }
+    return nil
+  }
+}
+
 @available(macOS 14.0, *)
 struct PaneLayout: View {
   let content: NSView
@@ -168,6 +225,9 @@ struct PaneLayout: View {
           .ignoresSafeArea(.container, edges: state.bleedTop ? .top : [])
           .paneSidebarWidth(state)
           .background(WidthReader { w in state.noteSidebarWidth(w) })
+          // #665: gate divider-drag collapse when collapsible:false (AppKit lock on
+          // the backing NSSplitView — the only lever that stops the drag cleanly).
+          .background(SplitViewLocker(state: state))
       } detail: {
         detail
       }
@@ -322,6 +382,17 @@ public func zapp_swift_panes_set_inspector_resizable(_ state: UnsafeMutableRawPo
 public func zapp_swift_panes_set_inspector_collapsible(_ state: UnsafeMutableRawPointer, _ collapsible: Bool) {
   Unmanaged<PaneState>.fromOpaque(state).takeUnretainedValue().inspectorCollapsible = collapsible
 }
+
+// #665 RESOLVED (see SplitViewLocker above): the SwiftUI sidebar divider-drag collapse
+// IS gateable — not via SwiftUI (NavigationSplitView ignores the column-width modifier
+// and the columnVisibility binding-clamp catches the drag only AFTER a visual collapse =
+// glitch), but at the AppKit layer: lock the backing NSSplitView's sidebar item with
+// canCollapse=false + canCollapseFromWindowResize=false + a hard minimumThickness floor.
+// SplitViewLocker applies it from inside the view tree, driven by state.sidebarCollapsible.
+// Proven dependency-free in spikes/swiftui-pane-control (FINDINGS.md). Dead ends ruled out
+// along the way: one-shot/per-layout canCollapse-only (no thickness floor) didn't hold;
+// replacing the split delegate CRASHES (NSSplitViewController asserts it owns its delegate).
+// Side effect: canCollapse=false makes macOS hide the built-in sidebar toggle (see #668).
 
 // Build the hosting controller. `state` carries initial visibility; the old
 // showInspector Bool param is gone. Returns a +1-retained NSHostingController;

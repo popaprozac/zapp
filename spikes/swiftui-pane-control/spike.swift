@@ -4,27 +4,25 @@ import AppKit
 #endif
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SwiftUI pane-control spike (2c risk gate).
+// SwiftUI pane-control spike (2c risk gate) + #665 divider-drag collapse gating.
 //
-// Three unknowns for Sub-cycle 2c (runtime sidebar control on the SwiftUI
-// NavigationSplitView path, macOS). SwiftUI exposes column *bounds*
-// (min/ideal/max), not an imperative "set this column to N px now" — so we test
-// whether external @State driving those bounds can stand in for:
+// Original 2c probe (sections 1-3) tested setWidth / setResizable / presentation
+// by driving the column BOUNDS (min/ideal/max). See FINDINGS.md.
 //
-//   (1) setWidth(px)     — pin the sidebar to an exact width by setting
-//                          min == ideal == max == px. Does the column actually
-//                          jump there, cleanly, and survive re-layout?
-//   (2) setResizable(b)  — lock by pinning min == max == current width; unlock
-//                          by restoring a real range. Does the drag handle
-//                          actually disable / re-enable?
-//   (3) presentation     — force TILE (sidebar beside content) vs OVERLAY
-//                          (sidebar floats over content) on macOS. Toggle the
-//                          NavigationSplitViewStyle + columnVisibility and SEE
-//                          which combination (if any) yields each mode.
+// Section (4) is the #665 experiment: can `collapsible:false` stop the SIDEBAR
+// divider-drag collapse? Two mechanisms have already FAILED (see FINDINGS):
+//   - the columnVisibility binding clamp → GLITCH (collapse → snap back), in BOTH
+//     the NSHostingController hybrid AND a real SwiftUI Scene. Host is not the var.
+//   - SwiftUI's `.navigationSplitViewColumnWidth(min==max)` → does NOT gate the drag.
 //
-// Everything is driven from the detail-pane control panel (the proxy for Zapp's
-// router pushing sidebar:setWidth / setResizable / presentation at runtime).
-// Watch the sidebar column as you tap. The status line echoes the live bounds.
+// This run tests the AppKit-level lever the research points to: reach
+// NavigationSplitView's REAL backing NSSplitView (here via a dependency-free
+// manual finder — the same thing swiftui-introspect would do, but version-token
+// proof) and lock the sidebar SPLIT ITEM with the full combination:
+//     canCollapse = false
+//     canCollapseFromWindowResize = false
+//     minimumThickness = minW        ← hard floor: divider can't reach collapse
+// No clamp this run, so whatever we SEE is the AppKit lock alone.
 // ─────────────────────────────────────────────────────────────────────────────
 
 enum SplitStyleChoice: String, CaseIterable, Identifiable {
@@ -40,6 +38,12 @@ final class Model: ObservableObject {
   @Published var style: SplitStyleChoice = .balanced
   @Published var columnVisibility: NavigationSplitViewVisibility = .all
 
+  // (4) #665: when false → apply the AppKit collapse-lock to the backing NSSplitView.
+  @Published var collapsibleAllowed: Bool = true
+  // The locker writes here so the UI can SHOW whether introspection found the split
+  // view + applied the lock (guards against false negatives from "never found it").
+  @Published var lockStatus: String = "—"
+
   // (1) setWidth(px): pin min == ideal == max == px.
   func setWidth(_ px: CGFloat) { minW = px; idealW = px; maxW = px }
   // setResizable(true): restore a real drag range.
@@ -51,7 +55,8 @@ final class Model: ObservableObject {
 
   var status: String {
     "min \(Int(minW)) · ideal \(Int(idealW)) · max \(Int(maxW)) · style \(style.rawValue) · " +
-    (columnVisibility == .all ? "shown" : "collapsed")
+    (columnVisibility == .all ? "shown" : "collapsed") + " · " +
+    "collapsible \(collapsibleAllowed ? "ON" : "OFF") · lock: \(lockStatus)"
   }
 }
 
@@ -91,12 +96,18 @@ struct ControlPanel: View {
             Button("Collapse") { withAnimation { model.columnVisibility = .detailOnly } }
             Button("Show") { withAnimation { model.columnVisibility = .all } }
           }
-          Text("Resize the WINDOW narrow/wide while toggling styles — note when the " +
-               "sidebar TILES (pushes content) vs OVERLAYS (floats over content).")
-            .font(.caption).foregroundStyle(.secondary)
-          Text("Messages-style forced tile: a window min-size (minW + 360) is set, " +
-               "so narrowing the window can't collapse/overlay the sidebar — it " +
-               "should bottom out at its min width. Confirm it holds (not collapse).")
+        }
+
+        group("(4) collapsible OFF — #665 AppKit-LOCK test") {
+          Toggle("collapsible allowed (OFF = lock the backing NSSplitView)", isOn: $model.collapsibleAllowed)
+          Text("THE EXPERIMENT: turn collapsible OFF, then DRAG the sidebar divider " +
+               "all the way LEFT (past min). This run reaches NavigationSplitView's " +
+               "REAL NSSplitView and sets canCollapse=false + canCollapseFromWindowResize=" +
+               "false + minimumThickness=minW (a hard floor) on the sidebar item. " +
+               "Report: (a) divider bottoms out at min and WON'T collapse — WIN; " +
+               "(b) still collapses/glitches — AppKit lock also defeated. " +
+               "Watch the 'lock:' field in the status line — it must read 'applied' " +
+               "(if it says 'no split view' the introspection missed and the test is void).")
             .font(.caption).foregroundStyle(.secondary)
         }
       }
@@ -116,6 +127,66 @@ struct ControlPanel: View {
     .cornerRadius(8)
   }
 }
+
+#if os(macOS)
+// Manual "introspection" — the same thing swiftui-introspect does, but dependency-
+// and version-token-free (so macOS 26 can't silently no-op it). Mounted in the
+// sidebar subtree; finds the enclosing NavigationSplitView NSSplitView and applies
+// the AppKit collapse locks that SwiftUI's column-width modifier does NOT honor.
+struct SplitViewLocker: NSViewRepresentable {
+  @ObservedObject var model: Model
+
+  func makeNSView(context: Context) -> NSView { NSView() }
+
+  func updateNSView(_ nsView: NSView, context: Context) {
+    let allowed = model.collapsibleAllowed
+    let minW = model.minW
+    // Re-apply a few times to catch NavigationSplitView re-deriving the item after
+    // layout (the failure mode of one-shot canCollapse).
+    for delay in [0.0, 0.1, 0.3] {
+      DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+        applyLock(from: nsView, allowed: allowed, minW: minW)
+      }
+    }
+  }
+
+  private func applyLock(from view: NSView, allowed: Bool, minW: CGFloat) {
+    guard let split = findSplitView(from: view) else {
+      if model.lockStatus != "no split view" { model.lockStatus = "no split view" }
+      return
+    }
+    guard let controller = split.delegate as? NSSplitViewController,
+          let sidebarItem = controller.splitViewItems.first else {
+      if model.lockStatus != "no controller" { model.lockStatus = "no controller" }
+      return
+    }
+    sidebarItem.canCollapse = allowed
+    if #available(macOS 14.0, *) {
+      sidebarItem.canCollapseFromWindowResize = allowed
+    }
+    sidebarItem.minimumThickness = allowed ? NSSplitViewItem.unspecifiedDimension : minW
+    let s = allowed ? "applied(open)" : "applied(locked)"
+    if model.lockStatus != s { model.lockStatus = s }
+  }
+
+  private func findSplitView(from view: NSView) -> NSSplitView? {
+    var v: NSView? = view
+    while let cur = v {
+      if let sp = cur as? NSSplitView { return sp }
+      v = cur.superview
+    }
+    if let root = view.window?.contentView { return descend(root) }
+    return nil
+  }
+  private func descend(_ view: NSView) -> NSSplitView? {
+    if let sp = view as? NSSplitView { return sp }
+    for sub in view.subviews {
+      if let found = descend(sub) { return found }
+    }
+    return nil
+  }
+}
+#endif
 
 // Applying a runtime-chosen NavigationSplitViewStyle requires a typed switch
 // (the protocol is not directly switchable). A small modifier does it.
@@ -155,14 +226,15 @@ struct SpikeApp: App {
           }.padding()
         }
         .navigationSplitViewColumnWidth(min: model.minW, ideal: model.idealW, max: model.maxW)
+        #if os(macOS)
+        .background(SplitViewLocker(model: model))   // (4) #665 AppKit collapse-lock
+        #endif
       } detail: {
         ControlPanel(model: model).navigationTitle("2c probe")
       }
       .splitStyle(model.style)
-      // Messages-style forced TILE: a window minimum that accommodates the
-      // sidebar's min + a content min, so narrowing the window can't squeeze the
-      // sidebar past its min — it bottoms out narrow instead of overlaying or
-      // collapsing. Drag the window narrow and watch the sidebar hold at minW.
+      // Messages-style forced TILE: a window minimum that accommodates the sidebar's
+      // min + a content min (window-narrow forced-tile — distinct from divider-drag).
       .frame(minWidth: model.minW + 360, minHeight: 360)
     }
   }

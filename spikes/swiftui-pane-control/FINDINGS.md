@@ -30,7 +30,64 @@ SwiftUI limitations get **documented deviations** (lock can't capture a live
 user-dragged width; `NavigationSplitViewStyle` is not the tile/overlay lever on
 macOS), plus a few quirks to mitigate. Build 2c.
 
-## Probe results
+## #665 follow-up — divider-drag collapse gating (human visual run 2026-06-22)
+
+**Question:** can `collapsible:false` stop the SIDEBAR divider-drag collapse on the
+SwiftUI path? The hybrid (`NSHostingController`) glitches (visual collapse → snap
+back). Hypothesis: a REAL SwiftUI Scene would gate it cleanly → would validate #644.
+
+**Experiment:** added section (4) to the probe — a `columnVisibility` binding clamp
+that refuses `.detailOnly` when collapsible is OFF (the SAME mechanism Zapp ships in
+the hybrid), but here inside a real `WindowGroup`/`App` Scene. Toggle collapsible
+OFF, drag the divider past min.
+
+**Result — (b) GLITCH.** The clamp behaves IDENTICALLY in a real Scene: the column
+visually collapses mid-drag, then snaps back (the `blocked` counter climbs, proving
+the drag reaches the threshold and the clamp fires). **The host is not the variable.**
+
+**Verdict (clamp):** #644 (real SwiftUI Scene) does NOT fix sidebar divider-drag
+gating via the clamp. The clamp is a post-hoc catch — NavigationSplitView collapses
+visually before any binding setter can intervene, regardless of hosting. Dead.
+
+## #665 RESOLVED — AppKit lock on the backing NSSplitView (human visual run 2026-06-22)
+
+**The win.** Reach NavigationSplitView's REAL backing `NSSplitView` and lock the
+sidebar split ITEM with the full combination:
+
+```swift
+sidebarItem.canCollapse = false
+if #available(macOS 14.0, *) { sidebarItem.canCollapseFromWindowResize = false }
+sidebarItem.minimumThickness = minW          // hard floor — divider can't reach collapse
+```
+
+**Result — CLEAN. No collapse, no glitch.** The divider bottoms out at `minW` and
+will not collapse. Toggling collapsible back ON restores normal drag/collapse. This
+is the lever every SwiftUI-level approach missed: `minimumThickness` is a HARD floor
+the divider physically can't cross, so the collapse threshold is never reached —
+categorically different from `canCollapse` alone (flaky on macOS 26.x) and from the
+SwiftUI `.navigationSplitViewColumnWidth` modifier (ignored for the drag).
+
+**Why prior attempts failed:** they set `canCollapse` alone (no `minimumThickness`
+floor) and/or were one-shot (NavigationSplitView re-derives the item after layout).
+The probe applies the lock from inside the SwiftUI view tree via an
+`NSViewRepresentable` (`SplitViewLocker`) whose `updateNSView` re-fires on every
+@Published change + delayed re-apply, so the lock survives re-derivation.
+
+**Dependency-free.** `swiftui-introspect` is only a view-finder; the probe uses a
+manual superview-walk / contentView-descend (and Zapp already ships
+`zapp_find_split_view` for the width reach-through). No new dep required.
+
+**Known side effect:** `canCollapse=false` makes macOS HIDE the SwiftUI sidebar
+toggle button entirely (not grey it). Arguably correct (non-collapsible ⇒ no toggle),
+but if a visible-but-disabled toggle is wanted, that's a separate follow-up spike
+(app-render the sidebar toggle like the inspector toggle, via `.toolbar(removing:
+.sidebarToggle)` + custom button).
+
+**Production path:** port `SplitViewLocker` into `panes.swift`, mount on the sidebar
+PaneHost, bound to `state.sidebarCollapsible` + `state.sidebarMinW`, gated on
+ZAPP_HAS_SWIFTUI. The @Published-driven SwiftUI update cycle handles re-derivation.
+
+## Probe results (original 2c)
 
 | Probe | Mechanism | Result |
 |---|---|---|
