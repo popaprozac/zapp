@@ -160,6 +160,21 @@ enum ZappPaneRole { case sidebar, inspector }
 //   minimumThickness = resizable ? (collapsible ? unspecified : minW) : width  (#672 + #665 floor)
 //   canCollapse / canCollapseFromWindowResize = collapsible           (#665/#668)
 // + a one-time setPosition to `width` so the column opens at the configured width (#671a).
+// #673 experiment: a tiny NSObject KVO bridge. NavigationSplitView re-derives the sidebar
+// item's canCollapse / thickness on relayouts our resize observer can't see (e.g. a
+// content-only route change). Observe those properties directly and re-assert the moment
+// they flip — regardless of what triggered it. String-based KVO so a non-KVO-compliant
+// property quietly no-ops instead of crashing.
+final class PaneItemKVO: NSObject {
+  let reassert: () -> Void
+  init(_ reassert: @escaping () -> Void) { self.reassert = reassert; super.init() }
+  override func observeValue(forKeyPath keyPath: String?, of object: Any?,
+                             change: [NSKeyValueChangeKey: Any]?, context: UnsafeMutableRawPointer?) {
+    reassert()
+  }
+  static let keys = ["canCollapse", "minimumThickness"]
+}
+
 @available(macOS 14.0, *)
 struct PaneGeometryLocker: NSViewRepresentable {
   @ObservedObject var state: PaneState
@@ -170,7 +185,14 @@ struct PaneGeometryLocker: NSViewRepresentable {
     var resizable = true, collapsible = true
     weak var observed: NSSplitView?
     var token: NSObjectProtocol?
-    deinit { if let t = token { NotificationCenter.default.removeObserver(t) } }
+    weak var observedItem: NSSplitViewItem?
+    var itemKVO: PaneItemKVO?
+    deinit {
+      if let t = token { NotificationCenter.default.removeObserver(t) }
+      if let item = observedItem, let kvo = itemKVO {
+        for k in PaneItemKVO.keys { item.removeObserver(kvo, forKeyPath: k) }
+      }
+    }
   }
   func makeCoordinator() -> Coordinator { Coordinator() }
   func makeNSView(context: Context) -> NSView { NSView() }
@@ -227,6 +249,23 @@ struct PaneGeometryLocker: NSViewRepresentable {
         forName: NSSplitView.didResizeSubviewsNotification, object: split, queue: .main) { _ in
           if let pane = item(controller) { enforce(pane, c) }
         }
+    }
+    // #673: observe the item's collapse/thickness directly and re-assert the desired
+    // state the instant NavigationSplitView re-derives it (catches content-only relayouts
+    // — route changes — that fire neither @Published nor didResizeSubviews). Deferred to
+    // the next runloop so we never re-enter AppKit mid-notification; enforce() only writes
+    // when different, so our own correction can't loop.
+    if c.observedItem !== pane {
+      if let prev = c.observedItem, let kvo = c.itemKVO {
+        for k in PaneItemKVO.keys { prev.removeObserver(kvo, forKeyPath: k) }
+      }
+      let kvo = PaneItemKVO { [weak pane] in
+        guard let p = pane else { return }
+        DispatchQueue.main.async { enforce(p, c) }
+      }
+      for k in PaneItemKVO.keys { pane.addObserver(kvo, forKeyPath: k, options: [.new], context: nil) }
+      c.itemKVO = kvo
+      c.observedItem = pane
     }
   }
 
