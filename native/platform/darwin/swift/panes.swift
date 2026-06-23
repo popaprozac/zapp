@@ -106,18 +106,20 @@ final class PaneState: ObservableObject {
   }
 }
 
-// Always the min:ideal:max: form; "locked" collapses the range to min==max==width
-// (non-draggable). Reading the @Published fields here (from PaneLayout.body) registers
-// the SwiftUI dependency so relayouts re-apply current values.
+// WI-1 (#671/#672): the column-width modifier is now a CREATION-TIME HINT only — it
+// provides `ideal` (so the column appears near the right width on first layout) but a
+// PERMISSIVE [min,max] range. It must NOT express the resize-LOCK (min==max==width):
+// the modifier's range is soft + it fights the imperative item geometry. The hard
+// lock/clip/collapse-floor is owned in ONE place — PaneGeometryLocker — which writes the
+// backing NSSplitViewItem directly and re-asserts on relayout. Reading the @Published
+// fields here registers the SwiftUI dependency so the ideal tracks runtime width changes.
 @available(macOS 14.0, *)
 extension View {
   func paneSidebarWidth(_ s: PaneState) -> some View {
-    let locked = !s.sidebarResizable
-    return navigationSplitViewColumnWidth(
-      min: locked ? s.sidebarWidth : s.sidebarMinW,
-      ideal: s.sidebarWidth,
-      max: locked ? s.sidebarWidth : s.sidebarMaxW)
+    navigationSplitViewColumnWidth(min: s.sidebarMinW, ideal: s.sidebarWidth, max: s.sidebarMaxW)
   }
+  // Inspector keeps its existing declarative lock for now (WI-1 unifies the SIDEBAR only;
+  // the inspector's working path is smoked separately before extending PaneGeometryLocker to it).
   func paneInspectorWidth(_ s: PaneState) -> some View {
     let locked = !s.inspectorResizable
     return inspectorColumnWidth(
@@ -139,43 +141,93 @@ struct WidthReader: View {
   }
 }
 
-// #665 sidebar collapsible:false gating. NavigationSplitView owns its own collapse
-// state machine and IGNORES the SwiftUI column-width modifier + the columnVisibility
-// binding-clamp for divider drags (the clamp catches it only AFTER a visual collapse
-// → glitch). The ONLY lever that gates the drag cleanly is at the AppKit layer: reach
-// NavigationSplitView's REAL backing NSSplitView and lock the sidebar SPLIT ITEM with
-// canCollapse=false + canCollapseFromWindowResize=false + a hard `minimumThickness`
-// floor (the divider physically can't cross it, so the collapse threshold is never
-// reached). Proven in spikes/swiftui-pane-control (FINDINGS.md, 2026-06-22).
-//
-// We reach the split view via a dependency-free view-tree walk (the same thing
-// swiftui-introspect does, but version-token-proof for macOS 26+) — Zapp also already
-// ships `zapp_find_split_view` for the width reach-through. Mounted in the sidebar
-// subtree as a `.background`, so `updateNSView` re-fires on every @Published change
-// (and a delayed re-apply catches NavigationSplitView re-deriving the item post-layout).
-@available(macOS 14.0, *)
-struct SplitViewLocker: NSViewRepresentable {
-  @ObservedObject var state: PaneState
+enum ZappPaneRole { case sidebar, inspector }
 
+// WI-1 (#665/#671/#672): the SINGLE owner of a SwiftUI pane's backing NSSplitViewItem
+// geometry — width clamp (min/max thickness), resize-lock, collapse-gating, and the
+// initial width. The SwiftUI column-width modifier is unreliable at runtime (ideal is
+// initial-only; min/max are soft and ignored for divider-drag collapse + don't hard-clip),
+// so geometry MUST be enforced imperatively on the real NSSplitViewItem. Reaching it is
+// dependency-free (a view-tree walk — what swiftui-introspect does, but version-token-proof
+// for macOS 26+). Mounted in the pane subtree as a `.background`:
+//   • updateNSView re-applies on every @Published change (+ 0/0.1/0.3s for post-layout
+//     re-derivation),
+//   • a NSSplitViewDidResizeSubviews observer re-asserts on EVERY relayout (window resize,
+//     drag) so NavigationSplitView / the modifier can never wipe the lock (the #672 cause:
+//     the old locker only re-fired on @Published, so a relayout un-locked resize:off).
+// Unified geometry per (resizable, collapsible):
+//   maximumThickness = resizable ? maxW : width                       (hard clip → #671b)
+//   minimumThickness = resizable ? (collapsible ? unspecified : minW) : width  (#672 + #665 floor)
+//   canCollapse / canCollapseFromWindowResize = collapsible           (#665/#668)
+// + a one-time setPosition to `width` so the column opens at the configured width (#671a).
+@available(macOS 14.0, *)
+struct PaneGeometryLocker: NSViewRepresentable {
+  @ObservedObject var state: PaneState
+  let role: ZappPaneRole
+
+  final class Coordinator {
+    var width: CGFloat = 0, minW: CGFloat = 0, maxW: CGFloat = 0
+    var resizable = true, collapsible = true
+    weak var observed: NSSplitView?
+    var token: NSObjectProtocol?
+    deinit { if let t = token { NotificationCenter.default.removeObserver(t) } }
+  }
+  func makeCoordinator() -> Coordinator { Coordinator() }
   func makeNSView(context: Context) -> NSView { NSView() }
 
   func updateNSView(_ nsView: NSView, context: Context) {
-    let collapsible = state.sidebarCollapsible
-    let minW = state.sidebarMinW
+    let c = context.coordinator
+    switch role {
+    case .sidebar:
+      c.width = state.sidebarWidth; c.minW = state.sidebarMinW; c.maxW = state.sidebarMaxW
+      c.resizable = state.sidebarResizable; c.collapsible = state.sidebarCollapsible
+    case .inspector:
+      c.width = state.inspectorWidth; c.minW = state.inspectorMinW; c.maxW = state.inspectorMaxW
+      c.resizable = state.inspectorResizable; c.collapsible = state.inspectorCollapsible
+    }
     for delay in [0.0, 0.1, 0.3] {
-      DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-        applyLock(from: nsView, collapsible: collapsible, minW: minW)
-      }
+      DispatchQueue.main.asyncAfter(deadline: .now() + delay) { apply(from: nsView, c) }
     }
   }
 
-  private func applyLock(from view: NSView, collapsible: Bool, minW: CGFloat) {
+  // Resolve the item this locker owns: first item = sidebar, last item = inspector.
+  private func item(_ controller: NSSplitViewController) -> NSSplitViewItem? {
+    role == .sidebar ? controller.splitViewItems.first : controller.splitViewItems.last
+  }
+
+  // Idempotent geometry write (guarded so re-asserting inside a resize notification can't
+  // feed back into another resize). minimumThickness is the resize FLOOR (always minW when
+  // resizable — keeps minWidth honored, #671); canCollapse independently governs whether
+  // the item can collapse to 0 (#665/#668) — the floor + canCollapse coexist (collapse is a
+  // separate state from thickness). Locked (!resizable) pins min==max==width.
+  private func enforce(_ pane: NSSplitViewItem, _ c: Coordinator) {
+    let maxT = c.resizable ? c.maxW : c.width
+    let minT = c.resizable ? c.minW : c.width
+    if pane.canCollapse != c.collapsible { pane.canCollapse = c.collapsible }
+    if pane.canCollapseFromWindowResize != c.collapsible { pane.canCollapseFromWindowResize = c.collapsible }
+    if pane.maximumThickness != maxT { pane.maximumThickness = maxT }
+    if pane.minimumThickness != minT { pane.minimumThickness = minT }
+  }
+
+  private func apply(from view: NSView, _ c: Coordinator) {
     guard let split = findSplitView(from: view),
           let controller = split.delegate as? NSSplitViewController,
-          let sidebarItem = controller.splitViewItems.first else { return }
-    sidebarItem.canCollapse = collapsible
-    sidebarItem.canCollapseFromWindowResize = collapsible
-    sidebarItem.minimumThickness = collapsible ? NSSplitViewItem.unspecifiedDimension : minW
+          let pane = item(controller) else { return }
+    enforce(pane, c)
+    // Durability: re-assert geometry on every relayout of THIS split, so neither
+    // NavigationSplitView nor the modifier can wipe the lock (the #672 cause: the old locker
+    // only re-fired on @Published → a relayout silently un-locked resize:off).
+    // NOTE: create-time WIDTH is owned elsewhere (the column-width modifier's ideal +, for the
+    // deterministic case, a post-mount setWidth) — NOT forced here; an early create-time
+    // setPosition destabilized the initial chrome layout (#671a handled in WI-2).
+    if c.observed !== split {
+      if let t = c.token { NotificationCenter.default.removeObserver(t) }
+      c.observed = split
+      c.token = NotificationCenter.default.addObserver(
+        forName: NSSplitView.didResizeSubviewsNotification, object: split, queue: .main) { _ in
+          if let pane = item(controller) { enforce(pane, c) }
+        }
+    }
   }
 
   private func findSplitView(from view: NSView) -> NSSplitView? {
@@ -225,9 +277,9 @@ struct PaneLayout: View {
           .ignoresSafeArea(.container, edges: state.bleedTop ? .top : [])
           .paneSidebarWidth(state)
           .background(WidthReader { w in state.noteSidebarWidth(w) })
-          // #665: gate divider-drag collapse when collapsible:false (AppKit lock on
-          // the backing NSSplitView — the only lever that stops the drag cleanly).
-          .background(SplitViewLocker(state: state))
+          // WI-1 (#665/#671/#672): single owner of the sidebar's backing NSSplitViewItem
+          // geometry — clamp/resize-lock/collapse-gate + initial width, durable across relayout.
+          .background(PaneGeometryLocker(state: state, role: .sidebar))
           // #668: remove SwiftUI's native auto sidebar toggle and render the app's
           // `toggleSidebar` item ourselves (toolbar.swift) — the native toggle was an
           // escape hatch (it re-derived the split item, resetting canCollapse and
