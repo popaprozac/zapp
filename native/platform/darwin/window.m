@@ -342,6 +342,9 @@ API_AVAILABLE(macos(26.0))
     [super layout];
     NSView* cv = self.contentView;
     if (cv) {
+        // Inset the content view by the live sidebar overlap (safeAreaInsets.left)
+        // but keep top=0 so real content bleeds under the titlebar/toolbar; the
+        // extension then mirrors ONLY the under-sidebar strip (not the top).
         CGFloat l = self.safeAreaInsets.left;
         cv.frame = NSMakeRect(l, 0, self.bounds.size.width - l, self.bounds.size.height);
     }

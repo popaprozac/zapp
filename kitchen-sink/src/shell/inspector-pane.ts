@@ -3,6 +3,9 @@ import { registry } from "../sections/registry";
 import { findSection } from "../sections/types";
 
 export function renderInspectorPane(app: HTMLElement) {
+  // Fully transparent (html + body) so the native inspector glass shows through;
+  // the opaque :root/html background would otherwise block it.
+  document.documentElement.style.background = "transparent";
   document.body.style.background = "transparent";
   const dragStrip = Platform.isIOS
     ? ""

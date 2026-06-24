@@ -2,6 +2,10 @@ import { Events, Window, Platform } from "@zappdev/runtime";
 import { registry } from "../sections/registry";
 
 export function renderSidebarPane(app: HTMLElement) {
+  // Chrome panes must be fully transparent (html + body) so the native sidebar
+  // glass — and any content mirror behind it (backgroundExtension) — shows
+  // through. Body alone isn't enough: the opaque :root/html background blocks it.
+  document.documentElement.style.background = "transparent";
   document.body.style.background = "transparent";
   const dragStrip = Platform.isIOS
     ? ""
