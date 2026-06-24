@@ -31,8 +31,6 @@ proc runApp(): int =
     width: 1100, height: 700,
     sidebar: SidebarOptions(url: "#sidebar-pane", width: 300, minWidth: 150, maxWidth: 500, presentation: SidebarPresentation.Default),
     inspector: InspectorOptions(url: "#inspector-pane", width: 300, collapsed: true),
-    backgroundExtension: BackgroundExtension.Mirror,  # SMOKE (W3 T3): content mirrors behind the sidebar glass
-
     inspectable: Inspectable.Auto,
     # Opt into the modern hidden unified chrome explicitly (the full-bleed tiled
     # Mail/Messages look). With the 2c change, an UNSET titleBarStyle now resolves

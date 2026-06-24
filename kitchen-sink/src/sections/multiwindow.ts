@@ -60,6 +60,34 @@ export const multiwindowSection: Section = {
     onAct(host, "sheet-bottom", () => open(host, "bottom sheet", () =>
       Window.create({ title: "Drawer", asSheetOf: win, presentation: "bottomSheet", detents: ["medium", "large"], grabber: true })));
 
+    // ── Background extension showcase ────────────────────────────────────────
+    host.appendChild(card({
+      title: "Background extension",
+      intro: "Open demo windows that show backgroundExtension in action. Each window has a full-bleed gradient so the glass effect is clearly visible. macOS 26+ only; earlier versions show a plain sidebar.",
+      buttons: [
+        { act: "bg-mirror", label: "Background — Mirror" },
+        { act: "bg-extend", label: "Background — Extend" },
+      ],
+    }));
+    onAct(host, "bg-mirror", () => open(host, "bg-mirror window", () =>
+      Window.create({
+        title: "Background — Mirror",
+        url: "#bg-demo=mirror",
+        width: 900, height: 600,
+        backgroundExtension: "mirror",
+        sidebar: { url: "#sidebar-pane", width: 240 },
+        titleBarStyle: "hiddenInset",
+      })));
+    onAct(host, "bg-extend", () => open(host, "bg-extend window", () =>
+      Window.create({
+        title: "Background — Extend",
+        url: "#bg-demo=extend",
+        width: 900, height: 600,
+        backgroundExtension: "extend",
+        sidebar: { url: "#sidebar-pane", width: 240 },
+        titleBarStyle: "hiddenInset",
+      })));
+
     // ── Title bar & toolbar showcase ─────────────────────────────────────────
     host.appendChild(card({
       title: "Title bar & toolbar",
