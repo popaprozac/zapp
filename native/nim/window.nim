@@ -147,9 +147,6 @@ type
     toolbar*: ToolbarOptions
     toolbarJsonCache*: string   ## derived: wopts_toolbar_json serializes `toolbar` here
                                 ## so the returned cstring borrows a GC-pinned buffer (BOUNDARY RULE 1)
-    # --- native surface pane (macOS only; no-op off-Apple) ---
-    nativeSurface*: bool       ## macOS: attach a framework "native surface" pane
-                               ## (SwiftUI enhanced / AppKit baseline). No-op off-Apple.
     # --- runtime Window.create extras (JS-driven) ---
     asSheetOfId*: int32 = -1
     sheetPresentation*: int32
@@ -249,10 +246,6 @@ proc wopts_inspector_can_resize(p: pointer): bool {.exportc, cdecl.} = opt(p).in
 proc wopts_inspector_background_color(p: pointer): cstring {.exportc, cdecl.} = opt(p).inspector.backgroundColor.cstring
 proc wopts_inspector_numeric_id(p: pointer): int32 {.exportc, cdecl.} = opt(p).inspector.numericId
 
-# native-surface accessor — 1/0 gate read by window.m's split builder (macOS only).
-proc wopts_native_surface(p: pointer): cint {.exportc, cdecl.} =
-  (if opt(p).nativeSurface: 1 else: 0).cint
-
 # toolbar accessor — defined after the j* JSON helpers (serializeToolbar/
 # parseToolbarJson depend on jHasStr/jStr/jHasBool/jBool), just before
 # windowOptsApplyJson. C resolves wopts_toolbar_json by symbol name, so its
@@ -273,8 +266,6 @@ proc darwin_window_register_numeric_id(handle: pointer, id: int32) {.importc, cd
 proc darwin_window_get_by_numeric_id(numericId: int32): pointer {.importc, cdecl.}
 proc darwin_window_attach_modal(parent, modal: pointer) {.importc, cdecl.}
 proc darwin_window_numeric_id_for_string(wid: cstring): int32 {.importc, cdecl.}
-proc darwin_native_surface_backing(window_id: int32): cstring {.importc, cdecl.}
-
 type
   Window* = object
     ## A created window — its monotonic numeric id + the opaque NSWindow* handle.
@@ -349,11 +340,6 @@ proc onReady*(win: Window, cb: ReadyProc) =
 proc show*(win: Window) =
   ## Show the window — `win.show()`, the Nim analog of `Window.show()`.
   darwin_window_show(win.handle)
-
-proc nativeSurfaceBacking*(win: Window): string =
-  ## macOS: which backing the native-surface pane resolved to — "swiftui",
-  ## "appkit", or "" if the window has no native surface. Useful for DX/debug.
-  $darwin_native_surface_backing(win.id.int32)
 
 # --- JSON → WindowOptions (port of window.zc:window_opts_apply_json) -----------
 # nil-safe readers. Numeric reads use getFloat so a fractional dim from the bridge
@@ -486,7 +472,6 @@ proc windowOptsApplyJson*(o: WindowOptions, a: JsonNode) =
   if jHasStr(a, "backgroundColor"): o.backgroundColor = jStr(a, "backgroundColor")
   if jHasStr(a, "frameAutosaveName"): o.frameAutosaveName = jStr(a, "frameAutosaveName")
   if jHasStr(a, "toolbarJson"): o.toolbar = parseToolbarJson(jStr(a, "toolbarJson"))
-  if jHasBool(a, "nativeSurface"): o.nativeSurface = jBool(a, "nativeSurface", o.nativeSurface)
   let sb = a{"sidebar"}
   if not sb.isNil and sb.kind == JObject:
     if jHasStr(sb, "url"): o.sidebar.url = jStr(sb, "url")
@@ -549,11 +534,3 @@ proc windowOptsApplyJson*(o: WindowOptions, a: JsonNode) =
     if jHasStr(tl, "minimize"): o.trafficLights.minimize = buttonStateFromStr(jStr(tl, "minimize"), ButtonState.Enabled)
     if jHasStr(tl, "zoom"): o.trafficLights.zoom = buttonStateFromStr(jStr(tl, "zoom"), ButtonState.Enabled)
 
-proc zapp_native_surface_emit(window_id: int32, value: cstring) {.exportc, cdecl.} =
-  ## Called from nativesurface.m when the native-surface control fires. Emits a
-  ## "native-surface:action" event (detail = {value}) to every webview + worker
-  ## via dispatch_event_to_all, so web content can observe the native→Nim
-  ## round-trip. value is an ASCII backing tag like "swiftui:3"/"appkit:3".
-  let v = if value.isNil: "" else: $value
-  let detail = "{\"value\":\"" & v & "\"}"
-  dispatch_event_to_all("native-surface:action".cstring, detail.cstring)

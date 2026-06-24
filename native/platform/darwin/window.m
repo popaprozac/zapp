@@ -68,9 +68,6 @@ extern const char* wopts_toolbar_json(void* opts);
 extern void darwin_toolbar_attach(void* window_ptr, const char* toolbar_json, int32_t window_numeric_id);
 extern void zapp_toolbar_unregister(void* window_ptr);
 
-// Native-surface pane (nativesurface.m). 1/0 gate + the view builder. cint == int.
-extern int wopts_native_surface(void* opts);
-extern NSView* darwin_native_surface_create(int32_t window_id);
 extern int zapp_dispatch_event(int window_id, int event_id, int w, int h, int x, int y);
 // Primary display height (top-left global origin flip). Defined in screen.m.
 extern double zapp_primary_screen_height(void);
@@ -808,11 +805,7 @@ void* darwin_window_create(WindowOptions* opts) {
 
         WKWebView* inspectorWebviewRef = nil;
 
-        // Native-surface pane (macOS, SwiftUI/AppKit). Rides the same split root;
-        // requesting it alone (no sidebar/inspector) still builds the split.
-        bool useNativeSurface = (wopts_native_surface(opts) != 0);
-
-        if (useSidebar || useInspector || useNativeSurface) {
+        if (useSidebar || useInspector) {
             // Pane windows root on an NSSplitViewController (the split must be
             // the window's root BEFORE any webview loads — re-parenting a
             // WKWebView resets its content process and breaks the bridge). All
@@ -933,23 +926,6 @@ void* darwin_window_create(WindowOptions* opts) {
                 [splitVC addSplitViewItem:inspItem];
             }
 
-            // Trailing native-surface pane (optional, macOS only). Resolves to a
-            // SwiftUI (enhanced) or AppKit (baseline) backing in nativesurface.m;
-            // it shares the host's numeric id (host_slot) so the round-trip emit
-            // (zapp_native_surface_emit) lands on this window. Appended last via
-            // addSplitViewItem (append-at-count is the safe NSSplitView idiom).
-            if (useNativeSurface) {
-                NSView* surface = darwin_native_surface_create(host_slot);
-                if (surface) {
-                    NSViewController* surfaceVC = [[NSViewController alloc] init];
-                    surfaceVC.view = surface;
-                    NSSplitViewItem* surfaceItem =
-                        [NSSplitViewItem splitViewItemWithViewController:surfaceVC];
-                    surfaceItem.minimumThickness = 240;
-                    [splitVC addSplitViewItem:surfaceItem];
-                }
-            }
-
             window.contentViewController = splitVC;
             // Assigning a split-view controller with sidebar/inspector minimums makes
             // AppKit grow the window to fit their SUM — so the panes would be added
@@ -1066,11 +1042,9 @@ void* darwin_window_create(WindowOptions* opts) {
             [window setContentView:vfx];
         }
 
-        if (!useSidebar && !useInspector && !useNativeSurface) {
+        if (!useSidebar && !useInspector) {
             // Legacy single-webview path — byte-for-byte equivalent to before
             // (the vibrancy vfx, if any, was installed as contentView above).
-            // A native-surface-only window took the split path above (its main
-            // webview is the _ext content pane), so skip this fallback.
             darwin_webview_create((__bridge void*)window, inspectable, accept_first_mouse,
                                   custom_url, host_slot, useVibrancy);
         }
