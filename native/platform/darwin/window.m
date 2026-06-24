@@ -639,15 +639,6 @@ static NSVisualEffectMaterial zapp_material_from_name(const char* name) {
     return NSVisualEffectMaterialWindowBackground;
 }
 
-// --- SwiftUI toolbar resolver stubs (Task 2 bridge) ---
-// router.nim still references these symbols; they are removed in Task 3
-// along with the router.nim callers. Until then, no-op stubs keep the link green.
-bool zapp_window_uses_swiftui_toolbar(void* handle) { (void)handle; return false; }
-void* zapp_window_swiftui_toolbar_state(void* handle) { (void)handle; return NULL; }
-void zapp_swift_module_set_string(void* state, int32_t key, const char* value) {
-    (void)state; (void)key; (void)value;
-}
-
 // --- Window C API ---
 
 void* darwin_window_create(WindowOptions* opts) {

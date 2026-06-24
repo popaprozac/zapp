@@ -30,11 +30,3 @@ void darwin_toolbar_remove(void* window_ptr) {
     (void)window_ptr;
 }
 
-// SwiftUI toolbar is macOS-only; iOS never sets a swiftToolbarState, so the
-// router's swiftTb branch is always false here. These stubs exist solely to
-// satisfy the linker for the shared router.nim importc references.
-bool zapp_window_uses_swiftui_toolbar(void* handle) { (void)handle; return false; }
-void* zapp_window_swiftui_toolbar_state(void* handle) { (void)handle; return NULL; }
-void zapp_swift_module_set_string(void* state, int32_t key, const char* value) {
-    (void)state; (void)key; (void)value;
-}

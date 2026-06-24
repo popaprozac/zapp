@@ -11,24 +11,8 @@
 
 extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
 extern void darwin_window_eval_js(int32_t window_id, const char* js);
-// Reach-through (#660 hybrid): resolve the SwiftUI-backed NSSplitView/Controller
-// (defined in window.m) so setWidth can drive it imperatively. SwiftUI's declarative
-// `.navigationSplitViewColumnWidth` is initial-only (runtime min/max/ideal changes are
-// ignored on an already-laid-out column), so width MUST go through setPosition; the
-// WidthReader then captures the result back into the @Published width for persistence.
-// (setResizable/setCollapsible stay declarative — those DO take at runtime.)
 @class NSSplitViewController;
 extern NSSplitView* zapp_find_split_view(NSView* v);
-// SwiftUI pane drivers (defined in panes.swift) — only linked in when the
-// swiftc tier is compiled (native.swiftui != false + swiftc present). Behind
-// ZAPP_HAS_SWIFTUI so the opted-out/AppKit-only build doesn't reference an
-// undefined symbol; swiftPaneState is never set on that path anyway.
-#ifdef ZAPP_HAS_SWIFTUI
-extern void zapp_swift_panes_set_sidebar_visible(void* state, bool visible);
-extern void zapp_swift_panes_toggle_sidebar(void* state);
-extern void zapp_swift_panes_set_sidebar_resizable(void* state, bool resizable);
-extern void zapp_swift_panes_set_sidebar_collapsible(void* state, bool collapsible);
-#endif
 
 // --- Registry API consumed by window.m (Task 5) ---
 // No header — the codebase externs across .m files. window.m declares these
@@ -46,7 +30,6 @@ extern void zapp_swift_panes_set_sidebar_collapsible(void* state, bool collapsib
 @property (nonatomic, assign) int32_t sidebarSlotId;  // sidebar webview's slot
 @property (nonatomic, assign) BOOL lastCollapsed;
 @property (nonatomic, assign) int lastWidth;
-@property (nonatomic, assign) void* swiftPaneState;  // non-owning; set for the SwiftUI path (nil = AppKit)
 // Configured resize bounds captured at register (before any lock), so
 // setResizable(true) can restore the original drag range after a lock.
 @property (nonatomic, assign) CGFloat cfgMinThickness;
@@ -156,36 +139,12 @@ static void zapp_sidebar_sync_collapse(ZappSidebarController* c) {
 
 @end
 
-// Lazily bind the SwiftUI-backed split so setWidth can drive it imperatively
-// (#660 hybrid). A NavigationSplitView's NSSplitView lives in the VIEW tree with its
-// NSSplitViewController as the split view's delegate; resolve on first setWidth (the
-// split only exists after layout). Cached for the window's lifetime. Only setWidth uses
-// this — setResizable/setCollapsible are declarative (@Published).
-static BOOL zapp_sidebar_bind_swiftui(ZappSidebarController* c) {
-    if (c.splitVC && c.sidebarItem) return YES;            // already bound
-    if (!c.swiftPaneState) return NO;
-    void* win_ptr = darwin_window_get_by_numeric_id(c.hostWindowId);
-    NSWindow* win = (__bridge NSWindow*)win_ptr;
-    NSSplitView* sv = zapp_find_split_view(win.contentView);
-    NSSplitViewController* svc = [sv.delegate isKindOfClass:[NSSplitViewController class]]
-        ? (NSSplitViewController*)sv.delegate : nil;
-    if (!svc || svc.splitViewItems.count == 0) return NO;  // not laid out yet / not found
-    c.splitVC = svc;
-    c.sidebarItem = svc.splitViewItems.firstObject;
-    if (c.cfgMinThickness <= 0) c.cfgMinThickness = c.sidebarItem.minimumThickness;
-    if (c.cfgMaxThickness <= 0) c.cfgMaxThickness = c.sidebarItem.maximumThickness;
-    return YES;
-}
-
 // --- Control ops (router entry points) ---
 
 void darwin_sidebar_toggle(int32_t window_id) {
     zapp_sidebar_on_main(^{
         ZappSidebarController* c = zapp_sidebar_for_slot(window_id);
         if (!c) return;
-#ifdef ZAPP_HAS_SWIFTUI
-        if (c.swiftPaneState) { zapp_swift_panes_toggle_sidebar(c.swiftPaneState); return; }
-#endif
         if (!c.sidebarItem) return;
         // Documented AppKit idiom: animate the collapsed property via the
         // item's animator proxy.
@@ -197,9 +156,6 @@ void darwin_sidebar_collapse(int32_t window_id) {
     zapp_sidebar_on_main(^{
         ZappSidebarController* c = zapp_sidebar_for_slot(window_id);
         if (!c) return;
-#ifdef ZAPP_HAS_SWIFTUI
-        if (c.swiftPaneState) { zapp_swift_panes_set_sidebar_visible(c.swiftPaneState, false); return; }
-#endif
         if (!c.sidebarItem) return;
         if (c.sidebarItem.isCollapsed) return; // idempotent
         [[c.sidebarItem animator] setCollapsed:YES];
@@ -210,9 +166,6 @@ void darwin_sidebar_expand(int32_t window_id) {
     zapp_sidebar_on_main(^{
         ZappSidebarController* c = zapp_sidebar_for_slot(window_id);
         if (!c) return;
-#ifdef ZAPP_HAS_SWIFTUI
-        if (c.swiftPaneState) { zapp_swift_panes_set_sidebar_visible(c.swiftPaneState, true); return; }
-#endif
         if (!c.sidebarItem) return;
         if (!c.sidebarItem.isCollapsed) return; // idempotent
         [[c.sidebarItem animator] setCollapsed:NO];
@@ -232,14 +185,6 @@ void darwin_sidebar_set_width(int32_t window_id, int32_t width) {
     zapp_sidebar_on_main(^{
         ZappSidebarController* c = zapp_sidebar_for_slot(window_id);
         if (!c) return;
-        // #660 hybrid: width is imperative on BOTH paths (SwiftUI declarative column width
-        // is initial-only). On the SwiftUI path, bind resolves the NavigationSplitView's
-        // backing NSSplitView; setPosition moves the divider; the Swift WidthReader then
-        // captures the new width into @Published sidebarWidth so it persists.
-        if (c.swiftPaneState && !zapp_sidebar_bind_swiftui(c)) {
-            if (getenv("ZAPP_LOG")) NSLog(@"[zapp] sidebar: SwiftUI split not resolved yet — set_width skipped");
-            return;
-        }
         if (!c.sidebarItem || !c.splitVC) return;
         CGFloat w = (CGFloat)width;
         CGFloat minT = c.sidebarItem.minimumThickness;
@@ -257,21 +202,6 @@ void darwin_sidebar_set_collapsible(int32_t window_id, bool can_collapse) {
     zapp_sidebar_on_main(^{
         ZappSidebarController* c = zapp_sidebar_for_slot(window_id);
         if (!c) return;
-#ifdef ZAPP_HAS_SWIFTUI
-        if (c.swiftPaneState) {
-            // Declarative flag gates the native sidebar toggle (binding-clamp refuses
-            // .detailOnly). #665: ALSO forbid divider-drag collapse imperatively — the
-            // AppKit-native canCollapse=NO on the SwiftUI-backed item (the clamp alone
-            // leaves the drag glitchy). Same imperative-reach-through lever as setWidth.
-            zapp_swift_panes_set_sidebar_collapsible(c.swiftPaneState, can_collapse);
-            // NOTE (#665): the native sidebar toggle is gated by the @Published clamp above.
-            // NavigationSplitView ignores the item's canCollapse AND replacing its split
-            // delegate to clamp the drag CRASHES (NSSplitViewController asserts it must be
-            // its own split view's delegate). So the sidebar divider-DRAG collapse can't be
-            // forbidden on the SwiftUI path — documented limitation.
-            return;
-        }
-#endif
         if (!c.sidebarItem) return;
         c.sidebarItem.canCollapse = can_collapse ? YES : NO;
         // #665: revalidate so the system NSToolbarToggleSidebarItem greys when the sidebar
@@ -288,9 +218,6 @@ void darwin_sidebar_set_resizable(int32_t window_id, bool resizable) {
     zapp_sidebar_on_main(^{
         ZappSidebarController* c = zapp_sidebar_for_slot(window_id);
         if (!c) return;
-#ifdef ZAPP_HAS_SWIFTUI
-        if (c.swiftPaneState) { zapp_swift_panes_set_sidebar_resizable(c.swiftPaneState, resizable); return; }
-#endif
         if (!c.sidebarItem) return;
         if (resizable) {
             c.sidebarItem.minimumThickness = c.cfgMinThickness;
@@ -305,50 +232,6 @@ void darwin_sidebar_set_resizable(int32_t window_id, bool resizable) {
 }
 
 // --- Registry API for window.m (Task 5) ---
-
-// SwiftUI-backed register: no splitVC/NSSplitViewItem, no KVO/NSNotification
-// observers (the Swift callback is the observation source). lastCollapsed is the
-// dedup baseline, seeded from the visibility the PaneState was created with.
-void zapp_sidebar_register_swiftui(void* window_ptr, void* paneState,
-                                   int32_t host_id, int32_t sidebar_slot_id,
-                                   bool initial_collapsed) {
-    if (!window_ptr || !paneState) return;
-    zapp_sidebar_on_main(^{
-        if (!zapp_sidebars) zapp_sidebars = [NSMutableDictionary dictionary];
-        NSValue* key = [NSValue valueWithPointer:window_ptr];
-        ZappSidebarController* c = [[ZappSidebarController alloc] init];
-        c.swiftPaneState = paneState;
-        c.hostWindowId = host_id;
-        c.sidebarSlotId = sidebar_slot_id;
-        c.lastCollapsed = initial_collapsed ? YES : NO;
-        zapp_sidebars[key] = c;
-    });
-}
-
-// Reverse path: SwiftUI sidebar visibility changed. Dedup against lastCollapsed,
-// then emit the same event the AppKit KVO path emits. Called by window.m's
-// reverse dispatcher (always on the main thread — SwiftUI bindings fire on main).
-void zapp_sidebar_note_swiftui_visibility(void* window_ptr, bool collapsed) {
-    if (!window_ptr || !zapp_sidebars) return;
-    ZappSidebarController* c = zapp_sidebars[[NSValue valueWithPointer:window_ptr]];
-    if (!c) return;
-    if (collapsed == c.lastCollapsed) return;  // dedup (absorbs redundant sets)
-    c.lastCollapsed = collapsed;
-    zapp_sidebar_emit(c, collapsed ? "sidebar-collapsed" : "sidebar-expanded", nil);
-}
-
-// Reverse path: SwiftUI sidebar rendered width changed (WidthReader). Dedup against
-// lastWidth, then emit the same "sidebar-resized" event the AppKit splitViewDidResize
-// path emits. Called by window.m's reverse dispatcher (always on the main thread).
-void zapp_sidebar_note_swiftui_width(void* window_ptr, int width) {
-    if (!window_ptr || !zapp_sidebars || width <= 0) return;
-    ZappSidebarController* c = zapp_sidebars[[NSValue valueWithPointer:window_ptr]];
-    if (!c) return;
-    if (width == c.lastWidth) return;  // dedup
-    c.lastWidth = width;
-    NSString* json = [NSString stringWithFormat:@"{\"width\":%d}", width];
-    zapp_sidebar_emit(c, "sidebar-resized", json);
-}
 
 void zapp_sidebar_register(void* window_ptr, NSSplitViewController* splitVC,
                            NSSplitViewItem* sidebarItem, int32_t host_id,
@@ -389,13 +272,10 @@ void zapp_sidebar_unregister(void* window_ptr) {
         NSValue* key = [NSValue valueWithPointer:window_ptr];
         ZappSidebarController* c = zapp_sidebars[key];
         if (!c) return;
-        if (!c.swiftPaneState) {  // AppKit-only observers; none installed on the SwiftUI path
-            @try {
-                [c.sidebarItem removeObserver:c forKeyPath:@"collapsed"];
-            } @catch (__unused NSException* e) {}
-            [[NSNotificationCenter defaultCenter] removeObserver:c];
-        }
-        // Do NOT release swiftPaneState here — the window delegate owns it.
+        @try {
+            [c.sidebarItem removeObserver:c forKeyPath:@"collapsed"];
+        } @catch (__unused NSException* e) {}
+        [[NSNotificationCenter defaultCenter] removeObserver:c];
         [zapp_sidebars removeObjectForKey:key];
     });
 }

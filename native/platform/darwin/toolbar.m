@@ -38,11 +38,9 @@ static void zapp_toolbar_on_main(void (^block)(void)) {
     else dispatch_async(dispatch_get_main_queue(), block);
 }
 
-// Shared toolbar emit — used by the NSToolbar handler AND the SwiftUI toolbar
-// reverse dispatcher (window.m). item_id must be non-NULL.
-// SAFETY: the SwiftUI side passes a const char* valid only during the call; the
-// NSString conversion below runs SYNCHRONOUSLY (before the dispatch_async), so
-// the captured `escaped` is a retained NSString and the raw pointer never
+// Shared toolbar emit — used by the NSToolbar handler. item_id must be non-NULL.
+// SAFETY: the NSString conversion runs SYNCHRONOUSLY (before the dispatch_async),
+// so the captured `escaped` is a retained NSString and the raw pointer never
 // escapes onto the async block.
 void zapp_toolbar_emit_click(int32_t host_id, const char* item_id) {
     if (!item_id) return;
@@ -63,10 +61,8 @@ void zapp_toolbar_emit_click(int32_t host_id, const char* item_id) {
     });
 }
 
-// Mirror menu.m's __menu:click emit so SwiftUI toolbar Menu items route
-// identically (NSMenuToolbarItem rides menu.m's broadcast; the SwiftUI path's
-// `Menu` buttons have no NSMenuItem to ride, so they re-emit the same event
-// shape here). menu.m emits, verbatim:
+// Mirror menu.m's __menu:click emit so NSMenuToolbarItem clicks route
+// identically. menu.m emits, verbatim:
 //   b._onEvent('__menu:click','{"id":"<escaped>"}')
 // with the same backslash/double-quote/single-quote escaping trio and the same
 // darwin_webview_eval_all + worker_broadcast_eval_js fan-out. SAFETY identical
@@ -362,32 +358,6 @@ void darwin_toolbar_attach(void* window_ptr, const char* toolbar_json, int32_t w
     // (user toggles Icon/Text display modes via the toolbar context menu).
     // Removed in zapp_toolbar_unregister.
     [window addObserver:c forKeyPath:@"contentLayoutRect" options:0 context:NULL];
-}
-
-// SwiftUI pane path (#670): SwiftUI owns the `.toolbar`, so we do NOT attach an
-// NSToolbar — but the chrome CSS vars (--zapp-titlebar-height / --zapp-toolbar-height)
-// still need to track the band height, which only becomes correct once SwiftUI lays the
-// toolbar out (a tick or two after the hosting controller mounts). Instead of guessing
-// with dispatch_after, register the SAME deterministic `contentLayoutRect` KVO the AppKit
-// path uses (ZappToolbarController.observeValueForKeyPath → zapp_toolbar_inject_metrics),
-// reusing the controller purely as a metrics observer (no identifiers / NSToolbar). The
-// KVO fires the instant the toolbar lays out → correct vars with no visible settle delay.
-// Cleaned up by zapp_toolbar_unregister on window destroy (same registry).
-void zapp_metrics_observe_swiftui(void* window_ptr, int32_t window_numeric_id) {
-    if (!window_ptr) return;
-    NSCAssert([NSThread isMainThread], @"zapp toolbar registry is main-thread-only");
-    NSWindow* window = (__bridge NSWindow*)window_ptr;
-    if (!zapp_toolbars) zapp_toolbars = [NSMutableDictionary dictionary];
-    NSValue* key = [NSValue valueWithPointer:window_ptr];
-    if (zapp_toolbars[key]) return;   // already observing — don't double-register the KVO
-    ZappToolbarController* c = [[ZappToolbarController alloc] init];
-    c.window = window;
-    c.windowNumericId = window_numeric_id;
-    zapp_toolbars[key] = c;            // retains c + makes zapp_toolbar_unregister tear down the KVO
-    [window addObserver:c forKeyPath:@"contentLayoutRect" options:0 context:NULL];
-    // Inject once now (persisted, for reloads) — the KVO re-injects the corrected value the
-    // moment the SwiftUI toolbar lays out and changes contentLayoutRect.
-    zapp_toolbar_inject_metrics(window_ptr, window_numeric_id, true);
 }
 
 // Replace the full item set. Registry hit: reconcile the SAME NSToolbar
