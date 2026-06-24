@@ -17,7 +17,6 @@ import std/json
 import apptypes
 export apptypes    # WindowManager visible to callers of window.nim
 import appconfig
-import dispatch    # dispatch_event_to_all — native→JS/worker event broadcast
 
 type
   TitleBarStyle* {.pure.} = enum   ## NSWindow title-bar style (window.m tag 0/1/2/3)
