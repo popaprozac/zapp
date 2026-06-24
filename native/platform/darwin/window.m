@@ -328,6 +328,26 @@ void zapp_dump_view_tree(NSView* v, int depth) {
     for (NSView* sub in v.subviews) zapp_dump_view_tree(sub, depth + 1);
 }
 
+// --- Top-preserving background extension subclass (macOS 26+) ---
+// Places the content view inset on the LEFT only (by the live sidebar overlap =
+// safeAreaInsets.left, which the content split item's
+// automaticallyAdjustsSafeAreaInsets keeps updated), at top=0 so real content
+// still bleeds under the titlebar/toolbar. The extension then mirrors only the
+// under-sidebar strip — not the top.
+API_AVAILABLE(macos(26.0))
+@interface ZappBgExtView : NSBackgroundExtensionView
+@end
+@implementation ZappBgExtView
+- (void)layout {
+    [super layout];
+    NSView* cv = self.contentView;
+    if (cv) {
+        CGFloat l = self.safeAreaInsets.left;
+        cv.frame = NSMakeRect(l, 0, self.bounds.size.width - l, self.bounds.size.height);
+    }
+}
+@end
+
 // --- Window Delegate ---
 // numericId cached — zero lookup cost per event.
 
@@ -895,8 +915,9 @@ void* darwin_window_create(WindowOptions* opts) {
             bool bgWantMirror = bgExt && strcmp(bgExt, "mirror") == 0;
             if (bgWantMirror && useSidebar) {
                 if (@available(macOS 26.0, *)) {
-                    NSBackgroundExtensionView* bev = [[NSBackgroundExtensionView alloc] initWithFrame:contentVC.view.bounds];
+                    ZappBgExtView* bev = [[ZappBgExtView alloc] initWithFrame:contentVC.view.bounds];
                     bev.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+                    bev.automaticallyPlacesContentView = NO;   // we place it (left-inset, top=0) to keep top bleed-under
                     bev.contentView = contentVC.view;   // mainContainer (holds the webview)
                     NSViewController* bgWrap = [[NSViewController alloc] init];
                     bgWrap.view = bev;

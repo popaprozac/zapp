@@ -6,6 +6,11 @@ const config: ZappConfig = {
   name: "kitchen-sink",
   identifier: "com.zapp.kitchensink",
   version: "0.1.0",
+  // SMOKE (W3 T3): mirror = liquid-glass sidebar overlap bleeds into content area;
+  // only the under-sidebar strip mirrors (top still bleeds under titlebar/toolbar).
+  window: {
+    backgroundExtension: "mirror",
+  },
   // Headless TypeScript workers that start when the app boots. New projects
   // default to `engine: "zjs"` — first-party, cross-platform, small,
   // iOS-friendly. On macOS you can opt into `engine: "bare-jsc"` for JIT
