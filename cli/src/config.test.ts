@@ -43,10 +43,3 @@ test("validateNative rejects a non-array / non-map value", () => {
 test("validateNative rejects non-string array entries", () => {
   expect(() => validateNative({ native: { linkFlags: [1, 2] } } as any)).toThrow(/native\.linkFlags/);
 });
-
-test("native.swiftui accepts a boolean and rejects non-boolean", () => {
-  expect(() => validateNative({ native: { swiftui: false } } as any)).not.toThrow();
-  expect(() => validateNative({ native: { swiftui: true } } as any)).not.toThrow();
-  expect(() => validateNative({} as any)).not.toThrow();
-  expect(() => validateNative({ native: { swiftui: "yes" } } as any)).toThrow(/swiftui/);
-});

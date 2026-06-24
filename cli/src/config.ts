@@ -757,14 +757,6 @@ export interface ZappConfig {
     frameworks?: PlatformValue<string[]>;
     linkFlags?: PlatformValue<string[]>;
     sources?: PlatformValue<string[]>;
-    /**
-     * Apple-only. Opt OUT of the SwiftUI "enhanced tier" for native surfaces.
-     * Default (omitted/true): when the Swift toolchain is present, native
-     * surfaces are backed by SwiftUI where its OS floor is met, falling back to
-     * AppKit otherwise. Set `false` to force the AppKit baseline and skip the
-     * `swiftc` build step entirely. No effect on Windows/Linux.
-     */
-    swiftui?: boolean;
   };
 }
 
@@ -869,9 +861,6 @@ export function validateNative(config: ZappConfig): void {
   checkField(n.frameworks, "frameworks");
   checkField(n.linkFlags, "linkFlags");
   checkField(n.sources, "sources");
-  if (n.swiftui !== undefined && typeof n.swiftui !== "boolean") {
-    throw new Error(`[zapp] native.swiftui must be a boolean, got ${typeof n.swiftui}`);
-  }
 }
 
 function validateWebEngine(engine?: ZappConfig["webEngine"]): void {
