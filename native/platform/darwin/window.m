@@ -63,6 +63,8 @@ extern int32_t wopts_inspector_numeric_id(void* opts);
 // honor a `resizable: false` option once the controller is registered.
 extern void darwin_sidebar_set_resizable(int32_t window_id, bool resizable);
 extern void darwin_inspector_set_resizable(int32_t window_id, bool resizable);
+// Background extension (window.zc accessor).
+extern const char* wopts_background_extension(void* opts);
 // Toolbar (toolbar.m + window.zc accessor).
 extern const char* wopts_toolbar_json(void* opts);
 extern void darwin_toolbar_attach(void* window_ptr, const char* toolbar_json, int32_t window_numeric_id);
@@ -883,9 +885,34 @@ void* darwin_window_create(WindowOptions* opts) {
                 [splitVC addSplitViewItem:sideItem];
             }
 
-            // Content pane.
+            // Content pane. backgroundExtension: extend = content extends under the
+            // floating sidebar via automaticallyAdjustsSafeAreaInsets; mirror = also
+            // wraps the content pane in NSBackgroundExtensionView so the sidebar's
+            // liquid-glass material bleeds into the content area. Both require macOS 26+
+            // and a sidebar; falls back to none (content beside sidebar) otherwise.
+            const char* bgExt = wopts_background_extension(opts);   // "none" | "extend" | "mirror"
+            bool bgWantExtend = bgExt && (strcmp(bgExt, "extend") == 0 || strcmp(bgExt, "mirror") == 0);
+            bool bgWantMirror = bgExt && strcmp(bgExt, "mirror") == 0;
+            if (bgWantMirror && useSidebar) {
+                if (@available(macOS 26.0, *)) {
+                    NSBackgroundExtensionView* bev = [[NSBackgroundExtensionView alloc] initWithFrame:contentVC.view.bounds];
+                    bev.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+                    bev.contentView = contentVC.view;   // mainContainer (holds the webview)
+                    NSViewController* bgWrap = [[NSViewController alloc] init];
+                    bgWrap.view = bev;
+                    contentVC = bgWrap;
+                }
+            }
             NSSplitViewItem* contentItem = [NSSplitViewItem splitViewItemWithViewController:contentVC];
             [splitVC addSplitViewItem:contentItem];
+            if (bgWantExtend && useSidebar) {
+                if (@available(macOS 26.0, *)) {
+                    contentItem.automaticallyAdjustsSafeAreaInsets = YES;   // content extends under the floating sidebar
+                    NSLog(@"[zapp] backgroundExtension: %s (macOS 26)", bgExt);
+                } else {
+                    NSLog(@"[zapp] backgroundExtension: %s requested, falling back to none (macOS < 26)", bgExt);
+                }
+            }
 
             // Trailing inspector pane (optional).
             NSSplitViewItem* inspItem = nil;
