@@ -50,6 +50,11 @@ type
     Tile = "tile"
     Overlay = "overlay"
 
+  BackgroundExtension* {.pure.} = enum  ## content-pane bg vs floating sidebar (macOS 26+)
+    None = "none"             ## default: content sits beside the sidebar
+    Extend = "extend"         ## content flows under the sidebar glass
+    Mirror = "mirror"         ## NSBackgroundExtensionView mirrors/blurs behind glass
+
   ToolbarStyle* {.pure.} = enum          ## NSWindow.toolbarStyle
     Unified = "unified"       ## default
     UnifiedCompact = "unifiedCompact"
@@ -141,6 +146,7 @@ type
     # NSSplitViewItem.maximumThickness = wopts_sidebar_max_width(opts) literally,
     # so a 0 default clamps the pane to ZERO width (invisible sidebar — #460).
     # Those non-zero defaults are now carried by SidebarOptions/InspectorOptions.
+    backgroundExtension*: BackgroundExtension  ## macOS 26+: content bg vs floating sidebar
     sidebar*: SidebarOptions
     inspector*: InspectorOptions
     toolbar*: ToolbarOptions
@@ -177,6 +183,7 @@ let sidebarPresStr = (block:
   var a: array[SidebarPresentation, string]
   for p in SidebarPresentation: a[p] = $p
   a)
+let backgroundExtensionStr = [BackgroundExtension.None: "none", BackgroundExtension.Extend: "extend", BackgroundExtension.Mirror: "mirror"]
 
 # Generic string→enum: returns the member whose $ equals `s`, else `dflt`.
 # (The "" Default/sentinel member is itself matchable, so `s == ""` returns it.)
@@ -219,6 +226,9 @@ proc wopts_title_bar_style_tag(p: pointer): int32 {.exportc, cdecl.} = opt(p).ti
 proc wopts_traffic_light_close_tag(p: pointer): int32 {.exportc, cdecl.} = opt(p).trafficLights.close.int32
 proc wopts_traffic_light_minimize_tag(p: pointer): int32 {.exportc, cdecl.} = opt(p).trafficLights.minimize.int32
 proc wopts_traffic_light_zoom_tag(p: pointer): int32 {.exportc, cdecl.} = opt(p).trafficLights.zoom.int32
+
+proc wopts_background_extension(p: pointer): cstring {.exportc, cdecl.} =
+  backgroundExtensionStr[opt(p).backgroundExtension].cstring
 
 # sidebar accessors — unused feature; "" url short-circuits the sidebar branch.
 proc wopts_sidebar_url(p: pointer): cstring {.exportc, cdecl.} = opt(p).sidebar.url.cstring
@@ -468,6 +478,8 @@ proc windowOptsApplyJson*(o: WindowOptions, a: JsonNode) =
   if jHasBool(a, "acceptFirstMouse"): o.acceptFirstMouse = jBool(a, "acceptFirstMouse", o.acceptFirstMouse)
   if jHasBool(a, "autoCenter"): o.autoCenter = jBool(a, "autoCenter", o.autoCenter)
   if jHasStr(a, "vibrancy"): o.vibrancy = enumFromStr[Material](jStr(a, "vibrancy"), Material.Default)
+  if jHasStr(a, "backgroundExtension"):
+    o.backgroundExtension = enumFromStr[BackgroundExtension](jStr(a, "backgroundExtension"), BackgroundExtension.None)
   if jHasStr(a, "backgroundColor"): o.backgroundColor = jStr(a, "backgroundColor")
   if jHasStr(a, "frameAutosaveName"): o.frameAutosaveName = jStr(a, "frameAutosaveName")
   if jHasStr(a, "toolbarJson"): o.toolbar = parseToolbarJson(jStr(a, "toolbarJson"))

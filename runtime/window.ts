@@ -45,6 +45,20 @@ export const Material = {
 export type Material = (typeof Material)[keyof typeof Material];
 
 /**
+ * Content-pane background behavior relative to the floating sidebar (macOS 26+).
+ * `None` = content beside the sidebar (default). `Extend` = content flows under the
+ * floating sidebar; lay out with the injected `--zapp-safe-area-*` CSS vars. `Mirror`
+ * = NSBackgroundExtensionView mirrors/blurs content behind the glass (full-bleed media).
+ * Extend/Mirror fall back to `None` on macOS < 26. Sidebar-edge only.
+ */
+export const BackgroundExtension = {
+  None: "none",
+  Extend: "extend",
+  Mirror: "mirror",
+} as const;
+export type BackgroundExtension = (typeof BackgroundExtension)[keyof typeof BackgroundExtension];
+
+/**
  * Per-traffic-light state. `disabled` greys the button, `hidden` removes
  * it entirely (leaves a gap unless paired with a custom titlebar).
  */
@@ -231,6 +245,9 @@ export interface WindowOptions {
   toolbar?: ToolbarOptions;
   /** Attach a native inspector (trailing NSSplitViewItem). macOS only; no-op elsewhere. */
   inspector?: InspectorOptions;
+  /** macOS 26+. How the content pane's background relates to the floating sidebar.
+   *  Default `None`. Extend/Mirror fall back to `None` on older macOS. Create-time. */
+  backgroundExtension?: BackgroundExtension;
 }
 
 /** Options for a native sidebar (NSSplitViewItem) attached to a window. */
