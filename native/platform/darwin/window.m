@@ -75,96 +75,6 @@ extern int zapp_dispatch_event(int window_id, int event_id, int w, int h, int x,
 // Primary display height (top-left global origin flip). Defined in screen.m.
 extern double zapp_primary_screen_height(void);
 
-// SwiftUI pane host (panes.swift, macOS 14+). Wraps a populated content NSView in
-// an NSHostingView; +1-retained, consumed via __bridge_transfer. Only declared
-// when the swiftc tier is compiled in (native.swiftui != false + swiftc present).
-#ifdef ZAPP_HAS_SWIFTUI
-// Reverse state-change channel from SwiftUI (panes.swift). Scalar, main-thread,
-// change-driven. Keys match panes.swift; value is the new scalar (0/1 here).
-typedef void (*ZappSwiftStateCallback)(void* ctx, int32_t key, int64_t value);
-enum { ZAPP_PANE_KEY_SIDEBAR_VISIBLE = 1, ZAPP_PANE_KEY_INSPECTOR_PRESENTED = 2,
-       ZAPP_PANE_KEY_SIDEBAR_WIDTH = 3, ZAPP_PANE_KEY_INSPECTOR_WIDTH = 4 };
-
-extern void* zapp_swift_panes_state_create(void* ctx, ZappSwiftStateCallback cb,
-                                           bool sidebarVisible, bool inspectorPresented,
-                                           bool bleedTop,
-                                           double sidebarMinW, double sidebarWidth, double sidebarMaxW,
-                                           bool sidebarResizable, bool sidebarCollapsible,
-                                           double inspectorMinW, double inspectorWidth, double inspectorMaxW,
-                                           bool inspectorResizable, bool inspectorCollapsible);
-extern void zapp_swift_panes_state_release(void* state);
-extern void zapp_swift_panes_set_sidebar_visible(void* state, bool visible);
-extern void zapp_swift_panes_set_inspector_presented(void* state, bool presented);
-extern void zapp_swift_panes_toggle_sidebar(void* state);
-extern void zapp_swift_panes_toggle_inspector(void* state);
-extern void* zapp_swift_panes_create(void* state, void* toolbarState, void* content, void* sidebar, void* inspector);
-
-// Reverse string channel from SwiftUI (toolbar.swift). Sibling of
-// ZappSwiftStateCallback; value is a C string (itemId / menuId). cb is wired in
-// Task 4; passed NULL here.
-typedef void (*ZappSwiftStringCallback)(void* ctx, int32_t key, const char* value);
-extern void* zapp_swift_toolbar_state_create(void* ctx, ZappSwiftStringCallback cb);
-extern void zapp_swift_toolbar_state_release(void* state);
-extern void zapp_swift_module_set_string(void* state, int32_t key, const char* value);
-
-// Reverse-emit entries (defined in sidebar.m / inspector.m — wired in Tasks 2/3).
-extern void zapp_sidebar_note_swiftui_visibility(void* window_ptr, bool collapsed);
-extern void zapp_inspector_note_swiftui_visibility(void* window_ptr, bool collapsed);
-extern void zapp_sidebar_note_swiftui_width(void* window_ptr, int width);
-extern void zapp_inspector_note_swiftui_width(void* window_ptr, int width);
-// SwiftUI controller register variants (defined in sidebar.m / inspector.m — Tasks 2/3).
-extern void zapp_sidebar_register_swiftui(void* window_ptr, void* paneState,
-                                          int32_t host_id, int32_t sidebar_slot_id,
-                                          bool initial_collapsed);
-extern void zapp_inspector_register_swiftui(void* window_ptr, void* paneState,
-                                            int32_t host_id, int32_t inspector_slot_id,
-                                            bool initial_collapsed,
-                                            int32_t min_width, int32_t max_width);
-
-// File-static reverse dispatcher: PaneState's didSet fires this with the changed
-// key + new value (1=visible/0=collapsed). ctx is the host NSWindow*. The switch
-// arms are added in Tasks 2 (sidebar) and 3 (inspector); a stub today emits nothing.
-static void zapp_swiftui_pane_changed(void* ctx, int32_t key, int64_t value) {
-    switch (key) {
-        case ZAPP_PANE_KEY_SIDEBAR_VISIBLE:
-            zapp_sidebar_note_swiftui_visibility(ctx, value == 0);  // value=1 visible -> collapsed=false
-            break;
-        case ZAPP_PANE_KEY_SIDEBAR_WIDTH:
-            zapp_sidebar_note_swiftui_width(ctx, (int)value);
-            break;
-        case ZAPP_PANE_KEY_INSPECTOR_PRESENTED:
-            zapp_inspector_note_swiftui_visibility(ctx, value == 0);  // value=1 presented -> collapsed=false
-            break;
-        case ZAPP_PANE_KEY_INSPECTOR_WIDTH:
-            zapp_inspector_note_swiftui_width(ctx, (int)value);
-            break;
-        default: break;
-    }
-}
-
-// Shared toolbar emit helpers (toolbar.m). Defined regardless of SwiftUI, but
-// only referenced from the SwiftUI reverse dispatcher below.
-extern void zapp_toolbar_emit_click(int32_t host_id, const char* item_id);
-extern void zapp_toolbar_emit_menu_click(int32_t host_id, const char* menu_id);
-// SET_ITEMS-family keys (toolbar->SwiftUI, set_string); EVT keys (SwiftUI->native).
-// Must match panes.swift / toolbar.swift.
-enum { ZAPP_TB_SET_ITEMS = 1, ZAPP_TB_UPDATE_ITEM = 2, ZAPP_TB_CLEAR = 3 };
-enum { ZAPP_TB_EVT_CLICK = 1, ZAPP_TB_EVT_MENU_CLICK = 2 };
-
-// Reverse dispatcher for the SwiftUI toolbar string channel. The toolbar
-// module's ctx is the numeric host id boxed as a pointer (NOT the window ptr) —
-// see the state-create call below. host_slot=0 -> NULL ctx -> unboxes to host 0,
-// which is correct (no special-casing).
-static void zapp_swiftui_toolbar_event(void* ctx, int32_t key, const char* value) {
-    int32_t host = (int32_t)(intptr_t)ctx;
-    switch (key) {
-        case ZAPP_TB_EVT_CLICK:      zapp_toolbar_emit_click(host, value); break;
-        case ZAPP_TB_EVT_MENU_CLICK: zapp_toolbar_emit_menu_click(host, value); break;
-        default: break;
-    }
-}
-#endif
-
 // Event IDs (mirrored from window/events.zc)
 #ifndef ZAPP_EVENT_WINDOW_READY
 #define ZAPP_EVENT_WINDOW_READY       0
@@ -442,8 +352,6 @@ static const char kZappWindowDelegateKey = 0;
 @property (nonatomic, weak) WKWebView* mainWebview;
 @property (nonatomic, weak) WKWebView* sidebarWebview;
 @property (nonatomic, weak) WKWebView* inspectorWebview;
-@property (nonatomic, assign) void* swiftPaneState;  // owning ref to the SwiftUI PaneState (NULL on AppKit path)
-@property (nonatomic, assign) void* swiftToolbarState;  // owning ref to the SwiftUI ToolbarState (NULL on AppKit path)
 @property (nonatomic, assign) BOOL bridgeReady;
 @property (nonatomic, assign) BOOL pendingFocusEvent;
 @property (nonatomic, assign) BOOL wasZoomed;
@@ -656,46 +564,6 @@ void* darwin_window_get_by_numeric_id(int32_t numeric_id) {
     return (__bridge void*)w;
 }
 
-// --- SwiftUI toolbar routing resolvers (callable on ALL builds) ---
-//
-// router.nim's toolbar:* arm forks on these regardless of swiftc tier, so both
-// must compile when ZAPP_HAS_SWIFTUI is undefined — only the BODY guards the
-// SwiftUI bits (returns false/NULL on the AppKit path or opted-out windows).
-
-// True when this window renders its toolbar via SwiftUI (so the router routes
-// toolbar:* to the SwiftUI module instead of NSToolbar). False on AppKit/opted-out.
-bool zapp_window_uses_swiftui_toolbar(void* handle) {
-#ifdef ZAPP_HAS_SWIFTUI
-    if (!handle) return false;
-    NSWindow* window = (__bridge NSWindow*)handle;
-    ZappWindowDelegate* d = (ZappWindowDelegate*)[window delegate];
-    if ([d isKindOfClass:[ZappWindowDelegate class]]) return d.swiftToolbarState != NULL;
-#endif
-    (void)handle; return false;
-}
-
-// The SwiftUI ToolbarState handle for this window (NULL on the AppKit path).
-void* zapp_window_swiftui_toolbar_state(void* handle) {
-#ifdef ZAPP_HAS_SWIFTUI
-    if (!handle) return NULL;
-    NSWindow* window = (__bridge NSWindow*)handle;
-    ZappWindowDelegate* d = (ZappWindowDelegate*)[window delegate];
-    if ([d isKindOfClass:[ZappWindowDelegate class]]) return d.swiftToolbarState;
-#endif
-    (void)handle; return NULL;
-}
-
-#ifndef ZAPP_HAS_SWIFTUI
-// AppKit-only build (native.swiftui:false / macOS<14): router.nim's toolbar:* fork
-// references this Swift @_cdecl symbol (defined in toolbar.swift) unconditionally
-// at link time, even though the SwiftUI branch is never taken at runtime
-// (zapp_window_uses_swiftui_toolbar returns false). Provide a no-op so the
-// AppKit-only binary links. The real impl ships in toolbar.swift on the SwiftUI path.
-void zapp_swift_module_set_string(void* state, int32_t key, const char* value) {
-    (void)state; (void)key; (void)value;
-}
-#endif
-
 // --- JS eval on specific window (by numeric ID, O(1) lookup) ---
 
 void darwin_window_eval_js(int32_t window_id, const char* js) {
@@ -769,6 +637,15 @@ static NSVisualEffectMaterial zapp_material_from_name(const char* name) {
     else if ([mat isEqualToString:@"underWindowBackground"]) return NSVisualEffectMaterialUnderWindowBackground;
     else if ([mat isEqualToString:@"underPageBackground"])   return NSVisualEffectMaterialUnderPageBackground;
     return NSVisualEffectMaterialWindowBackground;
+}
+
+// --- SwiftUI toolbar resolver stubs (Task 2 bridge) ---
+// router.nim still references these symbols; they are removed in Task 3
+// along with the router.nim callers. Until then, no-op stubs keep the link green.
+bool zapp_window_uses_swiftui_toolbar(void* handle) { (void)handle; return false; }
+void* zapp_window_swiftui_toolbar_state(void* handle) { (void)handle; return NULL; }
+void zapp_swift_module_set_string(void* state, int32_t key, const char* value) {
+    (void)state; (void)key; (void)value;
 }
 
 // --- Window C API ---
@@ -939,8 +816,6 @@ void* darwin_window_create(WindowOptions* opts) {
         int32_t inspector_slot = wopts_inspector_numeric_id(opts);
 
         WKWebView* inspectorWebviewRef = nil;
-        void* swiftPaneState = NULL;  // SwiftUI PaneState handle (owned by the delegate; released once at teardown)
-        void* swiftToolbarState = NULL;  // SwiftUI ToolbarState handle (owned by the delegate; released once at teardown)
 
         // Native-surface pane (macOS, SwiftUI/AppKit). Rides the same split root;
         // requesting it alone (no sidebar/inspector) still builds the split.
@@ -958,259 +833,7 @@ void* darwin_window_create(WindowOptions* opts) {
             // is the ONLY value that gets this chrome default. An explicit Default
             // (tbs==0) falls through here, leaving a standard title bar even on a
             // split window; Hidden/HiddenInset (1/2) already hid it above.
-            bool useSwiftUIPanes = false;
-#ifdef ZAPP_HAS_SWIFTUI
-            // Sub-cycle 1: sidebar/inspector accessory'd windows use the SwiftUI pane
-            // layout on macOS 14+. native-surface windows keep the AppKit split for now.
-            if ((useSidebar || useInspector) && !useNativeSurface) {
-                if (@available(macOS 14.0, *)) useSwiftUIPanes = true;
-            }
-#endif
-            if (getenv("ZAPP_LOG")) {
-                NSLog(@"[zapp] window panes: %s", useSwiftUIPanes ? "swiftui" : "appkit");
-            }
 
-#ifdef ZAPP_HAS_SWIFTUI
-            if (useSwiftUIPanes) {
-                // Task 1: content pane only (sidebar/inspector added in Tasks 2-3).
-                // Build the content container (mirror the AppKit branch's content-pane
-                // container construction at window.m:797-808): an NSView sized to the
-                // window content frame, wrapped in a vibrancy NSVisualEffectView when
-                // useVibrancy. The representable wraps the bare NSView, so we do NOT
-                // need the NSViewController — just the resulting NSView* mainContainer.
-                NSView* mainContainer = [[NSView alloc] initWithFrame:[window contentView].frame];
-                mainContainer.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-                if (useVibrancy) {
-                    NSVisualEffectView* vfx = [[NSVisualEffectView alloc] initWithFrame:mainContainer.frame];
-                    vfx.material = material;
-                    vfx.blendingMode = NSVisualEffectBlendingModeBehindWindow;
-                    vfx.state = NSVisualEffectStateFollowsWindowActiveState;
-                    vfx.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-                    mainContainer = vfx;
-                }
-
-                // Task 2: sidebar pane (when requested). Mirror the AppKit branch's
-                // sidebar-container construction (window.m sideVC.view path: NSView sized
-                // to sidebar_width × height, with the material-override vfx OR the
-                // backgroundColor backdrop) — but the SwiftUI representable wraps a bare
-                // NSView, so we keep ONLY the resulting NSView* sidebarContainer (no
-                // NSViewController / NSSplitViewItem; the NavigationSplitView is the split).
-                NSView* sidebarContainer = nil;
-                if (useSidebar) {
-                    sidebarContainer = [[NSView alloc] initWithFrame:
-                        NSMakeRect(0, 0, (CGFloat)wopts_sidebar_width(opts), (CGFloat)wopts_height(opts))];
-                    const char* sidebarMaterialName = wopts_sidebar_material(opts);
-                    bool sidebarMaterialOverride = sidebarMaterialName && sidebarMaterialName[0] != '\0' &&
-                                                   strcmp(sidebarMaterialName, "sidebar") != 0;
-                    if (sidebarMaterialOverride) {
-                        NSVisualEffectView* svfx = [[NSVisualEffectView alloc] initWithFrame:sidebarContainer.bounds];
-                        svfx.material = zapp_material_from_name(sidebarMaterialName);
-                        svfx.blendingMode = NSVisualEffectBlendingModeBehindWindow;
-                        svfx.state = NSVisualEffectStateFollowsWindowActiveState;
-                        svfx.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-                        sidebarContainer = svfx;
-                    } else {
-                        int cr, cg, cb;
-                        const char* sbg = wopts_sidebar_background_color(opts);
-                        if (sbg && sbg[0] != '\0' && zapp_parse_hex_color(sbg, &cr, &cg, &cb)) {
-                            sidebarContainer.wantsLayer = YES;
-                            sidebarContainer.layer.backgroundColor =
-                                [NSColor colorWithSRGBRed:cr/255.0 green:cg/255.0 blue:cb/255.0 alpha:1.0].CGColor;
-                        }
-                    }
-                    sidebarContainer.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-                }
-
-                // Task 3: inspector pane (when requested). Mirror the AppKit branch's
-                // inspector-container construction (the inspVC.view path: NSView sized to
-                // inspector_width × height, with the material-override vfx OR the
-                // backgroundColor backdrop) — but the SwiftUI representable wraps a bare
-                // NSView, so we keep ONLY the resulting NSView* inspectorContainer (no
-                // NSViewController / NSSplitViewItem; the .inspector modifier is the split).
-                NSView* inspectorContainer = nil;
-                if (useInspector) {
-                    inspectorContainer = [[NSView alloc] initWithFrame:
-                        NSMakeRect(0, 0, (CGFloat)wopts_inspector_width(opts), (CGFloat)wopts_height(opts))];
-                    const char* inspectorMaterialName = wopts_inspector_material(opts);
-                    bool inspectorMaterialOverride = inspectorMaterialName && inspectorMaterialName[0] != '\0' &&
-                                                     strcmp(inspectorMaterialName, "sidebar") != 0;
-                    if (inspectorMaterialOverride) {
-                        NSVisualEffectView* ivfx = [[NSVisualEffectView alloc] initWithFrame:inspectorContainer.bounds];
-                        ivfx.material = zapp_material_from_name(inspectorMaterialName);
-                        ivfx.blendingMode = NSVisualEffectBlendingModeBehindWindow;
-                        ivfx.state = NSVisualEffectStateFollowsWindowActiveState;
-                        ivfx.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-                        inspectorContainer = ivfx;
-                    } else {
-                        int cr, cg, cb;
-                        const char* ibg = wopts_inspector_background_color(opts);
-                        if (ibg && ibg[0] != '\0' && zapp_parse_hex_color(ibg, &cr, &cg, &cb)) {
-                            inspectorContainer.wantsLayer = YES;
-                            inspectorContainer.layer.backgroundColor =
-                                [NSColor colorWithSRGBRed:cr/255.0 green:cg/255.0 blue:cb/255.0 alpha:1.0].CGColor;
-                        }
-                    }
-                    inspectorContainer.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-                }
-                // Initial pane visibility for the shared PaneState: sidebar shown
-                // when present; inspector shown unless created collapsed.
-                bool sidebarVisible = useSidebar;
-                bool inspectorPresented = useInspector && !wopts_inspector_collapsed(opts);
-                // 2c: bleed pane content under the titlebar only for transparent/hidden
-                // chrome (titleBarStyle hidden=1 / hiddenInset=2). A `default` titlebar
-                // (tbs 0, and Unset=3 which now resolves to default) keeps content below
-                // the bar — matches the AppKit path per resolved style.
-                bool paneBleedTop = (tbs == 1 || tbs == 2);
-
-                // Shared, observable pane state. ctx = host NSWindow* (the registry
-                // key the reverse dispatcher resolves controllers by); cb = the
-                // file-static reverse dispatcher. The delegate owns this handle and
-                // releases it once at teardown.
-                swiftPaneState = zapp_swift_panes_state_create((__bridge void*)window,
-                    zapp_swiftui_pane_changed, sidebarVisible, inspectorPresented, paneBleedTop,
-                    (double)wopts_sidebar_min_width(opts), (double)wopts_sidebar_width(opts),
-                    (double)wopts_sidebar_max_width(opts),
-                    wopts_sidebar_can_resize(opts), wopts_sidebar_collapsible(opts),
-                    (double)wopts_inspector_min_width(opts), (double)wopts_inspector_width(opts),
-                    (double)wopts_inspector_max_width(opts),
-                    wopts_inspector_can_resize(opts), wopts_inspector_collapsible(opts));
-
-                // Shared, observable toolbar state. ctx = the numeric host id boxed
-                // as a pointer (the dispatcher unboxes it for window:toolbar-clicked's
-                // win-<n> field); cb = the file-static reverse dispatcher (click /
-                // menu-click -> native). The delegate owns this handle and releases it
-                // once at teardown. The initial config toolbar is pushed below.
-                swiftToolbarState = zapp_swift_toolbar_state_create((void*)(intptr_t)host_slot,
-                    zapp_swiftui_toolbar_event);
-
-                // REQUIRED for the SwiftUI pane path: NavigationSplitView only behaves
-                // consistently in a HOSTED NSWindow with a full-size content view — its
-                // toolbar/sidebar chrome otherwise differs under NSHostingController vs
-                // the SwiftUI app lifecycle (toolbar items shifted on sidebar collapse
-                // without this). `.fullSizeContentView` is the documented mitigation and
-                // also gives the modern full-height sidebar. (See native-ui-strategy.md.)
-                [window setStyleMask:([window styleMask] | NSWindowStyleMaskFullSizeContentView)];
-                // titleBarStyle resolution (2c): Unset (tbs==3) now resolves to DEFAULT —
-                // a standard title bar — same as tbs==0. Apps opt into the hidden unified
-                // chrome explicitly via titleBarStyle hidden/hiddenInset (tbs 1/2), which
-                // the common block up top (~798) already applies for ALL windows. So no
-                // sidebar-specific hidden default here anymore (parity with AppKit + least
-                // surprise). KNOWN SwiftUI limitation when hidden IS chosen: the title-less
-                // .navigation/.primaryAction toolbar split packs leading (no title anchor) —
-                // documented in native-ui-strategy.md (#658).
-                // Toolbar-style parity: AppKit sets window.toolbarStyle from the toolbar
-                // `style` (darwin_toolbar_attach), which the SwiftUI path skips. Set the
-                // unified style here (tbs==2 already chose unifiedCompact up top). This
-                // ALSO restores the toolbar's leading/.navigation vs trailing/.primaryAction
-                // distribution — under the hidden-title transparent chrome, the default
-                // (automatic) style collapsed all items to the leading edge.
-                if (@available(macOS 11.0, *)) {
-                    if (tbs != 2) [window setToolbarStyle:NSWindowToolbarStyleUnified];
-                }
-
-                // Install the SwiftUI host (wrapping the content container + optional
-                // sidebar + optional inspector) as the window's contentView FIRST, so
-                // the containers are in the window before the webviews are created into
-                // them (mirrors the AppKit ordering where splitVC is root before _ext).
-                NSViewController* paneVC = (__bridge_transfer NSViewController*)zapp_swift_panes_create(
-                    swiftPaneState, swiftToolbarState, (__bridge void*)mainContainer,
-                    (__bridge void*)sidebarContainer, (__bridge void*)inspectorContainer);
-                window.contentViewController = paneVC;   // sets window.contentView = paneVC.view; window retains the VC
-                // NSHostingController overrides the window's content size on assignment; restore the
-                // configured size (sizingOptions=[] in panes.swift stops it re-driving on later layout).
-                [window setContentSize:NSMakeSize((CGFloat)wopts_width(opts), (CGFloat)wopts_height(opts))];
-                [paneVC.view layoutSubtreeIfNeeded];
-
-                // Create the content webview INTO mainContainer (same call as the AppKit
-                // path; never re-parented). pane_role=0; host_has_sidebar=useSidebar +
-                // host_has_inspector=useInspector so the Window.current() handle wires the
-                // sidebar + inspector panes.
-                darwin_webview_create_ext((__bridge void*)window, inspectable, accept_first_mouse,
-                                          custom_url, host_slot, useVibrancy,
-                                          (__bridge void*)mainContainer, -1, 0,
-                                          useSidebar, useInspector);
-
-                // Register the content webview (routing/bridge essential).
-                NSString* hostWindowId = [NSString stringWithFormat:@"win-%d", host_slot];
-                for (NSView* sub in mainContainer.subviews) {
-                    if ([sub isKindOfClass:[WKWebView class]]) {
-                        mainWebviewRef = (WKWebView*)sub;
-                        zapp_register_webview(host_slot, mainWebviewRef, hostWindowId);
-                        break;
-                    }
-                }
-
-                // Sidebar webview: own transport slot, HOST identity (win-<host>), always
-                // transparent so the pane material shows through, pane_role=1 (sidebar).
-                // NOTE: the SwiftUI register variant (below) wires a swiftPaneState-backed
-                // controller — no splitVC/NSSplitViewItem — so darwin_sidebar_* runtime ops
-                // resolve + drive the PaneState. zapp_set_sidebar_slot still runs (fan-out).
-                if (useSidebar) {
-                    darwin_webview_create_ext((__bridge void*)window, inspectable, accept_first_mouse,
-                                              sidebarUrl, sidebar_slot, true,
-                                              (__bridge void*)sidebarContainer, host_slot, 1,
-                                              useSidebar, useInspector);
-                    for (NSView* sub in sidebarContainer.subviews) {
-                        if ([sub isKindOfClass:[WKWebView class]]) { sidebarWebviewRef = (WKWebView*)sub; break; }
-                    }
-                    if (sidebarWebviewRef) zapp_register_webview(sidebar_slot, sidebarWebviewRef, hostWindowId);
-                    zapp_set_sidebar_slot(host_slot, sidebar_slot);   // event fan-out
-                    // Register a SwiftUI-backed controller so darwin_sidebar_* ops
-                    // resolve + drive the PaneState (no splitVC/NSSplitViewItem).
-                    zapp_sidebar_register_swiftui((__bridge void*)window, swiftPaneState,
-                                                  host_slot, sidebar_slot, !sidebarVisible);
-                    // #671a: NavigationSplitView estimates the column narrow while the sidebar
-                    // webview is still mounting and ignores the modifier's `ideal` at runtime, so
-                    // the configured width doesn't take at launch. Snap to it deterministically
-                    // once the split has laid out — the automated version of the manual setWidth
-                    // "snap" (idempotent; re-setting the same width is harmless). setPosition stays
-                    // within the PaneGeometryLocker's [min,max], and WidthReader mirrors the
-                    // result back into PaneState.
-                    extern void darwin_sidebar_set_width(int32_t window_id, int32_t width);
-                    int32_t cfgSidebarW = (int32_t)wopts_sidebar_width(opts);
-                    int32_t hsForWidth = host_slot;
-                    if (cfgSidebarW > 0) {
-                        const double snapDelays[3] = {0.1, 0.4, 0.9};
-                        for (int si = 0; si < 3; si++) {
-                            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(snapDelays[si] * NSEC_PER_SEC)),
-                                           dispatch_get_main_queue(), ^{
-                                darwin_sidebar_set_width(hsForWidth, cfgSidebarW);
-                            });
-                        }
-                    }
-                }
-
-                // Inspector webview: own transport slot, HOST identity (win-<host>), always
-                // transparent so the pane material shows through, pane_role=3 (inspector).
-                if (useInspector) {
-                    darwin_webview_create_ext((__bridge void*)window, inspectable, accept_first_mouse,
-                                              inspectorUrl, inspector_slot, true,
-                                              (__bridge void*)inspectorContainer, host_slot, 3,
-                                              useSidebar, useInspector);
-                    for (NSView* sub in inspectorContainer.subviews) {
-                        if ([sub isKindOfClass:[WKWebView class]]) { inspectorWebviewRef = (WKWebView*)sub; break; }
-                    }
-                    if (inspectorWebviewRef) zapp_register_webview(inspector_slot, inspectorWebviewRef, hostWindowId);
-                    zapp_set_inspector_slot(host_slot, inspector_slot);   // event fan-out
-                    // Register a SwiftUI-backed controller so darwin_inspector_* ops
-                    // resolve + drive the PaneState (no splitVC/NSSplitViewItem).
-                    zapp_inspector_register_swiftui((__bridge void*)window, swiftPaneState,
-                                                    host_slot, inspector_slot, !inspectorPresented,
-                                                    wopts_inspector_min_width(opts), wopts_inspector_max_width(opts));
-                }
-
-                // Initial config toolbar -> SwiftUI ToolbarState. On this path the
-                // AppKit NSToolbar attach is skipped (it would collide with the
-                // SwiftUI `.toolbar`); push the config items into the ToolbarState so
-                // a config-declared toolbar renders via SwiftUI on launch. Runtime
-                // setItems still routes to NSToolbar until Task 5 (the router fork).
-                {
-                    const char* tj0 = wopts_toolbar_json(opts);
-                    if (tj0 && tj0[0]) zapp_swift_module_set_string(swiftToolbarState, ZAPP_TB_SET_ITEMS, tj0);
-                }
-            } else
-#endif
-            {
             // titleBarStyle resolution (2c): Unset (tbs==3) now resolves to DEFAULT (a
             // standard title bar) — no sidebar-specific hidden chrome. Apps opt into the
             // hidden unified chrome explicitly via hidden/hiddenInset (tbs 1/2), applied
@@ -1442,7 +1065,6 @@ void* darwin_window_create(WindowOptions* opts) {
                                         (__bridge void*)inspItem, host_slot, inspector_slot);
                 if (!wopts_inspector_can_resize(opts)) darwin_inspector_set_resizable(host_slot, false);
             }
-            } // end AppKit (else) branch
         } else if (useVibrancy) {
             NSRect contentRect = [window contentView].frame;
             NSVisualEffectView* vfx = [[NSVisualEffectView alloc] initWithFrame:contentRect];
@@ -1474,8 +1096,6 @@ void* darwin_window_create(WindowOptions* opts) {
         delegate.mainWebview = mainWebviewRef;         // nil in the non-split path
         delegate.sidebarWebview = sidebarWebviewRef;   // nil when no sidebar
         delegate.inspectorWebview = inspectorWebviewRef; // nil when no inspector
-        delegate.swiftPaneState = swiftPaneState;       // NULL unless the SwiftUI path ran
-        delegate.swiftToolbarState = swiftToolbarState;  // NULL unless the SwiftUI path ran
 
         // Seed the host webview's underpage fill (the WebView2
         // DefaultBackgroundColor analogue) with the app-set background. Split
@@ -1514,16 +1134,9 @@ void* darwin_window_create(WindowOptions* opts) {
         // Native toolbar (toolbar.m). Attach AFTER split construction (the
         // tracking separator resolves the live NSSplitView through the
         // window's contentViewController) and after delegate setup.
-        //
-        // Sub-cycle 2b: on the SwiftUI pane path the toolbar is rendered by SwiftUI
-        // `.toolbar` (panes.swift); do NOT attach an NSToolbar (it would collide).
-        bool swiftUIToolbar = false;
-#ifdef ZAPP_HAS_SWIFTUI
-        swiftUIToolbar = (delegate.swiftPaneState != NULL);
-#endif
         const char* toolbarJson = wopts_toolbar_json(opts);
         extern void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_user_script);
-        if (!swiftUIToolbar && toolbarJson && toolbarJson[0]) {
+        if (toolbarJson && toolbarJson[0]) {
             darwin_toolbar_attach((__bridge void*)window, toolbarJson, host_slot);
             // Initial chrome-metrics injection, one runloop tick later: the
             // titlebar band picks the toolbar up in the next layout pass, and
@@ -1537,18 +1150,6 @@ void* darwin_window_create(WindowOptions* opts) {
                 zapp_toolbar_inject_metrics((__bridge void*)toolbarWindow, host_slot, true);
             });
         }
-#ifdef ZAPP_HAS_SWIFTUI
-        else if (swiftUIToolbar) {
-            // #670 (A1): on the SwiftUI pane path SwiftUI owns the `.toolbar`, so we do NOT
-            // attach an NSToolbar. The chrome metrics are measured at webview-create time
-            // (webview.m) BEFORE that toolbar lays out → titlebar band too short → content
-            // underlaps it. Register the deterministic `contentLayoutRect` KVO (same machinery
-            // as the AppKit path) so the metrics re-inject the INSTANT the toolbar lays out —
-            // no guessed dispatch_after, no visible settle delay.
-            extern void zapp_metrics_observe_swiftui(void* window_ptr, int32_t window_numeric_id);
-            zapp_metrics_observe_swiftui((__bridge void*)window, host_slot);
-        }
-#endif
 
         return (__bridge_retained void*)window;
     }
@@ -1621,16 +1222,6 @@ void darwin_window_destroy(void* handle) {
             zapp_teardown_webview(delegate.inspectorWebview);
             zapp_inspector_unregister(handle);
         }
-#ifdef ZAPP_HAS_SWIFTUI
-        if (delegate.swiftPaneState) {
-            zapp_swift_panes_state_release(delegate.swiftPaneState);
-            delegate.swiftPaneState = NULL;
-        }
-        if (delegate.swiftToolbarState) {
-            zapp_swift_toolbar_state_release(delegate.swiftToolbarState);
-            delegate.swiftToolbarState = NULL;
-        }
-#endif
     }
     zapp_toolbar_unregister(handle);
     extern void zapp_popover_unregister_window(void* window_ptr);
