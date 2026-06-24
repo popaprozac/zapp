@@ -68,6 +68,15 @@ Then `bun run dev`. **Human confirms:**
 
 ---
 
+## T1 GATE RESULT (2026-06-24): GO — with two refinements
+
+Human smoke passed (mirror behind floating sidebar; webview interactive; live safe area on collapse/resize). macOS 26.4 SDK header confirmed the API exactly (`NSBackgroundExtensionView.contentView`, `initWithFrame:`, `automaticallyPlacesContentView` default YES; `NSSplitViewItem.automaticallyAdjustsSafeAreaInsets` `macos(26.0)`). Also validated on macOS 27 beta against Messages. Two refinements fold into T3/T5:
+
+- **Top-edge contract (T3):** `backgroundExtension` governs the **sidebar edge only**. The titlebar/toolbar top edge MUST keep today's behavior — real web content **bleeds under** the translucent top chrome with the `data-zapp-drag-region` element — NOT mirrored/inset. So do NOT use `automaticallyAdjustsSafeAreaInsets` (it insets/mirrors ALL chrome edges incl. top). Instead use `automaticallyPlacesContentView = NO` + manually place the content view inset on the LEFT only (sidebar overlap) at full height (top = 0, bleeds under titlebar). The extension then mirrors only the under-sidebar strip. "Optionally mirror/extend the top too" = documented FUTURE customization, out of W3 scope.
+- **Resize-perf tradeoff (T5):** `Mirror` lags sidebar resize because `NSBackgroundExtensionView` re-snapshots the out-of-process WKWebView layer each layout tick. `Standard` is the snappy baseline (today's behavior). Add an explicit `Standard`/`Extend`/`Mirror` resize-responsiveness comparison; document the `Mirror` tradeoff; mitigate if cheap (coalesce the re-snapshot, e.g. one per runloop tick like the metrics KVO).
+
+---
+
 ## Task 2: Config surface — `BackgroundExtension` enum (TS + Nim) + parse
 
 **Files:**
