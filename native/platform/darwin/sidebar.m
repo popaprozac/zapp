@@ -13,6 +13,9 @@ extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
 extern void darwin_window_eval_js(int32_t window_id, const char* js);
 @class NSSplitViewController;
 extern NSSplitView* zapp_find_split_view(NSView* v);
+// toolbar.m: re-inject chrome-metric CSS vars (incl. safe-area) after sidebar
+// geometry changes so --zapp-safe-area-left tracks live sidebar overlap.
+extern void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_user_script);
 
 // --- Registry API consumed by window.m (Task 5) ---
 // No header — the codebase externs across .m files. window.m declares these
@@ -121,6 +124,10 @@ static void zapp_sidebar_sync_collapse(ZappSidebarController* c) {
                         change:(NSDictionary*)change context:(void*)context {
     if ([keyPath isEqualToString:@"collapsed"]) {
         zapp_sidebar_sync_collapse(self);
+        // Re-inject chrome metrics so --zapp-safe-area-left reflects the new
+        // sidebar width (0 when collapsed, sidebar width when expanded).
+        void* winPtr = darwin_window_get_by_numeric_id(self.hostWindowId);
+        if (winPtr) zapp_toolbar_inject_metrics(winPtr, self.hostWindowId, false);
     }
 }
 
@@ -135,6 +142,10 @@ static void zapp_sidebar_sync_collapse(ZappSidebarController* c) {
     self.lastWidth = w;
     NSString* json = [NSString stringWithFormat:@"{\"width\":%d}", w];
     zapp_sidebar_emit(self, "sidebar-resized", json);
+    // Re-inject chrome metrics so --zapp-safe-area-left tracks the live
+    // sidebar width after a divider drag or window resize redistribution.
+    void* winPtr = darwin_window_get_by_numeric_id(self.hostWindowId);
+    if (winPtr) zapp_toolbar_inject_metrics(winPtr, self.hostWindowId, false);
 }
 
 @end

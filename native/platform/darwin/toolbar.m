@@ -98,6 +98,10 @@ void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_u
 @property (nonatomic, assign) BOOL metricsUpdateQueued;
 @property (nonatomic, assign) CGFloat lastInjectedInset;
 @property (nonatomic, assign) CGFloat lastInjectedToolbarH;
+// Safe-area cache: sidebar collapse/resize changes sa.left without changing
+// the titlebar/toolbar metrics — include it in the skip-guard so re-injection
+// runs whenever the sidebar overlap changes.
+@property (nonatomic, assign) CGFloat lastInjectedSafeLeft;
 @end
 
 static NSMutableDictionary<NSValue*, ZappToolbarController*>* zapp_toolbars = nil;
@@ -588,17 +592,31 @@ void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_u
     // toolbar (post-remove re-inject) the row is genuinely gone — 0px.
     if (toolbarH <= 0) toolbarH = window.toolbar ? totalInset : 0;
 
+    // Read the HOST content webview's safe-area insets so Extend-mode content
+    // can avoid the overlap region (sidebar sits over the content webview).
+    WKWebView* hostWv = zapp_webview_for_slot(host_slot);
+    NSEdgeInsets sa = hostWv ? hostWv.safeAreaInsets : NSEdgeInsetsZero;
+
+    // Approximate window corner radius for Tahoe (macOS 26+). The exact radius
+    // isn't cleanly exposed by AppKit; 12pt is a close approximation used here
+    // so apps can inset content away from the rounded corners. Not exact.
+    CGFloat corner = 0.0;
+    if (@available(macOS 26.0, *)) corner = 12.0;
+
     // Skip no-op re-injections (the KVO also fires during plain window
     // resizes, where the chrome height doesn't change). Initial injection
-    // (add_user_script) always runs.
+    // (add_user_script) always runs. Safe-area-left is included because
+    // sidebar collapse/resize changes it independently of titlebar/toolbar.
     ZappToolbarController* c = zapp_toolbars[[NSValue valueWithPointer:window_ptr]];
     if (!add_user_script && c &&
-        c.lastInjectedInset == totalInset && c.lastInjectedToolbarH == toolbarH) {
+        c.lastInjectedInset == totalInset && c.lastInjectedToolbarH == toolbarH &&
+        c.lastInjectedSafeLeft == sa.left) {
         return;
     }
     if (c) {
         c.lastInjectedInset = totalInset;
         c.lastInjectedToolbarH = toolbarH;
+        c.lastInjectedSafeLeft = sa.left;
     }
 
     NSString* js = [NSString stringWithFormat:
@@ -617,6 +635,26 @@ void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_u
                     injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
         }
         [wv evaluateJavaScript:js completionHandler:nil];
+    }
+
+    // Inject safe-area + corner vars into the HOST webview only. In Extend
+    // mode the content view extends under the floating sidebar; these vars let
+    // the app keep foreground content clear of the overlap + rounded corners.
+    NSString* saJs = [NSString stringWithFormat:
+        @"(function(){try{var r=document.documentElement;if(r){"
+        @"r.style.setProperty('--zapp-safe-area-top','%.0fpx');"
+        @"r.style.setProperty('--zapp-safe-area-left','%.0fpx');"
+        @"r.style.setProperty('--zapp-safe-area-right','%.0fpx');"
+        @"r.style.setProperty('--zapp-safe-area-bottom','%.0fpx');"
+        @"r.style.setProperty('--zapp-corner-inset','%.0fpx');}}catch(e){}})();",
+        sa.top, sa.left, sa.right, sa.bottom, corner];
+    if (hostWv) {
+        if (add_user_script) {
+            [hostWv.configuration.userContentController addUserScript:
+                [[WKUserScript alloc] initWithSource:saJs
+                    injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
+        }
+        [hostWv evaluateJavaScript:saJs completionHandler:nil];
     }
 }
 
