@@ -1342,8 +1342,11 @@ Two `NSToolbarItemGroup`-backed item types let you cluster related controls:
   ] }
 ```
 
-**`TOOLBAR_GROUP_SELECTED` event** fires for `"one"` and `"any"` modes on every
-selection change (not for `"momentary"` — those only fire segment `action` callbacks):
+**`TOOLBAR_GROUP_SELECTED` event** fires for all selection modes on every segment
+activation. For `"one"`/`"any"`, `selected` reflects the new state; for `"momentary"` it
+also fires on each press with `selected: false` (no persistent highlight — use it as a
+group-level press signal, or rely on the per-segment `action`). In all modes the
+segment's own `action` callback also runs.
 
 ```ts
 win.on(WindowEvent.TOOLBAR_GROUP_SELECTED, ({ id, index, selected }) => {

@@ -140,9 +140,10 @@ Two `NSToolbarItemGroup` flavors let you cluster controls in the toolbar:
 
 - **`type: "segmented"`** — an `NSSegmentedControl` embedded in a group item.
   `selectionMode` controls behavior: `"one"` (radio), `"any"` (multi-select),
-  `"momentary"` (no persistent highlight — fires action only). The shared
-  primitive for all three modes is `action: () => void` on each segment. For
-  `"one"` and `"any"`, selection changes also emit `TOOLBAR_GROUP_SELECTED`
+  `"momentary"` (no persistent highlight — fires `action` and also emits
+  `TOOLBAR_GROUP_SELECTED` with `selected: false` on each press). The shared
+  primitive for all three modes is `action: () => void` on each segment. All
+  three modes emit `TOOLBAR_GROUP_SELECTED`
   (`{ windowId, id, index, selected }`) so any pane or worker holding a window
   handle can react without registering individual segment callbacks. Live
   selection can be pushed from code via `win.toolbar.updateItem(id, { selected })`.

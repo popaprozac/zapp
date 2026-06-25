@@ -60,7 +60,9 @@ export enum WindowEvent {
    * selectAny). Broadcast to ALL webviews + workers (toolbar-click pattern).
    * Payload: `{ windowId, id, index, selected }` — `selected` is the index's
    * new state (always true for selectOne; the toggle result for selectAny).
-   * Momentary groups do NOT fire this — only their per-segment `action`. */
+   * Momentary groups also fire this on each press with `selected: false` (no
+   * persistent highlight). Use it as a group-level press signal, or rely on
+   * the per-segment `action`; both are delivered in all modes. */
   TOOLBAR_GROUP_SELECTED = 20,
 }
 
