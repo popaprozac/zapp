@@ -97,11 +97,14 @@ Three modes:
 silently to `"none"`. The Liquid Glass itself is delivered by AppKit
 (`NSSplitViewController` sidebar) — Zapp rides the OS treatment.
 
-**Mirror reflow:** `NSBackgroundExtensionView` re-snapshots the out-of-process
-`WKWebView` per layout pass. The snapshot cost scales with content weight: light
-content resizes live; heavy content settles the mirror on mouseup. `"extend"` and
-`"none"` always resize live. Choose `"extend"` for live divider tracking, `"mirror"`
-for the poster look.
+**Mirror reflow scales with content weight:** `NSBackgroundExtensionView` re-snapshots
+the out-of-process `WKWebView` per layout pass (a cost `"extend"`/`"none"` avoid). The
+snapshot scales with how heavy the content is to reflow: a light page mirrors live during
+a sidebar drag; a heavy single-page app defers reflow to drag-settle, and very heavy
+content can stall mid-drag. Verified by isolation — inspector, window `vibrancy`, and
+primary-vs-secondary window were each ruled out; content complexity is the determinant.
+`"extend"`/`"none"` always resize live. Choose `"extend"` for guaranteed live tracking,
+`"mirror"` for the poster look on lighter content.
 
 See [`docs/api-reference.md` → Content background extension](#content-background-extension-macos-26)
 and the design spec at

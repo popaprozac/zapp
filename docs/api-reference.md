@@ -857,16 +857,17 @@ edge-to-edge:
 }
 ```
 
-**Mirror reflow tradeoff**
+**Mirror reflow scales with content weight**
 
 In `"mirror"` mode, `NSBackgroundExtensionView` re-snapshots the (out-of-process)
-`WKWebView` on each layout pass to produce the blurred-mirror edge. The snapshot
-cost scales with content weight: light content resizes the mirrored edge
-instantly; heavy content settles the mirror on mouseup rather than tracking the
-divider in real time. `"extend"` and `"none"` both resize live because they do
-not involve a content snapshot. This is why the three modes exist — choose
-`"extend"` when you need live divider tracking, `"mirror"` when you want the
-poster look and can accept that the mirrored edge may defer on heavy content.
+`WKWebView` on each layout pass to produce the blurred-mirror edge — a cost that
+`"extend"` and `"none"` don't incur. That snapshot scales with how heavy the
+content webview is to reflow: a light/static page mirrors **live** as you drag the
+sidebar divider; a heavy single-page app defers the reflow to drag-settle (mouseup),
+and very heavy content can stall the mirror mid-drag. Verified by isolation — the
+inspector pane, window `vibrancy`, and primary-vs-secondary window were each ruled
+out; content complexity is the determinant. Prefer `"extend"` for guaranteed live
+divider tracking; use `"mirror"` for the poster look, ideally on lighter content.
 
 > **Inspector is out of scope by design.** The inspector pane is edge-to-edge
 > glass *alongside* content (it does not float over it), so `backgroundExtension`
