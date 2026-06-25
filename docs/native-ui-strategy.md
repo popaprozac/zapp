@@ -64,6 +64,7 @@ iOS) natively on AppKit/UIKit is a queued future cycle.
 | Sidebar (macOS) | `NSSplitViewItem` sidebar, `SidebarHandle`, sidebar events | Done |
 | Inspector (macOS) | `NSSplitViewItem` trailing inspector, `InspectorHandle` | Done |
 | Toolbar (macOS) | `NSToolbar`, `ToolbarItemDef`, `setItems`/`updateItem`/`remove` | Done |
+| Toolbar affordances (macOS 26) | `style`/`tintColor`/`badge`/`bordered` on `ToolbarItemDef`; prominent+flat+badge looks; live `updateItem` patches | Done |
 | Embedded webview panels | `<zapp-webview>`, `panel.m` — macOS + iOS | Done |
 | iOS sidebar / inspector | `UISplitViewController`-backed sidebar + sheet inspector | Done |
 | SwiftUI pane path (macOS) | `NavigationSplitView`/`.inspector` via `NSHostingController` | Removed 2026-06-23 (geometry re-derivation; see spec) |
@@ -109,6 +110,28 @@ primary-vs-secondary window were each ruled out; content complexity is the deter
 See [`docs/api-reference.md` → Content background extension](#content-background-extension-macos-26)
 and the design spec at
 [`docs/superpowers/specs/2026-06-24-appkit-w3-content-background-extension-design.md`](superpowers/specs/2026-06-24-appkit-w3-content-background-extension-design.md).
+
+## Toolbar affordances (macOS 26)
+
+Four new fields on `ToolbarItemDef` (and patchable via `win.toolbar.updateItem`)
+recover the prominent/badge/flat looks that macOS 26 exposes natively:
+
+- **`style: "prominent"`** — filled-capsule background (the Mail Compose button look).
+  Combine with `tintColor` (hex) to set the fill color; omit `tintColor` to use the
+  app accent. `style`/`tintColor` are macOS-26-gated; on earlier releases they fall
+  back silently to plain.
+- **`badge`** — numeric (`{count}`), text (`{text}`), or dot (`{dot:true}`) badge
+  on the icon. Pass `null` to a `updateItem` patch to clear a live badge. macOS-26-gated;
+  hidden on earlier releases.
+- **`bordered: false`** — flat borderless button (the Messages attachment-picker look).
+  Universal — no macOS-26 gate.
+
+All four fields are parity-identical across TS and Nim authoring. The kitchen-sink
+Toolbar section demonstrates live badge increment/clear via `updateItem`.
+
+See the design spec at
+[`docs/superpowers/specs/2026-06-24-appkit-w2-toolbar-affordances-design.md`](superpowers/specs/2026-06-24-appkit-w2-toolbar-affordances-design.md)
+and the API reference at [`docs/api-reference.md` → Toolbar (macOS)](#toolbar-macos).
 
 ## Material / native glass
 

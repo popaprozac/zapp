@@ -1136,6 +1136,39 @@ look). System types: `toggleSidebar`, `trackingSeparator`
 (both require the window to have a `sidebar` — warned and dropped
 otherwise), `space`, `flexibleSpace`.
 
+**Item visual affordances (macOS 26+).** Four optional fields control button
+appearance:
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `style` | `"plain"` \| `"prominent"` | `"plain"` | `"prominent"` renders with a filled-capsule background (the macOS 26 Mail Compose look). |
+| `tintColor` | `string` (hex) | accent color | Color for the prominent fill; only meaningful when `style: "prominent"`. Omit to inherit the app accent. |
+| `badge` | `{count: number}` \| `{text: string}` \| `{dot: true}` \| `null` | none | Numeric, text, or dot badge rendered on the icon. `null` (or `badge: null` in a patch) clears a live badge. |
+| `bordered` | `boolean` | `true` | `false` produces a flat borderless button (the Messages-app attachment-picker look). Universal — no macOS-26 gate. |
+
+`style`, `tintColor`, and `badge` require macOS 26; on earlier releases they fall
+back silently — `style`/`tintColor` render as plain, `badge` is hidden. `bordered`
+works on all macOS versions. All four fields are also accepted by
+`win.toolbar.updateItem(id, patch)` for live updates — the canonical use case is
+incrementing a badge in response to new content:
+
+```ts
+// Initial item — prominent Compose + borderless badged Inbox
+{ id: "compose", icon: "sf:square.and.pencil", label: "Compose",
+  style: "prominent", tintColor: "#aa3bff",
+  action: () => startCompose() },
+{ id: "inbox", icon: "sf:tray", label: "Inbox", bordered: false,
+  badge: { count: 0 },
+  action: () => openInbox() },
+
+// Live badge update — call from any webview pane holding the window handle
+let count = 0;
+win.toolbar.updateItem("inbox", { badge: { count: ++count } });
+
+// Clear badge
+win.toolbar.updateItem("inbox", { badge: null });
+```
+
 **Clicks — the menu pattern.** A button click broadcasts
 `window:toolbar-clicked` with `{ windowId, id }` to every webview and
 worker. Two ways to consume the same emit:

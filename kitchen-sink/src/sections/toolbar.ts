@@ -4,6 +4,7 @@ import { card, onAct, setResult } from "../shell/ui";
 import { shellToolbar, filterMenu, getFilter, setFilter } from "../shell/toolbar-def";
 
 let composeEnabled = true;
+let inboxCount = 0;
 
 export const toolbarSection: Section = {
   id: "toolbar",
@@ -18,6 +19,8 @@ export const toolbarSection: Section = {
         { act: "cycle-filter", label: "Cycle filter (moving checkmark)" },
         { act: "remove", label: "Remove toolbar" },
         { act: "attach", label: "Attach toolbar" },
+        { act: "badge-inc", label: "Inbox badge +1" },
+        { act: "badge-clear", label: "Clear inbox badge" },
       ],
     }));
     onAct(host, "toggle-compose", () => {
@@ -39,6 +42,16 @@ export const toolbarSection: Section = {
       composeEnabled = true;
       win.toolbar.setItems(shellToolbar());
       setResult(host, "toolbar attached — titlebar grows back");
+    });
+    onAct(host, "badge-inc", () => {
+      inboxCount += 1;
+      win.toolbar.updateItem("inbox", { badge: { count: inboxCount } });
+      setResult(host, `inbox badge → ${inboxCount}`);
+    });
+    onAct(host, "badge-clear", () => {
+      inboxCount = 0;
+      win.toolbar.updateItem("inbox", { badge: null });
+      setResult(host, "inbox badge cleared");
     });
   },
   inspector(host) {
