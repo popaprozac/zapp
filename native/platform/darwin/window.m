@@ -413,6 +413,20 @@ static const char kZappWindowDelegateKey = 0;
         self.fullscreenOnShow = NO;
         [window toggleFullScreen:nil];
     }
+    // Re-inject chrome + safe-area CSS vars once the split has laid out post-show.
+    // The create-time injection (and the sidebar's initial didResizeSubviews) can
+    // run before the sidebar settles, leaving --zapp-safe-area-left stale (the
+    // pre-layout window inset, not the sidebar overlap) until the first manual
+    // resize. One runloop hop after show the geometry is settled and the page is
+    // loaded to receive it.
+    if (self.numericId >= 0) {
+        int32_t hostSlot = self.numericId;
+        NSWindow* w = window;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            extern void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_user_script);
+            zapp_toolbar_inject_metrics((__bridge void*)w, hostSlot, false);
+        });
+    }
 }
 
 - (BOOL)windowShouldClose:(NSWindow*)sender {
