@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, it, test } from "bun:test";
 import { normalizeToolbar, assertToolbarItemsNonEmpty, type ToolbarOptions } from "./window";
 import { eventName, WindowEvent } from "./events";
 
@@ -350,5 +350,44 @@ describe("normalizeToolbar inspector integration", () => {
       { items: [{ type: "trackingSeparator" }, { id: "a" }] }, false, false,
     );
     expect(JSON.parse(json).items).toEqual([{ type: "button", id: "a", label: "", icon: "" }]);
+  });
+});
+
+describe("normalizeToolbar trio (W2)", () => {
+  it("emits style, tintColor, bordered, and tagged badge", () => {
+    const { json } = normalizeToolbar({
+      items: [{ id: "go", label: "Go", style: "prominent", tintColor: "#aa3bff",
+                bordered: false, badge: { count: 3 } }],
+    }, false, false);
+    const item = JSON.parse(json).items[0];
+    expect(item.style).toBe("prominent");
+    expect(item.tintColor).toBe("#aa3bff");
+    expect(item.bordered).toBe(false);
+    expect(item.badge).toEqual({ kind: "count", count: 3 });
+  });
+  it("maps badge variants (text, dot)", () => {
+    const text = JSON.parse(normalizeToolbar({ items: [{ id: "a", badge: { text: "NEW" } }] }, false, false).json).items[0];
+    expect(text.badge).toEqual({ kind: "text", text: "NEW" });
+    const dot = JSON.parse(normalizeToolbar({ items: [{ id: "b", badge: { dot: true } }] }, false, false).json).items[0];
+    expect(dot.badge).toEqual({ kind: "dot" });
+  });
+  it("omits trio keys when unset", () => {
+    const item = JSON.parse(normalizeToolbar({ items: [{ id: "x" }] }, false, false).json).items[0];
+    expect(item.style).toBeUndefined();
+    expect(item.tintColor).toBeUndefined();
+    expect(item.bordered).toBeUndefined();
+    expect(item.badge).toBeUndefined();
+  });
+});
+
+describe("normalizeToolbarPatch trio (W2)", () => {
+  it("emits trio keys and clears badge with null", () => {
+    const set = JSON.parse(normalizeToolbarPatch("compose", { style: "prominent", tintColor: "#fff", bordered: true, badge: { count: 5 } }).json);
+    expect(set.style).toBe("prominent");
+    expect(set.tintColor).toBe("#fff");
+    expect(set.bordered).toBe(true);
+    expect(set.badge).toEqual({ kind: "count", count: 5 });
+    const cleared = JSON.parse(normalizeToolbarPatch("compose", { badge: null }).json);
+    expect(cleared.badge).toEqual({ kind: "none" });
   });
 });

@@ -356,6 +356,17 @@ export interface ToolbarItemDef {
   /** Menu buttons: show the pull-down chevron. Default true; false is the
    *  Messages-app no-chevron look. */
   indicator?: boolean;
+  /** macOS 26+. "prominent" tints the item background (the new-design
+   *  highlighted action). Default "plain". No-op < macOS 26. */
+  style?: "plain" | "prominent";
+  /** macOS 26+. Hex color tinting a prominent item's background; ignored
+   *  unless `style` is "prominent". Omit → system accent. No-op < macOS 26. */
+  tintColor?: string;
+  /** macOS 26+. A badge: a count, short text, or a plain dot. No-op < macOS 26. */
+  badge?: { count: number } | { text: string } | { dot: true };
+  /** Draw the item's standard bordered background. Default true; false → flat.
+   *  All macOS versions. */
+  bordered?: boolean;
 }
 
 /** Options for a native toolbar (NSToolbar) attached at Window.create. */
@@ -379,6 +390,11 @@ export interface ToolbarItemPatch {
   menu?: MenuItemDef[];
   /** Replaces the creator callback for this button. */
   action?: () => void;
+  style?: "plain" | "prominent";
+  tintColor?: string;
+  /** Pass null to clear the badge. */
+  badge?: { count: number } | { text: string } | { dot: true } | null;
+  bordered?: boolean;
 }
 
 /** Lifecycle handle for a window's NSToolbar — present on every
@@ -578,6 +594,17 @@ export function assertToolbarItemsNonEmpty(json: string): void {
   }
 }
 
+/** Convert a ToolbarItemDef/Patch badge value to its tagged wire form.
+ *  null (patch-only) → clear. */
+function badgeToWire(
+  b: { count: number } | { text: string } | { dot: true } | null,
+): Record<string, unknown> {
+  if (b === null) return { kind: "none" };
+  if ("count" in b) return { kind: "count", count: b.count };
+  if ("text" in b) return { kind: "text", text: b.text };
+  return { kind: "dot" };
+}
+
 /** Validate a ToolbarOptions and split it into the wire JSON (actions
  * stripped, defaults applied) and the action maps. Pure — unit-tested. */
 export function normalizeToolbar(
@@ -646,6 +673,10 @@ export function normalizeToolbar(
     const wire: Record<string, unknown> = { type: "button", id: item.id, label: item.label ?? "", icon: item.icon ?? "" };
     if (item.enabled !== undefined) wire.enabled = item.enabled;
     if (item.indicator !== undefined) wire.indicator = item.indicator;
+    if (item.style !== undefined) wire.style = item.style;
+    if (item.tintColor !== undefined) wire.tintColor = item.tintColor;
+    if (item.bordered !== undefined) wire.bordered = item.bordered;
+    if (item.badge !== undefined) wire.badge = badgeToWire(item.badge);
     if (item.menu) {
       const itemMenuActions = new Map<string, () => void>();
       wire.menu = stripMenuActions(item.menu, itemMenuActions);
@@ -657,7 +688,7 @@ export function normalizeToolbar(
   return { json: JSON.stringify({ style: toolbar.style ?? "unified", items }), actions, menuActions, menuIdsByItem };
 }
 
-const TOOLBAR_PATCH_KEYS = new Set(["label", "icon", "enabled", "indicator", "menu", "action"]);
+const TOOLBAR_PATCH_KEYS = new Set(["label", "icon", "enabled", "indicator", "menu", "action", "style", "tintColor", "badge", "bordered"]);
 
 /** Validate a ToolbarItemPatch and split it into the wire JSON (only
  * patched keys, plus id), the replacement action, and stripped menu
@@ -690,6 +721,10 @@ export function normalizeToolbarPatch(
   if (patch.icon !== undefined && patch.icon !== "") wire.icon = patch.icon;
   if (patch.enabled !== undefined) wire.enabled = patch.enabled;
   if (patch.indicator !== undefined) wire.indicator = patch.indicator;
+  if (patch.style !== undefined) wire.style = patch.style;
+  if (patch.tintColor !== undefined) wire.tintColor = patch.tintColor;
+  if (patch.bordered !== undefined) wire.bordered = patch.bordered;
+  if (patch.badge !== undefined) wire.badge = badgeToWire(patch.badge);
   if (patch.menu !== undefined) wire.menu = stripMenuActions(patch.menu, menuActions);
   // Explicit-undefined values pass the keys.length guard above (key exists,
   // value is undefined) but produce a wire with only the id — detect here.
