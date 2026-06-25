@@ -793,6 +793,85 @@ takes precedence if both are set; for the native vibrant look, prefer
 > at its `Default` (or `ToolbarStyle.Unified`) to get the native default. (The
 > TS API uses the equivalent `Material` const + string-literal unions.)
 
+#### Content background extension (macOS 26+)
+
+`WindowOptions.backgroundExtension` controls how the *content* pane's
+background relates to the floating Liquid Glass sidebar on macOS 26 and later.
+This is a **create-time**, **sidebar-edge-only** option — it describes what
+happens to the content pane beneath the sidebar glass, not the inspector (the
+inspector sits edge-to-edge beside content, so there is nothing to extend under
+or mirror there).
+
+**`BackgroundExtension` enum:**
+
+| Value | Behaviour |
+|---|---|
+| `"none"` *(default)* | Content sits beside the sidebar. The sidebar glass does not overlap the content pane. Today's behavior on all macOS versions. |
+| `"extend"` | Content flows *under* the floating sidebar. The sidebar glass floats over the content's left edge. Apps keep foreground content clear by padding with `--zapp-safe-area-left` (see below). The divider tracks live in real time during resize. |
+| `"mirror"` | `NSBackgroundExtensionView`: content is inset to the unobscured area and its left edge is mirrored and blurred *behind* the sidebar glass — the "poster" effect seen in Messages.app on macOS 26. Real content still bleeds under the titlebar/toolbar (the top is never mirrored — sidebar-edge only). |
+
+**Version gating:** `"extend"` and `"mirror"` require macOS 26. On earlier
+releases both modes fall back silently to `"none"`. The native Liquid Glass
+itself is delivered by AppKit (`NSSplitViewController` sidebar) — Zapp rides the
+OS treatment.
+
+```ts
+const win = await Window.create({
+  title: "My App",
+  width: 900, height: 600,
+  backgroundExtension: "extend",   // "none" | "extend" | "mirror"  (macOS 26+)
+  sidebar: { url: "/sidebar", width: 240 },
+});
+```
+
+**Injected CSS variables**
+
+Zapp injects the following CSS custom properties into the **content webview**
+(not the sidebar pane). They are re-injected after sidebar collapse/resize and
+once after the window is shown:
+
+| Variable | Source | Notes |
+|---|---|---|
+| `--zapp-safe-area-top` | `WKWebView.safeAreaInsets.top` | Titlebar/toolbar height |
+| `--zapp-safe-area-left` | `WKWebView.safeAreaInsets.left` | Sidebar overlap in `"extend"` mode; 0 otherwise |
+| `--zapp-safe-area-right` | `WKWebView.safeAreaInsets.right` | Inspector or system right inset |
+| `--zapp-safe-area-bottom` | `WKWebView.safeAreaInsets.bottom` | System bottom inset |
+| `--zapp-corner-inset` | Approximate value | Inset for the rounder macOS 26 window corners, so content near the corners is not clipped |
+
+Use these to pad foreground content while letting your background flow
+edge-to-edge:
+
+```css
+.content-root {
+  /* Foreground elements clear the sidebar glass and window corners */
+  padding-top:    var(--zapp-safe-area-top);
+  padding-left:   var(--zapp-safe-area-left);
+  padding-right:  var(--zapp-safe-area-right);
+  padding-bottom: var(--zapp-safe-area-bottom);
+}
+
+.hero-background {
+  /* Backgrounds bleed to all edges — the glass handles the visual blend */
+  position: absolute;
+  inset: 0;
+}
+```
+
+**Mirror reflow tradeoff**
+
+In `"mirror"` mode, `NSBackgroundExtensionView` re-snapshots the (out-of-process)
+`WKWebView` on each layout pass to produce the blurred-mirror edge. The snapshot
+cost scales with content weight: light content resizes the mirrored edge
+instantly; heavy content settles the mirror on mouseup rather than tracking the
+divider in real time. `"extend"` and `"none"` both resize live because they do
+not involve a content snapshot. This is why the three modes exist — choose
+`"extend"` when you need live divider tracking, `"mirror"` when you want the
+poster look and can accept that the mirrored edge may defer on heavy content.
+
+> **Inspector is out of scope by design.** The inspector pane is edge-to-edge
+> glass *alongside* content (it does not float over it), so `backgroundExtension`
+> does not apply to the inspector edge.
+
 **`SidebarHandle`** — available as `win.sidebar` on the creator's
 `Window.create` handle, and via `Window.current().sidebar` from **either
 pane** of the window (main pane and sidebar pane alike). The rule is simply:

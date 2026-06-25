@@ -71,6 +71,62 @@ iOS) natively on AppKit/UIKit is a queued future cycle.
 | DOM-overlay native view | native view inline in web content (reuses `panel.m`) | Spike |
 | App-authored native code | Swift<->Nim bridge recipe — see `examples/swift-nim-bridge/` | Recipe available |
 
+## Content background extension (macOS 26+)
+
+`WindowOptions.backgroundExtension` controls how the content pane's background
+relates to the floating Liquid Glass sidebar on macOS 26 and later. This is a
+**sidebar-edge-only** concept — the inspector pane sits edge-to-edge glass
+*alongside* content (not floating over it), so there is nothing to extend under
+or mirror; `backgroundExtension` does not apply to the inspector edge.
+
+Three modes:
+
+- **`"none"` (default)** — content sits beside the sidebar. Today's behavior
+  on all macOS versions. No overlap.
+- **`"extend"`** — content flows *under* the floating sidebar. The sidebar glass
+  floats over the content's left edge. Apps keep foreground content clear by
+  padding with `--zapp-safe-area-left` (injected by Zapp). The divider tracks
+  live in real time.
+- **`"mirror"`** — `NSBackgroundExtensionView`: content is inset to the
+  unobscured area and its left edge is mirrored and blurred *behind* the sidebar
+  glass — the "poster" effect (validated against Messages.app on macOS 26 and
+  27 beta). Real content still bleeds under the titlebar/toolbar; only the
+  sidebar edge is mirrored.
+
+`"extend"` and `"mirror"` require macOS 26; on earlier releases both fall back
+silently to `"none"`. The Liquid Glass itself is delivered by AppKit
+(`NSSplitViewController` sidebar) — Zapp rides the OS treatment.
+
+**Mirror reflow:** `NSBackgroundExtensionView` re-snapshots the out-of-process
+`WKWebView` per layout pass. The snapshot cost scales with content weight: light
+content resizes live; heavy content settles the mirror on mouseup. `"extend"` and
+`"none"` always resize live. Choose `"extend"` for live divider tracking, `"mirror"`
+for the poster look.
+
+See [`docs/api-reference.md` → Content background extension](#content-background-extension-macos-26)
+and the design spec at
+[`docs/superpowers/specs/2026-06-24-appkit-w3-content-background-extension-design.md`](superpowers/specs/2026-06-24-appkit-w3-content-background-extension-design.md).
+
+## Material / native glass
+
+The `material` option on `sidebar` (and `inspector`) controls which background
+treatment AppKit applies to that pane:
+
+- **Unspecified or `Material.Sidebar`** — the OS-native glass treatment. On
+  macOS 26+ this is the floating Liquid Glass sidebar (no forced
+  `NSVisualEffectView`; AppKit owns the rendering). On earlier macOS it is
+  classic vibrancy. This is the default and the path to the modern look.
+- **Any other explicit `material`** — a forced `NSVisualEffectView` with the
+  specified material is applied. This works on all macOS versions but opts out
+  of the 26+ Liquid Glass treatment.
+
+**Rule of thumb:** leave `material` unset (or set `Material.Sidebar`) to get
+the native OS glass automatically. Only set an explicit material if you need a
+specific vibrancy effect and are willing to opt out of the Liquid Glass on 26+.
+
+Validated on macOS 26 and macOS 27 beta against Messages.app for the
+`backgroundExtension` behavior.
+
 ## Anchors
 
 1. **macOS chrome = AppKit; iOS chrome = UIKit.** These are the sole framework-chrome paths.
