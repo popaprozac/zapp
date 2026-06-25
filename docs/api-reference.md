@@ -1321,7 +1321,7 @@ Two `NSToolbarItemGroup`-backed item types let you cluster related controls:
 | Field | Type | Default | Notes |
 |---|---|---|---|
 | `id` | `string` | required | Same rules as button ids. |
-| `segments` | `SegmentDef[]` | required | At least one. Each segment takes `id?`, `label?`, `icon?` (`sf:…`/data-URL/path), and an `action: () => void` callback. |
+| `segments` | `SegmentDef[]` | required | At least one. Each segment takes `id?`, `label?`, `icon?` (`sf:…`/data-URL/path), and an `action: () => void` callback. Give each segment a `label` even when using an `icon` — AppKit uses the labels for the collapsed/overflow menu (icon-only segments collapse to a blank menu) and for accessibility. The native right-click "icon only / icon and text" customization is available for free. |
 | `selectionMode` | `"one"` \| `"any"` \| `"momentary"` | `"momentary"` | `"one"` = radio; `"any"` = multi-select; `"momentary"` = no persistent highlight. |
 | `selected` | `number \| number[]` | none | Initial selection — index for `"one"`, indices array for `"any"`. Ignored for `"momentary"`. |
 | `controlRepresentation` | `"automatic"` \| `"expanded"` \| `"collapsed"` | `"automatic"` | Controls how the group collapses in the overflow menu. |

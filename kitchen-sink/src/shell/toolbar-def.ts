@@ -36,13 +36,14 @@ export function shellToolbar(): ToolbarItemDef[] {
       ] },
     { type: "segmented", id: "view", selectionMode: "one", selected: 0,
       segments: [
-        { id: "grid", icon: "sf:square.grid.2x2", action: () => Events.emit("ks:toolbar", { id: "view:grid" }) },
-        { id: "list", icon: "sf:list.bullet",     action: () => Events.emit("ks:toolbar", { id: "view:list" }) },
+        // label populates the collapsed/overflow menu (icon-only segments collapse blank)
+        { id: "grid", icon: "sf:square.grid.2x2", label: "Grid", action: () => Events.emit("ks:toolbar", { id: "view:grid" }) },
+        { id: "list", icon: "sf:list.bullet",     label: "List", action: () => Events.emit("ks:toolbar", { id: "view:list" }) },
       ] },
     { type: "segmented", id: "fmt", selectionMode: "momentary",
       segments: [
-        { id: "bold",   icon: "sf:bold",      action: () => Events.emit("ks:toolbar", { id: "fmt:bold" }) },
-        { id: "italic", icon: "sf:italic",    action: () => Events.emit("ks:toolbar", { id: "fmt:italic" }) },
+        { id: "bold",   icon: "sf:bold",   label: "Bold",   action: () => Events.emit("ks:toolbar", { id: "fmt:bold" }) },
+        { id: "italic", icon: "sf:italic", label: "Italic", action: () => Events.emit("ks:toolbar", { id: "fmt:italic" }) },
       ] },
     { type: "flexibleSpace" },
     { id: "filter", icon: "sf:line.3.horizontal.decrease", label: "Filter",
