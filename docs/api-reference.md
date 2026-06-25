@@ -757,11 +757,16 @@ const win = await Window.create({
 | `backgroundColor` | `string` | — (material) |
 | `material` | `Material` | `Material.Sidebar` |
 
-`backgroundColor` (e.g. `"#1e1e1e"`) paints a solid, opaque backdrop behind the
-transparent pane webview — the pane analog of the window `backgroundColor`,
-filling the pre-first-paint gap with a flat (non-vibrant) color. `material`
-takes precedence if both are set; for the native vibrant look, prefer
-`material`. macOS; create-time only.
+`backgroundColor` accepts a CSS color **name** (`"teal"`, `"rebeccapurple"`),
+`#rgb` / `#rrggbb` / `#rrggbbaa` hex, `rgb()`, or `rgba()` (parsed via Nim's
+`std/colors`). It paints a solid backdrop behind the transparent pane webview
+(the flat, non-vibrant path; `material` wins if both are set). For sidebar and
+inspector panes an `rgba()` alpha is honored — the window background behind the
+pane shows through. The **window** `backgroundColor` is always opaque (AppKit
+ignores alpha on opaque windows). Invalid colors are ignored with a
+`[zapp] invalid backgroundColor` warning. In Nim `app.nim` you may pass a
+`std/colors` constant directly, e.g. `backgroundColor: colBlue`. macOS;
+create-time.
 
 **`presentation`** controls the sidebar split behavior on iPad-regular (maps to
 `UISplitViewController.preferredSplitBehavior`):

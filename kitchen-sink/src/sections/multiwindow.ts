@@ -92,6 +92,28 @@ export const multiwindowSection: Section = {
         titleBarStyle: "hiddenInset",
       })));
 
+    // ── Color (std/colors) showcase ──────────────────────────────────────────
+    host.appendChild(card({
+      title: "Color (std/colors)",
+      intro: "backgroundColor now accepts CSS names, #rgb/#rrggbb/#rrggbbaa, rgb() and rgba(). This window uses a named window color (opaque) and a translucent rgba() sidebar whose alpha lets the window color show through.",
+      buttons: [
+        { act: "color-demo", label: "Open color window" },
+      ],
+    }));
+    onAct(host, "color-demo", () => open(host, "color window", () =>
+      Window.create({
+        title: "Color — names + rgba",
+        url: "#sidebar-pane",
+        width: 720, height: 480,
+        backgroundColor: "teal",                       // CSS name → opaque window
+        titleBarStyle: "hiddenInset",
+        sidebar: {
+          url: "#sidebar-pane",
+          width: 240,
+          backgroundColor: "rgba(170, 59, 255, 0.4)",  // flat translucent → teal shows through
+        },
+      })));
+
     // ── Title bar & toolbar showcase ─────────────────────────────────────────
     host.appendChild(card({
       title: "Title bar & toolbar",
