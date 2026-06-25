@@ -32,6 +32,9 @@ doAssert parseCssColor("rgb(1,2)").isNone        # wrong arity
 doAssert parseCssColor("rgb(300,0,0)").isNone    # channel > 255
 doAssert parseCssColor("rgba(0,0,0,2)").isNone   # alpha > 1
 doAssert parseCssColor("rgba(0,0,0,128)").isNone # int alpha rejected (use #rrggbbaa)
+doAssert parseCssColor("rgba(0,0,0,nan)").isNone # NaN alpha rejected (no UB int cast)
+doAssert parseCssColor("rgba(0,0,0,inf)").isNone # inf alpha rejected
+doAssert parseCssColor("hsl(0,100%,50%)").isNone # hsl() unsupported (std/colors can't parse)
 
 # ZappColor converters
 let zc: ZappColor = colBlue            # Color -> ZappColor ($Color is UPPERCASE hex)

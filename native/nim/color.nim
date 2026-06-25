@@ -13,7 +13,7 @@ type ZappColor* = distinct string
   ## native unchanged; native delegates parsing to `zapp_color_parse`.
 
 converter toZappColor*(s: string): ZappColor = ZappColor(s)
-converter colorToZappColor*(c: Color): ZappColor = ZappColor($c)  # $Color -> "#rrggbb"
+converter colorToZappColor*(c: Color): ZappColor = ZappColor($c)  # $Color -> "#RRGGBB" (uppercase)
 
 # stderr warn idiom (matches permissions.nim / worker.nim).
 proc c_fprintf(stream: pointer, fmt: cstring) {.importc: "fprintf", varargs, header: "<stdio.h>", cdecl.}
@@ -69,7 +69,7 @@ proc parseRgbFunc(low: string): Option[tuple[r, g, b, a: int]] =
       f = parseFloat(parts[3].strip())
     except ValueError:
       return none(tuple[r, g, b, a: int])
-    if f < 0.0 or f > 1.0:
+    if not (f >= 0.0 and f <= 1.0):          # rejects nan/inf too (NaN compares false)
       return none(tuple[r, g, b, a: int])
     a = int(f * 255.0 + 0.5)                 # round to nearest
   some((ch[0], ch[1], ch[2], a))
