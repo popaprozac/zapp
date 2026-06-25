@@ -62,6 +62,7 @@ export function renderMainPane(app: HTMLElement) {
     teardown = section.render(stage);
   };
 
-  Events.on("ks:nav", ({ id }: any) => show(id));
+  // Only act on this window's own sidebar (ks:nav is a global emit; match windowId).
+  Events.on("ks:nav", ({ id, windowId }: any) => { if (windowId === Window.current().id) show(id); });
   if (registry[0]) show(registry[0].id); // self-init to Home (race-free, in-pane)
 }

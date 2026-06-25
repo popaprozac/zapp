@@ -25,7 +25,9 @@ export function renderSidebarPane(app: HTMLElement) {
   items.forEach((el) =>
     el.addEventListener("click", () => {
       items.forEach((i) => i.classList.toggle("active", i === el));
-      Events.emit("ks:nav", { id: el.dataset.id! });
+      // Scope the route to THIS window — Events.emit fans out across all
+      // windows, so a secondary window's nav must not drive the main window.
+      Events.emit("ks:nav", { id: el.dataset.id!, windowId: Window.current().id });
       // iPhone master-detail: reveal the content column full-screen.
       // No-op on macOS / iPad (panes are side-by-side); gated so the cost
       // is clearly iOS-only and the intent is explicit.

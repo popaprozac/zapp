@@ -102,8 +102,10 @@ export const multiwindowSection: Section = {
     }));
     onAct(host, "color-demo", () => open(host, "color window", () =>
       Window.create({
+        // No main `url` → the content pane loads the shell (main-pane), like the
+        // "Sidebar shell" demo — so this window is sidebar(nav) + content, not
+        // two nav lists. The sidebar drives THIS window's content (window-scoped).
         title: "Color — names + rgba",
-        url: "#sidebar-pane",
         width: 720, height: 480,
         backgroundColor: "teal",                       // CSS name → opaque window
         titleBarStyle: "hiddenInset",
