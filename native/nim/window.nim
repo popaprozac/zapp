@@ -110,6 +110,7 @@ type
     selectionMode*: ToolbarGroupSelectionMode    ## default Momentary
     selected*: seq[int]                          ## indices; empty = none
     controlRepresentation*: ToolbarControlRepresentation  ## default Automatic
+    items*: seq[ToolbarItemOpt]                  ## "group" sub-items (one level)
 
   ToolbarOptions* = object
     style*: ToolbarStyle
@@ -436,6 +437,15 @@ proc serializeToolbar*(t: ToolbarOptions): string =
       if it.controlRepresentation != ToolbarControlRepresentation.Automatic:
         w["controlRepresentation"] = %($it.controlRepresentation)
       items.add(w)
+    of "group":
+      var subs = newJArray()
+      for sub in it.items:
+        subs.add(%*{"type": "button", "id": sub.id, "label": sub.label,
+                    "icon": sub.icon, "enabled": sub.enabled})
+      var w = %*{"type": "group", "id": it.id, "items": subs}
+      if it.controlRepresentation != ToolbarControlRepresentation.Automatic:
+        w["controlRepresentation"] = %($it.controlRepresentation)
+      items.add(w)
     else:  # button (default)
       var w = %*{"type": "button", "id": it.id, "label": it.label,
                  "icon": it.icon, "enabled": it.enabled}
@@ -490,6 +500,20 @@ proc parseToolbarJson*(s: string): ToolbarOptions =
           if jHasStr(sn, "icon"): sg.icon = jStr(sn, "icon")
           if jHasBool(sn, "enabled"): sg.enabled = jBool(sn, "enabled", true)
           item.segments.add(sg)
+    if item.`type` == "group":
+      item.controlRepresentation = (if jHasStr(itn, "controlRepresentation"):
+        enumFromStr[ToolbarControlRepresentation](jStr(itn, "controlRepresentation"), ToolbarControlRepresentation.Automatic)
+        else: ToolbarControlRepresentation.Automatic)
+      let subn = itn{"items"}
+      if not subn.isNil and subn.kind == JArray:
+        for sn in subn:
+          if sn.kind != JObject: continue
+          var sub = ToolbarItemOpt(`type`: "button", enabled: true, indicator: true, bordered: true)
+          if jHasStr(sn, "id"): sub.id = jStr(sn, "id")
+          if jHasStr(sn, "label"): sub.label = jStr(sn, "label")
+          if jHasStr(sn, "icon"): sub.icon = jStr(sn, "icon")
+          if jHasBool(sn, "enabled"): sub.enabled = jBool(sn, "enabled", true)
+          item.items.add(sub)
     if jHasStr(itn, "id"): item.id = jStr(itn, "id")
     if jHasStr(itn, "pane"): item.pane = jStr(itn, "pane")
     if jHasStr(itn, "label"): item.label = jStr(itn, "label")

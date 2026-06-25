@@ -301,6 +301,34 @@ static NSMutableDictionary<NSValue*, ZappToolbarController*>* zapp_toolbars = ni
         return nil;
     }
 
+    // Plain grouping (NSToolbarItemGroup with full button subitems, macOS 10.15+).
+    if ([def[@"type"] isEqualToString:@"group"]) {
+        if (@available(macOS 10.15, *)) {
+            NSToolbarItemGroup* group = [[NSToolbarItemGroup alloc] initWithItemIdentifier:identifier];
+            NSArray* subs = [def[@"items"] isKindOfClass:[NSArray class]] ? def[@"items"] : @[];
+            NSMutableArray<NSToolbarItem*>* built = [NSMutableArray array];
+            for (NSDictionary* sub in subs) {
+                NSString* sid = [sub[@"id"] isKindOfClass:[NSString class]] ? sub[@"id"] : nil;
+                if (!sid.length) continue;
+                NSToolbarItem* bi = [[NSToolbarItem alloc] initWithItemIdentifier:sid];
+                NSString* lbl = [sub[@"label"] isKindOfClass:[NSString class]] ? sub[@"label"] : @"";
+                bi.label = lbl; bi.paletteLabel = lbl.length ? lbl : sid; bi.toolTip = lbl;
+                NSString* ic = [sub[@"icon"] isKindOfClass:[NSString class]] ? sub[@"icon"] : @"";
+                if (ic.length) bi.image = zapp_resolve_icon(ic, 18.0, 1);
+                bi.target = self; bi.action = @selector(zappToolbarItemClicked:);
+                zapp_toolbar_apply_trio(bi, sub);   // bordered (+ macOS-26 trio if present)
+                [built addObject:bi];
+            }
+            group.subitems = built;
+            NSString* repr = [def[@"controlRepresentation"] isKindOfClass:[NSString class]] ? def[@"controlRepresentation"] : @"automatic";
+            group.controlRepresentation = [repr isEqualToString:@"expanded"] ? NSToolbarItemGroupControlRepresentationExpanded
+                : ([repr isEqualToString:@"collapsed"] ? NSToolbarItemGroupControlRepresentationCollapsed : NSToolbarItemGroupControlRepresentationAutomatic);
+            return group;
+        }
+        NSLog(@"[zapp] toolbar: group requires macOS 10.15 — item dropped");
+        return nil;
+    }
+
     // Pull-down menu item (Mail's filter button). The runtime stripped the
     // action callbacks; this re-serializes the cleaned MenuItemDef array for
     // menu.m's JSON builder. Clicks dispatch via __menu:click as usual.
@@ -423,6 +451,11 @@ static NSArray<NSToolbarItemIdentifier>* zapp_toolbar_parse_items(
             if (gid.length == 0 || buttons[gid]) continue;
             [ids addObject:gid];
             buttons[gid] = def;   // carries segments/selectionMode/selected/controlRepresentation
+        } else if ([type isEqualToString:@"group"]) {
+            NSString* gid = [def[@"id"] isKindOfClass:[NSString class]] ? def[@"id"] : nil;
+            if (gid.length == 0 || buttons[gid]) continue;
+            [ids addObject:gid];
+            buttons[gid] = def;   // carries items/controlRepresentation
         } else {
             // Custom button. The runtime validated id presence/uniqueness;
             // belt-and-suspenders here because native Zen-C apps can set

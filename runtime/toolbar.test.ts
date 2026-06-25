@@ -346,6 +346,30 @@ describe("normalizeToolbar segmented (grouping)", () => {
   });
 });
 
+describe("normalizeToolbar group (grouping)", () => {
+  it("emits a group with nested button items + controlRepresentation", () => {
+    const fn = () => {};
+    const { json, actions } = normalizeToolbar({ items: [{
+      type: "group", id: "nav", controlRepresentation: "collapsed",
+      items: [{ id: "back", icon: "sf:chevron.left", action: fn }, { id: "fwd", icon: "sf:chevron.right" }],
+    }] }, false, false);
+    const it0 = JSON.parse(json).items[0];
+    expect(it0.type).toBe("group");
+    expect(it0.controlRepresentation).toBe("collapsed");
+    expect(it0.items.map((x: any) => x.id)).toEqual(["back", "fwd"]);
+    expect(actions.get("back")).toBe(fn);     // nested button actions register normally
+  });
+  it("rejects a group nested in a group", () => {
+    expect(() => normalizeToolbar({ items: [{ type: "group", id: "g",
+      items: [{ type: "group", id: "inner", items: [{ id: "x" }] } as any] }] }, false, false)).toThrow(/nest/i);
+  });
+  it("rejects a group or segmented with an invalid/reserved id", () => {
+    expect(() => normalizeToolbar({ items: [{ type: "group", id: "zapp.nav", items: [{ id: "x" }] }] }, false, false)).toThrow(/reserved/);
+    expect(() => normalizeToolbar({ items: [{ type: "segmented", id: "NSToolbarX", segments: [{ label: "a" }] }] }, false, false)).toThrow(/reserved/);
+    expect(() => normalizeToolbar({ items: [{ type: "group", id: "bad id", items: [{ id: "x" }] }] }, false, false)).toThrow(/invalid item id/);
+  });
+});
+
 describe("normalizeToolbarPatch selection (grouping)", () => {
   it("emits selected[] and controlRepresentation", () => {
     const p = JSON.parse(normalizeToolbarPatch("view", { selected: 2 }).json);

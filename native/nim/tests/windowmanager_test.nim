@@ -243,4 +243,22 @@ block:
   doAssert root["items"][0]["selected"] == %*[1]
   doAssert root["items"][0]["segments"][0]["icon"].getStr == "sf:square.grid.2x2"
 
+block:
+  # plain group round-trips (grouping)
+  let t = ToolbarOptions(style: ToolbarStyle.Unified, items: @[
+    ToolbarItemOpt(`type`: "group", id: "nav",
+      controlRepresentation: ToolbarControlRepresentation.Collapsed,
+      items: @[
+        ToolbarItemOpt(`type`: "button", id: "back", icon: "sf:chevron.left", enabled: true, indicator: true, bordered: true),
+        ToolbarItemOpt(`type`: "button", id: "fwd", icon: "sf:chevron.right", enabled: true, indicator: true, bordered: true)]),
+  ])
+  let s = serializeToolbar(t)
+  doAssert parseToolbarJson(s) == t, "parse(serialize(t)) must round-trip plain group"
+  let root = parseJson(s)
+  doAssert root["items"][0]["type"].getStr == "group"
+  doAssert root["items"][0]["id"].getStr == "nav"
+  doAssert root["items"][0]["controlRepresentation"].getStr == "collapsed"
+  doAssert root["items"][0]["items"][0]["id"].getStr == "back"
+  doAssert root["items"][0]["items"][1]["id"].getStr == "fwd"
+
 echo "windowmanager ok"

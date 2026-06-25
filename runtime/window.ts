@@ -649,6 +649,17 @@ function selectedToWire(s: number | number[] | undefined): number[] {
   return Array.isArray(s) ? s.slice() : [s];
 }
 
+/** Validate a toolbar item id: must match [A-Za-z0-9._-]+ and must not start
+ * with the reserved prefixes "zapp." or "NSToolbar". Used for button, segmented,
+ * and group ids (all become native NSToolbar identifiers). */
+function assertValidToolbarId(id: string): void {
+  if (!/^[A-Za-z0-9._-]+$/.test(id) || id.startsWith("zapp.") || id.startsWith("NSToolbar")) {
+    throw new Error(
+      `[zapp] toolbar: invalid item id "${id}" — use letters, digits, ".", "_", "-" (ids prefixed "zapp." or "NSToolbar" are reserved)`,
+    );
+  }
+}
+
 /** Validate a ToolbarOptions and split it into the wire JSON (actions
  * stripped, defaults applied) and the action maps. Pure — unit-tested. */
 export function normalizeToolbar(
@@ -705,6 +716,7 @@ export function normalizeToolbar(
     if (type === "segmented") {
       if (!item.id) throw new Error('[zapp] toolbar: "segmented" items require an "id"');
       if (!item.segments || item.segments.length === 0) throw new Error('[zapp] toolbar: "segmented" requires a non-empty "segments" array');
+      assertValidToolbarId(item.id);
       if (seen.has(item.id)) throw new Error(`[zapp] toolbar: duplicate item id "${item.id}"`);
       seen.add(item.id);
       const wireSegs = item.segments.map((s, i) => {
@@ -722,15 +734,32 @@ export function normalizeToolbar(
       items.push(seg);
       continue;
     }
+    if (type === "group") {
+      if (!item.id) throw new Error('[zapp] toolbar: "group" items require an "id"');
+      if (!item.items || item.items.length === 0) throw new Error('[zapp] toolbar: "group" requires a non-empty "items" array');
+      assertValidToolbarId(item.id);
+      if (seen.has(item.id)) throw new Error(`[zapp] toolbar: duplicate item id "${item.id}"`);
+      seen.add(item.id);
+      const wireItems: Record<string, unknown>[] = [];
+      for (const sub of item.items) {
+        if (sub.type === "group" || sub.type === "segmented") throw new Error('[zapp] toolbar: groups cannot nest groups');
+        if (!sub.id) throw new Error('[zapp] toolbar: group sub-items require an "id"');
+        if (sub.action) actions.set(sub.id, sub.action);
+        const w: Record<string, unknown> = { type: "button", id: sub.id, label: sub.label ?? "", icon: sub.icon ?? "" };
+        if (sub.enabled !== undefined) w.enabled = sub.enabled;
+        if (sub.bordered !== undefined) w.bordered = sub.bordered;
+        wireItems.push(w);
+      }
+      const g: Record<string, unknown> = { type: "group", id: item.id, items: wireItems };
+      if (item.controlRepresentation !== undefined) g.controlRepresentation = item.controlRepresentation;
+      items.push(g);
+      continue;
+    }
     if (!item.id) throw new Error('[zapp] toolbar: button items require an "id"');
     if (item.action && item.menu) {
       throw new Error('[zapp] toolbar: a button cannot have both "action" and "menu" — the menu consumes the click');
     }
-    if (!/^[A-Za-z0-9._-]+$/.test(item.id) || item.id.startsWith("zapp.") || item.id.startsWith("NSToolbar")) {
-      throw new Error(
-        `[zapp] toolbar: invalid item id "${item.id}" — use letters, digits, ".", "_", "-" (ids prefixed "zapp." or "NSToolbar" are reserved)`,
-      );
-    }
+    assertValidToolbarId(item.id);
     if (seen.has(item.id)) throw new Error(`[zapp] toolbar: duplicate item id "${item.id}"`);
     seen.add(item.id);
     if (item.action) actions.set(item.id, item.action);
