@@ -1,5 +1,12 @@
 import { test, expect } from "bun:test";
-import { renderAssetsNim, type AssetEntry } from "./assets";
+import { renderAssetsNim, generateAssetManifestNim, ASSETS_EMBEDDED_MARKER, type AssetEntry } from "./assets";
+import { mkdtemp, rm, mkdir, writeFile, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
+async function pathExists(p: string): Promise<boolean> {
+  try { await stat(p); return true; } catch { return false; }
+}
 
 test("renderAssetsNim emits an exportc table from staticRead, brotli on", () => {
   const assets: AssetEntry[] = [
@@ -43,4 +50,46 @@ test("renderAssetsNim emits a count-0 stub for an empty set (links, no staticRea
   expect(out).toContain("zapp_embedded_assets_count");
   expect(out).toContain("cint(0)");
   expect(out).not.toContain("staticRead(");
+});
+
+test("generateAssetManifestNim embed:false writes a count-0 stub and removes the marker", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "zapp-assets-"));
+  try {
+    // Pre-seed a stale marker so we prove the dev path actively removes it.
+    await mkdir(path.join(root, ".zapp"), { recursive: true });
+    await writeFile(path.join(root, ASSETS_EMBEDDED_MARKER), "");
+    expect(await pathExists(path.join(root, ASSETS_EMBEDDED_MARKER))).toBe(true);
+
+    const out = await generateAssetManifestNim(root, "dist", { embed: false });
+
+    expect(out).toBe(path.join(root, ".zapp", "zapp_assets.nim"));
+    expect(await pathExists(out)).toBe(true);
+    const nim = await Bun.file(out).text();
+    expect(nim).toContain("cint(0)");          // count-0 stub
+    expect(nim).not.toContain("staticRead(");   // dev: no embeds
+    expect(await pathExists(path.join(root, ASSETS_EMBEDDED_MARKER))).toBe(false); // marker removed
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("generateAssetManifestNim embed:true writes the embed marker + a populated table", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "zapp-assets-"));
+  try {
+    const assetDir = path.join(root, "dist");
+    await mkdir(assetDir, { recursive: true });
+    await writeFile(path.join(assetDir, "index.html"), "<!doctype html><title>t</title>");
+
+    // compress:false keeps the test off brotli; collectAssets stores raw bytes.
+    const out = await generateAssetManifestNim(root, "dist", { embed: true, compress: false });
+
+    expect(await pathExists(out)).toBe(true);
+    expect(await pathExists(path.join(root, ASSETS_EMBEDDED_MARKER))).toBe(true); // marker written
+    const nim = await Bun.file(out).text();
+    expect(nim).toContain("zapp_embedded_assets_count");
+    expect(nim).toContain('path: cstring"/index.html"'); // the asset made it into the table
+    expect(nim).toContain("cint(1)");                     // count = 1
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
