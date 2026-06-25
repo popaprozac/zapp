@@ -56,6 +56,12 @@ export enum WindowEvent {
   INSPECTOR_EXPANDED = 18,
   /** Fires when the inspector is resized. Payload: `{ windowId, width, timestamp }`. */
   INSPECTOR_RESIZED = 19,
+  /** Fires when a segmented toolbar group's selection changes (selectOne/
+   * selectAny). Broadcast to ALL webviews + workers (toolbar-click pattern).
+   * Payload: `{ windowId, id, index, selected }` — `selected` is the index's
+   * new state (always true for selectOne; the toggle result for selectAny).
+   * Momentary groups do NOT fire this — only their per-segment `action`. */
+  TOOLBAR_GROUP_SELECTED = 20,
 }
 
 /** App lifecycle events.
@@ -104,6 +110,7 @@ const WINDOW_EVENT_NAMES: Record<number, string> = {
   [WindowEvent.INSPECTOR_COLLAPSED]: "window:inspector-collapsed",
   [WindowEvent.INSPECTOR_EXPANDED]: "window:inspector-expanded",
   [WindowEvent.INSPECTOR_RESIZED]: "window:inspector-resized",
+  [WindowEvent.TOOLBAR_GROUP_SELECTED]: "window:toolbar-group-selected",
 };
 
 const APP_EVENT_NAMES: Record<number, string> = {

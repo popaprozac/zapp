@@ -324,6 +324,20 @@ export interface InspectorOptions {
   material?: Material;
 }
 
+/** One segment of a `type: "segmented"` toolbar group. A menu-like item:
+ *  same `action: () => void` primitive as MenuItemDef/ToolbarItemDef. */
+export interface ToolbarSegmentDef {
+  /** Optional id (currently informational; segments route by index). */
+  id?: string;
+  /** Segment label OR icon — the convenience control takes titles or images. */
+  label?: string;
+  icon?: string;
+  /** Default true. */
+  enabled?: boolean;
+  /** Fires when this segment is pressed (momentary) or becomes selected. */
+  action?: () => void;
+}
+
 /** One toolbar item. `type` defaults to "button". */
 export interface ToolbarItemDef {
   /** Identifier for custom buttons — REQUIRED for type "button" (keys
@@ -337,7 +351,7 @@ export interface ToolbarItemDef {
    *  (the `pane` field selects which). `toggleSidebar`/sidebar-tracking
    *  require a `sidebar`; `toggleInspector`/inspector-tracking require an
    *  `inspector` (warned + dropped otherwise). */
-  type?: "button" | "toggleSidebar" | "toggleInspector" | "trackingSeparator" | "space" | "flexibleSpace";
+  type?: "button" | "toggleSidebar" | "toggleInspector" | "trackingSeparator" | "space" | "flexibleSpace" | "segmented" | "group";
   /** For `trackingSeparator`: which split divider to track. Default "sidebar". */
   pane?: "sidebar" | "inspector";
   /** Tooltip; visible text in the "expanded" style. */
@@ -367,6 +381,17 @@ export interface ToolbarItemDef {
   /** Draw the item's standard bordered background. Default true; false → flat.
    *  All macOS versions. */
   bordered?: boolean;
+  /** "segmented": the segments of the control. label OR icon each. */
+  segments?: ToolbarSegmentDef[];
+  /** "segmented": selection behavior. Default "momentary". */
+  selectionMode?: "one" | "any" | "momentary";
+  /** "segmented": initial selection — index ("one") or indices ("any").
+   *  Ignored for "momentary". */
+  selected?: number | number[];
+  /** "group": clustered full items (one level — no nested groups). */
+  items?: ToolbarItemDef[];
+  /** "segmented" + "group": how the control collapses. Default "automatic". */
+  controlRepresentation?: "automatic" | "expanded" | "collapsed";
 }
 
 /** Options for a native toolbar (NSToolbar) attached at Window.create. */
@@ -395,6 +420,9 @@ export interface ToolbarItemPatch {
   /** Pass null to clear the badge. */
   badge?: { count: number } | { text: string } | { dot: true } | null;
   bordered?: boolean;
+  /** "segmented": set selection live — index ("one") or indices ("any"). */
+  selected?: number | number[];
+  controlRepresentation?: "automatic" | "expanded" | "collapsed";
 }
 
 /** Lifecycle handle for a window's NSToolbar — present on every
@@ -491,6 +519,16 @@ function wireToolbarClicks(): void {
   toolbarClickWired = true;
   getBridge().on(eventName(WindowEvent.TOOLBAR_CLICKED), (payload: any) => {
     const fn = toolbarActions.get(`${payload?.windowId}:${payload?.id}`);
+    if (fn) fn();
+  });
+}
+
+let toolbarGroupWired = false;
+function wireToolbarGroupSelect(): void {
+  if (toolbarGroupWired) return;
+  toolbarGroupWired = true;
+  getBridge().on(eventName(WindowEvent.TOOLBAR_GROUP_SELECTED), (payload: any) => {
+    const fn = toolbarActions.get(`${payload?.windowId}:${payload?.id}:${payload?.index}`);
     if (fn) fn();
   });
 }
@@ -605,6 +643,12 @@ function badgeToWire(
   return { kind: "dot" };
 }
 
+/** Normalize a `selected` value to the wire array form ([]/[n]/[a,b]). */
+function selectedToWire(s: number | number[] | undefined): number[] {
+  if (s === undefined) return [];
+  return Array.isArray(s) ? s.slice() : [s];
+}
+
 /** Validate a ToolbarOptions and split it into the wire JSON (actions
  * stripped, defaults applied) and the action maps. Pure — unit-tested. */
 export function normalizeToolbar(
@@ -658,6 +702,26 @@ export function normalizeToolbar(
       items.push({ type });
       continue;
     }
+    if (type === "segmented") {
+      if (!item.id) throw new Error('[zapp] toolbar: "segmented" items require an "id"');
+      if (!item.segments || item.segments.length === 0) throw new Error('[zapp] toolbar: "segmented" requires a non-empty "segments" array');
+      if (seen.has(item.id)) throw new Error(`[zapp] toolbar: duplicate item id "${item.id}"`);
+      seen.add(item.id);
+      const wireSegs = item.segments.map((s, i) => {
+        if (s.action) actions.set(`${item.id}:${i}`, s.action);
+        const w: Record<string, unknown> = {};
+        if (s.id !== undefined) w.id = s.id;
+        if (s.label !== undefined) w.label = s.label;
+        if (s.icon !== undefined) w.icon = s.icon;
+        if (s.enabled !== undefined) w.enabled = s.enabled;
+        return w;
+      });
+      const seg: Record<string, unknown> = { type: "segmented", id: item.id, segments: wireSegs,
+        selectionMode: item.selectionMode ?? "momentary", selected: selectedToWire(item.selected) };
+      if (item.controlRepresentation !== undefined) seg.controlRepresentation = item.controlRepresentation;
+      items.push(seg);
+      continue;
+    }
     if (!item.id) throw new Error('[zapp] toolbar: button items require an "id"');
     if (item.action && item.menu) {
       throw new Error('[zapp] toolbar: a button cannot have both "action" and "menu" — the menu consumes the click');
@@ -688,7 +752,7 @@ export function normalizeToolbar(
   return { json: JSON.stringify({ style: toolbar.style ?? "unified", items }), actions, menuActions, menuIdsByItem };
 }
 
-const TOOLBAR_PATCH_KEYS = new Set(["label", "icon", "enabled", "indicator", "menu", "action", "style", "tintColor", "badge", "bordered"]);
+const TOOLBAR_PATCH_KEYS = new Set(["label", "icon", "enabled", "indicator", "menu", "action", "style", "tintColor", "badge", "bordered", "selected", "controlRepresentation"]);
 
 /** Validate a ToolbarItemPatch and split it into the wire JSON (only
  * patched keys, plus id), the replacement action, and stripped menu
@@ -725,6 +789,8 @@ export function normalizeToolbarPatch(
   if (patch.tintColor !== undefined) wire.tintColor = patch.tintColor;
   if (patch.bordered !== undefined) wire.bordered = patch.bordered;
   if (patch.badge !== undefined) wire.badge = badgeToWire(patch.badge);
+  if (patch.selected !== undefined) wire.selected = selectedToWire(patch.selected);
+  if (patch.controlRepresentation !== undefined) wire.controlRepresentation = patch.controlRepresentation;
   if (patch.menu !== undefined) wire.menu = stripMenuActions(patch.menu, menuActions);
   // Explicit-undefined values pass the keys.length guard above (key exists,
   // value is undefined) but produce a wire with only the id — detect here.
@@ -1041,6 +1107,7 @@ function createWindowHandle(windowId: string, sidebarOpts?: SidebarOptions, insp
         purgeWindowToolbarActions(windowId, toolbarActions, toolbarMenuActions, toolbarMenuIdsByWindow);
         if (actions.size > 0) {
           wireToolbarClicks();
+          wireToolbarGroupSelect();
           for (const [id, fn] of actions) toolbarActions.set(`${windowId}:${id}`, fn);
         }
         if (menuActions.size > 0) {
@@ -1054,6 +1121,7 @@ function createWindowHandle(windowId: string, sidebarOpts?: SidebarOptions, insp
         const { json, action, menuActions } = normalizeToolbarPatch(id, patch);
         if (action) {
           wireToolbarClicks();
+          wireToolbarGroupSelect();
           toolbarActions.set(`${windowId}:${id}`, action);
         }
         if (patch.menu !== undefined) {
@@ -1198,6 +1266,7 @@ export const Window = {
       if (pendingToolbarMenuIds) recordToolbarMenuIds(windowId, pendingToolbarMenuIds, toolbarMenuIdsByWindow);
       if (!pendingToolbarActions) return;
       wireToolbarClicks();
+      wireToolbarGroupSelect();
       for (const [id, fn] of pendingToolbarActions) toolbarActions.set(`${windowId}:${id}`, fn);
     };
     // Worker context: call the createWindow host directly (sync C call).

@@ -309,6 +309,52 @@ describe("toolbar registry hygiene helpers", () => {
   });
 });
 
+describe("normalizeToolbar segmented (grouping)", () => {
+  it("emits a segmented group with segments, selectionMode, selected[], controlRepresentation", () => {
+    const { json } = normalizeToolbar({ items: [{
+      type: "segmented", id: "view", selectionMode: "one", selected: 1,
+      controlRepresentation: "automatic",
+      segments: [{ id: "grid", icon: "sf:square.grid.2x2" }, { id: "list", icon: "sf:list.bullet" }],
+    }] }, false, false);
+    const it0 = JSON.parse(json).items[0];
+    expect(it0.type).toBe("segmented");
+    expect(it0.id).toBe("view");
+    expect(it0.selectionMode).toBe("one");
+    expect(it0.selected).toEqual([1]);              // number → [number]
+    expect(it0.controlRepresentation).toBe("automatic");
+    expect(it0.segments).toEqual([{ id: "grid", icon: "sf:square.grid.2x2" }, { id: "list", icon: "sf:list.bullet" }]);
+  });
+  it("defaults selectionMode omitted; selected[] passthrough for selectAny", () => {
+    const it0 = JSON.parse(normalizeToolbar({ items: [{
+      type: "segmented", id: "fmt", selectionMode: "any", selected: [0, 2],
+      segments: [{ label: "B" }, { label: "I" }, { label: "U" }],
+    }] }, false, false).json).items[0];
+    expect(it0.selected).toEqual([0, 2]);
+    expect(it0.selectionMode).toBe("any");
+  });
+  it("registers per-segment actions and returns them", () => {
+    const fn = () => {};
+    const { actions } = normalizeToolbar({ items: [{
+      type: "segmented", id: "view",
+      segments: [{ id: "grid", icon: "sf:a", action: fn }, { id: "list", icon: "sf:b" }],
+    }] }, false, false);
+    expect(actions.get("view:0")).toBe(fn);          // keyed groupId:index
+  });
+  it("rejects a segmented item with no segments / no id", () => {
+    expect(() => normalizeToolbar({ items: [{ type: "segmented", segments: [{ label: "x" }] } as any] }, false, false)).toThrow(/id/);
+    expect(() => normalizeToolbar({ items: [{ type: "segmented", id: "x", segments: [] }] }, false, false)).toThrow(/segment/);
+  });
+});
+
+describe("normalizeToolbarPatch selection (grouping)", () => {
+  it("emits selected[] and controlRepresentation", () => {
+    const p = JSON.parse(normalizeToolbarPatch("view", { selected: 2 }).json);
+    expect(p.selected).toEqual([2]);
+    const p2 = JSON.parse(normalizeToolbarPatch("view", { controlRepresentation: "collapsed" }).json);
+    expect(p2.controlRepresentation).toBe("collapsed");
+  });
+});
+
 describe("normalizeToolbar inspector integration", () => {
   test("toggleInspector kept when window has an inspector", () => {
     const { json } = normalizeToolbar(
