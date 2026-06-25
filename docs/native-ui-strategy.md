@@ -65,6 +65,7 @@ iOS) natively on AppKit/UIKit is a queued future cycle.
 | Inspector (macOS) | `NSSplitViewItem` trailing inspector, `InspectorHandle` | Done |
 | Toolbar (macOS) | `NSToolbar`, `ToolbarItemDef`, `setItems`/`updateItem`/`remove` | Done |
 | Toolbar affordances (macOS 26) | `style`/`tintColor`/`badge`/`bordered` on `ToolbarItemDef`; prominent+flat+badge looks; live `updateItem` patches | Done |
+| Toolbar grouping (macOS 10.15+) | `type:"segmented"` (`NSSegmentedControl`-in-group, selectionMode one/any/momentary) + `type:"group"` (cluster → overflow); `TOOLBAR_GROUP_SELECTED` event; `updateItem({selected})` | Done |
 | Embedded webview panels | `<zapp-webview>`, `panel.m` — macOS + iOS | Done |
 | iOS sidebar / inspector | `UISplitViewController`-backed sidebar + sheet inspector | Done |
 | SwiftUI pane path (macOS) | `NavigationSplitView`/`.inspector` via `NSHostingController` | Removed 2026-06-23 (geometry re-derivation; see spec) |
@@ -132,6 +133,34 @@ Toolbar section demonstrates live badge increment/clear via `updateItem`.
 See the design spec at
 [`docs/superpowers/specs/2026-06-24-appkit-w2-toolbar-affordances-design.md`](superpowers/specs/2026-06-24-appkit-w2-toolbar-affordances-design.md)
 and the API reference at [`docs/api-reference.md` → Toolbar (macOS)](#toolbar-macos).
+
+## Toolbar grouping (macOS 10.15+)
+
+Two `NSToolbarItemGroup` flavors let you cluster controls in the toolbar:
+
+- **`type: "segmented"`** — an `NSSegmentedControl` embedded in a group item.
+  `selectionMode` controls behavior: `"one"` (radio), `"any"` (multi-select),
+  `"momentary"` (no persistent highlight — fires action only). The shared
+  primitive for all three modes is `action: () => void` on each segment. For
+  `"one"` and `"any"`, selection changes also emit `TOOLBAR_GROUP_SELECTED`
+  (`{ windowId, id, index, selected }`) so any pane or worker holding a window
+  handle can react without registering individual segment callbacks. Live
+  selection can be pushed from code via `win.toolbar.updateItem(id, { selected })`.
+  Menu-like unification (a single callback/event for both action and selection) is
+  a planned follow-up; today the two primitives — per-segment `action` and the
+  group `TOOLBAR_GROUP_SELECTED` event — coexist.
+
+- **`type: "group"`** — wraps a flat array of button items into a single
+  `NSToolbarItemGroup` that clusters them visually and collapses to an overflow
+  menu when the window narrows. `controlRepresentation: "automatic"` (default)
+  lets AppKit decide; `"expanded"`/`"collapsed"` force the state. Nested groups
+  are rejected at create time.
+
+Both flavors share the `controlRepresentation` field and are parity-identical
+across TS and Nim authoring (Nim: `segmented:` / `group:` in the toolbar block).
+macOS 10.15 floor; the field is a no-op on iOS.
+
+See [`docs/api-reference.md` → Toolbar grouping](#toolbar-grouping--segmented-controls--item-groups-macos-1015) for the full API.
 
 ## Title bar styles & toolbar tracking
 

@@ -57,9 +57,13 @@ export const toolbarSection: Section = {
   },
   inspector(host) {
     const win = Window.current();
-    host.innerHTML = `<div class="kv"><b>Toolbar</b><div data-state class="muted">click a toolbar item…</div></div>`;
+    host.innerHTML = `<div class="kv"><b>Toolbar</b><div data-state class="muted">click a toolbar item…</div><div data-group class="muted">group: —</div></div>`;
     const state = host.querySelector<HTMLElement>("[data-state]")!;
-    const off = win.on(WindowEvent.TOOLBAR_CLICKED, (p: any) => { state.textContent = `clicked: ${p.id}`; });
-    return () => off();
+    const group = host.querySelector<HTMLElement>("[data-group]")!;
+    const offClick = win.on(WindowEvent.TOOLBAR_CLICKED, (p: any) => { state.textContent = `clicked: ${p.id}`; });
+    const offGroup = win.on(WindowEvent.TOOLBAR_GROUP_SELECTED, (p: any) => {
+      group.textContent = `group: id=${p.id} index=${p.index} selected=${JSON.stringify(p.selected)}`;
+    });
+    return () => { offClick(); offGroup(); };
   },
 };

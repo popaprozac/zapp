@@ -1312,6 +1312,76 @@ same `action` callbacks:
   ] }
 ```
 
+### Toolbar grouping — segmented controls + item groups (macOS 10.15+)
+
+Two `NSToolbarItemGroup`-backed item types let you cluster related controls:
+
+**`type: "segmented"`** — a native `NSSegmentedControl` embedded in the toolbar.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `id` | `string` | required | Same rules as button ids. |
+| `segments` | `SegmentDef[]` | required | At least one. Each segment takes `id?`, `label?`, `icon?` (`sf:…`/data-URL/path), and an `action: () => void` callback. |
+| `selectionMode` | `"one"` \| `"any"` \| `"momentary"` | `"momentary"` | `"one"` = radio; `"any"` = multi-select; `"momentary"` = no persistent highlight. |
+| `selected` | `number \| number[]` | none | Initial selection — index for `"one"`, indices array for `"any"`. Ignored for `"momentary"`. |
+| `controlRepresentation` | `"automatic"` \| `"expanded"` \| `"collapsed"` | `"automatic"` | Controls how the group collapses in the overflow menu. |
+
+```ts
+// selectOne view-switcher: clicking a segment selects it and fires its action
+{ type: "segmented", id: "view", selectionMode: "one", selected: 0,
+  segments: [
+    { id: "grid", icon: "sf:square.grid.2x2", action: () => switchView("grid") },
+    { id: "list", icon: "sf:list.bullet",     action: () => switchView("list") },
+  ] }
+
+// Momentary format group: no persistent highlight, each press fires its action
+{ type: "segmented", id: "fmt", selectionMode: "momentary",
+  segments: [
+    { id: "bold",   icon: "sf:bold",   action: () => applyFmt("bold") },
+    { id: "italic", icon: "sf:italic", action: () => applyFmt("italic") },
+  ] }
+```
+
+**`TOOLBAR_GROUP_SELECTED` event** fires for `"one"` and `"any"` modes on every
+selection change (not for `"momentary"` — those only fire segment `action` callbacks):
+
+```ts
+win.on(WindowEvent.TOOLBAR_GROUP_SELECTED, ({ id, index, selected }) => {
+  // id      — the segmented item's id
+  // index   — segment index that was toggled
+  // selected — current selection: number ("one") or number[] ("any")
+  console.log(`${id}: index ${index}, now ${JSON.stringify(selected)}`);
+});
+```
+
+`win.toolbar.updateItem(id, { selected })` sets the selection live (index or
+indices; ignored for `"momentary"`).
+
+**`type: "group"`** — wraps a flat list of toolbar items into a single
+`NSToolbarItemGroup` cluster that collapses to an overflow menu when the window
+narrows:
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `id` | `string` | required | |
+| `items` | `ToolbarItemDef[]` | required | Plain button items only; nesting groups is rejected. |
+| `controlRepresentation` | `"automatic"` \| `"expanded"` \| `"collapsed"` | `"automatic"` | |
+
+```ts
+{ type: "group", id: "actions",
+  items: [
+    { id: "share",  icon: "sf:square.and.arrow.up", label: "Share",  action: () => share() },
+    { id: "export", icon: "sf:arrow.down.doc",      label: "Export", action: () => exportDoc() },
+  ] }
+```
+
+Clicks inside a `"group"` still fire `TOOLBAR_CLICKED` with the inner button's
+`id` — no different from a standalone button.
+
+> **macOS 10.15 floor.** Both `type: "segmented"` and `type: "group"` use
+> `NSToolbarItemGroup` which is available from macOS 10.15 (Catalina).
+> Zapp's minimum macOS target already covers this floor.
+
 ### Pick your surface
 
 | You want | Use |

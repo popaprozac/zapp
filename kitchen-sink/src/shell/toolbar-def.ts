@@ -27,6 +27,16 @@ export function shellToolbar(): ToolbarItemDef[] {
       action: () => Events.emit("ks:toolbar", { id: "compose" }) },
     { id: "inbox", icon: "sf:tray", label: "Inbox", bordered: false,
       action: () => Events.emit("ks:toolbar", { id: "inbox" }) },
+    { type: "segmented", id: "view", selectionMode: "one", selected: 0,
+      segments: [
+        { id: "grid", icon: "sf:square.grid.2x2", action: () => Events.emit("ks:toolbar", { id: "view:grid" }) },
+        { id: "list", icon: "sf:list.bullet",     action: () => Events.emit("ks:toolbar", { id: "view:list" }) },
+      ] },
+    { type: "segmented", id: "fmt", selectionMode: "momentary",
+      segments: [
+        { id: "bold",   icon: "sf:bold",      action: () => Events.emit("ks:toolbar", { id: "fmt:bold" }) },
+        { id: "italic", icon: "sf:italic",    action: () => Events.emit("ks:toolbar", { id: "fmt:italic" }) },
+      ] },
     { type: "flexibleSpace" },
     { id: "filter", icon: "sf:line.3.horizontal.decrease", label: "Filter",
       indicator: false, menu: filterMenu() },
