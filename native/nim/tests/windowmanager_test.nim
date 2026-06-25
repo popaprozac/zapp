@@ -166,6 +166,28 @@ block:
   doAssert parseToolbarJson(s) == t, "parse(serialize(t)) must round-trip (incl. enabled:false / checked:false)"
 
 block:
+  # toolbar trio fields round-trip (W2)
+  let t = ToolbarOptions(style: ToolbarStyle.Unified, items: @[
+    ToolbarItemOpt(`type`: "button", id: "go", label: "Go", enabled: true,
+      indicator: true, bordered: false,
+      style: ToolbarItemStyle.Prominent, tintColor: "#aa3bff",
+      badge: ToolbarBadge(kind: ToolbarBadgeKind.Count, count: 3)),
+    ToolbarItemOpt(`type`: "button", id: "tag", label: "Tag", enabled: true,
+      indicator: true, bordered: true,
+      badge: ToolbarBadge(kind: ToolbarBadgeKind.Dot)),
+  ])
+  let s = serializeToolbar(t)
+  doAssert parseToolbarJson(s) == t, "parse(serialize(t)) must round-trip trio fields"
+  # spot-check the wire keys native parses
+  let root = parseJson(s)
+  doAssert root["items"][0]["style"].getStr == "prominent"
+  doAssert root["items"][0]["tintColor"].getStr == "#aa3bff"
+  doAssert root["items"][0]["bordered"].getBool == false
+  doAssert root["items"][0]["badge"]["kind"].getStr == "count"
+  doAssert root["items"][0]["badge"]["count"].getInt == 3
+  doAssert root["items"][1]["badge"]["kind"].getStr == "dot"
+
+block:
   # windowOptsApplyJson parses an incoming toolbarJson STRING into o.toolbar.
   let o = WindowOptions(title: "tb")
   windowOptsApplyJson(o, parseJson(

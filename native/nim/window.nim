@@ -72,6 +72,18 @@ type
     id*, label*, icon*: string
     checked*: bool
 
+  ToolbarItemStyle* {.pure.} = enum     ## NSToolbarItemStyle (macOS 26)
+    Plain = "plain"
+    Prominent = "prominent"
+
+  ToolbarBadgeKind* {.pure.} = enum     ## NSItemBadge variant (macOS 26)
+    None = "none", Count = "count", Text = "text", Dot = "dot"
+
+  ToolbarBadge* = object                ## mirrors TS badge union
+    kind*: ToolbarBadgeKind             ## None ⇒ no badge / clear
+    count*: int
+    text*: string
+
   ToolbarItemOpt* = object           ## mirrors TS ToolbarItemDef — DATA fields only (no action closure)
     id*: string
     `type`*: string                  ## "" ⇒ native treats as "button"
@@ -80,6 +92,10 @@ type
     enabled*: bool = true
     indicator*: bool = true          ## menu chevron; native default YES; emitted only on menu items
     menu*: seq[MenuItemOpt]
+    style*: ToolbarItemStyle            ## default Plain; macOS 26+
+    tintColor*: string                  ## hex; emitted only when Prominent
+    badge*: ToolbarBadge                ## kind None ⇒ omitted
+    bordered*: bool = true
 
   ToolbarOptions* = object
     style*: ToolbarStyle
@@ -372,6 +388,10 @@ proc jBool(a: JsonNode, k: string, dflt: bool): bool =
   if not v.isNil and v.kind == JBool: v.getBool else: dflt
 proc jHasBool(a: JsonNode, k: string): bool =
   let v = a{k}; (not v.isNil and v.kind == JBool)
+proc jHasInt(a: JsonNode, k: string): bool =
+  let v = a{k}; (not v.isNil and v.kind == JInt)
+proc jInt(a: JsonNode, k: string, d: int): int =
+  let v = a{k}; (if v.isNil or v.kind != JInt: d else: v.getInt)
 
 # Serialize ToolbarOptions to the native toolbar wire JSON ({style, items:[...]})
 # consumed by toolbar.m's zapp_toolbar_parse_items (matches TS normalizeToolbar).
@@ -391,6 +411,14 @@ proc serializeToolbar*(t: ToolbarOptions): string =
     else:  # button (default)
       var w = %*{"type": "button", "id": it.id, "label": it.label,
                  "icon": it.icon, "enabled": it.enabled}
+      if it.style == ToolbarItemStyle.Prominent: w["style"] = %($it.style)
+      if it.tintColor.len > 0: w["tintColor"] = %it.tintColor
+      if not it.bordered: w["bordered"] = %false
+      case it.badge.kind
+      of ToolbarBadgeKind.Count: w["badge"] = %*{"kind": "count", "count": it.badge.count}
+      of ToolbarBadgeKind.Text:  w["badge"] = %*{"kind": "text", "text": it.badge.text}
+      of ToolbarBadgeKind.Dot:   w["badge"] = %*{"kind": "dot"}
+      of ToolbarBadgeKind.None:  discard
       if it.menu.len > 0:
         var m = newJArray()
         for mi in it.menu:
@@ -420,6 +448,17 @@ proc parseToolbarJson*(s: string): ToolbarOptions =
     if jHasStr(itn, "icon"): item.icon = jStr(itn, "icon")
     if jHasBool(itn, "enabled"): item.enabled = jBool(itn, "enabled", true)
     if jHasBool(itn, "indicator"): item.indicator = jBool(itn, "indicator", true)
+    if jHasStr(itn, "style"): item.style = enumFromStr[ToolbarItemStyle](jStr(itn, "style"), ToolbarItemStyle.Plain)
+    if jHasStr(itn, "tintColor"): item.tintColor = jStr(itn, "tintColor")
+    item.bordered = (if jHasBool(itn, "bordered"): jBool(itn, "bordered", true) else: true)
+    let bn = itn{"badge"}
+    if not bn.isNil and bn.kind == JObject:
+      let bk = if jHasStr(bn, "kind"): jStr(bn, "kind") else: "none"
+      case bk
+      of "count": item.badge = ToolbarBadge(kind: ToolbarBadgeKind.Count, count: (if jHasInt(bn, "count"): jInt(bn, "count", 0) else: 0))
+      of "text":  item.badge = ToolbarBadge(kind: ToolbarBadgeKind.Text, text: (if jHasStr(bn, "text"): jStr(bn, "text") else: ""))
+      of "dot":   item.badge = ToolbarBadge(kind: ToolbarBadgeKind.Dot)
+      else:       item.badge = ToolbarBadge(kind: ToolbarBadgeKind.None)
     let menu = itn{"menu"}
     if not menu.isNil and menu.kind == JArray:
       for mn in menu:
