@@ -116,15 +116,19 @@ void zapp_toolbar_emit_click(int32_t host_id, const char* item_id) {
 void zapp_toolbar_emit_group_select(int32_t host_id, const char* group_id, int32_t index, bool selected) {
     if (!group_id) return;
     NSString* gid = [NSString stringWithUTF8String:group_id];
-    NSString* js = [NSString stringWithFormat:
-        @"(function(){var b=window.__zappBridge;"
-        @"if(b&&b._onEvent)b._onEvent('window:toolbar-group-selected',"
-        @"JSON.stringify({windowId:'win-%d',id:'%@',index:%d,selected:%@}));})();",
-        host_id, gid, index, selected ? @"true" : @"false"];
-    extern void darwin_webview_eval_all(const char* js);
-    darwin_webview_eval_all([js UTF8String]);
-    extern void worker_broadcast_eval_js(char* js);
-    worker_broadcast_eval_js((char*)[js UTF8String]);
+    if (!gid.length) return;
+    NSString* escaped = [gid stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+    escaped = [escaped stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\""];
+    escaped = [escaped stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSString* js = [NSString stringWithFormat:
+            @"(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+            "if(b&&b._onEvent)b._onEvent('window:toolbar-group-selected',"
+            "'{\"windowId\":\"win-%d\",\"id\":\"%@\",\"index\":%d,\"selected\":%@}');})();",
+            host_id, escaped, index, selected ? @"true" : @"false"];
+        darwin_webview_eval_all([js UTF8String]);
+        worker_broadcast_eval_js((char*)[js UTF8String]);
+    });
 }
 
 // Mirror menu.m's __menu:click emit so NSMenuToolbarItem clicks route
