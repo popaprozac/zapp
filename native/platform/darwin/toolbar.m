@@ -111,6 +111,22 @@ void zapp_toolbar_emit_click(int32_t host_id, const char* item_id) {
     });
 }
 
+// Broadcast window:toolbar-group-selected {windowId,id,index,selected} to all
+// webviews + workers (same fan-out as toolbar-clicked).
+void zapp_toolbar_emit_group_select(int32_t host_id, const char* group_id, int32_t index, bool selected) {
+    if (!group_id) return;
+    NSString* gid = [NSString stringWithUTF8String:group_id];
+    NSString* js = [NSString stringWithFormat:
+        @"(function(){var b=window.__zappBridge;"
+        @"if(b&&b._onEvent)b._onEvent('window:toolbar-group-selected',"
+        @"JSON.stringify({windowId:'win-%d',id:'%@',index:%d,selected:%@}));})();",
+        host_id, gid, index, selected ? @"true" : @"false"];
+    extern void darwin_webview_eval_all(const char* js);
+    darwin_webview_eval_all([js UTF8String]);
+    extern void worker_broadcast_eval_js(char* js);
+    worker_broadcast_eval_js((char*)[js UTF8String]);
+}
+
 // Mirror menu.m's __menu:click emit so NSMenuToolbarItem clicks route
 // identically. menu.m emits, verbatim:
 //   b._onEvent('__menu:click','{"id":"<escaped>"}')
@@ -238,6 +254,49 @@ static NSMutableDictionary<NSValue*, ZappToolbarController*>* zapp_toolbars = ni
     NSDictionary* def = self.buttonsById[identifier];
     if (!def) return nil;
 
+    // Segmented control group (NSToolbarItemGroup, macOS 10.15+).
+    if ([def[@"type"] isEqualToString:@"segmented"]) {
+        if (@available(macOS 10.15, *)) {
+            NSArray* segs = [def[@"segments"] isKindOfClass:[NSArray class]] ? def[@"segments"] : @[];
+            NSString* modeStr = [def[@"selectionMode"] isKindOfClass:[NSString class]] ? def[@"selectionMode"] : @"momentary";
+            NSToolbarItemGroupSelectionMode mode = [modeStr isEqualToString:@"one"] ? NSToolbarItemGroupSelectionModeSelectOne
+                : ([modeStr isEqualToString:@"any"] ? NSToolbarItemGroupSelectionModeSelectAny : NSToolbarItemGroupSelectionModeMomentary);
+            // Build titles or images. Prefer images when any segment has an icon.
+            BOOL useImages = NO;
+            for (NSDictionary* s in segs) if ([s[@"icon"] isKindOfClass:[NSString class]] && ((NSString*)s[@"icon"]).length) { useImages = YES; break; }
+            NSMutableArray* labels = [NSMutableArray array];
+            for (NSDictionary* s in segs) [labels addObject:([s[@"label"] isKindOfClass:[NSString class]] ? s[@"label"] : @"")];
+            NSToolbarItemGroup* group;
+            if (useImages) {
+                NSMutableArray<NSImage*>* imgs = [NSMutableArray array];
+                for (NSDictionary* s in segs) {
+                    NSString* ic = [s[@"icon"] isKindOfClass:[NSString class]] ? s[@"icon"] : @"";
+                    NSImage* im = ic.length ? zapp_resolve_icon(ic, 18.0, 1) : [[NSImage alloc] initWithSize:NSMakeSize(1,1)];
+                    [imgs addObject:(im ?: [[NSImage alloc] initWithSize:NSMakeSize(1,1)])];
+                }
+                group = [NSToolbarItemGroup groupWithItemIdentifier:identifier images:imgs selectionMode:mode labels:labels target:self action:@selector(zappToolbarGroupChanged:)];
+            } else {
+                NSMutableArray<NSString*>* titles = [NSMutableArray array];
+                for (NSDictionary* s in segs) [titles addObject:([s[@"label"] isKindOfClass:[NSString class]] ? s[@"label"] : @"")];
+                group = [NSToolbarItemGroup groupWithItemIdentifier:identifier titles:titles selectionMode:mode labels:nil target:self action:@selector(zappToolbarGroupChanged:)];
+            }
+            NSString* repr = [def[@"controlRepresentation"] isKindOfClass:[NSString class]] ? def[@"controlRepresentation"] : @"automatic";
+            group.controlRepresentation = [repr isEqualToString:@"expanded"] ? NSToolbarItemGroupControlRepresentationExpanded
+                : ([repr isEqualToString:@"collapsed"] ? NSToolbarItemGroupControlRepresentationCollapsed : NSToolbarItemGroupControlRepresentationAutomatic);
+            // initial selection
+            NSArray* sel = [def[@"selected"] isKindOfClass:[NSArray class]] ? def[@"selected"] : @[];
+            for (NSNumber* n in sel) { NSInteger i = n.integerValue; if (i >= 0 && i < (NSInteger)segs.count) [group setSelected:YES atIndex:i]; }
+            // per-segment enabled
+            for (NSUInteger i = 0; i < group.subitems.count && i < segs.count; i++) {
+                NSNumber* en = [segs[i][@"enabled"] isKindOfClass:[NSNumber class]] ? segs[i][@"enabled"] : nil;
+                group.subitems[i].enabled = en ? en.boolValue : YES;
+            }
+            return group;
+        }
+        NSLog(@"[zapp] toolbar: segmented group requires macOS 10.15 — item dropped");
+        return nil;
+    }
+
     // Pull-down menu item (Mail's filter button). The runtime stripped the
     // action callbacks; this re-serializes the cleaned MenuItemDef array for
     // menu.m's JSON builder. Clicks dispatch via __menu:click as usual.
@@ -311,6 +370,15 @@ static NSMutableDictionary<NSValue*, ZappToolbarController*>* zapp_toolbars = ni
     zapp_toolbar_emit_click(self.windowNumericId, [sender.itemIdentifier UTF8String]);
 }
 
+- (void)zappToolbarGroupChanged:(NSToolbarItemGroup*)sender {
+    if (![sender isKindOfClass:[NSToolbarItemGroup class]]) return;
+    NSInteger idx = sender.selectedIndex;
+    // Momentary groups report -1; fall back to the highlighted segment if needed.
+    if (idx < 0) { for (NSInteger i = 0; i < (NSInteger)sender.subitems.count; i++) if ([sender isSelectedAtIndex:i]) { idx = i; break; } }
+    BOOL sel = (idx >= 0) ? [sender isSelectedAtIndex:idx] : NO;
+    zapp_toolbar_emit_group_select(self.windowNumericId, [sender.itemIdentifier UTF8String], (int32_t)idx, sel);
+}
+
 @end
 
 // Parse the wire items array into the identifier list + custom-button defs.
@@ -346,6 +414,11 @@ static NSArray<NSToolbarItemIdentifier>* zapp_toolbar_parse_items(
             [ids addObject:NSToolbarSpaceItemIdentifier];
         } else if ([type isEqualToString:@"flexibleSpace"]) {
             [ids addObject:NSToolbarFlexibleSpaceItemIdentifier];
+        } else if ([type isEqualToString:@"segmented"]) {
+            NSString* gid = [def[@"id"] isKindOfClass:[NSString class]] ? def[@"id"] : nil;
+            if (gid.length == 0 || buttons[gid]) continue;
+            [ids addObject:gid];
+            buttons[gid] = def;   // carries segments/selectionMode/selected/controlRepresentation
         } else {
             // Custom button. The runtime validated id presence/uniqueness;
             // belt-and-suspenders here because native Zen-C apps can set
@@ -566,6 +639,19 @@ void darwin_toolbar_update_item(void* window_ptr, const char* item_json) {
         // badge {"kind":"none"} → cleared). Works for both button + menu items.
         if (patch[@"style"] || patch[@"tintColor"] || patch[@"bordered"] || patch[@"badge"]) {
             zapp_toolbar_apply_trio(live, merged);
+        }
+        // Segmented group: apply live selected + controlRepresentation.
+        if (@available(macOS 10.15, *)) {
+            if ([live isKindOfClass:[NSToolbarItemGroup class]]) {
+                NSToolbarItemGroup* g = (NSToolbarItemGroup*)live;
+                if ([patch[@"selected"] isKindOfClass:[NSArray class]]) {
+                    for (NSInteger i = 0; i < (NSInteger)g.subitems.count; i++) [g setSelected:NO atIndex:i];
+                    for (NSNumber* n in (NSArray*)patch[@"selected"]) { NSInteger i = n.integerValue; if (i >= 0 && i < (NSInteger)g.subitems.count) [g setSelected:YES atIndex:i]; }
+                }
+                NSString* repr = [patch[@"controlRepresentation"] isKindOfClass:[NSString class]] ? patch[@"controlRepresentation"] : nil;
+                if (repr) g.controlRepresentation = [repr isEqualToString:@"expanded"] ? NSToolbarItemGroupControlRepresentationExpanded
+                    : ([repr isEqualToString:@"collapsed"] ? NSToolbarItemGroupControlRepresentationCollapsed : NSToolbarItemGroupControlRepresentationAutomatic);
+            }
         }
         // Action buttons: enabled lives in the merged def; force a
         // validation pass so it applies now, not on the next idle.
