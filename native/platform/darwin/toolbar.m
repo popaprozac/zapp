@@ -33,6 +33,56 @@ static NSString* const kZappTrackingSeparatorId          = @"zapp.trackingSepara
 static NSString* const kZappTrackingSeparatorInspectorId = @"zapp.trackingSeparator.inspector";
 static NSString* const kZappToggleInspectorId = @"zapp.toggleInspector";
 
+// Parse "#RGB" / "#RRGGBB" / "#RRGGBBAA" → NSColor (nil on malformed).
+static NSColor* zapp_toolbar_color(NSString* hex) {
+    if (![hex isKindOfClass:[NSString class]] || hex.length == 0) return nil;
+    NSString* s = [hex hasPrefix:@"#"] ? [hex substringFromIndex:1] : hex;
+    if (s.length == 3) { // expand #RGB → #RRGGBB
+        unichar c[3]; [s getCharacters:c range:NSMakeRange(0,3)];
+        s = [NSString stringWithFormat:@"%C%C%C%C%C%C", c[0],c[0],c[1],c[1],c[2],c[2]];
+    }
+    if (s.length != 6 && s.length != 8) return nil;
+    unsigned int v = 0;
+    if (![[NSScanner scannerWithString:s] scanHexInt:&v]) return nil;
+    CGFloat r,g,b,a;
+    if (s.length == 8) { r=((v>>24)&0xFF)/255.0; g=((v>>16)&0xFF)/255.0; b=((v>>8)&0xFF)/255.0; a=(v&0xFF)/255.0; }
+    else               { r=((v>>16)&0xFF)/255.0; g=((v>>8)&0xFF)/255.0; b=(v&0xFF)/255.0; a=1.0; }
+    return [NSColor colorWithSRGBRed:r green:g blue:b alpha:a];
+}
+
+// Build an NSItemBadge from a def's "badge" dict. Returns nil for absent/none.
+API_AVAILABLE(macos(26.0))
+static NSItemBadge* zapp_toolbar_badge(NSDictionary* def) {
+    NSDictionary* b = [def[@"badge"] isKindOfClass:[NSDictionary class]] ? def[@"badge"] : nil;
+    if (!b) return nil;
+    NSString* kind = [b[@"kind"] isKindOfClass:[NSString class]] ? b[@"kind"] : @"none";
+    if ([kind isEqualToString:@"count"]) {
+        NSNumber* n = [b[@"count"] isKindOfClass:[NSNumber class]] ? b[@"count"] : @0;
+        return [NSItemBadge badgeWithCount:n.integerValue];
+    }
+    if ([kind isEqualToString:@"text"]) {
+        NSString* t = [b[@"text"] isKindOfClass:[NSString class]] ? b[@"text"] : @"";
+        return [NSItemBadge badgeWithText:t];
+    }
+    if ([kind isEqualToString:@"dot"]) return [NSItemBadge indicatorBadge];
+    return nil; // "none"
+}
+
+// Apply the W2 trio (style/tint/badge/bordered) from a stored def onto a live
+// item. bordered is ungated; style/tint/badge require macOS 26.
+static void zapp_toolbar_apply_trio(NSToolbarItem* item, NSDictionary* def) {
+    NSNumber* bordered = [def[@"bordered"] isKindOfClass:[NSNumber class]] ? def[@"bordered"] : nil;
+    if (@available(macOS 10.15, *)) item.bordered = bordered ? bordered.boolValue : YES;
+    if (@available(macOS 26.0, *)) {
+        NSString* style = [def[@"style"] isKindOfClass:[NSString class]] ? def[@"style"] : @"plain";
+        BOOL prominent = [style isEqualToString:@"prominent"];
+        item.style = prominent ? NSToolbarItemStyleProminent : NSToolbarItemStylePlain;
+        NSString* tint = [def[@"tintColor"] isKindOfClass:[NSString class]] ? def[@"tintColor"] : nil;
+        item.backgroundTintColor = prominent ? zapp_toolbar_color(tint) : nil;
+        item.badge = zapp_toolbar_badge(def);
+    }
+}
+
 static void zapp_toolbar_on_main(void (^block)(void)) {
     if ([NSThread isMainThread]) block();
     else dispatch_async(dispatch_get_main_queue(), block);
@@ -214,6 +264,7 @@ static NSMutableDictionary<NSValue*, ZappToolbarController*>* zapp_toolbars = ni
             mitem.autovalidates = NO;
             NSNumber* men = [def[@"enabled"] isKindOfClass:[NSNumber class]] ? def[@"enabled"] : nil;
             mitem.enabled = men ? men.boolValue : YES;
+            zapp_toolbar_apply_trio(mitem, def);
             return mitem;
         }
         // < 10.15: fall through to a plain button (clicks still broadcast).
@@ -232,9 +283,7 @@ static NSMutableDictionary<NSValue*, ZappToolbarController*>* zapp_toolbars = ni
     }
     item.target = self;
     item.action = @selector(zappToolbarItemClicked:);
-    if (@available(macOS 10.15, *)) {
-        item.bordered = YES; // modern pill-button look in unified styles
-    }
+    zapp_toolbar_apply_trio(item, def);
     return item;
 }
 
@@ -512,6 +561,11 @@ void darwin_toolbar_update_item(void* window_ptr, const char* item_json) {
                     mlive.enabled = [patch[@"enabled"] boolValue]; // autovalidates is NO
                 }
             }
+        }
+        // W2 trio: re-apply from the merged def (covers style/tint/badge/bordered;
+        // badge {"kind":"none"} → cleared). Works for both button + menu items.
+        if (patch[@"style"] || patch[@"tintColor"] || patch[@"bordered"] || patch[@"badge"]) {
+            zapp_toolbar_apply_trio(live, merged);
         }
         // Action buttons: enabled lives in the merged def; force a
         // validation pass so it applies now, not on the next idle.
