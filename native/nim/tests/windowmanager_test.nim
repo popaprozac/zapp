@@ -244,21 +244,24 @@ block:
   doAssert root["items"][0]["segments"][0]["icon"].getStr == "sf:square.grid.2x2"
 
 block:
-  # plain group round-trips (grouping)
+  # plain group round-trips (grouping), including bordered:false sub-item
   let t = ToolbarOptions(style: ToolbarStyle.Unified, items: @[
     ToolbarItemOpt(`type`: "group", id: "nav",
       controlRepresentation: ToolbarControlRepresentation.Collapsed,
       items: @[
         ToolbarItemOpt(`type`: "button", id: "back", icon: "sf:chevron.left", enabled: true, indicator: true, bordered: true),
-        ToolbarItemOpt(`type`: "button", id: "fwd", icon: "sf:chevron.right", enabled: true, indicator: true, bordered: true)]),
+        ToolbarItemOpt(`type`: "button", id: "fwd", icon: "sf:chevron.right", enabled: true, indicator: true, bordered: true),
+        ToolbarItemOpt(`type`: "button", id: "unbrd", icon: "sf:xmark", enabled: true, indicator: true, bordered: false)]),
   ])
   let s = serializeToolbar(t)
-  doAssert parseToolbarJson(s) == t, "parse(serialize(t)) must round-trip plain group"
+  doAssert parseToolbarJson(s) == t, "parse(serialize(t)) must round-trip plain group incl. bordered:false sub-item"
   let root = parseJson(s)
   doAssert root["items"][0]["type"].getStr == "group"
   doAssert root["items"][0]["id"].getStr == "nav"
   doAssert root["items"][0]["controlRepresentation"].getStr == "collapsed"
   doAssert root["items"][0]["items"][0]["id"].getStr == "back"
   doAssert root["items"][0]["items"][1]["id"].getStr == "fwd"
+  doAssert root["items"][0]["items"][2]["bordered"].getBool == false, "bordered:false sub-item must appear on wire"
+  doAssert not root["items"][0]["items"][0].hasKey("bordered"), "bordered:true sub-item must be omitted from wire (default)"
 
 echo "windowmanager ok"

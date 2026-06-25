@@ -442,6 +442,7 @@ proc serializeToolbar*(t: ToolbarOptions): string =
       for sub in it.items:
         subs.add(%*{"type": "button", "id": sub.id, "label": sub.label,
                     "icon": sub.icon, "enabled": sub.enabled})
+        if not sub.bordered: subs[^1]["bordered"] = %false
       var w = %*{"type": "group", "id": it.id, "items": subs}
       if it.controlRepresentation != ToolbarControlRepresentation.Automatic:
         w["controlRepresentation"] = %($it.controlRepresentation)
@@ -513,6 +514,7 @@ proc parseToolbarJson*(s: string): ToolbarOptions =
           if jHasStr(sn, "label"): sub.label = jStr(sn, "label")
           if jHasStr(sn, "icon"): sub.icon = jStr(sn, "icon")
           if jHasBool(sn, "enabled"): sub.enabled = jBool(sn, "enabled", true)
+          if jHasBool(sn, "bordered"): sub.bordered = jBool(sn, "bordered", true)
           item.items.add(sub)
     if jHasStr(itn, "id"): item.id = jStr(itn, "id")
     if jHasStr(itn, "pane"): item.pane = jStr(itn, "pane")
