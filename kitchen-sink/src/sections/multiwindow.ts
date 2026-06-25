@@ -50,6 +50,10 @@ export const multiwindowSection: Section = {
     onAct(host, "shell", () => open(host, "sidebar-shell window", () =>
       Window.create({
         title: "Kitchen Sink — Shell 2", width: 1000, height: 680,
+        // Match the main window's chrome so the 2nd shell looks identical:
+        // hidden-inset unified titlebar (so the toolbar merges into it without a
+        // height "readjust") + the native sidebar glass.
+        titleBarStyle: "hiddenInset", vibrancy: "sidebar",
         sidebar: { url: "#sidebar-pane", width: 240 },
         inspector: { url: "#inspector-pane", width: 300, collapsed: true },
       })));
