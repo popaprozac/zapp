@@ -26,7 +26,6 @@ export function shellToolbar(): ToolbarItemDef[] {
       style: "prominent", tintColor: "#aa3bff",
       action: () => Events.emit("ks:toolbar", { id: "compose" }) },
     { id: "inbox", icon: "sf:tray", label: "Inbox", bordered: false,
-      badge: { count: 0 },
       action: () => Events.emit("ks:toolbar", { id: "inbox" }) },
     { type: "flexibleSpace" },
     { id: "filter", icon: "sf:line.3.horizontal.decrease", label: "Filter",

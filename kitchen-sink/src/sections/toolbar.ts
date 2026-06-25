@@ -40,6 +40,7 @@ export const toolbarSection: Section = {
     });
     onAct(host, "attach", () => {
       composeEnabled = true;
+      inboxCount = 0;
       win.toolbar.setItems(shellToolbar());
       setResult(host, "toolbar attached — titlebar grows back");
     });
