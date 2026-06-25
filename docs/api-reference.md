@@ -1257,6 +1257,25 @@ win.toolbar.remove();
 action/menu exclusivity) and re-registers action callbacks in the calling
 context, purging the window's previous registrations.
 
+**Pull-down menus don't auto-toggle their checkmark.** A pull-down item's
+`action` fires, but the native menu is static — the app owns `checked` and must
+`updateItem` to redraw it. The "moving checkmark" idiom is to refresh the menu
+*from the selected item's action*, rebuilding it with the new `checked` state:
+
+```ts
+// filterMenu() returns items whose `checked` reflects the current filter.
+function pickFilter(value: string) {
+  setFilter(value);
+  // Replace the menu so the native checkmark moves to the new selection.
+  Window.current().toolbar.updateItem("filter", { menu: filterMenu() });
+}
+// each menu item: { id: "kf-unread", label: "Unread", checked: filter === "unread",
+//                   action: () => pickFilter("unread") }
+```
+
+Without that `updateItem`, the filter value changes but the checkmark stays put
+— which reads as "nothing happened."
+
 Caveats worth knowing:
 
 - **Webview contexts only (v1).** Worker-held `WindowHandle`s carry the

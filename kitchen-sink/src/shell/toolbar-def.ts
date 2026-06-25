@@ -1,4 +1,9 @@
-import { Events, type ToolbarItemDef } from "@zappdev/runtime";
+import {
+  Events,
+  Window,
+  type MenuItemDef,
+  type ToolbarItemDef,
+} from "@zappdev/runtime";
 
 // Filter state for the pull-down's moving checkmark (the Toolbar section
 // drives this via updateItem). Module-level so main-pane (attach) and the
@@ -11,11 +16,35 @@ export function setFilter(f: string) {
   filter = f;
 }
 
-export function filterMenu(): any[] {
+// Selecting a pull-down item must REPLACE the menu to move the native
+// checkmark: the AppKit pull-down is static until updateItem, and the app
+// owns the `checked` state. This is the documented "moving checkmark"
+// pattern (see api-reference: Updating toolbar items).
+function pickFilter(f: string) {
+  setFilter(f);
+  Window.current().toolbar.updateItem("filter", { menu: filterMenu() });
+}
+
+export function filterMenu(): MenuItemDef[] {
   return [
-    { id: "kf-all", label: "All", checked: filter === "all" },
-    { id: "kf-unread", label: "Unread", checked: filter === "unread" },
-    { id: "kf-flagged", label: "Flagged", checked: filter === "flagged" },
+    {
+      id: "kf-all",
+      label: "All",
+      checked: filter === "all",
+      action: () => pickFilter("all"),
+    },
+    {
+      id: "kf-unread",
+      label: "Unread",
+      checked: filter === "unread",
+      action: () => pickFilter("unread"),
+    },
+    {
+      id: "kf-flagged",
+      label: "Flagged",
+      checked: filter === "flagged",
+      action: () => pickFilter("flagged"),
+    },
   ];
 }
 
@@ -41,6 +70,7 @@ export function shellToolbar(): ToolbarItemDef[] {
       bordered: false,
       action: () => Events.emit("ks:toolbar", { id: "inbox" }),
     },
+    { type: "flexibleSpace" },
     {
       type: "group",
       id: "nav",
