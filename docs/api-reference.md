@@ -1091,7 +1091,8 @@ win.on(WindowEvent.INSPECTOR_RESIZED, ({ width }) => console.log("inspector", wi
 (180/400), `collapsible` (default true), `collapsed` (default false — set
 true for the common "hidden until summoned" inspector), `resizable`
 (default true; false locks the pane at `width`), `backgroundColor`
-(solid backdrop hex — `material` wins if both set), `material`.
+(solid backdrop — CSS name / `#rgb`/`#rrggbb`/`#rrggbbaa` / `rgb()` / `rgba()`;
+`rgba()` alpha is honored; `material` wins if both set), `material`.
 
 **Handle (`win.inspector`, present only when the window has one):**
 `toggle()` / `collapse()` / `expand()` / `setWidth(px)` /
