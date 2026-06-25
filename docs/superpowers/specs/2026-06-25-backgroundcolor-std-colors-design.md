@@ -43,9 +43,13 @@ constants directly (`backgroundColor: colBlue`).
    pointer). Honors "use `std/colors` from Nim", keeps native thin, no
    cstring-return lifetime hazard, one tested source covering both author paths.
 2. **Alpha — honor it where applicable.** Parse alpha from `rgba()` /
-   `#rrggbbaa`. Sidebar + inspector `layer.backgroundColor` composite the alpha
-   over the glass (real translucency). The opaque window clamps to `1.0`
-   (AppKit ignores alpha on opaque windows) — documented.
+   `#rrggbbaa`. Sidebar + inspector `backgroundColor` is the **flat,
+   non-vibrant pane path** (`layer.backgroundColor`, used only when no
+   `material` override is set — there is no `NSVisualEffectView` behind it);
+   honoring alpha lets the **window background behind the pane** show through
+   (real translucency; today it's forced opaque). The opaque window clamps to
+   `1.0` (AppKit ignores alpha on opaque windows) — documented. `material`
+   (glass) and `backgroundColor` remain mutually exclusive; `material` wins.
 3. **Invalid input — warn + ignore (fall back).** Unparseable color → log
    `[zapp] invalid backgroundColor "…"` (warn) and skip the bg (surface keeps
    its default). Non-fatal; no longer silent.
@@ -133,7 +137,7 @@ whitespace/case tolerance; invalid (`"#zz"`, `"reddish"`, `"rgb(1,2)"`,
 - Delete `zapp_parse_hex_color` (these three sites are its only callers).
 - Window (~816, opaque): `if (zapp_color_parse(str, &cr,&cg,&cb,&ca)) bg =
   colorWithSRGBRed:cr/255.0 …alpha:1.0;` — ignore `ca` (documented clamp).
-- Sidebar (~912) & inspector (~979): `…alpha:ca/255.0` (honor alpha over glass).
+- Sidebar (~912) & inspector (~979): `…alpha:ca/255.0` (honor alpha — flat pane path; alpha shows the window background behind the pane).
 
 ### `runtime/window.ts`
 
@@ -150,11 +154,10 @@ opaque while sidebar/inspector honor it.
 
 ## Kitchen-sink showcase
 
-A Multi-window demo button opens a window whose **sidebar** uses an `rgba()`
-color (alpha composited over the glass) and whose window uses a **named** color
-(e.g. `colTeal` via the Nim path, or a CSS name string) — one click proves
-names + alpha visually. (Exact wiring decided in the plan; keep the main
-window clean as the smoke surface, consistent with prior cycles.)
+A Multi-window demo button opens a window with an **opaque named** window color
+(e.g. `"teal"`) and a **flat `rgba()` sidebar** color whose alpha lets the teal
+window background show through — one click proves names + alpha visually. (Keep
+the main window clean as the smoke surface, consistent with prior cycles.)
 
 ## Docs
 
