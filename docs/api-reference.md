@@ -1349,8 +1349,9 @@ selection change (not for `"momentary"` — those only fire segment `action` cal
 win.on(WindowEvent.TOOLBAR_GROUP_SELECTED, ({ id, index, selected }) => {
   // id      — the segmented item's id
   // index   — segment index that was toggled
-  // selected — current selection: number ("one") or number[] ("any")
-  console.log(`${id}: index ${index}, now ${JSON.stringify(selected)}`);
+  // selected — boolean: the toggled index's new state (always true for "one";
+  //            the toggle result for "any")
+  console.log(`${id}: index ${index}, now ${selected}`);
 });
 ```
 

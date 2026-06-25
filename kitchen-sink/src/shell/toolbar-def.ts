@@ -27,6 +27,13 @@ export function shellToolbar(): ToolbarItemDef[] {
       action: () => Events.emit("ks:toolbar", { id: "compose" }) },
     { id: "inbox", icon: "sf:tray", label: "Inbox", bordered: false,
       action: () => Events.emit("ks:toolbar", { id: "inbox" }) },
+    { type: "group", id: "nav", controlRepresentation: "automatic",
+      items: [
+        { id: "back", icon: "sf:chevron.left",  label: "Back",
+          action: () => Events.emit("ks:toolbar", { id: "nav:back" }) },
+        { id: "fwd",  icon: "sf:chevron.right", label: "Forward",
+          action: () => Events.emit("ks:toolbar", { id: "nav:fwd" }) },
+      ] },
     { type: "segmented", id: "view", selectionMode: "one", selected: 0,
       segments: [
         { id: "grid", icon: "sf:square.grid.2x2", action: () => Events.emit("ks:toolbar", { id: "view:grid" }) },
