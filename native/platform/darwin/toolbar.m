@@ -317,6 +317,12 @@ static NSMutableDictionary<NSValue*, ZappToolbarController*>* zapp_toolbars = ni
                 if (ic.length) bi.image = zapp_resolve_icon(ic, 18.0, 1);
                 bi.target = self; bi.action = @selector(zappToolbarItemClicked:);
                 zapp_toolbar_apply_trio(bi, sub);   // bordered (+ macOS-26 trio if present)
+                // Honor enabled:false — group sub-items aren't in buttonsById, so
+                // validateToolbarItem: can't answer for them; disable autovalidation
+                // so the explicit state sticks (mirrors the segmented flavor).
+                NSNumber* en = [sub[@"enabled"] isKindOfClass:[NSNumber class]] ? sub[@"enabled"] : nil;
+                bi.autovalidates = NO;
+                bi.enabled = en ? en.boolValue : YES;
                 [built addObject:bi];
             }
             group.subitems = built;
