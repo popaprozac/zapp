@@ -264,4 +264,21 @@ block:
   doAssert root["items"][0]["items"][2]["bordered"].getBool == false, "bordered:false sub-item must appear on wire"
   doAssert not root["items"][0]["items"][0].hasKey("bordered"), "bordered:true sub-item must be omitted from wire (default)"
 
+block:
+  # #706: segmented momentary + Collapsed representation + empty selected round-trips
+  let t = ToolbarOptions(style: ToolbarStyle.Unified, items: @[
+    ToolbarItemOpt(`type`: "segmented", id: "fmt",
+      selectionMode: ToolbarGroupSelectionMode.Momentary, selected: @[],
+      controlRepresentation: ToolbarControlRepresentation.Collapsed,
+      segments: @[
+        ToolbarSegmentOpt(id: "b", label: "B", enabled: true),
+        ToolbarSegmentOpt(id: "i", label: "I", enabled: true)]),
+  ])
+  let s = serializeToolbar(t)
+  doAssert parseToolbarJson(s) == t, "parse(serialize(t)) must round-trip momentary + Collapsed segmented"
+  let root = parseJson(s)
+  doAssert root["items"][0]["selectionMode"].getStr == "momentary"
+  doAssert root["items"][0]["controlRepresentation"].getStr == "collapsed"
+  doAssert root["items"][0]["selected"].len == 0, "empty selected must serialize as []"
+
 echo "windowmanager ok"

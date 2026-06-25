@@ -744,6 +744,9 @@ export function normalizeToolbar(
       for (const sub of item.items) {
         if (sub.type === "group" || sub.type === "segmented") throw new Error('[zapp] toolbar: groups cannot nest groups');
         if (!sub.id) throw new Error('[zapp] toolbar: group sub-items require an "id"');
+        assertValidToolbarId(sub.id);
+        if (seen.has(sub.id)) throw new Error(`[zapp] toolbar: duplicate item id "${sub.id}"`);
+        seen.add(sub.id);
         if (sub.action) actions.set(sub.id, sub.action);
         const w: Record<string, unknown> = { type: "button", id: sub.id, label: sub.label ?? "", icon: sub.icon ?? "" };
         if (sub.enabled !== undefined) w.enabled = sub.enabled;

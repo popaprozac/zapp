@@ -461,3 +461,16 @@ describe("normalizeToolbarPatch trio (W2)", () => {
     expect(cleared.badge).toEqual({ kind: "none" });
   });
 });
+
+describe("grouping #706 follow-ups", () => {
+  it("group sub-item ids run the shared validator + dedup", () => {
+    expect(() => normalizeToolbar({ items: [{ type: "group", id: "g", items: [{ id: "zapp.x" }] }] }, false, false)).toThrow(/reserved/);
+    expect(() => normalizeToolbar({ items: [{ type: "group", id: "g", items: [{ id: "a b" }] }] }, false, false)).toThrow(/invalid item id/);
+    expect(() => normalizeToolbar({ items: [{ id: "dup" }, { type: "group", id: "g", items: [{ id: "dup" }] }] }, false, false)).toThrow(/duplicate/);
+  });
+  it("segmented: omitted selected → [] and omitted selectionMode → momentary on the wire", () => {
+    const it0 = JSON.parse(normalizeToolbar({ items: [{ type: "segmented", id: "s", segments: [{ label: "A" }] }] }, false, false).json).items[0];
+    expect(it0.selected).toEqual([]);
+    expect(it0.selectionMode).toBe("momentary");
+  });
+});
