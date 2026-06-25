@@ -574,14 +574,20 @@ wire `on(READY, () => show())` themselves — that pattern is no longer
 needed. Pass `visible: false` if you want to defer showing yourself and
 call `show()` manually when your app's logic decides it's time.
 
-**Title bar (macOS).** `titleBarStyle` controls the title bar:
-`"hidden"` and `"hiddenInset"` hide the title and extend content under the
-title bar (full-bleed); `"default"` is a standard title bar. **Omitting
-`titleBarStyle` is distinct from setting `"default"`.** When you omit it, a
-plain window gets a standard title bar, but a window with a `sidebar` or
-`inspector` pane automatically uses the unified hidden-title chrome (the
-standard macOS sidebar-app look). Setting `titleBarStyle: "default"`
-*explicitly* opts a sidebar/inspector window back into a standard title bar.
+**Title bar (macOS).** `titleBarStyle` controls the title bar chrome — it is a
+free, per-window cosmetic choice; the framework never forces a particular style.
+`"default"` is a standard macOS title bar: the window title is shown, and a
+toolbar (if present) renders as its own band below/around it — more chrome,
+taller total height. `"hidden"` sets `NSWindowStyleMaskFullSizeContentView` +
+a transparent titlebar and hides the title text, so content runs full-height and
+the toolbar merges into a unified titlebar row (the Mail/Notes look). `"hiddenInset"`
+is identical but keeps the title text visible. **Omitting `titleBarStyle` is
+distinct from setting `"default"`.** When you omit it, a plain window gets a
+standard title bar, but a window with a `sidebar` or `inspector` pane
+automatically uses the unified hidden-title chrome (the standard macOS
+sidebar-app look). Setting `titleBarStyle: "default"` *explicitly* opts a
+sidebar/inspector window back into a standard title bar. Any of the three values
+is first-class per window.
 (Note: on a window that also has a `toolbar`, the toolbar's own `style`
 governs the toolbar appearance, so `"hidden"` vs `"hiddenInset"` won't
 differ visibly there.)
@@ -1135,6 +1141,22 @@ unclickable when `false`) and — on menu buttons — `indicator?: boolean`
 look). System types: `toggleSidebar`, `trackingSeparator`
 (both require the window to have a `sidebar` — warned and dropped
 otherwise), `space`, `flexibleSpace`.
+
+**Title bar & toolbar layout.** `titleBarStyle` and `trackingSeparator` interact:
+
+- Under `titleBarStyle: "hidden"` or `"hiddenInset"` the toolbar merges into the
+  unified titlebar row (the Mail/Notes look). A `trackingSeparator` reflow —
+  items shifting when the sidebar collapses — looks clean and natural here.
+- Under `titleBarStyle: "default"` the toolbar renders as its own separate band
+  below the standard title. The same `trackingSeparator` reflow still works
+  correctly, but the larger visual jump is expected: the toolbar band is taller
+  and the title text remains visible, so the shift reads more pronounced.
+  This is not a bug — it is standard AppKit behavior in both configurations.
+- `trackingSeparator` is opt-in. Omit it and toolbar items stay
+  fixed/left-aligned regardless of pane collapse state.
+- `hiddenInset` (title visible + unified bar) is the common choice for
+  sidebar+toolbar apps and matches what Apple's own sidebar apps use, but
+  `default` is fully valid if you want the standard title bar chrome.
 
 **Item visual affordances (macOS 26+).** Four optional fields control button
 appearance:

@@ -133,6 +133,44 @@ See the design spec at
 [`docs/superpowers/specs/2026-06-24-appkit-w2-toolbar-affordances-design.md`](superpowers/specs/2026-06-24-appkit-w2-toolbar-affordances-design.md)
 and the API reference at [`docs/api-reference.md` → Toolbar (macOS)](#toolbar-macos).
 
+## Title bar styles & toolbar tracking
+
+`titleBarStyle` is a free, per-window cosmetic choice — the framework never
+forces a particular style. Three values are supported:
+
+- **`"default"` (or unset on a plain window)** — standard macOS title bar: title
+  text shown, toolbar (if any) renders as its own separate band below it. More
+  chrome, taller combined height.
+- **`"hidden"`** — sets `NSWindowStyleMaskFullSizeContentView` + transparent
+  titlebar, hides the title text. Content runs full-height; the toolbar merges
+  into the unified titlebar row (the Mail/Notes "unified" look).
+- **`"hiddenInset"`** — identical to `"hidden"` but keeps the title text
+  visible in the unified bar. This is the most common choice for sidebar+toolbar
+  apps and matches what Apple's own apps (Mail, Notes) use.
+
+**Unset → resolves to `"default"` for plain windows.** Exception: a window with
+a `sidebar` or `inspector` automatically adopts the hidden-title unified chrome
+when `titleBarStyle` is omitted — set `titleBarStyle: "default"` explicitly to
+opt back into the standard title bar on those windows.
+
+**`trackingSeparator` and pane reflow.** A `{ type: "trackingSeparator" }` toolbar
+item is an `NSTrackingSeparatorToolbarItem` that binds a toolbar divider to the
+sidebar (or inspector) split-view divider. Items before the separator stay aligned
+over that pane's column; items after it stay over the content. When the pane
+collapses, the divider moves and the toolbar groups reflow — this is the Mail/Notes
+sidebar pattern and is intentional AppKit behavior.
+
+The visual prominence of that reflow depends on `titleBarStyle`:
+
+- Under `"hidden"`/`"hiddenInset"` the reflow looks clean — the toolbar lives in
+  the compact unified bar.
+- Under `"default"` the shift appears more pronounced — the taller separate toolbar
+  band + visible title make the movement read larger. Both are correct.
+
+`trackingSeparator` is opt-in: omit it and toolbar items stay fixed regardless of
+pane state. See [`docs/api-reference.md` → Toolbar (macOS)](#toolbar-macos) for
+the full item API.
+
 ## Material / native glass
 
 The `material` option on `sidebar` (and `inspector`) controls which background
