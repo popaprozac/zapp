@@ -225,4 +225,22 @@ block:
   doAssert o.sidebar.material == Material.Default, "unknown material must fall back to Default"
   doAssert o.sidebar.presentation == SidebarPresentation.Default, "unknown presentation must fall back to Default"
 
+block:
+  # segmented toolbar group round-trips (grouping)
+  let t = ToolbarOptions(style: ToolbarStyle.Unified, items: @[
+    ToolbarItemOpt(`type`: "segmented", id: "view",
+      selectionMode: ToolbarGroupSelectionMode.One, selected: @[1],
+      controlRepresentation: ToolbarControlRepresentation.Automatic,
+      segments: @[
+        ToolbarSegmentOpt(id: "grid", icon: "sf:square.grid.2x2", enabled: true),
+        ToolbarSegmentOpt(id: "list", icon: "sf:list.bullet", enabled: true)]),
+  ])
+  let s = serializeToolbar(t)
+  doAssert parseToolbarJson(s) == t, "parse(serialize(t)) must round-trip segmented group"
+  let root = parseJson(s)
+  doAssert root["items"][0]["type"].getStr == "segmented"
+  doAssert root["items"][0]["selectionMode"].getStr == "one"
+  doAssert root["items"][0]["selected"] == %*[1]
+  doAssert root["items"][0]["segments"][0]["icon"].getStr == "sf:square.grid.2x2"
+
 echo "windowmanager ok"

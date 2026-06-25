@@ -60,6 +60,16 @@ type
     UnifiedCompact = "unifiedCompact"
     Expanded = "expanded"
 
+  ToolbarGroupSelectionMode* {.pure.} = enum   ## NSToolbarItemGroupSelectionMode
+    Momentary = "momentary", One = "one", Any = "any"
+
+  ToolbarControlRepresentation* {.pure.} = enum ## NSToolbarItemGroupControlRepresentation
+    Automatic = "automatic", Expanded = "expanded", Collapsed = "collapsed"
+
+  ToolbarSegmentOpt* = object                  ## mirrors TS ToolbarSegmentDef (data only)
+    id*, label*, icon*: string
+    enabled*: bool = true
+
   ButtonState* {.pure.} = enum      ## a traffic-light button (window.m tag 0/1/2)
     Enabled = 0
     Disabled = 1
@@ -96,6 +106,10 @@ type
     tintColor*: string                  ## hex; emitted only when Prominent
     badge*: ToolbarBadge                ## kind None ⇒ omitted
     bordered*: bool = true
+    segments*: seq[ToolbarSegmentOpt]            ## "segmented"
+    selectionMode*: ToolbarGroupSelectionMode    ## default Momentary
+    selected*: seq[int]                          ## indices; empty = none
+    controlRepresentation*: ToolbarControlRepresentation  ## default Automatic
 
   ToolbarOptions* = object
     style*: ToolbarStyle
@@ -408,6 +422,20 @@ proc serializeToolbar*(t: ToolbarOptions): string =
     of "trackingSeparator":
       items.add(%*{"type": "trackingSeparator",
                    "pane": (if it.pane.len > 0: it.pane else: "sidebar")})
+    of "segmented":
+      var segs = newJArray()
+      for sg in it.segments:
+        var sj = newJObject()
+        if sg.id.len > 0: sj["id"] = %sg.id
+        if sg.label.len > 0: sj["label"] = %sg.label
+        if sg.icon.len > 0: sj["icon"] = %sg.icon
+        sj["enabled"] = %sg.enabled
+        segs.add(sj)
+      var w = %*{"type": "segmented", "id": it.id, "segments": segs,
+                 "selectionMode": $it.selectionMode, "selected": %it.selected}
+      if it.controlRepresentation != ToolbarControlRepresentation.Automatic:
+        w["controlRepresentation"] = %($it.controlRepresentation)
+      items.add(w)
     else:  # button (default)
       var w = %*{"type": "button", "id": it.id, "label": it.label,
                  "icon": it.icon, "enabled": it.enabled}
@@ -442,6 +470,26 @@ proc parseToolbarJson*(s: string): ToolbarOptions =
     if itn.kind != JObject: continue
     var item = ToolbarItemOpt(enabled: true, indicator: true)  # explicit: match field defaults
     item.`type` = (if jHasStr(itn, "type"): jStr(itn, "type") else: "button")
+    if item.`type` == "segmented":
+      if jHasStr(itn, "selectionMode"):
+        item.selectionMode = enumFromStr[ToolbarGroupSelectionMode](jStr(itn, "selectionMode"), ToolbarGroupSelectionMode.Momentary)
+      item.controlRepresentation = (if jHasStr(itn, "controlRepresentation"):
+        enumFromStr[ToolbarControlRepresentation](jStr(itn, "controlRepresentation"), ToolbarControlRepresentation.Automatic)
+        else: ToolbarControlRepresentation.Automatic)
+      let seln = itn{"selected"}
+      if not seln.isNil and seln.kind == JArray:
+        for v in seln:
+          if v.kind == JInt: item.selected.add(v.getInt)
+      let segn = itn{"segments"}
+      if not segn.isNil and segn.kind == JArray:
+        for sn in segn:
+          if sn.kind != JObject: continue
+          var sg = ToolbarSegmentOpt(enabled: true)
+          if jHasStr(sn, "id"): sg.id = jStr(sn, "id")
+          if jHasStr(sn, "label"): sg.label = jStr(sn, "label")
+          if jHasStr(sn, "icon"): sg.icon = jStr(sn, "icon")
+          if jHasBool(sn, "enabled"): sg.enabled = jBool(sn, "enabled", true)
+          item.segments.add(sg)
     if jHasStr(itn, "id"): item.id = jStr(itn, "id")
     if jHasStr(itn, "pane"): item.pane = jStr(itn, "pane")
     if jHasStr(itn, "label"): item.label = jStr(itn, "label")
