@@ -17,6 +17,8 @@ import std/json
 import apptypes
 export apptypes    # WindowManager visible to callers of window.nim
 import appconfig
+import color
+export color   # ZappColor + converters reach app.nim through the WindowOptions API
 
 type
   TitleBarStyle* {.pure.} = enum   ## NSWindow title-bar style (window.m tag 0/1/2/3)
@@ -117,7 +119,8 @@ type
     items*: seq[ToolbarItemOpt]
 
   SidebarOptions* = object
-    url*, backgroundColor*: string
+    url*: string
+    backgroundColor*: ZappColor
     material*: Material
     presentation*: SidebarPresentation
     width*: int32 = 260
@@ -129,7 +132,8 @@ type
     numericId*: int32 = -1
 
   InspectorOptions* = object
-    url*, backgroundColor*: string
+    url*: string
+    backgroundColor*: ZappColor
     material*: Material
     width*: int32 = 280
     minWidth*: int32 = 180
@@ -158,7 +162,7 @@ type
     hidden*: bool
     fullscreen*: bool
     acceptFirstMouse*: bool = true
-    backgroundColor*: string
+    backgroundColor*: ZappColor
     numericIdPrealloc*: int32 = -1
     inspectable*: Inspectable = Inspectable.Inherit  # cascade: window > AppConfig > dev/prod
     frameAutosaveName*: string
@@ -247,7 +251,7 @@ proc wopts_transparent(p: pointer): bool {.exportc, cdecl.} = opt(p).transparent
 proc wopts_hidden(p: pointer): bool {.exportc, cdecl.} = opt(p).hidden
 proc wopts_always_on_top(p: pointer): bool {.exportc, cdecl.} = opt(p).alwaysOnTop
 proc wopts_accept_first_mouse(p: pointer): bool {.exportc, cdecl.} = opt(p).acceptFirstMouse
-proc wopts_background_color(p: pointer): cstring {.exportc, cdecl.} = opt(p).backgroundColor.cstring
+proc wopts_background_color(p: pointer): cstring {.exportc, cdecl.} = string(opt(p).backgroundColor).cstring
 proc wopts_numeric_id_pre_alloc(p: pointer): int32 {.exportc, cdecl.} = opt(p).numericIdPrealloc
 proc wopts_inspectable(p: pointer): int32 {.exportc, cdecl.} =
   if resolveInspectable(opt(p).inspectable): 1 else: 0
@@ -270,7 +274,7 @@ proc wopts_sidebar_max_width(p: pointer): int32 {.exportc, cdecl.} = opt(p).side
 proc wopts_sidebar_collapsible(p: pointer): bool {.exportc, cdecl.} = opt(p).sidebar.collapsible
 proc wopts_sidebar_collapsed(p: pointer): bool {.exportc, cdecl.} = opt(p).sidebar.collapsed
 proc wopts_sidebar_can_resize(p: pointer): bool {.exportc, cdecl.} = opt(p).sidebar.resizable
-proc wopts_sidebar_background_color(p: pointer): cstring {.exportc, cdecl.} = opt(p).sidebar.backgroundColor.cstring
+proc wopts_sidebar_background_color(p: pointer): cstring {.exportc, cdecl.} = string(opt(p).sidebar.backgroundColor).cstring
 proc wopts_sidebar_presentation(p: pointer): cstring {.exportc, cdecl.} = sidebarPresStr[opt(p).sidebar.presentation].cstring
 proc wopts_sidebar_numeric_id(p: pointer): int32 {.exportc, cdecl.} = opt(p).sidebar.numericId
 
@@ -283,7 +287,7 @@ proc wopts_inspector_max_width(p: pointer): int32 {.exportc, cdecl.} = opt(p).in
 proc wopts_inspector_collapsible(p: pointer): bool {.exportc, cdecl.} = opt(p).inspector.collapsible
 proc wopts_inspector_collapsed(p: pointer): bool {.exportc, cdecl.} = opt(p).inspector.collapsed
 proc wopts_inspector_can_resize(p: pointer): bool {.exportc, cdecl.} = opt(p).inspector.resizable
-proc wopts_inspector_background_color(p: pointer): cstring {.exportc, cdecl.} = opt(p).inspector.backgroundColor.cstring
+proc wopts_inspector_background_color(p: pointer): cstring {.exportc, cdecl.} = string(opt(p).inspector.backgroundColor).cstring
 proc wopts_inspector_numeric_id(p: pointer): int32 {.exportc, cdecl.} = opt(p).inspector.numericId
 
 # toolbar accessor — defined after the j* JSON helpers (serializeToolbar/

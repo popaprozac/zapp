@@ -93,23 +93,11 @@ export interface WindowOptions {
   fullscreen?: boolean;
   borderless?: boolean;
   transparent?: boolean;
-  /**
-   * Window/webview background color as `"#rrggbb"`. The page's own CSS
-   * background always paints over it — this only fills the color shown
-   * *before* the page's first paint (and any transient gap). Leave unset for
-   * the platform default.
-   *
-   * - **Windows:** seeds the WebView2 background. Most impactful here because
-   *   WebView2's repaint lags during live resize, otherwise flashing white
-   *   against a dark UI.
-   * - **macOS:** sets the window background + the webview's
-   *   `underPageBackgroundColor`. Opaque windows only — ignored when
-   *   `transparent` or `vibrancy` is set (those own their background).
-   *   WKWebView repaints fast, so this is mainly background customization +
-   *   the pre-render fill, not a resize-flash fix.
-   * - **iOS:** sets the window/root + webview background (launch/pre-render
-   *   fill; iOS is full-screen with no live resize).
-   */
+  /** Window background color. Accepts a CSS name (`"teal"`), `#rgb`/`#rrggbb`/
+   *  `#rrggbbaa`, `rgb()`, or `rgba()`. The window is opaque, so alpha is
+   *  clamped to fully opaque. Opaque windows only (ignored when transparent or
+   *  `vibrancy` is set). macOS; create-time. Invalid colors are ignored with a
+   *  `[zapp] invalid backgroundColor` warning. */
   backgroundColor?: string;
   alwaysOnTop?: boolean;
   /**
@@ -266,10 +254,11 @@ export interface SidebarOptions {
   /** User can resize by dragging the divider. Default true; false locks the
    *  pane at `width`. Toggle later with `win.sidebar.setResizable(...)`. */
   resizable?: boolean;
-  /** Solid backdrop color (e.g. "#1e1e1e") behind the transparent pane webview —
-   *  the analog of the window `backgroundColor`. Fills the pre-first-paint gap and
-   *  gives a flat (non-vibrant) pane. `material` takes precedence if both are set;
-   *  for the native vibrant look, prefer `material`. macOS; create-time only. */
+  /** Solid backdrop color behind the transparent pane webview (the flat,
+   *  non-vibrant path — `material` takes precedence if both are set). Accepts a
+   *  CSS name, `#rgb`/`#rrggbb`/`#rrggbbaa`, `rgb()`, or `rgba()`; an `rgba()`
+   *  alpha lets the window background behind the pane show through. macOS;
+   *  create-time. Invalid colors are ignored with a warning. */
   backgroundColor?: string;
   /** Background material. Default Material.Sidebar (liquid glass on macOS 26+). */
   material?: Material;
@@ -315,10 +304,11 @@ export interface InspectorOptions {
   /** User can resize by dragging the divider. Default true; false locks the
    *  pane at `width`. Toggle later with `win.inspector.setResizable(...)`. */
   resizable?: boolean;
-  /** Solid backdrop color (e.g. "#1e1e1e") behind the transparent pane webview —
-   *  the analog of the window `backgroundColor`. Fills the pre-first-paint gap and
-   *  gives a flat (non-vibrant) pane. `material` takes precedence if both are set;
-   *  for the native vibrant look, prefer `material`. macOS; create-time only. */
+  /** Solid backdrop color behind the transparent pane webview (the flat,
+   *  non-vibrant path — `material` takes precedence if both are set). Accepts a
+   *  CSS name, `#rgb`/`#rrggbb`/`#rrggbbaa`, `rgb()`, or `rgba()`; an `rgba()`
+   *  alpha lets the window background behind the pane show through. macOS;
+   *  create-time. Invalid colors are ignored with a warning. */
   backgroundColor?: string;
   /** Background material. Default matches the sidebar pane default. */
   material?: Material;

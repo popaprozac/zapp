@@ -43,6 +43,8 @@ extern int32_t wopts_sidebar_numeric_id(void* opts);
 extern const char* wopts_sidebar_presentation(void* opts);
 // App-set window background color ("#rrggbb"); applied on opaque windows.
 extern const char* wopts_background_color(void* opts);
+// Nim-side color parser (native/nim/color.nim): names/#hex/rgb()/rgba() -> rgba 0..255.
+extern bool zapp_color_parse(const char* s, int* r, int* g, int* b, int* a);
 // Inspector split registry (inspector.m). Mirrors the sidebar pattern.
 extern void zapp_inspector_register(void* window_ptr, void* splitVC, void* inspectorItem,
                                     int32_t host_id, int32_t inspector_slot_id);
@@ -649,14 +651,6 @@ void darwin_window_set_bridge_ready(const char* window_id) {
 // Shared by the vibrancy path (whole-window blur) and the sidebar's optional
 // per-pane material override. Names mirror runtime/window.ts's Material const.
 // Unknown / empty names fall back to WindowBackground.
-// Parse "#rrggbb" -> r,g,b (0-255). false on malformed input. Mirrors the
-// Windows sscanf parse (windows/window.c) so both platforms accept the same
-// backgroundColor string.
-static bool zapp_parse_hex_color(const char* hex, int* r, int* g, int* b) {
-    if (!hex || hex[0] != '#' || strlen(hex) < 7) return false;
-    return sscanf(hex + 1, "%2x%2x%2x", r, g, b) == 3;
-}
-
 static NSVisualEffectMaterial zapp_material_from_name(const char* name) {
     if (!name || !name[0]) return NSVisualEffectMaterialWindowBackground;
     NSString* mat = [NSString stringWithUTF8String:name];
@@ -811,9 +805,10 @@ void* darwin_window_create(WindowOptions* opts) {
         // page's own CSS background still paints over it.
         NSColor* bgColor = nil;
         {
-            int cr, cg, cb;
+            int cr, cg, cb, ca;
             if (!wopts_transparent(opts) && !useVibrancy &&
-                zapp_parse_hex_color(wopts_background_color(opts), &cr, &cg, &cb)) {
+                zapp_color_parse(wopts_background_color(opts), &cr, &cg, &cb, &ca)) {
+                // Opaque window: AppKit ignores alpha on opaque windows; clamp to 1.0.
                 bgColor = [NSColor colorWithSRGBRed:cr/255.0 green:cg/255.0 blue:cb/255.0 alpha:1.0];
                 [window setBackgroundColor:bgColor];
             }
@@ -907,12 +902,12 @@ void* darwin_window_create(WindowOptions* opts) {
                     // No material override: a solid backgroundColor (if set) paints
                     // an opaque backdrop behind the transparent webview — the pane
                     // analog of the window backgroundColor, filling the pre-paint gap.
-                    int cr, cg, cb;
+                    int cr, cg, cb, ca;
                     const char* sbg = wopts_sidebar_background_color(opts);
-                    if (sbg && sbg[0] != '\0' && zapp_parse_hex_color(sbg, &cr, &cg, &cb)) {
+                    if (sbg && sbg[0] != '\0' && zapp_color_parse(sbg, &cr, &cg, &cb, &ca)) {
                         sideVC.view.wantsLayer = YES;
                         sideVC.view.layer.backgroundColor =
-                            [NSColor colorWithSRGBRed:cr/255.0 green:cg/255.0 blue:cb/255.0 alpha:1.0].CGColor;
+                            [NSColor colorWithSRGBRed:cr/255.0 green:cg/255.0 blue:cb/255.0 alpha:ca/255.0].CGColor;
                     }
                 }
                 sideItem = [NSSplitViewItem sidebarWithViewController:sideVC];
@@ -972,12 +967,12 @@ void* darwin_window_create(WindowOptions* opts) {
                     inspVC.view = ivfx;
                     inspectorContainer = ivfx;
                 } else {
-                    int cr, cg, cb;
+                    int cr, cg, cb, ca;
                     const char* ibg = wopts_inspector_background_color(opts);
-                    if (ibg && ibg[0] != '\0' && zapp_parse_hex_color(ibg, &cr, &cg, &cb)) {
+                    if (ibg && ibg[0] != '\0' && zapp_color_parse(ibg, &cr, &cg, &cb, &ca)) {
                         inspVC.view.wantsLayer = YES;
                         inspVC.view.layer.backgroundColor =
-                            [NSColor colorWithSRGBRed:cr/255.0 green:cg/255.0 blue:cb/255.0 alpha:1.0].CGColor;
+                            [NSColor colorWithSRGBRed:cr/255.0 green:cg/255.0 blue:cb/255.0 alpha:ca/255.0].CGColor;
                     }
                 }
                 if (@available(macOS 11.0, *)) {
