@@ -757,6 +757,8 @@ void* darwin_window_create(void* opts) {
         d->inspectorNumericId = wopts_inspector_numeric_id(opts);
         d->inspectorWidth = wopts_inspector_width(opts);
         d->inspectorCollapsed = wopts_inspector_collapsed(opts);
+        extern int wopts_inspectable(void* opts);
+        d->inspectable = wopts_inspectable(opts) > 0;
     }
     for (int i = 0; i < ZAPP_MAX_DEFERRED; i++) {
         if (!zapp_ios_deferred_list[i]) {
