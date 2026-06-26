@@ -32,6 +32,10 @@ extern int32_t zapp_ios_sidebar_slot_for(int32_t host_slot);
 // pane's transport slot; all resolve to the same host UIWindow via
 // darwin_window_get_by_numeric_id, so the host-window key catches them all.
 
+// Tag used to guard against duplicate close buttons when expand is called
+// more than once on the same heldInspectorVC.
+static const NSInteger kZappInspectorCloseButtonTag = 0x7A437042; // 'zCpB'
+
 @interface ZappIOSInspectorController : NSObject <UISheetPresentationControllerDelegate, UIAdaptivePresentationControllerDelegate>
 @property (nonatomic, weak)   UIViewController* inspectorVC;     // persistent inspector pane VC
 @property (nonatomic, weak)   UIViewController* contentVC;       // the content pane VC it trails
@@ -264,6 +268,55 @@ void darwin_inspector_expand(int32_t window_id) {
                 }
             }
             ivc.presentationController.delegate = c; // UIAdaptivePresentationControllerDelegate
+
+            // Add a guaranteed dismiss affordance: the grabber sits in the iOS
+            // top-edge gesture zone in landscape, making it unreachable (activates
+            // Notification Center). A native close button (top-trailing, safe-area-
+            // inset) bypasses that zone entirely. Guard with a tag so a second call
+            // to expand (while already presented) doesn't add a second button.
+            if (![ivc.view viewWithTag:kZappInspectorCloseButtonTag]) {
+                // Capture a weak ref to `c` so the button block doesn't retain the
+                // controller cycle. We mirror presentationControllerDidDismiss: exactly:
+                // dismiss + set shown=NO + emit inspector-collapsed.
+                __weak ZappIOSInspectorController* weakC = c;
+                UIButton* closeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+                closeBtn.tag = kZappInspectorCloseButtonTag;
+                UIImage* xImg = [UIImage systemImageNamed:@"xmark.circle.fill"];
+                if (xImg) {
+                    UIImageSymbolConfiguration* cfg =
+                        [UIImageSymbolConfiguration configurationWithPointSize:24
+                                                                        weight:UIImageSymbolWeightMedium];
+                    closeBtn.configuration = nil; // use legacy image path for tint
+                    [closeBtn setImage:[xImg imageByApplyingSymbolConfiguration:cfg]
+                              forState:UIControlStateNormal];
+                } else {
+                    [closeBtn setTitle:@"✕" forState:UIControlStateNormal];
+                }
+                closeBtn.tintColor = [UIColor secondaryLabelColor];
+                closeBtn.translatesAutoresizingMaskIntoConstraints = NO;
+                [ivc.view addSubview:closeBtn];
+                // High z-order: above the inspector webview.
+                [ivc.view bringSubviewToFront:closeBtn];
+                [NSLayoutConstraint activateConstraints:@[
+                    [closeBtn.topAnchor constraintEqualToAnchor:ivc.view.safeAreaLayoutGuide.topAnchor
+                                                       constant:12.0],
+                    [closeBtn.trailingAnchor constraintEqualToAnchor:ivc.view.safeAreaLayoutGuide.trailingAnchor
+                                                            constant:-12.0],
+                ]];
+                [closeBtn addAction:[UIAction actionWithHandler:^(__kindof UIAction* action) {
+                    (void)action;
+                    ZappIOSInspectorController* sc = weakC;
+                    if (!sc) return;
+                    UIViewController* iv = sc.heldInspectorVC;
+                    if (iv && iv.presentingViewController) {
+                        [iv dismissViewControllerAnimated:YES completion:nil];
+                    }
+                    // Mirror presentationControllerDidDismiss: — sync state + emit.
+                    sc.shown = NO;
+                    zapp_ios_inspector_emit(sc, "inspector-collapsed");
+                }] forControlEvents:UIControlEventTouchUpInside];
+            }
+
             [presenter presentViewController:ivc animated:YES completion:nil];
         } else {
             // iPad: animate the trailing pane in (widthConstraint 0 -> width).
