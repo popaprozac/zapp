@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.json",
+  "include": ["runtime/toolbar-types.test.ts"],
+  "exclude": ["**/node_modules"]
+}

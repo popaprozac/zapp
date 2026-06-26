@@ -330,22 +330,13 @@ export interface ToolbarSegmentDef {
   action?: (ctx?: ActionContext) => void;
 }
 
-/** One toolbar item. `type` defaults to "button". */
-export interface ToolbarItemDef {
-  /** Identifier for custom buttons — REQUIRED for type "button" (keys
-   *  click routing). Ignored for system types. Allowed charset: letters,
-   *  digits, `.`, `_`, `-`. Prefixes `"zapp."` and `"NSToolbar"` are reserved. */
-  id?: string;
-  /** "button" (default) | system items. `toggleSidebar` is AppKit's
-   *  standard sidebar button (auto-wired to the split view controller);
-   *  `toggleInspector` toggles the trailing inspector pane;
-   *  `trackingSeparator` makes a toolbar divider track a split divider
-   *  (the `pane` field selects which). `toggleSidebar`/sidebar-tracking
-   *  require a `sidebar`; `toggleInspector`/inspector-tracking require an
-   *  `inspector` (warned + dropped otherwise). */
-  type?: "button" | "toggleSidebar" | "toggleInspector" | "trackingSeparator" | "space" | "flexibleSpace" | "segmented" | "group";
-  /** For `trackingSeparator`: which split divider to track. Default "sidebar". */
-  pane?: "sidebar" | "inspector";
+/** A toolbar button (the default item; `type` may be omitted).
+ *  `id` is REQUIRED — it keys click routing. Allowed charset: letters,
+ *  digits, `.`, `_`, `-`. Prefixes `"zapp."` and `"NSToolbar"` are reserved. */
+export interface ToolbarButtonDef {
+  type?: "button";
+  /** Required. Keys click routing and native NSToolbar identifier. */
+  id: string;
   /** Tooltip; visible text in the "expanded" style. */
   label?: string;
   /** Icon via the shared resolver: "sf:<symbol>", file path, or data URL. */
@@ -356,7 +347,7 @@ export interface ToolbarItemDef {
    *  are the same MenuItemDef used by Menu/ContextMenu/Tray; their `action`
    *  callbacks run in this (creator) context via the __menu:click pipeline. */
   menu?: MenuItemDef[];
-  /** Buttons: enabled state. Default true. AppKit-validated, so it sticks
+  /** Enabled state. Default true. AppKit-validated, so it sticks
    *  across revalidation. Patchable via win.toolbar.updateItem. */
   enabled?: boolean;
   /** Menu buttons: show the pull-down chevron. Default true; false is the
@@ -369,22 +360,63 @@ export interface ToolbarItemDef {
    *  unless `style` is "prominent". Omit → system accent. No-op < macOS 26. */
   tintColor?: string;
   /** macOS 26+. A badge: a count, short text, or a plain dot. No-op < macOS 26. */
-  badge?: { count: number } | { text: string } | { dot: true };
+  badge?: { count: number } | { text: string } | { dot: true } | null;
   /** Draw the item's standard bordered background. Default true; false → flat.
    *  All macOS versions. */
   bordered?: boolean;
-  /** "segmented": the segments of the control. label OR icon each. */
-  segments?: ToolbarSegmentDef[];
-  /** "segmented": selection behavior. Default "momentary". */
+}
+
+/** A segmented control toolbar item. */
+export interface ToolbarSegmentedDef {
+  type: "segmented";
+  /** Required. Native NSToolbar identifier. */
+  id: string;
+  /** The segments of the control. label OR icon each. */
+  segments: ToolbarSegmentDef[];
+  /** Selection behavior. Default "momentary". */
   selectionMode?: "one" | "any" | "momentary";
-  /** "segmented": initial selection — index ("one") or indices ("any").
+  /** Initial selection — index ("one") or indices ("any").
    *  Ignored for "momentary". */
   selected?: number | number[];
-  /** "group": clustered full items (one level — no nested groups). */
-  items?: ToolbarItemDef[];
-  /** "segmented" + "group": how the control collapses. Default "automatic". */
+  /** How the control collapses. Default "automatic". */
   controlRepresentation?: "automatic" | "expanded" | "collapsed";
 }
+
+/** A group of toolbar buttons (one level — no nested groups). */
+export interface ToolbarGroupDef {
+  type: "group";
+  /** Required. Native NSToolbar identifier. */
+  id: string;
+  /** Clustered full button items (one level — no nested groups). */
+  items: ToolbarButtonDef[];
+  /** How the group collapses. Default "automatic". */
+  controlRepresentation?: "automatic" | "expanded" | "collapsed";
+}
+
+/** A tracking separator that follows a split-view divider. */
+export interface ToolbarTrackingSepDef {
+  type: "trackingSeparator";
+  /** Which split divider to track. Default "sidebar". `toggleSidebar`/sidebar-tracking
+   *  require a `sidebar`; `toggleInspector`/inspector-tracking require an
+   *  `inspector` (warned + dropped otherwise). */
+  pane?: "sidebar" | "inspector";
+}
+
+/** A system toolbar item: fixed/flexible space or sidebar/inspector toggles.
+ *  `toggleSidebar` is AppKit's standard sidebar button (auto-wired to the
+ *  split view controller); `toggleInspector` toggles the trailing inspector
+ *  pane. Both require the corresponding pane (warned + dropped otherwise). */
+export interface ToolbarSystemDef {
+  type: "toggleSidebar" | "toggleInspector" | "space" | "flexibleSpace";
+}
+
+/** One toolbar item. `type` defaults to `"button"`. */
+export type ToolbarItemDef =
+  | ToolbarButtonDef
+  | ToolbarSegmentedDef
+  | ToolbarGroupDef
+  | ToolbarTrackingSepDef
+  | ToolbarSystemDef;
 
 /** Options for a native toolbar (NSToolbar) attached at Window.create. */
 export interface ToolbarOptions {
@@ -776,9 +808,12 @@ export function normalizeToolbar(
   const seen = new Set<string>();
   const items: Record<string, unknown>[] = [];
   for (const item of toolbar.items ?? []) {
-    const type = item.type ?? "button";
+    // Internal cast: the union is author-facing; internal heterogeneous reads
+    // use `it` so the type system stays author-safe without narrowing every branch.
+    const it = item as Record<string, any>;
+    const type = it.type ?? "button";
     if (type === "toggleSidebar") {
-      if ((item as any).menu) throw new Error('[zapp] toolbar: "menu" is only valid on button items');
+      if (it.menu) throw new Error('[zapp] toolbar: "menu" is only valid on button items');
       if (!hasSidebar) {
         console.warn(`[zapp] toolbar: "toggleSidebar" requires the window to have a sidebar — item dropped`);
         continue;
@@ -787,7 +822,7 @@ export function normalizeToolbar(
       continue;
     }
     if (type === "toggleInspector") {
-      if ((item as any).menu) throw new Error('[zapp] toolbar: "menu" is only valid on button items');
+      if (it.menu) throw new Error('[zapp] toolbar: "menu" is only valid on button items');
       if (!hasInspector) {
         console.warn(`[zapp] toolbar: "toggleInspector" requires the window to have an inspector — item dropped`);
         continue;
@@ -796,8 +831,8 @@ export function normalizeToolbar(
       continue;
     }
     if (type === "trackingSeparator") {
-      if ((item as any).menu) throw new Error('[zapp] toolbar: "menu" is only valid on button items');
-      const pane = item.pane ?? "sidebar";
+      if (it.menu) throw new Error('[zapp] toolbar: "menu" is only valid on button items');
+      const pane = it.pane ?? "sidebar";
       const ok = pane === "inspector" ? hasInspector : hasSidebar;
       if (!ok) {
         console.warn(`[zapp] toolbar: "trackingSeparator" (pane: "${pane}") requires the window to have ${pane === "inspector" ? "an" : "a"} ${pane} — item dropped`);
@@ -807,18 +842,18 @@ export function normalizeToolbar(
       continue;
     }
     if (type === "space" || type === "flexibleSpace") {
-      if ((item as any).menu) throw new Error('[zapp] toolbar: "menu" is only valid on button items');
+      if (it.menu) throw new Error('[zapp] toolbar: "menu" is only valid on button items');
       items.push({ type });
       continue;
     }
     if (type === "segmented") {
-      if (!item.id) throw new Error('[zapp] toolbar: "segmented" items require an "id"');
-      if (!item.segments || item.segments.length === 0) throw new Error('[zapp] toolbar: "segmented" requires a non-empty "segments" array');
-      assertValidToolbarId(item.id);
-      if (seen.has(item.id)) throw new Error(`[zapp] toolbar: duplicate item id "${item.id}"`);
-      seen.add(item.id);
-      const wireSegs = item.segments.map((s, i) => {
-        if (s.action) actions.set(`${item.id}:${i}`, s.action);
+      if (!it.id) throw new Error('[zapp] toolbar: "segmented" items require an "id"');
+      if (!it.segments || it.segments.length === 0) throw new Error('[zapp] toolbar: "segmented" requires a non-empty "segments" array');
+      assertValidToolbarId(it.id);
+      if (seen.has(it.id)) throw new Error(`[zapp] toolbar: duplicate item id "${it.id}"`);
+      seen.add(it.id);
+      const wireSegs = it.segments.map((s: any, i: number) => {
+        if (s.action) actions.set(`${it.id}:${i}`, s.action);
         const w: Record<string, unknown> = {};
         if (s.id !== undefined) w.id = s.id;
         if (s.label !== undefined) w.label = s.label;
@@ -826,20 +861,20 @@ export function normalizeToolbar(
         if (s.enabled !== undefined) w.enabled = s.enabled;
         return w;
       });
-      const seg: Record<string, unknown> = { type: "segmented", id: item.id, segments: wireSegs,
-        selectionMode: item.selectionMode ?? "momentary", selected: selectedToWire(item.selected) };
-      if (item.controlRepresentation !== undefined) seg.controlRepresentation = item.controlRepresentation;
+      const seg: Record<string, unknown> = { type: "segmented", id: it.id, segments: wireSegs,
+        selectionMode: it.selectionMode ?? "momentary", selected: selectedToWire(it.selected) };
+      if (it.controlRepresentation !== undefined) seg.controlRepresentation = it.controlRepresentation;
       items.push(seg);
       continue;
     }
     if (type === "group") {
-      if (!item.id) throw new Error('[zapp] toolbar: "group" items require an "id"');
-      if (!item.items || item.items.length === 0) throw new Error('[zapp] toolbar: "group" requires a non-empty "items" array');
-      assertValidToolbarId(item.id);
-      if (seen.has(item.id)) throw new Error(`[zapp] toolbar: duplicate item id "${item.id}"`);
-      seen.add(item.id);
+      if (!it.id) throw new Error('[zapp] toolbar: "group" items require an "id"');
+      if (!it.items || it.items.length === 0) throw new Error('[zapp] toolbar: "group" requires a non-empty "items" array');
+      assertValidToolbarId(it.id);
+      if (seen.has(it.id)) throw new Error(`[zapp] toolbar: duplicate item id "${it.id}"`);
+      seen.add(it.id);
       const wireItems: Record<string, unknown>[] = [];
-      for (const sub of item.items) {
+      for (const sub of it.items as Array<Record<string, any>>) {
         if (sub.type === "group" || sub.type === "segmented") throw new Error('[zapp] toolbar: groups cannot nest groups');
         if (!sub.id) throw new Error('[zapp] toolbar: group sub-items require an "id"');
         assertValidToolbarId(sub.id);
@@ -851,35 +886,35 @@ export function normalizeToolbar(
         if (sub.bordered !== undefined) w.bordered = sub.bordered;
         wireItems.push(w);
       }
-      const g: Record<string, unknown> = { type: "group", id: item.id, items: wireItems };
-      if (item.controlRepresentation !== undefined) g.controlRepresentation = item.controlRepresentation;
+      const g: Record<string, unknown> = { type: "group", id: it.id, items: wireItems };
+      if (it.controlRepresentation !== undefined) g.controlRepresentation = it.controlRepresentation;
       items.push(g);
       continue;
     }
-    if (!item.id) throw new Error('[zapp] toolbar: button items require an "id"');
-    if (item.action && item.menu) {
+    if (!it.id) throw new Error('[zapp] toolbar: button items require an "id"');
+    if (it.action && it.menu) {
       throw new Error('[zapp] toolbar: a button cannot have both "action" and "menu" — the menu consumes the click');
     }
-    assertValidToolbarId(item.id);
-    if (seen.has(item.id)) throw new Error(`[zapp] toolbar: duplicate item id "${item.id}"`);
-    seen.add(item.id);
-    if (item.action) actions.set(item.id, item.action);
-    const wire: Record<string, unknown> = { type: "button", id: item.id, label: item.label ?? "", icon: item.icon ?? "" };
-    if (item.enabled !== undefined) wire.enabled = item.enabled;
-    if (item.indicator !== undefined) wire.indicator = item.indicator;
-    if (item.style !== undefined) wire.style = item.style;
-    if (item.tintColor !== undefined) wire.tintColor = item.tintColor;
-    if (item.bordered !== undefined) wire.bordered = item.bordered;
-    if (item.badge !== undefined) wire.badge = badgeToWire(item.badge);
-    if (item.menu) {
+    assertValidToolbarId(it.id);
+    if (seen.has(it.id)) throw new Error(`[zapp] toolbar: duplicate item id "${it.id}"`);
+    seen.add(it.id);
+    if (it.action) actions.set(it.id, it.action);
+    const wire: Record<string, unknown> = { type: "button", id: it.id, label: it.label ?? "", icon: it.icon ?? "" };
+    if (it.enabled !== undefined) wire.enabled = it.enabled;
+    if (it.indicator !== undefined) wire.indicator = it.indicator;
+    if (it.style !== undefined) wire.style = it.style;
+    if (it.tintColor !== undefined) wire.tintColor = it.tintColor;
+    if (it.bordered !== undefined) wire.bordered = it.bordered;
+    if (it.badge !== undefined) wire.badge = badgeToWire(it.badge);
+    if (it.menu) {
       const itemMenuActions = new Map<string, (ctx?: ActionContext) => void>();
-      const strippedMenu = stripMenuActions(item.menu, itemMenuActions);
+      const strippedMenu = stripMenuActions(it.menu, itemMenuActions);
       wire.menu = strippedMenu;
       for (const [mid, fn] of itemMenuActions) menuActions.set(mid, fn);
-      if (itemMenuActions.size > 0) menuIdsByItem.set(item.id, new Set(itemMenuActions.keys()));
+      if (itemMenuActions.size > 0) menuIdsByItem.set(it.id, new Set(itemMenuActions.keys()));
       // Retain a tree with ids (from stripped) + actions (from originals) for
       // ctx.update in pull-down callbacks (patchMenuTree + updateItem refresh).
-      menuTrees.set(item.id!, mergeMenuIds(strippedMenu, item.menu));
+      menuTrees.set(it.id!, mergeMenuIds(strippedMenu, it.menu));
     }
     items.push(wire);
   }
