@@ -24,6 +24,7 @@ import { ensurePermission } from "./permissions";
 import type { ActionContext, MenuItemPatch } from "./action-context";
 import { patchMenuTree } from "./action-context";
 import { Window } from "./window";
+import type { WindowHandle } from "./window";
 
 export interface MenuItemDef {
   id?: string;
@@ -102,17 +103,20 @@ export const Menu = {
         const id = typeof payload === "string" ? JSON.parse(payload).id : payload?.id;
         const fn = appMenuActions.get(id);
         if (!fn) return;
-        let win: import("./window").WindowHandle;
-        try {
-          win = Window.current();
-        } catch {
-          // Outside WebView context — should not normally happen for menu clicks.
-          return;
-        }
         const update = (patch: MenuItemPatch) => {
           appMenuTree = patchMenuTree(appMenuTree, id, patch);
           (getBridge() as any).post(JSON.stringify({ t: 4, m: "setMenu", a: { items: stripActions(appMenuTree) } }));
         };
+        let win: WindowHandle;
+        try {
+          win = Window.current();
+        } catch {
+          // No WebView/window context (e.g. windowless menubar app) — fire the
+          // action without ctx so the menu item still works; ctx.window/update
+          // are unavailable here.
+          fn();
+          return;
+        }
         fn({ id, window: win, update });
       });
     }

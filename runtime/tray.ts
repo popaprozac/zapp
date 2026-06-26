@@ -173,13 +173,6 @@ function ensureEventsWired() {
     for (const [trayId, actions] of menuActionsByTray) {
       const handler = actions.get(itemId);
       if (!handler) continue;
-      let win: WindowHandle;
-      try {
-        win = Window.current();
-      } catch {
-        // Outside WebView context — should not normally happen for tray menu clicks.
-        return;
-      }
       const update = (patch: MenuItemPatch) => {
         const tree = menuTreesByTray.get(trayId);
         if (!tree) return;
@@ -187,6 +180,16 @@ function ensureEventsWired() {
         menuTreesByTray.set(trayId, patched);
         postAction("tray:setMenu", { id: trayId, items: stripActions(patched) });
       };
+      let win: WindowHandle;
+      try {
+        win = Window.current();
+      } catch {
+        // No WebView/window context (e.g. windowless menubar app) — fire the
+        // action without ctx so the tray item still works; ctx.window/update
+        // are unavailable here.
+        handler();
+        return;
+      }
       handler({ id: itemId, window: win, update });
       return;
     }
