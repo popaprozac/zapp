@@ -20,6 +20,9 @@ export const sidebarSection: Section = {
           { act: "w320", label: "Width 320" },
           { act: "collapsible", label: "Collapsible: on" },
           { act: "resizable", label: "Resizable: on" },
+          { act: "presAuto", label: "Auto" },
+          { act: "presTile", label: "Tile" },
+          { act: "presOverlay", label: "Overlay" },
         ],
       }),
     );
@@ -52,6 +55,18 @@ export const sidebarSection: Section = {
       );
       if (btn) btn.textContent = `Resizable: ${resizable ? "on" : "off"}`;
       setResult(host, `resizable → ${resizable} (try dragging the divider)`);
+    });
+    onAct(host, "presAuto", () => {
+      win.sidebar?.setPresentation("automatic");
+      setResult(host, "presentation → automatic");
+    });
+    onAct(host, "presTile", () => {
+      win.sidebar?.setPresentation("tile");
+      setResult(host, "presentation → tile");
+    });
+    onAct(host, "presOverlay", () => {
+      win.sidebar?.setPresentation("overlay");
+      setResult(host, "presentation → overlay");
     });
   },
   inspector(host) {

@@ -208,6 +208,12 @@ void darwin_sidebar_expand(int32_t window_id) {
 void darwin_sidebar_show_content(int32_t window_id) { (void)window_id; }
 void darwin_sidebar_show_sidebar(int32_t window_id) { (void)window_id; }
 
+// Presentation (tile/overlay/automatic) is an iOS UISplitViewController concept;
+// AppKit's NSSplitViewController tiles and never overlays. No-op on macOS.
+void darwin_sidebar_set_presentation(int32_t window_id, const char* mode) {
+    (void)window_id; (void)mode;
+}
+
 void darwin_sidebar_set_width(int32_t window_id, int32_t width) {
     zapp_sidebar_on_main(^{
         ZappSidebarController* c = zapp_sidebar_for_slot(window_id);

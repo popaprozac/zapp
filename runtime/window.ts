@@ -1044,6 +1044,9 @@ export interface SidebarHandle {
   setCollapsible(allowed: boolean): void;
   /** Allow/disallow resizing by dragging the divider. false locks the current width. */
   setResizable(allowed: boolean): void;
+  /** Switch the iPad sidebar split presentation at runtime. iOS-only;
+   *  no-op on macOS (AppKit tiles, never overlays). */
+  setPresentation(mode: "automatic" | "tile" | "overlay"): void;
   /** Tracked from SIDEBAR_COLLAPSED/EXPANDED events, seeded by the create option. */
   readonly collapsed: boolean;
   /** Last width from SIDEBAR_RESIZED (the create option until the first event). */
@@ -1211,6 +1214,7 @@ function createSidebarHandle(
     showSidebar()         { windowAction("sidebar:showSidebar", { windowId }); },
     setCollapsible(allowed: boolean) { windowAction("sidebar:setCollapsible", { windowId, value: allowed }); },
     setResizable(allowed: boolean)   { windowAction("sidebar:setResizable",   { windowId, value: allowed }); },
+    setPresentation(mode: "automatic" | "tile" | "overlay") { windowAction("sidebar:setPresentation", { windowId, mode }); },
   };
 }
 

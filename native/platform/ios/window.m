@@ -269,14 +269,16 @@ void zapp_ios_materialize_pending_windows(void) {
                 split.preferredPrimaryColumnWidth = (CGFloat)d->sidebarWidth;
             }
             // Sidebar presentation → UISplitViewController split behavior.
-            // "overlay" = iPad flyout (sidebar floats over content, dims it,
-            // tap-out dismisses); start hidden so it reads as summon-able. The
-            // system provides an edge-swipe (presentsWithGesture defaults YES).
-            // Default/"tile" leaves the side-by-side behavior unchanged. No-op on
-            // iPhone (the split always collapses to a nav stack).
-            if (d->sidebarPresentation && strcmp(d->sidebarPresentation, "overlay") == 0) {
+            // Default/"" => .automatic (Apple adapts by size). "tile" forces
+            // side-by-side; "overlay" floats over content (dims, tap-out dismiss).
+            const char* sp = d->sidebarPresentation;
+            if (sp && strcmp(sp, "overlay") == 0) {
                 split.preferredSplitBehavior = UISplitViewControllerSplitBehaviorOverlay;
                 split.preferredDisplayMode = UISplitViewControllerDisplayModeSecondaryOnly;
+            } else if (sp && strcmp(sp, "tile") == 0) {
+                split.preferredSplitBehavior = UISplitViewControllerSplitBehaviorTile;
+            } else {
+                split.preferredSplitBehavior = UISplitViewControllerSplitBehaviorAutomatic;
             }
             // Left-edge swipe reveals the sidebar (esp. in overlay, where the
             // flyout starts hidden). This is the system default, but set it
