@@ -1,4 +1,4 @@
-import { Tray, type TrayHandle, type MenuItemDef, Window } from "@zappdev/runtime";
+import { Tray, type TrayHandle, type MenuItemDef, Window, Events } from "@zappdev/runtime";
 import type { Section } from "./types";
 import { card, onAct, setResult } from "../shell/ui";
 
@@ -11,15 +11,27 @@ let tray: TrayHandle | undefined;
 // radioGroup (auto-moving checkmark) on a tray menu.
 let demotray: TrayHandle | undefined;
 
-// Track checkbox state for the ctx.update demo.
+// Track demo state. `notifyEnabled` drives the ctx.update checkbox; `priority`
+// drives the radioGroup. Both feed the inspector pane via ks:tray (it lives in
+// a separate webview — same cross-pane pattern as the Toolbar view's ks:filter).
 let notifyEnabled = true;
+let priority = "med"; // matches dt-med checked initially
+
+function emitTrayState() {
+  Events.emit("ks:tray", { priority, notify: notifyEnabled });
+}
 
 function demoMenu(): MenuItemDef[] {
   return [
-    // radioGroup: ticking one option auto-unticks the others — no ctx.update needed.
-    { id: "dt-low",  label: "Low priority",    radioGroup: "dt-priority", checked: false },
-    { id: "dt-med",  label: "Medium priority",  radioGroup: "dt-priority", checked: true  },
-    { id: "dt-high", label: "High priority",    radioGroup: "dt-priority", checked: false },
+    // radioGroup: ticking one option auto-unticks the others (no ctx.update
+    // needed). The action is optional — here it records state + feeds the
+    // inspector, demonstrating a radio item can still carry a side effect.
+    { id: "dt-low",  label: "Low priority",    radioGroup: "dt-priority", checked: priority === "low",
+      action: () => { priority = "low"; emitTrayState(); } },
+    { id: "dt-med",  label: "Medium priority",  radioGroup: "dt-priority", checked: priority === "med",
+      action: () => { priority = "med"; emitTrayState(); } },
+    { id: "dt-high", label: "High priority",    radioGroup: "dt-priority", checked: priority === "high",
+      action: () => { priority = "high"; emitTrayState(); } },
     { type: "separator" },
     // checkbox item: ctx.update flips the checkmark without rebuilding the whole menu.
     { id: "dt-notify", label: "Notifications", type: "checkbox",
@@ -27,6 +39,7 @@ function demoMenu(): MenuItemDef[] {
       action: (ctx) => {
         notifyEnabled = !notifyEnabled;
         ctx?.update({ checked: notifyEnabled });
+        emitTrayState();
       } },
     { type: "separator" },
     { label: "Quit", role: "quit" },
@@ -114,5 +127,22 @@ export const traySection: Section = {
       demotray.destroy(); demotray = undefined;
       setResult(host, "demo tray destroyed");
     });
+  },
+  inspector(host) {
+    const prLabel = (p: string) => ({ low: "Low", med: "Medium", high: "High" } as Record<string, string>)[p] ?? p;
+    host.innerHTML =
+      `<div class="kv"><b>Tray demo</b>` +
+      `<div data-priority class="muted">Priority: ${prLabel(priority)}</div>` +
+      `<div data-notify class="muted">Notifications: ${notifyEnabled ? "on" : "off"}</div>` +
+      `<div class="muted" style="margin-top:6px">Open the ★ demo tray in the menu bar and change items.</div></div>`;
+    const pr = host.querySelector<HTMLElement>("[data-priority]")!;
+    const nf = host.querySelector<HTMLElement>("[data-notify]")!;
+    // ks:tray is emitted from the demo tray's radioGroup + checkbox actions —
+    // keep this inspector pane (a separate webview) in sync from either.
+    const off = Events.on("ks:tray", ({ priority, notify }: any) => {
+      pr.textContent = `Priority: ${prLabel(priority)}`;
+      nf.textContent = `Notifications: ${notify ? "on" : "off"}`;
+    });
+    return () => off();
   },
 };
