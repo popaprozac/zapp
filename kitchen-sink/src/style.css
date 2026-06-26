@@ -53,11 +53,13 @@ h2 { font-size: 16px; color: var(--text-h); margin: 0 0 8px; font-weight: 600; }
    bar reads as part of the bar, and scrolled content passes UNDER it (not above).
    The inner row holds the hamburger + title at the normal 44px bar height, below
    the status bar. REQUIRES viewport-fit=cover in index.html, else
-   env(safe-area-inset-top) is 0 on iOS and the bar can't reach the status bar. */
+   env(safe-area-inset-top) is 0 on iOS and the bar can't reach the status bar.
+   --zapp-safe-area-top is injected by the native layer on iOS (macOS parity);
+   env(safe-area-inset-top) is the fallback for web/pre-injection. */
 .ks-ios-topbar {
   position: fixed; top: 0; left: 0; right: 0; z-index: 50;
   /* Extend the bar's box up under the status bar (notch / Dynamic Island). */
-  padding-top: env(safe-area-inset-top);
+  padding-top: var(--zapp-safe-area-top, env(safe-area-inset-top));
   background: rgba(255, 255, 255, 0.82);
   backdrop-filter: blur(12px) saturate(1.4);
   -webkit-backdrop-filter: blur(12px) saturate(1.4);
@@ -100,7 +102,7 @@ h2 { font-size: 16px; color: var(--text-h); margin: 0 0 8px; font-weight: 600; }
 /* Main pane */
 .main-pane { padding: var(--zapp-titlebar-height, 52px) 24px 24px; max-width: 720px; }
 /* On iOS the native titlebar is absent; offset by the topbar instead */
-.main-pane--ios-offset { padding-top: calc(env(safe-area-inset-top) + 44px + 8px); }
+.main-pane--ios-offset { padding-top: calc(var(--zapp-safe-area-top, env(safe-area-inset-top)) + 44px + 8px); }
 .stage { display: flex; flex-direction: column; gap: 16px; }
 .card { border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
 .card .intro { margin: 0 0 12px; opacity: 0.7; font-size: 12px; }

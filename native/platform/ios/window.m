@@ -162,6 +162,45 @@ static void zapp_ios_register_webview_slot(int32_t slot, WKWebView* webview, NSS
     }
 }
 
+// --- ZappIOSWindowVC: VC subclass that re-injects --zapp-safe-area-* on
+// rotation / multitasking safe-area changes (macOS parity). Stored in the
+// contentVC (and sidebarVC) roles at materialize so viewSafeAreaInsetsDidChange
+// fires whenever UIKit updates safe-area insets for that pane's view.
+// numeric_id is the HOST window's slot — used to look up all three panes
+// (host + sidebar + inspector) from the global dispatch tables in this file.
+
+extern void zapp_ios_inject_safe_area(WKWebView* wv);  // defined in webview.m
+
+@interface ZappIOSWindowVC : UIViewController
+@property (nonatomic, assign) int32_t numericId;  // HOST window slot
+@end
+
+@implementation ZappIOSWindowVC
+
+- (void)viewSafeAreaInsetsDidChange {
+    [super viewSafeAreaInsetsDidChange];
+    int32_t slot = self.numericId;
+    if (slot < 0 || slot >= ZAPP_MAX_WINDOW_CALLBACKS) return;
+
+    // Re-inject for host, sidebar, inspector (all three panes share safe-area).
+    WKWebView* host = zapp_ios_webviews[slot];
+    if (host) zapp_ios_inject_safe_area(host);
+
+    int32_t sbSlot = zapp_ios_sidebar_slot_for(slot);
+    if (sbSlot >= 0 && sbSlot < ZAPP_MAX_WINDOW_CALLBACKS) {
+        WKWebView* sb = zapp_ios_webviews[sbSlot];
+        if (sb) zapp_ios_inject_safe_area(sb);
+    }
+
+    int32_t insSlot = zapp_ios_inspector_slot_for(slot);
+    if (insSlot >= 0 && insSlot < ZAPP_MAX_WINDOW_CALLBACKS) {
+        WKWebView* ins = zapp_ios_webviews[insSlot];
+        if (ins) zapp_ios_inject_safe_area(ins);
+    }
+}
+
+@end
+
 // Implemented in ios/sidebar.m (T3 — chrome-less master-detail). Materialize
 // calls it with the split + both column VCs + the host/sidebar ids; sidebar.m
 // wraps the columns in bar-hidden navigation controllers, installs the
@@ -242,8 +281,15 @@ void zapp_ios_materialize_pending_windows(void) {
             // the darwin/window.m create-ordering note.)
             UISplitViewController* split =
                 [[UISplitViewController alloc] initWithStyle:UISplitViewControllerStyleDoubleColumn];
-            sidebarVC = [[UIViewController alloc] init];   // primary column
-            contentVC = [[UIViewController alloc] init];   // secondary column
+            // ZappIOSWindowVC overrides viewSafeAreaInsetsDidChange to re-inject
+            // --zapp-safe-area-* vars on rotation / multitasking. Both columns
+            // get the subclass so either pane's VC triggers the re-inject.
+            ZappIOSWindowVC* sidebarVC_ = [[ZappIOSWindowVC alloc] init];
+            sidebarVC_.numericId = d->numeric_id;
+            sidebarVC = sidebarVC_;
+            ZappIOSWindowVC* contentVC_ = [[ZappIOSWindowVC alloc] init];
+            contentVC_.numericId = d->numeric_id;
+            contentVC = contentVC_;
 
             contentVC.view.backgroundColor = bgColor;
             // Sidebar pane backdrop: explicit "#rrggbb" if the app set one,
@@ -287,7 +333,10 @@ void zapp_ios_materialize_pending_windows(void) {
             window.rootViewController = split;   // BEFORE any webview creation
         } else {
             // Single-pane window: lone root VC hosting the content webview.
-            UIViewController* root = [[UIViewController alloc] init];
+            // ZappIOSWindowVC overrides viewSafeAreaInsetsDidChange so rotation
+            // re-injects --zapp-safe-area-* vars (macOS parity).
+            ZappIOSWindowVC* root = [[ZappIOSWindowVC alloc] init];
+            root.numericId = d->numeric_id;
             root.view.frame = window.bounds;
             root.view.backgroundColor = bgColor;
             contentVC = root;
