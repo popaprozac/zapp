@@ -208,3 +208,75 @@ test("the Nim-link lint sees the ios/*.m extern surface (sanity: non-empty)", ()
   expect(fromNim.has("wopts_sheet_detents")).toBe(true);
   expect(fromNim.has("wopts_sheet_grabber")).toBe(true);
 });
+
+// ---------------------------------------------------------------------------
+// Nim importc darwin_* parity (#637)
+//
+// The Nim layer {.importc.}s darwin_* C functions (defined in darwin/*.m).
+// Because ios/*.m is compiled instead of darwin/*.m on iOS, any darwin_* that
+// is referenced by Nim AND defined only in darwin/*.m (no matching stub in
+// ios/*.m) will cause the iOS link to fail with "Undefined symbols".
+//
+// Scanner strategy: a bare `{.importc.}` in Nim means the C name equals the
+// Nim proc name. All darwin_* importc declarations in native/nim use this bare
+// form (no explicit `importc: "darwin_..."` renames exist), so we match:
+//   proc darwin_<name>(...) {.importc ...}
+// and extract the proc name as the C symbol name.
+// ---------------------------------------------------------------------------
+
+// Every `darwin_*` C symbol that the Nim layer brings in via `{.importc.}`.
+// Bare `{.importc.}` (no explicit C-name string) means C name == Nim proc name,
+// so we match `proc darwin_<name>(` followed (within 400 chars) by `importc`.
+// This mirrors `nimExportcProvidedSymbols`'s file-globbing + sync-read idiom.
+function nimImportcDarwinSymbols(): Set<string> {
+  const out = new Set<string>();
+  const glob = new Bun.Glob("native/nim/**/*.nim");
+  for (const rel of glob.scanSync({ cwd: ROOT })) {
+    const src = readFileSync(path.join(ROOT, rel), "utf8");
+
+    // Case 1: explicit C-name rename — `importc: "darwin_<name>"` anywhere.
+    for (const m of src.matchAll(/importc:\s*"(darwin_[A-Za-z0-9_]+)"/g)) {
+      out.add(m[1]);
+    }
+
+    // Case 2: bare importc — proc name IS the C name. Match `proc darwin_<name>`
+    // and confirm an `importc` pragma appears in the bounded window after the
+    // proc keyword (same 400-char window as nimExportcProvidedSymbols).
+    for (const m of src.matchAll(/\bproc\s+(darwin_[A-Za-z0-9_]+)\s*\*/g)) {
+      const name = m[1];
+      const start = m.index ?? 0;
+      const rest = src.slice(start, start + 400);
+      const nextProc = rest.indexOf("\nproc ", 1);
+      const windowText = nextProc >= 0 ? rest.slice(0, nextProc) : rest;
+      if (/\bimportc\b/.test(windowText)) out.add(name);
+    }
+    // Also match procs without the export `*` marker.
+    for (const m of src.matchAll(/\bproc\s+(darwin_[A-Za-z0-9_]+)\s*\(/g)) {
+      const name = m[1];
+      const start = m.index ?? 0;
+      const rest = src.slice(start, start + 400);
+      const nextProc = rest.indexOf("\nproc ", 1);
+      const windowText = nextProc >= 0 ? rest.slice(0, nextProc) : rest;
+      if (/\bimportc\b/.test(windowText)) out.add(name);
+    }
+  }
+  return out;
+}
+
+test("every darwin_* {.importc.}'d in native/nim has an iOS definition (#637)", () => {
+  const imported = nimImportcDarwinSymbols();
+  const definedIos = definedSymbolsIn("native/platform/ios", imported);
+  const definedDarwin = definedSymbolsIn("native/platform/darwin", imported);
+  const violations = [...imported].filter((s) => definedDarwin.has(s) && !definedIos.has(s)).sort();
+  expect(violations).toEqual([]);
+});
+
+test("the Nim importc scanner sees the darwin_* importc surface (sanity: non-empty, #637)", () => {
+  // Guards against a glob/regex regression silently making the parity test
+  // vacuously pass (empty imported set → no violations possible).
+  const imported = nimImportcDarwinSymbols();
+  expect(imported.size).toBeGreaterThan(10);
+  // Known stable symbols from fs.nim and router.nim:
+  expect(imported.has("darwin_fs_read_file")).toBe(true);
+  expect(imported.has("darwin_window_show")).toBe(true);
+});
