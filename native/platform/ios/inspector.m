@@ -258,6 +258,8 @@ void darwin_inspector_expand(int32_t window_id) {
                     sheet.detents = @[UISheetPresentationControllerDetent.mediumDetent,
                                       UISheetPresentationControllerDetent.largeDetent];
                     sheet.prefersGrabberVisible = YES;
+                    sheet.prefersEdgeAttachedInCompactHeight = YES;
+                    sheet.widthFollowsPreferredContentSizeWhenEdgeAttached = YES;
                     sheet.delegate = c; // for swipe-dismiss sync (presentationControllerDidDismiss:)
                 }
             }
