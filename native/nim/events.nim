@@ -43,4 +43,8 @@ proc eventNameToId*(name: string): int =
   of "restore": 8
   of "fullscreen": 9
   of "unfullscreen": 10
+  # Sidebar/inspector chrome events (ids 12-19) are intentionally NOT mapped
+  # here: they're delivered directly via zapp_pane_emit -> dispatchWindowEvent
+  # in the webview bridge, bypassing the gJsListeners bitmask. Mapping them
+  # would route delivery through the bitmask and silently drop them. See #627.
   else: -1
