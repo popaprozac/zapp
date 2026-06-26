@@ -37,7 +37,9 @@ h2 { font-size: 16px; color: var(--text-h); margin: 0 0 8px; font-weight: 600; }
 .drag-strip--no-inset { padding-left: 0; }
 
 /* Sidebar pane */
-.sidebar-pane { padding: var(--zapp-titlebar-height, 52px) 8px 8px; }
+/* Top: macOS uses the injected toolbar height; iOS has no toolbar injected, so
+   fall through to the status-bar safe area (A1 idiom: var, env() fallback). */
+.sidebar-pane { padding: var(--zapp-titlebar-height, env(safe-area-inset-top, 8px)) 8px 8px; }
 .sidebar-title { opacity: 0.5; font-size: 11px; letter-spacing: 0.06em; padding: 0 8px 8px; }
 .nav-item {
   display: block; width: 100%; text-align: left; border: 0; background: transparent;
