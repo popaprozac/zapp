@@ -1,4 +1,4 @@
-import { Window, WindowEvent } from "@zappdev/runtime";
+import { Window, Events } from "@zappdev/runtime";
 import type { Section } from "./types";
 import { card, onAct, setResult } from "../shell/ui";
 
@@ -58,11 +58,14 @@ export const sidebarSection: Section = {
     const win = Window.current();
     host.innerHTML = `<div class="kv"><b>Sidebar</b><div data-state class="muted">Live — collapse, expand, or drag the sidebar to see state.</div></div>`;
     const state = host.querySelector<HTMLElement>("[data-state]")!;
-    const off = [
-      win.on(WindowEvent.SIDEBAR_COLLAPSED, () => { state.textContent = "collapsed"; }),
-      win.on(WindowEvent.SIDEBAR_EXPANDED, () => { state.textContent = "expanded"; }),
-      win.on(WindowEvent.SIDEBAR_RESIZED, (d: any) => { state.textContent = `width ${d.width}`; }),
-    ];
-    return () => off.forEach((fn) => fn());
+    // SIDEBAR_* events don't reach the inspector pane directly (framework #627:
+    // zapp_pane_emit fans out to main + sidebar panes only). The main pane relays
+    // them over the Events bus as ks:sidebar-state; match windowId so other
+    // windows don't cross-drive this inspector.
+    const off = Events.on("ks:sidebar-state", ({ state: s, width, windowId }: any) => {
+      if (windowId !== win.id) return;
+      state.textContent = s === "resized" ? `width ${width}` : s; // "collapsed" | "expanded"
+    });
+    return () => off();
   },
 };

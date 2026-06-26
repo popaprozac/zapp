@@ -1,4 +1,4 @@
-import { Window, Events, Platform } from "@zappdev/runtime";
+import { Window, Events, Platform, WindowEvent } from "@zappdev/runtime";
 import { registry } from "../sections/registry";
 import { findSection } from "../sections/types";
 import { shellToolbar } from "./toolbar-def";
@@ -64,5 +64,16 @@ export function renderMainPane(app: HTMLElement) {
 
   // Only act on this window's own sidebar (ks:nav is a global emit; match windowId).
   Events.on("ks:nav", ({ id, windowId }: any) => { if (windowId === Window.current().id) show(id); });
+
+  // SIDEBAR_* events reach the main + sidebar panes but NOT the inspector pane
+  // (framework #627: zapp_pane_emit fans out to only two panes). Relay them over
+  // the Events bus, windowId-scoped, so the Sidebar section's inspector — which
+  // lives in the inspector pane — can reflect live sidebar state. (Set up once;
+  // renderMainPane runs once per main-pane load.)
+  const win = Window.current();
+  win.on(WindowEvent.SIDEBAR_COLLAPSED, () => Events.emit("ks:sidebar-state", { state: "collapsed", windowId: win.id }));
+  win.on(WindowEvent.SIDEBAR_EXPANDED, () => Events.emit("ks:sidebar-state", { state: "expanded", windowId: win.id }));
+  win.on(WindowEvent.SIDEBAR_RESIZED, (d: any) => Events.emit("ks:sidebar-state", { state: "resized", width: d.width, windowId: win.id }));
+
   if (registry[0]) show(registry[0].id); // self-init to Home (race-free, in-pane)
 }
