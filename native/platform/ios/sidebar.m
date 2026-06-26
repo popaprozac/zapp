@@ -420,6 +420,12 @@ void darwin_sidebar_set_width(int32_t window_id, int32_t width) {
         c.configuredWidth = width;
         if (width > 0) {
             c.splitVC.preferredPrimaryColumnWidth = (CGFloat)width;
+            // Force a relayout so the width re-applies immediately — without
+            // this, a native overlay-reveal gesture that changed displayMode can
+            // leave the split ignoring the new preferred width until the next
+            // system layout pass.
+            [c.splitVC.view setNeedsLayout];
+            [c.splitVC.view layoutIfNeeded];
             zapp_ios_sidebar_emit_resize(c, width);
         }
     });

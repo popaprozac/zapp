@@ -74,7 +74,7 @@ typedef struct ZappIOSDeferred {
     int32_t sidebarNumericId;    // sidebar webview's transport slot
     bool    sidebarCollapsed;
     int32_t sidebarWidth;
-    char*   sidebarPresentation;  // strdup'd; freed in destroy. "" / NULL = tile; "overlay" = flyout
+    char*   sidebarPresentation;  // strdup'd; freed in destroy. "" / NULL = automatic; "tile"; "overlay"
     int32_t sidebarMinWidth;
     int32_t sidebarMaxWidth;
     bool    sidebarCollapsible;
@@ -259,13 +259,21 @@ void zapp_ios_materialize_pending_windows(void) {
             split.preferredDisplayMode = d->sidebarCollapsed
                 ? UISplitViewControllerDisplayModeSecondaryOnly
                 : UISplitViewControllerDisplayModeOneBesideSecondary;
+            // Set column min/max BEFORE preferred so the preferred value lands
+            // inside the allowed range. Without min/max, iOS caps
+            // preferredPrimaryColumnWidth at ~320 pt by default — any configured
+            // width above that (e.g. maxWidth:500) is silently clamped.
+            if (d->sidebarMinWidth > 0) {
+                split.minimumPrimaryColumnWidth = (CGFloat)d->sidebarMinWidth;
+            }
+            if (d->sidebarMaxWidth > 0) {
+                split.maximumPrimaryColumnWidth = (CGFloat)d->sidebarMaxWidth;
+            }
             if (d->sidebarWidth > 0) {
                 // Sidebar = the PRIMARY column in .doubleColumn style, so its
                 // width is preferredPrimaryColumnWidth. (preferredSupplementary*
                 // exists ONLY in .tripleColumn and THROWS NSInvalidArgument on
-                // double-column.) iOS clamps to its own min/max; the configured
-                // sidebarMinWidth/MaxWidth aren't directly settable like
-                // NSSplitViewItem thicknesses.
+                // double-column.) Governed by the min/max set above.
                 split.preferredPrimaryColumnWidth = (CGFloat)d->sidebarWidth;
             }
             // Sidebar presentation → UISplitViewController split behavior.
