@@ -32,7 +32,9 @@ The matrix grounding (§1–§6) showed iOS is solid at the core but has a clust
 **Problem:** generated apps' `index.html` lacks `viewport-fit=cover`, so `env(safe-area-inset-*)` resolves to 0 on iOS. **Fix:** in `cli/src/init.ts`, post-process the generated `index.html` to ensure the viewport meta includes `viewport-fit=cover` (kitchen-sink already has it). Add a focused test that the scaffolded HTML carries it.
 
 ### A1.4 — inject `--zapp-safe-area-*` on iOS (macOS parity) — DECIDED: inject
-**Problem:** macOS injects `--zapp-safe-area-*` CSS vars (darwin/toolbar.m); iOS doesn't, so cross-platform apps using those vars get 0 on iOS. **Fix:** inject `--zapp-safe-area-{top,right,bottom,left}` from the webview's `safeAreaInsets` on iOS, mirroring the macOS injection, re-injected on safe-area changes (rotation, etc.). Raw `env(safe-area-inset-*)` remains available too. (The sidebar-pane *visual* top-gap/hug polish is **deferred to A2**.)
+**Problem:** macOS injects `--zapp-safe-area-*` CSS vars (darwin/toolbar.m); iOS doesn't, so cross-platform apps using those vars get 0 on iOS. **Fix:** inject `--zapp-safe-area-{top,right,bottom,left}` from the webview's `safeAreaInsets` on iOS, mirroring the macOS injection, re-injected on safe-area changes (rotation, etc.). Raw `env(safe-area-inset-*)` remains available too.
+
+**Dogfood (added per user):** migrate the kitchen-sink's raw `env(safe-area-inset-*)` usages — the iOS faux top bar (`main-pane.ts` / `style.css` `.ks-ios-topbar`, `.main-pane--ios-offset`) and any other content — to the canonical `--zapp-safe-area-*` vars where applicable. This dogfoods the API and is the **live verification surface** for A1.4: the chrome must still sit correctly under the notch / home-indicator using the vars. (The sidebar-pane *visual* top-gap/hug **spacing redesign** stays in **A2**, but A2 will use these same vars.)
 
 ### A1.5 — parity-lint covers `native/nim/**` importc (#637)
 **Problem:** `cli/src/ios-platform-parity.test.ts` scans `.zc` refs + `ios/*.m` externs, but not the ~140 `{.importc.}` `darwin_*` symbols in `native/nim/*.nim`. **Fix:** add a test arm that scans `native/nim/**` for `importc`'d `darwin_*` symbols and asserts each has an iOS definition (or is Nim-provided), same violation-reporting style as the existing tests.
@@ -40,7 +42,7 @@ The matrix grounding (§1–§6) showed iOS is solid at the core but has a clust
 ## Verification
 - `bun run check` clean; `bun test cli/src` (parity gate, incl. the new #637 arm) green — both runnable in-session.
 - iOS-sim build: `cd kitchen-sink && bun run build --platform ios` → `[zapp] build complete:` (compiles the ObjC changes); also default macOS build stays green (no regression).
-- **Human smoke (device/sim, your gate):** (1) Sidebar section → inspector pane updates on sidebar collapse/expand/drag (#713 fixed); reverse still works. (2) Build kitchen-sink (or a config) with `inspectable:false` → Safari Web Inspector can NOT attach; with default → it can. (3) `zapp init` a throwaway app → its `index.html` has `viewport-fit=cover`. (4) `--zapp-safe-area-*` resolve non-zero on iOS (quick check in the webview).
+- **Human smoke (device/sim, your gate):** (1) Sidebar section → inspector pane updates on sidebar collapse/expand/drag (#713 fixed); reverse still works. (2) Build kitchen-sink (or a config) with `inspectable:false` → Safari Web Inspector can NOT attach; with default → it can. (3) `zapp init` a throwaway app → its `index.html` has `viewport-fit=cover`. (4) `--zapp-safe-area-*` resolve non-zero on iOS AND the kitchen-sink faux top bar (now using the vars) still sits correctly under the notch/Dynamic Island on iPhone + iPad — this is the live A1.4 proof.
 
 ## Non-goals (explicitly parked)
 - Sidebar presentation tile-vs-overlay, dim/tap-dismiss, sidebar-pane visual safe-area spacing → **A2**.
@@ -53,7 +55,7 @@ The matrix grounding (§1–§6) showed iOS is solid at the core but has a clust
 - **A1-T1 (meatiest):** iOS pane-event fan-out — the two registry `_slot_for_host` lookups + three emit/dispatch sites (sidebar.m, inspector.m, window.m); build-verify.
 - **A1-T2:** `inspectable` honors config (ios/window.m).
 - **A1-T3:** `viewport-fit=cover` in `zapp init` (init.ts + test).
-- **A1-T4:** inject `--zapp-safe-area-*` on iOS (webview/window .m, mirror darwin).
+- **A1-T4:** inject `--zapp-safe-area-*` on iOS (webview/window .m, mirror darwin) + migrate kitchen-sink raw `env(safe-area-*)` usages to the vars (dogfood + verification surface; excludes the A2 sidebar-pane spacing redesign).
 - **A1-T5:** parity-lint #637 extension (test) + full gates + HUMAN SMOKE.
 
 (Group as the plan sees fit; A1-T2/T3/T5 are small and could merge. Native items (T1/T2/T4) verified by iOS-sim compile; T3/T5 by `bun test`.)
