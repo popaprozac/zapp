@@ -100,7 +100,7 @@ type
     id*: string
     `type`*: string                  ## "" ⇒ native treats as "button"
     pane*: string                    ## trackingSeparator: "sidebar" | "inspector"
-    label*, icon*: string
+    label*, icon*, text*: string
     enabled*: bool = true
     indicator*: bool = true          ## menu chevron; native default YES; emitted only on menu items
     menu*: seq[MenuItemOpt]
@@ -451,6 +451,8 @@ proc serializeToolbar*(t: ToolbarOptions): string =
       if it.controlRepresentation != ToolbarControlRepresentation.Automatic:
         w["controlRepresentation"] = %($it.controlRepresentation)
       items.add(w)
+    of "label":
+      items.add(%*{"type": "label", "id": it.id, "text": it.text})
     else:  # button (default)
       var w = %*{"type": "button", "id": it.id, "label": it.label,
                  "icon": it.icon, "enabled": it.enabled}
@@ -524,6 +526,8 @@ proc parseToolbarJson*(s: string): ToolbarOptions =
     if jHasStr(itn, "pane"): item.pane = jStr(itn, "pane")
     if jHasStr(itn, "label"): item.label = jStr(itn, "label")
     if jHasStr(itn, "icon"): item.icon = jStr(itn, "icon")
+    if item.`type` == "label":
+      if jHasStr(itn, "text"): item.text = jStr(itn, "text")
     if jHasBool(itn, "enabled"): item.enabled = jBool(itn, "enabled", true)
     if jHasBool(itn, "indicator"): item.indicator = jBool(itn, "indicator", true)
     if jHasStr(itn, "style"): item.style = enumFromStr[ToolbarItemStyle](jStr(itn, "style"), ToolbarItemStyle.Plain)

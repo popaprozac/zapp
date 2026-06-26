@@ -367,6 +367,23 @@ static NSMutableDictionary<NSValue*, ZappToolbarController*>* zapp_toolbars = ni
         // < 10.15: fall through to a plain button (clicks still broadcast).
     }
 
+    // Non-interactive text label (NSTextField hosted in an NSToolbarItem).
+    if ([def[@"type"] isEqualToString:@"label"]) {
+        NSString* text = [def[@"text"] isKindOfClass:[NSString class]] ? def[@"text"] : @"";
+        NSToolbarItem* labelItem = [[NSToolbarItem alloc] initWithItemIdentifier:identifier];
+        NSTextField* tf = [NSTextField labelWithString:text];
+        tf.font = [NSFont systemFontOfSize:[NSFont smallSystemFontSize]];
+        [tf sizeToFit];
+        labelItem.view = tf;
+        labelItem.label = text;
+        labelItem.paletteLabel = text.length ? text : identifier;
+        labelItem.minSize = tf.fittingSize;
+        labelItem.maxSize = tf.fittingSize;
+        labelItem.autovalidates = NO;
+        labelItem.enabled = YES;
+        return labelItem;
+    }
+
     NSToolbarItem* item = [[NSToolbarItem alloc] initWithItemIdentifier:identifier];
     NSString* label = [def[@"label"] isKindOfClass:[NSString class]] ? def[@"label"] : @"";
     item.label = label;
@@ -462,6 +479,11 @@ static NSArray<NSToolbarItemIdentifier>* zapp_toolbar_parse_items(
             if (gid.length == 0 || buttons[gid]) continue;
             [ids addObject:gid];
             buttons[gid] = def;   // carries items/controlRepresentation
+        } else if ([type isEqualToString:@"label"]) {
+            NSString* lid = [def[@"id"] isKindOfClass:[NSString class]] ? def[@"id"] : nil;
+            if (lid.length == 0 || buttons[lid]) continue;
+            [ids addObject:lid];
+            buttons[lid] = def;   // carries "text"
         } else {
             // Custom button. The runtime validated id presence/uniqueness;
             // belt-and-suspenders here because native Zen-C apps can set
@@ -656,6 +678,20 @@ void darwin_toolbar_update_item(void* window_ptr, const char* item_json) {
             live.label = label;
             live.paletteLabel = label.length ? label : itemId;
             live.toolTip = label;
+        }
+        // Label item text update: patch the hosted NSTextField's stringValue.
+        if ([patch[@"text"] isKindOfClass:[NSString class]]) {
+            NSString* newText = patch[@"text"];
+            if ([live.view isKindOfClass:[NSTextField class]]) {
+                NSTextField* tf = (NSTextField*)live.view;
+                tf.stringValue = newText;
+                [tf sizeToFit];
+                live.label = newText;
+                live.paletteLabel = newText.length ? newText : itemId;
+                NSSize fit = tf.fittingSize;
+                live.minSize = fit;
+                live.maxSize = fit;
+            }
         }
         if ([patch[@"icon"] isKindOfClass:[NSString class]] && ((NSString*)patch[@"icon"]).length) {
             live.image = zapp_resolve_icon(patch[@"icon"], 18.0, 1);

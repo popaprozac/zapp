@@ -20,3 +20,11 @@ test("discriminated ToolbarItemDef accepts valid shapes, rejects invalid", () =>
   const bad3: ToolbarItemDef = { type: "trackingSeparator", badge: { dot: true } };
   void bad1; void bad2; void bad3;
 });
+
+test("ToolbarItemDef accepts a label item, rejects a label without text", () => {
+  const ok: ToolbarItemDef = { type: "label", text: "Synced" };
+  expect(ok.type).toBe("label");
+  // @ts-expect-error — a label requires `text`.
+  const bad: ToolbarItemDef = { type: "label" };
+  void bad;
+});

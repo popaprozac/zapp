@@ -410,13 +410,24 @@ export interface ToolbarSystemDef {
   type: "toggleSidebar" | "toggleInspector" | "space" | "flexibleSpace";
 }
 
+/** A non-interactive text label in the toolbar (NSToolbarItem hosting an
+ *  NSTextField). macOS-only; no action/icon. Useful for status strings. */
+export interface ToolbarLabelDef {
+  type: "label";
+  /** Optional NSToolbar identifier. Auto-assigned if absent (like button ids). */
+  id?: string;
+  /** The text to display. Required. */
+  text: string;
+}
+
 /** One toolbar item. `type` defaults to `"button"`. */
 export type ToolbarItemDef =
   | ToolbarButtonDef
   | ToolbarSegmentedDef
   | ToolbarGroupDef
   | ToolbarTrackingSepDef
-  | ToolbarSystemDef;
+  | ToolbarSystemDef
+  | ToolbarLabelDef;
 
 /** Options for a native toolbar (NSToolbar) attached at Window.create. */
 export interface ToolbarOptions {
@@ -429,6 +440,8 @@ export interface ToolbarOptions {
  * left unchanged on the live item. */
 export interface ToolbarItemPatch {
   label?: string;
+  /** For `type:"label"` items: update the displayed text string. */
+  text?: string;
   /** Icon via the shared resolver: "sf:<symbol>", file path, or data URL. */
   icon?: string;
   enabled?: boolean;
@@ -846,6 +859,18 @@ export function normalizeToolbar(
       items.push({ type });
       continue;
     }
+    if (type === "label") {
+      if (!it.text) throw new Error('[zapp] toolbar: "label" items require a non-empty "text"');
+      if (it.id) {
+        assertValidToolbarId(it.id);
+        if (seen.has(it.id)) throw new Error(`[zapp] toolbar: duplicate item id "${it.id}"`);
+        seen.add(it.id);
+      } else {
+        it.id = `zapp.label.${items.length}`;
+      }
+      items.push({ type: "label", id: it.id, text: it.text });
+      continue;
+    }
     if (type === "segmented") {
       if (!it.id) throw new Error('[zapp] toolbar: "segmented" items require an "id"');
       if (!it.segments || it.segments.length === 0) throw new Error('[zapp] toolbar: "segmented" requires a non-empty "segments" array');
@@ -921,7 +946,7 @@ export function normalizeToolbar(
   return { json: JSON.stringify({ style: toolbar.style ?? "unified", items }), actions, menuActions, menuIdsByItem, menuTrees };
 }
 
-const TOOLBAR_PATCH_KEYS = new Set(["label", "icon", "enabled", "indicator", "menu", "action", "style", "tintColor", "badge", "bordered", "selected", "controlRepresentation"]);
+const TOOLBAR_PATCH_KEYS = new Set(["label", "text", "icon", "enabled", "indicator", "menu", "action", "style", "tintColor", "badge", "bordered", "selected", "controlRepresentation"]);
 
 /** Validate a ToolbarItemPatch and split it into the wire JSON (only
  * patched keys, plus id), the replacement action, and stripped menu
@@ -948,6 +973,7 @@ export function normalizeToolbarPatch(
   const menuActions = new Map<string, (ctx?: ActionContext) => void>();
   const wire: Record<string, unknown> = { id };
   if (patch.label !== undefined) wire.label = patch.label;
+  if (patch.text !== undefined) wire.text = patch.text;
   // Empty icon strings are stripped: native ignores them on the live item,
   // but a merged stored def carrying "" would silently lose the icon on the
   // next shape rebuild. Icons can be swapped, not cleared (documented).

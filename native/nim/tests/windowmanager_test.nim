@@ -281,4 +281,21 @@ block:
   doAssert root["items"][0]["controlRepresentation"].getStr == "collapsed"
   doAssert root["items"][0]["selected"].len == 0, "empty selected must serialize as []"
 
+block:
+  # label item round-trips (type:"label" text field)
+  let t = ToolbarOptions(style: ToolbarStyle.Unified, items: @[
+    ToolbarItemOpt(`type`: "label", id: "status", text: "Synced"),
+    ToolbarItemOpt(`type`: "button", id: "refresh", label: "Refresh", enabled: true,
+      indicator: true, bordered: true),
+  ])
+  let s = serializeToolbar(t)
+  doAssert "\"type\":\"label\"" in s, "label type must serialize"
+  doAssert "\"id\":\"status\"" in s, "label id must serialize"
+  doAssert "\"text\":\"Synced\"" in s, "label text must serialize"
+  doAssert parseToolbarJson(s) == t, "parse(serialize(t)) must round-trip label item"
+  let root = parseJson(s)
+  doAssert root["items"][0]["type"].getStr == "label"
+  doAssert root["items"][0]["id"].getStr == "status"
+  doAssert root["items"][0]["text"].getStr == "Synced"
+
 echo "windowmanager ok"
