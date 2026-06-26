@@ -151,14 +151,25 @@ static void zapp_ios_sidebar_rearm_pop(ZappIOSSidebarController* c) {
 // dispatchWindowEvent's first arg is the target window id ("win-<hostId>");
 // both panes carry the host id. eventName is the bare suffix
 // ("sidebar-collapsed"); bootstrap/webview.ts prepends "window:".
-static void zapp_ios_sidebar_emit(ZappIOSSidebarController* c, const char* eventName) {
+
+// Data-carrying fan-out (mirrors ios/inspector.m's zapp_ios_inspector_emit_data):
+// host + sidebar slot + inspector slot. dataJson nil => third arg `undefined`.
+static void zapp_ios_sidebar_emit_data(ZappIOSSidebarController* c,
+                                       const char* eventName, NSString* dataJson) {
     if (!c || !eventName) return;
+    NSString* dataArg = @"undefined";
+    if (dataJson) {
+        NSString* esc = [dataJson stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+        esc = [esc stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
+        dataArg = [NSString stringWithFormat:@"'%@'", esc];
+    }
+    NSString* event = [NSString stringWithUTF8String:eventName];
     char js[256];
     snprintf(js, sizeof(js),
         "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
         "if(b&&typeof b.dispatchWindowEvent==='function'){"
-        "b.dispatchWindowEvent('win-%d','%s');}})();",
-        c.hostWindowId, eventName);
+        "b.dispatchWindowEvent('win-%d','%s',%s);}})();",
+        c.hostWindowId, event.UTF8String, dataArg.UTF8String);
     darwin_window_eval_js(c.hostWindowId, js);
     if (c.sidebarSlotId >= 0 && c.sidebarSlotId != c.hostWindowId) {
         darwin_window_eval_js(c.sidebarSlotId, js);
@@ -167,6 +178,19 @@ static void zapp_ios_sidebar_emit(ZappIOSSidebarController* c, const char* event
     if (inspectorSlot >= 0 && inspectorSlot != c.hostWindowId && inspectorSlot != c.sidebarSlotId) {
         darwin_window_eval_js(inspectorSlot, js);
     }
+}
+
+// Name-only emit (collapse/expand) — delegates to the data-carrying form.
+static void zapp_ios_sidebar_emit(ZappIOSSidebarController* c, const char* eventName) {
+    zapp_ios_sidebar_emit_data(c, eventName, nil);
+}
+
+// sidebar-resized carries {"width":N} (bare top-level width) — mirrors the
+// inspector resize payload + macOS sidebar-resized + bootstrap/webview.ts's
+// bareWidth branch.
+static void zapp_ios_sidebar_emit_resize(ZappIOSSidebarController* c, int32_t width) {
+    NSString* json = [NSString stringWithFormat:@"{\"width\":%d}", (int)width];
+    zapp_ios_sidebar_emit_data(c, "sidebar-resized", json);
 }
 
 // Emit collapsed/expanded once per transition. "Collapsed" here means the
@@ -396,6 +420,7 @@ void darwin_sidebar_set_width(int32_t window_id, int32_t width) {
         c.configuredWidth = width;
         if (width > 0) {
             c.splitVC.preferredPrimaryColumnWidth = (CGFloat)width;
+            zapp_ios_sidebar_emit_resize(c, width);
         }
     });
 }
