@@ -21,14 +21,23 @@ const filterLabels: Record<string, string> = {
   flagged: "Flagged items",
 };
 
+/** Apply a filter from a Filter pull-down item: set state, live-update the
+ *  toolbar status label, and broadcast ks:filter so the Toolbar section's
+ *  inspector pane (a separate webview) stays in sync. */
+function applyFilter(value: string, ctx?: { window: { toolbar: { updateItem(id: string, patch: { text: string }): void } } }) {
+  setFilter(value);
+  ctx?.window.toolbar.updateItem("status", { text: filterLabels[value] ?? "All items" });
+  Events.emit("ks:filter", { value });
+}
+
 export function filterMenu(): MenuItemDef[] {
   return [
     { id: "kf-all", label: "All", radioGroup: "filter", checked: filter === "all",
-      action: (ctx) => { setFilter("all"); ctx?.window.toolbar.updateItem("status", { text: filterLabels.all }); } },
+      action: (ctx) => applyFilter("all", ctx) },
     { id: "kf-unread", label: "Unread", radioGroup: "filter", checked: filter === "unread",
-      action: (ctx) => { setFilter("unread"); ctx?.window.toolbar.updateItem("status", { text: filterLabels.unread }); } },
+      action: (ctx) => applyFilter("unread", ctx) },
     { id: "kf-flagged", label: "Flagged", radioGroup: "filter", checked: filter === "flagged",
-      action: (ctx) => { setFilter("flagged"); ctx?.window.toolbar.updateItem("status", { text: filterLabels.flagged }); } },
+      action: (ctx) => applyFilter("flagged", ctx) },
   ];
 }
 

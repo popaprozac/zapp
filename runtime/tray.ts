@@ -168,42 +168,41 @@ function ensureEventsWired() {
     const itemId = data?.id;
     if (!itemId) return;
     // Menu items are global (action ids unique app-wide via menu.ts's
-    // counter), but tray menus register their actions under the tray's
-    // own map. Look across all trays — first match wins.
-    for (const [trayId, actions] of menuActionsByTray) {
-      const handler = actions.get(itemId);
-      if (!handler) continue;
-      // Auto-radio: move the checkmark before firing the action.
-      const tree = menuTreesByTray.get(trayId);
-      if (tree) {
-        const clickedItem = findMenuItem(tree, itemId);
-        if (clickedItem?.radioGroup) {
-          const patched = applyRadioSelection(tree, itemId, clickedItem.radioGroup);
-          menuTreesByTray.set(trayId, patched);
-          postAction("tray:setMenu", { id: trayId, items: stripActions(patched) });
-        }
-      }
-      const update = (patch: MenuItemPatch) => {
-        const currentTree = menuTreesByTray.get(trayId);
-        if (!currentTree) return;
-        const patched = patchMenuTree(currentTree, itemId, patch);
+    // counter), but tray menus register under the tray's own maps. Key off the
+    // retained TREE (not the action map) so radioGroup items with NO action
+    // still move their checkmark. Look across all trays — first match wins.
+    for (const [trayId, tree] of menuTreesByTray) {
+      const clickedItem = findMenuItem(tree, itemId);
+      if (!clickedItem) continue; // not this tray's item (another surface owns it)
+      // Auto-radio: move the checkmark regardless of whether an action exists.
+      if (clickedItem.radioGroup) {
+        const patched = applyRadioSelection(tree, itemId, clickedItem.radioGroup);
         menuTreesByTray.set(trayId, patched);
         postAction("tray:setMenu", { id: trayId, items: stripActions(patched) });
-      };
-      let win: WindowHandle;
-      try {
-        win = Window.current();
-      } catch {
-        // No WebView/window context (e.g. windowless menubar app) — fire the
-        // action without ctx so the tray item still works; ctx.window/update
-        // are unavailable here.
-        handler();
-        return;
       }
-      // ctx.checked reflects the item's last-set checked state (read from the
-      // retained tree at dispatch time) — uniform with toolbar + app-menu ctx.
-      const checked = findMenuItem(menuTreesByTray.get(trayId) ?? [], itemId)?.checked;
-      handler({ id: itemId, window: win, checked, update });
+      // Fire the action only if one is registered for this item.
+      const handler = menuActionsByTray.get(trayId)?.get(itemId);
+      if (handler) {
+        const update = (patch: MenuItemPatch) => {
+          const currentTree = menuTreesByTray.get(trayId);
+          if (!currentTree) return;
+          const patched = patchMenuTree(currentTree, itemId, patch);
+          menuTreesByTray.set(trayId, patched);
+          postAction("tray:setMenu", { id: trayId, items: stripActions(patched) });
+        };
+        try {
+          const win = Window.current();
+          // ctx.checked reflects the item's last-set checked state (read from
+          // the retained tree post-radio) — uniform with toolbar + app-menu ctx.
+          const checked = findMenuItem(menuTreesByTray.get(trayId) ?? [], itemId)?.checked;
+          handler({ id: itemId, window: win, checked, update });
+        } catch {
+          // No WebView/window context (e.g. windowless menubar app) — fire the
+          // action without ctx so the tray item still works; ctx.window/update
+          // are unavailable here.
+          handler();
+        }
+      }
       return;
     }
   });

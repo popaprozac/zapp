@@ -381,6 +381,17 @@ static NSMutableDictionary<NSValue*, ZappToolbarController*>* zapp_toolbars = ni
         labelItem.maxSize = tf.fittingSize;
         labelItem.autovalidates = NO;
         labelItem.enabled = YES;
+        // Custom-view items don't display their hosted NSTextField until the
+        // toolbar performs its first layout pass — at create time the field
+        // renders blank until something forces a relayout. Re-apply sizing on
+        // the next main-queue turn (after that first pass) so the text shows at
+        // launch, exactly as updateItem({text}) corrects it post-layout.
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [tf sizeToFit];
+            NSSize fit = tf.fittingSize;
+            labelItem.minSize = fit;
+            labelItem.maxSize = fit;
+        });
         return labelItem;
     }
 

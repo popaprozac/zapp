@@ -105,32 +105,34 @@ export const Menu = {
       appMenuWired = true;
       Events.on("__menu:click", (payload: any) => {
         const id = typeof payload === "string" ? JSON.parse(payload).id : payload?.id;
-        const fn = appMenuActions.get(id);
-        if (!fn) return;
-        // Auto-radio: move the checkmark before firing the action.
+        // Key off the retained TREE (not the action map) so radioGroup items
+        // with NO action still move their checkmark.
         const clickedItem = findMenuItem(appMenuTree, id);
-        if (clickedItem?.radioGroup) {
+        if (!clickedItem) return; // not an app-menu item (another surface owns it)
+        // Auto-radio: move the checkmark regardless of whether an action exists.
+        if (clickedItem.radioGroup) {
           appMenuTree = applyRadioSelection(appMenuTree, id, clickedItem.radioGroup);
           (getBridge() as any).post(JSON.stringify({ t: 4, m: "setMenu", a: { items: stripActions(appMenuTree) } }));
         }
+        // Fire the action only if one is registered for this item.
+        const fn = appMenuActions.get(id);
+        if (!fn) return;
         const update = (patch: MenuItemPatch) => {
           appMenuTree = patchMenuTree(appMenuTree, id, patch);
           (getBridge() as any).post(JSON.stringify({ t: 4, m: "setMenu", a: { items: stripActions(appMenuTree) } }));
         };
-        let win: WindowHandle;
         try {
-          win = Window.current();
+          const win = Window.current();
+          // ctx.checked reflects the item's last-set checked state (read from the
+          // retained tree post-radio) — uniform with toolbar + tray ctx.
+          const checked = findMenuItem(appMenuTree, id)?.checked;
+          fn({ id, window: win, checked, update });
         } catch {
           // No WebView/window context (e.g. windowless menubar app) — fire the
           // action without ctx so the menu item still works; ctx.window/update
           // are unavailable here.
           fn();
-          return;
         }
-        // ctx.checked reflects the item's last-set checked state (read from the
-        // retained tree at dispatch time) — uniform with toolbar + tray ctx.
-        const checked = findMenuItem(appMenuTree, id)?.checked;
-        fn({ id, window: win, checked, update });
       });
     }
 

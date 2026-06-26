@@ -631,25 +631,27 @@ function wireToolbarMenuClicks(): void {
   toolbarMenuClickWired = true;
   getBridge().on("__menu:click", (payload: any) => {
     const id = typeof payload === "string" ? JSON.parse(payload).id : payload?.id;
-    const fn = toolbarMenuActions.get(id);
-    if (!fn) return; // not a toolbar pull-down item — app menu / tray handles it
-    const win = Window.current();
+    // Key off the owner map (covers radio-only pull-down items with NO action)
+    // rather than the action map — so radioGroup items still move their check.
     const ownerKey = toolbarMenuItemOwner.get(id); // "windowId:itemId"
-    let tree = ownerKey ? toolbarMenuTrees.get(ownerKey) : undefined;
+    if (!ownerKey) return; // not a toolbar pull-down item — app menu / tray handles it
+    const win = Window.current();
+    const itemId = ownerKey.slice(ownerKey.indexOf(":") + 1);
+    let tree = toolbarMenuTrees.get(ownerKey);
     const clicked = tree ? findMenuItem(tree, id) : undefined;
-    // Auto-radio: move the checkmark before firing the action.
-    if (tree && ownerKey && clicked?.radioGroup) {
+    // Auto-radio: move the checkmark regardless of whether an action exists.
+    if (tree && clicked?.radioGroup) {
       const patched = applyRadioSelection(tree, id, clicked.radioGroup);
       toolbarMenuTrees.set(ownerKey, patched);
       tree = patched;
-      const itemId = ownerKey.slice(ownerKey.indexOf(":") + 1);
       win.toolbar.updateItem(itemId, { menu: patched } as any);
     }
+    // Fire the action only if one is registered for this item.
+    const fn = toolbarMenuActions.get(id);
+    if (!fn) return;
     const update = (patch: MenuItemPatch) => {
-      if (!ownerKey) return;
       const currentTree = toolbarMenuTrees.get(ownerKey);
       if (!currentTree) return;
-      const itemId = ownerKey.slice(ownerKey.indexOf(":") + 1);
       const patched = patchMenuTree(currentTree, id, patch);
       toolbarMenuTrees.set(ownerKey, patched);
       win.toolbar.updateItem(itemId, { menu: patched } as any);

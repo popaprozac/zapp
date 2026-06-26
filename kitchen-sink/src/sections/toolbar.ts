@@ -1,4 +1,4 @@
-import { Window, WindowEvent } from "@zappdev/runtime";
+import { Events, Window, WindowEvent } from "@zappdev/runtime";
 import type { Section } from "./types";
 import { card, onAct, setResult } from "../shell/ui";
 import { shellToolbar, filterMenu, filterStatusText, getFilter, setFilter } from "../shell/toolbar-def";
@@ -38,6 +38,8 @@ export const toolbarSection: Section = {
       win.toolbar.updateItem("filter", { menu: filterMenu() });
       // Live-update the label item text.
       win.toolbar.updateItem("status", { text: filterStatusText() });
+      // Keep the inspector pane in sync (it lives in a separate webview).
+      Events.emit("ks:filter", { value: getFilter() });
       setResult(host, `filter → ${getFilter()} (menu rebuilt; label updated)`);
     });
     onAct(host, "remove", () => {
@@ -63,13 +65,17 @@ export const toolbarSection: Section = {
   },
   inspector(host) {
     const win = Window.current();
-    host.innerHTML = `<div class="kv"><b>Toolbar</b><div data-state class="muted">click a toolbar item…</div><div data-group class="muted">group: —</div></div>`;
+    host.innerHTML = `<div class="kv"><b>Toolbar</b><div data-state class="muted">click a toolbar item…</div><div data-group class="muted">group: —</div><div data-filter class="muted">Filter: ${getFilter()}</div></div>`;
     const state = host.querySelector<HTMLElement>("[data-state]")!;
     const group = host.querySelector<HTMLElement>("[data-group]")!;
+    const filterEl = host.querySelector<HTMLElement>("[data-filter]")!;
     const offClick = win.on(WindowEvent.TOOLBAR_CLICKED, (p: any) => { state.textContent = `clicked: ${p.id}`; });
     const offGroup = win.on(WindowEvent.TOOLBAR_GROUP_SELECTED, (p: any) => {
       group.textContent = `group: id=${p.id} index=${p.index} selected=${JSON.stringify(p.selected)}`;
     });
-    return () => { offClick(); offGroup(); };
+    // ks:filter is emitted from the Filter pull-down AND the cycle button — keep
+    // the inspector in sync from either path (this pane is a separate webview).
+    const offFilter = Events.on("ks:filter", ({ value }: any) => { filterEl.textContent = `Filter: ${value}`; });
+    return () => { offClick(); offGroup(); offFilter(); };
   },
 };
