@@ -14,6 +14,7 @@ import { screenSection } from "./screen";
 import { shortcutsSection } from "./shortcuts";
 import { dockSection } from "./dock";
 import { eventsSection } from "./events";
+import { windowLogSection } from "./window-log";
 import { filedropSection } from "./filedrop";
 import { traySection } from "./tray";
 
@@ -33,6 +34,7 @@ export const registry: Section[] = [
   shortcutsSection,
   dockSection,
   eventsSection,
+  windowLogSection,
   filedropSection,
   traySection,
 ];
