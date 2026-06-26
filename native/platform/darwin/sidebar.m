@@ -11,6 +11,10 @@
 
 extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
 extern void darwin_window_eval_js(int32_t window_id, const char* js);
+// window.m slot-lookup helpers: resolve a host window's sidebar/inspector
+// transport slots so pane events fan out to every pane (#627).
+extern int32_t zapp_sidebar_slot_lookup(int32_t host_slot);
+extern int32_t zapp_inspector_slot_lookup(int32_t host_slot);
 @class NSSplitViewController;
 extern NSSplitView* zapp_find_split_view(NSView* v);
 // toolbar.m: re-inject chrome-metric CSS vars (incl. safe-area) after sidebar
@@ -64,13 +68,17 @@ static int zapp_sidebar_current_width(ZappSidebarController* c) {
     return (int)lround(v.frame.size.width);
 }
 
-// Shared pane event-emit: dispatch a window event into the host pane and one
-// accessory pane (sidebar or inspector). eventName is the BARE suffix
-// ("sidebar-collapsed" / "inspector-resized" etc.); dispatchWindowEvent in
-// bootstrap/webview.ts prepends "window:". dataJson may be nil. Single-quoted
-// JSON literal, backslash + quote escaped. Exported — also used by inspector.m.
-void zapp_pane_emit(int32_t host_id, int32_t accessory_slot,
-                    const char* eventName, NSString* dataJson) {
+// Shared pane event-emit: dispatch a window event into ALL panes of the host
+// window — the host/content pane plus the sidebar and inspector panes (when
+// present). eventName is the BARE suffix ("sidebar-collapsed" /
+// "inspector-resized" etc.); dispatchWindowEvent in bootstrap/webview.ts
+// prepends "window:". dataJson may be nil. Single-quoted JSON literal,
+// backslash + quote escaped. Exported — also used by inspector.m.
+//
+// This deliberately bypasses the gJsListeners bitmask (these event ids aren't
+// in the Nim WindowEvent enum / eventNameToId) — see #627. Fan-out mirrors
+// zapp_dispatch_event_to_js in window.m.
+void zapp_pane_emit(int32_t host_id, const char* eventName, NSString* dataJson) {
     if (!eventName) return;
 
     NSString* dataArg = @"undefined";
@@ -81,9 +89,9 @@ void zapp_pane_emit(int32_t host_id, int32_t accessory_slot,
     }
     NSString* event = [NSString stringWithUTF8String:eventName];
 
-    // Build per-target because dispatchWindowEvent's first arg is the target
-    // window id ("win-<hostId>"). Both panes belong to the same logical
-    // window, so both receive the host's id.
+    // Build once: dispatchWindowEvent's first arg is the target window id
+    // ("win-<hostId>"). All panes belong to the same logical window, so all
+    // receive the host's id.
     NSString* js = [NSString stringWithFormat:
         @"(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
         @"if(b&&typeof b.dispatchWindowEvent==='function'){"
@@ -91,16 +99,24 @@ void zapp_pane_emit(int32_t host_id, int32_t accessory_slot,
         host_id, event, dataArg];
     const char* jsc = [js UTF8String];
 
+    // Host/content pane (always).
     darwin_window_eval_js(host_id, jsc);
-    if (accessory_slot >= 0 && accessory_slot != host_id) {
-        darwin_window_eval_js(accessory_slot, jsc);
+    // Sidebar pane (if this window has one).
+    int32_t sidebar_slot = zapp_sidebar_slot_lookup(host_id);
+    if (sidebar_slot >= 0 && sidebar_slot != host_id) {
+        darwin_window_eval_js(sidebar_slot, jsc);
+    }
+    // Inspector pane (if this window has one).
+    int32_t inspector_slot = zapp_inspector_slot_lookup(host_id);
+    if (inspector_slot >= 0 && inspector_slot != host_id) {
+        darwin_window_eval_js(inspector_slot, jsc);
     }
 }
 
-// Emit a window event into both sidebar panes (host + sidebar slot).
+// Emit a window event into all panes of the host window (#627 fan-out).
 static void zapp_sidebar_emit(ZappSidebarController* c, const char* eventName, NSString* dataJson) {
     if (!c) return;
-    zapp_pane_emit(c.hostWindowId, c.sidebarSlotId, eventName, dataJson);
+    zapp_pane_emit(c.hostWindowId, eventName, dataJson);
 }
 
 // Re-evaluate collapse state and emit a single-shot transition event.

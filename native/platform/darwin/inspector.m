@@ -8,8 +8,7 @@
 
 extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
 extern void darwin_window_eval_js(int32_t window_id, const char* js);
-extern void zapp_pane_emit(int32_t host_id, int32_t accessory_slot,
-                           const char* eventName, NSString* dataJson);
+extern void zapp_pane_emit(int32_t host_id, const char* eventName, NSString* dataJson);
 @class NSSplitViewController;
 extern NSSplitView* zapp_find_split_view(NSView* v);
 extern WKWebView* zapp_webview_for_slot(int32_t slot);
@@ -62,10 +61,10 @@ static int zapp_inspector_current_width(ZappInspectorController* c) {
     return (int)lround(v.frame.size.width);
 }
 
-// Emit a window event into both inspector panes (host + inspector slot).
+// Emit a window event into all panes of the host window (#627 fan-out).
 static void zapp_inspector_emit(ZappInspectorController* c, const char* eventName, NSString* dataJson) {
     if (!c) return;
-    zapp_pane_emit(c.hostWindowId, c.inspectorSlotId, eventName, dataJson);
+    zapp_pane_emit(c.hostWindowId, eventName, dataJson);
 }
 
 // Re-evaluate collapse state and emit a single-shot transition event.
