@@ -911,6 +911,11 @@ win.sidebar?.width              // reactive: tracks SIDEBAR_RESIZED; seeded by c
 (see [Sidebar on iOS](#sidebar-on-ios)). They are no-ops on macOS and
 iPad-regular, where both panes are always side-by-side.
 
+`setCollapsible(bool)` / `setResizable(bool)` are macOS-only. iOS sidebar
+collapse is size-class–driven by `UISplitViewController`; there is no
+divider-drag affordance to gate, so these calls are no-ops on iOS.
+`setWidth()` still works programmatically on iOS.
+
 **Identity rules.** Both panes see the same host window through
 `Window.current()` — code in the sidebar can call
 `Window.current().setTitle("…")`, `setSize`, etc. and it targets the host
@@ -1039,6 +1044,7 @@ Platform.isWindows   // boolean
 | Layout | `NSSplitViewController` side-by-side | `UISplitViewController` — side-by-side (iPad), master-detail (iPhone) |
 | `showContent()` / `showSidebar()` | no-op (always side-by-side) | navigate the iPhone master-detail stack (no-op on iPad) |
 | `material` / vibrancy | liquid glass / `NSVisualEffectMaterial` | deferred — flat background (future cycle) |
+| `setCollapsible(...)` | disallows/allows user collapse | no-op (collapse is size-class–driven) |
 | `setResizable(...)` | locks/unlocks the divider | no-op (no draggable divider) |
 | `setWidth(px)` | exact divider position | best-effort (system-managed column width) |
 | Native toolbar (`toggleSidebar`, back chevron) | full NSToolbar | none — app renders its own back control (future cycle) |
@@ -1102,6 +1108,11 @@ true for the common "hidden until summoned" inspector), `resizable`
 and `width` (tracked from `INSPECTOR_COLLAPSED` / `INSPECTOR_EXPANDED` /
 `INSPECTOR_RESIZED`). `Window.isInspector()` is true inside the inspector
 pane.
+
+`setCollapsible(bool)` / `setResizable(bool)` are macOS-only. iOS inspector
+collapse is size-class–driven; there is no divider-drag affordance to gate,
+so these calls are no-ops on iOS. `setWidth()` still works programmatically
+on iOS (applies to the iPad pane; ignored on the iPhone sheet).
 
 **Toolbar integration:** `{ type: "toggleInspector" }` adds a button (SF
 symbol `sidebar.right`) that toggles the inspector;
