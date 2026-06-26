@@ -22,6 +22,19 @@ import { clog, clogError } from "./log";
 import { renderNimCfg } from "./build-config";
 import { resolveNativeDir } from "./paths";
 
+/** Ensure the index.html viewport meta opts into the safe-area inset model on
+ *  iOS (env(safe-area-inset-*) is 0 without viewport-fit=cover). Idempotent;
+ *  no-op when there is no viewport meta. */
+export function ensureViewportFitCover(html: string): string {
+  return html.replace(
+    /(<meta\s+name=["']viewport["']\s+content=["'])([^"']*)(["'])/i,
+    (full, pre: string, content: string, post: string) =>
+      /viewport-fit\s*=\s*cover/i.test(content)
+        ? full
+        : `${pre}${content.replace(/\s*$/, "")}, viewport-fit=cover${post}`,
+  );
+}
+
 // Vite templates we surface as first-class. Each entry maps the display
 // name to the `create-vite` template flag. Restricted to the "main four"
 // (plus vanilla) so the prompt stays scannable — power users pass any
@@ -155,6 +168,18 @@ export async function runInit(opts: InitOptions) {
   if ((await viteProc.exited) !== 0) {
     clogError("vite scaffold failed");
     process.exit(1);
+  }
+
+  // 1b. Patch the scaffolded index.html to add viewport-fit=cover so that
+  //     env(safe-area-inset-*) resolves correctly on iOS (#577).
+  {
+    const idx = path.join(projectDir, "index.html");
+    const f = Bun.file(idx);
+    if (await f.exists()) {
+      const html = await f.text();
+      const next = ensureViewportFitCover(html);
+      if (next !== html) await Bun.write(idx, next);
+    }
   }
 
   // 2. Add zapp/ native code
