@@ -17,12 +17,12 @@ export function setFilter(f: string) {
 
 export function filterMenu(): MenuItemDef[] {
   return [
-    { id: "kf-all", label: "All", checked: filter === "all",
-      action: (ctx) => { setFilter("all"); ctx?.update({ checked: true }); } },
-    { id: "kf-unread", label: "Unread", checked: filter === "unread",
-      action: (ctx) => { setFilter("unread"); ctx?.update({ checked: true }); } },
-    { id: "kf-flagged", label: "Flagged", checked: filter === "flagged",
-      action: (ctx) => { setFilter("flagged"); ctx?.update({ checked: true }); } },
+    { id: "kf-all", label: "All", radioGroup: "filter", checked: filter === "all",
+      action: () => setFilter("all") },
+    { id: "kf-unread", label: "Unread", radioGroup: "filter", checked: filter === "unread",
+      action: () => setFilter("unread") },
+    { id: "kf-flagged", label: "Flagged", radioGroup: "filter", checked: filter === "flagged",
+      action: () => setFilter("flagged") },
   ];
 }
 

@@ -29,6 +29,35 @@ export interface ActionContext {
   selected?: boolean;
 }
 
+/** Find an item by id anywhere in a tree (incl. submenus). */
+export function findMenuItem(tree: MenuItemDef[], id: string): MenuItemDef | undefined {
+  for (const item of tree) {
+    if (item.id === id) return item;
+    if (item.submenu) {
+      const hit = findMenuItem(item.submenu, id);
+      if (hit) return hit;
+    }
+  }
+  return undefined;
+}
+
+/** Pure: return a new tree where every item with `radioGroup === group` gets
+ *  `checked = (item.id === selectedId)`. Recurses into submenu. Does not
+ *  mutate the original tree. */
+export function applyRadioSelection(
+  tree: MenuItemDef[],
+  selectedId: string,
+  group: string,
+): MenuItemDef[] {
+  return tree.map((item) => {
+    const next: MenuItemDef = item.submenu
+      ? { ...item, submenu: applyRadioSelection(item.submenu, selectedId, group) }
+      : { ...item };
+    if (next.radioGroup === group) next.checked = next.id === selectedId;
+    return next;
+  });
+}
+
 /** Pure: return a new tree (items deep-copied) with the item whose id matches
  *  shallow-merged with `patch`. Recurses into submenu. Actions are preserved by
  *  reference so re-stripping/re-registering keeps them live. */

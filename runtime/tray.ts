@@ -37,7 +37,7 @@ import type { MenuItemDef } from "./menu";
 import type { WindowHandle } from "./window";
 import { Window } from "./window";
 import type { ActionContext, MenuItemPatch } from "./action-context";
-import { patchMenuTree } from "./action-context";
+import { patchMenuTree, applyRadioSelection, findMenuItem } from "./action-context";
 
 export interface AttachWindowOptions {
   /**
@@ -173,10 +173,20 @@ function ensureEventsWired() {
     for (const [trayId, actions] of menuActionsByTray) {
       const handler = actions.get(itemId);
       if (!handler) continue;
+      // Auto-radio: move the checkmark before firing the action.
+      const tree = menuTreesByTray.get(trayId);
+      if (tree) {
+        const clickedItem = findMenuItem(tree, itemId);
+        if (clickedItem?.radioGroup) {
+          const patched = applyRadioSelection(tree, itemId, clickedItem.radioGroup);
+          menuTreesByTray.set(trayId, patched);
+          postAction("tray:setMenu", { id: trayId, items: stripActions(patched) });
+        }
+      }
       const update = (patch: MenuItemPatch) => {
-        const tree = menuTreesByTray.get(trayId);
-        if (!tree) return;
-        const patched = patchMenuTree(tree, itemId, patch);
+        const currentTree = menuTreesByTray.get(trayId);
+        if (!currentTree) return;
+        const patched = patchMenuTree(currentTree, itemId, patch);
         menuTreesByTray.set(trayId, patched);
         postAction("tray:setMenu", { id: trayId, items: stripActions(patched) });
       };

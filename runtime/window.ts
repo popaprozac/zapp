@@ -21,7 +21,7 @@ import { Platform } from "./platform";
 import { WindowEvent, eventName, type WindowSizePayload, type WindowPayload, type ModalDismissedPayload, type SidebarResizedPayload } from "./events";
 import type { Display } from "./screen";
 import type { MenuItemDef } from "./menu";
-import { patchMenuTree } from "./action-context";
+import { patchMenuTree, applyRadioSelection, findMenuItem } from "./action-context";
 import type { ActionContext, MenuItemPatch } from "./action-context";
 
 /**
@@ -581,19 +581,6 @@ function recordToolbarMenuTree(windowId: string, itemId: string, retained: MenuI
   walk(retained);
 }
 
-/** Local recursive lookup of a menu item by id (recursing submenus). A tiny
- *  inline finder — the shared findMenuItem helper lands in Task 3. */
-function findToolbarMenuItem(items: MenuItemDef[], id: string): MenuItemDef | undefined {
-  for (const m of items) {
-    if (m.id === id) return m;
-    if (m.submenu) {
-      const hit = findToolbarMenuItem(m.submenu, id);
-      if (hit) return hit;
-    }
-  }
-  return undefined;
-}
-
 function wireToolbarMenuClicks(): void {
   if (toolbarMenuClickWired) return;
   toolbarMenuClickWired = true;
@@ -603,14 +590,22 @@ function wireToolbarMenuClicks(): void {
     if (!fn) return; // not a toolbar pull-down item — app menu / tray handles it
     const win = Window.current();
     const ownerKey = toolbarMenuItemOwner.get(id); // "windowId:itemId"
-    const tree = ownerKey ? toolbarMenuTrees.get(ownerKey) : undefined;
-    const clicked = tree ? findToolbarMenuItem(tree, id) : undefined;
+    let tree = ownerKey ? toolbarMenuTrees.get(ownerKey) : undefined;
+    const clicked = tree ? findMenuItem(tree, id) : undefined;
+    // Auto-radio: move the checkmark before firing the action.
+    if (tree && ownerKey && clicked?.radioGroup) {
+      const patched = applyRadioSelection(tree, id, clicked.radioGroup);
+      toolbarMenuTrees.set(ownerKey, patched);
+      tree = patched;
+      const itemId = ownerKey.slice(ownerKey.indexOf(":") + 1);
+      win.toolbar.updateItem(itemId, { menu: patched } as any);
+    }
     const update = (patch: MenuItemPatch) => {
       if (!ownerKey) return;
-      const tree = toolbarMenuTrees.get(ownerKey);
-      if (!tree) return;
+      const currentTree = toolbarMenuTrees.get(ownerKey);
+      if (!currentTree) return;
       const itemId = ownerKey.slice(ownerKey.indexOf(":") + 1);
-      const patched = patchMenuTree(tree, id, patch);
+      const patched = patchMenuTree(currentTree, id, patch);
       toolbarMenuTrees.set(ownerKey, patched);
       win.toolbar.updateItem(itemId, { menu: patched } as any);
     };

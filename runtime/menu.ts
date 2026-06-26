@@ -22,7 +22,7 @@ import { getBridge } from "./bridge";
 import { Events } from "./events";
 import { ensurePermission } from "./permissions";
 import type { ActionContext, MenuItemPatch } from "./action-context";
-import { patchMenuTree } from "./action-context";
+import { patchMenuTree, applyRadioSelection, findMenuItem } from "./action-context";
 import { Window } from "./window";
 import type { WindowHandle } from "./window";
 
@@ -42,6 +42,10 @@ export interface MenuItemDef {
   /** Force template rendering (monochrome, auto-tinted to menu text/dark mode)
    *  on/off. Default: "sf:" icons → true, file/data icons → false. */
   iconTemplate?: boolean;
+  /** Single-select group key. Same-group items are radio-exclusive: selecting
+   *  one auto-moves the checkmark (the runtime checks it + unchecks siblings).
+   *  Set initial `checked: true` on the starting selection. */
+  radioGroup?: string;
 }
 
 export interface MenuHandle {
@@ -103,6 +107,12 @@ export const Menu = {
         const id = typeof payload === "string" ? JSON.parse(payload).id : payload?.id;
         const fn = appMenuActions.get(id);
         if (!fn) return;
+        // Auto-radio: move the checkmark before firing the action.
+        const clickedItem = findMenuItem(appMenuTree, id);
+        if (clickedItem?.radioGroup) {
+          appMenuTree = applyRadioSelection(appMenuTree, id, clickedItem.radioGroup);
+          (getBridge() as any).post(JSON.stringify({ t: 4, m: "setMenu", a: { items: stripActions(appMenuTree) } }));
+        }
         const update = (patch: MenuItemPatch) => {
           appMenuTree = patchMenuTree(appMenuTree, id, patch);
           (getBridge() as any).post(JSON.stringify({ t: 4, m: "setMenu", a: { items: stripActions(appMenuTree) } }));

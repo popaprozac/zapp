@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { patchMenuTree } from "./action-context";
+import { patchMenuTree, applyRadioSelection } from "./action-context";
 import type { MenuItemDef } from "./menu";
 
 test("patchMenuTree merges patch into the matching item, leaves others, deep-copies", () => {
@@ -25,6 +25,19 @@ test("patchMenuTree recurses into submenu", () => {
 });
 
 import type { ActionContext } from "./action-context";
+
+test("applyRadioSelection checks the selected item, unchecks same-group siblings", () => {
+  const tree: MenuItemDef[] = [
+    { id: "all", label: "All", radioGroup: "filter", checked: true },
+    { id: "unread", label: "Unread", radioGroup: "filter", checked: false },
+    { id: "other", label: "Other", checked: true }, // no group — untouched
+  ];
+  const next = applyRadioSelection(tree, "unread", "filter");
+  expect(next[0].checked).toBe(false);
+  expect(next[1].checked).toBe(true);
+  expect(next[2].checked).toBe(true); // not in group
+  expect(tree[1].checked).toBe(false); // original not mutated
+});
 
 // Type-level: a zero-arg closure must satisfy (ctx?) => void (non-breaking).
 test("ActionContext callback accepts zero-arg closures", () => {
