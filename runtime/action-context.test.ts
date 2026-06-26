@@ -35,3 +35,12 @@ test("ActionContext callback accepts zero-arg closures", () => {
   expect(typeof widened).toBe("function");
   expect(typeof ctxAware).toBe("function");
 });
+
+test("patchMenuTree round-trips a checkbox toggle for app/tray re-setMenu", () => {
+  const held: MenuItemDef[] = [
+    { id: "wrap", label: "Word Wrap", type: "checkbox", checked: false, action: () => {} },
+  ];
+  const next = patchMenuTree(held, "wrap", { checked: true });
+  expect(next[0].checked).toBe(true);
+  expect(next[0].action).toBe(held[0].action); // action survives → re-strip re-registers it
+});

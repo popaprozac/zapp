@@ -35,6 +35,9 @@ import { Events } from "./events";
 import { ensurePermission } from "./permissions";
 import type { MenuItemDef } from "./menu";
 import type { WindowHandle } from "./window";
+import { Window } from "./window";
+import type { ActionContext, MenuItemPatch } from "./action-context";
+import { patchMenuTree } from "./action-context";
 
 export interface AttachWindowOptions {
   /**
@@ -142,7 +145,8 @@ export interface TrayHandle {
 let trayCounter = 0;
 const clickHandlers = new Map<number, Set<() => void>>();
 const rightClickHandlers = new Map<number, Set<() => void>>();
-const menuActionsByTray = new Map<number, Map<string, () => void>>();
+const menuActionsByTray = new Map<number, Map<string, (ctx?: ActionContext) => void>>();
+const menuTreesByTray = new Map<number, MenuItemDef[]>();
 
 let eventsWired = false;
 
@@ -166,17 +170,33 @@ function ensureEventsWired() {
     // Menu items are global (action ids unique app-wide via menu.ts's
     // counter), but tray menus register their actions under the tray's
     // own map. Look across all trays — first match wins.
-    for (const actions of menuActionsByTray.values()) {
+    for (const [trayId, actions] of menuActionsByTray) {
       const handler = actions.get(itemId);
-      if (handler) { handler(); return; }
+      if (!handler) continue;
+      let win: WindowHandle;
+      try {
+        win = Window.current();
+      } catch {
+        // Outside WebView context — should not normally happen for tray menu clicks.
+        return;
+      }
+      const update = (patch: MenuItemPatch) => {
+        const tree = menuTreesByTray.get(trayId);
+        if (!tree) return;
+        const patched = patchMenuTree(tree, itemId, patch);
+        menuTreesByTray.set(trayId, patched);
+        postAction("tray:setMenu", { id: trayId, items: stripActions(patched) });
+      };
+      handler({ id: itemId, window: win, update });
+      return;
     }
   });
 }
 
 let menuActionCounter = 0;
 
-function collectActions(items: MenuItemDef[]): Map<string, () => void> {
-  const actions = new Map<string, () => void>();
+function collectActions(items: MenuItemDef[]): Map<string, (ctx?: ActionContext) => void> {
+  const actions = new Map<string, (ctx?: ActionContext) => void>();
   function walk(items: MenuItemDef[]) {
     for (const item of items) {
       if (item.action) {
@@ -212,6 +232,7 @@ export const Tray = {
     let cleanMenu: any[] = [];
     if (opts.menu) {
       menuActionsByTray.set(id, collectActions(opts.menu));
+      menuTreesByTray.set(id, opts.menu);
       cleanMenu = stripActions(opts.menu);
     }
 
@@ -243,8 +264,8 @@ export const Tray = {
       },
 
       setMenu(items: MenuItemDef[]) {
-        const actions = collectActions(items);
-        menuActionsByTray.set(id, actions);
+        menuActionsByTray.set(id, collectActions(items));
+        menuTreesByTray.set(id, items);
         postAction("tray:setMenu", { id, items: stripActions(items) });
       },
 
@@ -284,6 +305,7 @@ export const Tray = {
         clickHandlers.delete(id);
         rightClickHandlers.delete(id);
         menuActionsByTray.delete(id);
+        menuTreesByTray.delete(id);
       },
     };
   },

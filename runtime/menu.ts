@@ -21,6 +21,9 @@
 import { getBridge } from "./bridge";
 import { Events } from "./events";
 import { ensurePermission } from "./permissions";
+import type { ActionContext, MenuItemPatch } from "./action-context";
+import { patchMenuTree } from "./action-context";
+import { Window } from "./window";
 
 export interface MenuItemDef {
   id?: string;
@@ -30,7 +33,7 @@ export interface MenuItemDef {
   checked?: boolean;
   accelerator?: string;
   role?: "editMenu" | "windowMenu" | "appMenu" | "copy" | "cut" | "paste" | "selectAll" | "undo" | "redo" | "quit";
-  action?: (ctx?: import("./action-context").ActionContext) => void;
+  action?: (ctx?: ActionContext) => void;
   submenu?: MenuItemDef[];
   /** Icon for this item (macOS). "sf:gear" (SF Symbol) | "build/logo.png"
    *  (file path, relative-resolved) | "data:image/png;base64,…" (dynamic). */
@@ -46,8 +49,14 @@ export interface MenuHandle {
 
 let menuActionCounter = 0;
 
-function collectActions(items: MenuItemDef[]): Map<string, (ctx?: import("./action-context").ActionContext) => void> {
-  const actions = new Map<string, (ctx?: import("./action-context").ActionContext) => void>();
+// Module-level app-menu state — avoids listener-accumulation and retains the
+// tree so ctx.update can patch + re-send without a full rebuild from the caller.
+let appMenuTree: MenuItemDef[] = [];
+let appMenuActions = new Map<string, (ctx?: ActionContext) => void>();
+let appMenuWired = false;
+
+function collectActions(items: MenuItemDef[]): Map<string, (ctx?: ActionContext) => void> {
+  const actions = new Map<string, (ctx?: ActionContext) => void>();
 
   function walk(items: MenuItemDef[]) {
     for (const item of items) {
@@ -77,20 +86,36 @@ function stripActions(items: MenuItemDef[]): any[] {
 export const Menu = {
   build(items: MenuItemDef[]): MenuHandle {
     ensurePermission("menu");
-    const actions = collectActions(items);
-    const clean = stripActions(items);
 
-    // Wire up action event listeners
-    if (actions.size > 0) {
+    // Retain the original tree (with actions) + collect action map.
+    appMenuTree = items;
+    appMenuActions = collectActions(items);
+
+    // Send stripped tree to native.
+    (getBridge() as any).post(JSON.stringify({ t: 4, m: "setMenu", a: { items: stripActions(appMenuTree) } }));
+
+    // Wire the listener exactly once — reads from module-level state so it
+    // always sees the most recently retained tree and actions.
+    if (!appMenuWired) {
+      appMenuWired = true;
       Events.on("__menu:click", (payload: any) => {
         const id = typeof payload === "string" ? JSON.parse(payload).id : payload?.id;
-        const handler = actions.get(id);
-        if (handler) handler();
+        const fn = appMenuActions.get(id);
+        if (!fn) return;
+        let win: import("./window").WindowHandle;
+        try {
+          win = Window.current();
+        } catch {
+          // Outside WebView context — should not normally happen for menu clicks.
+          return;
+        }
+        const update = (patch: MenuItemPatch) => {
+          appMenuTree = patchMenuTree(appMenuTree, id, patch);
+          (getBridge() as any).post(JSON.stringify({ t: 4, m: "setMenu", a: { items: stripActions(appMenuTree) } }));
+        };
+        fn({ id, window: win, update });
       });
     }
-
-    // Send to native
-    (getBridge() as any).post(JSON.stringify({ t: 4, m: "setMenu", a: { items: clean } }));
 
     return { items };
   },
