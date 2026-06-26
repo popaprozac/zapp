@@ -656,7 +656,9 @@ function wireToolbarMenuClicks(): void {
       toolbarMenuTrees.set(ownerKey, patched);
       win.toolbar.updateItem(itemId, { menu: patched } as any);
     };
-    fn({ id, window: win, checked: clicked?.checked, update });
+    // Read checked from the (post-radio) patched tree so ctx.checked is
+    // current — uniform with the app-menu + tray dispatch handlers.
+    fn({ id, window: win, checked: findMenuItem(tree ?? [], id)?.checked, update });
   });
 }
 
