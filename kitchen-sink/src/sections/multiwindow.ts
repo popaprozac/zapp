@@ -79,7 +79,7 @@ export const multiwindowSection: Section = {
         url: "#bg-demo=mirror",
         width: 900, height: 600,
         backgroundExtension: "mirror",
-        sidebar: { url: "#sidebar-pane", width: 240 },
+        sidebar: { url: "#bg-sidebar", width: 200 },
         titleBarStyle: "hiddenInset",
       })));
     onAct(host, "bg-extend", () => open(host, "bg-extend window", () =>
@@ -88,7 +88,7 @@ export const multiwindowSection: Section = {
         url: "#bg-demo=extend",
         width: 900, height: 600,
         backgroundExtension: "extend",
-        sidebar: { url: "#sidebar-pane", width: 240 },
+        sidebar: { url: "#bg-sidebar", width: 200 },
         titleBarStyle: "hiddenInset",
       })));
 
