@@ -15,7 +15,8 @@
  */
 
 export { App, type PowerState } from "./app";
-export { Window, Material, type WindowHandle, type WindowOptions, type SidebarOptions, type SidebarHandle, type InspectorOptions, type InspectorHandle, type ToolbarHandle, type ToolbarItemPatch, type ToolbarOptions, type ToolbarItemDef, type ToolbarButtonDef, type ToolbarSegmentedDef, type ToolbarGroupDef, type ToolbarTrackingSepDef, type ToolbarSystemDef } from "./window";
+export { Window, Material, type WindowHandle, type WindowOptions, type SidebarOptions, type SidebarHandle, type InspectorOptions, type InspectorHandle, type ToolbarHandle, type ToolbarItemPatch, type ToolbarOptions, type ToolbarItemDef, type ToolbarButtonDef, type ToolbarSegmentedDef, type ToolbarGroupDef, type ToolbarTrackingSepDef, type ToolbarSystemDef, type ToolbarLabelDef } from "./window";
+export type { ActionContext, MenuItemPatch } from "./action-context";
 export { Screen, type Display, type DisplayRect, type CursorPoint } from "./screen";
 export { Webview, ZappWebviewElement, type PanelEvent, type WebviewCreateOptions } from "./webview";
 export { Events, WindowEvent, AppEvent, eventName, type WindowPayload, type WindowSizePayload, type EventName, type ModalDismissedPayload, type SidebarResizedPayload, type InspectorResizedPayload } from "./events";

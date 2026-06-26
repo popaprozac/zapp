@@ -599,6 +599,14 @@ const toolbarMenuItemOwner = new Map<string, string>();
  *  `stripped` is the output of stripMenuActions (ids set, actions removed);
  *  `originals` is the source tree (actions present, ids may be missing). */
 function mergeMenuIds(stripped: any[], originals: MenuItemDef[]): MenuItemDef[] {
+  // stripMenuActions maps 1:1 over the same tree, so lengths always match.
+  // Guard defensively: a mismatch would silently misalign the positional zip
+  // (wrong ids onto items) — surface it instead.
+  if (stripped.length !== originals.length) {
+    console.warn(
+      `[zapp] mergeMenuIds: length mismatch (${stripped.length} stripped vs ${originals.length} originals) — menu-item id alignment may be off`,
+    );
+  }
   return originals.map((orig, i) => {
     const s = stripped[i];
     const merged: MenuItemDef = { ...orig };
@@ -629,6 +637,10 @@ function recordToolbarMenuTree(windowId: string, itemId: string, retained: MenuI
 function wireToolbarMenuClicks(): void {
   if (toolbarMenuClickWired) return;
   toolbarMenuClickWired = true;
+  // Uses getBridge().on (not Events.on) to match the sibling toolbar handlers
+  // above (TOOLBAR_CLICKED / TOOLBAR_GROUP_SELECTED). menu.ts/tray.ts/context-menu.ts
+  // listen for this same "__menu:click" via Events.on — both target the one bridge
+  // bus, so all four handlers receive every click and self-filter by surface.
   getBridge().on("__menu:click", (payload: any) => {
     const id = typeof payload === "string" ? JSON.parse(payload).id : payload?.id;
     // Key off the owner map (covers radio-only pull-down items with NO action)

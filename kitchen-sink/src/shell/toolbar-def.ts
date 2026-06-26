@@ -1,5 +1,6 @@
 import {
   Events,
+  type ActionContext,
   type MenuItemDef,
   type ToolbarItemDef,
 } from "@zappdev/runtime";
@@ -24,7 +25,7 @@ const filterLabels: Record<string, string> = {
 /** Apply a filter from a Filter pull-down item: set state, live-update the
  *  toolbar status label, and broadcast ks:filter so the Toolbar section's
  *  inspector pane (a separate webview) stays in sync. */
-function applyFilter(value: string, ctx?: { window: { toolbar: { updateItem(id: string, patch: { text: string }): void } } }) {
+function applyFilter(value: string, ctx?: ActionContext) {
   setFilter(value);
   ctx?.window.toolbar.updateItem("status", { text: filterLabels[value] ?? "All items" });
   Events.emit("ks:filter", { value });
