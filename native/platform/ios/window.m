@@ -277,6 +277,9 @@ void zapp_ios_materialize_pending_windows(void) {
                 split.preferredDisplayMode = UISplitViewControllerDisplayModeSecondaryOnly;
             } else if (sp && strcmp(sp, "tile") == 0) {
                 split.preferredSplitBehavior = UISplitViewControllerSplitBehaviorTile;
+                // displayMode was set above to OneBesideSecondary or SecondaryOnly
+                // based on sidebarCollapsed; for tile we always want side-by-side.
+                split.preferredDisplayMode = UISplitViewControllerDisplayModeOneBesideSecondary;
             } else {
                 split.preferredSplitBehavior = UISplitViewControllerSplitBehaviorAutomatic;
             }

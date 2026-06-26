@@ -440,16 +440,25 @@ void darwin_sidebar_set_resizable(int32_t window_id, bool resizable) {
 }
 
 // Runtime sidebar presentation switch (A2). mode: "automatic" | "tile" | "overlay".
+// "tile" requires BOTH preferredSplitBehavior=Tile AND preferredDisplayMode=
+// OneBesideSecondary; splitBehavior alone leaves the split in a secondary-only/
+// summon state and never produces side-by-side layout.
 void darwin_sidebar_set_presentation(int32_t window_id, const char* mode) {
     zapp_ios_sidebar_on_main(^{
         ZappIOSSidebarController* c = zapp_ios_sidebar_for_slot(window_id);
         if (!c || !c.splitVC || !mode) return;
         if (strcmp(mode, "overlay") == 0) {
+            // overlay already works (dims + tap-to-dismiss); leave displayMode alone.
             c.splitVC.preferredSplitBehavior = UISplitViewControllerSplitBehaviorOverlay;
         } else if (strcmp(mode, "tile") == 0) {
+            // Both must be set together: behavior drives the collapse affordance;
+            // displayMode drives the actual side-by-side layout.
             c.splitVC.preferredSplitBehavior = UISplitViewControllerSplitBehaviorTile;
+            c.splitVC.preferredDisplayMode = UISplitViewControllerDisplayModeOneBesideSecondary;
         } else {
+            // automatic: let UIKit adapt by trait / size class.
             c.splitVC.preferredSplitBehavior = UISplitViewControllerSplitBehaviorAutomatic;
+            c.splitVC.preferredDisplayMode = UISplitViewControllerDisplayModeAutomatic;
         }
         [c.splitVC.view setNeedsLayout];
         [c.splitVC.view layoutIfNeeded];
