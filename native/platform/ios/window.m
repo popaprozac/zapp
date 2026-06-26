@@ -124,10 +124,30 @@ static void zapp_ios_set_sidebar_slot(int32_t host_slot, int32_t sidebar_slot) {
     }
 }
 
-static int32_t zapp_ios_sidebar_slot_for(int32_t host_slot) {
+int32_t zapp_ios_sidebar_slot_for(int32_t host_slot) {
     if (!zapp_ios_sidebar_slot_of_init) return -1;
     if (host_slot < 0 || host_slot >= ZAPP_MAX_WINDOW_CALLBACKS) return -1;
     return zapp_ios_sidebar_slot_of[host_slot];
+}
+
+// Host slot -> inspector slot (mirror of zapp_ios_sidebar_slot_of). -1 = none.
+static int32_t zapp_ios_inspector_slot_of[ZAPP_MAX_WINDOW_CALLBACKS];
+static bool zapp_ios_inspector_slot_of_init = false;
+
+void zapp_ios_set_inspector_slot(int32_t host_slot, int32_t inspector_slot) {
+    if (!zapp_ios_inspector_slot_of_init) {
+        for (int i = 0; i < ZAPP_MAX_WINDOW_CALLBACKS; i++) zapp_ios_inspector_slot_of[i] = -1;
+        zapp_ios_inspector_slot_of_init = true;
+    }
+    if (host_slot >= 0 && host_slot < ZAPP_MAX_WINDOW_CALLBACKS) {
+        zapp_ios_inspector_slot_of[host_slot] = inspector_slot;
+    }
+}
+
+int32_t zapp_ios_inspector_slot_for(int32_t host_slot) {
+    if (!zapp_ios_inspector_slot_of_init) return -1;
+    if (host_slot < 0 || host_slot >= ZAPP_MAX_WINDOW_CALLBACKS) return -1;
+    return zapp_ios_inspector_slot_of[host_slot];
 }
 
 // Register a webview directly into a specific transport slot + window-id
@@ -456,6 +476,8 @@ void zapp_ios_materialize_pending_windows(void) {
                                         (__bridge void*)contentWebviewForInspector,
                                         d->numeric_id, d->inspectorNumericId,
                                         d->inspectorWidth, d->inspectorCollapsed);
+            // Record host→inspector for pane-event fan-out (#713).
+            zapp_ios_set_inspector_slot(d->numeric_id, d->inspectorNumericId);
         }
 
         // Replay queued setters.
@@ -641,10 +663,15 @@ void zapp_dispatch_event_to_js(int32_t window_id, int32_t event_id, int32_t w, i
     WKWebView* sidebarWebview = (sidebar_slot >= 0 && sidebar_slot != window_id &&
                                  sidebar_slot < ZAPP_MAX_WINDOW_CALLBACKS)
         ? zapp_ios_webviews[sidebar_slot] : nil;
+    int32_t inspector_slot = zapp_ios_inspector_slot_for(window_id);
+    WKWebView* inspectorWebview = (inspector_slot >= 0 && inspector_slot != window_id &&
+                                   inspector_slot < ZAPP_MAX_WINDOW_CALLBACKS)
+        ? zapp_ios_webviews[inspector_slot] : nil;
 
     void (^run)(void) = ^{
         [webview evaluateJavaScript:js completionHandler:nil];
         if (sidebarWebview) [sidebarWebview evaluateJavaScript:js completionHandler:nil];
+        if (inspectorWebview) [inspectorWebview evaluateJavaScript:js completionHandler:nil];
     };
     if ([NSThread isMainThread]) run();
     else dispatch_async(dispatch_get_main_queue(), run);

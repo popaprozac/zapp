@@ -23,6 +23,7 @@
 
 extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
 extern void darwin_window_eval_js(int32_t window_id, const char* js);
+extern int32_t zapp_ios_sidebar_slot_for(int32_t host_slot);
 
 // --- Per-window registry --------------------------------------------------
 //
@@ -110,6 +111,10 @@ static void zapp_ios_inspector_emit_data(ZappIOSInspectorController* c,
     darwin_window_eval_js(c.hostWindowId, js);
     if (c.inspectorSlotId >= 0 && c.inspectorSlotId != c.hostWindowId) {
         darwin_window_eval_js(c.inspectorSlotId, js);
+    }
+    int32_t sidebarSlot = zapp_ios_sidebar_slot_for(c.hostWindowId);
+    if (sidebarSlot >= 0 && sidebarSlot != c.hostWindowId && sidebarSlot != c.inspectorSlotId) {
+        darwin_window_eval_js(sidebarSlot, js);
     }
 }
 
