@@ -58,11 +58,11 @@ export const multiwindowSection: Section = {
         inspector: { url: "#inspector-pane", width: 300, collapsed: true },
       })));
     onAct(host, "sheet-page", () => open(host, "page sheet", () =>
-      Window.create({ title: "Settings", width: 480, height: 600, asSheetOf: win, presentation: "page", grabber: true })));
+      Window.create({ title: "Settings", url: "#sheet=settings", width: 480, height: 600, asSheetOf: win, presentation: "page", grabber: true })));
     onAct(host, "sheet-form", () => open(host, "form sheet", () =>
-      Window.create({ title: "Quick Add", width: 400, height: 300, asSheetOf: win, presentation: "form", grabber: true })));
+      Window.create({ title: "Quick Add", url: "#sheet=quickadd", width: 400, height: 300, asSheetOf: win, presentation: "form", grabber: true })));
     onAct(host, "sheet-bottom", () => open(host, "bottom sheet", () =>
-      Window.create({ title: "Drawer", asSheetOf: win, presentation: "bottomSheet", detents: ["medium", "large"], grabber: true })));
+      Window.create({ title: "Drawer", url: "#sheet=drawer", asSheetOf: win, presentation: "bottomSheet", detents: ["medium", "large"], grabber: true })));
 
     // ── Background extension showcase ────────────────────────────────────────
     host.appendChild(card({
