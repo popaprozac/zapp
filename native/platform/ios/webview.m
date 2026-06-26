@@ -679,38 +679,10 @@ static void zapp_ios_open_external(NSURL* url) {
     [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:nil];
 }
 
-// --- Safe-area injection (macOS parity) ---
-//
-// Reads the webview's safeAreaInsets and evals the same
-// --zapp-safe-area-{top,right,bottom,left} setProperty JS as macOS
-// (darwin/toolbar.m lines ~870-880). Idempotent; safe to call
-// repeatedly (after load + on safe-area changes). Non-static so
-// window.m's ZappIOSWindowVC.viewSafeAreaInsetsDidChange can call it.
-void zapp_ios_inject_safe_area(WKWebView* wv) {
-    if (!wv) return;
-    UIEdgeInsets sa = wv.safeAreaInsets;
-    char js[320];
-    snprintf(js, sizeof(js),
-        "(function(){var r=document.documentElement.style;"
-        "r.setProperty('--zapp-safe-area-top','%.0fpx');"
-        "r.setProperty('--zapp-safe-area-right','%.0fpx');"
-        "r.setProperty('--zapp-safe-area-bottom','%.0fpx');"
-        "r.setProperty('--zapp-safe-area-left','%.0fpx');})();",
-        sa.top, sa.right, sa.bottom, sa.left);
-    [wv evaluateJavaScript:[NSString stringWithUTF8String:js] completionHandler:nil];
-}
-
 @interface ZappIOSNavDelegate : NSObject <WKNavigationDelegate, WKUIDelegate>
 @end
 
 @implementation ZappIOSNavDelegate
-
-// Inject --zapp-safe-area-* once the page has committed and the webview's
-// safeAreaInsets are meaningful (mirrors macOS's toolbar KVO path).
-- (void)webView:(WKWebView*)webView didFinishNavigation:(WKNavigation*)navigation {
-    (void)navigation;
-    zapp_ios_inject_safe_area(webView);
-}
 
 - (void)webView:(WKWebView*)webView decidePolicyForNavigationAction:(WKNavigationAction*)action
     decisionHandler:(void (^)(WKNavigationActionPolicy))handler {

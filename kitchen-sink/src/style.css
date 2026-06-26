@@ -54,8 +54,8 @@ h2 { font-size: 16px; color: var(--text-h); margin: 0 0 8px; font-weight: 600; }
    The inner row holds the hamburger + title at the normal 44px bar height, below
    the status bar. REQUIRES viewport-fit=cover in index.html, else
    env(safe-area-inset-top) is 0 on iOS and the bar can't reach the status bar.
-   --zapp-safe-area-top is injected by the native layer on iOS (macOS parity);
-   env(safe-area-inset-top) is the fallback for web/pre-injection. */
+   --zapp-safe-area-* is injected by the native layer on macOS; on iOS
+   env(safe-area-inset-*) is the authoritative source (native injection deferred to A2). */
 .ks-ios-topbar {
   position: fixed; top: 0; left: 0; right: 0; z-index: 50;
   /* Extend the bar's box up under the status bar (notch / Dynamic Island). */

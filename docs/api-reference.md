@@ -837,11 +837,13 @@ const win = await Window.create({
 
 **Injected CSS variables**
 
-Zapp injects the following CSS custom properties into the **content webview**
-(not the sidebar pane). They are re-injected after sidebar collapse/resize and
-once after the window is shown:
+On **macOS**, Zapp injects the following CSS custom properties into the **content
+webview** (not the sidebar pane). They are re-injected after sidebar
+collapse/resize and once after the window is shown. On **iOS**, these variables
+are not injected — use `env(safe-area-inset-*)` directly, or the cross-platform
+fallback idiom shown below (native injection on iOS is planned for A2):
 
-| Variable | Source | Notes |
+| Variable | macOS source | Notes |
 |---|---|---|
 | `--zapp-safe-area-top` | `WKWebView.safeAreaInsets.top` | Titlebar/toolbar height |
 | `--zapp-safe-area-left` | `WKWebView.safeAreaInsets.left` | Sidebar overlap in `"extend"` mode; 0 otherwise |
@@ -849,16 +851,16 @@ once after the window is shown:
 | `--zapp-safe-area-bottom` | `WKWebView.safeAreaInsets.bottom` | System bottom inset |
 | `--zapp-corner-inset` | Approximate value | Inset for the rounder macOS 26 window corners, so content near the corners is not clipped |
 
-Use these to pad foreground content while letting your background flow
-edge-to-edge:
+Use the cross-platform idiom to pad foreground content on both macOS and iOS
+while letting your background flow edge-to-edge:
 
 ```css
 .content-root {
-  /* Foreground elements clear the sidebar glass and window corners */
-  padding-top:    var(--zapp-safe-area-top);
-  padding-left:   var(--zapp-safe-area-left);
-  padding-right:  var(--zapp-safe-area-right);
-  padding-bottom: var(--zapp-safe-area-bottom);
+  /* macOS: vars injected by Zapp. iOS: falls through to env() — both resolve correctly. */
+  padding-top:    var(--zapp-safe-area-top,    env(safe-area-inset-top,    0px));
+  padding-left:   var(--zapp-safe-area-left,   env(safe-area-inset-left,   0px));
+  padding-right:  var(--zapp-safe-area-right,  env(safe-area-inset-right,  0px));
+  padding-bottom: var(--zapp-safe-area-bottom, env(safe-area-inset-bottom, 0px));
 }
 
 .hero-background {
