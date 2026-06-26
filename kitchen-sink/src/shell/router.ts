@@ -5,6 +5,7 @@ import { renderPopoverPane } from "./popover-pane";
 import { renderTitlebarShowcasePane } from "./titlebar-showcase-pane";
 import { renderBgDemoPane, renderBgSidebarPane } from "./bg-demo-pane";
 import { renderSheetPane } from "./sheet-pane";
+import { renderColorSidebarPane, renderColorContentPane } from "./color-panes";
 
 export function routeShell(app: HTMLElement) {
   const hash = location.hash;
@@ -14,6 +15,8 @@ export function routeShell(app: HTMLElement) {
   switch (hash) {
     case "#sidebar-pane":   renderSidebarPane(app); break;
     case "#bg-sidebar":     renderBgSidebarPane(app); break;
+    case "#color-sidebar":  renderColorSidebarPane(app); break;
+    case "#color-content":  renderColorContentPane(app); break;
     case "#inspector-pane": renderInspectorPane(app); break;
     case "#popover-pane":   renderPopoverPane(app); break;
     default:                void renderMainPane(app); break;
