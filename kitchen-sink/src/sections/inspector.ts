@@ -38,7 +38,7 @@ export const inspectorSection: Section = {
   },
   inspector(host) {
     const win = Window.current();
-    host.innerHTML = `<div class="kv"><b>Inspector</b><div data-state class="muted">observing…</div></div>`;
+    host.innerHTML = `<div class="kv"><b>Inspector</b><div data-state class="muted">Live — collapse, expand, or drag the inspector to see state.</div></div>`;
     const state = host.querySelector<HTMLElement>("[data-state]")!;
     const off = [
       win.on(WindowEvent.INSPECTOR_COLLAPSED, () => { state.textContent = "collapsed"; }),

@@ -1,4 +1,4 @@
-import { Events, Platform } from "@zappdev/runtime";
+import { Events, Platform, Window } from "@zappdev/runtime";
 import { registry } from "../sections/registry";
 import { findSection } from "../sections/types";
 
@@ -33,6 +33,6 @@ export function renderInspectorPane(app: HTMLElement) {
     }
   };
 
-  Events.on("ks:nav", ({ id }: any) => show(id));
+  Events.on("ks:nav", ({ id, windowId }: any) => { if (windowId === Window.current().id) show(id); });
   if (registry[0]) show(registry[0].id);   // self-init
 }

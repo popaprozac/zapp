@@ -16,7 +16,7 @@ export const popoverSection: Section = {
   render(host) {
     host.appendChild(card({
       title: "Popover (web content in NSPopover)",
-      intro: "Created lazily, reused after — the counter inside survives hide/show. Anchor to a button or to the Compose toolbar item.",
+      intro: "ONE popover, re-anchored on demand — created lazily and reused (the counter inside survives hide/show). Shown here from this button AND from the Compose toolbar item; same popover, two anchors.",
       buttons: [
         { act: "from-button", label: "Popover from this button" },
         { act: "from-toolbar", label: "Popover from Compose item" },
