@@ -43,13 +43,20 @@ macOS-only (menus + toolbar are macOS chrome). Branch UNMERGED.
 ## Decisions (from brainstorm)
 
 1. **Context arg** (not `this`-binding, not return-a-patch): `action: (ctx) => …`.
-2. **`ctx.parent.update()`** for toolbar pull-down items (the moving-checkmark fix).
+2. **Collapsed `ctx.update` semantic:** `ctx.update(patch)` always patches **the
+   item the action is on**, on every surface. No `ctx.parent` (the only reason it
+   existed was the radio whole-menu rebuild, which auto-radio removes). The rare
+   "update my owning toolbar button from a pull-down action" → `ctx.window.toolbar.updateItem(buttonId, patch)`;
+   a `ctx.parent` convenience can be added later, purely additively.
 3. **Unify across all menu-like surfaces** (app/context/tray/toolbar/segments).
 4. **Live per-item update for app + tray menus too** — implemented in the runtime
    (hold the menu tree, patch, re-`setMenu`); no new native API. Context menus are
    ephemeral → `ctx.update` is a documented no-op there.
-5. Radio/sibling management stays the **app's job** in v1 (patch each, or rebuild +
-   `setMenu`); a declarative auto-radio menu is a **follow-up**, not in scope.
+5. **Auto-radio IN SCOPE:** `MenuItemDef.radioGroup?: string`. Same-group items in
+   a menu are single-select; selecting one auto-moves the checkmark (the runtime
+   sets the clicked item `checked` + unchecks same-group siblings in the held tree
+   + rebuilds) — **no `update` call needed** for the moving-checkmark case. Runtime
+   only (reuses the Part A+ held-tree rebuild); native menus just re-render.
 
 ## Part A — `ActionContext`
 
@@ -61,15 +68,13 @@ export interface ActionContext {
   id: string;
   /** The window the action fired in (Window.current()). */
   window: WindowHandle;
-  /** Live per-item update. Toolbar item → updateItem; toolbar pull-down item →
-   *  patches this menu item; app/tray menu item → patch held tree + re-setMenu.
+  /** Live per-item update — patches THE ITEM THE ACTION IS ON, on every surface:
+   *  toolbar item → updateItem; toolbar pull-down item → patch this menu item
+   *  (rebuild parent menu); app/tray menu item → patch held tree + re-setMenu.
    *  Context menus are dismissed on click → no-op (documented). */
   update(patch: MenuItemPatch | ToolbarItemPatch): void;
-  /** Toolbar pull-down items only: the owning toolbar item, so you can replace
-   *  its whole menu (the moving-checkmark idiom) or patch it directly. */
-  parent?: { id: string; update(patch: ToolbarItemPatch): void };
-  /** Checkable menu items: the item's `checked` state as last set. The app owns
-   *  the toggle. */
+  /** Checkable menu items: the item's `checked` state as last set (for non-radio
+   *  toggles; radio checkmarks are auto-managed — see Auto-radio). */
   checked?: boolean;
   /** Segments: the activated segment index + its (transient) selected state. */
   index?: number;
@@ -77,19 +82,23 @@ export interface ActionContext {
 }
 ```
 
+No `ctx.parent` (collapsed semantic, Decision 2). To update a pull-down's owning
+toolbar button from a menu item's action, use
+`ctx.window.toolbar.updateItem(buttonId, patch)`.
+
 `MenuItemPatch` (new, small): `{ label?; checked?; enabled?; icon? }` — the live-
 patchable subset of a `MenuItemDef`. `ToolbarItemPatch` already exists.
 
 ### Per-surface `update()` wiring
 
-| Surface | `ctx.update(patch)` does | `ctx.parent` |
-|---|---|---|
-| Toolbar button | `win.toolbar.updateItem(id, patch)` | — |
-| Toolbar pull-down item | patch this item in the parent's held menu tree → `win.toolbar.updateItem(parentId, { menu: rebuilt })` | the owning toolbar item (`parent.update` = `updateItem(parentId, patch)`) |
-| App menu item | patch the held app-menu tree → re-`Menu.setMenu(rebuilt)` | — |
-| Tray menu item | patch the held tray-menu tree → re-`tray.setMenu(rebuilt)` | — |
-| Context menu item | no-op (menu dismissed) | — |
-| Segment | `win.toolbar.updateItem(groupId, { selected })`-style group update | — |
+| Surface | `ctx.update(patch)` patches THIS item by |
+|---|---|
+| Toolbar button | `win.toolbar.updateItem(id, patch)` |
+| Toolbar pull-down item | patch this item in the parent's held menu tree → `win.toolbar.updateItem(parentId, { menu: rebuilt })` |
+| App menu item | patch the held app-menu tree → re-`Menu.setMenu(rebuilt)` |
+| Tray menu item | patch the held tray-menu tree → re-`tray.setMenu(rebuilt)` |
+| Context menu item | no-op (menu dismissed) |
+| Segment | `win.toolbar.updateItem(groupId, { selected })`-style group update |
 
 The action callback signature changes to `(ctx?: ActionContext) => void` on
 `MenuItemDef`, `ToolbarItemDef`, and `ToolbarSegmentDef`. The runtime constructs
@@ -111,6 +120,29 @@ menu tree** (the clean `MenuItemDef[]` last set) per surface:
   Menus are small; rebuild cost is negligible.
 
 The patch-by-id walk + tree retention is pure runtime + unit-testable.
+
+## Part A++ — Auto-radio menus
+
+`MenuItemDef` gains `radioGroup?: string`. Items sharing a `radioGroup` value
+within a menu are a single-select group: exactly one is `checked`. When the user
+clicks a `radioGroup` item, **before/around firing its action** the runtime
+auto-moves the checkmark — in the held menu tree it sets the clicked item
+`checked: true` and the same-group siblings `checked: false`, then rebuilds the
+surface (the Part A+ patch-held-tree-and-rebuild). The app's action just runs its
+logic; no `update` call is needed for the checkmark.
+
+- Pure **runtime** (reuses Part A+ tree retention + rebuild); native menus only
+  re-render the rebuilt tree. No native menu-state API.
+- Initial selection = whichever item the app set `checked: true` on.
+- Works on every menu surface that retains its tree (app menu, tray, toolbar
+  pull-down). Context menus are ephemeral — `radioGroup` is honored for the
+  initial checkmark but there is nothing to re-render after dismissal.
+- Unit-testable: clicking a group item updates the held tree's checked states
+  correctly (one on, siblings off) and triggers exactly one rebuild.
+
+This makes the filter the cleanest case: `{ id, label, radioGroup: "filter",
+checked: filter === "unread", action: (ctx) => setFilter("unread") }` — the
+checkmark moves itself.
 
 ## Part B — Discriminated-union `ToolbarItemDef`
 
@@ -171,22 +203,28 @@ kitchen-sink showcase + api-reference.
 ## Plan shape (proposed — decomposed)
 
 1. **T1** — `ActionContext` type + `MenuItemPatch` + the dispatch wiring for
-   TOOLBAR surfaces (button `ctx.update`, pull-down `ctx.parent`), TDD where
-   unit-testable. Migrate the kitchen-sink filter to `ctx.parent.update`.
+   TOOLBAR surfaces (button + pull-down item `ctx.update`), TDD. Migrate the
+   kitchen-sink filter button to receive `ctx` (interim: `ctx.update`).
 2. **T2** — App/Tray menu-tree retention + `ctx.update` (patch held tree +
-   re-setMenu), TDD. Wire the menu/tray dispatch to pass `ctx`.
-3. **T3** — Discriminated-union `ToolbarItemDef` + `normalizeToolbar` narrowing +
+   re-setMenu) + pass `ctx` to menu/tray actions, TDD.
+3. **T3** — Auto-radio: `MenuItemDef.radioGroup` + the runtime auto-checkmark
+   (patch held tree on group-item click + rebuild), TDD. Migrate the filter to
+   `radioGroup` (drop the manual refresh).
+4. **T4** — Discriminated-union `ToolbarItemDef` + `normalizeToolbar` narrowing +
    type tests; fix any kitchen-sink fallout.
-4. **T4** — `type:"label"` text item full stack (TS variant + Nim + toolbar.m +
+5. **T5** — `type:"label"` text item full stack (TS variant + Nim + toolbar.m +
    patch `text`).
-5. **T5** — kitchen-sink showcase (ctx-update across toolbar/app-menu/tray + a
-   label item) + api-reference docs + full gates + human visual smoke.
+6. **T6** — kitchen-sink showcase (ctx-update + auto-radio across toolbar
+   pull-down / app-menu / tray + a label item) + api-reference docs + full gates
+   + human visual smoke.
 
 ## Non-goals / follow-ups
 
-- **Declarative auto-radio menu** (single-select that auto-moves the checkmark
-  with no `update` call) — a future ergonomic layer on top of this.
-- Context-menu live update (ephemeral; `ctx.update` is a no-op).
+- **`ctx.parent`** (a pull-down item reaching its owning toolbar button) — dropped
+  in favor of the collapsed `ctx.update` semantic; can be added later, purely
+  additively, if the "button reflects selection" pattern proves common.
+- Context-menu live update (ephemeral; `ctx.update` is a no-op; `radioGroup` only
+  sets the initial checkmark).
 - Per-segment `ctx.update` beyond the group `selected` (segments are create-time
   shaped; v1 exposes index/selected payload + group update).
 - iOS (menus/toolbar are macOS chrome).
