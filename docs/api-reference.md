@@ -1046,9 +1046,30 @@ Platform.isWindows   // boolean
 | `material` / vibrancy | liquid glass / `NSVisualEffectMaterial` | deferred — flat background (future cycle) |
 | `setCollapsible(...)` | disallows/allows user collapse | no-op (collapse is size-class–driven) |
 | `setResizable(...)` | locks/unlocks the divider | no-op (no draggable divider) |
-| `setWidth(px)` | exact divider position | best-effort (system-managed column width) |
+| `setWidth(px)` | authoritative — moves the real divider | width preference within system adaptive layout (see note below) |
+| `presentation` / `setPresentation` | **ignored** — macOS always tiles | iOS/iPadOS-only: `"automatic"`, `"tile"`, `"overlay"` |
 | Native toolbar (`toggleSidebar`, back chevron) | full NSToolbar | none — app renders its own back control (future cycle) |
 | Back navigation | divider / toolbar toggle | in-page control + system edge-swipe |
+
+> **Apple-native divergence — by design.** macOS (`NSSplitViewController`) and
+> iPadOS (`UISplitViewController`) have genuinely different split models; Zapp
+> surfaces each platform's native behavior rather than papering over the
+> differences with a custom container.
+>
+> - **`presentation` / `setPresentation` is iOS/iPadOS-only.** On macOS,
+>   `NSSplitViewController` always tiles (columns placed side-by-side); the
+>   option is accepted in the config but ignored on macOS.
+> - **`"tile"` on iPadOS is a _preference_, not a guarantee.** The system may
+>   still present the sidebar as an overlay in narrow widths (e.g. portrait on a
+>   small iPad) — this matches Apple's own adaptive split behavior (Mail, Notes)
+>   and is not a Zapp bug.
+> - **`setWidth(px)` semantics differ by platform.** On macOS it moves the
+>   actual NSSplitView divider — the change is immediate and authoritative. On
+>   iPadOS it sets `preferredPrimaryColumnWidth` — a hint honored when tiling,
+>   bounded by the configured `minWidth`/`maxWidth`, and capped by the system's
+>   own adaptive layout. There is no user divider-drag on iPad, so `setWidth` is
+>   the only way to change the column width programmatically; `SIDEBAR_RESIZED`
+>   is fired after each call to keep reactive state in sync.
 
 ### Inspector (macOS + iOS)
 
