@@ -200,7 +200,10 @@ function ensureEventsWired() {
         handler();
         return;
       }
-      handler({ id: itemId, window: win, update });
+      // ctx.checked reflects the item's last-set checked state (read from the
+      // retained tree at dispatch time) — uniform with toolbar + app-menu ctx.
+      const checked = findMenuItem(menuTreesByTray.get(trayId) ?? [], itemId)?.checked;
+      handler({ id: itemId, window: win, checked, update });
       return;
     }
   });

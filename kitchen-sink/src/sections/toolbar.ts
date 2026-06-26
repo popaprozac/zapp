@@ -31,12 +31,14 @@ export const toolbarSection: Section = {
     onAct(host, "cycle-filter", () => {
       const order = ["all", "unread", "flagged"];
       setFilter(order[(order.indexOf(getFilter()) + 1) % order.length]);
-      // radioGroup auto-moves the checkmark; we still refresh the menu so
-      // the initial checked states are correct on re-open after a manual cycle.
+      // This is an EXTERNAL cycle (a button outside the menu), so radioGroup
+      // doesn't apply here — we move the checkmark by rebuilding the pull-down
+      // menu with the new `checked` states. (radioGroup auto-moves the checkmark
+      // only when you pick an item from WITHIN the Filter pull-down.)
       win.toolbar.updateItem("filter", { menu: filterMenu() });
       // Live-update the label item text.
       win.toolbar.updateItem("status", { text: filterStatusText() });
-      setResult(host, `filter → ${getFilter()} (radioGroup moved the checkmark; label updated)`);
+      setResult(host, `filter → ${getFilter()} (menu rebuilt; label updated)`);
     });
     onAct(host, "remove", () => {
       win.toolbar.remove();

@@ -2161,8 +2161,10 @@ a checkmark automatically. No need to wire up listeners separately —
 
 ### `ActionContext`
 
-Every `action` callback on any menu-like surface receives an optional `ctx`
-argument of this shape:
+`action` callbacks on the toolbar (buttons, pull-down items, segments), app
+menus, and tray menus receive a `ctx` argument of this shape. (Context-menu
+actions are the exception: they fire with **no** `ctx` — the menu is already
+dismissed, so there is nothing to patch.)
 
 ```ts
 interface ActionContext {
@@ -2172,8 +2174,13 @@ interface ActionContext {
   window: WindowHandle;
   /** Live per-item patch. Behavior varies by surface — see table below. */
   update(patch: { label?: string; checked?: boolean; enabled?: boolean; icon?: string }): void;
-  /** For checkable items: the item's checked state at time of click. */
+  /** For checkable items: the item's checked state as last set — uniform across
+   *  toolbar, app, and tray menus. Read it to toggle: ctx.update({ checked: !ctx.checked }). */
   checked?: boolean;
+  /** Segment actions also receive the activated segment index + its
+   *  (transient) selected state. */
+  index?: number;
+  selected?: boolean;
 }
 ```
 
@@ -2214,10 +2221,13 @@ pull-down menus.
 ```ts
 { id: "notify", label: "Notifications", type: "checkbox", checked: true,
   action: (ctx) => {
-    const next = !ctx?.checked;
-    ctx?.update({ checked: next });   // live — no setMenu/rebuild needed
+    const next = !ctx?.checked;        // ctx.checked = last-set state
+    ctx?.update({ checked: next });    // live — no setMenu/rebuild needed
   } }
 ```
+
+This same toggle works unchanged on toolbar pull-down items, app menu items, and
+tray menu items — `ctx.checked` carries the last-set checked state on all three.
 
 ### Menu item icons (macOS)
 

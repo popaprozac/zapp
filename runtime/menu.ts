@@ -127,7 +127,10 @@ export const Menu = {
           fn();
           return;
         }
-        fn({ id, window: win, update });
+        // ctx.checked reflects the item's last-set checked state (read from the
+        // retained tree at dispatch time) — uniform with toolbar + tray ctx.
+        const checked = findMenuItem(appMenuTree, id)?.checked;
+        fn({ id, window: win, checked, update });
       });
     }
 
