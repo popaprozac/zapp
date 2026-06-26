@@ -15,15 +15,25 @@ export function setFilter(f: string) {
   filter = f;
 }
 
+const filterLabels: Record<string, string> = {
+  all: "All items",
+  unread: "Unread items",
+  flagged: "Flagged items",
+};
+
 export function filterMenu(): MenuItemDef[] {
   return [
     { id: "kf-all", label: "All", radioGroup: "filter", checked: filter === "all",
-      action: () => setFilter("all") },
+      action: (ctx) => { setFilter("all"); ctx?.window.toolbar.updateItem("status", { text: filterLabels.all }); } },
     { id: "kf-unread", label: "Unread", radioGroup: "filter", checked: filter === "unread",
-      action: () => setFilter("unread") },
+      action: (ctx) => { setFilter("unread"); ctx?.window.toolbar.updateItem("status", { text: filterLabels.unread }); } },
     { id: "kf-flagged", label: "Flagged", radioGroup: "filter", checked: filter === "flagged",
-      action: () => setFilter("flagged") },
+      action: (ctx) => { setFilter("flagged"); ctx?.window.toolbar.updateItem("status", { text: filterLabels.flagged }); } },
   ];
+}
+
+export function filterStatusText(): string {
+  return filterLabels[filter] ?? "All items";
 }
 
 /** The shell toolbar: toggleSidebar | tracking | Compose | flex | Filter |
@@ -117,6 +127,8 @@ export function shellToolbar(): ToolbarItemDef[] {
       indicator: false,
       menu: filterMenu(),
     },
+    // type:"label" demo — text updates live via updateItem when the filter changes
+    { type: "label", id: "status", text: filterStatusText() },
     { type: "trackingSeparator", pane: "inspector" },
     { type: "toggleInspector" },
   ];

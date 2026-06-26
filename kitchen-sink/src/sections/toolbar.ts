@@ -1,7 +1,7 @@
 import { Window, WindowEvent } from "@zappdev/runtime";
 import type { Section } from "./types";
 import { card, onAct, setResult } from "../shell/ui";
-import { shellToolbar, filterMenu, getFilter, setFilter } from "../shell/toolbar-def";
+import { shellToolbar, filterMenu, filterStatusText, getFilter, setFilter } from "../shell/toolbar-def";
 
 let composeEnabled = true;
 let inboxCount = 0;
@@ -13,10 +13,10 @@ export const toolbarSection: Section = {
     const win = Window.current();
     host.appendChild(card({
       title: "Dynamic Toolbar",
-      intro: "Mutates the native toolbar above. The Filter button's checkmark moves via updateItem; remove/attach changes the titlebar height.",
+      intro: "Mutates the native toolbar above. The Filter pull-down uses radioGroup — the checkmark moves automatically. The status label updates live via updateItem({text}). Remove/attach changes the titlebar height.",
       buttons: [
         { act: "toggle-compose", label: "Toggle Compose enabled" },
-        { act: "cycle-filter", label: "Cycle filter (moving checkmark)" },
+        { act: "cycle-filter", label: "Cycle filter (auto-radio checkmark + label update)" },
         { act: "remove", label: "Remove toolbar" },
         { act: "attach", label: "Attach toolbar" },
         { act: "badge-inc", label: "Inbox badge +1" },
@@ -31,8 +31,12 @@ export const toolbarSection: Section = {
     onAct(host, "cycle-filter", () => {
       const order = ["all", "unread", "flagged"];
       setFilter(order[(order.indexOf(getFilter()) + 1) % order.length]);
+      // radioGroup auto-moves the checkmark; we still refresh the menu so
+      // the initial checked states are correct on re-open after a manual cycle.
       win.toolbar.updateItem("filter", { menu: filterMenu() });
-      setResult(host, `filter → ${getFilter()} (reopen the Filter menu to see the checkmark move)`);
+      // Live-update the label item text.
+      win.toolbar.updateItem("status", { text: filterStatusText() });
+      setResult(host, `filter → ${getFilter()} (radioGroup moved the checkmark; label updated)`);
     });
     onAct(host, "remove", () => {
       win.toolbar.remove();

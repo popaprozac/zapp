@@ -1257,24 +1257,33 @@ win.toolbar.remove();
 action/menu exclusivity) and re-registers action callbacks in the calling
 context, purging the window's previous registrations.
 
-**Pull-down menus don't auto-toggle their checkmark.** A pull-down item's
-`action` fires, but the native menu is static — the app owns `checked` and must
-`updateItem` to redraw it. The "moving checkmark" idiom is to refresh the menu
-*from the selected item's action*, rebuilding it with the new `checked` state:
+**Moving checkmark in a pull-down — use `radioGroup`.**
+
+Add `radioGroup: "<name>"` to the items that share a checkmark. The runtime
+moves the check automatically when any item fires — no `updateItem` call
+required:
 
 ```ts
-// filterMenu() returns items whose `checked` reflects the current filter.
-function pickFilter(value: string) {
-  setFilter(value);
-  // Replace the menu so the native checkmark moves to the new selection.
-  Window.current().toolbar.updateItem("filter", { menu: filterMenu() });
-}
-// each menu item: { id: "kf-unread", label: "Unread", checked: filter === "unread",
-//                   action: () => pickFilter("unread") }
+{ id: "filter", icon: "sf:line.3.horizontal.decrease", label: "Filter",
+  menu: [
+    { id: "kf-all",     label: "All",     radioGroup: "filter", checked: true  },
+    { id: "kf-unread",  label: "Unread",  radioGroup: "filter", checked: false },
+    { id: "kf-flagged", label: "Flagged", radioGroup: "filter", checked: false },
+  ] }
+// Clicking "Unread" auto-checks it and unchecks "All" — zero extra code.
 ```
 
-Without that `updateItem`, the filter value changes but the checkmark stays put
-— which reads as "nothing happened."
+For manual cases (label, icon, or multi-field patches) use `ctx.update` inside
+the item's action:
+
+```ts
+{ id: "kf-unread", label: "Unread", radioGroup: "filter", checked: false,
+  action: (ctx) => {
+    setFilter("unread");
+    // Update a sibling status label in the toolbar at the same time:
+    ctx?.window.toolbar.updateItem("status", { text: "Unread items" });
+  } }
+```
 
 Caveats worth knowing:
 
@@ -1410,6 +1419,27 @@ Clicks inside a `"group"` still fire `TOOLBAR_CLICKED` with the inner button's
 > **macOS 10.15 floor.** Both `type: "segmented"` and `type: "group"` use
 > `NSToolbarItemGroup` which is available from macOS 10.15 (Catalina).
 > Zapp's minimum macOS target already covers this floor.
+
+**`type: "label"`** — a read-only text string in the toolbar (an
+`NSTextField` hosted in an `NSToolbarItem`). No action, no icon. Useful
+for live status strings.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `id` | `string` | auto-assigned | Optional; required to `updateItem` later. |
+| `text` | `string` | required | The displayed text. |
+
+```ts
+// Initial definition — e.g. after a filter pull-down
+{ type: "label", id: "status", text: "All items" }
+
+// Live update from any pane
+win.toolbar.updateItem("status", { text: "Unread items" });
+```
+
+This pairs naturally with a `radioGroup` pull-down: each item's action
+receives `ctx.window.toolbar.updateItem("status", { text: … })` to
+reflect the current selection as readable text.
 
 ### Pick your surface
 
@@ -2104,12 +2134,13 @@ Menu.build([
   type?: "normal" | "separator" | "checkbox"   // default: "normal"
   enabled?: boolean
   checked?: boolean
+  radioGroup?: string                          // auto-radio: same-group items share one checkmark
   accelerator?: string                         // e.g. "CmdOrCtrl+N"
   role?:
     | "editMenu" | "windowMenu" | "appMenu"
     | "copy" | "cut" | "paste" | "selectAll"
     | "undo" | "redo" | "quit"
-  action?: () => void
+  action?: (ctx?: ActionContext) => void       // ctx carries id, window, update, checked
   submenu?: MenuItemDef[]
   icon?: string                                // "sf:gear" | "build/x.png" | "data:image/png;base64,…" (macOS)
   iconTemplate?: boolean                        // force template tint on/off
@@ -2123,8 +2154,70 @@ Roles auto-populate with the right system items:
 
 When you only need one system item: `{ role: "copy" }`.
 
-`action` fires on click. No need to wire up listeners separately —
+`action` fires on click. It receives an [`ActionContext`](#actioncontext) — use
+`ctx.update({ checked })` to toggle a checkbox, or rely on `radioGroup` to move
+a checkmark automatically. No need to wire up listeners separately —
 `Menu.build` tracks them internally via the Events bus.
+
+### `ActionContext`
+
+Every `action` callback on any menu-like surface receives an optional `ctx`
+argument of this shape:
+
+```ts
+interface ActionContext {
+  /** The item's id. */
+  id: string;
+  /** The window the action fired in (Window.current()). */
+  window: WindowHandle;
+  /** Live per-item patch. Behavior varies by surface — see table below. */
+  update(patch: { label?: string; checked?: boolean; enabled?: boolean; icon?: string }): void;
+  /** For checkable items: the item's checked state at time of click. */
+  checked?: boolean;
+}
+```
+
+`ctx` is optional in the callback signature (`(ctx?) => void`) so zero-arg
+closures compile without change.
+
+**`ctx.update` per surface:**
+
+| Surface | Effect |
+|---|---|
+| Toolbar button | `win.toolbar.updateItem(id, patch)` |
+| Toolbar pull-down item | Patches that item in the menu; rebuilds the pull-down in place |
+| App menu item | Patches held tree + calls `Menu.build` (re-registers, same handle) |
+| Tray menu item | Patches held tree + calls `tray.setMenu` |
+| Context menu item | No-op — the menu is dismissed on click |
+
+**`radioGroup` — automatic single-select checkmark.**
+
+Add `radioGroup: "<name>"` to a set of menu items. When any one fires, the
+runtime automatically moves the checkmark to it and clears the others — no
+`ctx.update` needed:
+
+```ts
+Menu.build([
+  { label: "View", submenu: [
+    { id: "vw-grid", label: "Grid", radioGroup: "view", checked: true  },
+    { id: "vw-list", label: "List", radioGroup: "view", checked: false },
+  ]},
+]);
+// Clicking "List" auto-checks it and unchecks "Grid" — zero extra code.
+```
+
+`radioGroup` works across all menu surfaces: app menus, tray menus, and toolbar
+pull-down menus.
+
+**`ctx.update` for manual cases** (checkbox toggle, label change, etc.):
+
+```ts
+{ id: "notify", label: "Notifications", type: "checkbox", checked: true,
+  action: (ctx) => {
+    const next = !ctx?.checked;
+    ctx?.update({ checked: next });   // live — no setMenu/rebuild needed
+  } }
+```
 
 ### Menu item icons (macOS)
 
