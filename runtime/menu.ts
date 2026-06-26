@@ -30,7 +30,7 @@ export interface MenuItemDef {
   checked?: boolean;
   accelerator?: string;
   role?: "editMenu" | "windowMenu" | "appMenu" | "copy" | "cut" | "paste" | "selectAll" | "undo" | "redo" | "quit";
-  action?: () => void;
+  action?: (ctx?: import("./action-context").ActionContext) => void;
   submenu?: MenuItemDef[];
   /** Icon for this item (macOS). "sf:gear" (SF Symbol) | "build/logo.png"
    *  (file path, relative-resolved) | "data:image/png;base64,…" (dynamic). */
@@ -46,8 +46,8 @@ export interface MenuHandle {
 
 let menuActionCounter = 0;
 
-function collectActions(items: MenuItemDef[]): Map<string, () => void> {
-  const actions = new Map<string, () => void>();
+function collectActions(items: MenuItemDef[]): Map<string, (ctx?: import("./action-context").ActionContext) => void> {
+  const actions = new Map<string, (ctx?: import("./action-context").ActionContext) => void>();
 
   function walk(items: MenuItemDef[]) {
     for (const item of items) {

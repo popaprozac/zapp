@@ -1,6 +1,5 @@
 import {
   Events,
-  Window,
   type MenuItemDef,
   type ToolbarItemDef,
 } from "@zappdev/runtime";
@@ -16,35 +15,14 @@ export function setFilter(f: string) {
   filter = f;
 }
 
-// Selecting a pull-down item must REPLACE the menu to move the native
-// checkmark: the AppKit pull-down is static until updateItem, and the app
-// owns the `checked` state. This is the documented "moving checkmark"
-// pattern (see api-reference: Updating toolbar items).
-function pickFilter(f: string) {
-  setFilter(f);
-  Window.current().toolbar.updateItem("filter", { menu: filterMenu() });
-}
-
 export function filterMenu(): MenuItemDef[] {
   return [
-    {
-      id: "kf-all",
-      label: "All",
-      checked: filter === "all",
-      action: () => pickFilter("all"),
-    },
-    {
-      id: "kf-unread",
-      label: "Unread",
-      checked: filter === "unread",
-      action: () => pickFilter("unread"),
-    },
-    {
-      id: "kf-flagged",
-      label: "Flagged",
-      checked: filter === "flagged",
-      action: () => pickFilter("flagged"),
-    },
+    { id: "kf-all", label: "All", checked: filter === "all",
+      action: (ctx) => { setFilter("all"); ctx?.update({ checked: true }); } },
+    { id: "kf-unread", label: "Unread", checked: filter === "unread",
+      action: (ctx) => { setFilter("unread"); ctx?.update({ checked: true }); } },
+    { id: "kf-flagged", label: "Flagged", checked: filter === "flagged",
+      action: (ctx) => { setFilter("flagged"); ctx?.update({ checked: true }); } },
   ];
 }
 

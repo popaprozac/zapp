@@ -21,6 +21,8 @@ import { Platform } from "./platform";
 import { WindowEvent, eventName, type WindowSizePayload, type WindowPayload, type ModalDismissedPayload, type SidebarResizedPayload } from "./events";
 import type { Display } from "./screen";
 import type { MenuItemDef } from "./menu";
+import { patchMenuTree } from "./action-context";
+import type { ActionContext, MenuItemPatch } from "./action-context";
 
 /**
  * Native background materials (NSVisualEffectMaterial names). Used by the
@@ -325,7 +327,7 @@ export interface ToolbarSegmentDef {
   /** Default true. */
   enabled?: boolean;
   /** Fires when this segment is pressed (momentary) or becomes selected. */
-  action?: () => void;
+  action?: (ctx?: ActionContext) => void;
 }
 
 /** One toolbar item. `type` defaults to "button". */
@@ -349,7 +351,7 @@ export interface ToolbarItemDef {
   /** Icon via the shared resolver: "sf:<symbol>", file path, or data URL. */
   icon?: string;
   /** Creator-context callback (menu pattern). Stripped before the wire. */
-  action?: () => void;
+  action?: (ctx?: ActionContext) => void;
   /** Pull-down menu (NSMenuToolbarItem — e.g. Mail's filter button). Items
    *  are the same MenuItemDef used by Menu/ContextMenu/Tray; their `action`
    *  callbacks run in this (creator) context via the __menu:click pipeline. */
@@ -404,7 +406,7 @@ export interface ToolbarItemPatch {
    *  are stripped + re-registered like setItems. */
   menu?: MenuItemDef[];
   /** Replaces the creator callback for this button. */
-  action?: () => void;
+  action?: (ctx?: ActionContext) => void;
   style?: "plain" | "prominent";
   tintColor?: string;
   /** Pass null to clear the badge. */
@@ -501,15 +503,19 @@ export interface PopoverHandle {
  * Hygiene: setItems/remove purge the window's entries; updateItem swaps
  * one entry. Only windows that never touch their toolbar again keep
  * entries for the app lifetime (create-time-only apps — the v1 behavior). */
-const toolbarActions = new Map<string, () => void>();
+const toolbarActions = new Map<string, (ctx?: ActionContext) => void>();
 let toolbarClickWired = false;
 
 function wireToolbarClicks(): void {
   if (toolbarClickWired) return;
   toolbarClickWired = true;
   getBridge().on(eventName(WindowEvent.TOOLBAR_CLICKED), (payload: any) => {
-    const fn = toolbarActions.get(`${payload?.windowId}:${payload?.id}`);
-    if (fn) fn();
+    const windowId = payload?.windowId;
+    const id = payload?.id;
+    const fn = toolbarActions.get(`${windowId}:${id}`);
+    if (!fn) return;
+    const win = Window.current();
+    fn({ id, window: win, update: (patch) => win.toolbar.updateItem(id, patch as any) });
   });
 }
 
@@ -518,8 +524,14 @@ function wireToolbarGroupSelect(): void {
   if (toolbarGroupWired) return;
   toolbarGroupWired = true;
   getBridge().on(eventName(WindowEvent.TOOLBAR_GROUP_SELECTED), (payload: any) => {
-    const fn = toolbarActions.get(`${payload?.windowId}:${payload?.id}:${payload?.index}`);
-    if (fn) fn();
+    const windowId = payload?.windowId;
+    const id = payload?.id;
+    const index = payload?.index;
+    const fn = toolbarActions.get(`${windowId}:${id}:${index}`);
+    if (!fn) return;
+    const win = Window.current();
+    fn({ id, window: win, index, selected: payload?.selected,
+         update: (patch) => win.toolbar.updateItem(id, patch as any) });
   });
 }
 
@@ -527,8 +539,60 @@ let tbMenuIdCounter = 0;
 /** Toolbar pull-down menu actions, keyed by menu-item id ("__menu:click"
  * carries only the id — app-global like Menu.build; reused ids across
  * windows collide, same caveat as Menu). App-lifetime, like toolbarActions. */
-const toolbarMenuActions = new Map<string, () => void>();
+const toolbarMenuActions = new Map<string, (ctx?: ActionContext) => void>();
 let toolbarMenuClickWired = false;
+
+// Retained pull-down menu trees (with actions) so a pull-down item's
+// ctx.update can patch the item + re-send the owning toolbar item's whole menu.
+// Keyed "windowId:itemId" (the owning toolbar item).
+const toolbarMenuTrees = new Map<string, MenuItemDef[]>();
+// Reverse: a pull-down menu item id → the "windowId:itemId" that owns it.
+const toolbarMenuItemOwner = new Map<string, string>();
+
+/** Merge auto-assigned ids from the stripped output back onto the originals,
+ *  producing a tree with ids + actions. Recurses into submenu in parallel.
+ *  `stripped` is the output of stripMenuActions (ids set, actions removed);
+ *  `originals` is the source tree (actions present, ids may be missing). */
+function mergeMenuIds(stripped: any[], originals: MenuItemDef[]): MenuItemDef[] {
+  return originals.map((orig, i) => {
+    const s = stripped[i];
+    const merged: MenuItemDef = { ...orig };
+    // Propagate auto-assigned id from stripped copy back to retained item.
+    if (s?.id !== undefined) merged.id = s.id;
+    if (orig.submenu && s?.submenu) {
+      merged.submenu = mergeMenuIds(s.submenu, orig.submenu);
+    }
+    return merged;
+  });
+}
+
+/** Record a toolbar item's pull-down menu tree (with actions + ids, already
+ *  merged via mergeMenuIds) so wireToolbarMenuClicks can call patchMenuTree +
+ *  updateItem on ctx.update. */
+function recordToolbarMenuTree(windowId: string, itemId: string, retained: MenuItemDef[]): void {
+  const ownerKey = `${windowId}:${itemId}`;
+  toolbarMenuTrees.set(ownerKey, retained);
+  const walk = (items: MenuItemDef[]) => {
+    for (const m of items) {
+      if (m.id) toolbarMenuItemOwner.set(m.id, ownerKey);
+      if (m.submenu) walk(m.submenu);
+    }
+  };
+  walk(retained);
+}
+
+/** Local recursive lookup of a menu item by id (recursing submenus). A tiny
+ *  inline finder — the shared findMenuItem helper lands in Task 3. */
+function findToolbarMenuItem(items: MenuItemDef[], id: string): MenuItemDef | undefined {
+  for (const m of items) {
+    if (m.id === id) return m;
+    if (m.submenu) {
+      const hit = findToolbarMenuItem(m.submenu, id);
+      if (hit) return hit;
+    }
+  }
+  return undefined;
+}
 
 function wireToolbarMenuClicks(): void {
   if (toolbarMenuClickWired) return;
@@ -536,14 +600,28 @@ function wireToolbarMenuClicks(): void {
   getBridge().on("__menu:click", (payload: any) => {
     const id = typeof payload === "string" ? JSON.parse(payload).id : payload?.id;
     const fn = toolbarMenuActions.get(id);
-    if (fn) fn();
+    if (!fn) return; // not a toolbar pull-down item — app menu / tray handles it
+    const win = Window.current();
+    const ownerKey = toolbarMenuItemOwner.get(id); // "windowId:itemId"
+    const tree = ownerKey ? toolbarMenuTrees.get(ownerKey) : undefined;
+    const clicked = tree ? findToolbarMenuItem(tree, id) : undefined;
+    const update = (patch: MenuItemPatch) => {
+      if (!ownerKey) return;
+      const tree = toolbarMenuTrees.get(ownerKey);
+      if (!tree) return;
+      const itemId = ownerKey.slice(ownerKey.indexOf(":") + 1);
+      const patched = patchMenuTree(tree, id, patch);
+      toolbarMenuTrees.set(ownerKey, patched);
+      win.toolbar.updateItem(itemId, { menu: patched } as any);
+    };
+    fn({ id, window: win, checked: clicked?.checked, update });
   });
 }
 
 /** Strip `action` callbacks out of a MenuItemDef tree (recursing submenus),
  * collecting them into `out` keyed by (possibly auto-generated) id. Mirrors
  * context-menu.ts's collectAndStrip. */
-function stripMenuActions(items: MenuItemDef[], out: Map<string, () => void>): any[] {
+function stripMenuActions(items: MenuItemDef[], out: Map<string, (ctx?: ActionContext) => void>): any[] {
   return items.map((item) => {
     const clean: any = { ...item };
     if (clean.action) {
@@ -567,8 +645,8 @@ const toolbarMenuIdsByWindow = new Map<string, Map<string, Set<string>>>();
  * maps. */
 export function purgeWindowToolbarActions(
   windowId: string,
-  actions: Map<string, () => void>,
-  menuActions: Map<string, () => void>,
+  actions: Map<string, (ctx?: ActionContext) => void>,
+  menuActions: Map<string, (ctx?: ActionContext) => void>,
   menuIdsByWindow: Map<string, Map<string, Set<string>>>,
 ): void {
   for (const key of [...actions.keys()]) {
@@ -588,7 +666,7 @@ export function purgeWindowToolbarActions(
 export function purgeItemToolbarMenuActions(
   windowId: string,
   itemId: string,
-  menuActions: Map<string, () => void>,
+  menuActions: Map<string, (ctx?: ActionContext) => void>,
   menuIdsByWindow: Map<string, Map<string, Set<string>>>,
 ): void {
   const perItem = menuIdsByWindow.get(windowId);
@@ -596,6 +674,37 @@ export function purgeItemToolbarMenuActions(
   if (!ids) return;
   for (const mid of ids) menuActions.delete(mid);
   perItem!.delete(itemId);
+}
+
+/** Remove a window's retained pull-down trees + reverse owner entries.
+ * Pairs with purgeWindowToolbarActions (setItems/remove). Maps are injected
+ * for unit tests; production callers pass the module maps. */
+export function purgeWindowToolbarMenuTrees(
+  windowId: string,
+  menuTrees: Map<string, MenuItemDef[]>,
+  menuItemOwner: Map<string, string>,
+): void {
+  for (const ownerKey of [...menuTrees.keys()]) {
+    if (ownerKey.startsWith(`${windowId}:`)) menuTrees.delete(ownerKey);
+  }
+  for (const [menuItemId, ownerKey] of [...menuItemOwner]) {
+    if (ownerKey.startsWith(`${windowId}:`)) menuItemOwner.delete(menuItemId);
+  }
+}
+
+/** Remove ONE item's retained pull-down tree + its reverse owner entries
+ * (updateItem with a replacement menu). Pairs with purgeItemToolbarMenuActions. */
+export function purgeItemToolbarMenuTree(
+  windowId: string,
+  itemId: string,
+  menuTrees: Map<string, MenuItemDef[]>,
+  menuItemOwner: Map<string, string>,
+): void {
+  const ownerKey = `${windowId}:${itemId}`;
+  menuTrees.delete(ownerKey);
+  for (const [menuItemId, owner] of [...menuItemOwner]) {
+    if (owner === ownerKey) menuItemOwner.delete(menuItemId);
+  }
 }
 
 /** Record which menu ids a window's items registered (merges per item). */
@@ -658,12 +767,16 @@ export function normalizeToolbar(
   hasInspector: boolean,
 ): {
   json: string;
-  actions: Map<string, () => void>;
-  menuActions: Map<string, () => void>;
+  actions: Map<string, (ctx?: ActionContext) => void>;
+  menuActions: Map<string, (ctx?: ActionContext) => void>;
   menuIdsByItem: Map<string, Set<string>>;
+  /** Retained pull-down trees (with actions + auto-assigned ids) keyed by
+   *  toolbar item id. Populated only for items that have a `menu`. */
+  menuTrees: Map<string, MenuItemDef[]>;
 } {
-  const actions = new Map<string, () => void>();
-  const menuActions = new Map<string, () => void>();
+  const actions = new Map<string, (ctx?: ActionContext) => void>();
+  const menuActions = new Map<string, (ctx?: ActionContext) => void>();
+  const menuTrees = new Map<string, MenuItemDef[]>();
   const menuIdsByItem = new Map<string, Set<string>>();
   const seen = new Set<string>();
   const items: Record<string, unknown>[] = [];
@@ -764,14 +877,18 @@ export function normalizeToolbar(
     if (item.bordered !== undefined) wire.bordered = item.bordered;
     if (item.badge !== undefined) wire.badge = badgeToWire(item.badge);
     if (item.menu) {
-      const itemMenuActions = new Map<string, () => void>();
-      wire.menu = stripMenuActions(item.menu, itemMenuActions);
+      const itemMenuActions = new Map<string, (ctx?: ActionContext) => void>();
+      const strippedMenu = stripMenuActions(item.menu, itemMenuActions);
+      wire.menu = strippedMenu;
       for (const [mid, fn] of itemMenuActions) menuActions.set(mid, fn);
       if (itemMenuActions.size > 0) menuIdsByItem.set(item.id, new Set(itemMenuActions.keys()));
+      // Retain a tree with ids (from stripped) + actions (from originals) for
+      // ctx.update in pull-down callbacks (patchMenuTree + updateItem refresh).
+      menuTrees.set(item.id!, mergeMenuIds(strippedMenu, item.menu));
     }
     items.push(wire);
   }
-  return { json: JSON.stringify({ style: toolbar.style ?? "unified", items }), actions, menuActions, menuIdsByItem };
+  return { json: JSON.stringify({ style: toolbar.style ?? "unified", items }), actions, menuActions, menuIdsByItem, menuTrees };
 }
 
 const TOOLBAR_PATCH_KEYS = new Set(["label", "icon", "enabled", "indicator", "menu", "action", "style", "tintColor", "badge", "bordered", "selected", "controlRepresentation"]);
@@ -782,7 +899,7 @@ const TOOLBAR_PATCH_KEYS = new Set(["label", "icon", "enabled", "indicator", "me
 export function normalizeToolbarPatch(
   id: string,
   patch: ToolbarItemPatch,
-): { json: string; action?: () => void; menuActions: Map<string, () => void> } {
+): { json: string; action?: (ctx?: ActionContext) => void; menuActions: Map<string, (ctx?: ActionContext) => void>; menuTree?: MenuItemDef[] } {
   if (!id || !/^[A-Za-z0-9._-]+$/.test(id) || id.startsWith("zapp.") || id.startsWith("NSToolbar")) {
     throw new Error(
       `[zapp] toolbar: invalid item id "${id}" — use letters, digits, ".", "_", "-" (ids prefixed "zapp." or "NSToolbar" are reserved)`,
@@ -798,7 +915,7 @@ export function normalizeToolbarPatch(
   if (patch.action && patch.menu) {
     throw new Error('[zapp] toolbar: a button cannot have both "action" and "menu" — the menu consumes the click');
   }
-  const menuActions = new Map<string, () => void>();
+  const menuActions = new Map<string, (ctx?: ActionContext) => void>();
   const wire: Record<string, unknown> = { id };
   if (patch.label !== undefined) wire.label = patch.label;
   // Empty icon strings are stripped: native ignores them on the live item,
@@ -813,13 +930,18 @@ export function normalizeToolbarPatch(
   if (patch.badge !== undefined) wire.badge = badgeToWire(patch.badge);
   if (patch.selected !== undefined) wire.selected = selectedToWire(patch.selected);
   if (patch.controlRepresentation !== undefined) wire.controlRepresentation = patch.controlRepresentation;
-  if (patch.menu !== undefined) wire.menu = stripMenuActions(patch.menu, menuActions);
+  let menuTree: MenuItemDef[] | undefined;
+  if (patch.menu !== undefined) {
+    const strippedMenu = stripMenuActions(patch.menu, menuActions);
+    wire.menu = strippedMenu;
+    menuTree = mergeMenuIds(strippedMenu, patch.menu);
+  }
   // Explicit-undefined values pass the keys.length guard above (key exists,
   // value is undefined) but produce a wire with only the id — detect here.
   if (Object.keys(wire).length === 1 && !patch.action) {
     throw new Error('[zapp] toolbar: empty patch — pass at least one of label/icon/enabled/indicator/menu/action');
   }
-  return { json: JSON.stringify(wire), action: patch.action, menuActions };
+  return { json: JSON.stringify(wire), action: patch.action, menuActions, menuTree };
 }
 
 /** A handle to the sidebar attached to a window. */
@@ -1116,7 +1238,7 @@ function createWindowHandle(windowId: string, sidebarOpts?: SidebarOptions, insp
 
     toolbar: {
       setItems(items: ToolbarItemDef[], setOpts?: { style?: "unified" | "unifiedCompact" | "expanded" }) {
-        const { json, actions, menuActions, menuIdsByItem } =
+        const { json, actions, menuActions, menuIdsByItem, menuTrees } =
           normalizeToolbar({ items, style: setOpts?.style }, sidebarOpts !== undefined, inspectorOpts !== undefined);
         // Parse once: guard on empty items, then conditionally strip style.
         // Only send style when the caller set one — native warns when style
@@ -1127,6 +1249,7 @@ function createWindowHandle(windowId: string, sidebarOpts?: SidebarOptions, insp
         if (setOpts?.style === undefined) delete parsed.style;
         const wireJson = JSON.stringify(parsed);
         purgeWindowToolbarActions(windowId, toolbarActions, toolbarMenuActions, toolbarMenuIdsByWindow);
+        purgeWindowToolbarMenuTrees(windowId, toolbarMenuTrees, toolbarMenuItemOwner);
         if (actions.size > 0) {
           wireToolbarClicks();
           wireToolbarGroupSelect();
@@ -1137,10 +1260,14 @@ function createWindowHandle(windowId: string, sidebarOpts?: SidebarOptions, insp
           for (const [id, fn] of menuActions) toolbarMenuActions.set(id, fn);
         }
         recordToolbarMenuIds(windowId, menuIdsByItem, toolbarMenuIdsByWindow);
+        // Record retained pull-down trees for ctx.update in wireToolbarMenuClicks.
+        for (const [itemId, tree] of menuTrees) {
+          recordToolbarMenuTree(windowId, itemId, tree);
+        }
         windowAction("toolbar:setItems", { windowId, toolbarJson: wireJson });
       },
       updateItem(id: string, patch: ToolbarItemPatch) {
-        const { json, action, menuActions } = normalizeToolbarPatch(id, patch);
+        const { json, action, menuActions, menuTree } = normalizeToolbarPatch(id, patch);
         if (action) {
           wireToolbarClicks();
           wireToolbarGroupSelect();
@@ -1151,16 +1278,22 @@ function createWindowHandle(windowId: string, sidebarOpts?: SidebarOptions, insp
           // consumed by the menu, so any old action callback can never fire.
           toolbarActions.delete(`${windowId}:${id}`);
           purgeItemToolbarMenuActions(windowId, id, toolbarMenuActions, toolbarMenuIdsByWindow);
+          purgeItemToolbarMenuTree(windowId, id, toolbarMenuTrees, toolbarMenuItemOwner);
           if (menuActions.size > 0) {
             wireToolbarMenuClicks();
             for (const [mid, fn] of menuActions) toolbarMenuActions.set(mid, fn);
             recordToolbarMenuIds(windowId, new Map([[id, new Set(menuActions.keys())]]), toolbarMenuIdsByWindow);
+          }
+          // Refresh retained pull-down tree for ctx.update.
+          if (menuTree) {
+            recordToolbarMenuTree(windowId, id, menuTree);
           }
         }
         windowAction("toolbar:updateItem", { windowId, itemJson: json });
       },
       remove() {
         purgeWindowToolbarActions(windowId, toolbarActions, toolbarMenuActions, toolbarMenuIdsByWindow);
+        purgeWindowToolbarMenuTrees(windowId, toolbarMenuTrees, toolbarMenuItemOwner);
         windowAction("toolbar:remove", { windowId });
       },
     },
