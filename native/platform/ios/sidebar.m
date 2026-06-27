@@ -83,7 +83,10 @@ extern int32_t zapp_ios_inspector_slot_for(int32_t host_slot);
 @property (nonatomic, assign) int32_t hostWindowId;    // content webview's slot
 @property (nonatomic, assign) int32_t sidebarSlotId;   // sidebar webview's slot
 @property (nonatomic, assign) BOOL lastCollapsedEmit;  // last collapse state we emitted
-@property (nonatomic, assign) int32_t configuredWidth; // setWidth best-effort store
+@property (nonatomic, assign) int32_t configuredWidth;    // configured width (setWidth + create-time)
+@property (nonatomic, assign) int32_t configuredMinWidth; // configured minimumPrimaryColumnWidth
+@property (nonatomic, assign) int32_t configuredMaxWidth; // configured maximumPrimaryColumnWidth
+@property (nonatomic, assign) BOOL resizable;             // whether drag-resize is allowed
 // Source of truth for the current presentation mode. Set at register time from
 // the create-time config (via zapp_ios_apply_presentation) and updated by
 // darwin_sidebar_set_presentation. Values: nil/"" = automatic, "tile", "overlay".
@@ -403,7 +406,9 @@ static void zapp_ios_sidebar_sync_collapse(ZappIOSSidebarController* c, BOOL col
 // This is the STRONG definition that window.m declares extern.
 void zapp_ios_sidebar_register(void* window, void* split, void* sidebarVC,
                                void* contentVC, int32_t host_id, int32_t sidebar_id,
-                               const char* presentation) {
+                               const char* presentation,
+                               int32_t width, int32_t minWidth, int32_t maxWidth,
+                               bool resizable) {
     if (!window || !split) return;
     // Capture the presentation C-string before the async block (the caller's
     // buffer may be freed by the time the block runs if the deferred struct is
@@ -428,6 +433,12 @@ void zapp_ios_sidebar_register(void* window, void* split, void* sidebarVC,
         // Store the presentation as source of truth so the transition hook can
         // re-apply it without reading stale config from the deferred struct.
         c.presentation = presMode;
+        // Store configured width/min/max and resizable so setWidth and
+        // setResizable can reference them without the deferred struct.
+        c.configuredWidth    = width;
+        c.configuredMinWidth = minWidth;
+        c.configuredMaxWidth = maxWidth;
+        c.resizable          = (BOOL)resizable;
 
         // OWN the navigation controllers so we control the bar. The column VCs
         // are still empty (no webview yet), so this never re-parents a live
@@ -460,6 +471,13 @@ void zapp_ios_sidebar_register(void* window, void* split, void* sidebarVC,
         // before the nav-wrap (as window.m did) means the pair is set on bare VCs
         // that are immediately replaced, losing the resolved behavior.
         zapp_ios_apply_presentation(svc, presMode);
+
+        // Fix 2 (create-time): if resizable==false, lock the divider by clamping
+        // min==max==width so the user cannot drag-resize the column at launch.
+        if (!resizable && width > 0) {
+            svc.minimumPrimaryColumnWidth = (CGFloat)width;
+            svc.maximumPrimaryColumnWidth = (CGFloat)width;
+        }
 
         NSValue* key = [NSValue valueWithPointer:window];
         zapp_ios_sidebars[key] = c;
@@ -595,13 +613,27 @@ void zapp_ios_sidebar_register_leading_constraints(void* window,
 // resolves either to the host record.
 
 // Reveal the CONTENT (hide the sidebar). compact(iPhone): existing nav move.
-// regular(iPad): tile → collapse the sidebar to full content width; overlay →
-// dismiss the flyout. (hideColumn:Primary adapts to the split's behavior.)
+// regular(iPad) overlay: dismiss the flyout. regular(iPad) tile/automatic: NO-OP —
+// when the split is showing both columns side-by-side (tiled), the content is
+// ALREADY visible; collapsing the sidebar here would break the tiled layout on
+// every route change that calls showContent().
+//
+// Guard: only collapse when compact (iPhone / narrow multitasking) OR the
+// configured presentation is "overlay". "automatic" on a regular-width iPad
+// also tiles the sidebar (Mail/Notes behaviour), so do NOT gate on presentation
+// alone — gate on "compact OR overlay" so automatic-tiled is correctly a no-op.
 void darwin_sidebar_show_content(int32_t window_id) {
     zapp_ios_sidebar_on_main(^{
         ZappIOSSidebarController* c = zapp_ios_sidebar_for_slot(window_id);
         if (!c || !c.splitVC) return;
-        BOOL compact = zapp_ios_sidebar_is_compact(c);
+        BOOL compact  = zapp_ios_sidebar_is_compact(c);
+        BOOL isOverlay = [c.presentation isEqualToString:@"overlay"];
+        // On regular width with a tiled sidebar (automatic or tile presentation),
+        // showContent is a no-op — the content is always visible beside the sidebar.
+        if (!compact && !isOverlay) {
+            // Both panes are side-by-side; content is already visible. No collapse.
+            return;
+        }
         if (@available(iOS 16.0, *)) {
             if (compact) {
                 [c.splitVC showColumn:UISplitViewControllerColumnSecondary];
@@ -611,6 +643,7 @@ void darwin_sidebar_show_content(int32_t window_id) {
                 // that a content VC is on the stack.
                 zapp_ios_sidebar_rearm_pop(c);
             } else {
+                // overlay on regular: dismiss the flyout
                 [c.splitVC hideColumn:UISplitViewControllerColumnPrimary];
             }
         } else if (compact) {
@@ -619,6 +652,7 @@ void darwin_sidebar_show_content(int32_t window_id) {
                 [nav pushViewController:c.contentVC animated:YES];
             zapp_ios_sidebar_rearm_pop(c);  // defensive re-arm (see above)
         } else {
+            // overlay on pre-iOS16 regular: collapse via displayMode
             c.splitVC.preferredDisplayMode = UISplitViewControllerDisplayModeSecondaryOnly;
         }
         zapp_ios_sidebar_sync_collapse(c, YES);  // content visible == collapsed
@@ -681,9 +715,12 @@ void darwin_sidebar_expand(int32_t window_id) {
     darwin_sidebar_show_sidebar(window_id);
 }
 
-// Best-effort sidebar width: the PRIMARY column width in .doubleColumn style.
-// iOS clamps to its own min/max; only meaningful on regular width (compact is a
-// full-screen stack). Stored so a later layout/regular transition can apply it.
+// Set the sidebar width programmatically. Stores as configuredWidth and forces
+// the split to honour it even after the user has drag-resized the column (a
+// drag-resize pins the column width and subsequent preferredPrimaryColumnWidth
+// changes have no visible effect). To override a user drag: momentarily clamp
+// min==max==width, force layout, then restore the configured min/max — UNLESS
+// resizable==false, in which case leave the column locked.
 void darwin_sidebar_set_width(int32_t window_id, int32_t width) {
     zapp_ios_sidebar_on_main(^{
         ZappIOSSidebarController* c = zapp_ios_sidebar_for_slot(window_id);
@@ -691,12 +728,22 @@ void darwin_sidebar_set_width(int32_t window_id, int32_t width) {
         c.configuredWidth = width;
         if (width > 0) {
             c.splitVC.preferredPrimaryColumnWidth = (CGFloat)width;
-            // Force a relayout so the width re-applies immediately — without
-            // this, a native overlay-reveal gesture that changed displayMode can
-            // leave the split ignoring the new preferred width until the next
-            // system layout pass.
+            // Fix 3: force the width even if the user has previously drag-resized
+            // (which pins the column and makes preferredPrimaryColumnWidth a no-op).
+            // Momentarily clamp min==max==width, layout, then restore configured
+            // min/max so future drag-resize is still possible when resizable==true.
+            c.splitVC.minimumPrimaryColumnWidth = (CGFloat)width;
+            c.splitVC.maximumPrimaryColumnWidth = (CGFloat)width;
             [c.splitVC.view setNeedsLayout];
             [c.splitVC.view layoutIfNeeded];
+            if (c.resizable) {
+                // Restore the configured min/max so the user can drag freely again.
+                c.splitVC.minimumPrimaryColumnWidth = (c.configuredMinWidth > 0)
+                    ? (CGFloat)c.configuredMinWidth : 0.0;
+                c.splitVC.maximumPrimaryColumnWidth = (c.configuredMaxWidth > 0)
+                    ? (CGFloat)c.configuredMaxWidth : CGFLOAT_MAX;
+            }
+            // else: resizable==false — leave min==max==width (column stays locked).
             zapp_ios_sidebar_emit_resize(c, width);
         }
     });
@@ -709,11 +756,33 @@ void darwin_sidebar_set_collapsible(int32_t window_id, bool can_collapse) {
     (void)window_id; (void)can_collapse;
 }
 
-// Divider-drag resize isn't a UISplitViewController affordance (column widths
-// are system-managed within preferredPrimaryColumnWidth bounds). No-op for
-// router parity (documented).
+// Lock or unlock the divider drag. When resizable==false, clamp
+// minimumPrimaryColumnWidth == maximumPrimaryColumnWidth == configured width so
+// the user cannot drag-resize the sidebar column. When resizable==true, restore
+// the configured min/max so the user can drag freely within those bounds.
 void darwin_sidebar_set_resizable(int32_t window_id, bool resizable) {
-    (void)window_id; (void)resizable;
+    zapp_ios_sidebar_on_main(^{
+        ZappIOSSidebarController* c = zapp_ios_sidebar_for_slot(window_id);
+        if (!c || !c.splitVC) return;
+        c.resizable = (BOOL)resizable;
+        if (!resizable) {
+            // Lock: clamp both ends to the current configured width so no drag is
+            // possible. Use configuredWidth if set; fall back to the live
+            // preferredPrimaryColumnWidth so any previously programmatic width is
+            // honoured even if the register-time width was 0.
+            CGFloat lockWidth = (c.configuredWidth > 0)
+                ? (CGFloat)c.configuredWidth
+                : c.splitVC.preferredPrimaryColumnWidth;
+            c.splitVC.minimumPrimaryColumnWidth = lockWidth;
+            c.splitVC.maximumPrimaryColumnWidth = lockWidth;
+        } else {
+            // Restore configured min/max (0 means "use system default").
+            c.splitVC.minimumPrimaryColumnWidth = (c.configuredMinWidth > 0)
+                ? (CGFloat)c.configuredMinWidth : 0.0;
+            c.splitVC.maximumPrimaryColumnWidth = (c.configuredMaxWidth > 0)
+                ? (CGFloat)c.configuredMaxWidth : CGFLOAT_MAX;
+        }
+    });
 }
 
 // Runtime sidebar presentation switch (A2). mode: "automatic" | "tile" | "overlay".

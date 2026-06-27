@@ -180,7 +180,9 @@ static void zapp_ios_register_webview_slot(int32_t slot, WKWebView* webview, NSS
 // config string: "tile", "overlay", or NULL/"" for automatic.
 extern void zapp_ios_sidebar_register(void* window, void* split, void* sidebarVC,
                                       void* contentVC, int32_t host_id, int32_t sidebar_id,
-                                      const char* presentation);
+                                      const char* presentation,
+                                      int32_t width, int32_t minWidth, int32_t maxWidth,
+                                      bool resizable);
 
 // Implemented in ios/inspector.m. Materialize calls it AFTER both the content
 // and (optional) sidebar panes are built, handing it the persistent inspector
@@ -338,7 +340,9 @@ void zapp_ios_materialize_pending_windows(void) {
                                       (__bridge void*)sidebarVC,
                                       (__bridge void*)contentVC,
                                       d->numeric_id, d->sidebarNumericId,
-                                      d->sidebarPresentation);
+                                      d->sidebarPresentation,
+                                      d->sidebarWidth, d->sidebarMinWidth,
+                                      d->sidebarMaxWidth, d->sidebarResizable);
         }
 
         if (d->hasSidebar) {
