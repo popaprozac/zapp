@@ -274,7 +274,6 @@ static void zapp_ios_sidebar_sync_collapse(ZappIOSSidebarController* c, BOOL col
     // A regular-width iPad in portrait is still regular; just check size class
     // by inference: any width above 768 pt is safely regular on modern iPads.
     // For robustness, also check the trait collection when available.
-    (void)coordinator;   // animation block skipped — setPreferred* is instant
     if (![mode isEqualToString:@"tile"]) return;
     // Re-apply tile if incoming width can plausibly fit two columns. Use the
     // same heuristic Mail uses: re-apply unconditionally when regular, let
@@ -282,7 +281,18 @@ static void zapp_ios_sidebar_sync_collapse(ZappIOSSidebarController* c, BOOL col
     UITraitCollection* tc = self.traitCollection;
     BOOL willBeRegular = (size.width >= 768.0)
         || (tc.horizontalSizeClass == UIUserInterfaceSizeClassRegular);
-    if (willBeRegular) {
+    if (!willBeRegular) return;
+    // Run the re-apply inside the transition coordinator's animation batch so
+    // the split resolves atomically with the rotation / multitasking resize
+    // (WWDC10105 "Build for iPad" recipe). Fall back to a direct call if the
+    // coordinator is nil (shouldn't happen in practice).
+    if (coordinator) {
+        NSString* modeCopy = [mode copy];
+        [coordinator animateAlongsideTransition:^(id<UIViewControllerTransitionCoordinatorContext> ctx) {
+            (void)ctx;
+            zapp_ios_apply_presentation(self, modeCopy);
+        } completion:nil];
+    } else {
         zapp_ios_apply_presentation(self, mode);
     }
 }
