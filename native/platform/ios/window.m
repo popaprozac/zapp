@@ -162,15 +162,25 @@ static void zapp_ios_register_webview_slot(int32_t slot, WKWebView* webview, NSS
     }
 }
 
+// ZappIOSSplitViewController is defined in ios/sidebar.m. Both TUs are in the
+// same link unit (same xcbuild target) so the runtime class is always present.
+// We use it instead of UISplitViewController directly so that
+// viewWillTransitionToSize: and traitCollectionDidChange: can re-apply the
+// stored presentation pair on rotation / multitasking changes (the Mail recipe).
+// Declaring the @interface here (matching the definition in sidebar.m, which
+// the linker provides) lets the compiler resolve initWithStyle: correctly.
+@interface ZappIOSSplitViewController : UISplitViewController
+@end
+
 // Implemented in ios/sidebar.m (T3 — chrome-less master-detail). Materialize
-// calls it with the split + both column VCs + the host/sidebar ids; sidebar.m
-// wraps the columns in bar-hidden navigation controllers, installs the
-// UISplitViewControllerDelegate (land-on-sidebar + hidden nav bar), and stores
-// a per-host record keyed by the UIWindow (like darwin/sidebar.m's
-// zapp_sidebar_register). The old __attribute__((weak)) no-op shim that lived
-// here is gone now that the strong definition exists in another TU.
+// calls it after setting min/max/preferred column widths but BEFORE creating
+// pane webviews. sidebar.m nav-wraps the columns, installs the delegate, stores
+// the presentation mode, and applies the behavior+displayMode pair in its final
+// correct order (after nav-wrapped columns are set). `presentation` is the raw
+// config string: "tile", "overlay", or NULL/"" for automatic.
 extern void zapp_ios_sidebar_register(void* window, void* split, void* sidebarVC,
-                                      void* contentVC, int32_t host_id, int32_t sidebar_id);
+                                      void* contentVC, int32_t host_id, int32_t sidebar_id,
+                                      const char* presentation);
 
 // Implemented in ios/inspector.m. Materialize calls it AFTER both the content
 // and (optional) sidebar panes are built, handing it the persistent inspector
@@ -234,14 +244,15 @@ void zapp_ios_materialize_pending_windows(void) {
         WKWebView* canonicalContentWebview = nil;
 
         if (d->hasSidebar) {
-            // Sidebar window: root on a UISplitViewController (the iOS analog
-            // of macOS's NSSplitViewController). The split MUST be the window's
-            // rootViewController BEFORE either pane webview is created —
-            // re-parenting a WKWebView resets its content process and kills the
-            // bridge, so every pane is born in its final container. (Mirrors
-            // the darwin/window.m create-ordering note.)
-            UISplitViewController* split =
-                [[UISplitViewController alloc] initWithStyle:UISplitViewControllerStyleDoubleColumn];
+            // Sidebar window: root on a ZappIOSSplitViewController (our
+            // UISplitViewController subclass that re-applies the presentation
+            // pair on rotation / multitasking size changes). The split MUST be
+            // the window's rootViewController BEFORE either pane webview is
+            // created — re-parenting a WKWebView resets its content process and
+            // kills the bridge, so every pane is born in its final container.
+            // (Mirrors the darwin/window.m create-ordering note.)
+            ZappIOSSplitViewController* split =
+                [[ZappIOSSplitViewController alloc] initWithStyle:UISplitViewControllerStyleDoubleColumn];
             sidebarVC = [[UIViewController alloc] init];   // primary column
             contentVC = [[UIViewController alloc] init];   // secondary column
 
@@ -254,15 +265,18 @@ void zapp_ios_materialize_pending_windows(void) {
                                    blue:d->sidebar_bg_b/255.0 alpha:1.0]
                 : [UIColor systemBackgroundColor];
 
+            // Set the column VCs on the bare split first. zapp_ios_sidebar_register
+            // (called below, after min/max/width) will nav-wrap these and re-set
+            // them, then apply the presentation pair AFTER the final columns are
+            // in place — the correct ordering per WWDC20 10105.
             [split setViewController:sidebarVC forColumn:UISplitViewControllerColumnPrimary];
             [split setViewController:contentVC forColumn:UISplitViewControllerColumnSecondary];
-            split.preferredDisplayMode = d->sidebarCollapsed
-                ? UISplitViewControllerDisplayModeSecondaryOnly
-                : UISplitViewControllerDisplayModeOneBesideSecondary;
             // Set column min/max BEFORE preferred so the preferred value lands
             // inside the allowed range. Without min/max, iOS caps
             // preferredPrimaryColumnWidth at ~320 pt by default — any configured
             // width above that (e.g. maxWidth:500) is silently clamped.
+            // These are split-level (not column-VC-scoped) so they survive the
+            // nav-wrap re-set in zapp_ios_sidebar_register below.
             if (d->sidebarMinWidth > 0) {
                 split.minimumPrimaryColumnWidth = (CGFloat)d->sidebarMinWidth;
             }
@@ -276,21 +290,10 @@ void zapp_ios_materialize_pending_windows(void) {
                 // double-column.) Governed by the min/max set above.
                 split.preferredPrimaryColumnWidth = (CGFloat)d->sidebarWidth;
             }
-            // Sidebar presentation → UISplitViewController split behavior.
-            // Default/"" => .automatic (Apple adapts by size). "tile" forces
-            // side-by-side; "overlay" floats over content (dims, tap-out dismiss).
-            const char* sp = d->sidebarPresentation;
-            if (sp && strcmp(sp, "overlay") == 0) {
-                split.preferredSplitBehavior = UISplitViewControllerSplitBehaviorOverlay;
-                split.preferredDisplayMode = UISplitViewControllerDisplayModeSecondaryOnly;
-            } else if (sp && strcmp(sp, "tile") == 0) {
-                split.preferredSplitBehavior = UISplitViewControllerSplitBehaviorTile;
-                // displayMode was set above to OneBesideSecondary or SecondaryOnly
-                // based on sidebarCollapsed; for tile we always want side-by-side.
-                split.preferredDisplayMode = UISplitViewControllerDisplayModeOneBesideSecondary;
-            } else {
-                split.preferredSplitBehavior = UISplitViewControllerSplitBehaviorAutomatic;
-            }
+            // Presentation (preferredSplitBehavior + preferredDisplayMode) is
+            // intentionally NOT set here. zapp_ios_sidebar_register applies the
+            // pair AFTER it nav-wraps the columns — that is the correct ordering
+            // (set both together, after final columns exist, per WWDC20 10105).
             // Left-edge swipe reveals the sidebar (esp. in overlay, where the
             // flyout starts hidden). This is the system default, but set it
             // explicitly/intentionally so the reveal affordance is guaranteed.
@@ -327,11 +330,15 @@ void zapp_ios_materialize_pending_windows(void) {
         // the webviews are born inside their final (nav-wrapped) containers and
         // never re-parent. (zapp_ios_sidebar_register declared at file scope.)
         if (d->hasSidebar) {
+            // Pass the presentation string so sidebar_register can apply the
+            // behavior+displayMode pair AFTER nav-wrapping and store it for
+            // the transition hook's re-apply on rotation/multitasking changes.
             zapp_ios_sidebar_register((__bridge void*)window,
                                       (__bridge void*)window.rootViewController,
                                       (__bridge void*)sidebarVC,
                                       (__bridge void*)contentVC,
-                                      d->numeric_id, d->sidebarNumericId);
+                                      d->numeric_id, d->sidebarNumericId,
+                                      d->sidebarPresentation);
         }
 
         if (d->hasSidebar) {

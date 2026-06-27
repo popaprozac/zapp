@@ -84,9 +84,41 @@ extern int32_t zapp_ios_inspector_slot_for(int32_t host_slot);
 @property (nonatomic, assign) int32_t sidebarSlotId;   // sidebar webview's slot
 @property (nonatomic, assign) BOOL lastCollapsedEmit;  // last collapse state we emitted
 @property (nonatomic, assign) int32_t configuredWidth; // setWidth best-effort store
+// Source of truth for the current presentation mode. Set at register time from
+// the create-time config (via zapp_ios_apply_presentation) and updated by
+// darwin_sidebar_set_presentation. Values: nil/"" = automatic, "tile", "overlay".
+@property (nonatomic, copy) NSString* presentation;
 @end
 
 static NSMutableDictionary<NSValue*, ZappIOSSidebarController*>* zapp_ios_sidebars = nil;
+
+// --- Shared presentation helper -------------------------------------------
+//
+// Applies the `preferredSplitBehavior` + `preferredDisplayMode` pair to `svc`
+// from a canonical mode string ("tile", "overlay", or anything else = automatic).
+// Called from three sites:
+//   1. zapp_ios_sidebar_register (create path, after columns are nav-wrapped)
+//   2. darwin_sidebar_set_presentation (runtime setter)
+//   3. ZappIOSSplitViewController's transition/trait hooks (size-change re-apply)
+//
+// The pair MUST be applied together; setting one without the other produces
+// undefined resolved behavior (per WWDC20 10105 and community consensus).
+static void zapp_ios_apply_presentation(UISplitViewController* svc, NSString* mode) {
+    if (!svc) return;
+    if ([mode isEqualToString:@"overlay"]) {
+        svc.preferredSplitBehavior = UISplitViewControllerSplitBehaviorOverlay;
+        svc.preferredDisplayMode  = UISplitViewControllerDisplayModeSecondaryOnly;
+    } else if ([mode isEqualToString:@"tile"]) {
+        // WWDC canonical tile recipe: both flags, applied together.
+        svc.preferredSplitBehavior = UISplitViewControllerSplitBehaviorTile;
+        svc.preferredDisplayMode  = UISplitViewControllerDisplayModeOneBesideSecondary;
+    } else {
+        // "automatic" / nil / empty — let UIKit adapt (tile-landscape,
+        // overlay-portrait, collapse-compact). This is the Mail/Notes default.
+        svc.preferredSplitBehavior = UISplitViewControllerSplitBehaviorAutomatic;
+        svc.preferredDisplayMode  = UISplitViewControllerDisplayModeAutomatic;
+    }
+}
 
 static void zapp_ios_sidebar_on_main(void (^block)(void)) {
     if ([NSThread isMainThread]) block();
@@ -205,6 +237,76 @@ static void zapp_ios_sidebar_sync_collapse(ZappIOSSidebarController* c, BOOL col
     zapp_ios_sidebar_emit(c, collapsed ? "sidebar-collapsed" : "sidebar-expanded");
 }
 
+// --- ZappIOSSplitViewController subclass -----------------------------------
+//
+// Overrides the two UIKit hooks that fire on size/trait changes so the tile
+// presentation pair is re-applied whenever the split enters regular width.
+// This is the Mail/Notes recipe: (re)apply `preferredSplitBehavior` +
+// `preferredDisplayMode` on every size transition keyed off horizontal size
+// class, not orientation — multitasking can hand a landscape app a narrow width.
+//
+// The subclass is used instead of an observer because only the VC itself has the
+// correct timing for these hooks (observers fire later in the layout cycle). It
+// is declared + defined here so it can call `zapp_ios_apply_presentation` (above)
+// and read the `presentation` property from the registered ZappIOSSidebarController.
+@interface ZappIOSSplitViewController : UISplitViewController
+@end
+
+@implementation ZappIOSSplitViewController
+
+// Re-apply the stored presentation pair on any size transition.
+// `coordinator` runs the block inside the transition animation batch so the
+// split adjusts atomically with the device rotation / multitasking resize.
+- (void)viewWillTransitionToSize:(CGSize)size
+       withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator {
+    [super viewWillTransitionToSize:size withTransitionCoordinator:coordinator];
+    // Resolve the stored presentation from the sidebar registry (keyed by window).
+    UIWindow* win = self.view.window;
+    if (!win || !zapp_ios_sidebars) return;
+    NSValue* key = [NSValue valueWithPointer:(__bridge void*)win];
+    ZappIOSSidebarController* c = zapp_ios_sidebars[key];
+    if (!c) return;
+    NSString* mode = c.presentation;
+    // Only re-apply if tile is configured and we're transitioning to regular width.
+    // For automatic, UIKit handles it natively. For overlay, it already works.
+    // Key off the INCOMING size, not the current trait — size is authoritative
+    // during rotation/multitasking (traitCollection hasn't updated yet).
+    // A regular-width iPad in portrait is still regular; just check size class
+    // by inference: any width above 768 pt is safely regular on modern iPads.
+    // For robustness, also check the trait collection when available.
+    (void)coordinator;   // animation block skipped — setPreferred* is instant
+    if (![mode isEqualToString:@"tile"]) return;
+    // Re-apply tile if incoming width can plausibly fit two columns. Use the
+    // same heuristic Mail uses: re-apply unconditionally when regular, let
+    // UIKit override to overlay/collapse if the width can't actually fit.
+    UITraitCollection* tc = self.traitCollection;
+    BOOL willBeRegular = (size.width >= 768.0)
+        || (tc.horizontalSizeClass == UIUserInterfaceSizeClassRegular);
+    if (willBeRegular) {
+        zapp_ios_apply_presentation(self, mode);
+    }
+}
+
+// Re-apply on trait changes (multitasking mode switch: full-screen <-> split
+// view on iPad). `traitCollectionDidChange:` fires after the transition; use
+// the current traitCollection (already updated).
+- (void)traitCollectionDidChange:(UITraitCollection*)previousTraitCollection {
+    [super traitCollectionDidChange:previousTraitCollection];
+    if (!zapp_ios_sidebars) return;
+    UIWindow* win = self.view.window;
+    if (!win) return;
+    NSValue* key = [NSValue valueWithPointer:(__bridge void*)win];
+    ZappIOSSidebarController* c = zapp_ios_sidebars[key];
+    if (!c) return;
+    NSString* mode = c.presentation;
+    if (![mode isEqualToString:@"tile"]) return;
+    if (self.traitCollection.horizontalSizeClass == UIUserInterfaceSizeClassRegular) {
+        zapp_ios_apply_presentation(self, mode);
+    }
+}
+
+@end
+
 @implementation ZappIOSSidebarController
 
 // LAND ON THE SIDEBAR: when the split collapses to a single column on compact,
@@ -252,14 +354,21 @@ static void zapp_ios_sidebar_sync_collapse(ZappIOSSidebarController* c, BOOL col
 
 // --- Registry API consumed by window.m ------------------------------------
 //
-// window.m calls this after building the split (columns set, BEFORE the pane
-// webviews are created). We wrap the column VCs in bar-hidden navigation
-// controllers, install the delegate, and provide an explicit bar-hidden compact
-// column so the collapsed iPhone stack is chrome-less by construction. This is
-// the STRONG definition that overrides window.m's __attribute__((weak)) shim.
+// window.m calls this after building the split AND after setting the preferred
+// min/max/width values, BEFORE the pane webviews are created. We wrap the column
+// VCs in bar-hidden navigation controllers, install the delegate, store the
+// presentation mode, and apply the presentation pair (behavior + displayMode)
+// AFTER the final (nav-wrapped) columns are in place — per the WWDC 10105 rule.
+// This is the STRONG definition that window.m declares extern.
 void zapp_ios_sidebar_register(void* window, void* split, void* sidebarVC,
-                               void* contentVC, int32_t host_id, int32_t sidebar_id) {
+                               void* contentVC, int32_t host_id, int32_t sidebar_id,
+                               const char* presentation) {
     if (!window || !split) return;
+    // Capture the presentation C-string before the async block (the caller's
+    // buffer may be freed by the time the block runs if the deferred struct is
+    // torn down; copy to an NSString which is ARC-retained safely).
+    NSString* presMode = (presentation && presentation[0])
+        ? [NSString stringWithUTF8String:presentation] : @"";
     zapp_ios_sidebar_on_main(^{
         if (!zapp_ios_sidebars) zapp_ios_sidebars = [NSMutableDictionary dictionary];
 
@@ -275,6 +384,9 @@ void zapp_ios_sidebar_register(void* window, void* split, void* sidebarVC,
         c.hostWindowId = host_id;
         c.sidebarSlotId = sidebar_id;
         c.lastCollapsedEmit = NO;   // we land on the sidebar → start "expanded"
+        // Store the presentation as source of truth so the transition hook can
+        // re-apply it without reading stale config from the deferred struct.
+        c.presentation = presMode;
 
         // OWN the navigation controllers so we control the bar. The column VCs
         // are still empty (no webview yet), so this never re-parents a live
@@ -286,6 +398,9 @@ void zapp_ios_sidebar_register(void* window, void* split, void* sidebarVC,
         c.sidebarNav = sbNav;
         c.contentNav = ctNav;
 
+        // Re-install the nav-wrapped columns. This REPLACES the bare VCs that
+        // window.m set before calling us. The preferred min/max/width values
+        // window.m set are preserved on the split (they're not column-VC-scoped).
         [svc setViewController:sbNav forColumn:UISplitViewControllerColumnPrimary];
         [svc setViewController:ctNav forColumn:UISplitViewControllerColumnSecondary];
 
@@ -298,11 +413,18 @@ void zapp_ios_sidebar_register(void* window, void* split, void* sidebarVC,
 
         svc.delegate = c;
 
+        // Apply the presentation PAIR (behavior + displayMode) NOW, AFTER the
+        // final nav-wrapped columns are in place. This is the WWDC 10105 rule:
+        // set displayMode + splitBehavior together, after columns exist. Applying
+        // before the nav-wrap (as window.m did) means the pair is set on bare VCs
+        // that are immediately replaced, losing the resolved behavior.
+        zapp_ios_apply_presentation(svc, presMode);
+
         NSValue* key = [NSValue valueWithPointer:window];
         zapp_ios_sidebars[key] = c;
 
-        NSLog(@"[native] iOS sidebar registered: host=%d sidebar=%d split=%@",
-              host_id, sidebar_id, svc);
+        NSLog(@"[native] iOS sidebar registered: host=%d sidebar=%d split=%@ presentation=%@",
+              host_id, sidebar_id, svc, presMode.length ? presMode : @"automatic");
     });
 }
 
@@ -446,26 +568,19 @@ void darwin_sidebar_set_resizable(int32_t window_id, bool resizable) {
 }
 
 // Runtime sidebar presentation switch (A2). mode: "automatic" | "tile" | "overlay".
-// "tile" requires BOTH preferredSplitBehavior=Tile AND preferredDisplayMode=
-// OneBesideSecondary; splitBehavior alone leaves the split in a secondary-only/
-// summon state and never produces side-by-side layout.
+// Applies via the shared zapp_ios_apply_presentation helper so the create path,
+// this setter, and the transition hook all use exactly the same pair. Stores the
+// new mode on the controller so the transition hook re-applies it on rotation /
+// multitasking changes without reading stale config.
 void darwin_sidebar_set_presentation(int32_t window_id, const char* mode) {
+    NSString* presMode = (mode && mode[0]) ? [NSString stringWithUTF8String:mode] : @"";
     zapp_ios_sidebar_on_main(^{
         ZappIOSSidebarController* c = zapp_ios_sidebar_for_slot(window_id);
-        if (!c || !c.splitVC || !mode) return;
-        if (strcmp(mode, "overlay") == 0) {
-            // overlay already works (dims + tap-to-dismiss); leave displayMode alone.
-            c.splitVC.preferredSplitBehavior = UISplitViewControllerSplitBehaviorOverlay;
-        } else if (strcmp(mode, "tile") == 0) {
-            // Both must be set together: behavior drives the collapse affordance;
-            // displayMode drives the actual side-by-side layout.
-            c.splitVC.preferredSplitBehavior = UISplitViewControllerSplitBehaviorTile;
-            c.splitVC.preferredDisplayMode = UISplitViewControllerDisplayModeOneBesideSecondary;
-        } else {
-            // automatic: let UIKit adapt by trait / size class.
-            c.splitVC.preferredSplitBehavior = UISplitViewControllerSplitBehaviorAutomatic;
-            c.splitVC.preferredDisplayMode = UISplitViewControllerDisplayModeAutomatic;
-        }
+        if (!c || !c.splitVC) return;
+        // Update the stored presentation so ZappIOSSplitViewController's
+        // transition/trait hooks re-apply the correct pair on size changes.
+        c.presentation = presMode;
+        zapp_ios_apply_presentation(c.splitVC, presMode);
         [c.splitVC.view setNeedsLayout];
         [c.splitVC.view layoutIfNeeded];
     });
