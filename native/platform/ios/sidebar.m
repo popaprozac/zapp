@@ -775,15 +775,19 @@ void darwin_sidebar_expand(int32_t window_id) {
 // drag-resizes the sidebar column on iPad. This pin overrides
 // preferredPrimaryColumnWidth and there is NO public API to clear it directly.
 //
-// Synchronous displayMode-purge approach (iOS 16+, resizable:ON, regular):
-//   Toggle preferredDisplayMode to SecondaryOnly and back inside a single
-//   performWithoutAnimation block, forcing a layout pass while the primary
-//   column is "hidden" so UIKit must flush the drag-pin geometry against the
-//   new preferredPrimaryColumnWidth. Both the hide and restore happen in the
-//   same no-animation transaction, so the collapse is never rendered and
-//   WKWebViews keep their content process intact. This deliberately uses the
-//   preferredDisplayMode PROPERTY (not hideColumn:/showColumn:) — the latter
-//   collapses the column; the property toggle + layoutIfNeeded is in-place.
+// The pin is stored as a relative layout FRACTION inside a private style
+// subclass that is bound to the `.tile` split behavior. Toggling only
+// preferredDisplayMode leaves this subclass — and its cached fraction — alive.
+// The fix requires switching BOTH preferredSplitBehavior AND preferredDisplayMode:
+//   1. Switch to Overlay behavior + SecondaryOnly display mode: UIKit tears down
+//      the tile-behavior style subclass (and its cached user-drag fraction).
+//   2. Force a synchronous layout pass to flush the tear-down.
+//   3. Restore the original behavior + display mode: UIKit rebuilds the
+//      side-by-side tile columns from the pristine absolute
+//      preferredPrimaryColumnWidth (no fraction in sight).
+// All four assignments happen inside a single performWithoutAnimation block so
+// neither the collapse nor the rebuild is ever rendered; WKWebViews keep their
+// content process intact.
 //
 // resizable:false — setWidth IS authoritative. We lock min==max==width (the same
 //   lock darwin_sidebar_set_resizable uses), so no drag can form and UIKit honors
@@ -834,21 +838,26 @@ void darwin_sidebar_set_width(int32_t window_id, int32_t width) {
                         ? (CGFloat)c.configuredMaxWidth : svc.maximumPrimaryColumnWidth;
                     CGFloat clamped = MAX(lo, MIN(hi, (CGFloat)width));
                     [UIView performWithoutAnimation:^{
-                        UISplitViewControllerDisplayMode original = svc.preferredDisplayMode;
+                        UISplitViewControllerSplitBehavior originalBehavior  = svc.preferredSplitBehavior;
+                        UISplitViewControllerDisplayMode   originalDisplayMode = svc.preferredDisplayMode;
                         svc.preferredPrimaryColumnWidth = clamped;
-                        // Purge UIKit's user-drag gesture cache by transiently hiding
-                        // the primary column and forcing a synchronous layout while it
-                        // is "off screen". The synchronous preferredDisplayMode property
-                        // toggle (NOT hideColumn:/showColumn:, which collapses the
-                        // column) + double layoutIfNeeded inside performWithoutAnimation
-                        // overwrites UIKit's drag-pin in-place with no rendered frame
-                        // and no VC teardown (WKWebViews keep their content process).
-                        svc.preferredDisplayMode = UISplitViewControllerDisplayModeSecondaryOnly;
+                        // Tear down the tile-behavior style subclass (which owns the
+                        // cached user-drag FRACTION) by switching to overlay behavior +
+                        // secondary-only display, then force a synchronous layout so the
+                        // fraction storage is reset. Using the PROPERTY (not
+                        // hideColumn:/showColumn:) keeps the operation in-place — no VC
+                        // teardown, WKWebViews keep their content process intact.
+                        svc.preferredSplitBehavior = UISplitViewControllerSplitBehaviorOverlay;
+                        svc.preferredDisplayMode   = UISplitViewControllerDisplayModeSecondaryOnly;
                         [svc.view setNeedsLayout];
                         [svc.view layoutIfNeeded];
-                        // Restore the original display mode + flush the correct layout
-                        // in the SAME no-animation transaction (collapse never rendered).
-                        svc.preferredDisplayMode = original;
+                        // Restore the original behavior + display mode; UIKit rebuilds
+                        // the side-by-side tile columns from the pristine absolute
+                        // preferredPrimaryColumnWidth (no cached fraction). Both the
+                        // collapse and the rebuild are inside the same no-animation
+                        // transaction — neither is ever rendered.
+                        svc.preferredSplitBehavior = originalBehavior;
+                        svc.preferredDisplayMode   = originalDisplayMode;
                         [svc.view setNeedsLayout];
                         [svc.view layoutIfNeeded];
                     }];
