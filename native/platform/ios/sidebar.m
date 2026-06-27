@@ -680,27 +680,57 @@ void darwin_sidebar_show_sidebar(int32_t window_id) {
     });
 }
 
-// Toggle which column is shown on compact (sidebar <-> content). No-op on
-// regular (both always visible). Mapped onto the show/hide reveal primitives.
+// Toggle which column is shown. On compact (iPhone): push/pop via show_* helpers
+// (existing behaviour). On regular/tiled (iPad): bypass show_content's no-op
+// guard and operate DIRECTLY on the primary column — this is the explicit user
+// affordance (toolbar toggle) and MUST collapse/expand a tiled sidebar.
 void darwin_sidebar_toggle(int32_t window_id) {
     zapp_ios_sidebar_on_main(^{
         ZappIOSSidebarController* c = zapp_ios_sidebar_for_slot(window_id);
         if (!c || !c.splitVC) return;
-        BOOL sidebarVisible;
+
         if (c.splitVC.isCollapsed) {
-            // compact (iPhone): no system tap-out dismiss; tracked state is
-            // authoritative (lastCollapsedEmit YES == sidebar hidden).
-            sidebarVisible = !c.lastCollapsedEmit;
-        } else {
-            // regular (iPad): the overlay can be dismissed by the system
-            // (tap-out), so read the LIVE displayMode, not the cached flag —
-            // otherwise lastCollapsedEmit goes stale and toggle needs two taps.
-            sidebarVisible = (c.splitVC.displayMode != UISplitViewControllerDisplayModeSecondaryOnly);
+            // COMPACT (iPhone): keep existing push/pop behaviour via the
+            // show_* helpers. lastCollapsedEmit YES == sidebar hidden.
+            BOOL sidebarVisible = !c.lastCollapsedEmit;
+            if (sidebarVisible) darwin_sidebar_show_content(window_id);
+            else                darwin_sidebar_show_sidebar(window_id);
+            return;
         }
-        // The show_* ops re-dispatch to main (already on it here — they run
-        // inline since [NSThread isMainThread] is true).
-        if (sidebarVisible) darwin_sidebar_show_content(window_id);  // hide it
-        else darwin_sidebar_show_sidebar(window_id);                 // show it
+
+        // REGULAR (iPad) — direct primary-column collapse/expand, bypassing the
+        // show_content no-op guard that protects route-navigation from collapsing
+        // a tiled sidebar. Toggle is the *explicit* affordance and MUST act.
+        //
+        // Detect current shown state from the LIVE displayMode:
+        //   SecondaryOnly → sidebar is hidden (collapsed away).
+        //   Anything else → sidebar is visible (tiled beside content, or overlay).
+        BOOL sidebarHidden = (c.splitVC.displayMode == UISplitViewControllerDisplayModeSecondaryOnly);
+
+        if (!sidebarHidden) {
+            // Sidebar currently visible → COLLAPSE it (hide primary column).
+            if (@available(iOS 16.0, *)) {
+                [c.splitVC hideColumn:UISplitViewControllerColumnPrimary];
+            } else {
+                c.splitVC.preferredDisplayMode = UISplitViewControllerDisplayModeSecondaryOnly;
+            }
+            zapp_ios_sidebar_sync_collapse(c, YES);
+        } else {
+            // Sidebar currently hidden → EXPAND it (show primary column and
+            // re-apply the stored presentation so it returns to side-by-side
+            // tile/overlay rather than leaving UIKit in an intermediate state).
+            if (@available(iOS 16.0, *)) {
+                [c.splitVC showColumn:UISplitViewControllerColumnPrimary];
+            } else {
+                c.splitVC.preferredDisplayMode = UISplitViewControllerDisplayModeOneBesideSecondary;
+            }
+            // Re-apply the stored presentation pair (e.g. tile) so the column
+            // returns to its configured side-by-side mode, not just a transient
+            // show. On tile mode this also calls showColumn:Primary (iOS16+) to
+            // clear any outstanding hideColumn override.
+            zapp_ios_apply_presentation(c.splitVC, c.presentation);
+            zapp_ios_sidebar_sync_collapse(c, NO);
+        }
     });
 }
 
@@ -737,11 +767,22 @@ void darwin_sidebar_set_width(int32_t window_id, int32_t width) {
             [c.splitVC.view setNeedsLayout];
             [c.splitVC.view layoutIfNeeded];
             if (c.resizable) {
-                // Restore the configured min/max so the user can drag freely again.
-                c.splitVC.minimumPrimaryColumnWidth = (c.configuredMinWidth > 0)
-                    ? (CGFloat)c.configuredMinWidth : 0.0;
-                c.splitVC.maximumPrimaryColumnWidth = (c.configuredMaxWidth > 0)
-                    ? (CGFloat)c.configuredMaxWidth : CGFLOAT_MAX;
+                // Fix A: defer min/max restore to the NEXT main-runloop tick so UIKit
+                // gets one fully-settled layout pass at the new width before the column
+                // becomes resizable again. Without the defer, UISplitViewController
+                // reverts to the user's drag-pinned width as soon as min/max reopen in
+                // the same runloop tick, making the width buttons appear to do nothing.
+                ZappIOSSidebarController* __weak weakC = c;
+                int32_t restoreMin = c.configuredMinWidth;
+                int32_t restoreMax = c.configuredMaxWidth;
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    ZappIOSSidebarController* sc = weakC;
+                    if (!sc || !sc.splitVC) return;
+                    sc.splitVC.minimumPrimaryColumnWidth = (restoreMin > 0)
+                        ? (CGFloat)restoreMin : 0.0;
+                    sc.splitVC.maximumPrimaryColumnWidth = (restoreMax > 0)
+                        ? (CGFloat)restoreMax : CGFLOAT_MAX;
+                });
             }
             // else: resizable==false — leave min==max==width (column stays locked).
             zapp_ios_sidebar_emit_resize(c, width);
