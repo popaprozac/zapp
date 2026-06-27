@@ -32,10 +32,6 @@ extern int32_t zapp_ios_sidebar_slot_for(int32_t host_slot);
 // pane's transport slot; all resolve to the same host UIWindow via
 // darwin_window_get_by_numeric_id, so the host-window key catches them all.
 
-// Tag used to guard against duplicate close buttons when expand is called
-// more than once on the same heldInspectorVC.
-static const NSInteger kZappInspectorCloseButtonTag = 0x7A437042; // 'zCpB'
-
 @interface ZappIOSInspectorController : NSObject <UISheetPresentationControllerDelegate, UIAdaptivePresentationControllerDelegate>
 @property (nonatomic, weak)   UIViewController* inspectorVC;     // persistent inspector pane VC
 @property (nonatomic, weak)   UIViewController* contentVC;       // the content pane VC it trails
@@ -50,6 +46,10 @@ static const NSInteger kZappInspectorCloseButtonTag = 0x7A437042; // 'zCpB'
 // retains it), so the registry must keep it alive until the sheet task presents
 // it. On iPad the addChildViewController: parent owns it and this stays nil.
 @property (nonatomic, strong) UIViewController* heldInspectorVC;
+// iPhone-compact only: the UINavigationController wrapper presented as the sheet
+// (ivc is its root). We dismiss the NAV, not ivc directly, so UIKit tears down
+// the full presentation cleanly.
+@property (nonatomic, strong) UINavigationController* heldNavVC;
 @end
 
 // Forward-declared so the swipe-dismiss delegate (in @implementation below) can
@@ -64,6 +64,9 @@ static void zapp_ios_inspector_emit(ZappIOSInspectorController* c, const char* e
 // the sidebar overlay tap-out).
 - (void)presentationControllerDidDismiss:(UIPresentationController*)pc {
     (void)pc;
+    // Clear the nav wrapper so heldNavVC doesn't linger as a stale reference
+    // after the system tears the sheet down (swipe-dismiss or Done button).
+    self.heldNavVC = nil;
     self.shown = NO;
     zapp_ios_inspector_emit(self, "inspector-collapsed");
 }
@@ -279,16 +282,50 @@ void darwin_inspector_expand(int32_t window_id) {
         ZappIOSInspectorController* c = zapp_ios_inspector_for_slot(window_id);
         if (!c) return;
         if (c.compact) {
-            // iPhone: present the held VC as a sheet.
+            // iPhone: wrap the held inspector VC in a UINavigationController and
+            // present the nav as a sheet. The nav bar provides a Done button that
+            // is always reachable — including landscape where UIKit promotes
+            // pageSheet to fullscreen and the top-edge gesture zone (Notification
+            // Center) would otherwise eat a floating close button.
             UIViewController* ivc = c.heldInspectorVC;
-            if (!ivc || ivc.presentingViewController) return; // already presented
+            // Guard: already presented (nav is up).
+            if (!ivc || c.heldNavVC) return;
             void* winptr = darwin_window_get_by_numeric_id(c.hostWindowId);
             UIWindow* win = (__bridge UIWindow*)winptr;
             UIViewController* presenter = win.rootViewController;
             while (presenter.presentedViewController) presenter = presenter.presentedViewController;
-            ivc.modalPresentationStyle = UIModalPresentationPageSheet;
+
+            // Give the inspector a meaningful nav-bar title.
+            ivc.navigationItem.title = @"Inspector";
+
+            // Done button: dismisses the nav wrapper, syncs state, emits.
+            __weak ZappIOSInspectorController* weakC = c;
+            UIBarButtonItem* doneBtn =
+                [[UIBarButtonItem alloc]
+                    initWithBarButtonSystemItem:UIBarButtonSystemItemDone
+                                        target:nil
+                                        action:nil];
+            [doneBtn setPrimaryAction:
+                [UIAction actionWithHandler:^(__kindof UIAction* action) {
+                    (void)action;
+                    ZappIOSInspectorController* sc = weakC;
+                    if (!sc) return;
+                    UINavigationController* nav = sc.heldNavVC;
+                    if (nav && nav.presentingViewController) {
+                        [nav dismissViewControllerAnimated:YES completion:nil];
+                    }
+                    sc.heldNavVC = nil;
+                    sc.shown = NO;
+                    zapp_ios_inspector_emit(sc, "inspector-collapsed");
+                }]];
+            ivc.navigationItem.rightBarButtonItem = doneBtn;
+
+            // Build the nav wrapper and configure the sheet on IT (not on ivc).
+            UINavigationController* nav =
+                [[UINavigationController alloc] initWithRootViewController:ivc];
+            nav.modalPresentationStyle = UIModalPresentationPageSheet;
             if (@available(iOS 15.0, *)) {
-                UISheetPresentationController* sheet = ivc.sheetPresentationController;
+                UISheetPresentationController* sheet = nav.sheetPresentationController;
                 if (sheet) {
                     sheet.detents = @[UISheetPresentationControllerDetent.mediumDetent,
                                       UISheetPresentationControllerDetent.largeDetent];
@@ -298,57 +335,10 @@ void darwin_inspector_expand(int32_t window_id) {
                     sheet.delegate = c; // for swipe-dismiss sync (presentationControllerDidDismiss:)
                 }
             }
-            ivc.presentationController.delegate = c; // UIAdaptivePresentationControllerDelegate
+            nav.presentationController.delegate = c; // UIAdaptivePresentationControllerDelegate
 
-            // Add a guaranteed dismiss affordance: the grabber sits in the iOS
-            // top-edge gesture zone in landscape, making it unreachable (activates
-            // Notification Center). A native close button (top-trailing, safe-area-
-            // inset) bypasses that zone entirely. Guard with a tag so a second call
-            // to expand (while already presented) doesn't add a second button.
-            if (![ivc.view viewWithTag:kZappInspectorCloseButtonTag]) {
-                // Capture a weak ref to `c` so the button block doesn't retain the
-                // controller cycle. We mirror presentationControllerDidDismiss: exactly:
-                // dismiss + set shown=NO + emit inspector-collapsed.
-                __weak ZappIOSInspectorController* weakC = c;
-                UIButton* closeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-                closeBtn.tag = kZappInspectorCloseButtonTag;
-                UIImage* xImg = [UIImage systemImageNamed:@"xmark.circle.fill"];
-                if (xImg) {
-                    UIImageSymbolConfiguration* cfg =
-                        [UIImageSymbolConfiguration configurationWithPointSize:24
-                                                                        weight:UIImageSymbolWeightMedium];
-                    closeBtn.configuration = nil; // use legacy image path for tint
-                    [closeBtn setImage:[xImg imageByApplyingSymbolConfiguration:cfg]
-                              forState:UIControlStateNormal];
-                } else {
-                    [closeBtn setTitle:@"✕" forState:UIControlStateNormal];
-                }
-                closeBtn.tintColor = [UIColor secondaryLabelColor];
-                closeBtn.translatesAutoresizingMaskIntoConstraints = NO;
-                [ivc.view addSubview:closeBtn];
-                // High z-order: above the inspector webview.
-                [ivc.view bringSubviewToFront:closeBtn];
-                [NSLayoutConstraint activateConstraints:@[
-                    [closeBtn.topAnchor constraintEqualToAnchor:ivc.view.safeAreaLayoutGuide.topAnchor
-                                                       constant:12.0],
-                    [closeBtn.trailingAnchor constraintEqualToAnchor:ivc.view.safeAreaLayoutGuide.trailingAnchor
-                                                            constant:-12.0],
-                ]];
-                [closeBtn addAction:[UIAction actionWithHandler:^(__kindof UIAction* action) {
-                    (void)action;
-                    ZappIOSInspectorController* sc = weakC;
-                    if (!sc) return;
-                    UIViewController* iv = sc.heldInspectorVC;
-                    if (iv && iv.presentingViewController) {
-                        [iv dismissViewControllerAnimated:YES completion:nil];
-                    }
-                    // Mirror presentationControllerDidDismiss: — sync state + emit.
-                    sc.shown = NO;
-                    zapp_ios_inspector_emit(sc, "inspector-collapsed");
-                }] forControlEvents:UIControlEventTouchUpInside];
-            }
-
-            [presenter presentViewController:ivc animated:YES completion:nil];
+            c.heldNavVC = nav;
+            [presenter presentViewController:nav animated:YES completion:nil];
         } else {
             // iPad: animate the trailing pane in (widthConstraint 0 -> width).
             c.widthConstraint.constant = (c.width > 0 ? c.width : 280);
@@ -366,9 +356,12 @@ void darwin_inspector_collapse(int32_t window_id) {
         ZappIOSInspectorController* c = zapp_ios_inspector_for_slot(window_id);
         if (!c) return;
         if (c.compact) {
-            UIViewController* ivc = c.heldInspectorVC;
-            if (ivc && ivc.presentingViewController)
-                [ivc dismissViewControllerAnimated:YES completion:nil];
+            // Dismiss the nav wrapper (not ivc directly) so UIKit tears down
+            // the full presentation cleanly.
+            UINavigationController* nav = c.heldNavVC;
+            if (nav && nav.presentingViewController)
+                [nav dismissViewControllerAnimated:YES completion:nil];
+            c.heldNavVC = nil;
         } else {
             c.widthConstraint.constant = 0;
             [UIView animateWithDuration:0.25 animations:^{ [c.contentVC.view layoutIfNeeded]; }];
@@ -386,7 +379,7 @@ void darwin_inspector_toggle(int32_t window_id) {
         ZappIOSInspectorController* c = zapp_ios_inspector_for_slot(window_id);
         if (!c) return;
         BOOL isShown;
-        if (c.compact) isShown = (c.heldInspectorVC && c.heldInspectorVC.presentingViewController != nil);
+        if (c.compact) isShown = (c.heldNavVC && c.heldNavVC.presentingViewController != nil);
         else isShown = (c.widthConstraint.constant > 0.5);
         // The collapse/expand ops re-dispatch to main (already on it here — they
         // run inline since [NSThread isMainThread] is true).
