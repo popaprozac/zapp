@@ -113,6 +113,29 @@ const char* darwin_get_theme(void) {
     return style == UIUserInterfaceStyleDark ? "dark" : "light";
 }
 
+// --- THEME_CHANGED dispatch (deduped) ---
+// iOS appearance changes arrive per-VC via traitCollectionDidChange:; multiple
+// windows would otherwise emit duplicate app-level THEME_CHANGED. Dedup here:
+// dispatch only when the resolved theme actually changed. Mirrors the macOS
+// single-observer behavior + payload ({"theme":"dark|light"}).
+static char zapp_ios_last_theme[8] = "";
+
+void zapp_ios_theme_init_cache(void) {
+    const char* t = darwin_get_theme();
+    strncpy(zapp_ios_last_theme, t, sizeof(zapp_ios_last_theme) - 1);
+    zapp_ios_last_theme[sizeof(zapp_ios_last_theme) - 1] = '\0';
+}
+
+void zapp_ios_dispatch_theme_if_changed(void) {
+    const char* t = darwin_get_theme();
+    if (strcmp(t, zapp_ios_last_theme) == 0) return;
+    strncpy(zapp_ios_last_theme, t, sizeof(zapp_ios_last_theme) - 1);
+    zapp_ios_last_theme[sizeof(zapp_ios_last_theme) - 1] = '\0';
+    char payload[64];
+    snprintf(payload, sizeof(payload), "{\"theme\":\"%s\"}", t);
+    zapp_app_dispatch(ZAPP_EVENT_APP_THEME_CHANGED, payload);
+}
+
 // --- Shell helpers (App.openExternal / openPath / showItemInFolder / trashItem) ---
 //
 // `openExternal` works the same conceptually (open URL in default app)
@@ -211,6 +234,26 @@ const char* darwin_escape_js_string(const char* raw) {
                                              selector:@selector(zappPowerStateChanged:)
                                                  name:NSProcessInfoPowerStateDidChangeNotification
                                                object:nil];
+    zapp_ios_theme_init_cache();
+    // Device lock/unlock (passcode devices): protected-data availability —
+    // the iOS analog of macOS's com.apple.screenIs{Locked,Unlocked}.
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(zappScreenLocked:)
+                                                 name:UIApplicationProtectedDataWillBecomeUnavailable
+                                               object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(zappScreenUnlocked:)
+                                                 name:UIApplicationProtectedDataDidBecomeAvailable
+                                               object:nil];
+    // External display connect/disconnect → SCREENS_CHANGED.
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(zappScreensChanged:)
+                                                 name:UIScreenDidConnectNotification
+                                               object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(zappScreensChanged:)
+                                                 name:UIScreenDidDisconnectNotification
+                                               object:nil];
     zapp_app_dispatch(ZAPP_EVENT_APP_STARTED, NULL);
 
     // Drain the deferred-window queue from window.m. The framework's
@@ -232,6 +275,9 @@ const char* darwin_escape_js_string(const char* raw) {
 }
 
 - (void)zappPowerStateChanged:(NSNotification*)note { (void)note; zapp_power_on_change(); }
+- (void)zappScreenLocked:(NSNotification*)note   { (void)note; zapp_app_dispatch(ZAPP_EVENT_APP_SCREEN_LOCKED, "{}"); }
+- (void)zappScreenUnlocked:(NSNotification*)note { (void)note; zapp_app_dispatch(ZAPP_EVENT_APP_SCREEN_UNLOCKED, "{}"); }
+- (void)zappScreensChanged:(NSNotification*)note { (void)note; zapp_app_dispatch(ZAPP_EVENT_APP_SCREENS_CHANGED, "{}"); }
 
 - (void)applicationDidBecomeActive:(UIApplication*)application {
     (void)application;

@@ -348,6 +348,10 @@ static void zapp_ios_sidebar_sync_collapse(ZappIOSSidebarController* c, BOOL col
     // Always update the content webview's leading constraint — the horizontal
     // size class may have changed (e.g. multitasking → full-screen or vice-versa).
     zapp_ios_update_content_leading(c);
+    // App-level THEME_CHANGED (deduped in the helper — safe to call on any
+    // trait change; only a real light/dark switch dispatches).
+    extern void zapp_ios_dispatch_theme_if_changed(void);
+    zapp_ios_dispatch_theme_if_changed();
 }
 
 @end

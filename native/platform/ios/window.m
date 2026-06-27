@@ -173,6 +173,19 @@ static void zapp_ios_register_webview_slot(int32_t slot, WKWebView* webview, NSS
 @interface ZappIOSSplitViewController : UISplitViewController
 @end
 
+// Root VC for the no-sidebar window. The sidebar path gets THEME_CHANGED from
+// ZappIOSSplitViewController's traitCollectionDidChange:; the plain path needs
+// its own override so a no-sidebar window also dispatches the app-level event.
+@interface ZappIOSRootViewController : UIViewController
+@end
+@implementation ZappIOSRootViewController
+- (void)traitCollectionDidChange:(UITraitCollection*)previous {
+    [super traitCollectionDidChange:previous];
+    extern void zapp_ios_dispatch_theme_if_changed(void);
+    zapp_ios_dispatch_theme_if_changed();
+}
+@end
+
 // Implemented in ios/sidebar.m (T3 — chrome-less master-detail). Materialize
 // calls it after setting min/max/preferred column widths but BEFORE creating
 // pane webviews. sidebar.m nav-wraps the columns, installs the delegate, stores
@@ -306,7 +319,7 @@ void zapp_ios_materialize_pending_windows(void) {
             window.rootViewController = split;   // BEFORE any webview creation
         } else {
             // Single-pane window: lone root VC hosting the content webview.
-            UIViewController* root = [[UIViewController alloc] init];
+            UIViewController* root = [[ZappIOSRootViewController alloc] init];
             root.view.frame = window.bounds;
             root.view.backgroundColor = bgColor;
             contentVC = root;

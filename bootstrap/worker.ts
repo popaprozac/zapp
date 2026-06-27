@@ -103,11 +103,20 @@
   // Native-driven event dispatch callbacks.
   bridge._dispatchAppEvent = function (eventId: number, dataJson: string) {
     const eventMap: Record<number, string> = {
+      // Keep in sync with APP_EVENT_NAMES (runtime/events.ts) + the internal
+      // notification ids 102/103. Bootstrap bundles are standalone (no imports),
+      // so this is mirrored rather than derived. 109-116 were previously dropped
+      // for workers (incl. power 114/115) — this is the fix.
       100: "app:started", 101: "app:shutdown",
       102: "app:notification-click", 103: "app:notification-action",
       104: "app:reopen", 105: "app:open-url",
       106: "app:active", 107: "app:inactive",
       108: "app:theme-changed",
+      109: "app:will-sleep", 110: "app:did-wake",
+      111: "app:screen-locked", 112: "app:screen-unlocked",
+      113: "app:before-quit",
+      114: "app:power-state-changed", 115: "app:battery-level-changed",
+      116: "app:screens-changed",
     };
     const name = eventMap[eventId];
     if (!name) return;
