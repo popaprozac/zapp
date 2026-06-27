@@ -4,6 +4,8 @@ export function card(opts: {
   title: string;
   intro?: string;
   buttons: { act: string; label: string }[];
+  /** Optional platform/behavior note rendered under the buttons (allows inline HTML). */
+  note?: string;
 }): HTMLElement {
   const el = document.createElement("section");
   el.className = "card";
@@ -14,6 +16,7 @@ export function card(opts: {
     <h2>${opts.title}</h2>
     ${opts.intro ? `<p class="intro">${opts.intro}</p>` : ""}
     <div class="row">${btns}</div>
+    ${opts.note ? `<p class="note">${opts.note}</p>` : ""}
     <div class="result" data-result></div>`;
   return el;
 }

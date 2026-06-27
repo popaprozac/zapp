@@ -24,6 +24,8 @@ export const sidebarSection: Section = {
           { act: "presTile", label: "Tile" },
           { act: "presOverlay", label: "Overlay" },
         ],
+        note:
+          "<b>On iPad:</b> the sidebar tiles beside the content (Mail-style); at narrow widths or in Slide Over it becomes an overlay — switch <b>Auto / Tile / Overlay</b> to compare. With <b>Resizable: on</b> the user owns the width: drag the divider to resize. <code>setWidth</code> (the Width buttons) sets the starting width, but once you drag, your width wins and <code>setWidth</code> stops moving the divider — a UIKit limitation. Switch <b>Resizable: off</b> to make <code>setWidth</code> authoritative again. <b>On iPhone:</b> the sidebar is a slide-over drawer. (On macOS it's the native NSSplitView above — drag and <code>setWidth</code> always cooperate.)",
       }),
     );
     onAct(host, "toggle", () => {

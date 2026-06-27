@@ -108,6 +108,8 @@ h2 { font-size: 16px; color: var(--text-h); margin: 0 0 8px; font-weight: 600; }
 .stage { display: flex; flex-direction: column; gap: 16px; }
 .card { border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
 .card .intro { margin: 0 0 12px; opacity: 0.7; font-size: 12px; }
+.card .note { margin: 12px 0 0; opacity: 0.75; font-size: 12px; line-height: 1.5; border-top: 1px solid var(--border); padding-top: 10px; }
+.card .note code { font-family: ui-monospace, Consolas, monospace; font-size: 11px; opacity: 0.9; }
 .card .row { display: flex; flex-wrap: wrap; gap: 8px; }
 .card button {
   font: inherit; color: var(--accent); background: var(--accent-bg);
