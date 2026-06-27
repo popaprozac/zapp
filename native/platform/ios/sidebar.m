@@ -693,14 +693,12 @@ void darwin_sidebar_show_sidebar(int32_t window_id) {
 // (existing behaviour). On regular/tiled (iPad): bypass show_content's no-op
 // guard and operate DIRECTLY on the primary column — this is the explicit user
 // affordance (toolbar toggle) and MUST collapse/expand a tiled sidebar.
-// When collapsible==NO, this is a no-op on BOTH paths.
+// collapsible:false only gates the NATIVE edge-swipe gesture (presentsWithGesture);
+// the programmatic toggle (API + app ☰ button) still works — matching macOS parity.
 void darwin_sidebar_toggle(int32_t window_id) {
     zapp_ios_sidebar_on_main(^{
         ZappIOSSidebarController* c = zapp_ios_sidebar_for_slot(window_id);
         if (!c || !c.splitVC) return;
-
-        // collapsible:false — toggle is a no-op; sidebar must stay as-is.
-        if (!c.collapsible) return;
 
         if (c.splitVC.isCollapsed) {
             // COMPACT (iPhone): keep existing push/pop behaviour via the
@@ -729,19 +727,29 @@ void darwin_sidebar_toggle(int32_t window_id) {
             }
             zapp_ios_sidebar_sync_collapse(c, YES);
         } else {
-            // Sidebar currently hidden → EXPAND it (show primary column and
-            // re-apply the stored presentation so it returns to side-by-side
-            // tile/overlay rather than leaving UIKit in an intermediate state).
+            // Sidebar currently hidden → EXPAND it (show primary column).
+            //
+            // For overlay presentation: showColumn:Primary summons the flyout
+            // directly. Do NOT call zapp_ios_apply_presentation after this —
+            // the overlay helper sets preferredDisplayMode=SecondaryOnly, which
+            // would immediately re-hide the column we just summoned.
+            //
+            // For tile/automatic: showColumn:Primary then re-apply the stored
+            // presentation pair so the column returns to side-by-side mode
+            // (not just a transient show). The tile path also calls
+            // showColumn:Primary internally to clear any outstanding hideColumn
+            // override, making the explicit call here redundant but harmless.
             if (@available(iOS 16.0, *)) {
                 [c.splitVC showColumn:UISplitViewControllerColumnPrimary];
             } else {
                 c.splitVC.preferredDisplayMode = UISplitViewControllerDisplayModeOneBesideSecondary;
             }
-            // Re-apply the stored presentation pair (e.g. tile) so the column
-            // returns to its configured side-by-side mode, not just a transient
-            // show. On tile mode this also calls showColumn:Primary (iOS16+) to
-            // clear any outstanding hideColumn override.
-            zapp_ios_apply_presentation(c.splitVC, c.presentation);
+            // Only re-apply the presentation pair for tile/automatic; for
+            // overlay, showColumn:Primary alone summons the flyout and re-
+            // applying would undo it.
+            if (![c.presentation isEqualToString:@"overlay"]) {
+                zapp_ios_apply_presentation(c.splitVC, c.presentation);
+            }
             zapp_ios_sidebar_sync_collapse(c, NO);
         }
     });
@@ -826,13 +834,22 @@ void darwin_sidebar_set_resizable(int32_t window_id, bool resizable) {
         if (!c || !c.splitVC) return;
         c.resizable = (BOOL)resizable;
         if (!resizable) {
-            // Lock: clamp both ends to the current configured width so no drag is
-            // possible. Use configuredWidth if set; fall back to the live
-            // preferredPrimaryColumnWidth so any previously programmatic width is
-            // honoured even if the register-time width was 0.
-            CGFloat lockWidth = (c.configuredWidth > 0)
-                ? (CGFloat)c.configuredWidth
-                : c.splitVC.preferredPrimaryColumnWidth;
+            // Lock: clamp both ends to the LIVE current column width so the
+            // sidebar freezes at whatever width it currently shows — including
+            // any width the user reached by dragging the divider (a drag never
+            // updates configuredWidth, so clamping to configuredWidth would snap
+            // the sidebar to a stale value).
+            //
+            // Read the live width from the sidebarNav's view bounds (the actual
+            // primary-column container laid out to the column width). Fall back
+            // to configuredWidth (pre-layout / zero-bounds), then to
+            // preferredPrimaryColumnWidth as a last resort.
+            CGFloat liveWidth = c.sidebarNav.view.bounds.size.width;
+            CGFloat lockWidth = (liveWidth > 0.0)
+                ? liveWidth
+                : ((c.configuredWidth > 0)
+                    ? (CGFloat)c.configuredWidth
+                    : c.splitVC.preferredPrimaryColumnWidth);
             // Guard: never clamp to 0 (would collapse the column to nothing if
             // called before first layout with no configured width).
             if (lockWidth > 0.0) {
