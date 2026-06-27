@@ -769,25 +769,31 @@ void darwin_sidebar_expand(int32_t window_id) {
 
 // Set the sidebar width programmatically.
 //
-// UIKit DRAG-PIN OVERRIDE STRATEGY — resizable:ON on regular iPad:
+// DRAG-PIN PURGE STRATEGY — resizable:ON, regular iPad (horizontalSizeClass==Regular
+// && !isCollapsed):
 //
 // UISplitViewController stores an internal "user-drag pin" when the user
 // drag-resizes the sidebar column on iPad. This pin overrides
 // preferredPrimaryColumnWidth and there is NO public API to clear it directly.
 //
-// The pin is stored as a relative layout FRACTION inside a private style
-// subclass that is bound to the `.tile` split behavior. Toggling only
-// preferredDisplayMode leaves this subclass — and its cached fraction — alive.
-// The fix requires switching BOTH preferredSplitBehavior AND preferredDisplayMode:
-//   1. Switch to Overlay behavior + SecondaryOnly display mode: UIKit tears down
-//      the tile-behavior style subclass (and its cached user-drag fraction).
-//   2. Force a synchronous layout pass to flush the tear-down.
-//   3. Restore the original behavior + display mode: UIKit rebuilds the
-//      side-by-side tile columns from the pristine absolute
-//      preferredPrimaryColumnWidth (no fraction in sight).
-// All four assignments happen inside a single performWithoutAnimation block so
-// neither the collapse nor the rebuild is ever rendered; WKWebViews keep their
-// content process intact.
+// APPROACH: synchronous min/max clamp sandwich (iOS 14+ APIs only).
+//
+// Instead of detaching or swapping view controllers, we purge the drag-pin by
+// temporarily locking min==max==clamped (tight-clamping the column to exactly
+// the target width), forcing two synchronous layout flushes inside ONE
+// performWithoutAnimation block. UIKit resolves the column frame to `clamped`
+// during the first flush. We then restore the real flexible bounds (min/max)
+// SYNCHRONOUSLY (no dispatch_async) and flush a second time — the column stays
+// at `clamped` because preferredPrimaryColumnWidth is still set to it. The
+// entire operation is committed in one CA transaction; no runloop iteration
+// separates the lock from the restore, so there is no snap-back.
+//
+// SAFETY: this approach deliberately does NOT detach views, swap VCs, toggle
+// preferredDisplayMode/preferredSplitBehavior, or call hideColumn/showColumn.
+// WKWebView never leaves the window hierarchy, so there is zero bridge risk.
+// All APIs used (minimumPrimaryColumnWidth, maximumPrimaryColumnWidth,
+// preferredPrimaryColumnWidth, layoutIfNeeded) are available since iOS 14 —
+// no @available(iOS 16) gate is required.
 //
 // resizable:false — setWidth IS authoritative. We lock min==max==width (the same
 //   lock darwin_sidebar_set_resizable uses), so no drag can form and UIKit honors
@@ -828,49 +834,35 @@ void darwin_sidebar_set_width(int32_t window_id, int32_t width) {
             BOOL isCollapsed = c.splitVC.isCollapsed;
 
             if (isRegular && !isCollapsed) {
-                if (@available(iOS 16.0, *)) {
-                    UISplitViewController* svc = c.splitVC;
-                    if (!svc) return;
-                    // Clamp to the configured resizable bounds (avoid layout exceptions).
-                    CGFloat lo = (c.configuredMinWidth > 0)
-                        ? (CGFloat)c.configuredMinWidth : svc.minimumPrimaryColumnWidth;
-                    CGFloat hi = (c.configuredMaxWidth > 0)
-                        ? (CGFloat)c.configuredMaxWidth : svc.maximumPrimaryColumnWidth;
-                    CGFloat clamped = MAX(lo, MIN(hi, (CGFloat)width));
-                    [UIView performWithoutAnimation:^{
-                        UISplitViewControllerSplitBehavior originalBehavior  = svc.preferredSplitBehavior;
-                        UISplitViewControllerDisplayMode   originalDisplayMode = svc.preferredDisplayMode;
-                        svc.preferredPrimaryColumnWidth = clamped;
-                        // Tear down the tile-behavior style subclass (which owns the
-                        // cached user-drag FRACTION) by switching to overlay behavior +
-                        // secondary-only display, then force a synchronous layout so the
-                        // fraction storage is reset. Using the PROPERTY (not
-                        // hideColumn:/showColumn:) keeps the operation in-place — no VC
-                        // teardown, WKWebViews keep their content process intact.
-                        svc.preferredSplitBehavior = UISplitViewControllerSplitBehaviorOverlay;
-                        svc.preferredDisplayMode   = UISplitViewControllerDisplayModeSecondaryOnly;
-                        [svc.view setNeedsLayout];
-                        [svc.view layoutIfNeeded];
-                        // Restore the original behavior + display mode; UIKit rebuilds
-                        // the side-by-side tile columns from the pristine absolute
-                        // preferredPrimaryColumnWidth (no cached fraction). Both the
-                        // collapse and the rebuild are inside the same no-animation
-                        // transaction — neither is ever rendered.
-                        svc.preferredSplitBehavior = originalBehavior;
-                        svc.preferredDisplayMode   = originalDisplayMode;
-                        [svc.view setNeedsLayout];
-                        [svc.view layoutIfNeeded];
-                    }];
-                    c.configuredWidth = (int32_t)clamped;
-                    zapp_ios_sidebar_emit_resize(c, (int32_t)clamped);
-                } else {
-                    // Pre-iOS 16, resizable:ON — no drag-pin purge available;
-                    // set preferredPrimaryColumnWidth directly.
-                    c.splitVC.preferredPrimaryColumnWidth = (CGFloat)width;
-                    [c.splitVC.view setNeedsLayout];
-                    [c.splitVC.view layoutIfNeeded];
-                    zapp_ios_sidebar_emit_resize(c, width);
-                }
+                UISplitViewController* svc = c.splitVC;
+                if (!svc) return;
+                // Clamp the requested width to the configured flexible bounds.
+                CGFloat originalMin = (c.configuredMinWidth > 0) ? (CGFloat)c.configuredMinWidth : svc.minimumPrimaryColumnWidth;
+                CGFloat originalMax = (c.configuredMaxWidth > 0) ? (CGFloat)c.configuredMaxWidth : svc.maximumPrimaryColumnWidth;
+                CGFloat clamped = MAX(originalMin, MIN(originalMax, (CGFloat)width));
+                [UIView performWithoutAnimation:^{
+                    // Set the target baseline.
+                    svc.preferredPrimaryColumnWidth = clamped;
+                    // Tight-lock min==max==clamped and flush — this resolves the frame at
+                    // the boundary, overwriting UIKit's cached user-drag fraction. No VC
+                    // detach, no displayMode/splitBehavior toggle, no hideColumn/showColumn —
+                    // WKWebView stays attached throughout (zero bridge risk).
+                    svc.minimumPrimaryColumnWidth = clamped;
+                    svc.maximumPrimaryColumnWidth = clamped;
+                    [svc.view setNeedsLayout];
+                    [svc.view layoutIfNeeded];
+                    // Restore the real flexible bounds SYNCHRONOUSLY (no dispatch_async) and
+                    // flush again — column stays at `clamped` because
+                    // preferredPrimaryColumnWidth==clamped. The whole purge is committed in
+                    // one CA transaction; no runloop iteration separates lock from restore,
+                    // so there is no snap-back.
+                    svc.minimumPrimaryColumnWidth = originalMin;
+                    svc.maximumPrimaryColumnWidth = originalMax;
+                    [svc.view setNeedsLayout];
+                    [svc.view layoutIfNeeded];
+                }];
+                c.configuredWidth = (int32_t)clamped;
+                zapp_ios_sidebar_emit_resize(c, (int32_t)clamped);
             } else {
                 // Compact / collapsed — no drag pin; set preferred directly.
                 c.splitVC.preferredPrimaryColumnWidth = (CGFloat)width;
