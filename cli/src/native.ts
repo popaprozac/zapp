@@ -41,6 +41,18 @@ export function isIOSTarget(t: BuildTarget): boolean {
 }
 
 /**
+ * Extra `nim c` `-d:` defines for a build target. iOS targets get `-d:zappIos`
+ * so hand-written Nim (router.nim/dialog.nim) can compile-gate iOS-only branches
+ * (the async UIKit dialog path) — the Nim-layer analog of router.zc's
+ * `#if TARGET_OS_IPHONE`. We use a project-namespaced symbol (NOT `ios`) to avoid
+ * colliding with Nim's built-in `defined(ios)` OS conditional, which is keyed off
+ * `--os:` (we compile with the host `--os:macosx` + iOS clang flags).
+ */
+export function nimDefinesForTarget(target: BuildTarget): string[] {
+  return isIOSTarget(target) ? ["-d:zappIos"] : [];
+}
+
+/**
  * Build the permissions manifest object baked into the Nim build config.
  * Mirrors the zc path's manifest shape (build-config.ts permissions block):
  * `{ platform, active, allow }`. The `platform` string is TARGET-DERIVED —
@@ -1291,6 +1303,7 @@ async function buildNativeNim(
   }
 
   const args = ["c", "--cc:clang", "--mm:orc", "--threads:on", "-d:release", "--opt:size",
+                ...nimDefinesForTarget(target),
                 `--path:${zappDir}`, `--path:${nimFrameworkDir}`,
                 ...iosArgs,
                 `-o:${output}`, ...(verbose ? [] : ["--hints:off"]), nimRoot];

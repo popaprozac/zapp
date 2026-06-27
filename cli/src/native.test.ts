@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { detectTarget, isIOSTarget } from "./native";
+import { detectTarget, isIOSTarget, nimDefinesForTarget } from "./native";
 
 test("detectTarget: --platform ios → ios-simulator", () => {
   expect(detectTarget(["--platform", "ios"])).toBe("ios-simulator");
@@ -21,4 +21,13 @@ test("isIOSTarget classifies the iOS variants", () => {
   expect(isIOSTarget("ios-device")).toBe(true);
   expect(isIOSTarget("macos")).toBe(false);
   expect(isIOSTarget("windows")).toBe(false);
+});
+
+test("nimDefinesForTarget: iOS targets get -d:zappIos", () => {
+  expect(nimDefinesForTarget("ios-simulator")).toEqual(["-d:zappIos"]);
+  expect(nimDefinesForTarget("ios-device")).toEqual(["-d:zappIos"]);
+});
+test("nimDefinesForTarget: macos/windows get no extra defines", () => {
+  expect(nimDefinesForTarget("macos")).toEqual([]);
+  expect(nimDefinesForTarget("windows")).toEqual([]);
 });

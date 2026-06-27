@@ -279,27 +279,46 @@ proc routeClipboard(m: string, a: JsonNode, windowId, id: int) =
   else:
     sendInvokeResponse(windowId, id, false, "UNKNOWN_CLIPBOARD")
 
+when defined(zappIos):
+  proc dialogAsyncReply(wid, rid: int32; ok: bool; json: cstring) {.cdecl.} =
+    ## iOS dialog completion (UIKit main-thread callback). Extends the FS
+    ## allowlist with any picked paths — a no-op for save/message results, which
+    ## carry no `paths` array (dialogGrantedPaths returns @[]) — then resolves the
+    ## invoke promise. Mirrors router.zc's dialog_open_response_cb_zc. Runs on the
+    ## main thread (same as routeDialog), so ORC GC is safe; no foreign-thread init.
+    let payload = if json.isNil: "null" else: $json
+    if ok and not json.isNil:
+      for p in dialogGrantedPaths(payload): fsGrantPath(p)
+    sendInvokeResponse(wid.int, rid.int, ok, payload)
+
 proc routeDialog(meth: string, a: JsonNode, windowId, id: int) =
-  ## t:1 `__dialog:*` — desktop path (mirror router.zc:1430-1535). Pass the
-  ## options object (JSON) to the darwin_dialog_* JSON variant; reply with the
-  ## result JSON the runtime JSON.parses. On `__dialog:open`, grant each picked
-  ## path to the FS session allowlist (so FS/shell-path ops can act on it).
-  ## (iOS async + Windows branches are out of scope; macOS desktop only.)
+  ## t:1 `__dialog:*`. macOS (else): sync darwin_dialog_* JSON variant, reply
+  ## inline, grant picked paths to the FS session allowlist. iOS (zappIos): the
+  ## pickers/alerts are async-presentation only — call the async variant and let
+  ## dialogAsyncReply resolve the invoke + grant paths from the UIKit callback.
   let optionsJson = (if a.isNil: "{}" else: $a)
-  var resultStr = ""
-  case meth
-  of "__dialog:open":   resultStr = dialogOpenFile(optionsJson)
-  of "__dialog:save":   resultStr = dialogSaveFile(optionsJson)
-  of "__dialog:message": resultStr = dialogMessage(optionsJson)
+  when defined(zappIos):
+    case meth
+    of "__dialog:open":    dialogOpenFileAsync(windowId, id, optionsJson, dialogAsyncReply)
+    of "__dialog:save":    dialogSaveFileAsync(windowId, id, optionsJson, dialogAsyncReply)
+    of "__dialog:message": dialogMessageAsync(windowId, id, optionsJson, dialogAsyncReply)
+    else: sendInvokeResponse(windowId, id, false, "UNKNOWN_DIALOG")
+    # async: dialogAsyncReply replies later — no inline reply here.
   else:
-    sendInvokeResponse(windowId, id, false, "UNKNOWN_DIALOG")
-    return
-  if meth == "__dialog:open" and resultStr.len > 0:
-    for p in dialogGrantedPaths(resultStr): fsGrantPath(p)
-  if resultStr.len > 0:
-    sendInvokeResponse(windowId, id, true, resultStr)
-  else:
-    sendInvokeResponse(windowId, id, false, "UNKNOWN_DIALOG")
+    var resultStr = ""
+    case meth
+    of "__dialog:open":   resultStr = dialogOpenFile(optionsJson)
+    of "__dialog:save":   resultStr = dialogSaveFile(optionsJson)
+    of "__dialog:message": resultStr = dialogMessage(optionsJson)
+    else:
+      sendInvokeResponse(windowId, id, false, "UNKNOWN_DIALOG")
+      return
+    if meth == "__dialog:open" and resultStr.len > 0:
+      for p in dialogGrantedPaths(resultStr): fsGrantPath(p)
+    if resultStr.len > 0:
+      sendInvokeResponse(windowId, id, true, resultStr)
+    else:
+      sendInvokeResponse(windowId, id, false, "UNKNOWN_DIALOG")
 
 proc routeNotification(meth: string, a: JsonNode, windowId, id: int) =
   ## t:1 `__notif:*` (mirror router.zc:1551-1690). Async ops (requestPermission/
