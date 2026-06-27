@@ -410,12 +410,14 @@ void zapp_ios_materialize_pending_windows(void) {
                                                      (__bridge void*)contentWebview);
             }
 
-            // Underpage fill on both panes when the app set a background color.
-            if (d->has_bg) {
-                if (@available(iOS 15.0, *)) {
-                    if (contentWebview) contentWebview.underPageBackgroundColor = bgColor;
-                    if (sidebarWebview) sidebarWebview.underPageBackgroundColor = bgColor;
-                }
+            // Underpage fill on both panes — ALWAYS (bgColor is the brand bg if
+            // set, else the adaptive systemBackgroundColor). Filling the pre-paint
+            // / overscroll gap means a presenting sheet slides up already colored
+            // instead of flashing WebKit's default white and popping content in
+            // (esp. visible in dark mode). The page's CSS background paints over it.
+            if (@available(iOS 15.0, *)) {
+                if (contentWebview) contentWebview.underPageBackgroundColor = bgColor;
+                if (sidebarWebview) sidebarWebview.underPageBackgroundColor = bgColor;
             }
             // (windowId / isSidebar / hasSidebar are injected as document-start
             // user scripts inside darwin_webview_create_ext — a one-shot eval
@@ -443,11 +445,12 @@ void zapp_ios_materialize_pending_windows(void) {
                         @"globalThis[Symbol.for('zapp.windowId')]='win-%d';", d->numeric_id];
                     [d->real_webview evaluateJavaScript:setIdJs completionHandler:nil];
                     // Seed the webview's underpage fill (WebView2 DefaultBackground
-                    // analogue) when the app set a background color.
-                    if (d->has_bg) {
-                        if (@available(iOS 15.0, *)) {
-                            d->real_webview.underPageBackgroundColor = bgColor;
-                        }
+                    // analogue) — ALWAYS: brand bg if set, else the adaptive system
+                    // background. Fills the pre-paint gap so a presenting sheet
+                    // slides up already colored instead of flashing white + popping
+                    // content in once the load commits.
+                    if (@available(iOS 15.0, *)) {
+                        d->real_webview.underPageBackgroundColor = bgColor;
                     }
                 }
             }
@@ -1092,6 +1095,15 @@ void darwin_window_attach_modal(void* parent_handle, void* modal_handle) {
     int32_t sheetPres = modalDef ? modalDef->sheet_presentation : 0;
     int32_t sheetDetents = modalDef ? modalDef->sheet_detents : 0;
     bool sheetGrabber = modalDef ? modalDef->sheet_grabber : false;
+    // Sheet card fill — paint the presented VC's view with the window bg so the
+    // sheet slides up already colored (the webview's underPageBackgroundColor,
+    // set at materialize, fills the content area; this backs any inset/gap during
+    // the slide). Captured off modalDef before the block (same safety reason as
+    // the sheet opts above).
+    bool modalHasBg = modalDef ? modalDef->has_bg : false;
+    int modalBgR = modalDef ? modalDef->bg_r : 0;
+    int modalBgG = modalDef ? modalDef->bg_g : 0;
+    int modalBgB = modalDef ? modalDef->bg_b : 0;
 
     void (^run)(void) = ^{
         // Hold the VC strong before clearing rootViewController
@@ -1177,6 +1189,11 @@ void darwin_window_attach_modal(void* parent_handle, void* modal_handle) {
             zapp_ios_modal_stack[zapp_ios_modal_stack_count].modal_id = modalId;
             zapp_ios_modal_stack_count++;
         }
+
+        UIColor* sheetCardBg = modalHasBg
+            ? [UIColor colorWithRed:modalBgR/255.0 green:modalBgG/255.0 blue:modalBgB/255.0 alpha:1.0]
+            : [UIColor systemBackgroundColor];
+        vcStrong.view.backgroundColor = sheetCardBg;
 
         [parentVC presentViewController:vcStrong animated:YES completion:nil];
     };
