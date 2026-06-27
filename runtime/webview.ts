@@ -39,17 +39,20 @@ function panelPost(action: string, args: Record<string, unknown>): void {
 // disconnectedCallback, causing panels to leak without explicit teardown).
 const _livePanels = new Set<ZappWebviewElement>();
 
-// Install a ONE-TIME pagehide listener (module load, DOM context only). On
+// Install the pagehide listener ONCE (module load, DOM context only). On
 // full-page navigation the browser fires pagehide before unloading; we iterate
 // the registry and destroy every live panel so native child WKWebViews are
-// removed even when disconnectedCallback never fires.
+// removed even when disconnectedCallback never fires. NOT `{ once: true }`:
+// pagehide can fire repeatedly (bfcache restore re-populates _livePanels via
+// connectedCallback, then a later nav fires pagehide again). The handler is
+// idempotent — clear() on an already-empty set is harmless.
 if (typeof window !== "undefined") {
   window.addEventListener("pagehide", () => {
     for (const el of _livePanels) {
       panelPost("panelDestroy", { panelId: (el as any)._panelId });
     }
     _livePanels.clear();
-  }, { once: true, capture: true });
+  }, { capture: true });
 }
 
 // Base class: the real HTMLElement in a DOM/webview context, or a no-op
@@ -152,8 +155,8 @@ export class ZappWebviewElement extends HostElement {
     // of getBoundingClientRect values relative to the native layer). Guard for
     // environments that don't expose visualViewport (e.g. workers, older Safari).
     if (typeof window !== "undefined" && window.visualViewport) {
-      window.visualViewport.addEventListener("resize", this._onWinChange);
-      window.visualViewport.addEventListener("scroll", this._onWinChange);
+      window.visualViewport.addEventListener("resize", this._onWinChange, { passive: true });
+      window.visualViewport.addEventListener("scroll", this._onWinChange, { passive: true });
     }
     try { this._armIO(); } catch { /* IO is an optimization; listeners cover correctness */ }
   }
