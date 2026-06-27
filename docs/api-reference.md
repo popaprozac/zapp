@@ -914,7 +914,9 @@ iPad-regular, where both panes are always side-by-side.
 `setCollapsible(bool)` / `setResizable(bool)` are macOS-only. iOS sidebar
 collapse is size-class–driven by `UISplitViewController`; there is no
 divider-drag affordance to gate, so these calls are no-ops on iOS.
-`setWidth()` still works programmatically on iOS.
+`setWidth()` works programmatically on iOS: authoritative when `resizable:false`
+(min==max lock), a best-effort preference when `resizable:true` (overridden by
+a user drag — UIKit limitation; see [Sidebar on iOS](#sidebar-on-ios)).
 
 **Identity rules.** Both panes see the same host window through
 `Window.current()` — code in the sidebar can call
@@ -1046,7 +1048,7 @@ Platform.isWindows   // boolean
 | `material` / vibrancy | liquid glass / `NSVisualEffectMaterial` | deferred — flat background (future cycle) |
 | `setCollapsible(...)` | disallows/allows user collapse | no-op (collapse is size-class–driven) |
 | `setResizable(...)` | locks/unlocks the divider | no-op (no draggable divider) |
-| `setWidth(px)` | authoritative — moves the real divider | width preference within system adaptive layout (see note below) |
+| `setWidth(px)` | authoritative — moves the real divider | authoritative when `resizable:false`; applies until user drags when `resizable:true` (see note below) |
 | `presentation` / `setPresentation` | **ignored** — macOS always tiles | iOS/iPadOS-only: `"automatic"`, `"tile"`, `"overlay"` |
 | Native toolbar (`toggleSidebar`, back chevron) | full NSToolbar | none — app renders its own back control (future cycle) |
 | Back navigation | divider / toolbar toggle | in-page control + system edge-swipe |
@@ -1064,12 +1066,19 @@ Platform.isWindows   // boolean
 >   small iPad) — this matches Apple's own adaptive split behavior (Mail, Notes)
 >   and is not a Zapp bug.
 > - **`setWidth(px)` semantics differ by platform.** On macOS it moves the
->   actual NSSplitView divider — the change is immediate and authoritative. On
->   iPadOS it sets `preferredPrimaryColumnWidth` — a hint honored when tiling,
->   bounded by the configured `minWidth`/`maxWidth`, and capped by the system's
->   own adaptive layout. There is no user divider-drag on iPad, so `setWidth` is
->   the only way to change the column width programmatically; `SIDEBAR_RESIZED`
->   is fired after each call to keep reactive state in sync.
+>   actual NSSplitView divider — the change is immediate and authoritative
+>   (`AppKit: setPosition:ofDividerAtIndex:`). On iPadOS:
+>   - **`resizable: false`** — `setWidth` is authoritative. The divider is
+>     locked (`min == max == width`) so UIKit always honors the value.
+>   - **`resizable: true`** — `setWidth` applies via
+>     `preferredPrimaryColumnWidth` before the user has dragged the divider.
+>     Once the user manually drags, UIKit stores an internal drag-pin that
+>     overrides `preferredPrimaryColumnWidth`, and there is no public API to
+>     clear it. `setWidth` becomes a no-op for the visual column after a drag
+>     (though `SIDEBAR_RESIZED` still fires and reactive state stays in sync).
+>     This is a UIKit limitation — `UISplitViewController` has no equivalent
+>     of AppKit's `setPosition:ofDividerAtIndex:`. Use `resizable: false` when
+>     programmatic width control must be authoritative on iPad.
 
 ### Inspector (macOS + iOS)
 

@@ -767,70 +767,44 @@ void darwin_sidebar_expand(int32_t window_id) {
     darwin_sidebar_show_sidebar(window_id);
 }
 
-// Set the sidebar width programmatically. Stores as configuredWidth and forces
-// the split to honour it even after the user has drag-resized the column.
+// Set the sidebar width programmatically.
 //
-// The drag-pin problem: once the user drag-resizes the sidebar on iPad regular/
-// tiled, UIKit stores an internal "user-drag pin" that overrides
-// preferredPrimaryColumnWidth. There is NO public API to clear this pin.
-// The proven lever — mirroring what the overlay→tile presentation round-trip
-// does — is to hide then show the primary column. UIKit rebuilds the column
-// from preferredPrimaryColumnWidth, discarding the user-drag pin.
-// performWithoutAnimation suppresses the hide/show slide so the transition is
-// invisible. This path is only needed on iOS 16+ regular-width resizable splits
-// (where the drag pin can exist); the other cases use simpler fallbacks.
+// HONEST MODEL — UIKit limitation documented here:
+//
+// UISplitViewController stores an internal "user-drag pin" when the user
+// drag-resizes the sidebar column on iPad. This pin overrides
+// preferredPrimaryColumnWidth and there is NO public API to clear it.
+// The only lever that resets the pin (hide+show the primary column) collapses
+// the sidebar synchronously — hideColumn:Primary + showColumn:Primary net to
+// HIDDEN in the same runloop turn, leaving the sidebar collapsed on return.
+// We do NOT use that lever.
+//
+// Compare macOS: AppKit exposes `setPosition:ofDividerAtIndex:` which moves
+// the live divider immediately and authoritatively. UIKit has no equivalent.
+//
+// Consequence:
+//   resizable:false — setWidth IS authoritative. We lock min==max==width (the
+//     same lock darwin_sidebar_set_resizable uses), so no drag can form and
+//     UIKit honors the width unconditionally.
+//   resizable:true  — setWidth applies via preferredPrimaryColumnWidth before
+//     any user drag and is a harmless no-op once the user has dragged (UIKit
+//     keeps the drag-pin). The width is still stored and the resize event fires
+//     so reactive state stays in sync, but the visual column does not change
+//     if a drag-pin is active.
+//   compact (iPhone) — single-column mode; no drag pin. preferredPrimaryColumnWidth
+//     takes effect when the split expands to regular width.
 void darwin_sidebar_set_width(int32_t window_id, int32_t width) {
     zapp_ios_sidebar_on_main(^{
         ZappIOSSidebarController* c = zapp_ios_sidebar_for_slot(window_id);
         if (!c || !c.splitVC) return;
 
-        // Always store the new configured width and emit the resize event.
+        // Always store the new configured width and emit the resize event once.
         c.configuredWidth = width;
         zapp_ios_sidebar_emit_resize(c, width);
 
         if (width <= 0) return;
 
-        // Determine whether we're on a regular-width (non-collapsed) split.
-        BOOL regular = (c.splitVC.traitCollection.horizontalSizeClass
-                        == UIUserInterfaceSizeClassRegular)
-                       && !c.splitVC.isCollapsed;
-
-        if (c.resizable && regular) {
-            // Resizable + regular-width: use the "column kick" (hide→show) to
-            // clear any UIKit user-drag pin that overrides preferredPrimaryColumnWidth.
-            // Set the target width WITHOUT clamping min/max so the user can still
-            // drag-resize afterward. The hide/show rebuilds the column from the
-            // preferred width, discarding the pin.
-            c.splitVC.preferredPrimaryColumnWidth = (CGFloat)width;
-            if (@available(iOS 16.0, *)) {
-                // Suppress the hide/show slide with performWithoutAnimation so the
-                // transition is invisible to the user.
-                [UIView performWithoutAnimation:^{
-                    [c.splitVC hideColumn:UISplitViewControllerColumnPrimary];
-                    [c.splitVC showColumn:UISplitViewControllerColumnPrimary];
-                    [c.splitVC.view layoutIfNeeded];
-                }];
-            } else {
-                // Pre-iOS 16 fallback (no showColumn: API): momentarily clamp
-                // min==max==width + deferred restore. Best-effort — the drag pin
-                // may not clear, but this is what worked before iOS 16.
-                c.splitVC.minimumPrimaryColumnWidth = (CGFloat)width;
-                c.splitVC.maximumPrimaryColumnWidth = (CGFloat)width;
-                [c.splitVC.view setNeedsLayout];
-                [c.splitVC.view layoutIfNeeded];
-                ZappIOSSidebarController* __weak weakC = c;
-                int32_t restoreMin = c.configuredMinWidth;
-                int32_t restoreMax = c.configuredMaxWidth;
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    ZappIOSSidebarController* sc = weakC;
-                    if (!sc || !sc.splitVC) return;
-                    sc.splitVC.minimumPrimaryColumnWidth = (restoreMin > 0)
-                        ? (CGFloat)restoreMin : 0.0;
-                    sc.splitVC.maximumPrimaryColumnWidth = (restoreMax > 0)
-                        ? (CGFloat)restoreMax : CGFLOAT_MAX;
-                });
-            }
-        } else if (!c.resizable) {
+        if (!c.resizable) {
             // Resizable:OFF — lock the column by clamping min==max==width.
             // This is the authoritative "frozen" path: no drag is possible so
             // no drag pin can form; clamping is sufficient and correct.
@@ -841,10 +815,13 @@ void darwin_sidebar_set_width(int32_t window_id, int32_t width) {
             [c.splitVC.view layoutIfNeeded];
             // Leave min==max==width — column stays locked (no restore needed).
         } else {
-            // Compact (collapsed/iPhone) or resizable + compact: no drag pin can
-            // form in single-column mode. Just set preferredPrimaryColumnWidth;
-            // it takes effect when the split expands to regular width.
+            // Resizable:ON (regular or compact) — set the preferred width and
+            // trigger layout. This is authoritative before any user drag; after
+            // a drag the user-pin overrides it (UIKit limitation — no API to
+            // clear). No hide/show kick: that collapses the sidebar.
             c.splitVC.preferredPrimaryColumnWidth = (CGFloat)width;
+            [c.splitVC.view setNeedsLayout];
+            [c.splitVC.view layoutIfNeeded];
         }
     });
 }
