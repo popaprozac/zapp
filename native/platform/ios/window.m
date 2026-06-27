@@ -388,6 +388,22 @@ void zapp_ios_materialize_pending_windows(void) {
             // Record host→sidebar for window-event fan-out (zapp_dispatch_event_to_js).
             zapp_ios_set_sidebar_slot(d->numeric_id, d->sidebarNumericId);
 
+            // Register the content webview with the sidebar manager so it can
+            // apply the safeArea-conditional leading constraint (iPad regular =
+            // safeAreaLayoutGuide.leading; iPhone compact = view.leading). This
+            // converts the webview from autoresizingMask to explicit Auto Layout
+            // and pins top/bottom/trailing to the container. Only called when
+            // there is NO inspector pane — when an inspector is present,
+            // inspector.m owns the full AutoLayout conversion (including trailing)
+            // and calls zapp_ios_sidebar_register_leading_constraints to hand the
+            // leading constraints to the sidebar coordinator for trait-change updates.
+            // Forward-declared at file scope; defined in ios/sidebar.m.
+            extern void zapp_ios_sidebar_set_content_webview(void* window, void* webview);
+            if (contentWebview && !d->hasInspector) {
+                zapp_ios_sidebar_set_content_webview((__bridge void*)window,
+                                                     (__bridge void*)contentWebview);
+            }
+
             // Underpage fill on both panes when the app set a background color.
             if (d->has_bg) {
                 if (@available(iOS 15.0, *)) {

@@ -194,14 +194,45 @@ void zapp_ios_inspector_register(void* window, void* inspectorVC, void* contentV
             // it to Auto Layout pinned content-leading..inspector-leading. This
             // re-CONSTRAINS the existing webview in place — it does NOT re-parent
             // it (the webview stays a subview of cvc.view).
+            //
+            // Leading is trait-conditional (safeAreaLayoutGuide on iPad regular,
+            // view.leading on iPhone compact) to respect the sidebar's safe-area
+            // inset when present. Both constraints are created; the sidebar
+            // coordinator (zapp_ios_sidebar_register_leading_constraints) owns
+            // activating/deactivating them on trait changes. When there is no
+            // sidebar the split controller is absent and trailing safe-area inset
+            // is zero, so using safeAreaLayoutGuide.leading would still be fine —
+            // but we defer to view.leading for the compact path to be safe.
             if (cwv) {
                 cwv.translatesAutoresizingMaskIntoConstraints = NO;
+
+                // Two leading candidates — only one active at a time.
+                NSLayoutConstraint* leadFull =
+                    [cwv.leadingAnchor constraintEqualToAnchor:cvc.view.leadingAnchor];
+                NSLayoutConstraint* leadSafe =
+                    [cwv.leadingAnchor constraintEqualToAnchor:cvc.view.safeAreaLayoutGuide.leadingAnchor];
+
+                // Activate the correct leading for the CURRENT trait right away.
+                BOOL isRegular = (hostWindow.traitCollection.horizontalSizeClass
+                                  == UIUserInterfaceSizeClassRegular);
+                leadFull.active = !isRegular;
+                leadSafe.active = isRegular;
+
                 [NSLayoutConstraint activateConstraints:@[
-                    [cwv.leadingAnchor constraintEqualToAnchor:cvc.view.leadingAnchor],
                     [cwv.topAnchor constraintEqualToAnchor:cvc.view.topAnchor],
                     [cwv.bottomAnchor constraintEqualToAnchor:cvc.view.bottomAnchor],
                     [cwv.trailingAnchor constraintEqualToAnchor:ivc.view.leadingAnchor],
                 ]];
+
+                // Hand the leading pair to the sidebar coordinator so it can swap
+                // them when horizontalSizeClass changes (rotation / multitasking).
+                // If no sidebar is registered the call is a safe no-op.
+                extern void zapp_ios_sidebar_register_leading_constraints(
+                    void* window, void* fullConstraint, void* safeConstraint);
+                zapp_ios_sidebar_register_leading_constraints(
+                    window,
+                    (__bridge void*)leadFull,
+                    (__bridge void*)leadSafe);
             }
             c.widthConstraint = w;
             c.shown = !collapsed;
