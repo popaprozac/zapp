@@ -112,6 +112,14 @@ static void zapp_ios_apply_presentation(UISplitViewController* svc, NSString* mo
         // WWDC canonical tile recipe: both flags, applied together.
         svc.preferredSplitBehavior = UISplitViewControllerSplitBehaviorTile;
         svc.preferredDisplayMode  = UISplitViewControllerDisplayModeOneBesideSecondary;
+        // iOS 16+: showColumn:Primary clears any outstanding hideColumn override
+        // so the primary column is forced BESIDE the secondary (true tile). Without
+        // this, if the split's resolved column state is "primary hidden" (e.g. the
+        // overlay/summon state), UIKit ignores preferredDisplayMode and the sidebar
+        // stays an overlay regardless of the behavior/displayMode pair.
+        if (@available(iOS 16.0, *)) {
+            [svc showColumn:UISplitViewControllerColumnPrimary];
+        }
     } else {
         // "automatic" / nil / empty — let UIKit adapt (tile-landscape,
         // overlay-portrait, collapse-compact). This is the Mail/Notes default.
