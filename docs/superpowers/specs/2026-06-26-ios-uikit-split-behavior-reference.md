@@ -197,5 +197,3 @@ If, after (1)+(2), a given width genuinely cannot fit two usable columns, the sy
 - [Use Your Loaf — Split View Controller Display Modes](https://useyourloaf.com/blog/split-view-controller-display-modes/) · [Size Classes](https://useyourloaf.com/blog/size-classes/) · [Change the Width of Master View](https://useyourloaf.com/blog/change-the-width-of-master-view-in-split-view-controller/)
 - [MacStories — iOS/iPadOS 14 Review (Mail/Notes columns)](https://www.macstories.net/stories/ios-and-ipados-14-the-macstories-review/12/)
 - Zapp source: `native/platform/ios/window.m` (split materialize, ~L236–335), `native/platform/ios/sidebar.m` (`zapp_ios_sidebar_register` L260–307, `darwin_sidebar_set_presentation` L452–472)
-</content>
-</invoke>
