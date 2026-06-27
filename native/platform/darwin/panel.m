@@ -19,6 +19,11 @@ extern void darwin_window_eval_js(int32_t window_id, const char* js);
 @property (nonatomic, strong) WKWebView* webview;
 @property (nonatomic, copy)   NSString*  panelId;
 @property (nonatomic, assign) int32_t    ownerWindowId;
+// Weak ref to the HOST content webview (the one the panel overlays). Used
+// by set_bounds to convert the incoming CSS-viewport rect (relative to the
+// host webview's top-left) into the panel parent's coordinate space so the
+// panel lands correctly even when the host webview is inset (e.g. sidebar).
+@property (nonatomic, weak)   WKWebView* hostWebview;
 @end
 
 static NSMutableDictionary<NSString*, ZappPanel*>* zapp_panels = nil;
@@ -123,6 +128,14 @@ void darwin_panel_create(int32_t window_id, const char* panel_id, const char* ur
         panel.panelId = pid;
         panel.ownerWindowId = window_id;
 
+        // Capture the host content webview (weak — no retain cycle). Used in
+        // set_bounds to convert CSS-viewport coords (host webview space) into
+        // the panel-parent's coordinate space so sidebars/inspectors don't
+        // cause the panel to bleed over adjacent panes.
+        extern void* darwin_window_get_webview(int32_t window_id);
+        void* hostWV = darwin_window_get_webview(window_id);
+        if (hostWV) panel.hostWebview = (__bridge WKWebView*)hostWV;
+
         // embed -> host postMessage shim (sandboxed: NO __zappBridge).
         [ucc addScriptMessageHandler:panel name:@"zappPanel"];
         NSString* shim =
@@ -152,17 +165,34 @@ void darwin_panel_set_bounds(const char* panel_id, int32_t x, int32_t y, int32_t
     ZappPanel* p = zapp_panel_get(panel_id);
     if (!p) return;
     zapp_panel_on_main(^{
-        // x,y arrive as CSS top-left (viewport) points. Convert into the parent
-        // view's coordinate space. WKWebView is flipped (top-left origin) so y
-        // is used directly; a non-flipped NSView needs the bottom-left flip.
-        // Using the actual superview adapts to either, with no window.innerHeight
-        // assumption.
+        // x,y arrive as CSS top-left (viewport) points in the HOST content
+        // webview's coordinate space. The panel webview is parented to the
+        // window contentView (full-window root), so when the host webview is
+        // inset (e.g. by a sidebar), the two spaces differ. Convert via the
+        // host webview when available so the panel tracks the element exactly.
+        //
+        // WKWebView is flipped on macOS (isFlipped=YES, top-left origin),
+        // matching CSS. Non-flipped NSViews use bottom-left origin. We check
+        // host.isFlipped at runtime so the conversion is robust regardless of
+        // any future WKWebView coordinate-system change.
         NSView* parent = p.webview.superview;
-        CGFloat oy = (CGFloat)y;
-        if (parent && !parent.isFlipped) {
-            oy = parent.bounds.size.height - (CGFloat)y - (CGFloat)h;
+        WKWebView* host = p.hostWebview;
+        if (host && parent) {
+            CGFloat hy = host.isFlipped
+                ? (CGFloat)y
+                : (host.bounds.size.height - (CGFloat)y - (CGFloat)h);
+            NSRect inHost = NSMakeRect((CGFloat)x, hy, (CGFloat)w, (CGFloat)h);
+            NSRect inParent = [host convertRect:inHost toView:parent];
+            [p.webview setFrame:inParent];
+        } else {
+            // Fallback: host webview unavailable (full-window embed). Use the
+            // parent-relative flip as before.
+            CGFloat oy = (CGFloat)y;
+            if (parent && !parent.isFlipped) {
+                oy = parent.bounds.size.height - (CGFloat)y - (CGFloat)h;
+            }
+            [p.webview setFrame:NSMakeRect((CGFloat)x, oy, (CGFloat)w, (CGFloat)h)];
         }
-        [p.webview setFrame:NSMakeRect((CGFloat)x, oy, (CGFloat)w, (CGFloat)h)];
     });
 }
 

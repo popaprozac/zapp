@@ -34,6 +34,24 @@ function panelPost(action: string, args: Record<string, unknown>): void {
   else bridge.emit("__panel:" + action, args);
 }
 
+// Module-level registry of live panel elements. Used by the pagehide handler
+// to teardown panels on full-page navigation (which fires pagehide instead of
+// disconnectedCallback, causing panels to leak without explicit teardown).
+const _livePanels = new Set<ZappWebviewElement>();
+
+// Install a ONE-TIME pagehide listener (module load, DOM context only). On
+// full-page navigation the browser fires pagehide before unloading; we iterate
+// the registry and destroy every live panel so native child WKWebViews are
+// removed even when disconnectedCallback never fires.
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", () => {
+    for (const el of _livePanels) {
+      panelPost("panelDestroy", { panelId: (el as any)._panelId });
+    }
+    _livePanels.clear();
+  }, { once: true, capture: true });
+}
+
 // Base class: the real HTMLElement in a DOM/webview context, or a no-op
 // stand-in when there is no DOM (e.g. a zjs worker that imports
 // @zappdev/runtime — webview.ts gets pulled in by its top-level
@@ -71,6 +89,7 @@ export class ZappWebviewElement extends HostElement {
       windowId: currentWindowId(), panelId: this._panelId, url: src, bridge, partition,
     });
     this._created = true;
+    _livePanels.add(this); // track for pagehide teardown
     this._subscribe();
     this._startTracking();
   }
@@ -80,6 +99,7 @@ export class ZappWebviewElement extends HostElement {
     this._stopTracking();
     if (this._unsub) { this._unsub(); this._unsub = null; }
     panelPost("panelDestroy", { panelId: this._panelId });
+    _livePanels.delete(this); // SPA removal: remove from pagehide registry
     this._created = false;
     this._lastRect = null;
   }
@@ -128,6 +148,13 @@ export class ZappWebviewElement extends HostElement {
     // ancestor; it's the correctness backstop for the IO re-arm.
     window.addEventListener("resize", this._onWinChange, { passive: true });
     window.addEventListener("scroll", this._onWinChange, { passive: true, capture: true });
+    // Track pinch-zoom via visualViewport (iOS/desktop zoom changes the scale
+    // of getBoundingClientRect values relative to the native layer). Guard for
+    // environments that don't expose visualViewport (e.g. workers, older Safari).
+    if (typeof window !== "undefined" && window.visualViewport) {
+      window.visualViewport.addEventListener("resize", this._onWinChange);
+      window.visualViewport.addEventListener("scroll", this._onWinChange);
+    }
     try { this._armIO(); } catch { /* IO is an optimization; listeners cover correctness */ }
   }
   private _stopTracking(): void {
@@ -135,6 +162,10 @@ export class ZappWebviewElement extends HostElement {
     if (this._ro) { this._ro.disconnect(); this._ro = null; }
     window.removeEventListener("resize", this._onWinChange);
     window.removeEventListener("scroll", this._onWinChange, { capture: true } as any);
+    if (typeof window !== "undefined" && window.visualViewport) {
+      window.visualViewport.removeEventListener("resize", this._onWinChange);
+      window.visualViewport.removeEventListener("scroll", this._onWinChange);
+    }
   }
   private _onWinChange = (): void => this._schedule();
 

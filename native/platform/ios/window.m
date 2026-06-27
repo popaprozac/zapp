@@ -109,6 +109,15 @@ static UIWindow* zapp_ios_windows[ZAPP_MAX_WINDOW_CALLBACKS] = {0};
 static WKWebView* zapp_ios_webviews[ZAPP_MAX_WINDOW_CALLBACKS] = {0};
 static NSString* zapp_ios_window_ids[ZAPP_MAX_WINDOW_CALLBACKS] = {0};
 
+// Public getter: content webview for a numeric window slot. Used by
+// ios/panel.m to capture the host webview for coord-space conversion in
+// set_bounds (fix #737: panel mispositions when host webview is inset by
+// a sidebar).
+WKWebView* zapp_ios_content_webview_for_slot(int32_t slot) {
+    if (slot < 0 || slot >= ZAPP_MAX_WINDOW_CALLBACKS) return nil;
+    return zapp_ios_webviews[slot];
+}
+
 // host slot -> sidebar transport slot, for window-event fan-out (mirrors
 // darwin/window.m's zapp_sidebar_slot_of). -1 = no sidebar. Initialized
 // lazily so a 0-filled table doesn't read as "host 0 -> sidebar 0".
