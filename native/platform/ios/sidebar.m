@@ -773,8 +773,12 @@ void darwin_sidebar_set_resizable(int32_t window_id, bool resizable) {
             CGFloat lockWidth = (c.configuredWidth > 0)
                 ? (CGFloat)c.configuredWidth
                 : c.splitVC.preferredPrimaryColumnWidth;
-            c.splitVC.minimumPrimaryColumnWidth = lockWidth;
-            c.splitVC.maximumPrimaryColumnWidth = lockWidth;
+            // Guard: never clamp to 0 (would collapse the column to nothing if
+            // called before first layout with no configured width).
+            if (lockWidth > 0.0) {
+                c.splitVC.minimumPrimaryColumnWidth = lockWidth;
+                c.splitVC.maximumPrimaryColumnWidth = lockWidth;
+            }
         } else {
             // Restore configured min/max (0 means "use system default").
             c.splitVC.minimumPrimaryColumnWidth = (c.configuredMinWidth > 0)
