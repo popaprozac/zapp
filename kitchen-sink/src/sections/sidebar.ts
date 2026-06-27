@@ -1,4 +1,4 @@
-import { Window, WindowEvent } from "@zappdev/runtime";
+import { Window, WindowEvent, Events } from "@zappdev/runtime";
 import type { Section } from "./types";
 import { card, onAct, setResult } from "../shell/ui";
 
@@ -46,6 +46,8 @@ export const sidebarSection: Section = {
       );
       if (btn) btn.textContent = `Collapsible: ${collapsible ? "on" : "off"}`;
       setResult(host, `collapsible → ${collapsible}`);
+      // Notify the main pane's ☰ button (iOS: different webview, same window).
+      Events.emit("ks:sidebar-collapsible", { collapsible, windowId: win.id });
     });
     onAct(host, "resizable", () => {
       resizable = !resizable;

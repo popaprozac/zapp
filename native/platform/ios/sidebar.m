@@ -87,6 +87,7 @@ extern int32_t zapp_ios_inspector_slot_for(int32_t host_slot);
 @property (nonatomic, assign) int32_t configuredMinWidth; // configured minimumPrimaryColumnWidth
 @property (nonatomic, assign) int32_t configuredMaxWidth; // configured maximumPrimaryColumnWidth
 @property (nonatomic, assign) BOOL resizable;             // whether drag-resize is allowed
+@property (nonatomic, assign) BOOL collapsible;           // whether the sidebar can be collapsed
 // Source of truth for the current presentation mode. Set at register time from
 // the create-time config (via zapp_ios_apply_presentation) and updated by
 // darwin_sidebar_set_presentation. Values: nil/"" = automatic, "tile", "overlay".
@@ -408,7 +409,7 @@ void zapp_ios_sidebar_register(void* window, void* split, void* sidebarVC,
                                void* contentVC, int32_t host_id, int32_t sidebar_id,
                                const char* presentation,
                                int32_t width, int32_t minWidth, int32_t maxWidth,
-                               bool resizable) {
+                               bool resizable, bool collapsible) {
     if (!window || !split) return;
     // Capture the presentation C-string before the async block (the caller's
     // buffer may be freed by the time the block runs if the deferred struct is
@@ -439,6 +440,7 @@ void zapp_ios_sidebar_register(void* window, void* split, void* sidebarVC,
         c.configuredMinWidth = minWidth;
         c.configuredMaxWidth = maxWidth;
         c.resizable          = (BOOL)resizable;
+        c.collapsible        = (BOOL)collapsible;
 
         // OWN the navigation controllers so we control the bar. The column VCs
         // are still empty (no webview yet), so this never re-parents a live
@@ -477,6 +479,13 @@ void zapp_ios_sidebar_register(void* window, void* split, void* sidebarVC,
         if (!resizable && width > 0) {
             svc.minimumPrimaryColumnWidth = (CGFloat)width;
             svc.maximumPrimaryColumnWidth = (CGFloat)width;
+        }
+
+        // collapsible:false — disable the swipe-in gesture from launch so the
+        // sidebar cannot be collapsed by the user. darwin_sidebar_toggle is a
+        // no-op when collapsible==NO, so programmatic routes are also gated.
+        if (!collapsible) {
+            svc.presentsWithGesture = NO;
         }
 
         NSValue* key = [NSValue valueWithPointer:window];
@@ -684,10 +693,14 @@ void darwin_sidebar_show_sidebar(int32_t window_id) {
 // (existing behaviour). On regular/tiled (iPad): bypass show_content's no-op
 // guard and operate DIRECTLY on the primary column — this is the explicit user
 // affordance (toolbar toggle) and MUST collapse/expand a tiled sidebar.
+// When collapsible==NO, this is a no-op on BOTH paths.
 void darwin_sidebar_toggle(int32_t window_id) {
     zapp_ios_sidebar_on_main(^{
         ZappIOSSidebarController* c = zapp_ios_sidebar_for_slot(window_id);
         if (!c || !c.splitVC) return;
+
+        // collapsible:false — toggle is a no-op; sidebar must stay as-is.
+        if (!c.collapsible) return;
 
         if (c.splitVC.isCollapsed) {
             // COMPACT (iPhone): keep existing push/pop behaviour via the
@@ -790,11 +803,17 @@ void darwin_sidebar_set_width(int32_t window_id, int32_t width) {
     });
 }
 
-// User-collapsible gating is an NSSplitViewItem affordance; the iOS split's
-// collapse is width-driven (system-owned), so there's no equivalent knob.
-// Stored intent / no-op for router parity (documented).
+// Enable or disable sidebar collapsing. When can_collapse==false:
+//   • presentsWithGesture is set to NO so the swipe-in gesture is disabled.
+//   • darwin_sidebar_toggle becomes a no-op for both compact and regular paths.
+// When can_collapse==true, presentsWithGesture is restored to YES.
 void darwin_sidebar_set_collapsible(int32_t window_id, bool can_collapse) {
-    (void)window_id; (void)can_collapse;
+    zapp_ios_sidebar_on_main(^{
+        ZappIOSSidebarController* c = zapp_ios_sidebar_for_slot(window_id);
+        if (!c || !c.splitVC) return;
+        c.collapsible = (BOOL)can_collapse;
+        c.splitVC.presentsWithGesture = (BOOL)can_collapse;
+    });
 }
 
 // Lock or unlock the divider drag. When resizable==false, clamp

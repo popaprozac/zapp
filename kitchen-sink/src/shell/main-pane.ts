@@ -34,9 +34,20 @@ export function renderMainPane(app: HTMLElement) {
 
   // iOS top bar: use sidebar.toggle() so the native split-view state is always
   // the source of truth — tap-out dismiss no longer desyncs the button.
-  app
-    .querySelector<HTMLButtonElement>("[data-sidebar-toggle]")
-    ?.addEventListener("click", () => Window.current().sidebar?.toggle());
+  const toggleBtn = app.querySelector<HTMLButtonElement>("[data-sidebar-toggle]");
+  toggleBtn?.addEventListener("click", () => Window.current().sidebar?.toggle());
+
+  // Reflect collapsible state on the ☰ button: when the Sidebar section calls
+  // setCollapsible(false) it emits ks:sidebar-collapsible so this pane (a
+  // different webview on iOS) can disable the button without framework plumbing.
+  if (Platform.isIOS && toggleBtn) {
+    Events.on("ks:sidebar-collapsible", ({ collapsible, windowId }: any) => {
+      if (windowId !== Window.current().id) return;
+      toggleBtn.disabled = !collapsible;
+      toggleBtn.style.opacity = collapsible ? "" : "0.35";
+      toggleBtn.style.pointerEvents = collapsible ? "" : "none";
+    });
+  }
 
   // iOS top bar: inspector toggle (trailing button, iOS-only).
   app

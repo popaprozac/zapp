@@ -182,7 +182,7 @@ extern void zapp_ios_sidebar_register(void* window, void* split, void* sidebarVC
                                       void* contentVC, int32_t host_id, int32_t sidebar_id,
                                       const char* presentation,
                                       int32_t width, int32_t minWidth, int32_t maxWidth,
-                                      bool resizable);
+                                      bool resizable, bool collapsible);
 
 // Implemented in ios/inspector.m. Materialize calls it AFTER both the content
 // and (optional) sidebar panes are built, handing it the persistent inspector
@@ -342,7 +342,8 @@ void zapp_ios_materialize_pending_windows(void) {
                                       d->numeric_id, d->sidebarNumericId,
                                       d->sidebarPresentation,
                                       d->sidebarWidth, d->sidebarMinWidth,
-                                      d->sidebarMaxWidth, d->sidebarResizable);
+                                      d->sidebarMaxWidth, d->sidebarResizable,
+                                      d->sidebarCollapsible);
         }
 
         if (d->hasSidebar) {
