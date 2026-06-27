@@ -127,6 +127,13 @@ void zapp_ios_theme_init_cache(void) {
 }
 
 void zapp_ios_dispatch_theme_if_changed(void) {
+    // Only dispatch while ACTIVE. On backgrounding, iOS flips
+    // userInterfaceStyle to snapshot BOTH light+dark for the app switcher,
+    // firing traitCollectionDidChange twice — those aren't real user theme
+    // changes. Returning BEFORE the cache update means a genuine theme change
+    // made while backgrounded is still caught when applicationDidBecomeActive:
+    // re-invokes this helper on return to foreground.
+    if ([UIApplication sharedApplication].applicationState != UIApplicationStateActive) return;
     const char* t = darwin_get_theme();
     if (strcmp(t, zapp_ios_last_theme) == 0) return;
     strncpy(zapp_ios_last_theme, t, sizeof(zapp_ios_last_theme) - 1);
@@ -282,6 +289,10 @@ const char* darwin_escape_js_string(const char* raw) {
 - (void)applicationDidBecomeActive:(UIApplication*)application {
     (void)application;
     zapp_app_dispatch(ZAPP_EVENT_APP_DID_BECOME_ACTIVE, NULL);
+    // Catch a genuine theme change made while backgrounded — the dispatch
+    // helper suppresses the app-switcher snapshot flips that fire while
+    // inactive, so re-check now that we're active.
+    zapp_ios_dispatch_theme_if_changed();
 }
 
 - (void)applicationWillResignActive:(UIApplication*)application {
