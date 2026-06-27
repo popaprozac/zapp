@@ -18,6 +18,7 @@ import { eventsSection } from "./events";
 import { windowLogSection } from "./window-log";
 import { appEventsSection } from "./app-events";
 import { filedropSection } from "./filedrop";
+import { embeddedWebviewSection } from "./embedded-webview";
 import { traySection } from "./tray";
 
 export const registry: Section[] = [
@@ -40,5 +41,6 @@ export const registry: Section[] = [
   windowLogSection,
   appEventsSection,
   filedropSection,
+  embeddedWebviewSection,
   traySection,
 ];
