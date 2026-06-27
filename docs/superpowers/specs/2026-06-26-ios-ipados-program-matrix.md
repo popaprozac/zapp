@@ -158,3 +158,8 @@ The correctness tier (originally "SP-1") is larger than one spec — re-decompos
 - **Then B (chrome: SP-3 context-menu+popover, SP-4 toolbar, SP-5 UIKeyCommand) → C (SP-6 multi-window).**
 
 **NEXT:** brainstorm/design **A1** first (small, low-risk, mergeable, de-risks the rest). Open decisions deferred to their sub-cycle: iPad sidebar tile-vs-overlay (A2), inspector multitasking adapt-vs-hide (A3), native-toolbar-vs-faux-bar (SP-4).
+
+## A2 CLOSED (2026-06-27) — sidebar/inspector behavior (Apple-native)
+- §2 Sidebar: iPad now TILES (Apple-native) — content webview respects the split safe-area inset. presentation automatic/tile/overlay all work; route-nav persists; toggle collapses/expands; resizable:false locks; collapsible:false disables the native gesture only (macOS-parity, app button still toggles). setWidth = ownership model (resizable:false app-owned/authoritative; resizable:true user-owned, sticky after a manual drag — documented UIKit limitation, see uikit-split-behavior-reference).
+- §3 Inspector: trailing child-VC pane on iPad (UIKit has no native inspector — this is the idiomatic equivalent of SwiftUI .inspector), sheet on iPhone with a nav-bar Done button (dismissable in landscape).
+- Deferred follow-ups filed: #718 (A3 multitasking pane↔sheet RISK GATE), #719 (scene-manifest/iOS-27), #720 (live-drag width emit), #721 (tile→overlay anim).
