@@ -50,6 +50,7 @@ typedef struct ZappIOSDeferred {
     bool inspectable;
     bool first_mouse;
     char* queued_title;       // last-set title (replayed on materialize)
+    char* url;                // content webview url override (e.g. "#sheet=settings"); strdup'd; freed in destroy. NULL = default initial url.
     bool show_requested;      // makeKeyAndVisible queued?
     UIWindow* __unsafe_unretained real_window;     // nil until materialized
     WKWebView* __unsafe_unretained real_webview;
@@ -354,7 +355,7 @@ void zapp_ios_materialize_pending_windows(void) {
             // useSidebar/useInspector). host_has_inspector injects zapp.hasInspector
             // so Window.current().inspector (and the kitchen-sink toggle) is wired.
             darwin_webview_create_ext((__bridge void*)window, d->inspectable, d->first_mouse,
-                                      NULL, d->numeric_id, false,
+                                      d->url, d->numeric_id, false,
                                       (__bridge void*)contentVC.view, d->numeric_id, 0,
                                       /*host_has_sidebar*/true, /*host_has_inspector*/d->hasInspector);
             // _ext auto-registers by UIWindow → the content webview landed in
@@ -427,7 +428,7 @@ void zapp_ios_materialize_pending_windows(void) {
             // zapp.hasInspector so a no-sidebar window with an inspector still
             // wires Window.current().inspector.
             darwin_webview_create_ext((__bridge void*)window, d->inspectable, d->first_mouse,
-                                      NULL, d->numeric_id, false,
+                                      d->url, d->numeric_id, false,
                                       /*container*/NULL, /*identity*/-1, /*pane_role*/0,
                                       /*host_has_sidebar*/false, /*host_has_inspector*/d->hasInspector);
 
@@ -800,6 +801,15 @@ void* darwin_window_create(void* opts) {
         d->inspectorCollapsed = wopts_inspector_collapsed(opts);
         extern int wopts_inspectable(void* opts);
         d->inspectable = wopts_inspectable(opts) > 0;
+
+        // Content webview url override (macOS parity: darwin/window.m reads
+        // wopts_url and passes it as url_override). strdup to survive until
+        // materialize (like queued_title / sidebarUrl). NULL/empty -> default
+        // initial url. This is what makes a sheet opened with url:"#sheet=foo"
+        // load the requested route instead of the default page.
+        extern const char* wopts_url(void* opts);
+        const char* _contentUrl = wopts_url(opts);
+        d->url = (_contentUrl && _contentUrl[0]) ? strdup(_contentUrl) : NULL;
     }
     for (int i = 0; i < ZAPP_MAX_DEFERRED; i++) {
         if (!zapp_ios_deferred_list[i]) {
@@ -816,6 +826,7 @@ void darwin_window_destroy(void* handle) {
     if (d) {
         if (d->real_window) d->real_window.hidden = YES;
         free(d->queued_title);
+        free(d->url);
         free(d->sidebarUrl);
         free(d->sidebarPresentation);
         free(d->inspectorUrl);
