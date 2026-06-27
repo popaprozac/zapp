@@ -768,32 +768,56 @@ void darwin_sidebar_expand(int32_t window_id) {
 }
 
 // Set the sidebar width programmatically. Stores as configuredWidth and forces
-// the split to honour it even after the user has drag-resized the column (a
-// drag-resize pins the column width and subsequent preferredPrimaryColumnWidth
-// changes have no visible effect). To override a user drag: momentarily clamp
-// min==max==width, force layout, then restore the configured min/max — UNLESS
-// resizable==false, in which case leave the column locked.
+// the split to honour it even after the user has drag-resized the column.
+//
+// The drag-pin problem: once the user drag-resizes the sidebar on iPad regular/
+// tiled, UIKit stores an internal "user-drag pin" that overrides
+// preferredPrimaryColumnWidth. There is NO public API to clear this pin.
+// The proven lever — mirroring what the overlay→tile presentation round-trip
+// does — is to hide then show the primary column. UIKit rebuilds the column
+// from preferredPrimaryColumnWidth, discarding the user-drag pin.
+// performWithoutAnimation suppresses the hide/show slide so the transition is
+// invisible. This path is only needed on iOS 16+ regular-width resizable splits
+// (where the drag pin can exist); the other cases use simpler fallbacks.
 void darwin_sidebar_set_width(int32_t window_id, int32_t width) {
     zapp_ios_sidebar_on_main(^{
         ZappIOSSidebarController* c = zapp_ios_sidebar_for_slot(window_id);
         if (!c || !c.splitVC) return;
+
+        // Always store the new configured width and emit the resize event.
         c.configuredWidth = width;
-        if (width > 0) {
+        zapp_ios_sidebar_emit_resize(c, width);
+
+        if (width <= 0) return;
+
+        // Determine whether we're on a regular-width (non-collapsed) split.
+        BOOL regular = (c.splitVC.traitCollection.horizontalSizeClass
+                        == UIUserInterfaceSizeClassRegular)
+                       && !c.splitVC.isCollapsed;
+
+        if (c.resizable && regular) {
+            // Resizable + regular-width: use the "column kick" (hide→show) to
+            // clear any UIKit user-drag pin that overrides preferredPrimaryColumnWidth.
+            // Set the target width WITHOUT clamping min/max so the user can still
+            // drag-resize afterward. The hide/show rebuilds the column from the
+            // preferred width, discarding the pin.
             c.splitVC.preferredPrimaryColumnWidth = (CGFloat)width;
-            // Fix 3: force the width even if the user has previously drag-resized
-            // (which pins the column and makes preferredPrimaryColumnWidth a no-op).
-            // Momentarily clamp min==max==width, layout, then restore configured
-            // min/max so future drag-resize is still possible when resizable==true.
-            c.splitVC.minimumPrimaryColumnWidth = (CGFloat)width;
-            c.splitVC.maximumPrimaryColumnWidth = (CGFloat)width;
-            [c.splitVC.view setNeedsLayout];
-            [c.splitVC.view layoutIfNeeded];
-            if (c.resizable) {
-                // Fix A: defer min/max restore to the NEXT main-runloop tick so UIKit
-                // gets one fully-settled layout pass at the new width before the column
-                // becomes resizable again. Without the defer, UISplitViewController
-                // reverts to the user's drag-pinned width as soon as min/max reopen in
-                // the same runloop tick, making the width buttons appear to do nothing.
+            if (@available(iOS 16.0, *)) {
+                // Suppress the hide/show slide with performWithoutAnimation so the
+                // transition is invisible to the user.
+                [UIView performWithoutAnimation:^{
+                    [c.splitVC hideColumn:UISplitViewControllerColumnPrimary];
+                    [c.splitVC showColumn:UISplitViewControllerColumnPrimary];
+                    [c.splitVC.view layoutIfNeeded];
+                }];
+            } else {
+                // Pre-iOS 16 fallback (no showColumn: API): momentarily clamp
+                // min==max==width + deferred restore. Best-effort — the drag pin
+                // may not clear, but this is what worked before iOS 16.
+                c.splitVC.minimumPrimaryColumnWidth = (CGFloat)width;
+                c.splitVC.maximumPrimaryColumnWidth = (CGFloat)width;
+                [c.splitVC.view setNeedsLayout];
+                [c.splitVC.view layoutIfNeeded];
                 ZappIOSSidebarController* __weak weakC = c;
                 int32_t restoreMin = c.configuredMinWidth;
                 int32_t restoreMax = c.configuredMaxWidth;
@@ -806,8 +830,21 @@ void darwin_sidebar_set_width(int32_t window_id, int32_t width) {
                         ? (CGFloat)restoreMax : CGFLOAT_MAX;
                 });
             }
-            // else: resizable==false — leave min==max==width (column stays locked).
-            zapp_ios_sidebar_emit_resize(c, width);
+        } else if (!c.resizable) {
+            // Resizable:OFF — lock the column by clamping min==max==width.
+            // This is the authoritative "frozen" path: no drag is possible so
+            // no drag pin can form; clamping is sufficient and correct.
+            c.splitVC.preferredPrimaryColumnWidth = (CGFloat)width;
+            c.splitVC.minimumPrimaryColumnWidth = (CGFloat)width;
+            c.splitVC.maximumPrimaryColumnWidth = (CGFloat)width;
+            [c.splitVC.view setNeedsLayout];
+            [c.splitVC.view layoutIfNeeded];
+            // Leave min==max==width — column stays locked (no restore needed).
+        } else {
+            // Compact (collapsed/iPhone) or resizable + compact: no drag pin can
+            // form in single-column mode. Just set preferredPrimaryColumnWidth;
+            // it takes effect when the split expands to regular width.
+            c.splitVC.preferredPrimaryColumnWidth = (CGFloat)width;
         }
     });
 }
