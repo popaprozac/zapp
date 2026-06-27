@@ -481,9 +481,10 @@ void zapp_ios_sidebar_register(void* window, void* split, void* sidebarVC,
             svc.maximumPrimaryColumnWidth = (CGFloat)width;
         }
 
-        // collapsible:false — disable the swipe-in gesture from launch so the
-        // sidebar cannot be collapsed by the user. darwin_sidebar_toggle is a
-        // no-op when collapsible==NO, so programmatic routes are also gated.
+        // collapsible:false — disable the native swipe-in gesture from launch
+        // (macOS parity: collapsible gates only the native affordance). The
+        // programmatic API (toggle/collapse/expand) and an app-rendered toggle
+        // button still work — the dev owns their UI.
         if (!collapsible) {
             svc.presentsWithGesture = NO;
         }
@@ -811,9 +812,11 @@ void darwin_sidebar_set_width(int32_t window_id, int32_t width) {
     });
 }
 
-// Enable or disable sidebar collapsing. When can_collapse==false:
-//   • presentsWithGesture is set to NO so the swipe-in gesture is disabled.
-//   • darwin_sidebar_toggle becomes a no-op for both compact and regular paths.
+// Enable or disable sidebar collapsing (macOS parity: gates only the native
+// affordance, not the programmatic API). When can_collapse==false:
+//   • presentsWithGesture is set to NO so the native swipe-in gesture is disabled.
+//   • darwin_sidebar_toggle / collapse / expand STILL work — the app's own
+//     toggle button calls those and the dev owns their UI.
 // When can_collapse==true, presentsWithGesture is restored to YES.
 void darwin_sidebar_set_collapsible(int32_t window_id, bool can_collapse) {
     zapp_ios_sidebar_on_main(^{
