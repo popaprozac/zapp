@@ -1039,6 +1039,41 @@ static UIViewController* zapp_ios_topmost_presented(UIViewController* rootVC) {
 
 static ZappIOSModalDismissObserver* zapp_ios_modal_observer = nil;
 
+// Defers a sheet's presentation until its content webview finishes loading
+// (KVO on -loading) or a timeout fires — whichever first, exactly once — so the
+// sheet slides in already rendered instead of popping content in after the
+// present animation. Kept alive by the timeout block's strong capture (and the
+// pending KVO->fire dispatch); releases once fired.
+@interface ZappIOSSheetPresentGate : NSObject
+@property (nonatomic, copy) void (^present)(void);
+@property (nonatomic, weak) WKWebView* observed;
+@property (nonatomic) BOOL fired;
+- (void)fire;
+@end
+@implementation ZappIOSSheetPresentGate
+- (void)fire {
+    if (self.fired) return;
+    self.fired = YES;
+    WKWebView* wv = self.observed;
+    if (wv) {
+        @try { [wv removeObserver:self forKeyPath:@"loading"]; }
+        @catch (__unused NSException* e) {}
+        self.observed = nil;
+    }
+    void (^p)(void) = self.present;
+    self.present = nil;
+    if (p) p();
+}
+- (void)observeValueForKeyPath:(NSString*)keyPath ofObject:(id)object
+                        change:(NSDictionary*)change context:(void*)context {
+    if (![keyPath isEqualToString:@"loading"]) return;
+    WKWebView* wv = self.observed;
+    if (wv && wv.isLoading) return;
+    // Defer off the KVO callback frame before removing the observer + presenting.
+    dispatch_async(dispatch_get_main_queue(), ^{ [self fire]; });
+}
+@end
+
 void darwin_window_attach_modal(void* parent_handle, void* modal_handle) {
     if (!parent_handle || !modal_handle || parent_handle == modal_handle) return;
 
@@ -1104,14 +1139,17 @@ void darwin_window_attach_modal(void* parent_handle, void* modal_handle) {
     int modalBgR = modalDef ? modalDef->bg_r : 0;
     int modalBgG = modalDef ? modalDef->bg_g : 0;
     int modalBgB = modalDef ? modalDef->bg_b : 0;
+    // Content webview whose load we wait on before presenting (so the sheet
+    // slides in rendered, not blank). real_webview is the canonical content
+    // webview post-materialize. Captured before the block (modalDef safety).
+    WKWebView* modalContentWv = modalDef ? modalDef->real_webview : nil;
 
     void (^run)(void) = ^{
-        // Hold the VC strong before clearing rootViewController
-        // (which would otherwise dealloc it — UIWindow.rootViewController
-        // is the only strong ref).
+        // Hold the VC strong (the modal window's rootViewController is its only
+        // strong ref). Clearing rootViewController + presenting are DEFERRED into
+        // the `present` block below, so the content webview keeps its window and
+        // its in-flight load can make progress before we present.
         UIViewController* vcStrong = modalVC;
-        modal.rootViewController = nil;
-        modal.hidden = YES;
 
         // Map sheet presentation enum:
         //   0 = page (PageSheet) — default
@@ -1190,12 +1228,36 @@ void darwin_window_attach_modal(void* parent_handle, void* modal_handle) {
             zapp_ios_modal_stack_count++;
         }
 
-        UIColor* sheetCardBg = modalHasBg
-            ? [UIColor colorWithRed:modalBgR/255.0 green:modalBgG/255.0 blue:modalBgB/255.0 alpha:1.0]
-            : [UIColor systemBackgroundColor];
-        vcStrong.view.backgroundColor = sheetCardBg;
+        // Defer presentation until the content webview finishes loading (KVO on
+        // -loading) or a short timeout — whichever first, exactly once — so the
+        // sheet slides in already rendered instead of popping content in after the
+        // animation. Safe: this only DELAYS present; the webview is not
+        // re-parented (present moves the whole VC, not the webview's superview —
+        // the window→window move already happened pre-change and the bridge
+        // survives it). The card / underPageBackgroundColor fill is the graceful
+        // fallback if the load exceeds the cap.
+        void (^present)(void) = ^{
+            modal.rootViewController = nil;
+            modal.hidden = YES;
+            UIColor* sheetCardBg = modalHasBg
+                ? [UIColor colorWithRed:modalBgR/255.0 green:modalBgG/255.0 blue:modalBgB/255.0 alpha:1.0]
+                : [UIColor systemBackgroundColor];
+            vcStrong.view.backgroundColor = sheetCardBg;
+            [parentVC presentViewController:vcStrong animated:YES completion:nil];
+        };
 
-        [parentVC presentViewController:vcStrong animated:YES completion:nil];
+        ZappIOSSheetPresentGate* gate = [[ZappIOSSheetPresentGate alloc] init];
+        gate.present = present;
+        gate.observed = modalContentWv;
+        if (modalContentWv && modalContentWv.isLoading) {
+            [modalContentWv addObserver:gate forKeyPath:@"loading" options:0 context:NULL];
+            // Timeout cap so a slow/stalled (e.g. offscreen-throttled) load doesn't
+            // hang the present — keeps the tap responsive (~300ms; smoke-tunable).
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{ [gate fire]; });
+        } else {
+            [gate fire];  // already loaded (or no content webview) → present now
+        }
     };
     if ([NSThread isMainThread]) run();
     else dispatch_async(dispatch_get_main_queue(), run);
