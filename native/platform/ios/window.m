@@ -1145,11 +1145,16 @@ void darwin_window_attach_modal(void* parent_handle, void* modal_handle) {
     WKWebView* modalContentWv = modalDef ? modalDef->real_webview : nil;
 
     void (^run)(void) = ^{
-        // Hold the VC strong (the modal window's rootViewController is its only
-        // strong ref). Clearing rootViewController + presenting are DEFERRED into
-        // the `present` block below, so the content webview keeps its window and
-        // its in-flight load can make progress before we present.
+        // Hold the VC strong, then DETACH + HIDE the modal window NOW (not
+        // deferred). Two reasons this must happen before both the sheet config and
+        // the present: (1) sheetPresentationController is nil while the VC is still
+        // a window's rootViewController, so the detent/grabber/style block below
+        // would be skipped (→ full-page sheets); (2) a still-visible modal window
+        // flashes its full-screen content during the load wait. Only the final
+        // presentViewController is deferred (the gate below).
         UIViewController* vcStrong = modalVC;
+        modal.rootViewController = nil;
+        modal.hidden = YES;
 
         // Map sheet presentation enum:
         //   0 = page (PageSheet) — default
@@ -1237,8 +1242,6 @@ void darwin_window_attach_modal(void* parent_handle, void* modal_handle) {
         // survives it). The card / underPageBackgroundColor fill is the graceful
         // fallback if the load exceeds the cap.
         void (^present)(void) = ^{
-            modal.rootViewController = nil;
-            modal.hidden = YES;
             UIColor* sheetCardBg = modalHasBg
                 ? [UIColor colorWithRed:modalBgR/255.0 green:modalBgG/255.0 blue:modalBgB/255.0 alpha:1.0]
                 : [UIColor systemBackgroundColor];
