@@ -769,30 +769,30 @@ void darwin_sidebar_expand(int32_t window_id) {
 
 // Set the sidebar width programmatically.
 //
-// HONEST MODEL — UIKit limitation documented here:
+// UIKit DRAG-PIN OVERRIDE STRATEGY — resizable:ON on regular iPad:
 //
 // UISplitViewController stores an internal "user-drag pin" when the user
 // drag-resizes the sidebar column on iPad. This pin overrides
-// preferredPrimaryColumnWidth and there is NO public API to clear it.
-// The only lever that resets the pin (hide+show the primary column) collapses
-// the sidebar synchronously — hideColumn:Primary + showColumn:Primary net to
-// HIDDEN in the same runloop turn, leaving the sidebar collapsed on return.
-// We do NOT use that lever.
+// preferredPrimaryColumnWidth and there is NO public API to clear it directly.
+// The hide+show column lever collapses the sidebar synchronously (reverted).
 //
-// Compare macOS: AppKit exposes `setPosition:ofDividerAtIndex:` which moves
-// the live divider immediately and authoritatively. UIKit has no equivalent.
+// Refined approach (never hides the column — worst case is a no-op):
+//   1. Set preferredPrimaryColumnWidth to the new width.
+//   2. Tightly lock min==max==width to force the layout engine past the drag pin.
+//   3. Run a synchronous layout pass WHILE LOCKED inside performWithoutAnimation
+//      so UIKit must resolve the column geometry against the locked constraint,
+//      overwriting the user-drag cache in the same transaction.
+//   4. On the NEXT runloop cycle (dispatch_async to main), re-affirm
+//      preferredPrimaryColumnWidth BEFORE reopening min/max. Theory: UIKit clears
+//      the sticky drag-pin only after the locked layout transaction completes —
+//      re-affirming preferred first ensures the new width persists when bounds
+//      reopen. The column is NEVER hidden; worst case this is a clean no-op.
 //
-// Consequence:
-//   resizable:false — setWidth IS authoritative. We lock min==max==width (the
-//     same lock darwin_sidebar_set_resizable uses), so no drag can form and
-//     UIKit honors the width unconditionally.
-//   resizable:true  — setWidth applies via preferredPrimaryColumnWidth before
-//     any user drag and is a harmless no-op once the user has dragged (UIKit
-//     keeps the drag-pin). The width is still stored and the resize event fires
-//     so reactive state stays in sync, but the visual column does not change
-//     if a drag-pin is active.
-//   compact (iPhone) — single-column mode; no drag pin. preferredPrimaryColumnWidth
-//     takes effect when the split expands to regular width.
+// resizable:false — setWidth IS authoritative. We lock min==max==width (the same
+//   lock darwin_sidebar_set_resizable uses), so no drag can form and UIKit honors
+//   the width unconditionally. No deferred restore here.
+// compact (iPhone) — single-column mode; no drag pin. preferredPrimaryColumnWidth
+//   takes effect when the split expands to regular width.
 void darwin_sidebar_set_width(int32_t window_id, int32_t width) {
     zapp_ios_sidebar_on_main(^{
         ZappIOSSidebarController* c = zapp_ios_sidebar_for_slot(window_id);
@@ -815,13 +815,54 @@ void darwin_sidebar_set_width(int32_t window_id, int32_t width) {
             [c.splitVC.view layoutIfNeeded];
             // Leave min==max==width — column stays locked (no restore needed).
         } else {
-            // Resizable:ON (regular or compact) — set the preferred width and
-            // trigger layout. This is authoritative before any user drag; after
-            // a drag the user-pin overrides it (UIKit limitation — no API to
-            // clear). No hide/show kick: that collapses the sidebar.
-            c.splitVC.preferredPrimaryColumnWidth = (CGFloat)width;
-            [c.splitVC.view setNeedsLayout];
-            [c.splitVC.view layoutIfNeeded];
+            // Resizable:ON — applies when horizontalSizeClass==Regular && !isCollapsed
+            // (iPad regular / tiled). On compact (iPhone, collapsed split) there is
+            // no drag pin so the plain preferredPrimaryColumnWidth below suffices.
+            BOOL isRegular = (c.splitVC.traitCollection.horizontalSizeClass
+                              == UIUserInterfaceSizeClassRegular);
+            BOOL isCollapsed = c.splitVC.isCollapsed;
+
+            if (isRegular && !isCollapsed) {
+                UISplitViewController* svc = c.splitVC;
+                // 1. Apply the new preferred width.
+                svc.preferredPrimaryColumnWidth = (CGFloat)width;
+                // 2. Cache the configured resizable bounds (source of truth =
+                //    configured fields, with the same 0-fallbacks the rest of
+                //    the file uses).
+                CGFloat origMin = (c.configuredMinWidth > 0)
+                    ? (CGFloat)c.configuredMinWidth : 0.0;
+                CGFloat origMax = (c.configuredMaxWidth > 0)
+                    ? (CGFloat)c.configuredMaxWidth : CGFLOAT_MAX;
+                // 3. Tightly lock min==max==width to force the layout engine
+                //    past the user-drag pin.
+                svc.minimumPrimaryColumnWidth = (CGFloat)width;
+                svc.maximumPrimaryColumnWidth = (CGFloat)width;
+                // 4. Synchronous layout pass WHILE LOCKED, no animation —
+                //    overwrites the user-drag cache in the same transaction.
+                [UIView performWithoutAnimation:^{
+                    [svc.view setNeedsLayout];
+                    [svc.view layoutIfNeeded];
+                }];
+                // 5. Restore the resizable bounds on the NEXT runloop —
+                //    re-affirm preferred FIRST so the locked layout transaction
+                //    finishes before min/max reopen (this is what clears the
+                //    sticky drag-pin so the new width persists; column is never
+                //    hidden — worst case is a clean no-op).
+                __weak ZappIOSSidebarController* weakC = c;
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    ZappIOSSidebarController* sc = weakC;
+                    if (!sc || !sc.splitVC) return;
+                    sc.splitVC.preferredPrimaryColumnWidth = (CGFloat)width;
+                    sc.splitVC.minimumPrimaryColumnWidth = origMin;
+                    sc.splitVC.maximumPrimaryColumnWidth = origMax;
+                    [sc.splitVC.view setNeedsLayout];
+                });
+            } else {
+                // Compact / collapsed — no drag pin; set preferred directly.
+                c.splitVC.preferredPrimaryColumnWidth = (CGFloat)width;
+                [c.splitVC.view setNeedsLayout];
+                [c.splitVC.view layoutIfNeeded];
+            }
         }
     });
 }
