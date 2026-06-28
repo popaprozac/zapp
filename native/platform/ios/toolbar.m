@@ -9,8 +9,14 @@
 //
 // T1 scope (CORE item types only):
 //   button, space, flexibleSpace, label, toggleSidebar, toggleInspector.
-//   segmented/group/button.menu deferred to T2.
 //   trackingSeparator dropped on iOS.
+//
+// T2 scope (BREADTH):
+//   segmented → UISegmentedControl wrapped in UIBarButtonItem(customView:)
+//   group     → flattened sub-buttons into same placement bucket
+//   button.menu → UIMenu set on barButtonItem.menu (iOS 14+)
+//   darwin_toolbar_update_item → live patch (label/icon/enabled/selected)
+//   darwin_toolbar_remove      → hide bar + clear items + drop registry
 //
 // T1.5 collapse-aware delivery:
 //   On iPhone the split collapses to a single column (collapsedNav). T1's
@@ -140,6 +146,11 @@ static UIImage* zapp_ios_resolve_icon(NSString* spec) {
 // window_ptr — stored for use by the nav delegate (it only sees the nav, not
 // the window pointer, so we keep it here for the re-apply lookup).
 @property (nonatomic, assign) void* windowPtr;
+// T2: id-keyed dicts for update_item.
+// itemsById: maps item-id → UIBarButtonItem (buttons, group sub-buttons, segmented wrapper).
+// segmentedById: maps segmented-id → UISegmentedControl (for selected / enabled patch).
+@property (nonatomic, strong) NSMutableDictionary<NSString*, UIBarButtonItem*>* itemsById;
+@property (nonatomic, strong) NSMutableDictionary<NSString*, UISegmentedControl*>* segmentedById;
 @end
 
 @implementation ZappIOSToolbarEntry
@@ -271,6 +282,51 @@ static void zapp_ios_toolbar_emit_click(int32_t host_id, NSString* itemId) {
 
 @end
 
+// ─── ZappIOSToolbarSegmentTarget ─────────────────────────────────────────────
+//
+// T2: UISegmentedControl target for valueChanged.
+// Emits window:toolbar-group-selected mirroring darwin/toolbar.m's
+// zapp_toolbar_emit_group_select payload:
+//   {"windowId":"win-<N>","id":"<groupId>","index":<N>,"selected":<bool>}
+// selectionMode stored so we can report `selected` accurately:
+//   one/any → selectedSegmentIndex is meaningful; report true
+//   momentary → segment doesn't stay down; report true (just tapped)
+
+static const char kZappToolbarSegmentTargetKey = 0;
+
+@interface ZappIOSToolbarSegmentTarget : NSObject
+@property (nonatomic, assign) int32_t hostId;
+@property (nonatomic, copy)   NSString* groupId;
+@property (nonatomic, copy)   NSString* selectionMode; // "one", "any", "momentary"
+@end
+
+@implementation ZappIOSToolbarSegmentTarget
+
+- (void)segmentChanged:(UISegmentedControl*)sender {
+    NSInteger idx = sender.selectedSegmentIndex;
+    if (idx == UISegmentedControlNoSegment) return;
+    // Emit group-selected — mirrors darwin/toolbar.m's zapp_toolbar_emit_group_select.
+    NSString* gid = self.groupId;
+    if (!gid.length) return;
+    NSString* escaped = [gid stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+    escaped = [escaped stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\""];
+    escaped = [escaped stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
+    int32_t hid = self.hostId;
+    int32_t idxInt = (int32_t)idx;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        // `selected` is always true on iOS — the segment that fired the change
+        // event is the one just selected (momentary or persistent).
+        NSString* js = [NSString stringWithFormat:
+            @"(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+            "if(b&&b._onEvent)b._onEvent('window:toolbar-group-selected',"
+            "'{\"windowId\":\"win-%d\",\"id\":\"%@\",\"index\":%d,\"selected\":true}');})();",
+            hid, escaped, idxInt];
+        zapp_ios_eval_js_all_webviews([js UTF8String]);
+    });
+}
+
+@end
+
 // ─── Main-thread helper ──────────────────────────────────────────────────────
 
 static void zapp_ios_toolbar_on_main(void (^block)(void)) {
@@ -289,6 +345,99 @@ void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_u
 // extern-declares it below.
 
 void zapp_ios_toolbar_reapply_for_window(void* window_ptr);
+
+// ─── T2: UIMenu builder ──────────────────────────────────────────────────────
+//
+// Builds a UIMenu from the stripped MenuItemDef array (actions removed by the
+// runtime; ids present). Taps emit __menu:click {"id":"<id>"} via
+// zapp_ios_eval_js_all_webviews — mirrors darwin/toolbar.m's
+// zapp_toolbar_emit_menu_click, which uses the SAME event name/__menu:click
+// because NSMenuToolbarItem clicks route through darwin_menu_build_from_items_json
+// and menu.m emits __menu:click.
+//
+// Recursion: items with a "submenu" array build a nested UIMenu.
+// Separator items (type:"separator") build UIAction dividers (iOS 14+: use
+// a UIMenuElement that acts as a standalone-display divider by creating an
+// empty titled UIMenu as an inline section divider).
+// checked / radioGroup: UIAction.state (.on / .off) for checkmarks.
+// enabled: UIAction.attributes = .disabled when false.
+// iOS 14+ required for UIMenu on UIBarButtonItem; this is the iOS 14+ API.
+//
+// Note: `host_id` is unused here (macOS zapp_toolbar_emit_menu_click ignores
+// it too — __menu:click is window-agnostic by design).
+
+API_AVAILABLE(ios(14.0))
+static NSArray<UIMenuElement*>* zapp_ios_build_menu_elements(NSArray* items);
+
+API_AVAILABLE(ios(14.0))
+static NSArray<UIMenuElement*>* zapp_ios_build_menu_elements(NSArray* items) {
+    if (![items isKindOfClass:[NSArray class]]) return @[];
+    NSMutableArray<UIMenuElement*>* elements = [NSMutableArray array];
+    for (NSDictionary* def in items) {
+        if (![def isKindOfClass:[NSDictionary class]]) continue;
+        NSString* type = [def[@"type"] isKindOfClass:[NSString class]] ? def[@"type"] : @"normal";
+
+        // Separator → UIMenu inline section (no title, no children) acts as divider.
+        if ([type isEqualToString:@"separator"]) {
+            UIMenu* sep = [UIMenu menuWithTitle:@"" image:nil identifier:nil
+                                         options:UIMenuOptionsDisplayInline children:@[]];
+            [elements addObject:sep];
+            continue;
+        }
+
+        NSString* itemId  = [def[@"id"] isKindOfClass:[NSString class]] ? def[@"id"] : @"";
+        NSString* label   = [def[@"label"] isKindOfClass:[NSString class]] ? def[@"label"] : @"";
+        NSNumber* enabled = [def[@"enabled"] isKindOfClass:[NSNumber class]] ? def[@"enabled"] : nil;
+        NSNumber* checked = [def[@"checked"] isKindOfClass:[NSNumber class]] ? def[@"checked"] : nil;
+        NSArray*  submenu = [def[@"submenu"] isKindOfClass:[NSArray class]] ? def[@"submenu"] : nil;
+
+        if (submenu.count > 0) {
+            // Nested submenu → UIMenu (not a UIAction; iOS shows a disclosure indicator).
+            NSArray<UIMenuElement*>* children = zapp_ios_build_menu_elements(submenu);
+            UIMenu* sub = [UIMenu menuWithTitle:label children:children];
+            [elements addObject:sub];
+            continue;
+        }
+
+        // Leaf item → UIAction.
+        NSString* capturedId = itemId;
+        UIAction* action = [UIAction actionWithTitle:label
+                                               image:nil
+                                          identifier:nil
+                                             handler:^(__kindof UIAction* _Nonnull act) {
+            (void)act;
+            if (!capturedId.length) return;
+            // Emit __menu:click {"id":"<id>"} — mirrors darwin/toolbar.m's
+            // zapp_toolbar_emit_menu_click event + payload exactly.
+            NSString* esc = [capturedId stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+            esc = [esc stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\""];
+            esc = [esc stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
+            NSString* js = [NSString stringWithFormat:
+                @"(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+                "if(b&&b._onEvent)b._onEvent('__menu:click','{\"id\":\"%@\"}');})();",
+                esc];
+            zapp_ios_eval_js_all_webviews([js UTF8String]);
+        }];
+        // Enabled state.
+        if (enabled && !enabled.boolValue) {
+            action.attributes = UIMenuElementAttributesDisabled;
+        }
+        // Checkmark state (maps to UIMenuElementState).
+        if (checked && checked.boolValue) {
+            action.state = UIMenuElementStateOn;
+        } else {
+            action.state = UIMenuElementStateOff;
+        }
+        [elements addObject:action];
+    }
+    return elements;
+}
+
+API_AVAILABLE(ios(14.0))
+static UIMenu* zapp_ios_build_uimenu(NSArray* items) {
+    NSArray<UIMenuElement*>* children = zapp_ios_build_menu_elements(items);
+    return [UIMenu menuWithTitle:@"" children:children];
+}
 
 // ─── zapp_ios_toolbar_apply_to_nav (internal helper) ─────────────────────────
 //
@@ -368,6 +517,8 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
         UIView*   centerView  = nil;
         NSMutableArray<UIBarButtonItem*>* trailing = [NSMutableArray array];
         NSMutableArray* allBuilt = [NSMutableArray array]; // for registry
+        NSMutableDictionary<NSString*, UIBarButtonItem*>* itemsById = [NSMutableDictionary dictionary];
+        NSMutableDictionary<NSString*, UISegmentedControl*>* segmentedById = [NSMutableDictionary dictionary];
 
         for (NSDictionary* def in items) {
             if (![def isKindOfClass:[NSDictionary class]]) continue;
@@ -375,16 +526,131 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
             NSString* placement = [def[@"placement"] isKindOfClass:[NSString class]]
                 ? def[@"placement"] : @"leading";
 
+            // Determine the target bucket once.
+            NSMutableArray<UIBarButtonItem*>* bucket =
+                [placement isEqualToString:@"trailing"] ? trailing : leading;
+            NSMutableArray<UIBarButtonItem*>* bucketNoToggle =
+                [placement isEqualToString:@"trailing"] ? trailing : leadingNoToggle;
+
             // trackingSeparator — dropped on iOS (macOS-only NSTrackingSeparatorToolbarItem).
+            // badge / style:prominent / controlRepresentation — ignored without error.
             if ([type isEqualToString:@"trackingSeparator"]) continue;
 
-            // segmented / group / button.menu — T2. Skip silently in T1.
-            if ([type isEqualToString:@"segmented"] ||
-                [type isEqualToString:@"group"]) continue;
-            // button.menu check: button type with a "menu" array.
-            BOOL hasMenu = [def[@"menu"] isKindOfClass:[NSArray class]] &&
-                           ((NSArray*)def[@"menu"]).count > 0;
-            if ([type isEqualToString:@"button"] && hasMenu) continue;
+            // ── T2: segmented ────────────────────────────────────────────────
+            if ([type isEqualToString:@"segmented"]) {
+                NSString* groupId = [def[@"id"] isKindOfClass:[NSString class]] ? def[@"id"] : nil;
+                if (!groupId.length) continue;
+                NSArray* segs = [def[@"segments"] isKindOfClass:[NSArray class]] ? def[@"segments"] : @[];
+                if (segs.count == 0) continue;
+                NSString* modeStr = [def[@"selectionMode"] isKindOfClass:[NSString class]]
+                    ? def[@"selectionMode"] : @"momentary";
+
+                UISegmentedControl* sc = [[UISegmentedControl alloc] init];
+                for (NSUInteger i = 0; i < segs.count; i++) {
+                    NSDictionary* seg = segs[i];
+                    if (![seg isKindOfClass:[NSDictionary class]]) {
+                        [sc insertSegmentWithTitle:@"" atIndex:i animated:NO];
+                        continue;
+                    }
+                    NSString* segIcon = [seg[@"icon"] isKindOfClass:[NSString class]] ? seg[@"icon"] : @"";
+                    UIImage* img = segIcon.length ? zapp_ios_resolve_icon(segIcon) : nil;
+                    if (img) {
+                        [sc insertSegmentWithImage:img atIndex:i animated:NO];
+                    } else {
+                        NSString* segLabel = [seg[@"label"] isKindOfClass:[NSString class]] ? seg[@"label"] : @"";
+                        [sc insertSegmentWithTitle:segLabel atIndex:i animated:NO];
+                    }
+                    // Per-segment enabled.
+                    NSNumber* segEn = [seg[@"enabled"] isKindOfClass:[NSNumber class]] ? seg[@"enabled"] : nil;
+                    if (segEn && !segEn.boolValue) {
+                        [sc setEnabled:NO forSegmentAtIndex:i];
+                    }
+                }
+
+                // selectionMode:
+                //   "one"      → persistent single-select (momentary=NO)
+                //   "any"      → no native multi-select on iOS; approximate as single-select + note
+                //   "momentary"→ momentary=YES (segment springs back)
+                if ([modeStr isEqualToString:@"momentary"]) {
+                    sc.momentary = YES;
+                } else {
+                    // "one" and "any" both use persistent single-select.
+                    // "any" (multi-select) has no native UIKit equivalent on nav bars —
+                    // approximated as single-select. This is noted in the task report.
+                    sc.momentary = NO;
+                }
+
+                // Apply initial selection (wire format: always number[]).
+                NSArray* selArr = [def[@"selected"] isKindOfClass:[NSArray class]] ? def[@"selected"] : @[];
+                if (selArr.count > 0) {
+                    NSInteger selIdx = [selArr[0] integerValue];
+                    if (selIdx >= 0 && selIdx < (NSInteger)segs.count) {
+                        sc.selectedSegmentIndex = selIdx;
+                    }
+                }
+
+                // Wire the target.
+                ZappIOSToolbarSegmentTarget* tgt = [[ZappIOSToolbarSegmentTarget alloc] init];
+                tgt.hostId        = host_slot;
+                tgt.groupId       = groupId;
+                tgt.selectionMode = modeStr;
+                [sc addTarget:tgt action:@selector(segmentChanged:)
+                    forControlEvents:UIControlEventValueChanged];
+
+                UIBarButtonItem* wrapperItem =
+                    [[UIBarButtonItem alloc] initWithCustomView:sc];
+                // Retain the target via associated object on the wrapper item.
+                objc_setAssociatedObject(wrapperItem, &kZappToolbarSegmentTargetKey, tgt,
+                    OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+                [bucket addObject:wrapperItem];
+                [bucketNoToggle addObject:wrapperItem];
+                [allBuilt addObject:wrapperItem];
+                itemsById[groupId] = wrapperItem;
+                segmentedById[groupId] = sc;
+                continue;
+            }
+
+            // ── T2: group — flatten sub-buttons into same placement bucket ──
+            if ([type isEqualToString:@"group"]) {
+                NSArray* subItems = [def[@"items"] isKindOfClass:[NSArray class]] ? def[@"items"] : @[];
+                for (NSDictionary* sub in subItems) {
+                    if (![sub isKindOfClass:[NSDictionary class]]) continue;
+                    NSString* subId = [sub[@"id"] isKindOfClass:[NSString class]] ? sub[@"id"] : nil;
+                    if (!subId.length) continue;
+                    NSString* subIcon  = [sub[@"icon"]  isKindOfClass:[NSString class]] ? sub[@"icon"]  : @"";
+                    NSString* subLabel = [sub[@"label"] isKindOfClass:[NSString class]] ? sub[@"label"] : @"";
+                    NSNumber* subEn    = [sub[@"enabled"] isKindOfClass:[NSNumber class]] ? sub[@"enabled"] : nil;
+                    BOOL subEnabled = subEn ? subEn.boolValue : YES;
+
+                    ZappIOSToolbarButtonTarget* tgt = [[ZappIOSToolbarButtonTarget alloc] init];
+                    tgt.hostId = host_slot;
+                    tgt.itemId = subId;
+
+                    UIImage* img = subIcon.length ? zapp_ios_resolve_icon(subIcon) : nil;
+                    UIBarButtonItem* subItem;
+                    if (img) {
+                        subItem = [[UIBarButtonItem alloc] initWithImage:img
+                                                                   style:UIBarButtonItemStylePlain
+                                                                  target:tgt
+                                                                  action:@selector(buttonTapped:)];
+                    } else {
+                        subItem = [[UIBarButtonItem alloc] initWithTitle:subLabel
+                                                                   style:UIBarButtonItemStylePlain
+                                                                  target:tgt
+                                                                  action:@selector(buttonTapped:)];
+                    }
+                    subItem.enabled = subEnabled;
+                    objc_setAssociatedObject(subItem, &kZappToolbarButtonTargetKey, tgt,
+                        OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+                    [bucket addObject:subItem];
+                    [bucketNoToggle addObject:subItem];
+                    [allBuilt addObject:subItem];
+                    itemsById[subId] = subItem;
+                }
+                continue;
+            }
 
             UIBarButtonItem* item = nil;
             BOOL isToggleSidebar = NO;
@@ -440,6 +706,9 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
                     lbl.font = [UIFont systemFontOfSize:[UIFont smallSystemFontSize]];
                     [lbl sizeToFit];
                     item = [[UIBarButtonItem alloc] initWithCustomView:lbl];
+                    // Store by id for update_item (text patch).
+                    NSString* labelId = [def[@"id"] isKindOfClass:[NSString class]] ? def[@"id"] : nil;
+                    if (labelId.length) itemsById[labelId] = item;
                 }
 
             } else {
@@ -452,6 +721,31 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
                 NSNumber* enNum    = [def[@"enabled"] isKindOfClass:[NSNumber class]] ? def[@"enabled"] : nil;
                 BOOL enabled = enNum ? enNum.boolValue : YES;
 
+                // ── T2: button.menu ──────────────────────────────────────────
+                NSArray* menuArr = [def[@"menu"] isKindOfClass:[NSArray class]] ? def[@"menu"] : nil;
+                BOOL hasMenu = (menuArr.count > 0);
+                if (hasMenu && @available(ios 14.0, *)) {
+                    UIImage* image = iconSpec.length ? zapp_ios_resolve_icon(iconSpec) : nil;
+                    UIMenu* menu = zapp_ios_build_uimenu(menuArr);
+                    if (image) {
+                        item = [[UIBarButtonItem alloc] initWithImage:image
+                                                               style:UIBarButtonItemStylePlain
+                                                              target:nil action:nil];
+                    } else {
+                        item = [[UIBarButtonItem alloc] initWithTitle:label
+                                                               style:UIBarButtonItemStylePlain
+                                                              target:nil action:nil];
+                    }
+                    item.menu = menu;
+                    item.enabled = enabled;
+                    itemsById[itemId] = item;
+                    [bucket addObject:item];
+                    [bucketNoToggle addObject:item];
+                    [allBuilt addObject:item];
+                    continue;
+                }
+
+                // Plain button (no menu, or iOS < 14 fallback — just skip menu).
                 ZappIOSToolbarButtonTarget* tgt = [[ZappIOSToolbarButtonTarget alloc] init];
                 tgt.hostId = host_slot;
                 tgt.itemId = itemId;
@@ -472,19 +766,16 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
                 // Retain the target (UIBarButtonItem.target is weak/unretained).
                 objc_setAssociatedObject(item, &kZappToolbarButtonTargetKey, tgt,
                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                itemsById[itemId] = item;
             }
 
             if (!item) continue;
 
-            // Bucket by placement.
-            if ([placement isEqualToString:@"trailing"]) {
-                [trailing addObject:item];
-            } else {
-                // "leading" and anything else → leading.
-                [leading addObject:item];
-                // leadingNoToggle omits the toggleSidebar item for iPad de-dup.
-                if (!isToggleSidebar) [leadingNoToggle addObject:item];
-            }
+            // Bucket by placement. `bucket` and `bucketNoToggle` both point at `trailing`
+            // for trailing items (so only add once). For leading items `bucket` is `leading`
+            // and `bucketNoToggle` is `leadingNoToggle` (separate arrays).
+            [bucket addObject:item];
+            if (!isToggleSidebar && bucket != bucketNoToggle) [bucketNoToggle addObject:item];
             [allBuilt addObject:item];
         }
 
@@ -504,6 +795,8 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
         entry.trailingItems   = [trailing copy];
         entry.centerTitle     = centerTitle;
         entry.centerView      = centerView;
+        entry.itemsById       = itemsById;
+        entry.segmentedById   = segmentedById;
 
         // Apply to the correct nav (collapsed vs expanded) and show the bar.
         // zapp_ios_toolbar_reapply_for_window reads the collapse state and picks
@@ -639,18 +932,179 @@ void zapp_ios_toolbar_reapply_for_window(void* window_ptr) {
     }
 }
 
-// ─── darwin_toolbar_update_item (stub — T2 adds the live patch) ─────────────
+// ─── darwin_toolbar_update_item ──────────────────────────────────────────────
+//
+// T2: Patch one item in place. item_json = {"id", ...only patched keys}.
+// Mirrors darwin/toolbar.m's darwin_toolbar_update_item adapted to UIKit.
+//
+// Supported patch keys (iOS UIKit equivalents):
+//   label  → barButtonItem.title (for text-title buttons) or UILabel.text (label items)
+//   icon   → barButtonItem.image (for image buttons)
+//   enabled → barButtonItem.enabled
+//   selected → UISegmentedControl.selectedSegmentIndex (for segmented items; wire: number[])
+//   menu   → rebuild UIMenu on a button.menu item (iOS 14+)
+//   text   → same as label but for type:"label" items — UILabel.text
+// Ignored/graceful: badge, style, tintColor, bordered, controlRepresentation.
+// Unknown id → no-op (match macOS behavior).
 
 void darwin_toolbar_update_item(void* window_ptr, const char* item_json) {
-    // T1: no-op. T2 will parse the patch and mutate the live UIBarButtonItem.
-    (void)window_ptr; (void)item_json;
+    if (!window_ptr || !item_json || !item_json[0]) return;
+    NSString* json = [NSString stringWithUTF8String:item_json];
+    zapp_ios_toolbar_on_main(^{
+        if (!zapp_ios_toolbars) return;
+        NSValue* key = [NSValue valueWithPointer:window_ptr];
+        ZappIOSToolbarEntry* entry = zapp_ios_toolbars[key];
+        if (!entry) return; // no toolbar registered — no-op (matches macOS)
+
+        NSData* data = [json dataUsingEncoding:NSUTF8StringEncoding];
+        NSDictionary* patch = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+        if (![patch isKindOfClass:[NSDictionary class]]) return;
+
+        NSString* itemId = [patch[@"id"] isKindOfClass:[NSString class]] ? patch[@"id"] : nil;
+        if (!itemId.length) return;
+
+        // ── Segmented control ────────────────────────────────────────────────
+        UISegmentedControl* sc = entry.segmentedById[itemId];
+        if (sc) {
+            // selected: wire is always number[]; apply first element.
+            if ([patch[@"selected"] isKindOfClass:[NSArray class]]) {
+                NSArray* sel = patch[@"selected"];
+                if (sel.count > 0) {
+                    NSInteger idx = [sel[0] integerValue];
+                    if (idx >= 0 && idx < sc.numberOfSegments) {
+                        sc.selectedSegmentIndex = idx;
+                    }
+                } else {
+                    // Empty array → deselect (e.g. momentary reset).
+                    sc.selectedSegmentIndex = UISegmentedControlNoSegment;
+                }
+            }
+            if ([patch[@"enabled"] isKindOfClass:[NSNumber class]]) {
+                sc.enabled = [(NSNumber*)patch[@"enabled"] boolValue];
+            }
+            // icon/label for segmented: not patched at the control level on iOS
+            // (individual segment images/titles would require index; not in the patch shape).
+            return;
+        }
+
+        // ── Bar button item (button / group sub-button / button.menu / label) ─
+        UIBarButtonItem* barItem = entry.itemsById[itemId];
+        if (!barItem) {
+            // Unknown id: no-op (matches darwin/toolbar.m behavior).
+            NSLog(@"[zapp] iOS toolbar: updateItem unknown id \"%@\" — ignored", itemId);
+            return;
+        }
+
+        // label / text → title or UILabel.text.
+        NSString* newLabel = nil;
+        if ([patch[@"label"] isKindOfClass:[NSString class]]) newLabel = patch[@"label"];
+        if ([patch[@"text"]  isKindOfClass:[NSString class]]) newLabel = patch[@"text"]; // overrides label if both
+
+        if (newLabel) {
+            // Check if the custom view is a UILabel (type:"label" items).
+            if ([barItem.customView isKindOfClass:[UILabel class]]) {
+                UILabel* lbl = (UILabel*)barItem.customView;
+                lbl.text = newLabel;
+                [lbl sizeToFit];
+            } else {
+                barItem.title = newLabel;
+            }
+        }
+
+        // icon → image.
+        if ([patch[@"icon"] isKindOfClass:[NSString class]] && ((NSString*)patch[@"icon"]).length) {
+            UIImage* img = zapp_ios_resolve_icon(patch[@"icon"]);
+            if (img) barItem.image = img;
+        }
+
+        // enabled.
+        if ([patch[@"enabled"] isKindOfClass:[NSNumber class]]) {
+            barItem.enabled = [(NSNumber*)patch[@"enabled"] boolValue];
+        }
+
+        // menu → rebuild UIMenu (iOS 14+; button.menu items only).
+        if ([patch[@"menu"] isKindOfClass:[NSArray class]] && @available(ios 14.0, *)) {
+            UIMenu* menu = zapp_ios_build_uimenu(patch[@"menu"]);
+            barItem.menu = menu;
+        }
+
+        // badge / style / tintColor / bordered / controlRepresentation →
+        // gracefully ignored (not available on UIBarButtonItem / nav bar).
+    });
 }
 
-// ─── darwin_toolbar_remove (stub — T2 adds full remove) ─────────────────────
+// ─── darwin_toolbar_remove ────────────────────────────────────────────────────
+//
+// T2: Hide the nav bar, clear navigationItem items, drop the registry entry,
+// re-inject --zapp-toolbar-height: 0.
+//
+// Mirrors darwin/toolbar.m's darwin_toolbar_remove adapted for iOS.
+// Must work correctly whether the split is collapsed (iPhone) or expanded (iPad)
+// — uses the same collapse-aware target selection as reapply_for_window.
+// No-op when no toolbar is registered for this window.
 
 void darwin_toolbar_remove(void* window_ptr) {
-    // T1: no-op. T2 will hide the bar, clear navigationItem items, drop registry.
-    (void)window_ptr;
+    if (!window_ptr) return;
+    zapp_ios_toolbar_on_main(^{
+        if (!zapp_ios_toolbars) return;
+        NSValue* key = [NSValue valueWithPointer:window_ptr];
+        ZappIOSToolbarEntry* entry = zapp_ios_toolbars[key];
+        if (!entry) return; // not registered — no-op
+
+        int32_t slot = entry.hostSlot;
+        BOOL collapsed = zapp_ios_split_is_collapsed_for_window(window_ptr);
+
+        if (collapsed) {
+            // ── Collapsed (iPhone) ────────────────────────────────────────
+            UINavigationController* collapsedNav = zapp_ios_collapsed_nav_for_window(window_ptr);
+            if (collapsedNav) {
+                collapsedNav.navigationBarHidden = YES;
+                // Clear items on the content VC's navigationItem.
+                UIViewController* contentVC = zapp_ios_content_vc_for_window(window_ptr);
+                if (contentVC) {
+                    contentVC.navigationItem.leftBarButtonItems  = @[];
+                    contentVC.navigationItem.rightBarButtonItems = @[];
+                    contentVC.navigationItem.title     = nil;
+                    contentVC.navigationItem.titleView = nil;
+                }
+                // Remove the nav delegate (no toolbar → no bar visibility management).
+                id existingDelegate = collapsedNav.delegate;
+                if ([existingDelegate isKindOfClass:[ZappIOSToolbarNavDelegate class]]) {
+                    collapsedNav.delegate = nil;
+                    objc_setAssociatedObject(collapsedNav, &kZappToolbarNavDelegateKey, nil,
+                        OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                }
+            }
+        } else {
+            // ── Expanded (iPad) ───────────────────────────────────────────
+            UINavigationController* contentNav = zapp_ios_content_nav_for_window(window_ptr);
+            if (contentNav) {
+                contentNav.navigationBarHidden = YES;
+                UIViewController* vc = contentNav.topViewController;
+                if (vc) {
+                    vc.navigationItem.leftBarButtonItems  = @[];
+                    vc.navigationItem.rightBarButtonItems = @[];
+                    vc.navigationItem.title     = nil;
+                    vc.navigationItem.titleView = nil;
+                }
+            }
+        }
+
+        // Drop the registry entry before re-injecting metrics so that
+        // inject_metrics measures a hidden bar (height → 0).
+        [zapp_ios_toolbars removeObjectForKey:key];
+
+        // Re-inject --zapp-toolbar-height: 0 (one tick so UIKit hides the bar first).
+        dispatch_async(dispatch_get_main_queue(), ^{
+            // Inject 0 directly — entry is gone so inject_metrics would
+            // measure a missing/hidden bar. Build the JS inline here.
+            NSString* js = @"(function(){try{var r=document.documentElement;"
+                            "if(r){r.style.setProperty('--zapp-toolbar-height','0px');}"
+                            "}catch(e){}})();";
+            WKWebView* wv = zapp_ios_content_webview_for_slot(slot);
+            if (wv) [wv evaluateJavaScript:js completionHandler:nil];
+        });
+    });
 }
 
 // ─── zapp_toolbar_inject_metrics ─────────────────────────────────────────────
