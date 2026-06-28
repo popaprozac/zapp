@@ -70,6 +70,11 @@ extern int32_t zapp_ios_inspector_slot_for(int32_t host_slot);
 // a collapse/expand transition. No-op when no toolbar has been registered.
 extern void zapp_ios_toolbar_reapply_for_window(void* window_ptr);
 
+// Defined in ios/toolbar.m — re-applies with an explicit sidebarHidden state
+// (the transition TARGET) so willChangeToDisplayMode: can drive the toggle change
+// synchronously within the animation instead of one tick after.
+extern void zapp_ios_toolbar_reapply_for_window_hidden(void* window_ptr, BOOL sidebarHidden);
+
 // --- Per-window registry --------------------------------------------------
 //
 // Keyed by the host UIWindow (NSValue-wrapped pointer), mirroring darwin/
@@ -484,24 +489,32 @@ static void zapp_ios_sidebar_sync_collapse(ZappIOSSidebarController* c, BOOL col
 // button at that point). Without this hook, the toolbar never updates after the
 // user shows/hides the sidebar via our button, the system button, or a gesture.
 //
-// dispatch_async so the re-apply runs AFTER the new displayMode has settled on
-// the split (the mode is already set to the incoming value by the time the
-// async block runs on the main queue — UIKit fires this delegate method before
-// it transitions, but the async hop ensures we read the final settled state).
+// We call zapp_ios_toolbar_reapply_for_window_hidden SYNCHRONOUSLY, passing the
+// `displayMode` parameter as the TARGET state. This is correct because UIKit
+// calls this delegate method with the incoming display mode BEFORE the transition,
+// so `displayMode` is the settled target — exactly what the toolbar needs to set
+// its leading items. Calling synchronously (we are already on the main thread)
+// means the toolbar change rides the SAME animation as the sidebar show/hide,
+// eliminating the "wonky snap" seen when using dispatch_async (which applied
+// the change one tick after the transition completed).
 //
 // NOTE: do NOT emit sidebar-visibility events from here. The imperative toggle
 // path (darwin_sidebar_toggle / show_content / show_sidebar) owns those emits
 // via zapp_ios_sidebar_sync_collapse — emitting here would double-fire.
 - (void)splitViewController:(UISplitViewController*)svc
     willChangeToDisplayMode:(UISplitViewControllerDisplayMode)displayMode {
-    (void)svc; (void)displayMode;
+    (void)svc;
     // Resolve the window pointer that zapp_ios_toolbar_reapply_for_window expects.
     void* winPtr = darwin_window_get_by_numeric_id(self.hostWindowId);
     if (!winPtr) return;
-    // Async so the split's displayMode property reflects the new mode when we read it.
-    dispatch_async(dispatch_get_main_queue(), ^{
-        zapp_ios_toolbar_reapply_for_window(winPtr);
-    });
+    // Compute the target hidden state from the incoming displayMode parameter.
+    // SecondaryOnly means the primary (sidebar) column will be hidden after the
+    // transition. All other modes leave the sidebar visible.
+    BOOL targetHidden = (displayMode == UISplitViewControllerDisplayModeSecondaryOnly);
+    // Synchronous call — we are already on the main thread inside the delegate.
+    // The toolbar change applies within the same transition batch so leading items
+    // change simultaneously with the sidebar show/hide animation (no snap lag).
+    zapp_ios_toolbar_reapply_for_window_hidden(winPtr, targetHidden);
 }
 
 @end

@@ -338,13 +338,18 @@ static void zapp_ios_toolbar_on_main(void (^block)(void)) {
 
 void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_user_script);
 
-// ─── zapp_ios_toolbar_reapply_for_window (forward declaration) ───────────────
+// ─── zapp_ios_toolbar_reapply_for_window (forward declarations) ──────────────
 //
 // Called from sidebar.m on collapse/expand transitions so a set toolbar
 // survives the nav-controller switch. Must be declared here before sidebar.m
 // extern-declares it below.
+//
+// The _hidden variant accepts an explicit sidebarHidden state (the transition
+// TARGET) so willChangeToDisplayMode: can drive the toggle decision
+// synchronously without reading the stale splitVC.displayMode.
 
 void zapp_ios_toolbar_reapply_for_window(void* window_ptr);
+void zapp_ios_toolbar_reapply_for_window_hidden(void* window_ptr, BOOL sidebarHidden);
 
 // ─── T2: UIMenu builder ──────────────────────────────────────────────────────
 //
@@ -840,15 +845,26 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
 //
 // Must be called on the main thread. Declared extern so sidebar.m can call it.
 
-void zapp_ios_toolbar_reapply_for_window(void* window_ptr) {
+// ─── zapp_ios_toolbar_reapply_for_window_hidden ──────────────────────────────
+//
+// Core re-apply implementation that accepts an explicit `sidebarHidden` flag for
+// the expanded (iPad) path. This allows willChangeToDisplayMode: to pass the
+// transition TARGET (the new displayMode) synchronously — before splitVC.displayMode
+// has settled — so the toolbar's leading items change within the animation, not
+// one tick after.
+//
+// All existing callers (set_items, didCollapse, didExpand) use the live-read
+// wrapper zapp_ios_toolbar_reapply_for_window, which reads
+// zapp_ios_sidebar_is_hidden_for_window at call time. Only willChangeToDisplayMode:
+// uses this variant directly with the target displayMode.
+//
+// Must be called on the main thread.
+
+void zapp_ios_toolbar_reapply_for_window_hidden(void* window_ptr, BOOL sidebarHidden) {
     if (!window_ptr || !zapp_ios_toolbars) return;
     // Must be on main thread (UIKit constraint).
-    if (![NSThread isMainThread]) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            zapp_ios_toolbar_reapply_for_window(window_ptr);
-        });
-        return;
-    }
+    NSCAssert([NSThread isMainThread],
+              @"zapp_ios_toolbar_reapply_for_window_hidden must be called on the main thread");
 
     NSValue* key = [NSValue valueWithPointer:window_ptr];
     ZappIOSToolbarEntry* entry = zapp_ios_toolbars[key];
@@ -910,12 +926,13 @@ void zapp_ios_toolbar_reapply_for_window(void* window_ptr) {
         if (!contentNav) return;
 
         // Include our manual toggleSidebar button ONLY when the sidebar is
-        // currently VISIBLE (displayMode != SecondaryOnly). When the sidebar is
-        // visible, UIKit adds no system button, so ours is the only affordance
-        // and the user needs it to hide the sidebar.
-        // When the sidebar is HIDDEN (displayMode == SecondaryOnly), UIKit shows
-        // its own "show sidebar" system button — omit ours to avoid a duplicate.
-        BOOL includeToggle = !zapp_ios_sidebar_is_hidden_for_window(window_ptr);
+        // VISIBLE (sidebarHidden == NO). When the sidebar is visible, UIKit adds
+        // no system button, so ours is the only affordance.
+        // When the sidebar is HIDDEN, UIKit shows its own "show sidebar" system
+        // button — omit ours to avoid a duplicate.
+        // NOTE: `sidebarHidden` is passed by the caller (may be the transition
+        // TARGET from willChangeToDisplayMode:, not the live splitVC.displayMode).
+        BOOL includeToggle = !sidebarHidden;
         zapp_ios_toolbar_apply_to_nav(contentNav, entry, includeToggle);
 
         // On expand, also clear the nav delegate from the old collapsedNav so it
@@ -930,6 +947,20 @@ void zapp_ios_toolbar_reapply_for_window(void* window_ptr) {
             }
         }
     }
+}
+
+void zapp_ios_toolbar_reapply_for_window(void* window_ptr) {
+    if (!window_ptr || !zapp_ios_toolbars) return;
+    // Must be on main thread (UIKit constraint).
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            zapp_ios_toolbar_reapply_for_window(window_ptr);
+        });
+        return;
+    }
+    // Read the live sidebar-hidden state and delegate to the explicit-state variant.
+    BOOL sidebarHidden = zapp_ios_sidebar_is_hidden_for_window(window_ptr);
+    zapp_ios_toolbar_reapply_for_window_hidden(window_ptr, sidebarHidden);
 }
 
 // ─── darwin_toolbar_update_item ──────────────────────────────────────────────
