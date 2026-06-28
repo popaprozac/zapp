@@ -199,6 +199,23 @@ BOOL zapp_ios_split_is_collapsed_for_window(void* window_ptr) {
     return c ? c.splitVC.isCollapsed : NO;
 }
 
+// Returns YES when the sidebar is HIDDEN on iPad (displayMode == SecondaryOnly).
+// Returns NO for: collapsed (iPhone), no sidebar, sidebar visible.
+// On iPad, hiding the sidebar is a displayMode change — the split is never
+// isCollapsed on regular width. This distinguishes "visible" from "hidden" on
+// the expanded path so the toolbar can include/omit the manual toggle correctly.
+// Declared extern in ios/toolbar.m.
+BOOL zapp_ios_sidebar_is_hidden_for_window(void* window_ptr) {
+    if (!window_ptr || !zapp_ios_sidebars) return NO;
+    NSValue* key = [NSValue valueWithPointer:window_ptr];
+    ZappIOSSidebarController* c = zapp_ios_sidebars[key];
+    if (!c || !c.splitVC) return NO;
+    // Never collapsed on iPad regular width; isCollapsed == YES means compact/iPhone,
+    // where "hidden" has no meaning (the sidebar is the nav root, not a column).
+    if (c.splitVC.isCollapsed) return NO;
+    return c.splitVC.displayMode == UISplitViewControllerDisplayModeSecondaryOnly;
+}
+
 // slot -> owning UIWindow -> registry key. Works from EITHER pane's slot.
 static ZappIOSSidebarController* zapp_ios_sidebar_for_slot(int32_t slot_id) {
     if (!zapp_ios_sidebars) return nil;
@@ -458,6 +475,33 @@ static void zapp_ios_sidebar_sync_collapse(ZappIOSSidebarController* c, BOOL col
         return nav.viewControllers.count > 1;
     }
     return YES;
+}
+
+// Re-apply the toolbar when the split's displayMode changes (iPad only).
+// The toolbar's expanded path must include our manual toggleSidebar when the
+// sidebar is VISIBLE (displayMode != SecondaryOnly) and OMIT it when the
+// sidebar is HIDDEN (displayMode == SecondaryOnly — UIKit shows its own system
+// button at that point). Without this hook, the toolbar never updates after the
+// user shows/hides the sidebar via our button, the system button, or a gesture.
+//
+// dispatch_async so the re-apply runs AFTER the new displayMode has settled on
+// the split (the mode is already set to the incoming value by the time the
+// async block runs on the main queue — UIKit fires this delegate method before
+// it transitions, but the async hop ensures we read the final settled state).
+//
+// NOTE: do NOT emit sidebar-visibility events from here. The imperative toggle
+// path (darwin_sidebar_toggle / show_content / show_sidebar) owns those emits
+// via zapp_ios_sidebar_sync_collapse — emitting here would double-fire.
+- (void)splitViewController:(UISplitViewController*)svc
+    willChangeToDisplayMode:(UISplitViewControllerDisplayMode)displayMode {
+    (void)svc; (void)displayMode;
+    // Resolve the window pointer that zapp_ios_toolbar_reapply_for_window expects.
+    void* winPtr = darwin_window_get_by_numeric_id(self.hostWindowId);
+    if (!winPtr) return;
+    // Async so the split's displayMode property reflects the new mode when we read it.
+    dispatch_async(dispatch_get_main_queue(), ^{
+        zapp_ios_toolbar_reapply_for_window(winPtr);
+    });
 }
 
 @end

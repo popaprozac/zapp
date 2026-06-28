@@ -77,6 +77,13 @@ extern UINavigationController* zapp_ios_collapsed_nav_for_window(void* window_pt
 // (c.splitVC.isCollapsed). NO when expanded (side-by-side) or no sidebar.
 extern BOOL zapp_ios_split_is_collapsed_for_window(void* window_ptr);
 
+// Returns YES when the sidebar is HIDDEN on iPad (displayMode == SecondaryOnly).
+// Returns NO for collapsed (iPhone), no sidebar, or sidebar visible.
+// Used by the expanded toolbar path to decide whether to include our manual
+// toggleSidebar button: include when sidebar is visible (UIKit adds none);
+// omit when hidden (UIKit's own system button is the affordance).
+extern BOOL zapp_ios_sidebar_is_hidden_for_window(void* window_ptr);
+
 // ─── Icon resolver ──────────────────────────────────────────────────────────
 //
 // Parallel to macOS zapp_resolve_icon / menu.m's icon resolution.
@@ -609,10 +616,14 @@ void zapp_ios_toolbar_reapply_for_window(void* window_ptr) {
         UINavigationController* contentNav = zapp_ios_content_nav_for_window(window_ptr);
         if (!contentNav) return;
 
-        // Omit the manual toggleSidebar when expanded — UIKit auto-provides the
-        // system sidebar button (displayModeButtonItem) in the content column
-        // nav bar. Including ours too would create a duplicate.
-        zapp_ios_toolbar_apply_to_nav(contentNav, entry, NO);
+        // Include our manual toggleSidebar button ONLY when the sidebar is
+        // currently VISIBLE (displayMode != SecondaryOnly). When the sidebar is
+        // visible, UIKit adds no system button, so ours is the only affordance
+        // and the user needs it to hide the sidebar.
+        // When the sidebar is HIDDEN (displayMode == SecondaryOnly), UIKit shows
+        // its own "show sidebar" system button — omit ours to avoid a duplicate.
+        BOOL includeToggle = !zapp_ios_sidebar_is_hidden_for_window(window_ptr);
+        zapp_ios_toolbar_apply_to_nav(contentNav, entry, includeToggle);
 
         // On expand, also clear the nav delegate from the old collapsedNav so it
         // doesn't fire stale callbacks if the nav is somehow reused.
