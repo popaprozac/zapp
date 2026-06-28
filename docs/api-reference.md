@@ -1191,6 +1191,30 @@ look). System types: `toggleSidebar`, `trackingSeparator`
 (both require the window to have a `sidebar` — warned and dropped
 otherwise), `space`, `flexibleSpace`.
 
+**Item placement (macOS).** Every item accepts an optional `placement?:
+"leading" | "center" | "trailing"` field (default `"leading"`). Items are
+sorted into three groups and rendered as:
+
+```
+leading  |  flexibleSpace  |  center  |  flexibleSpace  |  trailing
+```
+
+The two `flexibleSpace` separators are inserted automatically between
+non-empty groups — you do not need to add them manually. Within each group,
+array order is preserved; `space` and `flexibleSpace` items remain usable
+inside a group for fine-grained spacing. Example:
+
+```ts
+{ id: "filter", label: "Filter", placement: "trailing" }
+```
+
+`placement` is structural and cannot be patched via `updateItem` — call
+`win.toolbar.setItems(...)` to move an item between slots.
+
+iOS future note: `placement` is carried in the item definition now for
+the upcoming native iOS navigation-bar toolbar (a later cycle); a `"bottom"`
+slot will be added at that time.
+
 **Title bar & toolbar layout.** `titleBarStyle` and `trackingSeparator` interact:
 
 - Under `titleBarStyle: "hidden"` or `"hiddenInset"` the toolbar merges into the

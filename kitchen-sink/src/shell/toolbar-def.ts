@@ -68,10 +68,10 @@ export function shellToolbar(): ToolbarItemDef[] {
       bordered: false,
       action: () => Events.emit("ks:toolbar", { id: "inbox" }),
     },
-    { type: "flexibleSpace" },
     {
       type: "group",
       id: "nav",
+      placement: "center",
       controlRepresentation: "automatic",
       items: [
         {
@@ -92,6 +92,7 @@ export function shellToolbar(): ToolbarItemDef[] {
     {
       type: "segmented",
       id: "view",
+      placement: "center",
       selectionMode: "one",
       selected: 0,
       segments: [
@@ -113,6 +114,7 @@ export function shellToolbar(): ToolbarItemDef[] {
     {
       type: "segmented",
       id: "fmt",
+      placement: "center",
       selectionMode: "momentary",
       segments: [
         {
@@ -129,17 +131,17 @@ export function shellToolbar(): ToolbarItemDef[] {
         },
       ],
     },
-    { type: "flexibleSpace" },
     {
       id: "filter",
+      placement: "trailing",
       icon: "sf:line.3.horizontal.decrease",
       label: "Filter",
       indicator: false,
       menu: filterMenu(),
     },
     // type:"label" demo — text updates live via updateItem when the filter changes
-    { type: "label", id: "status", text: filterStatusText() },
-    { type: "trackingSeparator", pane: "inspector" },
-    { type: "toggleInspector" },
+    { type: "label", id: "status", placement: "trailing", text: filterStatusText() },
+    { type: "trackingSeparator", pane: "inspector", placement: "trailing" },
+    { type: "toggleInspector", placement: "trailing" },
   ];
 }
