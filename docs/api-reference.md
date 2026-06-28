@@ -1614,6 +1614,17 @@ z-order, like macOS), so app sheets/modals/popovers cannot cover an embed —
 keep embeds clear of regions you'll overlay with native iOS UI. iPad
 multi-window (UIScene) bucketing is a follow-up; iPhone single-window works today.
 
+**Page zoom (iOS) — recommended: disable it.** The embed composites at a fixed
+scale, so a **pinch-zoom of the host page** moves your DOM without moving the
+embed (the visual viewport scales but `getBoundingClientRect` does not), and the
+embed goes out of alignment until the next layout. Most app-style UIs want page
+zoom off anyway — set it in your host page's viewport meta:
+`<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">`.
+Relatedly, give any text `<input>` near an embed `font-size: 16px` or larger —
+iOS auto-zooms the page when focusing a smaller field, which triggers the same
+desync. (The embed *does* track page **scroll**, element resize, and window
+resize correctly; only live page-zoom is unsupported.)
+
 ---
 
 ## `Services`
