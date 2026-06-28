@@ -63,6 +63,12 @@ extern void darwin_inspector_toggle(int32_t window_id);
 // (contentNav) for the window. Nil for no-sidebar windows → set_items no-ops.
 extern UINavigationController* zapp_ios_content_nav_for_window(void* window_ptr);
 
+// Defined in ios/sidebar.m — returns the authoritative content UIViewController
+// stored at registration time. Nil for no-sidebar/unregistered windows.
+// Used in the collapsed path instead of contentNav.topViewController (UIKit may
+// orphan contentNav when building the combined collapsed stack).
+extern UIViewController* zapp_ios_content_vc_for_window(void* window_ptr);
+
 // Returns the combined collapsed nav controller (collapsedNav) captured by
 // splitViewControllerDidCollapse:. Nil when not yet collapsed or no sidebar.
 extern UINavigationController* zapp_ios_collapsed_nav_for_window(void* window_ptr);
@@ -154,7 +160,6 @@ static const char kZappToolbarNavDelegateKey = 0;
 
 @interface ZappIOSToolbarNavDelegate : NSObject <UINavigationControllerDelegate>
 @property (nonatomic, assign) void* windowPtr;   // for re-apply lookup
-@property (nonatomic, weak)   UINavigationController* collapsedNav;
 @end
 
 @implementation ZappIOSToolbarNavDelegate
@@ -568,10 +573,10 @@ void zapp_ios_toolbar_reapply_for_window(void* window_ptr) {
         // which may be the sidebar VC at this moment). The assignment is idempotent
         // and harmless whether content is on top or not — items will appear when
         // the content VC is shown.
-        // To reach contentVC, use contentNav.topViewController (contentVC is the
-        // root of contentNav, which was incorporated into the combined stack).
-        UINavigationController* contentNav = zapp_ios_content_nav_for_window(window_ptr);
-        UIViewController* contentVC = contentNav.topViewController;
+        // Use the authoritative contentVC stored at registration time (not
+        // contentNav.topViewController — UIKit may orphan contentNav when it builds
+        // the combined collapsed stack, making topViewController unreliable here).
+        UIViewController* contentVC = zapp_ios_content_vc_for_window(window_ptr);
         if (contentVC) {
             NSArray<UIBarButtonItem*>* leading = entry.leadingItems; // include toggleSidebar
             contentVC.navigationItem.leftBarButtonItems  = leading ?: @[];
@@ -592,8 +597,7 @@ void zapp_ios_toolbar_reapply_for_window(void* window_ptr) {
         id existingDelegate = collapsedNav.delegate;
         if (![existingDelegate isKindOfClass:[ZappIOSToolbarNavDelegate class]]) {
             ZappIOSToolbarNavDelegate* delegate = [[ZappIOSToolbarNavDelegate alloc] init];
-            delegate.windowPtr    = window_ptr;
-            delegate.collapsedNav = collapsedNav;
+            delegate.windowPtr = window_ptr;
             collapsedNav.delegate = delegate;
             // Retain the delegate via associated object (UINavigationController.delegate is weak).
             objc_setAssociatedObject(collapsedNav, &kZappToolbarNavDelegateKey, delegate,

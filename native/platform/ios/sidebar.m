@@ -167,6 +167,18 @@ UINavigationController* zapp_ios_content_nav_for_window(void* window_ptr) {
     return c ? c.contentNav : nil;
 }
 
+// window_ptr -> the content UIViewController stored at registration time.
+// Returns the authoritative contentVC (not inferred from nav stack), so the
+// toolbar can target contentVC.navigationItem even when UIKit has orphaned
+// contentNav in the combined collapsed stack. Nil for no-sidebar/unregistered.
+// Declared extern in ios/toolbar.m.
+UIViewController* zapp_ios_content_vc_for_window(void* window_ptr) {
+    if (!window_ptr || !zapp_ios_sidebars) return nil;
+    NSValue* key = [NSValue valueWithPointer:window_ptr];
+    ZappIOSSidebarController* c = zapp_ios_sidebars[key];
+    return c ? c.contentVC : nil;
+}
+
 // window_ptr -> the combined collapsed UINavigationController captured by
 // splitViewControllerDidCollapse:. Nil when not yet collapsed or no sidebar.
 // Declared extern in ios/toolbar.m.
