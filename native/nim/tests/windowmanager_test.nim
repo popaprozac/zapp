@@ -298,4 +298,19 @@ block:
   doAssert root["items"][0]["id"].getStr == "status"
   doAssert root["items"][0]["text"].getStr == "Synced"
 
+block:
+  # placement round-trips (leading default + center/trailing)
+  let t = ToolbarOptions(style: ToolbarStyle.Unified, items: @[
+    ToolbarItemOpt(`type`: "toggleSidebar"),                              # default Leading
+    ToolbarItemOpt(`type`: "button", id: "status", label: "Hi",
+                   placement: ToolbarPlacement.Center),
+    ToolbarItemOpt(`type`: "button", id: "filter", label: "Filter",
+                   placement: ToolbarPlacement.Trailing),
+  ])
+  let s = serializeToolbar(t)
+  doAssert "\"placement\":\"leading\"" in s, "default placement must serialize as leading"
+  doAssert "\"placement\":\"center\"" in s
+  doAssert "\"placement\":\"trailing\"" in s
+  doAssert parseToolbarJson(s) == t, "parse(serialize(t)) must round-trip placement"
+
 echo "windowmanager ok"

@@ -68,6 +68,9 @@ type
   ToolbarControlRepresentation* {.pure.} = enum ## NSToolbarItemGroupControlRepresentation
     Automatic = "automatic", Expanded = "expanded", Collapsed = "collapsed"
 
+  ToolbarPlacement* {.pure.} = enum    ## toolbar slot (macOS sort / future iOS nav-bar)
+    Leading = "leading", Center = "center", Trailing = "trailing"
+
   ToolbarSegmentOpt* = object                  ## mirrors TS ToolbarSegmentDef (data only)
     id*, label*, icon*: string
     enabled*: bool = true
@@ -100,6 +103,7 @@ type
     id*: string
     `type`*: string                  ## "" ⇒ native treats as "button"
     pane*: string                    ## trackingSeparator: "sidebar" | "inspector"
+    placement*: ToolbarPlacement = ToolbarPlacement.Leading   ## toolbar slot; default Leading
     label*, icon*, text*: string
     enabled*: bool = true
     indicator*: bool = true          ## menu chevron; native default YES; emitted only on menu items
@@ -471,6 +475,7 @@ proc serializeToolbar*(t: ToolbarOptions): string =
         w["menu"] = m
         w["indicator"] = %it.indicator   # chevron — only meaningful on menu items
       items.add(w)
+    items[^1]["placement"] = %($it.placement)
   $(%*{"style": $t.style, "items": items})
 
 # Inverse: parse a native toolbar wire string back into ToolbarOptions (used when
@@ -551,6 +556,9 @@ proc parseToolbarJson*(s: string): ToolbarOptions =
         if jHasStr(mn, "icon"): m.icon = jStr(mn, "icon")
         if jHasBool(mn, "checked"): m.checked = jBool(mn, "checked", false)
         item.menu.add(m)
+    item.placement = (if jHasStr(itn, "placement"):
+      enumFromStr[ToolbarPlacement](jStr(itn, "placement"), ToolbarPlacement.Leading)
+      else: ToolbarPlacement.Leading)
     result.items.add(item)
 
 # toolbar accessor — serializes `toolbar` into the ref's own toolbarJsonCache so
