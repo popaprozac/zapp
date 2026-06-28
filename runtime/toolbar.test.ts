@@ -19,12 +19,12 @@ describe("normalizeToolbar", () => {
     const parsed = JSON.parse(json);
     expect(parsed.style).toBe("unified"); // default
     expect(parsed.items).toEqual([
-      { type: "toggleSidebar" },
-      { type: "trackingSeparator", pane: "sidebar" },
-      { type: "button", id: "compose", label: "Compose", icon: "sf:square.and.pencil" },
-      { type: "flexibleSpace" },
-      { type: "space" },
-      { type: "button", id: "filter", label: "", icon: "sf:line.3.horizontal.decrease" },
+      { type: "toggleSidebar", placement: "leading" },
+      { type: "trackingSeparator", pane: "sidebar", placement: "leading" },
+      { type: "button", id: "compose", label: "Compose", icon: "sf:square.and.pencil", placement: "leading" },
+      { type: "flexibleSpace", placement: "leading" },
+      { type: "space", placement: "leading" },
+      { type: "button", id: "filter", label: "", icon: "sf:line.3.horizontal.decrease", placement: "leading" },
     ]);
     expect(json).not.toContain("action");
     expect(actions.size).toBe(1);
@@ -53,7 +53,7 @@ describe("normalizeToolbar", () => {
       false,
       false,
     );
-    expect(JSON.parse(json).items).toEqual([{ type: "button", id: "a", label: "", icon: "" }]);
+    expect(JSON.parse(json).items).toEqual([{ type: "button", id: "a", label: "", icon: "", placement: "leading" }]);
   });
 
   test("ids with unsafe characters throw", () => {
@@ -384,42 +384,42 @@ describe("normalizeToolbar inspector integration", () => {
     const { json } = normalizeToolbar(
       { items: [{ type: "toggleInspector" }] } as any, false, true,
     );
-    expect(JSON.parse(json).items).toEqual([{ type: "toggleInspector" }]);
+    expect(JSON.parse(json).items).toEqual([{ type: "toggleInspector", placement: "leading" }]);
   });
 
   test("toggleInspector dropped + warned when no inspector", () => {
     const { json } = normalizeToolbar(
       { items: [{ type: "toggleInspector" }, { id: "a" }] } as any, false, false,
     );
-    expect(JSON.parse(json).items).toEqual([{ type: "button", id: "a", label: "", icon: "" }]);
+    expect(JSON.parse(json).items).toEqual([{ type: "button", id: "a", label: "", icon: "", placement: "leading" }]);
   });
 
   test("trackingSeparator pane defaults to sidebar", () => {
     const { json } = normalizeToolbar(
       { items: [{ type: "trackingSeparator" }] }, true, false,
     );
-    expect(JSON.parse(json).items).toEqual([{ type: "trackingSeparator", pane: "sidebar" }]);
+    expect(JSON.parse(json).items).toEqual([{ type: "trackingSeparator", pane: "sidebar", placement: "leading" }]);
   });
 
   test("inspector trackingSeparator kept when window has an inspector", () => {
     const { json } = normalizeToolbar(
       { items: [{ type: "trackingSeparator", pane: "inspector" }] } as any, false, true,
     );
-    expect(JSON.parse(json).items).toEqual([{ type: "trackingSeparator", pane: "inspector" }]);
+    expect(JSON.parse(json).items).toEqual([{ type: "trackingSeparator", pane: "inspector", placement: "leading" }]);
   });
 
   test("inspector trackingSeparator dropped when no inspector", () => {
     const { json } = normalizeToolbar(
       { items: [{ type: "trackingSeparator", pane: "inspector" }, { id: "a" }] } as any, false, false,
     );
-    expect(JSON.parse(json).items).toEqual([{ type: "button", id: "a", label: "", icon: "" }]);
+    expect(JSON.parse(json).items).toEqual([{ type: "button", id: "a", label: "", icon: "", placement: "leading" }]);
   });
 
   test("sidebar trackingSeparator still requires a sidebar", () => {
     const { json } = normalizeToolbar(
       { items: [{ type: "trackingSeparator" }, { id: "a" }] }, false, false,
     );
-    expect(JSON.parse(json).items).toEqual([{ type: "button", id: "a", label: "", icon: "" }]);
+    expect(JSON.parse(json).items).toEqual([{ type: "button", id: "a", label: "", icon: "", placement: "leading" }]);
   });
 });
 
@@ -459,6 +459,34 @@ describe("normalizeToolbarPatch trio (W2)", () => {
     expect(set.badge).toEqual({ kind: "count", count: 5 });
     const cleared = JSON.parse(normalizeToolbarPatch("compose", { badge: null }).json);
     expect(cleared.badge).toEqual({ kind: "none" });
+  });
+});
+
+describe("normalizeToolbar placement", () => {
+  test("normalizeToolbar emits placement (default leading) on every item", () => {
+    const { json } = normalizeToolbar(
+      { items: [
+        { type: "toggleSidebar" },
+        { id: "compose", label: "Compose" },
+        { id: "status", type: "label", text: "Hi", placement: "center" },
+        { id: "filter", label: "Filter", placement: "trailing" },
+      ] },
+      /* hasSidebar */ true,
+      /* hasInspector */ false,
+    );
+    const wire = JSON.parse(json);
+    expect(wire.items.map((i: any) => i.placement)).toEqual([
+      "leading", "leading", "center", "trailing",
+    ]);
+  });
+
+  test("normalizeToolbar rejects an invalid placement", () => {
+    expect(() =>
+      normalizeToolbar(
+        { items: [{ id: "x", label: "X", placement: "top" as any }] },
+        false, false,
+      ),
+    ).toThrow(/invalid placement/);
   });
 });
 

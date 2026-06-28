@@ -316,6 +316,12 @@ export interface InspectorOptions {
   material?: Material;
 }
 
+/** Which toolbar slot an item belongs to. macOS sorts items into these slots
+ *  (leading → center → trailing) with flexible space auto-inserted between
+ *  non-empty groups; iOS maps them to navigation-bar leading/title/trailing
+ *  (a later cycle). Default "leading". */
+export type ToolbarPlacement = "leading" | "center" | "trailing";
+
 /** One segment of a `type: "segmented"` toolbar group. A menu-like item:
  *  same `action: () => void` primitive as MenuItemDef/ToolbarItemDef. */
 export interface ToolbarSegmentDef {
@@ -364,6 +370,9 @@ export interface ToolbarButtonDef {
   /** Draw the item's standard bordered background. Default true; false → flat.
    *  All macOS versions. */
   bordered?: boolean;
+  /** Toolbar slot. Default "leading". macOS sorts by placement; iOS (later)
+   *  maps to nav-bar slots. */
+  placement?: ToolbarPlacement;
 }
 
 /** A segmented control toolbar item. */
@@ -380,6 +389,9 @@ export interface ToolbarSegmentedDef {
   selected?: number | number[];
   /** How the control collapses. Default "automatic". */
   controlRepresentation?: "automatic" | "expanded" | "collapsed";
+  /** Toolbar slot. Default "leading". macOS sorts by placement; iOS (later)
+   *  maps to nav-bar slots. */
+  placement?: ToolbarPlacement;
 }
 
 /** A group of toolbar buttons (one level — no nested groups). */
@@ -391,6 +403,9 @@ export interface ToolbarGroupDef {
   items: ToolbarButtonDef[];
   /** How the group collapses. Default "automatic". */
   controlRepresentation?: "automatic" | "expanded" | "collapsed";
+  /** Toolbar slot. Default "leading". macOS sorts by placement; iOS (later)
+   *  maps to nav-bar slots. */
+  placement?: ToolbarPlacement;
 }
 
 /** A tracking separator that follows a split-view divider. */
@@ -400,6 +415,9 @@ export interface ToolbarTrackingSepDef {
    *  require a `sidebar`; `toggleInspector`/inspector-tracking require an
    *  `inspector` (warned + dropped otherwise). */
   pane?: "sidebar" | "inspector";
+  /** Toolbar slot. Default "leading". macOS sorts by placement; iOS (later)
+   *  maps to nav-bar slots. */
+  placement?: ToolbarPlacement;
 }
 
 /** A system toolbar item: fixed/flexible space or sidebar/inspector toggles.
@@ -408,6 +426,9 @@ export interface ToolbarTrackingSepDef {
  *  pane. Both require the corresponding pane (warned + dropped otherwise). */
 export interface ToolbarSystemDef {
   type: "toggleSidebar" | "toggleInspector" | "space" | "flexibleSpace";
+  /** Toolbar slot. Default "leading". macOS sorts by placement; iOS (later)
+   *  maps to nav-bar slots. */
+  placement?: ToolbarPlacement;
 }
 
 /** A non-interactive text label in the toolbar (NSToolbarItem hosting an
@@ -418,6 +439,9 @@ export interface ToolbarLabelDef {
   id?: string;
   /** The text to display. Required. */
   text: string;
+  /** Toolbar slot. Default "leading". macOS sorts by placement; iOS (later)
+   *  maps to nav-bar slots. */
+  placement?: ToolbarPlacement;
 }
 
 /** One toolbar item. `type` defaults to `"button"`. */
@@ -841,13 +865,17 @@ export function normalizeToolbar(
     // use `it` so the type system stays author-safe without narrowing every branch.
     const it = item as Record<string, any>;
     const type = it.type ?? "button";
+    const placement: ToolbarPlacement = it.placement ?? "leading";
+    if (placement !== "leading" && placement !== "center" && placement !== "trailing") {
+      throw new Error(`[zapp] toolbar: invalid placement "${placement}" — use "leading", "center", or "trailing"`);
+    }
     if (type === "toggleSidebar") {
       if (it.menu) throw new Error('[zapp] toolbar: "menu" is only valid on button items');
       if (!hasSidebar) {
         console.warn(`[zapp] toolbar: "toggleSidebar" requires the window to have a sidebar — item dropped`);
         continue;
       }
-      items.push({ type });
+      items.push({ type, placement });
       continue;
     }
     if (type === "toggleInspector") {
@@ -856,7 +884,7 @@ export function normalizeToolbar(
         console.warn(`[zapp] toolbar: "toggleInspector" requires the window to have an inspector — item dropped`);
         continue;
       }
-      items.push({ type });
+      items.push({ type, placement });
       continue;
     }
     if (type === "trackingSeparator") {
@@ -867,12 +895,12 @@ export function normalizeToolbar(
         console.warn(`[zapp] toolbar: "trackingSeparator" (pane: "${pane}") requires the window to have ${pane === "inspector" ? "an" : "a"} ${pane} — item dropped`);
         continue;
       }
-      items.push({ type, pane });
+      items.push({ type, pane, placement });
       continue;
     }
     if (type === "space" || type === "flexibleSpace") {
       if (it.menu) throw new Error('[zapp] toolbar: "menu" is only valid on button items');
-      items.push({ type });
+      items.push({ type, placement });
       continue;
     }
     if (type === "label") {
@@ -884,7 +912,7 @@ export function normalizeToolbar(
       } else {
         it.id = `zapp.label.${items.length}`;
       }
-      items.push({ type: "label", id: it.id, text: it.text });
+      items.push({ type: "label", id: it.id, text: it.text, placement });
       continue;
     }
     if (type === "segmented") {
@@ -905,6 +933,7 @@ export function normalizeToolbar(
       const seg: Record<string, unknown> = { type: "segmented", id: it.id, segments: wireSegs,
         selectionMode: it.selectionMode ?? "momentary", selected: selectedToWire(it.selected) };
       if (it.controlRepresentation !== undefined) seg.controlRepresentation = it.controlRepresentation;
+      seg.placement = placement;
       items.push(seg);
       continue;
     }
@@ -929,6 +958,7 @@ export function normalizeToolbar(
       }
       const g: Record<string, unknown> = { type: "group", id: it.id, items: wireItems };
       if (it.controlRepresentation !== undefined) g.controlRepresentation = it.controlRepresentation;
+      g.placement = placement;
       items.push(g);
       continue;
     }
@@ -957,6 +987,7 @@ export function normalizeToolbar(
       // ctx.update in pull-down callbacks (patchMenuTree + updateItem refresh).
       menuTrees.set(it.id!, mergeMenuIds(strippedMenu, it.menu));
     }
+    wire.placement = placement;
     items.push(wire);
   }
   return { json: JSON.stringify({ style: toolbar.style ?? "unified", items }), actions, menuActions, menuIdsByItem, menuTrees };
