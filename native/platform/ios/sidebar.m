@@ -153,6 +153,16 @@ static void zapp_ios_sidebar_on_main(void (^block)(void)) {
     else dispatch_async(dispatch_get_main_queue(), block);
 }
 
+// window_ptr -> content UINavigationController (for the toolbar to reach
+// contentVC.navigationItem). Returns nil for no-sidebar windows.
+// Declared extern in ios/toolbar.m.
+UINavigationController* zapp_ios_content_nav_for_window(void* window_ptr) {
+    if (!window_ptr || !zapp_ios_sidebars) return nil;
+    NSValue* key = [NSValue valueWithPointer:window_ptr];
+    ZappIOSSidebarController* c = zapp_ios_sidebars[key];
+    return c ? c.contentNav : nil;
+}
+
 // slot -> owning UIWindow -> registry key. Works from EITHER pane's slot.
 static ZappIOSSidebarController* zapp_ios_sidebar_for_slot(int32_t slot_id) {
     if (!zapp_ios_sidebars) return nil;
