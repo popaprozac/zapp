@@ -1027,16 +1027,46 @@ if (Platform.isIOS) {
 ```
 
 **`Platform` API** — runtime platform check for conditional app logic
-(`@zappdev/runtime`). Reads the platform baked into the per-webview bootstrap
-manifest by the native layer; defaults to `"macos"` when absent (SSR/tests):
+(`@zappdev/runtime`). Values are injected native-first: the native layer bakes
+them into the per-webview bootstrap manifest before any JS runs. Defaults apply
+when the manifest is absent (SSR / unit tests).
+
+`Platform` is **webview-only** today — workers do not yet receive the bootstrap
+manifest (a later cycle).
 
 ```ts
 import { Platform } from "@zappdev/runtime";
 
-Platform.current()   // "macos" | "ios" | "windows"
-Platform.isMacOS     // boolean
-Platform.isIOS       // boolean
-Platform.isWindows   // boolean
+// OS string — "macos" | "ios" | "windows"
+Platform.current()   // alias for Platform.os
+Platform.os          // "macos" | "ios" | "windows"
+
+// Form factor — "desktop" | "phone" | "tablet"
+// macOS/Windows → "desktop"; iPhone → "phone"; iPad → "tablet"
+// Note: iPad reports os:"ios" + formFactor:"tablet" (there is no "ipados" value).
+Platform.formFactor
+
+// Build environment — "dev" | "prod"
+// "dev" under `bun run dev`; "prod" under `bun run build` / a packaged app.
+Platform.env
+
+// Boolean shorthands
+Platform.isMacOS     // os === "macos"
+Platform.isIOS       // os === "ios"
+Platform.isWindows   // os === "windows"
+Platform.isPhone     // formFactor === "phone"
+Platform.isTablet    // formFactor === "tablet"
+Platform.isDesktop   // formFactor === "desktop"
+Platform.isDev       // env === "dev"
+Platform.isProd      // env === "prod"
+```
+
+Example — gate a UI path on iPhone only:
+
+```ts
+if (Platform.isIOS && Platform.isPhone) {
+  // render compact mobile layout
+}
 ```
 
 **macOS ↔ iOS degradations** (sidebar):

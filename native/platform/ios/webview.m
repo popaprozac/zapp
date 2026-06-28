@@ -805,12 +805,18 @@ void darwin_webview_create_ext(void* window_ptr, bool inspectable, bool accept_f
     const char* permsJson = permissions_bootstrap_json();
     if (!permsJson || !permsJson[0]) permsJson = "{\"platform\":\"ios\",\"active\":false,\"allow\":[]}";
 
+    // formFactor: runtime device idiom (iPad → "tablet", else "phone").
+    NSString* ffStr = (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad)
+        ? @"tablet" : @"phone";
     NSString* configScript = [NSString stringWithFormat:
         @"(function(){globalThis[Symbol.for('zapp.bootstrapConfig')]="
         "{name:'%@',applicationShouldTerminateAfterLastWindowClosed:%@,"
-        "webContentInspectable:%@,maxWorkers:%d,theme:'%@',powerState:%s,permissions:%s};})();",
+        "webContentInspectable:%@,maxWorkers:%d,theme:'%@',powerState:%s,"
+        "formFactor:'%@',env:'%@',permissions:%s};})();",
         appName, terminate ? @"true" : @"false", inspect ? @"true" : @"false",
-        maxWorkers, themeStr, darwin_get_power_state(), permsJson];
+        maxWorkers, themeStr, darwin_get_power_state(),
+        ffStr, (zapp_build_is_dev() ? @"dev" : @"prod"),
+        permsJson];
     [ucc addUserScript:[[WKUserScript alloc] initWithSource:configScript
         injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
 

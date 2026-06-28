@@ -923,11 +923,14 @@ void darwin_webview_create_ext(void* window_ptr, bool inspectable, bool accept_f
     NSString* configScript = [NSString stringWithFormat:
         @"(function(){globalThis[Symbol.for('zapp.bootstrapConfig')]="
         "{name:'%@',applicationShouldTerminateAfterLastWindowClosed:%@,"
-        "webContentInspectable:%@,maxWorkers:%d,theme:'%@',powerState:%s,permissions:%s%@};})();",
+        "webContentInspectable:%@,maxWorkers:%d,theme:'%@',powerState:%s,"
+        "formFactor:'desktop',env:'%@',permissions:%s%@};})();",
         appName,
         terminate ? @"true" : @"false",
         inspect ? @"true" : @"false",
-        maxWorkers, themeStr, powerStateC, permsJson, cspExtra];
+        maxWorkers, themeStr, powerStateC,
+        (zapp_build_is_dev() ? @"dev" : @"prod"),
+        permsJson, cspExtra];
     [ucc addUserScript:[[WKUserScript alloc] initWithSource:configScript
         injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
 
