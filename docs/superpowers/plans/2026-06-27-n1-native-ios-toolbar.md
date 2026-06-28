@@ -87,6 +87,38 @@ Run: `bun run check`; `bun test cli/src`; `bun run test:native` (all pass — no
 
 ---
 
+## Task 1.5: Collapse-aware bar delivery (iPhone launch bug + iPad duplicate toggle)
+
+**Added after the T1 risk-gate smoke.** Two real findings surfaced (both about how the content nav bar interacts with `UISplitViewController` collapse state):
+- **iPhone (the launch bug):** the native bar does NOT appear at app launch — only after a manual re-`setItems`. Root cause (confirmed in `sidebar.m`): on iPhone the split **collapses** to one column; UIKit COMBINES the two bar-hidden column nav controllers into a single `collapsedNav`, and `splitViewControllerDidCollapse:` force-sets `collapsedNav.navigationBarHidden = YES` (`sidebar.m:385`). T1's `set_items` un-hides **`contentNav`**, but in collapsed mode `contentNav` is not the displayed controller — `collapsedNav` is, and it stays hidden. (iPad never collapses → its bar showed, which is why iPad worked and iPhone didn't.)
+- **iPad: duplicate sidebar toggle.** In the expanded column split, UIKit auto-provides a system sidebar button; our manual `toggleSidebar` button is then a second, redundant one.
+
+**Decision (confirmed):** the sidebar affordance is the **system button when the split is expanded/regular** (omit our manual `toggleSidebar` there) and **our manual button when collapsed/compact** (iPhone + iPad multitasking-narrow, where no system button exists). The bar must be managed on the controller that is actually on screen, and re-applied across collapse/expand transitions.
+
+**Files:**
+- Modify: `native/platform/ios/toolbar.m` (collapse-aware target nav + re-apply hook + iPad de-dup)
+- Modify: `native/platform/ios/sidebar.m` (call into toolbar re-apply on collapse/expand; expose the collapsed/displayed nav + collapse state)
+
+**Interfaces:**
+- Consumes: the T1 registry (`ZappIOSToolbarEntry` storing built items per window), `zapp_ios_collapsed_nav`, the `ZappIOSSidebarController` collapse delegate (`splitViewControllerDidCollapse:` / `DidExpand:`), `darwin_sidebar_toggle`.
+- Produces: a re-apply entry point (e.g. `zapp_ios_toolbar_reapply_for_window(void* window_ptr)`) that sidebar.m calls on collapse/expand so the bar survives the transition.
+
+- [ ] **Step 1: Root-cause (systematic-debugging, no fix yet).** Read `native/platform/ios/sidebar.m` collapse/expand handling (`splitViewControllerDidCollapse:`/`DidExpand:`, `zapp_ios_collapsed_nav`, `topColumnForCollapsingToProposedTopColumn`, `collapsedNav`/`contentNav`/`sidebarNav`) and the T1 `darwin_toolbar_set_items`. Confirm in the report: (a) which nav controller is on screen in collapsed vs expanded, (b) why the startup `set_items` bar is hidden on collapsed iPhone, (c) why a later manual `set_items` ("Attach") appears to work (timing/registry/collapse-settled), (d) how the iPad system sidebar button is auto-added. Write the confirmed mechanism before changing code.
+
+- [ ] **Step 2: Collapse-aware bar target + re-apply.** Make `set_items` (and a new `zapp_ios_toolbar_reapply_for_window`) show the bar on the controller that is actually displayed: when the split is **collapsed**, target `collapsedNav` (show its bar only when the content VC is the visible/top VC; keep it hidden when the sidebar root is shown — this also fixes the empty-gap); when **expanded**, target `contentNav` as today. Store the built items on the registry entry so the bar can be rebuilt/re-shown without the app re-calling `setItems`.
+
+- [ ] **Step 3: Re-apply on collapse/expand.** In `sidebar.m`'s `splitViewControllerDidCollapse:` and `splitViewControllerDidExpand:`, after the existing logic, call `zapp_ios_toolbar_reapply_for_window` for that window so a set toolbar survives the transition (and the collapse handler no longer blanket-hides a bar that has items). Use a `UINavigationControllerDelegate` (`willShowViewController:`) on the collapsed/content nav to toggle the bar per visible VC (content → shown, sidebar root → hidden).
+
+- [ ] **Step 4: iPad de-dup.** When building the leading bucket: include the `toggleSidebar` item as our manual `UIBarButtonItem` ONLY when the split is collapsed/compact; when expanded/regular, omit it and rely on the system sidebar button (which already drives the column and fires our displayMode-change delegate → the sidebar-visibility event still flows). Re-evaluate this on collapse/expand via the re-apply hook.
+
+- [ ] **Step 5: Build gates** — `cd kitchen-sink && bun run build --platform ios` → `[zapp] build complete:`; `cd kitchen-sink && bun run build` → `[zapp] build complete:` (macOS untouched); `bun run check`; `bun test cli/src`; `bun run test:native`.
+
+- [ ] **Step 6: Commit** (`git add native/platform/ios/toolbar.m native/platform/ios/sidebar.m`; trailer).
+
+- [ ] **Step 7: HUMAN SMOKE GATE (re-smoke).** STOP for the controller/user. iPhone: the native bar shows the core items **at launch** (no manual attach needed); no empty toolbar gap above the sidebar list; toggles + clicks work. iPad: a **single** sidebar toggle (no duplicate); the bar persists across rotation / multitasking collapse→expand. macOS unchanged.
+
+---
+
 ## Task 2: Breadth — segmented, group, menu + update/remove
 
 **Files:**
