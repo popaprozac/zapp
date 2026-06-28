@@ -1,7 +1,7 @@
 # iOS Native Navigation — Program Design / Decision Doc
 
 **Date:** 2026-06-27
-**Branch:** `feat/nim-native` (UNMERGED)
+**Branch:** the whole program runs on a dedicated branch **`feat/ios-native-nav`** (cut from `feat/nim-native`). Rationale: it's a large new feature arc, NOT a prerequisite for getting `feat/nim-native` onto main, so isolating it keeps `feat/nim-native` independently mergeable and contains N3's risk. `feat/nim-native` is not worked concurrently until this program finishes, so rebase cost is low.
 **Status:** Architecture approved; governs a multi-cycle program (each sub-cycle gets its own spec → plan → SDD)
 **Builds on:** toolbar placement model (#643, shipped) — the cross-platform `placement` API this program consumes.
 
@@ -53,7 +53,28 @@ Native routing means **each route is its own webview** (so native push/back/swip
 - **Cross-platform, not iOS-only:** iOS = native `UINavigationController` push; **desktop = in-window navigation driving toolbar back/forward + the content route** (logical back stack). Same call works everywhere → app navigation code doesn't fork.
 - **`window.create` on iPhone:** warn + fall back to `router.push` *if* routing is opted-in (graceful degradation for shared code), rather than silently returning a route as a window handle. On iPad it becomes a real window once multi-window lands (#655).
 - **Declarative route tree** (in `zapp.config.ts` / `AppConfig`): later sugar for the "sidebar drives content" pattern; not the v1 primitive. Start imperative.
-- Events: nav push/pop / route-changed (exact enum TBD in the cycle that builds it).
+- Events: `ROUTE_CHANGED` (+ push/pop) — a `WindowEvent` that fans out to webviews **and subscribed workers** (reuses the worker event-delivery machinery). Exact enum values set in the cycle that builds it.
+
+## Cross-context access — Router from workers (the shared-state payoff)
+
+Routing is **per-window** (each window owns a nav stack), so the handle stays `win.router`. But the *window handle must be reachable from any context*, not just `Window.current()`:
+- **webview:** `Window.current().router` (the window you're in).
+- **worker:** `Window.current()` has no meaning (warns) → reach a window by id via a **window-handle-by-id API**: `Window.get(id)` / `Window.all()` (single-window iPhone → `Window.all()[0]`; iPad multi-window → by id). This is broader than routing and is added as part of the program.
+
+This makes the worker a first-class navigation participant — the "worker as the app's brain" payoff (the same worker that holds shared route state can also drive + observe navigation):
+- **`win.router.on(ROUTE_CHANGED, …)`** — observe route changes from a worker (e.g. preload the new route's data before the surface renders).
+- **`Window.get(id).router.push/pop`** from a worker — a worker→host-bridge op routed by window id (same path as create-window-from-worker, which already works). Real use case: a **notification tap → worker → `push("/message/42")`** deep-link, driven entirely from the headless layer.
+
+So `Router` is window-scoped (correct) yet reachable everywhere via `Window.get` / `Window.all` — the clean reconciliation of "Router as a top-level thing."
+
+## Route params — three tiers, by durability
+
+The route's identity *is* its URL, so params layer by how durable they must be:
+1. **URL — identity + small params** (`push("/detail?id=42")`, read via `location.search` / `hash`). **Durable:** survives back/forward AND cold state-restoration (the URL is the route's true identity). Use for anything that must restore.
+2. **`params` in `RouteOptions`** — richer ephemeral serializable hand-off (`push({ url: "/detail", params: {…} })`), received as **`Window.current().router.params`** on the new surface (the framework stores it with the nav-stack entry + injects it on boot). **Ephemeral:** may NOT survive a cold restore (only the URL is durable) — document this.
+3. **Real data → the worker** (the idiomatic path) — the URL carries the **key** (`/detail?id=42`), the **worker holds the payload**, the new route subscribes and pulls it. No big-object serialization through navigation; consistent across routes.
+
+Rule: **identity/restorable → URL; small ephemeral hand-off → `params`; actual data → worker.**
 
 ## Native architecture: the `NavContext` seam (forward-compatible with tab bars)
 
@@ -71,7 +92,7 @@ Route operations are scoped to a **navigation context** (`ZappIOSNavContext`) �
 
 - **N0 — Platform runtime API** (#749, small, enabler). Round out `Platform` (os / form-factor / dev-vs-prod env) as the top-level conditional-logic export. Everything downstream's opt-in conditionals depend on it. Independent, useful on its own.
 - **N1 — Native toolbar (iOS content nav bar).** Implement `ios/toolbar.m`: `placement` items → the content column's `UINavigationItem`; show the bar; `toggleSidebar` → `displayModeButtonItem`; `toolbar-clicked` / `group-selected` events; chrome-metrics + webview top-constraint/safe-area fix (`--zapp-toolbar-height`, the **risk gate**). Replace the kitchen-sink HTML top-bar. **No routing.** Lowest-risk, ships the visible native bar, builds the surface routing chrome later populates.
-- **N2 — Router API + desktop.** `Window.current().router` (push/pop/replace/popToRoot), `RouteOptions`, `router:*` wire plumbing, nav events, **desktop in-window nav + toolbar back/forward binding**, `window.create`-on-iPhone warn+fallback. Cross-platform surface; fully macOS-testable before iOS-stack work.
+- **N2 — Router API + desktop.** `Window.current().router` (push/pop/replace/popToRoot), `RouteOptions` (incl. `params`), `router:*` wire plumbing, **`Window.get(id)`/`Window.all()`** (window-handle-by-id — enables worker-driven routing), the **`ROUTE_CHANGED`** event (webviews + subscribed workers), **`router.params`** (ephemeral hand-off channel), **desktop in-window nav + toolbar back/forward binding**, `window.create`-on-iPhone warn+fallback. Cross-platform surface; fully macOS-testable before iOS-stack work.
 - **N3 — iOS native routing (the differentiator).** Starts with a **risk-gate spike** (per-route webview push/pop onto the content nav controller, shared cached bundle + conditional render, native back + swipe, cost, worker-shared-state). Then `ZappIOSNavContext` (per-route webviews, lazy + bounded back-stack cache + state restore), per-route chrome (title+toolbar update on push/pop), wired to N2's Router. Biggest/riskiest; gated.
 - **Future (not this program): native tab bars** — accommodated by the `NavContext` seam.
 
@@ -86,4 +107,4 @@ Route operations are scoped to a **navigation context** (`ZappIOSNavContext`) �
 
 ## Constraints
 
-Branch `feat/nim-native` UNMERGED; commit trailer EXACTLY `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`; per-file `git add`; Bun; native-first parity (C/Nim primitive → router → TS runtime → docs, same PR); Nim faithful to the wire contract; NO iOS simulator interaction in-session (build-only gates + human smoke); iOS arm64 / min 15.0 / sim-functional, device compile-only; default iOS engine zjs; macOS is the parity reference — the per-pane iOS model must NOT break the shipped macOS single-`NSToolbar` API/behavior; docs updated in the same PR.
+Branch `feat/ios-native-nav` (cut from `feat/nim-native`) — commit on it directly, UNMERGED; commit trailer EXACTLY `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`; per-file `git add`; Bun; native-first parity (C/Nim primitive → router → TS runtime → docs, same PR); Nim faithful to the wire contract; NO iOS simulator interaction in-session (build-only gates + human smoke); iOS arm64 / min 15.0 / sim-functional, device compile-only; default iOS engine zjs; macOS is the parity reference — the per-pane iOS model must NOT break the shipped macOS single-`NSToolbar` API/behavior; docs updated in the same PR.
