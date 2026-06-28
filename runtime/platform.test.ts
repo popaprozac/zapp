@@ -24,3 +24,39 @@ test("Platform.isWindows for a windows manifest", () => {
   expect(Platform.isWindows).toBe(true);
   delete (globalThis as any)[BOOT];
 });
+
+test("Platform.os mirrors current()", () => {
+  (globalThis as any)[BOOT] = { permissions: { platform: "ios" } };
+  expect(Platform.os).toBe("ios");
+  delete (globalThis as any)[BOOT];
+});
+
+test("Platform.formFactor + booleans read the injected formFactor", () => {
+  (globalThis as any)[BOOT] = { permissions: { platform: "ios" }, formFactor: "tablet" };
+  expect(Platform.formFactor).toBe("tablet");
+  expect(Platform.isTablet).toBe(true);
+  expect(Platform.isPhone).toBe(false);
+  expect(Platform.isDesktop).toBe(false);
+  delete (globalThis as any)[BOOT];
+});
+
+test("Platform.formFactor defaults to desktop when absent", () => {
+  (globalThis as any)[BOOT] = { permissions: { platform: "macos" } };
+  expect(Platform.formFactor).toBe("desktop");
+  expect(Platform.isDesktop).toBe(true);
+  delete (globalThis as any)[BOOT];
+});
+
+test("Platform.env + booleans read the injected env", () => {
+  (globalThis as any)[BOOT] = { permissions: { platform: "ios" }, env: "dev" };
+  expect(Platform.env).toBe("dev");
+  expect(Platform.isDev).toBe(true);
+  expect(Platform.isProd).toBe(false);
+  delete (globalThis as any)[BOOT];
+});
+
+test("Platform.env defaults to prod when absent", () => {
+  delete (globalThis as any)[BOOT];
+  expect(Platform.env).toBe("prod");
+  expect(Platform.isProd).toBe(true);
+});
