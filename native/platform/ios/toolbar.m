@@ -30,6 +30,12 @@
 #include <stdbool.h>
 #include <objc/runtime.h>
 
+// Associated-object keys: use static addresses, not C string literals.
+// The address of these variables is the unique key — the value stored at the
+// address is irrelevant; 0 is conventional.
+static const char kZappToolbarButtonTargetKey = 0;
+static const char kZappToolbarToggleTargetKey = 0;
+
 extern WKWebView* zapp_ios_content_webview_for_slot(int32_t slot);
 extern void zapp_ios_eval_js_all_webviews(const char* js);
 extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
@@ -80,6 +86,11 @@ static UIImage* zapp_ios_resolve_icon(NSString* spec) {
 @interface ZappIOSToolbarEntry : NSObject
 @property (nonatomic, assign) int32_t hostSlot;       // numeric window id (content slot)
 @property (nonatomic, strong) NSArray* allItems;       // all UIBarButtonItems built
+// Tracks whether the persistent WKUserScript for --zapp-toolbar-height has been
+// added. WKUserContentController has no per-script removal, so repeated
+// set_items calls must add the user script only on the first call, then rely on
+// evaluateJavaScript for live updates thereafter.
+@property (nonatomic, assign) BOOL hasUserScript;
 @end
 
 @implementation ZappIOSToolbarEntry
@@ -247,7 +258,7 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
                                                        target:tgt
                                                        action:@selector(toggleTapped:)];
                 // Retain the target via associated object (UIBarButtonItem.target is weak).
-                objc_setAssociatedObject(item, "zapp_toggle_target", tgt,
+                objc_setAssociatedObject(item, &kZappToolbarToggleTargetKey, tgt,
                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
             } else if ([type isEqualToString:@"toggleInspector"]) {
@@ -259,7 +270,7 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
                                                         style:UIBarButtonItemStylePlain
                                                        target:tgt
                                                        action:@selector(toggleTapped:)];
-                objc_setAssociatedObject(item, "zapp_toggle_target", tgt,
+                objc_setAssociatedObject(item, &kZappToolbarToggleTargetKey, tgt,
                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
             } else if ([type isEqualToString:@"label"]) {
@@ -306,7 +317,7 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
                 }
                 item.enabled = enabled;
                 // Retain the target (UIBarButtonItem.target is weak/unretained).
-                objc_setAssociatedObject(item, "zapp_button_target", tgt,
+                objc_setAssociatedObject(item, &kZappToolbarButtonTargetKey, tgt,
                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             }
 
@@ -349,11 +360,16 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
         }
         entry.allItems = allBuilt;
 
-        // Inject chrome metrics into the content webview (add_user_script=true
-        // on first set so reloads keep the value).
+        // Inject chrome metrics into the content webview. The persistent
+        // WKUserScript (add_user_script=true) is added only the first time for
+        // this entry — WKUserContentController has no per-script removal, so
+        // repeated set_items calls would pile up scripts unboundedly. After the
+        // first injection, live updates use evaluateJavaScript only.
         // One tick delay so UIKit finishes laying the nav bar out before we measure.
+        BOOL needsUserScript = !entry.hasUserScript;
+        if (needsUserScript) entry.hasUserScript = YES;
         dispatch_async(dispatch_get_main_queue(), ^{
-            zapp_toolbar_inject_metrics(window_ptr, host_slot, true);
+            zapp_toolbar_inject_metrics(window_ptr, host_slot, needsUserScript);
         });
     });
 }
