@@ -1241,9 +1241,8 @@ inside a group for fine-grained spacing. Example:
 `placement` is structural and cannot be patched via `updateItem` — call
 `win.toolbar.setItems(...)` to move an item between slots.
 
-iOS future note: `placement` is carried in the item definition now for
-the upcoming native iOS navigation-bar toolbar (a later cycle); a `"bottom"`
-slot will be added at that time.
+On iOS, `placement` maps to the `UINavigationItem` leading/center/trailing
+slots — see "Toolbar (iOS)" below. A `"bottom"` slot is a future follow-up.
 
 **Title bar & toolbar layout.** `titleBarStyle` and `trackingSeparator` interact:
 
@@ -1322,7 +1321,7 @@ the traffic lights center in the same row); in the `expanded` style it's
 the toolbar row below the title. Never add the two variables.
 
 **Dynamic updates — `win.toolbar`.** Every `WindowHandle` carries a
-`ToolbarHandle` (macOS; ops no-op elsewhere):
+`ToolbarHandle` (macOS + iOS; ops no-op on Windows):
 
 ```ts
 const win = Window.current();
@@ -1400,6 +1399,62 @@ Caveats worth knowing:
   stripped from the patch (an icon-only `""` patch throws "empty patch").
 
 No search field; `allowsUserCustomization` is off.
+
+### Toolbar (iOS)
+
+On iOS, `win.toolbar.setItems(items)` populates the **content column's
+`UINavigationItem`** — the native nav bar that UIKit renders at the top of
+the content view controller. No flag is required; the bar appears as soon as
+`setItems` is called. The bar is shown on the content column only; it is
+hidden on the sidebar root (the nav list itself never grows a toolbar row).
+
+**Placement → nav bar slots.**
+
+| `placement` | UIKit target |
+|---|---|
+| `"leading"` (default) | `navigationItem.leftBarButtonItems` |
+| `"center"` | `navigationItem.title` / `navigationItem.titleView` |
+| `"trailing"` | `navigationItem.rightBarButtonItems` |
+
+**Item type mapping.**
+
+| Type | iOS rendering |
+|---|---|
+| `button` | `UIBarButtonItem` (SF symbol or label; `enabled` honored) |
+| `toggleSidebar` | `UIBarButtonItem` with `sidebar.leading` SF symbol → calls `darwin_sidebar_toggle`. On iPad when the split is **expanded** (regular width), the system sidebar button is used instead and the manual button is omitted — exactly one toggle is shown. On iPhone (always collapsed) and iPad in compact/multitasking-narrow, the manual button is shown. |
+| `toggleInspector` | `UIBarButtonItem` with `sidebar.trailing` SF symbol → calls `darwin_inspector_toggle`. |
+| `label` | `center` placement → `navigationItem.title` (string) or a `UILabel` titleView; other placements → `UIBarButtonItem(customView:)`. |
+| `segmented` | `UISegmentedControl` wrapped in `UIBarButtonItem(customView:)`. `selectionMode: "one"` → single-select; `"momentary"` → momentary. **`selectionMode: "any"` (multi-select) has no native nav-bar equivalent — it approximates to single-select on iOS.** Call this out in your UI if the distinction matters. |
+| `group` | Flattened: each sub-item becomes its own `UIBarButtonItem` appended to the same placement bucket. iOS nav bars have no `NSToolbarItemGroup` equivalent. |
+| `button` with `menu` | `UIBarButtonItem.menu` (`UIMenu` / `UIAction`, iOS 14+). Nested submenus become nested `UIMenu` instances. |
+| `space` / `flexibleSpace` | `UIBarButtonItem` fixed/flexible space system items. |
+| `trackingSeparator` | **Dropped on iOS** — no tracking-separator concept on `UINavigationItem`. Silently skipped. |
+
+**Fields ignored on iOS nav bar** (silently no-op; pass them in the same
+definition and they round-trip harmlessly): `badge`, `style: "prominent"`,
+`tintColor`, `bordered`, `controlRepresentation`.
+
+**Layout metrics.** `--zapp-toolbar-height` is injected into the content
+webview once the nav bar is shown (mirrors macOS). Pad fixed content headers
+by `var(--zapp-toolbar-height, 0px)` — the same variable works on both
+platforms. The sidebar webview receives `--zapp-toolbar-height: 0` (it sits
+outside the content nav controller).
+
+**Events.** Toolbar clicks (`window:toolbar-clicked`), segmented selection
+(`window:toolbar-group-selected`), and menu-item clicks reach all webview
+panes. Worker delivery of toolbar events is a **known iOS gap** — wire
+toolbar handlers from a webview pane for now.
+
+**Caveats and follow-ups.**
+
+- **No-sidebar windows** (windows created without a `sidebar:` option) do not
+  yet have a nav controller to attach to — `setItems` is a safe no-op for
+  them. Support is deferred to a future cycle.
+- **`WindowOptions.toolbar` at create time** (the `Window.create({ toolbar: … })`
+  path) is also deferred on iOS — use `win.toolbar.setItems(…)` after the
+  window opens (the kitchen-sink shell does this).
+- The iOS toolbar is rendered even when `titleBarStyle` differs; the
+  `titleBarStyle` option is macOS-only and has no effect on iOS.
 
 ### Popovers (macOS)
 

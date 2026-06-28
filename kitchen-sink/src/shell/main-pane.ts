@@ -4,45 +4,17 @@ import { findSection } from "../sections/types";
 import { shellToolbar } from "./toolbar-def";
 
 export function renderMainPane(app: HTMLElement) {
-  // iPhone: render a static top bar that showcases in-page chrome. It hosts a
-  // hamburger button wired to sidebar.toggle() (reads live native state, so
-  // tap-out dismiss never desyncs it). macOS uses the real native window chrome
-  // and sidebar — the top bar must NOT appear there.
-  const iosTopBar = Platform.isIOS
-    ? `<header class="ks-ios-topbar" aria-label="Navigation">
-        <div class="ks-ios-topbar-inner">
-          <button class="ks-ios-topbar-menu" data-sidebar-toggle aria-label="Toggle sidebar">☰</button>
-          <span class="ks-ios-topbar-title">Kitchen Sink</span>
-          <button class="ks-ios-topbar-inspector" data-inspector-toggle aria-label="Toggle inspector">⊟</button>
-        </div>
-      </header>`
-    : "";
   const dragStrip = Platform.isIOS
     ? ""
     : `<div class="drag-strip" data-zapp-drag-region>
       <span class="drag-strip-label">⠿ Kitchen Sink — drag to move</span>
     </div>`;
-  // On iOS the main-pane top padding must clear the fixed top bar instead of
-  // the native titlebar. Add the --ios-offset modifier class accordingly.
-  const mainPaneClass = Platform.isIOS
-    ? "main-pane main-pane--ios-offset"
-    : "main-pane";
   app.innerHTML = `
     ${dragStrip}
-    ${iosTopBar}
-    <div class="${mainPaneClass}"><div class="stage" data-stage></div></div>`;
-
-  // iOS top bar: use sidebar.toggle() so the native split-view state is always
-  // the source of truth — tap-out dismiss no longer desyncs the button.
-  const toggleBtn = app.querySelector<HTMLButtonElement>("[data-sidebar-toggle]");
-  toggleBtn?.addEventListener("click", () => Window.current().sidebar?.toggle());
-
-  // iOS top bar: inspector toggle (trailing button, iOS-only).
-  app
-    .querySelector<HTMLButtonElement>("[data-inspector-toggle]")
-    ?.addEventListener("click", () => Window.current().inspector?.toggle());
+    <div class="main-pane"><div class="stage" data-stage></div></div>`;
 
   // Attach the shell toolbar (late-attach to a toolbar-less window works).
+  // On iOS this renders as a native UINavigationItem nav bar (T1/T1.5/T2).
   try {
     Window.current().toolbar.setItems(shellToolbar());
   } catch (e) {
