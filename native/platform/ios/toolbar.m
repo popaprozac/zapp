@@ -468,10 +468,8 @@ static void zapp_ios_toolbar_apply_to_nav(UINavigationController* nav,
     vc.navigationItem.leftBarButtonItems  = leading ?: @[];
     vc.navigationItem.rightBarButtonItems = entry.trailingItems ?: @[];
 
-    if (entry.centerTitle) {
-        vc.navigationItem.title = entry.centerTitle;
-        vc.navigationItem.titleView = entry.centerView; // nil clears custom view
-    }
+    vc.navigationItem.title = entry.centerTitle;       // nil clears it
+    vc.navigationItem.titleView = entry.centerView;    // nil clears it
 
     nav.navigationBarHidden = NO;
 }
@@ -897,10 +895,8 @@ void zapp_ios_toolbar_reapply_for_window_hidden(void* window_ptr, BOOL sidebarHi
             NSArray<UIBarButtonItem*>* leading = entry.leadingItems; // include toggleSidebar
             contentVC.navigationItem.leftBarButtonItems  = leading ?: @[];
             contentVC.navigationItem.rightBarButtonItems = entry.trailingItems ?: @[];
-            if (entry.centerTitle) {
-                contentVC.navigationItem.title = entry.centerTitle;
-                contentVC.navigationItem.titleView = entry.centerView;
-            }
+            contentVC.navigationItem.title = entry.centerTitle;       // nil clears it
+            contentVC.navigationItem.titleView = entry.centerView;    // nil clears it
         }
 
         // Show bar only when the content VC is on top (depth > 1 means pushed
