@@ -447,14 +447,32 @@ static NSMutableDictionary<NSValue*, ZappToolbarController*>* zapp_toolbars = ni
 
 @end
 
+// Dedup helper for system-item identifiers that cannot appear more than once.
+// Checks all three placement buckets so an item added to any slot isn't
+// re-added to another (NSToolbar raises on duplicate non-space identifiers).
+static BOOL zapp_toolbar_has_id(NSArray* a, NSArray* b, NSArray* c, NSString* x) {
+    return [a containsObject:x] || [b containsObject:x] || [c containsObject:x];
+}
+
 // Parse the wire items array into the identifier list + custom-button defs.
 // Shared by darwin_toolbar_attach and darwin_toolbar_set_items.
+// Items are bucketed by their "placement" key (default "leading"), then
+// concatenated as: leading | flexSpace | center | flexSpace | trailing,
+// with NSToolbarFlexibleSpaceItemIdentifier auto-inserted only between
+// non-empty groups. Within-bucket order is preserved (stable).
 static NSArray<NSToolbarItemIdentifier>* zapp_toolbar_parse_items(
     NSArray* items, NSMutableDictionary<NSString*, NSDictionary*>* buttons) {
-    NSMutableArray<NSToolbarItemIdentifier>* ids = [NSMutableArray array];
+    NSMutableArray<NSToolbarItemIdentifier>* leading  = [NSMutableArray array];
+    NSMutableArray<NSToolbarItemIdentifier>* center   = [NSMutableArray array];
+    NSMutableArray<NSToolbarItemIdentifier>* trailing = [NSMutableArray array];
     for (NSDictionary* def in items) {
         if (![def isKindOfClass:[NSDictionary class]]) continue;
         NSString* type = [def[@"type"] isKindOfClass:[NSString class]] ? def[@"type"] : @"button";
+        // Route this item to its slot bucket (default leading).
+        NSString* placement = [def[@"placement"] isKindOfClass:[NSString class]] ? def[@"placement"] : @"leading";
+        NSMutableArray<NSToolbarItemIdentifier>* bucket =
+            [placement isEqualToString:@"center"]   ? center   :
+            [placement isEqualToString:@"trailing"]  ? trailing : leading;
         if ([type isEqualToString:@"toggleSidebar"]) {
             // System item: AppKit supplies icon/animation and routes the
             // action to the split view controller's toggleSidebar:. State
@@ -463,37 +481,37 @@ static NSArray<NSToolbarItemIdentifier>* zapp_toolbar_parse_items(
             // SIDEBAR_COLLAPSED/EXPANDED either way.
             // NSToolbar raises on duplicate non-space identifiers; AppKit's
             // own default-identifiers attach path filters dups, so mirror it.
-            if (![ids containsObject:NSToolbarToggleSidebarItemIdentifier])
-                [ids addObject:NSToolbarToggleSidebarItemIdentifier];
+            if (!zapp_toolbar_has_id(leading, center, trailing, NSToolbarToggleSidebarItemIdentifier))
+                [bucket addObject:NSToolbarToggleSidebarItemIdentifier];
         } else if ([type isEqualToString:@"toggleInspector"]) {
-            if (![ids containsObject:kZappToggleInspectorId])
-                [ids addObject:kZappToggleInspectorId];
+            if (!zapp_toolbar_has_id(leading, center, trailing, kZappToggleInspectorId))
+                [bucket addObject:kZappToggleInspectorId];
         } else if ([type isEqualToString:@"trackingSeparator"]) {
             NSString* tsPane = [def[@"pane"] isKindOfClass:[NSString class]] ? def[@"pane"] : @"sidebar";
             NSString* tsId = [tsPane isEqualToString:@"inspector"]
                 ? kZappTrackingSeparatorInspectorId : kZappTrackingSeparatorId;
-            if (![ids containsObject:tsId]) {
-                [ids addObject:tsId];
+            if (!zapp_toolbar_has_id(leading, center, trailing, tsId)) {
+                [bucket addObject:tsId];
                 buttons[tsId] = def;  // carries "pane"
             }
         } else if ([type isEqualToString:@"space"]) {
-            [ids addObject:NSToolbarSpaceItemIdentifier];
+            [bucket addObject:NSToolbarSpaceItemIdentifier];
         } else if ([type isEqualToString:@"flexibleSpace"]) {
-            [ids addObject:NSToolbarFlexibleSpaceItemIdentifier];
+            [bucket addObject:NSToolbarFlexibleSpaceItemIdentifier];
         } else if ([type isEqualToString:@"segmented"]) {
             NSString* gid = [def[@"id"] isKindOfClass:[NSString class]] ? def[@"id"] : nil;
             if (gid.length == 0 || buttons[gid]) continue;
-            [ids addObject:gid];
+            [bucket addObject:gid];
             buttons[gid] = def;   // carries segments/selectionMode/selected/controlRepresentation
         } else if ([type isEqualToString:@"group"]) {
             NSString* gid = [def[@"id"] isKindOfClass:[NSString class]] ? def[@"id"] : nil;
             if (gid.length == 0 || buttons[gid]) continue;
-            [ids addObject:gid];
+            [bucket addObject:gid];
             buttons[gid] = def;   // carries items/controlRepresentation
         } else if ([type isEqualToString:@"label"]) {
             NSString* lid = [def[@"id"] isKindOfClass:[NSString class]] ? def[@"id"] : nil;
             if (lid.length == 0 || buttons[lid]) continue;
-            [ids addObject:lid];
+            [bucket addObject:lid];
             buttons[lid] = def;   // carries "text"
         } else {
             // Custom button. The runtime validated id presence/uniqueness;
@@ -502,11 +520,24 @@ static NSArray<NSToolbarItemIdentifier>* zapp_toolbar_parse_items(
             NSString* itemId = def[@"id"];
             if (![itemId isKindOfClass:[NSString class]] || itemId.length == 0) continue;
             if (buttons[itemId]) continue;
-            [ids addObject:itemId];
+            [bucket addObject:itemId];
             buttons[itemId] = def;
         }
     }
-    return ids;
+    // Concatenate buckets: leading | flexSpace | center | flexSpace | trailing.
+    // Auto-flexSpace is inserted only between non-empty groups.
+    NSMutableArray<NSToolbarItemIdentifier>* out = [NSMutableArray array];
+    [out addObjectsFromArray:leading];
+    if (center.count > 0) {
+        if (out.count > 0) [out addObject:NSToolbarFlexibleSpaceItemIdentifier];
+        [out addObjectsFromArray:center];
+        if (trailing.count > 0) [out addObject:NSToolbarFlexibleSpaceItemIdentifier];
+        [out addObjectsFromArray:trailing];
+    } else if (trailing.count > 0) {
+        if (out.count > 0) [out addObject:NSToolbarFlexibleSpaceItemIdentifier];
+        [out addObjectsFromArray:trailing];
+    }
+    return out;
 }
 
 void darwin_toolbar_attach(void* window_ptr, const char* toolbar_json, int32_t window_numeric_id) {
