@@ -106,8 +106,18 @@ void darwin_panel_create(int32_t window_id, const char* panel_id, const char* ur
         void* win_ptr = darwin_window_get_by_numeric_id(window_id);
         if (!win_ptr) { NSLog(@"[zapp] panel: owner window %d not available", window_id); return; }
         UIWindow* window = (__bridge UIWindow*)win_ptr;
-        UIView* host = window.rootViewController.view;
-        if (!host) { NSLog(@"[zapp] panel: owner window %d has no root view", window_id); return; }
+
+        // Capture the host content webview (weak — no retain cycle). Used in
+        // set_bounds to convert CSS-viewport coords into the parent's space,
+        // AND as the panel's PARENT container so the panel is scoped to the
+        // content pane — clipped to it, and hidden when the sidebar overlays
+        // the content on iPhone (collapsed split) — instead of floating over
+        // the whole window's root view (which sits above both split columns).
+        extern WKWebView* zapp_ios_content_webview_for_slot(int32_t slot);
+        WKWebView* hostWebview = zapp_ios_content_webview_for_slot(window_id);
+        UIView* host = (hostWebview && hostWebview.superview)
+            ? hostWebview.superview : window.rootViewController.view;
+        if (!host) { NSLog(@"[zapp] panel: owner window %d has no host view", window_id); return; }
 
         WKWebViewConfiguration* config = [[WKWebViewConfiguration alloc] init];
         config.websiteDataStore = [WKWebsiteDataStore defaultDataStore]; // v1: shared
@@ -117,12 +127,7 @@ void darwin_panel_create(int32_t window_id, const char* panel_id, const char* ur
         panel.panelId = pid;
         panel.ownerWindowId = window_id;
 
-        // Capture the host content webview (weak — no retain cycle). Used in
-        // set_bounds to convert CSS-viewport coords (host webview space) into
-        // the panel-parent's coordinate space so sidebars/inspectors don't
-        // cause the panel to bleed over adjacent panes.
-        extern WKWebView* zapp_ios_content_webview_for_slot(int32_t slot);
-        panel.hostWebview = zapp_ios_content_webview_for_slot(window_id);
+        panel.hostWebview = hostWebview;
 
         // embed -> host postMessage shim (sandboxed: NO __zappBridge).
         [ucc addScriptMessageHandler:panel name:@"zappPanel"];
