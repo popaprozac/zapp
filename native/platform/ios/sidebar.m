@@ -66,6 +66,10 @@ extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
 extern void darwin_window_eval_js(int32_t window_id, const char* js);
 extern int32_t zapp_ios_inspector_slot_for(int32_t host_slot);
 
+// Defined in ios/toolbar.m — re-applies a set toolbar to the correct nav after
+// a collapse/expand transition. No-op when no toolbar has been registered.
+extern void zapp_ios_toolbar_reapply_for_window(void* window_ptr);
+
 // --- Per-window registry --------------------------------------------------
 //
 // Keyed by the host UIWindow (NSValue-wrapped pointer), mirroring darwin/
@@ -161,6 +165,26 @@ UINavigationController* zapp_ios_content_nav_for_window(void* window_ptr) {
     NSValue* key = [NSValue valueWithPointer:window_ptr];
     ZappIOSSidebarController* c = zapp_ios_sidebars[key];
     return c ? c.contentNav : nil;
+}
+
+// window_ptr -> the combined collapsed UINavigationController captured by
+// splitViewControllerDidCollapse:. Nil when not yet collapsed or no sidebar.
+// Declared extern in ios/toolbar.m.
+UINavigationController* zapp_ios_collapsed_nav_for_window(void* window_ptr) {
+    if (!window_ptr || !zapp_ios_sidebars) return nil;
+    NSValue* key = [NSValue valueWithPointer:window_ptr];
+    ZappIOSSidebarController* c = zapp_ios_sidebars[key];
+    return c ? c.collapsedNav : nil;
+}
+
+// Returns YES when the split is currently collapsed to a single column
+// (c.splitVC.isCollapsed). NO when expanded or no sidebar.
+// Declared extern in ios/toolbar.m.
+BOOL zapp_ios_split_is_collapsed_for_window(void* window_ptr) {
+    if (!window_ptr || !zapp_ios_sidebars) return NO;
+    NSValue* key = [NSValue valueWithPointer:window_ptr];
+    ZappIOSSidebarController* c = zapp_ios_sidebars[key];
+    return c ? c.splitVC.isCollapsed : NO;
 }
 
 // slot -> owning UIWindow -> registry key. Works from EITHER pane's slot.
@@ -377,25 +401,40 @@ static void zapp_ios_sidebar_sync_collapse(ZappIOSSidebarController* c, BOOL col
 }
 
 // On collapse (entered compact): the stack roots at the sidebar → expanded
-// (sidebar visible). Capture the combined nav controller UIKit built and force
-// its bar hidden in case UIKit re-installed one while building the stack.
+// (sidebar visible). Capture the combined nav controller UIKit built.
+// If no toolbar has been registered, force its bar hidden (chrome-less default).
+// If a toolbar IS registered, delegate to zapp_ios_toolbar_reapply_for_window —
+// it will show the bar on collapsedNav only when the content VC is on top, and
+// install a UINavigationControllerDelegate to track push/pop transitions.
 - (void)splitViewControllerDidCollapse:(UISplitViewController*)svc {
     UINavigationController* nav = zapp_ios_collapsed_nav(svc);
     if (nav) {
-        nav.navigationBarHidden = YES;
         self.collapsedNav = nav;
         // The hidden nav bar disables UIKit's interactive-pop gesture; re-arm it
         // so chrome-less still gets edge-swipe-back. Our delegate gates it to
         // "only when there's something to pop" (avoids a no-op swipe at root).
         zapp_ios_sidebar_rearm_pop(self);
     }
+    // Always default the bar to hidden first. If a toolbar is registered,
+    // reapply will override this and manage per-VC visibility via the nav
+    // delegate. This preserves the chrome-less default for windows without a
+    // toolbar.
+    if (nav) nav.navigationBarHidden = YES;
     zapp_ios_sidebar_sync_collapse(self, NO);
+    // Re-apply any registered toolbar to the now-captured collapsedNav.
+    // Must happen AFTER self.collapsedNav is set so the toolbar can reach it.
+    void* winPtr = (__bridge void*)self.splitVC.view.window;
+    if (winPtr) zapp_ios_toolbar_reapply_for_window(winPtr);
 }
 
 - (void)splitViewControllerDidExpand:(UISplitViewController*)svc {
     (void)svc;
     // Back to side-by-side: both panes visible → expanded.
     zapp_ios_sidebar_sync_collapse(self, NO);
+    // Re-apply any registered toolbar to contentNav now that the split is
+    // expanded. Also removes the nav delegate from the old collapsedNav.
+    void* winPtr = (__bridge void*)self.splitVC.view.window;
+    if (winPtr) zapp_ios_toolbar_reapply_for_window(winPtr);
 }
 
 // Gate the re-armed interactive-pop gesture: only begin when the collapsed
