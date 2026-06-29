@@ -34,6 +34,9 @@
 // --- Nim/native externs ---
 extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
 extern UINavigationController* zapp_ios_content_nav_for_window(void* window_ptr);
+// R1: owned-nav chrome (iphonenav.m). nil on iPad/non-phone or before init.
+extern UINavigationController* zapp_ios_owned_nav_for_window(void* window_ptr);
+extern UIViewController* zapp_ios_owned_content_vc_for_window(void* window_ptr);
 extern bool zapp_window_native_routing(int32_t window_id);
 extern int router_depth(int32_t win);
 extern const char* router_current_url(int32_t win);
@@ -94,7 +97,12 @@ static void zapp_route_vc_teardown(ZappRouteVC* vc) {
        didShowViewController:(UIViewController*)vc
                     animated:(BOOL)animated {
     int nativeDepth = (int)nav.viewControllers.count;
-    int wantDepth = router_depth(self.windowId);
+    // R1: compare native depth against baseline + routerDepth so the owned-nav's
+    // sidebar root (baseline=1) is accounted for. On iPad (baseline=0) this is
+    // identical to the previous check.
+    void* win = darwin_window_get_by_numeric_id(self.windowId);
+    int baseline = (win && zapp_ios_owned_nav_for_window(win) != nil) ? 1 : 0;
+    int wantDepth = baseline + router_depth(self.windowId);
     if (nativeDepth < wantDepth) {
         // User popped via back button or edge swipe — reflect into routerstate.
         // zapp_router_pop_from_native will call zapp_ios_router_sync, but at
@@ -136,10 +144,15 @@ static void zapp_route_vc_teardown(ZappRouteVC* vc) {
 // Per-window delegate registry — keeps delegates alive and deduplicated.
 static NSMutableDictionary<NSNumber*, ZappRoutingNavDelegate*>* g_routing_delegates;
 
-// The navigation controller that hosts the route stack. iPad/expanded → contentNav
-// (a clean nav). Task 3 extends this to return the iPhone owned nav when present.
+// The navigation controller that hosts the route stack.
+//   iPhone owned-nav chrome (R1): returns the app-owned UINavigationController
+//   whose root is the sidebar VC (depth-0 chrome).
+//   iPad/expanded: falls back to contentNav (a plain nav whose root IS the
+//   content VC — no sidebar chrome root, so baseline = 0).
 static UINavigationController* zapp_routing_nav(void* win) {
-    return zapp_ios_content_nav_for_window(win);
+    UINavigationController* owned = zapp_ios_owned_nav_for_window(win);
+    if (owned) return owned;                      // iPhone owned-nav chrome (R1)
+    return zapp_ios_content_nav_for_window(win);  // iPad / expanded
 }
 
 void zapp_ios_router_sync(int32_t windowId) {
@@ -178,53 +191,75 @@ void zapp_ios_router_sync(int32_t windowId) {
         nav.interactivePopGestureRecognizer.enabled = YES;
     }
 
-    int want = router_depth(windowId);   // desired total VCs (root + routes)
+    // R1: baseline-aware reconcile.
+    //   Owned nav (iPhone): sidebar is depth-0 chrome → baseline = 1.
+    //     want_native = 1 + routerDepth  (0→sidebar-only, 1→+content, 2+→+routes)
+    //   iPad contentNav: root IS the content VC → baseline = 0.
+    //     want_native = 0 + routerDepth  (unchanged from N3a)
+    UIViewController* ownedContent = zapp_ios_owned_content_vc_for_window(win);
+    int baseline = (zapp_ios_owned_nav_for_window(win) != nil) ? 1 : 0;
+    int want = baseline + router_depth(windowId);
     int have = (int)nav.viewControllers.count;
 
     if (have < want) {
-        // → push 1 ZappRouteVC
-        const char* urlC = router_current_url(windowId);
-        NSString* url = (urlC && urlC[0]) ? [NSString stringWithUTF8String:urlC] : @"/";
-        // N3a per-route identity: the route webview renders THIS url (zapp.route),
-        // not the latest broadcast. create_ext consumes the pending url once.
-        // [url UTF8String] is valid for this autorelease pool → stable across the
-        // synchronous create_ext call (the Nim cstring is not held past here).
-        zapp_ios_set_pending_route_url([url UTF8String]);
+        // → push 1 VC.
+        //
+        // R1 owned-nav push distinction:
+        //   Native index 1 (have == baseline == 1): push the HELD content VC.
+        //     This VC hosts the lateral-switching content webview (section panes).
+        //     It is NOT a ZappRouteVC and must NOT be added to pushedVCs/torn down.
+        //     The teardown diff in didShowViewController only tears down ZappRouteVC
+        //     entries from pushedVCs, so the content VC is naturally exempt.
+        //   Native index 2+ (have > baseline): mint a ZappRouteVC (existing path).
+        if (have == baseline && ownedContent != nil) {
+            // Push the persistent content VC (owned-nav, first content reveal).
+            // No ZappRouteVC minted; not added to pushedVCs; not torn down on pop.
+            [nav pushViewController:ownedContent animated:YES];
+        } else {
+            // Mint a new ephemeral ZappRouteVC for a drill-down route (existing path).
+            const char* urlC = router_current_url(windowId);
+            NSString* url = (urlC && urlC[0]) ? [NSString stringWithUTF8String:urlC] : @"/";
+            // N3a per-route identity: the route webview renders THIS url (zapp.route),
+            // not the latest broadcast. create_ext consumes the pending url once.
+            // [url UTF8String] is valid for this autorelease pool → stable across the
+            // synchronous create_ext call (the Nim cstring is not held past here).
+            zapp_ios_set_pending_route_url([url UTF8String]);
 
-        ZappRouteVC* vc = [ZappRouteVC new];
-        vc.view.backgroundColor = UIColor.systemBackgroundColor;
+            ZappRouteVC* vc = [ZappRouteVC new];
+            vc.view.backgroundColor = UIColor.systemBackgroundColor;
 
-        // Mint a new webview into vc.view via the existing create path.
-        // identity_window_id = host windowId so the route webview reports the
-        // host window's id to the bridge (ROUTE_CHANGED + all t:4 ops target host).
-        // pane_role 0 (main). container_view = vc.view → create_ext pins it.
-        darwin_webview_create_ext(win,
-            /*inspectable*/true,
-            /*accept_first_mouse*/false,
-            /*url_override*/NULL,
-            /*numeric_id_pre_alloc*/-1,
-            /*transparent_background*/false,
-            /*container_view*/(__bridge void*)vc.view,
-            /*identity_window_id*/windowId,
-            /*pane_role*/0,
-            /*host_has_sidebar*/false,
-            /*host_has_inspector*/false);
+            // Mint a new webview into vc.view via the existing create path.
+            // identity_window_id = host windowId so the route webview reports the
+            // host window's id to the bridge (ROUTE_CHANGED + all t:4 ops target host).
+            // pane_role 0 (main). container_view = vc.view → create_ext pins it.
+            darwin_webview_create_ext(win,
+                /*inspectable*/true,
+                /*accept_first_mouse*/false,
+                /*url_override*/NULL,
+                /*numeric_id_pre_alloc*/-1,
+                /*transparent_background*/false,
+                /*container_view*/(__bridge void*)vc.view,
+                /*identity_window_id*/windowId,
+                /*pane_role*/0,
+                /*host_has_sidebar*/false,
+                /*host_has_inspector*/false);
 
-        // Locate the webview that create_ext pinned as vc.view's first subview.
-        // darwin_webview_create_ext with container_view does: [host addSubview:webview]
-        // (ios/webview.m:966), so subviews.firstObject is the WKWebView.
-        for (UIView* sub in vc.view.subviews) {
-            if ([sub isKindOfClass:[WKWebView class]]) {
-                vc.webview = (WKWebView*)sub;
-                break;
+            // Locate the webview that create_ext pinned as vc.view's first subview.
+            // darwin_webview_create_ext with container_view does: [host addSubview:webview]
+            // (ios/webview.m:966), so subviews.firstObject is the WKWebView.
+            for (UIView* sub in vc.view.subviews) {
+                if ([sub isKindOfClass:[WKWebView class]]) {
+                    vc.webview = (WKWebView*)sub;
+                    break;
+                }
             }
+
+            // Track for unified teardown (the delegate tears it down when popped,
+            // whether by the user or programmatically).
+            [g_routing_delegates[@(windowId)].pushedVCs addObject:vc];
+
+            [nav pushViewController:vc animated:YES];
         }
-
-        // Track for unified teardown (the delegate tears it down when popped,
-        // whether by the user or programmatically).
-        [g_routing_delegates[@(windowId)].pushedVCs addObject:vc];
-
-        [nav pushViewController:vc animated:YES];
 
     } else if (have > want) {
         // Pop extra route VCs (programmatic router.pop / router.popToRoot). Each

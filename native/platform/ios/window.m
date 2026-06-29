@@ -328,6 +328,8 @@ extern void zapp_ios_inspector_register(void* window, void* inspectorVC,
 extern bool zapp_ios_owned_nav_enabled(int32_t window_id);
 extern void zapp_ios_register_owned_nav(void* window_ptr, UINavigationController* nav,
                                         UIViewController* sidebarVC, UIViewController* contentVC);
+// Nim routerstate: seed empty stack so owned-nav launch shows only the sidebar.
+extern void zapp_router_seed_empty(int32_t window_id);
 
 static ZappIOSDeferred* zapp_ios_find_deferred(void* handle) {
     if (!handle) return NULL;
@@ -398,6 +400,10 @@ void zapp_ios_materialize_pending_windows(void) {
                 ownedNavVC.view.backgroundColor = bgColor;
                 window.rootViewController = ownedNavVC;   // BEFORE any webview creation
                 zapp_ios_register_owned_nav((__bridge void*)window, ownedNavVC, sidebarVC, contentVC);
+                // R1 seeding: seed an EMPTY routerstate so launch shows only the sidebar
+                // (routerDepth=0 → want=1+0=1=baseline). The subsequent routerSeed(id,"/")
+                // in createWindow (Nim) is a no-op because hasKey is already true.
+                zapp_router_seed_empty(d->numeric_id);
                 // NOTE: do NOT call zapp_ios_sidebar_register / build the split for this window.
             } else {
                 // Sidebar window: root on a ZappIOSSplitViewController (our

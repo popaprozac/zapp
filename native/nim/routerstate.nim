@@ -18,6 +18,14 @@ proc routerSeed*(win: int32, url: string) =
   if not gRoutes.hasKey(win):
     gRoutes[win] = RouteState(entries: @[RouteEntry(url: url, params: "")], cur: 0)
 
+proc routerSeedEmpty*(win: int32) {.exportc: "zapp_router_seed_empty", cdecl.} =
+  ## Seed with an EMPTY stack (depth=0) for owned-nav windows — the sidebar is
+  ## shown at launch with no content pushed. No-op if already present.
+  ## Called from ios/window.m after zapp_ios_register_owned_nav; the subsequent
+  ## routerSeed(id, "/") in createWindow (window.nim) is then a no-op (hasKey guard).
+  if not gRoutes.hasKey(win):
+    gRoutes[win] = RouteState(entries: @[], cur: 0)
+
 proc routerClear*(win: int32) =
   gRoutes.del(win)
 
@@ -32,7 +40,13 @@ proc routerPush*(win: int32, url, params: string) =
 proc routerReplace*(win: int32, url, params: string) =
   if not gRoutes.hasKey(win): routerSeed(win, "/")
   var s = gRoutes[win]
-  s.entries[s.cur] = RouteEntry(url: url, params: params)   # in place; forward preserved
+  if s.entries.len == 0:
+    # Empty state (owned-nav, pre-first-select): treat as the initial entry.
+    # popToRoot was a no-op; replace here seeds the first real entry.
+    s.entries = @[RouteEntry(url: url, params: params)]
+    s.cur = 0
+  else:
+    s.entries[s.cur] = RouteEntry(url: url, params: params)  # in place; forward preserved
   gRoutes[win] = s
 
 proc routerPop*(win: int32): bool =
@@ -97,8 +111,12 @@ proc routerCanGoForward*(win: int32): bool =
 proc routerDepth*(win: int32): cint {.exportc: "router_depth", cdecl.} =
   ## Number of entries up to and including the current cursor (the native VC
   ## stack must match this: 1 = root only, N = root + (N-1) pushed routes).
+  ## An empty-seeded window (owned-nav, pre-first-select) returns 0 so
+  ## want = baseline + 0 = 1 = sidebar only at launch.
   if gRoutes.hasKey(win):
-    return (gRoutes[win].cur + 1).cint
+    let s = gRoutes[win]
+    if s.entries.len == 0: return 0
+    return (s.cur + 1).cint
   return 0
 
 proc routerCurrentUrlC*(win: int32): cstring {.exportc: "router_current_url", cdecl.} =
