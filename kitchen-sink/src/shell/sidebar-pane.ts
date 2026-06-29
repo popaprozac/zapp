@@ -1,5 +1,6 @@
-import { Events, Window, Platform } from "@zappdev/runtime";
+import { Window, Platform, WindowEvent } from "@zappdev/runtime";
 import { registry } from "../sections/registry";
+import { routeForSection, sectionForRoute } from "./route-map";
 
 export function renderSidebarPane(app: HTMLElement) {
   // Chrome panes must be fully transparent (html + body) so the native sidebar
@@ -22,17 +23,22 @@ export function renderSidebarPane(app: HTMLElement) {
         .join("")}</nav>
     </div>`;
   const items = app.querySelectorAll<HTMLButtonElement>(".nav-item");
+
+  // Click → router.push the section's route. The native stack fans out
+  // ROUTE_CHANGED to every pane; we don't toggle .active here (see below).
   items.forEach((el) =>
     el.addEventListener("click", () => {
-      items.forEach((i) => i.classList.toggle("active", i === el));
-      // Scope the route to THIS window — Events.emit fans out across all
-      // windows, so a secondary window's nav must not drive the main window.
-      Events.emit("ks:nav", { id: el.dataset.id!, windowId: Window.current().id });
+      Window.current().router.push(routeForSection(el.dataset.id!));
       // iPhone master-detail: reveal the content column full-screen.
-      // No-op on macOS / iPad (panes are side-by-side); gated so the cost
-      // is clearly iOS-only and the intent is explicit.
       if (Platform.isIOS) Window.current().sidebar?.showContent();
     }),
   );
-  items[0]?.classList.add("active"); // mark Home active on launch (visual only; no emit)
+
+  // Highlight follows the current route, so back/forward move it too (#666).
+  const applyActive = (url: string) => {
+    const sectionId = sectionForRoute(url);
+    items.forEach((i) => i.classList.toggle("active", i.dataset.id === sectionId));
+  };
+  Window.current().router.on((e) => applyActive(e.url));
+  applyActive(Window.current().router.url); // initial (cache → "" → home)
 }

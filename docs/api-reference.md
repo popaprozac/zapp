@@ -1666,6 +1666,42 @@ that tracks `canGoBack`/`canGoForward`. Wiring these states to native toolbar
 back/forward buttons lands in N2b (this cycle only delivers the stack and its
 events). iOS native routing (UINavigationController) is a future milestone.
 
+#### Desktop in-window navigation
+
+On desktop the router drives **in-window** navigation: the route stack is logical
+and content is swapped within the existing webview (there are no per-route
+windows — that is iOS's model). Wire it like this:
+
+- **Navigate:** call `Window.current().router.push("/section")` from anywhere
+  (a sidebar button, a menu, a worker via `Window.get(id)`).
+- **Render:** subscribe once and swap content on the event — never render
+  directly from the click. In a multi-pane window the click happens in one
+  webview (e.g. the sidebar) and the content lives in another, so the
+  `ROUTE_CHANGED` broadcast is the only cross-pane channel:
+
+  ```ts
+  Window.current().router.on((e) => renderRoute(e.url));
+  // First render / reload-restore — read the authoritative route async:
+  Window.current().router.current().then((s) => renderRoute(s.url));
+  ```
+
+- **Back/forward toolbar buttons:** give them ids, then sync their enabled-state
+  from the same event:
+
+  ```ts
+  // toolbar items:  { id: "back", action: () => win.router.pop() }, { id: "fwd", action: () => win.router.forward() }
+  win.router.on((e) => {
+    win.toolbar.updateItem("back", { enabled: e.canGoBack });
+    win.toolbar.updateItem("fwd",  { enabled: e.canGoForward });
+  });
+  ```
+
+**iOS / single-window:** `Window.create(opts)` without `asSheetOf` is a no-op that
+returns the current window — **except** when `opts.url` is set, in which case it
+becomes an in-window `router.push({ url, title, presentation })` (iOS is
+single-window; use a sheet via `asSheetOf` for a modal surface). Native
+UINavigationController routing on iPhone is a later cycle.
+
 #### `Window.get(id: string): WindowHandle`
 
 Return a handle for any open window by its id (`"win-1"`, etc.) without a

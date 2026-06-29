@@ -1,6 +1,7 @@
-import { Events, Platform, Window } from "@zappdev/runtime";
+import { Platform, Window } from "@zappdev/runtime";
 import { registry } from "../sections/registry";
 import { findSection } from "../sections/types";
+import { sectionForRoute } from "./route-map";
 
 export function renderInspectorPane(app: HTMLElement) {
   // Fully transparent (html + body) so the native inspector glass shows through;
@@ -33,6 +34,6 @@ export function renderInspectorPane(app: HTMLElement) {
     }
   };
 
-  Events.on("ks:nav", ({ id, windowId }: any) => { if (windowId === Window.current().id) show(id); });
-  if (registry[0]) show(registry[0].id);   // self-init
+  Window.current().router.on((e) => show(sectionForRoute(e.url)));
+  show(sectionForRoute(Window.current().router.url)); // initial
 }

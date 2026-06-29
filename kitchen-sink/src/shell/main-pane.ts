@@ -1,7 +1,8 @@
-import { Window, Events, Platform } from "@zappdev/runtime";
+import { Window, Platform, WindowEvent } from "@zappdev/runtime";
 import { registry } from "../sections/registry";
 import { findSection } from "../sections/types";
 import { shellToolbar } from "./toolbar-def";
+import { sectionForRoute } from "./route-map";
 
 export function renderMainPane(app: HTMLElement) {
   const dragStrip = Platform.isIOS
@@ -14,7 +15,7 @@ export function renderMainPane(app: HTMLElement) {
     <div class="main-pane"><div class="stage" data-stage></div></div>`;
 
   // Attach the shell toolbar (late-attach to a toolbar-less window works).
-  // On iOS this renders as a native UINavigationItem nav bar (T1/T1.5/T2).
+  // On iOS this renders as a native UINavigationItem nav bar (N1).
   try {
     Window.current().toolbar.setItems(shellToolbar());
   } catch (e) {
@@ -23,18 +24,39 @@ export function renderMainPane(app: HTMLElement) {
 
   const stage = app.querySelector<HTMLElement>("[data-stage]")!;
   let teardown: void | (() => void);
+  let shownId = "";
 
   const show = (id: string) => {
+    if (id === shownId) return;          // already rendering this section
     if (typeof teardown === "function") teardown();
     teardown = undefined;
     const section = findSection(registry, id);
     if (!section) return;
+    shownId = id;
     stage.innerHTML = "";
     teardown = section.render(stage);
   };
 
-  // Only act on this window's own sidebar (ks:nav is a global emit; match windowId).
-  Events.on("ks:nav", ({ id, windowId }: any) => { if (windowId === Window.current().id) show(id); });
+  const win = Window.current();
+  const syncToolbar = (canGoBack: boolean, canGoForward: boolean) => {
+    try {
+      win.toolbar.updateItem("back", { enabled: canGoBack });
+      win.toolbar.updateItem("fwd",  { enabled: canGoForward });
+    } catch { /* toolbar not ready — ignore */ }
+  };
 
-  if (registry[0]) show(registry[0].id); // self-init to Home (race-free, in-pane)
+  // Render on every route change (sidebar click, toolbar back/forward, etc.).
+  win.router.on((e) => {
+    show(sectionForRoute(e.url));
+    syncToolbar(e.canGoBack, e.canGoForward);
+  });
+
+  // First render: show home immediately (cache may be unseeded), then correct to
+  // the authoritative route (restores a deep route after reload).
+  show(sectionForRoute(win.router.url));
+  syncToolbar(win.router.canGoBack, win.router.canGoForward);
+  win.router.current().then((snap) => {
+    show(sectionForRoute(snap.url));
+    syncToolbar(snap.canGoBack, snap.canGoForward);
+  }).catch(() => { /* best-effort restore */ });
 }
