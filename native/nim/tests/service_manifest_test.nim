@@ -1,7 +1,8 @@
 import ../service
+import ../apptypes
 import std/json
 
-proc h(args: JsonNode): string = ""
+proc h(app: App, args: JsonNode): string = ""
 
 proc test() =
   doAssert serviceManifestJson() == """{"v":1,"services":[]}"""

@@ -1,8 +1,9 @@
 import ../service
+import ../apptypes
 import std/json
 
 var order: seq[string]
-proc h(args: JsonNode): string = ""
+proc h(app: App, args: JsonNode): string = ""
 proc upA() = order.add "startA"
 proc dnA() = order.add "stopA"
 proc upB() = order.add "startB"

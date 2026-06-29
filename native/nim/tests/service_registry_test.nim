@@ -1,9 +1,11 @@
 import ../service
+import ../apptypes
 import std/[json, options]
 
-proc handlerA(args: JsonNode): string = """{"a":1}"""
+proc handlerA(app: App, args: JsonNode): string = """{"a":1}"""
 
 proc test() =
+  setCurrentApp(App(name: "test"))
   registerService("svcA", handlerA)
   doAssert invokeService("svcA", newJNull()).get == """{"a":1}"""
   doAssert invokeService("missing", newJNull()).isNone

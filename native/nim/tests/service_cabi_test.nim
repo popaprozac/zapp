@@ -1,8 +1,9 @@
 import ../service
+import ../apptypes
 import std/json
 
 var shutOrder: seq[string]
-proc h(args: JsonNode): string = ""
+proc h(app: App, args: JsonNode): string = ""
 proc dn() = shutOrder.add "down"
 
 proc test() =
