@@ -1,4 +1,4 @@
-import { Window, Platform, WindowEvent } from "@zappdev/runtime";
+import { Window, Platform } from "@zappdev/runtime";
 import { registry } from "../sections/registry";
 import { routeForSection, sectionForRoute } from "./route-map";
 

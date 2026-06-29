@@ -21,8 +21,11 @@ export function renderInspectorPane(app: HTMLElement) {
     </div>`;
   const body = app.querySelector<HTMLElement>("[data-body]")!;
   let teardown: void | (() => void);
+  let shownId = "";
 
   const show = (id: string) => {
+    if (id === shownId) return;          // already rendering this section
+    shownId = id;
     if (typeof teardown === "function") teardown();
     teardown = undefined;
     const section = findSection(registry, id);

@@ -1,4 +1,4 @@
-import { Window, Platform, WindowEvent } from "@zappdev/runtime";
+import { Window, Platform } from "@zappdev/runtime";
 import { registry } from "../sections/registry";
 import { findSection } from "../sections/types";
 import { shellToolbar } from "./toolbar-def";
