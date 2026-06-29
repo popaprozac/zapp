@@ -182,10 +182,73 @@ static void zapp_ios_register_webview_slot(int32_t slot, WKWebView* webview, NSS
 @interface ZappIOSSplitViewController : UISplitViewController
 @end
 
-// Root VC for the no-sidebar window. The sidebar path gets THEME_CHANGED from
-// ZappIOSSplitViewController's traitCollectionDidChange:; the plain path needs
-// its own override so a no-sidebar window also dispatches the app-level event.
-@interface ZappIOSRootViewController : UIViewController
+// ── ZappIOSPaneViewController ────────────────────────────────────────────────
+//
+// Minimal UIViewController subclass shared by ALL pane view controllers (content
+// VC in sidebar windows, inspector VC, and the lone root VC in no-sidebar windows).
+//
+// Overrides -viewSafeAreaInsetsDidChange to re-inject chrome metrics into EVERY
+// pane webview for the owning window. UIKit fires this callback:
+//   • After the initial layout (so the nav bar height is known by then).
+//   • On every subsequent change: rotation, bar show/hide, sheet present/dismiss,
+//     multitasking resize.
+//
+// This fixes the T4 "too-early inject" root cause:
+//   • iPad content: -set_items defers one tick but the floating UINavigationBar
+//     hasn't laid out yet → safeAreaInsets.top too small → content obscured.
+//     viewSafeAreaInsetsDidChange fires AFTER layout settles → correct value.
+//   • iPad sidebar: same mechanism (sidebar VC's safe area mirrors the content VC's).
+//   • iPhone inspector sheet: inspector VC gets its own safe-area change when the
+//     sheet appears → inject fires with the correct bar-present inset.
+//   • Rotation / multitasking resize: automatically re-injects the new insets.
+//
+// The re-inject calls zapp_toolbar_inject_metrics(windowPtr, hostSlot, false)
+// — add_user_script=false because the WKUserScript was already added on the
+// first set_items call. Multiple rapid safe-area change callbacks are safe:
+// inject_metrics only evaluates JS (setProperty on documentElement.style), which
+// is idempotent and has no layout side-effects, so no feedback loop can form.
+//
+// Guard: windowPtr==NULL || hostSlot<0 means this VC is not yet wired (e.g. the
+// no-sidebar plain root VC before materialize sets the id). The override is a
+// no-op until both fields are populated.
+
+// Forward declaration — defined in ios/toolbar.m (same link unit).
+extern void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot,
+                                         bool add_user_script);
+
+@interface ZappIOSPaneViewController : UIViewController
+@property (nonatomic, assign) void* windowPtr;  // host UIWindow* (not retained; window outlives VCs)
+@property (nonatomic, assign) int32_t hostSlot; // numeric window id (content slot)
+@end
+
+@implementation ZappIOSPaneViewController
+
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        _windowPtr = NULL;
+        _hostSlot  = -1;
+    }
+    return self;
+}
+
+- (void)viewSafeAreaInsetsDidChange {
+    [super viewSafeAreaInsetsDidChange];
+    // Guard: skip until the VC is wired to a window (materialize sets these).
+    if (!_windowPtr || _hostSlot < 0) return;
+    // add_user_script=false: the persistent WKUserScript was already installed at
+    // set_items time; this is a live CSS-var update only. Safe to call repeatedly —
+    // inject_metrics only evaluates JS setProperty (no layout side-effects).
+    zapp_toolbar_inject_metrics(_windowPtr, _hostSlot, false);
+}
+
+@end
+
+// Root VC for the no-sidebar window. Inherits ZappIOSPaneViewController so that
+// -viewSafeAreaInsetsDidChange re-injects metrics when the nav bar settles.
+// Adds -traitCollectionDidChange: for THEME_CHANGED dispatch (the sidebar path
+// gets this from ZappIOSSplitViewController's override; the plain path needs its own).
+@interface ZappIOSRootViewController : ZappIOSPaneViewController
 @end
 @implementation ZappIOSRootViewController
 - (void)traitCollectionDidChange:(UITraitCollection*)previous {
@@ -279,7 +342,10 @@ void zapp_ios_materialize_pending_windows(void) {
             ZappIOSSplitViewController* split =
                 [[ZappIOSSplitViewController alloc] initWithStyle:UISplitViewControllerStyleDoubleColumn];
             sidebarVC = [[UIViewController alloc] init];   // primary column
-            contentVC = [[UIViewController alloc] init];   // secondary column
+            // content VC: ZappIOSPaneViewController so viewSafeAreaInsetsDidChange
+            // re-injects toolbar metrics after UIKit lays out the floating nav bar.
+            // windowPtr + hostSlot are wired below after d->real_window is set.
+            contentVC = [[ZappIOSPaneViewController alloc] init]; // secondary column
 
             contentVC.view.backgroundColor = bgColor;
             // Sidebar pane backdrop: explicit "#rrggbb" if the app set one,
@@ -346,6 +412,17 @@ void zapp_ios_materialize_pending_windows(void) {
             // Numeric form matches what router.zc returns to JS — keeps
             // Window.current() and Window.create() handles in lockstep.
             zapp_ios_window_ids[d->numeric_id] = [NSString stringWithFormat:@"win-%d", d->numeric_id];
+        }
+
+        // Wire the numeric id and window pointer into every ZappIOSPaneViewController
+        // so that viewSafeAreaInsetsDidChange can re-inject toolbar metrics once
+        // UIKit has finished laying out the floating nav bar. contentVC is either a
+        // ZappIOSPaneViewController (sidebar path) or a ZappIOSRootViewController
+        // (no-sidebar path, which also subclasses ZappIOSPaneViewController). In
+        // both cases the cast is safe because both classes respond to the properties.
+        if (d->numeric_id >= 0 && [contentVC isKindOfClass:[ZappIOSPaneViewController class]]) {
+            ((ZappIOSPaneViewController*)contentVC).windowPtr = (__bridge void*)window;
+            ((ZappIOSPaneViewController*)contentVC).hostSlot  = d->numeric_id;
         }
 
         // Hand the split + columns + ids to the sidebar manager (ios/sidebar.m).
@@ -500,7 +577,14 @@ void zapp_ios_materialize_pending_windows(void) {
         if (d->hasInspector) {
             // Persistent inspector VC owns the inspector webview for life (never
             // re-parented). Created here so the webview is born in its final home.
-            UIViewController* inspectorVC = [[UIViewController alloc] init];
+            // Use ZappIOSPaneViewController so viewSafeAreaInsetsDidChange re-injects
+            // toolbar metrics when the iPhone inspector sheet is presented (the sheet
+            // changes the VC's safe-area insets, firing the callback with the correct
+            // bar-present inset for the inspector webview). windowPtr+hostSlot wired
+            // immediately below so the callback has context from first invocation.
+            ZappIOSPaneViewController* inspectorVC = [[ZappIOSPaneViewController alloc] init];
+            inspectorVC.windowPtr = (__bridge void*)window;
+            inspectorVC.hostSlot  = d->numeric_id;
             inspectorVC.view.backgroundColor = [UIColor systemBackgroundColor];
 
             // Create the inspector webview INTO inspectorVC.view (pane_role 3),
