@@ -38,10 +38,6 @@ extern bool zapp_window_native_routing(int32_t window_id);
 extern int router_depth(int32_t win);
 extern const char* router_current_url(int32_t win);
 extern void zapp_router_pop_from_native(int32_t window_id);
-// N3a DIAGNOSTIC (Phase-1 evidence): the iPhone split is collapsed → the live
-// stack is collapsedNav, not contentNav. Log both to ground the reconcile.
-extern BOOL zapp_ios_split_is_collapsed_for_window(void* window_ptr);
-extern UINavigationController* zapp_ios_collapsed_nav_for_window(void* window_ptr);
 // N3a per-route identity: set the route url just before create_ext mints the
 // route webview → it renders its OWN fixed route (zapp.route), not the latest
 // broadcast. zapp_ios_toolbar_inject_webview_safe_area gives the route webview
@@ -99,9 +95,6 @@ static void zapp_route_vc_teardown(ZappRouteVC* vc) {
                     animated:(BOOL)animated {
     int nativeDepth = (int)nav.viewControllers.count;
     int wantDepth = router_depth(self.windowId);
-    NSLog(@"[zapp-routing] didShow win=%d nav(this).count=%d wantDepth=%d → %@",
-          self.windowId, nativeDepth, wantDepth,
-          (nativeDepth < wantDepth) ? @"pop_from_native()" : @"(no reflect)");
     if (nativeDepth < wantDepth) {
         // User popped via back button or edge swipe — reflect into routerstate.
         // zapp_router_pop_from_native will call zapp_ios_router_sync, but at
@@ -122,8 +115,6 @@ static void zapp_route_vc_teardown(ZappRouteVC* vc) {
         }
     }
     if (gone.count) {
-        NSLog(@"[zapp-routing]   teardown %d popped route VC(s) (pushedVCs %d→%d)",
-              (int)gone.count, (int)self.pushedVCs.count, (int)(self.pushedVCs.count - gone.count));
         [self.pushedVCs removeObjectsInArray:gone];
     }
 
@@ -145,32 +136,10 @@ static void zapp_route_vc_teardown(ZappRouteVC* vc) {
 // Per-window delegate registry — keeps delegates alive and deduplicated.
 static NSMutableDictionary<NSNumber*, ZappRoutingNavDelegate*>* g_routing_delegates;
 
-// The VISIBLE navigation controller that owns the routing stack. On a COLLAPSED
-// split (iPhone) the live, on-screen stack is collapsedNav — pushing onto the
-// secondary-column contentNav instead makes UIKit nest contentNav INTO
-// collapsedNav (a duplicate presentation that lingers, causing the sticky-route
-// + extra-webview + toolbar-loss bugs). Expanded (iPad) → contentNav is visible.
+// The navigation controller that hosts the route stack. iPad/expanded → contentNav
+// (a clean nav). Task 3 extends this to return the iPhone owned nav when present.
 static UINavigationController* zapp_routing_nav(void* win) {
-    if (zapp_ios_split_is_collapsed_for_window(win)) {
-        UINavigationController* c = zapp_ios_collapsed_nav_for_window(win);
-        if (c) return c;   // visible combined stack
-    }
     return zapp_ios_content_nav_for_window(win);
-}
-
-// N3a DIAGNOSTIC: dump a nav's VC stack (class names) so we can see exactly what
-// the collapse combine retained (sticky / extra-webview investigation).
-static NSString* zapp_nav_vc_dump(UINavigationController* nav) {
-    if (!nav) return @"(nil)";
-    NSMutableArray<NSString*>* names = [NSMutableArray array];
-    for (UIViewController* v in nav.viewControllers) {
-        BOOL hasWeb = [v isKindOfClass:[ZappRouteVC class]]
-            ? (((ZappRouteVC*)v).webview != nil)
-            : NO;
-        [names addObject:[NSString stringWithFormat:@"%@%@",
-            NSStringFromClass([v class]), hasWeb ? @"(web)" : @""]];
-    }
-    return [names componentsJoinedByString:@" / "];
 }
 
 void zapp_ios_router_sync(int32_t windowId) {
@@ -179,24 +148,8 @@ void zapp_ios_router_sync(int32_t windowId) {
     void* win = darwin_window_get_by_numeric_id(windowId);
     if (!win) return;
 
-    UINavigationController* nav = zapp_routing_nav(win);   // visible nav (collapsedNav when collapsed)
+    UINavigationController* nav = zapp_routing_nav(win);
     if (!nav) return;   // no-sidebar window: nav not available yet; deferred
-
-    // --- N3a DIAGNOSTIC (Phase-1 evidence) ---
-    {
-        BOOL collapsed = zapp_ios_split_is_collapsed_for_window(win);
-        UINavigationController* cont = zapp_ios_content_nav_for_window(win);
-        UINavigationController* coll = zapp_ios_collapsed_nav_for_window(win);
-        const char* urlDbg = router_current_url(windowId);
-        NSLog(@"[zapp-routing] SYNC win=%d collapsed=%d routingNav.count=%d (contentNav=%d collapsedNav=%d) want(routerDepth)=%d url=%s",
-              windowId, collapsed,
-              (int)nav.viewControllers.count,
-              (int)(cont ? cont.viewControllers.count : -1),
-              (int)(coll ? coll.viewControllers.count : -1),
-              router_depth(windowId),
-              urlDbg ? urlDbg : "(null)");
-        NSLog(@"[zapp-routing]   routingNav VCs: [%@]", zapp_nav_vc_dump(nav));
-    }
 
     // Install our delegate once per window. Chain any pre-existing delegate
     // (e.g. N1's ZappIOSToolbarNavDelegate) so it keeps receiving callbacks.
@@ -229,8 +182,7 @@ void zapp_ios_router_sync(int32_t windowId) {
     int have = (int)nav.viewControllers.count;
 
     if (have < want) {
-        NSLog(@"[zapp-routing]   PUSH branch: have=%d < want=%d → push 1 ZappRouteVC onto contentNav", have, want);
-        // Push one route VC for the new top entry.
+        // → push 1 ZappRouteVC
         const char* urlC = router_current_url(windowId);
         NSString* url = (urlC && urlC[0]) ? [NSString stringWithUTF8String:urlC] : @"/";
         // N3a per-route identity: the route webview renders THIS url (zapp.route),
@@ -273,14 +225,8 @@ void zapp_ios_router_sync(int32_t windowId) {
         [g_routing_delegates[@(windowId)].pushedVCs addObject:vc];
 
         [nav pushViewController:vc animated:YES];
-        {
-            UINavigationController* coll = zapp_ios_collapsed_nav_for_window(win);
-            NSLog(@"[zapp-routing]   after PUSH: contentNav.count=%d collapsedNav.count=%d",
-                  (int)nav.viewControllers.count, (int)(coll ? coll.viewControllers.count : -1));
-        }
 
     } else if (have > want) {
-        NSLog(@"[zapp-routing]   POP branch: have=%d > want=%d → pop %d VC(s)", have, want, have - want);
         // Pop extra route VCs (programmatic router.pop / router.popToRoot). Each
         // pop fires the delegate's didShowViewController, which tears down the
         // popped route VC's webview via the pushedVCs diff (unified with the
@@ -290,7 +236,5 @@ void zapp_ios_router_sync(int32_t windowId) {
             // Teardown of the popped route VC happens in the delegate's
             // didShowViewController (pushedVCs diff) — unified user/programmatic path.
         }
-    } else {
-        NSLog(@"[zapp-routing]   NOOP: have==want==%d (no native push/pop)", have);
     }
 }
