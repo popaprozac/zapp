@@ -5,7 +5,7 @@
  * Uses a mock bridge installed on globalThis[Symbol.for("zapp.bridge")]
  * so tests run without a real native layer (same pattern as worker.test.ts).
  */
-import { describe, expect, test, beforeEach } from "bun:test";
+import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { createWindowHandle, Window } from "./window";
 import { WindowEvent, eventName } from "./events";
 
@@ -242,4 +242,70 @@ describe("Window.all", () => {
 
 test("ROUTE_CHANGED maps to the window:route-changed wire name", () => {
   expect(eventName(WindowEvent.ROUTE_CHANGED)).toBe("window:route-changed");
+});
+
+// ── M-c: async seed must not clobber a ROUTE_CHANGED that arrived first ────────
+describe("router seed vs event race (M-c)", () => {
+  const EVENT = eventName(WindowEvent.ROUTE_CHANGED);
+
+  test("a ROUTE_CHANGED before the seed resolves wins over the stale seed", async () => {
+    // The seed invoke resolves to a STALE snapshot (root):
+    mock.invokeResult = { url: "/", params: null, canGoBack: false, canGoForward: false };
+    const win = createWindowHandle("win-mc");
+    // A push lands (event) before the async seed promise resolves:
+    mock.fire(EVENT, { windowId: "win-mc", url: "/fresh", params: null, canGoBack: true, canGoForward: false });
+    // Flush the seed's .then microtask(s):
+    await Promise.resolve(); await Promise.resolve();
+    expect(win.router.url).toBe("/fresh");        // event value retained
+    expect(win.router.canGoBack).toBe(true);      // NOT clobbered back to false
+  });
+});
+
+// ── M-a: seed invoke fires once per window ────────────────────────────────────
+test("__router:state seed invoke fires once per window (M-a)", () => {
+  createWindowHandle("win-once");
+  createWindowHandle("win-once");
+  createWindowHandle("win-once");
+  const seeds = mock.invokes.filter((i) => i.method === "__router:state" && i.args.windowId === "win-once");
+  expect(seeds.length).toBe(1);
+});
+
+// ── router.current(): async authoritative read ────────────────────────────────
+test("router.current() resolves the native snapshot and updates the cache", async () => {
+  mock.invokeResult = { url: "/deep", params: { a: 1 }, canGoBack: true, canGoForward: false };
+  const win = createWindowHandle("win-cur");
+  const snap = await win.router.current();
+  expect(snap.url).toBe("/deep");
+  expect(snap.canGoBack).toBe(true);
+  expect(win.router.url).toBe("/deep"); // cache updated too
+});
+
+// ── iOS: Window.create non-sheet falls back to router.push ─────────────────────
+describe("Window.create iOS single-window fallback", () => {
+  const BC = Symbol.for("zapp.bootstrapConfig");
+  const WID = Symbol.for("zapp.windowId");
+  afterEach(() => {
+    delete (globalThis as any)[BC];
+    delete (globalThis as any)[WID];
+  });
+
+  test("create({url,title}) on iOS posts router:push and returns the current window", async () => {
+    // Mirror platform.test.ts's bootstrapConfig shape for os=ios:
+    (globalThis as any)[BC] = { permissions: { platform: "ios" } };
+    (globalThis as any)[WID] = "win-iose";
+    const w = await Window.create({ url: "/detail", title: "Detail" });
+    const pushMsg = mock.posts.map((p) => JSON.parse(p)).find((m) => m.m === "router:push");
+    expect(pushMsg).toEqual({ t: 4, m: "router:push", a: { windowId: "win-iose", url: "/detail", title: "Detail" } });
+    expect(w.id).toBe("win-iose");
+    expect(mock.invokes.some((i) => i.method === "__window:create")).toBe(false);
+  });
+
+  test("create({title}) with no url on iOS does NOT push", async () => {
+    (globalThis as any)[BC] = { permissions: { platform: "ios" } };
+    (globalThis as any)[WID] = "win-iose2";
+    const before = mock.posts.length;
+    await Window.create({ title: "X" });
+    const pushed = mock.posts.slice(before).map((p) => JSON.parse(p)).some((m) => m.m === "router:push");
+    expect(pushed).toBe(false);
+  });
 });

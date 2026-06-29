@@ -1141,6 +1141,10 @@ export interface RouterHandle {
   popToRoot(): void;
   /** Subscribe to ROUTE_CHANGED for this window. Returns an unsubscribe fn. */
   on(handler: (payload: RouteChangedPayload) => void): () => void;
+  /** Resolve the authoritative current route from native (async). Updates the
+   *  cache and returns the snapshot. Use for first render / reload-restore,
+   *  where the synchronously-cached getters may not be seeded yet. */
+  current(): Promise<{ url: string; params: Record<string, unknown> | null; canGoBack: boolean; canGoForward: boolean }>;
   /** Whether the router can go back (at least one entry before current). */
   readonly canGoBack: boolean;
   /** Whether the router can go forward (entries after current exist). */
@@ -1348,7 +1352,7 @@ function createInspectorHandle(
  * Module-scope router state records keyed by windowId. Shared across repeated
  * createWindowHandle calls (same pattern as sidebarState / inspectorState).
  */
-const routerState = new Map<string, { url: string; params: Record<string, unknown> | null; canGoBack: boolean; canGoForward: boolean }>();
+const routerState = new Map<string, { url: string; params: Record<string, unknown> | null; canGoBack: boolean; canGoForward: boolean; version: number }>();
 
 /** Windows whose ROUTE_CHANGED bridge listener is already registered. */
 const routerWired = new Set<string>();
@@ -1357,24 +1361,12 @@ const routerWired = new Set<string>();
 function createRouterHandle(windowId: string): RouterHandle {
   // Seed with defaults on first creation; leave alone if already seeded.
   if (!routerState.has(windowId)) {
-    routerState.set(windowId, { url: "", params: null, canGoBack: false, canGoForward: false });
+    routerState.set(windowId, { url: "", params: null, canGoBack: false, canGoForward: false, version: 0 });
   }
 
-  // Best-effort seed from native (resolves asynchronously; we don't await).
-  // The invoke resolves to the current stack snapshot so the getters are
-  // populated immediately on the next microtask without needing a real event.
-  getBridge().invoke("__router:state", { windowId }).then((r: any) => {
-    if (r && typeof r === "object") {
-      const rec = routerState.get(windowId);
-      if (rec) {
-        if (typeof r.url === "string")              rec.url          = r.url;
-        if (r.params !== undefined)                 rec.params       = r.params ?? null;
-        if (typeof r.canGoBack === "boolean")       rec.canGoBack    = r.canGoBack;
-        if (typeof r.canGoForward === "boolean")    rec.canGoForward = r.canGoForward;
-      }
-    }
-  }).catch(() => { /* best-effort — ignore failures (e.g. route not yet seeded) */ });
-
+  // Wire the live listener + best-effort seed ONCE per window (M-a). The seed is
+  // version-guarded so a push that lands before it resolves is never clobbered
+  // by the stale snapshot (M-c).
   if (!routerWired.has(windowId)) {
     const bridge = getBridge();
     bridge.on(eventName(WindowEvent.ROUTE_CHANGED), (payload: any) => {
@@ -1385,9 +1377,23 @@ function createRouterHandle(windowId: string): RouterHandle {
           rec.params       = payload.params ?? null;
           rec.canGoBack    = payload.canGoBack;
           rec.canGoForward = payload.canGoForward;
+          rec.version++;
         }
       }
     });
+    const seedVersion = routerState.get(windowId)!.version;
+    bridge.invoke("__router:state", { windowId }).then((r: any) => {
+      if (r && typeof r === "object") {
+        const rec = routerState.get(windowId);
+        // Only apply the seed if no ROUTE_CHANGED arrived meanwhile (M-c).
+        if (rec && rec.version === seedVersion) {
+          if (typeof r.url === "string")              rec.url          = r.url;
+          if (r.params !== undefined)                 rec.params       = r.params ?? null;
+          if (typeof r.canGoBack === "boolean")       rec.canGoBack    = r.canGoBack;
+          if (typeof r.canGoForward === "boolean")    rec.canGoForward = r.canGoForward;
+        }
+      }
+    }).catch(() => { /* best-effort — ignore failures (e.g. route not yet seeded) */ });
     routerWired.add(windowId);
   }
 
@@ -1425,6 +1431,23 @@ function createRouterHandle(windowId: string): RouterHandle {
     get canGoForward(): boolean                            { return routerState.get(windowId)!.canGoForward; },
     get url():          string                             { return routerState.get(windowId)!.url; },
     get params():       Record<string, unknown> | null     { return routerState.get(windowId)!.params; },
+    async current() {
+      const r: any = await getBridge().invoke("__router:state", { windowId });
+      const rec = routerState.get(windowId);
+      if (rec && r && typeof r === "object") {
+        if (typeof r.url === "string")           rec.url          = r.url;
+        if (r.params !== undefined)              rec.params       = r.params ?? null;
+        if (typeof r.canGoBack === "boolean")    rec.canGoBack    = r.canGoBack;
+        if (typeof r.canGoForward === "boolean") rec.canGoForward = r.canGoForward;
+        rec.version++; // authoritative read counts as a write so a racing seed won't clobber it
+      }
+      return {
+        url:          rec?.url ?? "",
+        params:       rec?.params ?? null,
+        canGoBack:    rec?.canGoBack ?? false,
+        canGoForward: rec?.canGoForward ?? false,
+      };
+    },
   };
 }
 
@@ -1631,12 +1654,29 @@ export const Window = {
     // sidebar/inspector panes. So a non-sheet create on iOS is a no-op that
     // returns the current (main) window. iPad multi-window (UIScene) is planned.
     if (Platform.isIOS && opts?.asSheetOf === undefined) {
-      console.warn(
-        "[zapp] iOS is single-window — Window.create() without `asSheetOf` is a no-op " +
-        "(returns the current window). Use a sheet (`asSheetOf`) or a sidebar/inspector " +
-        "pane for secondary surfaces; iPad multi-window is planned.",
-      );
-      return Window.current();
+      const current = Window.current();
+      if (opts?.url) {
+        // iOS is single-window: a non-sheet create becomes an in-window route
+        // push. The logical stack + ROUTE_CHANGED + content-swap all work on the
+        // single webview; native UINavigationController routing is a later cycle.
+        console.warn(
+          "[zapp] iOS is single-window — Window.create() without `asSheetOf` became an " +
+          "in-window route push (router.push). Use a sheet (`asSheetOf`) for a modal " +
+          "surface; iPad multi-window is planned.",
+        );
+        current.router.push({
+          url: opts.url,
+          ...(opts.title !== undefined ? { title: opts.title } : {}),
+          ...(opts.presentation !== undefined ? { presentation: opts.presentation } : {}),
+        });
+      } else {
+        console.warn(
+          "[zapp] iOS is single-window — Window.create() without `asSheetOf` is a no-op " +
+          "(returns the current window). Use a sheet (`asSheetOf`) or a sidebar/inspector " +
+          "pane for secondary surfaces; iPad multi-window is planned.",
+        );
+      }
+      return current;
     }
     // Normalize asSheetOf to its string window ID. The native side
     // resolves the JS-visible "win-0xPTR" string back to its internal
