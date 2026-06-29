@@ -667,6 +667,11 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
                                                                    style:UIBarButtonItemStylePlain
                                                                   target:tgt
                                                                   action:@selector(buttonTapped:)];
+                        // VoiceOver label for icon-only bar items. We set
+                        // accessibilityLabel only (not title) — setting both image
+                        // and title on a UIBarButtonItem causes UIKit to render the
+                        // title text in the bar instead of the icon.
+                        if (subLabel.length) subItem.accessibilityLabel = subLabel;
                     } else {
                         subItem = [[UIBarButtonItem alloc] initWithTitle:subLabel
                                                                    style:UIBarButtonItemStylePlain
@@ -708,6 +713,12 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
                                                         style:UIBarButtonItemStylePlain
                                                        target:tgt
                                                        action:@selector(toggleTapped:)];
+                // VoiceOver label. Not setting title — UIBarButtonItem with both
+                // image and title renders title text in the bar (icon-only broken).
+                NSString* toggleSidebarLabel = [def[@"label"] isKindOfClass:[NSString class]]
+                    ? def[@"label"] : @"";
+                item.accessibilityLabel = toggleSidebarLabel.length
+                    ? toggleSidebarLabel : @"Toggle Sidebar";
                 // Retain the target via associated object (UIBarButtonItem.target is weak).
                 objc_setAssociatedObject(item, &kZappToolbarToggleTargetKey, tgt,
                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -722,6 +733,11 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
                                                         style:UIBarButtonItemStylePlain
                                                        target:tgt
                                                        action:@selector(toggleTapped:)];
+                // VoiceOver label. Not setting title — same reason as toggleSidebar.
+                NSString* toggleInspectorLabel = [def[@"label"] isKindOfClass:[NSString class]]
+                    ? def[@"label"] : @"";
+                item.accessibilityLabel = toggleInspectorLabel.length
+                    ? toggleInspectorLabel : @"Toggle Inspector";
                 objc_setAssociatedObject(item, &kZappToolbarToggleTargetKey, tgt,
                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
@@ -764,6 +780,9 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
                         item = [[UIBarButtonItem alloc] initWithImage:image
                                                                style:UIBarButtonItemStylePlain
                                                               target:nil action:nil];
+                        // VoiceOver label for icon-only bar items. Not setting title
+                        // — UIBarButtonItem renders title text (not icon) when both are set.
+                        if (label.length) item.accessibilityLabel = label;
                     } else {
                         item = [[UIBarButtonItem alloc] initWithTitle:label
                                                                style:UIBarButtonItemStylePlain
@@ -789,6 +808,9 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
                                                             style:UIBarButtonItemStylePlain
                                                            target:tgt
                                                            action:@selector(buttonTapped:)];
+                    // VoiceOver label for icon-only bar items. Not setting title
+                    // — UIBarButtonItem renders title text (not icon) when both are set.
+                    if (label.length) item.accessibilityLabel = label;
                 } else {
                     item = [[UIBarButtonItem alloc] initWithTitle:label
                                                             style:UIBarButtonItemStylePlain

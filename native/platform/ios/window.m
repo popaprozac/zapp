@@ -242,6 +242,21 @@ extern void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot,
     zapp_toolbar_inject_metrics(_windowPtr, _hostSlot, false);
 }
 
+- (void)viewDidAppear:(BOOL)animated {
+    [super viewDidAppear:animated];
+    // Re-inject toolbar metrics once per appearance (sheet present, tab return,
+    // etc.) to cover the inspector sheet's initial present, where
+    // viewSafeAreaInsetsDidChange fires before the sheet's geometry settles.
+    // One-tick defer so the sheet's final geometry / safeAreaInsets are settled.
+    // Guard: skip until the VC is wired to a window (materialize sets these).
+    if (!_windowPtr || _hostSlot < 0) return;
+    void* winPtr = _windowPtr;
+    int32_t slot = _hostSlot;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        zapp_toolbar_inject_metrics(winPtr, slot, false);
+    });
+}
+
 @end
 
 // Root VC for the no-sidebar window. Inherits ZappIOSPaneViewController so that
