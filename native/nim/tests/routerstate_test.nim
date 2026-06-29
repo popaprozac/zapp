@@ -129,11 +129,24 @@ block:
   doAssert routerCurrentUrl(902) == "/section-a", "seed after empty+replace: no-op"
   doAssert routerDepth(902) == 1, "seed after empty+replace: depth unchanged"
 
-  # routerSeedEmpty on existing window: no-op
+  # routerSeedEmpty on existing window: OVERWRITES (not a no-op).
+  # This is the fix: unconditional overwrite so launch stays sidebar-only.
   routerSeedEmpty(902)
-  doAssert routerDepth(902) == 1, "routerSeedEmpty on existing: no-op"
+  doAssert routerDepth(902) == 0, "routerSeedEmpty on existing: must overwrite to depth 0"
+  doAssert routerCurrentUrl(902) == "", "routerSeedEmpty on existing: url cleared"
 
   routerClear(902)
+
+# Window 904: regression — real runtime ordering.
+# createWindow calls routerSeed("/") first, THEN ios/window.m calls
+# routerSeedEmpty. routerSeedEmpty MUST overwrite so launch shows sidebar only.
+block:
+  routerSeed(904, "/")
+  doAssert routerDepth(904) == 1, "sanity: routerSeed gives depth 1"
+  routerSeedEmpty(904)
+  doAssert routerDepth(904) == 0, "routerSeedEmpty must overwrite an earlier routerSeed"
+  doAssert routerCurrentUrl(904) == "", "routerSeedEmpty must clear url"
+  routerClear(904)
 
 # Window 903: owned-nav full flow simulation
 #   seed empty → popToRoot (no-op) → replace(section) → push(detail) → pop

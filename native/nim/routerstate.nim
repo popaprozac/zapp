@@ -20,11 +20,11 @@ proc routerSeed*(win: int32, url: string) =
 
 proc routerSeedEmpty*(win: int32) {.exportc: "zapp_router_seed_empty", cdecl.} =
   ## Seed with an EMPTY stack (depth=0) for owned-nav windows — the sidebar is
-  ## shown at launch with no content pushed. No-op if already present.
-  ## Called from ios/window.m after zapp_ios_register_owned_nav; the subsequent
-  ## routerSeed(id, "/") in createWindow (window.nim) is then a no-op (hasKey guard).
-  if not gRoutes.hasKey(win):
-    gRoutes[win] = RouteState(entries: @[], cur: 0)
+  ## shown at launch with no content pushed. UNCONDITIONALLY overwrites any
+  ## earlier seed (e.g. the routerSeed("/") that createWindow runs first).
+  ## Called from ios/window.m after zapp_ios_register_owned_nav, which happens
+  ## after createWindow's routerSeed — so this must overwrite, not guard.
+  gRoutes[win] = RouteState(entries: @[], cur: 0)
 
 proc routerClear*(win: int32) =
   gRoutes.del(win)
@@ -32,9 +32,14 @@ proc routerClear*(win: int32) =
 proc routerPush*(win: int32, url, params: string) =
   if not gRoutes.hasKey(win): routerSeed(win, "/")
   var s = gRoutes[win]
-  s.entries.setLen(s.cur + 1)               # truncate forward
-  s.entries.add RouteEntry(url: url, params: params)
-  s.cur = s.entries.high
+  if s.entries.len == 0:
+    # Empty state (owned-nav, pre-first-select): first push seeds the initial entry.
+    s.entries = @[RouteEntry(url: url, params: params)]
+    s.cur = 0
+  else:
+    s.entries.setLen(s.cur + 1)               # truncate forward
+    s.entries.add RouteEntry(url: url, params: params)
+    s.cur = s.entries.high
   gRoutes[win] = s
 
 proc routerReplace*(win: int32, url, params: string) =
