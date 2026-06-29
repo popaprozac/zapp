@@ -25,6 +25,13 @@
     <key>UILaunchScreen</key>
     <dict/>
 
+    <!-- Universal: 1=iPhone, 2=iPad — simctl honours this for hand-built .app bundles -->
+    <key>UIDeviceFamily</key>
+    <array>
+        <integer>1</integer>
+        <integer>2</integer>
+    </array>
+
     <key>UIRequiredDeviceCapabilities</key>
     <array>
         <string>arm64</string>

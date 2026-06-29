@@ -4,14 +4,21 @@
 
 ### iPhone (collapsed)
 
-- [ ] (a) App starts on the **Sidebar** (Sections list) — not the Content VC.
-- [ ] (b) Tap a section → Content slides in with a **back button** to the Sidebar.
-- [ ] (c) **Edge-swipe from the left pops back to the Sidebar** — zero custom code.
-- [ ] (d) "Push detail →" pushes Detail with a **back button** to Content.
-- [ ] (e) **Edge-swipe pops Detail** back to Content — zero custom code.
-- [ ] (f) Toolbar items are **correct per screen** (Sidebar: Compose; Content: Share+Filter; Detail: Trash) with no duplication and no stale items across push/pop.
+> **PASS** — iPhone (collapsed): idiomatic UIKit gave sidebar-first collapse, native back button,
+> edge-swipe-back, and correct per-VC toolbar (compose / filter+share / trash — no duplication,
+> no stale) with ZERO custom code.
+
+- [x] (a) App starts on the **Sidebar** (Sections list) — not the Content VC.
+- [x] (b) Tap a section → Content slides in with a **back button** to the Sidebar.
+- [x] (c) **Edge-swipe from the left pops back to the Sidebar** — zero custom code.
+- [x] (d) "Push detail →" pushes Detail with a **back button** to Content.
+- [x] (e) **Edge-swipe pops Detail** back to Content — zero custom code.
+- [x] (f) Toolbar items are **correct per screen** (Sidebar: Compose; Content: Share+Filter; Detail: Trash) with no duplication and no stale items across push/pop.
 
 ### iPad (expanded)
+
+> **NOT YET TESTED** — iPad: first run was compact (iPhone-compat mode); re-test after the
+> `UIDeviceFamily=[1,2]` universal fix to exercise the expanded side-by-side split.
 
 - [ ] (g) Sidebar + Content appear **side-by-side** on launch.
 - [ ] (h) Tapping a section updates the Content column label in place; sidebar stays.
