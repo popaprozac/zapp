@@ -257,6 +257,33 @@ extern void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot,
     });
 }
 
+// T7: Re-inject chrome metrics AFTER the rotation transition completes.
+// viewSafeAreaInsetsDidChange fires DURING the transition with intermediate
+// insets; the coordinator completion block runs after the animation finishes
+// and safeAreaInsets reflect the final orientation — that value wins.
+// Capture scalars/void* into locals (not self) so the block is MRC-safe and
+// avoids any inadvertent self-retain under non-ARC translation units.
+- (void)viewWillTransitionToSize:(CGSize)size
+       withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator {
+    [super viewWillTransitionToSize:size withTransitionCoordinator:coordinator];
+    if (!_windowPtr || _hostSlot < 0) return;
+    void* wp = _windowPtr;
+    int32_t hs = _hostSlot;
+    if (coordinator) {
+        [coordinator animateAlongsideTransition:nil
+                                     completion:^(id<UIViewControllerTransitionCoordinatorContext> ctx){
+            (void)ctx;
+            // Post-rotation: safeAreaInsets now reflect the new orientation. Re-measure.
+            zapp_toolbar_inject_metrics(wp, hs, false);
+        }];
+    } else {
+        // No animated coordinator (e.g. non-animated size change): one-tick defer.
+        dispatch_async(dispatch_get_main_queue(), ^{
+            zapp_toolbar_inject_metrics(wp, hs, false);
+        });
+    }
+}
+
 @end
 
 // Root VC for the no-sidebar window. Inherits ZappIOSPaneViewController so that
