@@ -72,20 +72,43 @@ export function renderMainPane(app: HTMLElement) {
     } catch { /* toolbar not ready — ignore */ }
   };
 
-  // Render on every route change (sidebar click, toolbar back/forward, etc.).
+  // N3a per-route identity. On iOS native routing a PUSHED route VC's webview is
+  // created with zapp.route set → it renders ITS fixed route and ignores
+  // ROUTE_CHANGED (it's a depth snapshot). The ROOT content webview (no
+  // zapp.route) re-renders only on LATERAL changes (section switch via replace /
+  // collapse-to-root via popToRoot); drill-down push/pop is handled by the
+  // pushed route webview. On desktop (N2b) there is one webview and content
+  // swaps on every change.
+  const g = globalThis as unknown as Record<symbol, unknown>;
+  const myRoute = g[Symbol.for("zapp.route")] as string | undefined;
+
   win.router.on((e) => {
-    renderRoute(e.url);
+    if (Platform.isIOS) {
+      if (myRoute) return;            // fixed-route webview — never re-renders
+      // Root content webview re-renders only when the stack is at its ROOT depth
+      // (canGoBack === false → a lateral section switch via replace, or a
+      // collapse-to-root via popToRoot/pop). Drill-down pushes (canGoBack === true)
+      // are owned by the pushed route VC's own webview, so the root stays put.
+      if (!e.canGoBack) renderRoute(e.url);
+    } else {
+      renderRoute(e.url);             // desktop (N2b): content swaps on every change
+    }
     syncToolbar(e.canGoBack, e.canGoForward);
   });
 
-  // First render: show home immediately (cache may be unseeded), then correct to
-  // the authoritative route (restores a deep route after reload).
-  renderRoute(win.router.url);
-  syncToolbar(win.router.canGoBack, win.router.canGoForward);
-  win.router.current().then((snap) => {
-    renderRoute(snap.url);
-    syncToolbar(snap.canGoBack, snap.canGoForward);
-  }).catch(() => { /* best-effort restore */ });
+  if (Platform.isIOS && myRoute) {
+    // Pushed route VC: render its own fixed route once.
+    renderRoute(myRoute);
+  } else {
+    // Root content webview (or desktop): show the current route immediately,
+    // then correct to the authoritative route (restores a deep route on reload).
+    renderRoute(win.router.url);
+    syncToolbar(win.router.canGoBack, win.router.canGoForward);
+    win.router.current().then((snap) => {
+      renderRoute(snap.url);
+      syncToolbar(snap.canGoBack, snap.canGoForward);
+    }).catch(() => { /* best-effort restore */ });
+  }
 
   // N3a demo: on iOS (nativeRouting:true) this pushes a real native VC;
   // on macOS it's an in-window route (N2b). Isolated from the section nav —

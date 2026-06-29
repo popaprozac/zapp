@@ -746,6 +746,13 @@ static ZappIOSNavDelegate* zapp_ios_shared_nav_delegate = nil;
 // iOS equivalent yet (vibrancy is UIBlurEffect/UIVisualEffectView — Phase 2);
 // both are accepted to keep the signature identical and ignored via (void).
 
+// N3a: per-route URL identity. routing.m sets this immediately before minting a
+// pushed route VC's webview; create_ext consumes it ONCE as a document-start
+// zapp.route global so that webview renders its OWN fixed route (not the latest
+// broadcast route). Main-thread only; set + consume are synchronous in one call.
+static const char* g_pending_route_url = NULL;
+void zapp_ios_set_pending_route_url(const char* url) { g_pending_route_url = url; }
+
 void darwin_webview_create_ext(void* window_ptr, bool inspectable, bool accept_first_mouse,
                                const char* url_override, int32_t numeric_id_pre_alloc,
                                bool transparent_background,
@@ -847,6 +854,18 @@ void darwin_webview_create_ext(void* window_ptr, bool inspectable, bool accept_f
             identity_id];
         [ucc addUserScript:[[WKUserScript alloc] initWithSource:windowIdScript
             injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
+    }
+
+    // zapp.route (N3a): a pushed route VC's webview renders its OWN fixed route
+    // and ignores ROUTE_CHANGED — consume the pending url routing.m set just
+    // before this call. Document-start so it is visible at the app's first paint.
+    if (g_pending_route_url && g_pending_route_url[0]) {
+        NSString* routeStr = [NSString stringWithUTF8String:darwin_escape_js_string(g_pending_route_url)];
+        [ucc addUserScript:[[WKUserScript alloc] initWithSource:
+            [NSString stringWithFormat:
+                @"(function(){globalThis[Symbol.for('zapp.route')]='%@';})();", routeStr]
+            injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
+        g_pending_route_url = NULL;   // consume once
     }
 
     // Pane role marker — lets the runtime branch on the pane type at bootstrap

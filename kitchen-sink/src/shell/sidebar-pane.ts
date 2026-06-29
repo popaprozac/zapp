@@ -24,13 +24,23 @@ export function renderSidebarPane(app: HTMLElement) {
     </div>`;
   const items = app.querySelectorAll<HTMLButtonElement>(".nav-item");
 
-  // Click → router.push the section's route. The native stack fans out
-  // ROUTE_CHANGED to every pane; we don't toggle .active here (see below).
+  // Click → navigate to the section's route.
+  //   • Desktop (N2b): router.push — browser-history navigation.
+  //   • iOS native routing: sidebar selection is LATERAL (a top-level switch),
+  //     NOT a drill-down. popToRoot collapses any pushed route VC, then replace
+  //     sets the section as the root — depth stays 1, so no native VC stacks.
+  //     Genuine drill-downs (e.g. /detail) still use router.push → a native VC.
   items.forEach((el) =>
     el.addEventListener("click", () => {
-      Window.current().router.push(routeForSection(el.dataset.id!));
-      // iPhone master-detail: reveal the content column full-screen.
-      if (Platform.isIOS) Window.current().sidebar?.showContent();
+      const route = routeForSection(el.dataset.id!);
+      const r = Window.current().router;
+      if (Platform.isIOS) {
+        r.popToRoot();      // collapse any drill-down back to the section root
+        r.replace(route);   // set this section as the (lateral) root route
+        Window.current().sidebar?.showContent(); // reveal the content column
+      } else {
+        r.push(route);
+      }
     }),
   );
 

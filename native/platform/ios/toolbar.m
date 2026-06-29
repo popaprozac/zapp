@@ -185,6 +185,35 @@ static const char kZappToolbarNavDelegateKey = 0;
 // willShowViewController: which re-injects after the bar becomes visible.
 void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_user_script);
 
+// N3a: inject the --zapp-* safe-area vars into a SINGLE arbitrary webview — a
+// pushed route VC's webview, which is NOT a registered pane slot, so
+// zapp_toolbar_inject_metrics (which only reaches zapp_ios_content_webview_for_slot)
+// never touches it → it would otherwise render with 0px insets. titlebar =
+// the webview's own safeAreaInsets.top (status bar + dynamic island + nav bar);
+// toolbar row = 0 (route pages have no zapp-toolbar row). Must run AFTER the VC
+// is laid out so safeAreaInsets is valid — routing.m calls it from the route
+// VC's viewDidLayoutSubviews (idempotent; re-runs on rotation/resize).
+void zapp_ios_toolbar_inject_webview_safe_area(WKWebView* wv) {
+    if (!wv) return;
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{ zapp_ios_toolbar_inject_webview_safe_area(wv); });
+        return;
+    }
+    UIEdgeInsets sa = wv.safeAreaInsets;
+    CGFloat top = sa.top < 0 ? 0 : sa.top;
+    NSString* js = [NSString stringWithFormat:
+        @"(function(){try{var r=document.documentElement;if(r){"
+        @"r.style.setProperty('--zapp-titlebar-height','%.0fpx');"
+        @"r.style.setProperty('--zapp-toolbar-height','0px');"
+        @"r.style.setProperty('--zapp-safe-area-top','%.0fpx');"
+        @"r.style.setProperty('--zapp-safe-area-left','%.0fpx');"
+        @"r.style.setProperty('--zapp-safe-area-right','%.0fpx');"
+        @"r.style.setProperty('--zapp-safe-area-bottom','%.0fpx');"
+        @"}}catch(e){}})();",
+        top, sa.top, sa.left, sa.right, sa.bottom];
+    [wv evaluateJavaScript:js completionHandler:nil];
+}
+
 @interface ZappIOSToolbarNavDelegate : NSObject <UINavigationControllerDelegate>
 @property (nonatomic, assign) void* windowPtr;   // for re-apply lookup
 @end
