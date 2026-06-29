@@ -1,71 +1,72 @@
-// iOS native routing (N3a risk gate). Drives contentNav as a UINavigationController
-// routing stack: routerstate (Nim) is authoritative; zapp_ios_router_sync reconciles
-// the native VC stack to match; a nav delegate routes user pops back to Nim.
+// iOS native routing — idiomatic UIKit seam (R1' RISK GATE, Task 1).
 //
-// Architecture:
-//   - routerDepth(win) = desired VC stack depth (1 = root only, N = root + routes)
-//   - nav.viewControllers.count = current native depth
-//   - push: want > have → push one ZappRouteVC with a fresh webview
-//   - pop: want < have → pop extra VCs + brk-1 teardown on their webviews
-//   - ZappRoutingNavDelegate.didShow: detect user-initiated pops (swipe/back)
-//     and reflect them into routerstate (which re-syncs, but depth now matches → no-op)
+// Drives the LIVE content-nav (contentVC.navigationController) directly:
+//   push → [nav pushViewController:vc animated:YES]
+//   pop  → [nav popViewControllerAnimated:YES]
+//   popToRoot → [nav popToViewController:contentVC animated:NO]
 //
-// Gotchas addressed:
-//   - Delegate composition: prev-chain + forwardingTargetForSelector: keeps N1's
-//     ZappIOSToolbarNavDelegate working after we set ourselves as nav.delegate.
-//   - brk-1 teardown: stopLoading + nil delegates + removeScriptMessageHandler
-//     before the VC is released (reference_wkwebview_teardown recipe).
-//   - Swipe-back: route VCs on contentNav inherit sidebar.m's re-arm (rearm is on
-//     collapsedNav, not contentNav). contentNav has a visible bar (hidden), so iOS
-//     disables interactivePopGestureRecognizer by default; re-arm it here.
-//   - Loop guard: zapp_router_pop_from_native calls zapp_ios_router_sync, but by
-//     then native depth == Nim depth → sync is a no-op.
+// The chrome-agnostic live-nav resolver (`zapp_route_content_nav`) checks the
+// owned-nav chrome first (iPhone, present in T1) then the split content-vc
+// (iPad). T2 deletes the owned-nav fork + fallback.
+//
+// Deleted from N3a: zapp_ios_router_sync (reconcile), ZappRoutingNavDelegate
+// (old delegate with pushedVCs/prev chain/baseline math), zapp_routing_nav,
+// g_routing_delegates, and the owned-nav extern zapp_ios_owned_nav_for_window.
+// The zapp_ios_toolbar_reapply_for_window call that lived in the old delegate's
+// didShow is also gone — the new delegate does not reapply the toolbar.
+//
+// Kept verbatim: ZappRouteVC @interface/@implementation + viewDidLayoutSubviews,
+// zapp_route_vc_teardown, and all externs the seam still needs.
 
 #import <UIKit/UIKit.h>
 #import <WebKit/WebKit.h>
 
 // darwin_webview_create_ext is defined in ios/webview.m (same iOS link unit).
-// Include the shared header rather than re-declaring `extern` — the
-// ios-platform-parity lint can't parse the multi-line definition so a bare
-// `extern` would trip a false "unsatisfied cross-layer extern" violation.
-// (Same pattern as ios/window.m:40.)
 #include "../darwin/webview.h"
 
 // --- Nim/native externs ---
 extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
-extern UINavigationController* zapp_ios_content_nav_for_window(void* window_ptr);
-// R1: owned-nav chrome (iphonenav.m). nil on iPad/non-phone or before init.
-extern UINavigationController* zapp_ios_owned_nav_for_window(void* window_ptr);
-// Defined in ios/toolbar.m — re-applies the registered toolbar entry to the
-// correct nav for the window. No-op when no toolbar is registered. Called here
-// to re-attach items after a push/pop on the owned nav (T4: N3a toolbar-drop fix).
-extern void zapp_ios_toolbar_reapply_for_window(void* window_ptr);
-extern UIViewController* zapp_ios_owned_content_vc_for_window(void* window_ptr);
 extern bool zapp_window_native_routing(int32_t window_id);
 extern int router_depth(int32_t win);
-extern const char* router_current_url(int32_t win);
 extern void zapp_router_pop_from_native(int32_t window_id);
-// N3a per-route identity: set the route url just before create_ext mints the
-// route webview → it renders its OWN fixed route (zapp.route), not the latest
-// broadcast. zapp_ios_toolbar_inject_webview_safe_area gives the route webview
-// the --zapp-* insets that the registered-slot metrics pass never reaches.
+// Per-route identity: set the route url just before create_ext mints the route
+// webview → it renders its OWN fixed route (zapp.route), not the latest broadcast.
 extern void zapp_ios_set_pending_route_url(const char* url);
+// Inject --zapp-* safe-area vars into a route VC's webview after layout.
 extern void zapp_ios_toolbar_inject_webview_safe_area(WKWebView* wv);
 
+// Chrome-agnostic content-VC resolution (T2 deletes the owned-nav fork).
+// sidebar.m: the authoritative secondary-column content VC stored at register time.
+extern UIViewController* zapp_ios_content_vc_for_window(void* window_ptr);
+// iphonenav.m: the owned-nav chrome's content VC (nil on iPad / non-phone).
+// Deleted in T2 when the owned-nav chrome is removed.
+extern UIViewController* zapp_ios_owned_content_vc_for_window(void* window_ptr);
+
 // Route VC: a plain UIViewController hosting its own WKWebView.
-// Tagged so reconcile can distinguish route VCs from the root contentVC
-// and apply brk-1 teardown on pop.
+// Tagged so the delegate can distinguish route VCs from the root contentVC.
 @interface ZappRouteVC : UIViewController
 @property (nonatomic, weak) WKWebView* webview;
 @end
+
+// Forward declaration of the teardown helper — defined below; referenced from
+// viewDidDisappear: which appears before the static definition.
+static void zapp_route_vc_teardown(ZappRouteVC* vc);
+
 @implementation ZappRouteVC
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
-    // N3a: route VCs aren't registered pane slots, so the toolbar metrics pass
-    // never injects their --zapp-* safe-area vars (→ content under the nav).
-    // Inject here, after layout, so safeAreaInsets is valid. Idempotent; re-runs
-    // on rotation/resize and once the web content commits.
+    // Route VCs aren't registered pane slots, so the toolbar metrics pass never
+    // injects their --zapp-* safe-area vars (content under the nav). Inject
+    // here, after layout, so safeAreaInsets is valid. Idempotent.
     if (self.webview) zapp_ios_toolbar_inject_webview_safe_area(self.webview);
+}
+- (void)viewDidDisappear:(BOOL)animated {
+    [super viewDidDisappear:animated];
+    // Self-teardown: brk-1 (stopLoading + nil delegates + remove "zapp" handler)
+    // when this VC is popped (back button / swipe / programmatic pop).
+    if (self.isMovingFromParentViewController || self.isBeingDismissed) {
+        zapp_route_vc_teardown(self);
+    }
 }
 @end
 
@@ -79,210 +80,154 @@ static void zapp_route_vc_teardown(ZappRouteVC* vc) {
     wv.navigationDelegate = nil;
     wv.UIDelegate = nil;
     @try {
-        // Handler name is "zapp" (ios/webview.m:889).
         [wv.configuration.userContentController removeScriptMessageHandlerForName:@"zapp"];
     } @catch (__unused id e) {}
 }
 
-// One delegate per window's contentNav: detects user-initiated pops (back
-// button, edge swipe) and reflects them into routerstate. Composes with N1's
-// toolbar delegate by chaining `prev` + forwarding unknown selectors. Owns the
-// list of pushed route VCs so it can tear down whichever ones get popped — by
-// the user OR programmatically — via the unified didShow diff.
-@interface ZappRoutingNavDelegate : NSObject <UINavigationControllerDelegate>
+// --- Chrome-agnostic live-nav resolver ------------------------------------
+//
+// Returns the UINavigationController that the content VC currently lives in.
+// On iPhone with owned-nav chrome: the owned-nav hosts contentVC directly.
+// On iPad / split: contentVC is the root of contentNav (sidebar.m).
+// T2 removes the owned-nav fork once the chrome is deleted.
+static UINavigationController* zapp_route_content_nav(void* win) {
+    // iPhone owned-nav chrome (T2 deletes this fork).
+    UIViewController* contentVC = zapp_ios_owned_content_vc_for_window(win);
+    // Split chrome (iPad) — fallback when owned-nav is absent.
+    if (!contentVC) contentVC = zapp_ios_content_vc_for_window(win);
+    return contentVC.navigationController;   // LIVE nav — the fix vs N3a
+}
+
+// --- Single clean nav delegate --------------------------------------------
+//
+// One ZappRouteNavDelegate per content nav, installed once. didShow detects
+// a user-initiated pop (native route-VC depth < routerstate depth) and
+// reflects it into Nim. Route VCs self-teardown via viewDidDisappear: so
+// no external pushedVCs list is needed.
+//
+// Distinguishing programmatic vs user pop:
+//   Programmatic: routerstate mutated FIRST → by didShow the depths match → no-op.
+//   User back/swipe: VC popped first → didShow sees native < router → pop_from_native.
+//
+// This delegate lives on contentVC.navigationController (the live nav). It does
+// NOT conflict with ZappIOSToolbarNavDelegate, which lives on collapsedNav (the
+// combined collapsed stack on iPhone) — a different nav controller entirely.
+@interface ZappRouteNavDelegate : NSObject <UINavigationControllerDelegate>
 @property (nonatomic, assign) int32_t windowId;
-@property (nonatomic, weak) id<UINavigationControllerDelegate> prev;
-@property (nonatomic, strong) NSMutableArray<ZappRouteVC*>* pushedVCs;  // strong: hold until torn down
 @end
-
-@implementation ZappRoutingNavDelegate
-
+@implementation ZappRouteNavDelegate
 - (void)navigationController:(UINavigationController*)nav
-       didShowViewController:(UIViewController*)vc
-                    animated:(BOOL)animated {
-    int nativeDepth = (int)nav.viewControllers.count;
-    // R1: compare native depth against baseline + routerDepth so the owned-nav's
-    // sidebar root (baseline=1) is accounted for. On iPad (baseline=0) this is
-    // identical to the previous check.
-    void* win = darwin_window_get_by_numeric_id(self.windowId);
-    int baseline = (win && zapp_ios_owned_nav_for_window(win) != nil) ? 1 : 0;
-    int wantDepth = baseline + router_depth(self.windowId);
-    if (nativeDepth < wantDepth) {
+       didShowViewController:(UIViewController*)vc animated:(BOOL)animated {
+    (void)vc; (void)animated;
+    // Count only ZappRouteVC instances so the sidebar root on collapsed iPhone
+    // doesn't skew the delta.
+    int nativeRouteDepth = 0;
+    for (UIViewController* v in nav.viewControllers)
+        if ([v isKindOfClass:[ZappRouteVC class]]) nativeRouteDepth++;
+    // routerstate depth 1 = content VC (0 route VCs on top of it).
+    int wantRouteDepth = (int)router_depth(self.windowId) - 1;
+    if (wantRouteDepth < 0) wantRouteDepth = 0;
+    if (nativeRouteDepth < wantRouteDepth) {
         // User popped via back button or edge swipe — reflect into routerstate.
-        // zapp_router_pop_from_native will call zapp_ios_router_sync, but at
-        // that point nativeDepth == wantDepth-1 == new wantDepth → no-op sync.
+        // zapp_router_pop_from_native pops routerstate + emits ROUTE_CHANGED.
+        // It does NOT call any native op (loop broken).
         zapp_router_pop_from_native(self.windowId);
     }
-
-    // Unified teardown: any route VC we pushed that is no longer in the nav has
-    // been popped — by the user (back/swipe, which never hits the sync pop
-    // branch) OR programmatically. Tear down its webview now so it doesn't leak
-    // (the VC + WKWebView would otherwise stay alive in collapsedNav). Strong
-    // pushedVCs held them until this point.
-    NSMutableArray<ZappRouteVC*>* gone = [NSMutableArray array];
-    for (ZappRouteVC* rvc in self.pushedVCs) {
-        if (![nav.viewControllers containsObject:rvc]) {
-            zapp_route_vc_teardown(rvc);
-            [gone addObject:rvc];
-        }
-    }
-    if (gone.count) {
-        [self.pushedVCs removeObjectsInArray:gone];
-    }
-
-    // T4: re-apply the toolbar to the owned nav's NEW topViewController after
-    // any push or pop. On the owned nav, zapp_ios_toolbar_apply_to_nav targets
-    // nav.topViewController — so items must be re-stamped whenever topVC changes.
-    // This mirrors sidebar.m's collapse/expand reapply calls.
-    // Guard: only when this window uses the owned-nav chrome (iPhone R1).
-    if (win && zapp_ios_owned_nav_for_window(win)) {
-        zapp_ios_toolbar_reapply_for_window(win);
-    }
-
-    if ([self.prev respondsToSelector:_cmd]) {
-        [self.prev navigationController:nav didShowViewController:vc animated:animated];
-    }
 }
-
-- (BOOL)respondsToSelector:(SEL)sel {
-    return [super respondsToSelector:sel] || [self.prev respondsToSelector:sel];
-}
-
-- (id)forwardingTargetForSelector:(SEL)sel {
-    return self.prev;
-}
-
 @end
 
 // Per-window delegate registry — keeps delegates alive and deduplicated.
-static NSMutableDictionary<NSNumber*, ZappRoutingNavDelegate*>* g_routing_delegates;
+static NSMutableDictionary<NSNumber*, ZappRouteNavDelegate*>* g_route_delegates;
 
-// The navigation controller that hosts the route stack.
-//   iPhone owned-nav chrome (R1): returns the app-owned UINavigationController
-//   whose root is the sidebar VC (depth-0 chrome).
-//   iPad/expanded: falls back to contentNav (a plain nav whose root IS the
-//   content VC — no sidebar chrome root, so baseline = 0).
-static UINavigationController* zapp_routing_nav(void* win) {
-    UINavigationController* owned = zapp_ios_owned_nav_for_window(win);
-    if (owned) return owned;                      // iPhone owned-nav chrome (R1)
-    return zapp_ios_content_nav_for_window(win);  // iPad / expanded
+// Install the route delegate on nav (once per window; re-assert if UIKit reset it).
+static void zapp_route_install_delegate(UINavigationController* nav, int32_t windowId) {
+    if (!g_route_delegates) g_route_delegates = [NSMutableDictionary dictionary];
+    ZappRouteNavDelegate* d = g_route_delegates[@(windowId)];
+    if (!d) {
+        d = [ZappRouteNavDelegate new];
+        d.windowId = windowId;
+        g_route_delegates[@(windowId)] = d;
+    }
+    if (nav.delegate != d) nav.delegate = d;   // single owner; re-assert if UIKit reset it
 }
 
-void zapp_ios_router_sync(int32_t windowId) {
-    if (!zapp_window_native_routing(windowId)) return;   // opt-in only
+// --- Push seam ------------------------------------------------------------
 
+void zapp_ios_push_route_vc(int32_t windowId, const char* url) {
+    if (!zapp_window_native_routing(windowId)) return;   // opt-in gate (retired in R3')
     void* win = darwin_window_get_by_numeric_id(windowId);
     if (!win) return;
+    UINavigationController* nav = zapp_route_content_nav(win);
+    if (!nav) return;   // nav not available yet → deferred
+    zapp_route_install_delegate(nav, windowId);
 
-    UINavigationController* nav = zapp_routing_nav(win);
-    if (!nav) return;   // no-sidebar window: nav not available yet; deferred
+    ZappRouteVC* vc = [ZappRouteVC new];
+    vc.view.backgroundColor = UIColor.systemBackgroundColor;
 
-    // Install our delegate once per window. Chain any pre-existing delegate
-    // (e.g. N1's ZappIOSToolbarNavDelegate) so it keeps receiving callbacks.
-    if (!g_routing_delegates) {
-        g_routing_delegates = [NSMutableDictionary dictionary];
-    }
-    ZappRoutingNavDelegate* d = g_routing_delegates[@(windowId)];
-    if (!d) {
-        d = [ZappRoutingNavDelegate new];
-        d.windowId = windowId;
-        d.pushedVCs = [NSMutableArray array];
-        g_routing_delegates[@(windowId)] = d;
-    }
-    // Self-healing install on the CURRENT visible nav. We share collapsedNav with
-    // N1's ZappIOSToolbarNavDelegate, whose reapply may re-set the delegate and
-    // drop us — so re-chain whenever we're not the active delegate (chaining
-    // whatever is there now, e.g. N1). Idempotent when already installed.
-    if (nav.delegate != d) {
-        d.prev = nav.delegate;   // chain the current delegate (e.g. N1's toolbar)
-        nav.delegate = d;
-    }
+    // N3a per-route identity: set the pending url before create_ext mints the
+    // route webview so it renders its own fixed route, not the latest broadcast.
+    zapp_ios_set_pending_route_url(url);
 
-    // Re-arm the interactive-pop gesture on contentNav (hidden bar disables it
-    // by default). Idempotent — safe to call on every sync.
-    if (nav.interactivePopGestureRecognizer) {
-        nav.interactivePopGestureRecognizer.enabled = YES;
-    }
+    // Mint a webview into vc.view via the shared create path.
+    // Args match the content-pane call in window.m:534-537:
+    //   inspectable=true, accept_first_mouse=false, url_override=NULL
+    //   (route url is consumed via pending-url, not url_override),
+    //   numeric_id_pre_alloc = windowId (bridge targets the host window),
+    //   transparent_background=false, container_view=vc.view,
+    //   identity_window_id = windowId, pane_role=0 (main),
+    //   host_has_sidebar=true, host_has_inspector=false.
+    // Note: url_override=NULL — the route url was set via set_pending_route_url
+    // above and is consumed once at doc-start.
+    darwin_webview_create_ext(win,
+        /*inspectable*/true,
+        /*accept_first_mouse*/false,
+        /*url_override*/NULL,
+        /*numeric_id_pre_alloc*/windowId,
+        /*transparent_background*/false,
+        /*container_view*/(__bridge void*)vc.view,
+        /*identity_window_id*/windowId,
+        /*pane_role*/0,
+        /*host_has_sidebar*/true,
+        /*host_has_inspector*/false);
 
-    // R1: baseline-aware reconcile.
-    //   Owned nav (iPhone): sidebar is depth-0 chrome → baseline = 1.
-    //     want_native = 1 + routerDepth  (0→sidebar-only, 1→+content, 2+→+routes)
-    //   iPad contentNav: root IS the content VC → baseline = 0.
-    //     want_native = 0 + routerDepth  (unchanged from N3a)
-    UIViewController* ownedContent = zapp_ios_owned_content_vc_for_window(win);
-    int baseline = (zapp_ios_owned_nav_for_window(win) != nil) ? 1 : 0;
-    int want = baseline + router_depth(windowId);
-    int have = (int)nav.viewControllers.count;
-
-    if (have < want) {
-        // → push 1 VC.
-        //
-        // R1 owned-nav push distinction:
-        //   Native index 1 (have == baseline == 1): push the HELD content VC.
-        //     This VC hosts the lateral-switching content webview (section panes).
-        //     It is NOT a ZappRouteVC and must NOT be added to pushedVCs/torn down.
-        //     The teardown diff in didShowViewController only tears down ZappRouteVC
-        //     entries from pushedVCs, so the content VC is naturally exempt.
-        //   Native index 2+ (have > baseline): mint a ZappRouteVC (existing path).
-        if (have == baseline && ownedContent != nil) {
-            // Push the persistent content VC (owned-nav, first content reveal).
-            // No ZappRouteVC minted; not added to pushedVCs; not torn down on pop.
-            [nav pushViewController:ownedContent animated:YES];
-        } else {
-            // Mint a new ephemeral ZappRouteVC for a drill-down route (existing path).
-            const char* urlC = router_current_url(windowId);
-            NSString* url = (urlC && urlC[0]) ? [NSString stringWithUTF8String:urlC] : @"/";
-            // N3a per-route identity: the route webview renders THIS url (zapp.route),
-            // not the latest broadcast. create_ext consumes the pending url once.
-            // [url UTF8String] is valid for this autorelease pool → stable across the
-            // synchronous create_ext call (the Nim cstring is not held past here).
-            zapp_ios_set_pending_route_url([url UTF8String]);
-
-            ZappRouteVC* vc = [ZappRouteVC new];
-            vc.view.backgroundColor = UIColor.systemBackgroundColor;
-
-            // Mint a new webview into vc.view via the existing create path.
-            // identity_window_id = host windowId so the route webview reports the
-            // host window's id to the bridge (ROUTE_CHANGED + all t:4 ops target host).
-            // pane_role 0 (main). container_view = vc.view → create_ext pins it.
-            darwin_webview_create_ext(win,
-                /*inspectable*/true,
-                /*accept_first_mouse*/false,
-                /*url_override*/NULL,
-                /*numeric_id_pre_alloc*/-1,
-                /*transparent_background*/false,
-                /*container_view*/(__bridge void*)vc.view,
-                /*identity_window_id*/windowId,
-                /*pane_role*/0,
-                /*host_has_sidebar*/false,
-                /*host_has_inspector*/false);
-
-            // Locate the webview that create_ext pinned as vc.view's first subview.
-            // darwin_webview_create_ext with container_view does: [host addSubview:webview]
-            // (ios/webview.m:966), so subviews.firstObject is the WKWebView.
-            for (UIView* sub in vc.view.subviews) {
-                if ([sub isKindOfClass:[WKWebView class]]) {
-                    vc.webview = (WKWebView*)sub;
-                    break;
-                }
-            }
-
-            // Track for unified teardown (the delegate tears it down when popped,
-            // whether by the user or programmatically).
-            [g_routing_delegates[@(windowId)].pushedVCs addObject:vc];
-
-            [nav pushViewController:vc animated:YES];
-        }
-
-    } else if (have > want) {
-        // Pop extra route VCs (programmatic router.pop / router.popToRoot). Each
-        // pop fires the delegate's didShowViewController, which tears down the
-        // popped route VC's webview via the pushedVCs diff (unified with the
-        // user-pop path — no inline teardown needed here).
-        while ((int)nav.viewControllers.count > want) {
-            [nav popViewControllerAnimated:YES];
-            // Teardown of the popped route VC happens in the delegate's
-            // didShowViewController (pushedVCs diff) — unified user/programmatic path.
+    // Locate the webview that create_ext pinned as vc.view's first subview.
+    for (UIView* sub in vc.view.subviews) {
+        if ([sub isKindOfClass:[WKWebView class]]) {
+            vc.webview = (WKWebView*)sub;
+            break;
         }
     }
+
+    // Don't force-stamp toolbar items at push time. The app sets items via
+    // toolbar:setItems → darwin_toolbar_set_items → zapp_ios_toolbar_reapply_for_window,
+    // which already targets nav.topViewController via zapp_ios_toolbar_apply_to_nav.
+    // After this push, the route VC becomes topViewController → the next setItems
+    // call or reapply will reach it automatically. Stamping at push would apply
+    // stale items from the content VC, not the route-specific items.
+
+    [nav pushViewController:vc animated:YES];
+}
+
+// --- Pop ops --------------------------------------------------------------
+
+void zapp_ios_pop_route_vc(int32_t windowId) {
+    void* win = darwin_window_get_by_numeric_id(windowId);
+    if (!win) return;
+    UINavigationController* nav = zapp_route_content_nav(win);
+    if (!nav) return;
+    if ([nav.topViewController isKindOfClass:[ZappRouteVC class]])
+        [nav popViewControllerAnimated:YES];
+}
+
+void zapp_ios_pop_to_content(int32_t windowId) {
+    void* win = darwin_window_get_by_numeric_id(windowId);
+    if (!win) return;
+    // Resolve the content VC directly (chrome-agnostic, mirrors zapp_route_content_nav).
+    UIViewController* contentVC = zapp_ios_owned_content_vc_for_window(win);
+    if (!contentVC) contentVC = zapp_ios_content_vc_for_window(win);
+    if (!contentVC) return;
+    UINavigationController* nav = contentVC.navigationController;
+    if (!nav) return;
+    if ([nav.viewControllers containsObject:contentVC])
+        [nav popToViewController:contentVC animated:NO];
 }

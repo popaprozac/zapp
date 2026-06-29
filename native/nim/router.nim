@@ -27,7 +27,9 @@ import dispatch
 # --- iOS native routing (N3a). Defined in ios/routing.m; no-op symbol absent on
 #     non-iOS builds because the calls are `when defined(zappIos)`-gated. ---
 when defined(zappIos):
-  proc zapp_ios_router_sync(windowId: int32) {.importc, cdecl.}
+  proc zapp_ios_push_route_vc(windowId: int32, url: cstring) {.importc, cdecl.}
+  proc zapp_ios_pop_route_vc(windowId: int32) {.importc, cdecl.}
+  proc zapp_ios_pop_to_content(windowId: int32) {.importc, cdecl.}
 
 proc darwin_window_id_string(numericId: int32): cstring {.importc, cdecl.}
 proc darwin_window_set_bridge_ready(windowId: cstring) {.importc, cdecl.}
@@ -193,12 +195,12 @@ proc emitRouteChanged(win: int32, kind: string) =
   dispatch_event_to_all("window:route-changed".cstring, payload.cstring)
 
 proc zapp_router_pop_from_native*(windowId: int32) {.exportc, cdecl.} =
-  ## Called by ios/routing.m's nav delegate when the user pops a route VC
-  ## (back button / edge swipe). Mutate routerstate + broadcast; the trailing
-  ## sync sees native already matches → no-op (loop broken).
+  ## Called by ios/routing.m's ZappRouteNavDelegate when the user pops a route VC
+  ## (back button / edge swipe). Mutate routerstate + broadcast ONLY — no native
+  ## op here. The native pop already happened (user gesture); calling a pop op
+  ## would double-pop. The new per-action seam never calls this path programmatically.
   if routerPop(windowId):
     emitRouteChanged(windowId, "pop")
-  when defined(zappIos): zapp_ios_router_sync(windowId)
 
 proc routeZapp(meth: string, windowId, id: int) =
   ## __zapp:* routes (router.zc:1352-1375).
@@ -700,8 +702,11 @@ proc routeWindowAction(action: string, a: JsonNode, rawWindowId: int, payload: s
       let params = (if a.hasKey("params"): $a["params"] else: "")
       routerPush(target, url, params)
       emitRouteChanged(target, "push")
+      when defined(zappIos): zapp_ios_push_route_vc(target, url.cstring)
     of "router:pop":
-      if routerPop(target): emitRouteChanged(target, "pop")
+      if routerPop(target):
+        emitRouteChanged(target, "pop")
+        when defined(zappIos): zapp_ios_pop_route_vc(target)
     of "router:forward":
       if routerForward(target): emitRouteChanged(target, "forward")
     of "router:replace":
@@ -709,10 +714,15 @@ proc routeWindowAction(action: string, a: JsonNode, rawWindowId: int, payload: s
       let params = (if a.hasKey("params"): $a["params"] else: "")
       routerReplace(target, url, params)
       emitRouteChanged(target, "replace")
+      # On iOS a lateral section switch happens after popToRoot (sidebar-pane.ts).
+      # replace at depth > 1 pops back to content defensively (idempotent if already
+      # at content); the content webview re-renders via emitRouteChanged above.
+      when defined(zappIos): zapp_ios_pop_to_content(target)
     of "router:popToRoot":
-      if routerPopToRoot(target): emitRouteChanged(target, "popToRoot")
+      if routerPopToRoot(target):
+        emitRouteChanged(target, "popToRoot")
+        when defined(zappIos): zapp_ios_pop_to_content(target)
     else: discard
-    when defined(zappIos): zapp_ios_router_sync(target)   # reconcile native VC stack
     return
   if action.startsWith("popover:"):
     let pid = a{"popoverId"}.getStr("")
