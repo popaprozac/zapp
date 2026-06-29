@@ -56,6 +56,11 @@ void darwin_app_activate(void) {
     dispatch_async(dispatch_get_main_queue(), ^{ [NSApp activateIgnoringOtherApps:YES]; });
 }
 
+// Form factor for Platform.formFactor. macOS is always "desktop". Shared by
+// the webview config script (webview.m) and the worker engines (zjs/bare) so
+// the value can never drift between contexts. Mirrored on iOS (ios/platform.m).
+const char* zapp_form_factor(void) { return "desktop"; }
+
 // Read the current effective appearance and return "light" or "dark".
 // Returns string literals — caller must not free. Falls back to "light"
 // on macOS < 10.14 (pre-dark-mode) or if NSApp isn't ready yet.

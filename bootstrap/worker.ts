@@ -27,6 +27,15 @@
   const bridge = (self as any).__zappBridge;
   if (!bridge) return;
 
+  // N2c: publish the Platform bootstrapConfig from the native-supplied bridge
+  // props (os/formFactor/env), mirroring the webview's WKUserScript carrier so
+  // @zappdev/runtime's Platform works in worker code. Defaults match platform.ts.
+  (globalThis as any)[Symbol.for("zapp.bootstrapConfig")] = {
+    permissions: JSON.parse((bridge as any).permissions || '{"platform":"macos","active":false,"allow":[]}'),
+    formFactor: (bridge as any).formFactor || "desktop",
+    env: (bridge as any).env || "prod",
+  };
+
   // Zero-overhead principle: we mutate __zappBridge in place to add the
   // methods the runtime expects (on, emit, invoke, post, _onEvent,
   // _dispatchAppEvent) and expose *that same object* under

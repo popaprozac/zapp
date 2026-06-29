@@ -60,3 +60,25 @@ test("Platform.env defaults to prod when absent", () => {
   expect(Platform.env).toBe("prod");
   expect(Platform.isProd).toBe(true);
 });
+
+test("Platform reads a worker-shaped bootstrapConfig (os + formFactor + env)", () => {
+  (globalThis as any)[Symbol.for("zapp.bootstrapConfig")] = {
+    permissions: { platform: "ios" },
+    formFactor: "phone",
+    env: "dev",
+  };
+  expect(Platform.os).toBe("ios");
+  expect(Platform.isIOS).toBe(true);
+  expect(Platform.formFactor).toBe("phone");
+  expect(Platform.isPhone).toBe(true);
+  expect(Platform.env).toBe("dev");
+  expect(Platform.isDev).toBe(true);
+  delete (globalThis as any)[Symbol.for("zapp.bootstrapConfig")];
+});
+
+test("Platform defaults hold when no config (worker before/without carrier)", () => {
+  delete (globalThis as any)[Symbol.for("zapp.bootstrapConfig")];
+  expect(Platform.os).toBe("macos");
+  expect(Platform.formFactor).toBe("desktop");
+  expect(Platform.env).toBe("prod");
+});

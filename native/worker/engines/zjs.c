@@ -1020,6 +1020,24 @@ static void zjs_setup_bridge(ZjsWorkerSlot* slot) {
     // diagnostic tooling work uniformly.
     ZjsValue wid_str = zjs_new_string(ctx, slot->worker_id, (uint32_t) strlen(slot->worker_id));
     zjs_set_property(ctx, bridge, "workerId", wid_str);
+    // N2c: carry Platform os/formFactor/env into the worker via __zappBridge,
+    // mirroring the webview's bootstrapConfig. bootstrap/worker.ts reads these
+    // and publishes globalThis[Symbol.for("zapp.bootstrapConfig")].
+    {
+        extern const char* permissions_bootstrap_json(void);
+        extern int zapp_build_is_dev(void);
+        extern const char* zapp_form_factor(void);
+        const char* perms = permissions_bootstrap_json();
+        if (!perms || !perms[0]) perms = "{\"platform\":\"macos\",\"active\":false,\"allow\":[]}";
+        const char* envc = zapp_build_is_dev() ? "dev" : "prod";
+        const char* ffc = zapp_form_factor();
+        ZjsValue perms_str = zjs_new_string(ctx, perms, (uint32_t) strlen(perms));
+        zjs_set_property(ctx, bridge, "permissions", perms_str);
+        ZjsValue env_str = zjs_new_string(ctx, envc, (uint32_t) strlen(envc));
+        zjs_set_property(ctx, bridge, "env", env_str);
+        ZjsValue ff_str = zjs_new_string(ctx, ffc, (uint32_t) strlen(ffc));
+        zjs_set_property(ctx, bridge, "formFactor", ff_str);
+    }
     zjs_set_global(ctx, "__zappBridge", bridge);
     // Web Worker convention — bootstrap/worker.ts's `self.send` routes
     // through `self.postMessage`, so wire the same host function up as a

@@ -1,8 +1,9 @@
 /**
  * Runtime platform/form-factor/environment for conditional app logic.
  *
- * Reads the per-webview bootstrap manifest injected natively
- * (`globalThis[Symbol.for("zapp.bootstrapConfig")]`):
+ * Reads the bootstrap manifest injected natively — by the webview's WKUserScript,
+ * or, in a worker, published by `bootstrap/worker.ts` from the native `__zappBridge`
+ * (os/formFactor/env). Source: `globalThis[Symbol.for("zapp.bootstrapConfig")]`:
  *   - os  ← permissions.platform (build-time target)
  *   - formFactor ← top-level formFactor (runtime; iOS device idiom; "desktop" on desktop)
  *   - env ← top-level env (build-time dev/prod)

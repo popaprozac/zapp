@@ -30,6 +30,7 @@ extern int zapp_build_use_embedded_assets(void);
 extern const char* zapp_build_csp(void);
 extern const char* app_get_allowed_navigation_json(void);
 extern int zapp_build_is_dev(void);
+extern const char* zapp_form_factor(void);
 
 // Bootstrap script (generated from TS)
 extern const char* zapp_webview_bootstrap_script(void);
@@ -924,11 +925,12 @@ void darwin_webview_create_ext(void* window_ptr, bool inspectable, bool accept_f
         @"(function(){globalThis[Symbol.for('zapp.bootstrapConfig')]="
         "{name:'%@',applicationShouldTerminateAfterLastWindowClosed:%@,"
         "webContentInspectable:%@,maxWorkers:%d,theme:'%@',powerState:%s,"
-        "formFactor:'desktop',env:'%@',permissions:%s%@};})();",
+        "formFactor:'%s',env:'%@',permissions:%s%@};})();",
         appName,
         terminate ? @"true" : @"false",
         inspect ? @"true" : @"false",
         maxWorkers, themeStr, powerStateC,
+        zapp_form_factor(),
         (zapp_build_is_dev() ? @"dev" : @"prod"),
         permsJson, cspExtra];
     [ucc addUserScript:[[WKUserScript alloc] initWithSource:configScript

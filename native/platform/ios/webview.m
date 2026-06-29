@@ -61,6 +61,7 @@ extern int zapp_build_use_embedded_assets(void);
 extern const char* zapp_build_csp(void);
 extern const char* app_get_allowed_navigation_json(void);
 extern int zapp_build_is_dev(void);
+extern const char* zapp_form_factor(void);
 extern const char* zapp_webview_bootstrap_script(void);
 extern const char* app_get_bootstrap_name(void);
 extern bool app_get_bootstrap_web_content_inspectable(void);
@@ -806,8 +807,7 @@ void darwin_webview_create_ext(void* window_ptr, bool inspectable, bool accept_f
     if (!permsJson || !permsJson[0]) permsJson = "{\"platform\":\"ios\",\"active\":false,\"allow\":[]}";
 
     // formFactor: runtime device idiom (iPad → "tablet", else "phone").
-    NSString* ffStr = (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad)
-        ? @"tablet" : @"phone";
+    NSString* ffStr = [NSString stringWithUTF8String:zapp_form_factor()];
     NSString* configScript = [NSString stringWithFormat:
         @"(function(){globalThis[Symbol.for('zapp.bootstrapConfig')]="
         "{name:'%@',applicationShouldTerminateAfterLastWindowClosed:%@,"

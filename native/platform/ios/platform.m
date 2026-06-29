@@ -32,6 +32,12 @@ extern int zapp_app_dispatch(int event_id, const char* data);
 #define ZAPP_EVENT_APP_SCREENS_CHANGED       116
 #endif
 
+// Device idiom captured once at launch (main thread) into a process global,
+// so zapp_form_factor() is cheap + thread-safe to read from a worker pthread.
+// "tablet" on iPad, else "phone". Default "phone" until launch captures it.
+static const char* g_zapp_form_factor = "phone";
+const char* zapp_form_factor(void) { return g_zapp_form_factor; }
+
 // --- Power state (iOS) ---
 //
 // iOS power state from UIDevice battery + NSProcessInfo low-power. Same symbol
@@ -227,6 +233,7 @@ const char* darwin_escape_js_string(const char* raw) {
 
 - (BOOL)application:(UIApplication*)application didFinishLaunchingWithOptions:(NSDictionary<UIApplicationLaunchOptionsKey, id>*)launchOptions {
     (void)application; (void)launchOptions;
+    g_zapp_form_factor = (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad) ? "tablet" : "phone";
     [UIDevice currentDevice].batteryMonitoringEnabled = YES;
     zapp_power_init_cache();
     [[NSNotificationCenter defaultCenter] addObserver:self

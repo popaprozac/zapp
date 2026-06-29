@@ -1713,6 +1713,25 @@ static BareSetupResult bare_worker_setup_state(BareWorkerSlot* slot) {
     js_create_string_utf8(slot->env, (utf8_t*)slot->worker_id,
         strlen(slot->worker_id), &worker_id_str);
     js_set_named_property(slot->env, bridge, "workerId", worker_id_str);
+    // N2c: Platform os/formFactor/env carrier (mirror of zjs.c + the webview).
+    {
+        extern const char* permissions_bootstrap_json(void);
+        extern int zapp_build_is_dev(void);
+        extern const char* zapp_form_factor(void);
+        const char* perms = permissions_bootstrap_json();
+        if (!perms || !perms[0]) perms = "{\"platform\":\"macos\",\"active\":false,\"allow\":[]}";
+        const char* envc = zapp_build_is_dev() ? "dev" : "prod";
+        const char* ffc = zapp_form_factor();
+        js_value_t* perms_str;
+        js_create_string_utf8(slot->env, (const utf8_t*)perms, strlen(perms), &perms_str);
+        js_set_named_property(slot->env, bridge, "permissions", perms_str);
+        js_value_t* env_str;
+        js_create_string_utf8(slot->env, (const utf8_t*)envc, strlen(envc), &env_str);
+        js_set_named_property(slot->env, bridge, "env", env_str);
+        js_value_t* ff_str;
+        js_create_string_utf8(slot->env, (const utf8_t*)ffc, strlen(ffc), &ff_str);
+        js_set_named_property(slot->env, bridge, "formFactor", ff_str);
+    }
 
     // The worker bootstrap script expects `self` as an alias for the
     // global. Add it before running the bootstrap so `self.postMessage`
