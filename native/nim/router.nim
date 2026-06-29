@@ -677,8 +677,9 @@ proc routeWindowAction(action: string, a: JsonNode, rawWindowId: int, payload: s
     return
   if action.startsWith("router:"):
     # target: explicit windowId arg takes priority (same resolution as toolbar:*)
-    let widArg = a{"windowId"}.getStr("")
+    let widArg = (if a.isNil: "" else: a{"windowId"}.getStr(""))
     let target = (if widArg.len > 0: darwin_window_numeric_id_for_string(widArg.cstring) else: windowId.int32)
+    if a.isNil or target < 0: return  # I1+M1: dead-window guard + nil-a guard (hasKey below is not nil-safe)
     case action
     of "router:push":
       let url = a{"url"}.getStr("")
