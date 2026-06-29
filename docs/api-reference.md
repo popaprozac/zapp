@@ -1736,8 +1736,6 @@ if (Platform.isIOS) {
 }
 ```
 
-macOS/Windows ignore the flag (desktop in-window navigation).
-
 #### Desktop in-window navigation
 
 On desktop the router drives **in-window** navigation: the route stack is logical
