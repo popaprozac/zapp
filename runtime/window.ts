@@ -18,7 +18,7 @@
 
 import { getBridge } from "./bridge";
 import { Platform } from "./platform";
-import { WindowEvent, eventName, type WindowSizePayload, type WindowPayload, type ModalDismissedPayload, type SidebarResizedPayload } from "./events";
+import { WindowEvent, eventName, type WindowSizePayload, type WindowPayload, type ModalDismissedPayload, type SidebarResizedPayload, type RouteChangedPayload } from "./events";
 import type { Display } from "./screen";
 import type { MenuItemDef } from "./menu";
 import { patchMenuTree, applyRadioSelection, findMenuItem } from "./action-context";
@@ -1101,6 +1101,56 @@ export interface InspectorHandle {
   readonly width: number;
 }
 
+/**
+ * Options passed to `router.push` and `router.replace`.
+ * - `url` is the logical route path (e.g. `"/settings"`).
+ * - `title` is an optional display title hint; native may surface it in the
+ *   toolbar's back-button label or window title (N2b).
+ * - `params` are ephemeral route parameters — they are NOT encoded in the
+ *   URL. They are available via `router.params` until the next navigation.
+ *   Use the URL itself for durable, bookmarkable identity.
+ * - `presentation` is an iOS sheet presentation style, only meaningful when
+ *   the route maps to a sheet (`asSheetOf`). Ignored on macOS.
+ */
+export interface RouteOptions {
+  url: string;
+  title?: string;
+  params?: Record<string, unknown>;
+  presentation?: "page" | "form" | "fullscreen" | "bottomSheet";
+}
+
+/**
+ * Handle for a window's logical route stack. Always present on `WindowHandle`
+ * and accessible from any context (webview or worker) by window id.
+ *
+ * State (url/params/canGoBack/canGoForward) is seeded from native via a
+ * best-effort `__router:state` INVOKE on construction, then kept current via
+ * `ROUTE_CHANGED` broadcast events filtered to this window's id.
+ */
+export interface RouterHandle {
+  /** Navigate to a new route, pushing it onto the stack. Truncates any
+   *  forward history. */
+  push(opts: RouteOptions | string): void;
+  /** Navigate back one step. No-op if at the root. */
+  pop(): void;
+  /** Navigate forward one step (after a pop). No-op if at the head. */
+  forward(): void;
+  /** Replace the current route in place. Does NOT affect forward history. */
+  replace(opts: RouteOptions | string): void;
+  /** Pop all entries back to the root route. No-op if already at root. */
+  popToRoot(): void;
+  /** Subscribe to ROUTE_CHANGED for this window. Returns an unsubscribe fn. */
+  on(handler: (payload: RouteChangedPayload) => void): () => void;
+  /** Whether the router can go back (at least one entry before current). */
+  readonly canGoBack: boolean;
+  /** Whether the router can go forward (entries after current exist). */
+  readonly canGoForward: boolean;
+  /** The current route URL. Empty string before the first navigation. */
+  readonly url: string;
+  /** The current route params (ephemeral — not in URL). `null` when none. */
+  readonly params: Record<string, unknown> | null;
+}
+
 /** Size events that include width/height/position data. */
 type SizeEvent = WindowEvent.RESIZE | WindowEvent.MOVE | WindowEvent.MAXIMIZE | WindowEvent.RESTORE;
 
@@ -1114,6 +1164,10 @@ export interface WindowHandle {
   /** Lifecycle handle for this window's native toolbar (macOS). Always
    *  present — setItems attaches when no toolbar exists. */
   readonly toolbar: ToolbarHandle;
+  /** Router handle — push/pop/forward/replace/popToRoot + canGoBack/
+   *  canGoForward/url/params getters. Always present; works from any
+   *  context (webview or worker) using the window id. */
+  readonly router: RouterHandle;
 
   on(event: SizeEvent, handler: (payload: WindowSizePayload) => void): () => void;
   on(event: WindowEvent.MODAL_DISMISSED, handler: (payload: ModalDismissedPayload) => void): () => void;
@@ -1290,7 +1344,91 @@ function createInspectorHandle(
   };
 }
 
-function createWindowHandle(windowId: string, sidebarOpts?: SidebarOptions, inspectorOpts?: InspectorOptions): WindowHandle {
+/**
+ * Module-scope router state records keyed by windowId. Shared across repeated
+ * createWindowHandle calls (same pattern as sidebarState / inspectorState).
+ */
+const routerState = new Map<string, { url: string; params: Record<string, unknown> | null; canGoBack: boolean; canGoForward: boolean }>();
+
+/** Windows whose ROUTE_CHANGED bridge listener is already registered. */
+const routerWired = new Set<string>();
+
+/** Create a RouterHandle that caches route state from ROUTE_CHANGED events. */
+function createRouterHandle(windowId: string): RouterHandle {
+  // Seed with defaults on first creation; leave alone if already seeded.
+  if (!routerState.has(windowId)) {
+    routerState.set(windowId, { url: "", params: null, canGoBack: false, canGoForward: false });
+  }
+
+  // Best-effort seed from native (resolves asynchronously; we don't await).
+  // The invoke resolves to the current stack snapshot so the getters are
+  // populated immediately on the next microtask without needing a real event.
+  getBridge().invoke("__router:state", { windowId }).then((r: any) => {
+    if (r && typeof r === "object") {
+      const rec = routerState.get(windowId);
+      if (rec) {
+        if (typeof r.url === "string")              rec.url          = r.url;
+        if (r.params !== undefined)                 rec.params       = r.params ?? null;
+        if (typeof r.canGoBack === "boolean")       rec.canGoBack    = r.canGoBack;
+        if (typeof r.canGoForward === "boolean")    rec.canGoForward = r.canGoForward;
+      }
+    }
+  }).catch(() => { /* best-effort — ignore failures (e.g. route not yet seeded) */ });
+
+  if (!routerWired.has(windowId)) {
+    const bridge = getBridge();
+    bridge.on(eventName(WindowEvent.ROUTE_CHANGED), (payload: any) => {
+      if (payload?.windowId === windowId) {
+        const rec = routerState.get(windowId);
+        if (rec) {
+          rec.url          = payload.url;
+          rec.params       = payload.params ?? null;
+          rec.canGoBack    = payload.canGoBack;
+          rec.canGoForward = payload.canGoForward;
+        }
+      }
+    });
+    routerWired.add(windowId);
+  }
+
+  return {
+    push(opts: RouteOptions | string): void {
+      const o = typeof opts === "string" ? { url: opts } : opts;
+      windowAction("router:push", {
+        windowId,
+        url: o.url,
+        ...(o.title !== undefined ? { title: o.title } : {}),
+        ...(o.params !== undefined ? { params: o.params } : {}),
+        ...(o.presentation !== undefined ? { presentation: o.presentation } : {}),
+      });
+    },
+    pop(): void        { windowAction("router:pop",       { windowId }); },
+    forward(): void    { windowAction("router:forward",   { windowId }); },
+    replace(opts: RouteOptions | string): void {
+      const o = typeof opts === "string" ? { url: opts } : opts;
+      windowAction("router:replace", {
+        windowId,
+        url: o.url,
+        ...(o.title !== undefined ? { title: o.title } : {}),
+        ...(o.params !== undefined ? { params: o.params } : {}),
+        ...(o.presentation !== undefined ? { presentation: o.presentation } : {}),
+      });
+    },
+    popToRoot(): void  { windowAction("router:popToRoot", { windowId }); },
+    on(handler: (payload: RouteChangedPayload) => void): () => void {
+      const bridge = getBridge();
+      return bridge.on(eventName(WindowEvent.ROUTE_CHANGED), (p: any) => {
+        if (p?.windowId === windowId) handler(p as RouteChangedPayload);
+      });
+    },
+    get canGoBack():    boolean                            { return routerState.get(windowId)!.canGoBack; },
+    get canGoForward(): boolean                            { return routerState.get(windowId)!.canGoForward; },
+    get url():          string                             { return routerState.get(windowId)!.url; },
+    get params():       Record<string, unknown> | null     { return routerState.get(windowId)!.params; },
+  };
+}
+
+export function createWindowHandle(windowId: string, sidebarOpts?: SidebarOptions, inspectorOpts?: InspectorOptions): WindowHandle {
   const bridge = getBridge();
 
   return {
@@ -1342,6 +1480,8 @@ function createWindowHandle(windowId: string, sidebarOpts?: SidebarOptions, insp
     inspector: inspectorOpts !== undefined
       ? createInspectorHandle(windowId, inspectorOpts.collapsed ?? false, inspectorOpts.width ?? 280)
       : undefined,
+
+    router: createRouterHandle(windowId),
 
     toolbar: {
       setItems(items: ToolbarItemDef[], setOpts?: { style?: "unified" | "unifiedCompact" | "expanded" }) {
@@ -1542,5 +1682,40 @@ export const Window = {
     const result = await getBridge().invoke("__window:create", normalized) as { windowId: string };
     registerToolbarActions(result.windowId);
     return createWindowHandle(result.windowId, opts?.sidebar, opts?.inspector);
+  },
+
+  /**
+   * Get a handle for any window by its id string (e.g. `"win-1"`). Works
+   * from any context — webview, worker, or backend. Does NOT perform a
+   * round-trip; the handle's router/toolbar/base ops all use the supplied id.
+   *
+   * Note: sidebar/inspector ops on cross-window handles are not supported in
+   * v1 — those require the native window to be the current context.
+   */
+  get(id: string): WindowHandle {
+    return createWindowHandle(id);
+  },
+
+  /**
+   * List all currently open windows. Returns `WindowHandle` objects for each.
+   *
+   * Backed by the `__zapp:windows-list` native INVOKE. Requires the bridge's
+   * `invoke` to be available (it is in both webview and worker contexts).
+   *
+   * @example
+   * ```ts
+   * const wins = await Window.all();
+   * console.log(wins.map(w => w.id));
+   * ```
+   */
+  async all(): Promise<WindowHandle[]> {
+    let r: { ids?: string[] } | undefined;
+    try {
+      r = await getBridge().invoke("__zapp:windows-list", {}) as { ids?: string[] };
+    } catch (e) {
+      console.warn("[zapp] Window.all(): invoke failed —", e);
+      return [];
+    }
+    return (r?.ids ?? []).map((id) => createWindowHandle(id));
   },
 };

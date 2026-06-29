@@ -1604,6 +1604,109 @@ reflect the current selection as readable text.
 `ContextMenu.show`'s `anchor` and `popover.show` share the same `Anchor`
 vocabulary (Element / `{x, y, width?, height?}` / MouseEvent).
 
+### Router
+
+A logical per-window navigation stack. The native layer (`routerstate.nim`) is
+authoritative; the TS handle caches state from `ROUTE_CHANGED` events. No
+visible nav chrome is added this cycle — wiring the toolbar back/forward
+buttons is N2b.
+
+**Available everywhere:** `Window.current().router`, `Window.get(id).router`,
+or any handle returned by `Window.create` / `Window.all`.
+
+```ts
+const router = Window.current().router;
+
+// Navigate
+router.push("/settings");
+router.push({ url: "/item", params: { id: 42 }, title: "Item" });
+router.pop();
+router.forward();
+router.replace("/settings/account");   // replaces current entry in place
+router.popToRoot();                    // jump back to the root entry
+
+// Read cached state (updated from ROUTE_CHANGED events)
+router.url;          // "/item"
+router.params;       // { id: 42 } — or null
+router.canGoBack;    // true
+router.canGoForward; // false
+
+// Subscribe (returns unsubscribe fn)
+const off = router.on((e) => {
+  console.log(e.kind, e.url, e.params, e.canGoBack, e.canGoForward);
+});
+off();
+
+// Equivalent via WindowEvent
+win.on(WindowEvent.ROUTE_CHANGED, (e) => console.log(e.url));
+```
+
+#### `RouteOptions`
+
+```ts
+interface RouteOptions {
+  url: string;
+  title?: string;                                       // hint for toolbar back-label (N2b)
+  params?: Record<string, unknown>;                     // ephemeral — not in URL
+  presentation?: "page" | "form" | "fullscreen" | "bottomSheet";  // iOS sheet style
+}
+```
+
+`push` and `replace` accept either a `RouteOptions` object or a plain string
+URL (`router.push("/path")` is equivalent to `router.push({ url: "/path" })`).
+
+**URL vs params durability:** The URL is the durable, bookmarkable identity of
+a route. `params` are ephemeral — they are not encoded in the URL and are lost
+on hard reload. Use `params` for transient context (selected item, scroll
+offset); use query-string or path segments for anything that must survive
+refresh.
+
+**Desktop vs iOS note:** On desktop, the router drives a logical history stack
+that tracks `canGoBack`/`canGoForward`. Wiring these states to native toolbar
+back/forward buttons lands in N2b (this cycle only delivers the stack and its
+events). iOS native routing (UINavigationController) is a future milestone.
+
+#### `Window.get(id: string): WindowHandle`
+
+Return a handle for any open window by its id (`"win-1"`, etc.) without a
+native round-trip. Works from webview, worker, or backend. The `.router`,
+`.toolbar`, and base window ops (`show`, `setTitle`, etc.) all target the given
+id. Sidebar/inspector ops are current-window-only in v1.
+
+```ts
+const h = Window.get("win-1");
+h.router.push("/detail");
+h.setTitle("Detail");
+```
+
+#### `Window.all(): Promise<WindowHandle[]>`
+
+List all currently open windows. Backed by the `__zapp:windows-list` native
+INVOKE.
+
+```ts
+const wins = await Window.all();
+console.log(wins.map((w) => w.id));
+```
+
+#### `WindowEvent.ROUTE_CHANGED` (21)
+
+Broadcast to **all** webviews and workers when a router stack changes for any
+window (push/pop/forward/replace/popToRoot). Filter by `windowId` to scope to
+a specific window — or use `win.on(WindowEvent.ROUTE_CHANGED, handler)` /
+`win.router.on(handler)` which filter automatically.
+
+**Payload:** `{ windowId, url, params, canGoBack, canGoForward, kind }`
+
+| Field | Type | Notes |
+|---|---|---|
+| `windowId` | `string` | The window whose stack changed |
+| `url` | `string` | Current URL after the navigation |
+| `params` | `object \| null` | Ephemeral params (null when none) |
+| `canGoBack` | `boolean` | Stack has entries before current |
+| `canGoForward` | `boolean` | Stack has entries after current |
+| `kind` | `"push" \| "pop" \| "forward" \| "replace" \| "popToRoot"` | Navigation type |
+
 ### `WindowHandle.setFocus(): void`
 
 Raise this window to the front and bring the app to the foreground,

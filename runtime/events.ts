@@ -64,6 +64,13 @@ export enum WindowEvent {
    * persistent highlight). Use it as a group-level press signal, or rely on
    * the per-segment `action`; both are delivered in all modes. */
   TOOLBAR_GROUP_SELECTED = 20,
+  /** Fires when the router stack changes for a window (push/pop/forward/
+   * replace/popToRoot). Broadcast to ALL webviews + workers (toolbar-click
+   * pattern — global broadcast, filtered client-side by `windowId`).
+   * Payload: `{ windowId, url, params, canGoBack, canGoForward, kind }`.
+   * `kind` is one of `"push" | "pop" | "forward" | "replace" | "popToRoot"`.
+   * `params` is an object or `null` when none were provided. */
+  ROUTE_CHANGED = 21,
 }
 
 /** App lifecycle events.
@@ -113,6 +120,7 @@ const WINDOW_EVENT_NAMES: Record<number, string> = {
   [WindowEvent.INSPECTOR_EXPANDED]: "window:inspector-expanded",
   [WindowEvent.INSPECTOR_RESIZED]: "window:inspector-resized",
   [WindowEvent.TOOLBAR_GROUP_SELECTED]: "window:toolbar-group-selected",
+  [WindowEvent.ROUTE_CHANGED]: "window:route-changed",
 };
 
 const APP_EVENT_NAMES: Record<number, string> = {
@@ -175,6 +183,19 @@ export interface InspectorResizedPayload {
   windowId: string;
   width: number;
   timestamp?: number;
+}
+
+/** Payload for `WindowEvent.ROUTE_CHANGED` — fires when the router stack
+ *  changes for a window (push/pop/forward/replace/popToRoot). Broadcast to
+ *  ALL webviews + workers; filter by `windowId` to scope to a specific window.
+ *  `params` is `null` when no params were provided. */
+export interface RouteChangedPayload {
+  windowId: string;
+  url: string;
+  params: Record<string, unknown> | null;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  kind: "push" | "pop" | "forward" | "replace" | "popToRoot";
 }
 
 /** Known window events that carry size+position data. */
