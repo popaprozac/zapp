@@ -438,6 +438,10 @@ static void zapp_ios_toolbar_apply_to_nav(UINavigationController* nav,
     NSArray<UIBarButtonItem*>* leading = includeToggleSidebar
         ? entry.leadingItems
         : entry.leadingNoToggle;
+    // Keep the system back button when items are stamped onto a pushed VC.
+    // Without this, assigning leftBarButtonItems replaces UIKit's automatic
+    // back button (UIKit doc: a non-nil leftBarButtonItems suppresses it).
+    vc.navigationItem.leftItemsSupplementBackButton = YES;
     vc.navigationItem.leftBarButtonItems  = leading ?: @[];
     vc.navigationItem.rightBarButtonItems = entry.trailingItems ?: @[];
 
@@ -893,6 +897,7 @@ void zapp_ios_toolbar_apply_for_window_hidden(void* window_ptr, BOOL sidebarHidd
         UIViewController* contentVC = zapp_ios_content_vc_for_window(window_ptr);
         if (contentVC) {
             NSArray<UIBarButtonItem*>* leading = entry.leadingItems; // include toggleSidebar
+            contentVC.navigationItem.leftItemsSupplementBackButton = YES;
             contentVC.navigationItem.leftBarButtonItems  = leading ?: @[];
             contentVC.navigationItem.rightBarButtonItems = entry.trailingItems ?: @[];
             contentVC.navigationItem.title = entry.centerTitle;       // nil clears it
@@ -1065,6 +1070,7 @@ void darwin_toolbar_remove(void* window_ptr) {
                 // Clear items on the content VC's navigationItem.
                 UIViewController* contentVC = zapp_ios_content_vc_for_window(window_ptr);
                 if (contentVC) {
+                    contentVC.navigationItem.leftItemsSupplementBackButton = YES;
                     contentVC.navigationItem.leftBarButtonItems  = @[];
                     contentVC.navigationItem.rightBarButtonItems = @[];
                     contentVC.navigationItem.title     = nil;
@@ -1080,6 +1086,7 @@ void darwin_toolbar_remove(void* window_ptr) {
                 contentNav.navigationBarHidden = YES;
                 UIViewController* vc = contentNav.topViewController;
                 if (vc) {
+                    vc.navigationItem.leftItemsSupplementBackButton = YES;
                     vc.navigationItem.leftBarButtonItems  = @[];
                     vc.navigationItem.rightBarButtonItems = @[];
                     vc.navigationItem.title     = nil;
