@@ -90,6 +90,11 @@ extern BOOL zapp_ios_split_is_collapsed_for_window(void* window_ptr);
 // omit when hidden (UIKit's own system button is the affordance).
 extern BOOL zapp_ios_sidebar_is_hidden_for_window(void* window_ptr);
 
+// Defined in ios/window.m — slot lookup tables for sidebar + inspector panes.
+// Return -1 when no pane of that type is registered for the host.
+extern int32_t zapp_ios_sidebar_slot_for(int32_t host_slot);
+extern int32_t zapp_ios_inspector_slot_for(int32_t host_slot);
+
 // ─── Icon resolver ──────────────────────────────────────────────────────────
 //
 // Parallel to macOS zapp_resolve_icon / menu.m's icon resolution.
@@ -176,6 +181,10 @@ static NSMutableDictionary<NSValue*, ZappIOSToolbarEntry*>* zapp_ios_toolbars = 
 
 static const char kZappToolbarNavDelegateKey = 0;
 
+// Forward declaration — defined later. Needed by ZappIOSToolbarNavDelegate's
+// willShowViewController: which re-injects after the bar becomes visible.
+void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_user_script);
+
 @interface ZappIOSToolbarNavDelegate : NSObject <UINavigationControllerDelegate>
 @property (nonatomic, assign) void* windowPtr;   // for re-apply lookup
 @end
@@ -212,6 +221,31 @@ static const char kZappToolbarNavDelegateKey = 0;
     UIViewController* rootVC = navigationController.viewControllers.firstObject;
     BOOL goingToRoot = (viewController == rootVC);
     navigationController.navigationBarHidden = goingToRoot;
+
+    // Re-inject chrome metrics when the CONTENT VC is about to appear (the bar
+    // is now shown). At launch on iPhone the bar is hidden while the sidebar is
+    // visible, so safeAreaInsets.top on the content webview is smaller than the
+    // true top chrome (no bar contribution yet). Once the user taps into content
+    // the bar appears and safeAreaInsets.top grows → re-inject so
+    // --zapp-titlebar-height reflects the real inset the content must reserve.
+    // Guard: only re-inject when the content VC is the destination (bar is about
+    // to be SHOWN). Injecting when going to root (bar hidden) is unnecessary and
+    // we avoid it to prevent any layout cycle.
+    if (!goingToRoot && self.windowPtr && zapp_ios_toolbars) {
+        NSValue* key = [NSValue valueWithPointer:self.windowPtr];
+        ZappIOSToolbarEntry* entry = zapp_ios_toolbars[key];
+        if (entry) {
+            void* winPtr = self.windowPtr;
+            int32_t slot = entry.hostSlot;
+            // One-tick defer so UIKit finishes laying out the nav bar and
+            // safeAreaInsets reflects the shown-bar inset.
+            dispatch_async(dispatch_get_main_queue(), ^{
+                // add_user_script=false: the WKUserScript was already installed
+                // at set_items time; this is a live-value update only.
+                zapp_toolbar_inject_metrics(winPtr, slot, false);
+            });
+        }
+    }
 }
 
 @end
@@ -333,10 +367,6 @@ static void zapp_ios_toolbar_on_main(void (^block)(void)) {
     if ([NSThread isMainThread]) block();
     else dispatch_async(dispatch_get_main_queue(), block);
 }
-
-// ─── inject_metrics (forward declaration) ───────────────────────────────────
-
-void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_user_script);
 
 // ─── zapp_ios_toolbar_reapply_for_window (forward declarations) ──────────────
 //
@@ -1121,30 +1151,67 @@ void darwin_toolbar_remove(void* window_ptr) {
         // inject_metrics measures a hidden bar (height → 0).
         [zapp_ios_toolbars removeObjectForKey:key];
 
-        // Re-inject --zapp-toolbar-height: 0 (one tick so UIKit hides the bar first).
+        // Re-inject --zapp-toolbar-height: 0 and --zapp-titlebar-height: 0
+        // (one tick so UIKit hides the bar first). Clear all pane webviews.
+        // Entry is gone so we can't call inject_metrics — build the JS inline.
+        int32_t sidebarSlot   = zapp_ios_sidebar_slot_for(slot);
+        int32_t inspectorSlot = zapp_ios_inspector_slot_for(slot);
         dispatch_async(dispatch_get_main_queue(), ^{
-            // Inject 0 directly — entry is gone so inject_metrics would
-            // measure a missing/hidden bar. Build the JS inline here.
-            NSString* js = @"(function(){try{var r=document.documentElement;"
-                            "if(r){r.style.setProperty('--zapp-toolbar-height','0px');}"
-                            "}catch(e){}})();";
+            NSString* js = @"(function(){try{var r=document.documentElement;if(r){"
+                            "r.style.setProperty('--zapp-titlebar-height','0px');"
+                            "r.style.setProperty('--zapp-toolbar-height','0px');"
+                            "r.style.setProperty('--zapp-safe-area-top','0px');"
+                            "r.style.setProperty('--zapp-safe-area-left','0px');"
+                            "r.style.setProperty('--zapp-safe-area-right','0px');"
+                            "r.style.setProperty('--zapp-safe-area-bottom','0px');"
+                            "}}catch(e){}})();";
             WKWebView* wv = zapp_ios_content_webview_for_slot(slot);
             if (wv) [wv evaluateJavaScript:js completionHandler:nil];
+            if (sidebarSlot >= 0) {
+                WKWebView* sbWv = zapp_ios_content_webview_for_slot(sidebarSlot);
+                if (sbWv) [sbWv evaluateJavaScript:js completionHandler:nil];
+            }
+            if (inspectorSlot >= 0) {
+                WKWebView* insWv = zapp_ios_content_webview_for_slot(inspectorSlot);
+                if (insWv) [insWv evaluateJavaScript:js completionHandler:nil];
+            }
         });
     });
 }
 
 // ─── zapp_toolbar_inject_metrics ─────────────────────────────────────────────
 //
-// Mirrors darwin/toolbar.m's zapp_toolbar_inject_metrics adapted for iOS:
-//   - Measures nav.navigationBar.frame.size.height (the shown bar height).
-//   - Builds the CSS var JS string for --zapp-toolbar-height.
-//   - Evals into the content webview.
-//   - When add_user_script, adds a WKUserScript (AtDocumentStart) so
-//     reloads keep the value.
+// Mirrors darwin/toolbar.m's zapp_toolbar_inject_metrics adapted for iOS.
 //
-// Sidebar/inspector pane injection is optional in T1 (mirrors the macOS
-// three-slot loop; T1 only covers the content webview).
+// Injects chrome-metric CSS vars into all pane webviews (content, sidebar,
+// inspector) so the web layout reserves space for the native chrome:
+//
+//   --zapp-titlebar-height  = content webview's safeAreaInsets.top
+//                             (= status-bar + dynamic-island + shown nav bar)
+//                             → THE KEY VAR: kitchen-sink .main-pane /
+//                               .sidebar-pane / .inspector-pane all use this.
+//   --zapp-toolbar-height   = nav bar row height when shown (0 when hidden)
+//                             → for apps that want just the bar-band height.
+//   --zapp-safe-area-{top,left,right,bottom} = content webview safeAreaInsets
+//                             → mirrors macOS; injected into the content pane only.
+//
+// For the SIDEBAR and INSPECTOR panes, inject:
+//   --zapp-titlebar-height  = that pane's safeAreaInsets.top (status bar)
+//   --zapp-toolbar-height   = 0 (those panes have no toolbar row)
+//   --zapp-safe-area-{top,left,right,bottom} = that pane's safeAreaInsets
+//
+// safeAreaInsets MUST be read AFTER layout (called one tick after UIKit sets
+// items so the nav bar is laid out). On iPhone at launch the bar is hidden
+// over the sidebar, so safeAreaInsets.top on the content webview only reflects
+// the status-bar portion; once the content VC is shown (bar appears),
+// willShowViewController: fires a second one-tick-deferred inject so the
+// --zapp-titlebar-height updates to the full inset.
+//
+// The persistent WKUserScript (add_user_script=true) records the value at
+// AtDocumentStart so reloads keep it. Live updates use evaluateJavaScript only
+// (add_user_script=false) — WKUserContentController has no per-script removal,
+// so repeated adds would pile up. The first call from set_items passes
+// add_user_script=true; the willShowViewController re-inject passes false.
 
 void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_user_script) {
     if (!window_ptr) return;
@@ -1157,7 +1224,8 @@ void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_u
         return;
     }
 
-    // Measure height from whichever nav is currently showing the bar.
+    // ── Measure the toolbar row height ──────────────────────────────────────
+    //
     // Collapsed → collapsedNav owns the displayed bar (if content is on top).
     // Expanded  → contentNav owns the bar.
     UINavigationController* nav = nil;
@@ -1174,21 +1242,71 @@ void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_u
         if (toolbarH < 0) toolbarH = 0;
     }
 
-    NSString* js = [NSString stringWithFormat:
-        @"(function(){try{var r=document.documentElement;"
-        @"if(r){r.style.setProperty('--zapp-toolbar-height','%.0fpx');}}catch(e){}})();",
-        toolbarH];
+    // ── Helper: build + inject the metric vars into a single webview ─────────
+    //
+    // For the CONTENT webview: inject all four safe-area vars + the titlebar +
+    // toolbar heights. safeAreaInsets.top on the content WKWebView is the FULL
+    // top inset including status bar + dynamic island + the shown nav bar, so it
+    // is the authoritative source for --zapp-titlebar-height (the var used by
+    // kitchen-sink .main-pane padding-top).
+    //
+    // For SIDEBAR / INSPECTOR webviews: inject their own safeAreaInsets (status
+    // bar only on most devices; same full inset on iPhone when bar is hidden) as
+    // --zapp-titlebar-height, and --zapp-toolbar-height = 0.
+    //
+    // toolbarH is only non-zero for the CONTENT pane (its nav bar is the source
+    // of the row height); sidebar/inspector pass 0 explicitly.
 
-    WKWebView* wv = zapp_ios_content_webview_for_slot(host_slot);
-    if (!wv) return;
+    void (^injectIntoWebview)(WKWebView*, CGFloat, BOOL) =
+        ^(WKWebView* wv, CGFloat tbH, BOOL addScript) {
+        if (!wv) return;
 
-    if (add_user_script) {
-        [wv.configuration.userContentController addUserScript:
-            [[WKUserScript alloc] initWithSource:js
-                                  injectionTime:WKUserScriptInjectionTimeAtDocumentStart
-                               forMainFrameOnly:NO]];
+        UIEdgeInsets sa = wv.safeAreaInsets;
+        CGFloat titlebH = sa.top; // full top inset (status-bar + dynamic-island + nav bar)
+        if (titlebH < 0) titlebH = 0;
+
+        // Build the combined vars JS — mirrors macOS darwin/toolbar.m's shape
+        // exactly (same property names, same documentElement target, same IIFE
+        // wrapper). Set all vars in one pass.
+        NSString* js = [NSString stringWithFormat:
+            @"(function(){try{var r=document.documentElement;if(r){"
+            @"r.style.setProperty('--zapp-titlebar-height','%.0fpx');"
+            @"r.style.setProperty('--zapp-toolbar-height','%.0fpx');"
+            @"r.style.setProperty('--zapp-safe-area-top','%.0fpx');"
+            @"r.style.setProperty('--zapp-safe-area-left','%.0fpx');"
+            @"r.style.setProperty('--zapp-safe-area-right','%.0fpx');"
+            @"r.style.setProperty('--zapp-safe-area-bottom','%.0fpx');"
+            @"}}catch(e){}})();",
+            titlebH, tbH, sa.top, sa.left, sa.right, sa.bottom];
+
+        if (addScript) {
+            [wv.configuration.userContentController addUserScript:
+                [[WKUserScript alloc] initWithSource:js
+                                      injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                   forMainFrameOnly:NO]];
+        }
+        [wv evaluateJavaScript:js completionHandler:nil];
+    };
+
+    // ── Content webview ──────────────────────────────────────────────────────
+    WKWebView* contentWv = zapp_ios_content_webview_for_slot(host_slot);
+    injectIntoWebview(contentWv, toolbarH, (BOOL)add_user_script);
+
+    // ── Sidebar pane webview ──────────────────────────────────────────────────
+    // Toolbar height = 0 (no toolbar row in the sidebar column).
+    int32_t sidebarSlot = zapp_ios_sidebar_slot_for(host_slot);
+    if (sidebarSlot >= 0) {
+        WKWebView* sidebarWv = zapp_ios_content_webview_for_slot(sidebarSlot);
+        injectIntoWebview(sidebarWv, 0.0, (BOOL)add_user_script);
     }
-    [wv evaluateJavaScript:js completionHandler:nil];
+
+    // ── Inspector pane webview ───────────────────────────────────────────────
+    // Toolbar height = 0 (no toolbar row in the inspector column).
+    int32_t inspectorSlot = zapp_ios_inspector_slot_for(host_slot);
+    if (inspectorSlot >= 0) {
+        WKWebView* inspectorWv = zapp_ios_content_webview_for_slot(inspectorSlot);
+        injectIntoWebview(inspectorWv, 0.0, (BOOL)add_user_script);
+    }
 }
 
 // ─── zapp_toolbar_unregister ─────────────────────────────────────────────────
