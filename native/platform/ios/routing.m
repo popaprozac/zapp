@@ -36,6 +36,10 @@ extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
 extern UINavigationController* zapp_ios_content_nav_for_window(void* window_ptr);
 // R1: owned-nav chrome (iphonenav.m). nil on iPad/non-phone or before init.
 extern UINavigationController* zapp_ios_owned_nav_for_window(void* window_ptr);
+// Defined in ios/toolbar.m — re-applies the registered toolbar entry to the
+// correct nav for the window. No-op when no toolbar is registered. Called here
+// to re-attach items after a push/pop on the owned nav (T4: N3a toolbar-drop fix).
+extern void zapp_ios_toolbar_reapply_for_window(void* window_ptr);
 extern UIViewController* zapp_ios_owned_content_vc_for_window(void* window_ptr);
 extern bool zapp_window_native_routing(int32_t window_id);
 extern int router_depth(int32_t win);
@@ -124,6 +128,15 @@ static void zapp_route_vc_teardown(ZappRouteVC* vc) {
     }
     if (gone.count) {
         [self.pushedVCs removeObjectsInArray:gone];
+    }
+
+    // T4: re-apply the toolbar to the owned nav's NEW topViewController after
+    // any push or pop. On the owned nav, zapp_ios_toolbar_apply_to_nav targets
+    // nav.topViewController — so items must be re-stamped whenever topVC changes.
+    // This mirrors sidebar.m's collapse/expand reapply calls.
+    // Guard: only when this window uses the owned-nav chrome (iPhone R1).
+    if (win && zapp_ios_owned_nav_for_window(win)) {
+        zapp_ios_toolbar_reapply_for_window(win);
     }
 
     if ([self.prev respondsToSelector:_cmd]) {

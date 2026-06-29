@@ -83,6 +83,12 @@ extern UINavigationController* zapp_ios_collapsed_nav_for_window(void* window_pt
 // (c.splitVC.isCollapsed). NO when expanded (side-by-side) or no sidebar.
 extern BOOL zapp_ios_split_is_collapsed_for_window(void* window_ptr);
 
+// Defined in ios/iphonenav.m — returns the app-owned UINavigationController
+// used for iPhone native-routing chrome. Nil on iPad / non-phone windows or
+// before the owned nav is initialised. When non-nil, skip the split
+// collapsed/expanded branching and target the owned nav directly.
+extern UINavigationController* zapp_ios_owned_nav_for_window(void* window_ptr);
+
 // Returns YES when the sidebar is HIDDEN on iPad (displayMode == SecondaryOnly).
 // Returns NO for collapsed (iPhone), no sidebar, or sidebar visible.
 // Used by the expanded toolbar path to decide whether to include our manual
@@ -553,8 +559,8 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
     NSString* json = [NSString stringWithUTF8String:toolbar_json];
     zapp_ios_toolbar_on_main(^{
         UINavigationController* contentNav = zapp_ios_content_nav_for_window(window_ptr);
-        if (!contentNav) {
-            // No-sidebar window: deferred (T1 decision). Safe no-op.
+        if (!contentNav && !zapp_ios_owned_nav_for_window(window_ptr)) {
+            // No-sidebar and no owned-nav window: deferred (T1 decision). Safe no-op.
             return;
         }
 
@@ -949,6 +955,19 @@ void zapp_ios_toolbar_reapply_for_window_hidden(void* window_ptr, BOOL sidebarHi
     ZappIOSToolbarEntry* entry = zapp_ios_toolbars[key];
     if (!entry) return; // no toolbar registered for this window — no-op
 
+    // ── R1: iPhone owned-nav short-circuit ──────────────────────────────────
+    // On iPhone with native routing, the window root is an app-owned
+    // UINavigationController (not a UISplitViewController). Neither the
+    // collapsed nor expanded sidebar paths below apply — use the owned nav
+    // directly. Its topViewController is the content/route VC, which is
+    // reliable (the owned nav is never orphaned). includeToggleSidebar=YES
+    // because the sidebar is always "collapsed into" the nav on iPhone.
+    UINavigationController* ownedNav = zapp_ios_owned_nav_for_window(window_ptr);
+    if (ownedNav) {
+        zapp_ios_toolbar_apply_to_nav(ownedNav, entry, /*includeToggleSidebar*/YES);
+        return;
+    }
+
     BOOL collapsed = zapp_ios_split_is_collapsed_for_window(window_ptr);
 
     if (collapsed) {
@@ -1277,15 +1296,21 @@ void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_u
 
     // ── Measure the toolbar row height ──────────────────────────────────────
     //
+    // R1 owned-nav: use the owned nav directly (iPhone native-routing chrome).
     // Collapsed → collapsedNav owns the displayed bar (if content is on top).
     // Expanded  → contentNav owns the bar.
     UINavigationController* nav = nil;
-    BOOL collapsed = zapp_ios_split_is_collapsed_for_window(window_ptr);
-    if (collapsed) {
-        nav = zapp_ios_collapsed_nav_for_window(window_ptr);
-        if (!nav) nav = zapp_ios_content_nav_for_window(window_ptr); // fallback
+    UINavigationController* ownedNavM = zapp_ios_owned_nav_for_window(window_ptr);
+    if (ownedNavM) {
+        nav = ownedNavM;
     } else {
-        nav = zapp_ios_content_nav_for_window(window_ptr);
+        BOOL collapsed = zapp_ios_split_is_collapsed_for_window(window_ptr);
+        if (collapsed) {
+            nav = zapp_ios_collapsed_nav_for_window(window_ptr);
+            if (!nav) nav = zapp_ios_content_nav_for_window(window_ptr); // fallback
+        } else {
+            nav = zapp_ios_content_nav_for_window(window_ptr);
+        }
     }
     CGFloat toolbarH = 0;
     if (nav && !nav.navigationBarHidden) {
