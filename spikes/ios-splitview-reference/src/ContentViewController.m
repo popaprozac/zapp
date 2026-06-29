@@ -1,8 +1,59 @@
 #import "ContentViewController.h"
 #import "DetailViewController.h"
+#import <WebKit/WebKit.h>
 
-@interface ContentViewController ()
-@property (nonatomic, strong) UILabel *sectionLabel;
+// ---------------------------------------------------------------------------
+// HTML template shared for the safe-area visualiser.
+// %BG%    → background colour (CSS colour string)
+// %TITLE% → heading text
+// %LINK%  → optional anchor / note injected below the heading
+// ---------------------------------------------------------------------------
+static NSString * const kSafeAreaHTMLTemplate =
+    @"<!doctype html><html><head>"
+    "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1, viewport-fit=cover\">"
+    "<style>"
+    "html,body{margin:0;height:100%%;font-family:-apple-system,sans-serif;}"
+    "body{background:%BG%;}"
+    "#safetop{position:fixed;top:0;left:0;right:0;height:env(safe-area-inset-top);background:#ff3b30;}"
+    "#safebottom{position:fixed;bottom:0;left:0;right:0;height:env(safe-area-inset-bottom);background:#34c759;}"
+    "#safeleft{position:fixed;top:0;bottom:0;left:0;width:env(safe-area-inset-left);background:#ff9500;}"
+    "#saferight{position:fixed;top:0;bottom:0;right:0;width:env(safe-area-inset-right);background:#af52de;}"
+    "#content{padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);}"
+    "h1{margin:0;padding:8px 0;}"
+    "#readout{font-size:14px;white-space:pre;opacity:.85;}"
+    "a{font-size:20px;display:inline-block;margin-top:16px;}"
+    "</style></head><body>"
+    "<div id=\"safetop\"></div>"
+    "<div id=\"safebottom\"></div>"
+    "<div id=\"safeleft\"></div>"
+    "<div id=\"saferight\"></div>"
+    "<div id=\"content\">"
+    "<h1 id=\"section\">%TITLE%</h1>"
+    "<div id=\"readout\">reading safe-area\xe2\x80\xa6</div>"
+    "%LINK%"
+    "</div>"
+    "<script>"
+    "function show(){"
+    "var p=document.createElement('div');"
+    "p.style.cssText='position:fixed;top:env(safe-area-inset-top);left:env(safe-area-inset-left);';"
+    "document.body.appendChild(p);"
+    "var r=p.getBoundingClientRect();"
+    "document.getElementById('readout').textContent="
+    "'safe-area-inset-top  = '+Math.round(r.top)+'px\\n'"
+    "+'safe-area-inset-left = '+Math.round(r.left)+'px\\n'"
+    "+'(red band above = top inset; if 0 the content bleeds UNDER the nav bar)';"
+    "p.remove();}"
+    "window.addEventListener('load',show);"
+    "window.addEventListener('resize',show);"
+    "setTimeout(show,300);"
+    "</script>"
+    "</body></html>";
+
+// ---------------------------------------------------------------------------
+
+@interface ContentViewController () <WKScriptMessageHandler>
+@property (nonatomic, strong) WKWebView *webView;
+@property (nonatomic, copy)   NSString  *currentSection;
 @end
 
 @implementation ContentViewController
@@ -11,39 +62,41 @@
     [super viewDidLoad];
 
     self.title = @"Content";
-    self.view.backgroundColor = [UIColor systemTealColor];
+    self.currentSection = @"(select a section)";
 
-    // Section label
-    self.sectionLabel = [[UILabel alloc] init];
-    self.sectionLabel.text = @"(select a section)";
-    self.sectionLabel.font = [UIFont systemFontOfSize:28 weight:UIFontWeightMedium];
-    self.sectionLabel.textAlignment = NSTextAlignmentCenter;
-    self.sectionLabel.textColor = [UIColor labelColor];
-    self.sectionLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.view addSubview:self.sectionLabel];
+    // ------------------------------------------------------------------
+    // Full-bleed WKWebView pinned to EDGES (not safe-area guide).
+    // This is intentional: we want to observe UIKit's DEFAULT behaviour,
+    // not paper over it with safe-area constraints.
+    // ------------------------------------------------------------------
+    WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
 
-    // "Push detail →" button
-    UIButton *pushBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    [pushBtn setTitle:@"Push detail →" forState:UIControlStateNormal];
-    pushBtn.titleLabel.font = [UIFont systemFontOfSize:20];
-    pushBtn.translatesAutoresizingMaskIntoConstraints = NO;
-    [pushBtn addTarget:self
-                action:@selector(pushDetail)
-      forControlEvents:UIControlEventTouchUpInside];
-    [self.view addSubview:pushBtn];
+    // Register the "nav" message handler so JS can trigger native push.
+    [config.userContentController addScriptMessageHandler:self name:@"nav"];
 
+    self.webView = [[WKWebView alloc] initWithFrame:CGRectZero configuration:config];
+    self.webView.translatesAutoresizingMaskIntoConstraints = NO;
+
+    // Let the webview's scroll view extend behind the nav bar by default.
+    // (We deliberately do NOT set scrollView.contentInsetAdjustmentBehavior
+    //  so UIKit uses the default UIScrollViewContentInsetAdjustmentAutomatic —
+    //  this is what Phase 2 measures.)
+    [self.view addSubview:self.webView];
+
+    // Pin to view EDGES — NOT safe-area layout guide.
     [NSLayoutConstraint activateConstraints:@[
-        [self.sectionLabel.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
-        [self.sectionLabel.centerYAnchor constraintEqualToAnchor:self.view.centerYAnchor
-                                                        constant:-40],
-        [self.sectionLabel.leadingAnchor  constraintGreaterThanOrEqualToAnchor:self.view.leadingAnchor  constant:16],
-        [self.sectionLabel.trailingAnchor constraintLessThanOrEqualToAnchor:self.view.trailingAnchor   constant:-16],
-
-        [pushBtn.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
-        [pushBtn.topAnchor     constraintEqualToAnchor:self.sectionLabel.bottomAnchor constant:24],
+        [self.webView.leadingAnchor  constraintEqualToAnchor:self.view.leadingAnchor],
+        [self.webView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+        [self.webView.topAnchor      constraintEqualToAnchor:self.view.topAnchor],
+        [self.webView.bottomAnchor   constraintEqualToAnchor:self.view.bottomAnchor],
     ]];
 
-    // TWO DISTINCT content toolbar items — UIKit will swap these in when this VC is on screen
+    [self loadHTML];
+
+    // ------------------------------------------------------------------
+    // Per-VC toolbar items — identical to Phase 1.
+    // UIKit swaps these in/out as the VC enters/leaves the top of the stack.
+    // ------------------------------------------------------------------
     UIBarButtonItem *filter = [[UIBarButtonItem alloc]
         initWithImage:[UIImage systemImageNamed:@"line.3.horizontal.decrease.circle"]
                 style:UIBarButtonItemStylePlain
@@ -55,19 +108,66 @@
                              action:nil];
     self.navigationItem.rightBarButtonItems = @[ share, filter ];
 
-    // Do NOT set a leftBarButtonItem — let UISplitViewController provide its
-    // displayModeButtonItem / back button automatically.
+    // Do NOT set a leftBarButtonItem — let UISplitViewController/UINavigationController
+    // provide its displayModeButtonItem / back button automatically.
 }
 
+// ---------------------------------------------------------------------------
+// Build and load the HTML with the current section substituted in.
+// ---------------------------------------------------------------------------
+- (void)loadHTML {
+    NSString *link =
+        @"<a href=\"#\" "
+        "onclick=\"webkit.messageHandlers.nav.postMessage('detail');return false\">"
+        "Push detail \xe2\x86\x92</a>";
+
+    NSString *html = kSafeAreaHTMLTemplate;
+    html = [html stringByReplacingOccurrencesOfString:@"%BG%"    withString:@"#4db6ac"];
+    html = [html stringByReplacingOccurrencesOfString:@"%TITLE%" withString:self.currentSection];
+    html = [html stringByReplacingOccurrencesOfString:@"%LINK%"  withString:link];
+
+    [self.webView loadHTMLString:html baseURL:nil];
+}
+
+// ---------------------------------------------------------------------------
+// Called by SidebarViewController on row selection.
+// ---------------------------------------------------------------------------
 - (void)showSection:(NSString *)name {
     self.title = name;
-    self.sectionLabel.text = name;
+    self.currentSection = name;
+
+    // If the webview is already loaded, update in-place via JS (avoids a full
+    // reload that would flicker the visualiser). Fall back to full reload.
+    NSString *escaped = [name stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
+    NSString *js = [NSString stringWithFormat:
+        @"(function(){"
+        "var el=document.getElementById('section');"
+        "if(el){el.textContent='%@';return 'updated';}"
+        "return 'not-found';})()", escaped];
+
+    [self.webView evaluateJavaScript:js completionHandler:^(id result, NSError *err) {
+        if (err || ![@"updated" isEqualToString:result]) {
+            // Page not ready yet — fall back to full reload.
+            [self loadHTML];
+        }
+    }];
+}
+
+// ---------------------------------------------------------------------------
+// WKScriptMessageHandler — "nav" handler from JS.
+// JS calls:  webkit.messageHandlers.nav.postMessage("detail")
+// ---------------------------------------------------------------------------
+- (void)userContentController:(WKUserContentController *)controller
+      didReceiveScriptMessage:(WKScriptMessage *)message {
+    if ([message.name isEqualToString:@"nav"] &&
+        [message.body isEqualToString:@"detail"]) {
+        [self pushDetail];
+    }
 }
 
 - (void)pushDetail {
-    DetailViewController *d = [DetailViewController new];
-    // UIKit gives back button + interactive edge-swipe-back FOR FREE
-    [self.navigationController pushViewController:d animated:YES];
+    // Idiomatic push — UIKit gives the back button and edge-swipe for free.
+    [self.navigationController pushViewController:[DetailViewController new] animated:YES];
 }
 
 @end

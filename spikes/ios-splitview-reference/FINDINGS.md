@@ -1,4 +1,4 @@
-# FINDINGS — ios-splitview-reference Phase 1
+# FINDINGS — ios-splitview-reference
 
 ## Observe List
 
@@ -57,3 +57,46 @@ R1's iPhone bugs (lost swipe, double toolbar, transient back) and iPad #771's bu
 **Therefore: rebuild Zapp's iOS routing to drive `UISplitViewController` idiomatically** — push real VCs, set per-VC `navigationItem`, let UIKit own collapse / back / swipe / toolbar / adaptive presentation — and **delete** the reconcile + reapply + pop-detect machinery (and the R1 owned-nav fork). One native rewrite fixes BOTH idioms; #771 falls out of it. The only Zapp-specific work left is (1) hosting the WKWebView in the content/route VCs with correct safe-area insets [Phase 2 de-risks this], and (2) the JS/Nim-router ↔ native-VC bridge (when JS routes, native pushes; when the user pops, native tells JS).
 
 **Open before the rebuild design:** Phase 2 (swap plain VCs → WKWebView-hosting VCs, same idiomatic nav) to characterise the safe-area/inset behaviour (N2) with real webviews — the single riskiest part of the rebuild — before committing the full design.
+
+---
+
+## Phase 2 — WKWebView VCs + Safe-Area Visualiser
+
+*Pending sim runs. Observe-list below; fill in results.*
+
+### Setup
+
+Both ContentViewController and DetailViewController now host a full-bleed
+`WKWebView` pinned to `view.{leading,trailing,top,bottom}` edges (not the
+safe-area layout guide). The HTML loads `viewport-fit=cover` and uses
+`env(safe-area-inset-*)` bands + a JS readout to surface the actual insets
+the webview sees.
+
+### Key question
+
+**Does UIKit propagate the nav-bar height into `safe-area-inset-top` inside the
+WKWebView automatically (content insets below the bar), or does content bleed
+under the bar (inset-top = 0)?**
+
+The red `#safetop` band + `#readout` number answers this directly.
+
+### iPhone observe list
+
+- [ ] (P2-a) **Content — top inset**: red band visible below nav bar? `safe-area-inset-top` value:  ___px
+- [ ] (P2-b) **Detail — top inset** (after JS→native push): red band visible? value:  ___px
+- [ ] (P2-c) **Bottom inset**: green band visible above home indicator? value:  ___px
+- [ ] (P2-f) "Push detail →" link triggers native push (JS→native message handler works).
+- [ ] (P2-g) Native back button pops Detail → Content.
+- [ ] (P2-h) Edge-swipe pops Detail → Content.
+- [ ] (P2-i) Toolbar items correct: Content = Share+Filter; Detail = Trash. No stale items.
+- [ ] (P2-j) Sidebar selection updates Content webview title in-place.
+
+### iPad observe list
+
+- [ ] (P2-d) **Tile mode — left inset**: orange band present in Content? (Expected: absent — sidebar is beside, not over.)
+- [ ] (P2-e) **Overlay sidebar — left inset**: orange band present when sidebar overlays? (Expected: absent — overlay floats over; bleed is correct/expected UIKit behaviour.)
+- (P2-f through P2-j as above)
+
+### Verdict (fill in after sim run)
+
+> TBD

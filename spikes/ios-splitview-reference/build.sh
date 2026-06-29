@@ -13,6 +13,7 @@ clang \
     -fmodules \
     -framework UIKit \
     -framework Foundation \
+    -framework WebKit \
     src/*.m \
     -o build/SplitRef.app/SplitRef
 
