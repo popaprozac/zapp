@@ -37,6 +37,9 @@ proc runApp(): int =
     # to `default` (standard titlebar) — apps choose the hidden look on purpose.
     titleBarStyle: TitleBarStyle.HiddenInset,
     vibrancy: Material.Sidebar,
+    # N3a risk gate: on iOS, router.push drives a real native UINavigationController
+    # push instead of the desktop in-window content swap. Ignored on macOS/Windows.
+    nativeRouting: true,
   ))
   win.onReady(onReady)
 

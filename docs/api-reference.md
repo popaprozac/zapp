@@ -1677,6 +1677,16 @@ that tracks `canGoBack`/`canGoForward`. Wiring these states to native toolbar
 back/forward buttons lands in N2b (this cycle only delivers the stack and its
 events). iOS native routing (UINavigationController) is a future milestone.
 
+#### iOS native routing (preview)
+
+Set `nativeRouting: true` on a window (iOS only) and `router.push` materializes a
+real native `UINavigationController` push — a new view controller with its own
+webview, native slide-in animation, and edge swipe-back — instead of the desktop
+in-window content swap. The native back/swipe stays in lockstep with the router
+stack. **Preview / risk-gate** in this release: per-route webview caching, state
+restore on back, and per-route toolbar are not yet wired. macOS/Windows ignore the
+flag (desktop in-window navigation).
+
 #### Desktop in-window navigation
 
 On desktop the router drives **in-window** navigation: the route stack is logical
