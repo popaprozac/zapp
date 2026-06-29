@@ -18,14 +18,6 @@ proc routerSeed*(win: int32, url: string) =
   if not gRoutes.hasKey(win):
     gRoutes[win] = RouteState(entries: @[RouteEntry(url: url, params: "")], cur: 0)
 
-proc routerSeedEmpty*(win: int32) {.exportc: "zapp_router_seed_empty", cdecl.} =
-  ## Seed with an EMPTY stack (depth=0) for owned-nav windows — the sidebar is
-  ## shown at launch with no content pushed. UNCONDITIONALLY overwrites any
-  ## earlier seed (e.g. the routerSeed("/") that createWindow runs first).
-  ## Called from ios/window.m after zapp_ios_register_owned_nav, which happens
-  ## after createWindow's routerSeed — so this must overwrite, not guard.
-  gRoutes[win] = RouteState(entries: @[], cur: 0)
-
 proc routerClear*(win: int32) =
   gRoutes.del(win)
 
@@ -33,7 +25,7 @@ proc routerPush*(win: int32, url, params: string) =
   if not gRoutes.hasKey(win): routerSeed(win, "/")
   var s = gRoutes[win]
   if s.entries.len == 0:
-    # Empty state (owned-nav, pre-first-select): first push seeds the initial entry.
+    # Empty state (pre-first-select): first push seeds the initial entry.
     s.entries = @[RouteEntry(url: url, params: params)]
     s.cur = 0
   else:
@@ -46,7 +38,7 @@ proc routerReplace*(win: int32, url, params: string) =
   if not gRoutes.hasKey(win): routerSeed(win, "/")
   var s = gRoutes[win]
   if s.entries.len == 0:
-    # Empty state (owned-nav, pre-first-select): treat as the initial entry.
+    # Empty state (pre-first-select): treat as the initial entry.
     # popToRoot was a no-op; replace here seeds the first real entry.
     s.entries = @[RouteEntry(url: url, params: params)]
     s.cur = 0
@@ -116,8 +108,8 @@ proc routerCanGoForward*(win: int32): bool =
 proc routerDepth*(win: int32): cint {.exportc: "router_depth", cdecl.} =
   ## Number of entries up to and including the current cursor (the native VC
   ## stack must match this: 1 = root only, N = root + (N-1) pushed routes).
-  ## An empty-seeded window (owned-nav, pre-first-select) returns 0 so
-  ## want = baseline + 0 = 1 = sidebar only at launch.
+  ## An empty stack (pre-first-select) returns 0.
+  ## Baseline is 1 (content VC), so want = 1 + 0 = 1 = no route VCs on top.
   if gRoutes.hasKey(win):
     let s = gRoutes[win]
     if s.entries.len == 0: return 0

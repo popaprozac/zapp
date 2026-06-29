@@ -66,14 +66,14 @@ extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
 extern void darwin_window_eval_js(int32_t window_id, const char* js);
 extern int32_t zapp_ios_inspector_slot_for(int32_t host_slot);
 
-// Defined in ios/toolbar.m — re-applies a set toolbar to the correct nav after
+// Defined in ios/toolbar.m — applies a set toolbar to the correct nav after
 // a collapse/expand transition. No-op when no toolbar has been registered.
-extern void zapp_ios_toolbar_reapply_for_window(void* window_ptr);
+extern void zapp_ios_toolbar_apply_for_window(void* window_ptr);
 
-// Defined in ios/toolbar.m — re-applies with an explicit sidebarHidden state
+// Defined in ios/toolbar.m — applies with an explicit sidebarHidden state
 // (the transition TARGET) so willChangeToDisplayMode: can drive the toggle change
 // synchronously within the animation instead of one tick after.
-extern void zapp_ios_toolbar_reapply_for_window_hidden(void* window_ptr, BOOL sidebarHidden);
+extern void zapp_ios_toolbar_apply_for_window_hidden(void* window_ptr, BOOL sidebarHidden);
 
 // --- Per-window registry --------------------------------------------------
 //
@@ -437,9 +437,8 @@ static void zapp_ios_sidebar_sync_collapse(ZappIOSSidebarController* c, BOOL col
 // On collapse (entered compact): the stack roots at the sidebar → expanded
 // (sidebar visible). Capture the combined nav controller UIKit built.
 // If no toolbar has been registered, force its bar hidden (chrome-less default).
-// If a toolbar IS registered, delegate to zapp_ios_toolbar_reapply_for_window —
-// it will show the bar on collapsedNav only when the content VC is on top, and
-// install a UINavigationControllerDelegate to track push/pop transitions.
+// If a toolbar IS registered, call zapp_ios_toolbar_apply_for_window —
+// it will show the bar on collapsedNav only when the content VC is on top.
 - (void)splitViewControllerDidCollapse:(UISplitViewController*)svc {
     UINavigationController* nav = zapp_ios_collapsed_nav(svc);
     if (nav) {
@@ -450,15 +449,14 @@ static void zapp_ios_sidebar_sync_collapse(ZappIOSSidebarController* c, BOOL col
         zapp_ios_sidebar_rearm_pop(self);
     }
     // Always default the bar to hidden first. If a toolbar is registered,
-    // reapply will override this and manage per-VC visibility via the nav
-    // delegate. This preserves the chrome-less default for windows without a
-    // toolbar.
+    // apply_for_window will set the correct visibility. This preserves the
+    // chrome-less default for windows without a toolbar.
     if (nav) nav.navigationBarHidden = YES;
     zapp_ios_sidebar_sync_collapse(self, NO);
     // Re-apply any registered toolbar to the now-captured collapsedNav.
     // Must happen AFTER self.collapsedNav is set so the toolbar can reach it.
     void* winPtr = (__bridge void*)self.splitVC.view.window;
-    if (winPtr) zapp_ios_toolbar_reapply_for_window(winPtr);
+    if (winPtr) zapp_ios_toolbar_apply_for_window(winPtr);
 }
 
 - (void)splitViewControllerDidExpand:(UISplitViewController*)svc {
@@ -468,7 +466,7 @@ static void zapp_ios_sidebar_sync_collapse(ZappIOSSidebarController* c, BOOL col
     // Re-apply any registered toolbar to contentNav now that the split is
     // expanded. Also removes the nav delegate from the old collapsedNav.
     void* winPtr = (__bridge void*)self.splitVC.view.window;
-    if (winPtr) zapp_ios_toolbar_reapply_for_window(winPtr);
+    if (winPtr) zapp_ios_toolbar_apply_for_window(winPtr);
 }
 
 // Gate the re-armed interactive-pop gesture: only begin when the collapsed
@@ -489,7 +487,7 @@ static void zapp_ios_sidebar_sync_collapse(ZappIOSSidebarController* c, BOOL col
 // button at that point). Without this hook, the toolbar never updates after the
 // user shows/hides the sidebar via our button, the system button, or a gesture.
 //
-// We call zapp_ios_toolbar_reapply_for_window_hidden SYNCHRONOUSLY, passing the
+// We call zapp_ios_toolbar_apply_for_window_hidden SYNCHRONOUSLY, passing the
 // `displayMode` parameter as the TARGET state. This is correct because UIKit
 // calls this delegate method with the incoming display mode BEFORE the transition,
 // so `displayMode` is the settled target — exactly what the toolbar needs to set
@@ -504,7 +502,7 @@ static void zapp_ios_sidebar_sync_collapse(ZappIOSSidebarController* c, BOOL col
 - (void)splitViewController:(UISplitViewController*)svc
     willChangeToDisplayMode:(UISplitViewControllerDisplayMode)displayMode {
     (void)svc;
-    // Resolve the window pointer that zapp_ios_toolbar_reapply_for_window expects.
+    // Resolve the window pointer that zapp_ios_toolbar_apply_for_window expects.
     void* winPtr = darwin_window_get_by_numeric_id(self.hostWindowId);
     if (!winPtr) return;
     // Compute the target hidden state from the incoming displayMode parameter.
@@ -514,7 +512,7 @@ static void zapp_ios_sidebar_sync_collapse(ZappIOSSidebarController* c, BOOL col
     // Synchronous call — we are already on the main thread inside the delegate.
     // The toolbar change applies within the same transition batch so leading items
     // change simultaneously with the sidebar show/hide animation (no snap lag).
-    zapp_ios_toolbar_reapply_for_window_hidden(winPtr, targetHidden);
+    zapp_ios_toolbar_apply_for_window_hidden(winPtr, targetHidden);
 }
 
 @end

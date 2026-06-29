@@ -1,19 +1,17 @@
-// iOS native routing — idiomatic UIKit seam (R1' RISK GATE, Task 1).
+// iOS native routing — idiomatic UIKit seam (R1' RISK GATE, Task 1+2).
 //
 // Drives the LIVE content-nav (contentVC.navigationController) directly:
 //   push → [nav pushViewController:vc animated:YES]
 //   pop  → [nav popViewControllerAnimated:YES]
 //   popToRoot → [nav popToViewController:contentVC animated:NO]
 //
-// The chrome-agnostic live-nav resolver (`zapp_route_content_nav`) checks the
-// owned-nav chrome first (iPhone, present in T1) then the split content-vc
-// (iPad). T2 deletes the owned-nav fork + fallback.
+// The chrome-agnostic live-nav resolver (`zapp_route_content_nav`) resolves
+// contentVC.navigationController for both iPhone (collapsed split) and iPad
+// (expanded split). Owned-nav fork deleted in T2; single split path.
 //
-// Deleted from N3a: zapp_ios_router_sync (reconcile), ZappRoutingNavDelegate
-// (old delegate with pushedVCs/prev chain/baseline math), zapp_routing_nav,
-// g_routing_delegates, and the owned-nav extern zapp_ios_owned_nav_for_window.
-// The zapp_ios_toolbar_reapply_for_window call that lived in the old delegate's
-// didShow is also gone — the new delegate does not reapply the toolbar.
+// Deleted from N3a: old push/pop baseline math, router sync, old delegate chain.
+// Deleted in T2: owned-nav fork, iphonenav.m externs, toolbar-apply call in old delegate.
+// The ZappRouteNavDelegate does not apply toolbar items.
 //
 // Kept verbatim: ZappRouteVC @interface/@implementation + viewDidLayoutSubviews,
 // zapp_route_vc_teardown, and all externs the seam still needs.
@@ -35,12 +33,9 @@ extern void zapp_ios_set_pending_route_url(const char* url);
 // Inject --zapp-* safe-area vars into a route VC's webview after layout.
 extern void zapp_ios_toolbar_inject_webview_safe_area(WKWebView* wv);
 
-// Chrome-agnostic content-VC resolution (T2 deletes the owned-nav fork).
+// Chrome-agnostic content-VC resolution (owned-nav fork deleted in T2).
 // sidebar.m: the authoritative secondary-column content VC stored at register time.
 extern UIViewController* zapp_ios_content_vc_for_window(void* window_ptr);
-// iphonenav.m: the owned-nav chrome's content VC (nil on iPad / non-phone).
-// Deleted in T2 when the owned-nav chrome is removed.
-extern UIViewController* zapp_ios_owned_content_vc_for_window(void* window_ptr);
 
 // Route VC: a plain UIViewController hosting its own WKWebView.
 // Tagged so the delegate can distinguish route VCs from the root contentVC.
@@ -87,14 +82,10 @@ static void zapp_route_vc_teardown(ZappRouteVC* vc) {
 // --- Chrome-agnostic live-nav resolver ------------------------------------
 //
 // Returns the UINavigationController that the content VC currently lives in.
-// On iPhone with owned-nav chrome: the owned-nav hosts contentVC directly.
-// On iPad / split: contentVC is the root of contentNav (sidebar.m).
-// T2 removes the owned-nav fork once the chrome is deleted.
+// On both iPhone and iPad: contentVC is the root of contentNav (sidebar.m).
+// The owned-nav fork was deleted in T2; split path is the single chrome.
 static UINavigationController* zapp_route_content_nav(void* win) {
-    // iPhone owned-nav chrome (T2 deletes this fork).
-    UIViewController* contentVC = zapp_ios_owned_content_vc_for_window(win);
-    // Split chrome (iPad) — fallback when owned-nav is absent.
-    if (!contentVC) contentVC = zapp_ios_content_vc_for_window(win);
+    UIViewController* contentVC = zapp_ios_content_vc_for_window(win);
     return contentVC.navigationController;   // LIVE nav — the fix vs N3a
 }
 
@@ -109,9 +100,8 @@ static UINavigationController* zapp_route_content_nav(void* win) {
 //   Programmatic: routerstate mutated FIRST → by didShow the depths match → no-op.
 //   User back/swipe: VC popped first → didShow sees native < router → pop_from_native.
 //
-// This delegate lives on contentVC.navigationController (the live nav). It does
-// NOT conflict with ZappIOSToolbarNavDelegate, which lives on collapsedNav (the
-// combined collapsed stack on iPhone) — a different nav controller entirely.
+// This delegate lives on contentVC.navigationController (the live nav).
+// After T2 it is the sole delegate on that nav (no toolbar delegate conflicts).
 @interface ZappRouteNavDelegate : NSObject <UINavigationControllerDelegate>
 @property (nonatomic, assign) int32_t windowId;
 @end
@@ -199,11 +189,11 @@ void zapp_ios_push_route_vc(int32_t windowId, const char* url) {
     }
 
     // Don't force-stamp toolbar items at push time. The app sets items via
-    // toolbar:setItems → darwin_toolbar_set_items → zapp_ios_toolbar_reapply_for_window,
-    // which already targets nav.topViewController via zapp_ios_toolbar_apply_to_nav.
-    // After this push, the route VC becomes topViewController → the next setItems
-    // call or reapply will reach it automatically. Stamping at push would apply
-    // stale items from the content VC, not the route-specific items.
+    // toolbar:setItems → darwin_toolbar_set_items → zapp_ios_toolbar_apply_to_nav,
+    // which targets nav.topViewController. After this push, the route VC becomes
+    // topViewController → the next setItems call will reach it automatically.
+    // Stamping at push would apply stale items from the content VC, not the
+    // route-specific items.
 
     [nav pushViewController:vc animated:YES];
 }
@@ -222,9 +212,7 @@ void zapp_ios_pop_route_vc(int32_t windowId) {
 void zapp_ios_pop_to_content(int32_t windowId) {
     void* win = darwin_window_get_by_numeric_id(windowId);
     if (!win) return;
-    // Resolve the content VC directly (chrome-agnostic, mirrors zapp_route_content_nav).
-    UIViewController* contentVC = zapp_ios_owned_content_vc_for_window(win);
-    if (!contentVC) contentVC = zapp_ios_content_vc_for_window(win);
+    UIViewController* contentVC = zapp_ios_content_vc_for_window(win);
     if (!contentVC) return;
     UINavigationController* nav = contentVC.navigationController;
     if (!nav) return;

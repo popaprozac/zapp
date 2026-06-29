@@ -133,7 +133,6 @@ export function getPlatformSources(nativeDir: string, target: BuildTarget = dete
       path.join(iosDir, "popover.m"),
       path.join(iosDir, "screen.m"),
       path.join(iosDir, "routing.m"),
-      path.join(iosDir, "iphonenav.m"),
     ];
     return sources.filter(f => existsSync(f));
   }

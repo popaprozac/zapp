@@ -22,11 +22,10 @@
 //   On iPhone the split collapses to a single column (collapsedNav). T1's
 //   set_items un-hid contentNav, but collapsedNav (not contentNav) is on
 //   screen while collapsed → bar stayed hidden at launch.
-//   Fix: set_items and the new zapp_ios_toolbar_reapply_for_window target the
-//   nav that is actually displayed: collapsedNav when the split is collapsed,
-//   contentNav when expanded. A UINavigationControllerDelegate on the collapsed
-//   nav toggles bar visibility per visible VC (content → shown, sidebar → hidden)
-//   so the bar is absent over the sidebar list.
+//   Fix (T2): darwin_toolbar_set_items and zapp_ios_toolbar_apply_for_window target
+//   the nav that is actually displayed: collapsedNav when the split is collapsed,
+//   contentNav when expanded. Bar visibility in collapsed mode is set directly:
+//   shown when the content VC is on top (count > 1), hidden at the sidebar root.
 //   iPad de-dup: when the split is expanded/regular, UIKit auto-provides a
 //   system sidebar button in the nav bar; we omit our manual toggleSidebar item
 //   to avoid a duplicate. When collapsed/compact, no system button exists so we
@@ -82,12 +81,6 @@ extern UINavigationController* zapp_ios_collapsed_nav_for_window(void* window_pt
 // Returns YES when the split is currently collapsed to a single column
 // (c.splitVC.isCollapsed). NO when expanded (side-by-side) or no sidebar.
 extern BOOL zapp_ios_split_is_collapsed_for_window(void* window_ptr);
-
-// Defined in ios/iphonenav.m — returns the app-owned UINavigationController
-// used for iPhone native-routing chrome. Nil on iPad / non-phone windows or
-// before the owned nav is initialised. When non-nil, skip the split
-// collapsed/expanded branching and target the owned nav directly.
-extern UINavigationController* zapp_ios_owned_nav_for_window(void* window_ptr);
 
 // Returns YES when the sidebar is HIDDEN on iPad (displayMode == SecondaryOnly).
 // Returns NO for collapsed (iPhone), no sidebar, or sidebar visible.
@@ -146,7 +139,7 @@ static UIImage* zapp_ios_resolve_icon(NSString* spec) {
 // set_items calls must add the user script only on the first call, then rely on
 // evaluateJavaScript for live updates thereafter.
 @property (nonatomic, assign) BOOL hasUserScript;
-// Built navigation-item buckets — stored so zapp_ios_toolbar_reapply_for_window
+// Built navigation-item buckets — stored so zapp_ios_toolbar_apply_for_window
 // can re-assign them to whichever nav is on-screen after a collapse/expand
 // without the app needing to re-call setItems.
 @property (nonatomic, strong) NSArray<UIBarButtonItem*>* leadingItems;  // all leading (incl. toggleSidebar)
@@ -154,8 +147,7 @@ static UIImage* zapp_ios_resolve_icon(NSString* spec) {
 @property (nonatomic, strong) NSArray<UIBarButtonItem*>* trailingItems;
 @property (nonatomic, strong) NSString* centerTitle;   // nil if none
 @property (nonatomic, strong) UIView*   centerView;    // nil if none
-// window_ptr — stored for use by the nav delegate (it only sees the nav, not
-// the window pointer, so we keep it here for the re-apply lookup).
+// window_ptr — stored for the apply_for_window lookup on collapse/expand.
 @property (nonatomic, assign) void* windowPtr;
 // T2: id-keyed dicts for update_item.
 // itemsById: maps item-id → UIBarButtonItem (buttons, group sub-buttons, segmented wrapper).
@@ -169,26 +161,7 @@ static UIImage* zapp_ios_resolve_icon(NSString* spec) {
 
 static NSMutableDictionary<NSValue*, ZappIOSToolbarEntry*>* zapp_ios_toolbars = nil;
 
-// ─── ZappIOSToolbarNavDelegate ───────────────────────────────────────────────
-//
-// UINavigationControllerDelegate attached to collapsedNav on iPhone.
-// Toggles the navigation bar: visible when the content VC is on top (user
-// navigated into the content column), hidden when the sidebar root VC is
-// on top (avoids an empty gap over the sidebar list).
-//
-// The delegate is set on collapsedNav by zapp_ios_toolbar_reapply_for_window
-// when the split collapses. It is removed (delegate = nil) when the split
-// expands. We retain a strong reference via the registry entry's allItems
-// through objc_setAssociatedObject on the collapsedNav, so the delegate
-// object outlives the call site.
-//
-// NOTE: UINavigationController.delegate is an unowned/weak reference on older
-// runtimes; we retain the delegate via associated object on the nav controller.
-
-static const char kZappToolbarNavDelegateKey = 0;
-
-// Forward declaration — defined later. Needed by ZappIOSToolbarNavDelegate's
-// willShowViewController: which re-injects after the bar becomes visible.
+// Forward declaration — defined later.
 void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_user_script);
 
 // N3a: inject the --zapp-* safe-area vars into a SINGLE arbitrary webview — a
@@ -219,71 +192,6 @@ void zapp_ios_toolbar_inject_webview_safe_area(WKWebView* wv) {
         top, sa.top, sa.left, sa.right, sa.bottom];
     [wv evaluateJavaScript:js completionHandler:nil];
 }
-
-@interface ZappIOSToolbarNavDelegate : NSObject <UINavigationControllerDelegate>
-@property (nonatomic, assign) void* windowPtr;   // for re-apply lookup
-@end
-
-@implementation ZappIOSToolbarNavDelegate
-
-// Called just before any push/pop animation completes on collapsedNav.
-// Show the bar when contentVC is about to become visible; hide it when the
-// sidebar root is about to become visible.
-- (void)navigationController:(UINavigationController*)navigationController
-      willShowViewController:(UIViewController*)viewController
-                    animated:(BOOL)animated {
-    (void)animated;
-    if (!self.windowPtr || !zapp_ios_toolbars) {
-        navigationController.navigationBarHidden = YES;
-        return;
-    }
-    NSValue* key = [NSValue valueWithPointer:self.windowPtr];
-    ZappIOSToolbarEntry* entry = zapp_ios_toolbars[key];
-    if (!entry) {
-        navigationController.navigationBarHidden = YES;
-        return;
-    }
-    // Show the bar only when navigating TO a non-root VC (the content column).
-    // Hide it when navigating back TO the root (the sidebar VC).
-    //
-    // In willShowViewController:, `viewController` is the destination VC.
-    // The sidebar root is always viewControllers[0] (the first VC pushed at
-    // collapse time). Compare by pointer: destination == root → hide bar;
-    // destination != root (content VC pushed on top) → show bar.
-    //
-    // This cleanly handles both directions (push → show, pop → hide) without
-    // needing a direct pointer to sidebarVC or contentVC.
-    UIViewController* rootVC = navigationController.viewControllers.firstObject;
-    BOOL goingToRoot = (viewController == rootVC);
-    navigationController.navigationBarHidden = goingToRoot;
-
-    // Re-inject chrome metrics when the CONTENT VC is about to appear (the bar
-    // is now shown). At launch on iPhone the bar is hidden while the sidebar is
-    // visible, so safeAreaInsets.top on the content webview is smaller than the
-    // true top chrome (no bar contribution yet). Once the user taps into content
-    // the bar appears and safeAreaInsets.top grows → re-inject so
-    // --zapp-titlebar-height reflects the real inset the content must reserve.
-    // Guard: only re-inject when the content VC is the destination (bar is about
-    // to be SHOWN). Injecting when going to root (bar hidden) is unnecessary and
-    // we avoid it to prevent any layout cycle.
-    if (!goingToRoot && self.windowPtr && zapp_ios_toolbars) {
-        NSValue* key = [NSValue valueWithPointer:self.windowPtr];
-        ZappIOSToolbarEntry* entry = zapp_ios_toolbars[key];
-        if (entry) {
-            void* winPtr = self.windowPtr;
-            int32_t slot = entry.hostSlot;
-            // One-tick defer so UIKit finishes laying out the nav bar and
-            // safeAreaInsets reflects the shown-bar inset.
-            dispatch_async(dispatch_get_main_queue(), ^{
-                // add_user_script=false: the WKUserScript was already installed
-                // at set_items time; this is a live-value update only.
-                zapp_toolbar_inject_metrics(winPtr, slot, false);
-            });
-        }
-    }
-}
-
-@end
 
 // ─── Click emit ─────────────────────────────────────────────────────────────
 //
@@ -403,7 +311,7 @@ static void zapp_ios_toolbar_on_main(void (^block)(void)) {
     else dispatch_async(dispatch_get_main_queue(), block);
 }
 
-// ─── zapp_ios_toolbar_reapply_for_window (forward declarations) ──────────────
+// ─── zapp_ios_toolbar_apply_for_window (forward declarations) ──────────────
 //
 // Called from sidebar.m on collapse/expand transitions so a set toolbar
 // survives the nav-controller switch. Must be declared here before sidebar.m
@@ -413,8 +321,8 @@ static void zapp_ios_toolbar_on_main(void (^block)(void)) {
 // TARGET) so willChangeToDisplayMode: can drive the toggle decision
 // synchronously without reading the stale splitVC.displayMode.
 
-void zapp_ios_toolbar_reapply_for_window(void* window_ptr);
-void zapp_ios_toolbar_reapply_for_window_hidden(void* window_ptr, BOOL sidebarHidden);
+void zapp_ios_toolbar_apply_for_window(void* window_ptr);
+void zapp_ios_toolbar_apply_for_window_hidden(void* window_ptr, BOOL sidebarHidden);
 
 // ─── T2: UIMenu builder ──────────────────────────────────────────────────────
 //
@@ -550,7 +458,7 @@ static void zapp_ios_toolbar_apply_to_nav(UINavigationController* nav,
 //      Separate leading into: leadingItems (full, with toggleSidebar) and
 //      leadingNoToggle (without toggleSidebar, for expanded/iPad de-dup).
 //   4. Store buckets in the registry entry.
-//   5. Delegate to zapp_ios_toolbar_reapply_for_window to pick the correct
+//   5. Delegate to zapp_ios_toolbar_apply_for_window to pick the correct
 //      nav controller (collapsed vs expanded) and apply items there.
 //   6. Call zapp_toolbar_inject_metrics.
 
@@ -559,8 +467,8 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
     NSString* json = [NSString stringWithUTF8String:toolbar_json];
     zapp_ios_toolbar_on_main(^{
         UINavigationController* contentNav = zapp_ios_content_nav_for_window(window_ptr);
-        if (!contentNav && !zapp_ios_owned_nav_for_window(window_ptr)) {
-            // No-sidebar and no owned-nav window: deferred (T1 decision). Safe no-op.
+        if (!contentNav) {
+            // No-sidebar window: deferred (T1 decision). Safe no-op.
             return;
         }
 
@@ -888,10 +796,21 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
         entry.itemsById       = itemsById;
         entry.segmentedById   = segmentedById;
 
-        // Apply to the correct nav (collapsed vs expanded) and show the bar.
-        // zapp_ios_toolbar_reapply_for_window reads the collapse state and picks
-        // the right target nav / de-dup policy.
-        zapp_ios_toolbar_reapply_for_window(window_ptr);
+        // Apply directly to the live content nav's top VC. Resolve the nav via
+        // the split's content VC (works on both collapsed iPhone and expanded iPad).
+        // includeToggleSidebar: include our manual button when collapsed (UIKit adds
+        // no system button then) or when expanded+sidebar-visible (UIKit also adds none).
+        // Omit when expanded+sidebar-hidden (UIKit provides its own system button).
+        {
+            extern UIViewController* zapp_ios_content_vc_for_window(void* window_ptr);
+            UIViewController* cvc = zapp_ios_content_vc_for_window(window_ptr);
+            UINavigationController* applyNav = cvc ? cvc.navigationController : contentNav;
+            if (applyNav) {
+                BOOL collapsed = zapp_ios_split_is_collapsed_for_window(window_ptr);
+                BOOL sidebarHidden = !collapsed && zapp_ios_sidebar_is_hidden_for_window(window_ptr);
+                zapp_ios_toolbar_apply_to_nav(applyNav, entry, !sidebarHidden);
+            }
+        }
 
         // Inject chrome metrics into the content webview. The persistent
         // WKUserScript (add_user_script=true) is added only the first time for
@@ -907,66 +826,47 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
     });
 }
 
-// ─── zapp_ios_toolbar_reapply_for_window ─────────────────────────────────────
+// ─── zapp_ios_toolbar_apply_for_window ─────────────────────────────────────
 //
 // Called from sidebar.m's collapse/expand delegates so a set toolbar survives
 // the nav-controller switch.
 //
 // Logic:
 //   - If split is collapsed (iPhone / compact): target collapsedNav.
-//       • Show bar immediately only when the content VC is on top (i.e. the nav
-//         has been pushed past the sidebar root — viewControllers.count > 1).
-//         When only the sidebar root is showing (count == 1), the bar stays
-//         hidden to avoid an empty gap over the sidebar list.
-//       • Install ZappIOSToolbarNavDelegate so future pushes/pops keep the bar
-//         in sync.
+//       • Apply items to contentVC.navigationItem (items appear when content is on top).
+//       • Show bar only when the content VC is on top (count > 1).
 //       • Use leadingItems (include manual toggleSidebar — system button absent
 //         when collapsed).
 //   - If split is expanded (iPad): target contentNav.
 //       • Show bar unconditionally (the content column is always visible).
-//       • Remove the nav delegate from any collapsedNav (it's no longer relevant).
 //       • Use leadingNoToggle (omit manual toggleSidebar — UIKit provides the
 //         system sidebar button automatically).
 //
 // Must be called on the main thread. Declared extern so sidebar.m can call it.
 
-// ─── zapp_ios_toolbar_reapply_for_window_hidden ──────────────────────────────
+// ─── zapp_ios_toolbar_apply_for_window_hidden ─────────────────────────────────
 //
-// Core re-apply implementation that accepts an explicit `sidebarHidden` flag for
-// the expanded (iPad) path. This allows willChangeToDisplayMode: to pass the
-// transition TARGET (the new displayMode) synchronously — before splitVC.displayMode
-// has settled — so the toolbar's leading items change within the animation, not
-// one tick after.
+// Applies a registered toolbar to the correct nav (collapsed vs expanded).
+// Accepts an explicit `sidebarHidden` flag so willChangeToDisplayMode: can pass
+// the transition TARGET synchronously — before splitVC.displayMode has settled.
 //
-// All existing callers (set_items, didCollapse, didExpand) use the live-read
-// wrapper zapp_ios_toolbar_reapply_for_window, which reads
-// zapp_ios_sidebar_is_hidden_for_window at call time. Only willChangeToDisplayMode:
-// uses this variant directly with the target displayMode.
+// Collapsed (iPhone compact): apply items to the content VC's navigationItem
+//   (so they appear when the content VC is on top of collapsedNav), and show
+//   the bar only when the content VC is on top.
+// Expanded (iPad regular): apply to contentNav's topViewController, show bar.
+//   includeToggleSidebar = !sidebarHidden (UIKit provides system button when hidden).
 //
-// Must be called on the main thread.
+// Must be called on the main thread. Declared extern so sidebar.m can call it.
 
-void zapp_ios_toolbar_reapply_for_window_hidden(void* window_ptr, BOOL sidebarHidden) {
+void zapp_ios_toolbar_apply_for_window_hidden(void* window_ptr, BOOL sidebarHidden) {
     if (!window_ptr || !zapp_ios_toolbars) return;
     // Must be on main thread (UIKit constraint).
     NSCAssert([NSThread isMainThread],
-              @"zapp_ios_toolbar_reapply_for_window_hidden must be called on the main thread");
+              @"zapp_ios_toolbar_apply_for_window_hidden must be called on the main thread");
 
     NSValue* key = [NSValue valueWithPointer:window_ptr];
     ZappIOSToolbarEntry* entry = zapp_ios_toolbars[key];
     if (!entry) return; // no toolbar registered for this window — no-op
-
-    // ── R1: iPhone owned-nav short-circuit ──────────────────────────────────
-    // On iPhone with native routing, the window root is an app-owned
-    // UINavigationController (not a UISplitViewController). Neither the
-    // collapsed nor expanded sidebar paths below apply — use the owned nav
-    // directly. Its topViewController is the content/route VC, which is
-    // reliable (the owned nav is never orphaned). includeToggleSidebar=YES
-    // because the sidebar is always "collapsed into" the nav on iPhone.
-    UINavigationController* ownedNav = zapp_ios_owned_nav_for_window(window_ptr);
-    if (ownedNav) {
-        zapp_ios_toolbar_apply_to_nav(ownedNav, entry, /*includeToggleSidebar*/YES);
-        return;
-    }
 
     BOOL collapsed = zapp_ios_split_is_collapsed_for_window(window_ptr);
 
@@ -1004,18 +904,6 @@ void zapp_ios_toolbar_reapply_for_window_hidden(void* window_ptr, BOOL sidebarHi
         BOOL contentOnTop = (collapsedNav.viewControllers.count > 1);
         collapsedNav.navigationBarHidden = !contentOnTop;
 
-        // Install the nav delegate so bar visibility tracks future push/pops.
-        // Check whether a delegate is already installed to avoid redundant re-add.
-        id existingDelegate = collapsedNav.delegate;
-        if (![existingDelegate isKindOfClass:[ZappIOSToolbarNavDelegate class]]) {
-            ZappIOSToolbarNavDelegate* delegate = [[ZappIOSToolbarNavDelegate alloc] init];
-            delegate.windowPtr = window_ptr;
-            collapsedNav.delegate = delegate;
-            // Retain the delegate via associated object (UINavigationController.delegate is weak).
-            objc_setAssociatedObject(collapsedNav, &kZappToolbarNavDelegateKey, delegate,
-                OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        }
-
     } else {
         // ── Expanded path (iPad / regular) ─────────────────────────────────
         UINavigationController* contentNav = zapp_ios_content_nav_for_window(window_ptr);
@@ -1030,33 +918,21 @@ void zapp_ios_toolbar_reapply_for_window_hidden(void* window_ptr, BOOL sidebarHi
         // TARGET from willChangeToDisplayMode:, not the live splitVC.displayMode).
         BOOL includeToggle = !sidebarHidden;
         zapp_ios_toolbar_apply_to_nav(contentNav, entry, includeToggle);
-
-        // On expand, also clear the nav delegate from the old collapsedNav so it
-        // doesn't fire stale callbacks if the nav is somehow reused.
-        UINavigationController* collapsedNav = zapp_ios_collapsed_nav_for_window(window_ptr);
-        if (collapsedNav) {
-            id existingDelegate = collapsedNav.delegate;
-            if ([existingDelegate isKindOfClass:[ZappIOSToolbarNavDelegate class]]) {
-                collapsedNav.delegate = nil;
-                objc_setAssociatedObject(collapsedNav, &kZappToolbarNavDelegateKey, nil,
-                    OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            }
-        }
     }
 }
 
-void zapp_ios_toolbar_reapply_for_window(void* window_ptr) {
+void zapp_ios_toolbar_apply_for_window(void* window_ptr) {
     if (!window_ptr || !zapp_ios_toolbars) return;
     // Must be on main thread (UIKit constraint).
     if (![NSThread isMainThread]) {
         dispatch_async(dispatch_get_main_queue(), ^{
-            zapp_ios_toolbar_reapply_for_window(window_ptr);
+            zapp_ios_toolbar_apply_for_window(window_ptr);
         });
         return;
     }
     // Read the live sidebar-hidden state and delegate to the explicit-state variant.
     BOOL sidebarHidden = zapp_ios_sidebar_is_hidden_for_window(window_ptr);
-    zapp_ios_toolbar_reapply_for_window_hidden(window_ptr, sidebarHidden);
+    zapp_ios_toolbar_apply_for_window_hidden(window_ptr, sidebarHidden);
 }
 
 // ─── darwin_toolbar_update_item ──────────────────────────────────────────────
@@ -1167,7 +1043,7 @@ void darwin_toolbar_update_item(void* window_ptr, const char* item_json) {
 //
 // Mirrors darwin/toolbar.m's darwin_toolbar_remove adapted for iOS.
 // Must work correctly whether the split is collapsed (iPhone) or expanded (iPad)
-// — uses the same collapse-aware target selection as reapply_for_window.
+// — uses the same collapse-aware target selection as apply_for_window.
 // No-op when no toolbar is registered for this window.
 
 void darwin_toolbar_remove(void* window_ptr) {
@@ -1194,13 +1070,8 @@ void darwin_toolbar_remove(void* window_ptr) {
                     contentVC.navigationItem.title     = nil;
                     contentVC.navigationItem.titleView = nil;
                 }
-                // Remove the nav delegate (no toolbar → no bar visibility management).
-                id existingDelegate = collapsedNav.delegate;
-                if ([existingDelegate isKindOfClass:[ZappIOSToolbarNavDelegate class]]) {
-                    collapsedNav.delegate = nil;
-                    objc_setAssociatedObject(collapsedNav, &kZappToolbarNavDelegateKey, nil,
-                        OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                }
+                // Clear the nav delegate (no toolbar → no bar visibility management).
+                collapsedNav.delegate = nil;
             }
         } else {
             // ── Expanded (iPad) ───────────────────────────────────────────
@@ -1296,21 +1167,15 @@ void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_u
 
     // ── Measure the toolbar row height ──────────────────────────────────────
     //
-    // R1 owned-nav: use the owned nav directly (iPhone native-routing chrome).
     // Collapsed → collapsedNav owns the displayed bar (if content is on top).
     // Expanded  → contentNav owns the bar.
     UINavigationController* nav = nil;
-    UINavigationController* ownedNavM = zapp_ios_owned_nav_for_window(window_ptr);
-    if (ownedNavM) {
-        nav = ownedNavM;
+    BOOL collapsed = zapp_ios_split_is_collapsed_for_window(window_ptr);
+    if (collapsed) {
+        nav = zapp_ios_collapsed_nav_for_window(window_ptr);
+        if (!nav) nav = zapp_ios_content_nav_for_window(window_ptr); // fallback
     } else {
-        BOOL collapsed = zapp_ios_split_is_collapsed_for_window(window_ptr);
-        if (collapsed) {
-            nav = zapp_ios_collapsed_nav_for_window(window_ptr);
-            if (!nav) nav = zapp_ios_content_nav_for_window(window_ptr); // fallback
-        } else {
-            nav = zapp_ios_content_nav_for_window(window_ptr);
-        }
+        nav = zapp_ios_content_nav_for_window(window_ptr);
     }
     CGFloat toolbarH = 0;
     if (nav && !nav.navigationBarHidden) {
