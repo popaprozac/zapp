@@ -82,21 +82,41 @@ The red `#safetop` band + `#readout` number answers this directly.
 
 ### iPhone observe list
 
-- [ ] (P2-a) **Content — top inset**: red band visible below nav bar? `safe-area-inset-top` value:  ___px
-- [ ] (P2-b) **Detail — top inset** (after JS→native push): red band visible? value:  ___px
-- [ ] (P2-c) **Bottom inset**: green band visible above home indicator? value:  ___px
-- [ ] (P2-f) "Push detail →" link triggers native push (JS→native message handler works).
-- [ ] (P2-g) Native back button pops Detail → Content.
-- [ ] (P2-h) Edge-swipe pops Detail → Content.
-- [ ] (P2-i) Toolbar items correct: Content = Share+Filter; Detail = Trash. No stale items.
-- [ ] (P2-j) Sidebar selection updates Content webview title in-place.
+- [x] (P2-a) **Content — top inset**: red band visible below nav bar. `safe-area-inset-top` = **116px** (status bar + nav bar).
+- [x] (P2-b) **Detail — top inset** (after JS→native push): red band visible. `safe-area-inset-top` = **116px**.
+- [x] (P2-c) **Bottom inset**: green band visible above home indicator.
+- [x] (P2-f) "Push detail →" link triggers native push (JS→native message handler works).
+- [x] (P2-g) Native back button pops Detail → Content.
+- [x] (P2-h) Edge-swipe pops Detail → Content.
+- [x] (P2-i) Toolbar items correct: Content = Share+Filter; Detail = Trash. No stale items.
+- [x] (P2-j) Sidebar selection updates Content webview title in-place.
 
 ### iPad observe list
 
-- [ ] (P2-d) **Tile mode — left inset**: orange band present in Content? (Expected: absent — sidebar is beside, not over.)
-- [ ] (P2-e) **Overlay sidebar — left inset**: orange band present when sidebar overlays? (Expected: absent — overlay floats over; bleed is correct/expected UIKit behaviour.)
-- (P2-f through P2-j as above)
+- [x] (P2-d) **Tile mode**: `safe-area-inset-top` = 78px, `safe-area-inset-left` = 62px — real values on all four sides.
+- [x] (P2-e) **Overlay sidebar**: `safe-area-inset-top` = 86px, **`safe-area-inset-left` = 330px = the sidebar width** — UIKit reports the overlay sidebar as a LEFT safe-area inset to the content webview, so content honoring `env(safe-area-inset-left)` insets beside the sidebar rather than bleeding under it. The full-bleed background still extends under the (translucent) sidebar — correct/native; the readable content respects the inset.
+- (P2-f through P2-j confirmed as above.)
 
-### Verdict (fill in after sim run)
+### Verdict — Phase 2: PASS — webview safe-area insets are FREE
 
-> TBD
+A full-bleed `WKWebView` pinned to the VC's view edges (NOT the safe-area guide) receives correct `env(safe-area-inset-*)` values **automatically** from UIKit's `safeAreaInsets` — for the navigation bar (top), the home indicator (bottom), AND the iPad sidebar (left). **ZERO custom inset code.** Confirmed both idioms, portrait + landscape:
+- iPhone: `inset-top` = 116px (status + nav bar) — content padded with `env(safe-area-inset-top)` sits correctly below the bar.
+- iPad: nav bar → `inset-top`; sidebar width (62px tile / 330px overlay) → `inset-left`.
+
+**Implication for the rebuild:** Zapp's web content already uses `viewport-fit=cover` (#577), so it reads `env(safe-area-inset-*)` directly. The native inset-INJECTION machinery (`zapp_ios_toolbar_inject_webview_safe_area`, the computed `--zapp-*` push) is **largely unnecessary on iOS** — UIKit propagates the real insets. The rebuild can drop it (or, to keep the cross-platform `--zapp-*` var model for macOS/Windows where there's no `env()`, map `--zapp-*` FROM `env()` in CSS rather than computing+injecting natively). Either way, the inset layer that has been a recurring bug source goes away on iOS.
+
+---
+
+## OVERALL SPIKE VERDICT — GO: rebuild Zapp iOS routing to drive UISplitViewController idiomatically
+
+Both phases, both idioms, portrait + landscape, all PASS with **zero custom navigation or inset code**:
+- **Phase 1:** sidebar-first collapse, native back button, edge-swipe-back, correct per-VC toolbar, adaptive tile/overlay — all free.
+- **Phase 2:** full-bleed webview safe-area insets (nav bar + sidebar + home indicator) — all free via `env()`.
+
+R1 (iPhone) and #771 (iPad) bugs are **manufactured by Zapp's hand-management**. The rebuild drives UIKit idiomatically and DELETES: the VC-stack reconcile loop, the `didShow` toolbar-reapply, the `UINavigationControllerDelegate` pop-detection, the manual inset injection, AND the R1 owned-nav fork. One rewrite fixes both idioms.
+
+**Remaining Zapp-specific work for the rebuild (all small, none risky):**
+1. The **JS/Nim-router ↔ native-VC bridge**: when JS routes (`router.push`) → native `pushViewController:`; when the user pops (back/swipe) → native tells JS to update routerstate. (Proven pattern: the `webkit.messageHandlers` JS→native push in Phase 2.)
+2. **Lateral nav semantics**: `popToRootViewControllerAnimated:NO` on the content nav on section-select (the N1 nuance).
+3. **Per-VC webview hosting**: each content/route VC owns a WKWebView showing its route (the `zapp.route` per-route identity pattern, retained).
+4. **Inset model**: map `--zapp-*` from `env()` on iOS (or use `env()` directly), drop native injection.
