@@ -324,6 +324,11 @@ extern void zapp_ios_inspector_register(void* window, void* inspectorVC,
                                         int32_t host_id, int32_t inspector_id,
                                         int32_t width, bool collapsed);
 
+// Implemented in ios/iphonenav.m. Gate + registry for the iPhone owned-nav chrome.
+extern bool zapp_ios_owned_nav_enabled(int32_t window_id);
+extern void zapp_ios_register_owned_nav(void* window_ptr, UINavigationController* nav,
+                                        UIViewController* sidebarVC, UIViewController* contentVC);
+
 static ZappIOSDeferred* zapp_ios_find_deferred(void* handle) {
     if (!handle) return NULL;
     for (int i = 0; i < ZAPP_MAX_DEFERRED; i++) {
@@ -374,66 +379,88 @@ void zapp_ios_materialize_pending_windows(void) {
         WKWebView* canonicalContentWebview = nil;
 
         if (d->hasSidebar) {
-            // Sidebar window: root on a ZappIOSSplitViewController (our
-            // UISplitViewController subclass that re-applies the presentation
-            // pair on rotation / multitasking size changes). The split MUST be
-            // the window's rootViewController BEFORE either pane webview is
-            // created — re-parenting a WKWebView resets its content process and
-            // kills the bridge, so every pane is born in its final container.
-            // (Mirrors the darwin/window.m create-ordering note.)
-            ZappIOSSplitViewController* split =
-                [[ZappIOSSplitViewController alloc] initWithStyle:UISplitViewControllerStyleDoubleColumn];
-            sidebarVC = [[UIViewController alloc] init];   // primary column
-            // content VC: ZappIOSPaneViewController so viewSafeAreaInsetsDidChange
-            // re-injects toolbar metrics after UIKit lays out the floating nav bar.
-            // windowPtr + hostSlot are wired below after d->real_window is set.
-            contentVC = [[ZappIOSPaneViewController alloc] init]; // secondary column
+            BOOL ownedNav = zapp_ios_owned_nav_enabled(d->numeric_id);
+            if (ownedNav) {
+                // OWNED-NAV CHROME (R1): sidebar VC = root of an app-owned UINavigationController.
+                // Both pane VCs are created here so the shared create_ext calls below mount each
+                // webview into its FINAL container (no re-parenting). contentVC is HELD (not pushed)
+                // — Task 3 pushes it on section-select; at launch the nav shows the sidebar.
+                sidebarVC = [[UIViewController alloc] init];
+                contentVC = [[ZappIOSPaneViewController alloc] init];
+                contentVC.view.backgroundColor = bgColor;
+                sidebarVC.view.backgroundColor = d->sidebar_has_bg
+                    ? [UIColor colorWithRed:d->sidebar_bg_r/255.0 green:d->sidebar_bg_g/255.0
+                                       blue:d->sidebar_bg_b/255.0 alpha:1.0]
+                    : [UIColor systemBackgroundColor];
+                UINavigationController* ownedNavVC =
+                    [[UINavigationController alloc] initWithRootViewController:sidebarVC];
+                ownedNavVC.navigationBarHidden = NO;  // toolbar lives here (Task 4)
+                ownedNavVC.view.backgroundColor = bgColor;
+                window.rootViewController = ownedNavVC;   // BEFORE any webview creation
+                zapp_ios_register_owned_nav((__bridge void*)window, ownedNavVC, sidebarVC, contentVC);
+                // NOTE: do NOT call zapp_ios_sidebar_register / build the split for this window.
+            } else {
+                // Sidebar window: root on a ZappIOSSplitViewController (our
+                // UISplitViewController subclass that re-applies the presentation
+                // pair on rotation / multitasking size changes). The split MUST be
+                // the window's rootViewController BEFORE either pane webview is
+                // created — re-parenting a WKWebView resets its content process and
+                // kills the bridge, so every pane is born in its final container.
+                // (Mirrors the darwin/window.m create-ordering note.)
+                ZappIOSSplitViewController* split =
+                    [[ZappIOSSplitViewController alloc] initWithStyle:UISplitViewControllerStyleDoubleColumn];
+                sidebarVC = [[UIViewController alloc] init];   // primary column
+                // content VC: ZappIOSPaneViewController so viewSafeAreaInsetsDidChange
+                // re-injects toolbar metrics after UIKit lays out the floating nav bar.
+                // windowPtr + hostSlot are wired below after d->real_window is set.
+                contentVC = [[ZappIOSPaneViewController alloc] init]; // secondary column
 
-            contentVC.view.backgroundColor = bgColor;
-            // Sidebar pane backdrop: explicit "#rrggbb" if the app set one,
-            // else the adaptive system background (the pane analog of the
-            // window bg, filling the pre-paint gap behind the webview).
-            sidebarVC.view.backgroundColor = d->sidebar_has_bg
-                ? [UIColor colorWithRed:d->sidebar_bg_r/255.0 green:d->sidebar_bg_g/255.0
-                                   blue:d->sidebar_bg_b/255.0 alpha:1.0]
-                : [UIColor systemBackgroundColor];
+                contentVC.view.backgroundColor = bgColor;
+                // Sidebar pane backdrop: explicit "#rrggbb" if the app set one,
+                // else the adaptive system background (the pane analog of the
+                // window bg, filling the pre-paint gap behind the webview).
+                sidebarVC.view.backgroundColor = d->sidebar_has_bg
+                    ? [UIColor colorWithRed:d->sidebar_bg_r/255.0 green:d->sidebar_bg_g/255.0
+                                       blue:d->sidebar_bg_b/255.0 alpha:1.0]
+                    : [UIColor systemBackgroundColor];
 
-            // Set the column VCs on the bare split first. zapp_ios_sidebar_register
-            // (called below, after min/max/width) will nav-wrap these and re-set
-            // them, then apply the presentation pair AFTER the final columns are
-            // in place — the correct ordering per WWDC20 10105.
-            [split setViewController:sidebarVC forColumn:UISplitViewControllerColumnPrimary];
-            [split setViewController:contentVC forColumn:UISplitViewControllerColumnSecondary];
-            // Set column min/max BEFORE preferred so the preferred value lands
-            // inside the allowed range. Without min/max, iOS caps
-            // preferredPrimaryColumnWidth at ~320 pt by default — any configured
-            // width above that (e.g. maxWidth:500) is silently clamped.
-            // These are split-level (not column-VC-scoped) so they survive the
-            // nav-wrap re-set in zapp_ios_sidebar_register below.
-            if (d->sidebarMinWidth > 0) {
-                split.minimumPrimaryColumnWidth = (CGFloat)d->sidebarMinWidth;
-            }
-            if (d->sidebarMaxWidth > 0) {
-                split.maximumPrimaryColumnWidth = (CGFloat)d->sidebarMaxWidth;
-            }
-            if (d->sidebarWidth > 0) {
-                // Sidebar = the PRIMARY column in .doubleColumn style, so its
-                // width is preferredPrimaryColumnWidth. (preferredSupplementary*
-                // exists ONLY in .tripleColumn and THROWS NSInvalidArgument on
-                // double-column.) Governed by the min/max set above.
-                split.preferredPrimaryColumnWidth = (CGFloat)d->sidebarWidth;
-            }
-            // Presentation (preferredSplitBehavior + preferredDisplayMode) is
-            // intentionally NOT set here. zapp_ios_sidebar_register applies the
-            // pair AFTER it nav-wraps the columns — that is the correct ordering
-            // (set both together, after final columns exist, per WWDC20 10105).
-            // Left-edge swipe reveals the sidebar (esp. in overlay, where the
-            // flyout starts hidden). This is the system default, but set it
-            // explicitly/intentionally so the reveal affordance is guaranteed.
-            split.presentsWithGesture = YES;
-            split.view.backgroundColor = bgColor;
+                // Set the column VCs on the bare split first. zapp_ios_sidebar_register
+                // (called below, after min/max/width) will nav-wrap these and re-set
+                // them, then apply the presentation pair AFTER the final columns are
+                // in place — the correct ordering per WWDC20 10105.
+                [split setViewController:sidebarVC forColumn:UISplitViewControllerColumnPrimary];
+                [split setViewController:contentVC forColumn:UISplitViewControllerColumnSecondary];
+                // Set column min/max BEFORE preferred so the preferred value lands
+                // inside the allowed range. Without min/max, iOS caps
+                // preferredPrimaryColumnWidth at ~320 pt by default — any configured
+                // width above that (e.g. maxWidth:500) is silently clamped.
+                // These are split-level (not column-VC-scoped) so they survive the
+                // nav-wrap re-set in zapp_ios_sidebar_register below.
+                if (d->sidebarMinWidth > 0) {
+                    split.minimumPrimaryColumnWidth = (CGFloat)d->sidebarMinWidth;
+                }
+                if (d->sidebarMaxWidth > 0) {
+                    split.maximumPrimaryColumnWidth = (CGFloat)d->sidebarMaxWidth;
+                }
+                if (d->sidebarWidth > 0) {
+                    // Sidebar = the PRIMARY column in .doubleColumn style, so its
+                    // width is preferredPrimaryColumnWidth. (preferredSupplementary*
+                    // exists ONLY in .tripleColumn and THROWS NSInvalidArgument on
+                    // double-column.) Governed by the min/max set above.
+                    split.preferredPrimaryColumnWidth = (CGFloat)d->sidebarWidth;
+                }
+                // Presentation (preferredSplitBehavior + preferredDisplayMode) is
+                // intentionally NOT set here. zapp_ios_sidebar_register applies the
+                // pair AFTER it nav-wraps the columns — that is the correct ordering
+                // (set both together, after final columns exist, per WWDC20 10105).
+                // Left-edge swipe reveals the sidebar (esp. in overlay, where the
+                // flyout starts hidden). This is the system default, but set it
+                // explicitly/intentionally so the reveal affordance is guaranteed.
+                split.presentsWithGesture = YES;
+                split.view.backgroundColor = bgColor;
 
-            window.rootViewController = split;   // BEFORE any webview creation
+                window.rootViewController = split;   // BEFORE any webview creation
+            }
         } else {
             // Single-pane window: lone root VC hosting the content webview.
             UIViewController* root = [[ZappIOSRootViewController alloc] init];
@@ -473,7 +500,10 @@ void zapp_ios_materialize_pending_windows(void) {
         // collapse delegate, all BEFORE the pane webviews are created below — so
         // the webviews are born inside their final (nav-wrapped) containers and
         // never re-parent. (zapp_ios_sidebar_register declared at file scope.)
-        if (d->hasSidebar) {
+        // zapp_ios_sidebar_register is split-specific: it nav-wraps the UISplitViewController
+        // columns and installs the collapse delegate. Skip for the owned-nav chrome (phone +
+        // nativeRouting), which has no split to wrap.
+        if (d->hasSidebar && !zapp_ios_owned_nav_enabled(d->numeric_id)) {
             // Pass the presentation string so sidebar_register can apply the
             // behavior+displayMode pair AFTER nav-wrapping and store it for
             // the transition hook's re-apply on rotation/multitasking changes.
@@ -545,8 +575,10 @@ void zapp_ios_materialize_pending_windows(void) {
             // and calls zapp_ios_sidebar_register_leading_constraints to hand the
             // leading constraints to the sidebar coordinator for trait-change updates.
             // Forward-declared at file scope; defined in ios/sidebar.m.
+            // Split-specific: owned-nav chrome has no sidebar coordinator; the content
+            // webview fills the nav-push screen without a sidebar leading constraint.
             extern void zapp_ios_sidebar_set_content_webview(void* window, void* webview);
-            if (contentWebview && !d->hasInspector) {
+            if (contentWebview && !d->hasInspector && !zapp_ios_owned_nav_enabled(d->numeric_id)) {
                 zapp_ios_sidebar_set_content_webview((__bridge void*)window,
                                                      (__bridge void*)contentWebview);
             }
