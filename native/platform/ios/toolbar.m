@@ -173,24 +173,14 @@ void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_u
 // is laid out so safeAreaInsets is valid — routing.m calls it from the route
 // VC's viewDidLayoutSubviews (idempotent; re-runs on rotation/resize).
 void zapp_ios_toolbar_inject_webview_safe_area(WKWebView* wv) {
-    if (!wv) return;
-    if (![NSThread isMainThread]) {
-        dispatch_async(dispatch_get_main_queue(), ^{ zapp_ios_toolbar_inject_webview_safe_area(wv); });
-        return;
-    }
-    UIEdgeInsets sa = wv.safeAreaInsets;
-    CGFloat top = sa.top < 0 ? 0 : sa.top;
-    NSString* js = [NSString stringWithFormat:
-        @"(function(){try{var r=document.documentElement;if(r){"
-        @"r.style.setProperty('--zapp-titlebar-height','%.0fpx');"
-        @"r.style.setProperty('--zapp-toolbar-height','0px');"
-        @"r.style.setProperty('--zapp-safe-area-top','%.0fpx');"
-        @"r.style.setProperty('--zapp-safe-area-left','%.0fpx');"
-        @"r.style.setProperty('--zapp-safe-area-right','%.0fpx');"
-        @"r.style.setProperty('--zapp-safe-area-bottom','%.0fpx');"
-        @"}}catch(e){}})();",
-        top, sa.top, sa.left, sa.right, sa.bottom];
-    [wv evaluateJavaScript:js completionHandler:nil];
+    // N3b: No-op — the env(safe-area-inset-*) WKUserScript injected at
+    // document-start by darwin_webview_create_ext (webview.m) sets
+    // --zapp-titlebar-height and --zapp-safe-area-* correctly at the
+    // first paint. UIKit resolves env() before the first frame when the
+    // webview is edge-pinned and viewport-fit=cover is present.
+    // This deferred native injection is no longer needed or safe (it
+    // reads stale safeAreaInsets during mid-push layout).
+    (void)wv;
 }
 
 // ─── Click emit ─────────────────────────────────────────────────────────────
@@ -1209,23 +1199,16 @@ void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_u
         ^(WKWebView* wv, CGFloat tbH, BOOL addScript) {
         if (!wv) return;
 
-        UIEdgeInsets sa = wv.safeAreaInsets;
-        CGFloat titlebH = sa.top; // full top inset (status-bar + dynamic-island + nav bar)
-        if (titlebH < 0) titlebH = 0;
-
-        // Build the combined vars JS — mirrors macOS darwin/toolbar.m's shape
-        // exactly (same property names, same documentElement target, same IIFE
-        // wrapper). Set all vars in one pass.
+        // --zapp-titlebar-height and --zapp-safe-area-* are owned by the
+        // env(safe-area-inset-*) WKUserScript injected at document-start
+        // in darwin_webview_create_ext (webview.m). Only --zapp-toolbar-height
+        // is injected here — it holds the nav bar ROW height, which env() has
+        // no equivalent for.
         NSString* js = [NSString stringWithFormat:
             @"(function(){try{var r=document.documentElement;if(r){"
-            @"r.style.setProperty('--zapp-titlebar-height','%.0fpx');"
             @"r.style.setProperty('--zapp-toolbar-height','%.0fpx');"
-            @"r.style.setProperty('--zapp-safe-area-top','%.0fpx');"
-            @"r.style.setProperty('--zapp-safe-area-left','%.0fpx');"
-            @"r.style.setProperty('--zapp-safe-area-right','%.0fpx');"
-            @"r.style.setProperty('--zapp-safe-area-bottom','%.0fpx');"
             @"}}catch(e){}})();",
-            titlebH, tbH, sa.top, sa.left, sa.right, sa.bottom];
+            tbH];
 
         if (addScript) {
             [wv.configuration.userContentController addUserScript:

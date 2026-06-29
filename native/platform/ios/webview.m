@@ -898,6 +898,29 @@ void darwin_webview_create_ext(void* window_ptr, bool inspectable, bool accept_f
             injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
     }
 
+    // iOS safe-area CSS vars — set at document-start so layouts using
+    // --zapp-titlebar-height etc. are correct at the very first paint.
+    // Uses env(safe-area-inset-*) which UIKit resolves to the correct values
+    // before the first frame when the webview is edge-pinned (no safe-area
+    // guide) and the viewport-fit=cover meta tag is present.
+    // These are iOS-only vars; macOS resolves env() to 0 and the native
+    // toolbar injection (zapp_toolbar_inject_metrics) stamps the real values
+    // in via style.setProperty which overrides these :root declarations.
+    [ucc addUserScript:[[WKUserScript alloc] initWithSource:
+        @"(function(){try{"
+        "var s=document.createElement('style');"
+        "s.textContent=':root{"
+        "--zapp-titlebar-height:env(safe-area-inset-top,0px);"
+        "--zapp-toolbar-height:0px;"
+        "--zapp-safe-area-top:env(safe-area-inset-top,0px);"
+        "--zapp-safe-area-left:env(safe-area-inset-left,0px);"
+        "--zapp-safe-area-right:env(safe-area-inset-right,0px);"
+        "--zapp-safe-area-bottom:env(safe-area-inset-bottom,0px)"
+        "}';"
+        "document.head.appendChild(s);"
+        "}catch(e){}})();"
+        injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
+
     const char* bootstrapSrc = zapp_webview_bootstrap_script();
     if (bootstrapSrc) {
         [ucc addUserScript:[[WKUserScript alloc] initWithSource:[NSString stringWithUTF8String:bootstrapSrc]
