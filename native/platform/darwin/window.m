@@ -547,6 +547,36 @@ int32_t darwin_window_id_for_webview(void* webview) {
     return 0;
 }
 
+// --- Enumerate all live window id strings as a JSON array ---
+// Returns a heap-dup'd "["win-0","win-2",...]" string; caller frees.
+// Mirrors the heap-return convention of darwin_screen_list_json (screen.m).
+// Only host-slot entries are included: a slot is a real window id when its
+// zapp_window_ids string equals the canonical "win-<slot>" form (pane slots
+// share the host's id string, so they are included under the host's entry
+// rather than generating duplicates). But since pane slots register the host
+// id string (e.g. "win-0") not "win-<pane_slot>", and darwin_window_ids[]
+// stores the id string verbatim, we simply de-duplicate by emitting each
+// unique non-nil string at most once.
+const char* darwin_windows_list_json(void) {
+    // Collect unique, non-nil id strings.
+    NSMutableArray<NSString*>* seen = [NSMutableArray array];
+    for (int i = 0; i < ZAPP_MAX_WINDOW_CALLBACKS; i++) {
+        NSString* wid = zapp_window_ids[i];
+        if (!wid) continue;
+        if ([seen containsObject:wid]) continue;
+        [seen addObject:wid];
+    }
+    NSMutableString* json = [NSMutableString stringWithString:@"["];
+    BOOL first = YES;
+    for (NSString* wid in seen) {
+        if (!first) [json appendString:@","];
+        [json appendFormat:@"\"%@\"", wid];
+        first = NO;
+    }
+    [json appendString:@"]"];
+    return strdup([json UTF8String]);
+}
+
 // --- Get string window ID for a numeric ID ---
 
 const char* darwin_window_id_string(int32_t numeric_id) {
@@ -1251,6 +1281,11 @@ void darwin_window_destroy(void* handle) {
     zapp_toolbar_unregister(handle);
     extern void zapp_popover_unregister_window(void* window_ptr);
     zapp_popover_unregister_window(handle);
+    // Clear the per-window router state (N2a). Declared in window.nim (exportc).
+    extern void zapp_router_clear_window(int32_t numeric_id);
+    if ([delegate isKindOfClass:[ZappWindowDelegate class]]) {
+        zapp_router_clear_window(delegate.numericId);
+    }
 
     [window close];
     (void)window;

@@ -19,6 +19,7 @@ export apptypes    # WindowManager visible to callers of window.nim
 import appconfig
 import color
 export color   # ZappColor + converters reach app.nim through the WindowOptions API
+import routerstate
 
 type
   TitleBarStyle* {.pure.} = enum   ## NSWindow title-bar style (window.m tag 0/1/2/3)
@@ -353,7 +354,16 @@ proc createWindow*(o: WindowOptions): Window =
     let parent = darwin_window_get_by_numeric_id(o.asSheetOfId)
     if parent != nil:
       darwin_window_attach_modal(parent, h)
+  # Seed the router state for this window at "/" (the app can replace it on
+  # the first route push). Idempotent — routerSeed no-ops if already present.
+  routerSeed(id, "/")
   Window(id: id, handle: h)
+
+proc zapp_router_clear_window*(numericId: int32) {.exportc, cdecl.} =
+  ## Called from darwin_window_destroy (window.m) to free the route state for
+  ## a destroyed window. Exported as a C symbol so window.m can call it without
+  ## a Nim-level import cycle.
+  routerClear(numericId)
 
 proc allocSlot*(): int32 =
   ## Draw one dispatch slot from the same monotonic id-space windows + panes use

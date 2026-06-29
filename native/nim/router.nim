@@ -4,6 +4,7 @@
 ## the walking skeleton — they fall through silently for now.
 import std/[options, json, strutils]
 import bridge, service, clipboard, callbacks, events, permissions, fs, dialog, notification, shortcuts
+import routerstate
 # worker: worker_create / worker_post_message / worker_terminate (B7b.1
 #   dispatcher). registry: the C-ABI procs routeWorker needs are plain Nim `*`
 #   exports (zapp_worker_registry_add_full_with_engine_and_name / _remove —
@@ -74,6 +75,7 @@ proc darwin_trash_item(p: cstring) {.importc, cdecl.}
 proc darwin_screen_list_json(): cstring {.importc, cdecl.}
 proc darwin_screen_cursor_json(): cstring {.importc, cdecl.}
 proc darwin_screen_for_window_json(windowId: int32): cstring {.importc, cdecl.}
+proc darwin_windows_list_json(): cstring {.importc, cdecl.}
 proc c_free(p: cstring) {.importc: "free", cdecl.}
 
 # --- t:4 menu targets (menu.m; payload = the FULL bridge envelope, menu.m
@@ -158,6 +160,32 @@ proc resolveWinId(a: JsonNode, key: string): int32 =
   if v.kind == JString: return darwin_window_numeric_id_for_string(v.getStr("").cstring)
   -1
 
+proc emitRouteChanged(win: int32, kind: string) =
+  ## Build and broadcast a window:route-changed payload. Uses std/json for
+  ## correct encoding. params is stored as a JSON string; re-parse to embed as
+  ## an object (or null when absent). Mirrors dispatch_event_to_all broadcast
+  ## path (no bitmask change).
+  let url = routerCurrentUrl(win)
+  let paramsStr = routerCurrentParams(win)
+  let canBack = routerCanGoBack(win)
+  let canFwd = routerCanGoForward(win)
+  let windowIdStr = "win-" & $win
+  let paramsNode: JsonNode =
+    if paramsStr.len > 0:
+      try: parseJson(paramsStr)
+      except CatchableError: newJNull()
+    else:
+      newJNull()
+  let payload = $(%*{
+    "windowId": windowIdStr,
+    "url": url,
+    "params": paramsNode,
+    "canGoBack": canBack,
+    "canGoForward": canFwd,
+    "kind": kind
+  })
+  dispatch_event_to_all("window:route-changed".cstring, payload.cstring)
+
 proc routeZapp(meth: string, windowId, id: int) =
   ## __zapp:* routes (router.zc:1352-1375).
   if meth == "__zapp:workers-list":
@@ -166,6 +194,14 @@ proc routeZapp(meth: string, windowId, id: int) =
     return
   if meth == "__zapp:permissions":
     sendInvokeResponse(windowId, id, true, $permissions_bootstrap_json())
+    return
+  if meth == "__zapp:windows-list":
+    let j = darwin_windows_list_json()
+    let idsArr = (if j.isNil: "[]" else: $j)
+    if not j.isNil: c_free(j)
+    # Parse the array so we can embed it in {"ids":[...]}
+    let idsNode = try: parseJson(idsArr) except CatchableError: newJArray()
+    sendInvokeResponse(windowId, id, true, $(%*{"ids": idsNode}))
     return
   sendInvokeResponse(windowId, id, false, "UNKNOWN_ZAPP_METHOD")
 
@@ -639,6 +675,29 @@ proc routeWindowAction(action: string, a: JsonNode, rawWindowId: int, payload: s
     of "toolbar:remove": darwin_toolbar_remove(h)
     else: discard
     return
+  if action.startsWith("router:"):
+    # target: explicit windowId arg takes priority (same resolution as toolbar:*)
+    let widArg = a{"windowId"}.getStr("")
+    let target = (if widArg.len > 0: darwin_window_numeric_id_for_string(widArg.cstring) else: windowId.int32)
+    case action
+    of "router:push":
+      let url = a{"url"}.getStr("")
+      let params = (if a.hasKey("params"): $a["params"] else: "")
+      routerPush(target, url, params)
+      emitRouteChanged(target, "push")
+    of "router:pop":
+      if routerPop(target): emitRouteChanged(target, "pop")
+    of "router:forward":
+      if routerForward(target): emitRouteChanged(target, "forward")
+    of "router:replace":
+      let url = a{"url"}.getStr("")
+      let params = (if a.hasKey("params"): $a["params"] else: "")
+      routerReplace(target, url, params)
+      emitRouteChanged(target, "replace")
+    of "router:popToRoot":
+      if routerPopToRoot(target): emitRouteChanged(target, "popToRoot")
+    else: discard
+    return
   if action.startsWith("popover:"):
     let pid = a{"popoverId"}.getStr("")
     if pid.len == 0: return
@@ -754,10 +813,31 @@ proc routeMessage*(msg: string, windowId: int) =
     routeScreen(f.m, f.a, windowId, f.id)
     return
 
+  if f.m == "__router:state":
+    # Resolve target window (from "windowId" arg, else the sender).
+    let ws = (if f.a.isNil: "" else: f.a{"windowId"}.getStr(""))
+    let target = (if ws.len > 0: darwin_window_numeric_id_for_string(ws.cstring) else: windowId.int32)
+    let url = routerCurrentUrl(target)
+    let paramsStr = routerCurrentParams(target)
+    let paramsNode: JsonNode =
+      if paramsStr.len > 0:
+        try: parseJson(paramsStr)
+        except CatchableError: newJNull()
+      else:
+        newJNull()
+    let state = $(%*{
+      "url": url,
+      "params": paramsNode,
+      "canGoBack": routerCanGoBack(target),
+      "canGoForward": routerCanGoForward(target)
+    })
+    sendInvokeResponse(windowId, f.id, true, state)
+    return
+
   if f.m == "__window:create":
     let o = WindowOptions(title: "Zapp")
     if not f.a.isNil: windowOptsApplyJson(o, f.a)
-    let newId = createWindow(o).id
+    let newId = createWindow(o).id   # createWindow calls routerSeed(id, "/") internally
     sendInvokeResponse(windowId, f.id, true, "{\"windowId\":\"win-" & $newId & "\"}")
     return
 

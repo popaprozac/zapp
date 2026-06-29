@@ -752,6 +752,28 @@ const char* darwin_window_id_string(int32_t numeric_id) {
     return NULL;
 }
 
+// --- Enumerate all live window id strings as a JSON array ---
+// Same signature as darwin/window.m's darwin_windows_list_json so both
+// platforms compile and link. Returns a heap-dup'd JSON array; caller frees.
+const char* darwin_windows_list_json(void) {
+    NSMutableArray<NSString*>* seen = [NSMutableArray array];
+    for (int i = 0; i < ZAPP_MAX_WINDOW_CALLBACKS; i++) {
+        NSString* wid = zapp_ios_window_ids[i];
+        if (!wid) continue;
+        if ([seen containsObject:wid]) continue;
+        [seen addObject:wid];
+    }
+    NSMutableString* json = [NSMutableString stringWithString:@"["];
+    BOOL first = YES;
+    for (NSString* wid in seen) {
+        if (!first) [json appendString:@","];
+        [json appendFormat:@"\"%@\"", wid];
+        first = NO;
+    }
+    [json appendString:@"]"];
+    return strdup([json UTF8String]);
+}
+
 int32_t darwin_window_numeric_id_for_string(const char* window_id_string) {
     if (!window_id_string || !window_id_string[0]) return -1;
     NSString* target = [NSString stringWithUTF8String:window_id_string];
