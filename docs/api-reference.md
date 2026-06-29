@@ -1677,31 +1677,38 @@ that tracks `canGoBack`/`canGoForward`. macOS/Windows use in-window content swap
 (see "Desktop in-window navigation" below). On iPhone, set `nativeRouting: true`
 to opt into the app-owned navigation stack described below.
 
-#### iOS native routing — R1 risk gate (preview)
+#### iOS native routing — R1′ (idiomatic UISplitViewController)
 
-> **Preview / R1 risk gate.** The owned-nav chrome shipped in this release and
-> is gated by human iOS-sim smoke. The API surface is stable; internals may
-> iterate before the general release.
+> **R1′ seam.** iOS sidebar windows now use a **single idiomatic
+> `UISplitViewController`** for both form factors. The R1 owned-nav fork and the
+> per-route-VC reconcile loop have been deleted. The API surface is unchanged;
+> the internals are now simpler and match UIKit's expected usage pattern.
 
 Set `nativeRouting: true` on a window to opt into platform-appropriate native
 routing:
 
-- **iPhone** — the window uses an **app-owned `UINavigationController`**
-  (sidebar-first chrome). The sidebar section list is the root of the nav stack.
+- **iPhone (collapsed)** — the `UISplitViewController` collapses to a
+  sidebar-first navigation stack. The sidebar section list is the root.
   Selecting a section calls `router.replace` (lateral switch; no VC push) then
   `sidebar.showContent()`. Genuine drill-downs call `router.push("/path")` which
-  pushes a real `UIViewController` with its own webview onto the owned nav stack —
-  native slide-in animation, back button, and edge swipe-back all work. The root
-  content webview re-renders only when the stack collapses to root (`canGoBack ===
-  false`); pushed route webviews render their own fixed route and ignore subsequent
-  `ROUTE_CHANGED` events.
-- **iPad** — the `UISplitViewController` chrome is unchanged (sidebar tile/overlay,
-  inspector pane). `router.push` drives the content column's `UINavigationController`
-  as before.
+  calls `pushViewController:` directly on the content column's live
+  `UINavigationController` — native slide-in animation, back-button, and
+  edge-swipe-back all work. The root content webview re-renders only when the
+  stack collapses to root (`canGoBack === false`); pushed route webviews render
+  their own fixed route and ignore subsequent `ROUTE_CHANGED` events.
+- **iPad (expanded)** — the `UISplitViewController` shows sidebar + content
+  side-by-side (unchanged from before R1′). `router.push` drives
+  `pushViewController:` on the content column's `UINavigationController`; native
+  back-button and edge-swipe work within the content column.
 - **macOS / Windows** — the flag is silently ignored; in-window content swap
   applies.
 
-**Per-route identity pattern** (required for owned-nav correctness):
+> **Coming in R2′/R3′ (deferred):** per-view chrome opt-out (`{toolbar: false}`,
+> per-route `title`); `--zapp-*` CSS variables injected from `env()` on iOS (safe
+> area insets already available via `env(safe-area-inset-*)` today — use that
+> idiom now).
+
+**Per-route identity pattern** (required for correctness):
 
 ```ts
 // In the content pane — distinguish root vs pushed route webview:
@@ -1769,8 +1776,10 @@ windows — that is iOS's model). Wire it like this:
 **iOS / single-window:** `Window.create(opts)` without `asSheetOf` is a no-op that
 returns the current window — **except** when `opts.url` is set, in which case it
 becomes an in-window `router.push({ url, title, presentation })` (iOS is
-single-window; use a sheet via `asSheetOf` for a modal surface). Native
-UINavigationController routing on iPhone is a later cycle.
+single-window; use a sheet via `asSheetOf` for a modal surface). For native
+`UINavigationController` routing on iPhone, set `nativeRouting: true` (see
+[iOS native routing](#ios-native-routing--r1-idiomatic-uisplitviewcontroller)
+above).
 
 #### `Window.get(id: string): WindowHandle`
 
