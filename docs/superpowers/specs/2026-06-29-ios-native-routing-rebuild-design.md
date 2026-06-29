@@ -58,6 +58,8 @@ The nav bar carries two separable things: its **presence** (which provides the f
 
 Cross-platform shape: "no chrome / full-bleed" reads the same conceptually as macOS `titleBarStyle: hidden` (this rebuild is iOS-scoped; the API is named to stay cross-platform-friendly).
 
+**Toolbar placement model (clarification — no new work).** The same *logical* toolbar items render per platform idiom: macOS draws ONE window-wide `NSToolbar` spanning sidebar + content + inspector (`trackingSeparator`-aligned to the split dividers; the sidebar-toggle sits leading, within the sidebar region) — UNCHANGED by this rebuild. iOS renders **per-column / per-VC nav bars** — the sidebar column, the content column, and each pushed route each have their OWN bar. Driving UIKit idiomatically produces these per-column bars inherently (the spike's "correct" placement), so no placement engine is needed. Zapp's window-level toolbar API (`toolbar.setItems`) and the §3 per-view items target the **content/route bar** on iOS; the **sidebar column's bar is auto-chrome** (its title + the menu/toggle). Custom app items in the *sidebar* column's bar (vs the content bar) are deferred (see §7). The macOS↔iOS placement difference is intentional per-platform idiom, not a divergence to reconcile.
+
 ## §4 — Insets, flag retirement, cleanup
 
 **Insets (iOS only):** delete `zapp_ios_toolbar_inject_webview_safe_area` and the route-VC injection path. A route's full-bleed WKWebView gets `env(safe-area-inset-*)` for free (spike Phase 2: includes the nav bar). Keep the cross-platform `--zapp-*` var contract by defining the iOS vars **from `env()`** in a one-time CSS snippet (`:root { --zapp-safe-area-top: env(safe-area-inset-top); … }`), rather than computing + injecting natively per layout. Insets are **dev-driven**: pad with the vars to respect chrome, or ignore them for truly edge-to-edge. **macOS `--zapp-*` injection (`darwin/toolbar.m`, `darwin/webview.m`) is UNTOUCHED** — macOS has no reliable `env()` equivalent (insets come from NSToolbar/titlebar/NSSplitView metrics); the rebuild is iOS-scoped.
@@ -89,6 +91,8 @@ Cross-platform shape: "no chrome / full-bleed" reads the same conceptually as ma
 - Large-iPhone-landscape (regular-width) side-by-side — UIKit's adaptive split handles it; verify in smoke.
 - iPad-multitasking-compact-width edge cases — #718-adjacent.
 - Route-registry chrome declaration (`routes: {…}` in config) — future convenience; v1 uses push-options + runtime.
+- Custom app items in the **sidebar column's own nav bar** on iOS — v1: the sidebar bar is auto-chrome (title + menu/toggle); app items target the content/route bar. A future "which bar" placement option if apps need sidebar-bar items.
+- Cross-platform toolbar **placement polish** (e.g. the macOS leading sidebar-toggle position, spanning-vs-per-column nuances) — intentional per-platform idiom today; cosmetic polish later, not part of this rebuild.
 
 ## Constraints
 
