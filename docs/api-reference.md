@@ -1031,8 +1031,9 @@ if (Platform.isIOS) {
 them into the per-webview bootstrap manifest before any JS runs. Defaults apply
 when the manifest is absent (SSR / unit tests).
 
-`Platform` is **webview-only** today — workers do not yet receive the bootstrap
-manifest (a later cycle).
+`Platform` works in both **webview** and **worker** code — the values are carried
+from native into each worker (via the worker bridge) with the same API and
+meaning as in a webview.
 
 ```ts
 import { Platform } from "@zappdev/runtime";
@@ -1068,6 +1069,16 @@ if (Platform.isIOS && Platform.isPhone) {
   // render compact mobile layout
 }
 ```
+
+#### Platform in workers
+
+`Platform.os` / `isMacOS` / `isIOS` / `isWindows`, `Platform.formFactor` /
+`isPhone` / `isTablet` / `isDesktop`, and `Platform.env` / `isDev` / `isProd`
+all work in **worker** code too — the values are carried from native into each
+worker (via the worker bridge) with the same API and meaning as in a webview.
+`formFactor` in a worker is the device **idiom** (`"tablet"` on iPad, `"phone"`
+on iPhone, `"desktop"` on macOS/Windows) — a worker has no window, so there is
+no size-class notion.
 
 **macOS ↔ iOS degradations** (sidebar):
 

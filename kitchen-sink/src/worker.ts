@@ -9,9 +9,12 @@
 // It's a `declare global` + `export {}` module — pure types, so it bundles to a
 // no-op; it just makes the ambient worker globals visible to `tsc`.
 import "@zappdev/runtime/worker-globals";
-import { Events, Services, WindowEvent } from "@zappdev/runtime";
+import { Events, Platform, Services, WindowEvent } from "@zappdev/runtime";
 
 console.log("started");
+// N2c smoke: Platform now works in worker code (os/formFactor/env carried from
+// native via __zappBridge). Logs as `[zapp/greeter] platform: macos desktop dev`.
+console.log(`platform: ${Platform.os} ${Platform.formFactor} ${Platform.env}`);
 
 // Window lifecycle delivery (gap #3): a zjs worker can now receive native
 // window events. `Events.on` arms the per-window backend listener (via the zjs
