@@ -90,4 +90,20 @@ doAssert routerCurrentParams(10) == "", "after clear: params is empty"
 doAssert not routerCanGoBack(10), "after clear: no back"
 doAssert not routerCanGoForward(10), "after clear: no forward"
 
+# --- routerDepth + router_current_url (N3a iOS read accessors) ---------------
+block:
+  routerSeed(901, "/")
+  doAssert routerDepth(901) == 1
+  doAssert $routerCurrentUrlC(901) == "/"
+  routerPush(901, "/a", "")
+  doAssert routerDepth(901) == 2
+  doAssert $routerCurrentUrlC(901) == "/a"
+  routerPush(901, "/b", "")
+  doAssert routerDepth(901) == 3
+  discard routerPop(901)
+  doAssert routerDepth(901) == 2          # cursor moved back; forward preserved
+  doAssert $routerCurrentUrlC(901) == "/a"
+  routerClear(901)
+  doAssert routerDepth(901) == 0
+
 echo "routerstate ok"

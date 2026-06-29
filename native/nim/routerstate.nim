@@ -92,3 +92,16 @@ proc routerCanGoForward*(win: int32): bool =
     return s.cur < s.entries.high
   else:
     return false
+
+# --- iOS native-routing read accessors (N3a). exportc so ios/routing.m importc's. ---
+proc routerDepth*(win: int32): cint {.exportc: "router_depth", cdecl.} =
+  ## Number of entries up to and including the current cursor (the native VC
+  ## stack must match this: 1 = root only, N = root + (N-1) pushed routes).
+  if gRoutes.hasKey(win):
+    return (gRoutes[win].cur + 1).cint
+  return 0
+
+proc routerCurrentUrlC*(win: int32): cstring {.exportc: "router_current_url", cdecl.} =
+  ## Top entry url for the iOS side (cstring view of the Nim string).
+  ## Reuses routerCurrentUrl; "" when absent.
+  return routerCurrentUrl(win).cstring

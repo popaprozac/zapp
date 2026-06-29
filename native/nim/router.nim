@@ -23,6 +23,12 @@ import dispatch
 # pendingFocusEvent) and only flushes it when darwin_window_set_bridge_ready
 # fires (window.m:550-554). So without routing "ready", window:focus is stuck
 # deferred forever (every other window event dispatches unconditionally).
+
+# --- iOS native routing (N3a). Defined in ios/routing.m; no-op symbol absent on
+#     non-iOS builds because the calls are `when defined(zappIos)`-gated. ---
+when defined(zappIos):
+  proc zapp_ios_router_sync(windowId: int32) {.importc, cdecl.}
+
 proc darwin_window_id_string(numericId: int32): cstring {.importc, cdecl.}
 proc darwin_window_set_bridge_ready(windowId: cstring) {.importc, cdecl.}
 proc zapp_window_trigger_on_ready(id: int32) {.importc, cdecl.}  # def in callbacks.nim
@@ -185,6 +191,14 @@ proc emitRouteChanged(win: int32, kind: string) =
     "kind": kind
   })
   dispatch_event_to_all("window:route-changed".cstring, payload.cstring)
+
+proc zapp_router_pop_from_native*(windowId: int32) {.exportc, cdecl.} =
+  ## Called by ios/routing.m's nav delegate when the user pops a route VC
+  ## (back button / edge swipe). Mutate routerstate + broadcast; the trailing
+  ## sync sees native already matches → no-op (loop broken).
+  if routerPop(windowId):
+    emitRouteChanged(windowId, "pop")
+  when defined(zappIos): zapp_ios_router_sync(windowId)
 
 proc routeZapp(meth: string, windowId, id: int) =
   ## __zapp:* routes (router.zc:1352-1375).
@@ -698,6 +712,7 @@ proc routeWindowAction(action: string, a: JsonNode, rawWindowId: int, payload: s
     of "router:popToRoot":
       if routerPopToRoot(target): emitRouteChanged(target, "popToRoot")
     else: discard
+    when defined(zappIos): zapp_ios_router_sync(target)   # reconcile native VC stack
     return
   if action.startsWith("popover:"):
     let pid = a{"popoverId"}.getStr("")

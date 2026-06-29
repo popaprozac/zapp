@@ -14,12 +14,18 @@
 import coretypes
 export coretypes   # WindowOptions.inspectable is a coretypes.Inspectable
 import std/json
+import std/tables
 import apptypes
 export apptypes    # WindowManager visible to callers of window.nim
 import appconfig
 import color
 export color   # ZappColor + converters reach app.nim through the WindowOptions API
 import routerstate
+
+# Per-window native-routing flag (N3a). Set in createWindow; queried by ios/routing.m.
+var gNativeRouting: Table[int32, bool]
+proc zapp_window_native_routing*(id: int32): bool {.exportc, cdecl.} =
+  gNativeRouting.getOrDefault(id, false)
 
 type
   TitleBarStyle* {.pure.} = enum   ## NSWindow title-bar style (window.m tag 0/1/2/3)
@@ -197,6 +203,8 @@ type
     sheetPresentation*: int32
     sheetDetents*: int32
     sheetGrabber*: bool
+    # --- iOS native routing (N3a) ---
+    nativeRouting*: bool = false
 
 
 # Resolve a per-window Inspectable to the effective bool. Cascade:
@@ -357,6 +365,7 @@ proc createWindow*(o: WindowOptions): Window =
   # Seed the router state for this window at "/" (the app can replace it on
   # the first route push). Idempotent — routerSeed no-ops if already present.
   routerSeed(id, "/")
+  gNativeRouting[id] = o.nativeRouting   # N3a: stash the nativeRouting flag for ios/routing.m
   Window(id: id, handle: h)
 
 proc zapp_router_clear_window*(numericId: int32) {.exportc, cdecl.} =
@@ -672,6 +681,7 @@ proc windowOptsApplyJson*(o: WindowOptions, a: JsonNode) =
         else: discard
     o.sheetDetents = bits
   if jHasBool(a, "grabber"): o.sheetGrabber = jBool(a, "grabber", o.sheetGrabber)
+  if jHasBool(a, "nativeRouting"): o.nativeRouting = jBool(a, "nativeRouting", o.nativeRouting)
   let tbs = jStr(a, "titleBarStyle")
   case tbs
   of "hidden": o.titleBarStyle = TitleBarStyle.Hidden
