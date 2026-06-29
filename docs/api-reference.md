@@ -1673,19 +1673,70 @@ offset); use query-string or path segments for anything that must survive
 refresh.
 
 **Desktop vs iOS note:** On desktop, the router drives a logical history stack
-that tracks `canGoBack`/`canGoForward`. Wiring these states to native toolbar
-back/forward buttons lands in N2b (this cycle only delivers the stack and its
-events). iOS native routing (UINavigationController) is a future milestone.
+that tracks `canGoBack`/`canGoForward`. macOS/Windows use in-window content swap
+(see "Desktop in-window navigation" below). On iPhone, set `nativeRouting: true`
+to opt into the app-owned navigation stack described below.
 
-#### iOS native routing (preview)
+#### iOS native routing — R1 risk gate (preview)
 
-Set `nativeRouting: true` on a window (iOS only) and `router.push` materializes a
-real native `UINavigationController` push — a new view controller with its own
-webview, native slide-in animation, and edge swipe-back — instead of the desktop
-in-window content swap. The native back/swipe stays in lockstep with the router
-stack. **Preview / risk-gate** in this release: per-route webview caching, state
-restore on back, and per-route toolbar are not yet wired. macOS/Windows ignore the
-flag (desktop in-window navigation).
+> **Preview / R1 risk gate.** The owned-nav chrome shipped in this release and
+> is gated by human iOS-sim smoke. The API surface is stable; internals may
+> iterate before the general release.
+
+Set `nativeRouting: true` on a window to opt into platform-appropriate native
+routing:
+
+- **iPhone** — the window uses an **app-owned `UINavigationController`**
+  (sidebar-first chrome). The sidebar section list is the root of the nav stack.
+  Selecting a section calls `router.replace` (lateral switch; no VC push) then
+  `sidebar.showContent()`. Genuine drill-downs call `router.push("/path")` which
+  pushes a real `UIViewController` with its own webview onto the owned nav stack —
+  native slide-in animation, back button, and edge swipe-back all work. The root
+  content webview re-renders only when the stack collapses to root (`canGoBack ===
+  false`); pushed route webviews render their own fixed route and ignore subsequent
+  `ROUTE_CHANGED` events.
+- **iPad** — the `UISplitViewController` chrome is unchanged (sidebar tile/overlay,
+  inspector pane). `router.push` drives the content column's `UINavigationController`
+  as before.
+- **macOS / Windows** — the flag is silently ignored; in-window content swap
+  applies.
+
+**Per-route identity pattern** (required for owned-nav correctness):
+
+```ts
+// In the content pane — distinguish root vs pushed route webview:
+const g = globalThis as unknown as Record<symbol, unknown>;
+const myRoute = g[Symbol.for("zapp.route")] as string | undefined;
+
+win.router.on((e) => {
+  if (Platform.isIOS) {
+    if (myRoute) return;          // pushed route VC — never re-renders
+    if (!e.canGoBack) renderRoute(e.url); // root: re-render on lateral switch only
+  } else {
+    renderRoute(e.url);           // desktop: swap on every change
+  }
+});
+if (Platform.isIOS && myRoute) {
+  renderRoute(myRoute);           // pushed VC: render its fixed route once
+} else {
+  renderRoute(win.router.url);    // root / desktop: render current route
+}
+```
+
+**Lateral navigation** (sidebar to section on iPhone):
+
+```ts
+const r = Window.current().router;
+if (Platform.isIOS) {
+  r.popToRoot();       // collapse any drill-down back to the section root
+  r.replace(route);    // set this section as the (lateral) root route
+  Window.current().sidebar?.showContent(); // reveal the content column
+} else {
+  r.push(route);
+}
+```
+
+macOS/Windows ignore the flag (desktop in-window navigation).
 
 #### Desktop in-window navigation
 
