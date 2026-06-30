@@ -618,11 +618,16 @@ void zapp_ios_sidebar_register(void* window, void* split, void* sidebarVC,
                         (__bridge void*)inspVC, (__bridge void*)inspNav);
                 fflush(stderr);
             } else {
-                // Inspector VC not yet assigned (early call). Install content at Secondary
-                // as a safe fallback; inspector.m will set its own VC later.
-                fprintf(stderr, "[zapp-nav] register_triple: WARNING inspVC not yet assigned at Secondary\n");
+                // Inspector VC not yet assigned (should not happen — window.m assigns it
+                // first). Install a distinct placeholder so the column has a valid VC and
+                // we never double-parent ctNav (ctNav is ALREADY at Supplementary above;
+                // a single UINavigationController cannot be the VC of two columns).
+                // inspector.m will replace this placeholder when it registers.
+                fprintf(stderr, "[zapp-nav] register_triple: WARNING inspVC not yet assigned at Secondary — installing placeholder\n");
                 fflush(stderr);
-                [svc setViewController:ctNav forColumn:UISplitViewControllerColumnSecondary];
+                UINavigationController* placeholderNav = [[UINavigationController alloc] initWithRootViewController:[[UIViewController alloc] init]];
+                placeholderNav.navigationBarHidden = YES;
+                [svc setViewController:placeholderNav forColumn:UISplitViewControllerColumnSecondary];
             }
         } else {
             // doubleColumn: content at Secondary (unchanged behavior).
