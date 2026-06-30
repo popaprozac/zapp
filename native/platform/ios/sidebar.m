@@ -466,12 +466,18 @@ static void zapp_ios_sidebar_sync_collapse(ZappIOSSidebarController* c, BOOL col
     // willShowViewController: fires when UIKit shows the content VC (e.g. via
     // showColumn:Supplementary). Without this, the delegate only installs on the
     // first route push, so the content toolbar bar would be invisible until then.
-    // Bar visibility is owned exclusively by that delegate — do NOT write
-    // navigationBarHidden here; UIKit will show/hide via willShow when the top VC
-    // changes (content→bar visible; sidebar root→bar hidden).
     if (nav) {
         extern void zapp_ios_route_install_nav_delegate(UINavigationController* nav, int32_t windowId);
         zapp_ios_route_install_nav_delegate(nav, (int32_t)self.hostWindowId);
+        // Explicitly show the collapsed nav's bar so the content toolbar is
+        // visible from launch on iPhone without waiting for a route push.
+        // UIKit combines the two column nav controllers into one collapsed stack
+        // whose bar starts hidden (inherited from sidebarNav's hidden=YES); the
+        // willShowViewController: delegate is the ongoing authority for per-route
+        // transitions but does NOT fire for the already-visible content VC at
+        // initial collapse, so we prime the bar here. The delegate's idempotency
+        // guard means a later willShow call on the same state is a no-op.
+        [nav setNavigationBarHidden:NO animated:NO];
     }
     // [zapp-nav] diagnostic: log didCollapse — captures the combined nav pointer
     fprintf(stderr, "[zapp-nav] didCollapse win=%d collapsedNav=%p stack=%lu\n",
