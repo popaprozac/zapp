@@ -215,6 +215,15 @@ static void zapp_route_install_delegate(UINavigationController* nav, int32_t win
     if (nav.delegate != d) nav.delegate = d;   // single owner; re-assert if UIKit reset it
 }
 
+// Public entry point so sidebar.m can install the delegate on the collapsed
+// nav at didCollapse time — before any route push, so willShowViewController:
+// fires when UIKit shows the content VC (e.g. via showColumn:Supplementary).
+// Must be called on the main thread. Idempotent.
+void zapp_ios_route_install_nav_delegate(UINavigationController* nav, int32_t windowId) {
+    if (!nav || windowId <= 0) return;
+    zapp_route_install_delegate(nav, windowId);
+}
+
 // --- Push seam ------------------------------------------------------------
 
 void zapp_ios_push_route_vc(int32_t windowId, const char* url) {

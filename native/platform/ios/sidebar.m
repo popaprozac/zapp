@@ -462,15 +462,16 @@ static void zapp_ios_sidebar_sync_collapse(ZappIOSSidebarController* c, BOOL col
         // "only when there's something to pop" (avoids a no-op swipe at root).
         zapp_ios_sidebar_rearm_pop(self);
     }
-    // Always default the bar to hidden first. If a toolbar is registered,
-    // apply_for_window will set the correct visibility. This preserves the
-    // chrome-less default for windows without a toolbar.
+    // Install the route-nav delegate on the collapsed nav so that
+    // willShowViewController: fires when UIKit shows the content VC (e.g. via
+    // showColumn:Supplementary). Without this, the delegate only installs on the
+    // first route push, so the content toolbar bar would be invisible until then.
+    // Bar visibility is owned exclusively by that delegate — do NOT write
+    // navigationBarHidden here; UIKit will show/hide via willShow when the top VC
+    // changes (content→bar visible; sidebar root→bar hidden).
     if (nav) {
-        // [zapp-nav] diagnostic: WARN — this is the one remaining navBarHidden write; expected
-        fprintf(stderr, "[zapp-nav] WARN navBarHidden set=1 in sidebar.m:splitViewControllerDidCollapse collapsedNav=%p stack=%lu\n",
-                (__bridge void*)nav, (unsigned long)nav.viewControllers.count);
-        fflush(stderr);
-        nav.navigationBarHidden = YES;
+        extern void zapp_ios_route_install_nav_delegate(UINavigationController* nav, int32_t windowId);
+        zapp_ios_route_install_nav_delegate(nav, (int32_t)self.hostWindowId);
     }
     // [zapp-nav] diagnostic: log didCollapse — captures the combined nav pointer
     fprintf(stderr, "[zapp-nav] didCollapse win=%d collapsedNav=%p stack=%lu\n",
@@ -589,11 +590,17 @@ void zapp_ios_sidebar_register(void* window, void* split, void* sidebarVC,
 
         // OWN the navigation controllers so we control the bar. The column VCs
         // are still empty (no webview yet), so this never re-parents a live
-        // WKWebView. Each column becomes a bar-hidden nav controller root.
+        // WKWebView. Sidebar nav: bar hidden (no toolbar). Content nav: bar visible
+        // so the toolbar renders at launch without waiting for a route push.
         UINavigationController* sbNav = [[UINavigationController alloc] initWithRootViewController:sbVC];
         sbNav.navigationBarHidden = YES;
         UINavigationController* ctNav = [[UINavigationController alloc] initWithRootViewController:ctVC];
-        ctNav.navigationBarHidden = YES;
+        // Content nav starts bar-VISIBLE: the content pane always carries a toolbar,
+        // so its nav bar must be shown at launch (iPad) and whenever content is on
+        // top (iPhone/collapsed). ZappRouteNavDelegate's willShowViewController: is
+        // the ongoing authority; NO here is the correct initial state for iPad where
+        // no VC push fires before the bar is needed.
+        ctNav.navigationBarHidden = NO;
         c.sidebarNav = sbNav;
         c.contentNav = ctNav;
 
