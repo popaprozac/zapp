@@ -281,13 +281,28 @@ void zapp_ios_inspector_register(void* window, void* inspectorVC, void* contentV
             c.inspectorURL = inspWv.URL.absoluteString;
         }
 
-        // iPad initial display mode:  if collapsed-by-default, hide the Secondary
-        // column so it starts invisible.  The split's preferredDisplayMode was set
-        // to TwoBesideSecondary by window.m; override to OneBesideSecondary when
-        // the config says collapsed=true.
+        // iPad initial display mode: if collapsed-by-default, hide the Secondary
+        // column so it starts invisible.
+        //
+        // Timing note: hideColumn:Secondary called synchronously here (before first
+        // layout) is overridden by UIKit when it applies preferredDisplayMode =
+        // TwoBesideSecondary during the first layout pass — the inspector shows open
+        // even though collapsed=true was set. Fix: defer hideColumn: to the NEXT main-
+        // queue runloop pass so it fires AFTER UIKit has completed the initial layout
+        // and applied its preferred display mode. The deferred call then wins and the
+        // inspector starts hidden, with sidebar+content tiled side-by-side.
+        // iPhone-compact (split.isCollapsed==YES) is unaffected — that path never
+        // enters this branch.
         UISplitViewController* split = cvc.splitViewController;
         if (split && !split.isCollapsed && collapsed) {
-            [split hideColumn:UISplitViewControllerColumnSecondary];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                // Re-check that the split is still not collapsed (iPad only) before
+                // issuing the deferred hide. By this point UIKit has applied
+                // preferredDisplayMode, so hideColumn: wins.
+                if (!split.isCollapsed) {
+                    [split hideColumn:UISplitViewControllerColumnSecondary];
+                }
+            });
         }
 
         NSValue* key = [NSValue valueWithPointer:window];
