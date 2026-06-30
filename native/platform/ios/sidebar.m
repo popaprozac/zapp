@@ -61,6 +61,7 @@
 #import <WebKit/WebKit.h>
 #include <stdint.h>
 #include <math.h>
+#include <stdio.h>
 
 extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
 extern void darwin_window_eval_js(int32_t window_id, const char* js);
@@ -132,15 +133,24 @@ static NSMutableDictionary<NSValue*, ZappIOSSidebarController*>* zapp_ios_sideba
 //
 // The pair MUST be applied together; setting one without the other produces
 // undefined resolved behavior (per WWDC20 10105 and community consensus).
+//
+// tripleColumn awareness: OneBesideSecondary on a tripleColumn split HIDES the
+// sidebar (only content+inspector tile). Use TwoBesideSecondary instead so all
+// three columns (sidebar + content + inspector) are visible in the tile case.
 static void zapp_ios_apply_presentation(UISplitViewController* svc, NSString* mode) {
     if (!svc) return;
+    BOOL isTriple = (svc.style == UISplitViewControllerStyleTripleColumn);
     if ([mode isEqualToString:@"overlay"]) {
         svc.preferredSplitBehavior = UISplitViewControllerSplitBehaviorOverlay;
         svc.preferredDisplayMode  = UISplitViewControllerDisplayModeSecondaryOnly;
     } else if ([mode isEqualToString:@"tile"]) {
         // WWDC canonical tile recipe: both flags, applied together.
         svc.preferredSplitBehavior = UISplitViewControllerSplitBehaviorTile;
-        svc.preferredDisplayMode  = UISplitViewControllerDisplayModeOneBesideSecondary;
+        // tripleColumn: TwoBesideSecondary keeps sidebar+content+inspector all visible.
+        // doubleColumn: OneBesideSecondary keeps sidebar+content visible (existing behavior).
+        svc.preferredDisplayMode = isTriple
+            ? UISplitViewControllerDisplayModeTwoBesideSecondary
+            : UISplitViewControllerDisplayModeOneBesideSecondary;
         // iOS 16+: showColumn:Primary clears any outstanding hideColumn override
         // so the primary column is forced BESIDE the secondary (true tile). Without
         // this, if the split's resolved column state is "primary hidden" (e.g. the
@@ -152,8 +162,12 @@ static void zapp_ios_apply_presentation(UISplitViewController* svc, NSString* mo
     } else {
         // "automatic" / nil / empty — let UIKit adapt (tile-landscape,
         // overlay-portrait, collapse-compact). This is the Mail/Notes default.
+        // tripleColumn automatic: use TwoBesideSecondary (all three columns visible
+        // in regular width) mirroring the tile case intent set by Task 1.
         svc.preferredSplitBehavior = UISplitViewControllerSplitBehaviorAutomatic;
-        svc.preferredDisplayMode  = UISplitViewControllerDisplayModeAutomatic;
+        svc.preferredDisplayMode = isTriple
+            ? UISplitViewControllerDisplayModeTwoBesideSecondary
+            : UISplitViewControllerDisplayModeAutomatic;
     }
 }
 
@@ -451,7 +465,18 @@ static void zapp_ios_sidebar_sync_collapse(ZappIOSSidebarController* c, BOOL col
     // Always default the bar to hidden first. If a toolbar is registered,
     // apply_for_window will set the correct visibility. This preserves the
     // chrome-less default for windows without a toolbar.
-    if (nav) nav.navigationBarHidden = YES;
+    if (nav) {
+        // [zapp-nav] diagnostic: WARN — this is the one remaining navBarHidden write; expected
+        fprintf(stderr, "[zapp-nav] WARN navBarHidden set=1 in sidebar.m:splitViewControllerDidCollapse collapsedNav=%p stack=%lu\n",
+                (__bridge void*)nav, (unsigned long)nav.viewControllers.count);
+        fflush(stderr);
+        nav.navigationBarHidden = YES;
+    }
+    // [zapp-nav] diagnostic: log didCollapse — captures the combined nav pointer
+    fprintf(stderr, "[zapp-nav] didCollapse win=%d collapsedNav=%p stack=%lu\n",
+            (int)self.hostWindowId, (__bridge void*)nav,
+            nav ? (unsigned long)nav.viewControllers.count : 0UL);
+    fflush(stderr);
     zapp_ios_sidebar_sync_collapse(self, NO);
     // Re-apply any registered toolbar to the now-captured collapsedNav.
     // Must happen AFTER self.collapsedNav is set so the toolbar can reach it.
@@ -576,7 +601,33 @@ void zapp_ios_sidebar_register(void* window, void* split, void* sidebarVC,
         // window.m set before calling us. The preferred min/max/width values
         // window.m set are preserved on the split (they're not column-VC-scoped).
         [svc setViewController:sbNav forColumn:UISplitViewControllerColumnPrimary];
-        [svc setViewController:ctNav forColumn:UISplitViewControllerColumnSecondary];
+
+        BOOL isTriple = (svc.style == UISplitViewControllerStyleTripleColumn);
+        if (isTriple) {
+            // tripleColumn: content lives in Supplementary; inspector lives in Secondary.
+            // Nav-wrap content at Supplementary (bar hidden — same as doubleColumn content).
+            // Nav-wrap inspector at Secondary (bar VISIBLE — carries inspector title/items).
+            // Fetch the existing inspector VC that window.m already placed at Secondary.
+            UIViewController* inspVC = [svc viewControllerForColumn:UISplitViewControllerColumnSecondary];
+            [svc setViewController:ctNav forColumn:UISplitViewControllerColumnSupplementary];
+            if (inspVC) {
+                UINavigationController* inspNav = [[UINavigationController alloc] initWithRootViewController:inspVC];
+                inspNav.navigationBarHidden = NO; // inspector bar visible; carries title + items
+                [svc setViewController:inspNav forColumn:UISplitViewControllerColumnSecondary];
+                fprintf(stderr, "[zapp-nav] register_triple: inspVC=%p wrapped in inspNav=%p\n",
+                        (__bridge void*)inspVC, (__bridge void*)inspNav);
+                fflush(stderr);
+            } else {
+                // Inspector VC not yet assigned (early call). Install content at Secondary
+                // as a safe fallback; inspector.m will set its own VC later.
+                fprintf(stderr, "[zapp-nav] register_triple: WARNING inspVC not yet assigned at Secondary\n");
+                fflush(stderr);
+                [svc setViewController:ctNav forColumn:UISplitViewControllerColumnSecondary];
+            }
+        } else {
+            // doubleColumn: content at Secondary (unchanged behavior).
+            [svc setViewController:ctNav forColumn:UISplitViewControllerColumnSecondary];
+        }
 
         // NO explicit compact column. An explicit compact column is presented
         // VERBATIM on collapse (an empty one = blank screen); a populated one
@@ -612,8 +663,14 @@ void zapp_ios_sidebar_register(void* window, void* split, void* sidebarVC,
         NSValue* key = [NSValue valueWithPointer:window];
         zapp_ios_sidebars[key] = c;
 
-        NSLog(@"[native] iOS sidebar registered: host=%d sidebar=%d split=%@ presentation=%@",
-              host_id, sidebar_id, svc, presMode.length ? presMode : @"automatic");
+        // [zapp-nav] diagnostic: register_contentVC — use this pointer to match other log lines
+        fprintf(stderr, "[zapp-nav] register_contentVC win=%d contentVC=%p sidebarVC=%p contentNav=%p\n",
+                (int)host_id, (__bridge void*)ctVC, (__bridge void*)sbVC, (__bridge void*)ctNav);
+        fflush(stderr);
+        fprintf(stderr, "[native] iOS sidebar registered: host=%d sidebar=%d presentation=%s\n",
+                (int)host_id, (int)sidebar_id,
+                presMode.length ? presMode.UTF8String : "automatic");
+        fflush(stderr);
     });
 }
 
@@ -742,6 +799,15 @@ void zapp_ios_sidebar_register_leading_constraints(void* window,
 // All keyed by a transport slot (host OR sidebar pane); zapp_ios_sidebar_for_slot
 // resolves either to the host record.
 
+// Helper: return the column that holds CONTENT for this split style.
+// tripleColumn: content is at Supplementary (Secondary = inspector).
+// doubleColumn: content is at Secondary (unchanged).
+static UISplitViewControllerColumn zapp_ios_content_column(UISplitViewController* svc) {
+    return (svc.style == UISplitViewControllerStyleTripleColumn)
+        ? UISplitViewControllerColumnSupplementary
+        : UISplitViewControllerColumnSecondary;
+}
+
 // Reveal the CONTENT (hide the sidebar). compact(iPhone): existing nav move.
 // regular(iPad) overlay: dismiss the flyout. regular(iPad) tile/automatic: NO-OP —
 // when the split is showing both columns side-by-side (tiled), the content is
@@ -758,6 +824,11 @@ void darwin_sidebar_show_content(int32_t window_id) {
         if (!c || !c.splitVC) return;
         BOOL compact  = zapp_ios_sidebar_is_compact(c);
         BOOL isOverlay = [c.presentation isEqualToString:@"overlay"];
+        // [zapp-nav] diagnostic: show_content entry — key for lateral section switch (Bug B)
+        fprintf(stderr, "[zapp-nav] show_content win=%d contentVC=%p method=%s\n",
+                (int)c.hostWindowId, (__bridge void*)c.contentVC,
+                compact ? "showColumn(compact)" : (isOverlay ? "hideColumn(overlay)" : "noOp(tile)"));
+        fflush(stderr);
         // On regular width with a tiled sidebar (automatic or tile presentation),
         // showContent is a no-op — the content is always visible beside the sidebar.
         if (!compact && !isOverlay) {
@@ -766,7 +837,18 @@ void darwin_sidebar_show_content(int32_t window_id) {
         }
         if (@available(iOS 16.0, *)) {
             if (compact) {
-                [c.splitVC showColumn:UISplitViewControllerColumnSecondary];
+                // Pop to root FIRST if the content nav has been drilled into a detail
+                // view. This prevents the stale-view bug (sticky route / Bug B) where
+                // a section-select on a drilled nav leaves the user on the old detail.
+                // Mirror the spike (SidebarViewController.m:61-63).
+                if (c.contentNav && c.contentNav.viewControllers.count > 1) {
+                    [c.contentNav popToRootViewControllerAnimated:NO];
+                }
+                // Show the content column. In tripleColumn the content lives at
+                // Supplementary (Secondary = inspector); in doubleColumn at Secondary.
+                // showColumn:Supplementary on compact lands ONLY on content — it does
+                // NOT fold the inspector into the collapsed stack (unlike Secondary).
+                [c.splitVC showColumn:zapp_ios_content_column(c.splitVC)];
                 // The split may have been created already-collapsed on iPhone, so
                 // splitViewControllerDidCollapse: (which normally re-arms the
                 // swipe-back gesture) may never have fired. Re-arm defensively now
