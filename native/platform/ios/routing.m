@@ -18,6 +18,8 @@
 
 #import <UIKit/UIKit.h>
 #import <WebKit/WebKit.h>
+#include <stdio.h>
+#include <objc/runtime.h>
 
 // darwin_webview_create_ext is defined in ios/webview.m (same iOS link unit).
 #include "../darwin/webview.h"
@@ -32,6 +34,11 @@ extern void zapp_router_pop_from_native(int32_t window_id);
 extern void zapp_ios_set_pending_route_url(const char* url);
 // Inject --zapp-* safe-area vars into a route VC's webview after layout.
 extern void zapp_ios_toolbar_inject_webview_safe_area(WKWebView* wv);
+// Slot-restore dance: capture content webview before create_ext, restore after.
+// zapp_ios_content_webview_for_slot: returns zapp_ios_webviews[slot] (window.m).
+// zapp_ios_register_webview: writes a webview into the UIWindow-keyed host slot.
+extern WKWebView* zapp_ios_content_webview_for_slot(int32_t slot);
+extern void zapp_ios_register_webview(void* window_ptr, void* webview_ptr);
 
 // Chrome-agnostic content-VC resolution (owned-nav fork deleted in T2).
 // sidebar.m: the authoritative secondary-column content VC stored at register time.
@@ -86,7 +93,12 @@ static void zapp_route_vc_teardown(ZappRouteVC* vc) {
 // The owned-nav fork was deleted in T2; split path is the single chrome.
 static UINavigationController* zapp_route_content_nav(void* win) {
     UIViewController* contentVC = zapp_ios_content_vc_for_window(win);
-    return contentVC.navigationController;   // LIVE nav — the fix vs N3a
+    UINavigationController* nav = contentVC.navigationController;
+    // [zapp-nav] diagnostic: log resolved contentVC + nav pointers once per call
+    fprintf(stderr, "[zapp-nav] content_nav contentVC=%p nav=%p\n",
+            (__bridge void*)contentVC, (__bridge void*)nav);
+    fflush(stderr);
+    return nav;   // LIVE nav — the fix vs N3a
 }
 
 // --- Single clean nav delegate --------------------------------------------
@@ -102,13 +114,68 @@ static UINavigationController* zapp_route_content_nav(void* win) {
 //
 // This delegate lives on contentVC.navigationController (the live nav).
 // After T2 it is the sole delegate on that nav (no toolbar delegate conflicts).
+// Forward-declare zapp_toolbar_inject_metrics so willShowViewController can
+// trigger a metrics re-inject after the bar appears/disappears (same as the
+// comment in toolbar.m's zapp_toolbar_inject_metrics header).
+extern void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_user_script);
+
 @interface ZappRouteNavDelegate : NSObject <UINavigationControllerDelegate>
 @property (nonatomic, assign) int32_t windowId;
 @end
 @implementation ZappRouteNavDelegate
+
+// willShowViewController: — SINGLE source of nav-bar visibility (Fix 1).
+//
+// UIKit calls this on EVERY push AND pop, including user swipes, back-button taps,
+// and programmatic pops. Driving visibility here (rather than scattered
+// navigationBarHidden writes in toolbar.m) prevents bar-state drift.
+//
+// Rules:
+//   • SHOWN  on the content VC (leaf of the secondary column, no route VCs on top)
+//             and on any ZappRouteVC (shows the back button + per-VC toolbar items).
+//   • HIDDEN on the sidebar root and any other VC that is not the content VC or a
+//             route VC.
+//
+// The idempotency guard (only call setNavigationBarHidden: when the state actually
+// needs to change) prevents redundant UIKit transitions.
+- (void)navigationController:(UINavigationController*)nav
+    willShowViewController:(UIViewController*)vc animated:(BOOL)animated {
+    void* win = darwin_window_get_by_numeric_id(self.windowId);
+    UIViewController* contentVC = win ? zapp_ios_content_vc_for_window(win) : nil;
+    // Show the bar on:
+    //   1. The content VC itself (the live secondary-column root).
+    //   2. Any pushed ZappRouteVC (needs back button + per-VC toolbar items).
+    BOOL isContent = (contentVC && vc == contentVC);
+    BOOL isRoute = [vc isKindOfClass:[ZappRouteVC class]];
+    BOOL showBar = isContent || isRoute;
+    BOOL barHiddenBefore = nav.navigationBarHidden;
+    // [zapp-nav] diagnostic: key signal for bar-visibility desync (Bug A)
+    fprintf(stderr, "[zapp-nav] willShow win=%d vc=%p vcClass=%s contentVC=%p isContent=%d isRoute=%d showBar=%d barHiddenBefore=%d stackCount=%lu\n",
+            (int)self.windowId, (__bridge void*)vc,
+            class_getName([vc class]),
+            (__bridge void*)contentVC,
+            (int)isContent, (int)isRoute, (int)showBar, (int)barHiddenBefore,
+            (unsigned long)nav.viewControllers.count);
+    fflush(stderr);
+    if (nav.navigationBarHidden == showBar) {
+        [nav setNavigationBarHidden:!showBar animated:animated];
+        // Bar visibility changed — re-inject chrome metrics one tick later so the
+        // nav bar has been laid out and safeAreaInsets reflect the new state.
+        // add_user_script=false: the persistent WKUserScript was set by set_items;
+        // this is a live update only (avoids unbounded script accumulation).
+        if (win) {
+            void* capturedWin = win;
+            int32_t capturedSlot = self.windowId;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                zapp_toolbar_inject_metrics(capturedWin, capturedSlot, false);
+            });
+        }
+    }
+}
+
 - (void)navigationController:(UINavigationController*)nav
        didShowViewController:(UIViewController*)vc animated:(BOOL)animated {
-    (void)vc; (void)animated;
+    (void)animated;
     // Count only ZappRouteVC instances so the sidebar root on collapsed iPhone
     // doesn't skew the delta.
     int nativeRouteDepth = 0;
@@ -117,7 +184,14 @@ static UINavigationController* zapp_route_content_nav(void* win) {
     // routerstate depth 1 = content VC (0 route VCs on top of it).
     int wantRouteDepth = (int)router_depth(self.windowId) - 1;
     if (wantRouteDepth < 0) wantRouteDepth = 0;
-    if (nativeRouteDepth < wantRouteDepth) {
+    // [zapp-nav] diagnostic: depth-delta check (Bug B sticky-route: native popped but routerstate stuck)
+    BOOL willPopFromNative = (nativeRouteDepth < wantRouteDepth);
+    fprintf(stderr, "[zapp-nav] didShow win=%d vc=%p vcClass=%s nativeRouteDepth=%d wantRouteDepth=%d willPopFromNative=%d\n",
+            (int)self.windowId, (__bridge void*)vc,
+            class_getName([vc class]),
+            nativeRouteDepth, wantRouteDepth, (int)willPopFromNative);
+    fflush(stderr);
+    if (willPopFromNative) {
         // User popped via back button or edge swipe — reflect into routerstate.
         // zapp_router_pop_from_native pops routerstate + emits ROUTE_CHANGED.
         // It does NOT call any native op (loop broken).
@@ -148,6 +222,10 @@ void zapp_ios_push_route_vc(int32_t windowId, const char* url) {
     void* win = darwin_window_get_by_numeric_id(windowId);
     if (!win) return;
     UINavigationController* nav = zapp_route_content_nav(win);
+    // [zapp-nav] diagnostic: push entry — shows whether nav resolved
+    fprintf(stderr, "[zapp-nav] push_route_vc win=%d url=%s navResolved=%p\n",
+            (int)windowId, url ? url : "(null)", (__bridge void*)nav);
+    fflush(stderr);
     if (!nav) return;   // nav not available yet → deferred
     zapp_route_install_delegate(nav, windowId);
 
@@ -157,6 +235,17 @@ void zapp_ios_push_route_vc(int32_t windowId, const char* url) {
     // N3a per-route identity: set the pending url before create_ext mints the
     // route webview so it renders its own fixed route, not the latest broadcast.
     zapp_ios_set_pending_route_url(url);
+
+    // Slot-restore dance (fixes sticky-route / Bug B):
+    // darwin_webview_create_ext ends by calling zapp_ios_register_webview, which
+    // writes the newly minted route webview into zapp_ios_webviews[windowId] —
+    // evicting the content webview from its host slot.  After that eviction,
+    // zapp_ios_eval_js_all_webviews (used for ROUTE_CHANGED broadcasts) no longer
+    // reaches the content webview, so lateral section nav can't re-render and the
+    // route appears sticky.  Capture the current content webview BEFORE create_ext
+    // so we can restore it to the slot afterwards.  Mirrors the same fix applied to
+    // ZappIOSPushedInspectorVC.viewDidLoad in inspector.m:114-115.
+    WKWebView* savedContentWebview = zapp_ios_content_webview_for_slot(windowId);
 
     // Mint a webview into vc.view via the shared create path.
     // Args match the content-pane call in window.m:534-537:
@@ -188,6 +277,17 @@ void zapp_ios_push_route_vc(int32_t windowId, const char* url) {
         }
     }
 
+    // Restore the content webview to the host slot (slot-restore dance).
+    // create_ext has now clobbered zapp_ios_webviews[windowId] with the route
+    // webview.  Put the content webview back so ROUTE_CHANGED broadcasts via
+    // zapp_ios_eval_js_all_webviews continue reaching the content pane.
+    // The route webview is slot-less: its bridge (Back button, one-time render via
+    // zapp.route identity) works without a slot; it intentionally ignores
+    // ROUTE_CHANGED anyway.
+    if (savedContentWebview && savedContentWebview != vc.webview) {
+        zapp_ios_register_webview(win, (__bridge void*)savedContentWebview);
+    }
+
     // Don't force-stamp toolbar items at push time. The app sets items via
     // toolbar:setItems → darwin_toolbar_set_items → zapp_ios_toolbar_apply_to_nav,
     // which targets nav.topViewController. After this push, the route VC becomes
@@ -205,7 +305,12 @@ void zapp_ios_pop_route_vc(int32_t windowId) {
     if (!win) return;
     UINavigationController* nav = zapp_route_content_nav(win);
     if (!nav) return;
-    if ([nav.topViewController isKindOfClass:[ZappRouteVC class]])
+    BOOL topIsRouteVC = [nav.topViewController isKindOfClass:[ZappRouteVC class]];
+    // [zapp-nav] diagnostic: pop entry — shows whether top is actually a route VC
+    fprintf(stderr, "[zapp-nav] pop_route_vc win=%d topIsRouteVC=%d\n",
+            (int)windowId, (int)topIsRouteVC);
+    fflush(stderr);
+    if (topIsRouteVC)
         [nav popViewControllerAnimated:YES];
 }
 
@@ -216,6 +321,12 @@ void zapp_ios_pop_to_content(int32_t windowId) {
     if (!contentVC) return;
     UINavigationController* nav = contentVC.navigationController;
     if (!nav) return;
-    if ([nav.viewControllers containsObject:contentVC])
+    BOOL containsContent = [nav.viewControllers containsObject:contentVC];
+    // [zapp-nav] diagnostic: pop_to_content — key for lateral section switch (Bug B)
+    fprintf(stderr, "[zapp-nav] pop_to_content win=%d contentVC=%p stackBefore=%lu containsContent=%d\n",
+            (int)windowId, (__bridge void*)contentVC,
+            (unsigned long)nav.viewControllers.count, (int)containsContent);
+    fflush(stderr);
+    if (containsContent)
         [nav popToViewController:contentVC animated:NO];
 }
