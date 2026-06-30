@@ -59,6 +59,11 @@ type
     Tile = "tile"
     Overlay = "overlay"
 
+  InspectorPresentation* {.pure.} = enum ## inspector push vs sheet (iOS)
+    Default = ""              ## "" ⇒ per-platform default
+    Push = "push"
+    Sheet = "sheet"
+
   BackgroundExtension* {.pure.} = enum  ## content-pane bg vs floating sidebar (macOS 26+)
     None = "none"             ## default: content sits beside the sidebar
     Extend = "extend"         ## content flows under the sidebar glass
@@ -146,6 +151,7 @@ type
     url*: string
     backgroundColor*: ZappColor
     material*: Material
+    presentation*: InspectorPresentation
     width*: int32 = 280
     minWidth*: int32 = 180
     maxWidth*: int32 = 400
@@ -231,6 +237,10 @@ let sidebarPresStr = (block:
   var a: array[SidebarPresentation, string]
   for p in SidebarPresentation: a[p] = $p
   a)
+let inspectorPresStr = (block:
+  var a: array[InspectorPresentation, string]
+  for p in InspectorPresentation: a[p] = $p
+  a)
 let backgroundExtensionStr = [BackgroundExtension.None: "none", BackgroundExtension.Extend: "extend", BackgroundExtension.Mirror: "mirror"]
 
 # Generic string→enum: returns the member whose $ equals `s`, else `dflt`.
@@ -302,6 +312,7 @@ proc wopts_inspector_collapsed(p: pointer): bool {.exportc, cdecl.} = opt(p).ins
 proc wopts_inspector_can_resize(p: pointer): bool {.exportc, cdecl.} = opt(p).inspector.resizable
 proc wopts_inspector_background_color(p: pointer): cstring {.exportc, cdecl.} = string(opt(p).inspector.backgroundColor).cstring
 proc wopts_inspector_numeric_id(p: pointer): int32 {.exportc, cdecl.} = opt(p).inspector.numericId
+proc wopts_inspector_presentation(p: pointer): cstring {.exportc, cdecl.} = inspectorPresStr[opt(p).inspector.presentation].cstring
 
 # toolbar accessor — defined after the j* JSON helpers (serializeToolbar/
 # parseToolbarJson depend on jHasStr/jStr/jHasBool/jBool), just before
@@ -654,6 +665,7 @@ proc windowOptsApplyJson*(o: WindowOptions, a: JsonNode) =
     if jHasBool(insp, "collapsible"): o.inspector.collapsible = jBool(insp, "collapsible", o.inspector.collapsible)
     if jHasBool(insp, "collapsed"): o.inspector.collapsed = jBool(insp, "collapsed", o.inspector.collapsed)
     if jHasBool(insp, "resizable"): o.inspector.resizable = jBool(insp, "resizable", o.inspector.resizable)
+    if jHasStr(insp, "presentation"): o.inspector.presentation = enumFromStr[InspectorPresentation](jStr(insp, "presentation"), InspectorPresentation.Default)
   let aso = a{"asSheetOf"}
   if not aso.isNil:
     if aso.kind == JInt or aso.kind == JFloat:

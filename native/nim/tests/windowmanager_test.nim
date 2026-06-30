@@ -119,6 +119,7 @@ block:
   doAssert o.trafficLights.close == ButtonState.Enabled
   doAssert o.sidebar.material == Material.Default and o.inspector.material == Material.Default
   doAssert o.sidebar.presentation == SidebarPresentation.Default
+  doAssert o.inspector.presentation == InspectorPresentation.Default
   doAssert o.toolbar.style == ToolbarStyle.Unified, "toolbar style defaults to Unified"
   doAssert o.vibrancy == Material.Default
 
@@ -203,6 +204,9 @@ block:
   doAssert $Material.UnderWindowBackground == "underWindowBackground"
   doAssert $SidebarPresentation.Overlay == "overlay"
   doAssert $SidebarPresentation.Default == ""
+  doAssert $InspectorPresentation.Push == "push"
+  doAssert $InspectorPresentation.Sheet == "sheet"
+  doAssert $InspectorPresentation.Default == ""
   doAssert $ToolbarStyle.Unified == "unified"
   doAssert $ToolbarStyle.Expanded == "expanded"
 
@@ -224,6 +228,19 @@ block:
   windowOptsApplyJson(o, parseJson("""{"sidebar":{"material":"bogus","presentation":"nope"}}"""))
   doAssert o.sidebar.material == Material.Default, "unknown material must fall back to Default"
   doAssert o.sidebar.presentation == SidebarPresentation.Default, "unknown presentation must fall back to Default"
+
+block:
+  let o = WindowOptions(title: "ipres")
+  windowOptsApplyJson(o, parseJson("""{"inspector":{"url":"#in","width":300,"presentation":"sheet"}}"""))
+  doAssert o.inspector.presentation == InspectorPresentation.Sheet, "inspector.presentation must parse to the enum"
+block:
+  let o = WindowOptions(title: "ipres-default")
+  windowOptsApplyJson(o, parseJson("""{"inspector":{"url":"#in"}}"""))
+  doAssert o.inspector.presentation == InspectorPresentation.Default, "absent inspector.presentation must default to Default"
+block:
+  let o = WindowOptions(title: "ipres-bad")
+  windowOptsApplyJson(o, parseJson("""{"inspector":{"presentation":"nope"}}"""))
+  doAssert o.inspector.presentation == InspectorPresentation.Default, "unknown inspector.presentation must fall back to Default"
 
 block:
   # segmented toolbar group round-trips (grouping)
