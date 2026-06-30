@@ -27,6 +27,10 @@ extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
 extern void darwin_window_eval_js(int32_t window_id, const char* js);
 extern int32_t zapp_ios_sidebar_slot_for(int32_t host_slot);
 extern WKWebView* zapp_ios_content_webview_for_slot(int32_t slot);
+// Restores a webview to the UIWindow-keyed host slot (writes
+// zapp_ios_webviews[d->numeric_id] = wv). Used after darwin_webview_create_ext
+// to undo the automatic host-slot overwrite it applies (webview.m:1067).
+extern void zapp_ios_register_webview(void* window_ptr, void* webview_ptr);
 
 // --- Pushed inspector VC (push-mode for compact / iPhone) ------------------
 //
@@ -58,6 +62,10 @@ extern void zapp_ios_toolbar_inject_webview_safe_area(WKWebView* wv);
 @property (nonatomic, assign) int32_t  windowId;
 // Inspector URL to load (set lazily at push time from the live column webview).
 @property (nonatomic, copy)   NSString* inspectorURL;
+// Host CONTENT webview: needed to restore the host slot after
+// darwin_webview_create_ext clobbers it with the pushed inspector webview
+// (slot-restore dance — mirrors window.m:694-695).
+@property (nonatomic, strong) WKWebView* contentWebview;
 @end
 
 @implementation ZappIOSPushedInspectorVC
@@ -93,6 +101,18 @@ extern void zapp_ios_toolbar_inject_webview_safe_area(WKWebView* wv);
                 self.webview = (WKWebView*)sub;
                 break;
             }
+        }
+
+        // Slot-restore dance (Bug A fix, mirrors window.m:694-695):
+        // darwin_webview_create_ext ended with zapp_ios_register_webview, which
+        // wrote the pushed inspector webview into the host slot (all panes share
+        // one UIWindow → register_webview routes to numeric_id = host slot).
+        // Restore the host slot to the content webview so dispatch to the host
+        // slot continues reaching the content pane, not this pushed VC's webview.
+        // The inspector column slot is unaffected by create_ext and keeps the
+        // column inspector webview — no separate restore is needed there.
+        if (self.windowPtr && self.contentWebview) {
+            zapp_ios_register_webview(self.windowPtr, (__bridge void*)self.contentWebview);
         }
     }
 }
@@ -144,6 +164,9 @@ extern void zapp_ios_toolbar_inject_webview_safe_area(WKWebView* wv);
 @property (nonatomic, assign) int32_t inspectorSlotId;        // inspector webview slot
 @property (nonatomic, assign) int32_t width;                   // configured (expanded) width
 @property (nonatomic, copy)   NSString* inspectorURL;          // captured URL for compact push
+// Host content webview: retained here so the compact-push path can restore
+// the host slot after darwin_webview_create_ext clobbers it.
+@property (nonatomic, strong) WKWebView* contentWebview;
 // compact push-mode: the currently pushed transient inspector VC (weak — nav owns it).
 @property (nonatomic, weak)   ZappIOSPushedInspectorVC* pushedVC;
 @end
@@ -241,11 +264,14 @@ void zapp_ios_inspector_register(void* window, void* inspectorVC, void* contentV
         if (!ivc || !cvc) return;
 
         ZappIOSInspectorController* c = [[ZappIOSInspectorController alloc] init];
-        c.inspectorVC  = ivc;
-        c.contentVC    = cvc;
-        c.hostWindowId = host_id;
+        c.inspectorVC    = ivc;
+        c.contentVC      = cvc;
+        c.hostWindowId   = host_id;
         c.inspectorSlotId = inspector_id;
-        c.width        = (width > 0 ? width : 280);
+        c.width          = (width > 0 ? width : 280);
+        // Retain the host content webview so the compact-push path can restore
+        // the host slot after darwin_webview_create_ext clobbers it (Bug A fix).
+        c.contentWebview = (__bridge WKWebView*)contentWebview;
 
         // Capture the inspector URL now for compact push-mode. The inspector
         // webview has been registered in the inspector_id slot by the time
@@ -320,6 +346,9 @@ void darwin_inspector_expand(int32_t window_id) {
             void* winPtr = darwin_window_get_by_numeric_id(c.hostWindowId);
             pushVC.windowPtr = winPtr;
             pushVC.windowId  = c.inspectorSlotId;
+            // Hand the host content webview to the pushed VC so viewDidLoad can
+            // restore the host slot after darwin_webview_create_ext clobbers it.
+            pushVC.contentWebview = c.contentWebview;
 
             pushVC.title = @"Inspector";
 
@@ -332,23 +361,29 @@ void darwin_inspector_expand(int32_t window_id) {
             __weak ZappIOSPushedInspectorVC* weakPushVC = pushVC;
             ZappIOSInspectorController* __weak weakC = c;
             pushVC.onDismiss = ^{
-                // Emit inspector-collapsed to host + inspector + sidebar slots.
-                // Call JS inline using the captured by-value ids (no strong
-                // reference to any ObjC object that could form a retain cycle).
-                char js[256];
-                snprintf(js, sizeof(js),
-                    "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
-                    "if(b&&typeof b.dispatchWindowEvent==='function'){"
-                    "b.dispatchWindowEvent('win-%d','inspector-collapsed',undefined);}})();",
-                    hostId);
-                darwin_window_eval_js(hostId, js);
-                if (inspId >= 0 && inspId != hostId)
-                    darwin_window_eval_js(inspId, js);
-                if (sidebarId >= 0 && sidebarId != hostId && sidebarId != inspId)
-                    darwin_window_eval_js(sidebarId, js);
-                // Clear the pushedVC reference on the controller (if still alive).
+                // Bug B fix: gate the JS eval inside the pushedVC identity guard.
+                // • User swipe-back: c.pushedVC == weakPushVC (nobody nil'd it),
+                //   so the guard passes → emit once, then clear pushedVC. ✓
+                // • Programmatic collapse (darwin_inspector_collapse): c.pushedVC
+                //   is nil'd BEFORE the pop, so viewWillDisappear: fires this block
+                //   with the guard already false → no emit here. The inline emit
+                //   in darwin_inspector_collapse fires exactly once. ✓
                 ZappIOSInspectorController* strongC = weakC;
                 if (strongC && strongC.pushedVC == weakPushVC) {
+                    // Emit inspector-collapsed to host + inspector + sidebar slots.
+                    // Call JS inline using captured by-value ids (no strong
+                    // reference to any ObjC object that could form a retain cycle).
+                    char js[256];
+                    snprintf(js, sizeof(js),
+                        "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+                        "if(b&&typeof b.dispatchWindowEvent==='function'){"
+                        "b.dispatchWindowEvent('win-%d','inspector-collapsed',undefined);}})();",
+                        hostId);
+                    darwin_window_eval_js(hostId, js);
+                    if (inspId >= 0 && inspId != hostId)
+                        darwin_window_eval_js(inspId, js);
+                    if (sidebarId >= 0 && sidebarId != hostId && sidebarId != inspId)
+                        darwin_window_eval_js(sidebarId, js);
                     strongC.pushedVC = nil;
                 }
             };
@@ -382,8 +417,14 @@ void darwin_inspector_collapse(int32_t window_id) {
             UINavigationController* nav = c.contentVC.navigationController;
             if (c.pushedVC && nav &&
                 [nav.topViewController isKindOfClass:[ZappIOSPushedInspectorVC class]]) {
-                [nav popViewControllerAnimated:YES];
+                // Bug B fix: nil pushedVC BEFORE the pop so that the
+                // viewWillDisappear: → onDismiss path sees pushedVC==nil and
+                // skips its emit (guard fails).  The single emit below fires
+                // after the pop.  This ensures exactly one inspector-collapsed
+                // event per programmatic collapse, regardless of whether
+                // viewWillDisappear: fires synchronously during the pop call.
                 c.pushedVC = nil;
+                [nav popViewControllerAnimated:YES];
                 zapp_ios_inspector_emit(c, "inspector-collapsed");
             }
             // No pushedVC → nothing to collapse; skip emit.
