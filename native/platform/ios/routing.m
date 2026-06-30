@@ -121,6 +121,12 @@ extern void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, boo
 
 @interface ZappRouteNavDelegate : NSObject <UINavigationControllerDelegate>
 @property (nonatomic, assign) int32_t windowId;
+// Tracks the class of the VC that was on top (the "from" VC) during the most
+// recent willShowViewController: call. Set via the transition coordinator so
+// didShowViewController: can guard route-depth reconciliation: a pop that reveals
+// the content VC after an inspector push must NOT trigger pop_from_native because
+// the inspector VC (ZappIOSPushedInspectorVC) is a pane presentation, not a route.
+@property (nonatomic, assign) BOOL lastFromVCWasRouteVC;
 @end
 @implementation ZappRouteNavDelegate
 
@@ -149,13 +155,30 @@ extern void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, boo
     BOOL isRoute = [vc isKindOfClass:[ZappRouteVC class]];
     BOOL showBar = isContent || isRoute;
     BOOL barHiddenBefore = nav.navigationBarHidden;
+
+    // Inspector-pop guard: capture the "from" VC via the transition coordinator so
+    // didShowViewController: can skip route-depth reconciliation when the disappearing
+    // VC was not a ZappRouteVC (e.g. a ZappIOSPushedInspectorVC pane push/pop).
+    // The coordinator's fromVC is the VC that was on screen before this transition.
+    // Default to YES (assume route pop) so push paths are never mis-skipped; the
+    // coordinator is nil for programmatic pops that bypassed UIKit animation.
+    self.lastFromVCWasRouteVC = YES;
+    id<UIViewControllerTransitionCoordinator> coordinator = nav.transitionCoordinator;
+    if (coordinator) {
+        UIViewController* fromVC = [coordinator viewControllerForKey:UITransitionContextFromViewControllerKey];
+        // Only count genuine ZappRouteVC departures as route pops. Any other class
+        // (ZappIOSPushedInspectorVC, sidebar root, etc.) is pane-level and must not
+        // advance the route-depth reconciliation.
+        self.lastFromVCWasRouteVC = (fromVC != nil && [fromVC isKindOfClass:[ZappRouteVC class]]);
+    }
+
     // [zapp-nav] diagnostic: key signal for bar-visibility desync (Bug A)
-    fprintf(stderr, "[zapp-nav] willShow win=%d vc=%p vcClass=%s contentVC=%p isContent=%d isRoute=%d showBar=%d barHiddenBefore=%d stackCount=%lu\n",
+    fprintf(stderr, "[zapp-nav] willShow win=%d vc=%p vcClass=%s contentVC=%p isContent=%d isRoute=%d showBar=%d barHiddenBefore=%d stackCount=%lu lastFromVCWasRouteVC=%d\n",
             (int)self.windowId, (__bridge void*)vc,
             class_getName([vc class]),
             (__bridge void*)contentVC,
             (int)isContent, (int)isRoute, (int)showBar, (int)barHiddenBefore,
-            (unsigned long)nav.viewControllers.count);
+            (unsigned long)nav.viewControllers.count, (int)self.lastFromVCWasRouteVC);
     fflush(stderr);
     if (nav.navigationBarHidden == showBar) {
         [nav setNavigationBarHidden:!showBar animated:animated];
@@ -184,12 +207,21 @@ extern void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, boo
     // routerstate depth 1 = content VC (0 route VCs on top of it).
     int wantRouteDepth = (int)router_depth(self.windowId) - 1;
     if (wantRouteDepth < 0) wantRouteDepth = 0;
+    // Inspector-pop guard: only reconcile route depth when the VC that just
+    // disappeared was a ZappRouteVC. Pane-level pushes/pops (e.g. the
+    // ZappIOSPushedInspectorVC compact inspector) must be invisible to
+    // route-depth reconciliation — they are NOT router navigations, so popping
+    // them must never trigger pop_from_native (which would reset the route to /).
+    // lastFromVCWasRouteVC is set in willShowViewController: via the transition
+    // coordinator; it defaults to YES so programmatic/coordinator-less pops are
+    // not accidentally suppressed.
+    BOOL fromVCWasRoute = self.lastFromVCWasRouteVC;
     // [zapp-nav] diagnostic: depth-delta check (Bug B sticky-route: native popped but routerstate stuck)
-    BOOL willPopFromNative = (nativeRouteDepth < wantRouteDepth);
-    fprintf(stderr, "[zapp-nav] didShow win=%d vc=%p vcClass=%s nativeRouteDepth=%d wantRouteDepth=%d willPopFromNative=%d\n",
+    BOOL willPopFromNative = fromVCWasRoute && (nativeRouteDepth < wantRouteDepth);
+    fprintf(stderr, "[zapp-nav] didShow win=%d vc=%p vcClass=%s nativeRouteDepth=%d wantRouteDepth=%d fromVCWasRoute=%d willPopFromNative=%d\n",
             (int)self.windowId, (__bridge void*)vc,
             class_getName([vc class]),
-            nativeRouteDepth, wantRouteDepth, (int)willPopFromNative);
+            nativeRouteDepth, wantRouteDepth, (int)fromVCWasRoute, (int)willPopFromNative);
     fflush(stderr);
     if (willPopFromNative) {
         // User popped via back button or edge swipe — reflect into routerstate.
