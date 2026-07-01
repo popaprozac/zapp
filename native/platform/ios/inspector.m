@@ -1,22 +1,35 @@
-// iOS native inspector — Secondary column of the UISplitViewController.
+// iOS native inspector — doubleColumn base + the iOS-26 dedicated Inspector
+// column (UISplitViewControllerColumnInspector), with a modal-sheet fallback
+// below iOS 26. Ported from the proven spike
+// (spikes/ios-splitview-reference/src/AppDelegate.m + ContentViewController.m,
+// human-smoked on iPad + iPhone, iOS 26.5).
 //
-// Task 1 (window.m) assigns `inspectorVC` as the split's Secondary column via
-// `setViewController:forColumn:UISplitViewControllerColumnSecondary` BEFORE
-// calling `zapp_ios_inspector_register`. This file therefore does NOT embed
-// or re-parent the VC — it stores refs and drives the column.
+// window.m (materialize) creates the inspector VC PERSISTENTLY (so it keeps
+// accumulating route events and always shows the correct content, whichever
+// path presents it), nav-wraps it, and — on iOS 26+, when a split exists —
+// attaches the nav to the split's Inspector column via
+// setViewController:forColumn:UISplitViewControllerColumnInspector BEFORE
+// calling zapp_ios_inspector_register (see window.m's inspector pane block).
 //
-// iPad-regular (split is NOT collapsed):
-//   Toggle/expand/collapse call show/hideColumn:UISplitViewControllerColumnSecondary.
-//   set_width drives split.preferredSecondaryColumnWidth.
+// iOS 26+ (UISplitViewControllerColumnInspector is API_AVAILABLE(ios(26.0)),
+// orthogonal to the doubleColumn base style — Primary=sidebar, Secondary=
+// content, the permanent canvas):
+//   expand/collapse/toggle drive show/hideColumn:UISplitViewControllerColumnInspector;
+//   visibility is read via -isShowingColumn: (no BOOL bookkeeping needed).
+//   On iPad (regular width) this is a hideable/resizable column beside the
+//   content; on iPhone (compact width) UIKit auto-presents the SAME column
+//   as a sheet — no horizontalSizeClass branching needed on our side.
 //
-// iPhone-compact (split IS collapsed — UISplitViewController collapses into a
-// single navigation stack):
-//   expand: push a fresh lightweight inspector VC (with its own webview loading
-//           the inspector URL) onto the content nav (push-mode). Tear that VC's
-//           webview down on pop (brk-1 pattern from routing.m:73-82).
-//   collapse: pop that VC if it is currently the top of the content nav.
+// iOS 15–25 fallback (Zapp's deployment target is 15.0; there is no Inspector
+//   column below 26, and a no-sidebar window has no split to attach one to
+//   even on 26+): the persistent inspector nav is presented as a MODAL
+//   UISheetPresentationController sheet (medium+large detents, grabber) on
+//   BOTH iPhone and iPad, with a Close bar button (iPad form-sheets lack a
+//   guaranteed edge dismiss). expand presents it; collapse dismisses it;
+//   presented-state is read directly off the nav (presentingViewController),
+//   not a separate BOOL.
 //
-// darwin_inspector_* symbol names are preserved (imported by router.nim:150-155).
+// darwin_inspector_* symbol names are preserved (imported by router.nim).
 
 #import <UIKit/UIKit.h>
 #import <WebKit/WebKit.h>
@@ -26,129 +39,19 @@
 extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
 extern void darwin_window_eval_js(int32_t window_id, const char* js);
 extern int32_t zapp_ios_sidebar_slot_for(int32_t host_slot);
-extern WKWebView* zapp_ios_content_webview_for_slot(int32_t slot);
-// Restores a webview to the UIWindow-keyed host slot (writes
-// zapp_ios_webviews[d->numeric_id] = wv). Used after darwin_webview_create_ext
-// to undo the automatic host-slot overwrite it applies (webview.m:1067).
-extern void zapp_ios_register_webview(void* window_ptr, void* webview_ptr);
 
-// --- Pushed inspector VC (push-mode for compact / iPhone) ------------------
-//
-// A lightweight, transient VC pushed onto the content nav for iPhone. The
-// webview is minted via darwin_webview_create_ext so it gets the full zapp
-// bridge, scheme handlers, env() safe-area injection, and identity — exactly
-// mirroring how zapp_ios_push_route_vc creates route VCs (routing.m:215-272).
-//
-// onDismiss fires on swipe-back / tap-Back so the caller can emit
-// inspector-collapsed and clear the weak pushedVC reference.
+// Forward declaration — darwin_inspector_collapse is defined further down in
+// this file; the Close-button target/action (installed on the <26 modal
+// sheet) calls back into it so expand/collapse/toggle/Close-tap all share the
+// exact same collapse logic (single source of truth for the emit + guard).
+void darwin_inspector_collapse(int32_t window_id);
 
-// darwin_webview_create_ext is declared in the darwin/webview.h header;
-// include it here so the iOS link unit resolves the symbol.
-#include "../darwin/webview.h"
-
-// Inject safe-area vars into a webview after layout (defined in toolbar.m).
-extern void zapp_ios_toolbar_inject_webview_safe_area(WKWebView* wv);
-
-@interface ZappIOSPushedInspectorVC : UIViewController
-// The WKWebView mounted by darwin_webview_create_ext (weak — the view hierarchy
-// holds the strong reference; the VC just needs to reach it for teardown).
-@property (nonatomic, weak) WKWebView* webview;
-// Called when the VC is popped (swipe-back or Back button). The block MUST NOT
-// strongly capture self to avoid a retain cycle — capture controller and ids
-// by value instead (see darwin_inspector_expand's compact branch).
-@property (nonatomic, copy) void (^onDismiss)(void);
-// Window pointer + numeric id for darwin_webview_create_ext.
-@property (nonatomic, assign) void*    windowPtr;
-@property (nonatomic, assign) int32_t  windowId;
-// Inspector URL to load (set lazily at push time from the live column webview).
-@property (nonatomic, copy)   NSString* inspectorURL;
-// Host CONTENT webview: needed to restore the host slot after
-// darwin_webview_create_ext clobbers it with the pushed inspector webview
-// (slot-restore dance — mirrors window.m:694-695).
-@property (nonatomic, strong) WKWebView* contentWebview;
-@end
-
-@implementation ZappIOSPushedInspectorVC
-
-- (void)loadView {
-    self.view = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 0, 0)];
-    self.view.backgroundColor = [UIColor systemBackgroundColor];
-}
-
-- (void)viewDidLoad {
-    [super viewDidLoad];
-
-    // Mint a fully-bridged webview via the shared creation path — same pattern
-    // as zapp_ios_push_route_vc (routing.m:244-254).  pane_role=3 = inspector,
-    // so the bootstrap marks zapp.isInspector=true.
-    if (self.windowPtr && self.windowId >= 0) {
-        const char* urlCStr = self.inspectorURL ? self.inspectorURL.UTF8String : NULL;
-        darwin_webview_create_ext(self.windowPtr,
-            /*inspectable*/true,
-            /*accept_first_mouse*/false,
-            /*url_override*/urlCStr,
-            /*numeric_id_pre_alloc*/self.windowId,
-            /*transparent_background*/false,
-            /*container_view*/(__bridge void*)self.view,
-            /*identity_window_id*/self.windowId,
-            /*pane_role*/3,
-            /*host_has_sidebar*/true,
-            /*host_has_inspector*/true);
-
-        // Locate the webview create_ext pinned as our view's first subview.
-        for (UIView* sub in self.view.subviews) {
-            if ([sub isKindOfClass:[WKWebView class]]) {
-                self.webview = (WKWebView*)sub;
-                break;
-            }
-        }
-
-        // Slot-restore dance (Bug A fix, mirrors window.m:694-695):
-        // darwin_webview_create_ext ended with zapp_ios_register_webview, which
-        // wrote the pushed inspector webview into the host slot (all panes share
-        // one UIWindow → register_webview routes to numeric_id = host slot).
-        // Restore the host slot to the content webview so dispatch to the host
-        // slot continues reaching the content pane, not this pushed VC's webview.
-        // The inspector column slot is unaffected by create_ext and keeps the
-        // column inspector webview — no separate restore is needed there.
-        if (self.windowPtr && self.contentWebview) {
-            zapp_ios_register_webview(self.windowPtr, (__bridge void*)self.contentWebview);
-        }
-    }
-}
-
-- (void)viewDidLayoutSubviews {
-    [super viewDidLayoutSubviews];
-    // Re-inject safe-area CSS vars after each layout pass (mirrors ZappRouteVC).
-    if (self.webview) zapp_ios_toolbar_inject_webview_safe_area(self.webview);
-}
-
-// Detect swipe-back / tap-Back (user-initiated pop) and fire onDismiss so JS
-// hears inspector-collapsed.  Use viewWillDisappear: (not viewDidDisappear:)
-// so the event fires before the animation completes, consistent with how the
-// programmatic collapse path emits synchronously.
-- (void)viewWillDisappear:(BOOL)animated {
-    [super viewWillDisappear:animated];
-    if (self.isMovingFromParentViewController && self.onDismiss) {
-        self.onDismiss();
-    }
-}
-
-- (void)dealloc {
-    // brk-1 teardown (reference_wkwebview_teardown): stop + nil delegates +
-    // remove the "zapp" script-message handler registered by darwin_webview_create_ext.
-    WKWebView* wv = _webview;
-    if (wv) {
-        [wv stopLoading];
-        wv.navigationDelegate = nil;
-        wv.UIDelegate = nil;
-        @try {
-            [wv.configuration.userContentController removeScriptMessageHandlerForName:@"zapp"];
-        } @catch (__unused id e) {}
-    }
-}
-
-@end
+// Forward declarations — ZappIOSInspectorController (declared below) and the
+// name-only emit helper (defined further down, after the emit-with-data
+// helper it wraps). Needed here because presentationControllerDidDismiss:
+// (below) calls it.
+@class ZappIOSInspectorController;
+void zapp_ios_inspector_emit(ZappIOSInspectorController* c, const char* eventName);
 
 // --- Per-window registry --------------------------------------------------
 //
@@ -158,48 +61,37 @@ extern void zapp_ios_toolbar_inject_webview_safe_area(WKWebView* wv);
 // darwin_window_get_by_numeric_id, so the host-window key catches them all.
 
 @interface ZappIOSInspectorController : NSObject <UIAdaptivePresentationControllerDelegate>
-@property (nonatomic, weak)   UIViewController* inspectorVC;   // Secondary-column VC (owned by split)
-@property (nonatomic, weak)   UIViewController* contentVC;     // content pane VC (Primary/Supplementary)
+// The persistent inspector nav (UINavigationController wrapping the inspector
+// VC). STRONG: on iOS 26+ with a split it is also referenced by the split
+// (setViewController:forColumn:Inspector), but on <26 — or with no split at
+// all — nothing else retains it, so this registry is its sole owner between
+// expand/collapse cycles.
+@property (nonatomic, strong) UINavigationController* inspectorNav;
+@property (nonatomic, weak)   UIViewController* contentVC;     // content pane VC (Primary/Secondary)
 @property (nonatomic, assign) int32_t hostWindowId;           // content/host webview slot
 @property (nonatomic, assign) int32_t inspectorSlotId;        // inspector webview slot
 @property (nonatomic, assign) int32_t width;                   // configured (expanded) width
-@property (nonatomic, copy)   NSString* inspectorURL;          // captured URL for compact push
-// iPhone-compact presentation: nil / empty ⇒ "push" (default); "push"; "sheet".
-// Threaded from wopts_inspector_presentation via window.m at register time.
-@property (nonatomic, copy)   NSString* presentation;
-// iPad-regular visibility tracked EXPLICITLY (Part D / INSP-2). At narrow iPad
-// widths the resting displayMode is often OneBesideSecondary/TwoOverSecondary,
-// so inferring visibility from displayMode wrongly reports "hidden" and toggle
-// no-ops. Initialized to !collapsed at register; flipped by expand/collapse/
-// toggle regular branches. NOT used on the compact (iPhone) branches.
-@property (nonatomic, assign) BOOL inspectorVisible;
-// Host content webview: retained here so the compact-push path can restore
-// the host slot after darwin_webview_create_ext clobbers it.
+// Host content webview: retained here for parity with the sidebar controller
+// pattern (not required by any runtime op below, but cheap to keep in sync).
 @property (nonatomic, strong) WKWebView* contentWebview;
-// compact push-mode: the currently pushed transient inspector VC (weak — nav owns it).
-@property (nonatomic, weak)   ZappIOSPushedInspectorVC* pushedVC;
 @end
-
-// Forward-declared so the delegate callbacks can call the emit helper.
-static void zapp_ios_inspector_emit(ZappIOSInspectorController* c, const char* eventName);
-static void zapp_ios_inspector_emit_collapsed_ids(int32_t hostId, int32_t inspId,
-                                                  int32_t sidebarId);
 
 @implementation ZappIOSInspectorController
 
-// Sheet-dismiss path (Part C): the user swiped the modally-presented inspector
-// sheet down. Mirror the compact push-pop onDismiss semantics — emit
-// inspector-collapsed exactly once and clear the pushedVC weak ref. The
-// identity guard (pushedVC still points at a presented VC) keeps this to
-// exactly-once even if UIKit fires the delegate more than expected. A
-// programmatic collapse nils pushedVC BEFORE dismissing, so the guard fails
-// here and the single inline emit in darwin_inspector_collapse wins.
+// Sheet-dismiss path (<26 fallback): the user swiped the modally-presented
+// inspector sheet down. This delegate method only fires for INTERACTIVE
+// dismissal (swipe), never for a programmatic -dismissViewController: call,
+// so there is no double-emit risk with darwin_inspector_collapse's own emit.
 - (void)presentationControllerDidDismiss:(UIPresentationController *)presentationController {
-    if (self.pushedVC) {
-        int32_t sidebarId = zapp_ios_sidebar_slot_for(self.hostWindowId);
-        zapp_ios_inspector_emit_collapsed_ids(self.hostWindowId, self.inspectorSlotId, sidebarId);
-        self.pushedVC = nil;
-    }
+    (void)presentationController;
+    zapp_ios_inspector_emit(self, "inspector-collapsed");
+}
+
+// Close bar-button target (<26 modal sheet fallback). Delegates to
+// darwin_inspector_collapse so the tap and the programmatic collapse() path
+// share identical logic (dismiss + emit + guard).
+- (void)zapp_closeInspectorTapped {
+    darwin_inspector_collapse(self.hostWindowId);
 }
 
 @end
@@ -219,6 +111,15 @@ static ZappIOSInspectorController* zapp_ios_inspector_for_slot(int32_t slot_id) 
     if (!win_ptr) return nil;
     NSValue* key = [NSValue valueWithPointer:win_ptr];
     return zapp_ios_inspectors[key];
+}
+
+// Walk the presentedViewController chain to the topmost currently-presented
+// VC (mirrors window.m's zapp_ios_topmost_presented, kept local here to avoid
+// a cross-file static dependency). Returns root when nothing is presented.
+static UIViewController* zapp_ios_inspector_topmost_presented(UIViewController* root) {
+    UIViewController* vc = root;
+    while (vc.presentedViewController) vc = vc.presentedViewController;
+    return vc;
 }
 
 // --- Event fan-out (mirrors darwin/sidebar.m's zapp_pane_emit) ------------
@@ -257,27 +158,8 @@ static void zapp_ios_inspector_emit_data(ZappIOSInspectorController* c,
 }
 
 // Name-only emit (no payload) — collapse/expand transitions.
-static void zapp_ios_inspector_emit(ZappIOSInspectorController* c, const char* eventName) {
+void zapp_ios_inspector_emit(ZappIOSInspectorController* c, const char* eventName) {
     zapp_ios_inspector_emit_data(c, eventName, nil);
-}
-
-// Emit inspector-collapsed to host + inspector + sidebar slots using captured
-// by-value ids — no strong reference to any ObjC object, so no retain cycle.
-// Shared by the compact push-pop (onDismiss) and sheet-dismiss
-// (presentationControllerDidDismiss:) paths so both stay in lockstep.
-static void zapp_ios_inspector_emit_collapsed_ids(int32_t hostId, int32_t inspId,
-                                                  int32_t sidebarId) {
-    char js[256];
-    snprintf(js, sizeof(js),
-        "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
-        "if(b&&typeof b.dispatchWindowEvent==='function'){"
-        "b.dispatchWindowEvent('win-%d','inspector-collapsed',undefined);}})();",
-        hostId);
-    darwin_window_eval_js(hostId, js);
-    if (inspId >= 0 && inspId != hostId)
-        darwin_window_eval_js(inspId, js);
-    if (sidebarId >= 0 && sidebarId != hostId && sidebarId != inspId)
-        darwin_window_eval_js(sidebarId, js);
 }
 
 // inspector-resized carries a bare width under the top-level `width` key
@@ -290,79 +172,61 @@ static void zapp_ios_inspector_emit_resize(ZappIOSInspectorController* c, int32_
 
 // --- Registry API consumed by window.m ------------------------------------
 //
-// window.m calls this AFTER the inspector VC has been assigned as the split's
-// Secondary column (Task 1). This function:
-//   • stores inspectorVC (weak), contentVC (weak), ids, width.
-//   • captures the inspector URL from the inspector slot webview for compact push.
-//   • does NOT addChildViewController: — the split owns inspectorVC.
-//   • does NOT re-constrain the content webview — it keeps its edge-pin from
-//     darwin_webview_create_ext.
-//   • registers the controller in the registry so darwin_inspector_* can find it.
-void zapp_ios_inspector_register(void* window, void* inspectorVC, void* contentVC,
+// window.m calls this AFTER building the persistent inspector nav and (on
+// iOS 26+, when a split exists) attaching it to the split's Inspector column.
+// This function:
+//   • strongly retains inspectorNav — it must survive on <26 (or with no
+//     split at all), where nothing else holds a reference to it.
+//   • stores contentVC (weak), ids, width.
+//   • on iOS 26+ with a split: applies the configured width and, unless the
+//     app asked for collapsed:true, shows the column once (deferred one tick
+//     so it lands AFTER UIKit's initial layout — the column starts HIDDEN by
+//     default when attached, confirmed on the spike, regardless of the
+//     collapsed intent).
+//   • registers the controller in the registry so darwin_inspector_* can
+//     find it from any pane's transport slot.
+void zapp_ios_inspector_register(void* window, void* inspectorNav, void* contentVC,
                                  void* contentWebview, int32_t host_id,
-                                 int32_t inspector_id, int32_t width, bool collapsed,
-                                 const char* presentation) {
-    if (!window || !inspectorVC || !contentVC) return;
+                                 int32_t inspector_id, int32_t width, bool collapsed) {
+    if (!window || !inspectorNav || !contentVC) return;
     zapp_ios_inspector_on_main(^{
         if (!zapp_ios_inspectors) zapp_ios_inspectors = [NSMutableDictionary dictionary];
 
-        UIViewController* ivc = (__bridge UIViewController*)inspectorVC;
+        UINavigationController* nav = (__bridge UINavigationController*)inspectorNav;
         UIViewController* cvc = (__bridge UIViewController*)contentVC;
-        if (!ivc || !cvc) return;
+        if (!nav || !cvc) return;
 
         ZappIOSInspectorController* c = [[ZappIOSInspectorController alloc] init];
-        c.inspectorVC    = ivc;
-        c.contentVC      = cvc;
-        c.hostWindowId   = host_id;
+        c.inspectorNav    = nav;   // strong — see header comment
+        c.contentVC       = cvc;   // weak
+        c.hostWindowId    = host_id;
         c.inspectorSlotId = inspector_id;
-        c.width          = (width > 0 ? width : 280);
-        // iPhone-compact presentation choice (nil/empty ⇒ "push" default).
-        c.presentation   = (presentation && presentation[0])
-                             ? [NSString stringWithUTF8String:presentation]
-                             : nil;
-        // iPad-regular visibility tracked explicitly (Part D). Starts !collapsed.
-        c.inspectorVisible = !collapsed;
-        // Retain the host content webview so the compact-push path can restore
-        // the host slot after darwin_webview_create_ext clobbers it (Bug A fix).
-        c.contentWebview = (__bridge WKWebView*)contentWebview;
+        c.width           = (width > 0 ? width : 280);
+        c.contentWebview  = (__bridge WKWebView*)contentWebview;
 
-        // Capture the inspector URL now for compact push-mode. The inspector
-        // webview has been registered in the inspector_id slot by the time
-        // window.m calls us (see the re-slot dance above the call site).
-        WKWebView* inspWv = zapp_ios_content_webview_for_slot(inspector_id);
-        if (inspWv && inspWv.URL) {
-            c.inspectorURL = inspWv.URL.absoluteString;
-        }
-
-        // iPad initial display mode: if collapsed-by-default, hide the Secondary
-        // column so it starts invisible.
-        //
-        // Timing note: hideColumn:Secondary called synchronously here (before first
-        // layout) is overridden by UIKit when it applies preferredDisplayMode =
-        // TwoBesideSecondary during the first layout pass — the inspector shows open
-        // even though collapsed=true was set. Fix: defer hideColumn: to the NEXT main-
-        // queue runloop pass so it fires AFTER UIKit has completed the initial layout
-        // and applied its preferred display mode. The deferred call then wins and the
-        // inspector starts hidden, with sidebar+content tiled side-by-side.
-        // iPhone-compact (split.isCollapsed==YES) is unaffected — that path never
-        // enters this branch.
-        UISplitViewController* split = cvc.splitViewController;
-        if (split && !split.isCollapsed && collapsed) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                // Re-check that the split is still not collapsed (iPad only) before
-                // issuing the deferred hide. By this point UIKit has applied
-                // preferredDisplayMode, so hideColumn: wins.
-                if (!split.isCollapsed) {
-                    [split hideColumn:UISplitViewControllerColumnSecondary];
+        // iOS 26+: initial width + visibility on the dedicated Inspector
+        // column, when a split exists (sidebar window). No-op on <26 or when
+        // there is no split — the modal-sheet fallback simply isn't presented
+        // until darwin_inspector_expand is called (that IS "collapsed").
+        if (@available(iOS 26.0, *)) {
+            UISplitViewController* split = cvc.splitViewController;
+            if (split) {
+                if (c.width > 0) {
+                    split.preferredInspectorColumnWidth = (CGFloat)c.width;
                 }
-            });
+                if (!collapsed) {
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        [split showColumn:UISplitViewControllerColumnInspector];
+                    });
+                }
+            }
         }
 
         NSValue* key = [NSValue valueWithPointer:window];
         zapp_ios_inspectors[key] = c;
 
-        NSLog(@"[native] iOS inspector registered (column model): host=%d inspector=%d width=%d collapsed=%d url=%@",
-              host_id, inspector_id, c.width, (int)collapsed, c.inspectorURL ?: @"(none)");
+        NSLog(@"[native] iOS inspector registered (column model): host=%d inspector=%d width=%d collapsed=%d",
+              host_id, inspector_id, c.width, (int)collapsed);
     });
 }
 
@@ -381,199 +245,123 @@ void zapp_ios_inspector_unregister(void* window) {
 // zapp_ios_inspector_for_slot resolves either to the host record.
 
 // Show the inspector.
-//   iPad-regular (not collapsed): showColumn:Secondary.
-//   iPhone-compact (collapsed):   push a fresh ZappIOSPushedInspectorVC onto
-//                                 the content nav (push-mode).
+//   iOS 26+ with a split: showColumn:Inspector (adapts automatically — a
+//     resizable column on iPad, an auto-presented sheet on iPhone).
+//   <26, or no split: present the retained inspector nav as a modal sheet
+//     (medium+large detents, grabber, Close button). Guarded against
+//     double-present.
 void darwin_inspector_expand(int32_t window_id) {
     zapp_ios_inspector_on_main(^{
         ZappIOSInspectorController* c = zapp_ios_inspector_for_slot(window_id);
         if (!c) return;
 
         UISplitViewController* split = c.contentVC.splitViewController;
-        if (!split) return;
 
-        if (split.isCollapsed) {
-            // iPhone-compact: push a fresh inspector VC.
-            UINavigationController* nav = c.contentVC.navigationController;
-            if (!nav) return;
-            // Guard: already pushed (weak ref still alive).
-            if (c.pushedVC) return;
-
-            ZappIOSPushedInspectorVC* pushVC = [[ZappIOSPushedInspectorVC alloc] init];
-
-            // Fetch the inspector URL lazily from the live column webview at push
-            // time.  The column webview may not have loaded at register time, so
-            // c.inspectorURL can be nil; reading it here ensures we get the real URL.
-            WKWebView* liveInspWv = zapp_ios_content_webview_for_slot(c.inspectorSlotId);
-            NSString* liveURL = (liveInspWv && liveInspWv.URL)
-                                    ? liveInspWv.URL.absoluteString
-                                    : c.inspectorURL;
-            pushVC.inspectorURL = liveURL;
-
-            // Wire up bridge creation params (Fix #2).
-            void* winPtr = darwin_window_get_by_numeric_id(c.hostWindowId);
-            pushVC.windowPtr = winPtr;
-            pushVC.windowId  = c.inspectorSlotId;
-            // Hand the host content webview to the pushed VC so viewDidLoad can
-            // restore the host slot after darwin_webview_create_ext clobbers it.
-            pushVC.contentWebview = c.contentWebview;
-
-            pushVC.title = @"Inspector";
-
-            // Fix #1: emit inspector-collapsed when the user swipes back or taps
-            // Back.  Capture controller fields by value to avoid a retain cycle
-            // (the block must not strongly capture pushVC / the VC itself).
-            int32_t hostId      = c.hostWindowId;
-            int32_t inspId      = c.inspectorSlotId;
-            int32_t sidebarId   = zapp_ios_sidebar_slot_for(hostId);
-            __weak ZappIOSPushedInspectorVC* weakPushVC = pushVC;
-            ZappIOSInspectorController* __weak weakC = c;
-            pushVC.onDismiss = ^{
-                // Bug B fix: gate the JS eval inside the pushedVC identity guard.
-                // • User swipe-back: c.pushedVC == weakPushVC (nobody nil'd it),
-                //   so the guard passes → emit once, then clear pushedVC. ✓
-                // • Programmatic collapse (darwin_inspector_collapse): c.pushedVC
-                //   is nil'd BEFORE the pop, so viewWillDisappear: fires this block
-                //   with the guard already false → no emit here. The inline emit
-                //   in darwin_inspector_collapse fires exactly once. ✓
-                ZappIOSInspectorController* strongC = weakC;
-                if (strongC && strongC.pushedVC == weakPushVC) {
-                    // Emit inspector-collapsed to host + inspector + sidebar slots
-                    // via the shared helper (no strong ObjC ref → no retain cycle).
-                    zapp_ios_inspector_emit_collapsed_ids(hostId, inspId, sidebarId);
-                    strongC.pushedVC = nil;
-                }
-            };
-
-            c.pushedVC = pushVC;
-
-            // Presentation choice (iPhone-only): "sheet" presents the same VC
-            // modally with medium+large detents + grabber; "push" (default)
-            // pushes it onto the content nav. Both reuse ZappIOSPushedInspectorVC
-            // as-is (it mints its bridged webview in viewDidLoad, tears down in
-            // dealloc). nil / empty presentation ⇒ push.
-            BOOL asSheet = (c.presentation &&
-                            [c.presentation caseInsensitiveCompare:@"sheet"] == NSOrderedSame);
-            if (asSheet) {
-                pushVC.modalPresentationStyle = UIModalPresentationPageSheet;
-                if (@available(iOS 15.0, *)) {
-                    // Reuse the working detents pattern from window.m:1342-1370:
-                    // medium + large + grabber.
-                    UISheetPresentationController* sheet = pushVC.sheetPresentationController;
-                    if (sheet) {
-                        sheet.detents = @[
-                            [UISheetPresentationControllerDetent mediumDetent],
-                            [UISheetPresentationControllerDetent largeDetent],
-                        ];
-                        sheet.prefersGrabberVisible = YES;
-                    }
-                }
-                // Route interactive dismissal (swipe-down) through the controller's
-                // UIAdaptivePresentationControllerDelegate so we emit inspector-
-                // collapsed once and clear pushedVC — the sheet analogue of the
-                // push-pop viewWillDisappear:/onDismiss path.
-                pushVC.presentationController.delegate = c;
-                [nav presentViewController:pushVC animated:YES completion:nil];
-            } else {
-                [nav pushViewController:pushVC animated:YES];
+        if (@available(iOS 26.0, *)) {
+            if (split) {
+                [split showColumn:UISplitViewControllerColumnInspector];
+                zapp_ios_inspector_emit(c, "inspector-expanded");
+                return;
             }
-        } else {
-            // iPad-regular: show the Secondary column.
-            [split showColumn:UISplitViewControllerColumnSecondary];
-            c.inspectorVisible = YES;
         }
+
+        // <26 (or no split): modal sheet fallback.
+        if (c.inspectorNav.presentingViewController) return;  // already presented — guard double-present
+
+        c.inspectorNav.modalPresentationStyle = UIModalPresentationPageSheet;
+        if (@available(iOS 15.0, *)) {
+            UISheetPresentationController* sheet = c.inspectorNav.sheetPresentationController;
+            if (sheet) {
+                sheet.detents = @[
+                    [UISheetPresentationControllerDetent mediumDetent],
+                    [UISheetPresentationControllerDetent largeDetent],
+                ];
+                sheet.prefersGrabberVisible = YES;
+            }
+        }
+        // Close button — iPad form-sheets lack a guaranteed edge-dismiss
+        // affordance, so give the inspector's root VC an explicit Close item.
+        UIViewController* inspectorRoot = c.inspectorNav.viewControllers.firstObject;
+        inspectorRoot.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc]
+            initWithBarButtonSystemItem:UIBarButtonSystemItemClose
+                                  target:c
+                                  action:@selector(zapp_closeInspectorTapped)];
+        c.inspectorNav.presentationController.delegate = c;
+
+        UIViewController* presenterRoot = split ?: c.contentVC;
+        UIViewController* presenter = zapp_ios_inspector_topmost_presented(presenterRoot);
+        [presenter presentViewController:c.inspectorNav animated:YES completion:nil];
         zapp_ios_inspector_emit(c, "inspector-expanded");
     });
 }
 
 // Hide the inspector.
-//   iPad-regular: hideColumn:Secondary.
-//   iPhone-compact: pop if the top VC is the pushed inspector.
+//   iOS 26+ with a split: hideColumn:Inspector.
+//   <26, or no split: dismiss the modal sheet if presented.
 void darwin_inspector_collapse(int32_t window_id) {
     zapp_ios_inspector_on_main(^{
         ZappIOSInspectorController* c = zapp_ios_inspector_for_slot(window_id);
         if (!c) return;
 
         UISplitViewController* split = c.contentVC.splitViewController;
-        if (!split) return;
 
-        if (split.isCollapsed) {
-            // iPhone-compact: dismiss the pushed/presented inspector VC.
-            // Guard (Minor #4): only act + nil + emit when there is actually a
-            // pushed inspector VC alive, so a no-op collapse doesn't fire a
-            // spurious inspector-collapsed event.
-            UINavigationController* nav = c.contentVC.navigationController;
-            ZappIOSPushedInspectorVC* pushed = c.pushedVC;
-            if (pushed) {
-                // Bug B fix: nil pushedVC BEFORE the pop/dismiss so that the
-                // viewWillDisappear:/presentationControllerDidDismiss: path sees
-                // pushedVC==nil and skips its emit (guard fails). The single emit
-                // below fires exactly once per programmatic collapse, regardless
-                // of whether the transition callback fires synchronously.
-                c.pushedVC = nil;
-                if (nav && nav.topViewController == pushed) {
-                    // push-mode: pop it off the content nav.
-                    [nav popViewControllerAnimated:YES];
-                    zapp_ios_inspector_emit(c, "inspector-collapsed");
-                } else if (pushed.presentingViewController) {
-                    // sheet-mode: dismiss the modal presentation.
-                    [pushed dismissViewControllerAnimated:YES completion:nil];
-                    zapp_ios_inspector_emit(c, "inspector-collapsed");
-                }
-                // else: VC is neither on top nor presented (already gone) — the
-                // pre-clear above already suppressed a duplicate emit; skip.
+        if (@available(iOS 26.0, *)) {
+            if (split) {
+                [split hideColumn:UISplitViewControllerColumnInspector];
+                zapp_ios_inspector_emit(c, "inspector-collapsed");
+                return;
             }
-            // No pushedVC → nothing to collapse; skip emit.
-        } else {
-            // iPad-regular: hide the Secondary column. Track visibility explicitly.
-            [split hideColumn:UISplitViewControllerColumnSecondary];
-            c.inspectorVisible = NO;
+        }
+
+        // <26 (or no split): dismiss the modal sheet if it is actually presented
+        // (guard against a spurious emit on a no-op collapse).
+        if (c.inspectorNav.presentingViewController) {
+            [c.inspectorNav dismissViewControllerAnimated:YES completion:nil];
             zapp_ios_inspector_emit(c, "inspector-collapsed");
         }
     });
 }
 
-// Toggle from live state. Branches on the split's collapse state:
-//   • compact (isCollapsed=YES): delegate to expand (push-mode).
-//   • regular: check actual displayMode for a real toggle — never trust a cache.
+// Toggle from live state.
+//   iOS 26+ with a split: branch on -isShowingColumn:Inspector — the clean
+//     iOS-26 API, no BOOL bookkeeping needed.
+//   <26, or no split: branch on whether the modal sheet is currently presented.
 void darwin_inspector_toggle(int32_t window_id) {
     zapp_ios_inspector_on_main(^{
-        // Fetch the controller inside the main-thread block: the registry
-        // dictionary is not thread-safe (Minor #3 fix).
         ZappIOSInspectorController* c = zapp_ios_inspector_for_slot(window_id);
         if (!c) return;
 
         UISplitViewController* split = c.contentVC.splitViewController;
-        if (!split) return;
 
-        if (split.isCollapsed) {
-            // Compact (iPhone): push path.
-            darwin_inspector_expand(window_id);
-            return;
+        if (@available(iOS 26.0, *)) {
+            if (split) {
+                if ([split isShowingColumn:UISplitViewControllerColumnInspector]) {
+                    [split hideColumn:UISplitViewControllerColumnInspector];
+                    zapp_ios_inspector_emit(c, "inspector-collapsed");
+                } else {
+                    [split showColumn:UISplitViewControllerColumnInspector];
+                    zapp_ios_inspector_emit(c, "inspector-expanded");
+                }
+                return;
+            }
         }
 
-        // Regular (iPad): toggle from EXPLICIT tracked visibility (Part D /
-        // INSP-2). Inferring "visible" from split.displayMode is unreliable — at
-        // narrow iPad widths the resting displayMode is often OneBesideSecondary/
-        // TwoOverSecondary, which the old check read as "hidden" and so it called
-        // showColumn: (a no-op when already shown) instead of hideColumn:. The
-        // c.inspectorVisible BOOL is the single source of truth, flipped in
-        // lockstep by expand/collapse/toggle regular branches.
-        if (c.inspectorVisible) {
-            [split hideColumn:UISplitViewControllerColumnSecondary];
-            c.inspectorVisible = NO;
-            zapp_ios_inspector_emit(c, "inspector-collapsed");
+        // <26 (or no split): toggle the modal sheet presentation. Delegate to
+        // expand/collapse so the emit + guard logic stays in one place.
+        if (c.inspectorNav.presentingViewController) {
+            darwin_inspector_collapse(window_id);
         } else {
-            [split showColumn:UISplitViewControllerColumnSecondary];
-            c.inspectorVisible = YES;
-            zapp_ios_inspector_emit(c, "inspector-expanded");
+            darwin_inspector_expand(window_id);
         }
     });
 }
 
 // Set the (expanded) inspector width.
-//   iPad-regular: drives split.preferredSecondaryColumnWidth.
-//   iPhone-compact: full-width sheet/push — width is n/a (documented no-op there).
+//   iOS 26+ with a split: drives split.preferredInspectorColumnWidth (takes
+//     precedence over preferredInspectorColumnWidthFraction — verified in the
+//     UISplitViewController.h SDK header).
+//   <26, or no split: full-width/full-screen modal sheet — width is n/a
+//     (documented no-op there).
 // Emits inspector-resized for state parity with the runtime InspectorHandle.
 void darwin_inspector_set_width(int32_t window_id, int32_t width) {
     zapp_ios_inspector_on_main(^{
@@ -581,25 +369,26 @@ void darwin_inspector_set_width(int32_t window_id, int32_t width) {
         if (!c) return;
         c.width = width;
 
-        UISplitViewController* split = c.contentVC.splitViewController;
-        if (split && !split.isCollapsed) {
-            split.preferredSecondaryColumnWidth = width;
+        if (@available(iOS 26.0, *)) {
+            UISplitViewController* split = c.contentVC.splitViewController;
+            if (split && width > 0) {
+                split.preferredInspectorColumnWidth = (CGFloat)width;
+            }
         }
-        // compact: push fills full width — width is n/a (documented no-op there).
         zapp_ios_inspector_emit_resize(c, width);
     });
 }
 
 // User-collapsible gating is an NSSplitViewItem affordance; the iOS inspector is
-// driven explicitly (show/hideColumn: / push-pop), so there's no equivalent knob.
-// No-op for router parity (documented).
+// driven explicitly (show/hideColumn: / modal sheet), so there's no equivalent
+// knob. No-op for router parity (documented).
 void darwin_inspector_set_collapsible(int32_t window_id, bool can_collapse) {
     (void)window_id; (void)can_collapse;
 }
 
-// Divider-drag resize isn't a UIKit affordance (Secondary column width is set
-// programmatically; the compact push is full-width). No-op for router parity
-// (documented).
+// Divider-drag resize isn't a UIKit affordance on the Inspector column (its
+// width is set programmatically; the <26 fallback is a full-width/full-screen
+// sheet). No-op for router parity (documented).
 void darwin_inspector_set_resizable(int32_t window_id, bool resizable) {
     (void)window_id; (void)resizable;
 }

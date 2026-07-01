@@ -314,17 +314,17 @@ extern void zapp_ios_sidebar_register(void* window, void* split, void* sidebarVC
                                       bool resizable, bool collapsible);
 
 // Implemented in ios/inspector.m. Materialize calls it AFTER both the content
-// and (optional) sidebar panes are built, handing it the persistent inspector
-// VC + the content VC + the content webview + the host/inspector ids + the
-// configured width and collapsed intent. On iPad-regular inspector.m embeds the
-// inspector VC trailing-in-content (re-constraining the content webview via Auto
-// Layout, never re-parenting it); on iPhone-compact it merely holds the VC (the
-// sheet presentation + show/hide ops are a separate next task).
-extern void zapp_ios_inspector_register(void* window, void* inspectorVC,
+// and (optional) sidebar panes are built AND the persistent inspector nav has
+// been attached to the split's iOS-26 Inspector column (when available — see
+// the inspector pane block below), handing it the inspector nav + the content
+// VC + the content webview + the host/inspector ids + the configured width
+// and collapsed intent. inspector.m strongly retains the nav so it survives
+// on <26, when it is never attached to any split column, for on-demand modal
+// sheet presentation instead.
+extern void zapp_ios_inspector_register(void* window, void* inspectorNav,
                                         void* contentVC, void* contentWebview,
                                         int32_t host_id, int32_t inspector_id,
-                                        int32_t width, bool collapsed,
-                                        const char* presentation);
+                                        int32_t width, bool collapsed);
 
 static ZappIOSDeferred* zapp_ios_find_deferred(void* handle) {
     if (!handle) return NULL;
@@ -366,9 +366,18 @@ void zapp_ios_materialize_pending_windows(void) {
         // sidebar VC is the split's primary column; nil when there's no sidebar.
         UIViewController* contentVC = nil;
         UIViewController* sidebarVC = nil;
-        // Inspector column VC (Secondary in tripleColumn). Created inside the
-        // split-construction block when d->hasInspector; reused by the inspector
-        // webview block below so the webview is born in its final container.
+        // The split itself (nil for no-sidebar windows). Hoisted to function
+        // scope so the inspector pane block below can attach the persistent
+        // inspector nav to UISplitViewControllerColumnInspector (iOS 26+)
+        // without re-deriving it from window.rootViewController.
+        UISplitViewController* split = nil;
+        // Inspector column VC (UISplitViewControllerColumnInspector, iOS 26+
+        // only — orthogonal to the doubleColumn base style, so no tripleColumn
+        // is ever used). Created below in the inspector pane block, AFTER the
+        // content (+ optional sidebar) panes exist so the webview is born in
+        // its final container. Persistent for the window's lifetime: on 26+ it
+        // becomes the split's Inspector column; on <26 it is retained by
+        // inspector.m's registry for on-demand modal-sheet presentation.
         ZappIOSPaneViewController* inspectorVC = nil;
         // The CONTENT webview, captured canonically. d->real_webview is NOT
         // reliable past the pane-create dance: each darwin_webview_create_ext
@@ -388,20 +397,17 @@ void zapp_ios_materialize_pending_windows(void) {
             // kills the bridge, so every pane is born in its final container.
             // (Mirrors the darwin/window.m create-ordering note.)
             //
-            // Style is driven by declared panes: tripleColumn when an inspector
-            // is declared (Primary=sidebar, Supplementary=content, Secondary=
-            // inspector), doubleColumn otherwise (Primary=sidebar, Secondary=
-            // content). Mirrors the spike (spikes/ios-splitview-reference).
-            UISplitViewControllerStyle splitStyle = d->hasInspector
-                ? UISplitViewControllerStyleTripleColumn
-                : UISplitViewControllerStyleDoubleColumn;
-            ZappIOSSplitViewController* split =
-                [[ZappIOSSplitViewController alloc] initWithStyle:splitStyle];
+            // Always doubleColumn — Primary=sidebar, Secondary=content (the
+            // PERMANENT canvas). The iOS-26 Inspector column (attached in the
+            // inspector pane block below, after the content + inspector VCs
+            // exist) is orthogonal to the base style; it does NOT require
+            // tripleColumn. Mirrors the spike (spikes/ios-splitview-reference).
+            split = [[ZappIOSSplitViewController alloc] initWithStyle:UISplitViewControllerStyleDoubleColumn];
             sidebarVC = [[UIViewController alloc] init];   // primary column
             // content VC: ZappIOSPaneViewController so viewSafeAreaInsetsDidChange
             // re-injects toolbar metrics after UIKit lays out the floating nav bar.
             // windowPtr + hostSlot are wired below after d->real_window is set.
-            contentVC = [[ZappIOSPaneViewController alloc] init]; // supplementary (tripleColumn) or secondary (doubleColumn)
+            contentVC = [[ZappIOSPaneViewController alloc] init]; // secondary column — the permanent content canvas
 
             contentVC.view.backgroundColor = bgColor;
             // Sidebar pane backdrop: explicit "#rrggbb" if the app set one,
@@ -417,25 +423,9 @@ void zapp_ios_materialize_pending_windows(void) {
             // them, then apply the presentation pair AFTER the final columns are
             // in place — the correct ordering per WWDC20 10105.
             //
-            // In tripleColumn: Primary=sidebar, Supplementary=content, Secondary=
-            // inspector. In doubleColumn: Primary=sidebar, Secondary=content.
-            UISplitViewControllerColumn contentColumn = d->hasInspector
-                ? UISplitViewControllerColumnSupplementary
-                : UISplitViewControllerColumnSecondary;
+            // Content is ALWAYS Secondary now (doubleColumn — no Supplementary).
             [split setViewController:sidebarVC forColumn:UISplitViewControllerColumnPrimary];
-            [split setViewController:contentVC forColumn:contentColumn];
-            if (d->hasInspector) {
-                // Inspector column VC — persists for the lifetime of the window.
-                // The inspector webview block (below) reuses this VC so the webview
-                // is born directly in its final container (never re-parented).
-                inspectorVC = [[ZappIOSPaneViewController alloc] init];
-                [split setViewController:inspectorVC forColumn:UISplitViewControllerColumnSecondary];
-                // iPad: tile all three columns side-by-side (matches the spike).
-                // iPhone: UIKit ignores this on compact width and collapses to a
-                // single nav stack — collapse behavior is handled in Task 3.
-                split.preferredDisplayMode  = UISplitViewControllerDisplayModeTwoBesideSecondary;
-                split.preferredSplitBehavior = UISplitViewControllerSplitBehaviorTile;
-            }
+            [split setViewController:contentVC forColumn:UISplitViewControllerColumnSecondary];
             // Set column min/max BEFORE preferred so the preferred value lands
             // inside the allowed range. Without min/max, iOS caps
             // preferredPrimaryColumnWidth at ~320 pt by default — any configured
@@ -449,20 +439,14 @@ void zapp_ios_materialize_pending_windows(void) {
                 split.maximumPrimaryColumnWidth = (CGFloat)d->sidebarMaxWidth;
             }
             if (d->sidebarWidth > 0) {
-                // Sidebar = the PRIMARY column in both split styles, so its
-                // width is preferredPrimaryColumnWidth. (preferredSupplementary*
-                // exists ONLY in .tripleColumn and THROWS NSInvalidArgument on
-                // double-column.) Governed by the min/max set above.
+                // Sidebar = the PRIMARY column, so its width is
+                // preferredPrimaryColumnWidth. Governed by the min/max set above.
                 split.preferredPrimaryColumnWidth = (CGFloat)d->sidebarWidth;
             }
             // Presentation (preferredSplitBehavior + preferredDisplayMode) is
-            // intentionally NOT set here for the doubleColumn case.
-            // zapp_ios_sidebar_register applies the pair AFTER it nav-wraps the
-            // columns — that is the correct ordering (set both together, after
-            // final columns exist, per WWDC20 10105). The tripleColumn values
-            // are set above (before sidebar_register) because the tripleColumn
-            // display mode is fixed (TwoBesideSecondary/Tile) and not driven by
-            // the sidebar presentation option.
+            // intentionally NOT set here. zapp_ios_sidebar_register applies the
+            // pair AFTER it nav-wraps the columns — that is the correct ordering
+            // (set both together, after final columns exist, per WWDC20 10105).
             // Left-edge swipe reveals the sidebar (esp. in overlay, where the
             // flyout starts hidden). This is the system default, but set it
             // explicitly/intentionally so the reveal affordance is guaranteed.
@@ -639,8 +623,7 @@ void zapp_ios_materialize_pending_windows(void) {
             }
         }
 
-        // --- Inspector pane (trailing, the iOS analog of macOS's trailing
-        // NSSplitViewItem) -----------------------------------------------------
+        // --- Inspector VC (persistent; iOS-26 dedicated Inspector column) ----
         //
         // Built AFTER the content (+ optional sidebar) panes so contentVC and
         // d->real_webview are set in BOTH branches above. The inspector webview
@@ -659,20 +642,18 @@ void zapp_ios_materialize_pending_windows(void) {
         if (canonicalContentWebview) d->real_webview = canonicalContentWebview;
         WKWebView* contentWebviewForInspector = canonicalContentWebview;
         if (d->hasInspector) {
-            // The inspector VC was created inside the split-construction block
-            // above (when d->hasSidebar && d->hasInspector) and assigned as the
-            // split's Secondary column. Wire the window pointer and host slot now
-            // (after d->real_window is set) so viewSafeAreaInsetsDidChange has
-            // context from its first invocation. For a no-sidebar window with an
-            // inspector (not currently reachable — no-sidebar windows take the
-            // ZappIOSRootViewController path — but defensive for future), create
-            // the VC here if it was not already created in the split block.
-            if (!inspectorVC) {
-                inspectorVC = [[ZappIOSPaneViewController alloc] init];
-            }
+            // Always create + nav-wrap the persistent inspector VC here — it is
+            // NOT created in the split-construction block any more (the
+            // doubleColumn split built above has no inspector-shaped column to
+            // place it in ahead of time). Nav-wrapping gives it its own bar/
+            // title and lets it host the Close button on the <26 modal-sheet
+            // fallback (see ios/inspector.m).
+            inspectorVC = [[ZappIOSPaneViewController alloc] init];
             inspectorVC.windowPtr = (__bridge void*)window;
             inspectorVC.hostSlot  = d->numeric_id;
             inspectorVC.view.backgroundColor = [UIColor systemBackgroundColor];
+            UINavigationController* inspectorNav =
+                [[UINavigationController alloc] initWithRootViewController:inspectorVC];
 
             // Create the inspector webview INTO inspectorVC.view (pane_role 3),
             // host identity, transparent, host_has_inspector=true.
@@ -705,16 +686,29 @@ void zapp_ios_materialize_pending_windows(void) {
                 }
             }
 
-            // Hand off to the inspector manager (ios/inspector.m): it embeds the
-            // VC trailing-in-content on iPad-regular (honoring collapsed) and just
-            // holds it on iPhone-compact (the sheet presentation is the next task).
+            // iOS 26+: attach to the split's dedicated Inspector column — a
+            // sibling of Primary/Secondary, orthogonal to the doubleColumn base
+            // style (no tripleColumn needed). Requires a split (sidebar window);
+            // a no-sidebar window with an inspector (not currently reachable —
+            // no-sidebar windows take the ZappIOSRootViewController path, which
+            // has no split to attach to) falls through to inspector.m's <26
+            // modal-sheet fallback regardless of OS version.
+            if (@available(iOS 26.0, *)) {
+                if (split) {
+                    [split setViewController:inspectorNav forColumn:UISplitViewControllerColumnInspector];
+                }
+            }
+
+            // Hand off to the inspector manager (ios/inspector.m): it strongly
+            // retains inspectorNav (so it survives on <26, when it is never
+            // attached to any split column, for on-demand modal presentation)
+            // and drives show/hideColumn:Inspector (26+) or a modal sheet (<26).
             zapp_ios_inspector_register((__bridge void*)window,
-                                        (__bridge void*)inspectorVC,
+                                        (__bridge void*)inspectorNav,
                                         (__bridge void*)contentVC,
                                         (__bridge void*)contentWebviewForInspector,
                                         d->numeric_id, d->inspectorNumericId,
-                                        d->inspectorWidth, d->inspectorCollapsed,
-                                        d->inspectorPresentation);
+                                        d->inspectorWidth, d->inspectorCollapsed);
             // Record host→inspector for pane-event fan-out (#713).
             zapp_ios_set_inspector_slot(d->numeric_id, d->inspectorNumericId);
         }
