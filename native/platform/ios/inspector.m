@@ -98,6 +98,26 @@ void zapp_ios_inspector_emit(ZappIOSInspectorController* c, const char* eventNam
 
 static NSMutableDictionary<NSValue*, ZappIOSInspectorController*>* zapp_ios_inspectors = nil;
 
+// TEMPORARY FU-1 instrumentation (removed once the root cause lands).
+// Frames logged in each view's own coordinate space — widths are what matter.
+static void zapp_ios_fu1_dump(ZappIOSInspectorController* c, const char* tag) {
+    UISplitViewController* split = c.contentVC.splitViewController;
+    BOOL showing = NO;
+    if (@available(iOS 26.0, *)) {
+        if (split) showing = [split isShowingColumn:UISplitViewControllerColumnInspector];
+    }
+    fprintf(stderr,
+        "[zapp-nav] FU1 %s: splitW=%.0f secondaryW=%.0f webviewW=%.0f inspNavW=%.0f showing=%d behavior=%ld mode=%ld\n",
+        tag,
+        split ? split.view.bounds.size.width : -1.0,
+        c.contentVC.view.bounds.size.width,
+        c.contentWebview ? c.contentWebview.bounds.size.width : -1.0,
+        c.inspectorNav ? c.inspectorNav.view.bounds.size.width : -1.0,
+        (int)showing,
+        split ? (long)split.preferredSplitBehavior : -1L,
+        split ? (long)split.displayMode : -1L);
+}
+
 static void zapp_ios_inspector_on_main(void (^block)(void)) {
     if ([NSThread isMainThread]) block();
     else dispatch_async(dispatch_get_main_queue(), block);
@@ -268,6 +288,9 @@ void darwin_inspector_expand(int32_t window_id) {
         if (@available(iOS 26.0, *)) {
             if (split) {
                 [split showColumn:UISplitViewControllerColumnInspector];
+                zapp_ios_fu1_dump(c, "immediate");
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)),
+                               dispatch_get_main_queue(), ^{ zapp_ios_fu1_dump(c, "settled"); });
                 zapp_ios_inspector_emit(c, "inspector-expanded");
                 return;
             }
@@ -316,6 +339,9 @@ void darwin_inspector_collapse(int32_t window_id) {
         if (@available(iOS 26.0, *)) {
             if (split) {
                 [split hideColumn:UISplitViewControllerColumnInspector];
+                zapp_ios_fu1_dump(c, "immediate");
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)),
+                               dispatch_get_main_queue(), ^{ zapp_ios_fu1_dump(c, "settled"); });
                 zapp_ios_inspector_emit(c, "inspector-collapsed");
                 return;
             }
