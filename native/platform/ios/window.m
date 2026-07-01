@@ -96,6 +96,7 @@ typedef struct ZappIOSDeferred {
     int32_t inspectorNumericId;  // inspector webview's transport slot
     int32_t inspectorWidth;
     bool    inspectorCollapsed;
+    char*   inspectorPresentation;  // strdup'd; freed in destroy. "" / NULL = push (default); "push"; "sheet". iPhone-only.
 } ZappIOSDeferred;
 
 #define ZAPP_MAX_DEFERRED 16
@@ -322,7 +323,8 @@ extern void zapp_ios_sidebar_register(void* window, void* split, void* sidebarVC
 extern void zapp_ios_inspector_register(void* window, void* inspectorVC,
                                         void* contentVC, void* contentWebview,
                                         int32_t host_id, int32_t inspector_id,
-                                        int32_t width, bool collapsed);
+                                        int32_t width, bool collapsed,
+                                        const char* presentation);
 
 static ZappIOSDeferred* zapp_ios_find_deferred(void* handle) {
     if (!handle) return NULL;
@@ -711,7 +713,8 @@ void zapp_ios_materialize_pending_windows(void) {
                                         (__bridge void*)contentVC,
                                         (__bridge void*)contentWebviewForInspector,
                                         d->numeric_id, d->inspectorNumericId,
-                                        d->inspectorWidth, d->inspectorCollapsed);
+                                        d->inspectorWidth, d->inspectorCollapsed,
+                                        d->inspectorPresentation);
             // Record host→inspector for pane-event fan-out (#713).
             zapp_ios_set_inspector_slot(d->numeric_id, d->inspectorNumericId);
         }
@@ -1009,12 +1012,17 @@ void* darwin_window_create(void* opts) {
         extern int32_t wopts_inspector_numeric_id(void* opts);
         extern int32_t wopts_inspector_width(void* opts);
         extern bool wopts_inspector_collapsed(void* opts);
+        extern const char* wopts_inspector_presentation(void* opts);
         const char* _insUrl = wopts_inspector_url(opts);
         d->hasInspector = (_insUrl && _insUrl[0]);
         d->inspectorUrl = d->hasInspector ? strdup(_insUrl) : NULL;
         d->inspectorNumericId = wopts_inspector_numeric_id(opts);
         d->inspectorWidth = wopts_inspector_width(opts);
         d->inspectorCollapsed = wopts_inspector_collapsed(opts);
+        // iPhone-only push|sheet choice. "" / NULL ⇒ push (default). Threaded to
+        // inspector.m at register time (mirrors d->sidebarPresentation).
+        const char* _insPres = wopts_inspector_presentation(opts);
+        d->inspectorPresentation = (_insPres && _insPres[0]) ? strdup(_insPres) : NULL;
         extern int wopts_inspectable(void* opts);
         d->inspectable = wopts_inspectable(opts) > 0;
 
@@ -1046,6 +1054,7 @@ void darwin_window_destroy(void* handle) {
         free(d->sidebarUrl);
         free(d->sidebarPresentation);
         free(d->inspectorUrl);
+        free(d->inspectorPresentation);
         for (int i = 0; i < ZAPP_MAX_DEFERRED; i++) {
             if (zapp_ios_deferred_list[i] == d) zapp_ios_deferred_list[i] = NULL;
         }

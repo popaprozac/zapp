@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Material, BackgroundExtension } from "./window";
+import type { InspectorOptions } from "./window";
 import { WindowEvent, eventName } from "./events";
 
 describe("Material", () => {
@@ -36,5 +37,17 @@ describe("BackgroundExtension", () => {
   test("type is assignable from wire string", () => {
     const v: BackgroundExtension = "mirror";
     expect(v).toBe("mirror");
+  });
+});
+
+describe("InspectorOptions.presentation", () => {
+  test("accepts push and sheet presentation strings", () => {
+    const push: InspectorOptions = { url: "/inspector", presentation: "push" };
+    const sheet: InspectorOptions = { url: "/inspector", presentation: "sheet" };
+    expect(push.presentation).toBe("push");
+    expect(sheet.presentation).toBe("sheet");
+    // @ts-expect-error — presentation is a "push" | "sheet" union, not arbitrary.
+    const bad: InspectorOptions = { url: "/inspector", presentation: "modal" };
+    void bad;
   });
 });
