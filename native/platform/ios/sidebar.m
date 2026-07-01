@@ -108,8 +108,7 @@ extern void zapp_ios_toolbar_apply_for_window_hidden(void* window_ptr, BOOL side
 //                 (compact / iPhone — full-bleed, no sidebar inset)
 //   leadingSafe → content webview leading = contentVC.view.safeAreaLayoutGuide.leadingAnchor
 //                 (regular / iPad tile — respects the 310pt sidebar safe-area inset)
-// Both are nil until zapp_ios_sidebar_set_content_webview (or
-// zapp_ios_sidebar_register_leading_constraints from inspector.m) populates them.
+// Both are nil until zapp_ios_sidebar_set_content_webview populates them.
 @property (nonatomic, weak)   WKWebView* contentWebview; // weak — sidebar doesn't own it
 @property (nonatomic, strong) NSLayoutConstraint* leadingFull;  // to view.leadingAnchor
 @property (nonatomic, strong) NSLayoutConstraint* leadingSafe;  // to safeAreaLayoutGuide.leadingAnchor
@@ -681,10 +680,9 @@ void zapp_ios_sidebar_unregister(void* window) {
 //   - Compact (iPhone)    → view.leadingAnchor (full-bleed, no inset)
 //
 // This helper is called from:
-//   1. zapp_ios_sidebar_set_content_webview (initial setup, no-inspector path)
-//   2. zapp_ios_sidebar_register_leading_constraints (inspector.m handoff)
-//   3. ZappIOSSplitViewController traitCollectionDidChange: (trait changes)
-//   4. ZappIOSSplitViewController viewWillTransitionToSize: completion (rotation/multitasking)
+//   1. zapp_ios_sidebar_set_content_webview (initial setup)
+//   2. ZappIOSSplitViewController traitCollectionDidChange: (trait changes)
+//   3. ZappIOSSplitViewController viewWillTransitionToSize: completion (rotation/multitasking)
 
 static void zapp_ios_update_content_leading(ZappIOSSidebarController* c) {
     if (!c || !c.leadingFull || !c.leadingSafe) return;
@@ -703,17 +701,11 @@ static void zapp_ios_update_content_leading(ZappIOSSidebarController* c) {
     [c.contentVC.view layoutIfNeeded];
 }
 
-// Called from window.m immediately after the content webview is created (no-
-// inspector window). Converts the webview from autoresizingMask to explicit
-// Auto Layout, pins top/bottom/trailing to the container view, and stores the
-// two conditional leading constraints. The correct one is activated right away.
-//
-// When an inspector is ALSO present, inspector.m calls darwin_webview_create_ext
-// for the content webview BEFORE zapp_ios_inspector_register runs, so this
-// function runs first (autoresizingMask → AutoLayout conversion + top/bottom/
-// trailing pinning). Inspector.m then hands its own leading constraints to
-// zapp_ios_sidebar_register_leading_constraints, which replaces the ones set
-// here with the inspector-trailing-aware ones.
+// Called from window.m immediately after the content webview is created, for
+// every sidebar window (with or without an inspector pane). Converts the
+// webview from autoresizingMask to explicit Auto Layout, pins top/bottom/
+// trailing to the container view, and stores the two conditional leading
+// constraints. The correct one is activated right away.
 void zapp_ios_sidebar_set_content_webview(void* window, void* webview_ptr) {
     if (!window || !webview_ptr) return;
     zapp_ios_sidebar_on_main(^{
@@ -752,27 +744,6 @@ void zapp_ios_sidebar_set_content_webview(void* window, void* webview_ptr) {
 
         // Activate the correct leading constraint for the current trait.
         zapp_ios_update_content_leading(c);
-    });
-}
-
-// Called from inspector.m (zapp_ios_inspector_register) after it builds its
-// own leading constraints. Inspector.m creates the full/safe pair with the
-// trailing already anchored to the inspector pane's leading — it hands the
-// pair here so the sidebar controller can swap them on trait changes.
-// The caller is responsible for having already deactivated any previous
-// leading constraints and activated the initial correct one.
-void zapp_ios_sidebar_register_leading_constraints(void* window,
-                                                   void* fullConstraint,
-                                                   void* safeConstraint) {
-    if (!window || !fullConstraint || !safeConstraint) return;
-    zapp_ios_sidebar_on_main(^{
-        if (!zapp_ios_sidebars) return;
-        NSValue* key = [NSValue valueWithPointer:window];
-        ZappIOSSidebarController* c = zapp_ios_sidebars[key];
-        if (!c) return;
-        c.leadingFull = (__bridge NSLayoutConstraint*)fullConstraint;
-        c.leadingSafe = (__bridge NSLayoutConstraint*)safeConstraint;
-        // The caller already activated the initial correct one; no update needed.
     });
 }
 

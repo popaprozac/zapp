@@ -565,14 +565,12 @@ void zapp_ios_materialize_pending_windows(void) {
             // apply the safeArea-conditional leading constraint (iPad regular =
             // safeAreaLayoutGuide.leading; iPhone compact = view.leading). This
             // converts the webview from autoresizingMask to explicit Auto Layout
-            // and pins top/bottom/trailing to the container. Only called when
-            // there is NO inspector pane — when an inspector is present,
-            // inspector.m owns the full AutoLayout conversion (including trailing)
-            // and calls zapp_ios_sidebar_register_leading_constraints to hand the
-            // leading constraints to the sidebar coordinator for trait-change updates.
+            // and pins top/bottom/trailing to the container. Runs for every
+            // sidebar window, with or without an inspector pane — the inspector
+            // pane no longer touches content layout.
             // Forward-declared at file scope; defined in ios/sidebar.m.
             extern void zapp_ios_sidebar_set_content_webview(void* window, void* webview);
-            if (contentWebview && !d->hasInspector) {
+            if (contentWebview) {
                 zapp_ios_sidebar_set_content_webview((__bridge void*)window,
                                                      (__bridge void*)contentWebview);
             }
