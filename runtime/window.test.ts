@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { Material, BackgroundExtension } from "./window";
+import type { WindowHandle } from "./window";
 import { WindowEvent, eventName } from "./events";
+import type { InspectorResizedPayload } from "./events";
 
 describe("Material", () => {
   test("values are the wire strings", () => {
@@ -23,6 +25,12 @@ test("sidebar window event wire names", () => {
   expect(eventName(WindowEvent.SIDEBAR_EXPANDED)).toBe("window:sidebar-expanded");
   expect(eventName(WindowEvent.SIDEBAR_RESIZED)).toBe("window:sidebar-resized");
 });
+
+// INSPECTOR_RESIZED: wire name + typed on() overload (compile-level check).
+expect(eventName(WindowEvent.INSPECTOR_RESIZED)).toBe("window:inspector-resized");
+const _inspectorResizedTyped = (win: WindowHandle) =>
+  win.on(WindowEvent.INSPECTOR_RESIZED, (p: InspectorResizedPayload) => void p.width);
+void _inspectorResizedTyped;
 
 describe("BackgroundExtension", () => {
   test("values are the wire strings", () => {

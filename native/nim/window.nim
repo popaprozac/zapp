@@ -278,7 +278,7 @@ proc wopts_traffic_light_zoom_tag(p: pointer): int32 {.exportc, cdecl.} = opt(p)
 proc wopts_background_extension(p: pointer): cstring {.exportc, cdecl.} =
   backgroundExtensionStr[opt(p).backgroundExtension].cstring
 
-# sidebar accessors — unused feature; "" url short-circuits the sidebar branch.
+# sidebar accessors — consumed by darwin/window.m + ios/window.m at create time; "" url short-circuits the sidebar branch.
 proc wopts_sidebar_url(p: pointer): cstring {.exportc, cdecl.} = opt(p).sidebar.url.cstring
 proc wopts_sidebar_material(p: pointer): cstring {.exportc, cdecl.} = materialStr[opt(p).sidebar.material].cstring
 proc wopts_sidebar_width(p: pointer): int32 {.exportc, cdecl.} = opt(p).sidebar.width
@@ -291,7 +291,7 @@ proc wopts_sidebar_background_color(p: pointer): cstring {.exportc, cdecl.} = st
 proc wopts_sidebar_presentation(p: pointer): cstring {.exportc, cdecl.} = sidebarPresStr[opt(p).sidebar.presentation].cstring
 proc wopts_sidebar_numeric_id(p: pointer): int32 {.exportc, cdecl.} = opt(p).sidebar.numericId
 
-# inspector accessors — unused feature; "" url short-circuits the branch.
+# inspector accessors — consumed by darwin/window.m + ios/window.m at create time; "" url short-circuits the branch.
 proc wopts_inspector_url(p: pointer): cstring {.exportc, cdecl.} = opt(p).inspector.url.cstring
 proc wopts_inspector_material(p: pointer): cstring {.exportc, cdecl.} = materialStr[opt(p).inspector.material].cstring
 proc wopts_inspector_width(p: pointer): int32 {.exportc, cdecl.} = opt(p).inspector.width

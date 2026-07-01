@@ -18,7 +18,7 @@
 
 import { getBridge } from "./bridge";
 import { Platform } from "./platform";
-import { WindowEvent, eventName, type WindowSizePayload, type WindowPayload, type ModalDismissedPayload, type SidebarResizedPayload, type RouteChangedPayload } from "./events";
+import { WindowEvent, eventName, type WindowSizePayload, type WindowPayload, type ModalDismissedPayload, type SidebarResizedPayload, type InspectorResizedPayload, type RouteChangedPayload } from "./events";
 import type { Display } from "./screen";
 import type { MenuItemDef } from "./menu";
 import { patchMenuTree, applyRadioSelection, findMenuItem } from "./action-context";
@@ -1184,6 +1184,7 @@ export interface WindowHandle {
   on(event: SizeEvent, handler: (payload: WindowSizePayload) => void): () => void;
   on(event: WindowEvent.MODAL_DISMISSED, handler: (payload: ModalDismissedPayload) => void): () => void;
   on(event: WindowEvent.SIDEBAR_RESIZED, handler: (payload: SidebarResizedPayload) => void): () => void;
+  on(event: WindowEvent.INSPECTOR_RESIZED, handler: (payload: InspectorResizedPayload) => void): () => void;
   on(event: WindowEvent, handler: (payload: WindowPayload) => void): () => void;
 
   show(): void;

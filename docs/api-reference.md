@@ -1134,15 +1134,22 @@ declared at create, toggled/collapsed/resized at runtime.
 | Platform | Presentation |
 |---|---|
 | macOS | Trailing pane beside content (NSSplitView column) |
-| iOS 26+ | Native `UISplitViewControllerColumnInspector` column — a resizable, hideable column on iPad; an auto-presented sheet on iPhone. The system picks the host and adapts live across size-class changes; there is nothing to configure. |
+| iOS 26+ | Native `UISplitViewControllerColumnInspector` column — a resizable, hideable column on iPad; an auto-presented sheet on iPhone, with the same Close button + grabber as the `< 26` fallback below. The system picks the host and adapts live across size-class changes; there is nothing to configure. |
 | iOS < 26 | Modal sheet (medium + large detents, grabber, Close button) on both iPad and iPhone — summon-only (never shown at launch regardless of `collapsed: false`). |
 
 Presentation is automatic on iOS — there is no app-facing option to force
 push-vs-sheet; the OS decides based on the split's column state and iOS
 version.
 
-- `setWidth(px)` applies to the macOS pane and the iOS 26+ column; it is
-  ignored on the modal-sheet fallback (which is always full-width).
+- `setWidth(px)`, `minWidth`/`maxWidth`, and `setResizable(bool)` are honored
+  on the iOS 26+ column (`preferredInspectorColumnWidth` /
+  `minimumInspectorColumnWidth` / `maximumInspectorColumnWidth`);
+  `resizable: false` locks the divider at the column's *current* width, not
+  the configured `width`.
+- Below iOS 26 (or without a sidebar split) the inspector is a modal sheet
+  with no divider — `width`/`minWidth`/`maxWidth`/`setWidth`/`setResizable`
+  are inert there and log the same one-time console note as `collapsible`
+  (below).
 
 ```ts
 const win = await Window.create({
@@ -1173,6 +1180,8 @@ true for the common "hidden until summoned" inspector), `resizable`
 (default true; false locks the pane at `width`), `backgroundColor`
 (solid backdrop — CSS name / `#rgb`/`#rrggbb`/`#rrggbbaa` / `rgb()` / `rgba()`;
 `rgba()` alpha is honored; `material` wins if both set), `material`.
+`backgroundColor` is honored on the iOS inspector pane too, same as the
+sidebar; `material` remains macOS-only.
 
 **Handle (`win.inspector`, present only when the window has one):**
 `toggle()` / `collapse()` / `expand()` / `setWidth(px)` /
@@ -1181,10 +1190,13 @@ and `width` (tracked from `INSPECTOR_COLLAPSED` / `INSPECTOR_EXPANDED` /
 `INSPECTOR_RESIZED`). `Window.isInspector()` is true inside the inspector
 pane.
 
-`setCollapsible(bool)` / `setResizable(bool)` are macOS-only. iOS inspector
-collapse is size-class–driven; there is no divider-drag affordance to gate,
-so these calls are no-ops on iOS. `setWidth()` still works programmatically
-on iOS (applies to the iOS 26+ column; ignored on the modal-sheet fallback).
+`setCollapsible(bool)` has no user affordance to gate on iOS — the Inspector
+column has no user-collapse gesture to disallow — so it logs a one-time
+console note (`[zapp] inspector.setCollapsible is not supported on iOS: ...`)
+instead of silently no-op'ing; `collapse()` / `expand()` / `toggle()` keep
+working programmatically regardless. `setResizable(bool)` behaves like
+`setWidth()` above: it drives the real divider on the iOS 26+ column and
+logs the same one-time note below iOS 26 (or without a split).
 
 **Toolbar integration:** `{ type: "toggleInspector" }` adds a button (SF
 symbol `sidebar.right`) that toggles the inspector;
