@@ -67,6 +67,14 @@ extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
 extern void darwin_window_eval_js(int32_t window_id, const char* js);
 extern int32_t zapp_ios_inspector_slot_for(int32_t host_slot);
 
+// Defined in ios/inspector.m — the single iOS-26 source for the
+// inspector-expanded/-collapsed emits (and the auto-sheet Close/grabber
+// affordances). Called from the splitViewController:didShowColumn:/
+// didHideColumn: delegate hooks below whenever the split's Inspector column
+// visibility changes, keyed by the host UIWindow (the inspector registry key).
+extern void zapp_ios_inspector_column_did_show(void* window);
+extern void zapp_ios_inspector_column_did_hide(void* window);
+
 // Defined in ios/toolbar.m — applies a set toolbar to the correct nav after
 // a collapse/expand transition. No-op when no toolbar has been registered.
 extern void zapp_ios_toolbar_apply_for_window(void* window_ptr);
@@ -542,6 +550,38 @@ static void zapp_ios_sidebar_sync_collapse(ZappIOSSidebarController* c, BOOL col
     // The toolbar change applies within the same transition batch so leading items
     // change simultaneously with the sidebar show/hide animation (no snap lag).
     zapp_ios_toolbar_apply_for_window_hidden(winPtr, targetHidden);
+}
+
+// iOS 26+: column-level visibility notifications (both delegate methods are
+// API_AVAILABLE(ios(26.0)); UIKit never calls them on earlier OSes). The
+// Inspector column can show/hide WITHOUT any darwin_inspector_* call — UIKit
+// itself dismisses the auto-presented iPhone sheet on swipe — so these hooks
+// (not the imperative entry points in ios/inspector.m) are the single source
+// of the inspector-expanded/-collapsed emits on the 26+ path. Forward to
+// ios/inspector.m keyed by the host UIWindow (darwin_window_get_by_numeric_id
+// on the host slot — exactly the pointer the inspector registry is keyed by).
+// Non-Inspector columns are ignored: sidebar visibility emits stay owned by
+// the imperative sidebar paths (see the willChangeToDisplayMode: note above).
+// UISplitViewControllerColumnInspector is itself ios(26.0)-only, so the
+// comparison lives inside the @available guard.
+- (void)splitViewController:(UISplitViewController*)svc
+              didShowColumn:(UISplitViewControllerColumn)column {
+    (void)svc;
+    if (@available(iOS 26.0, *)) {
+        if (column != UISplitViewControllerColumnInspector) return;
+        void* winPtr = darwin_window_get_by_numeric_id(self.hostWindowId);
+        if (winPtr) zapp_ios_inspector_column_did_show(winPtr);
+    }
+}
+
+- (void)splitViewController:(UISplitViewController*)svc
+              didHideColumn:(UISplitViewControllerColumn)column {
+    (void)svc;
+    if (@available(iOS 26.0, *)) {
+        if (column != UISplitViewControllerColumnInspector) return;
+        void* winPtr = darwin_window_get_by_numeric_id(self.hostWindowId);
+        if (winPtr) zapp_ios_inspector_column_did_hide(winPtr);
+    }
 }
 
 @end

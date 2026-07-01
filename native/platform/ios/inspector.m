@@ -15,7 +15,13 @@
 // orthogonal to the doubleColumn base style — Primary=sidebar, Secondary=
 // content, the permanent canvas):
 //   expand/collapse/toggle drive show/hideColumn:UISplitViewControllerColumnInspector;
-//   visibility is read via -isShowingColumn: (no BOOL bookkeeping needed).
+//   visibility is read via -isShowingColumn:. The inspector-expanded/-collapsed
+//   emits do NOT come from those imperative calls: every 26+ visibility change
+//   (programmatic OR UIKit-initiated, e.g. the user swipe-dismissing the iPhone
+//   auto-sheet) flows through the split delegate's didShowColumn:/didHideColumn:
+//   (ios/sidebar.m) into zapp_ios_inspector_column_did_show/_did_hide below —
+//   the SINGLE 26+ emit source, deduped by lastCollapsedEmit (exactly-once per
+//   real state change; the launch-time deferred show/hideColumn stays silent).
 //   On iPad (regular width) this is a hideable/resizable column beside the
 //   content; on iPhone (compact width) UIKit auto-presents the SAME column
 //   as a sheet — no horizontalSizeClass branching needed on our side.
@@ -41,9 +47,11 @@ extern void darwin_window_eval_js(int32_t window_id, const char* js);
 extern int32_t zapp_ios_sidebar_slot_for(int32_t host_slot);
 
 // Forward declaration — darwin_inspector_collapse is defined further down in
-// this file; the Close-button target/action (installed on the <26 modal
-// sheet) calls back into it so expand/collapse/toggle/Close-tap all share the
-// exact same collapse logic (single source of truth for the emit + guard).
+// this file; the Close-button target/action (installed on the <26 modal sheet
+// AND on the 26+ UIKit-managed auto-sheet, see
+// zapp_ios_inspector_apply_sheet_affordances) calls back into it so
+// expand/collapse/toggle/Close-tap all share the exact same collapse logic
+// (single source of truth for the hide + emit discipline on each path).
 void darwin_inspector_collapse(int32_t window_id);
 
 // Forward declarations — ZappIOSInspectorController (declared below) and the
@@ -71,6 +79,15 @@ void zapp_ios_inspector_emit(ZappIOSInspectorController* c, const char* eventNam
 @property (nonatomic, assign) int32_t hostWindowId;           // content/host webview slot
 @property (nonatomic, assign) int32_t inspectorSlotId;        // inspector webview slot
 @property (nonatomic, assign) int32_t width;                   // configured (expanded) width
+// Dedupe guard for the iOS-26 column emit hooks (mirrors sidebar.m's
+// lastCollapsedEmit): the last collapsed state we emitted on the 26+ path.
+// Seeded at register time from the create-time `collapsed` value so the
+// launch-time deferred show/hideColumn dance never fires a spurious emit;
+// flipped ONLY by zapp_ios_inspector_column_did_show/_did_hide. The <26
+// modal-sheet fallback keeps its own (previously reviewed) emit discipline
+// and never touches this flag — the two paths are mutually exclusive per
+// window (a window either has a split on 26+ or it doesn't).
+@property (nonatomic, assign) BOOL lastCollapsedEmit;
 // Host content webview: retained here for parity with the sidebar controller
 // pattern (not required by any runtime op below, but cheap to keep in sync).
 @property (nonatomic, strong) WKWebView* contentWebview;
@@ -87,9 +104,12 @@ void zapp_ios_inspector_emit(ZappIOSInspectorController* c, const char* eventNam
     zapp_ios_inspector_emit(self, "inspector-collapsed");
 }
 
-// Close bar-button target (<26 modal sheet fallback). Delegates to
+// Close bar-button target — shared by the <26 modal sheet fallback AND the
+// 26+ UIKit-managed auto-sheet (installed by
+// zapp_ios_inspector_apply_sheet_affordances). Delegates to
 // darwin_inspector_collapse so the tap and the programmatic collapse() path
-// share identical logic (dismiss + emit + guard).
+// share identical logic (<26: dismiss + inline emit; 26+: hideColumn →
+// didHideColumn delegate → single-source emit).
 - (void)zapp_closeInspectorTapped {
     darwin_inspector_collapse(self.hostWindowId);
 }
@@ -170,6 +190,101 @@ static void zapp_ios_inspector_emit_resize(ZappIOSInspectorController* c, int32_
     zapp_ios_inspector_emit_data(c, "inspector-resized", json);
 }
 
+// --- iOS-26 Inspector column show/hide hooks (single 26+ emit source) ------
+//
+// Called from ios/sidebar.m's UISplitViewControllerDelegate
+// (splitViewController:didShowColumn:/didHideColumn:, both ios(26.0))
+// whenever the split's Inspector column becomes visible/hidden — REGARDLESS
+// of who initiated it: darwin_inspector_expand/collapse/toggle, the
+// launch-time deferred show/hideColumn in zapp_ios_inspector_register, or
+// UIKit itself (the user swipe-dismissing the iPhone auto-presented sheet —
+// the transition the old inline emits missed, leaving the JS `collapsed`
+// getter stale). Exactly-once by construction: every 26+ visibility change
+// funnels through these two functions, and lastCollapsedEmit (seeded from the
+// create-time `collapsed` value) suppresses repeats and the launch dance.
+
+// Auto-sheet affordances for the 26+ Inspector column, decided by how UIKit
+// adapted the column THIS time (the form can change between shows — rotation
+// or a multitasking resize in between):
+//   PRESENTED (compact — iPhone, narrow iPad multitasking): UIKit auto-
+//     presented the column as a sheet. In compact-HEIGHT landscape that sheet
+//     is full-screen with no grabber and NO swipe-dismiss, so a Close bar
+//     button is required (without it the user cannot leave the inspector);
+//     in portrait it swipe-dismisses but hides the grabber, so we request the
+//     grabber explicitly as well.
+//   TILED (regular — iPad): a real column beside the content; it must not
+//     carry an X, so any previously installed Close button is removed.
+//
+// Close routes through zapp_closeInspectorTapped → darwin_inspector_collapse
+// → hideColumn:Inspector. show/hideColumn: is the canonical control for the
+// column in EVERY adaptation, so hideColumn retracts the UIKit-managed sheet
+// exactly like it hides the tiled column (and the resulting didHideColumn:
+// delegate callback produces the collapsed emit).
+//
+// No collision with the <26 modal-sheet fallback's own Close install in
+// darwin_inspector_expand: this helper only runs from the 26+ column hooks,
+// and the fallback path (<26, or no split) never fires those delegate
+// callbacks. Both installs target the same selector, so even a hypothetical
+// overlap would be behaviorally identical.
+static void zapp_ios_inspector_apply_sheet_affordances(ZappIOSInspectorController* c) {
+    if (!c || !c.inspectorNav) return;
+    UIViewController* inspectorRoot = c.inspectorNav.viewControllers.firstObject;
+    if (!inspectorRoot) return;
+    if (c.inspectorNav.presentingViewController) {
+        // UIKit-managed sheet: ensure the Close escape hatch + grabber.
+        if (!inspectorRoot.navigationItem.rightBarButtonItem) {
+            inspectorRoot.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc]
+                initWithBarButtonSystemItem:UIBarButtonSystemItemClose
+                                      target:c
+                                      action:@selector(zapp_closeInspectorTapped)];
+        }
+        if (@available(iOS 15.0, *)) {
+            UISheetPresentationController* sheet = c.inspectorNav.sheetPresentationController;
+            if (sheet) sheet.prefersGrabberVisible = YES;
+        }
+    } else {
+        // Real tiled column (iPad regular width): no X.
+        inspectorRoot.navigationItem.rightBarButtonItem = nil;
+    }
+}
+
+void zapp_ios_inspector_column_did_show(void* window) {
+    if (!window) return;
+    zapp_ios_inspector_on_main(^{
+        if (!zapp_ios_inspectors) return;
+        ZappIOSInspectorController* c = zapp_ios_inspectors[[NSValue valueWithPointer:window]];
+        if (!c) return;
+        // Affordances run on EVERY show (not deduped) — the presentation form
+        // may differ from the previous show. Prefer the synchronous
+        // presentingViewController check; if UIKit hasn't wired up the
+        // auto-presentation by the time this delegate callback runs, re-check
+        // on the next main-queue tick (the deferred pass also correctly
+        // REMOVES the Close button when the column landed tiled).
+        if (c.inspectorNav.presentingViewController) {
+            zapp_ios_inspector_apply_sheet_affordances(c);
+        } else {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                zapp_ios_inspector_apply_sheet_affordances(c);
+            });
+        }
+        if (!c.lastCollapsedEmit) return;  // already expanded — no state change, stay silent
+        c.lastCollapsedEmit = NO;
+        zapp_ios_inspector_emit(c, "inspector-expanded");
+    });
+}
+
+void zapp_ios_inspector_column_did_hide(void* window) {
+    if (!window) return;
+    zapp_ios_inspector_on_main(^{
+        if (!zapp_ios_inspectors) return;
+        ZappIOSInspectorController* c = zapp_ios_inspectors[[NSValue valueWithPointer:window]];
+        if (!c) return;
+        if (c.lastCollapsedEmit) return;   // already collapsed — no state change, stay silent
+        c.lastCollapsedEmit = YES;
+        zapp_ios_inspector_emit(c, "inspector-collapsed");
+    });
+}
+
 // --- Registry API consumed by window.m ------------------------------------
 //
 // window.m calls this AFTER building the persistent inspector nav and (on
@@ -203,6 +318,11 @@ void zapp_ios_inspector_register(void* window, void* inspectorNav, void* content
         c.inspectorSlotId = inspector_id;
         c.width           = (width > 0 ? width : 280);
         c.contentWebview  = (__bridge WKWebView*)contentWebview;
+        // Seed the 26+ emit dedupe from the create-time collapsed state so the
+        // deferred launch show/hideColumn below reaches the delegate hooks as a
+        // SAME-STATE callback (silent) — no spurious launch emit in either
+        // direction; only a real post-launch state change emits.
+        c.lastCollapsedEmit = collapsed ? YES : NO;
 
         // iOS 26+: initial width + visibility on the dedicated Inspector
         // column, when a split exists (sidebar window). No-op on <26 or when
@@ -267,8 +387,11 @@ void darwin_inspector_expand(int32_t window_id) {
 
         if (@available(iOS 26.0, *)) {
             if (split) {
+                // No inline emit: showColumn flows through the split delegate's
+                // didShowColumn: → zapp_ios_inspector_column_did_show — the
+                // single 26+ emit source (deduped there, so a no-op expand on
+                // an already-visible column stays silent).
                 [split showColumn:UISplitViewControllerColumnInspector];
-                zapp_ios_inspector_emit(c, "inspector-expanded");
                 return;
             }
         }
@@ -315,8 +438,11 @@ void darwin_inspector_collapse(int32_t window_id) {
 
         if (@available(iOS 26.0, *)) {
             if (split) {
+                // No inline emit: hideColumn flows through the split delegate's
+                // didHideColumn: → zapp_ios_inspector_column_did_hide — the
+                // single 26+ emit source (deduped there, so a no-op collapse on
+                // an already-hidden column stays silent).
                 [split hideColumn:UISplitViewControllerColumnInspector];
-                zapp_ios_inspector_emit(c, "inspector-collapsed");
                 return;
             }
         }
@@ -343,12 +469,13 @@ void darwin_inspector_toggle(int32_t window_id) {
 
         if (@available(iOS 26.0, *)) {
             if (split) {
+                // No inline emits: both branches flow through the split
+                // delegate's didShow/didHideColumn: hooks — the single 26+
+                // emit source (see zapp_ios_inspector_column_did_show/_did_hide).
                 if ([split isShowingColumn:UISplitViewControllerColumnInspector]) {
                     [split hideColumn:UISplitViewControllerColumnInspector];
-                    zapp_ios_inspector_emit(c, "inspector-collapsed");
                 } else {
                     [split showColumn:UISplitViewControllerColumnInspector];
-                    zapp_ios_inspector_emit(c, "inspector-expanded");
                 }
                 return;
             }
