@@ -371,9 +371,15 @@ void darwin_inspector_toggle(int32_t window_id) {
             if (split) {
                 if ([split isShowingColumn:UISplitViewControllerColumnInspector]) {
                     [split hideColumn:UISplitViewControllerColumnInspector];
+                    zapp_ios_fu1_dump(c, "immediate");
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)),
+                                   dispatch_get_main_queue(), ^{ zapp_ios_fu1_dump(c, "settled"); });
                     zapp_ios_inspector_emit(c, "inspector-collapsed");
                 } else {
                     [split showColumn:UISplitViewControllerColumnInspector];
+                    zapp_ios_fu1_dump(c, "immediate");
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)),
+                                   dispatch_get_main_queue(), ^{ zapp_ios_fu1_dump(c, "settled"); });
                     zapp_ios_inspector_emit(c, "inspector-expanded");
                 }
                 return;
