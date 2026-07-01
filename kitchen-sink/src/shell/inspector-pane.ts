@@ -38,5 +38,11 @@ export function renderInspectorPane(app: HTMLElement) {
   };
 
   Window.current().router.on((e) => show(sectionForRoute(e.url)));
-  show(sectionForRoute(Window.current().router.url)); // initial
+  // Initial render: use the async authoritative snapshot, not the sync
+  // `router.url` getter. A freshly-minted webview (e.g. the iPhone inspector
+  // sheet/push) is a COLD JS context whose routerState cache starts empty
+  // ("") — the sync getter would render the "no inspector" fallback before the
+  // native route seed arrives. router.current() awaits the seed. (Warm panes —
+  // iPad/macOS columns — already have the route from live ROUTE_CHANGED events.)
+  Window.current().router.current().then((snap) => show(sectionForRoute(snap.url)));
 }
