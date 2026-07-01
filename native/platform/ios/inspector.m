@@ -214,9 +214,17 @@ void zapp_ios_inspector_register(void* window, void* inspectorNav, void* content
                 if (c.width > 0) {
                     split.preferredInspectorColumnWidth = (CGFloat)c.width;
                 }
+                // Zapp's materialize starts the Inspector column VISIBLE (unlike the
+                // spike's hidden-by-default assumption), so honor `collapsed` explicitly
+                // in BOTH directions. Deferred to the next runloop so it runs AFTER
+                // UIKit's initial column layout (mirrors the launch-visibility dance).
                 if (!collapsed) {
                     dispatch_async(dispatch_get_main_queue(), ^{
                         [split showColumn:UISplitViewControllerColumnInspector];
+                    });
+                } else {
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        [split hideColumn:UISplitViewControllerColumnInspector];
                     });
                 }
             }
