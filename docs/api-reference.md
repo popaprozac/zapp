@@ -1133,15 +1133,16 @@ declared at create, toggled/collapsed/resized at runtime.
 
 | Platform | Presentation |
 |---|---|
-| macOS / iPad (regular width) | Trailing pane beside content (NSSplitView / UISplitViewController column) |
-| iPhone (compact width) | Sheet with medium + large detents and a grabber; summon-only (never shown at launch regardless of `collapsed: false`) |
+| macOS | Trailing pane beside content (NSSplitView column) |
+| iOS 26+ | Native `UISplitViewControllerColumnInspector` column — a resizable, hideable column on iPad; an auto-presented sheet on iPhone. The system picks the host and adapts live across size-class changes; there is nothing to configure. |
+| iOS < 26 | Modal sheet (medium + large detents, grabber, Close button) on both iPad and iPhone — summon-only (never shown at launch regardless of `collapsed: false`). |
 
-- `setWidth(px)` applies to the iPad pane; it is ignored on the iPhone sheet
-  (which is always full-width).
-- **Known limitation:** the inspector host is chosen once at launch based on
-  the initial size class. Live iPad ↔ compact transitions (e.g. Stage Manager
-  resize, split-screen) do not re-host the pane as a sheet or vice-versa.
-  This is a documented follow-up.
+Presentation is automatic on iOS — there is no app-facing option to force
+push-vs-sheet; the OS decides based on the split's column state and iOS
+version.
+
+- `setWidth(px)` applies to the macOS pane and the iOS 26+ column; it is
+  ignored on the modal-sheet fallback (which is always full-width).
 
 ```ts
 const win = await Window.create({
@@ -1183,7 +1184,7 @@ pane.
 `setCollapsible(bool)` / `setResizable(bool)` are macOS-only. iOS inspector
 collapse is size-class–driven; there is no divider-drag affordance to gate,
 so these calls are no-ops on iOS. `setWidth()` still works programmatically
-on iOS (applies to the iPad pane; ignored on the iPhone sheet).
+on iOS (applies to the iOS 26+ column; ignored on the modal-sheet fallback).
 
 **Toolbar integration:** `{ type: "toggleInspector" }` adds a button (SF
 symbol `sidebar.right`) that toggles the inspector;

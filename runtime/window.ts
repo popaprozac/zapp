@@ -311,17 +311,6 @@ export interface InspectorOptions {
   collapsible?: boolean;
   /** Start collapsed (the common "hidden until summoned" inspector). Default false. */
   collapsed?: boolean;
-  /**
-   * How the inspector is presented on iPhone (compact width). iPhone-only —
-   * on iPad it is always the third column the toggle shows/hides, and on
-   * macOS it is always the trailing pane; this value is a NO-OP there.
-   *
-   * - "push" (default): pushes the inspector as a page onto the content
-   *   navigation stack; the user swipes/Backs out of it.
-   * - "sheet": presents the inspector as a draggable modal sheet
-   *   (medium + large detents with a grabber).
-   */
-  presentation?: "push" | "sheet";
   /** User can resize by dragging the divider. Default true; false locks the
    *  pane at `width`. Toggle later with `win.inspector.setResizable(...)`. */
   resizable?: boolean;
