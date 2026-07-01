@@ -66,6 +66,7 @@ void zapp_ios_inspector_emit(ZappIOSInspectorController* c, const char* eventNam
 // usual parity event so JS-side state stays coherent. Main-thread only (all
 // darwin_inspector_* ops hop through zapp_ios_inspector_on_main).
 void zapp_ios_control_unsupported(const char* control, const char* reason) {
+    if (!control || !reason) return;
     static NSMutableSet<NSString*>* zapp_warned = nil;
     if (!zapp_warned) zapp_warned = [NSMutableSet set];
     NSString* key = [NSString stringWithUTF8String:control];
@@ -565,26 +566,78 @@ void darwin_inspector_set_width(int32_t window_id, int32_t width) {
         if (!c) return;
         c.width = width;
 
+        bool applied = false;
         if (@available(iOS 26.0, *)) {
             UISplitViewController* split = c.contentVC.splitViewController;
             if (split && width > 0) {
                 split.preferredInspectorColumnWidth = (CGFloat)width;
+                applied = true;
             }
+        }
+        if (!applied) {
+            zapp_ios_control_unsupported("inspector.setWidth",
+                "below iOS 26 (or without a sidebar split) the inspector is a system modal sheet with no adjustable width");
         }
         zapp_ios_inspector_emit_resize(c, width);
     });
 }
 
-// User-collapsible gating is an NSSplitViewItem affordance; the iOS inspector is
-// driven explicitly (show/hideColumn: / modal sheet), so there's no equivalent
-// knob. No-op for router parity (documented).
+// There is no iOS user-collapse affordance on the Inspector column to gate
+// (presentsWithGesture governs the primary column only — SDK header :128).
+// Store the intent for state parity and warn once; darwin_inspector_toggle/
+// collapse/expand ALWAYS keep working regardless (matches the sidebar's
+// documented semantics).
 void darwin_inspector_set_collapsible(int32_t window_id, bool can_collapse) {
-    (void)window_id; (void)can_collapse;
+    zapp_ios_inspector_on_main(^{
+        ZappIOSInspectorController* c = zapp_ios_inspector_for_slot(window_id);
+        if (!c) return;
+        c.collapsible = (BOOL)can_collapse;
+        if (!can_collapse) {
+            zapp_ios_control_unsupported("inspector.setCollapsible",
+                "the iOS Inspector column has no user-collapse affordance to gate; "
+                "programmatic collapse()/expand()/toggle() always work");
+        }
+    });
 }
 
-// Divider-drag resize isn't a UIKit affordance on the Inspector column (its
-// width is set programmatically; the <26 fallback is a full-width/full-screen
-// sheet). No-op for router parity (documented).
+// Lock or unlock the inspector divider drag. resizable==false clamps
+// minimumInspectorColumnWidth == maximumInspectorColumnWidth to the LIVE
+// column width (a drag never updates c.width, so clamping to the configured
+// value would snap the pane to a stale width — same rationale as
+// darwin_sidebar_set_resizable). resizable==true restores the configured
+// min/max (0 = UISplitViewControllerAutomaticDimension, the header default).
+// <26 / no-split: the modal sheet has no divider — warn once, still store.
 void darwin_inspector_set_resizable(int32_t window_id, bool resizable) {
-    (void)window_id; (void)resizable;
+    zapp_ios_inspector_on_main(^{
+        ZappIOSInspectorController* c = zapp_ios_inspector_for_slot(window_id);
+        if (!c) return;
+        c.resizable = (BOOL)resizable;
+
+        if (@available(iOS 26.0, *)) {
+            UISplitViewController* split = c.contentVC.splitViewController;
+            if (split) {
+                if (!resizable) {
+                    CGFloat liveWidth = c.inspectorNav.view.bounds.size.width;
+                    CGFloat lockWidth = (liveWidth > 0.0)
+                        ? liveWidth
+                        : ((c.width > 0) ? (CGFloat)c.width
+                                         : split.preferredInspectorColumnWidth);
+                    if (lockWidth > 0.0) {
+                        split.minimumInspectorColumnWidth = lockWidth;
+                        split.maximumInspectorColumnWidth = lockWidth;
+                    }
+                } else {
+                    split.minimumInspectorColumnWidth = (c.configuredMinWidth > 0)
+                        ? (CGFloat)c.configuredMinWidth
+                        : UISplitViewControllerAutomaticDimension;
+                    split.maximumInspectorColumnWidth = (c.configuredMaxWidth > 0)
+                        ? (CGFloat)c.configuredMaxWidth
+                        : UISplitViewControllerAutomaticDimension;
+                }
+                return;
+            }
+        }
+        zapp_ios_control_unsupported("inspector.setResizable",
+            "below iOS 26 (or without a sidebar split) the inspector is a system modal sheet");
+    });
 }
