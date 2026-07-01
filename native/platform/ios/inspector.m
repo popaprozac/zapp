@@ -61,6 +61,19 @@ void darwin_inspector_collapse(int32_t window_id);
 @class ZappIOSInspectorController;
 void zapp_ios_inspector_emit(ZappIOSInspectorController* c, const char* eventName);
 
+// Honesty helper: a control that genuinely cannot work on iOS logs ONCE per
+// control per process instead of silently no-op'ing. Callers still emit the
+// usual parity event so JS-side state stays coherent. Main-thread only (all
+// darwin_inspector_* ops hop through zapp_ios_inspector_on_main).
+void zapp_ios_control_unsupported(const char* control, const char* reason) {
+    static NSMutableSet<NSString*>* zapp_warned = nil;
+    if (!zapp_warned) zapp_warned = [NSMutableSet set];
+    NSString* key = [NSString stringWithUTF8String:control];
+    if ([zapp_warned containsObject:key]) return;
+    [zapp_warned addObject:key];
+    NSLog(@"[zapp] %s is not supported on iOS: %s", control, reason);
+}
+
 // --- Per-window registry --------------------------------------------------
 //
 // Keyed by the host UIWindow (NSValue-wrapped pointer), mirroring sidebar.m's
@@ -79,6 +92,10 @@ void zapp_ios_inspector_emit(ZappIOSInspectorController* c, const char* eventNam
 @property (nonatomic, assign) int32_t hostWindowId;           // content/host webview slot
 @property (nonatomic, assign) int32_t inspectorSlotId;        // inspector webview slot
 @property (nonatomic, assign) int32_t width;                   // configured (expanded) width
+@property (nonatomic, assign) int32_t configuredMinWidth;  // minimumInspectorColumnWidth (0 = automatic)
+@property (nonatomic, assign) int32_t configuredMaxWidth;  // maximumInspectorColumnWidth (0 = automatic)
+@property (nonatomic, assign) BOOL resizable;              // divider-drag allowed (via min==max pin when NO)
+@property (nonatomic, assign) BOOL collapsible;            // stored; no iOS user-collapse affordance to gate (WARN)
 // Dedupe guard for the iOS-26 column emit hooks (mirrors sidebar.m's
 // lastCollapsedEmit): the last collapsed state we emitted on the 26+ path.
 // Seeded at register time from the create-time `collapsed` value so the
@@ -302,7 +319,9 @@ void zapp_ios_inspector_column_did_hide(void* window) {
 //     find it from any pane's transport slot.
 void zapp_ios_inspector_register(void* window, void* inspectorNav, void* contentVC,
                                  void* contentWebview, int32_t host_id,
-                                 int32_t inspector_id, int32_t width, bool collapsed) {
+                                 int32_t inspector_id, int32_t width, int32_t min_width,
+                                 int32_t max_width, bool collapsed, bool collapsible,
+                                 bool resizable) {
     if (!window || !inspectorNav || !contentVC) return;
     zapp_ios_inspector_on_main(^{
         if (!zapp_ios_inspectors) zapp_ios_inspectors = [NSMutableDictionary dictionary];
@@ -317,12 +336,34 @@ void zapp_ios_inspector_register(void* window, void* inspectorNav, void* content
         c.hostWindowId    = host_id;
         c.inspectorSlotId = inspector_id;
         c.width           = (width > 0 ? width : 280);
+        c.configuredMinWidth = min_width;
+        c.configuredMaxWidth = max_width;
+        c.resizable       = (BOOL)resizable;
+        c.collapsible     = (BOOL)collapsible;
         c.contentWebview  = (__bridge WKWebView*)contentWebview;
         // Seed the 26+ emit dedupe from the create-time collapsed state so the
         // deferred launch show/hideColumn below reaches the delegate hooks as a
         // SAME-STATE callback (silent) — no spurious launch emit in either
         // direction; only a real post-launch state change emits.
         c.lastCollapsedEmit = collapsed ? YES : NO;
+
+        // Shared warn path for controls the iOS inspector genuinely cannot
+        // honor when it isn't a dedicated split column (<26, or 26+ with no
+        // sidebar split to attach the Inspector column to — the modal-sheet
+        // fallback in both cases). min/max never warn here: Nim always
+        // materializes them (180/400 defaults), so a mismatch there isn't an
+        // explicit app choice the way resizable:false/collapsible:false are.
+        void (^warnUnsupportedOnSheetFallback)(void) = ^{
+            if (!c.resizable) {
+                zapp_ios_control_unsupported("inspector.resizable",
+                    "below iOS 26 (or without a sidebar split) the inspector is a system modal sheet");
+            }
+            if (!c.collapsible) {
+                zapp_ios_control_unsupported("inspector.collapsible",
+                    "the iOS inspector sheet has no user-collapse affordance to gate; "
+                    "programmatic collapse()/expand()/toggle() always work");
+            }
+        };
 
         // iOS 26+: initial width + visibility on the dedicated Inspector
         // column, when a split exists (sidebar window). No-op on <26 or when
@@ -333,6 +374,22 @@ void zapp_ios_inspector_register(void* window, void* inspectorNav, void* content
             if (split) {
                 if (c.width > 0) {
                     split.preferredInspectorColumnWidth = (CGFloat)c.width;
+                }
+                if (!c.resizable && c.width > 0) {
+                    // resizable:false at create — pin the column (ownership pattern,
+                    // mirrors darwin_sidebar_set_width's frozen path).
+                    split.minimumInspectorColumnWidth = (CGFloat)c.width;
+                    split.maximumInspectorColumnWidth = (CGFloat)c.width;
+                } else {
+                    if (c.configuredMinWidth > 0)
+                        split.minimumInspectorColumnWidth = (CGFloat)c.configuredMinWidth;
+                    if (c.configuredMaxWidth > 0)
+                        split.maximumInspectorColumnWidth = (CGFloat)c.configuredMaxWidth;
+                }
+                if (!c.collapsible) {
+                    zapp_ios_control_unsupported("inspector.collapsible",
+                        "the iOS Inspector column has no user-collapse affordance to gate; "
+                        "programmatic collapse()/expand()/toggle() always work");
                 }
                 // Zapp's materialize starts the Inspector column VISIBLE (unlike the
                 // spike's hidden-by-default assumption), so honor `collapsed` explicitly
@@ -347,7 +404,11 @@ void zapp_ios_inspector_register(void* window, void* inspectorNav, void* content
                         [split hideColumn:UISplitViewControllerColumnInspector];
                     });
                 }
+            } else {
+                warnUnsupportedOnSheetFallback();
             }
+        } else {
+            warnUnsupportedOnSheetFallback();
         }
 
         NSValue* key = [NSValue valueWithPointer:window];

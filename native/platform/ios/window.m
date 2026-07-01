@@ -96,6 +96,15 @@ typedef struct ZappIOSDeferred {
     int32_t inspectorNumericId;  // inspector webview's transport slot
     int32_t inspectorWidth;
     bool    inspectorCollapsed;
+    int32_t inspectorMinWidth;
+    int32_t inspectorMaxWidth;
+    bool    inspectorCollapsible;
+    bool    inspectorResizable;
+    // Optional inspector pane backdrop ("#rrggbb"); paints behind the
+    // transparent inspector webview (the pane analog of the window bg).
+    // Mirrors sidebar_has_bg above.
+    bool    inspector_has_bg;
+    int     inspector_bg_r, inspector_bg_g, inspector_bg_b;
 } ZappIOSDeferred;
 
 #define ZAPP_MAX_DEFERRED 16
@@ -323,7 +332,8 @@ extern void zapp_ios_sidebar_register(void* window, void* split, void* sidebarVC
 extern void zapp_ios_inspector_register(void* window, void* inspectorNav,
                                         void* contentVC, void* contentWebview,
                                         int32_t host_id, int32_t inspector_id,
-                                        int32_t width, bool collapsed);
+                                        int32_t width, int32_t min_width, int32_t max_width,
+                                        bool collapsed, bool collapsible, bool resizable);
 
 static ZappIOSDeferred* zapp_ios_find_deferred(void* handle) {
     if (!handle) return NULL;
@@ -648,7 +658,13 @@ void zapp_ios_materialize_pending_windows(void) {
             inspectorVC = [[ZappIOSPaneViewController alloc] init];
             inspectorVC.windowPtr = (__bridge void*)window;
             inspectorVC.hostSlot  = d->numeric_id;
-            inspectorVC.view.backgroundColor = [UIColor systemBackgroundColor];
+            // Inspector pane backdrop: explicit "#rrggbb" if the app set one,
+            // else the adaptive system background (mirrors the sidebar pane
+            // backdrop above).
+            inspectorVC.view.backgroundColor = d->inspector_has_bg
+                ? [UIColor colorWithRed:d->inspector_bg_r/255.0 green:d->inspector_bg_g/255.0
+                                   blue:d->inspector_bg_b/255.0 alpha:1.0]
+                : [UIColor systemBackgroundColor];
             UINavigationController* inspectorNav =
                 [[UINavigationController alloc] initWithRootViewController:inspectorVC];
 
@@ -705,7 +721,9 @@ void zapp_ios_materialize_pending_windows(void) {
                                         (__bridge void*)contentVC,
                                         (__bridge void*)contentWebviewForInspector,
                                         d->numeric_id, d->inspectorNumericId,
-                                        d->inspectorWidth, d->inspectorCollapsed);
+                                        d->inspectorWidth, d->inspectorMinWidth,
+                                        d->inspectorMaxWidth, d->inspectorCollapsed,
+                                        d->inspectorCollapsible, d->inspectorResizable);
             // Record host→inspector for pane-event fan-out (#713).
             zapp_ios_set_inspector_slot(d->numeric_id, d->inspectorNumericId);
         }
@@ -1003,12 +1021,27 @@ void* darwin_window_create(void* opts) {
         extern int32_t wopts_inspector_numeric_id(void* opts);
         extern int32_t wopts_inspector_width(void* opts);
         extern bool wopts_inspector_collapsed(void* opts);
+        extern int32_t wopts_inspector_min_width(void* opts);
+        extern int32_t wopts_inspector_max_width(void* opts);
+        extern bool wopts_inspector_collapsible(void* opts);
+        extern bool wopts_inspector_can_resize(void* opts);
+        extern const char* wopts_inspector_background_color(void* opts);
         const char* _insUrl = wopts_inspector_url(opts);
         d->hasInspector = (_insUrl && _insUrl[0]);
         d->inspectorUrl = d->hasInspector ? strdup(_insUrl) : NULL;
         d->inspectorNumericId = wopts_inspector_numeric_id(opts);
         d->inspectorWidth = wopts_inspector_width(opts);
         d->inspectorCollapsed = wopts_inspector_collapsed(opts);
+        d->inspectorMinWidth   = wopts_inspector_min_width(opts);
+        d->inspectorMaxWidth   = wopts_inspector_max_width(opts);
+        d->inspectorCollapsible = wopts_inspector_collapsible(opts);
+        d->inspectorResizable  = wopts_inspector_can_resize(opts);
+        const char* ibg = wopts_inspector_background_color(opts);
+        if (ibg && ibg[0] == '#' && strlen(ibg) >= 7 &&
+            sscanf(ibg + 1, "%2x%2x%2x",
+                   &d->inspector_bg_r, &d->inspector_bg_g, &d->inspector_bg_b) == 3) {
+            d->inspector_has_bg = true;
+        }
         extern int wopts_inspectable(void* opts);
         d->inspectable = wopts_inspectable(opts) > 0;
 
