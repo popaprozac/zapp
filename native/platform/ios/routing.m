@@ -11,7 +11,11 @@
 //
 // Deleted from N3a: old push/pop baseline math, router sync, old delegate chain.
 // Deleted in T2: owned-nav fork, iphonenav.m externs, toolbar-apply call in old delegate.
-// The ZappRouteNavDelegate does not apply toolbar items.
+// #771 datum 3: ZappRouteNavDelegate stamps toolbar ITEMS onto the shown VC
+// (zapp_ios_toolbar_stamp_vc at willShow/didShow); bar VISIBILITY stays
+// willShow-owned. Defs-as-truth — the displayed VC always carries the entry's
+// current UIBarButtonItem instances, so darwin_toolbar_update_item patches
+// what is actually on screen.
 //
 // Kept verbatim: ZappRouteVC @interface/@implementation, zapp_route_vc_teardown,
 // and all externs the seam still needs.
@@ -167,6 +171,9 @@ static UINavigationController* zapp_route_content_nav(void* win) {
 // trigger a metrics re-inject after the bar appears/disappears (same as the
 // comment in toolbar.m's zapp_toolbar_inject_metrics header).
 extern void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_user_script);
+// #771 datum 3: stamp the window's toolbar defs onto the VC being shown
+// (defined in ios/toolbar.m).
+extern void zapp_ios_toolbar_stamp_vc(void* window_ptr, UIViewController* vc);
 
 @interface ZappRouteNavDelegate : NSObject <UINavigationControllerDelegate>
 @property (nonatomic, assign) int32_t windowId;
@@ -243,6 +250,14 @@ extern void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, boo
             });
         }
     }
+
+    // #771 datum 3 (structural): stamp the window's toolbar defs onto the VC
+    // being shown. UIKit mutates viewControllers before this delegate fires,
+    // so the incoming VC gets the CURRENT item instances during the
+    // transition — and the revealed content VC gets them back after a pop
+    // (this is what killed the old generation mismatch: a pop used to reveal
+    // a bar holding instances that updateItem no longer patched).
+    if (showBar && win) zapp_ios_toolbar_stamp_vc(win, vc);
 }
 
 - (void)navigationController:(UINavigationController*)nav
@@ -277,6 +292,19 @@ extern void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, boo
         // zapp_router_pop_from_native pops routerstate + emits ROUTE_CHANGED.
         // It does NOT call any native op (loop broken).
         zapp_router_pop_from_native(self.windowId);
+    }
+
+    // #771 datum 3: re-stamp after the transition settles — covers cancelled
+    // interactive swipes (willShow fired for a VC that never landed; didShow
+    // always reports the real top) and guarantees the displayed bar holds the
+    // instances darwin_toolbar_update_item patches.
+    void* winPtr = darwin_window_get_by_numeric_id(self.windowId);
+    if (winPtr) {
+        UIViewController* shownContentVC = zapp_ios_content_vc_for_window(winPtr);
+        BOOL shownIsContent = (shownContentVC && vc == shownContentVC);
+        BOOL shownIsRoute = [vc isKindOfClass:[ZappRouteVC class]];
+        if (shownIsContent || shownIsRoute)
+            zapp_ios_toolbar_stamp_vc(winPtr, vc);
     }
 }
 @end
@@ -395,12 +423,9 @@ void zapp_ios_push_route_vc(int32_t windowId, const char* url) {
         zapp_ios_register_webview(win, (__bridge void*)savedContentWebview);
     }
 
-    // Don't force-stamp toolbar items at push time. The app sets items via
-    // toolbar:setItems → darwin_toolbar_set_items → zapp_ios_toolbar_apply_to_nav,
-    // which targets nav.topViewController. After this push, the route VC becomes
-    // topViewController → the next setItems call will reach it automatically.
-    // Stamping at push would apply stale items from the content VC, not the
-    // route-specific items.
+    // Toolbar items are stamped by the nav delegate (zapp_ios_toolbar_stamp_vc
+    // at willShow/didShow) — defs-as-truth, displayed-VC stamping. Nothing to
+    // do at push time.
 
     [nav pushViewController:vc animated:YES];
 }

@@ -453,6 +453,33 @@ static UIMenu* zapp_ios_build_uimenu(NSArray* items) {
     return [UIMenu menuWithTitle:@"" children:children];
 }
 
+// ─── zapp_ios_toolbar_stamp_items (internal) ─────────────────────────────────
+//
+// #771 datum 3 (structural): the single place item buckets are written onto a
+// navigationItem. Every apply path funnels here so the DISPLAYED VC always
+// carries the entry's CURRENT UIBarButtonItem instances — there is no longer a
+// "generation" of items left behind on a hidden VC.
+static void zapp_ios_toolbar_stamp_items(UIViewController* vc,
+                                         ZappIOSToolbarEntry* entry,
+                                         BOOL includeToggleSidebar) {
+    if (!vc || !entry) return;
+    NSArray<UIBarButtonItem*>* leading = includeToggleSidebar
+        ? entry.leadingItems
+        : entry.leadingNoToggle;
+    // Keep the system back button when items are stamped onto a pushed VC
+    // (a non-nil leftBarButtonItems otherwise suppresses it).
+    vc.navigationItem.leftItemsSupplementBackButton = YES;
+    vc.navigationItem.leftBarButtonItems  = leading ?: @[];
+    vc.navigationItem.rightBarButtonItems = entry.trailingItems ?: @[];
+    // E2 / #779 collapsible→enabled wiring (live read at stamp time).
+    entry.toggleSidebarButton.enabled =
+        zapp_ios_sidebar_is_collapsible_for_window(entry.windowPtr);
+    entry.toggleInspectorButton.enabled =
+        zapp_ios_inspector_is_collapsible_for_window(entry.windowPtr);
+    vc.navigationItem.title = entry.centerTitle;       // nil clears it
+    vc.navigationItem.titleView = entry.centerView;    // nil clears it
+}
+
 // ─── zapp_ios_toolbar_apply_to_nav (internal helper) ─────────────────────────
 //
 // Assigns the stored leading/trailing/center buckets from `entry` to the given
@@ -476,43 +503,10 @@ static void zapp_ios_toolbar_apply_to_nav(UINavigationController* nav,
             (int)entry.hostSlot, (__bridge void*)nav, (__bridge void*)vc);
     fflush(stderr);
 
-    NSArray<UIBarButtonItem*>* leading = includeToggleSidebar
-        ? entry.leadingItems
-        : entry.leadingNoToggle;
-    // Keep the system back button when items are stamped onto a pushed VC.
-    // Without this, assigning leftBarButtonItems replaces UIKit's automatic
-    // back button (UIKit doc: a non-nil leftBarButtonItems suppresses it).
-    vc.navigationItem.leftItemsSupplementBackButton = YES;
-    vc.navigationItem.leftBarButtonItems  = leading ?: @[];
-    vc.navigationItem.rightBarButtonItems = entry.trailingItems ?: @[];
+    zapp_ios_toolbar_stamp_items(vc, entry, includeToggleSidebar);
 
-    // E2 (collapsible affordance parity): grey our toggleSidebar button when
-    // the sidebar is non-collapsible — macOS greys its system toggle via
-    // AppKit validation; UIKit has no validation pass, so set enabled here,
-    // from the same live-at-apply-time state family as the inclusion read
-    // (zapp_ios_split_display_mode_is_secondary_only). Inclusion and
-    // enablement are orthogonal: inclusion de-dups against UIKit's system
-    // reveal button; enabled gates interactivity when ours IS shown.
-    // nil-safe: no toggle item, or no sidebar registered (helper returns
-    // true), leaves everything as-is.
-    entry.toggleSidebarButton.enabled =
-        zapp_ios_sidebar_is_collapsible_for_window(entry.windowPtr);
-
-    // #779 (inspector collapsible affordance parity): same mechanism, sibling
-    // button — grey our toggleInspector button when the inspector is
-    // non-collapsible. toggleInspector has no inclusion/de-dup logic (no
-    // system inspector-reveal button to collide with), so this is the only
-    // gate on it. nil-safe: no toggle item, or no inspector registered
-    // (helper returns true), leaves everything as-is.
-    entry.toggleInspectorButton.enabled =
-        zapp_ios_inspector_is_collapsible_for_window(entry.windowPtr);
-
-    vc.navigationItem.title = entry.centerTitle;       // nil clears it
-    vc.navigationItem.titleView = entry.centerView;    // nil clears it
-
-    // Bar visibility is now owned exclusively by ZappRouteNavDelegate's
-    // willShowViewController: (routing.m Fix 1). Do NOT touch navigationBarHidden
-    // here — any write here would race with the delegate and cause drift.
+    // Bar visibility is owned exclusively by ZappRouteNavDelegate's
+    // willShowViewController: (routing.m). Do NOT touch navigationBarHidden here.
 }
 
 // ─── darwin_toolbar_set_items ────────────────────────────────────────────────
@@ -991,22 +985,9 @@ void zapp_ios_toolbar_apply_for_window_hidden(void* window_ptr, BOOL sidebarHidd
         // the combined collapsed stack, making topViewController unreliable here).
         UIViewController* contentVC = zapp_ios_content_vc_for_window(window_ptr);
         if (contentVC) {
-            NSArray<UIBarButtonItem*>* leading = entry.leadingItems; // include toggleSidebar
-            contentVC.navigationItem.leftItemsSupplementBackButton = YES;
-            contentVC.navigationItem.leftBarButtonItems  = leading ?: @[];
-            contentVC.navigationItem.rightBarButtonItems = entry.trailingItems ?: @[];
-            // E2: same collapsible→enabled wiring as zapp_ios_toolbar_apply_to_nav
-            // (this path assigns items directly, bypassing that helper). The
-            // collapsed path always includes the toggle, so the disabled render
-            // is the only non-collapsible affordance cue on iPhone.
-            entry.toggleSidebarButton.enabled =
-                zapp_ios_sidebar_is_collapsible_for_window(window_ptr);
-            // #779: same collapsible→enabled wiring, sibling button — the
-            // collapsed path applies items directly, bypassing apply_to_nav.
-            entry.toggleInspectorButton.enabled =
-                zapp_ios_inspector_is_collapsible_for_window(window_ptr);
-            contentVC.navigationItem.title = entry.centerTitle;       // nil clears it
-            contentVC.navigationItem.titleView = entry.centerView;    // nil clears it
+            // Collapsed always includes the manual toggleSidebar (UIKit shows
+            // no system reveal button in compact).
+            zapp_ios_toolbar_stamp_items(contentVC, entry, YES);
         }
 
         // Bar visibility on the collapsed nav is now owned exclusively by
@@ -1058,6 +1039,27 @@ void zapp_ios_toolbar_apply_for_window(void* window_ptr) {
     // Read the live sidebar-hidden state and delegate to the explicit-state variant.
     BOOL sidebarHidden = zapp_ios_sidebar_is_hidden_for_window(window_ptr);
     zapp_ios_toolbar_apply_for_window_hidden(window_ptr, sidebarHidden);
+}
+
+// ─── zapp_ios_toolbar_stamp_vc ───────────────────────────────────────────────
+//
+// #771 datum 3: stamp the window's registered toolbar onto a SPECIFIC VC —
+// called by ZappRouteNavDelegate (routing.m) at willShow/didShow so the VC
+// being shown always receives the entry's current item instances (content VC
+// after a pop, route VC at push). The include-toggle decision is the same
+// live-state read set_items uses. Main thread only.
+void zapp_ios_toolbar_stamp_vc(void* window_ptr, UIViewController* vc) {
+    if (!window_ptr || !vc || !zapp_ios_toolbars) return;
+    NSCAssert([NSThread isMainThread],
+              @"zapp_ios_toolbar_stamp_vc must be called on the main thread");
+    NSValue* key = [NSValue valueWithPointer:window_ptr];
+    ZappIOSToolbarEntry* entry = zapp_ios_toolbars[key];
+    if (!entry) return;
+    BOOL collapsed = zapp_ios_split_is_collapsed_for_window(window_ptr);
+    BOOL includeToggle = collapsed
+        ? YES
+        : !zapp_ios_split_display_mode_is_secondary_only(window_ptr);
+    zapp_ios_toolbar_stamp_items(vc, entry, includeToggle);
 }
 
 // ─── darwin_toolbar_update_item ──────────────────────────────────────────────
