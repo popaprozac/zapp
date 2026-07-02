@@ -304,6 +304,13 @@ static NSMutableDictionary<NSValue*, ZappToolbarController*>* zapp_toolbars = ni
                 group.label = groupLabel;
                 group.paletteLabel = groupLabel;
             }
+            // #744 completion: in icon-only toolbar display mode, AppKit
+            // renders the collapsed group's IMAGE, not its label — `label`
+            // (above) alone still leaves a blank button body. Only set when
+            // the def carries a non-empty top-level `icon`; unlabeled/
+            // unimaged groups keep prior (blank) behavior.
+            NSString* groupIcon = [def[@"icon"] isKindOfClass:[NSString class]] ? def[@"icon"] : @"";
+            if (groupIcon.length) group.image = zapp_resolve_icon(groupIcon, 18.0, 1);
             NSString* repr = [def[@"controlRepresentation"] isKindOfClass:[NSString class]] ? def[@"controlRepresentation"] : @"automatic";
             group.controlRepresentation = [repr isEqualToString:@"expanded"] ? NSToolbarItemGroupControlRepresentationExpanded
                 : ([repr isEqualToString:@"collapsed"] ? NSToolbarItemGroupControlRepresentationCollapsed : NSToolbarItemGroupControlRepresentationAutomatic);

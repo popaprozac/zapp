@@ -116,11 +116,11 @@ describe("applyToolbarConventions", () => {
 
   test("#744: segmented top-level label passes through to the wire item", () => {
     const { json } = normalizeToolbar(
-      { items: [ { type: "segmented", id: "fmt", label: "Format", segments: [{ id: "bold", icon: "sf:bold" }] } as any ] },
+      { items: [ { type: "segmented", id: "fmt", label: "Format", icon: "sf:textformat", segments: [{ id: "bold", icon: "sf:bold" }] } as any ] },
       false, false,
     );
     const wire = JSON.parse(json);
-    expect(wire.items[0]).toMatchObject({ type: "segmented", id: "fmt", label: "Format" });
+    expect(wire.items[0]).toMatchObject({ type: "segmented", id: "fmt", label: "Format", icon: "sf:textformat" });
   });
 
   test("#744: segmented item without a top-level label omits it from the wire", () => {
@@ -130,6 +130,7 @@ describe("applyToolbarConventions", () => {
     );
     const wire = JSON.parse(json);
     expect(wire.items[0]).not.toHaveProperty("label");
+    expect(wire.items[0]).not.toHaveProperty("icon");
   });
 });
 

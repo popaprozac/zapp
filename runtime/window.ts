@@ -393,6 +393,9 @@ export interface ToolbarSegmentedDef {
    *  for icon-only groups (an unlabeled collapsed group renders a blank
    *  chevron button). Omit → unlabeled (prior behavior). */
   label?: string;
+  /** Group icon (`sf:`/path/data-URL) — renders the collapsed pull-down
+   *  button body in icon-only toolbars (pair with `label`). */
+  icon?: string;
   /** The segments of the control. label OR icon each. */
   segments: ToolbarSegmentDef[];
   /** Selection behavior. Default "momentary". */
@@ -987,6 +990,7 @@ export function normalizeToolbar(
       const seg: Record<string, unknown> = { type: "segmented", id: it.id, segments: wireSegs,
         selectionMode: it.selectionMode ?? "momentary", selected: selectedToWire(it.selected) };
       if (it.label !== undefined) seg.label = it.label;
+      if (it.icon !== undefined) seg.icon = it.icon;
       if (it.controlRepresentation !== undefined) seg.controlRepresentation = it.controlRepresentation;
       seg.placement = placement;
       items.push(seg);

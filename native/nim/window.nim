@@ -464,6 +464,11 @@ proc serializeToolbar*(t: ToolbarOptions): string =
       # #744 residual: top-level group label (names the collapsed chevron +
       # customization palette) — distinct from per-segment `label` (above).
       if it.label.len > 0: w["label"] = %it.label
+      # #744 completion: top-level group icon — renders the collapsed
+      # pull-down BUTTON BODY in icon-only toolbars (AppKit shows the
+      # collapsed group's image, not its label). Distinct from per-segment
+      # `icon` (above). Parse-side already generic (line ~555): no change needed.
+      if it.icon.len > 0: w["icon"] = %it.icon
       if it.controlRepresentation != ToolbarControlRepresentation.Automatic:
         w["controlRepresentation"] = %($it.controlRepresentation)
       items.add(w)

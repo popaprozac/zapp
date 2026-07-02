@@ -126,6 +126,7 @@ export function shellToolbar(): ToolbarItemDef[] {
       type: "segmented",
       id: "fmt",
       label: "Format",
+      icon: "sf:textformat",
       placement: "center",
       selectionMode: "momentary",
       segments: [

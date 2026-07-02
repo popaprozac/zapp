@@ -244,11 +244,11 @@ block:
   doAssert root["items"][0]["segments"][0]["icon"].getStr == "sf:square.grid.2x2"
 
 block:
-  # #744 residual: segmented top-level `label` (collapsed chevron + palette
-  # name — distinct from per-segment `label`) round-trips through
-  # parseToolbarJson(serializeToolbar(t)).
+  # #744 residual/completion: segmented top-level `label` + `icon` (collapsed
+  # chevron/pull-down button + palette name — distinct from per-segment
+  # `label`/`icon`) round-trip through parseToolbarJson(serializeToolbar(t)).
   let t = ToolbarOptions(style: ToolbarStyle.Unified, items: @[
-    ToolbarItemOpt(`type`: "segmented", id: "fmt", label: "Format",
+    ToolbarItemOpt(`type`: "segmented", id: "fmt", label: "Format", icon: "sf:textformat",
       selectionMode: ToolbarGroupSelectionMode.Momentary, selected: @[],
       segments: @[
         ToolbarSegmentOpt(id: "bold", icon: "sf:bold", enabled: true),
@@ -256,9 +256,11 @@ block:
   ])
   let s = serializeToolbar(t)
   doAssert "\"label\":\"Format\"" in s, "segmented top-level label must serialize"
-  doAssert parseToolbarJson(s) == t, "parse(serialize(t)) must round-trip segmented top-level label"
+  doAssert "\"icon\":\"sf:textformat\"" in s, "segmented top-level icon must serialize"
+  doAssert parseToolbarJson(s) == t, "parse(serialize(t)) must round-trip segmented top-level label + icon"
   let root = parseJson(s)
   doAssert root["items"][0]["label"].getStr == "Format"
+  doAssert root["items"][0]["icon"].getStr == "sf:textformat"
 
 block:
   # plain group round-trips (grouping), including bordered:false sub-item
