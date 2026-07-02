@@ -54,6 +54,8 @@ extern void zapp_ios_edge_pin_update(BOOL isRegular,
 // zapp_ios_register_webview: writes a webview into the UIWindow-keyed host slot.
 extern WKWebView* zapp_ios_content_webview_for_slot(int32_t slot);
 extern void zapp_ios_register_webview(void* window_ptr, void* webview_ptr);
+// #771 new-issue A: retarget the app-wide drag-drop webview (ios/webview.m).
+extern void zapp_ios_set_drop_webview(void* webview_ptr);
 
 // Chrome-agnostic content-VC resolution (owned-nav fork deleted in T2).
 // sidebar.m: the authoritative secondary-column content VC stored at register
@@ -83,6 +85,10 @@ extern int32_t zapp_ios_inspector_slot_for(int32_t host_slot);
 @property (nonatomic, strong) NSLayoutConstraint* leadingSafe;
 @property (nonatomic, strong) NSLayoutConstraint* trailingFull;
 @property (nonatomic, strong) NSLayoutConstraint* trailingSafe;
+// #771 new-issue B: set by zapp_route_vc_teardown so the explicit teardown in
+// zapp_ios_pop_to_content and the viewDidDisappear: self-teardown can both
+// fire in any order without double-running the brk-1 sequence.
+@property (nonatomic, assign) BOOL tornDown;
 @end
 
 // Forward declaration of the teardown helper — defined below; referenced from
@@ -129,6 +135,8 @@ static void zapp_route_vc_teardown(ZappRouteVC* vc);
 // stopLoading + nil delegates + remove the bridge script-message handler before
 // the VC/webview is released. Safe to call once per VC.
 static void zapp_route_vc_teardown(ZappRouteVC* vc) {
+    if (vc.tornDown) return;
+    vc.tornDown = YES;
     WKWebView* wv = vc.webview;
     if (!wv) return;
     [wv stopLoading];
@@ -305,6 +313,14 @@ extern void zapp_ios_toolbar_stamp_vc(void* window_ptr, UIViewController* vc);
         BOOL shownIsRoute = [vc isKindOfClass:[ZappRouteVC class]];
         if (shownIsContent || shownIsRoute)
             zapp_ios_toolbar_stamp_vc(winPtr, vc);
+
+        // #771 new-issue A: system drag-drop targets the webview of the VC
+        // now on screen — the route VC's own webview after a push, the
+        // window's content webview after a pop to content.
+        WKWebView* dropWv = nil;
+        if (shownIsRoute)        dropWv = ((ZappRouteVC*)vc).webview;
+        else if (shownIsContent) dropWv = zapp_ios_content_webview_for_slot(self.windowId);
+        if (dropWv) zapp_ios_set_drop_webview((__bridge void*)dropWv);
     }
 }
 @end
@@ -459,6 +475,21 @@ void zapp_ios_pop_to_content(int32_t windowId) {
             (int)windowId, (__bridge void*)contentVC,
             (unsigned long)nav.viewControllers.count, (int)containsContent);
     fflush(stderr);
-    if (containsContent)
+    if (containsContent) {
+        // #771 new-issue B: popToViewController: removes COVERED route VCs
+        // (depth ≥ 2) without a moving-from-parent viewDidDisappear:, so their
+        // self-teardown never runs — "zapp" handlers stay registered, zombie
+        // bridges accumulate. Collect every route VC above the content VC
+        // first, pop, then tear each down explicitly (idempotent via the
+        // tornDown flag — the topmost VC's own viewDidDisappear: may also fire).
+        NSMutableArray<ZappRouteVC*>* covered = [NSMutableArray array];
+        NSUInteger contentIdx = [nav.viewControllers indexOfObject:contentVC];
+        for (NSUInteger i = contentIdx + 1; i < nav.viewControllers.count; i++) {
+            UIViewController* v = nav.viewControllers[i];
+            if ([v isKindOfClass:[ZappRouteVC class]])
+                [covered addObject:(ZappRouteVC*)v];
+        }
         [nav popToViewController:contentVC animated:NO];
+        for (ZappRouteVC* v in covered) zapp_route_vc_teardown(v);
+    }
 }

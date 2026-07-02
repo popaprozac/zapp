@@ -1067,6 +1067,15 @@ void darwin_webview_create_ext(void* window_ptr, bool inspectable, bool accept_f
     zapp_ios_register_webview(window_ptr, (__bridge void*)webview);
 }
 
+// #771 new-issue A: every create_ext retargets the app-wide drop webview at
+// the newest webview and teardown never restored it — after a route push the
+// system drag-drop targeted the route webview, and after a pop a TORN-DOWN
+// one. routing.m retargets on every nav transition via this setter (the
+// underlying global is static to this file).
+void zapp_ios_set_drop_webview(void* webview_ptr) {
+    zapp_ios_drop_webview = (__bridge WKWebView*)webview_ptr;
+}
+
 // Legacy entry point — delegates to the ext path with pane params at their
 // no-op defaults, so the single-pane behavior is byte-for-byte equivalent.
 // Matches the macOS signature so app.zc can call into it the same way.
