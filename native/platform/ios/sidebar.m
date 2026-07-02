@@ -158,28 +158,43 @@ static NSMutableDictionary<NSValue*, ZappIOSSidebarController*>* zapp_ios_sideba
 // Always doubleColumn now (no tripleColumn) — content is the permanent
 // Secondary column; the iOS-26 Inspector column is a separate, orthogonal
 // column that this helper does NOT govern (see ios/inspector.m).
+//
+// #721: the pair assignment is wrapped in a UIView animation block so UIKit
+// animates the tile<->overlay column transition instead of snapping cold
+// (the human smoke: "overlay = instant disappear, no animation"). The
+// iOS16+ showColumn:Primary tile-recipe call below stays OUTSIDE that block,
+// exactly where it sat before this change — showColumn:/hideColumn: are
+// already animated by UIKit itself, so nesting that call inside our block
+// too would double-animate the same transition.
 static void zapp_ios_apply_presentation(UISplitViewController* svc, NSString* mode) {
     if (!svc) return;
-    if ([mode isEqualToString:@"overlay"]) {
-        svc.preferredSplitBehavior = UISplitViewControllerSplitBehaviorOverlay;
-        svc.preferredDisplayMode  = UISplitViewControllerDisplayModeSecondaryOnly;
-    } else if ([mode isEqualToString:@"tile"]) {
-        // WWDC canonical tile recipe: both flags, applied together.
-        svc.preferredSplitBehavior = UISplitViewControllerSplitBehaviorTile;
-        svc.preferredDisplayMode = UISplitViewControllerDisplayModeOneBesideSecondary;
+    BOOL isTile = [mode isEqualToString:@"tile"];
+    [UIView animateWithDuration:0.25 delay:0 options:UIViewAnimationOptionCurveEaseInOut animations:^{
+        if ([mode isEqualToString:@"overlay"]) {
+            svc.preferredSplitBehavior = UISplitViewControllerSplitBehaviorOverlay;
+            svc.preferredDisplayMode  = UISplitViewControllerDisplayModeSecondaryOnly;
+        } else if (isTile) {
+            // WWDC canonical tile recipe: both flags, applied together.
+            svc.preferredSplitBehavior = UISplitViewControllerSplitBehaviorTile;
+            svc.preferredDisplayMode = UISplitViewControllerDisplayModeOneBesideSecondary;
+        } else {
+            // "automatic" / nil / empty — let UIKit adapt (tile-landscape,
+            // overlay-portrait, collapse-compact). This is the Mail/Notes default.
+            svc.preferredSplitBehavior = UISplitViewControllerSplitBehaviorAutomatic;
+            svc.preferredDisplayMode = UISplitViewControllerDisplayModeAutomatic;
+        }
+        [svc.view layoutIfNeeded];
+    } completion:nil];
+    if (isTile) {
         // iOS 16+: showColumn:Primary clears any outstanding hideColumn override
         // so the primary column is forced BESIDE the secondary (true tile). Without
         // this, if the split's resolved column state is "primary hidden" (e.g. the
         // overlay/summon state), UIKit ignores preferredDisplayMode and the sidebar
-        // stays an overlay regardless of the behavior/displayMode pair.
+        // stays an overlay regardless of the behavior/displayMode pair. Kept OUTSIDE
+        // the animation block above (#721) — see the header comment.
         if (@available(iOS 16.0, *)) {
             [svc showColumn:UISplitViewControllerColumnPrimary];
         }
-    } else {
-        // "automatic" / nil / empty — let UIKit adapt (tile-landscape,
-        // overlay-portrait, collapse-compact). This is the Mail/Notes default.
-        svc.preferredSplitBehavior = UISplitViewControllerSplitBehaviorAutomatic;
-        svc.preferredDisplayMode = UISplitViewControllerDisplayModeAutomatic;
     }
 }
 
