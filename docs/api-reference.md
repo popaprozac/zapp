@@ -735,7 +735,7 @@ const win = await Window.create({
     collapsible: true,      // system collapse gestures allowed (default true)
     collapsed: false,       // start collapsed (default false)
     resizable: true,        // user can drag the divider (default true; false locks at `width`)
-    presentation: "tile",   // "tile" (default) | "overlay" — see below
+    presentation: "tile",   // "tile" | "overlay" — omit for the platform default, see below
     backgroundColor: "#1e1e1e",  // solid backdrop (optional; `material` wins if both set)
     material: Material.Sidebar,  // background material (default Material.Sidebar)
   },
@@ -753,7 +753,7 @@ const win = await Window.create({
 | `collapsible` | `boolean` | `true` |
 | `collapsed` | `boolean` | `false` |
 | `resizable` | `boolean` | `true` |
-| `presentation` | `"tile" \| "overlay"` | `"tile"` |
+| `presentation` | `"tile" \| "overlay"` | platform default (see below) |
 | `backgroundColor` | `string` | — (material) |
 | `material` | `Material` | `Material.Sidebar` |
 
@@ -769,22 +769,38 @@ ignores alpha on opaque windows). Invalid colors are ignored with a
 create-time.
 
 **`presentation`** controls the sidebar split behavior on iPad-regular (maps to
-`UISplitViewController.preferredSplitBehavior`):
+`UISplitViewController.preferredSplitBehavior`). **It is iOS/iPadOS-only.**
+`NSSplitViewController` on macOS always tiles the sidebar (slide-in collapse,
+never a floating overlay) — the option is accepted in the config but silently
+ignored there. This is deliberate, by-design macOS behavior, not a gap
+(closes #646).
 
-- `"tile"` *(default)* — sidebar sits beside content; both columns are always
+- `"tile"` — sidebar sits beside content; both columns are always
   on screen. Equivalent to `UISplitBehaviorTile`.
 - `"overlay"` — sidebar floats over the content as a flyout and dismisses on an
   outside tap. Equivalent to `UISplitBehaviorOverlay`. Useful for transient
   navigation panels that should not permanently reduce the content area.
 
+**Per-platform default when `presentation` is omitted (#621):**
+
+| Platform | Default | Notes |
+|---|---|---|
+| macOS | tile (always) | The only supported mode — see above. |
+| iOS/iPadOS | automatic | UIKit chooses tile vs. overlay by context (available width, orientation) — the Mail/Notes default. Pass `"tile"` or `"overlay"` explicitly to pin one. |
+
 **Platform matrix for `presentation`:**
 
 | Platform | Effect |
 |---|---|
-| iPad-regular | `tile` or `overlay` as specified |
+| iPad-regular | `tile` or `overlay` as specified; omitted → automatic (table above) |
 | iPhone-compact | no-op — the split always collapses to a master-detail nav stack regardless of this option |
-| macOS | no-op — `NSSplitViewController` tiles only; sidebar stays tiled-collapsible |
+| macOS | no-op — `NSSplitViewController` tiles only; sidebar stays tiled-collapsible (by design, #646) |
 | Windows | no-op — sidebar not implemented |
+
+Tile↔overlay presentation changes — from the create-time value, a
+`setPresentation` call, or a size-class transition re-applying the stored
+mode — now **animate** on iOS: UIKit eases the column transition instead of
+snapping cold (#721).
 
 > **iOS drag regions.** `data-zapp-drag-region` elements are inert on iOS —
 > iOS windows are not user-draggable.
@@ -899,6 +915,9 @@ win.sidebar?.setWidth(220)      // programmatic resize
 
 win.sidebar?.setCollapsible(false)  // disallow user collapse (programmatic toggle still works)
 win.sidebar?.setResizable(false)    // lock the width — divider no longer drags
+// `collapsible`/`resizable` have no getter or change event (unlike `collapsed`/
+// `width` below) — they are set-only. If your UI needs to reflect current
+// state (e.g. a toggle button's label), track what you last set yourself.
 
 win.sidebar?.showContent()      // iPhone master-detail: reveal the content column (no-op on macOS/iPad)
 win.sidebar?.showSidebar()      // iPhone master-detail: go back to the sidebar list (no-op on macOS/iPad)
@@ -956,6 +975,13 @@ if (Window.isSidebar()) {
 user-chosen width. Inside the sidebar itself, the DOM `resize` event and
 `window.innerWidth` already track the divider in real time — you don't
 need the event there.
+
+On iPadOS, a user divider drag now streams **live** `SIDEBAR_RESIZED` events
+during the drag itself, not just the terminal width on release — coalesced to
+at most one emit per runloop tick and deduped on the settled width (#720).
+`setWidth(px)` called programmatically emits once for the requested value; if
+the request falls outside `minWidth`/`maxWidth` and UIKit clamps it, a second
+correction event follows with the actual (clamped) width once layout settles.
 
 ```ts
 win.on(WindowEvent.SIDEBAR_RESIZED, ({ width }) => {
@@ -1090,7 +1116,7 @@ no size-class notion.
 | `setCollapsible(...)` | disallows/allows user collapse | no-op (collapse is size-class–driven) |
 | `setResizable(...)` | locks/unlocks the divider | no-op (no draggable divider) |
 | `setWidth(px)` | authoritative — moves the real divider | authoritative when `resizable:false`; applies until user drags when `resizable:true` (see note below) |
-| `presentation` / `setPresentation` | **ignored** — macOS always tiles | iOS/iPadOS-only: `"automatic"`, `"tile"`, `"overlay"` |
+| `presentation` / `setPresentation` | **ignored** — macOS always tiles | iOS/iPadOS-only: `"automatic"`, `"tile"`, `"overlay"`; tile↔overlay transitions animate (#721) |
 | Native toolbar (`toggleSidebar`, back chevron) | full NSToolbar | none — app renders its own back control (future cycle) |
 | Back navigation | divider / toolbar toggle | in-page control + system edge-swipe |
 
@@ -1144,6 +1170,17 @@ Presentation is automatic on iOS — there is no app-facing option to force
 push-vs-sheet; the OS decides based on the split's column state and iOS
 version.
 
+**No-sidebar windows (iOS 26+).** A window that declares an `inspector` but
+no `sidebar` used to always fall back to the modal sheet — there was no split
+for the Inspector column to attach to. On iOS 26+, these windows now get a
+hidden, permanently-collapsed split built purely to host the column, so they
+get the SAME native Inspector-column behavior as sidebar-bearing windows: a
+tiled column on iPad, an auto-presented sheet on iPhone. No sidebar
+affordances are ever shown (no edge-swipe reveal, no system reveal button) —
+it's inspector-only chrome. Below iOS 26 the modal-sheet fallback is
+unchanged (there is no `UISplitViewControllerColumnInspector` API to attach
+to).
+
 - `setWidth(px)`, `minWidth`/`maxWidth`, and `setResizable(bool)` are honored
   on the iOS 26+ column (`preferredInspectorColumnWidth` /
   `minimumInspectorColumnWidth` / `maximumInspectorColumnWidth`).
@@ -1157,6 +1194,11 @@ version.
   **double-tap the divider** to snap the column to it — and
   `resizable: false` remains authoritative when programmatic control is
   required.
+- Live `INSPECTOR_RESIZED` events stream during a user divider drag on
+  iPadOS the same way `SIDEBAR_RESIZED` does — coalesced to at most one emit
+  per runloop tick and deduped on the settled width, with a clamp-correction
+  follow-up event when a programmatic `setWidth(px)` lands outside
+  `minWidth`/`maxWidth` (#720).
 - Below iOS 26 (or without a sidebar split) the inspector is a modal sheet
   with no divider — `width`/`minWidth`/`maxWidth` are inert there (silently:
   they always carry the framework defaults), while `setWidth` /
@@ -1259,9 +1301,10 @@ prefixes reserved, duplicates are an error), take an `icon`
 `action` callback. Buttons also take `enabled?: boolean` (default `true`; greyed out and
 unclickable when `false`) and — on menu buttons — `indicator?: boolean`
 (default `true`; `false` hides the pull-down chevron, the Messages-app
-look). System types: `toggleSidebar`, `trackingSeparator`
-(both require the window to have a `sidebar` — warned and dropped
-otherwise), `space`, `flexibleSpace`.
+look). System types: `toggleSidebar`, `trackingSeparator`, `toggleInspector`
+(`toggleSidebar`/`trackingSeparator` require the window to have a `sidebar`,
+`toggleInspector`/`trackingSeparator` with `pane: "inspector"` require an
+`inspector` — warned and dropped otherwise), `space`, `flexibleSpace`.
 
 **Item placement (macOS).** Every item accepts an optional `placement?:
 "leading" | "center" | "trailing"` field (default `"leading"`). Items are
@@ -1273,8 +1316,9 @@ leading  |  flexibleSpace  |  center  |  flexibleSpace  |  trailing
 
 The two `flexibleSpace` separators are inserted automatically between
 non-empty groups — you do not need to add them manually. Within each group,
-array order is preserved; `space` and `flexibleSpace` items remain usable
-inside a group for fine-grained spacing. Example:
+array order is preserved for your own items (see the native convention
+anchoring below for the four system items); `space` and `flexibleSpace`
+items remain usable inside a group for fine-grained spacing. Example:
 
 ```ts
 { id: "filter", label: "Filter", placement: "trailing" }
@@ -1283,8 +1327,40 @@ inside a group for fine-grained spacing. Example:
 `placement` is structural and cannot be patched via `updateItem` — call
 `win.toolbar.setItems(...)` to move an item between slots.
 
+**Native convention anchoring (system items) — behavior change, pre-1.0.**
+`toggleSidebar`, the sidebar `trackingSeparator`, the inspector
+`trackingSeparator` (`pane: "inspector"`), and `toggleInspector` are no
+longer plain items subject to your declared `placement`/array position — a
+single centralized convention pass anchors them to their native macOS
+position regardless of where you declare them:
+
+- **Leading edge:** `[flexibleSpace, toggleSidebar, trackingSeparator]` — the
+  auto-inserted `flexibleSpace` right-aligns the toggle within the sidebar
+  region (against the divider — the native convention); when the sidebar
+  collapses, the tracking separator collapses with it and the toggle lands
+  statically at the leading edge of the main toolbar, with no reflow code
+  involved.
+- **Trailing edge:** ends with `[trackingSeparator (pane: "inspector"),
+  toggleInspector]`, appended after every other trailing item.
+- Your other (app) items keep their declared `placement` and relative order
+  untouched — only these four system anchors move.
+- Duplicate system items (e.g. two `toggleSidebar` declarations) collapse to
+  one; the first occurrence wins.
+- An app-declared leading `flexibleSpace` immediately adjacent to the
+  injected one is absorbed, so you never get a double gap.
+
+Previously, system items rendered wherever you placed them in the array,
+like any other item — that is no longer the case. This is an intentional,
+native-first, pre-1.0 change (it matches where Mail/Notes/Finder actually
+place their sidebar toggle) and is the designed insertion point for a future
+per-pane/per-route placement-config option, which will feed overrides into
+this same pass rather than bypass it.
+
 On iOS, `placement` maps to the `UINavigationItem` leading/center/trailing
 slots — see "Toolbar (iOS)" below. A `"bottom"` slot is a future follow-up.
+The same convention pass runs before iOS's placement mapping, so the four
+system items are anchored there too (`trackingSeparator` is then dropped —
+see the iOS item-type table).
 
 **Title bar & toolbar layout.** `titleBarStyle` and `trackingSeparator` interact:
 
@@ -1549,7 +1625,7 @@ Two `NSToolbarItemGroup`-backed item types let you cluster related controls:
 | Field | Type | Default | Notes |
 |---|---|---|---|
 | `id` | `string` | required | Same rules as button ids. |
-| `segments` | `SegmentDef[]` | required | At least one. Each segment takes `id?`, `label?`, `icon?` (`sf:…`/data-URL/path), and an `action: () => void` callback. Give each segment a `label` even when using an `icon` — AppKit uses the labels for the collapsed/overflow menu (icon-only segments collapse to a blank menu) and for accessibility. The native right-click "icon only / icon and text" customization is available for free. |
+| `segments` | `SegmentDef[]` | required | At least one. Each segment takes `id?`, `label?`, `icon?` (`sf:…`/data-URL/path), and an `action: () => void` callback. Give each segment a `label` even when using an `icon` — AppKit uses the labels for the collapsed/overflow (`≫`) menu and for accessibility. An icon-only segment without a `label` falls back to its `id` (or its index) in the overflow menu instead of rendering a blank chevron entry (#744) — but a real `label` still reads far better there, and omitting one on an icon-only segment logs a one-time `[zapp] toolbar: icon-only segment … has no "label"` console warning. The native right-click "icon only / icon and text" customization is available for free. |
 | `selectionMode` | `"one"` \| `"any"` \| `"momentary"` | `"momentary"` | `"one"` = radio; `"any"` = multi-select; `"momentary"` = no persistent highlight. |
 | `selected` | `number \| number[]` | none | Initial selection — index for `"one"`, indices array for `"any"`. Ignored for `"momentary"`. |
 | `controlRepresentation` | `"automatic"` \| `"expanded"` \| `"collapsed"` | `"automatic"` | Controls how the group collapses in the overflow menu. |
@@ -1616,7 +1692,10 @@ Clicks inside a `"group"` still fire `TOOLBAR_CLICKED` with the inner button's
 
 **`type: "label"`** — a read-only text string in the toolbar (an
 `NSTextField` hosted in an `NSToolbarItem`). No action, no icon. Useful
-for live status strings.
+for live status strings. In the collapsed/overflow (`≫`) menu it renders as
+**disabled, non-clickable text** (#745) — matching its inert on-toolbar
+behavior, rather than AppKit's default synthesized row, which would
+otherwise look like a normal, clickable menu item.
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
