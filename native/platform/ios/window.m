@@ -309,6 +309,287 @@ extern void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot,
 }
 @end
 
+// ── ZappIOSHiddenPrimarySplitViewController (E3: no-sidebar + inspector) ─────
+//
+// A no-sidebar window WITH an inspector needs a UISplitViewController for the
+// iOS-26 Inspector column to attach to (the column is split-scoped API). The
+// recipe is the spike-proven hidden-Primary doubleColumn split
+// (spikes/ios-splitview-reference/src/AppDelegate.m, SPLITREF_NO_SIDEBAR
+// variant, G1 human-smoked on iPad + iPhone):
+//   • Primary   = an EMPTY plain UIViewController (clear background, never
+//                 nav-wrapped, no content) held permanently hidden.
+//   • Secondary = the content pane (nav-wrapped, bar hidden — no-sidebar
+//                 windows are chrome-less today: toolbar.m and routing.m both
+//                 resolve their navs through the sidebar registry and no-op
+//                 for this shape; native toolbar support here is a future
+//                 cycle).
+//   • preferredDisplayMode SecondaryOnly + presentsWithGesture NO +
+//     showsSecondaryOnlyButton NO ⇒ no user affordance can ever summon the
+//     Primary.
+//
+// This subclass is BOTH the split and its UISplitViewControllerDelegate
+// (materialize sets self.delegate = self). Why not reuse sidebar.m's
+// ZappIOSSidebarController: that delegate assumes a REAL sidebar — it
+// collapses to Primary, emits sidebar-collapsed/-expanded, re-applies
+// toolbars, and registers the window in the sidebar registry (which toolbar/
+// routing nav resolution keys off) — installing it here would activate every
+// sidebar path for a pane that doesn't exist. And why window.m rather than
+// inspector.m: window.m owns split construction for every window shape (and
+// already defines the shape-specific VC subclasses above); inspector.m stays
+// shape-agnostic — it reaches whatever split contentVC lives in via
+// .splitViewController and runs unchanged for both shapes.
+//
+// RETENTION: this object is the window's rootViewController, so the UIWindow
+// strongly retains it for the window's lifetime; UIKit's weak `delegate`
+// back-reference points at self. No registry entry and no unregister path is
+// needed (unlike ZappIOSSidebarController, a separate object that must be
+// dictionary-retained).
+//
+// Delegate duties for this shape:
+//   1. topColumnForCollapsingToProposedTopColumn → Secondary: there is no
+//      sidebar, so compact width MUST land on content (spike commit fdec309).
+//   2. splitViewControllerDidCollapse / viewDidAppear → prune the empty
+//      Primary out of the combined collapsed stack. UIKit collapses
+//      "Secondary on top" by stacking it ABOVE the Primary root — the G1
+//      smoke showed the collapsed nav as [emptyPrimary, content], which grows
+//      a stray native Back button that pops to a blank screen. Filtering the
+//      empty Primary out makes the collapsed stack content-only: nothing
+//      beneath to pop to, by button OR gesture (the bar-hidden content nav
+//      leaves UIKit's interactive-pop disarmed and this shape never re-arms
+//      it the way sidebar.m does). Expansion is unaffected: on
+//      compact→regular UIKit restores columns from its own column registry
+//      (setViewController:forColumn:), not from the collapsed stack, and the
+//      sticky SecondaryOnly mode keeps the Primary hidden regardless.
+//   3. didShowColumn:/didHideColumn: (iOS 26) → forward Inspector-column
+//      visibility to ios/inspector.m's emit hooks. For sidebar windows this
+//      forwarding lives on ZappIOSSidebarController (the split delegate for
+//      that shape); this shape has no sidebar controller, so the split
+//      forwards its own.
+//   4. Content-webview edge model (FU-1 parity) — see
+//      zapp_ios_pin_content_webview_no_sidebar below.
+
+// Defined in ios/inspector.m — the single iOS-26 source for the
+// inspector-expanded/-collapsed emits (same externs sidebar.m declares).
+extern void zapp_ios_inspector_column_did_show(void* window);
+extern void zapp_ios_inspector_column_did_hide(void* window);
+// Defined later in this file (numeric-ID dispatch table).
+extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
+
+@interface ZappIOSHiddenPrimarySplitViewController : UISplitViewController <UISplitViewControllerDelegate>
+// The empty Primary column VC. Strong so the collapsed-stack prune can still
+// recognize it while UIKit shuffles ownership during collapse transitions.
+@property (nonatomic, strong) UIViewController* emptyPrimaryVC;
+@property (nonatomic, assign) int32_t hostWindowId;   // content/host webview slot
+// Content-webview edge constraints — mirror of ZappIOSSidebarController's four
+// stored constraints (see zapp_ios_pin_content_webview_no_sidebar below). All
+// nil until the pin helper populates them.
+@property (nonatomic, weak)   UIView* contentContainer;          // contentVC.view
+@property (nonatomic, strong) NSLayoutConstraint* leadingFull;   // to view.leadingAnchor
+@property (nonatomic, strong) NSLayoutConstraint* leadingSafe;   // to safeAreaLayoutGuide.leadingAnchor
+@property (nonatomic, strong) NSLayoutConstraint* trailingFull;  // to view.trailingAnchor
+@property (nonatomic, strong) NSLayoutConstraint* trailingSafe;  // to safeAreaLayoutGuide.trailingAnchor
+- (void)zapp_updateContentEdges;
+@end
+
+@implementation ZappIOSHiddenPrimarySplitViewController
+
+// Make the collapsed stack CONTENT-ONLY. UIKit's collapse honors our
+// topColumnForCollapsing→Secondary by putting content on TOP, but it roots
+// the combined nav at the (empty, hidden) Primary underneath — which grows a
+// stray native Back button that pops to a blank screen (observed in the G1
+// smoke on iPhone). Remove the empty Primary from every nav stack the split
+// built for the compact presentation. Idempotent and cheap when the stack is
+// already content-only.
+- (void)zapp_pruneEmptyPrimaryFromCollapsedStack {
+    if (!self.isCollapsed || !self.emptyPrimaryVC) return;
+    // Find the combined collapsed nav(s) the same way sidebar.m's
+    // zapp_ios_collapsed_nav does: `viewControllers` holds the single combined
+    // controller while collapsed; childViewControllers is belt-and-suspenders.
+    NSMutableArray<UINavigationController*>* navs = [NSMutableArray array];
+    for (UIViewController* vc in self.viewControllers) {
+        if ([vc isKindOfClass:[UINavigationController class]] &&
+            ![navs containsObject:(UINavigationController*)vc]) {
+            [navs addObject:(UINavigationController*)vc];
+        }
+    }
+    for (UIViewController* vc in self.childViewControllers) {
+        if ([vc isKindOfClass:[UINavigationController class]] &&
+            ![navs containsObject:(UINavigationController*)vc]) {
+            [navs addObject:(UINavigationController*)vc];
+        }
+    }
+    for (UINavigationController* nav in navs) {
+        if (![nav.viewControllers containsObject:self.emptyPrimaryVC]) continue;
+        NSMutableArray<UIViewController*>* stack = [nav.viewControllers mutableCopy];
+        [stack removeObject:self.emptyPrimaryVC];
+        // Never leave an empty stack (would blank the window); with the empty
+        // Primary removed the content root is always still present.
+        if (stack.count > 0) [nav setViewControllers:stack animated:NO];
+    }
+}
+
+// There is no sidebar: compact width must land on the CONTENT column, and the
+// Inspector column auto-sheets on top of it (spike commit fdec309's
+// SPLITREF_NO_SIDEBAR branch — the framework-port semantic it documented).
+- (UISplitViewControllerColumn)splitViewController:(UISplitViewController*)svc
+        topColumnForCollapsingToProposedTopColumn:(UISplitViewControllerColumn)proposedTopColumn {
+    (void)svc; (void)proposedTopColumn;
+    return UISplitViewControllerColumnSecondary;
+}
+
+- (void)splitViewControllerDidCollapse:(UISplitViewController*)svc {
+    (void)svc;
+    [self zapp_pruneEmptyPrimaryFromCollapsedStack];
+}
+
+- (void)viewDidAppear:(BOOL)animated {
+    [super viewDidAppear:animated];
+    // On iPhone the split is created ALREADY collapsed, so
+    // splitViewControllerDidCollapse: may never fire at launch (the same UIKit
+    // quirk sidebar.m documents for its swipe-back re-arm). Prune here too.
+    [self zapp_pruneEmptyPrimaryFromCollapsedStack];
+}
+
+// iOS 26+ column-level visibility notifications (both delegate methods are
+// API_AVAILABLE(ios(26.0)); UIKit never calls them on earlier OSes). Forward
+// Inspector-column changes to ios/inspector.m's emit hooks, keyed by the host
+// UIWindow — mirrors ZappIOSSidebarController's implementation verbatim.
+// Resolve the window via darwin_window_get_by_numeric_id, NOT self.view.window:
+// the launch-time deferred show/hideColumn in zapp_ios_inspector_register can
+// run before a `visible:false` window ever attaches its root view.
+- (void)splitViewController:(UISplitViewController*)svc
+              didShowColumn:(UISplitViewControllerColumn)column {
+    (void)svc;
+    if (@available(iOS 26.0, *)) {
+        if (column != UISplitViewControllerColumnInspector) return;
+        void* winPtr = darwin_window_get_by_numeric_id(self.hostWindowId);
+        if (winPtr) zapp_ios_inspector_column_did_show(winPtr);
+    }
+}
+
+- (void)splitViewController:(UISplitViewController*)svc
+              didHideColumn:(UISplitViewControllerColumn)column {
+    (void)svc;
+    if (@available(iOS 26.0, *)) {
+        if (column != UISplitViewControllerColumnInspector) return;
+        void* winPtr = darwin_window_get_by_numeric_id(self.hostWindowId);
+        if (winPtr) zapp_ios_inspector_column_did_hide(winPtr);
+    }
+}
+
+// Swap the active edge-constraint pair per horizontal size class — the exact
+// logic of sidebar.m's zapp_ios_update_content_edges, on this shape's own
+// stored constraints. Regular (iPad): safeAreaLayoutGuide anchors, tracking
+// the iOS-26 Inspector column's trailing safe-area inset. Compact (iPhone):
+// raw view anchors, full-bleed (notch insets must not shrink content).
+- (void)zapp_updateContentEdges {
+    if (!self.leadingFull || !self.leadingSafe) return;
+    if (!self.trailingFull || !self.trailingSafe) return;
+    BOOL isRegular = (self.traitCollection.horizontalSizeClass
+                      == UIUserInterfaceSizeClassRegular);
+    if (isRegular) {
+        self.leadingFull.active = NO;
+        self.trailingFull.active = NO;
+        self.leadingSafe.active = YES;
+        self.trailingSafe.active = YES;
+    } else {
+        self.leadingSafe.active = NO;
+        self.trailingSafe.active = NO;
+        self.leadingFull.active = YES;
+        self.trailingFull.active = YES;
+    }
+    [self.contentContainer setNeedsLayout];
+    [self.contentContainer layoutIfNeeded];
+}
+
+// Same two re-switch triggers ZappIOSSplitViewController (sidebar.m) uses for
+// the sidebar shape's edge model: trait changes and size transitions (edge
+// update in the coordinator's completion, after traitCollection is final).
+// No presentation re-apply here — unlike the sidebar tile pair, SecondaryOnly
+// is a sticky preferredDisplayMode that survives rotation/multitasking.
+- (void)traitCollectionDidChange:(UITraitCollection*)previousTraitCollection {
+    [super traitCollectionDidChange:previousTraitCollection];
+    [self zapp_updateContentEdges];
+    // App-level THEME_CHANGED (deduped in the helper). The sidebar shape gets
+    // this from ZappIOSSplitViewController, the plain shape from
+    // ZappIOSRootViewController; this split owns it for the hidden-Primary
+    // shape (its contentVC is a plain ZappIOSPaneViewController).
+    extern void zapp_ios_dispatch_theme_if_changed(void);
+    zapp_ios_dispatch_theme_if_changed();
+}
+
+- (void)viewWillTransitionToSize:(CGSize)size
+       withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator {
+    [super viewWillTransitionToSize:size withTransitionCoordinator:coordinator];
+    if (coordinator) {
+        [coordinator animateAlongsideTransition:nil
+                                     completion:^(id<UIViewControllerTransitionCoordinatorContext> ctx) {
+            (void)ctx;
+            [self zapp_updateContentEdges];
+        }];
+    } else {
+        [self zapp_updateContentEdges];
+    }
+}
+
+@end
+
+// ── Content-webview edge pinning for the hidden-Primary shape ────────────────
+//
+// Mirrors sidebar.m's zapp_ios_sidebar_set_content_webview +
+// zapp_ios_update_content_edges (the FU-1 trailing-safe fix) WITHOUT a sidebar
+// registry entry. Why the mirror is needed at all: on iPad regular width UIKit
+// does NOT resize the Secondary column's view for tiled siblings — the view
+// stays the full split width and the iOS-26 Inspector column is expressed as a
+// TRAILING safe-area inset on it, so a webview pinned to the raw view edges
+// bleeds UNDER the inspector. The pin: convert the webview from
+// autoresizingMask (set by webview.m) to explicit Auto Layout, keep top/bottom
+// full-frame, and store leading+trailing constraint PAIRS on the split —
+// safe-area anchors on regular (leading kept symmetric with sidebar.m's model;
+// it resolves to the raw edge when nothing insets it), raw anchors on compact.
+// -zapp_updateContentEdges (above) swaps the active pair at the same three
+// trigger points sidebar.m uses: initial setup here, trait changes, and
+// size-transition completions.
+//
+// Why a window.m helper instead of reusing sidebar.m's function: that function
+// is coupled to the ZappIOSSidebarController registry (keyed lookup, weak
+// contentVC), and registering a phantom sidebar controller for a window with
+// NO sidebar would activate every sidebar code path (toolbar/routing nav
+// resolution, collapse-to-Primary, sidebar emits) for a pane that doesn't
+// exist. Mirroring ~25 lines is the cheaper coupling.
+static void zapp_ios_pin_content_webview_no_sidebar(
+        ZappIOSHiddenPrimarySplitViewController* split,
+        WKWebView* wv, UIView* container) {
+    if (!split || !wv || !container) return;
+
+    wv.translatesAutoresizingMaskIntoConstraints = NO;
+
+    NSLayoutConstraint* leadingFull =
+        [wv.leadingAnchor constraintEqualToAnchor:container.leadingAnchor];
+    NSLayoutConstraint* leadingSafe =
+        [wv.leadingAnchor constraintEqualToAnchor:container.safeAreaLayoutGuide.leadingAnchor];
+    NSLayoutConstraint* trailingFull =
+        [wv.trailingAnchor constraintEqualToAnchor:container.trailingAnchor];
+    NSLayoutConstraint* trailingSafe =
+        [wv.trailingAnchor constraintEqualToAnchor:container.safeAreaLayoutGuide.trailingAnchor];
+
+    // Top / bottom stay full-frame (not safe-area) — same rationale as
+    // sidebar.m: the pane is the visible surface; no top/bottom insets.
+    [NSLayoutConstraint activateConstraints:@[
+        [wv.topAnchor constraintEqualToAnchor:container.topAnchor],
+        [wv.bottomAnchor constraintEqualToAnchor:container.bottomAnchor],
+    ]];
+
+    split.contentContainer = container;
+    split.leadingFull  = leadingFull;
+    split.leadingSafe  = leadingSafe;
+    split.trailingFull = trailingFull;
+    split.trailingSafe = trailingSafe;
+
+    // Activate the correct pair for the current trait.
+    [split zapp_updateContentEdges];
+}
+
 // Implemented in ios/sidebar.m (T3 — chrome-less master-detail). Materialize
 // calls it after setting min/max/preferred column widths but BEFORE creating
 // pane webviews. sidebar.m nav-wraps the columns, installs the delegate, stores
@@ -370,15 +651,18 @@ void zapp_ios_materialize_pending_windows(void) {
             ? [UIColor colorWithRed:d->bg_r/255.0 green:d->bg_g/255.0 blue:d->bg_b/255.0 alpha:1.0]
             : [UIColor systemBackgroundColor];
 
-        // The view controller holding the content webview — either the lone
-        // root VC (no sidebar) or the split's secondary column (sidebar). The
-        // sidebar VC is the split's primary column; nil when there's no sidebar.
+        // The view controller holding the content webview — the lone root VC
+        // (no sidebar, no inspector) or the split's Secondary column (sidebar
+        // windows AND no-sidebar+inspector windows, which get a hidden-Primary
+        // split — E3). The sidebar VC is the split's primary column; nil when
+        // there's no sidebar.
         UIViewController* contentVC = nil;
         UIViewController* sidebarVC = nil;
-        // The split itself (nil for no-sidebar windows). Hoisted to function
-        // scope so the inspector pane block below can attach the persistent
-        // inspector nav to UISplitViewControllerColumnInspector (iOS 26+)
-        // without re-deriving it from window.rootViewController.
+        // The split itself (nil only for plain no-sidebar/no-inspector
+        // windows). Hoisted to function scope so the inspector pane block
+        // below can attach the persistent inspector nav to
+        // UISplitViewControllerColumnInspector (iOS 26+) without re-deriving
+        // it from window.rootViewController.
         UISplitViewController* split = nil;
         // Inspector column VC (UISplitViewControllerColumnInspector, iOS 26+
         // only — orthogonal to the doubleColumn base style, so no tripleColumn
@@ -463,8 +747,75 @@ void zapp_ios_materialize_pending_windows(void) {
             split.view.backgroundColor = bgColor;
 
             window.rootViewController = split;   // BEFORE any webview creation
+        } else if (d->hasInspector) {
+            // E3: no-sidebar window WITH an inspector — hidden-Primary split
+            // so the iOS-26 Inspector column has a split to attach to. Full
+            // recipe + rationale on ZappIOSHiddenPrimarySplitViewController
+            // above. Same re-parenting rule as the sidebar path: the split
+            // MUST be the window's rootViewController BEFORE the content
+            // webview is created.
+            ZappIOSHiddenPrimarySplitViewController* hpSplit =
+                [[ZappIOSHiddenPrimarySplitViewController alloc]
+                    initWithStyle:UISplitViewControllerStyleDoubleColumn];
+            hpSplit.hostWindowId = d->numeric_id;
+            split = hpSplit;
+
+            // Primary: empty plain VC — clear background, never nav-wrapped,
+            // no content. Held permanently hidden (SecondaryOnly below);
+            // retained on the subclass so the collapsed-stack prune can
+            // recognize it (see the class comment's Back-button note).
+            UIViewController* emptyPrimary = [[UIViewController alloc] init];
+            emptyPrimary.view.backgroundColor = [UIColor clearColor];
+            hpSplit.emptyPrimaryVC = emptyPrimary;
+
+            // Secondary: the SAME ZappIOSPaneViewController content pane the
+            // sidebar path uses (windowPtr/hostSlot wired below; webview
+            // mounted by the shared split content-mount block below).
+            contentVC = [[ZappIOSPaneViewController alloc] init];
+            contentVC.view.backgroundColor = bgColor;
+
+            // Nav-wrap the content NOW, while the column VC is still empty —
+            // never re-parents a live WKWebView (the ordering rule
+            // zapp_ios_sidebar_register documents). Bar HIDDEN: no-sidebar
+            // windows are chrome-less today (toolbar.m/routing.m resolve navs
+            // via the sidebar registry and no-op for this shape); a visible
+            // empty bar would regress the plain root path's look. The hidden
+            // bar also leaves UIKit's interactive-pop gesture disarmed — this
+            // shape never re-arms it, part of the no-Back-button guarantee.
+            UINavigationController* contentNav =
+                [[UINavigationController alloc] initWithRootViewController:contentVC];
+            contentNav.navigationBarHidden = YES;
+
+            [hpSplit setViewController:emptyPrimary forColumn:UISplitViewControllerColumnPrimary];
+            [hpSplit setViewController:contentNav forColumn:UISplitViewControllerColumnSecondary];
+
+            // The spike recipe, applied immediately after construction:
+            // permanently hide the Primary and remove every affordance that
+            // could summon it. behavior+displayMode are set as a PAIR (the
+            // WWDC 10105 rule) and match the smoked spike configuration
+            // exactly: Tile keeps the iOS-26 Inspector column TILED beside
+            // content on iPad regular (content takes a trailing safe-area
+            // inset — the edge model the pin helper tracks) instead of an
+            // adaptive overlay. Both are sticky preferred values — no
+            // per-rotation re-apply needed (unlike the sidebar path, whose
+            // tile recipe includes a showColumn:Primary that must re-run).
+            hpSplit.preferredSplitBehavior = UISplitViewControllerSplitBehaviorTile;
+            hpSplit.preferredDisplayMode   = UISplitViewControllerDisplayModeSecondaryOnly;
+            hpSplit.presentsWithGesture    = NO;
+            if (@available(iOS 14.0, *)) {
+                hpSplit.showsSecondaryOnlyButton = NO;
+            }
+            // Self-delegate: collapse-to-Secondary + collapsed-stack prune +
+            // Inspector-column emit forwarding. No zapp_ios_sidebar_register
+            // for this shape (there is no sidebar), so the split — not a
+            // ZappIOSSidebarController — must own the delegate.
+            hpSplit.delegate = hpSplit;
+            hpSplit.view.backgroundColor = bgColor;
+
+            window.rootViewController = hpSplit;   // BEFORE any webview creation
         } else {
-            // Single-pane window: lone root VC hosting the content webview.
+            // Single-pane window (no sidebar, no inspector): lone root VC
+            // hosting the content webview.
             UIViewController* root = [[ZappIOSRootViewController alloc] init];
             root.view.frame = window.bounds;
             root.view.backgroundColor = bgColor;
@@ -523,86 +874,111 @@ void zapp_ios_materialize_pending_windows(void) {
                                       d->sidebarCollapsible);
         }
 
-        if (d->hasSidebar) {
-            // Content pane → host slot, host identity, pane_role 0, host_has_
-            // sidebar=true, host_has_inspector=d->hasInspector. Created into
-            // contentVC.view (the split's secondary column), which is now attached
-            // to the window. Mirrors the macOS content-pane call (which passes
-            // useSidebar/useInspector). host_has_inspector injects zapp.hasInspector
-            // so Window.current().inspector (and the kitchen-sink toggle) is wired.
+        if (split) {
+            // Content pane → host slot, host identity, pane_role 0. Shared by
+            // BOTH split shapes (sidebar and hidden-Primary): created into
+            // contentVC.view (the split's Secondary column), which is now
+            // attached to the window. Mirrors the macOS content-pane call
+            // (which passes useSidebar/useInspector) — host_has_sidebar
+            // reflects the shape; host_has_inspector injects zapp.hasInspector
+            // so Window.current().inspector (and the kitchen-sink toggle) is
+            // wired. Identity=d->numeric_id bakes the document-start
+            // zapp.windowId user script, so no post-create eval is needed
+            // (unlike the plain no-split path below).
             darwin_webview_create_ext((__bridge void*)window, d->inspectable, d->first_mouse,
                                       d->url, d->numeric_id, false,
                                       (__bridge void*)contentVC.view, d->numeric_id, 0,
-                                      /*host_has_sidebar*/true, /*host_has_inspector*/d->hasInspector);
+                                      /*host_has_sidebar*/d->hasSidebar, /*host_has_inspector*/d->hasInspector);
             // _ext auto-registers by UIWindow → the content webview landed in
-            // the host slot. Capture it before the sidebar create clobbers it.
+            // the host slot. Capture it before a later pane create clobbers it.
             WKWebView* contentWebview = (d->numeric_id >= 0 && d->numeric_id < ZAPP_MAX_WINDOW_CALLBACKS)
                 ? zapp_ios_webviews[d->numeric_id] : nil;
             d->real_webview = contentWebview;
-            canonicalContentWebview = contentWebview;  // captured BEFORE the sidebar _ext clobbers d->real_webview
+            canonicalContentWebview = contentWebview;  // captured BEFORE any pane _ext clobbers d->real_webview
 
-            // Sidebar pane → its OWN transport slot, HOST identity (win-<host>
-            // in JS), always-transparent intent, pane_role 1 (sets isSidebar),
-            // host_has_sidebar=true. Created into sidebarVC.view (the primary
-            // column). Mirrors the macOS sidebar-pane call.
-            darwin_webview_create_ext((__bridge void*)window, d->inspectable, d->first_mouse,
-                                      d->sidebarUrl, d->sidebarNumericId, true,
-                                      (__bridge void*)sidebarVC.view, d->numeric_id, 1,
-                                      /*host_has_sidebar*/true, /*host_has_inspector*/d->hasInspector);
-
-            // _ext registered the sidebar webview by UIWindow → it overwrote
-            // the HOST slot (both panes share one UIWindow). Pull the sidebar
-            // webview out of its container and register BOTH panes into their
-            // correct transport slots, with the sidebar's JS-visible window-id
-            // mirroring the host (its identity is the host id; transport routes
-            // by slot). Then restore the content webview to the host slot.
-            NSString* hostWindowId = [NSString stringWithFormat:@"win-%d", d->numeric_id];
-            WKWebView* sidebarWebview = nil;
-            for (UIView* sub in sidebarVC.view.subviews) {
-                if ([sub isKindOfClass:[WKWebView class]]) { sidebarWebview = (WKWebView*)sub; break; }
-            }
-            if (sidebarWebview) {
-                zapp_ios_register_webview_slot(d->sidebarNumericId, sidebarWebview, hostWindowId);
-            }
-            if (contentWebview) {
-                zapp_ios_register_webview_slot(d->numeric_id, contentWebview, hostWindowId);
-            }
-            // Record host→sidebar for window-event fan-out (zapp_dispatch_event_to_js).
-            zapp_ios_set_sidebar_slot(d->numeric_id, d->sidebarNumericId);
-
-            // Register the content webview with the sidebar manager so it can
-            // apply the safeArea-conditional leading constraint (iPad regular =
-            // safeAreaLayoutGuide.leading; iPhone compact = view.leading). This
-            // converts the webview from autoresizingMask to explicit Auto Layout
-            // and pins top/bottom/trailing to the container. Runs for every
-            // sidebar window, with or without an inspector pane — the inspector
-            // pane no longer touches content layout.
-            // Forward-declared at file scope; defined in ios/sidebar.m.
-            extern void zapp_ios_sidebar_set_content_webview(void* window, void* webview);
-            if (contentWebview) {
-                zapp_ios_sidebar_set_content_webview((__bridge void*)window,
-                                                     (__bridge void*)contentWebview);
-            }
-
-            // Underpage fill on both panes — ALWAYS (bgColor is the brand bg if
-            // set, else the adaptive systemBackgroundColor). Filling the pre-paint
-            // / overscroll gap means a presenting sheet slides up already colored
-            // instead of flashing WebKit's default white and popping content in
-            // (esp. visible in dark mode). The page's CSS background paints over it.
+            // Underpage fill on the content pane — ALWAYS (bgColor is the
+            // brand bg if set, else the adaptive systemBackgroundColor).
+            // Filling the pre-paint / overscroll gap means a presenting sheet
+            // slides up already colored instead of flashing WebKit's default
+            // white (esp. visible in dark mode). CSS paints over it.
             if (@available(iOS 15.0, *)) {
                 if (contentWebview) contentWebview.underPageBackgroundColor = bgColor;
-                if (sidebarWebview) sidebarWebview.underPageBackgroundColor = bgColor;
             }
-            // (windowId / isSidebar / hasSidebar are injected as document-start
-            // user scripts inside darwin_webview_create_ext — a one-shot eval
-            // here would race the page commit, as the macOS path notes.)
+
+            if (d->hasSidebar) {
+                // Sidebar pane → its OWN transport slot, HOST identity (win-<host>
+                // in JS), always-transparent intent, pane_role 1 (sets isSidebar),
+                // host_has_sidebar=true. Created into sidebarVC.view (the primary
+                // column). Mirrors the macOS sidebar-pane call.
+                darwin_webview_create_ext((__bridge void*)window, d->inspectable, d->first_mouse,
+                                          d->sidebarUrl, d->sidebarNumericId, true,
+                                          (__bridge void*)sidebarVC.view, d->numeric_id, 1,
+                                          /*host_has_sidebar*/true, /*host_has_inspector*/d->hasInspector);
+
+                // _ext registered the sidebar webview by UIWindow → it overwrote
+                // the HOST slot (both panes share one UIWindow). Pull the sidebar
+                // webview out of its container and register BOTH panes into their
+                // correct transport slots, with the sidebar's JS-visible window-id
+                // mirroring the host (its identity is the host id; transport routes
+                // by slot). Then restore the content webview to the host slot.
+                NSString* hostWindowId = [NSString stringWithFormat:@"win-%d", d->numeric_id];
+                WKWebView* sidebarWebview = nil;
+                for (UIView* sub in sidebarVC.view.subviews) {
+                    if ([sub isKindOfClass:[WKWebView class]]) { sidebarWebview = (WKWebView*)sub; break; }
+                }
+                if (sidebarWebview) {
+                    zapp_ios_register_webview_slot(d->sidebarNumericId, sidebarWebview, hostWindowId);
+                }
+                if (contentWebview) {
+                    zapp_ios_register_webview_slot(d->numeric_id, contentWebview, hostWindowId);
+                }
+                // Record host→sidebar for window-event fan-out (zapp_dispatch_event_to_js).
+                zapp_ios_set_sidebar_slot(d->numeric_id, d->sidebarNumericId);
+
+                // Register the content webview with the sidebar manager so it can
+                // apply the safeArea-conditional leading constraint (iPad regular =
+                // safeAreaLayoutGuide.leading; iPhone compact = view.leading). This
+                // converts the webview from autoresizingMask to explicit Auto Layout
+                // and pins top/bottom/trailing to the container. Runs for every
+                // sidebar window, with or without an inspector pane — the inspector
+                // pane no longer touches content layout.
+                // Forward-declared at file scope; defined in ios/sidebar.m.
+                extern void zapp_ios_sidebar_set_content_webview(void* window, void* webview);
+                if (contentWebview) {
+                    zapp_ios_sidebar_set_content_webview((__bridge void*)window,
+                                                         (__bridge void*)contentWebview);
+                }
+
+                // Underpage fill on the sidebar pane (the content pane's is set
+                // in the shared block above).
+                if (@available(iOS 15.0, *)) {
+                    if (sidebarWebview) sidebarWebview.underPageBackgroundColor = bgColor;
+                }
+                // (windowId / isSidebar / hasSidebar are injected as document-start
+                // user scripts inside darwin_webview_create_ext — a one-shot eval
+                // here would race the page commit, as the macOS path notes.)
+            } else {
+                // Hidden-Primary shape: no sidebar pane, so the content
+                // webview still owns the host slot (the inspector block below
+                // does its own re-slot + restore). Pin its edges with the
+                // sidebar-equivalent model — this window has no sidebar
+                // registry entry, so zapp_ios_sidebar_set_content_webview
+                // (registry-keyed) cannot apply; the static helper above
+                // mirrors it 1:1, storing the constraint pairs on the split.
+                if ([split isKindOfClass:[ZappIOSHiddenPrimarySplitViewController class]]) {
+                    zapp_ios_pin_content_webview_no_sidebar(
+                        (ZappIOSHiddenPrimarySplitViewController*)split,
+                        contentWebview, contentVC.view);
+                }
+            }
         } else {
-            // _ext (container=NULL → adds to the scene-bound window's root view,
-            // same as the legacy darwin_webview_create) so the gesture recognizers
-            // form against a live responder chain. We use _ext (not the legacy
-            // wrapper) to pass host_has_inspector=d->hasInspector — injecting
-            // zapp.hasInspector so a no-sidebar window with an inspector still
-            // wires Window.current().inspector.
+            // Plain path (no split — i.e. no sidebar AND no inspector; a
+            // no-sidebar window WITH an inspector takes the hidden-Primary
+            // split path above). _ext (container=NULL → adds to the
+            // scene-bound window's root view, same as the legacy
+            // darwin_webview_create) so the gesture recognizers form against
+            // a live responder chain. host_has_inspector=d->hasInspector is
+            // kept for signature parity — it is always false on this branch.
             darwin_webview_create_ext((__bridge void*)window, d->inspectable, d->first_mouse,
                                       d->url, d->numeric_id, false,
                                       /*container*/NULL, /*identity*/-1, /*pane_role*/0,
@@ -701,11 +1077,16 @@ void zapp_ios_materialize_pending_windows(void) {
 
             // iOS 26+: attach to the split's dedicated Inspector column — a
             // sibling of Primary/Secondary, orthogonal to the doubleColumn base
-            // style (no tripleColumn needed). Requires a split (sidebar window);
-            // a no-sidebar window with an inspector (not currently reachable —
-            // no-sidebar windows take the ZappIOSRootViewController path, which
-            // has no split to attach to) falls through to inspector.m's <26
-            // modal-sheet fallback regardless of OS version.
+            // style (no tripleColumn needed). A split now exists for EVERY
+            // inspector window: sidebar windows ride ZappIOSSplitViewController,
+            // no-sidebar windows the hidden-Primary
+            // ZappIOSHiddenPrimarySplitViewController (E3) — so this attach is
+            // reachable for both shapes. Below iOS 26 this attach is skipped
+            // (the Inspector-column API doesn't exist) even though the split
+            // does; zapp_ios_inspector_register's own @available branching
+            // then keeps the <26 modal-sheet fallback — its 26-only block is
+            // the ONLY place the register touches the split, so an unattached
+            // split on <26 is inert for the inspector.
             if (@available(iOS 26.0, *)) {
                 if (split) {
                     [split setViewController:inspectorNav forColumn:UISplitViewControllerColumnInspector];

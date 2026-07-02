@@ -27,8 +27,10 @@
 //   as a sheet — no horizontalSizeClass branching needed on our side.
 //
 // iOS 15–25 fallback (Zapp's deployment target is 15.0; there is no Inspector
-//   column below 26, and a no-sidebar window has no split to attach one to
-//   even on 26+): the persistent inspector nav is presented as a MODAL
+//   column below 26 — the split itself always exists now: sidebar windows get
+//   the sidebar split, no-sidebar windows the hidden-Primary split, see
+//   window.m's ZappIOSHiddenPrimarySplitViewController / E3): the persistent
+//   inspector nav is presented as a MODAL
 //   UISheetPresentationController sheet (medium+large detents, grabber) on
 //   BOTH iPhone and iPad, with a Close bar button (iPad form-sheets lack a
 //   guaranteed edge dismiss). expand presents it; collapse dismisses it;
