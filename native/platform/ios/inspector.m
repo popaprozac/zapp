@@ -635,6 +635,8 @@ void darwin_inspector_set_width(int32_t window_id, int32_t width) {
             zapp_ios_control_unsupported("inspector.setWidth",
                 "below iOS 26 (or without a sidebar split) the inspector is a system modal sheet with no adjustable width");
         }
+        // seed the layout-emit dedupe so the ensuing layout pass doesn't double-emit
+        c.lastLayoutEmitWidth = width;
         zapp_ios_inspector_emit_resize(c, width);
     });
 }

@@ -357,7 +357,20 @@ void zapp_ios_sidebar_note_layout_width(void* window_ptr, CGFloat width) {
     if (!window_ptr || !zapp_ios_sidebars) return;
     ZappIOSSidebarController* c = zapp_ios_sidebars[[NSValue valueWithPointer:window_ptr]];
     if (!c || !c.splitVC || c.splitVC.isCollapsed) return;
+    // Hidden-pane guard (iPad-regular, sidebar hidden via displayMode
+    // SecondaryOnly): the primary column still lays out off-screen at its
+    // last width, which would otherwise read as a phantom resize. Plain
+    // iOS-14 API — no availability gate needed at Zapp's 15.0 minimum.
+    if (c.splitVC.displayMode == UISplitViewControllerDisplayModeSecondaryOnly) return;
     int32_t w = (int32_t)lround(width);
+    // M1: unconfigured sidebar (registered with width<=0, seeded to the -2
+    // sentinel below) — absorb the FIRST observed layout width as the seed
+    // instead of treating it as a real resize, so landing at UIKit's default
+    // column width doesn't fire a spurious launch emit.
+    if (c.lastLayoutEmitWidth == -2) {
+        c.lastLayoutEmitWidth = w;
+        return;
+    }
     if (w <= 1 || w == c.lastLayoutEmitWidth) return;
     c.lastLayoutEmitWidth = w;
     if (c.layoutEmitScheduled) return;
@@ -661,8 +674,12 @@ void zapp_ios_sidebar_register(void* window, void* split, void* sidebarVC,
         c.collapsible        = (BOOL)collapsible;
         // #720: seed the live-resize dedupe to the configured width so the
         // first (launch) viewDidLayoutSubviews pass — which lands at that same
-        // width — does not fire a spurious resize event.
-        c.lastLayoutEmitWidth  = width;
+        // width — does not fire a spurious resize event. M1: when the app
+        // omits a sidebar width (width<=0) there's no configured value to
+        // seed against — use the -2 sentinel so the note-layout helper
+        // absorbs the first observed width instead of comparing against a
+        // bogus 0/negative value.
+        c.lastLayoutEmitWidth  = (width > 0) ? width : -2;
         c.layoutEmitScheduled  = NO;
 
         // OWN the navigation controllers so we control the bar. The column VCs
@@ -1059,6 +1076,8 @@ void darwin_sidebar_set_width(int32_t window_id, int32_t width) {
             [c.splitVC.view setNeedsLayout];
             [c.splitVC.view layoutIfNeeded];
             // Leave min==max==width — column stays locked (no restore needed).
+            // seed the layout-emit dedupe so the ensuing layout pass doesn't double-emit
+            c.lastLayoutEmitWidth = width;
             zapp_ios_sidebar_emit_resize(c, width);
         } else {
             // Resizable:ON — USER-OWNED width. Set the preferred width: it applies
@@ -1070,6 +1089,8 @@ void darwin_sidebar_set_width(int32_t window_id, int32_t width) {
             c.splitVC.preferredPrimaryColumnWidth = (CGFloat)width;
             [c.splitVC.view setNeedsLayout];
             [c.splitVC.view layoutIfNeeded];
+            // seed the layout-emit dedupe so the ensuing layout pass doesn't double-emit
+            c.lastLayoutEmitWidth = width;
             zapp_ios_sidebar_emit_resize(c, width);
         }
     });
