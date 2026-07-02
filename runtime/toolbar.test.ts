@@ -3,7 +3,7 @@ import { normalizeToolbar, assertToolbarItemsNonEmpty, type ToolbarOptions } fro
 import { eventName, WindowEvent } from "./events";
 
 describe("normalizeToolbar", () => {
-  test("strips actions and stringifies items in declared order", () => {
+  test("strips actions, stringifies items, and applies toolbar conventions", () => {
     let hit = 0;
     const tb: ToolbarOptions = {
       items: [
@@ -18,7 +18,10 @@ describe("normalizeToolbar", () => {
     const { json, actions } = normalizeToolbar(tb, true, false);
     const parsed = JSON.parse(json);
     expect(parsed.style).toBe("unified"); // default
+    // toggleSidebar + its trackingSeparator are anchored into a convention
+    // prefix (with an injected flexibleSpace); app items keep declared order.
     expect(parsed.items).toEqual([
+      { type: "flexibleSpace", placement: "leading" },
       { type: "toggleSidebar", placement: "leading" },
       { type: "trackingSeparator", pane: "sidebar", placement: "leading" },
       { type: "button", id: "compose", label: "Compose", icon: "sf:square.and.pencil", placement: "leading" },
@@ -384,7 +387,8 @@ describe("normalizeToolbar inspector integration", () => {
     const { json } = normalizeToolbar(
       { items: [{ type: "toggleInspector" }] } as any, false, true,
     );
-    expect(JSON.parse(json).items).toEqual([{ type: "toggleInspector", placement: "leading" }]);
+    // Convention pass anchors toggleInspector to the trailing edge.
+    expect(JSON.parse(json).items).toEqual([{ type: "toggleInspector", placement: "trailing" }]);
   });
 
   test("toggleInspector dropped + warned when no inspector", () => {
@@ -405,7 +409,8 @@ describe("normalizeToolbar inspector integration", () => {
     const { json } = normalizeToolbar(
       { items: [{ type: "trackingSeparator", pane: "inspector" }] } as any, false, true,
     );
-    expect(JSON.parse(json).items).toEqual([{ type: "trackingSeparator", pane: "inspector", placement: "leading" }]);
+    // Convention pass anchors the inspector trackingSeparator to the trailing edge.
+    expect(JSON.parse(json).items).toEqual([{ type: "trackingSeparator", pane: "inspector", placement: "trailing" }]);
   });
 
   test("inspector trackingSeparator dropped when no inspector", () => {
