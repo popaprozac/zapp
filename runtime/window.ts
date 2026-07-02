@@ -969,6 +969,9 @@ export function normalizeToolbar(
       seen.add(it.id);
       const wireSegs = it.segments.map((s: any, i: number) => {
         if (s.action) actions.set(`${it.id}:${i}`, s.action);
+        if (s.icon && !s.label) {
+          console.warn(`[zapp] toolbar: icon-only segment in "${it.id}" has no "label" — AppKit uses labels for the collapsed/overflow menu (add one to avoid a blank menu entry)`);
+        }
         const w: Record<string, unknown> = {};
         if (s.id !== undefined) w.id = s.id;
         if (s.label !== undefined) w.label = s.label;

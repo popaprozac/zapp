@@ -103,5 +103,15 @@ describe("applyToolbarConventions", () => {
     const wire = JSON.parse(json);
     expect(wire.items.slice(0, 3).map((i: any) => i.type)).toEqual(["flexibleSpace", "toggleSidebar", "trackingSeparator"]);
   });
+
+  test("T3: warns when an icon-only segment omits label", () => {
+    const warnings: string[] = [];
+    const orig = console.warn;
+    console.warn = (msg: string) => { warnings.push(String(msg)); };
+    try {
+      normalizeToolbar({ items: [ { type: "segmented", id: "seg", segments: [{ icon: "sf:star" }] } as any ] }, false, false);
+    } finally { console.warn = orig; }
+    expect(warnings.some((w) => w.includes("icon-only segment"))).toBe(true);
+  });
 });
 

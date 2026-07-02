@@ -268,8 +268,18 @@ static NSMutableDictionary<NSValue*, ZappToolbarController*>* zapp_toolbars = ni
             // Build titles or images. Prefer images when any segment has an icon.
             BOOL useImages = NO;
             for (NSDictionary* s in segs) if ([s[@"icon"] isKindOfClass:[NSString class]] && ((NSString*)s[@"icon"]).length) { useImages = YES; break; }
+            // #744: `labels` feeds the collapsed/overflow menu representation
+            // AppKit builds for the group — an empty string there renders as a
+            // blank chevron entry. Fall back to the segment id, then its index,
+            // so labels never contains @"".
             NSMutableArray* labels = [NSMutableArray array];
-            for (NSDictionary* s in segs) [labels addObject:([s[@"label"] isKindOfClass:[NSString class]] ? s[@"label"] : @"")];
+            for (NSUInteger si = 0; si < segs.count; si++) {
+                NSDictionary* s = segs[si];
+                NSString* segLabel = [s[@"label"] isKindOfClass:[NSString class]] && ((NSString*)s[@"label"]).length
+                    ? s[@"label"]
+                    : ([s[@"id"] isKindOfClass:[NSString class]] && ((NSString*)s[@"id"]).length ? s[@"id"] : [NSString stringWithFormat:@"%lu", (unsigned long)si]);
+                [labels addObject:segLabel];
+            }
             NSToolbarItemGroup* group;
             if (useImages) {
                 NSMutableArray<NSImage*>* imgs = [NSMutableArray array];
@@ -381,6 +391,13 @@ static NSMutableDictionary<NSValue*, ZappToolbarController*>* zapp_toolbars = ni
         labelItem.maxSize = tf.fittingSize;
         labelItem.autovalidates = NO;
         labelItem.enabled = YES;
+        // #745: without an explicit menuFormRepresentation, AppKit synthesizes
+        // an ENABLED NSMenuItem for the >> overflow menu, which looks
+        // clickable. Represent the label as disabled text.
+        NSMenuItem* mi = [[NSMenuItem alloc] initWithTitle:(text.length ? text : identifier)
+                                                     action:NULL keyEquivalent:@""];
+        mi.enabled = NO;
+        labelItem.menuFormRepresentation = mi;
         // Custom-view items don't display their hosted NSTextField until the
         // toolbar performs its first layout pass — at create time the field
         // renders blank until something forces a relayout. Re-apply sizing on
