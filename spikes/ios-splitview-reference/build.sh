@@ -3,6 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 SDK=$(xcrun --sdk iphonesimulator --show-sdk-path)
+CFLAGS="${CFLAGS:-} ${EXTRA_CFLAGS:-}"
 
 rm -rf build && mkdir -p build/SplitRef.app
 
@@ -14,6 +15,7 @@ clang \
     -framework UIKit \
     -framework Foundation \
     -framework WebKit \
+    $CFLAGS \
     src/*.m \
     -o build/SplitRef.app/SplitRef
 

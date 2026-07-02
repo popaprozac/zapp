@@ -1,5 +1,6 @@
 #import "ContentViewController.h"
 #import "DetailViewController.h"
+#import "InspectorViewController.h"
 #import <WebKit/WebKit.h>
 
 // ---------------------------------------------------------------------------
@@ -61,8 +62,8 @@ static NSString * const kSafeAreaHTMLTemplate =
 - (void)viewDidLoad {
     [super viewDidLoad];
 
-    self.title = @"Content";
-    self.currentSection = @"(select a section)";
+    self.title = @"Home";
+    self.currentSection = @"Home";
 
     // ------------------------------------------------------------------
     // Full-bleed WKWebView pinned to EDGES (not safe-area guide).
@@ -106,10 +107,147 @@ static NSString * const kSafeAreaHTMLTemplate =
         initWithBarButtonSystemItem:UIBarButtonSystemItemAction
                              target:nil
                              action:nil];
-    self.navigationItem.rightBarButtonItems = @[ share, filter ];
+
+    // ── Inspector BUTTON on the Content VC ────────────────────────────────────
+    // On iOS 26 this toggles the dedicated Inspector column (show/hideColumn:).
+    // On iPad (regular) it slides the inspector column in/out beside the content;
+    // on iPhone (compact) UIKit auto-presents that same column as a sheet.
+    // Below iOS 26 the button presents a modal InspectorViewController sheet.
+    // `sidebar.right` reads as "panel on the trailing edge" — the platform idiom
+    // for an inspector toggle.
+    UIBarButtonItem *inspector = [[UIBarButtonItem alloc]
+        initWithImage:[UIImage systemImageNamed:@"sidebar.right"]
+                style:UIBarButtonItemStylePlain
+               target:self
+               action:@selector(toggleInspector)];
+
+    // TEMPORARY width-probe buttons (drag-pin research, 2026-07-01):
+    // P1 = clamp-nudge, P2 = hide/show cycle. Open the inspector and DRAG the
+    // seam first, then press. Watch the [zapp-nav] PROBE inspW= log lines.
+    UIBarButtonItem *p1 = [[UIBarButtonItem alloc]
+        initWithTitle:@"P1" style:UIBarButtonItemStylePlain
+               target:self action:@selector(probeClampNudge)];
+    UIBarButtonItem *p2 = [[UIBarButtonItem alloc]
+        initWithTitle:@"P2" style:UIBarButtonItemStylePlain
+               target:self action:@selector(probeHideShowCycle)];
+
+    self.navigationItem.rightBarButtonItems = @[ inspector, share, filter, p1, p2 ];
 
     // Do NOT set a leftBarButtonItem — let UISplitViewController/UINavigationController
     // provide its displayModeButtonItem / back button automatically.
+}
+
+// ---------------------------------------------------------------------------
+// Inspector button handler — the crux of the experiment.
+//
+//   • iOS 26+: toggle the dedicated Inspector column via show/hideColumn:.
+//              Visibility is read with the clean -isShowingColumn: API (iOS 26),
+//              so no BOOL bookkeeping is needed. On iPad the column slides in/out
+//              beside the content; on iPhone (compact) UIKit auto-presents that
+//              same Inspector column as a sheet — we don't manage the sheet.
+//   • pre-26 fallback: present InspectorViewController modally, wrapped in a nav
+//              controller, as a sheet with medium+large detents and a grabber.
+// ---------------------------------------------------------------------------
+- (void)toggleInspector {
+    UISplitViewController *split = self.splitViewController;
+
+    if (@available(iOS 26.0, *)) {
+        BOOL showing = [split isShowingColumn:UISplitViewControllerColumnInspector];
+        if (showing) {
+            NSLog(@"[zapp-nav] inspector-button (iOS26) showing=1 → hideColumn:Inspector (collapsed=%d)",
+                  (int)split.isCollapsed);
+            [split hideColumn:UISplitViewControllerColumnInspector];
+        } else {
+            NSLog(@"[zapp-nav] inspector-button (iOS26) showing=0 → showColumn:Inspector (collapsed=%d)",
+                  (int)split.isCollapsed);
+            [split showColumn:UISplitViewControllerColumnInspector];
+        }
+        return;
+    }
+
+    // ── pre-26 fallback: modal inspector sheet ────────────────────────────────
+    NSLog(@"[zapp-nav] inspector-button (pre-iOS26) → present modal inspector sheet");
+    InspectorViewController *insp = [InspectorViewController new];
+    UINavigationController *nav =
+        [[UINavigationController alloc] initWithRootViewController:insp];
+    nav.modalPresentationStyle = UIModalPresentationPageSheet;
+    if (@available(iOS 15.0, *)) {
+        UISheetPresentationController *sheet = nav.sheetPresentationController;
+        sheet.detents = @[ UISheetPresentationControllerDetent.mediumDetent,
+                           UISheetPresentationControllerDetent.largeDetent ];
+        sheet.prefersGrabberVisible = YES;
+    }
+    [self presentViewController:nav animated:YES completion:nil];
+}
+
+// ---------------------------------------------------------------------------
+// TEMPORARY width-probe handlers (drag-pin research, 2026-07-01).
+//
+// After the USER drags the inspector seam, UIKit stops enforcing
+// preferredInspectorColumnWidth (internal enforcingColumnPreferences flag
+// flips off; the dragged width lives in private state and re-applies on every
+// layout). Question: can PUBLIC API re-assert a programmatic width?
+//
+//   P1 clamp-nudge : min==max==target (known to beat the pin) → layout →
+//                    1s later restore flexible min/max. If inspW HOLDS the
+//                    target after restore, the workaround exists; if it snaps
+//                    back to the dragged width, the pin survives clamping.
+//   P2 hide/show   : hideColumn: → set preferred while hidden → showColumn:.
+//                    Tests whether column re-presentation re-enters the
+//                    enforce-preferences path (distinct from displayMode
+//                    toggles, which never hide the Inspector column).
+//   P3 (no code)   : P1/P2 leave preferredInspectorColumnWidth armed at the
+//                    target — after a FAILED P1/P2, TAP the seam handle:
+//                    UIKit's built-in snap-to-preferred tap gesture is the
+//                    user-side reset (_handleResizeColumnToPreferredSize…).
+//
+// Verdict comes from the [zapp-nav] PROBE inspW= lines (InspectorViewController
+// logs every layout pass).
+// ---------------------------------------------------------------------------
+- (void)probeClampNudge {
+    if (@available(iOS 26.0, *)) {
+        UISplitViewController *split = self.splitViewController;
+        const CGFloat target = 240.0;
+        NSLog(@"[zapp-nav] PROBE P1 start target=%.0f prefW=%.1f min=%.1f max=%.1f",
+              target, split.preferredInspectorColumnWidth,
+              split.minimumInspectorColumnWidth, split.maximumInspectorColumnWidth);
+        split.preferredInspectorColumnWidth = target;
+        split.minimumInspectorColumnWidth = target;
+        split.maximumInspectorColumnWidth = target;
+        [split.view setNeedsLayout];
+        [split.view layoutIfNeeded];
+        NSLog(@"[zapp-nav] PROBE P1 clamped — restoring min=180 max=500 in 1s");
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            split.minimumInspectorColumnWidth = 180.0;
+            split.maximumInspectorColumnWidth = 500.0;
+            [split.view setNeedsLayout];
+            [split.view layoutIfNeeded];
+            NSLog(@"[zapp-nav] PROBE P1 restored — inspW=%.0f now: holding 240 = WORKAROUND WORKS; back at dragged width = pin survives",
+                  target);
+        });
+    } else {
+        NSLog(@"[zapp-nav] PROBE P1 requires iOS 26");
+    }
+}
+
+- (void)probeHideShowCycle {
+    if (@available(iOS 26.0, *)) {
+        UISplitViewController *split = self.splitViewController;
+        const CGFloat target = 360.0;
+        NSLog(@"[zapp-nav] PROBE P2 start target=%.0f prefW=%.1f — hiding column",
+              target, split.preferredInspectorColumnWidth);
+        [split hideColumn:UISplitViewControllerColumnInspector];
+        split.preferredInspectorColumnWidth = target;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            NSLog(@"[zapp-nav] PROBE P2 showing column (prefW=%.1f) — inspW at 360 = WORKAROUND WORKS; dragged width = pin survives hide/show",
+                  split.preferredInspectorColumnWidth);
+            [split showColumn:UISplitViewControllerColumnInspector];
+        });
+    } else {
+        NSLog(@"[zapp-nav] PROBE P2 requires iOS 26");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -133,6 +271,8 @@ static NSString * const kSafeAreaHTMLTemplate =
 // Called by SidebarViewController on row selection.
 // ---------------------------------------------------------------------------
 - (void)showSection:(NSString *)name {
+    NSLog(@"[zapp-nav] showSection %@", name);
+
     self.title = name;
     self.currentSection = name;
 
@@ -166,6 +306,8 @@ static NSString * const kSafeAreaHTMLTemplate =
 }
 
 - (void)pushDetail {
+    NSUInteger stackCount = self.navigationController.viewControllers.count + 1;
+    NSLog(@"[zapp-nav] push detail stack=%lu", (unsigned long)stackCount);
     // Idiomatic push — UIKit gives the back button and edge-swipe for free.
     [self.navigationController pushViewController:[DetailViewController new] animated:YES];
 }
