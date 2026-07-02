@@ -60,6 +60,7 @@
 #import <UIKit/UIKit.h>
 #import <WebKit/WebKit.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <math.h>
 #include <stdio.h>
 
@@ -259,6 +260,29 @@ BOOL zapp_ios_sidebar_is_hidden_for_window(void* window_ptr) {
     // Never collapsed on iPad regular width; isCollapsed == YES means compact/iPhone,
     // where "hidden" has no meaning (the sidebar is the nav root, not a column).
     if (c.splitVC.isCollapsed) return NO;
+    return c.splitVC.displayMode == UISplitViewControllerDisplayModeSecondaryOnly;
+}
+
+// T2 (double-toggle race fix): live read of the split's CURRENT displayMode —
+// NOT a transition target. Returns true only when displayMode ==
+// SecondaryOnly (sidebar hidden); false when no controller/split is
+// registered. Unlike zapp_ios_sidebar_is_hidden_for_window, this omits the
+// isCollapsed gate: its only caller (zapp_ios_toolbar_apply_for_window_hidden's
+// expanded path, ios/toolbar.m) has already established collapsed == NO
+// before calling, so the extra branch would be dead weight here.
+//
+// This is the single source of truth the toolbar's expanded path reads AT
+// APPLY TIME to decide whether to include the manual toggleSidebar button —
+// replacing a caller-supplied `sidebarHidden` BOOL that could be a stale
+// transition TARGET (from willChangeToDisplayMode:, fired before the mode
+// change commits) and let both Zapp's toggle and UIKit's system reveal
+// button render simultaneously, or neither, under overlapping transitions.
+// Declared extern in ios/toolbar.m.
+bool zapp_ios_split_display_mode_is_secondary_only(void* window_ptr) {
+    if (!window_ptr || !zapp_ios_sidebars) return false;
+    NSValue* key = [NSValue valueWithPointer:window_ptr];
+    ZappIOSSidebarController* c = zapp_ios_sidebars[key];
+    if (!c || !c.splitVC) return false;
     return c.splitVC.displayMode == UISplitViewControllerDisplayModeSecondaryOnly;
 }
 
@@ -584,14 +608,25 @@ static void zapp_ios_sidebar_sync_collapse(ZappIOSSidebarController* c, BOOL col
 // button at that point). Without this hook, the toolbar never updates after the
 // user shows/hides the sidebar via our button, the system button, or a gesture.
 //
-// We call zapp_ios_toolbar_apply_for_window_hidden SYNCHRONOUSLY, passing the
-// `displayMode` parameter as the TARGET state. This is correct because UIKit
-// calls this delegate method with the incoming display mode BEFORE the transition,
-// so `displayMode` is the settled target — exactly what the toolbar needs to set
-// its leading items. Calling synchronously (we are already on the main thread)
-// means the toolbar change rides the SAME animation as the sidebar show/hide,
-// eliminating the "wonky snap" seen when using dispatch_async (which applied
-// the change one tick after the transition completed).
+// TWO applies, for two different jobs (T2 double-toggle race fix):
+//   1. SYNCHRONOUS pre-settle apply, passing `displayMode` as a (now
+//      advisory-only) hint. UIKit calls this delegate BEFORE it commits the
+//      change, so splitVC.displayMode is still the OUTGOING value at this
+//      point — the toolbar's live read (zapp_ios_split_display_mode_is_
+//      secondary_only, ios/toolbar.m) would just reproduce the pre-transition
+//      toggle here. Calling synchronously (already on the main thread) means
+//      whatever the toolbar renders rides the SAME animation as the sidebar
+//      show/hide, avoiding the "wonky snap" a delayed apply produces.
+//   2. SETTLED re-apply, hopped one tick via dispatch_async. By the time this
+//      runs, splitVC.displayMode has committed to the target, so the
+//      toolbar's live read resolves to the correct final state. This is the
+//      actual race fix: under overlapping transitions (rapid toggle, rotation
+//      mid-toggle) a stale `displayMode`/target value could leave BOTH
+//      toggles visible or NEITHER once things settled; because the decision
+//      is now made from live state at APPLY time (not the target captured at
+//      SCHEDULE time), whichever settled re-apply runs last always reads
+//      whatever is CURRENTLY true and self-corrects, regardless of dispatch
+//      ordering between overlapping transitions.
 //
 // NOTE: do NOT emit sidebar-visibility events from here. The imperative toggle
 // path (darwin_sidebar_toggle / show_content / show_sidebar) owns those emits
@@ -599,17 +634,27 @@ static void zapp_ios_sidebar_sync_collapse(ZappIOSSidebarController* c, BOOL col
 - (void)splitViewController:(UISplitViewController*)svc
     willChangeToDisplayMode:(UISplitViewControllerDisplayMode)displayMode {
     (void)svc;
-    // Resolve the window pointer that zapp_ios_toolbar_apply_for_window expects.
+    // Resolve the window pointer that zapp_ios_toolbar_apply_for_window_hidden
+    // expects.
     void* winPtr = darwin_window_get_by_numeric_id(self.hostWindowId);
     if (!winPtr) return;
     // Compute the target hidden state from the incoming displayMode parameter.
     // SecondaryOnly means the primary (sidebar) column will be hidden after the
-    // transition. All other modes leave the sidebar visible.
+    // transition. This value is now advisory only (pre-settle hint) — the
+    // expanded toolbar path re-derives the real answer from live state; see
+    // the header comment above and zapp_ios_toolbar_apply_for_window_hidden.
     BOOL targetHidden = (displayMode == UISplitViewControllerDisplayModeSecondaryOnly);
-    // Synchronous call — we are already on the main thread inside the delegate.
-    // The toolbar change applies within the same transition batch so leading items
-    // change simultaneously with the sidebar show/hide animation (no snap lag).
+    // 1. Pre-settle apply — synchronous, rides the same animation batch.
     zapp_ios_toolbar_apply_for_window_hidden(winPtr, targetHidden);
+    // 2. Settled re-apply — one runloop tick later, once displayMode has
+    // actually committed, re-derive the toggle from LIVE state. Captures the
+    // numeric host id (not the raw pointer) so the lookup is re-resolved
+    // fresh at the later tick rather than trusting a possibly-stale pointer.
+    int32_t hostWindowId = self.hostWindowId;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        void* settledWinPtr = darwin_window_get_by_numeric_id(hostWindowId);
+        if (settledWinPtr) zapp_ios_toolbar_apply_for_window(settledWinPtr);
+    });
 }
 
 // iOS 26+: column-level visibility notifications (both delegate methods are

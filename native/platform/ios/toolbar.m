@@ -89,6 +89,18 @@ extern BOOL zapp_ios_split_is_collapsed_for_window(void* window_ptr);
 // omit when hidden (UIKit's own system button is the affordance).
 extern BOOL zapp_ios_sidebar_is_hidden_for_window(void* window_ptr);
 
+// T2 (double-toggle race fix): live read of the split's CURRENT displayMode —
+// NOT a transition target. Returns true only when displayMode ==
+// SecondaryOnly (sidebar hidden); false when collapsed, unregistered, or no
+// split. Defined in ios/sidebar.m. Used by
+// zapp_ios_toolbar_apply_for_window_hidden's expanded path so the
+// include-toggle decision is single-sourced from live state AT APPLY TIME,
+// instead of trusting the caller-supplied `sidebarHidden` parameter — which
+// may be a stale transition TARGET passed from willChangeToDisplayMode:
+// (pre-settle), the root cause of both-toggles-visible / neither-visible
+// under overlapping transitions (rapid toggle, rotation mid-toggle).
+extern bool zapp_ios_split_display_mode_is_secondary_only(void* window_ptr);
+
 // Defined in ios/window.m — slot lookup tables for sidebar + inspector panes.
 // Return -1 when no pane of that type is registered for the host.
 extern int32_t zapp_ios_sidebar_slot_for(int32_t host_slot);
@@ -841,14 +853,25 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
 // ─── zapp_ios_toolbar_apply_for_window_hidden ─────────────────────────────────
 //
 // Applies a registered toolbar to the correct nav (collapsed vs expanded).
-// Accepts an explicit `sidebarHidden` flag so willChangeToDisplayMode: can pass
-// the transition TARGET synchronously — before splitVC.displayMode has settled.
+//
+// T2 (double-toggle race fix): `sidebarHidden` is now ADVISORY ONLY. It used
+// to be trusted verbatim in the expanded path, but willChangeToDisplayMode:
+// passes the transition TARGET, not settled state — under overlapping
+// transitions (rapid toggle, rotation mid-toggle) that value can go stale,
+// producing either two visible toggles (ours + UIKit's system reveal button)
+// or zero. The expanded path now single-sources the include-toggle decision
+// from a LIVE read of the split's CURRENT displayMode
+// (zapp_ios_split_display_mode_is_secondary_only, ios/sidebar.m) taken at
+// apply time. The parameter is kept only for ABI/call-site compatibility —
+// callers may still pass the transition target as a pre-settle hint.
 //
 // Collapsed (iPhone compact): apply items to the content VC's navigationItem
 //   (so they appear when the content VC is on top of collapsedNav), and show
-//   the bar only when the content VC is on top.
+//   the bar only when the content VC is on top. (Collapsed has no displayMode
+//   concept — UIKit never shows a system reveal button there — so this path
+//   is unaffected by the live-read change.)
 // Expanded (iPad regular): apply to contentNav's topViewController, show bar.
-//   includeToggleSidebar = !sidebarHidden (UIKit provides system button when hidden).
+//   includeToggleSidebar = live read of !(displayMode == SecondaryOnly).
 //
 // Must be called on the main thread. Declared extern so sidebar.m can call it.
 
@@ -905,13 +928,20 @@ void zapp_ios_toolbar_apply_for_window_hidden(void* window_ptr, BOOL sidebarHidd
         if (!contentNav) return;
 
         // Include our manual toggleSidebar button ONLY when the sidebar is
-        // VISIBLE (sidebarHidden == NO). When the sidebar is visible, UIKit adds
-        // no system button, so ours is the only affordance.
-        // When the sidebar is HIDDEN, UIKit shows its own "show sidebar" system
-        // button — omit ours to avoid a duplicate.
-        // NOTE: `sidebarHidden` is passed by the caller (may be the transition
-        // TARGET from willChangeToDisplayMode:, not the live splitVC.displayMode).
-        BOOL includeToggle = !sidebarHidden;
+        // VISIBLE. When the sidebar is visible, UIKit adds no system button, so
+        // ours is the only affordance. When the sidebar is HIDDEN, UIKit shows
+        // its own "show sidebar" system button — omit ours to avoid a duplicate.
+        //
+        // T2: the `sidebarHidden` PARAMETER may be a transition TARGET passed
+        // from willChangeToDisplayMode: (pre-settle) — trusting it verbatim is
+        // what caused the double-toggle race under overlapping transitions.
+        // UIKit's own system reveal button is driven by the split's ACTUAL
+        // displayMode, so decide from a LIVE read here too; the settled
+        // re-apply (sidebar.m's willChangeToDisplayMode: hook, hopped one tick
+        // via dispatch_async) issues the final word once displayMode has
+        // actually committed to the target.
+        BOOL includeToggle = !zapp_ios_split_display_mode_is_secondary_only(window_ptr);
+        (void)sidebarHidden; // advisory only — kept for ABI/call-site compatibility
         zapp_ios_toolbar_apply_to_nav(contentNav, entry, includeToggle);
     }
 }
