@@ -38,8 +38,17 @@ h2 { font-size: 16px; color: var(--text-h); margin: 0 0 8px; font-weight: 600; }
 
 /* Sidebar pane */
 /* Top: macOS uses the injected toolbar height; iOS uses the nav-bar safe-area
-   inset (env() fallback — the sidebar column sits outside the content nav bar). */
-.sidebar-pane { padding: max(var(--zapp-titlebar-height, 0px), 20px) 8px 8px; }
+   inset (env() fallback — the sidebar column sits outside the content nav bar).
+   Left/right/bottom: additive to the base 8px so landscape notch/camera and
+   the home-indicator area (E1, branch A — env() reports real values inside
+   the pane, including the iOS inspector sheet; the panes just weren't
+   consuming them) don't run under sidebar rows. */
+.sidebar-pane {
+  padding: max(var(--zapp-titlebar-height, 0px), 20px) 8px 8px;
+  padding-left: calc(8px + env(safe-area-inset-left));
+  padding-right: calc(8px + env(safe-area-inset-right));
+  padding-bottom: calc(8px + env(safe-area-inset-bottom));
+}
 .sidebar-title { opacity: 0.5; font-size: 11px; letter-spacing: 0.06em; padding: 0 8px 8px; }
 .nav-item {
   display: block; width: 100%; text-align: left; border: 0; background: transparent;
@@ -65,6 +74,14 @@ h2 { font-size: 16px; color: var(--text-h); margin: 0 0 8px; font-weight: 600; }
   opacity: 0.8; margin-top: 10px; white-space: pre-wrap; min-height: 16px; }
 
 /* Inspector pane */
-.inspector-pane { padding: var(--zapp-titlebar-height, 52px) 12px 12px; }
+/* Left/right/bottom additive to the base 12px (E1, branch A — see sidebar-pane
+   above): the inspector sheet's content clears the notch side in landscape
+   and the home-indicator area at the bottom. */
+.inspector-pane {
+  padding: var(--zapp-titlebar-height, 52px) 12px 12px;
+  padding-left: calc(12px + env(safe-area-inset-left));
+  padding-right: calc(12px + env(safe-area-inset-right));
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+}
 .inspector-title { opacity: 0.5; font-size: 11px; letter-spacing: 0.06em; margin-bottom: 10px; }
 .kv b { color: var(--text-h); display: block; margin-bottom: 4px; }

@@ -1162,6 +1162,12 @@ version.
   they always carry the framework defaults), while `setWidth` /
   `setResizable` / `resizable: false` log the same one-time console note as
   `collapsible` (below).
+- Pane webviews should consume `env(safe-area-inset-*)` for landscape/notch
+  insets — the framework propagates real values into pane content, including
+  inside the auto-presented iOS sheet (the scaffolded `viewport-fit=cover`
+  meta tag is what makes `env()` report non-zero insets at all); a pane's own
+  styles are responsible for applying that padding so content doesn't run
+  under the notch/camera.
 
 ```ts
 const win = await Window.create({
