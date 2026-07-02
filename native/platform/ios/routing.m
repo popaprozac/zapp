@@ -41,8 +41,18 @@ extern WKWebView* zapp_ios_content_webview_for_slot(int32_t slot);
 extern void zapp_ios_register_webview(void* window_ptr, void* webview_ptr);
 
 // Chrome-agnostic content-VC resolution (owned-nav fork deleted in T2).
-// sidebar.m: the authoritative secondary-column content VC stored at register time.
+// sidebar.m: the authoritative secondary-column content VC stored at register
+// time (sidebar windows), or resolved out of the split's Secondary nav for the
+// hidden-Primary no-sidebar+inspector shape (G3 fallback in sidebar.m).
 extern UIViewController* zapp_ios_content_vc_for_window(void* window_ptr);
+
+// window.m slot maps (host slot -> pane slot, -1 = none). Used to stamp the
+// route webview's zapp.hasSidebar / zapp.hasInspector identity to match what
+// the CONTENT pane got at window creation (window.m passes d->hasSidebar /
+// d->hasInspector) — a hardcoded true/false pair would misidentify the chrome
+// on the no-sidebar+inspector shape now that pushes reach it (G3 fix).
+extern int32_t zapp_ios_sidebar_slot_for(int32_t host_slot);
+extern int32_t zapp_ios_inspector_slot_for(int32_t host_slot);
 
 // Route VC: a plain UIViewController hosting its own WKWebView.
 // Tagged so the delegate can distinguish route VCs from the root contentVC.
@@ -289,13 +299,16 @@ void zapp_ios_push_route_vc(int32_t windowId, const char* url) {
     WKWebView* savedContentWebview = zapp_ios_content_webview_for_slot(windowId);
 
     // Mint a webview into vc.view via the shared create path.
-    // Args match the content-pane call in window.m:534-537:
+    // Args match the content-pane call in window.m:
     //   inspectable=true, accept_first_mouse=false, url_override=NULL
     //   (route url is consumed via pending-url, not url_override),
     //   numeric_id_pre_alloc = windowId (bridge targets the host window),
     //   transparent_background=false, container_view=vc.view,
     //   identity_window_id = windowId, pane_role=0 (main),
-    //   host_has_sidebar=true, host_has_inspector=false.
+    //   host_has_sidebar / host_has_inspector = the window's REAL pane shape
+    //   (window.m slot maps; -1 = none) so the route webview's zapp.hasSidebar /
+    //   zapp.hasInspector identity matches the content pane's — hardcoding
+    //   true/false here would misidentify the no-sidebar+inspector shape.
     // Note: url_override=NULL — the route url was set via set_pending_route_url
     // above and is consumed once at doc-start.
     darwin_webview_create_ext(win,
@@ -307,8 +320,8 @@ void zapp_ios_push_route_vc(int32_t windowId, const char* url) {
         /*container_view*/(__bridge void*)vc.view,
         /*identity_window_id*/windowId,
         /*pane_role*/0,
-        /*host_has_sidebar*/true,
-        /*host_has_inspector*/false);
+        /*host_has_sidebar*/(zapp_ios_sidebar_slot_for(windowId) >= 0),
+        /*host_has_inspector*/(zapp_ios_inspector_slot_for(windowId) >= 0));
 
     // Locate the webview that create_ext pinned as vc.view's first subview.
     for (UIView* sub in vc.view.subviews) {

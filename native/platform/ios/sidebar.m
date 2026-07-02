@@ -204,26 +204,101 @@ static void zapp_ios_sidebar_on_main(void (^block)(void)) {
     else dispatch_async(dispatch_get_main_queue(), block);
 }
 
+// Forward declaration — defined later (collapsed-nav discovery helper) but
+// used by the shape-agnostic fallback below.
+static UINavigationController* zapp_ios_collapsed_nav(UISplitViewController* svc);
+
+// --- Shape-agnostic content-nav fallback (G3 fix) ---------------------------
+//
+// The registry above only knows SIDEBAR windows — zapp_ios_sidebar_register
+// runs solely on window.m's hasSidebar path. The E3 hidden-Primary shape
+// (no-sidebar + inspector, ZappIOSHiddenPrimarySplitViewController in
+// window.m) ALSO roots a UISplitViewController whose Secondary column is a
+// nav-wrapped content pane, but deliberately never registers here (there is
+// no sidebar to manage). Before this fallback, every consumer of the two
+// resolvers below — darwin_toolbar_set_items and routing.m's push/pop seam —
+// resolved nil for that shape and no-op'd: no native toolbar, no route pushes
+// (the deferral the G3 gate rejected). Resolve the shape directly from the
+// host UIWindow's rootViewController instead.
+//
+// window_ptr IS the host UIWindow pointer — the same value this registry keys
+// on (window.m's zapp_ios_windows dispatch table stores the UIWindow, and
+// darwin_window_get_by_numeric_id hands it back as void*). Dereference safety
+// matches the registry path's callers: every consumer obtains window_ptr from
+// a live dispatch-table lookup immediately before calling, and iOS windows
+// are never deallocated (darwin_window_force_close only hides them; the
+// dispatch slots are never cleared), so this cannot resurrect a nav for a
+// torn-down window. Nil-safe throughout.
+static UINavigationController* zapp_ios_secondary_nav_fallback(void* window_ptr) {
+    UIWindow* win = (__bridge UIWindow*)window_ptr;
+    UIViewController* root = win.rootViewController;
+    if (!root) return nil;
+    if ([root isKindOfClass:[UISplitViewController class]]) {
+        UISplitViewController* svc = (UISplitViewController*)root;
+        // The content pane is always the Secondary column (doubleColumn — both
+        // the sidebar shape and the hidden-Primary shape). Plain iOS-14 API,
+        // no availability gate needed at Zapp's 15.0 minimum.
+        UIViewController* secondary =
+            [svc viewControllerForColumn:UISplitViewControllerColumnSecondary];
+        if ([secondary isKindOfClass:[UINavigationController class]]) {
+            return (UINavigationController*)secondary;
+        }
+        // Collapsed compact (iPhone): UIKit may surface the combined collapsed
+        // stack instead of the registered column VC — find the combined nav
+        // the same way the sidebar shape does.
+        return zapp_ios_collapsed_nav(svc);
+    }
+    // A bare nav root (not a shape window.m builds today): the nav is the
+    // content nav — return it defensively.
+    if ([root isKindOfClass:[UINavigationController class]]) {
+        return (UINavigationController*)root;
+    }
+    // Plain shape (no sidebar, no inspector — ZappIOSRootViewController):
+    // genuinely nav-less. Preserve the nil no-op behavior.
+    return nil;
+}
+
 // window_ptr -> content UINavigationController (for the toolbar to reach
-// contentVC.navigationItem). Returns nil for no-sidebar windows.
+// contentVC.navigationItem). Registry fast path FIRST (sidebar windows —
+// unchanged behavior); no-sidebar windows fall back to the split's Secondary
+// nav (hidden-Primary shape) and nil for the plain nav-less shape.
 // Declared extern in ios/toolbar.m.
 UINavigationController* zapp_ios_content_nav_for_window(void* window_ptr) {
-    if (!window_ptr || !zapp_ios_sidebars) return nil;
-    NSValue* key = [NSValue valueWithPointer:window_ptr];
-    ZappIOSSidebarController* c = zapp_ios_sidebars[key];
-    return c ? c.contentNav : nil;
+    if (!window_ptr) return nil;
+    if (zapp_ios_sidebars) {
+        NSValue* key = [NSValue valueWithPointer:window_ptr];
+        ZappIOSSidebarController* c = zapp_ios_sidebars[key];
+        if (c) return c.contentNav;
+    }
+    return zapp_ios_secondary_nav_fallback(window_ptr);
 }
 
 // window_ptr -> the content UIViewController stored at registration time.
 // Returns the authoritative contentVC (not inferred from nav stack), so the
 // toolbar can target contentVC.navigationItem even when UIKit has orphaned
-// contentNav in the combined collapsed stack. Nil for no-sidebar/unregistered.
+// contentNav in the combined collapsed stack. Registry fast path FIRST
+// (sidebar windows — unchanged); no-sidebar windows resolve the content pane
+// out of the split's Secondary nav stack (hidden-Primary shape) and nil for
+// the plain nav-less shape.
 // Declared extern in ios/toolbar.m.
 UIViewController* zapp_ios_content_vc_for_window(void* window_ptr) {
-    if (!window_ptr || !zapp_ios_sidebars) return nil;
-    NSValue* key = [NSValue valueWithPointer:window_ptr];
-    ZappIOSSidebarController* c = zapp_ios_sidebars[key];
-    return c ? c.contentVC : nil;
+    if (!window_ptr) return nil;
+    if (zapp_ios_sidebars) {
+        NSValue* key = [NSValue valueWithPointer:window_ptr];
+        ZappIOSSidebarController* c = zapp_ios_sidebars[key];
+        if (c) return c.contentVC;
+    }
+    UINavigationController* nav = zapp_ios_secondary_nav_fallback(window_ptr);
+    // The content pane is the nav's root — but on a collapsed (iPhone)
+    // hidden-Primary split, UIKit's combined stack can transiently hold the
+    // EMPTY Primary beneath it until window.m's prune runs. That placeholder
+    // is a bare UIViewController by construction (window.m's emptyPrimary);
+    // every real Zapp pane/route VC is a subclass — skip exact-UIViewController
+    // members so the placeholder is never mistaken for content.
+    for (UIViewController* vc in nav.viewControllers) {
+        if (![vc isMemberOfClass:[UIViewController class]]) return vc;
+    }
+    return nav.viewControllers.firstObject;
 }
 
 // window_ptr -> the combined collapsed UINavigationController captured by

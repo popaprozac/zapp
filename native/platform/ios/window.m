@@ -341,11 +341,11 @@ extern void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot,
 // variant, G1 human-smoked on iPad + iPhone):
 //   • Primary   = an EMPTY plain UIViewController (clear background, never
 //                 nav-wrapped, no content) held permanently hidden.
-//   • Secondary = the content pane (nav-wrapped, bar hidden — no-sidebar
-//                 windows are chrome-less today: toolbar.m and routing.m both
-//                 resolve their navs through the sidebar registry and no-op
-//                 for this shape; native toolbar support here is a future
-//                 cycle).
+//   • Secondary = the content pane (nav-wrapped, bar visible — the content
+//                 pane carries the native toolbar, same stance as the sidebar
+//                 shape's contentNav. toolbar.m and routing.m reach this
+//                 shape's nav via sidebar.m's Secondary-column fallback
+//                 resolver, G3 fix).
 //   • preferredDisplayMode SecondaryOnly + presentsWithGesture NO +
 //     showsSecondaryOnlyButton NO ⇒ no user affordance can ever summon the
 //     Primary.
@@ -377,9 +377,9 @@ extern void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot,
 //      smoke showed the collapsed nav as [emptyPrimary, content], which grows
 //      a stray native Back button that pops to a blank screen. Filtering the
 //      empty Primary out makes the collapsed stack content-only: nothing
-//      beneath to pop to, by button OR gesture (the bar-hidden content nav
-//      leaves UIKit's interactive-pop disarmed and this shape never re-arms
-//      it the way sidebar.m does). Expansion is unaffected: on
+//      beneath to pop to, by button OR gesture (with the bar visible — G3
+//      fix — UIKit's interactive-pop is armed, but it no-ops at depth 1;
+//      pushed route VCs on top pop normally). Expansion is unaffected: on
 //      compact→regular UIKit restores columns from its own column registry
 //      (setViewController:forColumn:), not from the collapsed stack, and the
 //      sticky SecondaryOnly mode keeps the Primary hidden regardless.
@@ -805,15 +805,23 @@ void zapp_ios_materialize_pending_windows(void) {
 
             // Nav-wrap the content NOW, while the column VC is still empty —
             // never re-parents a live WKWebView (the ordering rule
-            // zapp_ios_sidebar_register documents). Bar HIDDEN: no-sidebar
-            // windows are chrome-less today (toolbar.m/routing.m resolve navs
-            // via the sidebar registry and no-op for this shape); a visible
-            // empty bar would regress the plain root path's look. The hidden
-            // bar also leaves UIKit's interactive-pop gesture disarmed — this
-            // shape never re-arms it, part of the no-Back-button guarantee.
+            // zapp_ios_sidebar_register documents). Bar VISIBLE (G3 fix,
+            // mirroring the sidebar shape's contentNav in
+            // zapp_ios_sidebar_register): the content pane carries the native
+            // toolbar, and toolbar.m/routing.m now reach this shape's nav via
+            // sidebar.m's Secondary-column fallback resolver — so the bar must
+            // be shown at launch or set toolbar items render invisibly.
+            // ZappRouteNavDelegate's willShowViewController: (routing.m) is
+            // the ongoing authority once route pushes install it. A visible
+            // bar re-arms UIKit's interactive-pop gesture, but the
+            // no-Back-button guarantee still holds at the nav root: the
+            // collapsed-stack prune below leaves nothing beneath the content
+            // VC to pop to (button or edge swipe both no-op at depth 1); a
+            // pushed route VC on TOP gets the normal back affordance, which is
+            // desired nav behavior.
             UINavigationController* contentNav =
                 [[UINavigationController alloc] initWithRootViewController:contentVC];
-            contentNav.navigationBarHidden = YES;
+            contentNav.navigationBarHidden = NO;
 
             [hpSplit setViewController:emptyPrimary forColumn:UISplitViewControllerColumnPrimary];
             [hpSplit setViewController:contentNav forColumn:UISplitViewControllerColumnSecondary];
