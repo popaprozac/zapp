@@ -38,7 +38,15 @@ Vehicle: `spikes/ios-splitview-reference` (zero risk to the framework branch) �
 
 Cross-cutting diagnostic while probing: `xcrun simctl spawn booted log stream --level debug --predicate 'subsystem == "com.apple.UIKit"'` — the `updatedEnforcingColumnPreferences = %d` log line shows which public mutations flip enforcement.
 
-## Decision tree after the probe
+## PROBE RESULTS (2026-07-01, iPad sim iOS 26.4, human-run — VERDICT SEALED)
+
+- **P1 clamp-nudge: FAILED.** Clamp visibly held the target (240) while active; the restore's layout pass snapped straight back to the dragged width (320) — `inspW=320` on the restore layout. The private user-width cache survives clamping. (Also re-confirmed: `preferred*` stays at the Automatic sentinel, printed as `-3.4e38`, through a drag.)
+- **P2 hide/show cycle: FAILED.** Column re-presented at the dragged width (~232), not the armed 360. The pin survives full column dismissal.
+- **P3 divider reset: WORKS — it is a DOUBLE-tap.** Single tap does nothing; double-tap on the seam animated the column to the armed `preferredInspectorColumnWidth` (240) from ~347. `setWidth` post-drag therefore ARMS the width that the user's double-tap adopts — Apple's ownership model, complete: app arms preferred → user owns actual → double-tap returns to the app's preference.
+
+**Final verdict: `POLICY: user-resize-wins`, no programmatic override via public API. Ship the documented ownership model, enriched with the double-tap affordance.** Probe code lives in the spike's uncommitted WIP (`src/ContentViewController.m` P1/P2 handlers + `src/InspectorViewController.m` width logging) for future re-runs on new iOS releases.
+
+## Decision tree after the probe (resolved: "only P3 works" branch)
 
 - **P1 or P2 works** → decide semantics: make `setWidth` always-authoritative (macOS parity) vs. an explicit `setWidth(w, {force})` — the silent blink/event-churn of P2 argues for opt-in if P2 is the winner; P1 winning is clean enough to be the default path.
 - **Only P3 works** → keep the documented ownership model; docs gain "the user can tap the divider to adopt the app's requested width" — a real, Apple-designed affordance.

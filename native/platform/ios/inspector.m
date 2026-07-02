@@ -310,12 +310,14 @@ void zapp_ios_inspector_column_did_hide(void* window) {
 // This function:
 //   • strongly retains inspectorNav — it must survive on <26 (or with no
 //     split at all), where nothing else holds a reference to it.
-//   • stores contentVC (weak), ids, width.
-//   • on iOS 26+ with a split: applies the configured width and, unless the
-//     app asked for collapsed:true, shows the column once (deferred one tick
-//     so it lands AFTER UIKit's initial layout — the column starts HIDDEN by
-//     default when attached, confirmed on the spike, regardless of the
-//     collapsed intent).
+//   • stores contentVC (weak), ids, width, min/max, collapsible, resizable,
+//     and seeds the lastCollapsedEmit dedupe from the create-time collapsed
+//     value (so the deferred launch column op below emits nothing).
+//   • on iOS 26+ with a split: applies preferred width + min/max (or the
+//     resizable:false min==max pin), then honors `collapsed` EXPLICITLY in
+//     BOTH directions with a deferred show/hideColumn (one tick, so it lands
+//     AFTER UIKit's initial layout — Zapp's materialize attaches the column
+//     VISIBLE, unlike the spike, so collapsed:true needs the explicit hide).
 //   • registers the controller in the registry so darwin_inspector_* can
 //     find it from any pane's transport slot.
 void zapp_ios_inspector_register(void* window, void* inspectorNav, void* contentVC,
@@ -557,8 +559,12 @@ void darwin_inspector_toggle(int32_t window_id) {
 //   iOS 26+ with a split: drives split.preferredInspectorColumnWidth (takes
 //     precedence over preferredInspectorColumnWidthFraction — verified in the
 //     UISplitViewController.h SDK header).
-//   <26, or no split: full-width/full-screen modal sheet — width is n/a
-//     (documented no-op there).
+//     Post-user-drag, UIKit's private drag-pin overrides the preferred width
+//     (user-resize-wins policy; see docs/superpowers/research/
+//     2026-07-01-ios-column-width-drag-pin.md) — the assignment still ARMS
+//     the width the user's divider double-tap snaps back to.
+//   <26, or no split: full-width/full-screen modal sheet — width is n/a;
+//     warns once via zapp_ios_control_unsupported.
 // Emits inspector-resized for state parity with the runtime InspectorHandle.
 void darwin_inspector_set_width(int32_t window_id, int32_t width) {
     zapp_ios_inspector_on_main(^{

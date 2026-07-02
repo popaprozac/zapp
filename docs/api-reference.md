@@ -1115,9 +1115,12 @@ no size-class notion.
 >     `preferredPrimaryColumnWidth` before the user has dragged the divider.
 >     Once the user manually drags, UIKit stores an internal drag-pin that
 >     overrides `preferredPrimaryColumnWidth`, and there is no public API to
->     clear it. `setWidth` becomes a no-op for the visual column after a drag
->     (though `SIDEBAR_RESIZED` still fires and reactive state stays in sync).
->     This is a UIKit limitation — `UISplitViewController` has no equivalent
+>     clear it. `setWidth` no longer moves the visual column after a drag
+>     (though `SIDEBAR_RESIZED` still fires and reactive state stays in sync)
+>     — but it still **arms** the preferred width: double-tapping the divider
+>     snaps the column back to the app's requested width (UIKit's built-in
+>     reset gesture; verified on the inspector divider). This is UIKit's
+>     designed ownership model — `UISplitViewController` has no equivalent
 >     of AppKit's `setPosition:ofDividerAtIndex:`. Use `resizable: false` when
 >     programmatic width control must be authoritative on iPad.
 
@@ -1143,13 +1146,22 @@ version.
 
 - `setWidth(px)`, `minWidth`/`maxWidth`, and `setResizable(bool)` are honored
   on the iOS 26+ column (`preferredInspectorColumnWidth` /
-  `minimumInspectorColumnWidth` / `maximumInspectorColumnWidth`);
-  `resizable: false` locks the divider at the column's *current* width, not
-  the configured `width`.
+  `minimumInspectorColumnWidth` / `maximumInspectorColumnWidth`).
+  `resizable: false` at create pins the divider at the configured `width`;
+  runtime `setResizable(false)` locks it at the column's *current* width.
+- The sidebar's iPadOS width-ownership rule (note above) applies to the
+  inspector column too: once the user drags the content↔inspector divider,
+  UIKit's internal drag-pin takes over and `setWidth` no longer moves the
+  visual column (`INSPECTOR_RESIZED` still fires and reactive state stays in
+  sync). `setWidth` still arms the preferred width — the user can
+  **double-tap the divider** to snap the column to it — and
+  `resizable: false` remains authoritative when programmatic control is
+  required.
 - Below iOS 26 (or without a sidebar split) the inspector is a modal sheet
-  with no divider — `width`/`minWidth`/`maxWidth`/`setWidth`/`setResizable`
-  are inert there and log the same one-time console note as `collapsible`
-  (below).
+  with no divider — `width`/`minWidth`/`maxWidth` are inert there (silently:
+  they always carry the framework defaults), while `setWidth` /
+  `setResizable` / `resizable: false` log the same one-time console note as
+  `collapsible` (below).
 
 ```ts
 const win = await Window.create({
