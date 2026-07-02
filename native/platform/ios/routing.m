@@ -13,8 +13,8 @@
 // Deleted in T2: owned-nav fork, iphonenav.m externs, toolbar-apply call in old delegate.
 // The ZappRouteNavDelegate does not apply toolbar items.
 //
-// Kept verbatim: ZappRouteVC @interface/@implementation + viewDidLayoutSubviews,
-// zapp_route_vc_teardown, and all externs the seam still needs.
+// Kept verbatim: ZappRouteVC @interface/@implementation, zapp_route_vc_teardown,
+// and all externs the seam still needs.
 
 #import <UIKit/UIKit.h>
 #import <WebKit/WebKit.h>
@@ -32,8 +32,19 @@ extern void zapp_router_pop_from_native(int32_t window_id);
 // Per-route identity: set the route url just before create_ext mints the route
 // webview → it renders its OWN fixed route (zapp.route), not the latest broadcast.
 extern void zapp_ios_set_pending_route_url(const char* url);
-// Inject --zapp-* safe-area vars into a route VC's webview after layout.
-extern void zapp_ios_toolbar_inject_webview_safe_area(WKWebView* wv);
+// Shared edge-pin helper (ios/sidebar.m, #771): Full/Safe constraint-pair
+// model; route VCs are its third consumer (datum 1 — iPad-expanded inset bleed).
+extern void zapp_ios_edge_pin_webview(WKWebView* wv, UIView* container,
+                                      NSLayoutConstraint* __autoreleasing * outLeadingFull,
+                                      NSLayoutConstraint* __autoreleasing * outLeadingSafe,
+                                      NSLayoutConstraint* __autoreleasing * outTrailingFull,
+                                      NSLayoutConstraint* __autoreleasing * outTrailingSafe);
+extern void zapp_ios_edge_pin_update(BOOL isRegular,
+                                     NSLayoutConstraint* leadingFull,
+                                     NSLayoutConstraint* leadingSafe,
+                                     NSLayoutConstraint* trailingFull,
+                                     NSLayoutConstraint* trailingSafe,
+                                     UIView* layoutView);
 // Slot-restore dance: capture content webview before create_ext, restore after.
 // zapp_ios_content_webview_for_slot: returns zapp_ios_webviews[slot] (window.m).
 // zapp_ios_register_webview: writes a webview into the UIWindow-keyed host slot.
@@ -56,8 +67,18 @@ extern int32_t zapp_ios_inspector_slot_for(int32_t host_slot);
 
 // Route VC: a plain UIViewController hosting its own WKWebView.
 // Tagged so the delegate can distinguish route VCs from the root contentVC.
+// Edge model (#771 datum 1): the webview is pinned via the shared Full/Safe
+// constraint-pair helper (sidebar.m) — on iPad regular width UIKit expresses
+// the tiled sidebar (leading) and the iOS-26 Inspector column (trailing) as
+// SAFE-AREA INSETS on the full-width Secondary column, so a raw-pinned route
+// webview slides under both. The pairs are stored here and swapped per
+// horizontal size class, exactly like the content webview's.
 @interface ZappRouteVC : UIViewController
 @property (nonatomic, weak) WKWebView* webview;
+@property (nonatomic, strong) NSLayoutConstraint* leadingFull;
+@property (nonatomic, strong) NSLayoutConstraint* leadingSafe;
+@property (nonatomic, strong) NSLayoutConstraint* trailingFull;
+@property (nonatomic, strong) NSLayoutConstraint* trailingSafe;
 @end
 
 // Forward declaration of the teardown helper — defined below; referenced from
@@ -65,12 +86,30 @@ extern int32_t zapp_ios_inspector_slot_for(int32_t host_slot);
 static void zapp_route_vc_teardown(ZappRouteVC* vc);
 
 @implementation ZappRouteVC
-- (void)viewDidLayoutSubviews {
-    [super viewDidLayoutSubviews];
-    // Route VCs aren't registered pane slots, so the toolbar metrics pass never
-    // injects their --zapp-* safe-area vars (content under the nav). Inject
-    // here, after layout, so safeAreaInsets is valid. Idempotent.
-    if (self.webview) zapp_ios_toolbar_inject_webview_safe_area(self.webview);
+- (void)zapp_updateEdges {
+    if (!self.leadingFull || !self.leadingSafe) return;
+    if (!self.trailingFull || !self.trailingSafe) return;
+    BOOL isRegular = (self.traitCollection.horizontalSizeClass
+                      == UIUserInterfaceSizeClassRegular);
+    zapp_ios_edge_pin_update(isRegular, self.leadingFull, self.leadingSafe,
+                             self.trailingFull, self.trailingSafe, self.view);
+}
+- (void)traitCollectionDidChange:(UITraitCollection*)previousTraitCollection {
+    [super traitCollectionDidChange:previousTraitCollection];
+    [self zapp_updateEdges];
+}
+- (void)viewWillTransitionToSize:(CGSize)size
+       withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator {
+    [super viewWillTransitionToSize:size withTransitionCoordinator:coordinator];
+    if (coordinator) {
+        [coordinator animateAlongsideTransition:nil
+                                     completion:^(id<UIViewControllerTransitionCoordinatorContext> ctx) {
+            (void)ctx;
+            [self zapp_updateEdges];
+        }];
+    } else {
+        [self zapp_updateEdges];
+    }
 }
 - (void)viewDidDisappear:(BOOL)animated {
     [super viewDidDisappear:animated];
@@ -329,6 +368,20 @@ void zapp_ios_push_route_vc(int32_t windowId, const char* url) {
             vc.webview = (WKWebView*)sub;
             break;
         }
+    }
+
+    // #771 datum 1: convert the create_ext frame+autoresizing mount to the
+    // shared edge-pin model so the route webview honors the tiled-sidebar
+    // (leading) and inspector-column (trailing) safe-area insets on iPad
+    // regular width, and stays full-bleed on compact.
+    if (vc.webview) {
+        NSLayoutConstraint *lf = nil, *ls = nil, *tf = nil, *ts = nil;
+        zapp_ios_edge_pin_webview(vc.webview, vc.view, &lf, &ls, &tf, &ts);
+        vc.leadingFull  = lf;
+        vc.leadingSafe  = ls;
+        vc.trailingFull = tf;
+        vc.trailingSafe = ts;
+        [vc zapp_updateEdges];
     }
 
     // Restore the content webview to the host slot (slot-restore dance).

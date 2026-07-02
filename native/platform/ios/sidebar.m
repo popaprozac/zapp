@@ -937,7 +937,7 @@ void zapp_ios_sidebar_unregister(void* window) {
 //   - Compact (iPhone) → raw view anchors (full-bleed — device notches create
 //                        edge safe insets in landscape that must NOT inset content)
 //
-// This helper is called from:
+// zapp_ios_update_content_edges is called from:
 //   1. zapp_ios_sidebar_set_content_webview (initial setup)
 //   2. ZappIOSSplitViewController traitCollectionDidChange: (trait changes)
 //   3. ZappIOSSplitViewController viewWillTransitionToSize: completion (rotation/multitasking)
