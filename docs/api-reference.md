@@ -1212,7 +1212,7 @@ to).
   per runloop tick and deduped on the settled width, with a clamp-correction
   follow-up event when a programmatic `setWidth(px)` lands outside
   `minWidth`/`maxWidth` (#720).
-- Below iOS 26 (or without a sidebar split) the inspector is a modal sheet
+- Below iOS 26 the inspector is a modal sheet
   with no divider — `width`/`minWidth`/`maxWidth` are inert there (silently:
   they always carry the framework defaults), while `setWidth` /
   `setResizable` / `resizable: false` log the same one-time console note as
