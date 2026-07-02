@@ -886,6 +886,26 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
                 BOOL collapsed = zapp_ios_split_is_collapsed_for_window(window_ptr);
                 BOOL sidebarHidden = !collapsed && zapp_ios_sidebar_is_hidden_for_window(window_ptr);
                 zapp_ios_toolbar_apply_to_nav(applyNav, entry, !sidebarHidden);
+
+                // #771 G1-B PRIMER: set_items can run with NO nav transition in
+                // flight — e.g. a bare remove() → setItems() re-attach from app
+                // code (kitchen-sink's Toolbar section), not a route push/pop.
+                // ZappRouteNavDelegate's willShowViewController: (routing.m) is
+                // the sole ONGOING bar-visibility owner, but it only fires on a
+                // real UIKit transition — a bar left hidden by
+                // darwin_toolbar_remove's matching PRIMER below would otherwise
+                // never be re-shown. Same class as the three construction-time
+                // primers (window.m:818, sidebar.m:662/846/853): a direct,
+                // idempotent visibility write for a state UIKit will not
+                // transition into on its own. Expanded: the content column's
+                // bar is meant to be visible whenever a toolbar is registered,
+                // so show unconditionally. Collapsed: only force it open when
+                // the content VC is what's actually on top — never steal the
+                // bar away from a visible sidebar root.
+                BOOL topIsContent = (cvc && applyNav.topViewController == cvc);
+                if ((!collapsed || topIsContent) && applyNav.navigationBarHidden) {
+                    [applyNav setNavigationBarHidden:NO animated:NO];
+                }
             }
         }
 
@@ -1188,8 +1208,6 @@ void darwin_toolbar_remove(void* window_ptr) {
             // ── Collapsed (iPhone) ────────────────────────────────────────
             UINavigationController* collapsedNav = zapp_ios_collapsed_nav_for_window(window_ptr);
             if (collapsedNav) {
-                // Bar visibility is owned by ZappRouteNavDelegate's willShowViewController:
-                // (routing.m Fix 1). Do NOT write navigationBarHidden here.
                 // Clear items on the content VC's navigationItem.
                 UIViewController* contentVC = zapp_ios_content_vc_for_window(window_ptr);
                 if (contentVC) {
@@ -1199,6 +1217,21 @@ void darwin_toolbar_remove(void* window_ptr) {
                     contentVC.navigationItem.title     = nil;
                     contentVC.navigationItem.titleView = nil;
                 }
+                // #771 G1-B PRIMER (symmetric with set_items' attach-time show
+                // above): no nav transition follows remove() in the bare
+                // remove()/setItems() cycle, so willShowViewController: (the
+                // ongoing visibility owner) never fires to hide the now-
+                // toolbar-less bar — it would otherwise stay visible-but-empty
+                // forever, occluding content that (correctly, per the fix
+                // below) no longer reserves space for it. Only hide when the
+                // content VC is actually the one on top — a covering
+                // ZappRouteVC keeps its own bar regardless of window-toolbar
+                // state (routing.m's willShow shows it unconditionally for
+                // any ZappRouteVC).
+                if (contentVC && collapsedNav.topViewController == contentVC
+                    && !collapsedNav.navigationBarHidden) {
+                    [collapsedNav setNavigationBarHidden:YES animated:NO];
+                }
                 // Clear the nav delegate (no toolbar → no bar visibility management).
                 collapsedNav.delegate = nil;
             }
@@ -1206,8 +1239,6 @@ void darwin_toolbar_remove(void* window_ptr) {
             // ── Expanded (iPad) ───────────────────────────────────────────
             UINavigationController* contentNav = zapp_ios_content_nav_for_window(window_ptr);
             if (contentNav) {
-                // Bar visibility is owned by ZappRouteNavDelegate's willShowViewController:
-                // (routing.m Fix 1). Do NOT write navigationBarHidden here.
                 UIViewController* vc = contentNav.topViewController;
                 if (vc) {
                     vc.navigationItem.leftItemsSupplementBackButton = YES;
@@ -1216,6 +1247,13 @@ void darwin_toolbar_remove(void* window_ptr) {
                     vc.navigationItem.title     = nil;
                     vc.navigationItem.titleView = nil;
                 }
+                // #771 G1-B PRIMER: see the collapsed branch above for
+                // rationale. Expanded has no "sidebar root" state — vc IS the
+                // content VC whenever no route currently covers it.
+                UIViewController* contentVC = zapp_ios_content_vc_for_window(window_ptr);
+                if (vc && vc == contentVC && !contentNav.navigationBarHidden) {
+                    [contentNav setNavigationBarHidden:YES animated:NO];
+                }
             }
         }
 
@@ -1223,19 +1261,36 @@ void darwin_toolbar_remove(void* window_ptr) {
         // inject_metrics measures a hidden bar (height → 0).
         [zapp_ios_toolbars removeObjectForKey:key];
 
-        // Re-inject --zapp-toolbar-height: 0 and --zapp-titlebar-height: 0
-        // (one tick so UIKit hides the bar first). Clear all pane webviews.
-        // Entry is gone so we can't call inject_metrics — build the JS inline.
+        // Re-inject --zapp-toolbar-height: 0. The PRIMER above already hid
+        // the bar synchronously, so 0 is unconditionally correct here — no
+        // measurement (or one-tick wait for layout) needed, unlike the
+        // show-a-real-bar case. Clear all pane webviews. Entry is gone so we
+        // can't call inject_metrics — build the JS inline.
+        //
+        // #771 G1-B: --zapp-toolbar-height is the ONLY var stomped here.
+        // --zapp-titlebar-height and --zapp-safe-area-* stay on the reactive
+        // env(safe-area-inset-*) CSS fallback (webview.m's document-start
+        // WKUserScript) — same ownership split zapp_toolbar_inject_metrics's
+        // injectIntoWebview documents below. WKWebView recomputes
+        // safeAreaInsets (and therefore env()) live as the just-hidden bar
+        // changes the content view's safe area; no native re-injection is
+        // needed or correct here. A prior version force-set these to a frozen
+        // "0px" inline style via .style.setProperty, which PERMANENTLY shadows
+        // the CSS env() rule (inline beats stylesheet in the cascade, and
+        // nothing ever called .style.removeProperty to release it) — since
+        // injectIntoWebview only ever re-injects --zapp-toolbar-height (by the
+        // same ownership contract), that frozen "0px" was never cleared on a
+        // later attach. This was the actual root cause of #771 G1: the
+        // re-attached bar's row height WAS measured correctly, but
+        // --zapp-titlebar-height stayed stuck at the stale "0px" this
+        // function had inline-set, permanently masking env()'s correct
+        // (reactive) value — hence "content underlapping the re-attached bar,
+        // titlebar-height stale."
         int32_t sidebarSlot   = zapp_ios_sidebar_slot_for(slot);
         int32_t inspectorSlot = zapp_ios_inspector_slot_for(slot);
         dispatch_async(dispatch_get_main_queue(), ^{
             NSString* js = @"(function(){try{var r=document.documentElement;if(r){"
-                            "r.style.setProperty('--zapp-titlebar-height','0px');"
                             "r.style.setProperty('--zapp-toolbar-height','0px');"
-                            "r.style.setProperty('--zapp-safe-area-top','0px');"
-                            "r.style.setProperty('--zapp-safe-area-left','0px');"
-                            "r.style.setProperty('--zapp-safe-area-right','0px');"
-                            "r.style.setProperty('--zapp-safe-area-bottom','0px');"
                             "}}catch(e){}})();";
             WKWebView* wv = zapp_ios_content_webview_for_slot(slot);
             if (wv) [wv evaluateJavaScript:js completionHandler:nil];
