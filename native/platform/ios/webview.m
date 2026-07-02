@@ -917,7 +917,9 @@ void darwin_webview_create_ext(void* window_ptr, bool inspectable, bool accept_f
         "--zapp-safe-area-right:env(safe-area-inset-right,0px);"
         "--zapp-safe-area-bottom:env(safe-area-inset-bottom,0px)"
         "}';"
-        "document.head.appendChild(s);"
+        // document.head does NOT exist yet at WKUserScriptInjectionTimeAtDocumentStart;
+        // append to documentElement (always present) so the :root rule actually applies.
+        "(document.head||document.documentElement).appendChild(s);"
         "}catch(e){}})();"
         injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
 

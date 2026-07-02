@@ -50,6 +50,7 @@
 #import <WebKit/WebKit.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <objc/runtime.h>
 
 // Associated-object keys: use static addresses, not C string literals.
@@ -470,6 +471,11 @@ static void zapp_ios_toolbar_apply_to_nav(UINavigationController* nav,
     UIViewController* vc = nav.topViewController;
     if (!vc) return;
 
+    // [zapp-nav] diagnostic: apply_to_nav — shows which nav+topVC gets items
+    fprintf(stderr, "[zapp-nav] toolbar_apply win=%d fn=apply_to_nav nav=%p topVC=%p\n",
+            (int)entry.hostSlot, (__bridge void*)nav, (__bridge void*)vc);
+    fflush(stderr);
+
     NSArray<UIBarButtonItem*>* leading = includeToggleSidebar
         ? entry.leadingItems
         : entry.leadingNoToggle;
@@ -504,7 +510,9 @@ static void zapp_ios_toolbar_apply_to_nav(UINavigationController* nav,
     vc.navigationItem.title = entry.centerTitle;       // nil clears it
     vc.navigationItem.titleView = entry.centerView;    // nil clears it
 
-    nav.navigationBarHidden = NO;
+    // Bar visibility is now owned exclusively by ZappRouteNavDelegate's
+    // willShowViewController: (routing.m Fix 1). Do NOT touch navigationBarHidden
+    // here — any write here would race with the delegate and cause drift.
 }
 
 // ─── darwin_toolbar_set_items ────────────────────────────────────────────────
@@ -956,6 +964,11 @@ void zapp_ios_toolbar_apply_for_window_hidden(void* window_ptr, BOOL sidebarHidd
 
     BOOL collapsed = zapp_ios_split_is_collapsed_for_window(window_ptr);
 
+    // [zapp-nav] diagnostic: apply_for_window_hidden entry
+    fprintf(stderr, "[zapp-nav] toolbar_apply win=%d fn=apply_for_window_hidden collapsed=%d sidebarHidden=%d\n",
+            (int)entry.hostSlot, (int)collapsed, (int)sidebarHidden);
+    fflush(stderr);
+
     if (collapsed) {
         // ── Collapsed path (iPhone / compact) ──────────────────────────────
         UINavigationController* collapsedNav = zapp_ios_collapsed_nav_for_window(window_ptr);
@@ -996,10 +1009,10 @@ void zapp_ios_toolbar_apply_for_window_hidden(void* window_ptr, BOOL sidebarHidd
             contentVC.navigationItem.titleView = entry.centerView;    // nil clears it
         }
 
-        // Show bar only when the content VC is on top (depth > 1 means pushed
-        // past the sidebar root). Avoids an empty toolbar gap over the sidebar.
-        BOOL contentOnTop = (collapsedNav.viewControllers.count > 1);
-        collapsedNav.navigationBarHidden = !contentOnTop;
+        // Bar visibility on the collapsed nav is now owned exclusively by
+        // ZappRouteNavDelegate's willShowViewController: (routing.m Fix 1).
+        // Do NOT write navigationBarHidden here — willShow fires on every
+        // push/pop and sets the correct state without drift.
 
     } else {
         // ── Expanded path (iPad / regular) ─────────────────────────────────
@@ -1033,6 +1046,14 @@ void zapp_ios_toolbar_apply_for_window(void* window_ptr) {
             zapp_ios_toolbar_apply_for_window(window_ptr);
         });
         return;
+    }
+    // [zapp-nav] diagnostic: apply_for_window entry
+    NSValue* _diagKey = [NSValue valueWithPointer:window_ptr];
+    ZappIOSToolbarEntry* _diagEntry = zapp_ios_toolbars[_diagKey];
+    if (_diagEntry) {
+        fprintf(stderr, "[zapp-nav] toolbar_apply win=%d fn=apply_for_window\n",
+                (int)_diagEntry.hostSlot);
+        fflush(stderr);
     }
     // Read the live sidebar-hidden state and delegate to the explicit-state variant.
     BOOL sidebarHidden = zapp_ios_sidebar_is_hidden_for_window(window_ptr);
@@ -1165,7 +1186,8 @@ void darwin_toolbar_remove(void* window_ptr) {
             // ── Collapsed (iPhone) ────────────────────────────────────────
             UINavigationController* collapsedNav = zapp_ios_collapsed_nav_for_window(window_ptr);
             if (collapsedNav) {
-                collapsedNav.navigationBarHidden = YES;
+                // Bar visibility is owned by ZappRouteNavDelegate's willShowViewController:
+                // (routing.m Fix 1). Do NOT write navigationBarHidden here.
                 // Clear items on the content VC's navigationItem.
                 UIViewController* contentVC = zapp_ios_content_vc_for_window(window_ptr);
                 if (contentVC) {
@@ -1182,7 +1204,8 @@ void darwin_toolbar_remove(void* window_ptr) {
             // ── Expanded (iPad) ───────────────────────────────────────────
             UINavigationController* contentNav = zapp_ios_content_nav_for_window(window_ptr);
             if (contentNav) {
-                contentNav.navigationBarHidden = YES;
+                // Bar visibility is owned by ZappRouteNavDelegate's willShowViewController:
+                // (routing.m Fix 1). Do NOT write navigationBarHidden here.
                 UIViewController* vc = contentNav.topViewController;
                 if (vc) {
                     vc.navigationItem.leftItemsSupplementBackButton = YES;
