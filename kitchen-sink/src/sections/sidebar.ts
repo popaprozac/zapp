@@ -1,14 +1,14 @@
 import { Window, WindowEvent } from "@zappdev/runtime";
 import type { Section } from "./types";
 import { card, onAct, setResult } from "../shell/ui";
+import { paneState } from "../shell/pane-state";
 
 export const sidebarSection: Section = {
   id: "sidebar",
   label: "Sidebar",
   render(host) {
     const win = Window.current();
-    let collapsible = true;
-    let resizable = true;
+    const pane = paneState.get(win.id).sidebar;
     host.appendChild(
       card({
         title: "Native Sidebar",
@@ -18,14 +18,19 @@ export const sidebarSection: Section = {
           { act: "toggle", label: "Toggle" },
           { act: "w180", label: "Width 180" },
           { act: "w320", label: "Width 320" },
-          { act: "collapsible", label: "Collapsible: on" },
-          { act: "resizable", label: "Resizable: on" },
+          {
+            act: "collapsible",
+            label: `Collapsible: ${pane.collapsible ? "on" : "off"}`,
+          },
+          {
+            act: "resizable",
+            label: `Resizable: ${pane.resizable ? "on" : "off"}`,
+          },
           { act: "presAuto", label: "Auto" },
           { act: "presTile", label: "Tile" },
           { act: "presOverlay", label: "Overlay" },
         ],
-        note:
-          "<b>On iPad:</b> the sidebar tiles beside the content (Mail-style); at narrow widths or in Slide Over it becomes an overlay — switch <b>Auto / Tile / Overlay</b> to compare. With <b>Resizable: on</b> the user owns the width: drag the divider to resize. <code>setWidth</code> (the Width buttons) sets the starting width, but once you drag, your width wins and <code>setWidth</code> stops moving the divider — a UIKit limitation. Switch <b>Resizable: off</b> to make <code>setWidth</code> authoritative again. <b>On iPhone:</b> the sidebar is a slide-over drawer. (On macOS it's the native NSSplitView above — drag and <code>setWidth</code> always cooperate.)",
+        note: "<b>On iPad:</b> the sidebar tiles beside the content (Mail-style); at narrow widths or in Slide Over it becomes an overlay — switch <b>Auto / Tile / Overlay</b> to compare. With <b>Resizable: on</b> the user owns the width: drag the divider to resize. <code>setWidth</code> (the Width buttons) sets the starting width, but once you drag, your width wins and <code>setWidth</code> stops moving the divider — a UIKit limitation. Switch <b>Resizable: off</b> to make <code>setWidth</code> authoritative again. <b>On iPhone:</b> the sidebar is a slide-over drawer. (On macOS it's the native NSSplitView above — drag and <code>setWidth</code> always cooperate.)",
       }),
     );
     onAct(host, "toggle", () => {
@@ -41,22 +46,27 @@ export const sidebarSection: Section = {
       setResult(host, "width → 320");
     });
     onAct(host, "collapsible", () => {
-      collapsible = !collapsible;
-      win.sidebar?.setCollapsible(collapsible);
+      pane.collapsible = !pane.collapsible;
+      win.sidebar?.setCollapsible(pane.collapsible);
       const btn = host.querySelector<HTMLButtonElement>(
         '[data-act="collapsible"]',
       );
-      if (btn) btn.textContent = `Collapsible: ${collapsible ? "on" : "off"}`;
-      setResult(host, `collapsible → ${collapsible}`);
+      if (btn)
+        btn.textContent = `Collapsible: ${pane.collapsible ? "on" : "off"}`;
+      setResult(host, `collapsible → ${pane.collapsible}`);
     });
     onAct(host, "resizable", () => {
-      resizable = !resizable;
-      win.sidebar?.setResizable(resizable);
+      pane.resizable = !pane.resizable;
+      win.sidebar?.setResizable(pane.resizable);
       const btn = host.querySelector<HTMLButtonElement>(
         '[data-act="resizable"]',
       );
-      if (btn) btn.textContent = `Resizable: ${resizable ? "on" : "off"}`;
-      setResult(host, `resizable → ${resizable} (try dragging the divider)`);
+      if (btn)
+        btn.textContent = `Resizable: ${pane.resizable ? "on" : "off"}`;
+      setResult(
+        host,
+        `resizable → ${pane.resizable} (try dragging the divider)`,
+      );
     });
     onAct(host, "presAuto", () => {
       win.sidebar?.setPresentation("automatic");
@@ -76,9 +86,15 @@ export const sidebarSection: Section = {
     host.innerHTML = `<div class="kv"><b>Sidebar</b><div data-state class="muted">Live — collapse, expand, or drag the sidebar to see state.</div></div>`;
     const state = host.querySelector<HTMLElement>("[data-state]")!;
     const off = [
-      win.on(WindowEvent.SIDEBAR_COLLAPSED, () => { state.textContent = "collapsed"; }),
-      win.on(WindowEvent.SIDEBAR_EXPANDED, () => { state.textContent = "expanded"; }),
-      win.on(WindowEvent.SIDEBAR_RESIZED, (d: any) => { state.textContent = `width ${d.width}`; }),
+      win.on(WindowEvent.SIDEBAR_COLLAPSED, () => {
+        state.textContent = "collapsed";
+      }),
+      win.on(WindowEvent.SIDEBAR_EXPANDED, () => {
+        state.textContent = "expanded";
+      }),
+      win.on(WindowEvent.SIDEBAR_RESIZED, (d: any) => {
+        state.textContent = `width ${d.width}`;
+      }),
     ];
     return () => off.forEach((fn) => fn());
   },
