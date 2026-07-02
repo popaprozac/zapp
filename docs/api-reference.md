@@ -1339,9 +1339,15 @@ position regardless of where you declare them:
   region (against the divider — the native convention); when the sidebar
   collapses, the tracking separator collapses with it and the toggle lands
   statically at the leading edge of the main toolbar, with no reflow code
-  involved.
+  involved. This three-item prefix (including the auto `flexibleSpace`)
+  only forms when **both** `toggleSidebar` and the sidebar
+  `trackingSeparator` are declared; if only one of the two is present, that
+  lone item is placed alone at the leading edge with no auto-inserted
+  `flexibleSpace`.
 - **Trailing edge:** ends with `[trackingSeparator (pane: "inspector"),
-  toggleInspector]`, appended after every other trailing item.
+  toggleInspector]`, appended after every other trailing item — each of the
+  two trailing anchors is independent, so either can appear alone if the
+  other isn't declared.
 - Your other (app) items keep their declared `placement` and relative order
   untouched — only these four system anchors move.
 - Duplicate system items (e.g. two `toggleSidebar` declarations) collapse to
@@ -1625,7 +1631,7 @@ Two `NSToolbarItemGroup`-backed item types let you cluster related controls:
 | Field | Type | Default | Notes |
 |---|---|---|---|
 | `id` | `string` | required | Same rules as button ids. |
-| `segments` | `SegmentDef[]` | required | At least one. Each segment takes `id?`, `label?`, `icon?` (`sf:…`/data-URL/path), and an `action: () => void` callback. Give each segment a `label` even when using an `icon` — AppKit uses the labels for the collapsed/overflow (`≫`) menu and for accessibility. An icon-only segment without a `label` falls back to its `id` (or its index) in the overflow menu instead of rendering a blank chevron entry (#744) — but a real `label` still reads far better there, and omitting one on an icon-only segment logs a one-time `[zapp] toolbar: icon-only segment … has no "label"` console warning. The native right-click "icon only / icon and text" customization is available for free. |
+| `segments` | `SegmentDef[]` | required | At least one. Each segment takes `id?`, `label?`, `icon?` (`sf:…`/data-URL/path), and an `action: () => void` callback. Give each segment a `label` even when using an `icon` — AppKit uses the labels for the collapsed/overflow (`≫`) menu and for accessibility. An icon-only segment without a `label` falls back to its `id` (or its index) in the overflow menu instead of rendering a blank chevron entry (#744) — but a real `label` still reads far better there, and omitting one on an icon-only segment logs a `[zapp] toolbar: icon-only segment … has no "label"` console warning on each toolbar normalization. The native right-click "icon only / icon and text" customization is available for free. |
 | `selectionMode` | `"one"` \| `"any"` \| `"momentary"` | `"momentary"` | `"one"` = radio; `"any"` = multi-select; `"momentary"` = no persistent highlight. |
 | `selected` | `number \| number[]` | none | Initial selection — index for `"one"`, indices array for `"any"`. Ignored for `"momentary"`. |
 | `controlRepresentation` | `"automatic"` \| `"expanded"` \| `"collapsed"` | `"automatic"` | Controls how the group collapses in the overflow menu. |
