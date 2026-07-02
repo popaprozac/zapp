@@ -847,6 +847,44 @@ function assertValidToolbarId(id: string): void {
   }
 }
 
+/** T1 convention pass — THE single placement-resolution point. The future
+ *  per-pane placement config feeds overrides into this function; nothing
+ *  else in the pipeline reorders items. Anchors (native convention):
+ *  leading = [flexibleSpace, toggleSidebar, trackingSeparator(sidebar)],
+ *  trailing tail = [trackingSeparator(inspector), toggleInspector].
+ *  App items keep declared order. Documented behavior change (pre-1.0). */
+export function applyToolbarConventions(
+  items: Record<string, unknown>[],
+): Record<string, unknown>[] {
+  let toggleSidebar: Record<string, unknown> | undefined;
+  let sepSidebar: Record<string, unknown> | undefined;
+  let sepInspector: Record<string, unknown> | undefined;
+  let toggleInspector: Record<string, unknown> | undefined;
+  const rest: Record<string, unknown>[] = [];
+  for (const item of items) {
+    const t = item.type;
+    if (t === "toggleSidebar") { toggleSidebar ??= { ...item, placement: "leading" }; continue; }
+    if (t === "toggleInspector") { toggleInspector ??= { ...item, placement: "trailing" }; continue; }
+    if (t === "trackingSeparator") {
+      if (item.pane === "inspector") sepInspector ??= { ...item, placement: "trailing" };
+      else sepSidebar ??= { ...item, placement: "leading" };
+      continue;
+    }
+    rest.push(item);
+  }
+  const prefix: Record<string, unknown>[] = [];
+  if (toggleSidebar && sepSidebar) {
+    prefix.push({ type: "flexibleSpace", placement: "leading" }, toggleSidebar, sepSidebar);
+    // Collapse an app-declared leading flex that duplicated the convention.
+    if (rest[0]?.type === "flexibleSpace" && rest[0]?.placement === "leading") rest.shift();
+  } else if (toggleSidebar) prefix.push(toggleSidebar);
+  else if (sepSidebar) prefix.push(sepSidebar);
+  const suffix: Record<string, unknown>[] = [];
+  if (sepInspector) suffix.push(sepInspector);
+  if (toggleInspector) suffix.push(toggleInspector);
+  return [...prefix, ...rest, ...suffix];
+}
+
 /** Validate a ToolbarOptions and split it into the wire JSON (actions
  * stripped, defaults applied) and the action maps. Pure — unit-tested. */
 export function normalizeToolbar(
@@ -998,7 +1036,7 @@ export function normalizeToolbar(
     wire.placement = placement;
     items.push(wire);
   }
-  return { json: JSON.stringify({ style: toolbar.style ?? "unified", items }), actions, menuActions, menuIdsByItem, menuTrees };
+  return { json: JSON.stringify({ style: toolbar.style ?? "unified", items: applyToolbarConventions(items) }), actions, menuActions, menuIdsByItem, menuTrees };
 }
 
 const TOOLBAR_PATCH_KEYS = new Set(["label", "text", "icon", "enabled", "indicator", "menu", "action", "style", "tintColor", "badge", "bordered", "selected", "controlRepresentation"]);

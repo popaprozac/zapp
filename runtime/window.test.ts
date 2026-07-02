@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Material, BackgroundExtension } from "./window";
+import { Material, BackgroundExtension, applyToolbarConventions, normalizeToolbar } from "./window";
 import type { WindowHandle } from "./window";
 import { WindowEvent, eventName } from "./events";
 import type { InspectorResizedPayload } from "./events";
@@ -44,6 +44,64 @@ describe("BackgroundExtension", () => {
   test("type is assignable from wire string", () => {
     const v: BackgroundExtension = "mirror";
     expect(v).toBe("mirror");
+  });
+});
+
+describe("applyToolbarConventions", () => {
+  const ts = (pane: string) => ({ type: "trackingSeparator", pane, placement: "leading" });
+  const tgl = { type: "toggleSidebar", placement: "leading" };
+  const insp = { type: "toggleInspector", placement: "trailing" };
+  const btn = (id: string, placement = "leading") => ({ type: "button", id, placement });
+
+  test("T1: anchors sidebar prefix with injected flex", () => {
+    const out = applyToolbarConventions([btn("a"), tgl, ts("sidebar"), btn("b", "trailing")]);
+    expect(out.slice(0, 3).map((i) => i.type)).toEqual(["flexibleSpace", "toggleSidebar", "trackingSeparator"]);
+    expect(out[3]).toMatchObject({ id: "a" });
+  });
+
+  test("T1: toggleSidebar declared trailing is still anchored leading", () => {
+    const out = applyToolbarConventions([btn("a"), { type: "toggleSidebar", placement: "trailing" }, ts("sidebar")]);
+    expect(out[1]).toMatchObject({ type: "toggleSidebar", placement: "leading" });
+  });
+
+  test("T1: inspector suffix anchored trailing-most", () => {
+    const out = applyToolbarConventions([insp, ts("inspector"), btn("z", "trailing")]);
+    const types = out.map((i) => i.type);
+    expect(types.slice(-2)).toEqual(["trackingSeparator", "toggleInspector"]);
+    expect((out.at(-2) as any).pane).toBe("inspector");
+  });
+
+  test("T1: no flex without the separator; toggle anchored leading-first", () => {
+    const out = applyToolbarConventions([btn("a"), tgl]);
+    expect(out[0]).toMatchObject({ type: "toggleSidebar" });
+    expect(out.some((i) => i.type === "flexibleSpace")).toBe(false);
+  });
+
+  test("T1: app-declared adjacent flex collapses into the injected one", () => {
+    const out = applyToolbarConventions([{ type: "flexibleSpace", placement: "leading" }, tgl, ts("sidebar"), btn("a")]);
+    expect(out.filter((i) => i.type === "flexibleSpace").length).toBe(1);
+  });
+
+  test("T1: duplicate system items collapse to one", () => {
+    const out = applyToolbarConventions([tgl, btn("a"), { ...tgl }]);
+    expect(out.filter((i) => i.type === "toggleSidebar").length).toBe(1);
+  });
+
+  test("T1: app items keep relative order and input is not mutated", () => {
+    const input = [btn("a"), tgl, btn("b"), ts("sidebar"), btn("c", "trailing")];
+    const snapshot = JSON.parse(JSON.stringify(input));
+    const out = applyToolbarConventions(input);
+    expect(out.filter((i: any) => i.type === "button").map((i: any) => i.id)).toEqual(["a", "b", "c"]);
+    expect(input).toEqual(snapshot);
+  });
+
+  test("T1: normalizeToolbar output is conventionalized end-to-end", () => {
+    const { json } = normalizeToolbar(
+      { items: [ { id: "x", label: "X" } as any, { type: "toggleSidebar" } as any, { type: "trackingSeparator" } as any ] },
+      true, false,
+    );
+    const wire = JSON.parse(json);
+    expect(wire.items.slice(0, 3).map((i: any) => i.type)).toEqual(["flexibleSpace", "toggleSidebar", "trackingSeparator"]);
   });
 });
 
