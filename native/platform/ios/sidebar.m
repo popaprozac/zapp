@@ -1051,8 +1051,16 @@ void darwin_sidebar_set_collapsible(int32_t window_id, bool can_collapse) {
     zapp_ios_sidebar_on_main(^{
         ZappIOSSidebarController* c = zapp_ios_sidebar_for_slot(window_id);
         if (!c || !c.splitVC) return;
+        // TEMP E2 instrumentation
+        fprintf(stderr, "[zapp-nav] E2 before: canCollapse=%d displayMode=%ld behavior=%ld gesture=%d\n",
+                (int)can_collapse, (long)c.splitVC.displayMode,
+                (long)c.splitVC.preferredSplitBehavior, (int)c.splitVC.presentsWithGesture);
         c.collapsible = (BOOL)can_collapse;
         c.splitVC.presentsWithGesture = (BOOL)can_collapse;
+        // TEMP E2 instrumentation
+        dispatch_async(dispatch_get_main_queue(), ^{
+            fprintf(stderr, "[zapp-nav] E2 settled: displayMode=%ld\n", (long)c.splitVC.displayMode);
+        });
     });
 }
 

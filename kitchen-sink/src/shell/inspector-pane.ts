@@ -44,5 +44,31 @@ export function renderInspectorPane(app: HTMLElement) {
   // ("") — the sync getter would render the "no inspector" fallback before the
   // native route seed arrives. router.current() awaits the seed. (Warm panes —
   // iPad/macOS columns — already have the route from live ROUTE_CHANGED events.)
-  Window.current().router.current().then((snap) => show(sectionForRoute(snap.url)));
+  Window.current().router.current().then((snap) => {
+    show(sectionForRoute(snap.url));
+    renderSafeAreaProbe(); // TEMP E1 instrumentation
+  });
 }
+
+// TEMP E1 instrumentation: print env(safe-area-inset-*) as resolved inside
+// this webview. Uses a probe element because env() is CSS-only.
+function renderSafeAreaProbe(): void {
+  const probe = document.createElement("div");
+  probe.style.cssText =
+    "position:fixed;top:env(safe-area-inset-top);left:env(safe-area-inset-left);" +
+    "right:env(safe-area-inset-right);bottom:env(safe-area-inset-bottom);pointer-events:none;";
+  document.body.appendChild(probe);
+  const r = probe.getBoundingClientRect();
+  const out = document.getElementById("e1-probe") ?? (() => {
+    const el = document.createElement("pre");
+    el.id = "e1-probe";
+    el.style.cssText = "position:fixed;bottom:0;left:50%;transform:translateX(-50%);background:#000c;color:#0f0;padding:4px 8px;font-size:11px;z-index:9999;";
+    document.body.appendChild(el);
+    return el;
+  })();
+  out.textContent = `E1 env(): top=${Math.round(r.top)} left=${Math.round(r.left)} ` +
+    `right=${Math.round(window.innerWidth - r.right)} bottom=${Math.round(window.innerHeight - r.bottom)}`;
+  probe.remove();
+}
+window.addEventListener("resize", renderSafeAreaProbe); // TEMP E1 instrumentation
+setInterval(renderSafeAreaProbe, 1000); // TEMP E1 instrumentation
