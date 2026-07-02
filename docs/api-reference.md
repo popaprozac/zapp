@@ -1263,13 +1263,25 @@ and `width` (tracked from `INSPECTOR_COLLAPSED` / `INSPECTOR_EXPANDED` /
 `INSPECTOR_RESIZED`). `Window.isInspector()` is true inside the inspector
 pane.
 
-`setCollapsible(bool)` has no user affordance to gate on iOS — the Inspector
-column has no user-collapse gesture to disallow — so it logs a one-time
-console note (`[zapp] inspector.setCollapsible is not supported on iOS: ...`)
-instead of silently no-op'ing; `collapse()` / `expand()` / `toggle()` keep
-working programmatically regardless. `setResizable(bool)` behaves like
-`setWidth()` above: it drives the real divider on the iOS 26+ column and
-logs the same one-time note below iOS 26 (or without a split).
+`setCollapsible(bool)` gates the **native affordances** on both platforms —
+programmatic `toggle()` / `collapse()` / `expand()` always keep working, by
+design (`canCollapse`/`collapsible` gates user affordances only):
+
+- **macOS** — `collapsible: false` disallows user collapse (divider snap) and
+  greys the system `toggleInspector` toolbar button (AppKit validates it
+  against `canCollapse`).
+- **iOS** — `collapsible: false` disables the toolbar `toggleInspector`
+  button (parity with macOS's validation greying). The Inspector column has
+  no separate native collapse *gesture* to disallow the way the sidebar's
+  edge-swipe does, so it still logs the one-time console note
+  (`[zapp] inspector.setCollapsible is not supported on iOS: ...`) — the
+  toolbar button is the actual gated affordance. The presented sheet's own
+  Close button and swipe-to-dismiss remain allowed regardless: dismissing a
+  *presentation* is not the pane-collapse affordance being gated.
+
+`setResizable(bool)` behaves like `setWidth()` above: it drives the real
+divider on the iOS 26+ column and logs the same one-time note below iOS 26
+(or without a split).
 
 **Toolbar integration:** `{ type: "toggleInspector" }` adds a button (SF
 symbol `sidebar.right`) that toggles the inspector;

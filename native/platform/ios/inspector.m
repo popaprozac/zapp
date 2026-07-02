@@ -49,6 +49,13 @@ extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
 extern void darwin_window_eval_js(int32_t window_id, const char* js);
 extern int32_t zapp_ios_sidebar_slot_for(int32_t host_slot);
 
+// Defined in ios/toolbar.m — re-applies the registered toolbar to whichever
+// nav is on-screen (collapsed vs expanded), reading live affordance state
+// (including zapp_ios_inspector_is_collapsible_for_window below) at apply
+// time. #779: called by darwin_inspector_set_collapsible so the
+// toggleInspector bar button greys/un-greys immediately.
+extern void zapp_ios_toolbar_apply_for_window(void* window_ptr);
+
 // Forward declaration — darwin_inspector_collapse is defined further down in
 // this file; the Close-button target/action (installed on the <26 modal sheet
 // AND on the 26+ UIKit-managed auto-sheet, see
@@ -149,6 +156,24 @@ static NSMutableDictionary<NSValue*, ZappIOSInspectorController*>* zapp_ios_insp
 static void zapp_ios_inspector_on_main(void (^block)(void)) {
     if ([NSThread isMainThread]) block();
     else dispatch_async(dispatch_get_main_queue(), block);
+}
+
+// Toolbar affordance query: is the inspector user-collapsible? Live read taken
+// at toolbar-apply time (same pattern as sidebar.m's
+// zapp_ios_sidebar_is_collapsible_for_window) — drives the ENABLED state of
+// Zapp's manual toggleInspector bar button (ios/toolbar.m). macOS parity:
+// AppKit auto-greys its system toggleInspector toolbar button when
+// NSSplitViewItem.canCollapse == NO (darwin/inspector.m's
+// darwin_inspector_set_collapsible revalidates the toolbar); UIKit has no
+// validation pass, so the toolbar reads this helper and sets `enabled`
+// manually. Returns true when no inspector is registered for the window — a
+// window without an inspector toggle has nothing to gate anyway. Declared
+// extern in ios/toolbar.m.
+bool zapp_ios_inspector_is_collapsible_for_window(void* window_ptr) {
+    if (!window_ptr || !zapp_ios_inspectors) return true;
+    NSValue* key = [NSValue valueWithPointer:window_ptr];
+    ZappIOSInspectorController* c = zapp_ios_inspectors[key];
+    return c ? (bool)c.collapsible : true;
 }
 
 // slot -> owning UIWindow -> registry key. Works from ANY pane's slot (content,
@@ -656,6 +681,18 @@ void darwin_inspector_set_collapsible(int32_t window_id, bool can_collapse) {
                 "the iOS Inspector column has no user-collapse affordance to gate; "
                 "programmatic collapse()/expand()/toggle() always work");
         }
+        // #779: re-apply the toolbar so the toggleInspector button greys/un-greys
+        // immediately (parity with the sidebar's darwin_sidebar_set_collapsible).
+        // Same two-step: a synchronous apply now, plus a settled re-apply one
+        // runloop tick later. Capture the numeric host id so the settled lookup
+        // re-resolves fresh rather than trusting a stale pointer.
+        void* winPtr = darwin_window_get_by_numeric_id(c.hostWindowId);
+        if (winPtr) zapp_ios_toolbar_apply_for_window(winPtr);
+        int32_t hostWindowId = c.hostWindowId;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            void* settledWinPtr = darwin_window_get_by_numeric_id(hostWindowId);
+            if (settledWinPtr) zapp_ios_toolbar_apply_for_window(settledWinPtr);
+        });
     });
 }
 

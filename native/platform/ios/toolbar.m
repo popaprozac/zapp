@@ -111,6 +111,16 @@ extern bool zapp_ios_split_display_mode_is_secondary_only(void* window_ptr);
 // (enabled) when no sidebar is registered. Defined in ios/sidebar.m.
 extern bool zapp_ios_sidebar_is_collapsible_for_window(void* window_ptr);
 
+// #779 (inspector collapsible affordance parity): live read of the
+// inspector's collapsible flag at apply time — drives the ENABLED state of
+// our manual toggleInspector button. Sibling of
+// zapp_ios_sidebar_is_collapsible_for_window above, same shape: macOS greys
+// its system toggleInspector toolbar item via AppKit validation against
+// NSSplitViewItem.canCollapse (darwin/inspector.m); UIKit has no validation
+// pass, so the apply paths set `enabled` manually. Returns true (enabled)
+// when no inspector is registered. Defined in ios/inspector.m.
+extern bool zapp_ios_inspector_is_collapsible_for_window(void* window_ptr);
+
 // Defined in ios/window.m — slot lookup tables for sidebar + inspector panes.
 // Return -1 when no pane of that type is registered for the host.
 extern int32_t zapp_ios_sidebar_slot_for(int32_t host_slot);
@@ -171,6 +181,14 @@ static UIImage* zapp_ios_resolve_icon(NSString* spec) {
 // from the live collapsible read (zapp_ios_sidebar_is_collapsible_for_window)
 // without rebuilding items. nil when the toolbar JSON has no toggleSidebar item.
 @property (nonatomic, strong) UIBarButtonItem* toggleSidebarButton;
+// #779: Zapp's manual toggleInspector bar button (lives wherever its
+// `placement` puts it — leading or trailing; unlike toggleSidebar it has no
+// dedicated leadingNoToggle exclusion, since iOS has no system inspector-
+// reveal button to de-dup against). Stored so the apply paths can set its
+// enabled state from the live collapsible read
+// (zapp_ios_inspector_is_collapsible_for_window) without rebuilding items.
+// nil when the toolbar JSON has no toggleInspector item.
+@property (nonatomic, strong) UIBarButtonItem* toggleInspectorButton;
 @property (nonatomic, strong) NSArray<UIBarButtonItem*>* trailingItems;
 @property (nonatomic, strong) NSString* centerTitle;   // nil if none
 @property (nonatomic, strong) UIView*   centerView;    // nil if none
@@ -474,6 +492,15 @@ static void zapp_ios_toolbar_apply_to_nav(UINavigationController* nav,
     entry.toggleSidebarButton.enabled =
         zapp_ios_sidebar_is_collapsible_for_window(entry.windowPtr);
 
+    // #779 (inspector collapsible affordance parity): same mechanism, sibling
+    // button — grey our toggleInspector button when the inspector is
+    // non-collapsible. toggleInspector has no inclusion/de-dup logic (no
+    // system inspector-reveal button to collide with), so this is the only
+    // gate on it. nil-safe: no toggle item, or no inspector registered
+    // (helper returns true), leaves everything as-is.
+    entry.toggleInspectorButton.enabled =
+        zapp_ios_inspector_is_collapsible_for_window(entry.windowPtr);
+
     vc.navigationItem.title = entry.centerTitle;       // nil clears it
     vc.navigationItem.titleView = entry.centerView;    // nil clears it
 
@@ -533,6 +560,11 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
         // has no toggleSidebar — the entry assignment below then RESETS any
         // previously stored button (repeat setItems without a toggle).
         UIBarButtonItem* toggleSidebarItem = nil;
+        // #779: capture the manual toggleInspector item so the apply paths can
+        // grey it when the inspector is non-collapsible. Stays nil when the
+        // toolbar has no toggleInspector — the entry assignment below then
+        // RESETS any previously stored button (repeat setItems without a toggle).
+        UIBarButtonItem* toggleInspectorItem = nil;
 
         for (NSDictionary* def in items) {
             if (![def isKindOfClass:[NSDictionary class]]) continue;
@@ -722,6 +754,7 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
                     ? toggleInspectorLabel : @"Toggle Inspector";
                 objc_setAssociatedObject(item, &kZappToolbarToggleTargetKey, tgt,
                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                toggleInspectorItem = item; // #779: stored on the entry for enabled-state wiring
 
             } else if ([type isEqualToString:@"label"]) {
                 NSString* text = [def[@"text"] isKindOfClass:[NSString class]] ? def[@"text"] : @"";
@@ -830,6 +863,7 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
         entry.leadingItems    = [leading copy];
         entry.leadingNoToggle = [leadingNoToggle copy];
         entry.toggleSidebarButton = toggleSidebarItem; // E2: nil when no toggle in this set
+        entry.toggleInspectorButton = toggleInspectorItem; // #779: nil when no toggle in this set
 
         entry.trailingItems   = [trailing copy];
         entry.centerTitle     = centerTitle;
@@ -954,6 +988,10 @@ void zapp_ios_toolbar_apply_for_window_hidden(void* window_ptr, BOOL sidebarHidd
             // is the only non-collapsible affordance cue on iPhone.
             entry.toggleSidebarButton.enabled =
                 zapp_ios_sidebar_is_collapsible_for_window(window_ptr);
+            // #779: same collapsible→enabled wiring, sibling button — the
+            // collapsed path applies items directly, bypassing apply_to_nav.
+            entry.toggleInspectorButton.enabled =
+                zapp_ios_inspector_is_collapsible_for_window(window_ptr);
             contentVC.navigationItem.title = entry.centerTitle;       // nil clears it
             contentVC.navigationItem.titleView = entry.centerView;    // nil clears it
         }
