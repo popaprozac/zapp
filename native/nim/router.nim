@@ -727,7 +727,18 @@ proc routeWindowAction(action: string, a: JsonNode, rawWindowId: int, payload: s
         emitRouteChanged(target, "pop")
         when defined(zappIos): zapp_ios_pop_route_vc(target)
     of "router:forward":
-      if routerForward(target): emitRouteChanged(target, "forward")
+      # [zapp-nav] diagnostic: forward arm
+      c_fprintf(cstderr_nav, "[zapp-nav] router_action=forward target=%d\n".cstring, target.cint)
+      c_fflush(cstderr_nav)
+      if routerForward(target):
+        emitRouteChanged(target, "forward")
+        # Forward re-enters a route (depth increases) — native must push a route
+        # VC for the forward URL, same seam as the push arm. routerstate was
+        # mutated FIRST, so didShow sees nativeRouteDepth == wantRouteDepth
+        # (no pop_from_native misfire), identical to the push flow.
+        when defined(zappIos):
+          let fwdUrl = routerCurrentUrl(target)   # new current = the forward entry
+          zapp_ios_push_route_vc(target, fwdUrl.cstring)
     of "router:replace":
       let url = a{"url"}.getStr("")
       let params = (if a.hasKey("params"): $a["params"] else: "")
