@@ -43,6 +43,7 @@
 #import <WebKit/WebKit.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <math.h>
 
 extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
 extern void darwin_window_eval_js(int32_t window_id, const char* js);
@@ -108,6 +109,13 @@ void zapp_ios_control_unsupported(const char* control, const char* reason) {
 // and never touches this flag — the two paths are mutually exclusive per
 // window (a window either has a split on 26+ or it doesn't).
 @property (nonatomic, assign) BOOL lastCollapsedEmit;
+// Live divider-drag resize emits (#720) — mirrors sidebar.m's
+// ZappIOSSidebarController.lastLayoutEmitWidth/layoutEmitScheduled. Seeded to
+// the configured width at register so the first (launch) layout pass emits
+// nothing; layoutEmitScheduled coalesces per-frame layout callbacks to at
+// most one emit per runloop tick.
+@property (nonatomic, assign) int32_t lastLayoutEmitWidth;
+@property (nonatomic, assign) BOOL layoutEmitScheduled;
 // Host content webview: retained here for parity with the sidebar controller
 // pattern (not required by any runtime op below, but cheap to keep in sync).
 @property (nonatomic, strong) WKWebView* contentWebview;
@@ -208,6 +216,42 @@ void zapp_ios_inspector_emit(ZappIOSInspectorController* c, const char* eventNam
 static void zapp_ios_inspector_emit_resize(ZappIOSInspectorController* c, int32_t width) {
     NSString* json = [NSString stringWithFormat:@"{\"width\":%d}", (int)width];
     zapp_ios_inspector_emit_data(c, "inspector-resized", json);
+}
+
+// Live divider-drag resize emits (#720) — mirrors sidebar.m's
+// zapp_ios_sidebar_note_layout_width (see that file for the full rationale on
+// the per-frame viewDidLayoutSubviews source + the coalesce-to-one-tick /
+// dedupe-on-rounded-width pattern). Called from window.m's
+// ZappIOSPaneViewController.viewDidLayoutSubviews (paneRole 3).
+//
+// Two guards beyond the sidebar version, both false-positive sources unique
+// to the inspector's two presentation forms:
+//   - <26 (or no split): the persistent inspector nav is shown as a modal
+//     UISheetPresentationController sheet. presentingViewController != nil
+//     detects this — a sheet's frame changes are detent geometry, not a
+//     draggable-column resize, so this reports nothing while presented.
+//   - 26+: the split may exist but the Inspector column itself hidden/tiled-
+//     away (isShowingColumn: false) — its VC still lays out off-screen at its
+//     last width, which would otherwise read as a phantom resize.
+void zapp_ios_inspector_note_layout_width(void* window_ptr, CGFloat width) {
+    if (!window_ptr || !zapp_ios_inspectors) return;
+    ZappIOSInspectorController* c = zapp_ios_inspectors[[NSValue valueWithPointer:window_ptr]];
+    if (!c) return;
+    if (c.inspectorNav.presentingViewController != nil) return;  // <26/no-split modal sheet, not a column
+    UISplitViewController* split = c.contentVC.splitViewController;
+    if (!split) return;
+    if (@available(iOS 26.0, *)) {
+        if (![split isShowingColumn:UISplitViewControllerColumnInspector]) return;
+    }
+    int32_t w = (int32_t)lround(width);
+    if (w <= 1 || w == c.lastLayoutEmitWidth) return;
+    c.lastLayoutEmitWidth = w;
+    if (c.layoutEmitScheduled) return;
+    c.layoutEmitScheduled = YES;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        c.layoutEmitScheduled = NO;
+        zapp_ios_inspector_emit_resize(c, c.lastLayoutEmitWidth);
+    });
 }
 
 // --- iOS-26 Inspector column show/hide hooks (single 26+ emit source) ------
@@ -346,6 +390,11 @@ void zapp_ios_inspector_register(void* window, void* inspectorNav, void* content
         c.resizable       = (BOOL)resizable;
         c.collapsible     = (BOOL)collapsible;
         c.contentWebview  = (__bridge WKWebView*)contentWebview;
+        // #720: seed the live-resize dedupe to the configured width so the
+        // first (launch) viewDidLayoutSubviews pass — which lands at that same
+        // width — does not fire a spurious resize event.
+        c.lastLayoutEmitWidth = c.width;
+        c.layoutEmitScheduled = NO;
         // Seed the 26+ emit dedupe from the create-time collapsed state so the
         // deferred launch show/hideColumn below reaches the delegate hooks as a
         // SAME-STATE callback (silent) — no spurious launch emit in either

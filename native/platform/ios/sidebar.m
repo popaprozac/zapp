@@ -101,6 +101,14 @@ extern void zapp_ios_toolbar_apply_for_window_hidden(void* window_ptr, BOOL side
 @property (nonatomic, assign) int32_t hostWindowId;    // content webview's slot
 @property (nonatomic, assign) int32_t sidebarSlotId;   // sidebar webview's slot
 @property (nonatomic, assign) BOOL lastCollapsedEmit;  // last collapse state we emitted
+// Live divider-drag resize emits (#720). lastLayoutEmitWidth dedupes on the
+// rounded width reported by ZappIOSPaneViewController.viewDidLayoutSubviews;
+// seeded to the configured width at register so the first (launch) layout
+// pass — which lands at that same width — emits nothing. layoutEmitScheduled
+// coalesces the per-frame layout callbacks (a seam drag fires this every
+// frame) down to at most one emit per runloop tick.
+@property (nonatomic, assign) int32_t lastLayoutEmitWidth;
+@property (nonatomic, assign) BOOL layoutEmitScheduled;
 @property (nonatomic, assign) int32_t configuredWidth;    // configured width (setWidth + create-time)
 @property (nonatomic, assign) int32_t configuredMinWidth; // configured minimumPrimaryColumnWidth
 @property (nonatomic, assign) int32_t configuredMaxWidth; // configured maximumPrimaryColumnWidth
@@ -337,6 +345,27 @@ static void zapp_ios_sidebar_emit(ZappIOSSidebarController* c, const char* event
 static void zapp_ios_sidebar_emit_resize(ZappIOSSidebarController* c, int32_t width) {
     NSString* json = [NSString stringWithFormat:@"{\"width\":%d}", (int)width];
     zapp_ios_sidebar_emit_data(c, "sidebar-resized", json);
+}
+
+// Live divider-drag resize emits (#720). viewDidLayoutSubviews fires per
+// frame during a seam drag (probe-proven); this coalesces to at most one
+// emit per runloop tick and dedupes on the rounded width. Guards: no split /
+// collapsed(compact) / hidden pane / width<=1 (collapse-expand transitions)
+// emit nothing — this reports regular-width divider geometry only. Called
+// from window.m's ZappIOSPaneViewController.viewDidLayoutSubviews (paneRole 1).
+void zapp_ios_sidebar_note_layout_width(void* window_ptr, CGFloat width) {
+    if (!window_ptr || !zapp_ios_sidebars) return;
+    ZappIOSSidebarController* c = zapp_ios_sidebars[[NSValue valueWithPointer:window_ptr]];
+    if (!c || !c.splitVC || c.splitVC.isCollapsed) return;
+    int32_t w = (int32_t)lround(width);
+    if (w <= 1 || w == c.lastLayoutEmitWidth) return;
+    c.lastLayoutEmitWidth = w;
+    if (c.layoutEmitScheduled) return;
+    c.layoutEmitScheduled = YES;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        c.layoutEmitScheduled = NO;
+        zapp_ios_sidebar_emit_resize(c, c.lastLayoutEmitWidth);
+    });
 }
 
 // Emit collapsed/expanded once per transition. "Collapsed" here means the
@@ -630,6 +659,11 @@ void zapp_ios_sidebar_register(void* window, void* split, void* sidebarVC,
         c.configuredMaxWidth = maxWidth;
         c.resizable          = (BOOL)resizable;
         c.collapsible        = (BOOL)collapsible;
+        // #720: seed the live-resize dedupe to the configured width so the
+        // first (launch) viewDidLayoutSubviews pass — which lands at that same
+        // width — does not fire a spurious resize event.
+        c.lastLayoutEmitWidth  = width;
+        c.layoutEmitScheduled  = NO;
 
         // OWN the navigation controllers so we control the bar. The column VCs
         // are still empty (no webview yet), so this never re-parents a live

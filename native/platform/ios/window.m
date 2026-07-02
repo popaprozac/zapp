@@ -228,6 +228,7 @@ extern void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot,
 @interface ZappIOSPaneViewController : UIViewController
 @property (nonatomic, assign) void* windowPtr;  // host UIWindow* (not retained; window outlives VCs)
 @property (nonatomic, assign) int32_t hostSlot; // numeric window id (content slot)
+@property (nonatomic, assign) int paneRole;     // 0 content, 1 sidebar, 3 inspector
 @end
 
 @implementation ZappIOSPaneViewController
@@ -237,6 +238,7 @@ extern void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot,
     if (self) {
         _windowPtr = NULL;
         _hostSlot  = -1;
+        _paneRole  = 0;
     }
     return self;
 }
@@ -291,6 +293,27 @@ extern void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot,
             zapp_toolbar_inject_metrics(wp, hs, false);
         });
     }
+}
+
+// Live divider-drag resize emits (#720). viewDidLayoutSubviews fires once per
+// frame while the user drags the sidebar/inspector column seam (probe-proven),
+// so this is the earliest per-frame hook available on the pane VC itself —
+// unlike viewSafeAreaInsetsDidChange above (insets-only, fires on chrome
+// changes, not divider geometry). Gated on paneRole so the content pane (role
+// 0 — including the plain no-sidebar/no-inspector root VC, which has no
+// sidebar/inspector column to report) never calls either note-layout helper.
+// Guard requires ONLY _windowPtr (not _hostSlot, unlike the metrics hooks
+// above): the sidebar VC is wired with windowPtr but deliberately left at its
+// -init default hostSlot=-1 (see the sidebar VC construction below) so the
+// pre-existing metrics hooks keep their current no-op behavior for that pane.
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    if (!_windowPtr || _paneRole == 0) return;
+    CGFloat w = self.view.bounds.size.width;
+    extern void zapp_ios_sidebar_note_layout_width(void*, CGFloat);
+    extern void zapp_ios_inspector_note_layout_width(void*, CGFloat);
+    if (_paneRole == 1) zapp_ios_sidebar_note_layout_width(_windowPtr, w);
+    else if (_paneRole == 3) zapp_ios_inspector_note_layout_width(_windowPtr, w);
 }
 
 @end
@@ -696,7 +719,13 @@ void zapp_ios_materialize_pending_windows(void) {
             // exist) is orthogonal to the base style; it does NOT require
             // tripleColumn. Mirrors the spike (spikes/ios-splitview-reference).
             split = [[ZappIOSSplitViewController alloc] initWithStyle:UISplitViewControllerStyleDoubleColumn];
-            sidebarVC = [[UIViewController alloc] init];   // primary column
+            // ZappIOSPaneViewController (not a bare UIViewController) so
+            // viewDidLayoutSubviews can note live divider-drag width changes
+            // (#720) via the paneRole=1 branch. windowPtr is wired below,
+            // alongside contentVC's; hostSlot is deliberately left at its
+            // -init default (-1) — see the wiring block below for why.
+            sidebarVC = [[ZappIOSPaneViewController alloc] init];   // primary column
+            ((ZappIOSPaneViewController*)sidebarVC).paneRole = 1;
             // content VC: ZappIOSPaneViewController so viewSafeAreaInsetsDidChange
             // re-injects toolbar metrics after UIKit lays out the floating nav bar.
             // windowPtr + hostSlot are wired below after d->real_window is set.
@@ -845,6 +874,20 @@ void zapp_ios_materialize_pending_windows(void) {
         if (d->numeric_id >= 0 && [contentVC isKindOfClass:[ZappIOSPaneViewController class]]) {
             ((ZappIOSPaneViewController*)contentVC).windowPtr = (__bridge void*)window;
             ((ZappIOSPaneViewController*)contentVC).hostSlot  = d->numeric_id;
+        }
+
+        // Sidebar VC (#720): wire windowPtr ONLY — hostSlot stays -1 (its -init
+        // default). The sidebar pane does not participate in the pre-existing
+        // metrics hooks (viewSafeAreaInsetsDidChange / viewDidAppear /
+        // viewWillTransitionToSize:) today: those are already covered end-to-end
+        // by contentVC's hostSlot-gated firing, since zapp_toolbar_inject_metrics
+        // re-injects into ALL THREE panes (content, sidebar, inspector) off the
+        // HOST slot in one call. Setting hostSlot here would newly arm those
+        // hooks on the sidebar VC too — a behavior change this task doesn't ask
+        // for. windowPtr alone is sufficient to arm the NEW viewDidLayoutSubviews
+        // resize hook above, which is paneRole-gated and windowPtr-only.
+        if (sidebarVC && [sidebarVC isKindOfClass:[ZappIOSPaneViewController class]]) {
+            ((ZappIOSPaneViewController*)sidebarVC).windowPtr = (__bridge void*)window;
         }
 
         // Hand the split + columns + ids to the sidebar manager (ios/sidebar.m).
@@ -1034,6 +1077,7 @@ void zapp_ios_materialize_pending_windows(void) {
             inspectorVC = [[ZappIOSPaneViewController alloc] init];
             inspectorVC.windowPtr = (__bridge void*)window;
             inspectorVC.hostSlot  = d->numeric_id;
+            inspectorVC.paneRole  = 3;  // #720: arms the viewDidLayoutSubviews resize-note hook
             // Inspector pane backdrop: explicit "#rrggbb" if the app set one,
             // else the adaptive system background (mirrors the sidebar pane
             // backdrop above).
