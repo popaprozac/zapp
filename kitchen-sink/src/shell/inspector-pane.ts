@@ -47,6 +47,8 @@ export function renderInspectorPane(app: HTMLElement) {
   Window.current().router.current().then((snap) => {
     show(sectionForRoute(snap.url));
     renderSafeAreaProbe(); // TEMP E1 instrumentation
+    window.addEventListener("resize", renderSafeAreaProbe); // TEMP E1 instrumentation
+    setInterval(renderSafeAreaProbe, 1000); // TEMP E1 instrumentation
   });
 }
 
@@ -70,5 +72,3 @@ function renderSafeAreaProbe(): void {
     `right=${Math.round(window.innerWidth - r.right)} bottom=${Math.round(window.innerHeight - r.bottom)}`;
   probe.remove();
 }
-window.addEventListener("resize", renderSafeAreaProbe); // TEMP E1 instrumentation
-setInterval(renderSafeAreaProbe, 1000); // TEMP E1 instrumentation
