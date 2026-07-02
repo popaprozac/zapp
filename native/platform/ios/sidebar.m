@@ -364,10 +364,13 @@ void zapp_ios_sidebar_note_layout_width(void* window_ptr, CGFloat width) {
     if (c.splitVC.displayMode == UISplitViewControllerDisplayModeSecondaryOnly) return;
     int32_t w = (int32_t)lround(width);
     // M1: unconfigured sidebar (registered with width<=0, seeded to the -2
-    // sentinel below) — absorb the FIRST observed layout width as the seed
-    // instead of treating it as a real resize, so landing at UIKit's default
-    // column width doesn't fire a spurious launch emit.
-    if (c.lastLayoutEmitWidth == -2) {
+    // sentinel below) — absorb the FIRST observed REAL layout width (w>1) as
+    // the seed instead of treating it as a real resize, so landing at UIKit's
+    // default column width doesn't fire a spurious launch emit. A degenerate
+    // 0/1-width first layout must NOT be absorbed — it falls through to the
+    // w<=1 guard below and leaves the sentinel in place, so the next real
+    // width is still absorbed as the seed instead of firing a launch emit.
+    if (c.lastLayoutEmitWidth == -2 && w > 1) {
         c.lastLayoutEmitWidth = w;
         return;
     }
@@ -1073,11 +1076,12 @@ void darwin_sidebar_set_width(int32_t window_id, int32_t width) {
             c.splitVC.preferredPrimaryColumnWidth = (CGFloat)width;
             c.splitVC.minimumPrimaryColumnWidth = (CGFloat)width;
             c.splitVC.maximumPrimaryColumnWidth = (CGFloat)width;
+            // seed BEFORE layoutIfNeeded — the synchronous layout pass drives the
+            // note-layout hook, which must see this width as already-emitted
+            c.lastLayoutEmitWidth = width;
             [c.splitVC.view setNeedsLayout];
             [c.splitVC.view layoutIfNeeded];
             // Leave min==max==width — column stays locked (no restore needed).
-            // seed the layout-emit dedupe so the ensuing layout pass doesn't double-emit
-            c.lastLayoutEmitWidth = width;
             zapp_ios_sidebar_emit_resize(c, width);
         } else {
             // Resizable:ON — USER-OWNED width. Set the preferred width: it applies
@@ -1087,10 +1091,11 @@ void darwin_sidebar_set_width(int32_t window_id, int32_t width) {
             // clear it (see the header comment), so this is a harmless no-op once
             // the user has dragged.
             c.splitVC.preferredPrimaryColumnWidth = (CGFloat)width;
+            // seed BEFORE layoutIfNeeded — the synchronous layout pass drives the
+            // note-layout hook, which must see this width as already-emitted
+            c.lastLayoutEmitWidth = width;
             [c.splitVC.view setNeedsLayout];
             [c.splitVC.view layoutIfNeeded];
-            // seed the layout-emit dedupe so the ensuing layout pass doesn't double-emit
-            c.lastLayoutEmitWidth = width;
             zapp_ios_sidebar_emit_resize(c, width);
         }
     });
