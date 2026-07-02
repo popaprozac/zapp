@@ -5,6 +5,11 @@
 import std/[options, json, strutils]
 import bridge, service, clipboard, callbacks, events, permissions, fs, dialog, notification, shortcuts
 import routerstate
+
+# [zapp-nav] diagnostic helpers — stderr logging to reach the dev terminal
+proc c_fprintf(stream: pointer, fmt: cstring) {.importc: "fprintf", varargs, header: "<stdio.h>", cdecl.}
+proc c_fflush(stream: pointer) {.importc: "fflush", header: "<stdio.h>", cdecl.}
+var cstderr_nav {.importc: "stderr", header: "<stdio.h>".}: pointer
 # worker: worker_create / worker_post_message / worker_terminate (B7b.1
 #   dispatcher). registry: the C-ABI procs routeWorker needs are plain Nim `*`
 #   exports (zapp_worker_registry_add_full_with_engine_and_name / _remove —
@@ -178,6 +183,10 @@ proc emitRouteChanged(win: int32, kind: string) =
   let canBack = routerCanGoBack(win)
   let canFwd = routerCanGoForward(win)
   let windowIdStr = "win-" & $win
+  # [zapp-nav] diagnostic: emitRouteChanged — see if root webview will re-render
+  c_fprintf(cstderr_nav, "[zapp-nav] emitRouteChanged win=%d url=%s canGoBack=%d kind=%s\n".cstring,
+            win.cint, url.cstring, (if canBack: 1.cint else: 0.cint), kind.cstring)
+  c_fflush(cstderr_nav)
   let paramsNode: JsonNode =
     if paramsStr.len > 0:
       try: parseJson(paramsStr)
@@ -199,6 +208,9 @@ proc zapp_router_pop_from_native*(windowId: int32) {.exportc, cdecl.} =
   ## (back button / edge swipe). Mutate routerstate + broadcast ONLY — no native
   ## op here. The native pop already happened (user gesture); calling a pop op
   ## would double-pop. The new per-action seam never calls this path programmatically.
+  # [zapp-nav] diagnostic: pop_from_native — if this fires twice Bug B may duplicate
+  c_fprintf(cstderr_nav, "[zapp-nav] pop_from_native win=%d\n".cstring, windowId.cint)
+  c_fflush(cstderr_nav)
   if routerPop(windowId):
     emitRouteChanged(windowId, "pop")
 
@@ -700,10 +712,17 @@ proc routeWindowAction(action: string, a: JsonNode, rawWindowId: int, payload: s
     of "router:push":
       let url = a{"url"}.getStr("")
       let params = (if a.hasKey("params"): $a["params"] else: "")
+      # [zapp-nav] diagnostic: push arm
+      c_fprintf(cstderr_nav, "[zapp-nav] router_action=push target=%d url=%s\n".cstring,
+                target.cint, url.cstring)
+      c_fflush(cstderr_nav)
       routerPush(target, url, params)
       emitRouteChanged(target, "push")
       when defined(zappIos): zapp_ios_push_route_vc(target, url.cstring)
     of "router:pop":
+      # [zapp-nav] diagnostic: pop arm
+      c_fprintf(cstderr_nav, "[zapp-nav] router_action=pop target=%d\n".cstring, target.cint)
+      c_fflush(cstderr_nav)
       if routerPop(target):
         emitRouteChanged(target, "pop")
         when defined(zappIos): zapp_ios_pop_route_vc(target)
@@ -712,6 +731,10 @@ proc routeWindowAction(action: string, a: JsonNode, rawWindowId: int, payload: s
     of "router:replace":
       let url = a{"url"}.getStr("")
       let params = (if a.hasKey("params"): $a["params"] else: "")
+      # [zapp-nav] diagnostic: replace arm (lateral section switch)
+      c_fprintf(cstderr_nav, "[zapp-nav] router_action=replace target=%d url=%s\n".cstring,
+                target.cint, url.cstring)
+      c_fflush(cstderr_nav)
       routerReplace(target, url, params)
       emitRouteChanged(target, "replace")
       # On iOS a lateral section switch happens after popToRoot (sidebar-pane.ts).
@@ -719,6 +742,9 @@ proc routeWindowAction(action: string, a: JsonNode, rawWindowId: int, payload: s
       # at content); the content webview re-renders via emitRouteChanged above.
       when defined(zappIos): zapp_ios_pop_to_content(target)
     of "router:popToRoot":
+      # [zapp-nav] diagnostic: popToRoot arm (starts lateral section switch)
+      c_fprintf(cstderr_nav, "[zapp-nav] router_action=popToRoot target=%d\n".cstring, target.cint)
+      c_fflush(cstderr_nav)
       if routerPopToRoot(target):
         emitRouteChanged(target, "popToRoot")
         when defined(zappIos): zapp_ios_pop_to_content(target)
