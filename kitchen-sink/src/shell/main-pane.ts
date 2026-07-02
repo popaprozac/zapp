@@ -84,7 +84,13 @@ export function renderMainPane(app: HTMLElement) {
 
   win.router.on((e) => {
     if (Platform.isIOS) {
-      if (myRoute) return;            // fixed-route webview — never re-renders
+      if (myRoute) {
+        // Fixed-route webview: never re-renders, but its toolbar back/fwd
+        // items must still track live router state (#771 datum 3 sibling —
+        // without this, pushed pages render back/fwd permanently disabled).
+        syncToolbar(e.canGoBack, e.canGoForward);
+        return;
+      }
       // Root content webview re-renders only when the stack is at its ROOT depth
       // (canGoBack === false → a lateral section switch via replace, or a
       // collapse-to-root via popToRoot/pop). Drill-down pushes (canGoBack === true)
@@ -97,8 +103,12 @@ export function renderMainPane(app: HTMLElement) {
   });
 
   if (Platform.isIOS && myRoute) {
-    // Pushed route VC: render its own fixed route once.
+    // Pushed route VC: render its own fixed route once, then seed the toolbar
+    // back/fwd enabled state from the authoritative router snapshot (#771).
     renderRoute(myRoute);
+    win.router.current()
+      .then((snap) => syncToolbar(snap.canGoBack, snap.canGoForward))
+      .catch(() => { /* best-effort */ });
   } else {
     // Root content webview (or desktop): show the current route immediately,
     // then correct to the authoritative route (restores a deep route on reload).
