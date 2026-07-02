@@ -176,8 +176,14 @@
           (long)UISplitViewControllerColumnPrimary,
           (long)UISplitViewControllerColumnSecondary,
           (long)UISplitViewControllerColumnCompact);
-    // Collapse to Primary (sidebar) so iPhone cold-launch shows the sidebar.
-    return UISplitViewControllerColumnPrimary;
+#if SPLITREF_NO_SIDEBAR
+    // No sidebar exists — compact must collapse onto the CONTENT column.
+    // (This is also the semantic the framework port needs: a no-sidebar
+    // window on iPhone shows content; the Inspector column auto-sheets.)
+    return UISplitViewControllerColumnSecondary;
+#else
+    return UISplitViewControllerColumnPrimary;   // existing behavior, unchanged
+#endif
 }
 
 // Called when the split re-expands (rotation to landscape / iPad).
