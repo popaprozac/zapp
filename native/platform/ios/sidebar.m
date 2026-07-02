@@ -942,26 +942,77 @@ void zapp_ios_sidebar_unregister(void* window) {
 //   2. ZappIOSSplitViewController traitCollectionDidChange: (trait changes)
 //   3. ZappIOSSplitViewController viewWillTransitionToSize: completion (rotation/multitasking)
 
+// --- Shared edge-pin helper (#771) ------------------------------------------
+//
+// ONE implementation of the constraint-pair edge model documented above
+// (leading+trailing Full/Safe pairs; top/bottom always full-frame), consumed
+// by all three content surfaces: the sidebar shape (this file), the
+// hidden-Primary shape (window.m), and pushed route VCs (routing.m).
+//
+// zapp_ios_edge_pin_webview converts wv from autoresizingMask (set by
+// webview.m) to explicit Auto Layout, pins top/bottom to the container, and
+// creates — WITHOUT activating — the four leading/trailing constraints,
+// returned via the out-params. The caller stores them in strong properties
+// and calls zapp_ios_edge_pin_update to activate the pair for the current
+// trait (and again on every trait / size-transition change).
+void zapp_ios_edge_pin_webview(WKWebView* wv, UIView* container,
+                               NSLayoutConstraint* __autoreleasing * outLeadingFull,
+                               NSLayoutConstraint* __autoreleasing * outLeadingSafe,
+                               NSLayoutConstraint* __autoreleasing * outTrailingFull,
+                               NSLayoutConstraint* __autoreleasing * outTrailingSafe) {
+    if (!wv || !container) return;
+    wv.translatesAutoresizingMaskIntoConstraints = NO;
+    // Top / bottom stay full-frame (not safe-area): the pane is the visible
+    // surface; no top/bottom insets (device notches must not shrink content).
+    [NSLayoutConstraint activateConstraints:@[
+        [wv.topAnchor constraintEqualToAnchor:container.topAnchor],
+        [wv.bottomAnchor constraintEqualToAnchor:container.bottomAnchor],
+    ]];
+    if (outLeadingFull)
+        *outLeadingFull  = [wv.leadingAnchor constraintEqualToAnchor:container.leadingAnchor];
+    if (outLeadingSafe)
+        *outLeadingSafe  = [wv.leadingAnchor constraintEqualToAnchor:container.safeAreaLayoutGuide.leadingAnchor];
+    if (outTrailingFull)
+        *outTrailingFull = [wv.trailingAnchor constraintEqualToAnchor:container.trailingAnchor];
+    if (outTrailingSafe)
+        *outTrailingSafe = [wv.trailingAnchor constraintEqualToAnchor:container.safeAreaLayoutGuide.trailingAnchor];
+}
+
+// Activate the correct pair for the given size class: regular → safe-area
+// anchors (track the tiled sidebar's leading inset and the iOS-26 Inspector
+// column's trailing inset), compact → raw view anchors (full-bleed).
+// layoutView is forced through a layout pass so the swap takes effect
+// immediately.
+void zapp_ios_edge_pin_update(BOOL isRegular,
+                              NSLayoutConstraint* leadingFull,
+                              NSLayoutConstraint* leadingSafe,
+                              NSLayoutConstraint* trailingFull,
+                              NSLayoutConstraint* trailingSafe,
+                              UIView* layoutView) {
+    if (!leadingFull || !leadingSafe || !trailingFull || !trailingSafe) return;
+    if (isRegular) {
+        leadingFull.active  = NO;
+        trailingFull.active = NO;
+        leadingSafe.active  = YES;
+        trailingSafe.active = YES;
+    } else {
+        leadingSafe.active  = NO;
+        trailingSafe.active = NO;
+        leadingFull.active  = YES;
+        trailingFull.active = YES;
+    }
+    [layoutView setNeedsLayout];
+    [layoutView layoutIfNeeded];
+}
+
 static void zapp_ios_update_content_edges(ZappIOSSidebarController* c) {
     if (!c || !c.leadingFull || !c.leadingSafe) return;
     if (!c.trailingFull || !c.trailingSafe) return;
     if (!c.splitVC) return;
     BOOL isRegular = (c.splitVC.traitCollection.horizontalSizeClass
                       == UIUserInterfaceSizeClassRegular);
-    if (isRegular) {
-        c.leadingFull.active = NO;
-        c.trailingFull.active = NO;
-        c.leadingSafe.active = YES;
-        c.trailingSafe.active = YES;
-    } else {
-        c.leadingSafe.active = NO;
-        c.trailingSafe.active = NO;
-        c.leadingFull.active = YES;
-        c.trailingFull.active = YES;
-    }
-    // Force layout so the change takes effect immediately.
-    [c.contentVC.view setNeedsLayout];
-    [c.contentVC.view layoutIfNeeded];
+    zapp_ios_edge_pin_update(isRegular, c.leadingFull, c.leadingSafe,
+                             c.trailingFull, c.trailingSafe, c.contentVC.view);
 }
 
 // Called from window.m immediately after the content webview is created, for
@@ -982,11 +1033,8 @@ void zapp_ios_sidebar_set_content_webview(void* window, void* webview_ptr) {
 
         c.contentWebview = wv;
 
-        // Switch from autoresizingMask (set by webview.m) to explicit Auto Layout.
-        wv.translatesAutoresizingMaskIntoConstraints = NO;
-
-        // Build both edge-constraint pairs — in each pair only one will be
-        // active at a time (swapped per size class by
+        // Build both edge-constraint pairs via the shared helper — in each
+        // pair only one will be active at a time (swapped per size class by
         // zapp_ios_update_content_edges).
         //
         // Why pairs on BOTH horizontal edges: the Secondary column's view stays
@@ -995,25 +1043,13 @@ void zapp_ios_sidebar_set_content_webview(void* window, void* webview_ptr) {
         // webview tracks those insets via the *Safe constraints on regular
         // width, and uses the raw edges (*Full) on compact for full-bleed
         // content (notch insets must not shrink it).
-        NSLayoutConstraint* leadingFull =
-            [wv.leadingAnchor constraintEqualToAnchor:container.leadingAnchor];
-        NSLayoutConstraint* leadingSafe =
-            [wv.leadingAnchor constraintEqualToAnchor:container.safeAreaLayoutGuide.leadingAnchor];
-        NSLayoutConstraint* trailingFull =
-            [wv.trailingAnchor constraintEqualToAnchor:container.trailingAnchor];
-        NSLayoutConstraint* trailingSafe =
-            [wv.trailingAnchor constraintEqualToAnchor:container.safeAreaLayoutGuide.trailingAnchor];
-
-        // Pin top / bottom to the container edges (not safe-area). Top and
-        // bottom must stay full-frame: on iPhone the entire content VC is the
-        // visible surface and we don't want top/bottom insets.
-        [NSLayoutConstraint activateConstraints:@[
-            [wv.topAnchor constraintEqualToAnchor:container.topAnchor],
-            [wv.bottomAnchor constraintEqualToAnchor:container.bottomAnchor],
-        ]];
-
-        c.leadingFull = leadingFull;
-        c.leadingSafe = leadingSafe;
+        NSLayoutConstraint *leadingFull = nil, *leadingSafe = nil,
+                           *trailingFull = nil, *trailingSafe = nil;
+        zapp_ios_edge_pin_webview(wv, container,
+                                  &leadingFull, &leadingSafe,
+                                  &trailingFull, &trailingSafe);
+        c.leadingFull  = leadingFull;
+        c.leadingSafe  = leadingSafe;
         c.trailingFull = trailingFull;
         c.trailingSafe = trailingSafe;
 

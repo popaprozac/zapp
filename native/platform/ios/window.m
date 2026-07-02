@@ -398,6 +398,20 @@ extern void zapp_ios_inspector_column_did_hide(void* window);
 // Defined later in this file (numeric-ID dispatch table).
 extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
 
+// Shared edge-pin helper (ios/sidebar.m, #771): one implementation of the
+// Full/Safe constraint-pair edge model. See sidebar.m's header comment.
+extern void zapp_ios_edge_pin_webview(WKWebView* wv, UIView* container,
+                                      NSLayoutConstraint* __autoreleasing * outLeadingFull,
+                                      NSLayoutConstraint* __autoreleasing * outLeadingSafe,
+                                      NSLayoutConstraint* __autoreleasing * outTrailingFull,
+                                      NSLayoutConstraint* __autoreleasing * outTrailingSafe);
+extern void zapp_ios_edge_pin_update(BOOL isRegular,
+                                     NSLayoutConstraint* leadingFull,
+                                     NSLayoutConstraint* leadingSafe,
+                                     NSLayoutConstraint* trailingFull,
+                                     NSLayoutConstraint* trailingSafe,
+                                     UIView* layoutView);
+
 @interface ZappIOSHiddenPrimarySplitViewController : UISplitViewController <UISplitViewControllerDelegate>
 // The empty Primary column VC. Strong so the collapsed-stack prune can still
 // recognize it while UIKit shuffles ownership during collapse transitions.
@@ -510,19 +524,9 @@ extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
     if (!self.trailingFull || !self.trailingSafe) return;
     BOOL isRegular = (self.traitCollection.horizontalSizeClass
                       == UIUserInterfaceSizeClassRegular);
-    if (isRegular) {
-        self.leadingFull.active = NO;
-        self.trailingFull.active = NO;
-        self.leadingSafe.active = YES;
-        self.trailingSafe.active = YES;
-    } else {
-        self.leadingSafe.active = NO;
-        self.trailingSafe.active = NO;
-        self.leadingFull.active = YES;
-        self.trailingFull.active = YES;
-    }
-    [self.contentContainer setNeedsLayout];
-    [self.contentContainer layoutIfNeeded];
+    zapp_ios_edge_pin_update(isRegular, self.leadingFull, self.leadingSafe,
+                             self.trailingFull, self.trailingSafe,
+                             self.contentContainer);
 }
 
 // Same two re-switch triggers ZappIOSSplitViewController (sidebar.m) uses for
@@ -579,29 +583,19 @@ extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
 // contentVC), and registering a phantom sidebar controller for a window with
 // NO sidebar would activate every sidebar code path (toolbar/routing nav
 // resolution, collapse-to-Primary, sidebar emits) for a pane that doesn't
-// exist. Mirroring ~25 lines is the cheaper coupling.
+// exist. The constraint construction itself now lives in the shared
+// zapp_ios_edge_pin_webview helper (#771) — only the storage-on-split (no
+// registry entry) differs from sidebar.m's consumer.
 static void zapp_ios_pin_content_webview_no_sidebar(
         ZappIOSHiddenPrimarySplitViewController* split,
         WKWebView* wv, UIView* container) {
     if (!split || !wv || !container) return;
 
-    wv.translatesAutoresizingMaskIntoConstraints = NO;
-
-    NSLayoutConstraint* leadingFull =
-        [wv.leadingAnchor constraintEqualToAnchor:container.leadingAnchor];
-    NSLayoutConstraint* leadingSafe =
-        [wv.leadingAnchor constraintEqualToAnchor:container.safeAreaLayoutGuide.leadingAnchor];
-    NSLayoutConstraint* trailingFull =
-        [wv.trailingAnchor constraintEqualToAnchor:container.trailingAnchor];
-    NSLayoutConstraint* trailingSafe =
-        [wv.trailingAnchor constraintEqualToAnchor:container.safeAreaLayoutGuide.trailingAnchor];
-
-    // Top / bottom stay full-frame (not safe-area) — same rationale as
-    // sidebar.m: the pane is the visible surface; no top/bottom insets.
-    [NSLayoutConstraint activateConstraints:@[
-        [wv.topAnchor constraintEqualToAnchor:container.topAnchor],
-        [wv.bottomAnchor constraintEqualToAnchor:container.bottomAnchor],
-    ]];
+    NSLayoutConstraint *leadingFull = nil, *leadingSafe = nil,
+                       *trailingFull = nil, *trailingSafe = nil;
+    zapp_ios_edge_pin_webview(wv, container,
+                              &leadingFull, &leadingSafe,
+                              &trailingFull, &trailingSafe);
 
     split.contentContainer = container;
     split.leadingFull  = leadingFull;
