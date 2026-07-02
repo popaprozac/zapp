@@ -1656,6 +1656,7 @@ Two `NSToolbarItemGroup`-backed item types let you cluster related controls:
 | Field | Type | Default | Notes |
 |---|---|---|---|
 | `id` | `string` | required | Same rules as button ids. |
+| `label` | `string` | none | Group label — names the collapsed chevron button and the customization palette, distinct from each segment's own `label`. Recommended for icon-only groups: an unlabeled collapsed group otherwise renders a blank chevron button (#744). |
 | `segments` | `SegmentDef[]` | required | At least one. Each segment takes `id?`, `label?`, `icon?` (`sf:…`/data-URL/path), and an `action: () => void` callback. Give each segment a `label` even when using an `icon` — AppKit uses the labels for the collapsed/overflow (`≫`) menu and for accessibility. An icon-only segment without a `label` falls back to its `id` (or its index) in the overflow menu instead of rendering a blank chevron entry (#744) — but a real `label` still reads far better there, and omitting one on an icon-only segment logs a `[zapp] toolbar: icon-only segment … has no "label"` console warning on each toolbar normalization. The native right-click "icon only / icon and text" customization is available for free. |
 | `selectionMode` | `"one"` \| `"any"` \| `"momentary"` | `"momentary"` | `"one"` = radio; `"any"` = multi-select; `"momentary"` = no persistent highlight. |
 | `selected` | `number \| number[]` | none | Initial selection — index for `"one"`, indices array for `"any"`. Ignored for `"momentary"`. |

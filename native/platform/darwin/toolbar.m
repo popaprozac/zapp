@@ -294,6 +294,16 @@ static NSMutableDictionary<NSValue*, ZappToolbarController*>* zapp_toolbars = ni
                 for (NSDictionary* s in segs) [titles addObject:([s[@"label"] isKindOfClass:[NSString class]] ? s[@"label"] : @"")];
                 group = [NSToolbarItemGroup groupWithItemIdentifier:identifier titles:titles selectionMode:mode labels:nil target:self action:@selector(zappToolbarGroupChanged:)];
             }
+            // #744 residual: `labels` (above) only feeds the per-segment
+            // overflow-menu ENTRIES. The group ITEM ITSELF has no label unless
+            // we set one — collapsed to a single chevron button, that renders
+            // BLANK. Only set when the def carries a non-empty top-level
+            // `label`; unlabeled groups keep prior (unlabeled) behavior.
+            NSString* groupLabel = [def[@"label"] isKindOfClass:[NSString class]] ? def[@"label"] : @"";
+            if (groupLabel.length) {
+                group.label = groupLabel;
+                group.paletteLabel = groupLabel;
+            }
             NSString* repr = [def[@"controlRepresentation"] isKindOfClass:[NSString class]] ? def[@"controlRepresentation"] : @"automatic";
             group.controlRepresentation = [repr isEqualToString:@"expanded"] ? NSToolbarItemGroupControlRepresentationExpanded
                 : ([repr isEqualToString:@"collapsed"] ? NSToolbarItemGroupControlRepresentationCollapsed : NSToolbarItemGroupControlRepresentationAutomatic);

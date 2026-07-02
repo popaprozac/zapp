@@ -388,6 +388,11 @@ export interface ToolbarSegmentedDef {
   type: "segmented";
   /** Required. Native NSToolbar identifier. */
   id: string;
+  /** Group label — names the collapsed chevron button and the customization
+   *  palette on macOS. Distinct from each segment's own `label`. Recommended
+   *  for icon-only groups (an unlabeled collapsed group renders a blank
+   *  chevron button). Omit → unlabeled (prior behavior). */
+  label?: string;
   /** The segments of the control. label OR icon each. */
   segments: ToolbarSegmentDef[];
   /** Selection behavior. Default "momentary". */
@@ -981,6 +986,7 @@ export function normalizeToolbar(
       });
       const seg: Record<string, unknown> = { type: "segmented", id: it.id, segments: wireSegs,
         selectionMode: it.selectionMode ?? "momentary", selected: selectedToWire(it.selected) };
+      if (it.label !== undefined) seg.label = it.label;
       if (it.controlRepresentation !== undefined) seg.controlRepresentation = it.controlRepresentation;
       seg.placement = placement;
       items.push(seg);

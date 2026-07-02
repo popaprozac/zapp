@@ -113,5 +113,23 @@ describe("applyToolbarConventions", () => {
     } finally { console.warn = orig; }
     expect(warnings.some((w) => w.includes("icon-only segment"))).toBe(true);
   });
+
+  test("#744: segmented top-level label passes through to the wire item", () => {
+    const { json } = normalizeToolbar(
+      { items: [ { type: "segmented", id: "fmt", label: "Format", segments: [{ id: "bold", icon: "sf:bold" }] } as any ] },
+      false, false,
+    );
+    const wire = JSON.parse(json);
+    expect(wire.items[0]).toMatchObject({ type: "segmented", id: "fmt", label: "Format" });
+  });
+
+  test("#744: segmented item without a top-level label omits it from the wire", () => {
+    const { json } = normalizeToolbar(
+      { items: [ { type: "segmented", id: "fmt", segments: [{ id: "bold", icon: "sf:bold", label: "Bold" }] } as any ] },
+      false, false,
+    );
+    const wire = JSON.parse(json);
+    expect(wire.items[0]).not.toHaveProperty("label");
+  });
 });
 

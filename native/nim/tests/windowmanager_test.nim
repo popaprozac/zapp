@@ -244,6 +244,23 @@ block:
   doAssert root["items"][0]["segments"][0]["icon"].getStr == "sf:square.grid.2x2"
 
 block:
+  # #744 residual: segmented top-level `label` (collapsed chevron + palette
+  # name — distinct from per-segment `label`) round-trips through
+  # parseToolbarJson(serializeToolbar(t)).
+  let t = ToolbarOptions(style: ToolbarStyle.Unified, items: @[
+    ToolbarItemOpt(`type`: "segmented", id: "fmt", label: "Format",
+      selectionMode: ToolbarGroupSelectionMode.Momentary, selected: @[],
+      segments: @[
+        ToolbarSegmentOpt(id: "bold", icon: "sf:bold", enabled: true),
+        ToolbarSegmentOpt(id: "italic", icon: "sf:italic", enabled: true)]),
+  ])
+  let s = serializeToolbar(t)
+  doAssert "\"label\":\"Format\"" in s, "segmented top-level label must serialize"
+  doAssert parseToolbarJson(s) == t, "parse(serialize(t)) must round-trip segmented top-level label"
+  let root = parseJson(s)
+  doAssert root["items"][0]["label"].getStr == "Format"
+
+block:
   # plain group round-trips (grouping), including bordered:false sub-item
   let t = ToolbarOptions(style: ToolbarStyle.Unified, items: @[
     ToolbarItemOpt(`type`: "group", id: "nav",

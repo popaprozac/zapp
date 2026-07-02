@@ -461,6 +461,9 @@ proc serializeToolbar*(t: ToolbarOptions): string =
         segs.add(sj)
       var w = %*{"type": "segmented", "id": it.id, "segments": segs,
                  "selectionMode": $it.selectionMode, "selected": %it.selected}
+      # #744 residual: top-level group label (names the collapsed chevron +
+      # customization palette) — distinct from per-segment `label` (above).
+      if it.label.len > 0: w["label"] = %it.label
       if it.controlRepresentation != ToolbarControlRepresentation.Automatic:
         w["controlRepresentation"] = %($it.controlRepresentation)
       items.add(w)
