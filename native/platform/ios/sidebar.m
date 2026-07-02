@@ -286,6 +286,24 @@ bool zapp_ios_split_display_mode_is_secondary_only(void* window_ptr) {
     return c.splitVC.displayMode == UISplitViewControllerDisplayModeSecondaryOnly;
 }
 
+// Toolbar affordance query: is the sidebar user-collapsible? Live read taken
+// at toolbar-apply time (same pattern as the displayMode read above) — drives
+// the ENABLED state of Zapp's manual toggleSidebar bar button (ios/toolbar.m).
+// macOS parity: AppKit auto-greys its system NSToolbarToggleSidebarItem when
+// NSSplitViewItem.canCollapse == NO (darwin/sidebar.m revalidates on
+// set_collapsible); UIKit has no validation pass, so the toolbar reads this
+// helper and sets `enabled` manually. Returns true when no sidebar is
+// registered for the window — a sidebar-less window has no toggle to gate
+// anyway (the TS runtime drops toggleSidebar items for windows without a
+// sidebar, runtime/window.ts), so the default is a harmless "nothing to
+// disable". Declared extern in ios/toolbar.m.
+bool zapp_ios_sidebar_is_collapsible_for_window(void* window_ptr) {
+    if (!window_ptr || !zapp_ios_sidebars) return true;
+    NSValue* key = [NSValue valueWithPointer:window_ptr];
+    ZappIOSSidebarController* c = zapp_ios_sidebars[key];
+    return c ? (bool)c.collapsible : true;
+}
+
 // slot -> owning UIWindow -> registry key. Works from EITHER pane's slot.
 static ZappIOSSidebarController* zapp_ios_sidebar_for_slot(int32_t slot_id) {
     if (!zapp_ios_sidebars) return nil;
@@ -1162,24 +1180,41 @@ void darwin_sidebar_set_width(int32_t window_id, int32_t width) {
 }
 
 // Enable or disable sidebar collapsing (macOS parity: gates only the native
-// affordance, not the programmatic API). When can_collapse==false:
+// affordances, not the programmatic API). When can_collapse==false:
 //   • presentsWithGesture is set to NO so the native swipe-in gesture is disabled.
-//   • darwin_sidebar_toggle / collapse / expand STILL work — the app's own
-//     toggle button calls those and the dev owns their UI.
-// When can_collapse==true, presentsWithGesture is restored to YES.
+//   • Zapp's toolbar toggleSidebar button renders DISABLED — the toolbar apply
+//     paths (ios/toolbar.m) read zapp_ios_sidebar_is_collapsible_for_window at
+//     apply time, mirroring macOS where AppKit auto-greys the system toggle
+//     against NSSplitViewItem.canCollapse.
+//   • darwin_sidebar_toggle / collapse / expand STILL work — those are the
+//     programmatic API and the dev owns their UI.
+// When can_collapse==true, presentsWithGesture is restored and the toggle
+// re-enables.
+//
+// presentsWithGesture=NO side-effects (E2-smoked; SDK-documented, by design):
+//   • iPad, sidebar tiled+visible: displayMode stays OneBesideSecondary — the
+//     sidebar STAYS OPEN. No side-effect collapse.
+//   • iPhone (compact) with the sidebar currently presented: removing the
+//     gesture also dismisses the presented primary — UISplitViewController
+//     behavior, not fought here.
 void darwin_sidebar_set_collapsible(int32_t window_id, bool can_collapse) {
     zapp_ios_sidebar_on_main(^{
         ZappIOSSidebarController* c = zapp_ios_sidebar_for_slot(window_id);
         if (!c || !c.splitVC) return;
-        // TEMP E2 instrumentation
-        fprintf(stderr, "[zapp-nav] E2 before: canCollapse=%d displayMode=%ld behavior=%ld gesture=%d\n",
-                (int)can_collapse, (long)c.splitVC.displayMode,
-                (long)c.splitVC.preferredSplitBehavior, (int)c.splitVC.presentsWithGesture);
         c.collapsible = (BOOL)can_collapse;
         c.splitVC.presentsWithGesture = (BOOL)can_collapse;
-        // TEMP E2 instrumentation
+        // Re-apply the toolbar so the toggleSidebar button greys/un-greys
+        // immediately. Same two-step as willChangeToDisplayMode: (above):
+        // a synchronous apply now, plus a settled re-apply one runloop tick
+        // later in case the gesture change moved the presentation (the iPhone
+        // dismiss-presented-primary case). Capture the numeric host id so the
+        // settled lookup re-resolves fresh rather than trusting a stale pointer.
+        void* winPtr = darwin_window_get_by_numeric_id(c.hostWindowId);
+        if (winPtr) zapp_ios_toolbar_apply_for_window(winPtr);
+        int32_t hostWindowId = c.hostWindowId;
         dispatch_async(dispatch_get_main_queue(), ^{
-            fprintf(stderr, "[zapp-nav] E2 settled: displayMode=%ld\n", (long)c.splitVC.displayMode);
+            void* settledWinPtr = darwin_window_get_by_numeric_id(hostWindowId);
+            if (settledWinPtr) zapp_ios_toolbar_apply_for_window(settledWinPtr);
         });
     });
 }

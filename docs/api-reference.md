@@ -930,9 +930,22 @@ win.sidebar?.width              // reactive: tracks SIDEBAR_RESIZED; seeded by c
 (see [Sidebar on iOS](#sidebar-on-ios)). They are no-ops on macOS and
 iPad-regular, where both panes are always side-by-side.
 
-`setCollapsible(bool)` / `setResizable(bool)` are macOS-only. iOS sidebar
-collapse is size-class–driven by `UISplitViewController`; there is no
-divider-drag affordance to gate, so these calls are no-ops on iOS.
+`setCollapsible(bool)` gates the **native affordances** on both platforms —
+programmatic `toggle()` / `collapse()` / `expand()` always keep working:
+
+- **macOS** — `collapsible: false` disallows user collapse (divider snap) and
+  greys the system `toggleSidebar` toolbar button (AppKit validates it against
+  `canCollapse`).
+- **iOS** — `collapsible: false` disables the toolbar `toggleSidebar` button
+  (parity with macOS) and turns off the system edge-swipe reveal gesture
+  (`presentsWithGesture = NO`). On iPad, a visible tiled sidebar **stays
+  open** — the call gates affordances, never current visibility. On iPhone
+  (compact), disabling the gesture also dismisses a currently-presented
+  sidebar — `UISplitViewController`'s documented behavior, by design.
+
+`setResizable(bool)` locks/unlocks the divider on macOS and iPad alike
+(`resizable: false` clamps the column at its current width; iPhone-compact has
+no divider, so it has no effect there).
 `setWidth()` works programmatically on iOS: authoritative when `resizable:false`
 (min==max lock), a best-effort preference when `resizable:true` (overridden by
 a user drag — UIKit limitation; see [Sidebar on iOS](#sidebar-on-ios)).
@@ -1113,8 +1126,8 @@ no size-class notion.
 | Layout | `NSSplitViewController` side-by-side | `UISplitViewController` — side-by-side (iPad), master-detail (iPhone) |
 | `showContent()` / `showSidebar()` | no-op (always side-by-side) | navigate the iPhone master-detail stack (no-op on iPad) |
 | `material` / vibrancy | liquid glass / `NSVisualEffectMaterial` | deferred — flat background (future cycle) |
-| `setCollapsible(...)` | disallows/allows user collapse | no-op (collapse is size-class–driven) |
-| `setResizable(...)` | locks/unlocks the divider | no-op (no draggable divider) |
+| `setCollapsible(...)` | disallows/allows user collapse; system toggle greys | disables/enables the toolbar toggle + edge-swipe reveal; a visible tiled sidebar stays open (see `SidebarHandle` above) |
+| `setResizable(...)` | locks/unlocks the divider | locks/unlocks the iPad divider (iPhone-compact has none) |
 | `setWidth(px)` | authoritative — moves the real divider | authoritative when `resizable:false`; applies until user drags when `resizable:true` (see note below) |
 | `presentation` / `setPresentation` | **ignored** — macOS always tiles | iOS/iPadOS-only: `"automatic"`, `"tile"`, `"overlay"`; tile↔overlay transitions animate (#721) |
 | Native toolbar (`toggleSidebar`, back chevron) | full NSToolbar | none — app renders its own back control (future cycle) |
