@@ -188,6 +188,32 @@ int32_t zapp_ios_inspector_slot_for(int32_t host_slot) {
     return zapp_ios_inspector_slot_of[host_slot];
 }
 
+// Shared "eval JS in the host content webview + its sidebar/inspector PANE
+// webviews" targeting rule (#627 pane fan-out). Single primitive for the two
+// call sites that need this exact 3-target reach: zapp_dispatch_event_to_js
+// below (window events) and ios/toolbar.m's zapp_ios_toolbar_eval_js_host_panes
+// (toolbar click / group-select / menu events, #771 G1-E). Both used to carry
+// their own copy of this loop; hoisted here (review G1-E Minor 1) so they can
+// never drift apart again. Self-exclusion guard (slot != host_id) added at
+// the same time (review G1-E Minor 2): a pane slot that happens to equal the
+// host slot must not be eval'd twice. Must be called on the main thread —
+// callers own their own dispatch_async(main_queue) wrapping if needed.
+void zapp_ios_eval_js_host_panes(int32_t host_id, NSString* js) {
+    if (!js.length) return;
+    WKWebView* hostWv = zapp_ios_content_webview_for_slot(host_id);
+    if (hostWv) [hostWv evaluateJavaScript:js completionHandler:nil];
+    int32_t sidebarSlot = zapp_ios_sidebar_slot_for(host_id);
+    if (sidebarSlot >= 0 && sidebarSlot != host_id) {
+        WKWebView* sidebarWv = zapp_ios_content_webview_for_slot(sidebarSlot);
+        if (sidebarWv) [sidebarWv evaluateJavaScript:js completionHandler:nil];
+    }
+    int32_t inspectorSlot = zapp_ios_inspector_slot_for(host_id);
+    if (inspectorSlot >= 0 && inspectorSlot != host_id) {
+        WKWebView* inspectorWv = zapp_ios_content_webview_for_slot(inspectorSlot);
+        if (inspectorWv) [inspectorWv evaluateJavaScript:js completionHandler:nil];
+    }
+}
+
 // Register a webview directly into a specific transport slot + window-id
 // string (mirrors darwin/window.m's zapp_register_webview). The pane path
 // needs this because zapp_ios_register_webview routes by UIWindow — both
@@ -278,13 +304,17 @@ static void zapp_ios_route_slot_free(int32_t slot) {
 int32_t zapp_ios_register_route_webview(void* webview_ptr, int32_t host_slot) {
     WKWebView* wv = (__bridge WKWebView*)webview_ptr;
     if (!wv) return -1;
+    // fix-D: an out-of-range host_slot has no real host to attribute this
+    // route to — bail before allocating a slot instead of falling through to
+    // fabricate a garbage "win-<n>" id (e.g. "win--1") and stash the
+    // out-of-range host_slot itself into zapp_ios_host_slot[slot].
+    if (host_slot < 0 || host_slot >= ZAPP_MAX_WINDOW_CALLBACKS) return -1;
     int32_t slot = zapp_ios_route_slot_alloc();
     if (slot < 0 || slot >= ZAPP_MAX_WINDOW_CALLBACKS) {
         fprintf(stderr, "[zapp] route slot table exhausted; pushed page will have a degraded bridge\n");
         return -1;
     }
-    NSString* hostId = (host_slot >= 0 && host_slot < ZAPP_MAX_WINDOW_CALLBACKS)
-        ? zapp_ios_window_ids[host_slot] : nil;
+    NSString* hostId = zapp_ios_window_ids[host_slot];
     if (!hostId) hostId = [NSString stringWithFormat:@"win-%d", host_slot];
     zapp_ios_register_webview_slot(slot, wv, hostId, host_slot);
     return slot;
@@ -1029,12 +1059,6 @@ void zapp_ios_materialize_pending_windows(void) {
         // collapse delegate, all BEFORE the pane webviews are created below — so
         // the webviews are born inside their final (nav-wrapped) containers and
         // never re-parent. (zapp_ios_sidebar_register declared at file scope.)
-        // Hand the split + columns + ids to the sidebar manager (ios/sidebar.m).
-        // It runs SYNCHRONOUSLY on this (main) thread, wrapping the still-empty
-        // column VCs in bar-hidden navigation controllers + installing the
-        // collapse delegate, all BEFORE the pane webviews are created below — so
-        // the webviews are born inside their final (nav-wrapped) containers and
-        // never re-parent. (zapp_ios_sidebar_register declared at file scope.)
         if (d->hasSidebar) {
             // Pass the presentation string so sidebar_register can apply the
             // behavior+displayMode pair AFTER nav-wrapping and store it for
@@ -1499,23 +1523,13 @@ void zapp_dispatch_event_to_js(int32_t window_id, int32_t event_id, int32_t w, i
         encoding:NSUTF8StringEncoding
         freeWhenDone:NO];
 
-    // Fan out to the sidebar pane: it identifies as the same host window, so
-    // the SAME JS (targeting wid = win-<host>) lands its handlers there too.
-    // Mirrors darwin/window.m's sidebar fan-out. (T3 wires the sidebar's own
-    // collapse/resize events; this carries the host's resize/focus/blur/etc.)
-    int32_t sidebar_slot = zapp_ios_sidebar_slot_for(window_id);
-    WKWebView* sidebarWebview = (sidebar_slot >= 0 && sidebar_slot != window_id &&
-                                 sidebar_slot < ZAPP_MAX_WINDOW_CALLBACKS)
-        ? zapp_ios_webviews[sidebar_slot] : nil;
-    int32_t inspector_slot = zapp_ios_inspector_slot_for(window_id);
-    WKWebView* inspectorWebview = (inspector_slot >= 0 && inspector_slot != window_id &&
-                                   inspector_slot < ZAPP_MAX_WINDOW_CALLBACKS)
-        ? zapp_ios_webviews[inspector_slot] : nil;
-
+    // Fan out to the host + its sidebar/inspector panes (zapp_ios_eval_js_host_panes
+    // above): they identify as the same host window, so the SAME JS (targeting
+    // wid = win-<host>) lands its handlers there too. Mirrors darwin/window.m's
+    // sidebar fan-out. (T3 wires the sidebar's own collapse/resize events; this
+    // carries the host's resize/focus/blur/etc.)
     void (^run)(void) = ^{
-        [webview evaluateJavaScript:js completionHandler:nil];
-        if (sidebarWebview) [sidebarWebview evaluateJavaScript:js completionHandler:nil];
-        if (inspectorWebview) [inspectorWebview evaluateJavaScript:js completionHandler:nil];
+        zapp_ios_eval_js_host_panes(window_id, js);
     };
     if ([NSThread isMainThread]) run();
     else dispatch_async(dispatch_get_main_queue(), run);

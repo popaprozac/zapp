@@ -1,8 +1,6 @@
 // iOS native inspector — doubleColumn base + the iOS-26 dedicated Inspector
 // column (UISplitViewControllerColumnInspector), with a modal-sheet fallback
-// below iOS 26. Ported from the proven spike
-// (spikes/ios-splitview-reference/src/AppDelegate.m + ContentViewController.m,
-// human-smoked on iPad + iPhone, iOS 26.5).
+// below iOS 26. Recipe proven in spikes/ios-splitview-reference.
 //
 // window.m (materialize) creates the inspector VC PERSISTENTLY (so it keeps
 // accumulating route events and always shows the correct content, whichever
@@ -251,7 +249,7 @@ static void zapp_ios_inspector_emit_resize(ZappIOSInspectorController* c, int32_
 //
 // Two guards beyond the sidebar version, both false-positive sources unique
 // to the inspector's two presentation forms:
-//   - <26 (or no split): the persistent inspector nav is shown as a modal
+//   - <26: the persistent inspector nav is shown as a modal
 //     UISheetPresentationController sheet. presentingViewController != nil
 //     detects this — a sheet's frame changes are detent geometry, not a
 //     draggable-column resize, so this reports nothing while presented.
@@ -262,7 +260,7 @@ void zapp_ios_inspector_note_layout_width(void* window_ptr, CGFloat width) {
     if (!window_ptr || !zapp_ios_inspectors) return;
     ZappIOSInspectorController* c = zapp_ios_inspectors[[NSValue valueWithPointer:window_ptr]];
     if (!c) return;
-    if (c.inspectorNav.presentingViewController != nil) return;  // <26/no-split modal sheet, not a column
+    if (c.inspectorNav.presentingViewController != nil) return;  // <26 modal sheet, not a column
     UISplitViewController* split = c.contentVC.splitViewController;
     if (!split) return;
     if (@available(iOS 26.0, *)) {
@@ -435,7 +433,7 @@ void zapp_ios_inspector_register(void* window, void* inspectorNav, void* content
         void (^warnUnsupportedOnSheetFallback)(void) = ^{
             if (!c.resizable) {
                 zapp_ios_control_unsupported("inspector.resizable",
-                    "below iOS 26 (or without a sidebar split) the inspector is a system modal sheet");
+                    "below iOS 26 the inspector is a system modal sheet");
             }
             if (!c.collapsible) {
                 zapp_ios_control_unsupported("inspector.collapsible",
@@ -658,7 +656,7 @@ void darwin_inspector_set_width(int32_t window_id, int32_t width) {
         }
         if (!applied) {
             zapp_ios_control_unsupported("inspector.setWidth",
-                "below iOS 26 (or without a sidebar split) the inspector is a system modal sheet with no adjustable width");
+                "below iOS 26 the inspector is a system modal sheet with no adjustable width");
         }
         // seed the layout-emit dedupe so the ensuing layout pass doesn't double-emit
         c.lastLayoutEmitWidth = width;
@@ -734,6 +732,6 @@ void darwin_inspector_set_resizable(int32_t window_id, bool resizable) {
             }
         }
         zapp_ios_control_unsupported("inspector.setResizable",
-            "below iOS 26 (or without a sidebar split) the inspector is a system modal sheet");
+            "below iOS 26 the inspector is a system modal sheet");
     });
 }

@@ -19,13 +19,21 @@
 // current UIBarButtonItem instances, so darwin_toolbar_update_item patches
 // what is actually on screen.
 //
+// #771 datum 1: each route webview is edge-pinned via the shared Full/Safe
+// constraint-pair helper (sidebar.m), so it honors the tiled-sidebar
+// (leading) and Inspector-column (trailing) safe-area insets on iPad regular
+// width, and stays full-bleed on compact.
+//
+// #771 T8: per-route chrome (navbarHidden / title / toolbar-override) rides
+// the push's compact chrome JSON, is parsed in zapp_ios_push_route_vc, and is
+// stamped onto the VC before it is shown so the first willShow already
+// applies it.
+//
 // Kept verbatim: ZappRouteVC @interface/@implementation, zapp_route_vc_teardown,
 // and all externs the seam still needs.
 
 #import <UIKit/UIKit.h>
 #import <WebKit/WebKit.h>
-#include <stdio.h>
-#include <objc/runtime.h>
 
 // darwin_webview_create_ext is defined in ios/webview.m (same iOS link unit).
 #include "../darwin/webview.h"
@@ -174,10 +182,6 @@ static void zapp_route_vc_teardown(ZappRouteVC* vc) {
 static UINavigationController* zapp_route_content_nav(void* win) {
     UIViewController* contentVC = zapp_ios_content_vc_for_window(win);
     UINavigationController* nav = contentVC.navigationController;
-    // [zapp-nav] diagnostic: log resolved contentVC + nav pointers once per call
-    fprintf(stderr, "[zapp-nav] content_nav contentVC=%p nav=%p\n",
-            (__bridge void*)contentVC, (__bridge void*)nav);
-    fflush(stderr);
     return nav;   // LIVE nav — the fix vs N3a
 }
 
@@ -308,12 +312,7 @@ BOOL zapp_route_bar_should_show(void* win, UIViewController* vc, UIViewControlle
     // (shared with didShowViewController:'s stranded-visibility re-assert) so
     // the two can never drift apart.
     ZappRouteBarWantState want = zapp_route_bar_want_state(vc, contentVC, win);
-    BOOL isContent = want.isContent;
-    BOOL isRoute = want.isRoute;
-    BOOL routeWantsBarHidden = want.routeWantsBarHidden;
-    BOOL toolbarRegistered = want.toolbarRegistered;
     BOOL showBar = want.showBar;
-    BOOL barHiddenBefore = nav.navigationBarHidden;
 
     // Inspector-pop guard: capture the "from" VC via the transition coordinator so
     // didShowViewController: can skip route-depth reconciliation when the disappearing
@@ -331,15 +330,6 @@ BOOL zapp_route_bar_should_show(void* win, UIViewController* vc, UIViewControlle
         self.lastFromVCWasRouteVC = (fromVC != nil && [fromVC isKindOfClass:[ZappRouteVC class]]);
     }
 
-    // [zapp-nav] diagnostic: key signal for bar-visibility desync (Bug A)
-    fprintf(stderr, "[zapp-nav] willShow win=%d vc=%p vcClass=%s contentVC=%p isContent=%d isRoute=%d routeBarHidden=%d toolbarReg=%d showBar=%d barHiddenBefore=%d stackCount=%lu lastFromVCWasRouteVC=%d\n",
-            (int)self.windowId, (__bridge void*)vc,
-            class_getName([vc class]),
-            (__bridge void*)contentVC,
-            (int)isContent, (int)isRoute, (int)routeWantsBarHidden,
-            (int)toolbarRegistered, (int)showBar, (int)barHiddenBefore,
-            (unsigned long)nav.viewControllers.count, (int)self.lastFromVCWasRouteVC);
-    fflush(stderr);
     if (nav.navigationBarHidden == showBar) {
         [nav setNavigationBarHidden:!showBar animated:animated];
         // Bar visibility changed — re-inject chrome metrics one tick later so the
@@ -394,13 +384,7 @@ BOOL zapp_route_bar_should_show(void* win, UIViewController* vc, UIViewControlle
     // coordinator; it defaults to YES so programmatic/coordinator-less pops are
     // not accidentally suppressed.
     BOOL fromVCWasRoute = self.lastFromVCWasRouteVC;
-    // [zapp-nav] diagnostic: depth-delta check (Bug B sticky-route: native popped but routerstate stuck)
     BOOL willPopFromNative = fromVCWasRoute && (nativeRouteDepth < wantRouteDepth);
-    fprintf(stderr, "[zapp-nav] didShow win=%d vc=%p vcClass=%s nativeRouteDepth=%d wantRouteDepth=%d fromVCWasRoute=%d willPopFromNative=%d\n",
-            (int)self.windowId, (__bridge void*)vc,
-            class_getName([vc class]),
-            nativeRouteDepth, wantRouteDepth, (int)fromVCWasRoute, (int)willPopFromNative);
-    fflush(stderr);
     if (willPopFromNative) {
         // User popped via back button or edge swipe — reflect into routerstate.
         // zapp_router_pop_from_native pops routerstate + emits ROUTE_CHANGED.
@@ -561,11 +545,6 @@ void zapp_ios_push_route_vc(int32_t windowId, const char* url, const char* chrom
     void* win = darwin_window_get_by_numeric_id(windowId);
     if (!win) return;
     UINavigationController* nav = zapp_route_content_nav(win);
-    // [zapp-nav] diagnostic: push entry — shows whether nav resolved
-    fprintf(stderr, "[zapp-nav] push_route_vc win=%d url=%s navResolved=%p chrome=%s\n",
-            (int)windowId, url ? url : "(null)", (__bridge void*)nav,
-            (chrome_json && chrome_json[0]) ? chrome_json : "(none)");
-    fflush(stderr);
     if (!nav) return;   // nav not available yet → deferred
     zapp_route_install_delegate(nav, windowId);
 
@@ -718,10 +697,6 @@ void zapp_ios_pop_route_vc(int32_t windowId) {
     UINavigationController* nav = zapp_route_content_nav(win);
     if (!nav) return;
     BOOL topIsRouteVC = [nav.topViewController isKindOfClass:[ZappRouteVC class]];
-    // [zapp-nav] diagnostic: pop entry — shows whether top is actually a route VC
-    fprintf(stderr, "[zapp-nav] pop_route_vc win=%d topIsRouteVC=%d\n",
-            (int)windowId, (int)topIsRouteVC);
-    fflush(stderr);
     if (topIsRouteVC)
         [nav popViewControllerAnimated:YES];
 }
@@ -734,11 +709,6 @@ void zapp_ios_pop_to_content(int32_t windowId) {
     UINavigationController* nav = contentVC.navigationController;
     if (!nav) return;
     BOOL containsContent = [nav.viewControllers containsObject:contentVC];
-    // [zapp-nav] diagnostic: pop_to_content — key for lateral section switch (Bug B)
-    fprintf(stderr, "[zapp-nav] pop_to_content win=%d contentVC=%p stackBefore=%lu containsContent=%d\n",
-            (int)windowId, (__bridge void*)contentVC,
-            (unsigned long)nav.viewControllers.count, (int)containsContent);
-    fflush(stderr);
     if (containsContent) {
         // #771 new-issue B: popToViewController: removes COVERED route VCs
         // (depth ≥ 2) without a moving-from-parent viewDidDisappear:, so their

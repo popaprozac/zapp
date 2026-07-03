@@ -24,8 +24,10 @@
 //   screen while collapsed → bar stayed hidden at launch.
 //   Fix (T2): darwin_toolbar_set_items and zapp_ios_toolbar_apply_for_window target
 //   the nav that is actually displayed: collapsedNav when the split is collapsed,
-//   contentNav when expanded. Bar visibility in collapsed mode is set directly:
-//   shown when the content VC is on top (count > 1), hidden at the sidebar root.
+//   contentNav when expanded. Bar visibility itself is owned by
+//   ZappRouteNavDelegate.willShowViewController: (routing.m) — it evaluates
+//   the shared want-state rule on every push/pop, including UIKit-initiated
+//   ones, and is the single write site for setNavigationBarHidden:.
 //   iPad de-dup: when the split is expanded/regular, UIKit auto-provides a
 //   system sidebar button in the nav bar; we omit our manual toggleSidebar item
 //   to avoid a duplicate. When collapsed/compact, no system button exists so we
@@ -58,14 +60,6 @@
 #import <WebKit/WebKit.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include <time.h> // [zapp-nav] G1-F: monotonic timestamps (no QuartzCore link dep)
-
-// [zapp-nav] G1-F: monotonic seconds on the CACurrentMediaTime timebase
-// (CLOCK_UPTIME_RAW == mach_absolute_time) without linking QuartzCore.
-static double zapp_nav_now(void) {
-    return (double)clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1e9;
-}
-#include <stdio.h>
 #include <objc/runtime.h>
 
 // Associated-object keys: use static addresses, not C string literals.
@@ -157,6 +151,11 @@ extern bool zapp_ios_inspector_is_collapsible_for_window(void* window_ptr);
 // Return -1 when no pane of that type is registered for the host.
 extern int32_t zapp_ios_sidebar_slot_for(int32_t host_slot);
 extern int32_t zapp_ios_inspector_slot_for(int32_t host_slot);
+// Defined in ios/window.m — the shared host+sidebar+inspector eval-JS
+// primitive (also used by zapp_dispatch_event_to_js there). #771 G1-E review
+// Minor 1: hoisted here so this file's toolbar/click/menu fan-out and
+// window.m's window-event fan-out can never drift apart again.
+extern void zapp_ios_eval_js_host_panes(int32_t host_id, NSString* js);
 
 // ─── Icon resolver ──────────────────────────────────────────────────────────
 //
@@ -255,51 +254,23 @@ bool zapp_ios_toolbar_registered_for_window(void* window_ptr) {
 // Forward declaration — defined later.
 void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_user_script);
 
-// N3a: inject the --zapp-* safe-area vars into a SINGLE arbitrary webview — a
-// pushed route VC's webview, which is NOT a registered pane slot, so
-// zapp_toolbar_inject_metrics (which only reaches zapp_ios_content_webview_for_slot)
-// never touches it → it would otherwise render with 0px insets. titlebar =
-// the webview's own safeAreaInsets.top (status bar + dynamic island + nav bar);
-// toolbar row = 0 (route pages have no zapp-toolbar row). Must run AFTER the VC
-// is laid out so safeAreaInsets is valid — routing.m calls it from the route
-// VC's viewDidLayoutSubviews (idempotent; re-runs on rotation/resize).
-void zapp_ios_toolbar_inject_webview_safe_area(WKWebView* wv) {
-    // N3b: No-op — the env(safe-area-inset-*) WKUserScript injected at
-    // document-start by darwin_webview_create_ext (webview.m) sets
-    // --zapp-titlebar-height and --zapp-safe-area-* correctly at the
-    // first paint. UIKit resolves env() before the first frame when the
-    // webview is edge-pinned and viewport-fit=cover is present.
-    // This deferred native injection is no longer needed or safe (it
-    // reads stale safeAreaInsets during mid-push layout).
-    (void)wv;
-}
-
 // ─── Window-scoped chrome-event fan-out ─────────────────────────────────────
 //
 // #771 G1-E: delivers `js` to the HOST content webview plus its sidebar/
 // inspector PANE webviews only — same 3-target reach as the #627 pane
-// fan-out (zapp_dispatch_event_to_js, window.m:1466), reimplemented here
-// because that function's payload shape (fixed window-event-id table +
-// bridge.dispatchWindowEvent) doesn't cover the toolbar's dynamically-built
-// `_onEvent(<name>, <json>)` strings (window:toolbar-clicked,
-// window:toolbar-group-selected, __menu:click). Deliberately excludes route-
+// fan-out (zapp_dispatch_event_to_js, window.m). Thin wrapper over the
+// shared zapp_ios_eval_js_host_panes primitive (window.m; review G1-E
+// Minor 1 hoist) because this file's payload shape (dynamically-built
+// `_onEvent(<name>, <json>)` strings — window:toolbar-clicked,
+// window:toolbar-group-selected, __menu:click) differs from
+// zapp_dispatch_event_to_js's fixed window-event-id table +
+// bridge.dispatchWindowEvent, so the two keep separate entry points even
+// though they now share one targeting loop. Deliberately excludes route-
 // webview transport slots — the #771 G1-C/D regression source — restoring
 // the pre-cff1324 delivery set for these window-scoped UI events.
 // Must be called on the main thread (matches zapp_dispatch_event_to_js).
 static void zapp_ios_toolbar_eval_js_host_panes(int32_t host_id, NSString* js) {
-    if (!js.length) return;
-    WKWebView* hostWv = zapp_ios_content_webview_for_slot(host_id);
-    if (hostWv) [hostWv evaluateJavaScript:js completionHandler:nil];
-    int32_t sidebarSlot = zapp_ios_sidebar_slot_for(host_id);
-    if (sidebarSlot >= 0) {
-        WKWebView* sidebarWv = zapp_ios_content_webview_for_slot(sidebarSlot);
-        if (sidebarWv) [sidebarWv evaluateJavaScript:js completionHandler:nil];
-    }
-    int32_t inspectorSlot = zapp_ios_inspector_slot_for(host_id);
-    if (inspectorSlot >= 0) {
-        WKWebView* inspectorWv = zapp_ios_content_webview_for_slot(inspectorSlot);
-        if (inspectorWv) [inspectorWv evaluateJavaScript:js completionHandler:nil];
-    }
+    zapp_ios_eval_js_host_panes(host_id, js);
 }
 
 // ─── Click emit ─────────────────────────────────────────────────────────────
@@ -610,17 +581,6 @@ static void zapp_ios_toolbar_stamp_items_force(UIViewController* vc,
                      (curTitle && wantTitle &&
                       [curTitle isEqualToString:wantTitle]);
     BOOL titleViewSame = (vc.navigationItem.titleView == wantTitleView);
-    // [zapp-nav] G1-F diagnostic: THE choke point — every item-assignment pass
-    // funnels here. leadSame/trailSame report whether this pass is a content
-    // no-op (assigning what the navigationItem already holds) or a real swap;
-    // t= places it inside/outside the ~0.35s sidebar collapse animation.
-    // force=1 marks the didShow cancelled-swipe recovery path (fix round 2);
-    // skip is always 0 when forced since the assignments always run below.
-    fprintf(stderr, "[zapp-nav] t=%.3f stamp vc=%p toggle=%d nLead=%lu leadSame=%d trailSame=%d force=%d skip=%d\n",
-            zapp_nav_now(), (__bridge void*)vc, (int)includeToggleSidebar,
-            (unsigned long)newLead.count, (int)leadSame, (int)trailSame, (int)force,
-            (int)(!force && leadSame && trailSame && titleSame && titleViewSame));
-    fflush(stderr);
     if (force || !(leadSame && trailSame)) {
         // Keep the system back button when items are stamped onto a pushed VC
         // (a non-nil leftBarButtonItems otherwise suppresses it).
@@ -668,11 +628,6 @@ static void zapp_ios_toolbar_apply_to_nav(UINavigationController* nav,
     if (!nav || !entry) return;
     UIViewController* vc = nav.topViewController;
     if (!vc) return;
-
-    // [zapp-nav] diagnostic: apply_to_nav — shows which nav+topVC gets items
-    fprintf(stderr, "[zapp-nav] toolbar_apply win=%d fn=apply_to_nav nav=%p topVC=%p\n",
-            (int)entry.hostSlot, (__bridge void*)nav, (__bridge void*)vc);
-    fflush(stderr);
 
     zapp_ios_toolbar_stamp_items(vc, entry, includeToggleSidebar);
 
@@ -1028,14 +983,9 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
     if (!window_ptr || !toolbar_json || !toolbar_json[0]) return;
     NSString* json = [NSString stringWithUTF8String:toolbar_json];
     zapp_ios_toolbar_on_main(^{
-        // [zapp-nav] G1-F diagnostic: any JS-initiated setItems landing near a
-        // sidebar collapse shows up here (full bucket rebuild + re-apply).
-        fprintf(stderr, "[zapp-nav] t=%.3f set_items win=%p slot=%d\n",
-                zapp_nav_now(), window_ptr, (int)host_slot);
-        fflush(stderr);
         UINavigationController* contentNav = zapp_ios_content_nav_for_window(window_ptr);
         if (!contentNav) {
-            // No-sidebar window: deferred (T1 decision). Safe no-op.
+            // Nav-less plain window (no split): nothing to attach a bar to. Safe no-op.
             return;
         }
 
@@ -1210,11 +1160,6 @@ void zapp_ios_toolbar_apply_for_window_hidden(void* window_ptr, BOOL sidebarHidd
 
     BOOL collapsed = zapp_ios_split_is_collapsed_for_window(window_ptr);
 
-    // [zapp-nav] diagnostic: apply_for_window_hidden entry
-    fprintf(stderr, "[zapp-nav] toolbar_apply win=%d fn=apply_for_window_hidden collapsed=%d sidebarHidden=%d\n",
-            (int)entry.hostSlot, (int)collapsed, (int)sidebarHidden);
-    fflush(stderr);
-
     if (collapsed) {
         // ── Collapsed path (iPhone / compact) ──────────────────────────────
         UINavigationController* collapsedNav = zapp_ios_collapsed_nav_for_window(window_ptr);
@@ -1284,14 +1229,6 @@ void zapp_ios_toolbar_apply_for_window(void* window_ptr) {
         });
         return;
     }
-    // [zapp-nav] diagnostic: apply_for_window entry
-    NSValue* _diagKey = [NSValue valueWithPointer:window_ptr];
-    ZappIOSToolbarEntry* _diagEntry = zapp_ios_toolbars[_diagKey];
-    if (_diagEntry) {
-        fprintf(stderr, "[zapp-nav] toolbar_apply win=%d fn=apply_for_window\n",
-                (int)_diagEntry.hostSlot);
-        fflush(stderr);
-    }
     // Read the live sidebar-hidden state and delegate to the explicit-state variant.
     BOOL sidebarHidden = zapp_ios_sidebar_is_hidden_for_window(window_ptr);
     zapp_ios_toolbar_apply_for_window_hidden(window_ptr, sidebarHidden);
@@ -1313,7 +1250,7 @@ void zapp_ios_toolbar_apply_for_window(void* window_ptr) {
 void zapp_ios_toolbar_stamp_vc_force(void* window_ptr, UIViewController* vc, BOOL force) {
     if (!window_ptr || !vc) return;
     NSCAssert([NSThread isMainThread],
-              @"zapp_ios_toolbar_stamp_vc must be called on the main thread");
+              @"zapp_ios_toolbar_stamp_vc_force must be called on the main thread");
     ZappIOSToolbarEntry* entry = nil;
     if (zapp_ios_toolbars) {
         NSValue* key = [NSValue valueWithPointer:window_ptr];
@@ -1407,12 +1344,6 @@ void darwin_toolbar_update_item(void* window_ptr, const char* item_json) {
     if (!window_ptr || !item_json || !item_json[0]) return;
     NSString* json = [NSString stringWithUTF8String:item_json];
     zapp_ios_toolbar_on_main(^{
-        // [zapp-nav] G1-F diagnostic: in-place patch traffic (no re-stamp) —
-        // logged to prove/disprove JS updateItem volume during the collapse.
-        // (json, not item_json: the raw pointer must not cross the async hop.)
-        fprintf(stderr, "[zapp-nav] t=%.3f update_item win=%p json=%.96s\n",
-                zapp_nav_now(), window_ptr, json.UTF8String);
-        fflush(stderr);
         if (!zapp_ios_toolbars) return;
         NSValue* key = [NSValue valueWithPointer:window_ptr];
         ZappIOSToolbarEntry* entry = zapp_ios_toolbars[key];
@@ -1508,10 +1439,6 @@ void darwin_toolbar_update_item(void* window_ptr, const char* item_json) {
 void darwin_toolbar_remove(void* window_ptr) {
     if (!window_ptr) return;
     zapp_ios_toolbar_on_main(^{
-        // [zapp-nav] G1-F diagnostic: remove() traffic near a collapse.
-        fprintf(stderr, "[zapp-nav] t=%.3f toolbar_remove win=%p\n",
-                zapp_nav_now(), window_ptr);
-        fflush(stderr);
         if (!zapp_ios_toolbars) return;
         NSValue* key = [NSValue valueWithPointer:window_ptr];
         ZappIOSToolbarEntry* entry = zapp_ios_toolbars[key];
