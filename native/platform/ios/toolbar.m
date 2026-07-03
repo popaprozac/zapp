@@ -27,7 +27,9 @@
 //   contentNav when expanded. Bar visibility itself is owned by
 //   ZappRouteNavDelegate.willShowViewController: (routing.m) — it evaluates
 //   the shared want-state rule on every push/pop, including UIKit-initiated
-//   ones, and is the single write site for setNavigationBarHidden:.
+//   ones, and is the ongoing visibility OWNER (per-transition); construction-time
+//   primers, the didShow re-assert, and the attach/remove primers are the
+//   sanctioned corrective writers.
 //   iPad de-dup: when the split is expanded/regular, UIKit auto-provides a
 //   system sidebar button in the nav bar; we omit our manual toggleSidebar item
 //   to avoid a duplicate. When collapsed/compact, no system button exists so we
@@ -1187,8 +1189,10 @@ void zapp_ios_toolbar_apply_for_window_hidden(void* window_ptr, BOOL sidebarHidd
             zapp_ios_toolbar_stamp_items(contentVC, entry, YES);
         }
 
-        // Bar visibility on the collapsed nav is now owned exclusively by
-        // ZappRouteNavDelegate's willShowViewController: (routing.m Fix 1).
+        // Bar visibility on the collapsed nav is owned, per-transition, by
+        // ZappRouteNavDelegate's willShowViewController: (routing.m Fix 1);
+        // construction-time primers, the didShow re-assert, and the
+        // attach/remove primers are the sanctioned corrective writers.
         // Do NOT write navigationBarHidden here — willShow fires on every
         // push/pop and sets the correct state without drift.
 

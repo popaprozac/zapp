@@ -81,8 +81,10 @@ extern void zapp_ios_inspector_column_did_hide(void* window);
 extern void zapp_ios_toolbar_apply_for_window(void* window_ptr);
 
 // Defined in ios/toolbar.m — applies with an explicit sidebarHidden hint —
-// ADVISORY ONLY since the double-toggle race fix (the expanded path
-// re-derives the real state from a live displayMode read at apply time).
+// AUTHORITATIVE for the expanded path's include-toggle decision (#771 G1-F,
+// revising T2's advisory-only rule): this pre-settle call site passes the
+// transition TARGET so the item swap rides the animation; the settled
+// re-apply passes the live-derived state as the correctness backstop.
 extern void zapp_ios_toolbar_apply_for_window_hidden(void* window_ptr, BOOL sidebarHidden);
 
 // --- Per-window registry --------------------------------------------------
