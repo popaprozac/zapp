@@ -402,6 +402,50 @@ extern void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot,
     return self;
 }
 
+// #782 per-VC nav-bar visibility ownership (foundation). Each pane VC sets its
+// OWN bar as it appears — the native UIKit idiom (spike-proven,
+// spikes/ios-splitview-reference). This fires on the split-VC column un-nest
+// (sidebar<->content via showColumn:) AND on collapse/expand re-nesting, where
+// ZappRouteNavDelegate's willShowViewController: does NOT — which is what
+// structurally fixes the #784 residuals. The delegate keeps owning toolbar
+// ITEMS, the pop gesture, and route-depth reconciliation.
+//   role 0 (content):   show iff a toolbar is registered (shared want-state rule).
+//   role 1 (sidebar):   hidden unless configured — in T1 the want-state rule
+//                       returns NO with no sidebar chrome (web-canvas default;
+//                       #782 T4 makes it config-implied).
+//   role 3 (inspector): keeps its own bar (it renders Close) — untouched here.
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    if (_paneRole == 3) return;
+    if (!_windowPtr) return;
+    UINavigationController* nav = self.navigationController;
+    if (!nav) return;   // plain no-split root VC is not nav-wrapped — no bar to own
+    extern BOOL zapp_route_bar_should_show(void* win, UIViewController* vc,
+                                           UIViewController* contentVC);
+    extern UIViewController* zapp_ios_content_vc_for_window(void* window_ptr);
+    extern void zapp_ios_toolbar_stamp_vc(void* window_ptr, UIViewController* vc);
+    UIViewController* contentVC = zapp_ios_content_vc_for_window(_windowPtr);
+    BOOL showBar = zapp_route_bar_should_show(_windowPtr, self, contentVC);
+    if (nav.navigationBarHidden == showBar) {
+        [nav setNavigationBarHidden:!showBar animated:animated];
+        // Bar visibility changed → re-inject chrome metrics one tick later so
+        // safeAreaInsets reflect the new bar state. Re-homed from the deleted
+        // willShow visibility write (routing.m). Content pane only (hostSlot wired;
+        // the sidebar VC is deliberately hostSlot=-1).
+        if (_hostSlot >= 0) {
+            void* wp = _windowPtr; int32_t hs = _hostSlot;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                zapp_toolbar_inject_metrics(wp, hs, false);
+            });
+        }
+    }
+    // Re-homed from zapp_ios_sidebar_apply_collapsed_bar's stamp (deleted): the
+    // showColumn un-nest fires no willShow, so stamp the shown VC's items here
+    // when its bar is up — a revealed bar is never empty. Idempotent with
+    // willShow's stamp on real nav push/pop transitions.
+    if (showBar) zapp_ios_toolbar_stamp_vc(_windowPtr, self);
+}
+
 - (void)viewSafeAreaInsetsDidChange {
     [super viewSafeAreaInsetsDidChange];
     // Guard: skip until the VC is wired to a window (materialize sets these).
@@ -958,23 +1002,16 @@ void zapp_ios_materialize_pending_windows(void) {
 
             // Nav-wrap the content NOW, while the column VC is still empty —
             // never re-parents a live WKWebView (the ordering rule
-            // zapp_ios_sidebar_register documents). Bar VISIBLE (G3 fix,
-            // mirroring the sidebar shape's contentNav in
-            // zapp_ios_sidebar_register): the content pane carries the native
-            // toolbar, and toolbar.m/routing.m now reach this shape's nav via
-            // sidebar.m's Secondary-column fallback resolver — so the bar must
-            // be shown at launch or set toolbar items render invisibly.
-            // ZappRouteNavDelegate's willShowViewController: (routing.m) is
-            // the ongoing authority once route pushes install it. A visible
-            // bar re-arms UIKit's interactive-pop gesture, but the
-            // no-Back-button guarantee still holds at the nav root: the
-            // collapsed-stack prune below leaves nothing beneath the content
-            // VC to pop to (button or edge swipe both no-op at depth 1); a
-            // pushed route VC on TOP gets the normal back affordance, which is
-            // desired nav behavior.
+            // zapp_ios_sidebar_register documents).
+            // #782 foundation: the bar-VISIBLE primer that used to be set here
+            // was DELETED. contentVC is a ZappIOSPaneViewController (role 0),
+            // so its viewWillAppear owns the bar visibility (shown iff a toolbar
+            // is registered — want-state rule) on this hidden-Primary shape too,
+            // reached via sidebar.m's Secondary-column fallback resolver. The
+            // no-Back-button guarantee still holds: the collapsed-stack prune
+            // below leaves nothing beneath the content VC to pop to.
             UINavigationController* contentNav =
                 [[UINavigationController alloc] initWithRootViewController:contentVC];
-            contentNav.navigationBarHidden = NO;
 
             [hpSplit setViewController:emptyPrimary forColumn:UISplitViewControllerColumnPrimary];
             [hpSplit setViewController:contentNav forColumn:UISplitViewControllerColumnSecondary];

@@ -144,6 +144,42 @@ static void zapp_route_vc_teardown(ZappRouteVC* vc);
         [self zapp_updateEdges];
     }
 }
+// #782 per-VC nav-bar visibility (foundation): a route VC owns its OWN bar as
+// it appears. navbarHidden=YES (chrome-less route) hides it; otherwise the
+// route shows a bar (back button + per-route items). Ported from the clean-room
+// spike (DetailViewController.m:206-252). The ZappRouteNavDelegate still stamps
+// items + owns the pop gesture; only VISIBILITY moved here.
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    UINavigationController* nav = self.navigationController;
+    if (!nav) return;
+    if (nav.navigationBarHidden != self.navbarHidden)
+        [nav setNavigationBarHidden:self.navbarHidden animated:animated];
+}
+
+// #782 cancelled-swipe coordinator coupling (fixes #784 residual 2): during an
+// INTERACTIVE pop the user can cancel the swipe halfway. The destination VC's
+// viewWillAppear already animated ITS bar in alongside the swipe; on COMMIT
+// that's correct. On CANCEL we stay on this route, so restore THIS route's bar
+// state inside the SAME coordinator pass — no separate frame where the bar is
+// wrong (the flicker the deleted didShow re-assert could not avoid, being
+// post-settle). Non-interactive pops need nothing: the destination's
+// viewWillAppear owns the bar.
+- (void)viewWillDisappear:(BOOL)animated {
+    [super viewWillDisappear:animated];
+    UINavigationController* nav = self.navigationController;
+    if (!nav) return;
+    id<UIViewControllerTransitionCoordinator> tc = self.transitionCoordinator;
+    if (tc && tc.isInteractive) {
+        BOOL hidden = self.navbarHidden;   // scalar capture — no self-retain (MRC)
+        [tc animateAlongsideTransition:nil
+                            completion:^(id<UIViewControllerTransitionCoordinatorContext> ctx) {
+            if (ctx.isCancelled)
+                [nav setNavigationBarHidden:hidden animated:NO];
+        }];
+    }
+}
+
 - (void)viewDidDisappear:(BOOL)animated {
     [super viewDidDisappear:animated];
     // Self-teardown: brk-1 (stopLoading + nil delegates + remove "zapp" handler)
@@ -330,20 +366,15 @@ BOOL zapp_route_bar_should_show(void* win, UIViewController* vc, UIViewControlle
         self.lastFromVCWasRouteVC = (fromVC != nil && [fromVC isKindOfClass:[ZappRouteVC class]]);
     }
 
-    if (nav.navigationBarHidden == showBar) {
-        [nav setNavigationBarHidden:!showBar animated:animated];
-        // Bar visibility changed — re-inject chrome metrics one tick later so the
-        // nav bar has been laid out and safeAreaInsets reflect the new state.
-        // add_user_script=false: the persistent WKUserScript was set by set_items;
-        // this is a live update only (avoids unbounded script accumulation).
-        if (win) {
-            void* capturedWin = win;
-            int32_t capturedSlot = self.windowId;
-            dispatch_async(dispatch_get_main_queue(), ^{
-                zapp_toolbar_inject_metrics(capturedWin, capturedSlot, false);
-            });
-        }
-    }
+    // #782 foundation: the bar-VISIBILITY write that used to live here (a
+    // setNavigationBarHidden: gated on the want-state, plus its metrics
+    // re-inject) MOVED to per-VC viewWillAppear (ZappIOSPaneViewController in
+    // window.m for content/sidebar; ZappRouteVC above for routes). willShow
+    // fires only on this content-nav's push/pop and NOT on the split-VC column
+    // un-nest — which is why the delegate could never fix the #784 residuals.
+    // The delegate now owns only ITEMS (the stamp below), the pop gesture, and
+    // route-depth reconciliation. `showBar` is still computed above solely to
+    // gate the stamp.
 
     // Layer 3 (iOS 26+) used to be written here — MOVED to
     // didShowViewController: (#771 T7 review I1: writing it mid-transition,
@@ -420,30 +451,15 @@ BOOL zapp_route_bar_should_show(void* win, UIViewController* vc, UIViewControlle
         // stamp_vc_force (entry gone → early return).
         BOOL shownRouteWantsBarHidden = want.routeWantsBarHidden;
 
-        // #771 T7 review I2: re-assert visibility against the SETTLED state.
-        // willShow drives the bar from the INCOMING vc mid-transition; on a
-        // cancelled interactive swipe, willShow already fired (and wrote) for a
-        // VC that never landed. Concretely: swiping out of a hidden-bar route
-        // shows the bar via willShow(content), then cancelling back to the
-        // hidden-bar route leaves nothing to re-hide it — a stranded visible
-        // bar on a route that opted out. Symmetric case: a cancelled swipe INTO
-        // a hidden-bar route can strand the bar hidden on a VC that wants it
-        // shown. didShow always reports the true final top VC, so it's the only
-        // call site that can safely correct a stranded write.
-        //
-        // #771 G2 rider: animated:YES. didShow fires only once the transition has
-        // SETTLED (committed OR cancelled), so no transition is ever in flight to
-        // race here — the animation is always safe. The reason it must animate:
-        // on a CANCELLED interactive swipe the bar that willShow animated IN for
-        // the never-landed VC is still on screen; an animated:NO re-assert would
-        // make it vanish in a single frame (a visible flicker). Animating the
-        // corrective toggle lets the stranded bar slide back out (or in) in step
-        // with the swipe's own roll-back, matching UIKit's cancel animation.
-        if (want.showBar && nav.navigationBarHidden) {
-            [nav setNavigationBarHidden:NO animated:YES];
-        } else if (!want.showBar && !nav.navigationBarHidden) {
-            [nav setNavigationBarHidden:YES animated:YES];
-        }
+        // #782 foundation: the SETTLED-state visibility re-assert that used to
+        // live here MOVED to per-VC ownership. The cancelled-swipe case it
+        // existed to handle (a stranded bar after willShow wrote for a
+        // never-landed VC) is now owned by ZappRouteVC's viewWillDisappear
+        // coordinator-completion re-hide (routing.m above), which is
+        // coordinator-COUPLED rather than post-settle — fixing the #784
+        // "cancelled swipe vanishes instantly" residual the animated re-assert
+        // here could only paper over. `want` is still computed above for the
+        // iOS-26 gesture toggle and the force re-stamp below.
 
         // Layer 3 (iOS 26+, #771 T7 review I1 fix): full-screen content pop for
         // hidden-bar routes, moved here from willShowViewController:. Writing
@@ -543,7 +559,15 @@ static void zapp_route_install_delegate(UINavigationController* nav, int32_t win
 // fires when UIKit shows the content VC (e.g. via showColumn:Supplementary).
 // Must be called on the main thread. Idempotent.
 void zapp_ios_route_install_nav_delegate(UINavigationController* nav, int32_t windowId) {
-    if (!nav || windowId <= 0) return;
+    // #783: window numeric ids start at 0 (the app's main window IS id 0), so
+    // the old `<= 0` guard skipped the delegate install for the single-window
+    // case — leaving win-0 without the pop-gesture owner until its first
+    // router.push, so a chrome-less collapsed window had no swipe-back
+    // auto-restore at launch. `< 0` rejects only genuinely invalid ids while
+    // letting win-0 install its delegate (gesture + item stamping) up front.
+    // Bar VISIBILITY no longer depends on this install (#782 moved it to
+    // per-VC viewWillAppear), so widening the guard is gesture/items-only.
+    if (!nav || windowId < 0) return;
     zapp_route_install_delegate(nav, windowId);
 }
 

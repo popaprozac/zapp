@@ -440,52 +440,14 @@ static void zapp_ios_sidebar_rearm_pop(ZappIOSSidebarController* c) {
 // nav for a sidebar↔content transition whose effective top VC we KNOW at the
 // call site.
 //
-// On iPhone the sidebar↔content switch is NOT a route push:
-// darwin_sidebar_show_content nests the content nav via showColumn:Secondary and
-// darwin_sidebar_show_sidebar un-nests it via showColumn:Primary. The ongoing
-// bar-visibility owner — ZappRouteNavDelegate.willShowViewController: (routing.m)
-// — fires on the CONTENT nav for route push/pop, but (a) it is installed on the
-// content nav only at the first route PUSH, so the FIRST content reveal fires no
-// callback at all, and (b) un-nesting back to the sidebar root leaves the content
-// nav's own top VC unchanged, so no willShow fires there either. Either way the
-// on-screen collapsed nav's bar is stranded at its prior value: content shows
-// bar-less on first reveal (and its hidden bar disables UIKit's default edge-swipe
-// pop), and the sidebar root shows an empty bar after content had one.
-//
-// Fix: apply the SAME rule here — zapp_route_bar_should_show +
-// zapp_ios_toolbar_stamp_vc (routing.m / toolbar.m), NOT a second rule — against
-// the KNOWN effective VC (contentVC on reveal-content, sidebarVC on
-// reveal-sidebar) so the async showColumn transition's not-yet-updated stack is
-// irrelevant. Writes BOTH the visible combined nav AND the nested content nav,
-// because UIKit's collapse machinery mirrors the nested nav's bar-hidden onto the
-// combined bar once the nesting settles — writing only the combined nav would be
-// undone one tick later.
-static void zapp_ios_sidebar_apply_collapsed_bar(ZappIOSSidebarController* c,
-                                                 UIViewController* effectiveVC) {
-    if (!c || !effectiveVC) return;
-    void* win = darwin_window_get_by_numeric_id(c.hostWindowId);
-    if (!win) return;
-    UINavigationController* collapsedNav = c.collapsedNav ?: zapp_ios_collapsed_nav(c.splitVC);
-    if (!collapsedNav) return;
-    extern BOOL zapp_route_bar_should_show(void* win, UIViewController* vc,
-                                           UIViewController* contentVC);
-    extern void zapp_ios_toolbar_stamp_vc(void* window_ptr, UIViewController* vc);
-    BOOL showBar = zapp_route_bar_should_show(win, effectiveVC, c.contentVC);
-    // The bar the user sees is the combined (collapsed) nav's — animate its
-    // change so it rides the showColumn slide. Idempotency guard mirrors
-    // willShow's: navigationBarHidden == showBar means the current state is
-    // wrong and needs the write.
-    if (collapsedNav.navigationBarHidden == showBar)
-        [collapsedNav setNavigationBarHidden:!showBar animated:YES];
-    // Keep the nested content nav consistent (it is off-screen while nested, so
-    // no animation) so the post-nesting mirror can't clobber the write above.
-    UINavigationController* ctNav = c.contentVC.navigationController;
-    if (ctNav && ctNav != collapsedNav && ctNav.navigationBarHidden == showBar)
-        [ctNav setNavigationBarHidden:!showBar animated:NO];
-    // Stamp toolbar items onto the shown VC when the bar is up (mirrors willShow's
-    // stamp) so a bar revealed here is never empty.
-    if (showBar) zapp_ios_toolbar_stamp_vc(win, effectiveVC);
-}
+// #782 foundation: zapp_ios_sidebar_apply_collapsed_bar was DELETED here. It
+// existed because the iPhone sidebar↔content switch (showColumn: un-nest) fires
+// no willShow, so the delegate could not re-apply the bar rule — a 4th special
+// case bolted onto the delegate model. Per-VC viewWillAppear (window.m's
+// ZappIOSPaneViewController) fires exactly on that un-nest for the revealed VC
+// (content OR sidebar root) and owns both the bar-visibility write AND the item
+// re-stamp there (re-homed from this function's stamp). The two call sites
+// (show_content / show_sidebar below) were removed with it.
 
 // --- Event fan-out (mirrors darwin/sidebar.m's zapp_sidebar_emit) ---------
 //
@@ -706,23 +668,12 @@ static void zapp_ios_sidebar_sync_collapse(ZappIOSSidebarController* c, BOOL col
     if (nav) {
         extern void zapp_ios_route_install_nav_delegate(UINavigationController* nav, int32_t windowId);
         zapp_ios_route_install_nav_delegate(nav, (int32_t)self.hostWindowId);
-        // Explicitly show the collapsed nav's bar so the content toolbar is
-        // visible from launch on iPhone without waiting for a route push.
-        // UIKit combines the two column nav controllers into one collapsed stack
-        // whose bar starts hidden (inherited from sidebarNav's hidden=YES); the
-        // willShowViewController: delegate is the ongoing authority for per-route
-        // transitions but does NOT fire for the already-visible content VC at
-        // initial collapse, so we prime the bar here. The delegate's idempotency
-        // guard means a later willShow call on the same state is a no-op.
-        // #771 G1 fix B: prime ONLY when a toolbar is actually registered —
-        // matching willShow's registration-aware rule (and this function's own
-        // header: "If no toolbar has been registered, force its bar hidden").
-        // Unconditional priming re-showed an EMPTY bar on a removed-toolbar
-        // window every time the split re-collapsed.
-        extern bool zapp_ios_toolbar_registered_for_window(void* window_ptr);
-        void* barWin = darwin_window_get_by_numeric_id(self.hostWindowId);
-        BOOL toolbarRegistered = barWin && zapp_ios_toolbar_registered_for_window(barWin);
-        [nav setNavigationBarHidden:!toolbarRegistered animated:NO];
+        // #782 foundation: the collapsed nav's bar-visibility priming that used
+        // to live here was DELETED. Its top VC (content or sidebar root) owns its
+        // own bar via viewWillAppear (window.m), which fires on the collapse
+        // re-nesting — the spike proves pure per-VC ownership covers the
+        // collapse/expand/rotation transitions with zero priming. The delegate
+        // install above (gesture + item stamping) stays.
     }
     zapp_ios_sidebar_sync_collapse(self, NO);
     // Re-apply any registered toolbar to the now-captured collapsedNav.
@@ -899,19 +850,18 @@ void zapp_ios_sidebar_register(void* window, void* split, void* sidebarVC,
         c.lastLayoutEmitWidth  = (width > 0) ? width : -2;
         c.layoutEmitScheduled  = NO;
 
-        // OWN the navigation controllers so we control the bar. The column VCs
-        // are still empty (no webview yet), so this never re-parents a live
-        // WKWebView. Sidebar nav: bar hidden (no toolbar). Content nav: bar visible
-        // so the toolbar renders at launch without waiting for a route push.
+        // OWN the navigation controllers so we control the columns. The column
+        // VCs are still empty (no webview yet), so this never re-parents a live
+        // WKWebView.
+        // #782 foundation: the bar-hidden PRIMERS that used to be set here
+        // (sbNav=YES, ctNav=NO) were DELETED. Each column VC now owns its OWN
+        // initial bar state in viewWillAppear (window.m's
+        // ZappIOSPaneViewController), which fires before first paint — the
+        // sidebar VC hides its bar (web-canvas default in T1), the content VC
+        // shows it iff a toolbar is registered (want-state rule). Setting an
+        // initial value here would just be a redundant write the VC re-evaluates.
         UINavigationController* sbNav = [[UINavigationController alloc] initWithRootViewController:sbVC];
-        sbNav.navigationBarHidden = YES;
         UINavigationController* ctNav = [[UINavigationController alloc] initWithRootViewController:ctVC];
-        // Content nav starts bar-VISIBLE: the content pane always carries a toolbar,
-        // so its nav bar must be shown at launch (iPad) and whenever content is on
-        // top (iPhone/collapsed). ZappRouteNavDelegate's willShowViewController: is
-        // the ongoing authority; NO here is the correct initial state for iPad where
-        // no VC push fires before the bar is needed.
-        ctNav.navigationBarHidden = NO;
         c.sidebarNav = sbNav;
         c.contentNav = ctNav;
 
@@ -1159,10 +1109,9 @@ void darwin_sidebar_show_content(int32_t window_id) {
                 // swipe-back gesture) may never have fired. Re-arm defensively now
                 // that a content VC is on the stack.
                 zapp_ios_sidebar_rearm_pop(c);
-                // #771 G2: this reveal fires no willShow on the first pass (the
-                // route-nav delegate isn't installed yet) — apply the bar
-                // want-state rule directly for the now-revealed content VC.
-                zapp_ios_sidebar_apply_collapsed_bar(c, c.contentVC);
+                // #782: the revealed content VC's viewWillAppear (window.m) now
+                // owns its bar visibility + item stamp on this un-nest — no
+                // delegate-side apply needed here anymore.
             } else {
                 // overlay on regular: dismiss the flyout
                 [c.splitVC hideColumn:UISplitViewControllerColumnPrimary];
@@ -1197,13 +1146,10 @@ void darwin_sidebar_show_sidebar(int32_t window_id) {
         } else {
             c.splitVC.preferredDisplayMode = UISplitViewControllerDisplayModeOneBesideSecondary;
         }
-        // #771 G2: revealing the sidebar root un-nests the content nav but fires
-        // no willShow (the content nav's own top VC is unchanged), so nothing
-        // would otherwise re-apply the "sidebar root wants no bar" rule to the
-        // combined nav — leaving a stranded empty bar. Apply it directly. Compact
-        // only: on regular width the bar belongs to the tiled content column,
-        // owned by the toolbar apply hooks, not this collapsed-shape rule.
-        if (compact) zapp_ios_sidebar_apply_collapsed_bar(c, c.sidebarVC);
+        // #782: revealing the sidebar root un-nests the content nav; the sidebar
+        // root VC's viewWillAppear (window.m) now owns applying the "sidebar
+        // wants no bar" rule (web-canvas default) on that un-nest — no
+        // delegate-side apply needed here anymore.
         zapp_ios_sidebar_sync_collapse(c, NO);  // sidebar visible == expanded
     });
 }
