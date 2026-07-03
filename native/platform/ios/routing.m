@@ -54,11 +54,15 @@ extern void zapp_ios_edge_pin_update(BOOL isRegular,
 // zapp_ios_register_webview: writes a webview into the UIWindow-keyed host slot.
 extern WKWebView* zapp_ios_content_webview_for_slot(int32_t slot);
 extern void zapp_ios_register_webview(void* window_ptr, void* webview_ptr);
-// #771 G1-C: route-webview transport slot (window.m + Nim allocSlot export).
-// A pushed route VC's webview registers under its OWN dispatch slot so invoke
-// responses and broadcast evals reach it (pane model); freed at teardown.
-extern int32_t zapp_alloc_dispatch_slot(void);
-extern void zapp_ios_register_route_webview(int32_t slot, void* webview_ptr, int32_t host_slot);
+// #771 G1-C/G1-D: route-webview transport slot (window.m). A pushed route
+// VC's webview registers under its OWN dispatch slot so invoke responses and
+// broadcast evals reach it (pane model); freed at teardown. G1-D moved slot
+// SELECTION (free-list reuse, else the Nim allocSlot export) into window.m,
+// next to the free-list itself — this file just hands over the webview +
+// host slot and gets back whichever slot it landed in (or -1 if the route
+// slot table is exhausted; same silent-degrade behavior as before, now
+// logged once on the window.m side).
+extern int32_t zapp_ios_register_route_webview(void* webview_ptr, int32_t host_slot);
 extern void zapp_ios_unregister_webview_slot(void* webview_ptr);
 // #771 new-issue A: retarget the app-wide drag-drop webview (ios/webview.m).
 extern void zapp_ios_set_drop_webview(void* webview_ptr);
@@ -455,10 +459,11 @@ void zapp_ios_push_route_vc(int32_t windowId, const char* url) {
     // pushed page's router.current() seed now resolves and router.on() fires,
     // so its toolbar.updateItem("back"/"fwd", { enabled }) calls actually
     // happen — the grouped back/fwd items enable on pushed routes. The slot is
-    // freed in zapp_route_vc_teardown (pop).
+    // freed in zapp_route_vc_teardown (pop) and recycled (#771 G1-D) — window.m
+    // owns the id-space free-list, so this call just hands over the webview +
+    // host and lets window.m pick (and possibly reuse) the slot id.
     if (vc.webview) {
-        int32_t routeSlot = zapp_alloc_dispatch_slot();
-        zapp_ios_register_route_webview(routeSlot, (__bridge void*)vc.webview, windowId);
+        zapp_ios_register_route_webview((__bridge void*)vc.webview, windowId);
     }
 
     // Toolbar items are stamped by the nav delegate (zapp_ios_toolbar_stamp_vc

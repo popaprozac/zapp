@@ -27,6 +27,7 @@
 #import <UIKit/UIKit.h>
 #import <WebKit/WebKit.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <objc/runtime.h>
@@ -118,6 +119,24 @@ static UIWindow* zapp_ios_windows[ZAPP_MAX_WINDOW_CALLBACKS] = {0};
 static WKWebView* zapp_ios_webviews[ZAPP_MAX_WINDOW_CALLBACKS] = {0};
 static NSString* zapp_ios_window_ids[ZAPP_MAX_WINDOW_CALLBACKS] = {0};
 
+// slot -> host slot (#771 G1-D). Host slots point at themselves
+// (zapp_ios_host_slot[slot] == slot); route slots (registered by
+// zapp_ios_register_route_webview below) point at the window that pushed
+// them. This is what lets darwin_window_numeric_id_for_string's ascending
+// id-string scan (below) tell a true host apart from a route/pane slot that
+// merely shares the host's id string — needed once route slots start being
+// RECYCLED (G1-D): without this filter, a recycled low-index route slot
+// could out-rank a later-registered, higher-index host in that scan (see the
+// free-list comment above zapp_ios_register_route_webview for the full
+// scenario this prevents). Every write site that establishes a slot as a
+// host (window materialize, darwin_window_register_numeric_id, and the
+// generic by-UIWindow register below) sets this to self; every write site
+// that establishes a route/pane slot (zapp_ios_register_webview_slot) sets
+// it to the caller-supplied host. Default C zero-init is never consulted for
+// correctness: every read below is gated behind zapp_ios_window_ids[slot]
+// being non-nil, and that is always written in the same breath as this table.
+static int32_t zapp_ios_host_slot[ZAPP_MAX_WINDOW_CALLBACKS] = {0};
+
 // Public getter: content webview for a numeric window slot. Used by
 // ios/panel.m to capture the host webview for coord-space conversion in
 // set_bounds (fix #737: panel mispositions when host webview is inset by
@@ -174,14 +193,69 @@ int32_t zapp_ios_inspector_slot_for(int32_t host_slot) {
 // needs this because zapp_ios_register_webview routes by UIWindow — both
 // panes share one UIWindow, so the second create would otherwise clobber
 // the first's slot. The pane's JS identity (windowId) is the HOST id.
-static void zapp_ios_register_webview_slot(int32_t slot, WKWebView* webview, NSString* windowId) {
+// host_slot (#771 G1-D) is the NUMERIC host slot backing `windowId` — every
+// call site below passes d->numeric_id, for both the self case (restoring
+// the content webview into its own slot) and the pane/route case
+// (registering a sidebar/inspector/route webview under its own slot but the
+// host's string+numeric identity).
+static void zapp_ios_register_webview_slot(int32_t slot, WKWebView* webview, NSString* windowId, int32_t host_slot) {
     if (slot >= 0 && slot < ZAPP_MAX_WINDOW_CALLBACKS) {
         zapp_ios_webviews[slot] = webview;
         zapp_ios_window_ids[slot] = windowId;
+        zapp_ios_host_slot[slot] = host_slot;
     }
 }
 
-// #771 G1-C: transport slot for a pushed route VC's webview (ios/routing.m).
+// ── Route-slot recycling (#771 G1-D) ──────────────────────────────────────
+//
+// zapp_ios_register_route_webview draws a transport slot for every router
+// push (ios/routing.m) from the shared monotonic Nim allocator
+// (zapp_alloc_dispatch_slot -> native/nim/window.nim allocSlot/gNextWindowId)
+// and, until this fix, never gave it back. That id-space is the SAME
+// 64-entry table every window/pane/popover slot draws from
+// (native/nim/events.nim:8, ZAPP_MAX_WINDOW_CALLBACKS), and allocSlot has no
+// bound check — it just keeps incrementing. So a long session with ~60+
+// router pushes exhausted it: the bounds guard below silently no-op'd and
+// that pushed page's bridge was orphaned (hung invokes — sendInvokeResponse
+// had nowhere to evaluate; missed ROUTE_CHANGED broadcasts).
+//
+// Fix, scoped to iOS: recycle route-slot ids locally, in front of the Nim
+// allocator. A route slot freed by zapp_ios_unregister_webview_slot (route
+// VC pop) goes onto this LIFO free-list instead of being discarded; the next
+// push pops a recycled id before minting a fresh one. Nim's allocator is
+// UNCHANGED — it stays the fallback/overflow path, and the sole allocator
+// for every OTHER slot kind (windows, sidebar panes, inspector panes,
+// popovers), none of which are ever freed at runtime today. Only route-slot
+// ids ever enter this free-list: zapp_ios_unregister_webview_slot has
+// exactly one caller (ios/routing.m's zapp_route_vc_teardown, on route-VC
+// pop), so every id it frees is a route slot.
+//
+// Naive recycling would be unsafe on its own: resolveAccessoryHost
+// (native/nim/router.nim) resolves a sender slot to its window via
+// darwin_window_numeric_id_for_string's ascending id-string scan, which
+// today wins on the FIRST matching slot. A recycled low-index route slot
+// reused for a route on a LATER (higher-index) window would otherwise
+// out-rank that window's own host slot in the scan. zapp_ios_host_slot above
+// is the fix for that half of the problem: the scan below is host-only.
+extern int32_t zapp_alloc_dispatch_slot(void);
+
+static int32_t zapp_ios_route_freelist[ZAPP_MAX_WINDOW_CALLBACKS];
+static int zapp_ios_route_freelist_count = 0;
+
+static int32_t zapp_ios_route_slot_alloc(void) {
+    if (zapp_ios_route_freelist_count > 0) {
+        return zapp_ios_route_freelist[--zapp_ios_route_freelist_count];
+    }
+    return zapp_alloc_dispatch_slot();
+}
+
+static void zapp_ios_route_slot_free(int32_t slot) {
+    if (slot < 0 || slot >= ZAPP_MAX_WINDOW_CALLBACKS) return;
+    if (zapp_ios_route_freelist_count >= ZAPP_MAX_WINDOW_CALLBACKS) return;  // defensive; can't exceed table size
+    zapp_ios_route_freelist[zapp_ios_route_freelist_count++] = slot;
+}
+
+// #771 G1-C/G1-D: transport slot for a pushed route VC's webview (ios/routing.m).
 // Same model as the sidebar/inspector panes above: the webview registers under
 // its OWN dispatch slot (so sendInvokeResponse → darwin_window_eval_js reaches
 // IT, and darwin_webview_eval_all broadcasts include it) while its window-id
@@ -192,20 +266,37 @@ static void zapp_ios_register_webview_slot(int32_t slot, WKWebView* webview, NSS
 // ROUTE_CHANGED broadcasts never reached it — a pushed page's router.current()
 // hung forever and router.on() never fired, leaving toolbar back/fwd at their
 // declared enabled:false.
-void zapp_ios_register_route_webview(int32_t slot, void* webview_ptr, int32_t host_slot) {
-    if (slot < 0 || slot >= ZAPP_MAX_WINDOW_CALLBACKS) return;
+//
+// G1-D: slot SELECTION now happens here (free-list pop, else a fresh Nim
+// allocation) instead of in the caller — the recycling logic has to live
+// next to the free-list, and the free-list lives next to this register/
+// unregister pair. Returns the slot registered, or -1 if the route slot
+// table is exhausted (no free-list entry AND the Nim allocator returned an
+// out-of-range id) — the caller degrades exactly as before this fix (the
+// route webview simply has no dedicated transport slot), just with one loud
+// log line instead of a silent no-op.
+int32_t zapp_ios_register_route_webview(void* webview_ptr, int32_t host_slot) {
     WKWebView* wv = (__bridge WKWebView*)webview_ptr;
-    if (!wv) return;
+    if (!wv) return -1;
+    int32_t slot = zapp_ios_route_slot_alloc();
+    if (slot < 0 || slot >= ZAPP_MAX_WINDOW_CALLBACKS) {
+        fprintf(stderr, "[zapp] route slot table exhausted; pushed page will have a degraded bridge\n");
+        return -1;
+    }
     NSString* hostId = (host_slot >= 0 && host_slot < ZAPP_MAX_WINDOW_CALLBACKS)
         ? zapp_ios_window_ids[host_slot] : nil;
     if (!hostId) hostId = [NSString stringWithFormat:@"win-%d", host_slot];
-    zapp_ios_register_webview_slot(slot, wv, hostId);
+    zapp_ios_register_webview_slot(slot, wv, hostId, host_slot);
+    return slot;
 }
 
-// #771 G1-C: free a route webview's transport slot at teardown (pop). Scans by
-// webview pointer; skips host slots (zapp_ios_windows non-nil) — a route/pane
-// slot never owns a UIWindow, and the host slot must keep its id string even
-// if a stale registration were found there.
+// #771 G1-C/G1-D: free a route webview's transport slot at teardown (pop).
+// Scans by webview pointer; skips host slots (zapp_ios_windows non-nil) — a
+// route/pane slot never owns a UIWindow, and the host slot must keep its id
+// string even if a stale registration were found there. The ONLY caller
+// today is ios/routing.m's zapp_route_vc_teardown (route-VC pop) — every
+// slot freed here is therefore a route slot, so it is safe to return every
+// freed id to the route free-list above (G1-D).
 void zapp_ios_unregister_webview_slot(void* webview_ptr) {
     WKWebView* wv = (__bridge WKWebView*)webview_ptr;
     if (!wv) return;
@@ -213,6 +304,8 @@ void zapp_ios_unregister_webview_slot(void* webview_ptr) {
         if (zapp_ios_webviews[i] == wv && zapp_ios_windows[i] == nil) {
             zapp_ios_webviews[i] = nil;
             zapp_ios_window_ids[i] = nil;
+            zapp_ios_host_slot[i] = i;  // reset to the "empty" self default (#771 G1-D)
+            zapp_ios_route_slot_free(i);
         }
     }
 }
@@ -901,6 +994,8 @@ void zapp_ios_materialize_pending_windows(void) {
             // Numeric form matches what router.zc returns to JS — keeps
             // Window.current() and Window.create() handles in lockstep.
             zapp_ios_window_ids[d->numeric_id] = [NSString stringWithFormat:@"win-%d", d->numeric_id];
+            // #771 G1-D: this slot IS a host — see zapp_ios_host_slot above.
+            zapp_ios_host_slot[d->numeric_id] = d->numeric_id;
         }
 
         // Wire the numeric id and window pointer into every ZappIOSPaneViewController
@@ -1008,10 +1103,10 @@ void zapp_ios_materialize_pending_windows(void) {
                     if ([sub isKindOfClass:[WKWebView class]]) { sidebarWebview = (WKWebView*)sub; break; }
                 }
                 if (sidebarWebview) {
-                    zapp_ios_register_webview_slot(d->sidebarNumericId, sidebarWebview, hostWindowId);
+                    zapp_ios_register_webview_slot(d->sidebarNumericId, sidebarWebview, hostWindowId, d->numeric_id);
                 }
                 if (contentWebview) {
-                    zapp_ios_register_webview_slot(d->numeric_id, contentWebview, hostWindowId);
+                    zapp_ios_register_webview_slot(d->numeric_id, contentWebview, hostWindowId, d->numeric_id);
                 }
                 // Record host→sidebar for window-event fan-out (zapp_dispatch_event_to_js).
                 zapp_ios_set_sidebar_slot(d->numeric_id, d->sidebarNumericId);
@@ -1143,10 +1238,10 @@ void zapp_ios_materialize_pending_windows(void) {
                 if ([sub isKindOfClass:[WKWebView class]]) { inspectorWebview = (WKWebView*)sub; break; }
             }
             if (inspectorWebview) {
-                zapp_ios_register_webview_slot(d->inspectorNumericId, inspectorWebview, hostWindowId2);
+                zapp_ios_register_webview_slot(d->inspectorNumericId, inspectorWebview, hostWindowId2, d->numeric_id);
             }
             if (contentWebviewForInspector) {
-                zapp_ios_register_webview_slot(d->numeric_id, contentWebviewForInspector, hostWindowId2);
+                zapp_ios_register_webview_slot(d->numeric_id, contentWebviewForInspector, hostWindowId2, d->numeric_id);
             }
 
             // Underpage fill on the inspector pane when the app set a window bg
@@ -1218,6 +1313,10 @@ void zapp_ios_register_webview(void* window_ptr, void* webview_ptr) {
             d->real_webview = wv;
             if (d->numeric_id >= 0 && d->numeric_id < ZAPP_MAX_WINDOW_CALLBACKS) {
                 zapp_ios_webviews[d->numeric_id] = wv;
+                // #771 G1-D: this slot IS a host. Idempotent — materialize
+                // already set this — but defensive: this is a "slot is
+                // registered" site too.
+                zapp_ios_host_slot[d->numeric_id] = d->numeric_id;
             }
             return;
         }
@@ -1226,6 +1325,9 @@ void zapp_ios_register_webview(void* window_ptr, void* webview_ptr) {
     for (int i = 0; i < ZAPP_MAX_WINDOW_CALLBACKS; i++) {
         if (zapp_ios_windows[i] == w) {
             zapp_ios_webviews[i] = wv;
+            // #771 G1-D: this slot IS a host (matched by UIWindow pointer,
+            // which only host slots ever populate). Idempotent defensive set.
+            zapp_ios_host_slot[i] = i;
             return;
         }
     }
@@ -1297,7 +1399,16 @@ int32_t darwin_window_numeric_id_for_string(const char* window_id_string) {
     NSString* target = [NSString stringWithUTF8String:window_id_string];
     if (!target) return -1;
     for (int i = 0; i < ZAPP_MAX_WINDOW_CALLBACKS; i++) {
-        if (zapp_ios_window_ids[i] && [zapp_ios_window_ids[i] isEqualToString:target]) return i;
+        // #771 G1-D: host-only filter. Route/pane slots share their host's id
+        // string by design (see zapp_ios_register_route_webview above), so this
+        // scan must skip them — otherwise a RECYCLED low-index route slot could
+        // out-rank a higher-index host registered after it (the exact hazard
+        // route-slot recycling introduces; see the free-list comment above).
+        // zapp_ios_host_slot[i] == i is the "is this slot a true host" test.
+        if (zapp_ios_window_ids[i] && zapp_ios_host_slot[i] == i &&
+            [zapp_ios_window_ids[i] isEqualToString:target]) {
+            return i;
+        }
     }
     return -1;
 }
@@ -1639,6 +1750,8 @@ void darwin_window_register_numeric_id(void* handle, int32_t numeric_id) {
     UIWindow* w = (__bridge UIWindow*)handle;
     zapp_ios_windows[numeric_id] = w;
     zapp_ios_window_ids[numeric_id] = [NSString stringWithFormat:@"win-%d", numeric_id];
+    // #771 G1-D: this slot IS a host — see zapp_ios_host_slot above.
+    zapp_ios_host_slot[numeric_id] = numeric_id;
 }
 
 // --- Modal sheets — UIViewController presentation ---
