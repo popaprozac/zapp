@@ -1494,18 +1494,22 @@ void darwin_toolbar_remove(void* window_ptr) {
             // ── Expanded (iPad) ───────────────────────────────────────────
             UINavigationController* contentNav = zapp_ios_content_nav_for_window(window_ptr);
             if (contentNav) {
-                UIViewController* vc = contentNav.topViewController;
-                if (vc) {
-                    vc.navigationItem.leftItemsSupplementBackButton = YES;
-                    vc.navigationItem.leftBarButtonItems  = @[];
-                    vc.navigationItem.rightBarButtonItems = @[];
-                    vc.navigationItem.title     = nil;
-                    vc.navigationItem.titleView = nil;
+                // Clear items on the content VC's navigationItem (not
+                // topViewController's) — a covering ZappRouteVC's T8
+                // per-route title/toolbar stamp must survive remove(),
+                // mirroring the collapsed branch above.
+                UIViewController* contentVC = zapp_ios_content_vc_for_window(window_ptr);
+                if (contentVC) {
+                    contentVC.navigationItem.leftItemsSupplementBackButton = YES;
+                    contentVC.navigationItem.leftBarButtonItems  = @[];
+                    contentVC.navigationItem.rightBarButtonItems = @[];
+                    contentVC.navigationItem.title     = nil;
+                    contentVC.navigationItem.titleView = nil;
                 }
                 // #771 G1-B PRIMER: see the collapsed branch above for
                 // rationale. Expanded has no "sidebar root" state — vc IS the
                 // content VC whenever no route currently covers it.
-                UIViewController* contentVC = zapp_ios_content_vc_for_window(window_ptr);
+                UIViewController* vc = contentNav.topViewController;
                 if (vc && vc == contentVC && !contentNav.navigationBarHidden) {
                     [contentNav setNavigationBarHidden:YES animated:NO];
                 }
