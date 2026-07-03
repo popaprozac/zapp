@@ -56,6 +56,9 @@ export function renderMainPane(app: HTMLElement) {
       stage.innerHTML = `<div class="detail-page" style="padding:24px">
         <h2>Detail route (/detail)</h2>
         <p>This is a native pushed view controller on iOS. Tap ‹ Back or swipe from the left edge to return.</p>
+        <p>Pushed with <code>title: "Detail"</code> + a per-route <code>toolbar</code> override (R2′ #771):
+        on iOS the nav bar shows the route title and a Share button instead of the window toolbar.
+        Back-then-forward re-enters with the same chrome.</p>
         <button id="ks-pop">Back (router.pop)</button></div>`;
       stage.querySelector("#ks-pop")?.addEventListener("click", () => Window.current().router.pop());
       console.log(`[ks] route /detail rendered (+${(performance.now() - t0).toFixed(0)}ms boot)`);
@@ -136,9 +139,26 @@ export function renderMainPane(app: HTMLElement) {
   // N3a demo: on iOS (nativeRouting:true) this pushes a real native VC;
   // on macOS it's an in-window route (N2b). Isolated from the section nav —
   // lives in demoStrip, outside stage, so section renders don't clear it.
+  // R2' (#771 T8): the push carries per-route chrome — a `title` (stamped as
+  // the pushed VC's navigationItem.title) and a `toolbar` override that
+  // REPLACES the window toolbar for this route only (falls back on pop).
+  // macOS ignores route chrome; the in-window SPA swap is unchanged.
   const detailBtn = document.createElement("button");
   detailBtn.textContent = "Push native route (/detail)";
-  detailBtn.onclick = () => Window.current().router.push("/detail");
+  detailBtn.onclick = () =>
+    Window.current().router.push({
+      url: "/detail",
+      title: "Detail",
+      toolbar: [
+        {
+          id: "d-share",
+          icon: "sf:square.and.arrow.up",
+          label: "Share",
+          placement: "trailing",
+          action: () => console.log("[ks] /detail per-route Share tapped"),
+        },
+      ],
+    });
   demoStrip.appendChild(detailBtn);
 
   const cleanBtn = document.createElement("button");
