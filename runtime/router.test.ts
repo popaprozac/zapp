@@ -196,6 +196,48 @@ describe("router handle ops post correct wire messages", () => {
     expect(hits).toBe(1);
     delete (globalThis as any)[Symbol.for("zapp.windowId")];
   });
+
+  // #771 T8 round-2 review: plain-button toolbarActions keys are NOT route-
+  // scoped ("${windowId}:${id}" is the app-declared id verbatim) — unlike the
+  // pull-down menu ids fixed above (I3 round 2 folds `url` into the menu-id
+  // base). Two sibling routes reusing the same button id silently share ONE
+  // toolbarActions entry (last-push-wins). router.push now tracks each key's
+  // registering url as provenance and warns when a DIFFERENT route
+  // re-registers an already-tagged key — but the SAME route re-pushing its
+  // own id stays silent, and the overwrite behavior itself is unchanged.
+  test("router.push warns when a DIFFERENT sibling route reuses a plain button action id (silent on same-route repeat; last-push-wins unchanged)", () => {
+    const warnings: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (msg: string) => { warnings.push(String(msg)); };
+    let hitsA = 0;
+    let hitsB = 0;
+    try {
+      (globalThis as any)[Symbol.for("zapp.windowId")] = "win-13";
+      const win = createWindowHandle("win-13");
+
+      win.router.push({ url: "/a", toolbar: [{ id: "share", label: "Share", action: () => { hitsA++; } }] });
+      expect(warnings.length).toBe(0); // first registration of this key — nothing to compare against
+
+      win.router.push({ url: "/a", toolbar: [{ id: "share", label: "Share", action: () => { hitsA++; } }] });
+      expect(warnings.length).toBe(0); // same route re-pushing its own id — no warn
+
+      win.router.push({ url: "/b", toolbar: [{ id: "share", label: "Share", action: () => { hitsB++; } }] });
+      expect(warnings.length).toBe(1); // a DIFFERENT route now claims the same key — warn
+      expect(warnings[0]).toMatch(/^\[zapp\] toolbar: route action id "share"/);
+      expect(warnings[0]).toContain("/a");
+      expect(warnings[0]).toContain("/b");
+      expect(warnings[0]).toContain("last-push-wins");
+      expect(warnings[0]).toContain("distinct ids");
+
+      // No behavior change beyond the warn: the shared key still last-push-wins.
+      mock.fire("window:toolbar-clicked", { windowId: "win-13", id: "share" });
+      expect(hitsA).toBe(0);
+      expect(hitsB).toBe(1);
+    } finally {
+      console.warn = origWarn;
+      delete (globalThis as any)[Symbol.for("zapp.windowId")];
+    }
+  });
 });
 
 // ── ROUTE_CHANGED event updates cached getters ────────────────────────────────

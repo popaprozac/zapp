@@ -282,14 +282,17 @@ describe("toolbar registry hygiene helpers", () => {
   // #771 T8 review I2: route-registered action keys (tagged at push-registration
   // time — see routeToolbarActionKeys in window.ts) must survive a window-toolbar
   // purge (setItems/remove) so a displayed route override's action keeps firing.
-  test("purgeWindowToolbarActions spares tagged route-registered keys", () => {
+  // Round 2: the map's values became key→url provenance (was Set<string>) — the
+  // purge only ever checks key presence, so the spare logic is unaffected by the
+  // shape change; this test now exercises it through the Map<string,string> form.
+  test("purgeWindowToolbarActions spares tagged route-registered keys (Map<string,string> provenance shape)", () => {
     const actions = new Map<string, () => void>([
       ["win-1:compose", () => {}],  // window-toolbar action — purged
       ["win-1:d-share", () => {}],  // route-registered action — spared
     ]);
     const menuActions = new Map<string, () => void>();
     const byWindow = new Map<string, Map<string, Set<string>>>();
-    const routeKeys = new Map<string, Set<string>>([["win-1", new Set(["win-1:d-share"])]]);
+    const routeKeys = new Map<string, Map<string, string>>([["win-1", new Map([["win-1:d-share", "/detail"]])]]);
     purgeWindowToolbarActions("win-1", actions, menuActions, byWindow, routeKeys);
     expect([...actions.keys()]).toEqual(["win-1:d-share"]);
   });

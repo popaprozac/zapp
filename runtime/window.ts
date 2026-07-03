@@ -592,13 +592,27 @@ const toolbarActions = new Map<string, (ctx?: ActionContext) => void>();
 let toolbarClickWired = false;
 
 /** `toolbarActions` keys registered by `router.push`'s `toolbar` override
- * (⊂ toolbarActions, tagged at push-registration time — #771 T8 review I2).
- * `purgeWindowToolbarActions` spares tagged keys: a route override's action
- * must keep firing after a window-toolbar `setItems`/`remove` call and after
- * `router.forward` replays the route (replay never re-registers — the JS
- * side only registers once, at the original `push`), so route action keys
- * are intentionally NEVER purged. */
-const routeToolbarActionKeys = new Map<string, Set<string>>();
+ * (⊂ toolbarActions, tagged at push-registration time — #771 T8 review I2),
+ * windowId → (key → the registering route's url, provenance — #771 T8
+ * round-2 review). `purgeWindowToolbarActions` spares tagged keys: a route
+ * override's action must keep firing after a window-toolbar `setItems`/
+ * `remove` call and after `router.forward` replays the route (replay never
+ * re-registers — the JS side only registers once, at the original `push`),
+ * so route action keys are intentionally NEVER purged.
+ *
+ * Unlike pull-down menu-item ids (see `stripMenuActions`'/`normalizeToolbar`'s
+ * `idBase`, which folds in the route `url`), PLAIN button action keys are
+ * `${windowId}:${id}` with no route discriminator — that's the app-declared
+ * item id verbatim, so it can't be silently rewritten. Two sibling routes on
+ * one window's stack that reuse the same button id therefore still share ONE
+ * `toolbarActions` entry: the second push's registration overwrites the
+ * first's closure (last-push-wins), and firing the id later always calls
+ * whichever route registered most recently — even while the OTHER route's
+ * button is the one currently visible. The url stored here lets push-time
+ * registration detect that mismatch and warn (see `router.push`); it does
+ * not change the overwrite behavior — apps must use distinct ids across
+ * routes that can coexist on one window's stack. */
+const routeToolbarActionKeys = new Map<string, Map<string, string>>();
 
 function wireToolbarClicks(): void {
   if (toolbarClickWired) return;
@@ -736,7 +750,17 @@ function wireToolbarMenuClicks(): void {
  * minting a fresh one and orphaning the old. Omitted (the `setItems` /
  * `updateItem` paths) keeps the original ever-growing global-counter
  * behavior — those paths purge-and-rebuild a window's registrations
- * wholesale on every call, so an ever-growing counter never leaks there. */
+ * wholesale on every call, so an ever-growing counter never leaks there.
+ *
+ * #771 T8 round-2 review: `normalizeToolbar` (the only caller that passes
+ * `idBase`) now folds the pushed route's `url` into it, alongside the
+ * `windowId` and the toolbar item's own id — see its call site. Round 1's
+ * `${windowId}_${itemId}` base was stable across repeated pushes of ONE
+ * route but collided across sibling routes on the same window reusing the
+ * same item id (last push's ids silently overwrote the first's map entries
+ * — the wrong route's closure would fire after navigating back to the
+ * first). Adding `url` scopes ids per ROUTE while keeping the same-route
+ * repeat-push property this parameter exists for. */
 function stripMenuActions(
   items: MenuItemDef[],
   out: Map<string, (ctx?: ActionContext) => void>,
@@ -765,15 +789,17 @@ const toolbarMenuIdsByWindow = new Map<string, Map<string, Set<string>>>();
 
 /** Remove a window's toolbar registrations from both action maps.
  * Maps are injected for unit tests; production callers pass the module
- * maps. `routeActionKeys` (#771 T8 review I2) tags `router.push` toolbar-
- * override action keys — those are spared (see `routeToolbarActionKeys`
- * doc comment for why they're never purged). */
+ * maps. `routeActionKeys` (#771 T8 review I2; values became key→url
+ * provenance in round 2) tags `router.push` toolbar-override action keys —
+ * those are spared (see `routeToolbarActionKeys` doc comment for why
+ * they're never purged). Only key *presence* matters here — the url
+ * payload is provenance for `router.push`'s warn check, not the purge. */
 export function purgeWindowToolbarActions(
   windowId: string,
   actions: Map<string, (ctx?: ActionContext) => void>,
   menuActions: Map<string, (ctx?: ActionContext) => void>,
   menuIdsByWindow: Map<string, Map<string, Set<string>>>,
-  routeActionKeys: Map<string, Set<string>>,
+  routeActionKeys: Map<string, Map<string, string>>,
 ): void {
   const spared = routeActionKeys.get(windowId);
   for (const key of [...actions.keys()]) {
@@ -935,6 +961,12 @@ export function normalizeToolbar(
   // caller (setItems et al.), which keeps the original global-counter
   // behavior — see stripMenuActions' doc comment.
   windowId?: string,
+  // #771 T8 round-2 review: the pushed route's url, paired with windowId to
+  // scope the auto-id base per ROUTE (not just per window) — see
+  // stripMenuActions' doc comment for the collision round 1 left open.
+  // Always passed together with windowId by the one caller that passes
+  // either (router.push); every other caller omits both.
+  url?: string,
 ): {
   json: string;
   actions: Map<string, (ctx?: ActionContext) => void>;
@@ -1074,7 +1106,11 @@ export function normalizeToolbar(
     if (it.badge !== undefined) wire.badge = badgeToWire(it.badge);
     if (it.menu) {
       const itemMenuActions = new Map<string, (ctx?: ActionContext) => void>();
-      const strippedMenu = stripMenuActions(it.menu, itemMenuActions, windowId ? `${windowId}_${it.id}` : undefined);
+      // #771 T8 round-2 review: fold `url` in alongside `windowId` — round 1's
+      // `${windowId}_${itemId}` base collided across sibling routes on one
+      // window reusing the same item id (see stripMenuActions' doc comment).
+      const idBase = windowId ? `${windowId}_${url}_${it.id}` : undefined;
+      const strippedMenu = stripMenuActions(it.menu, itemMenuActions, idBase);
       wire.menu = strippedMenu;
       for (const [mid, fn] of itemMenuActions) menuActions.set(mid, fn);
       if (itemMenuActions.size > 0) menuIdsByItem.set(it.id, new Set(itemMenuActions.keys()));
@@ -1521,14 +1557,17 @@ function createRouterHandle(windowId: string, hasSidebar = false, hasInspector =
       // additively so the window toolbar's own actions survive the route.
       let toolbarJson: string | undefined;
       if (o.toolbar !== undefined) {
-        // I3 (#771 T8 review): pass windowId so auto-generated menu-item ids
-        // derive from (windowId, itemId, menu-path-index) instead of the
-        // module-global counter — repeating this same push (e.g. after a
-        // pop/forward round-trip, or the app just pushing the same route
-        // again) re-derives the SAME ids and overwrites the existing map
-        // entries instead of minting fresh ones and orphaning the old.
+        // I3 (#771 T8 review); round-2 review: pass windowId AND url so
+        // auto-generated menu-item ids derive from (windowId, url, itemId,
+        // menu-path-index) instead of the module-global counter — repeating
+        // this same push (e.g. after a pop/forward round-trip, or the app
+        // just pushing the same route again) re-derives the SAME ids and
+        // overwrites the existing map entries instead of minting fresh ones
+        // and orphaning the old, while two DIFFERENT routes reusing the same
+        // itemId now derive DISTINCT ids (round-1 left this open — see
+        // normalizeToolbar's `url` param doc).
         const { json, actions, menuActions, menuIdsByItem, menuTrees } =
-          normalizeToolbar({ items: o.toolbar }, hasSidebar, hasInspector, windowId);
+          normalizeToolbar({ items: o.toolbar }, hasSidebar, hasInspector, windowId, o.url);
         const parsed = JSON.parse(json);
         delete parsed.style;               // per-route override never carries style
         toolbarJson = JSON.stringify(parsed);
@@ -1537,13 +1576,24 @@ function createRouterHandle(windowId: string, hasSidebar = false, hasInspector =
           wireToolbarGroupSelect();
           // I2 (#771 T8 review): tag each key as route-registered so a later
           // window-toolbar setItems/remove purge spares it (see
-          // routeToolbarActionKeys doc comment).
+          // routeToolbarActionKeys doc comment). Round-2 review: PLAIN button
+          // ids (unlike menu ids above) are NOT route-scoped — `${windowId}:${id}`
+          // is the app-declared id verbatim. If a DIFFERENT route already
+          // tagged this exact key, the two routes share one toolbarActions
+          // entry and this push's registration silently wins (last-push-wins)
+          // — warn so the app can pick distinct ids across sibling routes.
           let tagged = routeToolbarActionKeys.get(windowId);
-          if (!tagged) { tagged = new Set(); routeToolbarActionKeys.set(windowId, tagged); }
+          if (!tagged) { tagged = new Map(); routeToolbarActionKeys.set(windowId, tagged); }
           for (const [id, fn] of actions) {
             const key = `${windowId}:${id}`;
+            const existingUrl = tagged.get(key);
+            if (existingUrl !== undefined && existingUrl !== o.url) {
+              console.warn(
+                `[zapp] toolbar: route action id "${id}" is already registered by route "${existingUrl}" on this window — sibling routes sharing a toolbar action id last-push-wins (now "${o.url}"); use distinct ids across routes that can coexist on the same window's stack`,
+              );
+            }
             toolbarActions.set(key, fn);
-            tagged.add(key);
+            tagged.set(key, o.url);
           }
         }
         if (menuActions.size > 0) {

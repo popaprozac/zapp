@@ -142,7 +142,17 @@ describe("applyToolbarConventions", () => {
 // (windowId, itemId, menu-path-index) ids instead, so re-normalizing the
 // same menu tree reuses the same ids and the caller's Map.set() overwrites
 // in place rather than growing.
-describe("normalizeToolbar stable menu ids (push path, #771 T8 review I3)", () => {
+//
+// Round 2 (#771 T8 re-review): the (windowId, itemId, index) base was
+// stable ACROSS repeated pushes of the SAME route, but had no route
+// discriminator — two DIFFERENT routes pushing overrides with the same
+// itemId derived the SAME ids and silently overwrote each other's
+// menuActions entry (navigate back to route A, tap its menu, route B's
+// closure fires). normalizeToolbar's new optional 5th `url` arg folds the
+// pushed route's url into the base, so ids are now scoped per (windowId,
+// url, itemId, index) — same-route repeats still reuse identical ids;
+// different routes now derive disjoint ones.
+describe("normalizeToolbar stable menu ids (push path, #771 T8 review I3; round 2: route-scoped)", () => {
   const menuToolbar = {
     items: [
       {
@@ -155,14 +165,38 @@ describe("normalizeToolbar stable menu ids (push path, #771 T8 review I3)", () =
     ],
   };
 
-  test("repeated normalizeToolbar(..., windowId) calls reuse the same auto menu ids", () => {
-    const first = normalizeToolbar(menuToolbar, false, false, "win-42");
-    const second = normalizeToolbar(menuToolbar, false, false, "win-42");
+  test("repeated normalizeToolbar(..., windowId, url) calls for the SAME url reuse the same auto menu ids", () => {
+    const first = normalizeToolbar(menuToolbar, false, false, "win-42", "/detail");
+    const second = normalizeToolbar(menuToolbar, false, false, "win-42", "/detail");
     const firstIds = [...first.menuActions.keys()].sort();
     const secondIds = [...second.menuActions.keys()].sort();
     expect(firstIds.length).toBe(2);
     expect(secondIds).toEqual(firstIds); // same keys reused, not fresh ones appended
-    for (const id of firstIds) expect(id).toMatch(/^__tbmenu_win-42_d-share_\d+$/);
+    for (const id of firstIds) expect(id).toMatch(/^__tbmenu_win-42_\/detail_d-share_\d+$/);
+  });
+
+  test("round 2: two DIFFERENT urls, same itemId, produce DISTINCT key sets and both routes' actions survive", () => {
+    const routeA = {
+      items: [{ id: "d-share", label: "Share", menu: [{ label: "Copy", action: () => "A" }] } as any],
+    };
+    const routeB = {
+      items: [{ id: "d-share", label: "Share", menu: [{ label: "Copy", action: () => "B" }] } as any],
+    };
+    const a = normalizeToolbar(routeA, false, false, "win-42", "/a");
+    const b = normalizeToolbar(routeB, false, false, "win-42", "/b");
+    const aIds = [...a.menuActions.keys()];
+    const bIds = [...b.menuActions.keys()];
+    expect(aIds.length).toBe(1);
+    expect(bIds.length).toBe(1);
+    expect(aIds[0]).not.toBe(bIds[0]); // distinct keys — no cross-route collision
+
+    // Simulate router.push's registration into the shared app-global map:
+    // both pushes' menuActions land in ONE Map.set() sequence, additively.
+    const menuActions = new Map<string, (ctx?: any) => unknown>();
+    for (const [id, fn] of a.menuActions) menuActions.set(id, fn);
+    for (const [id, fn] of b.menuActions) menuActions.set(id, fn);
+    expect(menuActions.get(aIds[0])?.()).toBe("A"); // route A's closure still reachable at its key
+    expect(menuActions.get(bIds[0])?.()).toBe("B"); // route B's closure still reachable at its key
   });
 
   test("without windowId (setItems/create path), ids keep the original global-counter form", () => {

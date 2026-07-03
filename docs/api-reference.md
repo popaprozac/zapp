@@ -1845,6 +1845,15 @@ are push-only). Chrome is persisted per history entry: going back and then
   - Pane-dependent items (`toggleSidebar`, `toggleInspector`,
     `trackingSeparator`) validate against the pushing handle's pane shape,
     exactly like `setItems`.
+  - **Id scoping across sibling routes on one window's stack:** pull-down
+    **menu** item ids are auto-scoped per route (internally keyed off the
+    route's url), so two different routes can safely reuse the same menu
+    item id. **Plain button** action ids are *not* route-scoped — they share
+    one per-window registry keyed only by the id, so if two sibling routes
+    push a `toolbar` override with the same button id, the second push's
+    action silently replaces the first's (last push wins; a dev-console
+    warning is logged). Use distinct button ids across routes that can
+    coexist on one window's stack.
 
 ```ts
 Window.current().router.push({
