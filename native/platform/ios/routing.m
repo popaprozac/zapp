@@ -210,6 +210,35 @@ extern void zapp_ios_toolbar_stamp_vc_force(void* window_ptr, UIViewController* 
 // removed stays bar-less across every later transition (no empty re-shown bar).
 extern bool zapp_ios_toolbar_registered_for_window(void* window_ptr);
 
+// #771 T7 review (I1/I2): single source of truth for "does this VC want its
+// nav bar visible". willShowViewController: evaluates it for the INCOMING vc
+// mid-transition (drives the live setNavigationBarHidden: write); didShow's
+// stranded-visibility re-assert (I2) evaluates the SAME predicate for the vc
+// that actually SETTLED on screen. Extracted so the two call sites — which
+// must agree, or a cancelled swipe can strand the bar in the wrong state —
+// can never drift apart.
+typedef struct {
+    BOOL isContent;
+    BOOL isRoute;
+    BOOL routeWantsBarHidden;
+    BOOL toolbarRegistered;
+    BOOL showBar;
+} ZappRouteBarWantState;
+
+static ZappRouteBarWantState zapp_route_bar_want_state(UIViewController* vc,
+                                                        UIViewController* contentVC,
+                                                        void* win) {
+    ZappRouteBarWantState s;
+    s.isContent = (contentVC && vc == contentVC);
+    s.isRoute = [vc isKindOfClass:[ZappRouteVC class]];
+    // R2' navbar.hidden: a route that brings its own chrome shows NO bar.
+    s.routeWantsBarHidden = s.isRoute && ((ZappRouteVC*)vc).navbarHidden;
+    // G1 fix B: content only shows a bar while a toolbar is registered.
+    s.toolbarRegistered = (win != NULL) && zapp_ios_toolbar_registered_for_window(win);
+    s.showBar = (s.isContent && s.toolbarRegistered) || (s.isRoute && !s.routeWantsBarHidden);
+    return s;
+}
+
 @interface ZappRouteNavDelegate : NSObject <UINavigationControllerDelegate, UIGestureRecognizerDelegate>
 @property (nonatomic, assign) int32_t windowId;
 // Tracks the class of the VC that was on top (the "from" VC) during the most
@@ -259,12 +288,15 @@ extern bool zapp_ios_toolbar_registered_for_window(void* window_ptr);
     //      toolbar is registered for the window (G1 fix B).
     //   2. Any pushed ZappRouteVC that didn't opt out (needs back button +
     //      per-VC toolbar items).
-    BOOL isContent = (contentVC && vc == contentVC);
-    BOOL isRoute = [vc isKindOfClass:[ZappRouteVC class]];
-    // R2' navbar.hidden: a route that brings its own chrome shows NO bar.
-    BOOL routeWantsBarHidden = isRoute && ((ZappRouteVC*)vc).navbarHidden;
-    BOOL toolbarRegistered = (win != NULL) && zapp_ios_toolbar_registered_for_window(win);
-    BOOL showBar = (isContent && toolbarRegistered) || (isRoute && !routeWantsBarHidden);
+    // #771 T7 review I2: the rule itself now lives in zapp_route_bar_want_state
+    // (shared with didShowViewController:'s stranded-visibility re-assert) so
+    // the two can never drift apart.
+    ZappRouteBarWantState want = zapp_route_bar_want_state(vc, contentVC, win);
+    BOOL isContent = want.isContent;
+    BOOL isRoute = want.isRoute;
+    BOOL routeWantsBarHidden = want.routeWantsBarHidden;
+    BOOL toolbarRegistered = want.toolbarRegistered;
+    BOOL showBar = want.showBar;
     BOOL barHiddenBefore = nav.navigationBarHidden;
 
     // Inspector-pop guard: capture the "from" VC via the transition coordinator so
@@ -307,13 +339,10 @@ extern bool zapp_ios_toolbar_registered_for_window(void* window_ptr);
         }
     }
 
-    // Layer 3 (iOS 26+): full-screen content pop for hidden-bar routes — the
-    // public replacement for the old FD private-KVC pattern. Enabled ONLY on
-    // hidden-bar routes (they lose the visual back affordance; everywhere else
-    // it would fight horizontal web scrolling).
-    if (@available(iOS 26.0, *)) {
-        nav.interactiveContentPopGestureRecognizer.enabled = routeWantsBarHidden;
-    }
+    // Layer 3 (iOS 26+) used to be written here — MOVED to
+    // didShowViewController: (#771 T7 review I1: writing it mid-transition,
+    // during an interactive content-pop, disabled the very recognizer driving
+    // that gesture and self-cancelled it). See didShow for the rule + why.
 
     // #771 datum 3 (structural): stamp the window's toolbar defs onto the VC
     // being shown. UIKit mutates viewControllers before this delegate fires,
@@ -381,13 +410,46 @@ extern bool zapp_ios_toolbar_registered_for_window(void* window_ptr);
     void* winPtr = darwin_window_get_by_numeric_id(self.windowId);
     if (winPtr) {
         UIViewController* shownContentVC = zapp_ios_content_vc_for_window(winPtr);
-        BOOL shownIsContent = (shownContentVC && vc == shownContentVC);
-        BOOL shownIsRoute = [vc isKindOfClass:[ZappRouteVC class]];
+        // #771 T7 review I1/I2: same shared rule willShowViewController: uses,
+        // now evaluated for the VC that actually SETTLED on screen.
+        ZappRouteBarWantState want = zapp_route_bar_want_state(vc, shownContentVC, winPtr);
+        BOOL shownIsContent = want.isContent;
+        BOOL shownIsRoute = want.isRoute;
         // R2' navbar.hidden: a hidden-bar route needs NO stamp (its bar never
         // renders); the content/removed-toolbar case is handled inside
         // stamp_vc_force (entry gone → early return).
-        BOOL shownRouteWantsBarHidden =
-            shownIsRoute && ((ZappRouteVC*)vc).navbarHidden;
+        BOOL shownRouteWantsBarHidden = want.routeWantsBarHidden;
+
+        // #771 T7 review I2: re-assert visibility against the SETTLED state.
+        // willShow drives the bar from the INCOMING vc mid-transition; on a
+        // cancelled interactive swipe, willShow already fired (and wrote) for a
+        // VC that never landed. Concretely: swiping out of a hidden-bar route
+        // shows the bar via willShow(content), then cancelling back to the
+        // hidden-bar route leaves nothing to re-hide it — a stranded visible
+        // bar on a route that opted out. Symmetric case: a cancelled swipe INTO
+        // a hidden-bar route can strand the bar hidden on a VC that wants it
+        // shown. didShow always reports the true final top VC, so it's the only
+        // call site that can safely correct a stranded write. animated:NO — no
+        // transition is in flight to animate alongside.
+        if (want.showBar && nav.navigationBarHidden) {
+            [nav setNavigationBarHidden:NO animated:NO];
+        } else if (!want.showBar && !nav.navigationBarHidden) {
+            [nav setNavigationBarHidden:YES animated:NO];
+        }
+
+        // Layer 3 (iOS 26+, #771 T7 review I1 fix): full-screen content pop for
+        // hidden-bar routes, moved here from willShowViewController:. Writing
+        // this mid-transition toggled .enabled on the very recognizer driving
+        // an in-flight interactive content-pop — UIKit reads that as the
+        // gesture being disabled out from under it, cancels it (Began/Changed →
+        // Cancelled), and the pop rolls back: the feature self-cancelled on
+        // first use. didShow fires only once the transition has SETTLED
+        // (committed or cancelled), so the recognizer is idle here and toggling
+        // .enabled is safe. Availability guard preserved exactly.
+        if (@available(iOS 26.0, *)) {
+            nav.interactiveContentPopGestureRecognizer.enabled = shownRouteWantsBarHidden;
+        }
+
         if ((shownIsContent || shownIsRoute) && !shownRouteWantsBarHidden)
             zapp_ios_toolbar_stamp_vc_force(winPtr, vc, YES);
 
@@ -409,7 +471,16 @@ extern bool zapp_ios_toolbar_registered_for_window(void* window_ptr);
     if (nav && g == nav.interactivePopGestureRecognizer) {
         return nav.viewControllers.count > 1 && !self.duringTransition;
     }
-    return YES;
+    // #771 T7 review C1: this delegate is INSTALLED ONLY as the delegate of a
+    // pop recognizer (zapp_route_install_delegate below) — it never fields any
+    // other gesture. Reaching here means `g` is a pop recognizer that is not
+    // (or no longer) self.nav's — e.g. a stale reference to an OLD nav's
+    // recognizer after a retarget (iPad collapse↔expand). The old fallthrough
+    // of `return YES` armed that stale recognizer, which could win an
+    // interactive pop on a nav no longer on screen: touch goes in, nothing
+    // valid pops, the gesture wedges (frozen-touch). We have no basis to arm a
+    // gesture for a nav we don't currently own, so refuse it — always correct.
+    return NO;
 }
 
 // Layer 2 (webview arbitration): a full-bleed WKWebView's pan/scroll
@@ -436,6 +507,21 @@ static void zapp_route_install_delegate(UINavigationController* nav, int32_t win
         g_route_delegates[@(windowId)] = d;
     }
     if (nav.delegate != d) nav.delegate = d;   // single owner; re-assert if UIKit reset it
+    // #771 T7 review C1: disarm-on-retarget. iPad collapse↔expand (and the
+    // collapsed-nav re-arm path) re-target d.nav from one UINavigationController
+    // to another; if the OLD nav's interactivePopGestureRecognizer stayed
+    // .enabled with .delegate still == d, gestureRecognizerShouldBegin: would
+    // see a recognizer that isn't d.nav's anymore (self.nav has already moved
+    // on) — that's the exact freeze vector the return-NO fallthrough above now
+    // refuses, but disabling the OLD recognizer here closes it at the source
+    // instead of relying solely on the delegate callback.
+    // KNOWN RESIDUAL (deferred to the size-class-migration follow-up family):
+    // duringTransition is a single flag shared by `d` across whichever nav it
+    // currently owns. If the OLD and NEW navs' transitions interleave (a
+    // retarget landing mid-animation on either side), one nav's willShow/
+    // didShow pair can flip the guard while the other nav's transition is
+    // still in flight — the flag isn't split per-nav. Not addressed here.
+    if (d.nav != nav && d.nav) d.nav.interactivePopGestureRecognizer.enabled = NO;
     // Layer 1: own the edge-pop gesture too (single owner — sidebar.m's old
     // rearm handed ownership here). Keep it enabled; our shouldBegin gates it.
     d.nav = nav;
@@ -478,10 +564,18 @@ void zapp_ios_push_route_vc(int32_t windowId, const char* url, const char* chrom
     if (chrome_json && chrome_json[0]) {
         NSData* cd = [[NSString stringWithUTF8String:chrome_json]
                          dataUsingEncoding:NSUTF8StringEncoding];
-        NSDictionary* chrome = [NSJSONSerialization JSONObjectWithData:cd options:0 error:nil];
-        if ([chrome isKindOfClass:[NSDictionary class]]) {
-            if ([chrome[@"navbarHidden"] isKindOfClass:[NSNumber class]])
-                navbarHidden = [chrome[@"navbarHidden"] boolValue];
+        // M1 (#771 T7 review): stringWithUTF8String: returns nil for invalid
+        // UTF-8, which silently propagates to cd == nil (nil-messaging no-ops
+        // the dataUsingEncoding: step) — but NSJSONSerialization does NOT fail
+        // gracefully like its `error:` out-param implies when handed nil data;
+        // it raises. Guard the nil case instead of trusting the parse to fail
+        // safely.
+        if (cd) {
+            NSDictionary* chrome = [NSJSONSerialization JSONObjectWithData:cd options:0 error:nil];
+            if ([chrome isKindOfClass:[NSDictionary class]]) {
+                if ([chrome[@"navbarHidden"] isKindOfClass:[NSNumber class]])
+                    navbarHidden = [chrome[@"navbarHidden"] boolValue];
+            }
         }
     }
     vc.navbarHidden = navbarHidden;

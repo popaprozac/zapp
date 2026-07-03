@@ -226,8 +226,10 @@ static NSMutableDictionary<NSValue*, ZappIOSToolbarEntry*>* zapp_ios_toolbars = 
 // The entry registry is the single source of truth for "does this window
 // currently have a toolbar": set_items creates the entry, remove() drops it —
 // so after a remove(), every later nav transition keeps the content VC's bar
-// hidden instead of re-showing an empty bar. Safe from any thread (read-only
-// dictionary lookup; worst case a stale answer for one transition).
+// hidden instead of re-showing an empty bar. Main-thread-only, like the rest
+// of this file's UIKit-driven state — zapp_ios_toolbars is an unsynchronized
+// NSMutableDictionary, and both callers (routing.m's willShow/didShow) run on
+// the main thread via UIKit's delegate callbacks. Not safe to call off it.
 bool zapp_ios_toolbar_registered_for_window(void* window_ptr) {
     if (!window_ptr || !zapp_ios_toolbars) return false;
     return zapp_ios_toolbars[[NSValue valueWithPointer:window_ptr]] != nil;
@@ -1404,9 +1406,10 @@ void darwin_toolbar_remove(void* window_ptr) {
                 // forever, occluding content that (correctly, per the fix
                 // below) no longer reserves space for it. Only hide when the
                 // content VC is actually the one on top — a covering
-                // ZappRouteVC keeps its own bar regardless of window-toolbar
-                // state (routing.m's willShow shows it unconditionally for
-                // any ZappRouteVC).
+                // ZappRouteVC keeps its OWN bar state regardless of this
+                // window's toolbar-registration state: routing.m's willShow
+                // shows/hides a ZappRouteVC's bar per THAT route's own
+                // navbarHidden opt-out flag, not unconditionally.
                 if (contentVC && collapsedNav.topViewController == contentVC
                     && !collapsedNav.navigationBarHidden) {
                     [collapsedNav setNavigationBarHidden:YES animated:NO];

@@ -695,7 +695,14 @@ static void zapp_ios_sidebar_sync_collapse(ZappIOSSidebarController* c, BOOL col
     // Back to side-by-side: both panes visible → expanded.
     zapp_ios_sidebar_sync_collapse(self, NO);
     // Re-apply any registered toolbar to contentNav now that the split is
-    // expanded. Also removes the nav delegate from the old collapsedNav.
+    // expanded. This only re-stamps bar-button items (toolbar.m) — it does NOT
+    // touch ZappRouteNavDelegate. The delegate is retargeted from the old
+    // collapsedNav to the new expanded contentNav lazily, the next time
+    // zapp_route_install_delegate (routing.m) runs for this window (next
+    // push, or the show_content re-arm path); THAT call is what disarms the
+    // OLD nav's interactivePopGestureRecognizer before adopting the new one
+    // (#771 T7 review C1 disarm-on-retarget — closes the stale-armed-
+    // recognizer freeze vector on a nav no longer on screen).
     void* winPtr = (__bridge void*)self.splitVC.view.window;
     if (winPtr) zapp_ios_toolbar_apply_for_window(winPtr);
 }
