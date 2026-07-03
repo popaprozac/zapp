@@ -7,6 +7,10 @@ type
   RouteEntry = object
     url: string
     params: string          # JSON string; "" when none
+    chrome: string          # R2' (#771 T8) per-route chrome JSON ("" = all
+                            # defaults). Persisted at push time so a forward
+                            # re-enters the entry with the SAME chrome it was
+                            # pushed with (navbarHidden/title/toolbarJson).
   RouteState = object
     entries: seq[RouteEntry]
     cur: int
@@ -21,16 +25,18 @@ proc routerSeed*(win: int32, url: string) =
 proc routerClear*(win: int32) =
   gRoutes.del(win)
 
-proc routerPush*(win: int32, url, params: string) =
+proc routerPush*(win: int32, url, params: string, chrome: string = "") =
+  ## `chrome` (R2' #771 T8): the push-options chrome JSON — stored on the
+  ## entry so routerForward callers can replay it ("" = defaults).
   if not gRoutes.hasKey(win): routerSeed(win, "/")
   var s = gRoutes[win]
   if s.entries.len == 0:
     # Empty state (pre-first-select): first push seeds the initial entry.
-    s.entries = @[RouteEntry(url: url, params: params)]
+    s.entries = @[RouteEntry(url: url, params: params, chrome: chrome)]
     s.cur = 0
   else:
     s.entries.setLen(s.cur + 1)               # truncate forward
-    s.entries.add RouteEntry(url: url, params: params)
+    s.entries.add RouteEntry(url: url, params: params, chrome: chrome)
     s.cur = s.entries.high
   gRoutes[win] = s
 
@@ -43,7 +49,9 @@ proc routerReplace*(win: int32, url, params: string) =
     s.entries = @[RouteEntry(url: url, params: params)]
     s.cur = 0
   else:
-    s.entries[s.cur] = RouteEntry(url: url, params: params)  # in place; forward preserved
+    # In place; forward preserved. chrome resets to "" — replace excludes
+    # push options by contract (R2' #771: options are push-only).
+    s.entries[s.cur] = RouteEntry(url: url, params: params)
   gRoutes[win] = s
 
 proc routerPop*(win: int32): bool =
@@ -86,6 +94,20 @@ proc routerCurrentParams*(win: int32): string =
     let s = gRoutes[win]
     if s.entries.len > 0:
       return s.entries[s.cur].params
+    else:
+      return ""
+  else:
+    return ""
+
+proc routerCurrentChrome*(win: int32): string =
+  ## R2' (#771 T8): the current entry's push-time chrome JSON ("" when none).
+  ## Read by router.nim's forward arm AFTER routerForward advances the cursor,
+  ## so a forward re-enters the route with the chrome it was pushed with
+  ## (e.g. back-then-forward onto a navbar:{hidden} route stays chrome-less).
+  if gRoutes.hasKey(win):
+    let s = gRoutes[win]
+    if s.entries.len > 0:
+      return s.entries[s.cur].chrome
     else:
       return ""
   else:

@@ -204,6 +204,12 @@ extern void zapp_ios_toolbar_stamp_vc(void* window_ptr, UIViewController* vc);
 // the didShow re-stamp can rebuild the bar even when the item arrays/title
 // are pointer-identical to what's already there (defined in ios/toolbar.m).
 extern void zapp_ios_toolbar_stamp_vc_force(void* window_ptr, UIViewController* vc, BOOL force);
+// R2' (#771 T8): store per-VC chrome (route title + optional toolbar-override
+// entry built from wire JSON) on a route VC BEFORE it is pushed, so the first
+// willShow stamp already applies it (defined in ios/toolbar.m).
+extern void zapp_ios_toolbar_set_vc_chrome(void* window_ptr, UIViewController* vc,
+                                           const char* title, const char* toolbar_json,
+                                           int32_t host_slot);
 // #771 G1 fix B: does this window currently have a toolbar registered?
 // (ios/toolbar.m entry registry — the source of truth). willShow's visibility
 // rule gates the content VC's bar on this, so a window whose toolbar was
@@ -567,9 +573,14 @@ void zapp_ios_push_route_vc(int32_t windowId, const char* url, const char* chrom
     vc.view.backgroundColor = UIColor.systemBackgroundColor;
 
     // R2' per-route chrome: parse the compact options JSON the Nim push arm
-    // forwarded. Absent/empty → all defaults. This build understands ONLY
-    // navbarHidden; title/toolbarJson extend it (Task 8).
+    // forwarded. Absent/empty → all defaults. Keys (#771 T8):
+    //   navbarHidden (BOOL)   → ZappRouteVC.navbarHidden (bar visibility rule)
+    //   title (NSString)      → per-VC route title (stamped at willShow)
+    //   toolbarJson (NSString)→ serialized {"items":[...]} wire JSON — builds
+    //                           a per-VC toolbar-override entry
     BOOL navbarHidden = NO;
+    NSString* chromeTitle = nil;
+    NSString* chromeToolbarJson = nil;
     if (chrome_json && chrome_json[0]) {
         NSData* cd = [[NSString stringWithUTF8String:chrome_json]
                          dataUsingEncoding:NSUTF8StringEncoding];
@@ -584,6 +595,10 @@ void zapp_ios_push_route_vc(int32_t windowId, const char* url, const char* chrom
             if ([chrome isKindOfClass:[NSDictionary class]]) {
                 if ([chrome[@"navbarHidden"] isKindOfClass:[NSNumber class]])
                     navbarHidden = [chrome[@"navbarHidden"] boolValue];
+                if ([chrome[@"title"] isKindOfClass:[NSString class]])
+                    chromeTitle = chrome[@"title"];
+                if ([chrome[@"toolbarJson"] isKindOfClass:[NSString class]])
+                    chromeToolbarJson = chrome[@"toolbarJson"];
             }
         }
     }
@@ -683,8 +698,14 @@ void zapp_ios_push_route_vc(int32_t windowId, const char* url, const char* chrom
     }
 
     // Toolbar items are stamped by the nav delegate (zapp_ios_toolbar_stamp_vc
-    // at willShow/didShow) — defs-as-truth, displayed-VC stamping. Nothing to
-    // do at push time.
+    // at willShow/didShow) — defs-as-truth, displayed-VC stamping.
+
+    // R2' (#771 T8): store per-VC chrome before the push so the first willShow
+    // (which fires inside pushViewController:) already stamps it.
+    zapp_ios_toolbar_set_vc_chrome(win, vc,
+        chromeTitle ? chromeTitle.UTF8String : NULL,
+        chromeToolbarJson ? chromeToolbarJson.UTF8String : NULL,
+        windowId);
 
     [nav pushViewController:vc animated:YES];
 }

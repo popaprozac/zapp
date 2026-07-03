@@ -716,17 +716,23 @@ proc routeWindowAction(action: string, a: JsonNode, rawWindowId: int, payload: s
       c_fprintf(cstderr_nav, "[zapp-nav] router_action=push target=%d url=%s\n".cstring,
                 target.cint, url.cstring)
       c_fflush(cstderr_nav)
-      routerPush(target, url, params)
+      # R2' per-route chrome (#771 T8): collect push options into one compact
+      # JSON object. Keys: navbarHidden, title, toolbarJson. Built BEFORE
+      # routerPush so routerstate persists it per entry — router:forward
+      # replays the stored chrome when the entry is re-entered. Platform-
+      # neutral build (pure JSON); only the seam call below is iOS-gated.
+      var chrome = newJObject()
+      let navbar = a{"navbar"}
+      if not navbar.isNil and navbar.kind == JObject:
+        chrome["navbarHidden"] = newJBool(navbar{"hidden"}.getBool(false))
+      if a.hasKey("title") and a["title"].kind == JString:
+        chrome["title"] = a["title"]
+      if a.hasKey("toolbarJson") and a["toolbarJson"].kind == JString:
+        chrome["toolbarJson"] = a["toolbarJson"]
+      let chromeStr = (if chrome.len > 0: $chrome else: "")
+      routerPush(target, url, params, chromeStr)
       emitRouteChanged(target, "push")
       when defined(zappIos):
-        # R2' per-route chrome: forward push options to the native seam as one
-        # compact JSON object. Keys this build understands: navbarHidden
-        # (title/toolbarJson land with the full push-options work).
-        var chrome = newJObject()
-        let navbar = a{"navbar"}
-        if not navbar.isNil and navbar.kind == JObject:
-          chrome["navbarHidden"] = newJBool(navbar{"hidden"}.getBool(false))
-        let chromeStr = (if chrome.len > 0: $chrome else: "")
         zapp_ios_push_route_vc(target, url.cstring, chromeStr.cstring)
     of "router:pop":
       # [zapp-nav] diagnostic: pop arm
@@ -747,10 +753,14 @@ proc routeWindowAction(action: string, a: JsonNode, rawWindowId: int, payload: s
         # (no pop_from_native misfire), identical to the push flow.
         when defined(zappIos):
           let fwdUrl = routerCurrentUrl(target)   # new current = the forward entry
-          # Forward re-enters with DEFAULT chrome ("" = all defaults): routerstate
-          # does not persist per-entry push options, so a forward into a
-          # navbar:{hidden} route re-shows the bar (Task 8 may persist options).
-          zapp_ios_push_route_vc(target, fwdUrl.cstring, "".cstring)
+          # R2' (#771 T8): forward re-enters the entry with the SAME chrome it
+          # was pushed with — routerstate persists chrome_json per entry, so a
+          # back-then-forward onto a navbar:{hidden} route re-enters chrome-less
+          # (and a titled/toolbar-override route keeps its chrome). Single-step
+          # contract: routerForward advanced the cursor by exactly one, so this
+          # pushes exactly one VC per forward call.
+          let fwdChrome = routerCurrentChrome(target)
+          zapp_ios_push_route_vc(target, fwdUrl.cstring, fwdChrome.cstring)
     of "router:replace":
       let url = a{"url"}.getStr("")
       let params = (if a.hasKey("params"): $a["params"] else: "")

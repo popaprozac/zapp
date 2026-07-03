@@ -73,6 +73,13 @@ static double zapp_nav_now(void) {
 // address is irrelevant; 0 is conventional.
 static const char kZappToolbarButtonTargetKey = 0;
 static const char kZappToolbarToggleTargetKey = 0;
+// R2' (#771 T8) per-VC route chrome, set by zapp_ios_toolbar_set_vc_chrome:
+//   kZappRouteToolbarEntryKey → ZappIOSToolbarEntry* toolbar OVERRIDE for the
+//     route VC (replaces the window entry wholesale at stamp time; nil = fall
+//     back to the window defs).
+//   kZappRouteTitleKey → NSString* route title (wins over entry.centerTitle).
+static const char kZappRouteToolbarEntryKey = 0;
+static const char kZappRouteTitleKey = 0;
 
 extern WKWebView* zapp_ios_content_webview_for_slot(int32_t slot);
 extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
@@ -558,7 +565,17 @@ static void zapp_ios_toolbar_stamp_items_force(UIViewController* vc,
                                                ZappIOSToolbarEntry* entry,
                                                BOOL includeToggleSidebar,
                                                BOOL force) {
-    if (!vc || !entry) return;
+    if (!vc) return;
+    // R2' (#771 T8): a per-VC toolbar override replaces the window entry
+    // WHOLESALE. Resolved here — the single choke point — so every apply
+    // path (willShow/didShow stamp_vc, apply_to_nav on collapse/expand,
+    // set_items re-apply landing on a route top) is override-aware and can
+    // never clobber a route's own items with the window defs. No-op when the
+    // caller already resolved the override (stamp_vc_force) — same object.
+    ZappIOSToolbarEntry* vcOverride =
+        objc_getAssociatedObject(vc, &kZappRouteToolbarEntryKey);
+    if (vcOverride) entry = vcOverride;
+    if (!entry) return;
     NSArray<UIBarButtonItem*>* leading = includeToggleSidebar
         ? entry.leadingItems
         : entry.leadingNoToggle;
@@ -580,11 +597,19 @@ static void zapp_ios_toolbar_stamp_items_force(UIViewController* vc,
     NSArray* newTrail = entry.trailingItems ?: @[];
     BOOL leadSame  = [(vc.navigationItem.leftBarButtonItems  ?: @[]) isEqualToArray:newLead];
     BOOL trailSame = [(vc.navigationItem.rightBarButtonItems ?: @[]) isEqualToArray:newTrail];
+    // R2' (#771 T8): a per-VC route title wins over the entry's center label
+    // (and suppresses the entry's titleView — the title owns the center slot).
+    // Resolved BEFORE the idempotence guard so titleSame is computed against
+    // what this stamp actually wants to display; folding it in afterwards
+    // would make every guarded stamp of a titled route churn nil→routeTitle.
+    NSString* routeTitle = objc_getAssociatedObject(vc, &kZappRouteTitleKey);
+    NSString* wantTitle    = routeTitle.length ? routeTitle : entry.centerTitle;
+    UIView*   wantTitleView = routeTitle.length ? nil : entry.centerView;
     NSString* curTitle = vc.navigationItem.title;
-    BOOL titleSame = (curTitle == entry.centerTitle) ||
-                     (curTitle && entry.centerTitle &&
-                      [curTitle isEqualToString:entry.centerTitle]);
-    BOOL titleViewSame = (vc.navigationItem.titleView == entry.centerView);
+    BOOL titleSame = (curTitle == wantTitle) ||
+                     (curTitle && wantTitle &&
+                      [curTitle isEqualToString:wantTitle]);
+    BOOL titleViewSame = (vc.navigationItem.titleView == wantTitleView);
     // [zapp-nav] G1-F diagnostic: THE choke point — every item-assignment pass
     // funnels here. leadSame/trailSame report whether this pass is a content
     // no-op (assigning what the navigationItem already holds) or a real swap;
@@ -603,8 +628,8 @@ static void zapp_ios_toolbar_stamp_items_force(UIViewController* vc,
         vc.navigationItem.leftBarButtonItems  = newLead;
         vc.navigationItem.rightBarButtonItems = newTrail;
     }
-    if (force || !titleSame)     vc.navigationItem.title = entry.centerTitle;    // nil clears it
-    if (force || !titleViewSame) vc.navigationItem.titleView = entry.centerView; // nil clears it
+    if (force || !titleSame)     vc.navigationItem.title = wantTitle;    // nil clears it
+    if (force || !titleViewSame) vc.navigationItem.titleView = wantTitleView; // nil clears it
     // E2 / #779 collapsible→enabled wiring (live read at stamp time). These
     // are property writes on the SHARED UIBarButtonItem instances — they must
     // run even when the assignments above are skipped (a skip means the bar
@@ -655,50 +680,20 @@ static void zapp_ios_toolbar_apply_to_nav(UINavigationController* nav,
     // willShowViewController: (routing.m). Do NOT touch navigationBarHidden here.
 }
 
-// ─── darwin_toolbar_set_items ────────────────────────────────────────────────
+// ─── zapp_ios_toolbar_populate_entry (internal) ──────────────────────────────
 //
-// Mirrors darwin/toolbar.m's darwin_toolbar_set_items adapted to UIKit.
-// Main path:
-//   1. Resolve the content UINavigationController via
-//      zapp_ios_content_nav_for_window. Nil → no-op (no-sidebar window deferred).
-//   2. Parse toolbar_json (root.items array).
-//   3. Bucket items into leading / center / trailing UIBarButtonItem arrays.
-//      Separate leading into: leadingItems (full, with toggleSidebar) and
-//      leadingNoToggle (without toggleSidebar, for expanded/iPad de-dup).
-//   4. Store buckets in the registry entry.
-//   5. Delegate to zapp_ios_toolbar_apply_for_window to pick the correct
-//      nav controller (collapsed vs expanded) and apply items there.
-//   6. Call zapp_toolbar_inject_metrics.
-
-void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_t host_slot) {
-    if (!window_ptr || !toolbar_json || !toolbar_json[0]) return;
-    NSString* json = [NSString stringWithUTF8String:toolbar_json];
-    zapp_ios_toolbar_on_main(^{
-        // [zapp-nav] G1-F diagnostic: any JS-initiated setItems landing near a
-        // sidebar collapse shows up here (full bucket rebuild + re-apply).
-        fprintf(stderr, "[zapp-nav] t=%.3f set_items win=%p slot=%d\n",
-                zapp_nav_now(), window_ptr, (int)host_slot);
-        fflush(stderr);
-        UINavigationController* contentNav = zapp_ios_content_nav_for_window(window_ptr);
-        if (!contentNav) {
-            // No-sidebar window: deferred (T1 decision). Safe no-op.
-            return;
-        }
-
-        NSData* data = [json dataUsingEncoding:NSUTF8StringEncoding];
-        NSError* err = nil;
-        NSDictionary* root = [NSJSONSerialization JSONObjectWithData:data options:0 error:&err];
-        if (![root isKindOfClass:[NSDictionary class]]) {
-            NSLog(@"[zapp] iOS toolbar: invalid toolbarJson (%@) — setItems ignored",
-                  err ? err.localizedDescription : @"not an object");
-            return;
-        }
-        NSArray* items = [root[@"items"] isKindOfClass:[NSArray class]] ? root[@"items"] : @[];
-        if (items.count == 0) {
-            NSLog(@"[zapp] iOS toolbar: setItems with empty items array — ignored");
-            return;
-        }
-
+// R2' (#771 T8): builds all UIBarButtonItem buckets from a parsed wire `items`
+// array into `entry` — extracted verbatim from darwin_toolbar_set_items so
+// per-route toolbar overrides (zapp_ios_toolbar_set_vc_chrome) reuse the
+// IDENTICAL builder (same click targets, same id maps, same toggle capture).
+// The moved loop keeps its original (block-level) indentation so the
+// extraction reads as a pure move in the diff. Main thread only (both callers
+// already are).
+static void zapp_ios_toolbar_populate_entry(ZappIOSToolbarEntry* entry,
+                                            NSArray* items,
+                                            int32_t host_slot,
+                                            void* window_ptr) {
+    (void)window_ptr; // reserved — the loop reaches per-window state via host_slot only
         NSMutableArray<UIBarButtonItem*>* leading        = [NSMutableArray array];
         NSMutableArray<UIBarButtonItem*>* leadingNoToggle = [NSMutableArray array];
         // center: title string or titleView UILabel (only the last one wins).
@@ -1002,16 +997,6 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
             [allBuilt addObject:item];
         }
 
-        // Update the per-window registry with the parsed buckets.
-        if (!zapp_ios_toolbars) zapp_ios_toolbars = [NSMutableDictionary dictionary];
-        NSValue* key = [NSValue valueWithPointer:window_ptr];
-        ZappIOSToolbarEntry* entry = zapp_ios_toolbars[key];
-        if (!entry) {
-            entry = [[ZappIOSToolbarEntry alloc] init];
-            entry.hostSlot = host_slot;
-            entry.windowPtr = window_ptr;
-            zapp_ios_toolbars[key] = entry;
-        }
         entry.allItems        = allBuilt;
         entry.leadingItems    = [leading copy];
         entry.leadingNoToggle = [leadingNoToggle copy];
@@ -1023,6 +1008,62 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
         entry.centerView      = centerView;
         entry.itemsById       = itemsById;
         entry.segmentedById   = segmentedById;
+}
+
+// ─── darwin_toolbar_set_items ────────────────────────────────────────────────
+//
+// Mirrors darwin/toolbar.m's darwin_toolbar_set_items adapted to UIKit.
+// Main path:
+//   1. Resolve the content UINavigationController via
+//      zapp_ios_content_nav_for_window. Nil → no-op (no-sidebar window deferred).
+//   2. Parse toolbar_json (root.items array).
+//   3. Get-or-create the registry entry, then build the leading /
+//      leadingNoToggle / center / trailing buckets + id maps into it via
+//      zapp_ios_toolbar_populate_entry (shared with per-route overrides, R2').
+//   4. Apply to the live nav's top VC (zapp_ios_toolbar_apply_to_nav) + run
+//      the attach primer.
+//   5. Call zapp_toolbar_inject_metrics.
+
+void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_t host_slot) {
+    if (!window_ptr || !toolbar_json || !toolbar_json[0]) return;
+    NSString* json = [NSString stringWithUTF8String:toolbar_json];
+    zapp_ios_toolbar_on_main(^{
+        // [zapp-nav] G1-F diagnostic: any JS-initiated setItems landing near a
+        // sidebar collapse shows up here (full bucket rebuild + re-apply).
+        fprintf(stderr, "[zapp-nav] t=%.3f set_items win=%p slot=%d\n",
+                zapp_nav_now(), window_ptr, (int)host_slot);
+        fflush(stderr);
+        UINavigationController* contentNav = zapp_ios_content_nav_for_window(window_ptr);
+        if (!contentNav) {
+            // No-sidebar window: deferred (T1 decision). Safe no-op.
+            return;
+        }
+
+        NSData* data = [json dataUsingEncoding:NSUTF8StringEncoding];
+        NSError* err = nil;
+        NSDictionary* root = [NSJSONSerialization JSONObjectWithData:data options:0 error:&err];
+        if (![root isKindOfClass:[NSDictionary class]]) {
+            NSLog(@"[zapp] iOS toolbar: invalid toolbarJson (%@) — setItems ignored",
+                  err ? err.localizedDescription : @"not an object");
+            return;
+        }
+        NSArray* items = [root[@"items"] isKindOfClass:[NSArray class]] ? root[@"items"] : @[];
+        if (items.count == 0) {
+            NSLog(@"[zapp] iOS toolbar: setItems with empty items array — ignored");
+            return;
+        }
+
+        // Update the per-window registry with the parsed buckets.
+        if (!zapp_ios_toolbars) zapp_ios_toolbars = [NSMutableDictionary dictionary];
+        NSValue* key = [NSValue valueWithPointer:window_ptr];
+        ZappIOSToolbarEntry* entry = zapp_ios_toolbars[key];
+        if (!entry) {
+            entry = [[ZappIOSToolbarEntry alloc] init];
+            entry.hostSlot = host_slot;
+            entry.windowPtr = window_ptr;
+            zapp_ios_toolbars[key] = entry;
+        }
+        zapp_ios_toolbar_populate_entry(entry, items, host_slot, window_ptr);
 
         // Apply directly to the live content nav's top VC. Resolve the nav via
         // the split's content VC (works on both collapsed iPhone and expanded iPad).
@@ -1270,11 +1311,21 @@ void zapp_ios_toolbar_apply_for_window(void* window_ptr) {
 // interactive-swipe recovery path); willShow keeps calling the guarded
 // zapp_ios_toolbar_stamp_vc wrapper below (force=NO).
 void zapp_ios_toolbar_stamp_vc_force(void* window_ptr, UIViewController* vc, BOOL force) {
-    if (!window_ptr || !vc || !zapp_ios_toolbars) return;
+    if (!window_ptr || !vc) return;
     NSCAssert([NSThread isMainThread],
               @"zapp_ios_toolbar_stamp_vc must be called on the main thread");
-    NSValue* key = [NSValue valueWithPointer:window_ptr];
-    ZappIOSToolbarEntry* entry = zapp_ios_toolbars[key];
+    ZappIOSToolbarEntry* entry = nil;
+    if (zapp_ios_toolbars) {
+        NSValue* key = [NSValue valueWithPointer:window_ptr];
+        entry = zapp_ios_toolbars[key];
+    }
+    // R2' (#771 T8): a per-VC toolbar override replaces the window entry
+    // wholesale (falls back to the window defs when absent). Resolved here —
+    // not just in stamp_items_force — so a window with NO registered toolbar
+    // but a route WITH one still stamps (the old !zapp_ios_toolbars bail
+    // above would have skipped it).
+    ZappIOSToolbarEntry* override = objc_getAssociatedObject(vc, &kZappRouteToolbarEntryKey);
+    if (override) entry = override;
     if (!entry) return;
     BOOL collapsed = zapp_ios_split_is_collapsed_for_window(window_ptr);
     BOOL includeToggle = collapsed
@@ -1287,6 +1338,42 @@ void zapp_ios_toolbar_stamp_vc_force(void* window_ptr, UIViewController* vc, BOO
 // the willShow stamp in routing.m.
 void zapp_ios_toolbar_stamp_vc(void* window_ptr, UIViewController* vc) {
     zapp_ios_toolbar_stamp_vc_force(window_ptr, vc, NO);
+}
+
+// ─── zapp_ios_toolbar_set_vc_chrome ──────────────────────────────────────────
+//
+// R2' (#771 T8): store per-VC chrome on a pushed route VC — an optional route
+// title and an optional toolbar-override entry built from the same wire JSON
+// shape as darwin_toolbar_set_items. The stamping choke point reads both:
+// the override entry replaces the window entry wholesale; the title overrides
+// entry.centerTitle. NULL title / NULL toolbar_json clear. Called by
+// routing.m before the push (so the first willShow already sees it).
+// Main thread only (the push seam runs on it).
+void zapp_ios_toolbar_set_vc_chrome(void* window_ptr, UIViewController* vc,
+                                    const char* title, const char* toolbar_json,
+                                    int32_t host_slot) {
+    if (!vc) return;
+    objc_setAssociatedObject(vc, &kZappRouteTitleKey,
+        (title && title[0]) ? [NSString stringWithUTF8String:title] : nil,
+        OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    ZappIOSToolbarEntry* override = nil;
+    if (toolbar_json && toolbar_json[0]) {
+        NSData* data = [[NSString stringWithUTF8String:toolbar_json]
+                           dataUsingEncoding:NSUTF8StringEncoding];
+        NSDictionary* root = data
+            ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil]
+            : nil;
+        NSArray* items = ([root isKindOfClass:[NSDictionary class]] &&
+                          [root[@"items"] isKindOfClass:[NSArray class]]) ? root[@"items"] : nil;
+        if (items.count > 0) {
+            override = [[ZappIOSToolbarEntry alloc] init];
+            override.hostSlot = host_slot;
+            override.windowPtr = window_ptr;
+            zapp_ios_toolbar_populate_entry(override, items, host_slot, window_ptr);
+        }
+    }
+    objc_setAssociatedObject(vc, &kZappRouteToolbarEntryKey, override,
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
 // ─── darwin_toolbar_update_item ──────────────────────────────────────────────

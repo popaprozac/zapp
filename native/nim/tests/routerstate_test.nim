@@ -90,6 +90,38 @@ doAssert routerCurrentParams(10) == "", "after clear: params is empty"
 doAssert not routerCanGoBack(10), "after clear: no back"
 doAssert not routerCanGoForward(10), "after clear: no forward"
 
+# --- chrome persistence (R2' #771 T8) ----------------------------------------
+# Window 11: push with chrome JSON → persisted; pop/forward replay it.
+block:
+  routerSeed(11, "/")
+  doAssert routerCurrentChrome(11) == "", "seed entry has no chrome"
+  routerPush(11, "/clean", "", "{\"navbarHidden\":true}")
+  doAssert routerCurrentChrome(11) == "{\"navbarHidden\":true}", "push stores chrome"
+  discard routerPop(11)
+  doAssert routerCurrentChrome(11) == "", "pop: back to the chrome-less seed"
+  discard routerForward(11)
+  doAssert routerCurrentChrome(11) == "{\"navbarHidden\":true}",
+    "forward replays the entry's push-time chrome"
+
+# Window 12: default param (old 3-arg call shape) stores "" chrome; push after
+# pop truncates the forward entry's chrome along with the entry.
+block:
+  routerSeed(12, "/")
+  routerPush(12, "/a", "")                              # no chrome arg → ""
+  doAssert routerCurrentChrome(12) == "", "3-arg push stores empty chrome"
+  routerPush(12, "/b", "", "{\"title\":\"B\"}")
+  discard routerPop(12)
+  routerPush(12, "/c", "")                              # truncates /b (and its chrome)
+  doAssert routerCurrentChrome(12) == "", "truncating push drops stale chrome"
+  doAssert not routerCanGoForward(12), "forward truncated"
+
+# Window 13: replace resets chrome (options are push-only by contract).
+block:
+  routerSeed(13, "/")
+  routerPush(13, "/x", "", "{\"title\":\"X\"}")
+  routerReplace(13, "/y", "")
+  doAssert routerCurrentChrome(13) == "", "replace resets chrome to defaults"
+
 # --- routerDepth + router_current_url (N3a iOS read accessors) ---------------
 block:
   routerSeed(901, "/")

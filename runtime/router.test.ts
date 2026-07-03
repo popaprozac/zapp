@@ -26,10 +26,17 @@ interface MockBridge {
 
 let mock: MockBridge;
 
+// Listener store shared across per-test mock instances. window.ts wires its
+// one-shot global handlers (wireToolbarClicks etc.) on the bridge that is
+// current at FIRST registration and never re-wires (module-scope flags), so a
+// fresh listeners record per test would strand those handlers on a dead mock.
+// Handlers self-filter by windowId; tests use unique ids, so sharing is safe.
+const persistentListeners: Record<string, Array<(data: unknown) => void>> = {};
+
 beforeEach(() => {
   mock = {
     posts: [],
-    listeners: {},
+    listeners: persistentListeners,
     invokes: [],
     invokeResult: undefined,
     on(name, handler) {
@@ -131,6 +138,42 @@ describe("router handle ops post correct wire messages", () => {
     const msg = JSON.parse(mock.posts[0]);
     expect(msg.m).toBe("router:push");
     expect(msg.a.navbar).toEqual({ hidden: true });
+  });
+
+  test("push({url, toolbar}) serializes toolbarJson (actions stripped) and forwards title", () => {
+    const win = createWindowHandle("win-10");
+    win.router.push({
+      url: "/detail",
+      title: "Detail",
+      toolbar: [{ id: "d-share", icon: "sf:square.and.arrow.up", label: "Share", action: () => {} }],
+    });
+    const msg = JSON.parse(mock.posts[0]);
+    expect(msg.m).toBe("router:push");
+    expect(msg.a.title).toBe("Detail");
+    expect(typeof msg.a.toolbarJson).toBe("string");
+    const wire = JSON.parse(msg.a.toolbarJson);
+    expect(wire.items.length).toBe(1);
+    expect(wire.items[0].id).toBe("d-share");
+    expect(wire.items[0].action).toBeUndefined();   // stripped
+    expect(wire.style).toBeUndefined();             // push never sends style
+  });
+
+  test("push toolbar actions dispatch on window:toolbar-clicked", () => {
+    let hits = 0;
+    // wireToolbarClicks' handler builds an ActionContext via Window.current(),
+    // which resolves the id from globalThis[Symbol.for("zapp.windowId")] — seed
+    // it so the handler doesn't bail in the mock env.
+    (globalThis as any)[Symbol.for("zapp.windowId")] = "win-11";
+    const win = createWindowHandle("win-11");
+    win.router.push({
+      url: "/detail",
+      toolbar: [{ id: "d-share", label: "Share", action: () => { hits++; } }],
+    });
+    // Fire the click exactly as native emits it (wireToolbarClicks subscribes
+    // to eventName(WindowEvent.TOOLBAR_CLICKED) === "window:toolbar-clicked").
+    mock.fire("window:toolbar-clicked", { windowId: "win-11", id: "d-share" });
+    expect(hits).toBe(1);
+    delete (globalThis as any)[Symbol.for("zapp.windowId")];
   });
 });
 

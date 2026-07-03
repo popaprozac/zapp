@@ -1183,6 +1183,15 @@ export interface RouteOptions {
    * `replace`.
    */
   navbar?: { hidden: boolean };
+  /**
+   * iOS native routing only: per-route toolbar override for the pushed view
+   * controller's nav bar. Falls back to the window's toolbar when absent.
+   * Same item defs as `toolbar.setItems` (actions are stripped + registered
+   * the same way). `updateItem` keeps targeting the WINDOW toolbar defs —
+   * override items are static for their route's lifetime (v1). Prefer item
+   * ids distinct from the window toolbar's.
+   */
+  toolbar?: ToolbarItemDef[];
 }
 
 /**
@@ -1424,8 +1433,11 @@ const routerState = new Map<string, { url: string; params: Record<string, unknow
 /** Windows whose ROUTE_CHANGED bridge listener is already registered. */
 const routerWired = new Set<string>();
 
-/** Create a RouterHandle that caches route state from ROUTE_CHANGED events. */
-function createRouterHandle(windowId: string): RouterHandle {
+/** Create a RouterHandle that caches route state from ROUTE_CHANGED events.
+ *  `hasSidebar`/`hasInspector` describe the window's pane shape so a
+ *  per-route `toolbar` override (R2′ #771) validates pane-dependent items
+ *  exactly like `toolbar.setItems` does. */
+function createRouterHandle(windowId: string, hasSidebar = false, hasInspector = false): RouterHandle {
   // Seed with defaults on first creation; leave alone if already seeded.
   if (!routerState.has(windowId)) {
     routerState.set(windowId, { url: "", params: null, canGoBack: false, canGoForward: false, version: 0 });
@@ -1467,6 +1479,29 @@ function createRouterHandle(windowId: string): RouterHandle {
   return {
     push(opts: RouteOptions | string): void {
       const o = typeof opts === "string" ? { url: opts } : opts;
+      // R2′ (#771): a per-route toolbar override serializes through the SAME
+      // normalizeToolbar pipeline as toolbar.setItems (actions stripped +
+      // registered), but WITHOUT purging — route overrides register
+      // additively so the window toolbar's own actions survive the route.
+      let toolbarJson: string | undefined;
+      if (o.toolbar !== undefined) {
+        const { json, actions, menuActions, menuIdsByItem, menuTrees } =
+          normalizeToolbar({ items: o.toolbar }, hasSidebar, hasInspector);
+        const parsed = JSON.parse(json);
+        delete parsed.style;               // per-route override never carries style
+        toolbarJson = JSON.stringify(parsed);
+        if (actions.size > 0) {
+          wireToolbarClicks();
+          wireToolbarGroupSelect();
+          for (const [id, fn] of actions) toolbarActions.set(`${windowId}:${id}`, fn);
+        }
+        if (menuActions.size > 0) {
+          wireToolbarMenuClicks();
+          for (const [mid, fn] of menuActions) toolbarMenuActions.set(mid, fn);
+        }
+        recordToolbarMenuIds(windowId, menuIdsByItem, toolbarMenuIdsByWindow);
+        for (const [itemId, tree] of menuTrees) recordToolbarMenuTree(windowId, itemId, tree);
+      }
       windowAction("router:push", {
         windowId,
         url: o.url,
@@ -1474,6 +1509,7 @@ function createRouterHandle(windowId: string): RouterHandle {
         ...(o.params !== undefined ? { params: o.params } : {}),
         ...(o.presentation !== undefined ? { presentation: o.presentation } : {}),
         ...(o.navbar !== undefined ? { navbar: o.navbar } : {}),
+        ...(toolbarJson !== undefined ? { toolbarJson } : {}),
       });
     },
     pop(): void        { windowAction("router:pop",       { windowId }); },
@@ -1572,7 +1608,7 @@ export function createWindowHandle(windowId: string, sidebarOpts?: SidebarOption
       ? createInspectorHandle(windowId, inspectorOpts.collapsed ?? false, inspectorOpts.width ?? 280)
       : undefined,
 
-    router: createRouterHandle(windowId),
+    router: createRouterHandle(windowId, sidebarOpts !== undefined, inspectorOpts !== undefined),
 
     toolbar: {
       setItems(items: ToolbarItemDef[], setOpts?: { style?: "unified" | "unifiedCompact" | "expanded" }) {
