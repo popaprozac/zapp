@@ -1,4 +1,6 @@
-// iOS native routing — idiomatic UIKit seam (R1' RISK GATE, Task 1+2).
+// iOS native routing — idiomatic UIKit seam, default-on for iOS windows.
+// (Formerly gated behind the N3a `nativeRouting` opt-in flag; the gate
+// retired in R3' — #771 — once the split-view path proved out end to end.)
 //
 // Drives the LIVE content-nav (contentVC.navigationController) directly:
 //   push → [nav pushViewController:vc animated:YES]
@@ -30,7 +32,6 @@
 
 // --- Nim/native externs ---
 extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
-extern bool zapp_window_native_routing(int32_t window_id);
 extern int router_depth(int32_t win);
 extern void zapp_router_pop_from_native(int32_t window_id);
 // Per-route identity: set the route url just before create_ext mints the route
@@ -557,7 +558,6 @@ void zapp_ios_route_install_nav_delegate(UINavigationController* nav, int32_t wi
 // --- Push seam ------------------------------------------------------------
 
 void zapp_ios_push_route_vc(int32_t windowId, const char* url, const char* chrome_json) {
-    if (!zapp_window_native_routing(windowId)) return;   // opt-in gate (retired in R3')
     void* win = darwin_window_get_by_numeric_id(windowId);
     if (!win) return;
     UINavigationController* nav = zapp_route_content_nav(win);

@@ -191,14 +191,6 @@ export interface WindowOptions {
    */
   grabber?: boolean;
   /**
-   * iOS only: opt this window into native UINavigationController routing —
-   * `router.push` materializes a real pushed view controller (own webview,
-   * native slide-in + edge swipe-back) instead of in-window content-swap.
-   * Default `false`. macOS/Windows ignore it (desktop stays in-window nav).
-   * N3a risk-gate seed of the future `presentation: "route"` API.
-   */
-  nativeRouting?: boolean;
-  /**
    * Per-button state for the macOS traffic lights. Takes precedence over
    * the legacy `closable` / `minimizable` / `maximizable` booleans (those
    * remain as sugar: `false` maps to the corresponding button's

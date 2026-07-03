@@ -136,9 +136,10 @@ export function renderMainPane(app: HTMLElement) {
     }).catch(() => { /* best-effort restore */ });
   }
 
-  // N3a demo: on iOS (nativeRouting:true) this pushes a real native VC;
-  // on macOS it's an in-window route (N2b). Isolated from the section nav —
-  // lives in demoStrip, outside stage, so section renders don't clear it.
+  // N3a demo: on iOS this pushes a real native VC (native routing is
+  // default-on, #771 R3'); on macOS it's an in-window route (N2b). Isolated
+  // from the section nav — lives in demoStrip, outside stage, so section
+  // renders don't clear it.
   // R2' (#771 T8): the push carries per-route chrome — a `title` (stamped as
   // the pushed VC's navigationItem.title) and a `toolbar` override that
   // REPLACES the window toolbar for this route only (falls back on pop).
