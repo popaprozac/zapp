@@ -153,48 +153,35 @@ static void zapp_route_vc_teardown(ZappRouteVC* vc);
     [super viewWillAppear:animated];
     UINavigationController* nav = self.navigationController;
     if (!nav) return;
-    // #782 fix (G1 issue 2): skip the imperative bar write while an INTERACTIVE
-    // transition is in flight. This fires when a CANCELLED swipe-back re-appears
-    // this route, and an imperative setNavigationBarHidden: during UIKit's
-    // cancel-reversal SNAPS instead of animating (it isn't coupled to the
-    // reversal). The viewWillDisappear coordinator dance below owns the bar for
-    // that path. On a normal (non-interactive) push the guard passes and this
-    // hides the chrome-less bar as before.
+    if (nav.navigationBarHidden == self.navbarHidden) return;   // already correct — nothing to do
+    // #782 fix (G1 issue 2, fixes #784 residual 2): route the bar change through
+    // the transition coordinator. The probe proved the failure: on a CANCELLED
+    // swipe-back this route re-appears with a NON-interactive completion
+    // coordinator (interactive=0), so an imperative setNavigationBarHidden: here
+    // SNAPS the bar hidden — it isn't tied to UIKit's cancel-reversal.
+    // animateAlongsideTransition ties it to whatever transition is in flight: on
+    // CANCEL it rides the snap-back reversal (the destination's bar, shown during
+    // the swipe by the content VC's viewWillAppear, slides back out); on a normal
+    // PUSH it rides the push (the chrome-less bar animates out). Fall back to an
+    // imperative write only when there is NO coordinator (the very first appear).
+    BOOL hidden = self.navbarHidden;   // scalar capture — no self-retain (MRC)
     id<UIViewControllerTransitionCoordinator> tc = self.transitionCoordinator;
-    if (tc && tc.isInteractive) return;
-    if (nav.navigationBarHidden != self.navbarHidden)
-        [nav setNavigationBarHidden:self.navbarHidden animated:animated];
+    if (tc) {
+        [tc animateAlongsideTransition:^(id<UIViewControllerTransitionCoordinatorContext> ctx) {
+            (void)ctx;
+            [nav setNavigationBarHidden:hidden animated:YES];
+        } completion:nil];
+    } else {
+        [nav setNavigationBarHidden:hidden animated:animated];
+    }
 }
 
-// #782 fix (G1 issue 2, fixes #784 residual 2): cancelled-swipe bar slide.
-// Only a chrome-less route (navbarHidden=YES) needs this: it hid its own bar, so
-// the VC it pops back to (content / a chrome route) shows one and the shared bar
-// must transition. A route WITH a bar pops to content (also barred) — no
-// transition to coordinate. The bar reveal must live INSIDE the
-// animateAlongsideTransition BLOCK (spike DetailViewController.m:219-252), NOT a
-// completion: the block is coupled to the interactive pop, so on COMMIT the
-// destination keeps its bar and on CANCEL the coordinator REVERSES the block,
-// sliding the bar back out in lockstep with the swipe roll-back. An imperative
-// setNavigationBarHidden: from a completion or the re-appearing route's
-// viewWillAppear is NOT coupled to the reversal and SNAPS (the earlier
-// animated:YES completion still vanished instantly). The completion re-hides
-// WITHOUT animation only as a final-state cleanup — the block already animated it.
-- (void)viewWillDisappear:(BOOL)animated {
-    [super viewWillDisappear:animated];
-    if (!self.navbarHidden) return;
-    UINavigationController* nav = self.navigationController;
-    if (!nav) return;
-    id<UIViewControllerTransitionCoordinator> tc = self.transitionCoordinator;
-    if (!(tc && tc.isInteractive)) return;
-    [tc animateAlongsideTransition:^(id<UIViewControllerTransitionCoordinatorContext> ctx) {
-        (void)ctx;
-        [nav setNavigationBarHidden:NO animated:YES];   // reveal destination's bar, coordinator-coupled
-    } completion:^(id<UIViewControllerTransitionCoordinatorContext> ctx) {
-        if (ctx.isCancelled)
-            [nav setNavigationBarHidden:YES animated:NO]; // cleanup; block reversal already animated
-    }];
-}
-
+// #782 (G1 issue 2): the ZappRouteVC viewWillDisappear coordinator dance was
+// REMOVED. The probe proved it wasn't the effective actor — its block ran but
+// the re-appearing route's viewWillAppear (above) then imperatively overrode the
+// bar. viewWillAppear now owns the route's bar coordinator-coupled for BOTH
+// directions (push and cancel-reversal), so no disappear-side handling is needed;
+// the destination's own viewWillAppear owns ITS bar on a committed pop.
 - (void)viewDidDisappear:(BOOL)animated {
     [super viewDidDisappear:animated];
     // Self-teardown: brk-1 (stopLoading + nil delegates + remove "zapp" handler)
