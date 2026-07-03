@@ -1443,8 +1443,8 @@ win.toolbar.updateItem("inbox", { badge: null });
 ```
 
 **Clicks — the menu pattern.** A button click broadcasts
-`window:toolbar-clicked` with `{ windowId, id }` to every webview and
-worker. Two ways to consume the same emit:
+`window:toolbar-clicked` with `{ windowId, id }`. Two ways to consume the
+same emit:
 
 ```ts
 // 1. action callback — runs in the context that called Window.create
@@ -1455,6 +1455,12 @@ win.on(WindowEvent.TOOLBAR_CLICKED, ({ id }) => {
   if (id === "compose") startCompose();
 });
 ```
+
+**Reach.** On macOS this broadcasts to every webview and worker. On iOS it
+reaches the window's host content webview plus its sidebar/inspector panes
+only — not workers, and not a currently-pushed route webview (see
+[Toolbar (iOS)](#toolbar-ios) below and the route webview event-reach note in
+the Router section above).
 
 The `toggleSidebar` button needs no wiring: macOS routes it to the split
 view directly, and the existing `SIDEBAR_COLLAPSED` / `SIDEBAR_EXPANDED`
@@ -1590,9 +1596,23 @@ platforms. The sidebar webview receives `--zapp-toolbar-height: 0` (it sits
 outside the content nav controller).
 
 **Events.** Toolbar clicks (`window:toolbar-clicked`), segmented selection
-(`window:toolbar-group-selected`), and menu-item clicks reach all webview
-panes. Worker delivery of toolbar events is a **known iOS gap** — wire
-toolbar handlers from a webview pane for now.
+(`window:toolbar-group-selected`), and menu-item clicks reach the window's
+host content webview plus its sidebar/inspector panes — **not** a
+currently-pushed route webview. Worker delivery of toolbar events is a
+**known iOS gap** — wire toolbar handlers from a webview pane for now. A
+route page that needs a toolbar action should rely on the item's `action`
+callback (always delivered) rather than `win.on(WindowEvent.TOOLBAR_CLICKED, …)`.
+
+**Per-VC stamping.** The window's toolbar defs (`setItems`/`updateItem`) are
+the source of truth; the framework re-stamps whichever view controller is
+actually on screen on every native nav transition — push, pop, and user
+swipe-back alike — so `updateItem` always patches what the user currently
+sees, including immediately after a back-button tap or a cancelled swipe. A
+route pushed with its own `toolbar` override (see
+[`RouteOptions`](#routeoptions)) is the one exception: while that route is on
+top, `updateItem` keeps patching the **window** defs underneath, not the
+route's override (the override is static for the route's lifetime, v1) — the
+patch becomes visible again once the route pops.
 
 **Caveats and follow-ups.**
 
@@ -1876,18 +1896,21 @@ refresh.
 
 **Desktop vs iOS note:** On desktop, the router drives a logical history stack
 that tracks `canGoBack`/`canGoForward`. macOS/Windows use in-window content swap
-(see "Desktop in-window navigation" below). On iPhone, set `nativeRouting: true`
-to opt into the app-owned navigation stack described below.
+(see "Desktop in-window navigation" below). On iOS, native routing is the
+**default** — see below.
 
-#### iOS native routing — R1′ (idiomatic UISplitViewController)
+#### iOS native routing (default-on, idiomatic UISplitViewController)
 
-> **R1′ seam.** iOS sidebar windows now use a **single idiomatic
-> `UISplitViewController`** for both form factors. The R1 owned-nav fork and the
-> per-route-VC reconcile loop have been deleted. The API surface is unchanged;
-> the internals are now simpler and match UIKit's expected usage pattern.
+> **Settled shape (R1′→R3′).** iOS windows use a **single idiomatic
+> `UISplitViewController`** (or a hidden-primary split for inspector-only,
+> no-sidebar windows) for both form factors. The old owned-nav fork, the
+> per-route-VC reconcile loop, and the old opt-in window flag that used to
+> gate this behavior have all been deleted (#771 R3′) — native routing is now
+> the unconditional default wherever the content pane has a live navigation
+> controller. There is no window option to set.
 
-Set `nativeRouting: true` on a window to opt into platform-appropriate native
-routing:
+`router.push` materializes a native pushed view controller on **every iOS
+window whose content pane has a live `UINavigationController`**:
 
 - **iPhone (collapsed)** — the `UISplitViewController` collapses to a
   sidebar-first navigation stack. The sidebar section list is the root.
@@ -1899,17 +1922,23 @@ routing:
   stack collapses to root (`canGoBack === false`); pushed route webviews render
   their own fixed route and ignore subsequent `ROUTE_CHANGED` events.
 - **iPad (expanded)** — the `UISplitViewController` shows sidebar + content
-  side-by-side (unchanged from before R1′). `router.push` drives
-  `pushViewController:` on the content column's `UINavigationController`; native
-  back-button and edge-swipe work within the content column.
-- **macOS / Windows** — the flag is silently ignored; in-window content swap
+  side-by-side. `router.push` drives `pushViewController:` on the content
+  column's `UINavigationController`; native back-button and edge-swipe work
+  within the content column.
+- **Nav-less iOS windows** — a single-pane window with no sidebar and no
+  inspector has a lone root view controller and no navigation controller to
+  push onto. `router.push` is a silent native no-op there; the window keeps
+  the in-window `ROUTE_CHANGED` navigation described below (same model as
+  desktop).
+- **macOS / Windows** — always in-window content swap; native routing never
   applies.
 
 > **R2′ (shipped):** per-route chrome via `router.push` options — `title`,
 > `toolbar` override, `navbar: { hidden }` (see [`RouteOptions`](#routeoptions)
-> above). **Still deferred (R3′):** `--zapp-*` CSS variables injected from
-> `env()` on iOS (safe area insets already available via
-> `env(safe-area-inset-*)` today — use that idiom now).
+> above). **R3′ (shipped):** the opt-in window flag is retired — native
+> routing is default-on, as above. **Still deferred:** `--zapp-*` CSS
+> variables injected from `env()` on iOS (safe area insets already available
+> via `env(safe-area-inset-*)` today — use that idiom now).
 
 **Per-route identity pattern** (required for correctness):
 
@@ -1932,6 +1961,19 @@ if (Platform.isIOS && myRoute) {
   renderRoute(win.router.url);    // root / desktop: render current route
 }
 ```
+
+**Route webview event reach.** Each pushed route gets its own webview with its
+own bridge transport slot: `Services.invoke`/`invokeSync` and
+`router.on`/`WindowEvent.ROUTE_CHANGED` work from a route page exactly like
+anywhere else (this is what powers the back/fwd live-binding above and the
+per-route identity pattern's `router.current()` seeding). Window-scoped
+**chrome** events do **not** reach route webviews, though —
+`WindowEvent.TOOLBAR_CLICKED`, `window:toolbar-group-selected`, menu-item
+clicks, and sidebar/inspector collapse/expand events fan out only to the
+window's host content webview plus its sidebar/inspector panes, never to a
+currently-pushed route. A route page that needs to react to a toolbar click
+should rely on the item's `action` callback (always delivered to the pushing
+context) rather than `win.on(WindowEvent.TOOLBAR_CLICKED, …)`.
 
 **Lateral navigation** (sidebar to section on iPhone):
 
@@ -1979,10 +2021,11 @@ windows — that is iOS's model). Wire it like this:
 **iOS / single-window:** `Window.create(opts)` without `asSheetOf` is a no-op that
 returns the current window — **except** when `opts.url` is set, in which case it
 becomes an in-window `router.push({ url, title, presentation })` (iOS is
-single-window; use a sheet via `asSheetOf` for a modal surface). For native
-`UINavigationController` routing on iPhone, set `nativeRouting: true` (see
-[iOS native routing](#ios-native-routing--r1-idiomatic-uisplitviewcontroller)
-above).
+single-window; use a sheet via `asSheetOf` for a modal surface). That
+`router.push` call is the same one described above — it materializes a real
+native push whenever the current window's content pane has a live nav (see
+[iOS native routing](#ios-native-routing-default-on-idiomatic-uisplitviewcontroller)
+above); nav-less single-pane windows fall back to in-window content swap.
 
 #### `Window.get(id: string): WindowHandle`
 

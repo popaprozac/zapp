@@ -909,6 +909,11 @@ Events.on("file-drop", (d: any) => {
   framework auto-grants those paths through the FS allowlist so
   apps can `FS.readFile` them immediately. Most useful on iPad
   split-view; works on iPhone via long-press in Files.
+- **iOS routing (#771):** the drop interaction targets the webview of
+  whichever view controller is currently on screen — the route webview
+  while a native route is pushed, the window's content webview otherwise.
+  Drops follow the displayed page; a listener wired on a route page only
+  sees drops while that route is on top.
 
 ## Sync primitive — rate-limiting a resource
 
