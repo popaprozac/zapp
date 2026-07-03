@@ -1800,14 +1800,58 @@ win.on(WindowEvent.ROUTE_CHANGED, (e) => console.log(e.url));
 ```ts
 interface RouteOptions {
   url: string;
-  title?: string;                                       // hint for toolbar back-label (N2b)
+  title?: string;                                       // iOS: pushed VC's nav-bar title
   params?: Record<string, unknown>;                     // ephemeral — not in URL
   presentation?: "page" | "form" | "fullscreen" | "bottomSheet";  // iOS sheet style
+  navbar?: { hidden: boolean };                         // iOS: hide the nav bar for this route
+  toolbar?: ToolbarItemDef[];                           // iOS: per-route toolbar override
 }
 ```
 
 `push` and `replace` accept either a `RouteOptions` object or a plain string
 URL (`router.push("/path")` is equivalent to `router.push({ url: "/path" })`).
+
+**Per-route chrome (`title` / `toolbar` / `navbar`) — iOS native routing only.**
+These three options style the *pushed native view controller*; they are ignored
+on macOS/Windows (in-window SPA swap is unchanged) and by `replace` (options
+are push-only). Chrome is persisted per history entry: going back and then
+`forward()` re-enters the route with the same chrome it was pushed with.
+
+- **`title`** — becomes the pushed view controller's `navigationItem.title`.
+  It wins over any `label`-type center item from the window toolbar for the
+  route's lifetime.
+- **`navbar: { hidden: true }`** — hides the native navigation bar for this
+  route (bring-your-own-chrome pages). **Edge swipe-back keeps working** — the
+  framework owns and re-arms the pop gesture independently of bar visibility
+  (and on iOS 26+ also enables the full-screen content pop for hidden-bar
+  routes).
+- **`toolbar`** — a per-route toolbar override for the pushed view
+  controller's nav bar. Takes the same item defs as `toolbar.setItems`
+  (actions are stripped and registered the same way, additively — the window
+  toolbar's own actions survive the route). The override **replaces the window
+  toolbar wholesale** while the route is on top and **falls back to the window
+  defs when absent** (and again after the route pops). `style` is never sent —
+  the route rides the existing bar. Notes:
+  - `toolbar.updateItem` keeps targeting the **window** toolbar defs — the
+    displayed instance it patches is the window bar; override items are static
+    for their route's lifetime (v1). Prefer item ids distinct from the window
+    toolbar's.
+  - Pane-dependent items (`toggleSidebar`, `toggleInspector`,
+    `trackingSeparator`) validate against the pushing handle's pane shape,
+    exactly like `setItems`.
+
+```ts
+Window.current().router.push({
+  url: "/detail",
+  title: "Detail",
+  toolbar: [
+    { id: "d-share", icon: "sf:square.and.arrow.up", label: "Share",
+      placement: "trailing", action: () => share() },
+  ],
+});
+// …or a chrome-less page (the page brings its own back affordance):
+Window.current().router.push({ url: "/clean", navbar: { hidden: true } });
+```
 
 **URL vs params durability:** The URL is the durable, bookmarkable identity of
 a route. `params` are ephemeral — they are not encoded in the URL and are lost
@@ -1846,10 +1890,11 @@ routing:
 - **macOS / Windows** — the flag is silently ignored; in-window content swap
   applies.
 
-> **Coming in R2′/R3′ (deferred):** per-view chrome opt-out (`{toolbar: false}`,
-> per-route `title`); `--zapp-*` CSS variables injected from `env()` on iOS (safe
-> area insets already available via `env(safe-area-inset-*)` today — use that
-> idiom now).
+> **R2′ (shipped):** per-route chrome via `router.push` options — `title`,
+> `toolbar` override, `navbar: { hidden }` (see [`RouteOptions`](#routeoptions)
+> above). **Still deferred (R3′):** `--zapp-*` CSS variables injected from
+> `env()` on iOS (safe area insets already available via
+> `env(safe-area-inset-*)` today — use that idiom now).
 
 **Per-route identity pattern** (required for correctness):
 
