@@ -99,7 +99,7 @@ extern void zapp_ios_toolbar_apply_for_window_hidden(void* window_ptr, BOOL side
 // transport slot; both resolve to the same host UIWindow via
 // darwin_window_get_by_numeric_id, so the host-window key catches both.
 
-@interface ZappIOSSidebarController : NSObject <UISplitViewControllerDelegate, UIGestureRecognizerDelegate>
+@interface ZappIOSSidebarController : NSObject <UISplitViewControllerDelegate>
 @property (nonatomic, weak) UISplitViewController* splitVC;
 @property (nonatomic, weak) UIViewController* sidebarVC;   // primary column content
 @property (nonatomic, weak) UIViewController* contentVC;   // secondary column content
@@ -420,8 +420,7 @@ static UINavigationController* zapp_ios_collapsed_nav(UISplitViewController* svc
 
 // Re-arm the interactive-pop (swipe-back) gesture on the combined collapsed nav.
 // A hidden nav bar disables this gesture by default, so on chrome-less iPhone we
-// re-enable it and route it through our delegate (which gates it to "only when
-// there's something to pop"). Idempotent — safe to call repeatedly.
+// re-enable it. Idempotent — safe to call repeatedly.
 //
 // Called from BOTH `splitViewControllerDidCollapse:` AND
 // `darwin_sidebar_show_content`: on iPhone the split is often created ALREADY
@@ -435,8 +434,11 @@ static void zapp_ios_sidebar_rearm_pop(ZappIOSSidebarController* c) {
     UINavigationController* nav = c.collapsedNav ?: zapp_ios_collapsed_nav(c.splitVC);
     if (!nav) return;
     c.collapsedNav = nav;
-    nav.interactivePopGestureRecognizer.enabled = YES;
-    nav.interactivePopGestureRecognizer.delegate = c;
+    // Pop-gesture ownership moved to ZappRouteNavDelegate (routing.m, #771):
+    // ONE owner, in-transition-guarded (the naive count>1 gate here predated
+    // the guard). Installing the route delegate arms the gesture.
+    extern void zapp_ios_route_install_nav_delegate(UINavigationController* nav, int32_t windowId);
+    zapp_ios_route_install_nav_delegate(nav, (int32_t)c.hostWindowId);
 }
 
 // --- Event fan-out (mirrors darwin/sidebar.m's zapp_sidebar_emit) ---------
@@ -666,7 +668,15 @@ static void zapp_ios_sidebar_sync_collapse(ZappIOSSidebarController* c, BOOL col
         // transitions but does NOT fire for the already-visible content VC at
         // initial collapse, so we prime the bar here. The delegate's idempotency
         // guard means a later willShow call on the same state is a no-op.
-        [nav setNavigationBarHidden:NO animated:NO];
+        // #771 G1 fix B: prime ONLY when a toolbar is actually registered —
+        // matching willShow's registration-aware rule (and this function's own
+        // header: "If no toolbar has been registered, force its bar hidden").
+        // Unconditional priming re-showed an EMPTY bar on a removed-toolbar
+        // window every time the split re-collapsed.
+        extern bool zapp_ios_toolbar_registered_for_window(void* window_ptr);
+        void* barWin = darwin_window_get_by_numeric_id(self.hostWindowId);
+        BOOL toolbarRegistered = barWin && zapp_ios_toolbar_registered_for_window(barWin);
+        [nav setNavigationBarHidden:!toolbarRegistered animated:NO];
     }
     // [zapp-nav] diagnostic: log didCollapse — captures the combined nav pointer
     fprintf(stderr, "[zapp-nav] didCollapse win=%d collapsedNav=%p stack=%lu\n",
@@ -690,16 +700,10 @@ static void zapp_ios_sidebar_sync_collapse(ZappIOSSidebarController* c, BOOL col
     if (winPtr) zapp_ios_toolbar_apply_for_window(winPtr);
 }
 
-// Gate the re-armed interactive-pop gesture: only begin when the collapsed
-// stack actually has something to pop (depth > 1). Avoids a no-op edge swipe
-// at the root (the sidebar), where UIKit would otherwise fire it.
-- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer*)g {
-    UINavigationController* nav = self.collapsedNav;
-    if (nav && g == nav.interactivePopGestureRecognizer) {
-        return nav.viewControllers.count > 1;
-    }
-    return YES;
-}
+// The old -gestureRecognizerShouldBegin: (naive count>1 gate) lived here; it
+// was deleted in #771 R2' — ZappRouteNavDelegate (routing.m) is now the single
+// owner of interactivePopGestureRecognizer, with the in-transition guard the
+// naive gate lacked (a pop that begins mid-transition freezes ALL touch).
 
 // Re-apply the toolbar when the split's displayMode changes (iPad only).
 // The toolbar's expanded path must include our manual toggleSidebar when the

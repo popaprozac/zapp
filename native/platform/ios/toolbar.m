@@ -221,6 +221,18 @@ static UIImage* zapp_ios_resolve_icon(NSString* spec) {
 
 static NSMutableDictionary<NSValue*, ZappIOSToolbarEntry*>* zapp_ios_toolbars = nil;
 
+// #771 G1 fix B: registration query for routing.m's willShow visibility rule
+// (showBar = (isContent && toolbarRegistered) || (isRoute && !navbarHidden)).
+// The entry registry is the single source of truth for "does this window
+// currently have a toolbar": set_items creates the entry, remove() drops it —
+// so after a remove(), every later nav transition keeps the content VC's bar
+// hidden instead of re-showing an empty bar. Safe from any thread (read-only
+// dictionary lookup; worst case a stale answer for one transition).
+bool zapp_ios_toolbar_registered_for_window(void* window_ptr) {
+    if (!window_ptr || !zapp_ios_toolbars) return false;
+    return zapp_ios_toolbars[[NSValue valueWithPointer:window_ptr]] != nil;
+}
+
 // Forward declaration — defined later.
 void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_user_script);
 
@@ -1399,8 +1411,15 @@ void darwin_toolbar_remove(void* window_ptr) {
                     && !collapsedNav.navigationBarHidden) {
                     [collapsedNav setNavigationBarHidden:YES animated:NO];
                 }
-                // Clear the nav delegate (no toolbar → no bar visibility management).
-                collapsedNav.delegate = nil;
+                // #771 R2' + G1 fix B: the nav delegate STAYS installed (it
+                // used to be nil'd here as "no toolbar → no bar visibility
+                // management"). ZappRouteNavDelegate now (a) owns the
+                // interactive-pop gesture guard and route-depth
+                // reconciliation — nil'ing it would break swipe-back on
+                // already-pushed routes — and (b) is registration-aware:
+                // willShow consults zapp_ios_toolbar_registered_for_window,
+                // so with the entry dropped below it keeps the content VC
+                // bar-less across every later transition by itself.
             }
         } else {
             // ── Expanded (iPad) ───────────────────────────────────────────

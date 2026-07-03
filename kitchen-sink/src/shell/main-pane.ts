@@ -61,6 +61,19 @@ export function renderMainPane(app: HTMLElement) {
       console.log(`[ks] route /detail rendered (+${(performance.now() - t0).toFixed(0)}ms boot)`);
       return;
     }
+    if (url === "/detail-clean") {
+      // #771 R2' demo: navbar:{hidden:true} route — NO native chrome; the page
+      // brings its own Back. Edge swipe-back must still work (research recipe).
+      shownId = "";
+      if (typeof teardown === "function") teardown();
+      teardown = undefined;
+      stage.innerHTML = `<div class="detail-page" style="padding:24px;padding-top:calc(var(--zapp-safe-area-top, 24px) + 8px)">
+        <h2>Chrome-less route (/detail-clean)</h2>
+        <p>The native nav bar is hidden for this route. Swipe from the left edge to go back — it must NOT freeze the UI.</p>
+        <button id="ks-pop-clean">Back (router.pop)</button></div>`;
+      stage.querySelector("#ks-pop-clean")?.addEventListener("click", () => Window.current().router.pop());
+      return;
+    }
     show(sectionForRoute(url));
   };
 
@@ -127,4 +140,10 @@ export function renderMainPane(app: HTMLElement) {
   detailBtn.textContent = "Push native route (/detail)";
   detailBtn.onclick = () => Window.current().router.push("/detail");
   demoStrip.appendChild(detailBtn);
+
+  const cleanBtn = document.createElement("button");
+  cleanBtn.textContent = "Push chrome-less route";
+  cleanBtn.onclick = () =>
+    Window.current().router.push({ url: "/detail-clean", navbar: { hidden: true } });
+  demoStrip.appendChild(cleanBtn);
 }

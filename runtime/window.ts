@@ -1176,6 +1176,13 @@ export interface RouteOptions {
   title?: string;
   params?: Record<string, unknown>;
   presentation?: "page" | "form" | "fullscreen" | "bottomSheet";
+  /**
+   * iOS native routing only: hide the native navigation bar for this pushed
+   * route (bring-your-own-chrome pages). Edge swipe-back KEEPS working — the
+   * framework re-arms the pop gesture. Ignored on macOS/Windows and by
+   * `replace`.
+   */
+  navbar?: { hidden: boolean };
 }
 
 /**
@@ -1466,6 +1473,7 @@ function createRouterHandle(windowId: string): RouterHandle {
         ...(o.title !== undefined ? { title: o.title } : {}),
         ...(o.params !== undefined ? { params: o.params } : {}),
         ...(o.presentation !== undefined ? { presentation: o.presentation } : {}),
+        ...(o.navbar !== undefined ? { navbar: o.navbar } : {}),
       });
     },
     pop(): void        { windowAction("router:pop",       { windowId }); },

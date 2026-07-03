@@ -32,7 +32,7 @@ import dispatch
 # --- iOS native routing (N3a). Defined in ios/routing.m; no-op symbol absent on
 #     non-iOS builds because the calls are `when defined(zappIos)`-gated. ---
 when defined(zappIos):
-  proc zapp_ios_push_route_vc(windowId: int32, url: cstring) {.importc, cdecl.}
+  proc zapp_ios_push_route_vc(windowId: int32, url: cstring, chromeJson: cstring) {.importc, cdecl.}
   proc zapp_ios_pop_route_vc(windowId: int32) {.importc, cdecl.}
   proc zapp_ios_pop_to_content(windowId: int32) {.importc, cdecl.}
 
@@ -718,7 +718,16 @@ proc routeWindowAction(action: string, a: JsonNode, rawWindowId: int, payload: s
       c_fflush(cstderr_nav)
       routerPush(target, url, params)
       emitRouteChanged(target, "push")
-      when defined(zappIos): zapp_ios_push_route_vc(target, url.cstring)
+      when defined(zappIos):
+        # R2' per-route chrome: forward push options to the native seam as one
+        # compact JSON object. Keys this build understands: navbarHidden
+        # (title/toolbarJson land with the full push-options work).
+        var chrome = newJObject()
+        let navbar = a{"navbar"}
+        if not navbar.isNil and navbar.kind == JObject:
+          chrome["navbarHidden"] = newJBool(navbar{"hidden"}.getBool(false))
+        let chromeStr = (if chrome.len > 0: $chrome else: "")
+        zapp_ios_push_route_vc(target, url.cstring, chromeStr.cstring)
     of "router:pop":
       # [zapp-nav] diagnostic: pop arm
       c_fprintf(cstderr_nav, "[zapp-nav] router_action=pop target=%d\n".cstring, target.cint)
@@ -738,7 +747,10 @@ proc routeWindowAction(action: string, a: JsonNode, rawWindowId: int, payload: s
         # (no pop_from_native misfire), identical to the push flow.
         when defined(zappIos):
           let fwdUrl = routerCurrentUrl(target)   # new current = the forward entry
-          zapp_ios_push_route_vc(target, fwdUrl.cstring)
+          # Forward re-enters with DEFAULT chrome ("" = all defaults): routerstate
+          # does not persist per-entry push options, so a forward into a
+          # navbar:{hidden} route re-shows the bar (Task 8 may persist options).
+          zapp_ios_push_route_vc(target, fwdUrl.cstring, "".cstring)
     of "router:replace":
       let url = a{"url"}.getStr("")
       let params = (if a.hasKey("params"): $a["params"] else: "")

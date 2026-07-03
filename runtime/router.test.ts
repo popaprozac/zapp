@@ -124,6 +124,14 @@ describe("router handle ops post correct wire messages", () => {
     const msg = JSON.parse(mock.posts[0]);
     expect(msg).toEqual({ t: 4, m: "router:popToRoot", a: { windowId: "win-8" } });
   });
+
+  test("push({url, navbar}) forwards navbar to the wire", () => {
+    const win = createWindowHandle("win-8");
+    win.router.push({ url: "/clean", navbar: { hidden: true } });
+    const msg = JSON.parse(mock.posts[0]);
+    expect(msg.m).toBe("router:push");
+    expect(msg.a.navbar).toEqual({ hidden: true });
+  });
 });
 
 // ── ROUTE_CHANGED event updates cached getters ────────────────────────────────
