@@ -104,16 +104,16 @@ extern BOOL zapp_ios_split_is_collapsed_for_window(void* window_ptr);
 // omit when hidden (UIKit's own system button is the affordance).
 extern BOOL zapp_ios_sidebar_is_hidden_for_window(void* window_ptr);
 
-// T2 (double-toggle race fix): live read of the split's CURRENT displayMode —
-// NOT a transition target. Returns true only when displayMode ==
-// SecondaryOnly (sidebar hidden); false when collapsed, unregistered, or no
-// split. Defined in ios/sidebar.m. Used by
-// zapp_ios_toolbar_apply_for_window_hidden's expanded path so the
-// include-toggle decision is single-sourced from live state AT APPLY TIME,
-// instead of trusting the caller-supplied `sidebarHidden` parameter — which
-// may be a stale transition TARGET passed from willChangeToDisplayMode:
-// (pre-settle), the root cause of both-toggles-visible / neither-visible
-// under overlapping transitions (rapid toggle, rotation mid-toggle).
+// Live read of the split's CURRENT displayMode — NOT a transition target.
+// Returns true only when displayMode == SecondaryOnly (sidebar hidden); false
+// when collapsed, unregistered, or no split. Defined in ios/sidebar.m. Used
+// by zapp_ios_toolbar_stamp_vc's include-toggle decision (live at stamp time
+// — willShow/didShow re-stamps always run at settled moments). #771 G1-F:
+// zapp_ios_toolbar_apply_for_window_hidden's expanded path no longer reads
+// this — it trusts its `sidebarHidden` parameter per the caller contract
+// documented at its definition (live truth at settled call sites, the
+// transition TARGET inside willChangeToDisplayMode: so the toggle swap rides
+// the display-mode animation transaction).
 extern bool zapp_ios_split_display_mode_is_secondary_only(void* window_ptr);
 
 // E2 (collapsible affordance parity): live read of the sidebar's collapsible
@@ -523,32 +523,55 @@ static void zapp_ios_toolbar_stamp_items(UIViewController* vc,
     NSArray<UIBarButtonItem*>* leading = includeToggleSidebar
         ? entry.leadingItems
         : entry.leadingNoToggle;
+    // #771 G1-F idempotence guard: skip the navigationItem ASSIGNMENTS when
+    // the computed arrays / title are content-identical to what the
+    // navigationItem already holds. UIBarButtonItem does not override
+    // isEqual:, so isEqualToArray: is per-element POINTER equality — "same"
+    // means the navigationItem already carries these exact shared instances
+    // in this exact order (the T3 displayed-VC model), and re-assigning them
+    // can only trigger a spurious UIKit nav-bar relayout (the mid-animation
+    // over-slide when the settled re-apply lands inside a display-mode
+    // transition). A skipped stamp is by definition a visual no-op; anything
+    // different still stamps, so the settled live-read re-apply remains a
+    // real correctness backstop for cancelled/diverged transitions (the
+    // 30bb802 double-toggle guarantee). set_items rebuilds fresh
+    // UIBarButtonItem instances, so a new item set can never be skipped.
+    NSArray* newLead  = leading ?: @[];
+    NSArray* newTrail = entry.trailingItems ?: @[];
+    BOOL leadSame  = [(vc.navigationItem.leftBarButtonItems  ?: @[]) isEqualToArray:newLead];
+    BOOL trailSame = [(vc.navigationItem.rightBarButtonItems ?: @[]) isEqualToArray:newTrail];
+    NSString* curTitle = vc.navigationItem.title;
+    BOOL titleSame = (curTitle == entry.centerTitle) ||
+                     (curTitle && entry.centerTitle &&
+                      [curTitle isEqualToString:entry.centerTitle]);
+    BOOL titleViewSame = (vc.navigationItem.titleView == entry.centerView);
     // [zapp-nav] G1-F diagnostic: THE choke point — every item-assignment pass
     // funnels here. leadSame/trailSame report whether this pass is a content
     // no-op (assigning what the navigationItem already holds) or a real swap;
     // t= places it inside/outside the ~0.35s sidebar collapse animation.
-    {
-        NSArray* curLead  = vc.navigationItem.leftBarButtonItems ?: @[];
-        NSArray* curTrail = vc.navigationItem.rightBarButtonItems ?: @[];
-        BOOL leadSame  = [curLead isEqualToArray:(leading ?: @[])];
-        BOOL trailSame = [curTrail isEqualToArray:(entry.trailingItems ?: @[])];
-        fprintf(stderr, "[zapp-nav] t=%.3f stamp vc=%p toggle=%d nLead=%lu leadSame=%d trailSame=%d\n",
-                zapp_nav_now(), (__bridge void*)vc, (int)includeToggleSidebar,
-                (unsigned long)(leading ? leading.count : 0), (int)leadSame, (int)trailSame);
-        fflush(stderr);
+    fprintf(stderr, "[zapp-nav] t=%.3f stamp vc=%p toggle=%d nLead=%lu leadSame=%d trailSame=%d skip=%d\n",
+            zapp_nav_now(), (__bridge void*)vc, (int)includeToggleSidebar,
+            (unsigned long)newLead.count, (int)leadSame, (int)trailSame,
+            (int)(leadSame && trailSame && titleSame && titleViewSame));
+    fflush(stderr);
+    if (!(leadSame && trailSame)) {
+        // Keep the system back button when items are stamped onto a pushed VC
+        // (a non-nil leftBarButtonItems otherwise suppresses it).
+        vc.navigationItem.leftItemsSupplementBackButton = YES;
+        vc.navigationItem.leftBarButtonItems  = newLead;
+        vc.navigationItem.rightBarButtonItems = newTrail;
     }
-    // Keep the system back button when items are stamped onto a pushed VC
-    // (a non-nil leftBarButtonItems otherwise suppresses it).
-    vc.navigationItem.leftItemsSupplementBackButton = YES;
-    vc.navigationItem.leftBarButtonItems  = leading ?: @[];
-    vc.navigationItem.rightBarButtonItems = entry.trailingItems ?: @[];
-    // E2 / #779 collapsible→enabled wiring (live read at stamp time).
+    if (!titleSame)     vc.navigationItem.title = entry.centerTitle;    // nil clears it
+    if (!titleViewSame) vc.navigationItem.titleView = entry.centerView; // nil clears it
+    // E2 / #779 collapsible→enabled wiring (live read at stamp time). These
+    // are property writes on the SHARED UIBarButtonItem instances — they must
+    // run even when the assignments above are skipped (a skip means the bar
+    // already shows these instances; these writes are how their interactive
+    // state stays fresh).
     entry.toggleSidebarButton.enabled =
         zapp_ios_sidebar_is_collapsible_for_window(entry.windowPtr);
     entry.toggleInspectorButton.enabled =
         zapp_ios_inspector_is_collapsible_for_window(entry.windowPtr);
-    vc.navigationItem.title = entry.centerTitle;       // nil clears it
-    vc.navigationItem.titleView = entry.centerView;    // nil clears it
 }
 
 // ─── zapp_ios_toolbar_apply_to_nav (internal helper) ─────────────────────────
@@ -1021,24 +1044,38 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
 //
 // Applies a registered toolbar to the correct nav (collapsed vs expanded).
 //
-// T2 (double-toggle race fix): `sidebarHidden` is now ADVISORY ONLY. It used
-// to be trusted verbatim in the expanded path, but willChangeToDisplayMode:
-// passes the transition TARGET, not settled state — under overlapping
-// transitions (rapid toggle, rotation mid-toggle) that value can go stale,
-// producing either two visible toggles (ours + UIKit's system reveal button)
-// or zero. The expanded path now single-sources the include-toggle decision
-// from a LIVE read of the split's CURRENT displayMode
-// (zapp_ios_split_display_mode_is_secondary_only, ios/sidebar.m) taken at
-// apply time. The parameter is kept only for ABI/call-site compatibility —
-// callers may still pass the transition target as a pre-settle hint.
+// `sidebarHidden` CALLER CONTRACT (#771 G1-F, revising T2's advisory-only
+// rule): the parameter is AUTHORITATIVE for the expanded path's
+// include-toggle decision. Callers must pass the sidebar-hidden state that
+// will be TRUE FOR THE FRAMES THESE ITEMS ARE SEEN IN:
+//   • zapp_ios_toolbar_apply_for_window (the only other caller) — a LIVE
+//     read (zapp_ios_sidebar_is_hidden_for_window) taken at apply time;
+//     correct at every settled call site (didCollapse/didExpand, the settled
+//     dispatch_async re-applies, inspector show/hide, set_collapsible).
+//   • sidebar.m willChangeToDisplayMode: (sync pre-settle apply) — the
+//     transition TARGET derived from the delegate's displayMode parameter.
+//     Inside willChange the live displayMode still reads the OUTGOING mode,
+//     so a live read here stamped the OLD arrays (functional no-op) and
+//     deferred the real toggle swap to the settled tick — landing
+//     MID-ANIMATION and relayouting the bar mid-width-animation: the G1-F
+//     over-slide + snap-back. Passing the target stamps the swap
+//     synchronously, riding the same animation transaction (the 899aef2
+//     invariant).
+// T2's double-toggle guarantee is preserved one level up: the settled
+// dispatch_async re-apply goes through apply_for_window's LIVE read at APPLY
+// time, so under overlapping transitions (rapid toggle, rotation mid-toggle)
+// whichever settled re-apply runs LAST reads whatever is CURRENTLY true and
+// self-corrects, regardless of dispatch ordering. stamp_items' idempotence
+// guard makes that backstop a visual no-op when the transition settled as
+// announced.
 //
 // Collapsed (iPhone compact): apply items to the content VC's navigationItem
 //   (so they appear when the content VC is on top of collapsedNav), and show
 //   the bar only when the content VC is on top. (Collapsed has no displayMode
-//   concept — UIKit never shows a system reveal button there — so this path
-//   is unaffected by the live-read change.)
-// Expanded (iPad regular): apply to contentNav's topViewController, show bar.
-//   includeToggleSidebar = live read of !(displayMode == SecondaryOnly).
+//   concept — UIKit never shows a system reveal button there — so the
+//   parameter is not consulted on this path.)
+// Expanded (iPad regular): apply to contentNav's topViewController.
+//   includeToggleSidebar = !sidebarHidden.
 //
 // Must be called on the main thread. Declared extern so sidebar.m can call it.
 
@@ -1097,20 +1134,24 @@ void zapp_ios_toolbar_apply_for_window_hidden(void* window_ptr, BOOL sidebarHidd
         if (!contentNav) return;
 
         // Include our manual toggleSidebar button ONLY when the sidebar is
-        // VISIBLE. When the sidebar is visible, UIKit adds no system button, so
-        // ours is the only affordance. When the sidebar is HIDDEN, UIKit shows
-        // its own "show sidebar" system button — omit ours to avoid a duplicate.
+        // (or is about to be) VISIBLE. When the sidebar is visible, UIKit adds
+        // no system button, so ours is the only affordance. When the sidebar
+        // is HIDDEN, UIKit shows its own "show sidebar" system button — omit
+        // ours to avoid a duplicate.
         //
-        // T2: the `sidebarHidden` PARAMETER may be a transition TARGET passed
-        // from willChangeToDisplayMode: (pre-settle) — trusting it verbatim is
-        // what caused the double-toggle race under overlapping transitions.
-        // UIKit's own system reveal button is driven by the split's ACTUAL
-        // displayMode, so decide from a LIVE read here too; the settled
-        // re-apply (sidebar.m's willChangeToDisplayMode: hook, hopped one tick
-        // via dispatch_async) issues the final word once displayMode has
-        // actually committed to the target.
-        BOOL includeToggle = !zapp_ios_split_display_mode_is_secondary_only(window_ptr);
-        (void)sidebarHidden; // advisory only — kept for ABI/call-site compatibility
+        // #771 G1-F: decide from the `sidebarHidden` PARAMETER, per the caller
+        // contract in the header comment above — live truth at settled call
+        // sites, the transition TARGET inside willChangeToDisplayMode:.
+        // Trusting the target there is the point: the toggle swap is stamped
+        // synchronously INSIDE the display-mode animation transaction (899aef2
+        // invariant) instead of one tick later mid-animation (T2's live read
+        // reproduced the OUTGOING mode inside willChange, deferring the real
+        // swap to the settled re-apply → the visible over-slide + snap-back).
+        // The settled re-apply still re-derives from live state and remains
+        // the final word under overlapping transitions; stamp_items'
+        // idempotence guard makes it a visual no-op when the transition
+        // settled as announced.
+        BOOL includeToggle = !sidebarHidden;
         zapp_ios_toolbar_apply_to_nav(contentNav, entry, includeToggle);
     }
 }
