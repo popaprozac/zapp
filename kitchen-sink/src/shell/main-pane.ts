@@ -1,4 +1,4 @@
-import { Window, Platform } from "@zappdev/runtime";
+import { Window, Platform, Services } from "@zappdev/runtime";
 import { registry } from "../sections/registry";
 import { findSection } from "../sections/types";
 import { shellToolbar } from "./toolbar-def";
@@ -59,8 +59,24 @@ export function renderMainPane(app: HTMLElement) {
         <p>Pushed with <code>title: "Detail"</code> + a per-route <code>toolbar</code> override (R2′ #771):
         on iOS the nav bar shows the route title and a Share button instead of the window toolbar.
         Back-then-forward re-enters with the same chrome.</p>
+        <p class="muted" data-detail-greet>greet: (tap the button)</p>
+        <button id="ks-detail-greet">Invoke greet (bridge from route)</button>
         <button id="ks-pop">Back (router.pop)</button></div>`;
       stage.querySelector("#ks-pop")?.addEventListener("click", () => Window.current().router.pop());
+      // G1: human-checkable proof that a pushed route webview has its own
+      // live bridge transport slot (#771 G1-C/D) — Services.invoke works
+      // from here exactly like it does from the home section.
+      const detailGreetEl = stage.querySelector<HTMLElement>("[data-detail-greet]")!;
+      stage.querySelector("#ks-detail-greet")?.addEventListener("click", () => {
+        detailGreetEl.textContent = "greet: …";
+        Services.invoke("greet", { name: "Detail route" })
+          .then((msg) => {
+            detailGreetEl.textContent = `greet → ${msg}`;
+          })
+          .catch((e) => {
+            detailGreetEl.textContent = `greet error: ${e}`;
+          });
+      });
       console.log(`[ks] route /detail rendered (+${(performance.now() - t0).toFixed(0)}ms boot)`);
       return;
     }
