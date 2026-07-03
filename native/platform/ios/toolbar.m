@@ -31,10 +31,18 @@
 //   to avoid a duplicate. When collapsed/compact, no system button exists so we
 //   include ours.
 //
-// Click delivery: button taps broadcast `window:toolbar-clicked`
-//   {"windowId":"win-<n>","id":"<itemId>"} to ALL webviews via
-//   zapp_ios_eval_js_all_webviews (mirrors darwin/toolbar.m's
-//   zapp_toolbar_emit_click pattern using darwin_webview_eval_all).
+// Click delivery: button taps emit `window:toolbar-clicked`
+//   {"windowId":"win-<n>","id":"<itemId>"} to the HOST content webview plus
+//   its sidebar/inspector PANE webviews only (zapp_ios_toolbar_eval_js_host_panes,
+//   the #627 pane-fan-out shape) — NOT zapp_ios_eval_js_all_webviews. #771
+//   G1-E: route-webview transport slots (added in cff1324) joined the
+//   all-webviews broadcast table, so a toolbar click at push-depth N fired
+//   its handler once per live route webview (N+1x), multi-popping the
+//   router. Toolbar/group/menu clicks are window-scoped chrome events —
+//   route webviews never received them before cff1324 either, so this
+//   restores the original delivery set rather than inventing new behavior.
+//   Route-webview click targeting is deliberate future work (per-route
+//   toolbar), not a side effect of this fix.
 //
 // Per-window registry: keyed by window_ptr (NSValue), stores the
 // set of built UIBarButtonItems so zapp_toolbar_unregister can clear,
@@ -60,7 +68,6 @@ static const char kZappToolbarButtonTargetKey = 0;
 static const char kZappToolbarToggleTargetKey = 0;
 
 extern WKWebView* zapp_ios_content_webview_for_slot(int32_t slot);
-extern void zapp_ios_eval_js_all_webviews(const char* js);
 extern void* darwin_window_get_by_numeric_id(int32_t numeric_id);
 extern void darwin_sidebar_toggle(int32_t window_id);
 extern void darwin_inspector_toggle(int32_t window_id);
@@ -229,12 +236,42 @@ void zapp_ios_toolbar_inject_webview_safe_area(WKWebView* wv) {
     (void)wv;
 }
 
+// ─── Window-scoped chrome-event fan-out ─────────────────────────────────────
+//
+// #771 G1-E: delivers `js` to the HOST content webview plus its sidebar/
+// inspector PANE webviews only — same 3-target reach as the #627 pane
+// fan-out (zapp_dispatch_event_to_js, window.m:1466), reimplemented here
+// because that function's payload shape (fixed window-event-id table +
+// bridge.dispatchWindowEvent) doesn't cover the toolbar's dynamically-built
+// `_onEvent(<name>, <json>)` strings (window:toolbar-clicked,
+// window:toolbar-group-selected, __menu:click). Deliberately excludes route-
+// webview transport slots — the #771 G1-C/D regression source — restoring
+// the pre-cff1324 delivery set for these window-scoped UI events.
+// Must be called on the main thread (matches zapp_dispatch_event_to_js).
+static void zapp_ios_toolbar_eval_js_host_panes(int32_t host_id, NSString* js) {
+    if (!js.length) return;
+    WKWebView* hostWv = zapp_ios_content_webview_for_slot(host_id);
+    if (hostWv) [hostWv evaluateJavaScript:js completionHandler:nil];
+    int32_t sidebarSlot = zapp_ios_sidebar_slot_for(host_id);
+    if (sidebarSlot >= 0) {
+        WKWebView* sidebarWv = zapp_ios_content_webview_for_slot(sidebarSlot);
+        if (sidebarWv) [sidebarWv evaluateJavaScript:js completionHandler:nil];
+    }
+    int32_t inspectorSlot = zapp_ios_inspector_slot_for(host_id);
+    if (inspectorSlot >= 0) {
+        WKWebView* inspectorWv = zapp_ios_content_webview_for_slot(inspectorSlot);
+        if (inspectorWv) [inspectorWv evaluateJavaScript:js completionHandler:nil];
+    }
+}
+
 // ─── Click emit ─────────────────────────────────────────────────────────────
 //
 // Mirrors zapp_toolbar_emit_click in darwin/toolbar.m.
-// Builds {"windowId":"win-<N>","id":"<itemId>"} and broadcasts via
-// zapp_ios_eval_js_all_webviews (iOS analogue of darwin_webview_eval_all +
-// worker_broadcast_eval_js).
+// Builds {"windowId":"win-<N>","id":"<itemId>"} and delivers via
+// zapp_ios_toolbar_eval_js_host_panes (host + sidebar + inspector panes;
+// see #771 G1-E above — darwin/toolbar.m's macOS equivalent still
+// broadcasts to all webviews + workers, which is correct there since
+// macOS has no route-webview transport slots to over-deliver into).
 // SAFETY: escaping runs synchronously; the captured NSString is ARC-retained
 // before the dispatch_async so the pointer never escapes onto the async block.
 
@@ -250,7 +287,7 @@ static void zapp_ios_toolbar_emit_click(int32_t host_id, NSString* itemId) {
             "if(b&&b._onEvent)b._onEvent('window:toolbar-clicked',"
             "'{\"windowId\":\"win-%d\",\"id\":\"%@\"}');})();",
             host_id, escaped];
-        zapp_ios_eval_js_all_webviews([js UTF8String]);
+        zapp_ios_toolbar_eval_js_host_panes(host_id, js);
     });
 }
 
@@ -334,7 +371,9 @@ static const char kZappToolbarSegmentTargetKey = 0;
             "if(b&&b._onEvent)b._onEvent('window:toolbar-group-selected',"
             "'{\"windowId\":\"win-%d\",\"id\":\"%@\",\"index\":%d,\"selected\":true}');})();",
             hid, escaped, idxInt];
-        zapp_ios_eval_js_all_webviews([js UTF8String]);
+        // #771 G1-E: window-scoped host+panes fan-out (see above) instead of
+        // zapp_ios_eval_js_all_webviews — same regression class as toolbar clicks.
+        zapp_ios_toolbar_eval_js_host_panes(hid, js);
     });
 }
 
@@ -363,11 +402,10 @@ void zapp_ios_toolbar_apply_for_window_hidden(void* window_ptr, BOOL sidebarHidd
 // ─── T2: UIMenu builder ──────────────────────────────────────────────────────
 //
 // Builds a UIMenu from the stripped MenuItemDef array (actions removed by the
-// runtime; ids present). Taps emit __menu:click {"id":"<id>"} via
-// zapp_ios_eval_js_all_webviews — mirrors darwin/toolbar.m's
-// zapp_toolbar_emit_menu_click, which uses the SAME event name/__menu:click
-// because NSMenuToolbarItem clicks route through darwin_menu_build_from_items_json
-// and menu.m emits __menu:click.
+// runtime; ids present). Taps emit __menu:click {"id":"<id>"} — mirrors
+// darwin/toolbar.m's zapp_toolbar_emit_menu_click, which uses the SAME event
+// name/__menu:click because NSMenuToolbarItem clicks route through
+// darwin_menu_build_from_items_json and menu.m emits __menu:click.
 //
 // Recursion: items with a "submenu" array build a nested UIMenu.
 // Separator items (type:"separator") build UIAction dividers (iOS 14+: use
@@ -377,14 +415,24 @@ void zapp_ios_toolbar_apply_for_window_hidden(void* window_ptr, BOOL sidebarHidd
 // enabled: UIAction.attributes = .disabled when false.
 // iOS 14+ required for UIMenu on UIBarButtonItem; this is the iOS 14+ API.
 //
-// Note: `host_id` is unused here (macOS zapp_toolbar_emit_menu_click ignores
-// it too — __menu:click is window-agnostic by design).
+// #771 G1-E: on macOS, zapp_toolbar_emit_menu_click ignores `host_id` and
+// broadcasts __menu:click to ALL webviews because __menu:click there has
+// several origins (main menu bar, context menu, tray menu, toolbar
+// button.menu) that are genuinely window-agnostic. On iOS, ios/menu.m stubs
+// out app/context/tray menus entirely (see that file) — this UIMenu builder
+// is the ONLY __menu:click origin, and it is always built from one window's
+// toolbar button.menu (darwin_toolbar_set_items / darwin_toolbar_update_item
+// below, both of which have a host slot in scope). So on iOS __menu:click IS
+// a window-scoped chrome event in practice: `host_id` is threaded through
+// (unlike macOS) and clicks deliver via zapp_ios_toolbar_eval_js_host_panes
+// (host + sidebar + inspector panes), the same fan-out as toolbar clicks —
+// avoiding the same route-webview multi-fire class.
 
 API_AVAILABLE(ios(14.0))
-static NSArray<UIMenuElement*>* zapp_ios_build_menu_elements(NSArray* items);
+static NSArray<UIMenuElement*>* zapp_ios_build_menu_elements(int32_t host_id, NSArray* items);
 
 API_AVAILABLE(ios(14.0))
-static NSArray<UIMenuElement*>* zapp_ios_build_menu_elements(NSArray* items) {
+static NSArray<UIMenuElement*>* zapp_ios_build_menu_elements(int32_t host_id, NSArray* items) {
     if (![items isKindOfClass:[NSArray class]]) return @[];
     NSMutableArray<UIMenuElement*>* elements = [NSMutableArray array];
     for (NSDictionary* def in items) {
@@ -407,7 +455,7 @@ static NSArray<UIMenuElement*>* zapp_ios_build_menu_elements(NSArray* items) {
 
         if (submenu.count > 0) {
             // Nested submenu → UIMenu (not a UIAction; iOS shows a disclosure indicator).
-            NSArray<UIMenuElement*>* children = zapp_ios_build_menu_elements(submenu);
+            NSArray<UIMenuElement*>* children = zapp_ios_build_menu_elements(host_id, submenu);
             UIMenu* sub = [UIMenu menuWithTitle:label children:children];
             [elements addObject:sub];
             continue;
@@ -415,6 +463,7 @@ static NSArray<UIMenuElement*>* zapp_ios_build_menu_elements(NSArray* items) {
 
         // Leaf item → UIAction.
         NSString* capturedId = itemId;
+        int32_t capturedHostId = host_id;
         UIAction* action = [UIAction actionWithTitle:label
                                                image:nil
                                           identifier:nil
@@ -430,7 +479,8 @@ static NSArray<UIMenuElement*>* zapp_ios_build_menu_elements(NSArray* items) {
                 @"(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
                 "if(b&&b._onEvent)b._onEvent('__menu:click','{\"id\":\"%@\"}');})();",
                 esc];
-            zapp_ios_eval_js_all_webviews([js UTF8String]);
+            // #771 G1-E: window-scoped host+panes fan-out — see builder comment above.
+            zapp_ios_toolbar_eval_js_host_panes(capturedHostId, js);
         }];
         // Enabled state.
         if (enabled && !enabled.boolValue) {
@@ -448,8 +498,8 @@ static NSArray<UIMenuElement*>* zapp_ios_build_menu_elements(NSArray* items) {
 }
 
 API_AVAILABLE(ios(14.0))
-static UIMenu* zapp_ios_build_uimenu(NSArray* items) {
-    NSArray<UIMenuElement*>* children = zapp_ios_build_menu_elements(items);
+static UIMenu* zapp_ios_build_uimenu(int32_t host_id, NSArray* items) {
+    NSArray<UIMenuElement*>* children = zapp_ios_build_menu_elements(host_id, items);
     return [UIMenu menuWithTitle:@"" children:children];
 }
 
@@ -792,7 +842,7 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
                 BOOL hasMenu = (menuArr.count > 0);
                 if (hasMenu && @available(ios 14.0, *)) {
                     UIImage* image = iconSpec.length ? zapp_ios_resolve_icon(iconSpec) : nil;
-                    UIMenu* menu = zapp_ios_build_uimenu(menuArr);
+                    UIMenu* menu = zapp_ios_build_uimenu(host_slot, menuArr);
                     if (image) {
                         item = [[UIBarButtonItem alloc] initWithImage:image
                                                                style:UIBarButtonItemStylePlain
@@ -1174,7 +1224,7 @@ void darwin_toolbar_update_item(void* window_ptr, const char* item_json) {
 
         // menu → rebuild UIMenu (iOS 14+; button.menu items only).
         if ([patch[@"menu"] isKindOfClass:[NSArray class]] && @available(ios 14.0, *)) {
-            UIMenu* menu = zapp_ios_build_uimenu(patch[@"menu"]);
+            UIMenu* menu = zapp_ios_build_uimenu(entry.hostSlot, patch[@"menu"]);
             barItem.menu = menu;
         }
 
