@@ -510,15 +510,30 @@ static UIMenu* zapp_ios_build_uimenu(int32_t host_id, NSArray* items) {
     return [UIMenu menuWithTitle:@"" children:children];
 }
 
-// ─── zapp_ios_toolbar_stamp_items (internal) ─────────────────────────────────
+// ─── zapp_ios_toolbar_stamp_items / _force (internal) ────────────────────────
 //
 // #771 datum 3 (structural): the single place item buckets are written onto a
 // navigationItem. Every apply path funnels here so the DISPLAYED VC always
 // carries the entry's CURRENT UIBarButtonItem instances — there is no longer a
 // "generation" of items left behind on a hidden VC.
-static void zapp_ios_toolbar_stamp_items(UIViewController* vc,
-                                         ZappIOSToolbarEntry* entry,
-                                         BOOL includeToggleSidebar) {
+//
+// #771 G1-F fix round 2: `force` lets a caller bypass the idempotence guard
+// below and unconditionally re-run the navigationItem ASSIGNMENTS even when
+// the computed arrays/title are pointer-identical to what's already there.
+// This exists for exactly one caller (the didShow re-stamp in routing.m):
+// during an interactive swipe-back, UIKit reparents shared customView items
+// (segmented control, label items, titleView) out of the displayed bar into
+// the incoming bar's content view; on a CANCELLED swipe, UIKit discards that
+// content view — and the views inside it — without ever rebuilding the
+// displayed bar. Only the array/titleView SETTERS force UIKit to rebuild bar
+// content, even when the assigned objects are identical to what's already
+// held; a guarded (skipped) stamp is a no-op that leaves the custom views
+// missing. force=YES restores the pre-guard "always assign" behavior for
+// that one recovery path. All other callers keep the guarded behavior.
+static void zapp_ios_toolbar_stamp_items_force(UIViewController* vc,
+                                               ZappIOSToolbarEntry* entry,
+                                               BOOL includeToggleSidebar,
+                                               BOOL force) {
     if (!vc || !entry) return;
     NSArray<UIBarButtonItem*>* leading = includeToggleSidebar
         ? entry.leadingItems
@@ -536,6 +551,7 @@ static void zapp_ios_toolbar_stamp_items(UIViewController* vc,
     // real correctness backstop for cancelled/diverged transitions (the
     // 30bb802 double-toggle guarantee). set_items rebuilds fresh
     // UIBarButtonItem instances, so a new item set can never be skipped.
+    // `force` (fix round 2) bypasses this guard entirely — see header comment.
     NSArray* newLead  = leading ?: @[];
     NSArray* newTrail = entry.trailingItems ?: @[];
     BOOL leadSame  = [(vc.navigationItem.leftBarButtonItems  ?: @[]) isEqualToArray:newLead];
@@ -549,20 +565,22 @@ static void zapp_ios_toolbar_stamp_items(UIViewController* vc,
     // funnels here. leadSame/trailSame report whether this pass is a content
     // no-op (assigning what the navigationItem already holds) or a real swap;
     // t= places it inside/outside the ~0.35s sidebar collapse animation.
-    fprintf(stderr, "[zapp-nav] t=%.3f stamp vc=%p toggle=%d nLead=%lu leadSame=%d trailSame=%d skip=%d\n",
+    // force=1 marks the didShow cancelled-swipe recovery path (fix round 2);
+    // skip is always 0 when forced since the assignments always run below.
+    fprintf(stderr, "[zapp-nav] t=%.3f stamp vc=%p toggle=%d nLead=%lu leadSame=%d trailSame=%d force=%d skip=%d\n",
             zapp_nav_now(), (__bridge void*)vc, (int)includeToggleSidebar,
-            (unsigned long)newLead.count, (int)leadSame, (int)trailSame,
-            (int)(leadSame && trailSame && titleSame && titleViewSame));
+            (unsigned long)newLead.count, (int)leadSame, (int)trailSame, (int)force,
+            (int)(!force && leadSame && trailSame && titleSame && titleViewSame));
     fflush(stderr);
-    if (!(leadSame && trailSame)) {
+    if (force || !(leadSame && trailSame)) {
         // Keep the system back button when items are stamped onto a pushed VC
         // (a non-nil leftBarButtonItems otherwise suppresses it).
         vc.navigationItem.leftItemsSupplementBackButton = YES;
         vc.navigationItem.leftBarButtonItems  = newLead;
         vc.navigationItem.rightBarButtonItems = newTrail;
     }
-    if (!titleSame)     vc.navigationItem.title = entry.centerTitle;    // nil clears it
-    if (!titleViewSame) vc.navigationItem.titleView = entry.centerView; // nil clears it
+    if (force || !titleSame)     vc.navigationItem.title = entry.centerTitle;    // nil clears it
+    if (force || !titleViewSame) vc.navigationItem.titleView = entry.centerView; // nil clears it
     // E2 / #779 collapsible→enabled wiring (live read at stamp time). These
     // are property writes on the SHARED UIBarButtonItem instances — they must
     // run even when the assignments above are skipped (a skip means the bar
@@ -572,6 +590,16 @@ static void zapp_ios_toolbar_stamp_items(UIViewController* vc,
         zapp_ios_sidebar_is_collapsible_for_window(entry.windowPtr);
     entry.toggleInspectorButton.enabled =
         zapp_ios_inspector_is_collapsible_for_window(entry.windowPtr);
+}
+
+// Guarded (default) entry point — force=NO. Kept as the stable call shape for
+// every existing caller (zapp_ios_toolbar_apply_to_nav, the collapsed branch
+// of zapp_ios_toolbar_apply_for_window_hidden, and the guarded willShow path
+// via zapp_ios_toolbar_stamp_vc).
+static void zapp_ios_toolbar_stamp_items(UIViewController* vc,
+                                         ZappIOSToolbarEntry* entry,
+                                         BOOL includeToggleSidebar) {
+    zapp_ios_toolbar_stamp_items_force(vc, entry, includeToggleSidebar, NO);
 }
 
 // ─── zapp_ios_toolbar_apply_to_nav (internal helper) ─────────────────────────
@@ -1178,14 +1206,20 @@ void zapp_ios_toolbar_apply_for_window(void* window_ptr) {
     zapp_ios_toolbar_apply_for_window_hidden(window_ptr, sidebarHidden);
 }
 
-// ─── zapp_ios_toolbar_stamp_vc ───────────────────────────────────────────────
+// ─── zapp_ios_toolbar_stamp_vc / _force ──────────────────────────────────────
 //
 // #771 datum 3: stamp the window's registered toolbar onto a SPECIFIC VC —
 // called by ZappRouteNavDelegate (routing.m) at willShow/didShow so the VC
 // being shown always receives the entry's current item instances (content VC
 // after a pop, route VC at push). The include-toggle decision is the same
 // live-state read set_items uses. Main thread only.
-void zapp_ios_toolbar_stamp_vc(void* window_ptr, UIViewController* vc) {
+//
+// #771 G1-F fix round 2: `force` threads straight through to
+// zapp_ios_toolbar_stamp_items_force — see that function's header comment.
+// routing.m passes YES ONLY at the didShow re-stamp call site (the cancelled-
+// interactive-swipe recovery path); willShow keeps calling the guarded
+// zapp_ios_toolbar_stamp_vc wrapper below (force=NO).
+void zapp_ios_toolbar_stamp_vc_force(void* window_ptr, UIViewController* vc, BOOL force) {
     if (!window_ptr || !vc || !zapp_ios_toolbars) return;
     NSCAssert([NSThread isMainThread],
               @"zapp_ios_toolbar_stamp_vc must be called on the main thread");
@@ -1196,7 +1230,13 @@ void zapp_ios_toolbar_stamp_vc(void* window_ptr, UIViewController* vc) {
     BOOL includeToggle = collapsed
         ? YES
         : !zapp_ios_split_display_mode_is_secondary_only(window_ptr);
-    zapp_ios_toolbar_stamp_items(vc, entry, includeToggle);
+    zapp_ios_toolbar_stamp_items_force(vc, entry, includeToggle, force);
+}
+
+// Guarded (default) entry point — force=NO. Kept as the stable call shape for
+// the willShow stamp in routing.m.
+void zapp_ios_toolbar_stamp_vc(void* window_ptr, UIViewController* vc) {
+    zapp_ios_toolbar_stamp_vc_force(window_ptr, vc, NO);
 }
 
 // ─── darwin_toolbar_update_item ──────────────────────────────────────────────

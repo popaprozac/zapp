@@ -196,6 +196,10 @@ extern void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, boo
 // #771 datum 3: stamp the window's toolbar defs onto the VC being shown
 // (defined in ios/toolbar.m).
 extern void zapp_ios_toolbar_stamp_vc(void* window_ptr, UIViewController* vc);
+// #771 G1-F fix round 2: forced variant — bypasses the idempotence guard so
+// the didShow re-stamp can rebuild the bar even when the item arrays/title
+// are pointer-identical to what's already there (defined in ios/toolbar.m).
+extern void zapp_ios_toolbar_stamp_vc_force(void* window_ptr, UIViewController* vc, BOOL force);
 
 @interface ZappRouteNavDelegate : NSObject <UINavigationControllerDelegate>
 @property (nonatomic, assign) int32_t windowId;
@@ -320,13 +324,24 @@ extern void zapp_ios_toolbar_stamp_vc(void* window_ptr, UIViewController* vc);
     // interactive swipes (willShow fired for a VC that never landed; didShow
     // always reports the real top) and guarantees the displayed bar holds the
     // instances darwin_toolbar_update_item patches.
+    //
+    // #771 G1-F fix round 2: this is the ONE call site that passes force=YES.
+    // During an interactive swipe-back, UIKit reparents shared customView
+    // items (segmented control, label items, titleView) out of the displayed
+    // bar into the incoming bar's content view; on CANCEL, UIKit discards
+    // that content view — and the views inside it — without ever rebuilding
+    // the displayed bar. This re-stamp is the sole restorer, and it only
+    // works if the array/titleView assignments run unconditionally: the
+    // G1-F idempotence guard's pointer-equality skip would otherwise treat
+    // the (unchanged) computed arrays as a no-op and leave the custom views
+    // gone. force=YES here forces the setters to run regardless.
     void* winPtr = darwin_window_get_by_numeric_id(self.windowId);
     if (winPtr) {
         UIViewController* shownContentVC = zapp_ios_content_vc_for_window(winPtr);
         BOOL shownIsContent = (shownContentVC && vc == shownContentVC);
         BOOL shownIsRoute = [vc isKindOfClass:[ZappRouteVC class]];
         if (shownIsContent || shownIsRoute)
-            zapp_ios_toolbar_stamp_vc(winPtr, vc);
+            zapp_ios_toolbar_stamp_vc_force(winPtr, vc, YES);
 
         // #771 new-issue A: system drag-drop targets the webview of the VC
         // now on screen — the route VC's own webview after a push, the
