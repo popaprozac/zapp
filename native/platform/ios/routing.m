@@ -153,38 +153,46 @@ static void zapp_route_vc_teardown(ZappRouteVC* vc);
     [super viewWillAppear:animated];
     UINavigationController* nav = self.navigationController;
     if (!nav) return;
+    // #782 fix (G1 issue 2): skip the imperative bar write while an INTERACTIVE
+    // transition is in flight. This fires when a CANCELLED swipe-back re-appears
+    // this route, and an imperative setNavigationBarHidden: during UIKit's
+    // cancel-reversal SNAPS instead of animating (it isn't coupled to the
+    // reversal). The viewWillDisappear coordinator dance below owns the bar for
+    // that path. On a normal (non-interactive) push the guard passes and this
+    // hides the chrome-less bar as before.
+    id<UIViewControllerTransitionCoordinator> tc = self.transitionCoordinator;
+    if (tc && tc.isInteractive) return;
     if (nav.navigationBarHidden != self.navbarHidden)
         [nav setNavigationBarHidden:self.navbarHidden animated:animated];
 }
 
-// #782 cancelled-swipe coordinator coupling (fixes #784 residual 2): during an
-// INTERACTIVE pop the user can cancel the swipe halfway. The destination VC's
-// viewWillAppear already animated ITS bar in alongside the swipe; on COMMIT
-// that's correct. On CANCEL we stay on this route, so restore THIS route's bar
-// state inside the SAME coordinator pass — no separate frame where the bar is
-// wrong (the flicker the deleted didShow re-assert could not avoid, being
-// post-settle). Non-interactive pops need nothing: the destination's
-// viewWillAppear owns the bar.
+// #782 fix (G1 issue 2, fixes #784 residual 2): cancelled-swipe bar slide.
+// Only a chrome-less route (navbarHidden=YES) needs this: it hid its own bar, so
+// the VC it pops back to (content / a chrome route) shows one and the shared bar
+// must transition. A route WITH a bar pops to content (also barred) — no
+// transition to coordinate. The bar reveal must live INSIDE the
+// animateAlongsideTransition BLOCK (spike DetailViewController.m:219-252), NOT a
+// completion: the block is coupled to the interactive pop, so on COMMIT the
+// destination keeps its bar and on CANCEL the coordinator REVERSES the block,
+// sliding the bar back out in lockstep with the swipe roll-back. An imperative
+// setNavigationBarHidden: from a completion or the re-appearing route's
+// viewWillAppear is NOT coupled to the reversal and SNAPS (the earlier
+// animated:YES completion still vanished instantly). The completion re-hides
+// WITHOUT animation only as a final-state cleanup — the block already animated it.
 - (void)viewWillDisappear:(BOOL)animated {
     [super viewWillDisappear:animated];
+    if (!self.navbarHidden) return;
     UINavigationController* nav = self.navigationController;
     if (!nav) return;
     id<UIViewControllerTransitionCoordinator> tc = self.transitionCoordinator;
-    if (tc && tc.isInteractive) {
-        BOOL hidden = self.navbarHidden;   // scalar capture — no self-retain (MRC)
-        [tc animateAlongsideTransition:nil
-                            completion:^(id<UIViewControllerTransitionCoordinatorContext> ctx) {
-            // #782 fix (G1 issue 2): the destination VC's viewWillAppear showed
-            // ITS bar during the swipe, but that show is NOT coordinator-coupled,
-            // so on CANCEL nothing rolls it back and this route (which wants the
-            // bar hidden) is left showing the destination's bar. The cancelled
-            // route's viewWillAppear does NOT re-fire, so this completion is the
-            // sole restorer. animated:YES (was NO) so the stranded bar SLIDES out
-            // instead of vanishing in one frame — the #784 residual-2 polish.
-            if (ctx.isCancelled)
-                [nav setNavigationBarHidden:hidden animated:YES];
-        }];
-    }
+    if (!(tc && tc.isInteractive)) return;
+    [tc animateAlongsideTransition:^(id<UIViewControllerTransitionCoordinatorContext> ctx) {
+        (void)ctx;
+        [nav setNavigationBarHidden:NO animated:YES];   // reveal destination's bar, coordinator-coupled
+    } completion:^(id<UIViewControllerTransitionCoordinatorContext> ctx) {
+        if (ctx.isCancelled)
+            [nav setNavigationBarHidden:YES animated:NO]; // cleanup; block reversal already animated
+    }];
 }
 
 - (void)viewDidDisappear:(BOOL)animated {
