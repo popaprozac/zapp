@@ -174,8 +174,15 @@ static void zapp_route_vc_teardown(ZappRouteVC* vc);
         BOOL hidden = self.navbarHidden;   // scalar capture — no self-retain (MRC)
         [tc animateAlongsideTransition:nil
                             completion:^(id<UIViewControllerTransitionCoordinatorContext> ctx) {
+            // #782 fix (G1 issue 2): the destination VC's viewWillAppear showed
+            // ITS bar during the swipe, but that show is NOT coordinator-coupled,
+            // so on CANCEL nothing rolls it back and this route (which wants the
+            // bar hidden) is left showing the destination's bar. The cancelled
+            // route's viewWillAppear does NOT re-fire, so this completion is the
+            // sole restorer. animated:YES (was NO) so the stranded bar SLIDES out
+            // instead of vanishing in one frame — the #784 residual-2 polish.
             if (ctx.isCancelled)
-                [nav setNavigationBarHidden:hidden animated:NO];
+                [nav setNavigationBarHidden:hidden animated:YES];
         }];
     }
 }
@@ -476,6 +483,29 @@ BOOL zapp_route_bar_should_show(void* win, UIViewController* vc, UIViewControlle
 
         if ((shownIsContent || shownIsRoute) && !shownRouteWantsBarHidden)
             zapp_ios_toolbar_stamp_vc_force(winPtr, vc, YES);
+
+        // #782 fix (G1 issue 1): collapsed-iPhone two-nav pop-gesture ownership.
+        // On collapsed iPhone the content lives in a NESTED nav (ctNav) inside
+        // the combined nav [sidebarVC, ctNav]. A router.push installs the pop
+        // delegate on ctNav (contentVC.navigationController), so self.nav becomes
+        // ctNav. Once the route pops back to the content ROOT, ctNav has count 1
+        // — so the home->sidebar edge swipe, captured by ctNav's now-count-1
+        // recognizer, is refused (nothing to pop), and the COMBINED nav's
+        // recognizer (which WOULD pop content->sidebar) never fires. Hand
+        // ownership back to the combined nav here — the same re-arm the
+        // show_content path does, now also triggered by a route settling at
+        // content root — which re-points self.nav to the combined nav AND disarms
+        // ctNav's recognizer (install_delegate's retarget path). Guarded to the
+        // collapsed shape so iPad-expanded (no combined nav) is untouched.
+        extern BOOL zapp_ios_split_is_collapsed_for_window(void* window_ptr);
+        if (shownIsContent && nav.viewControllers.count == 1
+            && zapp_ios_split_is_collapsed_for_window(winPtr)) {
+            extern UINavigationController* zapp_ios_collapsed_nav_for_window(void* window_ptr);
+            extern void zapp_ios_route_install_nav_delegate(UINavigationController* nav, int32_t windowId);
+            UINavigationController* combined = zapp_ios_collapsed_nav_for_window(winPtr);
+            if (combined && combined != nav)
+                zapp_ios_route_install_nav_delegate(combined, self.windowId);
+        }
 
         // #771 new-issue A: system drag-drop targets the webview of the VC
         // now on screen — the route VC's own webview after a push, the
