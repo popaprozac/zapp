@@ -436,6 +436,57 @@ static void zapp_ios_sidebar_rearm_pop(ZappIOSSidebarController* c) {
     zapp_ios_route_install_nav_delegate(nav, (int32_t)c.hostWindowId);
 }
 
+// #771 G2: apply the bar want-state rule to the COLLAPSED (on-screen combined)
+// nav for a sidebar↔content transition whose effective top VC we KNOW at the
+// call site.
+//
+// On iPhone the sidebar↔content switch is NOT a route push:
+// darwin_sidebar_show_content nests the content nav via showColumn:Secondary and
+// darwin_sidebar_show_sidebar un-nests it via showColumn:Primary. The ongoing
+// bar-visibility owner — ZappRouteNavDelegate.willShowViewController: (routing.m)
+// — fires on the CONTENT nav for route push/pop, but (a) it is installed on the
+// content nav only at the first route PUSH, so the FIRST content reveal fires no
+// callback at all, and (b) un-nesting back to the sidebar root leaves the content
+// nav's own top VC unchanged, so no willShow fires there either. Either way the
+// on-screen collapsed nav's bar is stranded at its prior value: content shows
+// bar-less on first reveal (and its hidden bar disables UIKit's default edge-swipe
+// pop), and the sidebar root shows an empty bar after content had one.
+//
+// Fix: apply the SAME rule here — zapp_route_bar_should_show +
+// zapp_ios_toolbar_stamp_vc (routing.m / toolbar.m), NOT a second rule — against
+// the KNOWN effective VC (contentVC on reveal-content, sidebarVC on
+// reveal-sidebar) so the async showColumn transition's not-yet-updated stack is
+// irrelevant. Writes BOTH the visible combined nav AND the nested content nav,
+// because UIKit's collapse machinery mirrors the nested nav's bar-hidden onto the
+// combined bar once the nesting settles — writing only the combined nav would be
+// undone one tick later.
+static void zapp_ios_sidebar_apply_collapsed_bar(ZappIOSSidebarController* c,
+                                                 UIViewController* effectiveVC) {
+    if (!c || !effectiveVC) return;
+    void* win = darwin_window_get_by_numeric_id(c.hostWindowId);
+    if (!win) return;
+    UINavigationController* collapsedNav = c.collapsedNav ?: zapp_ios_collapsed_nav(c.splitVC);
+    if (!collapsedNav) return;
+    extern BOOL zapp_route_bar_should_show(void* win, UIViewController* vc,
+                                           UIViewController* contentVC);
+    extern void zapp_ios_toolbar_stamp_vc(void* window_ptr, UIViewController* vc);
+    BOOL showBar = zapp_route_bar_should_show(win, effectiveVC, c.contentVC);
+    // The bar the user sees is the combined (collapsed) nav's — animate its
+    // change so it rides the showColumn slide. Idempotency guard mirrors
+    // willShow's: navigationBarHidden == showBar means the current state is
+    // wrong and needs the write.
+    if (collapsedNav.navigationBarHidden == showBar)
+        [collapsedNav setNavigationBarHidden:!showBar animated:YES];
+    // Keep the nested content nav consistent (it is off-screen while nested, so
+    // no animation) so the post-nesting mirror can't clobber the write above.
+    UINavigationController* ctNav = c.contentVC.navigationController;
+    if (ctNav && ctNav != collapsedNav && ctNav.navigationBarHidden == showBar)
+        [ctNav setNavigationBarHidden:!showBar animated:NO];
+    // Stamp toolbar items onto the shown VC when the bar is up (mirrors willShow's
+    // stamp) so a bar revealed here is never empty.
+    if (showBar) zapp_ios_toolbar_stamp_vc(win, effectiveVC);
+}
+
 // --- Event fan-out (mirrors darwin/sidebar.m's zapp_sidebar_emit) ---------
 //
 // dispatchWindowEvent's first arg is the target window id ("win-<hostId>");
@@ -1108,6 +1159,10 @@ void darwin_sidebar_show_content(int32_t window_id) {
                 // swipe-back gesture) may never have fired. Re-arm defensively now
                 // that a content VC is on the stack.
                 zapp_ios_sidebar_rearm_pop(c);
+                // #771 G2: this reveal fires no willShow on the first pass (the
+                // route-nav delegate isn't installed yet) — apply the bar
+                // want-state rule directly for the now-revealed content VC.
+                zapp_ios_sidebar_apply_collapsed_bar(c, c.contentVC);
             } else {
                 // overlay on regular: dismiss the flyout
                 [c.splitVC hideColumn:UISplitViewControllerColumnPrimary];
@@ -1142,6 +1197,13 @@ void darwin_sidebar_show_sidebar(int32_t window_id) {
         } else {
             c.splitVC.preferredDisplayMode = UISplitViewControllerDisplayModeOneBesideSecondary;
         }
+        // #771 G2: revealing the sidebar root un-nests the content nav but fires
+        // no willShow (the content nav's own top VC is unchanged), so nothing
+        // would otherwise re-apply the "sidebar root wants no bar" rule to the
+        // combined nav — leaving a stranded empty bar. Apply it directly. Compact
+        // only: on regular width the bar belongs to the tiled content column,
+        // owned by the toolbar apply hooks, not this collapsed-shape rule.
+        if (compact) zapp_ios_sidebar_apply_collapsed_bar(c, c.sidebarVC);
         zapp_ios_sidebar_sync_collapse(c, NO);  // sidebar visible == expanded
     });
 }

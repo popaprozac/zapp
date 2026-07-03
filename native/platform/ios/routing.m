@@ -429,12 +429,20 @@ BOOL zapp_route_bar_should_show(void* win, UIViewController* vc, UIViewControlle
         // bar on a route that opted out. Symmetric case: a cancelled swipe INTO
         // a hidden-bar route can strand the bar hidden on a VC that wants it
         // shown. didShow always reports the true final top VC, so it's the only
-        // call site that can safely correct a stranded write. animated:NO — no
-        // transition is in flight to animate alongside.
+        // call site that can safely correct a stranded write.
+        //
+        // #771 G2 rider: animated:YES. didShow fires only once the transition has
+        // SETTLED (committed OR cancelled), so no transition is ever in flight to
+        // race here — the animation is always safe. The reason it must animate:
+        // on a CANCELLED interactive swipe the bar that willShow animated IN for
+        // the never-landed VC is still on screen; an animated:NO re-assert would
+        // make it vanish in a single frame (a visible flicker). Animating the
+        // corrective toggle lets the stranded bar slide back out (or in) in step
+        // with the swipe's own roll-back, matching UIKit's cancel animation.
         if (want.showBar && nav.navigationBarHidden) {
-            [nav setNavigationBarHidden:NO animated:NO];
+            [nav setNavigationBarHidden:NO animated:YES];
         } else if (!want.showBar && !nav.navigationBarHidden) {
-            [nav setNavigationBarHidden:YES animated:NO];
+            [nav setNavigationBarHidden:YES animated:YES];
         }
 
         // Layer 3 (iOS 26+, #771 T7 review I1 fix): full-screen content pop for
