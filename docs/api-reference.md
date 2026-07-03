@@ -1832,10 +1832,16 @@ are push-only). Chrome is persisted per history entry: going back and then
   toolbar wholesale** while the route is on top and **falls back to the window
   defs when absent** (and again after the route pops). `style` is never sent —
   the route rides the existing bar. Notes:
-  - `toolbar.updateItem` keeps targeting the **window** toolbar defs — the
-    displayed instance it patches is the window bar; override items are static
-    for their route's lifetime (v1). Prefer item ids distinct from the window
-    toolbar's.
+  - `toolbar: []` behaves as **absent** (falls back to the window defs) —
+    unlike `toolbar.setItems([])`, which throws.
+  - `navbar: { hidden: true }` on the same push wins: the nav bar (and
+    therefore the override) never renders, so a `toolbar` override paired
+    with `navbar: { hidden: true }` is silently unused.
+  - `toolbar.updateItem` always patches the **window** toolbar defs'
+    instances — while a route override is displayed, the patch is not
+    visible until the window bar returns (the route pops or `toolbar` was
+    absent). Override items are static for their route's lifetime (v1).
+    Prefer item ids distinct from the window toolbar's.
   - Pane-dependent items (`toggleSidebar`, `toggleInspector`,
     `trackingSeparator`) validate against the pushing handle's pane shape,
     exactly like `setItems`.

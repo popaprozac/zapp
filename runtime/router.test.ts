@@ -175,6 +175,27 @@ describe("router handle ops post correct wire messages", () => {
     expect(hits).toBe(1);
     delete (globalThis as any)[Symbol.for("zapp.windowId")];
   });
+
+  // #771 T8 review I2: purgeWindowToolbarActions used to delete every
+  // "${windowId}:" key on a window-toolbar setItems/remove call, including
+  // route-override actions registered by router.push — killing a displayed
+  // route action's callback the moment the app touched its window toolbar.
+  // Route-registered keys are now tagged at push time and spared by the purge.
+  test("window.toolbar.setItems purge spares a route-registered push action", () => {
+    let hits = 0;
+    (globalThis as any)[Symbol.for("zapp.windowId")] = "win-12";
+    const win = createWindowHandle("win-12");
+    win.router.push({
+      url: "/detail",
+      toolbar: [{ id: "d-share", label: "Share", action: () => { hits++; } }],
+    });
+    // A window-toolbar setItems call purges the window's OWN registrations —
+    // it must not also drop the still-displayed route override's action.
+    win.toolbar.setItems([{ id: "settings", label: "Settings", action: () => {} }]);
+    mock.fire("window:toolbar-clicked", { windowId: "win-12", id: "d-share" });
+    expect(hits).toBe(1);
+    delete (globalThis as any)[Symbol.for("zapp.windowId")];
+  });
 });
 
 // ── ROUTE_CHANGED event updates cached getters ────────────────────────────────

@@ -1326,7 +1326,19 @@ void zapp_ios_toolbar_stamp_vc_force(void* window_ptr, UIViewController* vc, BOO
     // above would have skipped it).
     ZappIOSToolbarEntry* override = objc_getAssociatedObject(vc, &kZappRouteToolbarEntryKey);
     if (override) entry = override;
-    if (!entry) return;
+    if (!entry) {
+        // I1 (#771 T8 review): a title-only push (no toolbar override) into a
+        // window that never registered a toolbar previously left this VC's
+        // navigationItem.title untouched — there is no entry to reach the
+        // title-only stamp arm inside stamp_items_force below, so we bailed
+        // before it ever ran. The bar itself DOES show in this scenario
+        // (want-state is `isRoute && !navbarHidden`, independent of whether a
+        // toolbar entry exists), so the route's title must still land. Apply
+        // it directly here, then bail (no items to stamp).
+        NSString* routeTitle = objc_getAssociatedObject(vc, &kZappRouteTitleKey);
+        if (routeTitle.length) vc.navigationItem.title = routeTitle;
+        return;
+    }
     BOOL collapsed = zapp_ios_split_is_collapsed_for_window(window_ptr);
     BOOL includeToggle = collapsed
         ? YES

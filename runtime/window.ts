@@ -591,6 +591,15 @@ export interface PopoverHandle {
 const toolbarActions = new Map<string, (ctx?: ActionContext) => void>();
 let toolbarClickWired = false;
 
+/** `toolbarActions` keys registered by `router.push`'s `toolbar` override
+ * (⊂ toolbarActions, tagged at push-registration time — #771 T8 review I2).
+ * `purgeWindowToolbarActions` spares tagged keys: a route override's action
+ * must keep firing after a window-toolbar `setItems`/`remove` call and after
+ * `router.forward` replays the route (replay never re-registers — the JS
+ * side only registers once, at the original `push`), so route action keys
+ * are intentionally NEVER purged. */
+const routeToolbarActionKeys = new Map<string, Set<string>>();
+
 function wireToolbarClicks(): void {
   if (toolbarClickWired) return;
   toolbarClickWired = true;
@@ -716,16 +725,34 @@ function wireToolbarMenuClicks(): void {
 
 /** Strip `action` callbacks out of a MenuItemDef tree (recursing submenus),
  * collecting them into `out` keyed by (possibly auto-generated) id. Mirrors
- * context-menu.ts's collectAndStrip. */
-function stripMenuActions(items: MenuItemDef[], out: Map<string, (ctx?: ActionContext) => void>): any[] {
+ * context-menu.ts's collectAndStrip.
+ *
+ * `idBase`, when provided (the `router.push` toolbar-override path — #771
+ * T8 review I3), derives auto-generated ids from `${idBase}_${n}` — a
+ * counter local to this call (flat across the whole tree, via `counter`) —
+ * instead of the module-global `tbMenuIdCounter`. Re-stripping the identical
+ * menu tree (e.g. an identical repeated push) then re-derives the SAME ids,
+ * so the caller's `Map.set()` overwrites the existing entry instead of
+ * minting a fresh one and orphaning the old. Omitted (the `setItems` /
+ * `updateItem` paths) keeps the original ever-growing global-counter
+ * behavior — those paths purge-and-rebuild a window's registrations
+ * wholesale on every call, so an ever-growing counter never leaks there. */
+function stripMenuActions(
+  items: MenuItemDef[],
+  out: Map<string, (ctx?: ActionContext) => void>,
+  idBase?: string,
+  counter: { n: number } = { n: 0 },
+): any[] {
   return items.map((item) => {
     const clean: any = { ...item };
     if (clean.action) {
-      if (!clean.id) clean.id = `__tbmenu_${++tbMenuIdCounter}`;
+      if (!clean.id) {
+        clean.id = idBase ? `__tbmenu_${idBase}_${counter.n++}` : `__tbmenu_${++tbMenuIdCounter}`;
+      }
       out.set(clean.id, clean.action);
       delete clean.action;
     }
-    if (clean.submenu) clean.submenu = stripMenuActions(clean.submenu, out);
+    if (clean.submenu) clean.submenu = stripMenuActions(clean.submenu, out, idBase, counter);
     return clean;
   });
 }
@@ -738,15 +765,19 @@ const toolbarMenuIdsByWindow = new Map<string, Map<string, Set<string>>>();
 
 /** Remove a window's toolbar registrations from both action maps.
  * Maps are injected for unit tests; production callers pass the module
- * maps. */
+ * maps. `routeActionKeys` (#771 T8 review I2) tags `router.push` toolbar-
+ * override action keys — those are spared (see `routeToolbarActionKeys`
+ * doc comment for why they're never purged). */
 export function purgeWindowToolbarActions(
   windowId: string,
   actions: Map<string, (ctx?: ActionContext) => void>,
   menuActions: Map<string, (ctx?: ActionContext) => void>,
   menuIdsByWindow: Map<string, Map<string, Set<string>>>,
+  routeActionKeys: Map<string, Set<string>>,
 ): void {
+  const spared = routeActionKeys.get(windowId);
   for (const key of [...actions.keys()]) {
-    if (key.startsWith(`${windowId}:`)) actions.delete(key);
+    if (key.startsWith(`${windowId}:`) && !spared?.has(key)) actions.delete(key);
   }
   const perItem = menuIdsByWindow.get(windowId);
   if (perItem) {
@@ -899,6 +930,11 @@ export function normalizeToolbar(
   toolbar: ToolbarOptions,
   hasSidebar: boolean,
   hasInspector: boolean,
+  // #771 T8 review I3: when set (the router.push call site), threads through
+  // to stripMenuActions as the stable auto-id base. Omitted by every other
+  // caller (setItems et al.), which keeps the original global-counter
+  // behavior — see stripMenuActions' doc comment.
+  windowId?: string,
 ): {
   json: string;
   actions: Map<string, (ctx?: ActionContext) => void>;
@@ -1038,7 +1074,7 @@ export function normalizeToolbar(
     if (it.badge !== undefined) wire.badge = badgeToWire(it.badge);
     if (it.menu) {
       const itemMenuActions = new Map<string, (ctx?: ActionContext) => void>();
-      const strippedMenu = stripMenuActions(it.menu, itemMenuActions);
+      const strippedMenu = stripMenuActions(it.menu, itemMenuActions, windowId ? `${windowId}_${it.id}` : undefined);
       wire.menu = strippedMenu;
       for (const [mid, fn] of itemMenuActions) menuActions.set(mid, fn);
       if (itemMenuActions.size > 0) menuIdsByItem.set(it.id, new Set(itemMenuActions.keys()));
@@ -1485,15 +1521,30 @@ function createRouterHandle(windowId: string, hasSidebar = false, hasInspector =
       // additively so the window toolbar's own actions survive the route.
       let toolbarJson: string | undefined;
       if (o.toolbar !== undefined) {
+        // I3 (#771 T8 review): pass windowId so auto-generated menu-item ids
+        // derive from (windowId, itemId, menu-path-index) instead of the
+        // module-global counter — repeating this same push (e.g. after a
+        // pop/forward round-trip, or the app just pushing the same route
+        // again) re-derives the SAME ids and overwrites the existing map
+        // entries instead of minting fresh ones and orphaning the old.
         const { json, actions, menuActions, menuIdsByItem, menuTrees } =
-          normalizeToolbar({ items: o.toolbar }, hasSidebar, hasInspector);
+          normalizeToolbar({ items: o.toolbar }, hasSidebar, hasInspector, windowId);
         const parsed = JSON.parse(json);
         delete parsed.style;               // per-route override never carries style
         toolbarJson = JSON.stringify(parsed);
         if (actions.size > 0) {
           wireToolbarClicks();
           wireToolbarGroupSelect();
-          for (const [id, fn] of actions) toolbarActions.set(`${windowId}:${id}`, fn);
+          // I2 (#771 T8 review): tag each key as route-registered so a later
+          // window-toolbar setItems/remove purge spares it (see
+          // routeToolbarActionKeys doc comment).
+          let tagged = routeToolbarActionKeys.get(windowId);
+          if (!tagged) { tagged = new Set(); routeToolbarActionKeys.set(windowId, tagged); }
+          for (const [id, fn] of actions) {
+            const key = `${windowId}:${id}`;
+            toolbarActions.set(key, fn);
+            tagged.add(key);
+          }
         }
         if (menuActions.size > 0) {
           wireToolbarMenuClicks();
@@ -1622,7 +1673,7 @@ export function createWindowHandle(windowId: string, sidebarOpts?: SidebarOption
         assertToolbarItemsNonEmpty(json);
         if (setOpts?.style === undefined) delete parsed.style;
         const wireJson = JSON.stringify(parsed);
-        purgeWindowToolbarActions(windowId, toolbarActions, toolbarMenuActions, toolbarMenuIdsByWindow);
+        purgeWindowToolbarActions(windowId, toolbarActions, toolbarMenuActions, toolbarMenuIdsByWindow, routeToolbarActionKeys);
         purgeWindowToolbarMenuTrees(windowId, toolbarMenuTrees, toolbarMenuItemOwner);
         if (actions.size > 0) {
           wireToolbarClicks();
@@ -1666,7 +1717,7 @@ export function createWindowHandle(windowId: string, sidebarOpts?: SidebarOption
         windowAction("toolbar:updateItem", { windowId, itemJson: json });
       },
       remove() {
-        purgeWindowToolbarActions(windowId, toolbarActions, toolbarMenuActions, toolbarMenuIdsByWindow);
+        purgeWindowToolbarActions(windowId, toolbarActions, toolbarMenuActions, toolbarMenuIdsByWindow, routeToolbarActionKeys);
         purgeWindowToolbarMenuTrees(windowId, toolbarMenuTrees, toolbarMenuItemOwner);
         windowAction("toolbar:remove", { windowId });
       },

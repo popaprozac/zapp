@@ -272,11 +272,26 @@ describe("toolbar registry hygiene helpers", () => {
       ["win-1", new Map([["filter", new Set(["all", "unread"])]])],
       ["win-2", new Map([["f2", new Set(["other-window"])]])],
     ]);
-    purgeWindowToolbarActions("win-1", actions, menuActions, byWindow);
+    purgeWindowToolbarActions("win-1", actions, menuActions, byWindow, new Map());
     expect([...actions.keys()]).toEqual(["win-2:compose"]);
     expect([...menuActions.keys()]).toEqual(["other-window"]);
     expect(byWindow.has("win-1")).toBe(false);
     expect(byWindow.has("win-2")).toBe(true);
+  });
+
+  // #771 T8 review I2: route-registered action keys (tagged at push-registration
+  // time — see routeToolbarActionKeys in window.ts) must survive a window-toolbar
+  // purge (setItems/remove) so a displayed route override's action keeps firing.
+  test("purgeWindowToolbarActions spares tagged route-registered keys", () => {
+    const actions = new Map<string, () => void>([
+      ["win-1:compose", () => {}],  // window-toolbar action — purged
+      ["win-1:d-share", () => {}],  // route-registered action — spared
+    ]);
+    const menuActions = new Map<string, () => void>();
+    const byWindow = new Map<string, Map<string, Set<string>>>();
+    const routeKeys = new Map<string, Set<string>>([["win-1", new Set(["win-1:d-share"])]]);
+    purgeWindowToolbarActions("win-1", actions, menuActions, byWindow, routeKeys);
+    expect([...actions.keys()]).toEqual(["win-1:d-share"]);
   });
 
   test("purgeItemToolbarMenuActions removes only that item's menu ids", () => {

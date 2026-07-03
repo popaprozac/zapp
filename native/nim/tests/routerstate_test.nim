@@ -122,6 +122,18 @@ block:
   routerReplace(13, "/y", "")
   doAssert routerCurrentChrome(13) == "", "replace resets chrome to defaults"
 
+# Window 14: popToRoot drops chrome (#771 T8 review — chrome'd entries above
+# the root must not leak their chrome once popToRoot truncates the stack
+# back down to the (chrome-less) seed entry).
+block:
+  routerSeed(14, "/root")
+  routerPush(14, "/a", "", "{\"title\":\"A\"}")
+  routerPush(14, "/b", "", "{\"title\":\"B\"}")
+  doAssert routerCurrentChrome(14) == "{\"title\":\"B\"}", "sanity: chrome set before popToRoot"
+  doAssert routerPopToRoot(14), "popToRoot returns true"
+  doAssert routerCurrentUrl(14) == "/root", "popToRoot: back to root url"
+  doAssert routerCurrentChrome(14) == "", "popToRoot: chrome dropped along with the truncated entries"
+
 # --- routerDepth + router_current_url (N3a iOS read accessors) ---------------
 block:
   routerSeed(901, "/")

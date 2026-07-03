@@ -134,3 +134,42 @@ describe("applyToolbarConventions", () => {
   });
 });
 
+// #771 T8 review I3: router.push's toolbar override used to mint fresh
+// __tbmenu_N ids (module-global counter) on every push, orphaning the
+// previous push's ids in the app-global action maps — unbounded growth
+// across repeated pushes of the same route. normalizeToolbar's optional
+// 4th `windowId` arg (only router.push passes it) derives stable
+// (windowId, itemId, menu-path-index) ids instead, so re-normalizing the
+// same menu tree reuses the same ids and the caller's Map.set() overwrites
+// in place rather than growing.
+describe("normalizeToolbar stable menu ids (push path, #771 T8 review I3)", () => {
+  const menuToolbar = {
+    items: [
+      {
+        id: "d-share", label: "Share",
+        menu: [
+          { label: "Copy Link", action: () => {} },
+          { label: "Email", action: () => {} },
+        ],
+      } as any,
+    ],
+  };
+
+  test("repeated normalizeToolbar(..., windowId) calls reuse the same auto menu ids", () => {
+    const first = normalizeToolbar(menuToolbar, false, false, "win-42");
+    const second = normalizeToolbar(menuToolbar, false, false, "win-42");
+    const firstIds = [...first.menuActions.keys()].sort();
+    const secondIds = [...second.menuActions.keys()].sort();
+    expect(firstIds.length).toBe(2);
+    expect(secondIds).toEqual(firstIds); // same keys reused, not fresh ones appended
+    for (const id of firstIds) expect(id).toMatch(/^__tbmenu_win-42_d-share_\d+$/);
+  });
+
+  test("without windowId (setItems/create path), ids keep the original global-counter form", () => {
+    const { menuActions } = normalizeToolbar(menuToolbar, false, false);
+    const ids = [...menuActions.keys()];
+    expect(ids.length).toBe(2);
+    for (const id of ids) expect(id).toMatch(/^__tbmenu_\d+$/);
+  });
+});
+
