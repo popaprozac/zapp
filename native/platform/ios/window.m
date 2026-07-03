@@ -181,6 +181,42 @@ static void zapp_ios_register_webview_slot(int32_t slot, WKWebView* webview, NSS
     }
 }
 
+// #771 G1-C: transport slot for a pushed route VC's webview (ios/routing.m).
+// Same model as the sidebar/inspector panes above: the webview registers under
+// its OWN dispatch slot (so sendInvokeResponse → darwin_window_eval_js reaches
+// IT, and darwin_webview_eval_all broadcasts include it) while its window-id
+// STRING is the host's — string→numeric resolution finds the host first, so
+// explicit windowId args keep targeting the real window. Without this the
+// route webview was transport-orphaned: its invoke responses were evaluated in
+// the content webview (darwin_window_id_for_webview falls back to 0) and
+// ROUTE_CHANGED broadcasts never reached it — a pushed page's router.current()
+// hung forever and router.on() never fired, leaving toolbar back/fwd at their
+// declared enabled:false.
+void zapp_ios_register_route_webview(int32_t slot, void* webview_ptr, int32_t host_slot) {
+    if (slot < 0 || slot >= ZAPP_MAX_WINDOW_CALLBACKS) return;
+    WKWebView* wv = (__bridge WKWebView*)webview_ptr;
+    if (!wv) return;
+    NSString* hostId = (host_slot >= 0 && host_slot < ZAPP_MAX_WINDOW_CALLBACKS)
+        ? zapp_ios_window_ids[host_slot] : nil;
+    if (!hostId) hostId = [NSString stringWithFormat:@"win-%d", host_slot];
+    zapp_ios_register_webview_slot(slot, wv, hostId);
+}
+
+// #771 G1-C: free a route webview's transport slot at teardown (pop). Scans by
+// webview pointer; skips host slots (zapp_ios_windows non-nil) — a route/pane
+// slot never owns a UIWindow, and the host slot must keep its id string even
+// if a stale registration were found there.
+void zapp_ios_unregister_webview_slot(void* webview_ptr) {
+    WKWebView* wv = (__bridge WKWebView*)webview_ptr;
+    if (!wv) return;
+    for (int i = 0; i < ZAPP_MAX_WINDOW_CALLBACKS; i++) {
+        if (zapp_ios_webviews[i] == wv && zapp_ios_windows[i] == nil) {
+            zapp_ios_webviews[i] = nil;
+            zapp_ios_window_ids[i] = nil;
+        }
+    }
+}
+
 // ZappIOSSplitViewController is defined in ios/sidebar.m. Both TUs are in the
 // same link unit (same xcbuild target) so the runtime class is always present.
 // We use it instead of UISplitViewController directly so that

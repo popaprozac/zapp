@@ -380,6 +380,13 @@ proc allocSlot*(): int32 =
   result = gNextWindowId
   inc gNextWindowId
 
+proc zapp_alloc_dispatch_slot*(): int32 {.exportc, cdecl.} =
+  ## C-callable allocSlot (#771 G1-C). ios/routing.m draws a transport slot for
+  ## each pushed route VC's webview so invoke responses + broadcast evals reach
+  ## it (same slot model as sidebar/inspector panes). Same monotonic id-space —
+  ## a natively-minted route slot can never collide with a later window/pane id.
+  allocSlot()
+
 proc create*(wm: WindowManager, o: WindowOptions): Window =
   ## app.window.create(opts) — mirrors zc app.window.create. Delegates to the
   ## createWindow primitive (also used directly by the router for __window:create).

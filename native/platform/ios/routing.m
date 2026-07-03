@@ -54,6 +54,12 @@ extern void zapp_ios_edge_pin_update(BOOL isRegular,
 // zapp_ios_register_webview: writes a webview into the UIWindow-keyed host slot.
 extern WKWebView* zapp_ios_content_webview_for_slot(int32_t slot);
 extern void zapp_ios_register_webview(void* window_ptr, void* webview_ptr);
+// #771 G1-C: route-webview transport slot (window.m + Nim allocSlot export).
+// A pushed route VC's webview registers under its OWN dispatch slot so invoke
+// responses and broadcast evals reach it (pane model); freed at teardown.
+extern int32_t zapp_alloc_dispatch_slot(void);
+extern void zapp_ios_register_route_webview(int32_t slot, void* webview_ptr, int32_t host_slot);
+extern void zapp_ios_unregister_webview_slot(void* webview_ptr);
 // #771 new-issue A: retarget the app-wide drag-drop webview (ios/webview.m).
 extern void zapp_ios_set_drop_webview(void* webview_ptr);
 
@@ -145,6 +151,10 @@ static void zapp_route_vc_teardown(ZappRouteVC* vc) {
     @try {
         [wv.configuration.userContentController removeScriptMessageHandlerForName:@"zapp"];
     } @catch (__unused id e) {}
+    // #771 G1-C: free the route webview's transport slot (registered at push).
+    // Without this the slot would keep the torn-down webview in the broadcast
+    // walk (darwin_webview_eval_all) and leak one slot per push.
+    zapp_ios_unregister_webview_slot((__bridge void*)wv);
 }
 
 // --- Chrome-agnostic live-nav resolver ------------------------------------
@@ -432,11 +442,23 @@ void zapp_ios_push_route_vc(int32_t windowId, const char* url) {
     // create_ext has now clobbered zapp_ios_webviews[windowId] with the route
     // webview.  Put the content webview back so ROUTE_CHANGED broadcasts via
     // zapp_ios_eval_js_all_webviews continue reaching the content pane.
-    // The route webview is slot-less: its bridge (Back button, one-time render via
-    // zapp.route identity) works without a slot; it intentionally ignores
-    // ROUTE_CHANGED anyway.
     if (savedContentWebview && savedContentWebview != vc.webview) {
         zapp_ios_register_webview(win, (__bridge void*)savedContentWebview);
+    }
+
+    // #771 G1-C: the route webview must NOT be slot-less. Register it under its
+    // OWN transport slot (identity string = host window id — pane model). This
+    // is what lets (a) sendInvokeResponse reach the ROUTE webview instead of
+    // being mis-evaluated in the content webview (darwin_window_id_for_webview
+    // used to fall back to 0 for unregistered senders), and (b) ROUTE_CHANGED /
+    // event broadcasts (darwin_webview_eval_all) include it. Concretely: the
+    // pushed page's router.current() seed now resolves and router.on() fires,
+    // so its toolbar.updateItem("back"/"fwd", { enabled }) calls actually
+    // happen — the grouped back/fwd items enable on pushed routes. The slot is
+    // freed in zapp_route_vc_teardown (pop).
+    if (vc.webview) {
+        int32_t routeSlot = zapp_alloc_dispatch_slot();
+        zapp_ios_register_route_webview(routeSlot, (__bridge void*)vc.webview, windowId);
     }
 
     // Toolbar items are stamped by the nav delegate (zapp_ios_toolbar_stamp_vc
