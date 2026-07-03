@@ -59,6 +59,13 @@
 
 #import <UIKit/UIKit.h>
 #import <WebKit/WebKit.h>
+#include <time.h> // [zapp-nav] G1-F: monotonic timestamps (no QuartzCore link dep)
+
+// [zapp-nav] G1-F: monotonic seconds on the CACurrentMediaTime timebase
+// (CLOCK_UPTIME_RAW == mach_absolute_time) without linking QuartzCore.
+static double zapp_nav_now(void) {
+    return (double)clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1e9;
+}
 #include <stdint.h>
 #include <stdbool.h>
 #include <math.h>
@@ -726,6 +733,15 @@ static void zapp_ios_sidebar_sync_collapse(ZappIOSSidebarController* c, BOOL col
 // via zapp_ios_sidebar_sync_collapse — emitting here would double-fire.
 - (void)splitViewController:(UISplitViewController*)svc
     willChangeToDisplayMode:(UISplitViewControllerDisplayMode)displayMode {
+    // [zapp-nav] G1-F diagnostic: target= the incoming mode, live= what
+    // svc.displayMode reads INSIDE the callback. Settles whether the sync
+    // pre-settle apply's live read resolves OLD (functional no-op; array swap
+    // deferred to the settled tick = mid-animation) or NEW (swap rides the
+    // animation batch = 899aef2 invariant intact).
+    fprintf(stderr, "[zapp-nav] t=%.3f willChangeDisplayMode win=%d target=%ld live=%ld\n",
+            zapp_nav_now(), (int)self.hostWindowId,
+            (long)displayMode, (long)svc.displayMode);
+    fflush(stderr);
     (void)svc;
     // Resolve the window pointer that zapp_ios_toolbar_apply_for_window_hidden
     // expects.
@@ -745,6 +761,12 @@ static void zapp_ios_sidebar_sync_collapse(ZappIOSSidebarController* c, BOOL col
     // fresh at the later tick rather than trusting a possibly-stale pointer.
     int32_t hostWindowId = self.hostWindowId;
     dispatch_async(dispatch_get_main_queue(), ^{
+        // [zapp-nav] G1-F diagnostic: the settled re-apply tick — its t=
+        // relative to willChangeDisplayMode places the second stamp pass
+        // inside/outside the collapse animation window.
+        fprintf(stderr, "[zapp-nav] t=%.3f settledApply win=%d\n",
+                zapp_nav_now(), hostWindowId);
+        fflush(stderr);
         void* settledWinPtr = darwin_window_get_by_numeric_id(hostWindowId);
         if (settledWinPtr) zapp_ios_toolbar_apply_for_window(settledWinPtr);
     });
@@ -1155,6 +1177,14 @@ void darwin_sidebar_toggle(int32_t window_id) {
     zapp_ios_sidebar_on_main(^{
         ZappIOSSidebarController* c = zapp_ios_sidebar_for_slot(window_id);
         if (!c || !c.splitVC) return;
+
+        // [zapp-nav] G1-F diagnostic: t0 marker for the collapse/expand
+        // animation window — every stamp/set_items/update_item line after
+        // this within ~0.35s lands MID-ANIMATION.
+        fprintf(stderr, "[zapp-nav] t=%.3f sidebar_toggle win=%d isCollapsed=%d displayMode=%ld\n",
+                zapp_nav_now(), window_id, (int)c.splitVC.isCollapsed,
+                (long)c.splitVC.displayMode);
+        fflush(stderr);
 
         if (c.splitVC.isCollapsed) {
             // COMPACT (iPhone): keep existing push/pop behaviour via the

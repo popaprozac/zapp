@@ -58,6 +58,13 @@
 #import <WebKit/WebKit.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <time.h> // [zapp-nav] G1-F: monotonic timestamps (no QuartzCore link dep)
+
+// [zapp-nav] G1-F: monotonic seconds on the CACurrentMediaTime timebase
+// (CLOCK_UPTIME_RAW == mach_absolute_time) without linking QuartzCore.
+static double zapp_nav_now(void) {
+    return (double)clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1e9;
+}
 #include <stdio.h>
 #include <objc/runtime.h>
 
@@ -516,6 +523,20 @@ static void zapp_ios_toolbar_stamp_items(UIViewController* vc,
     NSArray<UIBarButtonItem*>* leading = includeToggleSidebar
         ? entry.leadingItems
         : entry.leadingNoToggle;
+    // [zapp-nav] G1-F diagnostic: THE choke point — every item-assignment pass
+    // funnels here. leadSame/trailSame report whether this pass is a content
+    // no-op (assigning what the navigationItem already holds) or a real swap;
+    // t= places it inside/outside the ~0.35s sidebar collapse animation.
+    {
+        NSArray* curLead  = vc.navigationItem.leftBarButtonItems ?: @[];
+        NSArray* curTrail = vc.navigationItem.rightBarButtonItems ?: @[];
+        BOOL leadSame  = [curLead isEqualToArray:(leading ?: @[])];
+        BOOL trailSame = [curTrail isEqualToArray:(entry.trailingItems ?: @[])];
+        fprintf(stderr, "[zapp-nav] t=%.3f stamp vc=%p toggle=%d nLead=%lu leadSame=%d trailSame=%d\n",
+                zapp_nav_now(), (__bridge void*)vc, (int)includeToggleSidebar,
+                (unsigned long)(leading ? leading.count : 0), (int)leadSame, (int)trailSame);
+        fflush(stderr);
+    }
     // Keep the system back button when items are stamped onto a pushed VC
     // (a non-nil leftBarButtonItems otherwise suppresses it).
     vc.navigationItem.leftItemsSupplementBackButton = YES;
@@ -578,6 +599,11 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
     if (!window_ptr || !toolbar_json || !toolbar_json[0]) return;
     NSString* json = [NSString stringWithUTF8String:toolbar_json];
     zapp_ios_toolbar_on_main(^{
+        // [zapp-nav] G1-F diagnostic: any JS-initiated setItems landing near a
+        // sidebar collapse shows up here (full bucket rebuild + re-apply).
+        fprintf(stderr, "[zapp-nav] t=%.3f set_items win=%p slot=%d\n",
+                zapp_nav_now(), window_ptr, (int)host_slot);
+        fflush(stderr);
         UINavigationController* contentNav = zapp_ios_content_nav_for_window(window_ptr);
         if (!contentNav) {
             // No-sidebar window: deferred (T1 decision). Safe no-op.
@@ -1151,6 +1177,12 @@ void darwin_toolbar_update_item(void* window_ptr, const char* item_json) {
     if (!window_ptr || !item_json || !item_json[0]) return;
     NSString* json = [NSString stringWithUTF8String:item_json];
     zapp_ios_toolbar_on_main(^{
+        // [zapp-nav] G1-F diagnostic: in-place patch traffic (no re-stamp) —
+        // logged to prove/disprove JS updateItem volume during the collapse.
+        // (json, not item_json: the raw pointer must not cross the async hop.)
+        fprintf(stderr, "[zapp-nav] t=%.3f update_item win=%p json=%.96s\n",
+                zapp_nav_now(), window_ptr, json.UTF8String);
+        fflush(stderr);
         if (!zapp_ios_toolbars) return;
         NSValue* key = [NSValue valueWithPointer:window_ptr];
         ZappIOSToolbarEntry* entry = zapp_ios_toolbars[key];
@@ -1246,6 +1278,10 @@ void darwin_toolbar_update_item(void* window_ptr, const char* item_json) {
 void darwin_toolbar_remove(void* window_ptr) {
     if (!window_ptr) return;
     zapp_ios_toolbar_on_main(^{
+        // [zapp-nav] G1-F diagnostic: remove() traffic near a collapse.
+        fprintf(stderr, "[zapp-nav] t=%.3f toolbar_remove win=%p\n",
+                zapp_nav_now(), window_ptr);
+        fflush(stderr);
         if (!zapp_ios_toolbars) return;
         NSValue* key = [NSValue valueWithPointer:window_ptr];
         ZappIOSToolbarEntry* entry = zapp_ios_toolbars[key];
