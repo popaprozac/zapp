@@ -97,6 +97,16 @@ extern UINavigationController* zapp_ios_collapsed_nav_for_window(void* window_pt
 // (c.splitVC.isCollapsed). NO when expanded (side-by-side) or no sidebar.
 extern BOOL zapp_ios_split_is_collapsed_for_window(void* window_ptr);
 
+// Defined in ios/routing.m — single source of truth for "does this VC want
+// its nav bar visible" (the same rule ZappRouteNavDelegate's willShow/didShow
+// use to drive bar visibility on every push/pop). #771 T7 sub-gate: the
+// setItems attach primer below consults this instead of an unconditional
+// show, so a covering ZappRouteVC with navbarHidden:true keeps its hidden bar
+// (kills the chrome-less-route flash) rather than getting force-shown just
+// because a toolbar was (re-)registered.
+extern BOOL zapp_route_bar_should_show(void* win, UIViewController* vc,
+                                       UIViewController* contentVC);
+
 // Returns YES when the sidebar is HIDDEN on iPad (displayMode == SecondaryOnly).
 // Returns NO for collapsed (iPhone), no sidebar, or sidebar visible.
 // Used by the expanded toolbar path to decide whether to include our manual
@@ -1038,14 +1048,40 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
                 // never be re-shown. Same class as the three construction-time
                 // primers (window.m:818, sidebar.m:662/846/853): a direct,
                 // idempotent visibility write for a state UIKit will not
-                // transition into on its own. Expanded: the content column's
-                // bar is meant to be visible whenever a toolbar is registered,
-                // so show unconditionally. Collapsed: only force it open when
-                // the content VC is what's actually on top — never steal the
-                // bar away from a visible sidebar root.
-                BOOL topIsContent = (cvc && applyNav.topViewController == cvc);
-                if ((!collapsed || topIsContent) && applyNav.navigationBarHidden) {
-                    [applyNav setNavigationBarHidden:NO animated:NO];
+                // transition into on its own.
+                //
+                // #771 T7 sub-gate: the old heuristic here
+                // ((!collapsed || topIsContent) && hidden → show) fired
+                // unconditionally whenever the content VC was (or wasn't
+                // collapsed-relevant) on top, blind to what's ACTUALLY on top
+                // of the bar the user sees. Two bugs followed: (1) a
+                // navbarHidden:true route's OWN setItems call (kitchen-sink's
+                // main-pane.ts fires setItems unconditionally on every route
+                // webview boot) forced that route's deliberately-hidden bar
+                // back open — a visible flash until didShow's re-assert hid it
+                // one beat later; (2) resolving via `cvc.navigationController`
+                // (applyNav) rather than the shape-correct nav meant the
+                // primer could miss the collapsed/combined nav entirely on
+                // iPhone at launch, leaving the Home bar absent until the next
+                // transition re-ran willShow.
+                //
+                // Fix: resolve the nav for the CURRENT shape exactly like
+                // zapp_ios_toolbar_apply_for_window_hidden does — collapsed →
+                // the collapsed/combined nav, expanded → contentNav (the nav
+                // whose bar is actually on screen) — then consult the SAME
+                // want-state rule ZappRouteNavDelegate's willShow/didShow use
+                // (zapp_route_bar_should_show, routing.m) for whatever VC is
+                // really on top of THAT nav. Registration is true by
+                // definition here (the entry was just created/updated above),
+                // so for a bare content top this reduces to "show"; for a
+                // covering navbarHidden route on top it correctly stays NO.
+                UINavigationController* primerNav = collapsed
+                    ? zapp_ios_collapsed_nav_for_window(window_ptr)
+                    : contentNav;
+                UIViewController* primerTop = primerNav.topViewController;
+                if (primerNav && primerTop && primerNav.navigationBarHidden
+                    && zapp_route_bar_should_show(window_ptr, primerTop, cvc)) {
+                    [primerNav setNavigationBarHidden:NO animated:NO];
                 }
             }
         }

@@ -239,6 +239,15 @@ static ZappRouteBarWantState zapp_route_bar_want_state(UIViewController* vc,
     return s;
 }
 
+// #771 T7 sub-gate: thin non-static wrapper so toolbar.m's setItems attach
+// primer can consult this SAME want-state rule without sharing the
+// ZappRouteBarWantState struct definition across files (it only needs the
+// final boolean). routing.m's own two call sites (willShow/didShow above)
+// keep calling the static full-struct function directly — unchanged.
+BOOL zapp_route_bar_should_show(void* win, UIViewController* vc, UIViewController* contentVC) {
+    return zapp_route_bar_want_state(vc, contentVC, win).showBar;
+}
+
 @interface ZappRouteNavDelegate : NSObject <UINavigationControllerDelegate, UIGestureRecognizerDelegate>
 @property (nonatomic, assign) int32_t windowId;
 // Tracks the class of the VC that was on top (the "from" VC) during the most
