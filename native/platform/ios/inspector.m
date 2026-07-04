@@ -350,6 +350,33 @@ void zapp_ios_inspector_note_layout_width(void* window_ptr, CGFloat width) {
 // funnels through these two functions, and lastCollapsedEmit (seeded from the
 // create-time `collapsed` value) suppresses repeats and the launch dance.
 
+// #781: read whether the inspector column is currently COLLAPSED (hidden).
+// NO on <26 or when there is no inspector column (safe default). Called from
+// ios/sidebar.m's zapp_ios_apply_presentation BEFORE its display-mode
+// re-apply, which can otherwise re-reveal a collapsed inspector as a side
+// effect of resolving the Primary/Secondary columns.
+BOOL zapp_ios_inspector_is_collapsed(UISplitViewController* svc) {
+    if (!svc) return NO;
+    if (@available(iOS 26.0, *)) {
+        return ![svc isShowingColumn:UISplitViewControllerColumnInspector];
+    }
+    return NO;
+}
+
+// #781: re-collapse the inspector iff it was collapsed before a presentation
+// re-apply re-revealed it. hideColumn:Inspector is the canonical retract in
+// every adaptation (see darwin_inspector_collapse above); on a column that's
+// already hidden this is a documented no-op that stays emit-silent, and on
+// one the re-apply actually revealed, the split delegate's didHide dedupe
+// (zapp_ios_inspector_column_did_hide above) reports the correction as the
+// accurate collapsed-emit it is — no state is left inconsistent either way.
+void zapp_ios_inspector_restore_collapsed(UISplitViewController* svc, BOOL wasCollapsed) {
+    if (!svc || !wasCollapsed) return;
+    if (@available(iOS 26.0, *)) {
+        [svc hideColumn:UISplitViewControllerColumnInspector];
+    }
+}
+
 // Auto-sheet affordances for the 26+ Inspector column, decided by how UIKit
 // adapted the column THIS time (the form can change between shows — rotation
 // or a multitasking resize in between):

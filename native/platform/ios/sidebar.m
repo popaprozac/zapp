@@ -76,6 +76,14 @@ extern int32_t zapp_ios_inspector_slot_for(int32_t host_slot);
 extern void zapp_ios_inspector_column_did_show(void* window);
 extern void zapp_ios_inspector_column_did_hide(void* window);
 
+// Defined in ios/inspector.m — #781: capture/restore the Inspector column's
+// collapsed state around a presentation re-apply (rotation, tile/overlay
+// switch, explicit setPresentation, register) that can otherwise re-reveal a
+// collapsed inspector as a side effect of resolving the Primary/Secondary
+// columns. Called from zapp_ios_apply_presentation below.
+extern BOOL zapp_ios_inspector_is_collapsed(UISplitViewController* svc);
+extern void zapp_ios_inspector_restore_collapsed(UISplitViewController* svc, BOOL wasCollapsed);
+
 // Defined in ios/toolbar.m — applies a set toolbar to the correct nav after
 // a collapse/expand transition. No-op when no toolbar has been registered.
 extern void zapp_ios_toolbar_apply_for_window(void* window_ptr);
@@ -179,6 +187,11 @@ static NSMutableDictionary<NSValue*, ZappIOSSidebarController*>* zapp_ios_sideba
 // too would double-animate the same transition.
 static void zapp_ios_apply_presentation(UISplitViewController* svc, NSString* mode) {
     if (!svc) return;
+    // #781: a presentation re-apply (display-mode/behavior change below) can
+    // re-reveal a collapsed Inspector column as a side effect of resolving
+    // the Primary/Secondary columns — capture its collapsed state up front,
+    // restore it at the very end (see the restore call below).
+    BOOL inspectorWasCollapsed = zapp_ios_inspector_is_collapsed(svc);
     BOOL isTile = [mode isEqualToString:@"tile"];
     [UIView animateWithDuration:0.25 delay:0 options:UIViewAnimationOptionCurveEaseInOut animations:^{
         if ([mode isEqualToString:@"overlay"]) {
@@ -207,6 +220,11 @@ static void zapp_ios_apply_presentation(UISplitViewController* svc, NSString* mo
             [svc showColumn:UISplitViewControllerColumnPrimary];
         }
     }
+    // #781: restore the Inspector's prior collapsed state now that the
+    // display-mode + primary-column state is fully resolved. Synchronous,
+    // same call stack as the sets above — NOT inside the animate block and
+    // NOT dispatch_async'd, so no intermediate revealed frame is visible.
+    zapp_ios_inspector_restore_collapsed(svc, inspectorWasCollapsed);
 }
 
 static void zapp_ios_sidebar_on_main(void (^block)(void)) {
