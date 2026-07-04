@@ -427,7 +427,29 @@ extern void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot,
     UIViewController* contentVC = zapp_ios_content_vc_for_window(_windowPtr);
     BOOL showBar = zapp_route_bar_should_show(_windowPtr, self, contentVC);
     if (nav.navigationBarHidden == showBar) {
-        [nav setNavigationBarHidden:!showBar animated:animated];
+        BOOL newHidden = !showBar;
+        // #782 (#784 residual-2, per external review): during an INTERACTIVE
+        // swipe the coordinator is animating THIS pane's appearance, so drive the
+        // bar change INSIDE its animateAlongsideTransition block — UIKit
+        // interpolates the bar WITH the gesture and REVERSES it on CANCEL (the
+        // smooth slide-out). An imperative setNavigationBarHidden: here is not
+        // coordinator-tracked, so a cancel snaps it (the bug). The completion
+        // restores the CAPTURED pre-transition state on cancel as cleanup — the
+        // reversal already ran the visible animation. Non-interactive appearances
+        // (launch, rotate, programmatic show_content) keep the imperative write.
+        id<UIViewControllerTransitionCoordinator> tc = self.transitionCoordinator;
+        if (tc && tc.isInteractive) {
+            BOOL wasHidden = nav.navigationBarHidden;   // scalar captures — MRC-safe
+            [tc animateAlongsideTransition:^(id<UIViewControllerTransitionCoordinatorContext> ctx) {
+                (void)ctx;
+                [nav setNavigationBarHidden:newHidden animated:YES];
+            } completion:^(id<UIViewControllerTransitionCoordinatorContext> ctx) {
+                if (ctx.isCancelled)
+                    [nav setNavigationBarHidden:wasHidden animated:NO];
+            }];
+        } else {
+            [nav setNavigationBarHidden:newHidden animated:animated];
+        }
         // Bar visibility changed → re-inject chrome metrics one tick later so
         // safeAreaInsets reflect the new bar state. Re-homed from the deleted
         // willShow visibility write (routing.m). Content pane only (hostSlot wired;
