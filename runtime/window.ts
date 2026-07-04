@@ -244,6 +244,12 @@ export interface WindowOptions {
 export interface SidebarOptions {
   /** Entry URL/route for the sidebar webview (resolved like the window url). Required. */
   url: string;
+  /** #782. Title shown in the sidebar's own toolbar/nav region (its travel to
+   *  native is wired later). Preserved on the options; NOT merged into toolbar items. */
+  title?: string;
+  /** #782. A toolbar scoped to the sidebar pane. Its items are folded into the
+   *  window's single toolbar def tagged `pane: "sidebar"` at create time. */
+  toolbar?: ToolbarOptions;
   /** Initial width in points. Default 260. */
   width?: number;
   /** Divider drag limits. Defaults 180 / 400. */
@@ -294,6 +300,12 @@ export interface SidebarOptions {
 export interface InspectorOptions {
   /** Entry URL/route for the inspector webview (resolved like sidebar.url). Required. */
   url: string;
+  /** #782. Title shown in the inspector's own toolbar/nav region (its travel to
+   *  native is wired later). Preserved on the options; NOT merged into toolbar items. */
+  title?: string;
+  /** #782. A toolbar scoped to the inspector pane. Its items are folded into the
+   *  window's single toolbar def tagged `pane: "inspector"` at create time. */
+  toolbar?: ToolbarOptions;
   /** Initial width in points. Default 280. */
   width?: number;
   /** Divider drag limits. Defaults 180 / 400. */
@@ -373,6 +385,11 @@ export interface ToolbarButtonDef {
   /** Toolbar slot. Default "leading". macOS sorts by placement; iOS (later)
    *  maps to nav-bar slots. */
   placement?: ToolbarPlacement;
+  /** #782. Route this item into a pane's toolbar region: "sidebar" places it
+   *  before the sidebar tracking separator, "inspector" after the inspector
+   *  tracking separator. Untagged (default) → the content region. Ignored
+   *  (with a warning) when the named pane isn't attached to the window. */
+  pane?: "sidebar" | "inspector";
 }
 
 /** A segmented control toolbar item. */
@@ -400,6 +417,8 @@ export interface ToolbarSegmentedDef {
   /** Toolbar slot. Default "leading". macOS sorts by placement; iOS (later)
    *  maps to nav-bar slots. */
   placement?: ToolbarPlacement;
+  /** #782. Route this item into a pane's toolbar region. See ToolbarButtonDef.pane. */
+  pane?: "sidebar" | "inspector";
 }
 
 /** A group of toolbar buttons (one level — no nested groups). */
@@ -414,6 +433,8 @@ export interface ToolbarGroupDef {
   /** Toolbar slot. Default "leading". macOS sorts by placement; iOS (later)
    *  maps to nav-bar slots. */
   placement?: ToolbarPlacement;
+  /** #782. Route this item into a pane's toolbar region. See ToolbarButtonDef.pane. */
+  pane?: "sidebar" | "inspector";
 }
 
 /** A tracking separator that follows a split-view divider. */
@@ -437,6 +458,10 @@ export interface ToolbarSystemDef {
   /** Toolbar slot. Default "leading". macOS sorts by placement; iOS (later)
    *  maps to nav-bar slots. */
   placement?: ToolbarPlacement;
+  /** #782. On `space`/`flexibleSpace`, route the spacer into a pane region.
+   *  Ignored on `toggleSidebar`/`toggleInspector` (they anchor by convention).
+   *  See ToolbarButtonDef.pane. */
+  pane?: "sidebar" | "inspector";
 }
 
 /** A non-interactive text label in the toolbar (NSToolbarItem hosting an
@@ -450,6 +475,8 @@ export interface ToolbarLabelDef {
   /** Toolbar slot. Default "leading". macOS sorts by placement; iOS (later)
    *  maps to nav-bar slots. */
   placement?: ToolbarPlacement;
+  /** #782. Route this item into a pane's toolbar region. See ToolbarButtonDef.pane. */
+  pane?: "sidebar" | "inspector";
 }
 
 /** One toolbar item. `type` defaults to `"button"`. */
@@ -909,7 +936,15 @@ function assertValidToolbarId(id: string): void {
  *  else in the pipeline reorders items. Anchors (native convention):
  *  leading = [flexibleSpace, toggleSidebar, trackingSeparator(sidebar)],
  *  trailing tail = [trackingSeparator(inspector), toggleInspector].
- *  App items keep declared order. Documented behavior change (pre-1.0). */
+ *  App items keep declared order. Documented behavior change (pre-1.0).
+ *
+ *  #782: items carrying `pane: "sidebar" | "inspector"` bucket into that
+ *  pane's toolbar region — sidebar-tagged items land before the sidebar
+ *  tracking separator, inspector-tagged items after the inspector one, while
+ *  untagged items keep today's exact ordering in the content region. A
+ *  region's tracking separator is synthesized when tagged items need a
+ *  delimiter but none was declared (the separator has no wire id — native
+ *  locates it by type+pane). */
 export function applyToolbarConventions(
   items: Record<string, unknown>[],
 ): Record<string, unknown>[] {
@@ -929,17 +964,59 @@ export function applyToolbarConventions(
     }
     rest.push(item);
   }
+  // #782: partition the app items by pane tag. Untagged items stay in the
+  // content region (order-preserving) exactly as before.
+  const sidebarItems: Record<string, unknown>[] = [];
+  const inspectorItems: Record<string, unknown>[] = [];
+  const contentItems: Record<string, unknown>[] = [];
+  for (const item of rest) {
+    if (item.pane === "sidebar") sidebarItems.push(item);
+    else if (item.pane === "inspector") inspectorItems.push(item);
+    else contentItems.push(item);
+  }
+  // A pane region needs a tracking separator to delimit it; synthesize one
+  // when tagged items exist but none was declared (id-less — located by
+  // type+pane on the native side, mirroring the declared separator).
+  if (sidebarItems.length > 0) sepSidebar ??= { type: "trackingSeparator", pane: "sidebar", placement: "leading" };
+  if (inspectorItems.length > 0) sepInspector ??= { type: "trackingSeparator", pane: "inspector", placement: "trailing" };
   const prefix: Record<string, unknown>[] = [];
   if (toggleSidebar && sepSidebar) {
-    prefix.push({ type: "flexibleSpace", placement: "leading" }, toggleSidebar, sepSidebar);
+    prefix.push({ type: "flexibleSpace", placement: "leading" }, ...sidebarItems, toggleSidebar, sepSidebar);
     // Collapse an app-declared leading flex that duplicated the convention.
-    if (rest[0]?.type === "flexibleSpace" && rest[0]?.placement === "leading") rest.shift();
-  } else if (toggleSidebar) prefix.push(toggleSidebar);
-  else if (sepSidebar) prefix.push(sepSidebar);
+    if (contentItems[0]?.type === "flexibleSpace" && contentItems[0]?.placement === "leading") contentItems.shift();
+  } else if (sepSidebar) prefix.push(...sidebarItems, sepSidebar);
+  else if (toggleSidebar) prefix.push(...sidebarItems, toggleSidebar);
   const suffix: Record<string, unknown>[] = [];
-  if (sepInspector) suffix.push(sepInspector);
+  if (sepInspector) suffix.push(sepInspector, ...inspectorItems);
   if (toggleInspector) suffix.push(toggleInspector);
-  return [...prefix, ...rest, ...suffix];
+  return [...prefix, ...contentItems, ...suffix];
+}
+
+/** #782 desugar — fold pane-scoped toolbars into the window's single toolbar
+ *  def. The window's own items pass through untagged; each `sidebar.toolbar`
+ *  item is tagged `pane: "sidebar"` and each `inspector.toolbar` item
+ *  `pane: "inspector"`, so downstream `applyToolbarConventions` buckets them
+ *  into their pane regions. Returns undefined when there is nothing to build.
+ *  The pane TITLES travel separately (native reads them off the pane options);
+ *  they are NOT merged into items here. Pure — unit-tested. */
+export function mergePaneToolbars(
+  windowToolbar: ToolbarOptions | undefined,
+  sidebarToolbar: ToolbarOptions | undefined,
+  inspectorToolbar: ToolbarOptions | undefined,
+): ToolbarOptions | undefined {
+  if (!windowToolbar && !sidebarToolbar && !inspectorToolbar) return undefined;
+  const items: ToolbarItemDef[] = [];
+  if (windowToolbar?.items) items.push(...windowToolbar.items);
+  if (sidebarToolbar?.items) {
+    for (const it of sidebarToolbar.items) items.push({ ...it, pane: "sidebar" } as ToolbarItemDef);
+  }
+  if (inspectorToolbar?.items) {
+    for (const it of inspectorToolbar.items) items.push({ ...it, pane: "inspector" } as ToolbarItemDef);
+  }
+  // The window toolbar's style wins; fall back to a pane's if only panes bring
+  // a toolbar. Omit when none set (normalizeToolbar defaults it to "unified").
+  const style = windowToolbar?.style ?? sidebarToolbar?.style ?? inspectorToolbar?.style;
+  return style ? { items, style } : { items };
 }
 
 /** Validate a ToolbarOptions and split it into the wire JSON (actions
@@ -974,6 +1051,20 @@ export function normalizeToolbar(
   const menuIdsByItem = new Map<string, Set<string>>();
   const seen = new Set<string>();
   const items: Record<string, unknown>[] = [];
+  // #782: validate an app item's optional `pane` tag (mirrors the
+  // trackingSeparator pane check). Returns the tag when the named pane is
+  // attached, else warns and returns undefined so the item falls back to the
+  // content region — never synthesizing an orphan region separator.
+  const validatedPane = (it: Record<string, any>): "sidebar" | "inspector" | undefined => {
+    const p = it.pane;
+    if (p !== "sidebar" && p !== "inspector") return undefined;
+    const ok = p === "inspector" ? hasInspector : hasSidebar;
+    if (!ok) {
+      console.warn(`[zapp] toolbar: item "${it.id ?? it.type ?? "?"}" is tagged pane:"${p}" but the window has no ${p} — pane tag ignored`);
+      return undefined;
+    }
+    return p;
+  };
   for (const item of toolbar.items ?? []) {
     // Internal cast: the union is author-facing; internal heterogeneous reads
     // use `it` so the type system stays author-safe without narrowing every branch.
@@ -1014,7 +1105,8 @@ export function normalizeToolbar(
     }
     if (type === "space" || type === "flexibleSpace") {
       if (it.menu) throw new Error('[zapp] toolbar: "menu" is only valid on button items');
-      items.push({ type, placement });
+      const spacePane = validatedPane(it);
+      items.push(spacePane ? { type, pane: spacePane, placement } : { type, placement });
       continue;
     }
     if (type === "label") {
@@ -1026,7 +1118,10 @@ export function normalizeToolbar(
       } else {
         it.id = `zapp.label.${items.length}`;
       }
-      items.push({ type: "label", id: it.id, text: it.text, placement });
+      const labelWire: Record<string, unknown> = { type: "label", id: it.id, text: it.text, placement };
+      const labelPane = validatedPane(it);
+      if (labelPane) labelWire.pane = labelPane;
+      items.push(labelWire);
       continue;
     }
     if (type === "segmented") {
@@ -1053,6 +1148,8 @@ export function normalizeToolbar(
       if (it.icon !== undefined) seg.icon = it.icon;
       if (it.controlRepresentation !== undefined) seg.controlRepresentation = it.controlRepresentation;
       seg.placement = placement;
+      const segPane = validatedPane(it);
+      if (segPane) seg.pane = segPane;
       items.push(seg);
       continue;
     }
@@ -1078,6 +1175,8 @@ export function normalizeToolbar(
       const g: Record<string, unknown> = { type: "group", id: it.id, items: wireItems };
       if (it.controlRepresentation !== undefined) g.controlRepresentation = it.controlRepresentation;
       g.placement = placement;
+      const groupPane = validatedPane(it);
+      if (groupPane) g.pane = groupPane;
       items.push(g);
       continue;
     }
@@ -1111,6 +1210,8 @@ export function normalizeToolbar(
       menuTrees.set(it.id!, mergeMenuIds(strippedMenu, it.menu));
     }
     wire.placement = placement;
+    const buttonPane = validatedPane(it);
+    if (buttonPane) wire.pane = buttonPane;
     items.push(wire);
   }
   return { json: JSON.stringify({ style: toolbar.style ?? "unified", items: applyToolbarConventions(items) }), actions, menuActions, menuIdsByItem, menuTrees };
@@ -1888,12 +1989,33 @@ export const Window = {
     // Toolbar: validate, strip actions, pre-stringify (window.zc stores the
     // raw JSON; toolbar.m parses it). Actions register post-create once the
     // windowId is known.
+    //
+    // #782 desugar: the window toolbar plus any pane-scoped `sidebar.toolbar`
+    // / `inspector.toolbar` fold into ONE toolbar def (pane items tagged), so
+    // there is a single normalized wire toolbar for the window.
     let pendingToolbarActions: Map<string, () => void> | undefined;
     let pendingToolbarMenuIds: Map<string, Set<string>> | undefined;
-    if (opts?.toolbar) {
-      const { json, actions, menuActions, menuIdsByItem } = normalizeToolbar(opts.toolbar, opts.sidebar !== undefined, opts.inspector !== undefined);
+    const combinedToolbar = mergePaneToolbars(
+      opts?.toolbar,
+      opts?.sidebar?.toolbar,
+      opts?.inspector?.toolbar,
+    );
+    if (combinedToolbar) {
+      const { json, actions, menuActions, menuIdsByItem } = normalizeToolbar(combinedToolbar, opts?.sidebar !== undefined, opts?.inspector !== undefined);
       normalized.toolbarJson = json;
       delete normalized.toolbar;
+      // Strip the pane-scoped toolbars from the native payload — their items
+      // now live in toolbarJson, and their `action` callbacks aren't
+      // serializable. Shallow-copy the pane options first so we never mutate
+      // the caller's `opts`. Pane titles stay put (native reads them directly).
+      if (normalized.sidebar && (normalized.sidebar as SidebarOptions).toolbar) {
+        const { toolbar: _s, ...rest } = normalized.sidebar as SidebarOptions;
+        normalized.sidebar = rest;
+      }
+      if (normalized.inspector && (normalized.inspector as InspectorOptions).toolbar) {
+        const { toolbar: _i, ...rest } = normalized.inspector as InspectorOptions;
+        normalized.inspector = rest;
+      }
       if (actions.size > 0) pendingToolbarActions = actions;
       if (menuIdsByItem.size > 0) pendingToolbarMenuIds = menuIdsByItem;
       if (menuActions.size > 0) {

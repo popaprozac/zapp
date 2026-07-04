@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Material, BackgroundExtension, applyToolbarConventions, normalizeToolbar } from "./window";
+import { Material, BackgroundExtension, applyToolbarConventions, normalizeToolbar, mergePaneToolbars } from "./window";
 import type { WindowHandle } from "./window";
 import { WindowEvent, eventName } from "./events";
 import type { InspectorResizedPayload } from "./events";
@@ -131,6 +131,119 @@ describe("applyToolbarConventions", () => {
     const wire = JSON.parse(json);
     expect(wire.items[0]).not.toHaveProperty("label");
     expect(wire.items[0]).not.toHaveProperty("icon");
+  });
+});
+
+// #782: pane-tagged toolbar items. Every item carries an optional
+// `pane: "sidebar" | "inspector"`; applyToolbarConventions buckets tagged
+// items into their pane region (before the sidebar tracking separator /
+// after the inspector tracking separator) while untagged items stay in the
+// content region exactly as before. The tracking separators have NO wire id —
+// they're located by type+pane, and are synthesized when pane-tagged items
+// need a region delimiter but none was declared.
+describe("pane bucketing (#782)", () => {
+  test("pane-tagged items order into their pane region; untagged stay in content", () => {
+    const { json } = normalizeToolbar(
+      { items: [
+        { id: "s1", label: "New", pane: "sidebar" },
+        { id: "c1", label: "Share" },
+        { id: "i1", label: "Info", pane: "inspector" },
+      ] },
+      /*hasSidebar*/ true, /*hasInspector*/ true, /*windowId*/ "win-0",
+    );
+    const items = JSON.parse(json).items as Array<Record<string, any>>;
+    const sidebarSep   = items.findIndex((i) => i.type === "trackingSeparator" && i.pane === "sidebar");
+    const inspectorSep = items.findIndex((i) => i.type === "trackingSeparator" && i.pane === "inspector");
+    const idx = (id: string) => items.findIndex((i) => i.id === id);
+    expect(sidebarSep).toBeGreaterThanOrEqual(0);
+    expect(inspectorSep).toBeGreaterThanOrEqual(0);
+    expect(idx("s1")).toBeLessThan(sidebarSep);      // sidebar item BEFORE the sidebar separator
+    expect(idx("c1")).toBeGreaterThan(sidebarSep);   // content BETWEEN the two separators
+    expect(idx("c1")).toBeLessThan(inspectorSep);
+    expect(idx("i1")).toBeGreaterThan(inspectorSep); // inspector item AFTER the inspector separator
+  });
+
+  // No-regression (ambiguity #3): an all-untagged item set keeps today's exact
+  // ordering/behavior — content region between the two declared separators,
+  // convention flex injected, no synthesized separators.
+  test("untagged-only item set is ordered exactly as before pane tags existed", () => {
+    const input = [
+      { type: "button", id: "a", placement: "leading" },
+      { type: "toggleSidebar", placement: "leading" },
+      { type: "trackingSeparator", pane: "sidebar", placement: "leading" },
+      { type: "button", id: "b", placement: "leading" },
+      { type: "toggleInspector", placement: "trailing" },
+      { type: "trackingSeparator", pane: "inspector", placement: "trailing" },
+      { type: "button", id: "c", placement: "leading" },
+    ];
+    const out = applyToolbarConventions(input as any);
+    // Exactly today's order: [flex, toggleSidebar, sep(sidebar), a, b, c, sep(inspector), toggleInspector].
+    expect(out.map((i) => (i.id as string) ?? (i.type as string))).toEqual([
+      "flexibleSpace", "toggleSidebar", "trackingSeparator",
+      "a", "b", "c",
+      "trackingSeparator", "toggleInspector",
+    ]);
+    // No separator was synthesized — the two present ones are the declared ones.
+    expect(out.filter((i) => i.type === "trackingSeparator").length).toBe(2);
+  });
+
+  // Desugar (Step 4): a pane-scoped `sidebar.toolbar` folds its items into the
+  // window toolbar def tagged pane:"sidebar" (inspector symmetric); the window's
+  // own items stay untagged; the pane TITLE is not merged into any item.
+  test("mergePaneToolbars tags pane items and leaves window items untagged", () => {
+    const merged = mergePaneToolbars(
+      { items: [{ id: "w1", label: "Win" }] },
+      { items: [{ id: "s1", label: "New" }, { id: "s2", label: "Filter" }] },
+      { items: [{ id: "i1", label: "Info" }] },
+    );
+    const by = (id: string) => merged!.items.find((i) => (i as any).id === id) as any;
+    expect(by("w1").pane).toBeUndefined();
+    expect(by("s1").pane).toBe("sidebar");
+    expect(by("s2").pane).toBe("sidebar");
+    expect(by("i1").pane).toBe("inspector");
+    // No item was invented from a title (titles travel separately).
+    expect(merged!.items.length).toBe(4);
+  });
+
+  test("mergePaneToolbars returns undefined when nothing brings a toolbar", () => {
+    expect(mergePaneToolbars(undefined, undefined, undefined)).toBeUndefined();
+  });
+
+  // End-to-end: the desugared def, run through normalizeToolbar, buckets the
+  // sidebar item ahead of the sidebar separator (title stays out of the wire).
+  test("desugared sidebar toolbar buckets into the sidebar region end-to-end", () => {
+    const merged = mergePaneToolbars(
+      undefined,
+      { items: [{ id: "s1", label: "New" }] },
+      undefined,
+    );
+    const { json } = normalizeToolbar(merged!, /*hasSidebar*/ true, /*hasInspector*/ false);
+    const items = JSON.parse(json).items as Array<Record<string, any>>;
+    const sidebarSep = items.findIndex((i) => i.type === "trackingSeparator" && i.pane === "sidebar");
+    expect(sidebarSep).toBeGreaterThanOrEqual(0);
+    expect(items.findIndex((i) => i.id === "s1")).toBeLessThan(sidebarSep);
+    // The desugared item carries its pane tag through to the wire.
+    expect(items.find((i) => i.id === "s1")!.pane).toBe("sidebar");
+  });
+
+  // A pane tag pointing at an absent pane is warned + ignored (item falls back
+  // to content); no orphan region separator is synthesized. Mirrors the
+  // trackingSeparator pane-drop behavior.
+  test("pane tag for an absent pane is ignored (no synthesized separator)", () => {
+    const warnings: string[] = [];
+    const orig = console.warn;
+    console.warn = (msg: string) => { warnings.push(String(msg)); };
+    let json: string;
+    try {
+      ({ json } = normalizeToolbar(
+        { items: [{ id: "s1", label: "New", pane: "sidebar" }] },
+        /*hasSidebar*/ false, /*hasInspector*/ false,
+      ));
+    } finally { console.warn = orig; }
+    const items = JSON.parse(json!).items as Array<Record<string, any>>;
+    expect(items.some((i) => i.type === "trackingSeparator")).toBe(false);
+    expect(items.find((i) => i.id === "s1")).not.toHaveProperty("pane");
+    expect(warnings.some((w) => w.includes('pane:"sidebar"'))).toBe(true);
   });
 });
 
