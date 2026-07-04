@@ -121,6 +121,14 @@ extern void zapp_ios_toolbar_apply_for_window_hidden(void* window_ptr, BOOL side
 // the create-time config (via zapp_ios_apply_presentation) and updated by
 // darwin_sidebar_set_presentation. Values: nil/"" = automatic, "tile", "overlay".
 @property (nonatomic, copy) NSString* presentation;
+// #782 T4a: the sidebar pane's configured title (wopts_sidebar_title, threaded
+// through window.m's deferred struct + zapp_ios_sidebar_register). Stamped
+// onto the sidebar root VC's navigationItem at set_items (toolbar.m) same as
+// the inspector — harmless now since the sidebar bar stays hidden until T4b
+// flips its want-state on. Also exposed to T4b via
+// zapp_ios_sidebar_title_for_window below (title + has_pane_items feed its
+// config-implied want-state decision).
+@property (nonatomic, copy) NSString* sidebarTitle;
 // Content-webview edge constraint management.
 // Two stored constraint PAIRS (leading + trailing) — in each pair only one is
 // active at a time, swapped on trait change:
@@ -379,6 +387,29 @@ bool zapp_ios_sidebar_is_collapsible_for_window(void* window_ptr) {
     NSValue* key = [NSValue valueWithPointer:window_ptr];
     ZappIOSSidebarController* c = zapp_ios_sidebars[key];
     return c ? (bool)c.collapsible : true;
+}
+
+// #782 T4a: the sidebar's stored root VC (primary-column content) — consumed
+// by toolbar.m's darwin_toolbar_set_items to stamp the sidebar pane's
+// items/title via zapp_ios_toolbar_stamp_pane. nil when no sidebar is
+// registered for the window. Declared extern in ios/toolbar.m.
+UIViewController* zapp_ios_sidebar_vc_for_window(void* window_ptr) {
+    if (!window_ptr || !zapp_ios_sidebars) return nil;
+    NSValue* key = [NSValue valueWithPointer:window_ptr];
+    ZappIOSSidebarController* c = zapp_ios_sidebars[key];
+    return c.sidebarVC;
+}
+
+// #782 T4a: the sidebar's configured title (wopts_sidebar_title, stored at
+// register time). nil when no sidebar is registered or none was configured.
+// T4b reads this (+ zapp_ios_toolbar_has_pane_items) to decide its
+// config-implied want-state for the sidebar bar. Declared extern in
+// ios/toolbar.m.
+NSString* zapp_ios_sidebar_title_for_window(void* window_ptr) {
+    if (!window_ptr || !zapp_ios_sidebars) return nil;
+    NSValue* key = [NSValue valueWithPointer:window_ptr];
+    ZappIOSSidebarController* c = zapp_ios_sidebars[key];
+    return c.sidebarTitle;
 }
 
 // slot -> owning UIWindow -> registry key. Works from EITHER pane's slot.
@@ -808,13 +839,16 @@ void zapp_ios_sidebar_register(void* window, void* split, void* sidebarVC,
                                void* contentVC, int32_t host_id, int32_t sidebar_id,
                                const char* presentation,
                                int32_t width, int32_t minWidth, int32_t maxWidth,
-                               bool resizable, bool collapsible) {
+                               bool resizable, bool collapsible,
+                               const char* title) {
     if (!window || !split) return;
     // Capture the presentation C-string before the async block (the caller's
     // buffer may be freed by the time the block runs if the deferred struct is
     // torn down; copy to an NSString which is ARC-retained safely).
     NSString* presMode = (presentation && presentation[0])
         ? [NSString stringWithUTF8String:presentation] : @"";
+    // #782 T4a: same capture-before-async rationale as presMode above.
+    NSString* titleStr = (title && title[0]) ? [NSString stringWithUTF8String:title] : nil;
     zapp_ios_sidebar_on_main(^{
         if (!zapp_ios_sidebars) zapp_ios_sidebars = [NSMutableDictionary dictionary];
 
@@ -840,6 +874,7 @@ void zapp_ios_sidebar_register(void* window, void* split, void* sidebarVC,
         c.configuredMaxWidth = maxWidth;
         c.resizable          = (BOOL)resizable;
         c.collapsible        = (BOOL)collapsible;
+        c.sidebarTitle       = titleStr; // #782 T4a
         // #720: seed the live-resize dedupe to the configured width so the
         // first (launch) viewDidLayoutSubviews pass — which lands at that same
         // width — does not fire a spurious resize event. M1: when the app

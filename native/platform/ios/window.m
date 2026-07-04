@@ -73,6 +73,7 @@ typedef struct ZappIOSDeferred {
     // materialize, like queued_title. Inspector is a separate future task.
     bool    hasSidebar;
     char*   sidebarUrl;          // strdup'd; freed in destroy
+    char*   sidebarTitle;        // #782 T4a. strdup'd; freed in destroy. NULL = no title.
     int32_t sidebarNumericId;    // sidebar webview's transport slot
     bool    sidebarCollapsed;
     int32_t sidebarWidth;
@@ -94,6 +95,7 @@ typedef struct ZappIOSDeferred {
     // control ops are a separate next task).
     bool    hasInspector;
     char*   inspectorUrl;        // strdup'd; freed in destroy
+    char*   inspectorTitle;      // #782 T4a. strdup'd; freed in destroy. NULL = no title.
     int32_t inspectorNumericId;  // inspector webview's transport slot
     int32_t inspectorWidth;
     bool    inspectorCollapsed;
@@ -842,7 +844,8 @@ extern void zapp_ios_sidebar_register(void* window, void* split, void* sidebarVC
                                       void* contentVC, int32_t host_id, int32_t sidebar_id,
                                       const char* presentation,
                                       int32_t width, int32_t minWidth, int32_t maxWidth,
-                                      bool resizable, bool collapsible);
+                                      bool resizable, bool collapsible,
+                                      const char* title);
 
 // Implemented in ios/inspector.m. Materialize calls it AFTER both the content
 // and (optional) sidebar panes are built AND the persistent inspector nav has
@@ -856,7 +859,8 @@ extern void zapp_ios_inspector_register(void* window, void* inspectorNav,
                                         void* contentVC, void* contentWebview,
                                         int32_t host_id, int32_t inspector_id,
                                         int32_t width, int32_t min_width, int32_t max_width,
-                                        bool collapsed, bool collapsible, bool resizable);
+                                        bool collapsed, bool collapsible, bool resizable,
+                                        const char* title);
 
 static ZappIOSDeferred* zapp_ios_find_deferred(void* handle) {
     if (!handle) return NULL;
@@ -1130,7 +1134,7 @@ void zapp_ios_materialize_pending_windows(void) {
                                       d->sidebarPresentation,
                                       d->sidebarWidth, d->sidebarMinWidth,
                                       d->sidebarMaxWidth, d->sidebarResizable,
-                                      d->sidebarCollapsible);
+                                      d->sidebarCollapsible, d->sidebarTitle);
         }
 
         if (split) {
@@ -1364,7 +1368,8 @@ void zapp_ios_materialize_pending_windows(void) {
                                         d->numeric_id, d->inspectorNumericId,
                                         d->inspectorWidth, d->inspectorMinWidth,
                                         d->inspectorMaxWidth, d->inspectorCollapsed,
-                                        d->inspectorCollapsible, d->inspectorResizable);
+                                        d->inspectorCollapsible, d->inspectorResizable,
+                                        d->inspectorTitle);
             // Record host→inspector for pane-event fan-out (#713).
             zapp_ios_set_inspector_slot(d->numeric_id, d->inspectorNumericId);
         }
@@ -1630,6 +1635,7 @@ void* darwin_window_create(void* opts) {
         // survive until materialize (the WindowOptions is only pinned across
         // this call). Inspector panes are a separate future task on iOS.
         extern const char* wopts_sidebar_url(void* opts);
+        extern const char* wopts_sidebar_title(void* opts);
         extern int32_t wopts_sidebar_numeric_id(void* opts);
         extern int32_t wopts_sidebar_width(void* opts);
         extern int32_t wopts_sidebar_min_width(void* opts);
@@ -1643,6 +1649,8 @@ void* darwin_window_create(void* opts) {
         if (sbUrl && sbUrl[0] != '\0') {
             d->hasSidebar = true;
             d->sidebarUrl = strdup(sbUrl);
+            const char* _sbTitle = wopts_sidebar_title(opts);
+            d->sidebarTitle = (_sbTitle && _sbTitle[0]) ? strdup(_sbTitle) : NULL;
             d->sidebarNumericId = wopts_sidebar_numeric_id(opts);
             d->sidebarWidth = wopts_sidebar_width(opts);
             const char* _sbPres = wopts_sidebar_presentation(opts);
@@ -1665,6 +1673,7 @@ void* darwin_window_create(void* opts) {
         // trailing-pane materialize path. The url is strdup'd to survive until
         // materialize (the WindowOptions is only pinned across this call).
         extern const char* wopts_inspector_url(void* opts);
+        extern const char* wopts_inspector_title(void* opts);
         extern int32_t wopts_inspector_numeric_id(void* opts);
         extern int32_t wopts_inspector_width(void* opts);
         extern bool wopts_inspector_collapsed(void* opts);
@@ -1676,6 +1685,8 @@ void* darwin_window_create(void* opts) {
         const char* _insUrl = wopts_inspector_url(opts);
         d->hasInspector = (_insUrl && _insUrl[0]);
         d->inspectorUrl = d->hasInspector ? strdup(_insUrl) : NULL;
+        const char* _insTitle = wopts_inspector_title(opts);
+        d->inspectorTitle = (_insTitle && _insTitle[0]) ? strdup(_insTitle) : NULL;
         d->inspectorNumericId = wopts_inspector_numeric_id(opts);
         d->inspectorWidth = wopts_inspector_width(opts);
         d->inspectorCollapsed = wopts_inspector_collapsed(opts);
@@ -1718,8 +1729,10 @@ void darwin_window_destroy(void* handle) {
         free(d->queued_title);
         free(d->url);
         free(d->sidebarUrl);
+        free(d->sidebarTitle);
         free(d->sidebarPresentation);
         free(d->inspectorUrl);
+        free(d->inspectorTitle);
         for (int i = 0; i < ZAPP_MAX_DEFERRED; i++) {
             if (zapp_ios_deferred_list[i] == d) zapp_ios_deferred_list[i] = NULL;
         }

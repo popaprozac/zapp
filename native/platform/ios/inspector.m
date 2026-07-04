@@ -54,6 +54,15 @@ extern int32_t zapp_ios_sidebar_slot_for(int32_t host_slot);
 // toggleInspector bar button greys/un-greys immediately.
 extern void zapp_ios_toolbar_apply_for_window(void* window_ptr);
 
+// Defined in ios/toolbar.m — #782 T4a. Stamps the pane's leading/trailing
+// item buckets + title onto a specific VC's navigationItem, merging with
+// (not clobbering) an existing singular rightBarButtonItem (the Close button
+// below). Called from zapp_ios_inspector_column_did_show, AFTER the Close
+// affordance pass — see that function's call sites for the ordering
+// rationale.
+extern void zapp_ios_toolbar_stamp_pane(void* window_ptr, UIViewController* vc,
+                                        NSString* pane, NSString* title);
+
 // Forward declaration — darwin_inspector_collapse is defined further down in
 // this file; the Close-button target/action (installed on the <26 modal sheet
 // AND on the 26+ UIKit-managed auto-sheet, see
@@ -105,6 +114,13 @@ void zapp_ios_control_unsupported(const char* control, const char* reason) {
 @property (nonatomic, assign) int32_t configuredMaxWidth;  // maximumInspectorColumnWidth (0 = automatic)
 @property (nonatomic, assign) BOOL resizable;              // divider-drag allowed (via min==max pin when NO)
 @property (nonatomic, assign) BOOL collapsible;            // stored; no iOS user-collapse affordance to gate (WARN)
+// #782 T4a: the inspector pane's configured title (wopts_inspector_title,
+// threaded through window.m's deferred struct + zapp_ios_inspector_register).
+// Stamped onto the inspector root VC's navigationItem alongside its
+// pane-tagged items (see zapp_ios_toolbar_stamp_pane call sites below) —
+// unlike the sidebar, the inspector column already shows a bar unconditionally,
+// so this task stamps it directly (no want-state gate to wait on).
+@property (nonatomic, copy) NSString* inspectorTitle;
 // Dedupe guard for the iOS-26 column emit hooks (mirrors sidebar.m's
 // lastCollapsedEmit): the last collapsed state we emitted on the 26+ path.
 // Seeded at register time from the create-time `collapsed` value so the
@@ -172,6 +188,28 @@ bool zapp_ios_inspector_is_collapsible_for_window(void* window_ptr) {
     NSValue* key = [NSValue valueWithPointer:window_ptr];
     ZappIOSInspectorController* c = zapp_ios_inspectors[key];
     return c ? (bool)c.collapsible : true;
+}
+
+// #782 T4a: the inspector nav's root VC (its navigationItem is what
+// zapp_ios_toolbar_stamp_pane writes onto) — consumed by toolbar.m's
+// darwin_toolbar_set_items. Same traversal as
+// zapp_ios_inspector_apply_sheet_affordances above. nil when no inspector is
+// registered for the window. Declared extern in ios/toolbar.m.
+UIViewController* zapp_ios_inspector_root_vc_for_window(void* window_ptr) {
+    if (!window_ptr || !zapp_ios_inspectors) return nil;
+    NSValue* key = [NSValue valueWithPointer:window_ptr];
+    ZappIOSInspectorController* c = zapp_ios_inspectors[key];
+    return c.inspectorNav.viewControllers.firstObject;
+}
+
+// #782 T4a: the inspector's configured title (wopts_inspector_title, stored
+// at register time). nil when no inspector is registered or none was
+// configured. Declared extern in ios/toolbar.m.
+NSString* zapp_ios_inspector_title_for_window(void* window_ptr) {
+    if (!window_ptr || !zapp_ios_inspectors) return nil;
+    NSValue* key = [NSValue valueWithPointer:window_ptr];
+    ZappIOSInspectorController* c = zapp_ios_inspectors[key];
+    return c.inspectorTitle;
 }
 
 // slot -> owning UIWindow -> registry key. Works from ANY pane's slot (content,
@@ -347,11 +385,21 @@ void zapp_ios_inspector_column_did_show(void* window) {
         // auto-presentation by the time this delegate callback runs, re-check
         // on the next main-queue tick (the deferred pass also correctly
         // REMOVES the Close button when the column landed tiled).
+        //
+        // #782 T4a: the pane stamp runs immediately AFTER affordances in BOTH
+        // branches — order matters (see zapp_ios_toolbar_stamp_pane's header):
+        // affordances settle the singular Close (install/nil) first, so the
+        // stamp's read of rightBarButtonItem sees this show's real state
+        // before merging it into the plural rightBarButtonItems it writes.
         if (c.inspectorNav.presentingViewController) {
             zapp_ios_inspector_apply_sheet_affordances(c);
+            zapp_ios_toolbar_stamp_pane(window, c.inspectorNav.viewControllers.firstObject,
+                                        @"inspector", c.inspectorTitle);
         } else {
             dispatch_async(dispatch_get_main_queue(), ^{
                 zapp_ios_inspector_apply_sheet_affordances(c);
+                zapp_ios_toolbar_stamp_pane(window, c.inspectorNav.viewControllers.firstObject,
+                                            @"inspector", c.inspectorTitle);
             });
         }
         if (!c.lastCollapsedEmit) return;  // already expanded — no state change, stay silent
@@ -393,8 +441,12 @@ void zapp_ios_inspector_register(void* window, void* inspectorNav, void* content
                                  void* contentWebview, int32_t host_id,
                                  int32_t inspector_id, int32_t width, int32_t min_width,
                                  int32_t max_width, bool collapsed, bool collapsible,
-                                 bool resizable) {
+                                 bool resizable, const char* title) {
     if (!window || !inspectorNav || !contentVC) return;
+    // #782 T4a: capture the title C-string before the async block (mirrors
+    // sidebar.m's presMode/titleStr capture — the caller's buffer may be freed
+    // by the time the block runs if the deferred struct is torn down).
+    NSString* titleStr = (title && title[0]) ? [NSString stringWithUTF8String:title] : nil;
     zapp_ios_inspector_on_main(^{
         if (!zapp_ios_inspectors) zapp_ios_inspectors = [NSMutableDictionary dictionary];
 
@@ -412,6 +464,7 @@ void zapp_ios_inspector_register(void* window, void* inspectorNav, void* content
         c.configuredMaxWidth = max_width;
         c.resizable       = (BOOL)resizable;
         c.collapsible     = (BOOL)collapsible;
+        c.inspectorTitle  = titleStr; // #782 T4a
         c.contentWebview  = (__bridge WKWebView*)contentWebview;
         // #720: seed the live-resize dedupe to the configured width so the
         // first (launch) viewDidLayoutSubviews pass — which lands at that same

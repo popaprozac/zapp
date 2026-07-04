@@ -225,6 +225,16 @@ static UIImage* zapp_ios_resolve_icon(NSString* spec) {
 @property (nonatomic, strong) NSArray<UIBarButtonItem*>* trailingItems;
 @property (nonatomic, strong) NSString* centerTitle;   // nil if none
 @property (nonatomic, strong) UIView*   centerView;    // nil if none
+// #782 T4a: pane-tagged item buckets. Items with `pane:"sidebar"`/
+// `"inspector"` are segregated OUT of the content buckets above (by
+// zapp_ios_toolbar_populate_entry) into these — one leading/trailing pair per
+// pane, no toggle-exclusion variant (toggleSidebar/toggleInspector items are
+// content-only, never pane-tagged). Consumed by zapp_ios_toolbar_stamp_pane /
+// zapp_ios_toolbar_has_pane_items below.
+@property (nonatomic, strong) NSArray<UIBarButtonItem*>* sidebarLeading;
+@property (nonatomic, strong) NSArray<UIBarButtonItem*>* sidebarTrailing;
+@property (nonatomic, strong) NSArray<UIBarButtonItem*>* inspectorLeading;
+@property (nonatomic, strong) NSArray<UIBarButtonItem*>* inspectorTrailing;
 // window_ptr — stored for the apply_for_window lookup on collapse/expand.
 @property (nonatomic, assign) void* windowPtr;
 // T2: id-keyed dicts for update_item.
@@ -613,6 +623,60 @@ static void zapp_ios_toolbar_stamp_items(UIViewController* vc,
     zapp_ios_toolbar_stamp_items_force(vc, entry, includeToggleSidebar, NO);
 }
 
+// ─── zapp_ios_toolbar_has_pane_items / zapp_ios_toolbar_stamp_pane ───────────
+//
+// #782 T4a: pane-filtered read + stamp for the sidebar/inspector nav bars.
+// The entry's sidebarLeading/sidebarTrailing/inspectorLeading/
+// inspectorTrailing buckets are populated by zapp_ios_toolbar_populate_entry
+// above from items tagged pane:"sidebar"/"inspector" (segregated OUT of the
+// content buckets there — fixes the pre-T4a leak into the content navbar).
+//
+// has_pane_items is a query only (T4b's config-implied want-state gate for
+// the sidebar bar — the inspector bar is already shown unconditionally by
+// this task). stamp_pane writes that pane's leading/trailing items + title
+// onto a SPECIFIC VC's navigationItem — the pane's own root VC (inspector
+// nav's / sidebar nav's viewControllers.firstObject), never the content VC.
+//
+// Both resolve the entry via a direct dictionary lookup keyed by window_ptr,
+// mirroring zapp_ios_toolbar_stamp_vc_force — panes never carry a per-VC
+// toolbar OVERRIDE (that R2' mechanism is content-route-only), so there is no
+// override to consult here. Main-thread only, like the rest of this file's
+// UIKit-driven state.
+bool zapp_ios_toolbar_has_pane_items(void* window_ptr, NSString* pane) {
+    if (!window_ptr || !pane || !zapp_ios_toolbars) return false;
+    ZappIOSToolbarEntry* entry = zapp_ios_toolbars[[NSValue valueWithPointer:window_ptr]];
+    if (!entry) return false;
+    BOOL isSidebar = [pane isEqualToString:@"sidebar"];
+    NSArray* lead  = isSidebar ? entry.sidebarLeading  : entry.inspectorLeading;
+    NSArray* trail = isSidebar ? entry.sidebarTrailing : entry.inspectorTrailing;
+    return (lead.count + trail.count) > 0;
+}
+
+// Stamps `pane`'s leading/trailing buckets + title onto `vc`. The trailing
+// side MERGES with (never clobbers) a pre-existing SINGULAR
+// rightBarButtonItem: the inspector's Close button
+// (zapp_ios_inspector_apply_sheet_affordances, ios/inspector.m) is installed
+// via that singular property, while this stamp always assigns the PLURAL
+// rightBarButtonItems — so an existing Close is read and re-prepended here
+// rather than lost. CALLER CONTRACT: run any Close-button affordance pass
+// BEFORE calling this (see inspector.m's call sites) so the read sees the
+// settled Close state for this show, not a stale one.
+void zapp_ios_toolbar_stamp_pane(void* window_ptr, UIViewController* vc, NSString* pane, NSString* title) {
+    if (!window_ptr || !vc || !pane || !zapp_ios_toolbars) return;
+    ZappIOSToolbarEntry* entry = zapp_ios_toolbars[[NSValue valueWithPointer:window_ptr]];
+    if (!entry) return;
+    BOOL isSidebar = [pane isEqualToString:@"sidebar"];
+    NSArray<UIBarButtonItem*>* paneLeading  = isSidebar ? entry.sidebarLeading  : entry.inspectorLeading;
+    NSArray<UIBarButtonItem*>* paneTrailing = isSidebar ? entry.sidebarTrailing : entry.inspectorTrailing;
+    vc.navigationItem.leftBarButtonItems = paneLeading ?: @[];
+    NSArray<UIBarButtonItem*>* right = paneTrailing ?: @[];
+    if (vc.navigationItem.rightBarButtonItem != nil) {
+        right = [@[vc.navigationItem.rightBarButtonItem] arrayByAddingObjectsFromArray:right];
+    }
+    vc.navigationItem.rightBarButtonItems = right;
+    vc.navigationItem.title = title.length ? title : nil;
+}
+
 // ─── zapp_ios_toolbar_apply_to_nav (internal helper) ─────────────────────────
 //
 // Assigns the stored leading/trailing/center buckets from `entry` to the given
@@ -657,6 +721,14 @@ static void zapp_ios_toolbar_populate_entry(ZappIOSToolbarEntry* entry,
         NSString* centerTitle = nil;
         UIView*   centerView  = nil;
         NSMutableArray<UIBarButtonItem*>* trailing = [NSMutableArray array];
+        // #782 T4a: pane-tagged item buckets — populated below by the
+        // per-item `pane` read, segregated OUT of the content buckets above.
+        // One leading/trailing pair per pane; no toggle-exclusion variant
+        // (toggleSidebar/toggleInspector are content-only, never pane-tagged).
+        NSMutableArray<UIBarButtonItem*>* sidebarLeading    = [NSMutableArray array];
+        NSMutableArray<UIBarButtonItem*>* sidebarTrailing   = [NSMutableArray array];
+        NSMutableArray<UIBarButtonItem*>* inspectorLeading  = [NSMutableArray array];
+        NSMutableArray<UIBarButtonItem*>* inspectorTrailing = [NSMutableArray array];
         NSMutableArray* allBuilt = [NSMutableArray array]; // for registry
         NSMutableDictionary<NSString*, UIBarButtonItem*>* itemsById = [NSMutableDictionary dictionary];
         NSMutableDictionary<NSString*, UISegmentedControl*>* segmentedById = [NSMutableDictionary dictionary];
@@ -676,12 +748,32 @@ static void zapp_ios_toolbar_populate_entry(ZappIOSToolbarEntry* entry,
             NSString* type = [def[@"type"] isKindOfClass:[NSString class]] ? def[@"type"] : @"button";
             NSString* placement = [def[@"placement"] isKindOfClass:[NSString class]]
                 ? def[@"placement"] : @"leading";
+            // #782 T4a: pane tag — segregates sidebar/inspector items OUT of
+            // the content buckets (previously dropped/leaked into content;
+            // zero `@"pane"` reads existed here before this task). Untagged
+            // (nil) items are unaffected — original placement-only routing
+            // into the content buckets, unchanged.
+            NSString* pane = [def[@"pane"] isKindOfClass:[NSString class]] ? def[@"pane"] : nil;
+            BOOL isTrailing = [placement isEqualToString:@"trailing"];
 
-            // Determine the target bucket once.
-            NSMutableArray<UIBarButtonItem*>* bucket =
-                [placement isEqualToString:@"trailing"] ? trailing : leading;
-            NSMutableArray<UIBarButtonItem*>* bucketNoToggle =
-                [placement isEqualToString:@"trailing"] ? trailing : leadingNoToggle;
+            // Determine the target bucket once. Pane buckets have no
+            // toggle-exclusion variant — bucketNoToggle points at the SAME
+            // array as bucket, so the shared add-once logic below
+            // (`bucket != bucketNoToggle`) adds pane items exactly once,
+            // mirroring how the existing trailing case already avoids a
+            // double-add.
+            NSMutableArray<UIBarButtonItem*>* bucket;
+            NSMutableArray<UIBarButtonItem*>* bucketNoToggle;
+            if ([pane isEqualToString:@"sidebar"]) {
+                bucket = isTrailing ? sidebarTrailing : sidebarLeading;
+                bucketNoToggle = bucket;
+            } else if ([pane isEqualToString:@"inspector"]) {
+                bucket = isTrailing ? inspectorTrailing : inspectorLeading;
+                bucketNoToggle = bucket;
+            } else {
+                bucket = isTrailing ? trailing : leading;
+                bucketNoToggle = isTrailing ? trailing : leadingNoToggle;
+            }
 
             // trackingSeparator — dropped on iOS (macOS-only NSTrackingSeparatorToolbarItem).
             // badge / style:prominent / controlRepresentation — ignored without error.
@@ -965,6 +1057,11 @@ static void zapp_ios_toolbar_populate_entry(ZappIOSToolbarEntry* entry,
         entry.centerView      = centerView;
         entry.itemsById       = itemsById;
         entry.segmentedById   = segmentedById;
+        // #782 T4a
+        entry.sidebarLeading    = [sidebarLeading copy];
+        entry.sidebarTrailing   = [sidebarTrailing copy];
+        entry.inspectorLeading  = [inspectorLeading copy];
+        entry.inspectorTrailing = [inspectorTrailing copy];
 }
 
 // ─── darwin_toolbar_set_items ────────────────────────────────────────────────
@@ -1076,6 +1173,31 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
                     && zapp_route_bar_should_show(window_ptr, primerTop, cvc)) {
                     [primerNav setNavigationBarHidden:NO animated:NO];
                 }
+            }
+        }
+
+        // #782 T4a: stamp the sidebar/inspector panes' own item buckets +
+        // titles onto their root VCs. The inspector column already shows a
+        // bar unconditionally (no want-state gate), so this is the ONLY
+        // stamp it needs outside a show transition (column_did_show,
+        // ios/inspector.m, covers the first-show-before-any-setItems case).
+        // The sidebar stamp here is harmless plumbing ahead of T4b: its bar
+        // stays hidden until T4b wires up the config-implied want-state, so
+        // stamped items/title simply sit unseen until then.
+        {
+            extern UIViewController* zapp_ios_inspector_root_vc_for_window(void* window_ptr);
+            extern NSString* zapp_ios_inspector_title_for_window(void* window_ptr);
+            UIViewController* inspectorRootVC = zapp_ios_inspector_root_vc_for_window(window_ptr);
+            if (inspectorRootVC) {
+                zapp_ios_toolbar_stamp_pane(window_ptr, inspectorRootVC, @"inspector",
+                                            zapp_ios_inspector_title_for_window(window_ptr));
+            }
+            extern UIViewController* zapp_ios_sidebar_vc_for_window(void* window_ptr);
+            extern NSString* zapp_ios_sidebar_title_for_window(void* window_ptr);
+            UIViewController* sidebarRootVC = zapp_ios_sidebar_vc_for_window(window_ptr);
+            if (sidebarRootVC) {
+                zapp_ios_toolbar_stamp_pane(window_ptr, sidebarRootVC, @"sidebar",
+                                            zapp_ios_sidebar_title_for_window(window_ptr));
             }
         }
 
