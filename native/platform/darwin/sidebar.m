@@ -214,6 +214,16 @@ void darwin_sidebar_set_presentation(int32_t window_id, const char* mode) {
     (void)window_id; (void)mode;
 }
 
+// #782 T5: runtime title update is an iOS-only concept — iOS panes are
+// UINavigationController columns whose bar shows a navigationItem.title.
+// macOS has ONE window toolbar (no per-pane nav bar); apps own the sidebar
+// header themselves in HTML. No-op, defined here so the shared router's
+// darwin_sidebar_set_title call links on macOS (parity with ios/sidebar.m,
+// which carries the real implementation).
+void darwin_sidebar_set_title(int32_t window_id, const char* title) {
+    (void)window_id; (void)title;
+}
+
 void darwin_sidebar_set_width(int32_t window_id, int32_t width) {
     zapp_sidebar_on_main(^{
         ZappSidebarController* c = zapp_sidebar_for_slot(window_id);

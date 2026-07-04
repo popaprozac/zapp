@@ -143,12 +143,14 @@ proc darwin_sidebar_show_sidebar(windowId: int32) {.importc, cdecl.}
 proc darwin_sidebar_set_collapsible(windowId: int32, canCollapse: bool) {.importc, cdecl.}
 proc darwin_sidebar_set_resizable(windowId: int32, resizable: bool) {.importc, cdecl.}
 proc darwin_sidebar_set_presentation(windowId: int32, mode: cstring) {.importc, cdecl.}
+proc darwin_sidebar_set_title(windowId: int32, title: cstring) {.importc, cdecl.}
 proc darwin_inspector_toggle(windowId: int32) {.importc, cdecl.}
 proc darwin_inspector_collapse(windowId: int32) {.importc, cdecl.}
 proc darwin_inspector_expand(windowId: int32) {.importc, cdecl.}
 proc darwin_inspector_set_width(windowId: int32, width: int32) {.importc, cdecl.}
 proc darwin_inspector_set_collapsible(windowId: int32, canCollapse: bool) {.importc, cdecl.}
 proc darwin_inspector_set_resizable(windowId: int32, resizable: bool) {.importc, cdecl.}
+proc darwin_inspector_set_title(windowId: int32, title: cstring) {.importc, cdecl.}
 proc darwin_toolbar_set_items(windowPtr: pointer, toolbarJson: cstring, hostSlot: int32) {.importc, cdecl.}
 proc darwin_toolbar_update_item(windowPtr: pointer, itemJson: cstring) {.importc, cdecl.}
 proc darwin_toolbar_remove(windowPtr: pointer) {.importc, cdecl.}
@@ -669,12 +671,14 @@ proc routeWindowAction(action: string, a: JsonNode, rawWindowId: int, payload: s
     of "sidebar:setCollapsible": darwin_sidebar_set_collapsible(target, flag)
     of "sidebar:setResizable": darwin_sidebar_set_resizable(target, flag)
     of "sidebar:setPresentation": darwin_sidebar_set_presentation(target, a{"mode"}.getStr("automatic").cstring)
+    of "sidebar:setTitle": darwin_sidebar_set_title(target, a{"title"}.getStr("").cstring)
     of "inspector:toggle": darwin_inspector_toggle(target)
     of "inspector:collapse": darwin_inspector_collapse(target)
     of "inspector:expand": darwin_inspector_expand(target)
     of "inspector:setWidth": darwin_inspector_set_width(target, width)
     of "inspector:setCollapsible": darwin_inspector_set_collapsible(target, flag)
     of "inspector:setResizable": darwin_inspector_set_resizable(target, flag)
+    of "inspector:setTitle": darwin_inspector_set_title(target, a{"title"}.getStr("").cstring)
     else: discard
     return
   if action.startsWith("toolbar:"):

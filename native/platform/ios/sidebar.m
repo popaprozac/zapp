@@ -1334,6 +1334,22 @@ void darwin_sidebar_set_width(int32_t window_id, int32_t width) {
     });
 }
 
+// #782 T5: runtime title update. Updates the stored title (read by T4b's
+// config-implied want-state on the NEXT viewWillAppear) and, when the sidebar
+// root VC already exists, the live navigationItem.title (updates the visible
+// bar immediately if it's currently shown). v1 boundary (same class as T4b's):
+// if the sidebar bar is currently HIDDEN (want-state NO — no title + no
+// items), this does not force it to appear; the bar only reflects the new
+// title once want-state is re-evaluated (next viewWillAppear).
+void darwin_sidebar_set_title(int32_t window_id, const char* title) {
+    zapp_ios_sidebar_on_main(^{
+        ZappIOSSidebarController* c = zapp_ios_sidebar_for_slot(window_id);
+        if (!c) return;
+        c.sidebarTitle = (title && title[0]) ? [NSString stringWithUTF8String:title] : nil;
+        if (c.sidebarVC) c.sidebarVC.navigationItem.title = c.sidebarTitle;
+    });
+}
+
 // Enable or disable sidebar collapsing (macOS parity: gates only the native
 // affordances, not the programmatic API). When can_collapse==false:
 //   • presentsWithGesture is set to NO so the native swipe-in gesture is disabled.

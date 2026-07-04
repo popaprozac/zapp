@@ -776,6 +776,20 @@ void darwin_inspector_set_width(int32_t window_id, int32_t width) {
     });
 }
 
+// #782 T5: runtime title update. Updates the stored title and, when the
+// inspector nav's root VC exists, the live navigationItem.title — the
+// inspector bar shows unconditionally (unlike the sidebar's want-state gate),
+// so this always updates the visible bar immediately.
+void darwin_inspector_set_title(int32_t window_id, const char* title) {
+    zapp_ios_inspector_on_main(^{
+        ZappIOSInspectorController* c = zapp_ios_inspector_for_slot(window_id);
+        if (!c) return;
+        c.inspectorTitle = (title && title[0]) ? [NSString stringWithUTF8String:title] : nil;
+        UIViewController* root = c.inspectorNav.viewControllers.firstObject;
+        if (root) root.navigationItem.title = c.inspectorTitle;
+    });
+}
+
 // There is no iOS user-collapse affordance on the Inspector column to gate
 // (presentsWithGesture governs the primary column only — SDK header :128).
 // Store the intent for state parity and warn once; darwin_inspector_toggle/

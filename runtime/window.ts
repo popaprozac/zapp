@@ -1302,6 +1302,12 @@ export interface SidebarHandle {
   /** Switch the iPad sidebar split presentation at runtime. iOS-only;
    *  no-op on macOS (AppKit tiles, never overlays). */
   setPresentation(mode: "automatic" | "tile" | "overlay"): void;
+  /** Update the sidebar pane's title live. iOS updates the sidebar nav's
+   *  navigationItem.title; macOS is a no-op (the app owns the sidebar header
+   *  in HTML). v1 boundary: if the sidebar bar is currently hidden (no title
+   *  + no items → want-state NO), the title is stored but the bar itself
+   *  won't appear until the next viewWillAppear. */
+  setTitle(s: string): void;
   /** Tracked from SIDEBAR_COLLAPSED/EXPANDED events, seeded by the create option. */
   readonly collapsed: boolean;
   /** Last width from SIDEBAR_RESIZED (the create option until the first event). */
@@ -1319,6 +1325,10 @@ export interface InspectorHandle {
   setCollapsible(allowed: boolean): void;
   /** Allow/disallow resizing by dragging the divider. false locks the current width. */
   setResizable(allowed: boolean): void;
+  /** Update the inspector pane's title live. iOS updates the inspector nav's
+   *  navigationItem.title; macOS is a no-op (the app owns the inspector header
+   *  in HTML). */
+  setTitle(s: string): void;
   /** Tracked from INSPECTOR_COLLAPSED/EXPANDED, seeded by the create option. */
   readonly collapsed: boolean;
   /** Last width from INSPECTOR_RESIZED (the create option until the first event). */
@@ -1545,6 +1555,7 @@ function createSidebarHandle(
     setCollapsible(allowed: boolean) { windowAction("sidebar:setCollapsible", { windowId, value: allowed }); },
     setResizable(allowed: boolean)   { windowAction("sidebar:setResizable",   { windowId, value: allowed }); },
     setPresentation(mode: "automatic" | "tile" | "overlay") { windowAction("sidebar:setPresentation", { windowId, mode }); },
+    setTitle(s: string)   { windowAction("sidebar:setTitle", { windowId, title: s }); },
   };
 }
 
@@ -1586,6 +1597,7 @@ function createInspectorHandle(
     setWidth(px: number)  { windowAction("inspector:setWidth", { windowId, width: px }); },
     setCollapsible(allowed: boolean) { windowAction("inspector:setCollapsible", { windowId, value: allowed }); },
     setResizable(allowed: boolean)   { windowAction("inspector:setResizable",   { windowId, value: allowed }); },
+    setTitle(s: string)              { windowAction("inspector:setTitle", { windowId, title: s }); },
   };
 }
 
