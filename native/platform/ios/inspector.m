@@ -55,13 +55,19 @@ extern int32_t zapp_ios_sidebar_slot_for(int32_t host_slot);
 extern void zapp_ios_toolbar_apply_for_window(void* window_ptr);
 
 // Defined in ios/toolbar.m — #782 T4a. Stamps the pane's leading/trailing
-// item buckets + title onto a specific VC's navigationItem, merging with
-// (not clobbering) an existing singular rightBarButtonItem (the Close button
-// below). Called from zapp_ios_inspector_column_did_show, AFTER the Close
-// affordance pass — see that function's call sites for the ordering
-// rationale.
+// item buckets + title onto a specific VC's navigationItem. Generic across
+// panes (sidebar has no Close); the inspector's Close is layered on top
+// afterwards by zapp_ios_inspector_reconcile_right_items below (review I2 —
+// stamp_pane no longer does any Close inference).
 extern void zapp_ios_toolbar_stamp_pane(void* window_ptr, UIViewController* vc,
                                         NSString* pane, NSString* title);
+
+// Defined in ios/toolbar.m — #782 T4a (review I2). Returns the window
+// toolbar's pane-tagged TRAILING item bucket (the pane's own items, WITHOUT
+// any Close). zapp_ios_inspector_reconcile_right_items reads the "inspector"
+// bucket and layers the owned Close on top. Empty array when no entry / pane.
+extern NSArray<UIBarButtonItem*>* zapp_ios_toolbar_pane_trailing_items(void* window_ptr,
+                                                                       NSString* pane);
 
 // Forward declaration — darwin_inspector_collapse is defined further down in
 // this file; the Close-button target/action (installed on the <26 modal sheet
@@ -121,6 +127,22 @@ void zapp_ios_control_unsupported(const char* control, const char* reason) {
 // unlike the sidebar, the inspector column already shows a bar unconditionally,
 // so this task stamps it directly (no want-state gate to wait on).
 @property (nonatomic, copy) NSString* inspectorTitle;
+// #782 T4a (review I2): the inspector OWNS its Close button as ONE reused
+// instance rather than inferring it from navigationItem.rightBarButtonItem.
+// Inference was fooled across a tiled→sheet re-show: a tiled show clears the
+// right items to [paneTrailingA, paneTrailingB], and on the next sheet show
+// rightBarButtonItem (== firstObject == paneTrailingA) reads non-nil, so
+// apply_sheet_affordances skipped installing Close AND the old stamp merge
+// re-prepended paneTrailingA → [A, A, B], no Close. Now `wantsClose` is the
+// single source of truth (set by apply_sheet_affordances: YES on the
+// sheet/compact branch, NO on the tiled branch) and
+// zapp_ios_inspector_reconcile_right_items rebuilds rightBarButtonItems as
+// (wantsClose ? @[closeButton] : @[]) + paneTrailing. closeButton is the SAME
+// instance every time, so its identity is stable and can never be mistaken
+// for a pane item. Created once at register (ARC-retained via the strong
+// property; target is the controller, whose lifetime exceeds the button's).
+@property (nonatomic, strong) UIBarButtonItem* closeButton;
+@property (nonatomic, assign) BOOL wantsClose;
 // Dedupe guard for the iOS-26 column emit hooks (mirrors sidebar.m's
 // lastCollapsedEmit): the last collapsed state we emitted on the 26+ path.
 // Seeded at register time from the create-time `collapsed` value so the
@@ -351,25 +373,46 @@ void zapp_ios_inspector_note_layout_width(void* window_ptr, CGFloat width) {
 // and the fallback path (<26, or no split) never fires those delegate
 // callbacks. Both installs target the same selector, so even a hypothetical
 // overlap would be behaviorally identical.
-static void zapp_ios_inspector_apply_sheet_affordances(ZappIOSInspectorController* c) {
+// #782 T4a (review I2): single-owner reconcile for the inspector root VC's
+// rightBarButtonItems. Rebuilds them from scratch as
+//   (wantsClose ? @[closeButton] : @[]) + paneTrailing
+// where paneTrailing is the window toolbar's "inspector" trailing bucket
+// (WITHOUT Close). Because closeButton is one owned instance and this is a
+// full rebuild (never an in-place inference merge), the result is correct
+// after ANY sheet↔tiled↔sheet sequence: Close appears exactly when wanted,
+// pane items are never duplicated, and Close is never mistaken for a pane
+// item. Non-static — toolbar.m's darwin_toolbar_set_items calls it after
+// stamping the inspector pane. Main-thread only (all callers already are).
+void zapp_ios_inspector_reconcile_right_items(void* window_ptr) {
+    if (!window_ptr || !zapp_ios_inspectors) return;
+    ZappIOSInspectorController* c = zapp_ios_inspectors[[NSValue valueWithPointer:window_ptr]];
     if (!c || !c.inspectorNav) return;
     UIViewController* inspectorRoot = c.inspectorNav.viewControllers.firstObject;
     if (!inspectorRoot) return;
+    NSArray<UIBarButtonItem*>* paneTrailing =
+        zapp_ios_toolbar_pane_trailing_items(window_ptr, @"inspector") ?: @[];
+    NSMutableArray<UIBarButtonItem*>* right = [NSMutableArray array];
+    if (c.wantsClose && c.closeButton) [right addObject:c.closeButton];
+    [right addObjectsFromArray:paneTrailing];
+    inspectorRoot.navigationItem.rightBarButtonItems = right;
+}
+
+// #782 T4a (review I2): decide ONLY whether Close is wanted this show (+ the
+// sheet grabber) — no longer touches navigationItem directly. The caller runs
+// zapp_ios_inspector_reconcile_right_items afterwards (with the pane items) so
+// the owned closeButton is layered over the pane trailing items in one rebuild.
+static void zapp_ios_inspector_apply_sheet_affordances(ZappIOSInspectorController* c) {
+    if (!c || !c.inspectorNav) return;
     if (c.inspectorNav.presentingViewController) {
-        // UIKit-managed sheet: ensure the Close escape hatch + grabber.
-        if (!inspectorRoot.navigationItem.rightBarButtonItem) {
-            inspectorRoot.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc]
-                initWithBarButtonSystemItem:UIBarButtonSystemItemClose
-                                      target:c
-                                      action:@selector(zapp_closeInspectorTapped)];
-        }
+        // UIKit-managed sheet (compact / iPhone): Close escape hatch + grabber.
+        c.wantsClose = YES;
         if (@available(iOS 15.0, *)) {
             UISheetPresentationController* sheet = c.inspectorNav.sheetPresentationController;
             if (sheet) sheet.prefersGrabberVisible = YES;
         }
     } else {
         // Real tiled column (iPad regular width): no X.
-        inspectorRoot.navigationItem.rightBarButtonItem = nil;
+        c.wantsClose = NO;
     }
 }
 
@@ -383,23 +426,29 @@ void zapp_ios_inspector_column_did_show(void* window) {
         // may differ from the previous show. Prefer the synchronous
         // presentingViewController check; if UIKit hasn't wired up the
         // auto-presentation by the time this delegate callback runs, re-check
-        // on the next main-queue tick (the deferred pass also correctly
-        // REMOVES the Close button when the column landed tiled).
+        // on the next main-queue tick (the deferred pass also correctly clears
+        // Close when the column landed tiled).
         //
-        // #782 T4a: the pane stamp runs immediately AFTER affordances in BOTH
-        // branches — order matters (see zapp_ios_toolbar_stamp_pane's header):
-        // affordances settle the singular Close (install/nil) first, so the
-        // stamp's read of rightBarButtonItem sees this show's real state
-        // before merging it into the plural rightBarButtonItems it writes.
+        // #782 T4a (review I2): three ordered steps per show —
+        //   1. apply_sheet_affordances → set wantsClose (+ grabber) for this
+        //      show's form (sheet vs tiled);
+        //   2. stamp_pane → left items + title + pane trailing items (no Close);
+        //   3. reconcile_right_items → rebuild rightBarButtonItems as
+        //      (wantsClose ? closeButton : none) + pane trailing.
+        // Reconcile runs LAST so the owned Close is layered over the freshly
+        // stamped pane items in a single rebuild — robust across any
+        // sheet↔tiled sequence (no inference, no duplication).
         if (c.inspectorNav.presentingViewController) {
             zapp_ios_inspector_apply_sheet_affordances(c);
             zapp_ios_toolbar_stamp_pane(window, c.inspectorNav.viewControllers.firstObject,
                                         @"inspector", c.inspectorTitle);
+            zapp_ios_inspector_reconcile_right_items(window);
         } else {
             dispatch_async(dispatch_get_main_queue(), ^{
                 zapp_ios_inspector_apply_sheet_affordances(c);
                 zapp_ios_toolbar_stamp_pane(window, c.inspectorNav.viewControllers.firstObject,
                                             @"inspector", c.inspectorTitle);
+                zapp_ios_inspector_reconcile_right_items(window);
             });
         }
         if (!c.lastCollapsedEmit) return;  // already expanded — no state change, stay silent
@@ -465,6 +514,14 @@ void zapp_ios_inspector_register(void* window, void* inspectorNav, void* content
         c.resizable       = (BOOL)resizable;
         c.collapsible     = (BOOL)collapsible;
         c.inspectorTitle  = titleStr; // #782 T4a
+        // #782 T4a (review I2): one owned Close instance, reused for every
+        // sheet presentation. target=c is unretained by UIBarButtonItem; c
+        // outlives the button (c strongly retains it), so no cycle, no dangle.
+        c.closeButton     = [[UIBarButtonItem alloc]
+            initWithBarButtonSystemItem:UIBarButtonSystemItemClose
+                                 target:c
+                                 action:@selector(zapp_closeInspectorTapped)];
+        c.wantsClose      = NO;  // corrected per-show by apply_sheet_affordances
         c.contentWebview  = (__bridge WKWebView*)contentWebview;
         // #720: seed the live-resize dedupe to the configured width so the
         // first (launch) viewDidLayoutSubviews pass — which lands at that same
@@ -603,11 +660,13 @@ void darwin_inspector_expand(int32_t window_id) {
         }
         // Close button — iPad form-sheets lack a guaranteed edge-dismiss
         // affordance, so give the inspector's root VC an explicit Close item.
-        UIViewController* inspectorRoot = c.inspectorNav.viewControllers.firstObject;
-        inspectorRoot.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc]
-            initWithBarButtonSystemItem:UIBarButtonSystemItemClose
-                                  target:c
-                                  action:@selector(zapp_closeInspectorTapped)];
+        // #782 T4a (review I2): use the single-owner model here too — mark
+        // Close wanted and reconcile (owned closeButton + any pane trailing
+        // items), so a later set_items → stamp_pane can't wipe the Close on
+        // this <26 modal path either.
+        void* hostWin = darwin_window_get_by_numeric_id(c.hostWindowId);
+        c.wantsClose = YES;
+        if (hostWin) zapp_ios_inspector_reconcile_right_items(hostWin);
         c.inspectorNav.presentationController.delegate = c;
 
         UIViewController* presenterRoot = split ?: c.contentVC;

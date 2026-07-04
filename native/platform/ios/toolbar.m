@@ -642,38 +642,63 @@ static void zapp_ios_toolbar_stamp_items(UIViewController* vc,
 // toolbar OVERRIDE (that R2' mechanism is content-route-only), so there is no
 // override to consult here. Main-thread only, like the rest of this file's
 // UIKit-driven state.
+// Resolves the entry's leading/trailing buckets for a KNOWN pane. Returns NO
+// (and leaves the out-params untouched) for an unknown pane string — review
+// Minor: an explicit isEqualToString: per pane, so a bogus pane never silently
+// reads the inspector buckets.
+static BOOL zapp_ios_toolbar_pane_buckets(ZappIOSToolbarEntry* entry, NSString* pane,
+                                          NSArray<UIBarButtonItem*>** outLeading,
+                                          NSArray<UIBarButtonItem*>** outTrailing) {
+    if ([pane isEqualToString:@"sidebar"]) {
+        if (outLeading)  *outLeading  = entry.sidebarLeading;
+        if (outTrailing) *outTrailing = entry.sidebarTrailing;
+        return YES;
+    }
+    if ([pane isEqualToString:@"inspector"]) {
+        if (outLeading)  *outLeading  = entry.inspectorLeading;
+        if (outTrailing) *outTrailing = entry.inspectorTrailing;
+        return YES;
+    }
+    return NO;
+}
+
 bool zapp_ios_toolbar_has_pane_items(void* window_ptr, NSString* pane) {
     if (!window_ptr || !pane || !zapp_ios_toolbars) return false;
     ZappIOSToolbarEntry* entry = zapp_ios_toolbars[[NSValue valueWithPointer:window_ptr]];
     if (!entry) return false;
-    BOOL isSidebar = [pane isEqualToString:@"sidebar"];
-    NSArray* lead  = isSidebar ? entry.sidebarLeading  : entry.inspectorLeading;
-    NSArray* trail = isSidebar ? entry.sidebarTrailing : entry.inspectorTrailing;
+    NSArray<UIBarButtonItem*>* lead = nil;
+    NSArray<UIBarButtonItem*>* trail = nil;
+    if (!zapp_ios_toolbar_pane_buckets(entry, pane, &lead, &trail)) return false;
     return (lead.count + trail.count) > 0;
 }
 
-// Stamps `pane`'s leading/trailing buckets + title onto `vc`. The trailing
-// side MERGES with (never clobbers) a pre-existing SINGULAR
-// rightBarButtonItem: the inspector's Close button
-// (zapp_ios_inspector_apply_sheet_affordances, ios/inspector.m) is installed
-// via that singular property, while this stamp always assigns the PLURAL
-// rightBarButtonItems — so an existing Close is read and re-prepended here
-// rather than lost. CALLER CONTRACT: run any Close-button affordance pass
-// BEFORE calling this (see inspector.m's call sites) so the read sees the
-// settled Close state for this show, not a stale one.
+// #782 T4a (review I2). The window toolbar's pane-tagged TRAILING bucket —
+// the pane's own items, WITHOUT any Close. inspector.m's
+// zapp_ios_inspector_reconcile_right_items reads the "inspector" bucket and
+// layers the owned Close on top. Empty array for no entry / unknown pane.
+NSArray<UIBarButtonItem*>* zapp_ios_toolbar_pane_trailing_items(void* window_ptr, NSString* pane) {
+    if (!window_ptr || !pane || !zapp_ios_toolbars) return @[];
+    ZappIOSToolbarEntry* entry = zapp_ios_toolbars[[NSValue valueWithPointer:window_ptr]];
+    if (!entry) return @[];
+    NSArray<UIBarButtonItem*>* trail = nil;
+    if (!zapp_ios_toolbar_pane_buckets(entry, pane, NULL, &trail)) return @[];
+    return trail ?: @[];
+}
+
+// Stamps `pane`'s leading/trailing buckets + title onto `vc`. Generic across
+// panes — the inspector's owned Close is NOT handled here (review I2): it is
+// layered on afterwards by zapp_ios_inspector_reconcile_right_items, which
+// OWNS the inspector's rightBarButtonItems. The sidebar has no Close, so its
+// right items are exactly the pane trailing bucket. No-op for an unknown pane.
 void zapp_ios_toolbar_stamp_pane(void* window_ptr, UIViewController* vc, NSString* pane, NSString* title) {
     if (!window_ptr || !vc || !pane || !zapp_ios_toolbars) return;
     ZappIOSToolbarEntry* entry = zapp_ios_toolbars[[NSValue valueWithPointer:window_ptr]];
     if (!entry) return;
-    BOOL isSidebar = [pane isEqualToString:@"sidebar"];
-    NSArray<UIBarButtonItem*>* paneLeading  = isSidebar ? entry.sidebarLeading  : entry.inspectorLeading;
-    NSArray<UIBarButtonItem*>* paneTrailing = isSidebar ? entry.sidebarTrailing : entry.inspectorTrailing;
-    vc.navigationItem.leftBarButtonItems = paneLeading ?: @[];
-    NSArray<UIBarButtonItem*>* right = paneTrailing ?: @[];
-    if (vc.navigationItem.rightBarButtonItem != nil) {
-        right = [@[vc.navigationItem.rightBarButtonItem] arrayByAddingObjectsFromArray:right];
-    }
-    vc.navigationItem.rightBarButtonItems = right;
+    NSArray<UIBarButtonItem*>* paneLeading = nil;
+    NSArray<UIBarButtonItem*>* paneTrailing = nil;
+    if (!zapp_ios_toolbar_pane_buckets(entry, pane, &paneLeading, &paneTrailing)) return;
+    vc.navigationItem.leftBarButtonItems  = paneLeading  ?: @[];
+    vc.navigationItem.rightBarButtonItems = paneTrailing ?: @[];
     vc.navigationItem.title = title.length ? title : nil;
 }
 
@@ -755,13 +780,17 @@ static void zapp_ios_toolbar_populate_entry(ZappIOSToolbarEntry* entry,
             // into the content buckets, unchanged.
             NSString* pane = [def[@"pane"] isKindOfClass:[NSString class]] ? def[@"pane"] : nil;
             BOOL isTrailing = [placement isEqualToString:@"trailing"];
+            // #782 T4a: is this item routed to a pane bucket? Pane buckets have
+            // no toggle-exclusion variant — bucketNoToggle points at the SAME
+            // array as bucket — so every add-to-both site below must add pane
+            // items EXACTLY ONCE (guarded by !isPaneItem). The untagged content
+            // path (isPaneItem == NO) keeps its original add-to-both behavior
+            // byte-identical, including the pre-existing content-trailing
+            // double-add for the compound types — that is out of scope here.
+            BOOL isPaneItem = ([pane isEqualToString:@"sidebar"] ||
+                               [pane isEqualToString:@"inspector"]);
 
-            // Determine the target bucket once. Pane buckets have no
-            // toggle-exclusion variant — bucketNoToggle points at the SAME
-            // array as bucket, so the shared add-once logic below
-            // (`bucket != bucketNoToggle`) adds pane items exactly once,
-            // mirroring how the existing trailing case already avoids a
-            // double-add.
+            // Determine the target bucket once.
             NSMutableArray<UIBarButtonItem*>* bucket;
             NSMutableArray<UIBarButtonItem*>* bucketNoToggle;
             if ([pane isEqualToString:@"sidebar"]) {
@@ -847,7 +876,9 @@ static void zapp_ios_toolbar_populate_entry(ZappIOSToolbarEntry* entry,
                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
                 [bucket addObject:wrapperItem];
-                [bucketNoToggle addObject:wrapperItem];
+                // #782 T4a: pane buckets share one array (bucket==bucketNoToggle)
+                // — skip the second add so the segmented control isn't duplicated.
+                if (!isPaneItem) [bucketNoToggle addObject:wrapperItem];
                 [allBuilt addObject:wrapperItem];
                 itemsById[groupId] = wrapperItem;
                 segmentedById[groupId] = sc;
@@ -893,7 +924,8 @@ static void zapp_ios_toolbar_populate_entry(ZappIOSToolbarEntry* entry,
                         OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
                     [bucket addObject:subItem];
-                    [bucketNoToggle addObject:subItem];
+                    // #782 T4a: pane buckets share one array — single add.
+                    if (!isPaneItem) [bucketNoToggle addObject:subItem];
                     [allBuilt addObject:subItem];
                     itemsById[subId] = subItem;
                 }
@@ -1004,7 +1036,8 @@ static void zapp_ios_toolbar_populate_entry(ZappIOSToolbarEntry* entry,
                     item.enabled = enabled;
                     itemsById[itemId] = item;
                     [bucket addObject:item];
-                    [bucketNoToggle addObject:item];
+                    // #782 T4a: pane buckets share one array — single add.
+                    if (!isPaneItem) [bucketNoToggle addObject:item];
                     [allBuilt addObject:item];
                     continue;
                 }
@@ -1187,10 +1220,17 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
         {
             extern UIViewController* zapp_ios_inspector_root_vc_for_window(void* window_ptr);
             extern NSString* zapp_ios_inspector_title_for_window(void* window_ptr);
+            // #782 T4a (review I2): reconcile OWNS the inspector's right items
+            // (owned Close layered over pane trailing). stamp_pane sets
+            // left + title + right=paneTrailing; reconcile then rebuilds right
+            // with the owned Close if wantsClose — so a set_items call can
+            // never wipe a wanted Close.
+            extern void zapp_ios_inspector_reconcile_right_items(void* window_ptr);
             UIViewController* inspectorRootVC = zapp_ios_inspector_root_vc_for_window(window_ptr);
             if (inspectorRootVC) {
                 zapp_ios_toolbar_stamp_pane(window_ptr, inspectorRootVC, @"inspector",
                                             zapp_ios_inspector_title_for_window(window_ptr));
+                zapp_ios_inspector_reconcile_right_items(window_ptr);
             }
             extern UIViewController* zapp_ios_sidebar_vc_for_window(void* window_ptr);
             extern NSString* zapp_ios_sidebar_title_for_window(void* window_ptr);
