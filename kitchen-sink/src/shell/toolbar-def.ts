@@ -86,11 +86,19 @@ export function shellToolbar(): ToolbarItemDef[] {
       action: () => Window.current().router.forward(),
     },
     {
+      // #782: pane:"sidebar" moves this item into the sidebar's OWN bar
+      // (iOS: the sidebar column's nav bar; macOS: the toolbar region left of
+      // the sidebar's trackingSeparator — the Safari-style compose-lives-with-
+      // the-list model). applyToolbarConventions (runtime/window.ts) buckets
+      // it correctly for both platforms regardless of its position in this
+      // array — position only matters for a raw Nim create-time toolbar
+      // (see kitchen-sink/zapp/app.nim).
       id: "compose",
       icon: "sf:square.and.pencil",
       label: "Compose",
       style: "prominent",
       tintColor: "#aa3bff",
+      pane: "sidebar",
       action: () => Events.emit("ks:toolbar", { id: "compose" }),
     },
     {

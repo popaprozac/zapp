@@ -729,6 +729,7 @@ const win = await Window.create({
   width: 900, height: 600,
   sidebar: {
     url: "/sidebar",        // required — entry route for the sidebar webview
+    title: "Mailboxes",     // #782: opts the sidebar into its own native bar (see below)
     width: 240,             // initial width (default 260)
     minWidth: 180,          // divider drag minimum (default 180)
     maxWidth: 400,          // divider drag maximum (default 400)
@@ -747,6 +748,7 @@ const win = await Window.create({
 | Option | Type | Default |
 |---|---|---|
 | `url` | `string` | — (required) |
+| `title` | `string` | `""` (no bar unless set — see [Per-pane toolbars & titles](#per-pane-toolbars-and-titles-macos-and-ios)) |
 | `width` | `number` | `260` |
 | `minWidth` | `number` | `180` |
 | `maxWidth` | `number` | `400` |
@@ -912,6 +914,7 @@ win.sidebar?.toggle()           // collapse if expanded, expand if collapsed
 win.sidebar?.collapse()
 win.sidebar?.expand()
 win.sidebar?.setWidth(220)      // programmatic resize
+win.sidebar?.setTitle("Unread (3)")  // live update to the pane's own bar title (#782; no-op on macOS)
 
 win.sidebar?.setCollapsible(false)  // disallow user collapse (programmatic toggle still works)
 win.sidebar?.setResizable(false)    // lock the width — divider no longer drags
@@ -1032,7 +1035,13 @@ iOS hosts the same `sidebar | content` panes in a native
   to; both panes are already on screen).
 - **iPhone-compact** — the split collapses to a **chrome-less master-detail**
   stack. There is **no native toolbar** (no system back chevron, no
-  `toggleSidebar` button). The app launches on the sidebar list; selecting an
+  `toggleSidebar` button — those two remain content-bar-only). **Since #782,
+  a *configured* sidebar (a `title` and/or a `pane:"sidebar"` toolbar item) is
+  the one exception:** it shows the sidebar's own config-implied bar on the
+  list screen, same as iPad's dedicated column — see
+  [Per-pane toolbars & titles](#per-pane-toolbars-and-titles-macos-and-ios) below.
+  An unconfigured (bar-less, default) sidebar stays exactly as described
+  here. The app launches on the sidebar list; selecting an
   item pushes the content full-screen. Move between the two columns with the
   `SidebarHandle`:
   - `showContent()` — reveal the content (detail) column. Call it from the
@@ -1228,7 +1237,7 @@ to).
 const win = await Window.create({
   url: "/",
   sidebar: { url: "/nav", width: 240 },
-  inspector: { url: "/inspector", width: 300, collapsed: true },
+  inspector: { url: "/inspector", title: "Info", width: 300, collapsed: true },
   toolbar: {
     items: [
       { type: "toggleSidebar" },
@@ -1247,7 +1256,9 @@ insp.setWidth(360);
 win.on(WindowEvent.INSPECTOR_RESIZED, ({ width }) => console.log("inspector", width));
 ```
 
-**Options:** `url` (required), `width` (default 280), `minWidth`/`maxWidth`
+**Options:** `url` (required), `title` (default `""` — no bar unless set; see
+[Per-pane toolbars & titles](#per-pane-toolbars-and-titles-macos-and-ios)), `width`
+(default 280), `minWidth`/`maxWidth`
 (180/400), `collapsible` (default true), `collapsed` (default false — set
 true for the common "hidden until summoned" inspector), `resizable`
 (default true; false locks the pane at `width`), `backgroundColor`
@@ -1258,7 +1269,8 @@ sidebar; `material` remains macOS-only.
 
 **Handle (`win.inspector`, present only when the window has one):**
 `toggle()` / `collapse()` / `expand()` / `setWidth(px)` /
-`setCollapsible(bool)` / `setResizable(bool)`, plus `collapsed`
+`setCollapsible(bool)` / `setResizable(bool)` / `setTitle(s)` (#782; live
+title update, no-op on macOS), plus `collapsed`
 and `width` (tracked from `INSPECTOR_COLLAPSED` / `INSPECTOR_EXPANDED` /
 `INSPECTOR_RESIZED`). `Window.isInspector()` is true inside the inspector
 pane.
@@ -1292,6 +1304,140 @@ inspector (warned + dropped otherwise).
 A window with an inspector but no sidebar roots on a 2-item split (content
 + inspector); with both, a 3-item split. Each pane consumes one dispatch
 slot.
+
+### Per-pane toolbars and titles (macOS and iOS)
+
+The sidebar and inspector panes can each own a **native navigation bar** —
+independent of the window's main content toolbar — by giving the pane a
+`title` and/or tagging one or more toolbar items into it with
+`pane: "sidebar" | "inspector"` (#782).
+
+**The web-canvas tenet.** Panes are **bar-less by default** — full-bleed web
+content, matching Zapp's desktop-web-framework stance (a bare `sidebar`/
+`inspector` with no `title` and no pane-tagged items renders no native chrome
+at all, as documented above). Setting a `title` **or** tagging at least one
+toolbar item into the pane is the explicit **opt-in** to a native bar. This is
+a deliberate deviation from native platform defaults (Mail/Notes/Xcode always
+show a sidebar header) — Zapp never draws chrome over your web content that
+you didn't ask for.
+
+```ts
+const win = await Window.create({
+  sidebar:   { url: "/nav",       title: "Mailboxes" },
+  inspector: { url: "/inspector", title: "Info", collapsed: true },
+  toolbar: {
+    items: [
+      { id: "compose", icon: "sf:square.and.pencil", label: "Compose",
+        pane: "sidebar", action: () => startCompose() },   // renders IN the sidebar's own bar
+      { id: "share", icon: "sf:square.and.arrow.up",
+        action: () => share() },                            // untagged → content bar (Safari model)
+    ],
+  },
+});
+```
+
+**`pane` now generalizes to every item type.** Before #782, only
+`trackingSeparator` carried a `pane: "sidebar" | "inspector"` tag. Any toolbar
+item — `button`, `segmented`, `group`, `label`, `space`/`flexibleSpace` — may
+now carry `pane` to render inside that pane's own bar instead of the main
+content toolbar. An item tagged for a pane the window doesn't have is dropped
+with a `[zapp] toolbar: item "…" is tagged pane:"…" but the window has no …`
+console warning (falls back to *nothing* — it is never silently redirected to
+the content region).
+
+**TS authoring sugar.** `sidebar: { title?, toolbar? }` / `inspector: {
+title?, toolbar? }` (passed to `Window.create`) is sugar: the pane's
+`toolbar.items` are tagged `pane: "sidebar"` / `pane: "inspector"` and folded
+into the window's single toolbar definition for you:
+
+```ts
+Window.create({
+  sidebar: {
+    url: "/nav", title: "Mailboxes",
+    toolbar: { items: [
+      { id: "compose", icon: "sf:square.and.pencil", action: () => startCompose() },
+    ] },
+  },
+});
+```
+
+> **Nim authoring note.** `app.nim` doesn't have this `sidebar: { toolbar }`
+> sugar yet — Nim's `SidebarOptions`/`InspectorOptions` carry `title: string`
+> only (no nested `toolbar` field). Nim apps tag pane chrome directly on the
+> window's own `toolbar: ToolbarOptions`, setting `pane: "sidebar"` /
+> `"inspector"` on the relevant `ToolbarItemOpt`s — see the ordering rule
+> below, since Nim's create-time toolbar is a literal, unprocessed item list
+> (unlike the TS runtime path). Full Nim `sidebar: {toolbar}` sugar parity is
+> a tracked follow-up, not yet shipped. Reference:
+> `kitchen-sink/zapp/app.nim` and `native/nim/tests/windowmanager_test.nim`.
+
+**Rendering per platform:**
+
+- **iOS/iPadOS** — pane-tagged items are bucketed purely by their `pane` tag
+  — array position doesn't matter — and stamped onto that pane's own
+  `UINavigationItem` (`leading`/`trailing` placement maps to
+  `leftBarButtonItems`/`rightBarButtonItems`, exactly as the content bar
+  works — see [Toolbar (iOS)](#toolbar-ios)). The bar is **config-implied**:
+  it appears automatically once the pane has a `title` or at least one
+  pane-tagged item — there is no separate boolean to flip. iPad shows it in
+  the pane's own split column; iPhone-compact's collapsed master-detail stack
+  shows it too, on the sidebar list screen (see the #782 update in
+  [Sidebar on iOS](#sidebar-on-ios) above).
+- **macOS** — there is still exactly **one** `NSToolbar` per window — **zero
+  `darwin/toolbar.m` changes** for #782. A pane-tagged item renders in that
+  pane's region of the toolbar because of **position, not the tag**: an item
+  placed *before* the `{ type: "trackingSeparator", pane: "sidebar" }` marker
+  sits over the sidebar; an item placed *after* the inspector's tracking
+  separator sits over the inspector; everything else is the content region in
+  between (the existing `NSTrackingSeparatorToolbarItem` mechanism — see
+  [Toolbar (macOS)](#toolbar-macos) below). The `pane` tag itself still rides
+  along on the wire (iOS reads it), but **macOS never consults it for
+  placement.** Two authoring paths differ here:
+  - **TS (`Window.create()` / `win.toolbar.setItems()`)** —
+    `applyToolbarConventions` reorders pane-tagged items next to their pane's
+    tracking separator for you automatically, regardless of where you
+    declared them in the array.
+  - **Nim create-time (`app.nim`'s `toolbar: ToolbarOptions`)** — no reorder
+    pass exists; `serializeToolbar` emits the item list exactly as declared.
+    **You must place a `pane:"sidebar"` item before the sidebar
+    `trackingSeparator` yourself** for it to land in the sidebar region
+    (mirrors the authoring template in
+    `native/nim/tests/windowmanager_test.nim`).
+
+**`title` rendering:**
+
+- **iOS/iPadOS** — rendered as that pane's `navigationItem.title`.
+- **macOS `title` is a documented no-op.** macOS has exactly one window
+  titlebar/toolbar; there is no per-pane title slot to render into. Apps that
+  want a sidebar/inspector header on macOS render it themselves in the pane's
+  own HTML (the pane is just a webview — nothing stops you from putting a
+  heading in its markup). `title` is still accepted and stored on macOS,
+  purely so the same `WindowOptions` value works cross-platform without an
+  `if (Platform.isIOS)` branch.
+
+**Runtime updates.** `win.sidebar.setTitle(s: string): void` /
+`win.inspector.setTitle(s: string): void` update the pane's title live
+(fire-and-forget action, no acknowledgement event) — same no-op-on-macOS rule
+as the create-time option:
+
+```ts
+Window.current().sidebar?.setTitle("Unread (3)");
+```
+
+**Presentation is split-global, not per-pane.** `presentation` /
+`setPresentation` (`"tile" | "overlay"`, see
+[Sidebar](#sidebar-native-nssplitviewitem) above) and the iOS Inspector
+column's show/hide are both properties of the **one** `UISplitViewController`
+backing the window — `preferredSplitBehavior` and `preferredDisplayMode` are
+split-wide settings, there is no per-column equivalent. Concretely:
+presenting the sidebar as an `"overlay"` also carries the inspector along for
+the ride — there is no way to overlay just one column; this is UIKit's
+design, not a Zapp gap. A related fix (**#781**): re-applying the split's
+display mode (on rotation, a trait change, a sidebar toggle, or an explicit
+`setPresentation` call) used to unconditionally re-show a **collapsed**
+inspector column along with it; it now captures the inspector's collapsed
+state first and restores it afterward — collapsing the inspector and then
+rotating the device keeps it collapsed.
 
 ### Toolbar (macOS)
 
@@ -1329,7 +1475,10 @@ unclickable when `false`) and — on menu buttons — `indicator?: boolean`
 look). System types: `toggleSidebar`, `trackingSeparator`, `toggleInspector`
 (`toggleSidebar`/`trackingSeparator` require the window to have a `sidebar`,
 `toggleInspector`/`trackingSeparator` with `pane: "inspector"` require an
-`inspector` — warned and dropped otherwise), `space`, `flexibleSpace`.
+`inspector` — warned and dropped otherwise), `space`, `flexibleSpace`. Any
+item type may also carry `pane: "sidebar" | "inspector"` to render inside
+that pane's own bar instead of this window toolbar — see
+[Per-pane toolbars & titles](#per-pane-toolbars-and-titles-macos-and-ios) above.
 
 **Item placement (macOS).** Every item accepts an optional `placement?:
 "leading" | "center" | "trailing"` field (default `"leading"`). Items are

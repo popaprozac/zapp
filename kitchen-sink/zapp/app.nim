@@ -29,8 +29,30 @@ proc runApp(): int =
     title: "Kitchen Sink",
     visible: false,            # deferred show — revealed by onReady
     width: 1100, height: 700,
-    sidebar: SidebarOptions(url: "#sidebar-pane", width: 300, minWidth: 150, maxWidth: 500, presentation: SidebarPresentation.Default),
-    inspector: InspectorOptions(url: "#inspector-pane", width: 300, collapsed: true),
+    # #782: title alone is enough to opt the pane into its own config-implied
+    # native bar (iOS: navigationItem.title; macOS title is a documented no-op —
+    # see docs/api-reference.md "Per-pane toolbars & titles").
+    sidebar: SidebarOptions(url: "#sidebar-pane", title: "Kitchen Sink", width: 300, minWidth: 150, maxWidth: 500, presentation: SidebarPresentation.Default),
+    inspector: InspectorOptions(url: "#inspector-pane", title: "Inspector", width: 300, collapsed: true),
+    # #782 create-time Nim toolbar-authoring reference: unlike the TS runtime
+    # path (applyToolbarConventions), Nim's serializeToolbar emits this list
+    # EXACTLY as given — no auto-inserted toggle/tracking-separator items, and
+    # a pane:"sidebar" item renders in the sidebar's toolbar region on macOS
+    # only because it is POSITIONED before the trackingSeparator(pane:"sidebar")
+    # below (mirrors native/nim/tests/windowmanager_test.nim's authoring
+    # template). NOTE: kitchen-sink's shell (src/shell/main-pane.ts) attaches
+    # its OWN toolbar via `Window.current().toolbar.setItems(shellToolbar())`
+    # once the content pane's webview is ready, which REPLACES this create-time
+    # toolbar wholesale — so this list attaches natively at window-create time
+    # (proving out the convention + native attach path) but is superseded a
+    # moment later by the TS-owned one. The actually-visible pane-tagged demo
+    # item is toolbar-def.ts's "compose" button (tagged pane:"sidebar" there).
+    toolbar: ToolbarOptions(items: @[
+      ToolbarItemOpt(`type`: "toggleSidebar"),
+      ToolbarItemOpt(`type`: "button", id: "compose", label: "Compose", icon: "sf:square.and.pencil", pane: "sidebar"),
+      ToolbarItemOpt(`type`: "trackingSeparator", pane: "sidebar"),
+      ToolbarItemOpt(`type`: "button", id: "share", icon: "sf:square.and.arrow.up"),
+    ]),
     inspectable: Inspectable.Auto,
     # Opt into the modern hidden unified chrome explicitly (the full-bleed tiled
     # Mail/Messages look). With the 2c change, an UNSET titleBarStyle now resolves
