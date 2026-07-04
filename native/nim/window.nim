@@ -125,6 +125,7 @@ type
 
   SidebarOptions* = object
     url*: string
+    title*: string   ## #782: shown in the sidebar's own toolbar/nav region; native wiring lands later
     backgroundColor*: ZappColor
     material*: Material
     presentation*: SidebarPresentation
@@ -138,6 +139,7 @@ type
 
   InspectorOptions* = object
     url*: string
+    title*: string   ## #782: shown in the inspector's own toolbar/nav region; native wiring lands later
     backgroundColor*: ZappColor
     material*: Material
     width*: int32 = 280
@@ -272,6 +274,7 @@ proc wopts_background_extension(p: pointer): cstring {.exportc, cdecl.} =
 
 # sidebar accessors — consumed by darwin/window.m + ios/window.m at create time; "" url short-circuits the sidebar branch.
 proc wopts_sidebar_url(p: pointer): cstring {.exportc, cdecl.} = opt(p).sidebar.url.cstring
+proc wopts_sidebar_title(p: pointer): cstring {.exportc, cdecl.} = opt(p).sidebar.title.cstring
 proc wopts_sidebar_material(p: pointer): cstring {.exportc, cdecl.} = materialStr[opt(p).sidebar.material].cstring
 proc wopts_sidebar_width(p: pointer): int32 {.exportc, cdecl.} = opt(p).sidebar.width
 proc wopts_sidebar_min_width(p: pointer): int32 {.exportc, cdecl.} = opt(p).sidebar.minWidth
@@ -285,6 +288,7 @@ proc wopts_sidebar_numeric_id(p: pointer): int32 {.exportc, cdecl.} = opt(p).sid
 
 # inspector accessors — consumed by darwin/window.m + ios/window.m at create time; "" url short-circuits the branch.
 proc wopts_inspector_url(p: pointer): cstring {.exportc, cdecl.} = opt(p).inspector.url.cstring
+proc wopts_inspector_title(p: pointer): cstring {.exportc, cdecl.} = opt(p).inspector.title.cstring
 proc wopts_inspector_material(p: pointer): cstring {.exportc, cdecl.} = materialStr[opt(p).inspector.material].cstring
 proc wopts_inspector_width(p: pointer): int32 {.exportc, cdecl.} = opt(p).inspector.width
 proc wopts_inspector_min_width(p: pointer): int32 {.exportc, cdecl.} = opt(p).inspector.minWidth
@@ -500,6 +504,13 @@ proc serializeToolbar*(t: ToolbarOptions): string =
         w["menu"] = m
         w["indicator"] = %it.indicator   # chevron — only meaningful on menu items
       items.add(w)
+    # #782 T3: emit "pane" for ANY item carrying the tag — not just
+    # trackingSeparator (whose own case above already sets it, defaulting to
+    # "sidebar"). A pane-scoped toolbar item (button/segmented/group/label/
+    # space/toggle) folded from sidebar.toolbar/inspector.toolbar into the
+    # window's one toolbarJson must keep its pane tag across serialize->parse,
+    # or the T2 desugar's fold silently loses which pane an item belongs to.
+    if it.pane.len > 0: items[^1]["pane"] = %it.pane
     items[^1]["placement"] = %($it.placement)
   $(%*{"style": $t.style, "items": items})
 
@@ -640,6 +651,7 @@ proc windowOptsApplyJson*(o: WindowOptions, a: JsonNode) =
   let sb = a{"sidebar"}
   if not sb.isNil and sb.kind == JObject:
     if jHasStr(sb, "url"): o.sidebar.url = jStr(sb, "url")
+    if jHasStr(sb, "title"): o.sidebar.title = jStr(sb, "title")
     if jHasStr(sb, "material"): o.sidebar.material = enumFromStr[Material](jStr(sb, "material"), Material.Default)
     if jHasStr(sb, "backgroundColor"): o.sidebar.backgroundColor = jStr(sb, "backgroundColor")
     if jHasNum(sb, "width"): o.sidebar.width = jI32(sb, "width", o.sidebar.width)
@@ -652,6 +664,7 @@ proc windowOptsApplyJson*(o: WindowOptions, a: JsonNode) =
   let insp = a{"inspector"}
   if not insp.isNil and insp.kind == JObject:
     if jHasStr(insp, "url"): o.inspector.url = jStr(insp, "url")
+    if jHasStr(insp, "title"): o.inspector.title = jStr(insp, "title")
     if jHasStr(insp, "material"): o.inspector.material = enumFromStr[Material](jStr(insp, "material"), Material.Default)
     if jHasStr(insp, "backgroundColor"): o.inspector.backgroundColor = jStr(insp, "backgroundColor")
     if jHasNum(insp, "width"): o.inspector.width = jI32(insp, "width", o.inspector.width)

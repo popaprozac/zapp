@@ -22,6 +22,16 @@ proc zjs_broadcast_eval_js(js: cstring) {.exportc, cdecl.} = discard
 var gDevTools: cint = 0
 proc zapp_build_dev_tools_default(): cint {.exportc, cdecl.} = gDevTools
 
+# window.nim's wopts_* accessors are {.exportc.} (C-callable by window.m) but
+# NOT `*`-exported at the Nim level, so `import ../window` alone doesn't make
+# them callable by name here. Re-declare as `importc` to link against the
+# very definitions window.nim compiled into this same test binary — mirrors
+# the reverse of the darwin_window_create stubs above (there the test
+# provides the exportc'd body window.nim importc's; here window.nim provides
+# the exportc'd body this test importc's).
+proc wopts_sidebar_title(p: pointer): cstring {.importc, cdecl.}
+proc wopts_inspector_title(p: pointer): cstring {.importc, cdecl.}
+
 block:
   let a = createWindow(WindowOptions(title: "a"))
   let b = createWindow(WindowOptions(title: "b"))
@@ -331,5 +341,34 @@ block:
   doAssert "\"placement\":\"center\"" in s
   doAssert "\"placement\":\"trailing\"" in s
   doAssert parseToolbarJson(s) == t, "parse(serialize(t)) must round-trip placement"
+
+block:
+  # #782 T3: a pane-tagged BUTTON (not just trackingSeparator) must survive
+  # serialize->parse. Prior to the generalization, serializeToolbar only
+  # emitted "pane" for the trackingSeparator case, so a button/segmented/
+  # group/label/space item tagged pane:"sidebar" lost its tag on the wire —
+  # this is the T2-desugar shape (sidebar.toolbar items folded into the one
+  # window toolbarJson, each tagged pane:"sidebar"/"inspector").
+  let t = ToolbarOptions(style: ToolbarStyle.Unified, items: @[
+    ToolbarItemOpt(`type`: "button", id: "note", label: "Note", pane: "sidebar"),
+  ])
+  let s = serializeToolbar(t)
+  doAssert "\"pane\":\"sidebar\"" in s, "pane-tagged button must serialize its pane"
+  let parsed = parseToolbarJson(s)
+  doAssert parsed.items[0].pane == "sidebar", "pane-tagged button must round-trip through serialize->parse"
+
+block:
+  # #782 T3: SidebarOptions/InspectorOptions.title travels through
+  # windowOptsApplyJson (mirrors sidebar.url/inspector.url parsing) and is
+  # readable via wopts_sidebar_title/wopts_inspector_title.
+  let o = WindowOptions(title: "panes")
+  windowOptsApplyJson(o, parseJson("""{
+    "sidebar":{"url":"#sb","title":"Files"},
+    "inspector":{"url":"#insp","title":"Details"}
+  }"""))
+  doAssert o.sidebar.title == "Files", "sidebar.title must parse from JSON"
+  doAssert o.inspector.title == "Details", "inspector.title must parse from JSON"
+  doAssert $wopts_sidebar_title(cast[pointer](o)) == "Files"
+  doAssert $wopts_inspector_title(cast[pointer](o)) == "Details"
 
 echo "windowmanager ok"
