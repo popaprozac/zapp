@@ -255,12 +255,19 @@ typedef struct {
     BOOL isRoute;
     BOOL routeWantsBarHidden;
     BOOL toolbarRegistered;
+    BOOL isSidebar;
     BOOL showBar;
 } ZappRouteBarWantState;
 
 static ZappRouteBarWantState zapp_route_bar_want_state(UIViewController* vc,
                                                         UIViewController* contentVC,
                                                         void* win) {
+    // #782 T4b: sidebar config-implied want-state — extern decls local to this
+    // function, mirroring the file's local-extern style (defined in ios/sidebar.m
+    // and ios/toolbar.m).
+    extern UIViewController* zapp_ios_sidebar_vc_for_window(void* window_ptr);
+    extern NSString* zapp_ios_sidebar_title_for_window(void* window_ptr);
+    extern bool zapp_ios_toolbar_has_pane_items(void* window_ptr, NSString* pane);
     ZappRouteBarWantState s;
     s.isContent = (contentVC && vc == contentVC);
     s.isRoute = [vc isKindOfClass:[ZappRouteVC class]];
@@ -268,7 +275,17 @@ static ZappRouteBarWantState zapp_route_bar_want_state(UIViewController* vc,
     s.routeWantsBarHidden = s.isRoute && ((ZappRouteVC*)vc).navbarHidden;
     // G1 fix B: content only shows a bar while a toolbar is registered.
     s.toolbarRegistered = (win != NULL) && zapp_ios_toolbar_registered_for_window(win);
-    s.showBar = (s.isContent && s.toolbarRegistered) || (s.isRoute && !s.routeWantsBarHidden);
+    // #782 T4b: sidebar bar is config-implied — shown iff the sidebar itself was
+    // given a title or pane-tagged toolbar items (web-canvas default: no config,
+    // no bar). Never true for a content or route VC (sidebarVC is neither).
+    UIViewController* sidebarVC = (win != NULL) ? zapp_ios_sidebar_vc_for_window(win) : nil;
+    s.isSidebar = (sidebarVC != nil && vc == sidebarVC);
+    BOOL sidebarHasChrome = s.isSidebar &&
+        ((zapp_ios_sidebar_title_for_window(win).length > 0) ||
+         zapp_ios_toolbar_has_pane_items(win, @"sidebar"));
+    s.showBar = (s.isContent && s.toolbarRegistered)
+             || (s.isRoute && !s.routeWantsBarHidden)
+             || (s.isSidebar && sidebarHasChrome);
     return s;
 }
 

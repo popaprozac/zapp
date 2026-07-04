@@ -426,6 +426,11 @@ extern void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot,
                                            UIViewController* contentVC);
     extern UIViewController* zapp_ios_content_vc_for_window(void* window_ptr);
     extern void zapp_ios_toolbar_stamp_vc(void* window_ptr, UIViewController* vc);
+    // #782 T4b: sidebar pane stamp — the sidebar owns its OWN title/items, not
+    // the content/window toolbar entry (defined in ios/toolbar.m, ios/sidebar.m).
+    extern void zapp_ios_toolbar_stamp_pane(void* window_ptr, UIViewController* vc,
+                                            NSString* pane, NSString* title);
+    extern NSString* zapp_ios_sidebar_title_for_window(void* window_ptr);
     UIViewController* contentVC = zapp_ios_content_vc_for_window(_windowPtr);
     BOOL showBar = zapp_route_bar_should_show(_windowPtr, self, contentVC);
     if (nav.navigationBarHidden == showBar) {
@@ -467,7 +472,14 @@ extern void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot,
     // showColumn un-nest fires no willShow, so stamp the shown VC's items here
     // when its bar is up — a revealed bar is never empty. Idempotent with
     // willShow's stamp on real nav push/pop transitions.
-    if (showBar) zapp_ios_toolbar_stamp_vc(_windowPtr, self);
+    if (showBar) {
+        if (_paneRole == 1) {   // sidebar column owns its own bar — stamp pane-filtered items + title
+            zapp_ios_toolbar_stamp_pane(_windowPtr, self, @"sidebar",
+                                        zapp_ios_sidebar_title_for_window(_windowPtr));
+        } else {                // content pane — window toolbar entry
+            zapp_ios_toolbar_stamp_vc(_windowPtr, self);
+        }
+    }
 }
 
 - (void)viewSafeAreaInsetsDidChange {
