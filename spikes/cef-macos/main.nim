@@ -1,13 +1,22 @@
-## CEF spike (Task 0) — Nim orchestration.
+## CEF spike (Task 0 + Task 1) — Nim orchestration.
 ##
 ## This module IS the browser-process entry point (Nim's generated `main` runs
 ## the top-level `cefSpikeMain()` below). It proves the load-bearing thing for
-## GATE 0: the CEF C API links into a Nim build. Nim itself calls the four CEF
-## lifecycle entry points directly — `cef_initialize`, `cef_browser_host_create_browser`,
-## `cef_run_message_loop`, `cef_shutdown` — resolving those symbols from the
-## framework at link time. The fiddly cef_*_t / cef_string_t / cef_settings_t
-## construction is delegated to the C/ObjC helpers in cef_app.c / cef_client.c /
-## mac_entry.m (declared in cef_spike.h) so Nim stays free of CEF struct layout.
+## GATE 0: the CEF C API links into a Nim build. Nim itself calls the CEF
+## lifecycle entry points directly — `cef_initialize`,
+## `cef_browser_host_create_browser`, `cef_shutdown` — resolving those symbols
+## from the framework at link time. The fiddly cef_*_t / cef_string_t /
+## cef_settings_t construction is delegated to the C/ObjC helpers in cef_app.c /
+## cef_client.c / mac_entry.m (declared in cef_spike.h) so Nim stays free of CEF
+## struct layout.
+##
+## Task 1 (message-loop coexistence, the #1 risk gate) swaps T0's placeholder
+## `cef_run_message_loop` (CEF owns the loop) for CEF's EXTERNAL MESSAGE PUMP:
+## NSApplication owns the loop (`cefspike_run_main_loop` = [NSApp run]) and CEF
+## is pumped cooperatively via `cef_do_message_loop_work` scheduled from the
+## browser-process handler (see cef_app.c + the ObjC pump in mac_entry.m). A
+## second, ZJS-worker-shaped loop (`cefspike_start_worker_stub`) runs alongside
+## to prove neither starves.
 ##
 ## Build/link surface lives here (per the Task 0 brief): the CEF include dir and
 ## the framework link are wired via {.passC.}/{.passL.}; the C/ObjC sources via
@@ -53,7 +62,6 @@ proc cef_initialize(args, settings, app, sandboxInfo: pointer): cint
 proc cef_browser_host_create_browser(windowInfo, client, url, browserSettings,
                                      extraInfo, requestContext: pointer): cint
   {.importc, cdecl, header: "cef_spike.h".}
-proc cef_run_message_loop() {.importc, cdecl, header: "cef_spike.h".}
 proc cef_shutdown() {.importc, cdecl, header: "cef_spike.h".}
 
 # --- Zapp-specific C/ObjC helpers (cef_spike.h) ----------------------------
@@ -71,6 +79,10 @@ proc cefspike_make_cef_string(utf8: cstring): pointer
   {.importc, cdecl, header: "cef_spike.h".}
 proc cefspike_make_browser_settings(): pointer
   {.importc, cdecl, header: "cef_spike.h".}
+
+# Task 1 — external-pump loop ownership + the second-loop coexistence probe.
+proc cefspike_start_worker_stub() {.importc, cdecl, header: "cef_spike.h".}
+proc cefspike_run_main_loop() {.importc, cdecl, header: "cef_spike.h".}
 
 # argv backing store — must outlive cef_initialize (CEF snapshots it into a
 # command line). Module globals stay alive for the process lifetime.
@@ -109,11 +121,18 @@ proc cefSpikeMain() =
   discard cef_browser_host_create_browser(
     windowInfo, client, url, browserSettings, nil, nil)
 
-  # 5. Run CEF's message loop (T0 placeholder; T1 swaps in external-pump
-  #    coexistence). Returns when the last browser closes (cef_quit_message_loop).
-  cef_run_message_loop()
+  # 5. Coexistence probe (Task 1, the #1 risk): spawn the SECOND concurrent loop
+  #    — a ZJS-worker-shaped pthread+CFRunLoop that logs `[worker] tick N`. It
+  #    must keep ticking while CEF + NSApplication run, and vice versa.
+  cefspike_start_worker_stub()
 
-  # 6. Tear down.
+  # 6. Run the loop under NSApplication (Task 1 external message pump): [NSApp run]
+  #    owns the loop; CEF is pumped cooperatively via cef_do_message_loop_work
+  #    scheduled from the browser-process handler. Returns when the last browser
+  #    closes (life-span handler stops NSApp).
+  cefspike_run_main_loop()
+
+  # 7. Tear down.
   cef_shutdown()
 
 cefSpikeMain()

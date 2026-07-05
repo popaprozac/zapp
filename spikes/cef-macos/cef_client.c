@@ -63,9 +63,12 @@ cefspike_life_span_on_before_close(cef_life_span_handler_t* self,
                                    cef_browser_t* browser) {
   (void)self;
   browser->base.release(&browser->base);
-  // Single-window spike: the only browser has closed — quit the CEF loop.
-  fprintf(stderr, "[cef-spike] browser closing — quitting message loop\n");
-  cef_quit_message_loop();
+  // Single-window spike: the only browser has closed. Task 1 runs the external
+  // message pump under [NSApp run] (not cef_run_message_loop), so stop the NSApp
+  // loop rather than calling cef_quit_message_loop (which only applies to
+  // cef_run_message_loop). cefSpikeMain then falls through to cef_shutdown.
+  fprintf(stderr, "[cef-spike] browser closing — stopping NSApp loop\n");
+  cefspike_quit_main_loop();
 }
 
 static cefspike_life_span_handler_t* cefspike_life_span_handler_create(void) {

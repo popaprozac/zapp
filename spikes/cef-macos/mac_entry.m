@@ -13,10 +13,12 @@
 
 #import <Cocoa/Cocoa.h>
 
+#include <pthread.h>
 #include <string.h>
 
 #include "cef_spike.h"
 
+#include "include/capi/cef_app_capi.h"  // cef_do_message_loop_work
 #include "include/cef_api_hash.h"
 #include "include/cef_application_mac.h"
 #include "include/cef_version.h"
@@ -65,6 +67,14 @@ static ZappSpikeAppDelegate* g_delegate = nil;
 // The host window; retained so its content view survives as CEF's parent_view.
 static NSWindow* g_window = nil;
 
+// Task 1 external-pump owner. Interface declared here so cefspike_ns_application_init
+// (below) can create it; @implementation lives at the bottom of the file.
+@interface ZappCefPump : NSObject
+- (void)scheduleWork:(NSNumber*)delayMs;  // main thread
+@end
+
+static ZappCefPump* g_pump = nil;
+
 // ---------------------------------------------------------------------------
 // C helpers (declared in cef_spike.h, called from main.nim).
 // ---------------------------------------------------------------------------
@@ -85,6 +95,10 @@ void cefspike_ns_application_init(void) {
   g_delegate = [[ZappSpikeAppDelegate alloc] init];
   NSApp.delegate = g_delegate;
   [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+
+  // External-message-pump owner (Task 1). Created before cef_initialize so the
+  // browser-process handler's on_schedule_message_pump_work has a live target.
+  g_pump = [[ZappCefPump alloc] init];
 }
 
 cef_main_args_t* cefspike_make_main_args(int argc, char** argv) {
@@ -99,10 +113,16 @@ cef_settings_t* cefspike_make_settings(void) {
   memset(&settings, 0, sizeof(settings));
   settings.size = sizeof(cef_settings_t);
 
-  // Dev spike: no sandbox. T0 uses CEF's own message loop (cef_run_message_loop),
-  // so both multi_threaded_message_loop and external_message_pump stay 0.
+  // Dev spike: no sandbox.
   settings.no_sandbox = 1;
   settings.log_severity = LOGSEVERITY_WARNING;
+
+  // Task 1 — EXTERNAL MESSAGE PUMP. NSApplication owns the loop ([NSApp run]);
+  // CEF is advanced by cef_do_message_loop_work() calls that the ObjC pump below
+  // schedules from the browser-process handler's on_schedule_message_pump_work.
+  // multi_threaded_message_loop MUST stay 0 for external pump (see below).
+  settings.multi_threaded_message_loop = 0;
+  settings.external_message_pump = 1;
 
   NSString* frameworksDir = [[NSBundle mainBundle] privateFrameworksPath];
   NSString* fw = [frameworksDir
@@ -160,4 +180,196 @@ cef_window_info_t* cefspike_make_window_info(void* parent_view, int width,
   // manage its own top-level window/UI.)
   info.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
   return &info;
+}
+
+// ===========================================================================
+// Task 1 — external message pump (the #1 risk gate).
+//
+// This is the C-API port of cefclient's browser_message_loop_external_pump*
+// (chromiumembedded/cef, BSD). The scheme:
+//
+//   * CEF calls on_schedule_message_pump_work(delay_ms) from ANY thread when it
+//     has queued browser-UI work (cef_app.c forwards to cefspike_pump_schedule).
+//   * cefspike_pump_schedule hops to the MAIN thread (performSelectorOnMainThread
+//     in NSRunLoopCommonModes, so it also fires during modal/resize tracking
+//     loops) and calls -scheduleWork:.
+//   * -scheduleWork: with delay <= 0 pumps immediately; with delay > 0 arms an
+//     NSTimer (capped at kMaxTimerDelay so an idle CEF still gets serviced).
+//   * -doWork runs cef_do_message_loop_work() under a reentrancy guard (CEF may
+//     pump nested run loops that re-enter us), and — if CEF asked for more work
+//     mid-pump — reschedules immediately; otherwise arms the fallback timer.
+//
+// Because [NSApp run] owns the loop and each cef_do_message_loop_work() is
+// non-blocking, AppKit keeps servicing user events (drag/resize) between pumps,
+// and the ZJS-shaped worker runs on its own pthread — so neither starves.
+// ===========================================================================
+
+// Never wait longer than this between pumps (~30fps) even if CEF forgets to
+// schedule — matches cefclient's kMaxTimerDelay.
+static const int64_t kCefPumpMaxDelayMs = 1000 / 30;
+
+@implementation ZappCefPump {
+ @private
+  NSTimer* timer_;
+  BOOL isActive_;
+  BOOL reentrancyDetected_;
+}
+
+- (BOOL)isTimerPending {
+  return timer_ != nil;
+}
+
+- (void)killTimer {
+  if (timer_ != nil) {
+    [timer_ invalidate];
+    timer_ = nil;
+  }
+}
+
+- (void)setTimer:(int64_t)delayMs {
+  [self killTimer];
+  double delaySeconds = (double)delayMs / 1000.0;
+  timer_ = [NSTimer timerWithTimeInterval:delaySeconds
+                                   target:self
+                                 selector:@selector(onTimer:)
+                                 userInfo:nil
+                                  repeats:NO];
+  // Common modes so the pump keeps firing during live-resize / modal tracking.
+  [[NSRunLoop currentRunLoop] addTimer:timer_ forMode:NSRunLoopCommonModes];
+}
+
+- (void)onTimer:(NSTimer*)timer {
+  (void)timer;
+  [self killTimer];
+  [self doWork];
+}
+
+// Returns YES if a reentrant pump was detected (CEF wants more work now).
+- (BOOL)performMessageLoopWork {
+  if (isActive_) {
+    // Reentrant call (CEF pumped a nested run loop): flag it and unwind.
+    reentrancyDetected_ = YES;
+    return NO;
+  }
+  BOOL wasReentrant = NO;
+  for (;;) {
+    isActive_ = YES;
+    reentrancyDetected_ = NO;
+    [self killTimer];
+    cef_do_message_loop_work();
+    isActive_ = NO;
+    if (!reentrancyDetected_) {
+      break;
+    }
+    wasReentrant = YES;
+  }
+  return wasReentrant;
+}
+
+- (void)doWork {
+  BOOL wasReentrant = [self performMessageLoopWork];
+  if (wasReentrant) {
+    // CEF asked for more work while we were pumping — service it ASAP.
+    cefspike_pump_schedule(0);
+  } else if (![self isTimerPending]) {
+    // Arm a fallback timer so an otherwise-idle CEF still gets serviced.
+    [self setTimer:kCefPumpMaxDelayMs];
+  }
+}
+
+- (void)scheduleWork:(NSNumber*)delayMs {
+  int64_t delay = [delayMs longLongValue];
+  if (delay <= 0) {
+    [self doWork];
+  } else {
+    if (delay > kCefPumpMaxDelayMs) {
+      delay = kCefPumpMaxDelayMs;
+    }
+    [self setTimer:delay];
+  }
+}
+
+@end
+
+void cefspike_pump_schedule(int64_t delay_ms) {
+  // May be called on any thread (and possibly before [NSApp run]). Hop to the
+  // main thread in common modes; the call is queued until the loop spins.
+  ZappCefPump* pump = g_pump;
+  if (pump == nil) {
+    return;  // pre-init; CEF re-schedules once the handler is live.
+  }
+  [pump performSelectorOnMainThread:@selector(scheduleWork:)
+                         withObject:@(delay_ms)
+                      waitUntilDone:NO
+                              modes:@[ NSRunLoopCommonModes ]];
+}
+
+void cefspike_run_main_loop(void) {
+  [NSApp run];
+}
+
+void cefspike_quit_main_loop(void) {
+  // External-pump mode: cef_quit_message_loop does not apply. Stop the NSApp
+  // loop; -stop: only takes effect after the next event is dequeued, so post a
+  // dummy application-defined event to wake the loop immediately.
+  [NSApp stop:nil];
+  NSEvent* wake = [NSEvent otherEventWithType:NSEventTypeApplicationDefined
+                                     location:NSZeroPoint
+                                modifierFlags:0
+                                    timestamp:0
+                                 windowNumber:0
+                                      context:nil
+                                      subtype:0
+                                        data1:0
+                                        data2:0];
+  [NSApp postEvent:wake atStart:YES];
+}
+
+// ---------------------------------------------------------------------------
+// Task 1 — second concurrent loop (coexistence probe).
+//
+// STAND-IN for a real ZJS worker: a detached pthread running its own CFRunLoop
+// with a repeating timer. This is the SAME loop shape a real ZJS worker uses on
+// Apple — native/worker/engines/zjs.c runs each worker on a dedicated pthread
+// whose main loop ticks CFRunLoopRunInMode (alongside a kqueue) so NSURLSession
+// completions drain. Here a 1s repeating CFRunLoopTimer stands in for the JS
+// setInterval tick, logging "[worker] tick N". The full real ZJS worker (link
+// libzjs + the worker registry + capability-module machinery) is disproportionate
+// to pull into this standalone nim-c spike and is owned by T5.
+// ---------------------------------------------------------------------------
+
+static void cefspike_worker_timer_cb(CFRunLoopTimerRef timer, void* info) {
+  (void)timer;
+  (void)info;
+  static long tick = 0;
+  ++tick;
+  fprintf(stderr, "[worker] tick %ld\n", tick);
+}
+
+static void* cefspike_worker_thread(void* arg) {
+  (void)arg;
+  @autoreleasepool {
+    CFRunLoopRef loop = CFRunLoopGetCurrent();
+    CFRunLoopTimerRef timer = CFRunLoopTimerCreate(
+        kCFAllocatorDefault,
+        CFAbsoluteTimeGetCurrent() + 1.0,  // first fire in 1s
+        1.0,                               // repeat every 1s
+        0, 0, cefspike_worker_timer_cb, NULL);
+    CFRunLoopAddTimer(loop, timer, kCFRunLoopDefaultMode);
+    CFRelease(timer);
+    fprintf(stderr,
+            "[worker] stand-in loop started (dedicated pthread + CFRunLoop)\n");
+    CFRunLoopRun();  // blocks this thread forever (process teardown reclaims it)
+  }
+  return NULL;
+}
+
+void cefspike_start_worker_stub(void) {
+  pthread_t thread;
+  int rc = pthread_create(&thread, NULL, cefspike_worker_thread, NULL);
+  if (rc != 0) {
+    fprintf(stderr, "[worker] pthread_create failed: %d\n", rc);
+    return;
+  }
+  pthread_detach(thread);
 }
