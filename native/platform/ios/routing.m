@@ -392,7 +392,26 @@ BOOL zapp_route_bar_should_show(void* win, UIViewController* vc, UIViewControlle
     // a bar holding instances that updateItem no longer patched).
     // A hidden (or toolbar-less) bar needs NO stamp — the showBar gate covers
     // both the navbarHidden route case and the removed-toolbar content case.
-    if (showBar && win) zapp_ios_toolbar_stamp_vc(win, vc);
+    //
+    // #782 G2 fix: on collapsed iPhone the sidebar VC lives on this SAME
+    // combined nav (re-armed at content-root, below), so a pop back to the
+    // sidebar reveals it here too. zapp_ios_toolbar_stamp_vc always resolves
+    // the WINDOW (content) toolbar entry — stamping it onto the sidebar VC
+    // would clobber the pane stamp ZappIOSPaneViewController.viewWillAppear
+    // (window.m T4b) just applied. Route the sidebar VC to the SAME
+    // pane-filtered stamp viewWillAppear uses instead (mirrors window.m:475-478).
+    if (showBar && win) {
+        extern UIViewController* zapp_ios_sidebar_vc_for_window(void* window_ptr);
+        extern NSString* zapp_ios_sidebar_title_for_window(void* window_ptr);
+        extern void zapp_ios_toolbar_stamp_pane(void* window_ptr, UIViewController* vc,
+                                                NSString* pane, NSString* title);
+        UIViewController* sbVC = zapp_ios_sidebar_vc_for_window(win);
+        if (sbVC != nil && vc == sbVC) {
+            zapp_ios_toolbar_stamp_pane(win, vc, @"sidebar", zapp_ios_sidebar_title_for_window(win));
+        } else {
+            zapp_ios_toolbar_stamp_vc(win, vc);
+        }
+    }
 }
 
 - (void)navigationController:(UINavigationController*)nav
@@ -477,8 +496,24 @@ BOOL zapp_route_bar_should_show(void* win, UIViewController* vc, UIViewControlle
             nav.interactiveContentPopGestureRecognizer.enabled = shownRouteWantsBarHidden;
         }
 
-        if ((shownIsContent || shownIsRoute) && !shownRouteWantsBarHidden)
-            zapp_ios_toolbar_stamp_vc_force(winPtr, vc, YES);
+        // #782 G2 fix: same sidebar-vs-content routing as willShow above, kept
+        // for parity with that site (and as a guard should isContent/isRoute
+        // ever widen to admit the sidebar VC) — route the sidebar VC to the
+        // pane-filtered stamp so this force-restamp can never clobber the pane
+        // stamp. Content/route VCs are never == the sidebar VC, so their stamp
+        // path below is unchanged.
+        if ((shownIsContent || shownIsRoute) && !shownRouteWantsBarHidden) {
+            extern UIViewController* zapp_ios_sidebar_vc_for_window(void* window_ptr);
+            extern NSString* zapp_ios_sidebar_title_for_window(void* window_ptr);
+            extern void zapp_ios_toolbar_stamp_pane(void* window_ptr, UIViewController* vc,
+                                                    NSString* pane, NSString* title);
+            UIViewController* sbVC2 = zapp_ios_sidebar_vc_for_window(winPtr);
+            if (sbVC2 != nil && vc == sbVC2) {
+                zapp_ios_toolbar_stamp_pane(winPtr, vc, @"sidebar", zapp_ios_sidebar_title_for_window(winPtr));
+            } else {
+                zapp_ios_toolbar_stamp_vc_force(winPtr, vc, YES);
+            }
+        }
 
         // #782 fix (G1 issue 1): collapsed-iPhone two-nav pop-gesture ownership.
         // On collapsed iPhone the content lives in a NESTED nav (ctNav) inside
