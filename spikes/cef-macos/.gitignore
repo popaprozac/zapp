@@ -1,0 +1,8 @@
+# CEF binary distribution (~hundreds of MB extracted) — fetched by fetch-cef.sh
+cef_binary/
+# Build output + assembled .app bundle
+build/
+*.app
+# Downloaded tarballs / index
+*.tar.bz2
+index.json
