@@ -29,8 +29,10 @@ export const sidebarSection: Section = {
           { act: "presAuto", label: "Auto" },
           { act: "presTile", label: "Tile" },
           { act: "presOverlay", label: "Overlay" },
+          { act: "titleFiles", label: 'Rename → "Files"' },
+          { act: "titleKitchenSink", label: 'Rename → "Kitchen Sink"' },
         ],
-        note: "<b>On iPad:</b> the sidebar tiles beside the content (Mail-style); at narrow widths or in Slide Over it becomes an overlay — switch <b>Auto / Tile / Overlay</b> to compare. With <b>Resizable: on</b> the user owns the width: drag the divider to resize. <code>setWidth</code> (the Width buttons) sets the starting width, but once you drag, your width wins and <code>setWidth</code> stops moving the divider — a UIKit limitation. Switch <b>Resizable: off</b> to make <code>setWidth</code> authoritative again. <b>On iPhone:</b> the sidebar is a slide-over drawer. (On macOS it's the native NSSplitView above — drag and <code>setWidth</code> always cooperate.)",
+        note: "<b>On iPad:</b> the sidebar tiles beside the content (Mail-style); at narrow widths or in Slide Over it becomes an overlay — switch <b>Auto / Tile / Overlay</b> to compare. With <b>Resizable: on</b> the user owns the width: drag the divider to resize. <code>setWidth</code> (the Width buttons) sets the starting width, but once you drag, your width wins and <code>setWidth</code> stops moving the divider — a UIKit limitation. Switch <b>Resizable: off</b> to make <code>setWidth</code> authoritative again. <b>On iPhone:</b> the sidebar is a slide-over drawer. (On macOS it's the native NSSplitView above — drag and <code>setWidth</code> always cooperate.) The <b>Rename</b> buttons test the live per-pane sidebar title (iOS/iPadOS; macOS is a documented no-op).",
       }),
     );
     onAct(host, "toggle", () => {
@@ -79,6 +81,14 @@ export const sidebarSection: Section = {
     onAct(host, "presOverlay", () => {
       win.sidebar?.setPresentation("overlay");
       setResult(host, "presentation → overlay");
+    });
+    onAct(host, "titleFiles", () => {
+      win.sidebar?.setTitle("Files");
+      setResult(host, 'title → "Files"');
+    });
+    onAct(host, "titleKitchenSink", () => {
+      win.sidebar?.setTitle("Kitchen Sink");
+      setResult(host, 'title → "Kitchen Sink"');
     });
   },
   inspector(host) {
