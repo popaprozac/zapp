@@ -24,12 +24,17 @@
 //   screen while collapsed → bar stayed hidden at launch.
 //   Fix (T2): darwin_toolbar_set_items and zapp_ios_toolbar_apply_for_window target
 //   the nav that is actually displayed: collapsedNav when the split is collapsed,
-//   contentNav when expanded. Bar visibility itself is owned by
-//   ZappRouteNavDelegate.willShowViewController: (routing.m) — it evaluates
-//   the shared want-state rule on every push/pop, including UIKit-initiated
-//   ones, and is the ongoing visibility OWNER (per-transition); construction-time
-//   primers, the didShow re-assert, and the attach/remove primers are the
-//   sanctioned corrective writers.
+//   contentNav when expanded. Bar-HIDDEN visibility (#782 foundation) is owned
+//   per-VC by viewWillAppear — ZappIOSPaneViewController (window.m) for
+//   content/sidebar, ZappRouteVC (routing.m) for routes — which fires on
+//   every appearance including the split-VC column un-nest that
+//   ZappRouteNavDelegate's willShowViewController: does not see.
+//   ZappRouteNavDelegate (routing.m) owns toolbar ITEMS, the pop gesture, and
+//   route-depth reconciliation, evaluating the SAME shared want-state rule
+//   to gate its item stamp — but it is no longer the visibility writer;
+//   construction-time primers and the attach/remove primers below are
+//   direct corrective writes for states UIKit will not transition into on
+//   its own (see each primer's own comment for why).
 //   iPad de-dup: when the split is expanded/regular, UIKit auto-provides a
 //   system sidebar button in the nav bar; we omit our manual toggleSidebar item
 //   to avoid a duplicate. When collapsed/compact, no system button exists so we
@@ -672,16 +677,16 @@ bool zapp_ios_toolbar_has_pane_items(void* window_ptr, NSString* pane) {
     return (lead.count + trail.count) > 0;
 }
 
-// ─── zapp_ios_sidebar_owns_bar_for_window (internal) ─────────────────────────
+// ─── zapp_ios_sidebar_owns_bar_for_window ────────────────────────────────────
 //
 // #782 follow-up (iPad-expanded double-toggle): does the sidebar own a visible
 // nav bar right now? This is the sidebar's config-implied want-state — the
 // sidebar bar is shown iff the sidebar was given a title OR pane-tagged
 // ("pane":"sidebar") toolbar items (web-canvas default: no config → no bar).
-// It MUST stay in lockstep with routing.m's `sidebarHasChrome` (the want-state
-// that actually shows/hides the sidebar bar via viewWillAppear) — same two
-// accessors, same OR. (Kept as a small local predicate rather than a shared
-// extern to avoid touching routing.m's T4b want-state code.)
+// Non-static (plain C-ABI) so routing.m's zapp_route_bar_want_state can call
+// this SAME predicate for `sidebarHasChrome` (the want-state that actually
+// shows/hides the sidebar bar via viewWillAppear) instead of re-inlining the
+// same two-accessor OR there — one definition, nothing to keep in lockstep.
 //
 // Why the CONTENT bar's include-toggle decision needs it: once the sidebar owns
 // its own bar, UIKit auto-places the sidebar-collapse toggle in THAT bar
@@ -696,7 +701,7 @@ bool zapp_ios_toolbar_has_pane_items(void* window_ptr, NSString* pane) {
 //     NO system button anywhere, so the manual toggle is the ONLY affordance
 //     and must remain (the pre-#782 scenario).
 // Only VISIBLE-AND-OWNS-A-BAR flips from include→omit — the exact double state.
-static BOOL zapp_ios_sidebar_owns_bar_for_window(void* window_ptr) {
+BOOL zapp_ios_sidebar_owns_bar_for_window(void* window_ptr) {
     extern NSString* zapp_ios_sidebar_title_for_window(void* window_ptr);
     return (zapp_ios_sidebar_title_for_window(window_ptr).length > 0)
         || zapp_ios_toolbar_has_pane_items(window_ptr, @"sidebar");
@@ -1396,12 +1401,13 @@ void zapp_ios_toolbar_apply_for_window_hidden(void* window_ptr, BOOL sidebarHidd
             zapp_ios_toolbar_stamp_items(contentVC, entry, YES);
         }
 
-        // Bar visibility on the collapsed nav is owned, per-transition, by
-        // ZappRouteNavDelegate's willShowViewController: (routing.m Fix 1);
-        // construction-time primers, the didShow re-assert, and the
-        // attach/remove primers are the sanctioned corrective writers.
-        // Do NOT write navigationBarHidden here — willShow fires on every
-        // push/pop and sets the correct state without drift.
+        // Bar-HIDDEN visibility on the collapsed nav is owned per-VC by
+        // viewWillAppear (#782 foundation — ZappIOSPaneViewController in
+        // window.m for content, ZappRouteVC in routing.m for routes), not by
+        // ZappRouteNavDelegate's willShowViewController: (routing.m), which
+        // owns toolbar items, the pop gesture, and route-depth reconciliation.
+        // Do NOT write navigationBarHidden here — viewWillAppear fires on
+        // every appearance and sets the correct state without drift.
 
     } else {
         // ── Expanded path (iPad / regular) ─────────────────────────────────

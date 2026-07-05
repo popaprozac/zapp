@@ -266,8 +266,10 @@ static ZappRouteBarWantState zapp_route_bar_want_state(UIViewController* vc,
     // function, mirroring the file's local-extern style (defined in ios/sidebar.m
     // and ios/toolbar.m).
     extern UIViewController* zapp_ios_sidebar_vc_for_window(void* window_ptr);
-    extern NSString* zapp_ios_sidebar_title_for_window(void* window_ptr);
-    extern bool zapp_ios_toolbar_has_pane_items(void* window_ptr, NSString* pane);
+    // Polish (#782 cycle review, DRY-up): the sidebar-chrome predicate
+    // (title-or-pane-items) is toolbar.m's zapp_ios_sidebar_owns_bar_for_window
+    // — call it directly rather than re-inlining the same two-accessor OR here.
+    extern BOOL zapp_ios_sidebar_owns_bar_for_window(void* win);
     ZappRouteBarWantState s;
     s.isContent = (contentVC && vc == contentVC);
     s.isRoute = [vc isKindOfClass:[ZappRouteVC class]];
@@ -280,9 +282,7 @@ static ZappRouteBarWantState zapp_route_bar_want_state(UIViewController* vc,
     // no bar). Never true for a content or route VC (sidebarVC is neither).
     UIViewController* sidebarVC = (win != NULL) ? zapp_ios_sidebar_vc_for_window(win) : nil;
     s.isSidebar = (sidebarVC != nil && vc == sidebarVC);
-    BOOL sidebarHasChrome = s.isSidebar &&
-        ((zapp_ios_sidebar_title_for_window(win).length > 0) ||
-         zapp_ios_toolbar_has_pane_items(win, @"sidebar"));
+    BOOL sidebarHasChrome = s.isSidebar && zapp_ios_sidebar_owns_bar_for_window(win);
     s.showBar = (s.isContent && s.toolbarRegistered)
              || (s.isRoute && !s.routeWantsBarHidden)
              || (s.isSidebar && sidebarHasChrome);
@@ -496,23 +496,20 @@ BOOL zapp_route_bar_should_show(void* win, UIViewController* vc, UIViewControlle
             nav.interactiveContentPopGestureRecognizer.enabled = shownRouteWantsBarHidden;
         }
 
-        // #782 G2 fix: same sidebar-vs-content routing as willShow above, kept
-        // for parity with that site (and as a guard should isContent/isRoute
-        // ever widen to admit the sidebar VC) — route the sidebar VC to the
-        // pane-filtered stamp so this force-restamp can never clobber the pane
-        // stamp. Content/route VCs are never == the sidebar VC, so their stamp
-        // path below is unchanged.
+        // #771 G1-F fix round 2 (this is the ONE call site that passes
+        // force=YES — see zapp_ios_toolbar_stamp_vc_force's header for why).
+        // Polish (#782 cycle review): this used to also branch on
+        // vc == sidebarVC to route through the pane-filtered stamp, mirroring
+        // willShow's guard above — but that branch was unreachable here:
+        // shownIsContent/shownIsRoute come from zapp_route_bar_want_state,
+        // where isContent requires vc == contentVC and isRoute requires vc be
+        // a ZappRouteVC instance; the sidebar VC is a distinct pane VC that is
+        // never either (sidebar.m registers it separately from contentVC and
+        // it is never wrapped as a ZappRouteVC), so `shownIsContent ||
+        // shownIsRoute` is always false when vc is the sidebar VC. Removed —
+        // this call always resolves to the window's content toolbar entry.
         if ((shownIsContent || shownIsRoute) && !shownRouteWantsBarHidden) {
-            extern UIViewController* zapp_ios_sidebar_vc_for_window(void* window_ptr);
-            extern NSString* zapp_ios_sidebar_title_for_window(void* window_ptr);
-            extern void zapp_ios_toolbar_stamp_pane(void* window_ptr, UIViewController* vc,
-                                                    NSString* pane, NSString* title);
-            UIViewController* sbVC2 = zapp_ios_sidebar_vc_for_window(winPtr);
-            if (sbVC2 != nil && vc == sbVC2) {
-                zapp_ios_toolbar_stamp_pane(winPtr, vc, @"sidebar", zapp_ios_sidebar_title_for_window(winPtr));
-            } else {
-                zapp_ios_toolbar_stamp_vc_force(winPtr, vc, YES);
-            }
+            zapp_ios_toolbar_stamp_vc_force(winPtr, vc, YES);
         }
 
         // #782 fix (G1 issue 1): collapsed-iPhone two-nav pop-gesture ownership.
