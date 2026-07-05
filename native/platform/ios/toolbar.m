@@ -672,6 +672,36 @@ bool zapp_ios_toolbar_has_pane_items(void* window_ptr, NSString* pane) {
     return (lead.count + trail.count) > 0;
 }
 
+// ─── zapp_ios_sidebar_owns_bar_for_window (internal) ─────────────────────────
+//
+// #782 follow-up (iPad-expanded double-toggle): does the sidebar own a visible
+// nav bar right now? This is the sidebar's config-implied want-state — the
+// sidebar bar is shown iff the sidebar was given a title OR pane-tagged
+// ("pane":"sidebar") toolbar items (web-canvas default: no config → no bar).
+// It MUST stay in lockstep with routing.m's `sidebarHasChrome` (the want-state
+// that actually shows/hides the sidebar bar via viewWillAppear) — same two
+// accessors, same OR. (Kept as a small local predicate rather than a shared
+// extern to avoid touching routing.m's T4b want-state code.)
+//
+// Why the CONTENT bar's include-toggle decision needs it: once the sidebar owns
+// its own bar, UIKit auto-places the sidebar-collapse toggle in THAT bar
+// (top-trailing) whenever the sidebar is visible. Our manual toggleSidebar in
+// the content bar would then be a SECOND toggle for the same action. So the
+// expanded include-toggle decision omits the manual one whenever the sidebar is
+// visible-AND-owns-a-bar. The other expanded states are unchanged:
+//   • sidebar HIDDEN → its bar is off-screen and UIKit puts a "show sidebar"
+//     reveal button in the CONTENT bar, so the manual one stays omitted there
+//     (this fix does not touch the hidden path — it was already omitted);
+//   • sidebar VISIBLE but BARLESS (no title, no pane items) → UIKit provides
+//     NO system button anywhere, so the manual toggle is the ONLY affordance
+//     and must remain (the pre-#782 scenario).
+// Only VISIBLE-AND-OWNS-A-BAR flips from include→omit — the exact double state.
+static BOOL zapp_ios_sidebar_owns_bar_for_window(void* window_ptr) {
+    extern NSString* zapp_ios_sidebar_title_for_window(void* window_ptr);
+    return (zapp_ios_sidebar_title_for_window(window_ptr).length > 0)
+        || zapp_ios_toolbar_has_pane_items(window_ptr, @"sidebar");
+}
+
 // #782 T4a (review I2). The window toolbar's pane-tagged TRAILING bucket —
 // the pane's own items, WITHOUT any Close. inspector.m's
 // zapp_ios_inspector_reconcile_right_items reads the "inspector" bucket and
@@ -1159,7 +1189,17 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
             if (applyNav) {
                 BOOL collapsed = zapp_ios_split_is_collapsed_for_window(window_ptr);
                 BOOL sidebarHidden = !collapsed && zapp_ios_sidebar_is_hidden_for_window(window_ptr);
-                zapp_ios_toolbar_apply_to_nav(applyNav, entry, !sidebarHidden);
+                // #782 double-toggle fix: expanded → include our manual
+                // toggleSidebar ONLY when the sidebar is visible AND barless
+                // (UIKit provides no system button then). When the sidebar owns
+                // a bar its own UIKit toggle covers it; when hidden UIKit's
+                // content reveal button covers it — omit ours either way.
+                // Collapsed (iPhone) always keeps the manual toggle (UIKit shows
+                // none in compact), so the owns-bar term must NOT reach it.
+                BOOL includeToggle = collapsed
+                    ? YES
+                    : (!sidebarHidden && !zapp_ios_sidebar_owns_bar_for_window(window_ptr));
+                zapp_ios_toolbar_apply_to_nav(applyNav, entry, includeToggle);
 
                 // #771 G1-B PRIMER: set_items can run with NO nav transition in
                 // flight — e.g. a bare remove() → setItems() re-attach from app
@@ -1268,8 +1308,13 @@ void darwin_toolbar_set_items(void* window_ptr, const char* toolbar_json, int32_
 //         when collapsed).
 //   - If split is expanded (iPad): target contentNav.
 //       • Show bar unconditionally (the content column is always visible).
-//       • Use leadingNoToggle (omit manual toggleSidebar — UIKit provides the
-//         system sidebar button automatically).
+//       • Use leadingNoToggle (omit manual toggleSidebar) UNLESS the sidebar is
+//         visible AND barless — then UIKit provides no system button anywhere,
+//         so leadingItems (our manual toggle) is the only affordance. When the
+//         sidebar is hidden OR owns its own bar (#782), UIKit provides the
+//         system toggle (content reveal button, or the sidebar-bar toggle
+//         respectively), so ours is omitted. See
+//         zapp_ios_sidebar_owns_bar_for_window.
 //
 // Must be called on the main thread. Declared extern so sidebar.m can call it.
 
@@ -1364,10 +1409,13 @@ void zapp_ios_toolbar_apply_for_window_hidden(void* window_ptr, BOOL sidebarHidd
         if (!contentNav) return;
 
         // Include our manual toggleSidebar button ONLY when the sidebar is
-        // (or is about to be) VISIBLE. When the sidebar is visible, UIKit adds
-        // no system button, so ours is the only affordance. When the sidebar
-        // is HIDDEN, UIKit shows its own "show sidebar" system button — omit
-        // ours to avoid a duplicate.
+        // (or is about to be) VISIBLE **and does not own its own bar**. #782
+        // gave the sidebar a bar when it has chrome (title / pane items); when
+        // it does, UIKit auto-places the sidebar-collapse toggle in THAT bar, so
+        // ours in the content column would be a duplicate. When the sidebar is
+        // visible but BARLESS, UIKit adds no system button anywhere, so ours is
+        // the only affordance. When the sidebar is HIDDEN, UIKit shows its own
+        // "show sidebar" system button in the content bar — omit ours either way.
         //
         // #771 G1-F: decide from the `sidebarHidden` PARAMETER, per the caller
         // contract in the header comment above — live truth at settled call
@@ -1381,7 +1429,18 @@ void zapp_ios_toolbar_apply_for_window_hidden(void* window_ptr, BOOL sidebarHidd
         // the final word under overlapping transitions; stamp_items'
         // idempotence guard makes it a visual no-op when the transition
         // settled as announced.
-        BOOL includeToggle = !sidebarHidden;
+        // #782 double-toggle fix: on the expanded path, once the sidebar owns
+        // its own bar UIKit auto-places the sidebar-collapse toggle THERE (when
+        // visible), so the content bar must drop our manual toggleSidebar to
+        // avoid a duplicate. The `sidebarHidden` timing invariant is untouched
+        // (still the caller-supplied parameter — the transition TARGET inside
+        // willChange, live truth at settled sites); the added owns-bar term is a
+        // config-derived predicate that is INVARIANT across a show/hide
+        // animation, so it neither reads nor perturbs the display-mode timing.
+        // Hidden state is unchanged (was already omitted); visible-and-barless
+        // still keeps the manual toggle (UIKit provides none).
+        BOOL includeToggle = !sidebarHidden
+            && !zapp_ios_sidebar_owns_bar_for_window(window_ptr);
         zapp_ios_toolbar_apply_to_nav(contentNav, entry, includeToggle);
     }
 }
@@ -1443,9 +1502,15 @@ void zapp_ios_toolbar_stamp_vc_force(void* window_ptr, UIViewController* vc, BOO
         return;
     }
     BOOL collapsed = zapp_ios_split_is_collapsed_for_window(window_ptr);
+    // #782 double-toggle fix: expanded → include the manual toggleSidebar only
+    // when the sidebar is visible (not secondaryOnly) AND barless. Once the
+    // sidebar owns a bar, UIKit's toggle lives there, so omit ours from the
+    // content column. Collapsed keeps the manual toggle (guarded by the ternary
+    // — UIKit shows no system toggle in compact).
     BOOL includeToggle = collapsed
         ? YES
-        : !zapp_ios_split_display_mode_is_secondary_only(window_ptr);
+        : (!zapp_ios_split_display_mode_is_secondary_only(window_ptr)
+           && !zapp_ios_sidebar_owns_bar_for_window(window_ptr));
     zapp_ios_toolbar_stamp_items_force(vc, entry, includeToggle, force);
 }
 
