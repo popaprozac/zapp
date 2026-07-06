@@ -5,11 +5,13 @@
   proves:
 
     T3.1  The zapp:// scheme loads a real page (this file), not a data: URL.
-    T3.2  fetch("zapp://app/data.json") — served BROTLI-COMPRESSED with
-          Content-Encoding: br by the SAME resource-handler machinery (the
-          handler does NOT decompress; see scheme_handler.c) — comes back as
-          plain decoded text. Readable JSON in #br-out => Chromium decoded br
-          natively (see FINDINGS.md Task 3).
+    T3.2  fetch("zapp://app/data.json) — the asset ships brotli-compressed
+          (1176 B, the size win) but GATE 3 proved Chromium does NOT decode
+          Content-Encoding: br for custom-scheme responses (it handed fetch the
+          raw bytes = garbage). Option (a): the native resource handler
+          (scheme_handler.c) now DECODES the brotli itself and serves plain
+          application/json. Readable JSON in #br-out => the in-handler decode
+          works (see FINDINGS.md Task 3, GATE 3 RESULT).
     T4    Clicking "Invoke greet" calls window.zapp.invoke("greet", {name})
           — the bridge injected at document-start by the RENDER process
           (../bridge.c). That marshals JS -> render V8 -> "zapp:invoke" IPC ->
@@ -48,7 +50,7 @@
   <button id="invoke">Invoke greet</button>
   <pre id="out">click "Invoke greet" to call window.zapp.invoke("greet", {name:"World"}) …</pre>
 
-  <h2>Task 3 — brotli-direct probe</h2>
+  <h2>Task 3 — brotli decoded in the native handler (option a)</h2>
   <pre id="br-out">fetching zapp://app/data.json …</pre>
 
   <script>
@@ -86,7 +88,10 @@
         });
     });
 
-    // --- Task 3: brotli-direct fetch probe (unchanged) ----------------------
+    // --- Task 3: brotli asset, decoded in the native handler (option a) ------
+    // The asset ships brotli-compressed; scheme_handler.c decodes it and serves
+    // plain application/json (no Content-Encoding). #br-out should now show
+    // readable JSON — the fix for GATE 3's native-decode failure.
     fetch("zapp://app/data.json")
       .then(function (res) {
         var encoding = res.headers.get("content-encoding");

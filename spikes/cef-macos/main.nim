@@ -76,6 +76,18 @@ const cefRoot {.strdefine.}: string = thisDir & "/cef_binary"
 const cefFrameworkBin =
   cefRoot & "/Release/Chromium Embedded Framework.framework/Chromium Embedded Framework"
 
+## Option (a) — the BROWSER build decodes the brotli `data.json` asset itself
+## (GATE 3 proved Chromium won't decode Content-Encoding: br for custom-scheme
+## responses; see FINDINGS Task 3). Uses Homebrew's libbrotlidec, resolved at
+## compile time. The Helper build (build.sh) compiles scheme_handler.c WITHOUT
+## `-DCEFSPIKE_HAVE_BROTLI`, so it never pulls in brotli. Production would
+## statically link the brotli decoder Zapp already ships instead of Homebrew.
+## libbrotlidec keg prefix. build.sh overrides via -d:brotliPrefix:"$(brew
+## --prefix brotli)"; the default is the arm64-Homebrew keg so a bare `nim
+## check` / `nim c` still resolves without the override. (Run `brew install
+## brotli` if missing.)
+const brotliPrefix {.strdefine.}: string = "/opt/homebrew/opt/brotli"
+
 # --- build/link surface ---------------------------------------------------
 # Include dirs: the CEF dist root (so `include/capi/...` resolves) and this
 # spike dir (so `cef_spike.h` / `cef_refcount.h` resolve). These reach the
@@ -86,7 +98,11 @@ const cefFrameworkBin =
 # The CEF callback structs (C) and macOS scaffolding (ObjC, ARC).
 {.compile(thisDir & "/cef_app.c", "-std=c11").}
 {.compile(thisDir & "/cef_client.c", "-std=c11").}
-{.compile(thisDir & "/scheme_handler.c", "-std=c11").}
+# scheme_handler.c: browser build gets brotli (option a — decode data.json in
+# the handler). CEFSPIKE_HAVE_BROTLI gates the #include <brotli/decode.h> + the
+# decode call; the Helper (build.sh) compiles the same file without it.
+{.compile(thisDir & "/scheme_handler.c",
+          "-std=c11 -DCEFSPIKE_HAVE_BROTLI -I" & brotliPrefix & "/include").}
 {.compile(thisDir & "/mac_entry.m", "-fobjc-arc").}
 {.compile(thisDir & "/host.m", "-fobjc-arc").}
 
@@ -96,6 +112,11 @@ const cefFrameworkBin =
 {.passL: "'" & cefFrameworkBin & "'".}
 {.passL: "-framework Cocoa".}
 {.passL: "-Wl,-rpath,@executable_path/../Frameworks".}
+
+# Option (a) — libbrotlidec (+ libbrotlicommon) for the in-handler decode. The
+# Homebrew dylibs carry absolute install names, so dyld resolves them at runtime
+# without bundling (spike convenience; a real build would embed a static decoder).
+{.passL: "-L" & brotliPrefix & "/lib -lbrotlidec -lbrotlicommon".}
 
 # --- Task 5 (zjs_worker.c) — REAL libzjs worker build/link surface ---------
 # vendor/zjs is a sibling of spikes/ (zapp root -> vendor/zjs). Link libzjs's
@@ -153,20 +174,23 @@ proc cefspike_run_main_loop() {.importc, cdecl, header: "cef_spike.h".}
 # cefspike_start_worker_stub pthread+CFRunLoop stand-in).
 proc cefspike_start_zjs_worker() {.importc, cdecl, header: "cef_spike.h".}
 
-# --- Task 3 (scheme_handler.c) — custom "zapp" scheme + brotli probe -------
+# --- Task 3 (scheme_handler.c) — custom "zapp" scheme + in-handler brotli ----
 proc cefspike_scheme_set_assets(indexHtml: cstring, indexHtmlLen: cint,
-                                dataJsonBr: cstring, dataJsonBrLen: cint)
+                                dataJsonBr: cstring, dataJsonBrLen: cint,
+                                dataJsonDecodedLen: cint)
   {.importc, cdecl, header: "cef_spike.h".}
 
 # Embedded assets, read at NIM COMPILE TIME (absolute paths, same style as
 # cefRoot above — no ambiguity about the CWD build.sh happens to run from).
 # assets/index.html is served verbatim at zapp://app/index.html.
-# assets/data.json.br is the brotli-compressed form of assets/data.json (see
-# compress-assets.ts) — served AS-IS with Content-Encoding: br; the resource
-# handler never decompresses it (that's the whole probe).
+# assets/data.json.br is the brotli-compressed form of assets/data.json — it is
+# the ONLY form embedded in the binary (the 1176-byte size win). The raw JSON is
+# NOT embedded: `dataJsonRawLen` reads assets/data.json at compile time but keeps
+# only its LENGTH (the decoded size the one-shot brotli decoder needs), so the
+# 20 KB never enters the binary. scheme_handler.c decodes br -> JSON at runtime.
 const indexHtmlAsset = staticRead(thisDir & "/assets/index.html")
-const dataJsonRawAsset = staticRead(thisDir & "/assets/data.json")
 const dataJsonBrAsset = staticRead(thisDir & "/assets/data.json.br")
+const dataJsonRawLen = staticRead(thisDir & "/assets/data.json").len
 
 # argv backing store — must outlive cef_initialize (CEF snapshots it into a
 # command line). Module globals stay alive for the process lifetime.
@@ -193,11 +217,12 @@ proc cefSpikeMain() =
   #    can fire synchronously inside cef_initialize, so the assets must
   #    already be set by then.
   cefspike_scheme_set_assets(indexHtmlAsset.cstring, indexHtmlAsset.len.cint,
-                             dataJsonBrAsset.cstring, dataJsonBrAsset.len.cint)
-  let brPct = 100 - (dataJsonBrAsset.len * 100 div dataJsonRawAsset.len)
-  stderr.writeLine "[cef-spike] brotli probe: data.json raw=" &
-    $dataJsonRawAsset.len & "B  br=" & $dataJsonBrAsset.len & "B  (" &
-    $brPct & "% smaller)"
+                             dataJsonBrAsset.cstring, dataJsonBrAsset.len.cint,
+                             dataJsonRawLen.cint)
+  let brPct = 100 - (dataJsonBrAsset.len * 100 div dataJsonRawLen)
+  stderr.writeLine "[cef-spike] data.json ships brotli: raw=" &
+    $dataJsonRawLen & "B  br=" & $dataJsonBrAsset.len & "B  (" &
+    $brPct & "% smaller) — decoded in-handler, served as plain JSON"
 
   # 4. Initialize CEF (Nim calls cef_initialize directly). The "zapp" scheme
   #    is registered pre-init via cef_app_t::on_register_custom_schemes

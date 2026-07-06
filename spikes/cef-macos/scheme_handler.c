@@ -46,6 +46,15 @@
 #include "cef_refcount.h"
 #include "cef_spike.h"
 
+// Task 4 follow-up — option (a): decode brotli IN the resource handler (see
+// FINDINGS Task 3, GATE 3 RESULT). Gated by CEFSPIKE_HAVE_BROTLI so ONLY the
+// browser build (main.nim, which links libbrotlidec) pulls in brotli — the
+// Helper compiles this file without the define (it only registers the scheme;
+// it never serves), keeping the render/GPU subprocess free of the dependency.
+#ifdef CEFSPIKE_HAVE_BROTLI
+#include <brotli/decode.h>
+#endif
+
 // cef_spike.h (via cef_app_capi.h) already pulls in cef_scheme_capi.h, which
 // in turn pulls in cef_resource_handler_capi.h / cef_response_capi.h /
 // cef_request_capi.h — everything this file needs for scheme/factory/handler
@@ -82,16 +91,49 @@ void cefspike_register_zapp_scheme(cef_scheme_registrar_t* registrar) {
 
 static const unsigned char* g_index_html = NULL;
 static int g_index_html_len = 0;
-static const unsigned char* g_data_json_br = NULL;
+// data.json is shipped brotli-compressed (the on-disk / in-binary size win) but
+// served DECODED as plain application/json — option (a) from FINDINGS Task 3
+// (Chromium does not decode Content-Encoding: br for custom-scheme responses, so
+// the handler decodes it itself). g_data_json holds the decoded JSON (heap,
+// process-lifetime); g_data_json_br_len is kept only for the compression-ratio
+// log line.
+static const unsigned char* g_data_json = NULL;
+static int g_data_json_len = 0;
 static int g_data_json_br_len = 0;
 
 void cefspike_scheme_set_assets(const char* index_html, int index_html_len,
-                                const void* data_json_br,
-                                int data_json_br_len) {
+                                const void* data_json_br, int data_json_br_len,
+                                int data_json_decoded_len) {
   g_index_html = (const unsigned char*)index_html;
   g_index_html_len = index_html_len;
-  g_data_json_br = (const unsigned char*)data_json_br;
   g_data_json_br_len = data_json_br_len;
+
+#ifdef CEFSPIKE_HAVE_BROTLI
+  // Decode the brotli asset ONCE, here at setup (before cef_initialize returns
+  // and the factory is installed). |data_json_decoded_len| is the exact decoded
+  // size (main.nim's staticRead length of assets/data.json). Serve the result
+  // as plain JSON — no Content-Encoding — so fetch().text() gets readable text.
+  size_t out_len = (size_t)data_json_decoded_len;
+  unsigned char* buf = (unsigned char*)malloc(out_len);
+  CHECK(buf);
+  BrotliDecoderResult r = BrotliDecoderDecompress(
+      (size_t)data_json_br_len, (const uint8_t*)data_json_br, &out_len, buf);
+  if (r == BROTLI_DECODER_RESULT_SUCCESS) {
+    g_data_json = buf;
+    g_data_json_len = (int)out_len;
+    fprintf(stderr,
+            "[cef-spike] brotli decoded in handler: %d br bytes -> %d JSON "
+            "bytes\n",
+            data_json_br_len, g_data_json_len);
+  } else {
+    free(buf);
+    fprintf(stderr, "[cef-spike] brotli decode FAILED (result=%d)\n", (int)r);
+  }
+#else
+  // Helper build: never serves, so no decode needed (and no brotli linked).
+  (void)data_json_br;
+  (void)data_json_decoded_len;
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -263,8 +305,10 @@ struct _cef_resource_handler_t* CEF_CALLBACK cefspike_scheme_factory_create(
       handler = cefspike_resource_handler_create(g_index_html, g_index_html_len,
                                                  "text/html", NULL);
     } else if (strcmp(utf8.str, "zapp://app/data.json") == 0) {
+      // Option (a): serve the handler-DECODED JSON as plain application/json
+      // (no Content-Encoding) — Chromium hands it to fetch().text() verbatim.
       handler = cefspike_resource_handler_create(
-          g_data_json_br, g_data_json_br_len, "application/json", "br");
+          g_data_json, g_data_json_len, "application/json", NULL);
     } else {
       fprintf(stderr, "[cef-spike] zapp:// unhandled request: %s\n", utf8.str);
     }
@@ -309,7 +353,7 @@ void cefspike_install_scheme_handler_factory(void) {
             "[cef-spike] cef_register_scheme_handler_factory(zapp) failed\n");
   } else {
     fprintf(stderr, "[cef-spike] zapp:// scheme handler factory registered "
-                    "(index.html=%d bytes, data.json.br=%d bytes)\n",
-            g_index_html_len, g_data_json_br_len);
+                    "(index.html=%d bytes, data.json=%d br -> %d JSON bytes)\n",
+            g_index_html_len, g_data_json_br_len, g_data_json_len);
   }
 }

@@ -153,14 +153,19 @@ void cefspike_register_zapp_scheme(cef_scheme_registrar_t* registrar);
 // cef_initialize, so the assets must already be set by then). Browser-process
 // only; the Helper has no assets to serve.
 //   index_html    -> zapp://app/index.html, Content-Type: text/html
-//   data_json_br  -> zapp://app/data.json, Content-Type: application/json,
-//                    Content-Encoding: br. PRE-COMPRESSED bytes (see
-//                    compress-assets.ts) — this handler does NOT decompress;
-//                    the probe is whether Chromium's network stack decodes br
-//                    natively for a custom-scheme response.
+//   data_json_br  -> zapp://app/data.json. PRE-COMPRESSED brotli bytes (see
+//                    compress-assets.ts). GATE 3 proved Chromium does NOT decode
+//                    Content-Encoding: br for a custom-scheme response, so this
+//                    handler now DECODES the brotli itself (option a) and serves
+//                    plain application/json. |data_json_decoded_len| is the exact
+//                    decoded size (main.nim's staticRead length of data.json) —
+//                    the brotli one-shot decoder needs the output size up front.
+//                    Requires the browser build to link libbrotlidec (see
+//                    main.nim); the Helper compiles this without CEFSPIKE_HAVE_
+//                    BROTLI and never decodes.
 void cefspike_scheme_set_assets(const char* index_html, int index_html_len,
-                                const void* data_json_br,
-                                int data_json_br_len);
+                                const void* data_json_br, int data_json_br_len,
+                                int data_json_decoded_len);
 
 // Create the "zapp" scheme handler factory and register it with the global
 // request context (cef_register_scheme_handler_factory). Call AFTER

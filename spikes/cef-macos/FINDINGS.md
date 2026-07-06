@@ -339,6 +339,34 @@ would have had it stripped) — double-confirming no decode happened.
 is Chromium's push/GCM registration probing a dead Google endpoint — no bearing
 on the spike; would be disabled with the GCM feature off in a real build.)
 
+### GATE 3 FIX — option (a) implemented + verified (in-handler brotli decode)
+
+`scheme_handler.c` now **decodes the brotli asset itself** and serves plain
+`application/json` (no `Content-Encoding`), so `fetch().text()` gets readable
+JSON. This is the production-shaped path: ship compressed, decode natively,
+serve decoded.
+
+- **Only the `.br` (1176 B) is embedded in the binary** — `main.nim` `staticRead`s
+  `data.json.br` for the bytes but keeps only the `.len` of `data.json` (the
+  decoded size the one-shot decoder needs), so the 20 KB never enters the binary.
+  The size win is real, not just on the source tree.
+- **Decoder:** Homebrew `libbrotlidec` via `BrotliDecoderDecompress`, gated by
+  `-DCEFSPIKE_HAVE_BROTLI` so **only the browser build links brotli** — the
+  Helper (render/GPU) subprocess compiles `scheme_handler.c` without it and stays
+  dependency-free (it only registers the scheme; it never serves). `build.sh`
+  resolves the keg via `brew --prefix brotli` and passes it as
+  `-d:brotliPrefix:`; `main.nim` defaults to the arm64 keg for a bare `nim check`.
+  A real `webEngine:"chromium"` would statically link the brotli decoder Zapp
+  already ships instead of Homebrew.
+- **Verified** (headless + on-screen): `brotli decoded in handler: 1176 br bytes
+  -> 20364 JSON bytes`, then `zapp:// serving 20364 bytes, mime=application/json,
+  encoding=(none)`; `#br-out` renders readable JSON; bridge round-trip + libzjs
+  worker unaffected; `nim check` clean; zero crashes / dyld errors.
+- Trade recorded: this pays CPU (decode per cold asset load) to keep the on-disk
+  size win — the "engine decodes it for free" half of the original bet is gone
+  for the custom-scheme path, exactly as GATE 3 forced. A loopback-HTTP origin
+  (option b) would restore free decode at the cost of a socket; (a) chosen.
+
 ---
 
 ## Task 4 (MAKE-OR-BREAK): the `zapp` bridge — one JS↔native round-trip

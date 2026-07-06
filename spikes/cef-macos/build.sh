@@ -114,13 +114,23 @@ done
 rm -f "$HELPER_BIN"
 
 # --- 4. build the main app via nim c (main.nim owns compile/link surface) ---
-echo "[build] compiling main app (nim c main.nim)"
+# Resolve the libbrotlidec keg for option (a) — the browser build decodes the
+# brotli data.json asset in scheme_handler.c (GATE 3: Chromium won't decode br
+# for custom schemes). Pass the exact `brew` prefix to nim; main.nim defaults to
+# the arm64 keg if this is empty.
+BROTLI_PREFIX="$(brew --prefix brotli 2>/dev/null || true)"
+if [ -z "$BROTLI_PREFIX" ] || [ ! -f "$BROTLI_PREFIX/include/brotli/decode.h" ]; then
+  echo "error: libbrotlidec not found. Run: brew install brotli" >&2
+  exit 1
+fi
+echo "[build] compiling main app (nim c main.nim); brotli=$BROTLI_PREFIX"
 nim c \
   --mm:orc \
   -d:release \
   --hints:off \
   --nimcache:"$BUILD/nimcache" \
   -d:cefRoot:"$CEF_ROOT" \
+  -d:brotliPrefix:"$BROTLI_PREFIX" \
   --out:"$APP/Contents/MacOS/$APP_NAME" \
   "$HERE/main.nim"
 
