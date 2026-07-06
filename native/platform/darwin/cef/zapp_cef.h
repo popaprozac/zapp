@@ -60,11 +60,13 @@ cef_app_t* zapp_cef_app_create(void);
 
 // --- zapp_cef_client.c ---
 // A cef_client_t exposing a life-span handler (tracks browser create/close
-// and calls cef_quit_message_loop when the last browser closes) plus the
-// browser-process half of the `zapp` JS<->native bridge (handles
-// "zapp:invoke", runs a stub service this task — real-router wiring is a
-// later task — and ships "zapp:result" back). Ref count 1; the reference is
-// transferred to CEF by cef_browser_host_create_browser.
+// and stops the NSApp loop when the last browser closes) plus the
+// browser-process half of the `zapp` JS<->native bridge. On "zapp:invoke" it
+// hands the raw `{t,id,m,a}` envelope straight to the REAL Nim router
+// (zapp_handle_message_from_window — the same entry webview.m uses); the router
+// answers by eval'ing into the page (darwin_window_eval_js ->
+// zapp_cef_eval_in_window), so there is no reverse "zapp:result" message. Ref
+// count 1; the reference is transferred to CEF by cef_browser_host_create_browser.
 cef_client_t* zapp_cef_client_create(void);
 
 // Build a cef_string_t (UTF-16) from a UTF-8 C string. Returned pointer is to
@@ -86,6 +88,28 @@ cef_browser_settings_t* zapp_cef_make_browser_settings(void);
 // any reader both touch this only on the main thread, so no locking is
 // needed.
 cef_browser_t* zapp_cef_get_active_browser(void);
+
+// --- browser <-> Zapp window_id mapping (the CEF analogue of window.m's
+// darwin_window_id_for_webview, which maps a WKWebView* to its numeric window
+// slot). This slice is single-window on CEF (multi-window CEF is a non-goal —
+// see the design doc §6), so a single global slot suffices. window.m's CEF
+// branch records the slot at browser-create time; the browser-process bridge
+// (zapp_cef_client.c's on_process_message_received) reads it to pass the right
+// window_id into zapp_handle_message_from_window, exactly as
+// webview.m's didReceiveScriptMessage does for WKWebView. ---
+void zapp_cef_set_window_slot(int32_t slot);
+int32_t zapp_cef_get_window_slot(void);
+
+// native->JS delivery for a CEF-hosted window. If |slot| is the CEF window's
+// slot and a browser exists, run |js| in the page via the main frame's
+// execute_java_script (CEF's cross-process analogue of WKWebView's
+// evaluateJavaScript:) and return 1; otherwise return 0 so the caller falls
+// through to its WKWebView path. Thread-safe: runs inline on the main/UI
+// thread, hops to it (copying |js|) otherwise — execute_java_script must run
+// on the CEF UI thread (== main under the external pump). This is what makes
+// the router's sendInvokeResponse -> darwin_window_eval_js resolve an invoke
+// promise on a CEF page (see window.m's gated branch).
+int zapp_cef_eval_in_window(int32_t slot, const char* js);
 
 // --- zapp_cef_mac_entry.m ---
 // Configure the CEF API version (guarded) and install the CefAppProtocol-
@@ -157,7 +181,18 @@ void* zapp_cef_host_view_for_window(void* window);
 // factory create() for the matching dev-mode "don't serve embedded" hook).
 // Fire-and-forget: does not block for on_after_created; use
 // zapp_cef_get_active_browser() once the browser exists.
-void zapp_cef_create_browser_in_view(void* parent_view, const char* url);
+//
+// |window_slot| is the numeric Zapp window slot this browser belongs to —
+// recorded via zapp_cef_set_window_slot so the bridge can round-trip
+// Services.invoke to the right window (JS->native + native->JS). |window_id| /
+// |owner_id| are the JS-visible "win-<...>" / "owner-<...>" id strings; they
+// are injected as the Symbol.for('zapp.windowId') / Symbol.for('zapp.ownerId')
+// doc-start carriers (same as webview.m's WKUserScript carriers) inside the
+// bootstrap JS this function builds and hands to the render process via CEF's
+// create-browser extra_info. Pass NULL for the ids if unavailable.
+void zapp_cef_create_browser_in_view(void* parent_view, const char* url,
+                                     int32_t window_slot, const char* window_id,
+                                     const char* owner_id);
 
 // --- zapp_cef_mac_entry.m — external message pump + main-loop ownership ----
 
@@ -204,15 +239,18 @@ void zapp_cef_install_scheme_handler_factory(void);
 
 // --- zapp_cef_bridge.c — the `zapp` JS<->native bridge, RENDER-process half -
 
-// Create the render-process handler that owns the bridge: it injects the
-// document-start bootstrap + native V8 binding (window.zapp.invoke ->
-// __zappSendNative) in on_context_created, and resolves the JS promise on
-// the "zapp:result" reply in on_process_message_received. Ref count 1; the
-// Helper app (zapp_cef_mac_helper.c) owns it and returns it from
-// get_render_process_handler. RENDER-process only — the browser-side half
-// lives in zapp_cef_client.c's on_process_message_received (message names:
-// "zapp:invoke"/"zapp:result"). Stays the spike's `greet` STUB this task —
-// wiring it to Zapp's real router/service registry is a later task.
+// Create the render-process handler that owns the bridge render half: it
+// stashes the browser-built doc-start bootstrap from create-browser extra_info
+// (on_browser_created), binds the native V8 function __zappSendNative, and
+// eval's that bootstrap (webkit.messageHandlers.zapp shim + Symbol.for('zapp.*')
+// carriers + the real compiled bootstrap/webview.ts) in on_context_created.
+// __zappSendNative ships the raw bridge envelope to the browser as a
+// "zapp:invoke" process message. Ref count 1; the Helper app
+// (zapp_cef_mac_helper.c) owns it and returns it from
+// get_render_process_handler. RENDER-process only — the browser-side half lives
+// in zapp_cef_client.c's on_process_message_received (message name:
+// "zapp:invoke"). No reverse message: the router delivers results by eval'ing
+// into the page (zapp_cef_eval_in_window).
 cef_render_process_handler_t* zapp_cef_render_process_handler_create(void);
 
 #ifdef __cplusplus

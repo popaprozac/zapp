@@ -3,43 +3,39 @@
 // Promoted from the proven GO spike (`spikes/cef-macos/bridge.c` — see
 // docs/superpowers/specs/2026-07-05-cef-webengine-production-slice-macos-
 // design.md and spikes/cef-macos/FINDINGS.md, Task 4). Renamed cefspike_ ->
-// zapp_cef_, "spike" dropped. Stays the spike's `greet` STUB this task — real
-// router wiring is a later task.
+// zapp_cef_, "spike" dropped. R1 rewired the spike's `greet`-stub protocol to
+// the REAL Zapp bridge contract.
 //
-// This is the make-or-break file proving "does the Zapp JS<->native contract
-// map onto CEF." CEF's own promise plumbing (CefMessageRouter /
-// window.cefQuery) is C++-only (libcef_dll_wrapper); this is on the raw C
-// API, so it hand-rolls the equivalent with cef_v8 + cef_process_message. Two
-// CEF processes cooperate:
+// This is the render half of "does the Zapp JS<->native contract map onto
+// CEF." CEF's own promise plumbing (CefMessageRouter / window.cefQuery) is
+// C++-only (libcef_dll_wrapper); this is on the raw C API. Two CEF processes
+// cooperate, but far more thinly than the spike:
 //
 //   * RENDER process (this file, compiled into the Helper subprocess via
-//     zapp_cef_mac_helper.c) — owns the V8 context. It injects the
-//     document-start bootstrap that defines window.zapp.invoke(), binds a
-//     native V8 function (__zappSendNative) that ships a "zapp:invoke"
-//     process message to the browser, and — on the "zapp:result" reply —
-//     resolves the JS promise.
+//     zapp_cef_mac_helper.c) — owns the V8 context. It (a) binds one native
+//     V8 function __zappSendNative(str) that ships the raw bridge envelope to
+//     the browser as a "zapp:invoke" process message, and (b) evals the REAL
+//     Zapp doc-start bootstrap (the compiled bootstrap/webview.ts, PLUS the
+//     Symbol.for('zapp.*') carriers, PLUS a webkit.messageHandlers.zapp shim
+//     that routes the runtime's post() to __zappSendNative). The Helper runs
+//     no Nim and can't build any of that; the BROWSER process builds the whole
+//     doc-start string (reusing zapp_webview_bootstrap_script() /
+//     permissions_bootstrap_json() / service_get_manifest_json() / etc., see
+//     zapp_cef_host.m) and hands it here via CEF's create-browser extra_info
+//     (delivered to on_browser_created).
 //
-//   * BROWSER process (zapp_cef_client.c) — runs the STUB service and ships
-//     the "zapp:result" reply back. See zapp_cef_client.c's
-//     on_process_message_received.
+//   * BROWSER process (zapp_cef_client.c) — hands the envelope to the REAL Nim
+//     router and delivers the result back by eval'ing into the page (via
+//     darwin_window_eval_js's CEF branch -> zapp_cef_eval_in_window). There is
+//     NO reverse "zapp:result" process message — the render side never handles
+//     a reply, so this file no longer implements on_process_message_received.
 //
-// Message protocol (both processes must agree on the NAMES):
-//   "zapp:invoke"  RENDER -> BROWSER   args [0]=id:int, [1]=name:str, [2]=argsJSON:str
-//   "zapp:result"  BROWSER -> RENDER   args [0]=id:int, [1]=resultJSON:str
+// Message protocol (the ONE name both processes must agree on):
+//   "zapp:invoke"  RENDER -> BROWSER   args [0]=envelope:str  ({t,id,m,a} JSON)
 //
-// Native->JS delivery uses frame->execute_java_script("window.__zappResolve(
-// <id>, <resultJSON>)") — the "simplest robust path" the spike settled on. It
-// sidesteps storing a cef_v8_context_t across the async round-trip: the
-// render frame handed to on_process_message_received is enough to re-enter
-// JS. The resolver is defined by the same document-start bootstrap.
-//
-// WHY the bootstrap JS lives in a C string here (rather than a
-// bootstrap/*.ts through codegen, per the usual Zapp convention): the render
-// handler runs in the Helper subprocess, which does NOT run Nim and never
-// staticRead()s an asset. This file is the only code that reaches the render
-// V8 context, so the bootstrap has to compile INTO the Helper binary. See
-// FINDINGS.md Task 4 — a later task should generate this string from a .ts
-// source at build time instead.
+// The runtime resolves its own promise: bootstrap/webview.ts's _onInvokeResult
+// is called by the JS the router eval's back into the page — no render-side
+// promise map is needed here.
 
 #include <stdatomic.h>
 #include <stdio.h>
@@ -55,52 +51,20 @@
 #include "include/capi/cef_v8_capi.h"
 #include "include/capi/cef_values_capi.h"
 
-// ---------------------------------------------------------------------------
-// Document-start bootstrap. Defines window.zapp.invoke(name, args) -> Promise,
-// an id->{resolve,reject} pending map, and the window.__zappResolve/__zappReject
-// hooks the render handler calls via execute_java_script. invoke() marshals to
-// the native binding window.__zappSendNative(id, name, JSON.stringify(args)),
-// which this file installs on the global before this runs.
-// ---------------------------------------------------------------------------
+// The doc-start bootstrap string is built in the BROWSER process (it needs
+// zapp_webview_bootstrap_script() + the native carrier sources, none of which
+// the Helper links) and handed to this render process via CEF create-browser
+// extra_info -> on_browser_created. Stashed here (single browser this slice)
+// and eval'd in on_context_created. strdup'd copy owned by this process for
+// its lifetime; never freed (process-lifetime, single browser).
+static char* g_bootstrap_js = NULL;
 
-static const char* kZappBootstrapJS =
-    "(function () {\n"
-    "  if (window.zapp && window.zapp.__installed) return;\n"
-    "  var pending = Object.create(null);\n"
-    "  var nextId = 1;\n"
-    "  window.__zappResolve = function (id, result) {\n"
-    "    var cb = pending[id];\n"
-    "    if (!cb) return;\n"
-    "    delete pending[id];\n"
-    "    cb.resolve(result);\n"
-    "  };\n"
-    "  window.__zappReject = function (id, message) {\n"
-    "    var cb = pending[id];\n"
-    "    if (!cb) return;\n"
-    "    delete pending[id];\n"
-    "    cb.reject(new Error(message));\n"
-    "  };\n"
-    "  window.zapp = {\n"
-    "    __installed: true,\n"
-    "    invoke: function (name, args) {\n"
-    "      return new Promise(function (resolve, reject) {\n"
-    "        var id = nextId++;\n"
-    "        pending[id] = { resolve: resolve, reject: reject };\n"
-    "        try {\n"
-    "          window.__zappSendNative(id, name, JSON.stringify(args || {}));\n"
-    "        } catch (e) {\n"
-    "          delete pending[id];\n"
-    "          reject(e);\n"
-    "        }\n"
-    "      });\n"
-    "    }\n"
-    "  };\n"
-    "})();\n";
-
-// Process-message names — the whole cross-process contract hinges on these two
-// string literals matching zapp_cef_client.c exactly.
+// Process-message name — the cross-process contract hinges on this literal
+// matching zapp_cef_client.c exactly.
 #define ZAPP_MSG_INVOKE "zapp:invoke"
-#define ZAPP_MSG_RESULT "zapp:result"
+// extra_info key carrying the doc-start bootstrap JS (must match
+// zapp_cef_host.m's set_string key).
+#define ZAPP_EXTRA_BOOTSTRAP_KEY "zappBootstrap"
 
 // ---------------------------------------------------------------------------
 // Small cef_string helpers (mirrors zapp_cef_scheme_handler.c's usage; CEF
@@ -115,9 +79,13 @@ static void cef_str_set_utf8(cef_string_t* out, const char* utf8) {
 }
 
 // ---------------------------------------------------------------------------
-// V8 handler — backs window.__zappSendNative(id, name, argsJSON). Runs on the
-// render main thread inside a V8 callback, so it may create process messages
-// and touch the current frame directly.
+// V8 handler — backs window.__zappSendNative(envelope). |envelope| is the raw
+// `{t,id,m,a}` bridge string (bootstrap/webview.ts's post() argument, routed
+// here by the webkit.messageHandlers.zapp shim the browser-built bootstrap
+// installs). We forward it VERBATIM as the single arg of a "zapp:invoke"
+// process message to the browser — no parsing here; the Nim router owns that.
+// Runs on the render main thread inside a V8 callback, so it may create process
+// messages and touch the current frame directly.
 // ---------------------------------------------------------------------------
 
 typedef struct _zapp_cef_v8_handler_t {
@@ -137,14 +105,11 @@ int CEF_CALLBACK zapp_cef_v8_handler_execute(
   (void)name;
   (void)retval;
 
-  if (argumentsCount >= 3 && arguments[0] != NULL && arguments[1] != NULL &&
-      arguments[2] != NULL) {
-    int id = arguments[0]->get_int_value(arguments[0]);
-    // name + argsJSON are UTF-16 already; forward them straight into the
-    // message argument list (set_string takes a cef_string_t*, and
+  if (argumentsCount >= 1 && arguments[0] != NULL) {
+    // The envelope is UTF-16 already; forward it straight into the message
+    // argument list (set_string takes a cef_string_t*, and
     // cef_string_userfree_t IS a cef_string_t*).
-    cef_string_userfree_t js_name = arguments[1]->get_string_value(arguments[1]);
-    cef_string_userfree_t js_args = arguments[2]->get_string_value(arguments[2]);
+    cef_string_userfree_t js_env = arguments[0]->get_string_value(arguments[0]);
 
     // The current V8 context knows its frame — no need to have stored one.
     cef_v8_context_t* ctx = cef_v8_context_get_current_context();
@@ -158,16 +123,10 @@ int CEF_CALLBACK zapp_cef_v8_handler_execute(
       cef_string_clear(&msg_name);
 
       cef_list_value_t* args = msg->get_argument_list(msg);
-      args->set_int(args, 0, id);
-      if (js_name != NULL) {
-        args->set_string(args, 1, js_name);
+      if (js_env != NULL) {
+        args->set_string(args, 0, js_env);
       } else {
-        args->set_null(args, 1);
-      }
-      if (js_args != NULL) {
-        args->set_string(args, 2, js_args);
-      } else {
-        args->set_null(args, 2);
+        args->set_null(args, 0);
       }
       args->base.release(&args->base);
 
@@ -185,14 +144,11 @@ int CEF_CALLBACK zapp_cef_v8_handler_execute(
     if (ctx != NULL) {
       ctx->base.release(&ctx->base);
     }
-    if (js_name != NULL) {
-      cef_string_userfree_free(js_name);
-    }
-    if (js_args != NULL) {
-      cef_string_userfree_free(js_args);
+    if (js_env != NULL) {
+      cef_string_userfree_free(js_env);
     }
   } else {
-    cef_str_set_utf8(exception, "__zappSendNative expects (id, name, argsJSON)");
+    cef_str_set_utf8(exception, "__zappSendNative expects (envelope)");
   }
 
   // Release the owned callback params (CEF C-API: these arrive as refptr_diff /
@@ -222,14 +178,10 @@ static cef_v8_handler_t* zapp_cef_v8_handler_create(void) {
 }
 
 // ---------------------------------------------------------------------------
-// JSON string escaping — for the native->JS delivery. resultJSON arrives as a
-// JSON *value* (the browser already quoted+escaped it), so on the render side
-// we splice it verbatim into "window.__zappResolve(<id>, <resultJSON>)". No
-// escaping needed here; the browser owns it. (See zapp_cef_client.c.)
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Render process handler.
+// Render process handler. (No native->JS delivery lives here anymore: the
+// router eval's the invoke result straight into the page from the BROWSER
+// process via darwin_window_eval_js -> zapp_cef_eval_in_window, so the render
+// side never handles a reply message and needs no JSON escaping.)
 // ---------------------------------------------------------------------------
 
 typedef struct _zapp_cef_rph_t {
@@ -239,9 +191,49 @@ typedef struct _zapp_cef_rph_t {
 
 IMPLEMENT_REFCOUNTING_SIMPLE(zapp_cef_rph_t, zapp_cef_rph, ref_count)
 
-// Document-start: (a) bind the native function on the global, then (b) run the
-// bootstrap. Binding first means __zappSendNative already exists when any later
-// page script calls window.zapp.invoke().
+// on_browser_created: stash the doc-start bootstrap JS the browser process
+// passed via create-browser extra_info (key ZAPP_EXTRA_BOOTSTRAP_KEY). This
+// fires before any V8 context is created, so g_bootstrap_js is set by the time
+// on_context_created (below) needs it.
+void CEF_CALLBACK zapp_cef_rph_on_browser_created(
+    cef_render_process_handler_t* self, cef_browser_t* browser,
+    cef_dictionary_value_t* extra_info) {
+  (void)self;
+
+  if (extra_info != NULL) {
+    cef_string_t key;
+    memset(&key, 0, sizeof(key));
+    cef_str_set_utf8(&key, ZAPP_EXTRA_BOOTSTRAP_KEY);
+    // get_string returns a userfree cef_string_t (owned — free it after copy).
+    cef_string_userfree_t val = extra_info->get_string(extra_info, &key);
+    cef_string_clear(&key);
+    if (val != NULL) {
+      cef_string_utf8_t u;
+      memset(&u, 0, sizeof(u));
+      cef_string_utf16_to_utf8(val->str, val->length, &u);
+      cef_string_userfree_free(val);
+      if (u.str != NULL) {
+        if (g_bootstrap_js != NULL) {
+          free(g_bootstrap_js);  // re-create (cross-origin) — replace.
+        }
+        g_bootstrap_js = strdup(u.str);
+      }
+      cef_string_utf8_clear(&u);
+    }
+  }
+
+  // Release the owned callback params (refptr_diff — same convention as the
+  // life-span handler's browser param). extra_info is likewise an owned ref.
+  browser->base.release(&browser->base);
+  if (extra_info != NULL) {
+    extra_info->base.release(&extra_info->base);
+  }
+}
+
+// Document-start: (a) bind the native function on the global, then (b) eval the
+// browser-built bootstrap (shim + Symbol.for('zapp.*') carriers + the real
+// compiled bootstrap/webview.ts). Binding first means __zappSendNative already
+// exists when the shim (and any later page script) references it.
 void CEF_CALLBACK zapp_cef_rph_on_context_created(
     cef_render_process_handler_t* self, cef_browser_t* browser,
     cef_frame_t* frame, cef_v8_context_t* context) {
@@ -288,23 +280,42 @@ void CEF_CALLBACK zapp_cef_rph_on_context_created(
       fprintf(stderr, "[zapp-cef][render] get_global returned NULL\n");
     }
 
-    // (b) Run the document-start bootstrap IN this freshly-created context via
-    // context->eval (synchronous, scoped to THIS context) rather than
-    // frame->execute_java_script — keeps injection off the frame's async script
-    // path while we're still inside on_context_created.
-    cef_string_t code, url;
-    memset(&code, 0, sizeof(code));
-    memset(&url, 0, sizeof(url));
-    cef_str_set_utf8(&code, kZappBootstrapJS);
-    cef_v8_value_t* eval_ret = NULL;
-    cef_v8_exception_t* eval_exc = NULL;
-    context->eval(context, &code, &url, 0, &eval_ret, &eval_exc);
-    cef_string_clear(&code);
-    if (eval_ret != NULL) {
-      eval_ret->base.release(&eval_ret->base);
-    }
-    if (eval_exc != NULL) {
-      eval_exc->base.release(&eval_exc->base);
+    // (b) Eval the browser-built doc-start bootstrap IN this freshly-created
+    // context via context->eval (synchronous, scoped to THIS context) rather
+    // than frame->execute_java_script — keeps injection off the frame's async
+    // script path while we're still inside on_context_created. The string
+    // installs the webkit.messageHandlers.zapp shim (-> __zappSendNative), the
+    // Symbol.for('zapp.*') carriers, and the real bridge (bootstrap/webview.ts).
+    if (g_bootstrap_js != NULL) {
+      cef_string_t code, url;
+      memset(&code, 0, sizeof(code));
+      memset(&url, 0, sizeof(url));
+      cef_str_set_utf8(&code, g_bootstrap_js);
+      cef_v8_value_t* eval_ret = NULL;
+      cef_v8_exception_t* eval_exc = NULL;
+      context->eval(context, &code, &url, 0, &eval_ret, &eval_exc);
+      cef_string_clear(&code);
+      if (eval_exc != NULL) {
+        // Surface a bootstrap error rather than silently blanking — the page
+        // would have no bridge and every Services.invoke would hang.
+        cef_string_userfree_t emsg = eval_exc->get_message(eval_exc);
+        cef_string_utf8_t eu;
+        memset(&eu, 0, sizeof(eu));
+        if (emsg != NULL) {
+          cef_string_utf16_to_utf8(emsg->str, emsg->length, &eu);
+          cef_string_userfree_free(emsg);
+        }
+        fprintf(stderr, "[zapp-cef][render] bootstrap eval exception: %s\n",
+                eu.str ? eu.str : "(unknown)");
+        cef_string_utf8_clear(&eu);
+        eval_exc->base.release(&eval_exc->base);
+      }
+      if (eval_ret != NULL) {
+        eval_ret->base.release(&eval_ret->base);
+      }
+    } else {
+      fprintf(stderr, "[zapp-cef][render] no bootstrap (extra_info missing) — "
+                      "bridge NOT installed\n");
     }
 
     context->exit(context);
@@ -313,7 +324,7 @@ void CEF_CALLBACK zapp_cef_rph_on_context_created(
   }
 
   fprintf(stderr, "[zapp-cef][render] bridge bootstrap injected "
-                  "(window.zapp.invoke ready)\n");
+                  "(zapp.bridge ready)\n");
 
   // Release the owned callback params (refptr_diff — same convention as the
   // life-span handler's browser param).
@@ -322,74 +333,12 @@ void CEF_CALLBACK zapp_cef_rph_on_context_created(
   context->base.release(&context->base);
 }
 
-// "zapp:result" reply from the browser process -> resolve the JS promise.
-int CEF_CALLBACK zapp_cef_rph_on_process_message_received(
-    cef_render_process_handler_t* self, cef_browser_t* browser,
-    cef_frame_t* frame, cef_process_id_t source_process,
-    cef_process_message_t* message) {
-  (void)self;
-  (void)browser;
-  (void)source_process;
-
-  int handled = 0;
-  cef_string_userfree_t msg_name = message->get_name(message);
-  cef_string_utf8_t name_utf8;
-  memset(&name_utf8, 0, sizeof(name_utf8));
-  if (msg_name != NULL) {
-    cef_string_utf16_to_utf8(msg_name->str, msg_name->length, &name_utf8);
-    cef_string_userfree_free(msg_name);
-  }
-
-  if (name_utf8.str != NULL && strcmp(name_utf8.str, ZAPP_MSG_RESULT) == 0) {
-    cef_list_value_t* args = message->get_argument_list(message);
-    int id = args->get_int(args, 0);
-
-    // resultJSON is already a JSON value (browser-escaped) — convert to UTF-8.
-    cef_string_userfree_t result = args->get_string(args, 1);
-    cef_string_utf8_t result_utf8;
-    memset(&result_utf8, 0, sizeof(result_utf8));
-    if (result != NULL) {
-      cef_string_utf16_to_utf8(result->str, result->length, &result_utf8);
-      cef_string_userfree_free(result);
-    }
-    args->base.release(&args->base);
-
-    const char* result_json = result_utf8.str ? result_utf8.str : "null";
-    // Heap-allocate the JS call (avoid the stack-buffer truncation family of
-    // bugs — see the dispatch/JSON buffer lessons in the Zapp memory).
-    size_t need = strlen("window.__zappResolve(, );") + 24 /* id */ +
-                  strlen(result_json) + 1;
-    char* js = (char*)malloc(need);
-    CHECK(js);
-    snprintf(js, need, "window.__zappResolve(%d, %s);", id, result_json);
-
-    cef_string_t code, empty;
-    memset(&code, 0, sizeof(code));
-    memset(&empty, 0, sizeof(empty));
-    cef_str_set_utf8(&code, js);
-    frame->execute_java_script(frame, &code, &empty, 0);
-    cef_string_clear(&code);
-    free(js);
-
-    fprintf(stderr, "[zapp-cef][render] zapp:result id=%d -> resolving JS\n",
-            id);
-    cef_string_utf8_clear(&result_utf8);
-    handled = 1;
-  }
-
-  cef_string_utf8_clear(&name_utf8);
-
-  // Release the owned callback params (refptr_diff).
-  browser->base.release(&browser->base);
-  frame->base.release(&frame->base);
-  message->base.release(&message->base);
-  return handled;
-}
-
 // ---------------------------------------------------------------------------
 // Factory — called from zapp_cef_mac_helper.c (the Helper/render subprocess
 // entry). Returns with ref count 1; the Helper app owns it and releases on
-// teardown.
+// teardown. NB no on_process_message_received: the browser answers by eval'ing
+// the result into the page (darwin_window_eval_js -> zapp_cef_eval_in_window),
+// not by sending the render process a reply message.
 // ---------------------------------------------------------------------------
 
 cef_render_process_handler_t* zapp_cef_render_process_handler_create(void) {
@@ -397,9 +346,8 @@ cef_render_process_handler_t* zapp_cef_render_process_handler_create(void) {
   CHECK(rph);
   INIT_CEF_BASE_REFCOUNTED(&rph->handler.base, cef_render_process_handler_t,
                            zapp_cef_rph);
+  rph->handler.on_browser_created = zapp_cef_rph_on_browser_created;
   rph->handler.on_context_created = zapp_cef_rph_on_context_created;
-  rph->handler.on_process_message_received =
-      zapp_cef_rph_on_process_message_received;
   atomic_store(&rph->ref_count, 1);
   return &rph->handler;
 }

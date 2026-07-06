@@ -151,6 +151,17 @@ void zapp_registered_webviews_eval(const char* js) {
             WKWebView* wv = zapp_webviews[i];
             if (wv) [wv evaluateJavaScript:script completionHandler:nil];
         }
+#ifdef ZAPP_HAS_CEF
+        // A CEF window has no zapp_webviews[] entry, so the loop above misses
+        // it — fan the broadcast (Events.emit, notifications, etc.) into the
+        // CEF page too. Use script.UTF8String (retained by this block) rather
+        // than the raw |js| (the caller may have freed it by the time an async
+        // dispatch runs). Compiled out on a `system` build.
+        extern int zapp_cef_eval_in_window(int32_t slot, const char* js);
+        extern int32_t zapp_cef_get_window_slot(void);
+        int32_t cefSlot = zapp_cef_get_window_slot();
+        if (cefSlot >= 0) zapp_cef_eval_in_window(cefSlot, [script UTF8String]);
+#endif
     };
     if ([NSThread isMainThread]) run();
     else dispatch_async(dispatch_get_main_queue(), run);
@@ -636,6 +647,15 @@ void* darwin_window_get_by_numeric_id(int32_t numeric_id) {
 
 void darwin_window_eval_js(int32_t window_id, const char* js) {
     if (window_id < 0 || window_id >= ZAPP_MAX_WINDOW_CALLBACKS) return;
+#ifdef ZAPP_HAS_CEF
+    // A CEF-hosted window has no WKWebView in zapp_webviews[]; deliver via the
+    // CEF main frame's execute_java_script instead. This is THE native->JS path
+    // for an invoke result on CEF (router sendInvokeResponse -> here). Handled
+    // == 1 short-circuits before the WKWebView lookup below. The whole block is
+    // compiled out on a `system` build -> byte-identical.
+    extern int zapp_cef_eval_in_window(int32_t slot, const char* js);
+    if (js && zapp_cef_eval_in_window(window_id, js)) return;
+#endif
     WKWebView* webview = zapp_webviews[window_id];
     if (!webview || !js) return;
     // Copy the source string — callers frequently pass thread-local or static
@@ -1142,25 +1162,41 @@ void* darwin_window_create(WindowOptions* opts) {
             // for chromium builds (cli/src/build-config.ts), so the WKWebView
             // path below is byte-identical on a `system` build.
             //
-            // URL: dev -> Vite devUrl / prod -> zapp://index.html, resolved
-            // exactly like the WKWebView path (wopts_url override, else the
-            // build config's initial_url, else the zapp:// fallback) — see
-            // webview.m's zapp_initial_url.
-            extern const char* zapp_build_initial_url(void);
-            extern void zapp_cef_create_browser_in_view(void* parent_view, const char* url);
-            const char* cef_url = (custom_url && custom_url[0] != '\0')
-                                      ? custom_url
-                                      : zapp_build_initial_url();
+            // URL parity (T3 review Minor a): resolve custom_url with the SAME
+            // RFC-3986 relative rules the WKWebView path uses (zapp_resolve_url,
+            // exposed non-static on chromium builds — webview.m), so "#/chat" et
+            // al. resolve against the initial URL instead of being passed raw.
+            extern NSURL* zapp_resolve_url(const char* url_cstr);
+            extern void zapp_cef_create_browser_in_view(void* parent_view, const char* url,
+                                                        int32_t window_slot,
+                                                        const char* window_id,
+                                                        const char* owner_id);
+            NSURL* cefNsUrl = zapp_resolve_url(custom_url);
+            const char* cef_url = cefNsUrl ? [[cefNsUrl absoluteString] UTF8String] : "zapp://index.html";
             if (!cef_url || cef_url[0] == '\0') cef_url = "zapp://index.html";
-            // No JS<->native bridge yet (T4), so there is no "ready" event to
-            // trigger the deferred WKWebView-style auto-show (delegate.
-            // shouldAutoShow, applied from the READY/didFinishNavigation hooks
-            // that CEF never fires). Reveal the window here, then host the
-            // browser — cef_browser_host_create_browser reads parent_view at
-            // create time, so the content view must exist + be on screen first.
+
+            // Register the CEF window's JS-visible id string in the slot table so
+            // darwin_window_id_string / darwin_window_numeric_id_for_string
+            // round-trip (used by the "ready" signal + Window.current()). Same
+            // "win-%p" / "owner-%p" formula the shared strings below (re)compute
+            // from the same |window| ptr — kept gated so `system` is untouched.
+            // No zapp_webviews[] entry (there's no WKWebView); native->JS eval
+            // reaches this window through the CEF branch in darwin_window_eval_js.
+            NSString* cefWindowId = [NSString stringWithFormat:@"win-%p", window];
+            NSString* cefOwnerId = [NSString stringWithFormat:@"owner-%p", window];
+            zapp_window_ids[host_slot] = cefWindowId;
+
+            // The bridge now DOES fire "ready" (the bootstrap posts {t:4,m:ready}),
+            // which triggers the deferred WKWebView-style auto-show via onReady.
+            // But cef_browser_host_create_browser reads parent_view at create
+            // time, so the content view must exist + be on screen first — reveal
+            // here regardless (the later onReady show() is then idempotent).
             [window makeKeyAndOrderFront:nil];
             [NSApp activateIgnoringOtherApps:YES];
-            zapp_cef_create_browser_in_view((__bridge void*)[window contentView], cef_url);
+            zapp_cef_create_browser_in_view((__bridge void*)[window contentView], cef_url,
+                                            host_slot,
+                                            [cefWindowId UTF8String],
+                                            [cefOwnerId UTF8String]);
 #else
             // Legacy single-webview path — byte-for-byte equivalent to before
             // (the vibrancy vfx, if any, was installed as contentView above).

@@ -46,6 +46,141 @@
 #import <Cocoa/Cocoa.h>
 
 #include "zapp_cef.h"
+#include "include/capi/cef_values_capi.h"
+
+// --- Doc-start carrier + bootstrap sources (the SAME native functions
+// webview.m's WKUserScript block reads — see webview.m ~904-994). Reused here
+// so the CEF page gets a byte-equivalent doc-start environment: config carrier,
+// bindings manifest, owner/window ids, and the real compiled bootstrap. All are
+// {.exportc.} / build-config C symbols in the MAIN binary, which this TU links
+// into (the Helper, which can't call any of these, receives the finished string
+// via extra_info). ---
+extern const char* zapp_webview_bootstrap_script(void);
+extern const char* permissions_bootstrap_json(void);
+extern const char* service_get_manifest_json(void);
+extern const char* darwin_get_theme(void);
+extern const char* darwin_get_power_state(void);
+extern const char* zapp_form_factor(void);
+extern const char* zapp_build_csp(void);
+extern int zapp_build_is_dev(void);
+extern const char* app_get_bootstrap_name(void);
+extern bool app_get_bootstrap_web_content_inspectable(void);
+extern bool app_get_bootstrap_application_should_terminate_after_last_window_closed(void);
+extern int app_get_bootstrap_max_workers(void);
+
+// extra_info key carrying the doc-start bootstrap JS (must match
+// zapp_cef_bridge.c's ZAPP_EXTRA_BOOTSTRAP_KEY).
+#define ZAPP_CEF_EXTRA_BOOTSTRAP_KEY "zappBootstrap"
+
+// Single-pass JS string escape (mirrors webview.m's zapp_escape_js_string):
+// escapes backslash, single-quote, and the two line terminators — enough for
+// splicing a value into a JS single-quoted literal. NULL/empty -> @"".
+static NSString* zapp_cef_js_escape(const char* raw) {
+  if (!raw || raw[0] == '\0') return @"";
+  size_t len = strlen(raw);
+  char* buf = (char*)malloc(len * 2 + 1);
+  if (!buf) return @"";
+  size_t j = 0;
+  for (size_t i = 0; i < len; i++) {
+    switch (raw[i]) {
+      case '\\': buf[j++] = '\\'; buf[j++] = '\\'; break;
+      case '\'': buf[j++] = '\\'; buf[j++] = '\''; break;
+      case '\n': buf[j++] = '\\'; buf[j++] = 'n'; break;
+      case '\r': buf[j++] = '\\'; buf[j++] = 'r'; break;
+      default: buf[j++] = raw[i]; break;
+    }
+  }
+  buf[j] = '\0';
+  NSString* result = [NSString stringWithUTF8String:buf];
+  free(buf);
+  return result;
+}
+
+// Build the doc-start JS string CEF's render process evals in on_context_created
+// (via extra_info). Three parts, in order:
+//   1. webkit.messageHandlers.zapp shim -> __zappSendNative (so the UNMODIFIED
+//      bootstrap/webview.ts post() reaches native on CEF, keeping the WKWebView
+//      bootstrap byte-identical).
+//   2. the Symbol.for('zapp.*') carriers (bootstrapConfig / bindingsManifest /
+//      ownerId / windowId) — same shape as webview.m's WKUserScript carriers.
+//   3. the real compiled bootstrap (zapp_webview_bootstrap_script()).
+// Returns a malloc'd C string (caller frees).
+static char* zapp_cef_build_bootstrap_js(const char* window_id,
+                                         const char* owner_id) {
+  NSMutableString* js = [NSMutableString string];
+
+  // 1. Transport shim. The runtime's post() checks
+  // window.webkit?.messageHandlers?.zapp first (macOS); provide it so no
+  // change to bootstrap/webview.ts is needed. __zappSendNative is bound by the
+  // render V8 handler BEFORE this eval runs (zapp_cef_bridge.c).
+  [js appendString:
+      @"(function(){var g=(typeof window!=='undefined')?window:globalThis;"
+      @"g.webkit=g.webkit||{};g.webkit.messageHandlers=g.webkit.messageHandlers||{};"
+      @"g.webkit.messageHandlers.zapp={postMessage:function(m){__zappSendNative(String(m));}};"
+      @"})();\n"];
+
+  // 2a. bootstrapConfig — mirrors webview.m's configScript field-for-field.
+  NSString* appNameC = app_get_bootstrap_name()
+                           ? zapp_cef_js_escape(app_get_bootstrap_name())
+                           : @"Zapp";
+  BOOL terminate =
+      app_get_bootstrap_application_should_terminate_after_last_window_closed();
+  BOOL inspect = app_get_bootstrap_web_content_inspectable();
+  int maxWorkers = app_get_bootstrap_max_workers();
+  const char* themeC = darwin_get_theme();
+  const char* powerStateC = darwin_get_power_state();
+  if (!powerStateC || !powerStateC[0]) powerStateC = "null";
+  const char* formFactorC = zapp_form_factor();
+  const char* permsC = permissions_bootstrap_json();
+  if (!permsC || !permsC[0])
+    permsC = "{\"platform\":\"macos\",\"active\":false,\"allow\":[]}";
+  NSString* cspExtra = @"";
+  const char* cspRaw = zapp_build_csp();
+  if (cspRaw && cspRaw[0] != '\0') {
+    cspExtra = [NSString stringWithFormat:@",csp:'%@'",
+                                          zapp_cef_js_escape(cspRaw)];
+  }
+  [js appendFormat:
+      @"(function(){globalThis[Symbol.for('zapp.bootstrapConfig')]="
+      @"{name:'%@',applicationShouldTerminateAfterLastWindowClosed:%@,"
+      @"webContentInspectable:%@,maxWorkers:%d,theme:'%s',powerState:%s,"
+      @"formFactor:'%s',env:'%s',permissions:%s%@};})();\n",
+      appNameC,
+      terminate ? @"true" : @"false",
+      inspect ? @"true" : @"false",
+      maxWorkers,
+      themeC ? themeC : "light",
+      powerStateC,
+      formFactorC ? formFactorC : "desktop",
+      zapp_build_is_dev() ? "dev" : "prod",
+      permsC, cspExtra];
+
+  // 2b. bindingsManifest.
+  NSString* bindingsJson = zapp_cef_js_escape(service_get_manifest_json());
+  [js appendFormat:
+      @"(function(){globalThis[Symbol.for('zapp.bindingsManifest')]='%@';})();\n",
+      bindingsJson];
+
+  // 2c. owner + window ids.
+  if (owner_id && owner_id[0] != '\0') {
+    [js appendFormat:
+        @"(function(){globalThis[Symbol.for('zapp.ownerId')]='%@';})();\n",
+        zapp_cef_js_escape(owner_id)];
+  }
+  if (window_id && window_id[0] != '\0') {
+    [js appendFormat:
+        @"(function(){globalThis[Symbol.for('zapp.windowId')]='%@';})();\n",
+        zapp_cef_js_escape(window_id)];
+  }
+
+  // 3. The real compiled bootstrap (bootstrap/webview.ts).
+  const char* bootstrap = zapp_webview_bootstrap_script();
+  if (bootstrap && bootstrap[0] != '\0') {
+    [js appendString:[NSString stringWithUTF8String:bootstrap]];
+  }
+
+  return strdup([js UTF8String]);
+}
 
 // Strong static ref — keeps the standalone host window (and its contentView,
 // CEF's parent_view) alive for the process lifetime. Single-window helper; a
@@ -105,13 +240,20 @@ void* zapp_cef_host_view_for_window(void* window) {
 // Production entry point — see zapp_cef.h for the full contract.
 // ---------------------------------------------------------------------------
 
-void zapp_cef_create_browser_in_view(void* parent_view, const char* url) {
+void zapp_cef_create_browser_in_view(void* parent_view, const char* url,
+                                     int32_t window_slot, const char* window_id,
+                                     const char* owner_id) {
   NSView* parent = (__bridge NSView*)parent_view;
   if (!parent) {
     fprintf(stderr,
             "[zapp-cef] create_browser_in_view: NULL parent view\n");
     return;
   }
+
+  // Record the browser<->window_id association BEFORE create so any early
+  // message (the bootstrap's `ready`) resolves to the right window slot. Single
+  // browser this slice; window.m's CEF branch owns the slot.
+  zapp_cef_set_window_slot(window_slot);
 
   NSRect bounds = parent.bounds;
   int width = (int)bounds.size.width;
@@ -133,11 +275,37 @@ void zapp_cef_create_browser_in_view(void* parent_view, const char* url) {
                                                         : "zapp://index.html");
   cef_browser_settings_t* browser_settings = zapp_cef_make_browser_settings();
 
+  // Build the doc-start bootstrap here (browser process — it can reach the
+  // native carrier sources + the compiled bootstrap) and hand it to the render
+  // process via extra_info -> on_browser_created (zapp_cef_bridge.c). The
+  // Helper runs no Nim, so this is the ONLY way it gets the carriers/bootstrap.
+  char* bootstrap_js = zapp_cef_build_bootstrap_js(window_id, owner_id);
+  cef_dictionary_value_t* extra_info = cef_dictionary_value_create();
+  {
+    cef_string_t key, val;
+    memset(&key, 0, sizeof(key));
+    memset(&val, 0, sizeof(val));
+    cef_string_utf8_to_utf16(ZAPP_CEF_EXTRA_BOOTSTRAP_KEY,
+                             strlen(ZAPP_CEF_EXTRA_BOOTSTRAP_KEY), &key);
+    cef_string_utf8_to_utf16(bootstrap_js, strlen(bootstrap_js), &val);
+    // set_string COPIES both key + value (const cef_string_t*) — it does NOT
+    // consume the dict; we free our own bootstrap_js after.
+    extra_info->set_string(extra_info, &key, &val);
+    cef_string_clear(&key);
+    cef_string_clear(&val);
+  }
+  free(bootstrap_js);
+
   // Fire-and-forget: cef_browser_host_create_browser is CEF's ASYNCHRONOUS
   // creation entry (returns a bool indicating the request was accepted, not
   // a browser*). The browser itself becomes available once the life-span
   // handler's on_after_created fires (zapp_cef_client.c retains it —
   // zapp_cef_get_active_browser()).
+  //
+  // REFCOUNT: |client| and |extra_info| are refptr_same params — create_browser
+  // CONSUMES them (each created with ref=1, ownership transferred to CEF). Do
+  // NOT release either afterward (same Unwrap-consumed rule the bridge follows
+  // for send_process_message).
   cef_browser_host_create_browser(window_info, client, cef_url,
-                                  browser_settings, NULL, NULL);
+                                  browser_settings, extra_info, NULL);
 }

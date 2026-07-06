@@ -121,7 +121,16 @@ static NSURL* zapp_initial_url(void) {
 // bare path without knowing whether they're in dev (http://localhost:5173)
 // or prod (zapp://index.html). Matches RFC 3986 relative-reference
 // resolution semantics via NSURL.
+//
+// Exposed (non-static) ONLY on a chromium build so window.m's CEF
+// window-creation branch resolves the SAME relative-URL rules as the WKWebView
+// path before handing the URL to the CEF browser (T3 review Minor a). On a
+// `system` build (no ZAPP_HAS_CEF) it stays `static` — byte-identical to before.
+#ifdef ZAPP_HAS_CEF
+NSURL* zapp_resolve_url(const char* url_cstr) {
+#else
 static NSURL* zapp_resolve_url(const char* url_cstr) {
+#endif
     if (!url_cstr || url_cstr[0] == '\0') return zapp_initial_url();
     NSString* s = [NSString stringWithUTF8String:url_cstr];
     if (!s) return zapp_initial_url();
