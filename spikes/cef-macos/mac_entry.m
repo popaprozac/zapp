@@ -1,13 +1,14 @@
 // CEF spike (Task 0) — macOS scaffolding: the CefAppProtocol NSApplication
 // subclass + the C helpers main.nim calls to build cef_main_args_t /
-// cef_settings_t / cef_window_info_t and to open a host NSWindow.
+// cef_settings_t / cef_window_info_t. (Task 2: the host NSWindow itself is
+// built in host.m, not here — see cefspike_make_host_window.)
 //
 // Adapted from cefsimple_capi/cefsimple_mac.m. Divergences (deliberate, spike):
 //   - No runtime CEF library loader (cef_scoped_library_loader_*). The spike
 //     links the framework DIRECTLY (rpath @executable_path/../Frameworks). That
 //     is simpler for a Nim build and fine for a non-sandbox dev run; the runtime
 //     loader is the production path (needed for the macOS sandbox).
-//   - No MainMenu.xib load; we set an activation policy and open our own window.
+//   - No MainMenu.xib load; we set an activation policy (host.m opens the window).
 //   - The cef_initialize / cef_run_message_loop / cef_shutdown calls live in
 //     main.nim (Nim drives the lifecycle) — this file only prepares the pieces.
 
@@ -64,8 +65,6 @@
 
 // NSApp.delegate is a weak reference — keep a strong one alive.
 static ZappSpikeAppDelegate* g_delegate = nil;
-// The host window; retained so its content view survives as CEF's parent_view.
-static NSWindow* g_window = nil;
 
 // Task 1 external-pump owner. Interface declared here so cefspike_ns_application_init
 // (below) can create it; @implementation lives at the bottom of the file.
@@ -141,29 +140,6 @@ cef_settings_t* cefspike_make_settings(void) {
   cef_string_utf8_to_utf16(bundlec, strlen(bundlec), &settings.main_bundle_path);
 
   return &settings;
-}
-
-void* cefspike_create_window(int width, int height, const char* title) {
-  NSRect frame = NSMakeRect(0, 0, width, height);
-  NSWindow* win = [[NSWindow alloc]
-      initWithContentRect:frame
-                styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
-                           NSWindowStyleMaskMiniaturizable |
-                           NSWindowStyleMaskResizable)
-                  backing:NSBackingStoreBuffered
-                    defer:NO];
-  [win setTitle:[NSString stringWithUTF8String:(title ? title : "CEF Spike")]];
-  [win center];
-
-  NSView* content = [[NSView alloc] initWithFrame:frame];
-  content.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-  win.contentView = content;
-
-  [win makeKeyAndOrderFront:nil];
-  [NSApp activateIgnoringOtherApps:YES];
-
-  g_window = win;  // strong static ref keeps window + content view alive
-  return (__bridge void*)content;
 }
 
 cef_window_info_t* cefspike_make_window_info(void* parent_view, int width,

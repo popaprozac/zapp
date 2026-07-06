@@ -1,4 +1,4 @@
-## CEF spike (Task 0 + Task 1) — Nim orchestration.
+## CEF spike (Task 0 + Task 1 + Task 2) — Nim orchestration.
 ##
 ## This module IS the browser-process entry point (Nim's generated `main` runs
 ## the top-level `cefSpikeMain()` below). It proves the load-bearing thing for
@@ -17,6 +17,15 @@
 ## browser-process handler (see cef_app.c + the ObjC pump in mac_entry.m). A
 ## second, ZJS-worker-shaped loop (`cefspike_start_worker_stub`) runs alongside
 ## to prove neither starves.
+##
+## Task 2 (hosting-fit) hosts the CEF browser inside a standard Zapp-style
+## NSWindow (titlebar + traffic lights, mirroring native/platform/darwin/
+## window.m's basic shape) instead of T0/T1's ad hoc placeholder window:
+## `cefspike_make_host_window` (host.m) builds that window and
+## `cefspike_host_view_for_window` returns its contentView to use as
+## `cef_window_info_t.parent_view`. The browser was already created WINDOWED
+## (parent_view + Alloy runtime_style) since T0 — T2 only formalizes the host
+## window itself, not the browser-creation mode.
 ##
 ## Build/link surface lives here (per the Task 0 brief): the CEF include dir and
 ## the framework link are wired via {.passC.}/{.passL.}; the C/ObjC sources via
@@ -48,6 +57,7 @@ const cefFrameworkBin =
 {.compile(thisDir & "/cef_app.c", "-std=c11").}
 {.compile(thisDir & "/cef_client.c", "-std=c11").}
 {.compile(thisDir & "/mac_entry.m", "-fobjc-arc").}
+{.compile(thisDir & "/host.m", "-fobjc-arc").}
 
 # Link the CEF framework directly by its binary path (single-quoted: the bundle
 # name has spaces). The dylib's install name is @rpath-based, so dyld resolves
@@ -71,13 +81,17 @@ proc cefspike_make_main_args(argc: cint, argv: ptr cstring): pointer
 proc cefspike_make_settings(): pointer {.importc, cdecl, header: "cef_spike.h".}
 proc cefspike_app_create(): pointer {.importc, cdecl, header: "cef_spike.h".}
 proc cefspike_client_create(): pointer {.importc, cdecl, header: "cef_spike.h".}
-proc cefspike_create_window(width, height: cint, title: cstring): pointer
-  {.importc, cdecl, header: "cef_spike.h".}
 proc cefspike_make_window_info(parentView: pointer, width, height: cint): pointer
   {.importc, cdecl, header: "cef_spike.h".}
 proc cefspike_make_cef_string(utf8: cstring): pointer
   {.importc, cdecl, header: "cef_spike.h".}
 proc cefspike_make_browser_settings(): pointer
+  {.importc, cdecl, header: "cef_spike.h".}
+
+# --- Task 2 host window (host.m) --------------------------------------------
+proc cefspike_make_host_window(width, height: cint, title: cstring): pointer
+  {.importc, cdecl, header: "cef_spike.h".}
+proc cefspike_host_view_for_window(window: pointer): pointer
   {.importc, cdecl, header: "cef_spike.h".}
 
 # Task 1 — external-pump loop ownership + the second-loop coexistence probe.
@@ -110,10 +124,15 @@ proc cefSpikeMain() =
     stderr.writeLine "[cef-spike] cef_initialize failed"
     quit(1)
 
-  # 4. Open a host NSWindow and create a browser in it, pointed at a data: page.
+  # 4. Open a standard Zapp-style host NSWindow (host.m — T2) and create a
+  #    browser in it, pointed at a data: page. Ordering is load-bearing: the
+  #    window/contentView must exist before the browser is created, since
+  #    parent_view is captured into cef_window_info_t below and read by CEF at
+  #    cef_browser_host_create_browser time.
   let winW = cint(960)
   let winH = cint(680)
-  let parentView = cefspike_create_window(winW, winH, "CEF Spike — Task 0")
+  let hostWindow = cefspike_make_host_window(winW, winH, "CEF Spike — Task 2")
+  let parentView = cefspike_host_view_for_window(hostWindow)
   let client = cefspike_client_create()
   let windowInfo = cefspike_make_window_info(parentView, winW, winH)
   let url = cefspike_make_cef_string("data:text/html,<h1>CEF</h1>")

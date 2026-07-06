@@ -69,15 +69,25 @@ cef_main_args_t* cefspike_make_main_args(int argc, char** argv);
 // Static storage.
 cef_settings_t* cefspike_make_settings(void);
 
-// Create a plain NSWindow and return its content NSView* (as void*) to use as
-// cef_window_info_t.parent_view. Shows + activates the window. (T2 formalizes
-// this into Zapp's NSWindow shape in host.m.)
-void* cefspike_create_window(int width, int height, const char* title);
-
 // Build a cef_window_info_t for an Alloy-style browser hosted in parent_view.
 // Static storage.
 cef_window_info_t* cefspike_make_window_info(void* parent_view, int width,
                                              int height);
+
+// --- host.m (Task 2) ---
+// Create a standard Zapp-style NSWindow (titled/closable/miniaturizable/
+// resizable, standard traffic lights, auto-centered — mirrors the basic shape
+// of native/platform/darwin/window.m's darwin_window_create). Shows + activates
+// the window. Returns the NSWindow* (as void*). Replaces T0/T1's
+// cefspike_create_window placeholder (formerly in mac_entry.m).
+void* cefspike_make_host_window(int width, int height, const char* title);
+
+// Return the given NSWindow's contentView (as void*), to use as
+// cef_window_info_t.parent_view. The window/contentView must already exist —
+// call this AFTER cefspike_make_host_window and BEFORE
+// cef_browser_host_create_browser (parent_view is read at browser-create
+// time).
+void* cefspike_host_view_for_window(void* window);
 
 // --- mac_entry.m — Task 1 external message pump + NSApp loop ownership -------
 
