@@ -72,7 +72,10 @@ cef_app_t* zapp_cef_app_create(void);
 // answers by eval'ing into the page (darwin_window_eval_js ->
 // zapp_cef_eval_in_window), so there is no reverse "zapp:result" message. Ref
 // count 1; the reference is transferred to CEF by cef_browser_host_create_browser.
-cef_client_t* zapp_cef_client_create(void);
+// |slot| is the Zapp window slot this browser will host — baked onto the
+// client + its life-span handler so multi-window CEF can tag/route per-window
+// (registered into zapp_cef_browsers[slot] on on_after_created).
+cef_client_t* zapp_cef_client_create(int32_t slot);
 
 // Build a cef_string_t (UTF-16) from a UTF-8 C string. Returned pointer is to
 // static storage — valid until the next call.
@@ -81,40 +84,40 @@ cef_string_t* zapp_cef_make_cef_string(const char* utf8);
 // Zeroed cef_browser_settings_t with size set. Static storage.
 cef_browser_settings_t* zapp_cef_make_browser_settings(void);
 
-// Read-only accessor for the currently-hosted browser. zapp_cef_client.c's
-// life-span handler retains this (since on_after_created, releasing the
-// separate on_before_close owned ref alongside it) instead of releasing it
-// immediately, so a future native->page push mechanism (a worker event, the
-// real bridge's async replies, etc.) can reach the page via
-// `browser->get_main_frame(...)->execute_java_script(...)`. Returns NULL
-// before the browser exists / after it has closed. Main-thread-only by
-// construction: the writer (zapp_cef_client.c's life-span callbacks, which
-// run on the CEF UI thread == the main thread under the external pump) and
-// any reader both touch this only on the main thread, so no locking is
-// needed.
-cef_browser_t* zapp_cef_get_active_browser(void);
-
 // --- browser <-> Zapp window_id mapping (the CEF analogue of window.m's
 // darwin_window_id_for_webview, which maps a WKWebView* to its numeric window
-// slot). This slice is single-window on CEF (multi-window CEF is a non-goal —
-// see the design doc §6), so a single global slot suffices. window.m's CEF
-// branch records the slot at browser-create time; the browser-process bridge
-// (zapp_cef_client.c's on_process_message_received) reads it to pass the right
-// window_id into zapp_handle_message_from_window, exactly as
-// webview.m's didReceiveScriptMessage does for WKWebView. ---
-void zapp_cef_set_window_slot(int32_t slot);
-int32_t zapp_cef_get_window_slot(void);
+// slot). Multi-window: each browser is keyed by its Zapp window slot in
+// zapp_cef_client.c's file-static zapp_cef_browsers[] table (the exact mirror
+// of window.m's zapp_webviews[]). The slot is baked onto the client/life-span
+// handler at zapp_cef_client_create time; the browser-process bridge
+// (zapp_cef_client.c's on_process_message_received) reads it (via the
+// client's own |slot| field) to pass the right window_id into
+// zapp_handle_message_from_window, exactly as webview.m's
+// didReceiveScriptMessage does for WKWebView. ---
 
-// native->JS delivery for a CEF-hosted window. If |slot| is the CEF window's
-// slot and a browser exists, run |js| in the page via the main frame's
-// execute_java_script (CEF's cross-process analogue of WKWebView's
-// evaluateJavaScript:) and return 1; otherwise return 0 so the caller falls
-// through to its WKWebView path. Thread-safe: runs inline on the main/UI
-// thread, hops to it (copying |js|) otherwise — execute_java_script must run
-// on the CEF UI thread (== main under the external pump). This is what makes
-// the router's sendInvokeResponse -> darwin_window_eval_js resolve an invoke
-// promise on a CEF page (see window.m's gated branch).
+// Look up the live browser for |slot|, or NULL if out of range / not
+// (yet/still) registered. Main-thread-only by construction: the writer
+// (zapp_cef_client.c's life-span callbacks, which run on the CEF UI thread ==
+// the main thread under the external pump) and any reader both touch the
+// table only on the main thread, so no locking is needed.
+cef_browser_t* zapp_cef_browser_for_slot(int32_t slot);
+
+// native->JS delivery for a CEF-hosted window. If a browser is registered for
+// |slot|, run |js| in its page via the main frame's execute_java_script
+// (CEF's cross-process analogue of WKWebView's evaluateJavaScript:) and
+// return 1; otherwise return 0 so the caller falls through to its WKWebView
+// path. Thread-safe: runs inline on the main/UI thread, hops to it (copying
+// |js|, then re-looking-up the browser by slot in case the window closed
+// mid-hop) otherwise — execute_java_script must run on the CEF UI thread (==
+// main under the external pump). This is what makes the router's
+// sendInvokeResponse -> darwin_window_eval_js resolve an invoke promise on a
+// CEF page (see window.m's gated branch).
 int zapp_cef_eval_in_window(int32_t slot, const char* js);
+
+// Fan a broadcast into every live CEF browser (all slots) — the CEF analogue
+// of window.m's zapp_registered_webviews_eval loop, since a CEF window has no
+// zapp_webviews[] entry. Main-thread safe (see zapp_cef_browser_for_slot).
+void zapp_cef_broadcast_eval(const char* js);
 
 // --- zapp_cef_mac_entry.m ---
 // Configure the CEF API version (guarded) and install the CefAppProtocol-
@@ -185,10 +188,11 @@ void* zapp_cef_host_view_for_window(void* window);
 // hosts whatever URL string it is given — see zapp_cef_scheme_handler.c's
 // factory create() for the matching dev-mode "don't serve embedded" hook).
 // Fire-and-forget: does not block for on_after_created; use
-// zapp_cef_get_active_browser() once the browser exists.
+// zapp_cef_browser_for_slot(window_slot) once the browser exists.
 //
 // |window_slot| is the numeric Zapp window slot this browser belongs to —
-// recorded via zapp_cef_set_window_slot so the bridge can round-trip
+// passed straight through to zapp_cef_client_create(window_slot), which bakes
+// it onto the client + life-span handler, so the bridge can round-trip
 // Services.invoke to the right window (JS->native + native->JS). |window_id| /
 // |owner_id| are the JS-visible "win-<...>" / "owner-<...>" id strings; they
 // are injected as the Symbol.for('zapp.windowId') / Symbol.for('zapp.ownerId')

@@ -153,14 +153,10 @@ void zapp_registered_webviews_eval(const char* js) {
         }
 #ifdef ZAPP_HAS_CEF
         // A CEF window has no zapp_webviews[] entry, so the loop above misses
-        // it — fan the broadcast (Events.emit, notifications, etc.) into the
-        // CEF page too. Use script.UTF8String (retained by this block) rather
-        // than the raw |js| (the caller may have freed it by the time an async
-        // dispatch runs). Compiled out on a `system` build.
-        extern int zapp_cef_eval_in_window(int32_t slot, const char* js);
-        extern int32_t zapp_cef_get_window_slot(void);
-        int32_t cefSlot = zapp_cef_get_window_slot();
-        if (cefSlot >= 0) zapp_cef_eval_in_window(cefSlot, [script UTF8String]);
+        // it. Fan the broadcast into EVERY live CEF browser (multi-window).
+        // script.UTF8String is retained by this block. Compiled out on `system`.
+        extern void zapp_cef_broadcast_eval(const char* js);
+        zapp_cef_broadcast_eval([script UTF8String]);
 #endif
     };
     if ([NSThread isMainThread]) run();

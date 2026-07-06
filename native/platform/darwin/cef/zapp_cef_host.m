@@ -250,11 +250,6 @@ void zapp_cef_create_browser_in_view(void* parent_view, const char* url,
     return;
   }
 
-  // Record the browser<->window_id association BEFORE create so any early
-  // message (the bootstrap's `ready`) resolves to the right window slot. Single
-  // browser this slice; window.m's CEF branch owns the slot.
-  zapp_cef_set_window_slot(window_slot);
-
   NSRect bounds = parent.bounds;
   int width = (int)bounds.size.width;
   int height = (int)bounds.size.height;
@@ -269,7 +264,7 @@ void zapp_cef_create_browser_in_view(void* parent_view, const char* url,
   // is presumed to already be owned by Zapp's window/webview registry.
   cef_window_info_t* window_info =
       zapp_cef_make_window_info((__bridge void*)parent, width, height);
-  cef_client_t* client = zapp_cef_client_create();
+  cef_client_t* client = zapp_cef_client_create(window_slot);
   cef_string_t* cef_url =
       zapp_cef_make_cef_string((url && url[0] != '\0') ? url
                                                         : "zapp://index.html");
@@ -299,8 +294,8 @@ void zapp_cef_create_browser_in_view(void* parent_view, const char* url,
   // Fire-and-forget: cef_browser_host_create_browser is CEF's ASYNCHRONOUS
   // creation entry (returns a bool indicating the request was accepted, not
   // a browser*). The browser itself becomes available once the life-span
-  // handler's on_after_created fires (zapp_cef_client.c retains it —
-  // zapp_cef_get_active_browser()).
+  // handler's on_after_created fires (zapp_cef_client.c registers it in
+  // zapp_cef_browsers[window_slot] — see zapp_cef_browser_for_slot()).
   //
   // REFCOUNT: |client| and |extra_info| are refptr_same params — create_browser
   // CONSUMES them (each created with ref=1, ownership transferred to CEF). Do

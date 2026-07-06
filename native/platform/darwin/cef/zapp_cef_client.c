@@ -34,6 +34,13 @@
 #include "zapp_cef_refcount.h"
 #include "zapp_cef.h"
 
+// window.m defines this (its zapp_webviews[] dispatch table); not visible
+// here since window.m isn't included. Guarded so a future shared header
+// doesn't collide — mirror the value EXACTLY (window.m:102).
+#ifndef ZAPP_MAX_WINDOW_CALLBACKS
+#define ZAPP_MAX_WINDOW_CALLBACKS 64
+#endif
+
 // The browser-process half of the `zapp` bridge (below) handles the
 // "zapp:invoke" process message. These pull in the process-message /
 // list-value / frame vtables it needs.
@@ -57,6 +64,7 @@ typedef struct _zapp_cef_client_t {
   // MUST be first member — CEF base structure.
   cef_client_t client;
   atomic_int ref_count;
+  int32_t slot;               // Zapp window slot this browser hosts (multi-window).
   zapp_cef_life_span_handler_t* life_span_handler;
 } zapp_cef_client_t;
 
@@ -64,6 +72,7 @@ struct _zapp_cef_life_span_handler_t {
   // MUST be first member — CEF base structure.
   cef_life_span_handler_t handler;
   atomic_int ref_count;
+  int32_t slot;                      // same slot as the owning client.
 };
 
 //
@@ -74,34 +83,30 @@ IMPLEMENT_REFCOUNTING_SIMPLE(zapp_cef_life_span_handler_t,
                              zapp_cef_life_span_handler,
                              ref_count)
 
-// The currently-hosted browser, retained across its lifetime so a future
-// native->page push mechanism (a worker event, an async bridge reply, etc.)
-// can reach the page — see zapp_cef_get_active_browser in zapp_cef.h.
-// |browser| handed to on_after_created is an OWNED ref (CEF C-API callback
-// params are transferred to the callee — verified against the libcef_dll
-// translator source, see spikes/cef-macos/FINDINGS.md's ownership finding);
-// releasing it immediately (as an earlier iteration of this spike did) would
-// leave nothing to reach the page later, so it's kept instead and released
-// in on_before_close.
-static cef_browser_t* g_active_browser = NULL;
+// One browser per Zapp window slot — the exact mirror of window.m's
+// zapp_webviews[]. Registered in on_after_created, cleared in on_before_close /
+// the window-destroy path. Read by the targeted eval (by slot) and the
+// broadcast fan-out (all live entries). Main-thread only (CEF UI thread ==
+// the external-pump main thread), so no lock — same as zapp_webviews[].
+static cef_browser_t* zapp_cef_browsers[ZAPP_MAX_WINDOW_CALLBACKS] = {0};
 
-cef_browser_t* zapp_cef_get_active_browser(void) {
-  return g_active_browser;
+static int zapp_cef_slot_ok(int32_t slot) {
+  return slot >= 0 && slot < ZAPP_MAX_WINDOW_CALLBACKS;
+}
+
+cef_browser_t* zapp_cef_browser_for_slot(int32_t slot) {
+  return zapp_cef_slot_ok(slot) ? zapp_cef_browsers[slot] : NULL;
 }
 
 //
 // browser <-> Zapp window_id mapping + native->JS eval (see zapp_cef.h).
 //
-// Single-window this slice (multi-window CEF is a non-goal). The slot is set
-// by window.m's CEF branch at browser-create time and read by the bridge
+// Multi-window: each browser is keyed by the Zapp window slot it hosts
+// (zapp_cef_browsers[] above). The slot is baked onto the client/life-span
+// handler at create time (zapp_cef_client_create) and read by the bridge
 // (below) to pass the correct window_id into zapp_handle_message_from_window,
 // mirroring webview.m's darwin_window_id_for_webview.
 //
-
-static int32_t g_zapp_cef_window_slot = -1;
-
-void zapp_cef_set_window_slot(int32_t slot) { g_zapp_cef_window_slot = slot; }
-int32_t zapp_cef_get_window_slot(void) { return g_zapp_cef_window_slot; }
 
 // Run |js| in the CEF page NOW (caller guarantees the CEF UI/main thread).
 // |browser|->get_main_frame is an OWNED ref (release once). execute_java_script
@@ -109,15 +114,10 @@ int32_t zapp_cef_get_window_slot(void) { return g_zapp_cef_window_slot; }
 // analogue of WKWebView's evaluateJavaScript: and, called from the browser
 // process, is routed to the render frame (same mechanism the spike's
 // zjs_worker.c push used).
-static void zapp_cef_eval_now(const char* js) {
-  cef_browser_t* b = g_active_browser;
-  if (b == NULL || js == NULL) {
-    return;
-  }
+static void zapp_cef_eval_now(cef_browser_t* b, const char* js) {
+  if (b == NULL || js == NULL) return;
   cef_frame_t* frame = b->get_main_frame(b);
-  if (frame == NULL) {
-    return;
-  }
+  if (frame == NULL) return;
   cef_string_t code, empty;
   memset(&code, 0, sizeof(code));
   memset(&empty, 0, sizeof(empty));
@@ -129,41 +129,70 @@ static void zapp_cef_eval_now(const char* js) {
 }
 
 int zapp_cef_eval_in_window(int32_t slot, const char* js) {
-  if (js == NULL || slot < 0 || slot != g_zapp_cef_window_slot) {
-    return 0;
-  }
-  if (g_active_browser == NULL) {
-    return 0;  // browser not up yet / already gone — not handled.
-  }
+  cef_browser_t* b = zapp_cef_browser_for_slot(slot);
+  if (js == NULL || b == NULL) return 0;   // not handled → caller may fall through
   if (pthread_main_np() != 0) {
     // Already on the main (== CEF UI) thread — run inline to preserve
     // invoke-result ordering (matches darwin_window_eval_js's own inline path).
-    zapp_cef_eval_now(js);
+    zapp_cef_eval_now(b, js);
   } else {
     // A worker thread called sendInvokeResponse. execute_java_script must run
     // on the UI thread; copy |js| (the caller may free it right after this
     // returns) and hop. dispatch/blocks are C-available on Darwin (the spike's
-    // zjs_worker.c used the same pattern).
+    // zjs_worker.c used the same pattern). Re-look-up the browser by slot at
+    // eval time (rather than capturing |b| here) — a window can close between
+    // this worker-thread call and the main-thread hop.
     char* copy = strdup(js);
     if (copy == NULL) {
       return 1;  // handled (OOM — drop rather than touch the WKWebView path).
     }
+    int32_t s = slot;
     dispatch_async(dispatch_get_main_queue(), ^{
-      zapp_cef_eval_now(copy);
+      zapp_cef_eval_now(zapp_cef_browser_for_slot(s), copy);
       free(copy);
     });
   }
   return 1;  // handled by CEF — caller must NOT fall through to WKWebView.
 }
 
+// Fan |js| into every live CEF browser (all slots). Main-thread safe — see
+// zapp_cef.h. Used by window.m's broadcast branch (zapp_registered_webviews_eval)
+// since a CEF window has no zapp_webviews[] entry.
+void zapp_cef_broadcast_eval(const char* js) {
+  if (js == NULL) return;
+  if (pthread_main_np() != 0) {
+    for (int i = 0; i < ZAPP_MAX_WINDOW_CALLBACKS; i++) {
+      cef_browser_t* b = zapp_cef_browsers[i];
+      if (b) zapp_cef_eval_now(b, js);
+    }
+  } else {
+    char* copy = strdup(js);
+    if (copy == NULL) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+      for (int i = 0; i < ZAPP_MAX_WINDOW_CALLBACKS; i++) {
+        cef_browser_t* b = zapp_cef_browsers[i];
+        if (b) zapp_cef_eval_now(b, copy);
+      }
+      free(copy);
+    });
+  }
+}
+
 void CEF_CALLBACK
 zapp_cef_life_span_on_after_created(cef_life_span_handler_t* self,
                                     cef_browser_t* browser) {
-  (void)self;
-  fprintf(stderr, "[zapp-cef] browser created\n");
-  // Keep the owned ref instead of releasing it — see
-  // zapp_cef_get_active_browser above.
-  g_active_browser = browser;
+  zapp_cef_life_span_handler_t* h = (zapp_cef_life_span_handler_t*)self;
+  if (zapp_cef_slot_ok(h->slot)) {
+    // Keep the owned ref instead of releasing it — see zapp_cef_browsers
+    // above (a future native->page push mechanism needs it); released in
+    // on_before_close.
+    zapp_cef_browsers[h->slot] = browser;
+    fprintf(stderr, "[zapp-cef] browser created (slot %d)\n", h->slot);
+  } else {
+    fprintf(stderr, "[zapp-cef] browser created with bad slot %d — dropping\n",
+            h->slot);
+    browser->base.release(&browser->base);
+  }
 }
 
 int CEF_CALLBACK zapp_cef_life_span_do_close(cef_life_span_handler_t* self,
@@ -178,24 +207,26 @@ int CEF_CALLBACK zapp_cef_life_span_do_close(cef_life_span_handler_t* self,
 void CEF_CALLBACK
 zapp_cef_life_span_on_before_close(cef_life_span_handler_t* self,
                                    cef_browser_t* browser) {
-  (void)self;
+  zapp_cef_life_span_handler_t* h = (zapp_cef_life_span_handler_t*)self;
   // Release the EXTRA ref kept alive since on_after_created — a DIFFERENT
   // owned ref than the |browser| parameter below (CEF hands a fresh owned
   // ref to each callback invocation, per the same convention).
-  if (g_active_browser == browser) {
-    g_active_browser = NULL;
+  if (zapp_cef_slot_ok(h->slot) && zapp_cef_browsers[h->slot] == browser) {
+    zapp_cef_browsers[h->slot] = NULL;
     browser->base.release(&browser->base);
   }
   browser->base.release(&browser->base);
-  // Single-window host: the only browser has closed. The external message
-  // pump runs under [NSApp run] (not cef_run_message_loop), so stop the
-  // NSApp loop rather than calling cef_quit_message_loop (which only applies
-  // to cef_run_message_loop). The caller then falls through to cef_shutdown.
-  fprintf(stderr, "[zapp-cef] browser closing — stopping NSApp loop\n");
+  // TASK 2 removes the line below — the last-window quit becomes Zapp's
+  // terminateAfterLastWindowClosed path. Kept here so single-window quit still
+  // works until Task 2 reworks it. The external message pump runs under
+  // [NSApp run] (not cef_run_message_loop), so stop the NSApp loop rather than
+  // calling cef_quit_message_loop (which only applies to cef_run_message_loop).
+  // The caller then falls through to cef_shutdown.
+  fprintf(stderr, "[zapp-cef] browser closing (slot %d)\n", h->slot);
   zapp_cef_quit_main_loop();
 }
 
-static zapp_cef_life_span_handler_t* zapp_cef_life_span_handler_create(void) {
+static zapp_cef_life_span_handler_t* zapp_cef_life_span_handler_create(int32_t slot) {
   zapp_cef_life_span_handler_t* h = (zapp_cef_life_span_handler_t*)calloc(
       1, sizeof(zapp_cef_life_span_handler_t));
   CHECK(h);
@@ -205,6 +236,7 @@ static zapp_cef_life_span_handler_t* zapp_cef_life_span_handler_create(void) {
   h->handler.on_after_created = zapp_cef_life_span_on_after_created;
   h->handler.do_close = zapp_cef_life_span_do_close;
   h->handler.on_before_close = zapp_cef_life_span_on_before_close;
+  h->slot = slot;
 
   atomic_store(&h->ref_count, 1);
   return h;
@@ -231,7 +263,7 @@ static zapp_cef_life_span_handler_t* zapp_cef_life_span_handler_create(void) {
 int CEF_CALLBACK zapp_cef_client_on_process_message_received(
     cef_client_t* self, cef_browser_t* browser, cef_frame_t* frame,
     cef_process_id_t source_process, cef_process_message_t* message) {
-  (void)self;
+  zapp_cef_client_t* client = (zapp_cef_client_t*)self;
   (void)frame;
   (void)source_process;
 
@@ -263,17 +295,18 @@ int CEF_CALLBACK zapp_cef_client_on_process_message_received(
       // the log readable.
       if (strstr(env_utf8.str, "\"setDragRegion\"") == NULL) {
         fprintf(stderr, "[zapp-cef][browser] -> router (win=%d): %s\n",
-                zapp_cef_get_window_slot(), env_utf8.str);
+                client->slot, env_utf8.str);
       }
       // Same marshalling as webview.m:396 — (app, raw envelope, window_id).
-      // window_id = the CEF window's slot (single-window this slice, recorded
-      // by window.m's CEF branch). Runs on the CEF UI thread == the main
-      // thread under the external pump, i.e. the SAME thread the WKWebView
-      // handler and the Nim runtime use — safe to call the ORC-GC'd router.
+      // window_id = the CEF window's slot, baked onto this client at create
+      // time (zapp_cef_client_create) — multi-window: each browser's client
+      // carries its OWN slot, so a message from window 2 tags window 2. Runs
+      // on the CEF UI thread == the main thread under the external pump, i.e.
+      // the SAME thread the WKWebView handler and the Nim runtime use — safe
+      // to call the ORC-GC'd router.
       void* app_ptr = app_get_active();
       if (app_ptr != NULL) {
-        zapp_handle_message_from_window(app_ptr, env_utf8.str,
-                                        zapp_cef_get_window_slot());
+        zapp_handle_message_from_window(app_ptr, env_utf8.str, client->slot);
       }
     }
     cef_string_utf8_clear(&env_utf8);
@@ -285,7 +318,7 @@ int CEF_CALLBACK zapp_cef_client_on_process_message_received(
   // Release the owned callback params (CEF C-API refptr_diff — same convention
   // as the life-span handler's browser param). We retain nothing beyond this
   // call; the router delivers its result via zapp_cef_eval_in_window, which
-  // uses the retained g_active_browser, not this |frame|.
+  // looks the browser back up by slot in zapp_cef_browsers[], not this |frame|.
   browser->base.release(&browser->base);
   frame->base.release(&frame->base);
   message->base.release(&message->base);
@@ -324,7 +357,7 @@ zapp_cef_client_get_life_span_handler(cef_client_t* self) {
   return NULL;
 }
 
-cef_client_t* zapp_cef_client_create(void) {
+cef_client_t* zapp_cef_client_create(int32_t slot) {
   zapp_cef_client_t* client =
       (zapp_cef_client_t*)calloc(1, sizeof(zapp_cef_client_t));
   CHECK(client);
@@ -334,8 +367,9 @@ cef_client_t* zapp_cef_client_create(void) {
   // Browser-process half of the bridge (handles "zapp:invoke").
   client->client.on_process_message_received =
       zapp_cef_client_on_process_message_received;
+  client->slot = slot;
 
-  client->life_span_handler = zapp_cef_life_span_handler_create();
+  client->life_span_handler = zapp_cef_life_span_handler_create(slot);
   CHECK(client->life_span_handler);
 
   atomic_store(&client->ref_count, 1);
