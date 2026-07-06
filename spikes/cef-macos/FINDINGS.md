@@ -56,6 +56,112 @@ outside CEF's multi-process tree, and is shown coexisting with CEF. Recommendati
 ### Human-verified gates
 GATE 0/1/2/4/5 = PASS on screen. GATE 3 = negative finding (native custom-scheme `br` decode) + demonstrated handler-side-decode fix. Whole-branch review = **READY-TO-BANK** (bridge refcount fix verified against SDK `cpptoc` source; T5 thread-sound).
 
+### ★ Production slice update (`feat/cef-webengine-prod`, 2026-07-06) — which seeds THIS SLICE closed
+
+The production slice (design:
+`docs/superpowers/specs/2026-07-05-cef-webengine-production-slice-macos-design.md`;
+promotes this spike's sources into `native/platform/darwin/cef/zapp_cef_*`,
+gated behind `-DZAPP_HAS_CEF`) revisits the eight production seeds above.
+Five are **CLOSED**; four items remain **OPEN** (one seed above turned out
+to fold into two still-open items below).
+
+**CLOSED this slice:**
+
+1. **Real embedded-asset pipeline (seed 3, partially seed 6's asset half).**
+   `zapp_cef_scheme_handler.c` now serves the app's *real*
+   `zapp_embedded_assets[]` table on `zapp://` — the same weak-linked table
+   `webview.m`'s asset path reads, decoded with the same
+   `is_brotli && uncompressed_len>0` rule. Brotli decode uses **Apple's own
+   `libcompression`** (`compression_decode_buffer`, `COMPRESSION_BROTLI`) —
+   **Homebrew `libbrotlidec` is gone**, closing the brotli half of seed 3
+   for real (statically-linked, ships in the OS, no dev-machine dependency).
+2. **Real bridge → real Nim router.** The spike's bespoke `greet`-stub
+   protocol (`zapp:invoke[id,name,argsJSON]` → hand-run stub →
+   `zapp:result[id,resultJSON]` → `__zappResolve`) is **deleted**. The CEF
+   browser process now calls the exact same
+   `zapp_handle_message_from_window(app, envelope, window_id)` entry point
+   `webview.m`'s WKWebView handler calls, with the real
+   `{t,id,m,a}` envelope `bootstrap/webview.ts` produces — not a
+   parser/stub. Results flow back via the real `darwin_window_eval_js`
+   (a `#ifdef ZAPP_HAS_CEF` branch calls `execute_java_script` instead of
+   `evaluateJavaScript:`); `Events.emit` broadcasts reach the CEF page too.
+   The doc-start bootstrap the render process evals is now the **real
+   compiled bootstrap** (`zapp_webview_bootstrap_script()` + the real
+   `Symbol.for('zapp.*')` carriers), not a hand-written C-string stand-in —
+   this also closes the asset/codegen half of **seed 6** (bootstrap
+   injection): the browser process links Nim and calls the real codegen'd
+   function; only the Helper (which runs no Nim) still can't build it
+   itself, so the browser ships it across via CEF's `extra_info` at
+   browser-create time.
+3. **Loop integration into Zapp's REAL `NSApplication` loop, not a
+   spike-owned one.** The spike's `cefspike_run_main_loop` (its own
+   `[NSApp run]`) is gone from the production path. `darwin_platform_init()`
+   installs the `ZappCefApplication` pump subclass *before* Zapp's own
+   `[NSApplication sharedApplication]` call, and CEF's external pump
+   (`on_schedule_message_pump_work` → `cef_do_message_loop_work()`) rides
+   whichever run loop is already spinning — Zapp's existing
+   `darwin_platform_run()` → `[NSApp run]`. Proven both statically (exactly
+   one `[NSApp run]` call site; `zapp_cef_run_main_loop` defined but never
+   called — see the Minors below) and dynamically (a real built `.app`
+   renders + serves assets + fires the bridge, all of which requires the
+   pump to be getting serviced by Zapp's loop).
+4. **Scheme-handler `refptr_diff` leak (seed 1) — fixed, and extended.**
+   The spike's known leak (`request`/`callback`/`response` never released)
+   is fixed. Production **also** extends correct-release discipline to
+   every resource-handler entry point touched (`open` /
+   `get_response_headers` / `skip` / `read`) **and** the factory's
+   `create()` (`browser`/`frame`/`request` released once each); the
+   factory-returned handler itself is `refptr_same` (consumed by the
+   caller, correctly *not* released a second time).
+5. **`system` build stays byte-identical (the gate guarantee itself).**
+   Not one of the original 8 seeds, but the load-bearing promise the whole
+   slice depends on — re-verified in the T5 (docs/smoke) task independently
+   of Tasks 2-4: a clean `webEngine:"system"` build of `examples/cef-hello`
+   hashes identically to a pre-CEF-version-pin build
+   (`sha256 588494f859df1097160d18f371c1d35f4ac45d39e83a790594a20c0b78f93312`),
+   and `unifdef -UZAPP_HAS_CEF` over `window.m` / `platform.m` / `webview.m`
+   shows the CEF-gated lines are the only delta.
+
+**Still OPEN (unchanged from the spike's list, tracked for a future cycle):**
+
+- **Worker on CEF.** `spikes/cef-macos`'s T5 proved a real `libzjs` worker
+  co-exists with CEF (render-engine-independent by construction — the
+  worker never touches CEF, only the one `execute_java_script`-shaped
+  push-to-page hop). The production plumbing (worker registry, capability
+  modules, headless-worker codegen) for a `chromium` window is **not**
+  wired up this slice — deferred by design (the slice's stated bar is
+  render + bridge, not worker).
+- **macOS sandbox runtime-library loader (seed 5).** Still links the
+  framework directly via `@rpath`; fine unsandboxed/dev, not sandboxed
+  App Store-shaped distribution.
+- **Real OSCrypt "Safe Storage" / keychain policy (seed 4).** Still no
+  production policy decision; `--use-mock-keychain` remains a dev-run
+  convenience, now inherited by the promoted `zapp_cef_app.c`.
+- **Helper-process signing + notarization (seed 7).** Unchanged — the five
+  bundled Helper `.app`s (`bundleCefApp` in `cli/src/cef.ts`) are unsigned.
+- **Shared header for the hand-rolled message-name constant (the rest of
+  seed 2/6).** `#define ZAPP_MSG_INVOKE "zapp:invoke"` is still duplicated
+  in two TUs (`zapp_cef_bridge.c` + `zapp_cef_client.c`) — no shared
+  header. (The *reverse* `"zapp:result"` message the spike hand-rolled is
+  now gone entirely — results ride the real `darwin_window_eval_js` path —
+  so there's exactly one hand-rolled name left to consolidate, down from
+  two.)
+
+Also unchanged / not attempted this slice: DevTools, multi-window CEF,
+native chrome (sidebar/inspector/toolbar) on the `chromium` path, iOS /
+Windows / Linux, per-window engine selection, navigation/back-forward — all
+explicit non-goals of the design, not regressions.
+
+Non-blocking Minors accumulated across this slice's tasks (recorded for the
+eventual whole-branch review, not fixed here): CEF elision for
+`setDragRegion` (currently round-trips through the router at ~60 Hz as a
+no-op on the fullbleed CEF path); `app_get_active()` NULL-guard parity with
+`webview.m`'s equivalent check (harmless today, single-window); the
+now-dead `zapp_cef_run_main_loop` (superseded by Zapp's own loop, never
+called, not yet deleted); OOM-territory NULL-hardening in
+`zapp_cef_host.m` (`cef_dictionary_value_create` / `strdup` on the
+bootstrap JS string) matching the spike's original hardening level.
+
 ---
 
 ## Task 1 (RISK GATE): message-loop coexistence — CEF + NSApplication + a second (ZJS-shaped) loop

@@ -2688,6 +2688,121 @@ enforcement is in `runtime/bare/fs.ts` (paths must match
 
 ---
 
+## Webview engine (`webEngine`) — macOS early access (CEF)
+
+`zapp.config.ts`'s `webEngine` field picks what renders the UI:
+
+```ts
+const config: ZappConfig = {
+  webEngine: "chromium", // default: "system"
+};
+```
+
+- **`"system"`** *(default)* — the OS-native WebView: WKWebView on macOS,
+  WebView2 on Windows, WebKitGTK on Linux. Tiny binary (a few MB — the OS
+  already provides the engine), zero extra runtime overhead. This is the
+  right answer for the overwhelming majority of apps and is what every
+  other doc on this site assumes unless stated otherwise.
+- **`"chromium"`** *(early access, **macOS only**, strictly opt-in)* —
+  bundles a real Chromium via CEF (Chromium Embedded Framework) instead of
+  WKWebView. Setting it logs a one-line early-access warning and is
+  accepted; any other value still throws.
+
+### What works in this slice
+
+- **Fullbleed-web render.** A `zapp build` with `webEngine:"chromium"`
+  produces a real `.app` whose window renders its page on Chromium, hosted
+  inside a standard Zapp `NSWindow` (not a CEF-owned window). CEF's external
+  message pump integrates into Zapp's *existing* `NSApplication` run loop —
+  there's no second loop to reason about.
+- **The `zapp` bridge.** `Services.invoke(...)` round-trips through the
+  *same* transport, the *same* `{t,id,m,a}` envelope, and the *same* Nim
+  router every WKWebView window uses — not a parallel bridge. Native →
+  JS results and `Events.emit` broadcasts are delivered the same way.
+- **The real asset pipeline.** Production builds serve the app's compiled
+  assets over `zapp://`, brotli-decoded in-handler from the same embedded
+  asset table (`zapp_embedded_assets[]`) the WKWebView path serves from —
+  not a separate CEF-only asset story. Dev mode points CEF at the Vite dev
+  server, same as WKWebView.
+
+The reference fixture is `examples/cef-hello` (one window, one service, one
+button) — see its `SMOKE.md` for the exact build/verify steps and measured
+results.
+
+### What's deferred / non-goals (this slice)
+
+Not yet supported on the `chromium` path — all tracked for a future cycle,
+none silently half-working:
+
+- **Workers.** `new Worker(...)` / headless workers are not wired to CEF
+  windows yet (ZJS itself is render-engine-independent by construction —
+  see `spikes/cef-macos/FINDINGS.md` — but the production plumbing isn't
+  done).
+- **DevTools.** No `chrome://inspect`-style remote debugging surface.
+- **Multi-window.** The bridge currently tracks a single active CEF
+  browser; a `chromium` app with more than one window is unsupported.
+- **Native chrome on CEF.** Sidebar / inspector / toolbar / pane machinery
+  is WKWebView-only. A `webEngine:"chromium"` window is fullbleed-web only
+  — it skips that machinery entirely rather than partially supporting it.
+- **Helper process signing / notarization.** The CEF Helper subprocess
+  `.app`s this slice bundles aren't yet part of a signing/notarization
+  pipeline.
+- **iOS, Windows, Linux.** macOS arm64 only, this slice.
+- **Per-window engine selection.** `webEngine` is app-wide; there's no way
+  to mix a `chromium` window with a `system` window in the same app yet.
+- **Navigation / back-forward.** Not exercised by this slice's fullbleed-web
+  model.
+
+### Cost: the opt-in price is ~289 MB
+
+CEF is not free, and Zapp does not hide that. Measured on a real built
+`examples/cef-hello.app`:
+
+| | Size |
+|---|---|
+| `.app` bundle, `webEngine:"chromium"` | **291 MB** |
+| — of which the `Chromium Embedded Framework.framework` | **289 MB** |
+| `.app`/binary, `webEngine:"system"` (same app, WKWebView) | a few MB |
+
+That ~289 MB is the entire reason `"chromium"` is opt-in rather than a
+config knob you flip casually: it's the price of bundling a full Chromium
+instead of using the OS-provided engine. `webEngine:"system"` builds pay
+none of it — no CEF fetch, no CEF compile, no CEF link, no CEF bundling
+step runs; the build is byte-identical to a build that never had CEF
+support added to the framework at all.
+
+### DX gotcha: clean the Nim cache when switching `webEngine`
+
+Flipping `webEngine` between `"chromium"` and `"system"` **in place,
+without clearing the Nim build cache, breaks the link.** Nim's compile
+cache keys on source-file identity, not on the `-D` flags a file was last
+compiled with, so a stale platform object built for one engine can get
+reused when you rebuild for the other — and the link fails with
+`Undefined symbols: _zapp_cef_*` (or the mirror-image failure switching
+back). This is a **loud, build-time failure, never a silently-wrong
+binary** — but every engine switch needs a clean build:
+
+```sh
+rm -rf ~/.cache/nim/<app>_r   # <app>_r is usually "app_r" for the default template
+bun run build
+```
+
+### Under the hood
+
+`native/platform/darwin/cef/` holds the CEF host, entirely gated behind a
+`-DZAPP_HAS_CEF` compile define that's only ever emitted when
+`resolveWebEngine(config) === "chromium"` on a macOS target
+(`cli/src/native.ts`, `cli/src/build-config.ts`). `cli/src/cef.ts` fetches
+(`cli/scripts/fetch-cef.sh`, cached under `vendor/cef/`, gitignored) and
+bundles the CEF framework + five Helper subprocess `.app`s into the output
+`.app`'s `Contents/Frameworks`. See
+`spikes/cef-macos/FINDINGS.md` for the full de-risking history (ref-ownership
+rules, the brotli custom-scheme caveat, message-loop coexistence) and
+`docs/superpowers/specs/2026-07-05-cef-webengine-production-slice-macos-design.md`
+for this slice's design.
+
+---
+
 ## Native build config
 
 Your `zapp/build.zc` is **service code** — Zen-C imports,
