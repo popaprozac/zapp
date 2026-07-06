@@ -1218,8 +1218,17 @@ async function buildNativeNim(
   // CEF is gated on this — a `system` (WKWebView) build resolves to "system",
   // passes NO `cef` to renderPlatformNim, and produces byte-identical output +
   // no bundling. chromium is macOS-only (Windows/iOS fall through to system).
-  const { resolveWebEngine } = await import("./config");
-  const useCef = resolveWebEngine(config) === "chromium" && target === "macos";
+  const { resolveWebEngineForBuild, platformSupportsChromium } = await import("./config");
+  const { engine, downgraded } = resolveWebEngineForBuild(config, target);
+  if (downgraded) {
+    const hint = target === "windows" ? "WebView2 = Chromium" : "the system webview";
+    process.stderr.write(
+      `[zapp] webEngine "chromium" is not yet available on ${target}; using system (${hint}).\n`,
+    );
+  } else if (engine === "chromium" && platformSupportsChromium(target)) {
+    process.stderr.write(`[zapp] webEngine:"chromium" is early-access (macOS)\n`);
+  }
+  const useCef = engine === "chromium" && platformSupportsChromium(target);
   let cefRoot: string | undefined;
   if (useCef) {
     const { ensureCefFetched } = await import("./cef");
