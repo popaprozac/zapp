@@ -92,6 +92,23 @@ cef_browser_t* zapp_cef_get_active_browser(void);
 // conforming NSApplication subclass. Must run before cef_initialize.
 void zapp_cef_ns_application_init(void);
 
+// Browser-process bootstrap (T3). Installs the CefAppProtocol NSApplication
+// subclass + external-pump owner (via zapp_cef_ns_application_init), builds the
+// browser-process main_args/settings/app, and calls cef_initialize with
+// external_message_pump=1. Call ONCE at app startup, BEFORE the host app's own
+// [NSApplication sharedApplication] (so NSApp is the ZappCefApplication) — see
+// native/platform/darwin/platform.m's darwin_platform_init. CEF's pump then
+// drives off the SAME [NSApp run] loop the host already owns; this does NOT
+// start a second run loop (do NOT also call zapp_cef_run_main_loop). The
+// browser process does NOT cef_execute_process: on macOS the child processes
+// are the separate Helper .apps (zapp_cef_mac_helper.c owns their main()).
+void zapp_cef_app_init(void);
+
+// cef_shutdown at app teardown. Idempotent (a static guard makes a double call
+// a no-op), so it is safe to invoke from BOTH the [NSApp stop] browser-close
+// path (after [NSApp run] returns) and applicationWillTerminate.
+void zapp_cef_app_shutdown(void);
+
 // Wrap argc/argv in a cef_main_args_t. Static storage.
 cef_main_args_t* zapp_cef_make_main_args(int argc, char** argv);
 

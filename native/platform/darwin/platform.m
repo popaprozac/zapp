@@ -9,6 +9,18 @@
 #import <IOKit/ps/IOPSKeys.h>
 #import "platform.h"
 
+#ifdef ZAPP_HAS_CEF
+// webEngine:"chromium" browser-process bootstrap + teardown (native/platform/
+// darwin/cef/zapp_cef_mac_entry.m). Declared here (rather than via zapp_cef.h,
+// which pulls in the CEF SDK headers) so this TU stays CEF-header-free. The
+// symbols are linked ONLY in a chromium build: ZAPP_HAS_CEF is defined solely
+// by the gated CEF block in cli/src/build-config.ts (renderCefPlatformNim), so
+// a `system` build compiles these blocks out entirely and references no
+// zapp_cef_* symbol.
+extern void zapp_cef_app_init(void);
+extern void zapp_cef_app_shutdown(void);
+#endif
+
 // --- App Delegate ---
 
 static BOOL zapp_should_terminate_after_last_window_closed = NO;
@@ -316,6 +328,12 @@ bool darwin_get_login_item(void) {
     extern void service_run_shutdown_all(void);
     service_run_shutdown_all();
     zapp_app_dispatch(ZAPP_EVENT_APP_SHUTDOWN, NULL);
+#ifdef ZAPP_HAS_CEF
+    // cef_shutdown on the terminate path (Cmd-Q / last-window-closed ->
+    // NSTerminateNow). Idempotent, so the [NSApp stop] browser-close path in
+    // darwin_platform_run can also call it without a double-shutdown.
+    zapp_cef_app_shutdown();
+#endif
 }
 
 - (BOOL)applicationShouldHandleReopen:(NSApplication*)sender hasVisibleWindows:(BOOL)flag {
@@ -441,6 +459,19 @@ static ZappAppDelegate* zapp_app_delegate = nil;
 extern void darwin_notification_setup_delegate(void);
 
 void darwin_platform_init(const char* app_name) {
+#ifdef ZAPP_HAS_CEF
+    // Install CEF's CefAppProtocol NSApplication subclass (ZappCefApplication)
+    // and cef_initialize BEFORE the [NSApplication sharedApplication] below —
+    // that call would otherwise create a plain NSApplication and lock NSApp to
+    // the wrong class. zapp_cef_app_init installs the subclass first, so the
+    // sharedApplication call below returns that same instance. CEF's external
+    // message pump then drives off the [NSApp run] loop darwin_platform_run
+    // owns; no second run loop is started (THE #1 integration risk). The
+    // ZappCefApplication also installs its own (throwaway) delegate, which the
+    // [app setDelegate:zapp_app_delegate] below immediately supersedes — Zapp's
+    // delegate (theme/screen/reopen/quit-guard) stays authoritative.
+    zapp_cef_app_init();
+#endif
     NSApplication* app = [NSApplication sharedApplication];
     [app setActivationPolicy:NSApplicationActivationPolicyRegular];
     if (!zapp_app_delegate) {
@@ -467,6 +498,12 @@ int darwin_platform_run(bool terminate_after_last_window) {
 
         [NSApp activateIgnoringOtherApps:YES];
         [NSApp run];
+#ifdef ZAPP_HAS_CEF
+        // [NSApp run] returns when the CEF life-span handler stops the loop
+        // ([NSApp stop] on the last browser close). Shut CEF down here; the
+        // terminate path is covered by applicationWillTerminate. Idempotent.
+        zapp_cef_app_shutdown();
+#endif
     }
     return 0;
 }

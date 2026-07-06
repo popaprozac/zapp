@@ -371,6 +371,15 @@ function renderCefPlatformNim(nativeDir: string, cefRoot: string, slash: (s: str
     // "zapp_cef.h" et al). Applied to the CEF {.compile.}s AND Nim's own C.
     `{.passC: "-I${root}".}`,
     `{.passC: "-I${cefDir}".}`,
+    // Compile-time gate for the WKWebView<->CEF branch points that live OUTSIDE
+    // this cef/ dir: native/platform/darwin/window.m's fullbleed-webview branch
+    // and native/platform/darwin/platform.m's app-boot CEF init/shutdown. A
+    // global {.passC.} reaches EVERY C/ObjC translation unit Nim compiles (the
+    // platform .m sources AND the CEF glue). Emitted ONLY here, so a `system`
+    // build (which never calls renderCefPlatformNim) leaves those
+    // `#ifdef ZAPP_HAS_CEF` blocks compiled out -> byte-identical to the pre-CEF
+    // output, referencing zero zapp_cef_* symbols.
+    `{.passC: "-DZAPP_HAS_CEF".}`,
     // c11 for the C glue; ARC for the ObjC. mac_helper.c/bridge.c are EXCLUDED
     // (Helper-only — see the doc comment + cli/src/cef.ts).
     ...cSources.map((c) => `{.compile("${cefDir}/${c}", "-std=c11").}`),

@@ -110,6 +110,51 @@ void zapp_cef_ns_application_init(void) {
   g_pump = [[ZappCefPump alloc] init];
 }
 
+// ---------------------------------------------------------------------------
+// Browser-process bootstrap (T3) — see zapp_cef.h. Runs the CEF init sequence
+// the spike's main.nim ran inline (ns_application_init -> main_args -> settings
+// -> app -> cef_initialize), MINUS the loop ownership: the spike then called
+// [NSApp run]; production must NOT — Zapp's darwin_platform_run already owns
+// [NSApp run], and CEF's external pump (below) slots into that same loop. So
+// this stops after cef_initialize; NSApplication starts the loop later.
+// ---------------------------------------------------------------------------
+void zapp_cef_app_init(void) {
+  zapp_cef_ns_application_init();
+
+  // Reconstruct argc/argv for cef_main_args_t (argv[0] = exe path). CEF
+  // snapshots argv into a command line during cef_initialize, so the backing
+  // store must outlive that call — a leaked static (process lifetime) is fine.
+  NSArray<NSString*>* args = [[NSProcessInfo processInfo] arguments];
+  int argc = (int)args.count;
+  static char** argv = NULL;
+  argv = (char**)calloc((size_t)argc + 1, sizeof(char*));
+  CHECK(argv);
+  for (int i = 0; i < argc; i++) {
+    argv[i] = strdup([args[i] UTF8String]);
+  }
+  argv[argc] = NULL;
+
+  cef_main_args_t* main_args = zapp_cef_make_main_args(argc, argv);
+  cef_settings_t* settings = zapp_cef_make_settings();  // external_message_pump=1
+  cef_app_t* app = zapp_cef_app_create();
+
+  // cef_initialize's internal on_context_initialized fires synchronously here
+  // and installs the "zapp" scheme handler factory (zapp_cef_scheme_handler.c)
+  // against the real embedded-asset table, so a browser created later already
+  // resolves zapp://. The browser process passes no sandbox info (NULL).
+  if (cef_initialize(main_args, settings, app, NULL) == 0) {
+    fprintf(stderr, "[zapp-cef] cef_initialize failed\n");
+    abort();
+  }
+}
+
+void zapp_cef_app_shutdown(void) {
+  static int did_shutdown = 0;
+  if (did_shutdown) return;
+  did_shutdown = 1;
+  cef_shutdown();
+}
+
 cef_main_args_t* zapp_cef_make_main_args(int argc, char** argv) {
   static cef_main_args_t args;
   args.argc = argc;

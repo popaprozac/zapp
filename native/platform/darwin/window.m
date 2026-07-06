@@ -1133,10 +1133,40 @@ void* darwin_window_create(WindowOptions* opts) {
         }
 
         if (!useSidebar && !useInspector) {
+#ifdef ZAPP_HAS_CEF
+            // webEngine:"chromium" — fullbleed-web: host a CEF browser in the
+            // window's content view instead of a WKWebView. This slice supports
+            // ONLY plain (fullbleed) windows on CEF; the sidebar/inspector path
+            // above stays WKWebView, and a chromium build never reaches it
+            // because the fixture sets no panes. ZAPP_HAS_CEF is defined only
+            // for chromium builds (cli/src/build-config.ts), so the WKWebView
+            // path below is byte-identical on a `system` build.
+            //
+            // URL: dev -> Vite devUrl / prod -> zapp://index.html, resolved
+            // exactly like the WKWebView path (wopts_url override, else the
+            // build config's initial_url, else the zapp:// fallback) — see
+            // webview.m's zapp_initial_url.
+            extern const char* zapp_build_initial_url(void);
+            extern void zapp_cef_create_browser_in_view(void* parent_view, const char* url);
+            const char* cef_url = (custom_url && custom_url[0] != '\0')
+                                      ? custom_url
+                                      : zapp_build_initial_url();
+            if (!cef_url || cef_url[0] == '\0') cef_url = "zapp://index.html";
+            // No JS<->native bridge yet (T4), so there is no "ready" event to
+            // trigger the deferred WKWebView-style auto-show (delegate.
+            // shouldAutoShow, applied from the READY/didFinishNavigation hooks
+            // that CEF never fires). Reveal the window here, then host the
+            // browser — cef_browser_host_create_browser reads parent_view at
+            // create time, so the content view must exist + be on screen first.
+            [window makeKeyAndOrderFront:nil];
+            [NSApp activateIgnoringOtherApps:YES];
+            zapp_cef_create_browser_in_view((__bridge void*)[window contentView], cef_url);
+#else
             // Legacy single-webview path — byte-for-byte equivalent to before
             // (the vibrancy vfx, if any, was installed as contentView above).
             darwin_webview_create((__bridge void*)window, inspectable, accept_first_mouse,
                                   custom_url, host_slot, useVibrancy);
+#endif
         }
 
         NSString* windowId = [NSString stringWithFormat:@"win-%p", window];
