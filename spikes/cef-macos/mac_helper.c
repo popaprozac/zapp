@@ -24,6 +24,14 @@
 // pulling it in would mean linking Cocoa/NSApplication scaffolding into a
 // renderer/GPU child process for no reason. scheme_handler.c has no such
 // dependency, so it links cleanly here.
+//
+// Task 4 (the `zapp` bridge): the RENDER-process half of the bridge runs HERE.
+// The render subprocess IS this Helper executable, so this app now also returns
+// a render-process handler (bridge.c) from get_render_process_handler — CEF
+// calls that on the render main thread and drives the handler's
+// on_context_created (bootstrap + V8 binding) and on_process_message_received
+// ("zapp:result"). bridge.c is compiled into this Helper build (see build.sh);
+// it, like scheme_handler.c, has no ObjC/Cocoa dependency.
 
 #include <stdatomic.h>
 #include <stdlib.h>
@@ -39,15 +47,45 @@ typedef struct _cefspike_helper_app_t {
   // MUST be first member — CEF base structure.
   cef_app_t app;
   atomic_int ref_count;
+  cef_render_process_handler_t* rph;  // owned; released on the app's last release.
 } cefspike_helper_app_t;
 
-IMPLEMENT_REFCOUNTING_SIMPLE(cefspike_helper_app_t, cefspike_helper_app,
+// add_ref / has_one_ref / has_at_least_one_ref (release is hand-written below
+// so it can release the owned render-process handler first — same pattern as
+// cef_app.c's cefspike_app).
+IMPLEMENT_REFCOUNTING_MANUAL(cefspike_helper_app_t, cefspike_helper_app,
                              ref_count)
+
+int CEF_CALLBACK cefspike_helper_app_release(cef_base_ref_counted_t* self) {
+  cefspike_helper_app_t* app = (cefspike_helper_app_t*)self;
+  int count = atomic_fetch_sub(&app->ref_count, 1) - 1;
+  if (count == 0) {
+    if (app->rph) {
+      app->rph->base.release(&app->rph->base);
+    }
+    free(app);
+    return 1;
+  }
+  return 0;
+}
 
 void CEF_CALLBACK cefspike_helper_app_on_register_custom_schemes(
     cef_app_t* self, cef_scheme_registrar_t* registrar) {
   (void)self;
   cefspike_register_zapp_scheme(registrar);
+}
+
+// Task 4 — hand CEF the bridge's render-process handler (bridge.c). Called on
+// the render main thread.
+cef_render_process_handler_t* CEF_CALLBACK
+cefspike_helper_app_get_render_process_handler(cef_app_t* self) {
+  cefspike_helper_app_t* app = (cefspike_helper_app_t*)self;
+  if (app->rph) {
+    // Add a reference before returning — CEF releases it when done.
+    app->rph->base.add_ref(&app->rph->base);
+    return app->rph;
+  }
+  return NULL;
 }
 
 static cef_app_t* cefspike_helper_app_create(void) {
@@ -58,6 +96,11 @@ static cef_app_t* cefspike_helper_app_create(void) {
   INIT_CEF_BASE_REFCOUNTED(&app->app.base, cef_app_t, cefspike_helper_app);
   app->app.on_register_custom_schemes =
       cefspike_helper_app_on_register_custom_schemes;
+  app->app.get_render_process_handler =
+      cefspike_helper_app_get_render_process_handler;
+
+  app->rph = cefspike_render_process_handler_create();
+  CHECK(app->rph);
 
   atomic_store(&app->ref_count, 1);
   return &app->app;

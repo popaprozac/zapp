@@ -19,6 +19,7 @@
 #include "include/capi/cef_browser_capi.h"
 #include "include/capi/cef_client_capi.h"
 #include "include/capi/cef_life_span_handler_capi.h"
+#include "include/capi/cef_render_process_handler_capi.h"
 #include "include/capi/cef_scheme_capi.h"
 #include "include/internal/cef_string.h"
 
@@ -149,6 +150,17 @@ void cefspike_scheme_set_assets(const char* index_html, int index_html_len,
 // cef_initialize (from the browser-process handler's on_context_initialized)
 // and after cefspike_scheme_set_assets. Browser-process only.
 void cefspike_install_scheme_handler_factory(void);
+
+// --- bridge.c (Task 4) — the `zapp` JS<->native bridge, RENDER-process half ---
+
+// Create the render-process handler that owns the bridge: it injects the
+// document-start bootstrap + native V8 binding (window.zapp.invoke ->
+// __zappSendNative) in on_context_created, and resolves the JS promise on the
+// "zapp:result" reply in on_process_message_received. Ref count 1; the Helper
+// app (mac_helper.c) owns it and returns it from get_render_process_handler.
+// RENDER-process only — the browser-side half lives in cef_client.c's
+// on_process_message_received (message names: "zapp:invoke"/"zapp:result").
+cef_render_process_handler_t* cefspike_render_process_handler_create(void);
 
 #ifdef __cplusplus
 }

@@ -306,3 +306,156 @@ JSON text is recognizably the `assets/data.json` content (the `"note"` field
 mentioning brotli, the `items` array); (3) `[worker] tick N` keeps
 incrementing in the console throughout. If all hold -> GATE 3 PASS (native
 brotli-decode confirmed for custom-scheme responses).
+
+---
+
+## Task 4 (MAKE-OR-BREAK): the `zapp` bridge — one JS↔native round-trip
+
+Does the Zapp JS↔native contract map onto CEF? CEF's own promise plumbing
+(`CefMessageRouter` / `window.cefQuery`) is **C++-only** (`libcef_dll_wrapper`);
+on the raw C API we hand-roll the equivalent with `cef_v8` + `cef_process_message`.
+Result: **yes, it maps cleanly** — the same shape as the WKWebview bridge
+(document-start user-script + a native message handler + a promise-resolve
+hook), just split across CEF's render↔browser process boundary.
+
+### What changed
+
+- **`bridge.c` (NEW, render-process half)** — a `cef_render_process_handler_t`
+  (`on_context_created` + `on_process_message_received`) plus a `cef_v8_handler_t`.
+  Compiled **into the Helper subprocess only** (see `build.sh`), because the
+  render process IS the Helper.
+- **`mac_helper.c`** — the Helper's minimal `cef_app_t` now returns the bridge
+  handler from `get_render_process_handler` (switched to `IMPLEMENT_REFCOUNTING_
+  MANUAL` + a hand-written release that frees the owned `rph`, mirroring
+  `cef_app.c`'s browser-process-handler ownership).
+- **`cef_client.c` (browser-process half)** — implements the client's
+  `on_process_message_received` for `"zapp:invoke"`: runs a STUB `greet` service
+  and ships `"zapp:result"` back to `PID_RENDERER`.
+- **`assets/index.html`** — adds an "Invoke greet" button that
+  `await window.zapp.invoke("greet", {name:"World"})` and renders the result
+  into `#out`. The T3 brotli fetch demo is preserved (now under `#br-out`).
+- **`cef_spike.h`** — declares `cefspike_render_process_handler_create()` and
+  pulls in `cef_render_process_handler_capi.h`.
+
+### Message-name protocol + which handler lives where
+
+| name          | direction         | args                              | sender                              | handler                                            |
+|---------------|-------------------|-----------------------------------|-------------------------------------|----------------------------------------------------|
+| `zapp:invoke` | RENDER → BROWSER  | `[0]=id:int,[1]=name:str,[2]=argsJSON:str` | `bridge.c` V8 handler → `frame->send_process_message(PID_BROWSER)` | `cef_client.c` `on_process_message_received` (**cef_client_t**) |
+| `zapp:result` | BROWSER → RENDER  | `[0]=id:int,[1]=resultJSON:str`   | `cef_client.c` → `frame->send_process_message(PID_RENDERER)` | `bridge.c` `on_process_message_received` (**cef_render_process_handler_t**) |
+
+`on_process_message_received` exists on **both** `cef_client_t` (browser side)
+and `cef_render_process_handler_t` (render side) — each side wires its own; both
+processes agree on the two literal names (`#define`d identically in both files).
+
+### V8 binding + promise-resolve mechanism
+
+- **JS→native binding.** In `on_context_created` we `context->enter()`, grab
+  `get_global()`, create `cef_v8_value_create_function("__zappSendNative", handler)`,
+  and `set_value_bykey(global, "__zappSendNative", fn)`. The `cef_v8_handler_t.execute`
+  reads `(id, name, argsJSON)`, finds its frame via
+  `cef_v8_context_get_current_context()->get_frame()`, and ships the `zapp:invoke`
+  process message. `window.zapp.invoke()` (defined in the bootstrap) wraps this:
+  it mints an id, stores `{resolve,reject}` in a pending map, and calls
+  `__zappSendNative(id, name, JSON.stringify(args))`.
+- **native→JS resolve.** Chosen path: **`frame->execute_java_script(
+  "window.__zappResolve(<id>, <resultJSON>)")`** from the render
+  `on_process_message_received`. This is the "simplest robust path" — it
+  sidesteps storing a `cef_v8_context_t` across the async round-trip (the render
+  `frame` handed to the callback is enough to re-enter JS). `resultJSON` is a
+  JSON *value* (the browser already quoted+escaped the string via
+  `cefspike_json_quote`), so it splices verbatim into the JS call and lands as
+  the resolved value.
+
+### Doc-start injection point
+
+`on_context_created(browser, frame, context)` **is** the document-start moment
+(V8 context just built, before page scripts run) — the exact analog of
+WKWebView's `WKUserScriptInjectionTimeAtDocumentStart`. We (a) bind
+`__zappSendNative` on the global via the V8 API, then (b) run the bootstrap JS
+(defines `window.zapp.invoke`, the `id→{resolve,reject}` pending map, and
+`window.__zappResolve`/`__zappReject`) via `execute_java_script`. Binding before
+running the bootstrap guarantees `__zappSendNative` exists by the time any page
+script calls `invoke()`.
+
+### FINDING — CEF C-API callback params are OWNED refs (must Release)
+
+The load-bearing ABI detail for correctness. Every ref-counted argument to a
+client callback is `refptr_diff` in the translator (`libcef_dll/cpptoc/*.cc`,
+e.g. `render_process_handler_cpptoc.cc`, `client_cpptoc.cc`, `v8_handler_cpptoc.cc`):
+**ownership is transferred to the callee, which must `->base.release()` it.**
+This matches the existing T0 life-span handler releasing its `browser` param.
+So the bridge releases: `browser`/`frame`/`context` in `on_context_created`;
+`browser`/`frame`/`message` in both `on_process_message_received`s; and the V8
+handler's `object` **and every `arguments[i]`** (`refptr_vec_diff_byref_const`).
+Getters that return new refs (`get_argument_list`, `get_frame`,
+`get_current_context`, `get_global`, `cef_v8_value_create_function`,
+`cef_process_message_create`) are released too; `cef_string_userfree_t` results
+are `cef_string_userfree_free`'d. Getting this wrong is a leak (under-release)
+or a use-after-free crash (over-release), so it was verified against the
+translator source, not guessed.
+
+### JSON at the boundary (spike-grade)
+
+The browser stub hand-rolls two tiny helpers in `cef_client.c`:
+`cefspike_json_quote` (encode a C string as a JSON value, minimal escaping,
+heap-allocated to dodge the stack-buffer-truncation bug family) and
+`cefspike_json_str_field` (extract `"name"` from `{"name":"World"}` — no
+nested-escape handling; enough for the spike). Production `webEngine:"chromium"`
+would route real args/results through the same typed C-ABI Zapp already uses for
+WKWebView, not ad-hoc string surgery — flagged for the real implementation.
+
+### Process-boundary friction worth logging
+
+- **No `CefMessageRouter`.** The C++ helper that gives you `window.cefQuery`
+  + automatic promise correlation is unavailable on the C API. The id↔promise
+  correlation, the pending map, and the two-message protocol are all
+  hand-rolled here. It's ~1 file of boilerplate, but it IS boilerplate every
+  raw-C-API embedder re-implements. (Production could still link
+  `libcef_dll_wrapper` for just the message router if desired — a size/complexity
+  trade to weigh later.)
+- **The bootstrap JS lives in a C string** (`kZappBootstrapJS` in `bridge.c`),
+  contrary to Zapp's usual "worker/bootstrap JS belongs in `bootstrap/*.ts`
+  through codegen" convention — because the render handler runs in the Helper
+  subprocess, which never runs Nim and never `staticRead()`s an asset. `bridge.c`
+  is the only code that reaches the render V8 context, so the bootstrap must
+  compile INTO the Helper binary. A production port would generate this string
+  from a `.ts` source at build time and `#include` it.
+- **Two builds, one contract.** The invoke/result names are `#define`d in two
+  separately-compiled translation units (`bridge.c` → Helper, `cef_client.c` →
+  main app). Nothing enforces they agree except discipline; a shared header
+  constant would be the production fix.
+
+### Evidence gathered (non-visual)
+
+`bash spikes/cef-macos/build.sh` → `[build] complete:` + fresh binary mtime;
+`nim check … main.nim` exit 0 (clean). The Helper binary links the bridge:
+`nm` shows `_cefspike_render_process_handler_create`,
+`_cefspike_rph_on_context_created`, `_cefspike_v8_handler_execute`; `strings`
+shows the `__zappSendNative` bootstrap. Two bounded runs (~35s, ~10s): app
+launches, browser created, `zapp://app/index.html` served, `[worker] tick N`
+keeps incrementing, **clean exit 0, zero crash reports**.
+
+**What the bounded runs did NOT show:** any render-side page-JS execution — the
+render process's `fprintf(stderr, …)` never reached the captured log, AND T3's
+own `fetch("zapp://app/data.json")` **also never served** in these headless/
+detached runs (no `serving … data.json` line). I.e. the render process loads
+the top resource but doesn't run page scripts without a real GUI session, so the
+round-trip is **not auto-observable here** — it is genuinely T6's on-screen job,
+exactly as the brief scopes it. This is an environment limitation, not a bridge
+defect (the browser-side handler, which IS in the captured process, would have
+logged `[browser] zapp:invoke` had a message arrived; none did because no page
+JS ran to send one).
+
+### GATE 4 — remaining human step (T6)
+
+Run `open spikes/cef-macos/build/cef-spike.app`. Confirm: (1) the window shows
+the Task 4 page with an **"Invoke greet"** button; (2) clicking it replaces
+`#out` with **`Hello from Zapp! (to World)`** (contains `Hello from Zapp!`) —
+proving the full JS→render-V8→`zapp:invoke` IPC→browser stub→`zapp:result`
+IPC→render→`__zappResolve`→awaited-Promise round-trip across the process
+boundary; (3) the T3 `#br-out` brotli demo still shows readable JSON; (4)
+`[worker] tick N` keeps incrementing throughout. Console should show
+`[cef-spike][browser] zapp:invoke id=… service=greet …` +
+`[cef-spike][browser] zapp:result id=… -> "Hello from Zapp! (to World)"`. If all
+hold → GATE 4 PASS (JS↔native bridge maps onto CEF).

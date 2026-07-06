@@ -1,30 +1,62 @@
 <!doctype html>
 <!--
-  CEF spike (Task 3) — served at zapp://app/index.html by the custom "zapp"
-  scheme handler (see ../scheme_handler.c). Two things this page proves:
+  CEF spike (Task 3 + Task 4) — served at zapp://app/index.html by the custom
+  "zapp" scheme handler (see ../scheme_handler.c). What this page proves:
 
-    1. The zapp:// scheme loads a real page (this file), not a data: URL.
-    2. fetch("zapp://app/data.json") — served BROTLI-COMPRESSED with
-       Content-Encoding: br by the SAME resource-handler machinery (the
-       handler does NOT decompress; see scheme_handler.c) — comes back as
-       plain decoded text. If #out below shows readable JSON, Chromium's
-       network stack decoded br natively. If it shows garbage/binary, the
-       probe FAILED (see FINDINGS.md Task 3 for the actual result).
+    T3.1  The zapp:// scheme loads a real page (this file), not a data: URL.
+    T3.2  fetch("zapp://app/data.json") — served BROTLI-COMPRESSED with
+          Content-Encoding: br by the SAME resource-handler machinery (the
+          handler does NOT decompress; see scheme_handler.c) — comes back as
+          plain decoded text. Readable JSON in #br-out => Chromium decoded br
+          natively (see FINDINGS.md Task 3).
+    T4    Clicking "Invoke greet" calls window.zapp.invoke("greet", {name})
+          — the bridge injected at document-start by the RENDER process
+          (../bridge.c). That marshals JS -> render V8 -> "zapp:invoke" IPC ->
+          BROWSER process stub service (../cef_client.c) -> "zapp:result" IPC
+          -> render -> window.__zappResolve -> the awaited Promise. If #out
+          shows "Hello from Zapp!" the full cross-process round-trip works.
 -->
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>CEF Spike — Task 3 (zapp:// scheme + brotli probe)</title>
+  <title>CEF Spike — Task 4 (zapp bridge round-trip)</title>
   <style>
     body { font: 14px/1.5 -apple-system, sans-serif; margin: 2rem; }
+    button { font: inherit; padding: 0.4rem 0.9rem; margin-bottom: 0.5rem; }
     pre { background: #f2f2f2; padding: 1rem; white-space: pre-wrap; word-break: break-all; }
+    h2 { font-size: 1rem; margin: 1.5rem 0 0.25rem; }
   </style>
 </head>
 <body>
   <h1>CEF</h1>
   <p>Loaded via <code>zapp://app/index.html</code> (custom scheme handler).</p>
-  <pre id="out">fetching zapp://app/data.json …</pre>
+
+  <h2>Task 4 — <code>zapp</code> bridge (JS &rarr; native &rarr; JS)</h2>
+  <button id="invoke">Invoke greet</button>
+  <pre id="out">click "Invoke greet" to call window.zapp.invoke("greet", {name:"World"}) …</pre>
+
+  <h2>Task 3 — brotli-direct probe</h2>
+  <pre id="br-out">fetching zapp://app/data.json …</pre>
+
   <script>
+    // --- Task 4: exercise the bridge round-trip -----------------------------
+    document.getElementById("invoke").addEventListener("click", function () {
+      var out = document.getElementById("out");
+      out.textContent = "invoking …";
+      if (!window.zapp || typeof window.zapp.invoke !== "function") {
+        out.textContent = "window.zapp.invoke missing — bridge not injected";
+        return;
+      }
+      window.zapp.invoke("greet", { name: "World" })
+        .then(function (result) {
+          out.textContent = result;  // expect: Hello from Zapp! (to World)
+        })
+        .catch(function (err) {
+          out.textContent = "invoke failed: " + err;
+        });
+    });
+
+    // --- Task 3: brotli-direct fetch probe (unchanged) ----------------------
     fetch("zapp://app/data.json")
       .then(function (res) {
         var encoding = res.headers.get("content-encoding");
@@ -34,13 +66,13 @@
         });
       })
       .then(function (r) {
-        document.getElementById("out").textContent =
+        document.getElementById("br-out").textContent =
           "Content-Encoding: " + (r.encoding || "(none)") + "\n" +
           "Content-Type: " + (r.contentType || "(none)") + "\n\n" +
           r.text;
       })
       .catch(function (err) {
-        document.getElementById("out").textContent = "fetch failed: " + err;
+        document.getElementById("br-out").textContent = "fetch failed: " + err;
       });
   </script>
 </body>
