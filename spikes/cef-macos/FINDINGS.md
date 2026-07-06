@@ -153,7 +153,7 @@ Two deliverables: close the worker-on-CEF gap this doc's "Still OPEN" list
 above tracked, and clear 5 of the Minors accumulated across the prod slice
 (above) + this sub-cycle's own spec.
 
-**Worker on CEF — CLOSED (structurally; human visual gate still pending).**
+**Worker on CEF — CLOSED (human visual gate PASSED 2026-07-06).**
 The spec's original premise (a missing broadcast→CEF branch in
 `darwin_webview_eval_all`, `webview.m`) turned out to be **stale** — that
 branch was already shipped, same-day, in `6f58489`, one layer down inside
