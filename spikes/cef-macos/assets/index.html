@@ -1,7 +1,8 @@
 <!doctype html>
 <!--
-  CEF spike (Task 3 + Task 4) — served at zapp://app/index.html by the custom
-  "zapp" scheme handler (see ../scheme_handler.c). What this page proves:
+  CEF spike (Task 3 + Task 4 + Task 5) — served at zapp://app/index.html by
+  the custom "zapp" scheme handler (see ../scheme_handler.c). What this page
+  proves:
 
     T3.1  The zapp:// scheme loads a real page (this file), not a data: URL.
     T3.2  fetch("zapp://app/data.json") — served BROTLI-COMPRESSED with
@@ -15,11 +16,20 @@
           BROWSER process stub service (../cef_client.c) -> "zapp:result" IPC
           -> render -> window.__zappResolve -> the awaited Promise. If #out
           shows "Hello from Zapp!" the full cross-process round-trip works.
+    T5    A REAL libzjs worker (../zjs_worker.c) runs a JS setInterval tick on
+          its own native thread, entirely independent of this CEF page — the
+          worker doesn't know or care that CEF (vs. WKWebView) is rendering
+          it. Each tick calls window.__zappWorker(v) via
+          frame->execute_java_script (the browser process pushing JS into
+          this page, same direction/mechanism as T4's window.__zappResolve).
+          Live ticks appearing in #worker-out below, without ever clicking
+          anything, is the demo: the worker layer is untouched by the render
+          engine.
 -->
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>CEF Spike — Task 4 (zapp bridge round-trip)</title>
+  <title>CEF Spike — Task 5 (real ZJS worker -> page)</title>
   <style>
     body { font: 14px/1.5 -apple-system, sans-serif; margin: 2rem; }
     button { font: inherit; padding: 0.4rem 0.9rem; margin-bottom: 0.5rem; }
@@ -31,6 +41,9 @@
   <h1>CEF</h1>
   <p>Loaded via <code>zapp://app/index.html</code> (custom scheme handler).</p>
 
+  <h2>Task 5 — real ZJS worker &rarr; page (native thread, independent of CEF)</h2>
+  <pre id="worker-out">waiting for the first tick from the real libzjs worker …</pre>
+
   <h2>Task 4 — <code>zapp</code> bridge (JS &rarr; native &rarr; JS)</h2>
   <button id="invoke">Invoke greet</button>
   <pre id="out">click "Invoke greet" to call window.zapp.invoke("greet", {name:"World"}) …</pre>
@@ -39,6 +52,23 @@
   <pre id="br-out">fetching zapp://app/data.json …</pre>
 
   <script>
+    // --- Task 5: worker -> page push -----------------------------------------
+    // Called from the browser process (zjs_worker.c's host_native_post, via
+    // frame->execute_java_script) once a second — one call per REAL libzjs
+    // setInterval tick, running on its own native thread that knows nothing
+    // about CEF. `v` arrives already-parsed (the native side splices the JS
+    // value in directly, same convention as T4's window.__zappResolve).
+    (function () {
+      var lines = [];
+      var MAX_LINES = 20;  // keep the demo readable on a long-running spike.
+      window.__zappWorker = function (v) {
+        var when = new Date(v.at).toLocaleTimeString();
+        lines.push("[" + when + "] tick " + v.tick + " — " + v.source);
+        if (lines.length > MAX_LINES) lines.shift();
+        document.getElementById("worker-out").textContent = lines.join("\n");
+      };
+    })();
+
     // --- Task 4: exercise the bridge round-trip -----------------------------
     document.getElementById("invoke").addEventListener("click", function () {
       var out = document.getElementById("out");

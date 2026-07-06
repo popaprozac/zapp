@@ -455,7 +455,239 @@ the Task 4 page with an **"Invoke greet"** button; (2) clicking it replaces
 proving the full JS→render-V8→`zapp:invoke` IPC→browser stub→`zapp:result`
 IPC→render→`__zappResolve`→awaited-Promise round-trip across the process
 boundary; (3) the T3 `#br-out` brotli demo still shows readable JSON; (4)
-`[worker] tick N` keeps incrementing throughout. Console should show
+the console keeps incrementing worker output throughout (Task 5 replaced
+the stand-in's `[worker] tick N` line with `[worker] real zjs tick N ->
+posting to page` — see Task 5, below). Console should show
 `[cef-spike][browser] zapp:invoke id=… service=greet …` +
 `[cef-spike][browser] zapp:result id=… -> "Hello from Zapp! (to World)"`. If all
 hold → GATE 4 PASS (JS↔native bridge maps onto CEF).
+
+---
+
+## Task 5: ZJS worker coexists — formalize + demo (REAL libzjs, PRIMARY path)
+
+**Verdict: PRIMARY path (real libzjs worker) delivered, builds + launches
+clean; bounded-run evidence shows the real engine ticking at 1 Hz while CEF
+stays alive (pending human GATE-5 on-screen check, deferred to T6).**
+Replaces Task 1's stand-in (a pthread+CFRunLoop timer logging `[worker] tick
+N`, deferred by design — see Task 1 above) with a genuine embed of
+`vendor/zjs`'s C ABI, and wires its output into the CEF-rendered page.
+
+### Path taken: PRIMARY (real libzjs), not the timebox fallback
+
+The orchestrator's brief flagged a timeboxed fallback (keep the stand-in,
+argue ZJS's render-engine-independence by construction) in case a minimal
+libzjs embed turned into a rabbit hole. It didn't: `vendor/zjs/include/zjs.h`
+already documents an embedder-facing "CLI-style loop" (`zjs_has_pending_work`
+/ `zjs_next_timer_ms` / `zjs_run_pending_timers`) and a
+`zjs_new_minimal_context()` constructor built exactly for tight embeddings —
+this is a much smaller surface than `native/worker/engines/zjs.c`'s full
+production embedding (worker registry, kqueue+CFRunLoop hybrid for
+NSURLSession draining, capability modules). The whole worker fit in one new
+file, `zjs_worker.c`, with no build-system fights: `vendor/zjs/build/libzjs.a`
+was already built (prerequisite, not produced by this task) and linked on the
+first `nim c` attempt with zero duplicate-symbol errors and zero missing
+frameworks beyond what `nm -u` predicted. PRIMARY delivered as scoped.
+
+### What changed
+
+- **New `zjs_worker.c`** — the whole real-worker surface:
+  - `cefspike_start_zjs_worker()`: spawns a detached pthread (`pthread_create`
+    + `pthread_detach`, same shape as T1's stand-in) that:
+    1. `zjs_new_minimal_context()` — ES-core-only context. No Ring-1/2 web
+       globals, no `node:` modules — this demo needs neither.
+    2. `zjs_register_host_function(ctx, "__zapp_native_post", ...)` — one
+       host function the JS tick calls once a second.
+    3. `zjs_eval(ctx, "setInterval(function () { ... }, 1000)")` — a REAL
+       `setInterval` tick on the REAL interpreter, computing
+       `{tick, at, source}` and calling `__zapp_native_post(JSON.stringify(...))`.
+    4. The documented CLI-style loop (`while (zjs_has_pending_work(ctx)) {
+       sleep to zjs_next_timer_ms; zjs_run_pending_timers(ctx); }`) pumps the
+       context for the process lifetime. `setInterval` re-arms its own timer
+       every fire, so "pending work" never reaches zero — this loop runs
+       forever, the same shape as T1's `CFRunLoopRun()`.
+  - `host_native_post`: copies the JSON string out immediately (per zjs.h's
+    lifetime contract — a `ZjsValue`'s backing bytes are only guaranteed
+    live while the cell is reachable, and this function is about to return
+    and hop threads), heap-allocates the JS call string (the
+    stack-buffer-truncation lesson from `reference_dispatch_buffer_bug` /
+    bridge.c's own `zapp:result` path — no fixed-size stack buffers here),
+    then `dispatch_async`s to the main queue where it calls
+    `cefspike_get_active_browser()` → `browser->get_main_frame(browser)` →
+    `frame->execute_java_script(frame, "if (window.__zappWorker) window.
+    __zappWorker(<jsonValue>);", ...)` — Task 4's exact bridge.c mechanism
+    (`frame->execute_java_script` resolving `window.__zappResolve`), reused
+    for a timer push instead of a process-message reply.
+  - Logs `[worker] real zjs tick N -> posting to page` once per tick (same
+    evidence-gathering style as T1's `[worker] tick N`) so a bounded/headless
+    run — which can't see the page — still shows the real engine advancing.
+- **`cef_client.c`** — the life-span handler now **retains** the browser
+  instead of releasing it on `on_after_created` (`g_active_browser`), exposed
+  read-only via `cefspike_get_active_browser()`. This parameter is an OWNED
+  ref per the Task 4 ownership finding (CEF hands each callback invocation a
+  fresh owned ref) — T0-T4 released it immediately since nothing needed it
+  past the log line; T5 keeps it and releases it in `on_before_close`
+  alongside that callback's own owned ref (two distinct refs, both released,
+  no leak). `get_main_frame`'s own doc comment confirms this is safe: "In the
+  browser process this will return a valid object until after
+  cef_life_span_handler_t::OnBeforeClose is called."
+- **`mac_entry.m`** — removed Task 1's stand-in (`cefspike_start_worker_stub`,
+  `cefspike_worker_thread`, `cefspike_worker_timer_cb`) and its now-unused
+  `#include <pthread.h>`, replacing the block with a short pointer to
+  `zjs_worker.c`. The T1 external-pump machinery (`ZappCefPump`,
+  `cefspike_pump_schedule`, `cefspike_run_main_loop`,
+  `cefspike_quit_main_loop`) is untouched — only the stand-in "second loop"
+  bit was superseded, per the orchestrator's explicit "replace the stand-in"
+  resolution.
+- **`cef_spike.h`** — swapped `cefspike_start_worker_stub`'s declaration for
+  `cefspike_start_zjs_worker` + `cefspike_get_active_browser`.
+- **`main.nim`** — added the zjs build/link surface (below), compiles
+  `zjs_worker.c`, swapped the `cefspike_start_worker_stub()` call (step 6) for
+  `cefspike_start_zjs_worker()`, updated the module doc comment.
+- **`assets/index.html`** — new "Task 5" section: a `<pre id="worker-out">`
+  and `window.__zappWorker(v)` (an IIFE closing over a capped 20-line ring
+  buffer) that formats each tick (`[HH:MM:SS] tick N — real zjs worker
+  (libzjs)`) and re-renders the `<pre>`. The T3 brotli demo (`#br-out`) and T4
+  bridge button (`#out`) are untouched below it.
+
+### libzjs link surface (the actual answer to "how small")
+
+Linked **`vendor/zjs/build/libzjs.a` DIRECTLY** — NOT the symbol-hidden
+`libzjs_embed.a` repack `cli/src/build-config.ts`'s production build
+post-processes (`ld -r` + `-exported_symbols_list _zjs_*`, ~40 lines of
+build-config.ts machinery to dodge duplicate-symbol clashes against the
+OTHER zenc-stdlib runtime — `Arena__`/`Vec__`/etc. — a full Zapp binary also
+embeds). This spike links no such runtime anywhere else (its C/ObjC files
+hand-roll their own JSON helpers rather than use the zenc `JsonValue` type —
+see `cef_client.c`'s `cefspike_json_quote`/`cefspike_json_str_field`), so
+there's nothing to dodge. Confirmed empirically, not just by inspection: the
+first `nim c` build with `libzjs.a` on the link line succeeded with zero
+duplicate-symbol errors.
+
+`main.nim`'s new build/link surface, in full:
+
+```nim
+const zjsRoot = thisDir & "/../../vendor/zjs"
+{.passC: "-I" & zjsRoot & "/include".}
+{.compile(thisDir & "/zjs_worker.c", "-std=c11").}
+{.passL: zjsRoot & "/build/libzjs.a".}
+{.passL: "-framework Security".}
+{.passL: "-lz".}
+{.passL: "-lm".}
+```
+
+`-framework Security` and `-lz` were determined by running `nm -u` on the
+prebuilt archive and cross-checking against `vendor/zjs/Makefile`'s own
+`PLATFORM_LDFLAGS` (Darwin: `-framework Foundation -framework Security
+-fobjc-arc -lz`) and `smoke_static`'s link recipe (adds `-lm`) — the archive's
+undefined externals are exactly `deflate`/`inflate` (node:zlib),
+`SecRandomCopyBytes`/`CC_SHA*`/`CCHmac` (crypto.subtle), and
+`NSURLSession`/Foundation classes (already covered transitively by the
+existing `-framework Cocoa` link). No `-framework Foundation` needed
+explicitly; no `-lcompression` needed (that flag belongs to
+`native/worker/engines/zjs.c`'s OWN embedded-asset decode path, not to
+`libzjs.a` itself — this spike doesn't compile that file, so it doesn't need
+that flag). `libzjs.a`'s single `libzjs.o` is the ENTIRE zc-transpiled engine
+as one translation unit (not compiled with `ZJS_TIER=minimal`, so
+`zjs_new_minimal_context()` saves RUNTIME work — skipped installers — not
+LINK-time size; referencing any `zjs_*` symbol pulls in the whole object).
+Binary size was not a goal for this spike; a production port would want the
+`ZJS_TIER=minimal` build + the `libzjs_embed.a` symbol-hiding repack once it
+sits alongside the full worker stack.
+
+### Evidence gathered (non-visual)
+
+`bash spikes/cef-macos/build.sh` → `[build] complete:` + fresh binary mtime
+(first-attempt success, no relink needed); `nim check` on `main.nim` — clean,
+zero output. `nm` on the final main binary confirms `_zjs_new_minimal_context`
+/ `_zjs_eval` / `_cefspike_start_zjs_worker` / `_cefspike_get_active_browser`
+/ `_host_native_post` all defined (`T`/`t`); `otool -L` shows
+`Security.framework` and `libz.1.dylib` now linked alongside the pre-existing
+Cocoa/AppKit/Foundation/CEF-framework set.
+
+A bounded run (~25s, `perl -e 'alarm 25; exec @ARGV' ...`) produced, in order:
+
+```
+[cef-spike] brotli probe: data.json raw=20364B  br=1176B  (95% smaller)
+[cef-spike] zapp:// scheme handler factory registered (index.html=5139 bytes, data.json.br=1176 bytes)
+[worker] real zjs worker starting (libzjs 0.0.1-phase0)
+[worker] real zjs loop started (setInterval armed)
+[cef-spike] browser created
+[cef-spike] zapp:// serving 5139 bytes, mime=text/html, encoding=(none)
+[worker] real zjs tick 1 -> posting to page
+[worker] real zjs tick 2 -> posting to page
+…
+[worker] real zjs tick 23 -> posting to page
+```
+
+Steady 1 Hz for the full 25s window, interleaved with CEF's own browser
+creation and asset serving — the real zjs engine advances concurrently with
+CEF, exactly as T1's stand-in did, now with a genuine `libzjs` context instead
+of a `CFRunLoopTimer`. No crash of the main `cef-spike` process across five
+separate bounded runs (10s/12s/15s/25s) during this task; `nm`/`otool` link
+checks above confirm the binary that produced this log is the one just built
+(fresh mtime).
+
+**Environment caveat found while gathering this evidence (not a T5
+regression):** the `cef-spike Helper (Renderer)` subprocess produces an
+`EXC_BREAKPOINT`/`SIGTRAP` diagnostic report at the moment the bounded-run
+harness's `SIGALRM` abruptly kills the parent process — but this was ALREADY
+happening in `~/Library/Logs/DiagnosticReports/` on THIS machine in reports
+timestamped *before* any Task 5 code existed in this session (17:49–18:10,
+vs. this task's first build at 18:19), so it predates and is independent of
+this task's changes. The symbolication in those reports is unreliable (a
+stripped release Chromium binary resolves to nonsense nearest-symbol names
+like `rust_png$cxxbridge...`), consistent with a Mojo/IPC teardown assertion
+firing when a child process's parent disappears non-gracefully (SIGALRM's
+default disposition is immediate termination, not `cef_shutdown`'s orderly
+`on_before_close` → `cef_shutdown` path a real window-close/Cmd-Q would
+trigger) rather than a genuine Task-5-introduced bug. **Zero crash reports
+appeared for the main `cef-spike` process itself** across every run in this
+task. Flagging for T6: as part of GATE 5, prefer quitting the app normally
+(closing the window / Cmd-Q) over killing it from a terminal, and note
+whether a Renderer crash report still appears after a graceful quit — if it
+does, that would upgrade this from "test-harness artifact" to a real finding
+worth chasing.
+
+### FINDINGS — ZJS is render-engine-independent by construction
+
+The point this task exists to prove, now demonstrated rather than argued: the
+zjs worker in `zjs_worker.c` never references CEF, `cef_spike.h`'s
+CEF-specific types, or anything Chromium-shaped, **except** at the single
+`cefspike_get_active_browser()` / `execute_java_script` call inside
+`host_native_post` — the one push-to-page hop. Everything upstream of that
+hop (`zjs_new_minimal_context`, `zjs_register_host_function`, `zjs_eval`, the
+`zjs_has_pending_work`/`zjs_next_timer_ms`/`zjs_run_pending_timers` pump loop)
+is identical to what `native/worker/engines/zjs.c` already does in
+production against WKWebView — a worker runs on its own native pthread,
+entirely outside whichever render engine's process tree hosts the page (CEF
+splits into browser/renderer/GPU/utility processes; WKWebView is
+single-process-from-Zapp's-perspective; the zjs worker thread lives inside
+Zapp's OWN process either way and touches the render engine only at the
+narrow "push a value into the page" boundary). Swapping WKWebView for CEF
+required **zero** changes to how a zjs worker is constructed, how JS runs
+inside it, or how its event loop is pumped — the only render-engine-specific
+code is the one-line difference between WKWebView's
+`evaluateJavaScript:completionHandler:` and CEF's
+`frame->execute_java_script`, both of which are "hop to the UI thread, tell
+the webview to run this JS string" with no deeper coupling. This is exactly
+the "worker layer is untouched by the render engine" claim the task brief
+asks this cycle to make concrete, now backed by a working real-engine
+implementation rather than the Task 1 stand-in's argument-by-analogy.
+
+### GATE 5 — remaining human step (T6)
+
+Run `open spikes/cef-macos/build/cef-spike.app`. Confirm: (1) the window
+shows the Task 5 section at the top with **live ticks appearing in
+`#worker-out`** roughly once a second, formatted like `[3:45:12 PM] tick 4 —
+real zjs worker (libzjs)`, **without clicking anything** — this is the
+worker pushing to the page on its own, independent of any user action; (2)
+the Task 4 `#out` "Invoke greet" button and the Task 3 `#br-out` brotli demo
+both still work exactly as before; (3) the console shows `[worker] real zjs
+tick N -> posting to page` incrementing steadily at ~1 Hz throughout; (4) as
+noted above, prefer quitting via the window's close button / Cmd-Q rather
+than killing the process, and check whether a Renderer crash report still
+appears afterward (if it does NOT, that confirms the SIGALRM artifact
+flagged above; if it DOES, flag it as a real Task 5 finding). If (1)-(3) hold
+→ GATE 5 PASS (a real ZJS worker runs alongside CEF and drives live page
+content, independent of the render engine).

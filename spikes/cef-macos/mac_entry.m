@@ -14,7 +14,6 @@
 
 #import <Cocoa/Cocoa.h>
 
-#include <pthread.h>
 #include <string.h>
 
 #include "cef_spike.h"
@@ -302,50 +301,11 @@ void cefspike_quit_main_loop(void) {
 }
 
 // ---------------------------------------------------------------------------
-// Task 1 — second concurrent loop (coexistence probe).
-//
-// STAND-IN for a real ZJS worker: a detached pthread running its own CFRunLoop
-// with a repeating timer. This is the SAME loop shape a real ZJS worker uses on
-// Apple — native/worker/engines/zjs.c runs each worker on a dedicated pthread
-// whose main loop ticks CFRunLoopRunInMode (alongside a kqueue) so NSURLSession
-// completions drain. Here a 1s repeating CFRunLoopTimer stands in for the JS
-// setInterval tick, logging "[worker] tick N". The full real ZJS worker (link
-// libzjs + the worker registry + capability-module machinery) is disproportionate
-// to pull into this standalone nim-c spike and is owned by T5.
+// Task 1's second-concurrent-loop coexistence probe lived here as a STAND-IN
+// for a real ZJS worker: a detached pthread running its own CFRunLoop with a
+// repeating timer logging "[worker] tick N" (the same loop SHAPE a real ZJS
+// worker uses on Apple — see native/worker/engines/zjs.c). Task 5 replaces it
+// with the real thing: a genuine libzjs context running real JS, on its own
+// pthread — see zjs_worker.c (cefspike_start_zjs_worker). FINDINGS.md Task 1
+// documents why the stand-in existed and Task 5 documents the swap.
 // ---------------------------------------------------------------------------
-
-static void cefspike_worker_timer_cb(CFRunLoopTimerRef timer, void* info) {
-  (void)timer;
-  (void)info;
-  static long tick = 0;
-  ++tick;
-  fprintf(stderr, "[worker] tick %ld\n", tick);
-}
-
-static void* cefspike_worker_thread(void* arg) {
-  (void)arg;
-  @autoreleasepool {
-    CFRunLoopRef loop = CFRunLoopGetCurrent();
-    CFRunLoopTimerRef timer = CFRunLoopTimerCreate(
-        kCFAllocatorDefault,
-        CFAbsoluteTimeGetCurrent() + 1.0,  // first fire in 1s
-        1.0,                               // repeat every 1s
-        0, 0, cefspike_worker_timer_cb, NULL);
-    CFRunLoopAddTimer(loop, timer, kCFRunLoopDefaultMode);
-    CFRelease(timer);
-    fprintf(stderr,
-            "[worker] stand-in loop started (dedicated pthread + CFRunLoop)\n");
-    CFRunLoopRun();  // blocks this thread forever (process teardown reclaims it)
-  }
-  return NULL;
-}
-
-void cefspike_start_worker_stub(void) {
-  pthread_t thread;
-  int rc = pthread_create(&thread, NULL, cefspike_worker_thread, NULL);
-  if (rc != 0) {
-    fprintf(stderr, "[worker] pthread_create failed: %d\n", rc);
-    return;
-  }
-  pthread_detach(thread);
-}

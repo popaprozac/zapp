@@ -48,13 +48,26 @@ IMPLEMENT_REFCOUNTING_SIMPLE(cefspike_life_span_handler_t,
                              cefspike_life_span_handler,
                              ref_count)
 
+// Task 5: the currently-hosted browser, retained across its lifetime so the
+// zjs worker thread (zjs_worker.c) can reach the page. `browser` handed to
+// on_after_created is an OWNED ref (CEF C-API callback params are
+// transferred to the callee — see FINDINGS.md Task 4's ownership finding);
+// T0-T4 released it immediately since nothing needed it beyond the log
+// line. T5 keeps it instead and releases it in on_before_close.
+static cef_browser_t* g_active_browser = NULL;
+
+cef_browser_t* cefspike_get_active_browser(void) {
+  return g_active_browser;
+}
+
 void CEF_CALLBACK
 cefspike_life_span_on_after_created(cef_life_span_handler_t* self,
                                     cef_browser_t* browser) {
   (void)self;
   fprintf(stderr, "[cef-spike] browser created\n");
-  // Release the callback parameter (we don't retain the browser for T0).
-  browser->base.release(&browser->base);
+  // Keep the owned ref (Task 5) instead of releasing it — see
+  // cefspike_get_active_browser above.
+  g_active_browser = browser;
 }
 
 int CEF_CALLBACK cefspike_life_span_do_close(cef_life_span_handler_t* self,
@@ -70,6 +83,13 @@ void CEF_CALLBACK
 cefspike_life_span_on_before_close(cef_life_span_handler_t* self,
                                    cef_browser_t* browser) {
   (void)self;
+  // Task 5: release the EXTRA ref kept alive since on_after_created — a
+  // DIFFERENT owned ref than the |browser| parameter below (CEF hands a
+  // fresh owned ref to each callback invocation, per the same convention).
+  if (g_active_browser == browser) {
+    g_active_browser = NULL;
+    browser->base.release(&browser->base);
+  }
   browser->base.release(&browser->base);
   // Single-window spike: the only browser has closed. Task 1 runs the external
   // message pump under [NSApp run] (not cef_run_message_loop), so stop the NSApp

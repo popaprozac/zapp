@@ -1,4 +1,4 @@
-## CEF spike (Task 0 + Task 1 + Task 2 + Task 3) — Nim orchestration.
+## CEF spike (Task 0 + Task 1 + Task 2 + Task 3 + Task 5) — Nim orchestration.
 ##
 ## This module IS the browser-process entry point (Nim's generated `main` runs
 ## the top-level `cefSpikeMain()` below). It proves the load-bearing thing for
@@ -15,8 +15,9 @@
 ## NSApplication owns the loop (`cefspike_run_main_loop` = [NSApp run]) and CEF
 ## is pumped cooperatively via `cef_do_message_loop_work` scheduled from the
 ## browser-process handler (see cef_app.c + the ObjC pump in mac_entry.m). A
-## second, ZJS-worker-shaped loop (`cefspike_start_worker_stub`) runs alongside
-## to prove neither starves.
+## second, ZJS-worker-shaped loop ran alongside to prove neither starves — T1
+## used a pthread+CFRunLoop stand-in for this (`cefspike_start_worker_stub`,
+## since removed); Task 5 below replaces it with the real thing.
 ##
 ## Task 2 (hosting-fit) hosts the CEF browser inside a standard Zapp-style
 ## NSWindow (titlebar + traffic lights, mirroring native/platform/darwin/
@@ -45,6 +46,21 @@
 ## the framework link are wired via {.passC.}/{.passL.}; the C/ObjC sources via
 ## {.compile.}. The CEF distribution root is injected by build.sh as
 ## `-d:cefRoot:<abs path to spikes/cef-macos/cef_binary>`.
+##
+## Task 5 (ZJS worker coexists — formalize + demo) replaces Task 1's stand-in
+## (a pthread + CFRunLoop timer logging "[worker] tick N") with a REAL libzjs
+## worker: `zjs_worker.c` embeds vendor/zjs's C ABI directly — a minimal
+## context, one host function, a real `setInterval` tick, and zjs's own
+## documented event-loop-pump pattern — running on its own pthread exactly
+## like the stand-in did (`cefspike_start_zjs_worker`, called from the same
+## step 6 slot `cefspike_start_worker_stub` used to occupy). The worker pushes
+## each tick into the page via `frame->execute_java_script` (Task 4's
+## bridge.c pattern, reused): `cefspike_get_active_browser()` (cef_client.c)
+## exposes the browser the life-span handler now retains instead of
+## releasing immediately. `libzjs.a` is linked DIRECTLY below (not the
+## symbol-hidden `libzjs_embed.a` repack `cli/src/build-config.ts`'s
+## production build post-processes) — see FINDINGS.md Task 5 for why that's
+## safe for this standalone spike.
 ##
 ## NOTE (spike): the framework is LINKED DIRECTLY (rpath), not loaded at runtime
 ## via CEF's library loader. Simpler for a Nim build; fine for a non-sandbox dev
@@ -81,6 +97,27 @@ const cefFrameworkBin =
 {.passL: "-framework Cocoa".}
 {.passL: "-Wl,-rpath,@executable_path/../Frameworks".}
 
+# --- Task 5 (zjs_worker.c) — REAL libzjs worker build/link surface ---------
+# vendor/zjs is a sibling of spikes/ (zapp root -> vendor/zjs). Link libzjs's
+# static archive DIRECTLY — not the symbol-hidden libzjs_embed.a repack
+# cli/src/build-config.ts's production build post-processes (`ld -r` +
+# `-exported_symbols_list _zjs_*`) to dodge duplicate-symbol clashes against
+# the OTHER zenc-stdlib runtime (Arena__/Vec__/...) a full Zapp binary also
+# embeds. This standalone spike links no such runtime anywhere else (its C/
+# ObjC files hand-roll their own JSON helpers — see cef_client.c), so there's
+# nothing to dodge; the plain archive links clean. See FINDINGS.md Task 5.
+const zjsRoot = thisDir & "/../../vendor/zjs"
+{.passC: "-I" & zjsRoot & "/include".}
+{.compile(thisDir & "/zjs_worker.c", "-std=c11").}
+{.passL: zjsRoot & "/build/libzjs.a".}
+# libzjs.a's own undefined externals (checked via `nm -u`): zlib deflate/
+# inflate (node:zlib) and Security.framework's SecRandomCopyBytes/CommonCrypto
+# (crypto.subtle) — Foundation/NSURLSession is already covered transitively by
+# the `-framework Cocoa` link above.
+{.passL: "-framework Security".}
+{.passL: "-lz".}
+{.passL: "-lm".}
+
 # --- CEF C API entry points (resolved from the framework at link time) -----
 proc cef_initialize(args, settings, app, sandboxInfo: pointer): cint
   {.importc, cdecl, header: "cef_spike.h".}
@@ -109,9 +146,12 @@ proc cefspike_make_host_window(width, height: cint, title: cstring): pointer
 proc cefspike_host_view_for_window(window: pointer): pointer
   {.importc, cdecl, header: "cef_spike.h".}
 
-# Task 1 — external-pump loop ownership + the second-loop coexistence probe.
-proc cefspike_start_worker_stub() {.importc, cdecl, header: "cef_spike.h".}
+# Task 1 — external-pump loop ownership.
 proc cefspike_run_main_loop() {.importc, cdecl, header: "cef_spike.h".}
+
+# Task 5 (zjs_worker.c) — the REAL libzjs worker (replaces Task 1's
+# cefspike_start_worker_stub pthread+CFRunLoop stand-in).
+proc cefspike_start_zjs_worker() {.importc, cdecl, header: "cef_spike.h".}
 
 # --- Task 3 (scheme_handler.c) — custom "zapp" scheme + brotli probe -------
 proc cefspike_scheme_set_assets(indexHtml: cstring, indexHtmlLen: cint,
@@ -186,10 +226,13 @@ proc cefSpikeMain() =
   discard cef_browser_host_create_browser(
     windowInfo, client, url, browserSettings, nil, nil)
 
-  # 6. Coexistence probe (Task 1, the #1 risk): spawn the SECOND concurrent loop
-  #    — a ZJS-worker-shaped pthread+CFRunLoop that logs `[worker] tick N`. It
-  #    must keep ticking while CEF + NSApplication run, and vice versa.
-  cefspike_start_worker_stub()
+  # 6. ZJS worker coexistence (Task 1's risk gate; Task 5's real worker): spawn
+  #    a REAL libzjs context on its own pthread (zjs_worker.c), running a real
+  #    JS setInterval tick that posts each tick into the page (index.html's
+  #    window.__zappWorker) via the browser's main frame. Must keep ticking
+  #    while CEF + NSApplication run, and vice versa — same coexistence gate
+  #    T1 opened, now proven against the real engine instead of a stand-in.
+  cefspike_start_zjs_worker()
 
   # 7. Run the loop under NSApplication (Task 1 external message pump): [NSApp run]
   #    owns the loop; CEF is pumped cooperatively via cef_do_message_loop_work

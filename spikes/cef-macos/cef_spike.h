@@ -110,12 +110,29 @@ void cefspike_run_main_loop(void);
 // apply). Called from the life-span handler when the last browser closes.
 void cefspike_quit_main_loop(void);
 
-// Task 1 coexistence probe (SECOND concurrent loop). Spawns a detached pthread
-// running its own CFRunLoop with a repeating timer that logs "[worker] tick N".
-// This is the loop SHAPE a real ZJS worker uses on Apple (dedicated pthread +
-// CFRunLoop). A faithful stand-in for the risk gate; T5 wires the real ZJS
-// worker. Call after the browser is created and before cefspike_run_main_loop.
-void cefspike_start_worker_stub(void);
+// --- zjs_worker.c (Task 5) — REAL libzjs worker + worker->page push --------
+// Spawns a detached pthread running a REAL zjs (libzjs) context: registers a
+// host function a JS `setInterval` tick calls once a second, then pumps
+// zjs's own documented event loop (zjs_has_pending_work / zjs_next_timer_ms
+// / zjs_run_pending_timers — vendor/zjs/include/zjs.h) for the process
+// lifetime. Formalizes Task 1's stand-in (a pthread+CFRunLoop timer logging
+// "[worker] tick N" — see FINDINGS.md Task 1) into the real thing: the same
+// loop-shape coexistence gate T1 opened, now proven against the actual
+// engine Zapp ships. Call after the browser is created and before
+// cefspike_run_main_loop, same as the stand-in it replaces.
+void cefspike_start_zjs_worker(void);
+
+// Read-only accessor for the currently-hosted browser. cef_client.c's
+// life-span handler retains this (since on_after_created) instead of
+// releasing it immediately, specifically so the zjs worker thread can reach
+// the page via `browser->get_main_frame(...)->execute_java_script(...)`
+// (Task 4's bridge.c pattern, reused). Returns NULL before the browser
+// exists / after it has closed. Main-thread-only by construction: the
+// writer (cef_client.c's life-span callbacks, which run on the CEF UI
+// thread == the main thread under Task 1's external pump) and the reader
+// (zjs_worker.c's dispatch_async-to-main-queue block) both touch this only
+// on the main thread, so no locking is needed.
+cef_browser_t* cefspike_get_active_browser(void);
 
 // --- scheme_handler.c (Task 3) — custom "zapp" scheme + brotli probe -------
 
