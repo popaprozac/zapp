@@ -1,0 +1,37 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["vite/client"],
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+
+    /* Path aliases — mirror kitchen-sink so `tsc --noEmit` can resolve the
+       runtime + config type (the Vite alias only covers the build, which
+       esbuild type-erases). One level deeper than kitchen-sink (examples/
+       + cef-hello/), hence ../../ instead of ../. */
+    "paths": {
+      "@zappdev/runtime": ["../../runtime/index.ts"],
+      "@zappdev/runtime/worker-globals": ["../../runtime/worker-globals.ts"],
+      "@zappdev/cli/config": ["../../cli/src/config.ts"]
+    },
+
+    /* Linting */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedSideEffectImports": true
+  },
+  "include": ["src"],
+  "exclude": ["**/*.test.ts"]
+}

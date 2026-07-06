@@ -1,0 +1,5 @@
+# Root .gitignore already covers .zapp/, bin/, dist/, node_modules/,
+# bun.lock, src/zapp/ — this adds the one per-app generated file those
+# patterns don't reach: the editor-support Nim config the build regenerates
+# on every run (mirrors kitchen-sink/.gitignore).
+zapp/nim.cfg
