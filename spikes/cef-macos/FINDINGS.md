@@ -307,6 +307,38 @@ mentioning brotli, the `items` array); (3) `[worker] tick N` keeps
 incrementing in the console throughout. If all hold -> GATE 3 PASS (native
 brotli-decode confirmed for custom-scheme responses).
 
+### GATE 3 RESULT — **FAILED** (confirmed on-screen 2026-07-05)
+
+The `#br-out` box renders `Content-Encoding: br` / `Content-Type:
+application/json` followed by **raw binary garbage**, not JSON. Verdict (the
+"flag it loudly" branch above): **Chromium does NOT run custom-scheme
+resource-handler responses through its content-decoding filters.** The
+`fetch().text()` call received the raw 1176-byte brotli payload verbatim, and
+the `Content-Encoding: br` header even **survived to JS** (a decoded response
+would have had it stripped) — double-confirming no decode happened.
+
+- **This is a decode failure, not a serve failure.** The `zapp://` handler
+  served the correct bytes with the correct headers (the same 1176-byte payload
+  a real HTTP `br` response carries). Chromium simply doesn't decode it for the
+  custom-scheme in-process resource path (content-decoding lives in the network
+  service, which cef_resource_handler_t bypasses). Real **HTTP** `br` responses
+  would still decode fine — only the custom-scheme asset path is affected.
+- **Kills perf-win #1 for the `zapp://` asset path specifically** ("ship brotli,
+  let the engine decode"). For a real `webEngine:"chromium"`, asset serving must
+  instead either (a) **decode brotli in the resource handler** before handing
+  bytes to CEF (we already ship a brotli decoder elsewhere; drops the "free"
+  part of the bet but keeps on-disk size savings), or (b) serve assets from a
+  **loopback HTTP origin** so Chromium's network stack does the decode (heavier;
+  reintroduces a socket). Recommend (a).
+- Everything else in T3 stands: the `zapp://` standard+secure+fetch scheme, the
+  resource-handler vtable, and byte-accurate serving all work (the page loads,
+  CORS/fetch is allowed, headers arrive intact). Only the *native-decode*
+  hypothesis is disproven.
+
+(Unrelated benign log noise seen alongside: `google_apis/gcm/... DEPRECATED_ENDPOINT`
+is Chromium's push/GCM registration probing a dead Google endpoint — no bearing
+on the spike; would be disabled with the GCM feature off in a real build.)
+
 ---
 
 ## Task 4 (MAKE-OR-BREAK): the `zapp` bridge — one JS↔native round-trip
@@ -494,6 +526,28 @@ posting to page` — see Task 5, below). Console should show
 `[cef-spike][browser] zapp:invoke id=… service=greet …` +
 `[cef-spike][browser] zapp:result id=… -> "Hello from Zapp! (to World)"`. If all
 hold → GATE 4 PASS (JS↔native bridge maps onto CEF).
+
+### GATE 4 RESULT — **PASS** (confirmed on-screen 2026-07-05)
+
+The full round-trip works on the real GUI. Observed console:
+
+```
+[cef-spike][render] bridge bootstrap injected (window.zapp.invoke ready)
+[cef-spike][browser] zapp:invoke id=1 service=greet args={"name":"World"}
+[cef-spike][browser] zapp:result id=1 -> "Hello from Zapp! (to World)"
+[cef-spike][render] zapp:result id=1 -> resolving JS
+```
+
+`#out` renders `Hello from Zapp! (to World)`. **The Zapp JS↔native contract maps
+onto CEF** — JS `window.zapp.invoke` → render V8 binding → `zapp:invoke` IPC →
+browser stub service → `zapp:result` IPC → render → `__zappResolve` → resolved
+Promise, all across the render↔browser process boundary, coexisting with the
+real libzjs worker (Task 5) ticking throughout.
+
+**Prerequisite fix (see the double-release FINDING above):** GATE 4 only passes
+after the `refptr_same`-consume double-release bug was fixed. As originally
+shipped, T4 crashed the render process on every page load (blank screen); the fix
+commit dropped the three post-consume `release()` calls.
 
 ---
 
