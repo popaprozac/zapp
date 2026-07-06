@@ -18,9 +18,19 @@
 # Env overrides:
 #   CEF_DEST        extract destination (default: <script>/../../vendor/cef).
 #                   Must end up containing Release/ + include/.
-#   CEF_CHANNEL     stable (default) | beta
+#   CEF_CHANNEL     stable (default) | beta. Only consulted when CEF_VERSION
+#                   is explicitly set to "" (see CEF_VERSION below).
 #   CEF_FILE_TYPE   minimal (default) | standard
-#   CEF_VERSION     pin an exact cef_version (default: newest for the channel)
+#   CEF_VERSION     pin an exact cef_version. Defaults to
+#                   144.0.29+g0b1a012+chromium-144.0.7559.256 — the exact
+#                   build this webEngine:"chromium" production slice was
+#                   written and smoke-tested against (also what
+#                   vendor/cef/README.txt in a seeded cache reports), so a
+#                   fresh cache-miss fetch is reproducible instead of
+#                   silently picking up a newer CEF whose C API may not match
+#                   what native/platform/darwin/cef/ compiles against. Set
+#                   CEF_VERSION="" explicitly to opt back into "newest for
+#                   CEF_CHANNEL" (unpinned) behavior.
 #   RESOLVE_ONLY=1  resolve + print the version/URL, download only the small
 #                   index.json, then exit (smoke-test without the big tarball).
 #
@@ -30,6 +40,11 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLATFORM="macosarm64"
 CHANNEL="${CEF_CHANNEL:-stable}"
 FILE_TYPE="${CEF_FILE_TYPE:-minimal}"
+# Pinned default — see the CEF_VERSION doc comment above. This is the ONLY
+# version this slice has been built + gated against; bump it deliberately
+# (and re-verify the build) rather than tracking "newest" automatically.
+DEFAULT_CEF_VERSION="144.0.29+g0b1a012+chromium-144.0.7559.256"
+CEF_VERSION="${CEF_VERSION-$DEFAULT_CEF_VERSION}"
 INDEX_URL="https://cef-builds.spotifycdn.com/index.json"
 CDN_BASE="https://cef-builds.spotifycdn.com"
 # Default cache location: the monorepo vendor/ dir (gitignored: vendor/cef/).
