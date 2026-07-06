@@ -128,8 +128,8 @@ void zapp_cef_ns_application_init(void);
 // [NSApplication sharedApplication] (so NSApp is the ZappCefApplication) — see
 // native/platform/darwin/platform.m's darwin_platform_init. CEF's pump then
 // drives off the SAME [NSApp run] loop the host already owns; this does NOT
-// start a second run loop. The
-// browser process does NOT cef_execute_process: on macOS the child processes
+// start a second run loop. The browser process does NOT cef_execute_process:
+// on macOS the child processes
 // are the separate Helper .apps (zapp_cef_mac_helper.c owns their main()).
 void zapp_cef_app_init(void);
 

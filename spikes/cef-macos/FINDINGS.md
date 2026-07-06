@@ -118,7 +118,7 @@ to fold into two still-open items below).
    slice depends on — re-verified in the T5 (docs/smoke) task independently
    of Tasks 2-4: a clean `webEngine:"system"` build of `examples/cef-hello`
    hashes identically to a pre-CEF-version-pin build
-   (`sha256 588494f859df1097160d18f371c1d35f4ac45d39e83a790594a20c0b78f93312`—**SUPERSEDED by sub-cycle A: the worker fixture changed source, so a fresh build's hash differs**),
+   (`sha256 588494f859df1097160d18f371c1d35f4ac45d39e83a790594a20c0b78f93312` — **SUPERSEDED by sub-cycle A: the worker fixture changed source, so a fresh build's hash differs**),
    and `unifdef -UZAPP_HAS_CEF` over `window.m` / `platform.m` / `webview.m`
    shows the CEF-gated lines are the only delta.
 
