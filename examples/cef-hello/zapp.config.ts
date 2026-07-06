@@ -20,6 +20,12 @@ const config: ZappConfig = {
   // builds of this same app stay on WKWebView and do zero CEF work — the
   // byte-identical control this fixture proves out.
   webEngine: "chromium",
+  // Sub-cycle A: a headless ZJS worker (the default macOS engine) ticking to
+  // the CEF page. Declaring any worker is also what compiles a worker engine
+  // into the binary — without one the build reports "workers disabled".
+  headless: {
+    ticker: { script: "src/ticker.ts", name: "ticker", engine: "zjs" },
+  },
 };
 
 export default config;
