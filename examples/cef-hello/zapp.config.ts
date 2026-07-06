@@ -14,10 +14,11 @@ const config: ZappConfig = {
   name: "cef-hello",
   identifier: "com.zapp.cefhello",
   version: "0.1.0",
-  // Early-access opt-in — accepted (with a warning) by validateWebEngine,
-  // resolved via resolveWebEngine. `system` builds of this same app stay
-  // on WKWebView and do zero CEF work; that's the byte-identical control
-  // this fixture is meant to prove out in a later task.
+  // Early-access opt-in — accepted by validateWebEngine and resolved per
+  // target via resolveWebEngine (a bare string applies to every platform);
+  // the "chromium is early-access" notice now prints at build time. `system`
+  // builds of this same app stay on WKWebView and do zero CEF work — the
+  // byte-identical control this fixture proves out.
   webEngine: "chromium",
 };
 
