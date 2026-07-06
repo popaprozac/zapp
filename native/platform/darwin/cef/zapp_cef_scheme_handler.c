@@ -475,6 +475,12 @@ struct _cef_resource_handler_t* CEF_CALLBACK zapp_cef_scheme_factory_create(
                   out, out_len, zapp_embedded_assets[i].data,
                   (size_t)zapp_embedded_assets[i].len, NULL,
                   COMPRESSION_BROTLI);
+              if (decoded == 0) {
+                fprintf(stderr,
+                        "[zapp-cef] brotli decode failed for %s "
+                        "(serving empty 200)\n",
+                        lookup_path);
+              }
               handler = zapp_cef_asset_resource_handler_create(
                   out, /*owns_data=*/1, (int)decoded, 200, mime);
             } else {

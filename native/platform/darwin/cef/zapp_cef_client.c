@@ -225,10 +225,8 @@ static zapp_cef_life_span_handler_t* zapp_cef_life_span_handler_create(void) {
 // darwin_window_eval_js, whose CEF branch (window.m) delivers the result back
 // into the page through zapp_cef_eval_in_window (above). So there is NO reverse
 // "zapp:result" process message — the result is eval'd into the page directly.
-// Message name MUST match zapp_cef_bridge.c.
+// ZAPP_MSG_INVOKE is the shared literal, defined once in zapp_cef.h.
 //
-
-#define ZAPP_MSG_INVOKE "zapp:invoke"
 
 int CEF_CALLBACK zapp_cef_client_on_process_message_received(
     cef_client_t* self, cef_browser_t* browser, cef_frame_t* frame,

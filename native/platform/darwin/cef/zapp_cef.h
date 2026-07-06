@@ -38,6 +38,11 @@
 #include "include/capi/cef_scheme_capi.h"
 #include "include/internal/cef_string.h"
 
+// Cross-process message name — the browser<->render contract hinges on this
+// literal. Single definition shared by zapp_cef_bridge.c (render) and
+// zapp_cef_client.c (browser); previously #define'd in both.
+#define ZAPP_MSG_INVOKE "zapp:invoke"
+
 // Invariant check — replaces cefsimple_capi/simple_utils.h's CHECK.
 #define CHECK(cond)                                                        \
   do {                                                                     \

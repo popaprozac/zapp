@@ -59,9 +59,6 @@
 // its lifetime; never freed (process-lifetime, single browser).
 static char* g_bootstrap_js = NULL;
 
-// Process-message name — the cross-process contract hinges on this literal
-// matching zapp_cef_client.c exactly.
-#define ZAPP_MSG_INVOKE "zapp:invoke"
 // extra_info key carrying the doc-start bootstrap JS (must match
 // zapp_cef_host.m's set_string key).
 #define ZAPP_EXTRA_BOOTSTRAP_KEY "zappBootstrap"
