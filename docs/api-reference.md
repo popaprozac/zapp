@@ -2690,23 +2690,52 @@ enforcement is in `runtime/bare/fs.ts` (paths must match
 
 ## Webview engine (`webEngine`) — macOS early access (CEF)
 
-`zapp.config.ts`'s `webEngine` field picks what renders the UI:
+`zapp.config.ts`'s `webEngine` field picks what renders the UI. A string
+applies to every platform; a per-platform map scopes it (a missing platform
+key defaults to `"system"`):
 
 ```ts
 const config: ZappConfig = {
-  webEngine: "chromium", // default: "system"
+  webEngine: "chromium",                              // all platforms
+  // or, scoped per platform:
+  webEngine: { macos: "chromium", windows: "system" },
 };
 ```
 
 - **`"system"`** *(default)* — the OS-native WebView: WKWebView on macOS,
-  WebView2 on Windows, WebKitGTK on Linux. Tiny binary (a few MB — the OS
-  already provides the engine), zero extra runtime overhead. This is the
-  right answer for the overwhelming majority of apps and is what every
-  other doc on this site assumes unless stated otherwise.
+  **WebView2 on Windows (this is Chromium — the Edge runtime — so Windows
+  already renders with Chromium at zero extra size)**, WebKitGTK on Linux.
+  Tiny binary (a few MB — the OS already provides the engine), zero extra
+  runtime overhead. This is the right answer for the overwhelming majority
+  of apps and is what every other doc on this site assumes unless stated
+  otherwise.
 - **`"chromium"`** *(early access, **macOS only**, strictly opt-in)* —
   bundles a real Chromium via CEF (Chromium Embedded Framework) instead of
-  WKWebView. Setting it logs a one-line early-access warning and is
-  accepted; any other value still throws.
+  WKWebView, for Chrome-consistent rendering where the system webview isn't
+  already Chromium. Setting it logs a one-line early-access warning and is
+  accepted; any other value still throws. Adds **~289 MB** to the `.app`
+  (see the cost breakdown below) — the strictly-opt-in price.
+
+**Bundle CEF only where the system webview isn't Chromium** — macOS today,
+Linux later. On Windows, `"system"` (WebView2) already gives you Chromium,
+so there's no reason yet to reach for `"chromium"` there.
+
+If `"chromium"` is requested for a platform with no CEF build yet (Windows /
+Linux today), the build **warns and falls back to `"system"`** instead of
+failing:
+
+```
+[zapp] webEngine "chromium" is not yet available on windows; using system (WebView2 = Chromium).
+```
+
+> **Evergreen vs. pinned.** WebView2 is evergreen — it floats with whatever
+> Edge runtime is installed on the user's machine, so it picks up
+> security/feature updates for free but you can't pin an exact Chromium
+> build. CEF, by contrast, is pinned to the exact version Zapp bundles at
+> build time. A future `windows: "chromium"` would trade WebView2's
+> zero-cost evergreen model for byte-pinned rendering — it's not needed
+> just to get Chromium-consistent rendering on Windows, since WebView2
+> already is Chromium.
 
 ### What works in this slice
 
@@ -2791,8 +2820,11 @@ bun run build
 
 `native/platform/darwin/cef/` holds the CEF host, entirely gated behind a
 `-DZAPP_HAS_CEF` compile define that's only ever emitted when
-`resolveWebEngine(config) === "chromium"` on a macOS target
-(`cli/src/native.ts`, `cli/src/build-config.ts`). `cli/src/cef.ts` fetches
+`resolveWebEngine(config, target) === "chromium"` on a macOS target
+(`cli/src/native.ts`, `cli/src/build-config.ts`). `resolveWebEngineForBuild`
+(`cli/src/config.ts`) is what `native.ts` actually reads at build time — it
+wraps `resolveWebEngine` with the downgrade-to-`"system"` fallback and warning
+for platforms `platformSupportsChromium` doesn't cover yet. `cli/src/cef.ts` fetches
 (`cli/scripts/fetch-cef.sh`, cached under `vendor/cef/`, gitignored) and
 bundles the CEF framework + five Helper subprocess `.app`s into the output
 `.app`'s `Contents/Frameworks`. See
