@@ -1,7 +1,60 @@
 # CEF macOS spike — FINDINGS
 
 Running log of load-bearing findings from the `webEngine:"chromium"` (CEF) macOS
-de-risking spike. Newest task last.
+de-risking spike. Newest task last. **Consolidated verdict + cost/benefit +
+production seeds are in the capstone directly below; per-task detail follows.**
+
+---
+
+## ★ VERDICT: GO — CEF is a viable opt-in macOS render backend for Zapp
+
+Every load-bearing seam is proven on macOS (arm64), human-smoked on screen. The
+one negative finding (native brotli decode for the custom scheme) has a
+demonstrated workaround. Zapp's edge — ZJS workers — runs native, entirely
+outside CEF's multi-process tree, and is shown coexisting with CEF. Recommendation:
+**GO to a production `webEngine:"chromium"` cycle (macOS-first, Linux-forward).**
+
+### Go/No-Go table (design criteria 0–6)
+
+| # | Criterion | Result | Evidence |
+|---|---|---|---|
+| 0 | Links + launches from the Nim/ObjC build | **PASS** | `nm` binds `cef_initialize`/`create_browser`/`do_message_loop_work`/`shutdown` to the framework; window launches (GATE 0 on-screen) |
+| 1 | Message-loop coexistence (CEF + NSApp + native worker) | **PASS** | external pump (`external_message_pump=1` + `[NSApp run]`); GATE 1 on-screen: window interactive **and** worker ticks, neither starves |
+| 2 | Hosts in a standard Zapp `NSWindow` | **PASS** | renders + resizes in a titled/traffic-light NSWindow (GATE 2, confirmed once the T4 crash was fixed) |
+| 3 | Custom `zapp://` scheme + brotli | **PASS w/ caveat** | scheme serves assets byte-accurately; **native `br` decode does NOT apply to custom-scheme responses** (Chromium's decode lives in the network service, bypassed by in-process handlers) → **handler-side decode demonstrated** (`78fb514`): size win kept, one-time CPU cost |
+| 4 | `zapp` bridge JS↔native round-trip | **PASS** | `window.zapp.invoke("greet")` → process-message round-trip → `Hello from Zapp! (to World)` on screen (GATE 4) |
+| 5 | Real ZJS worker coexists | **PASS** | real `libzjs` worker, 1 Hz ticks pushed to the page, coexisting with CEF (GATE 5) |
+| 6 | Cost/benefit data | **captured** | see below |
+
+### Cost / benefit (criterion 6)
+
+| Dimension | Value |
+|---|---|
+| `.app` size | **291 MB** (the `Chromium Embedded Framework.framework` = **289 MB** of it). A WKWebView Zapp app is a few MB (OS provides WebKit) → **~+289 MB is the opt-in price** |
+| Dev toolchain | CEF "minimal" distribution ≈ 311 MB extracted (≈110 MB compressed), gitignored, fetched by `fetch-cef.sh` |
+| Build | `nim c` + clang(.c/.m) + framework/Helper-bundle assembly; seconds-scale; not wired into `zapp build` |
+| Cold launch | multi-process (browser + 5 Helpers) spin-up; qualitatively fine in smoke; **not** benchmarked vs WKWebView (a production measurement item) |
+| Licensing | CEF = BSD-3-Clause; bundled Chromium = BSD-style + third-party (LGPL/MPL) components, standard for Chromium redistribution + attribution — no blocker for opt-in bundling |
+
+### Where the size buys perf/features (the explicit "is it worth it" question)
+
+- **Consistent cross-platform rendering** — the headline; identical Chromium everywhere (esp. future **Linux**, where WebKitGTK is weakest).
+- **Brotli** — on-disk *size* win: **YES** (handler-side decode, demonstrated). Free-CPU decode: **NO** for `zapp://` (HTTP only). Net: still a win, not free.
+- **Available, not exercised**: DevTools protocol, Chromium GPU/compositor pipeline.
+
+### Production seeds (must-do before a shippable `webEngine:"chromium"`)
+
+1. **CEF C-API ref-ownership rule** — *received* values (callback params; create/get returns) = own → release once; values *passed into* a setter/sender (`set_value_bykey`, `send_process_message`) = **consumed → do NOT release**. A double-free here caused the blank-screen (and slipped past a confident review). The **`scheme_handler.c` resource-handler params (`request`/`callback`/`response`, all `refptr_diff`) currently LEAK** (own-but-not-released) — fix in production.
+2. **No `CefMessageRouter` in the C API** → the id↔promise protocol is hand-rolled; use a **shared header** for the message-name constants (spike `#define`s them in two TUs).
+3. **Brotli** — statically link Zapp's own decoder (spike used Homebrew `libbrotlidec`); handler-side decode is the custom-scheme path.
+4. **OSCrypt "Safe Storage"** — real encrypted-storage policy (spike uses `--use-mock-keychain`).
+5. **CEF runtime library loader** for the macOS **sandbox** (spike links the framework directly via `@rpath` — fine unsandboxed/dev).
+6. **Bootstrap injection** — codegen from `bootstrap/*.ts` (the Helper runs no Nim; spike embeds the bootstrap in a C string).
+7. **Helper-process signing + notarization** for distribution.
+8. **External pump is sound** on macOS 26 / CEF 144 — the blank scare was a bridge double-free, **not** the pump; `external_message_pump=1` + `[NSApp run]` fits Zapp's Nim/ObjC-owns-the-loop model.
+
+### Human-verified gates
+GATE 0/1/2/4/5 = PASS on screen. GATE 3 = negative finding (native custom-scheme `br` decode) + demonstrated handler-side-decode fix. Whole-branch review = **READY-TO-BANK** (bridge refcount fix verified against SDK `cpptoc` source; T5 thread-sound).
 
 ---
 
