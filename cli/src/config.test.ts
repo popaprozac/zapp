@@ -48,10 +48,11 @@ test("validateNative rejects non-string array entries", () => {
 });
 
 // webEngine: "chromium" is now an accepted early-access opt-in (CEF
-// production slice) — it warns instead of throwing. "system"/unset stay
-// the default; unknown values still throw. See resolveWebEngine below for
-// the single-source-of-truth resolver the build + window creation both read.
-test("validateWebEngine accepts \"chromium\" (early-access, warns, does not throw)", () => {
+// production slice) — it silently accepts (no throw), no longer warns here.
+// "system"/unset stay the default; unknown values still throw. See
+// resolveWebEngine below for the single-source-of-truth resolver the build +
+// window creation both read.
+test("validateWebEngine accepts \"chromium\" (no throw, no longer warns)", () => {
   expect(() => validateWebEngine("chromium")).not.toThrow();
 });
 

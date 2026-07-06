@@ -836,11 +836,6 @@ export function defineConfig(config: ZappConfig): ZappConfig {
   return config;
 }
 
-// Reject `webEngine: "chromium"` with a clear next-step. The field exists
-// in the type (and on the landing page comparison matrix), but bundling
-// CEF / Chromium is gated on a real customer surfacing a reproducible
-// "system WebView won't render X" requirement — see
-// /Users/zach/.claude/plans/polished-mapping-ullman.md.
 // Validate the native: block — each of frameworks/linkFlags/sources must be a
 // string[] or a per-platform map of string[]. Throws a clear error otherwise.
 export function validateNative(config: ZappConfig): void {

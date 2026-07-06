@@ -330,7 +330,7 @@ export interface PlatformNimOpts {
   nativeDir: string; // absolute path to the framework's native/ dir
   /**
    * CEF (`webEngine:"chromium"`) build integration — macOS only. Present ONLY
-   * when resolveWebEngine(config) === "chromium" (see cli/src/native.ts's
+   * when resolveWebEngine(config, target) === "chromium" (see cli/src/native.ts's
    * buildNativeNim). `root` is the fetched CEF distribution dir (containing
    * Release/ + include/ — cli/src/cef.ts's ensureCefFetched).
    *

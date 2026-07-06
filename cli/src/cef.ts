@@ -1,5 +1,5 @@
 // CEF (`webEngine:"chromium"`) build integration — macOS. GATED: nothing here
-// runs unless resolveWebEngine(config) === "chromium" AND the target is macOS.
+// runs unless resolveWebEngine(config, target) === "chromium" AND the target is macOS.
 // The default `system` (WKWebView) build never imports this module.
 //
 // Two responsibilities, both promoted from the proven spike
