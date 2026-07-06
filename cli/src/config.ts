@@ -636,7 +636,7 @@ export interface ZappConfig {
    *     via CEF. For apps where the system WebView produces a visible
    *     rendering mismatch with desktop Chrome (rare in practice for
    *     modern web stacks; mostly impacts WebGL extensions and certain
-   *     Web Animations edge cases). Adds ~150 MB to the binary, so picks
+   *     Web Animations edge cases). Adds ~289 MB to the binary, so picks
    *     a different trade-off than Zapp's default pitch.
    *
    *     Opt-in and gated: setting this logs an early-access warning and
