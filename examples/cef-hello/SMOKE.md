@@ -28,6 +28,7 @@ Expected build output: `[zapp] CEF app bundle: .../bin/cef-hello.app` +
 |---|---|---|
 | **GATE 3** — render | A real Zapp `.app`, produced by real `zapp build`, renders its page on Chromium (not WKWebView) inside a standard Zapp `NSWindow` — CEF's external message pump correctly slots into Zapp's *existing* `NSApplication` run loop (R0, the #1 integration risk; no second `[NSApp run]`) | **PASS — human-confirmed 2026-07-06** |
 | **GATE 4** — bridge round-trip | Clicking "Say hello" runs `Services.invoke("greet", {name:"CEF"})` through the *real* transport (`bootstrap/webview.ts`'s `{t,id,m,a}` envelope, not a bespoke protocol) → `zapp_handle_message_from_window` → the real Nim router → `greet` service → `darwin_window_eval_js`'s CEF branch (`execute_java_script`) → the page. `#out` shows **`Hello from CEF`** | **PASS — human-confirmed 2026-07-06** |
+| **GATE 5** — worker→page broadcast | A headless **ZJS** worker (`src/ticker.ts`, declared in `zapp.config.ts`'s `headless.ticker` block) calls `Events.emit("tick", { n })` once a second with no point-to-point send — a plain broadcast. That rides `dispatch_event_to_all` → `darwin_webview_eval_all` (`webview.m:1247`) → `zapp_registered_webviews_eval`'s existing `ZAPP_HAS_CEF` branch (`window.m:154-164`, shipped in `6f58489` — see `docs/superpowers/specs/2026-07-06-cef-worker-hardening-design.md`'s corrected §1) → the CEF page's `Events.on("tick", …)` handler, which writes `#tick`'s text to `worker tick #N`. Intended to prove the render-engine-independent worker edge — CEF's whole point — reaches Chromium through the same broadcast path as WKWebView, with **zero code changes** to the delivery path. | **PENDING — human visual gate not yet run** |
 
 Non-visual evidence gathered alongside the human gates (bounded ~6s headless
 runs of `bin/cef-hello.app/Contents/MacOS/cef-hello`, re-confirmed during
@@ -80,12 +81,23 @@ Zero CEF fetch, zero CEF compile, zero CEF link, zero CEF bundle step runs.
 This is the load-bearing guarantee (spec §"Strictly opt-in + gated"),
 re-verified independently in this task:
 
-- **Binary hash, re-run fresh in this task:** a clean (`rm -rf ~/.cache/nim/app_r`)
-  `webEngine:"system"` build of `examples/cef-hello` produced
-  `bin/cef-hello` with `sha256 = 588494f859df1097160d18f371c1d35f4ac45d39e83a790594a20c0b78f93312` —
-  **identical** to the hash recorded in Task 3's report, produced *before*
-  any CEF-version-pin change existed. Flipping the config back to
-  `"chromium"` and rebuilding restores the `.app` bundle exactly as in (a).
+- **Binary hash — SUPERSEDED by the worker-hardening cycle, not re-verified.**
+  The `sha256 = 588494f859df1097160d18f371c1d35f4ac45d39e83a790594a20c0b78f93312`
+  recorded above predates this cycle's fixture (`b4d30cc`, the `ticker`
+  headless worker + `#tick` page wiring). That fixture changed
+  `examples/cef-hello`'s source (`zapp.config.ts`'s `headless` block,
+  `index.html`, `main.ts`) — changes that apply identically to *both*
+  `webEngine` values, since a headless-worker declaration and its compiled-in
+  engine are independent of `webEngine`. So a fresh `system` build's hash
+  would legitimately differ from `588494f…` now — that's expected, not a
+  regression, and this task deliberately does **not** run a `system` build to
+  compute a new hash (out of scope for a docs-only task). The load-bearing
+  guarantee this section exists to prove doesn't depend on a specific hash
+  anyway — it's this: **a `system` build does zero CEF work and produces no
+  `.app`** (see the compile-time gate and the "This task's own change" bullet
+  below, both of which remain true regardless of what the fixture's source
+  looks like). Flipping the config back to `"chromium"` and rebuilding
+  restores the `.app` bundle exactly as in (a).
 - **Compile-time gate (Task 2/Task 3 proof, re-affirmed):** `renderPlatformNim`'s
   macOS output is byte-identical with/without the CEF block appended only
   when `resolveWebEngine(config) === "chromium"`; `clang -E -P` /
@@ -123,9 +135,11 @@ this task changes.
 
 ## Non-goals this slice does NOT smoke
 
-Worker on CEF, DevTools, multi-window, native chrome (sidebar / inspector /
+DevTools, multi-window, native chrome (sidebar / inspector /
 toolbar) on the `chromium` path, Helper signing/notarization, iOS / Windows /
 Linux, per-window engine selection, and navigation/back-forward are all out
 of scope for this fixture and this slice — see
 `docs/api-reference.md`'s `webEngine` section and
-`spikes/cef-macos/FINDINGS.md` for what remains open.
+`spikes/cef-macos/FINDINGS.md` for what remains open. (Worker on CEF is now
+GATE 5 above, not a non-goal — the broadcast path was proven already-present;
+its human visual gate is still pending.)

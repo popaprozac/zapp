@@ -118,19 +118,12 @@ to fold into two still-open items below).
    slice depends on — re-verified in the T5 (docs/smoke) task independently
    of Tasks 2-4: a clean `webEngine:"system"` build of `examples/cef-hello`
    hashes identically to a pre-CEF-version-pin build
-   (`sha256 588494f859df1097160d18f371c1d35f4ac45d39e83a790594a20c0b78f93312`),
+   (`sha256 588494f859df1097160d18f371c1d35f4ac45d39e83a790594a20c0b78f93312`—**SUPERSEDED by sub-cycle A: the worker fixture changed source, so a fresh build's hash differs**),
    and `unifdef -UZAPP_HAS_CEF` over `window.m` / `platform.m` / `webview.m`
    shows the CEF-gated lines are the only delta.
 
 **Still OPEN (unchanged from the spike's list, tracked for a future cycle):**
 
-- **Worker on CEF.** `spikes/cef-macos`'s T5 proved a real `libzjs` worker
-  co-exists with CEF (render-engine-independent by construction — the
-  worker never touches CEF, only the one `execute_java_script`-shaped
-  push-to-page hop). The production plumbing (worker registry, capability
-  modules, headless-worker codegen) for a `chromium` window is **not**
-  wired up this slice — deferred by design (the slice's stated bar is
-  render + bridge, not worker).
 - **macOS sandbox runtime-library loader (seed 5).** Still links the
   framework directly via `@rpath`; fine unsandboxed/dev, not sandboxed
   App Store-shaped distribution.
@@ -139,13 +132,6 @@ to fold into two still-open items below).
   convenience, now inherited by the promoted `zapp_cef_app.c`.
 - **Helper-process signing + notarization (seed 7).** Unchanged — the five
   bundled Helper `.app`s (`bundleCefApp` in `cli/src/cef.ts`) are unsigned.
-- **Shared header for the hand-rolled message-name constant (the rest of
-  seed 2/6).** `#define ZAPP_MSG_INVOKE "zapp:invoke"` is still duplicated
-  in two TUs (`zapp_cef_bridge.c` + `zapp_cef_client.c`) — no shared
-  header. (The *reverse* `"zapp:result"` message the spike hand-rolled is
-  now gone entirely — results ride the real `darwin_window_eval_js` path —
-  so there's exactly one hand-rolled name left to consolidate, down from
-  two.)
 
 Also unchanged / not attempted this slice: DevTools, multi-window CEF,
 native chrome (sidebar/inspector/toolbar) on the `chromium` path, iOS /
@@ -153,14 +139,79 @@ Windows / Linux, per-window engine selection, navigation/back-forward — all
 explicit non-goals of the design, not regressions.
 
 Non-blocking Minors accumulated across this slice's tasks (recorded for the
-eventual whole-branch review, not fixed here): CEF elision for
-`setDragRegion` (currently round-trips through the router at ~60 Hz as a
-no-op on the fullbleed CEF path); `app_get_active()` NULL-guard parity with
-`webview.m`'s equivalent check (harmless today, single-window); the
-now-dead `zapp_cef_run_main_loop` (superseded by Zapp's own loop, never
-called, not yet deleted); OOM-territory NULL-hardening in
-`zapp_cef_host.m` (`cef_dictionary_value_create` / `strdup` on the
-bootstrap JS string) matching the spike's original hardening level.
+eventual whole-branch review): **CEF elision for `setDragRegion`** (currently
+round-trips through the router at ~60 Hz as a no-op on the fullbleed CEF
+path) is the one still open here — see the ★ sub-cycle A update below for
+what closed (`app_get_active()` NULL-guard parity, the now-dead
+`zapp_cef_run_main_loop`, and `zapp_cef_host.m` OOM NULL-hardening all
+cleared).
+
+### ★ Sub-cycle A update (CEF worker hardening, `feat/cef-worker-hardening`, 2026-07-06)
+
+Design: `docs/superpowers/specs/2026-07-06-cef-worker-hardening-design.md`.
+Two deliverables: close the worker-on-CEF gap this doc's "Still OPEN" list
+above tracked, and clear 5 of the Minors accumulated across the prod slice
+(above) + this sub-cycle's own spec.
+
+**Worker on CEF — CLOSED (structurally; human visual gate still pending).**
+The spec's original premise (a missing broadcast→CEF branch in
+`darwin_webview_eval_all`, `webview.m`) turned out to be **stale** — that
+branch was already shipped, same-day, in `6f58489`, one layer down inside
+`zapp_registered_webviews_eval` (`native/platform/darwin/window.m:154-164`).
+Confirmed by reading the shipped source and tracing the delegation chain;
+no code change was needed or made in `webview.m`/`window.m` this cycle (see
+the design doc's corrected Context + §1 for the full trace — and why a
+second branch there would have *double-delivered* every broadcast). The
+actual deliverable is `examples/cef-hello`'s new fixture (`b4d30cc`): a real
+headless **ZJS** `ticker` worker (`src/ticker.ts`) broadcasting
+`Events.emit("tick", { n })` once a second, with no point-to-point send,
+subscribed to by the page (`Events.on("tick", …)` → `#tick`). This is the
+render-engine-independent worker edge CEF's whole design point rests on,
+now backed by a real fixture instead of the spike's T5 argument-by-analogy.
+**Not yet closed:** the human visual R0 gate (does `#tick` actually
+increment on screen) has not been run — tracked as GATE 5 in
+`examples/cef-hello/SMOKE.md`, marked **PENDING**, not PASS. Do not treat
+this as visually confirmed until that gate is run.
+
+**5 Minors cleared** (`native/platform/darwin/cef/`, 3 commits):
+
+1. **Dead `zapp_cef_run_main_loop` removed** — `20b0faf`. Deleted from
+   `zapp_cef_mac_entry.m` + its `.h` declaration + comment refs; was defined
+   but never called since the prod slice integrated CEF's pump into Zapp's
+   own `[NSApp run]`.
+2. **`app_get_active()` NULL-guard parity in the CEF client** — `eb477bc`.
+   `zapp_cef_client.c`'s `zapp:invoke` handler now guards the same way
+   `webview.m:403-406` does before calling
+   `zapp_handle_message_from_window`.
+3. **`zapp_cef_host.m` OOM NULL-hardening** — `eb477bc`. The `extra_info`
+   population block (bootstrap-JS UTF-16 conversion + `set_string`) is now
+   guarded on `bootstrap_js != NULL && extra_info != NULL`; the
+   `cef_browser_host_create_browser` call below is unchanged (still
+   receives `extra_info`, possibly NULL on OOM, which CEF accepts).
+4. **`ZAPP_MSG_INVOKE` single-defined** — `f7278cb`. Hoisted into
+   `zapp_cef.h`; the local `#define`s in `zapp_cef_bridge.c` and
+   `zapp_cef_client.c` removed. This is the item the "Still OPEN" list above
+   tracked as "the rest of seed 2/6" — now closed.
+5. **Brotli decode-fail diagnostic** — `f7278cb`. `zapp_cef_scheme_handler.c`
+   now logs a warning when `compression_decode_buffer` fails instead of
+   silently serving an empty 200; behavior (the empty-200 response itself)
+   is unchanged — diagnostic only.
+
+Verified: each Minor's build produced `[zapp] CEF app bundle:` +
+`[zapp] build complete:` with no `Undefined symbols` / `implicit
+declaration` / `error:` in the log; a headless bounded run after Minor 5
+showed clean asset-serving with no spurious decode-failure warning (see
+`.superpowers/sdd/task-2-report.md` for full logs).
+
+**Still open, deferred to their own cycles (unchanged by this sub-cycle) —
+the 5 coupled Minors from the design's non-goals:** `on_before_close`'s
+`[NSApp stop]` quit-guard (**sub-cycle B**); per-request brotli decode
+cache (a perf pass, not correctness); `setDragRegion` CEF elision
+(fullbleed non-goal, listed above); `.zc`-legacy `chromium` config value
+silently falling back to WKWebView (a config-validation gap, not a runtime
+bug); `g_active_browser` cross-thread read (benign, matches the existing
+single-window pattern — see Task 5's life-span-handler retain/release
+above).
 
 ---
 
