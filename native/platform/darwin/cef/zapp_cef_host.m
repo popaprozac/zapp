@@ -281,7 +281,7 @@ void zapp_cef_create_browser_in_view(void* parent_view, const char* url,
   // Helper runs no Nim, so this is the ONLY way it gets the carriers/bootstrap.
   char* bootstrap_js = zapp_cef_build_bootstrap_js(window_id, owner_id);
   cef_dictionary_value_t* extra_info = cef_dictionary_value_create();
-  {
+  if (bootstrap_js != NULL && extra_info != NULL) {
     cef_string_t key, val;
     memset(&key, 0, sizeof(key));
     memset(&val, 0, sizeof(val));

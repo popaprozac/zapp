@@ -272,8 +272,11 @@ int CEF_CALLBACK zapp_cef_client_on_process_message_received(
       // by window.m's CEF branch). Runs on the CEF UI thread == the main
       // thread under the external pump, i.e. the SAME thread the WKWebView
       // handler and the Nim runtime use — safe to call the ORC-GC'd router.
-      zapp_handle_message_from_window(app_get_active(), env_utf8.str,
-                                      zapp_cef_get_window_slot());
+      void* app_ptr = app_get_active();
+      if (app_ptr != NULL) {
+        zapp_handle_message_from_window(app_ptr, env_utf8.str,
+                                        zapp_cef_get_window_slot());
+      }
     }
     cef_string_utf8_clear(&env_utf8);
     handled = 1;
