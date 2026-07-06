@@ -160,3 +160,149 @@ borderless/custom-chrome), (2) the CEF `<h1>CEF</h1>` page renders **inside**
 that window (not a separate CEF-owned window), (3) dragging/resizing the
 window resizes the CEF content live with it, (4) `[worker] tick N` keeps
 incrementing in the console throughout. If all hold -> GATE 2 PASS.
+
+---
+
+## Task 3: custom `zapp://` scheme handler + native-brotli-decode probe
+
+**Verdict: builds + launches clean; scheme + factory + both assets served
+correctly at the CEF resource-handler level (pending human GATE-3 on-screen
+check, deferred to T6).** Proves the mechanics Zapp's real `webEngine:
+"chromium"` asset-serving would use, and probes the "size cost buys perf"
+bet: ship brotli-compressed assets and let Chromium's own network stack
+decode them, instead of decompressing ourselves.
+
+### What changed
+
+- **New `scheme_handler.c`**: owns the whole `zapp` scheme end-to-end —
+  `cefspike_register_zapp_scheme()` (scheme registration, called in every
+  process), a `cef_scheme_handler_factory_t` (`create()` matches the request
+  URL against the two known asset URLs), a `cef_resource_handler_t`
+  (`open`/`get_response_headers`/`skip`/`read`/`cancel` — the modern,
+  non-deprecated vtable slots; `process_request`/`read_response` left `NULL`),
+  and `cefspike_scheme_set_assets()` / `cefspike_install_scheme_handler_factory()`.
+  Same manual-refcounting pattern (`cef_refcount.h`'s
+  `IMPLEMENT_REFCOUNTING_SIMPLE`) T0 established.
+- **New `assets/index.html`**: `<h1>` + `<pre id="out">`, with an inline
+  script that `fetch("zapp://app/data.json")` and renders the decoded
+  response text (plus the observed `Content-Encoding`/`Content-Type`
+  headers) into `#out`.
+- **New `assets/data.json`** (20364 bytes, human-readable source) +
+  **`assets/data.json.br`** (1176 bytes, committed binary, brotli-compressed
+  via `compress-assets.ts`) — the brotli probe payload.
+- **New `compress-assets.ts`**: `bun run spikes/cef-macos/compress-assets.ts`
+  — Bun's `node:zlib` `brotliCompressSync` (quality 11), NOT Node. Re-run
+  whenever `assets/data.json` changes.
+- **`cef_spike.h`**: added `#include ".../cef_scheme_capi.h"` (transitively
+  already pulled in via `cef_app_capi.h`, included explicitly for clarity)
+  and declarations for the three `scheme_handler.c` entry points.
+- **`cef_app.c`**: added `on_register_custom_schemes` to the browser-process
+  `cef_app_t` (forwards to `cefspike_register_zapp_scheme`) and
+  `on_context_initialized` to the browser-process handler (forwards to
+  `cefspike_install_scheme_handler_factory`).
+- **`mac_helper.c`**: **no longer passes a `NULL` `cef_app_t`.** CEF calls
+  `on_register_custom_schemes` in EVERY process, before init, and requires
+  identical registration everywhere — so the Helper subprocess (renderer/
+  GPU/utility) now builds its own minimal, standalone `cef_app_t` (same
+  refcounting macros) whose only job is that one callback, wired to the same
+  `cefspike_register_zapp_scheme()` scheme_handler.c exports. It deliberately
+  does **not** reuse `cef_app.c`'s `cefspike_app_create()`: that app's
+  browser-process handler calls `cefspike_pump_schedule` (mac_entry.m's ObjC
+  external-pump owner), which the Helper build does not compile — reusing it
+  would mean linking Cocoa/NSApplication pump scaffolding into a renderer/GPU
+  child process for no reason. `scheme_handler.c` has no such dependency, so
+  it links cleanly into the Helper (confirmed: `nm` shows
+  `_cefspike_register_zapp_scheme` defined in the Helper binary, and `otool
+  -L` shows **no** Cocoa link there — the ObjC pump machinery stayed fully
+  out of the Helper build.)
+- **`build.sh`**: helper-compile step now also compiles `scheme_handler.c`
+  (no new `-I` needed — its quoted `#include`s resolve relative to its own
+  directory, same as `mac_helper.c`'s pre-existing includes).
+- **`main.nim`**: compiles `scheme_handler.c`; `staticRead()`s
+  `assets/index.html`, `assets/data.json` (raw, for the size-delta log line
+  only — never served), and `assets/data.json.br` at **Nim compile time**
+  (absolute paths via `thisDir`, same style as `cefRoot`); hands the served
+  buffers to C once via `cefspike_scheme_set_assets` **before**
+  `cef_initialize` (the browser-process handler's `on_context_initialized`
+  — which installs the factory — can fire synchronously inside
+  `cef_initialize`, so the assets must already be set by then); the browser
+  URL is now `zapp://app/index.html` (was `data:text/html,<h1>CEF</h1>`
+  through T0-T2).
+
+### Scheme options chosen
+
+`CEF_SCHEME_OPTION_STANDARD | CEF_SCHEME_OPTION_SECURE |
+CEF_SCHEME_OPTION_CORS_ENABLED | CEF_SCHEME_OPTION_FETCH_ENABLED` — standard
+so `zapp://app/index.html` parses as `scheme://host/path`; secure so no
+mixed-content warnings; CORS/fetch-enabled so `index.html`'s same-origin
+`fetch("zapp://app/data.json")` is permitted (same-origin here, so CORS
+headers weren't strictly required, but a real `webEngine:"chromium"` asset
+scheme would want these regardless).
+
+### Resource-handler vtable used (CEF 144.0.29 / Chromium 144.0.7559.256)
+
+The **current, non-deprecated** slots:
+`open` -> `get_response_headers` -> `skip` (Range support) -> `read`
+(repeatedly; `bytes_read == 0` + return `0` signals completion) -> `cancel`.
+`process_request` / `read_response` (the pre-`open`/`read` legacy pair) exist
+in the struct but are **only invoked as a fallback if `open`/`read` aren't
+implemented** per the header's own doc comment — left `NULL` (calloc'd),
+never called. No vtable surprises versus the brief's expected mechanics;
+matched `cef_binary/include/capi/cef_resource_handler.h` +
+`cef_scheme.h` exactly, no blocking issues.
+
+### Brotli-direct probe: sizes + how it was verified
+
+`assets/data.json` raw = **20364 bytes** -> `assets/data.json.br` = **1176
+bytes** (`compress-assets.ts` reports "94% smaller"; `main.nim`'s own
+integer-division log line reports "95% smaller" — same ratio
+(1 - 1176/20364 = 0.9422), different rounding formulas, not a bug).
+
+**How verified (code path + bounded run — on-screen decode is T6's GATE 3):**
+a `perl -e 'alarm 8; exec @ARGV' ...` bounded run of the fresh build produced,
+in order:
+
+```
+[cef-spike] brotli probe: data.json raw=20364B  br=1176B  (95% smaller)
+[cef-spike] zapp:// scheme handler factory registered (index.html=1875 bytes, data.json.br=1176 bytes)
+[worker] stand-in loop started (dedicated pthread + CFRunLoop)
+[cef-spike] browser created
+[cef-spike] zapp:// serving 1875 bytes, mime=text/html, encoding=(none)
+[cef-spike] zapp:// serving 1176 bytes, mime=application/json, encoding=br
+[worker] tick 1
+[worker] tick 2
+[worker] tick 3 … tick 6
+```
+
+This confirms, at the CEF resource-handler level: (1) `zapp://app/index.html`
+was requested and served (1875 bytes = the exact committed file size); (2)
+the page's inline script's `fetch("zapp://app/data.json")` **reached the zapp
+scheme handler** and was served the exact 1176-byte brotli payload with
+`Content-Encoding: br` — proving the CORS/fetch-enabled scheme flags allowed
+the request through; (3) no `"zapp:// unhandled request"` log line appeared
+(the only other branch in `create()`), i.e. no mismatched/unexpected URLs;
+(4) no crash, no entries in `~/Library/Diagnostics/DiagnosticReports/`,
+`[worker] tick N` kept incrementing throughout — T1/T2's pump/worker
+coexistence is unaffected by T3's changes.
+
+**What this does NOT prove:** whether Chromium actually **decoded** the br
+bytes before handing them to `fetch().text()` (vs. the page receiving raw
+compressed garbage) — that requires eyes on `#out`'s rendered content, which
+is explicitly **T6's GATE 3 job**, not this task's. If GATE 3 shows garbled/
+binary content instead of readable JSON, the probe's verdict flips to "CEF
+custom-scheme responses don't run through Chromium's content-decoding
+filters" — worth flagging loudly in that case, since it would kill perf-win
+#1 for the custom-scheme-asset path specifically (HTTP responses would still
+decode br fine; only custom-scheme resource-handler responses would be in
+question).
+
+### GATE 3 — remaining human step (T6)
+
+Run `open spikes/cef-macos/build/cef-spike.app`. Confirm: (1) the window
+shows the Task 3 page — an `<h1>CEF</h1>` and, below it, `#out` populated
+with **readable JSON text** (not garbled binary) prefixed with
+`Content-Encoding: br` / `Content-Type: application/json` lines; (2) the
+JSON text is recognizably the `assets/data.json` content (the `"note"` field
+mentioning brotli, the `items` array); (3) `[worker] tick N` keeps
+incrementing in the console throughout. If all hold -> GATE 3 PASS (native
+brotli-decode confirmed for custom-scheme responses).

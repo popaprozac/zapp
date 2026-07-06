@@ -1,0 +1,47 @@
+<!doctype html>
+<!--
+  CEF spike (Task 3) — served at zapp://app/index.html by the custom "zapp"
+  scheme handler (see ../scheme_handler.c). Two things this page proves:
+
+    1. The zapp:// scheme loads a real page (this file), not a data: URL.
+    2. fetch("zapp://app/data.json") — served BROTLI-COMPRESSED with
+       Content-Encoding: br by the SAME resource-handler machinery (the
+       handler does NOT decompress; see scheme_handler.c) — comes back as
+       plain decoded text. If #out below shows readable JSON, Chromium's
+       network stack decoded br natively. If it shows garbage/binary, the
+       probe FAILED (see FINDINGS.md Task 3 for the actual result).
+-->
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>CEF Spike — Task 3 (zapp:// scheme + brotli probe)</title>
+  <style>
+    body { font: 14px/1.5 -apple-system, sans-serif; margin: 2rem; }
+    pre { background: #f2f2f2; padding: 1rem; white-space: pre-wrap; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <h1>CEF</h1>
+  <p>Loaded via <code>zapp://app/index.html</code> (custom scheme handler).</p>
+  <pre id="out">fetching zapp://app/data.json …</pre>
+  <script>
+    fetch("zapp://app/data.json")
+      .then(function (res) {
+        var encoding = res.headers.get("content-encoding");
+        var contentType = res.headers.get("content-type");
+        return res.text().then(function (text) {
+          return { text: text, encoding: encoding, contentType: contentType };
+        });
+      })
+      .then(function (r) {
+        document.getElementById("out").textContent =
+          "Content-Encoding: " + (r.encoding || "(none)") + "\n" +
+          "Content-Type: " + (r.contentType || "(none)") + "\n\n" +
+          r.text;
+      })
+      .catch(function (err) {
+        document.getElementById("out").textContent = "fetch failed: " + err;
+      });
+  </script>
+</body>
+</html>

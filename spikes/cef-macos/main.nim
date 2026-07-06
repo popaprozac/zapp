@@ -1,4 +1,4 @@
-## CEF spike (Task 0 + Task 1 + Task 2) — Nim orchestration.
+## CEF spike (Task 0 + Task 1 + Task 2 + Task 3) — Nim orchestration.
 ##
 ## This module IS the browser-process entry point (Nim's generated `main` runs
 ## the top-level `cefSpikeMain()` below). It proves the load-bearing thing for
@@ -26,6 +26,20 @@
 ## `cef_window_info_t.parent_view`. The browser was already created WINDOWED
 ## (parent_view + Alloy runtime_style) since T0 — T2 only formalizes the host
 ## window itself, not the browser-creation mode.
+##
+## Task 3 (custom scheme + brotli-direct probe) replaces T0-T2's `data:` URL
+## with a real `zapp://app/index.html` served by a custom scheme handler
+## (scheme_handler.c) — registered pre-init via `cef_app_t::
+## on_register_custom_schemes` (cef_app.c, and mirrored in mac_helper.c for
+## the Helper subprocess, since CEF requires identical registration in EVERY
+## process) and installed post-init via the browser-process handler's
+## `on_context_initialized`. The asset bytes (assets/index.html and the
+## brotli-compressed assets/data.json.br — see compress-assets.ts) are
+## `staticRead` here at NIM COMPILE TIME and handed to the C side once via
+## `cefspike_scheme_set_assets`, below. The second asset is the brotli probe:
+## it's served WITHOUT decompression (`Content-Encoding: br`), proving (or
+## disproving — see FINDINGS.md) that Chromium's own network stack decodes br
+## natively for a custom-scheme response, same as a real HTTP response.
 ##
 ## Build/link surface lives here (per the Task 0 brief): the CEF include dir and
 ## the framework link are wired via {.passC.}/{.passL.}; the C/ObjC sources via
@@ -56,6 +70,7 @@ const cefFrameworkBin =
 # The CEF callback structs (C) and macOS scaffolding (ObjC, ARC).
 {.compile(thisDir & "/cef_app.c", "-std=c11").}
 {.compile(thisDir & "/cef_client.c", "-std=c11").}
+{.compile(thisDir & "/scheme_handler.c", "-std=c11").}
 {.compile(thisDir & "/mac_entry.m", "-fobjc-arc").}
 {.compile(thisDir & "/host.m", "-fobjc-arc").}
 
@@ -98,6 +113,21 @@ proc cefspike_host_view_for_window(window: pointer): pointer
 proc cefspike_start_worker_stub() {.importc, cdecl, header: "cef_spike.h".}
 proc cefspike_run_main_loop() {.importc, cdecl, header: "cef_spike.h".}
 
+# --- Task 3 (scheme_handler.c) — custom "zapp" scheme + brotli probe -------
+proc cefspike_scheme_set_assets(indexHtml: cstring, indexHtmlLen: cint,
+                                dataJsonBr: cstring, dataJsonBrLen: cint)
+  {.importc, cdecl, header: "cef_spike.h".}
+
+# Embedded assets, read at NIM COMPILE TIME (absolute paths, same style as
+# cefRoot above — no ambiguity about the CWD build.sh happens to run from).
+# assets/index.html is served verbatim at zapp://app/index.html.
+# assets/data.json.br is the brotli-compressed form of assets/data.json (see
+# compress-assets.ts) — served AS-IS with Content-Encoding: br; the resource
+# handler never decompresses it (that's the whole probe).
+const indexHtmlAsset = staticRead(thisDir & "/assets/index.html")
+const dataJsonRawAsset = staticRead(thisDir & "/assets/data.json")
+const dataJsonBrAsset = staticRead(thisDir & "/assets/data.json.br")
+
 # argv backing store — must outlive cef_initialize (CEF snapshots it into a
 # command line). Module globals stay alive for the process lifetime.
 var gArgStrings: seq[string]
@@ -117,41 +147,57 @@ proc cefSpikeMain() =
   gArgv[gArgStrings.len] = nil
   let mainArgs = cefspike_make_main_args(gArgStrings.len.cint, addr gArgv[0])
 
-  # 3. Initialize CEF (Nim calls cef_initialize directly).
+  # 3. Hand the embedded asset bytes to the "zapp" scheme handler BEFORE
+  #    cef_initialize (Task 3): the browser-process handler's
+  #    on_context_initialized — which installs the scheme handler factory —
+  #    can fire synchronously inside cef_initialize, so the assets must
+  #    already be set by then.
+  cefspike_scheme_set_assets(indexHtmlAsset.cstring, indexHtmlAsset.len.cint,
+                             dataJsonBrAsset.cstring, dataJsonBrAsset.len.cint)
+  let brPct = 100 - (dataJsonBrAsset.len * 100 div dataJsonRawAsset.len)
+  stderr.writeLine "[cef-spike] brotli probe: data.json raw=" &
+    $dataJsonRawAsset.len & "B  br=" & $dataJsonBrAsset.len & "B  (" &
+    $brPct & "% smaller)"
+
+  # 4. Initialize CEF (Nim calls cef_initialize directly). The "zapp" scheme
+  #    is registered pre-init via cef_app_t::on_register_custom_schemes
+  #    (cef_app.c); the scheme handler factory is installed post-init via the
+  #    browser-process handler's on_context_initialized (also cef_app.c).
   let settings = cefspike_make_settings()
   let app = cefspike_app_create()
   if cef_initialize(mainArgs, settings, app, nil) == 0:
     stderr.writeLine "[cef-spike] cef_initialize failed"
     quit(1)
 
-  # 4. Open a standard Zapp-style host NSWindow (host.m — T2) and create a
-  #    browser in it, pointed at a data: page. Ordering is load-bearing: the
-  #    window/contentView must exist before the browser is created, since
-  #    parent_view is captured into cef_window_info_t below and read by CEF at
+  # 5. Open a standard Zapp-style host NSWindow (host.m — T2) and create a
+  #    browser in it, pointed at zapp://app/index.html (Task 3 — was a data:
+  #    page through T0-T2). Ordering is load-bearing: the window/contentView
+  #    must exist before the browser is created, since parent_view is
+  #    captured into cef_window_info_t below and read by CEF at
   #    cef_browser_host_create_browser time.
   let winW = cint(960)
   let winH = cint(680)
-  let hostWindow = cefspike_make_host_window(winW, winH, "CEF Spike — Task 2")
+  let hostWindow = cefspike_make_host_window(winW, winH, "CEF Spike — Task 3")
   let parentView = cefspike_host_view_for_window(hostWindow)
   let client = cefspike_client_create()
   let windowInfo = cefspike_make_window_info(parentView, winW, winH)
-  let url = cefspike_make_cef_string("data:text/html,<h1>CEF</h1>")
+  let url = cefspike_make_cef_string("zapp://app/index.html")
   let browserSettings = cefspike_make_browser_settings()
   discard cef_browser_host_create_browser(
     windowInfo, client, url, browserSettings, nil, nil)
 
-  # 5. Coexistence probe (Task 1, the #1 risk): spawn the SECOND concurrent loop
+  # 6. Coexistence probe (Task 1, the #1 risk): spawn the SECOND concurrent loop
   #    — a ZJS-worker-shaped pthread+CFRunLoop that logs `[worker] tick N`. It
   #    must keep ticking while CEF + NSApplication run, and vice versa.
   cefspike_start_worker_stub()
 
-  # 6. Run the loop under NSApplication (Task 1 external message pump): [NSApp run]
+  # 7. Run the loop under NSApplication (Task 1 external message pump): [NSApp run]
   #    owns the loop; CEF is pumped cooperatively via cef_do_message_loop_work
   #    scheduled from the browser-process handler. Returns when the last browser
   #    closes (life-span handler stops NSApp).
   cefspike_run_main_loop()
 
-  # 7. Tear down.
+  # 8. Tear down.
   cef_shutdown()
 
 cefSpikeMain()

@@ -19,6 +19,7 @@
 #include "include/capi/cef_browser_capi.h"
 #include "include/capi/cef_client_capi.h"
 #include "include/capi/cef_life_span_handler_capi.h"
+#include "include/capi/cef_scheme_capi.h"
 #include "include/internal/cef_string.h"
 
 // Invariant check — replaces cefsimple_capi/simple_utils.h's CHECK.
@@ -114,6 +115,40 @@ void cefspike_quit_main_loop(void);
 // CFRunLoop). A faithful stand-in for the risk gate; T5 wires the real ZJS
 // worker. Call after the browser is created and before cefspike_run_main_loop.
 void cefspike_start_worker_stub(void);
+
+// --- scheme_handler.c (Task 3) — custom "zapp" scheme + brotli probe -------
+
+// Register the "zapp" custom scheme (standard + secure + CORS/fetch-enabled).
+// Wire this into cef_app_t::on_register_custom_schemes. CEF calls that
+// callback in EVERY process — browser AND the Helper subprocess (mac_helper.c
+// wires its own minimal cef_app_t to this same function) — and requires
+// identical registration across all of them. Deliberately self-contained (no
+// dependency on the browser-process handler or the ObjC pump) so it links
+// cleanly into the Helper build too.
+void cefspike_register_zapp_scheme(cef_scheme_registrar_t* registrar);
+
+// Provide the embedded asset bytes the "zapp" scheme serves. Called once from
+// main.nim — which staticRead()s the committed assets/index.html and
+// assets/data.json.br at NIM COMPILE TIME — before cef_initialize (the
+// browser-process handler's on_context_initialized, which installs the
+// scheme handler factory below, can fire synchronously inside
+// cef_initialize, so the assets must already be set by then). Browser-process
+// only; the Helper has no assets to serve.
+//   index_html    -> zapp://app/index.html, Content-Type: text/html
+//   data_json_br  -> zapp://app/data.json, Content-Type: application/json,
+//                    Content-Encoding: br. PRE-COMPRESSED bytes (see
+//                    compress-assets.ts) — this handler does NOT decompress;
+//                    the probe is whether Chromium's network stack decodes br
+//                    natively for a custom-scheme response.
+void cefspike_scheme_set_assets(const char* index_html, int index_html_len,
+                                const void* data_json_br,
+                                int data_json_br_len);
+
+// Create the "zapp" scheme handler factory and register it with the global
+// request context (cef_register_scheme_handler_factory). Call AFTER
+// cef_initialize (from the browser-process handler's on_context_initialized)
+// and after cefspike_scheme_set_assets. Browser-process only.
+void cefspike_install_scheme_handler_factory(void);
 
 #ifdef __cplusplus
 }

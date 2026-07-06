@@ -43,10 +43,14 @@ echo "[build] copying Chromium Embedded Framework.framework"
 ditto "$FW_SRC" "$APP/Contents/Frameworks/Chromium Embedded Framework.framework"
 
 # --- 2. build the Helper subprocess executable (compiled once) -------------
-echo "[build] compiling helper (mac_helper.c)"
+echo "[build] compiling helper (mac_helper.c + scheme_handler.c)"
 HELPER_BIN="$BUILD/cef-spike-helper.bin"
+# scheme_handler.c is compiled in too (Task 3): mac_helper.c's minimal cef_app_t
+# needs cefspike_register_zapp_scheme, since CEF requires the "zapp" custom
+# scheme registered identically in EVERY process, including this Helper.
 clang -std=c11 -O2 \
   "$HERE/mac_helper.c" \
+  "$HERE/scheme_handler.c" \
   -I"$CEF_ROOT" \
   "$FW_BIN" \
   -Wl,-rpath,@executable_path/../../../ \

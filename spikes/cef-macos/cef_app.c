@@ -19,6 +19,24 @@
 //      (mac_entry.m), which schedules a cef_do_message_loop_work() on the main
 //      NSRunLoop. This is what lets NSApplication own the loop (via [NSApp run])
 //      while CEF is pumped cooperatively — see mac_entry.m for the pump.
+//
+// Task 3 (custom scheme + brotli probe) adds two more handler surfaces:
+//
+//   3. on_register_custom_schemes — CEF calls this in EVERY process, before
+//      init, and requires identical registration across all of them. Forwards
+//      to cefspike_register_zapp_scheme (scheme_handler.c), which is also
+//      wired into a separate minimal cef_app_t in mac_helper.c for the Helper
+//      subprocess (that file can't reuse THIS cef_app_t: the browser-process
+//      handler below references the ObjC pump, which the Helper build does
+//      not compile).
+//
+//   4. the browser-process handler's on_context_initialized — fires once,
+//      synchronously, after cef_initialize's internal setup completes.
+//      Installs the "zapp" scheme handler factory (cefspike_install_
+//      scheme_handler_factory, scheme_handler.c) — this must happen AFTER
+//      init (the factory registers with the global request context, which
+//      does not exist before init) but the scheme itself must be registered
+//      BEFORE init (step 3), hence the two separate hooks.
 
 #include <stdatomic.h>
 #include <stdlib.h>
@@ -52,6 +70,15 @@ void CEF_CALLBACK cefspike_bph_on_schedule_message_pump_work(
   cefspike_pump_schedule(delay_ms);
 }
 
+// Task 3 — fires once, synchronously, after CEF's internal init completes.
+// Installs the "zapp" scheme handler factory (the scheme ITSELF was already
+// registered pre-init via on_register_custom_schemes below).
+void CEF_CALLBACK cefspike_bph_on_context_initialized(
+    cef_browser_process_handler_t* self) {
+  (void)self;
+  cefspike_install_scheme_handler_factory();
+}
+
 static cefspike_bph_t* cefspike_bph_create(void) {
   cefspike_bph_t* bph = (cefspike_bph_t*)calloc(1, sizeof(cefspike_bph_t));
   CHECK(bph);
@@ -60,6 +87,7 @@ static cefspike_bph_t* cefspike_bph_create(void) {
                            cefspike_bph);
   bph->handler.on_schedule_message_pump_work =
       cefspike_bph_on_schedule_message_pump_work;
+  bph->handler.on_context_initialized = cefspike_bph_on_context_initialized;
 
   atomic_store(&bph->ref_count, 1);
   return bph;
@@ -121,6 +149,15 @@ cefspike_app_get_browser_process_handler(cef_app_t* self) {
   return NULL;
 }
 
+// Task 3 — called in EVERY process, before init. Forwards to the shared,
+// self-contained registration function in scheme_handler.c (also wired into
+// the Helper subprocess's own minimal cef_app_t — see mac_helper.c).
+void CEF_CALLBACK cefspike_app_on_register_custom_schemes(
+    cef_app_t* self, cef_scheme_registrar_t* registrar) {
+  (void)self;
+  cefspike_register_zapp_scheme(registrar);
+}
+
 cef_app_t* cefspike_app_create(void) {
   cefspike_app_t* app = (cefspike_app_t*)calloc(1, sizeof(cefspike_app_t));
   CHECK(app);
@@ -130,6 +167,7 @@ cef_app_t* cefspike_app_create(void) {
       cefspike_app_on_before_command_line_processing;
   app->app.get_browser_process_handler =
       cefspike_app_get_browser_process_handler;
+  app->app.on_register_custom_schemes = cefspike_app_on_register_custom_schemes;
 
   app->bph = cefspike_bph_create();
   CHECK(app->bph);

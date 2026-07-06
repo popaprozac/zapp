@@ -1,0 +1,566 @@
+{
+  "note": "Served pre-brotli-compressed by the zapp:// custom scheme resource handler (spikes/cef-macos/scheme_handler.c). The handler hands back the RAW compressed bytes with Content-Encoding: br — it does not decompress. If you can read this, Chromium decoded it natively.",
+  "generated": "spikes/cef-macos/compress-assets.ts",
+  "items": [
+    {
+      "id": 1,
+      "label": "Toggle sidebar",
+      "section": "sidebar",
+      "shortcut": "Cmd+Shift+C",
+      "description": "Native sidebar command: toggles the sidebar pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 2,
+      "label": "Open sidebar",
+      "section": "sidebar",
+      "shortcut": "Cmd+Shift+D",
+      "description": "Native sidebar command: opens the sidebar pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 3,
+      "label": "Close sidebar",
+      "section": "sidebar",
+      "shortcut": "Cmd+Shift+E",
+      "description": "Native sidebar command: closes the sidebar pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 4,
+      "label": "Focus sidebar",
+      "section": "sidebar",
+      "shortcut": "Cmd+Shift+F",
+      "description": "Native sidebar command: focuss the sidebar pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 5,
+      "label": "Resize sidebar",
+      "section": "sidebar",
+      "shortcut": "Cmd+Shift+G",
+      "description": "Native sidebar command: resizes the sidebar pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 6,
+      "label": "Collapse sidebar",
+      "section": "sidebar",
+      "shortcut": "Cmd+Shift+H",
+      "description": "Native sidebar command: collapses the sidebar pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 7,
+      "label": "Expand sidebar",
+      "section": "sidebar",
+      "shortcut": "Cmd+Shift+I",
+      "description": "Native sidebar command: expands the sidebar pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 8,
+      "label": "Reset sidebar",
+      "section": "sidebar",
+      "shortcut": "Cmd+Shift+J",
+      "description": "Native sidebar command: resets the sidebar pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 9,
+      "label": "Toggle inspector",
+      "section": "inspector",
+      "shortcut": "Cmd+Shift+K",
+      "description": "Native inspector command: toggles the inspector pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 10,
+      "label": "Open inspector",
+      "section": "inspector",
+      "shortcut": "Cmd+Shift+L",
+      "description": "Native inspector command: opens the inspector pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 11,
+      "label": "Close inspector",
+      "section": "inspector",
+      "shortcut": "Cmd+Shift+M",
+      "description": "Native inspector command: closes the inspector pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 12,
+      "label": "Focus inspector",
+      "section": "inspector",
+      "shortcut": "Cmd+Shift+N",
+      "description": "Native inspector command: focuss the inspector pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 13,
+      "label": "Resize inspector",
+      "section": "inspector",
+      "shortcut": "Cmd+Shift+O",
+      "description": "Native inspector command: resizes the inspector pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 14,
+      "label": "Collapse inspector",
+      "section": "inspector",
+      "shortcut": "Cmd+Shift+P",
+      "description": "Native inspector command: collapses the inspector pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 15,
+      "label": "Expand inspector",
+      "section": "inspector",
+      "shortcut": "Cmd+Shift+Q",
+      "description": "Native inspector command: expands the inspector pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 16,
+      "label": "Reset inspector",
+      "section": "inspector",
+      "shortcut": "Cmd+Shift+R",
+      "description": "Native inspector command: resets the inspector pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 17,
+      "label": "Toggle toolbar",
+      "section": "toolbar",
+      "shortcut": "Cmd+Shift+S",
+      "description": "Native toolbar command: toggles the toolbar pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 18,
+      "label": "Open toolbar",
+      "section": "toolbar",
+      "shortcut": "Cmd+Shift+T",
+      "description": "Native toolbar command: opens the toolbar pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 19,
+      "label": "Close toolbar",
+      "section": "toolbar",
+      "shortcut": "Cmd+Shift+U",
+      "description": "Native toolbar command: closes the toolbar pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 20,
+      "label": "Focus toolbar",
+      "section": "toolbar",
+      "shortcut": "Cmd+Shift+V",
+      "description": "Native toolbar command: focuss the toolbar pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 21,
+      "label": "Resize toolbar",
+      "section": "toolbar",
+      "shortcut": "Cmd+Shift+W",
+      "description": "Native toolbar command: resizes the toolbar pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 22,
+      "label": "Collapse toolbar",
+      "section": "toolbar",
+      "shortcut": "Cmd+Shift+X",
+      "description": "Native toolbar command: collapses the toolbar pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 23,
+      "label": "Expand toolbar",
+      "section": "toolbar",
+      "shortcut": "Cmd+Shift+Y",
+      "description": "Native toolbar command: expands the toolbar pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 24,
+      "label": "Reset toolbar",
+      "section": "toolbar",
+      "shortcut": "Cmd+Shift+Z",
+      "description": "Native toolbar command: resets the toolbar pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 25,
+      "label": "Toggle tray",
+      "section": "tray",
+      "shortcut": "Cmd+Shift+A",
+      "description": "Native tray command: toggles the tray pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 26,
+      "label": "Open tray",
+      "section": "tray",
+      "shortcut": "Cmd+Shift+B",
+      "description": "Native tray command: opens the tray pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 27,
+      "label": "Close tray",
+      "section": "tray",
+      "shortcut": "Cmd+Shift+C",
+      "description": "Native tray command: closes the tray pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 28,
+      "label": "Focus tray",
+      "section": "tray",
+      "shortcut": "Cmd+Shift+D",
+      "description": "Native tray command: focuss the tray pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 29,
+      "label": "Resize tray",
+      "section": "tray",
+      "shortcut": "Cmd+Shift+E",
+      "description": "Native tray command: resizes the tray pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 30,
+      "label": "Collapse tray",
+      "section": "tray",
+      "shortcut": "Cmd+Shift+F",
+      "description": "Native tray command: collapses the tray pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 31,
+      "label": "Expand tray",
+      "section": "tray",
+      "shortcut": "Cmd+Shift+G",
+      "description": "Native tray command: expands the tray pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 32,
+      "label": "Reset tray",
+      "section": "tray",
+      "shortcut": "Cmd+Shift+H",
+      "description": "Native tray command: resets the tray pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 33,
+      "label": "Toggle popover",
+      "section": "popover",
+      "shortcut": "Cmd+Shift+I",
+      "description": "Native popover command: toggles the popover pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 34,
+      "label": "Open popover",
+      "section": "popover",
+      "shortcut": "Cmd+Shift+J",
+      "description": "Native popover command: opens the popover pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 35,
+      "label": "Close popover",
+      "section": "popover",
+      "shortcut": "Cmd+Shift+K",
+      "description": "Native popover command: closes the popover pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 36,
+      "label": "Focus popover",
+      "section": "popover",
+      "shortcut": "Cmd+Shift+L",
+      "description": "Native popover command: focuss the popover pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 37,
+      "label": "Resize popover",
+      "section": "popover",
+      "shortcut": "Cmd+Shift+M",
+      "description": "Native popover command: resizes the popover pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 38,
+      "label": "Collapse popover",
+      "section": "popover",
+      "shortcut": "Cmd+Shift+N",
+      "description": "Native popover command: collapses the popover pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 39,
+      "label": "Expand popover",
+      "section": "popover",
+      "shortcut": "Cmd+Shift+O",
+      "description": "Native popover command: expands the popover pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 40,
+      "label": "Reset popover",
+      "section": "popover",
+      "shortcut": "Cmd+Shift+P",
+      "description": "Native popover command: resets the popover pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 41,
+      "label": "Toggle menu",
+      "section": "menu",
+      "shortcut": "Cmd+Shift+Q",
+      "description": "Native menu command: toggles the menu pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 42,
+      "label": "Open menu",
+      "section": "menu",
+      "shortcut": "Cmd+Shift+R",
+      "description": "Native menu command: opens the menu pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 43,
+      "label": "Close menu",
+      "section": "menu",
+      "shortcut": "Cmd+Shift+S",
+      "description": "Native menu command: closes the menu pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 44,
+      "label": "Focus menu",
+      "section": "menu",
+      "shortcut": "Cmd+Shift+T",
+      "description": "Native menu command: focuss the menu pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 45,
+      "label": "Resize menu",
+      "section": "menu",
+      "shortcut": "Cmd+Shift+U",
+      "description": "Native menu command: resizes the menu pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 46,
+      "label": "Collapse menu",
+      "section": "menu",
+      "shortcut": "Cmd+Shift+V",
+      "description": "Native menu command: collapses the menu pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 47,
+      "label": "Expand menu",
+      "section": "menu",
+      "shortcut": "Cmd+Shift+W",
+      "description": "Native menu command: expands the menu pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 48,
+      "label": "Reset menu",
+      "section": "menu",
+      "shortcut": "Cmd+Shift+X",
+      "description": "Native menu command: resets the menu pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 49,
+      "label": "Toggle multiwindow",
+      "section": "multiwindow",
+      "shortcut": "Cmd+Shift+Y",
+      "description": "Native multiwindow command: toggles the multiwindow pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 50,
+      "label": "Open multiwindow",
+      "section": "multiwindow",
+      "shortcut": "Cmd+Shift+Z",
+      "description": "Native multiwindow command: opens the multiwindow pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 51,
+      "label": "Close multiwindow",
+      "section": "multiwindow",
+      "shortcut": "Cmd+Shift+A",
+      "description": "Native multiwindow command: closes the multiwindow pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 52,
+      "label": "Focus multiwindow",
+      "section": "multiwindow",
+      "shortcut": "Cmd+Shift+B",
+      "description": "Native multiwindow command: focuss the multiwindow pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 53,
+      "label": "Resize multiwindow",
+      "section": "multiwindow",
+      "shortcut": "Cmd+Shift+C",
+      "description": "Native multiwindow command: resizes the multiwindow pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 54,
+      "label": "Collapse multiwindow",
+      "section": "multiwindow",
+      "shortcut": "Cmd+Shift+D",
+      "description": "Native multiwindow command: collapses the multiwindow pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 55,
+      "label": "Expand multiwindow",
+      "section": "multiwindow",
+      "shortcut": "Cmd+Shift+E",
+      "description": "Native multiwindow command: expands the multiwindow pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 56,
+      "label": "Reset multiwindow",
+      "section": "multiwindow",
+      "shortcut": "Cmd+Shift+F",
+      "description": "Native multiwindow command: resets the multiwindow pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 57,
+      "label": "Toggle clipboard",
+      "section": "clipboard",
+      "shortcut": "Cmd+Shift+G",
+      "description": "Native clipboard command: toggles the clipboard pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 58,
+      "label": "Open clipboard",
+      "section": "clipboard",
+      "shortcut": "Cmd+Shift+H",
+      "description": "Native clipboard command: opens the clipboard pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 59,
+      "label": "Close clipboard",
+      "section": "clipboard",
+      "shortcut": "Cmd+Shift+I",
+      "description": "Native clipboard command: closes the clipboard pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 60,
+      "label": "Focus clipboard",
+      "section": "clipboard",
+      "shortcut": "Cmd+Shift+J",
+      "description": "Native clipboard command: focuss the clipboard pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 61,
+      "label": "Resize clipboard",
+      "section": "clipboard",
+      "shortcut": "Cmd+Shift+K",
+      "description": "Native clipboard command: resizes the clipboard pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 62,
+      "label": "Collapse clipboard",
+      "section": "clipboard",
+      "shortcut": "Cmd+Shift+L",
+      "description": "Native clipboard command: collapses the clipboard pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 63,
+      "label": "Expand clipboard",
+      "section": "clipboard",
+      "shortcut": "Cmd+Shift+M",
+      "description": "Native clipboard command: expands the clipboard pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 64,
+      "label": "Reset clipboard",
+      "section": "clipboard",
+      "shortcut": "Cmd+Shift+N",
+      "description": "Native clipboard command: resets the clipboard pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 65,
+      "label": "Toggle shortcuts",
+      "section": "shortcuts",
+      "shortcut": "Cmd+Shift+O",
+      "description": "Native shortcuts command: toggles the shortcuts pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 66,
+      "label": "Open shortcuts",
+      "section": "shortcuts",
+      "shortcut": "Cmd+Shift+P",
+      "description": "Native shortcuts command: opens the shortcuts pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 67,
+      "label": "Close shortcuts",
+      "section": "shortcuts",
+      "shortcut": "Cmd+Shift+Q",
+      "description": "Native shortcuts command: closes the shortcuts pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 68,
+      "label": "Focus shortcuts",
+      "section": "shortcuts",
+      "shortcut": "Cmd+Shift+R",
+      "description": "Native shortcuts command: focuss the shortcuts pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 69,
+      "label": "Resize shortcuts",
+      "section": "shortcuts",
+      "shortcut": "Cmd+Shift+S",
+      "description": "Native shortcuts command: resizes the shortcuts pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 70,
+      "label": "Collapse shortcuts",
+      "section": "shortcuts",
+      "shortcut": "Cmd+Shift+T",
+      "description": "Native shortcuts command: collapses the shortcuts pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 71,
+      "label": "Expand shortcuts",
+      "section": "shortcuts",
+      "shortcut": "Cmd+Shift+U",
+      "description": "Native shortcuts command: expands the shortcuts pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 72,
+      "label": "Reset shortcuts",
+      "section": "shortcuts",
+      "shortcut": "Cmd+Shift+V",
+      "description": "Native shortcuts command: resets the shortcuts pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 73,
+      "label": "Toggle notifications",
+      "section": "notifications",
+      "shortcut": "Cmd+Shift+W",
+      "description": "Native notifications command: toggles the notifications pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 74,
+      "label": "Open notifications",
+      "section": "notifications",
+      "shortcut": "Cmd+Shift+X",
+      "description": "Native notifications command: opens the notifications pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 75,
+      "label": "Close notifications",
+      "section": "notifications",
+      "shortcut": "Cmd+Shift+Y",
+      "description": "Native notifications command: closes the notifications pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 76,
+      "label": "Focus notifications",
+      "section": "notifications",
+      "shortcut": "Cmd+Shift+Z",
+      "description": "Native notifications command: focuss the notifications pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 77,
+      "label": "Resize notifications",
+      "section": "notifications",
+      "shortcut": "Cmd+Shift+A",
+      "description": "Native notifications command: resizes the notifications pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 78,
+      "label": "Collapse notifications",
+      "section": "notifications",
+      "shortcut": "Cmd+Shift+B",
+      "description": "Native notifications command: collapses the notifications pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 79,
+      "label": "Expand notifications",
+      "section": "notifications",
+      "shortcut": "Cmd+Shift+C",
+      "description": "Native notifications command: expands the notifications pane using the Zapp router without a WebView round-trip."
+    },
+    {
+      "id": 80,
+      "label": "Reset notifications",
+      "section": "notifications",
+      "shortcut": "Cmd+Shift+D",
+      "description": "Native notifications command: resets the notifications pane using the Zapp router without a WebView round-trip."
+    }
+  ]
+}
