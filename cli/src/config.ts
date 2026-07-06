@@ -632,17 +632,17 @@ export interface ZappConfig {
    *     (445 KB on macOS), zero runtime overhead, modern web standards.
    *     The right answer for >99% of apps.
    *
-   *   - **`"chromium"`** *(early-access)* — bundled Chromium via CEF.
-   *     For apps where the system WebView produces a visible rendering
-   *     mismatch with desktop Chrome (rare in practice for modern web
-   *     stacks; mostly impacts WebGL extensions and certain Web Animations
-   *     edge cases). Adds ~150 MB to the binary, so picks a different
-   *     trade-off than Zapp's default pitch.
+   *   - **`"chromium"`** *(early-access, macOS only)* — bundled Chromium
+   *     via CEF. For apps where the system WebView produces a visible
+   *     rendering mismatch with desktop Chrome (rare in practice for
+   *     modern web stacks; mostly impacts WebGL extensions and certain
+   *     Web Animations edge cases). Adds ~150 MB to the binary, so picks
+   *     a different trade-off than Zapp's default pitch.
    *
-   *     **Not yet implemented.** Setting this today produces a clear
-   *     CLI error pointing at the early-access program. Ship-ready
-   *     when a real customer surfaces a reproducible "system WebView
-   *     won't render X" requirement.
+   *     Opt-in and gated: setting this logs an early-access warning and
+   *     is accepted. `webEngine:"system"` builds are unaffected — they do
+   *     zero CEF work. Fullbleed-web only (no native chrome — sidebar /
+   *     inspector / toolbar — on the `chromium` path yet).
    *
    * @default "system"
    */
@@ -863,24 +863,28 @@ export function validateNative(config: ZappConfig): void {
   checkField(n.sources, "sources");
 }
 
-function validateWebEngine(engine?: ZappConfig["webEngine"]): void {
+export function validateWebEngine(engine?: ZappConfig["webEngine"]): void {
   if (engine === undefined || engine === "system") return;
   if (engine === "chromium") {
-    throw new Error(
-      "[zapp] webEngine: \"chromium\" is early-access and not yet shipped.\n" +
-      "       The system WebView path (default) gives you a 445 KB binary and\n" +
-      "       handles modern web standards correctly. If you hit a real\n" +
-      "       rendering mismatch with desktop Chrome, open a discussion at\n" +
-      "       https://github.com/popaprozac/zapp/discussions with a repro and\n" +
-      "       we'll prioritize the Chromium backend for the next alpha.\n" +
-      "\n" +
-      "       For now: remove the `webEngine` field, or set it to \"system\"."
-    );
+    // Early-access opt-in (macOS only, CEF production slice) — warn and
+    // accept. `resolveWebEngine` below is the single source of truth the
+    // build (gates the CEF fetch/compile/bundle) and window creation
+    // (branches WKWebView vs CEF) both read, so they can never disagree.
+    process.stderr.write("[zapp] webEngine:\"chromium\" is early-access (macOS only)\n");
+    return;
   }
   throw new Error(
     `[zapp] webEngine: "${engine}" is not a valid value. ` +
     `Expected "system" or "chromium".`
   );
+}
+
+// Resolve the effective webEngine for a loaded config. Default "system"
+// when unset — every other value falls through to "system" too, since
+// validateWebEngine has already thrown for anything but "system"/"chromium"
+// by the time this runs against a loaded config.
+export function resolveWebEngine(config: Pick<ZappConfig, "webEngine">): "system" | "chromium" {
+  return config.webEngine === "chromium" ? "chromium" : "system";
 }
 
 // Removed engines — surface a clean error before TypeScript's narrowed
