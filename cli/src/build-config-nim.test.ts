@@ -213,6 +213,49 @@ test("renderPlatformNim (ios-simulator) emits ios sources + UIKit + libzjs_embed
   expect(out).not.toContain("-Wl,-rpath,");
 });
 
+test("renderPlatformNim (macos) CEF gate: system output is byte-identical; chromium APPENDS the CEF block", () => {
+  const nativeDir = resolveNativeDir();
+  // GATE: no cef → the WKWebView path → BYTE-IDENTICAL to the no-arg macOS
+  // output. This is the guarantee that a webEngine:"system" build does zero
+  // CEF work and its compile/link surface never changes.
+  const system = renderPlatformNim("macos", { nativeDir });
+  const systemAgain = renderPlatformNim("macos", { nativeDir, cef: undefined });
+  expect(systemAgain).toBe(system);
+  expect(system).not.toContain("chromium (CEF)");
+  expect(system).not.toContain("zapp_cef_");
+
+  // chromium → the SAME system bytes, then the CEF pragmas appended verbatim.
+  const cef = renderPlatformNim("macos", { nativeDir, cef: { root: "/CEFROOT" } });
+  expect(cef.startsWith(system)).toBe(true); // system prefix unchanged
+  const appended = cef.slice(system.length);
+  // Five main-exe sources (c11 glue + ARC ObjC); mac_helper.c/bridge.c are
+  // Helper-only and MUST NOT appear here. (Compile paths are the framework's
+  // native/platform/darwin/cef dir, not the CEF root.)
+  expect(appended).toContain("platform/darwin/cef/zapp_cef_app.c");
+  expect(appended).toContain("zapp_cef_app.c\", \"-std=c11\"");
+  expect(appended).toContain("zapp_cef_client.c\", \"-std=c11\"");
+  expect(appended).toContain("zapp_cef_scheme_handler.c\", \"-std=c11\"");
+  expect(appended).toContain("zapp_cef_mac_entry.m\", \"-fobjc-arc\"");
+  expect(appended).toContain("zapp_cef_host.m\", \"-fobjc-arc\"");
+  expect(appended).not.toContain("zapp_cef_mac_helper.c");
+  expect(appended).not.toContain("zapp_cef_bridge.c");
+  // Includes + framework link + -lcompression + rpath.
+  expect(appended).toContain('{.passC: "-I/CEFROOT".}');
+  expect(appended).toContain("Chromium Embedded Framework.framework/Chromium Embedded Framework'");
+  expect(appended).toContain("-lcompression");
+  expect(appended).toContain("-Wl,-rpath,@executable_path/../Frameworks");
+});
+
+// chromium never affects a non-macOS target (macOS-only production slice): even
+// when a cef root is threaded through, the iOS output stays byte-identical.
+test("renderPlatformNim (ios-simulator) ignores cef (macOS-only slice)", () => {
+  const nativeDir = resolveNativeDir();
+  const plain = renderPlatformNim("ios-simulator", { nativeDir });
+  const withCef = renderPlatformNim("ios-simulator", { nativeDir, cef: { root: "/CEFROOT" } });
+  expect(withCef).toBe(plain);
+  expect(withCef).not.toContain("zapp_cef_");
+});
+
 import { generateIOSBuildFile } from "./build-config";
 import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";

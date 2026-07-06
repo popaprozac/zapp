@@ -1214,6 +1214,18 @@ async function buildNativeNim(
   const headlessNim = renderHeadlessNim(config.headless);
   await fs.writeFile(path.join(zappDir, "zapp_headless.nim"), headlessNim, "utf-8");
 
+  // webEngine gate (T2): `chromium` on macOS pulls in the CEF build. Everything
+  // CEF is gated on this — a `system` (WKWebView) build resolves to "system",
+  // passes NO `cef` to renderPlatformNim, and produces byte-identical output +
+  // no bundling. chromium is macOS-only (Windows/iOS fall through to system).
+  const { resolveWebEngine } = await import("./config");
+  const useCef = resolveWebEngine(config) === "chromium" && target === "macos";
+  let cefRoot: string | undefined;
+  if (useCef) {
+    const { ensureCefFetched } = await import("./cef");
+    cefRoot = await ensureCefFetched();
+  }
+
   // Per-TARGET native link surface: the .m compile list (darwin vs ios via
   // getPlatformSources), the framework {.passL.} (Cocoa/Carbon… vs UIKit…), and
   // the libzjs link (libzjs.dylib + rpath on macOS; the static libzjs_embed.a +
@@ -1222,7 +1234,11 @@ async function buildNativeNim(
   // generated module (UnusedImport-suppressed) so its pragmas join the compile
   // graph. zjs.c's own {.compile.} stays in zapp.nim (target-agnostic; SDK flags
   // reach it globally via the --passC/--passL above). .zapp is on --path:${zappDir}.
-  const platformNim = renderPlatformNim(target, { nativeDir });
+  // `cef` is passed ONLY when useCef — otherwise the emitted Nim is unchanged.
+  const platformNim = renderPlatformNim(target, {
+    nativeDir,
+    ...(cefRoot ? { cef: { root: cefRoot } } : {}),
+  });
   await fs.writeFile(path.join(zappDir, "zapp_platform.nim"), platformNim, "utf-8");
 
   // Stage worker scripts where zjs.c's filesystem fallback looks for them.
@@ -1311,6 +1327,30 @@ async function buildNativeNim(
   const proc = Bun.spawn(["nim", ...args], { cwd: nativeDir, stdout: "inherit", stderr: "inherit" });
   const code = await proc.exited;
   if (code !== 0) throw new Error(`nim c failed (exit ${code})`);
+
+  // CEF (`webEngine:"chromium"`, macOS): assemble the `.app` CEF's runtime model
+  // requires (framework + five Helper .apps in Contents/Frameworks). The Nim
+  // build otherwise emits a bare bin/<exe>; a CEF app can't run without the
+  // bundle layout. Gated — a `system` build skips this entirely (`output` stays
+  // the bare binary, byte-identical behavior). Full packaging (icons, sign,
+  // notarize) remains cli/src/package.ts's job; this is the minimal launchable
+  // bundle the CEF path needs at `build` time.
+  if (useCef && cefRoot) {
+    const { bundleCefApp } = await import("./cef");
+    const exeName = path.basename(output);
+    const appPath = output + ".app";
+    await bundleCefApp({
+      nativeBinary: output,
+      appPath,
+      exeName,
+      cefRoot,
+      nativeDir,
+      config,
+      buildDir: zappDir,
+      embedAssets: prod,
+    });
+    clog(0, `CEF app bundle: ${appPath}`);
+  }
 }
 
 export async function compileNative(opts: CompileOptions): Promise<void> {

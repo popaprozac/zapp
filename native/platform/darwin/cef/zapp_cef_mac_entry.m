@@ -139,15 +139,23 @@ cef_settings_t* zapp_cef_make_settings(void) {
   NSString* frameworksDir = [[NSBundle mainBundle] privateFrameworksPath];
   NSString* fw = [frameworksDir
       stringByAppendingPathComponent:@"Chromium Embedded Framework.framework"];
-  // BUILD-INTEGRATION TODO (T2): the Helper bundle name/path is still the
-  // originating spike's literal ("cef-spike Helper.app") — T2 must update
-  // this to match whatever name its packaging step gives the app's CEF
-  // Helper bundle(s) (build.sh assembled five variants for the spike: GPU,
-  // Renderer, Plugin, Alerts, and the base Helper — a real package needs the
-  // same set, named after the app rather than "cef-spike").
+  // Helper bundle name/path — derived at RUNTIME from the main bundle's
+  // executable name (T2 build integration). cli/src/cef.ts's bundleCefApp names
+  // the five Helper .apps "<exe> Helper[ (GPU)| (Renderer)|…].app" (executable
+  // "<exe> Helper[…]") and points browser_subprocess_path at the BASE one; this
+  // must resolve to that exact base path, so it's built from CFBundleExecutable
+  // rather than a hardcoded app name. Falls back to the executable path's last
+  // component if the Info.plist key is somehow absent.
+  NSString* exeName =
+      [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleExecutable"];
+  if (exeName.length == 0) {
+    exeName = [[[NSBundle mainBundle] executablePath] lastPathComponent];
+  }
+  NSString* helperName = [exeName stringByAppendingString:@" Helper"];
   NSString* helper = [frameworksDir
       stringByAppendingPathComponent:
-          @"cef-spike Helper.app/Contents/MacOS/cef-spike Helper"];
+          [NSString stringWithFormat:@"%@.app/Contents/MacOS/%@", helperName,
+                                     helperName]];
   NSString* bundle = [[NSBundle mainBundle] bundlePath];
 
   const char* fwc = fw.UTF8String;

@@ -328,6 +328,66 @@ export function renderNimCfg(o: NimCfgOpts): string {
 
 export interface PlatformNimOpts {
   nativeDir: string; // absolute path to the framework's native/ dir
+  /**
+   * CEF (`webEngine:"chromium"`) build integration — macOS only. Present ONLY
+   * when resolveWebEngine(config) === "chromium" (see cli/src/native.ts's
+   * buildNativeNim). `root` is the fetched CEF distribution dir (containing
+   * Release/ + include/ — cli/src/cef.ts's ensureCefFetched).
+   *
+   * GATE: when this is absent — the default `system` (WKWebView) path — the
+   * emitted Nim is BYTE-IDENTICAL to the pre-CEF output. Every CEF pragma is
+   * appended only when `cef` is set, so a `system` build does zero CEF work.
+   */
+  cef?: { root: string };
+}
+
+/**
+ * The gated CEF compile/link surface for the macOS main executable — appended
+ * to renderPlatformNim's macOS output ONLY when webEngine === "chromium".
+ * Mirrors spikes/cef-macos/main.nim's proven {.compile.}/{.passC.}/{.passL.}
+ * surface (renamed cefspike_ -> zapp_cef_ per T1).
+ *
+ * Compiles FIVE sources into the main exe: the browser-process CEF glue
+ * (zapp_cef_app.c, zapp_cef_client.c), the real-asset scheme handler
+ * (zapp_cef_scheme_handler.c), and the Cocoa scaffolding + external message
+ * pump (zapp_cef_mac_entry.m, zapp_cef_host.m). Deliberately EXCLUDES
+ * zapp_cef_mac_helper.c (owns `main()` — built as the separate Helper exe by
+ * cli/src/cef.ts) and zapp_cef_bridge.c (render-process half — also Helper-only).
+ *
+ * The scheme handler's weak `zapp_embedded_assets[]` / strong
+ * `zapp_build_use_embedded_assets()` externs resolve against the CLI-generated
+ * Nim asset + build-config modules already linked into this same binary
+ * (.zapp/zapp_assets.nim, .zapp/zapp_build_config.nim) — no extra object needed.
+ */
+function renderCefPlatformNim(nativeDir: string, cefRoot: string, slash: (s: string) => string): string {
+  const cefDir = slash(path.join(nativeDir, "platform", "darwin", "cef"));
+  const root = slash(cefRoot);
+  const fwBin = `${root}/Release/Chromium Embedded Framework.framework/Chromium Embedded Framework`;
+  const cSources = ["zapp_cef_app.c", "zapp_cef_client.c", "zapp_cef_scheme_handler.c"];
+  const mSources = ["zapp_cef_mac_entry.m", "zapp_cef_host.m"];
+  const lines: string[] = [
+    `## --- webEngine:"chromium" (CEF) — GATED; absent for the WKWebView path ---`,
+    // SDK include root (for `#include "include/capi/..."`) + the cef/ dir (for
+    // "zapp_cef.h" et al). Applied to the CEF {.compile.}s AND Nim's own C.
+    `{.passC: "-I${root}".}`,
+    `{.passC: "-I${cefDir}".}`,
+    // c11 for the C glue; ARC for the ObjC. mac_helper.c/bridge.c are EXCLUDED
+    // (Helper-only — see the doc comment + cli/src/cef.ts).
+    ...cSources.map((c) => `{.compile("${cefDir}/${c}", "-std=c11").}`),
+    ...mSources.map((m) => `{.compile("${cefDir}/${m}", "-fobjc-arc").}`),
+    // Link the CEF framework directly by its binary path (single-quoted — the
+    // bundle name has spaces). Its install_name is @executable_path/../
+    // Frameworks/..., so the main exe at Contents/MacOS resolves it from
+    // Contents/Frameworks; the rpath is belt-and-suspenders (and future-proofs
+    // an @rpath-install-name SDK). Cocoa is already in the macOS framework set.
+    `{.passL: "'${fwBin}'".}`,
+    // -lcompression: zapp_cef_scheme_handler.c's brotli decode
+    // (compression_decode_buffer) — this TU needs it independently of the
+    // WKWebView target's own -lcompression above.
+    `{.passL: "-lcompression".}`,
+    `{.passL: "-Wl,-rpath,@executable_path/../Frameworks".}`,
+  ];
+  return lines.join("\n") + "\n";
 }
 
 /**
@@ -430,7 +490,11 @@ ${compileLines}
     "-framework Security -framework IOKit -framework ServiceManagement -framework UserNotifications " +
     "-framework Carbon -framework Foundation";
   const embed = `${zjsBuildDir}/libzjs_embed.a`;
-  return `## AUTO-GENERATED (Nim) — per-target native link surface. Do not edit.
+  // Base macOS link surface — BYTE-IDENTICAL to the pre-CEF output. The CEF
+  // block (renderCefPlatformNim) is appended ONLY when o.cef is set
+  // (webEngine === "chromium"); a `system`/WKWebView build passes no cef, so
+  // this returns `base` unchanged.
+  const base = `## AUTO-GENERATED (Nim) — per-target native link surface. Do not edit.
 ## Target: ${target}. Regenerated each build by buildNativeNim (cli/src/native.ts).
 ## Owns the .m compile list + frameworks + libzjs link for this target; the
 ## zjs.c compile + its -Ivendor/zjs/include passC stay in zapp.nim (SDK flags
@@ -444,6 +508,7 @@ ${compileLines}
                             # -lz, but the static archive leaves these undefined for us.
 {.passL: "${embed}".}
 `;
+  return o.cef ? base + renderCefPlatformNim(o.nativeDir, o.cef.root, slash) : base;
 }
 
 // Generate .zapp/zapp_headless_workers.zc — the function native/app/app.zc

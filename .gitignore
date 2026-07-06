@@ -5,6 +5,12 @@ release/
 dist/
 *.br
 
+# CEF (webEngine:"chromium") cached binary distribution — ~110 MB minimal dist
+# fetched by cli/scripts/fetch-cef.sh (cli/src/cef.ts ensureCefFetched). No
+# trailing slash so a symlinked cache (dev shortcut) is ignored too, not just a
+# real fetched directory.
+vendor/cef
+
 # Dependencies
 node_modules/
 bun.lock
