@@ -1,12 +1,14 @@
 import { defineConfig } from "vite";
 import path from "node:path";
 import { zappWorkers } from "../../vite/src/index";
+import zappConfig from "./zapp.config";
 
 export default defineConfig({
-  // No headless workers in this fixture (dead-minimal: one window, one
-  // service, one button) — zappWorkers() with no options still wires up
-  // the auto-discovered-worker + asset plumbing every Zapp app needs.
-  plugins: [zappWorkers()],
+  // Pass the app's `headless` config to the worker plugin so the `ticker`
+  // worker (src/ticker.ts) is bundled to dist/_workers/_headless_ticker.mjs —
+  // without this the CLI registers the worker but Vite never emits its script,
+  // and the runtime reports "script not found" (mirrors kitchen-sink).
+  plugins: [zappWorkers({ headless: zappConfig.headless })],
   resolve: {
     alias: {
       "@zappdev/runtime/worker-globals": path.resolve(__dirname, "../../runtime/worker-globals.ts"),
