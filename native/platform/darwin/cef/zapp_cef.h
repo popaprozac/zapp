@@ -123,7 +123,7 @@ void zapp_cef_ns_application_init(void);
 // [NSApplication sharedApplication] (so NSApp is the ZappCefApplication) — see
 // native/platform/darwin/platform.m's darwin_platform_init. CEF's pump then
 // drives off the SAME [NSApp run] loop the host already owns; this does NOT
-// start a second run loop (do NOT also call zapp_cef_run_main_loop). The
+// start a second run loop. The
 // browser process does NOT cef_execute_process: on macOS the child processes
 // are the separate Helper .apps (zapp_cef_mac_helper.c owns their main()).
 void zapp_cef_app_init(void);
@@ -204,11 +204,6 @@ void zapp_cef_create_browser_in_view(void* parent_view, const char* url,
 // cancelling any pending pump"). Safe to call before the run loop starts —
 // the hop is queued until [NSApp run].
 void zapp_cef_pump_schedule(int64_t delay_ms);
-
-// Run NSApplication's main loop ([NSApp run]). NSApplication owns the loop;
-// CEF is pumped cooperatively via zapp_cef_pump_schedule. Returns when the
-// loop is stopped (zapp_cef_quit_main_loop).
-void zapp_cef_run_main_loop(void);
 
 // Stop the NSApp main loop (external-pump mode: cef_quit_message_loop does
 // not apply). Called from the life-span handler when the last browser
