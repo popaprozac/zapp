@@ -292,8 +292,14 @@ int CEF_CALLBACK cefspike_client_on_process_message_received(
     cef_string_clear(&rjson);
     rargs->base.release(&rargs->base);
 
+    // REFCOUNT: send_process_message's message param is refptr_same — it
+    // CONSUMES our |reply| reference (translator Unwraps it with an added ref
+    // the receiver releases; the header also notes |reply| is invalidated
+    // after). |reply| came from cef_process_message_create with ref=1 (ours),
+    // so this transfers it to CEF. Do NOT release |reply| afterward — that was
+    // a double-release (same over-release family as the on_context_created
+    // set_value_bykey crash in bridge.c).
     frame->send_process_message(frame, PID_RENDERER, reply);
-    reply->base.release(&reply->base);
 
     fprintf(stderr, "[cef-spike][browser] zapp:result id=%d -> %s\n", id,
             result_json);

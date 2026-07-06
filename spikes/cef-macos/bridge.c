@@ -159,9 +159,11 @@ int CEF_CALLBACK cefspike_v8_handler_execute(
       }
       args->base.release(&args->base);
 
-      // Ownership of |msg| transfers to CEF; |msg| is invalidated after this.
+      // send_process_message's message param is refptr_same — it CONSUMES our
+      // |msg| reference (and the header notes |msg| is invalidated after). |msg|
+      // came from cef_process_message_create with ref=1 (ours), so this transfers
+      // it to CEF. Do NOT release |msg| afterward — that was a double-release.
       frame->send_process_message(frame, PID_BROWSER, msg);
-      msg->base.release(&msg->base);
       frame->base.release(&frame->base);
     } else {
       fprintf(stderr,
@@ -233,6 +235,9 @@ void CEF_CALLBACK cefspike_rph_on_context_created(
     cef_frame_t* frame, cef_v8_context_t* context) {
   (void)self;
 
+  // Every V8 result below is NULL-guarded so a failed create/get can never
+  // NULL-deref (crash) the render process.
+
   // (a) Bind window.__zappSendNative = <native function>. get_global() requires
   // the context to be entered.
   if (context->enter(context)) {
@@ -244,32 +249,56 @@ void CEF_CALLBACK cefspike_rph_on_context_created(
 
       cef_v8_handler_t* v8h = cefspike_v8_handler_create();
       cef_v8_value_t* fn = cef_v8_value_create_function(&fn_name, v8h);
-      // create_function retains the handler; drop our construction ref.
+      // create_function RETAINS the handler (refptr_diff, CppToC_Wrap adds a
+      // ref) — so drop our construction ref.
       v8h->base.release(&v8h->base);
-
-      cef_string_t key;
-      memset(&key, 0, sizeof(key));
-      cef_str_set_utf8(&key, "__zappSendNative");
-      global->set_value_bykey(global, &key, fn, V8_PROPERTY_ATTRIBUTE_NONE);
-      cef_string_clear(&key);
       cef_string_clear(&fn_name);
 
-      fn->base.release(&fn->base);
+      if (fn != NULL) {
+        cef_string_t key;
+        memset(&key, 0, sizeof(key));
+        cef_str_set_utf8(&key, "__zappSendNative");
+        // REFCOUNT (load-bearing): set_value_bykey's value param is refptr_same
+        // — it CONSUMES the reference we pass (the translator Unwraps it with an
+        // added ref the receiver releases). |fn| came from create_function with
+        // ref=1 (ours), so passing it here transfers that ref to |global|. We
+        // must NOT release |fn| afterward — doing so was a double-release that
+        // crashed the render process HERE (the T4 blank-screen bug). Same rule
+        // as send_process_message below.
+        global->set_value_bykey(global, &key, fn, V8_PROPERTY_ATTRIBUTE_NONE);
+        cef_string_clear(&key);
+      } else {
+        fprintf(stderr, "[cef-spike][render] create_function returned NULL "
+                        "(binding skipped)\n");
+      }
       global->base.release(&global->base);
+    } else {
+      fprintf(stderr, "[cef-spike][render] get_global returned NULL\n");
     }
-    context->exit(context);
-  }
 
-  // (b) Run the document-start bootstrap in this fresh context. on_context_
-  // created IS the document-start moment (context just built, before page
-  // scripts run) — the WKWebView WKUserScriptInjectionTimeAtDocumentStart
-  // analog.
-  cef_string_t code, empty;
-  memset(&code, 0, sizeof(code));
-  memset(&empty, 0, sizeof(empty));
-  cef_str_set_utf8(&code, kZappBootstrapJS);
-  frame->execute_java_script(frame, &code, &empty, 0);
-  cef_string_clear(&code);
+    // (b) Run the document-start bootstrap IN this freshly-created context via
+    // context->eval (synchronous, scoped to THIS context) rather than
+    // frame->execute_java_script — keeps injection off the frame's async script
+    // path while we're still inside on_context_created.
+    cef_string_t code, url;
+    memset(&code, 0, sizeof(code));
+    memset(&url, 0, sizeof(url));
+    cef_str_set_utf8(&code, kZappBootstrapJS);
+    cef_v8_value_t* eval_ret = NULL;
+    cef_v8_exception_t* eval_exc = NULL;
+    context->eval(context, &code, &url, 0, &eval_ret, &eval_exc);
+    cef_string_clear(&code);
+    if (eval_ret != NULL) {
+      eval_ret->base.release(&eval_ret->base);
+    }
+    if (eval_exc != NULL) {
+      eval_exc->base.release(&eval_exc->base);
+    }
+
+    context->exit(context);
+  } else {
+    fprintf(stderr, "[cef-spike][render] context->enter failed\n");
+  }
 
   fprintf(stderr, "[cef-spike][render] bridge bootstrap injected "
                   "(window.zapp.invoke ready)\n");

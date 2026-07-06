@@ -395,6 +395,39 @@ are `cef_string_userfree_free`'d. Getting this wrong is a leak (under-release)
 or a use-after-free crash (over-release), so it was verified against the
 translator source, not guessed.
 
+### FINDING (blank-screen bug, post-ship fix) — args passed INTO CEF setters/senders are CONSUMED
+
+The mirror of the rule above, and the one that actually bit. Ref-counted
+arguments you pass **into** a CEF call are `refptr_same`, routed through the
+translator's `Unwrap` (`libcef_dll/ctocpp/ctocpp_ref_counted.h`), whose comment
+is explicit: *"Add a reference … that will be released once the structure is
+received"* — i.e. **the callee CONSUMES one reference.** So a value you created
+with `ref=1` and then pass into such a call has had its reference **transferred**
+— you must **NOT** release it afterward. Two calls in this bridge are
+`refptr_same`-consuming:
+
+- `cef_v8_value_t.set_value_bykey(global, key, fn, …)` — consumes `fn`.
+- `cef_frame_t.send_process_message(frame, pid, msg)` — consumes `msg` (its
+  header even says "the message reference will be invalidated").
+
+The original T4 commit released `fn` after `set_value_bykey` (in
+`on_context_created`) and `msg`/`reply` after `send_process_message` (both
+processes). All three were **double-releases**. The `fn` one fired on **every
+page load**: it corrupted/killed the render process *inside*
+`on_context_created` → the render frame died → **blank white page, no page-JS
+executing, right-click context menu gone, and `blink.mojom.FrameWidgetHost`
+"Message rejected"** in the browser log. It was misdiagnosed at first as a T2
+hosting / compositor / external-pump issue because the symptom is browser-side;
+the actual cause was a render-process crash. Bisected by logging each step of
+`on_context_created` and seeing it reach `set_value_bykey` then vanish before
+the next line. Fix: drop the three post-consume releases. The `create_function`
+handler arg, by contrast, is `refptr_diff` via `CppToC_Wrap` — create RETAINS
+it — so releasing our construction ref on the handler stays correct.
+
+Rule of thumb for this C API: **`Wrap` (values you RECEIVE — callback params,
+create/get return values) = you OWN → you release; `Unwrap` (values you PASS
+into a setter/sender) = CONSUMED → you don't.**
+
 ### JSON at the boundary (spike-grade)
 
 The browser stub hand-rolls two tiny helpers in `cef_client.c`:
