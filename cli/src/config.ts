@@ -625,7 +625,9 @@ export interface ZappConfig {
   /**
    * Webview engine for the main window. Determines what renders the
    * UI on macOS / Windows / Linux (iOS is always WKWebView by platform
-   * contract).
+   * contract). Value may be a bare string (applies to every platform)
+   * or a per-platform map `{ macos, ios, windows }` — a missing key
+   * resolves to `"system"`.
    *
    *   - **`"system"`** *(default)* — system WebView. WKWebView on
    *     macOS, WebView2 on Windows, WebKitGTK on Linux. Tiny binary
@@ -639,14 +641,14 @@ export interface ZappConfig {
    *     Web Animations edge cases). Adds ~289 MB to the binary, so picks
    *     a different trade-off than Zapp's default pitch.
    *
-   *     Opt-in and gated: setting this logs an early-access warning and
-   *     is accepted. `webEngine:"system"` builds are unaffected — they do
-   *     zero CEF work. Fullbleed-web only (no native chrome — sidebar /
-   *     inspector / toolbar — on the `chromium` path yet).
+   *     Opt-in and gated: accepted on any platform, but a target with no
+   *     CEF build (everything but macOS today) is downgraded to
+   *     `"system"` at build time. Fullbleed-web only (no native chrome —
+   *     sidebar / inspector / toolbar — on the `chromium` path yet).
    *
    * @default "system"
    */
-  webEngine?: "system" | "chromium";
+  webEngine?: PlatformValue<WebEngine>;
 
   /**
    * Webview-engine preferences applied at WKWebView / WebView2 / WebKitGTK
@@ -774,6 +776,9 @@ export type PlatformValue<T> =
       windows?: T;
     };
 
+/** Which engine renders the WebView content: system WebView or bundled CEF/Chromium. */
+export type WebEngine = "system" | "chromium";
+
 /**
  * Normalise a `PlatformValue<T[]>` into a flat array of entries for a
  * given target. Returns `[]` if nothing is configured for that target.
@@ -863,28 +868,78 @@ export function validateNative(config: ZappConfig): void {
   checkField(n.sources, "sources");
 }
 
+// Validate the webEngine field shape/values. Pure: throws on a bad value in
+// either the string or the per-platform map form. Target-specific notices
+// (early-access, unsupported-platform) are emitted at build time (native.ts),
+// where the build target is known.
 export function validateWebEngine(engine?: ZappConfig["webEngine"]): void {
-  if (engine === undefined || engine === "system") return;
-  if (engine === "chromium") {
-    // Early-access opt-in (macOS only, CEF production slice) — warn and
-    // accept. `resolveWebEngine` below is the single source of truth the
-    // build (gates the CEF fetch/compile/bundle) and window creation
-    // (branches WKWebView vs CEF) both read, so they can never disagree.
-    process.stderr.write("[zapp] webEngine:\"chromium\" is early-access (macOS only)\n");
-    return;
+  if (engine === undefined) return;
+  const checkValue = (v: unknown, where: string) => {
+    if (v === undefined) return;
+    if (v !== "system" && v !== "chromium") {
+      throw new Error(
+        `[zapp] webEngine${where}: "${String(v)}" is not a valid value. Use "system" or "chromium".`,
+      );
+    }
+  };
+  if (typeof engine === "object" && engine !== null) {
+    const m = engine as { macos?: unknown; ios?: unknown; windows?: unknown };
+    checkValue(m.macos, ".macos");
+    checkValue(m.ios, ".ios");
+    checkValue(m.windows, ".windows");
+  } else {
+    checkValue(engine, "");
   }
-  throw new Error(
-    `[zapp] webEngine: "${engine}" is not a valid value. ` +
-    `Expected "system" or "chromium".`
-  );
 }
 
-// Resolve the effective webEngine for a loaded config. Default "system"
-// when unset — every other value falls through to "system" too, since
-// validateWebEngine has already thrown for anything but "system"/"chromium"
-// by the time this runs against a loaded config.
-export function resolveWebEngine(config: Pick<ZappConfig, "webEngine">): "system" | "chromium" {
-  return config.webEngine === "chromium" ? "chromium" : "system";
+// Scalar sibling of resolvePlatformValue (which is array-typed / []-defaulted):
+// a bare value applies to every platform; a map is looked up per key.
+function resolvePlatformScalar<T>(
+  v: PlatformValue<T> | undefined,
+  key: "macos" | "ios" | "windows",
+  fallback: T,
+): T {
+  if (v === undefined) return fallback;
+  if (typeof v === "object" && v !== null) {
+    return (v as { macos?: T; ios?: T; windows?: T })[key] ?? fallback;
+  }
+  return v as T; // bare value → all platforms
+}
+
+// Collapse BuildTarget → the narrow per-platform key (both iOS subtargets → "ios"),
+// identical to resolveNative's collapse.
+function webEnginePlatformKey(target: BuildTarget): "macos" | "ios" | "windows" {
+  return target === "macos" ? "macos"
+    : (target === "ios-simulator" || target === "ios-device") ? "ios"
+    : "windows";
+}
+
+// Resolve the requested webEngine for a target. PURE. Default "system".
+export function resolveWebEngine(
+  config: Pick<ZappConfig, "webEngine">,
+  target: BuildTarget,
+): WebEngine {
+  return resolvePlatformScalar<WebEngine>(config.webEngine, webEnginePlatformKey(target), "system");
+}
+
+// Which targets have a real CEF build today. macOS-only for now (Windows uses
+// WebView2 = Chromium; Linux CEF is future).
+export function platformSupportsChromium(target: BuildTarget): boolean {
+  return target === "macos";
+}
+
+// The engine a build should actually use, plus whether "chromium" was downgraded
+// to "system" because the target has no CEF build. PURE (no logging — the caller
+// emits the warning so this stays unit-testable).
+export function resolveWebEngineForBuild(
+  config: Pick<ZappConfig, "webEngine">,
+  target: BuildTarget,
+): { engine: WebEngine; downgraded: boolean } {
+  const requested = resolveWebEngine(config, target);
+  if (requested === "chromium" && !platformSupportsChromium(target)) {
+    return { engine: "system", downgraded: true };
+  }
+  return { engine: requested, downgraded: false };
 }
 
 // Removed engines — surface a clean error before TypeScript's narrowed

@@ -1,5 +1,8 @@
 import { test, expect } from "bun:test";
-import { resolveNative, validateNative, validateWebEngine, resolveWebEngine } from "./config";
+import {
+  resolveNative, validateNative, validateWebEngine, resolveWebEngine,
+  platformSupportsChromium, resolveWebEngineForBuild,
+} from "./config";
 
 test("resolveNative reads the grouped native block", () => {
   const cfg = { native: { frameworks: ["CoreLocation"], linkFlags: ["-lfoo"], sources: ["a.m"] } } as any;
@@ -61,11 +64,70 @@ test("validateWebEngine still rejects unknown values", () => {
   expect(() => validateWebEngine("blink" as any)).toThrow(/webEngine/);
 });
 
-test("resolveWebEngine returns \"chromium\" only when explicitly set", () => {
-  expect(resolveWebEngine({ webEngine: "chromium" } as any)).toBe("chromium");
+// --- resolveWebEngine: string form applies to every target ---
+test("resolveWebEngine string form applies to all targets", () => {
+  expect(resolveWebEngine({ webEngine: "chromium" } as any, "macos")).toBe("chromium");
+  expect(resolveWebEngine({ webEngine: "chromium" } as any, "windows")).toBe("chromium");
+  expect(resolveWebEngine({ webEngine: "system" } as any, "macos")).toBe("system");
 });
 
-test("resolveWebEngine defaults to \"system\" when unset or \"system\"", () => {
-  expect(resolveWebEngine({} as any)).toBe("system");
-  expect(resolveWebEngine({ webEngine: "system" } as any)).toBe("system");
+test("resolveWebEngine defaults to system when unset", () => {
+  expect(resolveWebEngine({} as any, "macos")).toBe("system");
+  expect(resolveWebEngine({} as any, "windows")).toBe("system");
+});
+
+// --- resolveWebEngine: map form resolves per platform, missing key => system ---
+test("resolveWebEngine map form resolves per platform", () => {
+  const cfg = { webEngine: { macos: "chromium", windows: "system" } } as any;
+  expect(resolveWebEngine(cfg, "macos")).toBe("chromium");
+  expect(resolveWebEngine(cfg, "windows")).toBe("system");
+});
+
+test("resolveWebEngine map form: missing key defaults to system", () => {
+  const cfg = { webEngine: { macos: "chromium" } } as any; // no windows/ios key
+  expect(resolveWebEngine(cfg, "windows")).toBe("system");
+  expect(resolveWebEngine(cfg, "ios-simulator")).toBe("system");
+});
+
+test("resolveWebEngine collapses both iOS subtargets to the ios key", () => {
+  const cfg = { webEngine: { ios: "chromium" } } as any;
+  expect(resolveWebEngine(cfg, "ios-simulator")).toBe("chromium");
+  expect(resolveWebEngine(cfg, "ios-device")).toBe("chromium");
+});
+
+// --- platformSupportsChromium: macOS only today ---
+test("platformSupportsChromium is macOS-only today", () => {
+  expect(platformSupportsChromium("macos")).toBe(true);
+  expect(platformSupportsChromium("windows")).toBe(false);
+  expect(platformSupportsChromium("ios-simulator")).toBe(false);
+  expect(platformSupportsChromium("ios-device")).toBe(false);
+});
+
+// --- resolveWebEngineForBuild: downgrade chromium -> system on unsupported target ---
+test("resolveWebEngineForBuild keeps chromium on macOS", () => {
+  expect(resolveWebEngineForBuild({ webEngine: "chromium" } as any, "macos"))
+    .toEqual({ engine: "chromium", downgraded: false });
+});
+
+test("resolveWebEngineForBuild downgrades chromium to system on an unsupported target", () => {
+  expect(resolveWebEngineForBuild({ webEngine: { windows: "chromium" } } as any, "windows"))
+    .toEqual({ engine: "system", downgraded: true });
+});
+
+test("resolveWebEngineForBuild leaves system alone everywhere", () => {
+  expect(resolveWebEngineForBuild({} as any, "windows"))
+    .toEqual({ engine: "system", downgraded: false });
+});
+
+// --- validateWebEngine: accepts string + map, throws on garbage ---
+test("validateWebEngine accepts string and map forms", () => {
+  expect(() => validateWebEngine("chromium")).not.toThrow();
+  expect(() => validateWebEngine("system")).not.toThrow();
+  expect(() => validateWebEngine(undefined)).not.toThrow();
+  expect(() => validateWebEngine({ macos: "chromium", windows: "system" } as any)).not.toThrow();
+});
+
+test("validateWebEngine throws on a garbage value in either form", () => {
+  expect(() => validateWebEngine("blink" as any)).toThrow(/webEngine/);
+  expect(() => validateWebEngine({ windows: "blink" } as any)).toThrow(/webEngine/);
 });
