@@ -1121,21 +1121,32 @@ void* darwin_window_create(WindowOptions* opts) {
             extern void zapp_cef_create_browser_in_view(void* parent_view, const char* url,
                                                         int32_t window_slot,
                                                         const char* window_id,
-                                                        const char* owner_id);
+                                                        const char* owner_id,
+                                                        int pane_role,
+                                                        bool host_has_sidebar,
+                                                        bool host_has_inspector);
             NSString* paneOwnerId = [NSString stringWithFormat:@"owner-%p", window];
             {
                 NSURL* hostNsUrl = zapp_resolve_url(custom_url);
                 const char* hostCefUrl = hostNsUrl ? [[hostNsUrl absoluteString] UTF8String] : "zapp://index.html";
                 if (!hostCefUrl || hostCefUrl[0] == '\0') hostCefUrl = "zapp://index.html";
+                // Host pane: pane_role=0; carry the window's composition flags so
+                // Window.current() in this pane wires the sidebar/inspector handles
+                // (the C1 fix — CEF panes previously got no has* carriers).
                 zapp_cef_create_browser_in_view((__bridge void*)mainContainer, hostCefUrl, host_slot,
-                                                [hostWindowId UTF8String], [paneOwnerId UTF8String]);
+                                                [hostWindowId UTF8String], [paneOwnerId UTF8String],
+                                                0, useSidebar, useInspector);
             }
             if (useSidebar) {
                 NSURL* sbNsUrl = zapp_resolve_url(sidebarUrl);
                 const char* sbCefUrl = sbNsUrl ? [[sbNsUrl absoluteString] UTF8String] : "zapp://index.html";
                 if (!sbCefUrl || sbCefUrl[0] == '\0') sbCefUrl = "zapp://index.html";
+                // Sidebar pane: pane_role=1 (zapp.isSidebar) + the same composition
+                // flags, so this pane's Window.current() resolves .sidebar and
+                // imperative toggle/collapse works on CEF.
                 zapp_cef_create_browser_in_view((__bridge void*)sidebarContainer, sbCefUrl, sidebar_slot,
-                                                [hostWindowId UTF8String], [paneOwnerId UTF8String]);
+                                                [hostWindowId UTF8String], [paneOwnerId UTF8String],
+                                                1, useSidebar, useInspector);
                 // Mirrors the WK path's zapp_register_webview(sidebar_slot, ...,
                 // hostWindowId), which sets zapp_window_ids[sidebar_slot]. Without
                 // this, Workers.create() called from JS in the CEF sidebar pane
@@ -1257,7 +1268,10 @@ void* darwin_window_create(WindowOptions* opts) {
             extern void zapp_cef_create_browser_in_view(void* parent_view, const char* url,
                                                         int32_t window_slot,
                                                         const char* window_id,
-                                                        const char* owner_id);
+                                                        const char* owner_id,
+                                                        int pane_role,
+                                                        bool host_has_sidebar,
+                                                        bool host_has_inspector);
             NSURL* cefNsUrl = zapp_resolve_url(custom_url);
             const char* cef_url = cefNsUrl ? [[cefNsUrl absoluteString] UTF8String] : "zapp://index.html";
             if (!cef_url || cef_url[0] == '\0') cef_url = "zapp://index.html";
@@ -1280,10 +1294,12 @@ void* darwin_window_create(WindowOptions* opts) {
             // here regardless (the later onReady show() is then idempotent).
             [window makeKeyAndOrderFront:nil];
             [NSApp activateIgnoringOtherApps:YES];
+            // Fullbleed window: no panes -> pane_role=0, no composition flags.
             zapp_cef_create_browser_in_view((__bridge void*)[window contentView], cef_url,
                                             host_slot,
                                             [cefWindowId UTF8String],
-                                            [cefOwnerId UTF8String]);
+                                            [cefOwnerId UTF8String],
+                                            0, false, false);
 #else
             // Legacy single-webview path — byte-for-byte equivalent to before
             // (the vibrancy vfx, if any, was installed as contentView above).

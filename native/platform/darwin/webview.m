@@ -796,6 +796,134 @@ void darwin_webview_set_drag_region(int32_t window_id, bool drag) {
 
 // --- WebView Creation ---
 
+// Shared bootstrap-carrier builder — used by BOTH the WKWebView path
+// (darwin_webview_create_ext below) and the CEF path (cef/zapp_cef_host.m's
+// zapp_cef_build_bootstrap_js). Builds the Symbol.for('zapp.*') document-start
+// carriers that seed the page's bootstrap environment: the bootstrapConfig
+// object, the bindings manifest, the owner/window ids, the pane-shape marker
+// (isSidebar/isPopover/isInspector by pane_role), and the composition flags
+// (hasSidebar/hasInspector). Each carrier is its own (function(){…})(); IIFE,
+// '\n'-separated, so the combined string can be injected as ONE document-start
+// user script (WK) or spliced between the CEF transport shim and the compiled
+// bootstrap (CEF). The carrier CONTENT is moved verbatim from the original WK
+// per-script code: same config fields/order/format, same zapp_escape_js_string
+// escaping on the config string fields + bindings manifest; owner/window ids
+// are pointer/numeric strings and — as in the original WK code — are spliced
+// without escaping. Returns a malloc'd C string the caller frees.
+//
+// Params:
+//   owner_id      — "owner-<ptr>" for Symbol.for('zapp.ownerId'); NULL/"" skips it.
+//   window_id     — "win-<N>" for Symbol.for('zapp.windowId'); NULL/"" skips it.
+//   pane_role     — 0 main / 1 sidebar / 2 popover / 3 inspector (pane-shape marker).
+//   has_sidebar   — inject zapp.hasSidebar when true.
+//   has_inspector — inject zapp.hasInspector when true.
+//   inspectable   — the per-window-resolved webContentInspectable flag. WK passes
+//                   its per-window `inspectable` param (keeps the config flag
+//                   consistent with the native setInspectable: gate); CEF passes
+//                   app_get_bootstrap_web_content_inspectable() (its prior value).
+char* zapp_build_bootstrap_carriers(const char* owner_id, const char* window_id,
+                                    int pane_role, bool has_sidebar,
+                                    bool has_inspector, bool inspectable) {
+    NSMutableString* js = [NSMutableString string];
+
+    // 1. App config (verbatim from the WK configScript, field-for-field).
+    const char* bootstrapName = app_get_bootstrap_name();
+    NSString* appName = bootstrapName ? [NSString stringWithUTF8String:bootstrapName] : @"Zapp";
+    appName = zapp_escape_js_string([appName UTF8String]);
+    BOOL terminate = app_get_bootstrap_application_should_terminate_after_last_window_closed();
+    // Per-window resolved inspectable (cascade already applied in wopts_inspectable);
+    // keep the JS-config flag consistent with the native setInspectable: gate.
+    BOOL inspect = inspectable;
+    int maxWorkers = app_get_bootstrap_max_workers();
+
+    NSString* cspExtra = @"";
+    const char* cspRaw = zapp_build_csp();
+    if (cspRaw && cspRaw[0] != '\0') {
+        NSString* cspStr = zapp_escape_js_string(cspRaw);
+        cspExtra = [NSString stringWithFormat:@",csp:'%@'", cspStr];
+    }
+
+    // theme: initial appearance at window-create time. App.getTheme() reads
+    // this on import, then refreshes from app:theme-changed events.
+    extern const char* darwin_get_theme(void);
+    const char* themeC = darwin_get_theme();
+    NSString* themeStr = [NSString stringWithUTF8String:themeC ? themeC : "light"];
+
+    // powerState: seed the current AC/battery state so App.getPowerState()
+    // returns a valid value synchronously on first call.
+    extern const char* darwin_get_power_state(void);
+    const char* powerStateC = darwin_get_power_state();
+    // Defensive guard adopted from the CEF path: a NULL/empty power state would
+    // splice UB into the %s below. darwin_get_power_state() is non-null in
+    // practice, so this never fires and WK's carrier output is unchanged.
+    if (!powerStateC || !powerStateC[0]) powerStateC = "null";
+
+    // permissions: forward the manifest so Permissions.query() answers
+    // synchronously without a round-trip to native.
+    const char* permsJson = permissions_bootstrap_json();
+    if (!permsJson || !permsJson[0]) permsJson = "{\"platform\":\"macos\",\"active\":false,\"allow\":[]}";
+
+    // Defensive guard adopted from the CEF path: NULL/empty form factor ->
+    // "desktop". Non-null in practice, so WK's carrier output is unchanged.
+    const char* formFactorC = zapp_form_factor();
+    if (!formFactorC || !formFactorC[0]) formFactorC = "desktop";
+
+    [js appendFormat:
+        @"(function(){globalThis[Symbol.for('zapp.bootstrapConfig')]="
+        "{name:'%@',applicationShouldTerminateAfterLastWindowClosed:%@,"
+        "webContentInspectable:%@,maxWorkers:%d,theme:'%@',powerState:%s,"
+        "formFactor:'%s',env:'%@',permissions:%s%@};})();\n",
+        appName,
+        terminate ? @"true" : @"false",
+        inspect ? @"true" : @"false",
+        maxWorkers, themeStr, powerStateC,
+        formFactorC,
+        (zapp_build_is_dev() ? @"dev" : @"prod"),
+        permsJson, cspExtra];
+
+    // 2. Service bindings.
+    const char* bindingsRaw = service_get_manifest_json();
+    NSString* bindingsJson = zapp_escape_js_string(bindingsRaw);
+    [js appendFormat:
+        @"(function(){globalThis[Symbol.for('zapp.bindingsManifest')]='%@';})();\n",
+        bindingsJson];
+
+    // 3. Owner + window ids (baked from the pre-allocated numeric id so
+    //    module-top Window.current() resolves correctly).
+    if (owner_id && owner_id[0] != '\0') {
+        NSString* ownerIdStr = [NSString stringWithUTF8String:owner_id];
+        [js appendFormat:
+            @"(function(){globalThis[Symbol.for('zapp.ownerId')]='%@';})();\n", ownerIdStr];
+    }
+    if (window_id && window_id[0] != '\0') {
+        NSString* windowIdStr = [NSString stringWithUTF8String:window_id];
+        [js appendFormat:
+            @"(function(){globalThis[Symbol.for('zapp.windowId')]='%@';})();\n", windowIdStr];
+    }
+
+    // 3b. Pane role marker — lets the runtime branch on the pane type at
+    //     bootstrap without a round-trip.
+    if (pane_role == 1) {
+        [js appendString:@"(function(){globalThis[Symbol.for('zapp.isSidebar')]=true;})();\n"];
+    } else if (pane_role == 2) {
+        [js appendString:@"(function(){globalThis[Symbol.for('zapp.isPopover')]=true;})();\n"];
+    } else if (pane_role == 3) {
+        [js appendString:@"(function(){globalThis[Symbol.for('zapp.isInspector')]=true;})();\n"];
+    }
+
+    // 3c. has{Sidebar,Inspector} markers — injected into every pane of a window
+    //     that has the corresponding accessory, so Window.current() in ANY pane
+    //     wires the matching handle. Driven by explicit composition flags.
+    if (has_sidebar) {
+        [js appendString:@"(function(){globalThis[Symbol.for('zapp.hasSidebar')]=true;})();\n"];
+    }
+    if (has_inspector) {
+        [js appendString:@"(function(){globalThis[Symbol.for('zapp.hasInspector')]=true;})();\n"];
+    }
+
+    return strdup([js UTF8String]);
+}
+
 // darwin_webview_create_ext — the full creation path, parameterized for the
 // native-sidebar feature (Task 4) and inspector panes (Task 5). The trailing
 // params widen the legacy signature without changing its behavior when they're
@@ -893,114 +1021,24 @@ void darwin_webview_create_ext(void* window_ptr, bool inspectable, bool accept_f
 
     // --- Inject user scripts before page load ---
 
-    // 1. App config
-    const char* bootstrapName = app_get_bootstrap_name();
-    NSString* appName = bootstrapName ? [NSString stringWithUTF8String:bootstrapName] : @"Zapp";
-    appName = zapp_escape_js_string([appName UTF8String]);
-    BOOL terminate = app_get_bootstrap_application_should_terminate_after_last_window_closed();
-    // Per-window resolved inspectable (cascade already applied in wopts_inspectable);
-    // keep the JS-config flag consistent with the native setInspectable: gate.
-    BOOL inspect = inspectable;
-    int maxWorkers = app_get_bootstrap_max_workers();
-
-    NSString* cspExtra = @"";
-    const char* cspRaw = zapp_build_csp();
-    if (cspRaw && cspRaw[0] != '\0') {
-        NSString* cspStr = zapp_escape_js_string(cspRaw);
-        cspExtra = [NSString stringWithFormat:@",csp:'%@'", cspStr];
-    }
-
-    // theme: initial appearance at window-create time. App.getTheme() reads
-    // this on import, then refreshes from app:theme-changed events. Without
-    // the initial value, the first render in dark mode would briefly assume
-    // "light" until the first KVO fire — visible flash.
-    extern const char* darwin_get_theme(void);
-    const char* themeC = darwin_get_theme();
-    NSString* themeStr = [NSString stringWithUTF8String:themeC ? themeC : "light"];
-
-    // powerState: seed the current AC/battery state into the bootstrap config
-    // so App.getPowerState() returns a valid value synchronously on first call,
-    // without waiting for the first IOKit notification.
-    extern const char* darwin_get_power_state(void);
-    const char* powerStateC = darwin_get_power_state();
-
-    // permissions: forward the permissions manifest so the runtime can answer
-    // Permissions.query() synchronously and throw PermissionDeniedError on
-    // gated fire-and-forget calls without a round-trip to native.
-    const char* permsJson = permissions_bootstrap_json();
-    if (!permsJson || !permsJson[0]) permsJson = "{\"platform\":\"macos\",\"active\":false,\"allow\":[]}";
-
-    NSString* configScript = [NSString stringWithFormat:
-        @"(function(){globalThis[Symbol.for('zapp.bootstrapConfig')]="
-        "{name:'%@',applicationShouldTerminateAfterLastWindowClosed:%@,"
-        "webContentInspectable:%@,maxWorkers:%d,theme:'%@',powerState:%s,"
-        "formFactor:'%s',env:'%@',permissions:%s%@};})();",
-        appName,
-        terminate ? @"true" : @"false",
-        inspect ? @"true" : @"false",
-        maxWorkers, themeStr, powerStateC,
-        zapp_form_factor(),
-        (zapp_build_is_dev() ? @"dev" : @"prod"),
-        permsJson, cspExtra];
-    [ucc addUserScript:[[WKUserScript alloc] initWithSource:configScript
+    // Bootstrap carriers: ONE combined document-start user script wrapping the
+    // shared builder's output (config object, bindings manifest, owner/window
+    // ids, pane-shape marker, has{Sidebar,Inspector} composition flags). The CEF
+    // path calls the SAME builder (cef/zapp_cef_host.m) so both engines seed a
+    // byte-equivalent globalThis[Symbol.for('zapp.*')] environment. These were
+    // previously N separate document-start user scripts; one combined
+    // document-start script leaves the post-doc-start globalThis identical. WK
+    // passes its per-window `inspectable` so the config flag stays consistent
+    // with the native setInspectable: gate. windowId is @"" (length 0) when the
+    // identity id is unresolved — pass NULL then so no windowId carrier emits.
+    char* carriers = zapp_build_bootstrap_carriers(
+        [ownerId UTF8String],
+        windowId.length > 0 ? [windowId UTF8String] : NULL,
+        pane_role, host_has_sidebar, host_has_inspector, inspectable);
+    [ucc addUserScript:[[WKUserScript alloc]
+        initWithSource:[NSString stringWithUTF8String:carriers]
         injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
-
-    // 2. Service bindings
-    const char* bindingsRaw = service_get_manifest_json();
-    NSString* bindingsJson = zapp_escape_js_string(bindingsRaw);
-    NSString* bindingsScript = [NSString stringWithFormat:
-        @"(function(){globalThis[Symbol.for('zapp.bindingsManifest')]='%@';})();", bindingsJson];
-    [ucc addUserScript:[[WKUserScript alloc] initWithSource:bindingsScript
-        injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
-
-    // 3. Owner + window IDs (window id baked from the pre-allocated
-    //    numeric id, so module-top Window.current() resolves correctly
-    //    without waiting for darwin_window_register_numeric_id).
-    NSString* ownerScript = [NSString stringWithFormat:
-        @"(function(){globalThis[Symbol.for('zapp.ownerId')]='%@';})();", ownerId];
-    [ucc addUserScript:[[WKUserScript alloc] initWithSource:ownerScript
-        injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
-
-    if (windowId.length > 0) {
-        NSString* windowIdScript = [NSString stringWithFormat:
-            @"(function(){globalThis[Symbol.for('zapp.windowId')]='%@';})();", windowId];
-        [ucc addUserScript:[[WKUserScript alloc] initWithSource:windowIdScript
-            injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
-    }
-
-    // 3b. Pane role marker — lets the runtime branch on the pane type at
-    //     bootstrap without a round-trip.
-    if (pane_role == 1) {
-        [ucc addUserScript:[[WKUserScript alloc] initWithSource:
-            @"(function(){globalThis[Symbol.for('zapp.isSidebar')]=true;})();"
-            injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
-    } else if (pane_role == 2) {
-        [ucc addUserScript:[[WKUserScript alloc] initWithSource:
-            @"(function(){globalThis[Symbol.for('zapp.isPopover')]=true;})();"
-            injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
-    } else if (pane_role == 3) {
-        [ucc addUserScript:[[WKUserScript alloc] initWithSource:
-            @"(function(){globalThis[Symbol.for('zapp.isInspector')]=true;})();"
-            injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
-    }
-
-    // 3c. has{Sidebar,Inspector} markers — injected into every pane of a window
-    //     that has the corresponding accessory, so Window.current() in ANY pane
-    //     wires the matching handle. Driven by explicit composition flags (the
-    //     old container_view heuristic mis-fired for inspector-only windows).
-    //     Must be document-start user scripts: a one-shot evaluateJavaScript at
-    //     construction lands in the pre-navigation context and is wiped when the
-    //     real page commits.
-    if (host_has_sidebar) {
-        [ucc addUserScript:[[WKUserScript alloc] initWithSource:
-            @"(function(){globalThis[Symbol.for('zapp.hasSidebar')]=true;})();"
-            injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
-    }
-    if (host_has_inspector) {
-        [ucc addUserScript:[[WKUserScript alloc] initWithSource:
-            @"(function(){globalThis[Symbol.for('zapp.hasInspector')]=true;})();"
-            injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
-    }
+    free(carriers);
 
     // 4. Window metrics — expose native values as CSS custom properties so
     //    custom-titlebar apps don't have to eyeball 28px / 78px guesses.

@@ -45,6 +45,23 @@ void darwin_webview_create_ext(void* window_ptr, bool inspectable, bool accept_f
                                int32_t pane_role, bool host_has_sidebar,
                                bool host_has_inspector);
 
+// Build the shared bootstrap-carrier JS injected at document-start by BOTH the
+// WKWebView path (darwin_webview_create_ext) and the CEF path
+// (cef/zapp_cef_host.m's zapp_cef_build_bootstrap_js). Emits the
+// Symbol.for('zapp.*') carriers — bootstrapConfig object, bindings manifest,
+// owner/window ids, pane-shape marker (isSidebar/isPopover/isInspector by
+// pane_role), and has{Sidebar,Inspector} composition flags — each as its own
+// (function(){…})(); IIFE, '\n'-separated. owner_id/window_id are the
+// "owner-<ptr>" / "win-<N>" id strings (NULL or "" skips that carrier).
+// pane_role: 0 main / 1 sidebar / 2 popover / 3 inspector. has_sidebar/
+// has_inspector drive the composition flags. inspectable is the per-window
+// resolved webContentInspectable value (WK passes its per-window flag; CEF
+// passes app_get_bootstrap_web_content_inspectable()). Returns a malloc'd C
+// string the caller must free().
+char* zapp_build_bootstrap_carriers(const char* owner_id, const char* window_id,
+                                    int pane_role, bool has_sidebar,
+                                    bool has_inspector, bool inspectable);
+
 // Evaluate JavaScript on a specific window's WebView.
 void darwin_webview_eval(void* window_ptr, const char* js);
 

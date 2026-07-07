@@ -26,6 +26,7 @@
 #ifndef ZAPP_CEF_H_
 #define ZAPP_CEF_H_
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -225,9 +226,20 @@ void* zapp_cef_host_view_for_window(void* window);
 // doc-start carriers (same as webview.m's WKUserScript carriers) inside the
 // bootstrap JS this function builds and hands to the render process via CEF's
 // create-browser extra_info. Pass NULL for the ids if unavailable.
+//
+// |pane_role| / |host_has_sidebar| / |host_has_inspector| are forwarded to the
+// SHARED bootstrap-carrier builder (zapp_build_bootstrap_carriers, webview.m) so
+// a CEF pane receives the SAME pane-shape marker (0 main / 1 sidebar / 2 popover
+// / 3 inspector -> zapp.isSidebar/isPopover/isInspector) and composition flags
+// (zapp.hasSidebar / zapp.hasInspector) a WKWebView pane does. Without the
+// composition flags a chromium sidebar pane's Window.current().sidebar is
+// undefined and imperative sidebar control silently no-ops. Plain fullbleed
+// windows pass (0, false, false).
 void zapp_cef_create_browser_in_view(void* parent_view, const char* url,
                                      int32_t window_slot, const char* window_id,
-                                     const char* owner_id);
+                                     const char* owner_id, int pane_role,
+                                     bool host_has_sidebar,
+                                     bool host_has_inspector);
 
 // --- zapp_cef_mac_entry.m — external message pump + main-loop ownership ----
 

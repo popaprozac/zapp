@@ -68,45 +68,41 @@ extern bool app_get_bootstrap_web_content_inspectable(void);
 extern bool app_get_bootstrap_application_should_terminate_after_last_window_closed(void);
 extern int app_get_bootstrap_max_workers(void);
 
+// The shared bootstrap-carrier builder (native/platform/darwin/webview.h /
+// webview.m) — always compiled, so both the WKWebView and CEF paths emit the
+// SAME Symbol.for('zapp.*') doc-start carriers from one source of truth. Declared
+// extern here (rather than #including webview.h) to keep this TU's include set
+// minimal. Caller frees the returned malloc'd string.
+extern char* zapp_build_bootstrap_carriers(const char* owner_id,
+                                           const char* window_id, int pane_role,
+                                           bool has_sidebar, bool has_inspector,
+                                           bool inspectable);
+
 // extra_info key carrying the doc-start bootstrap JS (must match
 // zapp_cef_bridge.c's ZAPP_EXTRA_BOOTSTRAP_KEY).
 #define ZAPP_CEF_EXTRA_BOOTSTRAP_KEY "zappBootstrap"
-
-// Single-pass JS string escape (mirrors webview.m's zapp_escape_js_string):
-// escapes backslash, single-quote, and the two line terminators — enough for
-// splicing a value into a JS single-quoted literal. NULL/empty -> @"".
-static NSString* zapp_cef_js_escape(const char* raw) {
-  if (!raw || raw[0] == '\0') return @"";
-  size_t len = strlen(raw);
-  char* buf = (char*)malloc(len * 2 + 1);
-  if (!buf) return @"";
-  size_t j = 0;
-  for (size_t i = 0; i < len; i++) {
-    switch (raw[i]) {
-      case '\\': buf[j++] = '\\'; buf[j++] = '\\'; break;
-      case '\'': buf[j++] = '\\'; buf[j++] = '\''; break;
-      case '\n': buf[j++] = '\\'; buf[j++] = 'n'; break;
-      case '\r': buf[j++] = '\\'; buf[j++] = 'r'; break;
-      default: buf[j++] = raw[i]; break;
-    }
-  }
-  buf[j] = '\0';
-  NSString* result = [NSString stringWithUTF8String:buf];
-  free(buf);
-  return result;
-}
 
 // Build the doc-start JS string CEF's render process evals in on_context_created
 // (via extra_info). Three parts, in order:
 //   1. webkit.messageHandlers.zapp shim -> __zappSendNative (so the UNMODIFIED
 //      bootstrap/webview.ts post() reaches native on CEF, keeping the WKWebView
-//      bootstrap byte-identical).
-//   2. the Symbol.for('zapp.*') carriers (bootstrapConfig / bindingsManifest /
-//      ownerId / windowId) — same shape as webview.m's WKUserScript carriers.
+//      bootstrap byte-identical). CEF-specific — NOT part of the shared carriers.
+//   2. the Symbol.for('zapp.*') carriers — built by the SHARED
+//      zapp_build_bootstrap_carriers (webview.m), the SAME builder the WKWebView
+//      path uses, so CEF seeds a byte-equivalent globalThis: bootstrapConfig,
+//      bindingsManifest, owner/window ids, the pane-shape marker (isSidebar/
+//      isPopover/isInspector), AND the has{Sidebar,Inspector} composition flags.
+//      (Those pane-shape/composition carriers were previously MISSING on CEF — a
+//      chromium sidebar pane never received zapp.hasSidebar/isSidebar, so
+//      Window.current().sidebar was undefined and imperative sidebar control
+//      silently no-op'd. Sharing the builder fixes that structurally.) CEF passes
+//      app_get_bootstrap_web_content_inspectable() for the per-window inspectable
+//      flag — its prior value.
 //   3. the real compiled bootstrap (zapp_webview_bootstrap_script()).
 // Returns a malloc'd C string (caller frees).
 static char* zapp_cef_build_bootstrap_js(const char* window_id,
-                                         const char* owner_id) {
+                                         const char* owner_id, int pane_role,
+                                         bool has_sidebar, bool has_inspector) {
   NSMutableString* js = [NSMutableString string];
 
   // 1. Transport shim. The runtime's post() checks
@@ -119,58 +115,14 @@ static char* zapp_cef_build_bootstrap_js(const char* window_id,
       @"g.webkit.messageHandlers.zapp={postMessage:function(m){__zappSendNative(String(m));}};"
       @"})();\n"];
 
-  // 2a. bootstrapConfig — mirrors webview.m's configScript field-for-field.
-  NSString* appNameC = app_get_bootstrap_name()
-                           ? zapp_cef_js_escape(app_get_bootstrap_name())
-                           : @"Zapp";
-  BOOL terminate =
-      app_get_bootstrap_application_should_terminate_after_last_window_closed();
-  BOOL inspect = app_get_bootstrap_web_content_inspectable();
-  int maxWorkers = app_get_bootstrap_max_workers();
-  const char* themeC = darwin_get_theme();
-  const char* powerStateC = darwin_get_power_state();
-  if (!powerStateC || !powerStateC[0]) powerStateC = "null";
-  const char* formFactorC = zapp_form_factor();
-  const char* permsC = permissions_bootstrap_json();
-  if (!permsC || !permsC[0])
-    permsC = "{\"platform\":\"macos\",\"active\":false,\"allow\":[]}";
-  NSString* cspExtra = @"";
-  const char* cspRaw = zapp_build_csp();
-  if (cspRaw && cspRaw[0] != '\0') {
-    cspExtra = [NSString stringWithFormat:@",csp:'%@'",
-                                          zapp_cef_js_escape(cspRaw)];
-  }
-  [js appendFormat:
-      @"(function(){globalThis[Symbol.for('zapp.bootstrapConfig')]="
-      @"{name:'%@',applicationShouldTerminateAfterLastWindowClosed:%@,"
-      @"webContentInspectable:%@,maxWorkers:%d,theme:'%s',powerState:%s,"
-      @"formFactor:'%s',env:'%s',permissions:%s%@};})();\n",
-      appNameC,
-      terminate ? @"true" : @"false",
-      inspect ? @"true" : @"false",
-      maxWorkers,
-      themeC ? themeC : "light",
-      powerStateC,
-      formFactorC ? formFactorC : "desktop",
-      zapp_build_is_dev() ? "dev" : "prod",
-      permsC, cspExtra];
-
-  // 2b. bindingsManifest.
-  NSString* bindingsJson = zapp_cef_js_escape(service_get_manifest_json());
-  [js appendFormat:
-      @"(function(){globalThis[Symbol.for('zapp.bindingsManifest')]='%@';})();\n",
-      bindingsJson];
-
-  // 2c. owner + window ids.
-  if (owner_id && owner_id[0] != '\0') {
-    [js appendFormat:
-        @"(function(){globalThis[Symbol.for('zapp.ownerId')]='%@';})();\n",
-        zapp_cef_js_escape(owner_id)];
-  }
-  if (window_id && window_id[0] != '\0') {
-    [js appendFormat:
-        @"(function(){globalThis[Symbol.for('zapp.windowId')]='%@';})();\n",
-        zapp_cef_js_escape(window_id)];
+  // 2. The Symbol.for('zapp.*') doc-start carriers — shared builder (webview.m),
+  // identical to the WKWebView path. CEF passes its bootstrap inspectable value.
+  char* carriers = zapp_build_bootstrap_carriers(
+      owner_id, window_id, pane_role, has_sidebar, has_inspector,
+      app_get_bootstrap_web_content_inspectable());
+  if (carriers != NULL) {
+    [js appendString:[NSString stringWithUTF8String:carriers]];
+    free(carriers);
   }
 
   // 3. The real compiled bootstrap (bootstrap/webview.ts).
@@ -242,7 +194,9 @@ void* zapp_cef_host_view_for_window(void* window) {
 
 void zapp_cef_create_browser_in_view(void* parent_view, const char* url,
                                      int32_t window_slot, const char* window_id,
-                                     const char* owner_id) {
+                                     const char* owner_id, int pane_role,
+                                     bool host_has_sidebar,
+                                     bool host_has_inspector) {
   NSView* parent = (__bridge NSView*)parent_view;
   if (!parent) {
     fprintf(stderr,
@@ -274,7 +228,8 @@ void zapp_cef_create_browser_in_view(void* parent_view, const char* url,
   // native carrier sources + the compiled bootstrap) and hand it to the render
   // process via extra_info -> on_browser_created (zapp_cef_bridge.c). The
   // Helper runs no Nim, so this is the ONLY way it gets the carriers/bootstrap.
-  char* bootstrap_js = zapp_cef_build_bootstrap_js(window_id, owner_id);
+  char* bootstrap_js = zapp_cef_build_bootstrap_js(
+      window_id, owner_id, pane_role, host_has_sidebar, host_has_inspector);
   cef_dictionary_value_t* extra_info = cef_dictionary_value_create();
   if (bootstrap_js != NULL && extra_info != NULL) {
     cef_string_t key, val;
