@@ -510,6 +510,19 @@ static const char kZappWindowDelegateKey = 0;
         extern void zapp_cef_teardown_browser_for_slot(int32_t slot);
         zapp_cef_teardown_browser_for_slot(self.numericId);
     }
+    // C1: the sidebar pane mounts its own CEF browser (its own slot) — tear it
+    // down too, same terminal-close contract as the host pane above. No-ops if
+    // this window has no sidebar pane or the sidebar slot has no CEF browser.
+    if (self.sidebarNumericId >= 0 && self.sidebarNumericId < ZAPP_MAX_WINDOW_CALLBACKS) {
+        extern void zapp_cef_teardown_browser_for_slot(int32_t slot);
+        zapp_cef_teardown_browser_for_slot(self.sidebarNumericId);
+    }
+    // C2 forward-compat: inspector pane, same contract as sidebar above.
+    // No-ops today since no window wires up an inspector CEF browser yet.
+    if (self.inspectorNumericId >= 0 && self.inspectorNumericId < ZAPP_MAX_WINDOW_CALLBACKS) {
+        extern void zapp_cef_teardown_browser_for_slot(int32_t slot);
+        zapp_cef_teardown_browser_for_slot(self.inspectorNumericId);
+    }
 #endif
 }
 
