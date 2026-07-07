@@ -168,10 +168,10 @@ headless **ZJS** `ticker` worker (`src/ticker.ts`) broadcasting
 subscribed to by the page (`Events.on("tick", …)` → `#tick`). This is the
 render-engine-independent worker edge CEF's whole design point rests on,
 now backed by a real fixture instead of the spike's T5 argument-by-analogy.
-**Not yet closed:** the human visual R0 gate (does `#tick` actually
-increment on screen) has not been run — tracked as GATE 5 in
-`examples/cef-hello/SMOKE.md`, marked **PENDING**, not PASS. Do not treat
-this as visually confirmed until that gate is run.
+The human visual R0 gate (does `#tick` actually increment on screen) **PASSED
+2026-07-06** — GATE 5 in `examples/cef-hello/SMOKE.md` is now PASS (`#tick`
+increments live on the Chromium page; sub-cycle B later confirmed it fans out
+to *both* windows — see the sub-cycle B update below).
 
 **5 Minors cleared** (`native/platform/darwin/cef/`, 3 commits):
 
