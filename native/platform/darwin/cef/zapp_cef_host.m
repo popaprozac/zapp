@@ -304,3 +304,60 @@ void zapp_cef_create_browser_in_view(void* parent_view, const char* url,
   cef_browser_host_create_browser(window_info, client, cef_url,
                                   browser_settings, extra_info, NULL);
 }
+
+// ---------------------------------------------------------------------------
+// TASK 2 (Electrobun teardown) — graceful CEF browser teardown on host-window
+// close. This lives in zapp_cef_host.m because it needs BOTH the CEF C-API
+// (get_host / close_browser / get_window_handle) AND ObjC/NSView + libdispatch.
+//
+// Root cause it fixes: Zapp creates a SetAsChild Alloy browser
+// (CEF_RUNTIME_STYLE_ALLOY, parent_view == the window's contentView — see
+// zapp_cef_make_window_info) and Zapp NSWindows are setReleasedWhenClosed:NO,
+// so [window close] only HIDES the window. The browser's NSView stays in the
+// hidden view hierarchy, CEF never finishes destroying the browser, and
+// on_before_close is deferred all the way to cef_shutdown — the owned ref +
+// zapp_cef_browsers[] slot leak.
+//
+// The fix (Electrobun's CEFWebViewImpl remove, nativeWrapper.mm): after
+// CloseBrowser(false), REMOVE the browser's NSView from its superview on a
+// later main-thread turn. That lets CEF finish the teardown -> on_before_close
+// fires -> zapp_cef_client.c deregisters the slot + releases the owned ref.
+// No defer machinery, no re-entrant windowShouldClose: dance.
+//
+// Idempotent: no-op if |slot| has no live browser (already closed / out of
+// range), which is what makes the darwin_window_destroy safety-net call harmless.
+void zapp_cef_teardown_browser_for_slot(int32_t slot) {
+  extern cef_browser_t* zapp_cef_browser_for_slot(int32_t slot);
+  cef_browser_t* b = zapp_cef_browser_for_slot(slot);
+  if (b == NULL) return;  // already closed / never registered — no-op.
+  cef_browser_host_t* host = b->get_host(b);  // owned ref
+  if (host == NULL) return;
+  // Capture the browser's NSView BEFORE closing. For a SetAsChild Alloy browser
+  // (NOT wrapped in a cef_browser_view_t — has_view() == 0) get_window_handle
+  // returns the CEF-created NSView, a direct subview of the parent contentView
+  // handed to zapp_cef_make_window_info. This is exactly the view Electrobun
+  // removes.
+  cef_window_handle_t handle = host->get_window_handle(host);
+  NSView* view = handle ? (__bridge NSView*)(void*)handle : nil;
+  fprintf(stderr, "[zapp-cef] teardown_browser (slot %d) handle=%s\n", slot,
+          view != nil ? "view" : "NULL");
+  host->close_browser(host, /*force_close=*/0);
+  host->base.release(&host->base);
+  // Electrobun pattern: the DELAYED removeFromSuperview is what lets CEF finish
+  // destroying the browser -> on_before_close fires. The block strongly captures
+  // |view| under ARC, so it stays alive until the removal runs even if the close
+  // races. close_browser is async and does not remove the view synchronously.
+  if (view != nil) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+      if (view.superview != nil) [view removeFromSuperview];
+    });
+  } else {
+    // Should not happen for a SetAsChild Alloy browser; if it ever does, the
+    // documented fallback is to remove CEF's subview(s) of the parent
+    // contentView. Logged so the interactive-close gate surfaces it.
+    fprintf(stderr,
+            "[zapp-cef] teardown_browser (slot %d): get_window_handle NULL — "
+            "on_before_close may not fire; subview fallback needed\n",
+            slot);
+  }
+}

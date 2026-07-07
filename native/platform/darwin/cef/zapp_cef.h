@@ -102,30 +102,6 @@ cef_browser_settings_t* zapp_cef_make_browser_settings(void);
 // table only on the main thread, so no locking is needed.
 cef_browser_t* zapp_cef_browser_for_slot(int32_t slot);
 
-// Bool liveness check (1 if a browser is registered for |slot|, else 0). The
-// CEF-header-free equivalent of `zapp_cef_browser_for_slot(slot) != NULL` for
-// window.m's windowShouldClose:, which cannot name the cef_browser_t type.
-int zapp_cef_has_browser_for_slot(int32_t slot);
-
-// TASK 2 (DEFER-pattern close): per-slot "closing in progress" flag. Set by
-// window.m's windowShouldClose: FIRST pass (right before it defers the NSWindow
-// close and tears the browser down); read on the SECOND pass (the re-entrant
-// windowShouldClose: that on_before_close's [window close] triggers) to return
-// YES immediately without re-dispatching the close event or re-deferring;
-// cleared in windowWillClose: once the window has actually closed. Bounds-
-// checked; main-thread only (same discipline as zapp_cef_browser_for_slot).
-int zapp_cef_is_closing(int32_t slot);
-void zapp_cef_set_closing(int32_t slot, int v);
-
-// TASK 2 (DEFER-pattern close): implemented in window.m, called from
-// zapp_cef_client.c's on_before_close once the browser at |slot| has fully torn
-// down. Finds the NSWindow carrying this slot and [window close]s it —
-// completing the close that windowShouldClose: deferred. Main-thread-safe:
-// on_before_close runs on the CEF UI thread == the main thread under the
-// external pump. Declared here for documentation; the caller uses a local
-// extern (window.m owns the definition, this header is C-side).
-void zapp_cef_finish_window_close(int32_t slot);
-
 // native->JS delivery for a CEF-hosted window. If a browser is registered for
 // |slot|, run |js| in its page via the main frame's execute_java_script
 // (CEF's cross-process analogue of WKWebView's evaluateJavaScript:) and
@@ -143,17 +119,20 @@ int zapp_cef_eval_in_window(int32_t slot, const char* js);
 // zapp_webviews[] entry. Main-thread safe (see zapp_cef_browser_for_slot).
 void zapp_cef_broadcast_eval(const char* js);
 
-// TASK 2 (DEFER-pattern close): graceful teardown for the CEF browser hosted at
-// |slot| — get_host(browser) -> close_browser(host, force_close=0) -> release
-// the owned host ref. Asynchronous: schedules do_close then on_before_close on
-// the CEF UI thread, which does the actual zapp_cef_browsers[] deregister +
-// owned-ref release and then triggers the deferred [window close]
-// (zapp_cef_client.c). No-op if |slot| has no live browser (already closed, or
-// out of range) — this idempotence is what makes the darwin_window_destroy
-// safety-net call harmless. Called from window.m's windowShouldClose: (the real
-// trigger on a user-initiated close, which DEFERS the NSWindow close until this
-// completes) and, idempotently, from darwin_window_destroy as a safety net.
-void zapp_cef_close_browser_for_slot(int32_t slot);
+// TASK 2 (Electrobun teardown): graceful teardown for the CEF browser hosted at
+// |slot|. Captures the browser's NSView (get_window_handle), calls
+// close_browser(force_close=0), releases the owned host ref, then — on a later
+// main-thread turn — removes that NSView from its superview. The delayed
+// removeFromSuperview is what lets CEF finish destroying a SetAsChild Alloy
+// browser hosted in a setReleasedWhenClosed:NO NSWindow (whose [window close]
+// only hides the window), so on_before_close fires and zapp_cef_client.c
+// deregisters the slot + releases the owned ref (no leak). Asynchronous +
+// idempotent: no-op if |slot| has no live browser (already closed / out of
+// range) — the idempotence is what makes the darwin_window_destroy safety-net
+// call harmless. Called from window.m's windowWillClose: (the real trigger on a
+// user-initiated close) and, idempotently, from darwin_window_destroy.
+// Implemented in zapp_cef_host.m (needs both CEF headers and ObjC/NSView).
+void zapp_cef_teardown_browser_for_slot(int32_t slot);
 
 // --- zapp_cef_mac_entry.m ---
 // Configure the CEF API version (guarded) and install the CefAppProtocol-
