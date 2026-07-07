@@ -246,6 +246,7 @@ zapp_cef_life_span_on_after_created(cef_life_span_handler_t* self,
     // above (a future native->page push mechanism needs it); released in
     // on_before_close.
     zapp_cef_browsers[h->slot] = browser;
+    zapp_cef_set_closing(h->slot, 0);  // fresh browser — clear any stale closing flag (slot reuse)
     fprintf(stderr, "[zapp-cef] browser created (slot %d)\n", h->slot);
   } else {
     fprintf(stderr, "[zapp-cef] browser created with bad slot %d — dropping\n",
