@@ -446,27 +446,15 @@ static const char kZappWindowDelegateKey = 0;
 #ifdef ZAPP_HAS_CEF
     if (self.numericId >= 0)
         fprintf(stderr, "[zapp-cef] windowShouldClose (slot %d)\n", self.numericId);
-    // DEFER-pattern re-entry. Once the first pass initiated the close, CEF
-    // re-enters this method TWICE: first as part of its own browser-close
-    // (BEFORE on_before_close), then via zapp_cef_finish_window_close ->
-    // [window close] (AFTER). Return YES only once on_before_close has
-    // deregistered the browser (has_browser == false); while it STILL exists,
-    // keep DEFERRING (NO). Allowing the close too early hides the host NSWindow
-    // mid-teardown and STARVES on_before_close — a CEF browser destroys only
-    // while its host window stays open (cefclient's TryCloseBrowser
-    // "defer-until-done" contract). This NO-while-browser-exists is what makes
-    // on_before_close actually fire on an interactive close (vs only at
-    // cef_shutdown).
+    // DEFER-pattern SECOND pass. on_before_close finished tearing the browser
+    // down and called zapp_cef_finish_window_close -> [window close], which
+    // re-enters this method. The close guard already ran (and the browser is
+    // already gone) on the FIRST pass; commit the close now WITHOUT
+    // re-dispatching the close event or re-deferring.
     if (self.numericId >= 0) {
         extern int zapp_cef_is_closing(int32_t slot);
-        extern int zapp_cef_has_browser_for_slot(int32_t slot);
         if (zapp_cef_is_closing(self.numericId)) {
-            if (zapp_cef_has_browser_for_slot(self.numericId)) {
-                fprintf(stderr, "[zapp-cef] windowShouldClose: still tearing down, deferring (slot %d)\n",
-                        self.numericId);
-                return NO;
-            }
-            fprintf(stderr, "[zapp-cef] windowShouldClose: browser gone, allowing close (slot %d)\n",
+            fprintf(stderr, "[zapp-cef] windowShouldClose: second pass, allowing (slot %d)\n",
                     self.numericId);
             return YES;
         }
