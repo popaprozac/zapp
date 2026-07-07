@@ -448,9 +448,7 @@ static const char kZappWindowDelegateKey = 0;
         fprintf(stderr, "[zapp-cef] windowShouldClose (slot %d)\n", self.numericId);
     // No defer here (Electrobun teardown). The browser teardown happens in
     // windowWillClose: after we return YES; its delayed removeFromSuperview is
-    // what makes on_before_close fire. CEF may re-enter this method during that
-    // teardown — that is benign: the guard already passed, so this just returns
-    // YES again.
+    // what makes on_before_close fire.
 #endif
     if (self.numericId >= 0) {
         int result = zapp_dispatch_event(self.numericId, ZAPP_EVENT_WINDOW_CLOSE, 0, 0, 0, 0);
@@ -459,7 +457,7 @@ static const char kZappWindowDelegateKey = 0;
             if (self.numericId >= 0)
                 fprintf(stderr, "[zapp-cef] windowShouldClose VETOED (slot %d)\n", self.numericId);
 #endif
-            // Guard veto: browser NOT closed, window stays fully intact.
+            // Close guard vetoed the close — window stays open (all engines).
             return NO;
         }
     }
@@ -498,9 +496,16 @@ static const char kZappWindowDelegateKey = 0;
     // browser's NSView. The removal is what lets CEF finish destroying a
     // SetAsChild Alloy browser under a setReleasedWhenClosed:NO NSWindow (whose
     // [window close] only HIDES the window), so on_before_close fires and the
-    // slot deregisters + the owned ref releases (no leak). CEF may re-enter
-    // windowShouldClose: during this teardown — benign (returns YES again).
-    // No-op if no live browser hosts this slot.
+    // slot deregisters + the owned ref releases (no leak).
+    //
+    // DIVERGENCE FROM THE WKWebView REVERSIBLE-CLOSE CONTRACT ABOVE: this
+    // DESTROYS the CEF browser on every close, so a CEF window's close is
+    // TERMINAL — a later Window.show() on the same id reshows a BLANK window (the
+    // browser is gone and is not recreated), whereas a WKWebView window reshows
+    // intact. Reversible reshow of a CEF window is a documented sub-cycle B
+    // non-goal: there is no other reliable signal that a CEF window is gone
+    // (darwin_window_destroy has no live caller today). No-op if no live browser
+    // hosts this slot.
     if (self.numericId >= 0 && self.numericId < ZAPP_MAX_WINDOW_CALLBACKS) {
         extern void zapp_cef_teardown_browser_for_slot(int32_t slot);
         zapp_cef_teardown_browser_for_slot(self.numericId);
