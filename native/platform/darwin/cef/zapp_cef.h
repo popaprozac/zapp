@@ -119,6 +119,16 @@ int zapp_cef_eval_in_window(int32_t slot, const char* js);
 // zapp_webviews[] entry. Main-thread safe (see zapp_cef_browser_for_slot).
 void zapp_cef_broadcast_eval(const char* js);
 
+// TASK 2 (close handshake): terminal close for the CEF browser hosted at
+// |slot| — get_host(browser) -> close_browser(host, force_close=1) -> release
+// the owned host ref. Asynchronous: schedules do_close then on_before_close
+// on the CEF UI thread, which does the actual zapp_cef_browsers[] deregister
+// + owned-ref release (zapp_cef_client.c). No-op if |slot| has no live
+// browser (already closed, or out of range). Called from window.m's
+// windowWillClose: (the real trigger on a user-initiated close) and,
+// idempotently, from darwin_window_destroy as a safety net.
+void zapp_cef_close_browser_for_slot(int32_t slot);
+
 // --- zapp_cef_mac_entry.m ---
 // Configure the CEF API version (guarded) and install the CefAppProtocol-
 // conforming NSApplication subclass. Must run before cef_initialize.

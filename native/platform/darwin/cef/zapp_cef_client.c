@@ -178,6 +178,35 @@ void zapp_cef_broadcast_eval(const char* js) {
   }
 }
 
+// TASK 2 (close handshake): terminal close for the CEF browser hosted at
+// |slot|. Called from window.m's windowWillClose: — the hook that actually
+// fires on a real user-initiated window close (red button, or JS
+// Window.close()'s force path). darwin_window_destroy also calls this
+// (idempotently) as a safety net; see its comment in window.m and the
+// close-handshake FINDINGS for why windowWillClose:, not
+// darwin_window_destroy, is the primary trigger today.
+//
+// get_host returns an OWNED ref (CEF convention, like get_main_frame above);
+// release it after the call. close_browser is asynchronous even with
+// force_close=1 — it schedules do_close then on_before_close on the CEF UI
+// thread (same thread as this call under the external pump), which is where
+// the slot is actually deregistered and the browser's owned ref released
+// (zapp_cef_life_span_on_before_close below). We deliberately do NOT touch
+// zapp_cef_browsers[slot] here — nulling it early would make
+// on_before_close's slot-match guard treat the browser as already
+// reassigned and skip its release, leaking the ref kept since
+// on_after_created.
+void zapp_cef_close_browser_for_slot(int32_t slot) {
+  cef_browser_t* b = zapp_cef_browser_for_slot(slot);
+  if (b == NULL) return;  // already closed / never registered — no-op.
+  cef_browser_host_t* host = b->get_host(b);  // owned ref
+  if (host) {
+    fprintf(stderr, "[zapp-cef] close_browser requested (slot %d)\n", slot);
+    host->close_browser(host, /*force_close=*/1);
+    host->base.release(&host->base);
+  }
+}
+
 void CEF_CALLBACK
 zapp_cef_life_span_on_after_created(cef_life_span_handler_t* self,
                                     cef_browser_t* browser) {
@@ -197,10 +226,19 @@ zapp_cef_life_span_on_after_created(cef_life_span_handler_t* self,
 
 int CEF_CALLBACK zapp_cef_life_span_do_close(cef_life_span_handler_t* self,
                                              cef_browser_t* browser) {
-  (void)self;
+  zapp_cef_life_span_handler_t* h = (zapp_cef_life_span_handler_t*)self;
+  // Diagnostic only (TASK 2 close-handshake evidence) — see FINDINGS.
+  fprintf(stderr, "[zapp-cef] do_close (slot %d)\n", h->slot);
   // Release the callback parameter before returning.
   browser->base.release(&browser->base);
-  // Return 0 to allow the close to proceed.
+  // Return 0 to allow the close to proceed immediately. do_close's "defer"
+  // return (1) exists for apps that let CEF own the native window and need
+  // to run their own confirmation UI before it actually closes; ours is the
+  // opposite (Alloy browser hosted INSIDE a Zapp-owned NSWindow — see
+  // zapp_cef_create_browser_in_view) and Zapp's own close guard already ran
+  // at windowShouldClose: (window.m), before close_browser was ever called
+  // (see zapp_cef_close_browser_for_slot / window.m's windowWillClose:) — so
+  // there is nothing left to defer for. Matches the pre-Task-2 behavior.
   return 0;
 }
 
@@ -216,14 +254,13 @@ zapp_cef_life_span_on_before_close(cef_life_span_handler_t* self,
     browser->base.release(&browser->base);
   }
   browser->base.release(&browser->base);
-  // TASK 2 removes the line below — the last-window quit becomes Zapp's
-  // terminateAfterLastWindowClosed path. Kept here so single-window quit still
-  // works until Task 2 reworks it. The external message pump runs under
-  // [NSApp run] (not cef_run_message_loop), so stop the NSApp loop rather than
-  // calling cef_quit_message_loop (which only applies to cef_run_message_loop).
-  // The caller then falls through to cef_shutdown.
-  fprintf(stderr, "[zapp-cef] browser closing (slot %d)\n", h->slot);
-  zapp_cef_quit_main_loop();
+  // TASK 2: no longer stops the NSApp loop here. Last-window quit is Zapp's
+  // own terminateAfterLastWindowClosed path (the NSWindow itself closing —
+  // see window.m / platform.m), which fires independently of this
+  // browser-level callback; see close-handshake FINDINGS for the read on why
+  // that's still correct with the quit call removed. This handler now only
+  // deregisters + releases.
+  fprintf(stderr, "[zapp-cef] browser closed (slot %d)\n", h->slot);
 }
 
 static zapp_cef_life_span_handler_t* zapp_cef_life_span_handler_create(int32_t slot) {
