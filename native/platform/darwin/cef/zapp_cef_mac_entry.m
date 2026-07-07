@@ -352,20 +352,3 @@ void zapp_cef_pump_schedule(int64_t delay_ms) {
                       waitUntilDone:NO
                               modes:@[ NSRunLoopCommonModes ]];
 }
-
-void zapp_cef_quit_main_loop(void) {
-  // External-pump mode: cef_quit_message_loop does not apply. Stop the NSApp
-  // loop; -stop: only takes effect after the next event is dequeued, so post a
-  // dummy application-defined event to wake the loop immediately.
-  [NSApp stop:nil];
-  NSEvent* wake = [NSEvent otherEventWithType:NSEventTypeApplicationDefined
-                                     location:NSZeroPoint
-                                modifierFlags:0
-                                    timestamp:0
-                                 windowNumber:0
-                                      context:nil
-                                      subtype:0
-                                        data1:0
-                                        data2:0];
-  [NSApp postEvent:wake atStart:YES];
-}

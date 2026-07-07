@@ -229,11 +229,6 @@ void zapp_cef_create_browser_in_view(void* parent_view, const char* url,
 // the hop is queued until [NSApp run].
 void zapp_cef_pump_schedule(int64_t delay_ms);
 
-// Stop the NSApp main loop (external-pump mode: cef_quit_message_loop does
-// not apply). Called from the life-span handler when the last browser
-// closes.
-void zapp_cef_quit_main_loop(void);
-
 // --- zapp_cef_scheme_handler.c — the "zapp" custom scheme, real assets -----
 
 // Register the "zapp" custom scheme (standard + secure + CORS/fetch-
