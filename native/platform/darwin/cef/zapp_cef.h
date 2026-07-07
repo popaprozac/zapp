@@ -134,6 +134,17 @@ void zapp_cef_broadcast_eval(const char* js);
 // Implemented in zapp_cef_host.m (needs both CEF headers and ObjC/NSView).
 void zapp_cef_teardown_browser_for_slot(int32_t slot);
 
+// C1 sub-cycle Task 2. Resolve the host NSWindow for a CEF slot (window OR
+// pane) — the CEF analogue of window.m's zapp_webviews[id].window lookup,
+// which has no entry for a CEF-hosted slot. The CEF browser's NSView
+// (get_window_handle on macOS Alloy) is a subview of the host window's
+// content view, so its .window is the host NSWindow. Lets
+// darwin_window_get_by_numeric_id resolve chromium windows, so imperative
+// sidebar/inspector/panel/screen ops (which route through that resolver)
+// work on CEF too. Returns NULL if |slot| has no live browser. Implemented
+// in zapp_cef_host.m (needs both CEF headers and ObjC/NSView).
+void* zapp_cef_window_for_slot(int32_t slot);
+
 // --- zapp_cef_mac_entry.m ---
 // Configure the CEF API version (guarded) and install the CefAppProtocol-
 // conforming NSApplication subclass. Must run before cef_initialize.

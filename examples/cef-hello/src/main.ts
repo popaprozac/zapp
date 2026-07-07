@@ -59,3 +59,14 @@ guard.addEventListener("change", () => {
   Window.current().setCloseGuard(guard.checked);
   guardStatus.textContent = `close guard: ${guard.checked ? "ON — close is blocked" : "off"}`;
 });
+
+// C1 sub-cycle Task 2 gate: HOST pane only (the sidebar pane has no sidebar
+// of its own). Click -> darwin_window_get_by_numeric_id resolves the CEF
+// window's NSWindow (window.m's new ZAPP_HAS_CEF fallback) -> zapp_sidebar_
+// for_slot finds the split registry -> the sidebar collapses/expands. Before
+// this task the resolver returned NULL for a CEF slot and this button
+// would silently no-op.
+if (!isSidebar) {
+  document.querySelector<HTMLButtonElement>("#toggle-sb")!
+    .addEventListener("click", () => Window.current().sidebar?.toggle());
+}

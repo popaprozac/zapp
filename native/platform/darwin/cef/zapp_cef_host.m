@@ -361,3 +361,27 @@ void zapp_cef_teardown_browser_for_slot(int32_t slot) {
             slot);
   }
 }
+
+// ---------------------------------------------------------------------------
+// C1 sub-cycle Task 2 — engine-agnostic window resolver support.
+//
+// window.m's darwin_window_get_by_numeric_id resolves the host NSWindow via
+// zapp_webviews[id].window, which is WK-only: a CEF window/pane has no
+// zapp_webviews[] entry, so every imperative op that routes through that
+// resolver (sidebar toggle/collapse/expand/setWidth via
+// zapp_sidebar_for_slot, plus inspector/panel/screen) silently no-ops on
+// chromium. This gives darwin_window_get_by_numeric_id a CEF fallback: the
+// CEF browser's NSView (get_window_handle on macOS Alloy) is a subview of the
+// host window's content view, so its .window is the host NSWindow.
+void* zapp_cef_window_for_slot(int32_t slot) {
+  extern cef_browser_t* zapp_cef_browser_for_slot(int32_t slot);
+  cef_browser_t* b = zapp_cef_browser_for_slot(slot);
+  if (b == NULL) return NULL;
+  cef_browser_host_t* host = b->get_host(b);  // owned ref
+  if (host == NULL) return NULL;
+  cef_window_handle_t handle = host->get_window_handle(host);
+  host->base.release(&host->base);
+  if (handle == 0) return NULL;
+  NSView* view = (__bridge NSView*)(void*)handle;
+  return (__bridge void*)view.window;
+}

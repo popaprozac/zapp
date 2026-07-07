@@ -672,10 +672,17 @@ void* darwin_window_get_webview(int32_t numeric_id) {
 void* darwin_window_get_by_numeric_id(int32_t numeric_id) {
     if (numeric_id < 0 || numeric_id >= ZAPP_MAX_WINDOW_CALLBACKS) return NULL;
     WKWebView* wv = zapp_webviews[numeric_id];
-    if (!wv) return NULL;
-    NSWindow* w = wv.window;
-    if (!w) return NULL;
-    return (__bridge void*)w;
+    if (wv && wv.window) return (__bridge void*)wv.window;
+#ifdef ZAPP_HAS_CEF
+    // CEF windows/panes have no zapp_webviews[] entry — resolve the host
+    // NSWindow from the CEF browser's NSView so imperative ops (sidebar/
+    // inspector/panel/screen) that route through this resolver work on
+    // chromium too. (system build keeps this #ifdef'd out, byte-identical.)
+    extern void* zapp_cef_window_for_slot(int32_t slot);
+    void* cefWin = zapp_cef_window_for_slot(numeric_id);
+    if (cefWin) return cefWin;
+#endif
+    return NULL;
 }
 
 // --- JS eval on specific window (by numeric ID, O(1) lookup) ---
@@ -1115,7 +1122,7 @@ void* darwin_window_create(WindowOptions* opts) {
                                                         int32_t window_slot,
                                                         const char* window_id,
                                                         const char* owner_id);
-            NSString* paneOwnerId = [NSString stringWithFormat:@"owner-%d", host_slot];
+            NSString* paneOwnerId = [NSString stringWithFormat:@"owner-%p", window];
             {
                 NSURL* hostNsUrl = zapp_resolve_url(custom_url);
                 const char* hostCefUrl = hostNsUrl ? [[hostNsUrl absoluteString] UTF8String] : "zapp://index.html";
@@ -1129,6 +1136,12 @@ void* darwin_window_create(WindowOptions* opts) {
                 if (!sbCefUrl || sbCefUrl[0] == '\0') sbCefUrl = "zapp://index.html";
                 zapp_cef_create_browser_in_view((__bridge void*)sidebarContainer, sbCefUrl, sidebar_slot,
                                                 [hostWindowId UTF8String], [paneOwnerId UTF8String]);
+                // Mirrors the WK path's zapp_register_webview(sidebar_slot, ...,
+                // hostWindowId), which sets zapp_window_ids[sidebar_slot]. Without
+                // this, Workers.create() called from JS in the CEF sidebar pane
+                // no-ops (router.nim's darwin_window_id_string(sidebar_slot) -> NULL).
+                if (sidebar_slot >= 0 && sidebar_slot < ZAPP_MAX_WINDOW_CALLBACKS)
+                    zapp_window_ids[sidebar_slot] = hostWindowId;
             }
             // Register the host's JS id string so Window.current() round-trips
             // (mirrors the WK zapp_register_webview identity, without a WKWebView).
