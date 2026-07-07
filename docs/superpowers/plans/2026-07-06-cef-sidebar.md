@@ -174,7 +174,95 @@ git commit -m "feat(cef): host CEF browsers in sidebar split panes (C1) + fixtur
 
 ---
 
-### Task 2: Per-pane teardown
+### Task 2: Engine-agnostic window resolver (imperative sidebar control on CEF)
+
+`darwin_window_get_by_numeric_id` (window.m:672) resolves the NSWindow via `zapp_webviews[id].window` — WK-only — so it returns NULL for a CEF window, and every imperative op that routes through it (sidebar `toggle`/`collapse`/`expand`/`setWidth` via `zapp_sidebar_for_slot`, plus inspector/panel/screen) silently no-ops on chromium windows. Add a gated CEF fallback that resolves the host NSWindow from the CEF browser's NSView. Foundational — unblocks C2 (inspector) + panel + screen too. (Surfaced by Task 1's review; the plan's original gate used divider-drag to sidestep it — this closes it.)
+
+**Files:**
+- Modify: `native/platform/darwin/cef/zapp_cef_host.m` (new `zapp_cef_window_for_slot`)
+- Modify: `native/platform/darwin/cef/zapp_cef.h` (decl)
+- Modify: `native/platform/darwin/window.m` (`darwin_window_get_by_numeric_id`, ~672)
+- Modify: `examples/cef-hello/src/main.ts` (a host-pane "toggle sidebar" button for the gate)
+
+**Interfaces:**
+- Consumes: `zapp_cef_browser_for_slot(int32_t)` (B); `get_host`/`get_window_handle` (CEF C-API).
+- Produces: `void* zapp_cef_window_for_slot(int32_t slot)` — the host NSWindow for a CEF slot (window or pane), or NULL.
+
+- [ ] **Step 1: host.m helper**
+
+Add to `native/platform/darwin/cef/zapp_cef_host.m` (it has CEF headers + ObjC):
+```c
+// Resolve the host NSWindow for a CEF slot (window OR pane). The CEF browser's
+// NSView (get_window_handle on macOS Alloy) is a subview of the window, so its
+// .window is the host NSWindow. Lets darwin_window_get_by_numeric_id resolve
+// chromium windows (no zapp_webviews[] entry) so imperative sidebar/inspector/
+// panel/screen ops work on CEF.
+void* zapp_cef_window_for_slot(int32_t slot) {
+  extern cef_browser_t* zapp_cef_browser_for_slot(int32_t slot);
+  cef_browser_t* b = zapp_cef_browser_for_slot(slot);
+  if (b == NULL) return NULL;
+  cef_browser_host_t* host = b->get_host(b);   // owned ref
+  if (host == NULL) return NULL;
+  cef_window_handle_t handle = host->get_window_handle(host);
+  host->base.release(&host->base);
+  if (handle == 0) return NULL;
+  NSView* view = (__bridge NSView*)(void*)handle;
+  return (__bridge void*)view.window;
+}
+```
+Declare in `zapp_cef.h`: `void* zapp_cef_window_for_slot(int32_t slot);`.
+
+- [ ] **Step 2: window.m gated fallback**
+
+Replace `darwin_window_get_by_numeric_id` (window.m ~672) with:
+```c
+void* darwin_window_get_by_numeric_id(int32_t numeric_id) {
+    if (numeric_id < 0 || numeric_id >= ZAPP_MAX_WINDOW_CALLBACKS) return NULL;
+    WKWebView* wv = zapp_webviews[numeric_id];
+    if (wv && wv.window) return (__bridge void*)wv.window;
+#ifdef ZAPP_HAS_CEF
+    // CEF windows/panes have no zapp_webviews[] entry — resolve the host NSWindow
+    // from the CEF browser's NSView so imperative ops (sidebar/inspector/panel/
+    // screen) that route through this resolver work on chromium too.
+    extern void* zapp_cef_window_for_slot(int32_t slot);
+    void* cefWin = zapp_cef_window_for_slot(numeric_id);
+    if (cefWin) return cefWin;
+#endif
+    return NULL;
+}
+```
+(Confirm the current body against the file first; the WK arm is behaviorally unchanged — just reordered to `if (wv && wv.window)`. The `#ifdef` block keeps a `system` build byte-identical.)
+
+- [ ] **Step 3: fixture — a sidebar-toggle button (host pane)**
+
+In `examples/cef-hello/src/main.ts`, in the HOST pane only (not the sidebar), add a button that toggles the sidebar via the runtime. First grep the runtime for the sidebar-toggle method (`grep -rn "toggleSidebar\|sidebar" runtime/window.ts`); use the real API (e.g. `Window.current().toggleSidebar()` or the `sidebar:toggle` action). Add to `index.html` a `<button id="toggle-sb">toggle sidebar</button>` and in `main.ts` (guarded by `!isSidebar`):
+```ts
+if (!isSidebar) {
+  document.querySelector<HTMLButtonElement>("#toggle-sb")!
+    .addEventListener("click", () => Window.current().toggleSidebar());
+}
+```
+(Adjust the method name to the real runtime API found by the grep.)
+
+- [ ] **Step 4: Build + R0 gate**
+
+```bash
+cd examples/cef-hello && rm -rf ~/.cache/nim/app_r && bun run build
+cd examples/cef-hello && ./bin/cef-hello.app/Contents/MacOS/cef-hello
+```
+**R0 gate:** in window 1's HOST pane, click **toggle sidebar** → the sidebar **collapses**; click again → it **expands** (imperative JS→native sidebar control now works on a CEF window). Divider-drag still works too. (Before this task the button would no-op.)
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add native/platform/darwin/cef/zapp_cef_host.m native/platform/darwin/cef/zapp_cef.h \
+        native/platform/darwin/window.m examples/cef-hello/src/main.ts examples/cef-hello/index.html
+git commit -m "fix(cef): engine-agnostic darwin_window_get_by_numeric_id (imperative sidebar control on CEF)"
+```
+
+---
+
+### Task 3: Per-pane teardown
 
 B's `windowWillClose:` CEF teardown closes only the host slot. Extend it to tear down every pane's CEF browser (host + sidebar) so closing a sidebar window is leak-free.
 
@@ -218,7 +306,7 @@ git commit -m "feat(cef): per-pane teardown for sidebar windows (host + sidebar 
 
 ---
 
-### Task 3: Docs
+### Task 4: Docs
 
 **Files:**
 - Modify: `spikes/cef-macos/FINDINGS.md`
