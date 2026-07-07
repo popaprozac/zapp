@@ -34,3 +34,15 @@ goButton.addEventListener("click", async () => {
     out.textContent = `error: ${e}`;
   }
 });
+
+// Sub-cycle B close-guard gate: toggling this sets the native per-window close
+// guard (Window.setCloseGuard → router → windowShouldClose:). With it ON, the
+// red close button is VETOED (the window stays open; console logs
+// `[zapp-cef] windowShouldClose VETOED`) — proving a CEF window honors the SAME
+// close guard WKWebView windows do, checked BEFORE the defer-pattern teardown.
+const guard = document.querySelector<HTMLInputElement>("#guard")!;
+const guardStatus = document.querySelector<HTMLPreElement>("#guardstatus")!;
+guard.addEventListener("change", () => {
+  Window.current().setCloseGuard(guard.checked);
+  guardStatus.textContent = `close guard: ${guard.checked ? "ON — close is blocked" : "off"}`;
+});
