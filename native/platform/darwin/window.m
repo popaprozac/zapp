@@ -444,12 +444,21 @@ static const char kZappWindowDelegateKey = 0;
 - (BOOL)windowShouldClose:(NSWindow*)sender {
     (void)sender;
 #ifdef ZAPP_HAS_CEF
-    // Diagnostic only (TASK 2 close-handshake evidence) — no CEF-specific
-    // branch is needed here: a CEF-hosted browser lives inside a normal
-    // Zapp NSWindow (zapp_cef_create_browser_in_view), so the existing JS
-    // close-guard veto below already applies unchanged. See FINDINGS.
     if (self.numericId >= 0)
         fprintf(stderr, "[zapp-cef] windowShouldClose (slot %d)\n", self.numericId);
+    // DEFER-pattern SECOND pass. on_before_close finished tearing the browser
+    // down and called zapp_cef_finish_window_close -> [window close], which
+    // re-enters this method. The close guard already ran (and the browser is
+    // already gone) on the FIRST pass; commit the close now WITHOUT
+    // re-dispatching the close event or re-deferring.
+    if (self.numericId >= 0) {
+        extern int zapp_cef_is_closing(int32_t slot);
+        if (zapp_cef_is_closing(self.numericId)) {
+            fprintf(stderr, "[zapp-cef] windowShouldClose: second pass, allowing (slot %d)\n",
+                    self.numericId);
+            return YES;
+        }
+    }
 #endif
     if (self.numericId >= 0) {
         int result = zapp_dispatch_event(self.numericId, ZAPP_EVENT_WINDOW_CLOSE, 0, 0, 0, 0);
@@ -458,9 +467,37 @@ static const char kZappWindowDelegateKey = 0;
             if (self.numericId >= 0)
                 fprintf(stderr, "[zapp-cef] windowShouldClose VETOED (slot %d)\n", self.numericId);
 #endif
+            // Guard veto: browser NOT closed, window stays fully intact. Must
+            // NOT set the closing flag or call close_browser.
             return NO;
         }
     }
+#ifdef ZAPP_HAS_CEF
+    // DEFER-pattern FIRST pass (guard allowed). If a live CEF browser hosts
+    // this window, DEFER the NSWindow close: flag the slot, kick off a graceful
+    // browser teardown (do_close -> on_before_close), and return NO. This is
+    // the canonical CEF-macOS order — the browser dies FIRST, then
+    // on_before_close calls zapp_cef_finish_window_close -> [window close],
+    // which re-enters this method and hits the second-pass branch above
+    // (returns YES). Doing it this way (rather than the old close-in-
+    // windowWillClose: after returning YES) is what lets on_before_close
+    // actually fire: the host NSWindow is NOT yet committed to closing while
+    // CEF tears the browser down, so windowShouldClose: no longer re-enters and
+    // starves on_before_close.
+    if (self.numericId >= 0) {
+        extern int zapp_cef_has_browser_for_slot(int32_t slot);
+        extern void zapp_cef_set_closing(int32_t slot, int v);
+        extern void zapp_cef_close_browser_for_slot(int32_t slot);
+        if (zapp_cef_has_browser_for_slot(self.numericId)) {
+            fprintf(stderr,
+                    "[zapp-cef] windowShouldClose: deferring, tearing down browser (slot %d)\n",
+                    self.numericId);
+            zapp_cef_set_closing(self.numericId, 1);
+            zapp_cef_close_browser_for_slot(self.numericId);
+            return NO;  // DEFER — do not close the window yet.
+        }
+    }
+#endif
     return YES;
 }
 
@@ -490,32 +527,22 @@ static const char kZappWindowDelegateKey = 0;
         zapp_window_ids[self.inspectorNumericId] = nil;
     }
 #ifdef ZAPP_HAS_CEF
-    // TASK 2 close handshake. A CEF window has no zapp_webviews[] entry (see
-    // zapp_cef_client.c's zapp_cef_browsers[] instead), so the clears above
-    // don't touch it. Unlike WKWebView — whose real teardown is deferred to
-    // darwin_window_destroy because [window close] here is reversible via
-    // show() — a CEF browser has no other reliable signal that its host
-    // window is gone: darwin_window_destroy has no reachable caller in the
-    // current app/router lifecycle (WindowManager::close / window_destroy
-    // is unwired — JS Window.close() and the red button both route through
-    // window_force_close/[window close], never window_destroy). So
-    // windowWillClose: IS the real "this window is gone" signal a CEF
-    // browser gets — close it HERE rather than waiting for a destroy path
-    // that, today, never fires. See close-handshake FINDINGS for the full
-    // read on this divergence from the original task brief.
-    //
-    // close_browser (zapp_cef_close_browser_for_slot) is asynchronous —
-    // do_close then on_before_close run on the CEF UI thread (same thread,
-    // shortly after this returns), and on_before_close is the ONE place
-    // that deregisters zapp_cef_browsers[slot] and releases the owned ref.
-    // Deliberately do NOT null the slot here too — on_before_close's
-    // slot-match guard would then see a mismatch and skip its release,
-    // leaking the ref kept since on_after_created.
-    if (self.numericId >= 0 && self.numericId < ZAPP_MAX_WINDOW_CALLBACKS) {
-        extern void zapp_cef_close_browser_for_slot(int32_t slot);
-        fprintf(stderr, "[zapp-cef] windowWillClose: closing browser (slot %d)\n",
-                self.numericId);
-        zapp_cef_close_browser_for_slot(self.numericId);
+    // TASK 2 (DEFER-pattern close). The CEF branch that used to call
+    // close_browser HERE was the bug: by the time windowWillClose: fires the
+    // NSWindow is already committed to closing, so tearing the browser down now
+    // re-enters windowShouldClose: and starves on_before_close (the browser
+    // leaks, the slot never clears). The teardown moved UP to
+    // windowShouldClose:, which DEFERS the window close (returns NO), tears the
+    // browser down first, and on_before_close then triggers the real [window
+    // close] that lands us here. So there is NOTHING to close now — the browser
+    // is already gone and zapp_cef_browsers[slot] was already deregistered in
+    // on_before_close. Just clear the per-slot closing flag (set on the first
+    // windowShouldClose: pass) so a future window reusing this slot starts
+    // clean. windowShouldClose: already returned its YES second-pass before
+    // this notification, so clearing here is the safe, race-free spot.
+    if (self.numericId >= 0) {
+        extern void zapp_cef_set_closing(int32_t slot, int v);
+        zapp_cef_set_closing(self.numericId, 0);
     }
 #endif
 }
@@ -738,6 +765,31 @@ void darwin_window_set_bridge_ready(const char* window_id) {
         }
     }
 }
+
+#ifdef ZAPP_HAS_CEF
+// TASK 2 (DEFER-pattern close): completes the deferred host-NSWindow close.
+// Called from zapp_cef_client.c's on_before_close once the CEF browser at
+// |slot| has fully torn down. windowShouldClose: returned NO to DEFER the
+// NSWindow close while the browser closed gracefully; now find that NSWindow
+// (its ZappWindowDelegate carries the slot as numericId — same iteration idiom
+// as darwin_window_set_bridge_ready above) and [window close] it. Because
+// zapp_cef_set_closing(slot, 1) is still set, the re-entrant windowShouldClose:
+// takes its second-pass branch and returns YES immediately (no re-dispatch, no
+// re-defer), so the window closes cleanly. Runs on the CEF UI thread == the
+// main thread under the external pump, so this NSWindow call is main-thread-safe.
+void zapp_cef_finish_window_close(int32_t slot) {
+    if (slot < 0) return;
+    fprintf(stderr, "[zapp-cef] finish_window_close (slot %d)\n", slot);
+    for (NSWindow* window in [NSApp windows]) {
+        ZappWindowDelegate* delegate = (ZappWindowDelegate*)[window delegate];
+        if ([delegate isKindOfClass:[ZappWindowDelegate class]] &&
+            delegate.numericId == slot) {
+            [window close];
+            break;
+        }
+    }
+}
+#endif
 
 // --- Material name → NSVisualEffectMaterial ---
 // Shared by the vibrancy path (whole-window blur) and the sidebar's optional
@@ -1396,16 +1448,14 @@ void darwin_window_destroy(void* handle) {
     }
 
 #ifdef ZAPP_HAS_CEF
-    // TASK 2 close handshake — safety net, mirroring the WKWebView teardown
-    // above. In today's lifecycle this is a no-op in practice: windowWillClose:
-    // (above) is what actually fires on a user close and has already closed
-    // the browser by the time we get here (this fn isn't reachable from a
-    // plain close — see its own header comment: only a true destroy/[window
-    // close] with releasedWhenClosed:YES-style teardown reaches this line,
-    // and nothing in the current router wires that up for CEF or WKWebView
-    // windows alike). Kept for parity + forward-compatibility with any
-    // future explicit-destroy caller; zapp_cef_close_browser_for_slot is
-    // idempotent (no-op once the slot is already cleared).
+    // TASK 2 (DEFER-pattern close) — safety net, mirroring the WKWebView
+    // teardown above. In today's lifecycle this is a no-op in practice: a user
+    // close goes through windowShouldClose:, which defers the window close and
+    // tears the browser down FIRST (on_before_close deregisters the slot), so
+    // by the time any destroy path reaches here the browser is already gone.
+    // Kept for parity + forward-compatibility with any future explicit-destroy
+    // caller that bypasses windowShouldClose:; zapp_cef_close_browser_for_slot
+    // is idempotent (no-op once the slot is already cleared).
     if ([delegate isKindOfClass:[ZappWindowDelegate class]] && delegate.numericId >= 0) {
         extern void zapp_cef_close_browser_for_slot(int32_t slot);
         fprintf(stderr, "[zapp-cef] darwin_window_destroy: closing browser (slot %d)\n",

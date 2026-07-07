@@ -98,6 +98,33 @@ cef_browser_t* zapp_cef_browser_for_slot(int32_t slot) {
   return zapp_cef_slot_ok(slot) ? zapp_cef_browsers[slot] : NULL;
 }
 
+// window.m is CEF-header-free (plain-C externs only, no cef_browser_t type), so
+// it can't spell `zapp_cef_browser_for_slot(slot) != NULL`. This bool predicate
+// gives windowShouldClose: the same liveness check without pulling the CEF
+// headers into that translation unit.
+int zapp_cef_has_browser_for_slot(int32_t slot) {
+  return zapp_cef_browser_for_slot(slot) != NULL;
+}
+
+// TASK 2 (DEFER-pattern close): per-slot "this browser is being torn down as
+// part of closing its host NSWindow" flag. The canonical CEF-macOS close is:
+// windowShouldClose: sets this flag, defers the NSWindow close (returns NO),
+// and gracefully closes the browser; on_before_close then triggers the REAL
+// [window close], which RE-ENTERS windowShouldClose:. That second pass reads
+// this flag and returns YES immediately — no re-dispatch of the close event, no
+// second defer. Cleared once the window has actually closed (windowWillClose:),
+// so a future window reusing the slot starts clean. Main-thread only, same
+// discipline as zapp_cef_browsers[].
+static int zapp_cef_closing[ZAPP_MAX_WINDOW_CALLBACKS] = {0};
+
+int zapp_cef_is_closing(int32_t slot) {
+  return zapp_cef_slot_ok(slot) ? zapp_cef_closing[slot] : 0;
+}
+
+void zapp_cef_set_closing(int32_t slot, int v) {
+  if (zapp_cef_slot_ok(slot)) zapp_cef_closing[slot] = v ? 1 : 0;
+}
+
 //
 // browser <-> Zapp window_id mapping + native->JS eval (see zapp_cef.h).
 //
@@ -178,31 +205,34 @@ void zapp_cef_broadcast_eval(const char* js) {
   }
 }
 
-// TASK 2 (close handshake): terminal close for the CEF browser hosted at
-// |slot|. Called from window.m's windowWillClose: — the hook that actually
-// fires on a real user-initiated window close (red button, or JS
-// Window.close()'s force path). darwin_window_destroy also calls this
-// (idempotently) as a safety net; see its comment in window.m and the
-// close-handshake FINDINGS for why windowWillClose:, not
-// darwin_window_destroy, is the primary trigger today.
+// TASK 2 (DEFER-pattern close): kick off the graceful teardown of the CEF
+// browser hosted at |slot|. Called from window.m's windowShouldClose: FIRST
+// pass, AFTER the JS close guard allowed the close and AFTER the slot was
+// flagged closing (zapp_cef_set_closing) — windowShouldClose: returns NO to
+// DEFER the host NSWindow close until this teardown completes.
+// darwin_window_destroy also calls this (idempotently) as a safety net; see its
+// comment in window.m.
 //
 // get_host returns an OWNED ref (CEF convention, like get_main_frame above);
-// release it after the call. close_browser is asynchronous even with
-// force_close=1 — it schedules do_close then on_before_close on the CEF UI
-// thread (same thread as this call under the external pump), which is where
-// the slot is actually deregistered and the browser's owned ref released
+// release it after the call. close_browser(force_close=0) is asynchronous AND
+// GRACEFUL — it schedules do_close then on_before_close on the CEF UI thread
+// (same thread as this call under the external pump). force_close is 0 (not 1)
+// on purpose: the defer pattern relies on do_close -> on_before_close running
+// the normal way, and Zapp's own close guard already ran at windowShouldClose:
+// before this was ever called, so there is nothing to force past.
+// on_before_close is where the slot is deregistered, the browser's owned ref
+// released, and the deferred [window close] finally triggered
 // (zapp_cef_life_span_on_before_close below). We deliberately do NOT touch
-// zapp_cef_browsers[slot] here — nulling it early would make
-// on_before_close's slot-match guard treat the browser as already
-// reassigned and skip its release, leaking the ref kept since
-// on_after_created.
+// zapp_cef_browsers[slot] here — nulling it early would make on_before_close's
+// slot-match guard treat the browser as already reassigned and skip its
+// release, leaking the ref kept since on_after_created.
 void zapp_cef_close_browser_for_slot(int32_t slot) {
   cef_browser_t* b = zapp_cef_browser_for_slot(slot);
   if (b == NULL) return;  // already closed / never registered — no-op.
   cef_browser_host_t* host = b->get_host(b);  // owned ref
   if (host) {
     fprintf(stderr, "[zapp-cef] close_browser requested (slot %d)\n", slot);
-    host->close_browser(host, /*force_close=*/1);
+    host->close_browser(host, /*force_close=*/0);
     host->base.release(&host->base);
   }
 }
@@ -231,14 +261,17 @@ int CEF_CALLBACK zapp_cef_life_span_do_close(cef_life_span_handler_t* self,
   fprintf(stderr, "[zapp-cef] do_close (slot %d)\n", h->slot);
   // Release the callback parameter before returning.
   browser->base.release(&browser->base);
-  // Return 0 to allow the close to proceed immediately. do_close's "defer"
-  // return (1) exists for apps that let CEF own the native window and need
-  // to run their own confirmation UI before it actually closes; ours is the
-  // opposite (Alloy browser hosted INSIDE a Zapp-owned NSWindow — see
-  // zapp_cef_create_browser_in_view) and Zapp's own close guard already ran
-  // at windowShouldClose: (window.m), before close_browser was ever called
-  // (see zapp_cef_close_browser_for_slot / window.m's windowWillClose:) — so
-  // there is nothing left to defer for. Matches the pre-Task-2 behavior.
+  // Return 0 to allow the browser close to proceed to on_before_close. Note
+  // this is CEF's do_close/on_before_close teardown — NOT the host NSWindow.
+  // do_close's "defer" return (1) exists for apps that let CEF OWN the native
+  // window and want to run their own confirmation UI before CEF destroys it;
+  // ours is the opposite: the browser is an Alloy child of a Zapp-owned
+  // NSWindow (zapp_cef_create_browser_in_view), and the NSWindow-level defer
+  // already happened one layer up — windowShouldClose: returned NO and kicked
+  // off THIS teardown (see zapp_cef_close_browser_for_slot). Zapp's close guard
+  // also already ran at windowShouldClose: before close_browser was called. So
+  // allow (0): let on_before_close fire, which then triggers the real, deferred
+  // [window close] via zapp_cef_finish_window_close.
   return 0;
 }
 
@@ -258,9 +291,18 @@ zapp_cef_life_span_on_before_close(cef_life_span_handler_t* self,
   // own terminateAfterLastWindowClosed path (the NSWindow itself closing —
   // see window.m / platform.m), which fires independently of this
   // browser-level callback; see close-handshake FINDINGS for the read on why
-  // that's still correct with the quit call removed. This handler now only
-  // deregisters + releases.
+  // that's still correct with the quit call removed.
   fprintf(stderr, "[zapp-cef] browser closed (slot %d)\n", h->slot);
+  // DEFER-pattern completion. windowShouldClose: returned NO to keep the host
+  // NSWindow open while THIS teardown ran; now that the browser is fully gone
+  // (deregistered + ref released above), finish the deferred close by actually
+  // closing the NSWindow. zapp_cef_finish_window_close (window.m) finds the
+  // NSWindow for this slot and [window close]s it; because the slot's closing
+  // flag is still set, the resulting re-entrant windowShouldClose: returns YES
+  // and the window closes cleanly. Runs on the CEF UI thread == the main thread
+  // under the external pump, so this main-thread NSWindow call is safe.
+  extern void zapp_cef_finish_window_close(int32_t slot);
+  zapp_cef_finish_window_close(h->slot);
 }
 
 static zapp_cef_life_span_handler_t* zapp_cef_life_span_handler_create(int32_t slot) {
