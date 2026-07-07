@@ -421,7 +421,7 @@ next.
    `zapp.hasInspector` resolve inside the pane exactly as they do on
    WKWebView. The WK `#else` inspector path is byte-unchanged.
 2. **Everything else inherited from C1, untouched — the reason this cycle
-   was ~12 lines of new code.** C1 already generalized every piece an
+   was ~17 lines of new code.** C1 already generalized every piece an
    inspector pane needs: the engine-agnostic window resolver
    (`zapp_cef_window_for_slot`, so imperative inspector control resolves on
    CEF), the shared bootstrap-carrier builder (`zapp_build_bootstrap_

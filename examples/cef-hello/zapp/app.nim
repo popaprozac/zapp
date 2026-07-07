@@ -30,7 +30,7 @@ proc runApp(): int =
   let win = app.window.create(WindowOptions(
     title: "CEF Hello",
     visible: false,               # deferred show — revealed by onReady
-    width: 640, height: 360,      # widened so host + sidebar both have room
+    width: 900, height: 400,      # room for all 3 panes: host + sidebar + inspector
     inspectable: Inspectable.Auto, # web inspector: on in dev, off in prod
     sidebar: SidebarOptions(url: "#sidebar-pane", title: "CEF Sidebar",
                             width: 240, minWidth: 150, maxWidth: 320,
