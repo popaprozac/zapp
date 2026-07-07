@@ -399,6 +399,75 @@ toolbar-on-CEF (C3), DevTools, iOS/Windows/Linux, per-window engine
 selection, navigation/back-forward — all explicit non-goals, tracked for
 sub-cycles C2/C3+.
 
+### ★ Sub-cycle C2 update (CEF inspector, `feat/cef-inspector`, 2026-07-07)
+
+Design: `docs/superpowers/specs/2026-07-07-cef-inspector-design.md`. Second
+native-chrome element on the `chromium` path — a direct mirror of C1's
+sidebar arm. **C1 sidebar → C2 inspector → C3 toolbar** is the north star
+sequence toward running full `kitchen-sink` on chromium; **C3 = toolbar** is
+next.
+
+**Inspector on CEF (macOS) — CLOSED.** All human gates PASSED on-screen
+2026-07-07 (`examples/cef-hello/SMOKE.md`). What shipped:
+
+1. **A single inspector arm in `window.m`'s CEF pane-mount branch** (T1,
+   `b195abb`) — a direct mirror of C1's sidebar arm, added right after it:
+   `zapp_cef_create_browser_in_view(inspectorContainer, insCefUrl,
+   inspector_slot, hostWindowId, paneOwnerId, 3 /* pane_role */, useSidebar,
+   useInspector)`, plus a bounds-checked `zapp_window_ids[inspector_slot] =
+   hostWindowId` mirroring the WK path's `zapp_register_webview` identity
+   registration. `pane_role=3` matches the WK `#else` inspector arm and the
+   shared carrier builder's `isInspector` case, so `zapp.isInspector` /
+   `zapp.hasInspector` resolve inside the pane exactly as they do on
+   WKWebView. The WK `#else` inspector path is byte-unchanged.
+2. **Everything else inherited from C1, untouched — the reason this cycle
+   was ~12 lines of new code.** C1 already generalized every piece an
+   inspector pane needs: the engine-agnostic window resolver
+   (`zapp_cef_window_for_slot`, so imperative inspector control resolves on
+   CEF), the shared bootstrap-carrier builder (`zapp_build_bootstrap_
+   carriers`, already emits `zapp.hasInspector`/`zapp.isInspector` by
+   `pane_role`/composition flags for both engines), per-pane teardown
+   (`windowWillClose:`'s CEF safety net already tore down
+   `inspectorNumericId`, forward-compat since C1 Task 3, now exercised for
+   real), the split builder (`inspectorContainer`, already constructed when
+   `useInspector`), and the inspector registry + `inspector.m` events
+   (already engine-agnostic, outside the `#ifdef`). None of these needed a
+   single change for C2.
+3. **Fixture** (`b195abb`) — `examples/cef-hello` window 1 gains an
+   `InspectorOptions` (`zapp/app.nim`) alongside its existing sidebar,
+   making it a **3-pane CEF window** (sidebar + host + inspector) — the
+   fixture that proves sidebar+inspector **coexistence** on Chromium, not
+   just sidebar+host. `src/main.ts` grows an `#inspector-pane` route branch
+   (own tint, own `which` label) and a host-pane "toggle inspector" button
+   beside the existing "toggle sidebar" button, both driven by the same
+   `darwin_window_get_by_numeric_id` CEF-fallback resolver C1 shipped.
+   Window 2 stays plain (fullbleed regression, unchanged).
+
+**Known limitations / follow-ups (documented, not hidden):**
+
+- **Host-level window-event fan-out (`zapp_dispatch_event_to_js`) is
+  WK-only** — a pre-existing, foundational gap since sub-cycle B, **not
+  inspector-specific**: it returns early for the host pane and every
+  accessory on ALL CEF windows (sidebar, inspector, plain). Deferred to a
+  dedicated foundational follow-up **after C2** (user-agreed 2026-07-07).
+  The inspector's OWN collapse/resize events (`inspector.m`) DO reach the
+  CEF inspector pane via `darwin_window_eval_js`'s `ZAPP_HAS_CEF` branch —
+  only the host→pane window-event fan-out (resize/focus/blur/move/maximize)
+  is gapped.
+- **CEF inspector panes are opaque** — same as C1's sidebar finding; a
+  non-OSR (Alloy) CEF browser paints its own background, so the WK
+  inspector's vibrancy/material won't show through. Vibrancy-on-CEF remains
+  OSR territory, an explicit non-goal.
+- **C3 = toolbar** is next in the native-chrome sequence.
+- **Sub-cycle B's terminal-close limitation applies per-pane** — closing
+  the 3-pane window tears down (and does not recreate) all three CEF
+  browsers, same as the sidebar-only and fullbleed single-browser cases
+  documented in the sub-cycle B/C1 updates above.
+
+Also unchanged / not attempted this sub-cycle: toolbar-on-CEF (C3),
+DevTools, iOS/Windows/Linux, per-window engine selection, navigation/
+back-forward — all explicit non-goals, tracked for sub-cycle C3+.
+
 ---
 
 ## Task 1 (RISK GATE): message-loop coexistence — CEF + NSApplication + a second (ZJS-shaped) loop

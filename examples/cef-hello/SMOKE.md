@@ -118,6 +118,36 @@ inconsistent (cosmetic, tracked); the WK carrier append lacks the CEF path's
 OOM NULL-check (cosmetic); sub-cycle B's terminal-close limitation applies
 per-pane (closing does not recreate either browser on a later `show()`).
 
+### Sub-cycle C2 — inspector (macOS)
+
+Window 1 (already has a sidebar) now also sets an `inspector`
+(`InspectorOptions`, `zapp/app.nim`) — a direct mirror of C1's sidebar arm
+in the CEF pane-mount branch (`window.m`), making window 1 a **3-pane** CEF
+window (sidebar + host + inspector). A host-pane "toggle inspector" button
+sits beside the existing "toggle sidebar" button. Window 2 stays plain/
+fullbleed (unchanged), regression fixture for the non-inspector CEF path.
+Design: `docs/superpowers/specs/2026-07-07-cef-inspector-design.md`;
+findings: `spikes/cef-macos/FINDINGS.md`'s ★ Sub-cycle C2 update.
+
+| Gate | What it proves | Result |
+|---|---|---|
+| **GATE 19** — inspector render + coexistence | Window 1 renders **three** independent Chromium panes — sidebar + host + inspector — inside the same `NSSplitViewController`, each its own CEF browser registered in `zapp_cef_browsers[]` via the new inspector arm (`pane_role=3`, a direct mirror of C1's sidebar arm) — proves sidebar+inspector **coexistence** on Chromium, not just sidebar+host | **PASS — human-confirmed 2026-07-07** |
+| **GATE 20** — broadcast fan-out to all three panes | The `ticker` worker's `Events.emit("tick", …)` reaches **all three** CEF browsers of window 1 (sidebar, host, inspector) — the engine-agnostic broadcast path, reused unchanged from sub-cycles B/C1 — all three panes' tick counters increment | **PASS — human-confirmed 2026-07-07** |
+| **GATE 21** — collapse/expand via divider drag | Dragging the inspector's divider collapses/expands it **independently** of the sidebar — both accessories are independently collapsible, proving coexistence extends to interaction, not just rendering — via the engine-agnostic split-pane event delivery reused unchanged from C1 | **PASS — human-confirmed 2026-07-07** |
+| **GATE 22** — imperative JS toggle | `Window.current().inspector.toggle()` from a host-pane button collapses the inspector; the sidebar's own toggle button still works side-by-side — proves C1's resolver (`darwin_window_get_by_numeric_id`'s CEF fallback) and shared bootstrap-carrier fixes generalize to the inspector **for free** — no new fix was needed this cycle | **PASS — human-confirmed 2026-07-07** |
+| **GATE 23** — per-pane teardown on close | Closing window 1 logs `teardown_browser (slot N)` then `browser closed (slot N)` for **all three** slots — host, sidebar, and inspector — no leak; C1's teardown extension already covered the inspector slot forward-compat (Task 3), exercised for real here for the first time | **PASS — human-confirmed 2026-07-07** |
+| **GATE 24** — window 2 (plain) regression | Window 2, unchanged (no sidebar/inspector/toolbar), still renders + ticks + closes cleanly via the original fullbleed CEF branch — proves the inspector arm didn't regress the plain path | **PASS — human-confirmed 2026-07-07** |
+| **GATE 25** — last-close clean quit | Closing the last remaining window quits the app cleanly via `terminateAfterLastWindowClosed`, same as the sidebar-only and plain multi-window cases | **PASS — human-confirmed 2026-07-07** |
+
+**Known limitations (documented, not hidden — see FINDINGS for detail):**
+host-level window-event fan-out (`zapp_dispatch_event_to_js`) is WK-only — a
+foundational gap since sub-cycle B affecting ALL CEF windows, not
+inspector-specific (the inspector's own collapse/resize events DO reach the
+CEF pane; deferred to a post-C2 follow-up, user-agreed 2026-07-07); CEF
+inspector panes are opaque (no vibrancy, same as C1's sidebar finding);
+sub-cycle B's terminal-close limitation applies per-pane; C3 (toolbar) is
+next.
+
 ## (b) `webEngine:"system"` — WKWebView, byte-identical to pre-change
 
 ```
@@ -189,17 +219,18 @@ this task changes.
 
 ## Non-goals this slice does NOT smoke
 
-DevTools, native chrome (inspector / toolbar — sidebar is CLOSED, see below)
-on the `chromium` path, Helper signing/notarization, iOS / Windows / Linux,
-per-window engine selection, in-app popups, and navigation/back-forward are
-all out of scope for this fixture and this slice — see
+DevTools, native chrome (toolbar — sidebar and inspector are CLOSED, see
+below) on the `chromium` path, Helper signing/notarization, iOS / Windows /
+Linux, per-window engine selection, in-app popups, and navigation/
+back-forward are all out of scope for this fixture and this slice — see
 `docs/api-reference.md`'s `webEngine` section and
 `spikes/cef-macos/FINDINGS.md` for what remains open. (Worker on CEF is GATE
 5 above, not a non-goal — **PASS**, human-confirmed 2026-07-06.
 **Multi-window is GATEs 6-11 above, not a non-goal either** — sub-cycle B
 closed it; all six gates PASSED human-confirmed 2026-07-06. **Sidebar-on-CEF
 is GATEs 12-18 above, not a non-goal either** — sub-cycle C1 closed it; all
-seven gates PASSED human-confirmed 2026-07-06; inspector (C2) and toolbar
-(C3) on `chromium` remain open for future sub-cycles. Reversible reshow of a
-closed CEF window remains an explicit non-goal — see the "Known limitation"
-note above.)
+seven gates PASSED human-confirmed 2026-07-06. **Inspector-on-CEF is GATEs
+19-25 above, not a non-goal either** — sub-cycle C2 closed it; all seven
+gates PASSED human-confirmed 2026-07-07; toolbar (C3) on `chromium` remains
+open for a future sub-cycle. Reversible reshow of a closed CEF window
+remains an explicit non-goal — see the "Known limitation" note above.)
