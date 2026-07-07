@@ -6,8 +6,9 @@
 ## browsers (host + sidebar pane), both registered in zapp_cef_browsers[].
 ## Window 2 stays plain/fullbleed (no sidebar/inspector/toolbar), proving the
 ## fullbleed CEF branch (window.m's `!useSidebar && !useInspector` path)
-## still works unchanged alongside the new sidebar path. Inspector-on-CEF is
-## sub-cycle C2 — neither window sets one yet.
+## still works unchanged alongside the new sidebar path. Sub-cycle C2: window
+## 1 now ALSO has an `inspector`, so it is a 3-pane CEF window (sidebar +
+## host + inspector). Window 2 stays plain/fullbleed.
 import zapp
 
 proc greet(app: App, args: JsonNode): string =
@@ -34,6 +35,8 @@ proc runApp(): int =
     sidebar: SidebarOptions(url: "#sidebar-pane", title: "CEF Sidebar",
                             width: 240, minWidth: 150, maxWidth: 320,
                             presentation: SidebarPresentation.Default),
+    inspector: InspectorOptions(url: "#inspector-pane", title: "CEF Inspector",
+                                width: 240, minWidth: 180, maxWidth: 320),
   ))
   win.onReady(onReady)
 

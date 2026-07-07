@@ -1128,8 +1128,8 @@ void* darwin_window_create(WindowOptions* opts) {
             // builder above + the sidebar registry below are engine-agnostic;
             // collapse/expand/resize events reach these panes via
             // darwin_window_eval_js's ZAPP_HAS_CEF branch (window.m:685). CEF panes
-            // are opaque (no vibrancy). Inspector-on-CEF is sub-cycle C2 — a
-            // chromium app must not set an inspector pane yet (the fixture doesn't).
+            // are opaque (no vibrancy). Sidebar (C1) + inspector (C2) panes are
+            // each hosted below by their own arm, mirroring the WK #else.
             extern NSURL* zapp_resolve_url(const char* url_cstr);
             extern void zapp_cef_create_browser_in_view(void* parent_view, const char* url,
                                                         int32_t window_slot,
@@ -1166,6 +1166,23 @@ void* darwin_window_create(WindowOptions* opts) {
                 // no-ops (router.nim's darwin_window_id_string(sidebar_slot) -> NULL).
                 if (sidebar_slot >= 0 && sidebar_slot < ZAPP_MAX_WINDOW_CALLBACKS)
                     zapp_window_ids[sidebar_slot] = hostWindowId;
+            }
+            if (useInspector) {
+                NSURL* insNsUrl = zapp_resolve_url(inspectorUrl);
+                const char* insCefUrl = insNsUrl ? [[insNsUrl absoluteString] UTF8String] : "zapp://index.html";
+                if (!insCefUrl || insCefUrl[0] == '\0') insCefUrl = "zapp://index.html";
+                // Inspector pane: pane_role=3 (zapp.isInspector) + the same
+                // composition flags, so this pane's Window.current() resolves
+                // .inspector and imperative toggle/collapse works on CEF
+                // (inherits C1's resolver + shared-carrier fixes).
+                zapp_cef_create_browser_in_view((__bridge void*)inspectorContainer, insCefUrl, inspector_slot,
+                                                [hostWindowId UTF8String], [paneOwnerId UTF8String],
+                                                3, useSidebar, useInspector);
+                // Mirrors the WK path's zapp_register_webview(inspector_slot, ...,
+                // hostWindowId) so Workers.create() from JS in the CEF inspector
+                // pane resolves its owner (router.nim's darwin_window_id_string).
+                if (inspector_slot >= 0 && inspector_slot < ZAPP_MAX_WINDOW_CALLBACKS)
+                    zapp_window_ids[inspector_slot] = hostWindowId;
             }
             // Register the host's JS id string so Window.current() round-trips
             // (mirrors the WK zapp_register_webview identity, without a WKWebView).

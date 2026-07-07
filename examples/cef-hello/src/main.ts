@@ -23,10 +23,14 @@ const which = document.querySelector<HTMLPreElement>("#which")!;
 // host pane — both panes share the host's window id (win-<host>), per the
 // CEF branch's identity note.
 const isSidebar = location.hash === "#sidebar-pane";
-which.textContent = isSidebar
-  ? `SIDEBAR pane (window ${Window.current().id})`
-  : `HOST pane (window ${Window.current().id})`;
+const isInspector = location.hash === "#inspector-pane";
+which.textContent = isInspector
+  ? `INSPECTOR pane (window ${Window.current().id})`
+  : isSidebar
+    ? `SIDEBAR pane (window ${Window.current().id})`
+    : `HOST pane (window ${Window.current().id})`;
 if (isSidebar) document.body.style.background = "#f0f4ff";
+if (isInspector) document.body.style.background = "#fff4f0"; // distinct tint from the sidebar
 
 // Sub-cycle A gate: the ticker worker broadcasts `tick` every second; render it.
 // If this increments on a chromium build, the worker→CEF broadcast edge works.
@@ -60,13 +64,14 @@ guard.addEventListener("change", () => {
   guardStatus.textContent = `close guard: ${guard.checked ? "ON — close is blocked" : "off"}`;
 });
 
-// C1 sub-cycle Task 2 gate: HOST pane only (the sidebar pane has no sidebar
-// of its own). Click -> darwin_window_get_by_numeric_id resolves the CEF
-// window's NSWindow (window.m's new ZAPP_HAS_CEF fallback) -> zapp_sidebar_
-// for_slot finds the split registry -> the sidebar collapses/expands. Before
-// this task the resolver returned NULL for a CEF slot and this button
-// would silently no-op.
-if (!isSidebar) {
+// C1/C2 gate: HOST pane only (accessory panes don't toggle themselves). Each
+// click -> darwin_window_get_by_numeric_id resolves the CEF window's NSWindow
+// (C1's ZAPP_HAS_CEF resolver fallback) -> zapp_{sidebar,inspector}_for_slot
+// finds the split registry -> the pane collapses/expands. Before C1's resolver
+// these no-op'd on CEF; before C2's inspector arm there was no inspector pane.
+if (!isSidebar && !isInspector) {
   document.querySelector<HTMLButtonElement>("#toggle-sb")!
     .addEventListener("click", () => Window.current().sidebar?.toggle());
+  document.querySelector<HTMLButtonElement>("#toggle-insp")!
+    .addEventListener("click", () => Window.current().inspector?.toggle());
 }
