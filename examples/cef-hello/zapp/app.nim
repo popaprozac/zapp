@@ -1,10 +1,13 @@
-## cef-hello — the minimal fullbleed-web fixture for the CEF
+## cef-hello — the render+bridge smoke target for the CEF
 ## `webEngine:"chromium"` production slice. One service, one button, TWO
 ## windows (sub-cycle B: proves the slot<->browser registry — see win2
-## below). No sidebar/inspector/toolbar are set on the WindowOptions below —
-## that omission (not a config flag) is what makes these windows fullbleed-web:
-## the CEF window-creation branch only supports plain windows like these,
-## not native-chrome-heavy ones.
+## below). Sub-cycle C1: window 1 now has a `sidebar`, so it exercises the
+## NSSplitViewController pane-mounting CEF branch (window.m) — TWO CEF
+## browsers (host + sidebar pane), both registered in zapp_cef_browsers[].
+## Window 2 stays plain/fullbleed (no sidebar/inspector/toolbar), proving the
+## fullbleed CEF branch (window.m's `!useSidebar && !useInspector` path)
+## still works unchanged alongside the new sidebar path. Inspector-on-CEF is
+## sub-cycle C2 — neither window sets one yet.
 import zapp
 
 proc greet(app: App, args: JsonNode): string =
@@ -26,8 +29,11 @@ proc runApp(): int =
   let win = app.window.create(WindowOptions(
     title: "CEF Hello",
     visible: false,               # deferred show — revealed by onReady
-    width: 480, height: 320,
+    width: 640, height: 360,      # widened so host + sidebar both have room
     inspectable: Inspectable.Auto, # web inspector: on in dev, off in prod
+    sidebar: SidebarOptions(url: "#sidebar-pane", title: "CEF Sidebar",
+                            width: 240, minWidth: 150, maxWidth: 320,
+                            presentation: SidebarPresentation.Default),
   ))
   win.onReady(onReady)
 

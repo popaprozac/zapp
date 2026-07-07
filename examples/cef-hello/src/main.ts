@@ -16,12 +16,25 @@ const which = document.querySelector<HTMLPreElement>("#which")!;
 // see zapp_cef_host.m's bootstrap builder). Rendering it here is the visual
 // proof (alongside the title bar) that each window has its OWN bridge/router
 // identity, not a shared one.
-which.textContent = `window: ${Window.current().id}`;
+//
+// Sub-cycle C1: window 1's sidebar pane loads this SAME bundle at
+// `zapp://index.html#sidebar-pane` (window.m's CEF pane-mounting branch), so
+// `location.hash` is the only signal distinguishing the sidebar pane from the
+// host pane — both panes share the host's window id (win-<host>), per the
+// CEF branch's identity note.
+const isSidebar = location.hash === "#sidebar-pane";
+which.textContent = isSidebar
+  ? `SIDEBAR pane (window ${Window.current().id})`
+  : `HOST pane (window ${Window.current().id})`;
+if (isSidebar) document.body.style.background = "#f0f4ff";
 
 // Sub-cycle A gate: the ticker worker broadcasts `tick` every second; render it.
 // If this increments on a chromium build, the worker→CEF broadcast edge works.
 // Sub-cycle B gate: BOTH windows must tick (broadcast fans into every live
 // CEF browser, not just the first).
+// Sub-cycle C1 gate: BOTH panes of window 1 (host + sidebar) must tick too —
+// same broadcast, proving it fans into every live CEF browser, not just the
+// first pane registered per window.
 Events.on("tick", (data: { n: number }) => {
   tick.textContent = `worker tick #${data.n}`;
 });

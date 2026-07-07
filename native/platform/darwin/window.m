@@ -1098,6 +1098,45 @@ void* darwin_window_create(WindowOptions* opts) {
                 if (wopts_inspector_collapsed(opts)) inspItem.collapsed = YES;
             }
 
+            // hostWindowId is used by both the WK and CEF pane-mounting arms
+            // below (and by the engine-agnostic registries further down), so
+            // it's hoisted above the branch.
+            NSString* hostWindowId = [NSString stringWithFormat:@"win-%d", host_slot];
+#ifdef ZAPP_HAS_CEF
+            // C1: webEngine:"chromium" — host a CEF browser in EACH pane container
+            // (sub-cycle B's create, per-pane slot, HOST js identity). The split
+            // builder above + the sidebar registry below are engine-agnostic;
+            // collapse/expand/resize events reach these panes via
+            // darwin_window_eval_js's ZAPP_HAS_CEF branch (window.m:685). CEF panes
+            // are opaque (no vibrancy). Inspector-on-CEF is sub-cycle C2 — a
+            // chromium app must not set an inspector pane yet (the fixture doesn't).
+            extern NSURL* zapp_resolve_url(const char* url_cstr);
+            extern void zapp_cef_create_browser_in_view(void* parent_view, const char* url,
+                                                        int32_t window_slot,
+                                                        const char* window_id,
+                                                        const char* owner_id);
+            NSString* paneOwnerId = [NSString stringWithFormat:@"owner-%d", host_slot];
+            {
+                NSURL* hostNsUrl = zapp_resolve_url(custom_url);
+                const char* hostCefUrl = hostNsUrl ? [[hostNsUrl absoluteString] UTF8String] : "zapp://index.html";
+                if (!hostCefUrl || hostCefUrl[0] == '\0') hostCefUrl = "zapp://index.html";
+                zapp_cef_create_browser_in_view((__bridge void*)mainContainer, hostCefUrl, host_slot,
+                                                [hostWindowId UTF8String], [paneOwnerId UTF8String]);
+            }
+            if (useSidebar) {
+                NSURL* sbNsUrl = zapp_resolve_url(sidebarUrl);
+                const char* sbCefUrl = sbNsUrl ? [[sbNsUrl absoluteString] UTF8String] : "zapp://index.html";
+                if (!sbCefUrl || sbCefUrl[0] == '\0') sbCefUrl = "zapp://index.html";
+                zapp_cef_create_browser_in_view((__bridge void*)sidebarContainer, sbCefUrl, sidebar_slot,
+                                                [hostWindowId UTF8String], [paneOwnerId UTF8String]);
+            }
+            // Register the host's JS id string so Window.current() round-trips
+            // (mirrors the WK zapp_register_webview identity, without a WKWebView).
+            // No zapp_webviews[] entry for either pane — native->JS eval reaches
+            // both through the CEF branch in darwin_window_eval_js, keyed by slot.
+            if (host_slot >= 0 && host_slot < ZAPP_MAX_WINDOW_CALLBACKS)
+                zapp_window_ids[host_slot] = hostWindowId;
+#else
             // Webviews. Main → host slot, self identity, legacy transparent rule
             // (useVibrancy), pane_role=0. Sidebar → its own transport slot, HOST
             // identity (win-<host> in JS), always transparent so the pane material
@@ -1127,7 +1166,6 @@ void* darwin_window_create(WindowOptions* opts) {
             // any pane webview that way, so we register them explicitly from the
             // containers we hold. zapp_register_webview is static-in-file.
             // Note: each pane window consumes 2-3 of the ZAPP_MAX_WINDOW_CALLBACKS slots.
-            NSString* hostWindowId = [NSString stringWithFormat:@"win-%d", host_slot];
             for (NSView* sub in mainContainer.subviews) {
                 if ([sub isKindOfClass:[WKWebView class]]) {
                     mainWebviewRef = (WKWebView*)sub;
@@ -1155,6 +1193,7 @@ void* darwin_window_create(WindowOptions* opts) {
                     zapp_register_webview(inspector_slot, inspectorWebviewRef, hostWindowId);
                 }
             }
+#endif
 
             // (zapp.hasSidebar / zapp.hasInspector are injected into ALL panes as
             // document-start user scripts in darwin_webview_create_ext — a one-shot
