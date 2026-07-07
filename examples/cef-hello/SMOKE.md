@@ -30,6 +30,32 @@ Expected build output: `[zapp] CEF app bundle: .../bin/cef-hello.app` +
 | **GATE 4** — bridge round-trip | Clicking "Say hello" runs `Services.invoke("greet", {name:"CEF"})` through the *real* transport (`bootstrap/webview.ts`'s `{t,id,m,a}` envelope, not a bespoke protocol) → `zapp_handle_message_from_window` → the real Nim router → `greet` service → `darwin_window_eval_js`'s CEF branch (`execute_java_script`) → the page. `#out` shows **`Hello from CEF`** | **PASS — human-confirmed 2026-07-06** |
 | **GATE 5** — worker→page broadcast | A headless **ZJS** worker (`src/ticker.ts`, declared in `zapp.config.ts`'s `headless.ticker` block) calls `Events.emit("tick", { n })` once a second with no point-to-point send — a plain broadcast. That rides `dispatch_event_to_all` → `darwin_webview_eval_all` (`webview.m:1247`) → `zapp_registered_webviews_eval`'s existing `ZAPP_HAS_CEF` branch (`window.m:154-164`, shipped in `6f58489` — see `docs/superpowers/specs/2026-07-06-cef-worker-hardening-design.md`'s corrected §1) → the CEF page's `Events.on("tick", …)` handler, which writes `#tick`'s text to `worker tick #N`. Proves the render-engine-independent worker edge — CEF's whole point — reaches Chromium through the same broadcast path as WKWebView, with **zero code changes** to the delivery path. | **PASS — human-confirmed 2026-07-06** (`#tick` incremented on the Chromium page; 25 ticks captured headless) |
 
+### Sub-cycle B — multi-window (macOS)
+
+`zapp/app.nim` opens a **second** CEF window (`win2`, offset so it doesn't
+overlap `win`) sharing the same `ticker` worker + `greet` service — the
+fixture for the slot↔browser registry, the close handshake, and popup
+parity. Design: `docs/superpowers/specs/2026-07-06-cef-multi-window-design.md`;
+root-cause finding for the close-teardown fix: `spikes/cef-macos/FINDINGS.md`'s
+★ Sub-cycle B update.
+
+| Gate | What it proves | Result |
+|---|---|---|
+| **GATE 6** — two-window render + broadcast fan-out | A second `window.create` renders on Chromium independently from the first; the `ticker` worker's `Events.emit("tick", …)` broadcast fans out to **both** windows via the slot-indexed `zapp_cef_browsers[]` table (`zapp_cef_broadcast_eval`, T1 `7d204ad`) instead of the old single-global path — both windows' `#tick` counters increment, not just one. | **PASS — human-confirmed 2026-07-06** |
+| **GATE 7** — per-window targeted greet | Clicking "Say hello" in **either** window round-trips `Services.invoke("greet")` through that window's own slot-tagged bridge message (`window_id` from `client->slot`) and the result evals back into **only** the clicking window (`zapp_cef_eval_in_window`, targeted by slot, not broadcast) — confirmed independently for `win=0` **and** `win=1`; neither window's result leaks into the other. | **PASS — human-confirmed 2026-07-06** |
+| **GATE 8** — close guard | Checking the 🔒 "Close guard" checkbox on a CEF window, then clicking its close button, is **vetoed** (`windowShouldClose VETOED` in the console; browser + window stay fully intact — close-guard parity with WKWebView); unchecking the box and closing again actually closes it. | **PASS — human-confirmed 2026-07-06** |
+| **GATE 9** — non-last close (leak-free teardown) | Closing **Window 2** (non-last) leaves **Window 1** alive and still ticking — the app does not quit. `browser closed (slot 1)` appears in the console, i.e. `on_before_close` actually fires (the Electrobun-pattern `removeFromSuperview` teardown, T2 `b74651e` — see FINDINGS' root-cause finding), so the slot deregisters and the owned ref releases with no leak. | **PASS — human-confirmed 2026-07-06** |
+| **GATE 10** — last close | Closing the **last** remaining CEF window quits the app cleanly via the existing `terminateAfterLastWindowClosed` path, not `on_before_close` → `[NSApp stop]` — the coupled quit-guard Minor sub-cycle A deferred is now cleared. | **PASS — human-confirmed 2026-07-06** |
+| **GATE 11** — popup → system browser | Clicking the `target=_blank` link in the page cancels the CEF popup (`on_before_popup`, T3 `1e75725`) and opens the URL in the **system browser** (Safari) instead — no chrome-less in-app popup window appears, matching WKWebView's `createWebViewWithConfiguration` parity. | **PASS — human-confirmed 2026-07-06** |
+
+**Known limitation (not a regression, documented non-goal):** the teardown
+that makes GATE 9 leak-free also makes a CEF window's close **terminal** —
+`Window.close()` then `Window.show()` on the same window reshows a **blank**
+window (the browser is destroyed and not recreated), unlike a WKWebView
+window which reshows intact. Reversible reshow of a CEF window was an
+explicit sub-cycle B non-goal; see FINDINGS for the follow-up candidate
+(a CEF-aware `show` action).
+
 Non-visual evidence gathered alongside the human gates (bounded ~6s headless
 runs of `bin/cef-hello.app/Contents/MacOS/cef-hello`, re-confirmed during
 this task after the CEF-version-pin change, which touches only the fetch
@@ -135,11 +161,13 @@ this task changes.
 
 ## Non-goals this slice does NOT smoke
 
-DevTools, multi-window, native chrome (sidebar / inspector /
-toolbar) on the `chromium` path, Helper signing/notarization, iOS / Windows /
-Linux, per-window engine selection, and navigation/back-forward are all out
-of scope for this fixture and this slice — see
-`docs/api-reference.md`'s `webEngine` section and
-`spikes/cef-macos/FINDINGS.md` for what remains open. (Worker on CEF is now
-GATE 5 above, not a non-goal — the broadcast path was proven already-present;
-its human visual gate is still pending.)
+DevTools, native chrome (sidebar / inspector / toolbar) on the `chromium`
+path, Helper signing/notarization, iOS / Windows / Linux, per-window engine
+selection, in-app popups, and navigation/back-forward are all out of scope
+for this fixture and this slice — see `docs/api-reference.md`'s `webEngine`
+section and `spikes/cef-macos/FINDINGS.md` for what remains open. (Worker on
+CEF is GATE 5 above, not a non-goal — **PASS**, human-confirmed 2026-07-06.
+**Multi-window is GATEs 6-11 above, not a non-goal either** — sub-cycle B
+closed it; all six gates PASSED human-confirmed 2026-07-06. Reversible
+reshow of a closed CEF window remains an explicit non-goal — see the "Known
+limitation" note above.)

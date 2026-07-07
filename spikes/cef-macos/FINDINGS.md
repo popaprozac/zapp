@@ -205,13 +205,111 @@ showed clean asset-serving with no spurious decode-failure warning (see
 
 **Still open, deferred to their own cycles (unchanged by this sub-cycle) —
 the 5 coupled Minors from the design's non-goals:** `on_before_close`'s
-`[NSApp stop]` quit-guard (**sub-cycle B**); per-request brotli decode
-cache (a perf pass, not correctness); `setDragRegion` CEF elision
-(fullbleed non-goal, listed above); `.zc`-legacy `chromium` config value
-silently falling back to WKWebView (a config-validation gap, not a runtime
-bug); `g_active_browser` cross-thread read (benign, matches the existing
-single-window pattern — see Task 5's life-span-handler retain/release
-above).
+`[NSApp stop]` quit-guard (**sub-cycle B — CLEARED, see below**);
+per-request brotli decode cache (a perf pass, not correctness);
+`setDragRegion` CEF elision (fullbleed non-goal, listed above); `.zc`-legacy
+`chromium` config value silently falling back to WKWebView (a
+config-validation gap, not a runtime bug); `g_active_browser` cross-thread
+read (benign, matches the existing single-window pattern — see Task 5's
+life-span-handler retain/release above).
+
+### ★ Sub-cycle B update (CEF multi-window, `feat/cef-multi-window`, 2026-07-06)
+
+Design: `docs/superpowers/specs/2026-07-06-cef-multi-window-design.md`.
+Builds the real per-window lifecycle a second `window.create` on
+`webEngine:"chromium"` needs: a slot↔browser registry, targeted + broadcast
+delivery, popup parity, and a per-window close handshake.
+
+**Multi-window (macOS) — CLOSED.** All human R0 gates PASSED on-screen
+2026-07-06 (six GATE rows, `examples/cef-hello/SMOKE.md`). What shipped:
+
+1. **Slot↔browser registry** (T1, `7d204ad`) — `zapp_cef_browsers[]`
+   replaces the single-window globals `g_active_browser` /
+   `g_zapp_cef_window_slot`; each client/handler is now per-window
+   (`zapp_cef_client_create(slot)`, slot baked into the client struct).
+   Targeted native→JS eval routes by slot (`zapp_cef_eval_in_window`); a
+   worker/notification broadcast fans to **every live CEF window**
+   (`zapp_cef_broadcast_eval`, wired into `zapp_registered_webviews_eval`'s
+   existing `ZAPP_HAS_CEF` branch — no new branch needed, just table
+   iteration instead of a single global). Bridge messages tag
+   `window_id` from `client->slot`, so an invoke from window 2 resolves back
+   to window 2.
+2. **Per-window close handshake** (T2, `9d6778e`..`b74651e`/`0bdaa94`) —
+   close-guard parity (a JS-vetoed close leaves the browser fully intact,
+   same as WKWebView); last-window quit now runs through Zapp's existing
+   `terminateAfterLastWindowClosed` path, **not** `on_before_close` →
+   `zapp_cef_quit_main_loop()` — the coupled Minor sub-cycle A deferred here
+   is now **CLEARED**. See the root-cause finding below for how this landed
+   (it took three attempts).
+3. **`on_before_popup` → system browser** (T3, `1e75725`) — WKWebView
+   parity (`createWebViewWithConfiguration`, webview.m:668-677):
+   `window.open`/`target=_blank` cancels the CEF popup and opens the target
+   URL via the existing `darwin_open_external` helper, instead of letting
+   CEF spawn a chrome-less in-app popup window.
+
+**Durable note for C/D — the close-lifecycle ordering (Task 2's Step-1
+spike):** `darwin_window_destroy` has **no reachable caller anywhere in the
+current app/router lifecycle**, for either render engine. Traced every call
+site: its only trampoline (`WindowManager.close`, `window.zc`) is itself
+never called from `router.zc`/`app.zc`/the Nim layer. Both a red-button
+close and the JS `Window.close()` action route through plain
+`[NSWindow close]` (`windowShouldClose:` → `windowWillClose:`) — the
+*reversible*-close path — never through `darwin_window_destroy`. Any future
+CEF-window teardown work (sub-cycles C/D, or a redesign of `Window.close()`)
+must hook `windowShouldClose:`/`windowWillClose:`, not
+`darwin_window_destroy` — treating the latter as the close path (as this
+sub-cycle's own design brief initially assumed) produces a leak, because
+that function never runs on an ordinary close.
+
+**KEY ROOT-CAUSE FINDING (record prominently — durable for sub-cycles C/D
+and any future CEF-window teardown work):** `on_before_close` does **not**
+fire on an interactive close of a `SetAsChild` `CEF_RUNTIME_STYLE_ALLOY`
+browser hosted in a Zapp `NSWindow`. Because that window is
+`setReleasedWhenClosed:NO`, `[window close]` only **hides** it — the
+browser's `NSView` stays alive in the now-hidden view hierarchy, so CEF
+never finishes destroying the browser, and `on_before_close` is deferred all
+the way to `cef_shutdown` (a per-close browser-ref + `zapp_cef_browsers[]`
+slot leak). **Fix:** after `CloseBrowser(false)`, do a **delayed
+(main-thread) `removeFromSuperview`** of the browser's `NSView` (captured
+via `get_window_handle` before closing) — removing the view from the hidden
+hierarchy is what lets CEF finish tearing the browser down, so
+`on_before_close` finally fires and deregisters the slot / releases the ref.
+This is the pattern **Electrobun** uses (blackboardsh/electrobun
+`nativeWrapper.mm`, `CEFWebViewImpl remove`) — credited, not
+independently discovered. Two earlier approaches were tried and abandoned
+first: a re-entrancy fix to the original close-in-`windowWillClose:`
+handshake (`9d6778e`/`fd527c2`), then a `windowShouldClose:`-level DEFER
+pattern (a per-slot "closing" flag that deferred the `NSWindow` close until
+`on_before_close` ran) which **deadlocked** on a refinement pass
+(`9d8df4f`, reverted by `67b7520`). The Electrobun `removeFromSuperview`
+approach (`b74651e`, comments clarified in `0bdaa94`) abandons defer
+machinery entirely and was the one that actually worked, confirmed by
+`browser closed (slot N)` finally appearing in the log for an interactive,
+non-last-window close.
+
+**KNOWN LIMITATION (documented, not hidden):** the teardown that makes the
+leak fix work also makes a CEF window's close **TERMINAL**. `Window.close()`
+(normally reversible) followed by `Window.show()` on the same window id
+reshows a **BLANK** window — the browser was destroyed by the teardown and
+is not recreated — whereas the same sequence on a WKWebView window reshows
+it intact. Reversible reshow of a CEF window is a documented sub-cycle B
+**non-goal** (recorded in-code too: `native/platform/darwin/window.m`'s
+`windowWillClose:` CEF branch, `0bdaa94`). Follow-up candidate for a later
+cycle: make the `show` action CEF-aware — either a clean no-op/diagnostic
+when the window's browser is already gone, or actually recreate the
+browser — rather than silently reshowing a dead window.
+
+**BACKLOG Minor:** `darwin_window_destroy`'s CEF safety-net branch
+(`zapp_cef_teardown_browser_for_slot`, idempotent) is currently
+**unreachable** — no live caller routes through `window_destroy` today (see
+the durable ordering note above). Kept for forward-compat / parity with the
+WKWebView teardown branch beside it; harmless dead code, not a regression.
+
+Also unchanged / not attempted this sub-cycle: DevTools, native chrome
+(sidebar/inspector/toolbar) on the `chromium` path, iOS/Windows/Linux,
+per-window engine selection, navigation/back-forward, in-app popups (§ the
+`on_before_popup` design note above), mixed-engine per-window — all explicit
+non-goals, tracked for sub-cycles C/D/E.
 
 ---
 
