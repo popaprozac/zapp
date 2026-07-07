@@ -311,6 +311,94 @@ per-window engine selection, navigation/back-forward, in-app popups (§ the
 `on_before_popup` design note above), mixed-engine per-window — all explicit
 non-goals, tracked for sub-cycles C/D/E.
 
+### ★ Sub-cycle C1 update (CEF sidebar, `feat/cef-native-chrome`, 2026-07-06)
+
+Design: `docs/superpowers/specs/2026-07-06-cef-sidebar-design.md`. First
+native-chrome element on the `chromium` path — the **north star**: sidebar
+proves the pattern that gets full `kitchen-sink` running on CEF; **C2 =
+inspector** (mirrors sidebar), **C3 = toolbar**.
+
+**Sidebar on CEF (macOS) — CLOSED.** All human gates PASSED on-screen
+2026-07-06 (`examples/cef-hello/SMOKE.md`). What shipped:
+
+1. **CEF browsers hosted in the split-pane containers** (T1, `f4756b4`) —
+   the `NSSplitViewController` pane-mounting in `window.m` grows a
+   `ZAPP_HAS_CEF` branch (the WKWebView path is the unchanged `#else`) that
+   calls sub-cycle B's `zapp_cef_create_browser_in_view` once per container
+   — `mainContainer` (host, `pane_role=0`) and, when `useSidebar`,
+   `sidebarContainer` (`pane_role=1`) — instead of once for the whole
+   window. Both panes carry the **host** js identity (`win-%d` string,
+   `hostWindowId`); each registers its own slot (`zapp_window_ids[host_slot]`
+   / `zapp_window_ids[sidebar_slot]`) so `Workers.create()` and JS identity
+   resolve correctly from either pane.
+2. **The split builder, the sidebar event registry
+   (`zapp_sidebar_register`), and collapse/expand/resize event delivery
+   (`darwin_window_eval_js`'s `ZAPP_HAS_CEF` branch, `zapp_cef_eval_in_window`)
+   are engine-agnostic — reused UNCHANGED.** This is the big DRY win: the
+   native-chrome machinery (split view, registries, event fan-out) never
+   needed CEF-specific code; only the pane *content* (webview vs. browser)
+   branches by engine.
+3. **Per-pane teardown** (T3, `b60c28f`) — `windowWillClose:`'s existing
+   `ZAPP_HAS_CEF` safety net (sub-cycle B, host-only) now also tears down the
+   sidebar pane's slot (and the inspector slot, forward-compat for C2) via
+   B's `zapp_cef_teardown_browser_for_slot`, each call independently
+   bounds-checked and a no-op when the slot has no live browser. `on_before_close`
+   fires for both host + sidebar, no leak.
+
+**Two fixes surfaced by the imperative-toggle gate** (T2, `0394121` +
+`919b113`) — worth recording because they generalize to any future
+imperative op on a CEF pane (C2 inspector, panel, screen):
+
+1. **Engine-agnostic window resolver** (`0394121`) —
+   `darwin_window_get_by_numeric_id` was WK-table-only
+   (`zapp_webviews[id].window`), so it returned `NULL` for any CEF slot —
+   every imperative op that routes through it (sidebar toggle/collapse/
+   setWidth, inspector, panel, screen) silently no-op'd on `webEngine:
+   "chromium"`. Fixed with a gated CEF fallback: a new
+   `zapp_cef_window_for_slot(slot)` (`zapp_cef_host.m`) resolves the host
+   `NSWindow` from the CEF browser's `NSView` (`get_window_handle` →
+   `[view window]`), called only when the WK lookup misses and only inside
+   `#ifdef ZAPP_HAS_CEF` (a `system` build is untouched).
+2. **Shared bootstrap-carrier builder** (`919b113`, DRY refactor) — the CEF
+   bootstrap (`zapp_cef_build_bootstrap_js`) never injected the
+   `zapp.hasSidebar`/`zapp.isSidebar` (etc.) Symbol carriers WK's document-start
+   script does, so `Window.current().sidebar` was `undefined` inside a CEF
+   pane and JS-side sidebar control silently no-op'd. Root fix: extracted
+   WK's carrier-building code (verbatim — same `bootstrapConfig` fields/
+   order/format, same `zapp_escape_js_string` escaping) into one shared
+   `zapp_build_bootstrap_carriers()` (`webview.m`, always compiled), and
+   routed **both** WK and CEF through it — `zapp_cef_create_browser_in_view`
+   now threads `pane_role`/`host_has_sidebar`/`host_has_inspector` into it.
+   This eliminated a two-list duplication (WK's carrier list and CEF's,
+   drifting independently — the actual source of the bug) and is a **net
+   architectural simplification**, not just a bugfix: WK's carrier output was
+   verified byte-identical (reviewed), and CEF gains the carriers for free.
+
+**Known limitations / follow-ups (documented, not hidden):**
+
+- **CEF panes are opaque** — no vibrancy. A non-OSR (Alloy) CEF browser
+  paints its own background; vibrancy-on-CEF would require off-screen
+  rendering (OSR), an explicit non-goal for this cycle.
+- **Window-id format inconsistency** — the fullbleed CEF path formats its
+  window-id string as `win-%p` (pointer) while the sidebar host/sidebar
+  panes use `win-%d` (slot index, `hostWindowId`). Both round-trip
+  correctly today (each path is internally consistent); cosmetic, tracked
+  for a later cleanup pass rather than fixed here.
+- **WK carrier append lacks the CEF path's OOM NULL-check** — cosmetic
+  robustness gap in the extracted shared builder's WK call site, not a
+  behavioral bug (WK's append already assumed non-NULL before the
+  extraction; the CEF call site added the check because CEF's is a fresh
+  call site). Noted for a future hardening pass.
+- **Sub-cycle B's terminal-close limitation applies per-pane** — closing a
+  sidebar-window's host pane tears down (and does not recreate) both CEF
+  browsers, same as the fullbleed single-browser case documented in the
+  sub-cycle B update above.
+
+Also unchanged / not attempted this sub-cycle: inspector-on-CEF (C2),
+toolbar-on-CEF (C3), DevTools, iOS/Windows/Linux, per-window engine
+selection, navigation/back-forward — all explicit non-goals, tracked for
+sub-cycles C2/C3+.
+
 ---
 
 ## Task 1 (RISK GATE): message-loop coexistence — CEF + NSApplication + a second (ZJS-shaped) loop

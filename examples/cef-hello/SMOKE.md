@@ -90,6 +90,34 @@ click-through above.)
 The ~289 MB is the framework — almost the entire opt-in cost. A
 `webEngine:"system"` build of the same app is a couple MB.
 
+### Sub-cycle C1 — sidebar (macOS)
+
+Window 1 now sets a `sidebar` (`SidebarOptions`, `zapp/app.nim`) — the
+`NSSplitViewController` pane-mounting CEF branch (`window.m`), rendering
+HOST vs. SIDEBAR content by route hash, both panes subscribing to the same
+`ticker` broadcast. Window 2 stays plain/fullbleed (unchanged), regression
+fixture for the non-sidebar CEF path. Design:
+`docs/superpowers/specs/2026-07-06-cef-sidebar-design.md`; findings + the
+two generalizing fixes: `spikes/cef-macos/FINDINGS.md`'s ★ Sub-cycle C1
+update.
+
+| Gate | What it proves | Result |
+|---|---|---|
+| **GATE 12** — sidebar render | Window 1 renders **two** independent Chromium panes — host + sidebar — inside the same `NSSplitViewController`, each its own CEF browser registered in `zapp_cef_browsers[]` (`zapp_cef_create_browser_in_view`, once per pane container) | **PASS — human-confirmed 2026-07-06** |
+| **GATE 13** — broadcast fan-out to both panes | The `ticker` worker's `Events.emit("tick", …)` reaches **both** the host and sidebar CEF browsers of window 1 (the engine-agnostic broadcast path, reused unchanged from sub-cycle B) — both panes' tick counters increment | **PASS — human-confirmed 2026-07-06** |
+| **GATE 14** — collapse/expand via divider drag | Dragging the sidebar's divider collapses/expands it; the engine-agnostic sidebar event registry + `darwin_window_eval_js`'s `ZAPP_HAS_CEF` branch deliver `window:sidebar-*` events into both CEF panes exactly as they do for WKWebView | **PASS — human-confirmed 2026-07-06** |
+| **GATE 15** — imperative JS toggle | `Window.current().sidebar.toggle()` from the page **collapses the sidebar** — proves the resolver fix (`darwin_window_get_by_numeric_id`'s CEF fallback, `zapp_cef_window_for_slot`) and the bootstrap-carrier fix (`zapp_build_bootstrap_carriers`, shared WK/CEF) together: without both, this no-ops silently on CEF | **PASS — human-confirmed 2026-07-06** |
+| **GATE 16** — per-pane teardown on close | Closing window 1 logs `browser closed` for **both** the host and sidebar slots (no leak) — the teardown extension in `windowWillClose:` (T3, `b60c28f`) | **PASS — human-confirmed 2026-07-06** |
+| **GATE 17** — window 2 (plain) regression | Window 2, unchanged (no sidebar/inspector/toolbar), still renders + ticks + closes cleanly via the original fullbleed CEF branch — proves the sidebar branch didn't regress the plain path | **PASS — human-confirmed 2026-07-06** |
+| **GATE 18** — last-close clean quit | Closing the last remaining window (after both are closed) quits the app cleanly via `terminateAfterLastWindowClosed`, same as the plain multi-window case | **PASS — human-confirmed 2026-07-06** |
+
+**Known limitations (documented, not hidden — see FINDINGS for detail):**
+CEF panes are opaque (no vibrancy — an OSR non-goal); the `win-%d` (sidebar
+host/sidebar panes) vs. `win-%p` (fullbleed window) window-id format is
+inconsistent (cosmetic, tracked); the WK carrier append lacks the CEF path's
+OOM NULL-check (cosmetic); sub-cycle B's terminal-close limitation applies
+per-pane (closing does not recreate either browser on a later `show()`).
+
 ## (b) `webEngine:"system"` — WKWebView, byte-identical to pre-change
 
 ```
@@ -161,13 +189,17 @@ this task changes.
 
 ## Non-goals this slice does NOT smoke
 
-DevTools, native chrome (sidebar / inspector / toolbar) on the `chromium`
-path, Helper signing/notarization, iOS / Windows / Linux, per-window engine
-selection, in-app popups, and navigation/back-forward are all out of scope
-for this fixture and this slice — see `docs/api-reference.md`'s `webEngine`
-section and `spikes/cef-macos/FINDINGS.md` for what remains open. (Worker on
-CEF is GATE 5 above, not a non-goal — **PASS**, human-confirmed 2026-07-06.
+DevTools, native chrome (inspector / toolbar — sidebar is CLOSED, see below)
+on the `chromium` path, Helper signing/notarization, iOS / Windows / Linux,
+per-window engine selection, in-app popups, and navigation/back-forward are
+all out of scope for this fixture and this slice — see
+`docs/api-reference.md`'s `webEngine` section and
+`spikes/cef-macos/FINDINGS.md` for what remains open. (Worker on CEF is GATE
+5 above, not a non-goal — **PASS**, human-confirmed 2026-07-06.
 **Multi-window is GATEs 6-11 above, not a non-goal either** — sub-cycle B
-closed it; all six gates PASSED human-confirmed 2026-07-06. Reversible
-reshow of a closed CEF window remains an explicit non-goal — see the "Known
-limitation" note above.)
+closed it; all six gates PASSED human-confirmed 2026-07-06. **Sidebar-on-CEF
+is GATEs 12-18 above, not a non-goal either** — sub-cycle C1 closed it; all
+seven gates PASSED human-confirmed 2026-07-06; inspector (C2) and toolbar
+(C3) on `chromium` remain open for future sub-cycles. Reversible reshow of a
+closed CEF window remains an explicit non-goal — see the "Known limitation"
+note above.)
