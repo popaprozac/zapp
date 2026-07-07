@@ -57,6 +57,16 @@ extern void zapp_handle_message_from_window(void* app, char* msg,
                                             int32_t window_id);
 extern void* app_get_active(void);
 
+// System-browser open for popup parity (on_before_popup below). Reuses the
+// EXISTING darwin layer helper (native/platform/darwin/webview.h /
+// webview.m:726 darwin_open_external — NSWorkspace openURL + main-thread
+// bounce) rather than adding a new NSWorkspace shim: webview.m is always
+// compiled into the macOS app target regardless of ZAPP_HAS_CEF (see
+// cli/src/native.ts's getPlatformSources), so the symbol is guaranteed to be
+// linked in here too. This file is plain C — it can't call NSWorkspace
+// directly, which is exactly why this helper lives in the ObjC .m file.
+extern void darwin_open_external(const char* url);
+
 // Forward declaration.
 typedef struct _zapp_cef_life_span_handler_t zapp_cef_life_span_handler_t;
 
@@ -250,6 +260,53 @@ zapp_cef_life_span_on_before_close(cef_life_span_handler_t* self,
   fprintf(stderr, "[zapp-cef] browser closed (slot %d)\n", h->slot);
 }
 
+// Popup parity — the CEF analogue of WKWebView's createWebViewWithConfiguration
+// (webview.m:668-677): cancel the popup and open its target URL in the system
+// browser instead of letting CEF spawn a chrome-less popup window. Runs on
+// the UI thread (CEF's UI thread == the main thread under the external pump —
+// see zapp_cef_eval_in_window's doc comment above), so darwin_open_external's
+// own main-thread check takes the synchronous path, exactly like the
+// WKWebView call site.
+//
+// Signature verified against the vendored CEF header (NOT the sketch this was
+// planned from): include/capi/cef_life_span_handler_capi.h's on_before_popup
+// takes an `int popup_id` between `frame` and `target_url` — easy to miss.
+int CEF_CALLBACK zapp_cef_life_span_on_before_popup(
+    cef_life_span_handler_t* self, cef_browser_t* browser, cef_frame_t* frame,
+    int popup_id, const cef_string_t* target_url,
+    const cef_string_t* target_frame_name,
+    cef_window_open_disposition_t target_disposition, int user_gesture,
+    const cef_popup_features_t* popup_features, cef_window_info_t* window_info,
+    cef_client_t** client, cef_browser_settings_t* settings,
+    cef_dictionary_value_t** extra_info, int* no_javascript_access) {
+  (void)self; (void)popup_id; (void)target_frame_name;
+  (void)target_disposition; (void)user_gesture; (void)popup_features;
+  (void)window_info; (void)client; (void)settings; (void)extra_info;
+  (void)no_javascript_access;
+
+  // target_url is a plain cef_string_t (UTF-16, NOT a userfree/ref-counted
+  // value) — convert to UTF-8 and hand to darwin_open_external. The UTF-8
+  // buffer we get back IS owned by us (cef_string_utf8_t) and must be cleared.
+  if (target_url != NULL && target_url->str != NULL) {
+    cef_string_utf8_t u8;
+    memset(&u8, 0, sizeof(u8));
+    cef_string_utf16_to_utf8(target_url->str, target_url->length, &u8);
+    if (u8.str != NULL) {
+      darwin_open_external(u8.str);
+    }
+    cef_string_utf8_clear(&u8);
+  }
+
+  // browser/frame are "refptr_diff" params — same convention as
+  // on_process_message_received above (verified against the CEF cpptoc
+  // translation layer: both annotated refptr_diff there too). We don't retain
+  // either beyond this call, so release both.
+  browser->base.release(&browser->base);
+  frame->base.release(&frame->base);
+
+  return 1;  // cancel the popup — no in-app browser is created.
+}
+
 static zapp_cef_life_span_handler_t* zapp_cef_life_span_handler_create(int32_t slot) {
   zapp_cef_life_span_handler_t* h = (zapp_cef_life_span_handler_t*)calloc(
       1, sizeof(zapp_cef_life_span_handler_t));
@@ -260,6 +317,7 @@ static zapp_cef_life_span_handler_t* zapp_cef_life_span_handler_create(int32_t s
   h->handler.on_after_created = zapp_cef_life_span_on_after_created;
   h->handler.do_close = zapp_cef_life_span_do_close;
   h->handler.on_before_close = zapp_cef_life_span_on_before_close;
+  h->handler.on_before_popup = zapp_cef_life_span_on_before_popup;
   h->slot = slot;
 
   atomic_store(&h->ref_count, 1);
