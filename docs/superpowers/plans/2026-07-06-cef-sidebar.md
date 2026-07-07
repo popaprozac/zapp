@@ -188,6 +188,17 @@ git commit -m "feat(cef): host CEF browsers in sidebar split panes (C1) + fixtur
 - Consumes: `zapp_cef_browser_for_slot(int32_t)` (B); `get_host`/`get_window_handle` (CEF C-API).
 - Produces: `void* zapp_cef_window_for_slot(int32_t slot)` — the host NSWindow for a CEF slot (window or pane), or NULL.
 
+- [ ] **Step 0: close two Task-1-review findings in the CEF sidebar mount branch** (`window.m` ~1105-1138, the `#ifdef ZAPP_HAS_CEF` branch added in Task 1)
+
+  (a) **`zapp_window_ids[sidebar_slot]`** (Important): the branch writes `zapp_window_ids[host_slot]` but not the sidebar slot, so `Workers.create()` from JS in the CEF sidebar pane no-ops (`router.nim`'s `darwin_window_id_string(sidebar_slot)` → NULL). Inside the CEF branch's `if (useSidebar) { … }` block (right after the sidebar `zapp_cef_create_browser_in_view`), add:
+  ```objc
+  if (sidebar_slot >= 0 && sidebar_slot < ZAPP_MAX_WINDOW_CALLBACKS)
+      zapp_window_ids[sidebar_slot] = hostWindowId;
+  ```
+  (mirrors the WK path's `zapp_register_webview(sidebar_slot, …, hostWindowId)` which sets `zapp_window_ids[sidebar_slot]`).
+
+  (b) **`paneOwnerId` format** (Minor): normalize `[NSString stringWithFormat:@"owner-%d", host_slot]` → `[NSString stringWithFormat:@"owner-%p", window]` to match every other `zapp.ownerId` site (webview.m:878, the CEF fullbleed branch). `window` is in scope.
+
 - [ ] **Step 1: host.m helper**
 
 Add to `native/platform/darwin/cef/zapp_cef_host.m` (it has CEF headers + ObjC):
