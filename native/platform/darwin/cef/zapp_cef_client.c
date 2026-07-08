@@ -213,6 +213,15 @@ zapp_cef_life_span_on_after_created(cef_life_span_handler_t* self,
     // view exists — see zapp_cef_host.m's zapp_cef_snap_view_to_superview_for_slot.
     extern void zapp_cef_snap_view_to_superview_for_slot(int32_t slot);
     zapp_cef_snap_view_to_superview_for_slot(h->slot);
+    // C3 sub-cycle Task 2: the window's INITIAL toolbar chrome-metrics inject
+    // (window.m, one tick after pane-create) races this async creation — the
+    // sidebar/inspector browsers register here, AFTER that inject fired, so
+    // their --zapp-*-height eval was dropped into an empty slot. Re-inject now
+    // that this pane's browser exists, so all 3 panes get the vars on initial
+    // load (no toolbar mode-change/resize needed). No-op if the window has no
+    // toolbar. (chromium-only TU, so no inline gate needed here.)
+    extern void zapp_toolbar_reinject_for_slot(int32_t slot);
+    zapp_toolbar_reinject_for_slot(h->slot);
   } else {
     fprintf(stderr, "[zapp-cef] browser created with bad slot %d — dropping\n",
             h->slot);

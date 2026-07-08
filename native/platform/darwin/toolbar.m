@@ -977,6 +977,27 @@ void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_u
 #endif
 }
 
+#ifdef ZAPP_HAS_CEF
+// Re-inject toolbar chrome-metrics for the window owning `slot`. Called from
+// on_after_created (CEF client) once a pane browser is ready, because the
+// INITIAL inject (window.m, one tick after the pane-create REQUESTS) races
+// the async cef_browser_host_create_browser — the host browser is registered
+// by then but the sidebar/inspector browsers register LATER, so their eval is
+// silently dropped (empty slot). This re-fires per pane the moment it exists.
+// Compiled out on a `system` build → toolbar.m stays byte-identical there.
+void zapp_toolbar_reinject_for_slot(int32_t slot) {
+    extern void* darwin_window_get_by_numeric_id(int32_t);
+    void (^work)(void) = ^{
+        void* winPtr = darwin_window_get_by_numeric_id(slot);   // C1 resolver: pane slot → host NSWindow
+        if (!winPtr) return;
+        ZappToolbarController* c = zapp_toolbars[[NSValue valueWithPointer:winPtr]];
+        if (!c) return;                                          // window has no toolbar → nothing to do
+        zapp_toolbar_inject_metrics(winPtr, c.windowNumericId, false);  // host_slot = c.windowNumericId
+    };
+    if ([NSThread isMainThread]) work(); else dispatch_async(dispatch_get_main_queue(), work);
+}
+#endif
+
 void zapp_toolbar_unregister(void* window_ptr) {
     if (!window_ptr || !zapp_toolbars) return;
     NSCAssert([NSThread isMainThread], @"zapp toolbar registry is main-thread-only");
