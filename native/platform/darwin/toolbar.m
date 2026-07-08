@@ -992,7 +992,14 @@ void zapp_toolbar_reinject_for_slot(int32_t slot) {
         if (!winPtr) return;
         ZappToolbarController* c = zapp_toolbars[[NSValue valueWithPointer:winPtr]];
         if (!c) return;                                          // window has no toolbar → nothing to do
-        zapp_toolbar_inject_metrics(winPtr, c.windowNumericId, false);  // host_slot = c.windowNumericId
+        // add_user_script=true BYPASSES inject_metrics's unchanged-metrics no-op
+        // guard (toolbar.m:906). The initial host-only inject already cached
+        // this window's inset/toolbarH/safeLeft, so a false call here would
+        // early-return and the just-ready CEF pane would never be eval'd. Safe:
+        // on a CEF window every slot's zapp_webview_for_slot is nil → the
+        // addUserScript branches (all inside if(wv)/if(hostWv)) never run; true
+        // here ONLY skips the guard, the CEF else-branch still does the eval.
+        zapp_toolbar_inject_metrics(winPtr, c.windowNumericId, /*add_user_script=*/true);  // host_slot = c.windowNumericId
     };
     if ([NSThread isMainThread]) work(); else dispatch_async(dispatch_get_main_queue(), work);
 }
