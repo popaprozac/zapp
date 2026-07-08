@@ -148,6 +148,39 @@ inspector panes are opaque (no vibrancy, same as C1's sidebar finding);
 sub-cycle B's terminal-close limitation applies per-pane; C3 (toolbar) is
 next.
 
+### Sub-cycle C3 — toolbar (macOS)
+
+Window 1 (already sidebar + inspector from C1/C2) now also gets a toolbar
+(spike `1c83c9c`) — the native-chrome element that completes the C1→C2→C3
+north-star sequence. Window 2 stays plain/fullbleed (unchanged), regression
+fixture for the non-toolbar CEF path. Design:
+`docs/superpowers/specs/2026-07-07-cef-toolbar-design.md`; findings + root
+causes: `spikes/cef-macos/FINDINGS.md`'s ★ Sub-cycle C3 update.
+
+| Gate | What it proves | Result |
+|---|---|---|
+| **GATE 26** — panes fill under the toolbar | All three panes (sidebar, host, inspector) render fully under the toolbar with no dark band, and holding the correct size across a window resize — the `cef_browser_host_create_browser` async-frame race fix (`zapp_cef_snap_view_to_superview_for_slot`, T1 `f2a7ad3`) | **PASS — human-confirmed 2026-07-07/08** |
+| **GATE 27** — trackingSeparator tracks the sidebar divider | `NSTrackingSeparatorToolbarItem` correctly anchors to the sidebar↔content divider under the unified (HiddenInset) chrome the fixture now opts into (T1 `7975b3e`) — verified interactively: `toggleSidebar` + a `ping` in the sidebar toolbar region, `toggleInspector` in the content region, both landing in the correct toolbar segment | **PASS — human-confirmed 2026-07-07/08** |
+| **GATE 28** — chrome-metrics reach all 3 CEF panes | `--zapp-toolbar-height` (and friends) populate on **initial load** for all three panes — not just the host — via the CEF-aware eval route + on-ready per-pane re-inject (T2 `c20180e`/`af2dbc4`/`6353234`); content clears the toolbar (fixture pads by `--zapp-titlebar-height`, `f14137c`); switching the toolbar's display mode (Icon/Text) updates the value live | **PASS — human-confirmed 2026-07-07/08** |
+| **GATE 29** — regression | Toolbar click → JS lands in the host pane (`zapp_toolbar_emit_click`, already CEF-aware, unchanged); `toggleSidebar`/`toggleInspector` toggles still work; window 2 (plain, no toolbar) still renders + ticks + closes cleanly; per-pane teardown on close still logs `browser closed` for all three slots, no leak | **PASS — human-confirmed 2026-07-07/08** |
+
+**Known limitation (documented, not hidden — see FINDINGS for detail):** a
+**manual page reload** on a CEF pane does not re-fire the chrome-metrics
+inject (no `cef_load_handler_t`/load-end hook exists yet in
+`zapp_cef_client.c`) — the metrics only refresh on the next KVO-driven
+layout change (toolbar mode switch, a chrome-height-crossing resize).
+Distinct from, and not fixed by, the GATE 28 initial-load race fix; deferred
+to a future cycle. Also unchanged: host-level window-event fan-out
+(`zapp_dispatch_event_to_js`, WK-only, foundational gap since sub-cycle B —
+C3 didn't need it, since toolbar clicks use the separate, already-CEF-aware
+`zapp_toolbar_emit_click` path); CEF panes remain opaque (no vibrancy);
+DevTools remains sub-cycle D.
+
+**North star reached:** sidebar (C1) + inspector (C2) + toolbar (C3) are all
+CLOSED on the `chromium` path — every native-chrome primitive `kitchen-sink`
+exercises now has a working CEF arm, clearing the toolbar blocker toward
+running the full `kitchen-sink` app on Chromium.
+
 ## (b) `webEngine:"system"` — WKWebView, byte-identical to pre-change
 
 ```
@@ -219,7 +252,7 @@ this task changes.
 
 ## Non-goals this slice does NOT smoke
 
-DevTools, native chrome (toolbar — sidebar and inspector are CLOSED, see
+DevTools, native chrome (sidebar, inspector, and toolbar are all CLOSED, see
 below) on the `chromium` path, Helper signing/notarization, iOS / Windows /
 Linux, per-window engine selection, in-app popups, and navigation/
 back-forward are all out of scope for this fixture and this slice — see
@@ -231,6 +264,8 @@ closed it; all six gates PASSED human-confirmed 2026-07-06. **Sidebar-on-CEF
 is GATEs 12-18 above, not a non-goal either** — sub-cycle C1 closed it; all
 seven gates PASSED human-confirmed 2026-07-06. **Inspector-on-CEF is GATEs
 19-25 above, not a non-goal either** — sub-cycle C2 closed it; all seven
-gates PASSED human-confirmed 2026-07-07; toolbar (C3) on `chromium` remains
-open for a future sub-cycle. Reversible reshow of a closed CEF window
-remains an explicit non-goal — see the "Known limitation" note above.)
+gates PASSED human-confirmed 2026-07-07. **Toolbar-on-CEF is GATEs 26-29
+above, not a non-goal either** — sub-cycle C3 closed it; all four gates
+PASSED human-confirmed 2026-07-07/08, completing the C1→C2→C3 native-chrome
+sequence. Reversible reshow of a closed CEF window remains an explicit
+non-goal — see the "Known limitation" note above.)

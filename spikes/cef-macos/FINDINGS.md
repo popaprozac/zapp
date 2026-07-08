@@ -468,6 +468,121 @@ Also unchanged / not attempted this sub-cycle: toolbar-on-CEF (C3),
 DevTools, iOS/Windows/Linux, per-window engine selection, navigation/
 back-forward — all explicit non-goals, tracked for sub-cycle C3+.
 
+### ★ Sub-cycle C3 update (CEF toolbar, `feat/cef-toolbar`, 2026-07-07/08)
+
+Third and final native-chrome element on the `chromium` path — completes the
+**C1 sidebar → C2 inspector → C3 toolbar** north-star sequence toward running
+full `kitchen-sink` on chromium. Fixture: `examples/cef-hello` window 1 gains
+a toolbar (spike `1c83c9c`) on top of its existing 3-pane (sidebar + host +
+inspector) layout from C1/C2.
+
+**Toolbar on CEF (macOS) — CLOSED.** All human gates PASSED on-screen
+2026-07-07/08 (`examples/cef-hello/SMOKE.md`). Commits: spike `1c83c9c`; T1
+`f2a7ad3` + `7975b3e`; T2 `c20180e` + `f14137c` + `af2dbc4` + `6353234`.
+
+**Inherited unchanged (works on CEF, spike-confirmed, zero code changes
+needed):** the toolbar is native chrome and mostly engine-agnostic —
+`darwin_toolbar_attach` (top-level `NSToolbar` construction, engine-agnostic),
+toolbar clicks → JS (`zapp_toolbar_emit_click`, which already routes through
+the CEF-aware `darwin_webview_eval_all` — **not** the WK-only
+`zapp_dispatch_event_to_js` — so C3 did **not** need the host-event fan-out
+fix C2 deferred), and `toggleSidebar`/`toggleInspector` (the native split-VC
+toggle + `darwin_inspector_toggle` resolver, already CEF-aware since C1/C2).
+
+**Three things C3 actually had to fix, all native, none WK-touching:**
+
+1. **(A) CEF panes render a dark band under the toolbar.** Root cause
+   (evidence-backed, Task 1's Phase-1 instrumentation logged the browser
+   NSView's frame vs. its superview's bounds before/after): CEF's own
+   autoresizing mask (`NSViewWidthSizable|NSViewHeightSizable`) was already
+   correct on every pane, and the pane containers were already at their
+   correct POST-toolbar-attach size — the mask/container-sizing hypotheses
+   were both refuted. The actual defect: `cef_browser_host_create_browser`
+   is asynchronous, so CEF bakes the browser NSView's initial frame from
+   `parent.bounds` captured at the earlier synchronous *request* time — but
+   the toolbar attaches (growing the container) one tick later, before the
+   view is inserted into the (now taller) hierarchy, so the view lands at
+   the stale pre-toolbar height with no live resize event afterward for the
+   already-correct mask to react to → a permanent dark band, identical on
+   host/sidebar/inspector. Fix (`f2a7ad3`): new
+   `zapp_cef_snap_view_to_superview_for_slot(slot)`
+   (`native/platform/darwin/cef/zapp_cef_host.m`) snaps `view.frame =
+   view.superview.bounds` once, at the earliest point the view exists —
+   called from `on_after_created` (`zapp_cef_client.c`) — robust to ordering
+   regardless of whether the race lands before or after that callback.
+2. **(B) `NSTrackingSeparatorToolbarItem` doesn't track the sidebar divider —
+   NOT a CEF bug.** Task 1's second diagnosis pass (instrumenting
+   `toolbar.m`'s separator-resolution code) found the split view, its items,
+   and the divider index were all correct and stable across the A fix —
+   the defect was window chrome, not geometry. The `examples/cef-hello`
+   spike fixture omitted `titleBarStyle`, so it resolved to a standard
+   (non-unified) titlebar; `NSTrackingSeparatorToolbarItem` can only anchor
+   to the split divider under the **unified/hidden-inset** chrome the
+   toolbar overlays — in a standard titlebar there's no such continuity, so
+   it can't align. Proven engine-agnostic by code path, not just
+   empirically: the split construction, `titleBarStyle` handling, and the
+   separator's resolution code (`toolbar.m`) are all 100% AppKit, entirely
+   outside any `#ifdef ZAPP_HAS_CEF` block — a `webEngine:"system"` build of
+   the identical fixture would mis-track the separator exactly the same
+   way. Fix (`7975b3e`, fixture-only, matches kitchen-sink): window 1 opts
+   into `titleBarStyle: TitleBarStyle.HiddenInset`. No framework/native code
+   touched; WK path byte-identical.
+3. **(C) chrome-metrics (`--zapp-toolbar-height` etc.) never reached CEF
+   panes — native fix, three layers.** `zapp_toolbar_inject_metrics`
+   (`toolbar.m`) only knew how to inject into a `WKWebView`
+   (`addUserScript:`/`evaluateJavaScript:`) and silently skipped every CEF
+   slot. Three fixes, in order of discovery:
+   1. **Route (`c20180e`).** Each CEF slot (`if (wv)` falls through to a new
+      `#ifdef ZAPP_HAS_CEF` `else`) now routes through the CEF-aware
+      `darwin_window_eval_js(slot, js)` instead of being dropped.
+   2. **Initial-load race (`af2dbc4`).** R0 showed only the HOST pane got
+      the CSS vars on initial load; sidebar/inspector stayed empty until a
+      later toolbar mode-change. Root cause: the initial inject (one runloop
+      tick after pane-create *requests*, in `window.m`) races the same async
+      `cef_browser_host_create_browser` A dealt with — only the host
+      browser happens to be registered by that tick, so the sidebar/
+      inspector evals silently no-op against a not-yet-existent browser. Fix:
+      new `zapp_toolbar_reinject_for_slot(slot)`, called from
+      `on_after_created` right after A's frame-snap, so each pane re-fires
+      the moment its own browser is ready — not tied to toolbar-attach
+      timing specifically.
+   3. **No-op guard swallowed the re-inject (`6353234`).** R0 showed the
+      re-inject alone still didn't work: `zapp_toolbar_inject_metrics` has
+      an unchanged-metrics no-op guard that short-circuits whenever
+      `add_user_script=false` and the computed metrics match the window's
+      last-cached values — and the re-inject computed the *same* metrics the
+      initial host-only inject already cached, so it always hit the guard
+      and returned before reaching the per-slot eval. Fix: the re-inject
+      call passes `add_user_script=true` to bypass the guard — safe because
+      every `addUserScript:` call site is nested inside `if (wv)`/`if
+      (hostWv)`, both nil on every CEF slot, so this never actually adds a
+      `WKUserScript`; it only skips the cache check on the CEF path.
+   The fixture (`f14137c`) pads its content by `--zapp-titlebar-height` to
+   demonstrate the metric is live.
+
+**KNOWN LIMITATION (documented, not hidden):** a **manual page reload** on a
+CEF pane does not re-fire the chrome-metrics inject — `zapp_cef_client.c`
+wires no `cef_load_handler_t`/load-end hook to re-inject from (grepped
+clean: no `on_load_end`/`OnLoadEnd` anywhere in the CEF integration). The
+metrics only refresh on the next KVO-driven layout change (toolbar
+display-mode switch, a resize crossing a chrome-height boundary). This is
+distinct from, and not fixed by, the initial-load race fix above — it is a
+missing hook, deferred to a future cycle rather than built speculatively per
+the task brief's constraint.
+
+Also unchanged / not attempted this sub-cycle: host-level window-event
+fan-out (`zapp_dispatch_event_to_js`, WK-only) — the foundational gap C2
+deferred remains open, but C3 didn't need it (toolbar clicks use the
+already-CEF-aware `zapp_toolbar_emit_click` path, not this one); CEF panes
+remain opaque (no vibrancy — an OSR non-goal, same as C1/C2); DevTools
+(sub-cycle D); iOS/Windows/Linux, per-window engine selection,
+navigation/back-forward — all explicit non-goals.
+
+**North star reached:** with sidebar (C1), inspector (C2), and toolbar (C3)
+all closed on the `chromium` path, every native-chrome primitive
+`kitchen-sink` exercises now has a working CEF arm — clearing the toolbar
+blocker toward running the full `kitchen-sink` app on Chromium.
+
 ---
 
 ## Task 1 (RISK GATE): message-loop coexistence — CEF + NSApplication + a second (ZJS-shaped) loop
