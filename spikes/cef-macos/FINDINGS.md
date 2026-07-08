@@ -1454,3 +1454,59 @@ appears afterward (if it does NOT, that confirms the SIGALRM artifact
 flagged above; if it DOES, flag it as a real Task 5 finding). If (1)-(3) hold
 → GATE 5 PASS (a real ZJS worker runs alongside CEF and drives live page
 content, independent of the render engine).
+
+---
+
+## Kitchen-sink-on-CEF integration catalog (2026-07-08)
+
+Spike (catalog-only, `feat/cef-kitchen-sink-catalog`): temp-flipped `kitchen-sink`
+to `webEngine:"chromium"`, built, walked all 21 native surfaces, cataloged, then
+REVERTED the flip (kitchen-sink stays `system` by default). Spec:
+`docs/superpowers/specs/2026-07-08-cef-kitchen-sink-catalog-design.md`. This is the
+north-star integration checkpoint after C1 sidebar / C2 inspector / C3 toolbar /
+host-event fan-out all merged.
+
+**Finding #0 — builds + launches cleanly on CEF.** `bun run build` produced both
+markers (1922 KB); headless launch = 3 browsers (host+sidebar+inspector), bridge
+ready in all, greeter **zjs worker started**, sidebar/inspector wired, **0 crash
+markers**. No build-level breakage — every surface's native code compiles under
+`ZAPP_HAS_CEF` and links with CEF.
+
+**Result: 18 / 21 surfaces PASS on CEF. 1 PARTIAL, 2 BROKEN.**
+
+| Surface | Status | Note |
+|---|---|---|
+| home | PASS | renders |
+| sidebar | PASS | collapse/expand + toolbar toggle (C1) |
+| inspector | PASS | collapse/expand (C2) |
+| toolbar | PASS | buttons fire, tracking separator (C3) |
+| workers | PASS | greeter invoke round-trips (A/B) |
+| events | PASS | window events show (host-event fan-out) |
+| sync | PASS | state syncs |
+| window-log | PASS | logs appear |
+| multiwindow | PASS | opens 2nd window (B) |
+| clipboard | PASS | text/html/image/files |
+| filedrop | PASS | dropped PNG loads in the webview |
+| dialogs | PASS | open/save/alert all work |
+| tray | PASS | status-bar item + window |
+| notifications | PASS | posts (fixture has no click-receipt UI — not a CEF gap) |
+| dock | PASS | menu/badge/bounce |
+| screen | PASS | displays info |
+| shortcuts | PASS | global shortcut fires (Carbon) |
+| app-events | PASS | active/inactive fire (the active double-fire is a PRE-EXISTING non-CEF bug) |
+| **embedded-webview** | **PARTIAL** | the nested `<zapp-webview>` (a real WKWebView-in-CEF) RENDERS + loads a URL, but does NOT position/track its host box — it lands mis-placed. A WKWebView inside a CEF page works; the geometry tracking is the gap. |
+| **popover** | **BROKEN** | `Window.current().popover…` NO-OPs — NSPopover doesn't open on a CEF window. |
+| **contextmenu** | **BROKEN** | JS→native fires correctly (router receives `showContextMenu` with the full item tree), but the native menu never appears. The native show path is WK-specific and/or CEF's own context menu suppresses it. |
+
+**Cross-cutting cosmetic gaps (not per-surface; deferred polish):**
+- **Vibrancy / material** — kitchen-sink uses `vibrancy: Material.Sidebar`; on WK the panels show the material behind a solid content bg, on CEF the panels render translucent/flat. This is the documented "CEF panes are opaque, no vibrancy" non-goal surfacing in a vibrancy-heavy app. Needs a decision (accept the flat look on CEF, or an OSR/background approach).
+- **Scrollbar gutter** — Chromium reserves a bottom scrollbar corner vs WKWebView full-height. See the CEF scrollbar note. Cosmetic.
+
+**Roadmap (follow-up cycles, prioritized):**
+1. **popover-on-CEF** (BROKEN, no-op) — likely the NSPopover host-view/positioning path assumes a WKWebView; own cycle.
+2. **contextmenu-on-CEF** (BROKEN) — the JS side works (router msg received); fix the native `showContextMenu` display for CEF (and/or suppress CEF's built-in context menu); own cycle.
+3. **embedded-webview positioning-on-CEF** (PARTIAL) — the `<zapp-webview>` box-tracking geometry on a CEF host page; own cycle.
+4. **Cosmetic (deferred):** vibrancy/material opacity + scrollbar gutter — a later polish pass, or accept as CEF-intrinsic.
+
+Everything else (18 surfaces) works on CEF unchanged — the C-series + host-event
+fix covered the bulk of the native-surface matrix.
