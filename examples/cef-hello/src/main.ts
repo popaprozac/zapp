@@ -24,13 +24,21 @@ const which = document.querySelector<HTMLPreElement>("#which")!;
 // CEF branch's identity note.
 const isSidebar = location.hash === "#sidebar-pane";
 const isInspector = location.hash === "#inspector-pane";
+// Popover-on-CEF Task 1: the popover's content is this SAME bundle at
+// `zapp://index.html#popover-pane` (popover.m's CEF content branch, mirroring
+// window.m's pane-mounting), distinguished the same way the sidebar/inspector
+// panes are — by location.hash alone.
+const isPopover = location.hash === "#popover-pane";
 which.textContent = isInspector
   ? `INSPECTOR pane (window ${Window.current().id})`
   : isSidebar
     ? `SIDEBAR pane (window ${Window.current().id})`
-    : `HOST pane (window ${Window.current().id})`;
+    : isPopover
+      ? `POPOVER pane (window ${Window.current().id})`
+      : `HOST pane (window ${Window.current().id})`;
 if (isSidebar) document.body.style.background = "#f0f4ff";
 if (isInspector) document.body.style.background = "#fff4f0"; // distinct tint from the sidebar
+if (isPopover) document.body.style.background = "#f5f0ff"; // distinct tint — identifies the popover content on sight
 
 // Sub-cycle A gate: the ticker worker broadcasts `tick` every second; render it.
 // If this increments on a chromium build, the worker→CEF broadcast edge works.
@@ -69,7 +77,7 @@ guard.addEventListener("change", () => {
 // (C1's ZAPP_HAS_CEF resolver fallback) -> zapp_{sidebar,inspector}_for_slot
 // finds the split registry -> the pane collapses/expands. Before C1's resolver
 // these no-op'd on CEF; before C2's inspector arm there was no inspector pane.
-if (!isSidebar && !isInspector) {
+if (!isSidebar && !isInspector && !isPopover) {
   document.querySelector<HTMLButtonElement>("#toggle-sb")!
     .addEventListener("click", () => Window.current().sidebar?.toggle());
   document.querySelector<HTMLButtonElement>("#toggle-insp")!
@@ -83,15 +91,32 @@ if (!isSidebar && !isInspector) {
   // a Chromium DevTools window opens showing this pane's live html/css/console.
   document.querySelector<HTMLButtonElement>("#open-devtools")!
     .addEventListener("click", () => Window.current().openDevTools());
+
+  // Popover-on-CEF Task 1 gate: click -> lazy-create the popover (once) ->
+  // show it anchored to the button. The popover's own content pane (this same
+  // bundle, loaded at #popover-pane) is where popover.m's CEF content branch
+  // (pane_role=2) is exercised; `pop.show` anchors to a CEF pane's own NSView
+  // via the ZAPP_HAS_CEF fallback in darwin_popover_show.
+  // Type spelled via Awaited<ReturnType<...>> since PopoverHandle isn't
+  // exported from @zappdev/runtime's public surface (v1).
+  let pop: Awaited<ReturnType<ReturnType<typeof Window.current>["createPopover"]>> | undefined;
+  document.querySelector<HTMLButtonElement>("#show-popover")!.addEventListener("click", async (e) => {
+    // Capture BEFORE the await — currentTarget is nulled once dispatch ends
+    // (normalizeAnchor's own warning, runtime/window.ts).
+    const btn = e.currentTarget as HTMLElement;
+    if (!pop) pop = await Window.current().createPopover({ url: "#popover-pane", width: 240, height: 160 });
+    pop.show(btn, { edge: "bottom" }); // Anchor accepts an Element directly (normalizeAnchor measures it).
+  });
 }
-if (isSidebar || isInspector) {
-  // These are HOST-scoped controls: toggle sidebar/inspector and Open DevTools
-  // all act on the host window via the window-scoped API (every pane shares the
-  // host's windowId), so they're only WIRED in the host pane. They render in
-  // every pane's shared HTML — hide the dead copies here so the accessory panes
-  // don't show inert buttons. (Per-pane DevTools is Cmd-Opt-I, which targets
-  // whichever pane is focused — see the CefKeyboardHandler.)
-  for (const id of ["toggle-sb", "toggle-insp", "open-devtools"]) {
+if (isSidebar || isInspector || isPopover) {
+  // These are HOST-scoped controls: toggle sidebar/inspector, Open DevTools,
+  // and Show popover all act on the host window via the window-scoped API
+  // (every pane shares the host's windowId), so they're only WIRED in the
+  // host pane. They render in every pane's shared HTML — hide the dead copies
+  // here so the accessory panes don't show inert buttons. (Per-pane DevTools
+  // is Cmd-Opt-I, which targets whichever pane is focused — see the
+  // CefKeyboardHandler.)
+  for (const id of ["toggle-sb", "toggle-insp", "open-devtools", "show-popover"]) {
     document.querySelector<HTMLElement>("#" + id)?.style.setProperty("display", "none");
   }
 }

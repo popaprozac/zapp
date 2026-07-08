@@ -77,6 +77,28 @@ void darwin_popover_create(void* window_ptr, const char* popover_id,
     // follow-up (popovers host the app's own dev-facing UI).
     NSView* container = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, width, height)];
     c.container = container;
+#ifdef ZAPP_HAS_CEF
+    // Popover content on CEF (webEngine:"chromium" build): mount a CEF browser
+    // (pane_role=2 -> zapp.isPopover in the shared carrier builder), host-twin
+    // identity = the host window — exactly as window.m's CEF pane-mount does.
+    // c.webview stays nil (no WKWebView); teardown routes through the CEF
+    // slot instead (zapp_popover_destroy_controller, below).
+    {
+        extern NSURL* zapp_resolve_url(const char* url_cstr);
+        extern void zapp_cef_create_browser_in_view(void* parent_view, const char* url,
+                                                    int32_t window_slot, const char* window_id,
+                                                    const char* owner_id, int pane_role,
+                                                    bool host_has_sidebar, bool host_has_inspector);
+        NSString* hostWindowId = [NSString stringWithFormat:@"win-%d", host_slot];
+        NSString* ownerId = [NSString stringWithFormat:@"owner-%p", window];
+        NSURL* nsUrl = zapp_resolve_url(url);
+        const char* cefUrl = nsUrl ? [[nsUrl absoluteString] UTF8String] : "zapp://index.html";
+        if (!cefUrl || cefUrl[0] == '\0') cefUrl = "zapp://index.html";
+        zapp_cef_create_browser_in_view((__bridge void*)container, cefUrl, popover_slot,
+                                        [hostWindowId UTF8String], [ownerId UTF8String],
+                                        2, false, false);
+    }
+#else
     darwin_webview_create_ext(window_ptr, true, true, url, popover_slot, true,
                               (__bridge void*)container, host_slot, 2, false, false);
     for (NSView* sub in container.subviews) {
@@ -85,6 +107,7 @@ void darwin_popover_create(void* window_ptr, const char* popover_id,
     if (c.webview) {
         zapp_register_pane_webview(popover_slot, c.webview, host_slot);
     }
+#endif
 
     NSViewController* vc = [[NSViewController alloc] init];
     vc.view = container;
@@ -142,6 +165,17 @@ void darwin_popover_show(const char* popover_id, const char* args_json, int32_t 
     if (!anchorView || anchorView.window != window) {
         anchorView = zapp_webview_for_slot(c.hostSlot);
     }
+#ifdef ZAPP_HAS_CEF
+    if (!anchorView) {
+        // No WKWebView -> a CEF pane. Its browser NSView anchors the popover.
+        // Cast to WKWebView* is deliberate: the show tail below uses only NSView
+        // API (.window/.bounds/.isFlipped/showRelativeToRect:ofView:) on it.
+        extern void* zapp_cef_view_for_slot(int32_t slot);
+        NSView* cv = (__bridge NSView*)zapp_cef_view_for_slot(sender_slot);
+        if (!cv || cv.window != window) cv = (__bridge NSView*)zapp_cef_view_for_slot(c.hostSlot);
+        anchorView = (WKWebView*)cv;
+    }
+#endif
     if (!anchorView) return;
 
     NSString* toolbarItemId = [anchor[@"toolbarItem"] isKindOfClass:[NSString class]] ? anchor[@"toolbarItem"] : nil;
@@ -166,6 +200,12 @@ void darwin_popover_show(const char* popover_id, const char* args_json, int32_t 
     CGFloat h = [anchor[@"height"] isKindOfClass:[NSNumber class]] ? [anchor[@"height"] doubleValue] : 1;
     if (w < 1) w = 1;
     if (h < 1) h = 1;
+#ifdef ZAPP_HAS_CEF
+    // WKWebView is flipped (top-left); CEF's browser NSView may not be. When it
+    // isn't, convert the DOM-top-left y so the popover anchors at the element,
+    // not mirrored. isFlipped-guarded so a flipped view (incl. all WK) is untouched.
+    if (!anchorView.isFlipped) { y = anchorView.bounds.size.height - y - h; }
+#endif
     [c.popover showRelativeToRect:NSMakeRect(x, y, w, h) ofView:anchorView preferredEdge:edge];
 }
 
@@ -182,6 +222,10 @@ static void zapp_popover_destroy_controller(ZappPopoverController* c) {
     if (!c) return;
     if (c.popover.isShown) [c.popover performClose:nil];
     if (c.webview) zapp_teardown_pane_webview(c.webview);
+#ifdef ZAPP_HAS_CEF
+    extern void zapp_cef_teardown_browser_for_slot(int32_t slot);
+    zapp_cef_teardown_browser_for_slot(c.popoverSlot);   // no-op if no CEF browser at slot
+#endif
     zapp_clear_pane_slot(c.popoverSlot);
     c.popover.delegate = nil;
     [zapp_popovers removeObjectForKey:c.popoverId];

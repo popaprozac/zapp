@@ -342,6 +342,28 @@ void* zapp_cef_window_for_slot(int32_t slot) {
 }
 
 // ---------------------------------------------------------------------------
+// Popover-on-CEF Task 1 (breakage #1 fix) — resolve a CEF pane's own NSView
+// (not its host .window) so darwin_popover_show (popover.m) can anchor an
+// NSPopover to a CEF-hosted pane the same way it anchors to a WKWebView.
+//
+// Mirrors zapp_cef_window_for_slot immediately above EXACTLY (same borrowed
+// browser / owned-then-released-once host idiom) — the only difference is
+// the final return: the browser's own NSView (get_window_handle), not that
+// view's .window.
+void* zapp_cef_view_for_slot(int32_t slot) {
+  extern cef_browser_t* zapp_cef_browser_for_slot(int32_t slot);
+  cef_browser_t* b = zapp_cef_browser_for_slot(slot);  // borrowed — do not release
+  if (b == NULL) return NULL;
+  cef_browser_host_t* host = b->get_host(b);  // owned
+  if (host == NULL) return NULL;
+  cef_window_handle_t handle = host->get_window_handle(host);
+  host->base.release(&host->base);
+  if (handle == 0) return NULL;
+  NSView* view = (__bridge NSView*)(void*)handle;
+  return (__bridge void*)view;  // NSView*
+}
+
+// ---------------------------------------------------------------------------
 // D sub-cycle Task 1 — Chromium DevTools show/close.
 //
 // Mirrors zapp_cef_window_for_slot's borrowed/owned idiom just above:

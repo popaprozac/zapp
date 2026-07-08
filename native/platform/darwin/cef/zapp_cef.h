@@ -146,6 +146,15 @@ void zapp_cef_teardown_browser_for_slot(int32_t slot);
 // in zapp_cef_host.m (needs both CEF headers and ObjC/NSView).
 void* zapp_cef_window_for_slot(int32_t slot);
 
+// Popover-on-CEF Task 1 (breakage #1 fix). Resolve the CEF browser's own
+// NSView for |slot| — as opposed to zapp_cef_window_for_slot's .window — so
+// darwin_popover_show (native/platform/darwin/popover.m) can anchor an
+// NSPopover to a CEF-hosted pane the same way it anchors to a WKWebView.
+// Mirrors zapp_cef_window_for_slot's borrowed/owned idiom exactly. Returns
+// NULL if |slot| has no live browser. Implemented in zapp_cef_host.m (needs
+// both CEF headers and ObjC/NSView).
+void* zapp_cef_view_for_slot(int32_t slot);
+
 // D sub-cycle Task 1. Open Chromium DevTools for the CEF browser at |slot|,
 // in its OWN standalone window (a local cef_window_info_t with
 // parent_view=0 — no parent view means CEF creates its own top-level
