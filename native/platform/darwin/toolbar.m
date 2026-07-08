@@ -922,14 +922,30 @@ void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_u
 
     int32_t slots[3] = { host_slot, zapp_sidebar_slot_lookup(host_slot), zapp_inspector_slot_lookup(host_slot) };
     for (int i = 0; i < 3; i++) {
+        if (slots[i] < 0) continue;
         WKWebView* wv = zapp_webview_for_slot(slots[i]);
-        if (!wv) continue;
-        if (add_user_script) {
-            [wv.configuration.userContentController addUserScript:
-                [[WKUserScript alloc] initWithSource:js
-                    injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
+        if (wv) {
+            if (add_user_script) {
+                [wv.configuration.userContentController addUserScript:
+                    [[WKUserScript alloc] initWithSource:js
+                        injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
+            }
+            [wv evaluateJavaScript:js completionHandler:nil];
         }
-        [wv evaluateJavaScript:js completionHandler:nil];
+#ifdef ZAPP_HAS_CEF
+        else {
+            // CEF pane: no WKWebView. Route through the CEF-aware per-slot eval
+            // (darwin_window_eval_js's ZAPP_HAS_CEF branch reaches the CEF browser
+            // at this slot). No WKUserScript equivalent on CEF, and the CEF client
+            // (zapp_cef_client.c) wires no load-handler yet, so a manual page
+            // reload on a CEF pane does NOT re-apply these vars immediately —
+            // known limitation; they re-apply on the next KVO-driven layout
+            // change (toolbar display-mode switch, window resize crossing a
+            // chrome-height boundary, etc). Revisit once a load-end hook lands.
+            extern void darwin_window_eval_js(int32_t window_id, const char* js);
+            darwin_window_eval_js(slots[i], [js UTF8String]);
+        }
+#endif
     }
 
     // Inject safe-area + corner vars into the HOST webview only. In Extend
@@ -951,6 +967,14 @@ void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_u
         }
         [hostWv evaluateJavaScript:saJs completionHandler:nil];
     }
+#ifdef ZAPP_HAS_CEF
+    else {
+        // CEF host pane: same CEF-aware per-slot eval fallback as the main
+        // loop above, keyed by host_slot (the host webview's numeric slot).
+        extern void darwin_window_eval_js(int32_t window_id, const char* js);
+        darwin_window_eval_js(host_slot, [saJs UTF8String]);
+    }
+#endif
 }
 
 void zapp_toolbar_unregister(void* window_ptr) {
