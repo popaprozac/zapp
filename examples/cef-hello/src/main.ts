@@ -95,6 +95,15 @@ if (!isSidebar && !isInspector) {
   });
 }
 
+// Host window events must reach CEF windows + panes (host-event fan-out fix).
+// Every pane subscribes; resizing/focusing window 1 should update ALL THREE.
+const winevt = document.querySelector<HTMLPreElement>("#winevt")!;
+Window.current().on(WindowEvent.RESIZE, (p) => {
+  winevt.textContent = `window event: resize ${p.size.width}×${p.size.height}`;
+});
+Window.current().on(WindowEvent.FOCUS, () => { winevt.textContent = "window event: focus"; });
+Window.current().on(WindowEvent.BLUR,  () => { winevt.textContent = "window event: blur"; });
+
 // Render whatever --zapp-toolbar-height computes to — this is the WK-only
 // zapp_toolbar_inject_metrics CSS var (zapp_webview_for_slot → WKWebView).
 // On CEF this is expected to read "" (empty) unless C3 wires an equivalent

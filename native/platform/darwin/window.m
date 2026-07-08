@@ -240,6 +240,53 @@ void zapp_dispatch_event_to_js(int32_t window_id, int32_t event_id, int32_t w, i
     if (window_id < 0 || window_id >= ZAPP_MAX_WINDOW_CALLBACKS) return;
     WKWebView* webview = zapp_webviews[window_id];
     NSString* windowId = zapp_window_ids[window_id];
+#ifdef ZAPP_HAS_CEF
+    // A CEF-hosted window has no WKWebView in zapp_webviews[] (webview == nil)
+    // but DOES have a windowId. Without this, the WK early-return below drops
+    // every host window event (resize/move/focus/blur/maximize/restore/modal)
+    // for CEF windows. Build the SAME event JS and fan out to host + sidebar +
+    // inspector via the CEF-aware darwin_window_eval_js.
+    //
+    // Approach B (see 2026-07-08-cef-host-events-design.md): keep the WK path
+    // byte-identical by isolating CEF here rather than refactoring the shared
+    // dispatcher. The snprintf block below MIRRORS the WK build at
+    // window.m:~255-273 — KEEP THE TWO IN SYNC if the payload shape changes.
+    if (!webview && windowId) {
+        const char* event_name = zapp_get_event_name(event_id);
+        const char* wid = [windowId UTF8String];
+        if (event_id == ZAPP_EVENT_WINDOW_MODAL_DISMISSED) {
+            snprintf(zapp_js_buf, sizeof(zapp_js_buf),
+                "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+                "if(b&&typeof b.dispatchWindowEvent==='function'){"
+                "b.dispatchWindowEvent('%s','%s','{\"modalId\":\"win-%d\",\"code\":%d}');}})();",
+                wid, event_name, w, h);
+        } else {
+            bool hasPayload = (event_id == ZAPP_EVENT_WINDOW_RESIZE || event_id == ZAPP_EVENT_WINDOW_MOVE ||
+                               event_id == ZAPP_EVENT_WINDOW_MAXIMIZE || event_id == ZAPP_EVENT_WINDOW_RESTORE);
+            if (hasPayload) {
+                snprintf(zapp_js_buf, sizeof(zapp_js_buf),
+                    "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+                    "if(b&&typeof b.dispatchWindowEvent==='function'){"
+                    "b.dispatchWindowEvent('%s','%s','{\"width\":%d,\"height\":%d,\"x\":%d,\"y\":%d}');}})();",
+                    wid, event_name, w, h, x, y);
+            } else {
+                snprintf(zapp_js_buf, sizeof(zapp_js_buf),
+                    "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+                    "if(b&&typeof b.dispatchWindowEvent==='function'){"
+                    "b.dispatchWindowEvent('%s','%s');}})();",
+                    wid, event_name);
+            }
+        }
+        darwin_window_eval_js(window_id, zapp_js_buf);   // host pane
+        int32_t cef_sb = zapp_sidebar_slot_for(window_id);
+        if (cef_sb >= 0 && cef_sb != window_id && cef_sb < ZAPP_MAX_WINDOW_CALLBACKS)
+            darwin_window_eval_js(cef_sb, zapp_js_buf);   // sidebar pane
+        int32_t cef_in = zapp_inspector_slot_for(window_id);
+        if (cef_in >= 0 && cef_in != window_id && cef_in < ZAPP_MAX_WINDOW_CALLBACKS)
+            darwin_window_eval_js(cef_in, zapp_js_buf);    // inspector pane
+        return;
+    }
+#endif
     if (!webview || !windowId) return;
 
     const char* event_name = zapp_get_event_name(event_id);
