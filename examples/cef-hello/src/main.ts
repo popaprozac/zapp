@@ -74,6 +74,15 @@ if (!isSidebar && !isInspector) {
     .addEventListener("click", () => Window.current().sidebar?.toggle());
   document.querySelector<HTMLButtonElement>("#toggle-insp")!
     .addEventListener("click", () => Window.current().inspector?.toggle());
+
+  // Sub-cycle D gate: DevTools-on-CEF. HOST pane only (same guard as the
+  // toggles above — accessory panes don't need their own trigger; Cmd-Opt-I
+  // already opens DevTools for whichever pane is focused, see
+  // CefKeyboardHandler). Click -> Window.current().openDevTools() -> router
+  // -> zapp_cef_show_dev_tools (own window, dev-gated on `inspectable`) ->
+  // a Chromium DevTools window opens showing this pane's live html/css/console.
+  document.querySelector<HTMLButtonElement>("#open-devtools")!
+    .addEventListener("click", () => Window.current().openDevTools());
 }
 
 // C3 SPIKE (cef-toolbar): probe whether NSToolbar works on a webEngine:"chromium"
