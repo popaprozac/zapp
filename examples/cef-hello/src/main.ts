@@ -3,7 +3,7 @@
 // through Services.invoke (webview → Nim router → back), same bridge path
 // WKWebView uses today, on whatever engine `zapp.config.ts`'s `webEngine`
 // resolves to.
-import { Events, Services, Window } from "@zappdev/runtime";
+import { Events, Services, Window, WindowEvent } from "@zappdev/runtime";
 
 const goButton = document.querySelector<HTMLButtonElement>("#go")!;
 const out = document.querySelector<HTMLPreElement>("#out")!;
@@ -75,3 +75,34 @@ if (!isSidebar && !isInspector) {
   document.querySelector<HTMLButtonElement>("#toggle-insp")!
     .addEventListener("click", () => Window.current().inspector?.toggle());
 }
+
+// C3 SPIKE (cef-toolbar): probe whether NSToolbar works on a webEngine:"chromium"
+// window. The toolbar itself is attached create-time from Nim (app.nim's
+// `toolbar:` field) — HOST pane only, since that's where the native NSToolbar
+// lives (window.m's darwin_toolbar_attach is engine-agnostic and per-window,
+// not per-pane). `Window.current().on(WindowEvent.TOOLBAR_CLICKED, ...)` is
+// the raw bridge subscription (window.ts's WindowHandle.on — filters by
+// windowId, independent of whether the clicked item was registered via a JS
+// `toolbar.setItems({action})` closure). We use this raw form deliberately:
+// the toolbar here is Nim-authored (no JS-side action closures registered),
+// so the internal `toolbarActions` map (populated only by setItems) would
+// never fire for it — this is the only way to observe the click from JS.
+const tbclick = document.querySelector<HTMLPreElement>("#tbclick")!;
+const tbheight = document.querySelector<HTMLPreElement>("#tbheight")!;
+if (!isSidebar && !isInspector) {
+  Window.current().on(WindowEvent.TOOLBAR_CLICKED, (payload: any) => {
+    tbclick.textContent = `toolbar click: ${JSON.stringify(payload)}`;
+  });
+}
+
+// Render whatever --zapp-toolbar-height computes to — this is the WK-only
+// zapp_toolbar_inject_metrics CSS var (zapp_webview_for_slot → WKWebView).
+// On CEF this is expected to read "" (empty) unless C3 wires an equivalent
+// injection path for CEF browsers. Re-read on toolbar click too, in case the
+// value only becomes available/observable after some native round-trip.
+function renderToolbarHeightVar(): void {
+  const v = getComputedStyle(document.documentElement).getPropertyValue("--zapp-toolbar-height");
+  tbheight.textContent = `--zapp-toolbar-height: "${v}" (${v.trim() === "" ? "EMPTY/absent" : "present"})`;
+}
+renderToolbarHeightVar();
+setTimeout(renderToolbarHeightVar, 500); // re-check after CEF/native settle

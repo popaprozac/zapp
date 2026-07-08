@@ -26,6 +26,13 @@
       <button id="toggle-sb">toggle sidebar</button>
       <button id="toggle-insp">toggle inspector</button>
       <p><a href="https://example.com" target="_blank">open external (should hit system browser)</a></p>
+      <!-- C3 spike: NSToolbar-on-CEF probe. #tbclick renders the last
+           TOOLBAR_CLICKED item id (human clicks "Ping" in the native
+           toolbar to exercise this); #tbheight renders whatever
+           --zapp-toolbar-height computes to, to SEE whether the WK-only
+           zapp_toolbar_inject_metrics path reaches a CEF window. -->
+      <pre id="tbclick">toolbar click: (none yet)</pre>
+      <pre id="tbheight">--zapp-toolbar-height: (pending)</pre>
     </main>
     <script type="module" src="/src/main.ts"></script>
   </body>

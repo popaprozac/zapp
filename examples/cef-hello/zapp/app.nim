@@ -8,7 +8,12 @@
 ## fullbleed CEF branch (window.m's `!useSidebar && !useInspector` path)
 ## still works unchanged alongside the new sidebar path. Sub-cycle C2: window
 ## 1 now ALSO has an `inspector`, so it is a 3-pane CEF window (sidebar +
-## host + inspector). Window 2 stays plain/fullbleed.
+## host + inspector). Window 2 stays plain/fullbleed. Sub-cycle C3 (SPIKE):
+## window 1 now ALSO has a `toolbar` (mirrors kitchen-sink's create-time
+## shape) — probes whether NSToolbar attach + toolbar-click fan-out +
+## toggleSidebar/toggleInspector + trackingSeparator + the WK-only
+## `zapp_toolbar_inject_metrics` CSS var all behave on a CEF window. See
+## .superpowers/sdd/c3-spike-report.md for findings.
 import zapp
 
 proc greet(app: App, args: JsonNode): string =
@@ -37,6 +42,12 @@ proc runApp(): int =
                             presentation: SidebarPresentation.Default),
     inspector: InspectorOptions(url: "#inspector-pane", title: "CEF Inspector",
                                 width: 240, minWidth: 180, maxWidth: 320),
+    toolbar: ToolbarOptions(items: @[
+      ToolbarItemOpt(`type`: "toggleSidebar"),
+      ToolbarItemOpt(`type`: "button", id: "ping", label: "Ping", icon: "sf:bell"),
+      ToolbarItemOpt(`type`: "trackingSeparator", pane: "sidebar"),
+      ToolbarItemOpt(`type`: "toggleInspector"),
+    ]),
   ))
   win.onReady(onReady)
 
