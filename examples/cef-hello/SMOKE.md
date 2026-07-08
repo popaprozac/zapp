@@ -174,7 +174,7 @@ to a future cycle. Also unchanged: host-level window-event fan-out
 (`zapp_dispatch_event_to_js`, WK-only, foundational gap since sub-cycle B —
 C3 didn't need it, since toolbar clicks use the separate, already-CEF-aware
 `zapp_toolbar_emit_click` path); CEF panes remain opaque (no vibrancy);
-DevTools remains sub-cycle D.
+DevTools (now shipped, see the Sub-cycle D section below).
 
 **North star reached:** sidebar (C1) + inspector (C2) + toolbar (C3) are all
 CLOSED on the `chromium` path — every native-chrome primitive `kitchen-sink`
@@ -210,6 +210,35 @@ with no gutter. Webview-internal rendering, not a fan-out defect;
 normalizable later from the web side (`::-webkit-scrollbar` /
 `scrollbar-gutter` CSS), alongside the vibrancy-opacity and manual-reload
 chrome-metrics gaps already deferred above.
+
+### Sub-cycle D — DevTools (macOS)
+
+The debugging tool for CEF app development itself — and specifically for
+the three `kitchen-sink`-on-CEF breakages the integration catalog flagged
+(popover, contextmenu, embedded-webview). Window 1's host pane gains an
+**"Open DevTools"** button (`index.html`/`src/main.ts`), wired to
+`Window.current().openDevTools()` → router (`devtools:open`) →
+`zapp_cef_show_dev_tools` (own standalone window, dev-gated on
+`inspectable`) — plus a **Cmd-Opt-I** keyboard shortcut
+(`CefKeyboardHandler`, `zapp_cef_client.c`) that opens DevTools for
+whichever CEF browser currently has focus, with no button needed. Design:
+`docs/superpowers/specs/2026-07-08-cef-devtools-design.md`; findings:
+`spikes/cef-macos/FINDINGS.md`'s ★ Sub-cycle D update.
+
+| Gate | What it proves | Result |
+|---|---|---|
+| **GATE 33** — API opens DevTools | Clicking **Open DevTools** in window 1's host pane opens a **Chromium DevTools window**, showing that pane's live html/css/console — the runtime API → router → `zapp_cef_show_dev_tools` path, with a standalone (`parent_view=0`) `window_info`. Interacting with Elements/Console works like any Chromium DevTools window. | **PASS — human-confirmed 2026-07-08** |
+| **GATE 34** — Cmd-Opt-I targets the FOCUSED pane | Focusing the **host** pane and pressing **Cmd-Opt-I** opens DevTools for the host browser; focusing the **sidebar** pane and pressing Cmd-Opt-I opens a DevTools window for the **sidebar's own** browser instead — confirming the per-client `cef_keyboard_handler_t` (baked-in `slot`) genuinely targets whichever browser has OS keyboard focus, not a single fixed pane. | **PASS — human-confirmed 2026-07-08** |
+| **GATE 35** — close works | The DevTools window's own close (its titlebar close button) works normally; `Window.current().closeDevTools()` (exercised from a host-pane console call) also closes an open DevTools window via `zapp_cef_close_dev_tools`. | **PASS — human-confirmed 2026-07-08** |
+| **GATE 36** — regression | The C1-C3 native-chrome surfaces (sidebar/inspector toggle, toolbar click, `ticker` broadcast, `greet` bridge) and the host-event fan-out (`#winevt`) all still work on window 1 after opening/closing DevTools; window 2 (plain, no DevTools button) still renders + ticks + closes cleanly, unaffected. | **PASS — human-confirmed 2026-07-08** |
+
+**Known limitations (documented, not hidden — see FINDINGS for detail):**
+DevTools always opens in its own standalone top-level window — docking it
+into an existing pane is an explicit non-goal this cycle; there is no
+"Inspect Element" context-menu entry point yet (`inspect_element_at` is
+always `NULL`) since CEF's right-click context menu is itself one of the
+three still-open `kitchen-sink`-on-CEF breakages this DevTools work exists
+to help debug.
 
 ## (b) `webEngine:"system"` — WKWebView, byte-identical to pre-change
 
@@ -282,13 +311,12 @@ this task changes.
 
 ## Non-goals this slice does NOT smoke
 
-DevTools, native chrome (sidebar, inspector, and toolbar are all CLOSED, see
-below) on the `chromium` path, Helper signing/notarization, iOS / Windows /
-Linux, per-window engine selection, in-app popups, and navigation/
-back-forward are all out of scope for this fixture and this slice — see
-`docs/api-reference.md`'s `webEngine` section and
-`spikes/cef-macos/FINDINGS.md` for what remains open. (Worker on CEF is GATE
-5 above, not a non-goal — **PASS**, human-confirmed 2026-07-06.
+Docked DevTools, CEF "Inspect Element" context-menu integration, Helper
+signing/notarization, iOS / Windows / Linux, per-window engine selection,
+in-app popups, and navigation/back-forward are all out of scope for this
+fixture and this slice — see `docs/api-reference.md`'s `webEngine` section
+and `spikes/cef-macos/FINDINGS.md` for what remains open. (Worker on CEF is
+GATE 5 above, not a non-goal — **PASS**, human-confirmed 2026-07-06.
 **Multi-window is GATEs 6-11 above, not a non-goal either** — sub-cycle B
 closed it; all six gates PASSED human-confirmed 2026-07-06. **Sidebar-on-CEF
 is GATEs 12-18 above, not a non-goal either** — sub-cycle C1 closed it; all
@@ -297,5 +325,7 @@ seven gates PASSED human-confirmed 2026-07-06. **Inspector-on-CEF is GATEs
 gates PASSED human-confirmed 2026-07-07. **Toolbar-on-CEF is GATEs 26-29
 above, not a non-goal either** — sub-cycle C3 closed it; all four gates
 PASSED human-confirmed 2026-07-07/08, completing the C1→C2→C3 native-chrome
-sequence. Reversible reshow of a closed CEF window remains an explicit
-non-goal — see the "Known limitation" note above.)
+sequence. **DevTools-on-CEF is GATEs 33-36 above, not a non-goal either** —
+sub-cycle D closed it; all four gates PASSED human-confirmed 2026-07-08.
+Reversible reshow of a closed CEF window remains an explicit non-goal — see
+the "Known limitation" note above.)

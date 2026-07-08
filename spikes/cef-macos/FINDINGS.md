@@ -575,7 +575,8 @@ fan-out (`zapp_dispatch_event_to_js`, WK-only) — the foundational gap C2
 deferred remains open, but C3 didn't need it (toolbar clicks use the
 already-CEF-aware `zapp_toolbar_emit_click` path, not this one); CEF panes
 remain opaque (no vibrancy — an OSR non-goal, same as C1/C2); DevTools
-(sub-cycle D); iOS/Windows/Linux, per-window engine selection,
+(sub-cycle D — **now shipped, see the ★ Sub-cycle D update below**);
+iOS/Windows/Linux, per-window engine selection,
 navigation/back-forward — all explicit non-goals.
 
 **North star reached:** with sidebar (C1), inspector (C2), and toolbar (C3)
@@ -650,6 +651,144 @@ deferred.
 This closes the item the C2/C3 "Known limitations"/"Also unchanged" notes
 above flagged as open (`zapp_dispatch_event_to_js` WK-only) — no other CEF
 host-window-event gap is currently tracked.
+
+### ★ Sub-cycle D update (CEF DevTools, `feat/cef-devtools`, 2026-07-08)
+
+Design: `docs/superpowers/specs/2026-07-08-cef-devtools-design.md`. Not a
+native-chrome element — the debugging tool for CEF app development itself,
+and specifically for the three `kitchen-sink`-on-CEF breakages the
+integration catalog flagged (popover, contextmenu, embedded-webview):
+without DevTools there was no way to inspect a CEF pane's live html/css/
+console at all, on a platform whose right-click "Inspect" context-menu path
+is itself one of the three broken surfaces.
+
+**DevTools-on-CEF — CLOSED.** All human gates PASSED on-screen 2026-07-08
+(`examples/cef-hello/SMOKE.md`, GATEs 33-36). Commits: Task 1 `8a6e441`
+(primitive + router + API) + `d88d3ff` (iOS symbol-parity fix); Task 2
+`7db588e` (Cmd-Opt-I shortcut).
+
+**What shipped:**
+
+1. **Native show/close, own window, dev-gated** (Task 1, `8a6e441`) —
+   `void zapp_cef_show_dev_tools(int32_t slot)` / `void
+   zapp_cef_close_dev_tools(int32_t slot)` (`zapp_cef_host.m`, declared in
+   `zapp_cef.h`), mirroring `zapp_cef_window_for_slot`'s borrowed/owned
+   idiom: `zapp_cef_browser_for_slot(slot)` returns a **borrowed**
+   `cef_browser_t*` (never released); `b->get_host(b)` returns an **owned**
+   `cef_browser_host_t*`, released exactly once via `host->base.release(...)`
+   regardless of whether the call succeeded. `show_dev_tools` is given a
+   local `cef_window_info_t` with `parent_view = 0` (no parent view — this
+   is what tells CEF to create its own **top-level standalone** DevTools
+   window rather than embedding the UI into an existing view; there is no
+   natural "inspector pane" host for it) and `client`/`settings`/
+   `inspect_element_at` all `NULL` (CEF's default DevTools behavior; no
+   seeded element, since CEF has no "Inspect Element" context-menu entry
+   point yet). The dev-gate — `if
+   (!app_get_bootstrap_web_content_inspectable()) return;` — lives **only**
+   in `zapp_cef_show_dev_tools`, deliberately the ONE place, so both the
+   runtime API and the Task-2 keyboard shortcut are covered by a single
+   check rather than duplicating it at each caller. `inspectable` is the
+   same per-window/app cascade the WKWebView inspector already gates on
+   (`Inspectable.Auto` = on in `zapp dev`, off in a release/`zapp build`;
+   `Inspectable.On`/`Off` force it either way) — `cef-hello`'s
+   `zapp/app.nim` already sets `Inspectable.Auto`, so a dev build satisfies
+   the gate for free.
+2. **Engine-aware router surface, compiling for BOTH engines** (Task 1,
+   `8a6e441`) — new `native/platform/darwin/devtools.m` (`darwin_devtools_
+   open`/`close(int32_t window_id)`), registered in the **shared** macOS
+   source list (`cli/src/native.ts`'s `getPlatformSources`), not the
+   CEF-only list — so a `webEngine:"system"` build compiles this file too.
+   Its CEF branch is `#ifdef ZAPP_HAS_CEF`-gated behind an **opaque**
+   `cef_browser_t` forward-declaration (the file never dereferences it, only
+   NULL-checks the pointer `zapp_cef_browser_for_slot` returns), so a WK
+   build never sees a single CEF type or symbol reference — mirrors
+   `platform.m`'s "stay CEF-header-free" convention. On a CEF slot it calls
+   `zapp_cef_show_dev_tools`/`close`; on a WK slot it falls through to a
+   no-op (`darwin_devtools_open` logs a one-line stderr hint pointing at the
+   system Develop menu / right-click Inspect Element; `darwin_devtools_close`
+   is silent — closing something that was never opened is harmless).
+3. **Router dispatch + runtime API** (Task 1, `8a6e441`) — `router.nim`
+   gains a `devtools:` action block mirroring the existing `sidebar:`/
+   `inspector:` target-resolution (explicit `windowId` arg else the resolved
+   sender window), dispatching the exact action strings `"devtools:open"`
+   and `"devtools:close"` to `darwin_devtools_open`/`close`. `runtime/
+   window.ts`'s `WindowHandle` gains `openDevTools(): void` /
+   `closeDevTools(): void`, each a one-line `windowAction("devtools:open"/
+   "devtools:close", { windowId })` fire-and-forget — reached as
+   `Window.current().openDevTools()`/`closeDevTools()`.
+4. **iOS symbol-parity fix** (`d88d3ff`) — `router.nim`'s new `importc`
+   decls are shared with the iOS build, but `devtools.m` (their macOS
+   definition) is macOS-only, so the iOS build had no definition to link
+   against — caught by the existing `darwin_*` symbol-parity lint
+   (`cli/src/ios-platform-parity.test.ts`, #637). Fixed with silent no-op
+   iOS stubs (`native/platform/ios/devtools.m`): iOS is WKWebView-only (no
+   CEF at all), and its inspector is Safari's **Web Inspector** (connect a
+   Mac, Develop menu) — there is no in-app DevTools story on iOS, so both
+   functions are pure `(void)window_id;` no-ops, registered in the iOS
+   branch of `getPlatformSources`.
+5. **Cmd-Opt-I shortcut, focused-browser targeting, dev-gate inherited for
+   free** (Task 2, `7db588e`) — a new `cef_keyboard_handler_t` on the CEF
+   client (`zapp_cef_client.c`), wired via `get_keyboard_handler` exactly
+   like the existing `get_life_span_handler` (same base-first struct
+   layout, same `IMPLEMENT_REFCOUNTING_SIMPLE` free-only ref-counting, same
+   per-client `slot` carried from `zapp_cef_client_create`). Its
+   `on_key_event` (fires **after** the renderer/page has had a chance to
+   handle the event — `on_key_event`, not `on_pre_key_event`) matches on
+   `event->type == KEYEVENT_RAWKEYDOWN`, `modifiers & EVENTFLAG_COMMAND_DOWN`,
+   `modifiers & EVENTFLAG_ALT_DOWN`, and `windows_key_code == 0x49` (`VKEY_I`),
+   then calls `zapp_cef_show_dev_tools(h->slot)` and returns `1` (handled).
+   **Focused-browser targeting falls out for free, with no separate
+   "focused slot" registry**: because the handler is created **per-client**
+   (i.e. per-browser — each CEF browser/pane has its own client and its own
+   keyboard handler carrying its own baked-in `slot`), CEF itself only
+   delivers `on_key_event` to whichever browser currently has OS keyboard
+   focus — so Cmd-Opt-I always opens DevTools for the pane the developer is
+   actually looking at (host, sidebar, or inspector), never a stale or
+   global target. No extra gate needed here — the dev-gate already lives
+   inside `zapp_cef_show_dev_tools` (item 1 above), covering this caller
+   too.
+6. **Fixture** (Task 3) — `examples/cef-hello`'s host pane gains an "Open
+   DevTools" button (`index.html`/`src/main.ts`, same HOST-pane-only guard
+   as the sidebar/inspector toggle buttons) wired to
+   `Window.current().openDevTools()`.
+
+**WK no-op, confirmed at the native layer, not the TS layer:** `runtime/
+window.ts`'s `openDevTools()`/`closeDevTools()` do **not** branch on engine
+at all — they always fire the same `devtools:open`/`devtools:close` action
+regardless of `webEngine`. The no-op is entirely a native-layer decision
+(`darwin_devtools_open`/`close`'s `#ifdef ZAPP_HAS_CEF` branch + the runtime
+`zapp_cef_browser_for_slot(window_id) != NULL` check falling through to the
+WK no-op path) — the WK inspector remains reachable only via macOS's system
+Develop menu / right-click Inspect Element, unaffected and untouched by any
+of this.
+
+**iOS:** no-op for the same reason as WK (iOS is WKWebView-only, no CEF) —
+the iOS Web Inspector story is Safari's, external to the app, unaffected by
+this cycle.
+
+**Known limitations / follow-ups (documented, not hidden):**
+
+- **DevTools opens in its own standalone top-level window, never docked.**
+  An explicit non-goal this cycle (`parent_view = 0`); a future cycle could
+  explore docking DevTools into (e.g.) the inspector pane, but that pane
+  hosts Zapp's own webview content today, not a debugging surface, so
+  docking would need real design work, not a quick follow-up.
+- **No "Inspect Element" entry point on CEF yet** — `show_dev_tools`'s
+  `inspect_element_at` is always `NULL`; there is nothing to seed it with
+  until CEF's right-click context menu (one of the three
+  `kitchen-sink`-on-CEF breakages the integration catalog flagged) is
+  fixed. DevTools opening at all — this cycle's actual deliverable — is the
+  debugging tool that makes fixing that context-menu breakage tractable in
+  the first place.
+- **This is the debug tool for the still-open kitchen-sink-on-CEF follow-up
+  cycles** (popover, contextmenu, embedded-webview breakages the
+  integration catalog identified) — DevTools-on-CEF exists specifically so
+  those follow-ups have a console/Elements panel to work from, not as an
+  end in itself.
+
+Also unchanged / not attempted this sub-cycle: docked DevTools, CEF
+"Inspect Element" context-menu integration, iOS/Windows/Linux, per-window
+engine selection, navigation/back-forward — all explicit non-goals.
 
 ---
 
