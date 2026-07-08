@@ -583,6 +583,74 @@ all closed on the `chromium` path, every native-chrome primitive
 `kitchen-sink` exercises now has a working CEF arm — clearing the toolbar
 blocker toward running the full `kitchen-sink` app on Chromium.
 
+### ★ Host-event fan-out fix (`feat/cef-host-events`, 2026-07-08)
+
+Design: `docs/superpowers/specs/2026-07-08-cef-host-events-design.md`. Not a
+new native-chrome element — a foundational fix closing the last CEF
+window-event gap, flagged and deferred during C2/C3.
+
+**Host-event fan-out — CLOSED.** All human gates PASSED on-screen
+2026-07-08 (`examples/cef-hello/SMOKE.md`, GATEs 30-32). Commit: T1
+`dd31439`.
+
+**The gap:** `zapp_dispatch_event_to_js` (`window.m:239`) is the shared
+host-window-event dispatcher (resize/move/focus/blur/maximize/restore/
+modal-dismissed) — every NSWindow-delegate window event routes through it.
+It resolved `webview = zapp_webviews[window_id]` and early-returned when nil
+(`!webview || !windowId`), which is correct for WKWebView but wrong for CEF:
+a CEF window's browsers live in `zapp_cef_browsers[]`, not `zapp_webviews[]`,
+so `webview` is always nil for a CEF window even though
+`zapp_window_ids[window_id]` IS set (registered since C1-C3). The
+early-return silently dropped EVERY host window event for every CEF window —
+sidebar, host, and inspector panes alike. This was distinct from, and did
+not affect, the accessory-level events (sidebar/inspector collapse/resize,
+`sidebar.m`/`inspector.m`) and toolbar clicks (`zapp_toolbar_emit_click`),
+which already routed through the CEF-aware `darwin_webview_eval_all`/
+`darwin_window_eval_js` paths and reached CEF fine — only this specific
+host→pane fan-out was WK-only.
+
+**The fix (approach B, decided with the human over approach A):** a
+byte-identical, gated `#ifdef ZAPP_HAS_CEF` branch inserted **before** the WK
+early-return. For a CEF window (`!webview && windowId`) it builds the SAME
+event JS the WK path builds a few lines below (~15 lines — the event-name
+lookup + the modal / resize-move-maximize-restore / plain `snprintf`
+switch, mirrored verbatim with a "keep in sync" comment) and fans it out to
+the host pane + sidebar pane (`zapp_sidebar_slot_for`) + inspector pane
+(`zapp_inspector_slot_for`) via the CEF-aware `darwin_window_eval_js`, then
+`return`s before reaching the WK early-return. The WK path from the
+early-return down is **completely unchanged** — the project's mechanical
+`unifdef -UZAPP_HAS_CEF → original-bytes` gate guarantee holds. Approach A
+(refactor the shared dispatcher to route both engines through
+`darwin_window_eval_js`, eliminating the JS-build duplication) was
+considered and rejected: it's more DRY, but it touches the *shared*
+dispatcher's bytes, trading the byte-identical guarantee for a regression
+risk on every future WK change. Approach B's cost — one bounded, ~15-line
+JS-build mirror, sitting adjacent to its WK twin with an explicit
+"keep in sync" comment — was judged the acceptable price; DRY was the
+softer principle here.
+
+**Gates (human-confirmed 2026-07-08):** resizing window 1 (the existing
+3-pane sidebar+host+inspector fixture) fans `resize {width,height}` to
+**all three** CEF panes; window 2 (plain) gets it in its own host pane;
+focus/blur reach the CEF panes the same way, proving the fix isn't
+resize-specific; the C1-C3 surfaces (sidebar/inspector toggle, `ticker`
+broadcast, `greet` bridge) regress cleanly on both windows; the WK dispatch
+path is byte-identical (unchanged below the early-return). See
+`examples/cef-hello/SMOKE.md` GATEs 30-32.
+
+**Known (cosmetic) difference, deferred — not a bug:** CEF (Chromium)
+reserves a bottom-right scrollbar gutter so a vertical and a horizontal
+scrollbar can coexist; WKWebView runs its vertical scrollbar full-height
+with no gutter. Purely webview-internal rendering, unrelated to the
+fan-out fix; normalizable later from the web side
+(`::-webkit-scrollbar` / `scrollbar-gutter` CSS), alongside the
+vibrancy-opacity (C1) and manual-reload chrome-metrics (C3) gaps already
+deferred.
+
+This closes the item the C2/C3 "Known limitations"/"Also unchanged" notes
+above flagged as open (`zapp_dispatch_event_to_js` WK-only) — no other CEF
+host-window-event gap is currently tracked.
+
 ---
 
 ## Task 1 (RISK GATE): message-loop coexistence — CEF + NSApplication + a second (ZJS-shaped) loop

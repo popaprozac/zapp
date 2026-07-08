@@ -181,6 +181,36 @@ CLOSED on the `chromium` path — every native-chrome primitive `kitchen-sink`
 exercises now has a working CEF arm, clearing the toolbar blocker toward
 running the full `kitchen-sink` app on Chromium.
 
+### Host-event fan-out fix (macOS)
+
+The last CEF window-event gap, flagged and deferred during C2/C3:
+`zapp_dispatch_event_to_js` (`window.m`, the shared host-window-event
+dispatcher for resize/move/focus/blur/maximize/restore/modal-dismissed)
+early-returned for every CEF window because it resolved
+`zapp_webviews[window_id]` — nil for CEF, whose browsers live in
+`zapp_cef_browsers[]` instead. Window 1's existing 3-pane fixture
+(sidebar + host + inspector) now subscribes to `WindowEvent.RESIZE` /
+`FOCUS` / `BLUR` and renders the latest into `#winevt` (`index.html`,
+`src/main.ts`) to prove the fan-out; window 2 (plain) proves the host-only
+path is unaffected. Design:
+`docs/superpowers/specs/2026-07-08-cef-host-events-design.md`; findings:
+`spikes/cef-macos/FINDINGS.md`'s ★ Host-event fan-out fix update. Commit:
+T1 `dd31439`.
+
+| Gate | What it proves | Result |
+|---|---|---|
+| **GATE 30** — resize fans to all 3 panes | Resizing window 1 updates `#winevt` with the new `resize {width,height}` in **all three** CEF panes (sidebar, host, inspector); window 2 (plain) updates it in its own host pane — the new gated `ZAPP_HAS_CEF` branch in `zapp_dispatch_event_to_js` mirrors the WK JS-build and fans out via `darwin_window_eval_js` to the host + sidebar + inspector slots | **PASS — human-confirmed 2026-07-08** |
+| **GATE 31** — focus/blur reach the CEF panes | Clicking away from window 1 then back updates `#winevt` to `blur` then `focus` in the CEF panes — proves the fix isn't resize-specific; the same gated branch dispatches every host window event | **PASS — human-confirmed 2026-07-08** |
+| **GATE 32** — C1-C3 surfaces regress cleanly + WK byte-identical | Sidebar/inspector toggles, the `ticker` broadcast, and the `greet` bridge all still work on window 1 and window 2 after the fix; the new CEF branch sits entirely before the WK early-return and `return`s ahead of it, so the WK dispatch path (`window.m`, from the early-return down) is untouched — a `webEngine:"system"` build compiles the exact pre-fix bytes | **PASS — human-confirmed 2026-07-08** |
+
+**Known (cosmetic) difference, deferred — not a bug:** CEF (Chromium)
+reserves a bottom-right scrollbar gutter so a vertical and a horizontal
+scrollbar can coexist; WKWebView runs its vertical scrollbar full-height
+with no gutter. Webview-internal rendering, not a fan-out defect;
+normalizable later from the web side (`::-webkit-scrollbar` /
+`scrollbar-gutter` CSS), alongside the vibrancy-opacity and manual-reload
+chrome-metrics gaps already deferred above.
+
 ## (b) `webEngine:"system"` — WKWebView, byte-identical to pre-change
 
 ```
