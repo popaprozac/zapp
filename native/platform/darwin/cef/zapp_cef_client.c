@@ -205,6 +205,14 @@ zapp_cef_life_span_on_after_created(cef_life_span_handler_t* self,
     // on_before_close.
     zapp_cef_browsers[h->slot] = browser;
     fprintf(stderr, "[zapp-cef] browser created (slot %d)\n", h->slot);
+    // C3 sub-cycle Task 1: the browser's NSView (get_window_handle) may have
+    // been sized from a now-stale parent.bounds capture — a container resize
+    // (e.g. a toolbar attaching, window.m ~1394) racing this async creation
+    // leaves no live resize event for the view's autoresizing mask to react
+    // to. Snap it to the CURRENT superview bounds now, the earliest point the
+    // view exists — see zapp_cef_host.m's zapp_cef_snap_view_to_superview_for_slot.
+    extern void zapp_cef_snap_view_to_superview_for_slot(int32_t slot);
+    zapp_cef_snap_view_to_superview_for_slot(h->slot);
   } else {
     fprintf(stderr, "[zapp-cef] browser created with bad slot %d — dropping\n",
             h->slot);

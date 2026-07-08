@@ -340,3 +340,55 @@ void* zapp_cef_window_for_slot(int32_t slot) {
   NSView* view = (__bridge NSView*)(void*)handle;
   return (__bridge void*)view.window;
 }
+
+// ---------------------------------------------------------------------------
+// C3 sub-cycle Task 1 — post-create frame snap (the toolbar-under-CEF dark-
+// band fix).
+//
+// ROOT CAUSE (confirmed via temporary instrumentation, C3 Task 1 diagnosis):
+// cef_browser_host_create_browser (above) is ASYNCHRONOUS — the actual
+// browser + its NSView don't exist until this life-span callback fires later
+// (a real IPC round-trip to CEF's own process), but the WIDTH/HEIGHT baked
+// into cef_window_info_t were captured from |parent|.bounds at the SYNC call
+// site, before that round-trip. If the parent pane's size changes in the
+// interim — e.g. window.m's darwin_toolbar_attach (window.m ~1394) attaches
+// an NSToolbar one runloop tick before the browser exists, which grows the
+// window's chrome band and resizes every split pane to fit the shrunk
+// content area — CEF still inserts its NSView at the STALE pre-resize frame.
+// The view's own NSViewWidthSizable|HeightSizable autoresizing mask (CEF
+// sets this itself — confirmed via instrumentation: mask == 18) is real and
+// correct, but it only reacts to LIVE resizes of an ALREADY-INSERTED view;
+// since the container's one-time resize already happened before insertion,
+// there is no subsequent resize event for the mask to react to, and the
+// stale frame (visibly too short — the dark band under the toolbar) persists
+// forever. Confirmed identically for the host, sidebar, AND inspector panes.
+//
+// FIX: once the browser's NSView first exists (here, on_after_created —
+// zapp_cef_client.c calls this for every slot right after registering it),
+// snap its frame to whatever its superview's CURRENT bounds are. This is a
+// one-time catch-up; the autoresizing mask (already correct) then tracks any
+// further LIVE resizes (interactive window resize, sidebar/inspector
+// collapse) exactly as the file-header resize note describes. No-op if the
+// slot/browser/view/superview isn't resolvable (mirrors every other
+// slot-keyed accessor in this file). NSView mutation must happen on the main
+// thread; zapp_cef_eval_in_window (zapp_cef_client.c) shows life-span-family
+// CEF callbacks are not unconditionally guaranteed to already be there, so
+// this hops like that call does rather than assuming.
+void zapp_cef_snap_view_to_superview_for_slot(int32_t slot) {
+  extern cef_browser_t* zapp_cef_browser_for_slot(int32_t slot);
+  cef_browser_t* b = zapp_cef_browser_for_slot(slot);
+  if (b == NULL) return;
+  cef_browser_host_t* host = b->get_host(b);  // owned ref
+  if (host == NULL) return;
+  cef_window_handle_t handle = host->get_window_handle(host);
+  host->base.release(&host->base);
+  if (handle == 0) return;
+  NSView* view = (__bridge NSView*)(void*)handle;
+  void (^snap)(void) = ^{
+    NSView* superview = view.superview;
+    if (superview == nil) return;
+    view.frame = superview.bounds;
+  };
+  if ([NSThread isMainThread]) snap();
+  else dispatch_async(dispatch_get_main_queue(), snap);
+}
