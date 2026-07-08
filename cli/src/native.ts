@@ -138,6 +138,9 @@ export function getPlatformSources(nativeDir: string, target: BuildTarget = dete
       path.join(iosDir, "toolbar.m"),
       path.join(iosDir, "popover.m"),
       path.join(iosDir, "screen.m"),
+      // DevTools: iOS no-op (WKWebView-only, no CEF). Present for darwin_*
+      // symbol parity with the macOS devtools.m (#637 iOS-link gate).
+      path.join(iosDir, "devtools.m"),
       path.join(iosDir, "routing.m"),
     ];
     return sources.filter(f => existsSync(f));
