@@ -6,7 +6,11 @@
     <title>cef-hello</title>
     <style>
       html, body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #fff; color: #111; }
-      main { padding: 24px; }
+      /* C3 gate C: pad the top by the injected chrome height so content clears the
+         unified titlebar/toolbar (HiddenInset = full-size content under the chrome).
+         --zapp-titlebar-height is injected by zapp_toolbar_inject_metrics; on CEF it
+         arrives via darwin_window_eval_js (C3 Task 2). Fallback 0px = no toolbar. */
+      main { padding: 24px; padding-top: calc(24px + var(--zapp-titlebar-height, 0px)); }
       h1 { margin: 0 0 16px; font-size: 20px; font-weight: 600; }
       button { font: inherit; padding: 6px 14px; cursor: pointer; }
       pre { margin-top: 16px; padding: 12px; background: #f4f4f4; border-radius: 6px; min-height: 1.2em; }
