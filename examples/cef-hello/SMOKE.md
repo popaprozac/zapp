@@ -225,11 +225,15 @@ whichever CEF browser currently has focus, with no button needed. Design:
 `docs/superpowers/specs/2026-07-08-cef-devtools-design.md`; findings:
 `spikes/cef-macos/FINDINGS.md`'s ★ Sub-cycle D update.
 
+**Two things the R0 gate surfaced (important for anyone re-running it):**
+- **Requires `inspectable`.** The dev-gate reads the APP-level inspectable; `Inspectable.Auto` is dev-only, so a `bun run build` (prod) app resolves it to `false` and DevTools stays closed (this is correct — no DevTools in a shipped prod build). This fixture therefore opts into `Inspectable.On` (`zapp/app.nim`'s `newApp(AppConfig(... inspectable: Inspectable.On ...))`) so the built app can open DevTools. (First R0 run failed for exactly this reason before the `On` opt-in.)
+- **The button/API is window-scoped; the shortcut is per-pane.** `Window.current().openDevTools()` targets by `windowId`, and all three panes share the host's `windowId` (`win-0`), so the button always opens the **host pane's** DevTools. The accessory panes' copies of the button are therefore **hidden** (host-scoped control). To inspect the sidebar/inspector pane specifically, focus it and press **Cmd-Opt-I** (the `CefKeyboardHandler` targets the focused browser).
+
 | Gate | What it proves | Result |
 |---|---|---|
 | **GATE 33** — API opens DevTools | Clicking **Open DevTools** in window 1's host pane opens a **Chromium DevTools window**, showing that pane's live html/css/console — the runtime API → router → `zapp_cef_show_dev_tools` path, with a standalone (`parent_view=0`) `window_info`. Interacting with Elements/Console works like any Chromium DevTools window. | **PASS — human-confirmed 2026-07-08** |
 | **GATE 34** — Cmd-Opt-I targets the FOCUSED pane | Focusing the **host** pane and pressing **Cmd-Opt-I** opens DevTools for the host browser; focusing the **sidebar** pane and pressing Cmd-Opt-I opens a DevTools window for the **sidebar's own** browser instead — confirming the per-client `cef_keyboard_handler_t` (baked-in `slot`) genuinely targets whichever browser has OS keyboard focus, not a single fixed pane. | **PASS — human-confirmed 2026-07-08** |
-| **GATE 35** — close works | The DevTools window's own close (its titlebar close button) works normally; `Window.current().closeDevTools()` (exercised from a host-pane console call) also closes an open DevTools window via `zapp_cef_close_dev_tools`. | **PASS — human-confirmed 2026-07-08** |
+| **GATE 35** — close works | The DevTools window's own close (its titlebar close button) works normally. `Window.current().closeDevTools()` is wired to `zapp_cef_close_dev_tools` (the same close path), but the human gate exercised the window's own close, not a separate console `closeDevTools()` call. | **PASS (window close) — human-confirmed 2026-07-08** |
 | **GATE 36** — regression | The C1-C3 native-chrome surfaces (sidebar/inspector toggle, toolbar click, `ticker` broadcast, `greet` bridge) and the host-event fan-out (`#winevt`) all still work on window 1 after opening/closing DevTools; window 2 (plain, no DevTools button) still renders + ticks + closes cleanly, unaffected. | **PASS — human-confirmed 2026-07-08** |
 
 **Known limitations (documented, not hidden — see FINDINGS for detail):**

@@ -690,9 +690,19 @@ is itself one of the three broken surfaces.
    check rather than duplicating it at each caller. `inspectable` is the
    same per-window/app cascade the WKWebView inspector already gates on
    (`Inspectable.Auto` = on in `zapp dev`, off in a release/`zapp build`;
-   `Inspectable.On`/`Off` force it either way) — `cef-hello`'s
-   `zapp/app.nim` already sets `Inspectable.Auto`, so a dev build satisfies
-   the gate for free.
+   `Inspectable.On`/`Off` force it either way). **R0-gate findings
+   (2026-07-08):** (a) the dev-gate reads the APP-level inspectable, and the
+   R0 fixture is built via `bun run build` (**prod**), where `Inspectable.Auto`
+   resolves to `false` — so the first R0 run opened NOTHING (the `devtools:open`
+   router message fired, but the gate returned early). Fix: `cef-hello`'s
+   `zapp/app.nim` now opts into APP-level `Inspectable.On`
+   (`newApp(AppConfig(... inspectable: Inspectable.On ...))`) so the built
+   (prod) app can open DevTools; a real shipped app leaves this `Auto` (DevTools
+   only in `zapp dev`). (b) The runtime API `openDevTools()` targets by
+   `windowId`, which all three panes share (`win-0` = host) — so the button
+   always opens the **host** pane's DevTools; the accessory panes' button
+   copies are hidden as host-scoped controls, and per-pane inspection is the
+   Cmd-Opt-I shortcut (item 5, focused-browser targeting).
 2. **Engine-aware router surface, compiling for BOTH engines** (Task 1,
    `8a6e441`) — new `native/platform/darwin/devtools.m` (`darwin_devtools_
    open`/`close(int32_t window_id)`), registered in the **shared** macOS

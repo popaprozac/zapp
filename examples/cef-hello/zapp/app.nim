@@ -29,7 +29,13 @@ proc onReady(id: cint, handle: pointer) {.cdecl.} =
   Window(id: id, handle: handle).show()
 
 proc runApp(): int =
-  let app = newApp("cef-hello", terminateAfterLastWindowClosed = true)
+  # DevTools (sub-cycle D) is dev-gated on the APP-level inspectable
+  # (app_get_bootstrap_web_content_inspectable). Inspectable.Auto is dev-only, so
+  # a `bun run build` (prod) app resolves it to false and DevTools can't open.
+  # This fixture opts into Inspectable.On so DevTools is exercisable in the built
+  # app — a devtools-demo fixture should always be inspectable.
+  let app = newApp(AppConfig(name: "cef-hello", terminateAfterLastWindowClosed: true,
+                             inspectable: Inspectable.On, maxWorkers: 0))
   app.service.add("greet", greet)
 
   let win = app.window.create(WindowOptions(

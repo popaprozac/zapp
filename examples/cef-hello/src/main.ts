@@ -84,6 +84,17 @@ if (!isSidebar && !isInspector) {
   document.querySelector<HTMLButtonElement>("#open-devtools")!
     .addEventListener("click", () => Window.current().openDevTools());
 }
+if (isSidebar || isInspector) {
+  // These are HOST-scoped controls: toggle sidebar/inspector and Open DevTools
+  // all act on the host window via the window-scoped API (every pane shares the
+  // host's windowId), so they're only WIRED in the host pane. They render in
+  // every pane's shared HTML — hide the dead copies here so the accessory panes
+  // don't show inert buttons. (Per-pane DevTools is Cmd-Opt-I, which targets
+  // whichever pane is focused — see the CefKeyboardHandler.)
+  for (const id of ["toggle-sb", "toggle-insp", "open-devtools"]) {
+    document.querySelector<HTMLElement>("#" + id)?.style.setProperty("display", "none");
+  }
+}
 
 // C3 SPIKE (cef-toolbar): probe whether NSToolbar works on a webEngine:"chromium"
 // window. The toolbar itself is attached create-time from Nim (app.nim's
