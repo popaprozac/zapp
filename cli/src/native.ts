@@ -97,6 +97,12 @@ export function getPlatformSources(nativeDir: string, target: BuildTarget = dete
       path.join(darwinDir, "toolbar.m"),
       path.join(darwinDir, "popover.m"),
       path.join(darwinDir, "screen.m"),
+      // Engine-aware DevTools show/close router surface (D sub-cycle Task 1).
+      // Compiles for BOTH engines — its CEF-only branch is `#ifdef
+      // ZAPP_HAS_CEF`-gated internally, NOT gated by source-list membership
+      // (unlike the CEF-only .m/.c list in build-config.ts's
+      // renderCefPlatformNim, which mac_entry/host belong to).
+      path.join(darwinDir, "devtools.m"),
     ];
     // bare.c / zjs.c are NOT listed here — they're added by
     // `generatePlatformConfig` only when the corresponding

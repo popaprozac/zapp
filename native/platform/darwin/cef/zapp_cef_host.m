@@ -342,6 +342,59 @@ void* zapp_cef_window_for_slot(int32_t slot) {
 }
 
 // ---------------------------------------------------------------------------
+// D sub-cycle Task 1 — Chromium DevTools show/close.
+//
+// Mirrors zapp_cef_window_for_slot's borrowed/owned idiom just above:
+// zapp_cef_browser_for_slot returns a BORROWED cef_browser_t* (never
+// release), while b->get_host(b) returns an OWNED cef_browser_host_t* (must
+// release exactly once, whether or not the call using it succeeded).
+//
+// DevTools is opened in its OWN standalone window: |info.parent_view| is
+// left 0 (no parent), which tells CEF to create a top-level DevTools window
+// rather than embedding the DevTools UI inside an existing view (there is no
+// natural "inspector pane" host for it the way sidebar/inspector panes host
+// Zapp's own webviews). |client|/|settings|/|inspect_element_at| are all
+// NULL — CEF supplies its own default DevTools client/behavior; there is no
+// right-click "Inspect Element" entry point on CEF yet (WK's is the system
+// one), so there is no element coordinate to seed.
+void zapp_cef_show_dev_tools(int32_t slot) {
+  // Dev-gate: parity with the WK inspector's own gate. Lives here (not at
+  // the router or runtime layer) so every caller — the runtime API today,
+  // any future keyboard shortcut — is covered by ONE check.
+  extern bool app_get_bootstrap_web_content_inspectable(void);
+  if (!app_get_bootstrap_web_content_inspectable()) return;
+
+  extern cef_browser_t* zapp_cef_browser_for_slot(int32_t slot);
+  cef_browser_t* b = zapp_cef_browser_for_slot(slot);  // borrowed
+  if (b == NULL) return;
+  cef_browser_host_t* host = b->get_host(b);  // owned
+  if (host == NULL) return;
+
+  cef_window_info_t info;
+  memset(&info, 0, sizeof(info));
+  info.size = sizeof(info);
+  info.bounds.x = 0;
+  info.bounds.y = 0;
+  info.bounds.width = 960;
+  info.bounds.height = 720;
+  info.parent_view = (cef_window_handle_t)0;  // no parent -> standalone window
+  info.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
+
+  host->show_dev_tools(host, &info, NULL, NULL, NULL);
+  host->base.release(&host->base);
+}
+
+void zapp_cef_close_dev_tools(int32_t slot) {
+  extern cef_browser_t* zapp_cef_browser_for_slot(int32_t slot);
+  cef_browser_t* b = zapp_cef_browser_for_slot(slot);  // borrowed
+  if (b == NULL) return;
+  cef_browser_host_t* host = b->get_host(b);  // owned
+  if (host == NULL) return;
+  host->close_dev_tools(host);
+  host->base.release(&host->base);
+}
+
+// ---------------------------------------------------------------------------
 // C3 sub-cycle Task 1 — post-create frame snap (the toolbar-under-CEF dark-
 // band fix).
 //

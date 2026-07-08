@@ -151,6 +151,10 @@ proc darwin_inspector_set_width(windowId: int32, width: int32) {.importc, cdecl.
 proc darwin_inspector_set_collapsible(windowId: int32, canCollapse: bool) {.importc, cdecl.}
 proc darwin_inspector_set_resizable(windowId: int32, resizable: bool) {.importc, cdecl.}
 proc darwin_inspector_set_title(windowId: int32, title: cstring) {.importc, cdecl.}
+# D sub-cycle Task 1 — engine-aware DevTools show/close (devtools.m; CEF
+# opens/closes real Chromium DevTools, WK no-ops — see devtools.m's header).
+proc darwin_devtools_open(windowId: int32) {.importc, cdecl.}
+proc darwin_devtools_close(windowId: int32) {.importc, cdecl.}
 proc darwin_toolbar_set_items(windowPtr: pointer, toolbarJson: cstring, hostSlot: int32) {.importc, cdecl.}
 proc darwin_toolbar_update_item(windowPtr: pointer, itemJson: cstring) {.importc, cdecl.}
 proc darwin_toolbar_remove(windowPtr: pointer) {.importc, cdecl.}
@@ -681,6 +685,19 @@ proc routeWindowAction(action: string, a: JsonNode, rawWindowId: int, payload: s
     of "inspector:setTitle": darwin_inspector_set_title(target, a{"title"}.getStr("").cstring)
     else: discard
     return
+
+  # --- DevTools ops (devtools.m; D sub-cycle Task 1). Same target resolution
+  # as sidebar:/inspector: above — "windowId" arg (a real window) else the
+  # resolved sender host. Engine-aware: no-ops on WK (system Develop menu).
+  if action.startsWith("devtools:"):
+    let widArg = a{"windowId"}.getStr("")
+    let target = (if widArg.len > 0: darwin_window_numeric_id_for_string(widArg.cstring) else: windowId.int32)
+    case action
+    of "devtools:open": darwin_devtools_open(target)
+    of "devtools:close": darwin_devtools_close(target)
+    else: discard
+    return
+
   if action.startsWith("toolbar:"):
     let widArg = a{"windowId"}.getStr("")
     let target = (if widArg.len > 0: darwin_window_numeric_id_for_string(widArg.cstring) else: windowId.int32)

@@ -1449,6 +1449,18 @@ export interface WindowHandle {
   getScreen(): Promise<Display>;
 
   /**
+   * Open DevTools for this window's web content, in its own standalone
+   * window. Engine-aware: on a CEF (`webEngine:"chromium"`) window this opens
+   * real Chromium DevTools (dev-gated — same `webContentInspectable` gate as
+   * the WKWebView inspector); on a standard WKWebView window this is a no-op
+   * (use the macOS system Develop menu / right-click "Inspect Element").
+   */
+  openDevTools(): void;
+  /** Close the DevTools window opened by `openDevTools()`, if any. No-op on
+   *  WKWebView (see `openDevTools`). */
+  closeDevTools(): void;
+
+  /**
    * Attach `modal` as a sheet on this window. The modal slides down from
    * this window's titlebar and blocks interaction with the parent (only)
    * until dismissed. Closing the modal — via its close button,
@@ -1790,6 +1802,8 @@ export function createWindowHandle(windowId: string, sidebarOpts?: SidebarOption
     setAlwaysOnTop(on: boolean)       { windowAction("setAlwaysOnTop", { windowId, on }); },
     setCloseGuard(on: boolean)        { windowAction("setCloseGuard", { windowId, on }); },
     loadUrl(url: string)              { windowAction("loadUrl", { windowId, url }); },
+    openDevTools()                    { windowAction("devtools:open",  { windowId }); },
+    closeDevTools()                   { windowAction("devtools:close", { windowId }); },
 
     async getScreen(): Promise<Display> {
       const r = await bridge.invoke("__screen:forWindow", { windowId });

@@ -146,6 +146,23 @@ void zapp_cef_teardown_browser_for_slot(int32_t slot);
 // in zapp_cef_host.m (needs both CEF headers and ObjC/NSView).
 void* zapp_cef_window_for_slot(int32_t slot);
 
+// D sub-cycle Task 1. Open Chromium DevTools for the CEF browser at |slot|,
+// in its OWN standalone window (a local cef_window_info_t with
+// parent_view=0 — no parent view means CEF creates its own top-level
+// DevTools window rather than embedding it). Dev-gated on
+// app_get_bootstrap_web_content_inspectable() (parity with the WK
+// inspector's own dev-gate): no-op if not inspectable. Both the runtime
+// openDevTools() API and any future Cmd-Opt-I shortcut route through here,
+// so the gate lives in this ONE place rather than being duplicated at each
+// caller. No-op if |slot| has no live browser. Implemented in
+// zapp_cef_host.m (needs both CEF headers and ObjC/NSView).
+void zapp_cef_show_dev_tools(int32_t slot);
+
+// D sub-cycle Task 1. Explicitly close the DevTools window opened by
+// zapp_cef_show_dev_tools for |slot|, if any. No-op if |slot| has no live
+// browser or no open DevTools. Implemented in zapp_cef_host.m.
+void zapp_cef_close_dev_tools(int32_t slot);
+
 // --- zapp_cef_mac_entry.m ---
 // Configure the CEF API version (guarded) and install the CefAppProtocol-
 // conforming NSApplication subclass. Must run before cef_initialize.
