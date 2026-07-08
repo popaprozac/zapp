@@ -249,8 +249,9 @@ void zapp_dispatch_event_to_js(int32_t window_id, int32_t event_id, int32_t w, i
     //
     // Approach B (see 2026-07-08-cef-host-events-design.md): keep the WK path
     // byte-identical by isolating CEF here rather than refactoring the shared
-    // dispatcher. The snprintf block below MIRRORS the WK build at
-    // window.m:~255-273 — KEEP THE TWO IN SYNC if the payload shape changes.
+    // dispatcher. The snprintf block below MIRRORS the WK build immediately
+    // below the early-return (`if (!webview || !windowId) return;`) — KEEP THE
+    // TWO IN SYNC if the window-event payload shape changes.
     if (!webview && windowId) {
         const char* event_name = zapp_get_event_name(event_id);
         const char* wid = [windowId UTF8String];
