@@ -44,10 +44,20 @@ proc runApp(): int =
                                 width: 240, minWidth: 180, maxWidth: 320),
     toolbar: ToolbarOptions(items: @[
       ToolbarItemOpt(`type`: "toggleSidebar"),
-      ToolbarItemOpt(`type`: "button", id: "ping", label: "Ping", icon: "sf:bell"),
+      # pane:"sidebar" + POSITIONED before the sidebar trackingSeparator ⇒ this
+      # item renders in the sidebar's toolbar region (Safari/Mail model), the
+      # same convention kitchen-sink's `compose` item uses.
+      ToolbarItemOpt(`type`: "button", id: "ping", label: "Ping", icon: "sf:bell", pane: "sidebar"),
       ToolbarItemOpt(`type`: "trackingSeparator", pane: "sidebar"),
       ToolbarItemOpt(`type`: "toggleInspector"),
     ]),
+    # C3 gate B: the trackingSeparator only anchors to the sidebar↔content
+    # divider under the UNIFIED hidden chrome (FullSizeContentView + transparent
+    # titlebar). An UNSET titleBarStyle resolves to a STANDARD titlebar (visible
+    # title, non-unified toolbar), where the separator can't align to the split —
+    # the same on WK and CEF. Opt into the Mail/Messages look explicitly, exactly
+    # as the known-good kitchen-sink reference does (kitchen-sink/zapp/app.nim).
+    titleBarStyle: TitleBarStyle.HiddenInset,
   ))
   win.onReady(onReady)
 
