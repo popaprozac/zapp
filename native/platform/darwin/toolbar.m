@@ -922,7 +922,6 @@ void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_u
 
     int32_t slots[3] = { host_slot, zapp_sidebar_slot_lookup(host_slot), zapp_inspector_slot_lookup(host_slot) };
     for (int i = 0; i < 3; i++) {
-        if (slots[i] < 0) continue;
         WKWebView* wv = zapp_webview_for_slot(slots[i]);
         if (wv) {
             if (add_user_script) {
@@ -933,7 +932,7 @@ void zapp_toolbar_inject_metrics(void* window_ptr, int32_t host_slot, bool add_u
             [wv evaluateJavaScript:js completionHandler:nil];
         }
 #ifdef ZAPP_HAS_CEF
-        else {
+        else if (slots[i] >= 0) {
             // CEF pane: no WKWebView. Route through the CEF-aware per-slot eval
             // (darwin_window_eval_js's ZAPP_HAS_CEF branch reaches the CEF browser
             // at this slot). No WKUserScript equivalent on CEF, and the CEF client
