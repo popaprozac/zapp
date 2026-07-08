@@ -244,6 +244,33 @@ always `NULL`) since CEF's right-click context menu is itself one of the
 three still-open `kitchen-sink`-on-CEF breakages this DevTools work exists
 to help debug.
 
+### Popover on CEF (breakage #1) (macOS)
+
+The **first** of the three `kitchen-sink`-on-CEF breakages the integration
+catalog flagged (popover, contextmenu, embedded-webview) — fixed. Window 1's
+host pane gains a **"Show popover"** button (`index.html`/`src/main.ts`),
+wired to lazily `Window.current().createPopover({ url: "#popover-pane",
+width: 240, height: 160 })` then `pop.show(btn, { edge: "bottom" })`. The
+popover's content is the same fixture bundle loaded at `#popover-pane` (its
+own tint, own `which` label — a fourth pane-shape branch alongside sidebar/
+inspector). Design:
+`docs/superpowers/specs/2026-07-08-cef-popover-design.md`; root cause + fix
+detail: `spikes/cef-macos/FINDINGS.md`'s ★ Popover on CEF fix section.
+Commit: `0e82c5a`.
+
+| Gate | What it proves | Result |
+|---|---|---|
+| **GATE 37** — opens + renders | Clicking **Show popover** opens an `NSPopover` whose content — a CEF browser mounted via the new `#ifdef ZAPP_HAS_CEF` content branch in `darwin_popover_create` (`pane_role=2`) — actually renders the `#popover-pane` page on Chromium, not an empty view | **PASS — human-confirmed 2026-07-08** |
+| **GATE 38** — anchored at the button | The popover appears anchored to the "Show popover" button's rect, not floating at the origin or mirrored vertically — proves the `zapp_cef_view_for_slot` anchor fallback and the `isFlipped`-guarded y-adjust in `darwin_popover_show` both work together | **PASS — human-confirmed 2026-07-08** |
+| **GATE 39** — teardown / reopen | Dismissing the popover tears down its CEF browser (`zapp_popover_destroy_controller`'s new gated `zapp_cef_teardown_browser_for_slot` call — no leak) and reopening it via the same button works cleanly | **PASS — human-confirmed 2026-07-08** |
+| **GATE 40** — no regressions | The C1-C3/host-events/DevTools surfaces (sidebar/inspector toggle, `ticker` broadcast, `greet` bridge, `#winevt`, Open DevTools) all still work on window 1 after opening/closing the popover; window 2 (plain, no popover button) still renders + ticks + closes cleanly | **PASS — human-confirmed 2026-07-08** |
+
+**Known limitation (documented, not hidden — see FINDINGS for detail):** CEF
+popover content is opaque, same as every other CEF pane (no vibrancy — an
+OSR non-goal). The two remaining `kitchen-sink`-on-CEF breakages —
+**contextmenu** and **embedded-webview** — remain open, each tracked for its
+own future cycle.
+
 ## (b) `webEngine:"system"` — WKWebView, byte-identical to pre-change
 
 ```
@@ -331,5 +358,10 @@ above, not a non-goal either** — sub-cycle C3 closed it; all four gates
 PASSED human-confirmed 2026-07-07/08, completing the C1→C2→C3 native-chrome
 sequence. **DevTools-on-CEF is GATEs 33-36 above, not a non-goal either** —
 sub-cycle D closed it; all four gates PASSED human-confirmed 2026-07-08.
+**Popover-on-CEF is GATEs 37-40 above, not a non-goal either** — it closed
+the first of the three kitchen-sink-on-CEF breakages the integration catalog
+flagged (popover/contextmenu/embedded-webview); all four gates PASSED
+human-confirmed 2026-07-08. Contextmenu-on-CEF and embedded-webview-on-CEF
+remain non-goals for this slice, each tracked for its own future cycle.
 Reversible reshow of a closed CEF window remains an explicit non-goal — see
 the "Known limitation" note above.)

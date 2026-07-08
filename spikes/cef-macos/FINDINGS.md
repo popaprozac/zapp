@@ -800,6 +800,102 @@ Also unchanged / not attempted this sub-cycle: docked DevTools, CEF
 "Inspect Element" context-menu integration, iOS/Windows/Linux, per-window
 engine selection, navigation/back-forward — all explicit non-goals.
 
+### ★ Popover on CEF fix (breakage #1) (`feat/cef-popover`, 2026-07-08)
+
+Design: `docs/superpowers/specs/2026-07-08-cef-popover-design.md`. Not a
+native-chrome element — the **first** of the three kitchen-sink-on-CEF
+breakages the integration catalog flagged (popover, contextmenu,
+embedded-webview) to get fixed on the `chromium` path. DevTools-on-CEF
+(sub-cycle D, above) exists specifically to make debugging this class of
+breakage tractable; this is the first cycle to actually use it that way.
+
+**Popover on CEF — CLOSED.** All human R0 gates PASSED on-screen 2026-07-08
+(`examples/cef-hello/SMOKE.md`, GATEs 37-40). Commit: `0e82c5a`.
+
+**Root cause:** two WK-specific assumptions in
+`native/platform/darwin/popover.m` — the same class of gap the C-series
+fixed for the panes, in a new surface:
+
+1. **Content** (`darwin_popover_create`) mounted the popover's content view
+   via `darwin_webview_create_ext` — a **WKWebView** — so on a CEF window the
+   popover's content view was simply empty; nothing CEF-shaped was ever
+   mounted into it.
+2. **Anchor** (`darwin_popover_show`) resolved the anchor view via
+   `zapp_webview_for_slot(sender_slot)`, falling back to
+   `zapp_webview_for_slot(c.hostSlot)` — both **nil on CEF** (CEF browsers
+   live in `zapp_cef_browsers[]`, not `zapp_webviews[]`) →
+   `if (!anchorView) return;` silently no-op'd the entire `show` call, so
+   nothing ever appeared.
+
+**The fix — four pieces, all `#ifdef ZAPP_HAS_CEF`-gated, mirroring the
+C-series pattern, WK path byte-identical:**
+
+1. **Content** — `darwin_popover_create` grows a CEF branch that mounts a
+   CEF browser into the popover's container via sub-cycle B's
+   `zapp_cef_create_browser_in_view(container, url, popover_slot,
+   hostWindowId, ownerId, /*pane_role=*/2, host_has_sidebar=false,
+   host_has_inspector=false)`. `pane_role=2` is the same value C1's shared
+   bootstrap-carrier builder already maps to `zapp.isPopover`, so
+   `Window.current()` identity resolves inside the popover for free.
+   `hostWindowId`/`ownerId` are formatted as `win-%d`/`owner-%p`, mirroring
+   `window.m:1172`'s pane-mount branch exactly. The `#else` is the original
+   `darwin_webview_create_ext` + WKWebView-scrape call, byte-for-byte.
+2. **Anchor** — a new `void* zapp_cef_view_for_slot(int32_t slot)`
+   (`zapp_cef_host.m`/`zapp_cef.h`) mirrors `zapp_cef_window_for_slot`
+   line-for-line (borrowed `zapp_cef_browser_for_slot` → owned `get_host` →
+   `get_window_handle` → release the host exactly once) but returns the
+   browser's own NSView instead of that view's `.window`. `darwin_popover_show`
+   gets a gated fallback inserted between the existing WK anchor resolution
+   and the existing `if (!anchorView) return;`: when both
+   `zapp_webview_for_slot` lookups are nil, try
+   `zapp_cef_view_for_slot(sender_slot)` then `(c.hostSlot)`.
+3. **Coordinate flip** — a second gated block, inserted right before
+   `showRelativeToRect:`: `if (!anchorView.isFlipped) { y =
+   anchorView.bounds.size.height - y - h; }`. WKWebView is flipped (top-left
+   origin), so it's untouched; CEF's Alloy browser NSView is not, so without
+   this the popover would anchor mirrored vertically relative to the
+   button. **The R0 gate confirmed the popover anchors correctly at the
+   button** — no edge follow-up (a `MinY`↔`MaxY` swap alongside the y-adjust,
+   which the design doc flagged as the likely next step if R0 showed it
+   mirrored or off-edge) was needed.
+4. **Teardown** — `zapp_popover_destroy_controller` (**not**
+   `popoverDidClose:`/hide — a reusable popover only tears down its CEF
+   browser on explicit destroy, the same lifetime contract the WK path
+   already had) gets a gated `zapp_cef_teardown_browser_for_slot(c.popoverSlot)`
+   call, mirroring sub-cycle B's per-pane teardown; idempotent/no-op when the
+   slot has no live browser.
+
+**Byte-identical, mechanically verified (not just reasoned):**
+`unifdef -UZAPP_HAS_CEF native/platform/darwin/popover.m` diffed with **zero
+output** against pre-change HEAD — every CEF addition is a pure
+`#ifdef`/`#else`/`#endif` insert around or beside the original WK lines; none
+of the original lines moved.
+
+**Fixture:** `examples/cef-hello`'s host pane gains a "Show popover" button
+(`index.html`); `src/main.ts` grows a fourth pane-shape branch (`isPopover`,
+`location.hash === "#popover-pane"`, own tint — alongside the existing
+sidebar/inspector branches), lazily creating
+(`Window.current().createPopover({ url: "#popover-pane", width, height })`)
+and showing (`pop.show(btn, { edge: "bottom" })`) the popover on click.
+
+**Known limitations / follow-ups (documented, not hidden):**
+
+- **CEF popover content is opaque** — same non-OSR limitation as every other
+  CEF pane (sidebar/inspector); no vibrancy behind the popover.
+- **Popover CEF-browser lifetime is tied to explicit `popover:destroy`** (or
+  the host window closing) — same contract the WK path already had, not a
+  new regression; a popover created and never explicitly destroyed keeps its
+  CEF browser alive until its host window closes.
+- **This is the first of the three kitchen-sink-on-CEF breakages** the
+  integration catalog flagged. The other two remain open, each its own
+  cycle: **contextmenu** (an `NSMenu` with no content webview — a different
+  class of fix than this one, not the same gap) and **embedded-webview**.
+
+Also unchanged / not attempted this cycle: contextmenu-on-CEF,
+embedded-webview-on-CEF, CEF "Inspect Element" context-menu integration,
+iOS/Windows/Linux, per-window engine selection, navigation/back-forward —
+all explicit non-goals, tracked for their own cycles.
+
 ---
 
 ## Task 1 (RISK GATE): message-loop coexistence — CEF + NSApplication + a second (ZJS-shaped) loop
