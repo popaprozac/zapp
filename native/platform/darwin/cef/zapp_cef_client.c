@@ -69,6 +69,8 @@ extern void darwin_open_external(const char* url);
 
 // Forward declaration.
 typedef struct _zapp_cef_life_span_handler_t zapp_cef_life_span_handler_t;
+// D sub-cycle Task 2 forward declaration — see zapp_cef_keyboard_handler_t below.
+typedef struct _zapp_cef_keyboard_handler_t zapp_cef_keyboard_handler_t;
 
 typedef struct _zapp_cef_client_t {
   // MUST be first member — CEF base structure.
@@ -76,11 +78,23 @@ typedef struct _zapp_cef_client_t {
   atomic_int ref_count;
   int32_t slot;               // Zapp window slot this browser hosts (multi-window).
   zapp_cef_life_span_handler_t* life_span_handler;
+  zapp_cef_keyboard_handler_t* keyboard_handler;  // D sub-cycle Task 2.
 } zapp_cef_client_t;
 
 struct _zapp_cef_life_span_handler_t {
   // MUST be first member — CEF base structure.
   cef_life_span_handler_t handler;
+  atomic_int ref_count;
+  int32_t slot;                      // same slot as the owning client.
+};
+
+// D sub-cycle Task 2 — Cmd-Opt-I DevTools shortcut. Mirrors
+// zapp_cef_life_span_handler_t exactly: same base-first layout, same
+// per-client slot carry, same simple (free-only) ref-counting — this handler
+// owns nothing further, just like the life-span handler.
+struct _zapp_cef_keyboard_handler_t {
+  // MUST be first member — CEF base structure.
+  cef_keyboard_handler_t handler;
   atomic_int ref_count;
   int32_t slot;                      // same slot as the owning client.
 };
@@ -342,6 +356,57 @@ static zapp_cef_life_span_handler_t* zapp_cef_life_span_handler_create(int32_t s
 }
 
 //
+// Keyboard handler — D sub-cycle Task 2 (Cmd-Opt-I opens DevTools for the
+// focused browser). Mirrors the life-span handler immediately above:
+// IMPLEMENT_REFCOUNTING_SIMPLE (free-only release — this handler owns
+// nothing further), INIT_CEF_BASE_REFCOUNTED for `base.size`/add_ref/release/
+// has_(at_least_)one_ref, and the same per-client slot carry set at create
+// time.
+//
+
+IMPLEMENT_REFCOUNTING_SIMPLE(zapp_cef_keyboard_handler_t,
+                             zapp_cef_keyboard_handler,
+                             ref_count)
+
+// Cmd-Opt-I shortcut. Fires after the renderer/page has had a chance to
+// handle the event (on_key_event, not on_pre_key_event) — matches the
+// brief's confirmed cef_key_event_t fields: KEYEVENT_RAWKEYDOWN=0,
+// EVENTFLAG_COMMAND_DOWN=1<<7, EVENTFLAG_ALT_DOWN=1<<3, VKEY_I=0x49. The
+// dev-gate (app_get_bootstrap_web_content_inspectable()) already lives
+// inside zapp_cef_show_dev_tools (Task 1, zapp_cef.h/zapp_cef_host.m) — no
+// extra gate here.
+static int CEF_CALLBACK zapp_cef_on_key_event(struct _cef_keyboard_handler_t* self,
+                                              struct _cef_browser_t* browser,
+                                              const cef_key_event_t* event,
+                                              cef_event_handle_t os_event) {
+  (void)browser;
+  (void)os_event;
+  zapp_cef_keyboard_handler_t* h = (zapp_cef_keyboard_handler_t*)self;
+  if (event && event->type == KEYEVENT_RAWKEYDOWN &&
+      (event->modifiers & EVENTFLAG_COMMAND_DOWN) &&
+      (event->modifiers & EVENTFLAG_ALT_DOWN) &&
+      event->windows_key_code == 0x49 /* VKEY_I */) {
+    zapp_cef_show_dev_tools(h->slot);
+    return 1;  // handled
+  }
+  return 0;
+}
+
+static zapp_cef_keyboard_handler_t* zapp_cef_keyboard_handler_create(int32_t slot) {
+  zapp_cef_keyboard_handler_t* h = (zapp_cef_keyboard_handler_t*)calloc(
+      1, sizeof(zapp_cef_keyboard_handler_t));
+  CHECK(h);
+
+  INIT_CEF_BASE_REFCOUNTED(&h->handler.base, cef_keyboard_handler_t,
+                           zapp_cef_keyboard_handler);
+  h->handler.on_key_event = zapp_cef_on_key_event;
+  h->slot = slot;
+
+  atomic_store(&h->ref_count, 1);
+  return h;
+}
+
+//
 // The `zapp` bridge, BROWSER-process half — REAL router.
 //
 // The render process (zapp_cef_bridge.c) ships a "zapp:invoke" process message
@@ -438,6 +503,10 @@ int CEF_CALLBACK zapp_cef_client_release(cef_base_ref_counted_t* self) {
       client->life_span_handler->handler.base.release(
           &client->life_span_handler->handler.base);
     }
+    if (client->keyboard_handler) {
+      client->keyboard_handler->handler.base.release(
+          &client->keyboard_handler->handler.base);
+    }
     free(client);
     return 1;
   }
@@ -456,6 +525,20 @@ zapp_cef_client_get_life_span_handler(cef_client_t* self) {
   return NULL;
 }
 
+// D sub-cycle Task 2 — mirrors zapp_cef_client_get_life_span_handler exactly
+// (same add_ref-before-return convention; CEF releases it when done).
+cef_keyboard_handler_t* CEF_CALLBACK
+zapp_cef_client_get_keyboard_handler(cef_client_t* self) {
+  zapp_cef_client_t* client = (zapp_cef_client_t*)self;
+  if (client->keyboard_handler) {
+    // Add a reference before returning — CEF releases it when done.
+    client->keyboard_handler->handler.base.add_ref(
+        &client->keyboard_handler->handler.base);
+    return &client->keyboard_handler->handler;
+  }
+  return NULL;
+}
+
 cef_client_t* zapp_cef_client_create(int32_t slot) {
   zapp_cef_client_t* client =
       (zapp_cef_client_t*)calloc(1, sizeof(zapp_cef_client_t));
@@ -463,6 +546,8 @@ cef_client_t* zapp_cef_client_create(int32_t slot) {
 
   INIT_CEF_BASE_REFCOUNTED(&client->client.base, cef_client_t, zapp_cef_client);
   client->client.get_life_span_handler = zapp_cef_client_get_life_span_handler;
+  // D sub-cycle Task 2 — Cmd-Opt-I DevTools shortcut.
+  client->client.get_keyboard_handler = zapp_cef_client_get_keyboard_handler;
   // Browser-process half of the bridge (handles "zapp:invoke").
   client->client.on_process_message_received =
       zapp_cef_client_on_process_message_received;
@@ -470,6 +555,9 @@ cef_client_t* zapp_cef_client_create(int32_t slot) {
 
   client->life_span_handler = zapp_cef_life_span_handler_create(slot);
   CHECK(client->life_span_handler);
+
+  client->keyboard_handler = zapp_cef_keyboard_handler_create(slot);
+  CHECK(client->keyboard_handler);
 
   atomic_store(&client->ref_count, 1);
   return &client->client;
