@@ -151,7 +151,7 @@ const ctxMenu: MenuItemDef[] = [
   { label: "Context: item B", action: () => { ctxStatus.textContent = "context menu: item B clicked"; } },
 ];
 document.addEventListener("contextmenu", (e) => {
-  if (isSidebar || isInspector) return;   // host pane only
+  if (isSidebar || isInspector || isPopover) return;   // host pane only
   e.preventDefault();
   ContextMenu.show(ctxMenu, { event: e });
 });
