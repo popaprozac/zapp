@@ -367,6 +367,16 @@ void darwin_menu_show_context(const char* items_json, int32_t x, int32_t y, int3
         // Find the window's WebView to position the menu
         extern void* darwin_window_get_webview(int32_t numeric_id);
         void* wv_ptr = darwin_window_get_webview(window_id);
+#ifdef ZAPP_HAS_CEF
+        // CEF windows have no WKWebView in the registry — anchor the menu to the
+        // CEF pane's NSView instead (the helper from popover breakage #1).
+        // window_id is the numeric slot zapp_cef_view_for_slot takes; the
+        // isFlipped-guarded point flip below handles its coordinate system.
+        if (!wv_ptr) {
+            extern void* zapp_cef_view_for_slot(int32_t slot);
+            wv_ptr = zapp_cef_view_for_slot(window_id);
+        }
+#endif
         if (!wv_ptr) return;
 
         NSView* view = (__bridge NSView*)wv_ptr;

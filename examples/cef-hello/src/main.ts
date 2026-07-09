@@ -3,7 +3,7 @@
 // through Services.invoke (webview → Nim router → back), same bridge path
 // WKWebView uses today, on whatever engine `zapp.config.ts`'s `webEngine`
 // resolves to.
-import { Events, Services, Window, WindowEvent } from "@zappdev/runtime";
+import { ContextMenu, Events, Services, Window, WindowEvent, type MenuItemDef } from "@zappdev/runtime";
 
 const goButton = document.querySelector<HTMLButtonElement>("#go")!;
 const out = document.querySelector<HTMLPreElement>("#out")!;
@@ -139,6 +139,22 @@ if (!isSidebar && !isInspector) {
     tbclick.textContent = `toolbar click: ${JSON.stringify(payload)}`;
   });
 }
+
+// Breakage #2 gate: native context menu on CEF. Right-click anywhere in the
+// host pane -> ContextMenu.show -> router (showContextMenu) ->
+// darwin_menu_show_context, which (with the CEF anchor-view fallback) pops a
+// native NSMenu at the cursor. Clicking an item routes its action back to JS.
+const ctxStatus = document.querySelector<HTMLPreElement>("#ctxstatus")!;
+const ctxMenu: MenuItemDef[] = [
+  { label: "Context: log a line", action: () => { ctxStatus.textContent = "context menu: item A clicked"; } },
+  { type: "separator" },
+  { label: "Context: item B", action: () => { ctxStatus.textContent = "context menu: item B clicked"; } },
+];
+document.addEventListener("contextmenu", (e) => {
+  if (isSidebar || isInspector) return;   // host pane only
+  e.preventDefault();
+  ContextMenu.show(ctxMenu, { event: e });
+});
 
 // Host window events must reach CEF windows + panes (host-event fan-out fix).
 // Every pane subscribes; resizing/focusing window 1 should update ALL THREE.
