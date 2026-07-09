@@ -3,7 +3,7 @@
 // through Services.invoke (webview → Nim router → back), same bridge path
 // WKWebView uses today, on whatever engine `zapp.config.ts`'s `webEngine`
 // resolves to.
-import { ContextMenu, Events, Services, Window, WindowEvent, type MenuItemDef } from "@zappdev/runtime";
+import { ContextMenu, Events, Services, Webview, Window, WindowEvent, type MenuItemDef } from "@zappdev/runtime";
 
 const goButton = document.querySelector<HTMLButtonElement>("#go")!;
 const out = document.querySelector<HTMLPreElement>("#out")!;
@@ -107,6 +107,19 @@ if (!isSidebar && !isInspector && !isPopover) {
     if (!pop) pop = await Window.current().createPopover({ url: "#popover-pane", width: 240, height: 160 });
     pop.show(btn, { edge: "bottom" }); // Anchor accepts an Element directly (normalizeAnchor measures it).
   });
+
+  // Breakage #3 gate: embedded <zapp-webview> positioning on CEF. The native
+  // panel must track this bordered frame's box. Window 1 is PANED (sidebar +
+  // inspector), so this exercises the inset case that was mis-positioning.
+  const embedFrame = document.createElement("div");
+  embedFrame.style.cssText =
+    "width:220px; height:140px; margin-top:12px; border:2px solid #c33; border-radius:6px; overflow:hidden;";
+  document.body.appendChild(embedFrame);
+  const embedWv = Webview.create({
+    src: "data:text/html,<body style='margin:0;background:%23148;color:%23fff;font:14px system-ui;display:grid;place-items:center'>embedded webview</body>",
+  });
+  embedWv.style.cssText = "width:100%; height:100%; display:block;";
+  embedFrame.appendChild(embedWv);
 }
 if (isSidebar || isInspector || isPopover) {
   // These are HOST-scoped controls: toggle sidebar/inspector, Open DevTools,

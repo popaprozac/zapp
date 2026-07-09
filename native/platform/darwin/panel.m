@@ -135,6 +135,16 @@ void darwin_panel_create(int32_t window_id, const char* panel_id, const char* ur
         extern void* darwin_window_get_webview(int32_t window_id);
         void* hostWV = darwin_window_get_webview(window_id);
         if (hostWV) panel.hostWebview = (__bridge WKWebView*)hostWV;
+#ifdef ZAPP_HAS_CEF
+        // CEF host: no WKWebView in the registry. Use the CEF pane's NSView as
+        // the coordinate reference so darwin_panel_set_bounds' convertRect maps
+        // the DOM rect (host viewport) into the contentView correctly — a paned
+        // window (sidebar/inspector) would otherwise offset the panel by the
+        // pane's origin. Cast to WKWebView*: set_bounds uses only NSView API on
+        // it (isFlipped / bounds / convertRect:toView:), same as popover's cast.
+        extern void* zapp_cef_view_for_slot(int32_t slot);
+        if (!hostWV) panel.hostWebview = (__bridge WKWebView*)zapp_cef_view_for_slot(window_id);
+#endif
 
         // embed -> host postMessage shim (sandboxed: NO __zappBridge).
         [ucc addScriptMessageHandler:panel name:@"zappPanel"];
