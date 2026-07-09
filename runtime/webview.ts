@@ -19,7 +19,14 @@ export interface WebviewCreateOptions {
 let panelSeq = 0;
 function nextPanelId(): string {
   panelSeq = (panelSeq + 1) & 0xffff;
-  return "panel-" + Date.now().toString(36) + "-" + panelSeq.toString(36);
+  // Include the window id so panels from different windows never collide in the
+  // process-wide native registry (zapp_panels, keyed by panelId). panelSeq is
+  // per-window (each window is its own JS context, starting at 0), and Date.now()
+  // can match for two windows loading in the same millisecond — without the
+  // windowId, both windows' first panel would share an id, and one window's
+  // setBounds would then drive the other window's native panel.
+  const wid = currentWindowId() ?? "w";
+  return "panel-" + wid + "-" + Date.now().toString(36) + "-" + panelSeq.toString(36);
 }
 
 function currentWindowId(): string | null {
