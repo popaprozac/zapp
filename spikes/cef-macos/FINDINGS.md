@@ -1034,6 +1034,142 @@ Also unchanged / not attempted this cycle: embedded-webview-on-CEF (#3), CEF
 engine selection, navigation/back-forward — all explicit non-goals, tracked
 for their own cycles.
 
+### ★ Embedded webview on CEF fix (breakage #3, LAST) (`feat/cef-embedded-webview`, 2026-07-08/09)
+
+Design: `docs/superpowers/specs/2026-07-08-cef-embedded-webview-design.md`. Not
+a native-chrome element — the **third and last** of the three
+kitchen-sink-on-CEF breakages the integration catalog flagged (popover,
+contextmenu, embedded-webview). With this fixed, all three catalog breakages
+are closed.
+
+**Embedded webview on CEF — CLOSED.** All human R0 gates PASSED on-screen
+2026-07-08 (`examples/cef-hello/SMOKE.md`, GATEs 45-48). Two commits, two
+distinct bugs — do not conflate them:
+
+1. **`d825cff`** — the CEF positioning fix (the bug this cycle's design set out
+   to fix).
+2. **`71d6e74`** — a window-unique `panelId` fix, for a **second, unrelated,
+   engine-agnostic** bug the R0 gate surfaced while confirming commit 1 (see
+   below).
+
+#### 1. Root cause + fix — CEF positioning (`d825cff`)
+
+The embedded `<zapp-webview>` (a "panel" — a child WKWebView the TS runtime
+positions over a DOM box, `native/platform/darwin/panel.m`) mis-positioned on a
+**paned** CEF window (kitchen-sink-shaped: sidebar + inspector).
+
+**Root cause:** `darwin_panel_create` (panel.m:135-137) captures a **host
+coordinate-reference webview** via `darwin_window_get_webview(window_id)` —
+**nil on CEF** (CEF browsers live in `zapp_cef_browsers[]`, never registered as
+WKWebViews) — so `panel.hostWebview` stays nil. `darwin_panel_set_bounds`
+(panel.m:174-207) branches on that reference: with a host (WK), it converts the
+incoming DOM rect from the host content webview's coordinate space into the
+panel-parent (`contentView`) space via `[host convertRect:inHost toView:parent]`
+(`isFlipped`-guarded) — correctly accounting for the host webview being inset
+(e.g. by a sidebar). Without a host (CEF, nil), it takes the `else` **fallback**
+(panel.m:197-205) that assumes the panel-parent (`contentView`) itself **IS**
+the host viewport — a parent-relative flip only, no inset adjustment. On a
+fullbleed CEF window that assumption is roughly true; on a **paned** CEF window
+the host CEF pane IS inset from `contentView`, so the DOM rect (host-pane-
+viewport coordinates) mapped straight into `contentView` coordinates, offset by
+the pane's origin — the panel bled into the wrong area (e.g. toward the
+sidebar).
+
+**Fix:** one gated insert in `darwin_panel_create`, immediately after the
+existing WK host-capture line — `#ifdef ZAPP_HAS_CEF`, reusing breakage #1
+(popover)'s `zapp_cef_view_for_slot(int32_t slot) -> void*` helper verbatim:
+when `darwin_window_get_webview` returns nil, set `panel.hostWebview` to the
+CEF pane's own `NSView` (cast to `WKWebView*`, used only via NSView API —
+`isFlipped`/`bounds`/`convertRect:toView:` — same deliberate cast idiom
+popover's anchor fix and the context-menu fix both use). `darwin_panel_set_bounds`
+is **UNCHANGED**: with `panel.hostWebview` now non-nil on CEF, its existing
+`convertRect` path runs unmodified and maps the DOM rect correctly, `isFlipped`-
+guarded (the popover fix already established the CEF Alloy browser `NSView`'s
+non-flipped coordinate behavior). No third native helper was built for this
+breakage — the fix is a single fallback assignment; `set_bounds`'s convert+flip
+logic was already engine-agnostic and correct, it only lacked a non-nil
+reference to work from on CEF.
+
+**Byte-identical, mechanically verified:** `unifdef -UZAPP_HAS_CEF
+native/platform/darwin/panel.m` diffed with **zero output** against pre-change
+HEAD (panel.m had no prior `#ifdef ZAPP_HAS_CEF` — this is its first) — the
+same gate guarantee the C-series and breakages #1/#2 hold; a `webEngine:
+"system"` build compiles the original, unchanged bytes.
+
+**Fixture:** `examples/cef-hello`'s host pane (window 1, PANED — sidebar +
+inspector) gains a red-bordered frame with `Webview.create({ src:
+"data:text/html,...blue page..." })` appended into it (`src/main.ts`) — the
+bordered box + the distinctly-tinted embedded page make "does the native
+webview sit inside the box" obvious at the gate, and window 1 being paned
+exercises exactly the inset case that was broken.
+
+#### 2. A second, ENGINE-AGNOSTIC bug the R0 gate surfaced — cross-window `panelId` collision (`71d6e74`)
+
+**This is NOT a CEF bug.** While confirming the positioning fix above on-screen,
+the R0 gate showed the embedded webview tracking scroll from **both** CEF
+windows in the `cef-hello` fixture (sub-cycle B's window 1 + window 2), not
+just its own window — a symptom the positioning fix does not explain.
+
+**Root cause:** `nextPanelId()` (`runtime/webview.ts`) generated ids as
+`"panel-" + Date.now() + "-" + panelSeq`, where `panelSeq` is **per-window**
+(each window is its own JS context, its own module-scope counter starting at
+0). Two windows whose pages evaluate `nextPanelId()` in the **same millisecond**
+(entirely plausible — `cef-hello`'s sub-cycle B fixture opens both windows at
+launch) produce the **identical panel id**. `zapp_panels` (`panel.m`) is a
+**process-wide** native dictionary keyed by panelId — not scoped per window —
+so window 2's `darwin_panel_create` for that id silently no-op'd (`if
+(zapp_panels[pid]) return;`, the "already exists" guard, resolving to window
+1's entry), and every subsequent `darwin_panel_set_bounds` call window 2's page
+fired (e.g. on scroll) was actually driving **window 1's** native panel. The
+visible effect: the embedded webview appeared to track scroll events from
+*both* windows, because it genuinely was — two JS-side panel objects in two
+different window contexts, one shared native panel underneath.
+
+**Fix:** `nextPanelId` now includes `currentWindowId()` in the id:
+`"panel-" + wid + "-" + Date.now() + "-" + panelSeq` (`wid` falls back to
+`"w"` if unavailable) — unique across windows, not just within one. This closes
+the collision at its source (id generation) rather than working around it in
+the native dictionary.
+
+**Why this belongs in this cycle's history but is a distinct bug:** it was
+found *via* the CEF two-window fixture, but the bug itself is entirely
+JS-runtime-level and engine-agnostic — a WKWebView (`webEngine:"system"`) app
+with two windows loading in the same millisecond hits the identical collision;
+CEF didn't cause it, the CEF fixture's two-window shape just happened to be
+what exposed it first. It is a general multi-window correctness bug in
+`runtime/webview.ts`, not a CEF-positioning issue, and must not be conflated
+with the `d825cff` fix above when reasoning about "what the CEF fix changed."
+
+**R0 gate result after both fixes (2026-07-08), human-confirmed:** the embedded
+webview sits on its own box; tracks its OWN window's scroll only (no
+cross-window bleed — verified independently for window 1 and window 2); tracks
+correctly on resize; renders with no regressions to the other CEF surfaces
+(sidebar/inspector/toolbar toggles, `ticker` broadcast, `greet` bridge,
+popover, context menu, DevTools).
+
+**Known limitations / follow-ups (documented, not hidden):**
+
+- **The embedded webview's content engine is unchanged** — it is a WKWebView
+  even when hosted inside a CEF window (the v1 embedded-webview design); this
+  cycle fixed positioning only, not content rendering.
+- **Non-host-pane embeds** (embedding a `<zapp-webview>` inside the sidebar or
+  inspector pane's own content, rather than the host pane) were not separately
+  exercised by the R0 gate — the fixture and gate use the host pane.
+- **This is the last of the three kitchen-sink-on-CEF breakages.** With
+  popover (#1), contextmenu (#2), and embedded-webview (#3) all fixed, every
+  breakage the integration catalog flagged is closed. The remaining CEF
+  production work is the still-open seeds tracked earlier in this document —
+  chiefly **Helper-process signing + notarization** (seed 7) — plus the
+  smaller backlog gaps already recorded above (macOS sandboxed runtime-library
+  loader, real OSCrypt policy, CEF-pane vibrancy/opacity, the manual-reload
+  chrome-metrics re-inject gap, the scrollbar-gutter cosmetic difference, and
+  a CEF "Inspect Element" context-menu entry point).
+
+Also unchanged / not attempted this cycle: CEF "Inspect Element" context-menu
+integration, iOS/Windows/Linux, per-window engine selection, navigation/
+back-forward, Helper-process signing/notarization — all explicit non-goals or
+already-tracked backlog, not regressions.
+
 ---
 
 ## Task 1 (RISK GATE): message-loop coexistence — CEF + NSApplication + a second (ZJS-shaped) loop

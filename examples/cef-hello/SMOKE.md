@@ -298,6 +298,41 @@ need the `CefContextMenuHandler` this fix's (unshipped) contingency
 describes. The one remaining `kitchen-sink`-on-CEF breakage —
 **embedded-webview (#3)** — stays open, its own future cycle.
 
+### Embedded webview on CEF (breakage #3, LAST) (macOS)
+
+The **third and last** of the three `kitchen-sink`-on-CEF breakages the
+integration catalog flagged (popover, contextmenu, embedded-webview) — fixed.
+Window 1's host pane (already sidebar + inspector + toolbar, PANED) gains a
+red-bordered frame with an embedded `<zapp-webview>`
+(`Webview.create({ src: "data:text/html,...blue page..." })`) appended into it
+(`src/main.ts`) — the native panel must track this frame's box, exercising the
+inset (paned) case that was mis-positioning. Design:
+`docs/superpowers/specs/2026-07-08-cef-embedded-webview-design.md`; root cause
++ fix detail: `spikes/cef-macos/FINDINGS.md`'s ★ Embedded webview on CEF fix
+section. Two commits, two distinct bugs: `d825cff` (CEF positioning fix) and
+`71d6e74` (a window-unique `panelId` fix for a separate, engine-agnostic
+cross-window collision the R0 gate surfaced — see FINDINGS for why this is
+NOT a CEF bug).
+
+Only the human-confirmed R0 items below are marked — this gate was not run
+further than these four checks.
+
+| Gate | What it proves | Result |
+|---|---|---|
+| **GATE 45** — sits on its box | The embedded webview (the blue "embedded webview" page) renders INSIDE the red-bordered frame in window 1's host pane, aligned to the border, not offset into the sidebar or elsewhere — the `zapp_cef_view_for_slot` host-reference fallback in `darwin_panel_create` gives `darwin_panel_set_bounds`'s existing (unchanged) `convertRect` path a non-nil CEF reference to convert against | **PASS — human-confirmed 2026-07-08** |
+| **GATE 46** — tracks its OWN window's scroll only, no cross-window bleed | With both `cef-hello` windows open, the embedded webview tracks window 1's own scroll/position and does **not** also track window 2's — confirming the `nextPanelId` window-unique-id fix (`71d6e74`) closed the cross-window `panelId` collision the earlier R0 pass surfaced (before this fix, window 2's `setBounds` was driving window 1's native panel) | **PASS — human-confirmed 2026-07-08** |
+| **GATE 47** — tracks on resize | Resizing window 1 keeps the embedded webview aligned to its bordered frame — the panel re-tracks via `set_bounds` on the new CEF host reference | **PASS — human-confirmed 2026-07-08** |
+| **GATE 48** — renders + no regressions | The embedded page's content still renders (unchanged, already worked pre-fix); the C1-C3/host-events/DevTools/popover/contextmenu surfaces (sidebar/inspector/toolbar toggle, `ticker` broadcast, `greet` bridge, `#winevt`, Open DevTools, Show popover, context menu) all still work on window 1; window 2 (plain) still renders + ticks + closes cleanly | **PASS — human-confirmed 2026-07-08** |
+
+**North star reached — all three catalog breakages closed:** with popover
+(#1), contextmenu (#2), and embedded-webview (#3) all fixed, every
+`kitchen-sink`-on-CEF breakage the integration catalog flagged is closed.
+Remaining CEF work is Helper-process signing/notarization (seed 7, still
+open — see FINDINGS) and the smaller backlog gaps already tracked there
+(sandboxed runtime-library loader, real OSCrypt policy, CEF-pane
+vibrancy/opacity, the manual-reload chrome-metrics gap, the scrollbar-gutter
+cosmetic difference, and a CEF "Inspect Element" context-menu entry point).
+
 ## (b) `webEngine:"system"` — WKWebView, byte-identical to pre-change
 
 ```
@@ -390,7 +425,9 @@ the first of the three kitchen-sink-on-CEF breakages the integration catalog
 flagged (popover/contextmenu/embedded-webview); all four gates PASSED
 human-confirmed 2026-07-08. **Contextmenu-on-CEF is GATEs 41-44 above, not a
 non-goal either** — it closed the second of the three breakages; all four
-gates PASSED human-confirmed 2026-07-08. Embedded-webview-on-CEF (#3) remains
-the one non-goal left for this slice, tracked for its own future cycle.
-Reversible reshow of a closed CEF window remains an explicit non-goal — see
-the "Known limitation" note above.)
+gates PASSED human-confirmed 2026-07-08. **Embedded-webview-on-CEF is GATEs
+45-48 above, not a non-goal either** — it closed the third and last of the
+three breakages; all four gates PASSED human-confirmed 2026-07-08. All three
+kitchen-sink-on-CEF catalog breakages (popover, contextmenu, embedded-webview)
+are now closed. Reversible reshow of a closed CEF window remains an explicit
+non-goal — see the "Known limitation" note above.)
