@@ -271,6 +271,33 @@ OSR non-goal). The two remaining `kitchen-sink`-on-CEF breakages —
 **contextmenu** and **embedded-webview** — remain open, each tracked for its
 own future cycle.
 
+### Context menu on CEF (breakage #2) (macOS)
+
+The **second** of the three `kitchen-sink`-on-CEF breakages the integration
+catalog flagged (popover, contextmenu, embedded-webview) — fixed, reusing
+breakage #1's anchor helper directly. Window 1's host pane gains a
+`#ctxstatus` status line (`index.html`); `src/main.ts` adds a `contextmenu`
+listener (host pane only) that `e.preventDefault()`s the browser default and
+calls `ContextMenu.show([...two items...], { event: e })` — a native `NSMenu`
+at the cursor, clicking an item updates `#ctxstatus`. Design:
+`docs/superpowers/specs/2026-07-08-cef-contextmenu-design.md`; root cause +
+fix detail: `spikes/cef-macos/FINDINGS.md`'s ★ Context menu on CEF fix
+section. Commit: `44089ad`.
+
+| Gate | What it proves | Result |
+|---|---|---|
+| **GATE 41** — appears at cursor | Right-clicking anywhere in window 1's host pane pops a native `NSMenu` at the pointer location (not at the origin, not offscreen) — the gated `zapp_cef_view_for_slot` anchor fallback in `darwin_menu_show_context` resolves the CEF pane's `NSView` in place of the nil WKWebView lookup | **PASS — human-confirmed 2026-07-08** |
+| **GATE 42** — items route back | Clicking a menu item fires its JS `action`, updating `#ctxstatus` — proves the full JS→router→native→JS round trip, not just that a menu is visually drawn | **PASS — human-confirmed 2026-07-08** |
+| **GATE 43** — no stray Chromium menu | Chromium's own native context menu (Reload / Inspect / …) does **not** also appear alongside or underneath ours — `preventDefault()` on the JS `contextmenu` event suppresses Chromium's default menu on CEF the same as it does on WKWebView, so the `CefContextMenuHandler` contingency the design flagged was **not needed** | **PASS — human-confirmed 2026-07-08** |
+| **GATE 44** — no regressions | The C1-C3/host-events/DevTools/popover surfaces (sidebar/inspector toggle, toolbar click, `ticker` broadcast, `greet` bridge, `#winevt`, Open DevTools, Show popover) all still work on window 1 after the context-menu round trip; window 2 (plain, no context-menu fixture) still renders + ticks + closes cleanly | **PASS — human-confirmed 2026-07-08** |
+
+**Known limitation (documented, not hidden — see FINDINGS for detail):** no
+"Inspect Element" entry point on the CEF context menu yet — same gap
+DevTools-on-CEF (sub-cycle D) already documented, since seeding one would
+need the `CefContextMenuHandler` this fix's (unshipped) contingency
+describes. The one remaining `kitchen-sink`-on-CEF breakage —
+**embedded-webview (#3)** — stays open, its own future cycle.
+
 ## (b) `webEngine:"system"` — WKWebView, byte-identical to pre-change
 
 ```
@@ -361,7 +388,9 @@ sub-cycle D closed it; all four gates PASSED human-confirmed 2026-07-08.
 **Popover-on-CEF is GATEs 37-40 above, not a non-goal either** — it closed
 the first of the three kitchen-sink-on-CEF breakages the integration catalog
 flagged (popover/contextmenu/embedded-webview); all four gates PASSED
-human-confirmed 2026-07-08. Contextmenu-on-CEF and embedded-webview-on-CEF
-remain non-goals for this slice, each tracked for its own future cycle.
+human-confirmed 2026-07-08. **Contextmenu-on-CEF is GATEs 41-44 above, not a
+non-goal either** — it closed the second of the three breakages; all four
+gates PASSED human-confirmed 2026-07-08. Embedded-webview-on-CEF (#3) remains
+the one non-goal left for this slice, tracked for its own future cycle.
 Reversible reshow of a closed CEF window remains an explicit non-goal — see
 the "Known limitation" note above.)

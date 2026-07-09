@@ -903,6 +903,104 @@ embedded-webview-on-CEF, CEF "Inspect Element" context-menu integration,
 iOS/Windows/Linux, per-window engine selection, navigation/back-forward —
 all explicit non-goals, tracked for their own cycles.
 
+### ★ Context menu on CEF fix (breakage #2) (`feat/cef-contextmenu`, 2026-07-08)
+
+Design: `docs/superpowers/specs/2026-07-08-cef-contextmenu-design.md`. Not a
+native-chrome element — the **second** of the three kitchen-sink-on-CEF
+breakages the integration catalog flagged (popover, contextmenu,
+embedded-webview) to get fixed on the `chromium` path. Landed directly after
+breakage #1 (popover, above) and reuses its anchor helper as-is.
+
+**Context menu on CEF — CLOSED.** All human R0 gates PASSED on-screen
+2026-07-08 (`examples/cef-hello/SMOKE.md`, GATEs 41-44). Commit: `44089ad`.
+
+**Root cause:** `darwin_menu_show_context` (`native/platform/darwin/menu.m:369`)
+resolved the anchor view via `darwin_window_get_webview(window_id)` → **nil
+on CEF** (CEF browsers live in `zapp_cef_browsers[]`, never registered as
+WKWebViews) → the existing `if (!wv_ptr) return;` silently no-op'd, so the
+native `NSMenu` never showed. The JS→router edge already worked — the
+`showContextMenu` router message arrived (confirmed in the kitchen-sink-on-CEF
+catalog log) — the gap was purely native presentation, the same class of
+WK-specific-view-lookup gap breakage #1 (popover) had, in a simpler shape: a
+context menu is pure native chrome, so there is no web content to mount, only
+an anchor view to resolve.
+
+**The fix — a pure gated insert, reusing popover #1's helper verbatim, WK path
+byte-identical:**
+
+A `#ifdef ZAPP_HAS_CEF` fallback inserted between the existing WK lookup and
+the existing `if (!wv_ptr) return;`: when `darwin_window_get_webview` returns
+nil, resolve via `zapp_cef_view_for_slot(window_id)` — the exact helper
+`zapp_cef_host.m`/`zapp_cef.h` built for the popover anchor fix, reused
+unchanged; no new native helper was needed for this breakage. `window_id` here
+is already the numeric slot the router resolves from the sender
+(`router.nim:620-621` → `darwin_menu_show_context_from_payload` →
+`darwin_menu_show_context`), the exact argument `zapp_cef_view_for_slot`
+takes. Everything below the fallback is unchanged and engine-agnostic:
+`build_menu_from_json(items)` builds the same `NSMenu`; the
+`isFlipped`-guarded point flip (menu.m:379-381, flipping `y` when the anchor
+view isn't flipped) needed no change at all — it already handles a
+non-flipped view generically, and the popover fix already proved the CEF
+Alloy browser `NSView`'s non-flipped coordinate behavior; `popUpMenuPositioningItem:atLocation:inView:`
+is untouched.
+
+**No secondary `hostSlot` fallback (unlike popover) — and why.** Popover's
+anchor fallback tries `zapp_cef_view_for_slot(sender_slot)` then falls back to
+`zapp_cef_view_for_slot(c.hostSlot)`, because a reusable popover can be shown
+from a foreign/worker sender whose element rect doesn't belong to the
+popover's own pane (sidebar panes are offset from the main pane) — the
+popover controller carries a distinct `hostSlot` to fall back to for exactly
+that cross-pane case. `ContextMenu.show` has no such indirection: the router
+resolves `window_id` directly as the sender's own numeric slot
+(`router.nim:620`, `darwin_menu_show_context_from_payload(payload, windowId)`)
+and `darwin_menu_show_context` receives that same slot straight through — the
+pane that raised the `contextmenu` event IS the pane the menu anchors into,
+always. There's no second candidate slot to fall back to, so a single
+`zapp_cef_view_for_slot(window_id)` call is the whole fallback.
+
+**Byte-identical, mechanically verified (not just reasoned):**
+`unifdef -UZAPP_HAS_CEF native/platform/darwin/menu.m` diffed with **zero
+output** against pre-change HEAD — the CEF addition is a pure
+`#ifdef`/`#endif` insert around the existing lines; none of the original
+lines moved. Same gate guarantee the C-series and popover fixes hold.
+
+**Fixture:** `examples/cef-hello`'s host pane gains a `#ctxstatus` status line
+(`index.html`) and a `contextmenu` listener (`src/main.ts`) that
+`e.preventDefault()`s the browser default and calls `ContextMenu.show([...],
+{ event: e })` with two items (one separator) — clicking an item updates
+`#ctxstatus`, proving the full JS→router→native→JS round trip, not just that
+a menu visually appears.
+
+**R0 gate result (2026-07-08): the `CefContextMenuHandler` contingency was
+NOT needed.** The design flagged a fallback — a
+`CefContextMenuHandler::on_before_context_menu` override to suppress
+Chromium's own native context menu, in case it fired independently of the JS
+`contextmenu` event's `preventDefault()` (CEF's default menu is
+native-handler-driven, not guaranteed to respect a renderer-side
+`preventDefault()` the way WKWebView's does). The R0 gate showed only **our**
+`NSMenu` appearing — right-clicking the CEF pane popped exactly one menu
+(ours), with no competing Chromium Reload/Inspect/… menu underneath or
+alongside it — confirming `preventDefault()` suppresses Chromium's native
+menu on CEF too, same as on WKWebView. No `CefContextMenuHandler` was built;
+it stays a documented contingency, not shipped code.
+
+**Known limitations / follow-ups (documented, not hidden):**
+
+- **No "Inspect Element" entry point** — same non-goal DevTools-on-CEF
+  (sub-cycle D) already documented: CEF's context menu has no Inspect
+  Element hookup yet (that would need the `CefContextMenuHandler` this fix's
+  contingency describes, seeded with `inspect_element_at`); a right-click
+  here only ever shows the app's own JS-supplied menu, never a native
+  inspect option.
+- **This is the second of the three kitchen-sink-on-CEF breakages** the
+  integration catalog flagged. The last remaining one — **embedded-webview
+  (#3)** — is still open, its own future cycle.
+
+Also unchanged / not attempted this cycle: embedded-webview-on-CEF (#3), CEF
+"Inspect Element" context-menu integration, iOS/Windows/Linux, per-window
+engine selection, navigation/back-forward — all explicit non-goals, tracked
+for their own cycles.
+
 ---
 
 ## Task 1 (RISK GATE): message-loop coexistence — CEF + NSApplication + a second (ZJS-shaped) loop
