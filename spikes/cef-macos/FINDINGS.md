@@ -933,10 +933,14 @@ the existing `if (!wv_ptr) return;`: when `darwin_window_get_webview` returns
 nil, resolve via `zapp_cef_view_for_slot(window_id)` — the exact helper
 `zapp_cef_host.m`/`zapp_cef.h` built for the popover anchor fix, reused
 unchanged; no new native helper was needed for this breakage. `window_id` here
-is already the numeric slot the router resolves from the sender
-(`router.nim:620-621` → `darwin_menu_show_context_from_payload` →
-`darwin_menu_show_context`), the exact argument `zapp_cef_view_for_slot`
-takes. Everything below the fallback is unchanged and engine-agnostic:
+is already a **real host-window slot**: the router normalizes it via
+`resolveAccessoryHost` (`router.nim:558`) — which runs *before* the
+`showContextMenu` dispatch (`router.nim:620-621` →
+`darwin_menu_show_context_from_payload` → `darwin_menu_show_context`) — so
+`zapp_cef_view_for_slot(window_id)` resolves the host CEF pane's NSView (see
+the "No secondary `hostSlot` fallback" note below for why that normalization
+is what makes a single-argument fallback sufficient). Everything below the
+fallback is unchanged and engine-agnostic:
 `build_menu_from_json(items)` builds the same `NSMenu`; the
 `isFlipped`-guarded point flip (menu.m:379-381, flipping `y` when the anchor
 view isn't flipped) needed no change at all — it already handles a
@@ -944,19 +948,35 @@ non-flipped view generically, and the popover fix already proved the CEF
 Alloy browser `NSView`'s non-flipped coordinate behavior; `popUpMenuPositioningItem:atLocation:inView:`
 is untouched.
 
-**No secondary `hostSlot` fallback (unlike popover) — and why.** Popover's
-anchor fallback tries `zapp_cef_view_for_slot(sender_slot)` then falls back to
-`zapp_cef_view_for_slot(c.hostSlot)`, because a reusable popover can be shown
-from a foreign/worker sender whose element rect doesn't belong to the
-popover's own pane (sidebar panes are offset from the main pane) — the
-popover controller carries a distinct `hostSlot` to fall back to for exactly
-that cross-pane case. `ContextMenu.show` has no such indirection: the router
-resolves `window_id` directly as the sender's own numeric slot
-(`router.nim:620`, `darwin_menu_show_context_from_payload(payload, windowId)`)
-and `darwin_menu_show_context` receives that same slot straight through — the
-pane that raised the `contextmenu` event IS the pane the menu anchors into,
-always. There's no second candidate slot to fall back to, so a single
-`zapp_cef_view_for_slot(window_id)` call is the whole fallback.
+**No secondary `hostSlot` fallback (unlike popover) — and why.** The reason
+is not that a context menu can't come from an accessory pane — it can — but
+that the router has **already normalized the slot to the host** by the time
+`darwin_menu_show_context` runs. `routeWindowAction` calls
+`let windowId = resolveAccessoryHost(rawWindowId)` (`router.nim:558`) *before*
+the `showContextMenu` dispatch (`router.nim:620-621`); only
+`subscribe`/`ready`/`setDragRegion` are handled earlier and keep the raw
+sender slot. `resolveAccessoryHost` (`router.nim:498`) remaps a t:4 op raised
+from a sidebar/inspector/popover pane's transport slot to the **host
+window's** slot (a real host slot passes through unchanged). So
+`darwin_menu_show_context` always receives a real host slot, and a single
+`zapp_cef_view_for_slot(window_id)` resolves the host CEF pane's NSView — no
+second candidate to fall back to.
+
+This **differs from popover**: `darwin_popover_show` receives the raw
+`sender_slot` (NOT run through `resolveAccessoryHost`), so it must try
+`zapp_cef_view_for_slot(sender_slot)` and fall back to
+`zapp_cef_view_for_slot(c.hostSlot)` itself. The context-menu path doesn't
+need that dual fallback precisely because the router already did the
+normalization upstream.
+
+**Consequence (accurate, not overclaimed):** because the slot is host-normalized,
+an accessory-pane context menu anchors to the **host** view at the accessory's
+cursor coordinates — the SAME pre-existing behavior WK context menus have, since
+`resolveAccessoryHost` is engine-agnostic and the WK path goes through it too
+(so this is parity, not a CEF-specific quirk). The R0 gate exercised the **host
+pane** (the fixture guards `if (isSidebar || isInspector) return`); the
+accessory-pane case inherits WK's existing behavior unchanged and was **not**
+separately exercised.
 
 **Byte-identical, mechanically verified (not just reasoned):**
 `unifdef -UZAPP_HAS_CEF native/platform/darwin/menu.m` diffed with **zero
