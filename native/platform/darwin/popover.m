@@ -97,6 +97,14 @@ void darwin_popover_create(void* window_ptr, const char* popover_id,
         zapp_cef_create_browser_in_view((__bridge void*)container, cefUrl, popover_slot,
                                         [hostWindowId UTF8String], [ownerId UTF8String],
                                         2, false, false);
+        // Mirror the WK #else path's zapp_register_pane_webview so
+        // zapp_window_ids[popover_slot] is set to the host-twin id — without it,
+        // Workers.create() and chrome/window ops from CEF popover content no-op
+        // (darwin_window_id_string(popover_slot) -> NULL; router.nim:259,504).
+        // nil webview: CEF has no WKWebView; zapp_register_webview stores nil
+        // harmlessly (window.m:133) and sets the id. Same mechanism the CEF
+        // sidebar/inspector panes use (window.m:1216/1233).
+        zapp_register_pane_webview(popover_slot, nil, host_slot);
     }
 #else
     darwin_webview_create_ext(window_ptr, true, true, url, popover_slot, true,

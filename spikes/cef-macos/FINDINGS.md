@@ -839,7 +839,14 @@ C-series pattern, WK path byte-identical:**
    `Window.current()` identity resolves inside the popover for free.
    `hostWindowId`/`ownerId` are formatted as `win-%d`/`owner-%p`, mirroring
    `window.m:1172`'s pane-mount branch exactly. The `#else` is the original
-   `darwin_webview_create_ext` + WKWebView-scrape call, byte-for-byte.
+   `darwin_webview_create_ext` + WKWebView-scrape call, byte-for-byte. The CEF
+   branch also registers the popover slot's host-twin window id via
+   `zapp_register_pane_webview(popover_slot, /*nil webview*/nil, host_slot)`
+   (nil is stored harmlessly — CEF has no WKWebView), so
+   `darwin_window_id_string(popover_slot)` resolves and `Workers.create()` /
+   chrome-window ops from popover content remap to the host — the same
+   mechanism the CEF sidebar/inspector panes use (`window.m:1216/1233`).
+   Without it those ops no-op (parity gap caught in final review).
 2. **Anchor** — a new `void* zapp_cef_view_for_slot(int32_t slot)`
    (`zapp_cef_host.m`/`zapp_cef.h`) mirrors `zapp_cef_window_for_slot`
    line-for-line (borrowed `zapp_cef_browser_for_slot` → owned `get_host` →
