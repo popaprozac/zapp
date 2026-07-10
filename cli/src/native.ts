@@ -171,6 +171,10 @@ export function getPlatformSources(nativeDir: string, target: BuildTarget = dete
       path.join(windowsDir, "material.c"),
       path.join(windowsDir, "sidebar.c"),
       path.join(windowsDir, "popover.c"),
+      // TEMP: stubs for darwin_* symbols with no windows_* impl yet (fs, window
+      // shims, devtools, toolbar, …). Shrinks as Phase C lands real impls; see
+      // native/platform/windows/nim_gaps.c.
+      path.join(windowsDir, "nim_gaps.c"),
     ];
     return sources.filter(f => existsSync(f));
   }
@@ -1341,6 +1345,42 @@ async function buildNativeNim(
     iosArgs.push(`--passC:${cFlags}`, `--passL:${cFlags}`);
   }
 
+  // Windows: zapp.nim compiles zjs.c, which #includes <uv.h> and pulls in
+  // libuv's event loop. On non-Apple platforms zjs drives a libuv loop per
+  // worker; the libuv headers + libuv.a come from a built Bare engine (the same
+  // source generatePlatformConfig uses for the zc path). renderPlatformNim's
+  // windows branch links libzjs_embed.a + the Win32/WebView2 import libs; here
+  // we thread the DYNAMIC libuv paths (build-dir-specific) as global --passC
+  // (so zjs.c finds uv.h) / --passL (libuv.a + the syslibs libuv & zjs pull:
+  // ws2_32/psapi/dbghelp/iphlpapi/userenv, -lz). GNU ld is single-pass, so
+  // these ride after the archives.
+  const windowsArgs: string[] = [];
+  if (target === "windows") {
+    const { resolveBareDir } = await import("./paths");
+    const bareDir = await resolveBareDir();
+    let uvInclude = "", uvLib = "";
+    for (const b of ["build-windows-quickjs", "build-windows-v8", "build-windows-mqjs", "build-windows-hermes"]) {
+      const inc = path.join(bareDir, b, "_deps", "github+libuv+libuv-src", "include");
+      const lib = path.join(bareDir, b, "_deps", "github+libuv+libuv-build", "libuv.a");
+      if (existsSync(inc) && existsSync(lib)) { uvInclude = inc; uvLib = lib; break; }
+    }
+    if (!uvInclude) {
+      throw new Error(
+        "[zapp] Windows Nim build: zjs needs libuv (uv.h + libuv.a) from a built " +
+        "Bare engine; none under vendor/bare/build-windows-*/. Build any bare engine once.");
+    }
+    windowsArgs.push(`--passC:-I${uvInclude.replace(/\\/g, "/")}`);
+    windowsArgs.push(`--passL:${uvLib.replace(/\\/g, "/")}`);
+    // zjs + libuv syslibs, repeated AFTER the archives: renderPlatformNim links
+    // libzjs_embed.a (and -lwinhttp/-lbcrypt) BEFORE these --passL args, but GNU
+    // ld is single-pass — so zjs's WinHTTP/crypto/ws refs (http_windows.c,
+    // ws_windows.c) go unresolved unless the import libs follow the archive.
+    // Mirrors generatePlatformConfig's windowsRspFlags order (the zc path).
+    windowsArgs.push("--passL:-lwinhttp", "--passL:-lws2_32", "--passL:-lbcrypt",
+                     "--passL:-lpsapi", "--passL:-lz", "--passL:-ldbghelp",
+                     "--passL:-liphlpapi", "--passL:-luserenv", "--passL:-lcrypt32");
+  }
+
   // Backend C compiler: clang on Apple (drives the ObjC/.m sources + iOS SDK
   // cross-compile flags); MinGW gcc on Windows — the toolchain the legacy zc
   // Windows build proved against the WebView2 CINTERFACE/COBJMACROS C-ABI and
@@ -1350,7 +1390,7 @@ async function buildNativeNim(
   const args = ["c", `--cc:${cc}`, "--mm:orc", "--threads:on", "-d:release", "--opt:size",
                 ...nimDefinesForTarget(target),
                 `--path:${zappDir}`, `--path:${nimFrameworkDir}`,
-                ...iosArgs,
+                ...iosArgs, ...windowsArgs,
                 `-o:${output}`, ...(verbose ? [] : ["--hints:off"]), nimRoot];
   const proc = Bun.spawn(["nim", ...args], { cwd: nativeDir, stdout: "inherit", stderr: "inherit" });
   const code = await proc.exited;

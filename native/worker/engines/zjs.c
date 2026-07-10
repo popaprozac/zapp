@@ -601,12 +601,25 @@ static ZjsValue host_invoke_service_async(ZjsContext* ctx, ZjsValue* argv, uint3
     char* wid = strdup(slot->worker_id);
     if (!wid) { free(method); free(args_json); return zjs_undefined(); }
 
+#if defined(__APPLE__)
     dispatch_async(dispatch_get_main_queue(), ^{
         zapp_worker_invoke_on_main(wid, id, method, args_json);
         free(method);
         free(args_json);
         free(wid);
     });
+#else
+    // TODO(windows-zjs): dispatch to the main thread via the platform funnel
+    // (Windows has zapp_webview_init_eval_funnel + the Win32 message loop; a
+    // parallel "invoke on main" funnel is the correct home). Proper async
+    // worker->native invoke on Windows is a zjs-on-Windows follow-up; for now
+    // invoke inline so the Nim build links. Not exercised at startup / first
+    // render — worker async service calls are the only caller.
+    zapp_worker_invoke_on_main(wid, id, method, args_json);
+    free(method);
+    free(args_json);
+    free(wid);
+#endif
 
     // Return the request id so the JS bootstrap can build a Promise around it.
     return zjs_int32(id);
