@@ -477,6 +477,14 @@ void windows_panel_create(int32_t window_id, const char* panel_id,
     ICoreWebView2Environment* env = zapp_get_webview_environment();
     HWND owner = zapp_get_hwnd(window_id);
     if (!env || !owner) return; // host webview not up yet — panel won't create
+    // The panel's CSS bounds are relative to the host webview's content, which
+    // in paned windows lives in a child HWND offset from the top-level host.
+    // Parent the panel to that webview window so its bounds map directly and it
+    // clips to the content pane; parenting to the host offsets it by the pane
+    // (e.g. sidebar) width — the "embedded webview mis-positions" bug.
+    extern void* windows_webview_parent_hwnd(int32_t);
+    HWND panel_parent = (HWND)windows_webview_parent_hwnd(window_id);
+    if (!panel_parent) panel_parent = owner;
 
     ZappWinPanel* p = panel_alloc();
     if (!p) return;
@@ -492,7 +500,7 @@ void windows_panel_create(int32_t window_id, const char* panel_id,
     panel_register_class();
     p->host_hwnd = CreateWindowExW(0, PANEL_HOST_CLASS, L"",
         WS_CHILD | WS_CLIPSIBLINGS, 0, 0, 0, 0,
-        owner, NULL, GetModuleHandleW(NULL), NULL);
+        panel_parent, NULL, GetModuleHandleW(NULL), NULL);
     if (!p->host_hwnd) { free(p->pending_url); p->active = 0; return; }
 
     p->ctrl_handler.lpVtbl = &PCtrl_Vtbl;

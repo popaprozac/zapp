@@ -186,6 +186,13 @@ void windows_popover_show(const char* popover_id, const char* args_json, int32_t
     if (!p || !p->hwnd) return;
     HWND owner = zapp_get_hwnd(p->host_slot);
     if (!owner) return;
+    // The anchor rect is CSS px relative to the firing webview, which in paned
+    // windows lives in a child HWND offset from the host (content/sidebar/
+    // inspector). Anchor coordinate math to that webview's parent so the popover
+    // lands on its anchor; fall back to the host if the controller isn't ready.
+    extern void* windows_webview_parent_hwnd(int32_t);
+    HWND anchor_hwnd = (HWND)windows_webview_parent_hwnd(p->host_slot);
+    if (!anchor_hwnd) anchor_hwnd = owner;
 
     // Parse anchor rect (CSS px) + edge from the args JSON.
     const char* anchor = args_json ? strstr(args_json, "\"anchor\"") : NULL;
@@ -206,10 +213,11 @@ void windows_popover_show(const char* popover_id, const char* args_json, int32_t
         }
     }
 
-    // Anchor CSS px → host client px → screen px.
-    double s = pop_scale(owner);
+    // Anchor CSS px → webview-client px → screen px (anchor = the firing
+    // webview's parent, offset-correct in paned windows).
+    double s = pop_scale(anchor_hwnd);
     POINT origin = { 0, 0 };
-    ClientToScreen(owner, &origin);
+    ClientToScreen(anchor_hwnd, &origin);
     int sx = origin.x + (int)(ax * s + 0.5);
     int sy = origin.y + (int)(ay * s + 0.5);
     int sw = (int)(aw * s + 0.5);
