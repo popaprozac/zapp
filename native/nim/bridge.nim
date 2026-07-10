@@ -4,6 +4,7 @@
 ## envelope shape and the native->JS `_onInvokeResult` IIFE must NOT drift, or
 ## the bootstrap bridge (bootstrap/webview.ts) stops resolving promises.
 import std/[json, options]
+import nativeabi
 
 type BridgeMsg* = object
   ## A decoded webview->native envelope. Mirrors the protocol the bootstrap
@@ -32,7 +33,7 @@ proc parseBridge*(raw: string): Option[BridgeMsg] =
 # darwin_window_eval_js — defined in the (compiled) window.m. Evaluates a JS
 # snippet in the given window's WKWebView on the main thread; it copies `js`
 # synchronously, so the caller may free immediately after the call.
-proc darwin_window_eval_js(windowId: int32, js: cstring) {.importc, cdecl.}
+proc nativeWindowEvalJs(windowId: int32, js: cstring) {.importc: abiPrefix & "window_eval_js", cdecl.}
 
 proc escapeJsSingleQuoted*(s: string): string =
   ## Escape a string as the CONTENTS of a JS single-quoted literal. Byte-for-byte
@@ -61,4 +62,4 @@ proc sendInvokeResponse*(windowId, requestId: int, ok: bool, payload: string) =
            "if(b&&typeof b._onInvokeResult==='function'){" &
            "b._onInvokeResult(" & $requestId & "," & okLit & ",'" &
            escapeJsSingleQuoted(payload) & "');}})();"
-  darwin_window_eval_js(windowId.int32, js.cstring)
+  nativeWindowEvalJs(windowId.int32, js.cstring)

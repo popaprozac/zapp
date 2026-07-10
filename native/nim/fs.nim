@@ -10,6 +10,7 @@
 ## `import permissions`) to avoid an import cycle — exactly as fs.zc:32-37
 ## declares it extern.
 import std/[json, strutils]
+import nativeabi
 
 # NB: the raw darwin_fs_* this module importc's are defined in
 # native/platform/darwin/fs.m, which is compiled by the build root (zapp.nim's
@@ -17,17 +18,17 @@ import std/[json, strutils]
 # module and stub the C-ABI symbols without pulling in fs.m + Foundation.
 
 # --- C-ABI: fs.m raw syscalls + path-var resolver -------------------------
-proc darwin_fs_path_var(name: cstring): cstring {.importc, cdecl.}
-proc darwin_fs_read_file(path: cstring): cstring {.importc, cdecl.}
-proc darwin_fs_write_file(path, data: cstring): bool {.importc, cdecl.}
-proc darwin_fs_append_file(path, data: cstring): bool {.importc, cdecl.}
-proc darwin_fs_exists(path: cstring): bool {.importc, cdecl.}
-proc darwin_fs_read_dir(path: cstring): cstring {.importc, cdecl.}
-proc darwin_fs_mkdir(path: cstring, recursive: bool): bool {.importc, cdecl.}
-proc darwin_fs_remove(path: cstring): bool {.importc, cdecl.}
-proc darwin_fs_rmdir(path: cstring, recursive: bool): bool {.importc, cdecl.}
-proc darwin_fs_rename(frm, dst: cstring): bool {.importc, cdecl.}
-proc darwin_fs_copy(frm, dst: cstring): bool {.importc, cdecl.}
+proc nativeFsPathVar(name: cstring): cstring {.importc: abiPrefix & "fs_path_var", cdecl.}
+proc nativeFsReadFile(path: cstring): cstring {.importc: abiPrefix & "fs_read_file", cdecl.}
+proc nativeFsWriteFile(path, data: cstring): bool {.importc: abiPrefix & "fs_write_file", cdecl.}
+proc nativeFsAppendFile(path, data: cstring): bool {.importc: abiPrefix & "fs_append_file", cdecl.}
+proc nativeFsExists(path: cstring): bool {.importc: abiPrefix & "fs_exists", cdecl.}
+proc nativeFsReadDir(path: cstring): cstring {.importc: abiPrefix & "fs_read_dir", cdecl.}
+proc nativeFsMkdir(path: cstring, recursive: bool): bool {.importc: abiPrefix & "fs_mkdir", cdecl.}
+proc nativeFsRemove(path: cstring): bool {.importc: abiPrefix & "fs_remove", cdecl.}
+proc nativeFsRmdir(path: cstring, recursive: bool): bool {.importc: abiPrefix & "fs_rmdir", cdecl.}
+proc nativeFsRename(frm, dst: cstring): bool {.importc: abiPrefix & "fs_rename", cdecl.}
+proc nativeFsCopy(frm, dst: cstring): bool {.importc: abiPrefix & "fs_copy", cdecl.}
 # CLI-emitted static allowlist (zapp_build_config.nim, Task 1).
 proc zapp_build_fs_allowlist_json(): cstring {.importc, cdecl.}
 # Permission gate (permissions.nim exportc); importc'd to dodge an import cycle.
@@ -46,13 +47,13 @@ proc fsExpandPath*(path: string): string =
   ## unresolvable var; absolute/relative paths pass through unchanged.
   if path.len == 0: return ""
   if path[0] == '~' and (path.len == 1 or path[1] == '/'):
-    let home = $darwin_fs_path_var("home".cstring)
+    let home = $nativeFsPathVar("home".cstring)
     if home.len == 0: return ""
     return home & path[1 .. ^1]
   if path[0] == '$':
     let slash = path.find('/', 1)
     let name = (if slash < 0: path[1 .. ^1] else: path[1 ..< slash])
-    let resolved = $darwin_fs_path_var(name.cstring)
+    let resolved = $nativeFsPathVar(name.cstring)
     if resolved.len == 0: return ""
     if slash < 0: return resolved
     return resolved & path[slash .. ^1]
@@ -122,7 +123,7 @@ proc fsReadFile*(path: string): string =
   let abs = fsExpandPath(path)
   if not fsIsAllowed(abs): return ""
   if not permissions_check("fs:read".cstring, "fs".cstring): return ""
-  let buf = darwin_fs_read_file(abs.cstring)
+  let buf = nativeFsReadFile(abs.cstring)
   if buf.isNil: return ""
   result = $buf
   c_free(buf)
@@ -131,25 +132,25 @@ proc fsWriteFile*(path, data: string): bool =
   let abs = fsExpandPath(path)
   if not fsIsAllowed(abs): return false
   if not permissions_check("fs:write".cstring, "fs".cstring): return false
-  darwin_fs_write_file(abs.cstring, data.cstring)
+  nativeFsWriteFile(abs.cstring, data.cstring)
 
 proc fsAppendFile*(path, data: string): bool =
   let abs = fsExpandPath(path)
   if not fsIsAllowed(abs): return false
   if not permissions_check("fs:write".cstring, "fs".cstring): return false
-  darwin_fs_append_file(abs.cstring, data.cstring)
+  nativeFsAppendFile(abs.cstring, data.cstring)
 
 proc fsExists*(path: string): bool =
   let abs = fsExpandPath(path)
   if not fsIsAllowed(abs): return false
   if not permissions_check("fs:read".cstring, "fs".cstring): return false
-  darwin_fs_exists(abs.cstring)
+  nativeFsExists(abs.cstring)
 
 proc fsReadDir*(path: string): string =
   let abs = fsExpandPath(path)
   if not fsIsAllowed(abs): return ""
   if not permissions_check("fs:read".cstring, "fs".cstring): return ""
-  let buf = darwin_fs_read_dir(abs.cstring)
+  let buf = nativeFsReadDir(abs.cstring)
   if buf.isNil: return ""
   result = $buf
   c_free(buf)
@@ -158,19 +159,19 @@ proc fsMkdir*(path: string, recursive: bool): bool =
   let abs = fsExpandPath(path)
   if not fsIsAllowed(abs): return false
   if not permissions_check("fs:write".cstring, "fs".cstring): return false
-  darwin_fs_mkdir(abs.cstring, recursive)
+  nativeFsMkdir(abs.cstring, recursive)
 
 proc fsRemove*(path: string): bool =
   let abs = fsExpandPath(path)
   if not fsIsAllowed(abs): return false
   if not permissions_check("fs:write".cstring, "fs".cstring): return false
-  darwin_fs_remove(abs.cstring)
+  nativeFsRemove(abs.cstring)
 
 proc fsRmdir*(path: string, recursive: bool): bool =
   let abs = fsExpandPath(path)
   if not fsIsAllowed(abs): return false
   if not permissions_check("fs:write".cstring, "fs".cstring): return false
-  darwin_fs_rmdir(abs.cstring, recursive)
+  nativeFsRmdir(abs.cstring, recursive)
 
 proc fsRename*(frm, dst: string): bool =
   ## rename/copy validate BOTH source and destination (fs.zc:448).
@@ -178,11 +179,11 @@ proc fsRename*(frm, dst: string): bool =
   let absTo = fsExpandPath(dst)
   if not fsIsAllowed(absFrom) or not fsIsAllowed(absTo): return false
   if not permissions_check("fs:write".cstring, "fs".cstring): return false
-  darwin_fs_rename(absFrom.cstring, absTo.cstring)
+  nativeFsRename(absFrom.cstring, absTo.cstring)
 
 proc fsCopy*(frm, dst: string): bool =
   let absFrom = fsExpandPath(frm)
   let absTo = fsExpandPath(dst)
   if not fsIsAllowed(absFrom) or not fsIsAllowed(absTo): return false
   if not permissions_check("fs:write".cstring, "fs".cstring): return false
-  darwin_fs_copy(absFrom.cstring, absTo.cstring)
+  nativeFsCopy(absFrom.cstring, absTo.cstring)

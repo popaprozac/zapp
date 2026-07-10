@@ -17,6 +17,7 @@ import worker, registry, window
 # proc in dispatch.nim, so importing the module makes it callable by name — NO
 # importc (it's a Nim proc, not a C symbol; mixing would risk a duplicate).
 import dispatch
+import nativeabi
 
 # Bridge-ready signal: the webview posts {t:4,m:"ready"} once its bootstrap bridge
 # is up (bootstrap/webview.ts). The .m window delegate defers the FIRST focus
@@ -32,8 +33,8 @@ when defined(zappIos):
   proc zapp_ios_pop_route_vc(windowId: int32) {.importc, cdecl.}
   proc zapp_ios_pop_to_content(windowId: int32) {.importc, cdecl.}
 
-proc darwin_window_id_string(numericId: int32): cstring {.importc, cdecl.}
-proc darwin_window_set_bridge_ready(windowId: cstring) {.importc, cdecl.}
+proc nativeWindowIdString(numericId: int32): cstring {.importc: abiPrefix & "window_id_string", cdecl.}
+proc nativeWindowSetBridgeReady(windowId: cstring) {.importc: abiPrefix & "window_set_bridge_ready", cdecl.}
 proc zapp_window_trigger_on_ready(id: int32) {.importc, cdecl.}  # def in callbacks.nim
 
 # __zapp: route targets. zapp_workers_registry_list_json is the zapp.nim stub →
@@ -43,127 +44,127 @@ proc zapp_window_trigger_on_ready(id: int32) {.importc, cdecl.}  # def in callba
 proc zapp_workers_registry_list_json(): cstring {.importc, cdecl.}
 
 # __app: route targets (platform.m — SMAppService login item, macOS).
-proc darwin_set_login_item(enabled: bool): bool {.importc, cdecl.}
-proc darwin_get_login_item(): bool {.importc, cdecl.}
+proc nativeSetLoginItem(enabled: bool): bool {.importc: abiPrefix & "set_login_item", cdecl.}
+proc nativeGetLoginItem(): bool {.importc: abiPrefix & "get_login_item", cdecl.}
 
 # --- t:4 window-op targets (window.m / webview.h, all compiled) -------------
-proc darwin_window_get_by_numeric_id(numericId: int32): pointer {.importc, cdecl.}
-proc darwin_window_numeric_id_for_string(wid: cstring): int32 {.importc, cdecl.}
-proc darwin_window_show(handle: pointer) {.importc, cdecl.}
-proc darwin_window_hide(handle: pointer) {.importc, cdecl.}
-proc darwin_window_minimize(handle: pointer) {.importc, cdecl.}
-proc darwin_window_maximize(handle: pointer) {.importc, cdecl.}
-proc darwin_window_zoom(handle: pointer) {.importc, cdecl.}
-proc darwin_window_focus(handle: pointer) {.importc, cdecl.}
-proc darwin_window_force_close(handle: pointer) {.importc, cdecl.}
-proc darwin_window_set_title(handle: pointer, title: cstring) {.importc, cdecl.}
-proc darwin_window_set_size(handle: pointer, w, h: int32) {.importc, cdecl.}
-proc darwin_window_set_position(handle: pointer, x, y: int32) {.importc, cdecl.}
-proc darwin_window_set_fullscreen(handle: pointer, on: bool) {.importc, cdecl.}
-proc darwin_window_set_always_on_top(handle: pointer, on: bool) {.importc, cdecl.}
-proc darwin_window_attach_modal(parent, modal: pointer) {.importc, cdecl.}
-proc darwin_window_detach_modal(parent, modal: pointer) {.importc, cdecl.}
-proc darwin_window_load_url(windowId: int32, url: cstring) {.importc, cdecl.}
-proc darwin_webview_set_drag_region(windowId: int32, drag: bool) {.importc, cdecl.}
+proc nativeWindowGetByNumericId(numericId: int32): pointer {.importc: abiPrefix & "window_get_by_numeric_id", cdecl.}
+proc nativeWindowNumericIdForString(wid: cstring): int32 {.importc: abiPrefix & "window_numeric_id_for_string", cdecl.}
+proc nativeWindowShow(handle: pointer) {.importc: abiPrefix & "window_show", cdecl.}
+proc nativeWindowHide(handle: pointer) {.importc: abiPrefix & "window_hide", cdecl.}
+proc nativeWindowMinimize(handle: pointer) {.importc: abiPrefix & "window_minimize", cdecl.}
+proc nativeWindowMaximize(handle: pointer) {.importc: abiPrefix & "window_maximize", cdecl.}
+proc nativeWindowZoom(handle: pointer) {.importc: abiPrefix & "window_zoom", cdecl.}
+proc nativeWindowFocus(handle: pointer) {.importc: abiPrefix & "window_focus", cdecl.}
+proc nativeWindowForceClose(handle: pointer) {.importc: abiPrefix & "window_force_close", cdecl.}
+proc nativeWindowSetTitle(handle: pointer, title: cstring) {.importc: abiPrefix & "window_set_title", cdecl.}
+proc nativeWindowSetSize(handle: pointer, w, h: int32) {.importc: abiPrefix & "window_set_size", cdecl.}
+proc nativeWindowSetPosition(handle: pointer, x, y: int32) {.importc: abiPrefix & "window_set_position", cdecl.}
+proc nativeWindowSetFullscreen(handle: pointer, on: bool) {.importc: abiPrefix & "window_set_fullscreen", cdecl.}
+proc nativeWindowSetAlwaysOnTop(handle: pointer, on: bool) {.importc: abiPrefix & "window_set_always_on_top", cdecl.}
+proc nativeWindowAttachModal(parent, modal: pointer) {.importc: abiPrefix & "window_attach_modal", cdecl.}
+proc nativeWindowDetachModal(parent, modal: pointer) {.importc: abiPrefix & "window_detach_modal", cdecl.}
+proc nativeWindowLoadUrl(windowId: int32, url: cstring) {.importc: abiPrefix & "window_load_url", cdecl.}
+proc nativeWebviewSetDragRegion(windowId: int32, drag: bool) {.importc: abiPrefix & "webview_set_drag_region", cdecl.}
 proc zapp_window_set_close_guard(id, enabled: cint) {.importc, cdecl.}  # def in callbacks.nim (exportc)
 
 # --- t:4 app-op + shell targets (platform.m / webview.h) -------------------
-proc darwin_app_quit(force: bool) {.importc, cdecl.}
-proc darwin_app_activate() {.importc, cdecl.}
-proc darwin_set_quit_guard(enabled: bool) {.importc, cdecl.}
-proc darwin_open_external(url: cstring) {.importc, cdecl.}
+proc nativeAppQuit(force: bool) {.importc: abiPrefix & "app_quit", cdecl.}
+proc nativeAppActivate() {.importc: abiPrefix & "app_activate", cdecl.}
+proc nativeSetQuitGuard(enabled: bool) {.importc: abiPrefix & "set_quit_guard", cdecl.}
+proc nativeOpenExternal(url: cstring) {.importc: abiPrefix & "open_external", cdecl.}
 
 # --- t:4 shell-path targets (webview.m, compiled; B6a) ---------------------
-proc darwin_show_item_in_folder(p: cstring) {.importc, cdecl.}
-proc darwin_open_path(p: cstring) {.importc, cdecl.}
-proc darwin_trash_item(p: cstring) {.importc, cdecl.}
+proc nativeShowItemInFolder(p: cstring) {.importc: abiPrefix & "show_item_in_folder", cdecl.}
+proc nativeOpenPath(p: cstring) {.importc: abiPrefix & "open_path", cdecl.}
+proc nativeTrashItem(p: cstring) {.importc: abiPrefix & "trash_item", cdecl.}
 
 # --- t:1 screen-query targets (screen.m, already compiled; B6e). Each returns
 # a heap char* the caller frees. darwin_window_numeric_id_for_string is already
 # importc'd above (B5b). ---
-proc darwin_screen_list_json(): cstring {.importc, cdecl.}
-proc darwin_screen_cursor_json(): cstring {.importc, cdecl.}
-proc darwin_screen_for_window_json(windowId: int32): cstring {.importc, cdecl.}
-proc darwin_windows_list_json(): cstring {.importc, cdecl.}
+proc nativeScreenListJson(): cstring {.importc: abiPrefix & "screen_list_json", cdecl.}
+proc nativeScreenCursorJson(): cstring {.importc: abiPrefix & "screen_cursor_json", cdecl.}
+proc nativeScreenForWindowJson(windowId: int32): cstring {.importc: abiPrefix & "screen_for_window_json", cdecl.}
+proc nativeWindowsListJson(): cstring {.importc: abiPrefix & "windows_list_json", cdecl.}
 proc c_free(p: cstring) {.importc: "free", cdecl.}
 
 # --- t:4 menu targets (menu.m; payload = the FULL bridge envelope, menu.m
 # extracts "a"). menu.m builds the NSMenu + icons + click delivery itself. ---
-proc darwin_menu_set_from_payload(payloadJson: cstring) {.importc, cdecl.}
-proc darwin_menu_show_context_from_payload(payloadJson: cstring, windowId: int32) {.importc, cdecl.}
+proc nativeMenuSetFromPayload(payloadJson: cstring) {.importc: abiPrefix & "menu_set_from_payload", cdecl.}
+proc nativeMenuShowContextFromPayload(payloadJson: cstring, windowId: int32) {.importc: abiPrefix & "menu_show_context_from_payload", cdecl.}
 
 # --- t:4 tray targets (tray.m; payload = the FULL bridge envelope, tray.m
 # extracts "a"). tray.m owns the NSStatusItem + icon + menu + click delivery. ---
-proc darwin_tray_create_from_payload(payloadJson: cstring) {.importc, cdecl.}
-proc darwin_tray_set_icon_from_payload(payloadJson: cstring) {.importc, cdecl.}
-proc darwin_tray_set_title_from_payload(payloadJson: cstring) {.importc, cdecl.}
-proc darwin_tray_set_tooltip_from_payload(payloadJson: cstring) {.importc, cdecl.}
-proc darwin_tray_set_menu_from_payload(payloadJson: cstring) {.importc, cdecl.}
-proc darwin_tray_destroy_from_payload(payloadJson: cstring) {.importc, cdecl.}
-proc darwin_tray_attach_window_from_payload(payloadJson: cstring) {.importc, cdecl.}
-proc darwin_tray_detach_window_from_payload(payloadJson: cstring) {.importc, cdecl.}
+proc nativeTrayCreateFromPayload(payloadJson: cstring) {.importc: abiPrefix & "tray_create_from_payload", cdecl.}
+proc nativeTraySetIconFromPayload(payloadJson: cstring) {.importc: abiPrefix & "tray_set_icon_from_payload", cdecl.}
+proc nativeTraySetTitleFromPayload(payloadJson: cstring) {.importc: abiPrefix & "tray_set_title_from_payload", cdecl.}
+proc nativeTraySetTooltipFromPayload(payloadJson: cstring) {.importc: abiPrefix & "tray_set_tooltip_from_payload", cdecl.}
+proc nativeTraySetMenuFromPayload(payloadJson: cstring) {.importc: abiPrefix & "tray_set_menu_from_payload", cdecl.}
+proc nativeTrayDestroyFromPayload(payloadJson: cstring) {.importc: abiPrefix & "tray_destroy_from_payload", cdecl.}
+proc nativeTrayAttachWindowFromPayload(payloadJson: cstring) {.importc: abiPrefix & "tray_attach_window_from_payload", cdecl.}
+proc nativeTrayDetachWindowFromPayload(payloadJson: cstring) {.importc: abiPrefix & "tray_detach_window_from_payload", cdecl.}
 
 # --- t:6 SYNC (sync.m, B7c). darwin_sync_handle's 2nd arg is the FULL RAW
 # envelope ({t:6,m,a}); sync.m:233-242 unwraps the nested "a" itself. ---
-proc darwin_sync_handle(action, payloadJson: cstring) {.importc, cdecl.}
+proc nativeSyncHandle(action, payloadJson: cstring) {.importc: abiPrefix & "sync_handle", cdecl.}
 
 # --- t:4 dock targets (dock.m; arg-based, not payload). ---
-proc darwin_dock_show_icon() {.importc, cdecl.}
-proc darwin_dock_hide_icon() {.importc, cdecl.}
-proc darwin_dock_remove_badge() {.importc, cdecl.}
-proc darwin_dock_reset_icon() {.importc, cdecl.}
-proc darwin_dock_set_badge(label: cstring) {.importc, cdecl.}
-proc darwin_dock_bounce(bounceType: cint) {.importc, cdecl.}
-proc darwin_dock_set_progress(permille, mode: cint) {.importc, cdecl.}
-proc darwin_dock_set_icon(imagePath: cstring) {.importc, cdecl.}
+proc nativeDockShowIcon() {.importc: abiPrefix & "dock_show_icon", cdecl.}
+proc nativeDockHideIcon() {.importc: abiPrefix & "dock_hide_icon", cdecl.}
+proc nativeDockRemoveBadge() {.importc: abiPrefix & "dock_remove_badge", cdecl.}
+proc nativeDockResetIcon() {.importc: abiPrefix & "dock_reset_icon", cdecl.}
+proc nativeDockSetBadge(label: cstring) {.importc: abiPrefix & "dock_set_badge", cdecl.}
+proc nativeDockBounce(bounceType: cint) {.importc: abiPrefix & "dock_bounce", cdecl.}
+proc nativeDockSetProgress(permille, mode: cint) {.importc: abiPrefix & "dock_set_progress", cdecl.}
+proc nativeDockSetIcon(imagePath: cstring) {.importc: abiPrefix & "dock_set_icon", cdecl.}
 
 # --- t:4 panel (embedded-webview) targets (panel.m, already compiled; B6i).
 # Arg-based; embed-gated at the head. ---
-proc darwin_panel_create(windowId: int32, panelId, url: cstring, bridge: bool, partition: cstring) {.importc, cdecl.}
-proc darwin_panel_set_bounds(panelId: cstring, x, y, w, h: int32) {.importc, cdecl.}
-proc darwin_panel_load_url(panelId, url: cstring) {.importc, cdecl.}
-proc darwin_panel_eval_js(panelId, js: cstring) {.importc, cdecl.}
-proc darwin_panel_post_message(panelId, dataJson: cstring) {.importc, cdecl.}
-proc darwin_panel_show(panelId: cstring) {.importc, cdecl.}
-proc darwin_panel_hide(panelId: cstring) {.importc, cdecl.}
-proc darwin_panel_reload(panelId: cstring) {.importc, cdecl.}
-proc darwin_panel_go_back(panelId: cstring) {.importc, cdecl.}
-proc darwin_panel_go_forward(panelId: cstring) {.importc, cdecl.}
-proc darwin_panel_destroy(panelId: cstring) {.importc, cdecl.}
+proc nativePanelCreate(windowId: int32, panelId, url: cstring, bridge: bool, partition: cstring) {.importc: abiPrefix & "panel_create", cdecl.}
+proc nativePanelSetBounds(panelId: cstring, x, y, w, h: int32) {.importc: abiPrefix & "panel_set_bounds", cdecl.}
+proc nativePanelLoadUrl(panelId, url: cstring) {.importc: abiPrefix & "panel_load_url", cdecl.}
+proc nativePanelEvalJs(panelId, js: cstring) {.importc: abiPrefix & "panel_eval_js", cdecl.}
+proc nativePanelPostMessage(panelId, dataJson: cstring) {.importc: abiPrefix & "panel_post_message", cdecl.}
+proc nativePanelShow(panelId: cstring) {.importc: abiPrefix & "panel_show", cdecl.}
+proc nativePanelHide(panelId: cstring) {.importc: abiPrefix & "panel_hide", cdecl.}
+proc nativePanelReload(panelId: cstring) {.importc: abiPrefix & "panel_reload", cdecl.}
+proc nativePanelGoBack(panelId: cstring) {.importc: abiPrefix & "panel_go_back", cdecl.}
+proc nativePanelGoForward(panelId: cstring) {.importc: abiPrefix & "panel_go_forward", cdecl.}
+proc nativePanelDestroy(panelId: cstring) {.importc: abiPrefix & "panel_destroy", cdecl.}
 
 # --- t:4 native-chrome targets (sidebar/inspector/toolbar/popover .m, B8) ----
-proc darwin_sidebar_toggle(windowId: int32) {.importc, cdecl.}
-proc darwin_sidebar_collapse(windowId: int32) {.importc, cdecl.}
-proc darwin_sidebar_expand(windowId: int32) {.importc, cdecl.}
-proc darwin_sidebar_set_width(windowId: int32, width: int32) {.importc, cdecl.}
+proc nativeSidebarToggle(windowId: int32) {.importc: abiPrefix & "sidebar_toggle", cdecl.}
+proc nativeSidebarCollapse(windowId: int32) {.importc: abiPrefix & "sidebar_collapse", cdecl.}
+proc nativeSidebarExpand(windowId: int32) {.importc: abiPrefix & "sidebar_expand", cdecl.}
+proc nativeSidebarSetWidth(windowId: int32, width: int32) {.importc: abiPrefix & "sidebar_set_width", cdecl.}
 # iPhone master-detail column reveal (iOS UISplitViewController). No-op on
 # macOS/iPad-regular where both panes are always visible.
-proc darwin_sidebar_show_content(windowId: int32) {.importc, cdecl.}
-proc darwin_sidebar_show_sidebar(windowId: int32) {.importc, cdecl.}
-proc darwin_sidebar_set_collapsible(windowId: int32, canCollapse: bool) {.importc, cdecl.}
-proc darwin_sidebar_set_resizable(windowId: int32, resizable: bool) {.importc, cdecl.}
-proc darwin_sidebar_set_presentation(windowId: int32, mode: cstring) {.importc, cdecl.}
-proc darwin_sidebar_set_title(windowId: int32, title: cstring) {.importc, cdecl.}
-proc darwin_inspector_toggle(windowId: int32) {.importc, cdecl.}
-proc darwin_inspector_collapse(windowId: int32) {.importc, cdecl.}
-proc darwin_inspector_expand(windowId: int32) {.importc, cdecl.}
-proc darwin_inspector_set_width(windowId: int32, width: int32) {.importc, cdecl.}
-proc darwin_inspector_set_collapsible(windowId: int32, canCollapse: bool) {.importc, cdecl.}
-proc darwin_inspector_set_resizable(windowId: int32, resizable: bool) {.importc, cdecl.}
-proc darwin_inspector_set_title(windowId: int32, title: cstring) {.importc, cdecl.}
+proc nativeSidebarShowContent(windowId: int32) {.importc: abiPrefix & "sidebar_show_content", cdecl.}
+proc nativeSidebarShowSidebar(windowId: int32) {.importc: abiPrefix & "sidebar_show_sidebar", cdecl.}
+proc nativeSidebarSetCollapsible(windowId: int32, canCollapse: bool) {.importc: abiPrefix & "sidebar_set_collapsible", cdecl.}
+proc nativeSidebarSetResizable(windowId: int32, resizable: bool) {.importc: abiPrefix & "sidebar_set_resizable", cdecl.}
+proc nativeSidebarSetPresentation(windowId: int32, mode: cstring) {.importc: abiPrefix & "sidebar_set_presentation", cdecl.}
+proc nativeSidebarSetTitle(windowId: int32, title: cstring) {.importc: abiPrefix & "sidebar_set_title", cdecl.}
+proc nativeInspectorToggle(windowId: int32) {.importc: abiPrefix & "inspector_toggle", cdecl.}
+proc nativeInspectorCollapse(windowId: int32) {.importc: abiPrefix & "inspector_collapse", cdecl.}
+proc nativeInspectorExpand(windowId: int32) {.importc: abiPrefix & "inspector_expand", cdecl.}
+proc nativeInspectorSetWidth(windowId: int32, width: int32) {.importc: abiPrefix & "inspector_set_width", cdecl.}
+proc nativeInspectorSetCollapsible(windowId: int32, canCollapse: bool) {.importc: abiPrefix & "inspector_set_collapsible", cdecl.}
+proc nativeInspectorSetResizable(windowId: int32, resizable: bool) {.importc: abiPrefix & "inspector_set_resizable", cdecl.}
+proc nativeInspectorSetTitle(windowId: int32, title: cstring) {.importc: abiPrefix & "inspector_set_title", cdecl.}
 # D sub-cycle Task 1 — engine-aware DevTools show/close (devtools.m; CEF
 # opens/closes real Chromium DevTools, WK no-ops — see devtools.m's header).
-proc darwin_devtools_open(windowId: int32) {.importc, cdecl.}
-proc darwin_devtools_close(windowId: int32) {.importc, cdecl.}
-proc darwin_toolbar_set_items(windowPtr: pointer, toolbarJson: cstring, hostSlot: int32) {.importc, cdecl.}
-proc darwin_toolbar_update_item(windowPtr: pointer, itemJson: cstring) {.importc, cdecl.}
-proc darwin_toolbar_remove(windowPtr: pointer) {.importc, cdecl.}
-proc darwin_popover_create(windowPtr: pointer, popoverId: cstring, url: cstring,
+proc nativeDevtoolsOpen(windowId: int32) {.importc: abiPrefix & "devtools_open", cdecl.}
+proc nativeDevtoolsClose(windowId: int32) {.importc: abiPrefix & "devtools_close", cdecl.}
+proc nativeToolbarSetItems(windowPtr: pointer, toolbarJson: cstring, hostSlot: int32) {.importc: abiPrefix & "toolbar_set_items", cdecl.}
+proc nativeToolbarUpdateItem(windowPtr: pointer, itemJson: cstring) {.importc: abiPrefix & "toolbar_update_item", cdecl.}
+proc nativeToolbarRemove(windowPtr: pointer) {.importc: abiPrefix & "toolbar_remove", cdecl.}
+proc nativePopoverCreate(windowPtr: pointer, popoverId: cstring, url: cstring,
                            width, height: int32, behavior: cstring,
-                           hostSlot, popoverSlot: int32) {.importc, cdecl.}
-proc darwin_popover_show(popoverId: cstring, argsJson: cstring, senderSlot: int32) {.importc, cdecl.}
-proc darwin_popover_hide(popoverId: cstring) {.importc, cdecl.}
-proc darwin_popover_destroy(popoverId: cstring) {.importc, cdecl.}
+                           hostSlot, popoverSlot: int32) {.importc: abiPrefix & "popover_create", cdecl.}
+proc nativePopoverShow(popoverId: cstring, argsJson: cstring, senderSlot: int32) {.importc: abiPrefix & "popover_show", cdecl.}
+proc nativePopoverHide(popoverId: cstring) {.importc: abiPrefix & "popover_hide", cdecl.}
+proc nativePopoverDestroy(popoverId: cstring) {.importc: abiPrefix & "popover_destroy", cdecl.}
 
 proc resolveWinId(a: JsonNode, key: string): int32 =
   ## parentId/modalId may be an int OR a "win-<n>" pointer-string; -1 if absent
@@ -172,7 +173,7 @@ proc resolveWinId(a: JsonNode, key: string): int32 =
   let v = a{key}
   if v.isNil: return -1
   if v.kind == JInt: return v.getInt(-1).int32
-  if v.kind == JString: return darwin_window_numeric_id_for_string(v.getStr("").cstring)
+  if v.kind == JString: return nativeWindowNumericIdForString(v.getStr("").cstring)
   -1
 
 proc emitRouteChanged(win: int32, kind: string) =
@@ -219,7 +220,7 @@ proc routeZapp(meth: string, windowId, id: int) =
     sendInvokeResponse(windowId, id, true, $permissions_bootstrap_json())
     return
   if meth == "__zapp:windows-list":
-    let j = darwin_windows_list_json()
+    let j = nativeWindowsListJson()
     let idsArr = (if j.isNil: "[]" else: $j)
     if not j.isNil: c_free(j)
     # Parse the array so we can embed it in {"ids":[...]}
@@ -233,11 +234,11 @@ proc routeApp(meth: string, a: JsonNode, windowId, id: int) =
   ## a JSON literal the runtime JSON.parses.
   if meth == "__app:setLoginItem":
     let enabled = (if a.isNil: false else: a{"enabled"}.getBool(false))
-    let ok = darwin_set_login_item(enabled)
+    let ok = nativeSetLoginItem(enabled)
     sendInvokeResponse(windowId, id, true, (if ok: "true" else: "false"))
     return
   if meth == "__app:getLoginItem":
-    let ok = darwin_get_login_item()
+    let ok = nativeGetLoginItem()
     sendInvokeResponse(windowId, id, true, (if ok: "true" else: "false"))
     return
   sendInvokeResponse(windowId, id, false, "UNKNOWN")
@@ -256,7 +257,7 @@ proc routeWorker(action: string, a: JsonNode, windowId: int) =
 
     # Owner id derived from the window's string id ("win-<n>"); bail if the
     # window has no string id (zc: `if owner_id == NULL return`).
-    let ownerId = darwin_window_id_string(windowId.int32)
+    let ownerId = nativeWindowIdString(windowId.int32)
     if ownerId.isNil: return
 
     # Per-worker engine selection (G8): string → id, mirroring router.zc:1228-1233.
@@ -443,19 +444,19 @@ proc routeScreen(meth: string, a: JsonNode, windowId, id: int) =
   ## return heap char* — copy ($) into the reply, then free. NULL → safe default.
   case meth
   of "__screen:list":
-    let j = darwin_screen_list_json()
+    let j = nativeScreenListJson()
     if j.isNil: sendInvokeResponse(windowId, id, true, "[]")
     else:
       sendInvokeResponse(windowId, id, true, $j); c_free(j)
   of "__screen:cursor":
-    let j = darwin_screen_cursor_json()
+    let j = nativeScreenCursorJson()
     if j.isNil: sendInvokeResponse(windowId, id, false, "null")
     else:
       sendInvokeResponse(windowId, id, true, $j); c_free(j)
   of "__screen:forWindow":
     let ws = a{"windowId"}.getStr("")
-    let target = (if ws.len > 0: darwin_window_numeric_id_for_string(ws.cstring) else: -1'i32)
-    let j = darwin_screen_for_window_json(target)
+    let target = (if ws.len > 0: nativeWindowNumericIdForString(ws.cstring) else: -1'i32)
+    let j = nativeScreenForWindowJson(target)
     if j.isNil: sendInvokeResponse(windowId, id, false, "null")
     else:
       sendInvokeResponse(windowId, id, true, $j); c_free(j)
@@ -472,26 +473,26 @@ proc routePanel(action: string, a: JsonNode, windowId: int): bool =
   of "panelCreate":
     let url = a{"url"}.getStr("")
     let partition = a{"partition"}.getStr("")
-    darwin_panel_create(windowId.int32, pid.cstring, url.cstring,
+    nativePanelCreate(windowId.int32, pid.cstring, url.cstring,
                         a{"bridge"}.getBool(false), partition.cstring)
   of "panelSetBounds":
-    darwin_panel_set_bounds(pid.cstring, a{"x"}.getInt(0).int32, a{"y"}.getInt(0).int32,
+    nativePanelSetBounds(pid.cstring, a{"x"}.getInt(0).int32, a{"y"}.getInt(0).int32,
                             a{"w"}.getInt(0).int32, a{"h"}.getInt(0).int32)
   of "panelLoadUrl":
     let url = a{"url"}.getStr("")
-    darwin_panel_load_url(pid.cstring, url.cstring)
+    nativePanelLoadUrl(pid.cstring, url.cstring)
   of "panelExecJs":
     let code = a{"code"}.getStr("")
-    darwin_panel_eval_js(pid.cstring, code.cstring)
+    nativePanelEvalJs(pid.cstring, code.cstring)
   of "panelPostMessage":
     let data = a{"data"}.getStr("")
-    darwin_panel_post_message(pid.cstring, data.cstring)
-  of "panelShow": darwin_panel_show(pid.cstring)
-  of "panelHide": darwin_panel_hide(pid.cstring)
-  of "panelReload": darwin_panel_reload(pid.cstring)
-  of "panelBack": darwin_panel_go_back(pid.cstring)
-  of "panelForward": darwin_panel_go_forward(pid.cstring)
-  of "panelDestroy": darwin_panel_destroy(pid.cstring)
+    nativePanelPostMessage(pid.cstring, data.cstring)
+  of "panelShow": nativePanelShow(pid.cstring)
+  of "panelHide": nativePanelHide(pid.cstring)
+  of "panelReload": nativePanelReload(pid.cstring)
+  of "panelBack": nativePanelGoBack(pid.cstring)
+  of "panelForward": nativePanelGoForward(pid.cstring)
+  of "panelDestroy": nativePanelDestroy(pid.cstring)
   else: return false      # "panel"-prefixed but not a real panel action
   return true
 
@@ -500,10 +501,10 @@ proc resolveAccessoryHost(windowId: int): int =
   ## the pane's transport slot as windowId, which is NOT a real NSWindow. Remap to
   ## the host via the id-string round-trip (router.zc:484-512). Real windows pass
   ## through unchanged.
-  if not darwin_window_get_by_numeric_id(windowId.int32).isNil: return windowId
-  let hostStr = darwin_window_id_string(windowId.int32)
+  if not nativeWindowGetByNumericId(windowId.int32).isNil: return windowId
+  let hostStr = nativeWindowIdString(windowId.int32)
   if hostStr.isNil: return windowId
-  let hostId = darwin_window_numeric_id_for_string(hostStr).int
+  let hostId = nativeWindowNumericIdForString(hostStr).int
   if hostId >= 0: hostId else: windowId
 
 proc routeWindowAction(action: string, a: JsonNode, rawWindowId: int, payload: string) =
@@ -534,8 +535,8 @@ proc routeWindowAction(action: string, a: JsonNode, rawWindowId: int, payload: s
   # ready: the webview's bridge is up — signal bridge-ready (flushes window.m's
   # deferred first-focus event) + fire the native on_ready callback.
   if action == "ready":
-    let wid = darwin_window_id_string(rawWindowId.int32)
-    if not wid.isNil: darwin_window_set_bridge_ready(wid)
+    let wid = nativeWindowIdString(rawWindowId.int32)
+    if not wid.isNil: nativeWindowSetBridgeReady(wid)
     zapp_window_trigger_on_ready(rawWindowId.int32)
     return
 
@@ -549,7 +550,7 @@ proc routeWindowAction(action: string, a: JsonNode, rawWindowId: int, payload: s
     # sent it. darwin_window_get_webview resolves the slot → that pane's webview.
     let drag = a{"drag"}
     if not drag.isNil:
-      darwin_webview_set_drag_region(rawWindowId.int32, drag.getBool(false))
+      nativeWebviewSetDragRegion(rawWindowId.int32, drag.getBool(false))
     return
 
   # Accessory-pane sender resolution: window + chrome ops from inside a pane
@@ -560,7 +561,7 @@ proc routeWindowAction(action: string, a: JsonNode, rawWindowId: int, payload: s
   # --- id-based window ops (take the numeric id; self-guard in the .m) -------
   if action == "loadUrl":
     let url = (if a.isNil: "" else: a{"url"}.getStr(""))
-    if url.len > 0: darwin_window_load_url(windowId.int32, url.cstring)
+    if url.len > 0: nativeWindowLoadUrl(windowId.int32, url.cstring)
     return
   if action == "setCloseGuard":
     let on = a{"on"}
@@ -573,28 +574,28 @@ proc routeWindowAction(action: string, a: JsonNode, rawWindowId: int, payload: s
     let pNum = resolveWinId(a, "parentId")
     let mNum = resolveWinId(a, "modalId")
     if pNum < 0 or mNum < 0: return
-    let pH = darwin_window_get_by_numeric_id(pNum)
-    let mH = darwin_window_get_by_numeric_id(mNum)
+    let pH = nativeWindowGetByNumericId(pNum)
+    let mH = nativeWindowGetByNumericId(mNum)
     if pH.isNil or mH.isNil: return
-    if action == "attachModal": darwin_window_attach_modal(pH, mH)
-    else: darwin_window_detach_modal(pH, mH)
+    if action == "attachModal": nativeWindowAttachModal(pH, mH)
+    else: nativeWindowDetachModal(pH, mH)
     return
 
   # --- app ops (platform.m; ungated) ----------------------------------------
   if action == "quit":
-    darwin_app_quit(if a.isNil: false else: a{"force"}.getBool(false))
+    nativeAppQuit(if a.isNil: false else: a{"force"}.getBool(false))
     return
   if action == "activate":
-    darwin_app_activate()
+    nativeAppActivate()
     return
   if action == "setQuitGuard":
-    darwin_set_quit_guard(if a.isNil: false else: a{"enabled"}.getBool(false))
+    nativeSetQuitGuard(if a.isNil: false else: a{"enabled"}.getBool(false))
     return
 
   # --- openExternal (shell:open — gated at the head) ------------------------
   if action == "openExternal":
     let url = (if a.isNil: "" else: a{"url"}.getStr(""))
-    if url.len > 0: darwin_open_external(url.cstring)
+    if url.len > 0: nativeOpenExternal(url.cstring)
     return
 
   # --- shell-path ops (B6a; permission-gated at the head as shell:open/reveal/
@@ -608,50 +609,50 @@ proc routeWindowAction(action: string, a: JsonNode, rawWindowId: int, payload: s
     let abs = fsExpandPath(path)
     if action == "trashItem":
       if not fsIsAllowed(abs): return
-    if action == "showItemInFolder": darwin_show_item_in_folder(abs.cstring)
-    elif action == "openPath": darwin_open_path(abs.cstring)
-    else: darwin_trash_item(abs.cstring)
+    if action == "showItemInFolder": nativeShowItemInFolder(abs.cstring)
+    elif action == "openPath": nativeOpenPath(abs.cstring)
+    else: nativeTrashItem(abs.cstring)
     return
 
   # --- menu ops (menu.m parses the full payload; gated "menu" at the head) ---
   if action == "setMenu":
-    darwin_menu_set_from_payload(payload.cstring)
+    nativeMenuSetFromPayload(payload.cstring)
     return
   if action == "showContextMenu":
-    darwin_menu_show_context_from_payload(payload.cstring, windowId.int32)
+    nativeMenuShowContextFromPayload(payload.cstring, windowId.int32)
     return
 
   # --- tray ops (tray.m parses the full payload; gated "tray" at the head) ---
   if action.startsWith("tray:"):
     case action
-    of "tray:create": darwin_tray_create_from_payload(payload.cstring)
-    of "tray:setIcon": darwin_tray_set_icon_from_payload(payload.cstring)
-    of "tray:setTitle": darwin_tray_set_title_from_payload(payload.cstring)
-    of "tray:setTooltip": darwin_tray_set_tooltip_from_payload(payload.cstring)
-    of "tray:setMenu": darwin_tray_set_menu_from_payload(payload.cstring)
-    of "tray:destroy": darwin_tray_destroy_from_payload(payload.cstring)
-    of "tray:attachWindow": darwin_tray_attach_window_from_payload(payload.cstring)
-    of "tray:detachWindow": darwin_tray_detach_window_from_payload(payload.cstring)
+    of "tray:create": nativeTrayCreateFromPayload(payload.cstring)
+    of "tray:setIcon": nativeTraySetIconFromPayload(payload.cstring)
+    of "tray:setTitle": nativeTraySetTitleFromPayload(payload.cstring)
+    of "tray:setTooltip": nativeTraySetTooltipFromPayload(payload.cstring)
+    of "tray:setMenu": nativeTraySetMenuFromPayload(payload.cstring)
+    of "tray:destroy": nativeTrayDestroyFromPayload(payload.cstring)
+    of "tray:attachWindow": nativeTrayAttachWindowFromPayload(payload.cstring)
+    of "tray:detachWindow": nativeTrayDetachWindowFromPayload(payload.cstring)
     else: discard      # unknown tray:* — no-op (matches the zc fallthrough)
     return
 
   # --- dock ops (dock.m; arg-based; gated "dock" at the head) ---
   if action.startsWith("dock:"):
     case action
-    of "dock:showIcon": darwin_dock_show_icon()
-    of "dock:hideIcon": darwin_dock_hide_icon()
-    of "dock:removeBadge": darwin_dock_remove_badge()
-    of "dock:resetIcon": darwin_dock_reset_icon()
+    of "dock:showIcon": nativeDockShowIcon()
+    of "dock:hideIcon": nativeDockHideIcon()
+    of "dock:removeBadge": nativeDockRemoveBadge()
+    of "dock:resetIcon": nativeDockResetIcon()
     of "dock:setBadge":
       let label = a{"label"}
-      if not label.isNil: darwin_dock_set_badge(label.getStr("").cstring)
+      if not label.isNil: nativeDockSetBadge(label.getStr("").cstring)
     of "dock:bounce":
-      darwin_dock_bounce(a{"type"}.getInt(0).cint)
+      nativeDockBounce(a{"type"}.getInt(0).cint)
     of "dock:setProgress":
-      darwin_dock_set_progress(a{"permille"}.getInt(-1).cint, a{"mode"}.getInt(0).cint)
+      nativeDockSetProgress(a{"permille"}.getInt(-1).cint, a{"mode"}.getInt(0).cint)
     of "dock:setIcon":
       let path = a{"path"}
-      if not path.isNil: darwin_dock_set_icon(path.getStr("").cstring)
+      if not path.isNil: nativeDockSetIcon(path.getStr("").cstring)
     else: discard
     return
 
@@ -662,27 +663,27 @@ proc routeWindowAction(action: string, a: JsonNode, rawWindowId: int, payload: s
   if action.startsWith("sidebar:") or action.startsWith("inspector:"):
     # target = "windowId" arg (a real window) else the resolved sender host
     let widArg = a{"windowId"}.getStr("")
-    let target = (if widArg.len > 0: darwin_window_numeric_id_for_string(widArg.cstring) else: windowId.int32)
+    let target = (if widArg.len > 0: nativeWindowNumericIdForString(widArg.cstring) else: windowId.int32)
     let width = a{"width"}.getInt(0).int32
     let flag = a{"value"}.getBool(true)  # setCollapsible/setResizable bool
     case action
-    of "sidebar:toggle": darwin_sidebar_toggle(target)
-    of "sidebar:collapse": darwin_sidebar_collapse(target)
-    of "sidebar:expand": darwin_sidebar_expand(target)
-    of "sidebar:setWidth": darwin_sidebar_set_width(target, width)
-    of "sidebar:showContent": darwin_sidebar_show_content(target)
-    of "sidebar:showSidebar": darwin_sidebar_show_sidebar(target)
-    of "sidebar:setCollapsible": darwin_sidebar_set_collapsible(target, flag)
-    of "sidebar:setResizable": darwin_sidebar_set_resizable(target, flag)
-    of "sidebar:setPresentation": darwin_sidebar_set_presentation(target, a{"mode"}.getStr("automatic").cstring)
-    of "sidebar:setTitle": darwin_sidebar_set_title(target, a{"title"}.getStr("").cstring)
-    of "inspector:toggle": darwin_inspector_toggle(target)
-    of "inspector:collapse": darwin_inspector_collapse(target)
-    of "inspector:expand": darwin_inspector_expand(target)
-    of "inspector:setWidth": darwin_inspector_set_width(target, width)
-    of "inspector:setCollapsible": darwin_inspector_set_collapsible(target, flag)
-    of "inspector:setResizable": darwin_inspector_set_resizable(target, flag)
-    of "inspector:setTitle": darwin_inspector_set_title(target, a{"title"}.getStr("").cstring)
+    of "sidebar:toggle": nativeSidebarToggle(target)
+    of "sidebar:collapse": nativeSidebarCollapse(target)
+    of "sidebar:expand": nativeSidebarExpand(target)
+    of "sidebar:setWidth": nativeSidebarSetWidth(target, width)
+    of "sidebar:showContent": nativeSidebarShowContent(target)
+    of "sidebar:showSidebar": nativeSidebarShowSidebar(target)
+    of "sidebar:setCollapsible": nativeSidebarSetCollapsible(target, flag)
+    of "sidebar:setResizable": nativeSidebarSetResizable(target, flag)
+    of "sidebar:setPresentation": nativeSidebarSetPresentation(target, a{"mode"}.getStr("automatic").cstring)
+    of "sidebar:setTitle": nativeSidebarSetTitle(target, a{"title"}.getStr("").cstring)
+    of "inspector:toggle": nativeInspectorToggle(target)
+    of "inspector:collapse": nativeInspectorCollapse(target)
+    of "inspector:expand": nativeInspectorExpand(target)
+    of "inspector:setWidth": nativeInspectorSetWidth(target, width)
+    of "inspector:setCollapsible": nativeInspectorSetCollapsible(target, flag)
+    of "inspector:setResizable": nativeInspectorSetResizable(target, flag)
+    of "inspector:setTitle": nativeInspectorSetTitle(target, a{"title"}.getStr("").cstring)
     else: discard
     return
 
@@ -691,32 +692,32 @@ proc routeWindowAction(action: string, a: JsonNode, rawWindowId: int, payload: s
   # resolved sender host. Engine-aware: no-ops on WK (system Develop menu).
   if action.startsWith("devtools:"):
     let widArg = a{"windowId"}.getStr("")
-    let target = (if widArg.len > 0: darwin_window_numeric_id_for_string(widArg.cstring) else: windowId.int32)
+    let target = (if widArg.len > 0: nativeWindowNumericIdForString(widArg.cstring) else: windowId.int32)
     case action
-    of "devtools:open": darwin_devtools_open(target)
-    of "devtools:close": darwin_devtools_close(target)
+    of "devtools:open": nativeDevtoolsOpen(target)
+    of "devtools:close": nativeDevtoolsClose(target)
     else: discard
     return
 
   if action.startsWith("toolbar:"):
     let widArg = a{"windowId"}.getStr("")
-    let target = (if widArg.len > 0: darwin_window_numeric_id_for_string(widArg.cstring) else: windowId.int32)
-    let h = darwin_window_get_by_numeric_id(target)
+    let target = (if widArg.len > 0: nativeWindowNumericIdForString(widArg.cstring) else: windowId.int32)
+    let h = nativeWindowGetByNumericId(target)
     if h.isNil: return
     case action
     of "toolbar:setItems":
       let tj = a{"toolbarJson"}.getStr("")
-      if tj.len > 0: darwin_toolbar_set_items(h, tj.cstring, target)
+      if tj.len > 0: nativeToolbarSetItems(h, tj.cstring, target)
     of "toolbar:updateItem":
       let ij = a{"itemJson"}.getStr("")
-      if ij.len > 0: darwin_toolbar_update_item(h, ij.cstring)
-    of "toolbar:remove": darwin_toolbar_remove(h)
+      if ij.len > 0: nativeToolbarUpdateItem(h, ij.cstring)
+    of "toolbar:remove": nativeToolbarRemove(h)
     else: discard
     return
   if action.startsWith("router:"):
     # target: explicit windowId arg takes priority (same resolution as toolbar:*)
     let widArg = (if a.isNil: "" else: a{"windowId"}.getStr(""))
-    let target = (if widArg.len > 0: darwin_window_numeric_id_for_string(widArg.cstring) else: windowId.int32)
+    let target = (if widArg.len > 0: nativeWindowNumericIdForString(widArg.cstring) else: windowId.int32)
     if a.isNil or target < 0: return  # I1+M1: dead-window guard + nil-a guard (hasKey below is not nil-safe)
     case action
     of "router:push":
@@ -782,45 +783,45 @@ proc routeWindowAction(action: string, a: JsonNode, rawWindowId: int, payload: s
     case action
     of "popover:show":
       let argsJson = $a
-      darwin_popover_show(pid.cstring, argsJson.cstring, windowId.int32)
-    of "popover:hide": darwin_popover_hide(pid.cstring)
-    of "popover:destroy": darwin_popover_destroy(pid.cstring)
+      nativePopoverShow(pid.cstring, argsJson.cstring, windowId.int32)
+    of "popover:hide": nativePopoverHide(pid.cstring)
+    of "popover:destroy": nativePopoverDestroy(pid.cstring)
     else: discard      # popover:create deferred (needs a Nim window-slot allocator)
     return
 
   # --- handle-based window ops (resolve the NSWindow from the numeric id) ---
-  let h = darwin_window_get_by_numeric_id(windowId.int32)
+  let h = nativeWindowGetByNumericId(windowId.int32)
   if h.isNil: return                       # window gone — nothing to act on
   case action
-  of "show": darwin_window_show(h)
-  of "hide": darwin_window_hide(h)
-  of "minimize": darwin_window_minimize(h)
-  of "maximize": darwin_window_maximize(h)
-  of "zoom": darwin_window_zoom(h)
-  of "setFocus": darwin_window_focus(h)
+  of "show": nativeWindowShow(h)
+  of "hide": nativeWindowHide(h)
+  of "minimize": nativeWindowMinimize(h)
+  of "maximize": nativeWindowMaximize(h)
+  of "zoom": nativeWindowZoom(h)
+  of "setFocus": nativeWindowFocus(h)
   of "close":
     # clear the close guard first (router.zc:652-654): force_close is just
     # [NSWindow close], which fires windowShouldClose:; a set guard would veto
     # it. Window.close() is the documented force path, so it must override.
     zapp_window_set_close_guard(windowId.cint, 0.cint)
-    darwin_window_force_close(h)
+    nativeWindowForceClose(h)
   of "setTitle":
     let title = a{"title"}
-    if not title.isNil: darwin_window_set_title(h, title.getStr("").cstring)
+    if not title.isNil: nativeWindowSetTitle(h, title.getStr("").cstring)
   of "setSize":
     let w = a{"width"}; let ht = a{"height"}      # getFloat: zc stores numbers as
     if not w.isNil and not ht.isNil:              # double, truncates to int (parity)
-      darwin_window_set_size(h, w.getFloat(0).int32, ht.getFloat(0).int32)
+      nativeWindowSetSize(h, w.getFloat(0).int32, ht.getFloat(0).int32)
   of "setPosition":
     let x = a{"x"}; let y = a{"y"}
     if not x.isNil and not y.isNil:
-      darwin_window_set_position(h, x.getFloat(0).int32, y.getFloat(0).int32)
+      nativeWindowSetPosition(h, x.getFloat(0).int32, y.getFloat(0).int32)
   of "setFullscreen":
     let on = a{"on"}
-    if not on.isNil: darwin_window_set_fullscreen(h, on.getBool(false))
+    if not on.isNil: nativeWindowSetFullscreen(h, on.getBool(false))
   of "setAlwaysOnTop":
     let on = a{"on"}
-    if not on.isNil: darwin_window_set_always_on_top(h, on.getBool(false))
+    if not on.isNil: nativeWindowSetAlwaysOnTop(h, on.getBool(false))
   else: discard
 
 proc routeMessage*(msg: string, windowId: int) =
@@ -851,7 +852,7 @@ proc routeMessage*(msg: string, windowId: int) =
     return
 
   if f.t == 6:        # SYNC envelope (protocol.zc:27) — Sync.wait/notify/cancel
-    darwin_sync_handle(f.m.cstring, msg.cstring)   # msg = full raw envelope (== zc parsed.payload); sync.m unwraps "a"
+    nativeSyncHandle(f.m.cstring, msg.cstring)   # msg = full raw envelope (== zc parsed.payload); sync.m unwraps "a"
     return
 
   if f.t != 1: return            # skeleton answers INVOKE only
@@ -894,7 +895,7 @@ proc routeMessage*(msg: string, windowId: int) =
   if f.m == "__router:state":
     # Resolve target window (from "windowId" arg, else the sender).
     let ws = (if f.a.isNil: "" else: f.a{"windowId"}.getStr(""))
-    let target = (if ws.len > 0: darwin_window_numeric_id_for_string(ws.cstring) else: windowId.int32)
+    let target = (if ws.len > 0: nativeWindowNumericIdForString(ws.cstring) else: windowId.int32)
     let url = routerCurrentUrl(target)
     let paramsStr = routerCurrentParams(target)
     let paramsNode: JsonNode =
@@ -928,7 +929,7 @@ proc routeMessage*(msg: string, windowId: int) =
     if not f.a.isNil and f.a.kind == JObject:
       let widv = f.a{"windowId"}
       if not widv.isNil and widv.kind == JString:
-        let resolved = darwin_window_numeric_id_for_string(widv.getStr.cstring)
+        let resolved = nativeWindowNumericIdForString(widv.getStr.cstring)
         if resolved >= 0: target = resolved
       let urlv = f.a{"url"}
       if not urlv.isNil and urlv.kind == JString: url = urlv.getStr
@@ -940,10 +941,10 @@ proc routeMessage*(msg: string, windowId: int) =
       if not hv.isNil and (hv.kind == JInt or hv.kind == JFloat): ph = hv.getFloat.int32
     if url.len > 0:
       let slot = allocSlot()
-      let host = darwin_window_get_by_numeric_id(target)
+      let host = nativeWindowGetByNumericId(target)
       if host != nil:
         let pid = "pop-" & $slot
-        darwin_popover_create(host, pid.cstring, url.cstring, pw, ph,
+        nativePopoverCreate(host, pid.cstring, url.cstring, pw, ph,
                               behavior.cstring, target, slot)
         sendInvokeResponse(windowId, f.id, true, "{\"popoverId\":\"" & pid & "\"}")
         return

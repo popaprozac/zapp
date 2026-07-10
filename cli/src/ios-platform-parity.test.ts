@@ -234,6 +234,14 @@ function nimImportcDarwinSymbols(): Set<string> {
   for (const rel of glob.scanSync({ cwd: ROOT })) {
     const src = readFileSync(path.join(ROOT, rel), "utf8");
 
+    // Case 0: the platform-ABI seam (native/nim/nativeabi.nim). Bindings are
+    // `{.importc: abiPrefix & "<suffix>".}` where abiPrefix is "darwin_" on Apple
+    // (and "windows_" on Windows). Reconstruct the darwin_ C name from the suffix
+    // so the iOS parity check still sees the full surface.
+    for (const m of src.matchAll(/abiPrefix\s*&\s*"([A-Za-z0-9_]+)"/g)) {
+      out.add("darwin_" + m[1]);
+    }
+
     // Case 1: explicit C-name rename — `importc: "darwin_<name>"` anywhere.
     for (const m of src.matchAll(/importc:\s*"(darwin_[A-Za-z0-9_]+)"/g)) {
       out.add(m[1]);

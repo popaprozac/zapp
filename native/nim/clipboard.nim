@@ -23,15 +23,16 @@
 ## base64 C string (NULL when no image) — same caller-frees contract as the
 ## other reads.
 
-proc darwin_clipboard_read_text(): cstring {.importc, cdecl.}
-proc darwin_clipboard_write_text(s: cstring): bool {.importc, cdecl.}
-proc darwin_clipboard_read_html(): cstring {.importc, cdecl.}
-proc darwin_clipboard_write_html(s: cstring): bool {.importc, cdecl.}
-proc darwin_clipboard_read_files(): cstring {.importc, cdecl.}
-proc darwin_clipboard_read_image_png_b64(): cstring {.importc, cdecl.}
-proc darwin_clipboard_write_image_png_b64(b64: cstring): bool {.importc, cdecl.}
-proc darwin_clipboard_has(fmt: cstring): bool {.importc, cdecl.}
-proc darwin_clipboard_clear() {.importc, cdecl.}
+import nativeabi
+proc nativeClipboardReadText(): cstring {.importc: abiPrefix & "clipboard_read_text", cdecl.}
+proc nativeClipboardWriteText(s: cstring): bool {.importc: abiPrefix & "clipboard_write_text", cdecl.}
+proc nativeClipboardReadHtml(): cstring {.importc: abiPrefix & "clipboard_read_html", cdecl.}
+proc nativeClipboardWriteHtml(s: cstring): bool {.importc: abiPrefix & "clipboard_write_html", cdecl.}
+proc nativeClipboardReadFiles(): cstring {.importc: abiPrefix & "clipboard_read_files", cdecl.}
+proc nativeClipboardReadImagePngB64(): cstring {.importc: abiPrefix & "clipboard_read_image_png_b64", cdecl.}
+proc nativeClipboardWriteImagePngB64(b64: cstring): bool {.importc: abiPrefix & "clipboard_write_image_png_b64", cdecl.}
+proc nativeClipboardHas(fmt: cstring): bool {.importc: abiPrefix & "clipboard_has", cdecl.}
+proc nativeClipboardClear() {.importc: abiPrefix & "clipboard_clear", cdecl.}
 proc c_free(p: pointer) {.importc: "free", header: "<stdlib.h>".}
 
 proc takeCString(p: cstring): string =
@@ -44,24 +45,24 @@ proc takeCString(p: cstring): string =
     result = $p
     c_free(cast[pointer](p))
 
-proc readText*(): string = takeCString(darwin_clipboard_read_text())
-proc writeText*(s: string): bool = darwin_clipboard_write_text(s.cstring)
-proc readHtml*(): string = takeCString(darwin_clipboard_read_html())
-proc writeHtml*(s: string): bool = darwin_clipboard_write_html(s.cstring)
+proc readText*(): string = takeCString(nativeClipboardReadText())
+proc writeText*(s: string): bool = nativeClipboardWriteText(s.cstring)
+proc readHtml*(): string = takeCString(nativeClipboardReadHtml())
+proc writeHtml*(s: string): bool = nativeClipboardWriteHtml(s.cstring)
 
 proc readFiles*(): string =
   ## Returns a JSON array of absolute path strings; "[]" when none.
-  let s = takeCString(darwin_clipboard_read_files())
+  let s = takeCString(nativeClipboardReadFiles())
   if s.len == 0: "[]" else: s
 
 proc readImagePngB64*(): string =
   ## Base64 PNG of the clipboard image; "" when no image present. clipboard.m
   ## does the PNG->base64 encode so the bridge stays JSON-only.
-  takeCString(darwin_clipboard_read_image_png_b64())
+  takeCString(nativeClipboardReadImagePngB64())
 
 proc writeImagePngB64*(b64: string): bool =
   ## Decode the base64 PNG and place it on the clipboard.
-  darwin_clipboard_write_image_png_b64(b64.cstring)
+  nativeClipboardWriteImagePngB64(b64.cstring)
 
-proc has*(fmt: string): bool = darwin_clipboard_has(fmt.cstring)
-proc clear*() = darwin_clipboard_clear()
+proc has*(fmt: string): bool = nativeClipboardHas(fmt.cstring)
+proc clear*() = nativeClipboardClear()

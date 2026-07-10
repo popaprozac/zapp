@@ -20,6 +20,7 @@ import appconfig
 import color
 export color   # ZappColor + converters reach app.nim through the WindowOptions API
 import routerstate
+import nativeabi
 
 type
   TitleBarStyle* {.pure.} = enum   ## NSWindow title-bar style (window.m tag 0/1/2/3)
@@ -314,11 +315,11 @@ proc wopts_sheet_detents(p: pointer): int32 {.exportc, cdecl.} = opt(p).sheetDet
 proc wopts_sheet_grabber(p: pointer): bool {.exportc, cdecl.} = opt(p).sheetGrabber
 
 # --- Window creation --------------------------------------------------------
-proc darwin_window_create(opts: pointer): pointer {.importc, cdecl.}
-proc darwin_window_register_numeric_id(handle: pointer, id: int32) {.importc, cdecl.}
-proc darwin_window_get_by_numeric_id(numericId: int32): pointer {.importc, cdecl.}
-proc darwin_window_attach_modal(parent, modal: pointer) {.importc, cdecl.}
-proc darwin_window_numeric_id_for_string(wid: cstring): int32 {.importc, cdecl.}
+proc nativeWindowCreate(opts: pointer): pointer {.importc: abiPrefix & "window_create", cdecl.}
+proc nativeWindowRegisterNumericId(handle: pointer, id: int32) {.importc: abiPrefix & "window_register_numeric_id", cdecl.}
+proc nativeWindowGetByNumericId(numericId: int32): pointer {.importc: abiPrefix & "window_get_by_numeric_id", cdecl.}
+proc nativeWindowAttachModal(parent, modal: pointer) {.importc: abiPrefix & "window_attach_modal", cdecl.}
+proc nativeWindowNumericIdForString(wid: cstring): int32 {.importc: abiPrefix & "window_numeric_id_for_string", cdecl.}
 type
   Window* = object
     ## A created window — its monotonic numeric id + the opaque NSWindow* handle.
@@ -351,13 +352,13 @@ proc createWindow*(o: WindowOptions): Window =
   # wopts_* accessors; pin across the call so ORC can't collect mid-read, then
   # unpin (the createWindow pin/unpin template).
   GC_ref(o)
-  let h = darwin_window_create(cast[pointer](o))
+  let h = nativeWindowCreate(cast[pointer](o))
   GC_unref(o)
-  darwin_window_register_numeric_id(h, id)
+  nativeWindowRegisterNumericId(h, id)
   if o.asSheetOfId >= 0:
-    let parent = darwin_window_get_by_numeric_id(o.asSheetOfId)
+    let parent = nativeWindowGetByNumericId(o.asSheetOfId)
     if parent != nil:
-      darwin_window_attach_modal(parent, h)
+      nativeWindowAttachModal(parent, h)
   # Seed the router state for this window at "/" (the app can replace it on
   # the first route push). Idempotent — routerSeed no-ops if already present.
   routerSeed(id, "/")
@@ -395,7 +396,7 @@ proc create*(wm: WindowManager, o: WindowOptions): Window =
 # router.nim uses for zapp_window_trigger_on_ready / zapp_window_set_close_guard.
 type ReadyProc* = proc(id: cint, handle: pointer) {.cdecl.}
 proc zapp_window_set_on_ready(id: cint, handle: pointer, cb: ReadyProc) {.importc, cdecl.}
-proc darwin_window_show(handle: pointer) {.importc, cdecl.}
+proc nativeWindowShow(handle: pointer) {.importc: abiPrefix & "window_show", cdecl.}
 
 proc onReady*(win: Window, cb: ReadyProc) =
   ## Register `cb` to fire once the window's webview bridge is ready — the Nim
@@ -408,7 +409,7 @@ proc onReady*(win: Window, cb: ReadyProc) =
 
 proc show*(win: Window) =
   ## Show the window — `win.show()`, the Nim analog of `Window.show()`.
-  darwin_window_show(win.handle)
+  nativeWindowShow(win.handle)
 
 # --- JSON → WindowOptions (port of window.zc:window_opts_apply_json) -----------
 # nil-safe readers. Numeric reads use getFloat so a fractional dim from the bridge
@@ -680,7 +681,7 @@ proc windowOptsApplyJson*(o: WindowOptions, a: JsonNode) =
     elif aso.kind == JString:
       # Resolve "win-<n>" via the .m registry (returns -1 for an unknown window),
       # matching window_opts_apply_json (window.zc:519-531) and the router's path.
-      o.asSheetOfId = darwin_window_numeric_id_for_string(aso.getStr.cstring)
+      o.asSheetOfId = nativeWindowNumericIdForString(aso.getStr.cstring)
   let pres = jStr(a, "presentation")
   case pres
   of "page": o.sheetPresentation = 0

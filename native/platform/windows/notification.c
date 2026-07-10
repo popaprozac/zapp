@@ -1007,3 +1007,29 @@ void windows_notification_request_permission(int32_t window_id, int32_t request_
         cb(window_id, request_id, true, json);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Delivered-notification management (darwin_notification_* twins). WinRT has no
+// pending/delivered split — both live in the action-center toast history — so
+// these reuse the cancel/cancel_all history primitives above.
+// ---------------------------------------------------------------------------
+
+// Clear the app's entire toast history.
+void windows_notification_remove_all_delivered(void) {
+    windows_notification_cancel_all();
+}
+
+// Remove one delivered toast by its "id" (which is the toast tag).
+void windows_notification_remove_delivered_json(const char* json) {
+    if (!json) return;
+    char id[128] = "";
+    if (notif_json_str(json, "id", id, (int)sizeof(id)) && id[0])
+        windows_notification_cancel(id);
+}
+
+// Update a visible toast: re-issue with the same "id" tag. WinRT replaces a
+// toast that shares tag+group, so a fresh show updates the notification in place.
+void windows_notification_update_json(const char* json) {
+    if (!json) return;
+    windows_notification_show(json, -1, 0, NULL);
+}

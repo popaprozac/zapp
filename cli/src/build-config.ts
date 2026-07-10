@@ -453,6 +453,39 @@ export function renderPlatformNim(target: BuildTarget, o: PlatformNimOpts): stri
   // location.
   const zjsBuildDir = slash(path.join(o.nativeDir, "..", "vendor", "zjs", "build"));
 
+  if (target === "windows") {
+    // Windows: compile the platform .c sources (getPlatformSources returns the
+    // native/platform/windows/*.c list) with the WebView2 C-ABI defines
+    // (CINTERFACE/COBJMACROS) + the webview2 headers — NOT -fobjc-arc, which is
+    // ObjC-only. Link the Win32/COM/WebView2 import libs the legacy zc build
+    // proved (native/build.zc) plus the static libzjs repack. The native/nim
+    // C-ABI seam (nativeabi.abiPrefix, gated by -d:zappWindows) makes shared Nim
+    // bind the `windows_*` symbols these sources export, so no C rename is needed.
+    const webview2Inc = slash(path.join(o.nativeDir, "..", "vendor", "webview2", "include"));
+    const winCFlags = `-DUNICODE -D_UNICODE -DCINTERFACE -DCOBJMACROS -I${webview2Inc}`;
+    const winCompileLines = sources
+      .map((f) => `{.compile("${slash(f)}", "${winCFlags}").}`)
+      .join("\n");
+    // Import libs (mirror native/build.zc windows link directives). ole32/uuid/
+    // shell32 (COM + shell), user32/gdi32/comctl32/comdlg32 (Win32 UI + dialogs),
+    // shlwapi, winhttp (fetch), bcrypt/crypt32/rpcrt4/advapi32 (crypto/registry),
+    // version, windowscodecs (WIC image decode), shcore (DPI), runtimeobject
+    // (WinRT toasts), dwmapi (Mica/immersive caption).
+    const winLibs =
+      "-lole32 -lshell32 -luuid -luser32 -lgdi32 -lcomctl32 -lcomdlg32 -lshlwapi " +
+      "-lwinhttp -lbcrypt -ladvapi32 -lrpcrt4 -lcrypt32 -lversion " +
+      "-lwindowscodecs -lshcore -lruntimeobject -ldwmapi";
+    const embed = `${zjsBuildDir}/windows/libzjs_embed.a`;
+    return `## AUTO-GENERATED (Nim) — per-target native link surface. Do not edit.
+## Target: ${target}. Regenerated each build by buildNativeNim (cli/src/native.ts).
+## Owns the platform .c compile list + Win32/WebView2 import libs + libzjs link.
+## The zjs.c compile + its -Ivendor/zjs/include passC stay in zapp.nim.
+${winCompileLines}
+{.passL: "${winLibs}".}
+{.passL: "${embed}".}
+`;
+  }
+
   if (ios) {
     // iOS: UIKit replaces Cocoa; no Carbon (RegisterEventHotKey is macOS-only,
     // ios/shortcuts.m is a no-op stub). Mirrors build-config.ts's iOS framework

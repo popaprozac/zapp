@@ -23,7 +23,8 @@
 ## data interpolation in the .zc is an UNESCAPED passthrough, so `$data` here
 ## matches it (no extra escaping the source doesn't have).
 
-import events, dispatch  # events: aeStarted/aeShutdown skip-list; dispatch: worker_broadcast_eval_js + darwin_webview_eval_all
+import events, dispatch  # events: aeStarted/aeShutdown skip-list; dispatch: worker_broadcast_eval_js + nativeWebviewEvalAll
+import nativeabi
 
 const
   ZAPP_APP_EVENT_BASE = 100
@@ -50,7 +51,7 @@ proc zapp_app_on(eventId: cint, cb: AppEventCb) {.exportc, cdecl.} =
 # Nim-visible). darwin_webview_eval_all (webview.m:1204) is importc-only there
 # (not Nim-exported), so re-declare it here for the Layer-3 call by Nim name —
 # both decls resolve to the same C symbol, so the link is unaffected.
-proc darwin_webview_eval_all(js: cstring) {.importc, cdecl.}
+proc nativeWebviewEvalAll(js: cstring) {.importc: abiPrefix & "webview_eval_all", cdecl.}
 
 ## EXACT map copied from app_events.zc:88-102 Layer-3 switch.
 ## Events outside this set (incl. 100/101/102/103) produce no WebView forward.
@@ -104,6 +105,6 @@ proc zapp_app_dispatch(eventId: cint, data: cstring): cint {.exportc, cdecl.} =
       let safe = (if data.isNil: "{}" else: $data)
       let js = "(function(){var b=globalThis[Symbol.for('zapp.bridge')];" &
                "if(b&&b._onEvent)b._onEvent('" & name & "','" & safe & "');})();"
-      darwin_webview_eval_all(js.cstring)
+      nativeWebviewEvalAll(js.cstring)
 
   return fired

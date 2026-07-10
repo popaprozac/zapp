@@ -6,12 +6,13 @@
 ## result), replacing the perf-gate strdup stub. The Nim IIFE builders run on the
 ## Cocoa main thread (event dispatch), so escapeJs (Nim string) is fine there.
 
+import nativeabi
 proc c_malloc(n: csize_t): pointer {.importc: "malloc", header: "<stdlib.h>".}
 proc c_strlen(s: cstring): csize_t {.importc: "strlen", header: "<string.h>".}
 
 # Broadcast primitives from the compiled engine / platform layer.
 proc zjs_broadcast_eval_js(js: cstring) {.importc, cdecl.}
-proc darwin_webview_eval_all(js: cstring) {.importc, cdecl.}
+proc nativeWebviewEvalAll(js: cstring) {.importc: abiPrefix & "webview_eval_all", cdecl.}
 
 # zapp_escape_dup — escape (\ ' \n \r) + malloc(2n+1); caller frees. zjs.c
 # consumes + frees this for worker→webview payloads. POD/libc (no Nim heap) →
@@ -62,5 +63,5 @@ proc dispatch_event_to_all*(eventName: cstring, payload: cstring)
   let js = "(function(){var b=globalThis[Symbol.for('zapp.bridge')];" &
            "if(b&&typeof b._onEvent==='function'){" &
            "b._onEvent('" & name & "','" & pl & "');}})();"
-  darwin_webview_eval_all(js.cstring)
+  nativeWebviewEvalAll(js.cstring)
   worker_broadcast_eval_js(js.cstring)
