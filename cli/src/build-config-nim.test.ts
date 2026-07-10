@@ -145,14 +145,14 @@ test("renderPlatformNim (macos) reproduces today's darwin pragmas", () => {
   // The spike confirmed both relative-to-module and absolute compile paths work;
   // absolute is correct here because the .m sources live in the FRAMEWORK's
   // native/, not the project. End-of-path is the darwin/<file>.m signature.
-  expect(out).toMatch(/\{\.compile\("\/.*\/platform\/darwin\/platform\.m", "-fobjc-arc"\)\.\}/);
-  expect(out).toMatch(/\{\.compile\("\/.*\/platform\/darwin\/window\.m", "-fobjc-arc"\)\.\}/);
-  expect(out).toMatch(/\{\.compile\("\/.*\/platform\/darwin\/webview\.m", "-fobjc-arc"\)\.\}/);
-  expect(out).toMatch(/\{\.compile\("\/.*\/platform\/darwin\/sync\.m", "-fobjc-arc"\)\.\}/);
+  expect(out).toMatch(/\{\.compile\("[^"]*\/platform\/darwin\/platform\.m", "-fobjc-arc"\)\.\}/);
+  expect(out).toMatch(/\{\.compile\("[^"]*\/platform\/darwin\/window\.m", "-fobjc-arc"\)\.\}/);
+  expect(out).toMatch(/\{\.compile\("[^"]*\/platform\/darwin\/webview\.m", "-fobjc-arc"\)\.\}/);
+  expect(out).toMatch(/\{\.compile\("[^"]*\/platform\/darwin\/sync\.m", "-fobjc-arc"\)\.\}/);
   // clipboard.m is now owned HERE (target-correct via getPlatformSources), not
   // clipboard.nim — on macOS that's darwin/clipboard.m. clipboard.nim dropped its
   // own `{.compile.}`, so only one source compiles it (no duplicate symbols).
-  expect(out).toMatch(/\{\.compile\("\/.*\/platform\/darwin\/clipboard\.m", "-fobjc-arc"\)\.\}/);
+  expect(out).toMatch(/\{\.compile\("[^"]*\/platform\/darwin\/clipboard\.m", "-fobjc-arc"\)\.\}/);
   // NO ios sources in the macOS branch.
   expect(out).not.toContain("/platform/ios/");
   // Full macOS framework set (current zapp.nim line 12), verbatim.
@@ -176,7 +176,7 @@ test("renderPlatformNim (macos) reproduces today's darwin pragmas", () => {
   expect(out).not.toContain("libzjs.dylib");
   expect(out).not.toContain("-Wl,-rpath,");
   // libzjs_embed.a path is ABSOLUTE (CLI-resolved), not currentSourcePath-relative.
-  expect(out).toMatch(/\{\.passL: "\/.*vendor\/zjs\/build\/libzjs_embed\.a"\.\}/);
+  expect(out).toMatch(/\{\.passL: "[^"]*vendor\/zjs\/build\/libzjs_embed\.a"\.\}/);
   // -lz (zlib) is now required on macOS too: static-linking libzjs leaves
   // host_zlib_codec's deflate/inflate undefined (the old dylib carried its own).
   expect(out).toContain("-lz");
@@ -186,12 +186,12 @@ test("renderPlatformNim (ios-simulator) emits ios sources + UIKit + libzjs_embed
   const nativeDir = resolveNativeDir();
   const out = renderPlatformNim("ios-simulator", { nativeDir });
   // iOS .m sources via the call form (ABSOLUTE path, same reasoning as macOS).
-  expect(out).toMatch(/\{\.compile\("\/.*\/platform\/ios\/platform\.m", "-fobjc-arc"\)\.\}/);
-  expect(out).toMatch(/\{\.compile\("\/.*\/platform\/ios\/window\.m", "-fobjc-arc"\)\.\}/);
-  expect(out).toMatch(/\{\.compile\("\/.*\/platform\/ios\/webview\.m", "-fobjc-arc"\)\.\}/);
+  expect(out).toMatch(/\{\.compile\("[^"]*\/platform\/ios\/platform\.m", "-fobjc-arc"\)\.\}/);
+  expect(out).toMatch(/\{\.compile\("[^"]*\/platform\/ios\/window\.m", "-fobjc-arc"\)\.\}/);
+  expect(out).toMatch(/\{\.compile\("[^"]*\/platform\/ios\/webview\.m", "-fobjc-arc"\)\.\}/);
   // clipboard.m owned HERE on iOS too — ios/clipboard.m (UIPasteboard), NOT the
   // darwin one. clipboard.nim no longer compiles a hardcoded darwin/clipboard.m.
-  expect(out).toMatch(/\{\.compile\("\/.*\/platform\/ios\/clipboard\.m", "-fobjc-arc"\)\.\}/);
+  expect(out).toMatch(/\{\.compile\("[^"]*\/platform\/ios\/clipboard\.m", "-fobjc-arc"\)\.\}/);
   // NO darwin sources in the iOS branch.
   expect(out).not.toContain("/platform/darwin/");
   // iOS framework set (UIKit replaces Cocoa; no Carbon).
@@ -209,6 +209,32 @@ test("renderPlatformNim (ios-simulator) emits ios sources + UIKit + libzjs_embed
   expect(out).toContain("-lz");
   // Static libzjs_embed.a for the simulator-arm64 slice; NO dylib, NO rpath.
   expect(out).toContain("vendor/zjs/build/ios/simulator-arm64/libzjs_embed.a");
+  expect(out).not.toContain("libzjs.dylib");
+  expect(out).not.toContain("-Wl,-rpath,");
+});
+
+test("renderPlatformNim (windows) emits .c sources with the WebView2 C-ABI flags + Win32 libs + libzjs_embed.a", () => {
+  const nativeDir = resolveNativeDir();
+  const out = renderPlatformNim("windows", { nativeDir });
+  // Platform .c sources via the call form. Path-agnostic (Windows emits C:/…,
+  // POSIX emits /…) — anchor on the platform/windows/ suffix, not a leading /.
+  expect(out).toMatch(/\{\.compile\("[^"]*\/platform\/windows\/platform\.c", "[^"]*"\)\.\}/);
+  expect(out).toMatch(/\{\.compile\("[^"]*\/platform\/windows\/window\.c", "[^"]*"\)\.\}/);
+  expect(out).toMatch(/\{\.compile\("[^"]*\/platform\/windows\/webview\.c", "[^"]*"\)\.\}/);
+  // WebView2 C-ABI defines on every .c; NOT -fobjc-arc (ObjC-only), NO Cocoa.
+  expect(out).toContain("-DCINTERFACE -DCOBJMACROS");
+  expect(out).toContain("/vendor/webview2/include");
+  expect(out).not.toContain("-fobjc-arc");
+  expect(out).not.toContain("-framework");
+  expect(out).not.toContain("/platform/darwin/");
+  expect(out).not.toContain("/platform/ios/");
+  // Win32/COM/WebView2 import libs (mirror native/build.zc windows link).
+  for (const lib of ["-lole32", "-lshell32", "-luser32", "-lwinhttp",
+                     "-lruntimeobject", "-ldwmapi", "-lwindowscodecs"]) {
+    expect(out).toContain(lib);
+  }
+  // Static libzjs repack for the windows slice; NO dylib, NO rpath.
+  expect(out).toContain("vendor/zjs/build/windows/libzjs_embed.a");
   expect(out).not.toContain("libzjs.dylib");
   expect(out).not.toContain("-Wl,-rpath,");
 });

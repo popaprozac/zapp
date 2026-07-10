@@ -27,7 +27,9 @@ test("nimDefinesForTarget: iOS targets get -d:zappIos", () => {
   expect(nimDefinesForTarget("ios-simulator")).toEqual(["-d:zappIos"]);
   expect(nimDefinesForTarget("ios-device")).toEqual(["-d:zappIos"]);
 });
-test("nimDefinesForTarget: macos/windows get no extra defines", () => {
+test("nimDefinesForTarget: windows gets -d:zappWindows", () => {
+  expect(nimDefinesForTarget("windows")).toEqual(["-d:zappWindows"]);
+});
+test("nimDefinesForTarget: macos gets no extra defines", () => {
   expect(nimDefinesForTarget("macos")).toEqual([]);
-  expect(nimDefinesForTarget("windows")).toEqual([]);
 });

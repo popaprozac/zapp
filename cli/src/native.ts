@@ -44,12 +44,16 @@ export function isIOSTarget(t: BuildTarget): boolean {
  * Extra `nim c` `-d:` defines for a build target. iOS targets get `-d:zappIos`
  * so hand-written Nim (router.nim/dialog.nim) can compile-gate iOS-only branches
  * (the async UIKit dialog path) — the Nim-layer analog of router.zc's
- * `#if TARGET_OS_IPHONE`. We use a project-namespaced symbol (NOT `ios`) to avoid
- * colliding with Nim's built-in `defined(ios)` OS conditional, which is keyed off
- * `--os:` (we compile with the host `--os:macosx` + iOS clang flags).
+ * `#if TARGET_OS_IPHONE`. Windows gets `-d:zappWindows`, which drives the native
+ * C-ABI seam (native/nim/nativeabi.nim `abiPrefix`): shared Nim binds
+ * `windows_*` symbols instead of `darwin_*`. We use project-namespaced symbols
+ * (NOT `ios`/`windows`) to avoid colliding with Nim's built-in OS conditionals,
+ * which are keyed off `--os:` (we compile with the host `--os:` + per-target flags).
  */
 export function nimDefinesForTarget(target: BuildTarget): string[] {
-  return isIOSTarget(target) ? ["-d:zappIos"] : [];
+  if (isIOSTarget(target)) return ["-d:zappIos"];
+  if (target === "windows") return ["-d:zappWindows"];
+  return [];
 }
 
 /**
@@ -1337,7 +1341,13 @@ async function buildNativeNim(
     iosArgs.push(`--passC:${cFlags}`, `--passL:${cFlags}`);
   }
 
-  const args = ["c", "--cc:clang", "--mm:orc", "--threads:on", "-d:release", "--opt:size",
+  // Backend C compiler: clang on Apple (drives the ObjC/.m sources + iOS SDK
+  // cross-compile flags); MinGW gcc on Windows — the toolchain the legacy zc
+  // Windows build proved against the WebView2 CINTERFACE/COBJMACROS C-ABI and
+  // the .c platform sources. Nim defaults to gcc on Windows anyway, but pin it
+  // explicitly so the choice is target-derived, not host-derived.
+  const cc = target === "windows" ? "gcc" : "clang";
+  const args = ["c", `--cc:${cc}`, "--mm:orc", "--threads:on", "-d:release", "--opt:size",
                 ...nimDefinesForTarget(target),
                 `--path:${zappDir}`, `--path:${nimFrameworkDir}`,
                 ...iosArgs,
