@@ -182,7 +182,23 @@ LRESULT CALLBACK zapp_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             if (lParam && lstrcmpW((LPCWSTR)lParam, L"ImmersiveColorSet") == 0) {
                 extern void windows_theme_setting_changed(void);
                 windows_theme_setting_changed();
+                extern void windows_titlebar_theme_changed(int32_t);
+                windows_titlebar_theme_changed(wid);
             }
+            break;
+        }
+
+        // Custom title bar: remove the caption in NCCALCSIZE and suppress the
+        // inactive frame line in NCACTIVATE. Both no-op for non-custom windows.
+        case WM_NCCALCSIZE: {
+            extern bool windows_titlebar_nccalcsize(HWND, int32_t, WPARAM, LPARAM);
+            if (windows_titlebar_nccalcsize(hwnd, wid, wParam, lParam)) return 0;
+            break;
+        }
+        case WM_NCACTIVATE: {
+            extern bool windows_titlebar_ncactivate(HWND, int32_t, WPARAM, LRESULT*);
+            LRESULT r = 0;
+            if (windows_titlebar_ncactivate(hwnd, wid, wParam, &r)) return r;
             break;
         }
 
@@ -201,6 +217,11 @@ LRESULT CALLBACK zapp_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             if (!windows_panes_layout(wid)) {
                 windows_webview_resize(wid, w, h);
             }
+
+            // Keep the custom caption buttons positioned + raised above the
+            // (resized) WebView2 surface. No-op for non-custom-titlebar windows.
+            extern void windows_titlebar_layout(int32_t);
+            windows_titlebar_layout(wid);
 
             WORD sizeType = LOWORD(wParam);
             if (sizeType == SIZE_MINIMIZED) {
@@ -283,6 +304,9 @@ LRESULT CALLBACK zapp_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             // Tear down native panes (child windows) if any.
             extern void windows_panes_destroy(int32_t host_slot);
             windows_panes_destroy(wid);
+            // Tear down the custom caption-button child if any.
+            extern void windows_titlebar_destroy(int32_t);
+            windows_titlebar_destroy(wid);
             // Clear dispatch table entry
             if (wid >= 0 && wid < ZAPP_MAX_WINDOWS) {
                 zapp_hwnds[wid] = NULL;
@@ -405,6 +429,16 @@ void* windows_window_create(WindowOptions* opts) {
                 windows_webview_set_bgcolor(pre_id, r, g, b);
             }
         }
+    }
+
+    // Custom title bar (titleBarStyle: hidden/hiddenInset) — remove the caption
+    // so content full-bleeds to the top and float native caption buttons over it
+    // (macOS parity). tbs 1 = hidden, 2 = hiddenInset. Must run before ShowWindow
+    // so the first WM_NCCALCSIZE sees the window as custom.
+    int32_t tbs = wopts_title_bar_style_tag(opts);
+    if ((tbs == 1 || tbs == 2) && pre_id >= 0 && pre_id < ZAPP_MAX_WINDOWS) {
+        extern void windows_titlebar_enable(HWND, int32_t, int32_t);
+        windows_titlebar_enable(hwnd, pre_id, tbs);
     }
 
     // Don't show yet — let the app call window_show after on_ready
