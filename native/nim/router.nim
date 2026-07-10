@@ -66,6 +66,12 @@ proc nativeWindowAttachModal(parent, modal: pointer) {.importc: abiPrefix & "win
 proc nativeWindowDetachModal(parent, modal: pointer) {.importc: abiPrefix & "window_detach_modal", cdecl.}
 proc nativeWindowLoadUrl(windowId: int32, url: cstring) {.importc: abiPrefix & "window_load_url", cdecl.}
 proc nativeWebviewSetDragRegion(windowId: int32, drag: bool) {.importc: abiPrefix & "webview_set_drag_region", cdecl.}
+# beginDrag: Windows-only. macOS drags via the WKWebView's mouseDownCanMoveWindow
+# (no explicit call), so the JS gesture that posts "beginDrag" only fires on
+# Windows (bootstrap/webview.ts gates on platform=="windows"); this binding is
+# gated to match so no darwin symbol is required.
+when defined(zappWindows):
+  proc nativeWindowBeginDrag(windowId: int32) {.importc: abiPrefix & "window_begin_drag", cdecl.}
 proc zapp_window_set_close_guard(id, enabled: cint) {.importc, cdecl.}  # def in callbacks.nim (exportc)
 
 # --- t:4 app-op + shell targets (platform.m / webview.h) -------------------
@@ -552,6 +558,14 @@ proc routeWindowAction(action: string, a: JsonNode, rawWindowId: int, payload: s
     if not drag.isNil:
       nativeWebviewSetDragRegion(rawWindowId.int32, drag.getBool(false))
     return
+
+  # beginDrag: Windows web-driven window drag (custom title bar). The JS gesture
+  # only fires on Windows; start the OS move loop on the TOP-LEVEL window (resolve
+  # the accessory host so a drag from a pane still moves the whole window).
+  when defined(zappWindows):
+    if action == "beginDrag":
+      nativeWindowBeginDrag(resolveAccessoryHost(rawWindowId).int32)
+      return
 
   # Accessory-pane sender resolution: window + chrome ops from inside a pane
   # target the host window (router.zc:484-512). subscribe/ready/setDragRegion

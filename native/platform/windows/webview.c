@@ -980,9 +980,27 @@ static HRESULT STDMETHODCALLTYPE ZappCtrl_Invoke(
     {
         LONG_PTR wstyle = GetWindowLongPtrW(self->hwnd, GWL_STYLE);
         int borderless = (wstyle & WS_CAPTION) != WS_CAPTION;
-        // Reserved for the extended-frame feature; 0 until then.
+        // Custom title bar (titleBarStyle hidden/hiddenInset): feed the real
+        // caption-button cluster metrics so the web chrome can pad the top by the
+        // control height (full content bleed) and reserve the right for the
+        // floated buttons. 0 when there's no custom title bar.
         int controls_inset_right = 0;
+        int titlebar_height = 0;
         const char* titlebar_style = borderless ? "hidden" : "default";
+        {
+            // Custom title bar is enabled on the HOST slot. This webview may be a
+            // pane (content registers under the host slot; sidebar/inspector
+            // present the host via identity_id) — resolve the host slot so every
+            // pane of a custom-titlebar window gets the metrics.
+            int32_t host_slot = (self->identity_id >= 0) ? self->identity_id : self->window_id;
+            extern bool windows_titlebar_metrics(int32_t, int*, int*);
+            int th = 0, ir = 0;
+            if (windows_titlebar_metrics(host_slot, &th, &ir)) {
+                titlebar_height = th;
+                controls_inset_right = ir;
+                titlebar_style = "hidden";
+            }
+        }
         // Defer to DOM-ready: AddScriptToExecuteOnDocumentCreated runs
         // BEFORE the parser builds the real <html>, so vars set on the
         // transient documentElement at document-create are discarded
@@ -991,14 +1009,14 @@ static HRESULT STDMETHODCALLTYPE ZappCtrl_Invoke(
         char metrics_js[768];
         snprintf(metrics_js, sizeof(metrics_js),
             "(function(){var apply=function(){try{var r=document.documentElement;if(r){"
-            "r.style.setProperty('--zapp-titlebar-height','0px');"
+            "r.style.setProperty('--zapp-titlebar-height','%dpx');"
             "r.style.setProperty('--zapp-toolbar-height','0px');"
             "r.style.setProperty('--zapp-window-controls-inset-left','0px');"
             "r.style.setProperty('--zapp-window-controls-inset-right','%dpx');"
             "r.setAttribute('data-zapp-titlebar-style','%s');}}catch(e){}};"
             "if(document.readyState!=='loading')apply();"
             "else document.addEventListener('DOMContentLoaded',apply);})();",
-            controls_inset_right, titlebar_style);
+            titlebar_height, controls_inset_right, titlebar_style);
         wchar_t* wmetrics = utf8_to_wchar_wv(metrics_js);
         if (wmetrics) {
             ICoreWebView2_AddScriptToExecuteOnDocumentCreated(webview, wmetrics, NULL);

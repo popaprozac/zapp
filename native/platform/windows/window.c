@@ -526,6 +526,18 @@ void windows_window_zoom(void* handle) {
     ShowWindow(hwnd, IsZoomed(hwnd) ? SW_RESTORE : SW_MAXIMIZE);
 }
 
+// Web-driven window drag for custom title bars. The bootstrap JS posts
+// "beginDrag" once the pointer moves inside an app-region:drag element (Windows
+// has no mouseDownCanMoveWindow). 0xF012 == SC_MOVE | HTCAPTION — it starts the
+// modal window-move loop that follows the mouse, as if the caption were grabbed.
+void windows_window_begin_drag(int32_t window_id) {
+    if (window_id < 0 || window_id >= ZAPP_MAX_WINDOWS) return;
+    HWND hwnd = zapp_hwnds[window_id];
+    if (!hwnd) return;
+    ReleaseCapture();
+    PostMessageW(hwnd, WM_SYSCOMMAND, 0xF012, 0);
+}
+
 void windows_window_set_title(void* handle, const char* title) {
     if (!handle) return;
     wchar_t* wtitle = utf8_to_wchar(title);

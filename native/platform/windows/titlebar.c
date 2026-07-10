@@ -250,7 +250,10 @@ void windows_titlebar_destroy(int32_t window_id) {
     tb->host = NULL;
 }
 
-int windows_titlebar_controls_inset(int32_t window_id) {
-    if (!windows_titlebar_enabled(window_id)) return 0;
-    return tb_scale(g_tb[window_id].host, TB_BTN_W) * TB_COUNT;
+bool windows_titlebar_metrics(int32_t window_id, int* height_logical, int* inset_right_logical) {
+    if (!windows_titlebar_enabled(window_id)) return false;
+    // Logical (96-dpi) values — CSS px in the DPI-aware webview.
+    if (height_logical)      *height_logical = TB_BTN_H;
+    if (inset_right_logical) *inset_right_logical = TB_BTN_W * TB_COUNT;
+    return true;
 }

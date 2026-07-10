@@ -322,6 +322,34 @@
         post(JSON.stringify({ t: 4, m: "setDragRegion", a: { drag: inDrag } }));
       }
     });
+
+    // Windows has no mouseDownCanMoveWindow hook (WebView2 owns the mouse), so a
+    // drag over a drag region can't move the window natively. Detect the gesture
+    // in JS instead: on mousedown inside a drag region, then a move past a small
+    // threshold, ask native to start the OS move loop (window:beginDrag). The
+    // >4px threshold (not mousedown) preserves plain clicks + dblclick-to-zoom —
+    // starting the modal move loop on mousedown would swallow the mouseup.
+    // Windows is detected by the WebView2 transport (chrome.webview), the same
+    // signal `post()` uses — the bootstrapConfig has no `permissions.platform`
+    // on Windows (that field is Apple-only), so key off the transport instead.
+    const _isWin = !(window as any).webkit?.messageHandlers?.zapp
+      && !!(window as any).chrome?.webview?.postMessage;
+    if (_isWin) {
+      let dragStart: { x: number; y: number } | null = null;
+      document.addEventListener("mousedown", (e: MouseEvent) => {
+        if (e.button === 0 && inDrag) dragStart = { x: e.screenX, y: e.screenY };
+      });
+      document.addEventListener("mousemove", (e: MouseEvent) => {
+        if (!dragStart) return;
+        if (Math.abs(e.screenX - dragStart.x) > 4 || Math.abs(e.screenY - dragStart.y) > 4) {
+          dragStart = null;
+          post(JSON.stringify({ t: 4, m: "beginDrag", a: {} }));
+        }
+      });
+      const _clearDrag = () => { dragStart = null; };
+      document.addEventListener("mouseup", _clearDrag);
+      document.addEventListener("mouseleave", _clearDrag);
+    }
   }
 
   // Double-click a drag region → window zoom (toggle maximize) is handled

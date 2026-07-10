@@ -46,8 +46,13 @@ void windows_titlebar_theme_changed(int32_t window_id);
 // Tear down the button child for a window (WM_DESTROY).
 void windows_titlebar_destroy(int32_t window_id);
 
-// Width (in physical px) of the caption-button cluster — the web chrome pads
-// around it via --zapp-window-controls-inset-right (pass 2). 0 if no titlebar.
-int windows_titlebar_controls_inset(int32_t window_id);
+// Logical (CSS px) caption metrics for a window slot, for the web chrome's CSS
+// vars: *height_logical = control cluster height (--zapp-titlebar-height, so
+// content can pad the top under the buttons), *inset_right_logical = cluster
+// width (--zapp-window-controls-inset-right, so headers pad around the buttons).
+// Returns true if the window has a custom title bar; false (out-params
+// untouched) otherwise. Keyed by the HOST window slot (titlebar is enabled on
+// the host; panes must resolve their host slot before calling).
+bool windows_titlebar_metrics(int32_t window_id, int* height_logical, int* inset_right_logical);
 
 #endif // ZAPP_WINDOWS_TITLEBAR_H
