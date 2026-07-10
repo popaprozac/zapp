@@ -471,6 +471,27 @@ void windows_window_force_close(void* handle) {
     if (handle) DestroyWindow((HWND)handle);
 }
 
+// darwin_window_get_by_numeric_id twin: map a WindowManager numeric id back to
+// its native handle (HWND-as-void*) via the zapp_hwnds registry. The router
+// resolves an id to a handle here, then calls the window ops below with it.
+void* windows_window_get_by_numeric_id(int32_t numeric_id) {
+    if (numeric_id < 0 || numeric_id >= ZAPP_MAX_WINDOWS) return NULL;
+    return (void*)zapp_hwnds[numeric_id];
+}
+
+// darwin_window_focus twin: bring the window to the foreground + key focus.
+void windows_window_focus(void* handle) {
+    if (handle) SetForegroundWindow((HWND)handle);
+}
+
+// darwin_window_zoom twin: macOS "zoom" toggles the standard/zoomed frame; the
+// closest Windows analogue is toggling maximize/restore.
+void windows_window_zoom(void* handle) {
+    if (!handle) return;
+    HWND hwnd = (HWND)handle;
+    ShowWindow(hwnd, IsZoomed(hwnd) ? SW_RESTORE : SW_MAXIMIZE);
+}
+
 void windows_window_set_title(void* handle, const char* title) {
     if (!handle) return;
     wchar_t* wtitle = utf8_to_wchar(title);

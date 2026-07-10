@@ -20,10 +20,8 @@
 
 // fs (11) is now a real implementation in native/platform/windows/fs.c.
 
-// --- window shims (3) — Windows has near-twins (activate/registry) ----------
-void*       windows_window_get_by_numeric_id(int32_t id)     { (void)id; return NULL; }
-void        windows_window_focus(void* handle)               { (void)handle; }
-void        windows_window_zoom(void* handle)                { (void)handle; }
+// window shims (3) are now real in native/platform/windows/window.c.
+// windows_list_json: enumerate-all-windows (Phase C: build from zapp_hwnds).
 const char* windows_windows_list_json(void)                  { return "[]"; }
 
 // --- devtools (2) — Phase C: WebView2 OpenDevToolsWindow ---------------------
