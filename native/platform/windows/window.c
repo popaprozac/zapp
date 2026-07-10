@@ -435,10 +435,29 @@ void* windows_window_create(WindowOptions* opts) {
     // so content full-bleeds to the top and float native caption buttons over it
     // (macOS parity). tbs 1 = hidden, 2 = hiddenInset. Must run before ShowWindow
     // so the first WM_NCCALCSIZE sees the window as custom.
+    // Window controls visibility (windowControls/trafficLights: 0=enabled,
+    // 1=disabled, 2=hidden). The Nim layer folds closable/minimizable/maximizable
+    // into these tags. minimize=zoom(maximize)=index; order min,max,close.
+    extern int32_t wopts_traffic_light_close_tag(WindowOptions* opts);
+    extern int32_t wopts_traffic_light_minimize_tag(WindowOptions* opts);
+    extern int32_t wopts_traffic_light_zoom_tag(WindowOptions* opts);
+    int close_tag = (int)wopts_traffic_light_close_tag(opts);
+    int min_tag   = (int)wopts_traffic_light_minimize_tag(opts);
+    int max_tag   = (int)wopts_traffic_light_zoom_tag(opts);
+
     int32_t tbs = wopts_title_bar_style_tag(opts);
     if ((tbs == 1 || tbs == 2) && pre_id >= 0 && pre_id < ZAPP_MAX_WINDOWS) {
         extern void windows_titlebar_enable(HWND, int32_t, int32_t);
+        extern void windows_titlebar_set_controls(int32_t, int, int, int);
         windows_titlebar_enable(hwnd, pre_id, tbs);
+        windows_titlebar_set_controls(pre_id, close_tag, min_tag, max_tag);
+    } else if (close_tag >= 1) {
+        // Default (native-caption) window: min/max hiding is handled by the
+        // WS_MINIMIZEBOX/WS_MAXIMIZEBOX styles above (minimizable/maximizable).
+        // Win32 can't hide the close button, but a disabled/hidden close maps to
+        // greying it via the system menu (SC_CLOSE) — the closest native effect.
+        HMENU sysmenu = GetSystemMenu(hwnd, FALSE);
+        if (sysmenu) EnableMenuItem(sysmenu, SC_CLOSE, MF_BYCOMMAND | MF_GRAYED);
     }
 
     // Don't show yet — let the app call window_show after on_ready

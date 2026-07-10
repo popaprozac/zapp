@@ -71,6 +71,10 @@ export const multiwindowSection: Section = {
           height: 360,
           vibrancy: "sidebar",
           titleBarStyle: "hiddenInset",
+          // Also demos window-control visibility: greyed (disabled) minimize,
+          // hidden maximize, normal close. On Windows the custom-titlebar buttons
+          // reflect this; on macOS the traffic lights do.
+          trafficLights: { minimize: "disabled", zoom: "hidden" },
         }),
       ),
     );

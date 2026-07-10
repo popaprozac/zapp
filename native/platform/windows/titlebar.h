@@ -43,6 +43,11 @@ void windows_titlebar_layout(int32_t window_id);
 // Re-theme the caption buttons (app light/dark changed). Safe to call anytime.
 void windows_titlebar_theme_changed(int32_t window_id);
 
+// Per-button window-control visibility (from windowControls/trafficLights):
+// 0=enabled, 1=disabled (greyed, inert), 2=hidden (dropped, cluster contracts).
+// Windows caption order is minimize, maximize, close.
+void windows_titlebar_set_controls(int32_t window_id, int close_state, int min_state, int max_state);
+
 // Tear down the button child for a window (WM_DESTROY).
 void windows_titlebar_destroy(int32_t window_id);
 

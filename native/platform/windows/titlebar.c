@@ -30,6 +30,7 @@ typedef struct {
     int     hover;       // TB_* or TB_NONE
     int     pressed;     // TB_* or TB_NONE
     bool    tracking;    // WM_MOUSELEAVE armed
+    int     state[TB_COUNT]; // per-button [TB_MIN/TB_MAX/TB_CLOSE]: 0=enabled 1=disabled 2=hidden
 } TitleBar;
 
 static TitleBar g_tb[ZAPP_MAX_WINDOWS];
@@ -47,12 +48,28 @@ static int tb_scale(HWND h, int v) {
     return MulDiv(v, (int)dpi, 96);
 }
 
-// Which button index sits under an x within the button child (0..width).
+// Non-hidden buttons in min,max,close order → vis[]; returns the count. Hidden
+// (state==2) buttons are dropped so the cluster is laid out contiguously.
+static int tb_visible(TitleBar* tb, int vis[TB_COUNT]) {
+    int n = 0;
+    for (int i = 0; i < TB_COUNT; i++) if (tb->state[i] != 2) vis[n++] = i;
+    return n;
+}
+
+// Logical button index under an x within the button child, or TB_NONE. Maps the
+// x-slot through the visible list and rejects disabled (state==1) buttons so
+// they neither hover nor click.
 static int tb_hit(HWND btn, int x) {
+    int32_t wid = (int32_t)GetWindowLongPtrW(btn, GWLP_USERDATA);
+    if (wid < 0 || wid >= ZAPP_MAX_WINDOWS) return TB_NONE;
+    TitleBar* tb = &g_tb[wid];
     int bw = tb_scale(btn, TB_BTN_W);
     if (bw <= 0) return TB_NONE;
-    int i = x / bw;
-    return (i >= 0 && i < TB_COUNT) ? i : TB_NONE;
+    int vis[TB_COUNT]; int n = tb_visible(tb, vis);
+    int slot = x / bw;
+    if (slot < 0 || slot >= n) return TB_NONE;
+    int logical = vis[slot];
+    return (tb->state[logical] == 0) ? logical : TB_NONE;  // disabled → inert
 }
 
 static void tb_paint(HWND btn) {
@@ -83,15 +100,20 @@ static void tb_paint(HWND btn) {
 
     // Segoe MDL2 Assets: minimize E921, maximize E922, restore E923, close E8BB.
     static const wchar_t glyphs[TB_COUNT] = { 0xE921, 0xE922, 0xE8BB };
-    for (int i = 0; i < TB_COUNT; i++) {
-        RECT b = { i * bw, rc.top, (i + 1) * bw, rc.bottom };
-        bool active = (i == tb->hover || i == tb->pressed);
+    COLORREF greyed = dark ? RGB(110, 110, 110) : RGB(150, 150, 150);
+    int vis[TB_COUNT]; int n = tb_visible(tb, vis);
+    for (int s = 0; s < n; s++) {           // draw visible buttons contiguously
+        int i = vis[s];                     // logical index (TB_MIN/TB_MAX/TB_CLOSE)
+        bool disabled = (tb->state[i] == 1);
+        RECT b = { s * bw, rc.top, (s + 1) * bw, rc.bottom };
+        bool active = !disabled && (i == tb->hover || i == tb->pressed);
         if (active) {
             HBRUSH hb = CreateSolidBrush(i == TB_CLOSE ? closebg : hoverbg);
             FillRect(hdc, &b, hb);
             DeleteObject(hb);
         }
-        SetTextColor(hdc, (i == TB_CLOSE && active) ? RGB(255, 255, 255) : glyph);
+        SetTextColor(hdc, disabled ? greyed
+                        : (i == TB_CLOSE && active) ? RGB(255, 255, 255) : glyph);
         wchar_t g = glyphs[i];
         if (i == TB_MAX && tb->host && IsZoomed(tb->host)) g = 0xE923; // restore
         DrawTextW(hdc, &g, 1, &b, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOCLIP);
@@ -176,6 +198,7 @@ void windows_titlebar_enable(HWND hwnd, int32_t window_id, int32_t style_tag) {
     tb->host      = hwnd;
     tb->hover     = TB_NONE;
     tb->pressed   = TB_NONE;
+    tb->state[TB_MIN] = tb->state[TB_MAX] = tb->state[TB_CLOSE] = 0;  // all enabled
 
     SetMenu(hwnd, NULL);  // custom titlebar windows drop the native menu bar
 
@@ -227,13 +250,15 @@ void windows_titlebar_layout(int32_t window_id) {
     TitleBar* tb = &g_tb[window_id];
     if (!tb->btn || !tb->host) return;
     RECT rc; GetClientRect(tb->host, &rc);
-    int bw  = tb_scale(tb->host, TB_BTN_W) * TB_COUNT;
+    int vis[TB_COUNT]; int n = tb_visible(tb, vis);   // only visible buttons
+    int bw  = tb_scale(tb->host, TB_BTN_W) * n;
     int bh  = tb_scale(tb->host, TB_BTN_H);
     // hiddenInset degrades to hidden on Windows — the macOS unified-toolbar inset
     // has no sensible Win analogue and reads as awkward. Buttons sit flush top.
     // Raise above the WebView2 surface (sibling child); re-raised on each resize.
+    // n==0 (all controls hidden) → zero-width cluster, effectively no buttons.
     SetWindowPos(tb->btn, HWND_TOP, rc.right - bw, 0, bw, bh,
-        SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        SWP_NOACTIVATE | (n > 0 ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
     InvalidateRect(tb->btn, NULL, FALSE);
 }
 
@@ -252,8 +277,22 @@ void windows_titlebar_destroy(int32_t window_id) {
 
 bool windows_titlebar_metrics(int32_t window_id, int* height_logical, int* inset_right_logical) {
     if (!windows_titlebar_enabled(window_id)) return false;
-    // Logical (96-dpi) values — CSS px in the DPI-aware webview.
+    // Logical (96-dpi) values — CSS px in the DPI-aware webview. inset_right is
+    // the VISIBLE cluster width so web content reserves exactly the shown buttons.
+    int vis[TB_COUNT]; int n = tb_visible(&g_tb[window_id], vis);
     if (height_logical)      *height_logical = TB_BTN_H;
-    if (inset_right_logical) *inset_right_logical = TB_BTN_W * TB_COUNT;
+    if (inset_right_logical) *inset_right_logical = TB_BTN_W * n;
     return true;
+}
+
+// Apply per-button window-control visibility/state (from the app's
+// windowControls/trafficLights: 0=enabled, 1=disabled, 2=hidden). Re-lays out +
+// repaints. Windows caption order is minimize, maximize, close.
+void windows_titlebar_set_controls(int32_t window_id, int close_state, int min_state, int max_state) {
+    if (!windows_titlebar_enabled(window_id)) return;
+    TitleBar* tb = &g_tb[window_id];
+    tb->state[TB_MIN]   = min_state;
+    tb->state[TB_MAX]   = max_state;
+    tb->state[TB_CLOSE] = close_state;
+    windows_titlebar_layout(window_id);
 }
