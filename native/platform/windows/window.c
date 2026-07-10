@@ -538,6 +538,16 @@ void windows_window_begin_drag(int32_t window_id) {
     PostMessageW(hwnd, WM_SYSCOMMAND, 0xF012, 0);
 }
 
+// Double-click on a drag region toggles maximize/restore — the framework
+// behavior that matches macOS (its WKWebView subclass zooms on a dblclick over a
+// drag region). The bootstrap posts "toggleMaximize" for custom-titlebar windows.
+void windows_window_toggle_maximize(int32_t window_id) {
+    if (window_id < 0 || window_id >= ZAPP_MAX_WINDOWS) return;
+    HWND hwnd = zapp_hwnds[window_id];
+    if (!hwnd) return;
+    ShowWindow(hwnd, IsZoomed(hwnd) ? SW_RESTORE : SW_MAXIMIZE);
+}
+
 void windows_window_set_title(void* handle, const char* title) {
     if (!handle) return;
     wchar_t* wtitle = utf8_to_wchar(title);

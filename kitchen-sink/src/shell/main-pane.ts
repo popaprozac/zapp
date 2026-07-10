@@ -7,7 +7,7 @@ import { sectionForRoute } from "./route-map";
 export function renderMainPane(app: HTMLElement) {
   const dragStrip = Platform.isIOS
     ? ""
-    : `<div class="drag-strip" data-zapp-drag-region>
+    : `<div class="drag-strip" data-zapp-titlebar>
       <span class="drag-strip-label">⠿ Kitchen Sink — drag to move</span>
     </div>`;
   app.innerHTML = `

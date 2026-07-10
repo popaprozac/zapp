@@ -10,7 +10,7 @@ export function renderSidebarPane(app: HTMLElement) {
   document.body.style.background = "transparent";
   const dragStrip = Platform.isIOS
     ? ""
-    : `<div class="drag-strip" data-zapp-drag-region></div>`;
+    : `<div class="drag-strip" data-zapp-titlebar></div>`;
   app.innerHTML = `
     ${dragStrip}
     <div class="sidebar-pane">

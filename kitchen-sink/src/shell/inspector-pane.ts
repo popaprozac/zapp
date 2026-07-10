@@ -10,7 +10,7 @@ export function renderInspectorPane(app: HTMLElement) {
   document.body.style.background = "transparent";
   const dragStrip = Platform.isIOS
     ? ""
-    : `<div class="drag-strip drag-strip--no-inset" data-zapp-drag-region></div>`;
+    : `<div class="drag-strip drag-strip--no-inset" data-zapp-titlebar></div>`;
   app.innerHTML = `
     ${dragStrip}
     <div class="inspector-pane">

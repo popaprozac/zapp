@@ -72,6 +72,7 @@ proc nativeWebviewSetDragRegion(windowId: int32, drag: bool) {.importc: abiPrefi
 # gated to match so no darwin symbol is required.
 when defined(zappWindows):
   proc nativeWindowBeginDrag(windowId: int32) {.importc: abiPrefix & "window_begin_drag", cdecl.}
+  proc nativeWindowToggleMaximize(windowId: int32) {.importc: abiPrefix & "window_toggle_maximize", cdecl.}
 proc zapp_window_set_close_guard(id, enabled: cint) {.importc, cdecl.}  # def in callbacks.nim (exportc)
 
 # --- t:4 app-op + shell targets (platform.m / webview.h) -------------------
@@ -565,6 +566,10 @@ proc routeWindowAction(action: string, a: JsonNode, rawWindowId: int, payload: s
   when defined(zappWindows):
     if action == "beginDrag":
       nativeWindowBeginDrag(resolveAccessoryHost(rawWindowId).int32)
+      return
+    # toggleMaximize: dblclick on a drag region (framework behavior, macOS parity).
+    if action == "toggleMaximize":
+      nativeWindowToggleMaximize(resolveAccessoryHost(rawWindowId).int32)
       return
 
   # Accessory-pane sender resolution: window + chrome ops from inside a pane

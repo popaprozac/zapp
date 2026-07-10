@@ -395,8 +395,11 @@ extern void zapp_handle_message_from_window(void* app, char* msg, int32_t window
         raw_msg[3] == '"' && raw_msg[4] == ':' && raw_msg[5] == '4' &&
         strstr(raw_msg, "\"setDragRegion\"") != NULL) {
         BOOL drag = strstr(raw_msg, "\"drag\":true") != NULL;
+        BOOL titlebar = strstr(raw_msg, "\"titlebar\":true") != NULL;
         extern void darwin_webview_set_drag_region(int32_t window_id, bool drag);
+        extern void darwin_webview_set_titlebar_region(int32_t window_id, bool titlebar);
         darwin_webview_set_drag_region(window_id, drag);
+        darwin_webview_set_titlebar_region(window_id, titlebar);
         return;
     }
 
@@ -411,6 +414,7 @@ extern void zapp_handle_message_from_window(void* app, char* msg, int32_t window
 
 @interface ZappWebView : WKWebView
 @property (nonatomic, assign) BOOL inDragRegion;
+@property (nonatomic, assign) BOOL inTitlebar;
 @property (nonatomic, assign) BOOL acceptFirstMouse;
 @property (nonatomic, assign) NSTimeInterval zapp_lastDropOverTime;
 @end
@@ -420,6 +424,7 @@ extern void zapp_handle_message_from_window(void* app, char* msg, int32_t window
     self = [super initWithFrame:frame configuration:config];
     if (self) {
         _inDragRegion = NO;
+        _inTitlebar = NO;
         _acceptFirstMouse = YES;
         // File drop wiring (G10). Web standards give JS a `File` object
         // on drop but never the absolute path — for desktop apps the
@@ -434,13 +439,14 @@ extern void zapp_handle_message_from_window(void* app, char* msg, int32_t window
 }
 - (void)mouseDown:(NSEvent*)event {
     if (self.inDragRegion) {
-        // Double-click the draggable background = standard macOS title-bar zoom
-        // toggle. This is the ONLY place that observes the double-click: clicks
-        // on a drag region are consumed here for window-dragging (we don't call
-        // super), so the web layer never sees a dblclick. inDragRegion is false
-        // over interactive controls (button/input/...) — they opt out of drag —
-        // so this never fires on a button, only the empty strip.
-        if (event.clickCount == 2) {
+        // Double-click the TITLE BAR = standard macOS title-bar zoom toggle. Gated
+        // on inTitlebar (data-zapp-titlebar), NOT every drag region — a generic
+        // draggable region must not zoom on a stray double-click. This is the ONLY
+        // place that observes the double-click: clicks on a drag region are
+        // consumed here for window-dragging (we don't call super), so the web layer
+        // never sees a dblclick. A dblclick over a plain (non-titlebar) drag region
+        // falls through to performWindowDragWithEvent (just a drag, no zoom).
+        if (event.clickCount == 2 && self.inTitlebar) {
             [self.window zoom:nil];
             return;
         }
@@ -791,6 +797,18 @@ void darwin_webview_set_drag_region(int32_t window_id, bool drag) {
     WKWebView* wv = (__bridge WKWebView*)wv_ptr;
     if ([wv isKindOfClass:[ZappWebView class]]) {
         ((ZappWebView*)wv).inDragRegion = drag;
+    }
+}
+
+// Whether the pointer is over the window TITLE BAR (data-zapp-titlebar). Gates
+// the native dblclick-to-zoom in mouseDown: separate from inDragRegion so a
+// generic drag region moves but does not zoom on double-click.
+void darwin_webview_set_titlebar_region(int32_t window_id, bool titlebar) {
+    void* wv_ptr = darwin_window_get_webview(window_id);
+    if (!wv_ptr) return;
+    WKWebView* wv = (__bridge WKWebView*)wv_ptr;
+    if ([wv isKindOfClass:[ZappWebView class]]) {
+        ((ZappWebView*)wv).inTitlebar = titlebar;
     }
 }
 

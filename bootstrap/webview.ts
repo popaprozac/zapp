@@ -283,15 +283,23 @@
   const _cfg = (globalThis as any)[Symbol.for("zapp.bootstrapConfig")];
   const _isIOS = _cfg?.permissions?.platform === "ios";
   if (!_isIOS) {
+    // Two intents, tracked separately:
+    //   inDrag     — pointer is over a draggable region (move the window). Set by
+    //                app-region:drag / --zapp-drag:drag / data-zapp-drag-region,
+    //                AND by data-zapp-titlebar (a title bar is draggable too).
+    //   inTitlebar — pointer is over the window TITLE BAR (data-zapp-titlebar):
+    //                draggable AND double-click-to-maximize. A generic drag region
+    //                is NOT a title bar, so it never dblclick-maximizes.
     let inDrag = false;
+    let inTitlebar = false;
     document.addEventListener("mousemove", (e: MouseEvent) => {
       let el: HTMLElement | null = e.target as HTMLElement;
       let isDrag = false;
+      let isTitlebar = false;
       while (el && el !== document.body && el !== (document as any)) {
         const style = window.getComputedStyle(el);
         const val = style.getPropertyValue("--zapp-drag").trim();
         if (val === "no-drag") {
-          isDrag = false;
           break;
         }
         if (val === "drag") {
@@ -308,7 +316,11 @@
           el.getAttribute("role") === "button" ||
           el.isContentEditable
         ) {
-          isDrag = false;
+          break;
+        }
+        if (el.hasAttribute && el.hasAttribute("data-zapp-titlebar")) {
+          isDrag = true;
+          isTitlebar = true;
           break;
         }
         if (el.hasAttribute && el.hasAttribute("data-zapp-drag-region")) {
@@ -317,9 +329,10 @@
         }
         el = el.parentElement;
       }
-      if (isDrag !== inDrag) {
+      if (isDrag !== inDrag || isTitlebar !== inTitlebar) {
         inDrag = isDrag;
-        post(JSON.stringify({ t: 4, m: "setDragRegion", a: { drag: inDrag } }));
+        inTitlebar = isTitlebar;
+        post(JSON.stringify({ t: 4, m: "setDragRegion", a: { drag: inDrag, titlebar: inTitlebar } }));
       }
     });
 
@@ -349,6 +362,15 @@
       const _clearDrag = () => { dragStart = null; };
       document.addEventListener("mouseup", _clearDrag);
       document.addEventListener("mouseleave", _clearDrag);
+
+      // Double-click the TITLE BAR (data-zapp-titlebar) → toggle maximize
+      // (framework behavior, parity with the macOS WKWebView subclass). Gated on
+      // inTitlebar, NOT inDrag — a generic draggable region must not maximize on a
+      // stray double-click. A dblclick stays within the 4px threshold so it never
+      // triggers beginDrag.
+      document.addEventListener("dblclick", () => {
+        if (inTitlebar) post(JSON.stringify({ t: 4, m: "toggleMaximize", a: {} }));
+      });
     }
   }
 
