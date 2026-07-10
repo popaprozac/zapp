@@ -60,15 +60,15 @@ export function nimDefinesForTarget(target: BuildTarget): string[] {
  * Build the permissions manifest object baked into the Nim build config.
  * Mirrors the zc path's manifest shape (build-config.ts permissions block):
  * `{ platform, active, allow }`. The `platform` string is TARGET-DERIVED —
- * `"ios"` for any iOS target, `"macos"` otherwise — so permissions.nim sees
- * the right platform without a hardcoded value.
+ * `"ios"` for any iOS target, `"windows"` for windows, `"macos"` otherwise —
+ * so permissions.nim sees the right platform without a hardcoded value.
  */
 export function buildPermissionsManifest(
   target: BuildTarget,
   resolved: { active: boolean; allow: string[] },
-): { platform: "ios" | "macos"; active: boolean; allow: string[] } {
+): { platform: "ios" | "macos" | "windows"; active: boolean; allow: string[] } {
   return {
-    platform: isIOSTarget(target) ? "ios" : "macos",
+    platform: isIOSTarget(target) ? "ios" : target === "windows" ? "windows" : "macos",
     active: resolved.active,
     allow: resolved.allow,
   };
@@ -171,7 +171,8 @@ export function getPlatformSources(nativeDir: string, target: BuildTarget = dete
       path.join(windowsDir, "material.c"),
       path.join(windowsDir, "sidebar.c"),
       path.join(windowsDir, "popover.c"),
-      // TEMP: stubs for darwin_* symbols with no windows_* impl yet (fs, window
+      path.join(windowsDir, "fs.c"),
+      // TEMP: stubs for darwin_* symbols with no windows_* impl yet (window
       // shims, devtools, toolbar, …). Shrinks as Phase C lands real impls; see
       // native/platform/windows/nim_gaps.c.
       path.join(windowsDir, "nim_gaps.c"),

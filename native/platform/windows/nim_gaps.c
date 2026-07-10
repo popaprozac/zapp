@@ -18,18 +18,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-// --- fs (11) — entire subsystem greenfield on Windows -----------------------
-const char* windows_fs_path_var(const char* name)            { (void)name; return ""; }
-char*       windows_fs_read_file(const char* path)           { (void)path; return NULL; }
-bool        windows_fs_write_file(const char* p, const char* d) { (void)p; (void)d; return false; }
-bool        windows_fs_append_file(const char* p, const char* d){ (void)p; (void)d; return false; }
-bool        windows_fs_exists(const char* path)              { (void)path; return false; }
-char*       windows_fs_read_dir(const char* path)            { (void)path; return NULL; }
-bool        windows_fs_mkdir(const char* path, bool recursive){ (void)path; (void)recursive; return false; }
-bool        windows_fs_remove(const char* path)             { (void)path; return false; }
-bool        windows_fs_rmdir(const char* path, bool recursive){ (void)path; (void)recursive; return false; }
-bool        windows_fs_rename(const char* from, const char* to){ (void)from; (void)to; return false; }
-bool        windows_fs_copy(const char* from, const char* to){ (void)from; (void)to; return false; }
+// fs (11) is now a real implementation in native/platform/windows/fs.c.
 
 // --- window shims (3) — Windows has near-twins (activate/registry) ----------
 void*       windows_window_get_by_numeric_id(int32_t id)     { (void)id; return NULL; }
