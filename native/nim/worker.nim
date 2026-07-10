@@ -20,6 +20,7 @@
 ## --threads:on (cli/src/native.ts:1212).
 
 import registry   # registryFirstOwner (gcsafe)
+import nativeabi
 
 # --- zjs engine C-ABI (compiled in native/worker/engines/zjs.c) -------------
 # Signatures match zjs.c:1802/1836/1872/1891 EXACTLY (importc by C name).
@@ -38,10 +39,10 @@ proc zapp_worker_registry_get_display_name(workerId: cstring): cstring {.importc
 # zapp_escape_dup: libc malloc'd escaped copy (\ ' \n \r); caller free()s.
 proc zapp_escape_dup(s: cstring): cstring {.importc, cdecl.}
 # Reverse-lookup "win-<n>" → numeric window id (window.m:475); -1 if no match.
-proc darwin_window_numeric_id_for_string(wid: cstring): int32 {.importc, cdecl.}
+proc nativeWindowNumericIdForString(wid: cstring): int32 {.importc: abiPrefix & "window_numeric_id_for_string", cdecl.}
 # Eval JS in a window's webview (window.m); copies the buffer synchronously
 # before queueing onto the main thread → safe from a worker pthread.
-proc darwin_window_eval_js(numericId: int32, js: cstring) {.importc, cdecl.}
+proc nativeWindowEvalJs(numericId: int32, js: cstring) {.importc: abiPrefix & "window_eval_js", cdecl.}
 
 # --- libc (no Nim heap; gcsafe + worker-thread-safe) ------------------------
 proc c_malloc(n: csize_t): pointer {.importc: "malloc", header: "<stdlib.h>", cdecl.}
@@ -127,7 +128,7 @@ proc worker_terminate_owner*(ownerId: cstring) {.exportc, cdecl, gcsafe.} =
 # via zapp_escape_dup), eval it, then free every libc buffer. gcsafe + libc:
 # worker-thread-reachable. The IIFE template is byte-identical to app.zc:220-223.
 proc dispatchToWindow(workerId, dataJson, ownerId: cstring) {.gcsafe.} =
-  let numericId = darwin_window_numeric_id_for_string(ownerId)
+  let numericId = nativeWindowNumericIdForString(ownerId)
   if numericId < 0: return
 
   let escWid = zapp_escape_dup(workerId)
@@ -153,7 +154,7 @@ proc dispatchToWindow(workerId, dataJson, ownerId: cstring) {.gcsafe.} =
   c_free(escWid)
   c_free(escData)
 
-  darwin_window_eval_js(numericId, cast[cstring](js))
+  nativeWindowEvalJs(numericId, cast[cstring](js))
   c_free(js)
 
 # worker_dispatch_to_webview (app.zc:245-275). REPLACES the zapp.nim stub.

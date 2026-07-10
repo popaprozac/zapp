@@ -6,33 +6,34 @@
 ## by the build root (zapp.nim) — NOT self-compiled here, so dialog_test.nim can
 ## stub the C-ABI without pulling in dialog.m + Foundation (the B6a rule).
 import std/json
+import nativeabi
 
 # --- C-ABI: dialog.m (dialog.h) -------------------------------------------
 # JSON variants — the webview path: options JSON in, result JSON out. The
 # returned const char* is NOT caller-owned (do not free; mirrors router.zc).
-proc darwin_dialog_open_file(o: cstring): cstring {.importc, cdecl.}
-proc darwin_dialog_save_file(o: cstring): cstring {.importc, cdecl.}
-proc darwin_dialog_message(o: cstring): cstring {.importc, cdecl.}
+proc nativeDialogOpenFile(o: cstring): cstring {.importc: abiPrefix & "dialog_open_file", cdecl.}
+proc nativeDialogSaveFile(o: cstring): cstring {.importc: abiPrefix & "dialog_save_file", cdecl.}
+proc nativeDialogMessage(o: cstring): cstring {.importc: abiPrefix & "dialog_message", cdecl.}
 # Typed variants — the native-first path (dialog.zc parity).
-proc darwin_dialog_open_file_typed(t: cstring, m, d: bool): cstring {.importc, cdecl.}
-proc darwin_dialog_save_file_typed(t, n: cstring): cstring {.importc, cdecl.}
-proc darwin_dialog_message_typed(m, t: cstring, s: cint): cint {.importc, cdecl.}
-proc darwin_dialog_message_buttons_typed(m, t: cstring, s: cint,
-                                         b1, b2, b3: cstring): cint {.importc, cdecl.}
+proc nativeDialogOpenFileTyped(t: cstring, m, d: bool): cstring {.importc: abiPrefix & "dialog_open_file_typed", cdecl.}
+proc nativeDialogSaveFileTyped(t, n: cstring): cstring {.importc: abiPrefix & "dialog_save_file_typed", cdecl.}
+proc nativeDialogMessageTyped(m, t: cstring, s: cint): cint {.importc: abiPrefix & "dialog_message_typed", cdecl.}
+proc nativeDialogMessageButtonsTyped(m, t: cstring, s: cint,
+                                         b1, b2, b3: cstring): cint {.importc: abiPrefix & "dialog_message_buttons_typed", cdecl.}
 
 # --- Webview JSON wrappers (used by router.nim's routeDialog) --------------
 # Each takes the options object as a JSON string and returns the result JSON
 # string ("" on a nil/error return — routeDialog maps that to UNKNOWN_DIALOG).
 proc dialogOpenFile*(optionsJson: string): string =
-  let r = darwin_dialog_open_file(optionsJson.cstring)
+  let r = nativeDialogOpenFile(optionsJson.cstring)
   if r.isNil: "" else: $r
 
 proc dialogSaveFile*(optionsJson: string): string =
-  let r = darwin_dialog_save_file(optionsJson.cstring)
+  let r = nativeDialogSaveFile(optionsJson.cstring)
   if r.isNil: "" else: $r
 
 proc dialogMessage*(optionsJson: string): string =
-  let r = darwin_dialog_message(optionsJson.cstring)
+  let r = nativeDialogMessage(optionsJson.cstring)
   if r.isNil: "" else: $r
 
 # --- Granted-path extraction (mirror router.zc:router_grant_paths_from_dialog)
@@ -52,17 +53,17 @@ proc dialogGrantedPaths*(resultJson: string): seq[string] =
 
 # --- Native-first typed wrappers (dialog.zc parity; no webview caller) -----
 proc dialogOpenFileTyped*(title: string): string =
-  $darwin_dialog_open_file_typed(title.cstring, false, false)
+  $nativeDialogOpenFileTyped(title.cstring, false, false)
 proc dialogOpenFolder*(title: string): string =
-  $darwin_dialog_open_file_typed(title.cstring, false, true)
+  $nativeDialogOpenFileTyped(title.cstring, false, true)
 proc dialogSaveFileTyped*(title, defaultName: string): string =
-  $darwin_dialog_save_file_typed(title.cstring, defaultName.cstring)
+  $nativeDialogSaveFileTyped(title.cstring, defaultName.cstring)
 proc dialogMessageInfo*(msg: string): int =
-  darwin_dialog_message_typed(msg.cstring, "".cstring, 0.cint).int
+  nativeDialogMessageTyped(msg.cstring, "".cstring, 0.cint).int
 proc dialogMessageWithTitle*(msg, title: string, style: int): int =
-  darwin_dialog_message_typed(msg.cstring, title.cstring, style.cint).int
+  nativeDialogMessageTyped(msg.cstring, title.cstring, style.cint).int
 proc dialogConfirm*(msg, btnYes, btnNo: string): int =
-  darwin_dialog_message_buttons_typed(msg.cstring, "".cstring, 0.cint,
+  nativeDialogMessageButtonsTyped(msg.cstring, "".cstring, 0.cint,
                                       btnYes.cstring, btnNo.cstring, "".cstring).int
 
 # --- iOS async dialog path (compile-gated; -d:zappIos) ---------------------
@@ -75,16 +76,16 @@ proc dialogConfirm*(msg, btnYes, btnNo: string): int =
 # the call's duration.
 when defined(zappIos):
   type ZappDialogCb* = proc(wid, rid: int32; ok: bool; json: cstring) {.cdecl.}
-  proc darwin_dialog_open_file_async(windowId, requestId: int32;
-                                     optionsJson: cstring; cb: ZappDialogCb) {.importc, cdecl.}
-  proc darwin_dialog_save_file_async(windowId, requestId: int32;
-                                     optionsJson: cstring; cb: ZappDialogCb) {.importc, cdecl.}
-  proc darwin_dialog_message_async(windowId, requestId: int32;
-                                   optionsJson: cstring; cb: ZappDialogCb) {.importc, cdecl.}
+  proc nativeDialogOpenFileAsync(windowId, requestId: int32;
+                                     optionsJson: cstring; cb: ZappDialogCb) {.importc: abiPrefix & "dialog_open_file_async", cdecl.}
+  proc nativeDialogSaveFileAsync(windowId, requestId: int32;
+                                     optionsJson: cstring; cb: ZappDialogCb) {.importc: abiPrefix & "dialog_save_file_async", cdecl.}
+  proc nativeDialogMessageAsync(windowId, requestId: int32;
+                                   optionsJson: cstring; cb: ZappDialogCb) {.importc: abiPrefix & "dialog_message_async", cdecl.}
 
   proc dialogOpenFileAsync*(windowId, id: int; optionsJson: string; cb: ZappDialogCb) =
-    darwin_dialog_open_file_async(windowId.int32, id.int32, optionsJson.cstring, cb)
+    nativeDialogOpenFileAsync(windowId.int32, id.int32, optionsJson.cstring, cb)
   proc dialogSaveFileAsync*(windowId, id: int; optionsJson: string; cb: ZappDialogCb) =
-    darwin_dialog_save_file_async(windowId.int32, id.int32, optionsJson.cstring, cb)
+    nativeDialogSaveFileAsync(windowId.int32, id.int32, optionsJson.cstring, cb)
   proc dialogMessageAsync*(windowId, id: int; optionsJson: string; cb: ZappDialogCb) =
-    darwin_dialog_message_async(windowId.int32, id.int32, optionsJson.cstring, cb)
+    nativeDialogMessageAsync(windowId.int32, id.int32, optionsJson.cstring, cb)
