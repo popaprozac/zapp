@@ -854,6 +854,18 @@ static HRESULT STDMETHODCALLTYPE ZappCtrl_Invoke(
         ICoreWebView2Settings_put_AreDevToolsEnabled(settings, self->inspectable ? TRUE : FALSE);
         ICoreWebView2Settings_put_IsStatusBarEnabled(settings, FALSE);
         ICoreWebView2Settings_put_IsZoomControlEnabled(settings, FALSE);
+        // Native non-client regions: with this on, CSS `-webkit-app-region: drag`
+        // makes the marked element the window title bar — WebView2 hit-tests it
+        // and hands the OS a caption region, so drag, double-click-to-maximize,
+        // and the right-click system menu all work natively (no JS beginDrag).
+        // ICoreWebView2Settings9, GA since runtime 1.0.2420.47; effective on the
+        // next navigation. try_query so older runtimes just skip it.
+        ICoreWebView2Settings9* settings9 = NULL;
+        if (SUCCEEDED(ICoreWebView2Settings_QueryInterface(
+                settings, &IID_ICoreWebView2Settings9, (void**)&settings9)) && settings9) {
+            ICoreWebView2Settings9_put_IsNonClientRegionSupportEnabled(settings9, TRUE);
+            ICoreWebView2Settings9_Release(settings9);
+        }
     }
 
     // Set up message handler

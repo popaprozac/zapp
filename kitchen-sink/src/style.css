@@ -20,12 +20,14 @@ h2 { font-size: 16px; color: var(--text-h); margin: 0 0 8px; font-weight: 600; }
 
 /* Drag strip — spans full width, sits above sidebar/inspector panes via position:fixed.
    Left inset 78px preserves the macOS traffic-light button zone (close/min/zoom). */
+/* data-zapp-titlebar gives this drag + dblclick-maximize on both platforms —
+   the framework bridges it to -webkit-app-region on Windows, so no app CSS for
+   dragging is needed. */
 .drag-strip {
   position: fixed; top: 0; left: 0; right: 0;
   height: var(--zapp-titlebar-height, 34px);
   padding-left: 78px;
   display: flex; align-items: center;
-  -webkit-app-region: drag;
   z-index: 100;
 }
 .drag-strip-label {

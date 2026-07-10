@@ -336,21 +336,41 @@
       }
     });
 
-    // Windows has no mouseDownCanMoveWindow hook (WebView2 owns the mouse), so a
-    // drag over a drag region can't move the window natively. Detect the gesture
-    // in JS instead: on mousedown inside a drag region, then a move past a small
-    // threshold, ask native to start the OS move loop (window:beginDrag). The
-    // >4px threshold (not mousedown) preserves plain clicks + dblclick-to-zoom —
-    // starting the modal move loop on mousedown would swallow the mouseup.
-    // Windows is detected by the WebView2 transport (chrome.webview), the same
-    // signal `post()` uses — the bootstrapConfig has no `permissions.platform`
-    // on Windows (that field is Apple-only), so key off the transport instead.
+    // Windows chrome model (WebView2). Detected by the chrome.webview transport
+    // (the bootstrapConfig has no permissions.platform on Windows — Apple-only),
+    // the same signal `post()` keys off.
+    //   - data-zapp-titlebar → NATIVE: the framework maps it to CSS
+    //     `-webkit-app-region: drag`, which WebView2's IsNonClientRegionSupport
+    //     turns into a real caption region — drag + double-click-maximize + the
+    //     right-click system menu, all handled by the OS. App markup stays
+    //     platform-agnostic (no -webkit-app-region in app CSS).
+    //   - data-zapp-drag-region / --zapp-drag:drag → MOVE-ONLY: native app-region
+    //     can't express "drag without dblclick", so plain drag regions keep the JS
+    //     gesture (post beginDrag past a 4px move; no dblclick). Titlebars are
+    //     skipped here — the OS owns those.
     const _isWin = !(window as any).webkit?.messageHandlers?.zapp
       && !!(window as any).chrome?.webview?.postMessage;
     if (_isWin) {
+      // Bridge data-zapp-titlebar → native app-region (interactive descendants
+      // opt out). Applied on DOMContentLoaded — document-start runs before the
+      // real <html> exists (same reason as the metrics injection).
+      const applyTitlebarCss = () => {
+        const s = document.createElement("style");
+        s.textContent =
+          "[data-zapp-titlebar]{-webkit-app-region:drag}" +
+          "[data-zapp-titlebar] button,[data-zapp-titlebar] input,[data-zapp-titlebar] select," +
+          "[data-zapp-titlebar] textarea,[data-zapp-titlebar] a[href]," +
+          "[data-zapp-titlebar] [role=button],[data-zapp-titlebar] [contenteditable=true]" +
+          "{-webkit-app-region:no-drag}";
+        (document.head || document.documentElement).appendChild(s);
+      };
+      if (document.readyState !== "loading") applyTitlebarCss();
+      else document.addEventListener("DOMContentLoaded", applyTitlebarCss);
+
+      // Move-only drag for plain drag regions (NOT titlebars — native owns those).
       let dragStart: { x: number; y: number } | null = null;
       document.addEventListener("mousedown", (e: MouseEvent) => {
-        if (e.button === 0 && inDrag) dragStart = { x: e.screenX, y: e.screenY };
+        if (e.button === 0 && inDrag && !inTitlebar) dragStart = { x: e.screenX, y: e.screenY };
       });
       document.addEventListener("mousemove", (e: MouseEvent) => {
         if (!dragStart) return;
@@ -362,15 +382,6 @@
       const _clearDrag = () => { dragStart = null; };
       document.addEventListener("mouseup", _clearDrag);
       document.addEventListener("mouseleave", _clearDrag);
-
-      // Double-click the TITLE BAR (data-zapp-titlebar) → toggle maximize
-      // (framework behavior, parity with the macOS WKWebView subclass). Gated on
-      // inTitlebar, NOT inDrag — a generic draggable region must not maximize on a
-      // stray double-click. A dblclick stays within the 4px threshold so it never
-      // triggers beginDrag.
-      document.addEventListener("dblclick", () => {
-        if (inTitlebar) post(JSON.stringify({ t: 4, m: "toggleMaximize", a: {} }));
-      });
     }
   }
 
