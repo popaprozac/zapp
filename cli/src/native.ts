@@ -1194,6 +1194,12 @@ async function buildNativeNim(
   const protocols = (config.protocols ?? []).filter(s => /^[a-z][a-z0-9.+-]*$/.test(s));
   const protocolsJson = JSON.stringify(protocols);
 
+  // Deep-link URL schemes + single-instance — mirrors the zc path
+  // (build-config.ts:113-114, 145). Referenced by windows/deeplink.c; previously
+  // stubbed in windows/nim_gaps.c.
+  const deepLinkSchemes = (config.deepLinkSchemes ?? []).filter(s => /^[a-z][a-z0-9.+-]*$/.test(s));
+  const deepLinkSchemesJson = JSON.stringify(deepLinkSchemes);
+
   // Initial URL — mirrors the zc path's generateBuildConfig: in dev, load the
   // Vite dev server (HMR, no dependence on a built dist/); in prod, the
   // zapp:// scheme handler serves the embedded asset table. Without this the
@@ -1212,6 +1218,8 @@ async function buildNativeNim(
     fsAllowlistJson: JSON.stringify(config.fs?.allow ?? []),
     fsPersistGrants: config.fs?.persistDialogGrants ?? false,
     customProtocolsJson: protocolsJson,
+    deepLinkSchemesJson,
+    singleInstance: config.singleInstance ?? false,
   });
   await fs.writeFile(path.join(zappDir, "zapp_build_config.nim"), configNim, "utf-8");
 

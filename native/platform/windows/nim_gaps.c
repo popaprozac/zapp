@@ -37,12 +37,9 @@ void        windows_toolbar_set_items(void* w, const char* json, int32_t host_sl
 void        windows_toolbar_update_item(void* w, const char* item_json)     { (void)w; (void)item_json; }
 void        windows_toolbar_remove(void* w)                                 { (void)w; }
 
-// --- unprefixed shared C-ABI symbols the platform must provide --------------
+// --- unprefixed shared C-ABI symbol the platform must provide ---------------
 // zapp_form_factor: per-platform (darwin/ios .m define it). Windows is desktop.
+// (The zapp_build_deep_link_schemes_json / zapp_build_single_instance getters
+// are now emitted by renderBuildConfigNim as Nim {.exportc.} from real config —
+// no longer stubbed here.)
 const char* zapp_form_factor(void)                           { return "desktop"; }
-// These two are build-config getters the zc path emits (build-config.ts:144)
-// but the Nim renderBuildConfigNim does not. Referenced only by windows/
-// deeplink.c. TODO: emit from renderBuildConfigNim with the app's real config
-// (config.singleInstance + deep-link schemes) and delete these stubs.
-const char* zapp_build_deep_link_schemes_json(void)          { return "[]"; }
-int         zapp_build_single_instance(void)                 { return 0; }

@@ -190,6 +190,14 @@ export interface BuildConfigNimOpts {
    *  module-level `let` per the cstring boundary rule (non-empty pointers must
    *  not dangle). */
   customProtocolsJson: string;
+  /** JSON array string of deep-link URL schemes (e.g. `'["myapp"]'`), system-wide
+   *  `myapp://` handlers. Mirrors the zc path's `deepLinkJson` (build-config.ts).
+   *  Referenced by windows/deeplink.c (windows_register_url_schemes). */
+  deepLinkSchemesJson: string;
+  /** Single-instance guard: a second launch forwards its args to the running
+   *  primary instead of opening a new window. Mirrors the zc path's
+   *  `config.singleInstance`. Referenced by windows/deeplink.c. */
+  singleInstance: boolean;
 }
 
 /**
@@ -212,6 +220,7 @@ let zappAssetRoot = ${s(o.assetRoot)}
 let zappPermissionsJson = ${s(o.permissionsJson)}
 let zappFsAllowlistJson = ${s(o.fsAllowlistJson)}
 let zappCustomProtocolsJson = ${s(o.customProtocolsJson)}
+let zappDeepLinkSchemesJson = ${s(o.deepLinkSchemesJson)}
 proc zapp_build_initial_url(): cstring {.exportc, cdecl.} = zappInitialUrl.cstring
 proc zapp_build_identifier(): cstring {.exportc, cdecl.} = zappIdentifier.cstring
 proc zapp_build_name(): cstring {.exportc, cdecl.} = zappName.cstring
@@ -224,6 +233,8 @@ proc zapp_build_csp(): cstring {.exportc, cdecl.} = "".cstring
 proc zapp_build_is_dev(): cint {.exportc, cdecl.} = return ${b(o.isDev)}.cint
 proc zapp_build_dev_tools_default(): cint {.exportc, cdecl.} = return ${o.devTools}.cint
 proc zapp_build_custom_protocols_json(): cstring {.exportc, cdecl.} = zappCustomProtocolsJson.cstring
+proc zapp_build_deep_link_schemes_json(): cstring {.exportc, cdecl.} = zappDeepLinkSchemesJson.cstring
+proc zapp_build_single_instance(): cint {.exportc, cdecl.} = return ${b(o.singleInstance)}.cint
 proc zapp_build_webview_autoplay_without_user_gesture(): cint {.exportc, cdecl.} = return 0.cint
 proc zapp_build_webview_back_forward_gestures(): cint {.exportc, cdecl.} = return 0.cint
 proc zapp_build_webview_text_interaction_enabled(): cint {.exportc, cdecl.} = return 1.cint

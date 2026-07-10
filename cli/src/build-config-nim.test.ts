@@ -94,6 +94,28 @@ test("renderBuildConfigNim emits fs allowlist + persist-grants getters", () => {
   expect(out).toContain("proc zapp_build_fs_persist_grants(): bool {.exportc, cdecl.} = true");
 });
 
+test("renderBuildConfigNim emits deep-link schemes + single-instance getters", () => {
+  const out = renderBuildConfigNim({
+    initialUrl: "zapp://index.html",
+    identifier: "com.example.app",
+    name: "Example App",
+    assetRoot: "",
+    embedAssets: true,
+    devTools: 1,
+    isDev: false,
+    permissionsJson: '{"platform":"windows","active":false,"allow":[]}',
+    fsAllowlistJson: "[]",
+    fsPersistGrants: false,
+    customProtocolsJson: "[]",
+    deepLinkSchemesJson: '["myapp"]',
+    singleInstance: true,
+  });
+  // Referenced by windows/deeplink.c (register_url_schemes + single-instance guard).
+  expect(out).toContain('let zappDeepLinkSchemesJson = "[\\"myapp\\"]"');
+  expect(out).toContain("proc zapp_build_deep_link_schemes_json(): cstring {.exportc, cdecl.} = zappDeepLinkSchemesJson.cstring");
+  expect(out).toContain("proc zapp_build_single_instance(): cint {.exportc, cdecl.} = return 1.cint");
+});
+
 import { buildPermissionsManifest } from "./native";
 test("buildPermissionsManifest derives platform from the build target (ios vs macos)", () => {
   const resolved = { active: true, allow: ["clipboard"] };
