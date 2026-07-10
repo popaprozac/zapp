@@ -229,9 +229,10 @@ void windows_titlebar_layout(int32_t window_id) {
     RECT rc; GetClientRect(tb->host, &rc);
     int bw  = tb_scale(tb->host, TB_BTN_W) * TB_COUNT;
     int bh  = tb_scale(tb->host, TB_BTN_H);
-    int top = (tb->style_tag == 2) ? tb_scale(tb->host, 6) : 0;  // hiddenInset inset
+    // hiddenInset degrades to hidden on Windows — the macOS unified-toolbar inset
+    // has no sensible Win analogue and reads as awkward. Buttons sit flush top.
     // Raise above the WebView2 surface (sibling child); re-raised on each resize.
-    SetWindowPos(tb->btn, HWND_TOP, rc.right - bw, top, bw, bh,
+    SetWindowPos(tb->btn, HWND_TOP, rc.right - bw, 0, bw, bh,
         SWP_NOACTIVATE | SWP_SHOWWINDOW);
     InvalidateRect(tb->btn, NULL, FALSE);
 }
