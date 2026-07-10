@@ -626,6 +626,33 @@ const char* windows_window_id_string(int32_t numeric_id) {
     return zapp_window_ids[numeric_id];
 }
 
+// darwin_windows_list_json twin: a JSON array of the live window id strings
+// (e.g. ["win-1","win-3"]). Malloc'd (caller frees), matching darwin's strdup
+// contract. Iterates the zapp_hwnds registry.
+const char* windows_windows_list_json(void) {
+    // Bound: each id is short ("win-<n>"); allocate generously per slot.
+    size_t cap = (size_t)ZAPP_MAX_WINDOWS * (sizeof(zapp_window_ids[0]) + 4) + 4;
+    char* out = (char*)malloc(cap);
+    if (!out) return NULL;
+    size_t len = 0;
+    out[len++] = '[';
+    int first = 1;
+    for (int i = 0; i < ZAPP_MAX_WINDOWS; i++) {
+        if (!zapp_hwnds[i]) continue;
+        const char* id = zapp_window_ids[i];
+        if (!id || !id[0]) continue;
+        if (!first) out[len++] = ',';
+        out[len++] = '"';
+        size_t n = strlen(id);
+        memcpy(out + len, id, n); len += n;
+        out[len++] = '"';
+        first = 0;
+    }
+    out[len++] = ']';
+    out[len] = '\0';
+    return out;
+}
+
 void* windows_window_get_webview(int32_t numeric_id) {
     // Returns the HWND — WebView2 lookup is done in webview.c
     if (numeric_id < 0 || numeric_id >= ZAPP_MAX_WINDOWS) return NULL;

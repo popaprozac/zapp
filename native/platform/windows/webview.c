@@ -1212,3 +1212,19 @@ void windows_webview_create(void* hwnd_ptr, bool inspectable, const char* url_ov
     windows_webview_create_ext(hwnd_ptr, inspectable, url_override, wid, -1,
                                zapp_webview_transparent[wid], 0, false, false);
 }
+
+// --- devtools (darwin_devtools_* twins) -------------------------------------
+// Open the WebView2 DevTools window for a window's webview. Uses the per-slot
+// ICoreWebView2 (zapp_webviews_wv). darwin routes CEF vs WKWebView; on Windows
+// WebView2 has a single OpenDevToolsWindow entry point.
+void windows_devtools_open(int32_t window_id) {
+    if (window_id < 0 || window_id >= ZAPP_MAX_WINDOWS) return;
+    ICoreWebView2* wv = zapp_webviews_wv[window_id];
+    if (wv) ICoreWebView2_OpenDevToolsWindow(wv);
+}
+
+// WebView2 exposes no programmatic DevTools-close (the DevTools window is
+// user-owned; F12 toggles it). No-op to satisfy the API surface.
+void windows_devtools_close(int32_t window_id) {
+    (void)window_id;
+}
