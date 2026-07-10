@@ -11,6 +11,52 @@ a running `.exe` — replacing the `ZAPP_NATIVE_LANG=zc` escape hatch. The worki
 
 ---
 
+## STATUS — 2026-07-09 (achieved: build links + runs)
+
+**`kitchen-sink.exe` builds on the default Nim path for `--platform windows`, boots,
+runs the zjs headless worker, and reports `platform: windows desktop prod`.** Commits
+on `windows-nim`: `9d9b96f` (seam) → `cc2b4be` (plumbing) → `0e1afe9` (first link) →
+`dceae46` (fs) → `020e1e4` (window shims).
+
+Done:
+- **Seam (Option C):** 148 bindings across 12 modules + router.nim on `nativeabi.abiPrefix`
+  (`darwin_*` on Apple, `windows_*` on Windows). Apple codegen byte-identical. So the
+  `windows/*.c` bind as-is — **no C rename**. The 30-symbol "gap" was really 27 (3 dialog
+  async are iOS-only).
+- **Phase A:** `nimDefinesForTarget("windows")→-d:zappWindows`; `renderPlatformNim` windows
+  branch (C-ABI flags + Win32 libs + `libzjs_embed.a`); `--cc:gcc` on Windows.
+- **Phase B (link + run):** libuv wired into the Nim build (uv.h + `libuv.a` from a built
+  Bare engine; syslibs repeated after archives for single-pass ld); zjs.c GCD async path
+  gated `__APPLE__`; platform.nim darwin-include gated off Windows; the 27 gaps stubbed
+  (`nim_gaps.c`) to reach the link; `+zapp_form_factor`, `+2 build getters` deeplink.c needs.
+- **Phase C so far:** real `windows/fs.c` (11 fs symbols); real window shims
+  (`get_by_numeric_id`/`focus`/`zoom` in window.c); `platform` tag = `windows`.
+
+Remaining (well-scoped):
+- **Phase C stubs still in `nim_gaps.c` (12):** devtools open/close (WebView2
+  OpenDevToolsWindow), notification remove-delivered/update (3), sidebar set_presentation/
+  set_title (2), inspector set_title (1), toolbar set_items/update_item/remove (3, no
+  windows_toolbar_* exists), `windows_list_json` (build from `zapp_hwnds`).
+- Move `zapp_build_deep_link_schemes_json` + `zapp_build_single_instance` from the
+  `nim_gaps.c` stubs into `renderBuildConfigNim` (emit from real app config).
+- **Phase D:** Nim-scoped Windows parity gate test (assert every `abiPrefix` suffix has a
+  `windows_*` def); then delete dead `native/**/*.zc` (gap #7b).
+- **zjs-on-Windows follow-ups (parallel session):** proper async worker→main funnel
+  (currently inline on non-Apple, `zjs.c` TODO); vendored libuv (the bare `bare-module`
+  binding fails to build — `js_on_dynamic_import_transitional` API skew — but `libuv.a`
+  builds fine first, which is all we need).
+
+### Environment landmines found
+- **Stray `C:\Windows\System32\nim.exe`** (full 9.8 MB nim, no stdlib) shadows scoop's nim
+  on PATH (System32 precedes `~/scoop/shims`). Any `nim` via PATH (incl. the CLI's
+  `Bun.spawn`) hits the broken one → `cannot open 'C:\WINDOWS\lib\system.nim'`. Workaround:
+  build with `PATH="$HOME/scoop/apps/nim/current/bin:$PATH"`. **Real fix (user, admin):
+  remove the System32 nim.**
+- Build cmds must run from `../zapp-nim` (worktree) with `bun install` done there +
+  kitchen-sink; worktree consolidation onto the primary dir is still pending.
+
+---
+
 ## The gap in numbers (verified)
 
 - Nim layer depends on **160 distinct C-ABI symbols**; **137 are `darwin_*`** platform
