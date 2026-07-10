@@ -1228,3 +1228,17 @@ void windows_devtools_open(int32_t window_id) {
 void windows_devtools_close(int32_t window_id) {
     (void)window_id;
 }
+
+// The HWND a window's WebView2 is parented to — the correct coordinate origin
+// for JS-supplied positions (context menus, popovers). In paned windows this is
+// the OFFSET content/sidebar/inspector child, not the top-level host, so a
+// ClientToScreen against it lands where the user actually clicked (matching the
+// macOS "anchor to the pane view" fix, in Windows terms). NULL if no controller.
+void* windows_webview_parent_hwnd(int32_t window_id) {
+    if (window_id < 0 || window_id >= ZAPP_MAX_WINDOWS) return NULL;
+    ICoreWebView2Controller* c = zapp_controllers[window_id];
+    if (!c) return NULL;
+    HWND h = NULL;
+    ICoreWebView2Controller_get_ParentWindow(c, &h);
+    return (void*)h;
+}

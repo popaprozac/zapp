@@ -213,6 +213,23 @@ void windows_menu_set_typed(ZappMenuItem* items, int count) {
     }
 }
 
+// Screen point for a JS (CSS px) position in a window's webview. Anchors to the
+// webview's ACTUAL parent HWND — in paned windows that's the offset content/
+// sidebar/inspector child, not the top-level host — then scales CSS->device px
+// by that window's DPI and maps to screen. Without this, a context menu fired
+// in a pane lands shifted by the pane's offset (e.g. the sidebar width). Falls
+// back to the host if the controller isn't ready. (Windows analogue of the
+// macOS "anchor the menu to the pane view" fix.)
+static POINT zapp_menu_screen_point(int32_t window_id, int x, int y, HWND host) {
+    extern void* windows_webview_parent_hwnd(int32_t);
+    HWND anchor = (HWND)windows_webview_parent_hwnd(window_id);
+    if (!anchor) anchor = host;
+    UINT dpi = GetDpiForWindow(anchor);
+    POINT pt = { MulDiv(x, (int)dpi, 96), MulDiv(y, (int)dpi, 96) };
+    ClientToScreen(anchor, &pt);
+    return pt;
+}
+
 void windows_menu_show_context_typed(ZappMenuItem* items, int count, int x, int y, int32_t window_id) {
     if (!items || count <= 0) return;
 
@@ -220,10 +237,8 @@ void windows_menu_show_context_typed(ZappMenuItem* items, int count, int x, int 
     HWND hwnd = zapp_get_hwnd(window_id);
     if (!hwnd) { DestroyMenu(menu); return; }
 
-    // Convert client coords (CSS px) to device px, then to screen.
-    UINT dpi = GetDpiForWindow(hwnd);
-    POINT pt = { MulDiv(x, (int)dpi, 96), MulDiv(y, (int)dpi, 96) };
-    ClientToScreen(hwnd, &pt);
+    // Anchor to the firing webview's parent (offset-correct in paned windows).
+    POINT pt = zapp_menu_screen_point(window_id, x, y, hwnd);
     TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN, pt.x, pt.y, 0, hwnd, NULL);
     DestroyMenu(menu);
 }
@@ -476,12 +491,11 @@ void windows_menu_show_context_from_payload(const char* payload_json, int32_t wi
     HWND hwnd = zapp_get_hwnd(window_id);
     if (!hwnd) { DestroyMenu(menu); return; }
 
-    // x/y arrive as CSS pixels from the webview; the client area is in
-    // device pixels — scale by the window's DPI or the menu lands short
-    // of the cursor on >100% displays.
-    UINT dpi = GetDpiForWindow(hwnd);
-    POINT pt = { MulDiv(x, (int)dpi, 96), MulDiv(y, (int)dpi, 96) };
-    ClientToScreen(hwnd, &pt);
+    // x/y arrive as CSS pixels relative to the FIRING webview; anchor to that
+    // webview's parent HWND (offset-correct in paned windows) and scale CSS->
+    // device px by its DPI. Anchoring to the top-level host instead shifts the
+    // menu by the pane offset (e.g. the sidebar width) on paned windows.
+    POINT pt = zapp_menu_screen_point(window_id, x, y, hwnd);
     // TPM_RETURNCMD not used — clicks dispatch through WM_COMMAND like
     // menubar items, sharing zapp_handle_menu_command.
     SetForegroundWindow(hwnd);
