@@ -88,6 +88,7 @@ static int sx(HWND h, int v) { return (int)(v * panes_scale(h) + 0.5); }
 // panes (both carry the host identity). data_json already-JSON or NULL.
 static void pane_emit(int32_t host_slot, int32_t accessory_slot,
                       const char* event, const char* data_json) {
+    (void)accessory_slot;   // event reaches ALL panes now (see below), not just the source
     char* esc = NULL;
     char* data_arg = NULL;
     if (data_json) {
@@ -108,9 +109,19 @@ static void pane_emit(int32_t host_slot, int32_t accessory_slot,
         char* js = (char*)malloc((size_t)needed + 1);
         if (js) {
             snprintf(js, (size_t)needed + 1, tmpl, host_slot, event, arg);
+            // Window events are a "global broadcast, filtered by windowId" — every
+            // pane of this window must receive them, not just the host + the pane
+            // that triggered the change. Otherwise a section's inspector() (which
+            // renders in the INSPECTOR pane) never sees SIDEBAR_* events, and vice
+            // versa. Dispatch to content/host + BOTH accessories.
             windows_webview_eval_by_id(host_slot, js);
-            if (accessory_slot >= 0 && accessory_slot != host_slot)
-                windows_webview_eval_by_id(accessory_slot, js);
+            ZappPaneWindow* p = panes_for(host_slot);
+            if (p) {
+                if (p->sidebar_slot >= 0 && p->sidebar_slot != host_slot)
+                    windows_webview_eval_by_id(p->sidebar_slot, js);
+                if (p->inspector_slot >= 0 && p->inspector_slot != host_slot)
+                    windows_webview_eval_by_id(p->inspector_slot, js);
+            }
             free(js);
         }
     }
