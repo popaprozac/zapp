@@ -59,3 +59,39 @@ header[data-zapp-titlebar] {
   padding-right: var(--zapp-window-controls-inset-right, 0);
 }
 ```
+
+## Windows: caption buttons vs. a transparent window (known tradeoff)
+
+On Windows the custom title bar's min/max/close buttons are drawn by the native
+layer (floated over the WebView2). One platform tradeoff to be aware of:
+
+When a window is **transparent** or uses a **`vibrancy`/`windows.backdrop`**
+(Mica/Acrylic), WebView2 renders through **DirectComposition**, whose surface
+composites *above* the native caption buttons. The buttons still **work**, but
+their **hover / press highlight isn't visible**. An **opaque** window (no
+vibrancy/backdrop) is unaffected — the buttons hover normally. (macOS is
+unaffected; its buttons are AppKit traffic lights, not a WebView overlay.)
+
+The two-tier options model gives you the escape hatch: **scope the material per
+platform** so you can have vibrancy on macOS while keeping Windows opaque (and its
+caption-button hover intact):
+
+```ts
+Window.create({
+  titleBarStyle: "hidden",
+  mac: { material: "sidebar" },     // vibrancy on macOS only
+  // Windows stays opaque → native caption buttons hover normally.
+});
+```
+
+Or keep the cross-platform semantic `vibrancy` and opt out on Windows explicitly:
+
+```ts
+Window.create({
+  vibrancy: "sidebar",              // → Mica on Windows…
+  windows: { backdrop: "none" },    // …but force this window opaque
+});
+```
+
+A future framework-rendered **web caption button** will close this gap (vibrancy +
+hover together); until then, the per-platform material scoping above is the fix.

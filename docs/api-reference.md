@@ -541,18 +541,18 @@ w.on(WindowEvent.READY, () => w.show());
   y?: number
   visible?: boolean               // default: true — auto-shows when content is ready
   resizable?: boolean             // default: true
-  closable?: boolean              // default: true   (sugar for trafficLights.close)
-  minimizable?: boolean           // default: true   (sugar for trafficLights.minimize)
-  maximizable?: boolean           // default: true   (sugar for trafficLights.zoom)
+  closable?: boolean              // default: true   (sugar for windowControls.close)
+  minimizable?: boolean           // default: true   (sugar for windowControls.minimize)
+  maximizable?: boolean           // default: true   (sugar for windowControls.maximize)
   fullscreen?: boolean            // default: false
   borderless?: boolean            // default: false
   transparent?: boolean           // default: false
   alwaysOnTop?: boolean           // default: false
   titleBarStyle?: "default" | "hidden" | "hiddenInset"
-  trafficLights?: {
+  windowControls?: {              // macOS traffic lights · Windows caption buttons
     close?:    "enabled" | "disabled" | "hidden"  // default: "enabled"
     minimize?: "enabled" | "disabled" | "hidden"
-    zoom?:     "enabled" | "disabled" | "hidden"
+    maximize?: "enabled" | "disabled" | "hidden"
   }
   acceptFirstMouse?: boolean      // default: true (macOS — first click both focuses and triggers)
   asSheetOf?: WindowHandle | string  // atomic create-and-attach as modal sheet
@@ -597,19 +597,19 @@ buttons. `"enabled"` is the default clickable state; `"disabled"` greys
 the button; `"hidden"` removes it entirely (leaves a gap unless paired
 with a custom titlebar). The legacy `closable` / `minimizable` /
 `maximizable` booleans are sugar: `false` maps to the corresponding
-button's `"disabled"` state. An explicit `trafficLights` object wins
+button's `"disabled"` state. An explicit `windowControls` object wins
 over the legacy booleans.
 
 ```ts
-// Custom titlebar — hide all three traffic lights, draw your own.
+// Custom titlebar — hide all three window controls, draw your own.
 Window.create({
   titleBarStyle: "hidden",
-  trafficLights: { close: "hidden", minimize: "hidden", zoom: "hidden" },
+  windowControls: { close: "hidden", minimize: "hidden", maximize: "hidden" },
 });
 
-// Chromeless tool window — only close button, zoom greyed, minimize gone.
+// Chromeless tool window — only close button, maximize greyed, minimize gone.
 Window.create({
-  trafficLights: { close: "enabled", minimize: "hidden", zoom: "disabled" },
+  windowControls: { close: "enabled", minimize: "hidden", maximize: "disabled" },
 });
 ```
 
@@ -700,7 +700,7 @@ re-attached to a different parent).
 
 **Honored `WindowOptions` on a modal:** `title`, `url`, `width`,
 `height`, `transparent`, `webContentInspectable`. Position,
-`fullscreen`, `borderless`, `titleBarStyle`, `trafficLights`, and
+`fullscreen`, `borderless`, `titleBarStyle`, `windowControls`, and
 `alwaysOnTop` are meaningless for sheets and ignored.
 
 **Platform support:** macOS only today. Windows is a no-op until
