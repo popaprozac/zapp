@@ -16,6 +16,44 @@ extern void zapp_increment_window_count(void);
 extern void zapp_decrement_window_count(void);
 extern void windows_webview_create(void* hwnd_ptr, bool inspectable, const char* url_override);
 extern int zapp_dispatch_event(int window_id, int event_id, int w, int h, int x, int y);
+extern int zapp_app_dispatch(int event_id, const char* data);   // app-level events (app_events.nim)
+
+// App-level event IDs forwarded via zapp_app_dispatch (app_events.nim name map).
+#define ZAPP_EVENT_APP_ACTIVE          106
+#define ZAPP_EVENT_APP_INACTIVE        107
+#define ZAPP_EVENT_APP_SCREEN_LOCKED   111
+#define ZAPP_EVENT_APP_SCREEN_UNLOCKED 112
+#define ZAPP_EVENT_APP_SCREENS_CHANGED 116
+
+// Session lock/unlock (Win+L) via WTS notifications. These constants live in
+// wtsapi32.h (not pulled in under WIN32_LEAN_AND_MEAN) — define locally and load
+// the register/unregister entry points dynamically to avoid a wtsapi32 link dep.
+#ifndef WM_WTSSESSION_CHANGE
+#define WM_WTSSESSION_CHANGE 0x02B1
+#endif
+#ifndef NOTIFY_FOR_THIS_SESSION
+#define NOTIFY_FOR_THIS_SESSION 0
+#endif
+#ifndef WTS_SESSION_LOCK
+#define WTS_SESSION_LOCK   0x7
+#define WTS_SESSION_UNLOCK 0x8
+#endif
+
+static void zapp_wts_register(HWND hwnd) {
+    HMODULE lib = LoadLibraryW(L"wtsapi32.dll");
+    if (!lib) return;
+    typedef BOOL (WINAPI *RegFn)(HWND, DWORD);
+    RegFn fn = (RegFn)GetProcAddress(lib, "WTSRegisterSessionNotification");
+    if (fn) fn(hwnd, NOTIFY_FOR_THIS_SESSION);
+    // Leave the module loaded — the registration outlives this call.
+}
+static void zapp_wts_unregister(HWND hwnd) {
+    HMODULE lib = GetModuleHandleW(L"wtsapi32.dll");
+    if (!lib) return;
+    typedef BOOL (WINAPI *UnregFn)(HWND);
+    UnregFn fn = (UnregFn)GetProcAddress(lib, "WTSUnRegisterSessionNotification");
+    if (fn) fn(hwnd);
+}
 
 // --- DPI helper ---
 
@@ -270,6 +308,51 @@ LRESULT CALLBACK zapp_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             return 0;
         }
 
+        // App-level activation (whole process moves to/from the foreground) —
+        // WM_ACTIVATE above is per-window; this is the app:active/inactive
+        // analog of NSApplication did-become/resign-active. WM_ACTIVATEAPP is
+        // delivered to every top-level window, so dedupe on a process-global
+        // state to emit exactly once per transition.
+        case WM_ACTIVATEAPP: {
+            static int g_app_active = -1;   // -1 = unknown at startup
+            int now_active = (wParam != FALSE) ? 1 : 0;
+            if (now_active != g_app_active) {
+                g_app_active = now_active;
+                zapp_app_dispatch(now_active ? ZAPP_EVENT_APP_ACTIVE
+                                             : ZAPP_EVENT_APP_INACTIVE, "{}");
+            }
+            break;
+        }
+
+        // Session lock / unlock (Win+L → app:screen-locked/unlocked). Registered
+        // on every window (zapp_wts_register), so dedupe on a process-global
+        // state to emit once per transition.
+        case WM_WTSSESSION_CHANGE: {
+            static int g_locked = -1;   // -1 = unknown
+            int now_locked = -1;
+            if (wParam == WTS_SESSION_LOCK)        now_locked = 1;
+            else if (wParam == WTS_SESSION_UNLOCK) now_locked = 0;
+            if (now_locked >= 0 && now_locked != g_locked) {
+                g_locked = now_locked;
+                zapp_app_dispatch(now_locked ? ZAPP_EVENT_APP_SCREEN_LOCKED
+                                             : ZAPP_EVENT_APP_SCREEN_UNLOCKED, "{}");
+            }
+            break;
+        }
+
+        // Monitor topology / resolution changed (app:screens-changed). Also
+        // broadcast to every top-level window, so throttle to collapse the
+        // per-window storm into a single dispatch.
+        case WM_DISPLAYCHANGE: {
+            static DWORD last_dc = 0;
+            DWORD now = GetTickCount();
+            if (now - last_dc > 250) {
+                last_dc = now;
+                zapp_app_dispatch(ZAPP_EVENT_APP_SCREENS_CHANGED, "{}");
+            }
+            break;
+        }
+
         case WM_COMMAND: {
             // Menu item or accelerator
             extern void zapp_handle_menu_command(unsigned int cmd_id);
@@ -291,6 +374,7 @@ LRESULT CALLBACK zapp_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
 
         case WM_DESTROY: {
+            zapp_wts_unregister(hwnd);   // stop session lock/unlock notifications
             // Modal safety net: if this window owned a disabled parent
             // (attach_modal) and is going away without a detach (user
             // hit the X), re-enable the parent or it's stuck dead.
@@ -392,6 +476,13 @@ void* windows_window_create(WindowOptions* opts) {
     if (!hwnd) return NULL;
 
     zapp_increment_window_count();
+    zapp_wts_register(hwnd);   // session lock/unlock notifications (Win+L)
+
+    // Content protection (windows:{contentProtection}) — exclude from screen
+    // capture / screenshots. WDA_EXCLUDEFROMCAPTURE: Windows 10 2004+.
+    extern bool wopts_windows_content_protection(void*);
+    if (wopts_windows_content_protection(opts))
+        SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
 
     // Register the hwnd ↔ numeric-id mapping NOW, from the id the
     // WindowManager pre-allocated, before anything that depends on
