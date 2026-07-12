@@ -260,6 +260,9 @@ LRESULT CALLBACK zapp_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             // (resized) WebView2 surface. No-op for non-custom-titlebar windows.
             extern void windows_titlebar_layout(int32_t);
             windows_titlebar_layout(wid);
+            // Sync the web-rendered caption buttons' maximized glyph (max↔restore).
+            extern void windows_titlebar_sync_web(int32_t);
+            windows_titlebar_sync_web(wid);
 
             WORD sizeType = LOWORD(wParam);
             if (sizeType == SIZE_MINIMIZED) {
@@ -297,6 +300,9 @@ LRESULT CALLBACK zapp_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         // Use WM_ACTIVATE instead of WM_SETFOCUS/WM_KILLFOCUS — WebView2 eats focus events
         case WM_ACTIVATE: {
             WORD activateState = LOWORD(wParam);
+            // Dim/undim the web caption buttons (native parity).
+            extern void windows_titlebar_set_focused(int32_t, bool);
+            windows_titlebar_set_focused(wid, activateState != WA_INACTIVE);
             if (activateState == WA_ACTIVE || activateState == WA_CLICKACTIVE) {
                 zapp_dispatch_event(wid, ZAPP_EVENT_FOCUS, 0, 0, 0, 0);
             } else if (activateState == WA_INACTIVE) {
@@ -440,12 +446,31 @@ void* windows_window_create(WindowOptions* opts) {
     if (borderless) {
         style |= WS_POPUP;
     } else {
-        style |= WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
+        style |= WS_OVERLAPPED | WS_CAPTION;
+        // WS_SYSMENU only on windows keeping the standard title bar. On a custom
+        // titlebar (hidden/hiddenInset) DWM must draw NO caption chrome: with the
+        // full-glass frame extension (material.c), a WS_SYSMENU window gets dead
+        // DWM-painted caption buttons floating behind ours ("ghost controls").
+        // Min/maximize via taskbar / Win+arrows still work off the *BOX styles.
+        if (wopts_title_bar_style_tag(opts) != 1 && wopts_title_bar_style_tag(opts) != 2)
+            style |= WS_SYSMENU;
         if (resizable)    style |= WS_THICKFRAME;
         if (minimizable)  style |= WS_MINIMIZEBOX;
         if (maximizable)  style |= WS_MAXIMIZEBOX;
     }
     if (always_on_top) ex_style |= WS_EX_TOPMOST;
+
+    // transparent (Tier-1) + windows: {} namespace → extended styles.
+    // A transparent window drops its DWM redirection bitmap so DirectComposition
+    // content (the alpha-0 webview) shows the desktop through it. Click-through
+    // overlays instead use the layered/transparent path (mouse passes below).
+    bool transparent = wopts_transparent(opts);
+    extern bool wopts_windows_click_through(void*);
+    extern bool wopts_windows_hidden_on_taskbar(void*);
+    bool click_through = wopts_windows_click_through(opts);
+    if (click_through)                 ex_style |= WS_EX_TRANSPARENT | WS_EX_LAYERED;
+    else if (transparent)              ex_style |= WS_EX_NOREDIRECTIONBITMAP;
+    if (wopts_windows_hidden_on_taskbar(opts)) ex_style |= WS_EX_TOOLWINDOW;
 
     // Adjust rect for non-client area (title bar, borders)
     RECT rc = { 0, 0, scaled_w, scaled_h };
@@ -501,15 +526,30 @@ void* windows_window_create(WindowOptions* opts) {
     // backdrop is requested the web surface must be transparent for it to show
     // through — flag the webview before its controller is built. Both no-op
     // gracefully on Win10 / pre-22H2.
-    const char* vibrancy = wopts_vibrancy(opts);
-    bool transparent = wopts_transparent(opts);
+    const char* vibrancy = wopts_vibrancy(opts);   // `transparent` declared above (ex-style)
+    // windows:{backdrop} is the Tier-2 precise override of the Tier-1 `vibrancy`.
+    extern const char* wopts_windows_backdrop(void*);
+    const char* wbd = wopts_windows_backdrop(opts);
+    const char* backdrop = (wbd && wbd[0]) ? wbd : vibrancy;
     extern void windows_material_apply(HWND hwnd, const char* vibrancy);
     extern int windows_material_wants_transparent(const char* vibrancy);
     extern void windows_webview_set_transparent(int32_t window_id, bool transparent);
-    windows_material_apply(hwnd, vibrancy);
+    extern void windows_webview_set_seethrough(int32_t window_id, bool v);
+    windows_material_apply(hwnd, backdrop);
+    // Custom title-bar colors (windows:{customTheme}).
+    extern void windows_material_apply_custom_theme(HWND, const char*, const char*, const char*);
+    extern const char* wopts_windows_caption_color(void*);
+    extern const char* wopts_windows_text_color(void*);
+    extern const char* wopts_windows_border_color(void*);
+    windows_material_apply_custom_theme(hwnd,
+        wopts_windows_caption_color(opts), wopts_windows_text_color(opts), wopts_windows_border_color(opts));
     if (pre_id >= 0 && pre_id < ZAPP_MAX_WINDOWS) {
-        windows_webview_set_transparent(pre_id,
-            transparent || windows_material_wants_transparent(vibrancy));
+        // See-through = a transparent window OR a DWM backdrop is present. The
+        // webview renders transparent-mode either way; seethrough decides alpha-0
+        // (desktop/backdrop shows) vs opaque theme surface (plain-window pane).
+        bool seethrough = transparent || windows_material_wants_transparent(backdrop);
+        windows_webview_set_transparent(pre_id, seethrough);
+        windows_webview_set_seethrough(pre_id, seethrough);
         // App-set webview background ("#rrggbb"): seeds the load/resize gap so
         // it isn't a white flash. The page's CSS background still wins.
         const char* bg = wopts_background_color(opts);
@@ -526,15 +566,15 @@ void* windows_window_create(WindowOptions* opts) {
     // so content full-bleeds to the top and float native caption buttons over it
     // (macOS parity). tbs 1 = hidden, 2 = hiddenInset. Must run before ShowWindow
     // so the first WM_NCCALCSIZE sees the window as custom.
-    // Window controls visibility (windowControls/trafficLights: 0=enabled,
-    // 1=disabled, 2=hidden). The Nim layer folds closable/minimizable/maximizable
-    // into these tags. minimize=zoom(maximize)=index; order min,max,close.
-    extern int32_t wopts_traffic_light_close_tag(WindowOptions* opts);
-    extern int32_t wopts_traffic_light_minimize_tag(WindowOptions* opts);
-    extern int32_t wopts_traffic_light_zoom_tag(WindowOptions* opts);
-    int close_tag = (int)wopts_traffic_light_close_tag(opts);
-    int min_tag   = (int)wopts_traffic_light_minimize_tag(opts);
-    int max_tag   = (int)wopts_traffic_light_zoom_tag(opts);
+    // Window controls visibility (windowControls: 0=enabled, 1=disabled,
+    // 2=hidden). The Nim layer folds closable/minimizable/maximizable into these
+    // tags. order min,max,close.
+    extern int32_t wopts_window_control_close_tag(WindowOptions* opts);
+    extern int32_t wopts_window_control_minimize_tag(WindowOptions* opts);
+    extern int32_t wopts_window_control_maximize_tag(WindowOptions* opts);
+    int close_tag = (int)wopts_window_control_close_tag(opts);
+    int min_tag   = (int)wopts_window_control_minimize_tag(opts);
+    int max_tag   = (int)wopts_window_control_maximize_tag(opts);
 
     int32_t tbs = wopts_title_bar_style_tag(opts);
     if ((tbs == 1 || tbs == 2) && pre_id >= 0 && pre_id < ZAPP_MAX_WINDOWS) {
@@ -588,6 +628,18 @@ void* windows_window_create(WindowOptions* opts) {
             has_inspector ? inspector_url : NULL,
             wopts_inspector_width(opts), wopts_inspector_min_width(opts),
             wopts_inspector_max_width(opts), wopts_inspector_collapsed(opts) ? 1 : 0);
+        // Initial resizable state (SidebarOptions/InspectorOptions.resizable).
+        extern bool wopts_sidebar_can_resize(void*);
+        extern bool wopts_inspector_can_resize(void*);
+        extern void windows_sidebar_set_resizable(int32_t, bool);
+        extern void windows_inspector_set_resizable(int32_t, bool);
+        if (has_sidebar)   windows_sidebar_set_resizable(pre_id, wopts_sidebar_can_resize(opts));
+        if (has_inspector) windows_inspector_set_resizable(pre_id, wopts_inspector_can_resize(opts));
+        // windows:{ paneSeparators:false } — flush split (collapse the splitter band).
+        extern bool wopts_windows_hide_pane_separators(void*);
+        extern void windows_sidebar_set_pane_separators(int32_t, bool);
+        if (wopts_windows_hide_pane_separators(opts))
+            windows_sidebar_set_pane_separators(pre_id, false);
     } else {
         // Plain single-webview path.
         windows_webview_create((void*)hwnd, inspectable > 0, url_override);
@@ -621,6 +673,13 @@ void windows_window_force_close(void* handle) {
 void* windows_window_get_by_numeric_id(int32_t numeric_id) {
     if (numeric_id < 0 || numeric_id >= ZAPP_MAX_WINDOWS) return NULL;
     return (void*)zapp_hwnds[numeric_id];
+}
+
+// Host HWND for a window slot — used by webview.c to route web-rendered caption
+// button clicks (window-control:*) to WM_SYSCOMMAND on the top-level window.
+HWND windows_host_hwnd_for_slot(int32_t slot) {
+    if (slot < 0 || slot >= ZAPP_MAX_WINDOWS) return NULL;
+    return zapp_hwnds[slot];
 }
 
 // darwin_window_focus twin: bring the window to the foreground + key focus.
@@ -792,6 +851,16 @@ const char* windows_window_id_string(int32_t numeric_id) {
     return zapp_window_ids[numeric_id];
 }
 
+// Resolve a webview slot to its HOST window slot. Pane slots (sidebar/inspector)
+// are registered as "win-<host>"; a content/host slot maps to itself. Used to
+// route web caption-button clicks that arrive from the inspector's webview.
+int32_t windows_window_host_slot_for(int32_t slot) {
+    const char* s = windows_window_id_string(slot);
+    int host = -1;
+    if (s && sscanf(s, "win-%d", &host) == 1 && host >= 0 && host < ZAPP_MAX_WINDOWS) return host;
+    return slot;
+}
+
 // darwin_windows_list_json twin: a JSON array of the live window id strings
 // (e.g. ["win-1","win-3"]). Malloc'd (caller frees), matching darwin's strdup
 // contract. Iterates the zapp_hwnds registry.
@@ -882,6 +951,14 @@ void windows_window_attach_modal(void* parent_handle, void* modal_handle) {
         int y = pr.top + ((pr.bottom - pr.top) - mh) / 2;
         SetWindowPos(modal, NULL, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
     }
+
+    // Reveal the sheet. It was created hidden (Nim forces visible=false for
+    // asSheetOf, to avoid a free-floating flash before it's owned + centered) —
+    // without this it never appears while the parent sits disabled. The
+    // presentation styles (page/form/bottomSheet) are iOS/macOS concepts; on
+    // Windows they all present as this centered owned modal.
+    ShowWindow(modal, SW_SHOW);
+    SetForegroundWindow(modal);
 }
 void windows_window_detach_modal(void* parent_handle, void* modal_handle) {
     HWND parent = (HWND)parent_handle;

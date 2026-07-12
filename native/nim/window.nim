@@ -49,6 +49,15 @@ type
     UnderPageBackground = "underPageBackground"
     WindowBackground = "windowBackground"
 
+  WindowsBackdrop* {.pure.} = enum   ## DWM system backdrop (Windows 11 22H2+). Tier-2
+                                     ## precise override for the Tier-1 `vibrancy` mapping.
+    Default = ""                     ## "" ⇒ derive from `vibrancy` (don't override)
+    None = "none"
+    Mica = "mica"
+    MicaAlt = "mica-alt"
+    Acrylic = "acrylic"
+    Tabbed = "tabbed"
+
   SidebarPresentation* {.pure.} = enum   ## sidebar tiling vs overlay
     Default = ""              ## "" ⇒ per-platform default (macOS tiles)
     Tile = "tile"
@@ -82,8 +91,9 @@ type
     Disabled = 1
     Hidden = 2
 
-  TrafficLights* = object           ## the three window buttons (zc TrafficLights struct)
-    close*, minimize*, zoom*: ButtonState
+  WindowControls* = object          ## the three window buttons: macOS traffic lights,
+                                    ## Windows caption buttons. `maximize` = macOS zoom.
+    close*, minimize*, maximize*: ButtonState
 
   MenuItemOpt* = object              ## mirrors TS ZappMenuItem (toolbar pull-down item)
     id*, label*, icon*: string
@@ -151,6 +161,27 @@ type
     resizable*: bool = true
     numericId*: int32 = -1
 
+  WindowsCustomTheme* = object   ## custom title-bar colors → DWMWA_CAPTION/TEXT/BORDER_COLOR
+    caption*: ZappColor          ## title-bar background
+    text*: ZappColor             ## title-bar text
+    border*: ZappColor           ## window border
+
+  WindowsOptions* = object       ## Tier-2 platform namespace — Windows-specific chrome.
+                                 ## Divergent-only features + precise overrides live here;
+                                 ## universal/semantic options stay top-level (Tier 1).
+    backdrop*: WindowsBackdrop           ## precise DWM backdrop; overrides `vibrancy`
+    customTheme*: WindowsCustomTheme     ## caption/text/border colors
+    clickThrough*: bool                  ## WS_EX_TRANSPARENT|WS_EX_LAYERED — pass mouse through
+    contentProtection*: bool             ## SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)
+    hiddenOnTaskbar*: bool               ## WS_EX_TOOLWINDOW — no taskbar button
+    hidePaneSeparators*: bool            ## windows.paneSeparators=false → flush split (splitter band width 0)
+
+  MacOptions* = object          ## Tier-2 macOS namespace — precise AppKit overrides.
+                                ## (Window toolbar desugars in TS; not read here.)
+    material*: Material          ## NSVisualEffectMaterial; overrides top-level `vibrancy`
+                                 ## on macOS only — lets an app use vibrancy on mac while
+                                 ## leaving Windows opaque (native caption buttons intact).
+
   WindowOptions* = ref object
     # --- set by the skeleton ---
     title*: string
@@ -182,8 +213,8 @@ type
     # split-window title-bar logic (window.m only applies the sidebar chrome
     # default for tbs==3/Unset).
     titleBarStyle*: TitleBarStyle = TitleBarStyle.Unset
-    trafficLights*: TrafficLights = TrafficLights(
-      close: ButtonState.Enabled, minimize: ButtonState.Enabled, zoom: ButtonState.Enabled)
+    windowControls*: WindowControls = WindowControls(
+      close: ButtonState.Enabled, minimize: ButtonState.Enabled, maximize: ButtonState.Enabled)
     # --- accessory chrome (nested; "" url / empty items ⇒ never built) -------
     # Sidebar/inspector geometry defaults MUST stay non-zero: window.m sets
     # NSSplitViewItem.maximumThickness = wopts_sidebar_max_width(opts) literally,
@@ -193,6 +224,8 @@ type
     sidebar*: SidebarOptions
     inspector*: InspectorOptions
     toolbar*: ToolbarOptions
+    windows*: WindowsOptions    ## Tier-2 Windows namespace
+    mac*: MacOptions            ## Tier-2 macOS namespace
     toolbarJsonCache*: string   ## derived: wopts_toolbar_json serializes `toolbar` here
                                 ## so the returned cstring borrows a GC-pinned buffer (BOUNDARY RULE 1)
     # --- runtime Window.create extras (JS-driven) ---
@@ -266,12 +299,27 @@ proc wopts_inspectable(p: pointer): int32 {.exportc, cdecl.} =
 proc wopts_frame_autosave_name(p: pointer): cstring {.exportc, cdecl.} = opt(p).frameAutosaveName.cstring
 proc wopts_vibrancy(p: pointer): cstring {.exportc, cdecl.} = materialStr[opt(p).vibrancy].cstring
 proc wopts_title_bar_style_tag(p: pointer): int32 {.exportc, cdecl.} = opt(p).titleBarStyle.int32
-proc wopts_traffic_light_close_tag(p: pointer): int32 {.exportc, cdecl.} = opt(p).trafficLights.close.int32
-proc wopts_traffic_light_minimize_tag(p: pointer): int32 {.exportc, cdecl.} = opt(p).trafficLights.minimize.int32
-proc wopts_traffic_light_zoom_tag(p: pointer): int32 {.exportc, cdecl.} = opt(p).trafficLights.zoom.int32
+proc wopts_window_control_close_tag(p: pointer): int32 {.exportc, cdecl.} = opt(p).windowControls.close.int32
+proc wopts_window_control_minimize_tag(p: pointer): int32 {.exportc, cdecl.} = opt(p).windowControls.minimize.int32
+proc wopts_window_control_maximize_tag(p: pointer): int32 {.exportc, cdecl.} = opt(p).windowControls.maximize.int32
 
 proc wopts_background_extension(p: pointer): cstring {.exportc, cdecl.} =
   backgroundExtensionStr[opt(p).backgroundExtension].cstring
+
+# --- windows: {} namespace accessors (read by the windows platform layer) ----
+let windowsBackdropStr = (block:
+  var a: array[WindowsBackdrop, string]
+  for b in WindowsBackdrop: a[b] = $b
+  a)
+proc wopts_windows_backdrop(p: pointer): cstring {.exportc, cdecl.} = windowsBackdropStr[opt(p).windows.backdrop].cstring
+proc wopts_windows_click_through(p: pointer): bool {.exportc, cdecl.} = opt(p).windows.clickThrough
+proc wopts_windows_content_protection(p: pointer): bool {.exportc, cdecl.} = opt(p).windows.contentProtection
+proc wopts_windows_hidden_on_taskbar(p: pointer): bool {.exportc, cdecl.} = opt(p).windows.hiddenOnTaskbar
+proc wopts_windows_hide_pane_separators(p: pointer): bool {.exportc, cdecl.} = opt(p).windows.hidePaneSeparators
+proc wopts_mac_material(p: pointer): cstring {.exportc, cdecl.} = materialStr[opt(p).mac.material].cstring
+proc wopts_windows_caption_color(p: pointer): cstring {.exportc, cdecl.} = string(opt(p).windows.customTheme.caption).cstring
+proc wopts_windows_text_color(p: pointer): cstring {.exportc, cdecl.} = string(opt(p).windows.customTheme.text).cstring
+proc wopts_windows_border_color(p: pointer): cstring {.exportc, cdecl.} = string(opt(p).windows.customTheme.border).cstring
 
 # sidebar accessors — consumed by darwin/window.m + ios/window.m at create time; "" url short-circuits the sidebar branch.
 proc wopts_sidebar_url(p: pointer): cstring {.exportc, cdecl.} = opt(p).sidebar.url.cstring
@@ -629,13 +677,13 @@ proc windowOptsApplyJson*(o: WindowOptions, a: JsonNode) =
   if jHasBool(a, "resizable"): o.resizable = jBool(a, "resizable", o.resizable)
   if jHasBool(a, "closable"):
     o.closable = jBool(a, "closable", o.closable)
-    if not o.closable: o.trafficLights.close = ButtonState.Disabled
+    if not o.closable: o.windowControls.close = ButtonState.Disabled
   if jHasBool(a, "minimizable"):
     o.minimizable = jBool(a, "minimizable", o.minimizable)
-    if not o.minimizable: o.trafficLights.minimize = ButtonState.Disabled
+    if not o.minimizable: o.windowControls.minimize = ButtonState.Disabled
   if jHasBool(a, "maximizable"):
     o.maximizable = jBool(a, "maximizable", o.maximizable)
-    if not o.maximizable: o.trafficLights.zoom = ButtonState.Disabled
+    if not o.maximizable: o.windowControls.maximize = ButtonState.Disabled
   if jHasBool(a, "fullscreen"): o.fullscreen = jBool(a, "fullscreen", o.fullscreen)
   if jHasBool(a, "borderless"): o.borderless = jBool(a, "borderless", o.borderless)
   if jHasBool(a, "transparent"): o.transparent = jBool(a, "transparent", o.transparent)
@@ -674,6 +722,22 @@ proc windowOptsApplyJson*(o: WindowOptions, a: JsonNode) =
     if jHasBool(insp, "collapsible"): o.inspector.collapsible = jBool(insp, "collapsible", o.inspector.collapsible)
     if jHasBool(insp, "collapsed"): o.inspector.collapsed = jBool(insp, "collapsed", o.inspector.collapsed)
     if jHasBool(insp, "resizable"): o.inspector.resizable = jBool(insp, "resizable", o.inspector.resizable)
+  let win = a{"windows"}
+  if not win.isNil and win.kind == JObject:
+    if jHasStr(win, "backdrop"): o.windows.backdrop = enumFromStr[WindowsBackdrop](jStr(win, "backdrop"), WindowsBackdrop.Default)
+    if jHasBool(win, "clickThrough"): o.windows.clickThrough = jBool(win, "clickThrough", o.windows.clickThrough)
+    if jHasBool(win, "contentProtection"): o.windows.contentProtection = jBool(win, "contentProtection", o.windows.contentProtection)
+    if jHasBool(win, "hiddenOnTaskbar"): o.windows.hiddenOnTaskbar = jBool(win, "hiddenOnTaskbar", o.windows.hiddenOnTaskbar)
+    # paneSeparators defaults to shown; only `false` hides the splitter band.
+    if jHasBool(win, "paneSeparators"): o.windows.hidePaneSeparators = not jBool(win, "paneSeparators", true)
+    let ct = win{"customTheme"}
+    if not ct.isNil and ct.kind == JObject:
+      if jHasStr(ct, "caption"): o.windows.customTheme.caption = jStr(ct, "caption")
+      if jHasStr(ct, "text"): o.windows.customTheme.text = jStr(ct, "text")
+      if jHasStr(ct, "border"): o.windows.customTheme.border = jStr(ct, "border")
+  let macj = a{"mac"}
+  if not macj.isNil and macj.kind == JObject:
+    if jHasStr(macj, "material"): o.mac.material = enumFromStr[Material](jStr(macj, "material"), Material.Default)
   let aso = a{"asSheetOf"}
   if not aso.isNil:
     if aso.kind == JInt or aso.kind == JFloat:
@@ -707,9 +771,9 @@ proc windowOptsApplyJson*(o: WindowOptions, a: JsonNode) =
   of "hiddenInset": o.titleBarStyle = TitleBarStyle.HiddenInset
   of "default": o.titleBarStyle = TitleBarStyle.Default
   else: discard
-  let tl = a{"trafficLights"}
-  if not tl.isNil and tl.kind == JObject:
-    if jHasStr(tl, "close"): o.trafficLights.close = buttonStateFromStr(jStr(tl, "close"), ButtonState.Enabled)
-    if jHasStr(tl, "minimize"): o.trafficLights.minimize = buttonStateFromStr(jStr(tl, "minimize"), ButtonState.Enabled)
-    if jHasStr(tl, "zoom"): o.trafficLights.zoom = buttonStateFromStr(jStr(tl, "zoom"), ButtonState.Enabled)
+  let wc = a{"windowControls"}
+  if not wc.isNil and wc.kind == JObject:
+    if jHasStr(wc, "close"): o.windowControls.close = buttonStateFromStr(jStr(wc, "close"), ButtonState.Enabled)
+    if jHasStr(wc, "minimize"): o.windowControls.minimize = buttonStateFromStr(jStr(wc, "minimize"), ButtonState.Enabled)
+    if jHasStr(wc, "maximize"): o.windowControls.maximize = buttonStateFromStr(jStr(wc, "maximize"), ButtonState.Enabled)
 

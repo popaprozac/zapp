@@ -361,8 +361,84 @@
           "[data-zapp-titlebar] button,[data-zapp-titlebar] input,[data-zapp-titlebar] select," +
           "[data-zapp-titlebar] textarea,[data-zapp-titlebar] a[href]," +
           "[data-zapp-titlebar] [role=button],[data-zapp-titlebar] [contenteditable=true]" +
-          "{-webkit-app-region:no-drag}";
+          "{-webkit-app-region:no-drag}" +
+          // Web-rendered caption buttons (min/max/close). A GDI child HWND can't
+          // composite over the DirectComposition webview on vibrant/transparent
+          // windows, so we draw them here. Native reserves their width via
+          // --zapp-window-controls-inset-right and pushes per-button state +
+          // maximized glyph via the data-zapp-window-controls / -maximized attrs.
+          "[data-zapp-winctl]{position:fixed;top:0;right:0;display:flex;" +
+          "height:var(--zapp-titlebar-height,32px);z-index:2147483647;-webkit-app-region:no-drag}" +
+          "[data-zapp-winctl] button{width:46px;height:100%;border:0;margin:0;padding:0;" +
+          "background:transparent;font-family:'Segoe MDL2 Assets','Segoe Fluent Icons';" +
+          "font-size:10px;line-height:1;color:#000;display:flex;align-items:center;" +
+          "justify-content:center;cursor:default;-webkit-app-region:no-drag}" +
+          "[data-zapp-winctl] button:hover{background:rgba(0,0,0,0.06)}" +
+          "[data-zapp-winctl] button.zapp-close:hover{background:#e81123;color:#fff}" +
+          "[data-zapp-winctl] button[disabled]{opacity:0.35}" +
+          // Native parity: caption-button glyphs dim when the window loses focus
+          // (data-zapp-window-focused pushed from WM_ACTIVATE).
+          "html[data-zapp-window-focused=\"0\"] [data-zapp-winctl] button:not(:hover){opacity:0.45}" +
+          "@media (prefers-color-scheme:dark){[data-zapp-winctl] button{color:#fff}" +
+          "[data-zapp-winctl] button:hover{background:rgba(255,255,255,0.09)}}";
         (document.head || document.documentElement).appendChild(s);
+
+        // Caption buttons render only where native set a non-zero inset (the
+        // content/host webview, at the window's right edge). Segoe MDL2 glyphs:
+        // minimize E921, maximize E922, restore E923, close E8BB.
+        const GLYPH: Record<string, string> = {
+          minimize: "", maximize: "", restore: "", close: "",
+        };
+        const wv = (window as any).chrome && (window as any).chrome.webview;
+        const renderWindowControls = () => {
+          const root = document.documentElement;
+          const inset = parseInt(
+            getComputedStyle(root).getPropertyValue("--zapp-window-controls-inset-right"), 10) || 0;
+          const desc = root.getAttribute("data-zapp-window-controls") || "";
+          let cluster = document.querySelector("[data-zapp-winctl]") as HTMLElement | null;
+          if (inset <= 0) { if (cluster) cluster.remove(); return; }
+          if (desc.length < 3) {
+            // NATIVE caption buttons (empty desc): render a buttonless NO-DRAG
+            // spacer over the cluster corner — without it the non-client drag
+            // region claims the corner and eats the native buttons' hover.
+            if (!cluster) {
+              cluster = document.createElement("div");
+              cluster.setAttribute("data-zapp-winctl", "");
+              (document.body || document.documentElement).appendChild(cluster);
+            }
+            cluster.innerHTML = "";
+            cluster.style.width = inset + "px";
+            cluster.style.background = "transparent";
+            return;
+          }
+          if (!cluster) {
+            cluster = document.createElement("div");
+            cluster.setAttribute("data-zapp-winctl", "");
+            (document.body || document.documentElement).appendChild(cluster);
+          }
+          const maxed = root.getAttribute("data-zapp-window-maximized") === "1";
+          // desc = [min,max,close]; 'e' enabled, 'd' disabled, 'h' hidden.
+          const defs = [
+            { key: "minimize", st: desc[0], glyph: GLYPH.minimize, cls: "" },
+            { key: "maximize", st: desc[1], glyph: maxed ? GLYPH.restore : GLYPH.maximize, cls: "" },
+            { key: "close", st: desc[2], glyph: GLYPH.close, cls: "zapp-close" },
+          ];
+          cluster.innerHTML = defs.filter((b) => b.st !== "h").map((b) =>
+            `<button data-ctl="${b.key}" class="${b.cls}"${b.st === "d" ? " disabled" : ""}>${b.glyph}</button>`,
+          ).join("");
+          cluster.querySelectorAll("button").forEach((btn) => {
+            btn.addEventListener("click", () => {
+              if ((btn as HTMLButtonElement).disabled) return;
+              if (wv) wv.postMessage("window-control:" + btn.getAttribute("data-ctl"));
+            });
+          });
+        };
+        renderWindowControls();
+        // Native updates the attrs on maximize/restore + windowControls changes.
+        new MutationObserver(renderWindowControls).observe(document.documentElement, {
+          attributes: true,
+          attributeFilter: ["data-zapp-window-controls", "data-zapp-window-maximized"],
+        });
       };
       if (document.readyState !== "loading") applyTitlebarCss();
       else document.addEventListener("DOMContentLoaded", applyTitlebarCss);

@@ -6,6 +6,7 @@
 #include "titlebar.h"
 #include <windowsx.h>   // GET_X_LPARAM
 #include <string.h>
+#include <stdio.h>      // snprintf
 
 #define ZAPP_MAX_WINDOWS 64   // matches window.c
 
@@ -22,11 +23,25 @@
 
 extern const char* windows_get_theme(void); // platform.c → "dark" | "light"
 
+// Forward decls (defined below; also called cross-TU from webview.c/window.c).
+void windows_titlebar_sync_web(int32_t window_id);
+void windows_titlebar_controls_desc(int32_t window_id, char* buf);
+
+// NATIVE vs WEB caption buttons. Native GDI buttons are fully functional
+// (visible/hover/click, no pane logic) — but ONLY on a non-glass client, where
+// windowed WebView2 renders the panes' alpha-0 as WHITE (no Mica). On the
+// full-glass client that Mica needs, GDI is alpha-0-invisible (physics), so
+// vibrancy windows use WEB buttons. A layered child (UpdateLayeredWindow,
+// premultiplied alpha — real alpha unlike GDI) is the future native-over-glass
+// path; the old WS_EX_LAYERED attempt "vanished" only because ULW was never
+// called (layered windows are invisible until their first update).
+bool windows_titlebar_native_controls(void) { return false; }
+
 typedef struct {
     bool    enabled;
     int32_t style_tag;   // 1 hidden, 2 hiddenInset
     HWND    host;
-    HWND    btn;         // caption-button child window
+    HWND    btn;         // caption-button child window (native-controls mode only)
     int     hover;       // TB_* or TB_NONE
     int     pressed;     // TB_* or TB_NONE
     bool    tracking;    // WM_MOUSELEAVE armed
@@ -202,12 +217,23 @@ void windows_titlebar_enable(HWND hwnd, int32_t window_id, int32_t style_tag) {
 
     SetMenu(hwnd, NULL);  // custom titlebar windows drop the native menu bar
 
-    tb_ensure_class();
-    if (!tb->btn) {
-        tb->btn = CreateWindowExW(0, TB_BTN_CLASS, L"",
-            WS_CHILD | WS_CLIPSIBLINGS | WS_VISIBLE, 0, 0, 0, 0,
-            hwnd, NULL, GetModuleHandleW(NULL), NULL);
-        if (tb->btn) SetWindowLongPtrW(tb->btn, GWLP_USERDATA, window_id);
+    if (windows_titlebar_native_controls()) {
+        // NATIVE caption buttons: GDI child at the host's top-right, raised above
+        // the pane webviews (siblings clip it out of their render region). Works
+        // with the {1,1,1,1} frame margin — the client composites opaquely, so
+        // GDI is visible; only the -1 sheet-of-glass made it alpha-0-invisible.
+        tb_ensure_class();
+        if (!tb->btn) {
+            tb->btn = CreateWindowExW(0, TB_BTN_CLASS, L"",
+                WS_CHILD | WS_CLIPSIBLINGS | WS_VISIBLE, 0, 0, 0, 0,
+                hwnd, NULL, GetModuleHandleW(NULL), NULL);
+            if (tb->btn) SetWindowLongPtrW(tb->btn, GWLP_USERDATA, window_id);
+        }
+    } else {
+        // WEB-rendered caption buttons (bootstrap/webview.ts): the webview draws
+        // them from --zapp-window-controls-inset-right + the data-zapp-window-*
+        // attributes and routes clicks to WM_SYSCOMMAND.
+        tb->btn = NULL;
     }
 
     // Mark the frame changed so WM_NCCALCSIZE runs with the window now custom.
@@ -248,18 +274,22 @@ bool windows_titlebar_ncactivate(HWND hwnd, int32_t window_id, WPARAM wParam, LR
 void windows_titlebar_layout(int32_t window_id) {
     if (!windows_titlebar_enabled(window_id)) return;
     TitleBar* tb = &g_tb[window_id];
-    if (!tb->btn || !tb->host) return;
+    if (!tb->host) return;
     RECT rc; GetClientRect(tb->host, &rc);
     int vis[TB_COUNT]; int n = tb_visible(tb, vis);   // only visible buttons
-    int bw  = tb_scale(tb->host, TB_BTN_W) * n;
+    int bw1 = tb_scale(tb->host, TB_BTN_W);
     int bh  = tb_scale(tb->host, TB_BTN_H);
-    // hiddenInset degrades to hidden on Windows — the macOS unified-toolbar inset
-    // has no sensible Win analogue and reads as awkward. Buttons sit flush top.
-    // Raise above the WebView2 surface (sibling child); re-raised on each resize.
-    // n==0 (all controls hidden) → zero-width cluster, effectively no buttons.
-    SetWindowPos(tb->btn, HWND_TOP, rc.right - bw, 0, bw, bh,
-        SWP_NOACTIVATE | (n > 0 ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
-    InvalidateRect(tb->btn, NULL, FALSE);
+    if (tb->btn) {
+        int bw = bw1 * n;
+        // hiddenInset degrades to hidden on Windows — the macOS unified-toolbar
+        // inset has no sensible Win analogue and reads as awkward. Buttons sit
+        // flush top. Raise above the WebView2 surface (sibling child); re-raised
+        // on each resize. n==0 (all hidden) → zero-width, effectively no buttons.
+        SetWindowPos(tb->btn, HWND_TOP, rc.right - bw, 0, bw, bh,
+            SWP_NOACTIVATE | (n > 0 ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
+        InvalidateRect(tb->btn, NULL, FALSE);
+    }
+    (void)bw1;
 }
 
 void windows_titlebar_theme_changed(int32_t window_id) {
@@ -286,7 +316,7 @@ bool windows_titlebar_metrics(int32_t window_id, int* height_logical, int* inset
 }
 
 // Apply per-button window-control visibility/state (from the app's
-// windowControls/trafficLights: 0=enabled, 1=disabled, 2=hidden). Re-lays out +
+// windowControls: 0=enabled, 1=disabled, 2=hidden). Re-lays out +
 // repaints. Windows caption order is minimize, maximize, close.
 void windows_titlebar_set_controls(int32_t window_id, int close_state, int min_state, int max_state) {
     if (!windows_titlebar_enabled(window_id)) return;
@@ -294,5 +324,85 @@ void windows_titlebar_set_controls(int32_t window_id, int close_state, int min_s
     tb->state[TB_MIN]   = min_state;
     tb->state[TB_MAX]   = max_state;
     tb->state[TB_CLOSE] = close_state;
-    windows_titlebar_layout(window_id);
+    windows_titlebar_layout(window_id);   // reposition native buttons (native mode)
+    if (!windows_titlebar_native_controls()) windows_titlebar_sync_web(window_id);
 }
+
+// Per-button state descriptor for the web buttons: 3 chars (min, max, close),
+// 'e'=enabled 'd'=disabled 'h'=hidden. buf must hold >= 4 bytes.
+void windows_titlebar_controls_desc(int32_t window_id, char* buf) {
+    static const char code[3] = { 'e', 'd', 'h' };  // state 0/1/2
+    if (window_id < 0 || window_id >= ZAPP_MAX_WINDOWS) { buf[0] = '\0'; return; }
+    // Native mode: empty desc → the bootstrap renders NO web cluster (it still
+    // gets the inset var so app chrome pads around the native buttons).
+    if (windows_titlebar_native_controls()) { buf[0] = '\0'; return; }
+    TitleBar* tb = &g_tb[window_id];
+    for (int i = 0; i < TB_COUNT; i++) {
+        int s = tb->state[i]; if (s < 0 || s > 2) s = 0;
+        buf[i] = code[s];
+    }
+    buf[TB_COUNT] = '\0';
+}
+
+// Push the current caption-button state (per-button visibility + maximized glyph)
+// to the host webview so the web buttons re-render. Called on maximize/restore
+// (WM_SIZE) and windowControls changes. The initial state is injected inline by
+// webview.c's metrics script at document load.
+// Push caption-button state to `webview_slot`. visible=0 hides (inset 0, no
+// buttons); visible=1 shows the reserved inset + per-button state + maximized
+// glyph. Used to (re)project the buttons onto the rightmost-visible pane
+// (windows_titlebar_relocate_controls) and to refresh state in place.
+void windows_titlebar_push_state(int32_t host_slot, int32_t webview_slot, int visible) {
+    if (!windows_titlebar_enabled(host_slot)) return;
+    if (windows_titlebar_native_controls()) return;   // native mode: no web cluster
+    extern void windows_webview_eval_by_id(int32_t, const char*);
+    char js[512];
+    if (visible) {
+        int th = 0, ir = 0; windows_titlebar_metrics(host_slot, &th, &ir);
+        char desc[TB_COUNT + 1]; windows_titlebar_controls_desc(host_slot, desc);
+        int maxed = (g_tb[host_slot].host && IsZoomed(g_tb[host_slot].host)) ? 1 : 0;
+        snprintf(js, sizeof(js),
+            "(function(){var r=document.documentElement;if(r){"
+            "r.style.setProperty('--zapp-window-controls-inset-right','%dpx');"
+            "r.setAttribute('data-zapp-window-controls','%s');"
+            "r.setAttribute('data-zapp-window-maximized','%d');}})();",
+            ir, desc, maxed);
+    } else {
+        // Directly remove the cluster (don't rely on the MutationObserver — the
+        // hide must be certain so a pane that no longer hosts the buttons can't
+        // keep a stale cluster).
+        snprintf(js, sizeof(js),
+            "(function(){var r=document.documentElement;if(r){"
+            "r.style.setProperty('--zapp-window-controls-inset-right','0px');"
+            "r.setAttribute('data-zapp-window-controls','');}"
+            "var cs=document.querySelectorAll('[data-zapp-winctl]');"
+            "for(var i=0;i<cs.length;i++)cs[i].remove();})();");
+    }
+    windows_webview_eval_by_id(webview_slot, js);
+}
+
+// Refresh state (maximized glyph / per-button visibility) on the CURRENT
+// controls webview (the rightmost-visible pane) without moving the buttons.
+void windows_titlebar_sync_web(int32_t window_id) {
+    if (!windows_titlebar_enabled(window_id)) return;
+    extern int32_t windows_pane_controls_slot(int32_t);
+    windows_titlebar_push_state(window_id, windows_pane_controls_slot(window_id), 1);
+}
+
+// Native parity: dim the web caption buttons when the window loses focus.
+// Pushed from WM_ACTIVATE (window.c); CSS keys off data-zapp-window-focused.
+void windows_titlebar_set_focused(int32_t window_id, bool focused) {
+    if (!windows_titlebar_enabled(window_id)) return;
+    if (windows_titlebar_native_controls()) {
+        if (g_tb[window_id].btn) InvalidateRect(g_tb[window_id].btn, NULL, FALSE);
+        return;
+    }
+    extern int32_t windows_pane_controls_slot(int32_t);
+    extern void windows_webview_eval_by_id(int32_t, const char*);
+    char js[160];
+    snprintf(js, sizeof(js),
+        "(function(){var r=document.documentElement;"
+        "if(r)r.setAttribute('data-zapp-window-focused','%d');})();", focused ? 1 : 0);
+    windows_webview_eval_by_id(windows_pane_controls_slot(window_id), js);
+}
+

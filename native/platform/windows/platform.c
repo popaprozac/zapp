@@ -84,6 +84,29 @@ const char* windows_get_theme(void) {
     return value == 0 ? "dark" : "light";
 }
 
+// App-theme window background brush. The transparent sidebar webview (and the
+// resize gap + pre-load) show this through; the old COLOR_WINDOW (white) was
+// jarring against the dark content + titlebar. Matches the titlebar base
+// (RGB 32 dark / 243 light) so the surface reads as one coherent chrome. Solid
+// (not translucent) for now — Acrylic sidebar parity is a follow-up. Painted via
+// the standard class brush (not a custom WM_ERASEBKGND), so no resize tearing.
+static HBRUSH zapp_bg_brush = NULL;
+static void zapp_refresh_bg_brush(void) {
+    // Note: the previous brush is intentionally NOT deleted — the pane class
+    // (sidebar.c PANE_HOST_CLASS) also holds it as its class background, and we
+    // don't re-point that on theme flips. A stale brush handle would dangle.
+    // Theme flips are rare; leaking one small GDI brush per flip is negligible.
+    int dark = strcmp(windows_get_theme(), "dark") == 0;
+    zapp_bg_brush = CreateSolidBrush(dark ? RGB(32, 32, 32) : RGB(243, 243, 243));
+}
+
+// The shared theme surface brush (dark 32 / light 243), for any window/pane class
+// that should read as the app chrome instead of COLOR_WINDOW white.
+HBRUSH windows_theme_bg_brush(void) {
+    if (!zapp_bg_brush) zapp_refresh_bg_brush();
+    return zapp_bg_brush;
+}
+
 void windows_theme_setting_changed(void) {
     // WM_SETTINGCHANGE fires several times per flip (and for unrelated
     // settings whose lParam also reads "ImmersiveColorSet") — dedupe on
@@ -100,9 +123,14 @@ void windows_theme_setting_changed(void) {
     // (material.c reads windows_get_theme()).
     extern HWND zapp_get_hwnd(int32_t window_id);
     extern void windows_material_apply_theme(HWND hwnd);
+    zapp_refresh_bg_brush();  // recolor the shared surface brush for the new theme
     for (int i = 0; i < 64; i++) {
         HWND h = zapp_get_hwnd(i);
-        if (h) windows_material_apply_theme(h);
+        if (h) {
+            windows_material_apply_theme(h);
+            SetClassLongPtrW(h, GCLP_HBRBACKGROUND, (LONG_PTR)zapp_bg_brush);
+            InvalidateRect(h, NULL, TRUE);
+        }
     }
 }
 
@@ -203,7 +231,8 @@ void windows_platform_init(const char* app_name) {
     wc.lpfnWndProc = zapp_wndproc;
     wc.hInstance = zapp_hinstance;
     wc.hCursor = LoadCursorW(NULL, IDC_ARROW);
-    wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+    if (!zapp_bg_brush) zapp_refresh_bg_brush();
+    wc.hbrBackground = zapp_bg_brush;   // theme surface, not COLOR_WINDOW white
     wc.lpszClassName = ZAPP_WINDOW_CLASS;
     RegisterClassExW(&wc);
 }

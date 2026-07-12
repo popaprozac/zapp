@@ -66,14 +66,69 @@ export type BackgroundExtension = (typeof BackgroundExtension)[keyof typeof Back
  */
 export type ButtonState = "enabled" | "disabled" | "hidden";
 
-/** macOS traffic light button states (close / minimize / zoom). */
-export interface TrafficLights {
+/**
+ * Window-control button states (close / minimize / maximize). Cross-platform:
+ * macOS traffic lights, Windows caption buttons. `maximize` is macOS's zoom.
+ */
+export interface WindowControls {
   close?: ButtonState;
   minimize?: ButtonState;
-  zoom?: ButtonState;
+  maximize?: ButtonState;
 }
 
 /** Options for creating a window (mirrors native WindowOptions). */
+/** DWM system backdrop (Windows 11 22H2+). Precise override for `vibrancy`. */
+export type WindowsBackdrop = "none" | "mica" | "mica-alt" | "acrylic" | "tabbed";
+
+/** Custom Windows title-bar colors (`DWMWA_CAPTION/TEXT/BORDER_COLOR`). Each a CSS
+ *  color string (`"#1e1e1e"`, `"teal"`, …). Windows 11+. */
+export interface WindowsCustomTheme {
+  caption?: string;
+  text?: string;
+  border?: string;
+}
+
+/**
+ * Windows-specific window options — the Tier-2 platform namespace. Divergent-only
+ * chrome + precise overrides for the Windows (WebView2) build; ignored on other
+ * platforms. Universal/semantic options (`transparent`, `vibrancy`,
+ * `titleBarStyle`, `windowControls`) stay top-level.
+ */
+export interface WindowsOptions {
+  /** Precise DWM backdrop; overrides the cross-platform `vibrancy` mapping. */
+  backdrop?: WindowsBackdrop;
+  /** Custom title-bar / border colors. */
+  customTheme?: WindowsCustomTheme;
+  /** Pass mouse events through to windows below (`WS_EX_TRANSPARENT|WS_EX_LAYERED`)
+   *  — for click-through overlays. Usually paired with `transparent`. */
+  clickThrough?: boolean;
+  /** Exclude the window from screen capture (`SetWindowDisplayAffinity`). */
+  contentProtection?: boolean;
+  /** Hide the window's taskbar button (`WS_EX_TOOLWINDOW`). */
+  hiddenOnTaskbar?: boolean;
+  /** Show the draggable band between the sidebar/inspector and content
+   *  (default `true`). Set `false` for a flush, seamless split — the splitter
+   *  band collapses to zero width. Pairs well with `sidebar.resizable: false`. */
+  paneSeparators?: boolean;
+}
+
+/**
+ * macOS-specific window options — the Tier-2 platform namespace (mirrors
+ * `windows:`). Divergent-only AppKit chrome; ignored on non-macOS builds.
+ */
+export interface MacOptions {
+  /** Native toolbar (NSToolbar) integrated with the title bar. macOS only. */
+  toolbar?: ToolbarOptions;
+  /**
+   * `NSVisualEffectMaterial` for this window — the **macOS-only** precise override
+   * of the cross-platform `vibrancy`. Use this (instead of top-level `vibrancy`)
+   * when you want vibrancy on macOS but an **opaque** window on Windows, e.g. to
+   * keep Windows' native caption-button hover working (a transparent WebView2
+   * composites over them). Windows stays opaque unless you set `windows.backdrop`.
+   */
+  material?: Material;
+}
+
 export interface WindowOptions {
   title?: string;
   url?: string;
@@ -125,6 +180,18 @@ export interface WindowOptions {
    * pre-22H2. No-op on iOS.
    */
   vibrancy?: Material;
+  /**
+   * Windows-specific window chrome (Tier-2 platform namespace) — precise DWM
+   * backdrop, custom title-bar colors, click-through, content protection,
+   * taskbar visibility. Ignored on non-Windows builds. `mac:`/`linux:` namespaces
+   * to follow the same shape.
+   */
+  windows?: WindowsOptions;
+  /**
+   * macOS-specific window chrome (Tier-2 platform namespace) — currently the
+   * native `toolbar`. Ignored on non-macOS builds.
+   */
+  mac?: MacOptions;
   /**
    * macOS title-bar style. `"hidden"`/`"hiddenInset"` hide the title and let
    * content extend under the title bar; `"default"` is a standard title bar.
@@ -191,19 +258,19 @@ export interface WindowOptions {
    */
   grabber?: boolean;
   /**
-   * Per-button state for the macOS traffic lights. Takes precedence over
-   * the legacy `closable` / `minimizable` / `maximizable` booleans (those
-   * remain as sugar: `false` maps to the corresponding button's
-   * `"disabled"` state).
+   * Per-button state for the window controls (close / minimize / maximize) —
+   * macOS traffic lights, Windows caption buttons. Takes precedence over the
+   * legacy `closable` / `minimizable` / `maximizable` booleans (those remain as
+   * sugar: `false` maps to the corresponding button's `"disabled"` state).
    *
    * @example
    * ```ts
    * Window.create({
-   *   trafficLights: { close: "enabled", minimize: "disabled", zoom: "hidden" },
+   *   windowControls: { close: "enabled", minimize: "disabled", maximize: "hidden" },
    * });
    * ```
    */
-  trafficLights?: TrafficLights;
+  windowControls?: WindowControls;
   /**
    * macOS — accept clicks on an unfocused window so the first click both
    * activates the window and triggers the target control. Default: `true`.
@@ -231,7 +298,9 @@ export interface WindowOptions {
   frameAutosaveName?: string;
   /** Attach a native sidebar (NSSplitViewItem) to this window. macOS only. */
   sidebar?: SidebarOptions;
-  /** Attach a native toolbar (NSToolbar). macOS only; no-op elsewhere. */
+  /** Attach a native toolbar (NSToolbar). macOS only; no-op elsewhere.
+   *  @deprecated Use `mac: { toolbar }` — the Tier-2 platform namespace. Still
+   *  honored (falls back to this) so existing code keeps working. */
   toolbar?: ToolbarOptions;
   /** Attach a native inspector (trailing NSSplitViewItem). macOS only; no-op elsewhere. */
   inspector?: InspectorOptions;
@@ -1468,7 +1537,7 @@ export interface WindowHandle {
    *
    * Honored options on the modal: `title`, `url`, `width`, `height`,
    * `transparent`, `webContentInspectable`. Position, fullscreen,
-   * borderless, titleBarStyle, trafficLights, and alwaysOnTop are
+   * borderless, titleBarStyle, windowControls, and alwaysOnTop are
    * meaningless for sheets and ignored.
    *
    * @example
@@ -2022,7 +2091,7 @@ export const Window = {
     let pendingToolbarActions: Map<string, () => void> | undefined;
     let pendingToolbarMenuIds: Map<string, Set<string>> | undefined;
     const combinedToolbar = mergePaneToolbars(
-      opts?.toolbar,
+      opts?.mac?.toolbar ?? opts?.toolbar,   // Tier-2 mac:{toolbar}; top-level is deprecated
       opts?.sidebar?.toolbar,
       opts?.inspector?.toolbar,
     );
@@ -2030,6 +2099,12 @@ export const Window = {
       const { json, actions, menuActions, menuIdsByItem } = normalizeToolbar(combinedToolbar, opts?.sidebar !== undefined, opts?.inspector !== undefined);
       normalized.toolbarJson = json;
       delete normalized.toolbar;
+      // The toolbar (now toolbarJson) may have come from mac:{toolbar}; strip it
+      // from the payload too — its action closures aren't serializable.
+      if (normalized.mac && (normalized.mac as MacOptions).toolbar) {
+        const { toolbar: _m, ...rest } = normalized.mac as MacOptions;
+        normalized.mac = rest;
+      }
       // Strip the pane-scoped toolbars from the native payload — their items
       // now live in toolbarJson, and their `action` callbacks aren't
       // serializable. Shallow-copy the pane options first so we never mutate

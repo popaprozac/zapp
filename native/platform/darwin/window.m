@@ -886,9 +886,9 @@ void* darwin_window_create(WindowOptions* opts) {
         // defaults so apps can express "close greyed, zoom hidden, minimize
         // clickable" without reshuffling the style mask.
         {
-            int close_tag = wopts_traffic_light_close_tag(opts);
-            int min_tag = wopts_traffic_light_minimize_tag(opts);
-            int zoom_tag = wopts_traffic_light_zoom_tag(opts);
+            int close_tag = wopts_window_control_close_tag(opts);
+            int min_tag = wopts_window_control_minimize_tag(opts);
+            int zoom_tag = wopts_window_control_maximize_tag(opts);
             NSButton* closeBtn = [window standardWindowButton:NSWindowCloseButton];
             NSButton* minBtn = [window standardWindowButton:NSWindowMiniaturizeButton];
             NSButton* zoomBtn = [window standardWindowButton:NSWindowZoomButton];
@@ -941,7 +941,11 @@ void* darwin_window_create(WindowOptions* opts) {
         // loadRequest resets the content process and breaks the
         // bridge bootstrap (the await greet() at module top would
         // time out — observed in dev).
-        const char* vibrancyName = wopts_vibrancy(opts);
+        // Tier-2 `mac: { material }` overrides the Tier-1 semantic `vibrancy` on
+        // macOS (lets an app set a mac-only material without it mapping to a
+        // Windows backdrop). Falls back to `vibrancy`.
+        const char* vibrancyName = wopts_mac_material(opts);
+        if (!vibrancyName || !vibrancyName[0]) vibrancyName = wopts_vibrancy(opts);
         bool useVibrancy = (vibrancyName && vibrancyName[0] != '\0');
         // Material enum shared by the whole-window vibrancy path and the
         // sidebar's optional per-pane material override (helper above).

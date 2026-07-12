@@ -82,7 +82,7 @@ block:
   doAssert o.height == 600'i32
   doAssert o.vibrancy == Material.Sidebar
   doAssert o.titleBarStyle == TitleBarStyle.HiddenInset
-  doAssert o.closable == false and o.trafficLights.close == ButtonState.Disabled
+  doAssert o.closable == false and o.windowControls.close == ButtonState.Disabled
   doAssert o.sidebar.url == "#sb" and o.sidebar.width == 240'i32
   doAssert o.inspector.url == "#insp" and o.inspector.collapsed == true
   doAssert o.asSheetOfId == 7'i32, "asSheetOf string win-7 must parse to 7"
@@ -126,7 +126,7 @@ block:
   doAssert o.numericIdPrealloc == -1'i32 and o.asSheetOfId == -1'i32
   doAssert o.inspectable == Inspectable.Inherit, "window inspectable defaults to Inherit"
   doAssert o.titleBarStyle == TitleBarStyle.Unset, "Unset (ord 3) must be the default, not Default"
-  doAssert o.trafficLights.close == ButtonState.Enabled
+  doAssert o.windowControls.close == ButtonState.Enabled
   doAssert o.sidebar.material == Material.Default and o.inspector.material == Material.Default
   doAssert o.sidebar.presentation == SidebarPresentation.Default
   doAssert o.toolbar.style == ToolbarStyle.Unified, "toolbar style defaults to Unified"

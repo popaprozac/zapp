@@ -30,6 +30,10 @@ extern void windows_webview_eval_by_id(int32_t window_id, const char* js);
 extern char* zapp_escape_dup(const char* src); // dispatch.zc — JS single-quote escape
 extern void windows_window_register_pane_id(int32_t slot, int32_t host_slot); // window.c
 
+// Defined below; called from the inspector collapse/expand ops above them.
+void windows_titlebar_relocate_controls(int32_t host_slot);
+int32_t windows_pane_controls_slot(int32_t host_slot);
+
 #define ZAPP_MAX_PANE_WINDOWS 64
 #define ZAPP_SPLITTER_PX 6
 
@@ -54,6 +58,7 @@ typedef struct {
 
     HWND     content_child;    // host webview's child window
     int      splitter_px;
+    int      sidebar_resizable, inspector_resizable;  // 0 = splitter drag disabled
 } ZappPaneWindow;
 
 static ZappPaneWindow zapp_panes[ZAPP_MAX_PANE_WINDOWS];
@@ -116,9 +121,13 @@ static void pane_emit(int32_t host_slot, int32_t accessory_slot,
 // --- Splitter drag ---
 
 static struct { int active; int32_t host; int which; int start_x; int start_w; } g_drag;
+static DWORD g_drag_last_bounds = 0;   // GetTickCount of the last webview put_Bounds during a drag
+#define PANE_SETTLE_TIMER_ID 0x5A99    // snaps webviews to final size if the drag pauses
+int windows_panes_layout_ex(int32_t host_slot, bool resize_webviews);  // fwd (defined below)
 
-static const wchar_t* PANE_HOST_CLASS  = L"ZappPaneHost";
-static const wchar_t* PANE_SPLIT_CLASS = L"ZappPaneSplitter";
+static const wchar_t* PANE_HOST_CLASS       = L"ZappPaneHost";
+static const wchar_t* PANE_HOST_CLEAR_CLASS = L"ZappPaneHostClear"; // see-through: no bg brush
+static const wchar_t* PANE_SPLIT_CLASS      = L"ZappPaneSplitter";
 
 static int clampi(int v, int lo, int hi) {
     if (lo > 0 && v < lo) v = lo;
@@ -129,14 +138,22 @@ static int clampi(int v, int lo, int hi) {
 
 static LRESULT CALLBACK splitter_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
-        case WM_SETCURSOR:
+        case WM_SETCURSOR: {
+            int32_t host = (int32_t)GetWindowLongPtrW(hwnd, GWLP_USERDATA) - 1;
+            ZappPaneWindow* p = panes_for(host);
+            if (p) {
+                int which = (hwnd == p->inspector_splitter) ? 1 : 0;
+                if (!(which ? p->inspector_resizable : p->sidebar_resizable)) break;  // fixed → arrow
+            }
             SetCursor(LoadCursorW(NULL, IDC_SIZEWE));
             return TRUE;
+        }
         case WM_LBUTTONDOWN: {
             int32_t host = (int32_t)GetWindowLongPtrW(hwnd, GWLP_USERDATA) - 1;
             ZappPaneWindow* p = panes_for(host);
             if (!p) break;
             int which = (hwnd == p->inspector_splitter) ? 1 : 0;
+            if (!(which ? p->inspector_resizable : p->sidebar_resizable)) return 0;  // fixed → no drag
             POINT pt; GetCursorPos(&pt);
             g_drag.active = 1; g_drag.host = host; g_drag.which = which;
             g_drag.start_x = pt.x;
@@ -150,26 +167,47 @@ static LRESULT CALLBACK splitter_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPA
             if (!p) break;
             POINT pt; GetCursorPos(&pt);
             int delta = pt.x - g_drag.start_x;
-            int neww;
-            int32_t slot;
-            const char* evt;
-            if (g_drag.which == 0) {           // sidebar grows rightward
-                neww = clampi(g_drag.start_w + delta, p->sidebar_min, p->sidebar_max);
-                p->sidebar_width = neww; slot = p->sidebar_slot; evt = "sidebar-resized";
-            } else {                            // inspector grows leftward
-                neww = clampi(g_drag.start_w - delta, p->inspector_min, p->inspector_max);
-                p->inspector_width = neww; slot = p->inspector_slot; evt = "inspector-resized";
-            }
-            extern int windows_panes_layout(int32_t);
-            windows_panes_layout(g_drag.host);
-            int logical = (int)(neww / panes_scale(p->host_hwnd) + 0.5);
-            char json[40];
-            snprintf(json, sizeof(json), "{\"width\":%d}", logical);
-            pane_emit(g_drag.host, slot, evt, json);
+            if (g_drag.which == 0)              // sidebar grows rightward
+                p->sidebar_width = clampi(g_drag.start_w + delta, p->sidebar_min, p->sidebar_max);
+            else                                // inspector grows leftward
+                p->inspector_width = clampi(g_drag.start_w - delta, p->inspector_min, p->inspector_max);
+            // Containers move every tick (atomic DeferWindowPos → smooth). The
+            // heavy WebView2 put_Bounds is throttled to ~60fps — cross-process IPC
+            // to Chromium's renderer can't keep up per-mousemove. A settle timer
+            // snaps the final size if the mouse pauses mid-drag. (The 'resized' JS
+            // event fires once on WM_LBUTTONUP.)
+            DWORD now = GetTickCount();
+            bool do_bounds = (now - g_drag_last_bounds) >= 16;
+            windows_panes_layout_ex(g_drag.host, do_bounds);
+            if (do_bounds) { g_drag_last_bounds = now; KillTimer(hwnd, PANE_SETTLE_TIMER_ID); }
+            else SetTimer(hwnd, PANE_SETTLE_TIMER_ID, 24, NULL);
             return 0;
         }
+        case WM_TIMER:
+            if (wParam == PANE_SETTLE_TIMER_ID) {
+                KillTimer(hwnd, PANE_SETTLE_TIMER_ID);
+                if (g_drag.active) {   // mouse paused mid-drag — snap webviews to size
+                    windows_panes_layout_ex(g_drag.host, true);
+                    g_drag_last_bounds = GetTickCount();
+                }
+            }
+            return 0;
         case WM_LBUTTONUP:
-            if (g_drag.active) { ReleaseCapture(); g_drag.active = 0; }
+            if (g_drag.active) {
+                ReleaseCapture();
+                KillTimer(hwnd, PANE_SETTLE_TIMER_ID);
+                windows_panes_layout_ex(g_drag.host, true);   // final snap to exact size
+                ZappPaneWindow* p = panes_for(g_drag.host);
+                if (p) {
+                    int32_t slot; const char* evt; int neww;
+                    if (g_drag.which == 0) { slot = p->sidebar_slot;   evt = "sidebar-resized";   neww = p->sidebar_width; }
+                    else                   { slot = p->inspector_slot; evt = "inspector-resized"; neww = p->inspector_width; }
+                    int logical = (int)(neww / panes_scale(p->host_hwnd) + 0.5);
+                    char json[40]; snprintf(json, sizeof(json), "{\"width\":%d}", logical);
+                    pane_emit(g_drag.host, slot, evt, json);
+                }
+                g_drag.active = 0;
+            }
             return 0;
     }
     return DefWindowProcW(hwnd, msg, wParam, lParam);
@@ -179,18 +217,32 @@ static void panes_register_classes(void) {
     static int done = 0;
     if (done) return;
     done = 1;
+    extern HBRUSH windows_theme_bg_brush(void); // platform.c — theme surface
     WNDCLASSEXW host = {0};
     host.cbSize = sizeof(host);
     host.lpfnWndProc = DefWindowProcW;
     host.hInstance = zapp_get_hinstance();
     host.hCursor = LoadCursorW(NULL, IDC_ARROW);
+    // Theme surface (not NULL/white): fills the strip a pane child exposes while
+    // the WebView2 catches up during a divider drag, so it doesn't flash white.
+    host.hbrBackground = windows_theme_bg_brush();
     host.lpszClassName = PANE_HOST_CLASS;
     RegisterClassExW(&host);
+
+    // See-through variant: NO background brush. On a Mica/transparent window the
+    // pane child must paint NOTHING — an opaque GDI brush in the child blocks the
+    // DWM backdrop behind the alpha-0 webview (this, not missing glass, is why
+    // Mica looked opaque; Wails/tao have no intermediate children to paint).
+    WNDCLASSEXW clear = host;
+    clear.hbrBackground = NULL;
+    clear.lpszClassName = PANE_HOST_CLEAR_CLASS;
+    RegisterClassExW(&clear);
 
     WNDCLASSEXW split = {0};
     split.cbSize = sizeof(split);
     split.lpfnWndProc = splitter_wndproc;
     split.hInstance = zapp_get_hinstance();
+    split.hbrBackground = windows_theme_bg_brush();  // theme surface, not white
     split.lpszClassName = PANE_SPLIT_CLASS;
     RegisterClassExW(&split);
 }
@@ -202,7 +254,15 @@ static HWND make_child(HWND parent, const wchar_t* cls) {
 
 // Lay out [sidebar | splitter | content | splitter | inspector]. Returns 1 when
 // the window has panes (WM_SIZE then skips the single-webview resize).
-int windows_panes_layout(int32_t host_slot) {
+//
+// resize_webviews=false is the interactive splitter-drag fast path: the child
+// container HWNDs move in ONE atomic DeferWindowPos pass (so the drag tracks
+// smoothly), but the heavy WebView2 put_Bounds — cross-process IPC to Chromium's
+// renderer, which floods + stalls at per-mousemove rates — is skipped. The
+// splitter throttles those to ~60fps + a settle. Everything else (window-edge
+// WM_SIZE, collapse/expand, setWidth) uses the true wrapper: the OS modal resize
+// loop is DWM-paced, so there's no flood to throttle.
+int windows_panes_layout_ex(int32_t host_slot, bool resize_webviews) {
     ZappPaneWindow* p = panes_for(host_slot);
     if (!p) return 0;
 
@@ -214,49 +274,71 @@ int windows_panes_layout(int32_t host_slot) {
 
     int content_left = 0;
     int content_right = W;
+    const UINT MOVE = SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS;
+
+    // Phase 1 — move every child + splitter in ONE atomic DWM pass. Separate
+    // SetWindowPos calls each trigger their own reflow/repaint; batching is what
+    // lets a splitter drag track like a window-edge resize.
+    HDWP hdwp = BeginDeferWindowPos(5);
+    int sb_w = p->sidebar_width, insp_w = p->inspector_width;
+    bool sb_shown = false, insp_shown = false;
 
     if (p->sidebar_slot >= 0 && !p->sidebar_collapsed && p->sidebar_child) {
         int w = p->sidebar_width;
         if (w > W - sp) w = (W - sp > 0) ? W - sp : 0;
-        SetWindowPos(p->sidebar_child, NULL, 0, 0, w, H, SWP_NOZORDER | SWP_SHOWWINDOW);
-        windows_webview_resize(p->sidebar_slot, w, H);
-        windows_webview_notify_position(p->sidebar_slot);
-        if (p->sidebar_splitter)
-            SetWindowPos(p->sidebar_splitter, HWND_TOP, w, 0, sp, H, SWP_SHOWWINDOW);
+        sb_w = w; sb_shown = true;
+        if (hdwp) hdwp = DeferWindowPos(hdwp, p->sidebar_child, NULL, 0, 0, w, H, MOVE | SWP_SHOWWINDOW);
+        if (p->sidebar_splitter && hdwp)
+            hdwp = DeferWindowPos(hdwp, p->sidebar_splitter, HWND_TOP, w, 0, sp, H, SWP_NOACTIVATE | SWP_SHOWWINDOW);
         content_left = w + sp;
     } else if (p->sidebar_slot >= 0 && p->sidebar_child) {
         // Collapsed: keep the child SIZED (just hidden) so its WebView2 still
-        // navigates/loads — a 0-size controller never loads, leaving the pane
-        // blank when later expanded. Park it under the content area, hidden.
-        SetWindowPos(p->sidebar_child, NULL, 0, 0, p->sidebar_width, H, SWP_NOZORDER | SWP_HIDEWINDOW);
-        windows_webview_resize(p->sidebar_slot, p->sidebar_width, H);
-        if (p->sidebar_splitter) ShowWindow(p->sidebar_splitter, SW_HIDE);
+        // navigates/loads — a 0-size controller never loads.
+        if (hdwp) hdwp = DeferWindowPos(hdwp, p->sidebar_child, NULL, 0, 0, p->sidebar_width, H, MOVE | SWP_HIDEWINDOW);
+        if (p->sidebar_splitter && hdwp)
+            hdwp = DeferWindowPos(hdwp, p->sidebar_splitter, NULL, 0, 0, 0, 0,
+                                  SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_HIDEWINDOW);
     }
 
     if (p->inspector_slot >= 0 && !p->inspector_collapsed && p->inspector_child) {
         int w = p->inspector_width;
         if (w > W - content_left - sp) w = (W - content_left - sp > 0) ? W - content_left - sp : 0;
         int x = W - w;
-        SetWindowPos(p->inspector_child, NULL, x, 0, w, H, SWP_NOZORDER | SWP_SHOWWINDOW);
-        windows_webview_resize(p->inspector_slot, w, H);
-        windows_webview_notify_position(p->inspector_slot);
-        if (p->inspector_splitter)
-            SetWindowPos(p->inspector_splitter, HWND_TOP, x - sp, 0, sp, H, SWP_SHOWWINDOW);
+        insp_w = w; insp_shown = true;
+        if (hdwp) hdwp = DeferWindowPos(hdwp, p->inspector_child, NULL, x, 0, w, H, MOVE | SWP_SHOWWINDOW);
+        if (p->inspector_splitter && hdwp)
+            hdwp = DeferWindowPos(hdwp, p->inspector_splitter, HWND_TOP, x - sp, 0, sp, H, SWP_NOACTIVATE | SWP_SHOWWINDOW);
         content_right = x - sp;
     } else if (p->inspector_slot >= 0 && p->inspector_child) {
-        // Collapsed: keep sized (hidden) so the webview still loads (see sidebar).
-        SetWindowPos(p->inspector_child, NULL, content_left, 0, p->inspector_width, H, SWP_NOZORDER | SWP_HIDEWINDOW);
-        windows_webview_resize(p->inspector_slot, p->inspector_width, H);
-        if (p->inspector_splitter) ShowWindow(p->inspector_splitter, SW_HIDE);
+        if (hdwp) hdwp = DeferWindowPos(hdwp, p->inspector_child, NULL, content_left, 0, p->inspector_width, H, MOVE | SWP_HIDEWINDOW);
+        if (p->inspector_splitter && hdwp)
+            hdwp = DeferWindowPos(hdwp, p->inspector_splitter, NULL, 0, 0, 0, 0,
+                                  SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_HIDEWINDOW);
     }
 
     int cw = content_right - content_left;
     if (cw < 0) cw = 0;
-    SetWindowPos(p->content_child, NULL, content_left, 0, cw, H, SWP_NOZORDER | SWP_SHOWWINDOW);
-    windows_webview_resize(p->host_slot, cw, H);
-    windows_webview_notify_position(p->host_slot);
+    if (hdwp) hdwp = DeferWindowPos(hdwp, p->content_child, NULL, content_left, 0, cw, H, MOVE | SWP_SHOWWINDOW);
+    if (hdwp) EndDeferWindowPos(hdwp);
+
+    // Phase 2 — resize the WebView2 controllers (the expensive, cross-process
+    // part). Skipped on throttled drag ticks; the containers above already moved.
+    if (resize_webviews) {
+        if (p->sidebar_slot >= 0 && p->sidebar_child) {
+            windows_webview_resize(p->sidebar_slot, sb_shown ? sb_w : p->sidebar_width, H);
+            if (sb_shown) windows_webview_notify_position(p->sidebar_slot);
+        }
+        if (p->inspector_slot >= 0 && p->inspector_child) {
+            windows_webview_resize(p->inspector_slot, insp_shown ? insp_w : p->inspector_width, H);
+            if (insp_shown) windows_webview_notify_position(p->inspector_slot);
+        }
+        windows_webview_resize(p->host_slot, cw, H);
+        windows_webview_notify_position(p->host_slot);
+    }
     return 1;
 }
+
+int windows_panes_layout(int32_t host_slot) { return windows_panes_layout_ex(host_slot, true); }
 
 void windows_panes_notify_move(int32_t host_slot) {
     ZappPaneWindow* p = panes_for(host_slot);
@@ -283,11 +365,20 @@ void windows_panes_init(HWND host_hwnd, int32_t host_slot, int inspectable,
     p->sidebar_slot = -1;
     p->inspector_slot = -1;
     p->splitter_px = sx(host_hwnd, ZAPP_SPLITTER_PX);
+    p->sidebar_resizable = 1;      // default draggable (memset zeroed them)
+    p->inspector_resizable = 1;
 
     bool has_sidebar = (sidebar_slot >= 0 && sidebar_url && sidebar_url[0]);
     bool has_inspector = (inspector_slot >= 0 && inspector_url && inspector_url[0]);
 
-    p->content_child = make_child(host_hwnd, PANE_HOST_CLASS);
+    // See-through host (Mica/transparent, set by window.c before panes_init):
+    // pane children paint NO background so the DWM backdrop shows through the
+    // alpha-0 webviews. Opaque hosts keep the theme brush (drag-gap fill).
+    extern bool windows_webview_get_seethrough(int32_t);
+    bool host_seethrough = windows_webview_get_seethrough(host_slot);
+    const wchar_t* pane_cls = host_seethrough ? PANE_HOST_CLEAR_CLASS : PANE_HOST_CLASS;
+
+    p->content_child = make_child(host_hwnd, pane_cls);
 
     if (has_sidebar) {
         p->sidebar_slot = sidebar_slot;
@@ -295,7 +386,7 @@ void windows_panes_init(HWND host_hwnd, int32_t host_slot, int inspectable,
         p->sidebar_min = sx(host_hwnd, sb_min);
         p->sidebar_max = sx(host_hwnd, sb_max);
         p->sidebar_collapsed = sb_collapsed ? 1 : 0;
-        p->sidebar_child = make_child(host_hwnd, PANE_HOST_CLASS);
+        p->sidebar_child = make_child(host_hwnd, pane_cls);
         p->sidebar_splitter = make_child(host_hwnd, PANE_SPLIT_CLASS);
         SetWindowLongPtrW(p->sidebar_splitter, GWLP_USERDATA, host_slot + 1);
         windows_window_register_pane_id(sidebar_slot, host_slot); // sender→host remap
@@ -306,13 +397,23 @@ void windows_panes_init(HWND host_hwnd, int32_t host_slot, int inspectable,
         p->inspector_min = sx(host_hwnd, insp_min);
         p->inspector_max = sx(host_hwnd, insp_max);
         p->inspector_collapsed = insp_collapsed ? 1 : 0;
-        p->inspector_child = make_child(host_hwnd, PANE_HOST_CLASS);
+        p->inspector_child = make_child(host_hwnd, pane_cls);
         p->inspector_splitter = make_child(host_hwnd, PANE_SPLIT_CLASS);
         SetWindowLongPtrW(p->inspector_splitter, GWLP_USERDATA, host_slot + 1);
         windows_window_register_pane_id(inspector_slot, host_slot); // sender→host remap
     }
 
     windows_panes_layout(host_slot);
+
+    // Panes inherit the host window's see-through state (DWM backdrop / transparent
+    // window), set on host_slot by window.c. Must land BEFORE each pane's
+    // controller builds so DefaultBackgroundColor picks alpha-0 (backdrop shows)
+    // vs an opaque theme surface (plain window → windowed transparency is white).
+    extern void windows_webview_set_seethrough(int32_t, bool);
+    // All panes inherit the host's see-through (Mica) state (queried above for
+    // the pane-class pick).
+    if (has_sidebar)   windows_webview_set_seethrough(sidebar_slot, host_seethrough);
+    if (has_inspector) windows_webview_set_seethrough(inspector_slot, host_seethrough);
 
     windows_webview_create_ext((void*)p->content_child, inspectable != 0, host_url,
                                host_slot, -1, false, 0, has_sidebar, has_inspector);
@@ -374,6 +475,7 @@ void windows_inspector_collapse(int32_t host_slot) {
     if (!p || p->inspector_slot < 0 || p->inspector_collapsed) return;
     p->inspector_collapsed = 1;
     windows_panes_layout(host_slot);
+    windows_titlebar_relocate_controls(host_slot);  // buttons → content (now rightmost)
     pane_emit(host_slot, p->inspector_slot, "inspector-collapsed", NULL);
 }
 void windows_inspector_expand(int32_t host_slot) {
@@ -381,6 +483,7 @@ void windows_inspector_expand(int32_t host_slot) {
     if (!p || p->inspector_slot < 0 || !p->inspector_collapsed) return;
     p->inspector_collapsed = 0;
     windows_panes_layout(host_slot);
+    windows_titlebar_relocate_controls(host_slot);  // buttons → inspector (now rightmost)
     pane_emit(host_slot, p->inspector_slot, "inspector-expanded", NULL);
 }
 void windows_inspector_toggle(int32_t host_slot) {
@@ -408,6 +511,42 @@ void windows_sidebar_show_sidebar(int32_t host_slot) { (void)host_slot; }
 // Collapse/resize gating is a macOS NSSplitViewItem affordance; the Win32 pane
 // splitter doesn't expose an equivalent yet, so these are no-ops (router parity).
 void windows_sidebar_set_collapsible(int32_t host_slot, bool can_collapse) { (void)host_slot; (void)can_collapse; }
-void windows_sidebar_set_resizable(int32_t host_slot, bool resizable) { (void)host_slot; (void)resizable; }
+void windows_sidebar_set_resizable(int32_t host_slot, bool resizable) {
+    ZappPaneWindow* p = panes_for(host_slot);
+    if (p) p->sidebar_resizable = resizable ? 1 : 0;
+}
 void windows_inspector_set_collapsible(int32_t host_slot, bool can_collapse) { (void)host_slot; (void)can_collapse; }
-void windows_inspector_set_resizable(int32_t host_slot, bool resizable) { (void)host_slot; (void)resizable; }
+void windows_inspector_set_resizable(int32_t host_slot, bool resizable) {
+    ZappPaneWindow* p = panes_for(host_slot);
+    if (p) p->inspector_resizable = resizable ? 1 : 0;
+}
+// windows:{ paneSeparators:false } — collapse the splitter band to zero width for
+// a flush, seamless split. Re-lays out so the panes sit edge-to-edge.
+void windows_sidebar_set_pane_separators(int32_t host_slot, bool visible) {
+    ZappPaneWindow* p = panes_for(host_slot);
+    if (!p) return;
+    p->splitter_px = visible ? sx(p->host_hwnd, ZAPP_SPLITTER_PX) : 0;
+    windows_panes_layout(host_slot);
+}
+// The webview slot that hosts the caption buttons: the RIGHTMOST-VISIBLE pane —
+// the inspector when present and expanded, otherwise the content/host webview.
+// (Non-paned windows report the host slot itself.) Web caption buttons render
+// only in this webview, which is the one reaching the window's right edge.
+int32_t windows_pane_controls_slot(int32_t host_slot) {
+    ZappPaneWindow* p = panes_for(host_slot);
+    if (!p) return host_slot;
+    return (p->inspector_slot >= 0 && !p->inspector_collapsed) ? p->inspector_slot : host_slot;
+}
+
+// Move the caption buttons to the current controls slot, clearing the other
+// candidate. Called after the inspector collapses/expands (the rightmost-visible
+// pane changed, so the buttons must follow it to the window's right edge).
+void windows_titlebar_relocate_controls(int32_t host_slot) {
+    ZappPaneWindow* p = panes_for(host_slot);
+    if (!p) return;
+    int32_t controls = windows_pane_controls_slot(host_slot);
+    int32_t other = (controls == host_slot) ? p->inspector_slot : host_slot;
+    extern void windows_titlebar_push_state(int32_t, int32_t, int);
+    windows_titlebar_push_state(host_slot, controls, 1);
+    if (other >= 0) windows_titlebar_push_state(host_slot, other, 0);
+}

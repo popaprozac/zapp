@@ -166,6 +166,20 @@ void windows_webview_set_transparent(int32_t window_id, bool transparent) {
     zapp_webview_transparent[window_id] = transparent;
 }
 
+// Whether this webview's window actually shows through — it has a DWM backdrop
+// (Mica/Acrylic) or is a transparent (WS_EX_NOREDIRECTIONBITMAP) window. On a
+// see-through window a transparent webview renders alpha-0 (desktop/backdrop
+// shows). On a plain window (e.g. a sidebar pane with no backdrop) windowed
+// WebView2 renders "transparent" as WHITE, so we paint an opaque theme surface
+// instead. Set by window.c (host) + sidebar.c (panes inherit the host's value).
+static bool zapp_webview_seethrough[ZAPP_MAX_WINDOWS] = {0};
+void windows_webview_set_seethrough(int32_t window_id, bool v) {
+    if (window_id >= 0 && window_id < ZAPP_MAX_WINDOWS) zapp_webview_seethrough[window_id] = v;
+}
+bool windows_webview_get_seethrough(int32_t window_id) {
+    return (window_id >= 0 && window_id < ZAPP_MAX_WINDOWS) && zapp_webview_seethrough[window_id];
+}
+
 // App-set default background color (the `backgroundColor` window option) — fills
 // the load/resize gap so it isn't a white flash. Opaque; the page's own CSS
 // background still paints over it. Set before the controller is built.
@@ -421,6 +435,27 @@ void windows_webview_notify_position(int32_t window_id) {
     ICoreWebView2Controller_NotifyParentWindowPositionChanged(controller);
 }
 
+// Force a transparent WebView2 to REALLOCATE its render surface, discarding the
+// stale trail it leaves after a pane move/resize (the caption-button ghost on a
+// Mica/transparent window — a documented windowed-WebView2 limitation). A
+// put_Bounds jitter THROUGH ZERO tears down + recreates the surface; IsVisible
+// toggling only hides the visual and does NOT clear it (confirmed). A follow-up
+// RedrawWindow manufactures the paint event that flushes the region.
+void windows_webview_recomposite(int32_t window_id) {
+    if (window_id < 0 || window_id >= ZAPP_MAX_WINDOWS) return;
+    ICoreWebView2Controller* controller = zapp_controllers[window_id];
+    if (!controller) return;
+    RECT b;
+    if (FAILED(ICoreWebView2Controller_get_Bounds(controller, &b))) return;
+    if (b.right <= b.left || b.bottom <= b.top) return;   // already degenerate
+    RECT zero = { b.left, b.top, b.left, b.top };         // 0 x 0
+    ICoreWebView2Controller_put_Bounds(controller, zero);
+    ICoreWebView2Controller_put_Bounds(controller, b);
+    HWND h = NULL;
+    if (SUCCEEDED(ICoreWebView2Controller_get_ParentWindow(controller, &h)) && h)
+        RedrawWindow(h, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_INTERNALPAINT | RDW_ALLCHILDREN);
+}
+
 // ============================================================
 // COM callback handlers
 // Each needs: QueryInterface, AddRef, Release, Invoke
@@ -474,6 +509,22 @@ static HRESULT STDMETHODCALLTYPE ZappMsgHandler_Invoke(
         char* msg = wchar_to_utf8_wv(wmsg);
         CoTaskMemFree(wmsg);
         if (msg) {
+            // Web-rendered caption buttons (bootstrap): route min/max/close to
+            // WM_SYSCOMMAND on the host window (buttons render in the content
+            // webview, so self->window_id is the host slot).
+            if (strncmp(msg, "window-control:", 15) == 0) {
+                extern int32_t windows_window_host_slot_for(int32_t);
+                extern HWND windows_host_hwnd_for_slot(int32_t);
+                HWND h = windows_host_hwnd_for_slot(windows_window_host_slot_for(self->window_id));
+                const char* a = msg + 15;
+                WPARAM sc = 0;
+                if (strcmp(a, "minimize") == 0)      sc = SC_MINIMIZE;
+                else if (strcmp(a, "maximize") == 0) sc = (h && IsZoomed(h)) ? SC_RESTORE : SC_MAXIMIZE;
+                else if (strcmp(a, "close") == 0)    sc = SC_CLOSE;
+                if (h && sc) PostMessageW(h, WM_SYSCOMMAND, sc, 0);
+                free(msg);
+                return S_OK;
+            }
             // File drag-drop (Approach B): bootstrap posts file-drop* messages;
             // resolve File objects → absolute paths + emit file-drop-* events.
             extern int windows_filedrop_handle_message(void*, const char*, int32_t);
@@ -836,9 +887,22 @@ static HRESULT STDMETHODCALLTYPE ZappCtrl_Invoke(
         ICoreWebView2Controller2* controller2 = NULL;
         if (SUCCEEDED(ICoreWebView2Controller_QueryInterface(controller,
                 &IID_ICoreWebView2Controller2, (void**)&controller2)) && controller2) {
-            if (zapp_webview_transparent[wid]) {
-                COREWEBVIEW2_COLOR transparent = { 0, 0, 0, 0 }; // A,R,G,B
-                ICoreWebView2Controller2_put_DefaultBackgroundColor(controller2, transparent);
+            if (zapp_webview_transparent[wid] && zapp_webview_seethrough[wid]) {
+                // See-through window (DWM backdrop or WS_EX_NOREDIRECTIONBITMAP):
+                // alpha-0 so the desktop / Mica / Acrylic shows through.
+                COREWEBVIEW2_COLOR clear = { 0, 0, 0, 0 };     // A,R,G,B
+                ICoreWebView2Controller2_put_DefaultBackgroundColor(controller2, clear);
+            } else if (zapp_webview_transparent[wid]) {
+                // Transparent webview on a PLAIN window (e.g. a sidebar pane, no
+                // backdrop): windowed WebView2 renders that as WHITE, so paint an
+                // opaque theme surface — a coherent dark/light pane, not a white
+                // flash. (True translucency here would need visual hosting, which
+                // we don't use — it tore on resize without improving it.)
+                extern const char* windows_get_theme(void);
+                COREWEBVIEW2_COLOR c; c.A = 255;               // A,R,G,B
+                if (strcmp(windows_get_theme(), "dark") == 0) { c.R = 32;  c.G = 32;  c.B = 32;  }
+                else                                          { c.R = 243; c.G = 243; c.B = 243; }
+                ICoreWebView2Controller2_put_DefaultBackgroundColor(controller2, c);
             } else if (zapp_webview_bg_set[wid]) {
                 ICoreWebView2Controller2_put_DefaultBackgroundColor(controller2, zapp_webview_bg[wid]);
             }
@@ -851,6 +915,15 @@ static HRESULT STDMETHODCALLTYPE ZappCtrl_Invoke(
     ICoreWebView2Controller_get_CoreWebView2(controller, &webview);
     if (!webview) return S_OK;
     zapp_webviews_wv[wid] = webview;
+
+    // Re-raise the custom-titlebar native buttons (native-controls mode) above
+    // this just-created webview HWND subtree — they were positioned HWND_TOP at
+    // titlebar-enable time, BEFORE the async webview creation landed on top.
+    // No-op in web-controls mode (no native button child).
+    {
+        extern void windows_titlebar_layout(int32_t);
+        windows_titlebar_layout(self->identity_id >= 0 ? self->identity_id : self->window_id);
+    }
 
     // Configure settings
     ICoreWebView2Settings* settings = NULL;
@@ -1006,6 +1079,8 @@ static HRESULT STDMETHODCALLTYPE ZappCtrl_Invoke(
         int controls_inset_right = 0;
         int titlebar_height = 0;
         const char* titlebar_style = borderless ? "hidden" : "default";
+        char controls_desc[8] = "";   // per-button state for the web buttons
+        int win_maximized = 0;
         {
             // Custom title bar is enabled on the HOST slot. This webview may be a
             // pane (content registers under the host slot; sidebar/inspector
@@ -1018,6 +1093,18 @@ static HRESULT STDMETHODCALLTYPE ZappCtrl_Invoke(
                 titlebar_height = th;
                 controls_inset_right = ir;
                 titlebar_style = "hidden";
+                // Web-rendered caption buttons render only in the RIGHTMOST-VISIBLE
+                // pane's webview (inspector when expanded, else content) — the one
+                // reaching the window's right edge. Other panes get zero inset →
+                // no buttons, and their whole top strip stays draggable.
+                extern int32_t windows_pane_controls_slot(int32_t);
+                if (windows_pane_controls_slot(host_slot) != self->window_id)
+                    controls_inset_right = 0;
+                extern void windows_titlebar_controls_desc(int32_t, char*);
+                windows_titlebar_controls_desc(host_slot, controls_desc);
+                extern HWND windows_host_hwnd_for_slot(int32_t);
+                HWND host = windows_host_hwnd_for_slot(host_slot);
+                win_maximized = (host && IsZoomed(host)) ? 1 : 0;
             }
         }
         // Defer to DOM-ready: AddScriptToExecuteOnDocumentCreated runs
@@ -1025,17 +1112,20 @@ static HRESULT STDMETHODCALLTYPE ZappCtrl_Invoke(
         // transient documentElement at document-create are discarded
         // (WebKit's atDocumentStart runs later, after it exists). Apply
         // on DOMContentLoaded (or immediately if already past loading).
-        char metrics_js[768];
+        char metrics_js[1024];
         snprintf(metrics_js, sizeof(metrics_js),
             "(function(){var apply=function(){try{var r=document.documentElement;if(r){"
             "r.style.setProperty('--zapp-titlebar-height','%dpx');"
             "r.style.setProperty('--zapp-toolbar-height','0px');"
             "r.style.setProperty('--zapp-window-controls-inset-left','0px');"
             "r.style.setProperty('--zapp-window-controls-inset-right','%dpx');"
-            "r.setAttribute('data-zapp-titlebar-style','%s');}}catch(e){}};"
+            "r.setAttribute('data-zapp-titlebar-style','%s');"
+            "r.setAttribute('data-zapp-window-controls','%s');"
+            "r.setAttribute('data-zapp-window-maximized','%d');}}catch(e){}};"
             "if(document.readyState!=='loading')apply();"
             "else document.addEventListener('DOMContentLoaded',apply);})();",
-            titlebar_height, controls_inset_right, titlebar_style);
+            titlebar_height, controls_inset_right, titlebar_style,
+            controls_desc, win_maximized);
         wchar_t* wmetrics = utf8_to_wchar_wv(metrics_js);
         if (wmetrics) {
             ICoreWebView2_AddScriptToExecuteOnDocumentCreated(webview, wmetrics, NULL);

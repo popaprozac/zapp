@@ -17,6 +17,7 @@
 #include <windows.h>
 #include <dwmapi.h>
 #include <string.h>
+#include <stdio.h>
 
 extern const char* windows_get_theme(void);
 
@@ -36,6 +37,18 @@ extern const char* windows_get_theme(void);
 #define ZAPP_DWMSBT_MAINWINDOW      2  // Mica
 #define ZAPP_DWMSBT_TRANSIENTWINDOW 3  // Acrylic
 #define ZAPP_DWMSBT_TABBEDWINDOW    4  // Mica Alt
+
+// Custom title-bar / border colors (Windows 11 22000+). Value is a COLORREF
+// (0x00BBGGRR). Not always in MinGW's dwmapi.h — define locally.
+#ifndef DWMWA_BORDER_COLOR
+#define DWMWA_BORDER_COLOR  34
+#endif
+#ifndef DWMWA_CAPTION_COLOR
+#define DWMWA_CAPTION_COLOR 35
+#endif
+#ifndef DWMWA_TEXT_COLOR
+#define DWMWA_TEXT_COLOR    36
+#endif
 
 static int theme_is_dark(void) {
     const char* t = windows_get_theme();
@@ -77,6 +90,28 @@ int windows_material_wants_transparent(const char* vibrancy) {
     return backdrop_for_vibrancy(vibrancy) > ZAPP_DWMSBT_NONE ? 1 : 0;
 }
 
+// Parse "#rrggbb" (or "#rrggbbaa", alpha ignored) → COLORREF. Returns 1 if valid;
+// other formats (CSS names) aren't resolved here.
+static int parse_hex_colorref(const char* s, COLORREF* out) {
+    if (!s || s[0] != '#') return 0;
+    unsigned r, g, b;
+    if (sscanf(s + 1, "%2x%2x%2x", &r, &g, &b) != 3) return 0;
+    *out = RGB(r, g, b);
+    return 1;
+}
+
+// Custom title-bar colors (windows:{customTheme}) → DWMWA_CAPTION/TEXT/BORDER_COLOR.
+// Each arg is a "#rrggbb" string or "" (skip that attribute). Win11 22000+; the
+// DWM calls no-op (HRESULT ignored) on older builds.
+void windows_material_apply_custom_theme(HWND hwnd, const char* caption,
+                                         const char* text, const char* border) {
+    if (!hwnd) return;
+    COLORREF c;
+    if (parse_hex_colorref(caption, &c)) DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, &c, sizeof(c));
+    if (parse_hex_colorref(text, &c))    DwmSetWindowAttribute(hwnd, DWMWA_TEXT_COLOR, &c, sizeof(c));
+    if (parse_hex_colorref(border, &c))  DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &c, sizeof(c));
+}
+
 // Apply theme caption + system backdrop at window create.
 void windows_material_apply(HWND hwnd, const char* vibrancy) {
     if (!hwnd) return;
@@ -85,5 +120,13 @@ void windows_material_apply(HWND hwnd, const char* vibrancy) {
     if (sbt > 0) {
         int val = sbt;
         DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &val, sizeof(val));
+        // Full glass: the client must be ALPHA-composited for the backdrop to show
+        // through the panes' alpha-0 webviews — windowed WebView2 renders alpha-0
+        // as WHITE on a non-glass client ({1,1,1,1} proved this). Full glass on a
+        // WS_SYSMENU window makes DWM paint dead caption buttons ("ghost
+        // controls"); custom-titlebar windows therefore drop WS_SYSMENU
+        // (window.c), which removes DWM's caption chrome entirely.
+        MARGINS m = { 32767, 32767, 32767, 32767 };
+        DwmExtendFrameIntoClientArea(hwnd, &m);
     }
 }
