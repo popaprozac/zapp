@@ -554,6 +554,25 @@ extern void zapp_worker_invoke_on_main(const char* worker_id, int req_id,
                                        const char* method, const char* args_json);
 static _Atomic int g_async_req_id = 1;
 
+#if !defined(__APPLE__)
+// Windows: marshal the invoke onto the UI thread via the platform funnel
+// (parity with the macOS dispatch_async). Window creation / any App work must
+// run on the UI thread — running it on the worker pthread yields a window bound
+// to a non-pumping thread (unresponsive). zapp_worker_invoke_on_main delivers
+// its result back asynchronously (zjs_worker_eval_js -> bridge._resolveInvoke),
+// so this is fire-and-forget — the worker thread never blocks.
+extern bool zapp_post_to_ui_thread(void (*fn)(void* arg), void* arg);
+typedef struct { char* worker_id; int req_id; char* method; char* args_json; } ZjsAsyncInvoke;
+static void zjs_run_invoke_on_main(void* arg) {
+    ZjsAsyncInvoke* t = (ZjsAsyncInvoke*) arg;
+    zapp_worker_invoke_on_main(t->worker_id, t->req_id, t->method, t->args_json);
+    free(t->method);
+    free(t->args_json);
+    free(t->worker_id);
+    free(t);
+}
+#endif
+
 static ZjsValue host_invoke_service_async(ZjsContext* ctx, ZjsValue* argv, uint32_t argc) {
     ZjsWorkerSlot* slot = zjs_slot_for_ctx(ctx);
     if (!slot || argc < 1 || !zjs_is_string(argv[0])) return zjs_undefined();
@@ -609,16 +628,27 @@ static ZjsValue host_invoke_service_async(ZjsContext* ctx, ZjsValue* argv, uint3
         free(wid);
     });
 #else
-    // TODO(windows-zjs): dispatch to the main thread via the platform funnel
-    // (Windows has zapp_webview_init_eval_funnel + the Win32 message loop; a
-    // parallel "invoke on main" funnel is the correct home). Proper async
-    // worker->native invoke on Windows is a zjs-on-Windows follow-up; for now
-    // invoke inline so the Nim build links. Not exercised at startup / first
-    // render — worker async service calls are the only caller.
-    zapp_worker_invoke_on_main(wid, id, method, args_json);
-    free(method);
-    free(args_json);
-    free(wid);
+    // Windows/other: hop to the UI thread via the platform funnel so the service
+    // handler (and any window creation it does) runs on the pumping thread.
+    ZjsAsyncInvoke* t = (ZjsAsyncInvoke*) malloc(sizeof(ZjsAsyncInvoke));
+    if (t) {
+        t->worker_id = wid;
+        t->req_id = id;
+        t->method = method;
+        t->args_json = args_json;
+        // zapp_post_to_ui_thread runs fn inline when already on the UI thread,
+        // and returns false (caller keeps ownership) only if the post failed —
+        // in which case run it inline as a best-effort fallback.
+        if (!zapp_post_to_ui_thread(zjs_run_invoke_on_main, t)) {
+            zjs_run_invoke_on_main(t);
+        }
+    } else {
+        // OOM — best-effort inline on the worker thread.
+        zapp_worker_invoke_on_main(wid, id, method, args_json);
+        free(method);
+        free(args_json);
+        free(wid);
+    }
 #endif
 
     // Return the request id so the JS bootstrap can build a Promise around it.
