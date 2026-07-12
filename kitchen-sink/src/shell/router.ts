@@ -6,10 +6,12 @@ import { renderTitlebarShowcasePane } from "./titlebar-showcase-pane";
 import { renderBgDemoPane, renderBgSidebarPane } from "./bg-demo-pane";
 import { renderSheetPane } from "./sheet-pane";
 import { renderColorSidebarPane, renderColorContentPane } from "./color-panes";
+import { renderTransparentDemo } from "./transparent-demo";
 
 export function routeShell(app: HTMLElement) {
   const hash = location.hash;
   if (hash.startsWith("#titlebar-showcase")) { renderTitlebarShowcasePane(app); return; }
+  if (hash === "#transparent-demo") { renderTransparentDemo(app); return; }
   if (hash.startsWith("#bg-demo")) { renderBgDemoPane(app); return; }
   if (hash.startsWith("#sheet=")) { renderSheetPane(app); return; }
   switch (hash) {

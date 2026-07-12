@@ -29,6 +29,7 @@ proc runApp(): int =
     title: "Kitchen Sink",
     visible: false,            # deferred show — revealed by onReady
     width: 1100, height: 700,
+    # transparent: true,
     # #782: title alone is enough to opt the pane into its own config-implied
     # native bar (iOS: navigationItem.title; macOS title is a documented no-op —
     # see docs/api-reference.md "Per-pane toolbars & titles").
@@ -58,6 +59,8 @@ proc runApp(): int =
     # Mail/Messages look). With the 2c change, an UNSET titleBarStyle now resolves
     # to `default` (standard titlebar) — apps choose the hidden look on purpose.
     titleBarStyle: TitleBarStyle.HiddenInset,
+    # Sidebar glass: the transparent sidebar pane lets the native vibrancy /
+    # Windows DWM backdrop show through (no opaque pane background).
     vibrancy: Material.Sidebar,
   ))
   win.onReady(onReady)

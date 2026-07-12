@@ -42,6 +42,7 @@ export const multiwindowSection: Section = {
           { act: "small", label: "New window (small)" },
           { act: "vibrant", label: "Vibrancy (sidebar)" },
           { act: "shell", label: "New window (sidebar shell)" },
+          { act: "flush-split", label: "Flush split (no separators)" },
           { act: "sheet-page", label: "Sheet (page)" },
           { act: "sheet-form", label: "Sheet (form)" },
           { act: "sheet-bottom", label: "Bottom sheet" },
@@ -74,7 +75,7 @@ export const multiwindowSection: Section = {
           // Also demos window-control visibility: greyed (disabled) minimize,
           // hidden maximize, normal close. On Windows the custom-titlebar buttons
           // reflect this; on macOS the traffic lights do.
-          trafficLights: { minimize: "disabled", zoom: "hidden" },
+          windowControls: { minimize: "disabled", maximize: "hidden" },
         }),
       ),
     );
@@ -94,6 +95,22 @@ export const multiwindowSection: Section = {
           vibrancy: "sidebar",
           sidebar: { url: "#sidebar-pane", width: 240 },
           inspector: { url: "#inspector-pane", width: 300, collapsed: true },
+        }),
+      ),
+    );
+    // Same sidebar+inspector shell, but windows:{ paneSeparators:false } — the
+    // splitter bands collapse for a flush, seamless split (Windows-only knob).
+    onAct(host, "flush-split", () =>
+      open(host, "flush-split shell window", () =>
+        Window.create({
+          title: "Kitchen Sink — Flush Split",
+          width: 1000,
+          height: 680,
+          titleBarStyle: "hiddenInset",
+          vibrancy: "sidebar",
+          sidebar: { url: "#sidebar-pane", width: 240, resizable: false },
+          inspector: { url: "#inspector-pane", width: 300, collapsed: true, resizable: false },
+          windows: { paneSeparators: false },
         }),
       ),
     );
@@ -132,6 +149,80 @@ export const multiwindowSection: Section = {
           presentation: "bottomSheet",
           detents: ["medium", "large"],
           grabber: true,
+        }),
+      ),
+    );
+
+    // ── Windows chrome (windows: {} namespace) ───────────────────────────────
+    host.appendChild(
+      card({
+        title: "Windows chrome (windows: {})",
+        intro:
+          "Tier-1 transparent + the new windows:{} namespace (backdrop, clickThrough, contentProtection, hiddenOnTaskbar). Transparent / Mica need Windows 11; no-ops elsewhere.",
+        buttons: [
+          { act: "win-transparent", label: "Transparent window" },
+          { act: "win-mica", label: "Mica backdrop" },
+          { act: "win-clickthrough", label: "Click-through overlay" },
+          { act: "win-protected", label: "Content-protected" },
+          { act: "win-notaskbar", label: "Hidden on taskbar" },
+        ],
+      }),
+    );
+    onAct(host, "win-transparent", () =>
+      open(host, "transparent window", () =>
+        Window.create({
+          title: "Transparent",
+          url: "#transparent-demo",
+          width: 480,
+          height: 360,
+          transparent: true,
+          titleBarStyle: "hidden",
+        }),
+      ),
+    );
+    onAct(host, "win-mica", () =>
+      open(host, "mica window", () =>
+        Window.create({
+          title: "Mica backdrop",
+          url: "#transparent-demo",
+          width: 480,
+          height: 360,
+          windows: { backdrop: "mica" },
+          titleBarStyle: "hidden",
+        }),
+      ),
+    );
+    onAct(host, "win-clickthrough", () =>
+      open(host, "click-through overlay", () =>
+        Window.create({
+          title: "Click-through",
+          url: "#transparent-demo",
+          width: 480,
+          height: 360,
+          transparent: true,
+          alwaysOnTop: true,
+          titleBarStyle: "hidden",
+          windows: { clickThrough: true },
+        }),
+      ),
+    );
+    onAct(host, "win-protected", () =>
+      open(host, "content-protected window", () =>
+        Window.create({
+          title: "Content-protected (try to screenshot)",
+          width: 520,
+          height: 320,
+          windows: { contentProtection: true },
+        }),
+      ),
+    );
+    onAct(host, "win-notaskbar", () =>
+      open(host, "no-taskbar window", () =>
+        Window.create({
+          title: "Hidden on taskbar",
+          width: 480,
+          height: 320,
+          windows: { hiddenOnTaskbar: true },
         }),
       ),
     );
@@ -252,7 +343,7 @@ export const multiwindowSection: Section = {
           url: "#titlebar-showcase/unified",
           width: 460,
           height: 300,
-          toolbar: { style: "unified", items: showcaseToolbarItems() },
+          mac: { toolbar: { style: "unified", items: showcaseToolbarItems() } },
         }),
       ),
     );
@@ -266,7 +357,7 @@ export const multiwindowSection: Section = {
           titleBarStyle: "hiddenInset",
           width: 460,
           height: 300,
-          toolbar: { style: "unifiedCompact", items: showcaseToolbarItems() },
+          mac: { toolbar: { style: "unifiedCompact", items: showcaseToolbarItems() } },
         }),
       ),
     );
@@ -279,7 +370,7 @@ export const multiwindowSection: Section = {
           url: "#titlebar-showcase/expanded",
           width: 460,
           height: 300,
-          toolbar: { style: "expanded", items: showcaseToolbarItems() },
+          mac: { toolbar: { style: "expanded", items: showcaseToolbarItems() } },
         }),
       ),
     );

@@ -8,9 +8,12 @@ export function renderSidebarPane(app: HTMLElement) {
   // through. Body alone isn't enough: the opaque :root/html background blocks it.
   document.documentElement.style.background = "transparent";
   document.body.style.background = "transparent";
+  // Windows caption buttons live top-RIGHT (over the content/inspector), so the
+  // sidebar's top strip needs no traffic-light inset — drop it for a clean,
+  // full-width drag surface. macOS keeps the 78px inset for the traffic lights.
   const dragStrip = Platform.isIOS
     ? ""
-    : `<div class="drag-strip" data-zapp-titlebar></div>`;
+    : `<div class="drag-strip${Platform.isWindows ? " drag-strip--no-inset" : ""}" data-zapp-titlebar></div>`;
   app.innerHTML = `
     ${dragStrip}
     <div class="sidebar-pane">
