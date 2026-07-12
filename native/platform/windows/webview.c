@@ -474,6 +474,13 @@ static HRESULT STDMETHODCALLTYPE ZappMsgHandler_Invoke(
         char* msg = wchar_to_utf8_wv(wmsg);
         CoTaskMemFree(wmsg);
         if (msg) {
+            // File drag-drop (Approach B): bootstrap posts file-drop* messages;
+            // resolve File objects → absolute paths + emit file-drop-* events.
+            extern int windows_filedrop_handle_message(void*, const char*, int32_t);
+            if (windows_filedrop_handle_message(args, msg, self->window_id)) {
+                free(msg);
+                return S_OK;
+            }
             void* app = app_get_active();
             if (app) {
                 zapp_handle_message_from_window(app, msg, self->window_id);

@@ -382,6 +382,42 @@
       const _clearDrag = () => { dragStart = null; };
       document.addEventListener("mouseup", _clearDrag);
       document.addEventListener("mouseleave", _clearDrag);
+
+      // File drag-drop (parity with macOS): handle EXTERNAL FILE drags via HTML5
+      // and route to native, which resolves absolute paths (ICoreWebView2File.
+      // GetPath) and emits the file-drop-* window events. preventDefault on a file
+      // drag stops WebView2 navigating to the file; NON-file drags fall through so
+      // in-page HTML5 DnD keeps working (matching darwin's call-super path).
+      const _wv = (window as any).chrome.webview;
+      const _isFileDrag = (e: DragEvent) =>
+        !!e.dataTransfer && Array.from(e.dataTransfer.types).includes("Files");
+      let _lastOver = 0;
+      document.addEventListener("dragenter", (e: DragEvent) => {
+        if (!_isFileDrag(e)) return;
+        e.preventDefault();
+        const items = e.dataTransfer!.items;
+        let n = 0;
+        if (items) for (let i = 0; i < items.length; i++) if (items[i].kind === "file") n++;
+        _wv.postMessage(`file-drop-enter:${n}:${e.clientX}:${e.clientY}`);
+      });
+      document.addEventListener("dragover", (e: DragEvent) => {
+        if (!_isFileDrag(e)) return;
+        e.preventDefault();                       // THIS stops the file:// navigation
+        e.dataTransfer!.dropEffect = "copy";
+        const now = Date.now();
+        if (now - _lastOver >= 16) { _lastOver = now; _wv.postMessage(`file-drop-over:${e.clientX}:${e.clientY}`); }
+      });
+      document.addEventListener("dragleave", (e: DragEvent) => {
+        if (!_isFileDrag(e) || e.relatedTarget !== null) return;   // relatedTarget null = left the window
+        _wv.postMessage(`file-drop-leave:${e.clientX}:${e.clientY}`);
+      });
+      document.addEventListener("drop", (e: DragEvent) => {
+        if (!_isFileDrag(e)) return;
+        e.preventDefault();
+        const files = e.dataTransfer!.files;
+        if (files && files.length)
+          _wv.postMessageWithAdditionalObjects(`file-drop:${e.clientX}:${e.clientY}`, Array.from(files) as any);
+      });
     }
   }
 

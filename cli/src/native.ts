@@ -173,6 +173,7 @@ export function getPlatformSources(nativeDir: string, target: BuildTarget = dete
       path.join(windowsDir, "popover.c"),
       path.join(windowsDir, "fs.c"),
       path.join(windowsDir, "titlebar.c"),
+      path.join(windowsDir, "filedrop.c"),
       // TEMP: stubs for darwin_* symbols with no windows_* impl yet (window
       // shims, devtools, toolbar, …). Shrinks as Phase C lands real impls; see
       // native/platform/windows/nim_gaps.c.
