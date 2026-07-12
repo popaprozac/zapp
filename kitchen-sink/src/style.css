@@ -87,3 +87,19 @@ h2 { font-size: 16px; color: var(--text-h); margin: 0 0 8px; font-weight: 600; }
 }
 .inspector-title { opacity: 0.5; font-size: 11px; letter-spacing: 0.06em; margin-bottom: 10px; }
 .kv b { color: var(--text-h); display: block; margin-bottom: 4px; }
+
+/* Inspector live-event log (notifications response metadata, etc.) */
+.notif-log {
+  max-height: 60vh; overflow-y: auto;
+  font-size: 12px; line-height: 1.5;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.notif-row {
+  padding: 5px 8px; border-radius: 6px;
+  border: 1px solid transparent;
+}
+.notif-row b { color: var(--text-h); font-weight: 600; }
+.notif-row .notif-t { opacity: 0.45; font-family: ui-monospace, Consolas, monospace; font-size: 11px; }
+/* A user interaction (click/action) — highlighted so it stands out from lifecycle rows. */
+.notif-row--hit { background: var(--accent-bg); border-color: var(--border); }
+.notif-row--hit b { color: var(--accent); }
