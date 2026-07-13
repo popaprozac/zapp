@@ -45,49 +45,50 @@ static wchar_t zapp_si_title[160] = L""; // = identifier (per-app uniqueness)
 void windows_dispatch_open_url(const char* url) {
     if (!url || !url[0]) return;
 
-    // Layer 1: native app event (fires without a webview).
-    size_t plen = strlen(url) + 32;
-    char* payload = (char*) malloc(plen);
-    if (payload) {
-        snprintf(payload, plen, "{\"url\":\"%s\"}", url);
-        // url is a system-supplied scheme URL; embedded quotes are
-        // percent-encoded, so the naive wrap is safe here.
-        zapp_app_dispatch(ZAPP_EVENT_APP_OPEN_URL, payload);
-        free(payload);
-    }
-
-    // Layer 2: JS bridge (best-effort — no-ops if no webview is ready,
-    // matching darwin_webview_eval_all on a cold deep-link launch).
-    // Two-layer encode: url is JSON-encoded into an inline JSON object
-    // (urlLit — a complete quoted JSON string), and THAT payload is
-    // separately JS-encoded (payloadLit) as the _onEvent argument. The
-    // event name is also encoded so nothing here relies on manual quoting.
-    char* urlLit = zapp_js_lit_dup(url);                     // "<url>"  (JSON string)
+    // Build the {"url":"<url>"} payload ONCE, with the url properly
+    // JSON-encoded (urlLit is a complete quoted JSON string value), and reuse
+    // the same well-formed payload for BOTH layers. Don't trust the input to
+    // be safe: a direct ShellExecute("myapp://x\"...") activation needn't
+    // percent-encode the `"`, which a naive `{"url":"%s"}` wrap would let
+    // corrupt the JSON — Layer 1 (native) parses it, and Layer 2's payload
+    // goes through jsLit so it can't inject, but a malformed payload fails
+    // JSON.parse on the JS side and the deep link silently doesn't deliver.
+    char* urlLit = zapp_js_lit_dup(url);                     // "<url>"  (JSON string value)
     if (urlLit) {
-        size_t json_len = strlen(urlLit) + 16;
-        char* url_payload = (char*) malloc(json_len);
-        if (url_payload) snprintf(url_payload, json_len, "{\"url\":%s}", urlLit); // {"url":"<url>"} valid JSON
-        char* payloadLit = zapp_js_lit_dup(url_payload ? url_payload : "{}");     // "<payload>" (JS literal)
-        char* nameLit = zapp_js_lit_dup("app:open-url");
-        if (payloadLit && nameLit) {
-            const char* tmpl =
-                "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
-                "if(b&&b._onEvent)b._onEvent(%s,%s);})();";
-            int needed = snprintf(NULL, 0, tmpl, nameLit, payloadLit);
-            if (needed > 0) {
-                char* js = (char*) malloc((size_t) needed + 1);
-                if (js) {
-                    snprintf(js, (size_t) needed + 1, tmpl, nameLit, payloadLit);
-                    windows_webview_eval_all(js);
-                    free(js);
+        size_t plen = strlen(urlLit) + 16;
+        char* payload = (char*) malloc(plen);
+        if (payload) {
+            snprintf(payload, plen, "{\"url\":%s}", urlLit); // {"url":"<url>"} — valid JSON
+
+            // Layer 1: native app event (fires without a webview).
+            zapp_app_dispatch(ZAPP_EVENT_APP_OPEN_URL, payload);
+
+            // Layer 2: JS bridge (best-effort — no-ops if no webview is ready,
+            // matching darwin_webview_eval_all on a cold deep-link launch).
+            // Reuse `payload`, JS-encode it (payloadLit) as the _onEvent arg;
+            // the event name is encoded too so nothing relies on manual quoting.
+            char* payloadLit = zapp_js_lit_dup(payload);     // "<payload>" (JS literal)
+            char* nameLit = zapp_js_lit_dup("app:open-url");
+            if (payloadLit && nameLit) {
+                const char* tmpl =
+                    "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+                    "if(b&&b._onEvent)b._onEvent(%s,%s);})();";
+                int needed = snprintf(NULL, 0, tmpl, nameLit, payloadLit);
+                if (needed > 0) {
+                    char* js = (char*) malloc((size_t) needed + 1);
+                    if (js) {
+                        snprintf(js, (size_t) needed + 1, tmpl, nameLit, payloadLit);
+                        windows_webview_eval_all(js);
+                        free(js);
+                    }
                 }
             }
+            free(payloadLit);
+            free(nameLit);
+            free(payload);
         }
-        free(url_payload);
-        free(payloadLit);
-        free(nameLit);
+        free(urlLit);
     }
-    free(urlLit);
 }
 
 // ---------------------------------------------------------------------------
