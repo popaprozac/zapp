@@ -116,17 +116,33 @@ void windows_material_apply_custom_theme(HWND hwnd, const char* caption,
 void windows_material_apply(HWND hwnd, const char* vibrancy) {
     if (!hwnd) return;
     windows_material_apply_theme(hwnd);
+    extern bool windows_titlebar_native_controls(void);
     int sbt = backdrop_for_vibrancy(vibrancy);
     if (sbt > 0) {
         int val = sbt;
         DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &val, sizeof(val));
-        // Full glass: the client must be ALPHA-composited for the backdrop to show
-        // through the panes' alpha-0 webviews — windowed WebView2 renders alpha-0
-        // as WHITE on a non-glass client ({1,1,1,1} proved this). Full glass on a
-        // WS_SYSMENU window makes DWM paint dead caption buttons ("ghost
-        // controls"); custom-titlebar windows therefore drop WS_SYSMENU
-        // (window.c), which removes DWM's caption chrome entirely.
-        MARGINS m = { 32767, 32767, 32767, 32767 };
+        // Full glass so the backdrop shows through the panes' alpha-0 webviews
+        // (windowed WebView2 renders alpha-0 as WHITE on a non-glass client). The
+        // margin depends on caption-button mode:
+        //   NATIVE (DWM) buttons → -1 "sheet of glass": DWM DRAWS min/max/close
+        //     (wanted here) and the glass fills the client for Mica.
+        //   WEB buttons → a big positive margin fills the client WITHOUT DWM's
+        //     caption chrome, which would otherwise be dead "ghost" buttons.
+        MARGINS m = windows_titlebar_native_controls()
+            ? (MARGINS){ -1, -1, -1, -1 }
+            : (MARGINS){ 32767, 32767, 32767, 32767 };
         DwmExtendFrameIntoClientArea(hwnd, &m);
+    } else if (windows_titlebar_native_controls()) {
+        // Opaque native-titlebar window (no backdrop). Two things are needed for
+        // DWM to draw the MODERN flat caption buttons instead of legacy ones:
+        //  1) extend the frame (sheet of glass) — without it DWM uses the old
+        //     caption-button rendering that only shows on interaction.
+        //  2) color the caption to the theme surface so the button strip matches
+        //     the dark/light content (no stray light bar). customTheme overrides.
+        MARGINS m = { -1, -1, -1, -1 };
+        DwmExtendFrameIntoClientArea(hwnd, &m);
+        int dark = strcmp(windows_get_theme(), "dark") == 0;
+        COLORREF c = dark ? RGB(32, 32, 32) : RGB(243, 243, 243);
+        DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, &c, sizeof(c));
     }
 }

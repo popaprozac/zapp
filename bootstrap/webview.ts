@@ -398,17 +398,12 @@
           let cluster = document.querySelector("[data-zapp-winctl]") as HTMLElement | null;
           if (inset <= 0) { if (cluster) cluster.remove(); return; }
           if (desc.length < 3) {
-            // NATIVE caption buttons (empty desc): render a buttonless NO-DRAG
-            // spacer over the cluster corner — without it the non-client drag
-            // region claims the corner and eats the native buttons' hover.
-            if (!cluster) {
-              cluster = document.createElement("div");
-              cluster.setAttribute("data-zapp-winctl", "");
-              (document.body || document.documentElement).appendChild(cluster);
-            }
-            cluster.innerHTML = "";
-            cluster.style.width = inset + "px";
-            cluster.style.background = "transparent";
+            // NATIVE (DWM) caption buttons (empty desc): render NOTHING over the
+            // button corner. DWM draws the buttons; the title-bar drag region must
+            // stay app-region:drag there so WebView2 forwards the NC hit-tests to
+            // the host's WM_NCHITTEST (→ HTMIN/MAX/CLOSE → DWM hover + Snap). The
+            // inset var still reserves the width so app content pads around them.
+            if (cluster) cluster.remove();
             return;
           }
           if (!cluster) {

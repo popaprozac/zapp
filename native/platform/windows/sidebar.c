@@ -14,11 +14,16 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <dwmapi.h>   // DwmGetWindowAttribute(DWMWA_CAPTION_BUTTON_BOUNDS)
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifndef DWMWA_CAPTION_BUTTON_BOUNDS
+#define DWMWA_CAPTION_BUTTON_BOUNDS 5   // DWMWINDOWATTRIBUTE enum value (NOT 30)
+#endif
 
 extern HINSTANCE zapp_get_hinstance(void);
 extern void windows_webview_create_ext(void* hwnd_ptr, bool inspectable, const char* url_override,
@@ -258,6 +263,48 @@ static void panes_register_classes(void) {
     RegisterClassExW(&split);
 }
 
+// Native (DWM) caption buttons: carve the caption-button rect out of the pane
+// container `pane` (positioned at pane_x,0 in host client coords, size pane_w×H)
+// so the top-level window owns those pixels — input falls through the hole to the
+// host's WM_NCHITTEST → DwmDefWindowProc gets the hover/press/Snap stream
+// (WebView2 otherwise swallows it, #446). DWM reports the exact rect (DPI/theme/
+// RTL aware) via DWMWA_CAPTION_BUTTON_BOUNDS. NULL region = full rect (no carve).
+// strip_w_logical = the caption-button cluster width (logical/96-dpi px), from
+// windows_titlebar_metrics (the same value reserved as the content inset).
+static void carve_caption_buttons(HWND host, HWND pane, int pane_x, int pane_w,
+                                  int pane_h, int strip_w_logical) {
+    if (!pane) return;
+    RECT btn;
+    if (FAILED(DwmGetWindowAttribute(host, DWMWA_CAPTION_BUTTON_BOUNDS, &btn, sizeof(btn)))) {
+        SetWindowRgn(pane, NULL, TRUE);
+        return;
+    }
+    // DWM's bounds gives the authoritative RIGHT + top/bottom of the button
+    // cluster, but its width can run a bit wider than the drawn buttons. Use our
+    // known cluster width (right-aligned to DWM's right edge) so the carve hugs
+    // the buttons exactly — no dead Mica gap on the left.
+    UINT dpi = GetDpiForWindow(host); if (!dpi) dpi = 96;
+    int strip_w = MulDiv(strip_w_logical, (int)dpi, 96);
+    if (strip_w > 0 && strip_w < btn.right - btn.left) btn.left = btn.right - strip_w;
+    // window-relative → host client → pane-relative.
+    RECT wr; GetWindowRect(host, &wr);
+    POINT co = { 0, 0 }; ClientToScreen(host, &co);
+    OffsetRect(&btn, wr.left - co.x, wr.top - co.y);
+    OffsetRect(&btn, -pane_x, 0);
+    // Maximized: after the client conversion the cluster top goes NEGATIVE (it
+    // extends into the off-screen frame), but DWM DRAWS it clamped to y=0 at full
+    // height. Pin the top to 0 while keeping the full height so the whole drawn
+    // button is carved (else the bottom is covered and looks too short).
+    if (btn.top < 0) { btn.bottom -= btn.top; btn.top = 0; }
+    RECT paneRect = { 0, 0, pane_w, pane_h }, overlap;
+    if (!IntersectRect(&overlap, &paneRect, &btn)) { SetWindowRgn(pane, NULL, TRUE); return; }
+    HRGN rgn = CreateRectRgn(0, 0, pane_w, pane_h);
+    HRGN hole = CreateRectRgnIndirect(&overlap);
+    CombineRgn(rgn, rgn, hole, RGN_DIFF);
+    DeleteObject(hole);
+    SetWindowRgn(pane, rgn, TRUE);   // system owns `rgn` after this
+}
+
 static HWND make_child(HWND parent, const wchar_t* cls) {
     return CreateWindowExW(0, cls, L"", WS_CHILD | WS_CLIPSIBLINGS, 0, 0, 0, 0,
                            parent, NULL, zapp_get_hinstance(), NULL);
@@ -345,6 +392,23 @@ int windows_panes_layout_ex(int32_t host_slot, bool resize_webviews) {
         }
         windows_webview_resize(p->host_slot, cw, H);
         windows_webview_notify_position(p->host_slot);
+
+        // Native (DWM) caption buttons: carve their rect out of the RIGHTMOST
+        // pane (inspector when expanded, else content) so DWM owns those pixels
+        // for hover / Snap / click; clear the region on the others.
+        extern bool windows_titlebar_native_controls(void);
+        extern bool windows_titlebar_enabled(int32_t);
+        extern bool windows_titlebar_metrics(int32_t, int*, int*);
+        if (windows_titlebar_native_controls() && windows_titlebar_enabled(p->host_slot)) {
+            int th = 0, ir = 0; windows_titlebar_metrics(p->host_slot, &th, &ir);  // ir = cluster width (logical)
+            HWND rightmost; int rx, rw;
+            if (insp_shown) { rightmost = p->inspector_child; rx = W - insp_w; rw = insp_w; }
+            else            { rightmost = p->content_child;   rx = content_left; rw = cw; }
+            if (p->content_child   && p->content_child   != rightmost) SetWindowRgn(p->content_child, NULL, TRUE);
+            if (p->inspector_child && p->inspector_child != rightmost) SetWindowRgn(p->inspector_child, NULL, TRUE);
+            if (p->sidebar_child) SetWindowRgn(p->sidebar_child, NULL, TRUE);
+            carve_caption_buttons(p->host_hwnd, rightmost, rx, rw, H, ir);
+        }
     }
     return 1;
 }

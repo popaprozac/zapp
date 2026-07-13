@@ -3,6 +3,7 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <dwmapi.h>   // DwmDefWindowProc (native DWM caption buttons)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -212,7 +213,30 @@ LRESULT CALLBACK zapp_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         return DefWindowProcW(hwnd, msg, wParam, lParam);
     }
 
+    // Native (DWM) caption buttons: let DwmDefWindowProc drive their hover/press
+    // + Snap Layouts. It only handles the caption-button messages (given the
+    // HTMINBUTTON/HTMAXBUTTON/HTCLOSE we return from WM_NCHITTEST) and passes the
+    // rest through — so it must run BEFORE our own handlers. No-op in web-button
+    // mode / non-custom windows.
+    {
+        extern bool windows_titlebar_enabled(int32_t);
+        extern bool windows_titlebar_native_controls(void);
+        if (windows_titlebar_enabled(wid) && windows_titlebar_native_controls()) {
+            LRESULT dwmr = 0;
+            if (DwmDefWindowProc(hwnd, msg, wParam, lParam, &dwmr)) return dwmr;
+        }
+    }
+
     switch (msg) {
+        // Native (DWM) mode: return the caption-button HT codes so DWM renders
+        // hover + Snap Layouts; fall through otherwise (DefWindowProc gives the
+        // resize borders, WebView2 forwards the drag region as HTCAPTION).
+        case WM_NCHITTEST: {
+            extern LRESULT windows_titlebar_nchittest(HWND, int32_t, LPARAM);
+            LRESULT ht = windows_titlebar_nchittest(hwnd, wid, lParam);
+            if (ht != HTNOWHERE) return ht;
+            break;
+        }
         case WM_SETTINGCHANGE: {
             // Apps light/dark preference flipped. The lParam string is
             // "ImmersiveColorSet" for theme flips; the handler re-reads
@@ -447,13 +471,19 @@ void* windows_window_create(WindowOptions* opts) {
         style |= WS_POPUP;
     } else {
         style |= WS_OVERLAPPED | WS_CAPTION;
-        // WS_SYSMENU only on windows keeping the standard title bar. On a custom
-        // titlebar (hidden/hiddenInset) DWM must draw NO caption chrome: with the
-        // full-glass frame extension (material.c), a WS_SYSMENU window gets dead
-        // DWM-painted caption buttons floating behind ours ("ghost controls").
-        // Min/maximize via taskbar / Win+arrows still work off the *BOX styles.
-        if (wopts_title_bar_style_tag(opts) != 1 && wopts_title_bar_style_tag(opts) != 2)
-            style |= WS_SYSMENU;
+        // WS_SYSMENU: kept for standard title bars AND for custom-titlebar windows
+        // in NATIVE (DWM) caption-button mode — there DWM draws min/max/close
+        // itself and WM_NCHITTEST + DwmDefWindowProc drive them (system menu +
+        // Alt+Space come free). Only WEB-button custom titlebars drop it (with the
+        // full-glass frame, a WS_SYSMENU window would get dead DWM caption chrome
+        // behind the web buttons — the "ghost controls").
+        {
+            extern bool windows_titlebar_native_controls(void);
+            int32_t tbs = wopts_title_bar_style_tag(opts);
+            bool custom_tb = (tbs == 1 || tbs == 2);
+            if (!custom_tb || windows_titlebar_native_controls())
+                style |= WS_SYSMENU;
+        }
         if (resizable)    style |= WS_THICKFRAME;
         if (minimizable)  style |= WS_MINIMIZEBOX;
         if (maximizable)  style |= WS_MAXIMIZEBOX;
@@ -612,7 +642,18 @@ void* windows_window_create(WindowOptions* opts) {
     bool has_sidebar = sidebar_url && sidebar_url[0];
     bool has_inspector = inspector_url && inspector_url[0];
 
-    if (has_sidebar || has_inspector) {
+    // Native (DWM) caption buttons need the caption-button rect carved out of a
+    // pane CONTAINER (SetWindowRgn — can't region the top-level window). So even
+    // a NON-paned custom-titlebar window in native mode is routed through the
+    // pane path (content-only): it mounts the single webview in content_child,
+    // which the carve then punches. Web-button mode keeps the direct mount.
+    extern bool windows_titlebar_native_controls(void);
+    int32_t tbs_now = wopts_title_bar_style_tag(opts);
+    bool custom_tb_now = (tbs_now == 1 || tbs_now == 2);
+    bool use_panes = (has_sidebar || has_inspector) ||
+                     (windows_titlebar_native_controls() && custom_tb_now);
+
+    if (use_panes) {
         extern void windows_panes_init(HWND host_hwnd, int32_t host_slot, int inspectable,
                                        const char* host_url,
                                        int32_t sidebar_slot, const char* sidebar_url,
@@ -656,6 +697,11 @@ void windows_window_show(void* handle) {
     if (handle) {
         ShowWindow((HWND)handle, SW_SHOW);
         SetForegroundWindow((HWND)handle);
+        // Native (DWM) caption buttons don't paint until the frame is
+        // recalculated once more after the window (and its webviews) are up —
+        // force it so they appear on launch, not only after the first relayout.
+        SetWindowPos((HWND)handle, NULL, 0, 0, 0, 0,
+            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
     }
 }
 

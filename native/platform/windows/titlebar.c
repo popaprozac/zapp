@@ -27,15 +27,21 @@ extern const char* windows_get_theme(void); // platform.c → "dark" | "light"
 void windows_titlebar_sync_web(int32_t window_id);
 void windows_titlebar_controls_desc(int32_t window_id, char* buf);
 
-// NATIVE vs WEB caption buttons. Native GDI buttons are fully functional
-// (visible/hover/click, no pane logic) — but ONLY on a non-glass client, where
-// windowed WebView2 renders the panes' alpha-0 as WHITE (no Mica). On the
-// full-glass client that Mica needs, GDI is alpha-0-invisible (physics), so
-// vibrancy windows use WEB buttons. A layered child (UpdateLayeredWindow,
-// premultiplied alpha — real alpha unlike GDI) is the future native-over-glass
-// path; the old WS_EX_LAYERED attempt "vanished" only because ULW was never
-// called (layered windows are invisible until their first update).
-bool windows_titlebar_native_controls(void) { return false; }
+// NATIVE (DWM) vs WEB caption buttons.
+//   true  → keep WS_SYSMENU + a "sheet of glass" frame ({-1}) so DWM DRAWS the
+//           min/max/close buttons itself (they composite above the webview);
+//           WM_NCHITTEST (windows_titlebar_nchittest) feeds DwmDefWindowProc the
+//           button hit-tests so hover + Snap Layouts + press work, and the system
+//           menu / Alt+Space come free from DefWindowProc. The one path to fully
+//           native caption chrome over Mica (GDI can't composite on glass; web
+//           buttons work but lack Snap Layouts + a clean system menu).
+//   false → web-rendered buttons (bootstrap/webview.ts).
+// The DWM path needs the windowed WebView2 to NOT cover the caption-button
+// corner (else it swallows the WM_NCMOUSEMOVE/WM_NCLBUTTONDOWN stream
+// DwmDefWindowProc needs — WebView2Feedback #446). We carve that rect out of the
+// rightmost pane container via SetWindowRgn (sidebar.c), so input falls through
+// to the host → native hover / Snap / click. See DWMWA_CAPTION_BUTTON_BOUNDS.
+bool windows_titlebar_native_controls(void) { return true; }
 
 typedef struct {
     bool    enabled;
@@ -61,6 +67,29 @@ static int tb_scale(HWND h, int v) {
     UINT dpi = GetDpiForWindow(h);
     if (!dpi) dpi = 96;
     return MulDiv(v, (int)dpi, 96);
+}
+
+// Native (DWM) mode: which caption-button HT* code covers the screen point in
+// lParam, or HTNOWHERE. Fed to WM_NCHITTEST so DwmDefWindowProc renders hover /
+// Snap Layouts / press. Buttons are right-aligned, order (l→r) min,max,close, so
+// from the right edge slot 0=close, 1=maximize, 2=minimize.
+LRESULT windows_titlebar_nchittest(HWND hwnd, int32_t window_id, LPARAM lParam) {
+    if (!windows_titlebar_enabled(window_id) || !windows_titlebar_native_controls())
+        return HTNOWHERE;
+    TitleBar* tb = &g_tb[window_id];
+    POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+    ScreenToClient(hwnd, &pt);                 // caption is reclaimed into client
+    int bw = tb_scale(hwnd, TB_BTN_W);
+    int bh = tb_scale(hwnd, TB_BTN_H);
+    if (bw <= 0 || pt.y < 0 || pt.y >= bh) return HTNOWHERE;
+    RECT rc; GetClientRect(hwnd, &rc);
+    int fromRight = rc.right - pt.x;
+    if (fromRight < 0 || fromRight >= 3 * bw) return HTNOWHERE;
+    int slot = fromRight / bw;                  // 0=close,1=max,2=min
+    if (slot == 0 && tb->state[TB_CLOSE] == 0) return HTCLOSE;
+    if (slot == 1 && tb->state[TB_MAX]   == 0) return HTMAXBUTTON;
+    if (slot == 2 && tb->state[TB_MIN]   == 0) return HTMINBUTTON;
+    return HTNOWHERE;
 }
 
 // Non-hidden buttons in min,max,close order → vis[]; returns the count. Hidden
@@ -218,17 +247,10 @@ void windows_titlebar_enable(HWND hwnd, int32_t window_id, int32_t style_tag) {
     SetMenu(hwnd, NULL);  // custom titlebar windows drop the native menu bar
 
     if (windows_titlebar_native_controls()) {
-        // NATIVE caption buttons: GDI child at the host's top-right, raised above
-        // the pane webviews (siblings clip it out of their render region). Works
-        // with the {1,1,1,1} frame margin — the client composites opaquely, so
-        // GDI is visible; only the -1 sheet-of-glass made it alpha-0-invisible.
-        tb_ensure_class();
-        if (!tb->btn) {
-            tb->btn = CreateWindowExW(0, TB_BTN_CLASS, L"",
-                WS_CHILD | WS_CLIPSIBLINGS | WS_VISIBLE, 0, 0, 0, 0,
-                hwnd, NULL, GetModuleHandleW(NULL), NULL);
-            if (tb->btn) SetWindowLongPtrW(tb->btn, GWLP_USERDATA, window_id);
-        }
+        // NATIVE (DWM) caption buttons: DWM draws them (WS_SYSMENU + sheet-of-glass
+        // frame, both in window.c/material.c); we only feed hit-tests via
+        // windows_titlebar_nchittest. No child window to create.
+        tb->btn = NULL;
     } else {
         // WEB-rendered caption buttons (bootstrap/webview.ts): the webview draws
         // them from --zapp-window-controls-inset-right + the data-zapp-window-*
@@ -254,12 +276,22 @@ bool windows_titlebar_nccalcsize(HWND hwnd, int32_t window_id, WPARAM wParam, LP
     // Reclaim the caption band so web content reaches the top edge; keep the
     // side/bottom resize-border insets DefWindowProc computed.
     p->rgrc[0].top = before.top;
-    // When maximized, Windows pushes the frame off-screen by the frame size;
-    // re-inset the top so content isn't clipped by the monitor edge.
+    // When maximized, Windows pushes the frame off-screen by the frame size, so
+    // the client top must move down to the monitor WORK-AREA top. Use the EXACT
+    // overhang (work-area top − proposed window top), not an SM_CYFRAME estimate:
+    // a pixel of slop at the top edge breaks DWM's Y=0 hover tracking when
+    // maximized (WM_NCMOUSEMOVE stops firing → caption buttons don't highlight).
     if (IsZoomed(hwnd)) {
-        UINT dpi = GetDpiForWindow(hwnd); if (!dpi) dpi = 96;
-        p->rgrc[0].top += MulDiv(GetSystemMetrics(SM_CYFRAME), dpi, 96)
-                        + MulDiv(GetSystemMetrics(SM_CXPADDEDBORDER), dpi, 96);
+        HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO mi = { sizeof(mi) };
+        int overhang = 0;
+        if (GetMonitorInfoW(mon, &mi)) overhang = mi.rcWork.top - before.top;
+        if (overhang <= 0) {   // fallback
+            UINT dpi = GetDpiForWindow(hwnd); if (!dpi) dpi = 96;
+            overhang = MulDiv(GetSystemMetrics(SM_CYFRAME), dpi, 96)
+                     + MulDiv(GetSystemMetrics(SM_CXPADDEDBORDER), dpi, 96);
+        }
+        p->rgrc[0].top += overhang;
     }
     return true;
 }
@@ -404,5 +436,49 @@ void windows_titlebar_set_focused(int32_t window_id, bool focused) {
         "(function(){var r=document.documentElement;"
         "if(r)r.setAttribute('data-zapp-window-focused','%d');})();", focused ? 1 : 0);
     windows_webview_eval_by_id(windows_pane_controls_slot(window_id), js);
+}
+
+// System menu (Restore/Move/Size/Minimize/Maximize/Close) at screen (x,y) —
+// right-click on the title bar / Alt+Space. Custom-titlebar windows drop
+// WS_SYSMENU (so DWM paints no dead caption chrome on the Mica glass), which
+// also silences DefWindowProc's built-in menu — so we build + show it ourselves.
+void windows_titlebar_show_sysmenu(HWND hwnd, int32_t window_id, int x, int y) {
+    BOOL zoomed = IsZoomed(hwnd);
+    TitleBar* tb = (window_id >= 0 && window_id < ZAPP_MAX_WINDOWS) ? &g_tb[window_id] : NULL;
+    int min_ok = tb ? (tb->state[TB_MIN] == 0) : 1;
+    int max_ok = tb ? (tb->state[TB_MAX] == 0) : 1;
+    int close_ok = tb ? (tb->state[TB_CLOSE] == 0) : 1;
+
+    HMENU m = CreatePopupMenu();
+    if (!m) return;
+    AppendMenuW(m, MF_STRING, SC_RESTORE, L"&Restore");
+    AppendMenuW(m, MF_STRING, SC_MOVE, L"&Move");
+    AppendMenuW(m, MF_STRING, SC_SIZE, L"&Size");
+    AppendMenuW(m, MF_STRING, SC_MINIMIZE, L"Mi&nimize");
+    AppendMenuW(m, MF_STRING, SC_MAXIMIZE, L"Ma&ximize");
+    AppendMenuW(m, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(m, MF_STRING, SC_CLOSE, L"&Close\tAlt+F4");
+    // Standard enable/disable (what DefWindowProc sets on a captioned window) +
+    // the app's windowControls gating.
+    EnableMenuItem(m, SC_RESTORE,  MF_BYCOMMAND | (zoomed ? MF_ENABLED : MF_GRAYED));
+    EnableMenuItem(m, SC_MOVE,     MF_BYCOMMAND | (zoomed ? MF_GRAYED : MF_ENABLED));
+    EnableMenuItem(m, SC_SIZE,     MF_BYCOMMAND | (zoomed ? MF_GRAYED : MF_ENABLED));
+    EnableMenuItem(m, SC_MINIMIZE, MF_BYCOMMAND | (min_ok ? MF_ENABLED : MF_GRAYED));
+    EnableMenuItem(m, SC_MAXIMIZE, MF_BYCOMMAND | ((max_ok && !zoomed) ? MF_ENABLED : MF_GRAYED));
+    EnableMenuItem(m, SC_CLOSE,    MF_BYCOMMAND | (close_ok ? MF_ENABLED : MF_GRAYED));
+    SetMenuDefaultItem(m, SC_CLOSE, FALSE);
+
+    // TrackPopupMenu needs the owner to be the foreground window or it returns
+    // 0 immediately without showing (the "needs a second right-click" symptom).
+    // The right-click arrived via WebView2's NC forwarding while the webview
+    // CHILD held focus, so force the top-level foreground first.
+    SetForegroundWindow(hwnd);
+    int cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_LEFTBUTTON,
+                             x, y, 0, hwnd, NULL);
+    DWORD err = GetLastError();
+    fprintf(stderr, "[zapp/menu] TrackPopupMenu cmd=%d err=%lu fg=%d\n",
+            cmd, err, GetForegroundWindow() == hwnd);
+    DestroyMenu(m);
+    if (cmd) PostMessageW(hwnd, WM_SYSCOMMAND, (WPARAM)cmd, 0);
 }
 
