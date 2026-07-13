@@ -189,6 +189,22 @@ proc app_get_active(): pointer {.exportc, cdecl.} = addr gActiveAppSentinel
 # the CLI-generated .zapp/zapp_platform.nim (imported above) — per-target. Only
 # zjs.c's compile + its include passC stay here (target-agnostic).
 
+# ---------------------------------------------------------------------------
+# jslit.c — the ONE safe native->JS string-literal encoder (finding #2, P0
+# security fix). Dependency-free C (no headers beyond libc, no per-file
+# flags). Task 1 put the {.compile("../shared/jslit.c", "").} pragma here;
+# Task 2 moved it INTO native/nim/jslit.nim instead (jsLit's own module),
+# because every main-thread call site now does `import jslit` (app_events,
+# dispatch, bridge, worker_service) — a second identical {.compile.} pragma
+# here would register the same C file twice for this binary and produce a
+# "duplicate symbol '_zapp_js_lit_dup'" LINK ERROR (confirmed empirically;
+# Nim 2.2.10 does not dedupe by resolved path across two modules). Keeping
+# the pragma in the single module that owns the symbol is also just the
+# more correct home for it. See cli/src/jslit-transport.test.ts for the
+# adversarial round-trip gate and native/nim/tests/jslit_test.nim for the
+# native unit test.
+# ---------------------------------------------------------------------------
+
 # zjs.c extern surface NOT satisfied by the provider .o / worker_service /
 # skeleton. Real impls live in not-yet-ported modules (permissions, the
 # event/dispatch layer, the worker supervisor + registry, bridge/dispatch.zc).
@@ -202,8 +218,8 @@ proc app_get_active(): pointer {.exportc, cdecl.} = addr gActiveAppSentinel
 # its verbose worker-lifecycle lines on `>= 1`; 0 keeps the default-quiet path.
 var zapp_log_level {.exportc.}: cint = 0
 
-# dispatch_event_to_all + zapp_escape_dup now live in dispatch.nim (the real
-# escaping broadcast helpers), imported transitively via callbacks/app_events.
+# dispatch_event_to_all now lives in dispatch.nim (the real broadcast helper,
+# routed through jsLit), imported transitively via callbacks/app_events.
 
 # worker_post_message (worker→worker dispatch) + worker_dispatch_to_webview
 # (worker→webview delivery) now live in worker.nim (imported above) — the

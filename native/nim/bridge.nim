@@ -5,6 +5,7 @@
 ## the bootstrap bridge (bootstrap/webview.ts) stops resolving promises.
 import std/[json, options]
 import nativeabi
+import jslit  # jsLit — the ONE safe native->JS string-literal encoder (finding #2, P0)
 
 type BridgeMsg* = object
   ## A decoded webview->native envelope. Mirrors the protocol the bootstrap
@@ -35,19 +36,6 @@ proc parseBridge*(raw: string): Option[BridgeMsg] =
 # synchronously, so the caller may free immediately after the call.
 proc nativeWindowEvalJs(windowId: int32, js: cstring) {.importc: abiPrefix & "window_eval_js", cdecl.}
 
-proc escapeJsSingleQuoted*(s: string): string =
-  ## Escape a string as the CONTENTS of a JS single-quoted literal. Byte-for-byte
-  ## the same transform as bridge/dispatch.zc's zapp_escape_dup: backslash,
-  ## single-quote, and the two line terminators are the only chars escaped.
-  result = newStringOfCap(s.len + 8)
-  for c in s:
-    case c
-    of '\\': result.add("\\\\")
-    of '\'': result.add("\\'")
-    of '\n': result.add("\\n")
-    of '\r': result.add("\\r")
-    else: result.add(c)
-
 proc sendInvokeResponse*(windowId, requestId: int, ok: bool, payload: string) =
   ## Send an invoke result back to the webview's bridge. Wire-identical to
   ## bridge/dispatch.zc:dispatch_invoke_response so the bootstrap's
@@ -60,6 +48,6 @@ proc sendInvokeResponse*(windowId, requestId: int, ok: bool, payload: string) =
   let okLit = if ok: "true" else: "false"
   let js = "(function(){var b=globalThis[Symbol.for('zapp.bridge')];" &
            "if(b&&typeof b._onInvokeResult==='function'){" &
-           "b._onInvokeResult(" & $requestId & "," & okLit & ",'" &
-           escapeJsSingleQuoted(payload) & "');}})();"
+           "b._onInvokeResult(" & $requestId & "," & okLit & "," &
+           jsLit(payload) & ");}})();"
   nativeWindowEvalJs(windowId.int32, js.cstring)

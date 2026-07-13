@@ -19,12 +19,15 @@
 ##   zapp_app_dispatch(int, const char*) -> int    app_events.zc:42
 ##
 ## The Layer-3 IIFE string, the 104..116 JS-name map, and the STARTED/SHUTDOWN
-## skip-list BYTE-MATCH app_events.zc — they are the wire contract. The `'%s'`
-## data interpolation in the .zc is an UNESCAPED passthrough, so `$data` here
-## matches it (no extra escaping the source doesn't have).
+## skip-list BYTE-MATCH app_events.zc — they are the wire contract. The .zc's
+## `'%s'` data interpolation was an UNESCAPED passthrough (finding #2, P0
+## injection); this port instead routes every interpolated value through
+## jsLit (native/shared/jslit.c) so each becomes a complete, safe JS string
+## literal — a deliberate, intentional divergence from the .zc byte-shape.
 
 import events, dispatch  # events: aeStarted/aeShutdown skip-list; dispatch: worker_broadcast_eval_js + nativeWebviewEvalAll
 import nativeabi
+import jslit  # jsLit — the ONE safe native->JS string-literal encoder (finding #2, P0)
 
 const
   ZAPP_APP_EVENT_BASE = 100
@@ -93,7 +96,7 @@ proc zapp_app_dispatch(eventId: cint, data: cstring): cint {.exportc, cdecl.} =
     let safeData = (if data.isNil: "" else: $data)
     let wjs = "(function(){var b=self.__zappBridge||globalThis.__zappBridge;" &
               "if(b&&b._dispatchAppEvent)b._dispatchAppEvent(" & $eventId &
-              ",'" & safeData & "');})();"
+              "," & jsLit(safeData) & ");})();"
     worker_broadcast_eval_js(wjs.cstring)
 
   # Layer 3: forward to all WebViews, skipping STARTED/SHUTDOWN.
@@ -101,10 +104,10 @@ proc zapp_app_dispatch(eventId: cint, data: cstring): cint {.exportc, cdecl.} =
     let name = appEventJsName(eventId)
     if name.len > 0:
       # app_events.zc:104 — safe_data defaults to "{}" for the WebView layer
-      # (Layer 2 uses ""), and is interpolated UNESCAPED (passthrough).
+      # (Layer 2 uses ""). Both name and data are jsLit-encoded (finding #2).
       let safe = (if data.isNil: "{}" else: $data)
       let js = "(function(){var b=globalThis[Symbol.for('zapp.bridge')];" &
-               "if(b&&b._onEvent)b._onEvent('" & name & "','" & safe & "');})();"
+               "if(b&&b._onEvent)b._onEvent(" & jsLit(name) & "," & jsLit(safe) & ");})();"
       nativeWebviewEvalAll(js.cstring)
 
   return fired

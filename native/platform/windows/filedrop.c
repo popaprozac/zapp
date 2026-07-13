@@ -22,26 +22,28 @@
 #include <stdint.h>
 
 extern void windows_webview_eval_by_id(int32_t window_id, const char* js);
-extern char* zapp_escape_dup(const char* src);   // JS single-quote escape
+extern char* zapp_js_lit_dup(const char* utf8);  // native/shared/jslit.c — complete quoted JSON/JS literal
 
 // Emit a drop event into the window's webview. Mirrors darwin's
 // zapp_dispatchDropEvent (webview.m): bridge._onEvent('<event>', '<json>')
 // with the RAW event name and untouched payload — NOT dispatchWindowEvent,
 // which is hardcoded for resize/move and would strip `paths` + prefix "window:".
 static void fd_emit(int32_t slot, const char* event, const char* data_json) {
-    char* esc = zapp_escape_dup(data_json);
-    if (!esc) return;
+    char* esc_name = zapp_js_lit_dup(event);
+    char* esc_payload = zapp_js_lit_dup(data_json);
+    if (!esc_name || !esc_payload) { free(esc_name); free(esc_payload); return; }
     const char* tmpl =
         "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
         "if(b&&typeof b._onEvent==='function'){"
-        "b._onEvent('%s','%s');}})();";
-    int needed = snprintf(NULL, 0, tmpl, event, esc);
+        "b._onEvent(%s,%s);}})();";
+    int needed = snprintf(NULL, 0, tmpl, esc_name, esc_payload);
     if (needed > 0) {
         char* js = (char*)malloc((size_t)needed + 1);
-        if (js) { snprintf(js, (size_t)needed + 1, tmpl, event, esc);
+        if (js) { snprintf(js, (size_t)needed + 1, tmpl, esc_name, esc_payload);
                   windows_webview_eval_by_id(slot, js); free(js); }
     }
-    free(esc);
+    free(esc_name);
+    free(esc_payload);
 }
 
 // Append `s` to *buf RAW (structural JSON — braces, keys, coords). No escaping.

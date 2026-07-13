@@ -4,7 +4,7 @@
 ## window layer (human smoke, Task 2 Step 4); here we only need the engine
 ## resolver, which is pure (libc fprintf + a registry display-name read).
 ##
-## worker.nim importc's the zjs engine + window + escape C symbols; none are
+## worker.nim importc's the zjs engine + window + jslit C symbols; none are
 ## CALLED by these tests, but the link needs them, so stub them as {.exportc.}
 ## Nim defs — the permissions_test / callbacks_test pattern. The registry C-ABI
 ## (set_engine/get_engine/get_display_name) is satisfied by the real
@@ -13,8 +13,9 @@
 
 import ../worker
 
-# Stub the importc'd engine + window + escape symbols worker.nim links against
-# (never called by the resolver tests — only the link needs them).
+# Stub the importc'd engine + window + zapp_js_lit_dup (finding #2) symbols
+# worker.nim links against (never called by the resolver tests — only the
+# link needs them).
 proc zjs_worker_create(scriptUrl, ownerId, workerId: cstring): bool
   {.exportc, cdecl.} = false
 proc zjs_worker_post_message(workerId, dataJson: cstring) {.exportc, cdecl.} = discard
@@ -24,7 +25,7 @@ proc zjs_worker_eval_js(workerId, js: cstring) {.exportc, cdecl.} = discard
 proc darwin_window_numeric_id_for_string(wid: cstring): int32
   {.exportc, cdecl.} = -1
 proc darwin_window_eval_js(numericId: int32, js: cstring) {.exportc, cdecl.} = discard
-proc zapp_escape_dup(s: cstring): cstring {.exportc, cdecl.} = s
+proc zapp_js_lit_dup(s: cstring): cstring {.exportc, cdecl.} = s
 
 proc test() =
   # zjs-only build: every request resolves to zjs (7). 7 honored; -1 (no

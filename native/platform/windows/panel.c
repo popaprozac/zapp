@@ -29,7 +29,7 @@
 extern HWND zapp_get_hwnd(int32_t window_id);                       // window.c
 extern ICoreWebView2Environment* zapp_get_webview_environment(void); // webview.c
 extern void windows_webview_eval_by_id(int32_t window_id, const char* js); // webview.c
-extern char* zapp_escape_dup(const char* src);                     // dispatch.zc (JS single-quote escape)
+extern char* zapp_js_lit_dup(const char* utf8);  // native/shared/jslit.c — complete quoted JSON/JS literal
 
 // --- utf8/wchar helpers (webview.c's are static; keep local copies) ---
 static wchar_t* p_u2w(const char* s) {
@@ -146,20 +146,13 @@ static ZappWinPanel* panel_alloc(void) {
 // data_json is already-JSON (or NULL → undefined); JS-escaped for the literal.
 static void panel_emit(ZappWinPanel* p, const char* event, const char* data_json) {
     if (!p) return;
-    char* data_arg = NULL;       // "undefined" or "'<escaped json>'"
-    char* esc = NULL;
-    if (data_json) {
-        esc = zapp_escape_dup(data_json);
-        if (esc) {
-            size_t len = strlen(esc) + 3;
-            data_arg = (char*)malloc(len);
-            if (data_arg) snprintf(data_arg, len, "'%s'", esc);
-        }
-    }
+    // zapp_js_lit_dup's result is a COMPLETE, already-quoted JS/JSON string
+    // literal — use it directly as the arg, no manual '%s' wrapping.
+    char* esc = data_json ? zapp_js_lit_dup(data_json) : NULL;
     const char* tmpl =
         "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
         "if(b&&typeof b.dispatchPanelEvent==='function'){b.dispatchPanelEvent('%s','%s',%s);}})();";
-    const char* arg = data_arg ? data_arg : "undefined";
+    const char* arg = esc ? esc : "undefined";
     int needed = snprintf(NULL, 0, tmpl, p->panel_id, event, arg);
     if (needed > 0) {
         char* js = (char*)malloc((size_t)needed + 1);
@@ -170,7 +163,6 @@ static void panel_emit(ZappWinPanel* p, const char* event, const char* data_json
         }
     }
     free(esc);
-    free(data_arg);
 }
 
 // ============================================================

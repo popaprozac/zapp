@@ -11,7 +11,7 @@ import std/json
 import std/options
 import apptypes        # App, AppServiceHandler
 import service         # registeredServices, invokeService
-import bridge          # escapeJsSingleQuoted
+import jslit           # jsLit — the ONE safe native->JS string-literal encoder (finding #2, P0)
 import jsonvalue     # JsonValue C-ABI provider (compiled into the build) + withArgsNode
 
 type SnapEntry = object
@@ -89,6 +89,6 @@ proc zapp_worker_invoke_on_main*(workerId: cstring, reqId: cint,
     payload = e.msg
   let iife =
     "(function(){var b=self.__zappBridge;if(b&&b._resolveInvoke){b._resolveInvoke(" &
-    $reqId.int & "," & (if ok: "true" else: "false") & ",'" &
-    escapeJsSingleQuoted(payload) & "');}})();"
+    $reqId.int & "," & (if ok: "true" else: "false") & "," &
+    jsLit(payload) & ");}})();"
   worker_eval_js(workerId, iife.cstring)
