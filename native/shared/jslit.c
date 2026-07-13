@@ -1,7 +1,6 @@
 #include "jslit.h"
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
 
 char* zapp_js_lit_dup(const char* utf8) {
   if (utf8 == NULL) utf8 = "";

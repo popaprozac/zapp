@@ -12,12 +12,14 @@
 ## Thread discipline: zjs.c calls worker_dispatch_to_webview (zjs.c:645, from
 ## host_post_to_webview) possibly on a WORKER pthread → the whole delivery path
 ## (worker_dispatch_to_webview / dispatchToWindow) is {.gcsafe.} + libc only.
-## NO Nim string / seq / GC anywhere on it. Escaping reuses dispatch.nim's
-## zapp_escape_dup (libc malloc; zjs.c's own escaper) and the IIFE is built with
-## libc snprintf/malloc — byte-faithful to app.zc:220-241. darwin_window_eval_js
-## copies the buffer synchronously before queueing onto the main thread, so it is
-## safe to call from any thread (window.m). The compiler enforces gcsafe under
-## --threads:on (cli/src/native.ts:1212).
+## NO Nim string / seq / GC anywhere on it. Encoding calls zapp_js_lit_dup
+## (native/shared/jslit.c, finding #2 P0 fix — the ONE safe native->JS literal
+## encoder; libc malloc, caller frees) DIRECTLY, not the Nim jsLit() wrapper,
+## so no Nim heap/GC touches this path. The IIFE is built with libc
+## snprintf/malloc; darwin_window_eval_js copies the buffer synchronously
+## before queueing onto the main thread, so it is safe to call from any thread
+## (window.m). The compiler enforces gcsafe under --threads:on
+## (cli/src/native.ts:1212).
 
 import registry   # registryFirstOwner (gcsafe)
 import nativeabi
@@ -35,9 +37,12 @@ proc zapp_worker_registry_set_engine(workerId: cstring, engine: cint) {.importc,
 proc zapp_worker_registry_get_engine(workerId: cstring): cint {.importc, cdecl.}
 proc zapp_worker_registry_get_display_name(workerId: cstring): cstring {.importc, cdecl.}
 
-# --- escaping (dispatch.nim B4) + platform window eval (window.m) -----------
-# zapp_escape_dup: libc malloc'd escaped copy (\ ' \n \r); caller free()s.
-proc zapp_escape_dup(s: cstring): cstring {.importc, cdecl.}
+# --- safe JS literal encoding (native/shared/jslit.c) + platform window eval
+# (window.m) -----------------------------------------------------------------
+# zapp_js_lit_dup: libc malloc'd COMPLETE double-quoted JS string literal
+# (finding #2, P0); caller free()s. Called directly (not via jslit.nim's
+# jsLit wrapper) to keep this path pure libc — no Nim heap on a worker pthread.
+proc zapp_js_lit_dup(s: cstring): cstring {.importc, cdecl.}
 # Reverse-lookup "win-<n>" → numeric window id (window.m:475); -1 if no match.
 proc nativeWindowNumericIdForString(wid: cstring): int32 {.importc: abiPrefix & "window_numeric_id_for_string", cdecl.}
 # Eval JS in a window's webview (window.m); copies the buffer synchronously
@@ -124,16 +129,18 @@ proc worker_terminate_owner*(ownerId: cstring) {.exportc, cdecl, gcsafe.} =
 
 # Deliver one worker message to one owner window (port of
 # app.zc:worker_dispatch_to_window, 184-243). Resolve the owner "win-<n>" id
-# string → numeric, build the _onWorkerMessage IIFE (escape workerId + dataJson
-# via zapp_escape_dup), eval it, then free every libc buffer. gcsafe + libc:
-# worker-thread-reachable. The IIFE template is byte-identical to app.zc:220-223.
+# string → numeric, build the _onWorkerMessage IIFE (workerId + dataJson each
+# encoded as a complete, safe JS string literal via zapp_js_lit_dup — finding
+# #2), eval it, then free every libc buffer. gcsafe + libc: worker-thread-
+# reachable. The IIFE shape mirrors app.zc:220-223 (the `'%s'` template is now
+# `%s` since the literal carries its own quotes).
 proc dispatchToWindow(workerId, dataJson, ownerId: cstring) {.gcsafe.} =
   let numericId = nativeWindowNumericIdForString(ownerId)
   if numericId < 0: return
 
-  let escWid = zapp_escape_dup(workerId)
+  let escWid = zapp_js_lit_dup(workerId)
   if escWid == nil: return
-  let escData = zapp_escape_dup(dataJson)
+  let escData = zapp_js_lit_dup(dataJson)
   if escData == nil:
     c_free(escWid)
     return
@@ -141,7 +148,7 @@ proc dispatchToWindow(workerId, dataJson, ownerId: cstring) {.gcsafe.} =
   const tmpl = cstring(
     "(function(){var b=globalThis[Symbol.for('zapp.bridge')];" &
     "if(b&&typeof b._onWorkerMessage==='function'){" &
-    "b._onWorkerMessage('%s','%s');}})();")
+    "b._onWorkerMessage(%s,%s);}})();")
   let needed = c_snprintf(nil, 0, tmpl, escWid, escData)
   if needed < 0:
     c_free(escWid); c_free(escData)

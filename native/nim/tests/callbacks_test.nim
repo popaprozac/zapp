@@ -1,5 +1,6 @@
 import std/strutils
 import ../callbacks
+import ../jslit
 
 # Standalone-link seam: the real binary resolves zapp_dispatch_event_to_js from
 # the untouched window.m. This test doesn't compile window.m, so provide a no-op
@@ -26,8 +27,14 @@ proc test() =
   zapp_window_set_backend_listener(2, 3, 1)   # window 2: worker subscribes to event 3
   workerJs = ""
   discard zapp_dispatch_event(2, 3, 100, 200, 0, 0)
-  doAssert workerJs.contains("b._onEvent('window:event'")
-  doAssert workerJs.contains("\"event\":3")
-  doAssert workerJs.contains("\"w\":100")
+  # window:event fan-out now routes both the fixed name AND the all-integer
+  # payload through jsLit (finding #2) — compute the expected literal with the
+  # same primitive under test so this asserts callbacks.nim's WIRING (right
+  # name, right payload, right IIFE shape), not a hand-transcribed
+  # re-implementation of jsLit's escaping (covered by jslit_test.nim /
+  # cli/src/jslit-transport.test.ts).
+  let rawPayload = "{\"windowId\":2,\"event\":3,\"w\":100,\"h\":200,\"x\":0,\"y\":0}"
+  let expected = "b._onEvent(" & jsLit("window:event") & "," & jsLit(rawPayload) & ")"
+  doAssert workerJs.contains(expected), "got: " & workerJs
   echo "callbacks ok"
 test()

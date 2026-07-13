@@ -24,6 +24,7 @@
 ##   zapp_dispatch_event(int,int,int,int,int,int)->int  callbacks.zc:94
 
 import events, coretypes, dispatch
+import jslit  # jsLit — the ONE safe native->JS string-literal encoder (finding #2, P0)
 
 type
   ## callbacks.zc's event cb is `int(*)(WindowEventData*)`. WindowEventData* is a
@@ -104,14 +105,17 @@ proc zapp_dispatch_event*(windowId, eventId, w, h, x, y: cint): cint {.exportc, 
   if (gJsListeners[windowId] and (1'u32 shl eventId.uint32)) != 0:
     zapp_dispatch_event_to_js(windowId, eventId, w, h, x, y)
 
-  # Layer 3: backend worker fan-out — build the window:event IIFE (all-integer,
-  # no escaping) and broadcast to every worker (callbacks.zc:131-136).
+  # Layer 3: backend worker fan-out — build the window:event IIFE and broadcast
+  # to every worker (callbacks.zc:131-136). winPayload is all-integer (no
+  # untrusted content) but still routed through jsLit — same as every other
+  # native->JS site (finding #2) — so the lint guard needs no exception here.
   if (gBackendListeners[windowId] and (1'u32 shl eventId.uint32)) != 0:
+    let winPayload = "{\"windowId\":" & $windowId &
+                      ",\"event\":" & $eventId & ",\"w\":" & $w & ",\"h\":" & $h &
+                      ",\"x\":" & $x & ",\"y\":" & $y & "}"
     let js = "(function(){var b=globalThis[Symbol.for('zapp.bridge')];" &
              "if(b&&typeof b._onEvent==='function'){" &
-             "b._onEvent('window:event','{\"windowId\":" & $windowId &
-             ",\"event\":" & $eventId & ",\"w\":" & $w & ",\"h\":" & $h &
-             ",\"x\":" & $x & ",\"y\":" & $y & "}');}})();"
+             "b._onEvent(" & jsLit("window:event") & "," & jsLit(winPayload) & ");}})();"
     worker_broadcast_eval_js(js.cstring)
 
   return EventResult.Allow.cint

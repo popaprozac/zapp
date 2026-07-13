@@ -192,17 +192,18 @@ proc app_get_active(): pointer {.exportc, cdecl.} = addr gActiveAppSentinel
 # ---------------------------------------------------------------------------
 # jslit.c — the ONE safe native->JS string-literal encoder (finding #2, P0
 # security fix). Dependency-free C (no headers beyond libc, no per-file
-# flags) — CALL-form {.compile.} with an empty flags arg (this Nim version's
-# call-form {.compile(path, flags).} requires exactly 2 arguments; a bare
-# {.compile(path).} errors with "'.compile' pragma takes up 2 arguments").
-# Target-agnostic like zjs.c above, so it lives here rather than in the
-# generated per-platform module. native/nim/jslit.nim wraps zapp_js_lit_dup
-# as jsLit() for main-thread Nim callers; worker-pthread paths import the C
-# symbol directly (libc-only, gcsafe). See cli/src/jslit-transport.test.ts
-# for the adversarial round-trip gate and native/nim/tests/jslit_test.nim
-# for the native unit test.
+# flags). Task 1 put the {.compile("../shared/jslit.c", "").} pragma here;
+# Task 2 moved it INTO native/nim/jslit.nim instead (jsLit's own module),
+# because every main-thread call site now does `import jslit` (app_events,
+# dispatch, bridge, worker_service) — a second identical {.compile.} pragma
+# here would register the same C file twice for this binary and produce a
+# "duplicate symbol '_zapp_js_lit_dup'" LINK ERROR (confirmed empirically;
+# Nim 2.2.10 does not dedupe by resolved path across two modules). Keeping
+# the pragma in the single module that owns the symbol is also just the
+# more correct home for it. See cli/src/jslit-transport.test.ts for the
+# adversarial round-trip gate and native/nim/tests/jslit_test.nim for the
+# native unit test.
 # ---------------------------------------------------------------------------
-{.compile("../shared/jslit.c", "").}
 
 # zjs.c extern surface NOT satisfied by the provider .o / worker_service /
 # skeleton. Real impls live in not-yet-ported modules (permissions, the
