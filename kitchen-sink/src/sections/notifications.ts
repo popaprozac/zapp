@@ -1,6 +1,6 @@
 import { Notification, Events } from "@zappdev/runtime";
 import type { Section } from "./types";
-import { card, onAct, setResult } from "../shell/ui";
+import { card, onAct, setResult, inspectorPanel } from "../shell/ui";
 
 // Category with an action button + text reply, so clicking an action (or
 // replying) produces rich response metadata (actionId, userText) that the
@@ -11,7 +11,6 @@ const CATEGORY_ID = "ks-demo";
 // render pane broadcasts lifecycle events (Events.emit → native t:3 → every
 // pane) and the inspector subscribes. Clicks/actions arrive natively (broadcast
 // to all panes), so the inspector reads those straight from Notification.on.
-const esc = (s: unknown) => String(s).replace(/[<&]/g, (c) => (c === "<" ? "&lt;" : "&amp;"));
 const short = (id: string) => (id ? id.slice(0, 8) : "—");
 
 export const notificationsSection: Section = {
@@ -90,52 +89,35 @@ export const notificationsSection: Section = {
   },
 
   inspector(host) {
-    host.innerHTML = `
-      <div class="kv">
-        <b>Notification state</b>
-        <div class="muted" data-perm>Permission: …</div>
-        <div class="muted" data-last>Last: —</div>
-      </div>
-      <div class="kv" style="margin-top:14px">
-        <b>Response log</b>
-        <div class="notif-log" data-log>
-          <p class="muted" data-empty>Show a notification, then click it (or an action) to see the metadata here.</p>
-        </div>
-      </div>`;
-    const perm = host.querySelector<HTMLElement>("[data-perm]")!;
-    const last = host.querySelector<HTMLElement>("[data-last]")!;
-    const log = host.querySelector<HTMLElement>("[data-log]")!;
-
-    const append = (label: string, detail: string, hit = false) => {
-      log.querySelector("[data-empty]")?.remove();
-      const row = document.createElement("div");
-      row.className = "notif-row" + (hit ? " notif-row--hit" : "");
-      const t = new Date().toLocaleTimeString();
-      row.innerHTML =
-        `<span class="notif-t">${t}</span> <b>${esc(label)}</b>` +
-        (detail ? ` <span class="muted">${detail}</span>` : "");
-      log.insertBefore(row, log.firstChild);
-      while (log.childElementCount > 40) log.lastElementChild!.remove();
-    };
+    const p = inspectorPanel(host, {
+      title: "Notification state",
+      fields: [
+        { key: "perm", label: "Permission", init: "…" },
+        { key: "last", label: "Last", init: "—" },
+      ],
+      log: {
+        title: "Response log",
+        empty: "Show a notification, then click it (or an action) to see the metadata here.",
+      },
+    });
 
     // Current permission (async authoritative snapshot).
     Notification.getPermissionStatus()
-      .then((s) => (perm.textContent = `Permission: ${s}`))
-      .catch(() => (perm.textContent = "Permission: unavailable"));
+      .then((s) => p.set("perm", s))
+      .catch(() => p.set("perm", "unavailable"));
 
     // Lifecycle from the render pane (separate webview, via Events broadcast).
-    const offLc = Events.on("ks:notif", (p: any) => {
-      if (p.kind === "permission") {
-        perm.textContent = `Permission: ${p.status}`;
-      } else if (p.kind === "shown") {
-        last.textContent =
-          `Last: ${short(p.id)} — ${p.title}` + (p.categoryId ? ` [${p.categoryId}]` : "");
-        append("shown", short(p.id));
-      } else if (p.kind === "updated") {
-        last.textContent = `Last: ${short(p.id)} — ${p.title} (updated)`;
-        append("updated", short(p.id));
-      } else if (p.kind === "removed") {
-        append("removed", short(p.id));
+    const offLc = Events.on("ks:notif", (m: any) => {
+      if (m.kind === "permission") {
+        p.set("perm", m.status);
+      } else if (m.kind === "shown") {
+        p.set("last", `${short(m.id)} — ${m.title}` + (m.categoryId ? ` [${m.categoryId}]` : ""));
+        p.log("shown", short(m.id));
+      } else if (m.kind === "updated") {
+        p.set("last", `${short(m.id)} — ${m.title} (updated)`);
+        p.log("updated", short(m.id));
+      } else if (m.kind === "removed") {
+        p.log("removed", short(m.id));
       }
     });
 
@@ -145,9 +127,9 @@ export const notificationsSection: Section = {
       const isAction = r.actionId && r.actionId !== "DEFAULT";
       const label = isAction ? `action · ${r.actionId}` : "clicked";
       const parts = [`id ${short(r.id)}`];
-      if (r.userText) parts.push(`reply “${esc(r.userText)}”`);
+      if (r.userText) parts.push(`reply “${r.userText}”`);
       if (r.categoryId) parts.push(`cat ${r.categoryId}`);
-      append(label, parts.join(" · "), true);
+      p.log(label, parts.join(" · "), true);
     });
 
     return () => {
