@@ -612,7 +612,7 @@ static ICoreWebView2NavigationCompletedEventHandlerVtbl ZappNav_Vtbl = {
 
 #include <shlwapi.h> // SHCreateMemStream
 
-extern char* zapp_escape_dup(const char* src);
+extern char* zapp_js_lit_dup(const char* utf8);  // native/shared/jslit.c — complete quoted JSON/JS literal
 extern char* zapp_build_custom_protocols_json(void);
 
 static ICoreWebView2Environment* zapp_webview_environment = NULL;
@@ -722,26 +722,43 @@ static HRESULT STDMETHODCALLTYPE Res_Invoke(ICoreWebView2WebResourceRequestedEve
     ICoreWebView2WebResourceRequestedEventArgs_AddRef(args);
     slot->active = 1;
 
-    // Fire __protocol:request to this window's bridge.
-    char* esc_url = zapp_escape_dup(url);
-    char* esc_scheme = zapp_escape_dup(scheme);
-    char* esc_method = zapp_escape_dup(method ? method : "GET");
-    if (esc_url && esc_scheme && esc_method) {
-        const char* tmpl =
-            "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
-            "if(b&&b._onEvent)b._onEvent('__protocol:request',"
-            "'{\"id\":\"%s\",\"scheme\":\"%s\",\"url\":\"%s\",\"method\":\"%s\"}');})();";
-        int needed = snprintf(NULL, 0, tmpl, slot->id, esc_scheme, esc_url, esc_method);
-        if (needed > 0) {
-            char* js = (char*)malloc((size_t)needed + 1);
-            if (js) {
-                snprintf(js, (size_t)needed + 1, tmpl, slot->id, esc_scheme, esc_url, esc_method);
-                windows_webview_eval_by_id(self->window_id, js);
-                free(js);
+    // Fire __protocol:request to this window's bridge. scheme/url/method are
+    // EXTERNAL (from the intercepted web request) — JSON-encode each as a JS/JSON
+    // string value via zapp_js_lit_dup (includes its own quotes), assemble the
+    // payload, then JS-encode the whole payload for the _onEvent arg (same
+    // two-layer pattern as deeplink.c). slot->id is an internal counter.
+    char* schemeLit = zapp_js_lit_dup(scheme);
+    char* urlLit    = zapp_js_lit_dup(url);
+    char* methodLit = zapp_js_lit_dup(method ? method : "GET");
+    if (schemeLit && urlLit && methodLit) {
+        size_t plen = strlen(schemeLit) + strlen(urlLit) + strlen(methodLit)
+                    + strlen(slot->id) + 64;
+        char* payload = (char*)malloc(plen);
+        if (payload) {
+            // slot->id is an internal "p<n>" counter — safe as a raw JSON string.
+            snprintf(payload, plen,
+                "{\"id\":\"%s\",\"scheme\":%s,\"url\":%s,\"method\":%s}",
+                slot->id, schemeLit, urlLit, methodLit);
+            char* payloadLit = zapp_js_lit_dup(payload);
+            if (payloadLit) {
+                const char* tmpl =
+                    "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+                    "if(b&&b._onEvent)b._onEvent(\"__protocol:request\",%s);})();";
+                int needed = snprintf(NULL, 0, tmpl, payloadLit);
+                if (needed > 0) {
+                    char* js = (char*)malloc((size_t)needed + 1);
+                    if (js) {
+                        snprintf(js, (size_t)needed + 1, tmpl, payloadLit);
+                        windows_webview_eval_by_id(self->window_id, js);
+                        free(js);
+                    }
+                }
+                free(payloadLit);
             }
+            free(payload);
         }
     }
-    free(esc_url); free(esc_scheme); free(esc_method);
+    free(schemeLit); free(urlLit); free(methodLit);
     free(url); free(method);
     return S_OK;
 }
