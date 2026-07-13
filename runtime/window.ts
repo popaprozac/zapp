@@ -134,6 +134,12 @@ export interface WindowOptions {
   url?: string;
   width?: number;
   height?: number;
+  /** Optional top-level size limits (logical px). Unset = no limit. Enforced
+   *  natively (Windows WM_GETMINMAXINFO / macOS contentMin/MaxSize). */
+  minWidth?: number;
+  minHeight?: number;
+  maxWidth?: number;
+  maxHeight?: number;
   x?: number;
   y?: number;
   /**

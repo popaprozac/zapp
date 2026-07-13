@@ -188,6 +188,8 @@ type
     url*: string
     width*: int32 = 1200
     height*: int32 = 800
+    # Optional top-level size limits (logical px). 0 = unset (no limit).
+    minWidth*, minHeight*, maxWidth*, maxHeight*: int32
     x*, y*: int32
     autoCenter*: bool
     visible*: bool = true
@@ -278,6 +280,10 @@ proc wopts_title(p: pointer): cstring {.exportc, cdecl.} = opt(p).title.cstring
 proc wopts_url(p: pointer): cstring {.exportc, cdecl.} = opt(p).url.cstring
 proc wopts_width(p: pointer): int32 {.exportc, cdecl.} = opt(p).width
 proc wopts_height(p: pointer): int32 {.exportc, cdecl.} = opt(p).height
+proc wopts_min_width(p: pointer): int32 {.exportc, cdecl.} = opt(p).minWidth
+proc wopts_min_height(p: pointer): int32 {.exportc, cdecl.} = opt(p).minHeight
+proc wopts_max_width(p: pointer): int32 {.exportc, cdecl.} = opt(p).maxWidth
+proc wopts_max_height(p: pointer): int32 {.exportc, cdecl.} = opt(p).maxHeight
 proc wopts_x(p: pointer): int32 {.exportc, cdecl.} = opt(p).x
 proc wopts_y(p: pointer): int32 {.exportc, cdecl.} = opt(p).y
 proc wopts_auto_center(p: pointer): bool {.exportc, cdecl.} = opt(p).autoCenter
@@ -671,6 +677,10 @@ proc windowOptsApplyJson*(o: WindowOptions, a: JsonNode) =
   if jHasStr(a, "url"): o.url = jStr(a, "url")
   if jHasNum(a, "width"): o.width = jI32(a, "width", o.width)
   if jHasNum(a, "height"): o.height = jI32(a, "height", o.height)
+  if jHasNum(a, "minWidth"): o.minWidth = jI32(a, "minWidth", o.minWidth)
+  if jHasNum(a, "minHeight"): o.minHeight = jI32(a, "minHeight", o.minHeight)
+  if jHasNum(a, "maxWidth"): o.maxWidth = jI32(a, "maxWidth", o.maxWidth)
+  if jHasNum(a, "maxHeight"): o.maxHeight = jI32(a, "maxHeight", o.maxHeight)
   if jHasNum(a, "x"): o.x = jI32(a, "x", o.x)
   if jHasNum(a, "y"): o.y = jI32(a, "y", o.y)
   if jHasBool(a, "visible"): o.visible = jBool(a, "visible", o.visible)

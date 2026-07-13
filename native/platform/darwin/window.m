@@ -846,6 +846,18 @@ void* darwin_window_create(WindowOptions* opts) {
             styleMask:styleMask backing:NSBackingStoreBuffered defer:NO];
         [window setReleasedWhenClosed:NO];
 
+        // Top-level size limits (WindowOptions.min/maxWidth/Height; 0 = unset).
+        // contentMin/MaxSize matches width/height being the CONTENT size above.
+        extern int32_t wopts_min_width(void*);  extern int32_t wopts_min_height(void*);
+        extern int32_t wopts_max_width(void*);  extern int32_t wopts_max_height(void*);
+        int32_t mnw = wopts_min_width(opts),  mnh = wopts_min_height(opts);
+        int32_t mxw = wopts_max_width(opts),  mxh = wopts_max_height(opts);
+        if (mnw > 0 || mnh > 0)
+            [window setContentMinSize:NSMakeSize(mnw > 0 ? mnw : 0, mnh > 0 ? mnh : 0)];
+        if (mxw > 0 || mxh > 0)
+            [window setContentMaxSize:NSMakeSize(mxw > 0 ? mxw : CGFLOAT_MAX,
+                                                 mxh > 0 ? mxh : CGFLOAT_MAX)];
+
         // Paint the host dark-or-light correctly before the WKWebView
         // shows up. windowBackgroundColor is a dynamic NSColor that
         // tracks the system's effective appearance without us having to

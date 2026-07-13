@@ -40,6 +40,7 @@ export const multiwindowSection: Section = {
         buttons: [
           { act: "plain", label: "New window" },
           { act: "small", label: "New window (small)" },
+          { act: "constrained", label: "Size-constrained" },
           { act: "vibrant", label: "Vibrancy (sidebar)" },
           { act: "shell", label: "New window (sidebar shell)" },
           { act: "flush-split", label: "Flush split (no separators)" },
@@ -62,6 +63,19 @@ export const multiwindowSection: Section = {
     onAct(host, "small", () =>
       open(host, "small window", () =>
         Window.create({ title: "Small", width: 400, height: 300 }),
+      ),
+    );
+    onAct(host, "constrained", () =>
+      open(host, "size-constrained window", () =>
+        // Top-level min/max size limits — try to resize below 360×280 or above
+        // 640×520 (enforced natively: Windows WM_GETMINMAXINFO / macOS
+        // contentMin/MaxSize).
+        Window.create({
+          title: "Size-constrained (360–640 × 280–520)",
+          width: 480, height: 360,
+          minWidth: 360, minHeight: 280,
+          maxWidth: 640, maxHeight: 520,
+        }),
       ),
     );
     onAct(host, "vibrant", () =>
@@ -145,6 +159,8 @@ export const multiwindowSection: Section = {
         Window.create({
           title: "Drawer",
           url: "#sheet=drawer",
+          width: 400,
+          height: 300,
           asSheetOf: win,
           presentation: "bottomSheet",
           detents: ["medium", "large"],

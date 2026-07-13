@@ -102,6 +102,11 @@ static int zapp_bridge_ready[ZAPP_MAX_WINDOWS] = {0};
 static int zapp_was_maximized[ZAPP_MAX_WINDOWS] = {0};
 static int zapp_was_minimized[ZAPP_MAX_WINDOWS] = {0};
 static int zapp_pending_focus[ZAPP_MAX_WINDOWS] = {0};
+// Top-level size limits (physical px, DPI-scaled at create; 0 = unset).
+static int zapp_min_w[ZAPP_MAX_WINDOWS] = {0};
+static int zapp_min_h[ZAPP_MAX_WINDOWS] = {0};
+static int zapp_max_w[ZAPP_MAX_WINDOWS] = {0};
+static int zapp_max_h[ZAPP_MAX_WINDOWS] = {0};
 
 // Fullscreen state
 static LONG zapp_pre_fullscreen_style[ZAPP_MAX_WINDOWS] = {0};
@@ -236,6 +241,20 @@ LRESULT CALLBACK zapp_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             LRESULT ht = windows_titlebar_nchittest(hwnd, wid, lParam);
             if (ht != HTNOWHERE) return ht;
             break;
+        }
+
+        // Top-level min/max size limits (WindowOptions.min/maxWidth/Height).
+        // ptMin/MaxTrackSize are WINDOW (frame-inclusive) sizes; our stored
+        // limits are the requested window px (initial width/height are also the
+        // full window rect via AdjustWindowRectEx), so apply directly. 0 = unset.
+        case WM_GETMINMAXINFO: {
+            MINMAXINFO* mmi = (MINMAXINFO*)lParam;
+            LRESULT r = DefWindowProcW(hwnd, msg, wParam, lParam);  // OS defaults first
+            if (zapp_min_w[wid] > 0) mmi->ptMinTrackSize.x = zapp_min_w[wid];
+            if (zapp_min_h[wid] > 0) mmi->ptMinTrackSize.y = zapp_min_h[wid];
+            if (zapp_max_w[wid] > 0) mmi->ptMaxTrackSize.x = zapp_max_w[wid];
+            if (zapp_max_h[wid] > 0) mmi->ptMaxTrackSize.y = zapp_max_h[wid];
+            return r;
         }
         case WM_SETTINGCHANGE: {
             // Apps light/dark preference flipped. The lParam string is
@@ -549,6 +568,16 @@ void* windows_window_create(WindowOptions* opts) {
     int32_t pre_id = wopts_numeric_id_pre_alloc(opts);
     if (pre_id >= 0 && pre_id < ZAPP_MAX_WINDOWS) {
         windows_window_register_numeric_id((void*)hwnd, pre_id);
+        // Top-level size limits (logical → physical px; 0 = unset). Enforced in
+        // WM_GETMINMAXINFO on user resize.
+        extern int32_t wopts_min_width(void*);  extern int32_t wopts_min_height(void*);
+        extern int32_t wopts_max_width(void*);  extern int32_t wopts_max_height(void*);
+        int32_t mnw = wopts_min_width(opts),  mnh = wopts_min_height(opts);
+        int32_t mxw = wopts_max_width(opts),  mxh = wopts_max_height(opts);
+        zapp_min_w[pre_id] = mnw > 0 ? zapp_scale(mnw, dpi) : 0;
+        zapp_min_h[pre_id] = mnh > 0 ? zapp_scale(mnh, dpi) : 0;
+        zapp_max_w[pre_id] = mxw > 0 ? zapp_scale(mxw, dpi) : 0;
+        zapp_max_h[pre_id] = mxh > 0 ? zapp_scale(mxh, dpi) : 0;
     }
 
     // Win11 material + theme-synced caption (Mica/Acrylic via the vibrancy
