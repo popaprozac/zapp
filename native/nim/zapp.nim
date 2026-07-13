@@ -218,8 +218,8 @@ proc app_get_active(): pointer {.exportc, cdecl.} = addr gActiveAppSentinel
 # its verbose worker-lifecycle lines on `>= 1`; 0 keeps the default-quiet path.
 var zapp_log_level {.exportc.}: cint = 0
 
-# dispatch_event_to_all + zapp_escape_dup now live in dispatch.nim (the real
-# escaping broadcast helpers), imported transitively via callbacks/app_events.
+# dispatch_event_to_all now lives in dispatch.nim (the real broadcast helper,
+# routed through jsLit), imported transitively via callbacks/app_events.
 
 # worker_post_message (worker→worker dispatch) + worker_dispatch_to_webview
 # (worker→webview delivery) now live in worker.nim (imported above) — the

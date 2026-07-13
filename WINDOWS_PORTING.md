@@ -150,9 +150,10 @@ from day one:
    "sidebar-collapsed") — bootstrap prepends `window:`. Passing prefixed
    names dispatches `window:window:*` and silently matches nothing.
 5. **No fixed-size buffers for outgoing JS/JSON** — the repo has a history
-   of 512B/3KB/4KB truncation bugs (zapp_escape_dup heap allocator is the
-   pattern; `darwin_dialog_extract_args`'s 4KB static buffer is a watched
-   legacy exception). Don't add new ones in windows/*.c.
+   of 512B/3KB/4KB truncation bugs (`zapp_js_lit_dup`'s malloc'd heap
+   allocation is the pattern; `darwin_dialog_extract_args`'s 4KB static
+   buffer is a watched legacy exception). Don't add new ones in
+   windows/*.c.
 6. **Main-thread funneling:** WebView2 is STA/UI-thread-bound like AppKit.
    macOS uses dispatch_async(main); Windows needs the
    `PostMessage(WM_ZAPP_TASK)` + (for sync) event-wait pattern, with a

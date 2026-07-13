@@ -27,7 +27,7 @@ extern const char* zapp_build_deep_link_schemes_json(void);
 extern int zapp_build_single_instance(void);
 extern int zapp_app_dispatch(int event_id, const char* data);
 extern void windows_webview_eval_all(const char* js);
-extern char* zapp_escape_dup(const char* src);
+extern char* zapp_js_lit_dup(const char* utf8);  // native/shared/jslit.c — complete quoted JSON/JS literal
 extern HINSTANCE zapp_get_hinstance(void);
 extern void windows_window_activate_app(void);
 
@@ -58,22 +58,36 @@ void windows_dispatch_open_url(const char* url) {
 
     // Layer 2: JS bridge (best-effort — no-ops if no webview is ready,
     // matching darwin_webview_eval_all on a cold deep-link launch).
-    char* esc = zapp_escape_dup(url);
-    if (esc) {
-        const char* tmpl =
-            "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
-            "if(b&&b._onEvent)b._onEvent('app:open-url','{\"url\":\"%s\"}');})();";
-        int needed = snprintf(NULL, 0, tmpl, esc);
-        if (needed > 0) {
-            char* js = (char*) malloc((size_t) needed + 1);
-            if (js) {
-                snprintf(js, (size_t) needed + 1, tmpl, esc);
-                windows_webview_eval_all(js);
-                free(js);
+    // Two-layer encode: url is JSON-encoded into an inline JSON object
+    // (urlLit — a complete quoted JSON string), and THAT payload is
+    // separately JS-encoded (payloadLit) as the _onEvent argument. The
+    // event name is also encoded so nothing here relies on manual quoting.
+    char* urlLit = zapp_js_lit_dup(url);                     // "<url>"  (JSON string)
+    if (urlLit) {
+        size_t json_len = strlen(urlLit) + 16;
+        char* url_payload = (char*) malloc(json_len);
+        if (url_payload) snprintf(url_payload, json_len, "{\"url\":%s}", urlLit); // {"url":"<url>"} valid JSON
+        char* payloadLit = zapp_js_lit_dup(url_payload ? url_payload : "{}");     // "<payload>" (JS literal)
+        char* nameLit = zapp_js_lit_dup("app:open-url");
+        if (payloadLit && nameLit) {
+            const char* tmpl =
+                "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
+                "if(b&&b._onEvent)b._onEvent(%s,%s);})();";
+            int needed = snprintf(NULL, 0, tmpl, nameLit, payloadLit);
+            if (needed > 0) {
+                char* js = (char*) malloc((size_t) needed + 1);
+                if (js) {
+                    snprintf(js, (size_t) needed + 1, tmpl, nameLit, payloadLit);
+                    windows_webview_eval_all(js);
+                    free(js);
+                }
             }
         }
-        free(esc);
+        free(url_payload);
+        free(payloadLit);
+        free(nameLit);
     }
+    free(urlLit);
 }
 
 // ---------------------------------------------------------------------------

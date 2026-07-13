@@ -27,7 +27,7 @@ extern void windows_webview_create_ext(void* hwnd_ptr, bool inspectable, const c
 extern void windows_webview_resize(int32_t window_id, int w, int h);
 extern void windows_webview_notify_position(int32_t window_id);
 extern void windows_webview_eval_by_id(int32_t window_id, const char* js);
-extern char* zapp_escape_dup(const char* src); // dispatch.zc — JS single-quote escape
+extern char* zapp_js_lit_dup(const char* utf8);  // native/shared/jslit.c — complete quoted JSON/JS literal
 extern void windows_window_register_pane_id(int32_t slot, int32_t host_slot); // window.c
 
 // Defined below; called from the inspector collapse/expand ops above them.
@@ -89,17 +89,10 @@ static int sx(HWND h, int v) { return (int)(v * panes_scale(h) + 0.5); }
 static void pane_emit(int32_t host_slot, int32_t accessory_slot,
                       const char* event, const char* data_json) {
     (void)accessory_slot;   // event reaches ALL panes now (see below), not just the source
-    char* esc = NULL;
-    char* data_arg = NULL;
-    if (data_json) {
-        esc = zapp_escape_dup(data_json);
-        if (esc) {
-            size_t n = strlen(esc) + 3;
-            data_arg = (char*)malloc(n);
-            if (data_arg) snprintf(data_arg, n, "'%s'", esc);
-        }
-    }
-    const char* arg = data_arg ? data_arg : "undefined";
+    // zapp_js_lit_dup's result is a COMPLETE, already-quoted JS/JSON string
+    // literal — use it directly as the arg, no manual '%s' wrapping.
+    char* esc = data_json ? zapp_js_lit_dup(data_json) : NULL;
+    const char* arg = esc ? esc : "undefined";
     const char* tmpl =
         "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
         "if(b&&typeof b.dispatchWindowEvent==='function'){"
@@ -126,7 +119,6 @@ static void pane_emit(int32_t host_slot, int32_t accessory_slot,
         }
     }
     free(esc);
-    free(data_arg);
 }
 
 // --- Splitter drag ---

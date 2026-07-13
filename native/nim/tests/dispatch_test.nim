@@ -10,11 +10,6 @@ var workerJs = ""
 proc zjs_broadcast_eval_js(js: cstring) {.exportc, cdecl.} = workerJs = $js
 
 proc test() =
-  # zapp_escape_dup (libc): still exported for the out-of-scope zjs.c/bare.c/
-  # Windows-platform callers (Task 2 only migrated the Nim-side call sites off
-  # it); same rules as before: \ ' \n \r escaped; nil -> "".
-  doAssert $zapp_escape_dup("x'y".cstring) == "x\\'y"
-  doAssert $zapp_escape_dup(nil) == ""
   # dispatch_event_to_all: _onEvent IIFE to BOTH webviews + workers. Both name
   # and payload are now complete, safe JS string literals via jsLit (finding
   # #2) — compute the expected literal with the same primitive under test so

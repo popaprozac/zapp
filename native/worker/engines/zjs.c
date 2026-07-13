@@ -1477,23 +1477,29 @@ static void zjs_worker_teardown_state(ZjsWorkerSlot* slot, int keep_loop);
 //
 // Caller returns ZJS_SETUP_CRASHED so the outer loop in zjs_worker_thread
 // teardown + iterate per verdict.
-extern char* zapp_escape_dup(const char* s);  // bridge/dispatch.zc
+extern char* zapp_js_lit_dup(const char* utf8);  // native/shared/jslit.c — complete quoted JSON/JS literal
 
 static void zjs_setup_synthesize_crash(ZjsWorkerSlot* slot,
                                        const char* msg,
                                        const char* stack) {
     size_t mlen = msg ? strlen(msg) : 0;
     size_t slen = stack ? strlen(stack) : 0;
-    size_t need = strlen(slot->worker_id) + mlen + slen + 128;
+    // Worst case per zapp_js_lit_dup: 6 bytes per input byte + 2 quotes + NUL.
+    size_t need = strlen(slot->worker_id) + (mlen + slen) * 6 + 128;
     char* payload = (char*) malloc(need);
     if (payload) {
-        char* msg_esc   = zapp_escape_dup(msg   ? msg   : "");
-        char* stack_esc = zapp_escape_dup(stack ? stack : "");
+        // Each *_esc is now a COMPLETE, already-quoted JSON string value
+        // (e.g. "hello \"world\""), so the template below does NOT wrap it
+        // in its own quotes — doing so would double-quote it and, worse, a
+        // raw `"` in msg/stack used to corrupt the JSON outright (the old
+        // libc escaper here never escaped `"`).
+        char* msg_esc   = zapp_js_lit_dup(msg   ? msg   : "");
+        char* stack_esc = zapp_js_lit_dup(stack ? stack : "");
         snprintf(payload, need,
-                 "{\"id\":\"%s\",\"message\":\"%s\",\"stack\":\"%s\",\"incarnation\":%d}",
+                 "{\"id\":\"%s\",\"message\":%s,\"stack\":%s,\"incarnation\":%d}",
                  slot->worker_id,
-                 msg_esc   ? msg_esc   : "",
-                 stack_esc ? stack_esc : "",
+                 msg_esc   ? msg_esc   : "\"\"",
+                 stack_esc ? stack_esc : "\"\"",
                  slot->incarnation);
         dispatch_event_to_all("worker:crashed", payload);
         free(msg_esc);

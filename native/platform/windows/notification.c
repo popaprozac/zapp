@@ -61,7 +61,7 @@ extern const char* zapp_get_app_name(void);
 extern int zapp_app_dispatch(int event_id, const char* data);
 extern void windows_webview_eval_all(const char* js);
 extern bool zapp_post_to_ui_thread(void (*fn)(void* arg), void* arg);
-extern char* zapp_escape_dup(const char* src);
+extern char* zapp_js_lit_dup(const char* utf8);  // native/shared/jslit.c — complete quoted JSON/JS literal
 
 #define ZAPP_EVENT_APP_NOTIFICATION_CLICK  102
 #define ZAPP_EVENT_APP_NOTIFICATION_ACTION 103
@@ -533,12 +533,12 @@ static void notif_dispatch_on_ui(void* arg) {
 
     // Layer 2: JS bridge event (buffered until a bridge subscribes —
     // mirrors darwin's pending list).
-    char* esc_name = zapp_escape_dup(t->event_name);
-    char* esc_payload = zapp_escape_dup(t->payload);
+    char* esc_name = zapp_js_lit_dup(t->event_name);
+    char* esc_payload = zapp_js_lit_dup(t->payload);
     if (esc_name && esc_payload) {
         const char* tmpl =
             "(function(){var b=globalThis[Symbol.for('zapp.bridge')];"
-            "if(b&&b._onEvent)b._onEvent('%s','%s');})();";
+            "if(b&&b._onEvent)b._onEvent(%s,%s);})();";
         int needed = snprintf(NULL, 0, tmpl, esc_name, esc_payload);
         if (needed > 0) {
             char* js = (char*) malloc((size_t) needed + 1);
@@ -695,13 +695,20 @@ static HRESULT STDMETHODCALLTYPE NotifAct_Invoke(ZIActivatedHandler* This,
 
     if (action_id[0]) {
         char* user_text = notif_read_user_text(args);
-        char* esc_text = user_text ? zapp_escape_dup(user_text) : NULL;
+        // esc_text is a COMPLETE, already-quoted JSON string value (e.g.
+        // "hello \"world\"") — embed it directly as the userText VALUE, no
+        // manual "\"...\"" wrapping (that used to let a raw `"` in the
+        // OS-supplied reply text corrupt the JSON outright, since the old
+        // libc escaper here never escaped `"`). Only encode when there's
+        // actual text, matching the prior no-userText-field behavior for
+        // NULL/empty replies.
+        char* esc_text = (user_text && user_text[0]) ? zapp_js_lit_dup(user_text) : NULL;
         free(user_text);
         size_t cap = 256 + (esc_text ? strlen(esc_text) : 0);
         task->payload = (char*) malloc(cap);
         if (task->payload) {
-            if (esc_text && esc_text[0]) {
-                snprintf(task->payload, cap, "{\"id\":\"%s\",\"action\":\"%s\",\"userText\":\"%s\"}",
+            if (esc_text) {
+                snprintf(task->payload, cap, "{\"id\":\"%s\",\"action\":\"%s\",\"userText\":%s}",
                          notif_id, action_id, esc_text);
             } else {
                 snprintf(task->payload, cap, "{\"id\":\"%s\",\"action\":\"%s\"}", notif_id, action_id);
