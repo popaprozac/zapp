@@ -189,6 +189,21 @@ proc app_get_active(): pointer {.exportc, cdecl.} = addr gActiveAppSentinel
 # the CLI-generated .zapp/zapp_platform.nim (imported above) — per-target. Only
 # zjs.c's compile + its include passC stay here (target-agnostic).
 
+# ---------------------------------------------------------------------------
+# jslit.c — the ONE safe native->JS string-literal encoder (finding #2, P0
+# security fix). Dependency-free C (no headers beyond libc, no per-file
+# flags) — CALL-form {.compile.} with an empty flags arg (this Nim version's
+# call-form {.compile(path, flags).} requires exactly 2 arguments; a bare
+# {.compile(path).} errors with "'.compile' pragma takes up 2 arguments").
+# Target-agnostic like zjs.c above, so it lives here rather than in the
+# generated per-platform module. native/nim/jslit.nim wraps zapp_js_lit_dup
+# as jsLit() for main-thread Nim callers; worker-pthread paths import the C
+# symbol directly (libc-only, gcsafe). See cli/src/jslit-transport.test.ts
+# for the adversarial round-trip gate and native/nim/tests/jslit_test.nim
+# for the native unit test.
+# ---------------------------------------------------------------------------
+{.compile("../shared/jslit.c", "").}
+
 # zjs.c extern surface NOT satisfied by the provider .o / worker_service /
 # skeleton. Real impls live in not-yet-ported modules (permissions, the
 # event/dispatch layer, the worker supervisor + registry, bridge/dispatch.zc).
