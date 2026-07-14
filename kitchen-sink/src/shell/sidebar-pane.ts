@@ -9,11 +9,12 @@ export function renderSidebarPane(app: HTMLElement) {
   document.documentElement.style.background = "transparent";
   document.body.style.background = "transparent";
   // Windows caption buttons live top-RIGHT (over the content/inspector), so the
-  // sidebar's top strip needs no traffic-light inset — drop it for a clean,
-  // full-width drag surface. macOS keeps the 78px inset for the traffic lights.
+  // The drag-strip reserves the window-control inset per platform/pane from the
+  // framework CSS vars (macOS traffic lights on the leading pane; Windows caption
+  // buttons on the rightmost pane) — no per-pane class needed.
   const dragStrip = Platform.isIOS
     ? ""
-    : `<div class="drag-strip${Platform.isWindows ? " drag-strip--no-inset" : ""}" data-zapp-titlebar></div>`;
+    : `<div class="drag-strip" data-zapp-titlebar></div>`;
   app.innerHTML = `
     ${dragStrip}
     <div class="sidebar-pane">

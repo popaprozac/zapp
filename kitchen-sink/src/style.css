@@ -26,7 +26,12 @@ h2 { font-size: 16px; color: var(--text-h); margin: 0 0 8px; font-weight: 600; }
 .drag-strip {
   position: fixed; top: 0; left: 0; right: 0;
   height: var(--zapp-titlebar-height, 34px);
-  padding-left: 78px;
+  /* Clear the window controls on whichever side this platform/pane puts them:
+     the framework injects these per-pane — macOS traffic lights → inset-left on
+     the leading pane; Windows caption buttons (native or web) → inset-right on
+     the rightmost pane; the other side is 0. No per-pane class needed. */
+  padding-left: var(--zapp-window-controls-inset-left, 0px);
+  padding-right: var(--zapp-window-controls-inset-right, 0px);
   display: flex; align-items: center;
   z-index: 100;
 }
@@ -35,8 +40,6 @@ h2 { font-size: 16px; color: var(--text-h); margin: 0 0 8px; font-weight: 600; }
   color: var(--text); opacity: 0.35;
   pointer-events: none; user-select: none;
 }
-/* Trailing (inspector) pane — not adjacent to traffic lights, no left inset needed. */
-.drag-strip--no-inset { padding-left: 0; }
 
 /* Sidebar pane */
 /* Top: macOS uses the injected toolbar height; iOS uses the nav-bar safe-area
