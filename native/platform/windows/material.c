@@ -113,10 +113,9 @@ void windows_material_apply_custom_theme(HWND hwnd, const char* caption,
 }
 
 // Apply theme caption + system backdrop at window create.
-void windows_material_apply(HWND hwnd, const char* vibrancy) {
+void windows_material_apply(HWND hwnd, const char* vibrancy, bool native_buttons) {
     if (!hwnd) return;
     windows_material_apply_theme(hwnd);
-    extern bool windows_titlebar_native_controls(void);
     int sbt = backdrop_for_vibrancy(vibrancy);
     if (sbt > 0) {
         int val = sbt;
@@ -128,11 +127,11 @@ void windows_material_apply(HWND hwnd, const char* vibrancy) {
         //     (wanted here) and the glass fills the client for Mica.
         //   WEB buttons → a big positive margin fills the client WITHOUT DWM's
         //     caption chrome, which would otherwise be dead "ghost" buttons.
-        MARGINS m = windows_titlebar_native_controls()
+        MARGINS m = native_buttons
             ? (MARGINS){ -1, -1, -1, -1 }
             : (MARGINS){ 32767, 32767, 32767, 32767 };
         DwmExtendFrameIntoClientArea(hwnd, &m);
-    } else if (windows_titlebar_native_controls()) {
+    } else if (native_buttons) {
         // Opaque native-titlebar window (no backdrop). Two things are needed for
         // DWM to draw the MODERN flat caption buttons instead of legacy ones:
         //  1) extend the frame (sheet of glass) — without it DWM uses the old

@@ -5,8 +5,25 @@
 
 #include "titlebar.h"
 #include <windowsx.h>   // GET_X_LPARAM
+#include <dwmapi.h>     // DwmGetWindowAttribute(DWMWA_CAPTION_BUTTON_BOUNDS)
 #include <string.h>
 #include <stdio.h>      // snprintf
+
+#ifndef DWMWA_CAPTION_BUTTON_BOUNDS
+#define DWMWA_CAPTION_BUTTON_BOUNDS 5
+#endif
+
+// Number of caption buttons DWM actually DRAWS, from the WS_*BOX styles (Win32's
+// own rule — deterministic + immediate, unlike DWMWA_CAPTION_BUTTON_BOUNDS which
+// lags a style change): no WS_SYSMENU → 0; both min/max boxes absent → 1 (close
+// only); otherwise 3 (a single absent box greys, not hides). Drives the pane
+// carve width (sidebar.c) + the content inset (metrics), so both track hidden
+// controls exactly.
+int windows_titlebar_drawn_button_count(HWND hwnd) {
+    LONG_PTR s = GetWindowLongPtrW(hwnd, GWL_STYLE);
+    if (!(s & WS_SYSMENU)) return 0;
+    return ((s & WS_MINIMIZEBOX) || (s & WS_MAXIMIZEBOX)) ? 3 : 1;
+}
 
 #define ZAPP_MAX_WINDOWS 64   // matches window.c
 
@@ -41,7 +58,21 @@ void windows_titlebar_controls_desc(int32_t window_id, char* buf);
 // DwmDefWindowProc needs — WebView2Feedback #446). We carve that rect out of the
 // rightmost pane container via SetWindowRgn (sidebar.c), so input falls through
 // to the host → native hover / Snap / click. See DWMWA_CAPTION_BUTTON_BOUNDS.
-bool windows_titlebar_native_controls(void) { return true; }
+//
+// PER-WINDOW: native is the default, BUT modern DWM caption buttons are
+// all-or-nothing — removing a WS_*BOX to hide/disable a single min/max button
+// drops DWM to legacy rendering + a dead phantom slot (confirmed; no modern
+// "subset" layout). So a window whose windowControls hides/disables min/max (or
+// hides close) falls back to WEB buttons, which do per-button hide/disable
+// cleanly. window.c sets the flag at create via windows_titlebar_set_web_buttons.
+static int g_web_buttons[ZAPP_MAX_WINDOWS] = {0};   // 1 = web, 0 = native (default)
+void windows_titlebar_set_web_buttons(int32_t window_id, int web) {
+    if (window_id >= 0 && window_id < ZAPP_MAX_WINDOWS) g_web_buttons[window_id] = web ? 1 : 0;
+}
+bool windows_titlebar_native_controls(int32_t window_id) {
+    if (window_id < 0 || window_id >= ZAPP_MAX_WINDOWS) return true;
+    return !g_web_buttons[window_id];
+}
 
 typedef struct {
     bool    enabled;
@@ -74,7 +105,7 @@ static int tb_scale(HWND h, int v) {
 // Snap Layouts / press. Buttons are right-aligned, order (l→r) min,max,close, so
 // from the right edge slot 0=close, 1=maximize, 2=minimize.
 LRESULT windows_titlebar_nchittest(HWND hwnd, int32_t window_id, LPARAM lParam) {
-    if (!windows_titlebar_enabled(window_id) || !windows_titlebar_native_controls())
+    if (!windows_titlebar_enabled(window_id) || !windows_titlebar_native_controls(window_id))
         return HTNOWHERE;
     TitleBar* tb = &g_tb[window_id];
     POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
@@ -246,7 +277,7 @@ void windows_titlebar_enable(HWND hwnd, int32_t window_id, int32_t style_tag) {
 
     SetMenu(hwnd, NULL);  // custom titlebar windows drop the native menu bar
 
-    if (windows_titlebar_native_controls()) {
+    if (windows_titlebar_native_controls(window_id)) {
         // NATIVE (DWM) caption buttons: DWM draws them (WS_SYSMENU + sheet-of-glass
         // frame, both in window.c/material.c); we only feed hit-tests via
         // windows_titlebar_nchittest. No child window to create.
@@ -340,10 +371,21 @@ void windows_titlebar_destroy(int32_t window_id) {
 bool windows_titlebar_metrics(int32_t window_id, int* height_logical, int* inset_right_logical) {
     if (!windows_titlebar_enabled(window_id)) return false;
     // Logical (96-dpi) values — CSS px in the DPI-aware webview. inset_right is
-    // the VISIBLE cluster width so web content reserves exactly the shown buttons.
-    int vis[TB_COUNT]; int n = tb_visible(&g_tb[window_id], vis);
-    if (height_logical)      *height_logical = TB_BTN_H;
-    if (inset_right_logical) *inset_right_logical = TB_BTN_W * n;
+    // the cluster width so web content reserves exactly the shown buttons.
+    TitleBar* tb = &g_tb[window_id];
+    if (height_logical) *height_logical = TB_BTN_H;
+    if (inset_right_logical) {
+        // NATIVE (DWM) mode: reserve the DRAWN-button count × button width (from
+        // the WS_*BOX styles) so content padding tracks hidden controls exactly.
+        // Web mode: our tb_visible count (it hides individual buttons itself).
+        int n;
+        if (windows_titlebar_native_controls(window_id) && tb->host) {
+            n = windows_titlebar_drawn_button_count(tb->host);
+        } else {
+            int vis[TB_COUNT]; n = tb_visible(tb, vis);
+        }
+        *inset_right_logical = TB_BTN_W * n;
+    }
     return true;
 }
 
@@ -356,8 +398,35 @@ void windows_titlebar_set_controls(int32_t window_id, int close_state, int min_s
     tb->state[TB_MIN]   = min_state;
     tb->state[TB_MAX]   = max_state;
     tb->state[TB_CLOSE] = close_state;
-    windows_titlebar_layout(window_id);   // reposition native buttons (native mode)
-    if (!windows_titlebar_native_controls()) windows_titlebar_sync_web(window_id);
+    if (windows_titlebar_native_controls(window_id)) {
+        // NATIVE (DWM) mode: DWM draws min/max from the WS_*BOX styles, so drive
+        // them from windowControls (present=enabled; removed=greyed, or hidden if
+        // BOTH min+max are removed — a Win32 rule we can't split per-button).
+        // Close can't be removed without losing the system menu / Alt+Space, so
+        // it's greyed via the system menu instead of hidden. DWM's
+        // CAPTION_BUTTON_BOUNDS then reflects the drawn set → the carve follows.
+        HWND h = tb->host;
+        LONG_PTR style = GetWindowLongPtrW(h, GWL_STYLE);
+        if (min_state == 0) style |= WS_MINIMIZEBOX; else style &= ~WS_MINIMIZEBOX;
+        if (max_state == 0) style |= WS_MAXIMIZEBOX; else style &= ~WS_MAXIMIZEBOX;
+        SetWindowLongPtrW(h, GWL_STYLE, style);
+        HMENU sys = GetSystemMenu(h, FALSE);
+        if (sys) EnableMenuItem(sys, SC_CLOSE,
+                     MF_BYCOMMAND | (close_state == 0 ? MF_ENABLED : MF_GRAYED));
+        SetWindowPos(h, NULL, 0, 0, 0, 0,
+            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        // Force DWM to REPAINT the caption — the frame-change alone leaves a dead
+        // "ghost" of a button whose WS_*BOX we just removed (DWM drew it at create
+        // and doesn't re-render the caption on a bare style change).
+        RedrawWindow(h, NULL, NULL, RDW_FRAME | RDW_INVALIDATE | RDW_UPDATENOW);
+        // Re-run the PANE layout so the caption-button carve recomputes against
+        // the new drawn-button count (windows_titlebar_layout only repositions
+        // the native GDI child, which DWM mode doesn't use).
+        extern int windows_panes_layout(int32_t);
+        windows_panes_layout(window_id);
+    }
+    windows_titlebar_layout(window_id);   // reposition (GDI native-button mode)
+    if (!windows_titlebar_native_controls(window_id)) windows_titlebar_sync_web(window_id);
 }
 
 // Per-button state descriptor for the web buttons: 3 chars (min, max, close),
@@ -367,7 +436,7 @@ void windows_titlebar_controls_desc(int32_t window_id, char* buf) {
     if (window_id < 0 || window_id >= ZAPP_MAX_WINDOWS) { buf[0] = '\0'; return; }
     // Native mode: empty desc → the bootstrap renders NO web cluster (it still
     // gets the inset var so app chrome pads around the native buttons).
-    if (windows_titlebar_native_controls()) { buf[0] = '\0'; return; }
+    if (windows_titlebar_native_controls(window_id)) { buf[0] = '\0'; return; }
     TitleBar* tb = &g_tb[window_id];
     for (int i = 0; i < TB_COUNT; i++) {
         int s = tb->state[i]; if (s < 0 || s > 2) s = 0;
@@ -386,7 +455,7 @@ void windows_titlebar_controls_desc(int32_t window_id, char* buf) {
 // (windows_titlebar_relocate_controls) and to refresh state in place.
 void windows_titlebar_push_state(int32_t host_slot, int32_t webview_slot, int visible) {
     if (!windows_titlebar_enabled(host_slot)) return;
-    if (windows_titlebar_native_controls()) return;   // native mode: no web cluster
+    if (windows_titlebar_native_controls(host_slot)) return;   // native mode: no web cluster
     extern void windows_webview_eval_by_id(int32_t, const char*);
     char js[512];
     if (visible) {
@@ -425,7 +494,7 @@ void windows_titlebar_sync_web(int32_t window_id) {
 // Pushed from WM_ACTIVATE (window.c); CSS keys off data-zapp-window-focused.
 void windows_titlebar_set_focused(int32_t window_id, bool focused) {
     if (!windows_titlebar_enabled(window_id)) return;
-    if (windows_titlebar_native_controls()) {
+    if (windows_titlebar_native_controls(window_id)) {
         if (g_tb[window_id].btn) InvalidateRect(g_tb[window_id].btn, NULL, FALSE);
         return;
     }
@@ -436,49 +505,5 @@ void windows_titlebar_set_focused(int32_t window_id, bool focused) {
         "(function(){var r=document.documentElement;"
         "if(r)r.setAttribute('data-zapp-window-focused','%d');})();", focused ? 1 : 0);
     windows_webview_eval_by_id(windows_pane_controls_slot(window_id), js);
-}
-
-// System menu (Restore/Move/Size/Minimize/Maximize/Close) at screen (x,y) —
-// right-click on the title bar / Alt+Space. Custom-titlebar windows drop
-// WS_SYSMENU (so DWM paints no dead caption chrome on the Mica glass), which
-// also silences DefWindowProc's built-in menu — so we build + show it ourselves.
-void windows_titlebar_show_sysmenu(HWND hwnd, int32_t window_id, int x, int y) {
-    BOOL zoomed = IsZoomed(hwnd);
-    TitleBar* tb = (window_id >= 0 && window_id < ZAPP_MAX_WINDOWS) ? &g_tb[window_id] : NULL;
-    int min_ok = tb ? (tb->state[TB_MIN] == 0) : 1;
-    int max_ok = tb ? (tb->state[TB_MAX] == 0) : 1;
-    int close_ok = tb ? (tb->state[TB_CLOSE] == 0) : 1;
-
-    HMENU m = CreatePopupMenu();
-    if (!m) return;
-    AppendMenuW(m, MF_STRING, SC_RESTORE, L"&Restore");
-    AppendMenuW(m, MF_STRING, SC_MOVE, L"&Move");
-    AppendMenuW(m, MF_STRING, SC_SIZE, L"&Size");
-    AppendMenuW(m, MF_STRING, SC_MINIMIZE, L"Mi&nimize");
-    AppendMenuW(m, MF_STRING, SC_MAXIMIZE, L"Ma&ximize");
-    AppendMenuW(m, MF_SEPARATOR, 0, NULL);
-    AppendMenuW(m, MF_STRING, SC_CLOSE, L"&Close\tAlt+F4");
-    // Standard enable/disable (what DefWindowProc sets on a captioned window) +
-    // the app's windowControls gating.
-    EnableMenuItem(m, SC_RESTORE,  MF_BYCOMMAND | (zoomed ? MF_ENABLED : MF_GRAYED));
-    EnableMenuItem(m, SC_MOVE,     MF_BYCOMMAND | (zoomed ? MF_GRAYED : MF_ENABLED));
-    EnableMenuItem(m, SC_SIZE,     MF_BYCOMMAND | (zoomed ? MF_GRAYED : MF_ENABLED));
-    EnableMenuItem(m, SC_MINIMIZE, MF_BYCOMMAND | (min_ok ? MF_ENABLED : MF_GRAYED));
-    EnableMenuItem(m, SC_MAXIMIZE, MF_BYCOMMAND | ((max_ok && !zoomed) ? MF_ENABLED : MF_GRAYED));
-    EnableMenuItem(m, SC_CLOSE,    MF_BYCOMMAND | (close_ok ? MF_ENABLED : MF_GRAYED));
-    SetMenuDefaultItem(m, SC_CLOSE, FALSE);
-
-    // TrackPopupMenu needs the owner to be the foreground window or it returns
-    // 0 immediately without showing (the "needs a second right-click" symptom).
-    // The right-click arrived via WebView2's NC forwarding while the webview
-    // CHILD held focus, so force the top-level foreground first.
-    SetForegroundWindow(hwnd);
-    int cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_LEFTBUTTON,
-                             x, y, 0, hwnd, NULL);
-    DWORD err = GetLastError();
-    fprintf(stderr, "[zapp/menu] TrackPopupMenu cmd=%d err=%lu fg=%d\n",
-            cmd, err, GetForegroundWindow() == hwnd);
-    DestroyMenu(m);
-    if (cmd) PostMessageW(hwnd, WM_SYSCOMMAND, (WPARAM)cmd, 0);
 }
 

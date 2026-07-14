@@ -225,8 +225,8 @@ LRESULT CALLBACK zapp_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     // mode / non-custom windows.
     {
         extern bool windows_titlebar_enabled(int32_t);
-        extern bool windows_titlebar_native_controls(void);
-        if (windows_titlebar_enabled(wid) && windows_titlebar_native_controls()) {
+        extern bool windows_titlebar_native_controls(int32_t);
+        if (windows_titlebar_enabled(wid) && windows_titlebar_native_controls(wid)) {
             LRESULT dwmr = 0;
             if (DwmDefWindowProc(hwnd, msg, wParam, lParam, &dwmr)) return dwmr;
         }
@@ -476,6 +476,22 @@ void* windows_window_create(WindowOptions* opts) {
     bool always_on_top = wopts_always_on_top(opts);
     int32_t inspectable = wopts_inspectable(opts);
 
+    // Caption-button mode (custom-titlebar windows). Native DWM buttons are the
+    // default, but modern DWM rendering is all-or-nothing: a caption reduced to
+    // CLOSE-ONLY (both min+max WS_*BOX removed) falls back to legacy rendering +
+    // a dead ghost slot, and close can't be hidden while keeping WS_SYSMENU. Such
+    // windows use WEB buttons, which hide/disable per-button cleanly. A single
+    // greyed min OR max still renders modern natively, so it stays native.
+    extern int32_t wopts_window_control_minimize_tag(WindowOptions*);
+    extern int32_t wopts_window_control_maximize_tag(WindowOptions*);
+    extern int32_t wopts_window_control_close_tag(WindowOptions*);
+    int32_t min_tag = wopts_window_control_minimize_tag(opts);
+    int32_t max_tag = wopts_window_control_maximize_tag(opts);
+    int32_t close_tag = wopts_window_control_close_tag(opts);
+    bool min_off = !minimizable || min_tag != 0;   // WS_MINIMIZEBOX would be removed
+    bool max_off = !maximizable || max_tag != 0;   // WS_MAXIMIZEBOX would be removed
+    bool web_buttons = (min_off && max_off) || (close_tag == 2);
+
     // DPI-aware scaling
     UINT dpi = zapp_get_dpi();
     int scaled_w = zapp_scale(w, dpi);
@@ -493,19 +509,19 @@ void* windows_window_create(WindowOptions* opts) {
         // WS_SYSMENU: kept for standard title bars AND for custom-titlebar windows
         // in NATIVE (DWM) caption-button mode — there DWM draws min/max/close
         // itself and WM_NCHITTEST + DwmDefWindowProc drive them (system menu +
-        // Alt+Space come free). Only WEB-button custom titlebars drop it (with the
+        // Alt+Space come free). WEB-button custom titlebars drop it (with the
         // full-glass frame, a WS_SYSMENU window would get dead DWM caption chrome
         // behind the web buttons — the "ghost controls").
-        {
-            extern bool windows_titlebar_native_controls(void);
-            int32_t tbs = wopts_title_bar_style_tag(opts);
-            bool custom_tb = (tbs == 1 || tbs == 2);
-            if (!custom_tb || windows_titlebar_native_controls())
-                style |= WS_SYSMENU;
-        }
+        int32_t tbs = wopts_title_bar_style_tag(opts);
+        bool custom_tb = (tbs == 1 || tbs == 2);
+        if (!custom_tb || !web_buttons)
+            style |= WS_SYSMENU;
         if (resizable)    style |= WS_THICKFRAME;
-        if (minimizable)  style |= WS_MINIMIZEBOX;
-        if (maximizable)  style |= WS_MAXIMIZEBOX;
+        // WS_*BOX at create (before first show) so DWM draws the right native set
+        // from the start (a single removed box greys that button; both removed →
+        // web path). Removed = window disallows it or windowControls disables/hides.
+        if (!min_off) style |= WS_MINIMIZEBOX;
+        if (!max_off) style |= WS_MAXIMIZEBOX;
     }
     if (always_on_top) ex_style |= WS_EX_TOPMOST;
 
@@ -568,6 +584,9 @@ void* windows_window_create(WindowOptions* opts) {
     int32_t pre_id = wopts_numeric_id_pre_alloc(opts);
     if (pre_id >= 0 && pre_id < ZAPP_MAX_WINDOWS) {
         windows_window_register_numeric_id((void*)hwnd, pre_id);
+        // Caption-button mode for this window (see web_buttons above).
+        extern void windows_titlebar_set_web_buttons(int32_t, int);
+        windows_titlebar_set_web_buttons(pre_id, web_buttons ? 1 : 0);
         // Top-level size limits (logical → physical px; 0 = unset). Enforced in
         // WM_GETMINMAXINFO on user resize.
         extern int32_t wopts_min_width(void*);  extern int32_t wopts_min_height(void*);
@@ -590,11 +609,11 @@ void* windows_window_create(WindowOptions* opts) {
     extern const char* wopts_windows_backdrop(void*);
     const char* wbd = wopts_windows_backdrop(opts);
     const char* backdrop = (wbd && wbd[0]) ? wbd : vibrancy;
-    extern void windows_material_apply(HWND hwnd, const char* vibrancy);
+    extern void windows_material_apply(HWND hwnd, const char* vibrancy, bool native_buttons);
     extern int windows_material_wants_transparent(const char* vibrancy);
     extern void windows_webview_set_transparent(int32_t window_id, bool transparent);
     extern void windows_webview_set_seethrough(int32_t window_id, bool v);
-    windows_material_apply(hwnd, backdrop);
+    windows_material_apply(hwnd, backdrop, !web_buttons);
     // Custom title-bar colors (windows:{customTheme}).
     extern void windows_material_apply_custom_theme(HWND, const char*, const char*, const char*);
     extern const char* wopts_windows_caption_color(void*);
@@ -625,22 +644,15 @@ void* windows_window_create(WindowOptions* opts) {
     // so content full-bleeds to the top and float native caption buttons over it
     // (macOS parity). tbs 1 = hidden, 2 = hiddenInset. Must run before ShowWindow
     // so the first WM_NCCALCSIZE sees the window as custom.
-    // Window controls visibility (windowControls: 0=enabled, 1=disabled,
-    // 2=hidden). The Nim layer folds closable/minimizable/maximizable into these
-    // tags. order min,max,close.
-    extern int32_t wopts_window_control_close_tag(WindowOptions* opts);
-    extern int32_t wopts_window_control_minimize_tag(WindowOptions* opts);
-    extern int32_t wopts_window_control_maximize_tag(WindowOptions* opts);
-    int close_tag = (int)wopts_window_control_close_tag(opts);
-    int min_tag   = (int)wopts_window_control_minimize_tag(opts);
-    int max_tag   = (int)wopts_window_control_maximize_tag(opts);
-
+    // Window controls visibility (windowControls tags read above: min_tag,
+    // max_tag, close_tag; 0=enabled 1=disabled 2=hidden). The Nim layer folds
+    // closable/minimizable/maximizable into these tags. order min,max,close.
     int32_t tbs = wopts_title_bar_style_tag(opts);
     if ((tbs == 1 || tbs == 2) && pre_id >= 0 && pre_id < ZAPP_MAX_WINDOWS) {
         extern void windows_titlebar_enable(HWND, int32_t, int32_t);
         extern void windows_titlebar_set_controls(int32_t, int, int, int);
         windows_titlebar_enable(hwnd, pre_id, tbs);
-        windows_titlebar_set_controls(pre_id, close_tag, min_tag, max_tag);
+        windows_titlebar_set_controls(pre_id, (int)close_tag, (int)min_tag, (int)max_tag);
     } else if (close_tag >= 1) {
         // Default (native-caption) window: min/max hiding is handled by the
         // WS_MINIMIZEBOX/WS_MAXIMIZEBOX styles above (minimizable/maximizable).
@@ -676,11 +688,10 @@ void* windows_window_create(WindowOptions* opts) {
     // a NON-paned custom-titlebar window in native mode is routed through the
     // pane path (content-only): it mounts the single webview in content_child,
     // which the carve then punches. Web-button mode keeps the direct mount.
-    extern bool windows_titlebar_native_controls(void);
     int32_t tbs_now = wopts_title_bar_style_tag(opts);
     bool custom_tb_now = (tbs_now == 1 || tbs_now == 2);
     bool use_panes = (has_sidebar || has_inspector) ||
-                     (windows_titlebar_native_controls() && custom_tb_now);
+                     (!web_buttons && custom_tb_now);
 
     if (use_panes) {
         extern void windows_panes_init(HWND host_hwnd, int32_t host_slot, int inspectable,

@@ -271,10 +271,11 @@ static void carve_caption_buttons(HWND host, HWND pane, int pane_x, int pane_w,
         SetWindowRgn(pane, NULL, TRUE);
         return;
     }
-    // DWM's bounds gives the authoritative RIGHT + top/bottom of the button
-    // cluster, but its width can run a bit wider than the drawn buttons. Use our
-    // known cluster width (right-aligned to DWM's right edge) so the carve hugs
-    // the buttons exactly — no dead Mica gap on the left.
+    // Use DWM's bounds for the authoritative RIGHT edge + top/bottom, but the
+    // WIDTH from strip_w_logical (our drawn-button-count × button width,
+    // right-aligned). DWM's reported WIDTH is unreliable right after a WS_*BOX
+    // change (it lags updating CAPTION_BUTTON_BOUNDS, so hiding min/max leaves a
+    // stale 3-button width → dead Mica gap on the left). Our count is immediate.
     UINT dpi = GetDpiForWindow(host); if (!dpi) dpi = 96;
     int strip_w = MulDiv(strip_w_logical, (int)dpi, 96);
     if (strip_w > 0 && strip_w < btn.right - btn.left) btn.left = btn.right - strip_w;
@@ -388,10 +389,10 @@ int windows_panes_layout_ex(int32_t host_slot, bool resize_webviews) {
         // Native (DWM) caption buttons: carve their rect out of the RIGHTMOST
         // pane (inspector when expanded, else content) so DWM owns those pixels
         // for hover / Snap / click; clear the region on the others.
-        extern bool windows_titlebar_native_controls(void);
+        extern bool windows_titlebar_native_controls(int32_t);
         extern bool windows_titlebar_enabled(int32_t);
         extern bool windows_titlebar_metrics(int32_t, int*, int*);
-        if (windows_titlebar_native_controls() && windows_titlebar_enabled(p->host_slot)) {
+        if (windows_titlebar_native_controls(p->host_slot) && windows_titlebar_enabled(p->host_slot)) {
             int th = 0, ir = 0; windows_titlebar_metrics(p->host_slot, &th, &ir);  // ir = cluster width (logical)
             HWND rightmost; int rx, rw;
             if (insp_shown) { rightmost = p->inspector_child; rx = W - insp_w; rw = insp_w; }
