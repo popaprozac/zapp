@@ -1,0 +1,7 @@
+{
+  "target": {
+    "kind": "static-library",
+    "name": "zapp_message_bridge",
+    "entry": "bridge.zs"
+  }
+}
