@@ -15,7 +15,7 @@ import { createDevBundle } from "./bundle";
 import { createProductionBundle } from "./package";
 import { generateAssetManifest } from "./assets";
 import { setCliLevel, levelFromArgv, getCliLevel, envFromLevel, clog, clogError } from "./log";
-import { useNimNative } from "./native-lang";
+import { nativeLanguage } from "./native-lang";
 
 // Bootstrap codegen lives outside cli/ in the monorepo but is bundled
 // alongside it in the published package. Dynamic import so the path
@@ -174,6 +174,12 @@ async function runDev(root: string) {
   }
 
   const target: BuildTarget = detectTarget();
+  if (nativeLanguage() === "z") {
+    throw new Error(
+      "[zapp] ZAPP_NATIVE_LANG=z currently supports `zapp build` and the " +
+      "message-boundary smoke. Interactive dev starts with the Phase 1 WebView core.",
+    );
+  }
   if (isIOSTarget(target) && process.platform !== "darwin") {
     clogError("iOS dev requires macOS host (Xcode SDK).");
     process.exit(1);
@@ -582,11 +588,41 @@ async function runBuild(root: string) {
   // (compileNative's nim branch ignores `assetsFile`.)
   const zappDir = path.join(root, ".zapp");
   let assetsFile: string | undefined;
-  if (useNimNative()) {
+  const selectedNativeLanguage = nativeLanguage();
+  if (selectedNativeLanguage === "nim") {
     clog(1, "embedding assets with brotli (Nim emitter, in native build)...");
-  } else {
+  } else if (selectedNativeLanguage === "zc") {
     clog(1, "embedding assets with brotli...");
     assetsFile = await generateAssetManifest(root, config.assetDir, config.compressAssets !== false);
+  } else {
+    // Phase 0 deliberately proves the Z archive/runtime/message boundary before
+    // rebuilding the WebView asset loader in Z. Vite still validates and emits
+    // the frontend; Phase 1 will consume it from the Z-owned application core.
+    clog(1, "staging frontend assets for the Phase 0 Z core...");
+  }
+
+  if (selectedNativeLanguage === "z") {
+    // The replacement core owns its native build graph. Do not run the legacy
+    // engine overlay, platform config, generated zc/Nim bootstrap, or native
+    // engine build merely because the old CLI historically did so.
+    const binDir = path.join(root, "bin");
+    await mkdir(binDir, { recursive: true });
+    const exeName = config.name.replace(/\s+/g, "-").toLowerCase();
+    const nativeOut = path.join(binDir, exeName);
+    clog(1, "compiling Phase 0 Z native core...");
+    await compileNative({
+      root,
+      buildFile: "",
+      buildConfigFile: "",
+      output: nativeOut,
+      nativeDir,
+      optimize: true,
+      config,
+      target,
+    });
+    const size = Bun.file(nativeOut).size;
+    clog(0, `build complete: ${nativeOut} (${Math.round(size / 1024)} KB, Phase 0 Z core)`);
+    return;
   }
 
   // 4. Generate engine overlay (auto-defines for engines named in
@@ -699,6 +735,11 @@ async function runPackage(root: string) {
     clogError("package is currently macOS-only.");
     process.exit(1);
   }
+  if (nativeLanguage() === "z") {
+    throw new Error(
+      "[zapp] packaging the Z native core begins after the Phase 1 AppKit/WebKit vertical slice; use `zapp build` for Phase 0.",
+    );
+  }
 
   // Run a full build first
   await runBuild(root);
@@ -737,7 +778,8 @@ setCliLevel(levelFromArgv(process.argv.slice(2)));
 // spawned native app) read it from ONE source of truth. "" = default/quiet.
 process.env.ZAPP_LOG = envFromLevel(getCliLevel());
 
-switch (command) {
+try {
+  switch (command) {
   case "init": {
     const name = process.argv[3] || "zapp-app";
     const tIdx = process.argv.indexOf("-t");
@@ -779,4 +821,13 @@ switch (command) {
     console.log("  package [--sign] [--notarize]  Create .app bundle for distribution");
     console.log("  generate                   Generate service bindings");
     process.exit(1);
+  }
+} catch (error) {
+  if (getCliLevel() >= 2 && error instanceof Error && error.stack) {
+    clogError(error.stack);
+  } else {
+    const message = error instanceof Error ? error.message : String(error);
+    clogError(message.startsWith("[zapp] ") ? message.slice(7) : message);
+  }
+  process.exitCode = 1;
 }

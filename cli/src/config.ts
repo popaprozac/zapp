@@ -6,7 +6,7 @@ import path from "node:path";
 // for user zapp.config.ts files); a VALUE import of ./native would drag the
 // entire build machinery (incl. babel's dynamic requires) into that bundle
 // and break `npm pack`.
-import type { BuildTarget } from "./native";
+import type { BuildTarget } from "./build-target";
 import type { ZappPermission } from "./permissions";
 import { validatePermissions } from "./permissions";
 export type { ZappPermission };

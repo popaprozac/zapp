@@ -1,7 +1,8 @@
 # Z message-bridge pressure test
 
-This opt-in spike exercises Z inside Zapp's real webview-to-router boundary
-without making the pre-alpha Z compiler a mandatory Zapp build dependency.
+This opt-in smoke test exercises the framework-owned `native/z/` core through
+the same builder used by `ZAPP_NATIVE_LANG=z`. It began as an isolated
+Nim-to-Z probe; Phase 0 promoted its evidence into the ordinary Zapp build.
 
 The current production ABI is:
 
@@ -13,9 +14,7 @@ void zapp_handle_message_from_window(
 );
 ```
 
-The Nim runtime does not inspect `app`, but the legacy Zen-C runtime still does.
-`host.nim` therefore preserves that ABI as a compatibility adapter and forwards
-the useful arguments to Z:
+The framework-owned core exports the useful message boundary directly:
 
 ```z
 export c function zapp_route_message_owned(
@@ -27,12 +26,12 @@ export c function zapp_route_message_owned(
 ```
 
 The generated Z wrapper rejects null or invalid UTF-8, makes one owned copy,
-and destroys it after the Z function returns. The final call models the current
-Nim router entry point. Its adjacent `.zd` contract selects the exact function;
-Clang supplies the fixed parameter's `const char *` identity, which Z exposes as
-a non-owning `cstring` call boundary. While routing remains in Nim, Nim makes its
-existing second owned copy. Moving envelope parsing and dispatch into Z will
-remove that temporary extra copy.
+and destroys it after the Z function returns. Its adjacent `.zd` contract
+selects the exact host callback; Clang supplies the fixed parameter's
+`const char *` identity, which Z exposes as a non-owning `cstring` call
+boundary. The Phase 0 C host is intentionally tiny: it proves archive linkage,
+runtime initialization, UTF-8 routing, and deterministic shutdown without
+retaining a Nim compatibility layer.
 
 The destination is not a permanent Nim/Z split. Zapp is an early experiment
 that can be rewritten incrementally until its application model, routing, and
@@ -47,13 +46,10 @@ bun run spike:z-bridge
 ```
 
 The runner uses `ZAPP_Z_COMPILER` when set, otherwise the fixed-point compiler
-at `../z-lang/.z-cache/bootstrap/z`, then finally `z` from `PATH`. It builds the
-Z static library, links it into a Nim executable, initializes the generated Z
-embedding runtime, sends a UTF-8 JSON envelope through Nim → Z → Nim, and shuts
-the runtime down cleanly.
-
-The Nim compiler is selected from `ZAPP_NIM`, then `~/.nimble/bin/nim`, and
-finally `nim` from `PATH`.
+at `../z-lang/.z-cache/bootstrap/z`, then finally `z` from `PATH`. It validates
+the compiler contract pinned in `native/z/compiler-contract.json`, stages and
+builds the same Z static library as the CLI, links the strict-C Phase 0 host,
+sends a UTF-8 JSON envelope through C → Z → C, and shuts the runtime down.
 
 This deliberately does not add a raw pointer type to Z. If Z eventually needs
 to inspect a host context rather than use its own application root, that should

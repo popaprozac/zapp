@@ -1,6 +1,11 @@
 {
   "name": "zapp-monorepo",
   "private": true,
+  "workspaces": [
+    "cli",
+    "runtime",
+    "vite"
+  ],
   "scripts": {
     "test": "bun test ./cli/src/*.test.ts ./runtime/*.test.ts",
     "test:native": "bun run cli/src/test-native.ts",

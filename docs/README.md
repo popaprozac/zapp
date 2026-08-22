@@ -11,6 +11,8 @@ Longer-form guides that complement the single-file
 | [`zen-c-services.md`](zen-c-services.md) | Writing native services: JsonValue args, lifecycle, thread-safety |
 | [`patterns.md`](patterns.md) | Cookbook of common app patterns with complete examples |
 | [`architecture.md`](architecture.md) | Under-the-hood walkthrough: layers, bridge, worker lifecycle |
+| [`z-rewrite-charter.md`](z-rewrite-charter.md) | Accepted direction, architecture, and staged plan for rewriting the native core in Z |
+| [`z-native-core.md`](z-native-core.md) | Running, validating, and measuring the experimental `ZAPP_NATIVE_LANG=z` replacement track |
 
 Other entry points:
 

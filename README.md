@@ -15,6 +15,13 @@
 
 Zapp is an application framework that produces **extraordinarily small binaries** by compiling to native code (Nim by default; [Zen-C](https://github.com/zenc-lang/zenc) available as `ZAPP_NATIVE_LANG=zc`) and rendering UI in the system WebView. No bundled browser. No runtime overhead. Your frontend is your choice — React, Svelte, Vue, Solid, or vanilla; `zapp init -t <template>` scaffolds any of them.
 
+The next native core is being written from scratch in [Z](https://github.com/popaprozac/z) and is
+available as an explicitly experimental `ZAPP_NATIVE_LANG=z` build track. The
+current Phase 0 path builds a pinned Z static library, validates its embedding
+runtime, and exercises the framework message boundary; it is not a usable
+WebView application yet. See the [rewrite charter](docs/z-rewrite-charter.md)
+and [checkpoint guide](docs/z-native-core.md).
+
 The same Zapp codebase ships to **macOS and iOS** today (Windows next). Desktop apps get the full multi-window / menu-bar / tray surface; iOS apps get UIKit-native modal sheets, file pickers, notifications, and clipboard — without any "this looks like a web app on a phone" feel.
 
 Building with an AI agent? Point it at [`llms.txt`](llms.txt) for a

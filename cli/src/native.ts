@@ -5,15 +5,15 @@ import { existsSync, unlinkSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { resolveBareDir } from "./paths";
 import { clog } from "./log";
-import { useNimNative } from "./native-lang";
+import { nativeLanguage } from "./native-lang";
+import type { BuildTarget } from "./build-target";
+export type { BuildTarget } from "./build-target";
 
 /**
  * Build target — what platform/architecture the binary is being
  * compiled FOR. Distinct from the host platform we're building ON
  * (always darwin for iOS targets — Xcode SDK requirement).
  */
-export type BuildTarget = "macos" | "ios-simulator" | "ios-device" | "windows";
-
 /**
  * Detect the build target from CLI argv. `--platform ios` is sugar
  * for ios-simulator (the common dev case); use `ios-device` explicitly
@@ -1132,11 +1132,11 @@ export function chooseNimRoot(root: string): string {
 }
 
 /**
- * Nim-driven native build (opt-in via ZAPP_NATIVE_LANG=nim). Drives the build
+ * Nim-driven native build (the current default). Drives the build
  * with `nim c` against the Nim build root (`native/nim/zapp.nim`), which
  * {.compile.}s the untouched darwin platform layer and links the frameworks.
- * The default build path stays `zc build` (compileNative below); this is the
- * walking-skeleton route while the native layer is rebuilt in Nim.
+ * The legacy Zen-C route remains available in `compileNative`; this is the
+ * current production path while the replacement Z core is built separately.
  *
  * Before invoking `nim c`, generates the two CLI-owned config modules into the
  * project's `.zapp/` dir (the same dir the zc path uses) and `--path`-imports
@@ -1435,11 +1435,19 @@ async function buildNativeNim(
 export async function compileNative(opts: CompileOptions): Promise<void> {
   const { root, buildFile, buildConfigFile, bootstrapFile, assetsFile, headlessFile, engineOverlayFile, output, nativeDir, optimize } = opts;
   const target: BuildTarget = opts.target ?? detectTarget();
+  const language = nativeLanguage();
+
+  if (language === "z") {
+    const { buildNativeZ } = await import("./native-z");
+    await buildNativeZ({ root, nativeDir, output, optimize, target });
+    return;
+  }
 
   // Default Nim build path. Branches before any zc setup so the Nim driver owns
   // the whole compile; the caller still emits the canonical "build complete"
-  // line. `ZAPP_NATIVE_LANG=zc` opts out to the legacy zc path below.
-  if (useNimNative()) {
+  // line. `ZAPP_NATIVE_LANG=zc` selects the legacy path below, while the Z
+  // replacement returned above.
+  if (language === "nim") {
     const verbose = process.argv.includes("--verbose") || process.argv.includes("-v");
     if (!opts.config) {
       throw new Error("[zapp] Nim build path requires a resolved config (opts.config).");

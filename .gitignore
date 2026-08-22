@@ -13,7 +13,6 @@ vendor/cef
 
 # Dependencies
 node_modules/
-bun.lock
 
 # Generated
 src/zapp/

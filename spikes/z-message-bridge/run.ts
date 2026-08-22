@@ -1,23 +1,14 @@
-import { existsSync } from "node:fs";
-import { homedir } from "node:os";
 import { resolve } from "node:path";
+import { compileNative } from "../../cli/src/native";
 
 const spike = import.meta.dir;
 const repository = resolve(spike, "../..");
-const siblingCompiler = resolve(repository, "../z-lang/.z-cache/bootstrap/z");
-const compiler = process.env.ZAPP_Z_COMPILER
-  ?? (existsSync(siblingCompiler) ? siblingCompiler : "z");
-const userNim = resolve(homedir(), ".nimble/bin/nim");
-const nim = process.env.ZAPP_NIM
-  ?? (existsSync(userNim) ? userNim : "nim");
 const build = resolve(spike, "build");
-const archive = resolve(build, "libzapp_message_bridge.a");
 const host = resolve(build, "zapp-message-bridge-host");
-const nimcache = resolve(build, "nimcache");
 
-async function run(command: string[], cwd = repository): Promise<void> {
+async function run(command: string[]): Promise<void> {
   const child = Bun.spawn(command, {
-    cwd,
+    cwd: repository,
     stdout: "inherit",
     stderr: "inherit",
   });
@@ -27,17 +18,20 @@ async function run(command: string[], cwd = repository): Promise<void> {
   }
 }
 
-await run([compiler, "build", spike]);
-await run([
-  nim,
-  "c",
-  `--cc:${process.platform === "win32" ? "gcc" : "clang"}`,
-  "--mm:orc",
-  "-d:release",
-  "--opt:size",
-  `--nimcache:${nimcache}`,
-  `--passL:${archive}`,
-  `-o:${host}`,
-  resolve(spike, "host.nim"),
-]);
-await run([host]);
+const originalLanguage = process.env.ZAPP_NATIVE_LANG;
+process.env.ZAPP_NATIVE_LANG = "z";
+try {
+  await compileNative({
+    root: spike,
+    buildFile: "",
+    buildConfigFile: "",
+    nativeDir: resolve(repository, "native"),
+    output: host,
+    optimize: true,
+    target: "macos",
+  });
+} finally {
+  if (originalLanguage === undefined) delete process.env.ZAPP_NATIVE_LANG;
+  else process.env.ZAPP_NATIVE_LANG = originalLanguage;
+}
+await run([host, "{\"message\":\"héllo from Zapp\"}"]);

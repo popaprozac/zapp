@@ -23,6 +23,8 @@ This guarantees your project keeps working even as the CLI evolves.
 
 - **Bun** ≥ 1.3
 - **Nim** — https://nim-lang.org (default native build on macOS/iOS/Linux)
+- **Z compiler** — required only with `ZAPP_NATIVE_LANG=z`; the compiler must
+  match the identity pinned by `native/z/compiler-contract.json`
 - **Zen-C compiler (`zc`)** — https://github.com/zenc-lang/zenc — only needed with `ZAPP_NATIVE_LANG=zc` (legacy opt-out; required for Windows until Windows-on-Nim lands)
 - **Xcode Command Line Tools** (macOS) — for `codesign`, `iconutil`
 - **cmake** — only required on first build of the `bare-*` worker engines
@@ -119,7 +121,7 @@ Valid values: `verbose`, `debug`. Unset (default) is quiet mode.
 my-app/
 ├── package.json, tsconfig.json, vite.config.ts, index.html
 ├── src/                   # your TS / UI code
-├── zapp/                  # your native code — app.nim (Nim default) or app.zc (ZAPP_NATIVE_LANG=zc)
+├── zapp/                  # app.nim (Nim default) or app.zc (legacy Zen-C)
 ├── zapp.config.ts         # app identity, headless workers, macOS opts
 ├── build/                 # platform-specific build inputs
 │   ├── README.md
@@ -188,6 +190,11 @@ CLI injects platform frameworks, link flags, ObjC ARC, and the sysroot into
 `.zapp/zapp_platform.zc` and derives worker engines from
 `zapp.config.ts → headless[].engine`, so the default template has no
 `//>` build directives or `ZAPP_WORKER_ENGINE_*` defines.
+
+`ZAPP_NATIVE_LANG=z` currently selects the framework-owned Phase 0 core under
+`native/z/`. It deliberately does not consume app-authored native source or
+start a WebView yet: this checkpoint proves the Z archive, compiler contract,
+runtime lifecycle, and message ABI through the ordinary CLI compile seam.
 
 To link beyond the defaults, declare it in `zapp.config.ts → native`:
 
