@@ -34,4 +34,8 @@ try {
   if (originalLanguage === undefined) delete process.env.ZAPP_NATIVE_LANG;
   else process.env.ZAPP_NATIVE_LANG = originalLanguage;
 }
-await run([host, "{\"message\":\"héllo from Zapp\"}"]);
+await run([
+  host,
+  '{"t":1,"id":18446744073709551615,"m":"__zapp:ping","a":{"message":"héllo from Zapp"}}',
+  '{"message":"héllo from Zapp"}',
+]);

@@ -1,5 +1,6 @@
 # Build artifacts
 .zapp/
+.z-cache/
 bin/
 release/
 dist/

@@ -1,6 +1,7 @@
 # Z native core
 
-Status: Phase 0 complete; Phase 1 AppKit/WebKit vertical slice next, August 2026.
+Status: Phase 0 complete; Phase 1 typed message ingress complete and the
+AppKit/WebKit vertical slice next, August 2026.
 
 Zapp's future native core lives under `native/z/`. It is a from-scratch Z
 implementation, not a translation of the current Nim or Zen-C trees. Those
@@ -23,8 +24,14 @@ the Z builder. The builder:
 6. initializes the Z runtime, routes one owned UTF-8 message through Z, and
    shuts the runtime down deterministically.
 
-The Phase 0 executable is a strict-C host, not a desktop application. It exits
-after the lifecycle smoke. Phase 1 replaces that host with the Z-owned
+The route is no longer a pass-through smoke. Z's source-backed `std/json`
+parser decodes the WebView envelope into `BridgeMessage`, preserves request
+identities through the full `u64` range, dispatches `__zapp:ping`, and returns
+a typed `BridgeResponse` to the C host. Arbitrary `a` payloads are serialized
+at the ingress edge and do not become the core's internal object model.
+
+The current executable is a strict-C host, not a desktop application. It exits
+after the lifecycle smoke. The next Phase 1 slice replaces that host with the Z-owned
 `Application`, `NSApplication`, `NSWindow`, and `WKWebView` vertical slice.
 
 Run the focused end-to-end smoke with:
@@ -34,9 +41,10 @@ bun run spike:z-bridge
 ```
 
 The smoke imports `compileNative`, sets the same language selector as the CLI,
-builds the in-tree core, links it, and routes a non-ASCII JSON envelope. It is
-therefore evidence for the real build seam rather than a parallel script that
-can drift from it.
+builds the in-tree core, links it, and routes a non-ASCII JSON envelope with
+request ID `u64.max`. It verifies the typed response metadata and exact JSON
+payload after the C -> Z -> C round trip. It is therefore evidence for the real
+build seam rather than a parallel script that can drift from it.
 
 ## Compiler contract
 
@@ -65,8 +73,10 @@ library and a size-optimized strict-C host:
 | Clean staged smoke | 373.6 ms mean, 35.3 ms standard deviation | Five runs, stage removed before each run |
 | Cached staged smoke | 314.1 ms mean, 24.8 ms standard deviation | Ten runs after two warmups |
 
-These numbers are a compiler/link baseline, not a product comparison. The
-current 445 KB / 26 MB / roughly 135 microsecond WebView baseline remains the
+These are the historical pre-JSON baseline numbers, not a product comparison.
+The first typed JSON bridge archive is 40,136 bytes and its strict-C smoke host
+is 70,424 bytes. The current 445 KB / 26 MB / roughly 135 microsecond WebView
+baseline remains the
 oracle until Phase 1 performs equivalent work. Z must then report clean and
 incremental build time, binary and bundle size, idle memory, startup, bridge
 latency, allocations/copies, and deterministic shutdown against the same app.
@@ -95,6 +105,7 @@ CLI merely because it exists.
 
 Phase 0's exit criterion is satisfied: `ZAPP_NATIVE_LANG=z` builds and links
 through the ordinary kitchen-sink frontend project without a separate bridge
-implementation. Phase 1 is the single-window AppKit/WebKit slice in the
-rewrite charter, with JSON decoded immediately into typed Z values rather than
-retained as the core object model.
+implementation. Phase 1 message ingress is also implemented: JSON is decoded
+immediately into typed Z values, one typed handler is dispatched, and typed
+response metadata crosses back into the host. The remaining Phase 1 work is
+the single-window AppKit/WebKit slice and a visible WebView round trip.

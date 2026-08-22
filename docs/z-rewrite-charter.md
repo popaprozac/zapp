@@ -5,8 +5,9 @@ Status: accepted direction, August 2026.
 Implementation status: Phase 0 is complete. The framework-owned `native/z/`
 static library, compiler-identity gate, embedding lifecycle host, and promoted
 message-boundary smoke are implemented and build through the ordinary
-kitchen-sink CLI path; the first AppKit/WebKit application is the next vertical
-slice.
+kitchen-sink CLI path. Phase 1's typed JSON ingress, first typed handler, and
+typed C response callback are implemented; the first AppKit/WebKit application
+is the next vertical slice.
 
 ## Decision
 
@@ -162,6 +163,11 @@ Implement one deliberately complete vertical slice:
 Exit: a frontend button completes a visible WebView -> Z -> WebView round trip,
 the app remains alive until the window closes, and sanitizers report no leaks,
 dangling callback targets, or ownership errors.
+
+Steps 7-9 are proven independently of WebKit by the promoted native bridge:
+`std/json` decodes `{t,id,m,a}`, `BridgeMessage` and `BridgeResponse` keep the
+core typed, and the response metadata returns through a narrow C callback. The
+remaining work connects that path to the real WebView lifecycle.
 
 ### Phase 2: make the core real
 

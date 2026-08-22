@@ -105,6 +105,7 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
   const stage = path.join(options.root, ".zapp", "z-native-core");
   await mkdir(stage, { recursive: true });
   for (const file of [
+    "bridge.zs",
     "core.zs",
     "z.json",
     "zapp_router.h",
