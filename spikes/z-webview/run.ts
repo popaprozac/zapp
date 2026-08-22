@@ -3,8 +3,7 @@ import { compileNative } from "../../cli/src/native";
 
 const spike = import.meta.dir;
 const repository = resolve(spike, "../..");
-const build = resolve(spike, "build");
-const host = resolve(build, "zapp-message-bridge-host");
+const output = resolve(spike, "build", "zapp-z-webview");
 
 async function run(command: string[]): Promise<void> {
   const child = Bun.spawn(command, {
@@ -21,14 +20,14 @@ async function run(command: string[]): Promise<void> {
 const originalLanguage = process.env.ZAPP_NATIVE_LANG;
 const originalHost = process.env.ZAPP_Z_HOST;
 process.env.ZAPP_NATIVE_LANG = "z";
-process.env.ZAPP_Z_HOST = "bridge";
+process.env.ZAPP_Z_HOST = "desktop";
 try {
   await compileNative({
     root: spike,
     buildFile: "",
     buildConfigFile: "",
     nativeDir: resolve(repository, "native"),
-    output: host,
+    output,
     optimize: true,
     target: "macos",
   });
@@ -38,8 +37,5 @@ try {
   if (originalHost === undefined) delete process.env.ZAPP_Z_HOST;
   else process.env.ZAPP_Z_HOST = originalHost;
 }
-await run([
-  host,
-  '{"t":1,"id":18446744073709551615,"m":"__zapp:ping","a":{"message":"héllo from Zapp"}}',
-  '{"message":"héllo from Zapp"}',
-]);
+
+await run([output]);

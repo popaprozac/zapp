@@ -1,5 +1,24 @@
 import { describe, expect, it } from "bun:test";
-import { parseZCompilerIdentity, validateZCompilerIdentity } from "./native-z";
+import {
+  parseZCompilerIdentity,
+  resolveZNativeHost,
+  validateZCompilerIdentity,
+} from "./native-z";
+
+describe("resolveZNativeHost", () => {
+  it("selects the visible desktop host by default", () => {
+    expect(resolveZNativeHost(undefined)).toBe("desktop");
+  });
+
+  it("allows the strict C bridge regression host", () => {
+    expect(resolveZNativeHost("bridge")).toBe("bridge");
+  });
+
+  it("rejects unknown host modes", () => {
+    expect(() => resolveZNativeHost("other"))
+      .toThrow(/ZAPP_Z_HOST must be "desktop" or "bridge"/);
+  });
+});
 
 describe("parseZCompilerIdentity", () => {
   it("decodes the pinned compiler contract", () => {

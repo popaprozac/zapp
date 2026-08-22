@@ -2,6 +2,11 @@
   "target": {
     "kind": "static-library",
     "name": "zapp_core",
-    "entry": "core.zs"
+    "entry": "core.zs",
+    "platform": "macos",
+    "minimumVersion": "14.0",
+    "runtime": {
+      "initialize": "initializeApplication"
+    }
   }
 }

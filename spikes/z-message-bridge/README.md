@@ -63,6 +63,8 @@ at `../z-lang/.z-cache/bootstrap/z`, then finally `z` from `PATH`. It validates
 the compiler contract pinned in `native/z/compiler-contract.json`, stages and
 builds the same Z static library as the CLI, links the strict-C host,
 sends a UTF-8 JSON envelope through C → Z → C, and shuts the runtime down.
+It selects the internal `bridge` host explicitly; ordinary
+`ZAPP_NATIVE_LANG=z` builds now link the visible desktop host.
 
 The Z router itself also has native fixed-point tests:
 

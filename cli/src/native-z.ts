@@ -9,6 +9,8 @@ export interface ZCompilerIdentity {
   compilerApi: number;
 }
 
+export type ZNativeHost = "desktop" | "bridge";
+
 interface ZCompilerContract extends ZCompilerIdentity {}
 
 interface BuildNativeZOptions {
@@ -65,6 +67,16 @@ export function resolveZCompiler(repositoryRoot: string): string {
   return existsSync(sibling) ? sibling : "z";
 }
 
+export function resolveZNativeHost(value: string | undefined): ZNativeHost {
+  const host = value ?? "desktop";
+  if (host !== "desktop" && host !== "bridge") {
+    throw new Error(
+      `[zapp] ZAPP_Z_HOST must be "desktop" or "bridge", not ${JSON.stringify(host)}.`,
+    );
+  }
+  return host;
+}
+
 async function run(command: string[], cwd: string, capture = false): Promise<string> {
   const process = Bun.spawn(command, {
     cwd,
@@ -107,6 +119,7 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
   for (const file of [
     "bridge.zs",
     "core.zs",
+    "desktop.m",
     "z.json",
     "zapp_router.h",
     "zapp_router.h.zd",
@@ -135,17 +148,25 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
   const archive = path.join(stage, "build", "libzapp_core.a");
   const headerDir = path.join(stage, "build");
   const clang = process.env.CC || "clang";
+  const host = resolveZNativeHost(process.env.ZAPP_Z_HOST);
+  const desktop = host === "desktop";
   await run([
     clang,
-    "-std=c11",
+    ...(desktop ? ["-fobjc-arc", "-fblocks"] : ["-std=c11"]),
+    "-mmacosx-version-min=14.0",
     options.optimize ? "-Oz" : "-O0",
     "-Wall",
     "-Wextra",
     "-Werror",
     "-I",
     headerDir,
-    path.join(stage, "host.c"),
+    path.join(stage, desktop ? "desktop.m" : "host.c"),
     archive,
+    ...(desktop ? [
+      "-framework", "AppKit",
+      "-framework", "WebKit",
+      "-framework", "CoreFoundation",
+    ] : []),
     "-o",
     options.output,
   ], options.root);

@@ -5,9 +5,10 @@ Status: accepted direction, August 2026.
 Implementation status: Phase 0 is complete. The framework-owned `native/z/`
 static library, compiler-identity gate, embedding lifecycle host, and promoted
 message-boundary smoke are implemented and build through the ordinary
-kitchen-sink CLI path. Phase 1's typed JSON ingress, first typed handler, and
-typed C response callback are implemented; the first AppKit/WebKit application
-is the next vertical slice.
+kitchen-sink CLI path. Phase 1's generated-runtime-owned Z `Application`, typed
+JSON ingress, first typed handler, typed response callback, and first visible
+AppKit/WebKit round trip are implemented. Native-object ownership remains in a
+small Objective-C host while fixed-point Objective-C metadata is staged.
 
 ## Decision
 
@@ -168,6 +169,13 @@ Steps 7-9 are proven independently of WebKit by the promoted native bridge:
 `std/json` decodes `{t,id,m,a}`, `BridgeMessage` and `BridgeResponse` keep the
 core typed, and the response metadata returns through a narrow C callback. The
 remaining work connects that path to the real WebView lifecycle.
+
+The first visible transport checkpoint now also proves steps 3-4, 6, and 10
+through a transitional Objective-C host, while step 2 is owned by Z's generated
+runtime initializer. The page automatically exercises a real button and updates
+its DOM from the typed Z response. This does not close Phase 1 yet: the
+production document-start bootstrap, Z-owned AppKit/WebKit identities and
+retained protocol registration, and sanitizer evidence remain required.
 
 ### Phase 2: make the core real
 
