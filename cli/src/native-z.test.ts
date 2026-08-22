@@ -1,9 +1,29 @@
 import { describe, expect, it } from "bun:test";
 import {
   parseZCompilerIdentity,
+  renderZWebviewBootstrapC,
   resolveZNativeHost,
   validateZCompilerIdentity,
 } from "./native-z";
+
+describe("renderZWebviewBootstrapC", () => {
+  it("preserves arbitrary UTF-8 source without C literal ambiguity", () => {
+    const source = 'globalThis.message = "héllo\\n世界";\u2028';
+    const output = renderZWebviewBootstrapC(source);
+    const bytes = Array.from(
+      output.matchAll(/\\x([0-9a-f]{2})/g),
+      (match) => Number.parseInt(match[1], 16),
+    );
+
+    expect(new TextDecoder().decode(Uint8Array.from(bytes))).toBe(source);
+    expect(output).toContain("const char *zapp_webview_bootstrap_script(void)");
+  });
+
+  it("emits a valid empty C string", () => {
+    expect(renderZWebviewBootstrapC(""))
+      .toContain('static const char zapp_webview_bootstrap[] =\n  "";');
+  });
+});
 
 describe("resolveZNativeHost", () => {
   it("selects the visible desktop host by default", () => {

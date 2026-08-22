@@ -19,11 +19,14 @@ export c function zapp_route_message_owned(
   windowId: i32
 ): void {
   const current = application.get();
-  const response = routeMessage(in message);
-  zapp_deliver_response_from_z(
-    response.payload,
-    response.id,
-    response.ok,
-    windowId
-  );
+  const routed = routeMessage(in message);
+  match (routed) {
+    some(response) => zapp_deliver_response_from_z(
+      response.payload,
+      response.id,
+      response.ok,
+      windowId
+    );
+    none => {}
+  }
 }

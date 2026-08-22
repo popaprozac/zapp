@@ -129,26 +129,26 @@ function response(id: u64, ok: boolean, payload: String): BridgeResponse {
   return BridgeResponse({ id, ok, payload: move payload });
 }
 
-function dispatch(in message: BridgeMessage): BridgeResponse {
+function dispatch(in message: BridgeMessage): Option<BridgeResponse> {
   return match (in message.kind) {
     invoke => {
       if (message.method == "__zapp:ping") {
-        return response(message.id, true, copy message.arguments);
+        return Option.some(response(message.id, true, copy message.arguments));
       }
-      select response(message.id, false, "UNKNOWN_METHOD");
+      select Option.some(response(message.id, false, "UNKNOWN_METHOD"));
     }
-    emit => response(message.id, false, "UNSUPPORTED_MESSAGE_KIND");
-    action => response(message.id, false, "UNSUPPORTED_MESSAGE_KIND");
-    worker => response(message.id, false, "UNSUPPORTED_MESSAGE_KIND");
-    sync => response(message.id, false, "UNSUPPORTED_MESSAGE_KIND");
-    cancel => response(message.id, false, "UNSUPPORTED_MESSAGE_KIND");
+    emit => Option.none;
+    action => Option.none;
+    worker => Option.none;
+    sync => Option.none;
+    cancel => Option.none;
   };
 }
 
-export function routeMessage(in source: String): BridgeResponse {
+export function routeMessage(in source: String): Option<BridgeResponse> {
   const decoded = attempt decodeBridgeMessage(in source);
   return match (decoded) {
     success(message) => dispatch(in message);
-    failure(error) => response(0, false, copy error.message);
+    failure(error) => Option.some(response(0, false, copy error.message));
   };
 }

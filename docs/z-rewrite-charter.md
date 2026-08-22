@@ -173,9 +173,10 @@ remaining work connects that path to the real WebView lifecycle.
 The first visible transport checkpoint now also proves steps 3-4, 6, and 10
 through a transitional Objective-C host, while step 2 is owned by Z's generated
 runtime initializer. The page automatically exercises a real button and updates
-its DOM from the typed Z response. This does not close Phase 1 yet: the
-production document-start bootstrap, Z-owned AppKit/WebKit identities and
-retained protocol registration, and sanitizer evidence remain required.
+its DOM from the typed Z response through the canonical production bootstrap's
+`bridge.invoke()` and `_onInvokeResult()` path. This does not close Phase 1 yet:
+Z-owned AppKit/WebKit identities and retained protocol registration, plus
+sanitizer evidence, remain required.
 
 ### Phase 2: make the core real
 

@@ -8,6 +8,8 @@
 #include <stdint.h>
 #include <stdio.h>
 
+extern const char *zapp_webview_bootstrap_script(void);
+
 @class ZAppDesktopHost;
 
 static __weak ZAppDesktopHost *active_host = nil;
@@ -110,7 +112,12 @@ void zapp_deliver_response_from_z(
   }
   NSString *json = [[NSString alloc] initWithData:data
                                           encoding:NSUTF8StringEncoding];
-  NSString *script = [NSString stringWithFormat:@"window.__zappReceive(%@);", json];
+  NSString *script = [NSString stringWithFormat:
+    @"(()=>{const r=%@;const b=globalThis[Symbol.for('zapp.bridge')];"
+    @"if(!b||typeof b._onInvokeResult!=='function'){"
+    @"throw new Error('Zapp bridge is unavailable')}"
+    @"b._onInvokeResult(Number(r.id),r.ok,r.payload)})()",
+    json];
   __weak ZAppDesktopHost *weakSelf = self;
   [self.webView evaluateJavaScript:script completionHandler:^(id value, NSError *error) {
     (void)value;
@@ -118,23 +125,59 @@ void zapp_deliver_response_from_z(
     if (strongSelf == nil) return;
     if (error != nil) {
       strongSelf.result = 45;
-    } else {
-      strongSelf.receivedResponse = YES;
-      strongSelf.result = 0;
-      printf(
-        "visible WebView round trip window=%d request=%llu ok=%s payload=%s\n",
-        windowId,
-        (unsigned long long)requestId,
-        ok ? "true" : "false",
-        payload.UTF8String
-      );
-      fflush(stdout);
+      [strongSelf.window close];
+      return;
     }
+
     dispatch_after(
-      dispatch_time(DISPATCH_TIME_NOW, 700 * NSEC_PER_MSEC),
+      dispatch_time(DISPATCH_TIME_NOW, 250 * NSEC_PER_MSEC),
       dispatch_get_main_queue(),
       ^{
-        [strongSelf.window close];
+        [strongSelf.webView
+          evaluateJavaScript:
+            @"JSON.stringify({"
+            @"roundTrip:document.body?.dataset?.roundTrip??null,"
+            @"status:document.querySelector('#status')?.textContent??null,"
+            @"bridge:typeof globalThis[Symbol.for('zapp.bridge')]"
+            @"})"
+          completionHandler:^(id state, NSError *stateError) {
+            BOOL updated = [state isKindOfClass:[NSString class]]
+              && [(NSString *)state containsString:@"\"roundTrip\":\"ok\""];
+            if (stateError != nil || !updated) {
+              const char *stateText = state == nil
+                ? "<nil>"
+                : [[state description] UTF8String];
+              const char *errorText = stateError == nil
+                ? "<none>"
+                : [[stateError description] UTF8String];
+              fprintf(
+                stderr,
+                "WebView DOM verification failed: state=%s error=%s\n",
+                stateText,
+                errorText
+              );
+              strongSelf.result = 47;
+              [strongSelf.window close];
+              return;
+            }
+            strongSelf.receivedResponse = YES;
+            strongSelf.result = 0;
+            printf(
+              "visible WebView round trip window=%d request=%llu ok=%s payload=%s\n",
+              windowId,
+              (unsigned long long)requestId,
+              ok ? "true" : "false",
+              payload.UTF8String
+            );
+            fflush(stdout);
+            dispatch_after(
+              dispatch_time(DISPATCH_TIME_NOW, 600 * NSEC_PER_MSEC),
+              dispatch_get_main_queue(),
+              ^{
+                [strongSelf.window close];
+              }
+            );
+          }];
       }
     );
   }];
@@ -161,6 +204,20 @@ void zapp_deliver_response_from_z(
 
   self.userContentController = [[WKUserContentController alloc] init];
   [self.userContentController addScriptMessageHandler:self name:@"zapp"];
+
+  const char *bootstrapBytes = zapp_webview_bootstrap_script();
+  NSString *bootstrapSource = bootstrapBytes == NULL
+    ? nil
+    : [NSString stringWithUTF8String:bootstrapBytes];
+  if (bootstrapSource == nil) {
+    self.result = 48;
+    return self.result;
+  }
+  WKUserScript *bootstrap = [[WKUserScript alloc]
+    initWithSource:bootstrapSource
+    injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+    forMainFrameOnly:NO];
+  [self.userContentController addUserScript:bootstrap];
 
   WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
   configuration.userContentController = self.userContentController;
@@ -196,16 +253,17 @@ void zapp_deliver_response_from_z(
     @"</main><script>"
     @"const button=document.querySelector('#ping');"
     @"const status=document.querySelector('#status');"
-    @"window.__zappReceive=response=>{"
-    @"const payload=JSON.parse(response.payload);"
-    @"status.textContent=`${response.ok?'Success':'Failure'}\\nrequest ${response.id}\\n${payload.message}`;"
-    @"document.body.dataset.roundTrip=response.ok?'ok':'error';"
-    @"};"
-    @"button.addEventListener('click',()=>{"
+    @"const bridge=globalThis[Symbol.for('zapp.bridge')];"
+    @"button.addEventListener('click',async()=>{"
     @"status.textContent='Routing…';"
-    @"window.webkit.messageHandlers.zapp.postMessage(JSON.stringify({"
-    @"t:1,id:42,m:'__zapp:ping',a:{message:'héllo from WebKit'}"
-    @"}));"
+    @"try{"
+    @"const payload=await bridge.invoke('__zapp:ping',{message:'héllo from WebKit'});"
+    @"status.textContent=`Success\\n${payload.message}`;"
+    @"document.body.dataset.roundTrip='ok';"
+    @"}catch(error){"
+    @"status.textContent=`Failure\\n${String(error)}`;"
+    @"document.body.dataset.roundTrip='error';"
+    @"}"
     @"});"
     @"setTimeout(()=>button.click(),350);"
     @"</script></body></html>";
@@ -215,6 +273,18 @@ void zapp_deliver_response_from_z(
   [self.window makeKeyAndOrderFront:nil];
   active_host = self;
   [application activate];
+  __weak ZAppDesktopHost *weakSelf = self;
+  dispatch_after(
+    dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC),
+    dispatch_get_main_queue(),
+    ^{
+      ZAppDesktopHost *strongSelf = weakSelf;
+      if (strongSelf != nil && !strongSelf.receivedResponse) {
+        strongSelf.result = 50;
+        [strongSelf.window close];
+      }
+    }
+  );
   [application run];
   active_host = nil;
 

@@ -26,12 +26,16 @@ the Z builder. The builder:
    initializer, routes owned UTF-8 messages through Z, and shuts the root down
    deterministically;
 7. links either the default AppKit/WebKit application host or the focused
-   strict-C bridge host used by the non-UI regression.
+   strict-C bridge host used by the non-UI regression; and
+8. bundles the canonical `bootstrap/webview.ts` source and injects it through a
+   `WKUserScript` at document start.
 
 The route is no longer a pass-through smoke. Z's source-backed `std/json`
 parser decodes the WebView envelope into `BridgeMessage`, preserves request
 identities through the full `u64` range, dispatches `__zapp:ping`, and returns
-a typed `BridgeResponse` to the C host. Arbitrary `a` payloads are serialized
+an `Option<BridgeResponse>` to the host. Request/response invokes produce
+`some(response)`; fire-and-forget bridge actions, events, worker messages, sync
+signals, and cancellation produce `none`. Arbitrary `a` payloads are serialized
 at the ingress edge and do not become the core's internal object model.
 
 The default executable is now a visible AppKit/WebKit application. Its page
@@ -54,10 +58,12 @@ envelope with request ID `u64.max`. It verifies the typed response metadata and
 exact JSON payload after the C -> Z -> C round trip. It is therefore evidence
 for the real build seam rather than a parallel script that can drift from it.
 
-The WebView smoke builds the default host, opens one window, automatically
-clicks the visible bridge button, prints the verified response, and closes. It
-uses the same staged archive and generated embedding header as an ordinary
-`ZAPP_NATIVE_LANG=z` build.
+The WebView smoke builds the default host, injects the production bootstrap at
+document start, opens one window, and automatically clicks the visible bridge
+button. The page calls the canonical `bridge.invoke()` API, native delivery
+resolves it through `_onInvokeResult()`, and the host verifies the resulting DOM
+state before printing the response and closing. It uses the same staged archive
+and generated embedding header as an ordinary `ZAPP_NATIVE_LANG=z` build.
 
 ## Compiler contract
 
@@ -121,5 +127,5 @@ Phase 0's exit criterion is satisfied. Phase 1 now has a visible
 WebView -> Z -> WebView round trip, a generated-runtime-owned Z `Application`,
 typed JSON ingress and dispatch, and deterministic window/run-loop/runtime
 shutdown. The remaining Phase 1 work is to move AppKit/WebKit identities and
-the retained protocol registration into that Z root, inject the production
-document-start bootstrap, and run the complete path under sanitizers.
+the retained protocol registration into that Z root and run the complete path
+under sanitizers.
