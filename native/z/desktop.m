@@ -79,23 +79,6 @@ static bool is_main_thread(void *context) {
   return active_host.registrationOwner;
 }
 
-+ (void)routeScriptMessage:(WKScriptMessage *)message
-        contentController:(WKUserContentController *)controller
-                  windowId:(int32_t)window_id {
-  (void)controller;
-  id body = message.body;
-  if (![body isKindOfClass:[NSString class]]) {
-    zapp_deliver_response_from_z(
-      "WebView message body must be a string",
-      0,
-      false,
-      window_id
-    );
-    return;
-  }
-  zapp_route_message_owned([(NSString *)body UTF8String], window_id);
-}
-
 @end
 
 void zapp_deliver_response_from_z(

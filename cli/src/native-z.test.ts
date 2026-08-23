@@ -59,7 +59,7 @@ describe("Z native host inputs", () => {
     expect(zNativeManifest("bridge")).toBe("z.json");
   });
 
-  it("keeps WebKit handler ownership and registration in Z", () => {
+  it("keeps WebKit handler ownership, validation, and registration in Z", () => {
     const desktopCore = readFileSync(
       new URL("../../native/z/desktop-core.zs", import.meta.url),
       "utf8",
@@ -70,11 +70,15 @@ describe("Z native host inputs", () => {
     );
 
     expect(desktopCore).toContain("implements native.WKScriptMessageHandler");
+    expect(desktopCore).toContain("body instanceof native.NSString");
+    expect(desktopCore).toContain("const text: String = body");
     expect(desktopCore).toContain("objc.register({");
     expect(objectiveCHost).not.toContain(
       "ZAppDesktopHost : NSObject <WKScriptMessageHandler",
     );
     expect(objectiveCHost).not.toContain("addScriptMessageHandler:self");
+    expect(objectiveCHost).not.toContain("[body isKindOfClass:[NSString class]]");
+    expect(objectiveCHost).not.toContain("routeScriptMessage:");
   });
 });
 

@@ -15,7 +15,4 @@
 
 @interface ZAppDesktopBridge : NSObject
 + (ZAppDesktopRegistrationOwner *)registrationOwner;
-+ (void)routeScriptMessage:(WKScriptMessage *)message
-        contentController:(WKUserContentController *)controller
-                  windowId:(int32_t)windowId;
 @end

@@ -11,10 +11,17 @@ class DesktopMessageHandler on thread.main
     in controller: native.WKUserContentController,
     in message: native.WKScriptMessage
   ): void as "userContentController:didReceiveScriptMessage:" {
-    native.ZAppDesktopBridge.routeScriptMessage(
-      message,
-      contentController: controller,
-      windowId: 1
+    const body = message.body;
+    if (body instanceof native.NSString) {
+      const text: String = body;
+      zapp_route_message_owned(move text, 1);
+      return;
+    }
+    zapp_deliver_response_from_z(
+      "WebView message body must be a string",
+      0,
+      false,
+      1
     );
   }
 }
