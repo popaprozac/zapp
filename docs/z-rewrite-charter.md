@@ -7,8 +7,10 @@ static library, compiler-identity gate, embedding lifecycle host, and promoted
 message-boundary smoke are implemented and build through the ordinary
 kitchen-sink CLI path. Phase 1's generated-runtime-owned Z `Application`, typed
 JSON ingress, first typed handler, typed response callback, and first visible
-AppKit/WebKit round trip are implemented. Native-object ownership remains in a
-small Objective-C host while fixed-point Objective-C metadata is staged.
+AppKit/WebKit round trip are implemented. The Z root now owns the WebKit
+protocol handler and deterministic registration guard. Window/WebView
+construction and one dynamic message-body check remain in a small Objective-C
+host.
 
 ## Decision
 
@@ -171,12 +173,13 @@ core typed, and the response metadata returns through a narrow C callback. The
 remaining work connects that path to the real WebView lifecycle.
 
 The first visible transport checkpoint now also proves steps 3-4, 6, and 10
-through a transitional Objective-C host, while step 2 is owned by Z's generated
-runtime initializer. The page automatically exercises a real button and updates
-its DOM from the typed Z response through the canonical production bootstrap's
-`bridge.invoke()` and `_onInvokeResult()` path. This does not close Phase 1 yet:
-Z-owned AppKit/WebKit identities and retained protocol registration, plus
-sanitizer evidence, remain required.
+through a transitional Objective-C host, while step 2 and retained
+`WKScriptMessageHandler` registration are owned by Z's generated runtime root.
+The page automatically exercises a real button and updates its DOM from the
+typed Z response through the canonical production bootstrap's
+`bridge.invoke()` and `_onInvokeResult()` path. Phase 1 still requires sanitizer
+evidence and a deliberate decision about which remaining window/WebView
+identities improve by moving into Z.
 
 ### Phase 2: make the core real
 

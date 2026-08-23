@@ -1,9 +1,12 @@
 import { describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
 import {
   parseZCompilerIdentity,
   renderZWebviewBootstrapC,
   resolveZNativeHost,
   validateZCompilerIdentity,
+  zNativeManifest,
+  zNativeStageFiles,
 } from "./native-z";
 
 describe("renderZWebviewBootstrapC", () => {
@@ -37,6 +40,40 @@ describe("resolveZNativeHost", () => {
   it("rejects unknown host modes", () => {
     expect(() => resolveZNativeHost("other"))
       .toThrow(/ZAPP_Z_HOST must be "desktop" or "bridge"/);
+  });
+});
+
+describe("Z native host inputs", () => {
+  it("stages the Z-owned Objective-C registration surface for desktop", () => {
+    expect(zNativeStageFiles("desktop")).toContain("desktop-core.zs");
+    expect(zNativeStageFiles("desktop")).toContain("zapp_desktop.h.zd");
+    expect(zNativeStageFiles("desktop")).not.toContain("host.c");
+    expect(zNativeManifest("desktop")).toBe("desktop-z.json");
+  });
+
+  it("keeps the strict C bridge on the minimal manifest", () => {
+    expect(zNativeStageFiles("bridge")).not.toContain("desktop-core.zs");
+    expect(zNativeStageFiles("bridge")).not.toContain("zapp_desktop.h");
+    expect(zNativeStageFiles("bridge")).not.toContain("desktop.m");
+    expect(zNativeManifest("bridge")).toBe("z.json");
+  });
+
+  it("keeps WebKit handler ownership and registration in Z", () => {
+    const desktopCore = readFileSync(
+      new URL("../../native/z/desktop-core.zs", import.meta.url),
+      "utf8",
+    );
+    const objectiveCHost = readFileSync(
+      new URL("../../native/z/desktop.m", import.meta.url),
+      "utf8",
+    );
+
+    expect(desktopCore).toContain("implements native.WKScriptMessageHandler");
+    expect(desktopCore).toContain("objc.register({");
+    expect(objectiveCHost).not.toContain(
+      "ZAppDesktopHost : NSObject <WKScriptMessageHandler",
+    );
+    expect(objectiveCHost).not.toContain("addScriptMessageHandler:self");
   });
 });
 

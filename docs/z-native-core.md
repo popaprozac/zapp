@@ -39,11 +39,13 @@ signals, and cancellation produce `none`. Arbitrary `a` payloads are serialized
 at the ingress edge and do not become the core's internal object model.
 
 The default executable is now a visible AppKit/WebKit application. Its page
-posts through `WKScriptMessageHandler`, Z decodes and dispatches the message,
-and the typed response updates the DOM before deterministic window and runtime
-shutdown. The framework's process root is already Z-owned. AppKit/WebKit object
-construction and script-handler registration remain in a small Objective-C
-host until Objective-C metadata crosses the fixed-point native compiler.
+posts through a Z-defined `WKScriptMessageHandler`; Z decodes and dispatches the
+message, and the typed response updates the DOM before deterministic window and
+runtime shutdown. The Z `DesktopApplication` root owns the handler registration
+guard, so shutdown unregisters it exactly once. The Objective-C host still owns
+window/WebView construction and rendering plus one narrow dynamic check that
+WebKit's `id` message body is an `NSString` before it enters Z as an owned
+`String`.
 
 Run the focused end-to-end smoke with:
 
@@ -125,7 +127,8 @@ CLI merely because it exists.
 
 Phase 0's exit criterion is satisfied. Phase 1 now has a visible
 WebView -> Z -> WebView round trip, a generated-runtime-owned Z `Application`,
-typed JSON ingress and dispatch, and deterministic window/run-loop/runtime
-shutdown. The remaining Phase 1 work is to move AppKit/WebKit identities and
-the retained protocol registration into that Z root and run the complete path
-under sanitizers.
+Z-owned retained protocol registration, typed JSON ingress and dispatch, and
+deterministic window/run-loop/runtime shutdown. The remaining Phase 1 work is
+to move window/WebView identities into Z where that improves the architecture,
+replace the dynamic body-check seam when checked Objective-C-owned text
+provenance is available, and run the complete path under sanitizers.

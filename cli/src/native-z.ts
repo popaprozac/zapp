@@ -77,6 +77,25 @@ export function resolveZNativeHost(value: string | undefined): ZNativeHost {
   return host;
 }
 
+export function zNativeStageFiles(host: ZNativeHost): string[] {
+  return [
+    "bridge.zs",
+    "core.zs",
+    ...(host === "desktop" ? [
+      "desktop-core.zs",
+      "desktop.m",
+      "zapp_desktop.h",
+      "zapp_desktop.h.zd",
+    ] : ["host.c"]),
+    "zapp_router.h",
+    "zapp_router.h.zd",
+  ];
+}
+
+export function zNativeManifest(host: ZNativeHost): string {
+  return host === "desktop" ? "desktop-z.json" : "z.json";
+}
+
 export function renderZWebviewBootstrapC(source: string): string {
   const bytes = new TextEncoder().encode(source);
   const lines: string[] = [];
@@ -137,18 +156,16 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
 
   const source = path.join(options.nativeDir, "z");
   const stage = path.join(options.root, ".zapp", "z-native-core");
+  const host = resolveZNativeHost(process.env.ZAPP_Z_HOST);
+  const desktop = host === "desktop";
   await mkdir(stage, { recursive: true });
-  for (const file of [
-    "bridge.zs",
-    "core.zs",
-    "desktop.m",
-    "z.json",
-    "zapp_router.h",
-    "zapp_router.h.zd",
-    "host.c",
-  ]) {
+  for (const file of zNativeStageFiles(host)) {
     await cp(path.join(source, file), path.join(stage, file));
   }
+  await cp(
+    path.join(source, zNativeManifest(host)),
+    path.join(stage, "z.json"),
+  );
 
   const compiler = resolveZCompiler(path.resolve(options.nativeDir, ".."));
   const identity = await assertZCompilerContract(
@@ -178,8 +195,6 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
   const archive = path.join(stage, "build", "libzapp_core.a");
   const headerDir = path.join(stage, "build");
   const clang = process.env.CC || "clang";
-  const host = resolveZNativeHost(process.env.ZAPP_Z_HOST);
-  const desktop = host === "desktop";
   await run([
     clang,
     ...(desktop ? ["-fobjc-arc", "-fblocks"] : ["-std=c11"]),

@@ -2,6 +2,8 @@
 #import <WebKit/WebKit.h>
 
 #include "zapp_core.h"
+#include "zapp_router.h"
+#import "zapp_desktop.h"
 
 #include <dispatch/dispatch.h>
 #include <pthread.h>
@@ -34,17 +36,66 @@ static bool is_main_thread(void *context) {
   return pthread_main_np() != 0;
 }
 
-@interface ZAppDesktopHost : NSObject <WKScriptMessageHandler, NSWindowDelegate>
+@interface ZAppDesktopHost : NSObject <NSWindowDelegate>
 @property(nonatomic, strong) NSWindow *window;
 @property(nonatomic, strong) WKWebView *webView;
 @property(nonatomic, strong) WKUserContentController *userContentController;
+@property(nonatomic, strong) ZAppDesktopRegistrationOwner *registrationOwner;
 @property(nonatomic, assign) BOOL receivedResponse;
 @property(nonatomic, assign) int32_t result;
 - (int32_t)run;
+- (void)prepare;
 - (void)deliverPayload:(NSString *)payload
              requestId:(uint64_t)requestId
                     ok:(BOOL)ok
               windowId:(int32_t)windowId;
+@end
+
+@interface ZAppDesktopRegistrationOwner ()
+@property(nonatomic, strong) WKUserContentController *contentController;
+@end
+
+@implementation ZAppDesktopRegistrationOwner
+
+- (instancetype)initWithContentController:(WKUserContentController *)controller {
+  self = [super init];
+  if (self != nil) _contentController = controller;
+  return self;
+}
+
+- (void)addHandler:(id<WKScriptMessageHandler>)handler {
+  [self.contentController addScriptMessageHandler:handler name:@"zapp"];
+}
+
+- (void)removeHandler {
+  [self.contentController removeScriptMessageHandlerForName:@"zapp"];
+}
+
+@end
+
+@implementation ZAppDesktopBridge
+
++ (ZAppDesktopRegistrationOwner *)registrationOwner {
+  return active_host.registrationOwner;
+}
+
++ (void)routeScriptMessage:(WKScriptMessage *)message
+        contentController:(WKUserContentController *)controller
+                  windowId:(int32_t)window_id {
+  (void)controller;
+  id body = message.body;
+  if (![body isKindOfClass:[NSString class]]) {
+    zapp_deliver_response_from_z(
+      "WebView message body must be a string",
+      0,
+      false,
+      window_id
+    );
+    return;
+  }
+  zapp_route_message_owned([(NSString *)body UTF8String], window_id);
+}
+
 @end
 
 void zapp_deliver_response_from_z(
@@ -80,16 +131,10 @@ void zapp_deliver_response_from_z(
   return self;
 }
 
-- (void)userContentController:(WKUserContentController *)userContentController
-      didReceiveScriptMessage:(WKScriptMessage *)message {
-  (void)userContentController;
-  if (![message.body isKindOfClass:[NSString class]]) {
-    self.result = 42;
-    [self.window close];
-    return;
-  }
-  NSString *source = (NSString *)message.body;
-  zapp_route_message_owned(source.UTF8String, 1);
+- (void)prepare {
+  self.userContentController = [[WKUserContentController alloc] init];
+  self.registrationOwner = [[ZAppDesktopRegistrationOwner alloc]
+    initWithContentController:self.userContentController];
 }
 
 - (void)deliverPayload:(NSString *)payload
@@ -202,9 +247,6 @@ void zapp_deliver_response_from_z(
   NSApplication *application = NSApplication.sharedApplication;
   [application setActivationPolicy:NSApplicationActivationPolicyRegular];
 
-  self.userContentController = [[WKUserContentController alloc] init];
-  [self.userContentController addScriptMessageHandler:self name:@"zapp"];
-
   const char *bootstrapBytes = zapp_webview_bootstrap_script();
   NSString *bootstrapSource = bootstrapBytes == NULL
     ? nil
@@ -288,7 +330,6 @@ void zapp_deliver_response_from_z(
   [application run];
   active_host = nil;
 
-  [self.userContentController removeScriptMessageHandlerForName:@"zapp"];
   self.window.delegate = nil;
   return self.receivedResponse ? 0 : self.result;
 }
@@ -297,6 +338,10 @@ void zapp_deliver_response_from_z(
 
 int main(void) {
   @autoreleasepool {
+    ZAppDesktopHost *host = [[ZAppDesktopHost alloc] init];
+    active_host = host;
+    [host prepare];
+
     const zapp_core_runtime_config config = {
       .context = NULL,
       .enqueue_release = enqueue_release,
@@ -307,13 +352,13 @@ int main(void) {
       return 2;
     }
 
-    ZAppDesktopHost *host = [[ZAppDesktopHost alloc] init];
     int32_t result = [host run];
     zapp_core_runtime_status shutdown = zapp_core_runtime_shutdown();
     if (shutdown != ZAPP_CORE_RUNTIME_OK) {
       fputs("could not shut down the embedded Z runtime\n", stderr);
       if (result == 0) result = 46;
     }
+    active_host = nil;
     return result;
   }
 }
