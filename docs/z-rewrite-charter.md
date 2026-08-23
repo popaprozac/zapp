@@ -73,7 +73,7 @@ The rewrite must retain the strongest ideas already proven by Zapp:
 
 | Concern | Z rewrite direction |
 |---|---|
-| Application root | `Once<Application>` provides one process-wide identity with explicit initialization and shutdown. |
+| Application root | Consuming `Application.run(move this)` publishes one platform-private `Once` runtime with explicit initialization and shutdown. |
 | Native lifetime | Owned values, `deinit`, ARC classes, `Weak<T>`, and checked foreign contracts replace implicit slot and callback lifetimes. |
 | UI affinity | AppKit/UIKit work is isolated to `thread.main`; invalid access is rejected before generated native compilation. |
 | Shared mutation | Prefer executor isolation; use `Mutex<T>.withLock` for state that genuinely crosses executors. |
@@ -97,7 +97,7 @@ Bootstrap and @zappdev/runtime (TypeScript)
                     | JSON only at this boundary
                     v
 Z application core
-  - lifecycle and Once<Application>
+  - lifecycle and selected platform runtime
   - typed message protocol and router
   - services and permissions
   - windows, webviews, and events
@@ -113,6 +113,24 @@ Platform modules implement common Z contracts. Cross-platform behavior should
 be shared Z code; a platform branch should contain only behavior that is truly
 platform-specific. macOS is the first implementation target, zjs is the first
 worker engine, and one window plus one WebView is the first UI shape.
+
+The first executable platform seam is now concrete. Portable
+`Application.run(move this)` freezes its services into an
+`ApplicationConfig`, then calls the single selected `platform.zs` module. That
+module must export
+`runApplicationPlatform(config: ApplicationConfig): i32 on thread.main`.
+The current selector delegates to a private `MacOSApplicationRuntime`; a
+headless smoke exports the same function while using a completely different
+runtime shape. There is no runtime platform dispatch or common native storage
+layout.
+
+Z's fixed-point compiler cannot yet execute ordinary traits, and callable type
+aliases cannot currently preserve `thread.main`, so this checkpoint does not
+weaken executor provenance merely to manufacture a formal interface. Future
+conditional-module selection plus target-matrix checking will compile this
+same export contract for macOS, Windows, and Linux. A native-executable trait
+or main-executor callable contract may strengthen the declaration later without
+changing the public `Application` surface.
 
 ## Boundary rules
 
@@ -154,7 +172,7 @@ changing the user frontend project.
 Implement one deliberately complete vertical slice:
 
 1. initialize the Z embedding/runtime boundary;
-2. create the process-wide Z `Application` root;
+2. consume the Z `Application` builder into the process-wide platform runtime;
 3. start `NSApplication` and keep its run loop attached to Zapp's process
    lifetime;
 4. create one `NSWindow` containing one `WKWebView`;
@@ -261,12 +279,12 @@ inside Zapp.
 | Area | Current evidence | Rewrite question |
 |---|---|---|
 | AppKit and main-thread work | The main-executor Z application creates and owns the window, WebView, configuration, content controller, and script handler; the visible round trip proves teardown. | Do navigation delegates, multiple windows, and broader callbacks compose cleanly? |
-| ARC application state | `Application.run(move this)` owns a `Once<ApplicationRuntime>` lifetime containing the native UI graph, protocol adapter, and registration guard while the platform adapter holds weak references. | Can multiple application-owned native delegates avoid cycles and preserve deterministic shutdown? |
+| ARC application state | `Application.run(move this)` owns a platform-private `Once<MacOSApplicationRuntime>` lifetime containing the native UI graph, protocol adapter, and registration guard while the Objective-C adapter holds weak references. | Can multiple application-owned native delegates avoid cycles and preserve deterministic shutdown? |
 | Message protocol | Z has strings, collections, enums, matching, errors, and exported C functions. | Is JSON parsing/encoding production-ready and allocation-conscious at the bridge boundary? |
 | Async and executors | Tasks, scopes, cancellation, placement, and native threads have working slices. | Can WebKit callbacks, task suspension, main-thread resumption, and shutdown cancellation compose in one app? |
 | zjs embedding | `export c function` and the message-bridge spike prove bidirectional linking. | Can JS values and callback lifetimes cross efficiently without reducing everything to JSON? |
 | Resources and packaging | The existing CLI already bundles bootstraps, assets, and native sources. | What should the stable Z build/library contract be before the CLI depends on it? |
-| Portability | Z lowers through C-family toolchains; Zapp has platform implementations. | Which core types and services are truly portable, and where are target guards required? |
+| Portability | Portable `Application` configuration now crosses one selected `runApplicationPlatform` module seam; macOS and headless implementations prove that private runtime layouts may differ. | When Windows pressure begins, which conditional-module and `std/target` spelling selects every implementation and checks the target matrix? |
 
 ## Performance gates
 

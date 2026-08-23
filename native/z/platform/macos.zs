@@ -1,6 +1,7 @@
 import native from "zapp_desktop.h";
-import { routeMessageWithServices } from "./bridge.zs";
-import { Services, ServicesBuilder, createServices } from "./services.zs";
+import { ApplicationConfig } from "../application-contract.zs";
+import { routeMessageWithServices } from "../bridge.zs";
+import { Services } from "../services.zs";
 import { zapp_deliver_response_from_z } from "zapp_router.h";
 import objc from "std/objc";
 import { Once, OnceLifetime } from "std/sync";
@@ -27,7 +28,7 @@ class DesktopMessageHandler on thread.main
   }
 }
 
-class ApplicationRuntime {
+class MacOSApplicationRuntime {
   readonly name: String;
   readonly services: Services;
   window: native.NSWindow on thread.main;
@@ -38,23 +39,19 @@ class ApplicationRuntime {
   registration: objc.Registration on thread.main;
 }
 
-const application = Once<ApplicationRuntime>();
+const application = Once<MacOSApplicationRuntime>();
 
-export struct Application {
-  name: String;
-  services: ServicesBuilder = createServices();
-
-  function run(move this): i32 on thread.main {
-    const { name, services } = move this;
-    const publishedServices = services.freeze();
-    const prepared = native.zapp_desktop_prepare();
-    if (prepared != 0) return prepared;
-    const lifetime = initializeApplicationRuntime(
-      move name,
-      move publishedServices
-    );
-    return native.zapp_desktop_run();
-  }
+export function runMacOSApplication(
+  config: ApplicationConfig
+): i32 on thread.main {
+  const { name, services } = move config;
+  const prepared = native.zapp_desktop_prepare();
+  if (prepared != 0) return prepared;
+  const lifetime = initializeMacOSApplicationRuntime(
+    move name,
+    move services
+  );
+  return native.zapp_desktop_run();
 }
 
 export c function zapp_route_message_owned(
@@ -100,10 +97,10 @@ export c function zapp_invoke_service_owned(
   }
 }
 
-function initializeApplicationRuntime(
+function initializeMacOSApplicationRuntime(
   name: String,
   services: Services
-): OnceLifetime<ApplicationRuntime> on thread.main {
+): OnceLifetime<MacOSApplicationRuntime> on thread.main {
   const contentController = native.WKUserContentController.alloc().init();
   const registrationOwner = native.ZAppDesktopRegistrationOwner.alloc()
     .initWithContentController(contentController);
@@ -137,7 +134,7 @@ function initializeApplicationRuntime(
     contentController: contentController
   );
 
-  const value = new ApplicationRuntime({
+  const value = new MacOSApplicationRuntime({
     name: move name,
     services: move services,
     window,

@@ -1,5 +1,5 @@
 import { createNotesService } from "./notes-service.zs";
-import { Application } from "./desktop-core.zs";
+import { Application } from "./application.zs";
 
 function main(): i32 {
   let app = Application({ name: "Notes" });

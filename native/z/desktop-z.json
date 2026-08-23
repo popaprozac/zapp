@@ -4,6 +4,7 @@
     "entry": "app.zs",
     "platform": "macos",
     "minimumVersion": "14.0",
+    "includeDirectories": ["."],
     "link": {
       "directories": ["."],
       "libraries": ["zapp_desktop_host"],

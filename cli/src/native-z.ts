@@ -86,7 +86,10 @@ export function zNativeStageFiles(host: ZNativeHost): string[] {
     "services.zmeta.json",
     ...(host === "desktop" ? [
       "app.zs",
-      "desktop-core.zs",
+      "application.zs",
+      "application-contract.zs",
+      "platform.zs",
+      "platform/macos.zs",
       "desktop.m",
       "zapp_desktop.h",
     ] : ["core.zs", "host.c"]),
@@ -163,7 +166,9 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
   const desktop = host === "desktop";
   await mkdir(stage, { recursive: true });
   for (const file of zNativeStageFiles(host)) {
-    await cp(path.join(source, file), path.join(stage, file));
+    const destination = path.join(stage, file);
+    await mkdir(path.dirname(destination), { recursive: true });
+    await cp(path.join(source, file), destination);
   }
   await cp(
     path.join(source, zNativeManifest(host)),

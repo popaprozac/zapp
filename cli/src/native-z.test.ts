@@ -46,7 +46,10 @@ describe("resolveZNativeHost", () => {
 describe("Z native host inputs", () => {
   it("stages the Z-owned Objective-C registration surface for desktop", () => {
     expect(zNativeStageFiles("desktop")).toContain("app.zs");
-    expect(zNativeStageFiles("desktop")).toContain("desktop-core.zs");
+    expect(zNativeStageFiles("desktop")).toContain("application.zs");
+    expect(zNativeStageFiles("desktop")).toContain("application-contract.zs");
+    expect(zNativeStageFiles("desktop")).toContain("platform.zs");
+    expect(zNativeStageFiles("desktop")).toContain("platform/macos.zs");
     expect(zNativeStageFiles("desktop")).toContain("services.zmeta.json");
     expect(zNativeStageFiles("desktop")).toContain("zapp_desktop.h");
     expect(zNativeStageFiles("desktop")).not.toContain("zapp_desktop.h.zd");
@@ -56,7 +59,8 @@ describe("Z native host inputs", () => {
   });
 
   it("keeps the strict C bridge on the minimal manifest", () => {
-    expect(zNativeStageFiles("bridge")).not.toContain("desktop-core.zs");
+    expect(zNativeStageFiles("bridge")).not.toContain("application.zs");
+    expect(zNativeStageFiles("bridge")).not.toContain("platform/macos.zs");
     expect(zNativeStageFiles("bridge")).toContain("core.zs");
     expect(zNativeStageFiles("bridge")).not.toContain("zapp_desktop.h");
     expect(zNativeStageFiles("bridge")).not.toContain("desktop.m");
@@ -64,8 +68,8 @@ describe("Z native host inputs", () => {
   });
 
   it("keeps the WebKit UI graph, handler, validation, and registration in Z", () => {
-    const desktopCore = readFileSync(
-      new URL("../../native/z/desktop-core.zs", import.meta.url),
+    const macOSPlatform = readFileSync(
+      new URL("../../native/z/platform/macos.zs", import.meta.url),
       "utf8",
     );
     const objectiveCHost = readFileSync(
@@ -73,15 +77,15 @@ describe("Z native host inputs", () => {
       "utf8",
     );
 
-    expect(desktopCore).toContain("implements native.WKScriptMessageHandler");
-    expect(desktopCore).toContain("body instanceof native.NSString");
-    expect(desktopCore).toContain("const text: String = body");
-    expect(desktopCore).toContain("objc.register({");
-    expect(desktopCore).toContain("window: native.NSWindow");
-    expect(desktopCore).toContain("webView: native.WKWebView");
-    expect(desktopCore).toContain("configuration.userContentController = contentController");
-    expect(desktopCore).toContain("window.contentView = webView");
-    expect(desktopCore).toContain("native.ZAppDesktopBridge.attachWindow(");
+    expect(macOSPlatform).toContain("implements native.WKScriptMessageHandler");
+    expect(macOSPlatform).toContain("body instanceof native.NSString");
+    expect(macOSPlatform).toContain("const text: String = body");
+    expect(macOSPlatform).toContain("objc.register({");
+    expect(macOSPlatform).toContain("window: native.NSWindow");
+    expect(macOSPlatform).toContain("webView: native.WKWebView");
+    expect(macOSPlatform).toContain("configuration.userContentController = contentController");
+    expect(macOSPlatform).toContain("window.contentView = webView");
+    expect(macOSPlatform).toContain("native.ZAppDesktopBridge.attachWindow(");
     expect(objectiveCHost).not.toContain(
       "ZAppDesktopHost : NSObject <WKScriptMessageHandler",
     );
@@ -101,19 +105,40 @@ describe("Z native host inputs", () => {
       new URL("../../native/z/app.zs", import.meta.url),
       "utf8",
     );
-    const desktopCore = readFileSync(
-      new URL("../../native/z/desktop-core.zs", import.meta.url),
+    const application = readFileSync(
+      new URL("../../native/z/application.zs", import.meta.url),
+      "utf8",
+    );
+    const contract = readFileSync(
+      new URL("../../native/z/application-contract.zs", import.meta.url),
+      "utf8",
+    );
+    const platform = readFileSync(
+      new URL("../../native/z/platform.zs", import.meta.url),
+      "utf8",
+    );
+    const headless = readFileSync(
+      new URL("../../native/z/platform/headless.zs", import.meta.url),
+      "utf8",
+    );
+    const headlessSmoke = readFileSync(
+      new URL("../../native/z/application-platform-smoke.zs", import.meta.url),
       "utf8",
     );
 
     expect(app).toContain('let app = Application({ name: "Notes" });');
     expect(app).toContain('app.services.register("notes", createNotesService());');
     expect(app).toContain("return app.run();");
-    expect(desktopCore).toContain("export struct Application");
-    expect(desktopCore).toContain("class ApplicationRuntime");
-    expect(desktopCore).toContain("services: ServicesBuilder = createServices();");
-    expect(desktopCore).toContain("function run(move this): i32 on thread.main");
-    expect(desktopCore).toContain("const publishedServices = services.freeze();");
+    expect(application).toContain("export struct Application");
+    expect(application).toContain("services: ServicesBuilder = createServices();");
+    expect(application).toContain("function run(move this): i32 on thread.main");
+    expect(application).toContain("services: services.freeze()");
+    expect(contract).toContain("export struct ApplicationConfig");
+    expect(platform).toContain("export function runApplicationPlatform(");
+    expect(platform).toContain("return runMacOSApplication(move config);");
+    expect(headless).toContain("struct HeadlessApplicationRuntime");
+    expect(headless).toContain("export function runApplicationPlatform(");
+    expect(headlessSmoke).toContain("runHeadlessApplicationPlatform(move config)");
   });
 
   it("freezes value services into an arbitrary-thread callable router", () => {
