@@ -1,4 +1,6 @@
 import json from "std/json";
+import { ServiceOutcome } from "./service-contract.zs";
+import { Services } from "./services.zs";
 
 export enum BridgeMessageKind {
   invoke,
@@ -151,4 +153,45 @@ export function routeMessage(in source: String): Option<BridgeResponse> {
     success(message) => dispatch(in message);
     failure(error) => Option.some(response(0, false, copy error.message));
   };
+}
+
+export function routeMessageWithServices(
+  in source: String,
+  in services: Services
+): Option<BridgeResponse> {
+  const decoded = attempt decodeBridgeMessage(in source);
+  match (decoded) {
+    failure(error) => return Option.some(response(0, false, copy error.message));
+    success(message) => return dispatchWithServices(in message, in services);
+  }
+}
+
+function dispatchWithServices(
+  in message: BridgeMessage,
+  in services: Services
+): Option<BridgeResponse> {
+  match (in message.kind) {
+    invoke => {
+      if (message.method == "__zapp:ping") {
+        return Option.some(response(message.id, true, copy message.arguments));
+      }
+      const invoked = services.invoke(
+        copy message.method,
+        copy message.arguments
+      );
+      match (invoked) {
+        success(payload) => return Option.some(
+          response(message.id, true, move payload)
+        );
+        failure(error) => return Option.some(
+          response(message.id, false, move error)
+        );
+      }
+    }
+    emit => return Option.none;
+    action => return Option.none;
+    worker => return Option.none;
+    sync => return Option.none;
+    cancel => return Option.none;
+  }
 }

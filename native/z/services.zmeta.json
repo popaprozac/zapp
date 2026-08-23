@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "types": [
+    {
+      "name": "CreateNoteInput",
+      "fields": [
+        { "name": "title", "type": "String" }
+      ]
+    },
+    {
+      "name": "Note",
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "title", "type": "String" }
+      ]
+    }
+  ],
+  "services": [
+    {
+      "name": "notes",
+      "type": "NotesService",
+      "methods": [
+        {
+          "name": "create",
+          "input": "CreateNoteInput",
+          "returns": "Note"
+        },
+        {
+          "name": "count",
+          "returns": "u64"
+        }
+      ]
+    }
+  ]
+}

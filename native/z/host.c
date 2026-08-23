@@ -3,7 +3,9 @@
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 static char observed_payload[4096];
 static uint64_t observed_request_id = 0;
@@ -70,10 +72,67 @@ int32_t zapp_run_native_host(void) {
     );
   }
 
-  return result;
+  if (result != 0) return result;
+
+  zapp_invoke_service_owned(
+    "notes.create",
+    "{\"title\":\"Host note\"}",
+    2,
+    7
+  );
+  if (
+    strcmp(observed_payload, "{\"id\":\"1\",\"title\":\"Host note\"}") != 0
+    || observed_request_id != 2
+    || !observed_ok
+    || observed_window_id != 7
+  ) {
+    fputs("the direct service entry did not create a typed note\n", stderr);
+    return 7;
+  }
+
+  zapp_invoke_service_owned("notes.count", "{}", 3, 7);
+  if (
+    strcmp(observed_payload, "{\"count\":\"1\"}") != 0
+    || observed_request_id != 3
+    || !observed_ok
+  ) {
+    fputs("the direct service entry did not retain NotesService state\n", stderr);
+    return 8;
+  }
+
+  puts("direct service notes.create + notes.count ok");
+  return 0;
+}
+
+static int32_t benchmark_services(uint64_t iterations) {
+  struct timespec started;
+  struct timespec finished;
+  if (clock_gettime(CLOCK_MONOTONIC, &started) != 0) return 9;
+  for (uint64_t index = 0; index < iterations; index += 1) {
+    zapp_invoke_service_owned("notes.count", "{}", index, 7);
+    if (!observed_ok) return 10;
+  }
+  if (clock_gettime(CLOCK_MONOTONIC, &finished) != 0) return 11;
+  const uint64_t elapsed =
+    (uint64_t)(finished.tv_sec - started.tv_sec) * UINT64_C(1000000000)
+    + (uint64_t)(finished.tv_nsec - started.tv_nsec);
+  const double per_call = iterations == 0
+    ? 0.0
+    : (double)elapsed / (double)iterations;
+  printf(
+    "direct service dispatch iterations=%llu total_ns=%llu ns_per_call=%.2f\n",
+    (unsigned long long)iterations,
+    (unsigned long long)elapsed,
+    per_call
+  );
+  return 0;
 }
 
 int main(int argc, char **argv) {
+  const bool benchmark = argc > 1 && strcmp(argv[1], "--benchmark") == 0;
+  const uint64_t benchmark_iterations = benchmark && argc > 2
+    ? strtoull(argv[2], NULL, 10)
+    : UINT64_C(100000);
   input_message = argc > 1
     ? argv[1]
     : "{\"t\":1,\"id\":18446744073709551615,\"m\":\"__zapp:ping\",\"a\":{\"message\":\"hello from Zapp\"}}";
@@ -91,7 +150,9 @@ int main(int argc, char **argv) {
     return 2;
   }
 
-  int result = zapp_run_native_host();
+  int result = benchmark
+    ? benchmark_services(benchmark_iterations)
+    : zapp_run_native_host();
 
   if (zapp_core_runtime_shutdown() != ZAPP_CORE_RUNTIME_OK) {
     fputs("could not shut down the embedded Z runtime\n", stderr);

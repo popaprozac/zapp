@@ -1,8 +1,7 @@
 # Z native core
 
-Status: Phase 0 complete; Phase 1 typed ingress and the first visible
-AppKit/WebKit round trip complete, with native-object ownership migration still
-in progress, August 2026.
+Status: Phase 0 complete; Phase 1 typed ingress, Z-owned AppKit/WebKit identity,
+and the first generated typed service round trip complete, August 2026.
 
 Zapp's future native core lives under `native/z/`. It is a from-scratch Z
 implementation, not a translation of the current Nim or Zen-C trees. Those
@@ -25,10 +24,11 @@ the Z builder. The builder:
 6. initializes a process-wide Z `Application` through the generated runtime
    initializer, routes owned UTF-8 messages through Z, and shuts the root down
    deterministically;
-7. links either the default AppKit/WebKit application host or the focused
+7. generates transport-independent typed TypeScript service bindings;
+8. links either the default AppKit/WebKit application host or the focused
    strict-C bridge host used by the non-UI regression; and
-8. bundles the canonical `bootstrap/webview.ts` source and injects it through a
-   `WKUserScript` at document start.
+9. bundles the canonical `bootstrap/webview.ts` source and generated browser
+   service facade, then injects both through a `WKUserScript` at document start.
 
 The route is no longer a pass-through smoke. Z's source-backed `std/json`
 parser decodes the WebView envelope into `BridgeMessage`, preserves request
@@ -38,14 +38,14 @@ an `Option<BridgeResponse>` to the host. Request/response invokes produce
 signals, and cancellation produce `none`. Arbitrary `a` payloads are serialized
 at the ingress edge and do not become the core's internal object model.
 
-The default executable is now a visible AppKit/WebKit application. Its page
-posts through a Z-defined `WKScriptMessageHandler`; Z decodes and dispatches the
-message, and the typed response updates the DOM before deterministic window and
-runtime shutdown. The Z `DesktopApplication` root owns the handler registration
-guard, so shutdown unregisters it exactly once. The Objective-C host still owns
-window/WebView construction and rendering plus one narrow dynamic check that
-WebKit's `id` message body is an `NSString` before it enters Z as an owned
-`String`.
+The default executable is now a visible AppKit/WebKit application. Z creates
+and owns the window, WebView, configuration, content controller, protocol
+handler, and registration guard. Its generated browser binding calls the
+Z-owned `NotesService`; Z decodes and dispatches the message, and the typed
+response updates the DOM before deterministic window and runtime shutdown. The
+Objective-C host owns the process/run-loop adapter, response delivery through
+WebKit, and smoke-test observation rather than application object construction
+or message-body validation.
 
 Run the focused end-to-end smoke with:
 
@@ -60,10 +60,11 @@ envelope with request ID `u64.max`. It verifies the typed response metadata and
 exact JSON payload after the C -> Z -> C round trip. It is therefore evidence
 for the real build seam rather than a parallel script that can drift from it.
 
-The WebView smoke builds the default host, injects the production bootstrap at
-document start, opens one window, and automatically clicks the visible bridge
-button. The page calls the canonical `bridge.invoke()` API, native delivery
-resolves it through `_onInvokeResult()`, and the host verifies the resulting DOM
+The WebView smoke builds the default host, injects the production bootstrap and
+generated Notes binding at document start, opens one window, and automatically
+clicks the visible service button. The page calls `notes.create(...)`; native
+delivery resolves it through `_onInvokeResult()`, the binding restores the
+exact `u64` identifier as `bigint`, and the host verifies the resulting DOM
 state before printing the response and closing. It uses the same staged archive
 and generated embedding header as an ordinary `ZAPP_NATIVE_LANG=z` build.
 
@@ -103,6 +104,15 @@ report clean and incremental build time, binary and bundle size, idle memory,
 startup, bridge latency, allocations/copies, and deterministic shutdown against
 the same app.
 
+The first typed-service checkpoint adds a frozen function-valued router,
+generated Notes adapter, synchronized service state, exact integer projection,
+and direct embedded-host entry. The measured release strict host grows from
+71,216 to 89,168 bytes; its Z archive grows from 43,552 to 56,592 bytes. Three
+100,000-call direct `notes.count` runs measured 393.61, 286.79, and 272.97 ns per
+call, including lookup, thunk invocation, synchronized read, JSON response, and
+C callback. See [Z-owned services](./z-services.md) for the architecture and
+measurement boundary.
+
 ## CLI and package design are open
 
 The existing command and npm layout are not compatibility constraints. Phase 0
@@ -125,10 +135,11 @@ CLI merely because it exists.
 
 ## Next exit criterion
 
-Phase 0's exit criterion is satisfied. Phase 1 now has a visible
-WebView -> Z -> WebView round trip, a generated-runtime-owned Z `Application`,
-Z-owned retained protocol registration, typed JSON ingress and dispatch, and
-deterministic window/run-loop/runtime shutdown. The remaining Phase 1 work is
-to move window/WebView identities into Z where that improves the architecture,
-replace the dynamic body-check seam when checked Objective-C-owned text
-provenance is available, and run the complete path under sanitizers.
+Phase 0's exit criterion is satisfied. Phase 1 now has a visible generated
+service call through WebView -> Z -> WebView, a generated-runtime-owned Z
+`Application`, Z-owned UI identities and retained protocol registration, typed
+JSON ingress and dispatch, an embedded-engine direct-service seam, and
+deterministic window/run-loop/runtime shutdown. Remaining work includes the
+consuming public application builder, compiler-produced service metadata,
+typed error/cancellation/permission composition, zjs host attachment, and ASan
+or equivalent leak evidence on a compatible host.

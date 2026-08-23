@@ -1,0 +1,124 @@
+# Z-owned services
+
+Status: first typed vertical slice implemented, August 2026.
+
+Zapp services are ordinary Z values whose public methods become typed frontend
+bindings. A service is a `struct` by default. It may contain `Mutex<T>`, native
+owners, or ARC references when its behavior needs those capabilities; service
+registration does not force every service into a class hierarchy.
+
+## Intended application surface
+
+The public lifecycle is designed around a consuming application builder:
+
+```z
+let app = Zapp({ name: "Notes" });
+app.services.register("notes", createNotesService());
+return app.run();
+```
+
+`app.run()` consumes the mutable configuration, freezes its service routing
+table, publishes the runtime application identity, and blocks until shutdown.
+There is no user-facing `finish()` call. Internally, `freeze()` names the exact
+mutable-builder to readonly-router transition and matches Z collection
+vocabulary.
+
+The current Phase 1 core proves that transition directly while the complete
+application builder is still being assembled:
+
+```z
+let services = createServices();
+services.register("notes", createNotesService());
+const published = services.freeze();
+```
+
+## One binding, two transports
+
+The generated TypeScript API is transport-independent:
+
+```ts
+import { notes } from "./.zapp/generated/services";
+
+const note = await notes.create({ title: "Draft" });
+const count = await notes.count();
+```
+
+In a WebView, `Services.invoke` sends the call through the document-start
+bridge. In an embedded zjs worker, the same generated module selects the
+existing direct-host fast path. Application code and generated method names do
+not change with the JavaScript execution environment.
+
+The Z core owns one frozen `readonly Map<String, ServiceHandler>`. Each handler
+is an `on thread.any` callable whose captured graph must be deeply shareable.
+The `NotesService` probe is a readonly value struct containing
+`Mutex<NotesState>`, so mutable state is synchronized inside the service rather
+than making the routing table mutable after publication.
+
+The strict C host additionally calls `zapp_invoke_service_owned` directly. It
+proves that an embedded engine can bypass the WebView envelope and reach the
+same handler and retained service state. Wiring that entry into zjs is a host
+adapter task, not a second service system.
+
+## Exact values at the JavaScript boundary
+
+Z `u64` and `i64` values do not become JavaScript `number`; that would silently
+lose precision. Their JSON wire representation is a decimal string and the
+generated TypeScript surface exposes `bigint`:
+
+```ts
+interface Note {
+  id: bigint;
+  title: string;
+}
+```
+
+The generated decoder validates and converts the wire value. Other numeric
+types map to `number` only when that mapping preserves the declared contract.
+
+## Metadata status
+
+`native/z/services.zmeta.json` is the versioned Phase 1 input to binding
+generation. It deliberately models semantic service types and methods rather
+than scanning Z source with regular expressions. Today it accompanies the
+concrete generated-style `NotesService` adapter because the fixed-point
+compiler does not yet execute trait declarations or export service metadata.
+
+The intended next step is compiler-produced metadata derived from checked Z
+symbols. Application authors should not maintain a second TypeScript schema,
+and a stale or incompatible metadata version must fail closed.
+
+## First performance checkpoint
+
+Measured on the Apple M4 Max development machine with a release Z library and
+size-optimized strict C host:
+
+| Metric | Result |
+|---|---:|
+| Direct `notes.count` after warmup | 273–287 ns/call |
+| Work inside that measurement | Frozen-map lookup, callable thunk, synchronized scalar read, JSON response encoding, C callback |
+| Pre-service strict host | 71,216 bytes |
+| Typed-service strict host | 89,168 bytes |
+| Executable growth | 17,952 bytes |
+| Pre-service Z archive | 43,552 bytes |
+| Typed-service Z archive | 56,592 bytes |
+| Archive growth | 13,040 bytes |
+
+These numbers are a regression checkpoint, not a framework comparison. WebView
+calls intentionally pay JSON transport cost. Direct embedded-engine calls
+should eventually convert typed values at the engine boundary without encoding
+an intermediate JSON document.
+
+## Gaps exposed by the slice
+
+- The native compiler understands traits but cannot execute them yet, so the
+  eventual generic `Service` contract is represented by a concrete generated
+  adapter in this slice.
+- Native cross-module specialization of `json.decode<UserType>` is incomplete;
+  the generated adapter currently projects `JsonValue` explicitly.
+- `Mutex.withLock` returns are limited to cleanup-free values in the native
+  compiler. The service keeps the critical section scalar and constructs owned
+  results after unlocking.
+- Async service methods, typed thrown errors, cancellation, permissions, and
+  service lifecycle hooks remain follow-up composition work.
+
+None of these gaps changes the intended application-facing API.

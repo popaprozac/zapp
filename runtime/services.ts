@@ -1,5 +1,5 @@
 /**
- * Services — call native Zen-C services from JavaScript.
+ * Services — call typed native services from JavaScript.
  *
  * @example
  * ```ts

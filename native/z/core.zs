@@ -1,16 +1,27 @@
-import { BridgeResponse, routeMessage } from "./bridge.zs";
+import { routeMessageWithServices } from "./bridge.zs";
+import { ServiceOutcome } from "./service-contract.zs";
+import { createNotesService } from "./notes-service.zs";
+import { Services, createServices } from "./services.zs";
 import { zapp_deliver_response_from_z } from "zapp_router.h";
 import { Once, OnceLifetime } from "std/sync";
 import { thread } from "std/thread";
 
-class Application on thread.main {
+class Application {
   readonly name: String;
+  readonly services: Services;
+  runtimeMarker: i32 on thread.main;
 }
 
 const application = Once<Application>();
 
 function initializeApplication(): OnceLifetime<Application> on thread.main {
-  const value = new Application({ name: "Zapp" });
+  let services = createServices();
+  services.register("notes", createNotesService());
+  const value = new Application({
+    name: "Zapp",
+    services: services.freeze(),
+    runtimeMarker: 1,
+  });
   return application.initialize(move value);
 }
 
@@ -19,7 +30,8 @@ export c function zapp_route_message_owned(
   windowId: i32
 ): void {
   const current = application.get();
-  const routed = routeMessage(in message);
+  const services = current.services;
+  const routed = routeMessageWithServices(in message, in services);
   match (routed) {
     some(response) => zapp_deliver_response_from_z(
       response.payload,
@@ -28,5 +40,30 @@ export c function zapp_route_message_owned(
       windowId
     );
     none => {}
+  }
+}
+
+export c function zapp_invoke_service_owned(
+  method: String,
+  arguments: String,
+  requestId: u64,
+  contextId: i32
+): void {
+  const current = application.get();
+  const services = current.services;
+  const invoked = services.invoke(move method, move arguments);
+  match (invoked) {
+    success(payload) => zapp_deliver_response_from_z(
+      payload,
+      requestId,
+      true,
+      contextId
+    );
+    failure(error) => zapp_deliver_response_from_z(
+      error,
+      requestId,
+      false,
+      contextId
+    );
   }
 }

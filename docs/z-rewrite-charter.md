@@ -9,8 +9,11 @@ kitchen-sink CLI path. Phase 1's generated-runtime-owned Z `Application`, typed
 JSON ingress, first typed handler, typed response callback, and first visible
 AppKit/WebKit round trip are implemented. The Z root now owns the WebKit
 protocol handler, dynamic message-body validation, owned string conversion,
-and deterministic registration guard. Window/WebView construction and the
-AppKit process/run-loop host remain in a small Objective-C boundary.
+deterministic registration guard, window/WebView construction, and the first
+frozen typed service router. One generated Notes binding runs through WebKit,
+and a narrow exported C entry reaches the same handler directly for future zjs
+attachment. The AppKit process/run-loop host remains a small Objective-C
+boundary.
 
 ## Decision
 

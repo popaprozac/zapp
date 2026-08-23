@@ -46,6 +46,7 @@ describe("resolveZNativeHost", () => {
 describe("Z native host inputs", () => {
   it("stages the Z-owned Objective-C registration surface for desktop", () => {
     expect(zNativeStageFiles("desktop")).toContain("desktop-core.zs");
+    expect(zNativeStageFiles("desktop")).toContain("services.zmeta.json");
     expect(zNativeStageFiles("desktop")).toContain("zapp_desktop.h");
     expect(zNativeStageFiles("desktop")).not.toContain("zapp_desktop.h.zd");
     expect(zNativeStageFiles("desktop")).not.toContain("host.c");
@@ -88,6 +89,28 @@ describe("Z native host inputs", () => {
     expect(objectiveCHost).not.toContain("addScriptMessageHandler:self");
     expect(objectiveCHost).not.toContain("[body isKindOfClass:[NSString class]]");
     expect(objectiveCHost).not.toContain("routeScriptMessage:");
+    expect(objectiveCHost).toContain("services.notes.create");
+  });
+
+  it("freezes value services into an arbitrary-thread callable router", () => {
+    const contracts = readFileSync(
+      new URL("../../native/z/service-contract.zs", import.meta.url),
+      "utf8",
+    );
+    const services = readFileSync(
+      new URL("../../native/z/services.zs", import.meta.url),
+      "utf8",
+    );
+    const notes = readFileSync(
+      new URL("../../native/z/notes-service.zs", import.meta.url),
+      "utf8",
+    );
+
+    expect(contracts).toContain("=> ServiceOutcome on thread.any");
+    expect(services).toContain("function freeze(move this): Services");
+    expect(services).toContain("readonly Map<String, ServiceHandler>");
+    expect(notes).toContain("export readonly struct NotesService");
+    expect(notes).toContain("readonly state: Mutex<NotesState>");
   });
 });
 

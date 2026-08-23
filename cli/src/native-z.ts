@@ -80,6 +80,10 @@ export function resolveZNativeHost(value: string | undefined): ZNativeHost {
 export function zNativeStageFiles(host: ZNativeHost): string[] {
   return [
     "bridge.zs",
+    "service-contract.zs",
+    "notes-service.zs",
+    "services.zs",
+    "services.zmeta.json",
     "core.zs",
     ...(host === "desktop" ? [
       "desktop-core.zs",
@@ -178,10 +182,24 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
   );
 
   const { resolveBootstrapDir } = await import("./paths");
+  const {
+    generateZServiceBindings,
+    loadZServiceManifest,
+    renderZServiceWebviewRuntime,
+  } = await import("./z-service-bindings");
   const { bundleWebviewBootstrapRaw } = await import(
     path.join(resolveBootstrapDir(), "codegen.ts")
   );
-  const bootstrapSource = await bundleWebviewBootstrapRaw();
+  const serviceManifest = await loadZServiceManifest(
+    path.join(source, "services.zmeta.json"),
+  );
+  const generatedBinding = await generateZServiceBindings(
+    serviceManifest,
+    path.join(options.root, ".zapp", "generated"),
+  );
+  console.log(`[zapp] generated typed Z service bindings ${generatedBinding}`);
+  const bootstrapSource = await bundleWebviewBootstrapRaw()
+    + renderZServiceWebviewRuntime(serviceManifest);
   const bootstrapC = path.join(stage, "zapp_webview_bootstrap.c");
   await writeFile(bootstrapC, renderZWebviewBootstrapC(bootstrapSource), "utf8");
 

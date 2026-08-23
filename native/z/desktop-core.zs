@@ -1,5 +1,7 @@
 import native from "zapp_desktop.h";
-import { routeMessage } from "./bridge.zs";
+import { routeMessageWithServices } from "./bridge.zs";
+import { createNotesService } from "./notes-service.zs";
+import { Services, createServices } from "./services.zs";
 import { zapp_deliver_response_from_z } from "zapp_router.h";
 import objc from "std/objc";
 import { Once, OnceLifetime } from "std/sync";
@@ -26,14 +28,15 @@ class DesktopMessageHandler on thread.main
   }
 }
 
-class DesktopApplication on thread.main {
+class DesktopApplication {
   readonly name: String;
-  window: native.NSWindow;
-  webView: native.WKWebView;
-  contentController: native.WKUserContentController;
-  configuration: native.WKWebViewConfiguration;
-  registrationOwner: native.ZAppDesktopRegistrationOwner;
-  registration: objc.Registration;
+  readonly services: Services;
+  window: native.NSWindow on thread.main;
+  webView: native.WKWebView on thread.main;
+  contentController: native.WKUserContentController on thread.main;
+  configuration: native.WKWebViewConfiguration on thread.main;
+  registrationOwner: native.ZAppDesktopRegistrationOwner on thread.main;
+  registration: objc.Registration on thread.main;
 }
 
 const application = Once<DesktopApplication>();
@@ -43,7 +46,8 @@ export c function zapp_route_message_owned(
   windowId: i32
 ): void {
   const current = application.get();
-  const routed = routeMessage(in message);
+  const services = current.services;
+  const routed = routeMessageWithServices(in message, in services);
   match (routed) {
     some(response) => zapp_deliver_response_from_z(
       response.payload,
@@ -55,8 +59,35 @@ export c function zapp_route_message_owned(
   }
 }
 
+export c function zapp_invoke_service_owned(
+  method: String,
+  arguments: String,
+  requestId: u64,
+  contextId: i32
+): void {
+  const current = application.get();
+  const services = current.services;
+  const invoked = services.invoke(move method, move arguments);
+  match (invoked) {
+    success(payload) => zapp_deliver_response_from_z(
+      payload,
+      requestId,
+      true,
+      contextId
+    );
+    failure(error) => zapp_deliver_response_from_z(
+      error,
+      requestId,
+      false,
+      contextId
+    );
+  }
+}
+
 function initializeDesktopApplication(
 ): OnceLifetime<DesktopApplication> on thread.main {
+  let services = createServices();
+  services.register("notes", createNotesService());
   const contentController = native.WKUserContentController.alloc().init();
   const registrationOwner = native.ZAppDesktopRegistrationOwner.alloc()
     .initWithContentController(contentController);
@@ -92,6 +123,7 @@ function initializeDesktopApplication(
 
   const value = new DesktopApplication({
     name: "Zapp",
+    services: services.freeze(),
     window,
     webView,
     contentController,
