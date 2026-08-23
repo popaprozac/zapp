@@ -1,7 +1,6 @@
 import native from "zapp_desktop.h";
 import { routeMessageWithServices } from "./bridge.zs";
-import { createNotesService } from "./notes-service.zs";
-import { Services, createServices } from "./services.zs";
+import { Services, ServicesBuilder, createServices } from "./services.zs";
 import { zapp_deliver_response_from_z } from "zapp_router.h";
 import objc from "std/objc";
 import { Once, OnceLifetime } from "std/sync";
@@ -28,7 +27,7 @@ class DesktopMessageHandler on thread.main
   }
 }
 
-class DesktopApplication {
+class ApplicationRuntime {
   readonly name: String;
   readonly services: Services;
   window: native.NSWindow on thread.main;
@@ -39,7 +38,24 @@ class DesktopApplication {
   registration: objc.Registration on thread.main;
 }
 
-const application = Once<DesktopApplication>();
+const application = Once<ApplicationRuntime>();
+
+export struct Application {
+  name: String;
+  services: ServicesBuilder = createServices();
+
+  function run(move this): i32 on thread.main {
+    const { name, services } = move this;
+    const publishedServices = services.freeze();
+    const prepared = native.zapp_desktop_prepare();
+    if (prepared != 0) return prepared;
+    const lifetime = initializeApplicationRuntime(
+      move name,
+      move publishedServices
+    );
+    return native.zapp_desktop_run();
+  }
+}
 
 export c function zapp_route_message_owned(
   message: String,
@@ -84,10 +100,10 @@ export c function zapp_invoke_service_owned(
   }
 }
 
-function initializeDesktopApplication(
-): OnceLifetime<DesktopApplication> on thread.main {
-  let services = createServices();
-  services.register("notes", createNotesService());
+function initializeApplicationRuntime(
+  name: String,
+  services: Services
+): OnceLifetime<ApplicationRuntime> on thread.main {
   const contentController = native.WKUserContentController.alloc().init();
   const registrationOwner = native.ZAppDesktopRegistrationOwner.alloc()
     .initWithContentController(contentController);
@@ -113,7 +129,7 @@ function initializeDesktopApplication(
     backing: native.NSBackingStoreBuffered,
     defer: false
   );
-  window.title = "Zapp — Z WebView Bridge";
+  window.title = name;
   window.contentView = webView;
   native.ZAppDesktopBridge.attachWindow(
     window,
@@ -121,9 +137,9 @@ function initializeDesktopApplication(
     contentController: contentController
   );
 
-  const value = new DesktopApplication({
-    name: "Zapp",
-    services: services.freeze(),
+  const value = new ApplicationRuntime({
+    name: move name,
+    services: move services,
     window,
     webView,
     contentController,

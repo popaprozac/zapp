@@ -45,16 +45,19 @@ describe("resolveZNativeHost", () => {
 
 describe("Z native host inputs", () => {
   it("stages the Z-owned Objective-C registration surface for desktop", () => {
+    expect(zNativeStageFiles("desktop")).toContain("app.zs");
     expect(zNativeStageFiles("desktop")).toContain("desktop-core.zs");
     expect(zNativeStageFiles("desktop")).toContain("services.zmeta.json");
     expect(zNativeStageFiles("desktop")).toContain("zapp_desktop.h");
     expect(zNativeStageFiles("desktop")).not.toContain("zapp_desktop.h.zd");
+    expect(zNativeStageFiles("desktop")).not.toContain("core.zs");
     expect(zNativeStageFiles("desktop")).not.toContain("host.c");
     expect(zNativeManifest("desktop")).toBe("desktop-z.json");
   });
 
   it("keeps the strict C bridge on the minimal manifest", () => {
     expect(zNativeStageFiles("bridge")).not.toContain("desktop-core.zs");
+    expect(zNativeStageFiles("bridge")).toContain("core.zs");
     expect(zNativeStageFiles("bridge")).not.toContain("zapp_desktop.h");
     expect(zNativeStageFiles("bridge")).not.toContain("desktop.m");
     expect(zNativeManifest("bridge")).toBe("z.json");
@@ -89,7 +92,28 @@ describe("Z native host inputs", () => {
     expect(objectiveCHost).not.toContain("addScriptMessageHandler:self");
     expect(objectiveCHost).not.toContain("[body isKindOfClass:[NSString class]]");
     expect(objectiveCHost).not.toContain("routeScriptMessage:");
+    expect(objectiveCHost).not.toContain("int main(");
     expect(objectiveCHost).toContain("services.notes.create");
+  });
+
+  it("gives the public Z builder ownership of main and run", () => {
+    const app = readFileSync(
+      new URL("../../native/z/app.zs", import.meta.url),
+      "utf8",
+    );
+    const desktopCore = readFileSync(
+      new URL("../../native/z/desktop-core.zs", import.meta.url),
+      "utf8",
+    );
+
+    expect(app).toContain('let app = Application({ name: "Notes" });');
+    expect(app).toContain('app.services.register("notes", createNotesService());');
+    expect(app).toContain("return app.run();");
+    expect(desktopCore).toContain("export struct Application");
+    expect(desktopCore).toContain("class ApplicationRuntime");
+    expect(desktopCore).toContain("services: ServicesBuilder = createServices();");
+    expect(desktopCore).toContain("function run(move this): i32 on thread.main");
+    expect(desktopCore).toContain("const publishedServices = services.freeze();");
   });
 
   it("freezes value services into an arbitrary-thread callable router", () => {
@@ -116,10 +140,10 @@ describe("Z native host inputs", () => {
 
 describe("parseZCompilerIdentity", () => {
   it("decodes the pinned compiler contract", () => {
-    expect(parseZCompilerIdentity("z 0.1.0-dev revision 2026-08-22 compiler-api 1\n"))
+    expect(parseZCompilerIdentity("z 0.1.0-dev revision 2026-08-23 compiler-api 1\n"))
       .toEqual({
         languageVersion: "0.1.0-dev",
-        compilerRevision: "2026-08-22",
+        compilerRevision: "2026-08-23",
         compilerApi: 1,
       });
   });
@@ -133,7 +157,7 @@ describe("parseZCompilerIdentity", () => {
 describe("validateZCompilerIdentity", () => {
   const expected = {
     languageVersion: "0.1.0-dev",
-    compilerRevision: "2026-08-22",
+    compilerRevision: "2026-08-23",
     compilerApi: 1,
   };
 

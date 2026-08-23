@@ -7,12 +7,12 @@ bindings. A service is a `struct` by default. It may contain `Mutex<T>`, native
 owners, or ARC references when its behavior needs those capabilities; service
 registration does not force every service into a class hierarchy.
 
-## Intended application surface
+## Application surface
 
 The public lifecycle is designed around a consuming application builder:
 
 ```z
-let app = Zapp({ name: "Notes" });
+let app = Application({ name: "Notes" });
 app.services.register("notes", createNotesService());
 return app.run();
 ```
@@ -23,8 +23,14 @@ There is no user-facing `finish()` call. Internally, `freeze()` names the exact
 mutable-builder to readonly-router transition and matches Z collection
 vocabulary.
 
-The current Phase 1 core proves that transition directly while the complete
-application builder is still being assembled:
+The Phase 1 native application uses that surface directly in
+`native/z/app.zs`. `Application({ name })` creates a fresh service builder through a
+value-field default, and the main-thread `run(move this)` method consumes the
+whole configuration. Z owns the executable `main`; the Objective-C file is a
+linked platform adapter with no framework policy or entry point of its own.
+
+The underlying transition remains available to framework internals and focused
+tests:
 
 ```z
 let services = createServices();
@@ -120,5 +126,8 @@ an intermediate JSON document.
   results after unlocking.
 - Async service methods, typed thrown errors, cancellation, permissions, and
   service lifecycle hooks remain follow-up composition work.
+- The sample app is still a framework-owned staged entry. Selecting an
+  application project's own `.zs` entry and deriving service metadata from its
+  checked exports are the next productization steps.
 
 None of these gaps changes the intended application-facing API.

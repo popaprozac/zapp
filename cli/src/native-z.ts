@@ -84,12 +84,12 @@ export function zNativeStageFiles(host: ZNativeHost): string[] {
     "notes-service.zs",
     "services.zs",
     "services.zmeta.json",
-    "core.zs",
     ...(host === "desktop" ? [
+      "app.zs",
       "desktop-core.zs",
       "desktop.m",
       "zapp_desktop.h",
-    ] : ["host.c"]),
+    ] : ["core.zs", "host.c"]),
     "zapp_router.h",
     "zapp_router.h.zd",
   ];
@@ -203,15 +203,60 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
   const bootstrapC = path.join(stage, "zapp_webview_bootstrap.c");
   await writeFile(bootstrapC, renderZWebviewBootstrapC(bootstrapSource), "utf8");
 
+  const clang = process.env.CC || "clang";
+  if (desktop) {
+    const desktopObject = path.join(stage, "zapp_desktop_host.o");
+    const bootstrapObject = path.join(stage, "zapp_webview_bootstrap.o");
+    await run([
+      clang,
+      "-fobjc-arc",
+      "-fblocks",
+      "-mmacosx-version-min=14.0",
+      options.optimize ? "-Oz" : "-O0",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "-I",
+      stage,
+      "-c",
+      path.join(stage, "desktop.m"),
+      "-o",
+      desktopObject,
+    ], options.root);
+    await run([
+      clang,
+      "-std=c11",
+      "-mmacosx-version-min=14.0",
+      options.optimize ? "-Oz" : "-O0",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "-c",
+      bootstrapC,
+      "-o",
+      bootstrapObject,
+    ], options.root);
+    await run([
+      "ar",
+      "rcs",
+      path.join(stage, "libzapp_desktop_host.a"),
+      desktopObject,
+      bootstrapObject,
+    ], options.root);
+  }
+
   await run(
     [compiler, "build", stage, ...(options.optimize ? ["--release"] : [])],
     options.root,
   );
 
   await mkdir(path.dirname(options.output), { recursive: true });
+  if (desktop) {
+    await cp(path.join(stage, "build", "zapp_core"), options.output);
+    return;
+  }
   const archive = path.join(stage, "build", "libzapp_core.a");
   const headerDir = path.join(stage, "build");
-  const clang = process.env.CC || "clang";
   await run([
     clang,
     ...(desktop ? ["-fobjc-arc", "-fblocks"] : ["-std=c11"]),

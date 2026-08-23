@@ -1,12 +1,10 @@
 #import <AppKit/AppKit.h>
 #import <WebKit/WebKit.h>
 
-#include "zapp_core.h"
 #include "zapp_router.h"
 #import "zapp_desktop.h"
 
 #include <dispatch/dispatch.h>
-#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 
@@ -15,26 +13,7 @@ extern const char *zapp_webview_bootstrap_script(void);
 @class ZAppDesktopHost;
 
 static __weak ZAppDesktopHost *active_host = nil;
-
-static void enqueue_release(
-  void *context,
-  void *value,
-  void (*finalize)(void *value)
-) {
-  (void)context;
-  if (pthread_main_np() != 0) {
-    finalize(value);
-    return;
-  }
-  dispatch_async(dispatch_get_main_queue(), ^{
-    finalize(value);
-  });
-}
-
-static bool is_main_thread(void *context) {
-  (void)context;
-  return pthread_main_np() != 0;
-}
+static ZAppDesktopHost *prepared_host = nil;
 
 @interface ZAppDesktopHost : NSObject <NSWindowDelegate>
 @property(nonatomic, weak) NSWindow *window;
@@ -310,28 +289,23 @@ void zapp_deliver_response_from_z(
 
 @end
 
-int main(void) {
+int32_t zapp_desktop_prepare(void) {
   @autoreleasepool {
+    if (prepared_host != nil) return 52;
     ZAppDesktopHost *host = [[ZAppDesktopHost alloc] init];
+    prepared_host = host;
     active_host = host;
+    return 0;
+  }
+}
 
-    const zapp_core_runtime_config config = {
-      .context = NULL,
-      .enqueue_release = enqueue_release,
-      .is_main_thread = is_main_thread,
-    };
-    if (zapp_core_runtime_initialize(&config) != ZAPP_CORE_RUNTIME_OK) {
-      fputs("could not initialize the embedded Z runtime\n", stderr);
-      return 2;
-    }
-
+int32_t zapp_desktop_run(void) {
+  @autoreleasepool {
+    ZAppDesktopHost *host = prepared_host;
+    if (host == nil) return 51;
     int32_t result = [host run];
-    zapp_core_runtime_status shutdown = zapp_core_runtime_shutdown();
-    if (shutdown != ZAPP_CORE_RUNTIME_OK) {
-      fputs("could not shut down the embedded Z runtime\n", stderr);
-      if (result == 0) result = 46;
-    }
     active_host = nil;
+    prepared_host = nil;
     return result;
   }
 }

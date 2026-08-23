@@ -73,7 +73,7 @@ and generated embedding header as an ordinary `ZAPP_NATIVE_LANG=z` build.
 Z reports an identity shaped like:
 
 ```text
-z 0.1.0-dev revision 2026-08-22 compiler-api 1
+z 0.1.0-dev revision 2026-08-23 compiler-api 1
 ```
 
 The language version describes the user-facing language, the compiler revision

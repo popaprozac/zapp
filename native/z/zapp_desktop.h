@@ -10,6 +10,9 @@
 
 #include <stdint.h>
 
+int32_t zapp_desktop_run(void);
+int32_t zapp_desktop_prepare(void);
+
 @interface ZAppDesktopRegistrationOwner : NSObject
 - (instancetype)initWithContentController:(WKUserContentController *)controller;
 - (void)addHandler:(id<WKScriptMessageHandler>)handler;

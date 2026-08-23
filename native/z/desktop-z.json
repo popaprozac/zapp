@@ -1,12 +1,13 @@
 {
   "target": {
-    "kind": "static-library",
     "name": "zapp_core",
-    "entry": "desktop-core.zs",
+    "entry": "app.zs",
     "platform": "macos",
     "minimumVersion": "14.0",
-    "runtime": {
-      "initialize": "initializeDesktopApplication"
+    "link": {
+      "directories": ["."],
+      "libraries": ["zapp_desktop_host"],
+      "frameworks": ["AppKit", "WebKit", "CoreFoundation"]
     }
   }
 }
