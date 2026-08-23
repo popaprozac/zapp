@@ -14,15 +14,28 @@ Run it from the repository root:
 bun run spike:z-webview
 ```
 
+The bounded sanitizer driver rebuilds the generated Z core with UBSan, enables
+Objective-C zombies for the complete registration/message/teardown lifecycle,
+and runs ASan only when an empty startup probe proves the installed Apple
+runtime works:
+
+```sh
+bun run spike:z-webview:sanitize
+```
+
+Every launched binary has a hard timeout and is killed if it does not exit, so
+a broken host sanitizer runtime cannot leave a CPU-intensive fixture behind.
+
 Expected terminal evidence:
 
 ```text
 visible WebView round trip window=1 request=1 ok=true payload={"message":"héllo from WebKit"}
 ```
 
-The Objective-C host is migration scaffolding, not the intended application
-architecture. The fixed-point native Z compiler does not yet ingest
-Objective-C/WebKit metadata; Stage 0 already does, as proven by Z's AppKit
-applications. Once that metadata crosses the fixed-point boundary, window,
-WebView, protocol-adapter, and run-loop ownership move into the Z `Application`
-without changing the typed router or public embedding ABI.
+The Objective-C process/run-loop and window construction host is migration
+scaffolding, not the intended application architecture. The fixed-point native
+Z compiler already imports WebKit metadata, emits the Z-owned protocol adapter,
+retains its registration guard in the process-wide `Application`, narrows the
+dynamic message body with `instanceof`, and copies `NSString` into owned Z
+storage. Window/WebView ownership is the next boundary to move without changing
+the typed router or public embedding ABI.

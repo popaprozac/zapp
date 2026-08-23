@@ -12,7 +12,8 @@
     "test:all": "bun run test && bun run test:native && bun run check",
     "check": "tsc --noEmit && tsc --noEmit -p tsconfig.typetest.json",
     "spike:z-bridge": "bun run spikes/z-message-bridge/run.ts",
-    "spike:z-webview": "bun run spikes/z-webview/run.ts"
+    "spike:z-webview": "bun run spikes/z-webview/run.ts",
+    "spike:z-webview:sanitize": "bun run spikes/z-webview/sanitize.ts"
   },
   "devDependencies": {
     "@types/bun": "^1.3.14",

@@ -8,9 +8,9 @@ message-boundary smoke are implemented and build through the ordinary
 kitchen-sink CLI path. Phase 1's generated-runtime-owned Z `Application`, typed
 JSON ingress, first typed handler, typed response callback, and first visible
 AppKit/WebKit round trip are implemented. The Z root now owns the WebKit
-protocol handler and deterministic registration guard. Window/WebView
-construction and one dynamic message-body check remain in a small Objective-C
-host.
+protocol handler, dynamic message-body validation, owned string conversion,
+and deterministic registration guard. Window/WebView construction and the
+AppKit process/run-loop host remain in a small Objective-C boundary.
 
 ## Decision
 
@@ -173,13 +173,17 @@ core typed, and the response metadata returns through a narrow C callback. The
 remaining work connects that path to the real WebView lifecycle.
 
 The first visible transport checkpoint now also proves steps 3-4, 6, and 10
-through a transitional Objective-C host, while step 2 and retained
-`WKScriptMessageHandler` registration are owned by Z's generated runtime root.
-The page automatically exercises a real button and updates its DOM from the
-typed Z response through the canonical production bootstrap's
-`bridge.invoke()` and `_onInvokeResult()` path. Phase 1 still requires sanitizer
-evidence and a deliberate decision about which remaining window/WebView
-identities improve by moving into Z.
+through a transitional Objective-C process/run-loop host, while step 2,
+retained `WKScriptMessageHandler` registration, dynamic `id` validation, and
+the owned UTF-8 copy are Z-owned. The page automatically exercises a real
+button and updates its DOM from the typed Z response through the canonical
+production bootstrap's `bridge.invoke()` and `_onInvokeResult()` path. Phase 1
+now has a bounded UBSan plus Objective-C-zombie lifecycle check. Its ASan
+startup probe detects that the current Apple sanitizer runtime can deadlock
+before `main`, kills that probe after three seconds, and skips the application
+run rather than orphaning a CPU-intensive process. Phase 1 still requires ASan
+on a compatible host or equivalent leak evidence, plus a deliberate decision
+about which remaining window/WebView identities improve by moving into Z.
 
 ### Phase 2: make the core real
 
