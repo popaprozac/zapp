@@ -32,10 +32,18 @@ Expected terminal evidence:
 visible WebView round trip window=1 request=1 ok=true payload={"message":"héllo from WebKit"}
 ```
 
-The Objective-C process/run-loop and window construction host is migration
-scaffolding, not the intended application architecture. The fixed-point native
-Z compiler already imports WebKit metadata, emits the Z-owned protocol adapter,
-retains its registration guard in the process-wide `Application`, narrows the
-dynamic message body with `instanceof`, and copies `NSString` into owned Z
-storage. Window/WebView ownership is the next boundary to move without changing
-the typed router or public embedding ABI.
+The fixed-point native Z compiler imports AppKit/WebKit metadata and the
+main-executor Z `DesktopApplication` now creates and strongly owns the window,
+WebView, configuration, content controller, registration owner, protocol
+adapter, and deterministic registration guard. The Objective-C host owns the
+process/run-loop bridge and smoke-test callbacks but keeps only weak access to
+the Z-owned UI identities. Z narrows the dynamic message body with
+`instanceof`, copies `NSString` into owned Z storage, and routes it without
+changing the public embedding ABI.
+
+This migration also serves as compiler pressure evidence. Importing the wider
+AppKit/WebKit graph originally exposed a native stored-view traversal that
+reached 55.1 GiB before being stopped; Objective-C references now terminate at
+their native identity and the same build completes in seconds. Z still spells
+separate `NSRect` and `CGRect` construction because their cross-framework
+canonical typedef identity is a known compiler follow-up.

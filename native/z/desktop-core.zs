@@ -28,6 +28,10 @@ class DesktopMessageHandler on thread.main
 
 class DesktopApplication on thread.main {
   readonly name: String;
+  window: native.NSWindow;
+  webView: native.WKWebView;
+  contentController: native.WKUserContentController;
+  configuration: native.WKWebViewConfiguration;
   registrationOwner: native.ZAppDesktopRegistrationOwner;
   registration: objc.Registration;
 }
@@ -53,14 +57,49 @@ export c function zapp_route_message_owned(
 
 function initializeDesktopApplication(
 ): OnceLifetime<DesktopApplication> on thread.main {
-  const registrationOwner = native.ZAppDesktopBridge.registrationOwner();
+  const contentController = native.WKUserContentController.alloc().init();
+  const registrationOwner = native.ZAppDesktopRegistrationOwner.alloc()
+    .initWithContentController(contentController);
   const handler = new DesktopMessageHandler({});
   const registration = objc.register({
     add: registrationOwner.addHandler(handler),
     remove: registrationOwner.removeHandler(),
   });
+  const configuration = native.WKWebViewConfiguration.alloc().init();
+  configuration.userContentController = contentController;
+
+  const webViewFrame = native.CGRect({
+    origin: native.CGPoint({ x: 0.0, y: 0.0 }),
+    size: native.CGSize({ width: 720.0, height: 460.0 }),
+  });
+  const webView = native.WKWebView.alloc().initWithFrame(
+    webViewFrame,
+    configuration: configuration
+  );
+  const windowFrame = native.NSMakeRect(0.0, 0.0, 720.0, 460.0);
+  const style: native.NSWindowStyleMask = native.NSWindowStyleMaskTitled
+    | native.NSWindowStyleMaskClosable
+    | native.NSWindowStyleMaskResizable;
+  const window = native.NSWindow.alloc().initWithContentRect(
+    windowFrame,
+    styleMask: style,
+    backing: native.NSBackingStoreBuffered,
+    defer: false
+  );
+  window.title = "Zapp — Z WebView Bridge";
+  window.contentView = webView;
+  native.ZAppDesktopBridge.attachWindow(
+    window,
+    webView: webView,
+    contentController: contentController
+  );
+
   const value = new DesktopApplication({
     name: "Zapp",
+    window,
+    webView,
+    contentController,
+    configuration,
     registrationOwner,
     registration,
   });

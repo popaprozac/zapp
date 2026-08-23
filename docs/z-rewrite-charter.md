@@ -172,18 +172,21 @@ Steps 7-9 are proven independently of WebKit by the promoted native bridge:
 core typed, and the response metadata returns through a narrow C callback. The
 remaining work connects that path to the real WebView lifecycle.
 
-The first visible transport checkpoint now also proves steps 3-4, 6, and 10
-through a transitional Objective-C process/run-loop host, while step 2,
-retained `WKScriptMessageHandler` registration, dynamic `id` validation, and
-the owned UTF-8 copy are Z-owned. The page automatically exercises a real
-button and updates its DOM from the typed Z response through the canonical
-production bootstrap's `bridge.invoke()` and `_onInvokeResult()` path. Phase 1
-now has a bounded UBSan plus Objective-C-zombie lifecycle check. Its ASan
-startup probe detects that the current Apple sanitizer runtime can deadlock
-before `main`, kills that probe after three seconds, and skips the application
-run rather than orphaning a CPU-intensive process. Phase 1 still requires ASan
-on a compatible host or equivalent leak evidence, plus a deliberate decision
-about which remaining window/WebView identities improve by moving into Z.
+The first visible transport checkpoint now also proves steps 2-4, 6, and 10.
+The main-executor Z application creates and strongly owns the window, WebView,
+configuration, content controller, retained `WKScriptMessageHandler`
+registration owner, protocol adapter, and teardown guard. The transitional
+Objective-C process/run-loop host keeps weak access to those identities for
+its lifecycle and deterministic smoke-test callbacks. The page automatically
+exercises a real button and updates its DOM from the typed Z response through
+the canonical production bootstrap's `bridge.invoke()` and
+`_onInvokeResult()` path. Phase 1 has a bounded UBSan plus
+Objective-C-zombie lifecycle check. Its ASan startup probe detects that the
+current Apple sanitizer runtime can deadlock before `main`, kills that probe
+after three seconds, and skips the application run rather than orphaning a
+CPU-intensive process. Phase 1 still requires ASan on a compatible host or
+equivalent leak evidence; process/run-loop orchestration and the smoke-test
+response machinery remain the principal Objective-C scaffolding.
 
 ### Phase 2: make the core real
 
@@ -249,8 +252,8 @@ inside Zapp.
 
 | Area | Current evidence | Rewrite question |
 |---|---|---|
-| AppKit and main-thread work | Z applications can create native windows and enforce `thread.main`. | Do `WKWebView` configuration, navigation delegates, script handlers, and teardown compose cleanly? |
-| ARC application state | `class`, `Weak<T>`, `Once<T>`, and `Mutex<T>` exist. | Can one application graph retain callback adapters and native delegates without cycles or hidden weak-target hazards? |
+| AppKit and main-thread work | The main-executor Z application creates and owns the window, WebView, configuration, content controller, and script handler; the visible round trip proves teardown. | Do navigation delegates, multiple windows, and broader callbacks compose cleanly? |
+| ARC application state | `Once<DesktopApplication>` owns the native UI graph, protocol adapter, and registration guard while the transitional host holds weak references. | Can multiple application-owned native delegates avoid cycles and preserve deterministic shutdown? |
 | Message protocol | Z has strings, collections, enums, matching, errors, and exported C functions. | Is JSON parsing/encoding production-ready and allocation-conscious at the bridge boundary? |
 | Async and executors | Tasks, scopes, cancellation, placement, and native threads have working slices. | Can WebKit callbacks, task suspension, main-thread resumption, and shutdown cancellation compose in one app? |
 | zjs embedding | `export c function` and the message-bridge spike prove bidirectional linking. | Can JS values and callback lifetimes cross efficiently without reducing everything to JSON? |

@@ -1,9 +1,12 @@
 #pragma once
 
+#import <AppKit/NSWindow.h>
 #import <Foundation/NSObject.h>
 #import <WebKit/WKScriptMessage.h>
 #import <WebKit/WKScriptMessageHandler.h>
 #import <WebKit/WKUserContentController.h>
+#import <WebKit/WKWebView.h>
+#import <WebKit/WKWebViewConfiguration.h>
 
 #include <stdint.h>
 
@@ -14,5 +17,7 @@
 @end
 
 @interface ZAppDesktopBridge : NSObject
-+ (ZAppDesktopRegistrationOwner *)registrationOwner;
++ (void)attachWindow:(NSWindow *)window
+             webView:(WKWebView *)webView
+   contentController:(WKUserContentController *)contentController;
 @end

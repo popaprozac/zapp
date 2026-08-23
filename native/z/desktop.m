@@ -37,14 +37,12 @@ static bool is_main_thread(void *context) {
 }
 
 @interface ZAppDesktopHost : NSObject <NSWindowDelegate>
-@property(nonatomic, strong) NSWindow *window;
-@property(nonatomic, strong) WKWebView *webView;
-@property(nonatomic, strong) WKUserContentController *userContentController;
-@property(nonatomic, strong) ZAppDesktopRegistrationOwner *registrationOwner;
+@property(nonatomic, weak) NSWindow *window;
+@property(nonatomic, weak) WKWebView *webView;
+@property(nonatomic, weak) WKUserContentController *userContentController;
 @property(nonatomic, assign) BOOL receivedResponse;
 @property(nonatomic, assign) int32_t result;
 - (int32_t)run;
-- (void)prepare;
 - (void)deliverPayload:(NSString *)payload
              requestId:(uint64_t)requestId
                     ok:(BOOL)ok
@@ -75,8 +73,15 @@ static bool is_main_thread(void *context) {
 
 @implementation ZAppDesktopBridge
 
-+ (ZAppDesktopRegistrationOwner *)registrationOwner {
-  return active_host.registrationOwner;
++ (void)attachWindow:(NSWindow *)window
+             webView:(WKWebView *)webView
+   contentController:(WKUserContentController *)contentController {
+  ZAppDesktopHost *host = active_host;
+  if (host == nil) return;
+  host.window = window;
+  host.webView = webView;
+  host.userContentController = contentController;
+  window.delegate = host;
 }
 
 @end
@@ -112,12 +117,6 @@ void zapp_deliver_response_from_z(
     _result = 41;
   }
   return self;
-}
-
-- (void)prepare {
-  self.userContentController = [[WKUserContentController alloc] init];
-  self.registrationOwner = [[ZAppDesktopRegistrationOwner alloc]
-    initWithContentController:self.userContentController];
 }
 
 - (void)deliverPayload:(NSString *)payload
@@ -230,6 +229,15 @@ void zapp_deliver_response_from_z(
   NSApplication *application = NSApplication.sharedApplication;
   [application setActivationPolicy:NSApplicationActivationPolicyRegular];
 
+  if (
+    self.window == nil
+    || self.webView == nil
+    || self.userContentController == nil
+  ) {
+    self.result = 49;
+    return self.result;
+  }
+
   const char *bootstrapBytes = zapp_webview_bootstrap_script();
   NSString *bootstrapSource = bootstrapBytes == NULL
     ? nil
@@ -243,23 +251,6 @@ void zapp_deliver_response_from_z(
     injectionTime:WKUserScriptInjectionTimeAtDocumentStart
     forMainFrameOnly:NO];
   [self.userContentController addUserScript:bootstrap];
-
-  WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
-  configuration.userContentController = self.userContentController;
-  self.webView = [[WKWebView alloc]
-    initWithFrame:NSMakeRect(0.0, 0.0, 720.0, 460.0)
-    configuration:configuration];
-
-  self.window = [[NSWindow alloc]
-    initWithContentRect:NSMakeRect(0.0, 0.0, 720.0, 460.0)
-    styleMask:NSWindowStyleMaskTitled
-      | NSWindowStyleMaskClosable
-      | NSWindowStyleMaskResizable
-    backing:NSBackingStoreBuffered
-    defer:NO];
-  self.window.title = @"Zapp — Z WebView Bridge";
-  self.window.contentView = self.webView;
-  self.window.delegate = self;
 
   NSString *html =
     @"<!doctype html>"
@@ -323,7 +314,6 @@ int main(void) {
   @autoreleasepool {
     ZAppDesktopHost *host = [[ZAppDesktopHost alloc] init];
     active_host = host;
-    [host prepare];
 
     const zapp_core_runtime_config config = {
       .context = NULL,
