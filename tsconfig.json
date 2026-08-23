@@ -11,13 +11,12 @@
     "moduleDetection": "force",
     "noEmit": true,
     "strict": true,
-    "baseUrl": ".",
     "paths": {
       "@zappdev/runtime": ["./runtime/index.ts"],
       "@zappdev/runtime/worker-globals": ["./runtime/worker-globals.ts"],
       "@zappdev/cli/config": ["./cli/src/config.ts"]
     }
   },
-  "include": ["cli/src", "runtime", "bootstrap"],
+  "include": ["cli/src", "runtime", "bootstrap", "spikes"],
   "exclude": ["**/*.test.ts", "**/node_modules"]
 }
