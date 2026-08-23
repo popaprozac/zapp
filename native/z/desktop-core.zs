@@ -77,7 +77,7 @@ function initializeDesktopApplication(
     configuration: configuration
   );
   const windowFrame = native.NSMakeRect(0.0, 0.0, 720.0, 460.0);
-  const style: native.NSWindowStyleMask = native.NSWindowStyleMaskTitled
+  const style = native.NSWindowStyleMaskTitled
     | native.NSWindowStyleMaskClosable
     | native.NSWindowStyleMaskResizable;
   const window = native.NSWindow.alloc().initWithContentRect(
