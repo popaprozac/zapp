@@ -68,20 +68,16 @@ function initializeDesktopApplication(
   const configuration = native.WKWebViewConfiguration.alloc().init();
   configuration.userContentController = contentController;
 
-  const webViewFrame = native.CGRect({
-    origin: native.CGPoint({ x: 0.0, y: 0.0 }),
-    size: native.CGSize({ width: 720.0, height: 460.0 }),
-  });
+  const frame = native.NSMakeRect(0.0, 0.0, 720.0, 460.0);
   const webView = native.WKWebView.alloc().initWithFrame(
-    webViewFrame,
+    frame,
     configuration: configuration
   );
-  const windowFrame = native.NSMakeRect(0.0, 0.0, 720.0, 460.0);
   const style = native.NSWindowStyleMaskTitled
     | native.NSWindowStyleMaskClosable
     | native.NSWindowStyleMaskResizable;
   const window = native.NSWindow.alloc().initWithContentRect(
-    windowFrame,
+    frame,
     styleMask: style,
     backing: native.NSBackingStoreBuffered,
     defer: false
