@@ -46,7 +46,8 @@ describe("resolveZNativeHost", () => {
 describe("Z native host inputs", () => {
   it("stages the Z-owned Objective-C registration surface for desktop", () => {
     expect(zNativeStageFiles("desktop")).toContain("desktop-core.zs");
-    expect(zNativeStageFiles("desktop")).toContain("zapp_desktop.h.zd");
+    expect(zNativeStageFiles("desktop")).toContain("zapp_desktop.h");
+    expect(zNativeStageFiles("desktop")).not.toContain("zapp_desktop.h.zd");
     expect(zNativeStageFiles("desktop")).not.toContain("host.c");
     expect(zNativeManifest("desktop")).toBe("desktop-z.json");
   });

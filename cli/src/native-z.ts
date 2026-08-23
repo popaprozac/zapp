@@ -85,7 +85,6 @@ export function zNativeStageFiles(host: ZNativeHost): string[] {
       "desktop-core.zs",
       "desktop.m",
       "zapp_desktop.h",
-      "zapp_desktop.h.zd",
     ] : ["host.c"]),
     "zapp_router.h",
     "zapp_router.h.zd",
