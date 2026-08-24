@@ -161,9 +161,16 @@ function addWireType(
 
 export function deriveZServiceManifest(metadata: ZProgramMetadata): ZServiceManifest {
   const registrations = metadata.modules.flatMap((module) => module.calls).filter((call) => (
-    call.target.symbol === "ServicesBuilder"
+    (
+      call.target.symbol === "ServicesBuilder"
+      || call.target.symbol === "ApplicationServicesBuilder"
+    )
     && call.target.kind === "method"
-    && call.target.name === "ServicesBuilder.register"
+    && (
+      call.target.name === "ServicesBuilder.register"
+      || call.target.name === "ApplicationServicesBuilder.register"
+      || call.target.name === "ApplicationServicesBuilder.registerWithLifecycle"
+    )
   ));
   const types: ZServiceTypeMetadata[] = [];
   const seenTypes = new Set<string>();
@@ -172,7 +179,7 @@ export function deriveZServiceManifest(metadata: ZProgramMetadata): ZServiceMani
     const [nameArgument, serviceArgument] = registration.arguments;
     if (registration.arguments.length !== 2 || nameArgument?.kind !== "string") {
       throw new Error(
-        "[zapp] ServicesBuilder.register requires a literal service name and one checked service value",
+        "[zapp] service registration requires a literal service name and one checked service value",
       );
     }
     const name = nameArgument.value;
@@ -192,13 +199,29 @@ export function deriveZServiceManifest(metadata: ZProgramMetadata): ZServiceMani
     }
     const implementsService = service.typeSignature.implementedTraits
       .includes("Service");
+    const implementsLifecycle = service.typeSignature.implementedTraits
+      .includes("ServiceLifecycle");
     const methods = service.typeSignature.methods.filter((method) => (
       method.visibility === "public"
       && !method.staticMethod
       && !(
         implementsService
         && method.name === "handler"
+        && !method.signature.asynchronous
+        && method.signature.parameterTypes.length === 0
         && method.signature.returnType === "ServiceHandler"
+        && method.signature.errorType === null
+      )
+      && !(
+        implementsLifecycle
+        && (method.name === "start" || method.name === "stop")
+        && !method.signature.asynchronous
+        && method.signature.parameterModes.length === 1
+        && method.signature.parameterModes[0] === "in"
+        && method.signature.parameterTypes.length === 1
+        && method.signature.parameterTypes[0] === "ApplicationContext"
+        && method.signature.returnType === "void"
+        && method.signature.errorType === "ServiceLifecycleError"
       )
     )).map((method) => {
       if (method.signature.asynchronous) {

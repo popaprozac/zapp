@@ -12,6 +12,12 @@ import {
   ServiceOutcome,
 } from "../../../native/z/framework/service-contract.zs";
 import { Service } from "../../../native/z/framework/services.zs";
+import {
+  ApplicationContext,
+  ServiceLifecycle,
+  ServiceLifecycleError,
+} from "../../../native/z/framework/service-lifecycle-contract.zs";
+import console from "std/console";
 
 export struct Note {
   id: u64;
@@ -30,7 +36,7 @@ struct NotesDecodeError {
   message: String;
 }
 
-export readonly struct NotesService implements Service {
+export readonly class NotesService implements Service, ServiceLifecycle {
   readonly state: Mutex<NotesState>;
 
   function create(input: CreateNoteInput): Note {
@@ -46,13 +52,25 @@ export readonly struct NotesService implements Service {
     return this.state.withLock((in state): u64 => state.nextId - 1);
   }
 
-  function handler(move this): ServiceHandler {
-    return createNotesHandler(move this);
+  function handler(): ServiceHandler {
+    return createNotesHandler(this);
+  }
+
+  function start(
+    in context: ApplicationContext
+  ): void throws ServiceLifecycleError on thread.main {
+    console.log(`${context.name}: notes service started`);
+  }
+
+  function stop(
+    in context: ApplicationContext
+  ): void throws ServiceLifecycleError on thread.main {
+    console.log(`${context.name}: notes service stopped`);
   }
 }
 
 export function createNotesService(): NotesService {
-  return NotesService({
+  return new NotesService({
     state: Mutex(NotesState({ nextId: 1 })),
   });
 }

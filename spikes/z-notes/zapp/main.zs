@@ -4,7 +4,7 @@ import console from "std/console";
 
 function main(): i32 {
   let app = Application({ name: "Notes" });
-  app.services.register("notes", createNotesService());
+  app.services.registerWithLifecycle("notes", createNotesService());
   const result = attempt app.run();
   return match (result) {
     success(status) => status;

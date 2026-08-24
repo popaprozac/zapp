@@ -8,6 +8,15 @@ import {
 import {
   createServiceLifecycles,
 } from "../../framework/service-lifecycle.zs";
+import {
+  ServiceHandler,
+  ServiceInvocation,
+  ServiceOutcome,
+} from "../../framework/service-contract.zs";
+import {
+  Service,
+  createApplicationServices,
+} from "../../framework/services.zs";
 import { thread } from "std/thread";
 import { Mutex, Once } from "std/sync";
 
@@ -76,6 +85,75 @@ readonly class RecordingLifecycle on thread.main implements ServiceLifecycle {
       );
     }
   }
+}
+
+struct RegisteredServiceState {
+  starts: i32;
+  invocations: i32;
+  stops: i32;
+}
+
+readonly class RegisteredService implements Service, ServiceLifecycle {
+  readonly state: Mutex<RegisteredServiceState>;
+
+  function handler(): ServiceHandler {
+    return createRegisteredServiceHandler(this);
+  }
+
+  function start(
+    in context: ApplicationContext
+  ): void throws ServiceLifecycleError on thread.main {
+    if (!contextReady(in context)) return;
+    this.state.withLock(
+      (inout state): void => {
+        state.starts = state.starts + 1;
+      }
+    );
+  }
+
+  function stop(
+    in context: ApplicationContext
+  ): void throws ServiceLifecycleError on thread.main {
+    if (!contextReady(in context)) return;
+    this.state.withLock(
+      (inout state): void => {
+        state.stops = state.stops + 1;
+      }
+    );
+  }
+
+  function countsMatch(
+    starts: i32,
+    invocations: i32,
+    stops: i32
+  ): boolean {
+    return this.state.withLock(
+      (in state): boolean =>
+        state.starts == starts
+        && state.invocations == invocations
+        && state.stops == stops
+    );
+  }
+}
+
+function invokeRegisteredService(
+  in service: RegisteredService,
+  in invocation: ServiceInvocation
+): ServiceOutcome on thread.any {
+  service.state.withLock(
+    (inout state): void => {
+      state.invocations = state.invocations + 1;
+    }
+  );
+  return ServiceOutcome.success(copy invocation.arguments);
+}
+
+function createRegisteredServiceHandler(
+  service: RegisteredService
+): ServiceHandler {
+  return move (
+    in invocation: ServiceInvocation
+  ): ServiceOutcome => invokeRegisteredService(in service, in invocation);
 }
 
 function createLifecycle(
@@ -198,11 +276,47 @@ function failingStopLifecycle(
   return eventsEqual(in trace, expected);
 }
 
+function registeredServiceLifecycle(
+  in context: ApplicationContext
+): boolean on thread.main {
+  const service = new RegisteredService({
+    state: Mutex(RegisteredServiceState({
+      starts: 0,
+      invocations: 0,
+      stops: 0,
+    })),
+  });
+  let builder = createApplicationServices();
+  builder.registerWithLifecycle("registered", service);
+  const configured = builder.freezeConfigured();
+  const { routes, lifecycles } = move configured;
+
+  const started = attempt lifecycles.start(in context);
+  match (started) {
+    success => {}
+    failure(_) => return false;
+  }
+  const outcome = routes.invoke("registered.echo", "same identity");
+  match (outcome) {
+    success(payload) => {
+      if (payload != "same identity") return false;
+    }
+    failure(_) => return false;
+  }
+  const stopped = attempt lifecycles.stop(in context);
+  match (stopped) {
+    success => {}
+    failure(_) => return false;
+  }
+  return service.countsMatch(1, 1, 1);
+}
+
 function main(): i32 {
   const lifetime = lifecycleTrace.initialize(createTrace());
   const context = ApplicationContext({ name: "Lifecycle smoke" });
   if (!normalLifecycle(in context)) return 1;
   if (!rollbackLifecycle(in context)) return 2;
   if (!failingStopLifecycle(in context)) return 3;
+  if (!registeredServiceLifecycle(in context)) return 4;
   return 0;
 }

@@ -41,10 +41,10 @@ const metadata: ZProgramMetadata = {
       },
       {
         name: "NotesService",
-        kind: "struct",
+        kind: "class",
         exported: true,
         typeSignature: {
-          implementedTraits: ["Service"],
+          implementedTraits: ["Service", "ServiceLifecycle"],
           fields: [],
           methods: [
             {
@@ -83,6 +83,30 @@ const metadata: ZProgramMetadata = {
                 errorType: null,
               },
             },
+            {
+              name: "start",
+              staticMethod: false,
+              visibility: "public",
+              signature: {
+                asynchronous: false,
+                parameterModes: ["in"],
+                parameterTypes: ["ApplicationContext"],
+                returnType: "void",
+                errorType: "ServiceLifecycleError",
+              },
+            },
+            {
+              name: "stop",
+              staticMethod: false,
+              visibility: "public",
+              signature: {
+                asynchronous: false,
+                parameterModes: ["in"],
+                parameterTypes: ["ApplicationContext"],
+                returnType: "void",
+                errorType: "ServiceLifecycleError",
+              },
+            },
           ],
         },
       },
@@ -90,9 +114,9 @@ const metadata: ZProgramMetadata = {
     calls: [{
       target: {
         module: "/services.zs",
-        symbol: "ServicesBuilder",
+        symbol: "ApplicationServicesBuilder",
         kind: "method",
-        name: "ServicesBuilder.register",
+        name: "ApplicationServicesBuilder.registerWithLifecycle",
       },
       arguments: [
         { kind: "string", type: "String", value: "notes" },

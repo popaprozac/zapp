@@ -22,6 +22,17 @@ function invokeServiceLifecycle<T: ServiceLifecycle>(
 export struct ServiceLifecycleBuilder {
   entries: Array<ServiceLifecycleAdapter>;
 
+  function add(
+    inout this,
+    name: String,
+    hook: ServiceLifecycleHook
+  ): void on thread.main {
+    this.entries.push(new ServiceLifecycleAdapter({
+      name: move name,
+      hook,
+    }));
+  }
+
   function register<T: ServiceLifecycle>(
     inout this,
     name: String,
@@ -32,10 +43,7 @@ export struct ServiceLifecycleBuilder {
       in context: ApplicationContext
     ): Result<void, ServiceLifecycleError> =>
       invokeServiceLifecycle(in service, phase, in context);
-    this.entries.push(new ServiceLifecycleAdapter({
-      name: move name,
-      hook,
-    }));
+    this.add(move name, hook);
   }
 
   function freeze(move this): ServiceLifecycles on thread.main {

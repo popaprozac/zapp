@@ -3,9 +3,10 @@
 Status: first typed vertical slice implemented, August 2026.
 
 Zapp services are ordinary Z values whose public methods become typed frontend
-bindings. A service is a `struct` by default. It may contain `Mutex<T>`, native
-owners, or ARC references when its behavior needs those capabilities; service
-registration does not force every service into a class hierarchy.
+bindings. A route-only service may be a `struct`. A service that shares one
+mutable identity between request handling and application lifecycle hooks is
+naturally an ARC `class`, usually with its mutable state behind `Mutex<T>`.
+Registration does not force every service into a class hierarchy.
 
 The reusable service machinery lives under `native/z/framework/`. The concrete
 Notes implementation and application entries live under
@@ -17,7 +18,7 @@ The public lifecycle is designed around a consuming application builder:
 
 ```z
 let app = Application({ name: "Notes" });
-app.services.register("notes", createNotesService());
+app.services.registerWithLifecycle("notes", createNotesService());
 return try app.run();
 ```
 
@@ -31,8 +32,8 @@ vocabulary.
 
 Most services do not need framework lifecycle hooks. They acquire owned
 resources when they are constructed and release them deterministically through
-the resource's `deinit`. Services that genuinely need application-wide startup
-or shutdown work will opt into one contract:
+the resource's `deinit`. Those services use `register`. A service that genuinely
+needs application-wide startup or shutdown work also implements one contract:
 
 ```z
 trait ServiceLifecycle {
@@ -52,31 +53,49 @@ order before the original start error is propagated. Normal stops run in
 reverse order, attempt every service even after an error, and then propagate
 the first reverse-order stop error.
 
-Lifecycle work is deliberately separate from the frozen service router. The
-router remains `on thread.any` for WebView and embedded-engine calls; storing
-main-only lifecycle callables inside it would make the entire fast path
-main-isolated. `Application.run(move this)` creates the immutable
-`ApplicationContext`, starts lifecycle services before entering the platform
-run loop, and stops them after the loop returns.
+The application surface has two explicit choices:
+
+```z
+app.services.register("health", createHealthService());
+app.services.registerWithLifecycle("notes", createNotesService());
+```
+
+`registerWithLifecycle` requires `T: Service & ServiceLifecycle`. It derives the
+route handler and lifecycle adapter from the same service value, so application
+authors do not register one object twice. The separate method is intentional in
+this tier: Z does not yet inspect a generic value for an optional trait and
+conditionally synthesize behavior. A future compiler-owned implementation may
+make plain `register` detect `ServiceLifecycle` automatically without changing
+the service contracts.
+
+Lifecycle storage remains deliberately separate from the frozen service router
+inside the framework. The router stays `on thread.any` for WebView and
+embedded-engine calls; storing main-only lifecycle callables inside it would
+make the entire fast path main-isolated. `Application.run(move this)` freezes
+both stores, creates the immutable `ApplicationContext`, starts lifecycle
+services before entering the platform run loop, and stops them after the loop
+returns.
 
 The fixed-point compiler executes constrained trait calls through static
 specialization: generated C calls the concrete service method directly,
 without a vtable or trait-object allocation. Z does not yet provide
-trait-typed storage or dynamic dispatch. `ServiceLifecycleBuilder.register`
-accepts the concrete service through a `T: ServiceLifecycle` constraint and
-constructs one main-qualified adapter internally. The fixed-point compiler
-specializes that framework-owned generic method over an application-private
-service type, preserves cleanup through the captured hook, and emits direct
-concrete method calls. Application authors write only:
+trait-typed storage or dynamic dispatch.
+`ApplicationServicesBuilder.registerWithLifecycle` accepts the concrete service
+through a `T: Service & ServiceLifecycle` constraint and constructs one
+main-qualified adapter internally. The fixed-point compiler specializes that
+framework-owned generic method over an application-private service type,
+preserves cleanup through the captured hook, and emits direct concrete method
+calls. Application authors write only:
 
 ```z
-let lifecycles = createServiceLifecycles();
-lifecycles.register("notes", createNotesService());
+app.services.registerWithLifecycle("notes", createNotesService());
 ```
 
 The permanent smoke under `native/z/smokes/service-lifecycle/` proves normal
 order, failed-start rollback, complete best-effort shutdown, and the generic
-cross-module registration path.
+cross-module registration path. It also proves that a lifecycle-aware service's
+handler and hooks retain the same ARC identity through start, invocation, and
+stop.
 
 The Phase 1 Notes application uses that surface directly in
 `spikes/z-notes/zapp/main.zs`. `Application({ name })` creates a fresh service builder through a
@@ -111,9 +130,10 @@ not change with the JavaScript execution environment.
 
 The Z core owns one frozen `readonly Map<String, ServiceHandler>`. Each handler
 is an `on thread.any` callable whose captured graph must be deeply shareable.
-The `NotesService` probe is a readonly value struct containing
-`Mutex<NotesState>`, so mutable state is synchronized inside the service rather
-than making the routing table mutable after publication.
+The `NotesService` probe is a readonly ARC class containing
+`Mutex<NotesState>`, so its handler and lifecycle adapter share identity while
+mutable state remains synchronized instead of making the routing table mutable
+after publication.
 
 The strict C host additionally calls `zapp_invoke_service_owned` directly. It
 proves that an embedded engine can bypass the WebView envelope and reach the
@@ -144,7 +164,7 @@ resolved public call sites, literal arguments, and non-literal argument types.
 Zapp recognizes the ordinary application call:
 
 ```z
-app.services.register("notes", createNotesService());
+app.services.registerWithLifecycle("notes", createNotesService());
 ```
 
 It resolves `NotesService`, its public methods, and the exported request and
@@ -157,19 +177,25 @@ before native compilation.
 
 ## Current service handler boundary
 
-`ServicesBuilder.register` is generic over the framework's `Service` trait, so
+The registration builders are generic over the framework's `Service` trait, so
 the framework does not know about Notes or any other concrete application
-type. A service supplies one consuming conversion into the framework's
+type. A service supplies one non-consuming conversion into the framework's
 thread-safe callable:
 
 ```z
-export readonly struct NotesService implements Service {
+export readonly class NotesService implements Service, ServiceLifecycle {
   function create(input: CreateNoteInput): Note { /* ... */ }
   function count(): u64 { /* ... */ }
 
-  function handler(move this): ServiceHandler {
-    return createNotesHandler(move this);
+  function handler(): ServiceHandler {
+    return createNotesHandler(this);
   }
+
+  function start(in context: ApplicationContext)
+    : void throws ServiceLifecycleError on thread.main { /* ... */ }
+
+  function stop(in context: ApplicationContext)
+    : void throws ServiceLifecycleError on thread.main { /* ... */ }
 }
 ```
 
@@ -186,6 +212,20 @@ service creates its `on thread.any` closure where the compiler can validate its
 captured graph. A future general shareable-generic proof or compiler-owned
 synthesis may remove that last conversion without making `Service` secretly
 weaken Z's concurrency rules.
+
+## Queued async service evolution
+
+The current `ServiceHandler` is synchronous and callable `on thread.any`. It
+executes on the thread that enters the registry; the qualifier proves placement
+safety but does not create a task or switch executors. This is the efficient
+default for pure work, synchronized shared state, and thread-safe native APIs.
+
+A service that must suspend—for example, a worker-originated request that awaits
+main-thread AppKit work—needs an async handler contract. The intended next slice
+is an `AsyncServiceHandler` that can use `await on thread.main` internally while
+the generated TypeScript caller continues to see one ordinary `Promise`. The
+exact registration and adapter syntax remains a deliberate design checkpoint;
+it is queued here rather than claimed as implemented behavior.
 
 ## First performance checkpoint
 

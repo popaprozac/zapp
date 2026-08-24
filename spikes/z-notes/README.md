@@ -24,7 +24,7 @@ import { Application } from "../../../native/z/framework/application.zs";
 
 function main(): i32 {
   let app = Application({ name: "Notes" });
-  app.services.register("notes", createNotesService());
+  app.services.registerWithLifecycle("notes", createNotesService());
   return match (attempt app.run()) {
     success(status) => status;
     failure(_) => 70;
@@ -38,12 +38,15 @@ sources into an application. The build stages the app and framework into one
 isolated workspace today so the fixed-point compiler and editor inspect the
 same source graph.
 
-`NotesService` is a normal readonly Z value with synchronized state. Its public
-`create` and `count` methods are the frontend API. It implements the framework's
-`Service` trait through a consuming `handler()` conversion. That method is
-excluded from generated TypeScript bindings. The framework owns the registered
-service name and method-prefix routing; the service does not repeat a route
-list, capture its registration name, or construct a binding object.
+`NotesService` is a normal readonly ARC class with synchronized state. Its
+public `create` and `count` methods are the frontend API. It implements
+`Service` with a non-consuming `handler()` conversion and `ServiceLifecycle`
+with main-thread `start` and `stop` methods. `registerWithLifecycle` derives both
+adapters from the same service identity; the application does not register the
+service twice. Framework methods are excluded from generated TypeScript
+bindings. The framework owns the registered service name and method-prefix
+routing; the service does not repeat a route list, capture its registration
+name, or construct a binding object.
 
 ## The reusable framework
 
@@ -78,7 +81,9 @@ The visible macOS app calls the generated `notes.create` TypeScript binding,
 verifies the DOM update, and closes automatically. Expected evidence:
 
 ```text
+Notes: notes service started
 visible WebView round trip window=1 request=1 ok=true payload={"id":"1","title":"WebView note"}
+Notes: notes service stopped
 ```
 
 The same app can be embedded behind the focused strict-C host:

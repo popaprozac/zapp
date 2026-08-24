@@ -158,14 +158,14 @@ describe("Z native host inputs", () => {
     );
 
     expect(app).toContain('let app = Application({ name: "Notes" });');
-    expect(app).toContain('app.services.register("notes", createNotesService());');
+    expect(app).toContain('app.services.registerWithLifecycle("notes", createNotesService());');
     expect(app).toContain("const result = attempt app.run();");
     expect(application).toContain("export struct Application");
-    expect(application).toContain("services: ServicesBuilder = createServices();");
-    expect(application).toContain("lifecycles: ServiceLifecycleBuilder = createServiceLifecycles();");
+    expect(application).toContain("services: ApplicationServicesBuilder = createApplicationServices();");
     expect(application).toContain("throws ServiceLifecycleError on thread.main");
-    expect(application).toContain("services: services.freeze()");
-    expect(application).toContain("lifecycles: lifecycles.freeze()");
+    expect(application).toContain("const { routes, lifecycles } = services.freezeConfigured();");
+    expect(application).toContain("services: routes");
+    expect(application).toContain("lifecycles,");
     expect(contract).toContain("export struct ApplicationConfig");
     expect(platform).toContain("export function runApplicationPlatform(");
     expect(platform).toContain("return try runMacOSApplication(move config);");
@@ -203,9 +203,11 @@ describe("Z native host inputs", () => {
     expect(services).toContain("const handler = service.handler();");
     expect(services).not.toContain("ServiceBinding");
     expect(services).toContain("readonly Map<String, ServiceHandler>");
-    expect(notes).toContain("export readonly struct NotesService implements Service");
+    expect(notes).toContain("export readonly class NotesService implements Service, ServiceLifecycle");
     expect(notes).toContain("readonly state: Mutex<NotesState>");
-    expect(notes).toContain("function handler(move this): ServiceHandler");
+    expect(notes).toContain("function handler(): ServiceHandler");
+    expect(notes).toContain("function start(");
+    expect(notes).toContain("function stop(");
     expect(notes).not.toContain("NotesAdapter");
   });
 });
