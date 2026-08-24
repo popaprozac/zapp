@@ -9,9 +9,10 @@ import { thread } from "std/thread";
 export struct ServiceLifecycleBuilder {
   entries: Array<ServiceLifecycleAdapter>;
 
-  // This is the explicit generated-adapter seam until native trait execution
-  // can synthesize it directly from a ServiceLifecycle implementation.
-  function add(
+  // Compiler-produced service metadata calls this after generating a concrete
+  // adapter beside the user's lifecycle type. It is framework plumbing rather
+  // than a second application-facing lifecycle API.
+  function addGenerated(
     inout this,
     lifecycle: ServiceLifecycleAdapter
   ): void on thread.main {

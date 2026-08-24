@@ -15,32 +15,46 @@ export struct ServiceLifecycleError {
   message: String;
 }
 
-export type ServiceStart =
-  (in context: ApplicationContext) => void
-    throws ServiceLifecycleError on thread.main;
+export trait ServiceLifecycle {
+  function start(
+    in context: ApplicationContext
+  ): void throws ServiceLifecycleError on thread.main;
 
-export type ServiceStop =
-  (in context: ApplicationContext) => void
-    throws ServiceLifecycleError on thread.main;
+  function stop(
+    in context: ApplicationContext
+  ): void throws ServiceLifecycleError on thread.main;
+}
 
-// Compiler-generated service adapters will construct this value for a service
-// that explicitly implements the future ServiceLifecycle trait. It remains a
-// runtime representation detail rather than a second user-facing lifecycle.
+export type ServiceLifecycleHook = (
+  phase: ServiceLifecyclePhase,
+  in context: ApplicationContext
+) => Result<void, ServiceLifecycleError> on thread.main;
+
+// Compiler-generated service adapters will construct this value beside a
+// concrete service that implements ServiceLifecycle. It remains a runtime
+// representation detail rather than a second user-facing lifecycle.
 export readonly class ServiceLifecycleAdapter {
   name: String;
-  startHook: ServiceStart;
-  stopHook: ServiceStop;
+  hook: ServiceLifecycleHook;
 
   function start(
     in context: ApplicationContext
   ): void throws ServiceLifecycleError on thread.main {
-    try this.startHook(in context);
+    const observed = this.hook(ServiceLifecyclePhase.start, in context);
+    match (observed) {
+      success => return;
+      failure(error) => throw error;
+    }
   }
 
   function stop(
     in context: ApplicationContext
   ): void throws ServiceLifecycleError on thread.main {
-    try this.stopHook(in context);
+    const observed = this.hook(ServiceLifecyclePhase.stop, in context);
+    match (observed) {
+      success => return;
+      failure(error) => throw error;
+    }
   }
 }
 

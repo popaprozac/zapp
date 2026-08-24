@@ -1,10 +1,10 @@
 import {
   ApplicationContext,
+  ServiceLifecycle,
   ServiceLifecycleAdapter,
   ServiceLifecycleError,
+  ServiceLifecycleHook,
   ServiceLifecyclePhase,
-  ServiceStart,
-  ServiceStop,
   serviceLifecycleError,
 } from "../../service-lifecycle-contract.zs";
 import {
@@ -37,18 +37,6 @@ readonly class LifecycleTrace on thread.main {
 
 const lifecycleTrace = Once<LifecycleTrace>();
 
-function createLifecycle(
-  name: String,
-  start: ServiceStart,
-  stop: ServiceStop
-): ServiceLifecycleAdapter on thread.main {
-  return new ServiceLifecycleAdapter({
-    name: move name,
-    startHook: start,
-    stopHook: stop,
-  });
-}
-
 function record(event: i32): void on thread.main {
   const trace = lifecycleTrace.get();
   trace.record(event);
@@ -58,81 +46,79 @@ function contextReady(in context: ApplicationContext): boolean {
   return context.name.byteLength > 0;
 }
 
-function firstStart(
-  in context: ApplicationContext
-): void throws ServiceLifecycleError on thread.main {
-  record(1);
-  if (!contextReady(in context)) throw serviceLifecycleError(
-    "first",
-    ServiceLifecyclePhase.start,
-    "start failed"
-  );
+readonly class RecordingLifecycle on thread.main implements ServiceLifecycle {
+  name: String;
+  startEvent: i32;
+  stopEvent: i32;
+  failStart: boolean;
+  failStop: boolean;
+
+  function start(
+    in context: ApplicationContext
+  ): void throws ServiceLifecycleError on thread.main {
+    record(this.startEvent);
+    if (this.failStart && contextReady(in context)) {
+      throw serviceLifecycleError(
+        copy this.name,
+        ServiceLifecyclePhase.start,
+        "start failed"
+      );
+    }
+  }
+
+  function stop(
+    in context: ApplicationContext
+  ): void throws ServiceLifecycleError on thread.main {
+    record(this.stopEvent);
+    if (this.failStop && contextReady(in context)) {
+      throw serviceLifecycleError(
+        copy this.name,
+        ServiceLifecyclePhase.stop,
+        "stop failed"
+      );
+    }
+  }
 }
 
-function secondStart(
-  in context: ApplicationContext
-): void throws ServiceLifecycleError on thread.main {
-  record(2);
-  if (!contextReady(in context)) throw serviceLifecycleError(
-    "second",
-    ServiceLifecyclePhase.start,
-    "start failed"
-  );
+function createLifecycle(
+  name: String,
+  startEvent: i32,
+  stopEvent: i32,
+  failStart: boolean,
+  failStop: boolean
+): RecordingLifecycle on thread.main {
+  return new RecordingLifecycle({
+    name: move name,
+    startEvent,
+    stopEvent,
+    failStart,
+    failStop,
+  });
 }
 
-function failingSecondStart(
+function invokeRecordingLifecycle(
+  in lifecycle: RecordingLifecycle,
+  phase: ServiceLifecyclePhase,
   in context: ApplicationContext
-): void throws ServiceLifecycleError on thread.main {
-  record(2);
-  if (contextReady(in context)) throw serviceLifecycleError(
-    "second",
-    ServiceLifecyclePhase.start,
-    "start failed"
-  );
+): Result<void, ServiceLifecycleError> on thread.main {
+  return match (phase) {
+    start => attempt lifecycle.start(in context);
+    stop => attempt lifecycle.stop(in context);
+  };
 }
 
-function firstStop(
-  in context: ApplicationContext
-): void throws ServiceLifecycleError on thread.main {
-  record(-1);
-  if (!contextReady(in context)) throw serviceLifecycleError(
-    "first",
-    ServiceLifecyclePhase.stop,
-    "stop failed"
-  );
-}
-
-function secondStop(
-  in context: ApplicationContext
-): void throws ServiceLifecycleError on thread.main {
-  record(-2);
-  if (!contextReady(in context)) throw serviceLifecycleError(
-    "second",
-    ServiceLifecyclePhase.stop,
-    "stop failed"
-  );
-}
-
-function failingFirstStop(
-  in context: ApplicationContext
-): void throws ServiceLifecycleError on thread.main {
-  record(-1);
-  if (contextReady(in context)) throw serviceLifecycleError(
-    "first",
-    ServiceLifecyclePhase.stop,
-    "stop failed"
-  );
-}
-
-function failingSecondStop(
-  in context: ApplicationContext
-): void throws ServiceLifecycleError on thread.main {
-  record(-2);
-  if (contextReady(in context)) throw serviceLifecycleError(
-    "second",
-    ServiceLifecyclePhase.stop,
-    "stop failed"
-  );
+// This is the concrete source shape compiler-produced service metadata emits.
+// Application authors implement ServiceLifecycle; they do not write adapters.
+function recordingLifecycleAdapter(
+  name: String,
+  lifecycle: RecordingLifecycle
+): ServiceLifecycleAdapter on thread.main {
+  const hook: ServiceLifecycleHook = move (
+    phase: ServiceLifecyclePhase,
+    in context: ApplicationContext
+  ): Result<void, ServiceLifecycleError> =>
+    invokeRecordingLifecycle(in lifecycle, phase, in context);
+  return new ServiceLifecycleAdapter({ name: move name, hook });
 }
 
 function createTrace(): LifecycleTrace on thread.main {
@@ -156,12 +142,14 @@ function eventsEqual(
 
 function normalLifecycle(in context: ApplicationContext): boolean on thread.main {
   let builder = createServiceLifecycles();
-  const firstStartHook: ServiceStart = firstStart;
-  const firstStopHook: ServiceStop = firstStop;
-  const secondStartHook: ServiceStart = secondStart;
-  const secondStopHook: ServiceStop = secondStop;
-  builder.add(createLifecycle("first", firstStartHook, firstStopHook));
-  builder.add(createLifecycle("second", secondStartHook, secondStopHook));
+  builder.addGenerated(recordingLifecycleAdapter(
+    "first",
+    createLifecycle("first", 1, -1, false, false)
+  ));
+  builder.addGenerated(recordingLifecycleAdapter(
+    "second",
+    createLifecycle("second", 2, -2, false, false)
+  ));
   const lifecycles = builder.freeze();
   const started = attempt lifecycles.start(in context);
   match (started) {
@@ -180,12 +168,14 @@ function normalLifecycle(in context: ApplicationContext): boolean on thread.main
 
 function rollbackLifecycle(in context: ApplicationContext): boolean on thread.main {
   let builder = createServiceLifecycles();
-  const firstStartHook: ServiceStart = firstStart;
-  const firstStopHook: ServiceStop = firstStop;
-  const secondStartHook: ServiceStart = failingSecondStart;
-  const secondStopHook: ServiceStop = secondStop;
-  builder.add(createLifecycle("first", firstStartHook, firstStopHook));
-  builder.add(createLifecycle("second", secondStartHook, secondStopHook));
+  builder.addGenerated(recordingLifecycleAdapter(
+    "first",
+    createLifecycle("first", 1, -1, false, false)
+  ));
+  builder.addGenerated(recordingLifecycleAdapter(
+    "second",
+    createLifecycle("second", 2, -2, true, false)
+  ));
   const lifecycles = builder.freeze();
   const started = attempt lifecycles.start(in context);
   match (started) {
@@ -206,12 +196,14 @@ function failingStopLifecycle(
   in context: ApplicationContext
 ): boolean on thread.main {
   let builder = createServiceLifecycles();
-  const firstStartHook: ServiceStart = firstStart;
-  const firstStopHook: ServiceStop = failingFirstStop;
-  const secondStartHook: ServiceStart = secondStart;
-  const secondStopHook: ServiceStop = failingSecondStop;
-  builder.add(createLifecycle("first", firstStartHook, firstStopHook));
-  builder.add(createLifecycle("second", secondStartHook, secondStopHook));
+  builder.addGenerated(recordingLifecycleAdapter(
+    "first",
+    createLifecycle("first", 1, -1, false, true)
+  ));
+  builder.addGenerated(recordingLifecycleAdapter(
+    "second",
+    createLifecycle("second", 2, -2, false, true)
+  ));
   const lifecycles = builder.freeze();
   const started = attempt lifecycles.start(in context);
   match (started) {

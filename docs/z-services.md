@@ -55,12 +55,16 @@ main-isolated. `Application.run(move this)` creates the immutable
 `ApplicationContext`, starts lifecycle services before entering the platform
 run loop, and stops them after the loop returns.
 
-Until the fixed-point compiler executes ordinary trait values, framework and
-compiler plumbing use a checked `ServiceLifecycleAdapter` containing
-`(in context) => ... on thread.main`-qualified callables. It is not a second
+The fixed-point compiler executes constrained trait calls through static
+specialization: generated C calls the concrete service method directly,
+without a vtable or trait-object allocation. Z does not yet provide
+trait-typed storage or dynamic dispatch. Compiler-produced service metadata
+therefore emits a concrete `ServiceLifecycleAdapter` beside each application
+service and hands that representation to `addGenerated`. The adapter contains
+one main-qualified hook and is framework plumbing, not a second
 application-facing lifecycle API. The permanent smoke under
-`native/z/smokes/service-lifecycle/` proves normal order, failed-start rollback,
-and complete best-effort shutdown.
+`native/z/smokes/service-lifecycle/` implements the trait normally and proves
+normal order, failed-start rollback, and complete best-effort shutdown.
 
 The Phase 1 native application uses that surface directly in
 `native/z/app.zs`. `Application({ name })` creates a fresh service builder through a
@@ -125,8 +129,8 @@ types map to `number` only when that mapping preserves the declared contract.
 `native/z/services.zmeta.json` is the versioned Phase 1 input to binding
 generation. It deliberately models semantic service types and methods rather
 than scanning Z source with regular expressions. Today it accompanies the
-concrete generated-style `NotesService` adapter because the fixed-point
-compiler does not yet execute trait declarations or export service metadata.
+concrete generated-style `NotesService` adapter because the compiler does not
+yet export service metadata.
 
 The intended next step is compiler-produced metadata derived from checked Z
 symbols. Application authors should not maintain a second TypeScript schema,
@@ -155,9 +159,10 @@ an intermediate JSON document.
 
 ## Gaps exposed by the slice
 
-- The native compiler understands traits but cannot execute them yet, so the
-  eventual generic `Service` contract is represented by a concrete generated
-  adapter in this slice.
+- Trait constraints now execute through zero-vtable static dispatch. Generic
+  specializations owned by a framework module cannot yet be instantiated there
+  with an application-private downstream type, so metadata must emit the
+  concrete adapter beside the service until demand ownership is generalized.
 - Native cross-module specialization of `json.decode<UserType>` is incomplete;
   the generated adapter currently projects `JsonValue` explicitly.
 - `Mutex.withLock` returns are limited to cleanup-free values in the native
@@ -165,8 +170,8 @@ an intermediate JSON document.
   results after unlocking.
 - Async service methods, typed invocation errors, cancellation, and permissions
   remain follow-up composition work. Lifecycle ordering and typed lifecycle
-  failures are implemented; compiler-generated adapters from ordinary trait
-  implementations remain future work.
+  failures are implemented; exporting and consuming compiler-generated service
+  metadata remains future work.
 - The sample app is still a framework-owned staged entry. Selecting an
   application project's own `.zs` entry and deriving service metadata from its
   checked exports are the next productization steps.

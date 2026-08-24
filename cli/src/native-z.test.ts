@@ -153,7 +153,10 @@ describe("Z native host inputs", () => {
     expect(headless).toContain("struct HeadlessApplicationRuntime");
     expect(headless).toContain("export function runApplicationPlatform(");
     expect(headlessSmoke).toContain("runHeadlessApplicationPlatform(move config)");
+    expect(lifecycleContract).toContain("export trait ServiceLifecycle");
+    expect(lifecycleContract).toContain("export type ServiceLifecycleHook");
     expect(lifecycleContract).toContain("throws ServiceLifecycleError on thread.main");
+    expect(lifecycles).toContain("function addGenerated(");
     expect(lifecycles).toContain("function start(");
     expect(lifecycles).toContain("function stop(");
     expect(lifecycles).toContain("while (rollback > 0)");
