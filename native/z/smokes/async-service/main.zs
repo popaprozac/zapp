@@ -14,6 +14,7 @@ import {
   ServiceOutcome,
 } from "../../framework/service-contract.zs";
 import { scheduler } from "std/async";
+import console from "std/console";
 
 readonly class SearchService implements AsyncService {
   readonly prefix: String;
@@ -88,5 +89,11 @@ async function main(): i32 {
     in request,
     services
   );
-  return validate(in response);
+  const status = validate(in response);
+  if (status != 0) return status;
+
+  console.log(
+    "Zapp async service smoke passed: sync + suspended async routes"
+  );
+  return 0;
 }
