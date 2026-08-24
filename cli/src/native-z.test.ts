@@ -212,6 +212,47 @@ describe("Z native host inputs", () => {
     expect(notes).toContain("function stop(");
     expect(notes).not.toContain("NotesAdapter");
   });
+
+  it("keeps async services separate from the synchronous fast path", () => {
+    const contracts = readFileSync(
+      new URL("../../native/z/framework/async-service-contract.zs", import.meta.url),
+      "utf8",
+    );
+    const services = readFileSync(
+      new URL("../../native/z/framework/async-services.zs", import.meta.url),
+      "utf8",
+    );
+    const bridge = readFileSync(
+      new URL("../../native/z/framework/async-bridge.zs", import.meta.url),
+      "utf8",
+    );
+    const synchronousServices = readFileSync(
+      new URL("../../native/z/framework/services.zs", import.meta.url),
+      "utf8",
+    );
+    const synchronousBridge = readFileSync(
+      new URL("../../native/z/framework/bridge.zs", import.meta.url),
+      "utf8",
+    );
+    const smoke = readFileSync(
+      new URL("../../native/z/smokes/async-service/main.zs", import.meta.url),
+      "utf8",
+    );
+
+    expect(contracts).toContain("export type AsyncServiceHandler");
+    expect(contracts).toContain("async (in invocation: ServiceInvocation) => ServiceOutcome on thread.any");
+    expect(services).toContain("export trait AsyncService");
+    expect(services).toContain("function registerAsync<T: AsyncService>(");
+    expect(services).toContain("readonly Map<String, AsyncServiceHandler>");
+    expect(services).toContain("readonly synchronous: Services");
+    expect(services).toContain("async function invoke(");
+    expect(bridge).toContain("export async function routeMessageWithServicesAsync(");
+    expect(synchronousServices).not.toContain("async function");
+    expect(synchronousBridge).not.toContain("async function");
+    expect(smoke).toContain("await scheduler.yield()");
+    expect(smoke).toContain('builder.registerAsync(');
+    expect(smoke).toContain("await routeMessageWithServicesAsync(");
+  });
 });
 
 describe("parseZCompilerIdentity", () => {

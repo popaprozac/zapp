@@ -1,6 +1,7 @@
 # Z-owned services
 
-Status: first typed vertical slice implemented, August 2026.
+Status: synchronous and first suspending typed vertical slices implemented,
+August 2026.
 
 Zapp services are ordinary Z values whose public methods become typed frontend
 bindings. A route-only service may be a `struct`. A service that shares one
@@ -53,7 +54,7 @@ order before the original start error is propagated. Normal stops run in
 reverse order, attempt every service even after an error, and then propagate
 the first reverse-order stop error.
 
-The application surface has two explicit choices:
+The synchronous application surface has two explicit choices:
 
 ```z
 app.services.register("health", createHealthService());
@@ -128,8 +129,12 @@ bridge. In an embedded zjs worker, the same generated module selects the
 existing direct-host fast path. Application code and generated method names do
 not change with the JavaScript execution environment.
 
-The Z core owns one frozen `readonly Map<String, ServiceHandler>`. Each handler
-is an `on thread.any` callable whose captured graph must be deeply shareable.
+The ordinary application core owns one frozen `ServiceHandler` map. The
+opt-in async-service module composes that router with a separate frozen
+`AsyncServiceHandler` map. Keeping them separate means synchronized or pure
+services retain the direct synchronous fast path; registering one suspending
+service does not allocate a task for every service call. Each handler is an
+`on thread.any` callable whose captured graph must be deeply shareable.
 The `NotesService` probe is a readonly ARC class containing
 `Mutex<NotesState>`, so its handler and lifecycle adapter share identity while
 mutable state remains synchronized instead of making the routing table mutable
@@ -220,28 +225,66 @@ encodes `ServiceOutcome`. Compiler-produced service metadata already knows
 those methods and types, so synthesizing this final router is a future Zapp
 code-generation step rather than a permanent per-service factory convention.
 
-## Queued async service evolution
+## Async services
 
 The current `ServiceHandler` is synchronous and callable `on thread.any`. It
 executes on the thread that enters the registry; the qualifier proves placement
 safety but does not create a task or switch executors. This is the efficient
 default for pure work, synchronized shared state, and thread-safe native APIs.
 
-A service that must suspend—for example, a worker-originated request that awaits
-main-thread AppKit work—needs an async handler contract. Z now accepts the
-intended type shape and executes direct awaits through the TypeScript seed:
+A service that must suspend—for example, a request that waits for I/O or awaits
+main-thread AppKit work—implements `AsyncService`. The framework synthesizes
+this stored handler contract:
 
 ```z
 type AsyncServiceHandler =
   async (in invocation: ServiceInvocation) => ServiceOutcome on thread.any;
 ```
 
-The fixed-point native compiler does not yet emit stored async callable frames,
-so Zapp keeps the synchronous fast path as its implemented service runtime. The
-next language prerequisite is native parity for that dynamic start-frame ABI;
-after it lands, `registerAsync` can synthesize the async adapter exactly as
-`register` now synthesizes the synchronous one. The generated TypeScript caller
-continues to see one ordinary `Promise` either way.
+Application code remains concrete and ordinary:
+
+```z
+readonly class SearchService implements AsyncService {
+  async function invoke(
+    in invocation: ServiceInvocation
+  ): ServiceOutcome {
+    const result = await searchIndex(in invocation.arguments);
+    return ServiceOutcome.success(move result);
+  }
+}
+
+let services = createAsyncServices();
+services.registerAsync("search", new SearchService({}));
+const published = services.freeze();
+```
+
+`AsyncServices.invoke` first checks the synchronous map, allowing one async
+bridge path to serve both service kinds without penalizing direct synchronous
+callers. If no synchronous service owns the name, it retains the selected async
+callable out of the frozen map before suspension and awaits it as a structured
+child. The map loan therefore never crosses `await`.
+
+The permanent smoke under `native/z/smokes/async-service/` executes the first
+complete headless request path: JSON bridge envelope → frozen async registry →
+genuinely suspended Z service (`await scheduler.yield()`) → typed bridge
+response. Run it from the Z repository with:
+
+```bash
+bun run z run /Users/zach/code/zapp/native/z/smokes/async-service
+```
+
+Both semantic frontends agree on this module graph. General library-shaped
+async execution still uses the TypeScript seed's Phase 1 emitter while the
+fixed-point emitter grows beyond its current bounded callable-task slice. The
+async registry and bridge therefore live in opt-in modules; importing the
+ordinary `Application` graph does not make today’s fixed-point Zapp build depend
+on unsupported async emission. The macOS `WKScriptMessageHandler` still enters
+the synchronous bridge. Once ordinary async functions execute in the
+fixed-point compiler, the intended product surface is
+`app.services.registerAsync(...)`; retaining a WebView request through async
+completion and publishing its response back on the main executor is the next
+host-integration slice. Generated TypeScript sees an ordinary `Promise` for
+both service kinds.
 
 ## First performance checkpoint
 
@@ -275,9 +318,10 @@ an intermediate JSON document.
 - `Mutex.withLock` returns are limited to cleanup-free values in the native
   compiler. The service keeps the critical section scalar and constructs owned
   results after unlocking.
-- Async service methods, typed invocation errors, cancellation, and permissions
-  remain follow-up composition work. Lifecycle ordering and typed lifecycle
-  failures and compiler-generated binding metadata are implemented.
+- The headless async service route is implemented. WebView async completion,
+  typed invocation errors beyond `ServiceOutcome`, request cancellation, and
+  permissions remain follow-up composition work. Lifecycle ordering, typed
+  lifecycle failures, and compiler-generated binding metadata are implemented.
 - The in-tree Notes project now supplies its own `.zs` entries. A stable local
   package/module contract is the next productization step; it must work in both
   semantic frontends and the editor rather than relying on staging rewrites.

@@ -1,0 +1,7 @@
+{
+  "target": {
+    "kind": "executable",
+    "name": "zapp_async_service_smoke",
+    "entry": "main.zs"
+  }
+}

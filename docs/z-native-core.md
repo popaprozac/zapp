@@ -1,7 +1,8 @@
 # Z native core
 
 Status: Phase 0 complete; Phase 1 typed ingress, Z-owned AppKit/WebKit identity,
-and the first generated typed service round trip complete, August 2026.
+the first generated typed service round trip, and the first headless suspending
+service round trip complete, August 2026.
 
 Zapp's reusable native core lives under `native/z/framework/`; the first
 application-owned source graph lives under `spikes/z-notes/zapp/`. It is a
@@ -78,6 +79,13 @@ exact `u64` identifier as `bigint`, and the host verifies the resulting DOM
 state before printing the response and closing. It uses the same staged archive
 and generated embedding header as an ordinary `ZAPP_NATIVE_LANG=z` build.
 
+The focused `native/z/smokes/async-service/` executable proves the next service
+shape without involving WebKit timing: a bridge request selects an
+`AsyncServiceHandler`, suspends through `scheduler.yield()`, resumes, and returns
+the typed response. Synchronous handlers remain in a separate frozen map and
+retain the direct-call path. The next desktop slice is to keep a WebView request
+alive through that suspension and publish completion back on `thread.main`.
+
 ## Compiler contract
 
 Z reports an identity shaped like:
@@ -153,4 +161,5 @@ deterministic window/run-loop/runtime shutdown. The framework and application
 are now separate source graphs, and one Notes
 project drives both the WebView and strict-C embedding hosts. Remaining work
 includes typed invocation error/cancellation/permission composition, zjs host
-attachment, and ASan or equivalent leak evidence on a compatible host.
+attachment, WebView delivery from suspending services, and ASan or equivalent
+leak evidence on a compatible host.
