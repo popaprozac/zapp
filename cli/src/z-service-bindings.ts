@@ -1,5 +1,5 @@
 import path from "node:path";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 
 export interface ZServiceFieldMetadata {
   name: string;
@@ -234,10 +234,6 @@ ${services}
   };
 })();
 `;
-}
-
-export async function loadZServiceManifest(file: string): Promise<ZServiceManifest> {
-  return JSON.parse(await readFile(file, "utf8")) as ZServiceManifest;
 }
 
 export async function generateZServiceBindings(

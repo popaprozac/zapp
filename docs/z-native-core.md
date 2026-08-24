@@ -24,7 +24,8 @@ the Z builder. The builder:
 6. initializes a process-wide Z `Application` through the generated runtime
    initializer, routes owned UTF-8 messages through Z, and shuts the root down
    deterministically;
-7. generates transport-independent typed TypeScript service bindings;
+7. asks `z metadata` for checked public symbols and service-registration calls,
+   then generates transport-independent typed TypeScript service bindings;
 8. links either the default AppKit/WebKit application host or the focused
    strict-C bridge host used by the non-UI regression; and
 9. bundles the canonical `bootstrap/webview.ts` source and generated browser
@@ -80,7 +81,7 @@ and generated embedding header as an ordinary `ZAPP_NATIVE_LANG=z` build.
 Z reports an identity shaped like:
 
 ```text
-z 0.1.0-dev revision 2026-08-23 compiler-api 1
+z 0.1.0-dev revision 2026-08-23 compiler-api 2
 ```
 
 The language version describes the user-facing language, the compiler revision
@@ -147,6 +148,5 @@ service call through WebView -> Z -> WebView, a generated-runtime-owned Z
 `Application`, Z-owned UI identities and retained protocol registration, typed
 JSON ingress and dispatch, an embedded-engine direct-service seam, and
 deterministic window/run-loop/runtime shutdown. Remaining work includes the
-compiler-produced public service metadata, typed invocation
-error/cancellation/permission composition, zjs host attachment, and ASan or
-equivalent leak evidence on a compatible host.
+typed invocation error/cancellation/permission composition, zjs host
+attachment, and ASan or equivalent leak evidence on a compatible host.

@@ -83,7 +83,6 @@ export function zNativeStageFiles(host: ZNativeHost): string[] {
     "service-contract.zs",
     "notes-service.zs",
     "services.zs",
-    "services.zmeta.json",
     ...(host === "desktop" ? [
       "app.zs",
       "application.zs",
@@ -191,14 +190,32 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
   const { resolveBootstrapDir } = await import("./paths");
   const {
     generateZServiceBindings,
-    loadZServiceManifest,
     renderZServiceWebviewRuntime,
   } = await import("./z-service-bindings");
+  const {
+    deriveZServiceManifest,
+    parseZProgramMetadata,
+  } = await import("./z-program-metadata");
   const { bundleWebviewBootstrapRaw } = await import(
     path.join(resolveBootstrapDir(), "codegen.ts")
   );
-  const serviceManifest = await loadZServiceManifest(
-    path.join(source, "services.zmeta.json"),
+  const programMetadataSource = await run(
+    [compiler, "metadata", stage],
+    options.root,
+    true,
+  );
+  await writeFile(
+    path.join(stage, "program.zmeta.json"),
+    programMetadataSource,
+    "utf8",
+  );
+  const serviceManifest = deriveZServiceManifest(
+    parseZProgramMetadata(programMetadataSource),
+  );
+  await writeFile(
+    path.join(stage, "services.zmeta.json"),
+    `${JSON.stringify(serviceManifest, null, 2)}\n`,
+    "utf8",
   );
   const generatedBinding = await generateZServiceBindings(
     serviceManifest,

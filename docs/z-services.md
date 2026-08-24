@@ -132,17 +132,24 @@ interface Note {
 The generated decoder validates and converts the wire value. Other numeric
 types map to `number` only when that mapping preserves the declared contract.
 
-## Metadata status
+## Compiler-produced metadata
 
-`native/z/services.zmeta.json` is the versioned Phase 1 input to binding
-generation. It deliberately models semantic service types and methods rather
-than scanning Z source with regular expressions. Today it accompanies the
-concrete generated-style `NotesService` adapter because the compiler does not
-yet export service metadata.
+The fixed-point Z compiler now owns the source of truth. `z metadata` emits a
+versioned, framework-neutral artifact containing checked public symbols,
+resolved public call sites, literal arguments, and non-literal argument types.
+Zapp recognizes the ordinary application call:
 
-The intended next step is compiler-produced metadata derived from checked Z
-symbols. Application authors should not maintain a second TypeScript schema,
-and a stale or incompatible metadata version must fail closed.
+```z
+app.services.register("notes", createNotesService());
+```
+
+It resolves `NotesService`, its public methods, and the exported request and
+response structs from compiler evidence, then derives the transport manifest
+and TypeScript bindings. No regular-expression source scanner and no
+hand-maintained `services.zmeta.json` remain. The generated program and service
+artifacts live under the application's gitignored `.zapp/z-native-core/`
+directory for inspection. Unknown compiler or metadata schema versions fail
+before native compilation.
 
 ## First performance checkpoint
 
@@ -178,10 +185,9 @@ an intermediate JSON document.
   results after unlocking.
 - Async service methods, typed invocation errors, cancellation, and permissions
   remain follow-up composition work. Lifecycle ordering and typed lifecycle
-  failures are implemented; exporting and consuming compiler-generated service
-  metadata remains future work.
+  failures and compiler-generated binding metadata are implemented.
 - The sample app is still a framework-owned staged entry. Selecting an
-  application project's own `.zs` entry and deriving service metadata from its
-  checked exports are the next productization steps.
+  application project's own `.zs` entry is the next productization step; its
+  checked service metadata can now use the same compiler path.
 
 None of these gaps changes the intended application-facing API.

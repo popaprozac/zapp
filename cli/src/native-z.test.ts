@@ -52,7 +52,7 @@ describe("Z native host inputs", () => {
     expect(zNativeStageFiles("desktop")).toContain("service-lifecycle.zs");
     expect(zNativeStageFiles("desktop")).toContain("platform.zs");
     expect(zNativeStageFiles("desktop")).toContain("platform/macos.zs");
-    expect(zNativeStageFiles("desktop")).toContain("services.zmeta.json");
+    expect(zNativeStageFiles("desktop")).not.toContain("services.zmeta.json");
     expect(zNativeStageFiles("desktop")).toContain("zapp_desktop.h");
     expect(zNativeStageFiles("desktop")).not.toContain("zapp_desktop.h.zd");
     expect(zNativeStageFiles("desktop")).not.toContain("core.zs");
@@ -188,11 +188,11 @@ describe("Z native host inputs", () => {
 
 describe("parseZCompilerIdentity", () => {
   it("decodes the pinned compiler contract", () => {
-    expect(parseZCompilerIdentity("z 0.1.0-dev revision 2026-08-23 compiler-api 1\n"))
+    expect(parseZCompilerIdentity("z 0.1.0-dev revision 2026-08-23 compiler-api 2\n"))
       .toEqual({
         languageVersion: "0.1.0-dev",
         compilerRevision: "2026-08-23",
-        compilerApi: 1,
+        compilerApi: 2,
       });
   });
 
@@ -206,7 +206,7 @@ describe("validateZCompilerIdentity", () => {
   const expected = {
     languageVersion: "0.1.0-dev",
     compilerRevision: "2026-08-23",
-    compilerApi: 1,
+    compilerApi: 2,
   };
 
   it("accepts the exact pinned identity", () => {
@@ -218,9 +218,9 @@ describe("validateZCompilerIdentity", () => {
     expect(() => validateZCompilerIdentity(expected, {
       languageVersion: "0.2.0-dev",
       compilerRevision: "later",
-      compilerApi: 2,
+      compilerApi: 3,
     }, "compiler-contract.json")).toThrow(
-      /language 0\.2\.0-dev.*revision later.*compiler API 2.*compiler-contract\.json/,
+      /language 0\.2\.0-dev.*revision later.*compiler API 3.*compiler-contract\.json/,
     );
   });
 });

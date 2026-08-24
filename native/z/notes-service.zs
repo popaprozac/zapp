@@ -21,7 +21,7 @@ struct NotesState {
   nextId: u64;
 }
 
-struct CreateNoteInput {
+export struct CreateNoteInput {
   title: String;
 }
 
@@ -32,7 +32,8 @@ struct NotesDecodeError {
 export readonly struct NotesService {
   readonly state: Mutex<NotesState>;
 
-  function create(title: String): Note {
+  function create(input: CreateNoteInput): Note {
+    const { title } = move input;
     const id = this.state.withLock((inout state): u64 => {
       state.nextId = state.nextId + 1;
       return state.nextId - 1;
@@ -114,8 +115,7 @@ readonly class NotesAdapter {
       const decoded = attempt decodeCreateNoteInput(in invocation.arguments);
       return match (decoded) {
         success(input) => {
-          const { title } = move input;
-          const note = this.service.create(move title);
+          const note = this.service.create(move input);
           select ServiceOutcome.success(encodeNote(move note));
         }
         failure(error) => invalidArguments(copy error.message);
