@@ -116,7 +116,7 @@ worker engine, and one window plus one WebView is the first UI shape.
 
 The first executable platform seam is now concrete. Portable
 `Application.run(move this)` freezes its services into an
-`ApplicationConfig`, freezes its explicit lifecycle adapters separately, then
+`ApplicationConfig`, freezes its explicit lifecycle registry separately, then
 calls the single selected `platform.zs` module. That module must export
 the following contract:
 
@@ -131,15 +131,15 @@ runtime shape. There is no runtime platform dispatch or common native storage
 layout.
 
 Z's fixed-point compiler executes constrained trait calls through direct static
-dispatch, without a vtable or trait-object allocation. It does not yet provide
-trait-typed storage, and a framework-owned generic cannot yet specialize itself
-over an application-private downstream type. Compiler metadata will therefore
-emit a concrete stored-callable adapter beside each `ServiceLifecycle`
-implementation and pass it to framework plumbing. Callable types preserve
-`on thread.main`, aggregate affinity follows those stored values, and off-main
-construction or invocation is rejected. Future conditional-module selection
-plus target-matrix checking will compile this same export contract for macOS,
-Windows, and Linux without changing the public `Application` surface.
+dispatch, without a vtable or trait-object allocation. A framework-owned
+generic method can specialize over an application-private downstream type, so
+`ServiceLifecycleBuilder.register(name, service)` constructs its stored-callable
+adapter internally. Z still does not provide trait-typed storage. Callable
+types preserve `on thread.main`, aggregate affinity follows those stored
+values, and off-main construction or invocation is rejected. Future
+conditional-module selection plus target-matrix checking will compile this same
+export contract for macOS, Windows, and Linux without changing the public
+`Application` surface.
 
 ## Boundary rules
 

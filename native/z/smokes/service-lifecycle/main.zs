@@ -1,9 +1,7 @@
 import {
   ApplicationContext,
   ServiceLifecycle,
-  ServiceLifecycleAdapter,
   ServiceLifecycleError,
-  ServiceLifecycleHook,
   ServiceLifecyclePhase,
   serviceLifecycleError,
 } from "../../service-lifecycle-contract.zs";
@@ -96,31 +94,6 @@ function createLifecycle(
   });
 }
 
-function invokeRecordingLifecycle(
-  in lifecycle: RecordingLifecycle,
-  phase: ServiceLifecyclePhase,
-  in context: ApplicationContext
-): Result<void, ServiceLifecycleError> on thread.main {
-  return match (phase) {
-    start => attempt lifecycle.start(in context);
-    stop => attempt lifecycle.stop(in context);
-  };
-}
-
-// This is the concrete source shape compiler-produced service metadata emits.
-// Application authors implement ServiceLifecycle; they do not write adapters.
-function recordingLifecycleAdapter(
-  name: String,
-  lifecycle: RecordingLifecycle
-): ServiceLifecycleAdapter on thread.main {
-  const hook: ServiceLifecycleHook = move (
-    phase: ServiceLifecyclePhase,
-    in context: ApplicationContext
-  ): Result<void, ServiceLifecycleError> =>
-    invokeRecordingLifecycle(in lifecycle, phase, in context);
-  return new ServiceLifecycleAdapter({ name: move name, hook });
-}
-
 function createTrace(): LifecycleTrace on thread.main {
   return new LifecycleTrace({
     state: Mutex(LifecycleTraceState({ events: Array<i32>() })),
@@ -142,14 +115,14 @@ function eventsEqual(
 
 function normalLifecycle(in context: ApplicationContext): boolean on thread.main {
   let builder = createServiceLifecycles();
-  builder.addGenerated(recordingLifecycleAdapter(
+  builder.register(
     "first",
     createLifecycle("first", 1, -1, false, false)
-  ));
-  builder.addGenerated(recordingLifecycleAdapter(
+  );
+  builder.register(
     "second",
     createLifecycle("second", 2, -2, false, false)
-  ));
+  );
   const lifecycles = builder.freeze();
   const started = attempt lifecycles.start(in context);
   match (started) {
@@ -168,14 +141,14 @@ function normalLifecycle(in context: ApplicationContext): boolean on thread.main
 
 function rollbackLifecycle(in context: ApplicationContext): boolean on thread.main {
   let builder = createServiceLifecycles();
-  builder.addGenerated(recordingLifecycleAdapter(
+  builder.register(
     "first",
     createLifecycle("first", 1, -1, false, false)
-  ));
-  builder.addGenerated(recordingLifecycleAdapter(
+  );
+  builder.register(
     "second",
     createLifecycle("second", 2, -2, true, false)
-  ));
+  );
   const lifecycles = builder.freeze();
   const started = attempt lifecycles.start(in context);
   match (started) {
@@ -196,14 +169,14 @@ function failingStopLifecycle(
   in context: ApplicationContext
 ): boolean on thread.main {
   let builder = createServiceLifecycles();
-  builder.addGenerated(recordingLifecycleAdapter(
+  builder.register(
     "first",
     createLifecycle("first", 1, -1, false, true)
-  ));
-  builder.addGenerated(recordingLifecycleAdapter(
+  );
+  builder.register(
     "second",
     createLifecycle("second", 2, -2, false, true)
-  ));
+  );
   const lifecycles = builder.freeze();
   const started = attempt lifecycles.start(in context);
   match (started) {

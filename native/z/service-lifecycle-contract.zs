@@ -30,9 +30,9 @@ export type ServiceLifecycleHook = (
   in context: ApplicationContext
 ) => Result<void, ServiceLifecycleError> on thread.main;
 
-// Compiler-generated service adapters will construct this value beside a
-// concrete service that implements ServiceLifecycle. It remains a runtime
-// representation detail rather than a second user-facing lifecycle.
+// ServiceLifecycleBuilder constructs this runtime representation through a
+// statically specialized generic method. It remains framework plumbing rather
+// than a second user-facing lifecycle.
 export readonly class ServiceLifecycleAdapter {
   name: String;
   hook: ServiceLifecycleHook;

@@ -58,13 +58,21 @@ run loop, and stops them after the loop returns.
 The fixed-point compiler executes constrained trait calls through static
 specialization: generated C calls the concrete service method directly,
 without a vtable or trait-object allocation. Z does not yet provide
-trait-typed storage or dynamic dispatch. Compiler-produced service metadata
-therefore emits a concrete `ServiceLifecycleAdapter` beside each application
-service and hands that representation to `addGenerated`. The adapter contains
-one main-qualified hook and is framework plumbing, not a second
-application-facing lifecycle API. The permanent smoke under
-`native/z/smokes/service-lifecycle/` implements the trait normally and proves
-normal order, failed-start rollback, and complete best-effort shutdown.
+trait-typed storage or dynamic dispatch. `ServiceLifecycleBuilder.register`
+accepts the concrete service through a `T: ServiceLifecycle` constraint and
+constructs one main-qualified adapter internally. The fixed-point compiler
+specializes that framework-owned generic method over an application-private
+service type, preserves cleanup through the captured hook, and emits direct
+concrete method calls. Application authors write only:
+
+```z
+let lifecycles = createServiceLifecycles();
+lifecycles.register("notes", createNotesService());
+```
+
+The permanent smoke under `native/z/smokes/service-lifecycle/` proves normal
+order, failed-start rollback, complete best-effort shutdown, and the generic
+cross-module registration path.
 
 The Phase 1 native application uses that surface directly in
 `native/z/app.zs`. `Application({ name })` creates a fresh service builder through a
@@ -159,10 +167,10 @@ an intermediate JSON document.
 
 ## Gaps exposed by the slice
 
-- Trait constraints now execute through zero-vtable static dispatch. Generic
-  specializations owned by a framework module cannot yet be instantiated there
-  with an application-private downstream type, so metadata must emit the
-  concrete adapter beside the service until demand ownership is generalized.
+- Trait constraints execute through zero-vtable static dispatch, including
+  framework-owned generic functions and methods instantiated with an
+  application-private downstream type. Lifecycle adapters no longer require
+  generated application-side source.
 - Native cross-module specialization of `json.decode<UserType>` is incomplete;
   the generated adapter currently projects `JsonValue` explicitly.
 - `Mutex.withLock` returns are limited to cleanup-free values in the native

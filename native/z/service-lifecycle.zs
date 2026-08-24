@@ -1,22 +1,41 @@
 import {
   ApplicationContext,
+  ServiceLifecycle,
   ServiceLifecycleAdapter,
   ServiceLifecycleError,
+  ServiceLifecycleHook,
   ServiceLifecyclePhase,
 } from "./service-lifecycle-contract.zs";
 import { thread } from "std/thread";
 
+function invokeServiceLifecycle<T: ServiceLifecycle>(
+  in service: T,
+  phase: ServiceLifecyclePhase,
+  in context: ApplicationContext
+): Result<void, ServiceLifecycleError> on thread.main {
+  return match (phase) {
+    start => attempt service.start(in context);
+    stop => attempt service.stop(in context);
+  };
+}
+
 export struct ServiceLifecycleBuilder {
   entries: Array<ServiceLifecycleAdapter>;
 
-  // Compiler-produced service metadata calls this after generating a concrete
-  // adapter beside the user's lifecycle type. It is framework plumbing rather
-  // than a second application-facing lifecycle API.
-  function addGenerated(
+  function register<T: ServiceLifecycle>(
     inout this,
-    lifecycle: ServiceLifecycleAdapter
+    name: String,
+    service: T
   ): void on thread.main {
-    this.entries.push(move lifecycle);
+    const hook: ServiceLifecycleHook = move (
+      phase: ServiceLifecyclePhase,
+      in context: ApplicationContext
+    ): Result<void, ServiceLifecycleError> =>
+      invokeServiceLifecycle(in service, phase, in context);
+    this.entries.push(new ServiceLifecycleAdapter({
+      name: move name,
+      hook,
+    }));
   }
 
   function freeze(move this): ServiceLifecycles on thread.main {

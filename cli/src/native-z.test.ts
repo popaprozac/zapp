@@ -156,7 +156,8 @@ describe("Z native host inputs", () => {
     expect(lifecycleContract).toContain("export trait ServiceLifecycle");
     expect(lifecycleContract).toContain("export type ServiceLifecycleHook");
     expect(lifecycleContract).toContain("throws ServiceLifecycleError on thread.main");
-    expect(lifecycles).toContain("function addGenerated(");
+    expect(lifecycles).toContain("function register<T: ServiceLifecycle>(");
+    expect(lifecycles).toContain("invokeServiceLifecycle(in service, phase, in context)");
     expect(lifecycles).toContain("function start(");
     expect(lifecycles).toContain("function stop(");
     expect(lifecycles).toContain("while (rollback > 0)");

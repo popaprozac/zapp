@@ -147,6 +147,6 @@ service call through WebView -> Z -> WebView, a generated-runtime-owned Z
 `Application`, Z-owned UI identities and retained protocol registration, typed
 JSON ingress and dispatch, an embedded-engine direct-service seam, and
 deterministic window/run-loop/runtime shutdown. Remaining work includes the
-compiler-produced service and lifecycle metadata, typed invocation
+compiler-produced public service metadata, typed invocation
 error/cancellation/permission composition, zjs host attachment, and ASan or
 equivalent leak evidence on a compatible host.
