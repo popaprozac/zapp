@@ -1,6 +1,6 @@
 import path from "node:path";
 import { existsSync } from "node:fs";
-import { cp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import type { BuildTarget } from "./build-target";
 
 export interface ZCompilerIdentity {
@@ -10,6 +10,11 @@ export interface ZCompilerIdentity {
 }
 
 export type ZNativeHost = "desktop" | "bridge";
+
+export interface ZNativeStageFile {
+  source: string;
+  destination: string;
+}
 
 interface ZCompilerContract extends ZCompilerIdentity {}
 
@@ -77,30 +82,64 @@ export function resolveZNativeHost(value: string | undefined): ZNativeHost {
   return host;
 }
 
-export function zNativeStageFiles(host: ZNativeHost): string[] {
+export function zNativeStageFiles(host: ZNativeHost): ZNativeStageFile[] {
   return [
-    "bridge.zs",
-    "service-contract.zs",
-    "notes-service.zs",
-    "services.zs",
+    {
+      source: "framework/bridge/zapp_router.h",
+      destination: "zapp_router.h",
+    },
+    {
+      source: "framework/bridge/zapp_router.h.zd",
+      destination: "zapp_router.h.zd",
+    },
     ...(host === "desktop" ? [
-      "app.zs",
-      "application.zs",
-      "application-contract.zs",
-      "service-lifecycle-contract.zs",
-      "service-lifecycle.zs",
-      "platform.zs",
-      "platform/macos.zs",
-      "desktop.m",
-      "zapp_desktop.h",
-    ] : ["core.zs", "host.c"]),
-    "zapp_router.h",
-    "zapp_router.h.zd",
+      {
+        source: "framework/platform/macos/desktop.m",
+        destination: "desktop.m",
+      },
+      {
+        source: "framework/platform/macos/zapp_desktop.h",
+        destination: "zapp_desktop.h",
+      },
+    ] : [{
+      source: "testing/bridge-host.c",
+      destination: "host.c",
+    }]),
   ];
 }
 
-export function zNativeManifest(host: ZNativeHost): string {
-  return host === "desktop" ? "desktop-z.json" : "z.json";
+export function zNativeEntry(host: ZNativeHost): string {
+  return host === "desktop" ? "main.zs" : "embedded.zs";
+}
+
+export function renderZNativeManifest(
+  host: ZNativeHost,
+  entry: string,
+  nativeDirectory = ".",
+): string {
+  const target = host === "desktop"
+    ? {
+      name: "zapp_core",
+      entry,
+      platform: "macos",
+      minimumVersion: "14.0",
+      includeDirectories: [nativeDirectory],
+      link: {
+        directories: [nativeDirectory],
+        libraries: ["zapp_desktop_host"],
+        frameworks: ["AppKit", "WebKit", "CoreFoundation"],
+      },
+    }
+    : {
+      kind: "static-library",
+      name: "zapp_core",
+      entry,
+      platform: "macos",
+      minimumVersion: "14.0",
+      includeDirectories: [nativeDirectory],
+      runtime: { initialize: "initializeApplication" },
+    };
+  return `${JSON.stringify({ target }, null, 2)}\n`;
 }
 
 export function renderZWebviewBootstrapC(source: string): string {
@@ -162,18 +201,45 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
   }
 
   const source = path.join(options.nativeDir, "z");
+  const appSource = path.join(options.root, "zapp");
+  const repositoryRoot = path.resolve(options.nativeDir, "..");
   const stage = path.join(options.root, ".zapp", "z-native-core");
+  const workspace = path.join(stage, "workspace");
   const host = resolveZNativeHost(process.env.ZAPP_Z_HOST);
   const desktop = host === "desktop";
-  await mkdir(stage, { recursive: true });
-  for (const file of zNativeStageFiles(host)) {
-    const destination = path.join(stage, file);
-    await mkdir(path.dirname(destination), { recursive: true });
-    await cp(path.join(source, file), destination);
+  const sourceEntry = path.join(appSource, zNativeEntry(host));
+  if (!existsSync(sourceEntry)) {
+    throw new Error(
+      `[zapp] could not find the Z application entry ${sourceEntry}. ` +
+      `Expected ${zNativeEntry(host)} under the project's zapp/ directory.`,
+    );
   }
+  const appRelative = path.relative(repositoryRoot, appSource);
+  if (appRelative.startsWith("..") || path.isAbsolute(appRelative)) {
+    throw new Error(
+      `[zapp] the current Z application spike must live inside ${repositoryRoot}; ` +
+      `package-resolved framework imports are the next productization layer.`,
+    );
+  }
+  await mkdir(stage, { recursive: true });
+  await rm(workspace, { recursive: true, force: true });
   await cp(
-    path.join(source, zNativeManifest(host)),
+    path.join(source, "framework"),
+    path.join(workspace, "native", "z", "framework"),
+    { recursive: true },
+  );
+  const stagedAppSource = path.join(workspace, appRelative);
+  await cp(appSource, stagedAppSource, { recursive: true });
+  const appEntry = path.join(stagedAppSource, zNativeEntry(host));
+  for (const file of zNativeStageFiles(host)) {
+    const destination = path.join(stage, file.destination);
+    await mkdir(path.dirname(destination), { recursive: true });
+    await cp(path.join(source, file.source), destination);
+  }
+  await writeFile(
     path.join(stage, "z.json"),
+    renderZNativeManifest(host, appEntry, stage),
+    "utf8",
   );
 
   const compiler = resolveZCompiler(path.resolve(options.nativeDir, ".."));

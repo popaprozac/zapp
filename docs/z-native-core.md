@@ -3,8 +3,9 @@
 Status: Phase 0 complete; Phase 1 typed ingress, Z-owned AppKit/WebKit identity,
 and the first generated typed service round trip complete, August 2026.
 
-Zapp's future native core lives under `native/z/`. It is a from-scratch Z
-implementation, not a translation of the current Nim or Zen-C trees. Those
+Zapp's reusable native core lives under `native/z/framework/`; the first
+application-owned source graph lives under `spikes/z-notes/zapp/`. It is a
+from-scratch Z implementation, not a translation of the current Nim or Zen-C trees. Those
 implementations remain the behavioral and performance oracle until the Z core
 reaches equivalent application behavior and measurement coverage.
 
@@ -17,7 +18,8 @@ the Z builder. The builder:
    `PATH`;
 2. runs `z version` and validates the exact language, compiler revision, and
    compiler API in `native/z/compiler-contract.json`;
-3. stages the framework-owned sources in the application's gitignored
+3. stages the reusable framework and project-owned `zapp/` sources in an
+   isolated workspace under the application's gitignored
    `.zapp/z-native-core/` directory;
 4. builds `libzapp_core.a` with the Z compiler;
 5. links the generated embedding header and archive into the CLI output;
@@ -59,7 +61,7 @@ Run the focused end-to-end smoke with:
 
 ```sh
 bun run spike:z-bridge
-bun run spike:z-webview
+bun run spike:z-notes
 ```
 
 The strict bridge smoke imports `compileNative`, sets the same language selector
@@ -68,7 +70,7 @@ envelope with request ID `u64.max`. It verifies the typed response metadata and
 exact JSON payload after the C -> Z -> C round trip. It is therefore evidence
 for the real build seam rather than a parallel script that can drift from it.
 
-The WebView smoke builds the default host, injects the production bootstrap and
+The Z Notes smoke builds the default host, injects the production bootstrap and
 generated Notes binding at document start, opens one window, and automatically
 clicks the visible service button. The page calls `notes.create(...)`; native
 delivery resolves it through `_onInvokeResult()`, the binding restores the
@@ -81,7 +83,7 @@ and generated embedding header as an ordinary `ZAPP_NATIVE_LANG=z` build.
 Z reports an identity shaped like:
 
 ```text
-z 0.1.0-dev revision 2026-08-23 compiler-api 2
+z 0.1.0-dev revision 2026-08-23.1 compiler-api 2
 ```
 
 The language version describes the user-facing language, the compiler revision
@@ -134,8 +136,8 @@ keeps `zapp build` as a stable measurement harness, but the rewrite may improve:
 - staging and incremental native caches;
 - compiler acquisition and reproducible toolchain selection;
 - generated-binding ownership and diagnostics; and
-- whether app-authored Z lives in the application, a package, or a generated
-  build graph.
+- the stable package import that replaces the spike's repository-relative
+  framework import, plus which remaining service adapter source is synthesized.
 
 Changes should reduce concepts and generated glue, preserve Bun-friendly
 frontend ergonomics, and remain measurable. We do not need to imitate the old
@@ -147,6 +149,8 @@ Phase 0's exit criterion is satisfied. Phase 1 now has a visible generated
 service call through WebView -> Z -> WebView, a generated-runtime-owned Z
 `Application`, Z-owned UI identities and retained protocol registration, typed
 JSON ingress and dispatch, an embedded-engine direct-service seam, and
-deterministic window/run-loop/runtime shutdown. Remaining work includes the
-typed invocation error/cancellation/permission composition, zjs host
+deterministic window/run-loop/runtime shutdown. The framework and application
+are now separate source graphs, and one Notes
+project drives both the WebView and strict-C embedding hosts. Remaining work
+includes typed invocation error/cancellation/permission composition, zjs host
 attachment, and ASan or equivalent leak evidence on a compatible host.

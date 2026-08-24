@@ -4,10 +4,10 @@ import {
   ServiceLifecycleError,
   ServiceLifecyclePhase,
   serviceLifecycleError,
-} from "../../service-lifecycle-contract.zs";
+} from "../../framework/service-lifecycle-contract.zs";
 import {
   createServiceLifecycles,
-} from "../../service-lifecycle.zs";
+} from "../../framework/service-lifecycle.zs";
 import { thread } from "std/thread";
 import { Mutex, Once } from "std/sync";
 

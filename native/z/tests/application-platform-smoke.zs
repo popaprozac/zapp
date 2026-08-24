@@ -1,9 +1,9 @@
-import { ApplicationConfig } from "./application-contract.zs";
+import { ApplicationConfig } from "../framework/application-contract.zs";
 import {
   runApplicationPlatform as runHeadlessApplicationPlatform,
-} from "./platform/headless.zs";
-import { createServices } from "./services.zs";
-import { createServiceLifecycles } from "./service-lifecycle.zs";
+} from "../framework/platform/headless.zs";
+import { createServices } from "../framework/services.zs";
+import { createServiceLifecycles } from "../framework/service-lifecycle.zs";
 
 function main(): i32 {
   const config = ApplicationConfig({

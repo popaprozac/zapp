@@ -1,7 +1,10 @@
-import { routeMessageWithServices } from "./bridge.zs";
-import { ServiceOutcome } from "./service-contract.zs";
+import { routeMessageWithServices } from "../../../native/z/framework/bridge.zs";
+import { ServiceOutcome } from "../../../native/z/framework/service-contract.zs";
 import { createNotesService } from "./notes-service.zs";
-import { Services, createServices } from "./services.zs";
+import {
+  Services,
+  createServices,
+} from "../../../native/z/framework/services.zs";
 import { zapp_deliver_response_from_z } from "zapp_router.h";
 import { Once, OnceLifetime } from "std/sync";
 import { thread } from "std/thread";

@@ -16,6 +16,7 @@ const metadata: ZProgramMetadata = {
         kind: "struct",
         exported: true,
         typeSignature: {
+          implementedTraits: [],
           fields: [{
             name: "title",
             typeName: "String",
@@ -30,6 +31,7 @@ const metadata: ZProgramMetadata = {
         kind: "struct",
         exported: true,
         typeSignature: {
+          implementedTraits: [],
           fields: [
             { name: "id", typeName: "u64", visibility: "public", optionalField: false },
             { name: "title", typeName: "String", visibility: "public", optionalField: false },
@@ -42,6 +44,7 @@ const metadata: ZProgramMetadata = {
         kind: "struct",
         exported: true,
         typeSignature: {
+          implementedTraits: ["Service"],
           fields: [],
           methods: [
             {
@@ -65,6 +68,18 @@ const metadata: ZProgramMetadata = {
                 parameterModes: [],
                 parameterTypes: [],
                 returnType: "u64",
+                errorType: null,
+              },
+            },
+            {
+              name: "bind",
+              staticMethod: false,
+              visibility: "public",
+              signature: {
+                asynchronous: false,
+                parameterModes: ["value"],
+                parameterTypes: ["String"],
+                returnType: "ServiceBinding",
                 errorType: null,
               },
             },

@@ -23,6 +23,7 @@ interface ZProgramMethodMetadata {
 }
 
 interface ZProgramTypeSignature {
+  implementedTraits: string[];
   fields: ZProgramFieldMetadata[];
   methods: ZProgramMethodMetadata[];
 }
@@ -189,8 +190,16 @@ export function deriveZServiceManifest(metadata: ZProgramMetadata): ZServiceMani
         `[zapp] registered service ${JSON.stringify(serviceType)} must be an exported Z struct or class`,
       );
     }
+    const implementsService = service.typeSignature.implementedTraits
+      .includes("Service");
     const methods = service.typeSignature.methods.filter((method) => (
-      method.visibility === "public" && !method.staticMethod
+      method.visibility === "public"
+      && !method.staticMethod
+      && !(
+        implementsService
+        && method.name === "bind"
+        && method.signature.returnType === "ServiceBinding"
+      )
     )).map((method) => {
       if (method.signature.asynchronous) {
         throw new Error(`[zapp] async service method ${serviceType}.${method.name} is not supported yet`);

@@ -3,9 +3,10 @@ import { readFileSync } from "node:fs";
 import {
   parseZCompilerIdentity,
   renderZWebviewBootstrapC,
+  renderZNativeManifest,
   resolveZNativeHost,
   validateZCompilerIdentity,
-  zNativeManifest,
+  zNativeEntry,
   zNativeStageFiles,
 } from "./native-z";
 
@@ -45,39 +46,57 @@ describe("resolveZNativeHost", () => {
 
 describe("Z native host inputs", () => {
   it("stages the Z-owned Objective-C registration surface for desktop", () => {
-    expect(zNativeStageFiles("desktop")).toContain("app.zs");
-    expect(zNativeStageFiles("desktop")).toContain("application.zs");
-    expect(zNativeStageFiles("desktop")).toContain("application-contract.zs");
-    expect(zNativeStageFiles("desktop")).toContain("service-lifecycle-contract.zs");
-    expect(zNativeStageFiles("desktop")).toContain("service-lifecycle.zs");
-    expect(zNativeStageFiles("desktop")).toContain("platform.zs");
-    expect(zNativeStageFiles("desktop")).toContain("platform/macos.zs");
-    expect(zNativeStageFiles("desktop")).not.toContain("services.zmeta.json");
-    expect(zNativeStageFiles("desktop")).toContain("zapp_desktop.h");
-    expect(zNativeStageFiles("desktop")).not.toContain("zapp_desktop.h.zd");
-    expect(zNativeStageFiles("desktop")).not.toContain("core.zs");
-    expect(zNativeStageFiles("desktop")).not.toContain("host.c");
-    expect(zNativeManifest("desktop")).toBe("desktop-z.json");
+    const files = zNativeStageFiles("desktop");
+    expect(files).toContainEqual({
+      source: "framework/platform/macos/desktop.m",
+      destination: "desktop.m",
+    });
+    expect(files).toContainEqual({
+      source: "framework/platform/macos/zapp_desktop.h",
+      destination: "zapp_desktop.h",
+    });
+    expect(files.map((file) => file.destination)).not.toContain("host.c");
+    expect(zNativeEntry("desktop")).toBe("main.zs");
+    expect(JSON.parse(renderZNativeManifest("desktop", "/app/main.zs", "/native")))
+      .toMatchObject({
+        target: {
+          entry: "/app/main.zs",
+          minimumVersion: "14.0",
+          includeDirectories: ["/native"],
+          link: {
+            directories: ["/native"],
+            frameworks: ["AppKit", "WebKit", "CoreFoundation"],
+          },
+        },
+      });
   });
 
   it("keeps the strict C bridge on the minimal manifest", () => {
-    expect(zNativeStageFiles("bridge")).not.toContain("application.zs");
-    expect(zNativeStageFiles("bridge")).not.toContain("service-lifecycle-contract.zs");
-    expect(zNativeStageFiles("bridge")).not.toContain("service-lifecycle.zs");
-    expect(zNativeStageFiles("bridge")).not.toContain("platform/macos.zs");
-    expect(zNativeStageFiles("bridge")).toContain("core.zs");
-    expect(zNativeStageFiles("bridge")).not.toContain("zapp_desktop.h");
-    expect(zNativeStageFiles("bridge")).not.toContain("desktop.m");
-    expect(zNativeManifest("bridge")).toBe("z.json");
+    const files = zNativeStageFiles("bridge");
+    expect(files).toContainEqual({
+      source: "testing/bridge-host.c",
+      destination: "host.c",
+    });
+    expect(files.map((file) => file.destination)).not.toContain("desktop.m");
+    expect(zNativeEntry("bridge")).toBe("embedded.zs");
+    expect(JSON.parse(renderZNativeManifest("bridge", "/app/embedded.zs", "/native")))
+      .toMatchObject({
+        target: {
+          kind: "static-library",
+          entry: "/app/embedded.zs",
+          includeDirectories: ["/native"],
+          runtime: { initialize: "initializeApplication" },
+        },
+      });
   });
 
   it("keeps the WebKit UI graph, handler, validation, and registration in Z", () => {
     const macOSPlatform = readFileSync(
-      new URL("../../native/z/platform/macos.zs", import.meta.url),
+      new URL("../../native/z/framework/platform/macos.zs", import.meta.url),
       "utf8",
     );
     const objectiveCHost = readFileSync(
-      new URL("../../native/z/desktop.m", import.meta.url),
+      new URL("../../native/z/framework/platform/macos/desktop.m", import.meta.url),
       "utf8",
     );
 
@@ -106,35 +125,35 @@ describe("Z native host inputs", () => {
 
   it("gives the public Z builder ownership of main and run", () => {
     const app = readFileSync(
-      new URL("../../native/z/app.zs", import.meta.url),
+      new URL("../../spikes/z-notes/zapp/main.zs", import.meta.url),
       "utf8",
     );
     const application = readFileSync(
-      new URL("../../native/z/application.zs", import.meta.url),
+      new URL("../../native/z/framework/application.zs", import.meta.url),
       "utf8",
     );
     const contract = readFileSync(
-      new URL("../../native/z/application-contract.zs", import.meta.url),
+      new URL("../../native/z/framework/application-contract.zs", import.meta.url),
       "utf8",
     );
     const platform = readFileSync(
-      new URL("../../native/z/platform.zs", import.meta.url),
+      new URL("../../native/z/framework/platform.zs", import.meta.url),
       "utf8",
     );
     const headless = readFileSync(
-      new URL("../../native/z/platform/headless.zs", import.meta.url),
+      new URL("../../native/z/framework/platform/headless.zs", import.meta.url),
       "utf8",
     );
     const headlessSmoke = readFileSync(
-      new URL("../../native/z/application-platform-smoke.zs", import.meta.url),
+      new URL("../../native/z/tests/application-platform-smoke.zs", import.meta.url),
       "utf8",
     );
     const lifecycleContract = readFileSync(
-      new URL("../../native/z/service-lifecycle-contract.zs", import.meta.url),
+      new URL("../../native/z/framework/service-lifecycle-contract.zs", import.meta.url),
       "utf8",
     );
     const lifecycles = readFileSync(
-      new URL("../../native/z/service-lifecycle.zs", import.meta.url),
+      new URL("../../native/z/framework/service-lifecycle.zs", import.meta.url),
       "utf8",
     );
 
@@ -166,32 +185,33 @@ describe("Z native host inputs", () => {
 
   it("freezes value services into an arbitrary-thread callable router", () => {
     const contracts = readFileSync(
-      new URL("../../native/z/service-contract.zs", import.meta.url),
+      new URL("../../native/z/framework/service-contract.zs", import.meta.url),
       "utf8",
     );
     const services = readFileSync(
-      new URL("../../native/z/services.zs", import.meta.url),
+      new URL("../../native/z/framework/services.zs", import.meta.url),
       "utf8",
     );
     const notes = readFileSync(
-      new URL("../../native/z/notes-service.zs", import.meta.url),
+      new URL("../../spikes/z-notes/zapp/notes-service.zs", import.meta.url),
       "utf8",
     );
 
     expect(contracts).toContain("=> ServiceOutcome on thread.any");
     expect(services).toContain("function freeze(move this): Services");
+    expect(services).toContain("function register<T: Service>(");
     expect(services).toContain("readonly Map<String, ServiceHandler>");
-    expect(notes).toContain("export readonly struct NotesService");
+    expect(notes).toContain("export readonly struct NotesService implements Service");
     expect(notes).toContain("readonly state: Mutex<NotesState>");
   });
 });
 
 describe("parseZCompilerIdentity", () => {
   it("decodes the pinned compiler contract", () => {
-    expect(parseZCompilerIdentity("z 0.1.0-dev revision 2026-08-23 compiler-api 2\n"))
+    expect(parseZCompilerIdentity("z 0.1.0-dev revision 2026-08-23.1 compiler-api 2\n"))
       .toEqual({
         languageVersion: "0.1.0-dev",
-        compilerRevision: "2026-08-23",
+        compilerRevision: "2026-08-23.1",
         compilerApi: 2,
       });
   });
@@ -205,7 +225,7 @@ describe("parseZCompilerIdentity", () => {
 describe("validateZCompilerIdentity", () => {
   const expected = {
     languageVersion: "0.1.0-dev",
-    compilerRevision: "2026-08-23",
+    compilerRevision: "2026-08-23.1",
     compilerApi: 2,
   };
 

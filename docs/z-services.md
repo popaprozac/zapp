@@ -7,6 +7,10 @@ bindings. A service is a `struct` by default. It may contain `Mutex<T>`, native
 owners, or ARC references when its behavior needs those capabilities; service
 registration does not force every service into a class hierarchy.
 
+The reusable service machinery lives under `native/z/framework/`. The concrete
+Notes implementation and application entries live under
+`spikes/z-notes/zapp/`; no framework module imports an application type.
+
 ## Application surface
 
 The public lifecycle is designed around a consuming application builder:
@@ -74,8 +78,8 @@ The permanent smoke under `native/z/smokes/service-lifecycle/` proves normal
 order, failed-start rollback, complete best-effort shutdown, and the generic
 cross-module registration path.
 
-The Phase 1 native application uses that surface directly in
-`native/z/app.zs`. `Application({ name })` creates a fresh service builder through a
+The Phase 1 Notes application uses that surface directly in
+`spikes/z-notes/zapp/main.zs`. `Application({ name })` creates a fresh service builder through a
 value-field default, and the main-thread `run(move this)` method consumes the
 whole configuration. Z owns the executable `main`; the Objective-C file is a
 linked platform adapter with no framework policy or entry point of its own.
@@ -151,6 +155,32 @@ artifacts live under the application's gitignored `.zapp/z-native-core/`
 directory for inspection. Unknown compiler or metadata schema versions fail
 before native compilation.
 
+## Current service adapter boundary
+
+`ServicesBuilder.register` is generic over the framework's `Service` trait, so
+the framework no longer knows about Notes or any other concrete application
+type. A service currently supplies one consuming binding method:
+
+```z
+export readonly struct NotesService implements Service {
+  function create(input: CreateNoteInput): Note { /* ... */ }
+  function count(): u64 { /* ... */ }
+
+  function bind(move this, name: String): ServiceBinding {
+    return ServiceBinding({
+      methods: Array<String>("create", "count"),
+      handler: createNotesHandler(move name, move this),
+    });
+  }
+}
+```
+
+Only `create` and `count` become generated frontend methods. `bind` is a
+framework contract and is filtered from the compiler-produced public service
+surface. This is honest temporary plumbing rather than a second hand-authored
+schema: checked metadata remains authoritative, and a future synthesis pass can
+generate the binding adapter from it.
+
 ## First performance checkpoint
 
 Measured on the Apple M4 Max development machine with a release Z library and
@@ -186,8 +216,8 @@ an intermediate JSON document.
 - Async service methods, typed invocation errors, cancellation, and permissions
   remain follow-up composition work. Lifecycle ordering and typed lifecycle
   failures and compiler-generated binding metadata are implemented.
-- The sample app is still a framework-owned staged entry. Selecting an
-  application project's own `.zs` entry is the next productization step; its
-  checked service metadata can now use the same compiler path.
+- The in-tree Notes project now supplies its own `.zs` entries. Stable
+  package-resolved framework imports and synthesized `Service.bind` adapters
+  are the next productization step.
 
 None of these gaps changes the intended application-facing API.

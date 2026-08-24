@@ -1,6 +1,8 @@
 import { expect } from "std/test";
-import { createNotesService } from "./notes-service.zs";
-import { createServices } from "./services.zs";
+import {
+  createNotesService,
+} from "../../../spikes/z-notes/zapp/notes-service.zs";
+import { createServices } from "../framework/services.zs";
 
 test "registers one value service and preserves its state" {
   let builder = createServices();

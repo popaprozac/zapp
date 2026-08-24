@@ -1,5 +1,5 @@
 import { createNotesService } from "./notes-service.zs";
-import { Application } from "./application.zs";
+import { Application } from "../../../native/z/framework/application.zs";
 import console from "std/console";
 
 function main(): i32 {

@@ -6,22 +6,32 @@ import {
   createServiceRegistry,
 } from "./service-contract.zs";
 import { Map } from "std/collections";
-import {
-  NotesService,
-  createNotesHandler,
-} from "./notes-service.zs";
+
+// A ServiceBinding is the temporary handwritten seam between an ordinary Z
+// service and Zapp's runtime router. The compiler already derives the public
+// frontend contract; a future synthesis pass can generate this adapter too.
+export struct ServiceBinding {
+  methods: Array<String>;
+  handler: ServiceHandler;
+}
+
+export trait Service {
+  function bind(move this, name: String): ServiceBinding;
+}
 
 export struct ServicesBuilder {
   registry: ServiceRegistry;
 
-  function register(
+  function register<T: Service>(
     inout this,
     name: String,
-    service: NotesService
+    service: T
   ): void {
-    const handler = createNotesHandler(copy name, move service);
-    this.registry.add(`${name}.create`, handler);
-    this.registry.add(`${name}.count`, handler);
+    const binding = service.bind(copy name);
+    const { methods, handler } = move binding;
+    for (const method of methods) {
+      this.registry.add(`${name}.${method}`, handler);
+    }
   }
 
   function freeze(move this): Services {

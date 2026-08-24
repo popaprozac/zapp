@@ -170,7 +170,7 @@ export contract for macOS, Windows, and Linux without changing the public
   clearly.
 - Preserve representative smoke tests and the current bridge/binary/build
   benchmarks before replacing their implementations.
-- Promote `spikes/z-message-bridge/` evidence into the framework build rather
+- Promote the strict-C path in `spikes/z-notes/bridge.ts` into the framework build rather
   than treating the spike as permanent architecture.
 
 Exit: the Z core builds and links through the ordinary Zapp CLI path without

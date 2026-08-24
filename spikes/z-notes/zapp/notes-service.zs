@@ -10,7 +10,11 @@ import {
   ServiceHandler,
   ServiceInvocation,
   ServiceOutcome,
-} from "./service-contract.zs";
+} from "../../../native/z/framework/service-contract.zs";
+import {
+  Service,
+  ServiceBinding,
+} from "../../../native/z/framework/services.zs";
 
 export struct Note {
   id: u64;
@@ -29,7 +33,7 @@ struct NotesDecodeError {
   message: String;
 }
 
-export readonly struct NotesService {
+export readonly struct NotesService implements Service {
   readonly state: Mutex<NotesState>;
 
   function create(input: CreateNoteInput): Note {
@@ -43,6 +47,13 @@ export readonly struct NotesService {
 
   function count(): u64 {
     return this.state.withLock((in state): u64 => state.nextId - 1);
+  }
+
+  function bind(move this, name: String): ServiceBinding {
+    return ServiceBinding({
+      methods: Array<String>("create", "count"),
+      handler: createNotesHandler(move name, move this),
+    });
   }
 }
 

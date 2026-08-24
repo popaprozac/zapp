@@ -1,4 +1,4 @@
-import { routeMessage } from "./bridge.zs";
+import { routeMessage } from "../framework/bridge.zs";
 import { expect } from "std/test";
 
 test "routes a typed ping envelope" {
