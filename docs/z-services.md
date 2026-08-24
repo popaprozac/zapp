@@ -187,8 +187,8 @@ export readonly class NotesService implements Service, ServiceLifecycle {
   function create(input: CreateNoteInput): Note { /* ... */ }
   function count(): u64 { /* ... */ }
 
-  function handler(): ServiceHandler {
-    return createNotesHandler(this);
+  function invoke(in invocation: ServiceInvocation): ServiceOutcome {
+    /* decode the checked route and call create/count */
   }
 
   function start(in context: ApplicationContext)
@@ -199,19 +199,26 @@ export readonly class NotesService implements Service, ServiceLifecycle {
 }
 ```
 
-Only `create` and `count` become generated frontend methods. `handler` is a
+Only `create` and `count` become generated frontend methods. `invoke` is a
 framework capability and is filtered from the compiler-produced public service
 surface. Registration owns the service name and strips that prefix before
 invocation, so the service does not duplicate its route list or capture its
 registered name. There is no `ServiceBinding`, application adapter class, or
 second hand-authored route schema.
 
-The one-line `handler()` remains because a generic `T: Service` does not prove
-that every `T` is deeply shareable across arbitrary threads. The concrete
-service creates its `on thread.any` closure where the compiler can validate its
-captured graph. A future general shareable-generic proof or compiler-owned
-synthesis may remove that last conversion without making `Service` secretly
-weaken Z's concurrency rules.
+Application authors do not write `createNotesHandler` or another callable
+factory. The framework's generic `register<T: Service>` specialization creates
+the `on thread.any` closure over the concrete service, and the compiler validates
+that concrete captured graph before publishing it. A mutable or otherwise
+non-shareable service fails at registration with the reason its capture cannot
+cross arbitrary threads; `Mutex<T>` and deeply readonly ARC services satisfy
+the established sharing rules.
+
+The remaining handwritten `invoke` method is the current checked wire adapter:
+it decodes `ServiceInvocation`, calls the service's typed public methods, and
+encodes `ServiceOutcome`. Compiler-produced service metadata already knows
+those methods and types, so synthesizing this final router is a future Zapp
+code-generation step rather than a permanent per-service factory convention.
 
 ## Queued async service evolution
 
@@ -221,11 +228,20 @@ safety but does not create a task or switch executors. This is the efficient
 default for pure work, synchronized shared state, and thread-safe native APIs.
 
 A service that must suspend—for example, a worker-originated request that awaits
-main-thread AppKit work—needs an async handler contract. The intended next slice
-is an `AsyncServiceHandler` that can use `await on thread.main` internally while
-the generated TypeScript caller continues to see one ordinary `Promise`. The
-exact registration and adapter syntax remains a deliberate design checkpoint;
-it is queued here rather than claimed as implemented behavior.
+main-thread AppKit work—needs an async handler contract. Z now accepts the
+intended type shape and executes direct awaits through the TypeScript seed:
+
+```z
+type AsyncServiceHandler =
+  async (in invocation: ServiceInvocation) => ServiceOutcome on thread.any;
+```
+
+The fixed-point native compiler does not yet emit stored async callable frames,
+so Zapp keeps the synchronous fast path as its implemented service runtime. The
+next language prerequisite is native parity for that dynamic start-frame ABI;
+after it lands, `registerAsync` can synthesize the async adapter exactly as
+`register` now synthesizes the synchronous one. The generated TypeScript caller
+continues to see one ordinary `Promise` either way.
 
 ## First performance checkpoint
 

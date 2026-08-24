@@ -7,7 +7,6 @@ import { Map } from "std/collections";
 import { Mutex } from "std/sync";
 import { thread } from "std/thread";
 import {
-  ServiceHandler,
   ServiceInvocation,
   ServiceOutcome,
 } from "../../../native/z/framework/service-contract.zs";
@@ -52,8 +51,21 @@ export readonly class NotesService implements Service, ServiceLifecycle {
     return this.state.withLock((in state): u64 => state.nextId - 1);
   }
 
-  function handler(): ServiceHandler {
-    return createNotesHandler(this);
+  function invoke(in invocation: ServiceInvocation): ServiceOutcome {
+    if (invocation.method == "create") {
+      const decoded = attempt decodeCreateNoteInput(in invocation.arguments);
+      return match (decoded) {
+        success(input) => {
+          const note = this.create(move input);
+          select ServiceOutcome.success(encodeNote(move note));
+        }
+        failure(error) => invalidArguments(copy error.message);
+      };
+    }
+    if (invocation.method == "count") {
+      return ServiceOutcome.success(encodeNoteCount(this.count()));
+    }
+    return ServiceOutcome.failure("UNKNOWN_METHOD");
   }
 
   function start(
@@ -127,30 +139,4 @@ function encodeNoteCount(count: u64): String {
   fields.set("count", JsonValue.string(`${count}`));
   const value = JsonValue.object(move fields);
   return stringify(in value);
-}
-
-function invokeNotesService(
-  in service: NotesService,
-  in invocation: ServiceInvocation
-): ServiceOutcome on thread.any {
-  if (invocation.method == "create") {
-    const decoded = attempt decodeCreateNoteInput(in invocation.arguments);
-    return match (decoded) {
-      success(input) => {
-        const note = service.create(move input);
-        select ServiceOutcome.success(encodeNote(move note));
-      }
-      failure(error) => invalidArguments(copy error.message);
-    };
-  }
-  if (invocation.method == "count") {
-    return ServiceOutcome.success(encodeNoteCount(service.count()));
-  }
-  return ServiceOutcome.failure("UNKNOWN_METHOD");
-}
-
-function createNotesHandler(service: NotesService): ServiceHandler {
-  return move (
-    in invocation: ServiceInvocation
-  ): ServiceOutcome => invokeNotesService(in service, in invocation);
 }

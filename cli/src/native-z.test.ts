@@ -200,12 +200,14 @@ describe("Z native host inputs", () => {
     expect(contracts).toContain("=> ServiceOutcome on thread.any");
     expect(services).toContain("function freeze(move this): Services");
     expect(services).toContain("function register<T: Service>(");
-    expect(services).toContain("const handler = service.handler();");
+    expect(services).toContain("const handler = serviceHandler(service);");
+    expect(services).toContain("service.invoke(in invocation)");
     expect(services).not.toContain("ServiceBinding");
     expect(services).toContain("readonly Map<String, ServiceHandler>");
     expect(notes).toContain("export readonly class NotesService implements Service, ServiceLifecycle");
     expect(notes).toContain("readonly state: Mutex<NotesState>");
-    expect(notes).toContain("function handler(): ServiceHandler");
+    expect(notes).toContain("function invoke(in invocation: ServiceInvocation): ServiceOutcome");
+    expect(notes).not.toContain("createNotesHandler");
     expect(notes).toContain("function start(");
     expect(notes).toContain("function stop(");
     expect(notes).not.toContain("NotesAdapter");

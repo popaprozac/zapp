@@ -72,14 +72,14 @@ const metadata: ZProgramMetadata = {
               },
             },
             {
-              name: "handler",
+              name: "invoke",
               staticMethod: false,
               visibility: "public",
               signature: {
                 asynchronous: false,
-                parameterModes: [],
-                parameterTypes: [],
-                returnType: "ServiceHandler",
+                parameterModes: ["in"],
+                parameterTypes: ["ServiceInvocation"],
+                returnType: "ServiceOutcome",
                 errorType: null,
               },
             },

@@ -21,7 +21,12 @@ import { Map } from "std/collections";
 import { thread } from "std/thread";
 
 export trait Service {
-  function handler(): ServiceHandler;
+  function invoke(in invocation: ServiceInvocation): ServiceOutcome;
+}
+
+function serviceHandler<T: Service>(service: T): ServiceHandler {
+  return move (in invocation: ServiceInvocation): ServiceOutcome =>
+    service.invoke(in invocation);
 }
 
 function invokeRegisteredServiceLifecycle<T: Service & ServiceLifecycle>(
@@ -48,7 +53,7 @@ export struct ServicesBuilder {
     name: String,
     service: T
   ): void {
-    const handler = service.handler();
+    const handler = serviceHandler(service);
     this.registry.add(move name, handler);
   }
 
@@ -68,7 +73,7 @@ export struct ApplicationServicesBuilder {
     name: String,
     service: T
   ): void {
-    const handler = service.handler();
+    const handler = serviceHandler(service);
     this.routes.registry.add(move name, handler);
   }
 
@@ -77,7 +82,7 @@ export struct ApplicationServicesBuilder {
     name: String,
     service: T
   ): void on thread.main {
-    const handler = service.handler();
+    const handler = serviceHandler(service);
     const hook: ServiceLifecycleHook = move (
       phase: ServiceLifecyclePhase,
       in context: ApplicationContext

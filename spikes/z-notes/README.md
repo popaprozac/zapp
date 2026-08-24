@@ -40,8 +40,9 @@ same source graph.
 
 `NotesService` is a normal readonly ARC class with synchronized state. Its
 public `create` and `count` methods are the frontend API. It implements
-`Service` with a non-consuming `handler()` conversion and `ServiceLifecycle`
-with main-thread `start` and `stop` methods. `registerWithLifecycle` derives both
+`Service` with a framework-synthesized callable around `invoke()` and
+`ServiceLifecycle` with main-thread `start` and `stop` methods.
+`registerWithLifecycle` derives both
 adapters from the same service identity; the application does not register the
 service twice. Framework methods are excluded from generated TypeScript
 bindings. The framework owns the registered service name and method-prefix

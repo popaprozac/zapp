@@ -206,10 +206,13 @@ export function deriveZServiceManifest(metadata: ZProgramMetadata): ZServiceMani
       && !method.staticMethod
       && !(
         implementsService
-        && method.name === "handler"
+        && method.name === "invoke"
         && !method.signature.asynchronous
-        && method.signature.parameterTypes.length === 0
-        && method.signature.returnType === "ServiceHandler"
+        && method.signature.parameterModes.length === 1
+        && method.signature.parameterModes[0] === "in"
+        && method.signature.parameterTypes.length === 1
+        && method.signature.parameterTypes[0] === "ServiceInvocation"
+        && method.signature.returnType === "ServiceOutcome"
         && method.signature.errorType === null
       )
       && !(

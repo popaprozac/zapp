@@ -9,7 +9,6 @@ import {
   createServiceLifecycles,
 } from "../../framework/service-lifecycle.zs";
 import {
-  ServiceHandler,
   ServiceInvocation,
   ServiceOutcome,
 } from "../../framework/service-contract.zs";
@@ -96,8 +95,13 @@ struct RegisteredServiceState {
 readonly class RegisteredService implements Service, ServiceLifecycle {
   readonly state: Mutex<RegisteredServiceState>;
 
-  function handler(): ServiceHandler {
-    return createRegisteredServiceHandler(this);
+  function invoke(in invocation: ServiceInvocation): ServiceOutcome {
+    this.state.withLock(
+      (inout state): void => {
+        state.invocations = state.invocations + 1;
+      }
+    );
+    return ServiceOutcome.success(copy invocation.arguments);
   }
 
   function start(
@@ -134,26 +138,6 @@ readonly class RegisteredService implements Service, ServiceLifecycle {
         && state.stops == stops
     );
   }
-}
-
-function invokeRegisteredService(
-  in service: RegisteredService,
-  in invocation: ServiceInvocation
-): ServiceOutcome on thread.any {
-  service.state.withLock(
-    (inout state): void => {
-      state.invocations = state.invocations + 1;
-    }
-  );
-  return ServiceOutcome.success(copy invocation.arguments);
-}
-
-function createRegisteredServiceHandler(
-  service: RegisteredService
-): ServiceHandler {
-  return move (
-    in invocation: ServiceInvocation
-  ): ServiceOutcome => invokeRegisteredService(in service, in invocation);
 }
 
 function createLifecycle(
@@ -288,8 +272,7 @@ function registeredServiceLifecycle(
   });
   let builder = createApplicationServices();
   builder.registerWithLifecycle("registered", service);
-  const configured = builder.freezeConfigured();
-  const { routes, lifecycles } = move configured;
+  const { routes, lifecycles } = builder.freezeConfigured();
 
   const started = attempt lifecycles.start(in context);
   match (started) {
