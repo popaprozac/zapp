@@ -88,6 +88,8 @@ export function zNativeStageFiles(host: ZNativeHost): string[] {
       "app.zs",
       "application.zs",
       "application-contract.zs",
+      "service-lifecycle-contract.zs",
+      "service-lifecycle.zs",
       "platform.zs",
       "platform/macos.zs",
       "desktop.m",

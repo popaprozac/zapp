@@ -48,6 +48,8 @@ describe("Z native host inputs", () => {
     expect(zNativeStageFiles("desktop")).toContain("app.zs");
     expect(zNativeStageFiles("desktop")).toContain("application.zs");
     expect(zNativeStageFiles("desktop")).toContain("application-contract.zs");
+    expect(zNativeStageFiles("desktop")).toContain("service-lifecycle-contract.zs");
+    expect(zNativeStageFiles("desktop")).toContain("service-lifecycle.zs");
     expect(zNativeStageFiles("desktop")).toContain("platform.zs");
     expect(zNativeStageFiles("desktop")).toContain("platform/macos.zs");
     expect(zNativeStageFiles("desktop")).toContain("services.zmeta.json");
@@ -60,6 +62,8 @@ describe("Z native host inputs", () => {
 
   it("keeps the strict C bridge on the minimal manifest", () => {
     expect(zNativeStageFiles("bridge")).not.toContain("application.zs");
+    expect(zNativeStageFiles("bridge")).not.toContain("service-lifecycle-contract.zs");
+    expect(zNativeStageFiles("bridge")).not.toContain("service-lifecycle.zs");
     expect(zNativeStageFiles("bridge")).not.toContain("platform/macos.zs");
     expect(zNativeStageFiles("bridge")).toContain("core.zs");
     expect(zNativeStageFiles("bridge")).not.toContain("zapp_desktop.h");
@@ -125,20 +129,35 @@ describe("Z native host inputs", () => {
       new URL("../../native/z/application-platform-smoke.zs", import.meta.url),
       "utf8",
     );
+    const lifecycleContract = readFileSync(
+      new URL("../../native/z/service-lifecycle-contract.zs", import.meta.url),
+      "utf8",
+    );
+    const lifecycles = readFileSync(
+      new URL("../../native/z/service-lifecycle.zs", import.meta.url),
+      "utf8",
+    );
 
     expect(app).toContain('let app = Application({ name: "Notes" });');
     expect(app).toContain('app.services.register("notes", createNotesService());');
-    expect(app).toContain("return app.run();");
+    expect(app).toContain("const result = attempt app.run();");
     expect(application).toContain("export struct Application");
     expect(application).toContain("services: ServicesBuilder = createServices();");
-    expect(application).toContain("function run(move this): i32 on thread.main");
+    expect(application).toContain("lifecycles: ServiceLifecycleBuilder = createServiceLifecycles();");
+    expect(application).toContain("throws ServiceLifecycleError on thread.main");
     expect(application).toContain("services: services.freeze()");
+    expect(application).toContain("lifecycles: lifecycles.freeze()");
     expect(contract).toContain("export struct ApplicationConfig");
     expect(platform).toContain("export function runApplicationPlatform(");
-    expect(platform).toContain("return runMacOSApplication(move config);");
+    expect(platform).toContain("return try runMacOSApplication(move config);");
     expect(headless).toContain("struct HeadlessApplicationRuntime");
     expect(headless).toContain("export function runApplicationPlatform(");
     expect(headlessSmoke).toContain("runHeadlessApplicationPlatform(move config)");
+    expect(lifecycleContract).toContain("throws ServiceLifecycleError on thread.main");
+    expect(lifecycles).toContain("function start(");
+    expect(lifecycles).toContain("function stop(");
+    expect(lifecycles).toContain("while (rollback > 0)");
+    expect(lifecycles).toContain("while (remaining > 0)");
   });
 
   it("freezes value services into an arbitrary-thread callable router", () => {

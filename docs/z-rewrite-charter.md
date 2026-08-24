@@ -116,21 +116,28 @@ worker engine, and one window plus one WebView is the first UI shape.
 
 The first executable platform seam is now concrete. Portable
 `Application.run(move this)` freezes its services into an
-`ApplicationConfig`, then calls the single selected `platform.zs` module. That
-module must export
-`runApplicationPlatform(config: ApplicationConfig): i32 on thread.main`.
+`ApplicationConfig`, freezes its explicit lifecycle adapters separately, then
+calls the single selected `platform.zs` module. That module must export
+the following contract:
+
+```z
+function runApplicationPlatform(
+  config: ApplicationConfig
+): i32 throws ServiceLifecycleError on thread.main;
+```
 The current selector delegates to a private `MacOSApplicationRuntime`; a
 headless smoke exports the same function while using a completely different
 runtime shape. There is no runtime platform dispatch or common native storage
 layout.
 
-Z's fixed-point compiler cannot yet execute ordinary traits, and callable type
-aliases cannot currently preserve `thread.main`, so this checkpoint does not
-weaken executor provenance merely to manufacture a formal interface. Future
-conditional-module selection plus target-matrix checking will compile this
-same export contract for macOS, Windows, and Linux. A native-executable trait
-or main-executor callable contract may strengthen the declaration later without
-changing the public `Application` surface.
+Z's fixed-point compiler cannot yet execute ordinary traits, so lifecycle
+services currently lower through a checked adapter of stored callables. Callable
+types preserve `on thread.main`, aggregate affinity follows those stored values,
+and off-main construction or invocation is rejected. The adapter is internal
+plumbing for the future `ServiceLifecycle` trait, not a weaker public interface.
+Future conditional-module selection plus target-matrix checking will compile
+this same export contract for macOS, Windows, and Linux without changing the
+public `Application` surface.
 
 ## Boundary rules
 

@@ -47,6 +47,13 @@ Objective-C host owns the process/run-loop adapter, response delivery through
 WebKit, and smoke-test observation rather than application object construction
 or message-body validation.
 
+The consuming `Application` also owns a separate lifecycle registry. Typed
+main-executor start hooks run before the blocking platform loop; stop hooks run
+after it returns. Startup failure rolls back the successfully started prefix in
+reverse order, while normal shutdown attempts every stop before propagating a
+typed lifecycle error. Ordinary owned service resources still prefer `deinit`;
+the explicit lifecycle contract is for process-wide orchestration.
+
 Run the focused end-to-end smoke with:
 
 ```sh
@@ -140,6 +147,6 @@ service call through WebView -> Z -> WebView, a generated-runtime-owned Z
 `Application`, Z-owned UI identities and retained protocol registration, typed
 JSON ingress and dispatch, an embedded-engine direct-service seam, and
 deterministic window/run-loop/runtime shutdown. Remaining work includes the
-consuming public application builder, compiler-produced service metadata,
-typed error/cancellation/permission composition, zjs host attachment, and ASan
-or equivalent leak evidence on a compatible host.
+compiler-produced service and lifecycle metadata, typed invocation
+error/cancellation/permission composition, zjs host attachment, and ASan or
+equivalent leak evidence on a compatible host.

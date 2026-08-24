@@ -14,7 +14,7 @@ The public lifecycle is designed around a consuming application builder:
 ```z
 let app = Application({ name: "Notes" });
 app.services.register("notes", createNotesService());
-return app.run();
+return try app.run();
 ```
 
 `app.run()` consumes the mutable configuration, freezes its service routing
@@ -22,6 +22,45 @@ table, publishes the runtime application identity, and blocks until shutdown.
 There is no user-facing `finish()` call. Internally, `freeze()` names the exact
 mutable-builder to readonly-router transition and matches Z collection
 vocabulary.
+
+## Lifecycle is explicit and exceptional
+
+Most services do not need framework lifecycle hooks. They acquire owned
+resources when they are constructed and release them deterministically through
+the resource's `deinit`. Services that genuinely need application-wide startup
+or shutdown work will opt into one contract:
+
+```z
+trait ServiceLifecycle {
+  function start(
+    in context: ApplicationContext
+  ): void throws ServiceLifecycleError on thread.main;
+
+  function stop(
+    in context: ApplicationContext
+  ): void throws ServiceLifecycleError on thread.main;
+}
+```
+
+The runtime ordering is already executable. Starts run in registration order.
+If one start fails, every service that already started is stopped in reverse
+order before the original start error is propagated. Normal stops run in
+reverse order, attempt every service even after an error, and then propagate
+the first reverse-order stop error.
+
+Lifecycle work is deliberately separate from the frozen service router. The
+router remains `on thread.any` for WebView and embedded-engine calls; storing
+main-only lifecycle callables inside it would make the entire fast path
+main-isolated. `Application.run(move this)` creates the immutable
+`ApplicationContext`, starts lifecycle services before entering the platform
+run loop, and stops them after the loop returns.
+
+Until the fixed-point compiler executes ordinary trait values, framework and
+compiler plumbing use a checked `ServiceLifecycleAdapter` containing
+`(in context) => ... on thread.main`-qualified callables. It is not a second
+application-facing lifecycle API. The permanent smoke under
+`native/z/smokes/service-lifecycle/` proves normal order, failed-start rollback,
+and complete best-effort shutdown.
 
 The Phase 1 native application uses that surface directly in
 `native/z/app.zs`. `Application({ name })` creates a fresh service builder through a
@@ -124,8 +163,10 @@ an intermediate JSON document.
 - `Mutex.withLock` returns are limited to cleanup-free values in the native
   compiler. The service keeps the critical section scalar and constructs owned
   results after unlocking.
-- Async service methods, typed thrown errors, cancellation, permissions, and
-  service lifecycle hooks remain follow-up composition work.
+- Async service methods, typed invocation errors, cancellation, and permissions
+  remain follow-up composition work. Lifecycle ordering and typed lifecycle
+  failures are implemented; compiler-generated adapters from ordinary trait
+  implementations remain future work.
 - The sample app is still a framework-owned staged entry. Selecting an
   application project's own `.zs` entry and deriving service metadata from its
   checked exports are the next productization steps.

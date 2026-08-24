@@ -1,6 +1,10 @@
 import native from "zapp_desktop.h";
 import { ApplicationConfig } from "../application-contract.zs";
 import { routeMessageWithServices } from "../bridge.zs";
+import {
+  ApplicationContext,
+  ServiceLifecycleError,
+} from "../service-lifecycle-contract.zs";
 import { Services } from "../services.zs";
 import { zapp_deliver_response_from_z } from "zapp_router.h";
 import objc from "std/objc";
@@ -43,15 +47,19 @@ const application = Once<MacOSApplicationRuntime>();
 
 export function runMacOSApplication(
   config: ApplicationConfig
-): i32 on thread.main {
-  const { name, services } = move config;
+): i32 throws ServiceLifecycleError on thread.main {
+  const { name, services, lifecycles } = move config;
   const prepared = native.zapp_desktop_prepare();
   if (prepared != 0) return prepared;
+  const context = ApplicationContext({ name: copy name });
   const lifetime = initializeMacOSApplicationRuntime(
     move name,
     move services
   );
-  return native.zapp_desktop_run();
+  try lifecycles.start(in context);
+  const status = native.zapp_desktop_run();
+  try lifecycles.stop(in context);
+  return status;
 }
 
 export c function zapp_route_message_owned(
@@ -126,7 +134,7 @@ function initializeMacOSApplicationRuntime(
     backing: native.NSBackingStoreBuffered,
     defer: false
   );
-  window.title = name;
+  window.title = copy name;
   window.contentView = webView;
   native.ZAppDesktopBridge.attachWindow(
     window,
