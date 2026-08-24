@@ -197,8 +197,8 @@ export function deriveZServiceManifest(metadata: ZProgramMetadata): ZServiceMani
       && !method.staticMethod
       && !(
         implementsService
-        && method.name === "bind"
-        && method.signature.returnType === "ServiceBinding"
+        && method.name === "handler"
+        && method.signature.returnType === "ServiceHandler"
       )
     )).map((method) => {
       if (method.signature.asynchronous) {

@@ -155,31 +155,37 @@ artifacts live under the application's gitignored `.zapp/z-native-core/`
 directory for inspection. Unknown compiler or metadata schema versions fail
 before native compilation.
 
-## Current service adapter boundary
+## Current service handler boundary
 
 `ServicesBuilder.register` is generic over the framework's `Service` trait, so
-the framework no longer knows about Notes or any other concrete application
-type. A service currently supplies one consuming binding method:
+the framework does not know about Notes or any other concrete application
+type. A service supplies one consuming conversion into the framework's
+thread-safe callable:
 
 ```z
 export readonly struct NotesService implements Service {
   function create(input: CreateNoteInput): Note { /* ... */ }
   function count(): u64 { /* ... */ }
 
-  function bind(move this, name: String): ServiceBinding {
-    return ServiceBinding({
-      methods: Array<String>("create", "count"),
-      handler: createNotesHandler(move name, move this),
-    });
+  function handler(move this): ServiceHandler {
+    return createNotesHandler(move this);
   }
 }
 ```
 
-Only `create` and `count` become generated frontend methods. `bind` is a
-framework contract and is filtered from the compiler-produced public service
-surface. This is honest temporary plumbing rather than a second hand-authored
-schema: checked metadata remains authoritative, and a future synthesis pass can
-generate the binding adapter from it.
+Only `create` and `count` become generated frontend methods. `handler` is a
+framework capability and is filtered from the compiler-produced public service
+surface. Registration owns the service name and strips that prefix before
+invocation, so the service does not duplicate its route list or capture its
+registered name. There is no `ServiceBinding`, application adapter class, or
+second hand-authored route schema.
+
+The one-line `handler()` remains because a generic `T: Service` does not prove
+that every `T` is deeply shareable across arbitrary threads. The concrete
+service creates its `on thread.any` closure where the compiler can validate its
+captured graph. A future general shareable-generic proof or compiler-owned
+synthesis may remove that last conversion without making `Service` secretly
+weaken Z's concurrency rules.
 
 ## First performance checkpoint
 
@@ -188,7 +194,7 @@ size-optimized strict C host:
 
 | Metric | Result |
 |---|---:|
-| Direct `notes.count` after warmup | 273–287 ns/call |
+| Direct `notes.count` after warmup | 257–279 ns/call |
 | Work inside that measurement | Frozen-map lookup, callable thunk, synchronized scalar read, JSON response encoding, C callback |
 | Pre-service strict host | 71,216 bytes |
 | Typed-service strict host | 89,168 bytes |
@@ -216,8 +222,8 @@ an intermediate JSON document.
 - Async service methods, typed invocation errors, cancellation, and permissions
   remain follow-up composition work. Lifecycle ordering and typed lifecycle
   failures and compiler-generated binding metadata are implemented.
-- The in-tree Notes project now supplies its own `.zs` entries. Stable
-  package-resolved framework imports and synthesized `Service.bind` adapters
-  are the next productization step.
+- The in-tree Notes project now supplies its own `.zs` entries. A stable local
+  package/module contract is the next productization step; it must work in both
+  semantic frontends and the editor rather than relying on staging rewrites.
 
 None of these gaps changes the intended application-facing API.

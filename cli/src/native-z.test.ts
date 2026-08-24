@@ -200,9 +200,13 @@ describe("Z native host inputs", () => {
     expect(contracts).toContain("=> ServiceOutcome on thread.any");
     expect(services).toContain("function freeze(move this): Services");
     expect(services).toContain("function register<T: Service>(");
+    expect(services).toContain("const handler = service.handler();");
+    expect(services).not.toContain("ServiceBinding");
     expect(services).toContain("readonly Map<String, ServiceHandler>");
     expect(notes).toContain("export readonly struct NotesService implements Service");
     expect(notes).toContain("readonly state: Mutex<NotesState>");
+    expect(notes).toContain("function handler(move this): ServiceHandler");
+    expect(notes).not.toContain("NotesAdapter");
   });
 });
 

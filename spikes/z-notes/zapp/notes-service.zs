@@ -11,10 +11,7 @@ import {
   ServiceInvocation,
   ServiceOutcome,
 } from "../../../native/z/framework/service-contract.zs";
-import {
-  Service,
-  ServiceBinding,
-} from "../../../native/z/framework/services.zs";
+import { Service } from "../../../native/z/framework/services.zs";
 
 export struct Note {
   id: u64;
@@ -49,11 +46,8 @@ export readonly struct NotesService implements Service {
     return this.state.withLock((in state): u64 => state.nextId - 1);
   }
 
-  function bind(move this, name: String): ServiceBinding {
-    return ServiceBinding({
-      methods: Array<String>("create", "count"),
-      handler: createNotesHandler(move name, move this),
-    });
+  function handler(move this): ServiceHandler {
+    return createNotesHandler(move this);
   }
 }
 
@@ -117,44 +111,28 @@ function encodeNoteCount(count: u64): String {
   return stringify(in value);
 }
 
-readonly class NotesAdapter {
-  readonly name: String;
-  readonly service: NotesService;
-
-  function invoke(in invocation: ServiceInvocation): ServiceOutcome {
-    if (invocation.method == `${this.name}.create`) {
-      const decoded = attempt decodeCreateNoteInput(in invocation.arguments);
-      return match (decoded) {
-        success(input) => {
-          const note = this.service.create(move input);
-          select ServiceOutcome.success(encodeNote(move note));
-        }
-        failure(error) => invalidArguments(copy error.message);
-      };
-    }
-    if (invocation.method == `${this.name}.count`) {
-      return ServiceOutcome.success(encodeNoteCount(this.service.count()));
-    }
-    return ServiceOutcome.failure("UNKNOWN_METHOD");
-  }
-}
-
-function invokeNotesAdapter(
-  in adapter: NotesAdapter,
+function invokeNotesService(
+  in service: NotesService,
   in invocation: ServiceInvocation
 ): ServiceOutcome on thread.any {
-  return adapter.invoke(in invocation);
+  if (invocation.method == "create") {
+    const decoded = attempt decodeCreateNoteInput(in invocation.arguments);
+    return match (decoded) {
+      success(input) => {
+        const note = service.create(move input);
+        select ServiceOutcome.success(encodeNote(move note));
+      }
+      failure(error) => invalidArguments(copy error.message);
+    };
+  }
+  if (invocation.method == "count") {
+    return ServiceOutcome.success(encodeNoteCount(service.count()));
+  }
+  return ServiceOutcome.failure("UNKNOWN_METHOD");
 }
 
-// This is the first concrete instance of the adapter a future compiler service
-// metadata pass will synthesize. The runtime registry stays independent of the
-// service's public methods and data model.
-export function createNotesHandler(
-  name: String,
-  service: NotesService
-): ServiceHandler {
-  const adapter = new NotesAdapter({ name: copy name, service: move service });
+function createNotesHandler(service: NotesService): ServiceHandler {
   return move (
     in invocation: ServiceInvocation
-  ): ServiceOutcome => invokeNotesAdapter(in adapter, in invocation);
+  ): ServiceOutcome => invokeNotesService(in service, in invocation);
 }

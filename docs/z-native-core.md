@@ -115,10 +115,10 @@ startup, bridge latency, allocations/copies, and deterministic shutdown against
 the same app.
 
 The first typed-service checkpoint adds a frozen function-valued router,
-generated Notes adapter, synchronized service state, exact integer projection,
+checked Notes handler, synchronized service state, exact integer projection,
 and direct embedded-host entry. The measured release strict host grows from
 71,216 to 89,168 bytes; its Z archive grows from 43,552 to 56,592 bytes. Three
-100,000-call direct `notes.count` runs measured 393.61, 286.79, and 272.97 ns per
+100,000-call direct `notes.count` runs measured 279.44, 258.85, and 257.00 ns per
 call, including lookup, thunk invocation, synchronized read, JSON response, and
 C callback. See [Z-owned services](./z-services.md) for the architecture and
 measurement boundary.
@@ -137,7 +137,7 @@ keeps `zapp build` as a stable measurement harness, but the rewrite may improve:
 - compiler acquisition and reproducible toolchain selection;
 - generated-binding ownership and diagnostics; and
 - the stable package import that replaces the spike's repository-relative
-  framework import, plus which remaining service adapter source is synthesized.
+  framework import.
 
 Changes should reduce concepts and generated glue, preserve Bun-friendly
 frontend ergonomics, and remain measurable. We do not need to imitate the old

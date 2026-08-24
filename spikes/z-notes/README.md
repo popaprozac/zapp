@@ -2,8 +2,8 @@
 
 This is the first Zapp project whose application-owned Z source is physically
 separate from the reusable framework. It is intentionally still a spike: the
-runtime behavior is real, while package-resolved `zapp` imports and synthesized
-service adapters remain productization work.
+runtime behavior is real, while package-resolved `zapp` imports remain
+productization work.
 
 ## The end-user application
 
@@ -13,7 +13,7 @@ An application author currently owns three files under `zapp/`:
 zapp/
 ├── main.zs           # desktop entry and Application configuration
 ├── embedded.zs       # strict-C embedding entry used by the regression host
-└── notes-service.zs  # service model, behavior, and temporary router adapter
+└── notes-service.zs  # service model, behavior, and checked handler conversion
 ```
 
 The ordinary desktop entry is deliberately small:
@@ -40,10 +40,10 @@ same source graph.
 
 `NotesService` is a normal readonly Z value with synchronized state. Its public
 `create` and `count` methods are the frontend API. It implements the framework's
-`Service` trait through `bind()`, which supplies the runtime routes and handler.
-That method is excluded from generated TypeScript bindings. It is the remaining
-handwritten adapter that a future Zapp synthesis pass can derive from the same
-checked compiler metadata already used for the public binding.
+`Service` trait through a consuming `handler()` conversion. That method is
+excluded from generated TypeScript bindings. The framework owns the registered
+service name and method-prefix routing; the service does not repeat a route
+list, capture its registration name, or construct a binding object.
 
 ## The reusable framework
 

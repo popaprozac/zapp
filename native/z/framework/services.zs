@@ -7,16 +7,8 @@ import {
 } from "./service-contract.zs";
 import { Map } from "std/collections";
 
-// A ServiceBinding is the temporary handwritten seam between an ordinary Z
-// service and Zapp's runtime router. The compiler already derives the public
-// frontend contract; a future synthesis pass can generate this adapter too.
-export struct ServiceBinding {
-  methods: Array<String>;
-  handler: ServiceHandler;
-}
-
 export trait Service {
-  function bind(move this, name: String): ServiceBinding;
+  function handler(move this): ServiceHandler;
 }
 
 export struct ServicesBuilder {
@@ -27,11 +19,8 @@ export struct ServicesBuilder {
     name: String,
     service: T
   ): void {
-    const binding = service.bind(copy name);
-    const { methods, handler } = move binding;
-    for (const method of methods) {
-      this.registry.add(`${name}.${method}`, handler);
-    }
+    const handler = service.handler();
+    this.registry.add(move name, handler);
   }
 
   function freeze(move this): Services {
@@ -46,12 +35,24 @@ export readonly class Services {
     method: String,
     arguments: String
   ): ServiceOutcome {
-    const found = this.handlers.get(method);
+    let separator: usize = 0;
+    while (
+      separator < method.byteLength
+      && method.byteAt(separator) != 46
+    ) {
+      separator = separator + 1;
+    }
+    if (separator == 0 || separator == method.byteLength) {
+      return ServiceOutcome.failure("UNKNOWN_METHOD");
+    }
+    const serviceName = method.copyBytes(0, separator);
+    const serviceMethod = method.copyBytes(separator + 1, method.byteLength);
+    const found = this.handlers.get(serviceName);
     match (in found) {
       some(handler) => {
         const selected: ServiceHandler = handler;
         const invocation = ServiceInvocation({
-          method: move method,
+          method: move serviceMethod,
           arguments: move arguments,
         });
         return selected(in invocation);
