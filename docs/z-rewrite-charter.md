@@ -10,10 +10,12 @@ JSON ingress, first typed handler, typed response callback, and first visible
 AppKit/WebKit round trip are implemented. The Z root now owns the WebKit
 protocol handler, dynamic message-body validation, owned string conversion,
 deterministic registration guard, window/WebView construction, and the first
-frozen typed service router. One generated Notes binding runs through WebKit,
-and a narrow exported C entry reaches the same handler directly for future zjs
-attachment. The AppKit process/run-loop host remains a small Objective-C
-boundary.
+frozen typed service router. The headless async-service graph also compiles
+through the fixed-point Z emitter: one reusable function sequences synchronous
+and suspended service routes through two child-task suspension states. One
+generated Notes binding runs through WebKit, and a narrow exported C entry
+reaches the same handler directly for future zjs attachment. The AppKit
+process/run-loop host remains a small Objective-C boundary.
 
 ## Decision
 

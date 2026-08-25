@@ -267,20 +267,22 @@ child. The map loan therefore never crosses `await`.
 The permanent smoke under `native/z/smokes/async-service/` executes the first
 complete headless request path: JSON bridge envelope → frozen async registry →
 genuinely suspended Z service (`await scheduler.yield()`) → typed bridge
-response. Run it from the Z repository with:
+response. Its `validateRoutes()` function performs two sequential bridge awaits
+through one heap-owned task frame, proving that the service graph no longer
+depends on `async main` blocking each route independently. Run it from the Z
+repository with:
 
 ```bash
 bun run z run /Users/zach/code/zapp/native/z/smokes/async-service
 ```
 
-Both semantic frontends agree on this module graph. General library-shaped
-async execution still uses the TypeScript seed's Phase 1 emitter while the
-fixed-point emitter grows beyond its current bounded callable-task slice. The
-async registry and bridge therefore live in opt-in modules; importing the
-ordinary `Application` graph does not make today’s fixed-point Zapp build depend
-on unsupported async emission. The macOS `WKScriptMessageHandler` still enters
-the synchronous bridge. Once ordinary async functions execute in the
-fixed-point compiler, the intended product surface is
+Both semantic frontends agree on this module graph, and the fixed-point emitter
+strict-C compiles and executes it. The current reusable frame supports two
+top-level awaited local bindings with owned storage and active-child
+cancellation; arbitrary suspension graphs remain language work. The async
+registry and bridge remain opt-in because the macOS `WKScriptMessageHandler`
+still enters the synchronous bridge, not because the headless graph needs the
+TypeScript emitter. The intended product surface is
 `app.services.registerAsync(...)`; retaining a WebView request through async
 completion and publishing its response back on the main executor is the next
 host-integration slice. Generated TypeScript sees an ordinary `Promise` for

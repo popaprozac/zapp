@@ -251,6 +251,8 @@ describe("Z native host inputs", () => {
     expect(synchronousBridge).not.toContain("async function");
     expect(smoke).toContain("await scheduler.yield()");
     expect(smoke).toContain('builder.registerAsync(');
+    expect(smoke).toContain("async function validateRoutes(services: AsyncServices): i32");
+    expect(smoke.match(/await routeMessageWithServicesAsync\(/g)).toHaveLength(2);
     expect(smoke).toContain("await routeMessageWithServicesAsync(");
   });
 });

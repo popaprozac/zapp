@@ -80,18 +80,21 @@ state before printing the response and closing. It uses the same staged archive
 and generated embedding header as an ordinary `ZAPP_NATIVE_LANG=z` build.
 
 The focused `native/z/smokes/async-service/` executable proves the next service
-shape without involving WebKit timing: a bridge request selects an
-`AsyncServiceHandler`, suspends through `scheduler.yield()`, resumes, and returns
-the typed response. Synchronous handlers remain in a separate frozen map and
-retain the direct-call path. The next desktop slice is to keep a WebView request
-alive through that suspension and publish completion back on `thread.main`.
+shape without involving WebKit timing. One ordinary reusable async function
+routes a synchronous health request, suspends and resumes, then routes a search
+request through an `AsyncServiceHandler` that itself suspends through
+`scheduler.yield()`. Both child joins share one heap-owned parent frame under
+the fixed-point emitter. Synchronous handlers remain in a separate frozen map
+and retain the direct-call path. The next desktop slice is to keep a WebView
+request alive through that suspension and publish completion back on
+`thread.main`.
 
 ## Compiler contract
 
 Z reports an identity shaped like:
 
 ```text
-z 0.1.0-dev revision 2026-08-23.1 compiler-api 2
+z 0.1.0-dev revision 2026-08-24.1 compiler-api 2
 ```
 
 The language version describes the user-facing language, the compiler revision

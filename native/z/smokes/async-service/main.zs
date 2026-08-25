@@ -3,6 +3,7 @@ import {
 } from "../../framework/bridge.zs";
 import {
   AsyncService,
+  AsyncServices,
   createAsyncServices,
 } from "../../framework/async-services.zs";
 import { Service } from "../../framework/services.zs";
@@ -66,14 +67,7 @@ function validateHealth(in response: Option<BridgeResponse>): i32 {
   };
 }
 
-async function main(): i32 {
-  let builder = createAsyncServices();
-  builder.register("health", new HealthService({}));
-  builder.registerAsync(
-    "search",
-    new SearchService({ prefix: "search" })
-  );
-  const services = builder.freeze();
+async function validateRoutes(services: AsyncServices): i32 {
   const healthRequest =
     '{"t":1,"id":41,"m":"health.status","a":{}}';
   const healthResponse = await routeMessageWithServicesAsync(
@@ -89,7 +83,18 @@ async function main(): i32 {
     in request,
     services
   );
-  const status = validate(in response);
+  return validate(in response);
+}
+
+async function main(): i32 {
+  let builder = createAsyncServices();
+  builder.register("health", new HealthService({}));
+  builder.registerAsync(
+    "search",
+    new SearchService({ prefix: "search" })
+  );
+  const services = builder.freeze();
+  const status = await validateRoutes(services);
   if (status != 0) return status;
 
   console.log(
