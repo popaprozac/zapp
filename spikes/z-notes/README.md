@@ -42,10 +42,9 @@ sources into an application. The build stages the app and framework into one
 isolated workspace today so the fixed-point compiler and editor inspect the
 same source graph.
 
-This spike's runner explicitly selects Z's Stage 0 driver while the fixed-point
-backend catches up with manual `TaskScope` construction. Zapp's normal compiler
-default remains the native `z` executable; the override is development debt
-kept visible in `run.ts`, not a hidden fallback.
+This spike now builds and runs through Z's fixed-point native driver. Manual
+`TaskScope` construction, owned capture transfer, main-executor placement, and
+scope close/join all execute without a Stage 0 override.
 
 `NotesCore` is a normal readonly ARC class with synchronized state and owns the
 single implementation of `create`, `count`, JSON decoding, and JSON encoding.

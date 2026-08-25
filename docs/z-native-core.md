@@ -66,11 +66,9 @@ bun run spike:z-notes
 bun run spike:z-notes:smoke
 ```
 
-The Z Notes development runner currently selects the TypeScript Stage 0 driver
-explicitly because manual `TaskScope` construction has not yet reached the
-fixed-point native backend. The ordinary build default remains the native `z`
-driver; `ZAPP_Z_COMPILER_DRIVER=stage0` is a visible development bridge, not an
-implicit fallback or intended application setting.
+The Z Notes development runner uses the fixed-point native `z` driver. Manual
+`TaskScope` construction, owned capture transfer, main-executor placement, and
+scope close/join are all native-backed; no Stage 0 override is required.
 
 The strict bridge smoke imports `compileNative`, sets the same language selector
 as the CLI, builds the in-tree core, links it, and routes a non-ASCII JSON
@@ -98,6 +96,10 @@ and retain the direct-call path. The desktop application applies that same
 model to a foreign WebKit callback: an application-owned `TaskScope` accepts
 the request, keeps it alive through service suspension, publishes completion
 on `thread.main`, and is cancelled and joined before lifecycle shutdown.
+Timer-backed suspension inside a stored async service operation remains the
+next native-frame prerequisite for per-request frontend cancellation. The
+compiler currently rejects that composition rather than emitting a synchronous
+stub that could abort at runtime.
 
 ## Compiler contract
 
