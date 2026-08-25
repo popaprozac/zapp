@@ -25,12 +25,8 @@ const smoke = process.argv.includes("--smoke");
 
 const originalLanguage = process.env.ZAPP_NATIVE_LANG;
 const originalHost = process.env.ZAPP_Z_HOST;
-const originalCompilerDriver = process.env.ZAPP_Z_COMPILER_DRIVER;
 process.env.ZAPP_NATIVE_LANG = "z";
 process.env.ZAPP_Z_HOST = "desktop";
-// TaskScope is implemented by the Stage 0 compiler today. Keep this explicit
-// until the fixed-point native backend reaches the same lowering tier.
-process.env.ZAPP_Z_COMPILER_DRIVER = "stage0";
 try {
   await compileNative({
     root: spike,
@@ -46,9 +42,6 @@ try {
   else process.env.ZAPP_NATIVE_LANG = originalLanguage;
   if (originalHost === undefined) delete process.env.ZAPP_Z_HOST;
   else process.env.ZAPP_Z_HOST = originalHost;
-  if (originalCompilerDriver === undefined) {
-    delete process.env.ZAPP_Z_COMPILER_DRIVER;
-  } else process.env.ZAPP_Z_COMPILER_DRIVER = originalCompilerDriver;
 }
 
 await run(

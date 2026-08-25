@@ -84,16 +84,11 @@ export c function zapp_route_message_owned(
   const updates = current.updates;
   const control = updates.schedule(
     thread.main,
-    async move (): void => {
-      const routed = await routeMessageWithServicesAsync(
-        move message,
-        services
-      );
-      match (routed) {
-        some(response) => deliverResponse(in response, windowId);
-        none => {}
-      }
-    }
+    async move (): void => await routeMessageAndDeliver(
+      move message,
+      services,
+      windowId
+    )
   );
   if (!control.accepted) {
     zapp_deliver_response_from_z(
@@ -102,6 +97,21 @@ export c function zapp_route_message_owned(
       false,
       windowId
     );
+  }
+}
+
+async function routeMessageAndDeliver(
+  message: String,
+  services: AsyncServices,
+  windowId: i32
+): void on thread.main {
+  const routed = await routeMessageWithServicesAsync(
+    move message,
+    services
+  );
+  match (routed) {
+    some(response) => deliverResponse(in response, windowId);
+    none => {}
   }
 }
 
