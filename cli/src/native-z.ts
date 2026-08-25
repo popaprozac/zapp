@@ -72,6 +72,24 @@ export function resolveZCompiler(repositoryRoot: string): string {
   return existsSync(sibling) ? sibling : "z";
 }
 
+export function resolveZCompilerCommand(repositoryRoot: string): string[] {
+  const driver = process.env.ZAPP_Z_COMPILER_DRIVER ?? "native";
+  if (driver === "native") return [resolveZCompiler(repositoryRoot)];
+  if (driver !== "stage0") {
+    throw new Error(
+      `[zapp] ZAPP_Z_COMPILER_DRIVER must be "native" or "stage0", not ${JSON.stringify(driver)}.`,
+    );
+  }
+  const entry = path.resolve(repositoryRoot, "../z-lang/compiler/src/cli.ts");
+  if (!existsSync(entry)) {
+    throw new Error(
+      `[zapp] the Stage 0 Z driver was requested, but ${entry} does not exist. ` +
+      "Use the sibling z-lang development workspace or select the native driver.",
+    );
+  }
+  return [process.execPath, entry];
+}
+
 export function resolveZNativeHost(value: string | undefined): ZNativeHost {
   const host = value ?? "desktop";
   if (host !== "desktop" && host !== "bridge") {
@@ -183,12 +201,12 @@ async function run(command: string[], cwd: string, capture = false): Promise<str
 }
 
 export async function assertZCompilerContract(
-  compiler: string,
+  compiler: string[],
   contractPath: string,
   cwd: string,
 ): Promise<ZCompilerIdentity> {
   const expected = JSON.parse(await readFile(contractPath, "utf8")) as ZCompilerContract;
-  const actual = parseZCompilerIdentity(await run([compiler, "version"], cwd, true));
+  const actual = parseZCompilerIdentity(await run([...compiler, "version"], cwd, true));
   validateZCompilerIdentity(expected, actual, contractPath);
   return actual;
 }
@@ -246,7 +264,9 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
     "utf8",
   );
 
-  const compiler = resolveZCompiler(path.resolve(options.nativeDir, ".."));
+  const compiler = resolveZCompilerCommand(
+    path.resolve(options.nativeDir, ".."),
+  );
   const identity = await assertZCompilerContract(
     compiler,
     path.join(source, "compiler-contract.json"),
@@ -254,7 +274,8 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
   );
   console.log(
     `[zapp] Z core compiler ${identity.languageVersion} ` +
-    `(revision ${identity.compilerRevision}, API ${identity.compilerApi})`,
+    `(revision ${identity.compilerRevision}, API ${identity.compilerApi}, ` +
+    `${process.env.ZAPP_Z_COMPILER_DRIVER === "stage0" ? "Stage 0" : "native"} driver)`,
   );
 
   const { resolveBootstrapDir } = await import("./paths");
@@ -270,7 +291,7 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
     path.join(resolveBootstrapDir(), "codegen.ts")
   );
   const programMetadataSource = await run(
-    [compiler, "metadata", stage],
+    [...compiler, "metadata", stage],
     options.root,
     true,
   );
@@ -340,7 +361,7 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
   }
 
   await run(
-    [compiler, "build", stage, ...(options.optimize ? ["--release"] : [])],
+    [...compiler, "build", stage, ...(options.optimize ? ["--release"] : [])],
     options.root,
   );
 

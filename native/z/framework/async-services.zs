@@ -1,4 +1,5 @@
 import {
+  AsyncService,
   AsyncServiceHandler,
   AsyncServiceRegistry,
   createAsyncServiceRegistry,
@@ -15,10 +16,6 @@ import {
   ServiceOutcome,
 } from "./service-contract.zs";
 import { Map } from "std/collections";
-
-export trait AsyncService {
-  async function invoke(in invocation: ServiceInvocation): ServiceOutcome;
-}
 
 function serviceHandler<T: Service>(service: T): ServiceHandler {
   return move (in invocation: ServiceInvocation): ServiceOutcome =>

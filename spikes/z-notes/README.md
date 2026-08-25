@@ -7,14 +7,16 @@ productization work.
 
 ## The end-user application
 
-An application author currently owns four files under `zapp/`:
+An application author currently owns six files under `zapp/`:
 
 ```text
 zapp/
 ├── z.json            # editor/native header and deployment context
 ├── main.zs           # desktop entry and Application configuration
 ├── embedded.zs       # strict-C embedding entry used by the regression host
-└── notes-service.zs  # service model, behavior, and checked handler conversion
+├── notes-core.zs     # shared model, behavior, and checked wire conversion
+├── notes-service.zs  # suspending service and lifecycle adapter
+└── sync-notes-service.zs # allocation-lean strict-C adapter
 ```
 
 The ordinary desktop entry is deliberately small:
@@ -22,11 +24,12 @@ The ordinary desktop entry is deliberately small:
 ```z
 import { createNotesService } from "./notes-service.zs";
 import { Application } from "../../../native/z/framework/application.zs";
+import { thread } from "std/thread";
 
-function main(): i32 {
+async function main(): i32 on thread.main {
   let app = Application({ name: "Notes" });
-  app.services.registerWithLifecycle("notes", createNotesService());
-  return match (attempt app.run()) {
+  app.services.registerAsyncWithLifecycle("notes", createNotesService());
+  return match (attempt await app.run()) {
     success(status) => status;
     failure(_) => 70;
   };
@@ -39,16 +42,35 @@ sources into an application. The build stages the app and framework into one
 isolated workspace today so the fixed-point compiler and editor inspect the
 same source graph.
 
-`NotesService` is a normal readonly ARC class with synchronized state. Its
-public `create` and `count` methods are the frontend API. It implements
-`Service` with a framework-synthesized callable around `invoke()` and
+This spike's runner explicitly selects Z's Stage 0 driver while the fixed-point
+backend catches up with manual `TaskScope` construction. Zapp's normal compiler
+default remains the native `z` executable; the override is development debt
+kept visible in `run.ts`, not a hidden fallback.
+
+`NotesCore` is a normal readonly ARC class with synchronized state and owns the
+single implementation of `create`, `count`, JSON decoding, and JSON encoding.
+`NotesService` is the suspending desktop adapter. Its public `create` and
+`count` methods are the frontend API. It implements
+`AsyncService` with a framework-synthesized callable around suspending
+`invoke()` and
 `ServiceLifecycle` with main-thread `start` and `stop` methods.
-`registerWithLifecycle` derives both
+`registerAsyncWithLifecycle` derives both
 adapters from the same service identity; the application does not register the
 service twice. Framework methods are excluded from generated TypeScript
 bindings. The framework owns the registered service name and method-prefix
 routing; the service does not repeat a route list, capture its registration
 name, or construct a binding object.
+
+The strict-C embedding entry uses `SyncNotesService`, a thin synchronous
+adapter around the same `NotesCore`. This keeps that host from importing task
+runtime code merely to exercise direct native invocation. It is a transport
+boundary, not a second implementation of the Notes domain.
+
+The visible request genuinely suspends through `await scheduler.yield()`. The
+WebKit callback transfers its owned message into the application's `TaskScope`,
+which keeps the operation structured until the response is delivered on
+`thread.main`. Closing the application rejects new submissions, cancels and
+joins accepted work, and only then runs service stop hooks.
 
 ## The reusable framework
 
@@ -58,8 +80,12 @@ The code an application should not own now lives under:
 native/z/framework/
 ├── application.zs
 ├── application-contract.zs
+├── application-services.zs
 ├── services.zs
 ├── service-contract.zs
+├── async-services.zs
+├── async-service-contract.zs
+├── async-bridge.zs
 ├── service-lifecycle.zs
 ├── service-lifecycle-contract.zs
 ├── bridge.zs

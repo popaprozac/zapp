@@ -2,16 +2,22 @@ import { ApplicationConfig } from "../framework/application-contract.zs";
 import {
   runApplicationPlatform as runHeadlessApplicationPlatform,
 } from "../framework/platform/headless.zs";
-import { createServices } from "../framework/services.zs";
+import { createAsyncServices } from "../framework/async-services.zs";
 import { createServiceLifecycles } from "../framework/service-lifecycle.zs";
+import { TaskScope } from "std/async";
+import { thread } from "std/thread";
 
-function main(): i32 {
-  const config = ApplicationConfig({
+async function main(): i32 on thread.main {
+  const config = new ApplicationConfig({
     name: "Headless",
-    services: createServices().freeze(),
+    services: createAsyncServices().freeze(),
     lifecycles: createServiceLifecycles().freeze(),
   });
-  const result = attempt runHeadlessApplicationPlatform(move config);
+  const updates = new TaskScope();
+  const result = attempt await runHeadlessApplicationPlatform(
+    config,
+    updates
+  );
   return match (result) {
     success(status) => status;
     failure(_) => 70;

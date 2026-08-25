@@ -13,9 +13,9 @@ import {
   ServiceOutcome,
 } from "../../framework/service-contract.zs";
 import {
-  Service,
   createApplicationServices,
-} from "../../framework/services.zs";
+} from "../../framework/application-services.zs";
+import { Service } from "../../framework/services.zs";
 import { thread } from "std/thread";
 import { Mutex, Once } from "std/sync";
 

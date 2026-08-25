@@ -12,7 +12,7 @@ function response(id: u64, ok: boolean, payload: String): BridgeResponse {
 }
 
 export async function routeMessageWithServicesAsync(
-  in source: String,
+  source: String,
   services: AsyncServices
 ): Option<BridgeResponse> {
   const decoded = attempt decodeBridgeMessage(in source);

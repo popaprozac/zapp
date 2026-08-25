@@ -1,8 +1,9 @@
-import { Services } from "./services.zs";
+import { AsyncServices } from "./async-services.zs";
 import { ServiceLifecycles } from "./service-lifecycle.zs";
+import { thread } from "std/thread";
 
-export struct ApplicationConfig {
-  name: String;
-  services: Services;
-  lifecycles: ServiceLifecycles;
+export readonly class ApplicationConfig on thread.main {
+  readonly name: String;
+  readonly services: AsyncServices;
+  readonly lifecycles: ServiceLifecycles;
 }

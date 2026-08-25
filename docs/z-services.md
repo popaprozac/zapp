@@ -1,7 +1,7 @@
 # Z-owned services
 
-Status: synchronous and first suspending typed vertical slices implemented,
-August 2026.
+Status: synchronous and suspending typed vertical slices implemented through
+headless and AppKit/WebView hosts, August 2026.
 
 Zapp services are ordinary Z values whose public methods become typed frontend
 bindings. A route-only service may be a `struct`. A service that shares one
@@ -10,7 +10,7 @@ naturally an ARC `class`, usually with its mutable state behind `Mutex<T>`.
 Registration does not force every service into a class hierarchy.
 
 The reusable service machinery lives under `native/z/framework/`. The concrete
-Notes implementation and application entries live under
+Notes core, transport adapters, and application entries live under
 `spikes/z-notes/zapp/`; no framework module imports an application type.
 
 ## Application surface
@@ -18,13 +18,19 @@ Notes implementation and application entries live under
 The public lifecycle is designed around a consuming application builder:
 
 ```z
-let app = Application({ name: "Notes" });
-app.services.registerWithLifecycle("notes", createNotesService());
-return try app.run();
+async function main(): i32 on thread.main {
+  let app = Application({ name: "Notes" });
+  app.services.registerAsyncWithLifecycle(
+    "notes",
+    createNotesService()
+  );
+  return try await app.run();
+}
 ```
 
 `app.run()` consumes the mutable configuration, freezes its service routing
-table, publishes the runtime application identity, and blocks until shutdown.
+table, publishes the runtime application identity, and asynchronously remains
+attached to the blocking platform run loop until shutdown.
 There is no user-facing `finish()` call. Internally, `freeze()` names the exact
 mutable-builder to readonly-router transition and matches Z collection
 vocabulary.
@@ -54,16 +60,19 @@ order before the original start error is propagated. Normal stops run in
 reverse order, attempt every service even after an error, and then propagate
 the first reverse-order stop error.
 
-The synchronous application surface has two explicit choices:
+The application surface has four explicit choices:
 
 ```z
 app.services.register("health", createHealthService());
-app.services.registerWithLifecycle("notes", createNotesService());
+app.services.registerWithLifecycle("database", createDatabaseService());
+app.services.registerAsync("search", createSearchService());
+app.services.registerAsyncWithLifecycle("notes", createNotesService());
 ```
 
-`registerWithLifecycle` requires `T: Service & ServiceLifecycle`. It derives the
-route handler and lifecycle adapter from the same service value, so application
-authors do not register one object twice. The separate method is intentional in
+`registerWithLifecycle` requires `T: Service & ServiceLifecycle`, while its
+async counterpart requires `T: AsyncService & ServiceLifecycle`. Each derives
+the route handler and lifecycle adapter from the same service value, so
+application authors do not register one object twice. The separate methods are intentional in
 this tier: Z does not yet inspect a generic value for an optional trait and
 conditionally synthesize behavior. A future compiler-owned implementation may
 make plain `register` detect `ServiceLifecycle` automatically without changing
@@ -72,24 +81,26 @@ the service contracts.
 Lifecycle storage remains deliberately separate from the frozen service router
 inside the framework. The router stays `on thread.any` for WebView and
 embedded-engine calls; storing main-only lifecycle callables inside it would
-make the entire fast path main-isolated. `Application.run(move this)` freezes
-both stores, creates the immutable `ApplicationContext`, starts lifecycle
-services before entering the platform run loop, and stops them after the loop
-returns.
+make the entire fast path main-isolated. `Application.run(move this)` is async,
+freezes both stores, creates the immutable `ApplicationContext`, starts
+lifecycle services before entering the platform run loop, then cancels and
+joins every accepted callback-created operation before stopping services after
+the loop returns.
 
 The fixed-point compiler executes constrained trait calls through static
 specialization: generated C calls the concrete service method directly,
 without a vtable or trait-object allocation. Z does not yet provide
 trait-typed storage or dynamic dispatch.
-`ApplicationServicesBuilder.registerWithLifecycle` accepts the concrete service
-through a `T: Service & ServiceLifecycle` constraint and constructs one
-main-qualified adapter internally. The fixed-point compiler specializes that
+`ApplicationServicesBuilder.registerAsyncWithLifecycle` accepts the concrete
+service through a `T: AsyncService & ServiceLifecycle` constraint and
+constructs the async handler plus main-qualified lifecycle adapter internally.
+The compiler specializes that
 framework-owned generic method over an application-private service type,
 preserves cleanup through the captured hook, and emits direct concrete method
 calls. Application authors write only:
 
 ```z
-app.services.registerWithLifecycle("notes", createNotesService());
+app.services.registerAsyncWithLifecycle("notes", createNotesService());
 ```
 
 The permanent smoke under `native/z/smokes/service-lifecycle/` proves normal
@@ -129,18 +140,24 @@ bridge. In an embedded zjs worker, the same generated module selects the
 existing direct-host fast path. Application code and generated method names do
 not change with the JavaScript execution environment.
 
-The ordinary application core owns one frozen `ServiceHandler` map. The
-opt-in async-service module composes that router with a separate frozen
-`AsyncServiceHandler` map. Keeping them separate means synchronized or pure
-services retain the direct synchronous fast path; registering one suspending
-service does not allocate a task for every service call. Each handler is an
+The application runtime owns one frozen `ServiceHandler` map and one frozen
+`AsyncServiceHandler` map. `services.zs` remains entirely synchronous;
+`application-services.zs` composes that router with the async registry and
+lifecycle hooks only for applications that need them. Keeping the graphs
+separate means synchronized or pure services retain the direct synchronous
+fast path, and a strict embedded host does not link task machinery merely
+because the framework also supports suspending services. Registering one
+suspending service does not allocate a task for every service call. Each handler is an
 `on thread.any` callable whose captured graph must be deeply shareable.
-The `NotesService` probe is a readonly ARC class containing
-`Mutex<NotesState>`, so its handler and lifecycle adapter share identity while
+The `NotesService` probe is a readonly ARC class containing a `NotesCore`,
+whose state is protected by `Mutex<NotesState>`, so its handler and lifecycle adapter share identity while
 mutable state remains synchronized instead of making the routing table mutable
 after publication.
 
-The strict C host additionally calls `zapp_invoke_service_owned` directly. It
+The Notes domain behavior lives once in `NotesCore`. `NotesService` adds the
+suspending desktop and lifecycle contracts; `SyncNotesService` is a thin direct
+host adapter over that same core. The strict C host calls
+`zapp_invoke_service_owned` directly. It
 proves that an embedded engine can bypass the WebView envelope and reach the
 same handler and retained service state. Wiring that entry into zjs is a host
 adapter task, not a second service system.
@@ -166,10 +183,10 @@ types map to `number` only when that mapping preserves the declared contract.
 The fixed-point Z compiler now owns the source of truth. `z metadata` emits a
 versioned, framework-neutral artifact containing checked public symbols,
 resolved public call sites, literal arguments, and non-literal argument types.
-Zapp recognizes the ordinary application call:
+Zapp recognizes synchronous and async application registrations, including:
 
 ```z
-app.services.registerWithLifecycle("notes", createNotesService());
+app.services.registerAsyncWithLifecycle("notes", createNotesService());
 ```
 
 It resolves `NotesService`, its public methods, and the exported request and
@@ -188,11 +205,14 @@ type. A service supplies one non-consuming conversion into the framework's
 thread-safe callable:
 
 ```z
-export readonly class NotesService implements Service, ServiceLifecycle {
+export readonly class NotesService implements AsyncService, ServiceLifecycle {
   function create(input: CreateNoteInput): Note { /* ... */ }
   function count(): u64 { /* ... */ }
 
-  function invoke(in invocation: ServiceInvocation): ServiceOutcome {
+  async function invoke(
+    in invocation: ServiceInvocation
+  ): ServiceOutcome {
+    await scheduler.yield();
     /* decode the checked route and call create/count */
   }
 
@@ -212,9 +232,9 @@ registered name. There is no `ServiceBinding`, application adapter class, or
 second hand-authored route schema.
 
 Application authors do not write `createNotesHandler` or another callable
-factory. The framework's generic `register<T: Service>` specialization creates
-the `on thread.any` closure over the concrete service, and the compiler validates
-that concrete captured graph before publishing it. A mutable or otherwise
+factory. The framework's generic `registerAsync<T: AsyncService>` specialization
+creates the `on thread.any` async closure over the concrete service, and the
+compiler validates that concrete captured graph before publishing it. A mutable or otherwise
 non-shareable service fails at registration with the reason its capture cannot
 cross arbitrary threads; `Mutex<T>` and deeply readonly ARC services satisfy
 the established sharing rules.
@@ -279,14 +299,13 @@ bun run z run /Users/zach/code/zapp/native/z/smokes/async-service
 Both semantic frontends agree on this module graph, and the fixed-point emitter
 strict-C compiles and executes it. The current reusable frame supports two
 top-level awaited local bindings with owned storage and active-child
-cancellation; arbitrary suspension graphs remain language work. The async
-registry and bridge remain opt-in because the macOS `WKScriptMessageHandler`
-still enters the synchronous bridge, not because the headless graph needs the
-TypeScript emitter. The intended product surface is
-`app.services.registerAsync(...)`; retaining a WebView request through async
-completion and publishing its response back on the main executor is the next
-host-integration slice. Generated TypeScript sees an ordinary `Promise` for
-both service kinds.
+cancellation; arbitrary suspension graphs remain language work. The desktop
+host uses the intended product surface, `app.services.registerAsync(...)`. Its
+`WKScriptMessageHandler` submits the owned request to an application
+`TaskScope`; the service may suspend, completion is published on the main
+executor, and shutdown rejects new work before cancelling and joining accepted
+operations. Generated TypeScript sees an ordinary `Promise` for both service
+kinds.
 
 ## First performance checkpoint
 
@@ -320,9 +339,9 @@ an intermediate JSON document.
 - `Mutex.withLock` returns are limited to cleanup-free values in the native
   compiler. The service keeps the critical section scalar and constructs owned
   results after unlocking.
-- The headless async service route is implemented. WebView async completion,
-  typed invocation errors beyond `ServiceOutcome`, request cancellation, and
-  permissions remain follow-up composition work. Lifecycle ordering, typed
+- Headless and WebView async service routes are implemented. Typed invocation
+  errors beyond `ServiceOutcome`, per-request cancellation, and permissions
+  remain follow-up composition work. Lifecycle ordering, typed
   lifecycle failures, and compiler-generated binding metadata are implemented.
 - The in-tree Notes project now supplies its own `.zs` entries. A stable local
   package/module contract is the next productization step; it must work in both

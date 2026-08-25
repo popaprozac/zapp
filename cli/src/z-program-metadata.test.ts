@@ -151,6 +151,42 @@ describe("compiler-produced Z program metadata", () => {
     });
   });
 
+  it("derives the same public API from an async service registration", () => {
+    const asynchronous = structuredClone(metadata);
+    const service = asynchronous.modules[0].symbols.find(
+      (symbol) => symbol.name === "NotesService",
+    );
+    if (!service?.typeSignature) throw new Error("missing NotesService fixture");
+    service.typeSignature.implementedTraits = ["AsyncService", "ServiceLifecycle"];
+    const invoke = service.typeSignature.methods.find((method) => method.name === "invoke");
+    if (!invoke) throw new Error("missing invoke fixture");
+    invoke.signature.asynchronous = true;
+    asynchronous.modules[0].calls[0].target.name =
+      "ApplicationServicesBuilder.registerAsyncWithLifecycle";
+
+    expect(deriveZServiceManifest(asynchronous)).toEqual({
+      schemaVersion: 1,
+      types: [
+        { name: "CreateNoteInput", fields: [{ name: "title", type: "String" }] },
+        {
+          name: "Note",
+          fields: [
+            { name: "id", type: "u64" },
+            { name: "title", type: "String" },
+          ],
+        },
+      ],
+      services: [{
+        name: "notes",
+        type: "NotesService",
+        methods: [
+          { name: "create", input: "CreateNoteInput", returns: "Note" },
+          { name: "count", returns: "u64" },
+        ],
+      }],
+    });
+  });
+
   it("fails closed on unknown compiler schemas", () => {
     expect(() => parseZProgramMetadata('{"schemaVersion":2,"entry":0,"modules":[]}'))
       .toThrow(/unsupported Z program metadata schema 2/);

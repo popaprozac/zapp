@@ -1,11 +1,12 @@
 import { createNotesService } from "./notes-service.zs";
 import { Application } from "../../../native/z/framework/application.zs";
 import console from "std/console";
+import { thread } from "std/thread";
 
-function main(): i32 {
+async function main(): i32 on thread.main {
   let app = Application({ name: "Notes" });
-  app.services.registerWithLifecycle("notes", createNotesService());
-  const result = attempt app.run();
+  app.services.registerAsyncWithLifecycle("notes", createNotesService());
+  const result = attempt await app.run();
   return match (result) {
     success(status) => status;
     failure(error) => {

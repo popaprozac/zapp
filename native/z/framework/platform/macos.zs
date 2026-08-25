@@ -1,14 +1,16 @@
 import native from "zapp_desktop.h";
 import { ApplicationConfig } from "../application-contract.zs";
-import { routeMessageWithServices } from "../bridge.zs";
+import { routeMessageWithServicesAsync } from "../async-bridge.zs";
+import { AsyncServices } from "../async-services.zs";
+import { BridgeResponse } from "../bridge.zs";
 import {
   ApplicationContext,
   ServiceLifecycleError,
 } from "../service-lifecycle-contract.zs";
-import { Services } from "../services.zs";
 import { zapp_deliver_response_from_z } from "zapp_router.h";
 import objc from "std/objc";
 import { Once, OnceLifetime } from "std/sync";
+import { TaskScope } from "std/async";
 import { thread } from "std/thread";
 
 class DesktopMessageHandler on thread.main
@@ -34,7 +36,8 @@ class DesktopMessageHandler on thread.main
 
 class MacOSApplicationRuntime {
   readonly name: String;
-  readonly services: Services;
+  readonly services: AsyncServices;
+  readonly updates: TaskScope;
   window: native.NSWindow on thread.main;
   webView: native.WKWebView on thread.main;
   contentController: native.WKUserContentController on thread.main;
@@ -45,20 +48,30 @@ class MacOSApplicationRuntime {
 
 const application = Once<MacOSApplicationRuntime>();
 
-export function runMacOSApplication(
-  config: ApplicationConfig
+export async function runMacOSApplication(
+  config: ApplicationConfig,
+  updates: TaskScope
 ): i32 throws ServiceLifecycleError on thread.main {
-  const { name, services, lifecycles } = move config;
   const prepared = native.zapp_desktop_prepare();
   if (prepared != 0) return prepared;
-  const context = ApplicationContext({ name: copy name });
+  const context = ApplicationContext({ name: copy config.name });
   const lifetime = initializeMacOSApplicationRuntime(
-    move name,
-    move services
+    copy config.name,
+    config.services,
+    updates
   );
-  try lifecycles.start(in context);
+  const started = attempt config.lifecycles.start(in context);
+  match (started) {
+    success => {}
+    failure(startError) => throw startError;
+  }
   const status = native.zapp_desktop_run();
-  try lifecycles.stop(in context);
+  await updates.cancel();
+  const stopped = attempt config.lifecycles.stop(in context);
+  match (stopped) {
+    success => {}
+    failure(stopError) => throw stopError;
+  }
   return status;
 }
 
@@ -68,46 +81,46 @@ export c function zapp_route_message_owned(
 ): void {
   const current = application.get();
   const services = current.services;
-  const routed = routeMessageWithServices(in message, in services);
-  match (routed) {
-    some(response) => zapp_deliver_response_from_z(
-      response.payload,
-      response.id,
-      response.ok,
+  const updates = current.updates;
+  const control = updates.schedule(
+    thread.main,
+    async move (): void => {
+      const routed = await routeMessageWithServicesAsync(
+        move message,
+        services
+      );
+      match (routed) {
+        some(response) => deliverResponse(in response, windowId);
+        none => {}
+      }
+    }
+  );
+  if (!control.accepted) {
+    zapp_deliver_response_from_z(
+      "Application is closing",
+      0,
+      false,
       windowId
     );
-    none => {}
   }
 }
 
-export c function zapp_invoke_service_owned(
-  method: String,
-  arguments: String,
-  requestId: u64,
-  contextId: i32
+function deliverResponse(
+  in response: BridgeResponse,
+  windowId: i32
 ): void {
-  const current = application.get();
-  const services = current.services;
-  const invoked = services.invoke(move method, move arguments);
-  match (invoked) {
-    success(payload) => zapp_deliver_response_from_z(
-      payload,
-      requestId,
-      true,
-      contextId
-    );
-    failure(error) => zapp_deliver_response_from_z(
-      error,
-      requestId,
-      false,
-      contextId
-    );
-  }
+  zapp_deliver_response_from_z(
+    response.payload,
+    response.id,
+    response.ok,
+    windowId
+  );
 }
 
 function initializeMacOSApplicationRuntime(
   name: String,
-  services: Services
+  services: AsyncServices,
+  updates: TaskScope
 ): OnceLifetime<MacOSApplicationRuntime> on thread.main {
   const contentController = native.WKUserContentController.alloc().init();
   const registrationOwner = native.ZAppDesktopRegistrationOwner.alloc()
@@ -145,6 +158,7 @@ function initializeMacOSApplicationRuntime(
   const value = new MacOSApplicationRuntime({
     name: move name,
     services: move services,
+    updates,
     window,
     webView,
     contentController,

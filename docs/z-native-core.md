@@ -1,8 +1,8 @@
 # Z native core
 
 Status: Phase 0 complete; Phase 1 typed ingress, Z-owned AppKit/WebKit identity,
-the first generated typed service round trip, and the first headless suspending
-service round trip complete, August 2026.
+generated typed service round trips, and structured suspending service delivery
+through the real WebView complete, August 2026.
 
 Zapp's reusable native core lives under `native/z/framework/`; the first
 application-owned source graph lives under `spikes/z-notes/zapp/`. It is a
@@ -66,6 +66,12 @@ bun run spike:z-notes
 bun run spike:z-notes:smoke
 ```
 
+The Z Notes development runner currently selects the TypeScript Stage 0 driver
+explicitly because manual `TaskScope` construction has not yet reached the
+fixed-point native backend. The ordinary build default remains the native `z`
+driver; `ZAPP_Z_COMPILER_DRIVER=stage0` is a visible development bridge, not an
+implicit fallback or intended application setting.
+
 The strict bridge smoke imports `compileNative`, sets the same language selector
 as the CLI, builds the in-tree core, links it, and routes a non-ASCII JSON
 envelope with request ID `u64.max`. It verifies the typed response metadata and
@@ -82,22 +88,23 @@ verifies the DOM, prints the response, and closes. Both use the same staged
 archive and generated embedding header as an ordinary `ZAPP_NATIVE_LANG=z`
 build.
 
-The focused `native/z/smokes/async-service/` executable proves the next service
+The focused `native/z/smokes/async-service/` executable proves the same service
 shape without involving WebKit timing. One ordinary reusable async function
 routes a synchronous health request, suspends and resumes, then routes a search
 request through an `AsyncServiceHandler` that itself suspends through
 `scheduler.yield()`. Both child joins share one heap-owned parent frame under
 the fixed-point emitter. Synchronous handlers remain in a separate frozen map
-and retain the direct-call path. The next desktop slice is to keep a WebView
-request alive through that suspension and publish completion back on
-`thread.main`.
+and retain the direct-call path. The desktop application applies that same
+model to a foreign WebKit callback: an application-owned `TaskScope` accepts
+the request, keeps it alive through service suspension, publishes completion
+on `thread.main`, and is cancelled and joined before lifecycle shutdown.
 
 ## Compiler contract
 
 Z reports an identity shaped like:
 
 ```text
-z 0.1.0-dev revision 2026-08-24.2 compiler-api 2
+z 0.1.0-dev revision 2026-08-25.1 compiler-api 2
 ```
 
 The language version describes the user-facing language, the compiler revision
@@ -167,5 +174,4 @@ deterministic window/run-loop/runtime shutdown. The framework and application
 are now separate source graphs, and one Notes
 project drives both the WebView and strict-C embedding hosts. Remaining work
 includes typed invocation error/cancellation/permission composition, zjs host
-attachment, WebView delivery from suspending services, and ASan or equivalent
-leak evidence on a compatible host.
+attachment, and ASan or equivalent leak evidence on a compatible host.

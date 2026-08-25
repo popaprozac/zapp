@@ -117,14 +117,15 @@ platform-specific. macOS is the first implementation target, zjs is the first
 worker engine, and one window plus one WebView is the first UI shape.
 
 The first executable platform seam is now concrete. Portable
-`Application.run(move this)` freezes its services into an
-`ApplicationConfig`, freezes its explicit lifecycle registry separately, then
-calls the single selected `platform.zs` module. That module must export
+`Application.run(move this)` freezes its services into an immutable
+`ApplicationConfig`, creates the application `TaskScope`, then calls the single
+selected `platform.zs` module. That module must export
 the following contract:
 
 ```z
-function runApplicationPlatform(
-  config: ApplicationConfig
+async function runApplicationPlatform(
+  config: ApplicationConfig,
+  updates: TaskScope
 ): i32 throws ServiceLifecycleError on thread.main;
 ```
 The current selector delegates to a private `MacOSApplicationRuntime`; a
@@ -207,8 +208,9 @@ lifecycle.
 
 The current visible transport checkpoint proves steps 2-10. Z owns the
 executable `main` and constructs the public consuming `Application` builder; its
-`run(move this)` freezes service configuration, publishes the process root for
-the blocking run-loop lifetime, and releases it after shutdown. The
+async `run(move this)` freezes service configuration, publishes the process
+root for the blocking run-loop lifetime, joins callback-created tasks, and
+releases it after shutdown. The
 main-executor Z application creates and strongly owns the window, WebView,
 configuration, content controller, retained `WKScriptMessageHandler`
 registration owner, protocol adapter, and teardown guard. The Objective-C
@@ -293,7 +295,7 @@ inside Zapp.
 | AppKit and main-thread work | The main-executor Z application creates and owns the window, WebView, configuration, content controller, and script handler; the visible round trip proves teardown. | Do navigation delegates, multiple windows, and broader callbacks compose cleanly? |
 | ARC application state | `Application.run(move this)` owns a platform-private `Once<MacOSApplicationRuntime>` lifetime containing the native UI graph, protocol adapter, and registration guard while the Objective-C adapter holds weak references. | Can multiple application-owned native delegates avoid cycles and preserve deterministic shutdown? |
 | Message protocol | Z has strings, collections, enums, matching, errors, and exported C functions. | Is JSON parsing/encoding production-ready and allocation-conscious at the bridge boundary? |
-| Async and executors | Tasks, scopes, cancellation, placement, and native threads have working slices. | Can WebKit callbacks, task suspension, main-thread resumption, and shutdown cancellation compose in one app? |
+| Async and executors | A WebKit callback now submits owned messages through an application `TaskScope`; suspended Z services publish on main and shutdown cancels and joins accepted work. | Can per-request cancellation, richer errors, worker executors, and multiple windows preserve the same structured boundary? |
 | zjs embedding | `export c function` and the message-bridge spike prove bidirectional linking. | Can JS values and callback lifetimes cross efficiently without reducing everything to JSON? |
 | Resources and packaging | The existing CLI already bundles bootstraps, assets, and native sources. | What should the stable Z build/library contract be before the CLI depends on it? |
 | Portability | Portable `Application` configuration now crosses one selected `runApplicationPlatform` module seam; macOS and headless implementations prove that private runtime layouts may differ. | When Windows pressure begins, which conditional-module and `std/target` spelling selects every implementation and checks the target matrix? |

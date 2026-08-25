@@ -2,10 +2,10 @@ import {
   BridgeResponse,
 } from "../../framework/bridge.zs";
 import {
-  AsyncService,
   AsyncServices,
   createAsyncServices,
 } from "../../framework/async-services.zs";
+import { AsyncService } from "../../framework/async-service-contract.zs";
 import { Service } from "../../framework/services.zs";
 import {
   routeMessageWithServicesAsync,
@@ -71,7 +71,7 @@ async function validateRoutes(services: AsyncServices): i32 {
   const healthRequest =
     '{"t":1,"id":41,"m":"health.status","a":{}}';
   const healthResponse = await routeMessageWithServicesAsync(
-    in healthRequest,
+    copy healthRequest,
     services
   );
   const healthStatus = validateHealth(in healthResponse);
@@ -80,7 +80,7 @@ async function validateRoutes(services: AsyncServices): i32 {
   const request =
     '{"t":1,"id":42,"m":"search.find","a":{"query":"Z"}}';
   const response = await routeMessageWithServicesAsync(
-    in request,
+    copy request,
     services
   );
   return validate(in response);

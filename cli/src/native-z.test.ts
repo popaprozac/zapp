@@ -165,20 +165,22 @@ describe("Z native host inputs", () => {
     );
 
     expect(app).toContain('let app = Application({ name: "Notes" });');
-    expect(app).toContain('app.services.registerWithLifecycle("notes", createNotesService());');
-    expect(app).toContain("const result = attempt app.run();");
+    expect(app).toContain('app.services.registerAsyncWithLifecycle("notes", createNotesService());');
+    expect(app).toContain("const result = attempt await app.run();");
     expect(application).toContain("export struct Application");
     expect(application).toContain("services: ApplicationServicesBuilder = createApplicationServices();");
     expect(application).toContain("throws ServiceLifecycleError on thread.main");
-    expect(application).toContain("const { routes, lifecycles } = services.freezeConfigured();");
-    expect(application).toContain("services: routes");
+    expect(application).toContain("const config = prepareApplication(move this);");
+    expect(application).toContain("const updates = new TaskScope();");
+    expect(application).toContain("const { routes, asynchronous, lifecycles }");
+    expect(application).toContain("synchronous: routes");
     expect(application).toContain("lifecycles,");
-    expect(contract).toContain("export struct ApplicationConfig");
-    expect(platform).toContain("export function runApplicationPlatform(");
-    expect(platform).toContain("return try runMacOSApplication(move config);");
+    expect(contract).toContain("export readonly class ApplicationConfig on thread.main");
+    expect(platform).toContain("export async function runApplicationPlatform(");
+    expect(platform).toContain("return try await runMacOSApplication(move config, updates);");
     expect(headless).toContain("struct HeadlessApplicationRuntime");
-    expect(headless).toContain("export function runApplicationPlatform(");
-    expect(headlessSmoke).toContain("runHeadlessApplicationPlatform(move config)");
+    expect(headless).toContain("export async function runApplicationPlatform(");
+    expect(headlessSmoke).toContain("attempt await runHeadlessApplicationPlatform(");
     expect(lifecycleContract).toContain("export trait ServiceLifecycle");
     expect(lifecycleContract).toContain("export type ServiceLifecycleHook");
     expect(lifecycleContract).toContain("throws ServiceLifecycleError on thread.main");
@@ -203,6 +205,14 @@ describe("Z native host inputs", () => {
       new URL("../../spikes/z-notes/zapp/notes-service.zs", import.meta.url),
       "utf8",
     );
+    const notesCore = readFileSync(
+      new URL("../../spikes/z-notes/zapp/notes-core.zs", import.meta.url),
+      "utf8",
+    );
+    const syncNotes = readFileSync(
+      new URL("../../spikes/z-notes/zapp/sync-notes-service.zs", import.meta.url),
+      "utf8",
+    );
 
     expect(contracts).toContain("=> ServiceOutcome on thread.any");
     expect(services).toContain("function freeze(move this): Services");
@@ -211,13 +221,18 @@ describe("Z native host inputs", () => {
     expect(services).toContain("service.invoke(in invocation)");
     expect(services).not.toContain("ServiceBinding");
     expect(services).toContain("readonly Map<String, ServiceHandler>");
-    expect(notes).toContain("export readonly class NotesService implements Service, ServiceLifecycle");
-    expect(notes).toContain("readonly state: Mutex<NotesState>");
-    expect(notes).toContain("function invoke(in invocation: ServiceInvocation): ServiceOutcome");
+    expect(notes).toContain("export readonly class NotesService implements AsyncService, ServiceLifecycle");
+    expect(notes).toContain("readonly core: NotesCore");
+    expect(notes).toContain("async function invoke(");
+    expect(notes).toContain("await scheduler.yield()");
     expect(notes).not.toContain("createNotesHandler");
     expect(notes).toContain("function start(");
     expect(notes).toContain("function stop(");
     expect(notes).not.toContain("NotesAdapter");
+    expect(notesCore).toContain("readonly state: Mutex<NotesState>");
+    expect(notesCore).toContain("export function invokeNotesCore(");
+    expect(syncNotes).toContain("export readonly class SyncNotesService implements Service");
+    expect(syncNotes).toContain("invokeNotesCore(in core, in invocation)");
   });
 
   it("keeps async services separate from the synchronous fast path", () => {
@@ -237,6 +252,10 @@ describe("Z native host inputs", () => {
       new URL("../../native/z/framework/services.zs", import.meta.url),
       "utf8",
     );
+    const applicationServices = readFileSync(
+      new URL("../../native/z/framework/application-services.zs", import.meta.url),
+      "utf8",
+    );
     const synchronousBridge = readFileSync(
       new URL("../../native/z/framework/bridge.zs", import.meta.url),
       "utf8",
@@ -248,14 +267,17 @@ describe("Z native host inputs", () => {
 
     expect(contracts).toContain("export type AsyncServiceHandler");
     expect(contracts).toContain("async (in invocation: ServiceInvocation) => ServiceOutcome on thread.any");
-    expect(services).toContain("export trait AsyncService");
+    expect(contracts).toContain("export trait AsyncService");
     expect(services).toContain("function registerAsync<T: AsyncService>(");
     expect(services).toContain("readonly Map<String, AsyncServiceHandler>");
     expect(services).toContain("readonly synchronous: Services");
     expect(services).toContain("async function invoke(");
     expect(bridge).toContain("export async function routeMessageWithServicesAsync(");
     expect(synchronousServices).not.toContain("async function");
+    expect(synchronousServices).not.toContain("AsyncService");
     expect(synchronousBridge).not.toContain("async function");
+    expect(applicationServices).toContain("function registerAsync<T: AsyncService>(");
+    expect(applicationServices).toContain("function registerAsyncWithLifecycle<");
     expect(smoke).toContain("await scheduler.yield()");
     expect(smoke).toContain('builder.registerAsync(');
     expect(smoke).toContain("async function validateRoutes(services: AsyncServices): i32");
@@ -266,10 +288,10 @@ describe("Z native host inputs", () => {
 
 describe("parseZCompilerIdentity", () => {
   it("decodes the pinned compiler contract", () => {
-    expect(parseZCompilerIdentity("z 0.1.0-dev revision 2026-08-23.1 compiler-api 2\n"))
+    expect(parseZCompilerIdentity("z 0.1.0-dev revision 2026-08-25.1 compiler-api 2\n"))
       .toEqual({
         languageVersion: "0.1.0-dev",
-        compilerRevision: "2026-08-23.1",
+        compilerRevision: "2026-08-25.1",
         compilerApi: 2,
       });
   });
@@ -283,7 +305,7 @@ describe("parseZCompilerIdentity", () => {
 describe("validateZCompilerIdentity", () => {
   const expected = {
     languageVersion: "0.1.0-dev",
-    compilerRevision: "2026-08-23.1",
+    compilerRevision: "2026-08-25.1",
     compilerApi: 2,
   };
 

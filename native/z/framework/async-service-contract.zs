@@ -8,6 +8,10 @@ import { thread } from "std/thread";
 export type AsyncServiceHandler =
   async (in invocation: ServiceInvocation) => ServiceOutcome on thread.any;
 
+export trait AsyncService {
+  async function invoke(in invocation: ServiceInvocation): ServiceOutcome;
+}
+
 export struct AsyncServiceRegistry {
   handlers: Map<String, AsyncServiceHandler>;
 
@@ -17,6 +21,13 @@ export struct AsyncServiceRegistry {
     handler: AsyncServiceHandler
   ): void {
     this.handlers.set(move name, handler);
+  }
+
+  function freeze(
+    move this
+  ): readonly Map<String, AsyncServiceHandler> {
+    const { handlers } = move this;
+    return handlers.freeze();
   }
 }
 

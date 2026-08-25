@@ -5,20 +5,7 @@ import {
   ServiceRegistry,
   createServiceRegistry,
 } from "./service-contract.zs";
-import {
-  ApplicationContext,
-  ServiceLifecycle,
-  ServiceLifecycleError,
-  ServiceLifecycleHook,
-  ServiceLifecyclePhase,
-} from "./service-lifecycle-contract.zs";
-import {
-  ServiceLifecycleBuilder,
-  ServiceLifecycles,
-  createServiceLifecycles,
-} from "./service-lifecycle.zs";
 import { Map } from "std/collections";
-import { thread } from "std/thread";
 
 export trait Service {
   function invoke(in invocation: ServiceInvocation): ServiceOutcome;
@@ -27,22 +14,6 @@ export trait Service {
 function serviceHandler<T: Service>(service: T): ServiceHandler {
   return move (in invocation: ServiceInvocation): ServiceOutcome =>
     service.invoke(in invocation);
-}
-
-function invokeRegisteredServiceLifecycle<T: Service & ServiceLifecycle>(
-  in service: T,
-  phase: ServiceLifecyclePhase,
-  in context: ApplicationContext
-): Result<void, ServiceLifecycleError> on thread.main {
-  return match (phase) {
-    start => attempt service.start(in context);
-    stop => attempt service.stop(in context);
-  };
-}
-
-export struct ConfiguredServices {
-  routes: Services;
-  lifecycles: ServiceLifecycles;
 }
 
 export struct ServicesBuilder {
@@ -61,47 +32,6 @@ export struct ServicesBuilder {
     const { registry } = move this;
     const { handlers } = move registry;
     return new Services({ handlers: handlers.freeze() });
-  }
-}
-
-export struct ApplicationServicesBuilder {
-  routes: ServicesBuilder;
-  lifecycles: ServiceLifecycleBuilder;
-
-  function register<T: Service>(
-    inout this,
-    name: String,
-    service: T
-  ): void {
-    const handler = serviceHandler(service);
-    this.routes.registry.add(move name, handler);
-  }
-
-  function registerWithLifecycle<T: Service & ServiceLifecycle>(
-    inout this,
-    name: String,
-    service: T
-  ): void on thread.main {
-    const handler = serviceHandler(service);
-    const hook: ServiceLifecycleHook = move (
-      phase: ServiceLifecyclePhase,
-      in context: ApplicationContext
-    ): Result<void, ServiceLifecycleError> =>
-      invokeRegisteredServiceLifecycle(in service, phase, in context);
-    this.routes.registry.add(copy name, handler);
-    this.lifecycles.add(move name, hook);
-  }
-
-  function freezeConfigured(
-    move this
-  ): ConfiguredServices on thread.main {
-    const { routes, lifecycles } = move this;
-    const { registry } = move routes;
-    const { handlers } = move registry;
-    return ConfiguredServices({
-      routes: new Services({ handlers: handlers.freeze() }),
-      lifecycles: lifecycles.freeze(),
-    });
   }
 }
 
@@ -141,12 +71,4 @@ export readonly class Services {
 
 export function createServices(): ServicesBuilder {
   return ServicesBuilder({ registry: createServiceRegistry() });
-}
-
-export function createApplicationServices(
-): ApplicationServicesBuilder on thread.main {
-  return ApplicationServicesBuilder({
-    routes: createServices(),
-    lifecycles: createServiceLifecycles(),
-  });
 }

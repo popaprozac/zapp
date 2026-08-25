@@ -163,13 +163,18 @@ export function deriveZServiceManifest(metadata: ZProgramMetadata): ZServiceMani
   const registrations = metadata.modules.flatMap((module) => module.calls).filter((call) => (
     (
       call.target.symbol === "ServicesBuilder"
+      || call.target.symbol === "AsyncServicesBuilder"
       || call.target.symbol === "ApplicationServicesBuilder"
     )
     && call.target.kind === "method"
     && (
       call.target.name === "ServicesBuilder.register"
+      || call.target.name === "AsyncServicesBuilder.register"
+      || call.target.name === "AsyncServicesBuilder.registerAsync"
       || call.target.name === "ApplicationServicesBuilder.register"
       || call.target.name === "ApplicationServicesBuilder.registerWithLifecycle"
+      || call.target.name === "ApplicationServicesBuilder.registerAsync"
+      || call.target.name === "ApplicationServicesBuilder.registerAsyncWithLifecycle"
     )
   ));
   const types: ZServiceTypeMetadata[] = [];
@@ -199,6 +204,8 @@ export function deriveZServiceManifest(metadata: ZProgramMetadata): ZServiceMani
     }
     const implementsService = service.typeSignature.implementedTraits
       .includes("Service");
+    const implementsAsyncService = service.typeSignature.implementedTraits
+      .includes("AsyncService");
     const implementsLifecycle = service.typeSignature.implementedTraits
       .includes("ServiceLifecycle");
     const methods = service.typeSignature.methods.filter((method) => (
@@ -208,6 +215,17 @@ export function deriveZServiceManifest(metadata: ZProgramMetadata): ZServiceMani
         implementsService
         && method.name === "invoke"
         && !method.signature.asynchronous
+        && method.signature.parameterModes.length === 1
+        && method.signature.parameterModes[0] === "in"
+        && method.signature.parameterTypes.length === 1
+        && method.signature.parameterTypes[0] === "ServiceInvocation"
+        && method.signature.returnType === "ServiceOutcome"
+        && method.signature.errorType === null
+      )
+      && !(
+        implementsAsyncService
+        && method.name === "invoke"
+        && method.signature.asynchronous
         && method.signature.parameterModes.length === 1
         && method.signature.parameterModes[0] === "in"
         && method.signature.parameterTypes.length === 1

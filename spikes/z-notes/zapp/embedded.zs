@@ -1,6 +1,6 @@
 import { routeMessageWithServices } from "../../../native/z/framework/bridge.zs";
 import { ServiceOutcome } from "../../../native/z/framework/service-contract.zs";
-import { createNotesService } from "./notes-service.zs";
+import { createSyncNotesService } from "./sync-notes-service.zs";
 import {
   Services,
   createServices,
@@ -19,7 +19,7 @@ const application = Once<Application>();
 
 function initializeApplication(): OnceLifetime<Application> on thread.main {
   let services = createServices();
-  services.register("notes", createNotesService());
+  services.register("notes", createSyncNotesService());
   const value = new Application({
     name: "Zapp",
     services: services.freeze(),

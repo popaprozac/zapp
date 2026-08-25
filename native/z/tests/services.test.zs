@@ -1,12 +1,12 @@
 import { expect } from "std/test";
 import {
-  createNotesService,
-} from "../../../spikes/z-notes/zapp/notes-service.zs";
+  createSyncNotesService,
+} from "../../../spikes/z-notes/zapp/sync-notes-service.zs";
 import { createServices } from "../framework/services.zs";
 
 test "registers one value service and preserves its state" {
   let builder = createServices();
-  builder.register("notes", createNotesService());
+  builder.register("notes", createSyncNotesService());
   const services = builder.freeze();
 
   const created = services.invoke(
@@ -29,7 +29,7 @@ test "registers one value service and preserves its state" {
 
 test "returns typed service failures without changing the routing table" {
   let builder = createServices();
-  builder.register("notes", createNotesService());
+  builder.register("notes", createSyncNotesService());
   const services = builder.freeze();
 
   const invalid = services.invoke("notes.create", "{}");
