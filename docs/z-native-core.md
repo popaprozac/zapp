@@ -58,11 +58,12 @@ reverse order, while normal shutdown attempts every stop before propagating a
 typed lifecycle error. Ordinary owned service resources still prefer `deinit`;
 the explicit lifecycle contract is for process-wide orchestration.
 
-Run the focused end-to-end smoke with:
+Run the focused end-to-end paths with:
 
 ```sh
 bun run spike:z-bridge
 bun run spike:z-notes
+bun run spike:z-notes:smoke
 ```
 
 The strict bridge smoke imports `compileNative`, sets the same language selector
@@ -71,13 +72,15 @@ envelope with request ID `u64.max`. It verifies the typed response metadata and
 exact JSON payload after the C -> Z -> C round trip. It is therefore evidence
 for the real build seam rather than a parallel script that can drift from it.
 
-The Z Notes smoke builds the default host, injects the production bootstrap and
-generated Notes binding at document start, opens one window, and automatically
-clicks the visible service button. The page calls `notes.create(...)`; native
-delivery resolves it through `_onInvokeResult()`, the binding restores the
-exact `u64` identifier as `bigint`, and the host verifies the resulting DOM
-state before printing the response and closing. It uses the same staged archive
-and generated embedding header as an ordinary `ZAPP_NATIVE_LANG=z` build.
+The ordinary Z Notes command builds the default host, injects the production
+bootstrap and generated Notes binding at document start, and stays open until
+the user closes its window. Clicking the visible button calls
+`notes.create(...)`; native delivery resolves it through `_onInvokeResult()`
+and the binding restores the exact `u64` identifier as `bigint` before updating
+the DOM. `spike:z-notes:smoke` opts into the bounded automation mode: it clicks,
+verifies the DOM, prints the response, and closes. Both use the same staged
+archive and generated embedding header as an ordinary `ZAPP_NATIVE_LANG=z`
+build.
 
 The focused `native/z/smokes/async-service/` executable proves the next service
 shape without involving WebKit timing. One ordinary reusable async function
@@ -94,7 +97,7 @@ request alive through that suspension and publish completion back on
 Z reports an identity shaped like:
 
 ```text
-z 0.1.0-dev revision 2026-08-24.1 compiler-api 2
+z 0.1.0-dev revision 2026-08-24.2 compiler-api 2
 ```
 
 The language version describes the user-facing language, the compiler revision

@@ -230,6 +230,10 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
   );
   const stagedAppSource = path.join(workspace, appRelative);
   await cp(appSource, stagedAppSource, { recursive: true });
+  // The source-local manifest exists for direct editor/check context. The
+  // isolated workspace has a generated root manifest that additionally owns
+  // its generated host archive, so it must remain the single build authority.
+  await rm(path.join(stagedAppSource, "z.json"), { force: true });
   const appEntry = path.join(stagedAppSource, zNativeEntry(host));
   for (const file of zNativeStageFiles(host)) {
     const destination = path.join(stage, file.destination);

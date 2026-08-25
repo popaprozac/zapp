@@ -214,10 +214,11 @@ configuration, content controller, retained `WKScriptMessageHandler`
 registration owner, protocol adapter, and teardown guard. The Objective-C
 platform adapter has no application entry point or framework policy; it keeps
 weak access to those identities for run-loop coordination and deterministic
-smoke-test callbacks. The page automatically
-exercises a real button and updates its DOM from the typed Z response through
-the canonical production bootstrap's `bridge.invoke()` and
-`_onInvokeResult()` path. Phase 1 has a bounded UBSan plus
+smoke-test callbacks. The interactive application leaves the real button under
+user control and stays open until its window closes. A separate bounded mode
+automatically exercises it and updates the DOM from the typed Z response through
+the canonical production bootstrap's `bridge.invoke()` and `_onInvokeResult()`
+path. Phase 1 has a bounded UBSan plus
 Objective-C-zombie lifecycle check. Its ASan startup probe detects that the
 current Apple sanitizer runtime can deadlock before `main`, kills that probe
 after three seconds, and skips the application run rather than orphaning a

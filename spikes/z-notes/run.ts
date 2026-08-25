@@ -5,9 +5,13 @@ const spike = import.meta.dir;
 const repository = resolve(spike, "../..");
 const output = resolve(spike, "build", "zapp-z-webview");
 
-async function run(command: string[]): Promise<void> {
+async function run(
+  command: string[],
+  env?: Record<string, string | undefined>,
+): Promise<void> {
   const child = Bun.spawn(command, {
     cwd: repository,
+    env,
     stdout: "inherit",
     stderr: "inherit",
   });
@@ -16,6 +20,8 @@ async function run(command: string[]): Promise<void> {
     throw new Error(`${command[0]} exited with status ${status}`);
   }
 }
+
+const smoke = process.argv.includes("--smoke");
 
 const originalLanguage = process.env.ZAPP_NATIVE_LANG;
 const originalHost = process.env.ZAPP_Z_HOST;
@@ -38,4 +44,9 @@ try {
   else process.env.ZAPP_Z_HOST = originalHost;
 }
 
-await run([output]);
+await run(
+  [output],
+  smoke
+    ? { ...process.env, ZAPP_Z_DESKTOP_SMOKE: "1" }
+    : process.env,
+);

@@ -15,7 +15,7 @@ const generatedHeaderDirectory = resolve(stagedCore, "build");
 const desktopHost = resolve(stagedCore, "desktop.m");
 const bootstrap = resolve(stagedCore, "zapp_webview_bootstrap.c");
 const expectedEvidence =
-  'visible WebView round trip window=1 request=1 ok=true payload={"message":"héllo from WebKit"}';
+  'visible WebView round trip window=1 request=1 ok=true payload={"id":"1","title":"WebView note"}';
 
 async function runBounded(
   command: string[],
@@ -137,7 +137,12 @@ const undefinedBehavior = await buildInstrumented("webview-ubsan", [
 const undefinedBehaviorResult = await runBounded(
   [undefinedBehavior],
   20_000,
-  { env: { NSZombieEnabled: "YES" } },
+  {
+    env: {
+      NSZombieEnabled: "YES",
+      ZAPP_Z_DESKTOP_SMOKE: "1",
+    },
+  },
 );
 requireLifecycleEvidence(undefinedBehaviorResult, "UBSan + Objective-C zombies");
 process.stdout.write(undefinedBehaviorResult.stdout);
@@ -177,7 +182,12 @@ if (addressProbeResult.timedOut) {
   const addressResult = await runBounded(
     [address],
     20_000,
-    { env: { ASAN_OPTIONS: "halt_on_error=1:detect_leaks=0" } },
+  {
+    env: {
+      ASAN_OPTIONS: "halt_on_error=1:detect_leaks=0",
+      ZAPP_Z_DESKTOP_SMOKE: "1",
+    },
+  },
   );
   requireLifecycleEvidence(addressResult, "ASan");
   console.log("[zapp] ASan lifecycle check passed");

@@ -7,6 +7,8 @@
 #include <dispatch/dispatch.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 extern const char *zapp_webview_bootstrap_script(void);
 
@@ -20,6 +22,7 @@ static ZAppDesktopHost *prepared_host = nil;
 @property(nonatomic, weak) WKWebView *webView;
 @property(nonatomic, weak) WKUserContentController *userContentController;
 @property(nonatomic, assign) BOOL receivedResponse;
+@property(nonatomic, assign) BOOL smokeMode;
 @property(nonatomic, assign) int32_t result;
 - (int32_t)run;
 - (void)deliverPayload:(NSString *)payload
@@ -93,7 +96,9 @@ void zapp_deliver_response_from_z(
   self = [super init];
   if (self != nil) {
     _receivedResponse = NO;
-    _result = 41;
+    const char *smoke = getenv("ZAPP_Z_DESKTOP_SMOKE");
+    _smokeMode = smoke != NULL && strcmp(smoke, "1") == 0;
+    _result = _smokeMode ? 41 : 0;
   }
   return self;
 }
@@ -176,13 +181,15 @@ void zapp_deliver_response_from_z(
               payload.UTF8String
             );
             fflush(stdout);
-            dispatch_after(
-              dispatch_time(DISPATCH_TIME_NOW, 600 * NSEC_PER_MSEC),
-              dispatch_get_main_queue(),
-              ^{
-                [strongSelf.window close];
-              }
-            );
+            if (strongSelf.smokeMode) {
+              dispatch_after(
+                dispatch_time(DISPATCH_TIME_NOW, 600 * NSEC_PER_MSEC),
+                dispatch_get_main_queue(),
+                ^{
+                  [strongSelf.window close];
+                }
+              );
+            }
           }];
       }
     );
@@ -231,7 +238,10 @@ void zapp_deliver_response_from_z(
     forMainFrameOnly:NO];
   [self.userContentController addUserScript:bootstrap];
 
-  NSString *html =
+  NSString *automaticInvocation = self.smokeMode
+    ? @"setTimeout(()=>button.click(),350);"
+    : @"";
+  NSString *html = [NSString stringWithFormat:
     @"<!doctype html>"
     @"<html><head><meta charset=\"utf-8\">"
     @"<style>"
@@ -260,31 +270,36 @@ void zapp_deliver_response_from_z(
     @"document.body.dataset.roundTrip='error';"
     @"}"
     @"});"
-    @"setTimeout(()=>button.click(),350);"
-    @"</script></body></html>";
+    @"%@"
+    @"</script></body></html>",
+    automaticInvocation];
   [self.webView loadHTMLString:html baseURL:nil];
 
   [self.window center];
   [self.window makeKeyAndOrderFront:nil];
   active_host = self;
   [application activate];
-  __weak ZAppDesktopHost *weakSelf = self;
-  dispatch_after(
-    dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC),
-    dispatch_get_main_queue(),
-    ^{
-      ZAppDesktopHost *strongSelf = weakSelf;
-      if (strongSelf != nil && !strongSelf.receivedResponse) {
-        strongSelf.result = 50;
-        [strongSelf.window close];
+  if (self.smokeMode) {
+    __weak ZAppDesktopHost *weakSelf = self;
+    dispatch_after(
+      dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC),
+      dispatch_get_main_queue(),
+      ^{
+        ZAppDesktopHost *strongSelf = weakSelf;
+        if (strongSelf != nil && !strongSelf.receivedResponse) {
+          strongSelf.result = 50;
+          [strongSelf.window close];
+        }
       }
-    }
-  );
+    );
+  }
   [application run];
   active_host = nil;
 
   self.window.delegate = nil;
-  return self.receivedResponse ? 0 : self.result;
+  return self.smokeMode
+    ? (self.receivedResponse ? 0 : self.result)
+    : self.result;
 }
 
 @end

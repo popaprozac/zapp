@@ -99,6 +99,10 @@ describe("Z native host inputs", () => {
       new URL("../../native/z/framework/platform/macos/desktop.m", import.meta.url),
       "utf8",
     );
+    const nativeBuilder = readFileSync(
+      new URL("./native-z.ts", import.meta.url),
+      "utf8",
+    );
 
     expect(macOSPlatform).toContain("implements native.WKScriptMessageHandler");
     expect(macOSPlatform).toContain("body instanceof native.NSString");
@@ -121,6 +125,9 @@ describe("Z native host inputs", () => {
     expect(objectiveCHost).not.toContain("routeScriptMessage:");
     expect(objectiveCHost).not.toContain("int main(");
     expect(objectiveCHost).toContain("services.notes.create");
+    expect(nativeBuilder).toContain(
+      'await rm(path.join(stagedAppSource, "z.json"), { force: true });',
+    );
   });
 
   it("gives the public Z builder ownership of main and run", () => {

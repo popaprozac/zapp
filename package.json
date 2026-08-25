@@ -13,6 +13,7 @@
     "check": "tsc --noEmit && tsc --noEmit -p tsconfig.typetest.json",
     "spike:z-bridge": "bun run spikes/z-notes/bridge.ts",
     "spike:z-notes": "bun run spikes/z-notes/run.ts",
+    "spike:z-notes:smoke": "bun run spikes/z-notes/run.ts --smoke",
     "spike:z-webview": "bun run spikes/z-notes/run.ts",
     "spike:z-webview:sanitize": "bun run spikes/z-notes/sanitize.ts"
   },

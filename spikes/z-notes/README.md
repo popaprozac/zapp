@@ -7,10 +7,11 @@ productization work.
 
 ## The end-user application
 
-An application author currently owns three files under `zapp/`:
+An application author currently owns four files under `zapp/`:
 
 ```text
 zapp/
+├── z.json            # editor/native header and deployment context
 ├── main.zs           # desktop entry and Application configuration
 ├── embedded.zs       # strict-C embedding entry used by the regression host
 └── notes-service.zs  # service model, behavior, and checked handler conversion
@@ -78,13 +79,24 @@ From the repository root:
 bun run spike:z-notes
 ```
 
-The visible macOS app calls the generated `notes.create` TypeScript binding,
-verifies the DOM update, and closes automatically. Expected evidence:
+The visible macOS app stays open until its window is closed. Click **Create a
+note in Z** to call the generated `notes.create` TypeScript binding and display
+the returned native-service value in the DOM. Expected evidence after a click:
 
 ```text
 Notes: notes service started
 visible WebView round trip window=1 request=1 ok=true payload={"id":"1","title":"WebView note"}
 Notes: notes service stopped
+```
+
+`zapp/z.json` gives direct editor analysis and `z check` the same macOS 14,
+AppKit, WebKit, CoreFoundation, and project-header context used by the staged
+Zapp build. The Zapp CLI still owns final host-library generation and linkage.
+
+For a bounded automated round trip that clicks and closes on success:
+
+```sh
+bun run spike:z-notes:smoke
 ```
 
 The same app can be embedded behind the focused strict-C host:
