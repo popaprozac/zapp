@@ -11,7 +11,7 @@ export enum BridgeMessageKind {
   cancel,
 }
 
-export struct BridgeMessage {
+export readonly struct BridgeMessage {
   kind: BridgeMessageKind;
   id: u64;
   method: String;
@@ -63,11 +63,7 @@ export function decodeBridgeMessage(
                 );
               };
             }
-            nullValue => throw decodeError("bridge message type must be an unsigned integer");
-            boolean(_) => throw decodeError("bridge message type must be an unsigned integer");
-            string(_) => throw decodeError("bridge message type must be an unsigned integer");
-            array(_) => throw decodeError("bridge message type must be an unsigned integer");
-            object(_) => throw decodeError("bridge message type must be an unsigned integer");
+            _ => throw decodeError("bridge message type must be an unsigned integer");
           }
         };
 
@@ -84,11 +80,7 @@ export function decodeBridgeMessage(
                 );
               };
             }
-            nullValue => throw decodeError("bridge request id must be an unsigned integer");
-            boolean(_) => throw decodeError("bridge request id must be an unsigned integer");
-            string(_) => throw decodeError("bridge request id must be an unsigned integer");
-            array(_) => throw decodeError("bridge request id must be an unsigned integer");
-            object(_) => throw decodeError("bridge request id must be an unsigned integer");
+            _ => throw decodeError("bridge request id must be an unsigned integer");
           }
         };
 
@@ -97,11 +89,7 @@ export function decodeBridgeMessage(
           none => "";
           some(field) => match (in field) {
             string(text) => copy text;
-            nullValue => throw decodeError("bridge method must be a string");
-            boolean(_) => throw decodeError("bridge method must be a string");
-            number(_) => throw decodeError("bridge method must be a string");
-            array(_) => throw decodeError("bridge method must be a string");
-            object(_) => throw decodeError("bridge method must be a string");
+            _ => throw decodeError("bridge method must be a string");
           }
         };
 
@@ -118,11 +106,7 @@ export function decodeBridgeMessage(
           arguments: move arguments,
         });
       }
-      nullValue => throw decodeError("bridge message must be a JSON object");
-      boolean(_) => throw decodeError("bridge message must be a JSON object");
-      number(_) => throw decodeError("bridge message must be a JSON object");
-      string(_) => throw decodeError("bridge message must be a JSON object");
-      array(_) => throw decodeError("bridge message must be a JSON object");
+      _ => throw decodeError("bridge message must be a JSON object");
     }
   };
 }

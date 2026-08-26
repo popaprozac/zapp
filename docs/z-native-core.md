@@ -96,10 +96,12 @@ and retain the direct-call path. The desktop application applies that same
 model to a foreign WebKit callback: an application-owned `TaskScope` accepts
 the request, keeps it alive through service suspension, publishes completion
 on `thread.main`, and is cancelled and joined before lifecycle shutdown.
-Timer-backed suspension inside a stored async service operation remains the
-next native-frame prerequisite for per-request frontend cancellation. The
-compiler currently rejects that composition rather than emitting a synchronous
-stub that could abort at runtime.
+WebView request identifiers now map to generation-guarded `TaskControl` values,
+so `CancellablePromise.cancel()`, timeouts, and standard `AbortSignal` requests
+reach the corresponding structured Z task. Cancellation remains cooperative:
+the browser rejects immediately, while the Z task observes cancellation at a
+supported suspension point and the browser ignores any completion that already
+won the race.
 
 ## Compiler contract
 

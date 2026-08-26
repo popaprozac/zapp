@@ -20,14 +20,14 @@ export async function routeMessageWithServicesAsync(
     failure(error) => return Option.some(
       response(0, false, copy error.message)
     );
-    success(message) => return await dispatchWithServicesAsync(
+    success(message) => return await routeDecodedMessageWithServicesAsync(
       move message,
       services
     );
   }
 }
 
-async function dispatchWithServicesAsync(
+export async function routeDecodedMessageWithServicesAsync(
   message: BridgeMessage,
   services: AsyncServices
 ): Option<BridgeResponse> {

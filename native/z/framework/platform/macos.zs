@@ -1,8 +1,13 @@
 import native from "zapp_desktop.h";
 import { ApplicationConfig } from "../application-contract.zs";
-import { routeMessageWithServicesAsync } from "../async-bridge.zs";
+import { routeDecodedMessageWithServicesAsync } from "../async-bridge.zs";
 import { AsyncServices } from "../async-services.zs";
-import { BridgeResponse } from "../bridge.zs";
+import {
+  BridgeMessage,
+  BridgeMessageKind,
+  BridgeResponse,
+  decodeBridgeMessage,
+} from "../bridge.zs";
 import {
   ApplicationContext,
   ServiceLifecycleError,
@@ -10,7 +15,8 @@ import {
 import { zapp_deliver_response_from_z } from "zapp_router.h";
 import objc from "std/objc";
 import { Once, OnceLifetime } from "std/sync";
-import { TaskScope } from "std/async";
+import { TaskControl, TaskScope } from "std/async";
+import { Map } from "std/collections";
 import { thread } from "std/thread";
 
 class DesktopMessageHandler on thread.main
@@ -38,12 +44,90 @@ class MacOSApplicationRuntime {
   readonly name: String;
   readonly services: AsyncServices;
   readonly updates: TaskScope;
+  pendingRequests: Map<u64, PendingRequest> on thread.main;
+  nextRequestGeneration: u64 on thread.main;
   window: native.NSWindow on thread.main;
   webView: native.WKWebView on thread.main;
   contentController: native.WKUserContentController on thread.main;
   configuration: native.WKWebViewConfiguration on thread.main;
   registrationOwner: native.ZAppDesktopRegistrationOwner on thread.main;
   registration: objc.Registration on thread.main;
+
+  function beginRequest(
+    inout this,
+    request: PendingRequest
+  ): void on thread.main {
+    const generation = this.nextRequestGeneration;
+    this.nextRequestGeneration = this.nextRequestGeneration + 1;
+    request.assignGeneration(generation);
+    const previous = this.pendingRequests.remove(request.id);
+    match (previous) {
+      some(active) => active.requestCancel();
+      none => {}
+    }
+    this.pendingRequests.set(request.id, request);
+  }
+
+  function finishRequest(
+    inout this,
+    request: PendingRequest
+  ): void on thread.main {
+    request.finish();
+    const active = this.pendingRequests.get(request.id);
+    const current = match (in active) {
+      some(value) => value.generation == request.generation;
+      none => false;
+    };
+    if (current) this.pendingRequests.delete(request.id);
+  }
+
+  function cancelRequest(
+    inout this,
+    id: u64
+  ): boolean on thread.main {
+    const found = this.pendingRequests.remove(id);
+    return match (found) {
+      some(request) => request.requestCancel();
+      none => false;
+    };
+  }
+}
+
+class PendingRequest {
+  readonly id: u64;
+  generation: u64;
+  control: Option<TaskControl>;
+  completed: boolean;
+
+  function assignGeneration(
+    inout this,
+    generation: u64
+  ): void {
+    this.generation = generation;
+  }
+
+  function attach(
+    inout this,
+    control: TaskControl
+  ): void {
+    if (this.completed) return;
+    this.control = Option.some(control);
+  }
+
+  function finish(inout this): void {
+    this.completed = true;
+    this.control = Option.none;
+  }
+
+  function requestCancel(inout this): boolean {
+    this.completed = true;
+    const requested = match (in this.control) {
+      some(control) => control.requestCancel();
+      none => false;
+    };
+    this.control = Option.none;
+    return requested;
+  }
 }
 
 const application = Once<MacOSApplicationRuntime>();
@@ -80,17 +164,52 @@ export c function zapp_route_message_owned(
   windowId: i32
 ): void {
   const current = application.get();
-  const services = current.services;
   const updates = current.updates;
+  const decoded = attempt decodeBridgeMessage(in message);
+  const bridgeMessage = match (decoded) {
+    success(value) => value;
+    failure(error) => {
+      zapp_deliver_response_from_z(
+        error.message,
+        0,
+        false,
+        windowId
+      );
+      return;
+    }
+  };
+  if (bridgeMessage.kind == BridgeMessageKind.cancel) {
+    const cancellationId = bridgeMessage.id;
+    const cancellation = updates.schedule(
+      thread.main,
+      async move (): void => cancelPendingRequest(cancellationId)
+    );
+    if (!cancellation.accepted) return;
+    return;
+  }
+  const services = current.services;
+  const tracked = bridgeMessage.kind == BridgeMessageKind.invoke;
+  const pending = new PendingRequest({
+    id: bridgeMessage.id,
+    generation: 0,
+    control: Option<TaskControl>.none,
+    completed: false,
+  });
+  let request = Option<PendingRequest>.none;
+  if (tracked) request = Option.some(pending);
   const control = updates.schedule(
     thread.main,
     async move (): void => await routeMessageAndDeliver(
-      move message,
+      move bridgeMessage,
       services,
-      windowId
+      windowId,
+      request
     )
   );
-  if (!control.accepted) {
+  const accepted: boolean = control.accepted;
+  if (tracked) pending.attach(control);
+  if (!accepted) {
+    if (tracked) pending.finish();
     zapp_deliver_response_from_z(
       "Application is closing",
       0,
@@ -101,18 +220,46 @@ export c function zapp_route_message_owned(
 }
 
 async function routeMessageAndDeliver(
-  message: String,
+  message: BridgeMessage,
   services: AsyncServices,
-  windowId: i32
+  windowId: i32,
+  request: Option<PendingRequest>
 ): void on thread.main {
-  const routed = await routeMessageWithServicesAsync(
+  match (in request) {
+    some(pending) => beginPendingRequest(pending);
+    none => {}
+  }
+  const routed = await routeDecodedMessageWithServicesAsync(
     move message,
     services
   );
+  match (in request) {
+    some(pending) => finishPendingRequest(pending);
+    none => {}
+  }
   match (routed) {
     some(response) => deliverResponse(in response, windowId);
     none => {}
   }
+}
+
+function beginPendingRequest(
+  request: PendingRequest
+): void on thread.main {
+  const current = application.get();
+  current.beginRequest(request);
+}
+
+function finishPendingRequest(
+  request: PendingRequest
+): void on thread.main {
+  const current = application.get();
+  current.finishRequest(request);
+}
+
+function cancelPendingRequest(id: u64): void on thread.main {
+  const current = application.get();
+  current.cancelRequest(id);
 }
 
 function deliverResponse(
@@ -175,6 +322,8 @@ function initializeMacOSApplicationRuntime(
     configuration,
     registrationOwner,
     registration,
+    pendingRequests: Map<u64, PendingRequest>(),
+    nextRequestGeneration: 1,
   });
   return application.initialize(move value);
 }

@@ -36,6 +36,9 @@ describe("Z service binding generation", () => {
     expect(source).toContain("export interface Note");
     expect(source).toContain("id: bigint;");
     expect(source).toContain('Services.invoke<unknown, unknown>(\n        "notes.create"');
+    expect(source).toContain("input: CreateNoteInput, options?: InvokeOptions");
+    expect(source).toContain("count(options?: InvokeOptions)");
+    expect(source).toContain("options,\n      )");
     expect(source).toContain("mapped.cancel = () => source.cancel()");
     expect(source).toContain("return BigInt(value)");
   });
@@ -43,7 +46,7 @@ describe("Z service binding generation", () => {
   it("installs the same service names into the WebView runtime", () => {
     const source = renderZServiceWebviewRuntime(manifest);
     expect(source).toContain(
-      'bridge.invoke("notes.create", encodeCreateNoteInput(input))',
+      'bridge.invoke("notes.create", encodeCreateNoteInput(input), options)',
     );
     expect(source).toContain("globalThis.__zappServices");
     expect(source).toContain(

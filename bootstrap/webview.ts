@@ -12,6 +12,8 @@
     resolve: (value: any) => void;
     reject: (reason: any) => void;
     timer?: ReturnType<typeof setTimeout>;
+    signal?: AbortSignal;
+    abort?: () => void;
   };
 
   const pending: Record<number, PendingEntry> = {};
@@ -26,40 +28,77 @@
     }
   }
 
+  function takePending(id: number): PendingEntry | undefined {
+    const entry = pending[id];
+    if (!entry) return undefined;
+    delete pending[id];
+    if (entry.timer !== undefined) clearTimeout(entry.timer);
+    if (entry.signal && entry.abort) {
+      entry.signal.removeEventListener("abort", entry.abort);
+    }
+    return entry;
+  }
+
+  function abortError(reason?: unknown): Error {
+    if (reason instanceof Error) return reason;
+    const error = new Error(reason === undefined ? "Cancelled" : String(reason));
+    error.name = "AbortError";
+    return error;
+  }
+
+  function cancelPending(id: number, reason?: unknown): void {
+    const entry = takePending(id);
+    if (!entry) return;
+    entry.reject(abortError(reason));
+    post(JSON.stringify({ t: 7, id }));
+  }
+
   type WorkerEntry = {
     onmessage: ((event: { data: any }) => void) | null;
     _messageHandlers: Array<(event: { data: any }) => void>;
   };
 
   const bridge = {
-    invoke(method: string, args?: Record<string, unknown>, opts?: { timeout?: number }) {
+    invoke(
+      method: string,
+      args?: Record<string, unknown>,
+      opts?: { timeout?: number; signal?: AbortSignal },
+    ) {
       const id = nextId++;
       if (nextId > 65535) nextId = 1;
       const timeout = opts?.timeout ?? 15000;
       let cancelled = false;
+      const signal = opts?.signal;
 
       const p: any = new Promise((resolve, reject) => {
-        pending[id] = { resolve, reject };
+        if (signal?.aborted) {
+          cancelled = true;
+          reject(abortError(signal.reason));
+          return;
+        }
+        const entry: PendingEntry = { resolve, reject, signal };
+        if (signal) {
+          entry.abort = () => {
+            cancelled = true;
+            cancelPending(id, signal.reason);
+          };
+          signal.addEventListener("abort", entry.abort, { once: true });
+        }
+        pending[id] = entry;
         post(JSON.stringify({ t: 1, id, m: method, a: args || {} }));
         const timer = setTimeout(() => {
-          if (pending[id]) {
-            pending[id].reject(new Error("Timeout"));
-            delete pending[id];
-            post(JSON.stringify({ t: 7, id }));
-          }
+          const timedOut = takePending(id);
+          if (!timedOut) return;
+          timedOut.reject(new Error("Timeout"));
+          post(JSON.stringify({ t: 7, id }));
         }, timeout);
-        pending[id].timer = timer;
+        entry.timer = timer;
       });
 
       p.cancel = () => {
         if (cancelled) return;
         cancelled = true;
-        if (pending[id]) {
-          clearTimeout(pending[id].timer);
-          pending[id].reject(new Error("Cancelled"));
-          delete pending[id];
-          post(JSON.stringify({ t: 7, id }));
-        }
+        cancelPending(id);
       };
 
       return p;
@@ -91,9 +130,8 @@
     },
 
     _onInvokeResult(id: number, ok: boolean, payload: string): void {
-      const p = pending[id];
+      const p = takePending(id);
       if (!p) return;
-      delete pending[id];
       if (ok) {
         try {
           p.resolve(JSON.parse(payload));

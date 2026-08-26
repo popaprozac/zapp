@@ -6,7 +6,11 @@
 const BRIDGE_KEY = Symbol.for("zapp.bridge");
 
 export interface ZappBridge {
-  invoke(method: string, args?: Record<string, unknown>, opts?: { timeout?: number }): Promise<unknown> & { cancel(): void };
+  invoke(
+    method: string,
+    args?: Record<string, unknown>,
+    opts?: { timeout?: number; signal?: AbortSignal },
+  ): Promise<unknown> & { cancel(): void };
   emit(name: string, payload?: Record<string, unknown>): void;
   on(name: string, handler: (payload: unknown) => void): () => void;
   _onInvokeResult(id: number, ok: boolean, payload: string): void;

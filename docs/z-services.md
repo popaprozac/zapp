@@ -140,6 +140,38 @@ bridge. In an embedded zjs worker, the same generated module selects the
 existing direct-host fast path. Application code and generated method names do
 not change with the JavaScript execution environment.
 
+## Per-request cancellation
+
+Generated WebView bindings accept the standard `AbortSignal` shape and retain
+their explicit `cancel()` escape hatch:
+
+```ts
+const controller = new AbortController();
+const pending = notes.create(
+  { title: "Draft" },
+  { signal: controller.signal },
+);
+
+controller.abort();
+// Equivalently: pending.cancel();
+await pending; // rejects with AbortError
+```
+
+An already-aborted signal prevents the request from crossing the bridge. Once
+submitted, cancellation removes the browser-side pending entry immediately and
+sends the request identity to Z. The application-owned `TaskScope` maps that
+identity to its `TaskControl` and requests cooperative cancellation. Completed
+requests remove their abort listeners and timers, so aborting a reused
+controller cannot affect work that already finished. Reused wire identifiers
+are guarded by a native generation, preventing an older completion from
+deleting a newer request with the same identifier.
+
+This end-to-end cancellation path currently applies to WebView invocations.
+The embedded-worker direct-host path retains its allocation-lean synchronous or
+host-owned async behavior; cancellable worker-host calls require a corresponding
+native host adapter rather than pretending that local Promise rejection stopped
+native work.
+
 The application runtime owns one frozen `ServiceHandler` map and one frozen
 `AsyncServiceHandler` map. `services.zs` remains entirely synchronous;
 `application-services.zs` composes that router with the async registry and

@@ -98,7 +98,9 @@ function renderService(service: ZServiceMetadata): string {
   assertIdentifier(service.name, "service name");
   const methods = service.methods.map((method) => {
     assertIdentifier(method.name, `${service.name} method`);
-    const parameter = method.input ? `input: ${tsType(method.input)}` : "";
+    const parameter = method.input
+      ? `input: ${tsType(method.input)}, options?: InvokeOptions`
+      : "options?: InvokeOptions";
     const argumentsValue = method.input
       ? `${codecName(method.input, "encode")}(input)`
       : "{}";
@@ -107,6 +109,7 @@ function renderService(service: ZServiceMetadata): string {
       Services.invoke<unknown, unknown>(
         ${JSON.stringify(`${service.name}.${method.name}`)},
         ${argumentsValue},
+        options,
       ),
       ${codecName(method.returns, "decode")},
     );
@@ -120,7 +123,7 @@ export function renderZServiceBindings(manifest: ZServiceManifest): string {
     throw new Error(`[zapp] unsupported Z service metadata schema ${manifest.schemaVersion}`);
   }
   return `// AUTO-GENERATED from Z service metadata. Do not edit.
-import { Services, type CancellablePromise } from "@zappdev/runtime";
+import { Services, type CancellablePromise, type InvokeOptions } from "@zappdev/runtime";
 
 ${renderTypes(manifest)}
 
@@ -209,12 +212,12 @@ ${named}`;
 export function renderZServiceWebviewRuntime(manifest: ZServiceManifest): string {
   const services = manifest.services.map((service) => {
     const methods = service.methods.map((method) => {
-      const parameter = method.input ? "input" : "";
+      const parameter = method.input ? "input, options" : "options";
       const argumentsValue = method.input
         ? `${codecName(method.input, "encode")}(input)`
         : "{}";
       return `${JSON.stringify(method.name)}: (${parameter}) => map(
-        bridge.invoke(${JSON.stringify(`${service.name}.${method.name}`)}, ${argumentsValue}),
+        bridge.invoke(${JSON.stringify(`${service.name}.${method.name}`)}, ${argumentsValue}, options),
         ${codecName(method.returns, "decode")}
       )`;
     }).join(",\n");

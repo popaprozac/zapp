@@ -13,10 +13,12 @@ import { getBridge } from "./bridge";
 export interface InvokeOptions {
   /** Timeout in milliseconds. Default: 15000. */
   timeout?: number;
+  /** Abort the pending bridge request and request native task cancellation. */
+  signal?: AbortSignal;
 }
 
 export interface CancellablePromise<T> extends Promise<T> {
-  /** Cancel the pending invoke. Rejects with CancelledError. */
+  /** Cancel the pending invoke. Rejects with an AbortError. */
   cancel(): void;
 }
 
