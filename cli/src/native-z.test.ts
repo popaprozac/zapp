@@ -281,8 +281,11 @@ describe("Z native host inputs", () => {
     expect(smoke).toContain("await scheduler.yield()");
     expect(smoke).toContain('builder.registerAsync(');
     expect(smoke).toContain("async function validateRoutes(services: AsyncServices): i32");
-    expect(smoke.match(/await routeMessageWithServicesAsync\(/g)).toHaveLength(2);
+    expect(smoke.match(/await routeMessageWithServicesAsync\(/g)).toHaveLength(3);
     expect(smoke).toContain("await routeMessageWithServicesAsync(");
+    expect(smoke).toContain("await delay(1000)");
+    expect(smoke).toContain("requests.cancel(50)");
+    expect(smoke).toContain("resumedAfterCancellation");
   });
 });
 

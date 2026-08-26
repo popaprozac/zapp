@@ -159,12 +159,15 @@ await pending; // rejects with AbortError
 
 An already-aborted signal prevents the request from crossing the bridge. Once
 submitted, cancellation removes the browser-side pending entry immediately and
-sends the request identity to Z. The application-owned `TaskScope` maps that
-identity to its `TaskControl` and requests cooperative cancellation. Completed
-requests remove their abort listeners and timers, so aborting a reused
-controller cannot affect work that already finished. Reused wire identifiers
-are guarded by a native generation, preventing an older completion from
-deleting a newer request with the same identifier.
+sends the request identity to Z. A main-isolated pending-request registry maps
+that identity to the `TaskControl` returned by the application-owned
+`TaskScope`; cancellation removes the registry entry and requests cooperative
+cancellation. Mutable request state never crosses the scheduling boundary—task
+closures carry only scalar identifiers and generations. Completed requests
+remove their abort listeners and timers, so aborting a reused controller cannot
+affect work that already finished. Reused wire identifiers are guarded by a
+native generation, preventing an older completion from deleting a newer
+request with the same identifier.
 
 This end-to-end cancellation path currently applies to WebView invocations.
 The embedded-worker direct-host path retains its allocation-lean synchronous or
@@ -316,22 +319,22 @@ callers. If no synchronous service owns the name, it retains the selected async
 callable out of the frozen map before suspension and awaits it as a structured
 child. The map loan therefore never crosses `await`.
 
-The permanent smoke under `native/z/smokes/async-service/` executes the first
-complete headless request path: JSON bridge envelope → frozen async registry →
-genuinely suspended Z service (`await scheduler.yield()`) → typed bridge
-response. Its `validateRoutes()` function performs two sequential bridge awaits
-through one heap-owned task frame, proving that the service graph no longer
-depends on `async main` blocking each route independently. Run it from the Z
-repository with:
+The permanent smoke under `native/z/smokes/async-service/` executes a complete
+headless request path: JSON bridge envelope → frozen async registry → genuinely
+suspended Z service (`await scheduler.yield()`) → typed bridge response. It
+then schedules a second operation parked in scheduler-aware `delay`, records
+its `TaskControl`, cancels it by request ID, and proves that the continuation
+after the delay never runs. A later request still completes successfully, so
+the proof covers cancellation isolation rather than merely closing the whole
+scope. Run it from the Z repository with:
 
 ```bash
 bun run z run /Users/zach/code/zapp/native/z/smokes/async-service
 ```
 
-Both semantic frontends agree on this module graph, and the fixed-point emitter
-strict-C compiles and executes it. The current reusable frame supports two
-top-level awaited local bindings with owned storage and active-child
-cancellation; arbitrary suspension graphs remain language work. The desktop
+Stage 0 and the fixed-point compiler both execute the unchanged smoke. Cancelling
+the timer-backed child removes its pending timer immediately, so the test is
+deterministic and does not wait for the one-second delay to expire. The desktop
 host uses the intended product surface, `app.services.registerAsync(...)`. Its
 `WKScriptMessageHandler` submits the owned request to an application
 `TaskScope`; the service may suspend, completion is published on the main

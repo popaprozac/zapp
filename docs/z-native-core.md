@@ -87,21 +87,25 @@ archive and generated embedding header as an ordinary `ZAPP_NATIVE_LANG=z`
 build.
 
 The focused `native/z/smokes/async-service/` executable proves the same service
-shape without involving WebKit timing. One ordinary reusable async function
-routes a synchronous health request, suspends and resumes, then routes a search
-request through an `AsyncServiceHandler` that itself suspends through
-`scheduler.yield()`. Both child joins share one heap-owned parent frame under
-the fixed-point emitter. Synchronous handlers remain in a separate frozen map
-and retain the direct-call path. The desktop application applies that same
-model to a foreign WebKit callback: an application-owned `TaskScope` accepts
-the request, keeps it alive through service suspension, publishes completion
-on `thread.main`, and is cancelled and joined before lifecycle shutdown.
-WebView request identifiers now map to generation-guarded `TaskControl` values,
-so `CancellablePromise.cancel()`, timeouts, and standard `AbortSignal` requests
-reach the corresponding structured Z task. Cancellation remains cooperative:
-the browser rejects immediately, while the Z task observes cancellation at a
-supported suspension point and the browser ignores any completion that already
-won the race.
+shape without involving WebKit timing. It routes the synchronous health path,
+the suspended `AsyncServiceHandler` path, and a deterministic cancellation
+path under one `TaskScope`. The cancellation target parks in scheduler-aware
+`delay`; cancelling its recorded `TaskControl` removes the timer and proves the
+post-delay continuation never executes, while a later service request still
+completes. Stage 0 and the fixed-point compiler execute the same smoke.
+Synchronous handlers remain in a separate frozen map and retain the direct-call
+path.
+
+The desktop application applies that model to a foreign WebKit callback. An
+application-owned `TaskScope` accepts each request, keeps it alive through
+service suspension, publishes completion on `thread.main`, and is cancelled
+and joined before lifecycle shutdown. A main-isolated registry maps WebView
+request identifiers to generation-guarded `TaskControl` values; mutable request
+objects never cross a task boundary. `CancellablePromise.cancel()`, timeouts,
+and standard `AbortSignal` requests therefore reach the corresponding
+structured Z task. Cancellation remains cooperative: the browser rejects
+immediately, the Z task observes cancellation at a supported suspension point,
+and the browser ignores any completion that already won the race.
 
 ## Compiler contract
 

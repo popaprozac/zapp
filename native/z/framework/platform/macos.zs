@@ -16,8 +16,11 @@ import { zapp_deliver_response_from_z } from "zapp_router.h";
 import objc from "std/objc";
 import { Once, OnceLifetime } from "std/sync";
 import { TaskControl, TaskScope } from "std/async";
-import { Map } from "std/collections";
 import { thread } from "std/thread";
+import {
+  PendingRequests,
+  createPendingRequests,
+} from "../pending-requests.zs";
 
 class DesktopMessageHandler on thread.main
   implements native.WKScriptMessageHandler {
@@ -44,8 +47,7 @@ class MacOSApplicationRuntime {
   readonly name: String;
   readonly services: AsyncServices;
   readonly updates: TaskScope;
-  pendingRequests: Map<u64, PendingRequest> on thread.main;
-  nextRequestGeneration: u64 on thread.main;
+  pendingRequests: PendingRequests on thread.main;
   window: native.NSWindow on thread.main;
   webView: native.WKWebView on thread.main;
   contentController: native.WKUserContentController on thread.main;
@@ -55,78 +57,32 @@ class MacOSApplicationRuntime {
 
   function beginRequest(
     inout this,
-    request: PendingRequest
+    id: u64
+  ): u64 on thread.main {
+    return this.pendingRequests.begin(id);
+  }
+
+  function attachRequest(
+    inout this,
+    id: u64,
+    control: TaskControl
   ): void on thread.main {
-    const generation = this.nextRequestGeneration;
-    this.nextRequestGeneration = this.nextRequestGeneration + 1;
-    request.assignGeneration(generation);
-    const previous = this.pendingRequests.remove(request.id);
-    match (previous) {
-      some(active) => active.requestCancel();
-      none => {}
-    }
-    this.pendingRequests.set(request.id, request);
+    this.pendingRequests.attach(id, control);
   }
 
   function finishRequest(
     inout this,
-    request: PendingRequest
+    id: u64,
+    generation: u64
   ): void on thread.main {
-    request.finish();
-    const active = this.pendingRequests.get(request.id);
-    const current = match (in active) {
-      some(value) => value.generation == request.generation;
-      none => false;
-    };
-    if (current) this.pendingRequests.delete(request.id);
+    this.pendingRequests.finish(id, generation);
   }
 
   function cancelRequest(
     inout this,
     id: u64
   ): boolean on thread.main {
-    const found = this.pendingRequests.remove(id);
-    return match (found) {
-      some(request) => request.requestCancel();
-      none => false;
-    };
-  }
-}
-
-class PendingRequest {
-  readonly id: u64;
-  generation: u64;
-  control: Option<TaskControl>;
-  completed: boolean;
-
-  function assignGeneration(
-    inout this,
-    generation: u64
-  ): void {
-    this.generation = generation;
-  }
-
-  function attach(
-    inout this,
-    control: TaskControl
-  ): void {
-    if (this.completed) return;
-    this.control = Option.some(control);
-  }
-
-  function finish(inout this): void {
-    this.completed = true;
-    this.control = Option.none;
-  }
-
-  function requestCancel(inout this): boolean {
-    this.completed = true;
-    const requested = match (in this.control) {
-      some(control) => control.requestCancel();
-      none => false;
-    };
-    this.control = Option.none;
-    return requested;
+    return this.pendingRequests.cancel(id);
   }
 }
 
@@ -189,27 +145,25 @@ export c function zapp_route_message_owned(
   }
   const services = current.services;
   const tracked = bridgeMessage.kind == BridgeMessageKind.invoke;
-  const pending = new PendingRequest({
-    id: bridgeMessage.id,
-    generation: 0,
-    control: Option<TaskControl>.none,
-    completed: false,
-  });
-  let request = Option<PendingRequest>.none;
-  if (tracked) request = Option.some(pending);
+  const requestId = bridgeMessage.id;
   const control = updates.schedule(
     thread.main,
     async move (): void => await routeMessageAndDeliver(
       move bridgeMessage,
       services,
       windowId,
-      request
+      tracked
     )
   );
   const accepted: boolean = control.accepted;
-  if (tracked) pending.attach(control);
+  if (tracked && accepted) {
+    const attachment = updates.schedule(
+      thread.main,
+      async move (): void => attachPendingRequest(requestId, control)
+    );
+    if (!attachment.accepted) return;
+  }
   if (!accepted) {
-    if (tracked) pending.finish();
     zapp_deliver_response_from_z(
       "Application is closing",
       0,
@@ -219,24 +173,28 @@ export c function zapp_route_message_owned(
   }
 }
 
+function attachPendingRequest(
+  id: u64,
+  control: TaskControl
+): void on thread.main {
+  const current = application.get();
+  current.attachRequest(id, control);
+}
+
 async function routeMessageAndDeliver(
   message: BridgeMessage,
   services: AsyncServices,
   windowId: i32,
-  request: Option<PendingRequest>
+  tracked: boolean
 ): void on thread.main {
-  match (in request) {
-    some(pending) => beginPendingRequest(pending);
-    none => {}
-  }
+  const requestId = message.id;
+  let generation: u64 = 0;
+  if (tracked) generation = beginPendingRequest(requestId);
   const routed = await routeDecodedMessageWithServicesAsync(
     move message,
     services
   );
-  match (in request) {
-    some(pending) => finishPendingRequest(pending);
-    none => {}
-  }
+  if (tracked) finishPendingRequest(requestId, generation);
   match (routed) {
     some(response) => deliverResponse(in response, windowId);
     none => {}
@@ -244,17 +202,18 @@ async function routeMessageAndDeliver(
 }
 
 function beginPendingRequest(
-  request: PendingRequest
-): void on thread.main {
+  id: u64
+): u64 on thread.main {
   const current = application.get();
-  current.beginRequest(request);
+  return current.beginRequest(id);
 }
 
 function finishPendingRequest(
-  request: PendingRequest
+  id: u64,
+  generation: u64
 ): void on thread.main {
   const current = application.get();
-  current.finishRequest(request);
+  current.finishRequest(id, generation);
 }
 
 function cancelPendingRequest(id: u64): void on thread.main {
@@ -322,8 +281,7 @@ function initializeMacOSApplicationRuntime(
     configuration,
     registrationOwner,
     registration,
-    pendingRequests: Map<u64, PendingRequest>(),
-    nextRequestGeneration: 1,
+    pendingRequests: createPendingRequests(),
   });
   return application.initialize(move value);
 }
