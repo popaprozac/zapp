@@ -125,6 +125,11 @@ describe("Z native host inputs", () => {
     expect(objectiveCHost).not.toContain("routeScriptMessage:");
     expect(objectiveCHost).not.toContain("int main(");
     expect(objectiveCHost).toContain("services.notes.create");
+    expect(objectiveCHost).toContain("new AbortController()");
+    expect(objectiveCHost).toContain("services.notes.count({signal:controller.signal})");
+    expect(objectiveCHost).toContain("error?.name!=='AbortError'");
+    expect(objectiveCHost).toContain("dataset.cancellation='ok'");
+    expect(objectiveCHost).toContain("cancelled WebView response ignored");
     expect(nativeBuilder).toContain(
       'await rm(path.join(stagedAppSource, "z.json"), { force: true });',
     );

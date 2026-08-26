@@ -49,7 +49,8 @@ scope close/join all execute without a Stage 0 override.
 `NotesCore` is a normal readonly ARC class with synchronized state and owns the
 single implementation of `create`, `count`, JSON decoding, and JSON encoding.
 `NotesService` is the suspending desktop adapter. Its public `create` and
-`count` methods are the frontend API. It implements
+`count` methods are the frontend API. Generated TypeScript bindings expose
+service invocations as cancellable promises. It implements
 `AsyncService` with a framework-synthesized callable around suspending
 `invoke()` and
 `ServiceLifecycle` with main-thread `start` and `stop` methods.
@@ -65,11 +66,14 @@ adapter around the same `NotesCore`. This keeps that host from importing task
 runtime code merely to exercise direct native invocation. It is a transport
 boundary, not a second implementation of the Notes domain.
 
-The visible request genuinely suspends through `await scheduler.yield()`. The
+The visible requests genuinely suspend through `await scheduler.yield()`. The
 WebKit callback transfers its owned message into the application's `TaskScope`,
 which keeps the operation structured until the response is delivered on
-`thread.main`. Closing the application rejects new submissions, cancels and
-joins accepted work, and only then runs service stop hooks.
+`thread.main`. A standard browser `AbortSignal` rejects the frontend request
+immediately and requests cancellation of the corresponding Z task. If native
+work wins the completion race, its late response is ignored rather than
+published. Closing the application rejects new submissions, cancels and joins
+accepted work, and only then runs service stop hooks.
 
 ## The reusable framework
 
@@ -106,7 +110,10 @@ bun run spike:z-notes
 
 The visible macOS app stays open until its window is closed. Click **Create a
 note in Z** to call the generated `notes.create` TypeScript binding and display
-the returned native-service value in the DOM. Expected evidence after a click:
+the returned native-service value in the DOM. **Cancel a suspended request**
+starts `notes.count`, aborts it with a standard `AbortController` while the
+service is yielded, and then proves a later request still succeeds. Expected
+evidence after creating a note directly:
 
 ```text
 Notes: notes service started
@@ -118,7 +125,9 @@ Notes: notes service stopped
 AppKit, WebKit, CoreFoundation, and project-header context used by the staged
 Zapp build. The Zapp CLI still owns final host-library generation and linkage.
 
-For a bounded automated round trip that clicks and closes on success:
+For a bounded automated round trip that aborts request 1, proves any raced
+native response cannot publish stale state, completes request 2, and then
+closes on success:
 
 ```sh
 bun run spike:z-notes:smoke

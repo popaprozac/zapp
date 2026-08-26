@@ -15,7 +15,7 @@ const generatedHeaderDirectory = resolve(stagedCore, "build");
 const desktopHost = resolve(stagedCore, "desktop.m");
 const bootstrap = resolve(stagedCore, "zapp_webview_bootstrap.c");
 const expectedEvidence =
-  'visible WebView round trip window=1 request=1 ok=true payload={"id":"1","title":"WebView note"}';
+  'visible WebView round trip window=1 request=2 ok=true payload={"id":"1","title":"WebView note"}';
 
 async function runBounded(
   command: string[],

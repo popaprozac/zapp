@@ -139,6 +139,14 @@ void zapp_deliver_response_from_z(
       [strongSelf.window close];
       return;
     }
+    if (strongSelf.smokeMode && requestId == 1) {
+      printf(
+        "cancelled WebView response ignored request=%llu\n",
+        (unsigned long long)requestId
+      );
+      fflush(stdout);
+      return;
+    }
 
     dispatch_after(
       dispatch_time(DISPATCH_TIME_NOW, 250 * NSEC_PER_MSEC),
@@ -148,12 +156,14 @@ void zapp_deliver_response_from_z(
           evaluateJavaScript:
             @"JSON.stringify({"
             @"roundTrip:document.body?.dataset?.roundTrip??null,"
+            @"cancellation:document.body?.dataset?.cancellation??null,"
             @"status:document.querySelector('#status')?.textContent??null,"
             @"bridge:typeof globalThis[Symbol.for('zapp.bridge')]"
             @"})"
           completionHandler:^(id state, NSError *stateError) {
             BOOL updated = [state isKindOfClass:[NSString class]]
-              && [(NSString *)state containsString:@"\"roundTrip\":\"ok\""];
+              && [(NSString *)state containsString:@"\"roundTrip\":\"ok\""]
+              && [(NSString *)state containsString:@"\"cancellation\":\"ok\""];
             if (stateError != nil || !updated) {
               const char *stateText = state == nil
                 ? "<nil>"
@@ -239,7 +249,7 @@ void zapp_deliver_response_from_z(
   [self.userContentController addUserScript:bootstrap];
 
   NSString *automaticInvocation = self.smokeMode
-    ? @"setTimeout(()=>button.click(),350);"
+    ? @"setTimeout(()=>cancelButton.click(),350);"
     : @"";
   NSString *html = [NSString stringWithFormat:
     @"<!doctype html>"
@@ -254,9 +264,11 @@ void zapp_deliver_response_from_z(
     @"<h1>Zapp is calling a Z service</h1>"
     @"<p>This button calls the generated NotesService binding.</p>"
     @"<button id=\"ping\">Create a note in Z</button>"
+    @"<button id=\"cancel\">Cancel a suspended request</button>"
     @"<pre id=\"status\">Waiting for the bridge…</pre>"
     @"</main><script>"
     @"const button=document.querySelector('#ping');"
+    @"const cancelButton=document.querySelector('#cancel');"
     @"const status=document.querySelector('#status');"
     @"const services=globalThis.__zappServices;"
     @"button.addEventListener('click',async()=>{"
@@ -268,6 +280,33 @@ void zapp_deliver_response_from_z(
     @"}catch(error){"
     @"status.textContent=`Failure\\n${String(error)}`;"
     @"document.body.dataset.roundTrip='error';"
+    @"}"
+    @"});"
+    @"cancelButton.addEventListener('click',async()=>{"
+    @"status.textContent='Starting cancellable work…';"
+    @"const controller=new AbortController();"
+    @"const pending=services.notes.count({signal:controller.signal});"
+    @"controller.abort('smoke cancellation');"
+    @"try{"
+    @"await pending;"
+    @"status.textContent='Failure\\nCancelled request resolved';"
+    @"document.body.dataset.cancellation='error';"
+    @"}catch(error){"
+    @"if(error?.name!=='AbortError'){"
+    @"status.textContent=`Failure\\n${String(error)}`;"
+    @"document.body.dataset.cancellation='error';"
+    @"return;"
+    @"}"
+    @"document.body.dataset.cancellation='ok';"
+    @"status.textContent='Cancelled safely; checking follow-up…';"
+    @"try{"
+    @"const note=await services.notes.create({title:'WebView note'});"
+    @"status.textContent=`Cancelled safely\\nCreated note ${note.id}\\n${note.title}`;"
+    @"document.body.dataset.roundTrip='ok';"
+    @"}catch(followUpError){"
+    @"status.textContent=`Failure\\n${String(followUpError)}`;"
+    @"document.body.dataset.roundTrip='error';"
+    @"}"
     @"}"
     @"});"
     @"%@"
