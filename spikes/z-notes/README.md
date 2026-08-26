@@ -49,8 +49,9 @@ scope close/join all execute without a Stage 0 override.
 `NotesCore` is a normal readonly ARC class with synchronized state and owns the
 single implementation of `create`, `count`, JSON decoding, and JSON encoding.
 `NotesService` is the suspending desktop adapter. Its public `create` and
-`count` methods are the frontend API. Generated TypeScript bindings expose
-service invocations as cancellable promises. It implements
+`count` methods are the frontend API. `count` is a real main-executor `async`
+method, while `create` is synchronous Z; generated TypeScript bindings expose
+both service invocations uniformly as cancellable promises. It implements
 `AsyncService` with a framework-synthesized callable around suspending
 `invoke()` and
 `ServiceLifecycle` with main-thread `start` and `stop` methods.

@@ -238,9 +238,6 @@ export function deriveZServiceManifest(metadata: ZProgramMetadata): ZServiceMani
         && method.signature.errorType === "ServiceLifecycleError"
       )
     )).map((method) => {
-      if (method.signature.asynchronous) {
-        throw new Error(`[zapp] async service method ${serviceType}.${method.name} is not supported yet`);
-      }
       if (method.signature.errorType !== null) {
         throw new Error(`[zapp] throwing service method ${serviceType}.${method.name} is not supported yet`);
       }

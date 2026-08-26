@@ -187,6 +187,22 @@ describe("compiler-produced Z program metadata", () => {
     });
   });
 
+  it("derives the same cancellable binding from a typed async method", () => {
+    const asynchronous = structuredClone(metadata);
+    const service = asynchronous.modules[0].symbols.find(
+      (symbol) => symbol.name === "NotesService",
+    );
+    if (!service?.typeSignature) throw new Error("missing NotesService fixture");
+    const count = service.typeSignature.methods.find((method) => method.name === "count");
+    if (!count) throw new Error("missing count fixture");
+    count.signature.asynchronous = true;
+
+    expect(deriveZServiceManifest(asynchronous).services[0].methods).toContainEqual({
+      name: "count",
+      returns: "u64",
+    });
+  });
+
   it("fails closed on unknown compiler schemas", () => {
     expect(() => parseZProgramMetadata('{"schemaVersion":2,"entry":0,"modules":[]}'))
       .toThrow(/unsupported Z program metadata schema 2/);

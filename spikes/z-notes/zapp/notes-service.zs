@@ -1,5 +1,6 @@
 import { thread } from "std/thread";
 import { scheduler } from "std/async";
+import { delay } from "std/time";
 import {
   ServiceInvocation,
   ServiceOutcome,
@@ -26,7 +27,8 @@ export readonly class NotesService implements AsyncService, ServiceLifecycle {
     return this.core.create(move input);
   }
 
-  function count(): u64 {
+  async function count(): u64 on thread.main {
+    await delay(1);
     return this.core.count();
   }
 

@@ -228,6 +228,8 @@ describe("Z native host inputs", () => {
     expect(services).toContain("readonly Map<String, ServiceHandler>");
     expect(notes).toContain("export readonly class NotesService implements AsyncService, ServiceLifecycle");
     expect(notes).toContain("readonly core: NotesCore");
+    expect(notes).toContain("async function count(): u64 on thread.main");
+    expect(notes).toContain("await delay(1)");
     expect(notes).toContain("async function invoke(");
     expect(notes).toContain("await scheduler.yield()");
     expect(notes).not.toContain("createNotesHandler");
