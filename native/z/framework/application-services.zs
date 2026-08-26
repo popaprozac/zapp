@@ -83,8 +83,7 @@ export struct ApplicationServicesBuilder {
     name: String,
     service: T
   ): void {
-    const handler = serviceHandler(service);
-    this.routes.registry.add(move name, handler);
+    this.routes.register(move name, service);
   }
 
   function registerAsync<T: AsyncService>(

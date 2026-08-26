@@ -198,4 +198,21 @@ describe("compiler-produced Z program metadata", () => {
     expect(() => deriveZServiceManifest(invalid))
       .toThrow(/requires a literal service name/);
   });
+
+  it("ignores framework-internal builder delegation", () => {
+    const delegated = structuredClone(metadata);
+    delegated.modules[0].calls.unshift({
+      target: {
+        module: "/services.zs",
+        symbol: "ServicesBuilder",
+        kind: "method",
+        name: "ServicesBuilder.register",
+      },
+      arguments: [
+        { kind: "other", type: "String" },
+        { kind: "other", type: "T" },
+      ],
+    });
+    expect(deriveZServiceManifest(delegated).services).toHaveLength(1);
+  });
 });

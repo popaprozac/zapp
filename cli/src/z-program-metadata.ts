@@ -161,17 +161,10 @@ function addWireType(
 
 export function deriveZServiceManifest(metadata: ZProgramMetadata): ZServiceManifest {
   const registrations = metadata.modules.flatMap((module) => module.calls).filter((call) => (
-    (
-      call.target.symbol === "ServicesBuilder"
-      || call.target.symbol === "AsyncServicesBuilder"
-      || call.target.symbol === "ApplicationServicesBuilder"
-    )
+    call.target.symbol === "ApplicationServicesBuilder"
     && call.target.kind === "method"
     && (
-      call.target.name === "ServicesBuilder.register"
-      || call.target.name === "AsyncServicesBuilder.register"
-      || call.target.name === "AsyncServicesBuilder.registerAsync"
-      || call.target.name === "ApplicationServicesBuilder.register"
+      call.target.name === "ApplicationServicesBuilder.register"
       || call.target.name === "ApplicationServicesBuilder.registerWithLifecycle"
       || call.target.name === "ApplicationServicesBuilder.registerAsync"
       || call.target.name === "ApplicationServicesBuilder.registerAsyncWithLifecycle"

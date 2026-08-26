@@ -11,16 +11,10 @@ import {
   createServices,
 } from "./services.zs";
 import {
-  ServiceHandler,
   ServiceInvocation,
   ServiceOutcome,
 } from "./service-contract.zs";
 import { Map } from "std/collections";
-
-function serviceHandler<T: Service>(service: T): ServiceHandler {
-  return move (in invocation: ServiceInvocation): ServiceOutcome =>
-    service.invoke(in invocation);
-}
 
 function asyncServiceHandler<T: AsyncService>(
   service: T
@@ -39,8 +33,7 @@ export struct AsyncServicesBuilder {
     name: String,
     service: T
   ): void {
-    const handler = serviceHandler(service);
-    this.synchronous.registry.add(move name, handler);
+    this.synchronous.register(move name, service);
   }
 
   function registerAsync<T: AsyncService>(
