@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Z Notes</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      }
+
+      body {
+        display: grid;
+        min-height: 100vh;
+        margin: 0;
+        place-content: center;
+      }
+
+      main {
+        width: min(560px, calc(100vw - 64px));
+      }
+
+      button {
+        padding: 10px 16px;
+        font: inherit;
+      }
+
+      pre {
+        min-height: 72px;
+        padding: 14px;
+        border-radius: 10px;
+        background: rgb(128 128 128 / 14%);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Zapp is calling a Z service</h1>
+      <p>This page is an embedded frontend asset calling generated service bindings.</p>
+      <button id="ping" type="button">Create a note in Z</button>
+      <button id="cancel" type="button">Cancel a suspended request</button>
+      <pre id="status">Waiting for the bridge…</pre>
+    </main>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

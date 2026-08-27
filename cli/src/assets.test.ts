@@ -1,5 +1,12 @@
 import { test, expect } from "bun:test";
-import { renderAssetsNim, generateAssetManifestNim, ASSETS_EMBEDDED_MARKER, type AssetEntry } from "./assets";
+import {
+  ASSETS_EMBEDDED_MARKER,
+  generateAssetManifestC,
+  generateAssetManifestNim,
+  renderAssetsC,
+  renderAssetsNim,
+  type AssetEntry,
+} from "./assets";
 import { mkdtemp, rm, mkdir, writeFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -89,6 +96,75 @@ test("generateAssetManifestNim embed:true writes the embed marker + a populated 
     expect(nim).toContain("zapp_embedded_assets_count");
     expect(nim).toContain('path: cstring"/index.html"'); // the asset made it into the table
     expect(nim).toContain("cint(1)");                     // count = 1
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("renderAssetsC emits an immutable process-lifetime byte table", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "zapp-assets-c-"));
+  try {
+    const payload = path.join(root, "index.html");
+    await writeFile(payload, "hello");
+    const out = await renderAssetsC([{
+      relPath: "/index.html",
+      brPath: payload,
+      originalSize: 5,
+      brotli: false,
+    }]);
+    expect(out).toContain("static const uint8_t zapp_desktop_asset_0[]");
+    expect(out).toContain("0x68, 0x65, 0x6c, 0x6c, 0x6f");
+    expect(out).toContain('{ "/index.html", zapp_desktop_asset_0');
+    expect(out).toContain("zapp_desktop_asset_0, 5, 5, 0");
+    expect(out).toContain("const size_t zapp_desktop_assets_count = 1");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("renderAssetsC represents an empty asset without extending its logical length", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "zapp-assets-c-"));
+  try {
+    const payload = path.join(root, "empty.txt");
+    await writeFile(payload, "");
+    const out = await renderAssetsC([{
+      relPath: "/empty.txt",
+      brPath: payload,
+      originalSize: 0,
+      brotli: false,
+    }]);
+    expect(out).toContain("zapp_desktop_asset_0[] = {\n  0x00,");
+    expect(out).toContain("zapp_desktop_asset_0, 0, 0, 0");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("generateAssetManifestC emits a linkable empty development table", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "zapp-assets-c-"));
+  try {
+    const out = await generateAssetManifestC(root, "missing", { embed: false });
+    expect(await pathExists(out)).toBe(true);
+    const source = await Bun.file(out).text();
+    expect(source).toContain("zapp_desktop_assets[1] = {{0}}");
+    expect(source).toContain("zapp_desktop_assets_count = 0");
+    expect(await pathExists(path.join(root, ASSETS_EMBEDDED_MARKER))).toBe(false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("generateAssetManifestC records when production assets are embedded", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "zapp-assets-c-"));
+  try {
+    const assetDir = path.join(root, "dist");
+    await mkdir(assetDir, { recursive: true });
+    await writeFile(path.join(assetDir, "index.html"), "<!doctype html>");
+    await generateAssetManifestC(root, "dist", {
+      embed: true,
+      compress: false,
+    });
+    expect(await pathExists(path.join(root, ASSETS_EMBEDDED_MARKER))).toBe(true);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -10,7 +10,11 @@ JSON ingress, first typed handler, typed response callback, and first visible
 AppKit/WebKit round trip are implemented. The Z root now owns the WebKit
 protocol handler, dynamic message-body validation, owned string conversion,
 deterministic registration guard, window/WebView construction, and the first
-frozen typed service router. The headless async-service graph also compiles
+frozen typed service router. The first Z-owned frontend loader now resolves one
+logical `Window.url` through a development HTTP origin or a packaged
+`zapp://app` origin, serves Brotli-compressed immutable assets from the binary,
+and runs an external ES module without application-mode branching. The
+headless async-service graph also compiles
 through the fixed-point Z emitter: one reusable function sequences synchronous
 and suspended service routes through two child-task suspension states. One
 generated Notes binding runs through WebKit, and a narrow exported C entry
@@ -71,6 +75,12 @@ source. The Z compiler does not evaluate or understand `zapp.config.ts`, and no
 TypeScript configuration evaluator ships in the application binary. A future
 static JSON authoring format can resolve to the same internal contract if a real
 non-TypeScript consumer requires it.
+
+Window source owns only a logical application-relative URL such as `/notes`.
+The resolved configuration supplies the development origin and packaged asset
+directory; the native backend supplies the packaged origin and transport.
+Remote origins are a separate, explicit capability and do not receive the
+privileged bridge by default.
 
 ## Repository and package ownership
 
@@ -213,6 +223,11 @@ export contract for macOS, Windows, and Linux without changing the public
    application architecture.
 7. Every abstraction added to a hot path should be inspectable in generated C
    and measured against the current implementation.
+8. Framework bootstrap injection and application-authored web-content
+   injection are separate lifecycle layers. The bridge remains a deterministic
+   document-start script. A future public injection surface must distinguish
+   document-start scripts, document-end scripts, and styles, preserve ordering,
+   avoid `eval`, and behave consistently across engines.
 
 ## Rewrite sequence
 

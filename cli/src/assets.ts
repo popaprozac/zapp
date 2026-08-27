@@ -2,7 +2,7 @@
 // Assets are compiled directly into the binary. Decompressed at runtime in the scheme handler.
 
 import path from "node:path";
-import { mkdir, readdir, rm, stat } from "node:fs/promises";
+import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { brotliCompressSync, constants } from "node:zlib";
 import { clog } from "./log";
@@ -55,7 +55,7 @@ async function walkDir(dir: string): Promise<string[]> {
  * Walk `assetDir`, brotli-compress each file into `.zapp/assets/`, and return
  * the collected asset metadata. Shared by the zc and Nim emitters.
  */
-async function collectAssets(
+export async function collectAssets(
   root: string,
   assetDir: string,
   compress: boolean,
@@ -97,6 +97,86 @@ async function collectAssets(
   }
 
   return { assets };
+}
+
+/**
+ * Render the immutable asset table consumed by the Z-owned native host.
+ *
+ * Unlike the transitional Nim emitter, this C table points directly at
+ * compiler-emitted read-only byte arrays. No managed runtime copy is created at
+ * startup. The platform scheme handler may borrow raw payloads for the life of
+ * the process and only allocates when a compressed entry must be decoded.
+ */
+export async function renderAssetsC(assets: AssetEntry[]): Promise<string> {
+  let source = `// AUTO-GENERATED — embedded frontend assets. DO NOT EDIT.\n`;
+  source += `#include <stddef.h>\n#include <stdint.h>\n\n`;
+  source += `typedef struct {\n`;
+  source += `  const char *path;\n`;
+  source += `  const uint8_t *data;\n`;
+  source += `  size_t length;\n`;
+  source += `  size_t original_length;\n`;
+  source += `  int is_brotli;\n`;
+  source += `} ZAppDesktopAsset;\n\n`;
+
+  const storedLengths: number[] = [];
+  for (let index = 0; index < assets.length; index++) {
+    const payload = new Uint8Array(await Bun.file(assets[index].brPath).arrayBuffer());
+    storedLengths.push(payload.length);
+    source += `static const uint8_t zapp_desktop_asset_${index}[] = {`;
+    if (payload.length === 0) source += `\n  0x00,`;
+    for (let offset = 0; offset < payload.length; offset += 24) {
+      const chunk = payload.slice(offset, offset + 24);
+      source += `\n  ${Array.from(chunk, (byte) => `0x${byte.toString(16).padStart(2, "0")}`).join(", ")},`;
+    }
+    source += `\n};\n\n`;
+  }
+
+  if (assets.length === 0) {
+    source += `const ZAppDesktopAsset zapp_desktop_assets[1] = {{0}};\n`;
+    source += `const size_t zapp_desktop_assets_count = 0;\n`;
+    return source;
+  }
+
+  source += `const ZAppDesktopAsset zapp_desktop_assets[] = {\n`;
+  for (let index = 0; index < assets.length; index++) {
+    const asset = assets[index];
+    const escapedPath = asset.relPath
+      .replace(/\\/g, "\\\\")
+      .replace(/"/g, '\\"');
+    source += `  { "${escapedPath}", zapp_desktop_asset_${index}, `;
+    source += `${storedLengths[index]}, ${asset.originalSize}, `;
+    source += `${asset.brotli ? 1 : 0} },\n`;
+  }
+  source += `};\n`;
+  source += `const size_t zapp_desktop_assets_count = ${assets.length};\n`;
+  return source;
+}
+
+/** Generate the C asset table used by the Z-owned desktop runtime. */
+export async function generateAssetManifestC(
+  root: string,
+  assetDir: string,
+  options: {
+    embed: boolean;
+    compress?: boolean;
+    outputPath?: string;
+  },
+): Promise<string> {
+  const outputPath = options.outputPath
+    ?? path.join(root, ".zapp", "zapp_assets.c");
+  await mkdir(path.dirname(outputPath), { recursive: true });
+
+  const assets = options.embed
+    ? (await collectAssets(root, assetDir, options.compress ?? true)).assets
+    : [];
+  await writeFile(outputPath, await renderAssetsC(assets), "utf8");
+  const marker = path.join(root, ASSETS_EMBEDDED_MARKER);
+  if (options.embed) {
+    await writeFile(marker, "", "utf8");
+  } else {
+    await rm(marker, { force: true });
+  }
+  return outputPath;
 }
 
 /**

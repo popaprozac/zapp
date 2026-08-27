@@ -3,8 +3,10 @@ import { readFileSync } from "node:fs";
 import {
   parseZCompilerIdentity,
   renderZApplicationMetadata,
+  renderZFrontendConfigC,
   renderZWebviewBootstrapC,
   renderZNativeManifest,
+  resolveZFrontendOrigin,
   resolveZNativeHost,
   validateZCompilerIdentity,
   zNativeEntry,
@@ -45,6 +47,30 @@ describe("renderZWebviewBootstrapC", () => {
   });
 });
 
+describe("Z frontend origin", () => {
+  it("uses one packaged application origin and normalizes development URLs", () => {
+    expect(resolveZFrontendOrigin()).toBe("zapp://app/");
+    expect(resolveZFrontendOrigin("http://localhost:5173"))
+      .toBe("http://localhost:5173/");
+    expect(resolveZFrontendOrigin("https://localhost:5173/app"))
+      .toBe("https://localhost:5173/app/");
+    expect(() => resolveZFrontendOrigin("file:///tmp/index.html"))
+      .toThrow(/must use http or https/);
+  });
+
+  it("emits the resolved origin without C string escaping ambiguity", () => {
+    const output = renderZFrontendConfigC("http://localhost:5173");
+    const bytes = Array.from(
+      output.matchAll(/0x([0-9a-f]{2})/g),
+      (match) => Number.parseInt(match[1], 16),
+    );
+    expect(new TextDecoder().decode(Uint8Array.from(bytes.slice(0, -1))))
+      .toBe("http://localhost:5173/");
+    expect(bytes.at(-1)).toBe(0);
+    expect(output).toContain("zapp_desktop_frontend_origin");
+  });
+});
+
 describe("resolveZNativeHost", () => {
   it("selects the visible desktop host by default", () => {
     expect(resolveZNativeHost(undefined)).toBe("desktop");
@@ -81,6 +107,7 @@ describe("Z native host inputs", () => {
           includeDirectories: ["/native"],
           link: {
             directories: ["/native"],
+            libraries: ["zapp_desktop_host", "compression"],
             frameworks: ["AppKit", "WebKit", "CoreFoundation"],
           },
         },
@@ -115,8 +142,20 @@ describe("Z native host inputs", () => {
       new URL("../../native/z/framework/platform/macos/desktop.m", import.meta.url),
       "utf8",
     );
+    const notesFrontend = readFileSync(
+      new URL("../../spikes/z-notes/frontend/app.js", import.meta.url),
+      "utf8",
+    );
+    const notesHTML = readFileSync(
+      new URL("../../spikes/z-notes/frontend/index.html", import.meta.url),
+      "utf8",
+    );
     const nativeBuilder = readFileSync(
       new URL("./native-z.ts", import.meta.url),
+      "utf8",
+    );
+    const cli = readFileSync(
+      new URL("./zapp-cli.ts", import.meta.url),
       "utf8",
     );
 
@@ -140,17 +179,27 @@ describe("Z native host inputs", () => {
     expect(objectiveCHost).not.toContain("[body isKindOfClass:[NSString class]]");
     expect(objectiveCHost).not.toContain("routeScriptMessage:");
     expect(objectiveCHost).not.toContain("int main(");
-    expect(objectiveCHost).toContain("services.notes.create");
-    expect(objectiveCHost).toContain("services.notes.isEmpty()");
-    expect(objectiveCHost).toContain("new AbortController()");
-    expect(objectiveCHost).toContain("services.notes.count({signal:controller.signal})");
+    expect(objectiveCHost).toContain("ZAppDesktopAssetSchemeHandler");
+    expect(objectiveCHost).toContain("zapp_desktop_resolve_logical_url");
+    expect(objectiveCHost).toContain("zapp_desktop_has_frontend_origin");
+    expect(objectiveCHost).toContain("decidePolicyForNavigationAction:");
+    expect(objectiveCHost).toContain("forMainFrameOnly:YES");
+    expect(objectiveCHost).toContain("loadRequest:");
+    expect(objectiveCHost).not.toContain("loadHTMLString:");
+    expect(notesFrontend).toContain("services.notes.create");
+    expect(notesFrontend).toContain("services.notes.isEmpty()");
+    expect(notesFrontend).toContain("new AbortController()");
+    expect(notesFrontend).toContain("services.notes.count({ signal: controller.signal })");
+    expect(notesFrontend).toContain('error?.name !== "AbortError"');
+    expect(notesFrontend).toContain('dataset.cancellation = "ok"');
+    expect(notesHTML).toContain('<script type="module" src="/app.js"></script>');
     expect(objectiveCHost).toContain("if (!strongSelf.smokeMode) return;");
-    expect(objectiveCHost).toContain("error?.name!=='AbortError'");
-    expect(objectiveCHost).toContain("dataset.cancellation='ok'");
     expect(objectiveCHost).toContain("cancelled WebView response ignored");
     expect(nativeBuilder).toContain(
       'await rm(path.join(stagedAppSource, "z.json"), { force: true });',
     );
+    expect(cli).toContain("devUrl,");
+    expect(cli).not.toContain("Interactive dev starts with the Phase 1 WebView core");
   });
 
   it("gives the public Z builder ownership of main and run", () => {

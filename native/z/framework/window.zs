@@ -155,7 +155,8 @@ class WindowManagerState on thread.main {
   function all(): Array<Window> {
     let result = Array<Window>();
     for (const entry of this.windows) {
-      result.push(entry.value.window);
+      let retained = entry.value.window;
+      result.push(move retained);
     }
     return result;
   }

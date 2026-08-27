@@ -147,3 +147,36 @@ repeated in Z source.
 
 Runtime behavior does not belong in configuration. Services, windows, menus,
 lifecycle hooks, and mutable state remain ordinary Z source.
+
+## Frontend origin and window URLs
+
+`frontend.assets` names the built frontend directory embedded for production.
+`frontend.devServer.port` selects the local Vite/Bun server used by `zapp dev`.
+Neither value leaks into application-authored window routing:
+
+```z
+const window = app.windows.create(WindowOptions({
+  title: "Z Notes",
+  url: "/notes",
+}));
+```
+
+`WindowOptions.url` is always a logical application-relative path. Zapp owns
+the transport resolution:
+
+| Mode | Resolved application origin | Assets |
+|---|---|---|
+| Development | `http://localhost:<devServer.port>/` | Vite/Bun server and HMR |
+| Packaged | `zapp://app/` on the macOS system WebView | Immutable bytes embedded in the executable |
+
+An extensionless packaged route such as `/notes` falls back to
+`/index.html`; a concrete missing asset remains a failure. Absolute URLs and
+scheme-relative URLs are not accepted as `WindowOptions.url`. Remote content
+will require a separate explicit API and never inherits the privileged native
+bridge merely because a window navigated to it.
+
+The custom WebKit scheme is not documented as an HTTP origin. In particular,
+Zapp does not claim that HTTP-only response headers such as COOP/COEP make
+`SharedArrayBuffer` portable through `zapp://`. Capability documentation will
+record engine differences, and a native-backed shared-memory primitive remains
+the portable fallback.

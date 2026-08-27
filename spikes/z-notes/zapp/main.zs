@@ -11,6 +11,7 @@ async function main(): i32 on thread.main {
   app.services.register("health", createHealthService());
   const mainWindow = app.windows.create(WindowOptions({
     title: "Z Notes",
+    url: "/notes",
     width: 720,
     height: 460,
   }));

@@ -1,0 +1,59 @@
+const button = document.querySelector("#ping");
+const cancelButton = document.querySelector("#cancel");
+const status = document.querySelector("#status");
+const services = globalThis.__zappServices;
+
+button.addEventListener("click", async () => {
+  status.textContent = "Routing…";
+  try {
+    const note = await services.notes.create({ title: "WebView note" });
+    const empty = await services.notes.isEmpty();
+    if (empty) throw new Error("Expected the created note");
+    const health = await services.health.status();
+    if (health !== "ready") {
+      throw new Error(`Unexpected health status: ${health}`);
+    }
+    status.textContent = `Created note ${note.id}\n${note.title}`;
+    document.body.dataset.roundTrip = "ok";
+    document.body.dataset.health = "ok";
+  } catch (error) {
+    status.textContent = `Failure\n${String(error)}`;
+    document.body.dataset.roundTrip = "error";
+  }
+});
+
+cancelButton.addEventListener("click", async () => {
+  status.textContent = "Starting cancellable work…";
+  const controller = new AbortController();
+  const pending = services.notes.count({ signal: controller.signal });
+  controller.abort("smoke cancellation");
+  try {
+    await pending;
+    status.textContent = "Failure\nCancelled request resolved";
+    document.body.dataset.cancellation = "error";
+  } catch (error) {
+    if (error?.name !== "AbortError") {
+      status.textContent = `Failure\n${String(error)}`;
+      document.body.dataset.cancellation = "error";
+      return;
+    }
+    document.body.dataset.cancellation = "ok";
+    status.textContent = "Cancelled safely; checking follow-up…";
+    try {
+      const note = await services.notes.create({ title: "WebView note" });
+      const empty = await services.notes.isEmpty();
+      if (empty) throw new Error("Expected the created note");
+      const health = await services.health.status();
+      if (health !== "ready") {
+        throw new Error(`Unexpected health status: ${health}`);
+      }
+      status.textContent =
+        `Cancelled safely\nCreated note ${note.id}\n${note.title}`;
+      document.body.dataset.roundTrip = "ok";
+      document.body.dataset.health = "ok";
+    } catch (followUpError) {
+      status.textContent = `Failure\n${String(followUpError)}`;
+      document.body.dataset.roundTrip = "error";
+    }
+  }
+});

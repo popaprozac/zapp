@@ -26,13 +26,36 @@ async function run(
 }
 
 const smoke = process.argv.includes("--smoke");
+const devSmoke = process.argv.includes("--dev-smoke");
 const config = await loadConfig(
   spike,
-  createConfigContext(spike, "build", "macos"),
+  createConfigContext(spike, devSmoke ? "dev" : "build", "macos"),
 );
+
+const devServer = devSmoke
+  ? Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const pathname = new URL(request.url).pathname;
+        const asset = pathname === "/app.js" ? "app.js" : "index.html";
+        return new Response(await Bun.file(resolve(spike, "frontend", asset)).bytes(), {
+          headers: {
+            "Content-Type": asset.endsWith(".js")
+              ? "text/javascript; charset=utf-8"
+              : "text/html; charset=utf-8",
+          },
+        });
+      },
+    })
+  : null;
+const devUrl = devServer === null
+  ? undefined
+  : `http://127.0.0.1:${devServer.port}`;
 
 const originalLanguage = process.env.ZAPP_NATIVE_LANG;
 const originalHost = process.env.ZAPP_Z_HOST;
+let compiled = false;
 process.env.ZAPP_NATIVE_LANG = "z";
 process.env.ZAPP_Z_HOST = "desktop";
 try {
@@ -45,17 +68,24 @@ try {
     optimize: true,
     target: "macos",
     config,
+    devUrl,
   });
+  compiled = true;
 } finally {
   if (originalLanguage === undefined) delete process.env.ZAPP_NATIVE_LANG;
   else process.env.ZAPP_NATIVE_LANG = originalLanguage;
   if (originalHost === undefined) delete process.env.ZAPP_Z_HOST;
   else process.env.ZAPP_Z_HOST = originalHost;
+  if (!compiled) devServer?.stop(true);
 }
 
-await run(
-  [output],
-  smoke
-    ? { ...process.env, ZAPP_Z_DESKTOP_SMOKE: "1" }
-    : process.env,
-);
+try {
+  await run(
+    [output],
+    smoke || devSmoke
+      ? { ...process.env, ZAPP_Z_DESKTOP_SMOKE: "1" }
+      : process.env,
+  );
+} finally {
+  devServer?.stop(true);
+}

@@ -381,6 +381,7 @@ function initializeMacOSApplicationRuntime(
   });
   const configuration = native.WKWebViewConfiguration.alloc().init();
   configuration.userContentController = contentController;
+  native.ZAppDesktopBridge.configureWebViewConfiguration(configuration);
 
   const frame = native.zapp_desktop_make_rect(
     options.width,
@@ -404,8 +405,10 @@ function initializeMacOSApplicationRuntime(
   const title = options.title.byteLength == 0
     ? copy name
     : copy options.title;
+  const logicalURL = copy options.url;
   window.title = move title;
   window.contentView = webView;
+  native.zapp_desktop_set_logical_url(logicalURL);
   native.ZAppDesktopBridge.attachWindow(
     window,
     webView: webView,

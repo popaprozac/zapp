@@ -21,12 +21,14 @@ NSRect zapp_desktop_make_rect(uint32_t width, uint32_t height);
 @end
 
 @interface ZAppDesktopBridge : NSObject
++ (void)configureWebViewConfiguration:(WKWebViewConfiguration *)configuration;
 + (void)attachWindow:(NSWindow *)window
              webView:(WKWebView *)webView
    contentController:(WKUserContentController *)contentController
              visible:(BOOL)visible;
 @end
 
+void zapp_desktop_set_logical_url(const char *logical_url);
 void zapp_desktop_window_show(const char *window_id);
 void zapp_desktop_window_hide(const char *window_id);
 void zapp_desktop_window_close(const char *window_id);

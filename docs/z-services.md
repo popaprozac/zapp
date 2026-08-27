@@ -23,6 +23,7 @@ async function main(): i32 on thread.main {
   app.services.register("notes", createNotesService());
   const mainWindow = app.windows.create(WindowOptions({
     title: "Notes",
+    url: "/notes",
     width: 900,
     height: 640,
   }));
@@ -47,6 +48,11 @@ stable ARC `Window` handle with `show`, `hide`, `setTitle`, and idempotent
 `close` operations. The current macOS vertical slice realizes one window
 registered before `run`; native dynamic and multi-window realization are
 explicit follow-up work.
+
+The window URL is application-relative and stable across environments. Zapp
+resolves `/notes` against the Vite/Bun development origin or the packaged
+embedded-asset origin; service code and generated bindings see the same page
+and bridge in either mode.
 
 `Application.run` throws the exhaustive `ApplicationError` enum. Service
 lifecycle failures remain typed as its `lifecycle` variant, while window and

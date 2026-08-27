@@ -181,12 +181,6 @@ async function runDev(root: string) {
   }
 
   const target: BuildTarget = detectTarget();
-  if (nativeLanguage() === "z") {
-    throw new Error(
-      "[zapp] ZAPP_NATIVE_LANG=z currently supports `zapp build` and the " +
-      "message-boundary smoke. Interactive dev starts with the Phase 1 WebView core.",
-    );
-  }
   if (isIOSTarget(target) && process.platform !== "darwin") {
     clogError("iOS dev requires macOS host (Xcode SDK).");
     process.exit(1);
@@ -611,10 +605,9 @@ async function runBuild(
     clog(1, "embedding assets with brotli...");
     assetsFile = await generateAssetManifest(root, config.assetDir, config.compressAssets !== false);
   } else {
-    // Phase 0 deliberately proves the Z archive/runtime/message boundary before
-    // rebuilding the WebView asset loader in Z. Vite still validates and emits
-    // the frontend; Phase 1 will consume it from the Z-owned application core.
-    clog(1, "staging frontend assets for the Phase 0 Z core...");
+    // The Z-owned native builder consumes the Vite output directly and emits
+    // its immutable C asset table as part of the native host archive.
+    clog(1, "staging frontend assets for the Z native core...");
   }
 
   if (selectedNativeLanguage === "z") {
@@ -625,7 +618,7 @@ async function runBuild(
     await mkdir(binDir, { recursive: true });
     const exeName = config.name.replace(/\s+/g, "-").toLowerCase();
     const nativeOut = path.join(binDir, exeName);
-    clog(1, "compiling Phase 0 Z native core...");
+    clog(1, "compiling Z native core...");
     await compileNative({
       root,
       buildFile: "",
@@ -637,7 +630,7 @@ async function runBuild(
       target,
     });
     const size = Bun.file(nativeOut).size;
-    clog(0, `build complete: ${nativeOut} (${Math.round(size / 1024)} KB, Phase 0 Z core)`);
+    clog(0, `build complete: ${nativeOut} (${Math.round(size / 1024)} KB, Z core)`);
     return config;
   }
 
@@ -754,7 +747,7 @@ async function runPackage(root: string) {
   }
   if (nativeLanguage() === "z") {
     throw new Error(
-      "[zapp] packaging the Z native core begins after the Phase 1 AppKit/WebKit vertical slice; use `zapp build` for Phase 0.",
+      "[zapp] packaging the Z native core is not implemented yet; use `zapp build` to produce the native executable.",
     );
   }
 

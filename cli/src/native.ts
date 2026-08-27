@@ -1449,6 +1449,7 @@ export async function compileNative(opts: CompileOptions): Promise<void> {
       optimize,
       target,
       config: opts.config,
+      devUrl: opts.devUrl,
     });
     return;
   }

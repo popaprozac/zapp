@@ -7,7 +7,8 @@ productization work.
 
 ## The end-user application
 
-An application author currently owns seven files under `zapp/`:
+An application author currently owns the Z application modules under `zapp/`
+and ordinary frontend assets under `frontend/`:
 
 ```text
 zapp/
@@ -18,6 +19,9 @@ zapp/
 ├── notes-service.zs  # suspending service and lifecycle adapter
 ├── health-service.zs # sync-only value service
 └── sync-notes-service.zs # allocation-lean strict-C adapter
+frontend/
+├── index.html        # packaged frontend entry
+└── app.js            # external ES module, shaped like Vite output
 ```
 
 The ordinary desktop entry is deliberately small:
@@ -35,6 +39,7 @@ async function main(): i32 on thread.main {
   app.services.register("health", createHealthService());
   const mainWindow = app.windows.create(WindowOptions({
     title: "Z Notes",
+    url: "/notes",
     width: 720,
     height: 460,
   }));
@@ -52,6 +57,14 @@ size, visibility, and resizability reach AppKit. `Window.show()`, `hide()`,
 `setTitle()`, and idempotent `close()` are main-executor operations. Native
 multi-window and dynamic creation are the next window-runtime slice rather than
 hidden behavior in this first checkpoint.
+
+`WindowOptions.url` is a logical application-relative URL, not a transport
+address. This example deliberately uses `/notes`. In a packaged build the
+macOS backend resolves it against `zapp://app/` and serves the embedded
+`index.html` fallback plus its external `/app.js` module. In development the
+same value resolves against the configured Vite/Bun HTTP origin. Application
+source does not branch on build mode and cannot use this field to grant the
+native bridge to an arbitrary remote origin.
 
 The repository-relative framework import is temporary. A real package/module
 resolver should make it an ordinary stable Zapp import without copying runtime
@@ -157,6 +170,14 @@ closes on success:
 
 ```sh
 bun run spike:z-notes:smoke
+```
+
+That smoke exercises Brotli-compressed assets embedded directly in the native
+binary. The same logical `/notes` URL can be proven against a temporary local
+development server without changing Z source:
+
+```sh
+bun run spike:z-notes:dev-smoke
 ```
 
 The same app can be embedded behind the focused strict-C host:

@@ -14,6 +14,7 @@
     "spike:z-bridge": "bun run spikes/z-notes/bridge.ts",
     "spike:z-notes": "bun run spikes/z-notes/run.ts",
     "spike:z-notes:smoke": "bun run spikes/z-notes/run.ts --smoke",
+    "spike:z-notes:dev-smoke": "bun run spikes/z-notes/run.ts --dev-smoke",
     "spike:z-webview": "bun run spikes/z-notes/run.ts",
     "spike:z-webview:sanitize": "bun run spikes/z-notes/sanitize.ts"
   },
