@@ -72,6 +72,37 @@ TypeScript configuration evaluator ships in the application binary. A future
 static JSON authoring format can resolve to the same internal contract if a real
 non-TypeScript consumer requires it.
 
+## Repository and package ownership
+
+The transition layout is not the final product architecture. `native/z/` keeps
+the replacement isolated while the legacy implementation remains an executable
+oracle, but the finished repository should make the Z framework—not its prior
+art—the primary source tree. Nim, Zen-C, and superseded native code will
+eventually move behind an explicitly named reference or legacy boundary before
+being deleted when they are no longer needed for behavior and performance
+comparison.
+
+Rewriting the native core in Z does not imply removing every JavaScript package.
+The browser bridge, generated TypeScript service clients, frontend bundler
+integration, and a web-ecosystem CLI are legitimate companion tools. Their
+current npm names, APIs, and package boundaries are not compatibility
+contracts. The redesign may combine, split, internalize, or replace
+`@zappdev/runtime`, `@zappdev/vite`, and `@zappdev/cli` wherever that produces a
+smaller application surface, less configuration, better tree shaking, or a
+clearer ownership boundary.
+
+Perform the repository inversion once these facts are true:
+
+1. the Z core is the default path for a representative application;
+2. that application no longer links the legacy native implementation;
+3. Z framework imports and the CLI-to-Z build contract are stable enough to
+   survive a move without framework-local path conventions; and
+4. current behavioral and performance baselines are recorded and repeatable.
+
+Until then, additions should favor the Z implementation and avoid deepening
+legacy directory or package assumptions. The eventual move is an architectural
+checkpoint, not a cosmetic cleanup.
+
 Objective-C, C, and C++ are dependencies and ABI surfaces, not implementation
 languages Zapp must preserve. Z's checked imports and `.zd` contracts should
 replace handwritten bridge code progressively. Small native shims remain valid
