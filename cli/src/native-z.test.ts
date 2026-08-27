@@ -127,6 +127,7 @@ describe("Z native host inputs", () => {
     expect(objectiveCHost).toContain("services.notes.create");
     expect(objectiveCHost).toContain("new AbortController()");
     expect(objectiveCHost).toContain("services.notes.count({signal:controller.signal})");
+    expect(objectiveCHost).toContain("if (!strongSelf.smokeMode) return;");
     expect(objectiveCHost).toContain("error?.name!=='AbortError'");
     expect(objectiveCHost).toContain("dataset.cancellation='ok'");
     expect(objectiveCHost).toContain("cancelled WebView response ignored");

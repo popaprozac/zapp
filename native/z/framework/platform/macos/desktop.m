@@ -139,7 +139,11 @@ void zapp_deliver_response_from_z(
       [strongSelf.window close];
       return;
     }
-    if (strongSelf.smokeMode && requestId == 1) {
+    // Everything below is automated smoke-test instrumentation. Interactive
+    // applications own their DOM and lifetime; a partially completed demo
+    // scenario must never cause the native host to close their window.
+    if (!strongSelf.smokeMode) return;
+    if (requestId == 1) {
       printf(
         "cancelled WebView response ignored request=%llu\n",
         (unsigned long long)requestId
