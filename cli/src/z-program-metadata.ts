@@ -215,12 +215,7 @@ export function deriveZServiceManifest(metadata: ZProgramMetadata): ZServiceMani
     module.calls.filter((call) => (
       call.target.symbol === "ApplicationServicesBuilder"
       && call.target.kind === "method"
-      && (
-        call.target.name === "ApplicationServicesBuilder.register"
-        || call.target.name === "ApplicationServicesBuilder.registerWithLifecycle"
-        || call.target.name === "ApplicationServicesBuilder.registerAsync"
-        || call.target.name === "ApplicationServicesBuilder.registerAsyncWithLifecycle"
-      )
+      && call.target.name === "ApplicationServicesBuilder.register"
     )).map((call) => ({ call, module }))
   ));
   const types: ZServiceTypeMetadata[] = [];

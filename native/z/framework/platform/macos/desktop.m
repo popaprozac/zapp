@@ -157,13 +157,15 @@ void zapp_deliver_response_from_z(
             @"JSON.stringify({"
             @"roundTrip:document.body?.dataset?.roundTrip??null,"
             @"cancellation:document.body?.dataset?.cancellation??null,"
+            @"health:document.body?.dataset?.health??null,"
             @"status:document.querySelector('#status')?.textContent??null,"
             @"bridge:typeof globalThis[Symbol.for('zapp.bridge')]"
             @"})"
           completionHandler:^(id state, NSError *stateError) {
             BOOL updated = [state isKindOfClass:[NSString class]]
               && [(NSString *)state containsString:@"\"roundTrip\":\"ok\""]
-              && [(NSString *)state containsString:@"\"cancellation\":\"ok\""];
+              && [(NSString *)state containsString:@"\"cancellation\":\"ok\""]
+              && [(NSString *)state containsString:@"\"health\":\"ok\""];
             if (stateError != nil || !updated) {
               const char *stateText = state == nil
                 ? "<nil>"
@@ -275,8 +277,11 @@ void zapp_deliver_response_from_z(
     @"status.textContent='Routing…';"
     @"try{"
     @"const note=await services.notes.create({title:'WebView note'});"
+    @"const health=await services.health.status();"
+    @"if(health!=='ready')throw new Error(`Unexpected health status: ${health}`);"
     @"status.textContent=`Created note ${note.id}\\n${note.title}`;"
     @"document.body.dataset.roundTrip='ok';"
+    @"document.body.dataset.health='ok';"
     @"}catch(error){"
     @"status.textContent=`Failure\\n${String(error)}`;"
     @"document.body.dataset.roundTrip='error';"
@@ -301,8 +306,11 @@ void zapp_deliver_response_from_z(
     @"status.textContent='Cancelled safely; checking follow-up…';"
     @"try{"
     @"const note=await services.notes.create({title:'WebView note'});"
+    @"const health=await services.health.status();"
+    @"if(health!=='ready')throw new Error(`Unexpected health status: ${health}`);"
     @"status.textContent=`Cancelled safely\\nCreated note ${note.id}\\n${note.title}`;"
     @"document.body.dataset.roundTrip='ok';"
+    @"document.body.dataset.health='ok';"
     @"}catch(followUpError){"
     @"status.textContent=`Failure\\n${String(followUpError)}`;"
     @"document.body.dataset.roundTrip='error';"

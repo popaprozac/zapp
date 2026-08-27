@@ -32,7 +32,7 @@ const manifest: ZServiceManifest = {
       offset: 100,
       line: 20,
       column: 24,
-      method: "ApplicationServicesBuilder.registerAsyncWithLifecycle",
+      method: "ApplicationServicesBuilder.register",
     },
     methods: [
       {
@@ -62,6 +62,7 @@ describe("generated Z service dispatch", () => {
     const source = renderZServiceDispatchers(manifest, {
       outputPath: "/workspace/generated/service-dispatchers.zs",
       serviceContractModule: "/workspace/framework/service-contract.zs",
+      servicesModule: "/workspace/framework/services.zs",
       asyncServiceContractModule: "/workspace/framework/async-service-contract.zs",
       serviceLifecycleContractModule: "/workspace/framework/service-lifecycle-contract.zs",
     });
@@ -91,8 +92,30 @@ describe("generated Z service dispatch", () => {
     expect(() => renderZServiceDispatchers(invalid, {
       outputPath: "/workspace/generated/service-dispatchers.zs",
       serviceContractModule: "/workspace/framework/service-contract.zs",
+      servicesModule: "/workspace/framework/services.zs",
       asyncServiceContractModule: "/workspace/framework/async-service-contract.zs",
       serviceLifecycleContractModule: "/workspace/framework/service-lifecycle-contract.zs",
     })).toThrow(/does not support inout input capability/);
+  });
+
+  it("keeps synchronous struct services on the non-task adapter path", () => {
+    const synchronous = structuredClone(manifest);
+    synchronous.services[0].kind = "struct";
+    synchronous.services[0].lifecycle = false;
+    synchronous.services[0].methods = [synchronous.services[0].methods[0]];
+    const source = renderZServiceDispatchers(synchronous, {
+      outputPath: "/workspace/generated/service-dispatchers.zs",
+      serviceContractModule: "/workspace/framework/service-contract.zs",
+      servicesModule: "/workspace/framework/services.zs",
+      asyncServiceContractModule: "/workspace/framework/async-service-contract.zs",
+      serviceLifecycleContractModule: "/workspace/framework/service-lifecycle-contract.zs",
+    });
+    expect(source).toContain('import { Service } from "../framework/services.zs";');
+    expect(source).not.toContain("import { AsyncService }");
+    expect(source).toContain("class __ZappNotesServiceAdapter implements Service");
+    expect(source).toContain("function __zappInvokeNotes(");
+    expect(source).toContain("const target = this.service;");
+    expect(source).toContain("in target");
+    expect(source).toContain("new __ZappNotesServiceAdapter({ service: service })");
   });
 });

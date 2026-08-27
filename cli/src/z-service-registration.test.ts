@@ -3,7 +3,7 @@ import type { ZServiceManifest } from "./z-service-bindings";
 import { rewriteZServiceRegistrationModule } from "./z-service-registration";
 
 function manifestFor(source: string): ZServiceManifest {
-  const method = "registerAsyncWithLifecycle";
+  const method = "register";
   return {
     schemaVersion: 2,
     types: [],
@@ -37,7 +37,7 @@ describe("generated Z service registration", () => {
     const source = `import { createNotesService } from "./notes-service.zs";
 
 function main(): i32 {
-  app.services.registerAsyncWithLifecycle(
+  app.services.register(
     "notes",
     createNotesService()
   );
@@ -53,12 +53,12 @@ function main(): i32 {
     expect(rewritten).toStartWith(
       'import { __zappAdaptNotes } from "../generated/service-dispatchers.zs";\n',
     );
-    expect(rewritten).toContain("app.services.registerAsyncWithLifecycle(");
+    expect(rewritten).toContain("app.services.__registerGeneratedAsyncWithLifecycle(");
     expect(rewritten).toContain("__zappAdaptNotes(createNotesService()\n  ));");
   });
 
   it("fails closed when compiler metadata no longer points at the checked call", () => {
-    const source = 'app.services.registerAsyncWithLifecycle("notes", service);\n';
+    const source = 'app.services.register("notes", service);\n';
     const manifest = manifestFor(source);
     manifest.services[0].registration.offset += 1;
     expect(() => rewriteZServiceRegistrationModule(
@@ -69,21 +69,18 @@ function main(): i32 {
     )).toThrow(/stale service metadata/);
   });
 
-  it("leaves synchronous registrations on their allocation-lean runtime path", () => {
+  it("selects the generated synchronous fast path from method metadata", () => {
     const source = 'app.services.register("health", service);\n';
     const manifest = manifestFor(source);
-    manifest.services[0].registration = {
-      module: "/workspace/app/main.zs",
-      offset: source.indexOf("register") + "register".length,
-      line: 1,
-      column: 22,
-      method: "ApplicationServicesBuilder.register",
-    };
-    expect(rewriteZServiceRegistrationModule(
+    manifest.services[0].lifecycle = false;
+    manifest.services[0].methods[0].asynchronous = false;
+    manifest.services[0].methods[0].executorAffinity = null;
+    const rewritten = rewriteZServiceRegistrationModule(
       source,
       "/workspace/app/main.zs",
       "/workspace/generated/service-dispatchers.zs",
       manifest,
-    )).toBe(source);
+    );
+    expect(rewritten).toContain("app.services.__registerGenerated(");
   });
 });

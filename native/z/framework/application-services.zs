@@ -78,7 +78,16 @@ export struct ApplicationServicesBuilder {
   asynchronous: AsyncServiceRegistry;
   lifecycles: ServiceLifecycleBuilder;
 
-  function register<T: Service>(
+  // Compiler/build marker for one ordinary application-owned service. Zapp's
+  // staged build replaces this call with the matching generated runtime
+  // adapter after reading checked compiler metadata.
+  function register<T>(
+    inout this,
+    name: String,
+    service: T
+  ): void {}
+
+  function __registerGenerated<T: Service>(
     inout this,
     name: String,
     service: T
@@ -86,7 +95,7 @@ export struct ApplicationServicesBuilder {
     this.routes.register(move name, service);
   }
 
-  function registerAsync<T: AsyncService>(
+  function __registerGeneratedAsync<T: AsyncService>(
     inout this,
     name: String,
     service: T
@@ -95,7 +104,9 @@ export struct ApplicationServicesBuilder {
     this.asynchronous.add(move name, handler);
   }
 
-  function registerWithLifecycle<T: Service & ServiceLifecycle>(
+  function __registerGeneratedWithLifecycle<
+    T: Service & ServiceLifecycle
+  >(
     inout this,
     name: String,
     service: T
@@ -110,7 +121,7 @@ export struct ApplicationServicesBuilder {
     this.lifecycles.add(move name, hook);
   }
 
-  function registerAsyncWithLifecycle<
+  function __registerGeneratedAsyncWithLifecycle<
     T: AsyncService & ServiceLifecycle
   >(
     inout this,

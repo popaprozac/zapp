@@ -325,6 +325,13 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
         "framework",
         "service-contract.zs",
       ),
+      servicesModule: path.join(
+        workspace,
+        "native",
+        "z",
+        "framework",
+        "services.zs",
+      ),
       asyncServiceContractModule: path.join(
         workspace,
         "native",

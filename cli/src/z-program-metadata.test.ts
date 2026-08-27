@@ -45,7 +45,7 @@ const metadata: ZProgramMetadata = {
         kind: "class",
         exported: true,
         typeSignature: {
-          implementedTraits: ["Service", "ServiceLifecycle"],
+          implementedTraits: ["ServiceLifecycle"],
           fields: [],
           methods: [
             {
@@ -73,20 +73,6 @@ const metadata: ZProgramMetadata = {
                 parameterModes: [],
                 parameterTypes: [],
                 returnType: "u64",
-                errorType: null,
-              },
-            },
-            {
-              name: "invoke",
-              staticMethod: false,
-              visibility: "public",
-              receiverMode: "in",
-              signature: {
-                asynchronous: false,
-                executorAffinity: null,
-                parameterModes: ["in"],
-                parameterTypes: ["ServiceInvocation"],
-                returnType: "ServiceOutcome",
                 errorType: null,
               },
             },
@@ -130,7 +116,7 @@ const metadata: ZProgramMetadata = {
         module: "/services.zs",
         symbol: "ApplicationServicesBuilder",
         kind: "method",
-        name: "ApplicationServicesBuilder.registerWithLifecycle",
+        name: "ApplicationServicesBuilder.register",
       },
       arguments: [
         { kind: "string", type: "String", value: "notes" },
@@ -170,7 +156,7 @@ describe("compiler-produced Z program metadata", () => {
           offset: 100,
           line: 20,
           column: 24,
-          method: "ApplicationServicesBuilder.registerWithLifecycle",
+          method: "ApplicationServicesBuilder.register",
         },
         methods: [
           {
@@ -196,70 +182,16 @@ describe("compiler-produced Z program metadata", () => {
     });
   });
 
-  it("derives the same public API from an async service registration", () => {
-    const asynchronous = structuredClone(metadata);
-    const service = asynchronous.modules[0].symbols.find(
+  it("derives lifecycle and async execution from an ordinary service", () => {
+    const service = metadata.modules[0].symbols.find(
       (symbol) => symbol.name === "NotesService",
     );
-    if (!service?.typeSignature) throw new Error("missing NotesService fixture");
-    service.typeSignature.implementedTraits = ["AsyncService", "ServiceLifecycle"];
-    const invoke = service.typeSignature.methods.find((method) => method.name === "invoke");
-    if (!invoke) throw new Error("missing invoke fixture");
-    invoke.signature.asynchronous = true;
-    asynchronous.modules[0].calls[0].target.name =
-      "ApplicationServicesBuilder.registerAsyncWithLifecycle";
-
-    expect(deriveZServiceManifest(asynchronous)).toEqual({
-      schemaVersion: 2,
-      types: [
-        {
-          name: "CreateNoteInput",
-          module: "/app.zs",
-          fields: [{ name: "title", type: "String" }],
-        },
-        {
-          name: "Note",
-          module: "/app.zs",
-          fields: [
-            { name: "id", type: "u64" },
-            { name: "title", type: "String" },
-          ],
-        },
-      ],
-      services: [{
-        name: "notes",
-        type: "NotesService",
-        kind: "class",
-        module: "/app.zs",
-        lifecycle: true,
-        registration: {
-          module: "/app.zs",
-          offset: 100,
-          line: 20,
-          column: 24,
-          method: "ApplicationServicesBuilder.registerAsyncWithLifecycle",
-        },
-        methods: [
-          {
-            id: zServiceMethodId("notes.create"),
-            name: "create",
-            input: "CreateNoteInput",
-            inputMode: "value",
-            returns: "Note",
-            asynchronous: false,
-            executorAffinity: null,
-            receiverMode: "in",
-          },
-          {
-            id: zServiceMethodId("notes.count"),
-            name: "count",
-            returns: "u64",
-            asynchronous: true,
-            executorAffinity: "thread.main",
-            receiverMode: "in",
-          },
-        ],
-      }],
+    expect(service?.typeSignature?.implementedTraits).toEqual(["ServiceLifecycle"]);
+    const derived = deriveZServiceManifest(metadata).services[0];
+    expect(derived.lifecycle).toBe(true);
+    expect(derived.methods.find((method) => method.name === "count")).toMatchObject({
+      asynchronous: true,
+      executorAffinity: "thread.main",
     });
   });
 

@@ -1,17 +1,17 @@
 import path from "node:path";
 import { readFile, writeFile } from "node:fs/promises";
 import type { ZServiceManifest, ZServiceMetadata } from "./z-service-bindings";
-import { zServiceAdapterFactoryName } from "./z-service-dispatcher";
+import {
+  zServiceAdapterFactoryName,
+  zServiceUsesAsyncDispatch,
+} from "./z-service-dispatcher";
 
 interface RegistrationCall {
   argumentStart: number;
   close: number;
 }
 
-const runtimeRegistrationMethods = new Map([
-  ["ApplicationServicesBuilder.registerAsync", "registerAsync"],
-  ["ApplicationServicesBuilder.registerAsyncWithLifecycle", "registerAsyncWithLifecycle"],
-]);
+const generatedRegistration = "ApplicationServicesBuilder.register";
 
 function relativeModule(fromFile: string, target: string): string {
   let relative = path.relative(path.dirname(fromFile), target).replaceAll(path.sep, "/");
@@ -20,14 +20,20 @@ function relativeModule(fromFile: string, target: string): string {
 }
 
 function registrationMethodName(service: ZServiceMetadata): string {
-  const method = runtimeRegistrationMethods.get(service.registration.method);
-  if (!method) {
+  if (service.registration.method !== generatedRegistration) {
     throw new Error(
       `[zapp] cannot generate runtime registration for unsupported method `
       + `${JSON.stringify(service.registration.method)}`,
     );
   }
-  return method;
+  if (zServiceUsesAsyncDispatch(service)) {
+    return service.lifecycle
+      ? "__registerGeneratedAsyncWithLifecycle"
+      : "__registerGeneratedAsync";
+  }
+  return service.lifecycle
+    ? "__registerGeneratedWithLifecycle"
+    : "__registerGenerated";
 }
 
 function scanRegistrationCall(
@@ -169,7 +175,7 @@ export function rewriteZServiceRegistrationModule(
   const services = manifest.services
     .filter((service) => (
       service.registration.module === modulePath
-      && runtimeRegistrationMethods.has(service.registration.method)
+      && service.registration.method === generatedRegistration
     ))
     .sort((left, right) => right.registration.offset - left.registration.offset);
   if (services.length === 0) return source;
@@ -190,7 +196,7 @@ export async function installGeneratedZServiceRegistrations(
   generatedModule: string,
 ): Promise<string[]> {
   const modules = [...new Set(manifest.services
-    .filter((service) => runtimeRegistrationMethods.has(service.registration.method))
+    .filter((service) => service.registration.method === generatedRegistration)
     .map((service) => service.registration.module))];
   for (const modulePath of modules) {
     const source = await readFile(modulePath, "utf8");

@@ -33,7 +33,7 @@ const manifest: ZServiceManifest = {
       offset: 100,
       line: 20,
       column: 24,
-      method: "ApplicationServicesBuilder.registerWithLifecycle",
+      method: "ApplicationServicesBuilder.register",
     },
     methods: [
       {

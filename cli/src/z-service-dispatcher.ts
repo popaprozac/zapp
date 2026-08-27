@@ -9,6 +9,7 @@ import type {
 export interface RenderZServiceDispatchersOptions {
   outputPath: string;
   serviceContractModule: string;
+  servicesModule: string;
   asyncServiceContractModule: string;
   serviceLifecycleContractModule: string;
 }
@@ -41,6 +42,14 @@ function generatedName(value: string): string {
 
 export function zServiceAdapterFactoryName(serviceName: string): string {
   return `__zappAdapt${generatedName(serviceName)}`;
+}
+
+export function zServiceUsesAsyncDispatch(
+  service: ZServiceManifest["services"][number],
+): boolean {
+  return service.methods.some((method) => (
+    method.asynchronous || method.executorAffinity === "thread.main"
+  ));
 }
 
 function relativeModule(fromFile: string, target: string): string {
@@ -207,7 +216,7 @@ function renderSyncMethodHelper(
 `
     : "";
   return `function __zappDispatch${generatedName(serviceType)}${generatedName(method.name)}(
-  service: ${serviceType},
+  in service: ${serviceType},
   in invocation: ServiceInvocation
 ): ServiceOutcome {
 ${decode}  const result = ${call};
@@ -225,7 +234,7 @@ function renderSyncMethodBranch(
   return `  // Static method ID: ${method.id}
   if (invocation.method == ${JSON.stringify(method.name)}) {
     return __zappDispatch${generatedName(serviceType)}${generatedName(method.name)}(
-      move service,
+      in service,
       in invocation
     );
   }`;
@@ -279,7 +288,8 @@ function renderDispatcher(
 ): string {
   assertIdentifier(service.name, "service name");
   assertIdentifier(service.type, "service type");
-  if (service.kind !== "class") {
+  const asyncDispatch = zServiceUsesAsyncDispatch(service);
+  if (asyncDispatch && service.kind !== "class") {
     throw new Error(
       `[zapp] generated async service adapters currently require a class service; `
       + `${service.type} is a ${service.kind}`,
@@ -301,7 +311,7 @@ function renderDispatcher(
   ]
     .join("\n\n");
   const asyncTail = asynchronous.length === 0
-    ? '  return ServiceOutcome.failure("UNKNOWN_METHOD");'
+    ? ""
     : `  // Static method ID: ${asynchronous[0].id}
   if (invocation.method != ${JSON.stringify(asynchronous[0].name)}) {
     return ServiceOutcome.failure("UNKNOWN_METHOD");
@@ -325,21 +335,27 @@ function renderDispatcher(
     try this.service.stop(in context);
   }`
     : "";
+  const serviceTrait = asyncDispatch ? "AsyncService" : "Service";
   const implemented = service.lifecycle
-    ? "AsyncService, ServiceLifecycle"
-    : "AsyncService";
-  return `${helpers}${helpers ? "\n\n" : ""}async function __zappInvoke${generatedName(service.name)}(
+    ? `${serviceTrait}, ServiceLifecycle`
+    : serviceTrait;
+  const invokeFunction = asyncDispatch
+    ? `async function __zappInvoke${generatedName(service.name)}(
   service: ${service.type},
   in invocation: ServiceInvocation
 ): ServiceOutcome {
 ${synchronous.map((method) => renderSyncMethodBranch(service.type, method)).join("\n")}
 ${asyncTail}
-}
-
-export readonly class ${adapter} implements ${implemented} {
-  readonly service: ${service.type};
-
-  async function invoke(
+}`
+    : `function __zappInvoke${generatedName(service.name)}(
+  in service: ${service.type},
+  in invocation: ServiceInvocation
+): ServiceOutcome {
+${synchronous.map((method) => renderSyncMethodBranch(service.type, method)).join("\n")}
+  return ServiceOutcome.failure("UNKNOWN_METHOD");
+}`;
+  const invokeMethod = asyncDispatch
+    ? `  async function invoke(
     in invocation: ServiceInvocation
   ): ServiceOutcome {
     const target = this.service;
@@ -347,13 +363,28 @@ export readonly class ${adapter} implements ${implemented} {
       move target,
       in invocation
     );
-  }${lifecycle}
+  }`
+    : `  function invoke(
+    in invocation: ServiceInvocation
+  ): ServiceOutcome {
+    const target = this.service;
+    return __zappInvoke${generatedName(service.name)}(
+      in target,
+      in invocation
+    );
+  }`;
+  return `${helpers}${helpers ? "\n\n" : ""}${invokeFunction}
+
+export readonly class ${adapter} implements ${implemented} {
+  readonly service: ${service.type};
+
+${invokeMethod}${lifecycle}
 }
 
 export function ${zServiceAdapterFactoryName(service.name)}(
   service: ${service.type}
 ): ${adapter} {
-  return new ${adapter}({ service: move service });
+  return new ${adapter}({ service: ${service.kind === "class" ? "move service" : "service"} });
 }`;
 }
 
@@ -413,9 +444,16 @@ import { thread } from "std/thread";
 import { ServiceInvocation, ServiceOutcome } from ${JSON.stringify(
     relativeModule(options.outputPath, options.serviceContractModule),
   )};
-import { AsyncService } from ${JSON.stringify(
+${manifest.services.some((service) => !zServiceUsesAsyncDispatch(service))
+    ? `import { Service } from ${JSON.stringify(
+      relativeModule(options.outputPath, options.servicesModule),
+    )};`
+    : ""}
+${manifest.services.some(zServiceUsesAsyncDispatch)
+    ? `import { AsyncService } from ${JSON.stringify(
     relativeModule(options.outputPath, options.asyncServiceContractModule),
-  )};
+  )};`
+    : ""}
 ${manifest.services.some((service) => service.lifecycle)
     ? `import {
   ApplicationContext,

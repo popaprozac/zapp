@@ -1,11 +1,5 @@
 import { thread } from "std/thread";
-import { scheduler } from "std/async";
 import { delay } from "std/time";
-import {
-  ServiceInvocation,
-  ServiceOutcome,
-} from "../../../native/z/framework/service-contract.zs";
-import { AsyncService } from "../../../native/z/framework/async-service-contract.zs";
 import {
   ApplicationContext,
   ServiceLifecycle,
@@ -16,11 +10,10 @@ import {
   Note,
   NotesCore,
   createNotesCore,
-  invokeNotesCore,
 } from "./notes-core.zs";
 import console from "std/console";
 
-export readonly class NotesService implements AsyncService, ServiceLifecycle {
+export readonly class NotesService implements ServiceLifecycle {
   readonly core: NotesCore;
 
   function create(input: CreateNoteInput): Note {
@@ -30,14 +23,6 @@ export readonly class NotesService implements AsyncService, ServiceLifecycle {
   async function count(): u64 on thread.main {
     await delay(1);
     return this.core.count();
-  }
-
-  async function invoke(
-    in invocation: ServiceInvocation
-  ): ServiceOutcome {
-    await scheduler.yield();
-    const core = this.core;
-    return invokeNotesCore(in core, in invocation);
   }
 
   function start(

@@ -7,7 +7,7 @@ productization work.
 
 ## The end-user application
 
-An application author currently owns six files under `zapp/`:
+An application author currently owns seven files under `zapp/`:
 
 ```text
 zapp/
@@ -16,6 +16,7 @@ zapp/
 ├── embedded.zs       # strict-C embedding entry used by the regression host
 ├── notes-core.zs     # shared model, behavior, and checked wire conversion
 ├── notes-service.zs  # suspending service and lifecycle adapter
+├── health-service.zs # sync-only value service
 └── sync-notes-service.zs # allocation-lean strict-C adapter
 ```
 
@@ -23,12 +24,14 @@ The ordinary desktop entry is deliberately small:
 
 ```z
 import { createNotesService } from "./notes-service.zs";
+import { createHealthService } from "./health-service.zs";
 import { Application } from "../../../native/z/framework/application.zs";
 import { thread } from "std/thread";
 
 async function main(): i32 on thread.main {
   let app = Application({ name: "Notes" });
-  app.services.registerAsyncWithLifecycle("notes", createNotesService());
+  app.services.register("notes", createNotesService());
+  app.services.register("health", createHealthService());
   return match (attempt await app.run()) {
     success(status) => status;
     failure(_) => 70;
@@ -54,22 +57,26 @@ method, while `create` is synchronous Z; generated TypeScript bindings expose
 both service invocations uniformly as cancellable promises. The build now
 generates and installs its checked `AsyncService` dispatcher plus lifecycle
 forwarder into the isolated staged application. The original `main.zs` remains
-unchanged. `registerAsyncWithLifecycle` derives both adapters from the same
-service identity; the application does not register the service twice.
-Framework methods are excluded from generated TypeScript bindings. The
-handwritten `invoke()` and explicit `AsyncService` conformance remain a
-bootstrap-only constraint until registration of an ordinary service value can
-be checked before code generation; the desktop runtime no longer calls that
-method. The framework owns the registered service name and method-prefix
+unchanged. One `register` call derives the async dispatcher and lifecycle
+forwarder from the same service identity; the application does not register the
+service twice. `NotesService` has no author-facing `invoke()` or `AsyncService`
+conformance. Framework methods are excluded from generated TypeScript
+bindings. The framework owns the registered service name and method-prefix
 routing; the service does not repeat a route list, capture its registration
 name, or construct a binding object.
+
+`HealthService` is a sync-only value struct registered through the same API.
+Its generated adapter implements the non-task `Service` path, and the WebView
+smoke calls `health.status()` after the async Notes flow. This proves automatic
+adapter selection without charging synchronous services task overhead.
 
 The strict-C embedding entry uses `SyncNotesService`, a thin synchronous
 adapter around the same `NotesCore`. This keeps that host from importing task
 runtime code merely to exercise direct native invocation. It is a transport
 boundary, not a second implementation of the Notes domain.
 
-The visible requests genuinely suspend through `await scheduler.yield()`. The
+The cancellable `count` request genuinely suspends through scheduler-aware
+`delay`. The
 WebKit callback transfers its owned message into the application's `TaskScope`,
 which keeps the operation structured until the response is delivered on
 `thread.main`. A standard browser `AbortSignal` rejects the frontend request

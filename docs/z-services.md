@@ -20,10 +20,7 @@ The public lifecycle is designed around a consuming application builder:
 ```z
 async function main(): i32 on thread.main {
   let app = Application({ name: "Notes" });
-  app.services.registerAsyncWithLifecycle(
-    "notes",
-    createNotesService()
-  );
+  app.services.register("notes", createNotesService());
   return try await app.run();
 }
 ```
@@ -60,23 +57,27 @@ order before the original start error is propagated. Normal stops run in
 reverse order, attempt every service even after an error, and then propagate
 the first reverse-order stop error.
 
-The application surface has four explicit choices:
+The application surface has one registration operation:
 
 ```z
 app.services.register("health", createHealthService());
-app.services.registerWithLifecycle("database", createDatabaseService());
-app.services.registerAsync("search", createSearchService());
-app.services.registerAsyncWithLifecycle("notes", createNotesService());
+app.services.register("database", createDatabaseService());
+app.services.register("search", createSearchService());
+app.services.register("notes", createNotesService());
 ```
 
-`registerWithLifecycle` requires `T: Service & ServiceLifecycle`, while its
-async counterpart requires `T: AsyncService & ServiceLifecycle`. Each derives
-the route handler and lifecycle adapter from the same service value, so
-application authors do not register one object twice. The separate methods are intentional in
-this tier: Z does not yet inspect a generic value for an optional trait and
-conditionally synthesize behavior. A future compiler-owned implementation may
-make plain `register` detect `ServiceLifecycle` automatically without changing
-the service contracts.
+The checked method metadata selects a synchronous adapter when every public
+method is synchronous and executor-neutral, or an async adapter when any method
+can suspend or requires `thread.main`. Implementing `ServiceLifecycle` adds the
+lifecycle forwarder. Application authors do not choose the transport adapter or
+register one object twice.
+
+`ApplicationServicesBuilder.register` is deliberately a build marker during
+the first metadata pass. The Zapp build verifies and replaces it only in an
+isolated staged copy, then the final native compilation calls an internal typed
+runtime registration method. The original source remains valid for editor and
+metadata checks, but a Zapp application is built with `zapp`, not by invoking
+its entry directly with bare `z run`.
 
 Lifecycle storage remains deliberately separate from the frozen service router
 inside the framework. The router stays `on thread.any` for WebView and
@@ -91,16 +92,12 @@ The fixed-point compiler executes constrained trait calls through static
 specialization: generated C calls the concrete service method directly,
 without a vtable or trait-object allocation. Z does not yet provide
 trait-typed storage or dynamic dispatch.
-`ApplicationServicesBuilder.registerAsyncWithLifecycle` accepts the concrete
-service through a `T: AsyncService & ServiceLifecycle` constraint and
-constructs the async handler plus main-qualified lifecycle adapter internally.
-The compiler specializes that
-framework-owned generic method over an application-private service type,
-preserves cleanup through the captured hook, and emits direct concrete method
+The generated adapter accepts the concrete service, preserves cleanup through
+its stored identity and lifecycle forwarding, and emits direct concrete method
 calls. Application authors write only:
 
 ```z
-app.services.registerAsyncWithLifecycle("notes", createNotesService());
+app.services.register("notes", createNotesService());
 ```
 
 The permanent smoke under `native/z/smokes/service-lifecycle/` proves normal
@@ -228,7 +225,7 @@ resolved public call sites, literal arguments, and non-literal argument types.
 Zapp recognizes synchronous and async application registrations, including:
 
 ```z
-app.services.registerAsyncWithLifecycle("notes", createNotesService());
+app.services.register("notes", createNotesService());
 ```
 
 It resolves `NotesService`, its public methods, and the exported request and
@@ -244,33 +241,26 @@ before native compilation.
 The native build now installs a generated adapter into the isolated staged
 application source. The checked application source is never rewritten. Zapp
 verifies the compiler-provided registration offset, imports the generated
-adapter, and retains the staged registration on its async runtime path. A stale
+adapter, and selects the staged sync/async runtime path. A stale
 or mismatched source location fails the build instead of silently routing a
 different value. The Z Notes WebView smoke therefore reaches `create` and
-`count` through generated Z codecs and dispatch—not through its handwritten
-`invoke` body.
+`count` through generated Z codecs and dispatch. The service contains no
+transport method.
 
-This checkpoint installs generated adapters for `registerAsync` and
-`registerAsyncWithLifecycle`. Synchronous registrations stay on their existing
-allocation-lean `Service` path until the generator emits a matching synchronous
-adapter; Zapp does not silently turn them into tasks.
+Synchronous registrations use a generated `Service` adapter and the existing
+allocation-lean map. Suspended or main-isolated methods use a generated
+`AsyncService` adapter. Zapp does not silently turn a sync-only service into a
+task.
 
-The registration builders are generic over the framework's `Service` trait, so
-the framework does not know about Notes or any other concrete application
-type. A service supplies one non-consuming conversion into the framework's
-thread-safe callable:
+The internal runtime builders remain generic over the framework's `Service`
+and `AsyncService` traits, so the framework does not know about Notes or any
+other concrete application type. Generated adapters provide those internal
+contracts from an ordinary service:
 
 ```z
-export readonly class NotesService implements AsyncService, ServiceLifecycle {
+export readonly class NotesService implements ServiceLifecycle {
   function create(input: CreateNoteInput): Note { /* ... */ }
-  function count(): u64 { /* ... */ }
-
-  async function invoke(
-    in invocation: ServiceInvocation
-  ): ServiceOutcome {
-    await scheduler.yield();
-    /* decode the checked route and call create/count */
-  }
+  async function count(): u64 on thread.main { /* ... */ }
 
   function start(in context: ApplicationContext)
     : void throws ServiceLifecycleError on thread.main { /* ... */ }
@@ -280,16 +270,11 @@ export readonly class NotesService implements AsyncService, ServiceLifecycle {
 }
 ```
 
-Only `create` and `count` become generated frontend methods. `invoke` is a
-temporary bootstrap capability needed so the original program can pass the
-current generic registration constraint before metadata generation. It is
-filtered from the compiler-produced public service surface and is no longer
-the desktop runtime dispatcher. Removing that final author-facing method and
-the `AsyncService` conformance requires a compiler/build registration marker
-that can type-check an ordinary service before its generated adapter exists;
-that is the next service-generation slice. Registration owns the service name,
-so the service does not duplicate its route list or capture its registered
-name. There is no hand-authored route schema.
+Only `create` and `count` become generated frontend methods. No author-facing
+`invoke`, transport type, route table, or `AsyncService` conformance remains.
+Registration owns the service name, so the service does not duplicate its
+route list or capture its registered name. There is no hand-authored route
+schema.
 
 Application authors do not write `createNotesHandler` or another callable
 factory. Zapp generates the codecs, method dispatch, `AsyncService` adapter,
@@ -299,13 +284,9 @@ non-shareable service fails at registration with the reason its capture cannot
 cross arbitrary threads; `Mutex<T>` and deeply readonly ARC services satisfy
 the established sharing rules.
 
-The remaining handwritten `invoke` method is dormant in the desktop runtime;
-the generated adapter now decodes `ServiceInvocation`, calls the typed public
-methods, and encodes `ServiceOutcome`. Its temporary purpose is only to make
-the original source satisfy the pre-generation `AsyncService` constraint. The
-compiler-produced metadata already knows the ordinary methods and types, so
-the next slice can replace that bootstrap constraint rather than preserve a
-per-service adapter convention.
+The generated adapter decodes `ServiceInvocation`, calls the typed public
+methods, and encodes `ServiceOutcome`. The application source remains ordinary
+Z and does not depend on those transport contracts.
 
 ## Async services
 
@@ -315,8 +296,8 @@ safety but does not create a task or switch executors. This is the efficient
 default for pure work, synchronized shared state, and thread-safe native APIs.
 
 A service that must suspend—for example, a request that waits for I/O or awaits
-main-thread AppKit work—implements `AsyncService`. The framework synthesizes
-this stored handler contract:
+main-thread AppKit work—simply declares an async or executor-qualified public
+method. The framework generates this stored handler contract:
 
 ```z
 type AsyncServiceHandler =
@@ -326,18 +307,13 @@ type AsyncServiceHandler =
 Application code remains concrete and ordinary:
 
 ```z
-readonly class SearchService implements AsyncService {
-  async function invoke(
-    in invocation: ServiceInvocation
-  ): ServiceOutcome {
-    const result = await searchIndex(in invocation.arguments);
-    return ServiceOutcome.success(move result);
+readonly class SearchService {
+  async function find(input: SearchInput): SearchResult {
+    return await searchIndex(move input);
   }
 }
 
-let services = createAsyncServices();
-services.registerAsync("search", new SearchService({}));
-const published = services.freeze();
+app.services.register("search", new SearchService({}));
 ```
 
 `AsyncServices.invoke` first checks the synchronous map, allowing one async
@@ -362,7 +338,7 @@ bun run z run /Users/zach/code/zapp/native/z/smokes/async-service
 Stage 0 and the fixed-point compiler both execute the unchanged smoke. Cancelling
 the timer-backed child removes its pending timer immediately, so the test is
 deterministic and does not wait for the one-second delay to expire. The desktop
-host uses the intended product surface, `app.services.registerAsync(...)`. Its
+host uses the intended product surface, `app.services.register(...)`. Its
 `WKScriptMessageHandler` submits the owned request to an application
 `TaskScope`; the service may suspend, completion is published on the main
 executor, and shutdown rejects new work before cancelling and joining accepted
@@ -392,19 +368,26 @@ an intermediate JSON document.
 
 ## Gaps exposed by the slice
 
-- Trait constraints execute through zero-vtable static dispatch, including
-  framework-owned generic functions and methods instantiated with an
-  application-private downstream type. Lifecycle adapters no longer require
-  generated application-side source.
+- Z has no first-class build-macro or generated-module hook yet, so Zapp
+  installs adapter imports and calls into an isolated staged copy. Compiler
+  offsets are verified and mismatches fail closed; a future compiler-owned
+  hook could remove this textual staging seam without changing user syntax.
+- Sync-only struct services currently need to be copyable when captured by the
+  generated ARC adapter. Async services require class identity. Move-only
+  struct adapters remain fail-closed until compiler metadata exposes a checked
+  copy/move capability instead of making the generator guess.
 - Native cross-module specialization of `json.decode<UserType>` is incomplete;
   the generated adapter currently projects `JsonValue` explicitly.
 - `Mutex.withLock` returns are limited to cleanup-free values in the native
   compiler. The service keeps the critical section scalar and constructs owned
   results after unlocking.
-- Headless and WebView async service routes are implemented. Typed invocation
-  errors beyond `ServiceOutcome`, per-request cancellation, and permissions
-  remain follow-up composition work. Lifecycle ordering, typed
-  lifecycle failures, and compiler-generated binding metadata are implemented.
+- Headless and WebView async service routes, per-request cancellation,
+  lifecycle ordering, lifecycle failures, and compiler-generated bindings are
+  implemented. Typed application error values beyond `ServiceOutcome` and
+  service permissions remain follow-up composition work.
+- Generated async dispatch currently supports one suspending method per service
+  and no owned request value across that suspension. These are native async
+  frame composition limits, not intended application API restrictions.
 - The in-tree Notes project now supplies its own `.zs` entries. A stable local
   package/module contract is the next productization step; it must work in both
   semantic frontends and the editor rather than relying on staging rewrites.

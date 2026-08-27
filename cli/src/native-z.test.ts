@@ -170,7 +170,8 @@ describe("Z native host inputs", () => {
     );
 
     expect(app).toContain('let app = Application({ name: "Notes" });');
-    expect(app).toContain('app.services.registerAsyncWithLifecycle("notes", createNotesService());');
+    expect(app).toContain('app.services.register("notes", createNotesService());');
+    expect(app).toContain('app.services.register("health", createHealthService());');
     expect(app).toContain("const result = attempt await app.run();");
     expect(application).toContain("export struct Application");
     expect(application).toContain("services: ApplicationServicesBuilder = createApplicationServices();");
@@ -214,6 +215,10 @@ describe("Z native host inputs", () => {
       new URL("../../spikes/z-notes/zapp/notes-core.zs", import.meta.url),
       "utf8",
     );
+    const health = readFileSync(
+      new URL("../../spikes/z-notes/zapp/health-service.zs", import.meta.url),
+      "utf8",
+    );
     const syncNotes = readFileSync(
       new URL("../../spikes/z-notes/zapp/sync-notes-service.zs", import.meta.url),
       "utf8",
@@ -226,12 +231,12 @@ describe("Z native host inputs", () => {
     expect(services).toContain("service.invoke(in invocation)");
     expect(services).not.toContain("ServiceBinding");
     expect(services).toContain("readonly Map<String, ServiceHandler>");
-    expect(notes).toContain("export readonly class NotesService implements AsyncService, ServiceLifecycle");
+    expect(notes).toContain("export readonly class NotesService implements ServiceLifecycle");
     expect(notes).toContain("readonly core: NotesCore");
     expect(notes).toContain("async function count(): u64 on thread.main");
     expect(notes).toContain("await delay(1)");
-    expect(notes).toContain("async function invoke(");
-    expect(notes).toContain("await scheduler.yield()");
+    expect(notes).not.toContain("function invoke(");
+    expect(notes).not.toContain("AsyncService");
     expect(notes).not.toContain("createNotesHandler");
     expect(notes).toContain("function start(");
     expect(notes).toContain("function stop(");
@@ -240,6 +245,8 @@ describe("Z native host inputs", () => {
     expect(notesCore).toContain("export function invokeNotesCore(");
     expect(syncNotes).toContain("export readonly class SyncNotesService implements Service");
     expect(syncNotes).toContain("invokeNotesCore(in core, in invocation)");
+    expect(health).toContain("export struct HealthService");
+    expect(health).toContain('return "ready";');
   });
 
   it("keeps async services separate from the synchronous fast path", () => {
@@ -283,8 +290,9 @@ describe("Z native host inputs", () => {
     expect(synchronousServices).not.toContain("async function");
     expect(synchronousServices).not.toContain("AsyncService");
     expect(synchronousBridge).not.toContain("async function");
-    expect(applicationServices).toContain("function registerAsync<T: AsyncService>(");
-    expect(applicationServices).toContain("function registerAsyncWithLifecycle<");
+    expect(applicationServices).toContain("function register<T>(");
+    expect(applicationServices).toContain("function __registerGeneratedAsync<T: AsyncService>(");
+    expect(applicationServices).toContain("function __registerGeneratedAsyncWithLifecycle<");
     expect(smoke).toContain("await scheduler.yield()");
     expect(smoke).toContain('builder.registerAsync(');
     expect(smoke).toContain("async function validateRoutes(services: AsyncServices): i32");
