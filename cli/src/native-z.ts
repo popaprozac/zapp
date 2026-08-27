@@ -322,6 +322,20 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
         "framework",
         "service-contract.zs",
       ),
+      asyncServiceContractModule: path.join(
+        workspace,
+        "native",
+        "z",
+        "framework",
+        "async-service-contract.zs",
+      ),
+      serviceLifecycleContractModule: path.join(
+        workspace,
+        "native",
+        "z",
+        "framework",
+        "service-lifecycle-contract.zs",
+      ),
     },
   );
   await run([...compiler, "check", dispatcherPreview], options.root, true);

@@ -44,6 +44,9 @@ interface ZProgramArgumentMetadata {
 }
 
 interface ZProgramCallMetadata {
+  offset: number;
+  line: number;
+  column: number;
   target: {
     module: string;
     symbol: string;
@@ -208,21 +211,23 @@ function addWireType(
 }
 
 export function deriveZServiceManifest(metadata: ZProgramMetadata): ZServiceManifest {
-  const registrations = metadata.modules.flatMap((module) => module.calls).filter((call) => (
-    call.target.symbol === "ApplicationServicesBuilder"
-    && call.target.kind === "method"
-    && (
-      call.target.name === "ApplicationServicesBuilder.register"
-      || call.target.name === "ApplicationServicesBuilder.registerWithLifecycle"
-      || call.target.name === "ApplicationServicesBuilder.registerAsync"
-      || call.target.name === "ApplicationServicesBuilder.registerAsyncWithLifecycle"
-    )
+  const registrations = metadata.modules.flatMap((module) => (
+    module.calls.filter((call) => (
+      call.target.symbol === "ApplicationServicesBuilder"
+      && call.target.kind === "method"
+      && (
+        call.target.name === "ApplicationServicesBuilder.register"
+        || call.target.name === "ApplicationServicesBuilder.registerWithLifecycle"
+        || call.target.name === "ApplicationServicesBuilder.registerAsync"
+        || call.target.name === "ApplicationServicesBuilder.registerAsyncWithLifecycle"
+      )
+    )).map((call) => ({ call, module }))
   ));
   const types: ZServiceTypeMetadata[] = [];
   const seenTypes = new Set<string>();
   const seenServices = new Set<string>();
   const methodIds = new Map<number, string>();
-  const services = registrations.map((registration) => {
+  const services = registrations.map(({ call: registration, module: registrationModule }) => {
     const [nameArgument, serviceArgument] = registration.arguments;
     if (registration.arguments.length !== 2 || nameArgument?.kind !== "string") {
       throw new Error(
@@ -239,11 +244,13 @@ export function deriveZServiceManifest(metadata: ZProgramMetadata): ZServiceMani
     seenServices.add(name);
     const serviceType = serviceArgument.type;
     const { module: serviceModule, symbol: service } = publicType(metadata, serviceType);
-    if ((service.kind !== "struct" && service.kind !== "class") || !service.typeSignature) {
+    const serviceKind = service.kind;
+    if ((serviceKind !== "struct" && serviceKind !== "class") || !service.typeSignature) {
       throw new Error(
         `[zapp] registered service ${JSON.stringify(serviceType)} must be an exported Z struct or class`,
       );
     }
+    const kind: "struct" | "class" = serviceKind;
     const implementsService = service.typeSignature.implementedTraits
       .includes("Service");
     const implementsAsyncService = service.typeSignature.implementedTraits
@@ -328,8 +335,16 @@ export function deriveZServiceManifest(metadata: ZProgramMetadata): ZServiceMani
     return {
       name,
       type: serviceType,
+      kind,
       module: serviceModule.path,
       lifecycle: implementsLifecycle,
+      registration: {
+        module: registrationModule.path,
+        offset: registration.offset,
+        line: registration.line,
+        column: registration.column,
+        method: registration.target.name,
+      },
       methods,
     };
   });

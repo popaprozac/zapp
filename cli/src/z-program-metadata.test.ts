@@ -123,6 +123,9 @@ const metadata: ZProgramMetadata = {
       },
     ],
     calls: [{
+      offset: 100,
+      line: 20,
+      column: 24,
       target: {
         module: "/services.zs",
         symbol: "ApplicationServicesBuilder",
@@ -159,8 +162,16 @@ describe("compiler-produced Z program metadata", () => {
       services: [{
         name: "notes",
         type: "NotesService",
+        kind: "class",
         module: "/app.zs",
         lifecycle: true,
+        registration: {
+          module: "/app.zs",
+          offset: 100,
+          line: 20,
+          column: 24,
+          method: "ApplicationServicesBuilder.registerWithLifecycle",
+        },
         methods: [
           {
             id: zServiceMethodId("notes.create"),
@@ -218,8 +229,16 @@ describe("compiler-produced Z program metadata", () => {
       services: [{
         name: "notes",
         type: "NotesService",
+        kind: "class",
         module: "/app.zs",
         lifecycle: true,
+        registration: {
+          module: "/app.zs",
+          offset: 100,
+          line: 20,
+          column: 24,
+          method: "ApplicationServicesBuilder.registerAsyncWithLifecycle",
+        },
         methods: [
           {
             id: zServiceMethodId("notes.create"),
@@ -283,6 +302,9 @@ describe("compiler-produced Z program metadata", () => {
   it("ignores framework-internal builder delegation", () => {
     const delegated = structuredClone(metadata);
     delegated.modules[0].calls.unshift({
+      offset: 50,
+      line: 10,
+      column: 12,
       target: {
         module: "/services.zs",
         symbol: "ServicesBuilder",

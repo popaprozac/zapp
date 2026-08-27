@@ -26,8 +26,16 @@ export interface ZServiceMethodMetadata {
 export interface ZServiceMetadata {
   name: string;
   type: string;
+  kind: "struct" | "class";
   module: string;
   lifecycle: boolean;
+  registration: {
+    module: string;
+    offset: number;
+    line: number;
+    column: number;
+    method: string;
+  };
   methods: ZServiceMethodMetadata[];
 }
 

@@ -9,6 +9,8 @@ import type {
 export interface RenderZServiceDispatchersOptions {
   outputPath: string;
   serviceContractModule: string;
+  asyncServiceContractModule: string;
+  serviceLifecycleContractModule: string;
 }
 
 const identifier = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
@@ -255,6 +257,12 @@ function renderDispatcher(
 ): string {
   assertIdentifier(service.name, "service name");
   assertIdentifier(service.type, "service type");
+  if (service.kind !== "class") {
+    throw new Error(
+      `[zapp] the generated async adapter preview currently requires a class service; `
+      + `${service.type} is a ${service.kind}`,
+    );
+  }
   const asynchronous = service.methods.filter((method) => (
     method.asynchronous || method.executorAffinity === "thread.main"
   ));
@@ -277,12 +285,51 @@ function renderDispatcher(
   return await __zappFinish${generatedName(service.type)}${generatedName(
     asynchronous[0].name,
   )}(move service);`;
-  return `${helpers}${helpers ? "\n\n" : ""}export async function __zappInvoke${generatedName(service.name)}(
+  const adapter = `__Zapp${generatedName(service.name)}ServiceAdapter`;
+  const lifecycle = service.lifecycle
+    ? `
+
+  function start(
+    in context: ApplicationContext
+  ): void throws ServiceLifecycleError on thread.main {
+    try this.service.start(in context);
+  }
+
+  function stop(
+    in context: ApplicationContext
+  ): void throws ServiceLifecycleError on thread.main {
+    try this.service.stop(in context);
+  }`
+    : "";
+  const implemented = service.lifecycle
+    ? "AsyncService, ServiceLifecycle"
+    : "AsyncService";
+  return `${helpers}${helpers ? "\n\n" : ""}async function __zappInvoke${generatedName(service.name)}(
   service: ${service.type},
   in invocation: ServiceInvocation
 ): ServiceOutcome {
 ${synchronous.map((method) => renderMethod(service.type, method)).join("\n")}
 ${asyncTail}
+}
+
+export readonly class ${adapter} implements ${implemented} {
+  readonly service: ${service.type};
+
+  async function invoke(
+    in invocation: ServiceInvocation
+  ): ServiceOutcome {
+    const service = this.service;
+    return await __zappInvoke${generatedName(service.name)}(
+      move service,
+      in invocation
+    );
+  }${lifecycle}
+}
+
+export function __zappAdapt${generatedName(service.name)}(
+  service: ${service.type}
+): ${adapter} {
+  return new ${adapter}({ service: move service });
 }`;
 }
 
@@ -342,6 +389,18 @@ import { thread } from "std/thread";
 import { ServiceInvocation, ServiceOutcome } from ${JSON.stringify(
     relativeModule(options.outputPath, options.serviceContractModule),
   )};
+import { AsyncService } from ${JSON.stringify(
+    relativeModule(options.outputPath, options.asyncServiceContractModule),
+  )};
+${manifest.services.some((service) => service.lifecycle)
+    ? `import {
+  ApplicationContext,
+  ServiceLifecycle,
+  ServiceLifecycleError,
+} from ${JSON.stringify(
+      relativeModule(options.outputPath, options.serviceLifecycleContractModule),
+    )};`
+    : ""}
 ${nativeImports}
 
 struct __ZappServiceCodecError {

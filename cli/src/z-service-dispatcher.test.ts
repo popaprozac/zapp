@@ -24,8 +24,16 @@ const manifest: ZServiceManifest = {
   services: [{
     name: "notes",
     type: "NotesService",
+    kind: "class",
     module: "/workspace/app/notes-service.zs",
     lifecycle: true,
+    registration: {
+      module: "/workspace/app/main.zs",
+      offset: 100,
+      line: 20,
+      column: 24,
+      method: "ApplicationServicesBuilder.registerAsyncWithLifecycle",
+    },
     methods: [
       {
         id: 3_539_395_672,
@@ -54,6 +62,8 @@ describe("generated Z service dispatch", () => {
     const source = renderZServiceDispatchers(manifest, {
       outputPath: "/workspace/generated/service-dispatchers.zs",
       serviceContractModule: "/workspace/framework/service-contract.zs",
+      asyncServiceContractModule: "/workspace/framework/async-service-contract.zs",
+      serviceLifecycleContractModule: "/workspace/framework/service-lifecycle-contract.zs",
     });
     expect(source).toContain(
       'import { CreateNoteInput, Note } from "../app/notes-core.zs";',
@@ -67,6 +77,10 @@ describe("generated Z service dispatch", () => {
     expect(source).toContain("__zappDecodeCreateNoteInput");
     expect(source).toContain("__zappEncodeNote");
     expect(source).toContain('ServiceOutcome.failure("UNKNOWN_METHOD")');
+    expect(source).toContain(
+      "class __ZappNotesServiceAdapter implements AsyncService, ServiceLifecycle",
+    );
+    expect(source).toContain("function __zappAdaptNotes(");
   });
 
   it("rejects writable request capabilities at generation time", () => {
@@ -75,6 +89,8 @@ describe("generated Z service dispatch", () => {
     expect(() => renderZServiceDispatchers(invalid, {
       outputPath: "/workspace/generated/service-dispatchers.zs",
       serviceContractModule: "/workspace/framework/service-contract.zs",
+      asyncServiceContractModule: "/workspace/framework/async-service-contract.zs",
+      serviceLifecycleContractModule: "/workspace/framework/service-lifecycle-contract.zs",
     })).toThrow(/does not support inout input capability/);
   });
 });

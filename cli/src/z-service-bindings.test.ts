@@ -25,8 +25,16 @@ const manifest: ZServiceManifest = {
   services: [{
     name: "notes",
     type: "NotesService",
+    kind: "class",
     module: "/app.zs",
     lifecycle: true,
+    registration: {
+      module: "/app.zs",
+      offset: 100,
+      line: 20,
+      column: 24,
+      method: "ApplicationServicesBuilder.registerWithLifecycle",
+    },
     methods: [
       {
         id: 3_539_395_672,
