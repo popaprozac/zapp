@@ -1,6 +1,8 @@
 // Zapp config loader — reads zapp.config.ts
 
 import path from "node:path";
+import { existsSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
 // Type-only import — erased at compile time. config.ts is bundled standalone
 // by the cli prepack (dist/config.js backs the `@zappdev/cli/config` export
 // for user zapp.config.ts files); a VALUE import of ./native would drag the
@@ -832,8 +834,60 @@ export interface ResolvedConfig extends ZappConfig {
   assetDir: string;
 }
 
-export function defineConfig(config: ZappConfig): ZappConfig {
-  return config;
+export type ZappConfigCommand = "dev" | "build" | "package";
+export type ZappConfigMode = "development" | "production";
+export type ZappTargetOS = "macos" | "ios" | "windows" | "linux";
+export type ZappTargetArch = "arm64" | "x64";
+export type ZappTargetEnvironment = "desktop" | "simulator" | "device";
+
+export interface ZappConfigContext {
+  command: ZappConfigCommand;
+  mode: ZappConfigMode;
+  target: {
+    os: ZappTargetOS;
+    arch: ZappTargetArch;
+    environment: ZappTargetEnvironment;
+  };
+  /** Absolute project root. Useful for resolving imported build inputs. */
+  root: string;
+}
+
+export type ZappConfigFactory = (
+  context: ZappConfigContext,
+) => ZappConfig | Promise<ZappConfig>;
+
+export type ZappConfigDefinition = ZappConfig | ZappConfigFactory;
+
+export function defineConfig(config: ZappConfig): ZappConfig;
+export function defineConfig(factory: ZappConfigFactory): ZappConfigFactory;
+export function defineConfig(
+  definition: ZappConfigDefinition,
+): ZappConfigDefinition {
+  return definition;
+}
+
+export function createConfigContext(
+  root: string,
+  command: ZappConfigCommand,
+  target: BuildTarget,
+): ZappConfigContext {
+  const os: ZappTargetOS = target === "macos" ? "macos"
+    : target === "windows" ? "windows"
+    : "ios";
+  const environment: ZappTargetEnvironment = target === "ios-simulator"
+    ? "simulator"
+    : target === "ios-device" ? "device"
+    : "desktop";
+  return {
+    command,
+    mode: command === "dev" ? "development" : "production",
+    target: {
+      os,
+      arch: process.arch === "arm64" ? "arm64" : "x64",
+      environment,
+    },
+    root: path.resolve(root),
+  };
 }
 
 // Validate the native: block — each of frameworks/linkFlags/sources must be a
@@ -997,12 +1051,97 @@ async function substituteZjsOnWindows(config: ZappConfig): Promise<void> {
   }
 }
 
-export async function loadConfig(root: string): Promise<ResolvedConfig> {
-  const configPath = path.join(root, "zapp.config.ts");
+function serializableConfigClone(config: ZappConfig): ZappConfig {
+  const active = new WeakSet<object>();
+  const inspect = (value: unknown, location: string, inArray = false): void => {
+    if (value === undefined) {
+      if (inArray) {
+        throw new Error(`[zapp] ${location} cannot be undefined inside an array`);
+      }
+      return;
+    }
+    if (value === null || typeof value === "string" || typeof value === "boolean") return;
+    if (typeof value === "number") {
+      if (!Number.isFinite(value)) {
+        throw new Error(`[zapp] ${location} must be a finite number`);
+      }
+      return;
+    }
+    if (typeof value === "function" || typeof value === "symbol" || typeof value === "bigint") {
+      throw new Error(
+        `[zapp] ${location} must be serializable; received ${typeof value}`,
+      );
+    }
+    if (typeof value !== "object") return;
+    if (active.has(value)) {
+      throw new Error(`[zapp] ${location} contains a circular reference`);
+    }
+    active.add(value);
+    if (Array.isArray(value)) {
+      value.forEach((entry, index) => inspect(entry, `${location}[${index}]`, true));
+    } else {
+      const prototype = Object.getPrototypeOf(value);
+      if (prototype !== Object.prototype && prototype !== null) {
+        const name = prototype?.constructor?.name ?? "non-plain object";
+        throw new Error(
+          `[zapp] ${location} must be a plain serializable object; received ${name}`,
+        );
+      }
+      for (const [key, entry] of Object.entries(value)) {
+        inspect(entry, `${location}.${key}`);
+      }
+    }
+    active.delete(value);
+  };
+  inspect(config, "config");
+  return JSON.parse(JSON.stringify(config)) as ZappConfig;
+}
+
+async function writeResolvedConfigSnapshot(
+  root: string,
+  context: ZappConfigContext,
+  config: ResolvedConfig,
+): Promise<void> {
+  const directory = path.join(root, ".zapp");
+  await mkdir(directory, { recursive: true });
+  await writeFile(
+    path.join(directory, "config.resolved.json"),
+    JSON.stringify({
+      version: 1,
+      command: context.command,
+      mode: context.mode,
+      target: context.target,
+      config,
+    }, null, 2) + "\n",
+  );
+}
+
+export async function loadConfig(
+  root: string,
+  context: ZappConfigContext,
+): Promise<ResolvedConfig> {
+  const absoluteRoot = path.resolve(root);
+  const configPath = path.join(absoluteRoot, "zapp.config.ts");
+  if (!existsSync(configPath)) {
+    const fallback = {
+      name: path.basename(absoluteRoot),
+      assetDir: "./dist",
+    };
+    await writeResolvedConfigSnapshot(absoluteRoot, context, fallback);
+    return fallback;
+  }
   try {
     const mod = await import(configPath);
-    // Support both `export default defineConfig({...})` and `export default {...}`
-    const config = (typeof mod.default === "function" ? mod.default() : mod.default) as ZappConfig;
+    // Support both `export default defineConfig({...})` and a contextual
+    // `export default defineConfig((context) => ({...}))` factory.
+    const exported = mod.default as ZappConfigDefinition | undefined;
+    if (!exported) {
+      throw new Error("[zapp] zapp.config.ts must have a default export");
+    }
+    const authored = typeof exported === "function"
+      ? await exported(context)
+      : exported;
+    const config = serializableConfigClone(authored);
     validateWebEngine(config.webEngine);
     rejectRemovedEngines(config);
     await substituteZjsOnWindows(config);
@@ -1012,15 +1151,15 @@ export async function loadConfig(root: string): Promise<ResolvedConfig> {
       for (const e of permErrors) process.stderr.write(e + "\n");
       throw new Error(permErrors[0]);
     }
-    return {
+    const resolved = {
       ...config,
       assetDir: config.assetDir ?? "./dist",
     };
+    await writeResolvedConfigSnapshot(absoluteRoot, context, resolved);
+    return resolved;
   } catch (e) {
     if (e instanceof Error && e.message.startsWith("[zapp]")) throw e;
-    return {
-      name: path.basename(root),
-      assetDir: "./dist",
-    };
+    const detail = e instanceof Error ? e.message : String(e);
+    throw new Error(`[zapp] failed to load zapp.config.ts: ${detail}`, { cause: e });
   }
 }

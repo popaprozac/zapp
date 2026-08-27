@@ -231,16 +231,13 @@ quit(runApp())
     renderNimCfg({ frameworkNimDir, zappDir: path.join(projectDir, ".zapp") }),
   );
 
-  // 3. Add zapp.config.ts — typed via an \`import type\` annotation. Same
-  // IntelliSense as a defineConfig() wrapper, but the import is erased at
-  // compile time: the config loads with zero runtime module resolution, so
-  // it works in any layout (npm install, workspaces, the zapp monorepo)
-  // and can never fail at vite-config load time.
+  // 3. Add zapp.config.ts. defineConfig supplies contextual typing today and
+  // can accept a target/mode-aware factory when the application needs one.
+  // The CLI resolves it once into .zapp/config.resolved.json before Vite runs.
   const identifier = `com.zapp.${name.toLowerCase().replace(/[^a-z0-9]/g, "")}`;
-  await Bun.write(path.join(projectDir, "zapp.config.ts"), `// \`import type\` is erased at compile time — typed config with no runtime import.
-import type { ZappConfig } from "@zappdev/cli/config";
+  await Bun.write(path.join(projectDir, "zapp.config.ts"), `import { defineConfig } from "@zappdev/cli/config";
 
-const config: ZappConfig = {
+export default defineConfig({
   name: "${name}",
   identifier: "${identifier}",
   version: "0.1.0",
@@ -253,9 +250,7 @@ const config: ZappConfig = {
   //   headless: {
   //     db: { script: "src/workers/db.ts", engine: "zjs" },
   //   },
-};
-
-export default config;
+});
 `);
 
   // 4. Update package.json — add deps and scripts
@@ -298,7 +293,6 @@ export default config;
     // Add our imports at the top (after existing imports)
     const importLines = [
       `import { zappWorkers } from "@zappdev/vite";`,
-      `import zappConfig from "./zapp.config";`,
     ];
     for (const importLine of importLines) {
       const pkg = importLine.match(/from ["'](.+?)["']/)?.[1] ?? "";
@@ -312,11 +306,12 @@ export default config;
       }
     }
 
-    // Append zappWorkers() with config to the plugins array
+    // The plugin reads the normalized config snapshot the CLI writes before
+    // Vite starts, so contextual config factories stay out of Vite's graph.
     if (!viteConfig.includes("zappWorkers(")) {
       viteConfig = viteConfig.replace(
         /plugins:\s*\[/,
-        "plugins: [zappWorkers({ headless: zappConfig.headless }), "
+        "plugins: [zappWorkers(), "
       );
     }
 
@@ -325,10 +320,9 @@ export default config;
     // No vite.config found — create a minimal one
     await Bun.write(viteConfigPath, `import { defineConfig } from "vite";
 import { zappWorkers } from "@zappdev/vite";
-import zappConfig from "./zapp.config";
 
 export default defineConfig({
-  plugins: [zappWorkers({ headless: zappConfig.headless })],
+  plugins: [zappWorkers()],
 });
 `);
   }

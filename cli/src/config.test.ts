@@ -1,8 +1,76 @@
 import { test, expect } from "bun:test";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
+  createConfigContext, defineConfig, loadConfig,
   resolveNative, validateNative, validateWebEngine, resolveWebEngine,
   platformSupportsChromium, resolveWebEngineForBuild,
 } from "./config";
+
+test("defineConfig preserves object and contextual factory definitions", () => {
+  const object = { name: "notes" };
+  const factory = (context: ReturnType<typeof createConfigContext>) => ({
+    name: context.mode,
+  });
+  expect(defineConfig(object)).toBe(object);
+  expect(defineConfig(factory)).toBe(factory);
+});
+
+test("createConfigContext exposes command, mode, target, and project root", () => {
+  const context = createConfigContext(".", "dev", "ios-simulator");
+  expect(context.command).toBe("dev");
+  expect(context.mode).toBe("development");
+  expect(context.target.os).toBe("ios");
+  expect(context.target.environment).toBe("simulator");
+  expect(["arm64", "x64"]).toContain(context.target.arch);
+  expect(path.isAbsolute(context.root)).toBe(true);
+});
+
+test("loadConfig evaluates a contextual factory and writes the resolved snapshot", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "zapp-config-context-"));
+  try {
+    await writeFile(path.join(root, "zapp.config.ts"), `
+      export default async (context) => ({
+        name: context.command + "-" + context.target.os,
+        devPort: context.mode === "development" ? 4100 : 4200,
+      });
+    `);
+    const relativeRoot = path.relative(process.cwd(), root);
+    const context = createConfigContext(relativeRoot, "package", "macos");
+    const config = await loadConfig(relativeRoot, context);
+    expect(config.name).toBe("package-macos");
+    expect(config.devPort).toBe(4200);
+    expect(config.assetDir).toBe("./dist");
+
+    const snapshot = JSON.parse(
+      await readFile(path.join(root, ".zapp", "config.resolved.json"), "utf8"),
+    );
+    expect(snapshot.version).toBe(1);
+    expect(snapshot.command).toBe("package");
+    expect(snapshot.target.os).toBe("macos");
+    expect(snapshot.config).toEqual(config);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig rejects values that cannot enter the resolved build contract", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "zapp-config-invalid-"));
+  try {
+    await writeFile(path.join(root, "zapp.config.ts"), `
+      export default {
+        name: "invalid",
+        native: { sources: [() => "not serializable"] },
+      };
+    `);
+    await expect(
+      loadConfig(root, createConfigContext(root, "build", "macos")),
+    ).rejects.toThrow(/must be serializable/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("resolveNative reads the grouped native block", () => {
   const cfg = { native: { frameworks: ["CoreLocation"], linkFlags: ["-lfoo"], sources: ["a.m"] } } as any;

@@ -701,6 +701,29 @@ interface ZappWorkersOptions {
   workerModules?: string[];
 }
 
+async function resolveWorkerOptions(
+  root: string,
+  authored: ZappWorkersOptions | undefined,
+): Promise<ZappWorkersOptions> {
+  const snapshotPath = path.join(root, ".zapp", "config.resolved.json");
+  if (!existsSync(snapshotPath)) return authored ?? {};
+  try {
+    const snapshot = JSON.parse(await readFile(snapshotPath, "utf8")) as {
+      config?: ZappWorkersOptions;
+    };
+    return {
+      headless: authored?.headless ?? snapshot.config?.headless,
+      workerModules: authored?.workerModules ?? snapshot.config?.workerModules,
+    };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `[zapp] failed to read ${path.relative(root, snapshotPath)}: ${detail}`,
+      { cause: error },
+    );
+  }
+}
+
 // Capability → worker-globals subpath. Must match
 // cli/src/config.ts's WORKER_MODULE_CAPABILITIES.globals values.
 // Vite plugin is published as a separate package so we duplicate this
@@ -785,6 +808,7 @@ export function zappWorkers(options?: ZappWorkersOptions): Plugin {
   let isDev = false;
   let mode = "production";
   let outDir = "";
+  let workerOptions = options ?? {};
 
   return {
     name: "zapp-workers",
@@ -817,11 +841,12 @@ export function zappWorkers(options?: ZappWorkersOptions): Plugin {
     },
 
     async buildStart() {
+      workerOptions = await resolveWorkerOptions(root, options);
       // Webview-spawned workers: discovered by scanning source.
       workers = await discoverWorkers(srcDir);
 
       // Headless workers: declared in zapp.config.ts.
-      headlessEntries = resolveHeadlessEntries(root, options?.headless);
+      headlessEntries = resolveHeadlessEntries(root, workerOptions.headless);
 
       // Auto-discovered workers don't carry an explicit engine, but if
       // any headless worker is `bare-hermes` they'll likely land on
@@ -871,6 +896,7 @@ export function zappWorkers(options?: ZappWorkersOptions): Plugin {
     // configureServer runs before buildStart, so we re-discover workers here
     // (buildStart's results aren't yet available).
     async configureServer(server: ViteDevServer) {
+      workerOptions = await resolveWorkerOptions(root, options);
       const devOutDir = path.join(root, ".zapp", "workers");
       // Wipe stale bundles first — otherwise renaming/deleting a worker,
       // changing a headless id, or flipping `bytecode` leaves orphaned
@@ -882,12 +908,12 @@ export function zappWorkers(options?: ZappWorkersOptions): Plugin {
       await mkdir(devOutDir, { recursive: true });
 
       workers = await discoverWorkers(srcDir);
-      headlessEntries = resolveHeadlessEntries(root, options?.headless);
+      headlessEntries = resolveHeadlessEntries(root, workerOptions.headless);
       inheritAutoWorkerEngine(workers, headlessEntries);
 
       const allEntries = [...workers, ...headlessEntries];
       for (const entry of allEntries) {
-        const ok = await bundleWorker(entry, devOutDir, aliases, root, mode, options?.workerModules ?? []);
+        const ok = await bundleWorker(entry, devOutDir, aliases, root, mode, workerOptions.workerModules ?? []);
         if (ok && zappLogLevel() >= 1) console.log(`[zapp] dev-bundled worker: ${entry.outputName}`);
       }
 
@@ -934,7 +960,7 @@ export function zappWorkers(options?: ZappWorkersOptions): Plugin {
       const allEntries = [...workers, ...headlessEntries];
 
       for (const entry of allEntries) {
-        const ok = await bundleWorker(entry, outDir, aliases, root, mode, options?.workerModules ?? []);
+        const ok = await bundleWorker(entry, outDir, aliases, root, mode, workerOptions.workerModules ?? []);
         if (ok && zappLogLevel() >= 1) {
           console.log(`[zapp] bundled worker: ${entry.outputName}`);
         }

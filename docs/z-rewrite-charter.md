@@ -50,6 +50,28 @@ Bun/Vite-oriented build experience remain TypeScript initially. They execute in
 the JavaScript ecosystem and are not native-core debt. The CLI can migrate later
 if doing so provides a concrete distribution, performance, or maintenance win.
 
+## Configuration boundary
+
+`z.json` belongs exclusively to the Z language and package toolchain. Zapp does
+not add framework-specific keys to it or depend on its unsettled internal
+schema. Zapp owns `zapp.config.ts`, which is an ergonomic build-time authoring
+surface for a web-oriented desktop framework.
+
+The config may be either a typed object or a contextual `defineConfig` factory
+that receives the command, mode, target OS/architecture/environment, and project
+root. Regardless of how it is authored, the result must be plain serializable
+data. The CLI validates and normalizes it into
+`.zapp/config.resolved.json`; frontend building, native compilation, packaging,
+and compiled application metadata consume that resolved contract rather than
+re-evaluating application policy independently.
+
+Executable configuration does not absorb runtime architecture. Services,
+windows, menus, lifecycle behavior, and mutable application state stay in Z
+source. The Z compiler does not evaluate or understand `zapp.config.ts`, and no
+TypeScript configuration evaluator ships in the application binary. A future
+static JSON authoring format can resolve to the same internal contract if a real
+non-TypeScript consumer requires it.
+
 Objective-C, C, and C++ are dependencies and ABI surfaces, not implementation
 languages Zapp must preserve. Z's checked imports and `.zd` contracts should
 replace handwritten bridge code progressively. Small native shims remain valid

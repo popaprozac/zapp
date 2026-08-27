@@ -3,7 +3,14 @@ import path from "node:path";
 import process from "node:process";
 import { mkdir, rm, cp } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { loadConfig, WORKER_MODULE_CAPABILITIES, type WorkerModuleId } from "./config";
+import {
+  createConfigContext,
+  loadConfig,
+  WORKER_MODULE_CAPABILITIES,
+  type ResolvedConfig,
+  type WorkerModuleId,
+  type ZappConfigCommand,
+} from "./config";
 import { generateBuildConfig, generatePlatformConfig, generateHeadlessWorkers, generateIOSBuildFile, generateEngineOverlay } from "./build-config";
 import { generateBindings } from "./generate";
 import { compileNative, ensureBareBuilt, bareEnginesEnabled, hasAnyWorkerEngine, detectTarget, isIOSTarget, type BuildTarget } from "./native";
@@ -185,7 +192,10 @@ async function runDev(root: string) {
     process.exit(1);
   }
 
-  const config = await loadConfig(root);
+  const config = await loadConfig(
+    root,
+    createConfigContext(root, "dev", target),
+  );
   const nativeDir = resolveNativeDir();
   const port = config.devPort ?? 5173;
   // iOS Simulator on Apple Silicon shares host network namespace, so
@@ -528,7 +538,10 @@ async function runDev(root: string) {
   cleanup(exitCode as number);
 }
 
-async function runBuild(root: string) {
+async function runBuild(
+  root: string,
+  configCommand: Extract<ZappConfigCommand, "build" | "package"> = "build",
+): Promise<ResolvedConfig> {
   if (process.platform !== "darwin" && process.platform !== "win32") {
     clogError("build is currently macOS and Windows only.");
     process.exit(1);
@@ -544,7 +557,10 @@ async function runBuild(root: string) {
     clog(0, `target: ${target}`);
   }
 
-  const config = await loadConfig(root);
+  const config = await loadConfig(
+    root,
+    createConfigContext(root, configCommand, target),
+  );
   const nativeDir = resolveNativeDir();
 
   // 0. Check worker engine. Workers are opt-in: a project either
@@ -622,7 +638,7 @@ async function runBuild(root: string) {
     });
     const size = Bun.file(nativeOut).size;
     clog(0, `build complete: ${nativeOut} (${Math.round(size / 1024)} KB, Phase 0 Z core)`);
-    return;
+    return config;
   }
 
   // 4. Generate engine overlay (auto-defines for engines named in
@@ -728,6 +744,7 @@ async function runBuild(root: string) {
   const stat = Bun.file(nativeOut);
   const size = stat.size;
   clog(0, `build complete: ${nativeOut} (${Math.round(size / 1024)} KB)`);
+  return config;
 }
 
 async function runPackage(root: string) {
@@ -742,9 +759,7 @@ async function runPackage(root: string) {
   }
 
   // Run a full build first
-  await runBuild(root);
-
-  const config = await loadConfig(root);
+  const config = await runBuild(root, "package");
   const binDir = path.join(root, "bin");
   const binaryPath = path.join(binDir, config.name.replace(/\s+/g, "-").toLowerCase());
 
