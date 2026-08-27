@@ -6,13 +6,14 @@
 // (which gates the WebView's FS API). Without a wrapper, code in a
 // Zapp worker that does `import fs from 'bare-fs'` would have full
 // process-level filesystem access regardless of the project's
-// `fs.allow` config.
+// `security.filesystem.allow` config.
 //
 // This module re-exports bare-fs's surface with each call gated by a
 // prefix-match against an allowlist. The allowlist is sourced from the
 // host process — bare workers receive it via
 // `globalThis.__zappBridge.fsAllowlist` during the worker bootstrap
-// (the Zapp CLI populates it from the project's `fs.allow` config plus
+// (the Zapp CLI populates it from the project's
+// `security.filesystem.allow` config plus
 // any runtime grants from the dialog API).
 //
 // Usage in a Zapp worker:
@@ -67,7 +68,7 @@ export class FsAllowlistError extends Error {
       `[zapp] filesystem access denied: "${path}" is not under any allowed prefix.\n` +
       (allowlist.length === 0
         ? "  No allowlist configured. Add to zapp.config.ts:\n" +
-          "    fs: { allow: [\"~/Library/Application Support/your-app\"] }\n"
+          "    security: { filesystem: { allow: [\"~/Library/Application Support/your-app\"] } }\n"
         : "  Allowed prefixes:\n" + allowlist.map(p => `    ${p}`).join("\n"))
     );
     this.name = "FsAllowlistError";

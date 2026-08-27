@@ -18,18 +18,16 @@ bun add -D @zappdev/vite
 // vite.config.ts
 import { defineConfig } from "vite";
 import { zappWorkers } from "@zappdev/vite";
-import zappConfig from "./zapp.config";
 
 export default defineConfig({
-  plugins: [
-    zappWorkers({ headless: zappConfig.headless }),
-    // ...your other plugins
-  ],
+  plugins: [zappWorkers()],
 });
 ```
 
-Pass `headless` directly from your `zapp.config.ts` so the plugin stays
-in lockstep with the rest of the build.
+The Zapp CLI evaluates `zapp.config.ts` once, validates it, and writes a
+normalized `.zapp/config.resolved.json` snapshot before Vite starts. The plugin
+reads worker configuration from that snapshot; `vite.config.ts` never imports
+or re-evaluates executable Zapp configuration.
 
 ## What the plugin does
 
@@ -46,7 +44,7 @@ script:
 
 ### Headless worker bundling
 
-For each entry in `zapp.config.ts → headless: { id: "path" }`, bundles the
+For each entry in `zapp.config.ts → workers.headless: { id: "path" }`, bundles the
 source to `dist/_workers/_headless_<id>.mjs`. Native code loads these at
 app boot via the generated `.zapp/zapp_headless_workers.zc`.
 
@@ -69,7 +67,7 @@ worker code.
 interface ZappWorkersOptions {
   /**
    * Headless workers: map of worker ID → source path (relative to project root).
-   * Usually passed straight from zapp.config.ts's `headless` field.
+   * Optional integration override. Ordinary Zapp apps use the CLI snapshot.
    */
   headless?: Record<string, string>;
 }

@@ -27,8 +27,8 @@ control) that own their own subtree, not framework chrome.
 2. In your app's `zapp.config.ts`, link it + compile the ObjC host:
    ```ts
    native: {
-     sources:   { macos: ["examples/swift-nim-bridge/nativesurface.m"] },
-     linkFlags: { macos: ["-L<dir-with-libzappbridge.a>", "-lzappbridge",
+     sources:   { macOS: ["examples/swift-nim-bridge/nativesurface.m"] },
+     linkFlags: { macOS: ["-L<dir-with-libzappbridge.a>", "-lzappbridge",
                           "-lswiftCore", "-lswiftFoundation",
                           "-Xlinker", "-rpath", "-Xlinker", "/usr/lib/swift",
                           "-framework", "SwiftUI"] },

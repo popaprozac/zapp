@@ -1525,7 +1525,7 @@ export interface WindowHandle {
 
   /**
    * Open DevTools for this window's web content, in its own standalone
-   * window. Engine-aware: on a CEF (`webEngine:"chromium"`) window this opens
+   * window. Engine-aware: on a CEF (`webview.engine: "chromium"`) window this opens
    * real Chromium DevTools (dev-gated — same `webContentInspectable` gate as
    * the WKWebView inspector); on a standard WKWebView window this is a no-op
    * (use the macOS system Develop menu / right-click "Inspect Element").

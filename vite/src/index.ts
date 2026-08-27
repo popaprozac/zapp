@@ -691,12 +691,13 @@ interface ZappWorkersOptions {
    */
   headless?: Record<string, string | { script: string; restart?: unknown; engine?: string; bytecode?: boolean }>;
   /**
-   * Worker capabilities (see ZappConfig.workerModules). For each entry
+   * Worker capabilities (see ZappConfig.workers.capabilities). For each entry
    * we prepend `import "@zappdev/runtime/worker-globals/<subpath>"` to
    * every bundled worker entry, so the matching globals (fetch,
    * WebSocket, etc.) are installed without per-worker boilerplate.
    *
-   * Pass through from `zapp.config.ts`'s `workerModules` field.
+   * Optional direct override for integration authors. Ordinary applications
+   * receive `workers.capabilities` through the resolved CLI snapshot.
    */
   workerModules?: string[];
 }

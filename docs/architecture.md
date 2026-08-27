@@ -345,7 +345,7 @@ context for app-level work. That design had two problems:
 0.6.0-alpha collapsed the backend worker into the regular worker slot
 system. Now:
 - You can have as many headless workers as you want, declared in
-  `zapp.config.ts → headless: { id: path }`.
+  `zapp.config.ts → workers.headless: { id: path }`.
 - Every worker (headless or webview-spawned) uses the same bootstrap and
   gets the same host objects.
 - The name "backend" reads as "web server backend" — we renamed to

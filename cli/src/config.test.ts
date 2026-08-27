@@ -9,9 +9,9 @@ import {
 } from "./config";
 
 test("defineConfig preserves object and contextual factory definitions", () => {
-  const object = { name: "notes" };
+  const object = { application: { name: "notes" } };
   const factory = (context: ReturnType<typeof createConfigContext>) => ({
-    name: context.mode,
+    application: { name: context.mode },
   });
   expect(defineConfig(object)).toBe(object);
   expect(defineConfig(factory)).toBe(factory);
@@ -32,16 +32,67 @@ test("loadConfig evaluates a contextual factory and writes the resolved snapshot
   try {
     await writeFile(path.join(root, "zapp.config.ts"), `
       export default async (context) => ({
-        name: context.command + "-" + context.target.os,
-        devPort: context.mode === "development" ? 4100 : 4200,
+        application: {
+          name: context.command + "-" + context.target.os,
+          identifier: "com.example.notes",
+          version: "1.2.3",
+          singleInstance: true,
+          deepLinks: ["notes"],
+        },
+        frontend: {
+          assets: "./web-dist",
+          devServer: { port: context.mode === "development" ? 4100 : 4200 },
+          compressAssets: false,
+        },
+        webview: {
+          engine: { macOS: "chromium", windows: "system" },
+          protocols: ["asset"],
+          preferences: { minimumFontSize: 14 },
+        },
+        workers: {
+          headless: { indexer: "src/workers/indexer.ts" },
+          capabilities: ["fetch"],
+        },
+        security: {
+          permissions: ["clipboard:read"],
+          filesystem: { allow: ["$userData"] },
+        },
+        native: {
+          frameworks: { macOS: ["AppKit"] },
+          linkFlags: ["-lsqlite3"],
+          sources: ["native/helper.m"],
+        },
+        targets: {
+          macOS: { minimumSystemVersion: "14.0" },
+          iOS: { minimumSystemVersion: "17.0" },
+        },
       });
     `);
     const relativeRoot = path.relative(process.cwd(), root);
     const context = createConfigContext(relativeRoot, "package", "macos");
     const config = await loadConfig(relativeRoot, context);
     expect(config.name).toBe("package-macos");
+    expect(config.identifier).toBe("com.example.notes");
+    expect(config.version).toBe("1.2.3");
+    expect(config.singleInstance).toBe(true);
     expect(config.devPort).toBe(4200);
-    expect(config.assetDir).toBe("./dist");
+    expect(config.assetDir).toBe("./web-dist");
+    expect(config.compressAssets).toBe(false);
+    expect(config.deepLinkSchemes).toEqual(["notes"]);
+    expect(config.webEngine).toEqual({ macOS: "chromium", windows: "system" });
+    expect(config.protocols).toEqual(["asset"]);
+    expect(config.webviewPreferences).toEqual({ minimumFontSize: 14 });
+    expect(config.headless).toEqual({ indexer: "src/workers/indexer.ts" });
+    expect(config.workerModules).toEqual(["fetch"]);
+    expect(config.permissions).toEqual(["clipboard:read"]);
+    expect(config.fs).toEqual({ allow: ["$userData"] });
+    expect(config.native).toEqual({
+      frameworks: { macOS: ["AppKit"] },
+      linkFlags: ["-lsqlite3"],
+      sources: ["native/helper.m"],
+    });
+    expect(config.macos).toEqual({ minimumSystemVersion: "14.0" });
+    expect(config.ios).toEqual({ minimumSystemVersion: "17.0" });
 
     const snapshot = JSON.parse(
       await readFile(path.join(root, ".zapp", "config.resolved.json"), "utf8"),
@@ -60,7 +111,7 @@ test("loadConfig rejects values that cannot enter the resolved build contract", 
   try {
     await writeFile(path.join(root, "zapp.config.ts"), `
       export default {
-        name: "invalid",
+        application: { name: "invalid" },
         native: { sources: [() => "not serializable"] },
       };
     `);
@@ -79,20 +130,8 @@ test("resolveNative reads the grouped native block", () => {
   });
 });
 
-test("resolveNative falls back to the deprecated flat fields", () => {
-  const cfg = { extraFrameworks: ["Contacts"], extraLinkFlags: ["-lbar"], nativeSources: ["b.c"] } as any;
-  expect(resolveNative(cfg, "macos")).toEqual({
-    frameworks: ["Contacts"], linkFlags: ["-lbar"], sources: ["b.c"],
-  });
-});
-
-test("resolveNative merges grouped + flat (grouped first, then flat, deduped)", () => {
-  const cfg = { native: { frameworks: ["A"] }, extraFrameworks: ["A", "B"] } as any;
-  expect(resolveNative(cfg, "macos").frameworks).toEqual(["A", "B"]);
-});
-
 test("resolveNative resolves per-platform PlatformValue maps for the target", () => {
-  const cfg = { native: { frameworks: { macos: ["MacFW"], ios: ["IosFW"] } } } as any;
+  const cfg = { native: { frameworks: { macOS: ["MacFW"], iOS: ["IosFW"] } } } as any;
   expect(resolveNative(cfg, "macos").frameworks).toEqual(["MacFW"]);
   expect(resolveNative(cfg, "ios-simulator").frameworks).toEqual(["IosFW"]);
 });
@@ -103,7 +142,7 @@ test("resolveNative returns empty arrays when nothing is set", () => {
 
 test("validateNative accepts arrays + per-platform maps", () => {
   expect(() => validateNative({ native: { frameworks: ["A"], linkFlags: ["-lx"] } } as any)).not.toThrow();
-  expect(() => validateNative({ native: { frameworks: { macos: ["A"], ios: ["B"] } } } as any)).not.toThrow();
+  expect(() => validateNative({ native: { frameworks: { macOS: ["A"], iOS: ["B"] } } } as any)).not.toThrow();
   expect(() => validateNative({} as any)).not.toThrow();
 });
 
@@ -113,6 +152,11 @@ test("validateNative rejects a non-array / non-map value", () => {
 
 test("validateNative rejects non-string array entries", () => {
   expect(() => validateNative({ native: { linkFlags: [1, 2] } } as any)).toThrow(/native\.linkFlags/);
+});
+
+test("validateNative rejects misspelled platform keys", () => {
+  expect(() => validateNative({ native: { frameworks: { macos: ["A"] } } } as any))
+    .toThrow(/use macOS, iOS, windows, or linux/);
 });
 
 // webEngine: "chromium" is now an accepted early-access opt-in (CEF
@@ -130,7 +174,7 @@ test("validateWebEngine accepts \"system\" and unset", () => {
 });
 
 test("validateWebEngine still rejects unknown values", () => {
-  expect(() => validateWebEngine("blink" as any)).toThrow(/webEngine/);
+  expect(() => validateWebEngine("blink" as any)).toThrow(/webview\.engine/);
 });
 
 // --- resolveWebEngine: string form applies to every target ---
@@ -147,19 +191,19 @@ test("resolveWebEngine defaults to system when unset", () => {
 
 // --- resolveWebEngine: map form resolves per platform, missing key => system ---
 test("resolveWebEngine map form resolves per platform", () => {
-  const cfg = { webEngine: { macos: "chromium", windows: "system" } } as any;
+  const cfg = { webEngine: { macOS: "chromium", windows: "system" } } as any;
   expect(resolveWebEngine(cfg, "macos")).toBe("chromium");
   expect(resolveWebEngine(cfg, "windows")).toBe("system");
 });
 
 test("resolveWebEngine map form: missing key defaults to system", () => {
-  const cfg = { webEngine: { macos: "chromium" } } as any; // no windows/ios key
+  const cfg = { webEngine: { macOS: "chromium" } } as any; // no windows/iOS key
   expect(resolveWebEngine(cfg, "windows")).toBe("system");
   expect(resolveWebEngine(cfg, "ios-simulator")).toBe("system");
 });
 
-test("resolveWebEngine collapses both iOS subtargets to the ios key", () => {
-  const cfg = { webEngine: { ios: "chromium" } } as any;
+test("resolveWebEngine collapses both iOS subtargets to the iOS key", () => {
+  const cfg = { webEngine: { iOS: "chromium" } } as any;
   expect(resolveWebEngine(cfg, "ios-simulator")).toBe("chromium");
   expect(resolveWebEngine(cfg, "ios-device")).toBe("chromium");
 });
@@ -193,10 +237,12 @@ test("validateWebEngine accepts string and map forms", () => {
   expect(() => validateWebEngine("chromium")).not.toThrow();
   expect(() => validateWebEngine("system")).not.toThrow();
   expect(() => validateWebEngine(undefined)).not.toThrow();
-  expect(() => validateWebEngine({ macos: "chromium", windows: "system" } as any)).not.toThrow();
+  expect(() => validateWebEngine({ macOS: "chromium", windows: "system" } as any)).not.toThrow();
 });
 
 test("validateWebEngine throws on a garbage value in either form", () => {
-  expect(() => validateWebEngine("blink" as any)).toThrow(/webEngine/);
-  expect(() => validateWebEngine({ windows: "blink" } as any)).toThrow(/webEngine/);
+  expect(() => validateWebEngine("blink" as any)).toThrow(/webview\.engine/);
+  expect(() => validateWebEngine({ windows: "blink" } as any)).toThrow(/webview\.engine/);
+  expect(() => validateWebEngine({ macos: "system" } as any))
+    .toThrow(/use macOS, iOS, windows, or linux/);
 });

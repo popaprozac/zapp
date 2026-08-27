@@ -498,270 +498,79 @@ export interface WebviewPreferences {
   minimumFontSize?: number;
 }
 
-export interface ZappConfig {
+export interface ApplicationConfig {
+  /** Human-readable product name. */
   name: string;
+  /** Reverse-DNS application identifier. */
   identifier?: string;
+  /** Application version embedded into native packages. */
   version?: string;
-  assetDir?: string;  // Default: "./dist" (Vite), configurable for static sites
-  devPort?: number;   // Default: 5173
-  /**
-   * Brotli-compress embedded web assets in prod builds (`zapp build`/`package`).
-   * Default `true`. Already-compressed types (png/jpg/woff2/...) are stored raw
-   * regardless — q11 on them is wasted build time for ~0 gain. Set `false` to
-   * skip compression entirely (faster builds, larger binary). On Windows, embeds
-   * are always raw (no runtime brotli decoder yet — see task #516).
-   */
-  compressAssets?: boolean;
-  /**
-   * Headless workers to start at app boot, keyed by ID.
-   *
-   * Two shapes per entry:
-   *
-   *   - `string` — script path. Worker starts at boot, no auto-restart.
-   *   - `{ script, restart? }` — same plus an optional restart policy.
-   *
-   * IDs are used for termination via `Workers.terminate(id)` and for
-   * the supervisor's `worker:crashed` / `worker:restarted` /
-   * `worker:gave-up` events.
-   *
-   * @example
-   * ```ts
-   * headless: {
-   *   db: "src/workers/db.ts",                     // simple
-   *   sync: {
-   *     script: "src/workers/sync.ts",
-   *     restart: { maxRetries: 3, withinMs: 60_000 }, // supervised
-   *   },
-   * }
-   * ```
-   */
-  headless?: Record<string, string | HeadlessWorkerConfig>;
-  /**
-   * Worker capabilities to enable. Each entry is a high-level
-   * capability name (e.g. `"fetch"`, `"websocket"`, `"fs"`) — the
-   * CLI maps it to the underlying bare-* package(s), verifies
-   * install, and auto-prepends the matching
-   * `@zappdev/runtime/worker-globals/<subpath>` import so the
-   * global API (`fetch`, `WebSocket`, etc.) is available in every
-   * worker without per-worker boilerplate.
-   *
-   * On bare engines, the package's native bindings (`binding.c`)
-   * are also auto-compiled into `libbare_modules.a` via the
-   * side-cmake overlay (see `ensureUserBareModulesCompiled`).
-   *
-   * @example
-   * ```ts
-   * workerModules: ["fetch", "websocket"]
-   * ```
-   *
-   * @example
-   * ```ts
-   * // src/worker.ts — no per-worker imports needed
-   * fetch("https://example.com").then(r => r.text());
-   * ```
-   */
-  workerModules?: WorkerModuleId[];
-  deepLinkSchemes?: string[];  // e.g. ["myapp"] → registers myapp:// URL scheme
-  /**
-   * Custom in-webview URL protocols (G19). Each scheme listed here
-   * is registered on every WKWebView's configuration so navigation
-   * / fetch requests with that scheme route to a JS handler registered
-   * via `Protocols.register("scheme", handler)` in the runtime.
-   *
-   * Use cases:
-   *  - `"asset"` for app-managed user uploads served from a DB or
-   *    encrypted store
-   *  - `"media"` for on-the-fly resized / transcoded images
-   *  - `"vault"` for content that must be decrypted before reaching
-   *    the webview
-   *
-   * **Different from `deepLinkSchemes`** — those are system-wide URL
-   * schemes registered with macOS so `myapp://open/...` from another
-   * app fires `App.on(AppEvent.OPEN_URL, ...)`. `protocols` are
-   * webview-internal: they only intercept requests inside Zapp's
-   * own WebViews.
-   *
-   * Schemes must be declared at build time (WKWebView's scheme
-   * registration is config-time only — can't be added after a
-   * webview is created).
-   *
-   * @example
-   * ```ts
-   * protocols: ["asset", "media"]
-   * ```
-   */
-  protocols?: string[];
-  /**
-   * Single-instance enforcement. When `true`, only one copy of the app
-   * can run at a time — Launch Services refuses second-launch attempts
-   * (`open -n` / duplicated bundles). On macOS this maps to
-   * `LSMultipleInstancesProhibited` in Info.plist.
-   *
-   * Deep-link clicks (`myapp://...`) and dock-icon reopens already
-   * route to the running instance via `App.on(AppEvent.OPEN_URL)` /
-   * `AppEvent.REOPEN`; `singleInstance: true` prevents the duplicate
-   * instances that would otherwise be spawned by `open -n`.
-   *
-   * Default: `false` (matches macOS-native behavior). Most desktop apps
-   * want `true`; menu-bar / sync-engine apps almost always want `true`
-   * to keep local state coherent.
-   *
-   * No-op on iOS (apps are always single-instance there by platform
-   * contract). Windows handling lands later.
-   */
+  /** Prevent multiple application instances where the platform supports it. */
   singleInstance?: boolean;
-  /** Filesystem allowlist. See {@link FsConfig}. */
-  fs?: FsConfig;
-  /**
-   * Declarative native-capability allowlist (built-ins only in v1).
-   *
-   * Absent → everything allowed (legacy behavior). Present → exhaustive:
-   * any built-in capability not listed is denied, enforced natively.
-   * A bare module name grants all its verbs ("clipboard" ⊇ ":read"+":write").
-   * See docs/security.md for the catalog and trust model.
-   */
-  permissions?: ZappPermission[];
-  macos?: MacOSConfig;
-  /** iOS-specific configuration. See {@link IOSConfig}. */
-  ios?: IOSConfig;
-  /**
-   * Webview engine for the main window. Determines what renders the
-   * UI on macOS / Windows / Linux (iOS is always WKWebView by platform
-   * contract). Value may be a bare string (applies to every platform)
-   * or a per-platform map `{ macos, ios, windows }` — a missing key
-   * resolves to `"system"`.
-   *
-   *   - **`"system"`** *(default)* — system WebView. WKWebView on
-   *     macOS, WebView2 on Windows, WebKitGTK on Linux. Tiny binary
-   *     (445 KB on macOS), zero runtime overhead, modern web standards.
-   *     The right answer for >99% of apps.
-   *
-   *   - **`"chromium"`** *(early-access, macOS only)* — bundled Chromium
-   *     via CEF. For apps where the system WebView produces a visible
-   *     rendering mismatch with desktop Chrome (rare in practice for
-   *     modern web stacks; mostly impacts WebGL extensions and certain
-   *     Web Animations edge cases). Adds ~289 MB to the binary, so picks
-   *     a different trade-off than Zapp's default pitch.
-   *
-   *     Opt-in and gated: accepted on any platform, but a target with no
-   *     CEF build (everything but macOS today) is downgraded to
-   *     `"system"` at build time. Fullbleed-web only (no native chrome —
-   *     sidebar / inspector / toolbar — on the `chromium` path yet).
-   *
-   * @default "system"
-   */
-  webEngine?: PlatformValue<WebEngine>;
+  /** System-visible URL schemes, without `://`. */
+  deepLinks?: string[];
+}
 
-  /**
-   * Webview-engine preferences applied at WKWebView / WebView2 / WebKitGTK
-   * construction time. Every field is optional — unset fields keep the
-   * platform default. macOS + iOS share the same WKWebView code path
-   * and respect all fields below; Windows / Linux land later.
-   *
-   * @example
-   * ```ts
-   * webviewPreferences: {
-   *   autoplayWithoutUserGesture: true,    // media-player / dashboard apps
-   *   backForwardNavigationGestures: false, // app-shell, not a browser
-   *   textInteractionEnabled: false,        // kiosk / display-only screens
-   *   minimumFontSize: 14,                  // a11y floor
-   * }
-   * ```
-   */
-  webviewPreferences?: WebviewPreferences;
-
-  /**
-   * Extra native source files to compile into the app binary. Use this
-   * to ship a custom ObjC service (`.m`), Win32 helper (`.c`), or any
-   * other native module that the framework's own platform plumbing
-   * doesn't already include.
-   *
-   * Each path is resolved relative to the project root and forwarded
-   * to the platform's cflags line in `.zapp/zapp_platform.zc`. You
-   * still need to declare the service in Zen-C (typically
-   * `zapp/app.zc` calling `app.service.add("name", c_handler)` plus
-   * an `extern fn c_handler(...)` declaration).
-   *
-   * Either a single list (applied on every platform that compiles it)
-   * or a per-platform map. Per-platform is the usual case — ObjC
-   * sources only make sense on Apple, COM/Win32 sources only on
-   * Windows.
-   *
-   * @example
-   * ```ts
-   * // ObjC service on macOS only
-   * nativeSources: { macos: ["src/native/MyService.m"] }
-   *
-   * // Cross-platform C helper
-   * nativeSources: ["src/native/helper.c"]
-   * ```
-   *
-   * @deprecated use `native.sources`
-   */
-  nativeSources?: PlatformValue<string[]>;
-
-  /**
-   * Additional system frameworks to link into the app binary, beyond
-   * the framework-internal set Zapp already pulls (Cocoa / WebKit /
-   * JavaScriptCore / UserNotifications / Carbon / Foundation / …).
-   *
-   * Names are passed straight to `clang -framework`. No-op on Windows
-   * (frameworks are Apple-specific); use `extraLinkFlags.windows` for
-   * `-l<name>` on that platform.
-   *
-   * @example
-   * ```ts
-   * // App uses Metal on Apple, nothing extra on Windows.
-   * extraFrameworks: { macos: ["Metal"], ios: ["Metal"] }
-   * ```
-   *
-   * @deprecated use `native.frameworks`
-   */
-  extraFrameworks?: PlatformValue<string[]>;
-
-  /**
-   * Extra raw link flags appended to the platform's `//> link:` line.
-   * Use for `-l<name>` libraries the framework doesn't pull, custom
-   * search paths (`-L/path`), or platform-specific link-time options.
-   *
-   * Per-platform is the usual case — `-l` syntax is the same shape on
-   * Apple and Linux but the library names differ.
-   *
-   * @example
-   * ```ts
-   * extraLinkFlags: {
-   *   macos:   ["-lsqlite3"],
-   *   windows: ["-lws2_32"],
-   * }
-   * ```
-   *
-   * @deprecated use `native.linkFlags`
-   */
-  extraLinkFlags?: PlatformValue<string[]>;
-
-  /**
-   * Native build extras — the Tauri-style escape hatch for linking system
-   * frameworks, raw linker flags, and extra native source files. Each value is
-   * either an array (all targets) or a per-platform map (PlatformValue).
-   *
-   * This grouped block supersedes the flat `extraFrameworks` /
-   * `extraLinkFlags` / `nativeSources` fields. Both are still honored and
-   * merged (grouped first, then flat, de-duplicated) via `resolveNative`.
-   *
-   * @example
-   * ```ts
-   * native: {
-   *   frameworks: { macos: ["CoreLocation"], ios: ["CoreLocation"] },
-   *   linkFlags:  { macos: ["-lsqlite3"], windows: ["-lws2_32"] },
-   *   sources:    { macos: ["src/native/MyService.m"] },
-   * }
-   * ```
-   */
-  native?: {
-    frameworks?: PlatformValue<string[]>;
-    linkFlags?: PlatformValue<string[]>;
-    sources?: PlatformValue<string[]>;
+export interface FrontendConfig {
+  /** Directory containing the built frontend. @default "./dist" */
+  assets?: string;
+  /** Development-server settings used by `zapp dev`. */
+  devServer?: {
+    /** @default 5173 */
+    port?: number;
   };
+  /** Brotli-compress eligible embedded assets in production. @default true */
+  compressAssets?: boolean;
+}
+
+export interface WebviewConfig {
+  /** Main WebView engine. The system engine remains the default. */
+  engine?: PlatformValue<WebEngine>;
+  /** URL schemes handled inside Zapp WebViews rather than by the OS. */
+  protocols?: string[];
+  /** Engine preferences applied when each WebView is constructed. */
+  preferences?: WebviewPreferences;
+}
+
+export interface WorkersConfig {
+  /** Headless workers started with application lifetime, keyed by ID. */
+  headless?: Record<string, string | HeadlessWorkerConfig>;
+  /** Web-compatible capabilities installed into first-party workers. */
+  capabilities?: WorkerModuleId[];
+}
+
+export interface SecurityConfig {
+  /** Exhaustive native-capability allowlist when present. */
+  permissions?: ZappPermission[];
+  /** Filesystem access and persisted dialog-grant policy. */
+  filesystem?: FsConfig;
+}
+
+export interface NativeConfig {
+  /** Additional system frameworks linked into the application. */
+  frameworks?: PlatformValue<string[]>;
+  /** Explicit linker flags for native dependencies and search paths. */
+  linkFlags?: PlatformValue<string[]>;
+  /** Additional C, C++, Objective-C, or other supported native sources. */
+  sources?: PlatformValue<string[]>;
+}
+
+export interface TargetConfig {
+  /** macOS packaging, signing, entitlement, and deployment settings. */
+  macOS?: MacOSConfig;
+  /** iOS packaging, signing, capability, and deployment settings. */
+  iOS?: IOSConfig;
+}
+
+/** Ergonomic, serializable authoring surface for `zapp.config.ts`. */
+export interface ZappConfig {
+  application: ApplicationConfig;
+  frontend?: FrontendConfig;
+  webview?: WebviewConfig;
+  workers?: WorkersConfig;
+  security?: SecurityConfig;
+  native?: NativeConfig;
+  targets?: TargetConfig;
 }
 
 /**
@@ -773,9 +582,10 @@ export interface ZappConfig {
 export type PlatformValue<T> =
   | T
   | {
-      macos?:   T;
-      ios?:     T;
+      macOS?:   T;
+      iOS?:     T;
       windows?: T;
+      linux?:   T;
     };
 
 /** Which engine renders the WebView content: system WebView or bundled CEF/Chromium. */
@@ -794,18 +604,12 @@ export function resolvePlatformValue<T>(
 ): T[] {
   if (!v) return [];
   if (Array.isArray(v)) return v;
-  return v[target] ?? [];
+  const key = target === "macos" ? "macOS" : target === "ios" ? "iOS" : "windows";
+  return v[key] ?? [];
 }
 
-/**
- * Merge the grouped `native:` block with the deprecated flat fields
- * (`extraFrameworks` / `extraLinkFlags` / `nativeSources`), resolved for
- * `target`. Grouped values come first, then flat, de-duplicated (order
- * preserved). Both iOS subtargets collapse to the `ios` map key — the same
- * bucket `resolvePlatformValue` uses elsewhere in the build.
- */
 export function resolveNative(
-  config: ZappConfig,
+  config: { native?: NativeConfig },
   target: BuildTarget,
 ): { frameworks: string[]; linkFlags: string[]; sources: string[] } {
   // Collapse BuildTarget → the narrow per-platform bucket key that
@@ -815,23 +619,33 @@ export function resolveNative(
     // Inlined isIOSTarget (./native) — see the type-only import note at top.
     : (target === "ios-simulator" || target === "ios-device") ? "ios"
     : "windows";
-  const dedupe = (xs: string[]) => [...new Set(xs)];
-  const merge = (
-    grouped: PlatformValue<string[]> | undefined,
-    flat: PlatformValue<string[]> | undefined,
-  ) => dedupe([
-    ...resolvePlatformValue(grouped, platformKey),
-    ...resolvePlatformValue(flat, platformKey),
-  ]);
   return {
-    frameworks: merge(config.native?.frameworks, config.extraFrameworks),
-    linkFlags: merge(config.native?.linkFlags, config.extraLinkFlags),
-    sources: merge(config.native?.sources, config.nativeSources),
+    frameworks: [...new Set(resolvePlatformValue(config.native?.frameworks, platformKey))],
+    linkFlags: [...new Set(resolvePlatformValue(config.native?.linkFlags, platformKey))],
+    sources: [...new Set(resolvePlatformValue(config.native?.sources, platformKey))],
   };
 }
 
-export interface ResolvedConfig extends ZappConfig {
+/** Normalized contract consumed by build, packaging, Vite, and native emission. */
+export interface ResolvedConfig {
+  name: string;
+  identifier?: string;
+  version?: string;
   assetDir: string;
+  devPort?: number;
+  compressAssets?: boolean;
+  headless?: Record<string, string | HeadlessWorkerConfig>;
+  workerModules?: WorkerModuleId[];
+  deepLinkSchemes?: string[];
+  protocols?: string[];
+  singleInstance?: boolean;
+  fs?: FsConfig;
+  permissions?: ZappPermission[];
+  macos?: MacOSConfig;
+  ios?: IOSConfig;
+  webEngine?: PlatformValue<WebEngine>;
+  webviewPreferences?: WebviewPreferences;
+  native?: NativeConfig;
 }
 
 export type ZappConfigCommand = "dev" | "build" | "package";
@@ -906,6 +720,12 @@ export function validateNative(config: ZappConfig): void {
     if (Array.isArray(v)) { checkList(v, `native.${name}`); return; }
     if (v && typeof v === "object") {
       for (const [plat, list] of Object.entries(v as Record<string, unknown>)) {
+        if (!new Set(["macOS", "iOS", "windows", "linux"]).has(plat)) {
+          throw new Error(
+            `[zapp] native.${name}.${plat} is not a valid target; ` +
+            `use macOS, iOS, windows, or linux`,
+          );
+        }
         checkList(list, `native.${name}.${plat}`);
       }
       return;
@@ -921,21 +741,31 @@ export function validateNative(config: ZappConfig): void {
 // either the string or the per-platform map form. Target-specific notices
 // (early-access, unsupported-platform) are emitted at build time (native.ts),
 // where the build target is known.
-export function validateWebEngine(engine?: ZappConfig["webEngine"]): void {
+export function validateWebEngine(engine?: PlatformValue<WebEngine>): void {
   if (engine === undefined) return;
   const checkValue = (v: unknown, where: string) => {
     if (v === undefined) return;
     if (v !== "system" && v !== "chromium") {
       throw new Error(
-        `[zapp] webEngine${where}: "${String(v)}" is not a valid value. Use "system" or "chromium".`,
+        `[zapp] webview.engine${where}: "${String(v)}" is not a valid value. ` +
+        `Use "system" or "chromium".`,
       );
     }
   };
   if (typeof engine === "object" && engine !== null) {
-    const m = engine as { macos?: unknown; ios?: unknown; windows?: unknown };
-    checkValue(m.macos, ".macos");
-    checkValue(m.ios, ".ios");
+    const m = engine as { macOS?: unknown; iOS?: unknown; windows?: unknown; linux?: unknown };
+    for (const key of Object.keys(m)) {
+      if (!new Set(["macOS", "iOS", "windows", "linux"]).has(key)) {
+        throw new Error(
+          `[zapp] webview.engine.${key} is not a valid target; ` +
+          `use macOS, iOS, windows, or linux`,
+        );
+      }
+    }
+    checkValue(m.macOS, ".macOS");
+    checkValue(m.iOS, ".iOS");
     checkValue(m.windows, ".windows");
+    checkValue(m.linux, ".linux");
   } else {
     checkValue(engine, "");
   }
@@ -950,7 +780,8 @@ function resolvePlatformScalar<T>(
 ): T {
   if (v === undefined) return fallback;
   if (typeof v === "object" && v !== null) {
-    return (v as { macos?: T; ios?: T; windows?: T })[key] ?? fallback;
+    const authoredKey = key === "macos" ? "macOS" : key === "ios" ? "iOS" : "windows";
+    return (v as { macOS?: T; iOS?: T; windows?: T })[authoredKey] ?? fallback;
   }
   return v as T; // bare value → all platforms
 }
@@ -965,7 +796,7 @@ function webEnginePlatformKey(target: BuildTarget): "macos" | "ios" | "windows" 
 
 // Resolve the requested webEngine for a target. PURE. Default "system".
 export function resolveWebEngine(
-  config: Pick<ZappConfig, "webEngine">,
+  config: { webEngine?: PlatformValue<WebEngine> },
   target: BuildTarget,
 ): WebEngine {
   return resolvePlatformScalar<WebEngine>(config.webEngine, webEnginePlatformKey(target), "system");
@@ -981,7 +812,7 @@ export function platformSupportsChromium(target: BuildTarget): boolean {
 // to "system" because the target has no CEF build. PURE (no logging — the caller
 // emits the warning so this stays unit-testable).
 export function resolveWebEngineForBuild(
-  config: Pick<ZappConfig, "webEngine">,
+  config: { webEngine?: PlatformValue<WebEngine> },
   target: BuildTarget,
 ): { engine: WebEngine; downgraded: boolean } {
   const requested = resolveWebEngine(config, target);
@@ -997,7 +828,7 @@ export function resolveWebEngineForBuild(
 // from old example code or chat-bot output.
 function rejectRemovedEngines(config: ZappConfig): void {
   const removed = new Set(["jsc", "txiki"]);
-  const headless = config.headless ?? {};
+  const headless = config.workers?.headless ?? {};
   for (const [id, entry] of Object.entries(headless)) {
     if (typeof entry === "object" && entry !== null && "engine" in entry) {
       const engine = (entry as { engine?: string }).engine;
@@ -1032,7 +863,7 @@ async function substituteZjsOnWindows(config: ZappConfig): Promise<void> {
   if (existsSync(path.join(resolveVendorDir(), "zjs", "src", "lib.zc"))) return;
   const fallback = `bare-${defaultBareEngine(target)}` as const;
   const substituted: string[] = [];
-  for (const [id, entry] of Object.entries(config.headless ?? {})) {
+  for (const [id, entry] of Object.entries(config.workers?.headless ?? {})) {
     if (typeof entry !== "object" || entry === null) continue;
     const e = entry as { engine?: string; bytecode?: boolean };
     if (e.engine !== "zjs") continue;
@@ -1097,6 +928,36 @@ function serializableConfigClone(config: ZappConfig): ZappConfig {
   return JSON.parse(JSON.stringify(config)) as ZappConfig;
 }
 
+function normalizeConfig(config: ZappConfig): ResolvedConfig {
+  if (!config.application || typeof config.application !== "object") {
+    throw new Error("[zapp] config.application is required");
+  }
+  const name = config.application.name;
+  if (typeof name !== "string" || name.trim().length === 0) {
+    throw new Error("[zapp] config.application.name must be a non-empty string");
+  }
+  return {
+    name,
+    identifier: config.application.identifier,
+    version: config.application.version,
+    singleInstance: config.application.singleInstance,
+    deepLinkSchemes: config.application.deepLinks,
+    assetDir: config.frontend?.assets ?? "./dist",
+    devPort: config.frontend?.devServer?.port,
+    compressAssets: config.frontend?.compressAssets,
+    webEngine: config.webview?.engine,
+    protocols: config.webview?.protocols,
+    webviewPreferences: config.webview?.preferences,
+    headless: config.workers?.headless,
+    workerModules: config.workers?.capabilities,
+    permissions: config.security?.permissions,
+    fs: config.security?.filesystem,
+    native: config.native,
+    macos: config.targets?.macOS,
+    ios: config.targets?.iOS,
+  };
+}
+
 async function writeResolvedConfigSnapshot(
   root: string,
   context: ZappConfigContext,
@@ -1141,20 +1002,20 @@ export async function loadConfig(
     const authored = typeof exported === "function"
       ? await exported(context)
       : exported;
+    if (!authored || typeof authored !== "object" || Array.isArray(authored)) {
+      throw new Error("[zapp] zapp.config.ts must resolve to a configuration object");
+    }
     const config = serializableConfigClone(authored);
-    validateWebEngine(config.webEngine);
+    validateWebEngine(config.webview?.engine);
     rejectRemovedEngines(config);
     await substituteZjsOnWindows(config);
     validateNative(config);
-    const permErrors = validatePermissions(config.permissions);
+    const permErrors = validatePermissions(config.security?.permissions);
     if (permErrors.length > 0) {
       for (const e of permErrors) process.stderr.write(e + "\n");
       throw new Error(permErrors[0]);
     }
-    const resolved = {
-      ...config,
-      assetDir: config.assetDir ?? "./dist",
-    };
+    const resolved = normalizeConfig(config);
     await writeResolvedConfigSnapshot(absoluteRoot, context, resolved);
     return resolved;
   } catch (e) {

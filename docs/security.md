@@ -7,7 +7,7 @@ Zapp has three trust zones:
 1. **Your native code (Zen-C / ObjC / C)** — fully privileged.
 2. **Your app's JS** (the main webview, sidebar webviews, + workers, loaded from `zapp://` or
    your dev server) — trusted by default. It talks to native over the
-   bridge; the `permissions` manifest (below) lets you narrow what it can
+   bridge; the `security.permissions` manifest (below) lets you narrow what it can
    reach.
 3. **External web content** — untrusted. Put it in an embedded webview
    (`<zapp-webview>`): embeds get **no bridge** — no `Services`, no FS, no
@@ -20,7 +20,7 @@ Additional standing boundaries:
   default-deny (built-in schemes + dev localhost only); allow specific
   origins natively via the security manager. `target="_blank"` opens in the
   system browser, never in-app.
-- **FS path allowlist** — `fs.allow` in zapp.config.ts; every FS call is
+- **FS path allowlist** — `security.filesystem.allow` in zapp.config.ts; every FS call is
   prefix-checked natively before the syscall (plus session grants from
   user-picked dialog paths). Composes with the `fs` permission below.
   (Note: the `fs` permission gates the framework FS API. The `bare-fs`
@@ -34,7 +34,9 @@ Declare which built-in native capabilities your app may use:
 
 ```ts
 // zapp.config.ts
-permissions: ["clipboard:read", "fs", "dialog", "notifications", "window:create"],
+security: {
+  permissions: ["clipboard:read", "fs", "dialog", "notifications", "window:create"],
+},
 ```
 
 - **Absent** → everything allowed (legacy behavior).
@@ -61,7 +63,8 @@ permissions: ["clipboard:read", "fs", "dialog", "notifications", "window:create"
 
 Not gated in v1 (by design): window ops on existing windows (including sidebar toggle/resize), app lifecycle,
 `Events`, `Sync`, user `Services` (you wrote both sides; per-service gating
-arrives with per-context grants in v2), `protocols`/`deepLinkSchemes`
+arrives with per-context grants in v2), `webview.protocols`/
+`application.deepLinks`
 (their config declaration is the grant).
 
 ## Denied calls

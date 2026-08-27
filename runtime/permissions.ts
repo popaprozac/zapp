@@ -1,6 +1,6 @@
 /**
  * Permissions — query the app's declarative native-capability manifest
- * (`permissions` in zapp.config.ts) and the platform's support for a
+ * (`security.permissions` in zapp.config.ts) and the platform's support for a
  * capability, in one tri-state answer.
  *
  * ```ts
@@ -25,7 +25,8 @@ export class PermissionDeniedError extends Error {
   readonly code = "PERMISSION_DENIED" as const;
   constructor(readonly permission: string) {
     super(
-      `[zapp] permission denied: "${permission}" — add it to \`permissions\` in zapp.config.ts`,
+      `[zapp] permission denied: "${permission}" — add it to ` +
+      `\`security.permissions\` in zapp.config.ts`,
     );
     this.name = "PermissionDeniedError";
   }

@@ -89,7 +89,7 @@ bun run package
 ./run.sh 5    # 5 runs, default
 ```
 
-To benchmark a different engine pair, edit `zapp.config.ts`'s `headless`
+To benchmark a different engine pair, edit `zapp.config.ts`'s `workers.headless`
 map to swap the bare-* engine alongside the `bench-zjs` row, then rerun.
 The bench harness aggregates median + range across runs into a markdown
 table you can paste into this file's headline numbers.

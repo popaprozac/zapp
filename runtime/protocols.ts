@@ -1,20 +1,20 @@
 /**
  * Custom URL protocols (G19) — webview-internal scheme handlers.
  *
- * Apps declare schemes in `zapp.config.ts` (e.g. `protocols:
- * ["asset", "media"]`) and register a handler at runtime with
+ * Apps declare schemes in `zapp.config.ts` (e.g. `webview: {
+ * protocols: ["asset", "media"] }`) and register a handler at runtime with
  * `Protocols.register("asset", handler)`. Whenever the webview
  * navigates to or fetches `asset://...`, the handler runs and
  * returns the response body + content type.
  *
- * **Different from `deepLinkSchemes`** — those are system-wide
+ * **Different from `application.deepLinks`** — those are system-wide
  * (`myapp://...` from another app fires `App.on(AppEvent.OPEN_URL,
  * ...)`). Protocols are webview-internal: they only intercept
  * requests inside Zapp's own WebViews.
  *
  * @example
  * ```ts
- * // zapp.config.ts:  protocols: ["asset"]
+ * // zapp.config.ts:  webview: { protocols: ["asset"] }
  *
  * import { Protocols } from "@zappdev/runtime";
  *
@@ -97,7 +97,7 @@ const registry = new Map<string, InternalRegistration>();
 export const Protocols = {
   /**
    * Register a handler for an in-webview URL scheme. The scheme
-   * must be declared in `zapp.config.ts` `protocols: [...]` —
+   * must be declared in `zapp.config.ts` `webview.protocols` —
    * WKWebView's scheme registration is config-time only, so adding
    * a scheme that wasn't declared at build time has no effect (no
    * handler will fire because no scheme is intercepted).

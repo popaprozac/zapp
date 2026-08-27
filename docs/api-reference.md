@@ -2442,7 +2442,7 @@ use `new Worker()` the same way.)
 > **`SharedWorker` is not provided by `@zappdev/runtime`.** `new SharedWorker()`
 > (without a Zapp import) is the platform-native web API (WKWebView / WebView2).
 > For a Zapp-engine background worker that any window — or the backend — can
-> talk to, use a **headless** worker (`zapp.config.ts` `headless`) plus the
+> talk to, use a **headless** worker (`zapp.config.ts` `workers.headless`) plus the
 > `Workers` namespace below; it's named, supervised, and app-scoped.
 
 ### `new Worker(scriptUrl: string, opts?: { name?: string })`
@@ -2479,7 +2479,7 @@ just avoids a switch statement in your handler.
 
 Terminate a worker by ID. Use this when you only have a string ID and
 no live `Worker` handle — most commonly for **headless workers**
-configured via `zapp.config.ts`'s `headless` map, since those are
+configured via `zapp.config.ts`'s `workers.headless` map, since those are
 started by the framework and never expose a JS-side `Worker` instance.
 
 Recognised ID forms:
@@ -2587,33 +2587,35 @@ workers without a `restart` policy.
 ### Headless workers — `HeadlessWorkerConfig`
 
 Headless workers are background JS threads the framework spawns at app
-startup. They live in `zapp.config.ts`'s `headless` map and run for the
+startup. They live in `zapp.config.ts`'s `workers.headless` map and run for the
 app's lifetime (subject to the optional supervisor restart policy).
 
 ```ts
 // zapp.config.ts
-import type { ZappConfig } from "@zappdev/cli/config";
+import { defineConfig } from "@zappdev/cli/config";
 
-const config: ZappConfig = {
-  name: "my-app",
-  identifier: "com.example.app",
-  version: "0.1.0",
-  headless: {
-    ticker: {
-      script: "src/workers/ticker.ts",
-      engine: "zjs",        // optional; see "Engine selection" below
-      bytecode: true,       // optional; only on bytecode-capable engines
-    },
-    supervised: {
-      script: "src/workers/sync.ts",
-      name: "sync-engine",  // optional display label (logs + Workers.list())
-      engine: "bare-jsc",
-      restart: { maxRetries: 2, withinMs: 30_000 },
+export default defineConfig({
+  application: {
+    name: "my-app",
+    identifier: "com.example.app",
+    version: "0.1.0",
+  },
+  workers: {
+    headless: {
+      ticker: {
+        script: "src/workers/ticker.ts",
+        engine: "zjs",        // optional; see "Engine selection" below
+        bytecode: true,        // optional; only on bytecode-capable engines
+      },
+      supervised: {
+        script: "src/workers/sync.ts",
+        name: "sync-engine",  // optional display label (logs + Workers.list())
+        engine: "bare-jsc",
+        restart: { maxRetries: 2, withinMs: 30_000 },
+      },
     },
   },
-};
-
-export default config;
+});
 ```
 
 The keys (`ticker`, `supervised`) become the worker IDs at runtime, each
@@ -2647,7 +2649,7 @@ documented chain (`zjs > bare-jsc > bare-v8 > bare-hermes > bare-quickjs
 For the full taxonomy + when-to-pick guidance, see
 [`docs/engines.md`](engines.md).
 
-### Worker modules — `workerModules`
+### Worker capabilities — `workers.capabilities`
 
 Bare-* engines don't ship web APIs intrinsically — `fetch`, `WebSocket`,
 `crypto`, etc. come from à-la-carte `bare-*` packages. Declare the
@@ -2656,10 +2658,9 @@ the matching packages, links the native bindings, and the Vite plugin
 auto-imports the worker-globals shim.
 
 ```ts
-const config: ZappConfig = {
-  // ...
-  workerModules: ["fetch", "websocket", "crypto"],
-};
+workers: {
+  capabilities: ["fetch", "websocket", "crypto"],
+}
 ```
 
 Capability → package → global:
@@ -2674,7 +2675,7 @@ Capability → package → global:
 | `"url"` | `bare-url` | `URL`, `URLSearchParams` |
 | `"encoding"` | `bare-encoding` | `TextEncoder`, `TextDecoder` |
 
-`workerModules` only affects bare-* engines. On `zjs`, the runtime layer
+`workers.capabilities` only affects bare-* engines. On `zjs`, the runtime layer
 provides intrinsics as they mature; bare-* shims are skipped (the
 declared module is a no-op for zjs workers). If you mix engines, the
 intersection is what each worker actually gets — declare the union of
@@ -2684,22 +2685,21 @@ capabilities, and per-engine reality decides what runs.
 imported explicitly via `import { readFile } from "@zappdev/runtime/bare/fs"`
 because the Node-style `fs` module isn't a browser global. Allowlist
 enforcement is in `runtime/bare/fs.ts` (paths must match
-`zapp.config.ts`'s `fsAllowList`).
+`zapp.config.ts`'s `security.filesystem.allow`).
 
 ---
 
-## Webview engine (`webEngine`) — macOS early access (CEF)
+## Webview engine (`webview.engine`) — macOS early access (CEF)
 
-`zapp.config.ts`'s `webEngine` field picks what renders the UI. A string
+`zapp.config.ts`'s `webview.engine` field picks what renders the UI. A string
 applies to every platform; a per-platform map scopes it (a missing platform
 key defaults to `"system"`):
 
 ```ts
-const config: ZappConfig = {
-  webEngine: "chromium",                              // all platforms
-  // or, scoped per platform:
-  webEngine: { macos: "chromium", windows: "system" },
-};
+webview: {
+  // A bare "chromium" applies everywhere; a map scopes by platform.
+  engine: { macOS: "chromium", windows: "system" },
+}
 ```
 
 - **`"system"`** *(default)* — the OS-native WebView: WKWebView on macOS,
@@ -2725,7 +2725,7 @@ Linux today), the build **warns and falls back to `"system"`** instead of
 failing:
 
 ```
-[zapp] webEngine "chromium" is not yet available on windows; using system (WebView2 = Chromium).
+[zapp] webview.engine "chromium" is not yet available on windows; using system (WebView2 = Chromium).
 ```
 
 > **Evergreen vs. pinned.** WebView2 is evergreen — it floats with whatever
@@ -2739,7 +2739,7 @@ failing:
 
 ### What works in this slice
 
-- **Fullbleed-web render.** A `zapp build` with `webEngine:"chromium"`
+- **Fullbleed-web render.** A `zapp build` with `webview.engine: "chromium"`
   produces a real `.app` whose window renders its page on Chromium, hosted
   inside a standard Zapp `NSWindow` (not a CEF-owned window). CEF's external
   message pump integrates into Zapp's *existing* `NSApplication` run loop —
@@ -2771,13 +2771,13 @@ none silently half-working:
 - **Multi-window.** The bridge currently tracks a single active CEF
   browser; a `chromium` app with more than one window is unsupported.
 - **Native chrome on CEF.** Sidebar / inspector / toolbar / pane machinery
-  is WKWebView-only. A `webEngine:"chromium"` window is fullbleed-web only
+  is WKWebView-only. A `webview.engine: "chromium"` window is fullbleed-web only
   — it skips that machinery entirely rather than partially supporting it.
 - **Helper process signing / notarization.** The CEF Helper subprocess
   `.app`s this slice bundles aren't yet part of a signing/notarization
   pipeline.
 - **iOS, Windows, Linux.** macOS arm64 only, this slice.
-- **Per-window engine selection.** `webEngine` is app-wide; there's no way
+- **Per-window engine selection.** `webview.engine` is app-wide; there's no way
   to mix a `chromium` window with a `system` window in the same app yet.
 - **Navigation / back-forward.** Not exercised by this slice's fullbleed-web
   model.
@@ -2789,20 +2789,20 @@ CEF is not free, and Zapp does not hide that. Measured on a real built
 
 | | Size |
 |---|---|
-| `.app` bundle, `webEngine:"chromium"` | **291 MB** |
+| `.app` bundle, `webview.engine: "chromium"` | **291 MB** |
 | — of which the `Chromium Embedded Framework.framework` | **289 MB** |
-| `.app`/binary, `webEngine:"system"` (same app, WKWebView) | a few MB |
+| `.app`/binary, `webview.engine: "system"` (same app, WKWebView) | a few MB |
 
 That ~289 MB is the entire reason `"chromium"` is opt-in rather than a
 config knob you flip casually: it's the price of bundling a full Chromium
-instead of using the OS-provided engine. `webEngine:"system"` builds pay
+instead of using the OS-provided engine. `webview.engine: "system"` builds pay
 none of it — no CEF fetch, no CEF compile, no CEF link, no CEF bundling
 step runs; the build is byte-identical to a build that never had CEF
 support added to the framework at all.
 
-### DX gotcha: clean the Nim cache when switching `webEngine`
+### DX gotcha: clean the Nim cache when switching `webview.engine`
 
-Flipping `webEngine` between `"chromium"` and `"system"` **in place,
+Flipping `webview.engine` between `"chromium"` and `"system"` **in place,
 without clearing the Nim build cache, breaks the link.** Nim's compile
 cache keys on source-file identity, not on the `-D` flags a file was last
 compiled with, so a stale platform object built for one engine can get
@@ -2841,7 +2841,7 @@ Your `zapp/build.zc` is **service code** — Zen-C imports,
 `app.service.add(...)` registrations, and handler `fn`s. The framework
 injects all platform boilerplate (system frameworks, link flags, ObjC
 ARC, sysroot) into `.zapp/zapp_platform.zc` and derives worker engines
-from `zapp.config.ts`'s `headless[].engine`, so the default template
+from `zapp.config.ts`'s `workers.headless[].engine`, so the default template
 carries no `//> framework:` / `//> link:` directives or
 `ZAPP_WORKER_ENGINE_*` defines.
 
@@ -2861,22 +2861,17 @@ Each value also accepts a per-platform map to scope it to one OS:
 
 ```ts
 native: {
-  frameworks: { macos: ["CoreLocation"], ios: ["CoreLocation"] },
-  linkFlags:  { macos: ["-lsqlite3"], windows: ["-lws2_32"] },
-  sources:    { macos: ["src/native/Foo.m"] },
+  frameworks: { macOS: ["CoreLocation"], iOS: ["CoreLocation"] },
+  linkFlags:  { macOS: ["-lsqlite3"], windows: ["-lws2_32"] },
+  sources:    { macOS: ["src/native/Foo.m"] },
 }
 ```
 
 | Field | Type | Purpose |
 |---|---|---|
-| `frameworks` | `string[]` \| `{ macos?, ios?, windows? }` | System frameworks to link (Apple-only concept). |
-| `linkFlags` | `string[]` \| `{ macos?, ios?, windows? }` | Raw linker flags (`-l…`, library paths). |
-| `sources` | `string[]` \| `{ macos?, ios?, windows? }` | Extra native source files (`.m`/`.c`) compiled into the binary. |
-
-The flat fields `extraFrameworks`, `extraLinkFlags`, and `nativeSources`
-are **deprecated aliases** for `native.frameworks` / `native.linkFlags` /
-`native.sources`. They still work and are merged with the grouped block,
-but prefer `native:` in new code.
+| `frameworks` | `string[]` \| `{ macOS?, iOS?, windows?, linux? }` | System frameworks to link (Apple-only concept). |
+| `linkFlags` | `string[]` \| `{ macOS?, iOS?, windows?, linux? }` | Raw linker flags (`-l…`, library paths). |
+| `sources` | `string[]` \| `{ macOS?, iOS?, windows?, linux? }` | Extra native source files (`.m`/`.c`) compiled into the binary. |
 
 Raw `//> macos: framework: …` / `//> macos: link: …` directives in
 `build.zc` (or any `.zc` the build scans) remain a supported power-user
@@ -3207,11 +3202,12 @@ Native system notifications with permission flow, action buttons, reply,
 scheduling.
 
 **Requires**: macOS app bundle + code signing. `zapp dev` adhoc-signs
-for you; `zapp package` respects `zapp.config.ts → macos.signingIdentity`.
+for you; `zapp package` respects
+`zapp.config.ts → targets.macOS.signingIdentity`.
 
 **Privacy permissions** (camera, microphone, location, photos, etc.)
 require usage-description strings in `Info.plist`. Set them via
-`zapp.config.ts → macos.usageDescriptions` — see [`patterns.md`
+`zapp.config.ts → targets.macOS.usageDescriptions` — see [`patterns.md`
 "Privacy usage descriptions"](patterns.md#privacy-usage-descriptions).
 
 ### Permission flow
@@ -3659,7 +3655,7 @@ Intercept requests inside Zapp's own WebViews on a custom scheme
 for serving generated content (thumbnails, decoded media, IndexedDB
 blobs) without spinning up a local HTTP server.
 
-**Different from `deepLinkSchemes`.** Deep links are *system-wide* — the
+**Different from `application.deepLinks`.** Deep links are *system-wide* — the
 OS routes `myapp://...` URLs to your app even when it's not running, and
 they fire `App.on(AppEvent.OPEN_URL)`. Protocols are *webview-internal*
 — they intercept requests inside Zapp's WebViews only.
@@ -3672,8 +3668,8 @@ registration runs at webview creation):
 ```ts
 // zapp.config.ts
 export default defineConfig({
-  name: "My App",
-  protocols: ["asset"],
+  application: { name: "My App" },
+  webview: { protocols: ["asset"] },
 });
 ```
 
@@ -3734,15 +3730,17 @@ push.
 ## `Permissions` — capability manifest
 
 Declare which built-in native capabilities your app may use via the
-`permissions` field in `zapp.config.ts`. Absent means allow-all (legacy
+`security.permissions` field in `zapp.config.ts`. Absent means allow-all (legacy
 behavior); present is an exhaustive allowlist enforced natively in the
 webview and all workers.
 
 ```ts
 // zapp.config.ts
 export default defineConfig({
-  name: "My App",
-  permissions: ["clipboard:read", "fs", "dialog", "notifications", "window:create"],
+  application: { name: "My App" },
+  security: {
+    permissions: ["clipboard:read", "fs", "dialog", "notifications", "window:create"],
+  },
 });
 ```
 

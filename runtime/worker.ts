@@ -114,7 +114,7 @@ export class Worker {
  * Use the platform-native `new SharedWorker()` (WKWebView / WebView2) for the
  * web-standard refcounted-across-windows worker; for a Zapp-engine background
  * worker that any window or the backend can talk to, use a **headless** worker
- * (`zapp.config.ts` `headless`) plus the `Workers` namespace below.
+ * (`zapp.config.ts` `workers.headless`) plus the `Workers` namespace below.
  */
 
 /**
@@ -167,7 +167,7 @@ export interface WorkerHandle {
  * Workers — namespace for managing workers by ID, complementing the
  * `Worker` class which is instance-scoped. Use this when you only have
  * a string ID and no live `Worker` handle — most commonly for headless
- * workers configured via `zapp.config.ts`'s `headless` map, since those
+ * workers configured via `zapp.config.ts`'s `workers.headless` map, since those
  * are started by the framework and never expose a JS-side `Worker`
  * instance.
  *
@@ -176,7 +176,7 @@ export interface WorkerHandle {
  * import { Workers } from "@zappdev/runtime";
  *
  * // zapp.config.ts:
- * //   headless: { sync: "src/workers/sync.ts" }
+ * //   workers: { headless: { sync: "src/workers/sync.ts" } }
  * // → at runtime, the worker is reachable as "h-sync".
  * Workers.terminate("h-sync");
  * ```
@@ -188,7 +188,7 @@ export const Workers = {
    *
    * Recognised ID forms:
    * - `"w-N"` — dedicated worker instance (same as `worker.terminate()`)
-   * - `"h-<key>"` — headless worker keyed by `zapp.config.ts` `headless`
+   * - `"h-<key>"` — headless worker keyed by `zapp.config.ts` `workers.headless`
    *
    * Unknown IDs are a silent no-op (native logs but doesn't throw).
    */

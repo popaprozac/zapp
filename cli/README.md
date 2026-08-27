@@ -19,6 +19,9 @@ bun run dev
 resolves to the local `node_modules/.bin/zapp` pinned in `package.json`.
 This guarantees your project keeps working even as the CLI evolves.
 
+The current typed configuration contract is documented in
+[`docs/configuration.md`](../docs/configuration.md).
+
 ## Requirements
 
 - **Bun** ≥ 1.3
@@ -52,13 +55,13 @@ bunx @zappdev/cli init my-app --no-install    # scaffold only, skip `bun install
 
 Produces a ready-to-run project with `@zappdev/cli`, `@zappdev/runtime`,
 `@zappdev/vite` as dependencies pinned to the current alpha. Vite config is
-auto-wired with the `zappWorkers()` plugin forwarding
-`zapp.config.ts → headless` and `workerModules` to the worker bundler.
+auto-wired with the `zappWorkers()` plugin. The CLI resolves
+`zapp.config.ts` once and the plugin consumes its normalized snapshot.
 
 ### `zapp dev`
 
-Compiles the native binary, starts the Vite dev server on port 5173 (or the
-configured `devPort`), launches the packaged `.app` with a live-reloading
+Compiles the native binary, starts the Vite dev server on port 5173 (or
+`frontend.devServer.port`), launches the packaged `.app` with a live-reloading
 webview. Workers re-bundle on source change.
 
 Watches `zapp/**` for native source changes and recompiles. Kill with Ctrl-C.
@@ -73,11 +76,11 @@ beyond the OS's WebView — a single file you can ship.
 
 Creates a macOS `.app` bundle in `release/` with:
 - The binary at `Contents/MacOS/<name>`
-- Icon from `zapp.config.ts → macos.icon` (converted to multi-resolution
+- Icon from `zapp.config.ts → targets.macOS.icon` (converted to multi-resolution
   `.icns` / asset catalog; macOS Sonoma+ picks up "liquid glass" rendering
   automatically for PNG icons)
-- `Info.plist` derived from `identifier`, `version`, `macos.category`
-- Adhoc signing (or your `macos.signingIdentity` if provided)
+- `Info.plist` derived from `application` and `targets.macOS.category`
+- Adhoc signing (or your `targets.macOS.signingIdentity` if provided)
 
 ### `zapp generate`
 
@@ -122,7 +125,7 @@ my-app/
 ├── package.json, tsconfig.json, vite.config.ts, index.html
 ├── src/                   # your TS / UI code
 ├── zapp/                  # app.nim (Nim default) or app.zc (legacy Zen-C)
-├── zapp.config.ts         # app identity, headless workers, macOS opts
+├── zapp.config.ts         # typed Zapp build and packaging configuration
 ├── build/                 # platform-specific build inputs
 │   ├── README.md
 │   └── macos/             # drop icon.{icon,icns,iconset,png} or Info.plist.extra
@@ -135,15 +138,15 @@ The `build/` directory is where you put **build inputs you control**:
   formats). CLI auto-detects.
 - `build/ios/icon.png` — iOS app icon source (1024×1024 PNG). The CLI
   compiles it into the app's `Assets.car` via `actool`. Alternatively,
-  set `ios.icon` in `zapp.config.ts`. If neither is provided, the CLI
-  falls back through `build/icon.png` → `macos.icon` (if it's a PNG) →
+  set `targets.iOS.icon` in `zapp.config.ts`. If neither is provided, the CLI
+  falls back through `build/icon.png` → `targets.macOS.icon` (if it's a PNG) →
   `build/macos/icon.png` → the framework default.
 - `build/macos/Info.plist.extra` — optional partial Info.plist; key/value
   pairs are merged into the generated plist at package time.
 - `build/macos/app.entitlements` — optional code-signing entitlements
   file; passed to `codesign --entitlements` during `zapp dev` and
-  `zapp package`. Override the path via `macos.entitlementsFile` or
-  add typed entries inline via `macos.entitlements`.
+  `zapp package`. Override the path via `targets.macOS.entitlementsFile` or
+  add typed entries inline via `targets.macOS.entitlements`.
 
 Any `.m` (macOS) or `.c` (Windows) files dropped anywhere under `zapp/`
 are auto-compiled and linked into the binary — useful for system APIs
@@ -153,16 +156,17 @@ AVFoundation, NSWorkspace). No config needed. See
 ObjC or C" for the bridging pattern.
 
 For inline `Info.plist` customization (typed, autocomplete-friendly), use
-`zapp.config.ts → macos.copyright`, `macos.usageDescriptions`,
-`macos.plistExtras`. Entitlements live alongside in
-`macos.entitlements` (typed map) or `macos.entitlementsFile` (path to
-`.entitlements`). See [`llms.txt`](../llms.txt) → "build/" and
+`zapp.config.ts → targets.macOS.copyright`, `targets.macOS.usageDescriptions`,
+`targets.macOS.plistExtras`. Entitlements live alongside in
+`targets.macOS.entitlements` (typed map) or
+`targets.macOS.entitlementsFile` (path to `.entitlements`). See
+[`llms.txt`](../llms.txt) → "build/" and
 "Entitlements" for priority rules and the ad-hoc signing caveat.
 
 ## Worker engines on first build
 
 Worker engines compile lazily based on the engines referenced in
-`zapp.config.ts → headless` (plus any auto-discovered `new Worker()`
+`zapp.config.ts → workers.headless` (plus any auto-discovered `new Worker()`
 calls in your source). The default `zjs` engine ships in-tree and has
 no first-build cost. The `bare-*` engines download to
 `~/.zapp/vendor/` and build via cmake on first use (~30–60 s each,
@@ -172,9 +176,11 @@ Picking engines per worker — recommended path:
 
 ```ts
 // zapp.config.ts
-headless: {
-  sync:    { script: "src/workers/sync.ts",    engine: "zjs" },        // default
-  encoder: { script: "src/workers/encoder.ts", engine: "bare-jsc" },   // JIT on macOS
+workers: {
+  headless: {
+    sync:    { script: "src/workers/sync.ts",    engine: "zjs" },
+    encoder: { script: "src/workers/encoder.ts", engine: "bare-jsc" },
+  },
 }
 ```
 
@@ -188,7 +194,7 @@ In the **Zen-C build** (`ZAPP_NATIVE_LANG=zc`), `zapp/build.zc` is your
 Zen-C service code (imports, `app.service.add(...)`, handler `fn`s). The
 CLI injects platform frameworks, link flags, ObjC ARC, and the sysroot into
 `.zapp/zapp_platform.zc` and derives worker engines from
-`zapp.config.ts → headless[].engine`, so the default template has no
+`zapp.config.ts → workers.headless[].engine`, so the default template has no
 `//>` build directives or `ZAPP_WORKER_ENGINE_*` defines.
 
 `ZAPP_NATIVE_LANG=z` currently selects the framework-owned Phase 0 core under
@@ -207,19 +213,17 @@ native: {
 }
 ```
 
-Each value also accepts a per-platform map — `{ macos?, ios?, windows? }`
+Each value also accepts a per-platform map — `{ macOS?, iOS?, windows?, linux? }`
 — to scope it to one OS:
 
 ```ts
 native: {
-  frameworks: { macos: ["CoreLocation"], ios: ["CoreLocation"] },
-  linkFlags:  { macos: ["-lsqlite3"], windows: ["-lws2_32"] },
+  frameworks: { macOS: ["CoreLocation"], iOS: ["CoreLocation"] },
+  linkFlags:  { macOS: ["-lsqlite3"], windows: ["-lws2_32"] },
 }
 ```
 
-The flat `extraFrameworks` / `extraLinkFlags` / `nativeSources` fields are
-**deprecated aliases** for `native.frameworks` / `native.linkFlags` /
-`native.sources` (still honored, merged with the grouped block). Raw
+Raw
 `//> macos: framework: …` / `//> macos: link: …` directives in any `.zc`
 remain a supported power-user escape hatch but aren't needed for normal
 linking.

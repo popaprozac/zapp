@@ -183,12 +183,12 @@ export const App = {
    * Move a file or folder to the user's Trash. Reversible from
    * Finder via "Put Back". Fire-and-forget — silent on failure
    * (path missing, permission denied, **or path not in
-   * `config.fs.allow`**). Callers wanting to confirm removal can
+   * `security.filesystem.allow`**). Callers wanting to confirm removal can
    * `app.fs.exists(path)` afterward.
    *
    * Path variables (`$userData`, `~/`, etc.) are expanded.
    *
-   * **Gated by the FS allowlist** — same `config.fs.allow` list that
+   * **Gated by the FS allowlist** — same `security.filesystem.allow` list that
    * gates `app.fs.remove`. Paths the user picks via `Dialog.openFile`
    * extend the session allowlist automatically, so the common
    * "user picks file → app trashes it" flow works out of the box.

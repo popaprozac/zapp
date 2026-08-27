@@ -48,7 +48,7 @@ All workers share the same runtime API surface. They differ only by *how
 they're spawned*:
 - **Webview-spawned workers**: `new Worker("./my-worker.ts")` from inside
   a webview. Owner is the window that spawned them. Die when the window dies.
-- **Headless workers**: declared in `zapp.config.ts` → `headless`. Start at
+- **Headless workers**: declared in `zapp.config.ts` → `workers.headless`. Start at
   app boot, no parent window, live for the app lifetime.
 
 **No "backend worker" — that concept is gone.** All workers have full API
@@ -90,7 +90,7 @@ What `bunx @zappdev/cli init my-app` scaffolds:
 ```
 my-app/
 ├── package.json          # @zappdev/cli, runtime, vite as deps
-├── zapp.config.ts        # app identity + headless + macOS opts
+├── zapp.config.ts        # typed Zapp build and packaging configuration
 ├── vite.config.ts        # auto-injects zappWorkers() from @zappdev/vite
 ├── tsconfig.json         # standard Vite TS setup
 ├── index.html            # webview entry
@@ -148,7 +148,7 @@ CLI scaffolds `build/macos/` empty; drop your assets in by convention.
 
 Resolution priority — first match wins:
 
-1. `macos.icon` path set in `zapp.config.ts` (explicit override)
+1. `targets.macOS.icon` path set in `zapp.config.ts` (explicit override)
 2. `build/macos/icon.{icon,icns,iconset,png}` (convention)
 3. Framework default (Zapp logo)
 
@@ -166,9 +166,10 @@ Three escape hatches, in order of preference:
 **1. Typed fields in `zapp.config.ts`** (autocomplete, validated):
 
 ```ts
-macos: {
-  copyright: "Copyright © 2026 You",
-  usageDescriptions: {
+targets: {
+  macOS: {
+    copyright: "Copyright © 2026 You",
+    usageDescriptions: {
     camera: "We need camera for photo capture",
     microphone: "Audio recording for calls",
     location: "...",
@@ -179,6 +180,7 @@ macos: {
     network: "...",
     bluetooth: "...",
     appleEvents: "...",
+    },
   },
 }
 ```
@@ -190,14 +192,16 @@ these capabilities without a usage description crash on first use.
 **2. `plistExtras` map** for arbitrary keys:
 
 ```ts
-macos: {
-  plistExtras: {
-    LSUIElement: true,                    // → <true/>
-    LSBackgroundOnly: false,              // → <false/>
-    NSPrincipalClass: "NSApplication",    // → <string>...</string>
-    SomeNumber: 42,                       // → <integer>42</integer>
-    SomeFloat: 3.14,                      // → <real>3.14</real>
-    SomeList: ["one", "two"],             // → <array><string>...</string></array>
+targets: {
+  macOS: {
+    plistExtras: {
+      LSUIElement: true,                    // → <true/>
+      LSBackgroundOnly: false,              // → <false/>
+      NSPrincipalClass: "NSApplication",    // → <string>...</string>
+      SomeNumber: 42,                       // → <integer>42</integer>
+      SomeFloat: 3.14,                      // → <real>3.14</real>
+      SomeList: ["one", "two"],             // → <array><string>...</string></array>
+    },
   },
 }
 ```
@@ -218,7 +222,7 @@ For nested dicts/arrays of mixed types, use the raw file:
 
 Just `<key>...</key><value/>` pairs at the top level. **No `<plist>` or
 `<dict>` wrappers** — those are added by the generator. Path can be
-overridden via `macos.plistFile`; default is `build/macos/Info.plist.extra`.
+overridden via `targets.macOS.plistFile`; default is `build/macos/Info.plist.extra`.
 
 ### Override semantics
 
@@ -239,16 +243,18 @@ Code-signing entitlements are configured separately from the Info.plist.
 They land in a standalone `Entitlements.plist` and are passed to
 `codesign --entitlements` during both `zapp dev` and `zapp package`.
 
-**Typed map** in `zapp.config.ts → macos.entitlements`:
+**Typed map** in `zapp.config.ts → targets.macOS.entitlements`:
 
 ```ts
 export default defineConfig({
-  name: "my-app",
-  macos: {
-    entitlements: {
-      "com.apple.security.network.client": true,
-      "com.apple.security.files.user-selected.read-write": true,
-      "com.apple.security.app-sandbox": false,
+  application: { name: "my-app" },
+  targets: {
+    macOS: {
+      entitlements: {
+        "com.apple.security.network.client": true,
+        "com.apple.security.files.user-selected.read-write": true,
+        "com.apple.security.app-sandbox": false,
+      },
     },
   },
 });
@@ -256,7 +262,7 @@ export default defineConfig({
 
 Value rules match `plistExtras` (`boolean`/`string`/`number`/`string[]`).
 
-**File** at `build/macos/app.entitlements` (or set `macos.entitlementsFile`)
+**File** at `build/macos/app.entitlements` (or set `targets.macOS.entitlementsFile`)
 for complex entitlements with nested dicts or mixed arrays. Wrap in a
 full `<plist><dict>…</dict></plist>` — the CLI strips and re-emits the
 wrappers.
@@ -549,33 +555,37 @@ is your JS/TS bundle, not native code.
 ## zapp.config.ts
 
 TypeScript config file at the project root. Typed via `defineConfig` from
-`@zappdev/cli/config`.
+`@zappdev/cli/config`. The authoritative grouped schema and contextual-factory
+contract are in `docs/configuration.md`.
 
 ```ts
 import { defineConfig } from "@zappdev/cli/config";
 
 export default defineConfig({
-  name: "My App",
-  identifier: "com.example.myapp",
-  version: "1.0.0",
+  application: {
+    name: "My App",
+    identifier: "com.example.myapp",
+    version: "1.0.0",
+    deepLinks: ["myapp"],
+  },
 
   // Headless workers — start at app boot, no parent window.
   // Keys are IDs (used for termination), values are source paths.
-  headless: {
-    db: "src/workers/db.ts",
-    sync: "src/workers/sync.ts",
+  workers: {
+    headless: {
+      db: "src/workers/db.ts",
+      sync: "src/workers/sync.ts",
+    },
   },
-
-  // Deep links: myapp://some/path opens the app with OPEN_URL event
-  deepLinkSchemes: ["myapp"],
 
   // macOS-specific packaging opts (install-time only — runtime policies
   // like acceptFirstMouse and navigation allowlist live in Zen-C)
-  macos: {
-    icon: "assets/icon.png",     // converted to .icns at package time
-    category: "public.app-category.developer-tools",
-    minimumSystemVersion: "12.0",
-    signingIdentity: undefined,  // undefined = adhoc signing
+  targets: {
+    macOS: {
+      icon: "assets/icon.png",     // converted to .icns at package time
+      category: "public.app-category.developer-tools",
+      minimumSystemVersion: "12.0",
+    },
   },
 });
 ```
@@ -597,23 +607,24 @@ can compose with the rest of the app logic. `WindowOptions.acceptFirstMouse`
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `name` | `string` | required | App name (also appears in generated AppConfig if desired) |
-| `identifier` | `string` | auto | Reverse-DNS bundle identifier |
-| `version` | `string` | `"0.1.0"` | Semver, shown in About box / Info.plist |
-| `assetDir` | `string` | `"./dist"` | Vite build output (usually don't change) |
-| `devPort` | `number` | `5173` | Vite dev server port |
-| `headless` | `Record<string,string>` | `{}` | Worker ID → source path map |
-| `deepLinkSchemes` | `string[]` | `[]` | URL schemes to register |
-| `macos.icon` | `string` | none | Path to `.icon` / `.icns` / `.iconset` / `.png`. If omitted, falls back to `build/macos/icon.*` then framework default. |
-| `macos.category` | `string` | none | App Store category (e.g. `public.app-category.developer-tools`) |
-| `macos.minimumSystemVersion` | `string` | `"12.0"` | LSMinimumSystemVersion |
-| `macos.signingIdentity` | `string` | adhoc | Apple Developer ID for signing |
-| `macos.copyright` | `string` | none | NSHumanReadableCopyright |
-| `macos.usageDescriptions` | `{camera?, microphone?, location?, photos?, documents?, downloads?, desktop?, network?, bluetooth?, appleEvents?: string}` | `{}` | Privacy strings shown in macOS permission prompts |
-| `macos.plistExtras` | `Record<string, string \| number \| boolean \| string[]>` | `{}` | Arbitrary additional Info.plist keys |
-| `macos.entitlements` | `Record<string, string \| number \| boolean \| string[]>` | `{}` | Code-signing entitlements (standalone `Entitlements.plist`; passed to `codesign --entitlements`) |
-| `macos.entitlementsFile` | `string` | `"build/macos/app.entitlements"` | Path to a `.entitlements` file. Map keys override matching file keys (CLI warns on conflict) |
-| `macos.plistFile` | `string` | `build/macos/Info.plist.extra` if present | Raw partial Info.plist file merged into generated plist |
+| `application.name` | `string` | required | Human-readable application name |
+| `application.identifier` | `string` | auto | Reverse-DNS bundle identifier |
+| `application.version` | `string` | `"0.1.0"` | Version embedded in native packages |
+| `application.deepLinks` | `string[]` | `[]` | System-visible URL schemes to register |
+| `frontend.assets` | `string` | `"./dist"` | Vite build output |
+| `frontend.devServer.port` | `number` | `5173` | Vite development-server port |
+| `workers.headless` | `Record<string, HeadlessWorkerConfig>` | `{}` | Worker ID → source/config map |
+| `workers.capabilities` | `WorkerModuleId[]` | `[]` | Web-compatible worker capabilities |
+| `targets.macOS.icon` | `string` | none | Path to `.icon` / `.icns` / `.iconset` / `.png` |
+| `targets.macOS.category` | `string` | none | App Store category |
+| `targets.macOS.minimumSystemVersion` | `string` | `"12.0"` | LSMinimumSystemVersion |
+| `targets.macOS.signingIdentity` | `string` | adhoc | Apple Developer ID for signing |
+| `targets.macOS.copyright` | `string` | none | NSHumanReadableCopyright |
+| `targets.macOS.usageDescriptions` | typed object | `{}` | Privacy strings shown in macOS permission prompts |
+| `targets.macOS.plistExtras` | serializable record | `{}` | Additional Info.plist keys |
+| `targets.macOS.entitlements` | serializable record | `{}` | Code-signing entitlements |
+| `targets.macOS.entitlementsFile` | `string` | `"build/macos/app.entitlements"` | Custom entitlements file |
+| `targets.macOS.plistFile` | `string` | convention | Raw partial Info.plist file |
 
 ---
 
@@ -816,7 +827,8 @@ Notification.on("response" | "click" | "action", handler): () => void
 `PermissionStatus`: `"granted" | "denied" | "not-determined" | "provisional"`
 
 **macOS requires**: app bundle + code signing. `zapp dev` handles this
-automatically with adhoc signing; `zapp package` respects `macos.signingIdentity`.
+automatically with adhoc signing; `zapp package` respects
+`targets.macOS.signingIdentity`.
 
 ### Dock (macOS)
 
@@ -977,8 +989,8 @@ win.on(WindowEvent.CLOSE, async () => {
 ```ts
 // zapp.config.ts
 export default defineConfig({
-  name: "my-app",
-  headless: { sync: "src/workers/sync.ts" },
+  application: { name: "my-app" },
+  workers: { headless: { sync: "src/workers/sync.ts" } },
 });
 ```
 
@@ -1117,7 +1129,7 @@ Menu.build([
 
 Removed in 0.6.0-alpha.0. Previously you'd set `backend: true` to enable a
 singleton privileged JS worker. Now: declare headless workers explicitly in
-`zapp.config.ts` under `headless`. The unified worker model means each
+`zapp.config.ts` under `workers.headless`. The unified worker model means each
 worker is explicit about its purpose and ID.
 
 ```ts
@@ -1125,7 +1137,10 @@ worker is explicit about its purpose and ID.
 AppConfig{ backend: true, ... }
 
 // RIGHT (declare in zapp.config.ts)
-export default defineConfig({ headless: { main: "src/main-worker.ts" } });
+export default defineConfig({
+  application: { name: "My App" },
+  workers: { headless: { main: "src/main-worker.ts" } },
+});
 ```
 
 ### Don't use raw `webContentInspectable: -1 / 0 / 1`
@@ -1243,15 +1258,18 @@ Options (mostly auto-configured):
 ```ts
 import { defineConfig } from "vite";
 import { zappWorkers } from "@zappdev/vite";
-import zappConfig from "./zapp.config";
 
 export default defineConfig({
   plugins: [
-    zappWorkers({ headless: zappConfig.headless }),
+    zappWorkers(),
     // your other plugins (svelte(), react(), etc.)
   ],
 });
 ```
+
+The Zapp CLI evaluates `zapp.config.ts` once and writes the normalized
+`.zapp/config.resolved.json` snapshot consumed by the plugin. Vite does not
+import or re-evaluate executable application configuration.
 
 ---
 
@@ -1259,7 +1277,7 @@ export default defineConfig({
 
 ### Icons
 
-Pass `macos.icon` in `zapp.config.ts` as a path to a `.png`, `.icns`, or
+Pass `targets.macOS.icon` in `zapp.config.ts` as a path to a `.png`, `.icns`, or
 `.iconset`. The CLI builds the appropriate macOS asset catalog on package.
 On macOS 14+ (Sonoma) with a PNG, the icon gets a "liquid glass" treatment
 automatically.
@@ -1270,10 +1288,12 @@ Recommended: 1024×1024 PNG. The CLI generates all the required resolutions.
 
 Adhoc signing (the default) produces a `.app` that runs locally but will
 show "unidentified developer" warnings elsewhere. For distribution, set
-`macos.signingIdentity` to your Apple Developer certificate name:
+`targets.macOS.signingIdentity` to your Apple Developer certificate name:
 
 ```ts
-macos: { signingIdentity: "Developer ID Application: Your Name (TEAMID)" }
+targets: {
+  macOS: { signingIdentity: "Developer ID Application: Your Name (TEAMID)" },
+}
 ```
 
 Notarization is not automated yet — you'll want to run `xcrun notarytool`
@@ -1301,9 +1321,11 @@ For agents: what a minimal Zapp app looks like from scratch.
 import { defineConfig } from "@zappdev/cli/config";
 
 export default defineConfig({
-  name: "hello",
-  identifier: "com.example.hello",
-  version: "0.1.0",
+  application: {
+    name: "hello",
+    identifier: "com.example.hello",
+    version: "0.1.0",
+  },
 });
 ```
 

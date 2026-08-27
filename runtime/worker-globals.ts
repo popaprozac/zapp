@@ -3,21 +3,21 @@
  * `__zappBridge`, etc.
  *
  * Runtime installation of WHATWG-shaped globals (`fetch`, `WebSocket`,
- * etc.) is now driven by `workerModules` in `zapp.config.ts`. The Vite
+ * etc.) is driven by `workers.capabilities` in `zapp.config.ts`. The Vite
  * plugin auto-prepends the binding code to every worker bundle, so
  * user code can just call `fetch(...)` without any per-worker import.
  *
  * @example
  * ```ts
  * // zapp.config.ts
- * workerModules: ["fetch", "websocket"]
+ * workers: { capabilities: ["fetch", "websocket"] }
  *
  * // src/worker.ts — no setup needed
  * fetch("https://example.com").then(r => r.text());
  * ```
  *
  * **Legacy per-subpath imports** (`import "@zappdev/runtime/worker-globals/fetch"`)
- * still work for projects not using `workerModules`. They bind the
+ * still work for projects not using `workers.capabilities`. They bind the
  * same globals via the file shims in this directory. Avoid mixing
  * the two approaches — the prelude is canonical.
  */
@@ -54,7 +54,7 @@ declare global {
 // Vite to externalize their `import bareFetch from "bare-fetch"` etc.
 // — invalid output for the worker's `js_run_script` script context.
 //
-// Use `workerModules` in `zapp.config.ts` for runtime installs (the
+// Use `workers.capabilities` in `zapp.config.ts` for runtime installs (the
 // canonical path), or import a specific subpath like
 // `import "@zappdev/runtime/worker-globals/fetch"` for one-off opt-in.
 

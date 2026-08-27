@@ -1251,10 +1251,10 @@ async function buildNativeNim(
   if (downgraded) {
     const hint = target === "windows" ? "WebView2 = Chromium" : "the system webview";
     process.stderr.write(
-      `[zapp] webEngine "chromium" is not yet available on ${target}; using system (${hint}).\n`,
+      `[zapp] webview.engine "chromium" is not yet available on ${target}; using system (${hint}).\n`,
     );
   } else if (engine === "chromium" && platformSupportsChromium(target)) {
-    process.stderr.write(`[zapp] webEngine:"chromium" is early-access (macOS)\n`);
+    process.stderr.write(`[zapp] webview.engine: "chromium" is early-access (macOS)\n`);
   }
   const useCef = engine === "chromium" && platformSupportsChromium(target);
   let cefRoot: string | undefined;

@@ -1,0 +1,142 @@
+# Zapp configuration
+
+`zapp.config.ts` is Zapp's typed, build-time configuration surface. It owns
+application metadata, frontend build inputs, WebView construction facts,
+worker declarations, security policy, native build additions, and target
+packaging settings.
+
+It is intentionally separate from `z.json`, which belongs to the Z language
+and package toolchain.
+
+## Minimal configuration
+
+```ts
+import { defineConfig } from "@zappdev/cli/config";
+
+export default defineConfig({
+  application: {
+    name: "Z Notes",
+    identifier: "com.example.z-notes",
+    version: "0.1.0",
+  },
+});
+```
+
+Only `application.name` is required. Zapp supplies defaults for the frontend
+asset directory, development port, system WebView, and asset compression.
+
+## Complete shape
+
+```ts
+export default defineConfig({
+  application: {
+    name: "Z Notes",
+    identifier: "com.example.z-notes",
+    version: "0.1.0",
+    singleInstance: true,
+    deepLinks: ["znotes"],
+  },
+
+  frontend: {
+    assets: "./dist",
+    devServer: { port: 5173 },
+    compressAssets: true,
+  },
+
+  webview: {
+    engine: "system",
+    protocols: ["asset"],
+    preferences: {
+      autoplayWithoutUserGesture: false,
+      backForwardNavigationGestures: false,
+    },
+  },
+
+  workers: {
+    capabilities: ["fetch", "websocket"],
+    headless: {
+      sync: {
+        script: "src/workers/sync.ts",
+        engine: "zjs",
+        restart: { maxRetries: 3, withinMs: 60_000 },
+      },
+    },
+  },
+
+  security: {
+    permissions: ["clipboard:read", "notifications"],
+    filesystem: {
+      allow: ["$userData/**"],
+      persistDialogGrants: true,
+    },
+  },
+
+  native: {
+    frameworks: { macOS: ["CoreLocation"], iOS: ["CoreLocation"] },
+    linkFlags: { macOS: ["-lsqlite3"], windows: ["-lws2_32"] },
+    sources: { macOS: ["src/native/LocationAdapter.m"] },
+  },
+
+  targets: {
+    macOS: {
+      icon: "build/macos/icon.icon",
+      minimumSystemVersion: "14.0",
+    },
+    iOS: {
+      icon: "build/ios/icon.png",
+      minimumSystemVersion: "17.0",
+    },
+  },
+});
+```
+
+The platform spellings in authored maps are `macOS`, `iOS`, `windows`, and
+`linux`. Misspellings such as `macos` fail validation instead of silently
+dropping target-specific configuration. Target packaging blocks are exposed as
+their implementations become real; macOS and iOS are currently typed.
+
+## Contextual configuration
+
+Configuration may be a synchronous or asynchronous factory:
+
+```ts
+export default defineConfig(async ({ command, mode, target, root }) => ({
+  application: {
+    name: target.os === "macos" ? "Z Notes" : "Z Notes Preview",
+  },
+  frontend: {
+    devServer: { port: mode === "development" ? 5173 : 4173 },
+  },
+}));
+```
+
+The context contains:
+
+| Field | Values |
+|---|---|
+| `command` | `"dev"`, `"build"`, or `"package"` |
+| `mode` | `"development"` or `"production"` |
+| `target.os` | `"macos"`, `"ios"`, `"windows"`, or `"linux"` |
+| `target.arch` | `"arm64"` or `"x64"` |
+| `target.environment` | `"desktop"`, `"simulator"`, or `"device"` |
+| `root` | Absolute application project root |
+
+Arbitrary TypeScript can choose and assemble configuration, but the returned
+value must be plain serializable data. Functions, symbols, bigints, class
+instances, cycles, non-finite numbers, and undefined array elements are
+rejected with a configuration diagnostic.
+
+## Resolution boundary
+
+The CLI evaluates configuration once per command and writes the validated,
+normalized contract to `.zapp/config.resolved.json`. Vite integration, native
+code generation, packaging, and compiled application metadata consume that
+snapshot. They do not import `zapp.config.ts` or independently execute its
+logic.
+
+The snapshot is generated build state, not a file applications should edit or
+commit. Its schema is versioned independently from the ergonomic authoring
+surface.
+
+Runtime behavior does not belong in configuration. Services, windows, menus,
+lifecycle hooks, and mutable state remain ordinary Z source.

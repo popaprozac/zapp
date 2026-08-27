@@ -54,9 +54,11 @@ Perfect for real-time updates (chat, stock prices, sync status).
 import { defineConfig } from "@zappdev/cli/config";
 
 export default defineConfig({
-  name: "My App",
-  headless: {
-    live: "src/workers/live.ts",
+  application: { name: "My App" },
+  workers: {
+    headless: {
+      live: "src/workers/live.ts",
+    },
   },
 });
 ```
@@ -98,11 +100,13 @@ failures inside `withinMs`, the supervisor gives up.
 
 ```ts
 // zapp.config.ts
-headless: {
-  sync: {
-    script: "src/workers/sync.ts",
-    engine: "zjs",
-    restart: { maxRetries: 3, withinMs: 60_000 },
+workers: {
+  headless: {
+    sync: {
+      script: "src/workers/sync.ts",
+      engine: "zjs",
+      restart: { maxRetries: 3, withinMs: 60_000 },
+    },
   },
 }
 ```
@@ -201,12 +205,12 @@ Note: `fetch` and `WebSocket` in workers require a capability declaration
 in `zapp.config.ts` for bare-* engines:
 
 ```ts
-workerModules: ["fetch", "websocket"],
+workers: { capabilities: ["fetch", "websocket"] },
 ```
 
 The CLI installs `bare-fetch` + `bare-ws`, links them in, and the Vite
 plugin injects the matching globals into the worker bundle. On `zjs`,
-the runtime layer provides intrinsics as they mature; `workerModules`
+the runtime layer provides intrinsics as they mature; `workers.capabilities`
 declarations are no-ops for zjs workers and the globals are undefined
 until the engine ships them. Move network calls to a webview (which has
 full DOM APIs) if the target engine doesn't provide them yet.
@@ -223,28 +227,29 @@ dispatcher picks per worker at create time.
 
 ```ts
 // zapp.config.ts
-const config: ZappConfig = {
-  name: "split-engine",
-  identifier: "com.example.split",
-  version: "0.1.0",
-  headless: {
-    // Sync-engine worker — small payloads, latency-sensitive.
-    // zjs's direct value-marshalling host bridge wins here.
-    sync: {
-      script: "src/workers/sync.ts",
-      engine: "zjs",
-    },
-    // Codec worker — CPU-heavy. JIT pays for itself.
-    codec: {
-      script: "src/workers/codec.ts",
-      engine: "bare-jsc",        // macOS JIT via system JSC
-    },
+export default defineConfig({
+  application: {
+    name: "split-engine",
+    identifier: "com.example.split",
+    version: "0.1.0",
   },
-  workerModules: ["fetch"],       // bare-jsc gets fetch via bare-fetch;
-                                  // zjs gets it once its runtime layer ships
-};
-
-export default config;
+  workers: {
+    headless: {
+      // Sync-engine worker — small payloads, latency-sensitive.
+      // zjs's direct value-marshalling host bridge wins here.
+      sync: {
+        script: "src/workers/sync.ts",
+        engine: "zjs",
+      },
+      // Codec worker — CPU-heavy. JIT pays for itself.
+      codec: {
+        script: "src/workers/codec.ts",
+        engine: "bare-jsc",
+      },
+    },
+    capabilities: ["fetch"],
+  },
+});
 ```
 
 The binary links both engines. Each worker boots in its own engine
@@ -500,7 +505,7 @@ Two windows that share state, synced via a headless worker.
 
 ```ts
 // zapp.config.ts
-headless: { state: "src/workers/state.ts" }
+workers: { headless: { state: "src/workers/state.ts" } }
 ```
 
 ```ts
@@ -675,10 +680,11 @@ fetch them.
 ```ts
 // zapp.config.ts
 export default defineConfig({
+  application: { name: "My App" },
   // Schemes must be declared at build time — WKWebView's scheme
   // registration is config-time only. You can declare any number;
   // each one stays dormant until JS calls Protocols.register.
-  protocols: ["asset", "media"],
+  webview: { protocols: ["asset", "media"] },
 });
 ```
 
@@ -715,13 +721,13 @@ contentType to `application/octet-stream`.
   read from disk via the FS service so the rest of the app sees a
   uniform URL space without scattered `file://` paths.
 
-### Different from `deepLinkSchemes`
+### Different from `application.deepLinks`
 
-- `deepLinkSchemes` registers a scheme **system-wide** with macOS so
+- `application.deepLinks` registers a scheme **system-wide** with macOS so
   `myapp://open/document/123` clicked from another app launches your
   app and fires `App.on(AppEvent.OPEN_URL)`. Routing happens in the
   OS.
-- `protocols` registers a scheme **inside the WebView** — Zapp
+- `webview.protocols` registers a scheme **inside the WebView** — Zapp
   intercepts navigation/fetch requests for that scheme and routes
   them to your handler. The OS doesn't see them at all.
 
@@ -745,7 +751,7 @@ mechanisms, different scheme namespaces).
   For very large bodies (>10 MB) consider chunking via streams or
   routing through a Zen-C service (lower overhead).
 - **iOS**: Same `WKURLSchemeHandler` API; shipped in alpha.54. Apps
-  declare `protocols: [...]` in `zapp.config.ts` and the iOS build
+  declare `webview.protocols: [...]` in `zapp.config.ts` and the iOS build
   registers each scheme on the `WKWebViewConfiguration`. The runtime
   side is identical — `Protocols.register(...)` works on both
   platforms with the same handler signature.
@@ -969,9 +975,11 @@ optional single-engine perf path when we add it.**
 ```ts
 // zapp.config.ts
 export default defineConfig({
-  name: "My App",
-  identifier: "com.example.myapp",
-  deepLinkSchemes: ["myapp"],  // registers myapp:// scheme
+  application: {
+    name: "My App",
+    identifier: "com.example.myapp",
+    deepLinks: ["myapp"],  // registers myapp:// scheme
+  },
 });
 ```
 
@@ -999,8 +1007,10 @@ through the registry + `WM_COPYDATA` for single-instance handling.
 ```ts
 // zapp.config.ts
 export default defineConfig({
-  name: "My App",
-  singleInstance: true,
+  application: {
+    name: "My App",
+    singleInstance: true,
+  },
 });
 ```
 
@@ -1243,13 +1253,15 @@ build/macos/icon.iconset
 build/macos/icon.png          # 1024×1024 single PNG
 ```
 
-For a custom path elsewhere, set `macos.icon` in `zapp.config.ts`:
+For a custom path elsewhere, set `targets.macOS.icon` in `zapp.config.ts`:
 
 ```ts
 export default defineConfig({
-  name: "My App",
-  macos: {
-    icon: "design/app-icon.png",
+  application: { name: "My App" },
+  targets: {
+    macOS: {
+      icon: "design/app-icon.png",
+    },
   },
 });
 ```
@@ -1263,12 +1275,14 @@ tries to use the capability.
 ```ts
 // zapp.config.ts
 export default defineConfig({
-  name: "My App",
-  macos: {
-    usageDescriptions: {
-      camera: "Capture photos for your profile",
-      microphone: "Record audio messages",
-      photos: "Pick images from your library",
+  application: { name: "My App" },
+  targets: {
+    macOS: {
+      usageDescriptions: {
+        camera: "Capture photos for your profile",
+        microphone: "Record audio messages",
+        photos: "Pick images from your library",
+      },
     },
   },
 });
@@ -1286,10 +1300,12 @@ menu bar.
 ```ts
 // zapp.config.ts
 export default defineConfig({
-  name: "My App",
-  macos: {
-    plistExtras: {
-      LSUIElement: true,    // → <true/>
+  application: { name: "My App" },
+  targets: {
+    macOS: {
+      plistExtras: {
+        LSUIElement: true,    // → <true/>
+      },
     },
   },
 });
@@ -1303,20 +1319,24 @@ Real-app config combining several options:
 import { defineConfig } from "@zappdev/cli/config";
 
 export default defineConfig({
-  name: "Conversa",
-  identifier: "com.acme.conversa",
-  version: "1.4.2",
-  deepLinkSchemes: ["conversa"],
-  macos: {
-    copyright: "Copyright © 2026 Acme Corp",
-    category: "public.app-category.social-networking",
-    minimumSystemVersion: "13.0",
-    signingIdentity: "Developer ID Application: Acme Corp (TEAM12345)",
-    usageDescriptions: {
-      camera: "Take photos for your conversations",
-      microphone: "Record voice messages",
-      photos: "Attach images from your library",
-      bluetooth: "Discover nearby contacts",
+  application: {
+    name: "Conversa",
+    identifier: "com.acme.conversa",
+    version: "1.4.2",
+    deepLinks: ["conversa"],
+  },
+  targets: {
+    macOS: {
+      copyright: "Copyright © 2026 Acme Corp",
+      category: "public.app-category.social-networking",
+      minimumSystemVersion: "13.0",
+      signingIdentity: "Developer ID Application: Acme Corp (TEAM12345)",
+      usageDescriptions: {
+        camera: "Take photos for your conversations",
+        microphone: "Record voice messages",
+        photos: "Attach images from your library",
+        bluetooth: "Discover nearby contacts",
+      },
     },
   },
 });
@@ -1374,20 +1394,22 @@ Common entitlements that fit a flat map:
 import { defineConfig } from "@zappdev/cli/config";
 
 export default defineConfig({
-  name: "my-app",
-  macos: {
-    entitlements: {
-      // Network access for a web client
-      "com.apple.security.network.client": true,
+  application: { name: "my-app" },
+  targets: {
+    macOS: {
+      entitlements: {
+        // Network access for a web client
+        "com.apple.security.network.client": true,
 
-      // File system scopes
-      "com.apple.security.files.user-selected.read-write": true,
+        // File system scopes
+        "com.apple.security.files.user-selected.read-write": true,
 
-      // Hardened runtime relaxations
-      "com.apple.security.cs.allow-jit": true,
+        // Hardened runtime relaxations
+        "com.apple.security.cs.allow-jit": true,
 
-      // App Sandbox opt-in (usually paired with narrow scopes above)
-      "com.apple.security.app-sandbox": false,
+        // App Sandbox opt-in (usually paired with narrow scopes above)
+        "com.apple.security.app-sandbox": false,
+      },
     },
   },
 });
@@ -1445,7 +1467,7 @@ Two common examples:
 - iCloud containers need a team-id-scoped container entitlement, also
   Developer ID only.
 
-For local dev against those APIs, set `macos.signingIdentity` to a
+For local dev against those APIs, set `targets.macOS.signingIdentity` to a
 self-signed or Developer ID identity so the entitlements take effect.
 `zapp dev` re-signs with the same identity and entitlements, so the
 dev run matches the `zapp package` result.
@@ -1480,9 +1502,11 @@ xcrun notarytool store-credentials zapp-notarize \
 Then in `zapp.config.ts`:
 
 ```ts
-macos: {
-  signingIdentity: "Developer ID Application: Your Name (TEAMID1234)",
-  notarize: { keychainProfile: "zapp-notarize" },
+targets: {
+  macOS: {
+    signingIdentity: "Developer ID Application: Your Name (TEAMID1234)",
+    notarize: { keychainProfile: "zapp-notarize" },
+  },
 }
 ```
 
@@ -1491,12 +1515,14 @@ macos: {
 Generate an App Store Connect API key (`.p8`). Set:
 
 ```ts
-macos: {
-  signingIdentity: "Developer ID Application: ...",
-  notarize: {
-    apiKeyPath: "/secure/path/AuthKey_AB12CD34EF.p8",
-    apiKeyId: "AB12CD34EF",
-    apiIssuerId: "1234abcd-...-...-...-1234abcd5678",
+targets: {
+  macOS: {
+    signingIdentity: "Developer ID Application: ...",
+    notarize: {
+      apiKeyPath: "/secure/path/AuthKey_AB12CD34EF.p8",
+      apiKeyId: "AB12CD34EF",
+      apiIssuerId: "1234abcd-...-...-...-1234abcd5678",
+    },
   },
 }
 ```
@@ -1512,13 +1538,15 @@ ZAPP_NOTARIZE_API_ISSUER_ID=1234abcd-...
 **Option 3 — Apple ID + app-specific password (legacy).**
 
 ```ts
-macos: {
-  signingIdentity: "Developer ID Application: ...",
-  notarize: {
-    appleId: "you@example.com",
-    teamId: "TEAMID1234",
-    // password ALWAYS via env, never config:
-    //   ZAPP_NOTARIZE_APPLE_PASSWORD=xxxx-xxxx-xxxx-xxxx
+targets: {
+  macOS: {
+    signingIdentity: "Developer ID Application: ...",
+    notarize: {
+      appleId: "you@example.com",
+      teamId: "TEAMID1234",
+      // password ALWAYS via env, never config:
+      //   ZAPP_NOTARIZE_APPLE_PASSWORD=xxxx-xxxx-xxxx-xxxx
+    },
   },
 }
 ```

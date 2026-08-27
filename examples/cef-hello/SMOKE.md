@@ -1,18 +1,18 @@
 # cef-hello — smoke matrix
 
 `examples/cef-hello` is the minimal fullbleed-web fixture for the CEF
-`webEngine:"chromium"` production slice
+`webview.engine: "chromium"` production slice
 (`docs/superpowers/specs/2026-07-05-cef-webengine-production-slice-macos-design.md`,
 branch `feat/cef-webengine-prod`). One window, one `greet` service, one
 button. Its only job is to be the render+bridge smoke target proving (a) a
 real Zapp app renders on CEF and round-trips `Services.invoke`, and (b) the
-`webEngine:"system"` (WKWebView) path is completely untouched — the gate
+`webview.engine: "system"` (WKWebView) path is completely untouched — the gate
 guarantee the whole slice depends on.
 
-Two builds, same source tree, only `zapp.config.ts`'s `webEngine` field
+Two builds, same source tree, only `zapp.config.ts`'s `webview.engine` field
 differs.
 
-## (a) `webEngine:"chromium"` — CEF render + bridge
+## (a) `webview.engine: "chromium"` — CEF render + bridge
 
 ```
 cd examples/cef-hello
@@ -28,7 +28,7 @@ Expected build output: `[zapp] CEF app bundle: .../bin/cef-hello.app` +
 |---|---|---|
 | **GATE 3** — render | A real Zapp `.app`, produced by real `zapp build`, renders its page on Chromium (not WKWebView) inside a standard Zapp `NSWindow` — CEF's external message pump correctly slots into Zapp's *existing* `NSApplication` run loop (R0, the #1 integration risk; no second `[NSApp run]`) | **PASS — human-confirmed 2026-07-06** |
 | **GATE 4** — bridge round-trip | Clicking "Say hello" runs `Services.invoke("greet", {name:"CEF"})` through the *real* transport (`bootstrap/webview.ts`'s `{t,id,m,a}` envelope, not a bespoke protocol) → `zapp_handle_message_from_window` → the real Nim router → `greet` service → `darwin_window_eval_js`'s CEF branch (`execute_java_script`) → the page. `#out` shows **`Hello from CEF`** | **PASS — human-confirmed 2026-07-06** |
-| **GATE 5** — worker→page broadcast | A headless **ZJS** worker (`src/ticker.ts`, declared in `zapp.config.ts`'s `headless.ticker` block) calls `Events.emit("tick", { n })` once a second with no point-to-point send — a plain broadcast. That rides `dispatch_event_to_all` → `darwin_webview_eval_all` (`webview.m:1247`) → `zapp_registered_webviews_eval`'s existing `ZAPP_HAS_CEF` branch (`window.m:154-164`, shipped in `6f58489` — see `docs/superpowers/specs/2026-07-06-cef-worker-hardening-design.md`'s corrected §1) → the CEF page's `Events.on("tick", …)` handler, which writes `#tick`'s text to `worker tick #N`. Proves the render-engine-independent worker edge — CEF's whole point — reaches Chromium through the same broadcast path as WKWebView, with **zero code changes** to the delivery path. | **PASS — human-confirmed 2026-07-06** (`#tick` incremented on the Chromium page; 25 ticks captured headless) |
+| **GATE 5** — worker→page broadcast | A headless **ZJS** worker (`src/ticker.ts`, declared in `zapp.config.ts`'s `workers.headless.ticker` block) calls `Events.emit("tick", { n })` once a second with no point-to-point send — a plain broadcast. That rides `dispatch_event_to_all` → `darwin_webview_eval_all` (`webview.m:1247`) → `zapp_registered_webviews_eval`'s existing `ZAPP_HAS_CEF` branch (`window.m:154-164`, shipped in `6f58489` — see `docs/superpowers/specs/2026-07-06-cef-worker-hardening-design.md`'s corrected §1) → the CEF page's `Events.on("tick", …)` handler, which writes `#tick`'s text to `worker tick #N`. Proves the render-engine-independent worker edge — CEF's whole point — reaches Chromium through the same broadcast path as WKWebView, with **zero code changes** to the delivery path. | **PASS — human-confirmed 2026-07-06** (`#tick` incremented on the Chromium page; 25 ticks captured headless) |
 
 ### Sub-cycle B — multi-window (macOS)
 
@@ -88,7 +88,7 @@ click-through above.)
 | `cef-hello` bare binary (system / WKWebView) | 1.8 MB |
 
 The ~289 MB is the framework — almost the entire opt-in cost. A
-`webEngine:"system"` build of the same app is a couple MB.
+`webview.engine: "system"` build of the same app is a couple MB.
 
 ### Sub-cycle C1 — sidebar (macOS)
 
@@ -201,7 +201,7 @@ T1 `dd31439`.
 |---|---|---|
 | **GATE 30** — resize fans to all 3 panes | Resizing window 1 updates `#winevt` with the new `resize {width,height}` in **all three** CEF panes (sidebar, host, inspector); window 2 (plain) updates it in its own host pane — the new gated `ZAPP_HAS_CEF` branch in `zapp_dispatch_event_to_js` mirrors the WK JS-build and fans out via `darwin_window_eval_js` to the host + sidebar + inspector slots | **PASS — human-confirmed 2026-07-08** |
 | **GATE 31** — focus/blur reach the CEF panes | Clicking away from window 1 then back updates `#winevt` to `blur` then `focus` in the CEF panes — proves the fix isn't resize-specific; the same gated branch dispatches every host window event | **PASS — human-confirmed 2026-07-08** |
-| **GATE 32** — C1-C3 surfaces regress cleanly + WK byte-identical | Sidebar/inspector toggles, the `ticker` broadcast, and the `greet` bridge all still work on window 1 and window 2 after the fix; the new CEF branch sits entirely before the WK early-return and `return`s ahead of it, so the WK dispatch path (`window.m`, from the early-return down) is untouched — a `webEngine:"system"` build compiles the exact pre-fix bytes | **PASS — human-confirmed 2026-07-08** |
+| **GATE 32** — C1-C3 surfaces regress cleanly + WK byte-identical | Sidebar/inspector toggles, the `ticker` broadcast, and the `greet` bridge all still work on window 1 and window 2 after the fix; the new CEF branch sits entirely before the WK early-return and `return`s ahead of it, so the WK dispatch path (`window.m`, from the early-return down) is untouched — a `webview.engine: "system"` build compiles the exact pre-fix bytes | **PASS — human-confirmed 2026-07-08** |
 
 **Known (cosmetic) difference, deferred — not a bug:** CEF (Chromium)
 reserves a bottom-right scrollbar gutter so a vertical and a horizontal
@@ -333,11 +333,11 @@ open — see FINDINGS) and the smaller backlog gaps already tracked there
 vibrancy/opacity, the manual-reload chrome-metrics gap, the scrollbar-gutter
 cosmetic difference, and a CEF "Inspect Element" context-menu entry point).
 
-## (b) `webEngine:"system"` — WKWebView, byte-identical to pre-change
+## (b) `webview.engine: "system"` — WKWebView, byte-identical to pre-change
 
 ```
 cd examples/cef-hello
-# zapp.config.ts: webEngine: "system"
+# zapp.config.ts: webview: { engine: "system" }
 rm -rf ~/.cache/nim/app_r
 bun run build
 ```
@@ -354,10 +354,10 @@ re-verified independently in this task:
   The `sha256 = 588494f859df1097160d18f371c1d35f4ac45d39e83a790594a20c0b78f93312`
   recorded above predates this cycle's fixture (`b4d30cc`, the `ticker`
   headless worker + `#tick` page wiring). That fixture changed
-  `examples/cef-hello`'s source (`zapp.config.ts`'s `headless` block,
+  `examples/cef-hello`'s source (`zapp.config.ts`'s `workers.headless` block,
   `index.html`, `main.ts`) — changes that apply identically to *both*
-  `webEngine` values, since a headless-worker declaration and its compiled-in
-  engine are independent of `webEngine`. So a fresh `system` build's hash
+  `webview.engine` values, since a headless-worker declaration and its compiled-in
+  engine are independent of `webview.engine`. So a fresh `system` build's hash
   would legitimately differ from `588494f…` now — that's expected, not a
   regression, and this task deliberately does **not** run a `system` build to
   compute a new hash (out of scope for a docs-only task). The load-bearing
@@ -379,9 +379,9 @@ re-verified independently in this task:
   (`cli/src/native.ts`'s `useCef` gate). A `system` build never imports
   `cli/src/cef.ts`.
 
-## DX gotcha — clean the Nim cache when switching `webEngine`
+## DX gotcha — clean the Nim cache when switching `webview.engine`
 
-Flipping `webEngine` between `"chromium"` and `"system"` **in place, without
+Flipping `webview.engine` between `"chromium"` and `"system"` **in place, without
 clearing the Nim build cache, breaks the link.** Nim's `{.compile.}` cache
 keys on the source file path, not on the `-D` flags (like `-DZAPP_HAS_CEF`)
 it was last compiled with — so a stale `window.m.o` / `platform.m.o` built
@@ -407,7 +407,7 @@ this task changes.
 Docked DevTools, CEF "Inspect Element" context-menu integration, Helper
 signing/notarization, iOS / Windows / Linux, per-window engine selection,
 in-app popups, and navigation/back-forward are all out of scope for this
-fixture and this slice — see `docs/api-reference.md`'s `webEngine` section
+fixture and this slice — see `docs/api-reference.md`'s `webview.engine` section
 and `spikes/cef-macos/FINDINGS.md` for what remains open. (Worker on CEF is
 GATE 5 above, not a non-goal — **PASS**, human-confirmed 2026-07-06.
 **Multi-window is GATEs 6-11 above, not a non-goal either** — sub-cycle B

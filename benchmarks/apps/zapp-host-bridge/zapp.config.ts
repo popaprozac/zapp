@@ -8,32 +8,40 @@
 // synthesises the matching `ZAPP_WORKER_ENGINE_*` defines from the
 // `engine:` field on each worker. To compare an additional engine,
 // add a worker entry below — no build.zc edits needed.
-export default {
-  name: "bench-host-bridge",
-  identifier: "com.zapp.bench.host-bridge",
-  version: "0.0.0",
+import { defineConfig } from "../../../cli/src/config.ts";
+
+export default defineConfig({
+  application: {
+    name: "bench-host-bridge",
+    identifier: "com.zapp.bench.host-bridge",
+    version: "0.0.0",
+  },
   // Auto-merged via cli/src/entitlements.ts when a JSC-class engine
   // is enabled — explicit here so the bench numbers are honest about
   // running with JIT (without `allow-jit`, bare-jsc falls back to the
   // interpreter and the comparison becomes meaningless).
-  macos: {
-    entitlements: {
-      "com.apple.security.cs.allow-jit": true,
+  targets: {
+    macOS: {
+      entitlements: {
+        "com.apple.security.cs.allow-jit": true,
+      },
     },
   },
-  headless: {
-    // Two-engine matrix today. Multi-bare-engine builds fail with
-    // duplicate-library / bad-path link errors — appears the CLI's
-    // build-config.ts emits stomping link directives when more than
-    // one bare-* engine is enabled. Workaround: swap engines between
-    // runs and merge the RESULTS.md numbers by hand.
-    //
-    // Engines deliberately excluded today:
-    //   bare-hermes — #168 fetch hang; numbers wouldn't be honest.
-    //   bare-mqjs   — vendor/bare's libmqjs cmake step needs the
-    //                 `mqjs-build` external tool not shipped with the
-    //                 toolchain. Tracked.
-    "bench-zjs":      { script: "src/bench-worker.ts", engine: "zjs" },
-    "bench-bare-jsc": { script: "src/bench-worker.ts", engine: "bare-jsc" },
+  workers: {
+    headless: {
+      // Two-engine matrix today. Multi-bare-engine builds fail with
+      // duplicate-library / bad-path link errors — appears the CLI's
+      // build-config.ts emits stomping link directives when more than
+      // one bare-* engine is enabled. Workaround: swap engines between
+      // runs and merge the RESULTS.md numbers by hand.
+      //
+      // Engines deliberately excluded today:
+      //   bare-hermes — #168 fetch hang; numbers wouldn't be honest.
+      //   bare-mqjs   — vendor/bare's libmqjs cmake step needs the
+      //                 `mqjs-build` external tool not shipped with the
+      //                 toolchain. Tracked.
+      "bench-zjs":      { script: "src/bench-worker.ts", engine: "zjs" },
+      "bench-bare-jsc": { script: "src/bench-worker.ts", engine: "bare-jsc" },
+    },
   },
-};
+});

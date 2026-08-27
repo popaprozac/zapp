@@ -30,7 +30,7 @@ the framework dispatches at runtime based on `engine: "..."` in
 
 This means:
 
-- On a **bare-*** engine, `workerModules: ["fetch"]` in `zapp.config.ts`
+- On a **bare-*** engine, `workers.capabilities: ["fetch"]` in `zapp.config.ts`
   auto-injects `bare-fetch` and exposes `fetch` as a worker global.
 - On **`zjs`** (or any non-bare engine), bare-* shims are skipped — if
   the engine ships the API intrinsically (eventually `fetch`, etc.),
@@ -45,11 +45,13 @@ Engines that ship a bytecode pipeline accept `bytecode: true` in the
 headless worker config:
 
 ```ts
-headless: {
-  ticker: {
-    script: "src/workers/ticker.ts",
-    engine: "zjs",
-    bytecode: true,   // CLI compiles to .zbc at build time
+workers: {
+  headless: {
+    ticker: {
+      script: "src/workers/ticker.ts",
+      engine: "zjs",
+      bytecode: true,   // CLI compiles to .zbc at build time
+    },
   },
 },
 ```

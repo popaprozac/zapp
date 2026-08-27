@@ -238,17 +238,21 @@ quit(runApp())
   await Bun.write(path.join(projectDir, "zapp.config.ts"), `import { defineConfig } from "@zappdev/cli/config";
 
 export default defineConfig({
-  name: "${name}",
-  identifier: "${identifier}",
-  version: "0.1.0",
+  application: {
+    name: "${name}",
+    identifier: "${identifier}",
+    version: "0.1.0",
+  },
   // Add headless TypeScript workers that start when the app boots.
   // New projects default to \`engine: "zjs"\` — first-party,
   // cross-platform, small, iOS-friendly. On macOS you can opt into
   // \`engine: "bare-jsc"\` for JIT (zero bundle cost via system JSC)
   // at the price of opting into bare-* packages for web APIs.
   //
-  //   headless: {
-  //     db: { script: "src/workers/db.ts", engine: "zjs" },
+  //   workers: {
+  //     headless: {
+  //       db: { script: "src/workers/db.ts", engine: "zjs" },
+  //     },
   //   },
 });
 `);
@@ -349,11 +353,11 @@ Drop any of these into \`build/macos/\`:
 - \`app.entitlements\` — code-signing entitlements. Passed to
   \`codesign --entitlements\` during both \`zapp dev\` and
   \`zapp package\`. Map entries in \`zapp.config.ts →
-  macos.entitlements\` override matching keys from this file.
+  targets.macOS.entitlements\` override matching keys from this file.
 
 ### Icon priority
 
-1. \`macos.icon\` path set in \`zapp.config.ts\` (explicit override)
+1. \`targets.macOS.icon\` path set in \`zapp.config.ts\` (explicit override)
 2. \`build/macos/icon.{icon,icns,iconset,png}\` (this directory)
 3. Framework default (Zapp logo)
 

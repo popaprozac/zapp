@@ -1,4 +1,4 @@
-// cef-hello — the render+bridge smoke target for the CEF `webEngine:"chromium"`
+// cef-hello — the render+bridge smoke target for CEF via `webview.engine: "chromium"`
 // production slice. One button, one service call: click → `greet` round-trips
 // through Services.invoke (webview → Nim router → back), same bridge path
 // WKWebView uses today, on whatever engine `zapp.config.ts`'s `webEngine`
@@ -134,7 +134,7 @@ if (isSidebar || isInspector || isPopover) {
   }
 }
 
-// C3 SPIKE (cef-toolbar): probe whether NSToolbar works on a webEngine:"chromium"
+// C3 SPIKE (cef-toolbar): probe whether NSToolbar works with `webview.engine: "chromium"`
 // window. The toolbar itself is attached create-time from Nim (app.nim's
 // `toolbar:` field) — HOST pane only, since that's where the native NSToolbar
 // lives (window.m's darwin_toolbar_attach is engine-agnostic and per-window,

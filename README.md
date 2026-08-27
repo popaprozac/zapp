@@ -17,10 +17,12 @@ Zapp is an application framework that produces **extraordinarily small binaries*
 
 The next native core is being written from scratch in [Z](https://github.com/popaprozac/z) and is
 available as an explicitly experimental `ZAPP_NATIVE_LANG=z` build track. The
-current Phase 0 path builds a pinned Z static library, validates its embedding
-runtime, and exercises the framework message boundary; it is not a usable
-WebView application yet. See the [rewrite charter](docs/z-rewrite-charter.md)
-and [checkpoint guide](docs/z-native-core.md).
+Phase 0 embedding path and the first Phase 1 application slice are complete:
+Z now owns a visible AppKit/WebKit window, typed JSON ingress, generated service
+round trips, and structured suspending service delivery through the real
+WebView. The small Objective-C process/run-loop host remains a boundary while
+the Z core expands. See the [rewrite charter](docs/z-rewrite-charter.md) and
+[checkpoint guide](docs/z-native-core.md).
 
 The same Zapp codebase ships to **macOS and iOS** today (Windows next). Desktop apps get the full multi-window / menu-bar / tray surface; iOS apps get UIKit-native modal sheets, file pickers, notifications, and clipboard — without any "this looks like a web app on a phone" feel.
 
@@ -61,7 +63,7 @@ Zapp workers bypass that entirely — `Services.invokeSync` is a direct C call v
 
 ### Which engine?
 
-Worker engine is **per-worker**, set in `zapp.config.ts → headless.<id>.engine`. The framework dispatches at runtime; you can mix engines within one app. Six engines ship today:
+Worker engine is **per-worker**, set in `zapp.config.ts → workers.headless.<id>.engine`. The framework dispatches at runtime; you can mix engines within one app. Six engines ship today:
 
 - **`zjs`** *(default, recommended)* — Zapp's first-party engine. ~1 MB engine cost, cross-platform, iOS-friendly (no JIT entitlement gymnastics). Direct value-marshalling host bridge at 0.45 µs. Bytecode AOT option (`bytecode: true`) ships parse-free workers.
 - **`bare-jsc`** — JIT via the system JSC framework on macOS. Zero engine bundle cost — literally smaller than zjs on Apple. Pick when absolute KB and macOS-only JIT-perf matter.
@@ -70,9 +72,11 @@ Worker engine is **per-worker**, set in `zapp.config.ts → headless.<id>.engine
 
 ```ts
 // zapp.config.ts — mix engines per worker
-headless: {
-  sync:    { script: "src/workers/sync.ts",    engine: "zjs" },
-  encoder: { script: "src/workers/encoder.ts", engine: "bare-jsc" },  // JIT-heavy
+workers: {
+  headless: {
+    sync:    { script: "src/workers/sync.ts",    engine: "zjs" },
+    encoder: { script: "src/workers/encoder.ts", engine: "bare-jsc" },
+  },
 }
 ```
 
@@ -95,6 +99,10 @@ bun run package   # .app bundle with icon (macOS)
 ```
 
 No global install needed — `bunx` fetches the CLI on the fly for init, and `bun run` uses the local copy in your project's `node_modules`.
+
+See [Zapp configuration](docs/configuration.md) for the typed nested
+`zapp.config.ts` surface, contextual factories, platform keys, and the resolved
+build boundary.
 
 iOS dev mode (requires Xcode + booted Simulator):
 ```bash
@@ -126,10 +134,12 @@ Customize `Info.plist` via typed config (autocomplete-friendly):
 
 ```ts
 // zapp.config.ts
-macos: {
-  copyright: "Copyright © 2026 You",
-  usageDescriptions: { camera: "We need camera for ...", microphone: "..." },
-  plistExtras: { LSUIElement: false, MyKey: "MyValue" },
+targets: {
+  macOS: {
+    copyright: "Copyright © 2026 You",
+    usageDescriptions: { camera: "We need camera for ...", microphone: "..." },
+    plistExtras: { LSUIElement: false, MyKey: "MyValue" },
+  },
 }
 ```
 
@@ -150,7 +160,7 @@ For nested dicts/arrays, drop a partial XML file into `build/macos/Info.plist.ex
 - **Screens** — `Screen.getAll()` / `getPrimary()` / `getCursorPoint()` + `Window.getScreen()` with bounds, work area, scale factor, and a `SCREENS_CHANGED` event. Top-left global coordinates everywhere.
 - **Sync** — `wait`/`notify` across contexts without SharedArrayBuffer.
 - **Events** — Typed cross-context events with autocomplete.
-- **Security** — Declarative permissions manifest (`permissions` in zapp.config.ts — allow/deny native capability, enforced natively), navigation allowlist, FS path allowlist, sandboxed embeds, path traversal prevention, dev tools disabled in production. See [`docs/security.md`](docs/security.md).
+- **Security** — Declarative permissions manifest (`security.permissions` in zapp.config.ts — allow/deny native capability, enforced natively), navigation allowlist, FS path allowlist, sandboxed embeds, path traversal prevention, dev tools disabled in production. See [`docs/security.md`](docs/security.md).
 - **Packaging** — `.app` bundles with icon generation (including macOS Tahoe liquid glass).
 - **iOS** — Same source compiles to iOS Simulator / device via `--platform ios`. UIKit-native presentation: `Window.create({ asSheetOf, presentation: "page" | "form" | "fullscreen" | "bottomSheet", detents, grabber })` for sheets and drawers, `UIDocumentPickerViewController` for file pickers, `UNUserNotificationCenter` for notifications + actions + reply field, `UIPasteboard` for full clipboard (text / HTML / image / files), `UIDropInteraction` for file drag-drop, custom `WKURLSchemeHandler` protocols, navigation allowlist with Safari handoff for external links.
 
@@ -242,15 +252,18 @@ to outlive individual windows.
 import { defineConfig } from "@zappdev/cli/config";
 
 export default defineConfig({
-  name: "My App",
-  // Capability modules — auto-installs `bare-fetch` + injects `fetch`
-  // global into every bundled worker.
-  workerModules: ["fetch"],
-  headless: {
-    sync: {
-      script: "src/workers/sync.ts",
-      engine: "zjs",                          // default; can also be "bare-jsc", "bare-v8", ...
-      restart: { maxRetries: 3, withinMs: 60_000 },
+  application: {
+    name: "My App",
+  },
+  workers: {
+    // Auto-installs `bare-fetch` and injects the `fetch` global.
+    capabilities: ["fetch"],
+    headless: {
+      sync: {
+        script: "src/workers/sync.ts",
+        engine: "zjs",
+        restart: { maxRetries: 3, withinMs: 60_000 },
+      },
     },
   },
 });
