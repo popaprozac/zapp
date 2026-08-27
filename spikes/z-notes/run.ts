@@ -12,9 +12,10 @@ const output = resolve(spike, "build", "zapp-z-webview");
 async function run(
   command: string[],
   env?: Record<string, string | undefined>,
+  workingDirectory = repository,
 ): Promise<void> {
   const child = Bun.spawn(command, {
-    cwd: repository,
+    cwd: workingDirectory,
     env,
     stdout: "inherit",
     stderr: "inherit",
@@ -26,32 +27,12 @@ async function run(
 }
 
 const smoke = process.argv.includes("--smoke");
-const devSmoke = process.argv.includes("--dev-smoke");
 const config = await loadConfig(
   spike,
-  createConfigContext(spike, devSmoke ? "dev" : "build", "macos"),
+  createConfigContext(spike, "build", "macos"),
 );
 
-const devServer = devSmoke
-  ? Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      async fetch(request) {
-        const pathname = new URL(request.url).pathname;
-        const asset = pathname === "/app.js" ? "app.js" : "index.html";
-        return new Response(await Bun.file(resolve(spike, "frontend", asset)).bytes(), {
-          headers: {
-            "Content-Type": asset.endsWith(".js")
-              ? "text/javascript; charset=utf-8"
-              : "text/html; charset=utf-8",
-          },
-        });
-      },
-    })
-  : null;
-const devUrl = devServer === null
-  ? undefined
-  : `http://127.0.0.1:${devServer.port}`;
+await run(["bunx", "vite", "build"], undefined, spike);
 
 const originalLanguage = process.env.ZAPP_NATIVE_LANG;
 const originalHost = process.env.ZAPP_Z_HOST;
@@ -68,7 +49,6 @@ try {
     optimize: true,
     target: "macos",
     config,
-    devUrl,
   });
   compiled = true;
 } finally {
@@ -76,16 +56,9 @@ try {
   else process.env.ZAPP_NATIVE_LANG = originalLanguage;
   if (originalHost === undefined) delete process.env.ZAPP_Z_HOST;
   else process.env.ZAPP_Z_HOST = originalHost;
-  if (!compiled) devServer?.stop(true);
 }
 
-try {
-  await run(
-    [output],
-    smoke || devSmoke
-      ? { ...process.env, ZAPP_Z_DESKTOP_SMOKE: "1" }
-      : process.env,
-  );
-} finally {
-  devServer?.stop(true);
-}
+await run(
+  [output],
+  smoke ? { ...process.env, ZAPP_Z_DESKTOP_SMOKE: "1" } : process.env,
+);

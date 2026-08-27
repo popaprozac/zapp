@@ -11,6 +11,61 @@ export interface BoundedCommandOptions {
   env?: Record<string, string>;
 }
 
+type ManagedSubprocess = ReturnType<typeof Bun.spawn>;
+
+export function signalProcessTree(
+  child: ManagedSubprocess,
+  signal: "SIGTERM" | "SIGKILL" = "SIGTERM",
+): void {
+  if (process.platform === "win32") {
+    Bun.spawnSync(["taskkill", "/F", "/T", "/PID", String(child.pid)], {
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    return;
+  }
+  try {
+    process.kill(-child.pid, signal);
+  } catch {
+    try {
+      child.kill(signal);
+    } catch {
+      // The process may have exited between observation and signalling.
+    }
+  }
+}
+
+async function exitsWithin(
+  child: ManagedSubprocess,
+  timeoutMs: number,
+): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      child.exited.then(() => true),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+/** Stop a detached child and its descendants, waiting for the port/resources
+ * owned by that tree to be released before returning. */
+export async function terminateProcessTree(
+  child: ManagedSubprocess | null,
+  graceMs = 1_500,
+): Promise<void> {
+  if (child === null) return;
+  if (child.exitCode !== null) return;
+  signalProcessTree(child, "SIGTERM");
+  if (await exitsWithin(child, graceMs)) return;
+  signalProcessTree(child, "SIGKILL");
+  await exitsWithin(child, graceMs);
+}
+
 /**
  * Run one child for a deliberately bounded amount of time.
  *
@@ -34,7 +89,7 @@ export async function runBoundedCommand(
     timedOut = true;
     if (process.platform !== "win32") {
       try {
-        process.kill(-child.pid, "SIGKILL");
+        signalProcessTree(child, "SIGKILL");
         return;
       } catch {
         // Fall through when the child exited between the timeout and signal.

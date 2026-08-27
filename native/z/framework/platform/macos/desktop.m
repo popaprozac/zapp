@@ -411,14 +411,23 @@ static BOOL zapp_desktop_has_frontend_origin(NSURL *url) {
             @"roundTrip:document.body?.dataset?.roundTrip??null,"
             @"cancellation:document.body?.dataset?.cancellation??null,"
             @"health:document.body?.dataset?.health??null,"
+            @"hmr:document.body?.dataset?.hmr??null,"
             @"status:document.querySelector('#status')?.textContent??null,"
             @"bridge:typeof globalThis[Symbol.for('zapp.bridge')]"
             @"})"
           completionHandler:^(id state, NSError *stateError) {
+            const char *frontendOrigin = zapp_desktop_frontend_origin();
+            BOOL development = frontendOrigin != NULL
+              && (strncmp(frontendOrigin, "http://", 7) == 0
+                || strncmp(frontendOrigin, "https://", 8) == 0);
+            NSString *expectedHMR = development
+              ? @"\"hmr\":\"ready\""
+              : @"\"hmr\":\"packaged\"";
             BOOL updated = [state isKindOfClass:[NSString class]]
               && [(NSString *)state containsString:@"\"roundTrip\":\"ok\""]
               && [(NSString *)state containsString:@"\"cancellation\":\"ok\""]
-              && [(NSString *)state containsString:@"\"health\":\"ok\""];
+              && [(NSString *)state containsString:@"\"health\":\"ok\""]
+              && [(NSString *)state containsString:expectedHMR];
             if (stateError != nil || !updated) {
               const char *stateText = state == nil
                 ? "<nil>"
@@ -439,10 +448,11 @@ static BOOL zapp_desktop_has_frontend_origin(NSURL *url) {
             strongSelf.receivedResponse = YES;
             strongSelf.result = 0;
             printf(
-              "visible WebView round trip window=%d request=%llu ok=%s payload=%s\n",
+              "visible WebView round trip window=%d request=%llu ok=%s hmr=%s payload=%s\n",
               windowId,
               (unsigned long long)requestId,
               ok ? "true" : "false",
+              development ? "ready" : "packaged",
               payload.UTF8String
             );
             fflush(stdout);

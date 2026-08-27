@@ -23,6 +23,7 @@ import { createProductionBundle } from "./package";
 import { generateAssetManifest } from "./assets";
 import { setCliLevel, levelFromArgv, getCliLevel, envFromLevel, clog, clogError } from "./log";
 import { nativeLanguage } from "./native-lang";
+import { signalProcessTree, terminateProcessTree } from "./bounded-process";
 
 // Bootstrap codegen lives outside cli/ in the monorepo but is bundled
 // alongside it in the published package. Dynamic import so the path
@@ -317,6 +318,7 @@ async function runDev(root: string) {
   clog(1, "starting vite dev server...");
   const viteProc = Bun.spawn(["bunx", "vite", "--port", String(port), "--strictPort"], {
     cwd: root,
+    detached: process.platform !== "win32",
     stdout: "inherit",
     stderr: "inherit",
     // Spread process.env so the vite plugin sees the runtime-set ZAPP_LOG
@@ -332,48 +334,38 @@ async function runDev(root: string) {
   ]);
   if (ready !== true) {
     clogError(`vite dev server failed to start on port ${port}`);
-    try { viteProc.kill(); } catch {}
-    process.exit(1);
+    await terminateProcessTree(viteProc);
+    throw new Error(`Vite dev server failed to start on port ${port}`);
   }
-
-  // Kill a process tree (Windows needs taskkill for child processes)
-  const killProc = (proc: ReturnType<typeof Bun.spawn> | null) => {
-    if (!proc) return;
-    try {
-      if (process.platform === "win32" && proc.pid) {
-        Bun.spawnSync(["taskkill", "/F", "/T", "/PID", String(proc.pid)], {
-          stdout: "ignore", stderr: "ignore",
-        });
-      } else {
-        proc.kill();
-      }
-    } catch {}
-  };
 
   // Register cleanup NOW, before the compile step. If compilation throws
   // (zc error, missing dep, etc.), vite would otherwise leak — the next
   // `bun run dev` would then fail with "port 5173 already in use" and
   // force the user to manually `kill` the stale vite.
   let appProc: ReturnType<typeof Bun.spawn> | null = null;
-  let cleaned = false;
-  const cleanup = (code?: number) => {
-    if (cleaned) return;
-    cleaned = true;
-    killProc(appProc);
-    killProc(viteProc);
-    if (code !== undefined) process.exit(code);
+  let cleanupPromise: Promise<void> | null = null;
+  const cleanup = (): Promise<void> => {
+    if (cleanupPromise !== null) return cleanupPromise;
+    cleanupPromise = Promise.all([
+      terminateProcessTree(appProc),
+      terminateProcessTree(viteProc),
+    ]).then(() => undefined);
+    return cleanupPromise;
   };
 
-  process.on("SIGINT", () => cleanup(0));
-  process.on("SIGTERM", () => cleanup(0));
-  process.on("exit", () => { cleaned = true; killProc(viteProc); killProc(appProc); });
+  process.on("SIGINT", () => void cleanup().then(() => process.exit(0)));
+  process.on("SIGTERM", () => void cleanup().then(() => process.exit(0)));
+  process.on("exit", () => {
+    if (appProc !== null) signalProcessTree(appProc);
+    signalProcessTree(viteProc);
+  });
   process.on("uncaughtException", (err) => {
     clogError("uncaught exception:", (err as Error)?.stack ?? err);
-    cleanup(1);
+    void cleanup().then(() => process.exit(1));
   });
   process.on("unhandledRejection", (err) => {
     clogError("unhandled rejection:", (err as Error)?.stack ?? err);
-    cleanup(1);
+    void cleanup().then(() => process.exit(1));
   });
 
   // 4. Compile native binary. If this throws, cleanup() above kills vite.
@@ -413,7 +405,7 @@ async function runDev(root: string) {
       target,
     });
   } catch (err) {
-    killProc(viteProc);
+    await cleanup();
     throw err;
   }
 
@@ -449,8 +441,8 @@ async function runDev(root: string) {
         "         xcrun simctl boot \"iPhone 17\"   # or any device from\n" +
         "         xcrun simctl list devices available"
       );
-      killProc(viteProc);
-      process.exit(1);
+      await cleanup();
+      throw new Error("No iOS Simulator is booted");
     }
 
     // Terminate any prior instance — install on top of a running app
@@ -468,8 +460,8 @@ async function runDev(root: string) {
     if (await installProc.exited !== 0) {
       const errOutput = await new Response(installProc.stderr).text();
       clogError(`simctl install failed\n${errOutput}`);
-      killProc(viteProc);
-      process.exit(1);
+      await cleanup();
+      throw new Error("simctl install failed");
     }
 
     const bundleId = config.identifier ?? `com.zapp.${exeName}.dev`;
@@ -480,6 +472,7 @@ async function runDev(root: string) {
       ["xcrun", "simctl", "launch", "--console-pty", "booted", bundleId],
       {
         cwd: root,
+        detached: process.platform !== "win32",
         stdout: "inherit",
         stderr: "inherit",
         // simctl forwards SIMCTL_CHILD_<VAR> to the launched app's env, so
@@ -496,7 +489,8 @@ async function runDev(root: string) {
       appProc.exited,
       viteProc.exited,
     ]);
-    cleanup(exitCode as number);
+    await cleanup();
+    process.exitCode = exitCode as number;
     return;
   }
 
@@ -515,6 +509,7 @@ async function runDev(root: string) {
 
   appProc = Bun.spawn([execPath], {
     cwd: root,
+    detached: process.platform !== "win32",
     stdout: "inherit",
     stderr: "inherit",
     // Bun.spawn with no env: inherits a start-time snapshot of process.env,
@@ -529,7 +524,8 @@ async function runDev(root: string) {
     viteProc.exited,
   ]);
 
-  cleanup(exitCode as number);
+  await cleanup();
+  process.exitCode = exitCode as number;
 }
 
 async function runBuild(

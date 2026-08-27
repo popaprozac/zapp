@@ -3,6 +3,11 @@ const cancelButton = document.querySelector("#cancel");
 const status = document.querySelector("#status");
 const services = globalThis.__zappServices;
 
+// Vite replaces `import.meta.hot` in production and supplies the live HMR
+// client in development. The native smoke verifies the matching mode, proving
+// that `zapp dev` loaded the app through Vite rather than a stale packaged UI.
+document.body.dataset.hmr = import.meta.hot ? "ready" : "packaged";
+
 button.addEventListener("click", async () => {
   status.textContent = "Routing…";
   try {

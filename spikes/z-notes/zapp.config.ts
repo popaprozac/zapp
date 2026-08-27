@@ -7,6 +7,6 @@ export default defineConfig({
     version: "0.1.0",
   },
   frontend: {
-    assets: "./frontend",
+    assets: "./dist",
   },
 });

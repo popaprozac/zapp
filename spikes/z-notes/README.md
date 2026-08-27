@@ -8,7 +8,7 @@ productization work.
 ## The end-user application
 
 An application author currently owns the Z application modules under `zapp/`
-and ordinary frontend assets under `frontend/`:
+and an ordinary Vite frontend under `frontend/`:
 
 ```text
 zapp/
@@ -20,8 +20,10 @@ zapp/
 ├── health-service.zs # sync-only value service
 └── sync-notes-service.zs # allocation-lean strict-C adapter
 frontend/
-├── index.html        # packaged frontend entry
-└── app.js            # external ES module, shaped like Vite output
+├── index.html        # Vite frontend entry
+└── app.js            # application ES module and generated-service consumer
+vite.config.ts        # frontend/ -> dist/ production build
+zapp.config.ts        # Zapp metadata and packaged dist/ asset root
 ```
 
 The ordinary desktop entry is deliberately small:
@@ -172,13 +174,27 @@ closes on success:
 bun run spike:z-notes:smoke
 ```
 
-That smoke exercises Brotli-compressed assets embedded directly in the native
-binary. The same logical `/notes` URL can be proven against a temporary local
-development server without changing Z source:
+That smoke runs a real Vite production build and then exercises its
+Brotli-compressed output embedded directly in the native binary. For the
+interactive development loop with Vite HMR:
+
+```sh
+bun run spike:z-notes:dev
+```
+
+The same logical `/notes` URL resolves against the live Vite origin without
+changing Z source. Closing the native application is authoritative: the CLI
+terminates the complete Vite process tree, waits for it to exit, and releases
+the development port before the command completes. The bounded form proves the
+same behavior automatically:
 
 ```sh
 bun run spike:z-notes:dev-smoke
 ```
+
+The desktop smoke reports `hmr=ready` in development and `hmr=packaged` in a
+production build, so a stale packaged frontend cannot masquerade as a working
+development session.
 
 The same app can be embedded behind the focused strict-C host:
 

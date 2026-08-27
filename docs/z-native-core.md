@@ -64,6 +64,8 @@ Run the focused end-to-end paths with:
 bun run spike:z-bridge
 bun run spike:z-notes
 bun run spike:z-notes:smoke
+bun run spike:z-notes:dev
+bun run spike:z-notes:dev-smoke
 ```
 
 The Z Notes development runner uses the fixed-point native `z` driver. Manual
@@ -85,6 +87,13 @@ the DOM. `spike:z-notes:smoke` opts into the bounded automation mode: it clicks,
 verifies the DOM, prints the response, and closes. Both use the same staged
 archive and generated embedding header as an ordinary `ZAPP_NATIVE_LANG=z`
 build.
+
+The development commands exercise the complete CLI-owned loop: Vite serves the
+same logical application URL with its HMR client, the Z-native AppKit/WebKit
+host loads it, and closing the app deterministically terminates and awaits the
+detached Vite process tree. The bounded smoke distinguishes `hmr=ready` from
+the packaged `hmr=packaged` path and verifies that port 5173 is reusable after
+shutdown.
 
 The focused `native/z/smokes/async-service/` executable proves the same service
 shape without involving WebKit timing. It routes the synchronous health path,

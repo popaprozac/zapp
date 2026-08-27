@@ -192,9 +192,11 @@ describe("Z native host inputs", () => {
     expect(notesFrontend).toContain("services.notes.count({ signal: controller.signal })");
     expect(notesFrontend).toContain('error?.name !== "AbortError"');
     expect(notesFrontend).toContain('dataset.cancellation = "ok"');
+    expect(notesFrontend).toContain('dataset.hmr = import.meta.hot ? "ready" : "packaged"');
     expect(notesHTML).toContain('<script type="module" src="/app.js"></script>');
     expect(objectiveCHost).toContain("if (!strongSelf.smokeMode) return;");
     expect(objectiveCHost).toContain("cancelled WebView response ignored");
+    expect(objectiveCHost).toContain('@"\\\"hmr\\\":\\\"ready\\\""');
     expect(nativeBuilder).toContain(
       'await rm(path.join(stagedAppSource, "z.json"), { force: true });',
     );
