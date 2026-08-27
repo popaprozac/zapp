@@ -148,10 +148,11 @@ export c function zapp_route_message_owned(
   const requestId = bridgeMessage.id;
   const control = updates.schedule(
     thread.main,
-    async move (): void => await routeMessageAndDeliver(
+    async move (): void => await routeScheduledMessageAndDeliver(
       move bridgeMessage,
       services,
       windowId,
+      requestId,
       tracked
     )
   );
@@ -181,24 +182,63 @@ function attachPendingRequest(
   current.attachRequest(id, control);
 }
 
+async function routeScheduledMessageAndDeliver(
+  message: BridgeMessage,
+  services: AsyncServices,
+  windowId: i32,
+  requestId: u64,
+  tracked: boolean
+): void on thread.main {
+  let generation: u64 = 0;
+  if (tracked) generation = beginPendingRequest(requestId);
+  const delivered = await routeMessageAndDeliver(
+    move message,
+    services,
+    windowId,
+    requestId,
+    generation,
+    tracked
+  );
+  if (!delivered) return;
+}
+
 async function routeMessageAndDeliver(
   message: BridgeMessage,
   services: AsyncServices,
   windowId: i32,
+  requestId: u64,
+  generation: u64,
   tracked: boolean
-): void on thread.main {
-  const requestId = message.id;
-  let generation: u64 = 0;
-  if (tracked) generation = beginPendingRequest(requestId);
+): boolean {
   const routed = await routeDecodedMessageWithServicesAsync(
     move message,
     services
   );
+  const delivered = await on thread.main finishAndDeliverRoutedResponse(
+    move routed,
+    windowId,
+    requestId,
+    generation,
+    tracked
+  );
+  return delivered;
+}
+
+async function finishAndDeliverRoutedResponse(
+  routed: Option<BridgeResponse>,
+  windowId: i32,
+  requestId: u64,
+  generation: u64,
+  tracked: boolean
+): boolean on thread.main {
   if (tracked) finishPendingRequest(requestId, generation);
-  match (routed) {
-    some(response) => deliverResponse(in response, windowId);
-    none => {}
-  }
+  return match (routed) {
+    some(response) => {
+      deliverResponse(in response, windowId);
+      select true;
+    }
+    none => false;
+  };
 }
 
 function beginPendingRequest(
@@ -224,7 +264,7 @@ function cancelPendingRequest(id: u64): void on thread.main {
 function deliverResponse(
   in response: BridgeResponse,
   windowId: i32
-): void {
+): void on thread.main {
   zapp_deliver_response_from_z(
     response.payload,
     response.id,

@@ -169,6 +169,13 @@ affect work that already finished. Reused wire identifiers are guarded by a
 native generation, preventing an older completion from deleting a newer
 request with the same identifier.
 
+Service routing is deliberately not declared `on thread.main`. After the
+service task resolves, one explicit placed call finishes the pending generation
+and publishes the response on main. The current WebKit callback already runs on
+main and therefore takes the zero-hop path; retaining the explicit boundary
+keeps native delivery compiler-checked and leaves service execution ready for a
+future worker or pool executor.
+
 This end-to-end cancellation path currently applies to WebView invocations.
 The embedded-worker direct-host path retains its allocation-lean synchronous or
 host-owned async behavior; cancellable worker-host calls require a corresponding

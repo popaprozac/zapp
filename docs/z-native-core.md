@@ -107,6 +107,14 @@ structured Z task. Cancellation remains cooperative: the browser rejects
 immediately, the Z task observes cancellation at a supported suspension point,
 and the browser ignores any completion that already won the race.
 
+The routing helper itself is executor-neutral. It awaits the selected service
+without claiming UI affinity, then explicitly uses
+`await on thread.main finishAndDeliverRoutedResponse(...)` for generation
+bookkeeping and native WebView delivery. WebKit currently enters this path on
+main, so publication takes the zero-hop fast path. The same router can later be
+started on a worker executor without making service code or response decoding
+implicitly main-isolated.
+
 ## Compiler contract
 
 Z reports an identity shaped like:
