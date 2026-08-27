@@ -241,6 +241,20 @@ before native compilation.
 
 ## Current service handler boundary
 
+The native build now installs a generated adapter into the isolated staged
+application source. The checked application source is never rewritten. Zapp
+verifies the compiler-provided registration offset, imports the generated
+adapter, and retains the staged registration on its async runtime path. A stale
+or mismatched source location fails the build instead of silently routing a
+different value. The Z Notes WebView smoke therefore reaches `create` and
+`count` through generated Z codecs and dispatch—not through its handwritten
+`invoke` body.
+
+This checkpoint installs generated adapters for `registerAsync` and
+`registerAsyncWithLifecycle`. Synchronous registrations stay on their existing
+allocation-lean `Service` path until the generator emits a matching synchronous
+adapter; Zapp does not silently turn them into tasks.
+
 The registration builders are generic over the framework's `Service` trait, so
 the framework does not know about Notes or any other concrete application
 type. A service supplies one non-consuming conversion into the framework's
@@ -267,25 +281,31 @@ export readonly class NotesService implements AsyncService, ServiceLifecycle {
 ```
 
 Only `create` and `count` become generated frontend methods. `invoke` is a
-framework capability and is filtered from the compiler-produced public service
-surface. Registration owns the service name and strips that prefix before
-invocation, so the service does not duplicate its route list or capture its
-registered name. There is no `ServiceBinding`, application adapter class, or
-second hand-authored route schema.
+temporary bootstrap capability needed so the original program can pass the
+current generic registration constraint before metadata generation. It is
+filtered from the compiler-produced public service surface and is no longer
+the desktop runtime dispatcher. Removing that final author-facing method and
+the `AsyncService` conformance requires a compiler/build registration marker
+that can type-check an ordinary service before its generated adapter exists;
+that is the next service-generation slice. Registration owns the service name,
+so the service does not duplicate its route list or capture its registered
+name. There is no hand-authored route schema.
 
 Application authors do not write `createNotesHandler` or another callable
-factory. The framework's generic `registerAsync<T: AsyncService>` specialization
-creates the `on thread.any` async closure over the concrete service, and the
-compiler validates that concrete captured graph before publishing it. A mutable or otherwise
+factory. Zapp generates the codecs, method dispatch, `AsyncService` adapter,
+and lifecycle forwarding over the concrete service. The compiler validates
+that concrete captured graph before publishing it. A mutable or otherwise
 non-shareable service fails at registration with the reason its capture cannot
 cross arbitrary threads; `Mutex<T>` and deeply readonly ARC services satisfy
 the established sharing rules.
 
-The remaining handwritten `invoke` method is the current checked wire adapter:
-it decodes `ServiceInvocation`, calls the service's typed public methods, and
-encodes `ServiceOutcome`. Compiler-produced service metadata already knows
-those methods and types, so synthesizing this final router is a future Zapp
-code-generation step rather than a permanent per-service factory convention.
+The remaining handwritten `invoke` method is dormant in the desktop runtime;
+the generated adapter now decodes `ServiceInvocation`, calls the typed public
+methods, and encodes `ServiceOutcome`. Its temporary purpose is only to make
+the original source satisfy the pre-generation `AsyncService` constraint. The
+compiler-produced metadata already knows the ordinary methods and types, so
+the next slice can replace that bootstrap constraint rather than preserve a
+per-service adapter convention.
 
 ## Async services
 

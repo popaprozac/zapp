@@ -39,6 +39,10 @@ function generatedName(value: string): string {
   return value[0].toUpperCase() + value.slice(1);
 }
 
+export function zServiceAdapterFactoryName(serviceName: string): string {
+  return `__zappAdapt${generatedName(serviceName)}`;
+}
+
 function relativeModule(fromFile: string, target: string): string {
   let relative = path.relative(path.dirname(fromFile), target).replaceAll(path.sep, "/");
   if (!relative.startsWith(".")) relative = `./${relative}`;
@@ -166,7 +170,10 @@ ${fields}
 }`;
 }
 
-function renderMethod(serviceType: string, method: ZServiceMethodMetadata): string {
+function renderSyncMethodHelper(
+  serviceType: string,
+  method: ZServiceMethodMetadata,
+): string {
   if (method.receiverMode !== "in") {
     throw new Error(
       `[zapp] generated repeatable service dispatch requires an in receiver for `
@@ -199,13 +206,28 @@ function renderMethod(serviceType: string, method: ZServiceMethodMetadata): stri
     };
 `
     : "";
+  return `function __zappDispatch${generatedName(serviceType)}${generatedName(method.name)}(
+  service: ${serviceType},
+  in invocation: ServiceInvocation
+): ServiceOutcome {
+${decode}  const result = ${call};
+  const encoded = __zappEncode${generatedName(method.returns)}(
+    ${moved(method.returns, "result")}
+  );
+  return ServiceOutcome.success(json.stringify(in encoded));
+}`;
+}
+
+function renderSyncMethodBranch(
+  serviceType: string,
+  method: ZServiceMethodMetadata,
+): string {
   return `  // Static method ID: ${method.id}
   if (invocation.method == ${JSON.stringify(method.name)}) {
-${decode}    const result = ${call};
-    const encoded = __zappEncode${generatedName(method.returns)}(
-      ${moved(method.returns, "result")}
+    return __zappDispatch${generatedName(serviceType)}${generatedName(method.name)}(
+      move service,
+      in invocation
     );
-    return ServiceOutcome.success(json.stringify(in encoded));
   }`;
 }
 
@@ -227,7 +249,7 @@ function renderAsyncMethodHelpers(
   }
   const suffix = `${generatedName(serviceType)}${generatedName(method.name)}`;
   const encode = `  const encoded = __zappEncode${generatedName(method.returns)}(
-    ${moved(method.returns, "result")}
+    ${moved(method.returns, "methodResult")}
   );
   return ServiceOutcome.success(json.stringify(in encoded));`;
   if (method.executorAffinity === "thread.main") {
@@ -240,14 +262,14 @@ function renderAsyncMethodHelpers(
 async function __zappFinish${suffix}(
   service: ${serviceType}
 ): ServiceOutcome {
-  const result = await __zappCall${suffix}(move service);
+  const methodResult = await __zappCall${suffix}(move service);
 ${encode}
 }`;
   }
   return `async function __zappFinish${suffix}(
   service: ${serviceType}
 ): ServiceOutcome {
-  const result = await service.${method.name}();
+  const methodResult = await service.${method.name}();
 ${encode}
 }`;
 }
@@ -259,7 +281,7 @@ function renderDispatcher(
   assertIdentifier(service.type, "service type");
   if (service.kind !== "class") {
     throw new Error(
-      `[zapp] the generated async adapter preview currently requires a class service; `
+      `[zapp] generated async service adapters currently require a class service; `
       + `${service.type} is a ${service.kind}`,
     );
   }
@@ -268,13 +290,15 @@ function renderDispatcher(
   ));
   if (asynchronous.length > 1) {
     throw new Error(
-      `[zapp] the native dispatcher preview currently supports one suspending method per `
+      `[zapp] native generated dispatch currently supports one suspending method per `
       + `service; ${service.type} has ${asynchronous.length}`,
     );
   }
   const synchronous = service.methods.filter((method) => !asynchronous.includes(method));
-  const helpers = asynchronous
-    .map((method) => renderAsyncMethodHelpers(service.type, method))
+  const helpers = [
+    ...synchronous.map((method) => renderSyncMethodHelper(service.type, method)),
+    ...asynchronous.map((method) => renderAsyncMethodHelpers(service.type, method)),
+  ]
     .join("\n\n");
   const asyncTail = asynchronous.length === 0
     ? '  return ServiceOutcome.failure("UNKNOWN_METHOD");'
@@ -308,7 +332,7 @@ function renderDispatcher(
   service: ${service.type},
   in invocation: ServiceInvocation
 ): ServiceOutcome {
-${synchronous.map((method) => renderMethod(service.type, method)).join("\n")}
+${synchronous.map((method) => renderSyncMethodBranch(service.type, method)).join("\n")}
 ${asyncTail}
 }
 
@@ -318,15 +342,15 @@ export readonly class ${adapter} implements ${implemented} {
   async function invoke(
     in invocation: ServiceInvocation
   ): ServiceOutcome {
-    const service = this.service;
+    const target = this.service;
     return await __zappInvoke${generatedName(service.name)}(
-      move service,
+      move target,
       in invocation
     );
   }${lifecycle}
 }
 
-export function __zappAdapt${generatedName(service.name)}(
+export function ${zServiceAdapterFactoryName(service.name)}(
   service: ${service.type}
 ): ${adapter} {
   return new ${adapter}({ service: move service });
@@ -417,7 +441,7 @@ ${manifest.services.map(renderDispatcher).join("\n\n")}
 `;
 }
 
-export async function generateZServiceDispatcherPreview(
+export async function generateZServiceDispatchers(
   manifest: ZServiceManifest,
   options: RenderZServiceDispatchersOptions,
 ): Promise<string> {

@@ -73,6 +73,8 @@ describe("generated Z service dispatch", () => {
     );
     expect(source).toContain("// Static method ID: 3539395672");
     expect(source).toContain("service.create(move input)");
+    expect(source).toContain("function __zappDispatchNotesServiceCreate(");
+    expect(source).toContain("return __zappDispatchNotesServiceCreate(");
     expect(source).toContain("await on thread.main service.count()");
     expect(source).toContain("__zappDecodeCreateNoteInput");
     expect(source).toContain("__zappEncodeNote");

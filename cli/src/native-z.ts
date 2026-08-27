@@ -283,8 +283,11 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
     generateZServiceBindings,
     renderZServiceWebviewRuntime,
   } = await import("./z-service-bindings");
-  const { generateZServiceDispatcherPreview } = await import(
+  const { generateZServiceDispatchers } = await import(
     "./z-service-dispatcher"
+  );
+  const { installGeneratedZServiceRegistrations } = await import(
+    "./z-service-registration"
   );
   const {
     deriveZServiceManifest,
@@ -311,7 +314,7 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
     `${JSON.stringify(serviceManifest, null, 2)}\n`,
     "utf8",
   );
-  const dispatcherPreview = await generateZServiceDispatcherPreview(
+  const dispatcher = await generateZServiceDispatchers(
     serviceManifest,
     {
       outputPath: path.join(stage, "generated", "service-dispatchers.zs"),
@@ -338,8 +341,15 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
       ),
     },
   );
-  await run([...compiler, "check", dispatcherPreview], options.root, true);
-  console.log(`[zapp] checked generated Z service dispatch ${dispatcherPreview}`);
+  await run([...compiler, "check", dispatcher], options.root, true);
+  console.log(`[zapp] checked generated Z service dispatch ${dispatcher}`);
+  const rewrittenModules = await installGeneratedZServiceRegistrations(
+    serviceManifest,
+    dispatcher,
+  );
+  for (const modulePath of rewrittenModules) {
+    console.log(`[zapp] installed generated service adapters in ${modulePath}`);
+  }
   const generatedBinding = await generateZServiceBindings(
     serviceManifest,
     path.join(options.root, ".zapp", "generated"),

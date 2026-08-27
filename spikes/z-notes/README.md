@@ -48,17 +48,19 @@ scope close/join all execute without a Stage 0 override.
 
 `NotesCore` is a normal readonly ARC class with synchronized state and owns the
 single implementation of `create`, `count`, JSON decoding, and JSON encoding.
-`NotesService` is the suspending desktop adapter. Its public `create` and
+`NotesService` is the application-owned service. Its public `create` and
 `count` methods are the frontend API. `count` is a real main-executor `async`
 method, while `create` is synchronous Z; generated TypeScript bindings expose
-both service invocations uniformly as cancellable promises. It implements
-`AsyncService` with a framework-synthesized callable around suspending
-`invoke()` and
-`ServiceLifecycle` with main-thread `start` and `stop` methods.
-`registerAsyncWithLifecycle` derives both
-adapters from the same service identity; the application does not register the
-service twice. Framework methods are excluded from generated TypeScript
-bindings. The framework owns the registered service name and method-prefix
+both service invocations uniformly as cancellable promises. The build now
+generates and installs its checked `AsyncService` dispatcher plus lifecycle
+forwarder into the isolated staged application. The original `main.zs` remains
+unchanged. `registerAsyncWithLifecycle` derives both adapters from the same
+service identity; the application does not register the service twice.
+Framework methods are excluded from generated TypeScript bindings. The
+handwritten `invoke()` and explicit `AsyncService` conformance remain a
+bootstrap-only constraint until registration of an ordinary service value can
+be checked before code generation; the desktop runtime no longer calls that
+method. The framework owns the registered service name and method-prefix
 routing; the service does not repeat a route list, capture its registration
 name, or construct a binding object.
 
