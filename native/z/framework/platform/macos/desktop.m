@@ -23,6 +23,7 @@ static ZAppDesktopHost *prepared_host = nil;
 @property(nonatomic, weak) WKUserContentController *userContentController;
 @property(nonatomic, assign) BOOL receivedResponse;
 @property(nonatomic, assign) BOOL smokeMode;
+@property(nonatomic, assign) BOOL windowVisible;
 @property(nonatomic, assign) int32_t result;
 - (int32_t)run;
 - (void)deliverPayload:(NSString *)payload
@@ -57,12 +58,14 @@ static ZAppDesktopHost *prepared_host = nil;
 
 + (void)attachWindow:(NSWindow *)window
              webView:(WKWebView *)webView
-   contentController:(WKUserContentController *)contentController {
+   contentController:(WKUserContentController *)contentController
+             visible:(BOOL)visible {
   ZAppDesktopHost *host = active_host;
   if (host == nil) return;
   host.window = window;
   host.webView = webView;
   host.userContentController = contentController;
+  host.windowVisible = visible;
   window.delegate = host;
 }
 
@@ -90,12 +93,51 @@ void zapp_deliver_response_from_z(
               windowId:window_id];
 }
 
+static ZAppDesktopHost *zapp_desktop_active_window_host(void) {
+  return active_host != nil ? active_host : prepared_host;
+}
+
+NSRect zapp_desktop_make_rect(uint32_t width, uint32_t height) {
+  return NSMakeRect(0.0, 0.0, (CGFloat)width, (CGFloat)height);
+}
+
+void zapp_desktop_window_show(const char *window_id) {
+  (void)window_id;
+  ZAppDesktopHost *host = zapp_desktop_active_window_host();
+  [host.window makeKeyAndOrderFront:nil];
+}
+
+void zapp_desktop_window_hide(const char *window_id) {
+  (void)window_id;
+  ZAppDesktopHost *host = zapp_desktop_active_window_host();
+  [host.window orderOut:nil];
+}
+
+void zapp_desktop_window_close(const char *window_id) {
+  (void)window_id;
+  ZAppDesktopHost *host = zapp_desktop_active_window_host();
+  [host.window close];
+}
+
+void zapp_desktop_window_set_title(
+  const char *window_id,
+  const char *title
+) {
+  (void)window_id;
+  ZAppDesktopHost *host = zapp_desktop_active_window_host();
+  NSString *value = title == NULL
+    ? @""
+    : [NSString stringWithUTF8String:title];
+  if (value != nil) host.window.title = value;
+}
+
 @implementation ZAppDesktopHost
 
 - (instancetype)init {
   self = [super init];
   if (self != nil) {
     _receivedResponse = NO;
+    _windowVisible = YES;
     const char *smoke = getenv("ZAPP_Z_DESKTOP_SMOKE");
     _smokeMode = smoke != NULL && strcmp(smoke, "1") == 0;
     _result = _smokeMode ? 41 : 0;
@@ -331,7 +373,7 @@ void zapp_deliver_response_from_z(
   [self.webView loadHTMLString:html baseURL:nil];
 
   [self.window center];
-  [self.window makeKeyAndOrderFront:nil];
+  if (self.windowVisible) [self.window makeKeyAndOrderFront:nil];
   active_host = self;
   [application activate];
   if (self.smokeMode) {

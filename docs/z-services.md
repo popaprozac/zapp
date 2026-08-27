@@ -21,6 +21,11 @@ The public lifecycle is designed around a consuming application builder:
 async function main(): i32 on thread.main {
   let app = Application();
   app.services.register("notes", createNotesService());
+  const mainWindow = app.windows.create(WindowOptions({
+    title: "Notes",
+    width: 900,
+    height: 640,
+  }));
   return try await app.run();
 }
 ```
@@ -33,6 +38,20 @@ blocking platform run loop until shutdown.
 There is no user-facing `finish()` call. Internally, `freeze()` names the exact
 mutable-builder to readonly-router transition and matches Z collection
 vocabulary.
+
+`app.windows` is a readonly class reference: application code cannot replace
+the manager, while its main-executor methods may safely update the manager's
+owned state. This is Z's shallow `readonly` contract, not a recursive freeze.
+`WindowOptions()` supplies defaults, and each successful `create` returns a
+stable ARC `Window` handle with `show`, `hide`, `setTitle`, and idempotent
+`close` operations. The current macOS vertical slice realizes one window
+registered before `run`; native dynamic and multi-window realization are
+explicit follow-up work.
+
+`Application.run` throws the exhaustive `ApplicationError` enum. Service
+lifecycle failures remain typed as its `lifecycle` variant, while window and
+platform setup failures use `window` and `platform`. This keeps one application
+boundary without flattening the underlying failure contracts into integers.
 
 ## Lifecycle is explicit and exceptional
 

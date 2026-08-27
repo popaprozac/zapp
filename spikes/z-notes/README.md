@@ -26,18 +26,32 @@ The ordinary desktop entry is deliberately small:
 import { createNotesService } from "./notes-service.zs";
 import { createHealthService } from "./health-service.zs";
 import { Application } from "../../../native/z/framework/application.zs";
+import { WindowOptions } from "../../../native/z/framework/window.zs";
 import { thread } from "std/thread";
 
 async function main(): i32 on thread.main {
   let app = Application();
   app.services.register("notes", createNotesService());
   app.services.register("health", createHealthService());
+  const mainWindow = app.windows.create(WindowOptions({
+    title: "Z Notes",
+    width: 720,
+    height: 460,
+  }));
   return match (attempt await app.run()) {
     success(status) => status;
     failure(_) => 70;
   };
 }
 ```
+
+`WindowOptions` is an ordinary value struct with defaults. `create` returns a
+shared `Window` identity immediately and the manager retains every open window.
+The first macOS native tier realizes one window registered before `run`; title,
+size, visibility, and resizability reach AppKit. `Window.show()`, `hide()`,
+`setTitle()`, and idempotent `close()` are main-executor operations. Native
+multi-window and dynamic creation are the next window-runtime slice rather than
+hidden behavior in this first checkpoint.
 
 The repository-relative framework import is temporary. A real package/module
 resolver should make it an ordinary stable Zapp import without copying runtime
@@ -93,7 +107,9 @@ The code an application should not own now lives under:
 native/z/framework/
 ├── application.zs
 ├── application-contract.zs
+├── application-error.zs
 ├── application-services.zs
+├── window.zs
 ├── services.zs
 ├── service-contract.zs
 ├── async-services.zs

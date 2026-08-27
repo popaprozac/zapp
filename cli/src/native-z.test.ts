@@ -195,8 +195,11 @@ describe("Z native host inputs", () => {
     expect(app).toContain('app.services.register("health", createHealthService());');
     expect(app).toContain("const result = attempt await app.run();");
     expect(application).toContain("export struct Application");
+    expect(application).toContain(
+      "readonly windows: WindowManager = createWindowManager()",
+    );
     expect(application).toContain("services: ApplicationServicesBuilder = createApplicationServices();");
-    expect(application).toContain("throws ServiceLifecycleError on thread.main");
+    expect(application).toContain("throws ApplicationError on thread.main");
     expect(application).toContain("const config = prepareApplication(move this);");
     expect(application).toContain("const updates = new TaskScope();");
     expect(application).toContain("const { routes, asynchronous, lifecycles }");

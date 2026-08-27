@@ -5,6 +5,7 @@ import {
 } from "../framework/platform/headless.zs";
 import { createAsyncServices } from "../framework/async-services.zs";
 import { createServiceLifecycles } from "../framework/service-lifecycle.zs";
+import { createWindowManager } from "../framework/window.zs";
 import { TaskScope } from "std/async";
 import { thread } from "std/thread";
 
@@ -15,6 +16,7 @@ async function main(): i32 on thread.main {
       identifier: "com.zapp.headless",
       version: "0.1.0",
     }),
+    windows: createWindowManager(),
     services: createAsyncServices().freeze(),
     lifecycles: createServiceLifecycles().freeze(),
   });

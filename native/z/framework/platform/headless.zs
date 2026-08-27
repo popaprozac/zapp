@@ -1,8 +1,8 @@
 import { PreparedApplication } from "../application-contract.zs";
+import { ApplicationError } from "../application-error.zs";
 import { ApplicationMetadata } from "../application-metadata.zs";
 import {
   ApplicationContext,
-  ServiceLifecycleError,
 } from "../service-lifecycle-contract.zs";
 import { thread } from "std/thread";
 import { TaskScope } from "std/async";
@@ -15,7 +15,7 @@ struct HeadlessApplicationRuntime {
 export async function runApplicationPlatform(
   config: PreparedApplication,
   updates: TaskScope
-): i32 throws ServiceLifecycleError on thread.main {
+): i32 throws ApplicationError on thread.main {
   const runtime = HeadlessApplicationRuntime({
     exitStatus: 0,
     configuredNameBytes: config.metadata.name.byteLength,
@@ -31,14 +31,14 @@ export async function runApplicationPlatform(
   const started = attempt config.lifecycles.start(in context);
   match (started) {
     success => {}
-    failure(startError) => throw startError;
+    failure(startError) => throw ApplicationError.lifecycle(startError);
   }
   const status = runtime.exitStatus;
   await updates.close();
   const stopped = attempt config.lifecycles.stop(in context);
   match (stopped) {
     success => {}
-    failure(stopError) => throw stopError;
+    failure(stopError) => throw ApplicationError.lifecycle(stopError);
   }
   return status;
 }

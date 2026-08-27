@@ -12,6 +12,7 @@
 
 int32_t zapp_desktop_run(void);
 int32_t zapp_desktop_prepare(void);
+NSRect zapp_desktop_make_rect(uint32_t width, uint32_t height);
 
 @interface ZAppDesktopRegistrationOwner : NSObject
 - (instancetype)initWithContentController:(WKUserContentController *)controller;
@@ -22,5 +23,14 @@ int32_t zapp_desktop_prepare(void);
 @interface ZAppDesktopBridge : NSObject
 + (void)attachWindow:(NSWindow *)window
              webView:(WKWebView *)webView
-   contentController:(WKUserContentController *)contentController;
+   contentController:(WKUserContentController *)contentController
+             visible:(BOOL)visible;
 @end
+
+void zapp_desktop_window_show(const char *window_id);
+void zapp_desktop_window_hide(const char *window_id);
+void zapp_desktop_window_close(const char *window_id);
+void zapp_desktop_window_set_title(
+  const char *window_id,
+  const char *title
+);

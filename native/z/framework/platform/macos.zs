@@ -1,5 +1,10 @@
 import native from "zapp_desktop.h";
 import { PreparedApplication } from "../application-contract.zs";
+import {
+  ApplicationError,
+  PlatformError,
+  WindowError,
+} from "../application-error.zs";
 import { ApplicationMetadata } from "../application-metadata.zs";
 import { routeDecodedMessageWithServicesAsync } from "../async-bridge.zs";
 import { AsyncServices } from "../async-services.zs";
@@ -11,7 +16,6 @@ import {
 } from "../bridge.zs";
 import {
   ApplicationContext,
-  ServiceLifecycleError,
 } from "../service-lifecycle-contract.zs";
 import { zapp_deliver_response_from_z } from "zapp_router.h";
 import objc from "std/objc";
@@ -22,6 +26,13 @@ import {
   PendingRequests,
   createPendingRequests,
 } from "../pending-requests.zs";
+import {
+  WindowBackend,
+  WindowCreateOperation,
+  WindowOptions,
+  WindowOperation,
+  WindowTitleOperation,
+} from "../window.zs";
 
 class DesktopMessageHandler on thread.main
   implements native.WKScriptMessageHandler {
@@ -92,9 +103,38 @@ const application = Once<MacOSApplicationRuntime>();
 export async function runMacOSApplication(
   config: PreparedApplication,
   updates: TaskScope
-): i32 throws ServiceLifecycleError on thread.main {
+): i32 throws ApplicationError on thread.main {
   const prepared = native.zapp_desktop_prepare();
-  if (prepared != 0) return prepared;
+  if (prepared != 0) {
+    throw ApplicationError.platform(PlatformError({
+      code: prepared,
+      message: "could not prepare the macOS application runtime",
+    }));
+  }
+  let windows = config.windows;
+  const registeredWindows = windows.all();
+  if (registeredWindows.length == 0) {
+    throw ApplicationError.window(WindowError({
+      id: "",
+      message: "a macOS desktop application requires a registered window in this tier",
+    }));
+  }
+  if (registeredWindows.length > 1) {
+    throw ApplicationError.window(WindowError({
+      id: "",
+      message: "native multi-window realization is not implemented yet",
+    }));
+  }
+  const primaryWindow = registeredWindows[0];
+  const primaryWindowId = copy primaryWindow.id;
+  const configuredOptions = windows.__options(in primaryWindowId);
+  const primaryOptions = match (configuredOptions) {
+    some(options) => options;
+    none => throw ApplicationError.window(WindowError({
+      id: copy primaryWindowId,
+      message: "the registered window lost its configuration",
+    }));
+  };
   const context = ApplicationContext({
     metadata: ApplicationMetadata({
       name: copy config.metadata.name,
@@ -105,21 +145,66 @@ export async function runMacOSApplication(
   const lifetime = initializeMacOSApplicationRuntime(
     copy config.metadata.name,
     config.services,
-    updates
+    updates,
+    in primaryOptions
   );
+  windows.__start(macOSWindowBackend(), false);
   const started = attempt config.lifecycles.start(in context);
   match (started) {
     success => {}
-    failure(startError) => throw startError;
+    failure(startError) => throw ApplicationError.lifecycle(startError);
   }
   const status = native.zapp_desktop_run();
+  windows.__stop();
   await updates.cancel();
   const stopped = attempt config.lifecycles.stop(in context);
   match (stopped) {
     success => {}
-    failure(stopError) => throw stopError;
+    failure(stopError) => throw ApplicationError.lifecycle(stopError);
   }
   return status;
+}
+
+function createMacOSWindowDeferred(
+  in id: String,
+  in options: WindowOptions
+): void on thread.main {
+  // Startup realization is owned by runMacOSApplication in the first native
+  // window tier. Dynamic and multi-window creation use this seam next.
+}
+
+function showMacOSWindow(in id: String): void on thread.main {
+  native.zapp_desktop_window_show(id);
+}
+
+function hideMacOSWindow(in id: String): void on thread.main {
+  native.zapp_desktop_window_hide(id);
+}
+
+function closeMacOSWindow(in id: String): void on thread.main {
+  native.zapp_desktop_window_close(id);
+}
+
+function setMacOSWindowTitle(
+  in id: String,
+  in title: String
+): void on thread.main {
+  native.zapp_desktop_window_set_title(id, title);
+}
+
+function macOSWindowBackend(): WindowBackend on thread.main {
+  const create: WindowCreateOperation = createMacOSWindowDeferred;
+  const show: WindowOperation = showMacOSWindow;
+  const hide: WindowOperation = hideMacOSWindow;
+  const close: WindowOperation = closeMacOSWindow;
+  const setTitle: WindowTitleOperation = setMacOSWindowTitle;
+  return WindowBackend({
+    create,
+    show,
+    hide,
+    close,
+    setTitle,
+  });
 }
 
 export c function zapp_route_message_owned(
@@ -283,7 +368,8 @@ function deliverResponse(
 function initializeMacOSApplicationRuntime(
   name: String,
   services: AsyncServices,
-  updates: TaskScope
+  updates: TaskScope,
+  in options: WindowOptions
 ): OnceLifetime<MacOSApplicationRuntime> on thread.main {
   const contentController = native.WKUserContentController.alloc().init();
   const registrationOwner = native.ZAppDesktopRegistrationOwner.alloc()
@@ -296,26 +382,35 @@ function initializeMacOSApplicationRuntime(
   const configuration = native.WKWebViewConfiguration.alloc().init();
   configuration.userContentController = contentController;
 
-  const frame = native.NSMakeRect(0.0, 0.0, 720.0, 460.0);
+  const frame = native.zapp_desktop_make_rect(
+    options.width,
+    options.height
+  );
   const webView = native.WKWebView.alloc().initWithFrame(
     frame,
     configuration: configuration
   );
-  const style = native.NSWindowStyleMaskTitled
-    | native.NSWindowStyleMaskClosable
-    | native.NSWindowStyleMaskResizable;
+  let style = native.NSWindowStyleMaskTitled
+    | native.NSWindowStyleMaskClosable;
+  if (options.resizable) {
+    style = style | native.NSWindowStyleMaskResizable;
+  }
   const window = native.NSWindow.alloc().initWithContentRect(
     frame,
     styleMask: style,
     backing: native.NSBackingStoreBuffered,
     defer: false
   );
-  window.title = copy name;
+  const title = options.title.byteLength == 0
+    ? copy name
+    : copy options.title;
+  window.title = move title;
   window.contentView = webView;
   native.ZAppDesktopBridge.attachWindow(
     window,
     webView: webView,
-    contentController: contentController
+    contentController: contentController,
+    visible: options.visible
   );
 
   const value = new MacOSApplicationRuntime({

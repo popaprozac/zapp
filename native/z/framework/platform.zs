@@ -1,6 +1,6 @@
 import { PreparedApplication } from "./application-contract.zs";
+import { ApplicationError } from "./application-error.zs";
 import { runMacOSApplication } from "./platform/macos.zs";
-import { ServiceLifecycleError } from "./service-lifecycle-contract.zs";
 import { thread } from "std/thread";
 import { TaskScope } from "std/async";
 
@@ -9,6 +9,6 @@ import { TaskScope } from "std/async";
 export async function runApplicationPlatform(
   config: PreparedApplication,
   updates: TaskScope
-): i32 throws ServiceLifecycleError on thread.main {
+): i32 throws ApplicationError on thread.main {
   return try await runMacOSApplication(move config, updates);
 }
