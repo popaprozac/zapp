@@ -12,9 +12,12 @@ export interface ZServiceTypeMetadata {
 }
 
 export interface ZServiceMethodMetadata {
+  id: number;
   name: string;
   input?: string;
   returns: string;
+  asynchronous: boolean;
+  executorAffinity: string | null;
 }
 
 export interface ZServiceMetadata {
@@ -24,7 +27,7 @@ export interface ZServiceMetadata {
 }
 
 export interface ZServiceManifest {
-  schemaVersion: 1;
+  schemaVersion: 2;
   types: ZServiceTypeMetadata[];
   services: ZServiceMetadata[];
 }
@@ -119,7 +122,7 @@ function renderService(service: ZServiceMetadata): string {
 }
 
 export function renderZServiceBindings(manifest: ZServiceManifest): string {
-  if (manifest.schemaVersion !== 1) {
+  if (manifest.schemaVersion !== 2) {
     throw new Error(`[zapp] unsupported Z service metadata schema ${manifest.schemaVersion}`);
   }
   return `// AUTO-GENERATED from Z service metadata. Do not edit.

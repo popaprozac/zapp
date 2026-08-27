@@ -3,6 +3,7 @@ import {
   deriveZServiceManifest,
   parseZProgramMetadata,
   type ZProgramMetadata,
+  zServiceMethodId,
 } from "./z-program-metadata";
 
 const metadata: ZProgramMetadata = {
@@ -53,6 +54,7 @@ const metadata: ZProgramMetadata = {
               visibility: "public",
               signature: {
                 asynchronous: false,
+                executorAffinity: null,
                 parameterModes: ["value"],
                 parameterTypes: ["CreateNoteInput"],
                 returnType: "Note",
@@ -64,7 +66,8 @@ const metadata: ZProgramMetadata = {
               staticMethod: false,
               visibility: "public",
               signature: {
-                asynchronous: false,
+                asynchronous: true,
+                executorAffinity: "thread.main",
                 parameterModes: [],
                 parameterTypes: [],
                 returnType: "u64",
@@ -77,6 +80,7 @@ const metadata: ZProgramMetadata = {
               visibility: "public",
               signature: {
                 asynchronous: false,
+                executorAffinity: null,
                 parameterModes: ["in"],
                 parameterTypes: ["ServiceInvocation"],
                 returnType: "ServiceOutcome",
@@ -89,6 +93,7 @@ const metadata: ZProgramMetadata = {
               visibility: "public",
               signature: {
                 asynchronous: false,
+                executorAffinity: "thread.main",
                 parameterModes: ["in"],
                 parameterTypes: ["ApplicationContext"],
                 returnType: "void",
@@ -101,6 +106,7 @@ const metadata: ZProgramMetadata = {
               visibility: "public",
               signature: {
                 asynchronous: false,
+                executorAffinity: "thread.main",
                 parameterModes: ["in"],
                 parameterTypes: ["ApplicationContext"],
                 returnType: "void",
@@ -129,7 +135,7 @@ const metadata: ZProgramMetadata = {
 describe("compiler-produced Z program metadata", () => {
   it("derives the typed service manifest without scanning Z source", () => {
     expect(deriveZServiceManifest(metadata)).toEqual({
-      schemaVersion: 1,
+      schemaVersion: 2,
       types: [
         { name: "CreateNoteInput", fields: [{ name: "title", type: "String" }] },
         {
@@ -144,8 +150,21 @@ describe("compiler-produced Z program metadata", () => {
         name: "notes",
         type: "NotesService",
         methods: [
-          { name: "create", input: "CreateNoteInput", returns: "Note" },
-          { name: "count", returns: "u64" },
+          {
+            id: zServiceMethodId("notes.create"),
+            name: "create",
+            input: "CreateNoteInput",
+            returns: "Note",
+            asynchronous: false,
+            executorAffinity: null,
+          },
+          {
+            id: zServiceMethodId("notes.count"),
+            name: "count",
+            returns: "u64",
+            asynchronous: true,
+            executorAffinity: "thread.main",
+          },
         ],
       }],
     });
@@ -165,7 +184,7 @@ describe("compiler-produced Z program metadata", () => {
       "ApplicationServicesBuilder.registerAsyncWithLifecycle";
 
     expect(deriveZServiceManifest(asynchronous)).toEqual({
-      schemaVersion: 1,
+      schemaVersion: 2,
       types: [
         { name: "CreateNoteInput", fields: [{ name: "title", type: "String" }] },
         {
@@ -180,32 +199,52 @@ describe("compiler-produced Z program metadata", () => {
         name: "notes",
         type: "NotesService",
         methods: [
-          { name: "create", input: "CreateNoteInput", returns: "Note" },
-          { name: "count", returns: "u64" },
+          {
+            id: zServiceMethodId("notes.create"),
+            name: "create",
+            input: "CreateNoteInput",
+            returns: "Note",
+            asynchronous: false,
+            executorAffinity: null,
+          },
+          {
+            id: zServiceMethodId("notes.count"),
+            name: "count",
+            returns: "u64",
+            asynchronous: true,
+            executorAffinity: "thread.main",
+          },
         ],
       }],
     });
   });
 
-  it("derives the same cancellable binding from a typed async method", () => {
-    const asynchronous = structuredClone(metadata);
-    const service = asynchronous.modules[0].symbols.find(
-      (symbol) => symbol.name === "NotesService",
-    );
-    if (!service?.typeSignature) throw new Error("missing NotesService fixture");
-    const count = service.typeSignature.methods.find((method) => method.name === "count");
-    if (!count) throw new Error("missing count fixture");
-    count.signature.asynchronous = true;
-
-    expect(deriveZServiceManifest(asynchronous).services[0].methods).toContainEqual({
+  it("retains typed async and executor contracts for dispatcher generation", () => {
+    expect(deriveZServiceManifest(metadata).services[0].methods).toContainEqual({
+      id: zServiceMethodId("notes.count"),
       name: "count",
       returns: "u64",
+      asynchronous: true,
+      executorAffinity: "thread.main",
     });
+  });
+
+  it("assigns stable static method IDs", () => {
+    expect(zServiceMethodId("notes.create")).toBe(3_539_395_672);
+    expect(zServiceMethodId("notes.count")).toBe(1_604_992_403);
   });
 
   it("fails closed on unknown compiler schemas", () => {
     expect(() => parseZProgramMetadata('{"schemaVersion":2,"entry":0,"modules":[]}'))
       .toThrow(/unsupported Z program metadata schema 2/);
+  });
+
+  it("fails closed when method execution metadata is absent", () => {
+    const invalid = JSON.parse(JSON.stringify(metadata));
+    delete invalid.modules[0].symbols[2].typeSignature.methods[0]
+      .signature.executorAffinity;
+    expect(() => parseZProgramMetadata(JSON.stringify(invalid)))
+      .toThrow(/method 0 execution contract/);
   });
 
   it("requires literal registration names", () => {

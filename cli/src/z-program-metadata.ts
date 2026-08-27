@@ -9,6 +9,7 @@ interface ZProgramFieldMetadata {
 
 interface ZProgramFunctionSignature {
   asynchronous: boolean;
+  executorAffinity: string | null;
   parameterModes: string[];
   parameterTypes: string[];
   returnType: string;
@@ -104,6 +105,44 @@ export function parseZProgramMetadata(source: string): ZProgramMetadata {
     ) {
       throw new Error(`[zapp] malformed Z program metadata module ${moduleIndex}`);
     }
+    for (const [symbolIndex, symbolValue] of module.symbols.entries()) {
+      const symbol = object(
+        symbolValue,
+        `Z program metadata module ${moduleIndex} symbol ${symbolIndex}`,
+      );
+      if (symbol.typeSignature === null) continue;
+      const typeSignature = object(
+        symbol.typeSignature,
+        `Z program metadata module ${moduleIndex} symbol ${symbolIndex} type signature`,
+      );
+      if (!Array.isArray(typeSignature.methods)) {
+        throw new Error(
+          `[zapp] malformed Z program metadata module ${moduleIndex} symbol ${symbolIndex} methods`,
+        );
+      }
+      for (const [methodIndex, methodValue] of typeSignature.methods.entries()) {
+        const method = object(
+          methodValue,
+          `Z program metadata module ${moduleIndex} symbol ${symbolIndex} method ${methodIndex}`,
+        );
+        const signature = object(
+          method.signature,
+          `Z program metadata module ${moduleIndex} symbol ${symbolIndex} method ${methodIndex} signature`,
+        );
+        if (
+          typeof signature.asynchronous !== "boolean"
+          || !(
+            signature.executorAffinity === null
+            || typeof signature.executorAffinity === "string"
+          )
+        ) {
+          throw new Error(
+            `[zapp] malformed Z program metadata module ${moduleIndex} symbol ${symbolIndex} `
+            + `method ${methodIndex} execution contract`,
+          );
+        }
+      }
+    }
   }
   return parsed as unknown as ZProgramMetadata;
 }
@@ -173,6 +212,7 @@ export function deriveZServiceManifest(metadata: ZProgramMetadata): ZServiceMani
   const types: ZServiceTypeMetadata[] = [];
   const seenTypes = new Set<string>();
   const seenServices = new Set<string>();
+  const methodIds = new Map<number, string>();
   const services = registrations.map((registration) => {
     const [nameArgument, serviceArgument] = registration.arguments;
     if (registration.arguments.length !== 2 || nameArgument?.kind !== "string") {
@@ -252,10 +292,23 @@ export function deriveZServiceManifest(metadata: ZProgramMetadata): ZServiceMani
       const input = method.signature.parameterTypes[0];
       if (input) addWireType(metadata, input, types, seenTypes);
       addWireType(metadata, method.signature.returnType, types, seenTypes);
+      const qualifiedName = `${name}.${method.name}`;
+      const methodId = zServiceMethodId(qualifiedName);
+      const collision = methodIds.get(methodId);
+      if (collision && collision !== qualifiedName) {
+        throw new Error(
+          `[zapp] service method ID collision between ${JSON.stringify(collision)} `
+          + `and ${JSON.stringify(qualifiedName)}; rename one method`,
+        );
+      }
+      methodIds.set(methodId, qualifiedName);
       return {
+        id: methodId,
         name: method.name,
         ...(input ? { input } : {}),
         returns: method.signature.returnType,
+        asynchronous: method.signature.asynchronous,
+        executorAffinity: method.signature.executorAffinity,
       };
     });
     if (methods.length === 0) {
@@ -263,5 +316,13 @@ export function deriveZServiceManifest(metadata: ZProgramMetadata): ZServiceMani
     }
     return { name, type: serviceType, methods };
   });
-  return { schemaVersion: 1, types, services };
+  return { schemaVersion: 2, types, services };
+}
+
+export function zServiceMethodId(qualifiedName: string): number {
+  let hash = 0x811c9dc5;
+  for (const byte of new TextEncoder().encode(qualifiedName)) {
+    hash = Math.imul(hash ^ byte, 0x01000193);
+  }
+  return hash >>> 0;
 }

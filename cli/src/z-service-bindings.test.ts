@@ -6,7 +6,7 @@ import {
 } from "./z-service-bindings";
 
 const manifest: ZServiceManifest = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   types: [
     {
       name: "CreateNoteInput",
@@ -24,8 +24,21 @@ const manifest: ZServiceManifest = {
     name: "notes",
     type: "NotesService",
     methods: [
-      { name: "create", input: "CreateNoteInput", returns: "Note" },
-      { name: "count", returns: "u64" },
+      {
+        id: 3_539_395_672,
+        name: "create",
+        input: "CreateNoteInput",
+        returns: "Note",
+        asynchronous: false,
+        executorAffinity: null,
+      },
+      {
+        id: 1_604_992_403,
+        name: "count",
+        returns: "u64",
+        asynchronous: true,
+        executorAffinity: "thread.main",
+      },
     ],
   }],
 };
