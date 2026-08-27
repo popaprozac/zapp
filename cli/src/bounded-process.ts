@@ -25,13 +25,22 @@ export async function runBoundedCommand(
   const child = Bun.spawn(command, {
     cwd: options.cwd,
     env: { ...process.env, ...options.env },
+    detached: process.platform !== "win32",
     stdout: "pipe",
     stderr: "pipe",
   });
   let timedOut = false;
   const timer = setTimeout(() => {
     timedOut = true;
-    child.kill(9);
+    if (process.platform !== "win32") {
+      try {
+        process.kill(-child.pid, "SIGKILL");
+        return;
+      } catch {
+        // Fall through when the child exited between the timeout and signal.
+      }
+    }
+    child.kill("SIGKILL");
   }, options.timeoutMs);
   try {
     const [stdout, stderr, status] = await Promise.all([

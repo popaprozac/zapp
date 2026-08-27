@@ -1,4 +1,6 @@
 import { describe, expect, it } from "bun:test";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { resolve } from "node:path";
 import { runBoundedCommand } from "./bounded-process";
 
 describe("runBoundedCommand", () => {
@@ -23,5 +25,33 @@ describe("runBoundedCommand", () => {
     expect(result.timedOut).toBe(true);
     expect(result.status).not.toBe(0);
     expect(performance.now() - started).toBeLessThan(2_000);
+  });
+
+  it("kills descendants when a bounded command times out", async () => {
+    const directory = mkdtempSync("/tmp/zapp-bounded-process-");
+    try {
+      const marker = resolve(directory, "escaped");
+      const descendant = [
+        "await Bun.sleep(250);",
+        `await Bun.write(${JSON.stringify(marker)}, "escaped");`,
+      ].join(" ");
+      const parent = [
+        `Bun.spawn([process.execPath, "-e", ${JSON.stringify(descendant)}], {`,
+        '  stdout: "ignore", stderr: "ignore",',
+        "});",
+        "setInterval(() => {}, 1_000);",
+      ].join("\n");
+
+      const result = await runBoundedCommand(
+        [process.execPath, "-e", parent],
+        { cwd: import.meta.dir, timeoutMs: 50 },
+      );
+
+      expect(result.timedOut).toBe(true);
+      await Bun.sleep(400);
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });
