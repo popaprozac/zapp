@@ -19,15 +19,17 @@ The public lifecycle is designed around a consuming application builder:
 
 ```z
 async function main(): i32 on thread.main {
-  let app = Application({ name: "Notes" });
+  let app = Application();
   app.services.register("notes", createNotesService());
   return try await app.run();
 }
 ```
 
-`app.run()` consumes the mutable configuration, freezes its service routing
-table, publishes the runtime application identity, and asynchronously remains
-attached to the blocking platform run loop until shutdown.
+The CLI compiles the resolved `zapp.config.ts` application name, identifier,
+and version into the readonly `app.metadata` value. `app.run()` consumes the
+mutable builder, freezes its service routing table and metadata, publishes the
+runtime application identity, and asynchronously remains attached to the
+blocking platform run loop until shutdown.
 There is no user-facing `finish()` call. Internally, `freeze()` names the exact
 mutable-builder to readonly-router transition and matches Z collection
 vocabulary.
@@ -107,10 +109,11 @@ handler and hooks retain the same ARC identity through start, invocation, and
 stop.
 
 The Phase 1 Notes application uses that surface directly in
-`spikes/z-notes/zapp/main.zs`. `Application({ name })` creates a fresh service builder through a
-value-field default, and the main-thread `run(move this)` method consumes the
-whole configuration. Z owns the executable `main`; the Objective-C file is a
-linked platform adapter with no framework policy or entry point of its own.
+`spikes/z-notes/zapp/main.zs`. `Application()` receives immutable generated
+metadata and creates a fresh service builder through value-field defaults; the
+main-thread `run(move this)` method consumes the whole configuration. Z owns
+the executable `main`; the Objective-C file is a linked platform adapter with
+no framework policy or entry point of its own.
 
 The underlying transition remains available to framework internals and focused
 tests:

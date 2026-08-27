@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import {
   parseZCompilerIdentity,
+  renderZApplicationMetadata,
   renderZWebviewBootstrapC,
   renderZNativeManifest,
   resolveZNativeHost,
@@ -9,6 +10,21 @@ import {
   zNativeEntry,
   zNativeStageFiles,
 } from "./native-z";
+
+describe("renderZApplicationMetadata", () => {
+  it("emits resolved immutable application metadata as valid Z literals", () => {
+    const output = renderZApplicationMetadata({
+      name: 'Notes "Preview"',
+      identifier: "com.example.notes",
+      version: "1.2.3",
+      assetDir: "./dist",
+    });
+    expect(output).toContain('name: "Notes \\"Preview\\""');
+    expect(output).toContain('identifier: "com.example.notes"');
+    expect(output).toContain('version: "1.2.3"');
+    expect(output).toContain("configuredApplicationMetadata");
+  });
+});
 
 describe("renderZWebviewBootstrapC", () => {
   it("preserves arbitrary UTF-8 source without C literal ambiguity", () => {
@@ -171,7 +187,10 @@ describe("Z native host inputs", () => {
       "utf8",
     );
 
-    expect(app).toContain('let app = Application({ name: "Notes" });');
+    expect(app).toContain("let app = Application();");
+    expect(application).toContain(
+      "readonly metadata: ApplicationMetadata = configuredApplicationMetadata()",
+    );
     expect(app).toContain('app.services.register("notes", createNotesService());');
     expect(app).toContain('app.services.register("health", createHealthService());');
     expect(app).toContain("const result = attempt await app.run();");
@@ -183,7 +202,7 @@ describe("Z native host inputs", () => {
     expect(application).toContain("const { routes, asynchronous, lifecycles }");
     expect(application).toContain("synchronous: routes");
     expect(application).toContain("lifecycles,");
-    expect(contract).toContain("export readonly class ApplicationConfig on thread.main");
+    expect(contract).toContain("export readonly class PreparedApplication on thread.main");
     expect(platform).toContain("export async function runApplicationPlatform(");
     expect(platform).toContain("return try await runMacOSApplication(move config, updates);");
     expect(headless).toContain("struct HeadlessApplicationRuntime");

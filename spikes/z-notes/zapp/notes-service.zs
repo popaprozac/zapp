@@ -33,13 +33,13 @@ export readonly class NotesService implements ServiceLifecycle {
   function start(
     in context: ApplicationContext
   ): void throws ServiceLifecycleError on thread.main {
-    console.log(`${context.name}: notes service started`);
+    console.log(`${context.metadata.name}: notes service started`);
   }
 
   function stop(
     in context: ApplicationContext
   ): void throws ServiceLifecycleError on thread.main {
-    console.log(`${context.name}: notes service stopped`);
+    console.log(`${context.metadata.name}: notes service stopped`);
   }
 }
 

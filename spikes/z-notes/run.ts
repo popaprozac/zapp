@@ -1,5 +1,9 @@
 import { resolve } from "node:path";
 import { compileNative } from "../../cli/src/native";
+import {
+  createConfigContext,
+  loadConfig,
+} from "../../cli/src/config";
 
 const spike = import.meta.dir;
 const repository = resolve(spike, "../..");
@@ -22,6 +26,10 @@ async function run(
 }
 
 const smoke = process.argv.includes("--smoke");
+const config = await loadConfig(
+  spike,
+  createConfigContext(spike, "build", "macos"),
+);
 
 const originalLanguage = process.env.ZAPP_NATIVE_LANG;
 const originalHost = process.env.ZAPP_Z_HOST;
@@ -36,6 +44,7 @@ try {
     output,
     optimize: true,
     target: "macos",
+    config,
   });
 } finally {
   if (originalLanguage === undefined) delete process.env.ZAPP_NATIVE_LANG;

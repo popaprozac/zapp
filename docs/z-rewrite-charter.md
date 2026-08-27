@@ -170,14 +170,14 @@ platform-specific. macOS is the first implementation target, zjs is the first
 worker engine, and one window plus one WebView is the first UI shape.
 
 The first executable platform seam is now concrete. Portable
-`Application.run(move this)` freezes its services into an immutable
-`ApplicationConfig`, creates the application `TaskScope`, then calls the single
+`Application.run(move this)` freezes its generated metadata and services into
+an immutable `PreparedApplication`, creates the application `TaskScope`, then calls the single
 selected `platform.zs` module. That module must export
 the following contract:
 
 ```z
 async function runApplicationPlatform(
-  config: ApplicationConfig,
+  config: PreparedApplication,
   updates: TaskScope
 ): i32 throws ServiceLifecycleError on thread.main;
 ```

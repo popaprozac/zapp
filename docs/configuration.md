@@ -22,8 +22,10 @@ export default defineConfig({
 });
 ```
 
-Only `application.name` is required. Zapp supplies defaults for the frontend
-asset directory, development port, system WebView, and asset compression.
+Only `application.name` is required. Zapp derives a stable
+`com.zapp.<name-slug>` identifier and uses version `0.1.0` when those values are
+omitted. It also supplies defaults for the frontend asset directory,
+development port, system WebView, and asset compression.
 
 ## Complete shape
 
@@ -137,6 +139,11 @@ logic.
 The snapshot is generated build state, not a file applications should edit or
 commit. Its schema is versioned independently from the ergonomic authoring
 surface.
+
+For Z-native applications, the same resolved identity is compiled into a
+readonly `ApplicationMetadata` value. `Application()` receives that value by
+default, so product metadata is authored once in `zapp.config.ts` rather than
+repeated in Z source.
 
 Runtime behavior does not belong in configuration. Services, windows, menus,
 lifecycle hooks, and mutable state remain ordinary Z source.

@@ -1,4 +1,5 @@
-import { ApplicationConfig } from "../framework/application-contract.zs";
+import { PreparedApplication } from "../framework/application-contract.zs";
+import { ApplicationMetadata } from "../framework/application-metadata.zs";
 import {
   runApplicationPlatform as runHeadlessApplicationPlatform,
 } from "../framework/platform/headless.zs";
@@ -8,8 +9,12 @@ import { TaskScope } from "std/async";
 import { thread } from "std/thread";
 
 async function main(): i32 on thread.main {
-  const config = new ApplicationConfig({
-    name: "Headless",
+  const config = new PreparedApplication({
+    metadata: ApplicationMetadata({
+      name: "Headless",
+      identifier: "com.zapp.headless",
+      version: "0.1.0",
+    }),
     services: createAsyncServices().freeze(),
     lifecycles: createServiceLifecycles().freeze(),
   });

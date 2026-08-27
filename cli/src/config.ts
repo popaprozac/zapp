@@ -629,8 +629,8 @@ export function resolveNative(
 /** Normalized contract consumed by build, packaging, Vite, and native emission. */
 export interface ResolvedConfig {
   name: string;
-  identifier?: string;
-  version?: string;
+  identifier: string;
+  version: string;
   assetDir: string;
   devPort?: number;
   compressAssets?: boolean;
@@ -936,10 +936,20 @@ function normalizeConfig(config: ZappConfig): ResolvedConfig {
   if (typeof name !== "string" || name.trim().length === 0) {
     throw new Error("[zapp] config.application.name must be a non-empty string");
   }
+  const normalizedName = name.trim();
+  const identifier = config.application.identifier?.trim()
+    ?? defaultApplicationIdentifier(normalizedName);
+  if (identifier.length === 0) {
+    throw new Error("[zapp] config.application.identifier must be a non-empty string");
+  }
+  const version = config.application.version?.trim() ?? "0.1.0";
+  if (version.length === 0) {
+    throw new Error("[zapp] config.application.version must be a non-empty string");
+  }
   return {
-    name,
-    identifier: config.application.identifier,
-    version: config.application.version,
+    name: normalizedName,
+    identifier,
+    version,
     singleInstance: config.application.singleInstance,
     deepLinkSchemes: config.application.deepLinks,
     assetDir: config.frontend?.assets ?? "./dist",
@@ -956,6 +966,15 @@ function normalizeConfig(config: ZappConfig): ResolvedConfig {
     macos: config.targets?.macOS,
     ios: config.targets?.iOS,
   };
+}
+
+export function defaultApplicationIdentifier(name: string): string {
+  const slug = name
+    .normalize("NFKD")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return `com.zapp.${slug || "app"}`;
 }
 
 async function writeResolvedConfigSnapshot(
@@ -986,6 +1005,8 @@ export async function loadConfig(
   if (!existsSync(configPath)) {
     const fallback = {
       name: path.basename(absoluteRoot),
+      identifier: defaultApplicationIdentifier(path.basename(absoluteRoot)),
+      version: "0.1.0",
       assetDir: "./dist",
     };
     await writeResolvedConfigSnapshot(absoluteRoot, context, fallback);

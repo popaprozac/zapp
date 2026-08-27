@@ -1,5 +1,9 @@
-import { ApplicationConfig } from "./application-contract.zs";
+import { PreparedApplication } from "./application-contract.zs";
+import { ApplicationMetadata } from "./application-metadata.zs";
 import { AsyncServices } from "./async-services.zs";
+import {
+  configuredApplicationMetadata,
+} from "./configured-application.zs";
 import { runApplicationPlatform } from "./platform.zs";
 import { ServiceLifecycleError } from "./service-lifecycle-contract.zs";
 import {
@@ -10,7 +14,7 @@ import { thread } from "std/thread";
 import { TaskScope } from "std/async";
 
 export struct Application on thread.main {
-  name: String;
+  readonly metadata: ApplicationMetadata = configuredApplicationMetadata();
   services: ApplicationServicesBuilder = createApplicationServices();
 
   async function run(
@@ -24,12 +28,12 @@ export struct Application on thread.main {
 
 function prepareApplication(
   app: Application
-): ApplicationConfig on thread.main {
-  const { name, services } = move app;
+): PreparedApplication on thread.main {
+  const { metadata, services } = move app;
   const { routes, asynchronous, lifecycles } =
     services.freezeConfigured();
-  return new ApplicationConfig({
-    name: move name,
+  return new PreparedApplication({
+    metadata: move metadata,
     services: new AsyncServices({
       synchronous: routes,
       asynchronous,

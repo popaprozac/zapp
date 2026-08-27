@@ -1,4 +1,5 @@
-import { ApplicationConfig } from "../application-contract.zs";
+import { PreparedApplication } from "../application-contract.zs";
+import { ApplicationMetadata } from "../application-metadata.zs";
 import {
   ApplicationContext,
   ServiceLifecycleError,
@@ -12,15 +13,21 @@ struct HeadlessApplicationRuntime {
 }
 
 export async function runApplicationPlatform(
-  config: ApplicationConfig,
+  config: PreparedApplication,
   updates: TaskScope
 ): i32 throws ServiceLifecycleError on thread.main {
   const runtime = HeadlessApplicationRuntime({
     exitStatus: 0,
-    configuredNameBytes: config.name.byteLength,
+    configuredNameBytes: config.metadata.name.byteLength,
   });
   if (runtime.configuredNameBytes == 0) return 64;
-  const context = ApplicationContext({ name: copy config.name });
+  const context = ApplicationContext({
+    metadata: ApplicationMetadata({
+      name: copy config.metadata.name,
+      identifier: copy config.metadata.identifier,
+      version: copy config.metadata.version,
+    }),
+  });
   const started = attempt config.lifecycles.start(in context);
   match (started) {
     success => {}

@@ -1439,7 +1439,17 @@ export async function compileNative(opts: CompileOptions): Promise<void> {
 
   if (language === "z") {
     const { buildNativeZ } = await import("./native-z");
-    await buildNativeZ({ root, nativeDir, output, optimize, target });
+    if (!opts.config) {
+      throw new Error("[zapp] Z build path requires a resolved config (opts.config).");
+    }
+    await buildNativeZ({
+      root,
+      nativeDir,
+      output,
+      optimize,
+      target,
+      config: opts.config,
+    });
     return;
   }
 

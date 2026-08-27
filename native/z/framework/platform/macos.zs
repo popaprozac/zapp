@@ -1,5 +1,6 @@
 import native from "zapp_desktop.h";
-import { ApplicationConfig } from "../application-contract.zs";
+import { PreparedApplication } from "../application-contract.zs";
+import { ApplicationMetadata } from "../application-metadata.zs";
 import { routeDecodedMessageWithServicesAsync } from "../async-bridge.zs";
 import { AsyncServices } from "../async-services.zs";
 import {
@@ -89,14 +90,20 @@ class MacOSApplicationRuntime {
 const application = Once<MacOSApplicationRuntime>();
 
 export async function runMacOSApplication(
-  config: ApplicationConfig,
+  config: PreparedApplication,
   updates: TaskScope
 ): i32 throws ServiceLifecycleError on thread.main {
   const prepared = native.zapp_desktop_prepare();
   if (prepared != 0) return prepared;
-  const context = ApplicationContext({ name: copy config.name });
+  const context = ApplicationContext({
+    metadata: ApplicationMetadata({
+      name: copy config.metadata.name,
+      identifier: copy config.metadata.identifier,
+      version: copy config.metadata.version,
+    }),
+  });
   const lifetime = initializeMacOSApplicationRuntime(
-    copy config.name,
+    copy config.metadata.name,
     config.services,
     updates
   );

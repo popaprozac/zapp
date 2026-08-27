@@ -6,6 +6,9 @@ import {
   serviceLifecycleError,
 } from "../../framework/service-lifecycle-contract.zs";
 import {
+  ApplicationMetadata,
+} from "../../framework/application-metadata.zs";
+import {
   createServiceLifecycles,
 } from "../../framework/service-lifecycle.zs";
 import {
@@ -49,7 +52,7 @@ function record(event: i32): void on thread.main {
 }
 
 function contextReady(in context: ApplicationContext): boolean {
-  return context.name.byteLength > 0;
+  return context.metadata.name.byteLength > 0;
 }
 
 readonly class RecordingLifecycle on thread.main implements ServiceLifecycle {
@@ -296,7 +299,13 @@ function registeredServiceLifecycle(
 
 function main(): i32 {
   const lifetime = lifecycleTrace.initialize(createTrace());
-  const context = ApplicationContext({ name: "Lifecycle smoke" });
+  const context = ApplicationContext({
+    metadata: ApplicationMetadata({
+      name: "Lifecycle smoke",
+      identifier: "com.zapp.lifecycle-smoke",
+      version: "0.1.0",
+    }),
+  });
   if (!normalLifecycle(in context)) return 1;
   if (!rollbackLifecycle(in context)) return 2;
   if (!failingStopLifecycle(in context)) return 3;

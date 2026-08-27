@@ -3,10 +3,15 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
-  createConfigContext, defineConfig, loadConfig,
+  createConfigContext, defaultApplicationIdentifier, defineConfig, loadConfig,
   resolveNative, validateNative, validateWebEngine, resolveWebEngine,
   platformSupportsChromium, resolveWebEngineForBuild,
 } from "./config";
+
+test("defaultApplicationIdentifier produces a stable reverse-DNS-safe identifier", () => {
+  expect(defaultApplicationIdentifier("  Z Notes!  ")).toBe("com.zapp.z-notes");
+  expect(defaultApplicationIdentifier("世界")).toBe("com.zapp.app");
+});
 
 test("defineConfig preserves object and contextual factory definitions", () => {
   const object = { application: { name: "notes" } };
@@ -101,6 +106,24 @@ test("loadConfig evaluates a contextual factory and writes the resolved snapshot
     expect(snapshot.command).toBe("package");
     expect(snapshot.target.os).toBe("macos");
     expect(snapshot.config).toEqual(config);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig resolves canonical application identity defaults", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "zapp-config-defaults-"));
+  try {
+    await writeFile(path.join(root, "zapp.config.ts"), `
+      export default { application: { name: "  Example Notes!  " } };
+    `);
+    const config = await loadConfig(
+      root,
+      createConfigContext(root, "build", "macos"),
+    );
+    expect(config.name).toBe("Example Notes!");
+    expect(config.identifier).toBe("com.zapp.example-notes");
+    expect(config.version).toBe("0.1.0");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

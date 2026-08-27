@@ -1,7 +1,8 @@
+import { ApplicationMetadata } from "./application-metadata.zs";
 import { thread } from "std/thread";
 
-export struct ApplicationContext {
-  name: String;
+export readonly struct ApplicationContext {
+  metadata: ApplicationMetadata;
 }
 
 export enum ServiceLifecyclePhase {

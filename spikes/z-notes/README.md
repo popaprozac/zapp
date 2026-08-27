@@ -29,7 +29,7 @@ import { Application } from "../../../native/z/framework/application.zs";
 import { thread } from "std/thread";
 
 async function main(): i32 on thread.main {
-  let app = Application({ name: "Notes" });
+  let app = Application();
   app.services.register("notes", createNotesService());
   app.services.register("health", createHealthService());
   return match (attempt await app.run()) {
