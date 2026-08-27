@@ -25,6 +25,11 @@ export readonly class NotesService implements ServiceLifecycle {
     return this.core.count();
   }
 
+  async function isEmpty(): boolean on thread.main {
+    await delay(1);
+    return this.core.count() == 0;
+  }
+
   function start(
     in context: ApplicationContext
   ): void throws ServiceLifecycleError on thread.main {

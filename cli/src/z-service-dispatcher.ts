@@ -298,27 +298,48 @@ function renderDispatcher(
   const asynchronous = service.methods.filter((method) => (
     method.asynchronous || method.executorAffinity === "thread.main"
   ));
-  if (asynchronous.length > 1) {
-    throw new Error(
-      `[zapp] native generated dispatch currently supports one suspending method per `
-      + `service; ${service.type} has ${asynchronous.length}`,
-    );
-  }
   const synchronous = service.methods.filter((method) => !asynchronous.includes(method));
   const helpers = [
     ...synchronous.map((method) => renderSyncMethodHelper(service.type, method)),
     ...asynchronous.map((method) => renderAsyncMethodHelpers(service.type, method)),
   ]
     .join("\n\n");
-  const asyncTail = asynchronous.length === 0
-    ? ""
-    : `  // Static method ID: ${asynchronous[0].id}
-  if (invocation.method != ${JSON.stringify(asynchronous[0].name)}) {
-    return ServiceOutcome.failure("UNKNOWN_METHOD");
-  }
-  return await __zappFinish${generatedName(service.type)}${generatedName(
-    asynchronous[0].name,
-  )}(move service);`;
+  const asyncMethodType = `__Zapp${generatedName(service.type)}AsyncMethod`;
+  const asyncSelection = asynchronous.length > 1
+    ? `type ${asyncMethodType} = async (
+  service: ${service.type}
+) => ServiceOutcome;
+
+function __zappSelect${generatedName(service.type)}AsyncMethod(
+  in invocation: ServiceInvocation
+): Option<${asyncMethodType}> {
+${asynchronous.map((method) => `  // Static method ID: ${method.id}
+  if (invocation.method == ${JSON.stringify(method.name)}) {
+    const handler: ${asyncMethodType} = async (
+      service: ${service.type}
+    ): ServiceOutcome => await __zappFinish${generatedName(service.type)}${generatedName(
+      method.name,
+    )}(move service);
+    return Option.some(move handler);
+  }`).join("\n")}
+  return Option<${asyncMethodType}>.none;
+}`
+    : "";
+  const asyncTail = asynchronous.length > 1
+    ? `  const selected = __zappSelect${generatedName(service.type)}AsyncMethod(
+    in invocation
+  );
+  match (selected) {
+    some(handler) => return await handler(move service);
+    none => return ServiceOutcome.failure("UNKNOWN_METHOD");
+  }`
+    : `${asynchronous.map((method) => `  // Static method ID: ${method.id}
+  if (invocation.method == ${JSON.stringify(method.name)}) {
+    return await __zappFinish${generatedName(service.type)}${generatedName(
+      method.name,
+    )}(move service);
+  }`).join("\n")}
+  return ServiceOutcome.failure("UNKNOWN_METHOD");`;
   const adapter = `__Zapp${generatedName(service.name)}ServiceAdapter`;
   const lifecycle = service.lifecycle
     ? `
@@ -373,7 +394,7 @@ ${synchronous.map((method) => renderSyncMethodBranch(service.type, method)).join
       in invocation
     );
   }`;
-  return `${helpers}${helpers ? "\n\n" : ""}${invokeFunction}
+  return `${helpers}${helpers ? "\n\n" : ""}${asyncSelection}${asyncSelection ? "\n\n" : ""}${invokeFunction}
 
 export readonly class ${adapter} implements ${implemented} {
   readonly service: ${service.type};

@@ -125,6 +125,7 @@ describe("Z native host inputs", () => {
     expect(objectiveCHost).not.toContain("routeScriptMessage:");
     expect(objectiveCHost).not.toContain("int main(");
     expect(objectiveCHost).toContain("services.notes.create");
+    expect(objectiveCHost).toContain("services.notes.isEmpty()");
     expect(objectiveCHost).toContain("new AbortController()");
     expect(objectiveCHost).toContain("services.notes.count({signal:controller.signal})");
     expect(objectiveCHost).toContain("if (!strongSelf.smokeMode) return;");

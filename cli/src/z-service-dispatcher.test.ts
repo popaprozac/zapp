@@ -118,4 +118,37 @@ describe("generated Z service dispatch", () => {
     expect(source).toContain("in target");
     expect(source).toContain("new __ZappNotesServiceAdapter({ service: service })");
   });
+
+  it("routes multiple suspending methods through one generated async adapter", () => {
+    const multiple = structuredClone(manifest);
+    multiple.services[0].methods.push({
+      id: 2_050_071_619,
+      name: "isEmpty",
+      returns: "boolean",
+      asynchronous: true,
+      executorAffinity: "thread.main",
+      receiverMode: "in",
+    });
+    const source = renderZServiceDispatchers(multiple, {
+      outputPath: "/workspace/generated/service-dispatchers.zs",
+      serviceContractModule: "/workspace/framework/service-contract.zs",
+      servicesModule: "/workspace/framework/services.zs",
+      asyncServiceContractModule: "/workspace/framework/async-service-contract.zs",
+      serviceLifecycleContractModule: "/workspace/framework/service-lifecycle-contract.zs",
+    });
+    expect(source).toContain("async function __zappFinishNotesServiceCount(");
+    expect(source).toContain("async function __zappFinishNotesServiceIsEmpty(");
+    expect(source).toContain("type __ZappNotesServiceAsyncMethod = async (");
+    expect(source).toContain("function __zappSelectNotesServiceAsyncMethod(");
+    expect(source).toContain('if (invocation.method == "count") {');
+    expect(source).toContain('if (invocation.method == "isEmpty") {');
+    expect(source).toContain(
+      "await __zappFinishNotesServiceCount(move service)",
+    );
+    expect(source).toContain(
+      "await __zappFinishNotesServiceIsEmpty(move service)",
+    );
+    expect(source).toContain("return Option.some(move handler)");
+    expect(source).toContain("some(handler) => return await handler(move service)");
+  });
 });
