@@ -10,10 +10,12 @@ const manifest: ZServiceManifest = {
   types: [
     {
       name: "CreateNoteInput",
+      module: "/app.zs",
       fields: [{ name: "title", type: "String" }],
     },
     {
       name: "Note",
+      module: "/app.zs",
       fields: [
         { name: "id", type: "u64" },
         { name: "title", type: "String" },
@@ -23,14 +25,18 @@ const manifest: ZServiceManifest = {
   services: [{
     name: "notes",
     type: "NotesService",
+    module: "/app.zs",
+    lifecycle: true,
     methods: [
       {
         id: 3_539_395_672,
         name: "create",
         input: "CreateNoteInput",
+        inputMode: "value",
         returns: "Note",
         asynchronous: false,
         executorAffinity: null,
+        receiverMode: "in",
       },
       {
         id: 1_604_992_403,
@@ -38,6 +44,7 @@ const manifest: ZServiceManifest = {
         returns: "u64",
         asynchronous: true,
         executorAffinity: "thread.main",
+        receiverMode: "in",
       },
     ],
   }],

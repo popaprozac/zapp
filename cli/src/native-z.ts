@@ -283,6 +283,9 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
     generateZServiceBindings,
     renderZServiceWebviewRuntime,
   } = await import("./z-service-bindings");
+  const { generateZServiceDispatcherPreview } = await import(
+    "./z-service-dispatcher"
+  );
   const {
     deriveZServiceManifest,
     parseZProgramMetadata,
@@ -308,6 +311,21 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
     `${JSON.stringify(serviceManifest, null, 2)}\n`,
     "utf8",
   );
+  const dispatcherPreview = await generateZServiceDispatcherPreview(
+    serviceManifest,
+    {
+      outputPath: path.join(stage, "generated", "service-dispatchers.zs"),
+      serviceContractModule: path.join(
+        workspace,
+        "native",
+        "z",
+        "framework",
+        "service-contract.zs",
+      ),
+    },
+  );
+  await run([...compiler, "check", dispatcherPreview], options.root, true);
+  console.log(`[zapp] checked generated Z service dispatch ${dispatcherPreview}`);
   const generatedBinding = await generateZServiceBindings(
     serviceManifest,
     path.join(options.root, ".zapp", "generated"),

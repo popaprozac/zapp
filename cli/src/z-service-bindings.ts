@@ -8,6 +8,7 @@ export interface ZServiceFieldMetadata {
 
 export interface ZServiceTypeMetadata {
   name: string;
+  module: string;
   fields: ZServiceFieldMetadata[];
 }
 
@@ -15,14 +16,18 @@ export interface ZServiceMethodMetadata {
   id: number;
   name: string;
   input?: string;
+  inputMode?: string;
   returns: string;
   asynchronous: boolean;
   executorAffinity: string | null;
+  receiverMode: "in" | "inout" | "move";
 }
 
 export interface ZServiceMetadata {
   name: string;
   type: string;
+  module: string;
+  lifecycle: boolean;
   methods: ZServiceMethodMetadata[];
 }
 

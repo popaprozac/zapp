@@ -20,6 +20,7 @@ interface ZProgramMethodMetadata {
   name: string;
   staticMethod: boolean;
   visibility: "public" | "private";
+  receiverMode: "in" | "inout" | "move";
   signature: ZProgramFunctionSignature;
 }
 
@@ -130,6 +131,12 @@ export function parseZProgramMetadata(source: string): ZProgramMetadata {
           `Z program metadata module ${moduleIndex} symbol ${symbolIndex} method ${methodIndex} signature`,
         );
         if (
+          !(
+            method.receiverMode === "in"
+            || method.receiverMode === "inout"
+            || method.receiverMode === "move"
+          )
+          ||
           typeof signature.asynchronous !== "boolean"
           || !(
             signature.executorAffinity === null
@@ -150,9 +157,11 @@ export function parseZProgramMetadata(source: string): ZProgramMetadata {
 function publicType(
   metadata: ZProgramMetadata,
   name: string,
-): ZProgramSymbolMetadata {
-  const matches = metadata.modules.flatMap((module) => module.symbols).filter((symbol) => (
-    symbol.exported && symbol.name === name && symbol.typeSignature !== null
+): { module: ZProgramModuleMetadata; symbol: ZProgramSymbolMetadata } {
+  const matches = metadata.modules.flatMap((module) => (
+    module.symbols
+      .filter((symbol) => symbol.exported && symbol.name === name && symbol.typeSignature !== null)
+      .map((symbol) => ({ module, symbol }))
   ));
   if (matches.length === 0) {
     throw new Error(
@@ -174,7 +183,7 @@ function addWireType(
   seen: Set<string>,
 ): void {
   if (scalarTypes.has(name) || seen.has(name)) return;
-  const symbol = publicType(metadata, name);
+  const { module, symbol } = publicType(metadata, name);
   if (symbol.kind !== "struct" || !symbol.typeSignature) {
     throw new Error(
       `[zapp] service wire type ${JSON.stringify(name)} must be an exported Z struct`,
@@ -195,7 +204,7 @@ function addWireType(
     return { name: field.name, type: field.typeName };
   });
   for (const field of fields) addWireType(metadata, field.type, types, seen);
-  types.push({ name, fields });
+  types.push({ name, module: module.path, fields });
 }
 
 export function deriveZServiceManifest(metadata: ZProgramMetadata): ZServiceManifest {
@@ -229,7 +238,7 @@ export function deriveZServiceManifest(metadata: ZProgramMetadata): ZServiceMani
     }
     seenServices.add(name);
     const serviceType = serviceArgument.type;
-    const service = publicType(metadata, serviceType);
+    const { module: serviceModule, symbol: service } = publicType(metadata, serviceType);
     if ((service.kind !== "struct" && service.kind !== "class") || !service.typeSignature) {
       throw new Error(
         `[zapp] registered service ${JSON.stringify(serviceType)} must be an exported Z struct or class`,
@@ -306,15 +315,23 @@ export function deriveZServiceManifest(metadata: ZProgramMetadata): ZServiceMani
         id: methodId,
         name: method.name,
         ...(input ? { input } : {}),
+        ...(input ? { inputMode: method.signature.parameterModes[0] } : {}),
         returns: method.signature.returnType,
         asynchronous: method.signature.asynchronous,
         executorAffinity: method.signature.executorAffinity,
+        receiverMode: method.receiverMode,
       };
     });
     if (methods.length === 0) {
       throw new Error(`[zapp] registered service ${serviceType} has no public instance methods`);
     }
-    return { name, type: serviceType, methods };
+    return {
+      name,
+      type: serviceType,
+      module: serviceModule.path,
+      lifecycle: implementsLifecycle,
+      methods,
+    };
   });
   return { schemaVersion: 2, types, services };
 }

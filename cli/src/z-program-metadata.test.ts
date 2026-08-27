@@ -52,6 +52,7 @@ const metadata: ZProgramMetadata = {
               name: "create",
               staticMethod: false,
               visibility: "public",
+              receiverMode: "in",
               signature: {
                 asynchronous: false,
                 executorAffinity: null,
@@ -65,6 +66,7 @@ const metadata: ZProgramMetadata = {
               name: "count",
               staticMethod: false,
               visibility: "public",
+              receiverMode: "in",
               signature: {
                 asynchronous: true,
                 executorAffinity: "thread.main",
@@ -78,6 +80,7 @@ const metadata: ZProgramMetadata = {
               name: "invoke",
               staticMethod: false,
               visibility: "public",
+              receiverMode: "in",
               signature: {
                 asynchronous: false,
                 executorAffinity: null,
@@ -91,6 +94,7 @@ const metadata: ZProgramMetadata = {
               name: "start",
               staticMethod: false,
               visibility: "public",
+              receiverMode: "in",
               signature: {
                 asynchronous: false,
                 executorAffinity: "thread.main",
@@ -104,6 +108,7 @@ const metadata: ZProgramMetadata = {
               name: "stop",
               staticMethod: false,
               visibility: "public",
+              receiverMode: "in",
               signature: {
                 asynchronous: false,
                 executorAffinity: "thread.main",
@@ -137,9 +142,14 @@ describe("compiler-produced Z program metadata", () => {
     expect(deriveZServiceManifest(metadata)).toEqual({
       schemaVersion: 2,
       types: [
-        { name: "CreateNoteInput", fields: [{ name: "title", type: "String" }] },
+        {
+          name: "CreateNoteInput",
+          module: "/app.zs",
+          fields: [{ name: "title", type: "String" }],
+        },
         {
           name: "Note",
+          module: "/app.zs",
           fields: [
             { name: "id", type: "u64" },
             { name: "title", type: "String" },
@@ -149,14 +159,18 @@ describe("compiler-produced Z program metadata", () => {
       services: [{
         name: "notes",
         type: "NotesService",
+        module: "/app.zs",
+        lifecycle: true,
         methods: [
           {
             id: zServiceMethodId("notes.create"),
             name: "create",
             input: "CreateNoteInput",
+            inputMode: "value",
             returns: "Note",
             asynchronous: false,
             executorAffinity: null,
+            receiverMode: "in",
           },
           {
             id: zServiceMethodId("notes.count"),
@@ -164,6 +178,7 @@ describe("compiler-produced Z program metadata", () => {
             returns: "u64",
             asynchronous: true,
             executorAffinity: "thread.main",
+            receiverMode: "in",
           },
         ],
       }],
@@ -186,9 +201,14 @@ describe("compiler-produced Z program metadata", () => {
     expect(deriveZServiceManifest(asynchronous)).toEqual({
       schemaVersion: 2,
       types: [
-        { name: "CreateNoteInput", fields: [{ name: "title", type: "String" }] },
+        {
+          name: "CreateNoteInput",
+          module: "/app.zs",
+          fields: [{ name: "title", type: "String" }],
+        },
         {
           name: "Note",
+          module: "/app.zs",
           fields: [
             { name: "id", type: "u64" },
             { name: "title", type: "String" },
@@ -198,14 +218,18 @@ describe("compiler-produced Z program metadata", () => {
       services: [{
         name: "notes",
         type: "NotesService",
+        module: "/app.zs",
+        lifecycle: true,
         methods: [
           {
             id: zServiceMethodId("notes.create"),
             name: "create",
             input: "CreateNoteInput",
+            inputMode: "value",
             returns: "Note",
             asynchronous: false,
             executorAffinity: null,
+            receiverMode: "in",
           },
           {
             id: zServiceMethodId("notes.count"),
@@ -213,6 +237,7 @@ describe("compiler-produced Z program metadata", () => {
             returns: "u64",
             asynchronous: true,
             executorAffinity: "thread.main",
+            receiverMode: "in",
           },
         ],
       }],
@@ -226,6 +251,7 @@ describe("compiler-produced Z program metadata", () => {
       returns: "u64",
       asynchronous: true,
       executorAffinity: "thread.main",
+      receiverMode: "in",
     });
   });
 
