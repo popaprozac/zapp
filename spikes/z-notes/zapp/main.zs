@@ -1,7 +1,7 @@
 import { createNotesService } from "./notes-service.zs";
 import { createHealthService } from "./health-service.zs";
-import { Application } from "../../../native/z/api/zapp.zs";
-import { WindowOptions } from "../../../native/z/api/zapp/window.zs";
+import { Application } from "zapp";
+import { WindowOptions } from "zapp/window";
 import console from "std/console";
 import { thread } from "std/thread";
 

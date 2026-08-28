@@ -186,6 +186,7 @@ export function renderZNativeManifest(
   host: ZNativeHost,
   entry: string,
   nativeDirectory = ".",
+  apiDirectory?: string,
 ): string {
   const target = host === "desktop"
     ? {
@@ -209,7 +210,14 @@ export function renderZNativeManifest(
       includeDirectories: [nativeDirectory],
       runtime: { initialize: "initializeApplication" },
     };
-  return `${JSON.stringify({ target }, null, 2)}\n`;
+  const imports = apiDirectory
+    ? {
+      zapp: path.join(apiDirectory, "zapp.zs"),
+      "zapp/window": path.join(apiDirectory, "zapp", "window.zs"),
+      "zapp/service": path.join(apiDirectory, "zapp", "service.zs"),
+    }
+    : undefined;
+  return `${JSON.stringify({ ...(imports ? { imports } : {}), target }, null, 2)}\n`;
 }
 
 export function renderZWebviewBootstrapC(source: string): string {
@@ -349,7 +357,12 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
   }
   await writeFile(
     path.join(stage, "z.json"),
-    renderZNativeManifest(host, appEntry, stage),
+    renderZNativeManifest(
+      host,
+      appEntry,
+      stage,
+      path.join(workspace, "native", "z", "api"),
+    ),
     "utf8",
   );
 

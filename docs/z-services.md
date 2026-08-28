@@ -16,9 +16,11 @@ framework module imports an application type.
 
 The facade fixes the eventual package boundary now: `zapp` exports
 `Application` and `ApplicationError`, `zapp/window` owns window types, and
-`zapp/service` owns lifecycle contracts. Repository-local examples temporarily
-use a relative path to that facade until Z's package resolver maps those stable
-module names.
+`zapp/service` owns lifecycle contracts. Repository-local projects use Z's
+exact `z.json` source import map for those stable names, and the isolated Zapp
+build generates equivalent mappings without rewriting application source.
+Package installation and version selection remain a later Z layer over the
+same public module identities.
 
 ## Application surface
 

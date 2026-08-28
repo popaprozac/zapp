@@ -2,8 +2,9 @@
 
 This is the first Zapp project whose application-owned Z source is physically
 separate from the reusable framework. It is intentionally still a spike: the
-runtime behavior is real, while package-resolved `zapp` imports remain
-productization work.
+runtime behavior is real, and Z's exact project import map now provides the
+intended public `zapp` module names. Package installation and version selection
+remain productization work.
 
 ## The end-user application
 
@@ -12,7 +13,7 @@ and an ordinary Vite frontend under `frontend/`:
 
 ```text
 zapp/
-├── z.json            # editor/native header and deployment context
+├── z.json            # public source imports plus native/deployment context
 ├── main.zs           # desktop entry and Application configuration
 ├── embedded.zs       # strict-C embedding entry used by the regression host
 ├── notes-core.zs     # shared model, behavior, and checked wire conversion
@@ -32,8 +33,8 @@ The ordinary desktop entry is deliberately small:
 ```z
 import { createNotesService } from "./notes-service.zs";
 import { createHealthService } from "./health-service.zs";
-import { Application } from "../../../native/z/api/zapp.zs";
-import { WindowOptions } from "../../../native/z/api/zapp/window.zs";
+import { Application } from "zapp";
+import { WindowOptions } from "zapp/window";
 import { thread } from "std/thread";
 
 async function main(): i32 on thread.main {
@@ -93,11 +94,12 @@ window.
 
 Application code now imports only Zapp's public source facade under
 `native/z/api/`; it no longer reaches into framework implementation modules.
-The repository-relative prefix is temporary. A real package/module resolver
-will map that facade to `"zapp"`, `"zapp/window"`, and `"zapp/service"`
-without changing the exported surface. The build stages the app, API, and
-framework into one isolated workspace today so the fixed-point compiler and
-editor inspect the same source graph.
+The source-local `z.json` maps that facade to `"zapp"`, `"zapp/window"`, and
+`"zapp/service"` for direct checking and editor services. The build generates
+the equivalent exact mappings after staging the app, API, and framework into
+one isolated workspace, so it does not rewrite authored imports. A future Z
+package layer can install Zapp and generate the same public map from package
+exports without changing application source.
 
 This spike now builds and runs through Z's fixed-point native driver. Manual
 `TaskScope` construction, owned capture transfer, main-executor placement, and

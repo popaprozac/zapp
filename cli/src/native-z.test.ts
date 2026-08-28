@@ -142,6 +142,18 @@ describe("Z native host inputs", () => {
           },
         },
       });
+    expect(JSON.parse(renderZNativeManifest(
+      "desktop",
+      "/app/main.zs",
+      "/native",
+      "/workspace/native/z/api",
+    ))).toMatchObject({
+      imports: {
+        zapp: "/workspace/native/z/api/zapp.zs",
+        "zapp/window": "/workspace/native/z/api/zapp/window.zs",
+        "zapp/service": "/workspace/native/z/api/zapp/service.zs",
+      },
+    });
   });
 
   it("keeps the strict C bridge on the minimal manifest", () => {

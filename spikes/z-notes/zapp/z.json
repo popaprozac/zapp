@@ -1,4 +1,9 @@
 {
+  "imports": {
+    "zapp": "../../../native/z/api/zapp.zs",
+    "zapp/window": "../../../native/z/api/zapp/window.zs",
+    "zapp/service": "../../../native/z/api/zapp/service.zs"
+  },
   "target": {
     "name": "zapp-z-notes",
     "entry": "main.zs",
