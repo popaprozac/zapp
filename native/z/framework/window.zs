@@ -1,5 +1,6 @@
 import { Map } from "std/collections";
 import { thread } from "std/thread";
+import { WindowError } from "./application-error.zs";
 
 export struct WindowOptions {
   title: String = "";
@@ -19,7 +20,7 @@ struct WindowRecord {
 export type WindowCreateOperation = (
   in id: String,
   in options: WindowOptions
-) => void on thread.main;
+) => void throws WindowError on thread.main;
 
 export type WindowOperation = (
   in id: String
@@ -41,7 +42,7 @@ export struct WindowBackend {
 function ignoreWindowCreate(
   in id: String,
   in options: WindowOptions
-): void on thread.main {}
+): void throws WindowError on thread.main {}
 
 function ignoreWindowOperation(in id: String): void on thread.main {}
 
@@ -130,11 +131,11 @@ class WindowManagerState on thread.main {
     inout this,
     owner: Weak<WindowManager>,
     options: WindowOptions
-  ): Window {
+  ): Window throws WindowError {
     const id = `win-${this.nextId}`;
     this.nextId = this.nextId + 1;
     const window = Window.__create(copy id, owner);
-    if (this.active) this.backend.create(in id, in options);
+    if (this.active) try this.backend.create(in id, in options);
     this.windows.set(
       move id,
       WindowRecord({
@@ -195,6 +196,10 @@ class WindowManagerState on thread.main {
     this.windows.delete(id);
   }
 
+  function __closedNative(inout this, in id: String): void {
+    this.windows.delete(id);
+  }
+
   function __setTitle(
     inout this,
     in id: String,
@@ -224,14 +229,14 @@ class WindowManagerState on thread.main {
     inout this,
     backend: WindowBackend,
     realizePending: boolean
-  ): void {
+  ): void throws WindowError {
     this.backend = backend;
     this.active = true;
     if (!realizePending) return;
     for (const entry of this.windows) {
       const id = copy entry.value.window.id;
       const options = copy entry.value.options;
-      this.backend.create(in id, in options);
+      try this.backend.create(in id, in options);
     }
   }
 
@@ -248,9 +253,12 @@ export readonly class WindowManager on thread.main {
     return new WindowManager({ __state: WindowManagerState.__create() });
   }
 
-  function create(inout this, options: WindowOptions): Window on thread.main {
+  function create(
+    inout this,
+    options: WindowOptions
+  ): Window throws WindowError on thread.main {
     const owner = weak this;
-    return this.__state.create(owner, options);
+    return try this.__state.create(owner, options);
   }
 
   function get(in id: String): Option<Window> on thread.main {
@@ -273,6 +281,10 @@ export readonly class WindowManager on thread.main {
     this.__state.__close(in id);
   }
 
+  function __closedNative(inout this, in id: String): void on thread.main {
+    this.__state.__closedNative(in id);
+  }
+
   function __setTitle(
     inout this,
     in id: String,
@@ -291,8 +303,8 @@ export readonly class WindowManager on thread.main {
     inout this,
     backend: WindowBackend,
     realizePending: boolean
-  ): void on thread.main {
-    this.__state.__start(backend, realizePending);
+  ): void throws WindowError on thread.main {
+    try this.__state.__start(backend, realizePending);
   }
 
   function __stop(inout this): void on thread.main {

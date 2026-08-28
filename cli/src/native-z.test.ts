@@ -169,12 +169,14 @@ describe("Z native host inputs", () => {
     expect(macOSPlatform).toContain("window.contentView = webView");
     expect(macOSPlatform).toContain("native.ZAppDesktopBridge.attachWindow(");
     expect(macOSPlatform).toContain("native.zapp_desktop_has_injection_profile(profile)");
-    expect(macOSPlatform).toContain("native.zapp_desktop_select_injection_profile(profile)");
+    expect(macOSPlatform).toContain("native.zapp_desktop_window_select_injection_profile(");
+    expect(macOSPlatform).toContain("window.releasedWhenClosed = false");
     expect(objectiveCHost).not.toContain(
       "ZAppDesktopHost : NSObject <WKScriptMessageHandler",
     );
-    expect(objectiveCHost).toContain("@property(nonatomic, weak) NSWindow *window");
-    expect(objectiveCHost).toContain("@property(nonatomic, weak) WKWebView *webView");
+    expect(objectiveCHost).toContain("@property(nonatomic, strong) NSWindow *window");
+    expect(objectiveCHost).toContain("@property(nonatomic, strong) WKWebView *webView");
+    expect(objectiveCHost).toContain("windowsByNativeId");
     expect(objectiveCHost).not.toContain("[[WKWebView alloc]");
     expect(objectiveCHost).not.toContain("[[NSWindow alloc]");
     expect(objectiveCHost).not.toContain("addScriptMessageHandler:self");

@@ -77,6 +77,8 @@ describe("generated Z service dispatch", () => {
     expect(source).toContain("function __zappDispatchNotesServiceCreate(");
     expect(source).toContain("return __zappDispatchNotesServiceCreate(");
     expect(source).toContain("await on thread.main service.count()");
+    expect(source).toContain("function __zappSelectNotesServiceAsyncMethod(");
+    expect(source).toContain("some(handler) => return await handler(move service)");
     expect(source).toContain("__zappDecodeCreateNoteInput");
     expect(source).toContain("__zappEncodeNote");
     expect(source).toContain('ServiceOutcome.failure("UNKNOWN_METHOD")');

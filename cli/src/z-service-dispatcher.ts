@@ -305,7 +305,7 @@ function renderDispatcher(
   ]
     .join("\n\n");
   const asyncMethodType = `__Zapp${generatedName(service.type)}AsyncMethod`;
-  const asyncSelection = asynchronous.length > 1
+  const asyncSelection = asynchronous.length > 0
     ? `type ${asyncMethodType} = async (
   service: ${service.type}
 ) => ServiceOutcome;
@@ -325,7 +325,7 @@ ${asynchronous.map((method) => `  // Static method ID: ${method.id}
   return Option<${asyncMethodType}>.none;
 }`
     : "";
-  const asyncTail = asynchronous.length > 1
+  const asyncTail = asynchronous.length > 0
     ? `  const selected = __zappSelect${generatedName(service.type)}AsyncMethod(
     in invocation
   );

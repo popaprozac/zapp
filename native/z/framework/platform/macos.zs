@@ -21,6 +21,7 @@ import { zapp_deliver_response_from_z } from "zapp_router.h";
 import objc from "std/objc";
 import { Once, OnceLifetime } from "std/sync";
 import { TaskControl, TaskScope } from "std/async";
+import { Map } from "std/collections";
 import { thread } from "std/thread";
 import {
   PendingRequests,
@@ -29,6 +30,7 @@ import {
 import {
   WindowBackend,
   WindowCreateOperation,
+  WindowManager,
   WindowOptions,
   WindowOperation,
   WindowTitleOperation,
@@ -36,6 +38,8 @@ import {
 
 class DesktopMessageHandler on thread.main
   implements native.WKScriptMessageHandler {
+  readonly windowId: i32;
+
   function receive(
     in controller: native.WKUserContentController,
     in message: native.WKScriptMessage
@@ -43,58 +47,140 @@ class DesktopMessageHandler on thread.main
     const body = message.body;
     if (body instanceof native.NSString) {
       const text: String = body;
-      zapp_route_message_owned(move text, 1);
+      zapp_route_message_owned(move text, this.windowId);
       return;
     }
     zapp_deliver_response_from_z(
       "WebView message body must be a string",
       0,
       false,
-      1
+      this.windowId
     );
   }
+}
+
+class MacOSWindowRuntime on thread.main {
+  readonly id: String;
+  readonly nativeId: i32;
+  readonly window: native.NSWindow;
+  readonly webView: native.WKWebView;
+  readonly contentController: native.WKUserContentController;
+  readonly configuration: native.WKWebViewConfiguration;
+  readonly registrationOwner: native.ZAppDesktopRegistrationOwner;
+  readonly registration: objc.Registration;
+  readonly pendingRequests: PendingRequests;
 }
 
 class MacOSApplicationRuntime {
   readonly name: String;
   readonly services: AsyncServices;
   readonly updates: TaskScope;
-  pendingRequests: PendingRequests on thread.main;
-  window: native.NSWindow on thread.main;
-  webView: native.WKWebView on thread.main;
-  contentController: native.WKUserContentController on thread.main;
-  configuration: native.WKWebViewConfiguration on thread.main;
-  registrationOwner: native.ZAppDesktopRegistrationOwner on thread.main;
-  registration: objc.Registration on thread.main;
+  readonly windowManager: WindowManager on thread.main;
+  nativeWindows: Map<i32, MacOSWindowRuntime> on thread.main;
+  nextNativeWindowId: i32 on thread.main;
+
+  function createWindow(
+    inout this,
+    in id: String,
+    in options: WindowOptions
+  ): void throws WindowError on thread.main {
+    for (const profile of options.inject) {
+      if (native.zapp_desktop_has_injection_profile(profile) == 0) {
+        throw WindowError({
+          id: copy id,
+          message: `unknown webview inject profile "${profile}"`,
+        });
+      }
+    }
+    const nativeId = this.nextNativeWindowId;
+    this.nextNativeWindowId = this.nextNativeWindowId + 1;
+    const runtime = try createMacOSWindowRuntime(
+      copy this.name,
+      in id,
+      nativeId,
+      in options
+    );
+    this.nativeWindows.set(nativeId, runtime);
+  }
+
+  function closeWindow(
+    inout this,
+    nativeId: i32,
+    in id: String
+  ): void on thread.main {
+    // Keep the Z-owned AppKit graph alive until NSApplication.run has fully
+    // unwound its autorelease pools. The native registry stops routing to the
+    // closed window immediately; releasing this graph from windowWillClose
+    // would tear it down while AppKit is still closing it.
+    this.windowManager.__closedNative(in id);
+  }
 
   function beginRequest(
     inout this,
+    windowId: i32,
     id: u64
   ): u64 on thread.main {
-    return this.pendingRequests.begin(id);
+    const found = this.nativeWindows.remove(windowId);
+    return match (found) {
+      some(value) => {
+        let window = value;
+        const generation = window.pendingRequests.begin(id);
+        this.nativeWindows.set(windowId, window);
+        select generation;
+      }
+      none => 0;
+    };
   }
 
   function attachRequest(
     inout this,
+    windowId: i32,
     id: u64,
     control: TaskControl
   ): void on thread.main {
-    this.pendingRequests.attach(id, control);
+    const found = this.nativeWindows.remove(windowId);
+    match (found) {
+      some(value) => {
+        let window = value;
+        window.pendingRequests.attach(id, control);
+        this.nativeWindows.set(windowId, window);
+      }
+      none => {}
+    }
   }
 
   function finishRequest(
     inout this,
+    windowId: i32,
     id: u64,
     generation: u64
   ): void on thread.main {
-    this.pendingRequests.finish(id, generation);
+    const found = this.nativeWindows.remove(windowId);
+    match (found) {
+      some(value) => {
+        let window = value;
+        window.pendingRequests.finish(id, generation);
+        this.nativeWindows.set(windowId, window);
+      }
+      none => {}
+    }
   }
 
   function cancelRequest(
     inout this,
+    windowId: i32,
     id: u64
   ): boolean on thread.main {
-    return this.pendingRequests.cancel(id);
+    const found = this.nativeWindows.remove(windowId);
+    return match (found) {
+      some(value) => {
+        let window = value;
+        const cancelled = window.pendingRequests.cancel(id);
+        this.nativeWindows.set(windowId, window);
+        select cancelled;
+      }
+      none => false;
+    };
   }
 }
 
@@ -112,45 +198,12 @@ export async function runMacOSApplication(
       message: "a macOS desktop application requires a registered window in this tier",
     }));
   }
-  if (registeredWindows.length > 1) {
-    throw ApplicationError.window(WindowError({
-      id: "",
-      message: "native multi-window realization is not implemented yet",
-    }));
-  }
-  const primaryWindow = registeredWindows[0];
-  const primaryWindowId = copy primaryWindow.id;
-  const configuredOptions = windows.__options(in primaryWindowId);
-  const primaryOptions = match (configuredOptions) {
-    some(options) => options;
-    none => throw ApplicationError.window(WindowError({
-      id: copy primaryWindowId,
-      message: "the registered window lost its configuration",
-    }));
-  };
-  for (const profile of primaryOptions.inject) {
-    if (native.zapp_desktop_has_injection_profile(profile) == 0) {
-      throw ApplicationError.window(WindowError({
-        id: copy primaryWindowId,
-        message: `unknown webview inject profile "${profile}"`,
-      }));
-    }
-  }
   const prepared = native.zapp_desktop_prepare();
   if (prepared != 0) {
     throw ApplicationError.platform(PlatformError({
       code: prepared,
       message: "could not prepare the macOS application runtime",
     }));
-  }
-  for (const profile of primaryOptions.inject) {
-    const selected = native.zapp_desktop_select_injection_profile(profile);
-    if (selected != 0) {
-      throw ApplicationError.platform(PlatformError({
-        code: selected,
-        message: `could not select webview inject profile "${profile}"`,
-      }));
-    }
   }
   const context = ApplicationContext({
     metadata: ApplicationMetadata({
@@ -163,13 +216,25 @@ export async function runMacOSApplication(
     copy config.metadata.name,
     config.services,
     updates,
-    in primaryOptions
+    windows
   );
-  windows.__start(macOSWindowBackend(), false);
+  const realized = attempt windows.__start(macOSWindowBackend(), true);
+  match (realized) {
+    success => {}
+    failure(windowError) => {
+      windows.__stop();
+      native.zapp_desktop_abort();
+      throw ApplicationError.window(windowError);
+    }
+  }
   const started = attempt config.lifecycles.start(in context);
   match (started) {
     success => {}
-    failure(startError) => throw ApplicationError.lifecycle(startError);
+    failure(startError) => {
+      windows.__stop();
+      native.zapp_desktop_abort();
+      throw ApplicationError.lifecycle(startError);
+    }
   }
   const status = native.zapp_desktop_run();
   windows.__stop();
@@ -185,9 +250,9 @@ export async function runMacOSApplication(
 function createMacOSWindowDeferred(
   in id: String,
   in options: WindowOptions
-): void on thread.main {
-  // Startup realization is owned by runMacOSApplication in the first native
-  // window tier. Dynamic and multi-window creation use this seam next.
+): void throws WindowError on thread.main {
+  const current = application.get();
+  try current.createWindow(in id, in options);
 }
 
 function showMacOSWindow(in id: String): void on thread.main {
@@ -247,7 +312,7 @@ export c function zapp_route_message_owned(
     const cancellationId = bridgeMessage.id;
     const cancellation = updates.schedule(
       thread.main,
-      async move (): void => cancelPendingRequest(cancellationId)
+      async move (): void => cancelPendingRequest(windowId, cancellationId)
     );
     if (!cancellation.accepted) return;
     return;
@@ -269,7 +334,7 @@ export c function zapp_route_message_owned(
   if (tracked && accepted) {
     const attachment = updates.schedule(
       thread.main,
-      async move (): void => attachPendingRequest(requestId, control)
+      async move (): void => attachPendingRequest(windowId, requestId, control)
     );
     if (!attachment.accepted) return;
   }
@@ -284,11 +349,12 @@ export c function zapp_route_message_owned(
 }
 
 function attachPendingRequest(
+  windowId: i32,
   id: u64,
   control: TaskControl
 ): void on thread.main {
   const current = application.get();
-  current.attachRequest(id, control);
+  current.attachRequest(windowId, id, control);
 }
 
 async function routeScheduledMessageAndDeliver(
@@ -299,7 +365,7 @@ async function routeScheduledMessageAndDeliver(
   tracked: boolean
 ): void on thread.main {
   let generation: u64 = 0;
-  if (tracked) generation = beginPendingRequest(requestId);
+  if (tracked) generation = beginPendingRequest(windowId, requestId);
   const delivered = await routeMessageAndDeliver(
     move message,
     services,
@@ -340,7 +406,7 @@ async function finishAndDeliverRoutedResponse(
   generation: u64,
   tracked: boolean
 ): boolean on thread.main {
-  if (tracked) finishPendingRequest(requestId, generation);
+  if (tracked) finishPendingRequest(windowId, requestId, generation);
   return match (routed) {
     some(response) => {
       deliverResponse(in response, windowId);
@@ -351,23 +417,49 @@ async function finishAndDeliverRoutedResponse(
 }
 
 function beginPendingRequest(
+  windowId: i32,
   id: u64
 ): u64 on thread.main {
   const current = application.get();
-  return current.beginRequest(id);
+  return current.beginRequest(windowId, id);
 }
 
 function finishPendingRequest(
+  windowId: i32,
   id: u64,
   generation: u64
 ): void on thread.main {
   const current = application.get();
-  current.finishRequest(id, generation);
+  current.finishRequest(windowId, id, generation);
 }
 
-function cancelPendingRequest(id: u64): void on thread.main {
+function cancelPendingRequest(
+  windowId: i32,
+  id: u64
+): void on thread.main {
   const current = application.get();
-  current.cancelRequest(id);
+  current.cancelRequest(windowId, id);
+}
+
+export c function zapp_window_closed_owned(
+  windowId: String,
+  nativeId: i32
+): void {
+  const current = application.get();
+  const updates = current.updates;
+  const cleanup = updates.schedule(
+    thread.main,
+    async move (): void => closeNativeWindow(move windowId, nativeId)
+  );
+  if (!cleanup.accepted) return;
+}
+
+function closeNativeWindow(
+  windowId: String,
+  nativeId: i32
+): void on thread.main {
+  const current = application.get();
+  current.closeWindow(nativeId, in windowId);
 }
 
 function deliverResponse(
@@ -382,16 +474,16 @@ function deliverResponse(
   );
 }
 
-function initializeMacOSApplicationRuntime(
+function createMacOSWindowRuntime(
   name: String,
-  services: AsyncServices,
-  updates: TaskScope,
+  in id: String,
+  nativeId: i32,
   in options: WindowOptions
-): OnceLifetime<MacOSApplicationRuntime> on thread.main {
+): MacOSWindowRuntime throws WindowError on thread.main {
   const contentController = native.WKUserContentController.alloc().init();
   const registrationOwner = native.ZAppDesktopRegistrationOwner.alloc()
     .initWithContentController(contentController);
-  const handler = new DesktopMessageHandler({});
+  const handler = new DesktopMessageHandler({ windowId: nativeId });
   const registration = objc.register({
     add: registrationOwner.addHandler(handler),
     remove: registrationOwner.removeHandler(),
@@ -419,24 +511,57 @@ function initializeMacOSApplicationRuntime(
     backing: native.NSBackingStoreBuffered,
     defer: false
   );
+  window.releasedWhenClosed = false;
   const title = options.title.byteLength == 0
     ? copy name
     : copy options.title;
   const logicalURL = copy options.url;
   window.title = move title;
   window.contentView = webView;
-  native.zapp_desktop_set_logical_url(logicalURL);
+  const configured = native.zapp_desktop_window_configure(
+    id,
+    nativeId,
+    logicalURL,
+    options.visible
+  );
+  if (configured != 0) {
+    throw WindowError({
+      id: copy id,
+      message: `could not configure native window (status ${configured})`,
+    });
+  }
   native.ZAppDesktopBridge.attachWindow(
     window,
+    nativeId: nativeId,
     webView: webView,
     contentController: contentController,
     visible: options.visible
   );
+  for (const profile of options.inject) {
+    const selected = native.zapp_desktop_window_select_injection_profile(
+      id,
+      profile
+    );
+    if (selected != 0) {
+      native.zapp_desktop_window_discard(id);
+      throw WindowError({
+        id: copy id,
+        message: `could not select webview inject profile "${profile}"`,
+      });
+    }
+  }
+  const started = native.zapp_desktop_window_start(id);
+  if (started != 0) {
+    native.zapp_desktop_window_discard(id);
+    throw WindowError({
+      id: copy id,
+      message: `could not realize native window (status ${started})`,
+    });
+  }
 
-  const value = new MacOSApplicationRuntime({
-    name: move name,
-    services: move services,
-    updates,
+  return new MacOSWindowRuntime({
+    id: copy id,
+    nativeId,
     window,
     webView,
     contentController,
@@ -444,6 +569,22 @@ function initializeMacOSApplicationRuntime(
     registrationOwner,
     registration,
     pendingRequests: createPendingRequests(),
+  });
+}
+
+function initializeMacOSApplicationRuntime(
+  name: String,
+  services: AsyncServices,
+  updates: TaskScope,
+  windowManager: WindowManager
+): OnceLifetime<MacOSApplicationRuntime> on thread.main {
+  const value = new MacOSApplicationRuntime({
+    name: move name,
+    services: move services,
+    updates,
+    windowManager,
+    nativeWindows: Map<i32, MacOSWindowRuntime>(),
+    nextNativeWindowId: 1,
   });
   return application.initialize(move value);
 }

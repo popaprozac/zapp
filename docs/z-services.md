@@ -18,16 +18,19 @@ Notes core, transport adapters, and application entries live under
 The public lifecycle is designed around a consuming application builder:
 
 ```z
-async function main(): i32 on thread.main {
+async function main(): i32 throws WindowError on thread.main {
   let app = Application();
   app.services.register("notes", createNotesService());
-  const mainWindow = app.windows.create(WindowOptions({
+  const mainWindow = try app.windows.create(WindowOptions({
     title: "Notes",
     url: "/notes",
     width: 900,
     height: 640,
   }));
-  return try await app.run();
+  return match (attempt await app.run()) {
+    success(status) => status;
+    failure(_) => 70;
+  };
 }
 ```
 

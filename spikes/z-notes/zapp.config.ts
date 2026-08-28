@@ -16,6 +16,9 @@ export default defineConfig({
         documentStart: ["./frontend/injected/preload.ts"],
         documentEnd: ["./frontend/injected/ready.ts"],
       },
+      diagnostics: {
+        documentStart: ["./frontend/injected/diagnostics.ts"],
+      },
     },
   },
 });

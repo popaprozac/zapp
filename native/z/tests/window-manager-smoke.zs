@@ -2,16 +2,17 @@ import {
   WindowOptions,
   createWindowManager,
 } from "../framework/window.zs";
+import { WindowError } from "../framework/application-error.zs";
 import { thread } from "std/thread";
 
-function main(): i32 on thread.main {
+function runWindowManagerSmoke(): i32 throws WindowError on thread.main {
   let windows = createWindowManager();
-  const primary = windows.create(WindowOptions({
+  const primary = try windows.create(WindowOptions({
     title: "Primary",
     width: 720,
     height: 460,
   }));
-  const secondary = windows.create(WindowOptions());
+  const secondary = try windows.create(WindowOptions());
 
   if (primary.id != "win-1" || secondary.id != "win-2") return 1;
   const initial = windows.all();
@@ -35,11 +36,16 @@ function main(): i32 on thread.main {
   primary.show();
   primary.setTitle("Renamed");
   const updated = windows.__options(primary.id);
-  const matches = match (updated) {
-    some(options) => options.visible && options.title == "Renamed";
+  const isVisible = match (in updated) {
+    some(options) => options.visible;
     none => false;
   };
-  if (!matches) return 5;
+  if (!isVisible) return 5;
+  const hasUpdatedTitle = match (updated) {
+    some(options) => options.title == "Renamed";
+    none => false;
+  };
+  if (!hasUpdatedTitle) return 8;
 
   primary.close();
   primary.close();
@@ -48,5 +54,12 @@ function main(): i32 on thread.main {
   return match (windows.get(primary.id)) {
     some(_) => 7;
     none => 0;
+  };
+}
+
+function main(): i32 on thread.main {
+  return match (attempt runWindowManagerSmoke()) {
+    success(status) => status;
+    failure(_) => 10;
   };
 }

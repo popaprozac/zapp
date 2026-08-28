@@ -19,6 +19,7 @@ extern const char *zapp_webview_injection_profile(size_t index);
 extern int32_t zapp_webview_injection_phase(size_t index);
 extern const unsigned char *zapp_webview_injection_source(size_t index);
 extern size_t zapp_webview_injection_source_length(size_t index);
+extern void zapp_window_closed_owned(const char *window_id, int32_t native_id);
 
 typedef struct {
   const char *path;
@@ -32,22 +33,32 @@ extern const ZAppDesktopAsset zapp_desktop_assets[];
 extern const size_t zapp_desktop_assets_count;
 
 @class ZAppDesktopHost;
+@class ZAppDesktopWindowRecord;
 
-static __weak ZAppDesktopHost *active_host = nil;
 static ZAppDesktopHost *prepared_host = nil;
 
-@interface ZAppDesktopHost : NSObject <NSWindowDelegate, WKNavigationDelegate>
-@property(nonatomic, weak) NSWindow *window;
-@property(nonatomic, weak) WKWebView *webView;
-@property(nonatomic, weak) WKUserContentController *userContentController;
-@property(nonatomic, strong) id<WKURLSchemeHandler> assetSchemeHandler;
+@interface ZAppDesktopWindowRecord : NSObject
+@property(nonatomic, copy) NSString *windowId;
+@property(nonatomic, assign) int32_t nativeId;
+@property(nonatomic, strong) NSWindow *window;
+@property(nonatomic, strong) WKWebView *webView;
+@property(nonatomic, strong) WKUserContentController *userContentController;
 @property(nonatomic, assign) BOOL receivedResponse;
-@property(nonatomic, assign) BOOL smokeMode;
 @property(nonatomic, assign) BOOL windowVisible;
 @property(nonatomic, copy) NSString *logicalURL;
 @property(nonatomic, strong) NSMutableArray<NSString *> *injectionProfiles;
+@property(nonatomic, assign) BOOL started;
+@end
+
+@interface ZAppDesktopHost : NSObject <NSWindowDelegate, WKNavigationDelegate>
+@property(nonatomic, strong) NSMutableDictionary<NSString *, ZAppDesktopWindowRecord *> *windows;
+@property(nonatomic, strong) NSMutableDictionary<NSNumber *, ZAppDesktopWindowRecord *> *windowsByNativeId;
+@property(nonatomic, strong) NSMutableArray<id<WKURLSchemeHandler>> *assetSchemeHandlers;
+@property(nonatomic, assign) BOOL smokeMode;
 @property(nonatomic, assign) int32_t result;
 - (int32_t)run;
+- (void)stopIfLastWindowClosed;
+- (void)closeAllWindows;
 - (void)deliverPayload:(NSString *)payload
              requestId:(uint64_t)requestId
                     ok:(BOOL)ok
@@ -221,25 +232,30 @@ static void zapp_desktop_scheme_error(
 
 @end
 
+@implementation ZAppDesktopWindowRecord
+@end
+
 @implementation ZAppDesktopBridge
 
 + (void)configureWebViewConfiguration:(WKWebViewConfiguration *)configuration {
   ZAppDesktopAssetSchemeHandler *handler = [[ZAppDesktopAssetSchemeHandler alloc] init];
   [configuration setURLSchemeHandler:handler forURLScheme:@"zapp"];
-  ZAppDesktopHost *host = active_host != nil ? active_host : prepared_host;
-  host.assetSchemeHandler = handler;
+  [prepared_host.assetSchemeHandlers addObject:handler];
 }
 
 + (void)attachWindow:(NSWindow *)window
+            nativeId:(int32_t)nativeId
              webView:(WKWebView *)webView
    contentController:(WKUserContentController *)contentController
              visible:(BOOL)visible {
-  ZAppDesktopHost *host = active_host;
+  ZAppDesktopHost *host = prepared_host;
   if (host == nil) return;
-  host.window = window;
-  host.webView = webView;
-  host.userContentController = contentController;
-  host.windowVisible = visible;
+  ZAppDesktopWindowRecord *record = host.windowsByNativeId[@(nativeId)];
+  if (record == nil || record.window != nil) return;
+  record.window = window;
+  record.webView = webView;
+  record.userContentController = contentController;
+  record.windowVisible = visible;
   window.delegate = host;
 }
 
@@ -251,14 +267,16 @@ void zapp_deliver_response_from_z(
   bool ok,
   int32_t window_id
 ) {
-  ZAppDesktopHost *host = active_host;
+  ZAppDesktopHost *host = prepared_host;
   if (host == nil) return;
+  ZAppDesktopWindowRecord *record = host.windowsByNativeId[@(window_id)];
+  if (record == nil) return;
   NSString *text = payload == NULL
     ? @""
     : [NSString stringWithUTF8String:payload];
   if (text == nil) {
     host.result = 44;
-    [host.window close];
+    [record.window close];
     return;
   }
   [host deliverPayload:text
@@ -267,32 +285,54 @@ void zapp_deliver_response_from_z(
               windowId:window_id];
 }
 
-static ZAppDesktopHost *zapp_desktop_active_window_host(void) {
-  return active_host != nil ? active_host : prepared_host;
-}
-
-void zapp_desktop_set_logical_url(const char *logical_url) {
-  ZAppDesktopHost *host = zapp_desktop_active_window_host();
-  NSString *logical = logical_url == NULL
-    ? nil
-    : [NSString stringWithUTF8String:logical_url];
-  host.logicalURL = logical.length == 0 ? @"/" : logical;
-}
-
 int32_t zapp_desktop_has_injection_profile(const char *profile) {
   return zapp_webview_injection_profile_exists(profile);
 }
 
-int32_t zapp_desktop_select_injection_profile(const char *profile) {
-  ZAppDesktopHost *host = zapp_desktop_active_window_host();
+int32_t zapp_desktop_window_configure(
+  const char *window_id,
+  int32_t native_id,
+  const char *logical_url,
+  bool visible
+) {
+  if (prepared_host == nil) return 1;
+  NSString *identifier = window_id == NULL
+    ? nil
+    : [NSString stringWithUTF8String:window_id];
+  NSString *logical = logical_url == NULL
+    ? nil
+    : [NSString stringWithUTF8String:logical_url];
+  if (identifier == nil || prepared_host.windows[identifier] != nil) return 2;
+  if (prepared_host.windowsByNativeId[@(native_id)] != nil) return 3;
+  ZAppDesktopWindowRecord *record = [[ZAppDesktopWindowRecord alloc] init];
+  record.windowId = identifier;
+  record.nativeId = native_id;
+  record.windowVisible = visible;
+  record.logicalURL = logical.length == 0 ? @"/" : logical;
+  record.injectionProfiles = [[NSMutableArray alloc] init];
+  prepared_host.windows[identifier] = record;
+  prepared_host.windowsByNativeId[@(native_id)] = record;
+  return 0;
+}
+
+int32_t zapp_desktop_window_select_injection_profile(
+  const char *window_id,
+  const char *profile
+) {
+  ZAppDesktopHost *host = prepared_host;
   if (host == nil) return 3;
   if (!zapp_webview_injection_profile_exists(profile)) return 1;
+  NSString *identifier = window_id == NULL
+    ? nil
+    : [NSString stringWithUTF8String:window_id];
   NSString *name = profile == NULL
     ? nil
     : [NSString stringWithUTF8String:profile];
-  if (name == nil) return 2;
-  if (![host.injectionProfiles containsObject:name]) {
-    [host.injectionProfiles addObject:name];
+  if (identifier == nil || name == nil) return 2;
+  ZAppDesktopWindowRecord *record = host.windows[identifier];
+  if (record == nil) return 4;
+  if (![record.injectionProfiles containsObject:name]) {
+    [record.injectionProfiles addObject:name];
   }
   return 0;
 }
@@ -318,10 +358,10 @@ static NSString *zapp_desktop_style_injection(NSString *css) {
 }
 
 static BOOL zapp_desktop_install_injection_profiles(
-  ZAppDesktopHost *host
+  ZAppDesktopWindowRecord *record
 ) {
   size_t entryCount = zapp_webview_injection_count();
-  for (NSString *selected in host.injectionProfiles) {
+  for (NSString *selected in record.injectionProfiles) {
     const char *selectedBytes = selected.UTF8String;
     if (selectedBytes == NULL) return NO;
     for (size_t index = 0; index < entryCount; index++) {
@@ -344,7 +384,7 @@ static BOOL zapp_desktop_install_injection_profiles(
         initWithSource:source
         injectionTime:injectionTime
         forMainFrameOnly:YES];
-      [host.userContentController addUserScript:script];
+      [record.userContentController addUserScript:script];
     }
   }
   return YES;
@@ -354,34 +394,48 @@ NSRect zapp_desktop_make_rect(uint32_t width, uint32_t height) {
   return NSMakeRect(0.0, 0.0, (CGFloat)width, (CGFloat)height);
 }
 
+static ZAppDesktopWindowRecord *zapp_desktop_window_record(
+  const char *window_id
+) {
+  if (prepared_host == nil || window_id == NULL) return nil;
+  NSString *identifier = [NSString stringWithUTF8String:window_id];
+  return identifier == nil ? nil : prepared_host.windows[identifier];
+}
+
+static ZAppDesktopWindowRecord *zapp_desktop_webview_record(
+  ZAppDesktopHost *host,
+  WKWebView *webView
+) {
+  for (ZAppDesktopWindowRecord *record in host.windows.allValues) {
+    if (record.webView == webView) return record;
+  }
+  return nil;
+}
+
 void zapp_desktop_window_show(const char *window_id) {
-  (void)window_id;
-  ZAppDesktopHost *host = zapp_desktop_active_window_host();
-  [host.window makeKeyAndOrderFront:nil];
+  ZAppDesktopWindowRecord *record = zapp_desktop_window_record(window_id);
+  [record.window makeKeyAndOrderFront:nil];
 }
 
 void zapp_desktop_window_hide(const char *window_id) {
-  (void)window_id;
-  ZAppDesktopHost *host = zapp_desktop_active_window_host();
-  [host.window orderOut:nil];
+  ZAppDesktopWindowRecord *record = zapp_desktop_window_record(window_id);
+  [record.window orderOut:nil];
 }
 
 void zapp_desktop_window_close(const char *window_id) {
-  (void)window_id;
-  ZAppDesktopHost *host = zapp_desktop_active_window_host();
-  [host.window close];
+  ZAppDesktopWindowRecord *record = zapp_desktop_window_record(window_id);
+  [record.window close];
 }
 
 void zapp_desktop_window_set_title(
   const char *window_id,
   const char *title
 ) {
-  (void)window_id;
-  ZAppDesktopHost *host = zapp_desktop_active_window_host();
+  ZAppDesktopWindowRecord *record = zapp_desktop_window_record(window_id);
   NSString *value = title == NULL
     ? @""
     : [NSString stringWithUTF8String:title];
-  if (value != nil) host.window.title = value;
+  if (value != nil) record.window.title = value;
 }
 
 static NSURL *zapp_desktop_resolve_logical_url(NSString *logicalURL) {
@@ -416,14 +470,118 @@ static BOOL zapp_desktop_has_frontend_origin(NSURL *url) {
   return sameScheme && sameHost && samePort;
 }
 
+static NSString *zapp_desktop_window_identity_script(NSString *windowId) {
+  NSError *error = nil;
+  NSData *jsonData = [NSJSONSerialization dataWithJSONObject:@[windowId]
+                                                     options:0
+                                                       error:&error];
+  if (jsonData == nil || error != nil) return nil;
+  NSString *json = [[NSString alloc] initWithData:jsonData
+                                          encoding:NSUTF8StringEncoding];
+  if (json == nil) return nil;
+  return [NSString stringWithFormat:
+    @"globalThis[Symbol.for('zapp.windowId')]=(%@)[0]", json];
+}
+
+int32_t zapp_desktop_window_start(const char *window_id) {
+  ZAppDesktopWindowRecord *record = zapp_desktop_window_record(window_id);
+  if (record == nil) return 1;
+  if (record.started) return 2;
+
+  const char *bootstrapBytes = zapp_webview_bootstrap_script();
+  NSString *bootstrapSource = bootstrapBytes == NULL
+    ? nil
+    : [NSString stringWithUTF8String:bootstrapBytes];
+  if (bootstrapSource == nil) return 3;
+  WKUserScript *bootstrap = [[WKUserScript alloc]
+    initWithSource:bootstrapSource
+    injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+    forMainFrameOnly:YES];
+  [record.userContentController addUserScript:bootstrap];
+
+  NSString *identitySource = zapp_desktop_window_identity_script(record.windowId);
+  if (identitySource == nil) return 4;
+  WKUserScript *identity = [[WKUserScript alloc]
+    initWithSource:identitySource
+    injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+    forMainFrameOnly:YES];
+  [record.userContentController addUserScript:identity];
+
+  if (!zapp_desktop_install_injection_profiles(record)) return 5;
+
+  if (prepared_host.smokeMode) {
+    WKUserScript *smoke = [[WKUserScript alloc]
+      initWithSource:
+        @"setTimeout(()=>document.querySelector('#cancel')?.click(),350);"
+      injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
+      forMainFrameOnly:YES];
+    [record.userContentController addUserScript:smoke];
+  }
+
+  NSURL *initialURL = zapp_desktop_resolve_logical_url(record.logicalURL);
+  if (initialURL == nil) return 6;
+  record.webView.navigationDelegate = prepared_host;
+  [record.webView loadRequest:[NSURLRequest requestWithURL:initialURL]];
+  [record.window center];
+  if (record.windowVisible) [record.window makeKeyAndOrderFront:nil];
+  record.started = YES;
+
+  if (prepared_host.smokeMode) {
+    __weak ZAppDesktopHost *weakHost = prepared_host;
+    __weak ZAppDesktopWindowRecord *weakRecord = record;
+    dispatch_after(
+      dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC),
+      dispatch_get_main_queue(),
+      ^{
+        ZAppDesktopHost *host = weakHost;
+        ZAppDesktopWindowRecord *current = weakRecord;
+        if (host == nil || current == nil || current.receivedResponse) return;
+        [current.webView
+          evaluateJavaScript:
+            @"JSON.stringify({"
+            @"ready:document.readyState,"
+            @"services:typeof globalThis.__zappServices,"
+            @"bridge:typeof globalThis[Symbol.for('zapp.bridge')],"
+            @"windowId:globalThis[Symbol.for('zapp.windowId')]??null,"
+            @"cancel:typeof document.querySelector('#cancel')?.onclick,"
+            @"status:document.querySelector('#status')?.textContent??null,"
+            @"body:document.body?.dataset??null"
+            @"})"
+          completionHandler:^(id state, NSError *stateError) {
+            fprintf(
+              stderr,
+              "[zapp] frontend smoke timed out window=%s state=%s error=%s\n",
+              current.windowId.UTF8String,
+              state == nil ? "<nil>" : [[state description] UTF8String],
+              stateError == nil ? "<none>" : [[stateError description] UTF8String]
+            );
+            host.result = 50;
+            [host closeAllWindows];
+          }];
+      }
+    );
+  }
+  return 0;
+}
+
+void zapp_desktop_window_discard(const char *window_id) {
+  ZAppDesktopWindowRecord *record = zapp_desktop_window_record(window_id);
+  if (record == nil) return;
+  record.window.delegate = nil;
+  record.webView.navigationDelegate = nil;
+  [prepared_host.windows removeObjectForKey:record.windowId];
+  [prepared_host.windowsByNativeId removeObjectForKey:@(record.nativeId)];
+  [record.window close];
+}
+
 @implementation ZAppDesktopHost
 
 - (instancetype)init {
   self = [super init];
   if (self != nil) {
-    _receivedResponse = NO;
-    _windowVisible = YES;
-    _injectionProfiles = [[NSMutableArray alloc] init];
+    _windows = [[NSMutableDictionary alloc] init];
+    _windowsByNativeId = [[NSMutableDictionary alloc] init];
+    _assetSchemeHandlers = [[NSMutableArray alloc] init];
     const char *smoke = getenv("ZAPP_Z_DESKTOP_SMOKE");
     _smokeMode = smoke != NULL && strcmp(smoke, "1") == 0;
     _result = _smokeMode ? 41 : 0;
@@ -435,6 +593,8 @@ static BOOL zapp_desktop_has_frontend_origin(NSURL *url) {
              requestId:(uint64_t)requestId
                     ok:(BOOL)ok
               windowId:(int32_t)windowId {
+  ZAppDesktopWindowRecord *record = self.windowsByNativeId[@(windowId)];
+  if (record == nil) return;
   NSDictionary *response = @{
     @"id": [NSString stringWithFormat:@"%llu", (unsigned long long)requestId],
     @"ok": @(ok),
@@ -446,7 +606,7 @@ static BOOL zapp_desktop_has_frontend_origin(NSURL *url) {
                                                    error:&serializationError];
   if (data == nil || serializationError != nil) {
     self.result = 43;
-    [self.window close];
+    [record.window close];
     return;
   }
   NSString *json = [[NSString alloc] initWithData:data
@@ -458,13 +618,13 @@ static BOOL zapp_desktop_has_frontend_origin(NSURL *url) {
     @"b._onInvokeResult(Number(r.id),r.ok,r.payload)})()",
     json];
   __weak ZAppDesktopHost *weakSelf = self;
-  [self.webView evaluateJavaScript:script completionHandler:^(id value, NSError *error) {
+  [record.webView evaluateJavaScript:script completionHandler:^(id value, NSError *error) {
     (void)value;
     ZAppDesktopHost *strongSelf = weakSelf;
     if (strongSelf == nil) return;
     if (error != nil) {
       strongSelf.result = 45;
-      [strongSelf.window close];
+      [record.window close];
       return;
     }
     // Everything below is automated smoke-test instrumentation. Interactive
@@ -484,7 +644,7 @@ static BOOL zapp_desktop_has_frontend_origin(NSURL *url) {
       dispatch_time(DISPATCH_TIME_NOW, 250 * NSEC_PER_MSEC),
       dispatch_get_main_queue(),
       ^{
-        [strongSelf.webView
+        [record.webView
           evaluateJavaScript:
             @"JSON.stringify({"
             @"roundTrip:document.body?.dataset?.roundTrip??null,"
@@ -492,6 +652,7 @@ static BOOL zapp_desktop_has_frontend_origin(NSURL *url) {
             @"health:document.body?.dataset?.health??null,"
             @"hmr:document.body?.dataset?.hmr??null,"
             @"inject:document.body?.dataset?.inject??null,"
+            @"dynamicWindow:document.body?.dataset?.dynamicWindow??null,"
             @"status:document.querySelector('#status')?.textContent??null,"
             @"bridge:typeof globalThis[Symbol.for('zapp.bridge')]"
             @"})"
@@ -508,6 +669,7 @@ static BOOL zapp_desktop_has_frontend_origin(NSURL *url) {
               && [(NSString *)state containsString:@"\"cancellation\":\"ok\""]
               && [(NSString *)state containsString:@"\"health\":\"ok\""]
               && [(NSString *)state containsString:@"\"inject\":\"ready\""]
+              && [(NSString *)state containsString:@"\"dynamicWindow\":\"ready\""]
               && [(NSString *)state containsString:expectedHMR];
             if (stateError != nil || !updated) {
               const char *stateText = state == nil
@@ -523,11 +685,10 @@ static BOOL zapp_desktop_has_frontend_origin(NSURL *url) {
                 errorText
               );
               strongSelf.result = 47;
-              [strongSelf.window close];
+              [record.window close];
               return;
             }
-            strongSelf.receivedResponse = YES;
-            strongSelf.result = 0;
+            record.receivedResponse = YES;
             printf(
               "visible WebView round trip window=%d request=%llu ok=%s hmr=%s inject=ready payload=%s\n",
               windowId,
@@ -538,11 +699,23 @@ static BOOL zapp_desktop_has_frontend_origin(NSURL *url) {
             );
             fflush(stdout);
             if (strongSelf.smokeMode) {
+              BOOL allWindowsResponded = YES;
+              for (
+                ZAppDesktopWindowRecord *candidate
+                in strongSelf.windows.allValues
+              ) {
+                if (!candidate.receivedResponse) {
+                  allWindowsResponded = NO;
+                  break;
+                }
+              }
+              if (!allWindowsResponded) return;
+              if (strongSelf.result == 41) strongSelf.result = 0;
               dispatch_after(
                 dispatch_time(DISPATCH_TIME_NOW, 600 * NSEC_PER_MSEC),
                 dispatch_get_main_queue(),
                 ^{
-                  [strongSelf.window close];
+                  [strongSelf closeAllWindows];
                 }
               );
             }
@@ -553,18 +726,48 @@ static BOOL zapp_desktop_has_frontend_origin(NSURL *url) {
 }
 
 - (void)windowWillClose:(NSNotification *)notification {
-  (void)notification;
-  [NSApp stop:nil];
-  NSEvent *wake = [NSEvent otherEventWithType:NSEventTypeApplicationDefined
-                                     location:NSMakePoint(0.0, 0.0)
-                                modifierFlags:0
-                                    timestamp:0.0
-                                 windowNumber:0
-                                      context:nil
-                                      subtype:0
-                                        data1:0
-                                        data2:0];
-  [NSApp postEvent:wake atStart:YES];
+  NSWindow *closedWindow = notification.object;
+  ZAppDesktopWindowRecord *closedRecord = nil;
+  for (ZAppDesktopWindowRecord *candidate in self.windows.allValues) {
+    if (candidate.window == closedWindow) {
+      closedRecord = candidate;
+      break;
+    }
+  }
+  if (closedRecord == nil) return;
+  [self.windows removeObjectForKey:closedRecord.windowId];
+  [self.windowsByNativeId removeObjectForKey:@(closedRecord.nativeId)];
+  closedRecord.webView.navigationDelegate = nil;
+  closedRecord.window.delegate = nil;
+  zapp_window_closed_owned(
+    closedRecord.windowId.UTF8String,
+    closedRecord.nativeId
+  );
+  [self stopIfLastWindowClosed];
+}
+
+- (void)stopIfLastWindowClosed {
+  if (self.windows.count != 0) return;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [NSApp stop:nil];
+    NSEvent *wake = [NSEvent otherEventWithType:NSEventTypeApplicationDefined
+                                       location:NSMakePoint(0.0, 0.0)
+                                  modifierFlags:0
+                                      timestamp:0.0
+                                   windowNumber:0
+                                        context:nil
+                                        subtype:0
+                                          data1:0
+                                          data2:0];
+    [NSApp postEvent:wake atStart:YES];
+  });
+}
+
+- (void)closeAllWindows {
+  NSArray<ZAppDesktopWindowRecord *> *records = self.windows.allValues;
+  for (ZAppDesktopWindowRecord *record in records) {
+    [record.window close];
+  }
 }
 
 - (void)webView:(WKWebView *)webView
@@ -579,7 +782,7 @@ static BOOL zapp_desktop_has_frontend_origin(NSURL *url) {
   );
   if (self.smokeMode) {
     self.result = 54;
-    [self.window close];
+    [zapp_desktop_webview_record(self, webView).window close];
   }
 }
 
@@ -595,7 +798,7 @@ static BOOL zapp_desktop_has_frontend_origin(NSURL *url) {
   );
   if (self.smokeMode) {
     self.result = 55;
-    [self.window close];
+    [zapp_desktop_webview_record(self, webView).window close];
   }
 }
 
@@ -624,96 +827,14 @@ static BOOL zapp_desktop_has_frontend_origin(NSURL *url) {
 - (int32_t)run {
   NSApplication *application = NSApplication.sharedApplication;
   [application setActivationPolicy:NSApplicationActivationPolicyRegular];
-
-  if (
-    self.window == nil
-    || self.webView == nil
-    || self.userContentController == nil
-  ) {
-    self.result = 49;
-    return self.result;
-  }
-
-  const char *bootstrapBytes = zapp_webview_bootstrap_script();
-  NSString *bootstrapSource = bootstrapBytes == NULL
-    ? nil
-    : [NSString stringWithUTF8String:bootstrapBytes];
-  if (bootstrapSource == nil) {
-    self.result = 48;
-    return self.result;
-  }
-  WKUserScript *bootstrap = [[WKUserScript alloc]
-    initWithSource:bootstrapSource
-    injectionTime:WKUserScriptInjectionTimeAtDocumentStart
-    forMainFrameOnly:YES];
-  [self.userContentController addUserScript:bootstrap];
-
-  if (!zapp_desktop_install_injection_profiles(self)) {
-    self.result = 54;
-    return self.result;
-  }
-
-  if (self.smokeMode) {
-    WKUserScript *smoke = [[WKUserScript alloc]
-      initWithSource:
-        @"setTimeout(()=>document.querySelector('#cancel')?.click(),350);"
-      injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
-      forMainFrameOnly:YES];
-    [self.userContentController addUserScript:smoke];
-  }
-
-  NSURL *initialURL = zapp_desktop_resolve_logical_url(self.logicalURL);
-  if (initialURL == nil) {
-    self.result = 53;
-    return self.result;
-  }
-  self.webView.navigationDelegate = self;
-  [self.webView loadRequest:[NSURLRequest requestWithURL:initialURL]];
-
-  [self.window center];
-  if (self.windowVisible) [self.window makeKeyAndOrderFront:nil];
-  active_host = self;
+  if (self.windows.count == 0) return 49;
   [application activate];
-  if (self.smokeMode) {
-    __weak ZAppDesktopHost *weakSelf = self;
-    dispatch_after(
-      dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC),
-      dispatch_get_main_queue(),
-      ^{
-        ZAppDesktopHost *strongSelf = weakSelf;
-        if (strongSelf != nil && !strongSelf.receivedResponse) {
-          [strongSelf.webView
-            evaluateJavaScript:
-              @"JSON.stringify({"
-              @"ready:document.readyState,"
-              @"services:typeof globalThis.__zappServices,"
-              @"bridge:typeof globalThis[Symbol.for('zapp.bridge')],"
-              @"cancel:typeof document.querySelector('#cancel')?.onclick,"
-              @"status:document.querySelector('#status')?.textContent??null,"
-              @"body:document.body?.dataset??null"
-              @"})"
-            completionHandler:^(id state, NSError *stateError) {
-              fprintf(
-                stderr,
-                "[zapp] frontend smoke timed out state=%s error=%s\n",
-                state == nil ? "<nil>" : [[state description] UTF8String],
-                stateError == nil ? "<none>" : [[stateError description] UTF8String]
-              );
-              strongSelf.result = 50;
-              [strongSelf.window close];
-            }];
-        }
-      }
-    );
-  }
   [application run];
-  active_host = nil;
-
-  self.window.delegate = nil;
-  self.webView.navigationDelegate = nil;
-  return self.smokeMode
-    ? (self.receivedResponse ? 0 : self.result)
-    : self.result;
+  for (ZAppDesktopWindowRecord *record in self.windows.allValues) {
+    record.window.delegate = nil;
+    record.webView.navigationDelegate = nil;
+  }
+  return self.result;
 }
 
 @end
@@ -723,8 +844,19 @@ int32_t zapp_desktop_prepare(void) {
     if (prepared_host != nil) return 52;
     ZAppDesktopHost *host = [[ZAppDesktopHost alloc] init];
     prepared_host = host;
-    active_host = host;
     return 0;
+  }
+}
+
+void zapp_desktop_abort(void) {
+  @autoreleasepool {
+    ZAppDesktopHost *host = prepared_host;
+    if (host == nil) return;
+    NSArray<NSString *> *windowIds = host.windows.allKeys;
+    for (NSString *windowId in windowIds) {
+      zapp_desktop_window_discard(windowId.UTF8String);
+    }
+    prepared_host = nil;
   }
 }
 
@@ -733,7 +865,6 @@ int32_t zapp_desktop_run(void) {
     ZAppDesktopHost *host = prepared_host;
     if (host == nil) return 51;
     int32_t result = [host run];
-    active_host = nil;
     prepared_host = nil;
     return result;
   }

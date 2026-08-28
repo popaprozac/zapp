@@ -8,14 +8,33 @@ const services = globalThis.__zappServices;
 // that `zapp dev` loaded the app through Vite rather than a stale packaged UI.
 document.body.dataset.hmr = import.meta.hot ? "ready" : "packaged";
 
+const currentWindowId = globalThis[Symbol.for("zapp.windowId")];
+if (currentWindowId === "win-1") {
+  services.windows.openDiagnostics().then((opened) => {
+    document.body.dataset.dynamicWindow =
+      opened ? "ready" : "error";
+  }).catch(() => {
+    document.body.dataset.dynamicWindow = "error";
+  });
+} else {
+  document.body.dataset.dynamicWindow = "ready";
+}
+
 setTimeout(() => {
+  const windowId = currentWindowId;
   const start = globalThis[Symbol.for("zapp.inject.base.start")];
+  const diagnostics = globalThis[Symbol.for("zapp.inject.diagnostics")];
   const end = document.documentElement.dataset.zappInjectEnd;
   const style = getComputedStyle(document.documentElement)
     .getPropertyValue("--zapp-inject-base")
     .trim();
+  const expectsDiagnostics = windowId === "win-2";
+  const isolated = expectsDiagnostics
+    ? diagnostics === "ready"
+    : diagnostics === undefined;
+  document.body.dataset.windowId = String(windowId ?? "missing");
   document.body.dataset.inject =
-    start === "ready" && end === "ready" && style === "ready"
+    start === "ready" && end === "ready" && style === "ready" && isolated
       ? "ready"
       : "error";
 }, 0);

@@ -164,7 +164,7 @@ lifecycle hooks, and mutable state remain ordinary Z source.
 Neither value leaks into application-authored window routing:
 
 ```z
-const window = app.windows.create(WindowOptions({
+const window = try app.windows.create(WindowOptions({
   title: "Z Notes",
   url: "/notes",
 }));
@@ -216,7 +216,7 @@ export default defineConfig({
 Each dynamically created window selects the profiles it needs:
 
 ```z
-const window = app.windows.create(WindowOptions({
+const window = try app.windows.create(WindowOptions({
   title: "Diagnostics",
   url: "/diagnostics",
   inject: Array<String>("base", "diagnostics"),

@@ -18,11 +18,12 @@ zapp/
 ├── notes-core.zs     # shared model, behavior, and checked wire conversion
 ├── notes-service.zs  # suspending service and lifecycle adapter
 ├── health-service.zs # sync-only value service
+├── window-service.zs # dynamically creates the diagnostics window
 └── sync-notes-service.zs # allocation-lean strict-C adapter
 frontend/
 ├── index.html        # Vite frontend entry
 ├── app.js            # application ES module and generated-service consumer
-└── injected/         # build-checked base injection profile evidence
+└── injected/         # build-checked per-window injection profile evidence
 vite.config.ts        # frontend/ -> dist/ production build
 zapp.config.ts        # Zapp metadata and packaged dist/ asset root
 ```
@@ -32,6 +33,7 @@ The ordinary desktop entry is deliberately small:
 ```z
 import { createNotesService } from "./notes-service.zs";
 import { createHealthService } from "./health-service.zs";
+import { createWindowService } from "./window-service.zs";
 import { Application } from "../../../native/z/framework/application.zs";
 import { WindowOptions } from "../../../native/z/framework/window.zs";
 import { thread } from "std/thread";
@@ -40,12 +42,18 @@ async function main(): i32 on thread.main {
   let app = Application();
   app.services.register("notes", createNotesService());
   app.services.register("health", createHealthService());
-  const mainWindow = app.windows.create(WindowOptions({
+  app.services.register("windows", createWindowService(app.windows));
+  const createdWindow = attempt app.windows.create(WindowOptions({
     title: "Z Notes",
     url: "/notes",
+    inject: Array<String>("base"),
     width: 720,
     height: 460,
   }));
+  match (createdWindow) {
+    success(_) => {}
+    failure(_) => return 71;
+  }
   return match (attempt await app.run()) {
     success(status) => status;
     failure(_) => 70;
@@ -54,12 +62,13 @@ async function main(): i32 on thread.main {
 ```
 
 `WindowOptions` is an ordinary value struct with defaults. `create` returns a
-shared `Window` identity immediately and the manager retains every open window.
-The first macOS native tier realizes one window registered before `run`; title,
-size, visibility, and resizability reach AppKit. `Window.show()`, `hide()`,
-`setTitle()`, and idempotent `close()` are main-executor operations. Native
-multi-window and dynamic creation are the next window-runtime slice rather than
-hidden behavior in this first checkpoint.
+shared `Window` identity or a typed `WindowError`, and the manager retains every
+open window. The primary WebView calls the generated `windows.openDiagnostics`
+binding after `app.run()` has entered the AppKit loop, dynamically realizing a
+second window with its own native ID, request registry, URL, and injection
+selection. `Window.show()`, `hide()`, `setTitle()`, and idempotent `close()` are
+main-executor operations. The process stops only after the last native window
+closes.
 
 `WindowOptions.url` is a logical application-relative URL, not a transport
 address. This example deliberately uses `/notes`. In a packaged build the
@@ -69,13 +78,14 @@ same value resolves against the configured Vite/Bun HTTP origin. Application
 source does not branch on build mode and cannot use this field to grant the
 native bridge to an arbitrary remote origin.
 
-The same window selects the `base` profile declared by
+The primary window selects the `base` profile declared by
 `zapp.config.ts` through `inject: Array<String>("base")`. Its CSS,
 document-start TypeScript, and document-end TypeScript are compiled into an
 immutable native catalog. The smoke proves the bridge precedes the preload,
-the style reaches the document, and the end script runs. Other dynamically
-created windows could select different profile combinations without accepting
-runtime JavaScript strings.
+the style reaches the document, and the end script runs. The dynamically
+created diagnostics window selects `base` plus `diagnostics`; the smoke proves
+the diagnostics marker exists only in that window, without accepting runtime
+JavaScript strings.
 
 The repository-relative framework import is temporary. A real package/module
 resolver should make it an ordinary stable Zapp import without copying runtime
@@ -158,16 +168,18 @@ From the repository root:
 bun run spike:z-notes
 ```
 
-The visible macOS app stays open until its window is closed. Click **Create a
-note in Z** to call the generated `notes.create` TypeScript binding and display
-the returned native-service value in the DOM. **Cancel a suspended request**
+The visible macOS app dynamically opens a second diagnostics window and stays
+open until both windows are closed. Click **Create a note in Z** to call the
+generated `notes.create` TypeScript binding and display the returned
+native-service value in the DOM. **Cancel a suspended request**
 starts `notes.count`, aborts it with a standard `AbortController` while the
 service is yielded, and then proves a later request still succeeds. Expected
 evidence after creating a note directly:
 
 ```text
 Notes: notes service started
-visible WebView round trip window=1 request=1 ok=true payload={"id":"1","title":"WebView note"}
+visible WebView round trip window=1 request=3 ok=true hmr=packaged inject=ready payload={"id":"1","title":"WebView note"}
+visible WebView round trip window=2 request=2 ok=true hmr=packaged inject=ready payload={"id":"2","title":"WebView note"}
 Notes: notes service stopped
 ```
 

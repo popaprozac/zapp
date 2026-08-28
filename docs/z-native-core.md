@@ -1,8 +1,8 @@
 # Z native core
 
-Status: Phase 0 complete; Phase 1 typed ingress, Z-owned AppKit/WebKit identity,
-generated typed service round trips, and structured suspending service delivery
-through the real WebView complete, August 2026.
+Status: Phase 0 complete; Phase 1 typed ingress, dynamically created Z-owned
+AppKit/WebKit windows, generated typed service round trips, and structured
+suspending service delivery through real WebViews complete, August 2026.
 
 Zapp's reusable native core lives under `native/z/framework/`; the first
 application-owned source graph lives under `spikes/z-notes/zapp/`. It is a
@@ -44,14 +44,16 @@ an `Option<BridgeResponse>` to the host. Request/response invokes produce
 signals, and cancellation produce `none`. Arbitrary `a` payloads are serialized
 at the ingress edge and do not become the core's internal object model.
 
-The default executable is now a visible AppKit/WebKit application. Z creates
-and owns the window, WebView, configuration, content controller, protocol
-handler, and registration guard. Its generated browser binding calls the
-Z-owned `NotesService`; Z decodes and dispatches the message, and the typed
-response updates the DOM before deterministic window and runtime shutdown. The
-Objective-C host owns the process/run-loop adapter, response delivery through
-WebKit, and smoke-test observation rather than application object construction
-or message-body validation.
+The default executable is now a visible multi-window AppKit/WebKit application.
+Z creates and owns each window, WebView, configuration, content controller,
+protocol handler, and registration guard. A per-window native registry retains
+the run-loop-facing graph and routes each WebKit response by a stable native
+identifier; Z owns each window's pending-request namespace and public identity.
+The primary WebView invokes a generated `windows.openDiagnostics()` service
+after the application loop starts, proving dynamic realization rather than
+startup-only enumeration. The Objective-C host owns the process/run-loop
+adapter, response delivery, and smoke observation rather than application
+object construction or message-body validation.
 
 The consuming `Application` also owns a separate lifecycle registry. Typed
 main-executor start hooks run before the blocking platform loop; stop hooks run
@@ -81,14 +83,16 @@ exact JSON payload after the C -> Z -> C round trip. It is therefore evidence
 for the real build seam rather than a parallel script that can drift from it.
 
 The ordinary Z Notes command builds the default host, injects the production
-bootstrap and generated Notes binding at document start, and stays open until
-the user closes its window. Clicking the visible button calls
+bootstrap and generated service facade at document start, and dynamically opens
+a second diagnostics window. The process stops only after the last native
+window closes. Clicking either window's visible button calls
 `notes.create(...)`; native delivery resolves it through `_onInvokeResult()`
 and the binding restores the exact `u64` identifier as `bigint` before updating
-the DOM. `spike:z-notes:smoke` opts into the bounded automation mode: it clicks,
-verifies the DOM, prints the response, and closes. Both use the same staged
-archive and generated embedding header as an ordinary `ZAPP_NATIVE_LANG=z`
-build.
+the DOM. `spike:z-notes:smoke` opts into bounded automation: it verifies
+independent window identities, per-window injection selection,
+cancellation/request routing, and both DOMs before closing every window. Both
+use the same staged archive and generated embedding header as an ordinary
+`ZAPP_NATIVE_LANG=z` build.
 
 The development commands exercise the complete CLI-owned loop: Vite serves the
 same logical application URL with its HMR client, the Z-native AppKit/WebKit
@@ -198,7 +202,7 @@ service call through WebView -> Z -> WebView, a generated-runtime-owned Z
 `Application`, Z-owned UI identities and retained protocol registration, typed
 JSON ingress and dispatch, an embedded-engine direct-service seam, and
 deterministic window/run-loop/runtime shutdown. The framework and application
-are now separate source graphs, and one Notes
-project drives both the WebView and strict-C embedding hosts. Remaining work
+are now separate source graphs, and one Notes project drives dynamic
+multi-window WebViews and the strict-C embedding host. Remaining work
 includes typed invocation error/cancellation/permission composition, zjs host
 attachment, and ASan or equivalent leak evidence on a compatible host.
