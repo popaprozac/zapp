@@ -146,12 +146,10 @@ describe("Z native host inputs", () => {
       "desktop",
       "/app/main.zs",
       "/native",
-      "/workspace/native/z/api",
+      "/workspace/native/z",
     ))).toMatchObject({
-      imports: {
-        zapp: "/workspace/native/z/api/zapp.zs",
-        "zapp/window": "/workspace/native/z/api/zapp/window.zs",
-        "zapp/service": "/workspace/native/z/api/zapp/service.zs",
+      dependencies: {
+        zapp: { path: "/workspace/native/z" },
       },
     });
   });

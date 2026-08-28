@@ -13,7 +13,7 @@ and an ordinary Vite frontend under `frontend/`:
 
 ```text
 zapp/
-├── z.json            # public source imports plus native/deployment context
+├── z.json            # Zapp package dependency plus native/deployment context
 ├── main.zs           # desktop entry and Application configuration
 ├── embedded.zs       # strict-C embedding entry used by the regression host
 ├── notes-core.zs     # shared model, behavior, and checked wire conversion
@@ -94,12 +94,13 @@ window.
 
 Application code now imports only Zapp's public source facade under
 `native/z/api/`; it no longer reaches into framework implementation modules.
-The source-local `z.json` maps that facade to `"zapp"`, `"zapp/window"`, and
-`"zapp/service"` for direct checking and editor services. The build generates
-the equivalent exact mappings after staging the app, API, and framework into
-one isolated workspace, so it does not rewrite authored imports. A future Z
-package layer can install Zapp and generate the same public map from package
-exports without changing application source.
+The source-local `z.json` declares one local `zapp` package dependency; Zapp's
+library manifest exposes `"zapp"`, `"zapp/window"`, and `"zapp/service"` for
+direct checking and editor services. The build generates an equivalent local
+dependency after staging the app, API, and framework into one isolated
+workspace, so it does not rewrite authored imports. A future registry
+dependency can replace the local path without changing application source or
+Zapp's declared public exports.
 
 This spike now builds and runs through Z's fixed-point native driver. Manual
 `TaskScope` construction, owned capture transfer, main-executor placement, and

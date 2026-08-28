@@ -186,7 +186,7 @@ export function renderZNativeManifest(
   host: ZNativeHost,
   entry: string,
   nativeDirectory = ".",
-  apiDirectory?: string,
+  packageDirectory?: string,
 ): string {
   const target = host === "desktop"
     ? {
@@ -210,14 +210,13 @@ export function renderZNativeManifest(
       includeDirectories: [nativeDirectory],
       runtime: { initialize: "initializeApplication" },
     };
-  const imports = apiDirectory
-    ? {
-      zapp: path.join(apiDirectory, "zapp.zs"),
-      "zapp/window": path.join(apiDirectory, "zapp", "window.zs"),
-      "zapp/service": path.join(apiDirectory, "zapp", "service.zs"),
-    }
+  const dependencies = packageDirectory
+    ? { zapp: { path: packageDirectory } }
     : undefined;
-  return `${JSON.stringify({ ...(imports ? { imports } : {}), target }, null, 2)}\n`;
+  return `${JSON.stringify({
+    ...(dependencies ? { dependencies } : {}),
+    target,
+  }, null, 2)}\n`;
 }
 
 export function renderZWebviewBootstrapC(source: string): string {
@@ -338,6 +337,10 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
     path.join(workspace, "native", "z", "api"),
     { recursive: true },
   );
+  await cp(
+    path.join(source, "z.json"),
+    path.join(workspace, "native", "z", "z.json"),
+  );
   await writeFile(
     path.join(stagedFramework, "configured-application.zs"),
     renderZApplicationMetadata(options.config),
@@ -361,7 +364,7 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
       host,
       appEntry,
       stage,
-      path.join(workspace, "native", "z", "api"),
+      path.join(workspace, "native", "z"),
     ),
     "utf8",
   );

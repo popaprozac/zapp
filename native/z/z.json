@@ -1,0 +1,13 @@
+{
+  "package": {
+    "name": "zapp",
+    "version": "0.1.0-dev"
+  },
+  "library": {
+    "entry": "api/zapp.zs",
+    "exports": {
+      "./window": "api/zapp/window.zs",
+      "./service": "api/zapp/service.zs"
+    }
+  }
+}

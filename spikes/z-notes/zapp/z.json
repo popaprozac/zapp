@@ -1,8 +1,6 @@
 {
-  "imports": {
-    "zapp": "../../../native/z/api/zapp.zs",
-    "zapp/window": "../../../native/z/api/zapp/window.zs",
-    "zapp/service": "../../../native/z/api/zapp/service.zs"
+  "dependencies": {
+    "zapp": { "path": "../../../native/z" }
   },
   "target": {
     "name": "zapp-z-notes",
