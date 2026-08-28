@@ -168,6 +168,8 @@ describe("Z native host inputs", () => {
     expect(macOSPlatform).toContain("configuration.userContentController = contentController");
     expect(macOSPlatform).toContain("window.contentView = webView");
     expect(macOSPlatform).toContain("native.ZAppDesktopBridge.attachWindow(");
+    expect(macOSPlatform).toContain("native.zapp_desktop_has_injection_profile(profile)");
+    expect(macOSPlatform).toContain("native.zapp_desktop_select_injection_profile(profile)");
     expect(objectiveCHost).not.toContain(
       "ZAppDesktopHost : NSObject <WKScriptMessageHandler",
     );
@@ -182,6 +184,8 @@ describe("Z native host inputs", () => {
     expect(objectiveCHost).toContain("ZAppDesktopAssetSchemeHandler");
     expect(objectiveCHost).toContain("zapp_desktop_resolve_logical_url");
     expect(objectiveCHost).toContain("zapp_desktop_has_frontend_origin");
+    expect(objectiveCHost).toContain("zapp_desktop_install_injection_profiles");
+    expect(objectiveCHost).toContain("data-zapp-injected-style");
     expect(objectiveCHost).toContain("decidePolicyForNavigationAction:");
     expect(objectiveCHost).toContain("forMainFrameOnly:YES");
     expect(objectiveCHost).toContain("loadRequest:");
@@ -193,6 +197,7 @@ describe("Z native host inputs", () => {
     expect(notesFrontend).toContain('error?.name !== "AbortError"');
     expect(notesFrontend).toContain('dataset.cancellation = "ok"');
     expect(notesFrontend).toContain('dataset.hmr = import.meta.hot ? "ready" : "packaged"');
+    expect(notesFrontend).toContain("document.body.dataset.inject");
     expect(notesHTML).toContain('<script type="module" src="/app.js"></script>');
     expect(objectiveCHost).toContain("if (!strongSelf.smokeMode) return;");
     expect(objectiveCHost).toContain("cancelled WebView response ignored");
@@ -244,6 +249,7 @@ describe("Z native host inputs", () => {
     );
     expect(app).toContain('app.services.register("notes", createNotesService());');
     expect(app).toContain('app.services.register("health", createHealthService());');
+    expect(app).toContain('inject: Array<String>("base")');
     expect(app).toContain("const result = attempt await app.run();");
     expect(application).toContain("export struct Application");
     expect(application).toContain(

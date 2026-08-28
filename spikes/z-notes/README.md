@@ -21,7 +21,8 @@ zapp/
 └── sync-notes-service.zs # allocation-lean strict-C adapter
 frontend/
 ├── index.html        # Vite frontend entry
-└── app.js            # application ES module and generated-service consumer
+├── app.js            # application ES module and generated-service consumer
+└── injected/         # build-checked base injection profile evidence
 vite.config.ts        # frontend/ -> dist/ production build
 zapp.config.ts        # Zapp metadata and packaged dist/ asset root
 ```
@@ -67,6 +68,14 @@ macOS backend resolves it against `zapp://app/` and serves the embedded
 same value resolves against the configured Vite/Bun HTTP origin. Application
 source does not branch on build mode and cannot use this field to grant the
 native bridge to an arbitrary remote origin.
+
+The same window selects the `base` profile declared by
+`zapp.config.ts` through `inject: Array<String>("base")`. Its CSS,
+document-start TypeScript, and document-end TypeScript are compiled into an
+immutable native catalog. The smoke proves the bridge precedes the preload,
+the style reaches the document, and the end script runs. Other dynamically
+created windows could select different profile combinations without accepting
+runtime JavaScript strings.
 
 The repository-relative framework import is temporary. A real package/module
 resolver should make it an ordinary stable Zapp import without copying runtime

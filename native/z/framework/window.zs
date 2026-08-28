@@ -8,6 +8,7 @@ export struct WindowOptions {
   height: u32 = 640;
   visible: boolean = true;
   resizable: boolean = true;
+  inject: Array<String> = Array<String>();
 }
 
 struct WindowRecord {

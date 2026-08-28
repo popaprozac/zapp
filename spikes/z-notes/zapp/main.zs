@@ -12,6 +12,7 @@ async function main(): i32 on thread.main {
   const mainWindow = app.windows.create(WindowOptions({
     title: "Z Notes",
     url: "/notes",
+    inject: Array<String>("base"),
     width: 720,
     height: 460,
   }));

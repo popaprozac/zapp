@@ -3,6 +3,10 @@ import { existsSync } from "node:fs";
 import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import type { BuildTarget } from "./build-target";
 import type { ResolvedConfig } from "./config";
+import {
+  buildWebviewInjections,
+  renderWebviewInjectionsC,
+} from "./webview-injections";
 
 export interface ZCompilerIdentity {
   languageVersion: string;
@@ -435,10 +439,22 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
       renderZFrontendConfigC(options.devUrl),
       "utf8",
     );
+    const injectionEntries = await buildWebviewInjections(
+      options.root,
+      options.config.webviewInject,
+      options.optimize,
+    );
+    const injectionsC = path.join(stage, "zapp_webview_injections.c");
+    await writeFile(
+      injectionsC,
+      renderWebviewInjectionsC(injectionEntries),
+      "utf8",
+    );
     const desktopObject = path.join(stage, "zapp_desktop_host.o");
     const bootstrapObject = path.join(stage, "zapp_webview_bootstrap.o");
     const assetsObject = path.join(stage, "zapp_frontend_assets.o");
     const frontendConfigObject = path.join(stage, "zapp_frontend_config.o");
+    const injectionsObject = path.join(stage, "zapp_webview_injections.o");
     await run([
       clang,
       "-fobjc-arc",
@@ -495,6 +511,19 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
       frontendConfigObject,
     ], options.root);
     await run([
+      clang,
+      "-std=c11",
+      "-mmacosx-version-min=14.0",
+      options.optimize ? "-Oz" : "-O0",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "-c",
+      injectionsC,
+      "-o",
+      injectionsObject,
+    ], options.root);
+    await run([
       "ar",
       "rcs",
       path.join(stage, "libzapp_desktop_host.a"),
@@ -502,6 +531,7 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
       bootstrapObject,
       assetsObject,
       frontendConfigObject,
+      injectionsObject,
     ], options.root);
   }
 

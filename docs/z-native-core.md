@@ -32,7 +32,9 @@ the Z builder. The builder:
 8. links either the default AppKit/WebKit application host or the focused
    strict-C bridge host used by the non-UI regression; and
 9. bundles the canonical `bootstrap/webview.ts` source and generated browser
-   service facade, then injects both through a `WKUserScript` at document start.
+   service facade, then injects both through a `WKUserScript` at document start;
+10. compiles the `webview.inject` catalog into immutable C data and lets each
+    Z `WindowOptions.inject` select its trusted profile set before navigation.
 
 The route is no longer a pass-through smoke. Z's source-backed `std/json`
 parser decodes the WebView envelope into `BridgeMessage`, preserves request

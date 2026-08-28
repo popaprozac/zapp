@@ -8,6 +8,18 @@ const services = globalThis.__zappServices;
 // that `zapp dev` loaded the app through Vite rather than a stale packaged UI.
 document.body.dataset.hmr = import.meta.hot ? "ready" : "packaged";
 
+setTimeout(() => {
+  const start = globalThis[Symbol.for("zapp.inject.base.start")];
+  const end = document.documentElement.dataset.zappInjectEnd;
+  const style = getComputedStyle(document.documentElement)
+    .getPropertyValue("--zapp-inject-base")
+    .trim();
+  document.body.dataset.inject =
+    start === "ready" && end === "ready" && style === "ready"
+      ? "ready"
+      : "error";
+}, 0);
+
 button.addEventListener("click", async () => {
   status.textContent = "Routing…";
   try {

@@ -13,6 +13,12 @@
 
 extern const char *zapp_webview_bootstrap_script(void);
 extern const char *zapp_desktop_frontend_origin(void);
+extern size_t zapp_webview_injection_count(void);
+extern int32_t zapp_webview_injection_profile_exists(const char *profile);
+extern const char *zapp_webview_injection_profile(size_t index);
+extern int32_t zapp_webview_injection_phase(size_t index);
+extern const unsigned char *zapp_webview_injection_source(size_t index);
+extern size_t zapp_webview_injection_source_length(size_t index);
 
 typedef struct {
   const char *path;
@@ -39,6 +45,7 @@ static ZAppDesktopHost *prepared_host = nil;
 @property(nonatomic, assign) BOOL smokeMode;
 @property(nonatomic, assign) BOOL windowVisible;
 @property(nonatomic, copy) NSString *logicalURL;
+@property(nonatomic, strong) NSMutableArray<NSString *> *injectionProfiles;
 @property(nonatomic, assign) int32_t result;
 - (int32_t)run;
 - (void)deliverPayload:(NSString *)payload
@@ -272,6 +279,77 @@ void zapp_desktop_set_logical_url(const char *logical_url) {
   host.logicalURL = logical.length == 0 ? @"/" : logical;
 }
 
+int32_t zapp_desktop_has_injection_profile(const char *profile) {
+  return zapp_webview_injection_profile_exists(profile);
+}
+
+int32_t zapp_desktop_select_injection_profile(const char *profile) {
+  ZAppDesktopHost *host = zapp_desktop_active_window_host();
+  if (host == nil) return 3;
+  if (!zapp_webview_injection_profile_exists(profile)) return 1;
+  NSString *name = profile == NULL
+    ? nil
+    : [NSString stringWithUTF8String:profile];
+  if (name == nil) return 2;
+  if (![host.injectionProfiles containsObject:name]) {
+    [host.injectionProfiles addObject:name];
+  }
+  return 0;
+}
+
+static NSString *zapp_desktop_style_injection(NSString *css) {
+  NSError *error = nil;
+  NSData *jsonData = [NSJSONSerialization dataWithJSONObject:@[css]
+                                                     options:0
+                                                       error:&error];
+  if (jsonData == nil || error != nil) return nil;
+  NSString *json = [[NSString alloc] initWithData:jsonData
+                                         encoding:NSUTF8StringEncoding];
+  if (json == nil) return nil;
+  return [NSString stringWithFormat:
+    @"(()=>{const css=(%@)[0];const install=()=>{"
+    @"const style=document.createElement('style');"
+    @"style.setAttribute('data-zapp-injected-style','');"
+    @"style.textContent=css;"
+    @"(document.head||document.documentElement).appendChild(style)};"
+    @"if(document.documentElement)install();"
+    @"else document.addEventListener('DOMContentLoaded',install,{once:true})})()",
+    json];
+}
+
+static BOOL zapp_desktop_install_injection_profiles(
+  ZAppDesktopHost *host
+) {
+  size_t entryCount = zapp_webview_injection_count();
+  for (NSString *selected in host.injectionProfiles) {
+    const char *selectedBytes = selected.UTF8String;
+    if (selectedBytes == NULL) return NO;
+    for (size_t index = 0; index < entryCount; index++) {
+      const char *profile = zapp_webview_injection_profile(index);
+      if (profile == NULL || strcmp(profile, selectedBytes) != 0) continue;
+      const unsigned char *sourceBytes = zapp_webview_injection_source(index);
+      size_t sourceLength = zapp_webview_injection_source_length(index);
+      if (sourceBytes == NULL) return NO;
+      NSString *source = [[NSString alloc] initWithBytes:sourceBytes
+                                                 length:sourceLength
+                                               encoding:NSUTF8StringEncoding];
+      if (source == nil) return NO;
+      int32_t phase = zapp_webview_injection_phase(index);
+      if (phase == 0) source = zapp_desktop_style_injection(source);
+      if (source == nil) return NO;
+      WKUserScriptInjectionTime injectionTime = phase == 2
+        ? WKUserScriptInjectionTimeAtDocumentEnd
+        : WKUserScriptInjectionTimeAtDocumentStart;
+      WKUserScript *script = [[WKUserScript alloc]
+        initWithSource:source
+        injectionTime:injectionTime
+        forMainFrameOnly:YES];
+      [host.userContentController addUserScript:script];
+    }
+  }
+  return YES;
+}
+
 NSRect zapp_desktop_make_rect(uint32_t width, uint32_t height) {
   return NSMakeRect(0.0, 0.0, (CGFloat)width, (CGFloat)height);
 }
@@ -345,6 +423,7 @@ static BOOL zapp_desktop_has_frontend_origin(NSURL *url) {
   if (self != nil) {
     _receivedResponse = NO;
     _windowVisible = YES;
+    _injectionProfiles = [[NSMutableArray alloc] init];
     const char *smoke = getenv("ZAPP_Z_DESKTOP_SMOKE");
     _smokeMode = smoke != NULL && strcmp(smoke, "1") == 0;
     _result = _smokeMode ? 41 : 0;
@@ -412,6 +491,7 @@ static BOOL zapp_desktop_has_frontend_origin(NSURL *url) {
             @"cancellation:document.body?.dataset?.cancellation??null,"
             @"health:document.body?.dataset?.health??null,"
             @"hmr:document.body?.dataset?.hmr??null,"
+            @"inject:document.body?.dataset?.inject??null,"
             @"status:document.querySelector('#status')?.textContent??null,"
             @"bridge:typeof globalThis[Symbol.for('zapp.bridge')]"
             @"})"
@@ -427,6 +507,7 @@ static BOOL zapp_desktop_has_frontend_origin(NSURL *url) {
               && [(NSString *)state containsString:@"\"roundTrip\":\"ok\""]
               && [(NSString *)state containsString:@"\"cancellation\":\"ok\""]
               && [(NSString *)state containsString:@"\"health\":\"ok\""]
+              && [(NSString *)state containsString:@"\"inject\":\"ready\""]
               && [(NSString *)state containsString:expectedHMR];
             if (stateError != nil || !updated) {
               const char *stateText = state == nil
@@ -448,7 +529,7 @@ static BOOL zapp_desktop_has_frontend_origin(NSURL *url) {
             strongSelf.receivedResponse = YES;
             strongSelf.result = 0;
             printf(
-              "visible WebView round trip window=%d request=%llu ok=%s hmr=%s payload=%s\n",
+              "visible WebView round trip window=%d request=%llu ok=%s hmr=%s inject=ready payload=%s\n",
               windowId,
               (unsigned long long)requestId,
               ok ? "true" : "false",
@@ -566,6 +647,11 @@ static BOOL zapp_desktop_has_frontend_origin(NSURL *url) {
     injectionTime:WKUserScriptInjectionTimeAtDocumentStart
     forMainFrameOnly:YES];
   [self.userContentController addUserScript:bootstrap];
+
+  if (!zapp_desktop_install_injection_profiles(self)) {
+    self.result = 54;
+    return self.result;
+  }
 
   if (self.smokeMode) {
     WKUserScript *smoke = [[WKUserScript alloc]

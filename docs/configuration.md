@@ -52,6 +52,15 @@ export default defineConfig({
       autoplayWithoutUserGesture: false,
       backForwardNavigationGestures: false,
     },
+    inject: {
+      base: {
+        styles: ["./src/injected/base.css"],
+        documentStart: ["./src/injected/preload.ts"],
+      },
+      diagnostics: {
+        documentEnd: ["./src/injected/diagnostics.ts"],
+      },
+    },
   },
 
   workers: {
@@ -180,3 +189,55 @@ Zapp does not claim that HTTP-only response headers such as COOP/COEP make
 `SharedArrayBuffer` portable through `zapp://`. Capability documentation will
 record engine differences, and a native-backed shared-memory primitive remains
 the portable fallback.
+
+## Per-window trusted injection
+
+`webview.inject` is a build-time catalog, not a global list applied to every
+WebView. Profiles contain project-relative files that Zapp validates and
+bundles into immutable native data:
+
+```ts
+export default defineConfig({
+  application: { name: "Z Notes" },
+  webview: {
+    inject: {
+      base: {
+        styles: ["./src/injected/base.css"],
+        documentStart: ["./src/injected/preload.ts"],
+      },
+      diagnostics: {
+        documentEnd: ["./src/injected/diagnostics.ts"],
+      },
+    },
+  },
+});
+```
+
+Each dynamically created window selects the profiles it needs:
+
+```z
+const window = app.windows.create(WindowOptions({
+  title: "Diagnostics",
+  url: "/diagnostics",
+  inject: Array<String>("base", "diagnostics"),
+}));
+```
+
+Selection order is preserved and repeated names are applied once. For each
+selected profile Zapp installs styles, document-start scripts, and document-end
+scripts in declaration order. The framework bridge is always the first
+document-start script, so a trusted preload may use it immediately. Every
+entry is main-frame-only and is reinstalled for subsequent navigations.
+
+Profile names must begin with a letter and may contain letters, digits, dots,
+underscores, and hyphens. Paths must remain inside the application root. CSS
+entries use `.css`; script entries may use JavaScript or TypeScript extensions
+and are bundled for the browser. Unknown names selected by `WindowOptions`
+fail window startup with a typed `WindowError` rather than becoming source.
+
+This surface is for content that must run before the ordinary application
+bundle or on every navigation. Normal application JavaScript and CSS belong in
+the Vite frontend, where they retain HMR. Changing an injection profile file
+currently requires restarting the native development host. Zapp does not
+accept inline runtime source strings and does not implement these profiles with
+`eval`.

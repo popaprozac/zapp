@@ -9,4 +9,13 @@ export default defineConfig({
   frontend: {
     assets: "./dist",
   },
+  webview: {
+    inject: {
+      base: {
+        styles: ["./frontend/injected/base.css"],
+        documentStart: ["./frontend/injected/preload.ts"],
+        documentEnd: ["./frontend/injected/ready.ts"],
+      },
+    },
+  },
 });

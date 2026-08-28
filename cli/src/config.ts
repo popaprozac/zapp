@@ -523,6 +523,15 @@ export interface FrontendConfig {
   compressAssets?: boolean;
 }
 
+export interface WebviewInjectProfile {
+  /** CSS files installed at document start, in declaration order. */
+  styles?: string[];
+  /** TypeScript or JavaScript files installed after the Zapp bridge. */
+  documentStart?: string[];
+  /** TypeScript or JavaScript files installed at WebView document end. */
+  documentEnd?: string[];
+}
+
 export interface WebviewConfig {
   /** Main WebView engine. The system engine remains the default. */
   engine?: PlatformValue<WebEngine>;
@@ -530,6 +539,8 @@ export interface WebviewConfig {
   protocols?: string[];
   /** Engine preferences applied when each WebView is constructed. */
   preferences?: WebviewPreferences;
+  /** Trusted build-time content profiles selected per WindowOptions.inject. */
+  inject?: Record<string, WebviewInjectProfile>;
 }
 
 export interface WorkersConfig {
@@ -645,6 +656,7 @@ export interface ResolvedConfig {
   ios?: IOSConfig;
   webEngine?: PlatformValue<WebEngine>;
   webviewPreferences?: WebviewPreferences;
+  webviewInject?: Record<string, WebviewInjectProfile>;
   native?: NativeConfig;
 }
 
@@ -768,6 +780,68 @@ export function validateWebEngine(engine?: PlatformValue<WebEngine>): void {
     checkValue(m.linux, ".linux");
   } else {
     checkValue(engine, "");
+  }
+}
+
+export function validateWebviewInject(
+  inject?: Record<string, WebviewInjectProfile>,
+): void {
+  if (inject === undefined) return;
+  if (inject === null || typeof inject !== "object" || Array.isArray(inject)) {
+    throw new Error("[zapp] webview.inject must be an object keyed by profile name");
+  }
+  const profileName = /^[A-Za-z][A-Za-z0-9._-]*$/;
+  const allowedKeys = new Set(["styles", "documentStart", "documentEnd"]);
+  for (const [name, profile] of Object.entries(inject)) {
+    if (!profileName.test(name)) {
+      throw new Error(
+        `[zapp] webview.inject profile ${JSON.stringify(name)} must start with a letter ` +
+        "and contain only letters, digits, '.', '_', or '-'",
+      );
+    }
+    if (profile === null || typeof profile !== "object" || Array.isArray(profile)) {
+      throw new Error(`[zapp] webview.inject.${name} must be an object`);
+    }
+    for (const key of Object.keys(profile)) {
+      if (!allowedKeys.has(key)) {
+        throw new Error(
+          `[zapp] webview.inject.${name}.${key} is unknown; ` +
+          "use styles, documentStart, or documentEnd",
+        );
+      }
+    }
+    let entryCount = 0;
+    for (const key of allowedKeys) {
+      const value = profile[key as keyof WebviewInjectProfile];
+      if (value === undefined) continue;
+      if (!Array.isArray(value)) {
+        throw new Error(`[zapp] webview.inject.${name}.${key} must be a string[]`);
+      }
+      const seen = new Set<string>();
+      for (const entry of value) {
+        if (typeof entry !== "string" || entry.trim().length === 0) {
+          throw new Error(
+            `[zapp] webview.inject.${name}.${key} entries must be non-empty paths`,
+          );
+        }
+        if (path.isAbsolute(entry) || entry.split(/[\\/]+/).includes("..")) {
+          throw new Error(
+            `[zapp] webview.inject.${name}.${key} path ${JSON.stringify(entry)} ` +
+            "must stay relative to the application root",
+          );
+        }
+        if (seen.has(entry)) {
+          throw new Error(
+            `[zapp] webview.inject.${name}.${key} repeats ${JSON.stringify(entry)}`,
+          );
+        }
+        seen.add(entry);
+        entryCount += 1;
+      }
+    }
+    if (entryCount === 0) {
+      throw new Error(`[zapp] webview.inject.${name} must declare at least one file`);
+    }
   }
 }
 
@@ -958,6 +1032,7 @@ function normalizeConfig(config: ZappConfig): ResolvedConfig {
     webEngine: config.webview?.engine,
     protocols: config.webview?.protocols,
     webviewPreferences: config.webview?.preferences,
+    webviewInject: config.webview?.inject,
     headless: config.workers?.headless,
     workerModules: config.workers?.capabilities,
     permissions: config.security?.permissions,
@@ -1028,6 +1103,7 @@ export async function loadConfig(
     }
     const config = serializableConfigClone(authored);
     validateWebEngine(config.webview?.engine);
+    validateWebviewInject(config.webview?.inject);
     rejectRemovedEngines(config);
     await substituteZjsOnWindows(config);
     validateNative(config);

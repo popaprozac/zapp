@@ -104,13 +104,6 @@ export async function runMacOSApplication(
   config: PreparedApplication,
   updates: TaskScope
 ): i32 throws ApplicationError on thread.main {
-  const prepared = native.zapp_desktop_prepare();
-  if (prepared != 0) {
-    throw ApplicationError.platform(PlatformError({
-      code: prepared,
-      message: "could not prepare the macOS application runtime",
-    }));
-  }
   let windows = config.windows;
   const registeredWindows = windows.all();
   if (registeredWindows.length == 0) {
@@ -135,6 +128,30 @@ export async function runMacOSApplication(
       message: "the registered window lost its configuration",
     }));
   };
+  for (const profile of primaryOptions.inject) {
+    if (native.zapp_desktop_has_injection_profile(profile) == 0) {
+      throw ApplicationError.window(WindowError({
+        id: copy primaryWindowId,
+        message: `unknown webview inject profile "${profile}"`,
+      }));
+    }
+  }
+  const prepared = native.zapp_desktop_prepare();
+  if (prepared != 0) {
+    throw ApplicationError.platform(PlatformError({
+      code: prepared,
+      message: "could not prepare the macOS application runtime",
+    }));
+  }
+  for (const profile of primaryOptions.inject) {
+    const selected = native.zapp_desktop_select_injection_profile(profile);
+    if (selected != 0) {
+      throw ApplicationError.platform(PlatformError({
+        code: selected,
+        message: `could not select webview inject profile "${profile}"`,
+      }));
+    }
+  }
   const context = ApplicationContext({
     metadata: ApplicationMetadata({
       name: copy config.metadata.name,

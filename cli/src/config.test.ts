@@ -5,7 +5,7 @@ import path from "node:path";
 import {
   createConfigContext, defaultApplicationIdentifier, defineConfig, loadConfig,
   resolveNative, validateNative, validateWebEngine, resolveWebEngine,
-  platformSupportsChromium, resolveWebEngineForBuild,
+  platformSupportsChromium, resolveWebEngineForBuild, validateWebviewInject,
 } from "./config";
 
 test("defaultApplicationIdentifier produces a stable reverse-DNS-safe identifier", () => {
@@ -53,6 +53,13 @@ test("loadConfig evaluates a contextual factory and writes the resolved snapshot
           engine: { macOS: "chromium", windows: "system" },
           protocols: ["asset"],
           preferences: { minimumFontSize: 14 },
+          inject: {
+            base: {
+              styles: ["src/base.css"],
+              documentStart: ["src/preload.ts"],
+              documentEnd: ["src/ready.ts"],
+            },
+          },
         },
         workers: {
           headless: { indexer: "src/workers/indexer.ts" },
@@ -87,6 +94,13 @@ test("loadConfig evaluates a contextual factory and writes the resolved snapshot
     expect(config.webEngine).toEqual({ macOS: "chromium", windows: "system" });
     expect(config.protocols).toEqual(["asset"]);
     expect(config.webviewPreferences).toEqual({ minimumFontSize: 14 });
+    expect(config.webviewInject).toEqual({
+      base: {
+        styles: ["src/base.css"],
+        documentStart: ["src/preload.ts"],
+        documentEnd: ["src/ready.ts"],
+      },
+    });
     expect(config.headless).toEqual({ indexer: "src/workers/indexer.ts" });
     expect(config.workerModules).toEqual(["fetch"]);
     expect(config.permissions).toEqual(["clipboard:read"]);
@@ -109,6 +123,24 @@ test("loadConfig evaluates a contextual factory and writes the resolved snapshot
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("validateWebviewInject rejects ambiguous or escaping profile inputs", () => {
+  expect(() => validateWebviewInject({ empty: {} })).toThrow(
+    /must declare at least one file/,
+  );
+  expect(() => validateWebviewInject({
+    "bad name": { documentStart: ["src/preload.ts"] },
+  })).toThrow(/profile "bad name"/);
+  expect(() => validateWebviewInject({
+    base: { documentStart: ["../outside.ts"] },
+  })).toThrow(/must stay relative/);
+  expect(() => validateWebviewInject({
+    base: { styles: ["src/base.css", "src/base.css"] },
+  })).toThrow(/repeats/);
+  expect(() => validateWebviewInject({
+    base: { documentStart: ["src/preload.ts"], typo: ["x.ts"] } as any,
+  })).toThrow(/typo is unknown/);
 });
 
 test("loadConfig resolves canonical application identity defaults", async () => {
