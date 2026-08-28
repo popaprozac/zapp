@@ -18,7 +18,11 @@
 
 import { getBridge } from "./bridge";
 import { ensurePermission } from "./permissions";
-export { PermissionDeniedError } from "./errors";
+export {
+  WindowError,
+  type WindowErrorPayload,
+  type WindowOperation,
+} from "./window-errors";
 import { Platform } from "./platform";
 import { WindowEvent, eventName, type WindowSizePayload, type WindowPayload, type ModalDismissedPayload, type SidebarResizedPayload, type InspectorResizedPayload, type RouteChangedPayload } from "./events";
 import type { Display } from "./screen";

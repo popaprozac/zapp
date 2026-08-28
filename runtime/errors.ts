@@ -6,19 +6,33 @@ export interface ZappErrorPayload {
   permission?: string;
 }
 
-export class ZappInvocationError extends Error {
+/** @internal Parsed transport metadata before a feature claims the error. */
+export interface BridgeErrorPayload extends ZappErrorPayload {
+  operation?: string;
+  windowId?: string;
+}
+
+export class ZappError extends Error {
   readonly code: string;
-  readonly permission?: string;
 
   constructor(payload: ZappErrorPayload) {
     super(payload.message);
-    this.name = "ZappInvocationError";
+    this.name = "ZappError";
     this.code = payload.code;
+  }
+}
+
+export class ZappInvocationError extends ZappError {
+  readonly permission?: string;
+
+  constructor(payload: ZappErrorPayload) {
+    super(payload);
+    this.name = "ZappInvocationError";
     this.permission = payload.permission;
   }
 }
 
-export class PermissionDeniedError extends ZappInvocationError {
+export class PermissionDeniedError extends ZappError {
   readonly permission: string;
 
   constructor(permission: string, message?: string) {
@@ -33,6 +47,17 @@ export class PermissionDeniedError extends ZappInvocationError {
     this.name = "PermissionDeniedError";
     this.permission = permission;
   }
+}
+
+type BridgeErrorFactory = (payload: BridgeErrorPayload) => ZappError;
+const bridgeErrorFactories = new Map<string, BridgeErrorFactory>();
+
+/** @internal Register the public error for a feature-specific bridge code. */
+export function registerBridgeErrorFactory(
+  code: string,
+  factory: BridgeErrorFactory,
+): void {
+  bridgeErrorFactories.set(code, factory);
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -60,13 +85,21 @@ export function errorFromBridgePayload(payload: string): Error {
       ) {
         return new PermissionDeniedError(parsed.permission, parsed.message);
       }
-      return new ZappInvocationError({
+      const normalized: BridgeErrorPayload = {
         code: parsed.code,
         message: parsed.message,
         ...(typeof parsed.permission === "string" && parsed.permission.length > 0
           ? { permission: parsed.permission }
           : {}),
-      });
+        ...(typeof parsed.operation === "string" && parsed.operation.length > 0
+          ? { operation: parsed.operation }
+          : {}),
+        ...(typeof parsed.windowId === "string" && parsed.windowId.length > 0
+          ? { windowId: parsed.windowId }
+          : {}),
+      };
+      const factory = bridgeErrorFactories.get(normalized.code);
+      return factory ? factory(normalized) : new ZappInvocationError(normalized);
     }
   } catch {}
   return new Error(payload);

@@ -33,7 +33,7 @@ export { Clipboard, type ClipboardFormat } from "./clipboard";
 export { Shortcuts } from "./shortcuts";
 export { Protocols, type ProtocolRequest, type ProtocolResponse, type ProtocolHandler } from "./protocols";
 export { Permissions, PermissionDeniedError, type PermissionState } from "./permissions";
-export { ZappInvocationError, type ZappErrorPayload } from "./errors";
+export { ZappError, ZappInvocationError, type ZappErrorPayload } from "./errors";
 export { Platform, type PlatformName, type FormFactor, type AppEnv } from "./platform";
 
 // Re-export worker globals type declarations.

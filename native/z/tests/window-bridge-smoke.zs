@@ -72,7 +72,8 @@ function main(): i32 on thread.main {
     }
     none => return 9;
   }
-  if (windows.all().length != 1) return 10;
+  const afterRejectedInjection = windows.all();
+  if (afterRejectedInjection.length != 1) return 10;
 
   const serviceMessage = BridgeMessage({
     kind: BridgeMessageKind.invoke,
@@ -109,7 +110,8 @@ function main(): i32 on thread.main {
       if (response.payload != '{"code":"PERMISSION_DENIED","message":"permission \\"window:create\\" is required; add it to security.permissions in zapp.config.ts","permission":"window:create"}') {
         return 14;
       }
-      if (windows.all().length != 1) return 15;
+      const afterDeniedCreation = windows.all();
+      if (afterDeniedCreation.length != 1) return 15;
       select 0;
     }
   };

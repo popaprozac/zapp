@@ -34,6 +34,25 @@ readonly struct FrontendWindowList {
   ids: Array<String>;
 }
 
+readonly struct WindowBridgeError {
+  code: String;
+  message: String;
+  operation: String;
+}
+
+function windowFailure(
+  id: u64,
+  operation: String,
+  message: String
+): BridgeResponse {
+  const error = WindowBridgeError({
+    code: "WINDOW_ERROR",
+    message: move message,
+    operation: move operation,
+  });
+  return BridgeResponse({ id, ok: false, payload: json.encode(in error) });
+}
+
 function rejectsTrustedInjection(in source: String): boolean {
   const parsed = attempt json.parse(in source);
   match (parsed) {
@@ -89,10 +108,10 @@ function createWindow(
           const payload: String = json.encode(in result);
           select bridgeSuccess(message.id, move payload);
         }
-        failure(error) => bridgeFailure(
+        failure(error) => windowFailure(
           message.id,
-          "WINDOW_ERROR",
-          `WINDOW_ERROR: ${error.message}`
+          "create",
+          copy error.message
         );
       };
     }

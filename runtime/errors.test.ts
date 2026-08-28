@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   PermissionDeniedError,
+  ZappError,
   ZappInvocationError,
   errorFromBridgePayload,
 } from "./errors";
@@ -13,6 +14,8 @@ describe("structured bridge errors", () => {
       permission: "window:create",
     }));
     expect(error).toBeInstanceOf(PermissionDeniedError);
+    expect(error).toBeInstanceOf(ZappError);
+    expect(error).not.toBeInstanceOf(ZappInvocationError);
     expect(error).toMatchObject({
       name: "PermissionDeniedError",
       code: "PERMISSION_DENIED",
@@ -23,15 +26,16 @@ describe("structured bridge errors", () => {
 
   test("retains stable codes for other native invocation failures", () => {
     const error = errorFromBridgePayload(JSON.stringify({
-      code: "WINDOW_ERROR",
-      message: "could not create the native window",
+      code: "SERVICE_ERROR",
+      message: "the native service failed",
       permission: "",
     }));
     expect(error).toBeInstanceOf(ZappInvocationError);
+    expect(error).toBeInstanceOf(ZappError);
     expect(error).toMatchObject({
       name: "ZappInvocationError",
-      code: "WINDOW_ERROR",
-      message: "could not create the native window",
+      code: "SERVICE_ERROR",
+      message: "the native service failed",
     });
   });
 });

@@ -235,7 +235,8 @@ Profile names must begin with a letter and may contain letters, digits, dots,
 underscores, and hyphens. Paths must remain inside the application root. CSS
 entries use `.css`; script entries may use JavaScript or TypeScript extensions
 and are bundled for the browser. Unknown names selected by `WindowOptions`
-fail window startup with a typed `WindowError` rather than becoming source.
+fail window startup with a typed `WindowError` (exported by
+`@zappdev/runtime/window`) rather than becoming source.
 
 This surface is for content that must run before the ordinary application
 bundle or on every navigation. Normal application JavaScript and CSS belong in

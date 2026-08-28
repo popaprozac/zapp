@@ -83,8 +83,24 @@ check for an immediate, descriptive `PermissionDeniedError`, while the Z
 router independently enforces `window:create`. Sending `__window:create`
 directly cannot bypass that native check. Native failures cross the WebView
 boundary as a structured `{ code, message, permission }` envelope and are
-reconstructed as `ZappInvocationError` or `PermissionDeniedError` instances
-when the runtime is loaded.
+reconstructed as `ZappError` subclasses when the runtime is loaded.
+
+Errors live at the broadest package boundary that can produce them:
+
+```ts
+import {
+  PermissionDeniedError,
+  ZappError,
+  ZappInvocationError,
+} from "@zappdev/runtime";
+import { WindowError } from "@zappdev/runtime/window";
+```
+
+`PermissionDeniedError` is runtime-wide because any capability can be denied.
+Feature entry points own their narrower failures; for example, a native window
+failure becomes `WindowError` with `operation` metadata such as `"create"`.
+Unknown or service-generic native failures remain `ZappInvocationError` and
+always retain their stable `code` for programmatic handling.
 
 ## Detection
 

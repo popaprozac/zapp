@@ -416,8 +416,10 @@ an intermediate JSON document.
   results after unlocking.
 - Headless and WebView async service routes, per-request cancellation,
   lifecycle ordering, lifecycle failures, and compiler-generated bindings are
-  implemented. Native bridge failures now carry structured codes and become
-  `ZappInvocationError` subclasses in TypeScript. Throwing service methods and
+implemented. Native bridge failures now carry structured codes and become
+`ZappError` subclasses in TypeScript. Runtime-wide failures are exported by
+`@zappdev/runtime`, while feature-specific failures live with their feature
+entry point. Throwing service methods and
   service-specific permissions remain follow-up composition work; when Z error
   metadata enters the service manifest, generated bindings should emit named
   error classes rather than flattening those failures into strings.

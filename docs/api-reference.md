@@ -3779,6 +3779,19 @@ is the grant).
   webview; in workers the native layer logs `[zapp] permission denied: <id> (<method>)`
   (once per id) and drops the call.
 
+Import runtime-wide errors from `@zappdev/runtime`:
+
+```ts
+import { PermissionDeniedError, ZappError, ZappInvocationError } from "@zappdev/runtime";
+```
+
+Feature errors live at their feature entry point. Native window failures, for
+example, are reconstructed as `WindowError` with operation metadata:
+
+```ts
+import { WindowError } from "@zappdev/runtime/window";
+```
+
 ### `Permissions.query(id): Promise<"granted" | "denied" | "unsupported">`
 
 ```ts
