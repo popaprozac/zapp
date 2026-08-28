@@ -18,7 +18,7 @@ import {
 } from "../bridge.zs";
 import {
   ApplicationContext,
-} from "../service-lifecycle-contract.zs";
+} from "../../api/zapp/service.zs";
 import { zapp_deliver_response_from_z } from "zapp_router.h";
 import objc from "std/objc";
 import { Once, OnceLifetime } from "std/sync";

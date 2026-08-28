@@ -4,7 +4,7 @@ import {
   ServiceLifecycleError,
   ServiceLifecyclePhase,
   serviceLifecycleError,
-} from "../../framework/service-lifecycle-contract.zs";
+} from "../../api/zapp/service.zs";
 import {
   ApplicationMetadata,
 } from "../../framework/application-metadata.zs";

@@ -1,4 +1,4 @@
-import { ServiceLifecycleError } from "./service-lifecycle-contract.zs";
+import { ServiceLifecycleError } from "../api/zapp/service.zs";
 
 export struct WindowError {
   id: String;

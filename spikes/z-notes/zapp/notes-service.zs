@@ -4,7 +4,7 @@ import {
   ApplicationContext,
   ServiceLifecycle,
   ServiceLifecycleError,
-} from "../../../native/z/framework/service-lifecycle-contract.zs";
+} from "../../../native/z/api/zapp/service.zs";
 import {
   CreateNoteInput,
   Note,

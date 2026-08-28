@@ -1,12 +1,40 @@
 import {
   ApplicationContext,
   ServiceLifecycle,
-  ServiceLifecycleAdapter,
   ServiceLifecycleError,
-  ServiceLifecycleHook,
   ServiceLifecyclePhase,
-} from "./service-lifecycle-contract.zs";
+} from "../api/zapp/service.zs";
 import { thread } from "std/thread";
+
+export type ServiceLifecycleHook = (
+  phase: ServiceLifecyclePhase,
+  in context: ApplicationContext
+) => Result<void, ServiceLifecycleError> on thread.main;
+
+readonly class ServiceLifecycleAdapter {
+  name: String;
+  hook: ServiceLifecycleHook;
+
+  function start(
+    in context: ApplicationContext
+  ): void throws ServiceLifecycleError on thread.main {
+    const observed = this.hook(ServiceLifecyclePhase.start, in context);
+    match (observed) {
+      success => return;
+      failure(error) => throw error;
+    }
+  }
+
+  function stop(
+    in context: ApplicationContext
+  ): void throws ServiceLifecycleError on thread.main {
+    const observed = this.hook(ServiceLifecyclePhase.stop, in context);
+    match (observed) {
+      success => return;
+      failure(error) => throw error;
+    }
+  }
+}
 
 function invokeServiceLifecycle<T: ServiceLifecycle>(
   in service: T,

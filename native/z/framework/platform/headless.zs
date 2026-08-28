@@ -3,7 +3,7 @@ import { ApplicationError } from "../application-error.zs";
 import { ApplicationMetadata } from "../application-metadata.zs";
 import {
   ApplicationContext,
-} from "../service-lifecycle-contract.zs";
+} from "../../api/zapp/service.zs";
 import { thread } from "std/thread";
 import { TaskScope } from "std/async";
 

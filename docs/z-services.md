@@ -9,9 +9,16 @@ mutable identity between request handling and application lifecycle hooks is
 naturally an ARC `class`, usually with its mutable state behind `Mutex<T>`.
 Registration does not force every service into a class hierarchy.
 
-The reusable service machinery lives under `native/z/framework/`. The concrete
-Notes core, transport adapters, and application entries live under
-`spikes/z-notes/zapp/`; no framework module imports an application type.
+The reusable service machinery lives under `native/z/framework/`, behind the
+public source facade in `native/z/api/`. The concrete Notes core, transport
+adapters, and application entries live under `spikes/z-notes/zapp/`; no
+framework module imports an application type.
+
+The facade fixes the eventual package boundary now: `zapp` exports
+`Application` and `ApplicationError`, `zapp/window` owns window types, and
+`zapp/service` owns lifecycle contracts. Repository-local examples temporarily
+use a relative path to that facade until Z's package resolver maps those stable
+module names.
 
 ## Application surface
 

@@ -32,8 +32,8 @@ The ordinary desktop entry is deliberately small:
 ```z
 import { createNotesService } from "./notes-service.zs";
 import { createHealthService } from "./health-service.zs";
-import { Application } from "../../../native/z/framework/application.zs";
-import { WindowOptions } from "../../../native/z/framework/window.zs";
+import { Application } from "../../../native/z/api/zapp.zs";
+import { WindowOptions } from "../../../native/z/api/zapp/window.zs";
 import { thread } from "std/thread";
 
 async function main(): i32 on thread.main {
@@ -91,11 +91,13 @@ created diagnostics window receives neither application-authored profile. The
 Web content cannot select or inherit trusted injection merely by creating a
 window.
 
-The repository-relative framework import is temporary. A real package/module
-resolver should make it an ordinary stable Zapp import without copying runtime
-sources into an application. The build stages the app and framework into one
-isolated workspace today so the fixed-point compiler and editor inspect the
-same source graph.
+Application code now imports only Zapp's public source facade under
+`native/z/api/`; it no longer reaches into framework implementation modules.
+The repository-relative prefix is temporary. A real package/module resolver
+will map that facade to `"zapp"`, `"zapp/window"`, and `"zapp/service"`
+without changing the exported surface. The build stages the app, API, and
+framework into one isolated workspace today so the fixed-point compiler and
+editor inspect the same source graph.
 
 This spike now builds and runs through Z's fixed-point native driver. Manual
 `TaskScope` construction, owned capture transfer, main-executor placement, and
@@ -143,7 +145,6 @@ The code an application should not own now lives under:
 
 ```text
 native/z/framework/
-├── application.zs
 ├── application-contract.zs
 ├── application-error.zs
 ├── application-services.zs
@@ -154,11 +155,13 @@ native/z/framework/
 ├── async-service-contract.zs
 ├── async-bridge.zs
 ├── service-lifecycle.zs
-├── service-lifecycle-contract.zs
 ├── bridge.zs
 ├── bridge/
 └── platform/
 ```
+
+The application-facing declarations live separately in `native/z/api/` so
+framework implementation files cannot accidentally become package API.
 
 This layer owns application lifecycle, frozen service routing, bridge envelope
 decoding, typed outcomes, AppKit/WebKit identity, and deterministic shutdown. It

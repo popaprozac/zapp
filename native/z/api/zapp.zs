@@ -1,21 +1,33 @@
-import { PreparedApplication } from "./application-contract.zs";
-import { ApplicationError } from "./application-error.zs";
-import { ApplicationMetadata } from "./application-metadata.zs";
-import { ApplicationPermissions } from "./application-permissions.zs";
-import { AsyncServices } from "./async-services.zs";
+import { PreparedApplication } from "../framework/application-contract.zs";
+import {
+  ApplicationError as FrameworkApplicationError,
+} from "../framework/application-error.zs";
+import {
+  ApplicationMetadata as FrameworkApplicationMetadata,
+} from "../framework/application-metadata.zs";
+import { ApplicationPermissions } from "../framework/application-permissions.zs";
+import { AsyncServices } from "../framework/async-services.zs";
 import {
   configuredApplicationMetadata,
   configuredApplicationPermissions,
-} from "./configured-application.zs";
-import { runApplicationPlatform } from "./platform.zs";
+} from "../framework/configured-application.zs";
+import { runApplicationPlatform } from "../framework/platform.zs";
 import {
   ApplicationServicesBuilder,
   createApplicationServices,
-} from "./application-services.zs";
+} from "../framework/application-services.zs";
 import { thread } from "std/thread";
 import { TaskScope } from "std/async";
-import { WindowManager, createWindowManager } from "./window.zs";
+import {
+  WindowManager,
+  createWindowManager,
+} from "../framework/window.zs";
 
+export type ApplicationError = FrameworkApplicationError;
+export type ApplicationMetadata = FrameworkApplicationMetadata;
+
+// Application is configuration under construction. run() consumes it once,
+// while its managers and the prepared runtime retain shared ARC identities.
 export struct Application on thread.main {
   readonly metadata: ApplicationMetadata = configuredApplicationMetadata();
   readonly permissions: ApplicationPermissions =

@@ -325,6 +325,11 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
     stagedFramework,
     { recursive: true },
   );
+  await cp(
+    path.join(source, "api"),
+    path.join(workspace, "native", "z", "api"),
+    { recursive: true },
+  );
   await writeFile(
     path.join(stagedFramework, "configured-application.zs"),
     renderZApplicationMetadata(options.config),
@@ -427,8 +432,9 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
         workspace,
         "native",
         "z",
-        "framework",
-        "service-lifecycle-contract.zs",
+        "api",
+        "zapp",
+        "service.zs",
       ),
     },
   );

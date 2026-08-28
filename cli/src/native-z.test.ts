@@ -247,7 +247,7 @@ describe("Z native host inputs", () => {
       "utf8",
     );
     const application = readFileSync(
-      new URL("../../native/z/framework/application.zs", import.meta.url),
+      new URL("../../native/z/api/zapp.zs", import.meta.url),
       "utf8",
     );
     const contract = readFileSync(
@@ -267,7 +267,7 @@ describe("Z native host inputs", () => {
       "utf8",
     );
     const lifecycleContract = readFileSync(
-      new URL("../../native/z/framework/service-lifecycle-contract.zs", import.meta.url),
+      new URL("../../native/z/api/zapp/service.zs", import.meta.url),
       "utf8",
     );
     const lifecycles = readFileSync(
@@ -301,8 +301,8 @@ describe("Z native host inputs", () => {
     expect(headless).toContain("export async function runApplicationPlatform(");
     expect(headlessSmoke).toContain("attempt await runHeadlessApplicationPlatform(");
     expect(lifecycleContract).toContain("export trait ServiceLifecycle");
-    expect(lifecycleContract).toContain("export type ServiceLifecycleHook");
     expect(lifecycleContract).toContain("throws ServiceLifecycleError on thread.main");
+    expect(lifecycles).toContain("export type ServiceLifecycleHook");
     expect(lifecycles).toContain("function register<T: ServiceLifecycle>(");
     expect(lifecycles).toContain("invokeServiceLifecycle(in service, phase, in context)");
     expect(lifecycles).toContain("function start(");

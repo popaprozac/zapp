@@ -13,11 +13,11 @@ import {
   ApplicationContext,
   ServiceLifecycle,
   ServiceLifecycleError,
-  ServiceLifecycleHook,
   ServiceLifecyclePhase,
-} from "./service-lifecycle-contract.zs";
+} from "../api/zapp/service.zs";
 import {
   ServiceLifecycleBuilder,
+  ServiceLifecycleHook,
   ServiceLifecycles,
   createServiceLifecycles,
 } from "./service-lifecycle.zs";
