@@ -28,6 +28,12 @@ export struct BridgeResponse {
   payload: String;
 }
 
+export readonly struct BridgeError {
+  code: String;
+  message: String;
+  permission: String = "";
+}
+
 function decodeError(message: String): BridgeDecodeError {
   return BridgeDecodeError({ message: move message });
 }
@@ -111,17 +117,49 @@ export function decodeBridgeMessage(
   };
 }
 
-function response(id: u64, ok: boolean, payload: String): BridgeResponse {
-  return BridgeResponse({ id, ok, payload: move payload });
+export function bridgeSuccess(
+  id: u64,
+  payload: String
+): BridgeResponse {
+  return BridgeResponse({ id, ok: true, payload: move payload });
+}
+
+export function bridgeFailure(
+  id: u64,
+  code: String,
+  message: String
+): BridgeResponse {
+  const error = BridgeError({
+    code: move code,
+    message: move message,
+  });
+  return BridgeResponse({ id, ok: false, payload: json.encode(in error) });
+}
+
+export function bridgePermissionFailure(
+  id: u64,
+  permission: String
+): BridgeResponse {
+  const message = `permission "${permission}" is required; add it to security.permissions in zapp.config.ts`;
+  const error = BridgeError({
+    code: "PERMISSION_DENIED",
+    message: move message,
+    permission: move permission,
+  });
+  return BridgeResponse({ id, ok: false, payload: json.encode(in error) });
 }
 
 function dispatch(in message: BridgeMessage): Option<BridgeResponse> {
   return match (in message.kind) {
     invoke => {
       if (message.method == "__zapp:ping") {
-        return Option.some(response(message.id, true, copy message.arguments));
+        return Option.some(bridgeSuccess(message.id, copy message.arguments));
       }
-      select Option.some(response(message.id, false, "UNKNOWN_METHOD"));
+      select Option.some(bridgeFailure(
+        message.id,
+        "UNKNOWN_METHOD",
+        `unknown bridge method "${message.method}"`
+      ));
     }
     emit => Option.none;
     action => Option.none;
@@ -135,7 +173,11 @@ export function routeMessage(in source: String): Option<BridgeResponse> {
   const decoded = attempt decodeBridgeMessage(in source);
   return match (decoded) {
     success(message) => dispatch(in message);
-    failure(error) => Option.some(response(0, false, copy error.message));
+    failure(error) => Option.some(bridgeFailure(
+      0,
+      "INVALID_MESSAGE",
+      copy error.message
+    ));
   };
 }
 
@@ -145,7 +187,11 @@ export function routeMessageWithServices(
 ): Option<BridgeResponse> {
   const decoded = attempt decodeBridgeMessage(in source);
   match (decoded) {
-    failure(error) => return Option.some(response(0, false, copy error.message));
+    failure(error) => return Option.some(bridgeFailure(
+      0,
+      "INVALID_MESSAGE",
+      copy error.message
+    ));
     success(message) => return dispatchWithServices(in message, in services);
   }
 }
@@ -157,7 +203,7 @@ function dispatchWithServices(
   match (in message.kind) {
     invoke => {
       if (message.method == "__zapp:ping") {
-        return Option.some(response(message.id, true, copy message.arguments));
+        return Option.some(bridgeSuccess(message.id, copy message.arguments));
       }
       const invoked = services.invoke(
         copy message.method,
@@ -165,10 +211,14 @@ function dispatchWithServices(
       );
       match (invoked) {
         success(payload) => return Option.some(
-          response(message.id, true, move payload)
+          bridgeSuccess(message.id, move payload)
         );
         failure(error) => return Option.some(
-          response(message.id, false, move error)
+          bridgeFailure(
+            message.id,
+            "SERVICE_ERROR",
+            move error
+          )
         );
       }
     }

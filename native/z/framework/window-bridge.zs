@@ -4,7 +4,11 @@ import {
   BridgeMessage,
   BridgeMessageKind,
   BridgeResponse,
+  bridgeFailure,
+  bridgePermissionFailure,
+  bridgeSuccess,
 } from "./bridge.zs";
+import { ApplicationPermissions } from "./application-permissions.zs";
 import {
   WindowManager,
   WindowOptions,
@@ -30,14 +34,6 @@ readonly struct FrontendWindowList {
   ids: Array<String>;
 }
 
-function response(
-  id: u64,
-  ok: boolean,
-  payload: String
-): BridgeResponse {
-  return BridgeResponse({ id, ok, payload: move payload });
-}
-
 function rejectsTrustedInjection(in source: String): boolean {
   const parsed = attempt json.parse(in source);
   match (parsed) {
@@ -53,12 +49,16 @@ function rejectsTrustedInjection(in source: String): boolean {
 
 function createWindow(
   in message: BridgeMessage,
+  in permissions: ApplicationPermissions,
   inout windows: WindowManager
 ): BridgeResponse on thread.main {
+  if (!permissions.windowCreate) {
+    return bridgePermissionFailure(message.id, "window:create");
+  }
   if (rejectsTrustedInjection(in message.arguments)) {
-    return response(
+    return bridgeFailure(
       message.id,
-      false,
+      "INVALID_ARGUMENTS",
       "INVALID_WINDOW_OPTIONS: inject is native application policy"
     );
   }
@@ -67,9 +67,9 @@ function createWindow(
     in message.arguments
   );
   return match (decoded) {
-    failure(error) => response(
+    failure(error) => bridgeFailure(
       message.id,
-      false,
+      "INVALID_ARGUMENTS",
       `INVALID_WINDOW_OPTIONS: ${error.message}`
     );
     success(options) => {
@@ -87,11 +87,11 @@ function createWindow(
             windowId: copy window.id,
           });
           const payload: String = json.encode(in result);
-          select response(message.id, true, move payload);
+          select bridgeSuccess(message.id, move payload);
         }
-        failure(error) => response(
+        failure(error) => bridgeFailure(
           message.id,
-          false,
+          "WINDOW_ERROR",
           `WINDOW_ERROR: ${error.message}`
         );
       };
@@ -110,16 +110,21 @@ function listWindows(
   }
   const result = FrontendWindowList({ ids });
   const payload: String = json.encode(in result);
-  return response(message.id, true, move payload);
+  return bridgeSuccess(message.id, move payload);
 }
 
 export function routeWindowBridgeMessage(
   in message: BridgeMessage,
+  in permissions: ApplicationPermissions,
   inout windows: WindowManager
 ): Option<BridgeResponse> on thread.main {
   if (message.kind != BridgeMessageKind.invoke) return Option.none;
   if (message.method == "__window:create") {
-    return Option.some(createWindow(in message, inout windows));
+    return Option.some(createWindow(
+      in message,
+      in permissions,
+      inout windows
+    ));
   }
   if (message.method == "__zapp:windows-list") {
     return Option.some(listWindows(in message, in windows));

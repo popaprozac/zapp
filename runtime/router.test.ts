@@ -13,6 +13,7 @@ import {
   Window,
 } from "./window";
 import { WindowEvent, eventName } from "./events";
+import { PermissionDeniedError } from "./errors";
 
 const BRIDGE_KEY = Symbol.for("zapp.bridge");
 
@@ -387,6 +388,23 @@ describe("focused window imports", () => {
         height: 320,
       },
     });
+  });
+
+  test("createWindow fails locally with the public descriptive error class", async () => {
+    const key = Symbol.for("zapp.bootstrapConfig");
+    const previous = (globalThis as any)[key];
+    (globalThis as any)[key] = {
+      permissions: { platform: "macos", active: true, allow: [] },
+    };
+    try {
+      await expect(createWindow({ title: "Denied" }))
+        .rejects.toBeInstanceOf(PermissionDeniedError);
+      expect(mock.invokes.some((invoke) => invoke.method === "__window:create"))
+        .toBe(false);
+    } finally {
+      if (previous === undefined) delete (globalThis as any)[key];
+      else (globalThis as any)[key] = previous;
+    }
   });
 });
 

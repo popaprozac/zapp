@@ -11,6 +11,8 @@
  * Enforcement is NATIVE — these mirrors exist for fast, friendly errors
  * and detection; a handcrafted bridge message still hits the native gate.
  */
+import { PermissionDeniedError } from "./errors";
+export { PermissionDeniedError } from "./errors";
 import { getBridge } from "./bridge";
 
 export type PermissionState = "granted" | "denied" | "unsupported";
@@ -19,17 +21,6 @@ export interface PermissionsManifest {
   platform: string;          // "macos" | "ios" | "windows"
   active: boolean;           // false = no permissions field (allow-all)
   allow: string[];
-}
-
-export class PermissionDeniedError extends Error {
-  readonly code = "PERMISSION_DENIED" as const;
-  constructor(readonly permission: string) {
-    super(
-      `[zapp] permission denied: "${permission}" — add it to ` +
-      `\`security.permissions\` in zapp.config.ts`,
-    );
-    this.name = "PermissionDeniedError";
-  }
 }
 
 /** Verb semantics — keep in lockstep with native permissions.zc and cli/src/permissions.ts. */

@@ -53,6 +53,40 @@
     post(JSON.stringify({ t: 7, id }));
   }
 
+  function invocationError(payload: string): Error {
+    const factory = (globalThis as any)[Symbol.for("zapp.errorFactory")];
+    if (typeof factory === "function") return factory(payload);
+    let parsed: Record<string, unknown> | undefined;
+    try {
+      const value = JSON.parse(payload);
+      if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+        parsed = value as Record<string, unknown>;
+      }
+    } catch {}
+    if (
+      parsed
+      && typeof parsed.code === "string"
+      && typeof parsed.message === "string"
+    ) {
+      const error: any = new Error(parsed.message);
+      error.name = parsed.code === "PERMISSION_DENIED"
+        ? "PermissionDeniedError"
+        : "ZappInvocationError";
+      error.code = parsed.code;
+      if (typeof parsed.permission === "string" && parsed.permission.length > 0) {
+        error.permission = parsed.permission;
+      }
+      return error;
+    }
+    const error: any = new Error(payload);
+    if (payload.startsWith("PERMISSION_DENIED:")) {
+      error.name = "PermissionDeniedError";
+      error.code = "PERMISSION_DENIED";
+      error.permission = payload.slice("PERMISSION_DENIED:".length);
+    }
+    return error;
+  }
+
   type WorkerEntry = {
     onmessage: ((event: { data: any }) => void) | null;
     _messageHandlers: Array<(event: { data: any }) => void>;
@@ -139,12 +173,7 @@
           p.resolve(payload);
         }
       } else {
-        const err: any = new Error(payload);
-        if (typeof payload === "string" && payload.startsWith("PERMISSION_DENIED:")) {
-          err.code = "PERMISSION_DENIED";
-          err.permission = payload.slice("PERMISSION_DENIED:".length);
-        }
-        p.reject(err);
+        p.reject(invocationError(payload));
       }
     },
 

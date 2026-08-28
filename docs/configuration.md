@@ -150,9 +150,11 @@ commit. Its schema is versioned independently from the ergonomic authoring
 surface.
 
 For Z-native applications, the same resolved identity is compiled into a
-readonly `ApplicationMetadata` value. `Application()` receives that value by
-default, so product metadata is authored once in `zapp.config.ts` rather than
-repeated in Z source.
+readonly `ApplicationMetadata` value. Security capabilities are compiled
+separately into immutable application policy, so descriptive metadata never
+becomes an authorization surface. `Application()` receives both generated
+values by default, and application source cannot replace policy with data from
+a WebView.
 
 Runtime behavior does not belong in configuration. Services, windows, menus,
 lifecycle hooks, and mutable state remain ordinary Z source.

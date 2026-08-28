@@ -68,6 +68,11 @@ same application-owned `WindowManager`. `Window.show()`, `hide()`,
 `setTitle()`, and idempotent `close()` are main-executor operations. The process
 stops only after the last native window closes.
 
+The frontend window factory is allowed explicitly by
+`security.permissions: ["window:create"]`. Zapp mirrors that manifest for a
+friendly TypeScript error, but the compiled Z router remains authoritative: a
+handcrafted `__window:create` message cannot bypass the permission check.
+
 `WindowOptions.url` is a logical application-relative URL, not a transport
 address. This example deliberately uses `/notes`. In a packaged build the
 macOS backend resolves it against `zapp://app/` and serves the embedded

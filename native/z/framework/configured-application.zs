@@ -1,4 +1,5 @@
 import { ApplicationMetadata } from "./application-metadata.zs";
+import { ApplicationPermissions } from "./application-permissions.zs";
 
 // The CLI replaces this module only inside its isolated build workspace.
 // Keeping a deterministic fallback in the source graph preserves editor,
@@ -8,5 +9,11 @@ export function configuredApplicationMetadata(): ApplicationMetadata {
     name: "Zapp",
     identifier: "com.zapp.app",
     version: "0.1.0",
+  });
+}
+
+export function configuredApplicationPermissions(): ApplicationPermissions {
+  return ApplicationPermissions({
+    windowCreate: true,
   });
 }

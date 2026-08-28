@@ -9,6 +9,9 @@ export default defineConfig({
   frontend: {
     assets: "./dist",
   },
+  security: {
+    permissions: ["window:create"],
+  },
   webview: {
     inject: {
       base: {

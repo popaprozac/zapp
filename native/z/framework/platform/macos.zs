@@ -6,12 +6,14 @@ import {
   WindowError,
 } from "../application-error.zs";
 import { ApplicationMetadata } from "../application-metadata.zs";
+import { ApplicationPermissions } from "../application-permissions.zs";
 import { routeDecodedMessageWithServicesAsync } from "../async-bridge.zs";
 import { AsyncServices } from "../async-services.zs";
 import {
   BridgeMessage,
   BridgeMessageKind,
   BridgeResponse,
+  bridgeFailure,
   decodeBridgeMessage,
 } from "../bridge.zs";
 import {
@@ -51,8 +53,13 @@ class DesktopMessageHandler on thread.main
       zapp_route_message_owned(move text, this.windowId);
       return;
     }
+    const failure = bridgeFailure(
+      0,
+      "INVALID_MESSAGE",
+      "WebView message body must be a string"
+    );
     zapp_deliver_response_from_z(
-      "WebView message body must be a string",
+      failure.payload,
       0,
       false,
       this.windowId
@@ -79,6 +86,7 @@ enum WindowMessageRoute {
 
 class MacOSApplicationRuntime {
   readonly name: String;
+  readonly permissions: ApplicationPermissions;
   readonly services: AsyncServices;
   readonly updates: TaskScope;
   readonly windowManager: WindowManager on thread.main;
@@ -220,6 +228,7 @@ export async function runMacOSApplication(
   });
   const lifetime = initializeMacOSApplicationRuntime(
     copy config.metadata.name,
+    config.permissions,
     config.services,
     updates,
     windows
@@ -305,8 +314,13 @@ export c function zapp_route_message_owned(
   const bridgeMessage = match (decoded) {
     success(value) => value;
     failure(error) => {
+      const failure = bridgeFailure(
+        0,
+        "INVALID_MESSAGE",
+        copy error.message
+      );
       zapp_deliver_response_from_z(
-        error.message,
+        failure.payload,
         0,
         false,
         windowId
@@ -345,8 +359,13 @@ export c function zapp_route_message_owned(
     if (!attachment.accepted) return;
   }
   if (!accepted) {
+    const failure = bridgeFailure(
+      0,
+      "APPLICATION_CLOSING",
+      "Application is closing"
+    );
     zapp_deliver_response_from_z(
-      "Application is closing",
+      failure.payload,
       0,
       false,
       windowId
@@ -415,7 +434,13 @@ function selectWindowMessageRoute(
   message: BridgeMessage,
   inout windows: WindowManager
 ): WindowMessageRoute on thread.main {
-  const routed = routeWindowBridgeMessage(in message, inout windows);
+  const current = application.get();
+  const permissions = current.permissions;
+  const routed = routeWindowBridgeMessage(
+    in message,
+    in permissions,
+    inout windows
+  );
   return match (routed) {
     some(response) => WindowMessageRoute.framework(response);
     none => WindowMessageRoute.service(move message);
@@ -619,12 +644,14 @@ function createMacOSWindowRuntime(
 
 function initializeMacOSApplicationRuntime(
   name: String,
+  permissions: ApplicationPermissions,
   services: AsyncServices,
   updates: TaskScope,
   windowManager: WindowManager
 ): OnceLifetime<MacOSApplicationRuntime> on thread.main {
   const value = new MacOSApplicationRuntime({
     name: move name,
+    permissions,
     services: move services,
     updates,
     windowManager,

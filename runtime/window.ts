@@ -17,6 +17,8 @@
  */
 
 import { getBridge } from "./bridge";
+import { ensurePermission } from "./permissions";
+export { PermissionDeniedError } from "./errors";
 import { Platform } from "./platform";
 import { WindowEvent, eventName, type WindowSizePayload, type WindowPayload, type ModalDismissedPayload, type SidebarResizedPayload, type InspectorResizedPayload, type RouteChangedPayload } from "./events";
 import type { Display } from "./screen";
@@ -2209,6 +2211,7 @@ export function currentWindow(): WindowHandle {
 export async function createWindow(
   options: WindowCreateOptions = {},
 ): Promise<WindowHandle> {
+  ensurePermission("window:create");
   const host = (globalThis as any).__zappBridge;
   if (host?.createWindow) {
     const result = host.createWindow(options) as { windowId: string };

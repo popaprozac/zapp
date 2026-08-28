@@ -1,9 +1,11 @@
 import { PreparedApplication } from "./application-contract.zs";
 import { ApplicationError } from "./application-error.zs";
 import { ApplicationMetadata } from "./application-metadata.zs";
+import { ApplicationPermissions } from "./application-permissions.zs";
 import { AsyncServices } from "./async-services.zs";
 import {
   configuredApplicationMetadata,
+  configuredApplicationPermissions,
 } from "./configured-application.zs";
 import { runApplicationPlatform } from "./platform.zs";
 import {
@@ -16,6 +18,8 @@ import { WindowManager, createWindowManager } from "./window.zs";
 
 export struct Application on thread.main {
   readonly metadata: ApplicationMetadata = configuredApplicationMetadata();
+  readonly permissions: ApplicationPermissions =
+    configuredApplicationPermissions();
   readonly windows: WindowManager = createWindowManager();
   services: ApplicationServicesBuilder = createApplicationServices();
 
@@ -31,11 +35,12 @@ export struct Application on thread.main {
 function prepareApplication(
   app: Application
 ): PreparedApplication on thread.main {
-  const { metadata, windows, services } = move app;
+  const { metadata, permissions, windows, services } = move app;
   const { routes, asynchronous, lifecycles } =
     services.freezeConfigured();
   return new PreparedApplication({
     metadata: move metadata,
+    permissions,
     windows,
     services: new AsyncServices({
       synchronous: routes,

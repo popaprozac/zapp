@@ -4,6 +4,7 @@ import {
   parseZCompilerIdentity,
   renderZApplicationMetadata,
   renderZFrontendConfigC,
+  renderZWebviewBootstrapConfig,
   renderZWebviewBootstrapC,
   renderZNativeManifest,
   resolveZFrontendOrigin,
@@ -25,6 +26,35 @@ describe("renderZApplicationMetadata", () => {
     expect(output).toContain('identifier: "com.example.notes"');
     expect(output).toContain('version: "1.2.3"');
     expect(output).toContain("configuredApplicationMetadata");
+    expect(output).toContain("configuredApplicationPermissions");
+    expect(output).toContain("windowCreate: true");
+  });
+
+  it("compiles an explicit window-create denial into native Z policy", () => {
+    const output = renderZApplicationMetadata({
+      name: "Locked",
+      identifier: "com.example.locked",
+      version: "1.0.0",
+      assetDir: "./dist",
+      permissions: [],
+    });
+    expect(output).toContain("windowCreate: false");
+  });
+});
+
+describe("renderZWebviewBootstrapConfig", () => {
+  it("mirrors resolved permissions for friendly frontend diagnostics", () => {
+    const source = renderZWebviewBootstrapConfig({
+      name: "Notes",
+      identifier: "com.example.notes",
+      version: "1.0.0",
+      assetDir: "./dist",
+      permissions: ["window:create"],
+    }, "macos");
+    expect(source).toContain('Symbol.for("zapp.bootstrapConfig")');
+    expect(source).toContain('"platform":"macos"');
+    expect(source).toContain('"active":true');
+    expect(source).toContain('"allow":["window:create"]');
   });
 });
 

@@ -205,6 +205,9 @@ service call through WebView -> Z -> WebView, a generated-runtime-owned Z
 JSON ingress and dispatch, an embedded-engine direct-service seam, and
 deterministic window/run-loop/runtime shutdown. The framework and application
 are now separate source graphs, and one Notes project drives dynamic
-multi-window WebViews and the strict-C embedding host. Remaining work
-includes typed invocation error/cancellation/permission composition, zjs host
-attachment, and ASan or equivalent leak evidence on a compatible host.
+multi-window WebViews and the strict-C embedding host. The first compiled
+permission slice also gates frontend window creation inside Z and returns
+structured invocation errors that the TypeScript runtime restores as
+descriptive error subclasses. Remaining work includes applying the same typed
+permission/error composition to generated services, zjs host attachment, and
+ASan or equivalent leak evidence on a compatible host.

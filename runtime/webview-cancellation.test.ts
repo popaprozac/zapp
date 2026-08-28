@@ -67,6 +67,20 @@ describe("WebView service cancellation", () => {
       bridge._onInvokeResult(completedInvoke.id, true, "42");
       expect(await completed).toBe(42);
 
+      const denied = bridge.invoke("__window:create", {}, { timeout: 1000 });
+      const deniedInvoke = messages.at(-1);
+      bridge._onInvokeResult(deniedInvoke.id, false, JSON.stringify({
+        code: "PERMISSION_DENIED",
+        message: "window creation is disabled",
+        permission: "window:create",
+      }));
+      await expect(denied).rejects.toMatchObject({
+        name: "PermissionDeniedError",
+        code: "PERMISSION_DENIED",
+        message: "window creation is disabled",
+        permission: "window:create",
+      });
+
       const countBeforeLateAbort = messages.length;
       completedController.abort();
       expect(messages).toHaveLength(countBeforeLateAbort);

@@ -407,15 +407,20 @@ an intermediate JSON document.
   generated ARC adapter. Async services require class identity. Move-only
   struct adapters remain fail-closed until compiler metadata exposes a checked
   copy/move capability instead of making the generator guess.
-- Native cross-module specialization of `json.decode<UserType>` is incomplete;
-  the generated adapter currently projects `JsonValue` explicitly.
+- Native cross-module specialization of `json.decode<UserType>` and
+  `json.encode(in value)` is implemented for the current scalar,
+  `Array<String>`, and exported-struct codec tier. The generated adapter still
+  keeps explicit codecs where its wire contract needs exact integer handling.
 - `Mutex.withLock` returns are limited to cleanup-free values in the native
   compiler. The service keeps the critical section scalar and constructs owned
   results after unlocking.
 - Headless and WebView async service routes, per-request cancellation,
   lifecycle ordering, lifecycle failures, and compiler-generated bindings are
-  implemented. Typed application error values beyond `ServiceOutcome` and
-  service permissions remain follow-up composition work.
+  implemented. Native bridge failures now carry structured codes and become
+  `ZappInvocationError` subclasses in TypeScript. Throwing service methods and
+  service-specific permissions remain follow-up composition work; when Z error
+  metadata enters the service manifest, generated bindings should emit named
+  error classes rather than flattening those failures into strings.
 - Generated async dispatch currently supports one suspending method per service
   and no owned request value across that suspension. These are native async
   frame composition limits, not intended application API restrictions.

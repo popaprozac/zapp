@@ -77,6 +77,15 @@ arrives with per-context grants in v2), `webview.protocols`/
   webview; in workers the native layer logs
   `[zapp] permission denied: <id> (<method>)` (once per id) and drops the call.
 
+The Z-native path compiles the resolved manifest into immutable application
+policy. Its focused frontend `createWindow()` performs the mirrored JavaScript
+check for an immediate, descriptive `PermissionDeniedError`, while the Z
+router independently enforces `window:create`. Sending `__window:create`
+directly cannot bypass that native check. Native failures cross the WebView
+boundary as a structured `{ code, message, permission }` envelope and are
+reconstructed as `ZappInvocationError` or `PermissionDeniedError` instances
+when the runtime is loaded.
+
 ## Detection
 
 ```ts
