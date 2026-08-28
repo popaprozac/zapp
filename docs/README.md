@@ -13,6 +13,7 @@ Longer-form guides that complement the single-file
 | [`architecture.md`](architecture.md) | Under-the-hood walkthrough: layers, bridge, worker lifecycle |
 | [`z-rewrite-charter.md`](z-rewrite-charter.md) | Accepted direction, architecture, and staged plan for rewriting the native core in Z |
 | [`z-native-core.md`](z-native-core.md) | Running, validating, and measuring the experimental `ZAPP_NATIVE_LANG=z` replacement track |
+| [`z-host-sdks.md`](z-host-sdks.md) | Future `libzapp` host SDK architecture, including Bun FFI and WebView IPC |
 
 Other entry points:
 

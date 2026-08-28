@@ -296,6 +296,64 @@ CPU-intensive process. Phase 1 still requires ASan on a compatible host or
 equivalent leak evidence; run-loop orchestration and the smoke-test response
 machinery remain the principal Objective-C scaffolding.
 
+## Application ownership and focused modules
+
+Zapp takes explicit inspiration from the
+[Wails v3 Manager API](https://v3.wails.io/concepts/manager-api/), especially
+its clear application-owned window and service lifecycles. The inspiration is
+credited rather than copied indiscriminately: Zapp uses an application
+capability when state truly belongs to one application, and focused modules
+when an operation does not need that ownership.
+
+Native Z window creation remains application-scoped:
+
+```z
+import { Application } from "zapp";
+import { WindowOptions } from "zapp/window";
+
+let app = Application();
+const mainWindow = try app.windows.create(WindowOptions({
+  title: "Notes",
+  url: "/notes",
+}));
+return try await app.run();
+```
+
+`app.windows` is not cosmetic namespacing. It owns the registry, identifiers,
+pre-run registrations, dynamic realization, main-executor contract, last-window
+policy, and deterministic shutdown. A global `Window.create(...)` would have
+to find the current application through hidden process state and make calls
+before initialization, after shutdown, and across isolated tests ambiguous.
+
+This does not make `Application` a universal manager container:
+
+- application-owned registries belong on `app`, initially `windows` and
+  `services`;
+- resource behavior belongs on its handle, such as `window.show()` and
+  `window.close()`;
+- types and options come from focused modules such as `zapp/window`; and
+- stateless operating-system capabilities should prefer focused imports rather
+  than automatically becoming `app.clipboard`, `app.shell`, or another manager.
+
+The WebView TypeScript API follows its own asynchronous boundary instead of
+mirroring native Z mechanically. A frontend may import named functions and
+proxy handles:
+
+```ts
+import { currentWindow, createWindow } from "@zapp/window";
+
+const current = currentWindow();
+const diagnostics = await createWindow({
+  title: "Diagnostics",
+  url: "/diagnostics",
+});
+```
+
+An async factory represents IPC failure more honestly than `new Window(...)`,
+which cannot await native realization. Native Z and frontend TypeScript should
+feel native to their environments while preserving the same identities,
+permissions, lifecycle, and generated contracts.
+
 ### Phase 2: make the core real
 
 - Multiple window identities and lifecycle events.
