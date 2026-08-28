@@ -1,3 +1,8 @@
+import {
+  createWindow,
+  currentWindow,
+} from "@zappdev/runtime/window";
+
 const button = document.querySelector("#ping");
 const cancelButton = document.querySelector("#cancel");
 const status = document.querySelector("#status");
@@ -8,13 +13,20 @@ const services = globalThis.__zappServices;
 // that `zapp dev` loaded the app through Vite rather than a stale packaged UI.
 document.body.dataset.hmr = import.meta.hot ? "ready" : "packaged";
 
-const currentWindowId = globalThis[Symbol.for("zapp.windowId")];
+const currentWindowId = currentWindow().id;
 if (currentWindowId === "win-1") {
-  services.windows.openDiagnostics().then((opened) => {
-    document.body.dataset.dynamicWindow =
-      opened ? "ready" : "error";
-  }).catch(() => {
+  createWindow({
+    title: "Z Notes Diagnostics",
+    url: "/diagnostics",
+    width: 480,
+    height: 320,
+  }).then((created) => {
+    document.body.dataset.dynamicWindow = created.id === "win-2"
+      ? "ready"
+      : "error";
+  }).catch((error) => {
     document.body.dataset.dynamicWindow = "error";
+    status.textContent = `Window failure\n${String(error)}`;
   });
 } else {
   document.body.dataset.dynamicWindow = "ready";
@@ -28,15 +40,18 @@ setTimeout(() => {
   const style = getComputedStyle(document.documentElement)
     .getPropertyValue("--zapp-inject-base")
     .trim();
-  const expectsDiagnostics = windowId === "win-2";
-  const isolated = expectsDiagnostics
-    ? diagnostics === "ready"
-    : diagnostics === undefined;
+  const expectsBase = windowId === "win-1";
+  const isolated = expectsBase
+    ? start === "ready"
+      && end === "ready"
+      && style === "ready"
+      && diagnostics === undefined
+    : start === undefined
+      && end === undefined
+      && style === ""
+      && diagnostics === undefined;
   document.body.dataset.windowId = String(windowId ?? "missing");
-  document.body.dataset.inject =
-    start === "ready" && end === "ready" && style === "ready" && isolated
-      ? "ready"
-      : "error";
+  document.body.dataset.inject = isolated ? "ready" : "error";
 }, 0);
 
 button.addEventListener("click", async () => {

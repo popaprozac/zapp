@@ -6,7 +6,12 @@
  * so tests run without a real native layer (same pattern as worker.test.ts).
  */
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { createWindowHandle, Window } from "./window";
+import {
+  createWindow,
+  createWindowHandle,
+  currentWindow,
+  Window,
+} from "./window";
 import { WindowEvent, eventName } from "./events";
 
 const BRIDGE_KEY = Symbol.for("zapp.bridge");
@@ -349,6 +354,39 @@ describe("Window.all", () => {
     mock.invokeResult = { ids: [] };
     const handles = await Window.all();
     expect(handles).toEqual([]);
+  });
+});
+
+describe("focused window imports", () => {
+  const WID = Symbol.for("zapp.windowId");
+
+  afterEach(() => {
+    delete (globalThis as any)[WID];
+  });
+
+  test("currentWindow returns the current identity-bearing handle", () => {
+    (globalThis as any)[WID] = "win-focused";
+    expect(currentWindow().id).toBe("win-focused");
+  });
+
+  test("createWindow invokes the narrow framework-owned factory", async () => {
+    mock.invokeResult = { windowId: "win-created" };
+    const created = await createWindow({
+      title: "Diagnostics",
+      url: "/diagnostics",
+      width: 480,
+      height: 320,
+    });
+    expect(created.id).toBe("win-created");
+    expect(mock.invokes.find((invoke) => invoke.method === "__window:create")).toEqual({
+      method: "__window:create",
+      args: {
+        title: "Diagnostics",
+        url: "/diagnostics",
+        width: 480,
+        height: 320,
+      },
+    });
   });
 });
 

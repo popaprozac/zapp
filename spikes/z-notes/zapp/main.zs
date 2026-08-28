@@ -1,6 +1,5 @@
 import { createNotesService } from "./notes-service.zs";
 import { createHealthService } from "./health-service.zs";
-import { createWindowService } from "./window-service.zs";
 import { Application } from "../../../native/z/framework/application.zs";
 import { WindowOptions } from "../../../native/z/framework/window.zs";
 import console from "std/console";
@@ -10,7 +9,6 @@ async function main(): i32 on thread.main {
   let app = Application();
   app.services.register("notes", createNotesService());
   app.services.register("health", createHealthService());
-  app.services.register("windows", createWindowService(app.windows));
   const createdWindow = attempt app.windows.create(WindowOptions({
     title: "Z Notes",
     url: "/notes",

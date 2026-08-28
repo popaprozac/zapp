@@ -2185,3 +2185,38 @@ export const Window = {
     return (r?.ids ?? []).map((id) => createWindowHandle(id));
   },
 };
+
+/**
+ * Frontend-safe options for creating a native window.
+ *
+ * Trusted document-start/document-end/style injection is intentionally absent:
+ * those profiles are application-owned native policy, not WebView input.
+ */
+export type WindowCreateOptions = Pick<
+  WindowOptions,
+  "title" | "url" | "width" | "height" | "visible" | "resizable"
+>;
+
+/** Return the identity-bearing handle for the current WebView window. */
+export function currentWindow(): WindowHandle {
+  return Window.current();
+}
+
+/**
+ * Ask the application-owned native WindowManager to realize a new window.
+ * Creation is asynchronous because the WebView/native boundary can fail.
+ */
+export async function createWindow(
+  options: WindowCreateOptions = {},
+): Promise<WindowHandle> {
+  const host = (globalThis as any).__zappBridge;
+  if (host?.createWindow) {
+    const result = host.createWindow(options) as { windowId: string };
+    return createWindowHandle(result.windowId);
+  }
+  const result = await getBridge().invoke(
+    "__window:create",
+    options as Record<string, unknown>,
+  ) as { windowId: string };
+  return createWindowHandle(result.windowId);
+}

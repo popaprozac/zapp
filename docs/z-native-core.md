@@ -49,11 +49,13 @@ Z creates and owns each window, WebView, configuration, content controller,
 protocol handler, and registration guard. A per-window native registry retains
 the run-loop-facing graph and routes each WebKit response by a stable native
 identifier; Z owns each window's pending-request namespace and public identity.
-The primary WebView invokes a generated `windows.openDiagnostics()` service
-after the application loop starts, proving dynamic realization rather than
-startup-only enumeration. The Objective-C host owns the process/run-loop
-adapter, response delivery, and smoke observation rather than application
-object construction or message-body validation.
+The primary WebView invokes the focused frontend `createWindow()` factory after
+the application loop starts, proving dynamic realization rather than
+startup-only enumeration. The framework handles the built-in operation before
+application service dispatch and calls the same Z-owned `WindowManager`. The
+Objective-C host owns the process/run-loop adapter, response delivery, and
+smoke observation rather than application object construction or message-body
+validation.
 
 The consuming `Application` also owns a separate lifecycle registry. Typed
 main-executor start hooks run before the blocking platform loop; stop hooks run
@@ -84,12 +86,12 @@ for the real build seam rather than a parallel script that can drift from it.
 
 The ordinary Z Notes command builds the default host, injects the production
 bootstrap and generated service facade at document start, and dynamically opens
-a second diagnostics window. The process stops only after the last native
+a second diagnostics window through `createWindow()`. The process stops only after the last native
 window closes. Clicking either window's visible button calls
 `notes.create(...)`; native delivery resolves it through `_onInvokeResult()`
 and the binding restores the exact `u64` identifier as `bigint` before updating
 the DOM. `spike:z-notes:smoke` opts into bounded automation: it verifies
-independent window identities, per-window injection selection,
+independent window identities, frontend-safe injection isolation,
 cancellation/request routing, and both DOMs before closing every window. Both
 use the same staged archive and generated embedding header as an ordinary
 `ZAPP_NATIVE_LANG=z` build.

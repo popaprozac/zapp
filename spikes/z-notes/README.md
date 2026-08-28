@@ -18,7 +18,6 @@ zapp/
 ├── notes-core.zs     # shared model, behavior, and checked wire conversion
 ├── notes-service.zs  # suspending service and lifecycle adapter
 ├── health-service.zs # sync-only value service
-├── window-service.zs # dynamically creates the diagnostics window
 └── sync-notes-service.zs # allocation-lean strict-C adapter
 frontend/
 ├── index.html        # Vite frontend entry
@@ -33,7 +32,6 @@ The ordinary desktop entry is deliberately small:
 ```z
 import { createNotesService } from "./notes-service.zs";
 import { createHealthService } from "./health-service.zs";
-import { createWindowService } from "./window-service.zs";
 import { Application } from "../../../native/z/framework/application.zs";
 import { WindowOptions } from "../../../native/z/framework/window.zs";
 import { thread } from "std/thread";
@@ -42,7 +40,6 @@ async function main(): i32 on thread.main {
   let app = Application();
   app.services.register("notes", createNotesService());
   app.services.register("health", createHealthService());
-  app.services.register("windows", createWindowService(app.windows));
   const createdWindow = attempt app.windows.create(WindowOptions({
     title: "Z Notes",
     url: "/notes",
@@ -63,12 +60,13 @@ async function main(): i32 on thread.main {
 
 `WindowOptions` is an ordinary value struct with defaults. `create` returns a
 shared `Window` identity or a typed `WindowError`, and the manager retains every
-open window. The primary WebView calls the generated `windows.openDiagnostics`
-binding after `app.run()` has entered the AppKit loop, dynamically realizing a
-second window with its own native ID, request registry, URL, and injection
-selection. `Window.show()`, `hide()`, `setTitle()`, and idempotent `close()` are
-main-executor operations. The process stops only after the last native window
-closes.
+open window. The primary WebView calls the focused frontend `createWindow()`
+factory after `app.run()` has entered the AppKit loop, dynamically realizing a
+second window with its own native ID, request registry, and URL. The request is
+handled by the framework before application service dispatch and reaches the
+same application-owned `WindowManager`. `Window.show()`, `hide()`,
+`setTitle()`, and idempotent `close()` are main-executor operations. The process
+stops only after the last native window closes.
 
 `WindowOptions.url` is a logical application-relative URL, not a transport
 address. This example deliberately uses `/notes`. In a packaged build the
@@ -83,9 +81,10 @@ The primary window selects the `base` profile declared by
 document-start TypeScript, and document-end TypeScript are compiled into an
 immutable native catalog. The smoke proves the bridge precedes the preload,
 the style reaches the document, and the end script runs. The dynamically
-created diagnostics window selects `base` plus `diagnostics`; the smoke proves
-the diagnostics marker exists only in that window, without accepting runtime
-JavaScript strings.
+created diagnostics window receives neither application-authored profile. The
+`diagnostics` profile still exists in the compiled catalog, so the smoke proves
+Web content cannot select or inherit trusted injection merely by creating a
+window.
 
 The repository-relative framework import is temporary. A real package/module
 resolver should make it an ordinary stable Zapp import without copying runtime

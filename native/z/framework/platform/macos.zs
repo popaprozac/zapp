@@ -35,6 +35,7 @@ import {
   WindowOperation,
   WindowTitleOperation,
 } from "../window.zs";
+import { routeWindowBridgeMessage } from "../window-bridge.zs";
 
 class DesktopMessageHandler on thread.main
   implements native.WKScriptMessageHandler {
@@ -69,6 +70,11 @@ class MacOSWindowRuntime on thread.main {
   readonly registrationOwner: native.ZAppDesktopRegistrationOwner;
   readonly registration: objc.Registration;
   readonly pendingRequests: PendingRequests;
+}
+
+enum WindowMessageRoute {
+  framework BridgeResponse,
+  service BridgeMessage,
 }
 
 class MacOSApplicationRuntime {
@@ -366,7 +372,7 @@ async function routeScheduledMessageAndDeliver(
 ): void on thread.main {
   let generation: u64 = 0;
   if (tracked) generation = beginPendingRequest(windowId, requestId);
-  const delivered = await routeMessageAndDeliver(
+  const delivered = await routeFrameworkOrServiceMessageAndDeliver(
     move message,
     services,
     windowId,
@@ -375,6 +381,45 @@ async function routeScheduledMessageAndDeliver(
     tracked
   );
   if (!delivered) return;
+}
+
+async function routeFrameworkOrServiceMessageAndDeliver(
+  message: BridgeMessage,
+  services: AsyncServices,
+  windowId: i32,
+  requestId: u64,
+  generation: u64,
+  tracked: boolean
+): boolean on thread.main {
+  const current = application.get();
+  let windows = current.windowManager;
+  const route = selectWindowMessageRoute(move message, inout windows);
+  match (route) {
+    framework(response) => {
+      if (tracked) finishPendingRequest(windowId, requestId, generation);
+      deliverResponse(in response, windowId);
+      return true;
+    }
+    service(forwarded) => return await routeMessageAndDeliver(
+      move forwarded,
+      services,
+      windowId,
+      requestId,
+      generation,
+      tracked
+    );
+  }
+}
+
+function selectWindowMessageRoute(
+  message: BridgeMessage,
+  inout windows: WindowManager
+): WindowMessageRoute on thread.main {
+  const routed = routeWindowBridgeMessage(in message, inout windows);
+  return match (routed) {
+    some(response) => WindowMessageRoute.framework(response);
+    none => WindowMessageRoute.service(move message);
+  };
 }
 
 async function routeMessageAndDeliver(

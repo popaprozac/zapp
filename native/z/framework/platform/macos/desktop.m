@@ -671,6 +671,19 @@ void zapp_desktop_window_discard(const char *window_id) {
               && [(NSString *)state containsString:@"\"inject\":\"ready\""]
               && [(NSString *)state containsString:@"\"dynamicWindow\":\"ready\""]
               && [(NSString *)state containsString:expectedHMR];
+            BOOL terminalFailure = [state isKindOfClass:[NSString class]]
+              && (
+                [(NSString *)state containsString:@"\"roundTrip\":\"error\""]
+                || [(NSString *)state containsString:@"\"cancellation\":\"error\""]
+                || [(NSString *)state containsString:@"\"health\":\"error\""]
+                || [(NSString *)state containsString:@"\"inject\":\"error\""]
+                || [(NSString *)state containsString:@"\"dynamicWindow\":\"error\""]
+              );
+            // Several legitimate requests may complete while the scripted
+            // scenario is still in flight (notably frontend window creation).
+            // Leave incomplete state to the per-window watchdog; only a
+            // terminal DOM failure should fail the smoke eagerly.
+            if (stateError == nil && !updated && !terminalFailure) return;
             if (stateError != nil || !updated) {
               const char *stateText = state == nil
                 ? "<nil>"
