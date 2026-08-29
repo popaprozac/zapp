@@ -1,5 +1,8 @@
 import json from "std/json";
-import { ServiceOutcome } from "./service-contract.zs";
+import {
+  ServiceOutcome,
+  ServiceTypedFailure,
+} from "./service-contract.zs";
 import { Services } from "./services.zs";
 
 export enum BridgeMessageKind {
@@ -32,6 +35,10 @@ export readonly struct BridgeError {
   code: String;
   message: String;
   permission: String = "";
+  service: String = "";
+  method: String = "";
+  errorType: String = "";
+  details: String = "";
 }
 
 function decodeError(message: String): BridgeDecodeError {
@@ -149,6 +156,22 @@ export function bridgePermissionFailure(
   return BridgeResponse({ id, ok: false, payload: json.encode(in error) });
 }
 
+export function bridgeTypedServiceFailure(
+  id: u64,
+  error: ServiceTypedFailure
+): BridgeResponse {
+  const { service, method, errorType, message, details } = move error;
+  const payload = BridgeError({
+    code: "SERVICE_ERROR",
+    message: move message,
+    service: move service,
+    method: move method,
+    errorType: move errorType,
+    details: move details,
+  });
+  return BridgeResponse({ id, ok: false, payload: json.encode(in payload) });
+}
+
 function dispatch(in message: BridgeMessage): Option<BridgeResponse> {
   return match (in message.kind) {
     invoke => {
@@ -219,6 +242,9 @@ function dispatchWithServices(
             "SERVICE_ERROR",
             move error
           )
+        );
+        typedFailure(error) => return Option.some(
+          bridgeTypedServiceFailure(message.id, move error)
         );
       }
     }

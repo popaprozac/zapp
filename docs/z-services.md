@@ -302,7 +302,8 @@ contracts from an ordinary service:
 
 ```z
 export readonly class NotesService implements ServiceLifecycle {
-  function create(input: CreateNoteInput): Note { /* ... */ }
+  function create(input: CreateNoteInput)
+    : Note throws NoteCreationError { /* ... */ }
   async function count(): u64 on thread.main { /* ... */ }
 
   function start(in context: ApplicationContext)
@@ -330,6 +331,62 @@ the established sharing rules.
 The generated adapter decodes `ServiceInvocation`, calls the typed public
 methods, and encodes `ServiceOutcome`. The application source remains ordinary
 Z and does not depend on those transport contracts.
+
+## Typed service errors
+
+A service method may throw an exported Z struct. Zapp preserves that declared
+error as structured data instead of flattening it into a transport string:
+
+```z
+export struct NoteCreationError {
+  message: String;
+  title: String;
+}
+
+export readonly class NotesService {
+  function create(input: CreateNoteInput)
+    : Note throws NoteCreationError {
+    if (input.title.byteLength == 0) {
+      throw NoteCreationError({
+        message: "a note title is required",
+        title: "",
+      });
+    }
+    // ...
+  }
+}
+```
+
+The thrown type must be an exported struct whose public fields use supported
+service-wire types. The compiler metadata names it; generated Z dispatch uses
+`attempt` or `attempt await`, serializes its fields only on the failure path,
+and publishes the service, method, error type, and details in the bridge error
+envelope. The first executable tier supports synchronous, non-placed methods.
+Throwing async or executor-isolated methods fail the build with a focused
+diagnostic until the fixed-point compiler can retain their typed failure across
+the suspension frame; returning an explicit result value remains available in
+that narrow case.
+
+Generated TypeScript exports a same-named `ZappError` subclass and a details
+interface:
+
+```ts
+import { NoteCreationError, notes } from "./.zapp/generated/services";
+
+try {
+  await notes.create({ title: "" });
+} catch (error) {
+  if (error instanceof NoteCreationError) {
+    console.log(error.details.message, error.details.title);
+  }
+}
+```
+
+Z does not require a language-wide `Error` base type. When the thrown struct
+has a string `message` field it is retained in `details`; the generated class
+also carries the stable bridge message, `code === "SERVICE_ERROR"`, and native
+service/method provenance. Cancellation remains a distinct `AbortError` and is
+not converted into the declared service error.
 
 ## Async services
 
@@ -430,14 +487,17 @@ an intermediate JSON document.
   lifecycle ordering, lifecycle failures, and compiler-generated bindings are
 implemented. Native bridge failures now carry structured codes and become
 `ZappError` subclasses in TypeScript. Runtime-wide failures are exported by
-`@zappdev/runtime`, while feature-specific failures live with their feature
-entry point. Throwing service methods and
-  service-specific permissions remain follow-up composition work; when Z error
-  metadata enters the service manifest, generated bindings should emit named
-  error classes rather than flattening those failures into strings.
-- Generated async dispatch currently supports one suspending method per service
-  and no owned request value across that suspension. These are native async
-  frame composition limits, not intended application API restrictions.
+`@zappdev/runtime`, while declared service errors are emitted beside their
+generated service bindings. Service-specific permissions remain follow-up
+composition work.
+- Generated async dispatch supports multiple suspending methods per service,
+  but does not yet carry an owned request value across suspension. That is a
+  native async-frame composition limit, not an intended application API
+  restriction.
+- Declared typed service errors currently require a synchronous, non-placed
+  method. Persisting a thrown value through `await` or an executor hop is a
+  fixed-point async-frame parity task; Zapp rejects that shape rather than
+  flattening or losing the error.
 - The in-tree Notes project now supplies its own `.zs` entries. A stable local
   package/module contract is the next productization step; it must work in both
   semantic frontends and the editor rather than relying on staging rewrites.

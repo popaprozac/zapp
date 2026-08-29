@@ -38,4 +38,22 @@ describe("structured bridge errors", () => {
       message: "the native service failed",
     });
   });
+
+  test("retains typed Z service error identity and decoded details", () => {
+    const error = errorFromBridgePayload(JSON.stringify({
+      code: "SERVICE_ERROR",
+      message: "notes.create threw NoteCreationError",
+      service: "notes",
+      method: "create",
+      errorType: "NoteCreationError",
+      details: JSON.stringify({ message: "a title is required", title: "" }),
+    }));
+    expect(error).toBeInstanceOf(ZappInvocationError);
+    expect(error).toMatchObject({
+      service: "notes",
+      method: "create",
+      errorType: "NoteCreationError",
+      details: { message: "a title is required", title: "" },
+    });
+  });
 });

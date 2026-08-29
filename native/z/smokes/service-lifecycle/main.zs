@@ -288,6 +288,7 @@ function registeredServiceLifecycle(
       if (payload != "same identity") return false;
     }
     failure(_) => return false;
+    typedFailure(_) => return false;
   }
   const stopped = attempt lifecycles.stop(in context);
   match (stopped) {

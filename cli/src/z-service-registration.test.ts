@@ -5,8 +5,9 @@ import { rewriteZServiceRegistrationModule } from "./z-service-registration";
 function manifestFor(source: string): ZServiceManifest {
   const method = "register";
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     types: [],
+    errors: [],
     services: [{
       name: "notes",
       type: "NotesService",

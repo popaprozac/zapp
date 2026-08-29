@@ -5,7 +5,7 @@ import {
 import type { ZServiceManifest } from "./z-service-bindings";
 
 const manifest: ZServiceManifest = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   types: [
     {
       name: "CreateNoteInput",
@@ -21,6 +21,14 @@ const manifest: ZServiceManifest = {
       ],
     },
   ],
+  errors: [{
+    name: "NoteCreationError",
+    module: "/workspace/app/notes-core.zs",
+    fields: [
+      { name: "message", type: "String" },
+      { name: "title", type: "String" },
+    ],
+  }],
   services: [{
     name: "notes",
     type: "NotesService",
@@ -41,6 +49,7 @@ const manifest: ZServiceManifest = {
         input: "CreateNoteInput",
         inputMode: "value",
         returns: "Note",
+        error: "NoteCreationError",
         asynchronous: false,
         executorAffinity: null,
         receiverMode: "in",
@@ -67,13 +76,17 @@ describe("generated Z service dispatch", () => {
       serviceLifecycleContractModule: "/workspace/framework/service-lifecycle-contract.zs",
     });
     expect(source).toContain(
-      'import { CreateNoteInput, Note } from "../app/notes-core.zs";',
+      'import { CreateNoteInput, Note, NoteCreationError } from "../app/notes-core.zs";',
     );
     expect(source).toContain(
       'import { NotesService } from "../app/notes-service.zs";',
     );
     expect(source).toContain("// Static method ID: 3539395672");
     expect(source).toContain("service.create(move input)");
+    expect(source).toContain("const __called = attempt service.create(move input)");
+    expect(source).toContain("ServiceOutcome.typedFailure(");
+    expect(source).toContain('errorType: "NoteCreationError"');
+    expect(source).toContain("__zappEncodeNoteCreationError(move error)");
     expect(source).toContain("function __zappDispatchNotesServiceCreate(");
     expect(source).toContain("return __zappDispatchNotesServiceCreate(");
     expect(source).toContain("await on thread.main service.count()");
@@ -98,6 +111,18 @@ describe("generated Z service dispatch", () => {
       asyncServiceContractModule: "/workspace/framework/async-service-contract.zs",
       serviceLifecycleContractModule: "/workspace/framework/service-lifecycle-contract.zs",
     })).toThrow(/does not support inout input capability/);
+  });
+
+  it("fails closed on throwing async dispatch until native task frames preserve the error", () => {
+    const invalid = structuredClone(manifest);
+    invalid.services[0].methods[1].error = "NoteCreationError";
+    expect(() => renderZServiceDispatchers(invalid, {
+      outputPath: "/workspace/generated/service-dispatchers.zs",
+      serviceContractModule: "/workspace/framework/service-contract.zs",
+      servicesModule: "/workspace/framework/services.zs",
+      asyncServiceContractModule: "/workspace/framework/async-service-contract.zs",
+      serviceLifecycleContractModule: "/workspace/framework/service-lifecycle-contract.zs",
+    })).toThrow(/cannot lower throwing method NotesService.count/);
   });
 
   it("keeps synchronous struct services on the non-task adapter path", () => {

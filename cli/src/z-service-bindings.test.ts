@@ -6,7 +6,7 @@ import {
 } from "./z-service-bindings";
 
 const manifest: ZServiceManifest = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   types: [
     {
       name: "CreateNoteInput",
@@ -22,6 +22,14 @@ const manifest: ZServiceManifest = {
       ],
     },
   ],
+  errors: [{
+    name: "NoteCreationError",
+    module: "/app.zs",
+    fields: [
+      { name: "message", type: "String" },
+      { name: "title", type: "String" },
+    ],
+  }],
   services: [{
     name: "notes",
     type: "NotesService",
@@ -42,6 +50,7 @@ const manifest: ZServiceManifest = {
         input: "CreateNoteInput",
         inputMode: "value",
         returns: "Note",
+        error: "NoteCreationError",
         asynchronous: false,
         executorAffinity: null,
         receiverMode: "in",
@@ -69,6 +78,10 @@ describe("Z service binding generation", () => {
     expect(source).toContain("options,\n      )");
     expect(source).toContain("mapped.cancel = () => source.cancel()");
     expect(source).toContain("return BigInt(value)");
+    expect(source).toContain("export class NoteCreationError extends ZappError");
+    expect(source).toContain("readonly details: NoteCreationErrorDetails");
+    expect(source).toContain("decodeNoteCreationErrorFailure");
+    expect(source).toContain('error.errorType === "NoteCreationError"');
   });
 
   it("installs the same service names into the WebView runtime", () => {
@@ -77,6 +90,7 @@ describe("Z service binding generation", () => {
       'bridge.invoke("notes.create", encodeCreateNoteInput(input), options)',
     );
     expect(source).toContain("globalThis.__zappServices");
+    expect(source).toContain('error.name = "NoteCreationError"');
     expect(source).toContain(
       'decodeU64(value["id"])',
     );

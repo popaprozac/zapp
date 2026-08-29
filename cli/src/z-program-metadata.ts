@@ -219,6 +219,7 @@ export function deriveZServiceManifest(metadata: ZProgramMetadata): ZServiceMani
     )).map((call) => ({ call, module }))
   ));
   const types: ZServiceTypeMetadata[] = [];
+  const errorNames = new Set<string>();
   const seenTypes = new Set<string>();
   const seenServices = new Set<string>();
   const methodIds = new Map<number, string>();
@@ -289,9 +290,6 @@ export function deriveZServiceManifest(metadata: ZProgramMetadata): ZServiceMani
         && method.signature.errorType === "ServiceLifecycleError"
       )
     )).map((method) => {
-      if (method.signature.errorType !== null) {
-        throw new Error(`[zapp] throwing service method ${serviceType}.${method.name} is not supported yet`);
-      }
       if (method.signature.parameterTypes.length > 1) {
         throw new Error(
           `[zapp] service method ${serviceType}.${method.name} must accept zero or one request value`,
@@ -303,6 +301,34 @@ export function deriveZServiceManifest(metadata: ZProgramMetadata): ZServiceMani
       const input = method.signature.parameterTypes[0];
       if (input) addWireType(metadata, input, types, seenTypes);
       addWireType(metadata, method.signature.returnType, types, seenTypes);
+      const error = method.signature.errorType ?? undefined;
+      if (error) {
+        if (
+          method.signature.asynchronous
+          || method.signature.executorAffinity !== null
+        ) {
+          throw new Error(
+            `[zapp] throwing suspending service method ${serviceType}.${method.name} `
+            + "is not supported by the fixed-point Z compiler yet; use a synchronous "
+            + "throwing method or return an explicit result value for this method",
+          );
+        }
+        if (scalarTypes.has(error)) {
+          throw new Error(
+            `[zapp] service error ${JSON.stringify(error)} for ${serviceType}.${method.name} `
+            + "must be an exported Z struct so its payload can cross the WebView boundary",
+          );
+        }
+        const { symbol: errorSymbol } = publicType(metadata, error);
+        if (errorSymbol.kind !== "struct") {
+          throw new Error(
+            `[zapp] service error ${JSON.stringify(error)} for ${serviceType}.${method.name} `
+            + "must be an exported Z struct",
+          );
+        }
+        addWireType(metadata, error, types, seenTypes);
+        errorNames.add(error);
+      }
       const qualifiedName = `${name}.${method.name}`;
       const methodId = zServiceMethodId(qualifiedName);
       const collision = methodIds.get(methodId);
@@ -319,6 +345,7 @@ export function deriveZServiceManifest(metadata: ZProgramMetadata): ZServiceMani
         ...(input ? { input } : {}),
         ...(input ? { inputMode: method.signature.parameterModes[0] } : {}),
         returns: method.signature.returnType,
+        ...(error ? { error } : {}),
         asynchronous: method.signature.asynchronous,
         executorAffinity: method.signature.executorAffinity,
         receiverMode: method.receiverMode,
@@ -343,7 +370,9 @@ export function deriveZServiceManifest(metadata: ZProgramMetadata): ZServiceMani
       methods,
     };
   });
-  return { schemaVersion: 2, types, services };
+  const errors = types.filter((type) => errorNames.has(type.name));
+  const values = types.filter((type) => !errorNames.has(type.name));
+  return { schemaVersion: 3, types: values, errors, services };
 }
 
 export function zServiceMethodId(qualifiedName: string): number {

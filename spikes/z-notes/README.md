@@ -112,7 +112,10 @@ scope close/join all execute without a Stage 0 override.
 single implementation of `create`, `count`, JSON decoding, and JSON encoding.
 `NotesService` is the application-owned service. Its public `create` and
 `count` methods are the frontend API. `count` is a real main-executor `async`
-method, while `create` is synchronous Z; generated TypeScript bindings expose
+method, while `create` is synchronous Z and throws an exported
+`NoteCreationError` for an empty title. Generated dispatch preserves that
+declared Z error as a typed WebView failure with decoded `details`; it remains
+separate from cancellation's `AbortError`. Generated TypeScript bindings expose
 both service invocations uniformly as cancellable promises. The build now
 generates and installs its checked `AsyncService` dispatcher plus lifecycle
 forwarder into the isolated staged application. The original `main.zs` remains
@@ -182,8 +185,9 @@ bun run spike:z-notes
 
 The visible macOS app dynamically opens a second diagnostics window and stays
 open until both windows are closed. Click **Create a note in Z** to call the
-generated `notes.create` TypeScript binding and display the returned
-native-service value in the DOM. **Cancel a suspended request**
+generated `notes.create` TypeScript binding. Each path first verifies the
+generated `NoteCreationError` and its structured details, then displays the
+returned native-service value in the DOM. **Cancel a suspended request**
 starts `notes.count`, aborts it with a standard `AbortController` while the
 service is yielded, and then proves a later request still succeeds. Expected
 evidence after creating a note directly:

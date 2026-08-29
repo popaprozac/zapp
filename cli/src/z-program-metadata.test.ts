@@ -41,6 +41,19 @@ const metadata: ZProgramMetadata = {
         },
       },
       {
+        name: "NoteCreationError",
+        kind: "struct",
+        exported: true,
+        typeSignature: {
+          implementedTraits: [],
+          fields: [
+            { name: "message", typeName: "String", visibility: "public", optionalField: false },
+            { name: "title", typeName: "String", visibility: "public", optionalField: false },
+          ],
+          methods: [],
+        },
+      },
+      {
         name: "NotesService",
         kind: "class",
         exported: true,
@@ -59,7 +72,7 @@ const metadata: ZProgramMetadata = {
                 parameterModes: ["value"],
                 parameterTypes: ["CreateNoteInput"],
                 returnType: "Note",
-                errorType: null,
+                errorType: "NoteCreationError",
               },
             },
             {
@@ -129,7 +142,7 @@ const metadata: ZProgramMetadata = {
 describe("compiler-produced Z program metadata", () => {
   it("derives the typed service manifest without scanning Z source", () => {
     expect(deriveZServiceManifest(metadata)).toEqual({
-      schemaVersion: 2,
+      schemaVersion: 3,
       types: [
         {
           name: "CreateNoteInput",
@@ -145,6 +158,14 @@ describe("compiler-produced Z program metadata", () => {
           ],
         },
       ],
+      errors: [{
+        name: "NoteCreationError",
+        module: "/app.zs",
+        fields: [
+          { name: "message", type: "String" },
+          { name: "title", type: "String" },
+        ],
+      }],
       services: [{
         name: "notes",
         type: "NotesService",
@@ -165,6 +186,7 @@ describe("compiler-produced Z program metadata", () => {
             input: "CreateNoteInput",
             inputMode: "value",
             returns: "Note",
+            error: "NoteCreationError",
             asynchronous: false,
             executorAffinity: null,
             receiverMode: "in",
@@ -218,7 +240,7 @@ describe("compiler-produced Z program metadata", () => {
 
   it("fails closed when method execution metadata is absent", () => {
     const invalid = JSON.parse(JSON.stringify(metadata));
-    delete invalid.modules[0].symbols[2].typeSignature.methods[0]
+    delete invalid.modules[0].symbols[3].typeSignature.methods[0]
       .signature.executorAffinity;
     expect(() => parseZProgramMetadata(JSON.stringify(invalid)))
       .toThrow(/method 0 execution contract/);
@@ -229,6 +251,14 @@ describe("compiler-produced Z program metadata", () => {
     invalid.modules[0].calls[0].arguments[0] = { kind: "other", type: "String" };
     expect(() => deriveZServiceManifest(invalid))
       .toThrow(/requires a literal service name/);
+  });
+
+  it("fails closed when a throwing service method must suspend", () => {
+    const invalid = structuredClone(metadata);
+    invalid.modules[0].symbols[3].typeSignature!.methods[1].signature.errorType =
+      "NoteCreationError";
+    expect(() => deriveZServiceManifest(invalid))
+      .toThrow(/throwing suspending service method NotesService.count/);
   });
 
   it("ignores framework-internal builder delegation", () => {

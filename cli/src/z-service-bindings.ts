@@ -18,6 +18,7 @@ export interface ZServiceMethodMetadata {
   input?: string;
   inputMode?: string;
   returns: string;
+  error?: string;
   asynchronous: boolean;
   executorAffinity: string | null;
   receiverMode: "in" | "inout" | "move";
@@ -40,8 +41,9 @@ export interface ZServiceMetadata {
 }
 
 export interface ZServiceManifest {
-  schemaVersion: 2;
+  schemaVersion: 3;
   types: ZServiceTypeMetadata[];
+  errors: ZServiceTypeMetadata[];
   services: ZServiceMetadata[];
 }
 
@@ -87,8 +89,36 @@ function renderTypes(manifest: ZServiceManifest): string {
   }).join("\n\n");
 }
 
-function renderNamedCodecs(manifest: ZServiceManifest): string {
-  return manifest.types.map((type) => {
+function renderErrorTypes(manifest: ZServiceManifest): string {
+  return manifest.errors.map((type) => {
+    assertIdentifier(type.name, "service error type");
+    const details = `${type.name}Details`;
+    const fields = type.fields.map((field) => {
+      assertIdentifier(field.name, `${type.name} field`);
+      return `  ${field.name}: ${tsType(field.type)};`;
+    }).join("\n");
+    const defaultMessage = type.fields.some((field) => (
+      field.name === "message" && field.type === "String"
+    ))
+      ? "details.message"
+      : JSON.stringify(`Z service threw ${type.name}`);
+    return `export interface ${details} {\n${fields}\n}\n\n`
+      + `export class ${type.name} extends ZappError {\n`
+      + `  readonly details: ${details};\n\n`
+      + `  constructor(details: ${details}, message?: string) {\n`
+      + `    super({\n`
+      + `      code: "SERVICE_ERROR",\n`
+      + `      message: message ?? ${defaultMessage},\n`
+      + `    });\n`
+      + `    this.name = ${JSON.stringify(type.name)};\n`
+      + `    this.details = details;\n`
+      + `  }\n`
+      + `}`;
+  }).join("\n\n");
+}
+
+function renderNamedCodecs(types: ZServiceTypeMetadata[]): string {
+  return types.map((type) => {
     const decodeFields = type.fields.map((field) =>
       `    ${field.name}: ${codecName(field.type, "decode")}(record.${field.name}),`
     ).join("\n");
@@ -106,6 +136,59 @@ function encode${type.name}(value: ${type.name}): unknown {
   return {
 ${encodeFields}
   };
+}`;
+  }).join("\n\n");
+}
+
+function renderErrorCodecs(manifest: ZServiceManifest): string {
+  return manifest.errors.map((type) => {
+    const decoded = type.fields.map((field) =>
+      `    ${field.name}: ${codecName(field.type, "decode")}(record.${field.name}),`
+    ).join("\n");
+    const encoded = type.fields.map((field) =>
+      `    ${field.name}: ${codecName(field.type, "encode")}(value.details.${field.name}),`
+    ).join("\n");
+    return `function decode${type.name}Details(value: unknown): ${type.name}Details {
+  const record = decodeRecord(value);
+  return {
+${decoded}
+  };
+}
+
+function decode${type.name}(value: unknown): ${type.name} {
+  return new ${type.name}(decode${type.name}Details(value));
+}
+
+function encode${type.name}(value: ${type.name}): unknown {
+  return {
+${encoded}
+  };
+}`;
+  }).join("\n\n");
+}
+
+function errorDecoderName(method: ZServiceMethodMetadata): string {
+  return method.error ? `decode${method.error}Failure` : "undefined";
+}
+
+function renderMethodErrorDecoders(manifest: ZServiceManifest): string {
+  const errors = new Map(manifest.errors.map((error) => [error.name, error]));
+  return [...new Set(manifest.services.flatMap((service) => (
+    service.methods.flatMap((method) => method.error ? [method.error] : [])
+  )))].map((name) => {
+    const errorType = errors.get(name);
+    if (!errorType) {
+      throw new Error(`[zapp] missing service error metadata for ${JSON.stringify(name)}`);
+    }
+    const message = errorType.fields.some((field) => (
+      field.name === "message" && field.type === "String"
+    )) ? "details.message" : "error.message";
+    return `function decode${name}Failure(error: unknown): Error {
+  if (error instanceof ZappInvocationError && error.errorType === ${JSON.stringify(name)}) {
+    const details = decode${name}Details(error.details);
+    return new ${name}(details, ${message});
+  }
+  return error instanceof Error ? error : new Error(String(error));
 }`;
   }).join("\n\n");
 }
@@ -128,6 +211,7 @@ function renderService(service: ZServiceMetadata): string {
         options,
       ),
       ${codecName(method.returns, "decode")},
+      ${errorDecoderName(method)},
     );
   },`;
   }).join("\n\n");
@@ -135,13 +219,21 @@ function renderService(service: ZServiceMetadata): string {
 }
 
 export function renderZServiceBindings(manifest: ZServiceManifest): string {
-  if (manifest.schemaVersion !== 2) {
+  if (manifest.schemaVersion !== 3) {
     throw new Error(`[zapp] unsupported Z service metadata schema ${manifest.schemaVersion}`);
   }
   return `// AUTO-GENERATED from Z service metadata. Do not edit.
-import { Services, type CancellablePromise, type InvokeOptions } from "@zappdev/runtime";
+import {
+  Services,
+  ZappError,
+  ZappInvocationError,
+  type CancellablePromise,
+  type InvokeOptions,
+} from "@zappdev/runtime";
 
 ${renderTypes(manifest)}
+
+${renderErrorTypes(manifest)}
 
 function decodeRecord(value: unknown): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -189,20 +281,28 @@ function encodeI64(value: bigint): string { return value.toString(); }
 function mapCall<T>(
   source: CancellablePromise<unknown>,
   decode: (value: unknown) => T,
+  decodeError?: (error: unknown) => Error,
 ): CancellablePromise<T> {
-  const mapped = source.then(decode) as CancellablePromise<T>;
+  const mapped = source.then(
+    decode,
+    (error) => { throw decodeError ? decodeError(error) : error; },
+  ) as CancellablePromise<T>;
   mapped.cancel = () => source.cancel();
   return mapped;
 }
 
-${renderNamedCodecs(manifest)}
+${renderNamedCodecs(manifest.types)}
+
+${renderErrorCodecs(manifest)}
+
+${renderMethodErrorDecoders(manifest)}
 
 ${manifest.services.map(renderService).join("\n\n")}
 `;
 }
 
 function renderRuntimeCodecs(manifest: ZServiceManifest): string {
-  const named = manifest.types.map((type) => {
+  const named = [...manifest.types, ...manifest.errors].map((type) => {
     const decoded = type.fields.map((field) =>
       `${JSON.stringify(field.name)}: ${codecName(field.type, "decode")}(value[${JSON.stringify(field.name)}])`
     ).join(", ");
@@ -234,7 +334,17 @@ export function renderZServiceWebviewRuntime(manifest: ZServiceManifest): string
         : "{}";
       return `${JSON.stringify(method.name)}: (${parameter}) => map(
         bridge.invoke(${JSON.stringify(`${service.name}.${method.name}`)}, ${argumentsValue}, options),
-        ${codecName(method.returns, "decode")}
+        ${codecName(method.returns, "decode")},
+        ${method.error ? `error => {
+          if (error && error.errorType === ${JSON.stringify(method.error)}) {
+            error.name = ${JSON.stringify(method.error)};
+            error.details = decode${method.error}(error.details);
+            if (typeof error.details?.message === "string") {
+              error.message = error.details.message;
+            }
+          }
+          return error;
+        }` : "undefined"},
       )`;
     }).join(",\n");
     return `${JSON.stringify(service.name)}: {\n${methods}\n}`;
@@ -242,8 +352,10 @@ export function renderZServiceWebviewRuntime(manifest: ZServiceManifest): string
   return `
 (() => {
   const bridge = globalThis[Symbol.for("zapp.bridge")];
-  const map = (source, decode) => {
-    const mapped = source.then(decode);
+  const map = (source, decode, decodeError) => {
+    const mapped = source.then(decode, error => {
+      throw decodeError ? decodeError(error) : error;
+    });
     mapped.cancel = () => source.cancel();
     return mapped;
   };

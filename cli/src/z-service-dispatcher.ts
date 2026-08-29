@@ -180,6 +180,7 @@ ${fields}
 }
 
 function renderSyncMethodHelper(
+  serviceName: string,
   serviceType: string,
   method: ZServiceMethodMetadata,
 ): string {
@@ -196,6 +197,22 @@ function renderSyncMethodHelper(
     );
   }
   const call = `service.${method.name}(${inputCall(method)})`;
+  const invocation = method.error
+    ? `  const __called = attempt ${call};
+  const result = match (__called) {
+    success(value) => value;
+    failure(error) => {
+      const encodedError = __zappEncode${generatedName(method.error)}(move error);
+      return ServiceOutcome.typedFailure(ServiceTypedFailure({
+        service: ${JSON.stringify(serviceName)},
+        method: ${JSON.stringify(method.name)},
+        errorType: ${JSON.stringify(method.error)},
+        message: ${JSON.stringify(`${serviceName}.${method.name} threw ${method.error}`)},
+        details: json.stringify(in encodedError),
+      }));
+    }
+  };`
+    : `  const result = ${call};`;
   const decode = method.input
     ? `    const __parsed = attempt json.parse(in invocation.arguments);
     const __arguments = match (__parsed) {
@@ -219,7 +236,7 @@ function renderSyncMethodHelper(
   in service: ${serviceType},
   in invocation: ServiceInvocation
 ): ServiceOutcome {
-${decode}  const result = ${call};
+${decode}${invocation}
   const encoded = __zappEncode${generatedName(method.returns)}(
     ${moved(method.returns, "result")}
   );
@@ -244,6 +261,12 @@ function renderAsyncMethodHelpers(
   serviceType: string,
   method: ZServiceMethodMetadata,
 ): string {
+  if (method.error) {
+    throw new Error(
+      `[zapp] generated async Z dispatch cannot lower throwing method `
+      + `${serviceType}.${method.name} in the current fixed-point compiler tier`,
+    );
+  }
   if (method.receiverMode !== "in") {
     throw new Error(
       `[zapp] generated repeatable service dispatch requires an in receiver for `
@@ -300,7 +323,7 @@ function renderDispatcher(
   ));
   const synchronous = service.methods.filter((method) => !asynchronous.includes(method));
   const helpers = [
-    ...synchronous.map((method) => renderSyncMethodHelper(service.type, method)),
+    ...synchronous.map((method) => renderSyncMethodHelper(service.name, service.type, method)),
     ...asynchronous.map((method) => renderAsyncMethodHelpers(service.type, method)),
   ]
     .join("\n\n");
@@ -413,16 +436,18 @@ export function renderZServiceDispatchers(
   manifest: ZServiceManifest,
   options: RenderZServiceDispatchersOptions,
 ): string {
-  if (manifest.schemaVersion !== 2) {
+  if (manifest.schemaVersion !== 3) {
     throw new Error(`[zapp] unsupported Z service metadata schema ${manifest.schemaVersion}`);
   }
-  const namedTypes = new Map(manifest.types.map((type) => [type.name, type]));
+  const allTypes = [...manifest.types, ...manifest.errors];
+  const namedTypes = new Map(allTypes.map((type) => [type.name, type]));
   const decoded = new Set<string>();
   const encoded = new Set<string>();
   for (const service of manifest.services) {
     for (const method of service.methods) {
       if (method.input) collectType(method.input, namedTypes, decoded);
       collectType(method.returns, namedTypes, encoded);
+      if (method.error) collectType(method.error, namedTypes, encoded);
     }
   }
 
@@ -433,7 +458,7 @@ export function renderZServiceDispatchers(
     imports.set(module, names);
   };
   for (const service of manifest.services) addImport(service.module, service.type);
-  for (const type of manifest.types) {
+  for (const type of allTypes) {
     if (decoded.has(type.name) || encoded.has(type.name)) addImport(type.module, type.name);
   }
   const nativeImports = [...imports.entries()].sort(([left], [right]) => left.localeCompare(right))
@@ -446,14 +471,14 @@ export function renderZServiceDispatchers(
     .filter((type) => !namedTypes.has(type))
     .sort()
     .map(renderDecodeScalar);
-  const typeDecoders = manifest.types
+  const typeDecoders = allTypes
     .filter((type) => decoded.has(type.name))
     .map(renderDecodeType);
   const scalarEncoders = [...encoded]
     .filter((type) => !namedTypes.has(type))
     .sort()
     .map(renderEncodeScalar);
-  const typeEncoders = manifest.types
+  const typeEncoders = allTypes
     .filter((type) => encoded.has(type.name))
     .map(renderEncodeType);
 
@@ -462,7 +487,7 @@ import json from "std/json";
 import { JsonValue } from "std/json";
 import { Map } from "std/collections";
 import { thread } from "std/thread";
-import { ServiceInvocation, ServiceOutcome } from ${JSON.stringify(
+import { ServiceInvocation, ServiceOutcome, ServiceTypedFailure } from ${JSON.stringify(
     relativeModule(options.outputPath, options.serviceContractModule),
   )};
 ${manifest.services.some((service) => !zServiceUsesAsyncDispatch(service))

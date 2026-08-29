@@ -1,4 +1,7 @@
-import { routeMessageWithServices } from "../../../native/z/framework/bridge.zs";
+import {
+  bridgeTypedServiceFailure,
+  routeMessageWithServices,
+} from "../../../native/z/framework/bridge.zs";
 import { ServiceOutcome } from "../../../native/z/framework/service-contract.zs";
 import { createSyncNotesService } from "./sync-notes-service.zs";
 import {
@@ -68,5 +71,14 @@ export c function zapp_invoke_service_owned(
       false,
       contextId
     );
+    typedFailure(error) => {
+      const response = bridgeTypedServiceFailure(requestId, move error);
+      zapp_deliver_response_from_z(
+        response.payload,
+        response.id,
+        response.ok,
+        contextId
+      );
+    }
   }
 }

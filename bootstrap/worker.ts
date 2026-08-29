@@ -93,7 +93,8 @@
     if (ok) {
       try { p.resolve(payload ? JSON.parse(payload) : undefined); } catch { p.resolve(payload); }
     } else {
-      p.reject(new Error(payload));
+      const factory = (globalThis as any)[Symbol.for("zapp.errorFactory")];
+      p.reject(typeof factory === "function" ? factory(payload) : new Error(payload));
     }
   };
 

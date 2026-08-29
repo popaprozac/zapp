@@ -648,6 +648,7 @@ void zapp_desktop_window_discard(const char *window_id) {
           evaluateJavaScript:
             @"JSON.stringify({"
             @"roundTrip:document.body?.dataset?.roundTrip??null,"
+            @"typedError:document.body?.dataset?.typedError??null,"
             @"cancellation:document.body?.dataset?.cancellation??null,"
             @"health:document.body?.dataset?.health??null,"
             @"hmr:document.body?.dataset?.hmr??null,"
@@ -666,6 +667,7 @@ void zapp_desktop_window_discard(const char *window_id) {
               : @"\"hmr\":\"packaged\"";
             BOOL updated = [state isKindOfClass:[NSString class]]
               && [(NSString *)state containsString:@"\"roundTrip\":\"ok\""]
+              && [(NSString *)state containsString:@"\"typedError\":\"ok\""]
               && [(NSString *)state containsString:@"\"cancellation\":\"ok\""]
               && [(NSString *)state containsString:@"\"health\":\"ok\""]
               && [(NSString *)state containsString:@"\"inject\":\"ready\""]

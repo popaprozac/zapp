@@ -54,9 +54,25 @@ setTimeout(() => {
   document.body.dataset.inject = isolated ? "ready" : "error";
 }, 0);
 
+async function verifyTypedServiceError() {
+  try {
+    await services.notes.create({ title: "" });
+    throw new Error("Expected typed NoteCreationError");
+  } catch (error) {
+    if (
+      error?.name !== "NoteCreationError"
+      || error?.details?.message !== "a note title is required"
+    ) {
+      throw error;
+    }
+    document.body.dataset.typedError = "ok";
+  }
+}
+
 button.addEventListener("click", async () => {
   status.textContent = "Routing…";
   try {
+    await verifyTypedServiceError();
     const note = await services.notes.create({ title: "WebView note" });
     const empty = await services.notes.isEmpty();
     if (empty) throw new Error("Expected the created note");
@@ -75,6 +91,13 @@ button.addEventListener("click", async () => {
 
 cancelButton.addEventListener("click", async () => {
   status.textContent = "Starting cancellable work…";
+  try {
+    await verifyTypedServiceError();
+  } catch (error) {
+    status.textContent = `Failure\n${String(error)}`;
+    document.body.dataset.cancellation = "error";
+    return;
+  }
   const controller = new AbortController();
   const pending = services.notes.count({ signal: controller.signal });
   controller.abort("smoke cancellation");

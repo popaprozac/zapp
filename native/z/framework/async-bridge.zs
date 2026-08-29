@@ -4,6 +4,7 @@ import {
   BridgeResponse,
   bridgeFailure,
   bridgeSuccess,
+  bridgeTypedServiceFailure,
   decodeBridgeMessage,
 } from "./bridge.zs";
 import { AsyncServices } from "./async-services.zs";
@@ -54,6 +55,9 @@ export async function routeDecodedMessageWithServicesAsync(
         "SERVICE_ERROR",
         move error
       )
+    );
+    typedFailure(typedError) => Option.some(
+      bridgeTypedServiceFailure(message.id, move typedError)
     );
   };
 }

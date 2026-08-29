@@ -10,6 +10,10 @@ export interface ZappErrorPayload {
 export interface BridgeErrorPayload extends ZappErrorPayload {
   operation?: string;
   windowId?: string;
+  service?: string;
+  method?: string;
+  errorType?: string;
+  details?: unknown;
 }
 
 export class ZappError extends Error {
@@ -24,11 +28,19 @@ export class ZappError extends Error {
 
 export class ZappInvocationError extends ZappError {
   readonly permission?: string;
+  readonly service?: string;
+  readonly method?: string;
+  readonly errorType?: string;
+  readonly details?: unknown;
 
-  constructor(payload: ZappErrorPayload) {
+  constructor(payload: BridgeErrorPayload) {
     super(payload);
     this.name = "ZappInvocationError";
     this.permission = payload.permission;
+    this.service = payload.service;
+    this.method = payload.method;
+    this.errorType = payload.errorType;
+    this.details = payload.details;
   }
 }
 
@@ -96,6 +108,21 @@ export function errorFromBridgePayload(payload: string): Error {
           : {}),
         ...(typeof parsed.windowId === "string" && parsed.windowId.length > 0
           ? { windowId: parsed.windowId }
+          : {}),
+        ...(typeof parsed.service === "string" && parsed.service.length > 0
+          ? { service: parsed.service }
+          : {}),
+        ...(typeof parsed.method === "string" && parsed.method.length > 0
+          ? { method: parsed.method }
+          : {}),
+        ...(typeof parsed.errorType === "string" && parsed.errorType.length > 0
+          ? { errorType: parsed.errorType }
+          : {}),
+        ...(typeof parsed.details === "string" && parsed.details.length > 0
+          ? { details: (() => {
+            try { return JSON.parse(parsed.details as string); }
+            catch { return parsed.details; }
+          })() }
           : {}),
       };
       const factory = bridgeErrorFactories.get(normalized.code);

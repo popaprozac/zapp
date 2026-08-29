@@ -76,6 +76,19 @@
       if (typeof parsed.permission === "string" && parsed.permission.length > 0) {
         error.permission = parsed.permission;
       }
+      if (typeof parsed.service === "string" && parsed.service.length > 0) {
+        error.service = parsed.service;
+      }
+      if (typeof parsed.method === "string" && parsed.method.length > 0) {
+        error.method = parsed.method;
+      }
+      if (typeof parsed.errorType === "string" && parsed.errorType.length > 0) {
+        error.errorType = parsed.errorType;
+      }
+      if (typeof parsed.details === "string" && parsed.details.length > 0) {
+        try { error.details = JSON.parse(parsed.details); }
+        catch { error.details = parsed.details; }
+      }
       return error;
     }
     const error: any = new Error(payload);

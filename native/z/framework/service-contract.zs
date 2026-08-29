@@ -6,9 +6,18 @@ export struct ServiceInvocation {
   arguments: String;
 }
 
+export struct ServiceTypedFailure {
+  service: String;
+  method: String;
+  errorType: String;
+  message: String;
+  details: String;
+}
+
 export enum ServiceOutcome {
   success String,
   failure String,
+  typedFailure ServiceTypedFailure,
 }
 
 export type ServiceHandler =

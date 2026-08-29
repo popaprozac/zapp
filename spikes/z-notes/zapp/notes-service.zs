@@ -13,10 +13,21 @@ import {
 } from "./notes-core.zs";
 import console from "std/console";
 
+export struct NoteCreationError {
+  message: String;
+  title: String;
+}
+
 export readonly class NotesService implements ServiceLifecycle {
   readonly core: NotesCore;
 
-  function create(input: CreateNoteInput): Note {
+  function create(input: CreateNoteInput): Note throws NoteCreationError {
+    if (input.title.byteLength == 0) {
+      throw NoteCreationError({
+        message: "a note title is required",
+        title: "",
+      });
+    }
     return this.core.create(move input);
   }
 
