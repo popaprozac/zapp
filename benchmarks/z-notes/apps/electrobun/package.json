@@ -1,0 +1,10 @@
+{
+  "name": "z-notes-benchmark-electrobun",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@types/bun": "1.4.0",
+    "typescript": "5.9.3"
+  }
+}

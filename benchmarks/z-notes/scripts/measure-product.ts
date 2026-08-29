@@ -31,6 +31,16 @@ const targets: Record<string, ProductTarget> = {
     ready: "/tmp/z-notes-benchmark-electron.ready",
     result: "/tmp/z-notes-benchmark-electron.result.json",
   },
+  electrobun: {
+    bundle: resolve(
+      import.meta.dir,
+      "../apps/electrobun/build/stable-macos-arm64/z-notes-benchmark-electrobun.app",
+    ),
+    database: "/tmp/z-notes-benchmark-electrobun.sqlite3",
+    control: "/tmp/z-notes-benchmark-electrobun.control",
+    ready: "/tmp/z-notes-benchmark-electrobun.ready",
+    result: "/tmp/z-notes-benchmark-electrobun.result.json",
+  },
   tauri: {
     bundle: resolve(
       import.meta.dir,
@@ -57,7 +67,7 @@ const name = process.argv[2];
 const runs = Number.parseInt(process.argv[3] ?? "7", 10);
 const target = targets[name];
 if (!target) {
-  console.error("usage: bun run bench:z-notes:product <zapp|electron|tauri|wails> [runs]");
+  console.error("usage: bun run bench:z-notes:product <zapp|electron|electrobun|tauri|wails> [runs]");
   process.exit(2);
 }
 if (!Number.isSafeInteger(runs) || runs < 1) {
@@ -107,6 +117,30 @@ async function waitFor(path: string, timeoutMs: number): Promise<void> {
   throw new Error(`${name} timed out waiting for ${path}`);
 }
 
+async function waitForReport(
+  path: string,
+  timeoutMs: number,
+): Promise<{ iterations: number; durationMs: number }> {
+  const deadline = performance.now() + timeoutMs;
+  let lastError: unknown = null;
+  while (performance.now() < deadline) {
+    if (existsSync(path)) {
+      try {
+        return JSON.parse(await readFile(path, "utf8")) as {
+          iterations: number;
+          durationMs: number;
+        };
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    await Bun.sleep(2);
+  }
+  throw new Error(`${name} timed out waiting for valid JSON at ${path}`, {
+    cause: lastError,
+  });
+}
+
 async function sample(): Promise<{ readyMs: number; workflowMs: number }> {
   await cleanSample();
   const started = Bun.nanoseconds();
@@ -117,11 +151,7 @@ async function sample(): Promise<{ readyMs: number; workflowMs: number }> {
   if (await launched.exited !== 0) throw new Error(`could not launch ${name}`);
   await waitFor(target.ready, 20_000);
   const readyMs = Number(Bun.nanoseconds() - started) / 1_000_000;
-  await waitFor(target.result, 60_000);
-  const report = JSON.parse(await readFile(target.result, "utf8")) as {
-    iterations: number;
-    durationMs: number;
-  };
+  const report = await waitForReport(target.result, 60_000);
   if (report.iterations !== 100 || !Number.isFinite(report.durationMs)) {
     throw new Error(`${name} produced an invalid workflow report`);
   }

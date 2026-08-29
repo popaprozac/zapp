@@ -2,9 +2,9 @@
 
 ## 2026-08-29 first peer checkpoint
 
-This is the first cross-framework evidence checkpoint, not yet a complete
-verdict. Zapp, Electron, Tauri, and Wails now package the same shared product
-workload; Electrobun remains to be added before publishing a full table.
+This is the first complete cross-framework product checkpoint, not a final
+verdict. Zapp, Electron, Electrobun, Tauri, and Wails now package the same
+shared workload through their current production paths.
 
 Machine:
 
@@ -17,6 +17,7 @@ Machine:
 - Rust/Cargo 1.97.1
 - Go 1.25.0
 - Wails 3.0.0-beta.16 and `@wailsio/runtime` 3.0.0-beta.16
+- Electrobun 2.0.1 stable and Cottontail 0.5.0
 
 Commands:
 
@@ -26,12 +27,15 @@ bun run bench:z-notes:zapp:build
 bun run bench:z-notes:zapp:measure 3
 bun run bench:z-notes:electron:build
 bun run bench:z-notes:electron:measure 3
+bun run bench:z-notes:electrobun:build
+bun run bench:z-notes:electrobun:measure 3
 bun run bench:z-notes:tauri:build
 bun run bench:z-notes:tauri:measure 3
 bun run bench:z-notes:wails:build
 bun run bench:z-notes:wails:measure 3
 bun run bench:z-notes:product zapp 7
 bun run bench:z-notes:product electron 7
+bun run bench:z-notes:product electrobun 7
 bun run bench:z-notes:product tauri 7
 bun run bench:z-notes:product wails 7
 ```
@@ -42,6 +46,7 @@ Initial release artifact:
 |---|---:|---:|---:|---:|---:|
 | Zapp (Z core) | 281,536 B | 913,408 B | 613,092 B | 104 ms | 24 MB |
 | Electron 41.2 | 178,890,304 B | 277,377,024 B | 272,259 B | 102 ms | 111 MB |
+| Electrobun 2.0.1 | 18,075,963 B | 20,496,384 B | 73,709 B | 98 ms | 209 MB |
 | Tauri 2.11 | 10,839,632 B | 11,476,992 B | 627,078 B | 105 ms | 26 MB |
 | Wails 3.0.0-beta.16 | 8,750,208 B | 9,060,352 B | 65,857 B | 118 ms | 31 MB |
 
@@ -57,6 +62,11 @@ Wails' system-WebView bundle is about 9.9 times larger than Zapp's and its idle
 process uses 31 MB versus Zapp's 24 MB. Its executable is smaller than Tauri's
 in this build, while both remain substantially larger than Zapp's direct native
 core.
+
+Electrobun's self-extracting shipping bundle is about 22.4 times larger than
+Zapp's. The executable-payload column reports its 18.08 MB compressed runtime
+archive rather than the 775 KB launcher. After extraction, the measured
+Cottontail/WebView process tree idles at 209 MB in this workload.
 
 `*` Three measured launches after the harness prime/warm-up behavior. The
 historical harness records process appearance, not the new shared UI ready
@@ -74,13 +84,15 @@ iterations through the public frontend adapter.
 |---|---:|---:|
 | Zapp (Z core) | 341.557 ms | 153.0 ms |
 | Electron 41.2 | 377.077 ms | 101.8 ms |
+| Electrobun 2.0.1 | 907.102 ms | 3,608.0 ms |
 | Tauri 2.11 | 391.093 ms | 164.0 ms |
 | Wails 3.0.0-beta.16 | 379.655 ms | 245.0 ms |
 
 Zapp reaches the actual shared ready point about 36 ms before Electron and
 about 50 ms before Tauri in this sample. It reaches ready about 38 ms before
 Wails. Electron completes the current workflow about 51 ms earlier; Tauri takes
-about 11 ms longer than Zapp, and Wails takes about 92 ms longer.
+about 11 ms longer than Zapp, Wails takes about 92 ms longer, and Electrobun
+takes about 3,455 ms longer.
 
 This rerun follows the addition of recursive generated `Array<T>` service
 codecs and removal of Z Notes' nested-JSON workaround. The Z service now
@@ -97,6 +109,8 @@ Zapp ready:    371.407, 341.491, 341.557, 340.127, 340.663, 344.664, 431.875 ms
 Zapp workflow: 165, 162, 144, 136, 153, 139, 187 ms
 Electron ready:    412.354, 366.976, 375.411, 388.243, 371.683, 377.077, 389.399 ms
 Electron workflow: 107.5, 90.2, 101.8, 116.3, 107.8, 84.4, 99.2 ms
+Electrobun ready:    890.967, 961.695, 889.651, 907.102, 880.531, 953.544, 909.657 ms
+Electrobun workflow: 3606, 3614, 3608, 3586, 3622, 3615, 3594 ms
 Tauri ready:    406.936, 395.544, 378.522, 383.382, 381.615, 392.119, 391.093 ms
 Tauri workflow: 187, 159, 162, 183, 164, 154, 167 ms
 Wails ready:    372.358, 379.655, 369.203, 382.548, 399.678, 363.463, 397.758 ms
@@ -106,8 +120,9 @@ Wails workflow: 256, 226, 212, 246, 245, 231, 278 ms
 Each packaged app's first shared-UI load created its isolated SQLite database
 and the same two canonical seed rows. Zapp uses checked direct `sqlite3.h`
 interop and no handwritten native shim; Electron uses Node's built-in SQLite
-module behind an isolated preload bridge; Tauri uses system SQLite behind
-typed Rust commands; Wails uses Apple SDK SQLite behind generated TypeScript
+module behind an isolated preload bridge; Electrobun uses Cottontail's
+`bun:sqlite` behind typed RPC; Tauri uses system SQLite behind typed Rust
+commands; Wails uses Apple SDK SQLite behind generated TypeScript
 bindings and typed Go service methods. `otool` confirms the Wails executable
 links `/usr/lib/libsqlite3.dylib`, rather than the Homebrew library selected by
 `go-sqlite3`'s default Darwin-arm64 external-library path.
@@ -138,3 +153,10 @@ Building this first real workload closed or exposed these general seams:
   bindings, the shared frontend without product-specific benchmark shortcuts,
   and the same database lifecycle. It establishes a fourth end-to-end product
   point without relying on the repository's older Wails alpha floor fixture.
+- The Electrobun peer uses the current 2.0.1 stable Hutch workflow and
+  Cottontail main process rather than adapting the repository's 1.16 floor
+  fixture. Its first-launch extraction is primed outside reported product
+  samples, while the shipping table captures the pristine archive first.
+- The product runner now waits for valid JSON rather than file existence alone,
+  closing a cross-process partial-write race. The artifact harness recognizes
+  self-extracting archives structurally, independent of launcher size.

@@ -1,0 +1,6 @@
+.hutch/
+artifacts/
+build/
+dist/
+node_modules/
+*.tsbuildinfo

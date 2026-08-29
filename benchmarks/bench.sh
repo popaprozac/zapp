@@ -106,13 +106,12 @@ if [[ "$BINARY_BYTES" -lt 524288 ]] && [[ -d "$BUNDLE/Contents/Frameworks" ]]; t
     fi
 fi
 
-# Electrobun ships a self-extracting bundle: Contents/MacOS/launcher is a
-# small stub (~180 KB) that extracts a .tar.zst archive in Contents/Resources/
-# at first launch. The real shipping weight is the compressed archive, so
-# report that instead of the stub. We keep this detection separate from the
-# Electron framework one because electrobun's payload lives in Resources/,
-# not Frameworks/.
-if [[ "$BINARY_BYTES" -lt 524288 ]] && [[ -d "$BUNDLE/Contents/Resources" ]]; then
+# Electrobun ships a self-extracting bundle: Contents/MacOS/launcher extracts
+# a .tar.zst archive in Contents/Resources/ at first launch. The real shipping
+# payload is the compressed archive, so report it whenever it is larger than
+# the launcher. Detection is structural rather than launcher-size based:
+# Electrobun 2's launcher is already larger than the old 512 KB heuristic.
+if [[ -d "$BUNDLE/Contents/Resources" ]]; then
     arch_file=$(find "$BUNDLE/Contents/Resources" -maxdepth 1 -name "*.tar.zst" -type f 2>/dev/null \
         | awk '{ cmd="stat -f%z \""$0"\""; cmd | getline sz; close(cmd); print sz"\t"$0 }' \
         | sort -rn | head -1 | cut -f2)

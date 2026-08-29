@@ -58,6 +58,9 @@ not an explanatory footnote.
   service bindings, and embedded assets.
 - `apps/electron`: isolated preload bridge, Electron IPC, and Node's built-in
   SQLite implementation. Its package step stages the exact shared UI sources.
+- `apps/electrobun`: Electrobun 2.0.1 stable, Cottontail main process, typed
+  Electrobun RPC, `bun:sqlite`, system WebView, and a self-extracting release
+  bundle.
 - `apps/tauri`: production Tauri 2.11 system WebView, typed Rust commands, and
   system SQLite through `rusqlite`.
 - `apps/wails`: Wails 3.0.0-beta.16 system WebView, generated TypeScript
@@ -72,12 +75,15 @@ bun run bench:z-notes:zapp:build
 bun run bench:z-notes:zapp:measure 15
 bun run bench:z-notes:electron:build
 bun run bench:z-notes:electron:measure 15
+bun run bench:z-notes:electrobun:build
+bun run bench:z-notes:electrobun:measure 15
 bun run bench:z-notes:tauri:build
 bun run bench:z-notes:tauri:measure 15
 bun run bench:z-notes:wails:build
 bun run bench:z-notes:wails:measure 15
 bun run bench:z-notes:product zapp 7
 bun run bench:z-notes:product electron 7
+bun run bench:z-notes:product electrobun 7
 bun run bench:z-notes:product tauri 7
 bun run bench:z-notes:product wails 7
 ```
