@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Z Notes</title>
+    <link rel="stylesheet" href="./shared/app.css" />
+    <script type="module" src="./renderer.js"></script>
+  </head>
+  <body>
+    <main>
+      <aside>
+        <h1>Z Notes</h1>
+        <p>One native notes workload, implemented across desktop frameworks.</p>
+        <ul id="notes"></ul>
+      </aside>
+      <section>
+        <h2>New note</h2>
+        <form id="create-note">
+          <label>Title <input id="title" required value="A measured note" /></label>
+          <label>Body <textarea id="body" required>Created through the native service bridge.</textarea></label>
+          <button id="submit" type="submit">Create note</button>
+          <p id="status" role="status">Loading…</p>
+        </form>
+      </section>
+    </main>
+  </body>
+</html>

@@ -1,5 +1,3 @@
-import "./app.css";
-
 function requireAdapter(adapter) {
   if (!adapter || typeof adapter.list !== "function" || typeof adapter.create !== "function") {
     throw new TypeError("Z Notes requires a list/create framework adapter");

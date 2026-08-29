@@ -20,6 +20,8 @@
     "spike:z-webview:sanitize": "bun run spikes/z-notes/sanitize.ts",
     "bench:z-notes:zapp:build": "bun run benchmarks/z-notes/scripts/build-zapp.ts",
     "bench:z-notes:zapp:measure": "bun run benchmarks/z-notes/scripts/measure-zapp.ts",
+    "bench:z-notes:electron:build": "bun run benchmarks/z-notes/scripts/build-electron.ts",
+    "bench:z-notes:electron:measure": "bun run benchmarks/z-notes/scripts/measure-electron.ts",
     "bench:z-notes:reset": "bun run benchmarks/z-notes/scripts/reset.ts"
   },
   "devDependencies": {

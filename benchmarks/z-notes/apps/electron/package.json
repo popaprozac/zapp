@@ -1,0 +1,17 @@
+{
+  "name": "z-notes-benchmark-electron",
+  "productName": "Z Notes Benchmark Electron",
+  "version": "0.1.0",
+  "private": true,
+  "main": "src/index.js",
+  "scripts": {
+    "stage": "bun run scripts/stage-shared.ts",
+    "package": "bun run stage && electron-forge package"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@electron-forge/cli": "7.11.1",
+    "@electron-forge/plugin-auto-unpack-natives": "7.11.1",
+    "electron": "41.2.0"
+  }
+}

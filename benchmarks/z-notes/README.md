@@ -56,6 +56,8 @@ not an explanatory footnote.
 
 - `apps/zapp`: Z native core, checked direct `sqlite3.h` import, typed generated
   service bindings, and embedded assets.
+- `apps/electron`: isolated preload bridge, Electron IPC, and Node's built-in
+  SQLite implementation. Its package step stages the exact shared UI sources.
 
 Build and measure the first implementation with:
 
@@ -63,6 +65,8 @@ Build and measure the first implementation with:
 bun run bench:z-notes:reset
 bun run bench:z-notes:zapp:build
 bun run bench:z-notes:zapp:measure 15
+bun run bench:z-notes:electron:build
+bun run bench:z-notes:electron:measure 15
 ```
 
 The rolling evidence and caveats live in [`RESULTS.md`](RESULTS.md).

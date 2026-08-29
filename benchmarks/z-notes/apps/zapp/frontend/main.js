@@ -1,4 +1,5 @@
 import { mountNotesApp } from "../../../shared/app.js";
+import "../../../shared/app.css";
 
 const notes = globalThis.__zappServices.notes;
 
