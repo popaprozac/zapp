@@ -1,0 +1,18 @@
+[package]
+name = "z-notes-benchmark-tauri"
+version = "0.1.0"
+description = "Z Notes product benchmark for Tauri"
+authors = ["popaprozac <zbotterman@gmail.com>"]
+edition = "2021"
+
+[lib]
+name = "z_notes_benchmark_tauri_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "=2.6.3", features = [] }
+
+[dependencies]
+rusqlite = "=0.37.0"
+serde = { version = "1.0", features = ["derive"] }
+tauri = { version = "=2.11.5", features = [] }

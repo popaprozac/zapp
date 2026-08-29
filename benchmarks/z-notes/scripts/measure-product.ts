@@ -31,13 +31,23 @@ const targets: Record<string, ProductTarget> = {
     ready: "/tmp/z-notes-benchmark-electron.ready",
     result: "/tmp/z-notes-benchmark-electron.result.json",
   },
+  tauri: {
+    bundle: resolve(
+      import.meta.dir,
+      "../apps/tauri/src-tauri/target/release/bundle/macos/Z Notes Benchmark Tauri.app",
+    ),
+    database: "/tmp/z-notes-benchmark-tauri.sqlite3",
+    control: "/tmp/z-notes-benchmark-tauri.control",
+    ready: "/tmp/z-notes-benchmark-tauri.ready",
+    result: "/tmp/z-notes-benchmark-tauri.result.json",
+  },
 };
 
 const name = process.argv[2];
 const runs = Number.parseInt(process.argv[3] ?? "7", 10);
 const target = targets[name];
 if (!target) {
-  console.error("usage: bun run bench:z-notes:product <zapp|electron> [runs]");
+  console.error("usage: bun run bench:z-notes:product <zapp|electron|tauri> [runs]");
   process.exit(2);
 }
 if (!Number.isSafeInteger(runs) || runs < 1) {

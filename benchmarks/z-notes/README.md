@@ -58,6 +58,8 @@ not an explanatory footnote.
   service bindings, and embedded assets.
 - `apps/electron`: isolated preload bridge, Electron IPC, and Node's built-in
   SQLite implementation. Its package step stages the exact shared UI sources.
+- `apps/tauri`: production Tauri 2.11 system WebView, typed Rust commands, and
+  system SQLite through `rusqlite`.
 
 Build and measure the first implementation with:
 
@@ -67,8 +69,11 @@ bun run bench:z-notes:zapp:build
 bun run bench:z-notes:zapp:measure 15
 bun run bench:z-notes:electron:build
 bun run bench:z-notes:electron:measure 15
+bun run bench:z-notes:tauri:build
+bun run bench:z-notes:tauri:measure 15
 bun run bench:z-notes:product zapp 7
 bun run bench:z-notes:product electron 7
+bun run bench:z-notes:product tauri 7
 ```
 
 The product runner creates an isolated control file, resets that framework's

@@ -3,8 +3,8 @@
 ## 2026-08-29 first peer checkpoint
 
 This is the first cross-framework evidence checkpoint, not yet a complete
-verdict. Zapp and Electron now package the same shared product workload;
-Tauri, Wails, and Electrobun remain to be added before publishing a full table.
+verdict. Zapp, Electron, and Tauri now package the same shared product workload;
+Wails and Electrobun remain to be added before publishing a full table.
 
 Machine:
 
@@ -14,6 +14,7 @@ Machine:
 - Z 0.1.0-dev, compiler revision 2026-08-25.1, compiler API 2
 - Apple Clang 17.0.0
 - Bun 1.3.14
+- Rust/Cargo 1.97.1
 
 Commands:
 
@@ -23,8 +24,11 @@ bun run bench:z-notes:zapp:build
 bun run bench:z-notes:zapp:measure 3
 bun run bench:z-notes:electron:build
 bun run bench:z-notes:electron:measure 3
+bun run bench:z-notes:tauri:build
+bun run bench:z-notes:tauri:measure 3
 bun run bench:z-notes:product zapp 7
 bun run bench:z-notes:product electron 7
+bun run bench:z-notes:product tauri 7
 ```
 
 Initial release artifact:
@@ -33,11 +37,15 @@ Initial release artifact:
 |---|---:|---:|---:|---:|---:|
 | Zapp (Z core) | 281,520 B | 913,408 B | 613,092 B | 99 ms | 23 MB |
 | Electron 41.2 | 178,890,304 B | 277,377,024 B | 272,259 B | 102 ms | 111 MB |
+| Tauri 2.11 | 10,839,632 B | 11,476,992 B | 627,078 B | 105 ms | 26 MB |
 
 At this checkpoint Electron's bundle is about 304 times larger and its idle
 process tree uses about 4.8 times the memory. Electron's executable payload is
 the shipped Electron Framework binary rather than its tiny loader stub, using
 the same historical harness rule.
+
+Tauri's system-WebView bundle is about 12.6 times larger than Zapp's while its
+idle memory is close: 26 MB versus 23 MB in these samples.
 
 `*` Three measured launches after the harness prime/warm-up behavior. The
 historical harness records process appearance, not the new shared UI ready
@@ -55,6 +63,7 @@ iterations through the public frontend adapter.
 |---|---:|---:|
 | Zapp (Z core) | 344.442 ms | 154.0 ms |
 | Electron 41.2 | 377.077 ms | 101.8 ms |
+| Tauri 2.11 | 391.093 ms | 164.0 ms |
 
 Zapp reaches the actual shared ready point about 33 ms earlier in this sample.
 Electron completes the current workflow about 52 ms earlier. The latter is a
@@ -64,6 +73,8 @@ encodes the list into a JSON string inside `NotesPage`, the outer generated
 bridge serializes that page, and the frontend parses the inner JSON again.
 Electron transfers the array directly through its ordinary structured IPC.
 The benchmark should be rerun unchanged when generated collection codecs land.
+Tauri's typed command path is close to Zapp on the product workflow in this
+sample while reaching the shared ready marker about 47 ms later.
 
 The exact seven-run samples were:
 
@@ -72,12 +83,15 @@ Zapp ready:    352.099, 345.405, 340.210, 331.451, 337.737, 344.442, 348.145 ms
 Zapp workflow: 159, 169, 165, 151, 154, 149, 143 ms
 Electron ready:    412.354, 366.976, 375.411, 388.243, 371.683, 377.077, 389.399 ms
 Electron workflow: 107.5, 90.2, 101.8, 116.3, 107.8, 84.4, 99.2 ms
+Tauri ready:    406.936, 395.544, 378.522, 383.382, 381.615, 392.119, 391.093 ms
+Tauri workflow: 187, 159, 162, 183, 164, 154, 167 ms
 ```
 
 Each packaged app's first shared-UI load created its isolated SQLite database
 and the same two canonical seed rows. Zapp uses checked direct `sqlite3.h`
 interop and no handwritten native shim; Electron uses Node's built-in SQLite
-module behind an isolated preload bridge.
+module behind an isolated preload bridge; Tauri uses system SQLite behind
+typed Rust commands.
 
 The icon is reported separately because it is 67% of Zapp's initial bundle.
 Both implementations consume the same source artwork; their packaging-format
