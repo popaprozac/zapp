@@ -67,16 +67,16 @@ function invokeRegisteredAsyncServiceLifecycle<
   };
 }
 
-export struct ConfiguredServices {
+internal struct ConfiguredServices {
   routes: Services;
   asynchronous: readonly Map<String, AsyncServiceHandler>;
   lifecycles: ServiceLifecycles;
 }
 
 export struct ApplicationServicesBuilder {
-  routes: ServicesBuilder;
-  asynchronous: AsyncServiceRegistry;
-  lifecycles: ServiceLifecycleBuilder;
+  internal routes: ServicesBuilder;
+  internal asynchronous: AsyncServiceRegistry;
+  internal lifecycles: ServiceLifecycleBuilder;
 
   // Compiler/build marker for one ordinary application-owned service. Zapp's
   // generated build overlay adapts this checked call to the matching runtime
@@ -142,7 +142,7 @@ export struct ApplicationServicesBuilder {
     this.lifecycles.add(move name, hook);
   }
 
-  function freezeConfigured(
+  internal function freezeConfigured(
     move this
   ): ConfiguredServices on thread.main {
     const { routes, asynchronous, lifecycles } = move this;
@@ -154,7 +154,7 @@ export struct ApplicationServicesBuilder {
   }
 }
 
-export function createApplicationServices(
+internal function createApplicationServices(
 ): ApplicationServicesBuilder on thread.main {
   return ApplicationServicesBuilder({
     routes: createServices(),

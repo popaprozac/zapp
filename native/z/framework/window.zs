@@ -17,21 +17,21 @@ struct WindowRecord {
   options: WindowOptions;
 }
 
-export type WindowCreateOperation = (
+internal type WindowCreateOperation = (
   in id: String,
   in options: WindowOptions
 ) => void throws WindowError on thread.main;
 
-export type WindowOperation = (
+internal type WindowOperation = (
   in id: String
 ) => void on thread.main;
 
-export type WindowTitleOperation = (
+internal type WindowTitleOperation = (
   in id: String,
   in title: String
 ) => void on thread.main;
 
-export struct WindowBackend {
+internal struct WindowBackend {
   create: WindowCreateOperation;
   show: WindowOperation;
   hide: WindowOperation;
@@ -63,50 +63,48 @@ function inactiveWindowBackend(): WindowBackend on thread.main {
 
 export readonly class Window {
   readonly id: String;
-  readonly __manager: Weak<WindowManager>;
+  internal readonly manager: Weak<WindowManager>;
 
-  static function __create(
+  internal constructor(
     id: String,
     manager: Weak<WindowManager>
-  ): Window on thread.main {
-    return new Window({
-      id: move id,
-      __manager: manager,
-    });
+  ) {
+    this.id = move id;
+    this.manager = manager;
   }
 
   function show(): void on thread.main {
     const id = copy this.id;
-    const current = attempt this.__manager.upgrade();
+    const current = attempt this.manager.upgrade();
     match (current) {
-      success(manager) => manager.__show(in id);
+      success(manager) => manager.show(in id);
       failure(_) => {}
     }
   }
 
   function hide(): void on thread.main {
     const id = copy this.id;
-    const current = attempt this.__manager.upgrade();
+    const current = attempt this.manager.upgrade();
     match (current) {
-      success(manager) => manager.__hide(in id);
+      success(manager) => manager.hide(in id);
       failure(_) => {}
     }
   }
 
   function close(): void on thread.main {
     const id = copy this.id;
-    const current = attempt this.__manager.upgrade();
+    const current = attempt this.manager.upgrade();
     match (current) {
-      success(manager) => manager.__close(in id);
+      success(manager) => manager.close(in id);
       failure(_) => {}
     }
   }
 
   function setTitle(title: String): void on thread.main {
     const id = copy this.id;
-    const current = attempt this.__manager.upgrade();
+    const current = attempt this.manager.upgrade();
     match (current) {
-      success(manager) => manager.__setTitle(in id, move title);
+      success(manager) => manager.setTitle(in id, move title);
       failure(_) => {}
     }
   }
@@ -118,15 +116,6 @@ class WindowManagerState on thread.main {
   backend: WindowBackend;
   active: boolean;
 
-  static function __create(): WindowManagerState on thread.main {
-    return new WindowManagerState({
-      windows: Map<String, WindowRecord>(),
-      nextId: 1,
-      backend: inactiveWindowBackend(),
-      active: false,
-    });
-  }
-
   function create(
     inout this,
     owner: Weak<WindowManager>,
@@ -134,7 +123,7 @@ class WindowManagerState on thread.main {
   ): Window throws WindowError {
     const id = `win-${this.nextId}`;
     this.nextId = this.nextId + 1;
-    const window = Window.__create(copy id, owner);
+    const window = new Window(copy id, owner);
     if (this.active) try this.backend.create(in id, in options);
     this.windows.set(
       move id,
@@ -163,7 +152,7 @@ class WindowManagerState on thread.main {
     return result;
   }
 
-  function __show(inout this, in id: String): void {
+  function show(inout this, in id: String): void {
     const found = this.windows.remove(id);
     match (found) {
       some(record) => {
@@ -176,7 +165,7 @@ class WindowManagerState on thread.main {
     }
   }
 
-  function __hide(inout this, in id: String): void {
+  function hide(inout this, in id: String): void {
     const found = this.windows.remove(id);
     match (found) {
       some(record) => {
@@ -189,18 +178,18 @@ class WindowManagerState on thread.main {
     }
   }
 
-  function __close(inout this, in id: String): void {
+  function close(inout this, in id: String): void {
     if (this.active && this.windows.has(id)) {
       this.backend.close(in id);
     }
     this.windows.delete(id);
   }
 
-  function __closedNative(inout this, in id: String): void {
+  function closedNative(inout this, in id: String): void {
     this.windows.delete(id);
   }
 
-  function __setTitle(
+  function setTitle(
     inout this,
     in id: String,
     title: String
@@ -217,7 +206,7 @@ class WindowManagerState on thread.main {
     }
   }
 
-  function __options(in id: String): Option<WindowOptions> {
+  function options(in id: String): Option<WindowOptions> {
     const found = this.windows.get(id);
     return match (in found) {
       some(record) => Option.some(copy record.options);
@@ -225,7 +214,7 @@ class WindowManagerState on thread.main {
     };
   }
 
-  function __start(
+  function start(
     inout this,
     backend: WindowBackend,
     realizePending: boolean
@@ -240,17 +229,26 @@ class WindowManagerState on thread.main {
     }
   }
 
-  function __stop(inout this): void {
+  function stop(inout this): void {
     this.active = false;
     this.backend = inactiveWindowBackend();
   }
 }
 
-export readonly class WindowManager on thread.main {
-  readonly __state: WindowManagerState;
+function createWindowManagerState(): WindowManagerState on thread.main {
+  return new WindowManagerState({
+    windows: Map<String, WindowRecord>(),
+    nextId: 1,
+    backend: inactiveWindowBackend(),
+    active: false,
+  });
+}
 
-  static function __create(): WindowManager on thread.main {
-    return new WindowManager({ __state: WindowManagerState.__create() });
+export readonly class WindowManager on thread.main {
+  internal readonly state: WindowManagerState;
+
+  internal constructor() {
+    this.state = createWindowManagerState();
   }
 
   function create(
@@ -258,60 +256,60 @@ export readonly class WindowManager on thread.main {
     options: WindowOptions
   ): Window throws WindowError on thread.main {
     const owner = weak this;
-    return try this.__state.create(owner, options);
+    return try this.state.create(owner, options);
   }
 
   function get(in id: String): Option<Window> on thread.main {
-    return this.__state.get(in id);
+    return this.state.get(in id);
   }
 
   function all(): Array<Window> on thread.main {
-    return this.__state.all();
+    return this.state.all();
   }
 
-  function __show(inout this, in id: String): void on thread.main {
-    this.__state.__show(in id);
+  internal function show(inout this, in id: String): void on thread.main {
+    this.state.show(in id);
   }
 
-  function __hide(inout this, in id: String): void on thread.main {
-    this.__state.__hide(in id);
+  internal function hide(inout this, in id: String): void on thread.main {
+    this.state.hide(in id);
   }
 
-  function __close(inout this, in id: String): void on thread.main {
-    this.__state.__close(in id);
+  internal function close(inout this, in id: String): void on thread.main {
+    this.state.close(in id);
   }
 
-  function __closedNative(inout this, in id: String): void on thread.main {
-    this.__state.__closedNative(in id);
+  internal function closedNative(inout this, in id: String): void on thread.main {
+    this.state.closedNative(in id);
   }
 
-  function __setTitle(
+  internal function setTitle(
     inout this,
     in id: String,
     title: String
   ): void on thread.main {
-    this.__state.__setTitle(in id, move title);
+    this.state.setTitle(in id, move title);
   }
 
-  function __options(
+  internal function options(
     in id: String
   ): Option<WindowOptions> on thread.main {
-    return this.__state.__options(in id);
+    return this.state.options(in id);
   }
 
-  function __start(
+  internal function start(
     inout this,
     backend: WindowBackend,
     realizePending: boolean
   ): void throws WindowError on thread.main {
-    try this.__state.__start(backend, realizePending);
+    try this.state.start(backend, realizePending);
   }
 
-  function __stop(inout this): void on thread.main {
-    this.__state.__stop();
+  internal function stop(inout this): void on thread.main {
+    this.state.stop();
   }
 }
 
-export function createWindowManager(): WindowManager on thread.main {
-  return WindowManager.__create();
+internal function createWindowManager(): WindowManager on thread.main {
+  return new WindowManager();
 }

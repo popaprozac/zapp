@@ -283,6 +283,14 @@ describe("Z native host inputs", () => {
       new URL("../../native/z/framework/service-lifecycle.zs", import.meta.url),
       "utf8",
     );
+    const windows = readFileSync(
+      new URL("../../native/z/framework/window.zs", import.meta.url),
+      "utf8",
+    );
+    const applicationServices = readFileSync(
+      new URL("../../native/z/framework/application-services.zs", import.meta.url),
+      "utf8",
+    );
 
     expect(app).toContain("let app = Application();");
     expect(application).toContain(
@@ -318,6 +326,12 @@ describe("Z native host inputs", () => {
     expect(lifecycles).toContain("function stop(");
     expect(lifecycles).toContain("while (rollback > 0)");
     expect(lifecycles).toContain("while (remaining > 0)");
+    expect(windows).toContain("internal constructor(");
+    expect(windows).toContain("internal readonly manager: Weak<WindowManager>");
+    expect(windows).toContain("internal readonly state: WindowManagerState");
+    expect(windows).not.toMatch(/\b__[A-Za-z]/);
+    expect(applicationServices).toContain("internal struct ConfiguredServices");
+    expect(applicationServices).toContain("internal function freezeConfigured(");
   });
 
   it("freezes value services into an arbitrary-thread callable router", () => {

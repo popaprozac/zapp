@@ -26,7 +26,7 @@ function runWindowManagerSmoke(): i32 throws WindowError on thread.main {
   if (foundId != "win-1") return 3;
 
   primary.hide();
-  const hidden = windows.__options(primary.id);
+  const hidden = windows.options(primary.id);
   const isHidden = match (hidden) {
     some(options) => !options.visible;
     none => false;
@@ -35,7 +35,7 @@ function runWindowManagerSmoke(): i32 throws WindowError on thread.main {
 
   primary.show();
   primary.setTitle("Renamed");
-  const updated = windows.__options(primary.id);
+  const updated = windows.options(primary.id);
   const isVisible = match (in updated) {
     some(options) => options.visible;
     none => false;

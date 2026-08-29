@@ -126,7 +126,7 @@ class MacOSApplicationRuntime {
     // unwound its autorelease pools. The native registry stops routing to the
     // closed window immediately; releasing this graph from windowWillClose
     // would tear it down while AppKit is still closing it.
-    this.windowManager.__closedNative(in id);
+    this.windowManager.closedNative(in id);
   }
 
   function beginRequest(
@@ -233,11 +233,11 @@ export async function runMacOSApplication(
     updates,
     windows
   );
-  const realized = attempt windows.__start(macOSWindowBackend(), true);
+  const realized = attempt windows.start(macOSWindowBackend(), true);
   match (realized) {
     success => {}
     failure(windowError) => {
-      windows.__stop();
+      windows.stop();
       native.zapp_desktop_abort();
       throw ApplicationError.window(windowError);
     }
@@ -246,13 +246,13 @@ export async function runMacOSApplication(
   match (started) {
     success => {}
     failure(startError) => {
-      windows.__stop();
+      windows.stop();
       native.zapp_desktop_abort();
       throw ApplicationError.lifecycle(startError);
     }
   }
   const status = native.zapp_desktop_run();
-  windows.__stop();
+  windows.stop();
   await updates.cancel();
   const stopped = attempt config.lifecycles.stop(in context);
   match (stopped) {

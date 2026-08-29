@@ -318,6 +318,13 @@ export readonly class NotesService implements ServiceLifecycle {
 }
 ```
 
+The same package boundary protects manager construction. Public `Window` and
+`WindowManager` identities remain valid API result and field types, but their
+constructors and back-references are `internal`; applications create windows
+through `app.windows.create(...)` rather than assembling framework state. Zapp
+therefore uses readable implementation names without publishing `__`-prefixed
+escape hatches.
+
 Only `create` and `count` become generated frontend methods. No author-facing
 `invoke`, transport type, route table, or `AsyncService` conformance remains.
 Registration owns the service name, so the service does not duplicate its
