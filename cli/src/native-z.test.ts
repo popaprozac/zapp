@@ -168,6 +168,27 @@ describe("Z native host inputs", () => {
         zapp: { path: "/workspace/native/z" },
       },
     });
+    expect(JSON.parse(renderZNativeManifest(
+      "desktop",
+      "/app/main.zs",
+      "/native",
+      "/workspace/native/z",
+      {
+        includeDirectories: ["/vendor/include"],
+        directories: ["/vendor/lib"],
+        libraries: ["sqlite3", "compression"],
+        frameworks: ["Security"],
+      },
+    ))).toMatchObject({
+      target: {
+        includeDirectories: ["/native", "/vendor/include"],
+        link: {
+          directories: ["/native", "/vendor/lib"],
+          libraries: ["zapp_desktop_host", "compression", "sqlite3"],
+          frameworks: ["Security"],
+        },
+      },
+    });
   });
 
   it("keeps the strict C bridge on the minimal manifest", () => {

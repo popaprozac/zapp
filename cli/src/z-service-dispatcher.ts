@@ -131,6 +131,18 @@ function renderEncodeScalar(type: string): string {
   return JsonValue.string(\`${"${value}"}\`);
 }`;
   }
+  if (/^i(8|16|32)$/.test(type)) {
+    const suffix = generatedName(type);
+    return `function __zappEncode${suffix}(value: ${type}): JsonValue {
+  return JsonValue.number(JsonNumber.fromI64(i64(value)));
+}`;
+  }
+  if (/^u(8|16|32)$/.test(type) || type === "usize") {
+    const suffix = generatedName(type);
+    return `function __zappEncode${suffix}(value: ${type}): JsonValue {
+  return JsonValue.number(JsonNumber.fromU64(u64(value)));
+}`;
+  }
   throw new Error(
     `[zapp] generated Z dispatch does not encode scalar ${JSON.stringify(type)} yet`,
   );
@@ -484,7 +496,7 @@ export function renderZServiceDispatchers(
 
   return `// AUTO-GENERATED from checked Z service metadata. Do not edit.
 import json from "std/json";
-import { JsonValue } from "std/json";
+import { JsonNumber, JsonValue } from "std/json";
 import { Map } from "std/collections";
 import { thread } from "std/thread";
 import { ServiceInvocation, ServiceOutcome, ServiceTypedFailure } from ${JSON.stringify(

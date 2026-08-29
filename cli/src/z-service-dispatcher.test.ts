@@ -25,6 +25,7 @@ const manifest: ZServiceManifest = {
     name: "NoteCreationError",
     module: "/workspace/app/notes-core.zs",
     fields: [
+      { name: "code", type: "i32" },
       { name: "message", type: "String" },
       { name: "title", type: "String" },
     ],
@@ -94,6 +95,10 @@ describe("generated Z service dispatch", () => {
     expect(source).toContain("some(handler) => return await handler(move service)");
     expect(source).toContain("__zappDecodeCreateNoteInput");
     expect(source).toContain("__zappEncodeNote");
+    expect(source).toContain("import { JsonNumber, JsonValue } from \"std/json\";");
+    expect(source).toContain(
+      "JsonValue.number(JsonNumber.fromI64(i64(value)))",
+    );
     expect(source).toContain('ServiceOutcome.failure("UNKNOWN_METHOD")');
     expect(source).toContain(
       "class __ZappNotesServiceAdapter implements AsyncService, ServiceLifecycle",

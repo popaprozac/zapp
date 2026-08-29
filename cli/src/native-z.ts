@@ -23,6 +23,13 @@ export interface ZNativeStageFile {
   destination: string;
 }
 
+export interface ZNativeLinkRequirements {
+  includeDirectories?: string[];
+  directories?: string[];
+  libraries?: string[];
+  frameworks?: string[];
+}
+
 interface ZCompilerContract extends ZCompilerIdentity {}
 
 interface BuildNativeZOptions {
@@ -230,17 +237,30 @@ export function renderZNativeManifest(
   entry: string,
   nativeDirectory = ".",
   packageDirectory?: string,
+  application: ZNativeLinkRequirements = {},
 ): string {
+  const unique = (values: string[]): string[] => [...new Set(values)];
   const target = host === "desktop"
     ? {
       name: "zapp_core",
       entry,
       platform: "macos",
       minimumVersion: "14.0",
-      includeDirectories: [nativeDirectory],
+      includeDirectories: unique([
+        nativeDirectory,
+        ...(application.includeDirectories ?? []),
+      ]),
       link: {
-        directories: [nativeDirectory],
-        libraries: ["zapp_desktop_host", "compression"],
+        directories: unique([
+          nativeDirectory,
+          ...(application.directories ?? []),
+        ]),
+        libraries: unique([
+          "zapp_desktop_host",
+          "compression",
+          ...(application.libraries ?? []),
+        ]),
+        frameworks: unique(application.frameworks ?? []),
       },
     }
     : {
@@ -259,6 +279,52 @@ export function renderZNativeManifest(
     ...(dependencies ? { dependencies } : {}),
     target,
   }, null, 2)}\n`;
+}
+
+function manifestStringList(value: unknown, label: string): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+    throw new Error(`[zapp] ${label} in zapp/z.json must be an array of strings`);
+  }
+  return value;
+}
+
+async function readZApplicationLinkRequirements(
+  appSource: string,
+): Promise<ZNativeLinkRequirements> {
+  const manifestPath = path.join(appSource, "z.json");
+  if (!existsSync(manifestPath)) return {};
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
+    target?: {
+      includeDirectories?: unknown;
+      link?: {
+        directories?: unknown;
+        libraries?: unknown;
+        frameworks?: unknown;
+      };
+    };
+  };
+  const absolute = (values: string[]): string[] => values.map((directory) => (
+    path.isAbsolute(directory) ? directory : path.resolve(appSource, directory)
+  ));
+  return {
+    includeDirectories: absolute(manifestStringList(
+      manifest.target?.includeDirectories,
+      "target.includeDirectories",
+    )),
+    directories: absolute(manifestStringList(
+      manifest.target?.link?.directories,
+      "target.link.directories",
+    )),
+    libraries: manifestStringList(
+      manifest.target?.link?.libraries,
+      "target.link.libraries",
+    ),
+    frameworks: manifestStringList(
+      manifest.target?.link?.frameworks,
+      "target.link.frameworks",
+    ),
+  };
 }
 
 export function renderZWebviewBootstrapC(source: string): string {
@@ -359,6 +425,9 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
       `Expected ${zNativeEntry(host)} under the project's zapp/ directory.`,
     );
   }
+  const applicationLinkRequirements = await readZApplicationLinkRequirements(
+    appSource,
+  );
   const appRelative = path.relative(repositoryRoot, appSource);
   if (appRelative.startsWith("..") || path.isAbsolute(appRelative)) {
     throw new Error(
@@ -407,6 +476,7 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
       appEntry,
       stage,
       path.join(workspace, "native", "z"),
+      applicationLinkRequirements,
     ),
     "utf8",
   );

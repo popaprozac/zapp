@@ -1,0 +1,14 @@
+{
+  "dependencies": {
+    "zapp": { "path": "../../../../../native/z" }
+  },
+  "target": {
+    "name": "z-notes-benchmark",
+    "entry": "main.zs",
+    "platform": "macos",
+    "minimumVersion": "14.0",
+    "link": {
+      "libraries": ["sqlite3"]
+    }
+  }
+}

@@ -741,11 +741,6 @@ async function runPackage(root: string) {
     clogError("package is currently macOS-only.");
     process.exit(1);
   }
-  if (nativeLanguage() === "z") {
-    throw new Error(
-      "[zapp] packaging the Z native core is not implemented yet; use `zapp build` to produce the native executable.",
-    );
-  }
 
   // Run a full build first
   const config = await runBuild(root, "package");
