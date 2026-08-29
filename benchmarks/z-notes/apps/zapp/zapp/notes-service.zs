@@ -1,5 +1,6 @@
 import console from "std/console";
 import fs from "std/fs";
+import { thread } from "std/thread";
 import {
   ApplicationContext,
   ServiceLifecycle,
