@@ -183,4 +183,51 @@ describe("generated Z service dispatch", () => {
     expect(source).toContain("return Option.some(move handler)");
     expect(source).toContain("some(handler) => return await handler(move service)");
   });
+
+  it("generates checked native codecs for arrays of service structs", () => {
+    const collections = structuredClone(manifest);
+    collections.types.push({
+      name: "NotesPage",
+      module: "/workspace/app/notes-core.zs",
+      fields: [
+        { name: "notes", type: "Array<Note>" },
+        { name: "pages", type: "Array<Array<Note>>" },
+      ],
+    });
+    collections.services[0].methods.push({
+      id: 1,
+      name: "list",
+      returns: "NotesPage",
+      asynchronous: false,
+      executorAffinity: null,
+      receiverMode: "in",
+    });
+    collections.services[0].methods.push({
+      id: 2,
+      name: "replace",
+      input: "NotesPage",
+      inputMode: "value",
+      returns: "u64",
+      asynchronous: false,
+      executorAffinity: null,
+      receiverMode: "in",
+    });
+    const source = renderZServiceDispatchers(collections, {
+      outputPath: "/workspace/generated/service-dispatchers.zs",
+      serviceContractModule: "/workspace/framework/service-contract.zs",
+      servicesModule: "/workspace/framework/services.zs",
+      asyncServiceContractModule: "/workspace/framework/async-service-contract.zs",
+      serviceLifecycleContractModule: "/workspace/framework/service-lifecycle-contract.zs",
+    });
+    expect(source).toContain("function __zappEncodeArrayOfNote(");
+    expect(source).toContain("value: Array<Note>");
+    expect(source).toContain("__zappEncodeNote(copy element)");
+    expect(source).toContain("function __zappEncodeArrayOfArrayOfNote(");
+    expect(source).toContain("__zappEncodeArrayOfNote(copy element)");
+    expect(source).toContain("__zappEncodeArrayOfNote(move notes)");
+    expect(source).toContain("function __zappDecodeArrayOfNote(");
+    expect(source).toContain("decoded.push(try __zappDecodeNote(in element))");
+    expect(source).toContain("function __zappDecodeU64(");
+    expect(source).toContain('expected an exact u64 string');
+  });
 });

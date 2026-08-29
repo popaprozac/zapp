@@ -35,17 +35,17 @@ Initial release artifact:
 
 | Framework | Executable payload | App bundle | Icon | Process startup* | Idle RSS |
 |---|---:|---:|---:|---:|---:|
-| Zapp (Z core) | 281,520 B | 913,408 B | 613,092 B | 99 ms | 23 MB |
+| Zapp (Z core) | 281,536 B | 913,408 B | 613,092 B | 104 ms | 24 MB |
 | Electron 41.2 | 178,890,304 B | 277,377,024 B | 272,259 B | 102 ms | 111 MB |
 | Tauri 2.11 | 10,839,632 B | 11,476,992 B | 627,078 B | 105 ms | 26 MB |
 
 At this checkpoint Electron's bundle is about 304 times larger and its idle
-process tree uses about 4.8 times the memory. Electron's executable payload is
+process tree uses about 4.6 times the memory. Electron's executable payload is
 the shipped Electron Framework binary rather than its tiny loader stub, using
 the same historical harness rule.
 
 Tauri's system-WebView bundle is about 12.6 times larger than Zapp's while its
-idle memory is close: 26 MB versus 23 MB in these samples.
+idle memory is close: 26 MB versus 24 MB in these samples.
 
 `*` Three measured launches after the harness prime/warm-up behavior. The
 historical harness records process appearance, not the new shared UI ready
@@ -61,26 +61,27 @@ iterations through the public frontend adapter.
 
 | Framework | Launch to shared UI ready | 100 create + refresh iterations |
 |---|---:|---:|
-| Zapp (Z core) | 344.442 ms | 154.0 ms |
+| Zapp (Z core) | 341.557 ms | 153.0 ms |
 | Electron 41.2 | 377.077 ms | 101.8 ms |
 | Tauri 2.11 | 391.093 ms | 164.0 ms |
 
-Zapp reaches the actual shared ready point about 33 ms earlier in this sample.
-Electron completes the current workflow about 52 ms earlier. The latter is a
-useful exposed limitation, not a reason to distort the peer adapter: Zapp's
-generated service layer cannot yet carry `Array<Note>`, so the Z service first
-encodes the list into a JSON string inside `NotesPage`, the outer generated
-bridge serializes that page, and the frontend parses the inner JSON again.
-Electron transfers the array directly through its ordinary structured IPC.
-The benchmark should be rerun unchanged when generated collection codecs land.
-Tauri's typed command path is close to Zapp on the product workflow in this
-sample while reaching the shared ready marker about 47 ms later.
+Zapp reaches the actual shared ready point about 36 ms before Electron and
+about 50 ms before Tauri in this sample. Electron completes the current
+workflow about 51 ms earlier; Tauri takes about 11 ms longer than Zapp.
+
+This rerun follows the addition of recursive generated `Array<T>` service
+codecs and removal of Z Notes' nested-JSON workaround. The Z service now
+returns `NotesPage { notes: Array<Note>, count }`, generated TypeScript exposes
+`notes: Array<Note>`, and the frontend consumes it directly. The workflow
+median moved from 154 ms to 153 ms, so the prior nested-JSON explanation was
+not the material source of Electron's lead at this workload size. That gap now
+requires bridge-level profiling rather than another inferred explanation.
 
 The exact seven-run samples were:
 
 ```text
-Zapp ready:    352.099, 345.405, 340.210, 331.451, 337.737, 344.442, 348.145 ms
-Zapp workflow: 159, 169, 165, 151, 154, 149, 143 ms
+Zapp ready:    371.407, 341.491, 341.557, 340.127, 340.663, 344.664, 431.875 ms
+Zapp workflow: 165, 162, 144, 136, 153, 139, 187 ms
 Electron ready:    412.354, 366.976, 375.411, 388.243, 371.683, 377.077, 389.399 ms
 Electron workflow: 107.5, 90.2, 101.8, 116.3, 107.8, 84.4, 99.2 ms
 Tauri ready:    406.936, 395.544, 378.522, 383.382, 381.615, 392.119, 391.093 ms
@@ -109,5 +110,9 @@ Building this first real workload closed or exposed these general seams:
 - The fixed-point compiler now preserves status-returning C handle cleanup,
   borrowed C-string inputs, explicit null-only parameters, safe `i32` to `i64`
   widening, borrowed character-pointer casts, and `String.from(cstring)`.
-- Generated `Array<Struct>` service codecs remain an explicit limitation; the
-  first adapter carries its list through a typed `NotesPage.notesJson` field.
+- Generated Z service codecs now carry recursive `Array<T>` shapes, including
+  arrays nested in exported structs. Native Z dispatch, generated TypeScript,
+  and the injected WebView runtime share the compiler-derived wire shape.
+- Removing the handwritten nested-JSON list path did not materially change the
+  100-operation median. The remaining Electron workflow lead is now a concrete
+  bridge-profiling target rather than attributed to collection serialization.

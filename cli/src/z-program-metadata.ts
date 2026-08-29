@@ -1,4 +1,8 @@
-import type { ZServiceManifest, ZServiceTypeMetadata } from "./z-service-bindings";
+import {
+  zArrayElementType,
+  type ZServiceManifest,
+  type ZServiceTypeMetadata,
+} from "./z-service-bindings";
 
 interface ZProgramFieldMetadata {
   name: string;
@@ -186,6 +190,17 @@ function addWireType(
   seen: Set<string>,
 ): void {
   if (scalarTypes.has(name) || seen.has(name)) return;
+  const arrayElement = zArrayElementType(name);
+  if (arrayElement) {
+    addWireType(metadata, arrayElement, types, seen);
+    return;
+  }
+  if (name.includes("<") || name.includes(">")) {
+    throw new Error(
+      `[zapp] generic service wire type ${JSON.stringify(name)} is not supported yet; `
+      + "Array<T> is the supported collection wire shape",
+    );
+  }
   const { module, symbol } = publicType(metadata, name);
   if (symbol.kind !== "struct" || !symbol.typeSignature) {
     throw new Error(

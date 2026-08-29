@@ -228,6 +228,38 @@ describe("compiler-produced Z program metadata", () => {
     });
   });
 
+  it("derives Array<T> service shapes without treating Array as a nominal export", () => {
+    const collections = structuredClone(metadata);
+    const service = collections.modules[0].symbols.find(
+      (symbol) => symbol.name === "NotesService",
+    )!;
+    service.typeSignature!.methods.push({
+      name: "list",
+      staticMethod: false,
+      visibility: "public",
+      receiverMode: "in",
+      signature: {
+        asynchronous: false,
+        executorAffinity: null,
+        parameterModes: [],
+        parameterTypes: [],
+        returnType: "Array<Note>",
+        errorType: null,
+      },
+    });
+
+    const derived = deriveZServiceManifest(collections);
+    expect(derived.services[0].methods).toContainEqual({
+      id: zServiceMethodId("notes.list"),
+      name: "list",
+      returns: "Array<Note>",
+      asynchronous: false,
+      executorAffinity: null,
+      receiverMode: "in",
+    });
+    expect(derived.types.filter((type) => type.name === "Note")).toHaveLength(1);
+  });
+
   it("assigns stable static method IDs", () => {
     expect(zServiceMethodId("notes.create")).toBe(3_539_395_672);
     expect(zServiceMethodId("notes.count")).toBe(1_604_992_403);

@@ -7,7 +7,7 @@ const benchmarkMode = await notes.benchmarkMode();
 await mountNotesApp({
   async list() {
     const page = await notes.list();
-    return JSON.parse(page.notesJson);
+    return page.notes;
   },
   async create(input) {
     const note = await notes.create(input);

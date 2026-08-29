@@ -10,7 +10,7 @@ export struct CreateNoteInput {
 }
 
 export struct NotesPage {
-  notesJson: String;
+  notes: Array<Note>;
   count: u64;
 }
 

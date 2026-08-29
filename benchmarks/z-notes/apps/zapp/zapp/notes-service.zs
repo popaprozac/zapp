@@ -1,5 +1,3 @@
-import { JsonValue, stringify } from "std/json";
-import { Map } from "std/collections";
 import console from "std/console";
 import fs from "std/fs";
 import {
@@ -45,19 +43,6 @@ function storageError(code: i32): NoteStorageError {
   });
 }
 
-function encodeNotes(in notes: Array<Note>): String {
-  let encodedNotes = Array<JsonValue>();
-  for (const note of notes) {
-    let fields = Map<String, JsonValue>();
-    fields.set("id", JsonValue.string(`${note.id}`));
-    fields.set("title", JsonValue.string(copy note.title));
-    fields.set("body", JsonValue.string(copy note.body));
-    encodedNotes.push(JsonValue.object(move fields));
-  }
-  const value = JsonValue.array(move encodedNotes);
-  return stringify(in value);
-}
-
 export readonly class NotesService implements ServiceLifecycle {
   readonly databasePath: String;
 
@@ -70,7 +55,7 @@ export readonly class NotesService implements ServiceLifecycle {
     };
     const count = u64(notes.length);
     return NotesPage({
-      notesJson: encodeNotes(in notes),
+      notes: move notes,
       count,
     });
   }

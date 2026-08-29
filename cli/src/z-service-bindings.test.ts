@@ -95,4 +95,53 @@ describe("Z service binding generation", () => {
       'decodeU64(value["id"])',
     );
   });
+
+  it("generates recursive Array<T> wire codecs for typed service values", () => {
+    const collections = structuredClone(manifest);
+    collections.types.push({
+      name: "NotesPage",
+      module: "/app.zs",
+      fields: [
+        { name: "notes", type: "Array<Note>" },
+        { name: "pages", type: "Array<Array<Note>>" },
+        { name: "counts", type: "Array<i32>" },
+      ],
+    });
+    collections.services[0].methods.push({
+      id: 1,
+      name: "list",
+      returns: "NotesPage",
+      asynchronous: false,
+      executorAffinity: null,
+      receiverMode: "in",
+    });
+
+    const bindings = renderZServiceBindings(collections);
+    expect(bindings).toContain("notes: Array<Note>;");
+    expect(bindings).toContain("pages: Array<Array<Note>>;");
+    expect(bindings).toContain("counts: Array<number>;");
+    expect(bindings).toContain("function decodeArrayOfNote(value: unknown): Array<Note>");
+    expect(bindings).toContain(
+      "function decodeArrayOfArrayOfNote(value: unknown): Array<Array<Note>>",
+    );
+    expect(bindings).toContain("notes: decodeArrayOfNote(record.notes)");
+    expect(bindings).toContain("return value.map(decodeNumber)");
+
+    const runtime = renderZServiceWebviewRuntime(collections);
+    expect(runtime).toContain("const decodeArrayOfNote = value =>");
+    expect(runtime).toContain("return value.map(decodeNote)");
+    expect(runtime).toContain("const encodeArrayOfArrayOfNote = value =>");
+  });
+
+  it("fails closed when nominal and collection codec names collide", () => {
+    const invalid = structuredClone(manifest);
+    invalid.types.push({
+      name: "ArrayOfNote",
+      module: "/app.zs",
+      fields: [{ name: "notes", type: "Array<Note>" }],
+    });
+    expect(() => renderZServiceBindings(invalid)).toThrow(
+      /produce the same generated codec name "ArrayOfNote"/,
+    );
+  });
 });

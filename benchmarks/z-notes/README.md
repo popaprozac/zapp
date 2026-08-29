@@ -85,9 +85,8 @@ are removed even when a measurement fails.
 
 The rolling evidence and caveats live in [`RESULTS.md`](RESULTS.md).
 
-The first Zapp checkpoint deliberately exposes a current generator boundary:
-`Array<Note>` is not yet a supported generated service wire type. The native
-service therefore returns a typed `NotesPage` containing exact JSON for the
-list, and the Zapp adapter parses it. Other implementations must use the same
-logical adapter contract; once Zapp gains collection codecs, this workaround is
-removed and called out in the next result revision.
+Zapp's generated service boundary carries `NotesPage.notes` as
+`Array<Note>` directly. The checked native dispatcher, generated TypeScript,
+and injected WebView runtime derive recursive collection codecs from the same
+compiler-produced service metadata; the application contains no handwritten
+list serialization.

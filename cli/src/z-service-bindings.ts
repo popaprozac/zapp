@@ -55,7 +55,36 @@ function assertIdentifier(value: string, description: string): void {
   }
 }
 
+export function zArrayElementType(type: string): string | null {
+  if (!type.startsWith("Array<") || !type.endsWith(">")) return null;
+  const element = type.slice("Array<".length, -1).trim();
+  if (element.length === 0) {
+    throw new Error("[zapp] Array service wire types require an element type");
+  }
+  let depth = 0;
+  for (const character of element) {
+    if (character === "<") depth += 1;
+    if (character === ">") depth -= 1;
+    if (depth < 0) {
+      throw new Error(`[zapp] malformed service wire type ${JSON.stringify(type)}`);
+    }
+  }
+  if (depth !== 0) {
+    throw new Error(`[zapp] malformed service wire type ${JSON.stringify(type)}`);
+  }
+  return element;
+}
+
+export function zWireCodecSuffix(type: string): string {
+  const element = zArrayElementType(type);
+  if (element) return `ArrayOf${zWireCodecSuffix(element)}`;
+  assertIdentifier(type, "service type");
+  return type[0].toUpperCase() + type.slice(1);
+}
+
 function tsType(type: string): string {
+  const element = zArrayElementType(type);
+  if (element) return `Array<${tsType(element)}>`;
   if (type === "String") return "string";
   if (type === "boolean") return "boolean";
   if (type === "u64" || type === "i64") return "bigint";
@@ -74,8 +103,70 @@ function codecName(type: string, operation: "decode" | "encode"): string {
   if (/^[ui](8|16|32)$/.test(type) || type === "usize" || type === "f64") {
     return `${operation}Number`;
   }
-  assertIdentifier(type, "service type");
-  return `${operation}${type}`;
+  return `${operation}${zWireCodecSuffix(type)}`;
+}
+
+function collectArrayType(type: string, selected: Set<string>): void {
+  const element = zArrayElementType(type);
+  if (!element) return;
+  collectArrayType(element, selected);
+  selected.add(type);
+}
+
+function manifestArrayTypes(manifest: ZServiceManifest): string[] {
+  const selected = new Set<string>();
+  for (const type of [...manifest.types, ...manifest.errors]) {
+    for (const field of type.fields) collectArrayType(field.type, selected);
+  }
+  for (const service of manifest.services) {
+    for (const method of service.methods) {
+      if (method.input) collectArrayType(method.input, selected);
+      collectArrayType(method.returns, selected);
+      if (method.error) collectArrayType(method.error, selected);
+    }
+  }
+  return [...selected];
+}
+
+export function assertZServiceCodecNames(manifest: ZServiceManifest): void {
+  const owners = new Map<string, string>([
+    ["String", "built-in String"],
+    ["Boolean", "built-in boolean"],
+    ["Number", "built-in number"],
+    ["U64", "built-in u64"],
+    ["I64", "built-in i64"],
+  ]);
+  const wireTypes = [
+    ...manifest.types.map((type) => type.name),
+    ...manifest.errors.map((type) => type.name),
+    ...manifestArrayTypes(manifest),
+  ];
+  for (const type of wireTypes) {
+    const suffix = zWireCodecSuffix(type);
+    const previous = owners.get(suffix);
+    if (previous && previous !== type) {
+      throw new Error(
+        `[zapp] service wire types ${JSON.stringify(previous)} and ${JSON.stringify(type)} `
+        + `produce the same generated codec name ${JSON.stringify(suffix)}`,
+      );
+    }
+    owners.set(suffix, type);
+  }
+}
+
+function renderArrayCodecs(manifest: ZServiceManifest): string {
+  return manifestArrayTypes(manifest).map((type) => {
+    const element = zArrayElementType(type)!;
+    const suffix = zWireCodecSuffix(type);
+    return `function decode${suffix}(value: unknown): ${tsType(type)} {
+  if (!Array.isArray(value)) throw new TypeError("expected an array from Z service");
+  return value.map(${codecName(element, "decode")});
+}
+
+function encode${suffix}(value: ${tsType(type)}): unknown[] {
+  return value.map(${codecName(element, "encode")});
+}`;
+  }).join("\n\n");
 }
 
 function renderTypes(manifest: ZServiceManifest): string {
@@ -222,6 +313,7 @@ export function renderZServiceBindings(manifest: ZServiceManifest): string {
   if (manifest.schemaVersion !== 3) {
     throw new Error(`[zapp] unsupported Z service metadata schema ${manifest.schemaVersion}`);
   }
+  assertZServiceCodecNames(manifest);
   return `// AUTO-GENERATED from Z service metadata. Do not edit.
 import {
   Services,
@@ -293,6 +385,8 @@ function mapCall<T>(
 
 ${renderNamedCodecs(manifest.types)}
 
+${renderArrayCodecs(manifest)}
+
 ${renderErrorCodecs(manifest)}
 
 ${renderMethodErrorDecoders(manifest)}
@@ -312,6 +406,15 @@ function renderRuntimeCodecs(manifest: ZServiceManifest): string {
     return `  const decode${type.name} = value => ({ ${decoded} });\n`
       + `  const encode${type.name} = value => ({ ${encoded} });`;
   }).join("\n");
+  const arrays = manifestArrayTypes(manifest).map((type) => {
+    const element = zArrayElementType(type)!;
+    const suffix = zWireCodecSuffix(type);
+    return `  const decode${suffix} = value => {
+    if (!Array.isArray(value)) throw new TypeError("expected an array from Z service");
+    return value.map(${codecName(element, "decode")});
+  };\n`
+      + `  const encode${suffix} = value => value.map(${codecName(element, "encode")});`;
+  }).join("\n");
   return `  const decodeString = value => value;
   const encodeString = value => value;
   const decodeBoolean = value => value;
@@ -322,10 +425,12 @@ function renderRuntimeCodecs(manifest: ZServiceManifest): string {
   const encodeU64 = value => value.toString();
   const decodeI64 = value => BigInt(value);
   const encodeI64 = value => value.toString();
-${named}`;
+${named}
+${arrays}`;
 }
 
 export function renderZServiceWebviewRuntime(manifest: ZServiceManifest): string {
+  assertZServiceCodecNames(manifest);
   const services = manifest.services.map((service) => {
     const methods = service.methods.map((method) => {
       const parameter = method.input ? "input, options" : "options";

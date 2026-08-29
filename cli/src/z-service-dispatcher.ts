@@ -5,6 +5,11 @@ import type {
   ZServiceMethodMetadata,
   ZServiceTypeMetadata,
 } from "./z-service-bindings";
+import {
+  assertZServiceCodecNames,
+  zArrayElementType,
+  zWireCodecSuffix,
+} from "./z-service-bindings";
 
 export interface RenderZServiceDispatchersOptions {
   outputPath: string;
@@ -62,6 +67,10 @@ function moved(type: string, expression: string): string {
   return copiedScalars.has(type) ? expression : `move ${expression}`;
 }
 
+function copied(type: string, expression: string): string {
+  return copiedScalars.has(type) ? expression : `copy ${expression}`;
+}
+
 function inputCall(method: ZServiceMethodMetadata): string {
   if (!method.input) return "";
   if (method.inputMode === "value") return "move input";
@@ -79,9 +88,47 @@ function collectType(
 ): void {
   if (selected.has(type)) return;
   selected.add(type);
+  const arrayElement = zArrayElementType(type);
+  if (arrayElement) {
+    collectType(arrayElement, namedTypes, selected);
+    return;
+  }
   const named = namedTypes.get(type);
   if (!named) return;
   for (const field of named.fields) collectType(field.type, namedTypes, selected);
+}
+
+function renderDecodeArray(type: string): string {
+  const element = zArrayElementType(type)!;
+  const suffix = zWireCodecSuffix(type);
+  return `function __zappDecode${suffix}(
+  in value: JsonValue
+): ${type} throws __ZappServiceCodecError {
+  return match (in value) {
+    array(values) => {
+      let decoded = Array<${element}>();
+      for (const element of values) {
+        decoded.push(try __zappDecode${zWireCodecSuffix(element)}(in element));
+      }
+      select decoded;
+    }
+    _ => throw __zappCodecError("expected an array");
+  };
+}`;
+}
+
+function renderEncodeArray(type: string): string {
+  const element = zArrayElementType(type)!;
+  const suffix = zWireCodecSuffix(type);
+  return `function __zappEncode${suffix}(
+  value: ${type}
+): JsonValue {
+  let encoded = Array<JsonValue>();
+  for (const element of value) {
+    encoded.push(__zappEncode${zWireCodecSuffix(element)}(${copied(element, "element")}));
+  }
+  return JsonValue.array(move encoded);
+}`;
 }
 
 function renderDecodeScalar(type: string): string {
@@ -102,6 +149,97 @@ function renderDecodeScalar(type: string): string {
   return match (in value) {
     boolean(value) => value;
     _ => throw __zappCodecError("expected a boolean");
+  };
+}`;
+  }
+  if (type === "u64" || type === "i64") {
+    const suffix = generatedName(type);
+    const conversion = type === "u64" ? "toU64" : "toI64";
+    return `function __zappDecode${suffix}(
+  in value: JsonValue
+): ${type} throws __ZappServiceCodecError {
+  const text = match (in value) {
+    string(text) => copy text;
+    _ => throw __zappCodecError("expected an exact ${type} string");
+  };
+  const parsed = attempt JsonNumber.parse(in text);
+  const number = match (parsed) {
+    success(number) => number;
+    failure(error) => throw __zappCodecError(copy error.message);
+  };
+  const converted = attempt number.${conversion}();
+  return match (converted) {
+    success(integer) => integer;
+    failure(error) => throw __zappCodecError(copy error.message);
+  };
+}`;
+  }
+  const signed = type.match(/^i(8|16|32)$/);
+  if (signed) {
+    const limits: Record<string, [string, string]> = {
+      "8": ["-128", "127"],
+      "16": ["-32768", "32767"],
+      "32": ["-2147483648", "2147483647"],
+    };
+    const [minimum, maximum] = limits[signed[1]];
+    const suffix = generatedName(type);
+    return `function __zappDecode${suffix}(
+  in value: JsonValue
+): ${type} throws __ZappServiceCodecError {
+  const number = match (in value) {
+    number(number) => copy number;
+    _ => throw __zappCodecError("expected a ${type} number");
+  };
+  const converted = attempt number.toI64();
+  const integer = match (converted) {
+    success(integer) => integer;
+    failure(error) => throw __zappCodecError(copy error.message);
+  };
+  if (integer < ${minimum} || integer > ${maximum}) {
+    throw __zappCodecError("${type} value is out of range");
+  }
+  return ${type}(integer);
+}`;
+  }
+  const unsigned = type.match(/^u(8|16|32)$/);
+  if (unsigned) {
+    const maximums: Record<string, string> = {
+      "8": "255",
+      "16": "65535",
+      "32": "4294967295",
+    };
+    const maximum = maximums[unsigned[1]];
+    const suffix = generatedName(type);
+    return `function __zappDecode${suffix}(
+  in value: JsonValue
+): ${type} throws __ZappServiceCodecError {
+  const number = match (in value) {
+    number(number) => copy number;
+    _ => throw __zappCodecError("expected a ${type} number");
+  };
+  const converted = attempt number.toU64();
+  const integer = match (converted) {
+    success(integer) => integer;
+    failure(error) => throw __zappCodecError(copy error.message);
+  };
+  if (integer > ${maximum}) {
+    throw __zappCodecError("${type} value is out of range");
+  }
+  return ${type}(integer);
+}`;
+  }
+  if (type === "f64") {
+    return `function __zappDecodeF64(
+  in value: JsonValue
+): f64 throws __ZappServiceCodecError {
+  const number = match (in value) {
+    number(number) => copy number;
+    _ => throw __zappCodecError("expected a finite f64 number");
+  };
+  const converted = attempt number.toF64();
+  return match (converted) {
+    success(number) => number;
+    failure(error) => throw __zappCodecError(copy error.message);
   };
 }`;
   }
@@ -153,7 +291,7 @@ function renderDecodeType(type: ZServiceTypeMetadata): string {
     assertIdentifier(field.name, `${type.name} field`);
     return `        const __field_${field.name} = fields.get(${JSON.stringify(field.name)});
         const ${field.name} = match (in __field_${field.name}) {
-          some(field) => try __zappDecode${generatedName(field.type)}(in field);
+          some(field) => try __zappDecode${zWireCodecSuffix(field.type)}(in field);
           none => throw __zappCodecError(${JSON.stringify(`missing required field ${field.name}`)});
         };`;
   }).join("\n");
@@ -179,7 +317,7 @@ function renderEncodeType(type: ZServiceTypeMetadata): string {
   const names = type.fields.map((field) => field.name).join(", ");
   const fields = type.fields.map((field) => (
     `  fields.set(${JSON.stringify(field.name)}, `
-    + `__zappEncode${generatedName(field.type)}(${moved(field.type, field.name)}));`
+    + `__zappEncode${zWireCodecSuffix(field.type)}(${moved(field.type, field.name)}));`
   )).join("\n");
   return `function __zappEncode${generatedName(type.name)}(
   value: ${type.name}
@@ -214,7 +352,7 @@ function renderSyncMethodHelper(
   const result = match (__called) {
     success(value) => value;
     failure(error) => {
-      const encodedError = __zappEncode${generatedName(method.error)}(move error);
+      const encodedError = __zappEncode${zWireCodecSuffix(method.error)}(move error);
       return ServiceOutcome.typedFailure(ServiceTypedFailure({
         service: ${JSON.stringify(serviceName)},
         method: ${JSON.stringify(method.name)},
@@ -233,7 +371,7 @@ function renderSyncMethodHelper(
         \`INVALID_ARGUMENTS: ${"${error.message}"}\`
       );
     };
-    const __decoded = attempt __zappDecode${generatedName(method.input)}(
+    const __decoded = attempt __zappDecode${zWireCodecSuffix(method.input)}(
       in __arguments
     );
     const input = match (__decoded) {
@@ -249,7 +387,7 @@ function renderSyncMethodHelper(
   in invocation: ServiceInvocation
 ): ServiceOutcome {
 ${decode}${invocation}
-  const encoded = __zappEncode${generatedName(method.returns)}(
+  const encoded = __zappEncode${zWireCodecSuffix(method.returns)}(
     ${moved(method.returns, "result")}
   );
   return ServiceOutcome.success(json.stringify(in encoded));
@@ -292,7 +430,7 @@ function renderAsyncMethodHelpers(
     );
   }
   const suffix = `${generatedName(serviceType)}${generatedName(method.name)}`;
-  const encode = `  const encoded = __zappEncode${generatedName(method.returns)}(
+  const encode = `  const encoded = __zappEncode${zWireCodecSuffix(method.returns)}(
     ${moved(method.returns, "methodResult")}
   );
   return ServiceOutcome.success(json.stringify(in encoded));`;
@@ -451,6 +589,7 @@ export function renderZServiceDispatchers(
   if (manifest.schemaVersion !== 3) {
     throw new Error(`[zapp] unsupported Z service metadata schema ${manifest.schemaVersion}`);
   }
+  assertZServiceCodecNames(manifest);
   const allTypes = [...manifest.types, ...manifest.errors];
   const namedTypes = new Map(allTypes.map((type) => [type.name, type]));
   const decoded = new Set<string>();
@@ -480,16 +619,22 @@ export function renderZServiceDispatchers(
     )).join("\n");
 
   const scalarDecoders = [...decoded]
-    .filter((type) => !namedTypes.has(type))
+    .filter((type) => !namedTypes.has(type) && !zArrayElementType(type))
     .sort()
     .map(renderDecodeScalar);
+  const arrayDecoders = [...decoded]
+    .filter((type) => zArrayElementType(type))
+    .map(renderDecodeArray);
   const typeDecoders = allTypes
     .filter((type) => decoded.has(type.name))
     .map(renderDecodeType);
   const scalarEncoders = [...encoded]
-    .filter((type) => !namedTypes.has(type))
+    .filter((type) => !namedTypes.has(type) && !zArrayElementType(type))
     .sort()
     .map(renderEncodeScalar);
+  const arrayEncoders = [...encoded]
+    .filter((type) => zArrayElementType(type))
+    .map(renderEncodeArray);
   const typeEncoders = allTypes
     .filter((type) => encoded.has(type.name))
     .map(renderEncodeType);
@@ -531,7 +676,14 @@ function __zappCodecError(message: String): __ZappServiceCodecError {
   return __ZappServiceCodecError({ message: move message });
 }
 
-${[...scalarDecoders, ...typeDecoders, ...scalarEncoders, ...typeEncoders].join("\n\n")}
+${[
+    ...scalarDecoders,
+    ...typeDecoders,
+    ...arrayDecoders,
+    ...scalarEncoders,
+    ...typeEncoders,
+    ...arrayEncoders,
+  ].join("\n\n")}
 
 ${manifest.services.map(renderDispatcher).join("\n\n")}
 `;
