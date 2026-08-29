@@ -67,7 +67,16 @@ bun run bench:z-notes:zapp:build
 bun run bench:z-notes:zapp:measure 15
 bun run bench:z-notes:electron:build
 bun run bench:z-notes:electron:measure 15
+bun run bench:z-notes:product zapp 7
+bun run bench:z-notes:product electron 7
 ```
+
+The product runner creates an isolated control file, resets that framework's
+database, launches a fresh packaged process, waits for the shared UI ready
+report, executes 100 create-and-full-refresh iterations, records the browser's
+aggregate workflow duration, and terminates the complete app process tree. One
+unreported prime run precedes the requested samples. Control and report files
+are removed even when a measurement fails.
 
 The rolling evidence and caveats live in [`RESULTS.md`](RESULTS.md).
 

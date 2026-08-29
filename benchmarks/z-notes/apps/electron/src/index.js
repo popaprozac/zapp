@@ -1,8 +1,12 @@
 const { app, BrowserWindow, ipcMain } = require("electron");
 const { DatabaseSync } = require("node:sqlite");
+const { existsSync, writeFileSync } = require("node:fs");
 const path = require("node:path");
 
 const databasePath = "/tmp/z-notes-benchmark-electron.sqlite3";
+const benchmarkControlPath = "/tmp/z-notes-benchmark-electron.control";
+const benchmarkReadyPath = "/tmp/z-notes-benchmark-electron.ready";
+const benchmarkResultPath = "/tmp/z-notes-benchmark-electron.result.json";
 
 function withDatabase(operation) {
   const database = new DatabaseSync(databasePath);
@@ -58,6 +62,13 @@ function createNote(input) {
 
 ipcMain.handle("notes:list", listNotes);
 ipcMain.handle("notes:create", (_event, input) => createNote(input));
+ipcMain.handle("benchmark:mode", () => existsSync(benchmarkControlPath));
+ipcMain.handle("benchmark:report", (_event, report) => {
+  const path = report?.phase === "ready"
+    ? benchmarkReadyPath
+    : benchmarkResultPath;
+  writeFileSync(path, typeof report?.payload === "string" ? report.payload : "");
+});
 
 function createWindow() {
   const window = new BrowserWindow({

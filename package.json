@@ -22,6 +22,7 @@
     "bench:z-notes:zapp:measure": "bun run benchmarks/z-notes/scripts/measure-zapp.ts",
     "bench:z-notes:electron:build": "bun run benchmarks/z-notes/scripts/build-electron.ts",
     "bench:z-notes:electron:measure": "bun run benchmarks/z-notes/scripts/measure-electron.ts",
+    "bench:z-notes:product": "bun run benchmarks/z-notes/scripts/measure-product.ts",
     "bench:z-notes:reset": "bun run benchmarks/z-notes/scripts/reset.ts"
   },
   "devDependencies": {

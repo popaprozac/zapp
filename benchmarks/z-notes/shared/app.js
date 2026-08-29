@@ -20,7 +20,7 @@ function renderNotes(notes) {
   document.body.dataset.noteCount = String(notes.length);
 }
 
-export async function mountNotesApp(candidate) {
+export async function mountNotesApp(candidate, harness = null) {
   const adapter = requireAdapter(candidate);
   const form = document.querySelector("#create-note");
   const title = document.querySelector("#title");
@@ -78,4 +78,12 @@ export async function mountNotesApp(candidate) {
   await refresh();
   document.body.dataset.ready = "true";
   status.textContent = "Ready";
+
+  if (harness?.enabled) {
+    await harness.ready();
+    const result = await globalThis.__zNotesBenchmark.run(
+      harness.iterations ?? 10,
+    );
+    await harness.complete(result);
+  }
 }

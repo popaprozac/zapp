@@ -1,6 +1,7 @@
 import { JsonValue, stringify } from "std/json";
 import { Map } from "std/collections";
 import console from "std/console";
+import fs from "std/fs";
 import {
   ApplicationContext,
   ServiceLifecycle,
@@ -8,10 +9,30 @@ import {
 } from "zapp/service";
 import {
   CreateNoteInput,
+  BenchmarkReport,
   Note,
   NoteStorageError,
   NotesPage,
 } from "./model.zs";
+
+const benchmarkControlPath = "/tmp/z-notes-benchmark-zapp.control";
+const benchmarkReadyPath = "/tmp/z-notes-benchmark-zapp.ready";
+const benchmarkResultPath = "/tmp/z-notes-benchmark-zapp.result.json";
+
+function writeBenchmarkReport(
+  in path: String,
+  in phase: String,
+  in payload: String
+): boolean {
+  const written = attempt fs.writeText(path, payload);
+  match (written) {
+    success => return true;
+    failure(message) => {
+      console.log(`could not report benchmark ${phase}: ${message}`);
+      return false;
+    }
+  }
+}
 import {
   loadNotesFromPath,
   saveNoteToPath,
@@ -80,6 +101,18 @@ export readonly class NotesService implements ServiceLifecycle {
       failure(code) => throw storageError(code);
     }
     return note;
+  }
+
+  function benchmarkMode(): boolean {
+    return fs.exists(benchmarkControlPath);
+  }
+
+  function reportBenchmark(report: BenchmarkReport): boolean {
+    const { phase, payload } = move report;
+    if (phase == "ready") {
+      return writeBenchmarkReport(benchmarkReadyPath, phase, payload);
+    }
+    return writeBenchmarkReport(benchmarkResultPath, phase, payload);
   }
 
   function start(

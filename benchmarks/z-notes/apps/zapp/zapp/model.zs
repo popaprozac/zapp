@@ -14,6 +14,11 @@ export struct NotesPage {
   count: u64;
 }
 
+export struct BenchmarkReport {
+  phase: String;
+  payload: String;
+}
+
 export struct NoteStorageError {
   code: i32;
   message: String;
