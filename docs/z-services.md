@@ -299,7 +299,10 @@ task.
 The internal runtime builders remain generic over the framework's `Service`
 and `AsyncService` traits, so the framework does not know about Notes or any
 other concrete application type. Generated adapters provide those internal
-contracts from an ordinary service:
+contracts from an ordinary service. Their `registerGenerated...` transition
+members are Z package-`internal`: the compiler-owned overlay receives narrowly
+scoped `zapp` package authority for its checked replacement call, while
+application source and external completion see only `register(...)`:
 
 ```z
 export readonly class NotesService implements ServiceLifecycle {

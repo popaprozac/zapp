@@ -274,7 +274,7 @@ function registeredServiceLifecycle(
     })),
   });
   let builder = createApplicationServices();
-  builder.__registerGeneratedWithLifecycle("registered", service);
+  builder.registerGeneratedWithLifecycle("registered", service);
   const { routes, lifecycles } = builder.freezeConfigured();
 
   const started = attempt lifecycles.start(in context);

@@ -87,7 +87,7 @@ export struct ApplicationServicesBuilder {
     service: T
   ): void {}
 
-  function __registerGenerated<T: Service>(
+  internal function registerGenerated<T: Service>(
     inout this,
     name: String,
     service: T
@@ -95,7 +95,7 @@ export struct ApplicationServicesBuilder {
     this.routes.register(move name, service);
   }
 
-  function __registerGeneratedAsync<T: AsyncService>(
+  internal function registerGeneratedAsync<T: AsyncService>(
     inout this,
     name: String,
     service: T
@@ -104,7 +104,7 @@ export struct ApplicationServicesBuilder {
     this.asynchronous.add(move name, handler);
   }
 
-  function __registerGeneratedWithLifecycle<
+  internal function registerGeneratedWithLifecycle<
     T: Service & ServiceLifecycle
   >(
     inout this,
@@ -121,7 +121,7 @@ export struct ApplicationServicesBuilder {
     this.lifecycles.add(move name, hook);
   }
 
-  function __registerGeneratedAsyncWithLifecycle<
+  internal function registerGeneratedAsyncWithLifecycle<
     T: AsyncService & ServiceLifecycle
   >(
     inout this,

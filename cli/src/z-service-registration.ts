@@ -25,12 +25,12 @@ function registrationMethodName(service: ZServiceMetadata): string {
   }
   if (zServiceUsesAsyncDispatch(service)) {
     return service.lifecycle
-      ? "__registerGeneratedAsyncWithLifecycle"
-      : "__registerGeneratedAsync";
+      ? "registerGeneratedAsyncWithLifecycle"
+      : "registerGeneratedAsync";
   }
   return service.lifecycle
-    ? "__registerGeneratedWithLifecycle"
-    : "__registerGenerated";
+    ? "registerGeneratedWithLifecycle"
+    : "registerGenerated";
 }
 
 export async function generateZServiceRegistrationOverlay(

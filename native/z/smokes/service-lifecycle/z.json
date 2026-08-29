@@ -1,7 +1,0 @@
-{
-  "target": {
-    "kind": "executable",
-    "name": "zapp_service_lifecycle_smoke",
-    "entry": "main.zs"
-  }
-}

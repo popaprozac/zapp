@@ -413,8 +413,8 @@ describe("Z native host inputs", () => {
     expect(synchronousServices).not.toContain("AsyncService");
     expect(synchronousBridge).not.toContain("async function");
     expect(applicationServices).toContain("function register<T>(");
-    expect(applicationServices).toContain("function __registerGeneratedAsync<T: AsyncService>(");
-    expect(applicationServices).toContain("function __registerGeneratedAsyncWithLifecycle<");
+    expect(applicationServices).toContain("internal function registerGeneratedAsync<T: AsyncService>(");
+    expect(applicationServices).toContain("internal function registerGeneratedAsyncWithLifecycle<");
     expect(smoke).toContain("await scheduler.yield()");
     expect(smoke).toContain('builder.registerAsync(');
     expect(smoke).toContain("async function validateRoutes(services: AsyncServices): i32");

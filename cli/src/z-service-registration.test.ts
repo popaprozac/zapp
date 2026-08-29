@@ -81,7 +81,7 @@ function main(): i32 {
         sourceHash: createHash("sha256").update(source).digest("hex"),
         offset: source.indexOf("register") + "register".length,
         target: "ApplicationServicesBuilder.register",
-        replacement: "ApplicationServicesBuilder.__registerGeneratedAsyncWithLifecycle",
+        replacement: "ApplicationServicesBuilder.registerGeneratedAsyncWithLifecycle",
         argument: 1,
         adapter: {
           module: "zapp/generated/service-dispatchers",
@@ -125,7 +125,7 @@ function main(): i32 {
     );
     const overlay = JSON.parse(readFileSync(overlayPath, "utf8"));
     expect(overlay.callAdapters[0].replacement)
-      .toBe("ApplicationServicesBuilder.__registerGenerated");
+      .toBe("ApplicationServicesBuilder.registerGenerated");
     rmSync(directory, { recursive: true, force: true });
   });
 });
