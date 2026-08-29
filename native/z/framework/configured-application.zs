@@ -1,3 +1,8 @@
+import { Map } from "std/collections";
+import {
+  ApplicationCapabilities,
+  CapabilityProfile,
+} from "./application-capabilities.zs";
 import { ApplicationMetadata } from "./application-metadata.zs";
 import { ApplicationPermissions } from "./application-permissions.zs";
 
@@ -16,4 +21,15 @@ export function configuredApplicationPermissions(): ApplicationPermissions {
   return ApplicationPermissions({
     windowCreate: true,
   });
+}
+
+export function configuredApplicationCapabilities(): ApplicationCapabilities {
+  let permissions = Array<String>("window:create");
+  let services = Array<String>();
+  let profiles = Map<String, CapabilityProfile>();
+  profiles.set("default", CapabilityProfile({
+    permissions: permissions.freeze(),
+    serviceMethods: services.freeze(),
+  }));
+  return new ApplicationCapabilities({ profiles: profiles.freeze() });
 }

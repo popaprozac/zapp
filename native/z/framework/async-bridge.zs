@@ -2,11 +2,13 @@ import {
   BridgeMessage,
   BridgeMessageKind,
   BridgeResponse,
+  bridgeCapabilityFailure,
   bridgeFailure,
   bridgeSuccess,
   bridgeTypedServiceFailure,
   decodeBridgeMessage,
 } from "./bridge.zs";
+import { CapabilitySelection } from "./application-capabilities.zs";
 import { AsyncServices } from "./async-services.zs";
 import { ServiceOutcome } from "./service-contract.zs";
 
@@ -60,4 +62,19 @@ export async function routeDecodedMessageWithServicesAsync(
       bridgeTypedServiceFailure(message.id, move typedError)
     );
   };
+}
+
+export function authorizeServiceInvocation(
+  in message: BridgeMessage,
+  capabilities: CapabilitySelection
+): Option<BridgeResponse> {
+  if (message.kind != BridgeMessageKind.invoke) return Option.none;
+  if (message.method == "__zapp:ping") return Option.none;
+  if (capabilities.allowsService(in message.method)) {
+    return Option.none;
+  }
+  return Option.some(bridgeCapabilityFailure(
+    message.id,
+    `service:${message.method}`
+  ));
 }

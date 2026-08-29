@@ -35,6 +35,9 @@ the Z builder. The builder:
    service facade, then injects both through a `WKUserScript` at document start;
 10. compiles the `webview.inject` catalog into immutable C data and lets each
     Z `WindowOptions.inject` select its trusted profile set before navigation.
+11. expands `security.capabilities` service selectors against the checked
+    service manifest, compiles exact grants into immutable Z collections, and
+    enforces the originating window's selected profiles before dispatch.
 
 The route is no longer a pass-through smoke. Z's source-backed `std/json`
 parser decodes the WebView envelope into `BridgeMessage`, preserves request
@@ -53,7 +56,11 @@ The primary WebView invokes the focused frontend `createWindow()` factory after
 the application loop starts, proving dynamic realization rather than
 startup-only enumeration. The framework handles the built-in operation before
 application service dispatch and calls the same Z-owned `WindowManager`. The
-Objective-C host owns the process/run-loop adapter, response delivery, and
+child inherits its creator's capability profiles; Web content cannot submit a
+different profile list. Native-authored windows may select named profiles in
+`WindowOptions`, while unknown names fail window realization with a typed
+`WindowError`.
+The Objective-C host owns the process/run-loop adapter, response delivery, and
 smoke observation rather than application object construction or message-body
 validation.
 

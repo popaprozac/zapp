@@ -10,6 +10,7 @@ export struct WindowOptions {
   visible: boolean = true;
   resizable: boolean = true;
   inject: Array<String> = Array<String>();
+  capabilities: Array<String> = Array<String>("default");
 }
 
 struct WindowRecord {

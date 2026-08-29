@@ -10,7 +10,11 @@ import { mkdir, writeFile } from "node:fs/promises";
 // and break `npm pack`.
 import type { BuildTarget } from "./build-target";
 import type { ZappPermission } from "./permissions";
-import { validatePermissions } from "./permissions";
+import {
+  isPermissionAllowed,
+  resolvePermissions,
+  validatePermissions,
+} from "./permissions";
 export type { ZappPermission };
 
 export interface MacOSConfig {
@@ -553,8 +557,17 @@ export interface WorkersConfig {
 export interface SecurityConfig {
   /** Exhaustive native-capability allowlist when present. */
   permissions?: ZappPermission[];
+  /** Named, trusted grants selected by native WindowOptions. */
+  capabilities?: Record<string, CapabilityProfileConfig>;
   /** Filesystem access and persisted dialog-grant policy. */
   filesystem?: FsConfig;
+}
+
+export interface CapabilityProfileConfig {
+  /** Framework permissions granted to windows using this profile. */
+  permissions?: ZappPermission[];
+  /** Registered Z services or exact `service.method` selectors. */
+  services?: string[];
 }
 
 export interface NativeConfig {
@@ -652,6 +665,7 @@ export interface ResolvedConfig {
   singleInstance?: boolean;
   fs?: FsConfig;
   permissions?: ZappPermission[];
+  capabilityProfiles?: Record<string, CapabilityProfileConfig>;
   macos?: MacOSConfig;
   ios?: IOSConfig;
   webEngine?: PlatformValue<WebEngine>;
@@ -841,6 +855,80 @@ export function validateWebviewInject(
     }
     if (entryCount === 0) {
       throw new Error(`[zapp] webview.inject.${name} must declare at least one file`);
+    }
+  }
+}
+
+export function validateCapabilityProfiles(
+  profiles: Record<string, CapabilityProfileConfig> | undefined,
+  globalPermissions?: ZappPermission[],
+): void {
+  if (profiles === undefined) return;
+  if (profiles === null || typeof profiles !== "object" || Array.isArray(profiles)) {
+    throw new Error("[zapp] security.capabilities must be an object keyed by profile name");
+  }
+  if (!("default" in profiles)) {
+    throw new Error(
+      '[zapp] security.capabilities must declare a "default" profile',
+    );
+  }
+  const profileName = /^[A-Za-z][A-Za-z0-9._-]*$/;
+  const allowedKeys = new Set(["permissions", "services"]);
+  const global = resolvePermissions(globalPermissions);
+  for (const [name, profile] of Object.entries(profiles)) {
+    if (!profileName.test(name)) {
+      throw new Error(
+        `[zapp] security.capabilities profile ${JSON.stringify(name)} must start with a letter ` +
+        "and contain only letters, digits, '.', '_', or '-'",
+      );
+    }
+    if (profile === null || typeof profile !== "object" || Array.isArray(profile)) {
+      throw new Error(`[zapp] security.capabilities.${name} must be an object`);
+    }
+    for (const key of Object.keys(profile)) {
+      if (!allowedKeys.has(key)) {
+        throw new Error(
+          `[zapp] security.capabilities.${name}.${key} is unknown; ` +
+          "use permissions or services",
+        );
+      }
+    }
+    for (const key of allowedKeys) {
+      const values = profile[key as keyof CapabilityProfileConfig];
+      if (values === undefined) continue;
+      if (!Array.isArray(values)) {
+        throw new Error(`[zapp] security.capabilities.${name}.${key} must be a string[]`);
+      }
+      const seen = new Set<string>();
+      for (const value of values) {
+        if (typeof value !== "string" || value.trim().length === 0) {
+          throw new Error(
+            `[zapp] security.capabilities.${name}.${key} entries must be non-empty strings`,
+          );
+        }
+        if (seen.has(value)) {
+          throw new Error(
+            `[zapp] security.capabilities.${name}.${key} repeats ${JSON.stringify(value)}`,
+          );
+        }
+        seen.add(value);
+      }
+    }
+    const permissionErrors = validatePermissions(profile.permissions);
+    if (permissionErrors.length > 0) throw new Error(permissionErrors[0]);
+    for (const permission of profile.permissions ?? []) {
+      if (permission !== "window:create") {
+        throw new Error(
+          `[zapp] security.capabilities.${name} cannot grant ${JSON.stringify(permission)} yet; ` +
+          'the Z-native per-window permission tier currently supports "window:create" and services',
+        );
+      }
+      if (!isPermissionAllowed(permission, global)) {
+        throw new Error(
+          `[zapp] security.capabilities.${name} grants ${JSON.stringify(permission)}, ` +
+          "but security.permissions does not include it",
+        );
+      }
     }
   }
 }
@@ -1036,6 +1124,7 @@ function normalizeConfig(config: ZappConfig): ResolvedConfig {
     headless: config.workers?.headless,
     workerModules: config.workers?.capabilities,
     permissions: config.security?.permissions,
+    capabilityProfiles: config.security?.capabilities,
     fs: config.security?.filesystem,
     native: config.native,
     macos: config.targets?.macOS,
@@ -1104,6 +1193,10 @@ export async function loadConfig(
     const config = serializableConfigClone(authored);
     validateWebEngine(config.webview?.engine);
     validateWebviewInject(config.webview?.inject);
+    validateCapabilityProfiles(
+      config.security?.capabilities,
+      config.security?.permissions,
+    );
     rejectRemovedEngines(config);
     await substituteZjsOnWindows(config);
     validateNative(config);

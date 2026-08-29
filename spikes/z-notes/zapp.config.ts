@@ -11,6 +11,15 @@ export default defineConfig({
   },
   security: {
     permissions: ["window:create"],
+    capabilities: {
+      default: {
+        permissions: ["window:create"],
+        services: ["notes", "health"],
+      },
+      diagnostics: {
+        services: ["notes.count", "health.status"],
+      },
+    },
   },
   webview: {
     inject: {

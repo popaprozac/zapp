@@ -40,6 +40,23 @@ describe("renderZApplicationMetadata", () => {
     });
     expect(output).toContain("windowCreate: false");
   });
+
+  it("emits exact immutable capability grants into native Z", () => {
+    const output = renderZApplicationMetadata({
+      name: "Scoped",
+      identifier: "com.example.scoped",
+      version: "1.0.0",
+      assetDir: "./dist",
+    }, [{
+      name: "diagnostics",
+      permissions: [],
+      serviceMethods: ["notes.count"],
+    }]);
+    expect(output).toContain("configuredApplicationCapabilities");
+    expect(output).toContain('profiles.set("diagnostics", CapabilityProfile({');
+    expect(output).toContain('serviceMethods0.push("notes.count");');
+    expect(output).toContain("serviceMethods: serviceMethods0.freeze()");
+  });
 });
 
 describe("renderZWebviewBootstrapConfig", () => {
@@ -209,6 +226,9 @@ describe("Z native host inputs", () => {
     expect(macOSPlatform).toContain("native.ZAppDesktopBridge.attachWindow(");
     expect(macOSPlatform).toContain("native.zapp_desktop_has_injection_profile(profile)");
     expect(macOSPlatform).toContain("native.zapp_desktop_window_select_injection_profile(");
+    expect(macOSPlatform).toContain("authorizeServiceInvocation(");
+    expect(macOSPlatform).toContain("current.capabilitiesForWindow(windowId)");
+    expect(macOSPlatform).toContain("unknown window capability profile");
     expect(macOSPlatform).toContain("window.releasedWhenClosed = false");
     expect(objectiveCHost).not.toContain(
       "ZAppDesktopHost : NSObject <WKScriptMessageHandler",
@@ -304,6 +324,9 @@ describe("Z native host inputs", () => {
     expect(application).toContain(
       "readonly windows: WindowManager = createWindowManager()",
     );
+    expect(application).toContain(
+      "readonly capabilities: ApplicationCapabilities",
+    );
     expect(application).toContain("services: ApplicationServicesBuilder = createApplicationServices();");
     expect(application).toContain("throws ApplicationError on thread.main");
     expect(application).toContain("const config = prepareApplication(move this);");
@@ -312,6 +335,7 @@ describe("Z native host inputs", () => {
     expect(application).toContain("synchronous: routes");
     expect(application).toContain("lifecycles,");
     expect(contract).toContain("export readonly class PreparedApplication on thread.main");
+    expect(contract).toContain("readonly capabilities: ApplicationCapabilities");
     expect(platform).toContain("export async function runApplicationPlatform(");
     expect(platform).toContain("return try await runMacOSApplication(move config, updates);");
     expect(headless).toContain("struct HeadlessApplicationRuntime");
@@ -329,6 +353,9 @@ describe("Z native host inputs", () => {
     expect(windows).toContain("internal constructor(");
     expect(windows).toContain("internal readonly manager: Weak<WindowManager>");
     expect(windows).toContain("internal readonly state: WindowManagerState");
+    expect(windows).toContain(
+      'capabilities: Array<String> = Array<String>("default")',
+    );
     expect(windows).not.toMatch(/\b__[A-Za-z]/);
     expect(applicationServices).toContain("internal struct ConfiguredServices");
     expect(applicationServices).toContain("internal function freezeConfigured(");

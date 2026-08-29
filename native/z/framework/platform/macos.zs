@@ -7,7 +7,14 @@ import {
 } from "../application-error.zs";
 import { ApplicationMetadata } from "../application-metadata.zs";
 import { ApplicationPermissions } from "../application-permissions.zs";
-import { routeDecodedMessageWithServicesAsync } from "../async-bridge.zs";
+import {
+  ApplicationCapabilities,
+  CapabilitySelection,
+} from "../application-capabilities.zs";
+import {
+  authorizeServiceInvocation,
+  routeDecodedMessageWithServicesAsync,
+} from "../async-bridge.zs";
 import { AsyncServices } from "../async-services.zs";
 import {
   BridgeMessage,
@@ -77,6 +84,7 @@ class MacOSWindowRuntime on thread.main {
   readonly registrationOwner: native.ZAppDesktopRegistrationOwner;
   readonly registration: objc.Registration;
   readonly pendingRequests: PendingRequests;
+  readonly capabilitySelection: CapabilitySelection;
 }
 
 enum WindowMessageRoute {
@@ -87,6 +95,7 @@ enum WindowMessageRoute {
 class MacOSApplicationRuntime {
   readonly name: String;
   readonly permissions: ApplicationPermissions;
+  readonly capabilities: ApplicationCapabilities;
   readonly services: AsyncServices;
   readonly updates: TaskScope;
   readonly windowManager: WindowManager on thread.main;
@@ -97,6 +106,33 @@ class MacOSApplicationRuntime {
     inout this,
     in id: String,
     in options: WindowOptions
+  ): void throws WindowError on thread.main {
+    for (const profile of options.capabilities) {
+      if (!this.capabilities.hasProfile(profile)) {
+        throw WindowError({
+          id: copy id,
+          message: `unknown window capability profile "${profile}"`,
+        });
+      }
+    }
+    const selected = this.capabilities.resolveProfiles(in options.capabilities);
+    match (selected) {
+      some(selection) => {
+        try this.createResolvedWindow(in id, in options, selection);
+        return;
+      }
+      none => throw WindowError({
+        id: copy id,
+        message: "could not resolve window capability profiles",
+      });
+    }
+  }
+
+  function createResolvedWindow(
+    inout this,
+    in id: String,
+    in options: WindowOptions,
+    selectedCapabilities: CapabilitySelection
   ): void throws WindowError on thread.main {
     for (const profile of options.inject) {
       if (native.zapp_desktop_has_injection_profile(profile) == 0) {
@@ -112,7 +148,8 @@ class MacOSApplicationRuntime {
       copy this.name,
       in id,
       nativeId,
-      in options
+      in options,
+      selectedCapabilities
     );
     this.nativeWindows.set(nativeId, runtime);
   }
@@ -196,6 +233,16 @@ class MacOSApplicationRuntime {
       none => false;
     };
   }
+
+  function capabilitiesForWindow(
+    windowId: i32
+  ): Option<CapabilitySelection> on thread.main {
+    const found = this.nativeWindows.get(windowId);
+    return match (in found) {
+      some(window) => Option.some(window.capabilitySelection);
+      none => Option.none;
+    };
+  }
 }
 
 const application = Once<MacOSApplicationRuntime>();
@@ -229,6 +276,7 @@ export async function runMacOSApplication(
   const lifetime = initializeMacOSApplicationRuntime(
     copy config.metadata.name,
     config.permissions,
+    config.capabilities,
     config.services,
     updates,
     windows
@@ -412,7 +460,11 @@ async function routeFrameworkOrServiceMessageAndDeliver(
 ): boolean on thread.main {
   const current = application.get();
   let windows = current.windowManager;
-  const route = selectWindowMessageRoute(move message, inout windows);
+  const route = selectWindowMessageRoute(
+    move message,
+    windowId,
+    inout windows
+  );
   match (route) {
     framework(response) => {
       if (tracked) finishPendingRequest(windowId, requestId, generation);
@@ -432,18 +484,52 @@ async function routeFrameworkOrServiceMessageAndDeliver(
 
 function selectWindowMessageRoute(
   message: BridgeMessage,
+  windowId: i32,
   inout windows: WindowManager
 ): WindowMessageRoute on thread.main {
   const current = application.get();
   const permissions = current.permissions;
+  const selected = current.capabilitiesForWindow(windowId);
+  match (selected) {
+    some(capabilities) => return selectWindowMessageRouteWithCapabilities(
+      move message,
+      in permissions,
+      capabilities,
+      inout windows
+    );
+    none => return WindowMessageRoute.framework(bridgeFailure(
+      message.id,
+      "INVALID_WINDOW",
+      "unknown originating window"
+    ));
+  }
+}
+
+function selectWindowMessageRouteWithCapabilities(
+  message: BridgeMessage,
+  in permissions: ApplicationPermissions,
+  selectedCapabilities: CapabilitySelection,
+  inout windows: WindowManager
+): WindowMessageRoute on thread.main {
   const routed = routeWindowBridgeMessage(
     in message,
     in permissions,
+    selectedCapabilities,
     inout windows
   );
   return match (routed) {
     some(response) => WindowMessageRoute.framework(response);
-    none => WindowMessageRoute.service(move message);
+    none => {
+      const denied = authorizeServiceInvocation(
+        in message,
+        selectedCapabilities
+      );
+      match (denied) {
+        some(response) => return WindowMessageRoute.framework(response);
+        none => {}
+      }
+      select WindowMessageRoute.service(move message);
+    }
   };
 }
 
@@ -548,7 +634,8 @@ function createMacOSWindowRuntime(
   name: String,
   in id: String,
   nativeId: i32,
-  in options: WindowOptions
+  in options: WindowOptions,
+  capabilitySelection: CapabilitySelection
 ): MacOSWindowRuntime throws WindowError on thread.main {
   const contentController = native.WKUserContentController.alloc().init();
   const registrationOwner = native.ZAppDesktopRegistrationOwner.alloc()
@@ -639,12 +726,14 @@ function createMacOSWindowRuntime(
     registrationOwner,
     registration,
     pendingRequests: createPendingRequests(),
+    capabilitySelection,
   });
 }
 
 function initializeMacOSApplicationRuntime(
   name: String,
   permissions: ApplicationPermissions,
+  capabilities: ApplicationCapabilities,
   services: AsyncServices,
   updates: TaskScope,
   windowManager: WindowManager
@@ -652,6 +741,7 @@ function initializeMacOSApplicationRuntime(
   const value = new MacOSApplicationRuntime({
     name: move name,
     permissions,
+    capabilities,
     services: move services,
     updates,
     windowManager,

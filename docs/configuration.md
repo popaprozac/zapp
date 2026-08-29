@@ -75,7 +75,16 @@ export default defineConfig({
   },
 
   security: {
-    permissions: ["clipboard:read", "notifications"],
+    permissions: ["clipboard:read", "notifications", "window:create"],
+    capabilities: {
+      default: {
+        permissions: ["window:create"],
+        services: ["notes"],
+      },
+      diagnostics: {
+        services: ["notes.count"],
+      },
+    },
     filesystem: {
       allow: ["$userData/**"],
       persistDialogGrants: true,
@@ -158,6 +167,60 @@ a WebView.
 
 Runtime behavior does not belong in configuration. Services, windows, menus,
 lifecycle hooks, and mutable state remain ordinary Z source.
+
+## Window capability profiles
+
+`security.permissions` is the maximum built-in authority compiled into the
+application. Named `security.capabilities` profiles narrow that authority and
+registered Z services for each trusted native window:
+
+```ts
+security: {
+  permissions: ["window:create"],
+  capabilities: {
+    default: {
+      permissions: ["window:create"],
+      services: ["notes", "health.status"],
+    },
+    diagnostics: {
+      services: ["notes.count", "health.status"],
+    },
+    untrusted: {
+      services: [],
+    },
+  },
+},
+```
+
+A bare service selector such as `"notes"` grants every checked method on that
+registered service. `"notes.count"` grants only that method. Unknown services
+and methods fail the build against compiler-produced service metadata. A
+profile cannot grant a built-in permission omitted from
+`security.permissions`.
+
+The first per-window framework-permission tier enforces `"window:create"`.
+Other built-in permissions remain app-global and are rejected inside a profile
+until their native routes carry originating-window context; this fails closed
+rather than presenting a grant that is not actually enforced.
+
+When an explicit catalog exists it must contain `default`. Without a catalog,
+Zapp synthesizes `default` with every registered service and the app-wide
+permissions, preserving the minimal configuration experience. Native Z may
+select profiles when constructing a window:
+
+```z
+const diagnostics = try app.windows.create(WindowOptions({
+  title: "Diagnostics",
+  url: "/diagnostics",
+  capabilities: Array<String>("diagnostics"),
+}));
+```
+
+Web content cannot set `WindowOptions.capabilities`. A window created through
+the frontend bridge inherits its caller's exact profile list, so it cannot
+elevate itself by creating a child. Native dispatch checks the originating
+window before entering a service and reports a structured
+`PermissionDeniedError` such as `service:notes.create` when denied.
 
 ## Frontend origin and window URLs
 

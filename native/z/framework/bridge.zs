@@ -156,6 +156,19 @@ export function bridgePermissionFailure(
   return BridgeResponse({ id, ok: false, payload: json.encode(in error) });
 }
 
+export function bridgeCapabilityFailure(
+  id: u64,
+  permission: String
+): BridgeResponse {
+  const message = `permission "${permission}" is not granted to the selected window capability profiles`;
+  const error = BridgeError({
+    code: "PERMISSION_DENIED",
+    message: move message,
+    permission: move permission,
+  });
+  return BridgeResponse({ id, ok: false, payload: json.encode(in error) });
+}
+
 export function bridgeTypedServiceFailure(
   id: u64,
   error: ServiceTypedFailure

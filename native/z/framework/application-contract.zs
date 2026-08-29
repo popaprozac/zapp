@@ -1,5 +1,6 @@
 import { ApplicationMetadata } from "./application-metadata.zs";
 import { ApplicationPermissions } from "./application-permissions.zs";
+import { ApplicationCapabilities } from "./application-capabilities.zs";
 import { AsyncServices } from "./async-services.zs";
 import { ServiceLifecycles } from "./service-lifecycle.zs";
 import { WindowManager } from "./window.zs";
@@ -10,6 +11,7 @@ import { thread } from "std/thread";
 export readonly class PreparedApplication on thread.main {
   readonly metadata: ApplicationMetadata;
   readonly permissions: ApplicationPermissions;
+  readonly capabilities: ApplicationCapabilities;
   readonly windows: WindowManager;
   readonly services: AsyncServices;
   readonly lifecycles: ServiceLifecycles;

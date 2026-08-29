@@ -499,8 +499,10 @@ an intermediate JSON document.
 implemented. Native bridge failures now carry structured codes and become
 `ZappError` subclasses in TypeScript. Runtime-wide failures are exported by
 `@zappdev/runtime`, while declared service errors are emitted beside their
-generated service bindings. Service-specific permissions remain follow-up
-composition work.
+generated service bindings. Named `security.capabilities` profiles can grant
+an entire registered service or one exact method. Selectors are checked against
+compiler metadata, and native dispatch rejects unauthorized originating
+windows before application service code runs.
 - Generated async dispatch supports multiple suspending methods per service,
   but does not yet carry an owned request value across suspension. That is a
   native async-frame composition limit, not an intended application API

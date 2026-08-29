@@ -4,11 +4,13 @@ import {
   BridgeMessage,
   BridgeMessageKind,
   BridgeResponse,
+  bridgeCapabilityFailure,
   bridgeFailure,
   bridgePermissionFailure,
   bridgeSuccess,
 } from "./bridge.zs";
 import { ApplicationPermissions } from "./application-permissions.zs";
+import { CapabilitySelection } from "./application-capabilities.zs";
 import {
   WindowManager,
   WindowOptions,
@@ -53,12 +55,12 @@ function windowFailure(
   return BridgeResponse({ id, ok: false, payload: json.encode(in error) });
 }
 
-function rejectsTrustedInjection(in source: String): boolean {
+function rejectsTrustedWindowPolicy(in source: String): boolean {
   const parsed = attempt json.parse(in source);
   match (parsed) {
     success(value) => {
       match (in value) {
-        object(fields) => return fields.has("inject");
+        object(fields) => return fields.has("inject") || fields.has("capabilities");
         _ => return false;
       }
     }
@@ -69,16 +71,20 @@ function rejectsTrustedInjection(in source: String): boolean {
 function createWindow(
   in message: BridgeMessage,
   in permissions: ApplicationPermissions,
+  capabilities: CapabilitySelection,
   inout windows: WindowManager
 ): BridgeResponse on thread.main {
   if (!permissions.windowCreate) {
     return bridgePermissionFailure(message.id, "window:create");
   }
-  if (rejectsTrustedInjection(in message.arguments)) {
+  if (!capabilities.allowsPermission("window:create")) {
+    return bridgeCapabilityFailure(message.id, "window:create");
+  }
+  if (rejectsTrustedWindowPolicy(in message.arguments)) {
     return bridgeFailure(
       message.id,
       "INVALID_ARGUMENTS",
-      "INVALID_WINDOW_OPTIONS: inject is native application policy"
+      "INVALID_WINDOW_OPTIONS: inject and capabilities are native application policy"
     );
   }
 
@@ -99,6 +105,7 @@ function createWindow(
         height: options.height,
         visible: options.visible,
         resizable: options.resizable,
+        capabilities: capabilities.copyNames(),
       }));
       select match (created) {
         success(window) => {
@@ -135,6 +142,7 @@ function listWindows(
 export function routeWindowBridgeMessage(
   in message: BridgeMessage,
   in permissions: ApplicationPermissions,
+  capabilities: CapabilitySelection,
   inout windows: WindowManager
 ): Option<BridgeResponse> on thread.main {
   if (message.kind != BridgeMessageKind.invoke) return Option.none;
@@ -142,6 +150,7 @@ export function routeWindowBridgeMessage(
     return Option.some(createWindow(
       in message,
       in permissions,
+      capabilities,
       inout windows
     ));
   }

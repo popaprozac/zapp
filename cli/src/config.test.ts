@@ -6,6 +6,7 @@ import {
   createConfigContext, defaultApplicationIdentifier, defineConfig, loadConfig,
   resolveNative, validateNative, validateWebEngine, resolveWebEngine,
   platformSupportsChromium, resolveWebEngineForBuild, validateWebviewInject,
+  validateCapabilityProfiles,
 } from "./config";
 
 test("defaultApplicationIdentifier produces a stable reverse-DNS-safe identifier", () => {
@@ -66,7 +67,13 @@ test("loadConfig evaluates a contextual factory and writes the resolved snapshot
           capabilities: ["fetch"],
         },
         security: {
-          permissions: ["clipboard:read"],
+          permissions: ["clipboard:read", "window:create"],
+          capabilities: {
+            default: {
+              permissions: ["window:create"],
+              services: ["notes"],
+            },
+          },
           filesystem: { allow: ["$userData"] },
         },
         native: {
@@ -103,7 +110,13 @@ test("loadConfig evaluates a contextual factory and writes the resolved snapshot
     });
     expect(config.headless).toEqual({ indexer: "src/workers/indexer.ts" });
     expect(config.workerModules).toEqual(["fetch"]);
-    expect(config.permissions).toEqual(["clipboard:read"]);
+    expect(config.permissions).toEqual(["clipboard:read", "window:create"]);
+    expect(config.capabilityProfiles).toEqual({
+      default: {
+        permissions: ["window:create"],
+        services: ["notes"],
+      },
+    });
     expect(config.fs).toEqual({ allow: ["$userData"] });
     expect(config.native).toEqual({
       frameworks: { macOS: ["AppKit"] },
@@ -141,6 +154,27 @@ test("validateWebviewInject rejects ambiguous or escaping profile inputs", () =>
   expect(() => validateWebviewInject({
     base: { documentStart: ["src/preload.ts"], typo: ["x.ts"] } as any,
   })).toThrow(/typo is unknown/);
+});
+
+test("validateCapabilityProfiles requires explicit default and bounded grants", () => {
+  expect(() => validateCapabilityProfiles({ diagnostics: {} }))
+    .toThrow(/must declare a "default" profile/);
+  expect(() => validateCapabilityProfiles({
+    default: { permissions: ["window:create"], services: ["notes"] },
+  }, []))
+    .toThrow(/security.permissions does not include it/);
+  expect(() => validateCapabilityProfiles({
+    default: { services: ["notes", "notes"] },
+  }))
+    .toThrow(/repeats "notes"/);
+  expect(() => validateCapabilityProfiles({
+    default: { services: ["notes"] },
+    diagnostics: { services: ["notes.count"] },
+  })).not.toThrow();
+  expect(() => validateCapabilityProfiles({
+    default: { permissions: ["clipboard:read"] },
+  }, ["clipboard:read"]))
+    .toThrow(/currently supports "window:create" and services/);
 });
 
 test("loadConfig resolves canonical application identity defaults", async () => {

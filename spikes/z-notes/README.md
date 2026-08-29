@@ -73,6 +73,15 @@ The frontend window factory is allowed explicitly by
 `security.permissions: ["window:create"]`. Zapp mirrors that manifest for a
 friendly TypeScript error, but the compiled Z router remains authoritative: a
 handcrafted `__window:create` message cannot bypass the permission check.
+The config also declares a `default` capability profile granting the `notes`
+and `health` services plus window creation, and a narrower `diagnostics`
+profile granting only `notes.count` and `health.status`. The primary window
+uses `default` through `WindowOptions`' default value. Its frontend-created
+child inherits that exact profile; Web content cannot submit a different
+capability list. The smoke's successful calls from both windows therefore
+exercise native profile enforcement and inheritance, while focused framework
+tests prove a narrow profile returns a structured `PermissionDeniedError`
+before service code runs.
 
 `WindowOptions.url` is a logical application-relative URL, not a transport
 address. This example deliberately uses `/notes`. In a packaged build the
