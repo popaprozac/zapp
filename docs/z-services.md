@@ -19,8 +19,11 @@ The facade fixes the eventual package boundary now: `zapp` exports
 `zapp/service` owns lifecycle contracts. `native/z/z.json` declares that
 surface as one local Z package with exact public subpaths; repository apps and
 the isolated Zapp build each declare one `zapp` path dependency without
-rewriting application source. Registry installation and version selection
-remain a later Z layer over the same public module identities.
+rewriting application source. The package also owns its framework header paths
+and Apple framework link requirements through `library.native`, leaving each
+application responsible only for deployment policy and app-specific native
+artifacts. Registry installation and version selection remain a later Z layer
+over the same public module identities.
 
 ## Application surface
 

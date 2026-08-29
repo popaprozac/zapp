@@ -198,7 +198,6 @@ export function renderZNativeManifest(
       link: {
         directories: [nativeDirectory],
         libraries: ["zapp_desktop_host", "compression"],
-        frameworks: ["AppKit", "WebKit", "CoreFoundation"],
       },
     }
     : {

@@ -8,6 +8,15 @@
     "exports": {
       "./window": "api/zapp/window.zs",
       "./service": "api/zapp/service.zs"
+    },
+    "native": {
+      "includeDirectories": [
+        "framework/bridge",
+        "framework/platform/macos"
+      ],
+      "link": {
+        "frameworks": ["AppKit", "WebKit", "CoreFoundation"]
+      }
     }
   }
 }

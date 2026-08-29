@@ -6,13 +6,6 @@
     "name": "zapp-z-notes",
     "entry": "main.zs",
     "platform": "macos",
-    "minimumVersion": "14.0",
-    "includeDirectories": [
-      "../../../native/z/framework/platform/macos",
-      "../../../native/z/framework/bridge"
-    ],
-    "link": {
-      "frameworks": ["AppKit", "WebKit", "CoreFoundation"]
-    }
+    "minimumVersion": "14.0"
   }
 }

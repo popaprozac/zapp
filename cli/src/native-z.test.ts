@@ -138,7 +138,6 @@ describe("Z native host inputs", () => {
           link: {
             directories: ["/native"],
             libraries: ["zapp_desktop_host", "compression"],
-            frameworks: ["AppKit", "WebKit", "CoreFoundation"],
           },
         },
       });

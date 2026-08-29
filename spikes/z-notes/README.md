@@ -96,9 +96,11 @@ Application code now imports only Zapp's public source facade under
 `native/z/api/`; it no longer reaches into framework implementation modules.
 The source-local `z.json` declares one local `zapp` package dependency; Zapp's
 library manifest exposes `"zapp"`, `"zapp/window"`, and `"zapp/service"` for
-direct checking and editor services. The build generates an equivalent local
-dependency after staging the app, API, and framework into one isolated
-workspace, so it does not rewrite authored imports. A future registry
+direct checking and editor services. That same manifest owns Zapp's framework
+header paths and AppKit/WebKit/CoreFoundation link requirements through
+`library.native`; this application does not repeat them. The build generates
+an equivalent local dependency after staging the app, API, and framework into
+one isolated workspace, so it does not rewrite authored imports. A future registry
 dependency can replace the local path without changing application source or
 Zapp's declared public exports.
 
@@ -193,9 +195,10 @@ visible WebView round trip window=2 request=2 ok=true hmr=packaged inject=ready 
 Notes: notes service stopped
 ```
 
-`zapp/z.json` gives direct editor analysis and `z check` the same macOS 14,
-AppKit, WebKit, CoreFoundation, and project-header context used by the staged
-Zapp build. The Zapp CLI still owns final host-library generation and linkage.
+`zapp/z.json` combines the application-owned macOS 14 deployment target with
+the package-owned AppKit, WebKit, CoreFoundation, and project-header context
+used by the staged Zapp build. The Zapp CLI still owns final host-library
+generation and linkage.
 
 For a bounded automated round trip that aborts request 1, proves any raced
 native response cannot publish stale state, completes request 2, and then
