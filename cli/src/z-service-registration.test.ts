@@ -1,8 +1,17 @@
 import { describe, expect, it } from "bun:test";
+import { createHash } from "node:crypto";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import path from "node:path";
 import type { ZServiceManifest } from "./z-service-bindings";
-import { rewriteZServiceRegistrationModule } from "./z-service-registration";
+import { generateZServiceRegistrationOverlay } from "./z-service-registration";
 
-function manifestFor(source: string): ZServiceManifest {
+function manifestFor(source: string, module = "/workspace/app/main.zs"): ZServiceManifest {
   const method = "register";
   return {
     schemaVersion: 3,
@@ -15,7 +24,7 @@ function manifestFor(source: string): ZServiceManifest {
       module: "/workspace/app/notes-service.zs",
       lifecycle: true,
       registration: {
-        module: "/workspace/app/main.zs",
+        module,
         offset: source.indexOf(method) + method.length,
         line: 4,
         column: 45,
@@ -34,7 +43,13 @@ function manifestFor(source: string): ZServiceManifest {
 }
 
 describe("generated Z service registration", () => {
-  it("installs the generated adapter into the staged registration only", () => {
+  it("describes checked call adaptation without rewriting staged source", async () => {
+    const directory = mkdtempSync("/tmp/zapp-service-registration-");
+    const application = path.join(directory, "app", "main.zs");
+    const generatedModule = path.join(directory, "generated", "service-dispatchers.zs");
+    const overlayPath = path.join(directory, "generated", "service-registration.zbuild.json");
+    mkdirSync(path.dirname(application), { recursive: true });
+    mkdirSync(path.dirname(generatedModule), { recursive: true });
     const source = `import { createNotesService } from "./notes-service.zs";
 
 function main(): i32 {
@@ -45,43 +60,72 @@ function main(): i32 {
   return 0;
 }
 `;
-    const rewritten = rewriteZServiceRegistrationModule(
-      source,
-      "/workspace/app/main.zs",
-      "/workspace/generated/service-dispatchers.zs",
-      manifestFor(source),
+    writeFileSync(application, source);
+    writeFileSync(generatedModule, "export function __zappAdaptNotes(value: i32): i32 { return value; }\n");
+    await generateZServiceRegistrationOverlay(
+      manifestFor(source, application),
+      generatedModule,
+      overlayPath,
     );
-    expect(rewritten).toStartWith(
-      'import { __zappAdaptNotes } from "../generated/service-dispatchers.zs";\n',
-    );
-    expect(rewritten).toContain("app.services.__registerGeneratedAsyncWithLifecycle(");
-    expect(rewritten).toContain("__zappAdaptNotes(createNotesService()\n  ));");
+    const overlay = JSON.parse(readFileSync(overlayPath, "utf8"));
+    expect(overlay).toEqual({
+      schemaVersion: 1,
+      modules: {
+        "zapp/generated/service-dispatchers": {
+          source: "./service-dispatchers.zs",
+          package: "zapp",
+        },
+      },
+      callAdapters: [{
+        source: "../app/main.zs",
+        sourceHash: createHash("sha256").update(source).digest("hex"),
+        offset: source.indexOf("register") + "register".length,
+        target: "ApplicationServicesBuilder.register",
+        replacement: "ApplicationServicesBuilder.__registerGeneratedAsyncWithLifecycle",
+        argument: 1,
+        adapter: {
+          module: "zapp/generated/service-dispatchers",
+          export: "__zappAdaptNotes",
+        },
+      }],
+    });
+    expect(readFileSync(application, "utf8")).toBe(source);
+    rmSync(directory, { recursive: true, force: true });
   });
 
-  it("fails closed when compiler metadata no longer points at the checked call", () => {
+  it("rejects unsupported registration metadata before producing an overlay", async () => {
     const source = 'app.services.register("notes", service);\n';
     const manifest = manifestFor(source);
-    manifest.services[0].registration.offset += 1;
-    expect(() => rewriteZServiceRegistrationModule(
-      source,
-      "/workspace/app/main.zs",
-      "/workspace/generated/service-dispatchers.zs",
+    manifest.services[0].registration.method = "OtherBuilder.register";
+    await expect(generateZServiceRegistrationOverlay(
       manifest,
-    )).toThrow(/stale service metadata/);
+      "/workspace/generated/service-dispatchers.zs",
+      "/workspace/generated/service-registration.zbuild.json",
+    )).rejects.toThrow(/unsupported method/);
   });
 
-  it("selects the generated synchronous fast path from method metadata", () => {
+  it("selects the generated synchronous fast path from method metadata", async () => {
+    const directory = mkdtempSync("/tmp/zapp-service-registration-sync-");
+    const application = path.join(directory, "app", "main.zs");
+    const generatedModule = path.join(directory, "generated", "service-dispatchers.zs");
+    const overlayPath = path.join(directory, "generated", "service-registration.zbuild.json");
+    mkdirSync(path.dirname(application), { recursive: true });
+    mkdirSync(path.dirname(generatedModule), { recursive: true });
     const source = 'app.services.register("health", service);\n';
-    const manifest = manifestFor(source);
+    writeFileSync(application, source);
+    writeFileSync(generatedModule, "");
+    const manifest = manifestFor(source, application);
     manifest.services[0].lifecycle = false;
     manifest.services[0].methods[0].asynchronous = false;
     manifest.services[0].methods[0].executorAffinity = null;
-    const rewritten = rewriteZServiceRegistrationModule(
-      source,
-      "/workspace/app/main.zs",
-      "/workspace/generated/service-dispatchers.zs",
+    await generateZServiceRegistrationOverlay(
       manifest,
+      generatedModule,
+      overlayPath,
     );
-    expect(rewritten).toContain("app.services.__registerGenerated(");
+    const overlay = JSON.parse(readFileSync(overlayPath, "utf8"));
+    expect(overlay.callAdapters[0].replacement)
+      .toBe("ApplicationServicesBuilder.__registerGenerated");
+    rmSync(directory, { recursive: true, force: true });
   });
 });

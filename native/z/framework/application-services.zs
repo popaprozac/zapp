@@ -79,8 +79,8 @@ export struct ApplicationServicesBuilder {
   lifecycles: ServiceLifecycleBuilder;
 
   // Compiler/build marker for one ordinary application-owned service. Zapp's
-  // staged build replaces this call with the matching generated runtime
-  // adapter after reading checked compiler metadata.
+  // generated build overlay adapts this checked call to the matching runtime
+  // method and adapter without rewriting application source.
   function register<T>(
     inout this,
     name: String,

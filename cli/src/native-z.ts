@@ -390,7 +390,7 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
   const { generateZServiceDispatchers } = await import(
     "./z-service-dispatcher"
   );
-  const { installGeneratedZServiceRegistrations } = await import(
+  const { generateZServiceRegistrationOverlay } = await import(
     "./z-service-registration"
   );
   const {
@@ -455,13 +455,12 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
   );
   await run([...compiler, "check", dispatcher], options.root, true);
   console.log(`[zapp] checked generated Z service dispatch ${dispatcher}`);
-  const rewrittenModules = await installGeneratedZServiceRegistrations(
+  const registrationOverlay = await generateZServiceRegistrationOverlay(
     serviceManifest,
     dispatcher,
+    path.join(stage, "generated", "service-registration.zbuild.json"),
   );
-  for (const modulePath of rewrittenModules) {
-    console.log(`[zapp] installed generated service adapters in ${modulePath}`);
-  }
+  console.log(`[zapp] generated checked Z service registration ${registrationOverlay}`);
   const generatedBinding = await generateZServiceBindings(
     serviceManifest,
     path.join(options.root, ".zapp", "generated"),
@@ -588,7 +587,14 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
   }
 
   await run(
-    [...compiler, "build", stage, ...(options.optimize ? ["--release"] : [])],
+    [
+      ...compiler,
+      "build",
+      stage,
+      "--generated",
+      registrationOverlay,
+      ...(options.optimize ? ["--release"] : []),
+    ],
     options.root,
   );
 

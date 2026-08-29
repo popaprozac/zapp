@@ -115,11 +115,12 @@ lifecycle forwarder. Application authors do not choose the transport adapter or
 register one object twice.
 
 `ApplicationServicesBuilder.register` is deliberately a build marker during
-the first metadata pass. The Zapp build verifies and replaces it only in an
-isolated staged copy, then the final native compilation calls an internal typed
-runtime registration method. The original source remains valid for editor and
-metadata checks, but a Zapp application is built with `zapp`, not by invoking
-its entry directly with bare `z run`.
+the first metadata pass. Zapp emits a versioned `.zbuild.json` overlay naming
+the original source hash, checked call offset and target, selected typed runtime
+method, and generated adapter export. The Z compiler applies that contract to
+its AST and performs a complete second semantic pass; neither authored nor
+staged application source is rewritten. A Zapp application is built with
+`zapp`, not by invoking its entry directly with bare `z run`.
 
 Lifecycle storage remains deliberately separate from the frozen service router
 inside the framework. The router stays `on thread.any` for WebView and
@@ -281,11 +282,11 @@ before native compilation.
 
 ## Current service handler boundary
 
-The native build now installs a generated adapter into the isolated staged
-application source. The checked application source is never rewritten. Zapp
-verifies the compiler-provided registration offset, imports the generated
-adapter, and selects the staged sync/async runtime path. A stale
-or mismatched source location fails the build instead of silently routing a
+The native build now describes each generated adapter through an
+invocation-scoped `.zbuild.json` overlay. The compiler verifies the source hash,
+original resolved registration, same-receiver runtime replacement, generated
+adapter import, argument position, and final types before lowering. A stale or
+mismatched source location fails the build instead of silently routing a
 different value. The Z Notes WebView smoke therefore reaches `create` and
 `count` through generated Z codecs and dispatch. The service contains no
 transport method.
