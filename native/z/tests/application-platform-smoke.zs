@@ -1,5 +1,6 @@
 import { PreparedApplication } from "../framework/application-contract.zs";
 import { ApplicationMetadata } from "../framework/application-metadata.zs";
+import { ApplicationPermissions } from "../framework/application-permissions.zs";
 import {
   runApplicationPlatform as runHeadlessApplicationPlatform,
 } from "../framework/platform/headless.zs";
@@ -16,6 +17,7 @@ async function main(): i32 on thread.main {
       identifier: "com.zapp.headless",
       version: "0.1.0",
     }),
+    permissions: ApplicationPermissions(),
     windows: createWindowManager(),
     services: createAsyncServices().freeze(),
     lifecycles: createServiceLifecycles().freeze(),

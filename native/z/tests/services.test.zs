@@ -18,12 +18,14 @@ test "registers one value service and preserves its state" {
       '{"id":"1","title":"Z service test"}'
     );
     failure(_) => expect(false).toEqual(true);
+    typedFailure(_) => expect(false).toEqual(true);
   }
 
   const counted = services.invoke("notes.count", "{}");
   match (counted) {
     success(payload) => expect(payload).toEqual('{"count":"1"}');
     failure(_) => expect(false).toEqual(true);
+    typedFailure(_) => expect(false).toEqual(true);
   }
 }
 
@@ -38,11 +40,13 @@ test "returns typed service failures without changing the routing table" {
     failure(message) => expect(message).toEqual(
       "INVALID_ARGUMENTS: missing required field title"
     );
+    typedFailure(_) => expect(false).toEqual(true);
   }
 
   const missing = services.invoke("missing.call", "{}");
   match (missing) {
     success(_) => expect(false).toEqual(true);
     failure(message) => expect(message).toEqual("UNKNOWN_METHOD");
+    typedFailure(_) => expect(false).toEqual(true);
   }
 }
