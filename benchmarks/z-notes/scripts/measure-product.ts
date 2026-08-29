@@ -41,13 +41,23 @@ const targets: Record<string, ProductTarget> = {
     ready: "/tmp/z-notes-benchmark-tauri.ready",
     result: "/tmp/z-notes-benchmark-tauri.result.json",
   },
+  wails: {
+    bundle: resolve(
+      import.meta.dir,
+      "../apps/wails/release/Z Notes Benchmark Wails.app",
+    ),
+    database: "/tmp/z-notes-benchmark-wails.sqlite3",
+    control: "/tmp/z-notes-benchmark-wails.control",
+    ready: "/tmp/z-notes-benchmark-wails.ready",
+    result: "/tmp/z-notes-benchmark-wails.result.json",
+  },
 };
 
 const name = process.argv[2];
 const runs = Number.parseInt(process.argv[3] ?? "7", 10);
 const target = targets[name];
 if (!target) {
-  console.error("usage: bun run bench:z-notes:product <zapp|electron|tauri> [runs]");
+  console.error("usage: bun run bench:z-notes:product <zapp|electron|tauri|wails> [runs]");
   process.exit(2);
 }
 if (!Number.isSafeInteger(runs) || runs < 1) {

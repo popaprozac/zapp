@@ -3,8 +3,8 @@
 ## 2026-08-29 first peer checkpoint
 
 This is the first cross-framework evidence checkpoint, not yet a complete
-verdict. Zapp, Electron, and Tauri now package the same shared product workload;
-Wails and Electrobun remain to be added before publishing a full table.
+verdict. Zapp, Electron, Tauri, and Wails now package the same shared product
+workload; Electrobun remains to be added before publishing a full table.
 
 Machine:
 
@@ -15,6 +15,8 @@ Machine:
 - Apple Clang 17.0.0
 - Bun 1.3.14
 - Rust/Cargo 1.97.1
+- Go 1.25.0
+- Wails 3.0.0-beta.16 and `@wailsio/runtime` 3.0.0-beta.16
 
 Commands:
 
@@ -26,9 +28,12 @@ bun run bench:z-notes:electron:build
 bun run bench:z-notes:electron:measure 3
 bun run bench:z-notes:tauri:build
 bun run bench:z-notes:tauri:measure 3
+bun run bench:z-notes:wails:build
+bun run bench:z-notes:wails:measure 3
 bun run bench:z-notes:product zapp 7
 bun run bench:z-notes:product electron 7
 bun run bench:z-notes:product tauri 7
+bun run bench:z-notes:product wails 7
 ```
 
 Initial release artifact:
@@ -38,6 +43,7 @@ Initial release artifact:
 | Zapp (Z core) | 281,536 B | 913,408 B | 613,092 B | 104 ms | 24 MB |
 | Electron 41.2 | 178,890,304 B | 277,377,024 B | 272,259 B | 102 ms | 111 MB |
 | Tauri 2.11 | 10,839,632 B | 11,476,992 B | 627,078 B | 105 ms | 26 MB |
+| Wails 3.0.0-beta.16 | 8,750,208 B | 9,060,352 B | 65,857 B | 118 ms | 31 MB |
 
 At this checkpoint Electron's bundle is about 304 times larger and its idle
 process tree uses about 4.6 times the memory. Electron's executable payload is
@@ -46,6 +52,11 @@ the same historical harness rule.
 
 Tauri's system-WebView bundle is about 12.6 times larger than Zapp's while its
 idle memory is close: 26 MB versus 24 MB in these samples.
+
+Wails' system-WebView bundle is about 9.9 times larger than Zapp's and its idle
+process uses 31 MB versus Zapp's 24 MB. Its executable is smaller than Tauri's
+in this build, while both remain substantially larger than Zapp's direct native
+core.
 
 `*` Three measured launches after the harness prime/warm-up behavior. The
 historical harness records process appearance, not the new shared UI ready
@@ -64,10 +75,12 @@ iterations through the public frontend adapter.
 | Zapp (Z core) | 341.557 ms | 153.0 ms |
 | Electron 41.2 | 377.077 ms | 101.8 ms |
 | Tauri 2.11 | 391.093 ms | 164.0 ms |
+| Wails 3.0.0-beta.16 | 379.655 ms | 245.0 ms |
 
 Zapp reaches the actual shared ready point about 36 ms before Electron and
-about 50 ms before Tauri in this sample. Electron completes the current
-workflow about 51 ms earlier; Tauri takes about 11 ms longer than Zapp.
+about 50 ms before Tauri in this sample. It reaches ready about 38 ms before
+Wails. Electron completes the current workflow about 51 ms earlier; Tauri takes
+about 11 ms longer than Zapp, and Wails takes about 92 ms longer.
 
 This rerun follows the addition of recursive generated `Array<T>` service
 codecs and removal of Z Notes' nested-JSON workaround. The Z service now
@@ -86,17 +99,22 @@ Electron ready:    412.354, 366.976, 375.411, 388.243, 371.683, 377.077, 389.399
 Electron workflow: 107.5, 90.2, 101.8, 116.3, 107.8, 84.4, 99.2 ms
 Tauri ready:    406.936, 395.544, 378.522, 383.382, 381.615, 392.119, 391.093 ms
 Tauri workflow: 187, 159, 162, 183, 164, 154, 167 ms
+Wails ready:    372.358, 379.655, 369.203, 382.548, 399.678, 363.463, 397.758 ms
+Wails workflow: 256, 226, 212, 246, 245, 231, 278 ms
 ```
 
 Each packaged app's first shared-UI load created its isolated SQLite database
 and the same two canonical seed rows. Zapp uses checked direct `sqlite3.h`
 interop and no handwritten native shim; Electron uses Node's built-in SQLite
 module behind an isolated preload bridge; Tauri uses system SQLite behind
-typed Rust commands.
+typed Rust commands; Wails uses Apple SDK SQLite behind generated TypeScript
+bindings and typed Go service methods. `otool` confirms the Wails executable
+links `/usr/lib/libsqlite3.dylib`, rather than the Homebrew library selected by
+`go-sqlite3`'s default Darwin-arm64 external-library path.
 
 The icon is reported separately because it is 67% of Zapp's initial bundle.
-Both implementations consume the same source artwork; their packaging-format
-difference remains visible rather than being subtracted.
+All implementations consume the same source artwork; their packaging-format
+differences remain visible rather than being subtracted.
 
 ### Composition findings
 
@@ -116,3 +134,7 @@ Building this first real workload closed or exposed these general seams:
 - Removing the handwritten nested-JSON list path did not materially change the
   100-operation median. The remaining Electron workflow lead is now a concrete
   bridge-profiling target rather than attributed to collection serialization.
+- The Wails peer uses the current 3.0.0-beta.16 release, current generated
+  bindings, the shared frontend without product-specific benchmark shortcuts,
+  and the same database lifecycle. It establishes a fourth end-to-end product
+  point without relying on the repository's older Wails alpha floor fixture.
