@@ -103,6 +103,11 @@ policy are Z-owned: origin/path validation, SPA fallback, asset selection, MIME
 and encoding choice, response construction, and task delivery all live in
 `scheme-handler.zs`. Native glue only indexes the generated immutable asset
 table, decodes Brotli bytes into `NSData`, and constructs WebKit's `NSError`.
+WebView bootstrap, identity, and configured CSS/JavaScript injection policy are
+also Z-owned in `webview-injections.zs`: profile validation, duplicate
+suppression, JSON-safe source quoting, phase mapping, and `WKUserScript`
+registration happen through checked Objective-C interop. Native glue exposes
+only length-aware reads from the generated immutable injection table.
 
 The consuming `Application` also owns a separate lifecycle registry. Typed
 main-executor start hooks run before the blocking platform loop; stop hooks run

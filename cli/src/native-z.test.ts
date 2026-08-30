@@ -215,6 +215,7 @@ describe("Z native host inputs", () => {
       "application.zs",
       "runtime.zs",
       "scheme-handler.zs",
+      "webview-injections.zs",
       "window-backend.zs",
       "window-events.zs",
     ];
@@ -244,7 +245,7 @@ describe("Z native host inputs", () => {
       "utf8",
     );
 
-    expect(macOSModules).toHaveLength(5);
+    expect(macOSModules).toHaveLength(6);
     expect(macOSModules.every((module) => module.split("\n").length < 700)).toBe(true);
     expect(macOSPlatform).toContain("implements native.WKScriptMessageHandler");
     expect(macOSPlatform).toContain("body instanceof native.NSString");
@@ -268,8 +269,12 @@ describe("Z native host inputs", () => {
     expect(macOSPlatform).toContain("task.didFinish()");
     expect(macOSPlatform).toContain("window.contentView = webView");
     expect(macOSPlatform).toContain("native.ZAppDesktopBridge.attachWindow(");
-    expect(macOSPlatform).toContain("native.zapp_desktop_has_injection_profile(profile)");
-    expect(macOSPlatform).toContain("native.zapp_desktop_window_select_injection_profile(");
+    expect(macOSPlatform).toContain("function webViewInjectionProfileExists(");
+    expect(macOSPlatform).toContain("function installWebViewScripts(");
+    expect(macOSPlatform).toContain("native.ZAppDesktopBridge.webViewInjectionCount()");
+    expect(macOSPlatform).toContain("JsonValue.string(move source)");
+    expect(macOSPlatform).toContain("WebKit.WKUserScript.alloc().initWithSource(");
+    expect(macOSPlatform).toContain("contentController.addUserScript(script)");
     expect(macOSPlatform).toContain("authorizeServiceInvocation(");
     expect(macOSPlatform).toContain("current.capabilitiesForWindow(windowId)");
     expect(macOSPlatform).toContain("unknown window capability profile");
@@ -298,8 +303,10 @@ describe("Z native host inputs", () => {
     expect(objectiveCHost).toContain("errorWithDomain:@\"com.zapp.frontend\"");
     expect(objectiveCHost).toContain("zapp_desktop_resolve_logical_url");
     expect(objectiveCHost).toContain("zapp_desktop_has_frontend_origin");
-    expect(objectiveCHost).toContain("zapp_desktop_install_injection_profiles");
-    expect(objectiveCHost).toContain("data-zapp-injected-style");
+    expect(objectiveCHost).not.toContain("zapp_desktop_install_injection_profiles");
+    expect(objectiveCHost).not.toContain("zapp_desktop_style_injection");
+    expect(objectiveCHost).not.toContain("zapp_desktop_window_identity_script");
+    expect(objectiveCHost).not.toContain("injectionProfiles");
     expect(objectiveCHost).toContain("decidePolicyForNavigationAction:");
     expect(objectiveCHost).toContain("forMainFrameOnly:YES");
     expect(objectiveCHost).toContain("loadRequest:");

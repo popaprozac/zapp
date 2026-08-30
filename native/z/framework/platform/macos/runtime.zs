@@ -34,6 +34,10 @@ import {
 } from "../../window.zs";
 import { routeWindowBridgeMessage } from "../../window-bridge.zs";
 import { createDesktopAssetSchemeHandler } from "./scheme-handler.zs";
+import {
+  installWebViewScripts,
+  webViewInjectionProfileExists,
+} from "./webview-injections.zs";
 
 class DesktopMessageHandler on thread.main
   implements native.WKScriptMessageHandler {
@@ -125,7 +129,7 @@ internal class MacOSApplicationRuntime {
     selectedCapabilities: CapabilitySelection
   ): void throws WindowError on thread.main {
     for (const profile of options.inject) {
-      if (native.zapp_desktop_has_injection_profile(profile) == 0) {
+      if (!webViewInjectionProfileExists(profile)) {
         throw WindowError({
           id: copy id,
           message: `unknown webview inject profile "${profile}"`,
@@ -578,6 +582,18 @@ function createMacOSWindowRuntime(
   configuration.userContentController = contentController;
   const schemeHandler = createDesktopAssetSchemeHandler();
   configuration.setURLSchemeHandler(schemeHandler, forURLScheme: "zapp");
+  const scripts = attempt installWebViewScripts(
+    contentController,
+    in id,
+    in options.inject
+  );
+  match (scripts) {
+    success => {}
+    failure(message) => throw WindowError({
+      id: copy id,
+      message,
+    });
+  }
 
   const frame = native.zapp_desktop_make_rect(
     options.width,
@@ -624,19 +640,6 @@ function createMacOSWindowRuntime(
     contentController: contentController,
     visible: options.visible
   );
-  for (const profile of options.inject) {
-    const selected = native.zapp_desktop_window_select_injection_profile(
-      id,
-      profile
-    );
-    if (selected != 0) {
-      native.zapp_desktop_window_discard(id);
-      throw WindowError({
-        id: copy id,
-        message: `could not select webview inject profile "${profile}"`,
-      });
-    }
-  }
   const started = native.zapp_desktop_window_start(id);
   if (started != 0) {
     native.zapp_desktop_window_discard(id);

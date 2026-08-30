@@ -14,7 +14,6 @@
 extern const char *zapp_webview_bootstrap_script(void);
 extern const char *zapp_desktop_frontend_origin(void);
 extern size_t zapp_webview_injection_count(void);
-extern int32_t zapp_webview_injection_profile_exists(const char *profile);
 extern const char *zapp_webview_injection_profile(size_t index);
 extern int32_t zapp_webview_injection_phase(size_t index);
 extern const unsigned char *zapp_webview_injection_source(size_t index);
@@ -54,7 +53,6 @@ static ZAppDesktopHost *prepared_host = nil;
 @property(nonatomic, assign) BOOL receivedResponse;
 @property(nonatomic, assign) BOOL windowVisible;
 @property(nonatomic, copy) NSString *logicalURL;
-@property(nonatomic, strong) NSMutableArray<NSString *> *injectionProfiles;
 @property(nonatomic, assign) BOOL started;
 @end
 
@@ -111,6 +109,33 @@ static ZAppDesktopHost *prepared_host = nil;
     return nil;
   }
   return [NSData dataWithBytesNoCopy:decoded length:length freeWhenDone:YES];
+}
+
++ (nullable NSString *)webViewBootstrapScript {
+  const char *source = zapp_webview_bootstrap_script();
+  return source == NULL ? nil : [NSString stringWithUTF8String:source];
+}
+
++ (NSUInteger)webViewInjectionCount {
+  return zapp_webview_injection_count();
+}
+
++ (nullable NSString *)webViewInjectionProfileAtIndex:(NSUInteger)index {
+  const char *profile = zapp_webview_injection_profile(index);
+  return profile == NULL ? nil : [NSString stringWithUTF8String:profile];
+}
+
++ (int32_t)webViewInjectionPhaseAtIndex:(NSUInteger)index {
+  return zapp_webview_injection_phase(index);
+}
+
++ (nullable NSString *)webViewInjectionSourceAtIndex:(NSUInteger)index {
+  const unsigned char *source = zapp_webview_injection_source(index);
+  size_t length = zapp_webview_injection_source_length(index);
+  if (source == NULL) return nil;
+  return [[NSString alloc] initWithBytes:source
+                                  length:length
+                                encoding:NSUTF8StringEncoding];
 }
 
 + (void)failURLSchemeTask:(id<WKURLSchemeTask>)task
@@ -172,10 +197,6 @@ void zapp_deliver_response_from_z(
               windowId:window_id];
 }
 
-int32_t zapp_desktop_has_injection_profile(const char *profile) {
-  return zapp_webview_injection_profile_exists(profile);
-}
-
 int32_t zapp_desktop_window_configure(
   const char *window_id,
   int32_t native_id,
@@ -196,85 +217,9 @@ int32_t zapp_desktop_window_configure(
   record.nativeId = native_id;
   record.windowVisible = visible;
   record.logicalURL = logical.length == 0 ? @"/" : logical;
-  record.injectionProfiles = [[NSMutableArray alloc] init];
   prepared_host.windows[identifier] = record;
   prepared_host.windowsByNativeId[@(native_id)] = record;
   return 0;
-}
-
-int32_t zapp_desktop_window_select_injection_profile(
-  const char *window_id,
-  const char *profile
-) {
-  ZAppDesktopHost *host = prepared_host;
-  if (host == nil) return 3;
-  if (!zapp_webview_injection_profile_exists(profile)) return 1;
-  NSString *identifier = window_id == NULL
-    ? nil
-    : [NSString stringWithUTF8String:window_id];
-  NSString *name = profile == NULL
-    ? nil
-    : [NSString stringWithUTF8String:profile];
-  if (identifier == nil || name == nil) return 2;
-  ZAppDesktopWindowRecord *record = host.windows[identifier];
-  if (record == nil) return 4;
-  if (![record.injectionProfiles containsObject:name]) {
-    [record.injectionProfiles addObject:name];
-  }
-  return 0;
-}
-
-static NSString *zapp_desktop_style_injection(NSString *css) {
-  NSError *error = nil;
-  NSData *jsonData = [NSJSONSerialization dataWithJSONObject:@[css]
-                                                     options:0
-                                                       error:&error];
-  if (jsonData == nil || error != nil) return nil;
-  NSString *json = [[NSString alloc] initWithData:jsonData
-                                         encoding:NSUTF8StringEncoding];
-  if (json == nil) return nil;
-  return [NSString stringWithFormat:
-    @"(()=>{const css=(%@)[0];const install=()=>{"
-    @"const style=document.createElement('style');"
-    @"style.setAttribute('data-zapp-injected-style','');"
-    @"style.textContent=css;"
-    @"(document.head||document.documentElement).appendChild(style)};"
-    @"if(document.documentElement)install();"
-    @"else document.addEventListener('DOMContentLoaded',install,{once:true})})()",
-    json];
-}
-
-static BOOL zapp_desktop_install_injection_profiles(
-  ZAppDesktopWindowRecord *record
-) {
-  size_t entryCount = zapp_webview_injection_count();
-  for (NSString *selected in record.injectionProfiles) {
-    const char *selectedBytes = selected.UTF8String;
-    if (selectedBytes == NULL) return NO;
-    for (size_t index = 0; index < entryCount; index++) {
-      const char *profile = zapp_webview_injection_profile(index);
-      if (profile == NULL || strcmp(profile, selectedBytes) != 0) continue;
-      const unsigned char *sourceBytes = zapp_webview_injection_source(index);
-      size_t sourceLength = zapp_webview_injection_source_length(index);
-      if (sourceBytes == NULL) return NO;
-      NSString *source = [[NSString alloc] initWithBytes:sourceBytes
-                                                 length:sourceLength
-                                               encoding:NSUTF8StringEncoding];
-      if (source == nil) return NO;
-      int32_t phase = zapp_webview_injection_phase(index);
-      if (phase == 0) source = zapp_desktop_style_injection(source);
-      if (source == nil) return NO;
-      WKUserScriptInjectionTime injectionTime = phase == 2
-        ? WKUserScriptInjectionTimeAtDocumentEnd
-        : WKUserScriptInjectionTimeAtDocumentStart;
-      WKUserScript *script = [[WKUserScript alloc]
-        initWithSource:source
-        injectionTime:injectionTime
-        forMainFrameOnly:YES];
-      [record.userContentController addUserScript:script];
-    }
-  }
-  return YES;
 }
 
 NSRect zapp_desktop_make_rect(uint32_t width, uint32_t height) {
@@ -331,44 +276,10 @@ static BOOL zapp_desktop_has_frontend_origin(NSURL *url) {
   return sameScheme && sameHost && samePort;
 }
 
-static NSString *zapp_desktop_window_identity_script(NSString *windowId) {
-  NSError *error = nil;
-  NSData *jsonData = [NSJSONSerialization dataWithJSONObject:@[windowId]
-                                                     options:0
-                                                       error:&error];
-  if (jsonData == nil || error != nil) return nil;
-  NSString *json = [[NSString alloc] initWithData:jsonData
-                                          encoding:NSUTF8StringEncoding];
-  if (json == nil) return nil;
-  return [NSString stringWithFormat:
-    @"globalThis[Symbol.for('zapp.windowId')]=(%@)[0]", json];
-}
-
 int32_t zapp_desktop_window_start(const char *window_id) {
   ZAppDesktopWindowRecord *record = zapp_desktop_window_record(window_id);
   if (record == nil) return 1;
   if (record.started) return 2;
-
-  const char *bootstrapBytes = zapp_webview_bootstrap_script();
-  NSString *bootstrapSource = bootstrapBytes == NULL
-    ? nil
-    : [NSString stringWithUTF8String:bootstrapBytes];
-  if (bootstrapSource == nil) return 3;
-  WKUserScript *bootstrap = [[WKUserScript alloc]
-    initWithSource:bootstrapSource
-    injectionTime:WKUserScriptInjectionTimeAtDocumentStart
-    forMainFrameOnly:YES];
-  [record.userContentController addUserScript:bootstrap];
-
-  NSString *identitySource = zapp_desktop_window_identity_script(record.windowId);
-  if (identitySource == nil) return 4;
-  WKUserScript *identity = [[WKUserScript alloc]
-    initWithSource:identitySource
-    injectionTime:WKUserScriptInjectionTimeAtDocumentStart
-    forMainFrameOnly:YES];
-  [record.userContentController addUserScript:identity];
-
-  if (!zapp_desktop_install_injection_profiles(record)) return 5;
 
   if (prepared_host.smokeMode) {
     WKUserScript *smoke = [[WKUserScript alloc]

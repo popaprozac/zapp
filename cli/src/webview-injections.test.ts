@@ -47,7 +47,8 @@ test("buildWebviewInjections preserves profile and phase ordering", async () => 
     expect(c).toContain('{"base", 0, zapp_webview_injection_0');
     expect(c).toContain('{"base", 1, zapp_webview_injection_1');
     expect(c).toContain('{"base", 2, zapp_webview_injection_2');
-    expect(c).toContain("zapp_webview_injection_profile_exists");
+    expect(c).not.toContain("zapp_webview_injection_profile_exists");
+    expect(c).not.toContain("#include <string.h>");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
