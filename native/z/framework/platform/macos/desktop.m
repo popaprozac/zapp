@@ -61,7 +61,6 @@ static ZAppDesktopHost *prepared_host = nil;
 @interface ZAppDesktopHost : NSObject <NSWindowDelegate, WKNavigationDelegate>
 @property(nonatomic, strong) NSMutableDictionary<NSString *, ZAppDesktopWindowRecord *> *windows;
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, ZAppDesktopWindowRecord *> *windowsByNativeId;
-@property(nonatomic, strong) NSMutableArray<id<WKURLSchemeHandler>> *assetSchemeHandlers;
 @property(nonatomic, assign) BOOL smokeMode;
 @property(nonatomic, assign) int32_t result;
 - (int32_t)run;
@@ -131,10 +130,11 @@ static void zapp_desktop_scheme_error(
   [task didFailWithError:error];
 }
 
-@interface ZAppDesktopAssetSchemeHandler : NSObject <WKURLSchemeHandler>
-@end
-
 @implementation ZAppDesktopAssetSchemeHandler
+
+- (void)installIntoConfiguration:(WKWebViewConfiguration *)configuration {
+  [configuration setURLSchemeHandler:self forURLScheme:@"zapp"];
+}
 
 - (void)webView:(WKWebView *)webView
     startURLSchemeTask:(id<WKURLSchemeTask>)task {
@@ -223,12 +223,6 @@ static void zapp_desktop_scheme_error(
 @end
 
 @implementation ZAppDesktopBridge
-
-+ (void)configureWebViewConfiguration:(WKWebViewConfiguration *)configuration {
-  ZAppDesktopAssetSchemeHandler *handler = [[ZAppDesktopAssetSchemeHandler alloc] init];
-  [configuration setURLSchemeHandler:handler forURLScheme:@"zapp"];
-  [prepared_host.assetSchemeHandlers addObject:handler];
-}
 
 + (void)attachWindow:(NSWindow *)window
             nativeId:(int32_t)nativeId
@@ -549,7 +543,6 @@ void zapp_desktop_window_discard(const char *window_id) {
   if (self != nil) {
     _windows = [[NSMutableDictionary alloc] init];
     _windowsByNativeId = [[NSMutableDictionary alloc] init];
-    _assetSchemeHandlers = [[NSMutableArray alloc] init];
     const char *smoke = getenv("ZAPP_Z_DESKTOP_SMOKE");
     _smokeMode = smoke != NULL && strcmp(smoke, "1") == 0;
     _result = _smokeMode ? 41 : 0;

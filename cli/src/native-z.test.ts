@@ -252,6 +252,10 @@ describe("Z native host inputs", () => {
     expect(macOSPlatform).toContain("window: native.NSWindow");
     expect(macOSPlatform).toContain("webView: native.WKWebView");
     expect(macOSPlatform).toContain("configuration.userContentController = contentController");
+    expect(macOSPlatform).toContain(
+      "schemeHandler: native.ZAppDesktopAssetSchemeHandler",
+    );
+    expect(macOSPlatform).toContain("schemeHandler.installIntoConfiguration(configuration)");
     expect(macOSPlatform).toContain("window.contentView = webView");
     expect(macOSPlatform).toContain("native.ZAppDesktopBridge.attachWindow(");
     expect(macOSPlatform).toContain("native.zapp_desktop_has_injection_profile(profile)");
@@ -272,6 +276,8 @@ describe("Z native host inputs", () => {
     expect(objectiveCHost).not.toContain("[body isKindOfClass:[NSString class]]");
     expect(objectiveCHost).not.toContain("routeScriptMessage:");
     expect(objectiveCHost).not.toContain("int main(");
+    expect(objectiveCHost).not.toContain("assetSchemeHandlers");
+    expect(objectiveCHost).not.toContain("configureWebViewConfiguration");
     expect(objectiveCHost).toContain("ZAppDesktopAssetSchemeHandler");
     expect(objectiveCHost).toContain("zapp_desktop_resolve_logical_url");
     expect(objectiveCHost).toContain("zapp_desktop_has_frontend_origin");

@@ -3,6 +3,7 @@
 #import <AppKit/NSWindow.h>
 #import <Foundation/NSObject.h>
 #import <WebKit/WKScriptMessage.h>
+#import <WebKit/WKURLSchemeHandler.h>
 #import <WebKit/WKScriptMessageHandler.h>
 #import <WebKit/WKUserContentController.h>
 #import <WebKit/WKWebView.h>
@@ -16,8 +17,11 @@ int32_t zapp_desktop_prepare(void);
 void zapp_desktop_abort(void);
 NSRect zapp_desktop_make_rect(uint32_t width, uint32_t height);
 
+@interface ZAppDesktopAssetSchemeHandler : NSObject <WKURLSchemeHandler>
+- (void)installIntoConfiguration:(WKWebViewConfiguration *)configuration;
+@end
+
 @interface ZAppDesktopBridge : NSObject
-+ (void)configureWebViewConfiguration:(WKWebViewConfiguration *)configuration;
 + (void)attachWindow:(NSWindow *)window
             nativeId:(int32_t)nativeId
              webView:(WKWebView *)webView

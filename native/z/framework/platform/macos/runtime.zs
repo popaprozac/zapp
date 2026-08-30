@@ -68,6 +68,7 @@ class MacOSWindowRuntime on thread.main {
   readonly webView: native.WKWebView;
   readonly contentController: native.WKUserContentController;
   readonly configuration: native.WKWebViewConfiguration;
+  readonly schemeHandler: native.ZAppDesktopAssetSchemeHandler;
   readonly registration: objc.Registration;
   readonly pendingRequests: PendingRequests;
   readonly capabilitySelection: CapabilitySelection;
@@ -560,14 +561,21 @@ function createMacOSWindowRuntime(
 ): MacOSWindowRuntime throws WindowError on thread.main {
   const contentController = native.WKUserContentController.alloc().init();
   const handler = new DesktopMessageHandler({ windowId: nativeId });
-  const handlerName: native.NSString = "zapp";
+  const handlerName = native.NSString.alloc().initWithUTF8String("zapp");
+  if (handlerName == null) {
+    throw WindowError({
+      id: copy id,
+      message: "could not construct the WebKit bridge name",
+    });
+  }
   const registration = objc.register({
     add: contentController.addScriptMessageHandler(handler, handlerName),
     remove: contentController.removeScriptMessageHandlerForName(handlerName),
   });
   const configuration = native.WKWebViewConfiguration.alloc().init();
   configuration.userContentController = contentController;
-  native.ZAppDesktopBridge.configureWebViewConfiguration(configuration);
+  const schemeHandler = native.ZAppDesktopAssetSchemeHandler.alloc().init();
+  schemeHandler.installIntoConfiguration(configuration);
 
   const frame = native.zapp_desktop_make_rect(
     options.width,
@@ -643,6 +651,7 @@ function createMacOSWindowRuntime(
     webView,
     contentController,
     configuration,
+    schemeHandler,
     registration,
     pendingRequests: createPendingRequests(),
     capabilitySelection,
