@@ -211,10 +211,17 @@ describe("Z native host inputs", () => {
   });
 
   it("keeps the WebKit UI graph, handler, validation, and registration in Z", () => {
-    const macOSPlatform = readFileSync(
-      new URL("../../native/z/framework/platform/macos.zs", import.meta.url),
+    const macOSModulePaths = [
+      "application.zs",
+      "runtime.zs",
+      "window-backend.zs",
+      "window-events.zs",
+    ];
+    const macOSModules = macOSModulePaths.map((module) => readFileSync(
+      new URL(`../../native/z/framework/platform/macos/${module}`, import.meta.url),
       "utf8",
-    );
+    ));
+    const macOSPlatform = macOSModules.join("\n");
     const objectiveCHost = readFileSync(
       new URL("../../native/z/framework/platform/macos/desktop.m", import.meta.url),
       "utf8",
@@ -236,6 +243,8 @@ describe("Z native host inputs", () => {
       "utf8",
     );
 
+    expect(macOSModules).toHaveLength(4);
+    expect(macOSModules.every((module) => module.split("\n").length < 700)).toBe(true);
     expect(macOSPlatform).toContain("implements native.WKScriptMessageHandler");
     expect(macOSPlatform).toContain("body instanceof native.NSString");
     expect(macOSPlatform).toContain("const text: String = body");
@@ -358,6 +367,7 @@ describe("Z native host inputs", () => {
     expect(contract).toContain("export readonly class PreparedApplication on thread.main");
     expect(contract).toContain("readonly capabilities: ApplicationCapabilities");
     expect(platform).toContain("export async function runApplicationPlatform(");
+    expect(platform).toContain('from "./platform/macos/application.zs"');
     expect(platform).toContain("return try await runMacOSApplication(move config, updates);");
     expect(headless).toContain("struct HeadlessApplicationRuntime");
     expect(headless).toContain("export async function runApplicationPlatform(");

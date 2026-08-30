@@ -1,31 +1,22 @@
 import native from "zapp_desktop.h";
-import { PreparedApplication } from "../application-contract.zs";
-import {
-  ApplicationError,
-  PlatformError,
-  WindowError,
-} from "../application-error.zs";
-import { ApplicationMetadata } from "../application-metadata.zs";
-import { ApplicationPermissions } from "../application-permissions.zs";
+import { WindowError } from "../../application-error.zs";
+import { ApplicationPermissions } from "../../application-permissions.zs";
 import {
   ApplicationCapabilities,
   CapabilitySelection,
-} from "../application-capabilities.zs";
+} from "../../application-capabilities.zs";
 import {
   authorizeServiceInvocation,
   routeDecodedMessageWithServicesAsync,
-} from "../async-bridge.zs";
-import { AsyncServices } from "../async-services.zs";
+} from "../../async-bridge.zs";
+import { AsyncServices } from "../../async-services.zs";
 import {
   BridgeMessage,
   BridgeMessageKind,
   BridgeResponse,
   bridgeFailure,
   decodeBridgeMessage,
-} from "../bridge.zs";
-import {
-  ApplicationContext,
-} from "../../api/zapp/service.zs";
+} from "../../bridge.zs";
 import { zapp_deliver_response_from_z } from "zapp_router.h";
 import objc from "std/objc";
 import { Once, OnceLifetime } from "std/sync";
@@ -35,16 +26,12 @@ import { thread } from "std/thread";
 import {
   PendingRequests,
   createPendingRequests,
-} from "../pending-requests.zs";
+} from "../../pending-requests.zs";
 import {
-  WindowBackend,
-  WindowCreateOperation,
   WindowManager,
   WindowOptions,
-  WindowOperation,
-  WindowTitleOperation,
-} from "../window.zs";
-import { routeWindowBridgeMessage } from "../window-bridge.zs";
+} from "../../window.zs";
+import { routeWindowBridgeMessage } from "../../window-bridge.zs";
 
 class DesktopMessageHandler on thread.main
   implements native.WKScriptMessageHandler {
@@ -92,7 +79,7 @@ enum WindowMessageRoute {
   service BridgeMessage,
 }
 
-class MacOSApplicationRuntime {
+internal class MacOSApplicationRuntime {
   readonly name: String;
   readonly permissions: ApplicationPermissions;
   readonly capabilities: ApplicationCapabilities;
@@ -265,112 +252,8 @@ class MacOSApplicationRuntime {
 
 const application = Once<MacOSApplicationRuntime>();
 
-export async function runMacOSApplication(
-  config: PreparedApplication,
-  updates: TaskScope
-): i32 throws ApplicationError on thread.main {
-  let windows = config.windows;
-  const registeredWindows = windows.all();
-  if (registeredWindows.length == 0) {
-    throw ApplicationError.window(WindowError({
-      id: "",
-      message: "a macOS desktop application requires a registered window in this tier",
-    }));
-  }
-  const prepared = native.zapp_desktop_prepare();
-  if (prepared != 0) {
-    throw ApplicationError.platform(PlatformError({
-      code: prepared,
-      message: "could not prepare the macOS application runtime",
-    }));
-  }
-  const context = ApplicationContext({
-    metadata: ApplicationMetadata({
-      name: copy config.metadata.name,
-      identifier: copy config.metadata.identifier,
-      version: copy config.metadata.version,
-    }),
-  });
-  const eventUpdates = new TaskScope();
-  const lifetime = initializeMacOSApplicationRuntime(
-    copy config.metadata.name,
-    config.permissions,
-    config.capabilities,
-    config.services,
-    updates,
-    eventUpdates,
-    windows
-  );
-  const realized = attempt windows.start(macOSWindowBackend(), true);
-  match (realized) {
-    success => {}
-    failure(windowError) => {
-      windows.stop();
-      native.zapp_desktop_abort();
-      throw ApplicationError.window(windowError);
-    }
-  }
-  const started = attempt config.lifecycles.start(in context);
-  match (started) {
-    success => {}
-    failure(startError) => {
-      windows.stop();
-      native.zapp_desktop_abort();
-      throw ApplicationError.lifecycle(startError);
-    }
-  }
-  const status = native.zapp_desktop_run();
-  await eventUpdates.close();
-  windows.stop();
-  await updates.cancel();
-  const stopped = attempt config.lifecycles.stop(in context);
-  match (stopped) {
-    success => {}
-    failure(stopError) => throw ApplicationError.lifecycle(stopError);
-  }
-  return status;
-}
-
-function createMacOSWindowDeferred(
-  in id: String,
-  in options: WindowOptions
-): void throws WindowError on thread.main {
-  const current = application.get();
-  try current.createWindow(in id, in options);
-}
-
-function showMacOSWindow(in id: String): void on thread.main {
-  native.zapp_desktop_window_show(id);
-}
-
-function hideMacOSWindow(in id: String): void on thread.main {
-  native.zapp_desktop_window_hide(id);
-}
-
-function closeMacOSWindow(in id: String): void on thread.main {
-  native.zapp_desktop_window_close(id);
-}
-
-function setMacOSWindowTitle(
-  in id: String,
-  in title: String
-): void on thread.main {
-  native.zapp_desktop_window_set_title(id, title);
-}
-
-function macOSWindowBackend(): WindowBackend on thread.main {
-  const create: WindowCreateOperation = createMacOSWindowDeferred;
-  const show: WindowOperation = showMacOSWindow;
-  const hide: WindowOperation = hideMacOSWindow;
-  const close: WindowOperation = closeMacOSWindow;
-  const setTitle: WindowTitleOperation = setMacOSWindowTitle;
-  return WindowBackend({
-    create,
-    show,
-    hide,
-    close,
-    setTitle,
-  });
+internal function currentMacOSApplication(): MacOSApplicationRuntime {
+  return application.get();
 }
 
 export c function zapp_route_message_owned(
@@ -618,103 +501,6 @@ function cancelPendingRequest(
   current.cancelRequest(windowId, id);
 }
 
-export c function zapp_window_closed_owned(
-  windowId: String,
-  nativeId: i32
-): void {
-  const current = application.get();
-  const eventUpdates = current.eventUpdates;
-  const id = copy windowId;
-  const cleanup = eventUpdates.schedule(
-    thread.main,
-    async move (): void => closeNativeWindow(in id, nativeId)
-  );
-  if (!cleanup.accepted) return;
-}
-
-export c function zapp_window_focused_owned(
-  windowId: String,
-  nativeId: i32
-): void {
-  const current = application.get();
-  const eventUpdates = current.eventUpdates;
-  const id = copy windowId;
-  const update = eventUpdates.schedule(
-    thread.main,
-    async move (): void => focusNativeWindow(in id, nativeId)
-  );
-  if (!update.accepted) return;
-}
-
-export c function zapp_window_blurred_owned(
-  windowId: String,
-  nativeId: i32
-): void {
-  const current = application.get();
-  const eventUpdates = current.eventUpdates;
-  const id = copy windowId;
-  const update = eventUpdates.schedule(
-    thread.main,
-    async move (): void => blurNativeWindow(in id, nativeId)
-  );
-  if (!update.accepted) return;
-}
-
-export c function zapp_window_resized_owned(
-  windowId: String,
-  nativeId: i32,
-  width: u32,
-  height: u32
-): void {
-  const current = application.get();
-  const eventUpdates = current.eventUpdates;
-  const id = copy windowId;
-  const update = eventUpdates.schedule(
-    thread.main,
-    async move (): void => resizeNativeWindow(
-      in id,
-      nativeId,
-      width,
-      height
-    )
-  );
-  if (!update.accepted) return;
-}
-
-function closeNativeWindow(
-  in windowId: String,
-  nativeId: i32
-): void on thread.main {
-  const current = application.get();
-  current.closeWindow(nativeId, in windowId);
-}
-
-function focusNativeWindow(
-  in windowId: String,
-  nativeId: i32
-): void on thread.main {
-  const current = application.get();
-  current.focusWindow(in windowId);
-}
-
-function blurNativeWindow(
-  in windowId: String,
-  nativeId: i32
-): void on thread.main {
-  const current = application.get();
-  current.blurWindow(in windowId);
-}
-
-function resizeNativeWindow(
-  in windowId: String,
-  nativeId: i32,
-  width: u32,
-  height: u32
-): void on thread.main {
-  const current = application.get();
-  current.resizeWindow(in windowId, width, height);
-}
-
 function deliverResponse(
   in response: BridgeResponse,
   windowId: i32
@@ -827,7 +613,7 @@ function createMacOSWindowRuntime(
   });
 }
 
-function initializeMacOSApplicationRuntime(
+internal function initializeMacOSApplicationRuntime(
   name: String,
   permissions: ApplicationPermissions,
   capabilities: ApplicationCapabilities,

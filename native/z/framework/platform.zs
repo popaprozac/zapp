@@ -1,6 +1,6 @@
 import { PreparedApplication } from "./application-contract.zs";
 import { ApplicationError } from "./application-error.zs";
-import { runMacOSApplication } from "./platform/macos.zs";
+import { runMacOSApplication } from "./platform/macos/application.zs";
 import { thread } from "std/thread";
 import { TaskScope } from "std/async";
 
