@@ -1,4 +1,3 @@
-import native from "zapp_desktop.h";
 import { WindowError } from "../../application-error.zs";
 import {
   WindowBackend,
@@ -19,22 +18,26 @@ function createMacOSWindowDeferred(
 }
 
 function showMacOSWindow(in id: String): void on thread.main {
-  native.zapp_desktop_window_show(id);
+  const current = currentMacOSApplication();
+  current.showWindow(in id);
 }
 
 function hideMacOSWindow(in id: String): void on thread.main {
-  native.zapp_desktop_window_hide(id);
+  const current = currentMacOSApplication();
+  current.hideWindow(in id);
 }
 
 function closeMacOSWindow(in id: String): void on thread.main {
-  native.zapp_desktop_window_close(id);
+  const current = currentMacOSApplication();
+  current.requestWindowClose(in id);
 }
 
 function setMacOSWindowTitle(
   in id: String,
   in title: String
 ): void on thread.main {
-  native.zapp_desktop_window_set_title(id, title);
+  const current = currentMacOSApplication();
+  current.setWindowTitle(in id, in title);
 }
 
 internal function macOSWindowBackend(): WindowBackend on thread.main {

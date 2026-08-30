@@ -219,28 +219,6 @@ static void zapp_desktop_scheme_error(
 
 @end
 
-@interface ZAppDesktopRegistrationOwner ()
-@property(nonatomic, strong) WKUserContentController *contentController;
-@end
-
-@implementation ZAppDesktopRegistrationOwner
-
-- (instancetype)initWithContentController:(WKUserContentController *)controller {
-  self = [super init];
-  if (self != nil) _contentController = controller;
-  return self;
-}
-
-- (void)addHandler:(id<WKScriptMessageHandler>)handler {
-  [self.contentController addScriptMessageHandler:handler name:@"zapp"];
-}
-
-- (void)removeHandler {
-  [self.contentController removeScriptMessageHandlerForName:@"zapp"];
-}
-
-@end
-
 @implementation ZAppDesktopWindowRecord
 @end
 
@@ -419,32 +397,6 @@ static ZAppDesktopWindowRecord *zapp_desktop_webview_record(
     if (record.webView == webView) return record;
   }
   return nil;
-}
-
-void zapp_desktop_window_show(const char *window_id) {
-  ZAppDesktopWindowRecord *record = zapp_desktop_window_record(window_id);
-  [record.window makeKeyAndOrderFront:nil];
-}
-
-void zapp_desktop_window_hide(const char *window_id) {
-  ZAppDesktopWindowRecord *record = zapp_desktop_window_record(window_id);
-  [record.window orderOut:nil];
-}
-
-void zapp_desktop_window_close(const char *window_id) {
-  ZAppDesktopWindowRecord *record = zapp_desktop_window_record(window_id);
-  [record.window close];
-}
-
-void zapp_desktop_window_set_title(
-  const char *window_id,
-  const char *title
-) {
-  ZAppDesktopWindowRecord *record = zapp_desktop_window_record(window_id);
-  NSString *value = title == NULL
-    ? @""
-    : [NSString stringWithUTF8String:title];
-  if (value != nil) record.window.title = value;
 }
 
 static NSURL *zapp_desktop_resolve_logical_url(NSString *logicalURL) {

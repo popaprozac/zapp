@@ -16,12 +16,6 @@ int32_t zapp_desktop_prepare(void);
 void zapp_desktop_abort(void);
 NSRect zapp_desktop_make_rect(uint32_t width, uint32_t height);
 
-@interface ZAppDesktopRegistrationOwner : NSObject
-- (instancetype)initWithContentController:(WKUserContentController *)controller;
-- (void)addHandler:(id<WKScriptMessageHandler>)handler;
-- (void)removeHandler;
-@end
-
 @interface ZAppDesktopBridge : NSObject
 + (void)configureWebViewConfiguration:(WKWebViewConfiguration *)configuration;
 + (void)attachWindow:(NSWindow *)window
@@ -44,10 +38,3 @@ int32_t zapp_desktop_window_select_injection_profile(
 );
 int32_t zapp_desktop_window_start(const char *window_id);
 void zapp_desktop_window_discard(const char *window_id);
-void zapp_desktop_window_show(const char *window_id);
-void zapp_desktop_window_hide(const char *window_id);
-void zapp_desktop_window_close(const char *window_id);
-void zapp_desktop_window_set_title(
-  const char *window_id,
-  const char *title
-);

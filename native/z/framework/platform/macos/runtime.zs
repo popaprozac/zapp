@@ -68,7 +68,6 @@ class MacOSWindowRuntime on thread.main {
   readonly webView: native.WKWebView;
   readonly contentController: native.WKUserContentController;
   readonly configuration: native.WKWebViewConfiguration;
-  readonly registrationOwner: native.ZAppDesktopRegistrationOwner;
   readonly registration: objc.Registration;
   readonly pendingRequests: PendingRequests;
   readonly capabilitySelection: CapabilitySelection;
@@ -237,6 +236,45 @@ internal class MacOSApplicationRuntime {
       }
       none => false;
     };
+  }
+
+  function showWindow(in id: String): void on thread.main {
+    for (const entry of this.nativeWindows) {
+      if (entry.value.id == id) {
+        entry.value.window.makeKeyAndOrderFront(null);
+        return;
+      }
+    }
+  }
+
+  function hideWindow(in id: String): void on thread.main {
+    for (const entry of this.nativeWindows) {
+      if (entry.value.id == id) {
+        entry.value.window.orderOut(null);
+        return;
+      }
+    }
+  }
+
+  function requestWindowClose(in id: String): void on thread.main {
+    for (const entry of this.nativeWindows) {
+      if (entry.value.id == id) {
+        entry.value.window.close();
+        return;
+      }
+    }
+  }
+
+  function setWindowTitle(
+    in id: String,
+    in title: String
+  ): void on thread.main {
+    for (const entry of this.nativeWindows) {
+      if (entry.value.id == id) {
+        entry.value.window.title = title;
+        return;
+      }
+    }
   }
 
   function capabilitiesForWindow(
@@ -521,12 +559,11 @@ function createMacOSWindowRuntime(
   capabilitySelection: CapabilitySelection
 ): MacOSWindowRuntime throws WindowError on thread.main {
   const contentController = native.WKUserContentController.alloc().init();
-  const registrationOwner = native.ZAppDesktopRegistrationOwner.alloc()
-    .initWithContentController(contentController);
   const handler = new DesktopMessageHandler({ windowId: nativeId });
+  const handlerName: native.NSString = "zapp";
   const registration = objc.register({
-    add: registrationOwner.addHandler(handler),
-    remove: registrationOwner.removeHandler(),
+    add: contentController.addScriptMessageHandler(handler, handlerName),
+    remove: contentController.removeScriptMessageHandlerForName(handlerName),
   });
   const configuration = native.WKWebViewConfiguration.alloc().init();
   configuration.userContentController = contentController;
@@ -606,7 +643,6 @@ function createMacOSWindowRuntime(
     webView,
     contentController,
     configuration,
-    registrationOwner,
     registration,
     pendingRequests: createPendingRequests(),
     capabilitySelection,
