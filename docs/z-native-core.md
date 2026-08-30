@@ -96,9 +96,13 @@ scope before releasing the Z-owned window graph, so native callbacks cannot race
 framework teardown. The public event objects remain platform-neutral; future
 backends provide their own native callback adapters.
 
-The Objective-C host owns the process/run-loop adapter, response delivery, and
-smoke observation rather than application object construction or message-body
-validation.
+The Objective-C host owns the process/run-loop adapter, native service-response
+delivery, and smoke observation rather than application object construction or
+message-body validation. The WebKit custom-scheme controller and its request
+policy are Z-owned: origin/path validation, SPA fallback, asset selection, MIME
+and encoding choice, response construction, and task delivery all live in
+`scheme-handler.zs`. Native glue only indexes the generated immutable asset
+table, decodes Brotli bytes into `NSData`, and constructs WebKit's `NSError`.
 
 The consuming `Application` also owns a separate lifecycle registry. Typed
 main-executor start hooks run before the blocking platform loop; stop hooks run

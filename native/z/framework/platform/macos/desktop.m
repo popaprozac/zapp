@@ -73,49 +73,49 @@ static ZAppDesktopHost *prepared_host = nil;
               windowId:(int32_t)windowId;
 @end
 
-static NSString *zapp_desktop_mime_type(NSString *path) {
-  static NSDictionary<NSString *, NSString *> *types;
-  static dispatch_once_t once;
-  dispatch_once(&once, ^{
-    types = @{
-      @"html": @"text/html",
-      @"css": @"text/css",
-      @"js": @"text/javascript",
-      @"mjs": @"text/javascript",
-      @"json": @"application/json",
-      @"svg": @"image/svg+xml",
-      @"png": @"image/png",
-      @"jpg": @"image/jpeg",
-      @"jpeg": @"image/jpeg",
-      @"gif": @"image/gif",
-      @"webp": @"image/webp",
-      @"ico": @"image/x-icon",
-      @"woff": @"font/woff",
-      @"woff2": @"font/woff2",
-      @"ttf": @"font/ttf",
-      @"wasm": @"application/wasm",
-    };
-  });
-  return types[path.pathExtension.lowercaseString]
-    ?: @"application/octet-stream";
+@implementation ZAppDesktopWindowRecord
+@end
+
+@implementation ZAppDesktopBridge
+
++ (NSUInteger)embeddedAssetCount {
+  return zapp_desktop_assets_count;
 }
 
-static const ZAppDesktopAsset *zapp_desktop_asset(NSString *path) {
-  const char *requested = path.UTF8String;
-  if (requested == NULL) return NULL;
-  for (size_t index = 0; index < zapp_desktop_assets_count; index++) {
-    if (strcmp(zapp_desktop_assets[index].path, requested) == 0) {
-      return &zapp_desktop_assets[index];
-    }
++ (nullable NSString *)embeddedAssetPathAtIndex:(NSUInteger)index {
+  if (index >= zapp_desktop_assets_count) return nil;
+  return [NSString stringWithUTF8String:zapp_desktop_assets[index].path];
+}
+
++ (nullable NSData *)embeddedAssetDataAtIndex:(NSUInteger)index {
+  if (index >= zapp_desktop_assets_count) return nil;
+  const ZAppDesktopAsset *asset = &zapp_desktop_assets[index];
+  if (!asset->is_brotli) {
+    return [NSData dataWithBytesNoCopy:(void *)asset->data
+                               length:asset->length
+                         freeWhenDone:NO];
   }
-  return NULL;
+  if (asset->original_length == 0) return [NSData data];
+  uint8_t *decoded = malloc(asset->original_length);
+  if (decoded == NULL) return nil;
+  size_t length = compression_decode_buffer(
+    decoded,
+    asset->original_length,
+    asset->data,
+    asset->length,
+    NULL,
+    COMPRESSION_BROTLI
+  );
+  if (length != asset->original_length) {
+    free(decoded);
+    return nil;
+  }
+  return [NSData dataWithBytesNoCopy:decoded length:length freeWhenDone:YES];
 }
 
-static void zapp_desktop_scheme_error(
-  id<WKURLSchemeTask> task,
-  NSInteger status,
-  NSString *message
-) {
++ (void)failURLSchemeTask:(id<WKURLSchemeTask>)task
+                   status:(NSInteger)status
+                  message:(NSString *)message {
   fprintf(
     stderr,
     "[zapp] frontend request failed status=%ld url=%s: %s\n",
@@ -128,93 +128,6 @@ static void zapp_desktop_scheme_error(
     code:status
     userInfo:@{NSLocalizedDescriptionKey: message}];
   [task didFailWithError:error];
-}
-
-static void zapp_desktop_start_url_scheme_task(
-  WKWebView *web_view,
-  id<WKURLSchemeTask> task
-) {
-  (void)web_view;
-  NSURL *url = task.request.URL;
-  if (![url.scheme isEqualToString:@"zapp"] || ![url.host isEqualToString:@"app"]) {
-    zapp_desktop_scheme_error(task, 403, @"Forbidden application origin");
-    return;
-  }
-
-  NSString *path = url.path.length == 0 ? @"/" : url.path;
-  NSArray<NSString *> *components = path.pathComponents;
-  if ([components containsObject:@".."] || [components containsObject:@"."]) {
-    zapp_desktop_scheme_error(task, 403, @"Forbidden asset path");
-    return;
-  }
-  if ([path isEqualToString:@"/"]) path = @"/index.html";
-
-  const ZAppDesktopAsset *asset = zapp_desktop_asset(path);
-  if (asset == NULL && path.pathExtension.length == 0) {
-    // Application routes resolve through the frontend entry while concrete
-    // asset paths remain honest 404s.
-    path = @"/index.html";
-    asset = zapp_desktop_asset(path);
-  }
-  if (asset == NULL) {
-    zapp_desktop_scheme_error(task, 404, @"Asset not found");
-    return;
-  }
-
-  NSData *data = nil;
-  if (asset->is_brotli) {
-    if (asset->original_length == 0) {
-      data = [NSData data];
-    } else {
-      uint8_t *decoded = malloc(asset->original_length);
-      if (decoded == NULL) {
-        zapp_desktop_scheme_error(task, 500, @"Could not allocate asset buffer");
-        return;
-      }
-      size_t length = compression_decode_buffer(
-        decoded,
-        asset->original_length,
-        asset->data,
-        asset->length,
-        NULL,
-        COMPRESSION_BROTLI
-      );
-      if (length != asset->original_length) {
-        free(decoded);
-        zapp_desktop_scheme_error(task, 500, @"Could not decode embedded asset");
-        return;
-      }
-      data = [NSData dataWithBytesNoCopy:decoded length:length freeWhenDone:YES];
-    }
-  } else {
-    data = [NSData dataWithBytesNoCopy:(void *)asset->data
-                                length:asset->length
-                          freeWhenDone:NO];
-  }
-
-  NSString *mimeType = zapp_desktop_mime_type(path);
-  NSString *encoding = (
-    [mimeType hasPrefix:@"text/"]
-    || [mimeType isEqualToString:@"application/json"]
-  ) ? @"utf-8" : nil;
-  NSURLResponse *response = [[NSURLResponse alloc]
-    initWithURL:url
-    MIMEType:mimeType
-    expectedContentLength:(NSInteger)data.length
-    textEncodingName:encoding];
-  [task didReceiveResponse:response];
-  [task didReceiveData:data];
-  [task didFinish];
-}
-
-@implementation ZAppDesktopWindowRecord
-@end
-
-@implementation ZAppDesktopBridge
-
-+ (void)startURLSchemeTask:(id<WKURLSchemeTask>)task
-                inWebView:(WKWebView *)webView {
-  zapp_desktop_start_url_scheme_task(webView, task);
 }
 
 + (void)attachWindow:(NSWindow *)window

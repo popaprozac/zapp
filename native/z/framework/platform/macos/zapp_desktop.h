@@ -1,7 +1,9 @@
 #pragma once
 
 #import <AppKit/NSWindow.h>
+#import <Foundation/NSData.h>
 #import <Foundation/NSObject.h>
+#import <Foundation/NSString.h>
 #import <WebKit/WKScriptMessage.h>
 #import <WebKit/WKURLSchemeHandler.h>
 #import <WebKit/WKScriptMessageHandler.h>
@@ -12,19 +14,25 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+NS_ASSUME_NONNULL_BEGIN
+
 int32_t zapp_desktop_run(void);
 int32_t zapp_desktop_prepare(void);
 void zapp_desktop_abort(void);
 NSRect zapp_desktop_make_rect(uint32_t width, uint32_t height);
 
 @interface ZAppDesktopBridge : NSObject
++ (NSUInteger)embeddedAssetCount;
++ (nullable NSString *)embeddedAssetPathAtIndex:(NSUInteger)index;
++ (nullable NSData *)embeddedAssetDataAtIndex:(NSUInteger)index;
++ (void)failURLSchemeTask:(id<WKURLSchemeTask>)task
+                   status:(NSInteger)status
+                  message:(NSString *)message;
 + (void)attachWindow:(NSWindow *)window
             nativeId:(int32_t)nativeId
              webView:(WKWebView *)webView
    contentController:(WKUserContentController *)contentController
              visible:(BOOL)visible;
-+ (void)startURLSchemeTask:(id<WKURLSchemeTask>)task
-                inWebView:(WKWebView *)webView;
 @end
 
 int32_t zapp_desktop_has_injection_profile(const char *profile);
@@ -40,3 +48,5 @@ int32_t zapp_desktop_window_select_injection_profile(
 );
 int32_t zapp_desktop_window_start(const char *window_id);
 void zapp_desktop_window_discard(const char *window_id);
+
+NS_ASSUME_NONNULL_END

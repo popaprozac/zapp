@@ -1,4 +1,5 @@
 import native from "zapp_desktop.h";
+import WebKit from "WebKit/WebKit.h";
 import { WindowError } from "../../application-error.zs";
 import { ApplicationPermissions } from "../../application-permissions.zs";
 import {
@@ -69,7 +70,7 @@ class MacOSWindowRuntime on thread.main {
   readonly webView: native.WKWebView;
   readonly contentController: native.WKUserContentController;
   readonly configuration: native.WKWebViewConfiguration;
-  readonly schemeHandler: objc.Adapter<native.WKURLSchemeHandler>;
+  readonly schemeHandler: objc.Adapter<WebKit.WKURLSchemeHandler>;
   readonly registration: objc.Registration;
   readonly pendingRequests: PendingRequests;
   readonly capabilitySelection: CapabilitySelection;

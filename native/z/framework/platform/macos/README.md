@@ -11,7 +11,11 @@ This directory is Zapp's internal macOS backend. It is not part of the public
   macOS operations.
 - `window-events.zs` contains the C ABI callbacks that bring native window
   events back into Z and schedule them on `thread.main`.
-- `zapp_desktop.h` and `desktop.m` are the remaining native ABI seam.
+- `scheme-handler.zs` owns the retained WebKit protocol adapter, packaged-origin
+  and path policy, asset routing, MIME/encoding selection, and response delivery.
+- `zapp_desktop.h` and `desktop.m` are the remaining native ABI seam for the
+  run loop, generated asset-table bytes/Brotli decoding, native errors, and
+  callbacks that have not yet gained a checked direct Z representation.
 
 The migration rule is that policy moves toward these Z modules while
 Objective-C shrinks toward generated adapters or small ABI glue. New public

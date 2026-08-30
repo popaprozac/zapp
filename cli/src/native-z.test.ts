@@ -254,11 +254,18 @@ describe("Z native host inputs", () => {
     expect(macOSPlatform).toContain("webView: native.WKWebView");
     expect(macOSPlatform).toContain("configuration.userContentController = contentController");
     expect(macOSPlatform).toContain(
-      "schemeHandler: objc.Adapter<native.WKURLSchemeHandler>",
+      "schemeHandler: objc.Adapter<WebKit.WKURLSchemeHandler>",
     );
-    expect(macOSPlatform).toContain("implements native.WKURLSchemeHandler");
-    expect(macOSPlatform).toContain("objc.adapt<native.WKURLSchemeHandler>(controller)");
+    expect(macOSPlatform).toContain("implements WebKit.WKURLSchemeHandler");
+    expect(macOSPlatform).toContain("objc.adapt<WebKit.WKURLSchemeHandler>(controller)");
     expect(macOSPlatform).toContain("configuration.setURLSchemeHandler(schemeHandler");
+    expect(macOSPlatform).toContain("function embeddedAssetIndex(");
+    expect(macOSPlatform).toContain("function assetMimeType(");
+    expect(macOSPlatform).toContain("function assetPathEscapes(");
+    expect(macOSPlatform).toContain("Foundation.NSURLResponse.alloc().initWithURL(");
+    expect(macOSPlatform).toContain("task.didReceiveResponse(response)");
+    expect(macOSPlatform).toContain("task.didReceiveData(data)");
+    expect(macOSPlatform).toContain("task.didFinish()");
     expect(macOSPlatform).toContain("window.contentView = webView");
     expect(macOSPlatform).toContain("native.ZAppDesktopBridge.attachWindow(");
     expect(macOSPlatform).toContain("native.zapp_desktop_has_injection_profile(profile)");
@@ -282,7 +289,13 @@ describe("Z native host inputs", () => {
     expect(objectiveCHost).not.toContain("assetSchemeHandlers");
     expect(objectiveCHost).not.toContain("configureWebViewConfiguration");
     expect(objectiveCHost).not.toContain("ZAppDesktopAssetSchemeHandler");
-    expect(objectiveCHost).toContain("zapp_desktop_start_url_scheme_task");
+    expect(objectiveCHost).not.toContain("zapp_desktop_start_url_scheme_task");
+    expect(objectiveCHost).not.toContain("text/javascript");
+    expect(objectiveCHost).not.toContain("application/octet-stream");
+    expect(objectiveCHost).not.toContain("didReceiveResponse:");
+    expect(objectiveCHost).toContain("embeddedAssetDataAtIndex:");
+    expect(objectiveCHost).toContain("compression_decode_buffer");
+    expect(objectiveCHost).toContain("errorWithDomain:@\"com.zapp.frontend\"");
     expect(objectiveCHost).toContain("zapp_desktop_resolve_logical_url");
     expect(objectiveCHost).toContain("zapp_desktop_has_frontend_origin");
     expect(objectiveCHost).toContain("zapp_desktop_install_injection_profiles");
