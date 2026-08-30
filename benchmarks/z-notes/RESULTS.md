@@ -24,7 +24,7 @@ Commands:
 ```sh
 bun run bench:z-notes:reset
 bun run bench:z-notes:zapp:build
-bun run bench:z-notes:zapp:measure 3
+bun run bench:z-notes:zapp:measure 7
 bun run bench:z-notes:electron:build
 bun run bench:z-notes:electron:measure 3
 bun run bench:z-notes:electrobun:build
@@ -44,26 +44,26 @@ Initial release artifact:
 
 | Framework | Executable payload | App bundle | Icon | Process startup* | Idle RSS |
 |---|---:|---:|---:|---:|---:|
-| Zapp (Z core) | 281,536 B | 913,408 B | 613,092 B | 104 ms | 24 MB |
+| Zapp (Z core) | 281,920 B | 290,816 B | 0 B | 102 ms | 24 MB |
 | Electron 41.2 | 178,890,304 B | 277,377,024 B | 272,259 B | 102 ms | 111 MB |
 | Electrobun 2.0.1 | 18,075,963 B | 20,496,384 B | 73,709 B | 98 ms | 209 MB |
 | Tauri 2.11 | 10,839,632 B | 11,476,992 B | 627,078 B | 105 ms | 26 MB |
 | Wails 3.0.0-beta.16 | 8,750,208 B | 9,060,352 B | 65,857 B | 118 ms | 31 MB |
 
-At this checkpoint Electron's bundle is about 304 times larger and its idle
+At this checkpoint Electron's bundle is about 954 times larger and its idle
 process tree uses about 4.6 times the memory. Electron's executable payload is
 the shipped Electron Framework binary rather than its tiny loader stub, using
 the same historical harness rule.
 
-Tauri's system-WebView bundle is about 12.6 times larger than Zapp's while its
+Tauri's system-WebView bundle is about 39.5 times larger than Zapp's while its
 idle memory is close: 26 MB versus 24 MB in these samples.
 
-Wails' system-WebView bundle is about 9.9 times larger than Zapp's and its idle
+Wails' system-WebView bundle is about 31.2 times larger than Zapp's and its idle
 process uses 31 MB versus Zapp's 24 MB. Its executable is smaller than Tauri's
 in this build, while both remain substantially larger than Zapp's direct native
 core.
 
-Electrobun's self-extracting shipping bundle is about 22.4 times larger than
+Electrobun's self-extracting shipping bundle is about 70.5 times larger than
 Zapp's. The executable-payload column reports its 18.08 MB compressed runtime
 archive rather than the 775 KB launcher. After extraction, the measured
 Cottontail/WebView process tree idles at 209 MB in this workload.
@@ -82,17 +82,17 @@ iterations through the public frontend adapter.
 
 | Framework | Launch to shared UI ready | 100 create + refresh iterations |
 |---|---:|---:|
-| Zapp (Z core) | 341.557 ms | 153.0 ms |
+| Zapp (Z core) | 345.424 ms | 135.0 ms |
 | Electron 41.2 | 377.077 ms | 101.8 ms |
 | Electrobun 2.0.1 | 907.102 ms | 3,608.0 ms |
 | Tauri 2.11 | 391.093 ms | 164.0 ms |
 | Wails 3.0.0-beta.16 | 379.655 ms | 245.0 ms |
 
-Zapp reaches the actual shared ready point about 36 ms before Electron and
-about 50 ms before Tauri in this sample. It reaches ready about 38 ms before
-Wails. Electron completes the current workflow about 51 ms earlier; Tauri takes
-about 11 ms longer than Zapp, Wails takes about 92 ms longer, and Electrobun
-takes about 3,455 ms longer.
+Zapp reaches the actual shared ready point about 32 ms before Electron and
+about 46 ms before Tauri in this sample. It reaches ready about 34 ms before
+Wails. Electron completes the current workflow about 33 ms earlier; Tauri takes
+about 29 ms longer than Zapp, Wails takes about 110 ms longer, and Electrobun
+takes about 3,473 ms longer.
 
 This rerun follows the addition of recursive generated `Array<T>` service
 codecs and removal of Z Notes' nested-JSON workaround. The Z service now
@@ -105,8 +105,8 @@ requires bridge-level profiling rather than another inferred explanation.
 The exact seven-run samples were:
 
 ```text
-Zapp ready:    371.407, 341.491, 341.557, 340.127, 340.663, 344.664, 431.875 ms
-Zapp workflow: 165, 162, 144, 136, 153, 139, 187 ms
+Zapp ready:    361.794, 337.643, 360.479, 336.429, 360.761, 345.424, 344.433 ms
+Zapp workflow: 135, 149, 135, 133, 155, 126, 132 ms
 Electron ready:    412.354, 366.976, 375.411, 388.243, 371.683, 377.077, 389.399 ms
 Electron workflow: 107.5, 90.2, 101.8, 116.3, 107.8, 84.4, 99.2 ms
 Electrobun ready:    890.967, 961.695, 889.651, 907.102, 880.531, 953.544, 909.657 ms
@@ -127,9 +127,36 @@ bindings and typed Go service methods. `otool` confirms the Wails executable
 links `/usr/lib/libsqlite3.dylib`, rather than the Homebrew library selected by
 `go-sqlite3`'s default Darwin-arm64 external-library path.
 
-The icon is reported separately because it is 67% of Zapp's initial bundle.
-All implementations consume the same source artwork; their packaging-format
-differences remain visible rather than being subtracted.
+The rewritten Zapp CLI no longer falls back to the repository's historical
+Zapp icon or publishes that asset with the CLI package. An application may
+provide an explicit icon or a project-local build icon; otherwise Zapp owns no
+product branding. The peer fixtures retain their benchmark artwork for this
+checkpoint, and icon bytes remain reported separately rather than subtracted.
+
+### Zapp bridge probes
+
+The Zapp adapter additionally runs two diagnostic probes after the shared
+workflow. These are not yet cross-framework comparisons; they isolate Zapp's
+current end-to-end WebView service path with 1,000 sequential calls per sample.
+
+| Probe | Median | Per call |
+|---|---:|---:|
+| No-argument boolean response | 79 ms / 1,000 | 79 us |
+| Typed struct echo | 80 ms / 1,000 | 80 us |
+
+The measured path includes WebKit message posting, checked Z envelope decoding,
+window capability routing, generated service dispatch, response encoding,
+`evaluateJavaScript`, and Promise resolution. The typed struct's generated
+JSON codec adds about 1 us per call in the median sample. This makes the
+remaining 33 ms workflow difference from Electron unlikely to be explained by
+typed bridge DTO handling alone; SQLite work, growing full-list serialization,
+DOM refresh, and framework scheduling remain part of the application result.
+
+The probe also exposed a native compiler correctness bug before measurement:
+`i64` JSON-number arithmetic was lowered through `i32` checked helpers, causing
+the first numeric value `9` to be rejected. The native integer-operation type
+selection and regression coverage were fixed rather than masking the failure
+with a benchmark timeout.
 
 ### Composition findings
 
@@ -160,3 +187,8 @@ Building this first real workload closed or exposed these general seams:
 - The product runner now waits for valid JSON rather than file existence alone,
   closing a cross-process partial-write race. The artifact harness recognizes
   self-extracting archives structurally, independent of launcher size.
+- The Zapp product adapter now reports repeatable no-op and typed-echo bridge
+  probes alongside the real workflow without giving the shared application a
+  product-specific shortcut.
+- Zapp packaging no longer inherits the old framework icon. The icon-free
+  application bundle is about 291 KB in the filesystem accounting used here.

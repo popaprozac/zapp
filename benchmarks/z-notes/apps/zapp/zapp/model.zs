@@ -19,6 +19,12 @@ export struct BenchmarkReport {
   payload: String;
 }
 
+export struct BenchmarkEcho {
+  sequence: i32;
+  label: String;
+  active: boolean;
+}
+
 export struct NoteStorageError {
   code: i32;
   message: String;

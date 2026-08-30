@@ -46,6 +46,7 @@ Report each dimension separately:
 | Cold launch | Process launch to the shared UI's ready marker |
 | Idle memory | Resident/private memory after the same settle period |
 | Workflow | Median duration of the shared create-and-refresh loop |
+| Bridge probes | Zapp-only no-op and typed-DTO round-trip diagnostics |
 | Build | Clean and incremental release build wall time |
 
 All measurements record machine, architecture, OS, framework versions, compiler
@@ -91,7 +92,10 @@ bun run bench:z-notes:product wails 7
 The product runner creates an isolated control file, resets that framework's
 database, launches a fresh packaged process, waits for the shared UI ready
 report, executes 100 create-and-full-refresh iterations, records the browser's
-aggregate workflow duration, and terminates the complete app process tree. One
+aggregate workflow duration, and terminates the complete app process tree. The
+Zapp adapter then records 1,000 no-op and 1,000 typed-echo service round trips;
+these diagnostic probes are reported separately and are not cross-framework
+scores. One
 unreported prime run precedes the requested samples. Control and report files
 are removed even when a measurement fails.
 

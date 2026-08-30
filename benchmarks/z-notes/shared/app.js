@@ -81,9 +81,13 @@ export async function mountNotesApp(candidate, harness = null) {
 
   if (harness?.enabled) {
     await harness.ready();
-    const result = await globalThis.__zNotesBenchmark.run(
+    const workflow = await globalThis.__zNotesBenchmark.run(
       harness.iterations ?? 10,
     );
+    const probes = typeof harness.probe === "function"
+      ? await harness.probe()
+      : undefined;
+    const result = probes ? { ...workflow, probes } : workflow;
     await harness.complete(result);
   }
 }

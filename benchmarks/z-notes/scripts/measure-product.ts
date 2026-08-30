@@ -10,6 +10,17 @@ interface ProductTarget {
   result: string;
 }
 
+interface ProbeReport {
+  iterations: number;
+  durationMs: number;
+}
+
+interface ProductReport {
+  iterations: number;
+  durationMs: number;
+  probes?: Record<string, ProbeReport>;
+}
+
 const targets: Record<string, ProductTarget> = {
   zapp: {
     bundle: resolve(
@@ -120,16 +131,13 @@ async function waitFor(path: string, timeoutMs: number): Promise<void> {
 async function waitForReport(
   path: string,
   timeoutMs: number,
-): Promise<{ iterations: number; durationMs: number }> {
+): Promise<ProductReport> {
   const deadline = performance.now() + timeoutMs;
   let lastError: unknown = null;
   while (performance.now() < deadline) {
     if (existsSync(path)) {
       try {
-        return JSON.parse(await readFile(path, "utf8")) as {
-          iterations: number;
-          durationMs: number;
-        };
+        return JSON.parse(await readFile(path, "utf8")) as ProductReport;
       } catch (error) {
         lastError = error;
       }
@@ -141,7 +149,11 @@ async function waitForReport(
   });
 }
 
-async function sample(): Promise<{ readyMs: number; workflowMs: number }> {
+async function sample(): Promise<{
+  readyMs: number;
+  workflowMs: number;
+  probes: Record<string, ProbeReport>;
+}> {
   await cleanSample();
   const started = Bun.nanoseconds();
   const launched = Bun.spawn(["open", "-g", "-n", "-a", target.bundle], {
@@ -155,8 +167,18 @@ async function sample(): Promise<{ readyMs: number; workflowMs: number }> {
   if (report.iterations !== 100 || !Number.isFinite(report.durationMs)) {
     throw new Error(`${name} produced an invalid workflow report`);
   }
+  for (const [probeName, probe] of Object.entries(report.probes ?? {})) {
+    if (!Number.isSafeInteger(probe.iterations) || probe.iterations < 1 ||
+        !Number.isFinite(probe.durationMs)) {
+      throw new Error(`${name} produced an invalid ${probeName} probe`);
+    }
+  }
   await terminate();
-  return { readyMs, workflowMs: report.durationMs };
+  return {
+    readyMs,
+    workflowMs: report.durationMs,
+    probes: report.probes ?? {},
+  };
 }
 
 function median(values: number[]): number {
@@ -172,6 +194,25 @@ try {
   for (let index = 0; index < runs; index += 1) samples.push(await sample());
   const ready = samples.map((value) => value.readyMs);
   const workflow = samples.map((value) => value.workflowMs);
+  const probeNames = [...new Set(samples.flatMap((value) => Object.keys(value.probes)))];
+  const bridgeProbes = Object.fromEntries(probeNames.map((probeName) => {
+    const reports = samples
+      .map((value) => value.probes[probeName])
+      .filter((value): value is ProbeReport => value !== undefined);
+    if (reports.length !== samples.length) {
+      throw new Error(`${name} did not report ${probeName} in every sample`);
+    }
+    const durations = reports.map((value) => value.durationMs);
+    const iterations = reports[0].iterations;
+    return [probeName, {
+      iterations,
+      median_ms: Number(median(durations).toFixed(3)),
+      median_per_call_us: Number(
+        ((median(durations) * 1_000) / iterations).toFixed(3),
+      ),
+      samples_ms: durations.map((value) => Number(value.toFixed(3))),
+    }];
+  }));
   console.log(JSON.stringify({
     label: `${name}-z-notes-product`,
     runs,
@@ -180,6 +221,7 @@ try {
     workflow_median_ms: Number(median(workflow).toFixed(3)),
     ready_samples_ms: ready.map((value) => Number(value.toFixed(3))),
     workflow_samples_ms: workflow.map((value) => Number(value.toFixed(3))),
+    ...(probeNames.length > 0 ? { bridge_probes: bridgeProbes } : {}),
   }));
 } finally {
   await terminate();

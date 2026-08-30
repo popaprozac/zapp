@@ -7,6 +7,7 @@ import {
   ServiceLifecycleError,
 } from "zapp/service";
 import {
+  BenchmarkEcho,
   CreateNoteInput,
   BenchmarkReport,
   Note,
@@ -91,6 +92,14 @@ export readonly class NotesService implements ServiceLifecycle {
 
   function benchmarkMode(): boolean {
     return fs.exists(benchmarkControlPath);
+  }
+
+  function benchmarkNoop(): boolean {
+    return true;
+  }
+
+  function benchmarkEcho(input: BenchmarkEcho): BenchmarkEcho {
+    return move input;
   }
 
   function reportBenchmark(report: BenchmarkReport): boolean {
