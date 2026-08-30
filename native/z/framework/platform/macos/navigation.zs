@@ -47,20 +47,16 @@ function hasFrontendOrigin(
     || host == null
     || originHost == null
   ) return false;
-  const normalizedScheme: Foundation.NSString = scheme.lowercaseString;
-  const normalizedOriginScheme: Foundation.NSString = originScheme.lowercaseString;
-  const normalizedHost: Foundation.NSString = host.lowercaseString;
-  const normalizedOriginHost: Foundation.NSString = originHost.lowercaseString;
   if (
-    !normalizedScheme.isEqualToString(normalizedOriginScheme)
-    || !normalizedHost.isEqualToString(normalizedOriginHost)
+    scheme.caseInsensitiveCompare(originScheme) != Foundation.NSOrderedSame
+    || host.caseInsensitiveCompare(originHost) != Foundation.NSOrderedSame
   ) return false;
   const port = url.port;
   const originPort = origin.port;
   if (port == null || originPort == null) {
     return port == null && originPort == null;
   }
-  return port.unsignedIntegerValue == originPort.unsignedIntegerValue;
+  return port.isEqualToNumber(originPort);
 }
 
 internal class DesktopNavigationDelegate on thread.main
