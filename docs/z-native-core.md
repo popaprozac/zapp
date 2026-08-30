@@ -60,6 +60,42 @@ child inherits its creator's capability profiles; Web content cannot submit a
 different profile list. Native-authored windows may select named profiles in
 `WindowOptions`, while unknown names fail window realization with a typed
 `WindowError`.
+
+Each Z-owned `Window` also exposes a typed, main-executor event surface. Event
+channels are ordinary Z objects rather than stringly framework callbacks:
+
+```zs
+import {
+  WindowClosedEvent,
+  WindowEventSubscription,
+} from "zapp/window";
+
+const subscribed = attempt window.events.closed.subscribe(
+  move (in event: WindowClosedEvent): void => {
+    console.log(`window ${event.windowId} closed`);
+  }
+);
+const subscription: WindowEventSubscription = match (subscribed) {
+  success(value) => value;
+  failure(error) => throw error;
+};
+```
+
+The focused initial surface includes `focused`, `blurred`, `resized`, and
+terminal `closed` channels plus `window.events.all`. Multiple subscribers are
+allowed. A specific channel publishes before `all`, and each channel preserves
+subscription order. `unsubscribe()` is explicit and idempotent; dropping the
+subscription also unregisters it deterministically through `deinit`. The name
+`cancel` remains available for future cancellable event requests such as a
+window-close decision. Closing a window publishes `closed`, rejects later
+subscriptions, and releases its handler registries before native shutdown.
+
+The AppKit delegate callbacks enter Z through the native registration owner and
+publish under a dedicated structured `TaskScope`. Shutdown closes and joins that
+scope before releasing the Z-owned window graph, so native callbacks cannot race
+framework teardown. The public event objects remain platform-neutral; future
+backends provide their own native callback adapters.
+
 The Objective-C host owns the process/run-loop adapter, response delivery, and
 smoke observation rather than application object construction or message-body
 validation.

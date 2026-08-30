@@ -3,7 +3,22 @@ import {
   createWindowManager,
 } from "../framework/window.zs";
 import { WindowError } from "../framework/application-error.zs";
+import {
+  WindowBlurredEvent,
+  WindowClosedEvent,
+  WindowEvent,
+  WindowFocusedEvent,
+  WindowResizedEvent,
+} from "../framework/window-events.zs";
 import { thread } from "std/thread";
+
+class ObservedWindowLifecycle on thread.main {
+  focused: i32;
+  blurred: i32;
+  resized: i32;
+  closed: i32;
+  aggregate: i32;
+}
 
 function runWindowManagerSmoke(): i32 throws WindowError on thread.main {
   let windows = createWindowManager();
@@ -13,6 +28,73 @@ function runWindowManagerSmoke(): i32 throws WindowError on thread.main {
     height: 460,
   }));
   const secondary = try windows.create(WindowOptions());
+  const observed = new ObservedWindowLifecycle({
+    focused: 0,
+    blurred: 0,
+    resized: 0,
+    closed: 0,
+    aggregate: 0,
+  });
+  const focusedObserved = observed;
+  const focusedHandler: (
+    in event: WindowFocusedEvent
+  ) => void on thread.main = move (in event: WindowFocusedEvent): void => {
+    if (event.windowId == "win-1") focusedObserved.focused = 1;
+  };
+  const focused = match (attempt primary.events.focused.subscribe(
+    focusedHandler
+  )) {
+    success(subscription) => subscription;
+    failure(_) => return 9;
+  };
+  const blurredObserved = observed;
+  const blurredHandler: (
+    in event: WindowBlurredEvent
+  ) => void on thread.main = move (in event: WindowBlurredEvent): void => {
+    if (event.windowId == "win-1") blurredObserved.blurred = 1;
+  };
+  const blurred = match (attempt primary.events.blurred.subscribe(
+    blurredHandler
+  )) {
+    success(subscription) => subscription;
+    failure(_) => return 10;
+  };
+  const resizedObserved = observed;
+  const resizedHandler: (
+    in event: WindowResizedEvent
+  ) => void on thread.main = move (in event: WindowResizedEvent): void => {
+    resizedObserved.resized = i32(event.size.width + event.size.height);
+  };
+  const resized = match (attempt primary.events.resized.subscribe(
+    resizedHandler
+  )) {
+    success(subscription) => subscription;
+    failure(_) => return 11;
+  };
+  const closedObserved = observed;
+  const closedHandler: (
+    in event: WindowClosedEvent
+  ) => void on thread.main = move (in event: WindowClosedEvent): void => {
+    if (event.windowId == "win-1") closedObserved.closed = 1;
+  };
+  const closed = match (attempt primary.events.closed.subscribe(
+    closedHandler
+  )) {
+    success(subscription) => subscription;
+    failure(_) => return 12;
+  };
+  const aggregateObserved = observed;
+  const aggregateHandler: (
+    in event: WindowEvent
+  ) => void on thread.main = move (in event: WindowEvent): void => {
+    aggregateObserved.aggregate = aggregateObserved.aggregate + 1;
+  };
+  const aggregate = match (attempt primary.events.all.subscribe(
+    aggregateHandler
+  )) {
+    success(subscription) => subscription;
+    failure(_) => return 13;
+  };
 
   if (primary.id != "win-1" || secondary.id != "win-2") return 1;
   const initial = windows.all();
@@ -47,8 +129,18 @@ function runWindowManagerSmoke(): i32 throws WindowError on thread.main {
   };
   if (!hasUpdatedTitle) return 8;
 
+  windows.focusedNative(primary.id);
+  windows.blurredNative(primary.id);
+  windows.resizedNative(primary.id, 720, 460);
+  if (observed.focused != 1) return 14;
+  if (observed.blurred != 1) return 15;
+  if (observed.resized != 1180) return 16;
+  if (observed.aggregate != 3) return 17;
+
   primary.close();
   primary.close();
+  if (observed.closed != 1) return 18;
+  if (observed.aggregate != 4) return 19;
   const remaining = windows.all();
   if (remaining.length != 1) return 6;
   return match (windows.get(primary.id)) {

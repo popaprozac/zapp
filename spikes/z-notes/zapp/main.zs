@@ -1,7 +1,10 @@
 import { createNotesService } from "./notes-service.zs";
 import { createHealthService } from "./health-service.zs";
 import { Application } from "zapp";
-import { WindowOptions } from "zapp/window";
+import {
+  WindowClosedEvent,
+  WindowOptions,
+} from "zapp/window";
 import console from "std/console";
 import { thread } from "std/thread";
 
@@ -16,13 +19,25 @@ async function main(): i32 on thread.main {
     width: 720,
     height: 460,
   }));
-  match (createdWindow) {
-    success(_) => {}
+  const window = match (createdWindow) {
+    success(value) => value;
     failure(error) => {
       console.log(`window ${error.id} failed: ${error.message}`);
       return 71;
     }
-  }
+  };
+  const closedSubscriptionResult = attempt window.events.closed.subscribe(
+    move (in event: WindowClosedEvent): void => {
+      console.log(`window ${event.windowId} closed`);
+    }
+  );
+  const closedSubscription = match (closedSubscriptionResult) {
+    success(subscription) => subscription;
+    failure(error) => {
+      console.log(`could not observe window close: ${error.message}`);
+      return 73;
+    }
+  };
   const result = attempt await app.run();
   return match (result) {
     success(status) => status;

@@ -1,6 +1,10 @@
 import { Map } from "std/collections";
 import { thread } from "std/thread";
 import { WindowError } from "./application-error.zs";
+import {
+  WindowEvents,
+  createWindowEvents,
+} from "./window-events.zs";
 
 export struct WindowOptions {
   title: String = "";
@@ -62,8 +66,9 @@ function inactiveWindowBackend(): WindowBackend on thread.main {
   });
 }
 
-export readonly class Window {
+export readonly class Window on thread.main {
   readonly id: String;
+  readonly events: WindowEvents;
   internal readonly manager: Weak<WindowManager>;
 
   internal constructor(
@@ -71,6 +76,7 @@ export readonly class Window {
     manager: Weak<WindowManager>
   ) {
     this.id = move id;
+    this.events = createWindowEvents();
     this.manager = manager;
   }
 
@@ -182,12 +188,58 @@ class WindowManagerState on thread.main {
   function close(inout this, in id: String): void {
     if (this.active && this.windows.has(id)) {
       this.backend.close(in id);
+      return;
     }
-    this.windows.delete(id);
+    this.closedNative(in id);
   }
 
   function closedNative(inout this, in id: String): void {
-    this.windows.delete(id);
+    const removed = this.windows.remove(id);
+    match (removed) {
+      some(record) => {
+        let events = record.window.events;
+        events.publishClosed(in id);
+      }
+      none => {}
+    }
+  }
+
+  function focusedNative(inout this, in id: String): void {
+    const found = this.get(in id);
+    match (found) {
+      some(window) => {
+        let events = window.events;
+        events.publishFocused(in id);
+      }
+      none => {}
+    }
+  }
+
+  function blurredNative(inout this, in id: String): void {
+    const found = this.get(in id);
+    match (found) {
+      some(window) => {
+        let events = window.events;
+        events.publishBlurred(in id);
+      }
+      none => {}
+    }
+  }
+
+  function resizedNative(
+    inout this,
+    in id: String,
+    width: u32,
+    height: u32
+  ): void {
+    const found = this.get(in id);
+    match (found) {
+      some(window) => {
+        let events = window.events;
+        events.publishResized(in id, width, height);
+      }
+      none => {}
+    }
   }
 
   function setTitle(
@@ -282,6 +334,23 @@ export readonly class WindowManager on thread.main {
 
   internal function closedNative(inout this, in id: String): void on thread.main {
     this.state.closedNative(in id);
+  }
+
+  internal function focusedNative(inout this, in id: String): void on thread.main {
+    this.state.focusedNative(in id);
+  }
+
+  internal function blurredNative(inout this, in id: String): void on thread.main {
+    this.state.blurredNative(in id);
+  }
+
+  internal function resizedNative(
+    inout this,
+    in id: String,
+    width: u32,
+    height: u32
+  ): void on thread.main {
+    this.state.resizedNative(in id, width, height);
   }
 
   internal function setTitle(

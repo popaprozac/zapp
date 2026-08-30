@@ -98,6 +98,7 @@ class MacOSApplicationRuntime {
   readonly capabilities: ApplicationCapabilities;
   readonly services: AsyncServices;
   readonly updates: TaskScope;
+  readonly eventUpdates: TaskScope;
   readonly windowManager: WindowManager on thread.main;
   nativeWindows: Map<i32, MacOSWindowRuntime> on thread.main;
   nextNativeWindowId: i32 on thread.main;
@@ -164,6 +165,23 @@ class MacOSApplicationRuntime {
     // closed window immediately; releasing this graph from windowWillClose
     // would tear it down while AppKit is still closing it.
     this.windowManager.closedNative(in id);
+  }
+
+  function focusWindow(inout this, in id: String): void on thread.main {
+    this.windowManager.focusedNative(in id);
+  }
+
+  function blurWindow(inout this, in id: String): void on thread.main {
+    this.windowManager.blurredNative(in id);
+  }
+
+  function resizeWindow(
+    inout this,
+    in id: String,
+    width: u32,
+    height: u32
+  ): void on thread.main {
+    this.windowManager.resizedNative(in id, width, height);
   }
 
   function beginRequest(
@@ -273,12 +291,14 @@ export async function runMacOSApplication(
       version: copy config.metadata.version,
     }),
   });
+  const eventUpdates = new TaskScope();
   const lifetime = initializeMacOSApplicationRuntime(
     copy config.metadata.name,
     config.permissions,
     config.capabilities,
     config.services,
     updates,
+    eventUpdates,
     windows
   );
   const realized = attempt windows.start(macOSWindowBackend(), true);
@@ -300,6 +320,7 @@ export async function runMacOSApplication(
     }
   }
   const status = native.zapp_desktop_run();
+  await eventUpdates.close();
   windows.stop();
   await updates.cancel();
   const stopped = attempt config.lifecycles.stop(in context);
@@ -602,20 +623,96 @@ export c function zapp_window_closed_owned(
   nativeId: i32
 ): void {
   const current = application.get();
-  const updates = current.updates;
-  const cleanup = updates.schedule(
+  const eventUpdates = current.eventUpdates;
+  const id = copy windowId;
+  const cleanup = eventUpdates.schedule(
     thread.main,
-    async move (): void => closeNativeWindow(move windowId, nativeId)
+    async move (): void => closeNativeWindow(in id, nativeId)
   );
   if (!cleanup.accepted) return;
 }
 
-function closeNativeWindow(
+export c function zapp_window_focused_owned(
   windowId: String,
+  nativeId: i32
+): void {
+  const current = application.get();
+  const eventUpdates = current.eventUpdates;
+  const id = copy windowId;
+  const update = eventUpdates.schedule(
+    thread.main,
+    async move (): void => focusNativeWindow(in id, nativeId)
+  );
+  if (!update.accepted) return;
+}
+
+export c function zapp_window_blurred_owned(
+  windowId: String,
+  nativeId: i32
+): void {
+  const current = application.get();
+  const eventUpdates = current.eventUpdates;
+  const id = copy windowId;
+  const update = eventUpdates.schedule(
+    thread.main,
+    async move (): void => blurNativeWindow(in id, nativeId)
+  );
+  if (!update.accepted) return;
+}
+
+export c function zapp_window_resized_owned(
+  windowId: String,
+  nativeId: i32,
+  width: u32,
+  height: u32
+): void {
+  const current = application.get();
+  const eventUpdates = current.eventUpdates;
+  const id = copy windowId;
+  const update = eventUpdates.schedule(
+    thread.main,
+    async move (): void => resizeNativeWindow(
+      in id,
+      nativeId,
+      width,
+      height
+    )
+  );
+  if (!update.accepted) return;
+}
+
+function closeNativeWindow(
+  in windowId: String,
   nativeId: i32
 ): void on thread.main {
   const current = application.get();
   current.closeWindow(nativeId, in windowId);
+}
+
+function focusNativeWindow(
+  in windowId: String,
+  nativeId: i32
+): void on thread.main {
+  const current = application.get();
+  current.focusWindow(in windowId);
+}
+
+function blurNativeWindow(
+  in windowId: String,
+  nativeId: i32
+): void on thread.main {
+  const current = application.get();
+  current.blurWindow(in windowId);
+}
+
+function resizeNativeWindow(
+  in windowId: String,
+  nativeId: i32,
+  width: u32,
+  height: u32
+): void on thread.main {
+  const current = application.get();
+  current.resizeWindow(in windowId, width, height);
 }
 
 function deliverResponse(
@@ -736,6 +833,7 @@ function initializeMacOSApplicationRuntime(
   capabilities: ApplicationCapabilities,
   services: AsyncServices,
   updates: TaskScope,
+  eventUpdates: TaskScope,
   windowManager: WindowManager
 ): OnceLifetime<MacOSApplicationRuntime> on thread.main {
   const value = new MacOSApplicationRuntime({
@@ -744,6 +842,7 @@ function initializeMacOSApplicationRuntime(
     capabilities,
     services: move services,
     updates,
+    eventUpdates,
     windowManager,
     nativeWindows: Map<i32, MacOSWindowRuntime>(),
     nextNativeWindowId: 1,
