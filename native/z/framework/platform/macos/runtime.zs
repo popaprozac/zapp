@@ -1,4 +1,5 @@
 import native from "zapp_desktop.h";
+import Foundation from "Foundation/Foundation.h";
 import WebKit from "WebKit/WebKit.h";
 import { WindowError } from "../../application-error.zs";
 import { ApplicationPermissions } from "../../application-permissions.zs";
@@ -34,15 +35,13 @@ import {
 } from "../../window.zs";
 import { routeWindowBridgeMessage } from "../../window-bridge.zs";
 import { createDesktopAssetSchemeHandler } from "./scheme-handler.zs";
-import {
-  installWebViewScripts,
-  webViewInjectionProfileExists,
+import { DesktopNavigationDelegate, createDesktopNavigationDelegate,
+  resolveLogicalURL } from "./navigation.zs";
+import { installWebViewScripts, webViewInjectionProfileExists
 } from "./webview-injections.zs";
-
 class DesktopMessageHandler on thread.main
   implements native.WKScriptMessageHandler {
   readonly windowId: i32;
-
   function receive(
     in controller: native.WKUserContentController,
     in message: native.WKScriptMessage
@@ -75,6 +74,7 @@ class MacOSWindowRuntime on thread.main {
   readonly contentController: native.WKUserContentController;
   readonly configuration: native.WKWebViewConfiguration;
   readonly schemeHandler: objc.Adapter<WebKit.WKURLSchemeHandler>;
+  readonly navigationDelegate: objc.Adapter<WebKit.WKNavigationDelegate>;
   readonly registration: objc.Registration;
   readonly pendingRequests: PendingRequests;
   readonly capabilitySelection: CapabilitySelection;
@@ -618,14 +618,20 @@ function createMacOSWindowRuntime(
   const title = options.title.byteLength == 0
     ? copy name
     : copy options.title;
-  const logicalURL = copy options.url;
   window.title = move title;
   window.contentView = webView;
+  const initialURL = resolveLogicalURL(in options.url);
+  if (initialURL == null) {
+    throw WindowError({
+      id: copy id,
+      message: `could not resolve window URL "${options.url}"`,
+    });
+  }
+  const navigationDelegate = createDesktopNavigationDelegate(window);
+  webView.navigationDelegate = navigationDelegate;
   const configured = native.zapp_desktop_window_configure(
     id,
-    nativeId,
-    logicalURL,
-    options.visible
+    nativeId
   );
   if (configured != 0) {
     throw WindowError({
@@ -637,8 +643,7 @@ function createMacOSWindowRuntime(
     window,
     nativeId: nativeId,
     webView: webView,
-    contentController: contentController,
-    visible: options.visible
+    contentController: contentController
   );
   const started = native.zapp_desktop_window_start(id);
   if (started != 0) {
@@ -648,6 +653,10 @@ function createMacOSWindowRuntime(
       message: `could not realize native window (status ${started})`,
     });
   }
+  const request = Foundation.NSURLRequest.requestWithURL(initialURL);
+  webView.loadRequest(request);
+  window.center();
+  if (options.visible) window.makeKeyAndOrderFront(null);
 
   return new MacOSWindowRuntime({
     id: copy id,
@@ -657,6 +666,7 @@ function createMacOSWindowRuntime(
     contentController,
     configuration,
     schemeHandler,
+    navigationDelegate,
     registration,
     pendingRequests: createPendingRequests(),
     capabilitySelection,

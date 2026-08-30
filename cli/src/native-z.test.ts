@@ -213,6 +213,7 @@ describe("Z native host inputs", () => {
   it("keeps the WebKit UI graph, handler, validation, and registration in Z", () => {
     const macOSModulePaths = [
       "application.zs",
+      "navigation.zs",
       "runtime.zs",
       "scheme-handler.zs",
       "webview-injections.zs",
@@ -245,7 +246,7 @@ describe("Z native host inputs", () => {
       "utf8",
     );
 
-    expect(macOSModules).toHaveLength(6);
+    expect(macOSModules).toHaveLength(7);
     expect(macOSModules.every((module) => module.split("\n").length < 700)).toBe(true);
     expect(macOSPlatform).toContain("implements native.WKScriptMessageHandler");
     expect(macOSPlatform).toContain("body instanceof native.NSString");
@@ -275,6 +276,13 @@ describe("Z native host inputs", () => {
     expect(macOSPlatform).toContain("JsonValue.string(move source)");
     expect(macOSPlatform).toContain("WebKit.WKUserScript.alloc().initWithSource(");
     expect(macOSPlatform).toContain("contentController.addUserScript(script)");
+    expect(macOSPlatform).toContain("implements WebKit.WKNavigationDelegate");
+    expect(macOSPlatform).toContain("objc.adapt<WebKit.WKNavigationDelegate>(delegate)");
+    expect(macOSPlatform).toContain("function resolveLogicalURL(");
+    expect(macOSPlatform).toContain("function hasFrontendOrigin(");
+    expect(macOSPlatform).toContain("decisionHandler(WebKit.WKNavigationActionPolicyAllow)");
+    expect(macOSPlatform).toContain("webView.navigationDelegate = navigationDelegate");
+    expect(macOSPlatform).toContain("webView.loadRequest(request)");
     expect(macOSPlatform).toContain("authorizeServiceInvocation(");
     expect(macOSPlatform).toContain("current.capabilitiesForWindow(windowId)");
     expect(macOSPlatform).toContain("unknown window capability profile");
@@ -301,15 +309,16 @@ describe("Z native host inputs", () => {
     expect(objectiveCHost).toContain("embeddedAssetDataAtIndex:");
     expect(objectiveCHost).toContain("compression_decode_buffer");
     expect(objectiveCHost).toContain("errorWithDomain:@\"com.zapp.frontend\"");
-    expect(objectiveCHost).toContain("zapp_desktop_resolve_logical_url");
-    expect(objectiveCHost).toContain("zapp_desktop_has_frontend_origin");
+    expect(objectiveCHost).not.toContain("zapp_desktop_resolve_logical_url");
+    expect(objectiveCHost).not.toContain("zapp_desktop_has_frontend_origin");
     expect(objectiveCHost).not.toContain("zapp_desktop_install_injection_profiles");
     expect(objectiveCHost).not.toContain("zapp_desktop_style_injection");
     expect(objectiveCHost).not.toContain("zapp_desktop_window_identity_script");
     expect(objectiveCHost).not.toContain("injectionProfiles");
-    expect(objectiveCHost).toContain("decidePolicyForNavigationAction:");
+    expect(objectiveCHost).not.toContain("WKNavigationDelegate");
+    expect(objectiveCHost).not.toContain("decidePolicyForNavigationAction:");
     expect(objectiveCHost).toContain("forMainFrameOnly:YES");
-    expect(objectiveCHost).toContain("loadRequest:");
+    expect(objectiveCHost).not.toContain("loadRequest:");
     expect(objectiveCHost).not.toContain("loadHTMLString:");
     expect(notesFrontend).toContain("services.notes.create");
     expect(notesFrontend).toContain("services.notes.isEmpty()");

@@ -108,6 +108,12 @@ also Z-owned in `webview-injections.zs`: profile validation, duplicate
 suppression, JSON-safe source quoting, phase mapping, and `WKUserScript`
 registration happen through checked Objective-C interop. Native glue exposes
 only length-aware reads from the generated immutable injection table.
+Initial URL resolution and application-origin navigation policy live in
+`navigation.zs`. A retained Z-owned `WKNavigationDelegate` adapter handles
+native completion blocks directly, permits subframe and same-origin main-frame
+navigation, rejects external main-frame navigation, and reports load failures.
+Window request construction, loading, centering, and initial visibility are
+also ordinary checked Z/AppKit calls rather than host-side Objective-C policy.
 
 The consuming `Application` also owns a separate lifecycle registry. Typed
 main-executor start hooks run before the blocking platform loop; stop hooks run

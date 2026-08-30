@@ -26,25 +26,25 @@ NSRect zapp_desktop_make_rect(uint32_t width, uint32_t height);
 + (nullable NSString *)embeddedAssetPathAtIndex:(NSUInteger)index;
 + (nullable NSData *)embeddedAssetDataAtIndex:(NSUInteger)index;
 + (nullable NSString *)webViewBootstrapScript;
++ (nullable NSString *)webViewFrontendOrigin;
 + (NSUInteger)webViewInjectionCount;
 + (nullable NSString *)webViewInjectionProfileAtIndex:(NSUInteger)index;
 + (int32_t)webViewInjectionPhaseAtIndex:(NSUInteger)index;
 + (nullable NSString *)webViewInjectionSourceAtIndex:(NSUInteger)index;
++ (BOOL)smokeMode;
++ (void)setResult:(int32_t)result;
 + (void)failURLSchemeTask:(id<WKURLSchemeTask>)task
                    status:(NSInteger)status
                   message:(NSString *)message;
 + (void)attachWindow:(NSWindow *)window
             nativeId:(int32_t)nativeId
              webView:(WKWebView *)webView
-   contentController:(WKUserContentController *)contentController
-             visible:(BOOL)visible;
+   contentController:(WKUserContentController *)contentController;
 @end
 
 int32_t zapp_desktop_window_configure(
   const char *window_id,
-  int32_t native_id,
-  const char *logical_url,
-  bool visible
+  int32_t native_id
 );
 int32_t zapp_desktop_window_start(const char *window_id);
 void zapp_desktop_window_discard(const char *window_id);

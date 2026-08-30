@@ -51,12 +51,10 @@ static ZAppDesktopHost *prepared_host = nil;
 @property(nonatomic, strong) WKWebView *webView;
 @property(nonatomic, strong) WKUserContentController *userContentController;
 @property(nonatomic, assign) BOOL receivedResponse;
-@property(nonatomic, assign) BOOL windowVisible;
-@property(nonatomic, copy) NSString *logicalURL;
 @property(nonatomic, assign) BOOL started;
 @end
 
-@interface ZAppDesktopHost : NSObject <NSWindowDelegate, WKNavigationDelegate>
+@interface ZAppDesktopHost : NSObject <NSWindowDelegate>
 @property(nonatomic, strong) NSMutableDictionary<NSString *, ZAppDesktopWindowRecord *> *windows;
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, ZAppDesktopWindowRecord *> *windowsByNativeId;
 @property(nonatomic, assign) BOOL smokeMode;
@@ -116,6 +114,11 @@ static ZAppDesktopHost *prepared_host = nil;
   return source == NULL ? nil : [NSString stringWithUTF8String:source];
 }
 
++ (nullable NSString *)webViewFrontendOrigin {
+  const char *source = zapp_desktop_frontend_origin();
+  return source == NULL ? nil : [NSString stringWithUTF8String:source];
+}
+
 + (NSUInteger)webViewInjectionCount {
   return zapp_webview_injection_count();
 }
@@ -138,6 +141,14 @@ static ZAppDesktopHost *prepared_host = nil;
                                 encoding:NSUTF8StringEncoding];
 }
 
++ (BOOL)smokeMode {
+  return prepared_host != nil && prepared_host.smokeMode;
+}
+
++ (void)setResult:(int32_t)result {
+  if (prepared_host != nil) prepared_host.result = result;
+}
+
 + (void)failURLSchemeTask:(id<WKURLSchemeTask>)task
                    status:(NSInteger)status
                   message:(NSString *)message {
@@ -158,8 +169,7 @@ static ZAppDesktopHost *prepared_host = nil;
 + (void)attachWindow:(NSWindow *)window
             nativeId:(int32_t)nativeId
              webView:(WKWebView *)webView
-   contentController:(WKUserContentController *)contentController
-             visible:(BOOL)visible {
+   contentController:(WKUserContentController *)contentController {
   ZAppDesktopHost *host = prepared_host;
   if (host == nil) return;
   ZAppDesktopWindowRecord *record = host.windowsByNativeId[@(nativeId)];
@@ -167,7 +177,6 @@ static ZAppDesktopHost *prepared_host = nil;
   record.window = window;
   record.webView = webView;
   record.userContentController = contentController;
-  record.windowVisible = visible;
   window.delegate = host;
 }
 
@@ -199,24 +208,17 @@ void zapp_deliver_response_from_z(
 
 int32_t zapp_desktop_window_configure(
   const char *window_id,
-  int32_t native_id,
-  const char *logical_url,
-  bool visible
+  int32_t native_id
 ) {
   if (prepared_host == nil) return 1;
   NSString *identifier = window_id == NULL
     ? nil
     : [NSString stringWithUTF8String:window_id];
-  NSString *logical = logical_url == NULL
-    ? nil
-    : [NSString stringWithUTF8String:logical_url];
   if (identifier == nil || prepared_host.windows[identifier] != nil) return 2;
   if (prepared_host.windowsByNativeId[@(native_id)] != nil) return 3;
   ZAppDesktopWindowRecord *record = [[ZAppDesktopWindowRecord alloc] init];
   record.windowId = identifier;
   record.nativeId = native_id;
-  record.windowVisible = visible;
-  record.logicalURL = logical.length == 0 ? @"/" : logical;
   prepared_host.windows[identifier] = record;
   prepared_host.windowsByNativeId[@(native_id)] = record;
   return 0;
@@ -234,48 +236,6 @@ static ZAppDesktopWindowRecord *zapp_desktop_window_record(
   return identifier == nil ? nil : prepared_host.windows[identifier];
 }
 
-static ZAppDesktopWindowRecord *zapp_desktop_webview_record(
-  ZAppDesktopHost *host,
-  WKWebView *webView
-) {
-  for (ZAppDesktopWindowRecord *record in host.windows.allValues) {
-    if (record.webView == webView) return record;
-  }
-  return nil;
-}
-
-static NSURL *zapp_desktop_resolve_logical_url(NSString *logicalURL) {
-  NSString *logical = logicalURL.length == 0 ? @"/" : logicalURL;
-  NSURLComponents *logicalParts = [NSURLComponents componentsWithString:logical];
-  if (logicalParts == nil || logicalParts.scheme != nil || [logical hasPrefix:@"//"]) {
-    return nil;
-  }
-
-  const char *originBytes = zapp_desktop_frontend_origin();
-  NSString *origin = originBytes == NULL
-    ? nil
-    : [NSString stringWithUTF8String:originBytes];
-  NSURL *base = origin == nil ? nil : [NSURL URLWithString:origin];
-  if (base == nil) return nil;
-  return [[NSURL URLWithString:logical relativeToURL:base] absoluteURL];
-}
-
-static BOOL zapp_desktop_has_frontend_origin(NSURL *url) {
-  const char *originBytes = zapp_desktop_frontend_origin();
-  NSString *originText = originBytes == NULL
-    ? nil
-    : [NSString stringWithUTF8String:originBytes];
-  NSURL *origin = originText == nil ? nil : [NSURL URLWithString:originText];
-  if (url == nil || origin == nil) return NO;
-  BOOL sameScheme = [url.scheme caseInsensitiveCompare:origin.scheme]
-    == NSOrderedSame;
-  BOOL sameHost = [url.host caseInsensitiveCompare:origin.host]
-    == NSOrderedSame;
-  BOOL samePort = (url.port == nil && origin.port == nil)
-    || [url.port isEqualToNumber:origin.port];
-  return sameScheme && sameHost && samePort;
-}
-
 int32_t zapp_desktop_window_start(const char *window_id) {
   ZAppDesktopWindowRecord *record = zapp_desktop_window_record(window_id);
   if (record == nil) return 1;
@@ -290,12 +250,6 @@ int32_t zapp_desktop_window_start(const char *window_id) {
     [record.userContentController addUserScript:smoke];
   }
 
-  NSURL *initialURL = zapp_desktop_resolve_logical_url(record.logicalURL);
-  if (initialURL == nil) return 6;
-  record.webView.navigationDelegate = prepared_host;
-  [record.webView loadRequest:[NSURLRequest requestWithURL:initialURL]];
-  [record.window center];
-  if (record.windowVisible) [record.window makeKeyAndOrderFront:nil];
   record.started = YES;
 
   if (prepared_host.smokeMode) {
@@ -340,7 +294,6 @@ void zapp_desktop_window_discard(const char *window_id) {
   ZAppDesktopWindowRecord *record = zapp_desktop_window_record(window_id);
   if (record == nil) return;
   record.window.delegate = nil;
-  record.webView.navigationDelegate = nil;
   [prepared_host.windows removeObjectForKey:record.windowId];
   [prepared_host.windowsByNativeId removeObjectForKey:@(record.nativeId)];
   [record.window close];
@@ -524,7 +477,6 @@ void zapp_desktop_window_discard(const char *window_id) {
   if (closedRecord == nil) return;
   [self.windows removeObjectForKey:closedRecord.windowId];
   [self.windowsByNativeId removeObjectForKey:@(closedRecord.nativeId)];
-  closedRecord.webView.navigationDelegate = nil;
   closedRecord.window.delegate = nil;
   zapp_window_closed_owned(
     closedRecord.windowId.UTF8String,
@@ -589,60 +541,6 @@ void zapp_desktop_window_discard(const char *window_id) {
   }
 }
 
-- (void)webView:(WKWebView *)webView
-    didFailProvisionalNavigation:(WKNavigation *)navigation
-    withError:(NSError *)error {
-  (void)webView;
-  (void)navigation;
-  fprintf(
-    stderr,
-    "[zapp] frontend navigation failed before commit: %s\n",
-    error.description.UTF8String ?: "<unknown>"
-  );
-  if (self.smokeMode) {
-    self.result = 54;
-    [zapp_desktop_webview_record(self, webView).window close];
-  }
-}
-
-- (void)webView:(WKWebView *)webView
-    didFailNavigation:(WKNavigation *)navigation
-    withError:(NSError *)error {
-  (void)webView;
-  (void)navigation;
-  fprintf(
-    stderr,
-    "[zapp] frontend navigation failed after commit: %s\n",
-    error.description.UTF8String ?: "<unknown>"
-  );
-  if (self.smokeMode) {
-    self.result = 55;
-    [zapp_desktop_webview_record(self, webView).window close];
-  }
-}
-
-- (void)webView:(WKWebView *)webView
-    decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction
-    decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
-  (void)webView;
-  WKFrameInfo *target = navigationAction.targetFrame;
-  if (target != nil && !target.mainFrame) {
-    decisionHandler(WKNavigationActionPolicyAllow);
-    return;
-  }
-  NSURL *url = navigationAction.request.URL;
-  if (target != nil && zapp_desktop_has_frontend_origin(url)) {
-    decisionHandler(WKNavigationActionPolicyAllow);
-    return;
-  }
-  fprintf(
-    stderr,
-    "[zapp] blocked navigation outside the application origin: %s\n",
-    url.absoluteString.UTF8String ?: "<invalid>"
-  );
-  decisionHandler(WKNavigationActionPolicyCancel);
-}
-
 - (int32_t)run {
   NSApplication *application = NSApplication.sharedApplication;
   [application setActivationPolicy:NSApplicationActivationPolicyRegular];
@@ -651,7 +549,6 @@ void zapp_desktop_window_discard(const char *window_id) {
   [application run];
   for (ZAppDesktopWindowRecord *record in self.windows.allValues) {
     record.window.delegate = nil;
-    record.webView.navigationDelegate = nil;
   }
   return self.result;
 }

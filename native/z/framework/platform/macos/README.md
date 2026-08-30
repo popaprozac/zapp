@@ -16,6 +16,9 @@ This directory is Zapp's internal macOS backend. It is not part of the public
 - `webview-injections.zs` owns bootstrap/window identity scripts, configured
   injection-profile validation and ordering, JSON-safe CSS wrapping, phase
   mapping, and `WKUserScript` registration.
+- `navigation.zs` owns logical URL resolution, frontend-origin comparison, the
+  retained `WKNavigationDelegate` adapter, completion-block decisions, and
+  navigation-failure policy.
 - `zapp_desktop.h` and `desktop.m` are the remaining native ABI seam for the
   run loop, generated asset/injection-table reads, Brotli decoding, native
   errors, and callbacks that have not yet gained a checked direct Z
