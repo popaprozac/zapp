@@ -32,6 +32,7 @@ import {
   WindowOptions,
 } from "../../window.zs";
 import { routeWindowBridgeMessage } from "../../window-bridge.zs";
+import { createDesktopAssetSchemeHandler } from "./scheme-handler.zs";
 
 class DesktopMessageHandler on thread.main
   implements native.WKScriptMessageHandler {
@@ -68,7 +69,7 @@ class MacOSWindowRuntime on thread.main {
   readonly webView: native.WKWebView;
   readonly contentController: native.WKUserContentController;
   readonly configuration: native.WKWebViewConfiguration;
-  readonly schemeHandler: native.ZAppDesktopAssetSchemeHandler;
+  readonly schemeHandler: objc.Adapter<native.WKURLSchemeHandler>;
   readonly registration: objc.Registration;
   readonly pendingRequests: PendingRequests;
   readonly capabilitySelection: CapabilitySelection;
@@ -574,8 +575,8 @@ function createMacOSWindowRuntime(
   });
   const configuration = native.WKWebViewConfiguration.alloc().init();
   configuration.userContentController = contentController;
-  const schemeHandler = native.ZAppDesktopAssetSchemeHandler.alloc().init();
-  schemeHandler.installIntoConfiguration(configuration);
+  const schemeHandler = createDesktopAssetSchemeHandler();
+  configuration.setURLSchemeHandler(schemeHandler, forURLScheme: "zapp");
 
   const frame = native.zapp_desktop_make_rect(
     options.width,

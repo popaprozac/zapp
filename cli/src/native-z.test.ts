@@ -214,6 +214,7 @@ describe("Z native host inputs", () => {
     const macOSModulePaths = [
       "application.zs",
       "runtime.zs",
+      "scheme-handler.zs",
       "window-backend.zs",
       "window-events.zs",
     ];
@@ -243,7 +244,7 @@ describe("Z native host inputs", () => {
       "utf8",
     );
 
-    expect(macOSModules).toHaveLength(4);
+    expect(macOSModules).toHaveLength(5);
     expect(macOSModules.every((module) => module.split("\n").length < 700)).toBe(true);
     expect(macOSPlatform).toContain("implements native.WKScriptMessageHandler");
     expect(macOSPlatform).toContain("body instanceof native.NSString");
@@ -253,9 +254,11 @@ describe("Z native host inputs", () => {
     expect(macOSPlatform).toContain("webView: native.WKWebView");
     expect(macOSPlatform).toContain("configuration.userContentController = contentController");
     expect(macOSPlatform).toContain(
-      "schemeHandler: native.ZAppDesktopAssetSchemeHandler",
+      "schemeHandler: objc.Adapter<native.WKURLSchemeHandler>",
     );
-    expect(macOSPlatform).toContain("schemeHandler.installIntoConfiguration(configuration)");
+    expect(macOSPlatform).toContain("implements native.WKURLSchemeHandler");
+    expect(macOSPlatform).toContain("objc.adapt<native.WKURLSchemeHandler>(controller)");
+    expect(macOSPlatform).toContain("configuration.setURLSchemeHandler(schemeHandler");
     expect(macOSPlatform).toContain("window.contentView = webView");
     expect(macOSPlatform).toContain("native.ZAppDesktopBridge.attachWindow(");
     expect(macOSPlatform).toContain("native.zapp_desktop_has_injection_profile(profile)");
@@ -278,7 +281,8 @@ describe("Z native host inputs", () => {
     expect(objectiveCHost).not.toContain("int main(");
     expect(objectiveCHost).not.toContain("assetSchemeHandlers");
     expect(objectiveCHost).not.toContain("configureWebViewConfiguration");
-    expect(objectiveCHost).toContain("ZAppDesktopAssetSchemeHandler");
+    expect(objectiveCHost).not.toContain("ZAppDesktopAssetSchemeHandler");
+    expect(objectiveCHost).toContain("zapp_desktop_start_url_scheme_task");
     expect(objectiveCHost).toContain("zapp_desktop_resolve_logical_url");
     expect(objectiveCHost).toContain("zapp_desktop_has_frontend_origin");
     expect(objectiveCHost).toContain("zapp_desktop_install_injection_profiles");

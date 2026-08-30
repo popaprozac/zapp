@@ -130,15 +130,11 @@ static void zapp_desktop_scheme_error(
   [task didFailWithError:error];
 }
 
-@implementation ZAppDesktopAssetSchemeHandler
-
-- (void)installIntoConfiguration:(WKWebViewConfiguration *)configuration {
-  [configuration setURLSchemeHandler:self forURLScheme:@"zapp"];
-}
-
-- (void)webView:(WKWebView *)webView
-    startURLSchemeTask:(id<WKURLSchemeTask>)task {
-  (void)webView;
+static void zapp_desktop_start_url_scheme_task(
+  WKWebView *web_view,
+  id<WKURLSchemeTask> task
+) {
+  (void)web_view;
   NSURL *url = task.request.URL;
   if (![url.scheme isEqualToString:@"zapp"] || ![url.host isEqualToString:@"app"]) {
     zapp_desktop_scheme_error(task, 403, @"Forbidden application origin");
@@ -211,18 +207,15 @@ static void zapp_desktop_scheme_error(
   [task didFinish];
 }
 
-- (void)webView:(WKWebView *)webView
-    stopURLSchemeTask:(id<WKURLSchemeTask>)task {
-  (void)webView;
-  (void)task;
-}
-
-@end
-
 @implementation ZAppDesktopWindowRecord
 @end
 
 @implementation ZAppDesktopBridge
+
++ (void)startURLSchemeTask:(id<WKURLSchemeTask>)task
+                inWebView:(WKWebView *)webView {
+  zapp_desktop_start_url_scheme_task(webView, task);
+}
 
 + (void)attachWindow:(NSWindow *)window
             nativeId:(int32_t)nativeId
