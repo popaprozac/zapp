@@ -2,7 +2,7 @@ import { test, expect } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { resolveIOSIconPng } from "./paths";
+import { resolveAppIconPath, resolveIOSIconPng } from "./paths";
 
 function tmpRoot(): string { return mkdtempSync(path.join(tmpdir(), "zapp-iosicon-")); }
 function touch(p: string) { mkdirSync(path.dirname(p), { recursive: true }); writeFileSync(p, "x"); }
@@ -45,4 +45,12 @@ test("resolveIOSIconPng: a non-.png config.ios.icon is ignored and falls through
   touch(path.join(root, "logo.icns"));
   touch(path.join(root, "build", "macos", "icon.png"));
   expect(resolveIOSIconPng(root, { ios: { icon: "logo.icns" } })).toBe(path.join(root, "build", "macos", "icon.png"));
+});
+
+test("resolveAppIconPath: does not impose framework branding", () => {
+  expect(resolveAppIconPath(tmpRoot())).toBe("");
+});
+
+test("resolveIOSIconPng: does not impose framework branding", () => {
+  expect(resolveIOSIconPng(tmpRoot(), {})).toBe("");
 });

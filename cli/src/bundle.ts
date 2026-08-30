@@ -29,12 +29,12 @@ export async function createDevBundle(root: string, binaryPath: string, config: 
   const { chmod } = await import("node:fs/promises");
   await chmod(execPath, 0o755);
 
-  // Process icon — user-configured or framework default
+  // Process an application-owned icon when one is configured or discovered.
   const resourcesDir = path.join(contentsDir, "Resources");
   await mkdir(resourcesDir, { recursive: true });
   let iconPlistEntry = "";
 
-  // Resolve icon source: macos.icon → build/macos/icon.* → framework default.
+  // Resolve icon source: macos.icon → build/macos/icon.*.
   // Same priority as production package (cli/src/package.ts).
   const iconSrc = resolveAppIconPath(root, config.macos?.icon);
 

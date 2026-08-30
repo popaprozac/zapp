@@ -70,7 +70,7 @@ export async function createProductionBundle(opts: PackageOptions): Promise<stri
     clog(1, "bundled worker scripts");
   }
 
-  // Process app icon. Priority: macos.icon → build/macos/icon.* → framework default.
+  // Process app icon. Priority: macos.icon → build/macos/icon.*.
   // resolveAppIconPath handles the search; processIcon converts to bundle format.
   const macosConfig = config.macos;
   let iconResult: IconResult | null = null;

@@ -359,7 +359,9 @@ Drop any of these into \`build/macos/\`:
 
 1. \`targets.macOS.icon\` path set in \`zapp.config.ts\` (explicit override)
 2. \`build/macos/icon.{icon,icns,iconset,png}\` (this directory)
-3. Framework default (Zapp logo)
+
+If neither is present, Zapp packages the application without imposing a
+framework-owned icon. Add application branding before distribution.
 
 ### Info.plist.extra example
 

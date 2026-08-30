@@ -24,7 +24,7 @@ export interface MacOSConfig {
    * to the project root or absolute.
    *
    * If omitted, the CLI looks for `build/macos/icon.{icon,icns,iconset,png}`
-   * in the project, then falls back to the framework default.
+   * in the project. Zapp does not apply framework branding by default.
    */
   icon?: string;
   /** App Store category (e.g. "public.app-category.developer-tools"). */
@@ -196,9 +196,9 @@ export interface IOSConfig {
    * into the app's `Assets.car` via `actool`). If omitted, the CLI
    * looks, in order, for `build/ios/icon.png`, `build/icon.png`, then
    * reuses the macOS icon (`macos.icon` if it's a `.png`, else
-   * `build/macos/icon.png`), then the framework default. Must be a
-   * **PNG** — iOS asset catalogs don't accept `.icns`/`.iconset`; if
-   * no PNG is found the iOS build proceeds without an app icon.
+   * `build/macos/icon.png`). Must be a **PNG** — iOS asset catalogs don't
+   * accept `.icns`/`.iconset`; if no PNG is found the iOS build proceeds
+   * without an app icon.
    */
   icon?: string;
 

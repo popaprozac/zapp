@@ -45,7 +45,7 @@ async function prepareIOSIcon(
   if (!isIOSTarget(target)) return null;
   const png = resolveIOSIconPng(root, config);
   if (!png) {
-    clog(0, "[zapp] no PNG app icon for iOS (ios.icon / build/ios/icon.png / build/icon.png / macOS icon / framework default) — skipping icon");
+    clog(0, "[zapp] no application-owned PNG icon for iOS (ios.icon / build/ios/icon.png / build/icon.png / macOS icon) — skipping icon");
     return null;
   }
   const tempDir = path.join(root, ".zapp", "ios-icon-tmp");
