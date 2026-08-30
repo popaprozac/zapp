@@ -169,11 +169,13 @@ library and a size-optimized strict-C host:
 These are the historical pre-JSON baseline numbers, not a product comparison.
 The runtime-owned typed JSON archive is 43,704 bytes. Its strict-C smoke host is
 71,224 bytes, while the first dynamically linked AppKit/WebKit executable is
-95,760 bytes. The current 445 KB / 26 MB / roughly 135 microsecond WebView
-baseline remains the oracle until Phase 1 performs equivalent work. Z must then
-report clean and incremental build time, binary and bundle size, idle memory,
-startup, bridge latency, allocations/copies, and deterministic shutdown against
-the same app.
+95,760 bytes. The current like-for-like Z Notes product checkpoint is a 281,920
+byte executable, a 290,816 byte icon-free application bundle, 24 MB idle RSS,
+and a 79 microsecond median no-op WebView service round trip. The typed struct
+echo probe measures 80 microseconds, so generated DTO handling adds about one
+microsecond at this boundary. Z must continue to report clean and incremental
+build time, binary and bundle size, idle memory, startup, bridge latency,
+allocations/copies, and deterministic shutdown against equivalent applications.
 
 The first typed-service checkpoint adds a frozen function-valued router,
 checked Notes handler, synchronized service state, exact integer projection,
