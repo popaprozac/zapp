@@ -23,13 +23,6 @@ export interface ZNativeStageFile {
   destination: string;
 }
 
-export const zNativeDesktopHostEntry = "native-bridge.m";
-
-export const zNativeDesktopHostSources = [
-  zNativeDesktopHostEntry,
-  "asset-bridge.m",
-] as const;
-
 export interface ZNativeLinkRequirements {
   includeDirectories?: string[];
   directories?: string[];
@@ -78,7 +71,11 @@ function renderZCapabilityProfiles(
 
 export function renderZConfiguredDesktopSmoke(enabled: boolean): string {
   const source = [
-    'import native from "zapp_desktop.h";',
+    ...(enabled ? [
+      'import smoke from "desktop-smoke.h";',
+      'import Foundation from "Foundation/Foundation.h";',
+    ] : []),
+    'import WebKit from "WebKit/WebKit.h";',
     'import { thread } from "std/thread";',
     "",
     "internal function configuredMacOSApplicationSmokeMode(): boolean {",
@@ -88,14 +85,14 @@ export function renderZConfiguredDesktopSmoke(enabled: boolean): string {
     "internal function startConfiguredWindowSmokeSupport(",
     "  in windowId: String,",
     "  nativeId: i32,",
-    "  in webView: native.WKWebView,",
-    "  in contentController: native.WKUserContentController",
+    "  in webView: WebKit.WKWebView,",
+    "  in contentController: WebKit.WKUserContentController",
     "): void on thread.main {",
   ];
   if (enabled) {
     source.push(
-      "  const nativeWindowId: native.NSString = copy windowId;",
-      "  native.zapp_desktop_smoke_start_window(",
+      "  const nativeWindowId: Foundation.NSString = copy windowId;",
+      "  smoke.zapp_desktop_smoke_start_window(",
       "    in webView,",
       "    in contentController,",
       "    in nativeWindowId,",
@@ -107,7 +104,7 @@ export function renderZConfiguredDesktopSmoke(enabled: boolean): string {
     "}",
     "",
     "internal function observeConfiguredWebViewResponse(",
-    "  in webView: native.WKWebView,",
+    "  in webView: WebKit.WKWebView,",
     "  nativeId: i32,",
     "  activeWindowCount: usize,",
     "  in payload: String,",
@@ -118,8 +115,8 @@ export function renderZConfiguredDesktopSmoke(enabled: boolean): string {
   );
   if (enabled) {
     source.push(
-      "  const nativePayload: native.NSString = copy payload;",
-      "  native.zapp_desktop_smoke_observe_response(",
+      "  const nativePayload: Foundation.NSString = copy payload;",
+      "  smoke.zapp_desktop_smoke_observe_response(",
       "    in webView,",
       "    nativeId,",
       "    activeWindowCount,",
@@ -278,25 +275,17 @@ export function zNativeStageFiles(host: ZNativeHost): ZNativeStageFile[] {
       destination: "zapp_router.h.zd",
     },
     ...(host === "desktop" ? [
-      ...zNativeDesktopHostSources.map((destination) => ({
-        source: `framework/platform/macos/${destination}`,
-        destination,
-      })),
       {
         source: "framework/platform/macos/desktop-smoke.h",
         destination: "desktop-smoke.h",
       },
       {
+        source: "framework/platform/macos/desktop-smoke.h.zd",
+        destination: "desktop-smoke.h.zd",
+      },
+      {
         source: "framework/platform/macos/desktop-smoke.m",
         destination: "desktop-smoke.m",
-      },
-      {
-        source: "framework/platform/macos/zapp_desktop.h",
-        destination: "zapp_desktop.h",
-      },
-      {
-        source: "framework/platform/macos/zapp_desktop.h.zd",
-        destination: "zapp_desktop.h.zd",
       },
     ] : [{
       source: "testing/bridge-host.c",
@@ -315,6 +304,7 @@ export function renderZNativeManifest(
   nativeDirectory = ".",
   packageDirectory?: string,
   application: ZNativeLinkRequirements = {},
+  desktopSmokeSupport = false,
 ): string {
   const unique = (values: string[]): string[] => [...new Set(values)];
   const target = host === "desktop"
@@ -333,7 +323,7 @@ export function renderZNativeManifest(
           ...(application.directories ?? []),
         ]),
         libraries: unique([
-          "zapp_desktop_host",
+          ...(desktopSmokeSupport ? ["zapp_desktop_smoke"] : []),
           "compression",
           ...(application.libraries ?? []),
         ]),
@@ -598,6 +588,7 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
       stage,
       path.join(workspace, "native", "z"),
       applicationLinkRequirements,
+      desktopSmokeSupport,
     ),
     "utf8",
   );
@@ -751,10 +742,9 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
   }
 
   const clang = process.env.CC || "clang";
-  if (desktop) {
-    const desktopObject = path.join(stage, "zapp_desktop_host.o");
+  if (desktop && desktopSmokeSupport) {
     const desktopSmokeObject = path.join(stage, "zapp_desktop_smoke.o");
-    const desktopArchive = path.join(stage, "libzapp_desktop_host.a");
+    const desktopArchive = path.join(stage, "libzapp_desktop_smoke.a");
     await run([
       clang,
       "-fobjc-arc",
@@ -764,41 +754,19 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
       "-Wall",
       "-Wextra",
       "-Werror",
-      ...(desktopSmokeSupport ? ["-DZAPP_DESKTOP_SMOKE_SUPPORT=1"] : []),
       "-I",
       stage,
       "-c",
-      path.join(stage, zNativeDesktopHostEntry),
+      path.join(stage, "desktop-smoke.m"),
       "-o",
-      desktopObject,
+      desktopSmokeObject,
     ], options.root);
-    if (desktopSmokeSupport) {
-      await run([
-        clang,
-        "-fobjc-arc",
-        "-fblocks",
-        "-mmacosx-version-min=14.0",
-        options.optimize ? "-Oz" : "-O0",
-        "-Wall",
-        "-Wextra",
-        "-Werror",
-        "-I",
-        stage,
-        "-c",
-        path.join(stage, "desktop-smoke.m"),
-        "-o",
-        desktopSmokeObject,
-      ], options.root);
-    } else {
-      await rm(desktopSmokeObject, { force: true });
-    }
     await rm(desktopArchive, { force: true });
     await run([
       "ar",
       "rcs",
       desktopArchive,
-      desktopObject,
-      ...(desktopSmokeSupport ? [desktopSmokeObject] : []),
+      desktopSmokeObject,
     ], options.root);
   }
 

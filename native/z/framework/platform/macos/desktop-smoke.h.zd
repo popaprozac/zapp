@@ -1,4 +1,4 @@
-declare module "zapp_desktop.h" {
+declare module "desktop-smoke.h" {
   export function zapp_desktop_smoke_start_window(
     in web_view: _,
     in content_controller: _,

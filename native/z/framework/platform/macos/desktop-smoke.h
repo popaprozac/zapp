@@ -6,6 +6,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+int32_t zapp_macos_application_smoke_mode(void);
+void zapp_macos_application_set_result(int32_t result);
+
 bool zapp_desktop_smoke_window_received(int32_t native_id);
 
 void zapp_desktop_smoke_start_window(

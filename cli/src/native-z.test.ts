@@ -10,7 +10,6 @@ import {
   resolveZFrontendOrigin,
   resolveZNativeHost,
   validateZCompilerIdentity,
-  zNativeDesktopHostSources,
   zNativeEntry,
   zNativeStageFiles,
 } from "./native-z";
@@ -20,16 +19,18 @@ describe("renderZConfiguredDesktopSmoke", () => {
     const source = renderZConfiguredDesktopSmoke(false);
     expect(source).toContain("return false");
     expect(source).not.toContain("getenv");
-    expect(source).not.toContain("native.zapp_desktop_smoke_start_window(");
-    expect(source).not.toContain("native.zapp_desktop_smoke_observe_response(");
+    expect(source).not.toContain("smoke.zapp_desktop_smoke_start_window(");
+    expect(source).not.toContain("smoke.zapp_desktop_smoke_observe_response(");
+    expect(source).not.toContain('import smoke from "desktop-smoke.h"');
   });
 
   it("enables smoke behavior only in the generated test build", () => {
     const source = renderZConfiguredDesktopSmoke(true);
     expect(source).toContain("return true");
     expect(source).not.toContain("getenv");
-    expect(source).toContain("native.zapp_desktop_smoke_start_window(");
-    expect(source).toContain("native.zapp_desktop_smoke_observe_response(");
+    expect(source).toContain("smoke.zapp_desktop_smoke_start_window(");
+    expect(source).toContain("smoke.zapp_desktop_smoke_observe_response(");
+    expect(source).toContain('import smoke from "desktop-smoke.h"');
   });
 });
 
@@ -148,24 +149,18 @@ describe("resolveZNativeHost", () => {
 describe("Z native host inputs", () => {
   it("stages the Z-owned Objective-C registration surface for desktop", () => {
     const files = zNativeStageFiles("desktop");
-    for (const destination of zNativeDesktopHostSources) {
-      expect(files).toContainEqual({
-        source: `framework/platform/macos/${destination}`,
-        destination,
-      });
-    }
     expect(files.map((file) => file.destination)).not.toContain("desktop.m");
     expect(files).toContainEqual({
       source: "framework/platform/macos/desktop-smoke.m",
       destination: "desktop-smoke.m",
     });
     expect(files).toContainEqual({
-      source: "framework/platform/macos/zapp_desktop.h",
-      destination: "zapp_desktop.h",
+      source: "framework/platform/macos/desktop-smoke.h",
+      destination: "desktop-smoke.h",
     });
     expect(files).toContainEqual({
-      source: "framework/platform/macos/zapp_desktop.h.zd",
-      destination: "zapp_desktop.h.zd",
+      source: "framework/platform/macos/desktop-smoke.h.zd",
+      destination: "desktop-smoke.h.zd",
     });
     expect(files.map((file) => file.destination)).not.toContain("host.c");
     expect(zNativeEntry("desktop")).toBe("main.zs");
@@ -177,7 +172,7 @@ describe("Z native host inputs", () => {
           includeDirectories: ["/native"],
           link: {
             directories: ["/native"],
-            libraries: ["zapp_desktop_host", "compression"],
+            libraries: ["compression"],
           },
         },
       });
@@ -207,8 +202,22 @@ describe("Z native host inputs", () => {
         includeDirectories: ["/native", "/vendor/include"],
         link: {
           directories: ["/native", "/vendor/lib"],
-          libraries: ["zapp_desktop_host", "compression", "sqlite3"],
+          libraries: ["compression", "sqlite3"],
           frameworks: ["Security"],
+        },
+      },
+    });
+    expect(JSON.parse(renderZNativeManifest(
+      "desktop",
+      "/app/main.zs",
+      "/native",
+      "/workspace/native/z",
+      {},
+      true,
+    ))).toMatchObject({
+      target: {
+        link: {
+          libraries: ["zapp_desktop_smoke", "compression"],
         },
       },
     });
@@ -254,11 +263,6 @@ describe("Z native host inputs", () => {
       "utf8",
     ));
     const macOSPlatform = macOSModules.join("\n");
-    const objectiveCHostModules = zNativeDesktopHostSources.map((source) => readFileSync(
-      new URL(`../../native/z/framework/platform/macos/${source}`, import.meta.url),
-      "utf8",
-    ));
-    const objectiveCHost = objectiveCHostModules.join("\n");
     const objectiveCSmoke = readFileSync(
       new URL("../../native/z/framework/platform/macos/desktop-smoke.m", import.meta.url),
       "utf8",
@@ -282,13 +286,12 @@ describe("Z native host inputs", () => {
 
     expect(macOSModules).toHaveLength(13);
     expect(macOSModules.every((module) => module.split("\n").length < 700)).toBe(true);
-    expect(objectiveCHostModules.every((module) => module.split("\n").length < 150)).toBe(true);
-    expect(macOSPlatform).toContain("implements native.WKScriptMessageHandler");
-    expect(macOSPlatform).toContain("body instanceof native.NSString");
+    expect(macOSPlatform).toContain("implements WebKit.WKScriptMessageHandler");
+    expect(macOSPlatform).toContain("body instanceof WebKit.NSString");
     expect(macOSPlatform).toContain("const text: String = body");
     expect(macOSPlatform).toContain("objc.register({");
-    expect(macOSPlatform).toContain("window: native.NSWindow");
-    expect(macOSPlatform).toContain("webView: native.WKWebView");
+    expect(macOSPlatform).toContain("window: WebKit.NSWindow");
+    expect(macOSPlatform).toContain("webView: WebKit.WKWebView");
     expect(macOSPlatform).toContain("configuration.userContentController = contentController");
     expect(macOSPlatform).toContain(
       "schemeHandler: objc.Adapter<WebKit.WKURLSchemeHandler>",
@@ -327,10 +330,9 @@ describe("Z native host inputs", () => {
     expect(macOSPlatform).toContain("function hasFrontendOrigin(");
     expect(macOSPlatform).toContain("decisionHandler(WebKit.WKNavigationActionPolicyAllow)");
     expect(macOSPlatform).toContain("webView.navigationDelegate = navigationDelegate");
-    expect(macOSPlatform).toContain("implements native.NSWindowDelegate");
-    expect(macOSPlatform).toContain("in notification: native.NSNotification");
-    expect(macOSPlatform).not.toContain("Foundation.NSNotification");
-    expect(macOSPlatform).toContain("objc.adapt<native.NSWindowDelegate>(delegate)");
+    expect(macOSPlatform).toContain("implements WebKit.NSWindowDelegate");
+    expect(macOSPlatform).toContain("in notification: WebKit.NSNotification");
+    expect(macOSPlatform).toContain("objc.adapt<WebKit.NSWindowDelegate>(delegate)");
     expect(macOSPlatform).toContain("window.delegate = windowDelegate");
     expect(macOSPlatform).toContain("function javascriptJSON(");
     expect(macOSPlatform).toContain("json.encode(in envelope)");
@@ -342,68 +344,15 @@ describe("Z native host inputs", () => {
     expect(macOSPlatform).toContain("unknown window capability profile");
     expect(macOSPlatform).toContain("window.releasedWhenClosed = false");
     expect(macOSPlatform).toContain("u32(math.trunc(value))");
-    expect(macOSPlatform).toContain("native.NSMakeRect(");
-    expect(objectiveCHost).not.toContain("zapp_desktop_make_rect");
-    expect(objectiveCHost).not.toContain("contentWidth:");
-    expect(objectiveCHost).not.toContain("dispatch_async");
-    expect(objectiveCHost).not.toContain("zapp_desktop_requested_smoke_mode");
-    expect(objectiveCHost).not.toContain(
-      "ZAppDesktopHost : NSObject <WKScriptMessageHandler",
-    );
-    expect(objectiveCHost).not.toContain("ZAppDesktopWindowRecord");
-    expect(objectiveCHost).not.toContain("NSMutableDictionary");
-    expect(objectiveCHost).not.toContain("windowsByNativeId");
-    expect(objectiveCHost).not.toContain("attachWindow:");
-    expect(objectiveCHost).not.toContain("detachWindow:");
-    expect(objectiveCHost).not.toContain("zapp_desktop_window_configure");
-    expect(objectiveCHost).not.toContain("zapp_desktop_window_start");
-    expect(objectiveCHost).not.toContain("zapp_desktop_window_discard");
-    expect(objectiveCHost).not.toContain("[[WKWebView alloc]");
-    expect(objectiveCHost).not.toContain("[[NSWindow alloc]");
-    expect(objectiveCHost).not.toContain("addScriptMessageHandler:self");
-    expect(objectiveCHost).not.toContain("[body isKindOfClass:[NSString class]]");
-    expect(objectiveCHost).not.toContain("routeScriptMessage:");
-    expect(objectiveCHost).not.toContain("int main(");
-    expect(objectiveCHost).not.toContain("assetSchemeHandlers");
-    expect(objectiveCHost).not.toContain("configureWebViewConfiguration");
-    expect(objectiveCHost).not.toContain("ZAppDesktopAssetSchemeHandler");
-    expect(objectiveCHost).not.toContain("zapp_desktop_start_url_scheme_task");
-    expect(objectiveCHost).not.toContain("text/javascript");
-    expect(objectiveCHost).not.toContain("application/octet-stream");
-    expect(objectiveCHost).not.toContain("didReceiveResponse:");
+    expect(macOSPlatform).toContain("WebKit.NSMakeRect(");
     expect(macOSPlatform).toContain("configuredEmbeddedAssetAtIndex(index)");
     expect(macOSPlatform).toContain("Foundation.NSData.borrow(asset.bytes)");
-    expect(objectiveCHost).not.toContain("embeddedAssetDataAtIndex:");
-    expect(objectiveCHost).toContain("decodeBrotliData:");
-    expect(objectiveCHost).toContain("compression_decode_buffer");
+    expect(macOSPlatform).toContain("function decodeBrotliData(");
+    expect(macOSPlatform).toContain("raw objc {");
+    expect(macOSPlatform).toContain("compression_decode_buffer");
     expect(macOSPlatform).toContain("Foundation.NSError.errorWithDomain(");
     expect(macOSPlatform).toContain("Foundation.NSLocalizedDescriptionKey");
-    expect(objectiveCHost).not.toContain("errorWithDomain:@\"com.zapp.frontend\"");
-    expect(objectiveCHost).not.toContain("zapp_desktop_resolve_logical_url");
-    expect(objectiveCHost).not.toContain("zapp_desktop_has_frontend_origin");
-    expect(objectiveCHost).not.toContain("zapp_desktop_install_injection_profiles");
-    expect(objectiveCHost).not.toContain("zapp_desktop_style_injection");
-    expect(objectiveCHost).not.toContain("zapp_desktop_window_identity_script");
-    expect(objectiveCHost).not.toContain("injectionProfiles");
-    expect(objectiveCHost).not.toContain("webViewBootstrapScript");
-    expect(objectiveCHost).not.toContain("webViewFrontendOrigin");
-    expect(objectiveCHost).not.toContain("zapp_desktop_frontend_origin");
-    expect(objectiveCHost).not.toContain("webViewInjectionCount");
-    expect(objectiveCHost).not.toContain("WKNavigationDelegate");
-    expect(objectiveCHost).not.toContain("<NSWindowDelegate>");
-    expect(objectiveCHost).not.toContain("windowWillClose:");
-    expect(objectiveCHost).not.toContain("windowDidBecomeKey:");
-    expect(objectiveCHost).not.toContain("windowDidResignKey:");
-    expect(objectiveCHost).not.toContain("windowDidResize:");
-    expect(objectiveCHost).not.toContain("zapp_window_closed_owned");
-    expect(objectiveCHost).not.toContain("zapp_deliver_response_from_z");
-    expect(objectiveCHost).not.toContain("deliverPayload:");
-    expect(objectiveCHost).not.toContain("NSJSONSerialization");
-    expect(objectiveCHost).not.toContain("decidePolicyForNavigationAction:");
-    expect(objectiveCHost).not.toContain("forMainFrameOnly:YES");
     expect(objectiveCSmoke).toContain("forMainFrameOnly:YES");
-    expect(objectiveCHost).not.toContain("loadRequest:");
-    expect(objectiveCHost).not.toContain("loadHTMLString:");
     expect(notesFrontend).toContain("services.notes.create");
     expect(notesFrontend).toContain("services.notes.isEmpty()");
     expect(notesFrontend).toContain("new AbortController()");
@@ -413,9 +362,6 @@ describe("Z native host inputs", () => {
     expect(notesFrontend).toContain('dataset.hmr = import.meta.hot ? "ready" : "packaged"');
     expect(notesFrontend).toContain("document.body.dataset.inject");
     expect(notesHTML).toContain('<script type="module" src="/app.js"></script>');
-    expect(objectiveCHost).not.toContain("observeDeliveredResponse:");
-    expect(objectiveCHost).not.toContain("cancelled WebView response ignored");
-    expect(objectiveCHost).not.toContain('@"\\\"hmr\\\":\\\"ready\\\""');
     expect(objectiveCSmoke).toContain("zapp_desktop_smoke_observe_response(");
     expect(objectiveCSmoke).toContain("cancelled WebView response ignored");
     expect(objectiveCSmoke).toContain('@"\\\"hmr\\\":\\\"ready\\\""');
@@ -423,9 +369,8 @@ describe("Z native host inputs", () => {
       'await rm(path.join(stagedAppSource, "z.json"), { force: true });',
     );
     expect(nativeBuilder).toContain('process.env.ZAPP_Z_DESKTOP_SMOKE_SUPPORT === "1"');
-    expect(nativeBuilder).toContain('"-DZAPP_DESKTOP_SMOKE_SUPPORT=1"');
-    expect(nativeBuilder).toContain('...(desktopSmokeSupport ? [desktopSmokeObject] : [])');
-    expect(nativeBuilder).toContain('await rm(desktopSmokeObject, { force: true });');
+    expect(nativeBuilder).toContain('if (desktop && desktopSmokeSupport)');
+    expect(nativeBuilder).toContain('libzapp_desktop_smoke.a');
     expect(nativeBuilder).toContain('await rm(desktopArchive, { force: true });');
     expect(nativeBuilder).not.toContain('renderWebviewInjectionsC(injectionEntries)');
     expect(nativeBuilder).not.toContain('renderZWebviewBootstrapC(bootstrapSource)');

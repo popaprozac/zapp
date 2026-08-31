@@ -1,4 +1,4 @@
-import native from "zapp_desktop.h";
+import WebKit from "WebKit/WebKit.h";
 import json from "std/json";
 import { TextBuffer } from "std/text";
 import { thread } from "std/thread";
@@ -53,8 +53,8 @@ function responseScript(in response: BridgeResponse): String {
 }
 
 internal function deliverWebViewResponse(
-  in webView: native.WKWebView,
-  in window: native.NSWindow,
+  in webView: WebKit.WKWebView,
+  in window: WebKit.NSWindow,
   in response: BridgeResponse,
   windowId: i32,
   activeWindowCount: usize

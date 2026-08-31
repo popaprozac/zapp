@@ -1,7 +1,5 @@
 #import "desktop-smoke.h"
 
-#import "zapp_desktop.h"
-
 #include <dispatch/dispatch.h>
 #include <stdio.h>
 

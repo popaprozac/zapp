@@ -5,7 +5,6 @@ import {
   type BoundedCommandResult,
 } from "../../cli/src/bounded-process";
 import { compileNative } from "../../cli/src/native";
-import { zNativeDesktopHostEntry } from "../../cli/src/native-z";
 import {
   createConfigContext,
   loadConfig,
@@ -17,7 +16,6 @@ const outputDirectory = resolve(spike, "build", "sanitizers");
 const stagedCore = resolve(spike, ".zapp", "z-native-core");
 const generatedCore = resolve(stagedCore, ".z-cache", "build", "zapp_core.m");
 const generatedHeaderDirectory = resolve(stagedCore, "build");
-const desktopHost = resolve(stagedCore, zNativeDesktopHostEntry);
 const desktopSmoke = resolve(stagedCore, "desktop-smoke.m");
 const bootstrap = resolve(stagedCore, "zapp_webview_bootstrap.c");
 const assets = resolve(stagedCore, "zapp_frontend_assets.c");
@@ -87,10 +85,8 @@ async function buildInstrumented(
     "-Wall",
     "-Wextra",
     "-Werror",
-    "-DZAPP_DESKTOP_SMOKE_SUPPORT=1",
     ...sanitizerFlags,
     "-I", generatedHeaderDirectory,
-    desktopHost,
     desktopSmoke,
     bootstrap,
     assets,

@@ -1,4 +1,4 @@
-import native from "zapp_desktop.h";
+import WebKit from "WebKit/WebKit.h";
 import objc from "std/objc";
 import { thread } from "std/thread";
 import { WindowManager } from "../../window.zs";
@@ -9,15 +9,15 @@ internal type NativeWindowClosedOperation = (
 ) => void on thread.main;
 
 class DesktopWindowDelegate on thread.main
-  implements native.NSWindowDelegate {
+  implements WebKit.NSWindowDelegate {
   readonly id: String;
   readonly nativeId: i32;
-  readonly window: native.NSWindow;
+  readonly window: WebKit.NSWindow;
   readonly windows: Weak<WindowManager>;
   readonly didCloseNativeWindow: NativeWindowClosedOperation;
 
   function willClose(
-    in notification: native.NSNotification
+    in notification: WebKit.NSNotification
   ): void as "windowWillClose:" {
     // Keep the Z-owned AppKit graph alive until NSApplication.run has fully
     // unwound its autorelease pools. Native routing stops immediately, while
@@ -33,7 +33,7 @@ class DesktopWindowDelegate on thread.main
   }
 
   function didBecomeKey(
-    in notification: native.NSNotification
+    in notification: WebKit.NSNotification
   ): void as "windowDidBecomeKey:" {
     const id = copy this.id;
     const current = attempt this.windows.upgrade();
@@ -44,7 +44,7 @@ class DesktopWindowDelegate on thread.main
   }
 
   function didResignKey(
-    in notification: native.NSNotification
+    in notification: WebKit.NSNotification
   ): void as "windowDidResignKey:" {
     const id = copy this.id;
     const current = attempt this.windows.upgrade();
@@ -55,7 +55,7 @@ class DesktopWindowDelegate on thread.main
   }
 
   function didResize(
-    in notification: native.NSNotification
+    in notification: WebKit.NSNotification
   ): void as "windowDidResize:" {
     const id = copy this.id;
     const window = this.window;
@@ -76,10 +76,10 @@ class DesktopWindowDelegate on thread.main
 internal function createDesktopWindowDelegate(
   id: String,
   nativeId: i32,
-  in window: native.NSWindow,
+  in window: WebKit.NSWindow,
   windows: Weak<WindowManager>,
   didCloseNativeWindow: NativeWindowClosedOperation
-): objc.Adapter<native.NSWindowDelegate> on thread.main {
+): objc.Adapter<WebKit.NSWindowDelegate> on thread.main {
   const delegate = new DesktopWindowDelegate({
     id: move id,
     nativeId,
@@ -87,5 +87,5 @@ internal function createDesktopWindowDelegate(
     windows,
     didCloseNativeWindow,
   });
-  return objc.adapt<native.NSWindowDelegate>(delegate);
+  return objc.adapt<WebKit.NSWindowDelegate>(delegate);
 }

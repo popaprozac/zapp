@@ -1,11 +1,11 @@
-import native from "zapp_desktop.h";
+import WebKit from "WebKit/WebKit.h";
 import math from "std/math";
 
 internal function macOSWindowFrame(
   width: u32,
   height: u32
-): native.CGRect {
-  return native.NSMakeRect(
+): WebKit.CGRect {
+  return WebKit.NSMakeRect(
     0.0,
     0.0,
     f64(width),

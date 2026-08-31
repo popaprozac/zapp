@@ -1,4 +1,4 @@
-import native from "zapp_desktop.h";
+import Compression from "compression.h";
 import Foundation from "Foundation/Foundation.h";
 import WebKit from "WebKit/WebKit.h";
 import console from "std/console";
@@ -10,6 +10,28 @@ import {
   configuredEmbeddedAssetCount,
   configuredEmbeddedAssetPathAtIndex,
 } from "./configured-assets.zs";
+
+function decodeBrotliData(
+  in data: Foundation.NSData,
+  originalLength: usize
+): Foundation.NSData | null on thread.main = raw objc {
+  if (originalLength == 0) return [NSData data];
+  uint8_t *decoded = malloc(originalLength);
+  if (decoded == NULL) return nil;
+  size_t length = compression_decode_buffer(
+    decoded,
+    originalLength,
+    data.bytes,
+    data.length,
+    NULL,
+    COMPRESSION_BROTLI
+  );
+  if (length != originalLength) {
+    free(decoded);
+    return nil;
+  }
+  return [NSData dataWithBytesNoCopy:decoded length:length freeWhenDone:YES];
+}
 
 function failAssetRequest(
   in task: WebKit.WKURLSchemeTask,
@@ -49,9 +71,9 @@ function embeddedAssetData(
 ): Foundation.NSData | null on thread.main {
   const encoded = Foundation.NSData.borrow(asset.bytes);
   if (!asset.compressed) return encoded;
-  return native.ZAppDesktopBridge.decodeBrotliData(
+  return decodeBrotliData(
     encoded,
-    originalLength: asset.originalLength
+    asset.originalLength
   );
 }
 

@@ -19,7 +19,9 @@ This directory is Zapp's internal macOS backend. It is not part of the public
 - `window-geometry.zs` converts Z window dimensions to and from the native
   `CGRect` representation with explicit, checked numeric construction.
 - `scheme-handler.zs` owns the retained WebKit protocol adapter, packaged-origin
-  and path policy, asset routing, MIME/encoding selection, and response delivery.
+  and path policy, asset routing, MIME/encoding selection, response delivery,
+  and the private typed `raw objc` boundary that transfers Brotli output
+  directly into `NSData` ownership.
 - `configured-assets.zs` is the editor-safe empty asset catalog. Packaged builds
   replace it with a generated Z module whose `embed.StaticBytes` values point
   directly at compiler-emitted process-lifetime storage.
@@ -41,12 +43,13 @@ This directory is Zapp's internal macOS backend. It is not part of the public
 - `desktop-smoke.m` is isolated native test support for DOM verification and
   bounded smoke shutdown. It is compiled only for smoke/sanitizer builds and
   is not application policy or part of production binaries.
-- `asset-bridge.m` is the remaining production native ABI seam for generated
-  Brotli decoding, whose raw output buffer does not yet have a checked direct Z
-  representation. It owns no application, run-loop, or window registry state.
-- `native-bridge.m` defines the otherwise-empty category host and is the unity
-  entry that keeps Objective-C category methods reachable when the adapters are
-  packaged in a static archive; it contains no application behavior or policy.
+- `desktop-smoke.h` and `desktop-smoke.h.zd` describe only that test harness.
+  Ordinary production builds do not compile or link the smoke source.
+
+The production macOS backend contains no tracked handwritten Objective-C
+implementation or umbrella header. Objective-C emitted into build caches is Z
+compiler output, and the remaining checked SDK imports come directly from
+Foundation, AppKit, WebKit, and libcompression.
 
 The migration rule is that policy moves toward these Z modules while
 Objective-C shrinks toward generated adapters or small ABI glue. New public

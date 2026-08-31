@@ -1,4 +1,3 @@
-import native from "zapp_desktop.h";
 import Foundation from "Foundation/Foundation.h";
 import WebKit from "WebKit/WebKit.h";
 import console from "std/console";
@@ -63,7 +62,7 @@ function hasFrontendOrigin(
 
 internal class DesktopNavigationDelegate on thread.main
   implements WebKit.WKNavigationDelegate {
-  readonly window: native.NSWindow;
+  readonly window: WebKit.NSWindow;
 
   function didFailProvisionalNavigation(
     in webView: WebKit.WKWebView,
@@ -118,7 +117,7 @@ internal class DesktopNavigationDelegate on thread.main
 }
 
 internal function createDesktopNavigationDelegate(
-  in window: native.NSWindow
+  in window: WebKit.NSWindow
 ): objc.Adapter<WebKit.WKNavigationDelegate> on thread.main {
   const delegate = new DesktopNavigationDelegate({ window });
   return objc.adapt<WebKit.WKNavigationDelegate>(delegate);

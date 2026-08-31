@@ -1,4 +1,3 @@
-import native from "zapp_desktop.h";
 import Foundation from "Foundation/Foundation.h";
 import WebKit from "WebKit/WebKit.h";
 import { WindowError } from "../../application-error.zs";
@@ -43,14 +42,14 @@ import { stopMacOSRunLoop } from "./application-host.zs";
 import { macOSWindowFrame } from "./window-geometry.zs";
 import { startConfiguredWindowSmokeSupport } from "./configured-smoke.zs";
 class DesktopMessageHandler on thread.main
-  implements native.WKScriptMessageHandler {
+  implements WebKit.WKScriptMessageHandler {
   readonly windowId: i32;
   function receive(
-    in controller: native.WKUserContentController,
-    in message: native.WKScriptMessage
+    in controller: WebKit.WKUserContentController,
+    in message: WebKit.WKScriptMessage
   ): void as "userContentController:didReceiveScriptMessage:" {
     const body = message.body;
-    if (body instanceof native.NSString) {
+    if (body instanceof WebKit.NSString) {
       const text: String = body;
       routeMessageOnMain(move text, this.windowId);
       return;
@@ -575,9 +574,9 @@ function createMacOSWindowRuntime(
   capabilitySelection: CapabilitySelection,
   windowManager: Weak<WindowManager>
 ): MacOSWindowRuntime throws WindowError on thread.main {
-  const contentController = native.WKUserContentController.alloc().init();
+  const contentController = WebKit.WKUserContentController.alloc().init();
   const handler = new DesktopMessageHandler({ windowId: nativeId });
-  const handlerName = native.NSString.alloc().initWithUTF8String("zapp");
+  const handlerName = Foundation.NSString.alloc().initWithUTF8String("zapp");
   if (handlerName == null) {
     throw WindowError({
       id: copy id,
@@ -588,7 +587,7 @@ function createMacOSWindowRuntime(
     add: contentController.addScriptMessageHandler(handler, handlerName),
     remove: contentController.removeScriptMessageHandlerForName(handlerName),
   });
-  const configuration = native.WKWebViewConfiguration.alloc().init();
+  const configuration = WebKit.WKWebViewConfiguration.alloc().init();
   configuration.userContentController = contentController;
   const schemeHandler = createDesktopAssetSchemeHandler();
   configuration.setURLSchemeHandler(schemeHandler, forURLScheme: "zapp");
@@ -609,19 +608,19 @@ function createMacOSWindowRuntime(
     options.width,
     options.height
   );
-  const webView = native.WKWebView.alloc().initWithFrame(
+  const webView = WebKit.WKWebView.alloc().initWithFrame(
     frame,
     configuration: configuration
   );
-  let style = native.NSWindowStyleMaskTitled
-    | native.NSWindowStyleMaskClosable;
+  let style = WebKit.NSWindowStyleMaskTitled
+    | WebKit.NSWindowStyleMaskClosable;
   if (options.resizable) {
-    style = style | native.NSWindowStyleMaskResizable;
+    style = style | WebKit.NSWindowStyleMaskResizable;
   }
-  const window = native.NSWindow.alloc().initWithContentRect(
+  const window = WebKit.NSWindow.alloc().initWithContentRect(
     frame,
     styleMask: style,
-    backing: native.NSBackingStoreBuffered,
+    backing: WebKit.NSBackingStoreBuffered,
     defer: false
   );
   window.releasedWhenClosed = false;

@@ -1,4 +1,4 @@
-import native from "zapp_desktop.h";
+import WebKit from "WebKit/WebKit.h";
 import { thread } from "std/thread";
 
 // Editor-safe production default. Smoke builds replace this staged module with
@@ -10,12 +10,12 @@ internal function configuredMacOSApplicationSmokeMode(): boolean {
 internal function startConfiguredWindowSmokeSupport(
   in windowId: String,
   nativeId: i32,
-  in webView: native.WKWebView,
-  in contentController: native.WKUserContentController
+  in webView: WebKit.WKWebView,
+  in contentController: WebKit.WKUserContentController
 ): void on thread.main {}
 
 internal function observeConfiguredWebViewResponse(
-  in webView: native.WKWebView,
+  in webView: WebKit.WKWebView,
   nativeId: i32,
   activeWindowCount: usize,
   in payload: String,
