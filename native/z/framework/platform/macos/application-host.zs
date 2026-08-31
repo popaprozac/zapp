@@ -1,7 +1,9 @@
 import AppKit from "AppKit/AppKit.h";
-import native from "zapp_desktop.h";
 import { Mutex, Once, OnceLifetime } from "std/sync";
 import { thread } from "std/thread";
+import {
+  configuredMacOSApplicationSmokeMode,
+} from "./configured-smoke.zs";
 
 internal struct MacOSApplicationHostState {
   result: i32;
@@ -27,7 +29,7 @@ const applicationHost = Once<MacOSApplicationHost>();
 
 internal function initializeMacOSApplicationHost():
   OnceLifetime<MacOSApplicationHost> on thread.main {
-  const smokeMode = native.zapp_desktop_requested_smoke_mode();
+  const smokeMode = configuredMacOSApplicationSmokeMode();
   const application: AppKit.NSApplication =
     AppKit.NSApplication.sharedApplication;
   return applicationHost.initialize(new MacOSApplicationHost({
@@ -52,7 +54,21 @@ internal function setMacOSApplicationResult(
 }
 
 internal function stopMacOSRunLoop(): void on thread.main {
-  native.ZAppDesktopBridge.stopRunLoop();
+  const host = applicationHost.get();
+  const application = host.application;
+  application.stop(null);
+  const wake = AppKit.NSEvent.otherEventWithType(
+    AppKit.NSEventTypeApplicationDefined,
+    location: AppKit.NSMakePoint(0.0, 0.0),
+    modifierFlags: 0,
+    timestamp: 0.0,
+    windowNumber: 0,
+    context: null,
+    subtype: 0,
+    data1: 0,
+    data2: 0
+  );
+  if (wake != null) application.postEvent(wake, atStart: true);
 }
 
 internal function runMacOSApplicationLoop(): i32 on thread.main {

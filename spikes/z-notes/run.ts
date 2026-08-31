@@ -65,7 +65,4 @@ try {
   }
 }
 
-await run(
-  [output],
-  smoke ? { ...process.env, ZAPP_Z_DESKTOP_SMOKE: "1" } : process.env,
-);
+await run([output], process.env);

@@ -1,0 +1,18 @@
+declare module "zapp_desktop.h" {
+  export function zapp_desktop_smoke_start_window(
+    in web_view: _,
+    in content_controller: _,
+    in window_id: _,
+    native_id: _
+  ): _;
+
+  export function zapp_desktop_smoke_observe_response(
+    in web_view: _,
+    native_id: _,
+    active_window_count: _,
+    in payload: _,
+    request_id: _,
+    development: _,
+    ok: _
+  ): _;
+}

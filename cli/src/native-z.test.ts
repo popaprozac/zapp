@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import {
   parseZCompilerIdentity,
   renderZApplicationMetadata,
+  renderZConfiguredDesktopSmoke,
   renderZConfiguredWebView,
   renderZWebviewBootstrapConfig,
   renderZNativeManifest,
@@ -13,6 +14,24 @@ import {
   zNativeEntry,
   zNativeStageFiles,
 } from "./native-z";
+
+describe("renderZConfiguredDesktopSmoke", () => {
+  it("keeps production builds free of the smoke environment probe", () => {
+    const source = renderZConfiguredDesktopSmoke(false);
+    expect(source).toContain("return false");
+    expect(source).not.toContain("getenv");
+    expect(source).not.toContain("native.zapp_desktop_smoke_start_window(");
+    expect(source).not.toContain("native.zapp_desktop_smoke_observe_response(");
+  });
+
+  it("enables smoke behavior only in the generated test build", () => {
+    const source = renderZConfiguredDesktopSmoke(true);
+    expect(source).toContain("return true");
+    expect(source).not.toContain("getenv");
+    expect(source).toContain("native.zapp_desktop_smoke_start_window(");
+    expect(source).toContain("native.zapp_desktop_smoke_observe_response(");
+  });
+});
 
 describe("renderZApplicationMetadata", () => {
   it("emits resolved immutable application metadata as valid Z literals", () => {
@@ -144,6 +163,10 @@ describe("Z native host inputs", () => {
       source: "framework/platform/macos/zapp_desktop.h",
       destination: "zapp_desktop.h",
     });
+    expect(files).toContainEqual({
+      source: "framework/platform/macos/zapp_desktop.h.zd",
+      destination: "zapp_desktop.h.zd",
+    });
     expect(files.map((file) => file.destination)).not.toContain("host.c");
     expect(zNativeEntry("desktop")).toBe("main.zs");
     expect(JSON.parse(renderZNativeManifest("desktop", "/app/main.zs", "/native")))
@@ -214,6 +237,7 @@ describe("Z native host inputs", () => {
     const macOSModulePaths = [
       "application-host.zs",
       "application.zs",
+      "configured-smoke.zs",
       "configured-webview.zs",
       "navigation.zs",
       "response-delivery.zs",
@@ -256,7 +280,7 @@ describe("Z native host inputs", () => {
       "utf8",
     );
 
-    expect(macOSModules).toHaveLength(12);
+    expect(macOSModules).toHaveLength(13);
     expect(macOSModules.every((module) => module.split("\n").length < 700)).toBe(true);
     expect(objectiveCHostModules.every((module) => module.split("\n").length < 150)).toBe(true);
     expect(macOSPlatform).toContain("implements native.WKScriptMessageHandler");
@@ -280,10 +304,13 @@ describe("Z native host inputs", () => {
     expect(macOSPlatform).toContain("task.didReceiveData(data)");
     expect(macOSPlatform).toContain("task.didFinish()");
     expect(macOSPlatform).toContain("window.contentView = webView");
-    expect(macOSPlatform).toContain("native.ZAppDesktopBridge.startWindowSmokeSupport(");
+    expect(macOSPlatform).toContain("startConfiguredWindowSmokeSupport(");
+    expect(macOSPlatform).toContain("observeConfiguredWebViewResponse(");
     expect(macOSPlatform).toContain("retiredNativeWindows: Array<MacOSWindowRuntime>");
     expect(macOSPlatform).toContain("recordClosedNativeWindow");
     expect(macOSPlatform).toContain("stopMacOSRunLoop()");
+    expect(macOSPlatform).toContain("application.stop(null)");
+    expect(macOSPlatform).toContain("AppKit.NSEvent.otherEventWithType(");
     expect(macOSPlatform).toContain("function webViewInjectionProfileExists(");
     expect(macOSPlatform).toContain("function installWebViewScripts(");
     expect(macOSPlatform).toContain("configuredWebViewInjectionCount()");
@@ -318,6 +345,8 @@ describe("Z native host inputs", () => {
     expect(macOSPlatform).toContain("native.NSMakeRect(");
     expect(objectiveCHost).not.toContain("zapp_desktop_make_rect");
     expect(objectiveCHost).not.toContain("contentWidth:");
+    expect(objectiveCHost).not.toContain("dispatch_async");
+    expect(objectiveCHost).not.toContain("zapp_desktop_requested_smoke_mode");
     expect(objectiveCHost).not.toContain(
       "ZAppDesktopHost : NSObject <WKScriptMessageHandler",
     );

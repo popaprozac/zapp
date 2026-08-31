@@ -16,33 +16,32 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-bool zapp_desktop_requested_smoke_mode(void);
 int32_t zapp_macos_application_smoke_mode(void);
 void zapp_macos_application_set_result(int32_t result);
 
+void zapp_desktop_smoke_start_window(
+  WKWebView *web_view,
+  WKUserContentController *content_controller,
+  NSString *window_id,
+  int32_t native_id
+);
+
+void zapp_desktop_smoke_observe_response(
+  WKWebView *web_view,
+  int32_t native_id,
+  NSUInteger active_window_count,
+  NSString *payload,
+  uint64_t request_id,
+  BOOL development,
+  BOOL ok
+);
+
 @interface ZAppDesktopBridge : NSObject
-+ (BOOL)smokeMode;
-+ (void)setResult:(int32_t)result;
-+ (void)stopRunLoop;
 @end
 
 @interface ZAppDesktopBridge (Assets)
 + (nullable NSData *)decodeBrotliData:(NSData *)data
                        originalLength:(NSUInteger)originalLength;
-@end
-
-@interface ZAppDesktopBridge (WebView)
-+ (void)observeResponseInWebView:(WKWebView *)webView
-                       nativeId:(int32_t)nativeId
-                        payload:(NSString *)payload
-                      requestId:(uint64_t)requestId
-              activeWindowCount:(NSUInteger)activeWindowCount
-                    development:(BOOL)development
-                             ok:(BOOL)ok;
-+ (void)startWindowSmokeSupport:(NSString *)windowId
-                       nativeId:(int32_t)nativeId
-                        webView:(WKWebView *)webView
-              contentController:(WKUserContentController *)contentController;
 @end
 
 NS_ASSUME_NONNULL_END

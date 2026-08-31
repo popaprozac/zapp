@@ -27,9 +27,7 @@ export const zNativeDesktopHostEntry = "native-bridge.m";
 
 export const zNativeDesktopHostSources = [
   zNativeDesktopHostEntry,
-  "application-host.m",
   "asset-bridge.m",
-  "webview-bridge.m",
 ] as const;
 
 export interface ZNativeLinkRequirements {
@@ -76,6 +74,64 @@ function renderZCapabilityProfiles(
     "  return new ApplicationCapabilities({ profiles: profiles.freeze() });",
   );
   return statements.join("\n");
+}
+
+export function renderZConfiguredDesktopSmoke(enabled: boolean): string {
+  const source = [
+    'import native from "zapp_desktop.h";',
+    'import { thread } from "std/thread";',
+    "",
+    "internal function configuredMacOSApplicationSmokeMode(): boolean {",
+    `  return ${enabled};`,
+    "}",
+    "",
+    "internal function startConfiguredWindowSmokeSupport(",
+    "  in windowId: String,",
+    "  nativeId: i32,",
+    "  in webView: native.WKWebView,",
+    "  in contentController: native.WKUserContentController",
+    "): void on thread.main {",
+  ];
+  if (enabled) {
+    source.push(
+      "  const nativeWindowId: native.NSString = copy windowId;",
+      "  native.zapp_desktop_smoke_start_window(",
+      "    in webView,",
+      "    in contentController,",
+      "    in nativeWindowId,",
+      "    nativeId",
+      "  );",
+    );
+  }
+  source.push(
+    "}",
+    "",
+    "internal function observeConfiguredWebViewResponse(",
+    "  in webView: native.WKWebView,",
+    "  nativeId: i32,",
+    "  activeWindowCount: usize,",
+    "  in payload: String,",
+    "  requestId: u64,",
+    "  development: boolean,",
+    "  ok: boolean",
+    "): void {",
+  );
+  if (enabled) {
+    source.push(
+      "  const nativePayload: native.NSString = copy payload;",
+      "  native.zapp_desktop_smoke_observe_response(",
+      "    in webView,",
+      "    nativeId,",
+      "    activeWindowCount,",
+      "    in nativePayload,",
+      "    requestId,",
+      "    development,",
+      "    ok",
+      "  );",
+    );
+  }
+  source.push("}", "");
+  return source.join("\n");
 }
 
 export function renderZApplicationMetadata(
@@ -237,6 +293,10 @@ export function zNativeStageFiles(host: ZNativeHost): ZNativeStageFile[] {
       {
         source: "framework/platform/macos/zapp_desktop.h",
         destination: "zapp_desktop.h",
+      },
+      {
+        source: "framework/platform/macos/zapp_desktop.h.zd",
+        destination: "zapp_desktop.h.zd",
       },
     ] : [{
       source: "testing/bridge-host.c",
@@ -659,6 +719,16 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
     + await bundleWebviewBootstrapRaw()
     + renderZServiceWebviewRuntime(serviceManifest);
   if (desktop) {
+    await writeFile(
+      path.join(
+        stagedFramework,
+        "platform",
+        "macos",
+        "configured-smoke.zs",
+      ),
+      renderZConfiguredDesktopSmoke(desktopSmokeSupport),
+      "utf8",
+    );
     const injectionEntries = await buildWebviewInjections(
       options.root,
       options.config.webviewInject,

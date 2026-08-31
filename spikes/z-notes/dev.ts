@@ -12,7 +12,7 @@ const child = Bun.spawn(
     env: {
       ...process.env,
       ZAPP_NATIVE_LANG: "z",
-      ...(smoke ? { ZAPP_Z_DESKTOP_SMOKE: "1" } : {}),
+      ...(smoke ? { ZAPP_Z_DESKTOP_SMOKE_SUPPORT: "1" } : {}),
     },
     stdin: "inherit",
     stdout: "inherit",

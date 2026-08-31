@@ -170,7 +170,6 @@ const undefinedBehaviorResult = await runBounded(
   {
     env: {
       NSZombieEnabled: "YES",
-      ZAPP_Z_DESKTOP_SMOKE: "1",
     },
   },
 );
@@ -215,7 +214,6 @@ if (addressProbeResult.timedOut) {
   {
     env: {
       ASAN_OPTIONS: "halt_on_error=1:detect_leaks=0",
-      ZAPP_Z_DESKTOP_SMOKE: "1",
     },
   },
   );

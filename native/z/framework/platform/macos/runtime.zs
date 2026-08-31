@@ -41,6 +41,7 @@ import {
 import { MacOSWindowRuntime } from "./window-runtime.zs";
 import { stopMacOSRunLoop } from "./application-host.zs";
 import { macOSWindowFrame } from "./window-geometry.zs";
+import { startConfiguredWindowSmokeSupport } from "./configured-smoke.zs";
 class DesktopMessageHandler on thread.main
   implements native.WKScriptMessageHandler {
   readonly windowId: i32;
@@ -647,11 +648,11 @@ function createMacOSWindowRuntime(
     didCloseNativeWindow
   );
   window.delegate = windowDelegate;
-  native.ZAppDesktopBridge.startWindowSmokeSupport(
-    copy id,
-    nativeId: nativeId,
-    webView: webView,
-    contentController: contentController
+  startConfiguredWindowSmokeSupport(
+    in id,
+    nativeId,
+    in webView,
+    in contentController
   );
   const request = Foundation.NSURLRequest.requestWithURL(initialURL);
   webView.loadRequest(request);

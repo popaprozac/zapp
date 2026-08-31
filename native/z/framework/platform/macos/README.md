@@ -4,7 +4,8 @@ This directory is Zapp's internal macOS backend. It is not part of the public
 `zapp` package surface.
 
 - `application-host.zs` owns the `NSApplication` identity, synchronized host
-  result, smoke-mode state, native run loop, and deterministic host lifetime.
+  result, smoke-mode state, native run loop, run-loop wake event, and
+  deterministic host lifetime.
 - `application.zs` owns application startup, lifecycle ordering, and
   deterministic shutdown around that host lifetime.
 - `runtime.zs` owns shared application state, WebKit message routing, and the
@@ -25,6 +26,9 @@ This directory is Zapp's internal macOS backend. It is not part of the public
 - `configured-webview.zs` is the editor-safe empty WebView configuration.
   Builds replace it with generated typed Z values for the frontend origin,
   bundled bootstrap, development mode, and trusted injection catalog.
+- `configured-smoke.zs` is the editor-safe disabled smoke configuration. Test
+  builds replace it with a generated enabled value alongside the conditionally
+  linked native smoke object; ordinary production builds contain neither.
 - `webview-injections.zs` owns bootstrap/window identity scripts, configured
   injection-profile validation and ordering, JSON-safe CSS wrapping, phase
   mapping, and `WKUserScript` registration.
@@ -32,19 +36,17 @@ This directory is Zapp's internal macOS backend. It is not part of the public
   retained `WKNavigationDelegate` adapter, completion-block decisions, and
   navigation-failure policy.
 - `response-delivery.zs` owns JavaScript-safe response envelopes and delivery
-  policy. `webview-bridge.m` retains a narrow adapter over WebKit's untyped
-  Objective-C completion result and smoke-only callback.
+  policy. Smoke builds route completion observations through the generated
+  `configured-smoke.zs` module into the test-only native harness.
 - `desktop-smoke.m` is isolated native test support for DOM verification and
   bounded smoke shutdown. It is compiled only for smoke/sanitizer builds and
   is not application policy or part of production binaries.
-- `application-host.m`, `asset-bridge.m`, and `webview-bridge.m` are narrow
-  native ABI seams for run-loop wakeup and the smoke environment probe,
-  generated Brotli decoding, and smoke-only WebKit completion observation that
-  have not yet gained a checked direct Z representation. They do not own
-  application, run-loop, or window registry state.
-- `native-bridge.m` is a four-line unity entry that keeps Objective-C category
-  methods reachable when the adapters are packaged in a static archive; it
-  contains no behavior or policy.
+- `asset-bridge.m` is the remaining production native ABI seam for generated
+  Brotli decoding, whose raw output buffer does not yet have a checked direct Z
+  representation. It owns no application, run-loop, or window registry state.
+- `native-bridge.m` defines the otherwise-empty category host and is the unity
+  entry that keeps Objective-C category methods reachable when the adapters are
+  packaged in a static archive; it contains no application behavior or policy.
 
 The migration rule is that policy moves toward these Z modules while
 Objective-C shrinks toward generated adapters or small ABI glue. New public

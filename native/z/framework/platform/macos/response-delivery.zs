@@ -5,6 +5,9 @@ import { thread } from "std/thread";
 import { BridgeResponse } from "../../bridge.zs";
 import { configuredFrontendIsDevelopment } from "./configured-webview.zs";
 import { setMacOSApplicationResult } from "./application-host.zs";
+import {
+  observeConfiguredWebViewResponse,
+} from "./configured-smoke.zs";
 
 readonly struct WebViewResponseEnvelope {
   id: String;
@@ -69,14 +72,14 @@ internal function deliverWebViewResponse(
         window.close();
         return;
       }
-      native.ZAppDesktopBridge.observeResponseInWebView(
-        webView,
-        nativeId: windowId,
-        payload: payload,
-        requestId: requestId,
-        activeWindowCount: activeWindowCount,
-        development: development,
-        ok: ok
+      observeConfiguredWebViewResponse(
+        in webView,
+        windowId,
+        activeWindowCount,
+        in payload,
+        requestId,
+        development,
+        ok
       );
     }
   );

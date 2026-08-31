@@ -1,3 +1,6 @@
-#import "application-host.m"
+#import "zapp_desktop.h"
+
+@implementation ZAppDesktopBridge
+@end
+
 #import "asset-bridge.m"
-#import "webview-bridge.m"

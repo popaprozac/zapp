@@ -69,7 +69,7 @@ void zapp_desktop_smoke_start_window(
               ? "<none>"
               : [[state_error description] UTF8String]
           );
-          [ZAppDesktopBridge setResult:50];
+          zapp_macos_application_set_result(50);
           zapp_desktop_smoke_close_all_windows();
         }];
     }
@@ -85,7 +85,7 @@ void zapp_desktop_smoke_observe_response(
   BOOL development,
   BOOL ok
 ) {
-  if (![ZAppDesktopBridge smokeMode]) return;
+  if (zapp_macos_application_smoke_mode() == 0) return;
   if (request_id == 1) {
     printf(
       "cancelled WebView response ignored request=%llu\n",
@@ -150,7 +150,7 @@ void zapp_desktop_smoke_observe_response(
               state_text,
               error_text
             );
-            [ZAppDesktopBridge setResult:47];
+            zapp_macos_application_set_result(47);
             zapp_desktop_smoke_close_all_windows();
             return;
           }
@@ -165,7 +165,7 @@ void zapp_desktop_smoke_observe_response(
           );
           fflush(stdout);
           if (zapp_desktop_smoke_responses().count < active_window_count) return;
-          [ZAppDesktopBridge setResult:0];
+          zapp_macos_application_set_result(0);
           dispatch_after(
             dispatch_time(DISPATCH_TIME_NOW, 600 * NSEC_PER_MSEC),
             dispatch_get_main_queue(),
