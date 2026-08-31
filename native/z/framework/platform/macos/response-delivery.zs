@@ -57,15 +57,26 @@ internal function deliverWebViewResponse(
 ): void on thread.main {
   const script = responseScript(in response);
   const payload = copy response.payload;
-  native.ZAppDesktopBridge.evaluateJavaScript(
+  const requestId = response.id;
+  const development = configuredFrontendIsDevelopment();
+  const ok = response.ok;
+  webView.evaluateJavaScript(
     move script,
-    inWebView: webView,
-    forWindow: window,
-    nativeId: windowId,
-    payload: move payload,
-    requestId: response.id,
-    activeWindowCount: activeWindowCount,
-    development: configuredFrontendIsDevelopment(),
-    ok: response.ok
+    completionHandler: move (value, error): void => {
+      if (error != null) {
+        native.ZAppDesktopBridge.setResult(45);
+        window.close();
+        return;
+      }
+      native.ZAppDesktopBridge.observeResponseInWebView(
+        webView,
+        nativeId: windowId,
+        payload: payload,
+        requestId: requestId,
+        activeWindowCount: activeWindowCount,
+        development: development,
+        ok: ok
+      );
+    }
   );
 }
