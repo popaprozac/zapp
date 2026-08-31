@@ -22,16 +22,19 @@ This directory is Zapp's internal macOS backend. It is not part of the public
   retained `WKNavigationDelegate` adapter, completion-block decisions, and
   navigation-failure policy.
 - `response-delivery.zs` owns JavaScript-safe response envelopes and delivery
-  policy. `desktop.m` retains a narrow adapter over WebKit's untyped
-  Objective-C completion result.
+  policy. `webview-bridge.m` retains a narrow adapter over WebKit's untyped
+  Objective-C completion result and smoke-only callback.
 - `desktop-smoke.m` is isolated native test support for DOM verification and
   bounded smoke shutdown. It is compiled only for smoke/sanitizer builds and
   is not application policy or part of production binaries.
-- `zapp_desktop.h` and `desktop.m` are the remaining native ABI seam for the
-  run loop, generated asset/injection-table reads, Brotli decoding, native
-  errors, run-loop wakeup, and WebKit completion adaptation that have not yet
-  gained a checked direct Z representation. They do not own application or
-  window registry state.
+- `application-host.m`, `asset-bridge.m`, `webview-bridge.m`, and
+  `window-bridge.m` are narrow native ABI seams for the run loop, generated
+  asset/injection-table reads, Brotli decoding, native errors, run-loop wakeup,
+  and WebKit completion adaptation that have not yet gained a checked direct Z
+  representation. They do not own application or window registry state.
+- `native-bridge.m` is a four-line unity entry that keeps Objective-C category
+  methods reachable when the adapters are packaged in a static archive; it
+  contains no behavior or policy.
 
 The migration rule is that policy moves toward these Z modules while
 Objective-C shrinks toward generated adapters or small ABI glue. New public

@@ -10,6 +10,7 @@ import {
   resolveZFrontendOrigin,
   resolveZNativeHost,
   validateZCompilerIdentity,
+  zNativeDesktopHostSources,
   zNativeEntry,
   zNativeStageFiles,
 } from "./native-z";
@@ -136,10 +137,13 @@ describe("resolveZNativeHost", () => {
 describe("Z native host inputs", () => {
   it("stages the Z-owned Objective-C registration surface for desktop", () => {
     const files = zNativeStageFiles("desktop");
-    expect(files).toContainEqual({
-      source: "framework/platform/macos/desktop.m",
-      destination: "desktop.m",
-    });
+    for (const destination of zNativeDesktopHostSources) {
+      expect(files).toContainEqual({
+        source: `framework/platform/macos/${destination}`,
+        destination,
+      });
+    }
+    expect(files.map((file) => file.destination)).not.toContain("desktop.m");
     expect(files).toContainEqual({
       source: "framework/platform/macos/desktop-smoke.m",
       destination: "desktop-smoke.m",
@@ -231,10 +235,11 @@ describe("Z native host inputs", () => {
       "utf8",
     ));
     const macOSPlatform = macOSModules.join("\n");
-    const objectiveCHost = readFileSync(
-      new URL("../../native/z/framework/platform/macos/desktop.m", import.meta.url),
+    const objectiveCHostModules = zNativeDesktopHostSources.map((source) => readFileSync(
+      new URL(`../../native/z/framework/platform/macos/${source}`, import.meta.url),
       "utf8",
-    );
+    ));
+    const objectiveCHost = objectiveCHostModules.join("\n");
     const objectiveCSmoke = readFileSync(
       new URL("../../native/z/framework/platform/macos/desktop-smoke.m", import.meta.url),
       "utf8",
@@ -258,6 +263,7 @@ describe("Z native host inputs", () => {
 
     expect(macOSModules).toHaveLength(9);
     expect(macOSModules.every((module) => module.split("\n").length < 700)).toBe(true);
+    expect(objectiveCHostModules.every((module) => module.split("\n").length < 150)).toBe(true);
     expect(macOSPlatform).toContain("implements native.WKScriptMessageHandler");
     expect(macOSPlatform).toContain("body instanceof native.NSString");
     expect(macOSPlatform).toContain("const text: String = body");

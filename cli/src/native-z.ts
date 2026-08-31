@@ -23,6 +23,16 @@ export interface ZNativeStageFile {
   destination: string;
 }
 
+export const zNativeDesktopHostEntry = "native-bridge.m";
+
+export const zNativeDesktopHostSources = [
+  zNativeDesktopHostEntry,
+  "application-host.m",
+  "asset-bridge.m",
+  "webview-bridge.m",
+  "window-bridge.m",
+] as const;
+
 export interface ZNativeLinkRequirements {
   includeDirectories?: string[];
   directories?: string[];
@@ -213,10 +223,10 @@ export function zNativeStageFiles(host: ZNativeHost): ZNativeStageFile[] {
       destination: "zapp_router.h.zd",
     },
     ...(host === "desktop" ? [
-      {
-        source: "framework/platform/macos/desktop.m",
-        destination: "desktop.m",
-      },
+      ...zNativeDesktopHostSources.map((destination) => ({
+        source: `framework/platform/macos/${destination}`,
+        destination,
+      })),
       {
         source: "framework/platform/macos/desktop-smoke.h",
         destination: "desktop-smoke.h",
@@ -659,7 +669,7 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
       "-I",
       stage,
       "-c",
-      path.join(stage, "desktop.m"),
+      path.join(stage, zNativeDesktopHostEntry),
       "-o",
       desktopObject,
     ], options.root);
@@ -770,7 +780,7 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
   const headerDir = path.join(stage, "build");
   await run([
     clang,
-    ...(desktop ? ["-fobjc-arc", "-fblocks"] : ["-std=c11"]),
+    "-std=c11",
     "-mmacosx-version-min=14.0",
     options.optimize ? "-Oz" : "-O0",
     "-Wall",
@@ -778,14 +788,8 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
     "-Werror",
     "-I",
     headerDir,
-    path.join(stage, desktop ? "desktop.m" : "host.c"),
-    ...(desktop ? [bootstrapC] : []),
+    path.join(stage, "host.c"),
     archive,
-    ...(desktop ? [
-      "-framework", "AppKit",
-      "-framework", "WebKit",
-      "-framework", "CoreFoundation",
-    ] : []),
     "-o",
     options.output,
   ], options.root);
