@@ -49,9 +49,6 @@ NSRect zapp_desktop_make_rect(uint32_t width, uint32_t height);
 @end
 
 @interface ZAppDesktopBridge (Window)
-+ (void)failURLSchemeTask:(id<WKURLSchemeTask>)task
-                   status:(NSInteger)status
-                  message:(NSString *)message;
 + (uint32_t)contentWidth:(NSWindow *)window;
 + (uint32_t)contentHeight:(NSWindow *)window;
 @end

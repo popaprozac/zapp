@@ -35,7 +35,7 @@ This directory is Zapp's internal macOS backend. It is not part of the public
   is not application policy or part of production binaries.
 - `application-host.m`, `asset-bridge.m`, `webview-bridge.m`, and
   `window-bridge.m` are narrow native ABI seams for the run loop, generated
-  Brotli decoding, native errors, run-loop wakeup, and WebKit completion
+  Brotli decoding, run-loop wakeup, and WebKit completion
   adaptation that have not yet gained a checked direct Z representation. They
   do not own application or window registry state.
 - `native-bridge.m` is a four-line unity entry that keeps Objective-C category

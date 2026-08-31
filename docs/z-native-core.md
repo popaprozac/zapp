@@ -106,7 +106,8 @@ and encoding choice, response construction, and task delivery all live in
 `scheme-handler.zs`. The generated asset catalog is also Z: module-local
 `embed.StaticBytes` values refer directly to process-lifetime compiler storage,
 and raw assets become zero-copy `NSData` views. Native glue only decodes Brotli
-bytes into an ownership-transferring `NSData` and constructs WebKit's `NSError`.
+bytes into an ownership-transferring `NSData`. Z constructs typed Foundation
+errors and fails WebKit scheme tasks directly.
 WebView bootstrap, identity, and configured CSS/JavaScript injection policy are
 also Z-owned in `webview-injections.zs`: profile validation, duplicate
 suppression, JSON-safe source quoting, phase mapping, and `WKUserScript`

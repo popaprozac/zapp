@@ -1,6 +1,7 @@
 import native from "zapp_desktop.h";
 import Foundation from "Foundation/Foundation.h";
 import WebKit from "WebKit/WebKit.h";
+import console from "std/console";
 import objc from "std/objc";
 import { thread } from "std/thread";
 import {
@@ -15,11 +16,20 @@ function failAssetRequest(
   status: isize,
   message: String
 ): void on thread.main {
-  native.ZAppDesktopBridge.failURLSchemeTask(
-    task,
-    status: status,
-    message: move message
+  console.error(
+    `frontend request failed: ${message}`
   );
+  const nativeMessage: Foundation.NSString = copy message;
+  const userInfo = Foundation.NSDictionary.dictionaryWithObject(
+    nativeMessage,
+    forKey: Foundation.NSLocalizedDescriptionKey
+  );
+  const error = Foundation.NSError.errorWithDomain(
+    "com.zapp.frontend",
+    code: status,
+    userInfo: userInfo
+  );
+  task.didFailWithError(error);
 }
 
 function embeddedAssetIndex(in path: Foundation.NSString): usize on thread.main {

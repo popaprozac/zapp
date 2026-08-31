@@ -341,7 +341,9 @@ describe("Z native host inputs", () => {
     expect(objectiveCHost).not.toContain("embeddedAssetDataAtIndex:");
     expect(objectiveCHost).toContain("decodeBrotliData:");
     expect(objectiveCHost).toContain("compression_decode_buffer");
-    expect(objectiveCHost).toContain("errorWithDomain:@\"com.zapp.frontend\"");
+    expect(macOSPlatform).toContain("Foundation.NSError.errorWithDomain(");
+    expect(macOSPlatform).toContain("Foundation.NSLocalizedDescriptionKey");
+    expect(objectiveCHost).not.toContain("errorWithDomain:@\"com.zapp.frontend\"");
     expect(objectiveCHost).not.toContain("zapp_desktop_resolve_logical_url");
     expect(objectiveCHost).not.toContain("zapp_desktop_has_frontend_origin");
     expect(objectiveCHost).not.toContain("zapp_desktop_install_injection_profiles");
