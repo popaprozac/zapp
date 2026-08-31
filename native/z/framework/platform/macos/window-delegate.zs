@@ -1,5 +1,4 @@
 import native from "zapp_desktop.h";
-import Foundation from "Foundation/Foundation.h";
 import objc from "std/objc";
 import { thread } from "std/thread";
 import { WindowManager } from "../../window.zs";
@@ -12,7 +11,7 @@ class DesktopWindowDelegate on thread.main
   readonly windows: Weak<WindowManager>;
 
   function willClose(
-    in notification: Foundation.NSNotification
+    in notification: native.NSNotification
   ): void as "windowWillClose:" {
     // Keep the Z-owned AppKit graph alive until NSApplication.run has fully
     // unwound its autorelease pools. Native routing stops immediately, while
@@ -32,7 +31,7 @@ class DesktopWindowDelegate on thread.main
   }
 
   function didBecomeKey(
-    in notification: Foundation.NSNotification
+    in notification: native.NSNotification
   ): void as "windowDidBecomeKey:" {
     const id = copy this.id;
     const current = attempt this.windows.upgrade();
@@ -43,7 +42,7 @@ class DesktopWindowDelegate on thread.main
   }
 
   function didResignKey(
-    in notification: Foundation.NSNotification
+    in notification: native.NSNotification
   ): void as "windowDidResignKey:" {
     const id = copy this.id;
     const current = attempt this.windows.upgrade();
@@ -54,7 +53,7 @@ class DesktopWindowDelegate on thread.main
   }
 
   function didResize(
-    in notification: Foundation.NSNotification
+    in notification: native.NSNotification
   ): void as "windowDidResize:" {
     const id = copy this.id;
     const window = this.window;

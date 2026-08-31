@@ -283,6 +283,8 @@ describe("Z native host inputs", () => {
     expect(macOSPlatform).toContain("decisionHandler(WebKit.WKNavigationActionPolicyAllow)");
     expect(macOSPlatform).toContain("webView.navigationDelegate = navigationDelegate");
     expect(macOSPlatform).toContain("implements native.NSWindowDelegate");
+    expect(macOSPlatform).toContain("in notification: native.NSNotification");
+    expect(macOSPlatform).not.toContain("Foundation.NSNotification");
     expect(macOSPlatform).toContain("objc.adapt<native.NSWindowDelegate>(delegate)");
     expect(macOSPlatform).toContain("window.delegate = windowDelegate");
     expect(macOSPlatform).toContain("webView.loadRequest(request)");
