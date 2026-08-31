@@ -9,7 +9,10 @@ import { ApplicationMetadata } from "../../application-metadata.zs";
 import { ApplicationContext } from "../../../api/zapp/service.zs";
 import { TaskScope } from "std/async";
 import { thread } from "std/thread";
-import { initializeMacOSApplicationRuntime } from "./runtime.zs";
+import {
+  abortMacOSApplicationRuntime,
+  initializeMacOSApplicationRuntime,
+} from "./runtime.zs";
 import { macOSWindowBackend } from "./window-backend.zs";
 
 export async function runMacOSApplication(
@@ -51,6 +54,7 @@ export async function runMacOSApplication(
     success => {}
     failure(windowError) => {
       windows.stop();
+      abortMacOSApplicationRuntime();
       native.zapp_desktop_abort();
       throw ApplicationError.window(windowError);
     }
@@ -60,6 +64,7 @@ export async function runMacOSApplication(
     success => {}
     failure(startError) => {
       windows.stop();
+      abortMacOSApplicationRuntime();
       native.zapp_desktop_abort();
       throw ApplicationError.lifecycle(startError);
     }

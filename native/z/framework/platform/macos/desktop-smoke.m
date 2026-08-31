@@ -27,6 +27,58 @@ bool zapp_desktop_smoke_window_received(int32_t native_id) {
   return [zapp_desktop_smoke_responses() containsObject:@(native_id)];
 }
 
+void zapp_desktop_smoke_start_window(
+  WKWebView *web_view,
+  WKUserContentController *content_controller,
+  NSString *window_id,
+  int32_t native_id
+) {
+  WKUserScript *smoke = [[WKUserScript alloc]
+    initWithSource:
+      @"setTimeout(()=>document.querySelector('#cancel')?.click(),350);"
+    injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
+    forMainFrameOnly:YES];
+  [content_controller addUserScript:smoke];
+
+  __weak WKWebView *weak_web_view = web_view;
+  NSString *retained_window_id = [window_id copy];
+  dispatch_after(
+    dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC),
+    dispatch_get_main_queue(),
+    ^{
+      WKWebView *current = weak_web_view;
+      if (
+        current == nil
+        || zapp_desktop_smoke_window_received(native_id)
+      ) return;
+      [current
+        evaluateJavaScript:
+          @"JSON.stringify({"
+          @"ready:document.readyState,"
+          @"services:typeof globalThis.__zappServices,"
+          @"bridge:typeof globalThis[Symbol.for('zapp.bridge')],"
+          @"windowId:globalThis[Symbol.for('zapp.windowId')]??null,"
+          @"cancel:typeof document.querySelector('#cancel')?.onclick,"
+          @"status:document.querySelector('#status')?.textContent??null,"
+          @"body:document.body?.dataset??null"
+          @"})"
+        completionHandler:^(id state, NSError *state_error) {
+          fprintf(
+            stderr,
+            "[zapp] frontend smoke timed out window=%s state=%s error=%s\n",
+            retained_window_id.UTF8String,
+            state == nil ? "<nil>" : [[state description] UTF8String],
+            state_error == nil
+              ? "<none>"
+              : [[state_error description] UTF8String]
+          );
+          [ZAppDesktopBridge setResult:50];
+          zapp_desktop_smoke_close_all_windows();
+        }];
+    }
+  );
+}
+
 void zapp_desktop_smoke_observe_response(
   WKWebView *web_view,
   int32_t native_id,

@@ -224,6 +224,7 @@ describe("Z native host inputs", () => {
       "webview-injections.zs",
       "window-backend.zs",
       "window-delegate.zs",
+      "window-runtime.zs",
     ];
     const macOSModules = macOSModulePaths.map((module) => readFileSync(
       new URL(`../../native/z/framework/platform/macos/${module}`, import.meta.url),
@@ -255,7 +256,7 @@ describe("Z native host inputs", () => {
       "utf8",
     );
 
-    expect(macOSModules).toHaveLength(8);
+    expect(macOSModules).toHaveLength(9);
     expect(macOSModules.every((module) => module.split("\n").length < 700)).toBe(true);
     expect(macOSPlatform).toContain("implements native.WKScriptMessageHandler");
     expect(macOSPlatform).toContain("body instanceof native.NSString");
@@ -278,7 +279,10 @@ describe("Z native host inputs", () => {
     expect(macOSPlatform).toContain("task.didReceiveData(data)");
     expect(macOSPlatform).toContain("task.didFinish()");
     expect(macOSPlatform).toContain("window.contentView = webView");
-    expect(macOSPlatform).toContain("native.ZAppDesktopBridge.attachWindow(");
+    expect(macOSPlatform).toContain("native.ZAppDesktopBridge.startWindowSmokeSupport(");
+    expect(macOSPlatform).toContain("retiredNativeWindows: Array<MacOSWindowRuntime>");
+    expect(macOSPlatform).toContain("recordClosedNativeWindow");
+    expect(macOSPlatform).toContain("native.ZAppDesktopBridge.stopRunLoop()");
     expect(macOSPlatform).toContain("function webViewInjectionProfileExists(");
     expect(macOSPlatform).toContain("function installWebViewScripts(");
     expect(macOSPlatform).toContain("native.ZAppDesktopBridge.webViewInjectionCount()");
@@ -308,9 +312,14 @@ describe("Z native host inputs", () => {
     expect(objectiveCHost).not.toContain(
       "ZAppDesktopHost : NSObject <WKScriptMessageHandler",
     );
-    expect(objectiveCHost).toContain("@property(nonatomic, strong) NSWindow *window");
-    expect(objectiveCHost).toContain("@property(nonatomic, strong) WKWebView *webView");
-    expect(objectiveCHost).toContain("windowsByNativeId");
+    expect(objectiveCHost).not.toContain("ZAppDesktopWindowRecord");
+    expect(objectiveCHost).not.toContain("NSMutableDictionary");
+    expect(objectiveCHost).not.toContain("windowsByNativeId");
+    expect(objectiveCHost).not.toContain("attachWindow:");
+    expect(objectiveCHost).not.toContain("detachWindow:");
+    expect(objectiveCHost).not.toContain("zapp_desktop_window_configure");
+    expect(objectiveCHost).not.toContain("zapp_desktop_window_start");
+    expect(objectiveCHost).not.toContain("zapp_desktop_window_discard");
     expect(objectiveCHost).not.toContain("[[WKWebView alloc]");
     expect(objectiveCHost).not.toContain("[[NSWindow alloc]");
     expect(objectiveCHost).not.toContain("addScriptMessageHandler:self");
@@ -344,7 +353,8 @@ describe("Z native host inputs", () => {
     expect(objectiveCHost).not.toContain("deliverPayload:");
     expect(objectiveCHost).not.toContain("NSJSONSerialization");
     expect(objectiveCHost).not.toContain("decidePolicyForNavigationAction:");
-    expect(objectiveCHost).toContain("forMainFrameOnly:YES");
+    expect(objectiveCHost).not.toContain("forMainFrameOnly:YES");
+    expect(objectiveCSmoke).toContain("forMainFrameOnly:YES");
     expect(objectiveCHost).not.toContain("loadRequest:");
     expect(objectiveCHost).not.toContain("loadHTMLString:");
     expect(notesFrontend).toContain("services.notes.create");

@@ -25,7 +25,6 @@ import { TaskControl, TaskScope } from "std/async";
 import { Map } from "std/collections";
 import { thread } from "std/thread";
 import {
-  PendingRequests,
   createPendingRequests,
 } from "../../pending-requests.zs";
 import {
@@ -37,7 +36,11 @@ import { createDesktopAssetSchemeHandler } from "./scheme-handler.zs";
 import { deliverWebViewResponse } from "./response-delivery.zs";
 import { DesktopNavigationDelegate, createDesktopNavigationDelegate, resolveLogicalURL } from "./navigation.zs";
 import { installWebViewScripts, webViewInjectionProfileExists } from "./webview-injections.zs";
-import { createDesktopWindowDelegate } from "./window-delegate.zs";
+import {
+  NativeWindowClosedOperation,
+  createDesktopWindowDelegate,
+} from "./window-delegate.zs";
+import { MacOSWindowRuntime } from "./window-runtime.zs";
 class DesktopMessageHandler on thread.main
   implements native.WKScriptMessageHandler {
   readonly windowId: i32;
@@ -60,21 +63,6 @@ class DesktopMessageHandler on thread.main
   }
 }
 
-class MacOSWindowRuntime on thread.main {
-  readonly id: String;
-  readonly nativeId: i32;
-  readonly window: native.NSWindow;
-  readonly webView: native.WKWebView;
-  readonly contentController: native.WKUserContentController;
-  readonly configuration: native.WKWebViewConfiguration;
-  readonly schemeHandler: objc.Adapter<WebKit.WKURLSchemeHandler>;
-  readonly navigationDelegate: objc.Adapter<WebKit.WKNavigationDelegate>;
-  readonly windowDelegate: objc.Adapter<native.NSWindowDelegate>;
-  readonly registration: objc.Registration;
-  readonly pendingRequests: PendingRequests;
-  readonly capabilitySelection: CapabilitySelection;
-}
-
 enum WindowMessageRoute {
   framework BridgeResponse,
   service BridgeMessage,
@@ -88,6 +76,7 @@ internal class MacOSApplicationRuntime {
   readonly updates: TaskScope;
   readonly windowManager: WindowManager on thread.main;
   nativeWindows: Map<i32, MacOSWindowRuntime> on thread.main;
+  retiredNativeWindows: Array<MacOSWindowRuntime> on thread.main;
   nextNativeWindowId: i32 on thread.main;
 
   function createWindow(
@@ -143,6 +132,31 @@ internal class MacOSApplicationRuntime {
       windowManagerOwner
     );
     this.nativeWindows.set(nativeId, runtime);
+  }
+
+  function nativeWindowClosed(
+    inout this,
+    nativeId: i32
+  ): void on thread.main {
+    const found = this.nativeWindows.remove(nativeId);
+    match (found) {
+      some(value) => {
+        let window = value;
+        window.pendingRequests.cancelAll();
+        this.retiredNativeWindows.push(move window);
+        if (this.nativeWindows.length == 0) {
+          native.ZAppDesktopBridge.stopRunLoop();
+        }
+      }
+      none => {}
+    }
+  }
+
+  function closeAllNativeWindows(inout this): void on thread.main {
+    const windows = this.windowManager.all();
+    for (const window of windows) {
+      window.close();
+    }
   }
 
   function beginRequest(
@@ -265,8 +279,20 @@ internal class MacOSApplicationRuntime {
 
 const application = Once<MacOSApplicationRuntime>();
 
+function recordClosedNativeWindow(
+  nativeId: i32
+): void on thread.main {
+  const current = application.get();
+  current.nativeWindowClosed(nativeId);
+}
+
 internal function currentMacOSApplication(): MacOSApplicationRuntime {
   return application.get();
+}
+
+internal function abortMacOSApplicationRuntime(): void on thread.main {
+  const current = application.get();
+  current.closeAllNativeWindows();
 }
 
 export c function zapp_route_message_owned(
@@ -522,6 +548,7 @@ function deliverResponse(
   windowId: i32
 ): void on thread.main {
   const current = application.get();
+  const activeWindowCount = current.nativeWindows.length;
   const found = current.nativeWindows.get(windowId);
   match (in found) {
     some(window) => {
@@ -531,7 +558,8 @@ function deliverResponse(
         webView,
         nativeWindow,
         in response,
-        windowId
+        windowId,
+        activeWindowCount
       );
     }
     none => {}
@@ -610,37 +638,21 @@ function createMacOSWindowRuntime(
   }
   const navigationDelegate = createDesktopNavigationDelegate(window);
   webView.navigationDelegate = navigationDelegate;
+  const didCloseNativeWindow: NativeWindowClosedOperation = recordClosedNativeWindow;
   const windowDelegate = createDesktopWindowDelegate(
     copy id,
     nativeId,
     window,
-    windowManager
+    windowManager,
+    didCloseNativeWindow
   );
   window.delegate = windowDelegate;
-  const configured = native.zapp_desktop_window_configure(
-    id,
-    nativeId
-  );
-  if (configured != 0) {
-    throw WindowError({
-      id: copy id,
-      message: `could not configure native window (status ${configured})`,
-    });
-  }
-  native.ZAppDesktopBridge.attachWindow(
-    window,
+  native.ZAppDesktopBridge.startWindowSmokeSupport(
+    copy id,
     nativeId: nativeId,
     webView: webView,
     contentController: contentController
   );
-  const started = native.zapp_desktop_window_start(id);
-  if (started != 0) {
-    native.zapp_desktop_window_discard(id);
-    throw WindowError({
-      id: copy id,
-      message: `could not realize native window (status ${started})`,
-    });
-  }
   const request = Foundation.NSURLRequest.requestWithURL(initialURL);
   webView.loadRequest(request);
   window.center();
@@ -678,6 +690,7 @@ internal function initializeMacOSApplicationRuntime(
     updates,
     windowManager,
     nativeWindows: Map<i32, MacOSWindowRuntime>(),
+    retiredNativeWindows: Array<MacOSWindowRuntime>(),
     nextNativeWindowId: 1,
   });
   return application.initialize(move value);

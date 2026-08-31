@@ -39,24 +39,18 @@ NSRect zapp_desktop_make_rect(uint32_t width, uint32_t height);
                   nativeId:(int32_t)nativeId
                    payload:(NSString *)payload
                  requestId:(uint64_t)requestId
+         activeWindowCount:(NSUInteger)activeWindowCount
                         ok:(BOOL)ok;
++ (void)startWindowSmokeSupport:(NSString *)windowId
+                       nativeId:(int32_t)nativeId
+                        webView:(WKWebView *)webView
+              contentController:(WKUserContentController *)contentController;
++ (void)stopRunLoop;
 + (void)failURLSchemeTask:(id<WKURLSchemeTask>)task
                    status:(NSInteger)status
                   message:(NSString *)message;
-+ (void)attachWindow:(NSWindow *)window
-            nativeId:(int32_t)nativeId
-             webView:(WKWebView *)webView
-   contentController:(WKUserContentController *)contentController;
-+ (void)detachWindow:(NSWindow *)window nativeId:(int32_t)nativeId;
 + (uint32_t)contentWidth:(NSWindow *)window;
 + (uint32_t)contentHeight:(NSWindow *)window;
 @end
-
-int32_t zapp_desktop_window_configure(
-  const char *window_id,
-  int32_t native_id
-);
-int32_t zapp_desktop_window_start(const char *window_id);
-void zapp_desktop_window_discard(const char *window_id);
 
 NS_ASSUME_NONNULL_END

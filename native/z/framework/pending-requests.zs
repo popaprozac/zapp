@@ -114,6 +114,16 @@ export class PendingRequests on thread.main {
       none => false;
     };
   }
+
+  internal function cancelAll(inout this): void {
+    let ids = Array<u64>();
+    for (const entry of this.requests) {
+      ids.push(entry.key);
+    }
+    for (const id of ids) {
+      this.cancel(id);
+    }
+  }
 }
 
 export function createPendingRequests(): PendingRequests on thread.main {

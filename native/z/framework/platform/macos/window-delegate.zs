@@ -3,12 +3,17 @@ import objc from "std/objc";
 import { thread } from "std/thread";
 import { WindowManager } from "../../window.zs";
 
+internal type NativeWindowClosedOperation = (
+  nativeId: i32
+) => void on thread.main;
+
 class DesktopWindowDelegate on thread.main
   implements native.NSWindowDelegate {
   readonly id: String;
   readonly nativeId: i32;
   readonly window: native.NSWindow;
   readonly windows: Weak<WindowManager>;
+  readonly didCloseNativeWindow: NativeWindowClosedOperation;
 
   function willClose(
     in notification: native.NSNotification
@@ -18,16 +23,12 @@ class DesktopWindowDelegate on thread.main
     // the application runtime retains its graph until the run loop returns.
     const id = copy this.id;
     const nativeId = this.nativeId;
-    const window = this.window;
     const current = attempt this.windows.upgrade();
     match (current) {
       success(windows) => windows.closedNative(in id);
       failure(_) => {}
     }
-    native.ZAppDesktopBridge.detachWindow(
-      window,
-      nativeId: nativeId
-    );
+    this.didCloseNativeWindow(nativeId);
   }
 
   function didBecomeKey(
@@ -75,13 +76,15 @@ internal function createDesktopWindowDelegate(
   id: String,
   nativeId: i32,
   in window: native.NSWindow,
-  windows: Weak<WindowManager>
+  windows: Weak<WindowManager>,
+  didCloseNativeWindow: NativeWindowClosedOperation
 ): objc.Adapter<native.NSWindowDelegate> on thread.main {
   const delegate = new DesktopWindowDelegate({
     id: move id,
     nativeId,
     window,
     windows,
+    didCloseNativeWindow,
   });
   return objc.adapt<native.NSWindowDelegate>(delegate);
 }

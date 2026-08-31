@@ -51,7 +51,8 @@ internal function deliverWebViewResponse(
   in webView: native.WKWebView,
   in window: native.NSWindow,
   in response: BridgeResponse,
-  windowId: i32
+  windowId: i32,
+  activeWindowCount: usize
 ): void on thread.main {
   const script = responseScript(in response);
   const payload = copy response.payload;
@@ -62,6 +63,7 @@ internal function deliverWebViewResponse(
     nativeId: windowId,
     payload: move payload,
     requestId: response.id,
+    activeWindowCount: activeWindowCount,
     ok: response.ok
   );
 }
