@@ -3,6 +3,7 @@ import json from "std/json";
 import { TextBuffer } from "std/text";
 import { thread } from "std/thread";
 import { BridgeResponse } from "../../bridge.zs";
+import { configuredFrontendIsDevelopment } from "./configured-webview.zs";
 
 readonly struct WebViewResponseEnvelope {
   id: String;
@@ -64,6 +65,7 @@ internal function deliverWebViewResponse(
     payload: move payload,
     requestId: response.id,
     activeWindowCount: activeWindowCount,
+    development: configuredFrontendIsDevelopment(),
     ok: response.ok
   );
 }

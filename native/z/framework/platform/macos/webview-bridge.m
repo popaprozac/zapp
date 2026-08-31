@@ -15,47 +15,7 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-extern const char *zapp_webview_bootstrap_script(void);
-extern const char *zapp_desktop_frontend_origin(void);
-extern size_t zapp_webview_injection_count(void);
-extern const char *zapp_webview_injection_profile(size_t index);
-extern int32_t zapp_webview_injection_phase(size_t index);
-extern const unsigned char *zapp_webview_injection_source(size_t index);
-extern size_t zapp_webview_injection_source_length(size_t index);
-
 @implementation ZAppDesktopBridge (WebView)
-
-+ (nullable NSString *)webViewBootstrapScript {
-  const char *source = zapp_webview_bootstrap_script();
-  return source == NULL ? nil : [NSString stringWithUTF8String:source];
-}
-
-+ (nullable NSString *)webViewFrontendOrigin {
-  const char *source = zapp_desktop_frontend_origin();
-  return source == NULL ? nil : [NSString stringWithUTF8String:source];
-}
-
-+ (NSUInteger)webViewInjectionCount {
-  return zapp_webview_injection_count();
-}
-
-+ (nullable NSString *)webViewInjectionProfileAtIndex:(NSUInteger)index {
-  const char *profile = zapp_webview_injection_profile(index);
-  return profile == NULL ? nil : [NSString stringWithUTF8String:profile];
-}
-
-+ (int32_t)webViewInjectionPhaseAtIndex:(NSUInteger)index {
-  return zapp_webview_injection_phase(index);
-}
-
-+ (nullable NSString *)webViewInjectionSourceAtIndex:(NSUInteger)index {
-  const unsigned char *source = zapp_webview_injection_source(index);
-  size_t length = zapp_webview_injection_source_length(index);
-  if (source == NULL) return nil;
-  return [[NSString alloc] initWithBytes:source
-                                  length:length
-                                encoding:NSUTF8StringEncoding];
-}
 
 + (void)evaluateJavaScript:(NSString *)script
                  inWebView:(WKWebView *)webView
@@ -64,6 +24,7 @@ extern size_t zapp_webview_injection_source_length(size_t index);
                    payload:(NSString *)payload
                  requestId:(uint64_t)requestId
          activeWindowCount:(NSUInteger)activeWindowCount
+               development:(BOOL)development
                         ok:(BOOL)ok {
   [webView evaluateJavaScript:script completionHandler:^(id value, NSError *error) {
     (void)value;
@@ -79,6 +40,7 @@ extern size_t zapp_webview_injection_source_length(size_t index);
       activeWindowCount,
       payload,
       requestId,
+      development,
       ok
     );
 #else
@@ -86,6 +48,7 @@ extern size_t zapp_webview_injection_source_length(size_t index);
     (void)payload;
     (void)requestId;
     (void)activeWindowCount;
+    (void)development;
     (void)ok;
 #endif
   }];

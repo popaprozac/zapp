@@ -18,6 +18,9 @@ This directory is Zapp's internal macOS backend. It is not part of the public
 - `configured-assets.zs` is the editor-safe empty asset catalog. Packaged builds
   replace it with a generated Z module whose `embed.StaticBytes` values point
   directly at compiler-emitted process-lifetime storage.
+- `configured-webview.zs` is the editor-safe empty WebView configuration.
+  Builds replace it with generated typed Z values for the frontend origin,
+  bundled bootstrap, development mode, and trusted injection catalog.
 - `webview-injections.zs` owns bootstrap/window identity scripts, configured
   injection-profile validation and ordering, JSON-safe CSS wrapping, phase
   mapping, and `WKUserScript` registration.
@@ -32,9 +35,9 @@ This directory is Zapp's internal macOS backend. It is not part of the public
   is not application policy or part of production binaries.
 - `application-host.m`, `asset-bridge.m`, `webview-bridge.m`, and
   `window-bridge.m` are narrow native ABI seams for the run loop, generated
-  injection-table reads, Brotli decoding, native errors, run-loop wakeup,
-  and WebKit completion adaptation that have not yet gained a checked direct Z
-  representation. They do not own application or window registry state.
+  Brotli decoding, native errors, run-loop wakeup, and WebKit completion
+  adaptation that have not yet gained a checked direct Z representation. They
+  do not own application or window registry state.
 - `native-bridge.m` is a four-line unity entry that keeps Objective-C category
   methods reachable when the adapters are packaged in a static archive; it
   contains no behavior or policy.

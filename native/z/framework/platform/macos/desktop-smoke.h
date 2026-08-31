@@ -21,5 +21,6 @@ void zapp_desktop_smoke_observe_response(
   NSUInteger active_window_count,
   NSString *payload,
   uint64_t request_id,
+  BOOL development,
   BOOL ok
 );

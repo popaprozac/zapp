@@ -4,12 +4,10 @@ import WebKit from "WebKit/WebKit.h";
 import console from "std/console";
 import objc from "std/objc";
 import { thread } from "std/thread";
+import { configuredFrontendOrigin } from "./configured-webview.zs";
 
 function frontendOrigin(): Foundation.NSURL | null on thread.main {
-  const source: Foundation.NSString | null =
-    native.ZAppDesktopBridge.webViewFrontendOrigin();
-  if (source == null) return null;
-  return Foundation.NSURL.URLWithString(source);
+  return Foundation.NSURL.URLWithString(configuredFrontendOrigin());
 }
 
 internal function resolveLogicalURL(

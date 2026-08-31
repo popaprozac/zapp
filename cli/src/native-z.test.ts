@@ -3,9 +3,8 @@ import { readFileSync } from "node:fs";
 import {
   parseZCompilerIdentity,
   renderZApplicationMetadata,
-  renderZFrontendConfigC,
+  renderZConfiguredWebView,
   renderZWebviewBootstrapConfig,
-  renderZWebviewBootstrapC,
   renderZNativeManifest,
   resolveZFrontendOrigin,
   resolveZNativeHost,
@@ -76,25 +75,6 @@ describe("renderZWebviewBootstrapConfig", () => {
   });
 });
 
-describe("renderZWebviewBootstrapC", () => {
-  it("preserves arbitrary UTF-8 source without C literal ambiguity", () => {
-    const source = 'globalThis.message = "héllo\\n世界";\u2028';
-    const output = renderZWebviewBootstrapC(source);
-    const bytes = Array.from(
-      output.matchAll(/\\x([0-9a-f]{2})/g),
-      (match) => Number.parseInt(match[1], 16),
-    );
-
-    expect(new TextDecoder().decode(Uint8Array.from(bytes))).toBe(source);
-    expect(output).toContain("const char *zapp_webview_bootstrap_script(void)");
-  });
-
-  it("emits a valid empty C string", () => {
-    expect(renderZWebviewBootstrapC(""))
-      .toContain('static const char zapp_webview_bootstrap[] =\n  "";');
-  });
-});
-
 describe("Z frontend origin", () => {
   it("uses one packaged application origin and normalizes development URLs", () => {
     expect(resolveZFrontendOrigin()).toBe("zapp://app/");
@@ -106,16 +86,28 @@ describe("Z frontend origin", () => {
       .toThrow(/must use http or https/);
   });
 
-  it("emits the resolved origin without C string escaping ambiguity", () => {
-    const output = renderZFrontendConfigC("http://localhost:5173");
-    const bytes = Array.from(
-      output.matchAll(/0x([0-9a-f]{2})/g),
-      (match) => Number.parseInt(match[1], 16),
+});
+
+describe("renderZConfiguredWebView", () => {
+  it("emits bootstrap, origin, and ordered injections as typed Z values", () => {
+    const output = renderZConfiguredWebView(
+      'globalThis.message = "ready";\n',
+      "zapp://app/",
+      [{
+        profile: "base",
+        phase: 1,
+        sourcePath: "src/preload.ts",
+        source: 'globalThis.preloaded = "yes";',
+      }],
     );
-    expect(new TextDecoder().decode(Uint8Array.from(bytes.slice(0, -1))))
-      .toBe("http://localhost:5173/");
-    expect(bytes.at(-1)).toBe(0);
-    expect(output).toContain("zapp_desktop_frontend_origin");
+    expect(output).toContain('return "zapp://app/";');
+    expect(output).toContain("configuredFrontendIsDevelopment");
+    expect(output).toContain("return false;");
+    expect(output).toContain('return "globalThis.message = \\"ready\\";\\n";');
+    expect(output).toContain('profile: "base"');
+    expect(output).toContain('source: "globalThis.preloaded = \\"yes\\";"');
+    expect(output).toContain("phase: 1");
+    expect(output).toContain("Option<ConfiguredWebViewInjection>");
   });
 });
 
@@ -221,6 +213,7 @@ describe("Z native host inputs", () => {
   it("keeps the WebKit UI graph, handler, validation, and registration in Z", () => {
     const macOSModulePaths = [
       "application.zs",
+      "configured-webview.zs",
       "navigation.zs",
       "response-delivery.zs",
       "runtime.zs",
@@ -261,7 +254,7 @@ describe("Z native host inputs", () => {
       "utf8",
     );
 
-    expect(macOSModules).toHaveLength(9);
+    expect(macOSModules).toHaveLength(10);
     expect(macOSModules.every((module) => module.split("\n").length < 700)).toBe(true);
     expect(objectiveCHostModules.every((module) => module.split("\n").length < 150)).toBe(true);
     expect(macOSPlatform).toContain("implements native.WKScriptMessageHandler");
@@ -291,7 +284,11 @@ describe("Z native host inputs", () => {
     expect(macOSPlatform).toContain("native.ZAppDesktopBridge.stopRunLoop()");
     expect(macOSPlatform).toContain("function webViewInjectionProfileExists(");
     expect(macOSPlatform).toContain("function installWebViewScripts(");
-    expect(macOSPlatform).toContain("native.ZAppDesktopBridge.webViewInjectionCount()");
+    expect(macOSPlatform).toContain("configuredWebViewInjectionCount()");
+    expect(macOSPlatform).toContain("configuredWebViewInjectionAtIndex(index)");
+    expect(macOSPlatform).toContain("configuredWebViewBootstrap()");
+    expect(macOSPlatform).toContain("configuredFrontendOrigin()");
+    expect(macOSPlatform).toContain("configuredFrontendIsDevelopment()");
     expect(macOSPlatform).toContain("JsonValue.string(move source)");
     expect(macOSPlatform).toContain("WebKit.WKUserScript.alloc().initWithSource(");
     expect(macOSPlatform).toContain("contentController.addUserScript(script)");
@@ -351,6 +348,10 @@ describe("Z native host inputs", () => {
     expect(objectiveCHost).not.toContain("zapp_desktop_style_injection");
     expect(objectiveCHost).not.toContain("zapp_desktop_window_identity_script");
     expect(objectiveCHost).not.toContain("injectionProfiles");
+    expect(objectiveCHost).not.toContain("webViewBootstrapScript");
+    expect(objectiveCHost).not.toContain("webViewFrontendOrigin");
+    expect(objectiveCHost).not.toContain("zapp_desktop_frontend_origin");
+    expect(objectiveCHost).not.toContain("webViewInjectionCount");
     expect(objectiveCHost).not.toContain("WKNavigationDelegate");
     expect(objectiveCHost).not.toContain("<NSWindowDelegate>");
     expect(objectiveCHost).not.toContain("windowWillClose:");
@@ -389,6 +390,8 @@ describe("Z native host inputs", () => {
     expect(nativeBuilder).toContain('...(desktopSmokeSupport ? [desktopSmokeObject] : [])');
     expect(nativeBuilder).toContain('await rm(desktopSmokeObject, { force: true });');
     expect(nativeBuilder).toContain('await rm(desktopArchive, { force: true });');
+    expect(nativeBuilder).not.toContain('renderWebviewInjectionsC(injectionEntries)');
+    expect(nativeBuilder).not.toContain('renderZWebviewBootstrapC(bootstrapSource)');
     expect(cli).toContain("devUrl,");
     expect(cli).not.toContain("Interactive dev starts with the Phase 1 WebView core");
   });

@@ -1,8 +1,11 @@
-import native from "zapp_desktop.h";
-import Foundation from "Foundation/Foundation.h";
 import WebKit from "WebKit/WebKit.h";
 import { JsonValue, stringify } from "std/json";
 import { thread } from "std/thread";
+import {
+  configuredWebViewBootstrap,
+  configuredWebViewInjectionAtIndex,
+  configuredWebViewInjectionCount,
+} from "./configured-webview.zs";
 
 function quotedJavaScriptString(source: String): String {
   const value = JsonValue.string(move source);
@@ -50,15 +53,16 @@ function profileWasSelected(
 internal function webViewInjectionProfileExists(
   in profile: String
 ): boolean on thread.main {
-  const count: usize = native.ZAppDesktopBridge.webViewInjectionCount();
+  const count: usize = configuredWebViewInjectionCount();
   let index: usize = 0;
   while (index < count) {
-    const candidate: Foundation.NSString | null =
-      native.ZAppDesktopBridge.webViewInjectionProfileAtIndex(index);
-    if (
-      candidate != null
-      && candidate.isEqualToString(copy profile)
-    ) return true;
+    const candidate = configuredWebViewInjectionAtIndex(index);
+    match (candidate) {
+      some(entry) => {
+        if (entry.profile == profile) return true;
+      }
+      none => {}
+    }
     index = index + 1;
   }
   return false;
@@ -69,39 +73,31 @@ internal function installWebViewScripts(
   in windowId: String,
   in profiles: Array<String>
 ): void throws String on thread.main {
-  const bootstrap: Foundation.NSString | null =
-    native.ZAppDesktopBridge.webViewBootstrapScript();
-  if (bootstrap == null) throw "could not decode the WebView bootstrap script";
-  const bootstrapSource: String = bootstrap;
-  addUserScript(contentController, move bootstrapSource, 1);
+  addUserScript(contentController, configuredWebViewBootstrap(), 1);
   addUserScript(
     contentController,
     windowIdentityInjection(in windowId),
     1
   );
 
-  const entryCount: usize = native.ZAppDesktopBridge.webViewInjectionCount();
+  const entryCount: usize = configuredWebViewInjectionCount();
   let selectedIndex: usize = 0;
   while (selectedIndex < profiles.length) {
     if (!profileWasSelected(in profiles, selectedIndex)) {
       let entryIndex: usize = 0;
       while (entryIndex < entryCount) {
-        const entryProfile: Foundation.NSString | null =
-          native.ZAppDesktopBridge.webViewInjectionProfileAtIndex(entryIndex);
-        if (
-          entryProfile != null
-          && entryProfile.isEqualToString(copy profiles[selectedIndex])
-        ) {
-          const source: Foundation.NSString | null =
-            native.ZAppDesktopBridge.webViewInjectionSourceAtIndex(entryIndex);
-          if (source == null) {
-            throw `could not decode WebView inject profile "${profiles[selectedIndex]}"`;
+        const configured = configuredWebViewInjectionAtIndex(entryIndex);
+        match (configured) {
+          some(entry) => {
+            if (entry.profile == profiles[selectedIndex]) {
+              let scriptSource = copy entry.source;
+              if (entry.phase == 0) {
+                scriptSource = styleInjection(move scriptSource);
+              }
+              addUserScript(contentController, move scriptSource, entry.phase);
+            }
           }
-          let scriptSource: String = source;
-          const phase =
-            native.ZAppDesktopBridge.webViewInjectionPhaseAtIndex(entryIndex);
-          if (phase == 0) scriptSource = styleInjection(move scriptSource);
-          addUserScript(contentController, move scriptSource, phase);
+          none => {}
         }
         entryIndex = entryIndex + 1;
       }

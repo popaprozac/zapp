@@ -4,9 +4,6 @@
 
 #include <dispatch/dispatch.h>
 #include <stdio.h>
-#include <string.h>
-
-extern const char *zapp_desktop_frontend_origin(void);
 
 static NSMutableSet<NSNumber *> *zapp_desktop_smoke_responses(void) {
   static NSMutableSet<NSNumber *> *responses = nil;
@@ -85,6 +82,7 @@ void zapp_desktop_smoke_observe_response(
   NSUInteger active_window_count,
   NSString *payload,
   uint64_t request_id,
+  BOOL development,
   BOOL ok
 ) {
   if (![ZAppDesktopBridge smokeMode]) return;
@@ -115,10 +113,6 @@ void zapp_desktop_smoke_observe_response(
           @"bridge:typeof globalThis[Symbol.for('zapp.bridge')]"
           @"})"
         completionHandler:^(id state, NSError *state_error) {
-          const char *frontend_origin = zapp_desktop_frontend_origin();
-          BOOL development = frontend_origin != NULL
-            && (strncmp(frontend_origin, "http://", 7) == 0
-              || strncmp(frontend_origin, "https://", 8) == 0);
           NSString *expected_hmr = development
             ? @"\"hmr\":\"ready\""
             : @"\"hmr\":\"packaged\"";

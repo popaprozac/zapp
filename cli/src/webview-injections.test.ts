@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   buildWebviewInjections,
-  renderWebviewInjectionsC,
   WEBVIEW_INJECT_DOCUMENT_END,
   WEBVIEW_INJECT_DOCUMENT_START,
   WEBVIEW_INJECT_STYLE,
@@ -43,21 +42,9 @@ test("buildWebviewInjections preserves profile and phase ordering", async () => 
     expect(entries[1].source).toContain("preloaded");
     expect(entries[2].source).toContain("ready");
 
-    const c = renderWebviewInjectionsC(entries);
-    expect(c).toContain('{"base", 0, zapp_webview_injection_0');
-    expect(c).toContain('{"base", 1, zapp_webview_injection_1');
-    expect(c).toContain('{"base", 2, zapp_webview_injection_2');
-    expect(c).not.toContain("zapp_webview_injection_profile_exists");
-    expect(c).not.toContain("#include <string.h>");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
-});
-
-test("renderWebviewInjectionsC emits a warning-clean empty registry shape", () => {
-  const c = renderWebviewInjectionsC([]);
-  expect(c).toContain("return 0;");
-  expect(c).not.toContain("zapp_webview_injections[1]");
 });
 
 test("buildWebviewInjections reports profile-qualified file errors", async () => {

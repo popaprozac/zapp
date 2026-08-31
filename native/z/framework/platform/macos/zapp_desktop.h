@@ -33,12 +33,6 @@ NSRect zapp_desktop_make_rect(uint32_t width, uint32_t height);
 @end
 
 @interface ZAppDesktopBridge (WebView)
-+ (nullable NSString *)webViewBootstrapScript;
-+ (nullable NSString *)webViewFrontendOrigin;
-+ (NSUInteger)webViewInjectionCount;
-+ (nullable NSString *)webViewInjectionProfileAtIndex:(NSUInteger)index;
-+ (int32_t)webViewInjectionPhaseAtIndex:(NSUInteger)index;
-+ (nullable NSString *)webViewInjectionSourceAtIndex:(NSUInteger)index;
 + (void)evaluateJavaScript:(NSString *)script
                  inWebView:(WKWebView *)webView
                  forWindow:(NSWindow *)window
@@ -46,6 +40,7 @@ NSRect zapp_desktop_make_rect(uint32_t width, uint32_t height);
                    payload:(NSString *)payload
                  requestId:(uint64_t)requestId
          activeWindowCount:(NSUInteger)activeWindowCount
+               development:(BOOL)development
                         ok:(BOOL)ok;
 + (void)startWindowSmokeSupport:(NSString *)windowId
                        nativeId:(int32_t)nativeId

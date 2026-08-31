@@ -34,8 +34,9 @@ the Z builder. The builder:
    strict-C bridge host used by the non-UI regression; and
 9. bundles the canonical `bootstrap/webview.ts` source and generated browser
    service facade, then injects both through a `WKUserScript` at document start;
-10. compiles the `webview.inject` catalog into immutable C data and lets each
-    Z `WindowOptions.inject` select its trusted profile set before navigation.
+10. compiles the WebView origin, bootstrap, and `webview.inject` catalog into
+    a generated typed Z module, then lets each `WindowOptions.inject` select
+    its trusted profile set before navigation;
 11. expands `security.capabilities` service selectors against the checked
     service manifest, compiles exact grants into immutable Z collections, and
     enforces the originating window's selected profiles before dispatch.
@@ -109,8 +110,10 @@ bytes into an ownership-transferring `NSData` and constructs WebKit's `NSError`.
 WebView bootstrap, identity, and configured CSS/JavaScript injection policy are
 also Z-owned in `webview-injections.zs`: profile validation, duplicate
 suppression, JSON-safe source quoting, phase mapping, and `WKUserScript`
-registration happen through checked Objective-C interop. Native glue exposes
-only length-aware reads from the generated immutable injection table.
+registration happen through checked Objective-C interop. The generated
+`configured-webview.zs` module carries the origin, bundled bootstrap, and
+ordered injection sources as ordinary typed Z values; production native glue
+no longer exposes or reads a parallel C configuration table.
 Initial URL resolution and application-origin navigation policy live in
 `navigation.zs`. A retained Z-owned `WKNavigationDelegate` adapter handles
 native completion blocks directly, permits subframe and same-origin main-frame
