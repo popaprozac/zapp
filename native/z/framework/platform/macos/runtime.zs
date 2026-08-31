@@ -19,7 +19,6 @@ import {
   bridgeFailure,
   decodeBridgeMessage,
 } from "../../bridge.zs";
-import { zapp_deliver_response_from_z } from "zapp_router.h";
 import objc from "std/objc";
 import { Once, OnceLifetime } from "std/sync";
 import { TaskControl, TaskScope } from "std/async";
@@ -35,6 +34,7 @@ import {
 } from "../../window.zs";
 import { routeWindowBridgeMessage } from "../../window-bridge.zs";
 import { createDesktopAssetSchemeHandler } from "./scheme-handler.zs";
+import { deliverWebViewResponse } from "./response-delivery.zs";
 import { DesktopNavigationDelegate, createDesktopNavigationDelegate, resolveLogicalURL } from "./navigation.zs";
 import { installWebViewScripts, webViewInjectionProfileExists } from "./webview-injections.zs";
 import { createDesktopWindowDelegate } from "./window-delegate.zs";
@@ -48,7 +48,7 @@ class DesktopMessageHandler on thread.main
     const body = message.body;
     if (body instanceof native.NSString) {
       const text: String = body;
-      zapp_route_message_owned(move text, this.windowId);
+      routeMessageOnMain(move text, this.windowId);
       return;
     }
     const failure = bridgeFailure(
@@ -56,12 +56,7 @@ class DesktopMessageHandler on thread.main
       "INVALID_MESSAGE",
       "WebView message body must be a string"
     );
-    zapp_deliver_response_from_z(
-      failure.payload,
-      0,
-      false,
-      this.windowId
-    );
+    deliverResponse(in failure, this.windowId);
   }
 }
 
@@ -280,6 +275,19 @@ export c function zapp_route_message_owned(
 ): void {
   const current = application.get();
   const updates = current.updates;
+  const routed = updates.schedule(
+    thread.main,
+    async move (): void => routeMessageOnMain(move message, windowId)
+  );
+  if (!routed.accepted) return;
+}
+
+function routeMessageOnMain(
+  message: String,
+  windowId: i32
+): void on thread.main {
+  const current = application.get();
+  const updates = current.updates;
   const decoded = attempt decodeBridgeMessage(in message);
   const bridgeMessage = match (decoded) {
     success(value) => value;
@@ -289,12 +297,7 @@ export c function zapp_route_message_owned(
         "INVALID_MESSAGE",
         copy error.message
       );
-      zapp_deliver_response_from_z(
-        failure.payload,
-        0,
-        false,
-        windowId
-      );
+      deliverResponse(in failure, windowId);
       return;
     }
   };
@@ -334,12 +337,7 @@ export c function zapp_route_message_owned(
       "APPLICATION_CLOSING",
       "Application is closing"
     );
-    zapp_deliver_response_from_z(
-      failure.payload,
-      0,
-      false,
-      windowId
-    );
+    deliverResponse(in failure, windowId);
   }
 }
 
@@ -523,12 +521,21 @@ function deliverResponse(
   in response: BridgeResponse,
   windowId: i32
 ): void on thread.main {
-  zapp_deliver_response_from_z(
-    response.payload,
-    response.id,
-    response.ok,
-    windowId
-  );
+  const current = application.get();
+  const found = current.nativeWindows.get(windowId);
+  match (in found) {
+    some(window) => {
+      const webView = window.webView;
+      const nativeWindow = window.window;
+      deliverWebViewResponse(
+        webView,
+        nativeWindow,
+        in response,
+        windowId
+      );
+    }
+    none => {}
+  }
 }
 
 function createMacOSWindowRuntime(

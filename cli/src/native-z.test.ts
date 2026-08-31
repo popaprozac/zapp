@@ -214,6 +214,7 @@ describe("Z native host inputs", () => {
     const macOSModulePaths = [
       "application.zs",
       "navigation.zs",
+      "response-delivery.zs",
       "runtime.zs",
       "scheme-handler.zs",
       "webview-injections.zs",
@@ -246,7 +247,7 @@ describe("Z native host inputs", () => {
       "utf8",
     );
 
-    expect(macOSModules).toHaveLength(7);
+    expect(macOSModules).toHaveLength(8);
     expect(macOSModules.every((module) => module.split("\n").length < 700)).toBe(true);
     expect(macOSPlatform).toContain("implements native.WKScriptMessageHandler");
     expect(macOSPlatform).toContain("body instanceof native.NSString");
@@ -287,6 +288,10 @@ describe("Z native host inputs", () => {
     expect(macOSPlatform).not.toContain("Foundation.NSNotification");
     expect(macOSPlatform).toContain("objc.adapt<native.NSWindowDelegate>(delegate)");
     expect(macOSPlatform).toContain("window.delegate = windowDelegate");
+    expect(macOSPlatform).toContain("function javascriptJSON(");
+    expect(macOSPlatform).toContain("json.encode(in envelope)");
+    expect(macOSPlatform).toContain("native.ZAppDesktopBridge.evaluateJavaScript(");
+    expect(macOSPlatform).toContain("forWindow: window");
     expect(macOSPlatform).toContain("webView.loadRequest(request)");
     expect(macOSPlatform).toContain("authorizeServiceInvocation(");
     expect(macOSPlatform).toContain("current.capabilitiesForWindow(windowId)");
@@ -327,6 +332,9 @@ describe("Z native host inputs", () => {
     expect(objectiveCHost).not.toContain("windowDidResignKey:");
     expect(objectiveCHost).not.toContain("windowDidResize:");
     expect(objectiveCHost).not.toContain("zapp_window_closed_owned");
+    expect(objectiveCHost).not.toContain("zapp_deliver_response_from_z");
+    expect(objectiveCHost).not.toContain("deliverPayload:");
+    expect(objectiveCHost).not.toContain("NSJSONSerialization");
     expect(objectiveCHost).not.toContain("decidePolicyForNavigationAction:");
     expect(objectiveCHost).toContain("forMainFrameOnly:YES");
     expect(objectiveCHost).not.toContain("loadRequest:");
@@ -340,7 +348,7 @@ describe("Z native host inputs", () => {
     expect(notesFrontend).toContain('dataset.hmr = import.meta.hot ? "ready" : "packaged"');
     expect(notesFrontend).toContain("document.body.dataset.inject");
     expect(notesHTML).toContain('<script type="module" src="/app.js"></script>');
-    expect(objectiveCHost).toContain("if (!strongSelf.smokeMode) return;");
+    expect(objectiveCHost).toContain("observeDeliveredResponse:");
     expect(objectiveCHost).toContain("cancelled WebView response ignored");
     expect(objectiveCHost).toContain('@"\\\"hmr\\\":\\\"ready\\\""');
     expect(nativeBuilder).toContain(

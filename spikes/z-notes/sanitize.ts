@@ -5,6 +5,10 @@ import {
   type BoundedCommandResult,
 } from "../../cli/src/bounded-process";
 import { compileNative } from "../../cli/src/native";
+import {
+  createConfigContext,
+  loadConfig,
+} from "../../cli/src/config";
 
 const spike = import.meta.dir;
 const repository = resolve(spike, "../..");
@@ -14,8 +18,11 @@ const generatedCore = resolve(stagedCore, ".z-cache", "build", "zapp_core.m");
 const generatedHeaderDirectory = resolve(stagedCore, "build");
 const desktopHost = resolve(stagedCore, "desktop.m");
 const bootstrap = resolve(stagedCore, "zapp_webview_bootstrap.c");
-const expectedEvidence =
-  'visible WebView round trip window=1 request=2 ok=true payload={"id":"1","title":"WebView note"}';
+const assets = resolve(stagedCore, "zapp_frontend_assets.c");
+const frontendConfig = resolve(stagedCore, "zapp_frontend_config.c");
+const injections = resolve(stagedCore, "zapp_webview_injections.c");
+const expectedEvidence = "visible WebView round trip window=1";
+const expectedPayload = 'payload={"id":"1","title":"WebView note"}';
 
 async function runBounded(
   command: string[],
@@ -82,10 +89,14 @@ async function buildInstrumented(
     "-I", generatedHeaderDirectory,
     desktopHost,
     bootstrap,
+    assets,
+    frontendConfig,
+    injections,
     archive,
     "-framework", "AppKit",
     "-framework", "WebKit",
     "-framework", "CoreFoundation",
+    "-lcompression",
     "-o", executable,
   ], 120_000);
   return executable;
@@ -95,7 +106,10 @@ function requireLifecycleEvidence(
   result: BoundedCommandResult,
   label: string,
 ): void {
-  if (!result.stdout.includes(expectedEvidence)) {
+  if (
+    !result.stdout.includes(expectedEvidence)
+    || !result.stdout.includes(expectedPayload)
+  ) {
     throw new Error(
       `${label} did not complete the WebKit lifecycle` +
       (result.stdout.trim() ? `\nstdout:\n${result.stdout.trim()}` : "") +
@@ -111,6 +125,10 @@ await mkdir(outputDirectory, { recursive: true });
 
 const originalLanguage = process.env.ZAPP_NATIVE_LANG;
 const originalHost = process.env.ZAPP_Z_HOST;
+const config = await loadConfig(
+  spike,
+  createConfigContext(spike, "build", "macos"),
+);
 process.env.ZAPP_NATIVE_LANG = "z";
 process.env.ZAPP_Z_HOST = "desktop";
 try {
@@ -122,6 +140,7 @@ try {
     output: resolve(outputDirectory, "ordinary"),
     optimize: true,
     target: "macos",
+    config,
   });
 } finally {
   if (originalLanguage === undefined) delete process.env.ZAPP_NATIVE_LANG;

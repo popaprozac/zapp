@@ -19,6 +19,9 @@ This directory is Zapp's internal macOS backend. It is not part of the public
 - `navigation.zs` owns logical URL resolution, frontend-origin comparison, the
   retained `WKNavigationDelegate` adapter, completion-block decisions, and
   navigation-failure policy.
+- `response-delivery.zs` owns JavaScript-safe response envelopes, native-window
+  lookup, and delivery policy. `desktop.m` retains a narrow adapter over
+  WebKit's untyped Objective-C completion result plus smoke-only observation.
 - `zapp_desktop.h` and `desktop.m` are the remaining native ABI seam for the
   run loop, generated asset/injection-table reads, Brotli decoding, native
   errors, run-loop wakeup, and registry bookkeeping that have not yet gained a

@@ -1,10 +1,22 @@
 import { resolve } from "node:path";
 import { compileNative } from "../../cli/src/native";
+import {
+  createConfigContext,
+  loadConfig,
+} from "../../cli/src/config";
 
 const spike = import.meta.dir;
 const repository = resolve(spike, "../..");
 const build = resolve(spike, "build");
 const host = resolve(build, "zapp-message-bridge-host");
+const config = await loadConfig(
+  spike,
+  createConfigContext(spike, "build", "macos"),
+);
+// This regression host intentionally exposes no application services. Let the
+// compiler derive its empty default capability surface instead of inheriting
+// Z Notes' service-specific production profiles.
+config.capabilityProfiles = undefined;
 
 async function run(command: string[]): Promise<void> {
   const child = Bun.spawn(command, {
@@ -31,6 +43,7 @@ try {
     output: host,
     optimize: true,
     target: "macos",
+    config,
   });
 } finally {
   if (originalLanguage === undefined) delete process.env.ZAPP_NATIVE_LANG;

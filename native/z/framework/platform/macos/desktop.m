@@ -49,13 +49,14 @@ static ZAppDesktopHost *prepared_host = nil;
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, ZAppDesktopWindowRecord *> *windowsByNativeId;
 @property(nonatomic, assign) BOOL smokeMode;
 @property(nonatomic, assign) int32_t result;
++ (void)observeDeliveredResponse:(NSWindow *)window
+                        nativeId:(int32_t)nativeId
+                         payload:(NSString *)payload
+                       requestId:(uint64_t)requestId
+                              ok:(BOOL)ok;
 - (int32_t)run;
 - (void)stopIfLastWindowClosed;
 - (void)closeAllWindows;
-- (void)deliverPayload:(NSString *)payload
-             requestId:(uint64_t)requestId
-                    ok:(BOOL)ok
-              windowId:(int32_t)windowId;
 @end
 
 @implementation ZAppDesktopWindowRecord
@@ -138,6 +139,40 @@ static ZAppDesktopHost *prepared_host = nil;
   if (prepared_host != nil) prepared_host.result = result;
 }
 
++ (void)evaluateJavaScript:(NSString *)script
+                 inWebView:(WKWebView *)webView
+                 forWindow:(NSWindow *)window
+                  nativeId:(int32_t)nativeId
+                   payload:(NSString *)payload
+                 requestId:(uint64_t)requestId
+                        ok:(BOOL)ok {
+  [webView evaluateJavaScript:script completionHandler:^(id value, NSError *error) {
+    (void)value;
+    if (error != nil) {
+      [ZAppDesktopBridge setResult:45];
+      [window close];
+      return;
+    }
+    [ZAppDesktopBridge observeDeliveredResponse:window
+                                       nativeId:nativeId
+                                        payload:payload
+                                      requestId:requestId
+                                             ok:ok];
+  }];
+}
+
++ (void)observeDeliveredResponse:(NSWindow *)window
+                        nativeId:(int32_t)nativeId
+                         payload:(NSString *)payload
+                       requestId:(uint64_t)requestId
+                              ok:(BOOL)ok {
+  [ZAppDesktopHost observeDeliveredResponse:window
+                                   nativeId:nativeId
+                                    payload:payload
+                                  requestId:requestId
+                                         ok:ok];
+}
+
 + (void)failURLSchemeTask:(id<WKURLSchemeTask>)task
                    status:(NSInteger)status
                   message:(NSString *)message {
@@ -194,30 +229,6 @@ static ZAppDesktopHost *prepared_host = nil;
 }
 
 @end
-
-void zapp_deliver_response_from_z(
-  const char *payload,
-  uint64_t request_id,
-  bool ok,
-  int32_t window_id
-) {
-  ZAppDesktopHost *host = prepared_host;
-  if (host == nil) return;
-  ZAppDesktopWindowRecord *record = host.windowsByNativeId[@(window_id)];
-  if (record == nil) return;
-  NSString *text = payload == NULL
-    ? @""
-    : [NSString stringWithUTF8String:payload];
-  if (text == nil) {
-    host.result = 44;
-    [record.window close];
-    return;
-  }
-  [host deliverPayload:text
-             requestId:request_id
-                    ok:ok
-              windowId:window_id];
-}
 
 int32_t zapp_desktop_window_configure(
   const char *window_id,
@@ -326,75 +337,42 @@ void zapp_desktop_window_discard(const char *window_id) {
   return self;
 }
 
-- (void)deliverPayload:(NSString *)payload
-             requestId:(uint64_t)requestId
-                    ok:(BOOL)ok
-              windowId:(int32_t)windowId {
-  ZAppDesktopWindowRecord *record = self.windowsByNativeId[@(windowId)];
-  if (record == nil) return;
-  NSDictionary *response = @{
-    @"id": [NSString stringWithFormat:@"%llu", (unsigned long long)requestId],
-    @"ok": @(ok),
-    @"payload": payload,
-  };
-  NSError *serializationError = nil;
-  NSData *data = [NSJSONSerialization dataWithJSONObject:response
-                                                 options:0
-                                                   error:&serializationError];
-  if (data == nil || serializationError != nil) {
-    self.result = 43;
-    [record.window close];
++ (void)observeDeliveredResponse:(NSWindow *)window
+                       nativeId:(int32_t)nativeId
+                         payload:(NSString *)payload
+                       requestId:(uint64_t)requestId
+                              ok:(BOOL)ok {
+  ZAppDesktopHost *strongSelf = prepared_host;
+  if (strongSelf == nil || !strongSelf.smokeMode) return;
+  ZAppDesktopWindowRecord *record = strongSelf.windowsByNativeId[@(nativeId)];
+  if (record == nil || record.window != window) return;
+  if (requestId == 1) {
+    printf(
+      "cancelled WebView response ignored request=%llu\n",
+      (unsigned long long)requestId
+    );
+    fflush(stdout);
     return;
   }
-  NSString *json = [[NSString alloc] initWithData:data
-                                          encoding:NSUTF8StringEncoding];
-  NSString *script = [NSString stringWithFormat:
-    @"(()=>{const r=%@;const b=globalThis[Symbol.for('zapp.bridge')];"
-    @"if(!b||typeof b._onInvokeResult!=='function'){"
-    @"throw new Error('Zapp bridge is unavailable')}"
-    @"b._onInvokeResult(Number(r.id),r.ok,r.payload)})()",
-    json];
-  __weak ZAppDesktopHost *weakSelf = self;
-  [record.webView evaluateJavaScript:script completionHandler:^(id value, NSError *error) {
-    (void)value;
-    ZAppDesktopHost *strongSelf = weakSelf;
-    if (strongSelf == nil) return;
-    if (error != nil) {
-      strongSelf.result = 45;
-      [record.window close];
-      return;
-    }
-    // Everything below is automated smoke-test instrumentation. Interactive
-    // applications own their DOM and lifetime; a partially completed demo
-    // scenario must never cause the native host to close their window.
-    if (!strongSelf.smokeMode) return;
-    if (requestId == 1) {
-      printf(
-        "cancelled WebView response ignored request=%llu\n",
-        (unsigned long long)requestId
-      );
-      fflush(stdout);
-      return;
-    }
 
-    dispatch_after(
-      dispatch_time(DISPATCH_TIME_NOW, 250 * NSEC_PER_MSEC),
-      dispatch_get_main_queue(),
-      ^{
-        [record.webView
-          evaluateJavaScript:
-            @"JSON.stringify({"
-            @"roundTrip:document.body?.dataset?.roundTrip??null,"
-            @"typedError:document.body?.dataset?.typedError??null,"
-            @"cancellation:document.body?.dataset?.cancellation??null,"
-            @"health:document.body?.dataset?.health??null,"
-            @"hmr:document.body?.dataset?.hmr??null,"
-            @"inject:document.body?.dataset?.inject??null,"
-            @"dynamicWindow:document.body?.dataset?.dynamicWindow??null,"
-            @"status:document.querySelector('#status')?.textContent??null,"
-            @"bridge:typeof globalThis[Symbol.for('zapp.bridge')]"
-            @"})"
-          completionHandler:^(id state, NSError *stateError) {
+  dispatch_after(
+    dispatch_time(DISPATCH_TIME_NOW, 250 * NSEC_PER_MSEC),
+    dispatch_get_main_queue(),
+    ^{
+      [record.webView
+        evaluateJavaScript:
+          @"JSON.stringify({"
+          @"roundTrip:document.body?.dataset?.roundTrip??null,"
+          @"typedError:document.body?.dataset?.typedError??null,"
+          @"cancellation:document.body?.dataset?.cancellation??null,"
+          @"health:document.body?.dataset?.health??null,"
+          @"hmr:document.body?.dataset?.hmr??null,"
+          @"inject:document.body?.dataset?.inject??null,"
+          @"dynamicWindow:document.body?.dataset?.dynamicWindow??null,"
+          @"status:document.querySelector('#status')?.textContent??null,"
+          @"bridge:typeof globalThis[Symbol.for('zapp.bridge')]"
+          @"})"
+        completionHandler:^(id state, NSError *stateError) {
             const char *frontendOrigin = zapp_desktop_frontend_origin();
             BOOL development = frontendOrigin != NULL
               && (strncmp(frontendOrigin, "http://", 7) == 0
@@ -443,7 +421,7 @@ void zapp_desktop_window_discard(const char *window_id) {
             record.receivedResponse = YES;
             printf(
               "visible WebView round trip window=%d request=%llu ok=%s hmr=%s inject=ready payload=%s\n",
-              windowId,
+              nativeId,
               (unsigned long long)requestId,
               ok ? "true" : "false",
               development ? "ready" : "packaged",
@@ -471,10 +449,9 @@ void zapp_desktop_window_discard(const char *window_id) {
                 }
               );
             }
-          }];
-      }
-    );
-  }];
+        }];
+    }
+  );
 }
 
 - (void)stopIfLastWindowClosed {
