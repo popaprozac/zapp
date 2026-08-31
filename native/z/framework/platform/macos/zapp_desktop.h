@@ -40,6 +40,9 @@ NSRect zapp_desktop_make_rect(uint32_t width, uint32_t height);
             nativeId:(int32_t)nativeId
              webView:(WKWebView *)webView
    contentController:(WKUserContentController *)contentController;
++ (void)detachWindow:(NSWindow *)window nativeId:(int32_t)nativeId;
++ (uint32_t)contentWidth:(NSWindow *)window;
++ (uint32_t)contentHeight:(NSWindow *)window;
 @end
 
 int32_t zapp_desktop_window_configure(

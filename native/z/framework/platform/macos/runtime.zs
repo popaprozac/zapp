@@ -35,10 +35,9 @@ import {
 } from "../../window.zs";
 import { routeWindowBridgeMessage } from "../../window-bridge.zs";
 import { createDesktopAssetSchemeHandler } from "./scheme-handler.zs";
-import { DesktopNavigationDelegate, createDesktopNavigationDelegate,
-  resolveLogicalURL } from "./navigation.zs";
-import { installWebViewScripts, webViewInjectionProfileExists
-} from "./webview-injections.zs";
+import { DesktopNavigationDelegate, createDesktopNavigationDelegate, resolveLogicalURL } from "./navigation.zs";
+import { installWebViewScripts, webViewInjectionProfileExists } from "./webview-injections.zs";
+import { createDesktopWindowDelegate } from "./window-delegate.zs";
 class DesktopMessageHandler on thread.main
   implements native.WKScriptMessageHandler {
   readonly windowId: i32;
@@ -75,6 +74,7 @@ class MacOSWindowRuntime on thread.main {
   readonly configuration: native.WKWebViewConfiguration;
   readonly schemeHandler: objc.Adapter<WebKit.WKURLSchemeHandler>;
   readonly navigationDelegate: objc.Adapter<WebKit.WKNavigationDelegate>;
+  readonly windowDelegate: objc.Adapter<native.NSWindowDelegate>;
   readonly registration: objc.Registration;
   readonly pendingRequests: PendingRequests;
   readonly capabilitySelection: CapabilitySelection;
@@ -91,7 +91,6 @@ internal class MacOSApplicationRuntime {
   readonly capabilities: ApplicationCapabilities;
   readonly services: AsyncServices;
   readonly updates: TaskScope;
-  readonly eventUpdates: TaskScope;
   readonly windowManager: WindowManager on thread.main;
   nativeWindows: Map<i32, MacOSWindowRuntime> on thread.main;
   nextNativeWindowId: i32 on thread.main;
@@ -138,43 +137,17 @@ internal class MacOSApplicationRuntime {
     }
     const nativeId = this.nextNativeWindowId;
     this.nextNativeWindowId = this.nextNativeWindowId + 1;
+    const windowManager = this.windowManager;
+    const windowManagerOwner = weak windowManager;
     const runtime = try createMacOSWindowRuntime(
       copy this.name,
       in id,
       nativeId,
       in options,
-      selectedCapabilities
+      selectedCapabilities,
+      windowManagerOwner
     );
     this.nativeWindows.set(nativeId, runtime);
-  }
-
-  function closeWindow(
-    inout this,
-    nativeId: i32,
-    in id: String
-  ): void on thread.main {
-    // Keep the Z-owned AppKit graph alive until NSApplication.run has fully
-    // unwound its autorelease pools. The native registry stops routing to the
-    // closed window immediately; releasing this graph from windowWillClose
-    // would tear it down while AppKit is still closing it.
-    this.windowManager.closedNative(in id);
-  }
-
-  function focusWindow(inout this, in id: String): void on thread.main {
-    this.windowManager.focusedNative(in id);
-  }
-
-  function blurWindow(inout this, in id: String): void on thread.main {
-    this.windowManager.blurredNative(in id);
-  }
-
-  function resizeWindow(
-    inout this,
-    in id: String,
-    width: u32,
-    height: u32
-  ): void on thread.main {
-    this.windowManager.resizedNative(in id, width, height);
   }
 
   function beginRequest(
@@ -563,7 +536,8 @@ function createMacOSWindowRuntime(
   in id: String,
   nativeId: i32,
   in options: WindowOptions,
-  capabilitySelection: CapabilitySelection
+  capabilitySelection: CapabilitySelection,
+  windowManager: Weak<WindowManager>
 ): MacOSWindowRuntime throws WindowError on thread.main {
   const contentController = native.WKUserContentController.alloc().init();
   const handler = new DesktopMessageHandler({ windowId: nativeId });
@@ -629,6 +603,13 @@ function createMacOSWindowRuntime(
   }
   const navigationDelegate = createDesktopNavigationDelegate(window);
   webView.navigationDelegate = navigationDelegate;
+  const windowDelegate = createDesktopWindowDelegate(
+    copy id,
+    nativeId,
+    window,
+    windowManager
+  );
+  window.delegate = windowDelegate;
   const configured = native.zapp_desktop_window_configure(
     id,
     nativeId
@@ -667,6 +648,7 @@ function createMacOSWindowRuntime(
     configuration,
     schemeHandler,
     navigationDelegate,
+    windowDelegate,
     registration,
     pendingRequests: createPendingRequests(),
     capabilitySelection,
@@ -679,7 +661,6 @@ internal function initializeMacOSApplicationRuntime(
   capabilities: ApplicationCapabilities,
   services: AsyncServices,
   updates: TaskScope,
-  eventUpdates: TaskScope,
   windowManager: WindowManager
 ): OnceLifetime<MacOSApplicationRuntime> on thread.main {
   const value = new MacOSApplicationRuntime({
@@ -688,7 +669,6 @@ internal function initializeMacOSApplicationRuntime(
     capabilities,
     services: move services,
     updates,
-    eventUpdates,
     windowManager,
     nativeWindows: Map<i32, MacOSWindowRuntime>(),
     nextNativeWindowId: 1,

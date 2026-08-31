@@ -11,12 +11,6 @@ import { TaskScope } from "std/async";
 import { thread } from "std/thread";
 import { initializeMacOSApplicationRuntime } from "./runtime.zs";
 import { macOSWindowBackend } from "./window-backend.zs";
-import {
-  zapp_window_blurred_owned,
-  zapp_window_closed_owned,
-  zapp_window_focused_owned,
-  zapp_window_resized_owned,
-} from "./window-events.zs";
 
 export async function runMacOSApplication(
   config: PreparedApplication,
@@ -44,14 +38,12 @@ export async function runMacOSApplication(
       version: copy config.metadata.version,
     }),
   });
-  const eventUpdates = new TaskScope();
   const lifetime = initializeMacOSApplicationRuntime(
     copy config.metadata.name,
     config.permissions,
     config.capabilities,
     config.services,
     updates,
-    eventUpdates,
     windows
   );
   const realized = attempt windows.start(macOSWindowBackend(), true);
@@ -73,7 +65,6 @@ export async function runMacOSApplication(
     }
   }
   const status = native.zapp_desktop_run();
-  await eventUpdates.close();
   windows.stop();
   await updates.cancel();
   const stopped = attempt config.lifecycles.stop(in context);

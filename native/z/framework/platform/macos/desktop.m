@@ -18,16 +18,6 @@ extern const char *zapp_webview_injection_profile(size_t index);
 extern int32_t zapp_webview_injection_phase(size_t index);
 extern const unsigned char *zapp_webview_injection_source(size_t index);
 extern size_t zapp_webview_injection_source_length(size_t index);
-extern void zapp_window_closed_owned(const char *window_id, int32_t native_id);
-extern void zapp_window_focused_owned(const char *window_id, int32_t native_id);
-extern void zapp_window_blurred_owned(const char *window_id, int32_t native_id);
-extern void zapp_window_resized_owned(
-  const char *window_id,
-  int32_t native_id,
-  uint32_t width,
-  uint32_t height
-);
-
 typedef struct {
   const char *path;
   const uint8_t *data;
@@ -54,13 +44,12 @@ static ZAppDesktopHost *prepared_host = nil;
 @property(nonatomic, assign) BOOL started;
 @end
 
-@interface ZAppDesktopHost : NSObject <NSWindowDelegate>
+@interface ZAppDesktopHost : NSObject
 @property(nonatomic, strong) NSMutableDictionary<NSString *, ZAppDesktopWindowRecord *> *windows;
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, ZAppDesktopWindowRecord *> *windowsByNativeId;
 @property(nonatomic, assign) BOOL smokeMode;
 @property(nonatomic, assign) int32_t result;
 - (int32_t)run;
-- (ZAppDesktopWindowRecord *)recordForWindow:(NSWindow *)window;
 - (void)stopIfLastWindowClosed;
 - (void)closeAllWindows;
 - (void)deliverPayload:(NSString *)payload
@@ -177,7 +166,31 @@ static ZAppDesktopHost *prepared_host = nil;
   record.window = window;
   record.webView = webView;
   record.userContentController = contentController;
-  window.delegate = host;
+}
+
++ (void)detachWindow:(NSWindow *)window nativeId:(int32_t)nativeId {
+  ZAppDesktopHost *host = prepared_host;
+  if (host == nil) return;
+  ZAppDesktopWindowRecord *record = host.windowsByNativeId[@(nativeId)];
+  if (record == nil || record.window != window) return;
+  record.window.delegate = nil;
+  [host.windows removeObjectForKey:record.windowId];
+  [host.windowsByNativeId removeObjectForKey:@(nativeId)];
+  [host stopIfLastWindowClosed];
+}
+
++ (uint32_t)contentWidth:(NSWindow *)window {
+  CGFloat width = window.contentView.bounds.size.width;
+  if (width <= 0.0) return 0;
+  if (width >= (CGFloat)UINT32_MAX) return UINT32_MAX;
+  return (uint32_t)width;
+}
+
++ (uint32_t)contentHeight:(NSWindow *)window {
+  CGFloat height = window.contentView.bounds.size.height;
+  if (height <= 0.0) return 0;
+  if (height >= (CGFloat)UINT32_MAX) return UINT32_MAX;
+  return (uint32_t)height;
 }
 
 @end
@@ -300,13 +313,6 @@ void zapp_desktop_window_discard(const char *window_id) {
 }
 
 @implementation ZAppDesktopHost
-
-- (ZAppDesktopWindowRecord *)recordForWindow:(NSWindow *)window {
-  for (ZAppDesktopWindowRecord *candidate in self.windows.allValues) {
-    if (candidate.window == window) return candidate;
-  }
-  return nil;
-}
 
 - (instancetype)init {
   self = [super init];
@@ -469,52 +475,6 @@ void zapp_desktop_window_discard(const char *window_id) {
       }
     );
   }];
-}
-
-- (void)windowWillClose:(NSNotification *)notification {
-  NSWindow *closedWindow = notification.object;
-  ZAppDesktopWindowRecord *closedRecord = [self recordForWindow:closedWindow];
-  if (closedRecord == nil) return;
-  [self.windows removeObjectForKey:closedRecord.windowId];
-  [self.windowsByNativeId removeObjectForKey:@(closedRecord.nativeId)];
-  closedRecord.window.delegate = nil;
-  zapp_window_closed_owned(
-    closedRecord.windowId.UTF8String,
-    closedRecord.nativeId
-  );
-  [self stopIfLastWindowClosed];
-}
-
-- (void)windowDidBecomeKey:(NSNotification *)notification {
-  ZAppDesktopWindowRecord *record = [self recordForWindow:notification.object];
-  if (record == nil) return;
-  zapp_window_focused_owned(record.windowId.UTF8String, record.nativeId);
-}
-
-- (void)windowDidResignKey:(NSNotification *)notification {
-  ZAppDesktopWindowRecord *record = [self recordForWindow:notification.object];
-  if (record == nil) return;
-  zapp_window_blurred_owned(record.windowId.UTF8String, record.nativeId);
-}
-
-- (void)windowDidResize:(NSNotification *)notification {
-  ZAppDesktopWindowRecord *record = [self recordForWindow:notification.object];
-  if (record == nil) return;
-  NSSize size = record.window.contentView.bounds.size;
-  CGFloat width = size.width;
-  CGFloat height = size.height;
-  uint32_t nativeWidth = width <= 0.0
-    ? 0
-    : (width >= (CGFloat)UINT32_MAX ? UINT32_MAX : (uint32_t)width);
-  uint32_t nativeHeight = height <= 0.0
-    ? 0
-    : (height >= (CGFloat)UINT32_MAX ? UINT32_MAX : (uint32_t)height);
-  zapp_window_resized_owned(
-    record.windowId.UTF8String,
-    record.nativeId,
-    nativeWidth,
-    nativeHeight
-  );
 }
 
 - (void)stopIfLastWindowClosed {

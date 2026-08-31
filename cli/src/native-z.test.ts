@@ -218,7 +218,7 @@ describe("Z native host inputs", () => {
       "scheme-handler.zs",
       "webview-injections.zs",
       "window-backend.zs",
-      "window-events.zs",
+      "window-delegate.zs",
     ];
     const macOSModules = macOSModulePaths.map((module) => readFileSync(
       new URL(`../../native/z/framework/platform/macos/${module}`, import.meta.url),
@@ -282,6 +282,9 @@ describe("Z native host inputs", () => {
     expect(macOSPlatform).toContain("function hasFrontendOrigin(");
     expect(macOSPlatform).toContain("decisionHandler(WebKit.WKNavigationActionPolicyAllow)");
     expect(macOSPlatform).toContain("webView.navigationDelegate = navigationDelegate");
+    expect(macOSPlatform).toContain("implements native.NSWindowDelegate");
+    expect(macOSPlatform).toContain("objc.adapt<native.NSWindowDelegate>(delegate)");
+    expect(macOSPlatform).toContain("window.delegate = windowDelegate");
     expect(macOSPlatform).toContain("webView.loadRequest(request)");
     expect(macOSPlatform).toContain("authorizeServiceInvocation(");
     expect(macOSPlatform).toContain("current.capabilitiesForWindow(windowId)");
@@ -316,6 +319,12 @@ describe("Z native host inputs", () => {
     expect(objectiveCHost).not.toContain("zapp_desktop_window_identity_script");
     expect(objectiveCHost).not.toContain("injectionProfiles");
     expect(objectiveCHost).not.toContain("WKNavigationDelegate");
+    expect(objectiveCHost).not.toContain("<NSWindowDelegate>");
+    expect(objectiveCHost).not.toContain("windowWillClose:");
+    expect(objectiveCHost).not.toContain("windowDidBecomeKey:");
+    expect(objectiveCHost).not.toContain("windowDidResignKey:");
+    expect(objectiveCHost).not.toContain("windowDidResize:");
+    expect(objectiveCHost).not.toContain("zapp_window_closed_owned");
     expect(objectiveCHost).not.toContain("decidePolicyForNavigationAction:");
     expect(objectiveCHost).toContain("forMainFrameOnly:YES");
     expect(objectiveCHost).not.toContain("loadRequest:");
