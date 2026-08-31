@@ -339,7 +339,10 @@ describe("Z native host inputs", () => {
     expect(objectiveCHost).not.toContain("text/javascript");
     expect(objectiveCHost).not.toContain("application/octet-stream");
     expect(objectiveCHost).not.toContain("didReceiveResponse:");
-    expect(objectiveCHost).toContain("embeddedAssetDataAtIndex:");
+    expect(macOSPlatform).toContain("configuredEmbeddedAssetAtIndex(index)");
+    expect(macOSPlatform).toContain("Foundation.NSData.borrow(asset.bytes)");
+    expect(objectiveCHost).not.toContain("embeddedAssetDataAtIndex:");
+    expect(objectiveCHost).toContain("decodeBrotliData:");
     expect(objectiveCHost).toContain("compression_decode_buffer");
     expect(objectiveCHost).toContain("errorWithDomain:@\"com.zapp.frontend\"");
     expect(objectiveCHost).not.toContain("zapp_desktop_resolve_logical_url");

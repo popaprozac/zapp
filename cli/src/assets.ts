@@ -2,7 +2,7 @@
 // Assets are compiled directly into the binary. Decompressed at runtime in the scheme handler.
 
 import path from "node:path";
-import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { brotliCompressSync, constants } from "node:zlib";
 import { clog } from "./log";
@@ -150,6 +150,79 @@ export async function renderAssetsC(assets: AssetEntry[]): Promise<string> {
   source += `};\n`;
   source += `const size_t zapp_desktop_assets_count = ${assets.length};\n`;
   return source;
+}
+
+/**
+ * Render the private Z catalog consumed by the Z-owned desktop scheme handler.
+ * Payload paths are relative to the generated module and enter the final binary
+ * through `std/embed`, so raw assets remain zero-copy process-lifetime bytes.
+ */
+export function renderAssetsZ(assets: AssetEntry[]): string {
+  let source = `// AUTO-GENERATED — embedded frontend assets. DO NOT EDIT.\n`;
+  source += `import embed from "std/embed";\n`;
+  source += `import Foundation from "Foundation/Foundation.h";\n\n`;
+  source += `internal struct ConfiguredEmbeddedAsset {\n`;
+  source += `  bytes: embed.StaticBytes;\n`;
+  source += `  originalLength: usize;\n`;
+  source += `  compressed: boolean;\n`;
+  source += `}\n\n`;
+  for (let index = 0; index < assets.length; index++) {
+    source += `const CONFIGURED_ASSET_${index}: embed.StaticBytes = `;
+    source += `embed.bytes("./configured-assets/asset-${index}.bin");\n`;
+  }
+  if (assets.length > 0) source += `\n`;
+  source += `internal function configuredEmbeddedAssetCount(): usize {\n`;
+  source += `  return ${assets.length};\n`;
+  source += `}\n\n`;
+  source += `internal function configuredEmbeddedAssetPathAtIndex(\n`;
+  source += `  index: usize\n`;
+  source += `): Foundation.NSString | null {\n`;
+  for (let index = 0; index < assets.length; index++) {
+    source += `  if (index == ${index}) return ${JSON.stringify(assets[index].relPath)};\n`;
+  }
+  source += `  return null;\n`;
+  source += `}\n\n`;
+  source += `internal function configuredEmbeddedAssetAtIndex(\n`;
+  source += `  index: usize\n`;
+  source += `): Option<ConfiguredEmbeddedAsset> {\n`;
+  for (let index = 0; index < assets.length; index++) {
+    source += `  if (index == ${index}) {\n`;
+    source += `    return Option.some(ConfiguredEmbeddedAsset({\n`;
+    source += `      bytes: CONFIGURED_ASSET_${index},\n`;
+    source += `      originalLength: ${assets[index].originalSize},\n`;
+    source += `      compressed: ${assets[index].brotli ? "true" : "false"},\n`;
+    source += `    }));\n`;
+    source += `  }\n`;
+  }
+  source += `  return Option.none;\n`;
+  source += `}\n`;
+  return source;
+}
+
+/** Generate the Z asset catalog and its module-relative payload files. */
+export async function generateAssetManifestZ(
+  root: string,
+  assetDir: string,
+  options: {
+    embed: boolean;
+    compress?: boolean;
+    outputPath: string;
+  },
+): Promise<string> {
+  const assets = options.embed
+    ? (await collectAssets(root, assetDir, options.compress ?? true)).assets
+    : [];
+  const payloadDirectory = path.join(path.dirname(options.outputPath), "configured-assets");
+  await rm(payloadDirectory, { recursive: true, force: true });
+  await mkdir(payloadDirectory, { recursive: true });
+  for (let index = 0; index < assets.length; index++) {
+    await copyFile(
+      assets[index].brPath,
+      path.join(payloadDirectory, `asset-${index}.bin`),
+    );
+  }
+  await writeFile(options.outputPath, renderAssetsZ(assets), "utf8");
+  return options.outputPath;
 }
 
 /** Generate the C asset table used by the Z-owned desktop runtime. */

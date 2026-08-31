@@ -15,6 +15,9 @@ This directory is Zapp's internal macOS backend. It is not part of the public
   window; `runtime.zs` owns the authoritative open and retired registries.
 - `scheme-handler.zs` owns the retained WebKit protocol adapter, packaged-origin
   and path policy, asset routing, MIME/encoding selection, and response delivery.
+- `configured-assets.zs` is the editor-safe empty asset catalog. Packaged builds
+  replace it with a generated Z module whose `embed.StaticBytes` values point
+  directly at compiler-emitted process-lifetime storage.
 - `webview-injections.zs` owns bootstrap/window identity scripts, configured
   injection-profile validation and ordering, JSON-safe CSS wrapping, phase
   mapping, and `WKUserScript` registration.
@@ -29,7 +32,7 @@ This directory is Zapp's internal macOS backend. It is not part of the public
   is not application policy or part of production binaries.
 - `application-host.m`, `asset-bridge.m`, `webview-bridge.m`, and
   `window-bridge.m` are narrow native ABI seams for the run loop, generated
-  asset/injection-table reads, Brotli decoding, native errors, run-loop wakeup,
+  injection-table reads, Brotli decoding, native errors, run-loop wakeup,
   and WebKit completion adaptation that have not yet gained a checked direct Z
   representation. They do not own application or window registry state.
 - `native-bridge.m` is a four-line unity entry that keeps Objective-C category

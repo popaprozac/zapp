@@ -456,6 +456,17 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
     );
   }
   await mkdir(stage, { recursive: true });
+  for (const obsolete of [
+    "desktop.m",
+    "zapp_frontend_assets.c",
+    "zapp_frontend_assets.o",
+    "zapp_application_host.o",
+    "zapp_asset_bridge.o",
+    "zapp_webview_bridge.o",
+    "zapp_window_bridge.o",
+  ]) {
+    await rm(path.join(stage, obsolete), { force: true });
+  }
   await rm(workspace, { recursive: true, force: true });
   const stagedFramework = path.join(workspace, "native", "z", "framework");
   await cp(
@@ -477,6 +488,23 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
     renderZApplicationMetadata(options.config),
     "utf8",
   );
+  if (desktop) {
+    const { generateAssetManifestZ } = await import("./assets");
+    await generateAssetManifestZ(
+      options.root,
+      options.config.assetDir,
+      {
+        embed: !options.devUrl,
+        compress: options.config.compressAssets !== false,
+        outputPath: path.join(
+          stagedFramework,
+          "platform",
+          "macos",
+          "configured-assets.zs",
+        ),
+      },
+    );
+  }
   const stagedAppSource = path.join(workspace, appRelative);
   await cp(appSource, stagedAppSource, { recursive: true });
   // The source-local manifest exists for direct editor/check context. The
@@ -622,16 +650,6 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
 
   const clang = process.env.CC || "clang";
   if (desktop) {
-    const { generateAssetManifestC } = await import("./assets");
-    const assetsC = await generateAssetManifestC(
-      options.root,
-      options.config.assetDir,
-      {
-        embed: !options.devUrl,
-        compress: options.config.compressAssets !== false,
-        outputPath: path.join(stage, "zapp_frontend_assets.c"),
-      },
-    );
     const frontendConfigC = path.join(stage, "zapp_frontend_config.c");
     await writeFile(
       frontendConfigC,
@@ -653,7 +671,6 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
     const desktopSmokeObject = path.join(stage, "zapp_desktop_smoke.o");
     const desktopArchive = path.join(stage, "libzapp_desktop_host.a");
     const bootstrapObject = path.join(stage, "zapp_webview_bootstrap.o");
-    const assetsObject = path.join(stage, "zapp_frontend_assets.o");
     const frontendConfigObject = path.join(stage, "zapp_frontend_config.o");
     const injectionsObject = path.join(stage, "zapp_webview_injections.o");
     await run([
@@ -715,19 +732,6 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
       "-Wextra",
       "-Werror",
       "-c",
-      assetsC,
-      "-o",
-      assetsObject,
-    ], options.root);
-    await run([
-      clang,
-      "-std=c11",
-      "-mmacosx-version-min=14.0",
-      options.optimize ? "-Oz" : "-O0",
-      "-Wall",
-      "-Wextra",
-      "-Werror",
-      "-c",
       frontendConfigC,
       "-o",
       frontendConfigObject,
@@ -753,7 +757,6 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
       desktopObject,
       ...(desktopSmokeSupport ? [desktopSmokeObject] : []),
       bootstrapObject,
-      assetsObject,
       frontendConfigObject,
       injectionsObject,
     ], options.root);

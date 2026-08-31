@@ -3,8 +3,10 @@ import {
   ASSETS_EMBEDDED_MARKER,
   generateAssetManifestC,
   generateAssetManifestNim,
+  generateAssetManifestZ,
   renderAssetsC,
   renderAssetsNim,
+  renderAssetsZ,
   type AssetEntry,
 } from "./assets";
 import { mkdtemp, rm, mkdir, writeFile, stat } from "node:fs/promises";
@@ -165,6 +167,49 @@ test("generateAssetManifestC records when production assets are embedded", async
       compress: false,
     });
     expect(await pathExists(path.join(root, ASSETS_EMBEDDED_MARKER))).toBe(true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("renderAssetsZ emits a typed process-lifetime asset catalog", () => {
+  const out = renderAssetsZ([{
+    relPath: "/index.html",
+    brPath: "/tmp/index.html.br",
+    originalSize: 42,
+    brotli: true,
+  }]);
+  expect(out).toContain('import embed from "std/embed"');
+  expect(out).toContain('embed.bytes("./configured-assets/asset-0.bin")');
+  expect(out).toContain('return "/index.html"');
+  expect(out).toContain("originalLength: 42");
+  expect(out).toContain("compressed: true");
+  expect(out).toContain("Option<ConfiguredEmbeddedAsset>");
+});
+
+test("generateAssetManifestZ copies payloads beside the generated module", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "zapp-assets-z-"));
+  try {
+    const assetDir = path.join(root, "dist");
+    await mkdir(assetDir, { recursive: true });
+    await writeFile(path.join(assetDir, "index.html"), "<!doctype html>");
+    const outputPath = path.join(root, "generated", "configured-assets.zs");
+    const out = await generateAssetManifestZ(root, "dist", {
+      embed: true,
+      compress: false,
+      outputPath,
+    });
+    expect(out).toBe(outputPath);
+    expect(await pathExists(path.join(
+      root,
+      "generated",
+      "configured-assets",
+      "asset-0.bin",
+    ))).toBe(true);
+    const source = await Bun.file(out).text();
+    expect(source).toContain("configuredEmbeddedAssetCount");
+    expect(source).toContain("return 1");
+    expect(source).toContain("compressed: false");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

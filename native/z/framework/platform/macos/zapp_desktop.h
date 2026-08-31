@@ -28,9 +28,8 @@ NSRect zapp_desktop_make_rect(uint32_t width, uint32_t height);
 @end
 
 @interface ZAppDesktopBridge (Assets)
-+ (NSUInteger)embeddedAssetCount;
-+ (nullable NSString *)embeddedAssetPathAtIndex:(NSUInteger)index;
-+ (nullable NSData *)embeddedAssetDataAtIndex:(NSUInteger)index;
++ (nullable NSData *)decodeBrotliData:(NSData *)data
+                       originalLength:(NSUInteger)originalLength;
 @end
 
 @interface ZAppDesktopBridge (WebView)

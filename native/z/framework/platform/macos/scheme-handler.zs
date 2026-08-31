@@ -3,6 +3,12 @@ import Foundation from "Foundation/Foundation.h";
 import WebKit from "WebKit/WebKit.h";
 import objc from "std/objc";
 import { thread } from "std/thread";
+import {
+  ConfiguredEmbeddedAsset,
+  configuredEmbeddedAssetAtIndex,
+  configuredEmbeddedAssetCount,
+  configuredEmbeddedAssetPathAtIndex,
+} from "./configured-assets.zs";
 
 function failAssetRequest(
   in task: WebKit.WKURLSchemeTask,
@@ -17,15 +23,26 @@ function failAssetRequest(
 }
 
 function embeddedAssetIndex(in path: Foundation.NSString): usize on thread.main {
-  const count: usize = native.ZAppDesktopBridge.embeddedAssetCount();
+  const count: usize = configuredEmbeddedAssetCount();
   let index: usize = 0;
   while (index < count) {
     const candidate: Foundation.NSString | null =
-      native.ZAppDesktopBridge.embeddedAssetPathAtIndex(index);
+      configuredEmbeddedAssetPathAtIndex(index);
     if (candidate != null && candidate.isEqualToString(path)) return index;
     index = index + 1;
   }
   return count;
+}
+
+function embeddedAssetData(
+  in asset: ConfiguredEmbeddedAsset
+): Foundation.NSData | null on thread.main {
+  const encoded = Foundation.NSData.borrow(asset.bytes);
+  if (!asset.compressed) return encoded;
+  return native.ZAppDesktopBridge.decodeBrotliData(
+    encoded,
+    originalLength: asset.originalLength
+  );
 }
 
 function assetMimeType(in path: Foundation.NSString): Foundation.NSString {
@@ -122,7 +139,7 @@ class DesktopAssetSchemeHandler on thread.main
       path = "/index.html";
     }
 
-    const count: usize = native.ZAppDesktopBridge.embeddedAssetCount();
+    const count: usize = configuredEmbeddedAssetCount();
     let index: usize = embeddedAssetIndex(path);
     if (index == count && path.pathExtension.length == 0) {
       // Application routes resolve through the frontend entry while concrete
@@ -135,8 +152,11 @@ class DesktopAssetSchemeHandler on thread.main
       return;
     }
 
-    const data: Foundation.NSData | null =
-      native.ZAppDesktopBridge.embeddedAssetDataAtIndex(index);
+    const selected = configuredEmbeddedAssetAtIndex(index);
+    const data: Foundation.NSData | null = match (selected) {
+      some(asset) => embeddedAssetData(asset);
+      none => null;
+    };
     if (data == null) {
       failAssetRequest(task, 500, "Could not decode embedded asset");
       return;
