@@ -260,7 +260,7 @@ internal class MacOSApplicationRuntime {
   ): void on thread.main {
     for (const entry of this.nativeWindows) {
       if (entry.value.id == id) {
-        entry.value.window.title = title;
+        entry.value.window.title = copy title;
         return;
       }
     }
