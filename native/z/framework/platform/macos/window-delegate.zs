@@ -2,6 +2,7 @@ import native from "zapp_desktop.h";
 import objc from "std/objc";
 import { thread } from "std/thread";
 import { WindowManager } from "../../window.zs";
+import { macOSContentDimension } from "./window-geometry.zs";
 
 internal type NativeWindowClosedOperation = (
   nativeId: i32
@@ -64,8 +65,8 @@ class DesktopWindowDelegate on thread.main
     match (current) {
       success(windows) => windows.resizedNative(
         in id,
-        native.ZAppDesktopBridge.contentWidth(window),
-        native.ZAppDesktopBridge.contentHeight(window)
+        macOSContentDimension(contentView.bounds.size.width),
+        macOSContentDimension(contentView.bounds.size.height)
       );
       failure(_) => {}
     }

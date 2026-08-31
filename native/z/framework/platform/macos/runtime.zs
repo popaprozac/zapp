@@ -24,9 +24,7 @@ import { Once, OnceLifetime } from "std/sync";
 import { TaskControl, TaskScope } from "std/async";
 import { Map } from "std/collections";
 import { thread } from "std/thread";
-import {
-  createPendingRequests,
-} from "../../pending-requests.zs";
+import { createPendingRequests } from "../../pending-requests.zs";
 import {
   WindowManager,
   WindowOptions,
@@ -42,6 +40,7 @@ import {
 } from "./window-delegate.zs";
 import { MacOSWindowRuntime } from "./window-runtime.zs";
 import { stopMacOSRunLoop } from "./application-host.zs";
+import { macOSWindowFrame } from "./window-geometry.zs";
 class DesktopMessageHandler on thread.main
   implements native.WKScriptMessageHandler {
   readonly windowId: i32;
@@ -605,7 +604,7 @@ function createMacOSWindowRuntime(
     });
   }
 
-  const frame = native.zapp_desktop_make_rect(
+  const frame = macOSWindowFrame(
     options.width,
     options.height
   );

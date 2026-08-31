@@ -19,7 +19,6 @@ NS_ASSUME_NONNULL_BEGIN
 bool zapp_desktop_requested_smoke_mode(void);
 int32_t zapp_macos_application_smoke_mode(void);
 void zapp_macos_application_set_result(int32_t result);
-NSRect zapp_desktop_make_rect(uint32_t width, uint32_t height);
 
 @interface ZAppDesktopBridge : NSObject
 + (BOOL)smokeMode;
@@ -44,11 +43,6 @@ NSRect zapp_desktop_make_rect(uint32_t width, uint32_t height);
                        nativeId:(int32_t)nativeId
                         webView:(WKWebView *)webView
               contentController:(WKUserContentController *)contentController;
-@end
-
-@interface ZAppDesktopBridge (Window)
-+ (uint32_t)contentWidth:(NSWindow *)window;
-+ (uint32_t)contentHeight:(NSWindow *)window;
 @end
 
 NS_ASSUME_NONNULL_END

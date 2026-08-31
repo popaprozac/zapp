@@ -15,6 +15,8 @@ This directory is Zapp's internal macOS backend. It is not part of the public
   lifecycle/focus/resize policy, and the Z-owned registry close callback.
 - `window-runtime.zs` defines the retained AppKit/WebKit object graph for one
   window; `runtime.zs` owns the authoritative open and retired registries.
+- `window-geometry.zs` converts Z window dimensions to and from the native
+  `CGRect` representation with explicit, checked numeric construction.
 - `scheme-handler.zs` owns the retained WebKit protocol adapter, packaged-origin
   and path policy, asset routing, MIME/encoding selection, and response delivery.
 - `configured-assets.zs` is the editor-safe empty asset catalog. Packaged builds
@@ -35,12 +37,11 @@ This directory is Zapp's internal macOS backend. It is not part of the public
 - `desktop-smoke.m` is isolated native test support for DOM verification and
   bounded smoke shutdown. It is compiled only for smoke/sanitizer builds and
   is not application policy or part of production binaries.
-- `application-host.m`, `asset-bridge.m`, `webview-bridge.m`, and
-  `window-bridge.m` are narrow native ABI seams for run-loop wakeup and the
-  smoke environment probe, generated Brotli decoding, smoke-only WebKit
-  completion observation, and geometry conversion that have not yet gained a
-  checked direct Z representation. They do not own application, run-loop, or
-  window registry state.
+- `application-host.m`, `asset-bridge.m`, and `webview-bridge.m` are narrow
+  native ABI seams for run-loop wakeup and the smoke environment probe,
+  generated Brotli decoding, and smoke-only WebKit completion observation that
+  have not yet gained a checked direct Z representation. They do not own
+  application, run-loop, or window registry state.
 - `native-bridge.m` is a four-line unity entry that keeps Objective-C category
   methods reachable when the adapters are packaged in a static archive; it
   contains no behavior or policy.

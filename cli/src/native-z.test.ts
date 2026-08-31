@@ -222,6 +222,7 @@ describe("Z native host inputs", () => {
       "webview-injections.zs",
       "window-backend.zs",
       "window-delegate.zs",
+      "window-geometry.zs",
       "window-runtime.zs",
     ];
     const macOSModules = macOSModulePaths.map((module) => readFileSync(
@@ -255,7 +256,7 @@ describe("Z native host inputs", () => {
       "utf8",
     );
 
-    expect(macOSModules).toHaveLength(11);
+    expect(macOSModules).toHaveLength(12);
     expect(macOSModules.every((module) => module.split("\n").length < 700)).toBe(true);
     expect(objectiveCHostModules.every((module) => module.split("\n").length < 150)).toBe(true);
     expect(macOSPlatform).toContain("implements native.WKScriptMessageHandler");
@@ -313,6 +314,10 @@ describe("Z native host inputs", () => {
     expect(macOSPlatform).toContain("current.capabilitiesForWindow(windowId)");
     expect(macOSPlatform).toContain("unknown window capability profile");
     expect(macOSPlatform).toContain("window.releasedWhenClosed = false");
+    expect(macOSPlatform).toContain("u32(math.trunc(value))");
+    expect(macOSPlatform).toContain("native.NSMakeRect(");
+    expect(objectiveCHost).not.toContain("zapp_desktop_make_rect");
+    expect(objectiveCHost).not.toContain("contentWidth:");
     expect(objectiveCHost).not.toContain(
       "ZAppDesktopHost : NSObject <WKScriptMessageHandler",
     );

@@ -30,7 +30,6 @@ export const zNativeDesktopHostSources = [
   "application-host.m",
   "asset-bridge.m",
   "webview-bridge.m",
-  "window-bridge.m",
 ] as const;
 
 export interface ZNativeLinkRequirements {
