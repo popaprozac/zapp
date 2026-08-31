@@ -4,6 +4,7 @@ import { TextBuffer } from "std/text";
 import { thread } from "std/thread";
 import { BridgeResponse } from "../../bridge.zs";
 import { configuredFrontendIsDevelopment } from "./configured-webview.zs";
+import { setMacOSApplicationResult } from "./application-host.zs";
 
 readonly struct WebViewResponseEnvelope {
   id: String;
@@ -64,7 +65,7 @@ internal function deliverWebViewResponse(
     move script,
     completionHandler: move (value, error): void => {
       if (error != null) {
-        native.ZAppDesktopBridge.setResult(45);
+        setMacOSApplicationResult(45);
         window.close();
         return;
       }

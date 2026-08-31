@@ -212,6 +212,7 @@ describe("Z native host inputs", () => {
 
   it("keeps the WebKit UI graph, handler, validation, and registration in Z", () => {
     const macOSModulePaths = [
+      "application-host.zs",
       "application.zs",
       "configured-webview.zs",
       "navigation.zs",
@@ -254,7 +255,7 @@ describe("Z native host inputs", () => {
       "utf8",
     );
 
-    expect(macOSModules).toHaveLength(10);
+    expect(macOSModules).toHaveLength(11);
     expect(macOSModules.every((module) => module.split("\n").length < 700)).toBe(true);
     expect(objectiveCHostModules.every((module) => module.split("\n").length < 150)).toBe(true);
     expect(macOSPlatform).toContain("implements native.WKScriptMessageHandler");
@@ -281,7 +282,7 @@ describe("Z native host inputs", () => {
     expect(macOSPlatform).toContain("native.ZAppDesktopBridge.startWindowSmokeSupport(");
     expect(macOSPlatform).toContain("retiredNativeWindows: Array<MacOSWindowRuntime>");
     expect(macOSPlatform).toContain("recordClosedNativeWindow");
-    expect(macOSPlatform).toContain("native.ZAppDesktopBridge.stopRunLoop()");
+    expect(macOSPlatform).toContain("stopMacOSRunLoop()");
     expect(macOSPlatform).toContain("function webViewInjectionProfileExists(");
     expect(macOSPlatform).toContain("function installWebViewScripts(");
     expect(macOSPlatform).toContain("configuredWebViewInjectionCount()");
@@ -305,8 +306,8 @@ describe("Z native host inputs", () => {
     expect(macOSPlatform).toContain("window.delegate = windowDelegate");
     expect(macOSPlatform).toContain("function javascriptJSON(");
     expect(macOSPlatform).toContain("json.encode(in envelope)");
-    expect(macOSPlatform).toContain("native.ZAppDesktopBridge.evaluateJavaScript(");
-    expect(macOSPlatform).toContain("forWindow: window");
+    expect(macOSPlatform).toContain("webView.evaluateJavaScript(");
+    expect(macOSPlatform).toContain("completionHandler: move (value, error): void =>");
     expect(macOSPlatform).toContain("webView.loadRequest(request)");
     expect(macOSPlatform).toContain("authorizeServiceInvocation(");
     expect(macOSPlatform).toContain("current.capabilitiesForWindow(windowId)");

@@ -5,6 +5,10 @@ import console from "std/console";
 import objc from "std/objc";
 import { thread } from "std/thread";
 import { configuredFrontendOrigin } from "./configured-webview.zs";
+import {
+  macOSApplicationSmokeMode,
+  setMacOSApplicationResult,
+} from "./application-host.zs";
 
 function frontendOrigin(): Foundation.NSURL | null on thread.main {
   return Foundation.NSURL.URLWithString(configuredFrontendOrigin());
@@ -67,8 +71,8 @@ internal class DesktopNavigationDelegate on thread.main
     in error: Foundation.NSError
   ): void as "webView:didFailProvisionalNavigation:withError:" {
     console.error("frontend navigation failed before commit");
-    if (native.ZAppDesktopBridge.smokeMode()) {
-      native.ZAppDesktopBridge.setResult(54);
+    if (macOSApplicationSmokeMode()) {
+      setMacOSApplicationResult(54);
       this.window.close();
     }
   }
@@ -79,8 +83,8 @@ internal class DesktopNavigationDelegate on thread.main
     in error: Foundation.NSError
   ): void as "webView:didFailNavigation:withError:" {
     console.error("frontend navigation failed after commit");
-    if (native.ZAppDesktopBridge.smokeMode()) {
-      native.ZAppDesktopBridge.setResult(55);
+    if (macOSApplicationSmokeMode()) {
+      setMacOSApplicationResult(55);
       this.window.close();
     }
   }

@@ -3,8 +3,10 @@
 This directory is Zapp's internal macOS backend. It is not part of the public
 `zapp` package surface.
 
-- `application.zs` owns application startup, lifecycle ordering, the native
-  run loop, and deterministic shutdown.
+- `application-host.zs` owns the `NSApplication` identity, synchronized host
+  result, smoke-mode state, native run loop, and deterministic host lifetime.
+- `application.zs` owns application startup, lifecycle ordering, and
+  deterministic shutdown around that host lifetime.
 - `runtime.zs` owns shared application state, WebKit message routing, and the
   authoritative open and retired native-window registries.
 - `window-backend.zs` adapts the cross-platform `WindowBackend` contract to
@@ -34,10 +36,11 @@ This directory is Zapp's internal macOS backend. It is not part of the public
   bounded smoke shutdown. It is compiled only for smoke/sanitizer builds and
   is not application policy or part of production binaries.
 - `application-host.m`, `asset-bridge.m`, `webview-bridge.m`, and
-  `window-bridge.m` are narrow native ABI seams for the run loop, generated
-  Brotli decoding, run-loop wakeup, and WebKit completion
-  adaptation that have not yet gained a checked direct Z representation. They
-  do not own application or window registry state.
+  `window-bridge.m` are narrow native ABI seams for run-loop wakeup and the
+  smoke environment probe, generated Brotli decoding, smoke-only WebKit
+  completion observation, and geometry conversion that have not yet gained a
+  checked direct Z representation. They do not own application, run-loop, or
+  window registry state.
 - `native-bridge.m` is a four-line unity entry that keeps Objective-C category
   methods reachable when the adapters are packaged in a static archive; it
   contains no behavior or policy.

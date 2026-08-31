@@ -3,7 +3,6 @@
 #import "zapp_desktop.h"
 
 #include <dispatch/dispatch.h>
-#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -13,23 +12,14 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-@class ZAppDesktopHost;
-static ZAppDesktopHost *prepared_host = nil;
-
-@interface ZAppDesktopHost : NSObject
-@property(nonatomic, assign) BOOL smokeMode;
-@property(nonatomic, assign) int32_t result;
-- (int32_t)run;
-@end
-
 @implementation ZAppDesktopBridge
 
 + (BOOL)smokeMode {
-  return prepared_host != nil && prepared_host.smokeMode;
+  return zapp_macos_application_smoke_mode() != 0;
 }
 
 + (void)setResult:(int32_t)result {
-  if (prepared_host != nil) prepared_host.result = result;
+  zapp_macos_application_set_result(result);
 }
 
 + (void)stopRunLoop {
@@ -50,57 +40,13 @@ static ZAppDesktopHost *prepared_host = nil;
 
 @end
 
-@implementation ZAppDesktopHost
-
-- (instancetype)init {
-  self = [super init];
-  if (self != nil) {
+bool zapp_desktop_requested_smoke_mode(void) {
 #if ZAPP_DESKTOP_SMOKE_SUPPORT
-    const char *smoke = getenv("ZAPP_Z_DESKTOP_SMOKE");
-    _smokeMode = smoke != NULL && strcmp(smoke, "1") == 0;
-    _result = _smokeMode ? 41 : 0;
+  const char *smoke = getenv("ZAPP_Z_DESKTOP_SMOKE");
+  return smoke != NULL && strcmp(smoke, "1") == 0;
 #else
-    _smokeMode = NO;
-    _result = 0;
+  return false;
 #endif
-  }
-  return self;
-}
-
-- (int32_t)run {
-  NSApplication *application = NSApplication.sharedApplication;
-  [application setActivationPolicy:NSApplicationActivationPolicyRegular];
-  [application activate];
-  [application run];
-  return self.result;
-}
-
-@end
-
-int32_t zapp_desktop_prepare(void) {
-  @autoreleasepool {
-    if (prepared_host != nil) return 52;
-    ZAppDesktopHost *host = [[ZAppDesktopHost alloc] init];
-    prepared_host = host;
-    return 0;
-  }
-}
-
-void zapp_desktop_abort(void) {
-  @autoreleasepool {
-    if (prepared_host == nil) return;
-    prepared_host = nil;
-  }
-}
-
-int32_t zapp_desktop_run(void) {
-  @autoreleasepool {
-    ZAppDesktopHost *host = prepared_host;
-    if (host == nil) return 51;
-    int32_t result = [host run];
-    prepared_host = nil;
-    return result;
-  }
 }
 
 NS_ASSUME_NONNULL_END

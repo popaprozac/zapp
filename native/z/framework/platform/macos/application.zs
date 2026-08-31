@@ -1,8 +1,6 @@
-import native from "zapp_desktop.h";
 import { PreparedApplication } from "../../application-contract.zs";
 import {
   ApplicationError,
-  PlatformError,
   WindowError,
 } from "../../application-error.zs";
 import { ApplicationMetadata } from "../../application-metadata.zs";
@@ -13,6 +11,10 @@ import {
   abortMacOSApplicationRuntime,
   initializeMacOSApplicationRuntime,
 } from "./runtime.zs";
+import {
+  initializeMacOSApplicationHost,
+  runMacOSApplicationLoop,
+} from "./application-host.zs";
 import { macOSWindowBackend } from "./window-backend.zs";
 
 export async function runMacOSApplication(
@@ -27,13 +29,7 @@ export async function runMacOSApplication(
       message: "a macOS desktop application requires a registered window in this tier",
     }));
   }
-  const prepared = native.zapp_desktop_prepare();
-  if (prepared != 0) {
-    throw ApplicationError.platform(PlatformError({
-      code: prepared,
-      message: "could not prepare the macOS application runtime",
-    }));
-  }
+  const hostLifetime = initializeMacOSApplicationHost();
   const context = ApplicationContext({
     metadata: ApplicationMetadata({
       name: copy config.metadata.name,
@@ -55,7 +51,6 @@ export async function runMacOSApplication(
     failure(windowError) => {
       windows.stop();
       abortMacOSApplicationRuntime();
-      native.zapp_desktop_abort();
       throw ApplicationError.window(windowError);
     }
   }
@@ -65,11 +60,10 @@ export async function runMacOSApplication(
     failure(startError) => {
       windows.stop();
       abortMacOSApplicationRuntime();
-      native.zapp_desktop_abort();
       throw ApplicationError.lifecycle(startError);
     }
   }
-  const status = native.zapp_desktop_run();
+  const status = runMacOSApplicationLoop();
   windows.stop();
   await updates.cancel();
   const stopped = attempt config.lifecycles.stop(in context);

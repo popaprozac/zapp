@@ -41,6 +41,7 @@ import {
   createDesktopWindowDelegate,
 } from "./window-delegate.zs";
 import { MacOSWindowRuntime } from "./window-runtime.zs";
+import { stopMacOSRunLoop } from "./application-host.zs";
 class DesktopMessageHandler on thread.main
   implements native.WKScriptMessageHandler {
   readonly windowId: i32;
@@ -145,7 +146,7 @@ internal class MacOSApplicationRuntime {
         window.pendingRequests.cancelAll();
         this.retiredNativeWindows.push(move window);
         if (this.nativeWindows.length == 0) {
-          native.ZAppDesktopBridge.stopRunLoop();
+          stopMacOSRunLoop();
         }
       }
       none => {}
