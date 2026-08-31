@@ -17,6 +17,7 @@ const stagedCore = resolve(spike, ".zapp", "z-native-core");
 const generatedCore = resolve(stagedCore, ".z-cache", "build", "zapp_core.m");
 const generatedHeaderDirectory = resolve(stagedCore, "build");
 const desktopHost = resolve(stagedCore, "desktop.m");
+const desktopSmoke = resolve(stagedCore, "desktop-smoke.m");
 const bootstrap = resolve(stagedCore, "zapp_webview_bootstrap.c");
 const assets = resolve(stagedCore, "zapp_frontend_assets.c");
 const frontendConfig = resolve(stagedCore, "zapp_frontend_config.c");
@@ -85,9 +86,11 @@ async function buildInstrumented(
     "-Wall",
     "-Wextra",
     "-Werror",
+    "-DZAPP_DESKTOP_SMOKE_SUPPORT=1",
     ...sanitizerFlags,
     "-I", generatedHeaderDirectory,
     desktopHost,
+    desktopSmoke,
     bootstrap,
     assets,
     frontendConfig,
@@ -125,12 +128,14 @@ await mkdir(outputDirectory, { recursive: true });
 
 const originalLanguage = process.env.ZAPP_NATIVE_LANG;
 const originalHost = process.env.ZAPP_Z_HOST;
+const originalSmokeSupport = process.env.ZAPP_Z_DESKTOP_SMOKE_SUPPORT;
 const config = await loadConfig(
   spike,
   createConfigContext(spike, "build", "macos"),
 );
 process.env.ZAPP_NATIVE_LANG = "z";
 process.env.ZAPP_Z_HOST = "desktop";
+process.env.ZAPP_Z_DESKTOP_SMOKE_SUPPORT = "1";
 try {
   await compileNative({
     root: spike,
@@ -147,6 +152,11 @@ try {
   else process.env.ZAPP_NATIVE_LANG = originalLanguage;
   if (originalHost === undefined) delete process.env.ZAPP_Z_HOST;
   else process.env.ZAPP_Z_HOST = originalHost;
+  if (originalSmokeSupport === undefined) {
+    delete process.env.ZAPP_Z_DESKTOP_SMOKE_SUPPORT;
+  } else {
+    process.env.ZAPP_Z_DESKTOP_SMOKE_SUPPORT = originalSmokeSupport;
+  }
 }
 
 const undefinedBehavior = await buildInstrumented("webview-ubsan", [

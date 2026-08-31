@@ -36,9 +36,11 @@ await run(["bunx", "vite", "build"], undefined, spike);
 
 const originalLanguage = process.env.ZAPP_NATIVE_LANG;
 const originalHost = process.env.ZAPP_Z_HOST;
+const originalSmokeSupport = process.env.ZAPP_Z_DESKTOP_SMOKE_SUPPORT;
 let compiled = false;
 process.env.ZAPP_NATIVE_LANG = "z";
 process.env.ZAPP_Z_HOST = "desktop";
+if (smoke) process.env.ZAPP_Z_DESKTOP_SMOKE_SUPPORT = "1";
 try {
   await compileNative({
     root: spike,
@@ -56,6 +58,11 @@ try {
   else process.env.ZAPP_NATIVE_LANG = originalLanguage;
   if (originalHost === undefined) delete process.env.ZAPP_Z_HOST;
   else process.env.ZAPP_Z_HOST = originalHost;
+  if (originalSmokeSupport === undefined) {
+    delete process.env.ZAPP_Z_DESKTOP_SMOKE_SUPPORT;
+  } else {
+    process.env.ZAPP_Z_DESKTOP_SMOKE_SUPPORT = originalSmokeSupport;
+  }
 }
 
 await run(

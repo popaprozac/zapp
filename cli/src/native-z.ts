@@ -218,6 +218,14 @@ export function zNativeStageFiles(host: ZNativeHost): ZNativeStageFile[] {
         destination: "desktop.m",
       },
       {
+        source: "framework/platform/macos/desktop-smoke.h",
+        destination: "desktop-smoke.h",
+      },
+      {
+        source: "framework/platform/macos/desktop-smoke.m",
+        destination: "desktop-smoke.m",
+      },
+      {
         source: "framework/platform/macos/zapp_desktop.h",
         destination: "zapp_desktop.h",
       },
@@ -418,6 +426,8 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
   const workspace = path.join(stage, "workspace");
   const host = resolveZNativeHost(process.env.ZAPP_Z_HOST);
   const desktop = host === "desktop";
+  const desktopSmokeSupport = desktop
+    && process.env.ZAPP_Z_DESKTOP_SMOKE_SUPPORT === "1";
   const sourceEntry = path.join(appSource, zNativeEntry(host));
   if (!existsSync(sourceEntry)) {
     throw new Error(
@@ -630,6 +640,8 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
       "utf8",
     );
     const desktopObject = path.join(stage, "zapp_desktop_host.o");
+    const desktopSmokeObject = path.join(stage, "zapp_desktop_smoke.o");
+    const desktopArchive = path.join(stage, "libzapp_desktop_host.a");
     const bootstrapObject = path.join(stage, "zapp_webview_bootstrap.o");
     const assetsObject = path.join(stage, "zapp_frontend_assets.o");
     const frontendConfigObject = path.join(stage, "zapp_frontend_config.o");
@@ -643,6 +655,7 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
       "-Wall",
       "-Wextra",
       "-Werror",
+      ...(desktopSmokeSupport ? ["-DZAPP_DESKTOP_SMOKE_SUPPORT=1"] : []),
       "-I",
       stage,
       "-c",
@@ -650,6 +663,26 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
       "-o",
       desktopObject,
     ], options.root);
+    if (desktopSmokeSupport) {
+      await run([
+        clang,
+        "-fobjc-arc",
+        "-fblocks",
+        "-mmacosx-version-min=14.0",
+        options.optimize ? "-Oz" : "-O0",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-I",
+        stage,
+        "-c",
+        path.join(stage, "desktop-smoke.m"),
+        "-o",
+        desktopSmokeObject,
+      ], options.root);
+    } else {
+      await rm(desktopSmokeObject, { force: true });
+    }
     await run([
       clang,
       "-std=c11",
@@ -702,11 +735,13 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
       "-o",
       injectionsObject,
     ], options.root);
+    await rm(desktopArchive, { force: true });
     await run([
       "ar",
       "rcs",
-      path.join(stage, "libzapp_desktop_host.a"),
+      desktopArchive,
       desktopObject,
+      ...(desktopSmokeSupport ? [desktopSmokeObject] : []),
       bootstrapObject,
       assetsObject,
       frontendConfigObject,

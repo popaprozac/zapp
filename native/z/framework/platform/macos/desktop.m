@@ -5,6 +5,14 @@
 #include "zapp_router.h"
 #import "zapp_desktop.h"
 
+#ifndef ZAPP_DESKTOP_SMOKE_SUPPORT
+#define ZAPP_DESKTOP_SMOKE_SUPPORT 0
+#endif
+
+#if ZAPP_DESKTOP_SMOKE_SUPPORT
+#import "desktop-smoke.h"
+#endif
+
 #include <dispatch/dispatch.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -40,7 +48,6 @@ static ZAppDesktopHost *prepared_host = nil;
 @property(nonatomic, strong) NSWindow *window;
 @property(nonatomic, strong) WKWebView *webView;
 @property(nonatomic, strong) WKUserContentController *userContentController;
-@property(nonatomic, assign) BOOL receivedResponse;
 @property(nonatomic, assign) BOOL started;
 @end
 
@@ -49,11 +56,6 @@ static ZAppDesktopHost *prepared_host = nil;
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, ZAppDesktopWindowRecord *> *windowsByNativeId;
 @property(nonatomic, assign) BOOL smokeMode;
 @property(nonatomic, assign) int32_t result;
-+ (void)observeDeliveredResponse:(NSWindow *)window
-                        nativeId:(int32_t)nativeId
-                         payload:(NSString *)payload
-                       requestId:(uint64_t)requestId
-                              ok:(BOOL)ok;
 - (int32_t)run;
 - (void)stopIfLastWindowClosed;
 - (void)closeAllWindows;
@@ -153,24 +155,25 @@ static ZAppDesktopHost *prepared_host = nil;
       [window close];
       return;
     }
-    [ZAppDesktopBridge observeDeliveredResponse:window
-                                       nativeId:nativeId
-                                        payload:payload
-                                      requestId:requestId
-                                             ok:ok];
+#if ZAPP_DESKTOP_SMOKE_SUPPORT
+    NSUInteger activeWindowCount = prepared_host == nil
+      ? 0
+      : prepared_host.windowsByNativeId.count;
+    zapp_desktop_smoke_observe_response(
+      webView,
+      nativeId,
+      activeWindowCount,
+      payload,
+      requestId,
+      ok
+    );
+#else
+    (void)nativeId;
+    (void)payload;
+    (void)requestId;
+    (void)ok;
+#endif
   }];
-}
-
-+ (void)observeDeliveredResponse:(NSWindow *)window
-                        nativeId:(int32_t)nativeId
-                         payload:(NSString *)payload
-                       requestId:(uint64_t)requestId
-                              ok:(BOOL)ok {
-  [ZAppDesktopHost observeDeliveredResponse:window
-                                   nativeId:nativeId
-                                    payload:payload
-                                  requestId:requestId
-                                         ok:ok];
 }
 
 + (void)failURLSchemeTask:(id<WKURLSchemeTask>)task
@@ -265,6 +268,7 @@ int32_t zapp_desktop_window_start(const char *window_id) {
   if (record == nil) return 1;
   if (record.started) return 2;
 
+#if ZAPP_DESKTOP_SMOKE_SUPPORT
   if (prepared_host.smokeMode) {
     WKUserScript *smoke = [[WKUserScript alloc]
       initWithSource:
@@ -273,9 +277,11 @@ int32_t zapp_desktop_window_start(const char *window_id) {
       forMainFrameOnly:YES];
     [record.userContentController addUserScript:smoke];
   }
+#endif
 
   record.started = YES;
 
+#if ZAPP_DESKTOP_SMOKE_SUPPORT
   if (prepared_host.smokeMode) {
     __weak ZAppDesktopHost *weakHost = prepared_host;
     __weak ZAppDesktopWindowRecord *weakRecord = record;
@@ -285,7 +291,11 @@ int32_t zapp_desktop_window_start(const char *window_id) {
       ^{
         ZAppDesktopHost *host = weakHost;
         ZAppDesktopWindowRecord *current = weakRecord;
-        if (host == nil || current == nil || current.receivedResponse) return;
+        if (
+          host == nil
+          || current == nil
+          || zapp_desktop_smoke_window_received(current.nativeId)
+        ) return;
         [current.webView
           evaluateJavaScript:
             @"JSON.stringify({"
@@ -311,6 +321,7 @@ int32_t zapp_desktop_window_start(const char *window_id) {
       }
     );
   }
+#endif
   return 0;
 }
 
@@ -330,128 +341,16 @@ void zapp_desktop_window_discard(const char *window_id) {
   if (self != nil) {
     _windows = [[NSMutableDictionary alloc] init];
     _windowsByNativeId = [[NSMutableDictionary alloc] init];
+#if ZAPP_DESKTOP_SMOKE_SUPPORT
     const char *smoke = getenv("ZAPP_Z_DESKTOP_SMOKE");
     _smokeMode = smoke != NULL && strcmp(smoke, "1") == 0;
     _result = _smokeMode ? 41 : 0;
+#else
+    _smokeMode = NO;
+    _result = 0;
+#endif
   }
   return self;
-}
-
-+ (void)observeDeliveredResponse:(NSWindow *)window
-                       nativeId:(int32_t)nativeId
-                         payload:(NSString *)payload
-                       requestId:(uint64_t)requestId
-                              ok:(BOOL)ok {
-  ZAppDesktopHost *strongSelf = prepared_host;
-  if (strongSelf == nil || !strongSelf.smokeMode) return;
-  ZAppDesktopWindowRecord *record = strongSelf.windowsByNativeId[@(nativeId)];
-  if (record == nil || record.window != window) return;
-  if (requestId == 1) {
-    printf(
-      "cancelled WebView response ignored request=%llu\n",
-      (unsigned long long)requestId
-    );
-    fflush(stdout);
-    return;
-  }
-
-  dispatch_after(
-    dispatch_time(DISPATCH_TIME_NOW, 250 * NSEC_PER_MSEC),
-    dispatch_get_main_queue(),
-    ^{
-      [record.webView
-        evaluateJavaScript:
-          @"JSON.stringify({"
-          @"roundTrip:document.body?.dataset?.roundTrip??null,"
-          @"typedError:document.body?.dataset?.typedError??null,"
-          @"cancellation:document.body?.dataset?.cancellation??null,"
-          @"health:document.body?.dataset?.health??null,"
-          @"hmr:document.body?.dataset?.hmr??null,"
-          @"inject:document.body?.dataset?.inject??null,"
-          @"dynamicWindow:document.body?.dataset?.dynamicWindow??null,"
-          @"status:document.querySelector('#status')?.textContent??null,"
-          @"bridge:typeof globalThis[Symbol.for('zapp.bridge')]"
-          @"})"
-        completionHandler:^(id state, NSError *stateError) {
-            const char *frontendOrigin = zapp_desktop_frontend_origin();
-            BOOL development = frontendOrigin != NULL
-              && (strncmp(frontendOrigin, "http://", 7) == 0
-                || strncmp(frontendOrigin, "https://", 8) == 0);
-            NSString *expectedHMR = development
-              ? @"\"hmr\":\"ready\""
-              : @"\"hmr\":\"packaged\"";
-            BOOL updated = [state isKindOfClass:[NSString class]]
-              && [(NSString *)state containsString:@"\"roundTrip\":\"ok\""]
-              && [(NSString *)state containsString:@"\"typedError\":\"ok\""]
-              && [(NSString *)state containsString:@"\"cancellation\":\"ok\""]
-              && [(NSString *)state containsString:@"\"health\":\"ok\""]
-              && [(NSString *)state containsString:@"\"inject\":\"ready\""]
-              && [(NSString *)state containsString:@"\"dynamicWindow\":\"ready\""]
-              && [(NSString *)state containsString:expectedHMR];
-            BOOL terminalFailure = [state isKindOfClass:[NSString class]]
-              && (
-                [(NSString *)state containsString:@"\"roundTrip\":\"error\""]
-                || [(NSString *)state containsString:@"\"cancellation\":\"error\""]
-                || [(NSString *)state containsString:@"\"health\":\"error\""]
-                || [(NSString *)state containsString:@"\"inject\":\"error\""]
-                || [(NSString *)state containsString:@"\"dynamicWindow\":\"error\""]
-              );
-            // Several legitimate requests may complete while the scripted
-            // scenario is still in flight (notably frontend window creation).
-            // Leave incomplete state to the per-window watchdog; only a
-            // terminal DOM failure should fail the smoke eagerly.
-            if (stateError == nil && !updated && !terminalFailure) return;
-            if (stateError != nil || !updated) {
-              const char *stateText = state == nil
-                ? "<nil>"
-                : [[state description] UTF8String];
-              const char *errorText = stateError == nil
-                ? "<none>"
-                : [[stateError description] UTF8String];
-              fprintf(
-                stderr,
-                "WebView DOM verification failed: state=%s error=%s\n",
-                stateText,
-                errorText
-              );
-              strongSelf.result = 47;
-              [record.window close];
-              return;
-            }
-            record.receivedResponse = YES;
-            printf(
-              "visible WebView round trip window=%d request=%llu ok=%s hmr=%s inject=ready payload=%s\n",
-              nativeId,
-              (unsigned long long)requestId,
-              ok ? "true" : "false",
-              development ? "ready" : "packaged",
-              payload.UTF8String
-            );
-            fflush(stdout);
-            if (strongSelf.smokeMode) {
-              BOOL allWindowsResponded = YES;
-              for (
-                ZAppDesktopWindowRecord *candidate
-                in strongSelf.windows.allValues
-              ) {
-                if (!candidate.receivedResponse) {
-                  allWindowsResponded = NO;
-                  break;
-                }
-              }
-              if (!allWindowsResponded) return;
-              if (strongSelf.result == 41) strongSelf.result = 0;
-              dispatch_after(
-                dispatch_time(DISPATCH_TIME_NOW, 600 * NSEC_PER_MSEC),
-                dispatch_get_main_queue(),
-                ^{
-                  [strongSelf closeAllWindows];
-                }
-              );
-            }
-        }];
-    }
-  );
 }
 
 - (void)stopIfLastWindowClosed {

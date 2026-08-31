@@ -141,6 +141,10 @@ describe("Z native host inputs", () => {
       destination: "desktop.m",
     });
     expect(files).toContainEqual({
+      source: "framework/platform/macos/desktop-smoke.m",
+      destination: "desktop-smoke.m",
+    });
+    expect(files).toContainEqual({
       source: "framework/platform/macos/zapp_desktop.h",
       destination: "zapp_desktop.h",
     });
@@ -228,6 +232,10 @@ describe("Z native host inputs", () => {
     const macOSPlatform = macOSModules.join("\n");
     const objectiveCHost = readFileSync(
       new URL("../../native/z/framework/platform/macos/desktop.m", import.meta.url),
+      "utf8",
+    );
+    const objectiveCSmoke = readFileSync(
+      new URL("../../native/z/framework/platform/macos/desktop-smoke.m", import.meta.url),
       "utf8",
     );
     const notesFrontend = readFileSync(
@@ -348,12 +356,20 @@ describe("Z native host inputs", () => {
     expect(notesFrontend).toContain('dataset.hmr = import.meta.hot ? "ready" : "packaged"');
     expect(notesFrontend).toContain("document.body.dataset.inject");
     expect(notesHTML).toContain('<script type="module" src="/app.js"></script>');
-    expect(objectiveCHost).toContain("observeDeliveredResponse:");
-    expect(objectiveCHost).toContain("cancelled WebView response ignored");
-    expect(objectiveCHost).toContain('@"\\\"hmr\\\":\\\"ready\\\""');
+    expect(objectiveCHost).not.toContain("observeDeliveredResponse:");
+    expect(objectiveCHost).not.toContain("cancelled WebView response ignored");
+    expect(objectiveCHost).not.toContain('@"\\\"hmr\\\":\\\"ready\\\""');
+    expect(objectiveCSmoke).toContain("zapp_desktop_smoke_observe_response(");
+    expect(objectiveCSmoke).toContain("cancelled WebView response ignored");
+    expect(objectiveCSmoke).toContain('@"\\\"hmr\\\":\\\"ready\\\""');
     expect(nativeBuilder).toContain(
       'await rm(path.join(stagedAppSource, "z.json"), { force: true });',
     );
+    expect(nativeBuilder).toContain('process.env.ZAPP_Z_DESKTOP_SMOKE_SUPPORT === "1"');
+    expect(nativeBuilder).toContain('"-DZAPP_DESKTOP_SMOKE_SUPPORT=1"');
+    expect(nativeBuilder).toContain('...(desktopSmokeSupport ? [desktopSmokeObject] : [])');
+    expect(nativeBuilder).toContain('await rm(desktopSmokeObject, { force: true });');
+    expect(nativeBuilder).toContain('await rm(desktopArchive, { force: true });');
     expect(cli).toContain("devUrl,");
     expect(cli).not.toContain("Interactive dev starts with the Phase 1 WebView core");
   });
