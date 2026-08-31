@@ -16,6 +16,17 @@ class DesktopWindowDelegate on thread.main
   readonly windows: Weak<WindowManager>;
   readonly didCloseNativeWindow: NativeWindowClosedOperation;
 
+  function shouldClose(
+    in window: WebKit.NSWindow
+  ): boolean as "windowShouldClose:" {
+    const id = copy this.id;
+    const current = attempt this.windows.upgrade();
+    return match (current) {
+      success(windows) => windows.closeRequestedNative(in id);
+      failure(_) => true;
+    };
+  }
+
   function willClose(
     in notification: WebKit.NSNotification
   ): void as "windowWillClose:" {

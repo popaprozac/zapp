@@ -5,6 +5,7 @@ import {
 import { WindowError } from "../framework/application-error.zs";
 import {
   WindowBlurredEvent,
+  WindowCloseRequestedEvent,
   WindowClosedEvent,
   WindowEvent,
   WindowFocusedEvent,
@@ -16,6 +17,8 @@ class ObservedWindowLifecycle on thread.main {
   focused: i32;
   blurred: i32;
   resized: i32;
+  closeRequested: i32;
+  cancelClose: boolean;
   closed: i32;
   aggregate: i32;
 }
@@ -32,6 +35,8 @@ function runWindowManagerSmoke(): i32 throws WindowError on thread.main {
     focused: 0,
     blurred: 0,
     resized: 0,
+    closeRequested: 0,
+    cancelClose: true,
     closed: 0,
     aggregate: 0,
   });
@@ -82,6 +87,22 @@ function runWindowManagerSmoke(): i32 throws WindowError on thread.main {
   )) {
     success(subscription) => subscription;
     failure(_) => return 12;
+  };
+  const closeRequestedObserved = observed;
+  const closeRequestedHandler: (
+    in event: WindowCloseRequestedEvent
+  ) => void on thread.main = move (
+    in event: WindowCloseRequestedEvent
+  ): void => {
+    closeRequestedObserved.closeRequested =
+      closeRequestedObserved.closeRequested + 1;
+    if (closeRequestedObserved.cancelClose) event.cancel();
+  };
+  const closeRequested = match (attempt primary.events.closeRequested.subscribe(
+    closeRequestedHandler
+  )) {
+    success(subscription) => subscription;
+    failure(_) => return 20;
   };
   const aggregateObserved = observed;
   const aggregateHandler: (
@@ -138,9 +159,15 @@ function runWindowManagerSmoke(): i32 throws WindowError on thread.main {
   if (observed.aggregate != 3) return 17;
 
   primary.close();
+  if (observed.closeRequested != 1 || observed.closed != 0) return 18;
+  const afterCancelledClose = windows.all();
+  if (afterCancelledClose.length != 2) return 19;
+  observed.cancelClose = false;
   primary.close();
-  if (observed.closed != 1) return 18;
-  if (observed.aggregate != 4) return 19;
+  primary.close();
+  if (observed.closeRequested != 2) return 21;
+  if (observed.closed != 1) return 22;
+  if (observed.aggregate != 6) return 23;
   const remaining = windows.all();
   if (remaining.length != 1) return 6;
   return match (windows.get(primary.id)) {

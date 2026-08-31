@@ -8,6 +8,7 @@ import {
 } from "../../framework/application-error.zs";
 import {
   WindowBlurredEvent as FrameworkWindowBlurredEvent,
+  WindowCloseRequestedEvent as FrameworkWindowCloseRequestedEvent,
   WindowClosedEvent as FrameworkWindowClosedEvent,
   WindowEvent as FrameworkWindowEvent,
   WindowEvents as FrameworkWindowEvents,
@@ -30,4 +31,5 @@ export type WindowFocusedEvent = FrameworkWindowFocusedEvent;
 export type WindowBlurredEvent = FrameworkWindowBlurredEvent;
 export type WindowResizedEvent = FrameworkWindowResizedEvent;
 export type WindowSize = FrameworkWindowSize;
+export type WindowCloseRequestedEvent = FrameworkWindowCloseRequestedEvent;
 export type WindowClosedEvent = FrameworkWindowClosedEvent;

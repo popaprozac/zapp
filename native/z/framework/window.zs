@@ -190,7 +190,21 @@ class WindowManagerState on thread.main {
       this.backend.close(in id);
       return;
     }
-    this.closedNative(in id);
+    if (this.closeRequestedNative(in id)) this.closedNative(in id);
+  }
+
+  function closeRequestedNative(
+    inout this,
+    in id: String
+  ): boolean {
+    const found = this.get(in id);
+    return match (found) {
+      some(window) => {
+        let events = window.events;
+        select events.publishCloseRequested(in id);
+      }
+      none => true;
+    };
   }
 
   function closedNative(inout this, in id: String): void {
@@ -334,6 +348,13 @@ export readonly class WindowManager on thread.main {
 
   internal function closedNative(inout this, in id: String): void on thread.main {
     this.state.closedNative(in id);
+  }
+
+  internal function closeRequestedNative(
+    inout this,
+    in id: String
+  ): boolean on thread.main {
+    return this.state.closeRequestedNative(in id);
   }
 
   internal function focusedNative(inout this, in id: String): void on thread.main {

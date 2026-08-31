@@ -1,0 +1,313 @@
+import WebKit from "WebKit/WebKit.h";
+import { WindowError } from "../../application-error.zs";
+import { ApplicationPermissions } from "../../application-permissions.zs";
+import {
+  ApplicationCapabilities,
+  CapabilitySelection,
+} from "../../application-capabilities.zs";
+import { AsyncServices } from "../../async-services.zs";
+import { BridgeResponse } from "../../bridge.zs";
+import { Once, OnceLifetime } from "std/sync";
+import { TaskControl, TaskScope } from "std/async";
+import { Map } from "std/collections";
+import { thread } from "std/thread";
+import {
+  WindowManager,
+  WindowOptions,
+} from "../../window.zs";
+import { stopMacOSRunLoop } from "./application-host.zs";
+import {
+  DesktopDeliverResponseOperation,
+  DesktopRouteMessageOperation,
+} from "./message-handler.zs";
+import { createMacOSWindowRuntime } from "./window-construction.zs";
+import { MacOSWindowRuntime } from "./window-runtime.zs";
+import { deliverWebViewResponse } from "./response-delivery.zs";
+import { webViewInjectionProfileExists } from "./webview-injections.zs";
+import { NativeWindowClosedOperation } from "./window-delegate.zs";
+
+internal class MacOSApplicationRuntime {
+  readonly name: String;
+  readonly permissions: ApplicationPermissions;
+  readonly capabilities: ApplicationCapabilities;
+  readonly services: AsyncServices;
+  readonly updates: TaskScope;
+  readonly windowManager: WindowManager on thread.main;
+  readonly routeMessage: DesktopRouteMessageOperation on thread.main;
+  readonly deliverMessageResponse: DesktopDeliverResponseOperation on thread.main;
+  nativeWindows: Map<i32, MacOSWindowRuntime> on thread.main;
+  retiredNativeWindows: Array<MacOSWindowRuntime> on thread.main;
+  nextNativeWindowId: i32 on thread.main;
+
+  function createWindow(
+    inout this,
+    in id: String,
+    in options: WindowOptions
+  ): void throws WindowError on thread.main {
+    for (const profile of options.capabilities) {
+      if (!this.capabilities.hasProfile(profile)) {
+        throw WindowError({
+          id: copy id,
+          message: `unknown window capability profile "${profile}"`,
+        });
+      }
+    }
+    const selected = this.capabilities.resolveProfiles(in options.capabilities);
+    match (selected) {
+      some(selection) => {
+        try this.createResolvedWindow(in id, in options, selection);
+        return;
+      }
+      none => throw WindowError({
+        id: copy id,
+        message: "could not resolve window capability profiles",
+      });
+    }
+  }
+
+  function createResolvedWindow(
+    inout this,
+    in id: String,
+    in options: WindowOptions,
+    selectedCapabilities: CapabilitySelection
+  ): void throws WindowError on thread.main {
+    for (const profile of options.inject) {
+      if (!webViewInjectionProfileExists(profile)) {
+        throw WindowError({
+          id: copy id,
+          message: `unknown webview inject profile "${profile}"`,
+        });
+      }
+    }
+    const nativeId = this.nextNativeWindowId;
+    this.nextNativeWindowId = this.nextNativeWindowId + 1;
+    const windowManager = this.windowManager;
+    const windowManagerOwner = weak windowManager;
+    const didClose: NativeWindowClosedOperation = recordClosedNativeWindow;
+    const runtime = try createMacOSWindowRuntime(
+      copy this.name,
+      in id,
+      nativeId,
+      in options,
+      selectedCapabilities,
+      windowManagerOwner,
+      this.routeMessage,
+      this.deliverMessageResponse,
+      didClose
+    );
+    this.nativeWindows.set(nativeId, runtime);
+  }
+
+  function nativeWindowClosed(
+    inout this,
+    nativeId: i32
+  ): void on thread.main {
+    const found = this.nativeWindows.remove(nativeId);
+    match (found) {
+      some(value) => {
+        let window = value;
+        window.pendingRequests.cancelAll();
+        this.retiredNativeWindows.push(move window);
+        if (this.nativeWindows.length == 0) {
+          stopMacOSRunLoop();
+        }
+      }
+      none => {}
+    }
+  }
+
+  function closeAllNativeWindows(inout this): void on thread.main {
+    // Teardown is already committed, so it bypasses cancellable user close
+    // requests. Snapshot the native windows first because close callbacks
+    // synchronously remove entries from the live registry.
+    let windows = Array<MacOSWindowRuntime>();
+    for (const entry of this.nativeWindows) {
+      let window = entry.value;
+      windows.push(move window);
+    }
+    for (const window of windows) {
+      window.window.close();
+    }
+  }
+
+  function beginRequest(
+    inout this,
+    windowId: i32,
+    id: u64
+  ): u64 on thread.main {
+    const found = this.nativeWindows.remove(windowId);
+    return match (found) {
+      some(value) => {
+        let window = value;
+        const generation = window.pendingRequests.begin(id);
+        this.nativeWindows.set(windowId, window);
+        select generation;
+      }
+      none => 0;
+    };
+  }
+
+  function attachRequest(
+    inout this,
+    windowId: i32,
+    id: u64,
+    control: TaskControl
+  ): void on thread.main {
+    const found = this.nativeWindows.remove(windowId);
+    match (found) {
+      some(value) => {
+        let window = value;
+        window.pendingRequests.attach(id, control);
+        this.nativeWindows.set(windowId, window);
+      }
+      none => {}
+    }
+  }
+
+  function finishRequest(
+    inout this,
+    windowId: i32,
+    id: u64,
+    generation: u64
+  ): void on thread.main {
+    const found = this.nativeWindows.remove(windowId);
+    match (found) {
+      some(value) => {
+        let window = value;
+        window.pendingRequests.finish(id, generation);
+        this.nativeWindows.set(windowId, window);
+      }
+      none => {}
+    }
+  }
+
+  function cancelRequest(
+    inout this,
+    windowId: i32,
+    id: u64
+  ): boolean on thread.main {
+    const found = this.nativeWindows.remove(windowId);
+    return match (found) {
+      some(value) => {
+        let window = value;
+        const cancelled = window.pendingRequests.cancel(id);
+        this.nativeWindows.set(windowId, window);
+        select cancelled;
+      }
+      none => false;
+    };
+  }
+
+  function showWindow(in id: String): void on thread.main {
+    for (const entry of this.nativeWindows) {
+      if (entry.value.id == id) {
+        entry.value.window.makeKeyAndOrderFront(null);
+        return;
+      }
+    }
+  }
+
+  function hideWindow(in id: String): void on thread.main {
+    for (const entry of this.nativeWindows) {
+      if (entry.value.id == id) {
+        entry.value.window.orderOut(null);
+        return;
+      }
+    }
+  }
+
+  function requestWindowClose(in id: String): void on thread.main {
+    for (const entry of this.nativeWindows) {
+      if (entry.value.id == id) {
+        // performClose follows AppKit's normal delegate decision path and
+        // therefore reaches WindowCloseRequestedEvent before committing.
+        entry.value.window.performClose(null);
+        return;
+      }
+    }
+  }
+
+  function setWindowTitle(
+    in id: String,
+    in title: String
+  ): void on thread.main {
+    for (const entry of this.nativeWindows) {
+      if (entry.value.id == id) {
+        entry.value.window.title = copy title;
+        return;
+      }
+    }
+  }
+
+  function capabilitiesForWindow(
+    windowId: i32
+  ): Option<CapabilitySelection> on thread.main {
+    const found = this.nativeWindows.get(windowId);
+    return match (in found) {
+      some(window) => Option.some(window.capabilitySelection);
+      none => Option.none;
+    };
+  }
+
+  function deliverResponse(
+    in response: BridgeResponse,
+    windowId: i32
+  ): void on thread.main {
+    const activeWindowCount = this.nativeWindows.length;
+    const found = this.nativeWindows.get(windowId);
+    match (in found) {
+      some(window) => deliverWebViewResponse(
+        window.webView,
+        window.window,
+        in response,
+        windowId,
+        activeWindowCount
+      );
+      none => {}
+    }
+  }
+}
+
+const application = Once<MacOSApplicationRuntime>();
+
+function recordClosedNativeWindow(
+  nativeId: i32
+): void on thread.main {
+  const current = application.get();
+  current.nativeWindowClosed(nativeId);
+}
+
+internal function currentMacOSApplication(): MacOSApplicationRuntime {
+  return application.get();
+}
+
+internal function abortMacOSApplicationRuntime(): void on thread.main {
+  const current = application.get();
+  current.closeAllNativeWindows();
+}
+
+internal function initializeMacOSApplicationRuntimeState(
+  name: String,
+  permissions: ApplicationPermissions,
+  capabilities: ApplicationCapabilities,
+  services: AsyncServices,
+  updates: TaskScope,
+  windowManager: WindowManager,
+  routeMessage: DesktopRouteMessageOperation,
+  deliverResponse: DesktopDeliverResponseOperation
+): OnceLifetime<MacOSApplicationRuntime> on thread.main {
+  const value = new MacOSApplicationRuntime({
+    name: move name,
+    permissions,
+    capabilities,
+    services: move services,
+    updates,
+    windowManager,
+    routeMessage,
+    deliverMessageResponse: deliverResponse,
+    nativeWindows: Map<i32, MacOSWindowRuntime>(),
+    retiredNativeWindows: Array<MacOSWindowRuntime>(),
+    nextNativeWindowId: 1,
+  });
+  return application.initialize(move value);
+}

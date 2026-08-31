@@ -68,29 +68,42 @@ channels are ordinary Z objects rather than stringly framework callbacks:
 
 ```zs
 import {
+  WindowCloseRequestedEvent,
   WindowClosedEvent,
-  WindowEventSubscription,
 } from "zapp/window";
 
-const subscribed = attempt window.events.closed.subscribe(
+const closeRequested = try window.events.closeRequested.subscribe(
+  move (in event: WindowCloseRequestedEvent): void => {
+    if (hasUnsavedChanges()) event.cancel();
+  }
+);
+const closed = try window.events.closed.subscribe(
   move (in event: WindowClosedEvent): void => {
     console.log(`window ${event.windowId} closed`);
   }
 );
-const subscription: WindowEventSubscription = match (subscribed) {
-  success(value) => value;
-  failure(error) => throw error;
-};
+
+window.close();
 ```
 
 The focused initial surface includes `focused`, `blurred`, `resized`, and
-terminal `closed` channels plus `window.events.all`. Multiple subscribers are
-allowed. A specific channel publishes before `all`, and each channel preserves
-subscription order. `unsubscribe()` is explicit and idempotent; dropping the
-subscription also unregisters it deterministically through `deinit`. The name
-`cancel` remains available for future cancellable event requests such as a
-window-close decision. Closing a window publishes `closed`, rejects later
-subscriptions, and releases its handler registries before native shutdown.
+`closeRequested` and terminal `closed` channels plus `window.events.all`.
+`window.close()` requests the operation; it does not claim that closing has
+already completed. `closeRequested` is dispatched synchronously on the main
+executor before AppKit or the inactive backend commits the close. Any handler
+may call `event.cancel()`, and cancellation is monotonic for that request. If
+the request proceeds, `closed` is published exactly once after the manager has
+removed the native and Z-owned window state.
+
+Multiple subscribers are allowed. A specific channel publishes before `all`,
+and each channel preserves subscription order. `window.events.all` observes the
+same `WindowCloseRequestedEvent`, so an aggregate handler may also cancel it.
+`unsubscribe()` is explicit and idempotent; dropping the subscription also
+unregisters it deterministically through `deinit`. Once `closed` publishes, all
+channels reject later subscriptions and release their handler registries before
+native shutdown. `WindowEventSubscription` remains useful when a subscription
+must be stored or passed independently; local inference normally keeps the
+common case concise.
 
 The AppKit delegate callbacks enter Z through the native registration owner and
 publish under a dedicated structured `TaskScope`. Shutdown closes and joins that

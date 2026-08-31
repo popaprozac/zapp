@@ -5,6 +5,22 @@ export struct WindowEventSubscriptionError {
   message: String;
 }
 
+internal class WindowCloseDecision on thread.main {
+  cancelled: boolean;
+
+  internal constructor() {
+    this.cancelled = false;
+  }
+
+  function cancel(inout this): void {
+    this.cancelled = true;
+  }
+
+  function wasCancelled(): boolean {
+    return this.cancelled;
+  }
+}
+
 type WindowEventUnsubscribe = () => void on thread.main;
 
 export class WindowEventSubscription on thread.main {
@@ -122,10 +138,30 @@ export readonly struct WindowClosedEvent {
   windowId: String;
 }
 
+export readonly class WindowCloseRequestedEvent on thread.main {
+  readonly windowId: String;
+  internal readonly decision: WindowCloseDecision;
+
+  internal constructor(windowId: String) {
+    this.windowId = move windowId;
+    this.decision = new WindowCloseDecision();
+  }
+
+  function cancel(): void {
+    let decision = this.decision;
+    decision.cancel();
+  }
+
+  internal function wasCancelled(): boolean {
+    return this.decision.wasCancelled();
+  }
+}
+
 export enum WindowEvent {
   focused WindowFocusedEvent,
   blurred WindowBlurredEvent,
   resized WindowResizedEvent,
+  closeRequested WindowCloseRequestedEvent,
   closed WindowClosedEvent,
 }
 
@@ -134,6 +170,7 @@ export readonly class WindowEvents on thread.main {
   readonly focused: Event<WindowFocusedEvent>;
   readonly blurred: Event<WindowBlurredEvent>;
   readonly resized: Event<WindowResizedEvent>;
+  readonly closeRequested: Event<WindowCloseRequestedEvent>;
   readonly closed: Event<WindowClosedEvent>;
 
   internal constructor() {
@@ -141,6 +178,7 @@ export readonly class WindowEvents on thread.main {
     this.focused = new Event<WindowFocusedEvent>();
     this.blurred = new Event<WindowBlurredEvent>();
     this.resized = new Event<WindowResizedEvent>();
+    this.closeRequested = new Event<WindowCloseRequestedEvent>();
     this.closed = new Event<WindowClosedEvent>();
   }
 
@@ -178,6 +216,19 @@ export readonly class WindowEvents on thread.main {
     all.publish(in aggregate);
   }
 
+  internal function publishCloseRequested(
+    in windowId: String
+  ): boolean {
+    const event = new WindowCloseRequestedEvent(copy windowId);
+    const decision = event.decision;
+    let closeRequested = this.closeRequested;
+    closeRequested.publish(in event);
+    const aggregate = WindowEvent.closeRequested(event);
+    let all = this.all;
+    all.publish(in aggregate);
+    return !decision.wasCancelled();
+  }
+
   internal function publishClosed(in windowId: String): void {
     const event = WindowClosedEvent({ windowId: copy windowId });
     let closed = this.closed;
@@ -193,11 +244,13 @@ export readonly class WindowEvents on thread.main {
     let focused = this.focused;
     let blurred = this.blurred;
     let resized = this.resized;
+    let closeRequested = this.closeRequested;
     let closed = this.closed;
     all.finish();
     focused.finish();
     blurred.finish();
     resized.finish();
+    closeRequested.finish();
     closed.finish();
   }
 }

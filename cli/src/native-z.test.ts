@@ -245,15 +245,19 @@ describe("Z native host inputs", () => {
   it("keeps the WebKit UI graph, handler, validation, and registration in Z", () => {
     const macOSModulePaths = [
       "application-host.zs",
+      "application-runtime.zs",
       "application.zs",
       "configured-smoke.zs",
       "configured-webview.zs",
+      "message-handler.zs",
+      "message-routing.zs",
       "navigation.zs",
       "response-delivery.zs",
       "runtime.zs",
       "scheme-handler.zs",
       "webview-injections.zs",
       "window-backend.zs",
+      "window-construction.zs",
       "window-delegate.zs",
       "window-geometry.zs",
       "window-runtime.zs",
@@ -284,7 +288,7 @@ describe("Z native host inputs", () => {
       "utf8",
     );
 
-    expect(macOSModules).toHaveLength(13);
+    expect(macOSModules).toHaveLength(17);
     expect(macOSModules.every((module) => module.split("\n").length < 700)).toBe(true);
     expect(macOSPlatform).toContain("implements WebKit.WKScriptMessageHandler");
     expect(macOSPlatform).toContain("body instanceof WebKit.NSString");

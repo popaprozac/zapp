@@ -7,7 +7,7 @@ import {
   WindowTitleOperation,
 } from "../../window.zs";
 import { thread } from "std/thread";
-import { currentMacOSApplication } from "./runtime.zs";
+import { currentMacOSApplication } from "./application-runtime.zs";
 
 function createMacOSWindowDeferred(
   in id: String,

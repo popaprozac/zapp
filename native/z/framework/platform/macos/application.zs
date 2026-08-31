@@ -7,10 +7,8 @@ import { ApplicationMetadata } from "../../application-metadata.zs";
 import { ApplicationContext } from "../../../api/zapp/service.zs";
 import { TaskScope } from "std/async";
 import { thread } from "std/thread";
-import {
-  abortMacOSApplicationRuntime,
-  initializeMacOSApplicationRuntime,
-} from "./runtime.zs";
+import { abortMacOSApplicationRuntime } from "./application-runtime.zs";
+import { initializeMacOSApplicationRuntime } from "./runtime.zs";
 import {
   initializeMacOSApplicationHost,
   runMacOSApplicationLoop,
