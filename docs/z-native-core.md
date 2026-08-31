@@ -23,7 +23,8 @@ the Z builder. The builder:
    isolated workspace under the application's gitignored
    `.zapp/z-native-core/` directory;
 4. builds `libzapp_core.a` with the Z compiler;
-5. links the generated embedding header and archive into the CLI output;
+5. links the generated native adapter archive and compiler-embedded Z asset
+   catalog into the CLI output;
 6. initializes a process-wide Z `Application` through the generated runtime
    initializer, routes owned UTF-8 messages through Z, and shuts the root down
    deterministically;
@@ -101,8 +102,10 @@ delivery, and smoke observation rather than application object construction or
 message-body validation. The WebKit custom-scheme controller and its request
 policy are Z-owned: origin/path validation, SPA fallback, asset selection, MIME
 and encoding choice, response construction, and task delivery all live in
-`scheme-handler.zs`. Native glue only indexes the generated immutable asset
-table, decodes Brotli bytes into `NSData`, and constructs WebKit's `NSError`.
+`scheme-handler.zs`. The generated asset catalog is also Z: module-local
+`embed.StaticBytes` values refer directly to process-lifetime compiler storage,
+and raw assets become zero-copy `NSData` views. Native glue only decodes Brotli
+bytes into an ownership-transferring `NSData` and constructs WebKit's `NSError`.
 WebView bootstrap, identity, and configured CSS/JavaScript injection policy are
 also Z-owned in `webview-injections.zs`: profile validation, duplicate
 suppression, JSON-safe source quoting, phase mapping, and `WKUserScript`
@@ -151,7 +154,7 @@ and the binding restores the exact `u64` identifier as `bigint` before updating
 the DOM. `spike:z-notes:smoke` opts into bounded automation: it verifies
 independent window identities, frontend-safe injection isolation,
 cancellation/request routing, and both DOMs before closing every window. Both
-use the same staged archive and generated embedding header as an ordinary
+use the same staged native inputs and generated Z asset catalog as an ordinary
 `ZAPP_NATIVE_LANG=z` build.
 
 The development commands exercise the complete CLI-owned loop: Vite serves the
