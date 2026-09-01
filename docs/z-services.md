@@ -261,12 +261,14 @@ interface Note {
 The generated decoder validates and converts the wire value. Other numeric
 types map to `number` only when that mapping preserves the declared contract.
 
-`Array<T>` is also a first-class generated wire shape. `T` may be a supported
-scalar, an exported public-field struct, or another `Array<T>`:
+`Array<T>` and `Option<T>` are first-class recursive generated wire shapes.
+Their payload may be a supported scalar, an exported public-field struct, or
+another supported container:
 
 ```z
 export struct NotesPage {
   notes: Array<Note>;
+  selected: Option<Note>;
   count: u64;
 }
 ```
@@ -274,9 +276,19 @@ export struct NotesPage {
 The compiler metadata retains the full collection type. Zapp recursively emits
 the checked native Z codec, generated TypeScript type and codec, and injected
 WebView runtime codec from that one shape. Application services do not write an
-inner JSON document or maintain a parallel TypeScript declaration. `Map`,
-`Set`, `Option`, and optional struct fields remain separate wire-design work;
-the generator rejects them rather than guessing a representation.
+inner JSON document or maintain a parallel TypeScript declaration.
+
+The wire rule for `Option<T>` is explicit: `some(value)` uses `T`'s existing
+representation and `none` uses JSON `null`. In generated TypeScript this is
+`T | null`—not `undefined`. A Z field declared `field: Option<T>` remains a
+required JSON property that accepts `null`. A field declared `field?: T`
+additionally accepts an omitted input property, maps omission to `none`, and is
+emitted as `field?: T | null`; native responses use the canonical explicit
+property with `null` for `none`.
+
+`Map` and `Set` remain separate wire-design work; the generator rejects them
+rather than guessing whether they should become objects, entry arrays, or
+another representation.
 
 ## Compiler-produced metadata
 

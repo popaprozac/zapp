@@ -13,6 +13,7 @@ import {
 export struct Note {
   id: u64;
   title: String;
+  subtitle?: String;
 }
 
 struct NotesState {
@@ -21,6 +22,7 @@ struct NotesState {
 
 export struct CreateNoteInput {
   title: String;
+  subtitle?: String;
 }
 
 struct NotesDecodeError {
@@ -31,12 +33,12 @@ export readonly class NotesCore {
   readonly state: Mutex<NotesState>;
 
   function create(input: CreateNoteInput): Note {
-    const { title } = move input;
+    const { title, subtitle } = move input;
     const id = this.state.withLock((inout state): u64 => {
       state.nextId = state.nextId + 1;
       return state.nextId - 1;
     });
-    return Note({ id, title: move title });
+    return Note({ id, title: move title, subtitle: move subtitle });
   }
 
   function count(): u64 {

@@ -305,4 +305,53 @@ describe("generated Z service dispatch", () => {
     expect(source).toContain("function __zappDecodeU64(");
     expect(source).toContain('expected an exact u64 string');
   });
+
+  it("generates native Option codecs for null, payloads, and omitted optional fields", () => {
+    const optional = structuredClone(manifest);
+    optional.types.push({
+      name: "NoteSelection",
+      module: "/workspace/app/notes-core.zs",
+      fields: [
+        { name: "selected", type: "Option<Note>" },
+        { name: "subtitle", type: "Option<String>", optional: true },
+      ],
+    });
+    optional.services[0].methods.push({
+      id: 2,
+      name: "find",
+      input: "Option<u64>",
+      inputMode: "value",
+      returns: "Option<Note>",
+      asynchronous: false,
+      executorAffinity: null,
+      receiverMode: "in",
+    });
+    optional.services[0].methods.push({
+      id: 3,
+      name: "selection",
+      input: "NoteSelection",
+      inputMode: "value",
+      returns: "NoteSelection",
+      asynchronous: false,
+      executorAffinity: null,
+      receiverMode: "in",
+    });
+
+    const source = renderZServiceDispatchers(optional, {
+      outputPath: "/workspace/generated/service-dispatchers.zs",
+      serviceContractModule: "/workspace/framework/service-contract.zs",
+      servicesModule: "/workspace/framework/services.zs",
+      asyncServiceContractModule: "/workspace/framework/async-service-contract.zs",
+      serviceLifecycleContractModule: "/workspace/framework/service-lifecycle-contract.zs",
+    });
+    expect(source).toContain("function __zappDecodeOptionOfU64(");
+    expect(source).toContain("nullValue => Option<u64>.none");
+    expect(source).toContain("const decoded = try __zappDecodeU64(in value)");
+    expect(source).toContain("select Option.some(decoded)");
+    expect(source).toContain("function __zappEncodeOptionOfNote(");
+    expect(source).toContain("some(value) => __zappEncodeNote(");
+    expect(source).toContain("none => JsonValue.nullValue");
+    expect(source).toContain("none => Option<String>.none");
+    expect(source).toContain("__zappEncodeOptionOfString(move subtitle)");
+  });
 });

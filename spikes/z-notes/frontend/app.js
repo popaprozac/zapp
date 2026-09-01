@@ -74,6 +74,9 @@ button.addEventListener("click", async () => {
   try {
     await verifyTypedServiceError();
     const note = await services.notes.create({ title: "WebView note" });
+    if (note.subtitle !== null) {
+      throw new Error(`Expected an omitted subtitle, received ${note.subtitle}`);
+    }
     const empty = await services.notes.isEmpty();
     if (empty) throw new Error("Expected the created note");
     const health = await services.health.status();
@@ -115,6 +118,9 @@ cancelButton.addEventListener("click", async () => {
     status.textContent = "Cancelled safely; checking follow-up…";
     try {
       const note = await services.notes.create({ title: "WebView note" });
+      if (note.subtitle !== null) {
+        throw new Error(`Expected an omitted subtitle, received ${note.subtitle}`);
+      }
       const empty = await services.notes.isEmpty();
       if (empty) throw new Error("Expected the created note");
       const health = await services.health.status();

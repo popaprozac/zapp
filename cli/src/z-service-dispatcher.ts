@@ -8,6 +8,7 @@ import type {
 import {
   assertZServiceCodecNames,
   zArrayElementType,
+  zOptionPayloadType,
   zWireCodecSuffix,
 } from "./z-service-bindings";
 
@@ -93,6 +94,11 @@ function collectType(
     collectType(arrayElement, namedTypes, selected);
     return;
   }
+  const optionPayload = zOptionPayloadType(type);
+  if (optionPayload) {
+    collectType(optionPayload, namedTypes, selected);
+    return;
+  }
   const named = namedTypes.get(type);
   if (!named) return;
   for (const field of named.fields) collectType(field.type, namedTypes, selected);
@@ -128,6 +134,37 @@ function renderEncodeArray(type: string): string {
     encoded.push(__zappEncode${zWireCodecSuffix(element)}(${copied(element, "element")}));
   }
   return JsonValue.array(move encoded);
+}`;
+}
+
+function renderDecodeOption(type: string): string {
+  const payload = zOptionPayloadType(type)!;
+  const suffix = zWireCodecSuffix(type);
+  return `function __zappDecode${suffix}(
+  in value: JsonValue
+): ${type} throws __ZappServiceCodecError {
+  return match (in value) {
+    nullValue => Option<${payload}>.none;
+    _ => {
+      const decoded = try __zappDecode${zWireCodecSuffix(payload)}(in value);
+      select Option.some(${moved(payload, "decoded")});
+    }
+  };
+}`;
+}
+
+function renderEncodeOption(type: string): string {
+  const payload = zOptionPayloadType(type)!;
+  const suffix = zWireCodecSuffix(type);
+  return `function __zappEncode${suffix}(
+  value: ${type}
+): JsonValue {
+  return match (value) {
+    some(value) => __zappEncode${zWireCodecSuffix(payload)}(
+      ${moved(payload, "value")}
+    );
+    none => JsonValue.nullValue;
+  };
 }`;
 }
 
@@ -289,10 +326,13 @@ function renderEncodeScalar(type: string): string {
 function renderDecodeType(type: ZServiceTypeMetadata): string {
   const fields = type.fields.map((field) => {
     assertIdentifier(field.name, `${type.name} field`);
+    const missing = field.optional
+      ? `${field.type}.none`
+      : `throw __zappCodecError(${JSON.stringify(`missing required field ${field.name}`)})`;
     return `        const __field_${field.name} = fields.get(${JSON.stringify(field.name)});
         const ${field.name} = match (in __field_${field.name}) {
           some(field) => try __zappDecode${zWireCodecSuffix(field.type)}(in field);
-          none => throw __zappCodecError(${JSON.stringify(`missing required field ${field.name}`)});
+          none => ${missing};
         };`;
   }).join("\n");
   const initialization = type.fields
@@ -642,22 +682,32 @@ export function renderZServiceDispatchers(
     )).join("\n");
 
   const scalarDecoders = [...decoded]
-    .filter((type) => !namedTypes.has(type) && !zArrayElementType(type))
+    .filter((type) => (
+      !namedTypes.has(type) && !zArrayElementType(type) && !zOptionPayloadType(type)
+    ))
     .sort()
     .map(renderDecodeScalar);
   const arrayDecoders = [...decoded]
     .filter((type) => zArrayElementType(type))
     .map(renderDecodeArray);
+  const optionDecoders = [...decoded]
+    .filter((type) => zOptionPayloadType(type))
+    .map(renderDecodeOption);
   const typeDecoders = allTypes
     .filter((type) => decoded.has(type.name))
     .map(renderDecodeType);
   const scalarEncoders = [...encoded]
-    .filter((type) => !namedTypes.has(type) && !zArrayElementType(type))
+    .filter((type) => (
+      !namedTypes.has(type) && !zArrayElementType(type) && !zOptionPayloadType(type)
+    ))
     .sort()
     .map(renderEncodeScalar);
   const arrayEncoders = [...encoded]
     .filter((type) => zArrayElementType(type))
     .map(renderEncodeArray);
+  const optionEncoders = [...encoded]
+    .filter((type) => zOptionPayloadType(type))
+    .map(renderEncodeOption);
   const typeEncoders = allTypes
     .filter((type) => encoded.has(type.name))
     .map(renderEncodeType);
@@ -703,9 +753,11 @@ ${[
     ...scalarDecoders,
     ...typeDecoders,
     ...arrayDecoders,
+    ...optionDecoders,
     ...scalarEncoders,
     ...typeEncoders,
     ...arrayEncoders,
+    ...optionEncoders,
   ].join("\n\n")}
 
 ${manifest.services.map(renderDispatcher).join("\n\n")}

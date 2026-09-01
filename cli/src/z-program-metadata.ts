@@ -1,5 +1,6 @@
 import {
   zArrayElementType,
+  zOptionPayloadType,
   type ZServiceManifest,
   type ZServiceTypeMetadata,
 } from "./z-service-bindings";
@@ -195,10 +196,15 @@ function addWireType(
     addWireType(metadata, arrayElement, types, seen);
     return;
   }
+  const optionPayload = zOptionPayloadType(name);
+  if (optionPayload) {
+    addWireType(metadata, optionPayload, types, seen);
+    return;
+  }
   if (name.includes("<") || name.includes(">")) {
     throw new Error(
       `[zapp] generic service wire type ${JSON.stringify(name)} is not supported yet; `
-      + "Array<T> is the supported collection wire shape",
+      + "Array<T> and Option<T> are the supported generic wire shapes",
     );
   }
   const { module, symbol } = publicType(metadata, name);
@@ -214,12 +220,15 @@ function addWireType(
         `[zapp] service wire type ${name} contains private field ${JSON.stringify(field.name)}`,
       );
     }
-    if (field.optionalField) {
-      throw new Error(
-        `[zapp] optional service wire field ${name}.${field.name} is not supported yet`,
-      );
-    }
-    return { name: field.name, type: field.typeName };
+    return field.optionalField
+      ? {
+        name: field.name,
+        type: zOptionPayloadType(field.typeName)
+          ? field.typeName
+          : `Option<${field.typeName}>`,
+        optional: true,
+      }
+      : { name: field.name, type: field.typeName };
   });
   for (const field of fields) addWireType(metadata, field.type, types, seen);
   types.push({ name, module: module.path, fields });

@@ -4,6 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 export interface ZServiceFieldMetadata {
   name: string;
   type: string;
+  optional?: boolean;
 }
 
 export interface ZServiceTypeMetadata {
@@ -55,11 +56,12 @@ function assertIdentifier(value: string, description: string): void {
   }
 }
 
-export function zArrayElementType(type: string): string | null {
-  if (!type.startsWith("Array<") || !type.endsWith(">")) return null;
-  const element = type.slice("Array<".length, -1).trim();
+function zUnaryGenericElementType(type: string, generic: string): string | null {
+  const prefix = `${generic}<`;
+  if (!type.startsWith(prefix) || !type.endsWith(">")) return null;
+  const element = type.slice(prefix.length, -1).trim();
   if (element.length === 0) {
-    throw new Error("[zapp] Array service wire types require an element type");
+    throw new Error(`[zapp] ${generic} service wire types require an element type`);
   }
   let depth = 0;
   for (const character of element) {
@@ -75,9 +77,19 @@ export function zArrayElementType(type: string): string | null {
   return element;
 }
 
+export function zArrayElementType(type: string): string | null {
+  return zUnaryGenericElementType(type, "Array");
+}
+
+export function zOptionPayloadType(type: string): string | null {
+  return zUnaryGenericElementType(type, "Option");
+}
+
 export function zWireCodecSuffix(type: string): string {
   const element = zArrayElementType(type);
   if (element) return `ArrayOf${zWireCodecSuffix(element)}`;
+  const payload = zOptionPayloadType(type);
+  if (payload) return `OptionOf${zWireCodecSuffix(payload)}`;
   assertIdentifier(type, "service type");
   return type[0].toUpperCase() + type.slice(1);
 }
@@ -85,6 +97,8 @@ export function zWireCodecSuffix(type: string): string {
 function tsType(type: string): string {
   const element = zArrayElementType(type);
   if (element) return `Array<${tsType(element)}>`;
+  const payload = zOptionPayloadType(type);
+  if (payload) return `${tsType(payload)} | null`;
   if (type === "String") return "string";
   if (type === "boolean") return "boolean";
   if (type === "u64" || type === "i64") return "bigint";
@@ -106,23 +120,23 @@ function codecName(type: string, operation: "decode" | "encode"): string {
   return `${operation}${zWireCodecSuffix(type)}`;
 }
 
-function collectArrayType(type: string, selected: Set<string>): void {
-  const element = zArrayElementType(type);
+function collectContainerType(type: string, selected: Set<string>): void {
+  const element = zArrayElementType(type) ?? zOptionPayloadType(type);
   if (!element) return;
-  collectArrayType(element, selected);
+  collectContainerType(element, selected);
   selected.add(type);
 }
 
-function manifestArrayTypes(manifest: ZServiceManifest): string[] {
+function manifestContainerTypes(manifest: ZServiceManifest): string[] {
   const selected = new Set<string>();
   for (const type of [...manifest.types, ...manifest.errors]) {
-    for (const field of type.fields) collectArrayType(field.type, selected);
+    for (const field of type.fields) collectContainerType(field.type, selected);
   }
   for (const service of manifest.services) {
     for (const method of service.methods) {
-      if (method.input) collectArrayType(method.input, selected);
-      collectArrayType(method.returns, selected);
-      if (method.error) collectArrayType(method.error, selected);
+      if (method.input) collectContainerType(method.input, selected);
+      collectContainerType(method.returns, selected);
+      if (method.error) collectContainerType(method.error, selected);
     }
   }
   return [...selected];
@@ -139,7 +153,7 @@ export function assertZServiceCodecNames(manifest: ZServiceManifest): void {
   const wireTypes = [
     ...manifest.types.map((type) => type.name),
     ...manifest.errors.map((type) => type.name),
-    ...manifestArrayTypes(manifest),
+    ...manifestContainerTypes(manifest),
   ];
   for (const type of wireTypes) {
     const suffix = zWireCodecSuffix(type);
@@ -154,17 +168,27 @@ export function assertZServiceCodecNames(manifest: ZServiceManifest): void {
   }
 }
 
-function renderArrayCodecs(manifest: ZServiceManifest): string {
-  return manifestArrayTypes(manifest).map((type) => {
-    const element = zArrayElementType(type)!;
+function renderContainerCodecs(manifest: ZServiceManifest): string {
+  return manifestContainerTypes(manifest).map((type) => {
     const suffix = zWireCodecSuffix(type);
-    return `function decode${suffix}(value: unknown): ${tsType(type)} {
+    const element = zArrayElementType(type);
+    if (element) return `function decode${suffix}(value: unknown): ${tsType(type)} {
   if (!Array.isArray(value)) throw new TypeError("expected an array from Z service");
   return value.map(${codecName(element, "decode")});
 }
 
 function encode${suffix}(value: ${tsType(type)}): unknown[] {
   return value.map(${codecName(element, "encode")});
+}`;
+    const payload = zOptionPayloadType(type)!;
+    return `function decode${suffix}(value: unknown): ${tsType(type)} {
+  if (value === null) return null;
+  return ${codecName(payload, "decode")}(value);
+}
+
+function encode${suffix}(value: ${tsType(type)}): unknown {
+  if (value === null) return null;
+  return ${codecName(payload, "encode")}(value);
 }`;
   }).join("\n\n");
 }
@@ -174,7 +198,7 @@ function renderTypes(manifest: ZServiceManifest): string {
     assertIdentifier(type.name, "service type");
     const fields = type.fields.map((field) => {
       assertIdentifier(field.name, `${type.name} field`);
-      return `  ${field.name}: ${tsType(field.type)};`;
+      return `  ${field.name}${field.optional ? "?" : ""}: ${tsType(field.type)};`;
     }).join("\n");
     return `export interface ${type.name} {\n${fields}\n}`;
   }).join("\n\n");
@@ -186,7 +210,7 @@ function renderErrorTypes(manifest: ZServiceManifest): string {
     const details = `${type.name}Details`;
     const fields = type.fields.map((field) => {
       assertIdentifier(field.name, `${type.name} field`);
-      return `  ${field.name}: ${tsType(field.type)};`;
+      return `  ${field.name}${field.optional ? "?" : ""}: ${tsType(field.type)};`;
     }).join("\n");
     const defaultMessage = type.fields.some((field) => (
       field.name === "message" && field.type === "String"
@@ -210,12 +234,16 @@ function renderErrorTypes(manifest: ZServiceManifest): string {
 
 function renderNamedCodecs(types: ZServiceTypeMetadata[]): string {
   return types.map((type) => {
-    const decodeFields = type.fields.map((field) =>
-      `    ${field.name}: ${codecName(field.type, "decode")}(record.${field.name}),`
-    ).join("\n");
-    const encodeFields = type.fields.map((field) =>
-      `    ${field.name}: ${codecName(field.type, "encode")}(value.${field.name}),`
-    ).join("\n");
+    const decodeFields = type.fields.map((field) => {
+      const value = field.optional
+        ? `(record.${field.name} === undefined ? null : record.${field.name})`
+        : `record.${field.name}`;
+      return `    ${field.name}: ${codecName(field.type, "decode")}(${value}),`;
+    }).join("\n");
+    const encodeFields = type.fields.map((field) => {
+      const value = field.optional ? `(value.${field.name} ?? null)` : `value.${field.name}`;
+      return `    ${field.name}: ${codecName(field.type, "encode")}(${value}),`;
+    }).join("\n");
     return `function decode${type.name}(value: unknown): ${type.name} {
   const record = decodeRecord(value);
   return {
@@ -233,12 +261,18 @@ ${encodeFields}
 
 function renderErrorCodecs(manifest: ZServiceManifest): string {
   return manifest.errors.map((type) => {
-    const decoded = type.fields.map((field) =>
-      `    ${field.name}: ${codecName(field.type, "decode")}(record.${field.name}),`
-    ).join("\n");
-    const encoded = type.fields.map((field) =>
-      `    ${field.name}: ${codecName(field.type, "encode")}(value.details.${field.name}),`
-    ).join("\n");
+    const decoded = type.fields.map((field) => {
+      const fieldValue = field.optional
+        ? `(record.${field.name} === undefined ? null : record.${field.name})`
+        : `record.${field.name}`;
+      return `    ${field.name}: ${codecName(field.type, "decode")}(${fieldValue}),`;
+    }).join("\n");
+    const encoded = type.fields.map((field) => {
+      const fieldValue = field.optional
+        ? `(value.details.${field.name} ?? null)`
+        : `value.details.${field.name}`;
+      return `    ${field.name}: ${codecName(field.type, "encode")}(${fieldValue}),`;
+    }).join("\n");
     return `function decode${type.name}Details(value: unknown): ${type.name}Details {
   const record = decodeRecord(value);
   return {
@@ -385,7 +419,7 @@ function mapCall<T>(
 
 ${renderNamedCodecs(manifest.types)}
 
-${renderArrayCodecs(manifest)}
+${renderContainerCodecs(manifest)}
 
 ${renderErrorCodecs(manifest)}
 
@@ -397,23 +431,36 @@ ${manifest.services.map(renderService).join("\n\n")}
 
 function renderRuntimeCodecs(manifest: ZServiceManifest): string {
   const named = [...manifest.types, ...manifest.errors].map((type) => {
-    const decoded = type.fields.map((field) =>
-      `${JSON.stringify(field.name)}: ${codecName(field.type, "decode")}(value[${JSON.stringify(field.name)}])`
-    ).join(", ");
-    const encoded = type.fields.map((field) =>
-      `${JSON.stringify(field.name)}: ${codecName(field.type, "encode")}(value[${JSON.stringify(field.name)}])`
-    ).join(", ");
+    const decoded = type.fields.map((field) => {
+      const access = `value[${JSON.stringify(field.name)}]`;
+      const fieldValue = field.optional
+        ? `(${access} === undefined ? null : ${access})`
+        : access;
+      return `${JSON.stringify(field.name)}: ${codecName(field.type, "decode")}(${fieldValue})`;
+    }).join(", ");
+    const encoded = type.fields.map((field) => {
+      const access = `value[${JSON.stringify(field.name)}]`;
+      const fieldValue = field.optional ? `(${access} ?? null)` : access;
+      return `${JSON.stringify(field.name)}: ${codecName(field.type, "encode")}(${fieldValue})`;
+    }).join(", ");
     return `  const decode${type.name} = value => ({ ${decoded} });\n`
       + `  const encode${type.name} = value => ({ ${encoded} });`;
   }).join("\n");
-  const arrays = manifestArrayTypes(manifest).map((type) => {
-    const element = zArrayElementType(type)!;
+  const containers = manifestContainerTypes(manifest).map((type) => {
     const suffix = zWireCodecSuffix(type);
-    return `  const decode${suffix} = value => {
+    const element = zArrayElementType(type);
+    if (element) return `  const decode${suffix} = value => {
     if (!Array.isArray(value)) throw new TypeError("expected an array from Z service");
     return value.map(${codecName(element, "decode")});
   };\n`
       + `  const encode${suffix} = value => value.map(${codecName(element, "encode")});`;
+    const payload = zOptionPayloadType(type)!;
+    return `  const decode${suffix} = value => value === null
+    ? null
+    : ${codecName(payload, "decode")}(value);\n`
+      + `  const encode${suffix} = value => value === null
+    ? null
+    : ${codecName(payload, "encode")}(value);`;
   }).join("\n");
   return `  const decodeString = value => value;
   const encodeString = value => value;
@@ -426,7 +473,7 @@ function renderRuntimeCodecs(manifest: ZServiceManifest): string {
   const decodeI64 = value => BigInt(value);
   const encodeI64 = value => value.toString();
 ${named}
-${arrays}`;
+${containers}`;
 }
 
 export function renderZServiceWebviewRuntime(manifest: ZServiceManifest): string {

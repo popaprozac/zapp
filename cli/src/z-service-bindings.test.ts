@@ -133,6 +133,52 @@ describe("Z service binding generation", () => {
     expect(runtime).toContain("const encodeArrayOfArrayOfNote = value =>");
   });
 
+  it("maps explicit options to null and preserves optional field omission", () => {
+    const optional = structuredClone(manifest);
+    optional.types.push({
+      name: "NoteSelection",
+      module: "/app.zs",
+      fields: [
+        { name: "selected", type: "Option<Note>" },
+        { name: "subtitle", type: "Option<String>", optional: true },
+        { name: "related", type: "Option<Array<Note>>" },
+      ],
+    });
+    optional.services[0].methods.push({
+      id: 2,
+      name: "find",
+      input: "Option<u64>",
+      inputMode: "value",
+      returns: "Option<Note>",
+      asynchronous: false,
+      executorAffinity: null,
+      receiverMode: "in",
+    });
+
+    const bindings = renderZServiceBindings(optional);
+    expect(bindings).toContain("selected: Note | null;");
+    expect(bindings).toContain("subtitle?: string | null;");
+    expect(bindings).toContain("related: Array<Note> | null;");
+    expect(bindings).toContain(
+      "find(input: bigint | null, options?: InvokeOptions): CancellablePromise<Note | null>",
+    );
+    expect(bindings).toContain("function decodeOptionOfNote(value: unknown): Note | null");
+    expect(bindings).toContain("if (value === null) return null");
+    expect(bindings).toContain(
+      "subtitle: decodeOptionOfString((record.subtitle === undefined ? null : record.subtitle))",
+    );
+    expect(bindings).toContain(
+      "subtitle: encodeOptionOfString((value.subtitle ?? null))",
+    );
+
+    const runtime = renderZServiceWebviewRuntime(optional);
+    expect(runtime).toContain("const decodeOptionOfNote = value => value === null");
+    expect(runtime).toContain("const encodeOptionOfArrayOfNote = value => value === null");
+    expect(runtime).toContain(
+      '"subtitle": decodeOptionOfString((value["subtitle"] === undefined ? null : value["subtitle"]))',
+    );
+  });
+
   it("fails closed when nominal and collection codec names collide", () => {
     const invalid = structuredClone(manifest);
     invalid.types.push({

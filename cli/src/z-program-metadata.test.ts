@@ -260,6 +260,55 @@ describe("compiler-produced Z program metadata", () => {
     expect(derived.types.filter((type) => type.name === "Note")).toHaveLength(1);
   });
 
+  it("derives explicit options and optional struct fields as distinct wire contracts", () => {
+    const optional = structuredClone(metadata);
+    const input = optional.modules[0].symbols.find(
+      (symbol) => symbol.name === "CreateNoteInput",
+    )!;
+    input.typeSignature!.fields.push({
+      name: "subtitle",
+      typeName: "Option<String>",
+      visibility: "public",
+      optionalField: true,
+    });
+    const service = optional.modules[0].symbols.find(
+      (symbol) => symbol.name === "NotesService",
+    )!;
+    service.typeSignature!.methods.push({
+      name: "find",
+      staticMethod: false,
+      visibility: "public",
+      receiverMode: "in",
+      signature: {
+        asynchronous: false,
+        executorAffinity: null,
+        parameterModes: ["value"],
+        parameterTypes: ["Option<u64>"],
+        returnType: "Option<Note>",
+        errorType: null,
+      },
+    });
+
+    const derived = deriveZServiceManifest(optional);
+    expect(derived.types.find((type) => type.name === "CreateNoteInput")?.fields)
+      .toContainEqual({
+        name: "subtitle",
+        type: "Option<String>",
+        optional: true,
+      });
+    expect(derived.services[0].methods).toContainEqual({
+      id: zServiceMethodId("notes.find"),
+      name: "find",
+      input: "Option<u64>",
+      inputMode: "value",
+      returns: "Option<Note>",
+      asynchronous: false,
+      executorAffinity: null,
+      receiverMode: "in",
+    });
+    expect(derived.types.filter((type) => type.name === "Note")).toHaveLength(1);
+  });
+
   it("assigns stable static method IDs", () => {
     expect(zServiceMethodId("notes.create")).toBe(3_539_395_672);
     expect(zServiceMethodId("notes.count")).toBe(1_604_992_403);

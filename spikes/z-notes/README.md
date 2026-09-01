@@ -120,12 +120,16 @@ scope close/join all execute without a Stage 0 override.
 `NotesCore` is a normal readonly ARC class with synchronized state and owns the
 single implementation of `create`, `count`, JSON decoding, and JSON encoding.
 `NotesService` is the application-owned service. Its public `create` and
-`count` methods are the frontend API. `count` is a real main-executor `async`
-method, while `create` is synchronous Z and throws an exported
-`NoteCreationError` for an empty title. Generated dispatch preserves that
+`count` methods are the frontend API. `create` is a suspending main-executor
+method and throws an exported `NoteCreationError` for an empty title. `count`
+is synchronous and main-isolated; generated dispatch taskifies that placement
+without changing the authored API. Generated dispatch preserves that
 declared Z error as a typed WebView failure with decoded `details`; it remains
 separate from cancellation's `AbortError`. Generated TypeScript bindings expose
-both service invocations uniformly as cancellable promises. The build now
+both service invocations uniformly as cancellable promises.
+`CreateNoteInput.subtitle?: String` proves an omitted Web input becomes Z
+`Option.none`; the returned `Note` exposes that absence as JSON `null` and a
+generated `string | null` TypeScript field. The build now
 generates and installs its checked `AsyncService` dispatcher plus lifecycle
 forwarder into the isolated staged application. The original `main.zs` remains
 unchanged. One `register` call derives the async dispatcher and lifecycle
@@ -146,8 +150,8 @@ adapter around the same `NotesCore`. This keeps that host from importing task
 runtime code merely to exercise direct native invocation. It is a transport
 boundary, not a second implementation of the Notes domain.
 
-The cancellable `count` request genuinely suspends through scheduler-aware
-`delay`. The
+The cancellable `count` request crosses the generated task wrapper and explicit
+main-executor placement even though the authored method is synchronous. The
 WebKit callback transfers its owned message into the application's `TaskScope`,
 which keeps the operation structured until the response is delivered on
 `thread.main`. A standard browser `AbortSignal` rejects the frontend request
@@ -203,8 +207,8 @@ evidence after creating a note directly:
 
 ```text
 Notes: notes service started
-visible WebView round trip window=1 request=3 ok=true hmr=packaged inject=ready payload={"id":"1","title":"WebView note"}
-visible WebView round trip window=2 request=2 ok=true hmr=packaged inject=ready payload={"id":"2","title":"WebView note"}
+visible WebView round trip window=1 request=6 ok=true hmr=packaged inject=ready payload={"id":"1","title":"WebView note","subtitle":null}
+visible WebView round trip window=2 request=4 ok=true hmr=packaged inject=ready payload={"id":"2","title":"WebView note","subtitle":null}
 Notes: notes service stopped
 ```
 
