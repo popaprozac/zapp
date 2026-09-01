@@ -73,7 +73,9 @@ Frontend code imports these capabilities from `@zappdev/runtime/window`. That
 focused boundary exposes the composed factories, handle operations, and
 focus/blur/resize subscriptions without carrying forward the legacy `Window`
 namespace. New capabilities join it only after their Z-owned native route and
-frontend contract work together end to end.
+frontend contract work together end to end. Resize delivers the same
+`{ windowId, size }` value as Z's `WindowResizedEvent`; it does not manufacture
+position or timestamp fields that the native event did not provide.
 
 The frontend window factory is allowed explicitly by
 `security.permissions: ["window:create"]`. Zapp mirrors that manifest for a

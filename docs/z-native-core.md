@@ -150,6 +150,11 @@ exports `currentWindow`, `createWindow`, the implemented event vocabulary, and
 the narrow `WindowHandle` contract without exposing the legacy `Window`
 namespace. Additional operations enter this boundary only after their native Z
 path, permissions, lifecycle, and frontend behavior are proven end to end.
+Its event payloads mirror Z directly: resize carries `windowId` plus a
+`WindowSize`, while position belongs to a future movement or bounds contract.
+Dimensions are native content-region values in logical display units (macOS
+points and Windows DIPs), never physical device pixels. Delivery timestamps are
+not fabricated as native event data.
 
 The Objective-C host owns the process/run-loop adapter, native service-response
 delivery, and smoke observation rather than application object construction or
