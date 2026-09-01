@@ -1,14 +1,19 @@
 import console from "std/console";
 import { thread } from "std/thread";
+import { delay } from "std/time";
 import native from "zapp_worker_zjs.h";
 import {
   WorkerEngine,
+  WorkerCommand,
   WorkerLifecycle,
+  WorkerMailbox,
+  WorkerMessage,
   WorkerModule,
+  createWorkerMailbox,
   runWorkerEngine,
 } from "./worker-engine.zs";
 
-const workerModule: cstring = "setTimeout(() => { __zappServiceAdd(20, 22); }, 5);";
+const workerModule: cstring = "export function onCommand(left, right) { setTimeout(() => { __zappServiceAdd(left, right); }, 5); }";
 
 // This is the checked Z implementation reached directly from the embedded JS
 // engine. The C ABI is an internal adapter seam, not a public application API.
@@ -33,6 +38,16 @@ struct ZjsWorkerEngine implements WorkerEngine {
     return native.zapp_zjs_engine_has_pending_work(this.handle) != 0;
   }
 
+  function dispatch(inout this, in command: WorkerCommand): i32 {
+    return match (in command) {
+      message(value) => native.zapp_zjs_engine_dispatch(
+        this.handle,
+        value.left,
+        value.right
+      );
+    };
+  }
+
   function nextWakeMilliseconds(): i64 {
     return native.zapp_zjs_engine_next_wake_milliseconds(this.handle);
   }
@@ -41,26 +56,58 @@ struct ZjsWorkerEngine implements WorkerEngine {
     return native.zapp_zjs_engine_pump(this.handle);
   }
 
+  function isComplete(): boolean {
+    return native.zapp_zjs_engine_is_complete(this.handle) != 0;
+  }
+
   function result(): i32 {
     return native.zapp_zjs_engine_result(this.handle);
   }
 }
 
-function executeWorkerModule(): i32 {
+function executeWorkerModule(in mailbox: WorkerMailbox): WorkerLifecycle {
   const engine = native.zapp_zjs_engine_create();
-  if (engine == null) return -100;
+  if (engine == null) return WorkerLifecycle.failed(100);
 
   let adapter = ZjsWorkerEngine({ handle: move engine });
   const module = WorkerModule({ source: workerModule });
-  return match (runWorkerEngine(inout adapter, in module)) {
-    stopped(value) => value;
-    failed(code) => -code;
-  };
+  return runWorkerEngine(inout adapter, in module, in mailbox);
 }
 
 async function main(): i32 {
-  const worker = thread.spawn((): i32 => executeWorkerModule());
+  const commands = createWorkerMailbox();
+  const worker = thread.spawn(
+    move (): WorkerLifecycle => executeWorkerModule(in commands)
+  );
+  await delay(1);
+  const accepted = commands.post(WorkerCommand.message(WorkerMessage({
+    left: 20,
+    right: 22,
+  })));
+  if (!accepted) return 1;
+
   const result = await worker;
-  console.log(`ZJS worker called Z directly and returned ${result}`);
-  return result - 42;
+  const value = match (result) {
+    stopped(observed) => observed;
+    cancelled(_) => -2;
+    failed(code) => -code;
+  };
+  if (value != 42) return 2;
+
+  const cancellation = createWorkerMailbox();
+  const cancelledWorker = thread.spawn(
+    move (): WorkerLifecycle => executeWorkerModule(in cancellation)
+  );
+  await delay(1);
+  if (!cancellation.requestCancellation()) return 3;
+  const cancelledResult = await cancelledWorker;
+  const cancelledCleanly = match (cancelledResult) {
+    cancelled(_) => true;
+    _ => false;
+  };
+  if (!cancelledCleanly) return 4;
+
+  console.log(`ZJS worker processed a Z command and returned ${value}`);
+  console.log("ZJS worker observed cancellation and joined cleanly");
+  return 0;
 }

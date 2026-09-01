@@ -6,9 +6,15 @@ declare module "zapp_worker_zjs.h" {
     in engine: _,
     in source: _
   ): _;
+  export function zapp_zjs_engine_dispatch(
+    in engine: _,
+    left: _,
+    right: _
+  ): _;
   export function zapp_zjs_engine_has_pending_work(in engine: _): _;
   export function zapp_zjs_engine_next_wake_milliseconds(in engine: _): _;
   export function zapp_zjs_engine_pump(in engine: _): _;
+  export function zapp_zjs_engine_is_complete(in engine: _): _;
   export function zapp_zjs_engine_result(in engine: _): _;
   export function zapp_zjs_engine_error(
     in engine: _
