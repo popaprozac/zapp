@@ -1053,7 +1053,7 @@ export type WorkerEngine =
 // Both call sites (zapp-cli.ts:154, :460) treat the return value as a
 // truthy/null check; they never read which specific engine came back.
 // The order below matches the documented fallback chain in
-// cli/src/config.ts:HeadlessWorkerConfig:
+// cli/src/config.ts:ApplicationWorkerConfig:
 // `zjs > bare-jsc > bare-v8 > bare-hermes > bare-quickjs > bare-mqjs`.
 export async function hasAnyWorkerEngine(root: string): Promise<WorkerEngine | null> {
   const buildFile = path.join(root, "zapp", "build.zc");
@@ -1240,7 +1240,7 @@ async function buildNativeNim(
   // zjs-only headless-worker spawn module. `zapp_start_headless_workers()` is
   // called at app boot (app.nim's run()). Only `engine: "zjs"` entries emit a
   // spawn call; other engines aren't wired in the Nim path.
-  const headlessNim = renderHeadlessNim(config.headless);
+  const headlessNim = renderHeadlessNim(config.applicationWorkers);
   await fs.writeFile(path.join(zappDir, "zapp_headless.nim"), headlessNim, "utf-8");
 
   // webEngine gate (T2): `chromium` on macOS pulls in the CEF build. Everything

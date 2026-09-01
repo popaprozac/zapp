@@ -63,17 +63,6 @@ export default defineConfig({
     },
   },
 
-  workers: {
-    capabilities: ["fetch", "websocket"],
-    headless: {
-      sync: {
-        script: "src/workers/sync.ts",
-        engine: "zjs",
-        restart: { maxRetries: 3, withinMs: 60_000 },
-      },
-    },
-  },
-
   security: {
     permissions: ["clipboard:read", "notifications", "window:create"],
     capabilities: {
@@ -84,10 +73,26 @@ export default defineConfig({
       diagnostics: {
         services: ["notes.count"],
       },
+      backgroundSync: {
+        services: ["notes.list", "notes.synchronize"],
+      },
     },
     filesystem: {
       allow: ["$userData/**"],
       persistDialogGrants: true,
+    },
+  },
+
+  workers: {
+    // Runtime-module selection is provisional while ZJS is rewritten in Z.
+    modules: ["fetch", "websocket"],
+    application: {
+      sync: {
+        script: "src/workers/sync.ts",
+        engine: "zjs",
+        capabilities: ["backgroundSync"],
+        restart: { maxRetries: 3, withinMs: 60_000 },
+      },
     },
   },
 
@@ -114,6 +119,24 @@ The platform spellings in authored maps are `macOS`, `iOS`, `windows`, and
 `linux`. Misspellings such as `macos` fail validation instead of silently
 dropping target-specific configuration. Target packaging blocks are exposed as
 their implementations become real; macOS and iOS are currently typed.
+
+## Worker authority and lifetime
+
+`workers.application` contains workers that start after registered services and
+stop before those services during application teardown. Each map key is a
+worker identity; its `capabilities` array selects trusted profiles declared
+under `security.capabilities`.
+
+Capability selection is additive and frozen at build time. Omitting a worker's
+`capabilities` grants no native permissions or service methods. Unknown and
+duplicate profile names fail configuration loading. The generated native worker
+metadata contains the fully expanded permission and service-method set, so
+worker JavaScript never chooses its own authority.
+
+`workers.modules` is deliberately separate. It currently selects optional
+web-compatible runtime facilities for bare-engine adapters; it does not grant
+native authority. Its exact vocabulary remains provisional while ZJS is
+rewritten in Z and its compile-time feature trimming is pressure-tested.
 
 ## Contextual configuration
 

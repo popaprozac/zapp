@@ -25,7 +25,7 @@ export default defineConfig({
   // the CEF page. Declaring any worker is also what compiles a worker engine
   // into the binary — without one the build reports "workers disabled".
   workers: {
-    headless: {
+    application: {
       ticker: { script: "src/ticker.ts", name: "ticker", engine: "zjs" },
     },
   },

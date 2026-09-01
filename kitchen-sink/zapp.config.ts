@@ -16,7 +16,7 @@ export default defineConfig({
   // is also what compiles a worker engine into the native binary (without a
   // declared worker, the build reports "workers disabled").
   workers: {
-    headless: {
+    application: {
       greeter: { script: "src/worker.ts", name: "greeter", engine: "zjs" },
     },
   },

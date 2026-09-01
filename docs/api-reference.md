@@ -2454,7 +2454,7 @@ use `new Worker()` the same way.)
 > **`SharedWorker` is not provided by `@zappdev/runtime`.** `new SharedWorker()`
 > (without a Zapp import) is the platform-native web API (WKWebView / WebView2).
 > For a Zapp-engine background worker that any window — or the backend — can
-> talk to, use a **headless** worker (`zapp.config.ts` `workers.headless`) plus the
+> talk to, use an **application** worker (`zapp.config.ts` `workers.application`) plus the
 > `Workers` namespace below; it's named, supervised, and app-scoped.
 
 ### `new Worker(scriptUrl: string, opts?: { name?: string })`
@@ -2490,29 +2490,30 @@ just avoids a switch statement in your handler.
 ### `Workers.terminate(id: string): void`
 
 Terminate a worker by ID. Use this when you only have a string ID and
-no live `Worker` handle — most commonly for **headless workers**
-configured via `zapp.config.ts`'s `workers.headless` map, since those are
+no live `Worker` handle — most commonly for **application workers**
+configured via `zapp.config.ts`'s `workers.application` map, since those are
 started by the framework and never expose a JS-side `Worker` instance.
 
 Recognised ID forms:
 - `"w-N"` — dedicated worker instance (same effect as
   `worker.terminate()`).
-- `"h-<key>"` — headless worker keyed by `zapp.config.ts`. For
-  `headless: { sync: "..." }` the runtime ID is `"h-sync"`.
+- `"h-<key>"` — application worker keyed by `zapp.config.ts` (the `h-` runtime
+  prefix is retained during the native-backend migration). For
+  `application: { sync: "..." }` the runtime ID is `"h-sync"`.
 
 Unknown IDs are a silent no-op (native logs but doesn't throw).
 
 ```ts
 import { Workers } from "@zappdev/runtime";
 
-// Stop the headless sync worker — e.g. user toggled "Pause sync".
+// Stop the application sync worker — e.g. user toggled "Pause sync".
 Workers.terminate("h-sync");
 ```
 
 ### `Workers.list(): Promise<WorkerInfo[]>`
 
 Enumerate the active worker registry — a runtime debug / introspection
-API. Returns one `WorkerInfo` per live worker (headless and dedicated).
+API. Returns one `WorkerInfo` per live worker (application and dedicated).
 Available from both webview and worker contexts; same shape
 either way (the webview round-trips through native IPC, a worker calls
 its host bridge directly — both resolve to the same array).
@@ -2538,13 +2539,13 @@ console.log(JSON.stringify(workers, null, 2));
 
 ```ts
 interface WorkerInfo {
-  id: string;                    // runtime id — "h-<key>" (headless), "w-N" (dedicated)
+  id: string;                    // runtime id — "h-<key>" (application), "w-N" (dedicated)
   name?: string;                 // display label, if set (config or new Worker)
   scriptUrl: string;
   engine: "zjs" | "bare-jsc" | "bare-v8" | "bare-quickjs"
         | "bare-mqjs" | "bare-hermes" | "pending";  // "pending" = not yet resolved
   shared: boolean;
-  owners: string[];              // owning window ids (empty for headless)
+  owners: string[];              // owning window ids (empty for application workers)
   supervisor?: {                 // present only for workers with a restart policy
     maxRetries: number;
     withinMs: number;
@@ -2557,7 +2558,7 @@ interface WorkerInfo {
 ### `Workers.get(id: string): WorkerHandle`
 
 The complement to `list()` (discover) → `get()` (interact). Returns a
-lightweight handle to a worker you didn't create — chiefly a **headless**
+lightweight handle to a worker you didn't create — chiefly an **application**
 worker, which has no JS-side `Worker` instance. Instead of repeating the id to
 `Workers.send`/`terminate`, hold a handle that mirrors the `Worker` instance
 surface.
@@ -2570,7 +2571,7 @@ isn't running.
 ```ts
 import { Workers } from "@zappdev/runtime";
 
-const db = Workers.get("h-db");        // for headless: { db: "..." }
+const db = Workers.get("h-db");        // for application: { db: "..." }
 db.send("write", { row: { id: 1 } });  // → the worker's self.receive("write")
 const info = await db.info();          // WorkerInfo | null
 db.terminate();
@@ -2587,7 +2588,7 @@ interface WorkerHandle {
 ```
 
 > Subscribing to messages *from* a worker via a handle (`handle.receive(...)`,
-> webview ← headless) isn't available yet — a headless worker has no single
+> webview ← application worker) isn't available yet — an application worker has no single
 > owner webview, so it needs worker→subscriber addressing (planned follow-up).
 > Today, the creating webview of a dedicated `new Worker()` receives via
 > `worker.onmessage` / `worker.receive(...)` as usual.
@@ -2596,11 +2597,12 @@ interface WorkerHandle {
 registry. `name` is omitted when unset, and `supervisor` is omitted for
 workers without a `restart` policy.
 
-### Headless workers — `HeadlessWorkerConfig`
+### Application workers — `ApplicationWorkerConfig`
 
-Headless workers are background JS threads the framework spawns at app
-startup. They live in `zapp.config.ts`'s `workers.headless` map and run for the
-app's lifetime (subject to the optional supervisor restart policy).
+Application workers are background JS threads the framework starts after
+services. They live in `zapp.config.ts`'s `workers.application` map and stop
+before services during application teardown (subject to the optional supervisor
+restart policy).
 
 ```ts
 // zapp.config.ts
@@ -2613,7 +2615,7 @@ export default defineConfig({
     version: "0.1.0",
   },
   workers: {
-    headless: {
+    application: {
       ticker: {
         script: "src/workers/ticker.ts",
         engine: "zjs",        // optional; see "Engine selection" below
@@ -2641,7 +2643,7 @@ what per-worker log lines use (`[zapp/sync-engine] ...` instead of
 
 ### Engine selection — `engine: "..."`
 
-Each headless worker picks an engine. The discriminated-union type
+Each application worker picks an engine. The discriminated-union type
 constrains `bytecode` to engines that support AOT:
 
 | Engine | Available `bytecode: true` | Notes |
@@ -2661,23 +2663,23 @@ documented chain (`zjs > bare-jsc > bare-v8 > bare-hermes > bare-quickjs
 For the full taxonomy + when-to-pick guidance, see
 [`docs/engines.md`](engines.md).
 
-### Worker capabilities — `workers.capabilities`
+### Worker runtime modules — `workers.modules`
 
 Bare-* engines don't ship web APIs intrinsically — `fetch`, `WebSocket`,
 `crypto`, etc. come from à-la-carte `bare-*` packages. Declare the
-capabilities your workers need in `zapp.config.ts` and the CLI installs
+modules your workers need in `zapp.config.ts` and the CLI installs
 the matching packages, links the native bindings, and the Vite plugin
 auto-imports the worker-globals shim.
 
 ```ts
 workers: {
-  capabilities: ["fetch", "websocket", "crypto"],
+  modules: ["fetch", "websocket", "crypto"],
 }
 ```
 
-Capability → package → global:
+Module → package → global:
 
-| Capability | Package(s) | Worker global |
+| Module | Package(s) | Worker global |
 |---|---|---|
 | `"fetch"` | `bare-fetch` | `fetch` |
 | `"websocket"` | `bare-ws` | `WebSocket` |
@@ -2687,11 +2689,13 @@ Capability → package → global:
 | `"url"` | `bare-url` | `URL`, `URLSearchParams` |
 | `"encoding"` | `bare-encoding` | `TextEncoder`, `TextDecoder` |
 
-`workers.capabilities` only affects bare-* engines. On `zjs`, the runtime layer
+`workers.modules` only affects bare-* engines. On `zjs`, the runtime layer
 provides intrinsics as they mature; bare-* shims are skipped (the
 declared module is a no-op for zjs workers). If you mix engines, the
 intersection is what each worker actually gets — declare the union of
-capabilities, and per-engine reality decides what runs.
+modules, and per-engine reality decides what runs. This runtime-module
+vocabulary remains provisional while the ZJS rewrite establishes its own
+compile-time feature-trimming model.
 
 `fs` is the only capability that doesn't expose a global — `bare-fs` is
 imported explicitly via `import { readFile } from "@zappdev/runtime/bare/fs"`
@@ -2853,7 +2857,7 @@ Your `zapp/build.zc` is **service code** — Zen-C imports,
 `app.service.add(...)` registrations, and handler `fn`s. The framework
 injects all platform boilerplate (system frameworks, link flags, ObjC
 ARC, sysroot) into `.zapp/zapp_platform.zc` and derives worker engines
-from `zapp.config.ts`'s `workers.headless[].engine`, so the default template
+from `zapp.config.ts`'s `workers.application[].engine`, so the default template
 carries no `//> framework:` / `//> link:` directives or
 `ZAPP_WORKER_ENGINE_*` defines.
 

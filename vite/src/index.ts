@@ -693,13 +693,13 @@ export interface ZappOptions {
    */
   headless?: Record<string, string | { script: string; restart?: unknown; engine?: string; bytecode?: boolean }>;
   /**
-   * Worker capabilities (see ZappConfig.workers.capabilities). For each entry
+   * Provisional worker runtime modules (see ZappConfig.workers.modules). For each entry
    * we prepend `import "@zappdev/runtime/worker-globals/<subpath>"` to
    * every bundled worker entry, so the matching globals (fetch,
    * WebSocket, etc.) are installed without per-worker boilerplate.
    *
    * Optional direct override for integration authors. Ordinary applications
-   * receive `workers.capabilities` through the resolved CLI snapshot.
+   * receive `workers.modules` through the resolved CLI snapshot.
    */
   workerModules?: string[];
 }
@@ -712,10 +712,10 @@ async function resolveWorkerOptions(
   if (!existsSync(snapshotPath)) return authored ?? {};
   try {
     const snapshot = JSON.parse(await readFile(snapshotPath, "utf8")) as {
-      config?: ZappOptions;
+      config?: ZappOptions & { applicationWorkers?: ZappOptions["headless"] };
     };
     return {
-      headless: authored?.headless ?? snapshot.config?.headless,
+      headless: authored?.headless ?? snapshot.config?.applicationWorkers,
       workerModules: authored?.workerModules ?? snapshot.config?.workerModules,
     };
   } catch (error) {

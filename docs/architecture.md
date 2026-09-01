@@ -29,7 +29,7 @@ users import).
   │  (Svelte/React/etc)     │      │  (TS, unified API)              │
   └─────────────────────────┘      └─────────────────────────────────┘
           one per window                  one per `new Worker()`
-                                          or per headless: {} entry
+                                          or per application: {} entry
 ```
 
 ## Layer 1: native core
@@ -332,7 +332,7 @@ This is why heavy IPC loops belong in workers, not webviews. WKWebView's
 async userContentController dispatch is a kernel-level round-trip that
 can't be sped up.
 
-## Why "headless" and not "backend"?
+## Why application workers instead of a backend singleton?
 
 `backend: true` in the AppConfig used to spawn a single privileged JS
 context for app-level work. That design had two problems:
@@ -344,12 +344,13 @@ context for app-level work. That design had two problems:
 
 0.6.0-alpha collapsed the backend worker into the regular worker slot
 system. Now:
-- You can have as many headless workers as you want, declared in
-  `zapp.config.ts → workers.headless: { id: path }`.
-- Every worker (headless or webview-spawned) uses the same bootstrap and
+- You can have as many application workers as you want, declared in
+  `zapp.config.ts → workers.application: { id: path }`.
+- Every worker (application or webview-spawned) uses the same bootstrap and
   gets the same host objects.
-- The name "backend" reads as "web server backend" — we renamed to
-  "headless" (no owning window) which matches the actual mechanic.
+- The public name states the lifetime directly: application workers start after
+  services and stop before services. Legacy native internals may still use the
+  earlier `headless` name while those backends are retired.
 
 ## Further reading
 

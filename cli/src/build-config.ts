@@ -591,7 +591,7 @@ export async function generateHeadlessWorkers(opts: {
     name?: string;
     restart?: { maxRetries?: number; withinMs?: number } | false;
     engine?: "bare-jsc" | "bare-v8" | "bare-quickjs" | "bare-mqjs" | "bare-hermes" | "zjs";
-    bytecode?: boolean;  // type-narrowed at the user-facing HeadlessWorkerConfig boundary
+    bytecode?: boolean;  // type-narrowed at the user-facing ApplicationWorkerConfig boundary
   }>;
 }): Promise<string> {
   const { root, headless } = opts;
@@ -709,7 +709,7 @@ export async function generateIOSBuildFile(
   // engine-overlay generator looks at — they need to stay in sync
   // so the iOS build sees the same engine list as the macOS build.
   const configEngines = new Set<string>();
-  for (const value of Object.values(config?.headless ?? {})) {
+  for (const value of Object.values(config?.applicationWorkers ?? {})) {
     if (typeof value === "object" && value && "engine" in value && value.engine) {
       configEngines.add(value.engine);
     }
@@ -825,7 +825,7 @@ export async function generateEngineOverlay(opts: {
 
   // 2. Walk headless config — pick up any `engine:` field.
   const wanted = new Set<string>();
-  for (const value of Object.values(config.headless ?? {})) {
+  for (const value of Object.values(config.applicationWorkers ?? {})) {
     if (typeof value === "object" && value && "engine" in value && value.engine) {
       wanted.add(value.engine);
     }
@@ -844,7 +844,9 @@ export async function generateEngineOverlay(opts: {
   //    duplicate engine in the binary, wrong worker engine picked at
   //    runtime if the resolver downgrade chain crosses them.
   const anyDeclared = Object.values(have).some(Boolean);
-  const hasWorkers = (config.headless && Object.keys(config.headless).length > 0)
+  const hasWorkers = (
+    config.applicationWorkers && Object.keys(config.applicationWorkers).length > 0
+  )
     || wanted.size > 0;
   if (!anyDeclared && wanted.size === 0 && hasWorkers) {
     // Defer the import — keep this file's deps narrow.

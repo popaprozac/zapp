@@ -211,7 +211,9 @@ async function runDev(root: string) {
   // overlay below to bridge the latter into the build. If a project has
   // workers but neither, we default to the platform's bare engine.
   const workerEngine = await hasAnyWorkerEngine(root);
-  const hasHeadlessWorkers = !!(config.headless && Object.keys(config.headless).length > 0);
+  const hasHeadlessWorkers = !!(
+    config.applicationWorkers && Object.keys(config.applicationWorkers).length > 0
+  );
   if (!workerEngine && !hasHeadlessWorkers) {
     // No workers anywhere. The build still succeeds — the user just
     // doesn't get the worker subsystem. Webview Workers still work.
@@ -271,7 +273,10 @@ async function runDev(root: string) {
   // 4. Generate build config + bootstrap (dev mode)
   const buildConfigFile = await generateBuildConfig({ root, config, mode: "dev", devUrl, target });
   const platformFile = await generatePlatformConfig(root, target, iosBuildFile ?? undefined, engineOverlayFile ?? undefined, config);
-  const headlessFile = await generateHeadlessWorkers({ root, headless: config.headless });
+  const headlessFile = await generateHeadlessWorkers({
+    root,
+    headless: config.applicationWorkers,
+  });
   const zappDir = path.join(root, ".zapp");
   clog(1, "generating bootstrap...");
   const bootstrapFile = await generateBootstrap(zappDir);
@@ -573,7 +578,9 @@ async function runBuild(
   // map (auto-overlay below pulls it into the build). When neither
   // exists, workers are silently disabled and the binary stays small.
   const workerEngine = await hasAnyWorkerEngine(root);
-  const hasHeadlessWorkers = !!(config.headless && Object.keys(config.headless).length > 0);
+  const hasHeadlessWorkers = !!(
+    config.applicationWorkers && Object.keys(config.applicationWorkers).length > 0
+  );
   if (!workerEngine && !hasHeadlessWorkers) {
     clog(0, "no worker engine configured — workers disabled.");
   }
@@ -668,7 +675,10 @@ async function runBuild(
   // 6. Generate build config + bootstrap (prod mode, embedded assets)
   const buildConfigFile = await generateBuildConfig({ root, config, mode: "prod", embedAssets: true, target });
   const platformFile = await generatePlatformConfig(root, target, undefined, engineOverlayFile ?? undefined, config);
-  const headlessFile = await generateHeadlessWorkers({ root, headless: config.headless });
+  const headlessFile = await generateHeadlessWorkers({
+    root,
+    headless: config.applicationWorkers,
+  });
   const bootstrapFile = await generateBootstrap(zappDir);
 
   // 5. Compile native binary (assets embedded in binary)

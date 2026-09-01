@@ -266,14 +266,15 @@ export default defineConfig({
     identifier: "${identifier}",
     version: "0.1.0",
   },
-  // Add headless TypeScript workers that start when the app boots.
+  // Add application TypeScript workers that start after services and stop
+  // before services during application teardown.
   // New projects default to \`engine: "zjs"\` — first-party,
   // cross-platform, small, iOS-friendly. On macOS you can opt into
   // \`engine: "bare-jsc"\` for JIT (zero bundle cost via system JSC)
   // at the price of opting into bare-* packages for web APIs.
   //
   //   workers: {
-  //     headless: {
+  //     application: {
   //       db: { script: "src/workers/db.ts", engine: "zjs" },
   //     },
   //   },

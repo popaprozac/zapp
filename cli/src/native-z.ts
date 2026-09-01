@@ -880,6 +880,7 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
     parseZProgramMetadata,
   } = await import("./z-program-metadata");
   const { resolveCapabilityProfiles } = await import("./capabilities");
+  const { resolveApplicationWorkers } = await import("./application-workers");
   const { bundleWebviewBootstrapRaw } = await import(
     path.join(resolveBootstrapDir(), "codegen.ts")
   );
@@ -917,6 +918,10 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
     options.config,
     serviceManifest,
   );
+  const applicationWorkers = resolveApplicationWorkers(
+    options.config,
+    capabilityProfiles,
+  );
   await writeFile(
     path.join(stagedFramework, "configured-application.zs"),
     renderZApplicationMetadata(options.config, capabilityProfiles),
@@ -925,6 +930,11 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
   await writeFile(
     path.join(stage, "capabilities.zmeta.json"),
     `${JSON.stringify({ schemaVersion: 1, profiles: capabilityProfiles }, null, 2)}\n`,
+    "utf8",
+  );
+  await writeFile(
+    path.join(stage, "application-workers.zmeta.json"),
+    `${JSON.stringify({ schemaVersion: 1, workers: applicationWorkers }, null, 2)}\n`,
     "utf8",
   );
   await writeFile(

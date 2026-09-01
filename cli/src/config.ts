@@ -323,11 +323,13 @@ type ScriptOnlyEngine = "bare-jsc" | "bare-v8" | "bare-quickjs" | "bare-mqjs";
 /** Union of all engine identifiers. */
 export type WorkerEngineName = BytecodeCapableEngine | ScriptOnlyEngine;
 
-interface HeadlessWorkerConfigBase {
+interface ApplicationWorkerConfigBase {
   /** Script path (same as the bare-string form). */
   script: string;
   /** Display label shown in logs and Workers.list(). Optional. */
   name?: string;
+  /** Trusted native authority profiles frozen when this worker is created. */
+  capabilities?: string[];
   /** Optional restart policy. Omit / `false` to disable auto-restart. */
   restart?: RestartPolicy | false;
 }
@@ -368,8 +370,8 @@ interface HeadlessWorkerConfigBase {
  * logs the downgrade and tries
  * `zjs > bare-jsc > bare-v8 > bare-hermes > bare-quickjs > bare-mqjs`.
  */
-export type HeadlessWorkerConfig =
-  | (HeadlessWorkerConfigBase & {
+export type ApplicationWorkerConfig =
+  | (ApplicationWorkerConfigBase & {
       engine?: BytecodeCapableEngine;
       /**
        * Pre-compile the worker bundle to bytecode at build time. Only
@@ -377,7 +379,7 @@ export type HeadlessWorkerConfig =
        */
       bytecode?: boolean;
     })
-  | (HeadlessWorkerConfigBase & {
+  | (ApplicationWorkerConfigBase & {
       engine: ScriptOnlyEngine;
       /** This engine does not support bytecode pre-compilation. */
       bytecode?: never;
@@ -548,10 +550,13 @@ export interface WebviewConfig {
 }
 
 export interface WorkersConfig {
-  /** Headless workers started with application lifetime, keyed by ID. */
-  headless?: Record<string, string | HeadlessWorkerConfig>;
-  /** Web-compatible capabilities installed into first-party workers. */
-  capabilities?: WorkerModuleId[];
+  /** Workers started after services and stopped before services, keyed by ID. */
+  application?: Record<string, string | ApplicationWorkerConfig>;
+  /**
+   * Provisional web-compatible runtime modules installed into first-party
+   * workers. This vocabulary remains under review with the ZJS rewrite.
+   */
+  modules?: WorkerModuleId[];
 }
 
 export interface SecurityConfig {
@@ -658,7 +663,7 @@ export interface ResolvedConfig {
   assetDir: string;
   devPort?: number;
   compressAssets?: boolean;
-  headless?: Record<string, string | HeadlessWorkerConfig>;
+  applicationWorkers?: Record<string, string | ApplicationWorkerConfig>;
   workerModules?: WorkerModuleId[];
   deepLinkSchemes?: string[];
   protocols?: string[];
@@ -933,6 +938,121 @@ export function validateCapabilityProfiles(
   }
 }
 
+export function validateWorkers(
+  workers: WorkersConfig | undefined,
+  profiles: Record<string, CapabilityProfileConfig> | undefined,
+): void {
+  if (workers === undefined) return;
+  if (workers === null || typeof workers !== "object" || Array.isArray(workers)) {
+    throw new Error("[zapp] workers must be an object");
+  }
+  const allowedWorkerKeys = new Set(["application", "modules"]);
+  for (const key of Object.keys(workers)) {
+    if (!allowedWorkerKeys.has(key)) {
+      throw new Error(
+        `[zapp] workers.${key} is unknown; use application or modules`,
+      );
+    }
+  }
+
+  const modules = workers.modules;
+  if (modules !== undefined) {
+    if (!Array.isArray(modules)) {
+      throw new Error("[zapp] workers.modules must be a string[]");
+    }
+    const knownModules = new Set(Object.keys(WORKER_MODULE_CAPABILITIES));
+    const seenModules = new Set<string>();
+    for (const module of modules) {
+      if (typeof module !== "string" || !knownModules.has(module)) {
+        throw new Error(
+          `[zapp] workers.modules contains unknown module ${JSON.stringify(module)}`,
+        );
+      }
+      if (seenModules.has(module)) {
+        throw new Error(`[zapp] workers.modules repeats ${JSON.stringify(module)}`);
+      }
+      seenModules.add(module);
+    }
+  }
+
+  const application = workers.application;
+  if (application === undefined) return;
+  if (
+    application === null
+    || typeof application !== "object"
+    || Array.isArray(application)
+  ) {
+    throw new Error("[zapp] workers.application must be an object keyed by worker ID");
+  }
+  const workerId = /^[A-Za-z][A-Za-z0-9._-]*$/;
+  const allowedEntryKeys = new Set([
+    "script",
+    "name",
+    "capabilities",
+    "restart",
+    "engine",
+    "bytecode",
+  ]);
+  const knownProfiles = new Set(profiles ? Object.keys(profiles) : ["default"]);
+  const validateScript = (id: string, script: unknown): void => {
+    if (typeof script !== "string" || script.trim().length === 0) {
+      throw new Error(`[zapp] workers.application.${id}.script must be a non-empty string`);
+    }
+    if (path.isAbsolute(script) || script.split(/[\\/]+/).includes("..")) {
+      throw new Error(
+        `[zapp] workers.application.${id}.script must stay relative to the application root`,
+      );
+    }
+  };
+
+  for (const [id, entry] of Object.entries(application)) {
+    if (!workerId.test(id)) {
+      throw new Error(
+        `[zapp] workers.application worker ID ${JSON.stringify(id)} must start with a letter ` +
+        "and contain only letters, digits, '.', '_', or '-'",
+      );
+    }
+    if (typeof entry === "string") {
+      validateScript(id, entry);
+      continue;
+    }
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error(`[zapp] workers.application.${id} must be a script path or object`);
+    }
+    for (const key of Object.keys(entry)) {
+      if (!allowedEntryKeys.has(key)) {
+        throw new Error(`[zapp] workers.application.${id}.${key} is unknown`);
+      }
+    }
+    validateScript(id, entry.script);
+    if (entry.capabilities !== undefined) {
+      if (!Array.isArray(entry.capabilities)) {
+        throw new Error(`[zapp] workers.application.${id}.capabilities must be a string[]`);
+      }
+      const seenProfiles = new Set<string>();
+      for (const profile of entry.capabilities) {
+        if (typeof profile !== "string" || profile.trim().length === 0) {
+          throw new Error(
+            `[zapp] workers.application.${id}.capabilities entries must be non-empty strings`,
+          );
+        }
+        if (!knownProfiles.has(profile)) {
+          throw new Error(
+            `[zapp] workers.application.${id}.capabilities references unknown ` +
+            `security capability profile ${JSON.stringify(profile)}`,
+          );
+        }
+        if (seenProfiles.has(profile)) {
+          throw new Error(
+            `[zapp] workers.application.${id}.capabilities repeats ${JSON.stringify(profile)}`,
+          );
+        }
+        seenProfiles.add(profile);
+      }
+    }
+  }
+}
+
 // Scalar sibling of resolvePlatformValue (which is array-typed / []-defaulted):
 // a bare value applies to every platform; a map is looked up per key.
 function resolvePlatformScalar<T>(
@@ -990,13 +1110,13 @@ export function resolveWebEngineForBuild(
 // from old example code or chat-bot output.
 function rejectRemovedEngines(config: ZappConfig): void {
   const removed = new Set(["jsc", "txiki"]);
-  const headless = config.workers?.headless ?? {};
-  for (const [id, entry] of Object.entries(headless)) {
+  const workers = config.workers?.application ?? {};
+  for (const [id, entry] of Object.entries(workers)) {
     if (typeof entry === "object" && entry !== null && "engine" in entry) {
       const engine = (entry as { engine?: string }).engine;
       if (engine && removed.has(engine)) {
         throw new Error(
-          `[zapp] headless worker "${id}" specifies engine: "${engine}", ` +
+          `[zapp] application worker "${id}" specifies engine: "${engine}", ` +
           `which has been removed. Use "zjs" (cross-platform, default) ` +
           `or "bare-jsc" (macOS JIT). See docs/engines.md.`
         );
@@ -1025,7 +1145,7 @@ async function substituteZjsOnWindows(config: ZappConfig): Promise<void> {
   if (existsSync(path.join(resolveVendorDir(), "zjs", "src", "lib.zc"))) return;
   const fallback = `bare-${defaultBareEngine(target)}` as const;
   const substituted: string[] = [];
-  for (const [id, entry] of Object.entries(config.workers?.headless ?? {})) {
+  for (const [id, entry] of Object.entries(config.workers?.application ?? {})) {
     if (typeof entry !== "object" || entry === null) continue;
     const e = entry as { engine?: string; bytecode?: boolean };
     if (e.engine !== "zjs") continue;
@@ -1038,7 +1158,7 @@ async function substituteZjsOnWindows(config: ZappConfig): Promise<void> {
     const { clogError } = await import("./log");
     clogError(
       `engine "zjs" is not yet available on Windows — substituting "${fallback}" ` +
-      `for headless worker(s): ${substituted.join(", ")} (bytecode disabled where set). ` +
+      `for application worker(s): ${substituted.join(", ")} (bytecode disabled where set). ` +
       `zjs Windows support is tracked separately; this substitution will be removed when it lands.`
     );
   }
@@ -1121,8 +1241,8 @@ function normalizeConfig(config: ZappConfig): ResolvedConfig {
     protocols: config.webview?.protocols,
     webviewPreferences: config.webview?.preferences,
     webviewInject: config.webview?.inject,
-    headless: config.workers?.headless,
-    workerModules: config.workers?.capabilities,
+    applicationWorkers: config.workers?.application,
+    workerModules: config.workers?.modules,
     permissions: config.security?.permissions,
     capabilityProfiles: config.security?.capabilities,
     fs: config.security?.filesystem,
@@ -1151,7 +1271,7 @@ async function writeResolvedConfigSnapshot(
   await writeFile(
     path.join(directory, "config.resolved.json"),
     JSON.stringify({
-      version: 1,
+      version: 2,
       command: context.command,
       mode: context.mode,
       target: context.target,
@@ -1197,6 +1317,7 @@ export async function loadConfig(
       config.security?.capabilities,
       config.security?.permissions,
     );
+    validateWorkers(config.workers, config.security?.capabilities);
     rejectRemovedEngines(config);
     await substituteZjsOnWindows(config);
     validateNative(config);

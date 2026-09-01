@@ -28,7 +28,7 @@ export default defineConfig({
     },
   },
   workers: {
-    headless: {
+    application: {
       // Two-engine matrix today. Multi-bare-engine builds fail with
       // duplicate-library / bad-path link errors — appears the CLI's
       // build-config.ts emits stomping link directives when more than

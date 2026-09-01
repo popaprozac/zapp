@@ -30,7 +30,7 @@ the framework dispatches at runtime based on `engine: "..."` in
 
 This means:
 
-- On a **bare-*** engine, `workers.capabilities: ["fetch"]` in `zapp.config.ts`
+- On a **bare-*** engine, the provisional `workers.modules: ["fetch"]` in `zapp.config.ts`
   auto-injects `bare-fetch` and exposes `fetch` as a worker global.
 - On **`zjs`** (or any non-bare engine), bare-* shims are skipped — if
   the engine ships the API intrinsically (eventually `fetch`, etc.),
@@ -42,11 +42,11 @@ This means:
 ## Bytecode (AOT) option
 
 Engines that ship a bytecode pipeline accept `bytecode: true` in the
-headless worker config:
+application worker config:
 
 ```ts
 workers: {
-  headless: {
+  application: {
     ticker: {
       script: "src/workers/ticker.ts",
       engine: "zjs",
@@ -72,7 +72,7 @@ parse cost is the dominant startup cost.
 
 Setting `bytecode: true` on a non-bytecode engine (`bare-jsc`,
 `bare-v8`, `bare-quickjs`, `bare-mqjs`) is a **TypeScript compile
-error** (the `HeadlessWorkerConfig` type is a discriminated union).
+error** (the `ApplicationWorkerConfig` type is a discriminated union).
 The runtime would have errored anyway; the type catches it earlier.
 
 ## Fallback chain
@@ -96,7 +96,7 @@ dispatcher picks per worker at create time.
 
 For auto-discovered (webview-spawned) workers — `new Worker("./x.ts")`
 in your main bundle — the Vite plugin inherits a single engine choice
-when all headless workers agree, defaults to `zjs` when the project
+when all application workers agree, defaults to `zjs` when the project
 hasn't picked, and leaves it to the runtime resolver in mixed-engine
 projects.
 

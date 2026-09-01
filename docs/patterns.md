@@ -45,7 +45,7 @@ win.subscribe(WindowEvent.CLOSE, async () => {
 async function save() { /* your save logic */ }
 ```
 
-## Headless worker broadcasting state to all windows
+## Application worker broadcasting state to all windows
 
 Perfect for real-time updates (chat, stock prices, sync status).
 
@@ -56,7 +56,7 @@ import { defineConfig } from "@zappdev/cli/config";
 export default defineConfig({
   application: { name: "My App" },
   workers: {
-    headless: {
+    application: {
       live: "src/workers/live.ts",
     },
   },
@@ -92,7 +92,7 @@ Events.on("live:update", (data) => {
 Open a second window and it gets the same broadcasts automatically.
 No per-window subscription setup needed.
 
-## Headless worker auto-restart
+## Application worker auto-restart
 
 Configure a restart policy in `zapp.config.ts` so the supervisor recreates
 the worker's JS context after an uncaught throw. After `maxRetries`
@@ -101,7 +101,7 @@ failures inside `withinMs`, the supervisor gives up.
 ```ts
 // zapp.config.ts
 workers: {
-  headless: {
+  application: {
     sync: {
       script: "src/workers/sync.ts",
       engine: "zjs",
@@ -201,16 +201,16 @@ uploadButton.addEventListener("click", () => {
 });
 ```
 
-Note: `fetch` and `WebSocket` in workers require a capability declaration
+Note: `fetch` and `WebSocket` in workers currently require a provisional runtime-module declaration
 in `zapp.config.ts` for bare-* engines:
 
 ```ts
-workers: { capabilities: ["fetch", "websocket"] },
+workers: { modules: ["fetch", "websocket"] },
 ```
 
 The CLI installs `bare-fetch` + `bare-ws`, links them in, and the Vite
 plugin injects the matching globals into the worker bundle. On `zjs`,
-the runtime layer provides intrinsics as they mature; `workers.capabilities`
+the runtime layer provides intrinsics as they mature; `workers.modules`
 declarations are no-ops for zjs workers and the globals are undefined
 until the engine ships them. Move network calls to a webview (which has
 full DOM APIs) if the target engine doesn't provide them yet.
@@ -234,7 +234,7 @@ export default defineConfig({
     version: "0.1.0",
   },
   workers: {
-    headless: {
+    application: {
       // Sync-engine worker — small payloads, latency-sensitive.
       // zjs's direct value-marshalling host bridge wins here.
       sync: {
@@ -247,7 +247,7 @@ export default defineConfig({
         engine: "bare-jsc",
       },
     },
-    capabilities: ["fetch"],
+    modules: ["fetch"],
   },
 });
 ```
@@ -501,11 +501,11 @@ function toggleSidebar() { /* ... */ }
 
 ## Multi-window app with shared state via Events
 
-Two windows that share state, synced via a headless worker.
+Two windows that share state, synced via an application worker.
 
 ```ts
 // zapp.config.ts
-workers: { headless: { state: "src/workers/state.ts" } }
+workers: { application: { state: "src/workers/state.ts" } }
 ```
 
 ```ts

@@ -6,7 +6,7 @@ import {
   createConfigContext, defaultApplicationIdentifier, defineConfig, loadConfig,
   resolveNative, validateNative, validateWebEngine, resolveWebEngine,
   platformSupportsChromium, resolveWebEngineForBuild, validateWebviewInject,
-  validateCapabilityProfiles,
+  validateCapabilityProfiles, validateWorkers,
 } from "./config";
 
 test("defaultApplicationIdentifier produces a stable reverse-DNS-safe identifier", () => {
@@ -63,8 +63,14 @@ test("loadConfig evaluates a contextual factory and writes the resolved snapshot
           },
         },
         workers: {
-          headless: { indexer: "src/workers/indexer.ts" },
-          capabilities: ["fetch"],
+          application: {
+            searchIndexer: {
+              script: "src/workers/indexer.ts",
+              engine: "zjs",
+              capabilities: ["default"],
+            },
+          },
+          modules: ["fetch"],
         },
         security: {
           permissions: ["clipboard:read", "window:create"],
@@ -108,7 +114,13 @@ test("loadConfig evaluates a contextual factory and writes the resolved snapshot
         documentEnd: ["src/ready.ts"],
       },
     });
-    expect(config.headless).toEqual({ indexer: "src/workers/indexer.ts" });
+    expect(config.applicationWorkers).toEqual({
+      searchIndexer: {
+        script: "src/workers/indexer.ts",
+        engine: "zjs",
+        capabilities: ["default"],
+      },
+    });
     expect(config.workerModules).toEqual(["fetch"]);
     expect(config.permissions).toEqual(["clipboard:read", "window:create"]);
     expect(config.capabilityProfiles).toEqual({
@@ -129,13 +141,52 @@ test("loadConfig evaluates a contextual factory and writes the resolved snapshot
     const snapshot = JSON.parse(
       await readFile(path.join(root, ".zapp", "config.resolved.json"), "utf8"),
     );
-    expect(snapshot.version).toBe(1);
+    expect(snapshot.version).toBe(2);
     expect(snapshot.command).toBe("package");
     expect(snapshot.target.os).toBe("macos");
     expect(snapshot.config).toEqual(config);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("validateWorkers keeps runtime modules separate from native authority", () => {
+  const profiles = {
+    default: { services: ["notes"] },
+    backgroundSearch: { services: ["notes.updateIndex"] },
+  };
+  expect(() => validateWorkers({
+    application: {
+      searchIndexer: {
+        script: "src/workers/search-indexer.ts",
+        engine: "zjs",
+        capabilities: ["backgroundSearch"],
+      },
+    },
+    modules: ["encoding"],
+  }, profiles)).not.toThrow();
+
+  expect(() => validateWorkers({
+    application: {
+      searchIndexer: {
+        script: "src/workers/search-indexer.ts",
+        capabilities: ["missing"],
+      },
+    },
+  }, profiles)).toThrow(/unknown security capability profile "missing"/);
+
+  expect(() => validateWorkers({
+    application: {
+      searchIndexer: {
+        script: "src/workers/search-indexer.ts",
+        capabilities: ["default", "default"],
+      },
+    },
+  }, profiles)).toThrow(/capabilities repeats "default"/);
+
+  expect(() => validateWorkers({
+    modules: ["encoding", "encoding"],
+  }, profiles)).toThrow(/workers.modules repeats "encoding"/);
 });
 
 test("validateWebviewInject rejects ambiguous or escaping profile inputs", () => {

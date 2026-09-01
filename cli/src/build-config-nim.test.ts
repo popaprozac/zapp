@@ -331,7 +331,9 @@ test("generateIOSBuildFile: explicitly-named bare-jsc is still honored", async (
   try {
     const buildFile = `${dir}/build.zc`;
     await writeFile(buildFile, 'import "app.zc";\n');
-    const cfg = { headless: { w: { script: "a.ts", engine: "bare-jsc" } } } as any;
+    const cfg = {
+      applicationWorkers: { w: { script: "a.ts", engine: "bare-jsc" } },
+    } as any;
     const outPath = await generateIOSBuildFile(dir, buildFile, cfg);
     const out = await readFile(outPath, "utf-8");
     expect(out).toContain("//> define: ZAPP_WORKER_ENGINE_BARE_JSC");

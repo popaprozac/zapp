@@ -63,7 +63,7 @@ Zapp workers bypass that entirely — `Services.invokeSync` is a direct C call v
 
 ### Which engine?
 
-Worker engine is **per-worker**, set in `zapp.config.ts → workers.headless.<id>.engine`. The framework dispatches at runtime; you can mix engines within one app. Six engines ship today:
+Worker engine is **per-worker**, set in `zapp.config.ts → workers.application.<id>.engine`. The framework dispatches at runtime; you can mix engines within one app. Six engines ship today:
 
 - **`zjs`** *(default, recommended)* — Zapp's first-party engine. ~1 MB engine cost, cross-platform, iOS-friendly (no JIT entitlement gymnastics). Direct value-marshalling host bridge at 0.45 µs. Bytecode AOT option (`bytecode: true`) ships parse-free workers.
 - **`bare-jsc`** — JIT via the system JSC framework on macOS. Zero engine bundle cost — literally smaller than zjs on Apple. Pick when absolute KB and macOS-only JIT-perf matter.
@@ -73,7 +73,7 @@ Worker engine is **per-worker**, set in `zapp.config.ts → workers.headless.<id
 ```ts
 // zapp.config.ts — mix engines per worker
 workers: {
-  headless: {
+  application: {
     sync:    { script: "src/workers/sync.ts",    engine: "zjs" },
     encoder: { script: "src/workers/encoder.ts", engine: "bare-jsc" },
   },
@@ -256,9 +256,9 @@ export default defineConfig({
     name: "My App",
   },
   workers: {
-    // Auto-installs `bare-fetch` and injects the `fetch` global.
-    capabilities: ["fetch"],
-    headless: {
+    // Provisional until ZJS and the optional bare adapter model settle.
+    modules: ["fetch"],
+    application: {
       sync: {
         script: "src/workers/sync.ts",
         engine: "zjs",
