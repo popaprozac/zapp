@@ -3,7 +3,7 @@ import { resolveCapabilityProfiles } from "./capabilities";
 import type { ZServiceManifest } from "./z-service-bindings";
 
 const manifest: ZServiceManifest = {
-  schemaVersion: 4,
+  schemaVersion: 5,
   types: [],
   enums: [],
   errors: [],

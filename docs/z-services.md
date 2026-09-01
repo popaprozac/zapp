@@ -302,9 +302,25 @@ export enum NoteState {
 uses `"active" | "archived"` on the JSON wire. Generated TypeScript exposes
 both a literal-union type and runtime values, so callers may write
 `NoteState.active` without numeric ordinals or unchecked strings. Generated
-JavaScript and native Z codecs reject unknown variant names. Enums with payloads
-remain fail-closed until their tagged JSON representation is deliberately
-settled.
+JavaScript and native Z codecs reject unknown variant names.
+
+An enum with at least one payload uses one uniform tagged-object representation
+for every variant:
+
+```zs
+export enum LookupResult {
+  found Note,
+  missing,
+}
+```
+
+The JSON and generated TypeScript shape is `{ kind: "found", value: note }` or
+`{ kind: "missing" }`. Generated TypeScript also exposes `LookupResult.found(note)`
+and the payload-free `LookupResult.missing` value. Once any variant carries a
+payload, even payload-free variants use the object representation; this keeps
+one enum from having two unrelated wire shapes. Generated codecs reject unknown
+`kind` values, missing payloads, and payloads that do not satisfy their declared
+Z type.
 
 ## Compiler-produced metadata
 

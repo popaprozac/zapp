@@ -5,7 +5,7 @@ import {
 import type { ZServiceManifest } from "./z-service-bindings";
 
 const manifest: ZServiceManifest = {
-  schemaVersion: 4,
+  schemaVersion: 5,
   types: [
     {
       name: "CreateNoteInput",
@@ -361,7 +361,7 @@ describe("generated Z service dispatch", () => {
     withEnum.enums.push({
       name: "NoteState",
       module: "/workspace/app/notes-core.zs",
-      variants: ["active", "archived"],
+      variants: [{ name: "active" }, { name: "archived" }],
     });
     withEnum.types[0].fields.push({ name: "state", type: "NoteState" });
     withEnum.types[1].fields.push({ name: "state", type: "NoteState" });
@@ -393,5 +393,78 @@ describe("generated Z service dispatch", () => {
     expect(source).toContain("const result = service.echoState(input)");
     expect(source).not.toContain("service.echoState(move input)");
     expect(source).toContain("__zappEncodeNoteState(\n    result\n  )");
+  });
+
+  it("generates tagged native codecs and ownership for payload enums", () => {
+    const withEnum = structuredClone(manifest);
+    withEnum.enums.push({
+      name: "NoteDescription",
+      module: "/workspace/app/notes-core.zs",
+      variants: [
+        { name: "described", payload: "String" },
+        { name: "unavailable" },
+      ],
+    });
+    withEnum.services[0].methods.push({
+      id: 5,
+      name: "echoDescription",
+      input: "NoteDescription",
+      inputMode: "value",
+      returns: "NoteDescription",
+      asynchronous: false,
+      executorAffinity: null,
+      receiverMode: "in",
+    });
+
+    const source = renderZServiceDispatchers(withEnum, {
+      outputPath: "/workspace/generated/service-dispatchers.zs",
+      serviceContractModule: "/workspace/framework/service-contract.zs",
+      servicesModule: "/workspace/framework/services.zs",
+      asyncServiceContractModule: "/workspace/framework/async-service-contract.zs",
+      serviceLifecycleContractModule: "/workspace/framework/service-lifecycle-contract.zs",
+    });
+    expect(source).toContain('const __kind = fields.get("kind")');
+    expect(source).toContain('if (kind == "described")');
+    expect(source).toContain('const __payload = fields.get("value")');
+    expect(source).toContain("return NoteDescription.described(\n          move decoded");
+    expect(source).toContain("described(value) => {");
+    expect(source).toContain('fields.set("kind", JsonValue.string("described"))');
+    expect(source).toContain("__zappEncodeString(\n        move value");
+    expect(source).toContain("const result = service.echoDescription(move input)");
+    expect(source).toContain("__zappEncodeNoteDescription(\n    move result");
+  });
+
+  it("keeps cleanup-free payload enums copyable", () => {
+    const withEnum = structuredClone(manifest);
+    withEnum.enums.push({
+      name: "CountResult",
+      module: "/workspace/app/notes-core.zs",
+      variants: [
+        { name: "count", payload: "i32" },
+        { name: "unavailable" },
+      ],
+    });
+    withEnum.services[0].methods.push({
+      id: 6,
+      name: "echoCount",
+      input: "CountResult",
+      inputMode: "value",
+      returns: "CountResult",
+      asynchronous: false,
+      executorAffinity: null,
+      receiverMode: "in",
+    });
+
+    const source = renderZServiceDispatchers(withEnum, {
+      outputPath: "/workspace/generated/service-dispatchers.zs",
+      serviceContractModule: "/workspace/framework/service-contract.zs",
+      servicesModule: "/workspace/framework/services.zs",
+      asyncServiceContractModule: "/workspace/framework/async-service-contract.zs",
+      serviceLifecycleContractModule: "/workspace/framework/service-lifecycle-contract.zs",
+    });
+    expect(source).toContain("return CountResult.count(\n          decoded");
+    expect(source).toContain("__zappEncodeI32(\n        value");
+    expect(source).toContain("const result = service.echoCount(input)");
+    expect(source).toContain("__zappEncodeCountResult(\n    result");
   });
 });

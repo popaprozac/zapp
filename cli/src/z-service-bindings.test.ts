@@ -6,7 +6,7 @@ import {
 } from "./z-service-bindings";
 
 const manifest: ZServiceManifest = {
-  schemaVersion: 4,
+  schemaVersion: 5,
   types: [
     {
       name: "CreateNoteInput",
@@ -185,7 +185,7 @@ describe("Z service binding generation", () => {
     withEnum.enums.push({
       name: "NoteState",
       module: "/app.zs",
-      variants: ["active", "archived"],
+      variants: [{ name: "active" }, { name: "archived" }],
     });
     withEnum.types[0].fields.push({ name: "state", type: "NoteState" });
     withEnum.types[1].fields.push({ name: "state", type: "NoteState" });
@@ -206,6 +206,49 @@ describe("Z service binding generation", () => {
     expect(runtime).toContain('const decodeNoteState = value => {');
     expect(runtime).toContain('value === "active" || value === "archived"');
     expect(runtime).toContain('const encodeNoteState = value => {');
+  });
+
+  it("emits payload enums as tagged unions with checked constructors and codecs", () => {
+    const withEnum = structuredClone(manifest);
+    withEnum.enums.push({
+      name: "NoteDescription",
+      module: "/app.zs",
+      variants: [
+        { name: "described", payload: "String" },
+        { name: "unavailable" },
+      ],
+    });
+    withEnum.services[0].methods.push({
+      id: 3,
+      name: "describe",
+      input: "NoteDescription",
+      inputMode: "value",
+      returns: "NoteDescription",
+      asynchronous: false,
+      executorAffinity: null,
+      receiverMode: "in",
+    });
+
+    const bindings = renderZServiceBindings(withEnum);
+    expect(bindings).toContain(`export type NoteDescription =
+  | { kind: "described"; value: string }
+  | { kind: "unavailable" };`);
+    expect(bindings).toContain(
+      'described: (value: string): NoteDescription => ({ kind: "described", value })',
+    );
+    expect(bindings).toContain(
+      'unavailable: { kind: "unavailable" } as const',
+    );
+    expect(bindings).toContain("const record = decodeRecord(value)");
+    expect(bindings).toContain('case "described":');
+    expect(bindings).toContain('value: decodeString(record.value)');
+    expect(bindings).toContain('value: encodeString(value.value)');
+
+    const runtime = renderZServiceWebviewRuntime(withEnum);
+    expect(runtime).toContain("const decodeNoteDescription = value => {");
+    expect(runtime).toContain("switch (value.kind)");
+    expect(runtime).toContain('value: decodeString(value.value)');
+    expect(runtime).toContain("const encodeNoteDescription = value => {");
   });
 
   it("fails closed when nominal and collection codec names collide", () => {

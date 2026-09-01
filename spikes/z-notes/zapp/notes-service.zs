@@ -8,6 +8,7 @@ import {
 import {
   CreateNoteInput,
   Note,
+  NoteDescription,
   NoteState,
   NotesCore,
   createNotesCore,
@@ -41,6 +42,20 @@ export readonly class NotesService implements ServiceLifecycle {
 
   function isArchived(state: NoteState): boolean {
     return state == NoteState.archived;
+  }
+
+  function describeState(state: NoteState): NoteDescription {
+    return match (state) {
+      active => NoteDescription.described("Editable");
+      archived => NoteDescription.unavailable;
+    };
+  }
+
+  function hasDescription(description: NoteDescription): boolean {
+    return match (description) {
+      described(_) => true;
+      unavailable => false;
+    };
   }
 
   async function isEmpty(): boolean on thread.main {

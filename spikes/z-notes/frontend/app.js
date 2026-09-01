@@ -69,6 +69,17 @@ async function verifyTypedServiceError() {
   }
 }
 
+async function verifyPayloadEnum() {
+  const description = await services.notes.describeState("active");
+  if (description.kind !== "described" || description.value !== "Editable") {
+    throw new Error(`Unexpected note description: ${JSON.stringify(description)}`);
+  }
+  if (!(await services.notes.hasDescription(description))) {
+    throw new Error("Expected the payload enum to round-trip through Z");
+  }
+  document.body.dataset.payloadEnum = "ok";
+}
+
 button.addEventListener("click", async () => {
   status.textContent = "Routing…";
   try {
@@ -83,6 +94,7 @@ button.addEventListener("click", async () => {
     if (await services.notes.isArchived("active")) {
       throw new Error("Expected active note to remain editable");
     }
+    await verifyPayloadEnum();
     const empty = await services.notes.isEmpty();
     if (empty) throw new Error("Expected the created note");
     const health = await services.health.status();
@@ -133,6 +145,7 @@ cancelButton.addEventListener("click", async () => {
       if (await services.notes.isArchived("active")) {
         throw new Error("Expected active note to remain editable");
       }
+      await verifyPayloadEnum();
       const empty = await services.notes.isEmpty();
       if (empty) throw new Error("Expected the created note");
       const health = await services.health.status();

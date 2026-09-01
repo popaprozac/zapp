@@ -219,25 +219,26 @@ function addWireType(
     if (!variants) {
       throw new Error(`[zapp] malformed enum metadata for service wire type ${JSON.stringify(name)}`);
     }
-    const payload = variants.find((variant) => variant.payloadType !== null);
-    if (payload) {
-      throw new Error(
-        `[zapp] service wire enum ${name}.${payload.name} carries payload `
-        + `${JSON.stringify(payload.payloadType)}; payload enum wire representation is not settled yet`,
-      );
-    }
     seen.add(name);
+    for (const variant of variants) {
+      if (variant.payloadType) {
+        addWireType(metadata, variant.payloadType, types, enums, seen);
+      }
+    }
     enums.push({
       name,
       module: module.path,
-      variants: variants.map((variant) => variant.name),
+      variants: variants.map((variant) => ({
+        name: variant.name,
+        ...(variant.payloadType ? { payload: variant.payloadType } : {}),
+      })),
     });
     return;
   }
   if (symbol.kind !== "struct" || !symbol.typeSignature) {
     throw new Error(
       `[zapp] service wire type ${JSON.stringify(name)} must be an exported Z struct `
-      + "or payload-free enum",
+      + "or enum",
     );
   }
   seen.add(name);
@@ -414,7 +415,7 @@ export function deriveZServiceManifest(metadata: ZProgramMetadata): ZServiceMani
   });
   const errors = types.filter((type) => errorNames.has(type.name));
   const values = types.filter((type) => !errorNames.has(type.name));
-  return { schemaVersion: 4, types: values, enums, errors, services };
+  return { schemaVersion: 5, types: values, enums, errors, services };
 }
 
 export function zServiceMethodId(qualifiedName: string): number {

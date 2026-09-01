@@ -16,7 +16,10 @@ export interface ZServiceTypeMetadata {
 export interface ZServiceEnumMetadata {
   name: string;
   module: string;
-  variants: string[];
+  variants: {
+    name: string;
+    payload?: string;
+  }[];
 }
 
 export interface ZServiceMethodMetadata {
@@ -48,7 +51,7 @@ export interface ZServiceMetadata {
 }
 
 export interface ZServiceManifest {
-  schemaVersion: 4;
+  schemaVersion: 5;
   types: ZServiceTypeMetadata[];
   enums: ZServiceEnumMetadata[];
   errors: ZServiceTypeMetadata[];
@@ -139,6 +142,11 @@ function manifestContainerTypes(manifest: ZServiceManifest): string[] {
   for (const type of [...manifest.types, ...manifest.errors]) {
     for (const field of type.fields) collectContainerType(field.type, selected);
   }
+  for (const enumeration of manifest.enums) {
+    for (const variant of enumeration.variants) {
+      if (variant.payload) collectContainerType(variant.payload, selected);
+    }
+  }
   for (const service of manifest.services) {
     for (const method of service.methods) {
       if (method.input) collectContainerType(method.input, selected);
@@ -179,18 +187,71 @@ export function assertZServiceCodecNames(manifest: ZServiceManifest): void {
 function renderEnums(manifest: ZServiceManifest): string {
   return manifest.enums.map((enumeration) => {
     assertIdentifier(enumeration.name, "service enum");
-    const variants = enumeration.variants.map((variant) => {
-      assertIdentifier(variant, `${enumeration.name} variant`);
-      return `  ${variant}: ${JSON.stringify(variant)},`;
-    }).join("\n");
-    return `export const ${enumeration.name} = {\n${variants}\n} as const;\n`
-      + `export type ${enumeration.name} = `
-      + `typeof ${enumeration.name}[keyof typeof ${enumeration.name}];`;
+    for (const variant of enumeration.variants) {
+      assertIdentifier(variant.name, `${enumeration.name} variant`);
+    }
+    const hasPayload = enumeration.variants.some((variant) => variant.payload !== undefined);
+    if (!hasPayload) {
+      const variants = enumeration.variants.map((variant) => (
+        `  ${variant.name}: ${JSON.stringify(variant.name)},`
+      )).join("\n");
+      return `export const ${enumeration.name} = {\n${variants}\n} as const;\n`
+        + `export type ${enumeration.name} = `
+        + `typeof ${enumeration.name}[keyof typeof ${enumeration.name}];`;
+    }
+    const typeVariants = enumeration.variants.map((variant) => (
+      variant.payload
+        ? `  | { kind: ${JSON.stringify(variant.name)}; value: ${tsType(variant.payload)} }`
+        : `  | { kind: ${JSON.stringify(variant.name)} }`
+    )).join("\n");
+    const constructors = enumeration.variants.map((variant) => (
+      variant.payload
+        ? `  ${variant.name}: (value: ${tsType(variant.payload)}): ${enumeration.name} => (`
+          + `{ kind: ${JSON.stringify(variant.name)}, value }),`
+        : `  ${variant.name}: { kind: ${JSON.stringify(variant.name)} } as const,`
+    )).join("\n");
+    return `export type ${enumeration.name} =\n${typeVariants};\n\n`
+      + `export const ${enumeration.name} = {\n${constructors}\n};`;
   }).join("\n\n");
 }
 
 function renderEnumCodecs(manifest: ZServiceManifest): string {
   return manifest.enums.map((enumeration) => {
+    const hasPayload = enumeration.variants.some((variant) => variant.payload !== undefined);
+    if (hasPayload) {
+      const decodeCases = enumeration.variants.map((variant) => (
+        variant.payload
+          ? `    case ${JSON.stringify(variant.name)}:\n`
+            + `      return { kind: ${JSON.stringify(variant.name)}, `
+            + `value: ${codecName(variant.payload, "decode")}(record.value) };`
+          : `    case ${JSON.stringify(variant.name)}:\n`
+            + `      return { kind: ${JSON.stringify(variant.name)} };`
+      )).join("\n");
+      const encodeCases = enumeration.variants.map((variant) => (
+        variant.payload
+          ? `    case ${JSON.stringify(variant.name)}:\n`
+            + `      return { kind: ${JSON.stringify(variant.name)}, `
+            + `value: ${codecName(variant.payload, "encode")}(value.value) };`
+          : `    case ${JSON.stringify(variant.name)}:\n`
+            + `      return { kind: ${JSON.stringify(variant.name)} };`
+      )).join("\n");
+      return `function decode${enumeration.name}(value: unknown): ${enumeration.name} {
+  const record = decodeRecord(value);
+  switch (record.kind) {
+${decodeCases}
+    default:
+      throw new TypeError(${JSON.stringify(`expected a ${enumeration.name} kind from Z service`)});
+  }
+}
+
+function encode${enumeration.name}(value: ${enumeration.name}): unknown {
+  switch (value.kind) {
+${encodeCases}
+    default:
+      throw new TypeError(${JSON.stringify(`expected a valid ${enumeration.name} kind`)});
+  }
+}`;
+    }
     const values = `${enumeration.name}Values`;
     return `const ${values} = new Set<string>(Object.values(${enumeration.name}));
 
@@ -386,7 +447,7 @@ function renderService(service: ZServiceMetadata): string {
 }
 
 export function renderZServiceBindings(manifest: ZServiceManifest): string {
-  if (manifest.schemaVersion !== 4) {
+  if (manifest.schemaVersion !== 5) {
     throw new Error(`[zapp] unsupported Z service metadata schema ${manifest.schemaVersion}`);
   }
   assertZServiceCodecNames(manifest);
@@ -509,8 +570,47 @@ function renderRuntimeCodecs(manifest: ZServiceManifest): string {
     : ${codecName(payload, "encode")}(value);`;
   }).join("\n");
   const enums = manifest.enums.map((enumeration) => {
+    const hasPayload = enumeration.variants.some((variant) => variant.payload !== undefined);
+    if (hasPayload) {
+      const decodeCases = enumeration.variants.map((variant) => (
+        variant.payload
+          ? `      case ${JSON.stringify(variant.name)}:\n`
+            + `        return { kind: ${JSON.stringify(variant.name)}, `
+            + `value: ${codecName(variant.payload, "decode")}(value.value) };`
+          : `      case ${JSON.stringify(variant.name)}:\n`
+            + `        return { kind: ${JSON.stringify(variant.name)} };`
+      )).join("\n");
+      const encodeCases = enumeration.variants.map((variant) => (
+        variant.payload
+          ? `      case ${JSON.stringify(variant.name)}:\n`
+            + `        return { kind: ${JSON.stringify(variant.name)}, `
+            + `value: ${codecName(variant.payload, "encode")}(value.value) };`
+          : `      case ${JSON.stringify(variant.name)}:\n`
+            + `        return { kind: ${JSON.stringify(variant.name)} };`
+      )).join("\n");
+      return `  const decode${enumeration.name} = value => {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw new TypeError(${JSON.stringify(`expected a ${enumeration.name} object from Z service`)});
+    }
+    switch (value.kind) {
+${decodeCases}
+      default:
+        throw new TypeError(${JSON.stringify(`expected a ${enumeration.name} kind from Z service`)});
+    }
+  };
+  const encode${enumeration.name} = value => {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw new TypeError(${JSON.stringify(`expected a valid ${enumeration.name} value`)});
+    }
+    switch (value.kind) {
+${encodeCases}
+      default:
+        throw new TypeError(${JSON.stringify(`expected a valid ${enumeration.name} kind`)});
+    }
+  };`;
+    }
     const expected = enumeration.variants
-      .map((variant) => `value === ${JSON.stringify(variant)}`)
+      .map((variant) => `value === ${JSON.stringify(variant.name)}`)
       .join(" || ");
     return `  const decode${enumeration.name} = value => {
     if (!(${expected})) {

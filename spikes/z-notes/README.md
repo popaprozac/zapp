@@ -132,7 +132,10 @@ both service invocations uniformly as cancellable promises.
 generated `string | null` TypeScript field. `NoteState` proves an exported
 payload-free Z enum becomes a checked string union with generated runtime
 values and exhaustive native codecs; `isArchived(state: NoteState)` also sends
-that enum directly from the WebView into a Z method. The build now
+that enum directly from the WebView into a Z method. `NoteDescription` proves
+payload enums use the uniform `{ kind, value }` tagged shape and round-trip an
+owned `String` payload through generated JavaScript, TypeScript, and native Z
+codecs. The build now
 generates and installs its checked `AsyncService` dispatcher plus lifecycle
 forwarder into the isolated staged application. The original `main.zs` remains
 unchanged. One `register` call derives the async dispatcher and lifecycle

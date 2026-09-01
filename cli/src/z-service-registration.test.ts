@@ -14,7 +14,7 @@ import { generateZServiceRegistrationOverlay } from "./z-service-registration";
 function manifestFor(source: string, module = "/workspace/app/main.zs"): ZServiceManifest {
   const method = "register";
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     types: [],
     enums: [],
     errors: [],

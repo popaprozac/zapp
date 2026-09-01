@@ -15,6 +15,11 @@ export enum NoteState {
   archived,
 }
 
+export enum NoteDescription {
+  described String,
+  unavailable,
+}
+
 export struct Note {
   id: u64;
   title: String;
