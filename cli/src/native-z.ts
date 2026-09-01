@@ -56,7 +56,13 @@ export interface PreparedZFrontendServices {
   bindingPath: string;
   manifest: ZServiceManifest;
   programMetadataSource: string;
-  moduleHashes: Record<string, string>;
+  inputHashes: Record<string, string>;
+}
+
+interface ZFrontendServicesCache {
+  schemaVersion: 1;
+  compiler: ZCompilerIdentity;
+  inputHashes: Record<string, string>;
 }
 
 export interface ZModulePathMapping {
@@ -504,21 +510,85 @@ async function hashFile(file: string): Promise<string> {
   return createHash("sha256").update(await readFile(file)).digest("hex");
 }
 
-async function hashZProgramModules(
+export function zProgramInputPaths(
   metadata: ZProgramMetadata,
+  explicitInputs: string[] = [],
+): string[] {
+  const inputs = new Set(metadata.modules.map((module) => module.path));
+  const visitedDirectories = new Set<string>();
+  for (const module of metadata.modules) {
+    let directory = path.dirname(module.path);
+    while (!visitedDirectories.has(directory)) {
+      visitedDirectories.add(directory);
+      const manifest = path.join(directory, "z.json");
+      if (existsSync(manifest)) inputs.add(manifest);
+      const parent = path.dirname(directory);
+      if (parent === directory) break;
+      directory = parent;
+    }
+  }
+  for (const input of explicitInputs) {
+    if (existsSync(input)) inputs.add(input);
+  }
+  return [...inputs].sort();
+}
+
+async function hashZProgramInputs(
+  metadata: ZProgramMetadata,
+  explicitInputs: string[] = [],
 ): Promise<Record<string, string>> {
-  return Object.fromEntries(await Promise.all(metadata.modules.map(async (module) => (
-    [module.path, await hashFile(module.path)] as const
-  ))));
+  return Object.fromEntries(await Promise.all(
+    zProgramInputPaths(metadata, explicitInputs).map(async (input) => (
+      [input, await hashFile(input)] as const
+    )),
+  ));
 }
 
 export async function preparedZServicesAreCurrent(
   prepared: PreparedZFrontendServices,
 ): Promise<boolean> {
-  for (const [modulePath, expectedHash] of Object.entries(prepared.moduleHashes)) {
-    if (!existsSync(modulePath) || await hashFile(modulePath) !== expectedHash) return false;
+  for (const [inputPath, expectedHash] of Object.entries(prepared.inputHashes)) {
+    if (!existsSync(inputPath) || await hashFile(inputPath) !== expectedHash) return false;
   }
   return true;
+}
+
+function sameZCompilerIdentity(
+  left: ZCompilerIdentity,
+  right: ZCompilerIdentity,
+): boolean {
+  return left.languageVersion === right.languageVersion
+    && left.compilerRevision === right.compilerRevision
+    && left.compilerApi === right.compilerApi;
+}
+
+function parseZFrontendServicesCache(source: string): ZFrontendServicesCache {
+  const parsed = JSON.parse(source) as Partial<ZFrontendServicesCache>;
+  if (
+    parsed.schemaVersion !== 1
+    || !parsed.compiler
+    || typeof parsed.compiler.languageVersion !== "string"
+    || typeof parsed.compiler.compilerRevision !== "string"
+    || !Number.isInteger(parsed.compiler.compilerApi)
+    || !parsed.inputHashes
+    || typeof parsed.inputHashes !== "object"
+    || Array.isArray(parsed.inputHashes)
+    || Object.values(parsed.inputHashes).some((hash) => typeof hash !== "string")
+  ) {
+    throw new Error("[zapp] malformed cached Z service metadata");
+  }
+  return parsed as ZFrontendServicesCache;
+}
+
+function cacheCoversZProgramInputs(
+  metadata: ZProgramMetadata,
+  inputHashes: Record<string, string>,
+  explicitInputs: string[],
+): boolean {
+  const expected = zProgramInputPaths(metadata, explicitInputs);
+  const cached = Object.keys(inputHashes).sort();
+  return expected.length === cached.length
+    && expected.every((input, index) => input === cached[index]);
 }
 
 function rebaseZModulePath(
@@ -594,9 +664,10 @@ export async function prepareZFrontendServices(
 
   const repositoryRoot = path.resolve(options.nativeDir, "..");
   const compiler = resolveZCompilerCommand(repositoryRoot);
-  await assertZCompilerContract(
+  const contractPath = path.join(options.nativeDir, "z", "compiler-contract.json");
+  const compilerIdentity = await assertZCompilerContract(
     compiler,
-    path.join(options.nativeDir, "z", "compiler-contract.json"),
+    contractPath,
     options.root,
   );
 
@@ -605,15 +676,55 @@ export async function prepareZFrontendServices(
     parseZProgramMetadata,
   } = await import("./z-program-metadata");
   const { generateZServiceBindings } = await import("./z-service-bindings");
-  const metadataSource = await run(
-    [...compiler, "metadata", appSource],
-    options.root,
-    true,
-  );
-  const programMetadata = parseZProgramMetadata(metadataSource);
-  const manifest = deriveZServiceManifest(programMetadata);
   const outputDirectory = path.join(options.root, ".zapp", "generated");
   await mkdir(outputDirectory, { recursive: true });
+  const programMetadataPath = path.join(outputDirectory, "program.zmeta.json");
+  const cachePath = path.join(outputDirectory, "program.zmeta.cache.json");
+  const explicitInputs = [contractPath];
+  let programMetadataSource: string;
+  let programMetadata: ZProgramMetadata;
+  let manifest: ZServiceManifest;
+  let inputHashes: Record<string, string>;
+
+  try {
+    const cache = parseZFrontendServicesCache(await readFile(cachePath, "utf8"));
+    if (!sameZCompilerIdentity(cache.compiler, compilerIdentity)) {
+      throw new Error("cached Z compiler identity changed");
+    }
+    programMetadataSource = await readFile(programMetadataPath, "utf8");
+    programMetadata = parseZProgramMetadata(programMetadataSource);
+    if (!cacheCoversZProgramInputs(programMetadata, cache.inputHashes, explicitInputs)) {
+      throw new Error("cached Z service inputs are incomplete");
+    }
+    manifest = deriveZServiceManifest(programMetadata);
+    inputHashes = cache.inputHashes;
+    if (!await preparedZServicesAreCurrent({
+      bindingPath: path.join(outputDirectory, "services.ts"),
+      manifest,
+      programMetadataSource,
+      inputHashes,
+    })) {
+      throw new Error("cached Z service inputs changed");
+    }
+    console.log("[zapp] reused persistent checked Z service metadata");
+  } catch {
+    programMetadataSource = await run(
+      [...compiler, "metadata", appSource],
+      options.root,
+      true,
+    );
+    programMetadata = parseZProgramMetadata(programMetadataSource);
+    manifest = deriveZServiceManifest(programMetadata);
+    inputHashes = await hashZProgramInputs(programMetadata, explicitInputs);
+    await writeFile(programMetadataPath, programMetadataSource, "utf8");
+    const cache: ZFrontendServicesCache = {
+      schemaVersion: 1,
+      compiler: compilerIdentity,
+      inputHashes,
+    };
+    await writeFile(cachePath, `${JSON.stringify(cache, null, 2)}\n`, "utf8");
+  }
+
   await writeFile(
     path.join(outputDirectory, "services.zmeta.json"),
     `${JSON.stringify(manifest, null, 2)}\n`,
@@ -623,8 +734,8 @@ export async function prepareZFrontendServices(
   return {
     bindingPath,
     manifest,
-    programMetadataSource: metadataSource,
-    moduleHashes: await hashZProgramModules(programMetadata),
+    programMetadataSource,
+    inputHashes,
   };
 }
 

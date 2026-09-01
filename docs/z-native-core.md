@@ -28,10 +28,11 @@ the Z builder. The builder:
 6. initializes a process-wide Z `Application` through the generated runtime
    initializer, routes owned UTF-8 messages through Z, and shuts the root down
    deterministically;
-7. consumes the checked `z metadata` graph already produced for the frontend
-   when every module hash is still current, otherwise refreshes it from the
-   isolated workspace, then generates transport-independent typed TypeScript
-   service bindings;
+7. consumes the checked `z metadata` graph already validated from the persistent
+   frontend cache or produced by the current frontend preflight when every
+   module, package manifest, compiler contract, and compiler identity is still
+   current; otherwise it refreshes the graph from the isolated workspace, then
+   generates transport-independent typed TypeScript service bindings;
 8. links either the default AppKit/WebKit application host or the focused
    strict-C bridge host used by the non-UI regression; and
 9. bundles the canonical `bootstrap/webview.ts` source and generated browser

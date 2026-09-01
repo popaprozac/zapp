@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -18,8 +18,10 @@ import {
   validateZCompilerIdentity,
   zNativeEntry,
   zNativeStageFiles,
+  zProgramInputPaths,
 } from "./native-z";
 import type { ZServiceManifest } from "./z-service-bindings";
+import type { ZProgramMetadata } from "./z-program-metadata";
 
 describe("prepared Z service metadata", () => {
   const manifest: ZServiceManifest = {
@@ -76,7 +78,7 @@ describe("prepared Z service metadata", () => {
         bindingPath: path.join(directory, "services.ts"),
         manifest,
         programMetadataSource: "{}",
-        moduleHashes: {
+        inputHashes: {
           [modulePath]: createHash("sha256").update(source).digest("hex"),
         },
       };
@@ -85,6 +87,35 @@ describe("prepared Z service metadata", () => {
       expect(await preparedZServicesAreCurrent(prepared)).toBe(false);
       await rm(modulePath);
       expect(await preparedZServicesAreCurrent(prepared)).toBe(false);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("tracks package manifests and explicit compiler contracts as cache inputs", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "zapp-program-inputs-"));
+    const packageDirectory = path.join(directory, "package");
+    const sourceDirectory = path.join(packageDirectory, "src");
+    const modulePath = path.join(sourceDirectory, "service.zs");
+    const manifestPath = path.join(packageDirectory, "z.json");
+    const contractPath = path.join(directory, "compiler-contract.json");
+    try {
+      await mkdir(sourceDirectory, { recursive: true });
+      await Promise.all([
+        writeFile(modulePath, "export struct Service {}\n", "utf8"),
+        writeFile(manifestPath, "{}\n", "utf8"),
+        writeFile(contractPath, "{}\n", "utf8"),
+      ]);
+      const metadata: ZProgramMetadata = {
+        schemaVersion: 1,
+        entry: 0,
+        modules: [{ path: modulePath, symbols: [], calls: [] }],
+      };
+      expect(zProgramInputPaths(metadata, [contractPath])).toEqual([
+        contractPath,
+        manifestPath,
+        modulePath,
+      ].sort());
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

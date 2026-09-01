@@ -348,18 +348,22 @@ app.services.register("notes", createNotesService());
 It resolves `NotesService`, its public methods, and the exported request and
 response structs from compiler evidence, then derives the transport manifest
 and TypeScript bindings. No regular-expression source scanner and no
-hand-maintained `services.zmeta.json` remain. The generated program and service
-artifacts live under the application's gitignored `.zapp/z-native-core/`
-directory for inspection. Unknown compiler or metadata schema versions fail
-before native compilation.
+hand-maintained `services.zmeta.json` remain. The frontend metadata cache lives
+under the application's gitignored `.zapp/generated/` directory; rebased native
+artifacts remain inspectable under `.zapp/z-native-core/`. Unknown compiler or
+metadata schema versions fail before native compilation.
 
 `zapp dev` and `zapp build` collect this checked graph before Vite starts so
 `zapp:services` exists on a clean checkout. The same in-memory evidence is then
 reused by the isolated native build after Zapp verifies the content hash of
-every compiler-reported module and rebases its source paths into the staged
-workspace. An edited, deleted, or foreign module invalidates reuse and causes a
-fresh authoritative metadata pass. The normal build therefore pays for one
-semantic metadata traversal, not two, without accepting stale service facts.
+every compiler-reported module, package `z.json`, and pinned compiler contract,
+then rebases source paths into the staged workspace. Zapp persists that same
+evidence with the exact compiler identity, so a later unchanged CLI invocation
+can regenerate the public bindings without rerunning `z metadata`. An edit,
+deletion, compiler change, incomplete cache, or foreign module invalidates
+reuse and causes a fresh authoritative metadata pass. A normal build therefore
+pays for at most one semantic metadata traversal, while a warm unchanged build
+pays for none, without accepting stale service facts.
 
 ## Current service handler boundary
 
