@@ -318,16 +318,6 @@ export function deriveZServiceManifest(metadata: ZProgramMetadata): ZServiceMani
       addWireType(metadata, method.signature.returnType, types, seenTypes);
       const error = method.signature.errorType ?? undefined;
       if (error) {
-        if (
-          method.signature.asynchronous
-          || method.signature.executorAffinity !== null
-        ) {
-          throw new Error(
-            `[zapp] throwing suspending service method ${serviceType}.${method.name} `
-            + "is not supported by the fixed-point Z compiler yet; use a synchronous "
-            + "throwing method or return an explicit result value for this method",
-          );
-        }
         if (scalarTypes.has(error)) {
           throw new Error(
             `[zapp] service error ${JSON.stringify(error)} for ${serviceType}.${method.name} `

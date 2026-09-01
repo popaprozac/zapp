@@ -288,6 +288,8 @@ are now separate source graphs, and one Notes project drives dynamic
 multi-window WebViews and the strict-C embedding host. The first compiled
 permission slice also gates frontend window creation inside Z and returns
 structured invocation errors that the TypeScript runtime restores as
-descriptive error subclasses. Remaining work includes applying the same typed
-permission/error composition to generated services, zjs host attachment, and
+descriptive error subclasses. Generated services now preserve owned decoded
+request values and typed failures through suspension and explicit main-executor
+placement. Remaining work includes zjs host attachment, broader wire-type
+coverage, the still fail-closed synchronous executor-placed method shape, and
 ASan or equivalent leak evidence on a compatible host.

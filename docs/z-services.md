@@ -389,11 +389,13 @@ The thrown type must be an exported struct whose public fields use supported
 service-wire types. The compiler metadata names it; generated Z dispatch uses
 `attempt` or `attempt await`, serializes its fields only on the failure path,
 and publishes the service, method, error type, and details in the bridge error
-envelope. The first executable tier supports synchronous, non-placed methods.
-Throwing async or executor-isolated methods fail the build with a focused
-diagnostic until the fixed-point compiler can retain their typed failure across
-the suspension frame; returning an explicit result value remains available in
-that narrow case.
+envelope. The executable tier supports synchronous methods plus suspending
+methods with ordinary or `thread.main` placement. Generated dispatch
+materializes the typed result with `attempt await`, retains it in the owned task
+frame, and narrows the failure into the structured bridge envelope only at the
+transport boundary. Synchronous executor-placed methods remain fail-closed in
+the current native compiler tier; declaring the method `async` is the supported
+placement shape when it must participate in generated service dispatch.
 
 Generated TypeScript exports a same-named `ZappError` subclass and a details
 interface:
@@ -442,6 +444,19 @@ readonly class SearchService {
 }
 
 app.services.register("search", new SearchService({}));
+```
+
+Decoded request values are created before the service suspension and then
+transferred or borrowed according to the concrete method signature. An owned
+input therefore remains ordinary Z rather than a transport-specific wrapper:
+
+```z
+async function create(
+  input: CreateNoteInput
+): Note throws NoteCreationError on thread.main {
+  await delay(1);
+  return this.core.create(move input);
+}
 ```
 
 `AsyncServices.invoke` first checks the synchronous map, allowing one async
@@ -513,21 +528,19 @@ an intermediate JSON document.
   results after unlocking.
 - Headless and WebView async service routes, per-request cancellation,
   lifecycle ordering, lifecycle failures, and compiler-generated bindings are
-implemented. Native bridge failures now carry structured codes and become
-`ZappError` subclasses in TypeScript. Runtime-wide failures are exported by
-`@zappdev/runtime`, while declared service errors are emitted beside their
-generated service bindings. Named `security.capabilities` profiles can grant
-an entire registered service or one exact method. Selectors are checked against
-compiler metadata, and native dispatch rejects unauthorized originating
-windows before application service code runs.
-- Generated async dispatch supports multiple suspending methods per service,
-  but does not yet carry an owned request value across suspension. That is a
-  native async-frame composition limit, not an intended application API
-  restriction.
-- Declared typed service errors currently require a synchronous, non-placed
-  method. Persisting a thrown value through `await` or an executor hop is a
-  fixed-point async-frame parity task; Zapp rejects that shape rather than
-  flattening or losing the error.
+  implemented. Native bridge failures now carry structured codes and become
+  `ZappError` subclasses in TypeScript. Runtime-wide failures are exported by
+  `@zappdev/runtime`, while declared service errors are emitted beside their
+  generated service bindings. Named `security.capabilities` profiles can grant
+  an entire registered service or one exact method. Selectors are checked
+  against compiler metadata, and native dispatch rejects unauthorized
+  originating windows before application service code runs.
+- Generated async dispatch supports multiple suspending methods, owned decoded
+  inputs, declared typed failures, and explicit `thread.main` placement. The
+  Z Notes smoke exercises all four in one generated `notes.create` route.
+- Synchronous executor-placed service methods remain fail-closed until the
+  fixed-point compiler can execute that placement without manufacturing an
+  unnecessary task. Async placed methods are the implemented path today.
 - The in-tree Notes project now supplies its own `.zs` entries. A stable local
   package/module contract is the next productization step; it must work in both
   semantic frontends and the editor rather than relying on staging rewrites.

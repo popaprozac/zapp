@@ -21,7 +21,10 @@ export struct NoteCreationError {
 export readonly class NotesService implements ServiceLifecycle {
   readonly core: NotesCore;
 
-  function create(input: CreateNoteInput): Note throws NoteCreationError {
+  async function create(
+    input: CreateNoteInput
+  ): Note throws NoteCreationError on thread.main {
+    await delay(1);
     if (input.title.byteLength == 0) {
       throw NoteCreationError({
         message: "a note title is required",

@@ -92,7 +92,9 @@ describe("generated Z service dispatch", () => {
     expect(source).toContain("return __zappDispatchNotesServiceCreate(");
     expect(source).toContain("await on thread.main service.count()");
     expect(source).toContain("function __zappSelectNotesServiceAsyncMethod(");
-    expect(source).toContain("some(handler) => return await handler(move service)");
+    expect(source).toContain(
+      "some(handler) => return await handler(move service, in invocation)",
+    );
     expect(source).toContain("__zappDecodeCreateNoteInput");
     expect(source).toContain("__zappEncodeNote");
     expect(source).toContain("import { JsonNumber, JsonValue } from \"std/json\";");
@@ -118,16 +120,42 @@ describe("generated Z service dispatch", () => {
     })).toThrow(/does not support inout input capability/);
   });
 
-  it("fails closed on throwing async dispatch until native task frames preserve the error", () => {
-    const invalid = structuredClone(manifest);
-    invalid.services[0].methods[1].error = "NoteCreationError";
-    expect(() => renderZServiceDispatchers(invalid, {
+  it("preserves typed errors through suspending executor-placed dispatch", () => {
+    const throwing = structuredClone(manifest);
+    throwing.services[0].methods[1].error = "NoteCreationError";
+    const source = renderZServiceDispatchers(throwing, {
       outputPath: "/workspace/generated/service-dispatchers.zs",
       serviceContractModule: "/workspace/framework/service-contract.zs",
       servicesModule: "/workspace/framework/services.zs",
       asyncServiceContractModule: "/workspace/framework/async-service-contract.zs",
       serviceLifecycleContractModule: "/workspace/framework/service-lifecycle-contract.zs",
-    })).toThrow(/cannot lower throwing method NotesService.count/);
+    });
+    expect(source).toContain(
+      "const __called = attempt await on thread.main service.count()",
+    );
+    expect(source).toContain("ServiceOutcome.typedFailure(");
+    expect(source).toContain('errorType: "NoteCreationError"');
+    expect(source).toContain("__zappEncodeNoteCreationError(move error)");
+  });
+
+  it("decodes and transfers owned request values into suspending methods", () => {
+    const suspending = structuredClone(manifest);
+    suspending.services[0].methods[0].asynchronous = true;
+    const source = renderZServiceDispatchers(suspending, {
+      outputPath: "/workspace/generated/service-dispatchers.zs",
+      serviceContractModule: "/workspace/framework/service-contract.zs",
+      servicesModule: "/workspace/framework/services.zs",
+      asyncServiceContractModule: "/workspace/framework/async-service-contract.zs",
+      serviceLifecycleContractModule: "/workspace/framework/service-lifecycle-contract.zs",
+    });
+    expect(source).toContain("const __parsed = attempt json.parse(in invocation.arguments)");
+    expect(source).toContain("const input = match (__decoded)");
+    expect(source).toContain(
+      "const __called = attempt await service.create(move input)",
+    );
+    expect(source).toContain(
+      "__zappFinishNotesServiceCreate(move service, in invocation)",
+    );
   });
 
   it("keeps synchronous struct services on the non-task adapter path", () => {
@@ -175,13 +203,15 @@ describe("generated Z service dispatch", () => {
     expect(source).toContain('if (invocation.method == "count") {');
     expect(source).toContain('if (invocation.method == "isEmpty") {');
     expect(source).toContain(
-      "await __zappFinishNotesServiceCount(move service)",
+      "await __zappFinishNotesServiceCount(move service, in invocation)",
     );
     expect(source).toContain(
-      "await __zappFinishNotesServiceIsEmpty(move service)",
+      "await __zappFinishNotesServiceIsEmpty(move service, in invocation)",
     );
     expect(source).toContain("return Option.some(move handler)");
-    expect(source).toContain("some(handler) => return await handler(move service)");
+    expect(source).toContain(
+      "some(handler) => return await handler(move service, in invocation)",
+    );
   });
 
   it("generates checked native codecs for arrays of service structs", () => {

@@ -285,12 +285,15 @@ describe("compiler-produced Z program metadata", () => {
       .toThrow(/requires a literal service name/);
   });
 
-  it("fails closed when a throwing service method must suspend", () => {
-    const invalid = structuredClone(metadata);
-    invalid.modules[0].symbols[3].typeSignature!.methods[1].signature.errorType =
+  it("retains typed errors for suspending service methods", () => {
+    const throwing = structuredClone(metadata);
+    throwing.modules[0].symbols[3].typeSignature!.methods[1].signature.errorType =
       "NoteCreationError";
-    expect(() => deriveZServiceManifest(invalid))
-      .toThrow(/throwing suspending service method NotesService.count/);
+    const manifest = deriveZServiceManifest(throwing);
+    expect(manifest.services[0].methods[1].error).toBe("NoteCreationError");
+    expect(manifest.errors.map((error) => error.name)).toContain(
+      "NoteCreationError",
+    );
   });
 
   it("ignores framework-internal builder delegation", () => {

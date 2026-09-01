@@ -329,6 +329,27 @@ ${fields}
 }`;
 }
 
+function renderInputDecode(method: ZServiceMethodMetadata): string {
+  if (!method.input) return "";
+  return `  const __parsed = attempt json.parse(in invocation.arguments);
+  const __arguments = match (__parsed) {
+    success(value) => value;
+    failure(error) => return ServiceOutcome.failure(
+      \`INVALID_ARGUMENTS: ${"${error.message}"}\`
+    );
+  };
+  const __decoded = attempt __zappDecode${zWireCodecSuffix(method.input)}(
+    in __arguments
+  );
+  const input = match (__decoded) {
+    success(value) => value;
+    failure(error) => return ServiceOutcome.failure(
+      \`INVALID_ARGUMENTS: ${"${error.message}"}\`
+    );
+  };
+`;
+}
+
 function renderSyncMethodHelper(
   serviceName: string,
   serviceType: string,
@@ -363,25 +384,7 @@ function renderSyncMethodHelper(
     }
   };`
     : `  const result = ${call};`;
-  const decode = method.input
-    ? `    const __parsed = attempt json.parse(in invocation.arguments);
-    const __arguments = match (__parsed) {
-      success(value) => value;
-      failure(error) => return ServiceOutcome.failure(
-        \`INVALID_ARGUMENTS: ${"${error.message}"}\`
-      );
-    };
-    const __decoded = attempt __zappDecode${zWireCodecSuffix(method.input)}(
-      in __arguments
-    );
-    const input = match (__decoded) {
-      success(value) => value;
-      failure(error) => return ServiceOutcome.failure(
-        \`INVALID_ARGUMENTS: ${"${error.message}"}\`
-      );
-    };
-`
-    : "";
+  const decode = renderInputDecode(method);
   return `function __zappDispatch${generatedName(serviceType)}${generatedName(method.name)}(
   in service: ${serviceType},
   in invocation: ServiceInvocation
@@ -408,50 +411,53 @@ function renderSyncMethodBranch(
 }
 
 function renderAsyncMethodHelpers(
+  serviceName: string,
   serviceType: string,
   method: ZServiceMethodMetadata,
 ): string {
-  if (method.error) {
-    throw new Error(
-      `[zapp] generated async Z dispatch cannot lower throwing method `
-      + `${serviceType}.${method.name} in the current fixed-point compiler tier`,
-    );
-  }
   if (method.receiverMode !== "in") {
     throw new Error(
       `[zapp] generated repeatable service dispatch requires an in receiver for `
       + `${serviceType}.${method.name}, not ${method.receiverMode}`,
     );
   }
-  if (method.input) {
+  if (method.executorAffinity === "thread.main" && !method.asynchronous) {
     throw new Error(
-      `[zapp] generated async Z dispatch does not carry request values across `
-      + `suspension for ${serviceType}.${method.name} yet`,
+      `[zapp] generated async Z dispatch cannot lower synchronous executor-placed `
+      + `method ${serviceType}.${method.name} in the current fixed-point compiler tier`,
     );
   }
   const suffix = `${generatedName(serviceType)}${generatedName(method.name)}`;
+  const decode = renderInputDecode(method);
+  const call = `service.${method.name}(${inputCall(method)})`;
+  const awaited = method.executorAffinity === "thread.main"
+    ? `await on thread.main ${call}`
+    : `await ${call}`;
+  const invocation = method.error
+    ? `  const __called = attempt ${awaited};
+  const methodResult = match (__called) {
+    success(value) => value;
+    failure(error) => {
+      const encodedError = __zappEncode${zWireCodecSuffix(method.error)}(move error);
+      return ServiceOutcome.typedFailure(ServiceTypedFailure({
+        service: ${JSON.stringify(serviceName)},
+        method: ${JSON.stringify(method.name)},
+        errorType: ${JSON.stringify(method.error)},
+        message: ${JSON.stringify(`${serviceName}.${method.name} threw ${method.error}`)},
+        details: json.stringify(in encodedError),
+      }));
+    }
+  };`
+    : `  const methodResult = ${awaited};`;
   const encode = `  const encoded = __zappEncode${zWireCodecSuffix(method.returns)}(
     ${moved(method.returns, "methodResult")}
   );
   return ServiceOutcome.success(json.stringify(in encoded));`;
-  if (method.executorAffinity === "thread.main") {
-    return `async function __zappCall${suffix}(
-  service: ${serviceType}
-): ${method.returns} {
-  return await on thread.main service.${method.name}();
-}
-
-async function __zappFinish${suffix}(
-  service: ${serviceType}
-): ServiceOutcome {
-  const methodResult = await __zappCall${suffix}(move service);
-${encode}
-}`;
-  }
   return `async function __zappFinish${suffix}(
-  service: ${serviceType}
+  service: ${serviceType},
+  in invocation: ServiceInvocation
 ): ServiceOutcome {
-  const methodResult = await service.${method.name}();
+${decode}${invocation}
 ${encode}
 }`;
 }
@@ -474,13 +480,18 @@ function renderDispatcher(
   const synchronous = service.methods.filter((method) => !asynchronous.includes(method));
   const helpers = [
     ...synchronous.map((method) => renderSyncMethodHelper(service.name, service.type, method)),
-    ...asynchronous.map((method) => renderAsyncMethodHelpers(service.type, method)),
+    ...asynchronous.map((method) => renderAsyncMethodHelpers(
+      service.name,
+      service.type,
+      method,
+    )),
   ]
     .join("\n\n");
   const asyncMethodType = `__Zapp${generatedName(service.type)}AsyncMethod`;
   const asyncSelection = asynchronous.length > 0
     ? `type ${asyncMethodType} = async (
-  service: ${service.type}
+  service: ${service.type},
+  in invocation: ServiceInvocation
 ) => ServiceOutcome;
 
 function __zappSelect${generatedName(service.type)}AsyncMethod(
@@ -489,10 +500,11 @@ function __zappSelect${generatedName(service.type)}AsyncMethod(
 ${asynchronous.map((method) => `  // Static method ID: ${method.id}
   if (invocation.method == ${JSON.stringify(method.name)}) {
     const handler: ${asyncMethodType} = async (
-      service: ${service.type}
+      service: ${service.type},
+      in invocation: ServiceInvocation
     ): ServiceOutcome => await __zappFinish${generatedName(service.type)}${generatedName(
       method.name,
-    )}(move service);
+    )}(move service, in invocation);
     return Option.some(move handler);
   }`).join("\n")}
   return Option<${asyncMethodType}>.none;
@@ -503,7 +515,7 @@ ${asynchronous.map((method) => `  // Static method ID: ${method.id}
     in invocation
   );
   match (selected) {
-    some(handler) => return await handler(move service);
+    some(handler) => return await handler(move service, in invocation);
     none => return ServiceOutcome.failure("UNKNOWN_METHOD");
   }`
     : `${asynchronous.map((method) => `  // Static method ID: ${method.id}

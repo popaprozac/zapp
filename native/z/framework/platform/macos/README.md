@@ -8,14 +8,23 @@ This directory is Zapp's internal macOS backend. It is not part of the public
   deterministic host lifetime.
 - `application.zs` owns application startup, lifecycle ordering, and
   deterministic shutdown around that host lifetime.
-- `runtime.zs` owns shared application state, WebKit message routing, and the
-  authoritative open and retired native-window registries.
+- `runtime.zs` is the small composition facade that initializes and shuts down
+  the split application, message-routing, and native-window runtime modules.
+- `application-runtime.zs` owns shared application state, response delivery,
+  and the authoritative open and retired native-window registries.
+- `message-handler.zs` owns the retained `WKScriptMessageHandler` adapter and
+  transfers each native WebKit callback into checked Z routing.
+- `message-routing.zs` owns request decoding, cancellation, capability checks,
+  built-in operations, generated service dispatch, and structured completion.
 - `window-backend.zs` adapts the cross-platform `WindowBackend` contract to
   macOS operations.
 - `window-delegate.zs` owns the retained `NSWindowDelegate` adapter, window
   lifecycle/focus/resize policy, and the Z-owned registry close callback.
 - `window-runtime.zs` defines the retained AppKit/WebKit object graph for one
-  window; `runtime.zs` owns the authoritative open and retired registries.
+  window; `application-runtime.zs` owns the authoritative open and retired
+  registries.
+- `window-construction.zs` builds that native graph, installs protocol and
+  delegate adapters, configures navigation/injection, and starts the request.
 - `window-geometry.zs` converts Z window dimensions to and from the native
   `CGRect` representation with explicit, checked numeric construction.
 - `scheme-handler.zs` owns the retained WebKit protocol adapter, packaged-origin
