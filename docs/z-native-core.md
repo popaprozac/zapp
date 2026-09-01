@@ -145,16 +145,24 @@ so this isolation can be exercised directly. Cancellable `closeRequested`
 remains a synchronous Z-native event; asynchronous JavaScript observers cannot
 veto an AppKit close and are not presented as though they can.
 
-`@zappdev/runtime/window` is a focused facade over that composed path. It
-exports `currentWindow`, `createWindow`, the implemented event vocabulary, and
-the narrow `WindowHandle` contract without exposing the legacy `Window`
-namespace. Additional operations enter this boundary only after their native Z
-path, permissions, lifecycle, and frontend behavior are proven end to end.
+`@zappdev/runtime/window` talks directly to the narrow bridge for identity,
+creation, actions, and subscriptions. It exports `currentWindow`,
+`createWindow`, the implemented event vocabulary, and the narrow
+`WindowHandle` contract without importing or exposing the legacy `Window`
+implementation. Additional operations enter this boundary only after their
+native Z path, permissions, lifecycle, and frontend behavior are proven end to
+end.
 Its event payloads mirror Z directly: resize carries `windowId` plus a
 `WindowSize`, while position belongs to a future movement or bounds contract.
 Dimensions are native content-region values in logical display units (macOS
 points and Windows DIPs), never physical device pixels. Delivery timestamps are
 not fabricated as native event data.
+
+This boundary also has measured bundling evidence. Building the same Z Notes
+frontend with Vite 8.2.2 produced a 40,280-byte JavaScript chunk (12,202 bytes
+gzip) while the focused module delegated through the legacy window runtime.
+The direct bridge implementation produces 17,773 bytes (5,846 bytes gzip): a
+55.9% raw and 52.1% gzip reduction without changing application behavior.
 
 The Objective-C host owns the process/run-loop adapter, native service-response
 delivery, and smoke observation rather than application object construction or

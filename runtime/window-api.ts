@@ -1,31 +1,29 @@
 /**
  * Focused frontend window API for the Z-owned Zapp runtime.
  *
- * This module intentionally does not re-export the legacy `Window` namespace
- * or the broader pre-rewrite handle. New capabilities enter this boundary only
- * after their native Z path and frontend contract are composed end to end.
+ * This module talks directly to the narrow bridge. It intentionally does not
+ * import the pre-rewrite window implementation or expose its broader surface.
  */
 
-import {
-  createWindow as createLegacyWindow,
-  currentWindow as currentLegacyWindow,
-  type WindowCreateOptions,
-  type WindowEventSubscription,
-  type WindowHandle as LegacyWindowHandle,
-} from "./window";
-import {
-  WindowEvent as LegacyWindowEvent,
-} from "./events";
+import { getBridge } from "./bridge";
+import { ensurePermission } from "./permissions";
+import { WindowError } from "./window-errors";
 
 export { WindowError } from "./window-errors";
 export type {
   WindowErrorPayload,
   WindowOperation,
 } from "./window-errors";
-export type {
-  WindowCreateOptions,
-  WindowEventSubscription,
-};
+
+/** Frontend-safe options accepted by the Z-owned window factory. */
+export interface WindowCreateOptions {
+  title?: string;
+  url?: string;
+  width?: number;
+  height?: number;
+  visible?: boolean;
+  resizable?: boolean;
+}
 
 /** Native window content dimensions in platform-independent logical units. */
 export interface WindowSize {
@@ -48,12 +46,18 @@ export interface WindowResizedEvent {
 
 /** Window events implemented through the Z-owned native path. */
 export const WindowEvent = {
-  FOCUS: LegacyWindowEvent.FOCUS,
-  BLUR: LegacyWindowEvent.BLUR,
-  RESIZE: LegacyWindowEvent.RESIZE,
+  FOCUS: 1,
+  BLUR: 2,
+  RESIZE: 3,
 } as const;
 
 export type WindowEvent = (typeof WindowEvent)[keyof typeof WindowEvent];
+
+/** One active window-event subscription. */
+export interface WindowEventSubscription {
+  /** Stop delivery. Repeated calls are harmless. */
+  unsubscribe(): void;
+}
 
 /** Identity-bearing frontend proxy for one native Zapp window. */
 export interface WindowHandle {
@@ -83,19 +87,55 @@ type FocusedEventHandler =
   | ((event: WindowBlurredEvent) => void)
   | ((event: WindowResizedEvent) => void);
 
-/**
- * Project the broad pre-rewrite handle into the Z-owned frontend contract.
- *
- * Event projection is intentional: legacy bridge metadata such as delivery
- * timestamps and combined geometry never becomes an accidental part of the
- * focused API.
- */
-class FocusedWindowHandle implements WindowHandle {
-  readonly id: string;
+type UnknownRecord = Record<string, unknown>;
 
-  constructor(private readonly legacy: LegacyWindowHandle) {
-    this.id = legacy.id;
+const WINDOW_ID_KEY = Symbol.for("zapp.windowId");
+
+const WINDOW_EVENT_NAMES: Record<WindowEvent, string> = {
+  [WindowEvent.FOCUS]: "window:focus",
+  [WindowEvent.BLUR]: "window:blur",
+  [WindowEvent.RESIZE]: "window:resize",
+};
+
+function isRecord(value: unknown): value is UnknownRecord {
+  return typeof value === "object" && value !== null;
+}
+
+function requiredWindowId(value: unknown, operation: "create" | "current"): string {
+  if (typeof value === "string" && value.length > 0) return value;
+  throw new WindowError({
+    operation: operation === "create" ? "create" : undefined,
+    message: operation === "current"
+      ? "The current WebView does not have a native window identity."
+      : "Native window creation returned an invalid window identity.",
+  });
+}
+
+function windowAction(action: string, args: UnknownRecord): void {
+  const bridge = getBridge() as ReturnType<typeof getBridge> & {
+    post?: (message: string) => void;
+  };
+  const message = JSON.stringify({ t: 4, m: action, a: args });
+  if (bridge.post) {
+    bridge.post(message);
+    return;
   }
+  bridge.emit(`__window_action:${action}`, args);
+}
+
+function subscription(cleanup: () => void): WindowEventSubscription {
+  let active = true;
+  return {
+    unsubscribe(): void {
+      if (!active) return;
+      active = false;
+      cleanup();
+    },
+  };
+}
+
+class FocusedWindowHandle implements WindowHandle {
+  constructor(readonly id: string) {}
 
   subscribe(
     event: typeof WindowEvent.FOCUS,
@@ -110,43 +150,51 @@ class FocusedWindowHandle implements WindowHandle {
     handler: (event: WindowResizedEvent) => void,
   ): WindowEventSubscription;
   subscribe(event: WindowEvent, handler: FocusedEventHandler): WindowEventSubscription {
-    if (event === WindowEvent.RESIZE) {
-      const receive = handler as (value: WindowResizedEvent) => void;
-      return this.legacy.subscribe(LegacyWindowEvent.RESIZE, (value) => {
-        receive({
-          windowId: value.windowId,
-          size: {
-            width: value.size.width,
-            height: value.size.height,
-          },
-        });
-      });
-    }
+    const cleanup = getBridge().on(WINDOW_EVENT_NAMES[event], (value) => {
+      if (!isRecord(value) || value.windowId !== this.id) return;
 
-    const receive = handler as (value: WindowFocusedEvent | WindowBlurredEvent) => void;
-    return this.legacy.subscribe(event, (value) => {
-      receive({ windowId: value.windowId });
+      if (event === WindowEvent.RESIZE) {
+        if (!isRecord(value.size)) return;
+        const width = value.size.width;
+        const height = value.size.height;
+        if (typeof width !== "number" || typeof height !== "number") return;
+        const receive = handler as (event: WindowResizedEvent) => void;
+        receive({ windowId: this.id, size: { width, height } });
+        return;
+      }
+
+      const receive = handler as (
+        event: WindowFocusedEvent | WindowBlurredEvent,
+      ) => void;
+      receive({ windowId: this.id });
     });
+    return subscription(cleanup);
   }
 
-  show(): void { this.legacy.show(); }
-  hide(): void { this.legacy.hide(); }
-  close(): void { this.legacy.close(); }
-  setTitle(title: string): void { this.legacy.setTitle(title); }
-}
-
-function focusedWindow(legacy: LegacyWindowHandle): WindowHandle {
-  return new FocusedWindowHandle(legacy);
+  show(): void { windowAction("show", { windowId: this.id }); }
+  hide(): void { windowAction("hide", { windowId: this.id }); }
+  close(): void { windowAction("close", { windowId: this.id }); }
+  setTitle(title: string): void {
+    windowAction("setTitle", { windowId: this.id, title });
+  }
 }
 
 /** Return the identity-bearing handle for the current WebView window. */
 export function currentWindow(): WindowHandle {
-  return focusedWindow(currentLegacyWindow());
+  return new FocusedWindowHandle(
+    requiredWindowId((globalThis as any)[WINDOW_ID_KEY], "current"),
+  );
 }
 
 /** Ask the application-owned native WindowManager to realize a new window. */
 export async function createWindow(
   options: WindowCreateOptions = {},
 ): Promise<WindowHandle> {
-  return focusedWindow(await createLegacyWindow(options));
+  ensurePermission("window:create");
+  const host = (globalThis as any).__zappBridge;
+  const result = host?.createWindow
+    ? host.createWindow(options)
+    : await getBridge().invoke("__window:create", options as UnknownRecord);
+  const windowId = isRecord(result) ? result.windowId : undefined;
+  return new FocusedWindowHandle(requiredWindowId(windowId, "create"));
 }

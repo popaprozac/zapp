@@ -379,7 +379,12 @@ drives `show`, `hide`, `setTitle`, and `close` through ordinary frontend window
 handles into the Z-owned manager. AppKit focus, blur, and resize callbacks now
 flow through typed Z events into the matching WebView. The focused
 `@zappdev/runtime/window` boundary deliberately exposes only this composed
-surface and does not leak the legacy `Window` namespace.
+surface, talks directly to the narrow bridge, and neither imports nor exposes
+the legacy `Window` implementation.
+
+This satisfies the Phase 2 exit criterion for the macOS reference vertical
+slice. Additional product breadth remains intentionally separate from the
+replacement core proof.
 
 ### Phase 3: zjs worker vertical slice
 
