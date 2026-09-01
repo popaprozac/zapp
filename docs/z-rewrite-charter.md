@@ -340,9 +340,16 @@ mirroring native Z mechanically. A frontend may import named functions and
 proxy handles:
 
 ```ts
-import { currentWindow, createWindow } from "@zapp/window";
+import {
+  createWindow,
+  currentWindow,
+  WindowEvent,
+} from "@zappdev/runtime/window";
 
 const current = currentWindow();
+const resized = current.subscribe(WindowEvent.RESIZE, ({ size }) => {
+  console.log(size.width, size.height);
+});
 const diagnostics = await createWindow({
   title: "Diagnostics",
   url: "/diagnostics",
@@ -369,8 +376,10 @@ native core was replaced.
 Current checkpoint: the Z Notes application creates multiple native windows,
 uses generated typed services with error and cancellation propagation, and
 drives `show`, `hide`, `setTitle`, and `close` through ordinary frontend window
-handles into the Z-owned manager. Frontend delivery of the native typed window
-event surface remains the next focused composition slice.
+handles into the Z-owned manager. AppKit focus, blur, and resize callbacks now
+flow through typed Z events into the matching WebView. The focused
+`@zappdev/runtime/window` boundary deliberately exposes only this composed
+surface and does not leak the legacy `Window` namespace.
 
 ### Phase 3: zjs worker vertical slice
 

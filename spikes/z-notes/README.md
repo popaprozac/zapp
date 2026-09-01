@@ -69,6 +69,12 @@ same application-owned `WindowManager`. `Window.show()`, `hide()`,
 `setTitle()`, and idempotent `close()` are main-executor operations. The process
 stops only after the last native window closes.
 
+Frontend code imports these capabilities from `@zappdev/runtime/window`. That
+focused boundary exposes the composed factories, handle operations, and
+focus/blur/resize subscriptions without carrying forward the legacy `Window`
+namespace. New capabilities join it only after their Z-owned native route and
+frontend contract work together end to end.
+
 The frontend window factory is allowed explicitly by
 `security.permissions: ["window:create"]`. Zapp mirrors that manifest for a
 friendly TypeScript error, but the compiled Z router remains authoritative: a

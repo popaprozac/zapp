@@ -1,8 +1,8 @@
 import {
   createWindow,
   currentWindow,
+  WindowEvent,
 } from "@zappdev/runtime/window";
-import { WindowEvent } from "@zappdev/runtime";
 import {
   health,
   NoteCreationError,

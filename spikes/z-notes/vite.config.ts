@@ -10,7 +10,7 @@ export default {
   resolve: {
     alias: {
       "@zappdev/runtime/window": fileURLToPath(
-        new URL("../../runtime/window.ts", import.meta.url),
+        new URL("../../runtime/window-api.ts", import.meta.url),
       ),
     },
   },

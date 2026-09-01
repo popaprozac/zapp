@@ -129,6 +129,8 @@ into the matching WebView. The frontend API deliberately mirrors the backend's
 subscription vocabulary and lifecycle:
 
 ```ts
+import { WindowEvent } from "@zappdev/runtime/window";
+
 const resized = window.subscribe(WindowEvent.RESIZE, ({ size }) => {
   renderSize(size.width, size.height);
 });
@@ -142,6 +144,12 @@ the handle identity. Z Notes renders per-window focus, blur, and resize counters
 so this isolation can be exercised directly. Cancellable `closeRequested`
 remains a synchronous Z-native event; asynchronous JavaScript observers cannot
 veto an AppKit close and are not presented as though they can.
+
+`@zappdev/runtime/window` is a focused facade over that composed path. It
+exports `currentWindow`, `createWindow`, the implemented event vocabulary, and
+the narrow `WindowHandle` contract without exposing the legacy `Window`
+namespace. Additional operations enter this boundary only after their native Z
+path, permissions, lifecycle, and frontend behavior are proven end to end.
 
 The Objective-C host owns the process/run-loop adapter, native service-response
 delivery, and smoke observation rather than application object construction or
