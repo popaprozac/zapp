@@ -16,6 +16,7 @@
     "spike:z-notes:smoke": "bun run spikes/z-notes/run.ts --smoke",
     "spike:z-notes:dev": "bun run spikes/z-notes/dev.ts",
     "spike:z-notes:dev-smoke": "bun run spikes/z-notes/dev.ts --smoke",
+    "spike:zjs-worker-host": "bun run spikes/zjs-worker-host/run.ts",
     "spike:z-webview": "bun run spikes/z-notes/run.ts",
     "spike:z-webview:sanitize": "bun run spikes/z-notes/sanitize.ts",
     "bench:z-notes:zapp:build": "bun run benchmarks/z-notes/scripts/build-zapp.ts",

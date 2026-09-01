@@ -1,0 +1,16 @@
+declare module "zapp_worker_zjs.h" {
+  export function zapp_zjs_engine_create(): _ | null {
+    deinit zapp_zjs_engine_destroy;
+  }
+  export function zapp_zjs_engine_evaluate_module(
+    in engine: _,
+    in source: _
+  ): _;
+  export function zapp_zjs_engine_result(in engine: _): _;
+  export function zapp_zjs_engine_error(
+    in engine: _
+  ): view cstring | null {
+    borrowed from engine;
+  }
+  export function zapp_zjs_engine_destroy(move engine: _): _;
+}
