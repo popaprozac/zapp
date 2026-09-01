@@ -35,10 +35,13 @@ actual executable build.
 
 This adapter is intentionally narrow. It keeps `ZjsContext`, `ZjsValue`, GC
 roots, module evaluation, and engine error conversion out of Zapp's eventual
-public worker model. The private `WorkerEngine` trait makes the scheduling
-contract engine-neutral: load a module, report pending work and its next wake,
-pump one turn, and expose the terminal result. It is evidence for a future API,
-not that API itself.
+public worker model. The spike now imports Zapp's private generic
+`WorkerEngine<Command>` runtime from `native/z/framework/worker/engine.zs`.
+That contract is engine-neutral and command-neutral: load a module, dispatch
+one application-selected command type, report pending work and its next wake,
+pump one turn, and expose the terminal result. The temporary arithmetic
+`WorkerCommand` remains local to this spike rather than becoming framework or
+public API. This is executable evidence for a future API, not that API itself.
 
 The private mailbox uses `Channel<WorkerCommand>.bounded(capacity)` with a
 shareable asynchronous sender and one synchronous receiver owned by the worker

@@ -4,16 +4,18 @@ import { thread } from "std/thread";
 import { delay } from "std/time";
 import native from "zapp_worker_zjs.h";
 import {
-  WorkerEngine,
   WorkerCommand,
+  WorkerMessage,
+} from "./worker-engine.zs";
+import {
+  WorkerEngine,
   WorkerInbox,
   WorkerLifecycle,
-  WorkerMessage,
   WorkerModule,
   createWorkerInbox,
   createWorkerMailbox,
   runWorkerEngine,
-} from "./worker-engine.zs";
+} from "../../native/z/framework/worker/engine.zs";
 
 const workerModule: cstring = "export function onCommand(left, right) { setTimeout(() => { __zappServiceAdd(left, right); }, 5); }";
 
@@ -23,7 +25,7 @@ export c function zapp_worker_probe_add(left: i32, right: i32): i32 {
   return left + right;
 }
 
-struct ZjsWorkerEngine implements WorkerEngine {
+struct ZjsWorkerEngine implements WorkerEngine<WorkerCommand> {
   handle: native.ZappZjsEngine;
 
   function load(
@@ -67,7 +69,9 @@ struct ZjsWorkerEngine implements WorkerEngine {
   }
 }
 
-function executeWorkerModule(in inbox: WorkerInbox): WorkerLifecycle {
+function executeWorkerModule(
+  in inbox: WorkerInbox<WorkerCommand>
+): WorkerLifecycle {
   const engine = native.zapp_zjs_engine_create();
   if (engine == null) return WorkerLifecycle.failed(100);
 
@@ -78,8 +82,8 @@ function executeWorkerModule(in inbox: WorkerInbox): WorkerLifecycle {
 
 async function main(): i32 {
   const { sender, receiver } = Channel<WorkerCommand>.bounded(1);
-  const mailbox = createWorkerMailbox(move sender);
-  const inbox = createWorkerInbox(move receiver, mailbox);
+  const mailbox = createWorkerMailbox<WorkerCommand>(move sender);
+  const inbox = createWorkerInbox<WorkerCommand>(move receiver, mailbox);
   const worker = thread.spawn(
     move (): WorkerLifecycle => executeWorkerModule(in inbox)
   );
@@ -107,8 +111,10 @@ async function main(): i32 {
     sender: cancellationSender,
     receiver: cancellationReceiver,
   } = Channel<WorkerCommand>.bounded(1);
-  const cancellation = createWorkerMailbox(move cancellationSender);
-  const cancellationInbox = createWorkerInbox(
+  const cancellation = createWorkerMailbox<WorkerCommand>(
+    move cancellationSender
+  );
+  const cancellationInbox = createWorkerInbox<WorkerCommand>(
     move cancellationReceiver,
     cancellation
   );

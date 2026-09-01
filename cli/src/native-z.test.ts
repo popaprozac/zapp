@@ -556,6 +556,14 @@ describe("Z native host inputs", () => {
       new URL("../../native/z/framework/application-services.zs", import.meta.url),
       "utf8",
     );
+    const workerEngine = readFileSync(
+      new URL("../../native/z/framework/worker/engine.zs", import.meta.url),
+      "utf8",
+    );
+    const workerSpike = readFileSync(
+      new URL("../../spikes/zjs-worker-host/main.zs", import.meta.url),
+      "utf8",
+    );
 
     expect(app).toContain("let app = Application();");
     expect(application).toContain(
@@ -605,6 +613,16 @@ describe("Z native host inputs", () => {
     expect(windows).not.toMatch(/\b__[A-Za-z]/);
     expect(applicationServices).toContain("internal struct ConfiguredServices");
     expect(applicationServices).toContain("internal function freezeConfigured(");
+    expect(workerEngine).toContain("export trait WorkerEngine<Command>");
+    expect(workerEngine).toContain("export readonly class WorkerMailbox<Command>");
+    expect(workerEngine).toContain("export struct WorkerInbox<Command>");
+    expect(workerEngine).toContain("Engine: WorkerEngine<Command>");
+    expect(workerSpike).toContain(
+      'from "../../native/z/framework/worker/engine.zs"',
+    );
+    expect(workerSpike).toContain(
+      "struct ZjsWorkerEngine implements WorkerEngine<WorkerCommand>",
+    );
   });
 
   it("freezes value services into an arbitrary-thread callable router", () => {
