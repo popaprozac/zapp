@@ -1,9 +1,12 @@
 import path from "node:path";
-import { existsSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, realpathSync } from "node:fs";
 import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import type { BuildTarget } from "./build-target";
 import type { ResolvedConfig } from "./config";
 import type { ResolvedCapabilityProfile } from "./capabilities";
+import type { ZServiceManifest } from "./z-service-bindings";
+import type { ZProgramMetadata } from "./z-program-metadata";
 import { isPermissionAllowed, resolvePermissions } from "./permissions";
 import {
   buildWebviewInjections,
@@ -41,11 +44,24 @@ interface BuildNativeZOptions {
   config: ResolvedConfig;
   /** Development frontend origin. Absent means packaged embedded assets. */
   devUrl?: string;
+  preparedServices?: PreparedZFrontendServices;
 }
 
 export interface PrepareZFrontendServicesOptions {
   root: string;
   nativeDir: string;
+}
+
+export interface PreparedZFrontendServices {
+  bindingPath: string;
+  manifest: ZServiceManifest;
+  programMetadataSource: string;
+  moduleHashes: Record<string, string>;
+}
+
+export interface ZModulePathMapping {
+  source: string;
+  destination: string;
 }
 
 function renderZCapabilityProfiles(
@@ -484,17 +500,88 @@ export async function assertZCompilerContract(
   return actual;
 }
 
+async function hashFile(file: string): Promise<string> {
+  return createHash("sha256").update(await readFile(file)).digest("hex");
+}
+
+async function hashZProgramModules(
+  metadata: ZProgramMetadata,
+): Promise<Record<string, string>> {
+  return Object.fromEntries(await Promise.all(metadata.modules.map(async (module) => (
+    [module.path, await hashFile(module.path)] as const
+  ))));
+}
+
+export async function preparedZServicesAreCurrent(
+  prepared: PreparedZFrontendServices,
+): Promise<boolean> {
+  for (const [modulePath, expectedHash] of Object.entries(prepared.moduleHashes)) {
+    if (!existsSync(modulePath) || await hashFile(modulePath) !== expectedHash) return false;
+  }
+  return true;
+}
+
+function rebaseZModulePath(
+  modulePath: string,
+  mappings: ZModulePathMapping[],
+): string {
+  const canonical = (value: string): string => {
+    try {
+      return realpathSync(value);
+    } catch {
+      return path.resolve(value);
+    }
+  };
+  const resolvedModule = canonical(modulePath);
+  for (const mapping of mappings) {
+    const resolvedSource = canonical(mapping.source);
+    const relative = path.relative(resolvedSource, resolvedModule);
+    if (!relative.startsWith("..") && !path.isAbsolute(relative)) {
+      return path.join(mapping.destination, relative);
+    }
+  }
+  throw new Error(
+    `[zapp] prepared Z service module ${modulePath} is outside the staged source graph`,
+  );
+}
+
+/** Rebase checked source metadata into the isolated native build workspace. */
+export function rebaseZServiceManifest(
+  manifest: ZServiceManifest,
+  mappings: ZModulePathMapping[],
+): ZServiceManifest {
+  const rebaseType = <T extends { module: string }>(value: T): T => ({
+    ...value,
+    module: rebaseZModulePath(value.module, mappings),
+  });
+  return {
+    ...manifest,
+    types: manifest.types.map(rebaseType),
+    enums: manifest.enums.map(rebaseType),
+    errors: manifest.errors.map(rebaseType),
+    services: manifest.services.map((service) => ({
+      ...service,
+      module: rebaseZModulePath(service.module, mappings),
+      registration: {
+        ...service.registration,
+        module: rebaseZModulePath(service.registration.module, mappings),
+      },
+    })),
+  };
+}
+
 /**
  * Generate the WebView-facing TypeScript service module before Vite starts.
  *
- * The full native build repeats metadata collection from its isolated staged
- * workspace and remains authoritative for linking. This source-graph pass is
- * intentionally smaller: it gives Vite and TypeScript a real generated module
- * on the first clean `zapp dev` / `zapp build` invocation.
+ * The native build reuses this checked source graph when every module hash is
+ * still current, and falls back to metadata collection from its isolated
+ * staged workspace when it is not. This gives Vite and TypeScript a real
+ * generated module on the first clean `zapp dev` / `zapp build` invocation
+ * without normally paying for semantic metadata twice.
  */
 export async function prepareZFrontendServices(
   options: PrepareZFrontendServicesOptions,
-): Promise<string> {
+): Promise<PreparedZFrontendServices> {
   const appSource = path.join(options.root, "zapp");
   const sourceEntry = path.join(appSource, zNativeEntry(
     resolveZNativeHost(process.env.ZAPP_Z_HOST),
@@ -523,7 +610,8 @@ export async function prepareZFrontendServices(
     options.root,
     true,
   );
-  const manifest = deriveZServiceManifest(parseZProgramMetadata(metadataSource));
+  const programMetadata = parseZProgramMetadata(metadataSource);
+  const manifest = deriveZServiceManifest(programMetadata);
   const outputDirectory = path.join(options.root, ".zapp", "generated");
   await mkdir(outputDirectory, { recursive: true });
   await writeFile(
@@ -531,7 +619,13 @@ export async function prepareZFrontendServices(
     `${JSON.stringify(manifest, null, 2)}\n`,
     "utf8",
   );
-  return generateZServiceBindings(manifest, outputDirectory);
+  const bindingPath = await generateZServiceBindings(manifest, outputDirectory);
+  return {
+    bindingPath,
+    manifest,
+    programMetadataSource: metadataSource,
+    moduleHashes: await hashZProgramModules(programMetadata),
+  };
 }
 
 export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> {
@@ -678,18 +772,35 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
   const { bundleWebviewBootstrapRaw } = await import(
     path.join(resolveBootstrapDir(), "codegen.ts")
   );
-  const programMetadataSource = await run(
-    [...compiler, "metadata", stage],
-    options.root,
-    true,
-  );
+  let programMetadataSource: string;
+  let serviceManifest: ZServiceManifest;
+  if (
+    options.preparedServices
+    && await preparedZServicesAreCurrent(options.preparedServices)
+  ) {
+    programMetadataSource = options.preparedServices.programMetadataSource;
+    serviceManifest = rebaseZServiceManifest(options.preparedServices.manifest, [
+      { source: appSource, destination: stagedAppSource },
+      { source, destination: path.join(workspace, "native", "z") },
+    ]);
+    console.log("[zapp] reused checked Z service metadata from the frontend preflight");
+  } else {
+    if (options.preparedServices) {
+      console.log("[zapp] Z sources changed after frontend preflight; refreshing metadata");
+    }
+    programMetadataSource = await run(
+      [...compiler, "metadata", stage],
+      options.root,
+      true,
+    );
+    serviceManifest = deriveZServiceManifest(
+      parseZProgramMetadata(programMetadataSource),
+    );
+  }
   await writeFile(
     path.join(stage, "program.zmeta.json"),
     programMetadataSource,
     "utf8",
-  );
-  const serviceManifest = deriveZServiceManifest(
-    parseZProgramMetadata(programMetadataSource),
   );
   const capabilityProfiles = resolveCapabilityProfiles(
     options.config,

@@ -41,7 +41,7 @@ process.env.ZAPP_NATIVE_LANG = "z";
 process.env.ZAPP_Z_HOST = "desktop";
 if (smoke) process.env.ZAPP_Z_DESKTOP_SMOKE_SUPPORT = "1";
 try {
-  await prepareZFrontendServices({
+  const preparedZServices = await prepareZFrontendServices({
     root: spike,
     nativeDir: resolve(repository, "native"),
   });
@@ -59,6 +59,7 @@ try {
     optimize: true,
     target: "macos",
     config,
+    preparedZServices,
   });
   compiled = true;
 } finally {

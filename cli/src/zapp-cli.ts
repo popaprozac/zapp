@@ -23,7 +23,10 @@ import { createProductionBundle } from "./package";
 import { generateAssetManifest } from "./assets";
 import { setCliLevel, levelFromArgv, getCliLevel, envFromLevel, clog, clogError } from "./log";
 import { nativeLanguage } from "./native-lang";
-import { prepareZFrontendServices } from "./native-z";
+import {
+  prepareZFrontendServices,
+  type PreparedZFrontendServices,
+} from "./native-z";
 import { signalProcessTree, terminateProcessTree } from "./bounded-process";
 
 // Bootstrap codegen lives outside cli/ in the monorepo but is bundled
@@ -241,10 +244,11 @@ async function runDev(root: string) {
   // their public `zapp:services` module from compiler metadata; legacy native
   // hosts retain the source scanner during migration.
   const selectedNativeLanguage = nativeLanguage();
+  let preparedZServices: PreparedZFrontendServices | undefined;
   if (selectedNativeLanguage === "z") {
     clog(1, "generating typed Z service module...");
-    const generated = await prepareZFrontendServices({ root, nativeDir });
-    clog(1, `generated ${path.relative(root, generated)}`);
+    preparedZServices = await prepareZFrontendServices({ root, nativeDir });
+    clog(1, `generated ${path.relative(root, preparedZServices.bindingPath)}`);
   } else {
     clog(1, "scanning for services...");
     const count = await generateBindings(root);
@@ -413,6 +417,7 @@ async function runDev(root: string) {
       devUrl,
       config,
       target,
+      preparedZServices,
     });
   } catch (err) {
     await cleanup();
@@ -577,10 +582,11 @@ async function runBuild(
 
   // 1. Generate service bindings before Vite resolves application imports.
   const selectedNativeLanguage = nativeLanguage();
+  let preparedZServices: PreparedZFrontendServices | undefined;
   if (selectedNativeLanguage === "z") {
     clog(1, "generating typed Z service module...");
-    const generated = await prepareZFrontendServices({ root, nativeDir });
-    clog(1, `generated ${path.relative(root, generated)}`);
+    preparedZServices = await prepareZFrontendServices({ root, nativeDir });
+    clog(1, `generated ${path.relative(root, preparedZServices.bindingPath)}`);
   } else {
     clog(1, "scanning for services...");
     const count = await generateBindings(root);
@@ -640,6 +646,7 @@ async function runBuild(
       optimize: true,
       config,
       target,
+      preparedZServices,
     });
     const size = Bun.file(nativeOut).size;
     clog(0, `build complete: ${nativeOut} (${Math.round(size / 1024)} KB, Z core)`);

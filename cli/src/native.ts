@@ -1110,6 +1110,7 @@ interface CompileOptions {
    * inside compileNative) sees them too.
    */
   config?: import("./config").ResolvedConfig;
+  preparedZServices?: import("./native-z").PreparedZFrontendServices;
 }
 
 /**
@@ -1450,6 +1451,7 @@ export async function compileNative(opts: CompileOptions): Promise<void> {
       target,
       config: opts.config,
       devUrl: opts.devUrl,
+      preparedServices: opts.preparedZServices,
     });
     return;
   }

@@ -1,18 +1,95 @@
 import { describe, expect, it } from "bun:test";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
   parseZCompilerIdentity,
+  preparedZServicesAreCurrent,
   renderZApplicationMetadata,
   renderZConfiguredDesktopSmoke,
   renderZConfiguredWebView,
   renderZWebviewBootstrapConfig,
   renderZNativeManifest,
+  rebaseZServiceManifest,
   resolveZFrontendOrigin,
   resolveZNativeHost,
   validateZCompilerIdentity,
   zNativeEntry,
   zNativeStageFiles,
 } from "./native-z";
+import type { ZServiceManifest } from "./z-service-bindings";
+
+describe("prepared Z service metadata", () => {
+  const manifest: ZServiceManifest = {
+    schemaVersion: 5,
+    types: [{ name: "Request", module: "/repo/app/zapp/types.zs", fields: [] }],
+    enums: [{ name: "State", module: "/repo/app/zapp/types.zs", variants: [] }],
+    errors: [{ name: "Failure", module: "/repo/app/zapp/errors.zs", fields: [] }],
+    services: [{
+      name: "notes",
+      type: "NotesService",
+      kind: "struct",
+      module: "/repo/app/zapp/notes.zs",
+      lifecycle: false,
+      registration: {
+        module: "/repo/app/zapp/main.zs",
+        offset: 42,
+        line: 3,
+        column: 2,
+        method: "ApplicationServicesBuilder.register",
+      },
+      methods: [],
+    }],
+  };
+
+  it("rebases every source-bearing manifest field into the isolated workspace", () => {
+    const rebased = rebaseZServiceManifest(manifest, [{
+      source: "/repo/app/zapp",
+      destination: "/stage/workspace/app/zapp",
+    }]);
+
+    expect(rebased.types[0].module).toBe("/stage/workspace/app/zapp/types.zs");
+    expect(rebased.enums[0].module).toBe("/stage/workspace/app/zapp/types.zs");
+    expect(rebased.errors[0].module).toBe("/stage/workspace/app/zapp/errors.zs");
+    expect(rebased.services[0].module).toBe("/stage/workspace/app/zapp/notes.zs");
+    expect(rebased.services[0].registration.module)
+      .toBe("/stage/workspace/app/zapp/main.zs");
+    expect(manifest.services[0].module).toBe("/repo/app/zapp/notes.zs");
+  });
+
+  it("fails closed when prepared evidence names a module outside the staged graph", () => {
+    expect(() => rebaseZServiceManifest(manifest, [{
+      source: "/different/repository",
+      destination: "/stage/workspace",
+    }])).toThrow(/outside the staged source graph/);
+  });
+
+  it("invalidates prepared evidence when any checked module changes or disappears", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "zapp-prepared-services-"));
+    const modulePath = path.join(directory, "service.zs");
+    const source = "export struct Service {}\n";
+    try {
+      await writeFile(modulePath, source, "utf8");
+      const prepared = {
+        bindingPath: path.join(directory, "services.ts"),
+        manifest,
+        programMetadataSource: "{}",
+        moduleHashes: {
+          [modulePath]: createHash("sha256").update(source).digest("hex"),
+        },
+      };
+      expect(await preparedZServicesAreCurrent(prepared)).toBe(true);
+      await writeFile(modulePath, `${source}// changed\n`, "utf8");
+      expect(await preparedZServicesAreCurrent(prepared)).toBe(false);
+      await rm(modulePath);
+      expect(await preparedZServicesAreCurrent(prepared)).toBe(false);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("renderZConfiguredDesktopSmoke", () => {
   it("keeps production builds free of the smoke environment probe", () => {

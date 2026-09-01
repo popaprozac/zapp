@@ -353,6 +353,14 @@ artifacts live under the application's gitignored `.zapp/z-native-core/`
 directory for inspection. Unknown compiler or metadata schema versions fail
 before native compilation.
 
+`zapp dev` and `zapp build` collect this checked graph before Vite starts so
+`zapp:services` exists on a clean checkout. The same in-memory evidence is then
+reused by the isolated native build after Zapp verifies the content hash of
+every compiler-reported module and rebases its source paths into the staged
+workspace. An edited, deleted, or foreign module invalidates reuse and causes a
+fresh authoritative metadata pass. The normal build therefore pays for one
+semantic metadata traversal, not two, without accepting stale service facts.
+
 ## Current service handler boundary
 
 The native build now describes each generated adapter through an
