@@ -1,7 +1,7 @@
 import { mountNotesApp } from "../../../shared/app.js";
 import "../../../shared/app.css";
+import { notes } from "zapp:services";
 
-const notes = globalThis.__zappServices.notes;
 const benchmarkMode = await notes.benchmarkMode();
 
 async function measureBridgeProbe(iterations, operation) {

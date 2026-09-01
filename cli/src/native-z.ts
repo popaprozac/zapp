@@ -663,10 +663,7 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
   );
 
   const { resolveBootstrapDir } = await import("./paths");
-  const {
-    generateZServiceBindings,
-    renderZServiceWebviewRuntime,
-  } = await import("./z-service-bindings");
+  const { generateZServiceBindings } = await import("./z-service-bindings");
   const { generateZServiceDispatchers } = await import(
     "./z-service-dispatcher"
   );
@@ -762,8 +759,7 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
   );
   console.log(`[zapp] generated typed Z service bindings ${generatedBinding}`);
   const bootstrapSource = renderZWebviewBootstrapConfig(options.config, options.target)
-    + await bundleWebviewBootstrapRaw()
-    + renderZServiceWebviewRuntime(serviceManifest);
+    + await bundleWebviewBootstrapRaw();
   if (desktop) {
     await writeFile(
       path.join(

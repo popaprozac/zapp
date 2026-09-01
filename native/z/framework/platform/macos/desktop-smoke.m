@@ -50,7 +50,6 @@ void zapp_desktop_smoke_start_window(
         evaluateJavaScript:
           @"JSON.stringify({"
           @"ready:document.readyState,"
-          @"services:typeof globalThis.__zappServices,"
           @"bridge:typeof globalThis[Symbol.for('zapp.bridge')],"
           @"windowId:globalThis[Symbol.for('zapp.windowId')]??null,"
           @"cancel:typeof document.querySelector('#cancel')?.onclick,"

@@ -188,6 +188,11 @@ worker bundles. `zapp init` adds the matching TypeScript `paths` entry so the
 editor provides completion and go-to-definition without exposing the generated
 path in application source.
 
+The generated module is the only application service surface. Zapp does not
+also inject a `globalThis.__zappServices` object; avoiding that duplicate keeps
+one checked codec implementation in the bundle and prevents the import API and
+an implicit global from drifting apart.
+
 ## Per-request cancellation
 
 Generated WebView bindings accept the standard `AbortSignal` shape and retain

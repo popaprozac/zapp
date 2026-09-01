@@ -1,7 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import {
   renderZServiceBindings,
-  renderZServiceWebviewRuntime,
   type ZServiceManifest,
 } from "./z-service-bindings";
 
@@ -83,18 +82,7 @@ describe("Z service binding generation", () => {
     expect(source).toContain("readonly details: NoteCreationErrorDetails");
     expect(source).toContain("decodeNoteCreationErrorFailure");
     expect(source).toContain('error.errorType === "NoteCreationError"');
-  });
-
-  it("installs the same service names into the WebView runtime", () => {
-    const source = renderZServiceWebviewRuntime(manifest);
-    expect(source).toContain(
-      'bridge.invoke("notes.create", encodeCreateNoteInput(input), options)',
-    );
-    expect(source).toContain("globalThis.__zappServices");
-    expect(source).toContain('error.name = "NoteCreationError"');
-    expect(source).toContain(
-      'decodeU64(value["id"])',
-    );
+    expect(source).not.toContain("__zappServices");
   });
 
   it("generates recursive Array<T> wire codecs for typed service values", () => {
@@ -128,10 +116,6 @@ describe("Z service binding generation", () => {
     expect(bindings).toContain("notes: decodeArrayOfNote(record.notes)");
     expect(bindings).toContain("return value.map(decodeNumber)");
 
-    const runtime = renderZServiceWebviewRuntime(collections);
-    expect(runtime).toContain("const decodeArrayOfNote = value =>");
-    expect(runtime).toContain("return value.map(decodeNote)");
-    expect(runtime).toContain("const encodeArrayOfArrayOfNote = value =>");
   });
 
   it("maps explicit options to null and preserves optional field omission", () => {
@@ -172,12 +156,6 @@ describe("Z service binding generation", () => {
       "subtitle: encodeOptionOfString((value.subtitle ?? null))",
     );
 
-    const runtime = renderZServiceWebviewRuntime(optional);
-    expect(runtime).toContain("const decodeOptionOfNote = value => value === null");
-    expect(runtime).toContain("const encodeOptionOfArrayOfNote = value => value === null");
-    expect(runtime).toContain(
-      '"subtitle": decodeOptionOfString((value["subtitle"] === undefined ? null : value["subtitle"]))',
-    );
   });
 
   it("emits payload-free enums as checked string unions with runtime values", () => {
@@ -202,10 +180,6 @@ describe("Z service binding generation", () => {
     expect(bindings).toContain("const NoteStateValues = new Set<string>(Object.values(NoteState))");
     expect(bindings).toContain("function decodeNoteState(value: unknown): NoteState");
 
-    const runtime = renderZServiceWebviewRuntime(withEnum);
-    expect(runtime).toContain('const decodeNoteState = value => {');
-    expect(runtime).toContain('value === "active" || value === "archived"');
-    expect(runtime).toContain('const encodeNoteState = value => {');
   });
 
   it("emits payload enums as tagged unions with checked constructors and codecs", () => {
@@ -244,11 +218,6 @@ describe("Z service binding generation", () => {
     expect(bindings).toContain('value: decodeString(record.value)');
     expect(bindings).toContain('value: encodeString(value.value)');
 
-    const runtime = renderZServiceWebviewRuntime(withEnum);
-    expect(runtime).toContain("const decodeNoteDescription = value => {");
-    expect(runtime).toContain("switch (value.kind)");
-    expect(runtime).toContain('value: decodeString(value.value)');
-    expect(runtime).toContain("const encodeNoteDescription = value => {");
   });
 
   it("fails closed when nominal and collection codec names collide", () => {
